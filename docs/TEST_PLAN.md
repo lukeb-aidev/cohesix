@@ -81,7 +81,7 @@ target canary merely because it is part of final acceptance.
 | `pi4-driver` | pi4 | one exact-image Pi boot, touched service/device liveness, one live operation, UART liveness, and no unexpected target fault | `pi4_diagnostic / configs/root_task_pi4_uboot_aarch64.toml` |
 | `worker` | qemu | canonical QEMU boot, real Worker READY, and one bounded startup/teardown/restart recovery operation | `qemu_smp_production / configs/root_task.toml` |
 | `ninedoor` | qemu | canonical QEMU boot, isolated NineDoor READY, and one real 9P operation | `qemu_smp_production / configs/root_task.toml` |
-| `console-network` | qemu | canonical QEMU boot, isolated console READY, and one authenticated live TCP operation | `qemu_smp_production / configs/root_task.toml` |
+| `console-network` | qemu | canonical QEMU boot, isolated console READY v3, and the fixed one-socket HELP/NETSTATS/SMP/CACHELOG matrix | `qemu_smp_production / configs/root_task.toml` |
 | `root-mcs` | qemu | canonical QEMU boot, root steady state, one real target operation, and no unexpected seL4 fault | `qemu_smp_production / configs/root_task.toml` |
 | `live-transport` | qemu, pi4 | one authenticated operation over the changed live target transport | `selected target production profile` |
 | `python-sdk` | qemu, pi4 | focused Python SDK tests | `host-only Python SDK` |
@@ -441,22 +441,19 @@ python3 scripts/worker_task_evidence.py qemu-service-gdb $SERVICE_GDB \
   --service console-network --mode during-call-standard \
   --service-elf target/aarch64-unknown-none/release/console-network-runtime \
   --out "$RUN/console-standard-fault/service.gdb.log"
-python3 scripts/worker_task_evidence.py qemu-service-gdb $SERVICE_GDB \
-  --service console-network --mode budget-exhaustion-timeout \
-  --service-elf target/aarch64-unknown-none/release/console-network-runtime \
-  --out "$RUN/console-timeout-fault/service.gdb.log"
 ```
 
 Each NineDoor command above attaches to its own fresh exact-artifact boot; its
 matching `service.uart.log` is frozen after terminal teardown. The first is
 triggered by one authenticated ordinary Secure9P Call. The second counts two
 successful root post-prepare returns and requests local revoke between them and
-the next Call. Console-network Standard and Timeout injection likewise use two
-distinct fresh exact-artifact boots because its containment is terminal and
-has no same-boot replacement. Each is triggered by one authenticated control
-turn; the runner neither waits for reconstruction nor attempts a second child
-handler after teardown. No VM command or namespace fault-injection authority
-exists.
+the next Call. Console-network Standard injection uses its own fresh
+exact-artifact boot because its containment is terminal and has no same-boot
+replacement. It is triggered by one authenticated control turn; the runner
+neither waits for reconstruction nor attempts a second child handler after
+teardown. Natural-postpone budget liveness is exercised under the retained
+pressure boots rather than by the obsolete terminal timeout-spin injection. No
+VM command or namespace fault-injection authority exists.
 
 The four critical-duty observation hooks occur during startup, so collect them
 on a separate halted boot of the exact same image/session:
@@ -499,11 +496,9 @@ python3 scripts/worker_task_evidence.py collect-qemu-preflight \
   --service-gdb-log "$RUN/ninedoor-during-call/service.gdb.log" \
   --service-gdb-log "$RUN/ninedoor-between-calls/service.gdb.log" \
   --service-gdb-log "$RUN/console-standard-fault/service.gdb.log" \
-  --service-gdb-log "$RUN/console-timeout-fault/service.gdb.log" \
   --service-uart "$RUN/ninedoor-during-call/service.uart.log" \
   --service-uart "$RUN/ninedoor-between-calls/service.uart.log" \
   --service-uart "$RUN/console-standard-fault/service.uart.log" \
-  --service-uart "$RUN/console-timeout-fault/service.uart.log" \
   --critical-gdb-log "$RUN/preflight/gdb-critical-duties.log" \
   --worker-archive out/cohesix/worker-images/cohesix-worker-images.cpio \
   --driver-archive out/cohesix/driver-runtimes/cohesix-driver-runtimes.cpio \
@@ -534,11 +529,9 @@ python3 scripts/worker_task_evidence.py collect-qemu \
   --preflight-service-gdb-log "$RUN/ninedoor-during-call/service.gdb.log" \
   --preflight-service-gdb-log "$RUN/ninedoor-between-calls/service.gdb.log" \
   --preflight-service-gdb-log "$RUN/console-standard-fault/service.gdb.log" \
-  --preflight-service-gdb-log "$RUN/console-timeout-fault/service.gdb.log" \
   --preflight-service-uart "$RUN/ninedoor-during-call/service.uart.log" \
   --preflight-service-uart "$RUN/ninedoor-between-calls/service.uart.log" \
   --preflight-service-uart "$RUN/console-standard-fault/service.uart.log" \
-  --preflight-service-uart "$RUN/console-timeout-fault/service.uart.log" \
   --preflight-critical-gdb-log "$RUN/preflight/gdb-critical-duties.log" \
   --uart "$RUN/medium/uart.log" --gdb-log "$RUN/medium/gdb.log" \
   --pressure "$RUN/medium/pressure.summary.json" \
@@ -644,6 +637,10 @@ generated topology hash cannot be recomputed, its inventory cannot be derived,
 generated and projected admitted-maximum inventories differ, or the accepted Worker record names
 a different target session or topology. The resulting
 `root-tcb-acceptance.json` binds all three input files by digest.
+The strict release inventory packages this topology beside the resolved
+manifest; `scripts/release_bundle.sh --check-manifest` rejects either an
+omission or an unexpected compiler-owned generated file rather than silently
+shipping a partial as-built contract.
 `ROOT_CRITICAL_OBJECTS scope=constructed-actual` separately records the five
 constructed duties, four restricted child TCBs, active SC/Reply counts, and
 installed standard/timeout fault-cap plus registry counts; it is the bounded
@@ -793,7 +790,7 @@ into logged shell command strings.
 
 | Target | Stages | Required target-specific evidence |
 | --- | --- | --- |
-| `qemu` | 01-05 | Stage 03 builds one immutable artifact per unique manifest, then uses a fresh boot for every regression group. Stage 04 reuses the validated default artifact but starts another fresh boot. Result manifests bind source, profile, manifest, image, scripts, boot identity, counts, and log hashes. |
+| `qemu` | 01-05 | Stage 03 builds one immutable artifact per unique manifest, content-binding all eight packaged host executables (`cas-tool`, `coh`, `cohsh`, `gpu-bridge-host`, `hive-gateway`, `host-sidecar-bridge`, `host-ticket-agent`, and `swarmui`), then uses a fresh boot for every regression group. Stage 04 reuses the validated default artifact but starts another fresh boot. Result manifests bind source, profile, manifest, image, scripts, boot identity, counts, and log hashes. |
 | `pi4` | 01-05 | Stage 03 requires `COHSH_TCP_HOST` or `COHSH_HOST` plus `TP_PI4_TARGET_EVIDENCE_FILE`; Stage 04 requires an existing gateway URL and evidence binding that gateway to the same boot/image. These stages yield only `pi4-transport`. `TP_PI4_HARDWARE_EVIDENCE_FILE`, when required, must validate the stronger hardware bundle and is never synthesized by the runner. |
 
 A Pi Stage 03 run refuses loopback unless `TP_PI4_ALLOW_LOOPBACK=1` records an
@@ -834,9 +831,9 @@ from that catalog.
 | `host.rust-risk-bootstrap` | 1 | `common-hermetic` | common / qemu, pi4 | `python3 scripts/ci/test_rust_risk_gate.py` |
 | `host.rust-risk-ratchet` | 1 | `common-hermetic` | common / qemu, pi4 | `env -u CARGO_HOME scripts/ci/rust_risk_gate.sh --baseline docs/audit/rust_risk_baseline.toml` |
 | `target.qemu-profile` | 2 | `qemu-integration` | provisioned-target / qemu | `"${TEST_PLAN_ROOT}/out/toolchain/sel4-profile-venv/bin/python" scripts/sel4_profile.py validate --profile qemu_smp_production --build-dir "${TEST_PLAN_ROOT}/out/sel4/profile-v2/qemu-smp-production" --require-source --require-artifacts --for-runtime` |
-| `target.root-task-qemu-release` | 2 | `qemu-integration` | provisioned-target / qemu | `SEL4_BUILD_DIR="${TEST_PLAN_ROOT}/out/sel4/profile-v2/qemu-smp-production" cargo check -p root-task --target aarch64-unknown-none --no-default-features --features release-qemu` |
+| `target.root-task-qemu-release` | 2 | `qemu-integration` | provisioned-target / qemu | `scripts/ci/test_plan_target_root_check.sh --target qemu --sel4-build "${TEST_PLAN_ROOT}/out/sel4/profile-v2/qemu-smp-production" --profile qemu_smp_production --features release-qemu --timer-clock-hz 24000000` |
 | `target.pi4-profile` | 2 | `pi4-transport` | provisioned-target / pi4 | `"${TEST_PLAN_ROOT}/.venv/bin/python" scripts/sel4_profile.py validate --repo-managed --profile pi4_diagnostic --build-dir "${TEST_PLAN_ROOT}/seL4/build_UBOOT" --require-artifacts --for-runtime` |
-| `target.root-task-pi4-release` | 2 | `pi4-transport` | provisioned-target / pi4 | `SEL4_BUILD_DIR="${TEST_PLAN_ROOT}/seL4/build_UBOOT" cargo check -p root-task --target aarch64-unknown-none --no-default-features --features release-pi4` |
+| `target.root-task-pi4-release` | 2 | `pi4-transport` | provisioned-target / pi4 | `scripts/ci/test_plan_target_root_check.sh --target pi4 --sel4-build "${TEST_PLAN_ROOT}/seL4/build_UBOOT" --profile pi4_diagnostic --features release-pi4 --timer-clock-hz 54000000` |
 | `qemu.tcp-regression` | 3 | `qemu-integration` | target / qemu | `scripts/cohsh/run_regression_batch.sh` |
 | `pi4.tcp-regression` | 3 | `pi4-transport` | target / pi4 | `scripts/cohsh/run_regression_batch.sh` |
 | `qemu.rest-regression` | 4 | `qemu-integration` | target / qemu | `scripts/ci/test_plan_stage_04_rest_multiplexer.sh` |
@@ -844,10 +841,10 @@ from that catalog.
 | `release.unique-governance` | 5 | `release` | target / qemu, pi4 | `scripts/ci/due_diligence_gate.sh` |
 | `diagnostic.qemu-canary` | NON-CLAIMING diagnostic | `non-claiming` | conditional / qemu | `scripts/ci/test_plan_target_canary.sh --target qemu` |
 | `diagnostic.pi4-canary` | NON-CLAIMING diagnostic | `non-claiming` | conditional / pi4 | `scripts/ci/test_plan_target_canary.sh --target pi4` |
-| `diagnostic.guard-root-mcs` | NON-CLAIMING diagnostic | `non-claiming` | conditional / qemu | `cargo test -p root-task --no-default-features --features driver-tests-qemu --test mcs_activation_order -- --test-threads=1` |
+| `diagnostic.guard-root-mcs` | NON-CLAIMING diagnostic | `non-claiming` | conditional / qemu | `cargo test -p root-task --no-default-features --test mcs_activation_order -- --test-threads=1` |
 | `diagnostic.guard-worker` | NON-CLAIMING diagnostic | `non-claiming` | conditional / qemu | `cargo test -p root-task --no-default-features --features driver-tests-qemu --test worker_fault_lifecycle -- --test-threads=1` |
 | `diagnostic.guard-ninedoor` | NON-CLAIMING diagnostic | `non-claiming` | conditional / qemu | `cargo test -p root-task --no-default-features --features driver-tests-qemu --test ninedoor_service_isolation -- --test-threads=1` |
-| `diagnostic.guard-console-network` | NON-CLAIMING diagnostic | `non-claiming` | conditional / qemu | `cargo test -p root-task --no-default-features --features driver-tests-qemu --test console_network_service -- --test-threads=1` |
+| `diagnostic.guard-console-network` | NON-CLAIMING diagnostic | `non-claiming` | conditional / qemu | `cargo test -p console-network-abi && cargo test -p console-network-runtime && cargo test -p root-task --test console_network_service && cargo test -p root-task --no-default-features --features driver-tests-qemu isolated_response_lane_pays_exactly_one_ordinary_debt_after_eight_units -- --test-threads=1 && cargo test -p root-task --no-default-features --features driver-tests-qemu isolated_help_capture_publishes_complete_body_then_one_terminal -- --test-threads=1 && cargo test -p root-task --no-default-features --features driver-tests-qemu isolated_fixed_synchronous_producers_cross_batch_depth_without_end -- --test-threads=1 && cargo test -p root-task --no-default-features --features driver-tests-qemu bounded_sync_capture_overflow_emits_only_typed_terminal_and_reconciles_metrics -- --test-threads=1 && cargo test -p root-task --no-default-features --features driver-tests-qemu bounded_sync_cache_snapshot_crosses_batch_depth_and_tombstones_on_quiet_cut -- --test-threads=1 && cargo test -p root-task --no-default-features --features driver-tests-qemu bounded_sync_response_is_retired_on_exact_identity_loss -- --test-threads=1 && cargo test -p root-task --no-default-features --features driver-tests-qemu pinned_network_line_cannot_dispatch_to_a_replacement_connection -- --test-threads=1 && cargo test -p root-task --no-default-features --features driver-tests-qemu physical_progress_is_bounded_while_heavy_producers_preserve_network_owner -- --test-threads=1 && cargo test -p root-task --no-default-features --features driver-tests-qemu blocked_physical_producer_retains_an_ordered_busy_terminal_and_prompt -- --test-threads=1 && cargo test -p root-task --no-default-features --features driver-tests-qemu hal::cache::tests -- --test-threads=1 && cargo test -p root-task --no-default-features --test isolated_virtio_network_phasing -- --test-threads=1 && .venv/bin/python -m pytest -q tests/test_console_network_runtime_packaging.py tests/test_qemu_tcp_response_matrix.py scripts/ci/test_run_regression_batch.py` |
 | `diagnostic.guard-pi4-driver` | NON-CLAIMING diagnostic | `non-claiming` | conditional / pi4 | `cargo test -p root-task --no-default-features --features driver-tests-pi4 --test driver_task_mcs -- --test-threads=1` |
 | `diagnostic.guard-live-transport` | NON-CLAIMING diagnostic | `non-claiming` | conditional / qemu, pi4 | `cargo test -p cohsh --no-default-features --features tcp` |
 | `diagnostic.python-sdk` | NON-CLAIMING diagnostic | `non-claiming` | conditional / qemu, pi4 | `scripts/ci/python_test_gate.sh --sdk-tests` |
@@ -858,6 +855,10 @@ from that catalog.
 | `pi4.hardware-acceptance` | conditional | `pi4-hardware` | conditional / pi4 | evidence-only: pi4-image-readback-identity, pi4-gate-proof, pi4-capture-manifest, pi4-repeatability-report |
 | `release.bundle-validation` | conditional | `release` | conditional / qemu, pi4 | evidence-only: macos-bundle-result, ubuntu-bundle-result |
 <!-- test-plan-catalog:end -->
+
+`performance.gateway-telemetry` may be selected alongside either target, but
+its retained evidence is Conditional D's host-model gateway comparator; it is
+not QEMU or Pi target-performance evidence.
 
 ## GitHub Actions gate mapping
 
@@ -913,9 +914,15 @@ Validate the full Cohesix stack end-to-end: generated artifacts, QEMU boot, TCP 
   profile contract.
 - Default QEMU SMP topology is four single-threaded cores; set `COHESIX_QEMU_SMP=1` for single-core baselines or `COHESIX_QEMU_SMP_TOPO` for explicit topologies.
 - seL4 16 QEMU artifact trees must be configured with
-  `ElfloaderRootserversLast=ON` and an embedded QEMU `virt` DTB generated with
-  `virtualization=on`, so PSCI records `method = "smc"` for the Cohesix QEMU
-  launcher.
+  `ElfloaderRootserversLast=ON`, scalar pre-MMU elfloader/libcpio code, and an
+  embedded QEMU `virt,gic-version=3,virtualization=off` DTB whose PSCI method is
+  `hvc`. The wrapper must select HVC `CPU_ON` only for an HVC DTB, retain the
+  upstream SMC path for SMC-selected platforms, and reject a duplicate or
+  missing PSCI SMP driver. On the supported Apple-Silicon/macOS target, the canonical accelerator
+  is HVF and generated `TIMER_CLOCK_HZ` plus the console-network descriptor must
+  both equal the host-visible 24,000,000 Hz virtual-counter frequency. TCG,
+  `-icount`, or a CNTFRQ override is diagnostic-only and cannot establish QEMU
+  acceptance or performance evidence.
 - Milestone 26d profile closure requires all five fresh
   `out/sel4/profile-v2/*` defaults to pass the fail-closed aggregate validator
   with source and artifacts required. QEMU build, release, regression, and
@@ -984,10 +991,10 @@ a renamed or removed test cannot turn an empty filtered run green.
 
 The Python actions use `scripts/ci/python_test_gate.sh`: a shared virtual
 environment keyed by the canonical Python executable and hashed requirements,
-with exact `pytest`/`pyserial` pins. Repository, client, due-diligence, and
-runner contract tests execute in one pytest process; four mock examples execute
-once in a separate smoke action. A missing Python lane is INCOMPLETE, never
-PASS.
+with exact `pytest`, `pyserial`, and Python-package build-backend (`setuptools`)
+pins. Repository, client, due-diligence, and runner contract tests execute in
+one pytest process; four mock examples execute once in a separate smoke action.
+A missing Python lane is INCOMPLETE, never PASS.
 
 `scripts/check-generated.sh` already invokes `scripts/ci/check_test_plan.sh`,
 so Stage 01 does not repeat that check. Fixture regeneration is intentionally
@@ -1015,11 +1022,15 @@ or imported Stage 01 common-hermetic attestation:
 
 - QEMU profile validation against
   `out/sel4/profile-v2/qemu-smp-production`, followed by the
-  `release-qemu` AArch64 root-task check.
+  `release-qemu` AArch64 root-task check. The check builds fresh Worker,
+  NineDoor, console-network, and driver-runtime identities inside the Stage 02
+  attempt and binds them to the root check under the selected 24 MHz profile.
 - Pi 4 profile validation against
   the immutable `seL4/build_UBOOT` `pi4_diagnostic` artifacts, followed by the
   `release-pi4`
-  AArch64 root-task check.
+  AArch64 root-task check. Its independently built component bindings use the
+  selected 54 MHz header; this remains compile evidence, not Pi boot or
+  hardware acceptance.
 
 The remaining Pi-specific material in this section defines evidence semantics
 for Conditional F. It is not additional Stage 02 execution and must not cause
@@ -4209,14 +4220,33 @@ change DPC authority or timing. Focused coverage is
 
 ### Automated Stage 03 — QEMU or Pi transport regression
 - `scripts/ci/test_plan_stage_03_qemu_tcp_regression.sh`
-- Stage 03 sets resilient defaults for clean hosts: `TP_STAGE3_READY_TIMEOUT=900`, `TP_STAGE3_PORT_TIMEOUT=60`, `TP_STAGE3_AUTH_READY_TIMEOUT=120`, `TP_STAGE3_QUIT_CLOSE_TIMEOUT=60` (override as needed).
+- Stage 03 sets resilient readiness defaults for clean hosts:
+  `TP_STAGE3_READY_TIMEOUT=900`, `TP_STAGE3_PORT_TIMEOUT=60`, and
+  `TP_STAGE3_AUTH_READY_TIMEOUT=120` (override as needed). The separate
+  authentication-readiness bound applies to Pi/live transport; QEMU evidence
+  workloads perform their own exact AUTH exchange after the UART marker.
+- QEMU boots must emit exact `[mark] root-console.start.ok` before the first
+  authenticated response-matrix or `.coh` workload. A listening TCP socket is
+  not root-console readiness, and the runner must not consume a throwaway QEMU
+  authentication connection before the evidence workload.
 - `scripts/cohsh/run_regression_batch.sh` builds one immutable artifact for the
   default manifest and one for the gated manifest. Base, telemetry, and shard
   groups reuse the default artifact bytes; every group still receives a fresh
   QEMU boot.
+- The gated manifest may change only its named audit, replay, policy, model,
+  sidecar, UI, and client feature gates. It must preserve the selected base
+  QEMU operational topology, including the root, Worker, temporal-authority,
+  NineDoor, console-network, resource-admission, and timer contracts exactly.
 - The batch snapshots generated projections and restores them in an EXIT trap,
   including failure and interrupt paths. Each artifact and boot result has a
   machine-readable source/profile/manifest/image/action/log binding.
+- QEMU close success is a same-connection protocol assertion. The fixed matrix
+  and every `.coh` client must receive exact `OK QUIT` followed by target EOF;
+  timeout, another post-terminal frame, or a client error fails the workload.
+  The isolated console child owns close and relisten, so Stage 03 must not wait
+  for the legacy root-stack UART string `audit tcp.conn.close`. Authentication
+  by the next workload on that same boot proves listener restoration without a
+  reconnect retry. Pi/live retains its lifecycle resume and per-script ledger.
 - Pi 4 hardware bring-up uses the same official runner against an already-booted TCP console: `COHSH_BATCH_TARGET=pi4 COHSH_TCP_HOST=<pi4-ip> COHSH_TCP_PORT=31337 scripts/cohsh/run_regression_batch.sh`. Pi mode archives a full per-script ledger, runs lifecycle resume before/after groups and scripts, continues after failures by default, and writes a unique `out/regression-logs/pi4-full-<utc>/summary.log` unless `COHSH_LOG_ROOT` is set.
 - Before the staged Pi 4 transport run, create its source/boot/image/endpoint
   binding and pass the result as `TEST_PLAN_TARGET_EVIDENCE_FILE`:
@@ -4274,9 +4304,11 @@ Run while QEMU is up:
   - `tcp-diag` has zero failures.
   - `pool bench` completes with non-zero operations. This is a liveness smoke,
     not a performance claim.
-  - The `performance` tier is qualified only by Conditional D's explicit
-    no-retry matrix and numeric error budget. Any regression claim also needs
-    reviewable baseline artifacts indexed in `docs/BENCHMARKS.md`; never
+  - The `performance` tier is qualified by the lane that owns the claim:
+    Conditional B2 for executable QEMU target pressure, a separate fresh-Pi
+    target-performance path for Pi, and Conditional D for the exact packaged
+    gateway's host-model large-telemetry comparator. Any regression claim also
+    needs reviewable baseline artifacts indexed in `docs/BENCHMARKS.md`; never
     compare against unpublished local runs.
 - Capture logs:
   - cohsh: `logs/cohsh-session.log`
@@ -4290,6 +4322,48 @@ Run while QEMU is up:
 - `audit tcp.flush.blocked` lines before any client connects are expected; do not treat them as failures.
 
 ### Conditional B — Host tools integration
+
+The retained exact-source boundary for this gate is explicit. State
+`out/test-plan/m26e-console-qemu-v35-v18-rest-timeout-ddscope-20260814T163813Z`
+passed Stages 01-05 for source
+`sha256:ea8bc5458e4ccbbcd1ecb2731030b66e7ec05782750534c0bf4a683a3fba9b60`:
+Stage 01 `21/21` with manifest
+`sha256:4320add56bd34ce7c4461507703eb6be4a22ee44b70424c4a8f5dedb5acc1f5f`;
+Stage 02 `2/2` with manifest
+`sha256:c9ae96134c2d2e2211c51e4524a98f1f6aa0654b75130a8ac5e596ef42ac6c03`
+and resolved manifest
+`sha256:72b6fdbd175150ec352f9345d99791a1d576cf01de47363aed2a64ad0c463a93`;
+Stage 03 passed the complete selection of fixed matrix `7/7` plus 18 `.coh`
+scripts and bound manifest
+`sha256:71092307be0d3501b47b12191604d698656fcb773007ede12fda798ae961499d`,
+aggregate
+`sha256:b65136f01a90d0f06ba192cdfe7252a29dff5e5f113d72f613a2d6609dc4976e`,
+base artifact
+`sha256:2491dc27b6b27a939b4427742c517405376516c27fbcb00962da03f1036f3012`,
+and gated artifact
+`sha256:1b0345bc385ef50480a439fb274e72f11877e40ef70f9ce5bae58ca00bd9939e`.
+Stage 04 passed core `3/3`, parity `1/1`, and Python smoke with manifest
+`sha256:f0c960c1a4b4103b851b71fb928fa54a5c96b30a43abf35558d3c9bf81456bee`
+and result
+`sha256:a8cd9ded3369ba74daf4e21bdad144a1d49eba3eb8a92e6d13d069836fb3d246`;
+Stage 05 passed with manifest
+`sha256:f03756e37da6eaef8edea929da5512144d80f4608a4b7296c486b12dabeceb88`.
+
+The exact-version post-pass at
+`out/host-tool-postpass/ddscope-stage03-20260815` later stopped at its first
+failure: gated `cas-tool` REST upload packed the 1,073-byte retained trace into
+1,152 bytes and nine 128-byte chunks, then received
+`ERR ECHO reason=quota detail=buffer-full` for ninth digest
+`247fbe6cb8e8f54887478fb4b4ffc1c8ca21324c5b0640db57fe638c0023196f`.
+That is failure evidence for the former host projection, not a reason to raise
+the eight-chunk target bound or retry. The five-stage pass remains valid only
+for its exact source and workloads; it did not close Conditional B, Python
+target projection, the Conditional D host-model comparator, or Pi. The capacity-projection
+repair is authorized by active discovery task
+`m26e-console-network-service-isolation` together with Reopened tasks
+`m17-cas-regressions` and `m24e-cas-tool-rest`; changed source requires fresh
+artifacts and every applicable gate.
+
 - QEMU log correlation (required):
   - Record a short note per tool in `logs/host-tool-runs.md` with start/stop time and tool name.
   - In the QEMU log, locate matching `audit tcp.conn.open`/`audit tcp.conn.close` lines for the same window.
@@ -4338,22 +4412,158 @@ Run while QEMU is up:
   - Release bundle: `./bin/swarmui --replay "$(pwd)/traces/trace_v0.hive.cbor"`
   - headless Linux: prefix with `xvfb-run -a`
 - `cas-tool`:
-  - Pad the trace to a 128-byte multiple (matches `cas.store.chunk_bytes`):
+  - Validate the selected generated host contract before using it. For the
+    default profile, `limits.max_chunks` must be exactly `8`,
+    `limits.max_payload_bytes` must be exactly `1024`, and `chunk_bytes` must be
+    exactly `128`. A template that omits `limits` is legacy and falls back to
+    the shared eight-chunk manifest-v1 maximum; if `limits` is present, neither
+    a smaller nor a larger value is accepted. The optional `--chunk-bytes`
+    argument must equal the selected template and cannot override it:
     ```bash
-    python3 - <<'PY'
-    from pathlib import Path
-    src = Path("tests/fixtures/traces/trace_v0.trace")
-    dst = Path("out/cas/trace_v0.padded")
-    data = src.read_bytes()
-    pad = (-len(data)) % 128
-    dst.write_bytes(data + b"\0" * pad)
-    print(f"padded {len(data)} -> {len(data) + pad} bytes")
-    PY
+    jq -e '
+      .chunk_bytes == 128 and
+      .limits.max_chunks == 8 and
+      .limits.max_payload_bytes == (.chunk_bytes * .limits.max_chunks)
+    ' configs/generated/cas_manifest_template.json
     ```
-  - Offline fixture-only pack test: `./bin/cas-tool pack --epoch 1 --input ./out/cas/trace_v0.padded --out-dir ./out/cas/1 --signing-key ./resources/fixtures/cas_signing_key.hex` (do not upload this bundle to an operational profile).
-  - Live source tree: `test -n "${COH_CAS_SIGNING_KEY:?set external CAS signing-key path}" && ./bin/cas-tool pack --epoch 1 --input ./out/cas/trace_v0.padded --out-dir ./out/cas/1 --signing-key "$COH_CAS_SIGNING_KEY"`; its public key must match the selected profile's `cas.signing.verification_key_path`.
-  - Release bundle: pad `./traces/trace_v0.trace` into `./out/cas/trace_v0.padded`, then run `./bin/cas-tool pack --epoch 1 --input ./out/cas/trace_v0.padded --out-dir ./out/cas/1 --signing-key <path>`
-  - `./bin/cas-tool upload --bundle ./out/cas/1 --host 127.0.0.1 --port 31337 --auth-token "$COH_AUTH_TOKEN" --ticket "$QUEEN_TICKET"`
+  - Prepare two independent payloads. Preserve the full trace as replay truth
+    and as the exact nine-chunk negative input. Pad the dedicated positive
+    359-byte fixture at
+    `sha256:7f97db91e95d67b8cdd7baa194c563e2a03f94045a4e5c3282b4bb8e7fc3fda1`
+    as a whole to exactly eight unique chunks using the deterministic nonzero
+    tail byte `((index * 73 + 19) % 251) + 1`; never truncate or relabel the
+    trace.
+    Use the source-tree invocation from the repository root or the release
+    invocation from the release root, never a path guessed across the two
+    packages:
+    ```bash
+    prepare_cas_payloads() {
+      CAS_TRACE_SOURCE="$1" CAS_POSITIVE_SOURCE="$2" python3 - <<'PY'
+    import hashlib
+    import os
+    from pathlib import Path
+
+    chunk_bytes = 128
+    max_chunks = 8
+    capacity = chunk_bytes * max_chunks
+    output = Path("out/cas")
+    output.mkdir(parents=True, exist_ok=True)
+
+    trace = Path(os.environ["CAS_TRACE_SOURCE"]).read_bytes()
+    trace_padded = trace + b"\0" * ((-len(trace)) % chunk_bytes)
+    assert len(trace) == 1073
+    assert len(trace_padded) == 1152
+    (output / "trace_v0.padded").write_bytes(trace_padded)
+
+    positive = Path(os.environ["CAS_POSITIVE_SOURCE"]).read_bytes()
+    assert len(positive) == 359
+    assert hashlib.sha256(positive).hexdigest() == (
+        "7f97db91e95d67b8cdd7baa194c563e2a03f94045a4e5c3282b4bb8e7fc3fda1"
+    )
+    if len(positive) > capacity:
+        raise SystemExit("positive fixture exceeds manifest-v1 capacity")
+    tail_len = capacity - len(positive)
+    positive_padded = positive + bytes(
+        ((index * 73 + 19) % 251) + 1 for index in range(tail_len)
+    )
+    assert len(positive_padded) == 1024
+    positive_chunks = [
+        positive_padded[offset : offset + chunk_bytes]
+        for offset in range(0, capacity, chunk_bytes)
+    ]
+    assert len({hashlib.sha256(chunk).digest() for chunk in positive_chunks}) == 8
+    (output / "max_chunks_v1.padded").write_bytes(positive_padded)
+    PY
+    }
+    ```
+  - Source-tree invocation, from the repository root:
+    ```bash
+    cargo build --locked --release -p cas-tool
+    CAS_TOOL=(./target/release/cas-tool)
+    CAS_FIXTURE_SIGNING_KEY=./resources/fixtures/cas_signing_key.hex
+    test -x "${CAS_TOOL[0]}"
+    test -f "$CAS_FIXTURE_SIGNING_KEY"
+    shasum -a 256 "${CAS_TOOL[0]}"
+    prepare_cas_payloads \
+      tests/fixtures/traces/trace_v0.trace \
+      tests/fixtures/cas/max_chunks_v1.txt
+    ```
+  - Release-bundle invocation, from the release root instead of the source
+    invocation:
+    ```bash
+    CAS_TOOL=(./bin/cas-tool)
+    unset CAS_FIXTURE_SIGNING_KEY
+    test -x "${CAS_TOOL[0]}"
+    shasum -a 256 "${CAS_TOOL[0]}"
+    test "$(tr -d '\n' < cas/max_chunks_v1.txt.sha256)" = \
+      "7f97db91e95d67b8cdd7baa194c563e2a03f94045a4e5c3282b4bb8e7fc3fda1"
+    prepare_cas_payloads \
+      traces/trace_v0.trace \
+      cas/max_chunks_v1.txt
+    ```
+  - Negative pack preflight: require a fresh nonexistent
+    `./out/cas/trace-v0-over-limit.bundle`, run `pack` on
+    `./out/cas/trace_v0.padded`, require nonzero exit with exact causal text
+    `CAS manifest capacity exceeded: payload_bytes=1152 chunk_bytes=128
+    chunks=9 max_chunks=8 max_payload_bytes=1024`, and require the bundle path
+    to remain absent. This is local proof: do not start or contact QEMU, Pi, or
+    a gateway for the negative case:
+    ```bash
+    test ! -e ./out/cas/trace-v0-over-limit.bundle
+    if "${CAS_TOOL[@]}" pack \
+      --epoch 1 \
+      --input ./out/cas/trace_v0.padded \
+      --out-dir ./out/cas/trace-v0-over-limit.bundle \
+      --chunk-bytes 128 \
+      >./out/cas/trace-v0-over-limit.log 2>&1; then
+      exit 1
+    fi
+    rg -F "CAS manifest capacity exceeded: payload_bytes=1152 chunk_bytes=128 chunks=9 max_chunks=8 max_payload_bytes=1024" \
+      ./out/cas/trace-v0-over-limit.log
+    test ! -e ./out/cas/trace-v0-over-limit.bundle
+    ```
+  - Exact-capacity fixture pack (source-tree gated-profile invocation only):
+    ```bash
+    test -n "${CAS_FIXTURE_SIGNING_KEY:?source-tree fixture key is required}"
+    "${CAS_TOOL[@]}" pack \
+      --epoch 1 \
+      --input ./out/cas/max_chunks_v1.padded \
+      --out-dir ./out/cas/max-chunks-fixture.bundle \
+      --chunk-bytes 128 \
+      --signing-key "$CAS_FIXTURE_SIGNING_KEY"
+    ```
+    This repository key is fixture-only. Upload that bundle only to the
+    explicitly gated QEMU artifact whose selected verification key is the
+    matching fixture key; never upload it to operational base QEMU or Pi.
+  - Operational pack:
+    ```bash
+    test -n "${COH_CAS_SIGNING_KEY:?set external CAS signing-key path}"
+    "${CAS_TOOL[@]}" pack \
+      --epoch 1 \
+      --input ./out/cas/max_chunks_v1.padded \
+      --out-dir ./out/cas/max-chunks-operational.bundle \
+      --chunk-bytes 128 \
+      --signing-key "$COH_CAS_SIGNING_KEY"
+    ```
+    Its public key must match the selected profile's
+    `cas.signing.verification_key_path`.
+  - Direct upload of the bundle appropriate to the selected artifact:
+    ```bash
+    "${CAS_TOOL[@]}" upload \
+      --bundle <exact-positive-bundle> \
+      --host 127.0.0.1 \
+      --port 31337 \
+      --auth-token "$COH_AUTH_TOKEN" \
+      --ticket "$QUEEN_TICKET"
+    ```
+    Upload must validate manifest chunk count before reading chunks or opening
+    the socket. A foreign or legacy nine-chunk bundle must therefore fail
+    locally with zero target connection.
+  - Passing local preflight proves only the fixed manifest shape. The target's
+    independent global store may still return typed `buffer-full` for an
+    eight-chunk manifest when previously retained chunks or models consume
+    capacity. Preserve that result; do not retry, increase capacity, or present
+    the positive fixture as target success unless the exact target accepted it.
 - `gpu-bridge-host`:
   - `./bin/gpu-bridge-host --mock --list`
   - Optional NVML: `./bin/gpu-bridge-host --list` (enabled by default on Linux builds; omit NVML with `--no-default-features`)
@@ -4414,7 +4624,7 @@ All runs are required unless explicitly marked `NA` by platform constraints.
     - `curl -sS 'http://127.0.0.1:8080/v1/fs/ls?path=/' | jq .`
     - `curl -sS 'http://127.0.0.1:8080/v1/fs/cat?path=/proc/lifecycle/state&max_bytes=64' | jq .`
     - `curl -sS 'http://127.0.0.1:8080/v1/fs/tail?path=/log/queen.log&max_bytes=512&lines=64' | jq .`
-    - Failure classification is part of the contract: `HTTP 429` means bounded broker queue backpressure, `HTTP 503` means transport unavailable, and `HTTP 504` means the broker accepted work but the backend response exceeded its response timeout.
+    - Failure classification is part of the contract: a preserved target `ERR` or exact in-process host-model schedule/lease/export semantic-capacity refusal returns HTTP `200` with `GatewayResponse.status="ERR"`; capacity retains `ERR ECHO reason=quota detail=buffer-full path=<path> error=buffer full`. HTTP `429` means bounded broker queue backpressure, HTTP `503` means transport or session unavailability, and HTTP `504` means the broker accepted work but the backend response exceeded its response timeout.
   - REST `/proc` bounds (schedule + lease):
     - `curl -sS 'http://127.0.0.1:8080/v1/fs/cat?path=/proc/schedule/summary&max_bytes=128' | jq .`
     - `curl -sS 'http://127.0.0.1:8080/v1/fs/cat?path=/proc/schedule/queue&max_bytes=256' | jq .`
@@ -4448,8 +4658,18 @@ All runs are required unless explicitly marked `NA` by platform constraints.
       - `printf 'hello-from-test-plan ts_ms=%s\n' "$(date +%s000)" >> "/tmp/coh-mount-rest/queen/telemetry/${DEV}/seg/seg-000001"`
       - `cat "/tmp/coh-mount-rest/queen/telemetry/${DEV}/latest"` (expects `seg-000001`)
   - `cas-tool` REST upload:
-    - `test -n "${COH_CAS_SIGNING_KEY:?set external CAS signing-key path}" && ./bin/cas-tool pack --epoch 1 --input ./out/cas/trace_v0.padded --out-dir ./out/cas/1 --signing-key "$COH_CAS_SIGNING_KEY"`
-    - `./bin/cas-tool upload --bundle ./out/cas/1 --rest-url http://127.0.0.1:8080 --rest-auth-token "$HIVE_GATEWAY_REQUEST_AUTH_TOKEN"`
+    - Use the separately named exact-eight-chunk bundle prepared in
+      Conditional B; never use a truncated prefix of `trace_v0.trace`.
+    - Run:
+      ```bash
+      "${CAS_TOOL[@]}" upload \
+        --bundle <exact-positive-bundle> \
+        --rest-url http://127.0.0.1:8080 \
+        --rest-auth-token "$HIVE_GATEWAY_REQUEST_AUTH_TOKEN"
+      ```
+    - Require zero retry. A local over-limit refusal must occur before a REST
+      request; a target `buffer-full` refusal for an eligible bundle remains a
+      valid target-capacity failure, not a host-preflight failure.
   - `cohsh` REST CLI:
     - `./bin/cohsh --transport rest --rest-url http://127.0.0.1:8080 --rest-auth-token "$HIVE_GATEWAY_REQUEST_AUTH_TOKEN"`
     - `attach queen`
@@ -4529,6 +4749,48 @@ All runs are required unless explicitly marked `NA` by platform constraints.
 - `COHESIX_GATEWAY_URL=http://<gateway-host>:<port> HIVE_GATEWAY_REQUEST_AUTH_TOKEN=<token> scripts/cohsh/REST_regression_batch.sh`
 - Pass the token through the inherited environment. The runner records a
   redacted command and must not place the token value in retained logs.
+- Stage 04 composes one filesystem-operation response window from the gateway
+  contract: `5,000 ms` bounded broker-queue admission plus
+  `max(control_response_ms, telemetry_response_ms)` plus `5,000 ms` HTTP
+  response-delivery grace. The canonical local gateway uses
+  `120,000/120,000 ms`, so the canonical client window is `130,000 ms`.
+  Metadata requests, name resolution, connection establishment, and response
+  body transfer retain their separate short bounds. Because the HTTP library
+  carries earlier send deadlines into response receipt, the filesystem agent
+  applies the composed window to request send, request-body send, and
+  response-header receipt; request and response byte bounds do not change.
+- Local runs resolve
+  `TP_STAGE4_GATEWAY_CONTROL_RESPONSE_TIMEOUT_MS` and
+  `TP_STAGE4_GATEWAY_TELEMETRY_RESPONSE_TIMEOUT_MS`, falling back to the
+  matching `HIVE_GATEWAY_BROKER_*_RESPONSE_TIMEOUT_MS` service variables, and
+  pass the resolved values explicitly to `hive-gateway`. Existing-gateway runs
+  must declare both values; Stage 04 does not infer external process
+  configuration. `TP_STAGE4_REST_CLIENT_TIMEOUT_MS`, with
+  `COHSH_REST_RESPONSE_TIMEOUT_MS` as its service fallback, may select a larger
+  client window but fails before target work when it is smaller than the
+  composition. The Stage 04 runner accepts each declared broker response
+  deadline only in `5,000..=1,200,000 ms` and the client window only from the
+  composed minimum through `1,210,000 ms`. Conflicting declarations fail rather
+  than choosing one.
+- The resolved client window applies identically to readiness, primary and
+  pooled `cohsh` transports, concurrent core/parity batches, and the Python
+  `RestBackend` smoke. This changes no batch concurrency, pool size, request,
+  retry, script, or target timeout. The Stage 04 summary retains
+  `gateway_timeout_declaration`,
+  `gateway_broker_queue_wait_limit_ms`,
+  `gateway_broker_control_response_timeout_ms`,
+  `gateway_broker_telemetry_response_timeout_ms`,
+  `rest_response_delivery_grace_ms`, and
+  `cohsh_rest_response_timeout_ms`.
+- Before it exports resolved endpoint, deadline, auth, or FUSE helper values,
+  Stage 04 snapshots the exact inherited presence and value of its complete
+  runner-owned environment set. It restores that snapshot before normal
+  `tp_stage_complete` and before cleanup or failure delegates to
+  `tp_stage_exit_trap`; an inherited value must be restored exactly and a
+  runner-created value must be unset. Focused regression
+  `test_stage4_restores_runner_owned_environment_before_final_context` covers
+  both finalization paths and the existing timeout composition. Runner-local
+  child configuration must not become an input-context change.
 - Stage 04 runs two REST batches:
   - A concurrent "core" batch (boot/proc/pool coverage): `scripts/cohsh/boot_v0.coh`, `scripts/cohsh/observe_watch.coh`, `scripts/cohsh/session_pool.coh`.
   - A strict "parity" batch (control-plane smoke): `scripts/cohsh/rest_control_plane_smoke.coh`.
@@ -4539,6 +4801,80 @@ All runs are required unless explicitly marked `NA` by platform constraints.
   - Manual runs of `scripts/cohsh/REST_regression_batch.sh` default to `out/regression-logs/<batch>/<script>.run*.log` unless `COHSH_LOG_ROOT` is set.
 - Verify logs show no unexpected errors or disconnects.
 - From Milestone 25 onward, use the REST batch above; the TCP/QEMU batch remains a local bring-up tool only.
+
+The fresh V35/V18 staged state
+`out/test-plan/m26e-console-qemu-v35-v18-full-20260814T134855Z`, source identity
+`sha256:0a1c64ec92fc9f80d74e423972c2579872fc067fbf76370c54daf14e823b2821`,
+passed Stage 01 `21/21`, Stage 02 `2/2`, the fixed matrix `7/7`, and all 18
+selected `.coh` scripts. Its Stage 03 base/gated artifact IDs were
+`sha256:d7f978d66935e93318892a09a7be426bc6083e55fc7237aaaea5d9ff332523f9`
+and
+`sha256:d0141863625f009280bab8f3bcbc085c0adc36dcdf978c116c9b42f0ac67c981`,
+and its Stage 03 aggregate result was
+`sha256:3cad4f939982e0d892ed9a92299bf9082345a601ee001f9489df032b61109e6b`.
+Stage 04 attempt `20260814T142002.169146Z-32864-8dc11c8651a4` then passed REST
+`boot_v0.coh` and failed `observe_watch.coh` line 8 with
+`ERR TAIL path=/proc/ingest/watch reason=gateway transport error`. The gateway
+kept one target connection and one upstream ATTACH, QEMU continued answering
+ECHO operations, and no root-emergency, fail-stop, panic, or target fault was
+recorded. The client expired at three seconds while the gateway was still
+inside its legal five-second queue plus 120-second broker-response envelope.
+This is exact Stage 04 failure evidence for the bounded deadline restoration
+owned by active `m26e-console-network-service-isolation`, reopened
+`m24e-rest-client`, `m24e-cohsh-rest-transport`,
+`m25-smp-rest-regression-batch`, and the deadline-composition portion of
+`m25f-gateway-broker-refactor`; it is not Stage 04 acceptance or performance
+evidence.
+
+The next fresh state
+`out/test-plan/m26e-console-qemu-v35-v18-rest-timeout-enumbound-20260814T150747Z`,
+attempt `20260814T153840.420898Z-83984-3692079da030`, bound source digest
+`sha256:9e782b7b531895b5e30954e16bb28b6fd460b29e42a2d0fadfabb5251e057f56`.
+It verified the Stage 03 base artifact, brought local QEMU and Hive Gateway to
+readiness, passed the concurrent core batch (`boot_v0.coh`,
+`observe_watch.coh`, and `session_pool.coh`), passed parity
+`rest_control_plane_smoke.coh`, passed the Python REST smoke with 12 root
+entries and a 12-byte lifecycle state, and wrote and verified Stage 04 result
+`sha256:6c971c409a8b352d5aef197e3cf40fca475f18f3b1a0275173b5502f7fe5a277`.
+
+Finalization correctly refused acceptance with status `stale-inputs`. Initial
+context digest
+`sha256:ee0a82e7448afebb6e8daaa10f9c85979dc8f39da7722b5609549de9ef4f6fc2`
+became
+`sha256:dbe746163ea96ed2d8b6485d3d8512f38d0cfbbaff2eeac42f9896f1a1898bde`
+solely because Stage 04 retained seven values it had exported after initial
+capture: `COHESIX_GATEWAY_URL`, `COHSH_REST_RESPONSE_TIMEOUT_MS`,
+`COHSH_REST_URL`, `COH_REST_URL`,
+`HIVE_GATEWAY_BROKER_CONTROL_RESPONSE_TIMEOUT_MS`,
+`HIVE_GATEWAY_BROKER_TELEMETRY_RESPONSE_TIMEOUT_MS`, and `HIVE_GATEWAY_URL`.
+Git HEAD, status, tracked diff, untracked inventory, source digest, action
+digest, toolchain digest, and Stage 03 dependency attestation remained exact.
+This is runner-owned provenance self-mutation, not a target, REST,
+external-concurrent-edit, or generated-restoration failure. Every behavioral
+result remains diagnostic only; Stage 04 did not pass and Stage 05 was not
+reached. Restore the pre-export environment before either final-context path,
+pass the focused regression above, and rerun Stage 04 from a fresh source-bound
+state.
+
+That fresh rerun is
+`out/test-plan/m26e-console-qemu-v35-v18-rest-timeout-envrestore-20260814T154759Z`,
+bound to source digest
+`sha256:c9736b7be1f5c14d16a2606f1259588e523b3fa03e33c774ac3f5040a80a4886`.
+Stage 04 attempt `20260814T161701.848576Z-19430-73991892f2e6` recorded byte-identical
+initial and final contexts with context digest
+`sha256:9b90429e67bf72aec97941ee7e93eba99eeb0379624e8672b14f1c2f82a6a782`.
+Its immutable passing stage manifest is
+`sha256:f475d77ecda220df2d1bb992d724a574175b0638691d87175bbdccc4051462de`.
+The Stage 03 base artifact verified, the local gateway declared the exact
+`5,000 + max(120,000, 120,000) + 5,000 = 130,000 ms` response window, and the
+core batch passed `3/3`: `boot_v0.coh`, `observe_watch.coh`, and
+`session_pool.coh`. Parity `rest_control_plane_smoke.coh` passed `1/1`; the
+Python REST smoke returned 12 root entries and a 12-byte lifecycle state; and
+Stage 04 result
+`sha256:de30a40d14f9e2e075c515c9e1f83cf3cd94d0662238c9f23afa045a0a64e98f`
+wrote and verified. This is immutable Stage 04 QEMU REST integration PASS for
+that exact source, dependency, artifact, and context. It does not establish a
+five-stage run, Stage 05, performance, release, or Milestone 26e acceptance.
 
 ### Conditional B2 — Milestone 26e QEMU executable-Worker REST pressure
 
@@ -4629,24 +4965,84 @@ result but cannot be used as a passing capacity or M26e acceptance claim.
 - Compare transcripts: `diff -u out/smp_parity_1.txt out/smp_parity_4.txt` (must be byte-identical).
 
 ### Conditional D — Gateway large-telemetry reliability (Milestone 25f)
-When the `performance` claim is selected, run this matrix with `hive-gateway`
-attached and **no retry paths**. Qualification requires both the local and G5g
-evidence named by the active milestone.
-- `python3 scripts/rest_perf_harness.py --mode simulate --rest-url http://127.0.0.1:8080 --no-retries --fast-ramp --scenario telemetry-1mb --error-budget-rate 0.01`
-- `python3 scripts/rest_perf_harness.py --mode simulate --rest-url http://127.0.0.1:8080 --no-retries --fast-ramp --scenario telemetry-10mb --error-budget-rate 0.01`
-- `python3 scripts/rest_perf_harness.py --mode simulate --rest-url http://127.0.0.1:8080 --no-retries --fast-ramp --scenario telemetry-100mb --error-budget-rate 0.01`
-- `python3 scripts/rest_perf_harness.py --mode simulate --rest-url http://127.0.0.1:8080 --no-retries --fast-ramp --scenario telemetry-1gb --error-budget-rate 0.01`
+When the `performance` claim is selected, run each scenario with a fresh exact-version
+Hive Gateway using its explicit in-process host-model backend. Pass
+`--gateway-mock`, supply the exact packaged gateway with `--gateway-bin`, and
+keep `--no-qemu`; the harness owns and tears down that gateway without probing
+or authenticating target TCP. The
+24-to-120 synthetic population belongs only to this `backend_class=host-model`
+lane. A TCP console gateway reports `backend_class=console-projection` and must
+fail before `/worker`, `/actions/queue`, or `/queen/ctl` access when paired with
+`--population-mode host-model`; target-backed QEMU pressure instead uses
+Conditional B2's exact three generated executable roles. QEMU cannot qualify
+Pi, and neither this host-model lane nor Conditional B2 substitutes for fresh
+Pi performance evidence.
+
+These commands disable only the harness's transient operation retries:
+`--no-retries` does not disable the gateway's bounded control-write retry
+window, whose canonical value is 1200 ms. Preserve the gateway launch
+configuration and retry counters with every report. Qualification requires
+both the local and G5g evidence named by the active milestone.
+
+The Worker telemetry read ceiling is explicitly `8192` bytes. This is the
+existing complete structured Worker-state bound used by executable discovery;
+it remains one fail-closed request and adds no retry or truncation. The earlier
+implicit `256`-byte default predates `cohesix-worker-observation/v1` and cannot
+admit its 381-byte host-model record. Results using `8192` are therefore a named
+comparator-input revision and are not directly comparable to historical
+`256`-byte Worker-tail results.
+
+The schedule, lease, and export control mirrors retain the newest complete
+JSONL records within their generated `ctl_max_bytes` bounds, matching the target
+provider. Cumulative mirror bytes are not a lifetime write quota: when a valid
+new record fits individually, the provider drops oldest complete mirror records
+before appending it. The independent schedule queue, lease lists, and export
+window limits remain semantic refusal boundaries and every refused operation
+still counts against the error budget. The ramp must begin the configured
+Worker/intensity maximum no later than the final ramp interval and hold it
+through that interval; a report that never observes the configured endpoint is
+non-qualifying.
+
+- `.venv/bin/python scripts/rest_perf_harness.py --mode simulate --population-mode host-model --no-qemu --gateway-mock --gateway-bin "$HIVE_GATEWAY_BIN" --gateway-log out/bench/conditional-d/telemetry-1mb/gateway.log --gateway-broker-control-response-timeout-ms 120000 --gateway-broker-telemetry-response-timeout-ms 120000 --gateway-control-write-retry-window-ms 1200 --no-retries --strict-control-errors --tail-bytes 8192 --fast-ramp --scenario telemetry-1mb --error-budget-rate 0.01 --log-dir out/bench/conditional-d/telemetry-1mb --log-prefix telemetry-1mb`
+- `.venv/bin/python scripts/rest_perf_harness.py --mode simulate --population-mode host-model --no-qemu --gateway-mock --gateway-bin "$HIVE_GATEWAY_BIN" --gateway-log out/bench/conditional-d/telemetry-10mb/gateway.log --gateway-broker-control-response-timeout-ms 120000 --gateway-broker-telemetry-response-timeout-ms 120000 --gateway-control-write-retry-window-ms 1200 --no-retries --strict-control-errors --tail-bytes 8192 --fast-ramp --scenario telemetry-10mb --error-budget-rate 0.01 --log-dir out/bench/conditional-d/telemetry-10mb --log-prefix telemetry-10mb`
+- `.venv/bin/python scripts/rest_perf_harness.py --mode simulate --population-mode host-model --no-qemu --gateway-mock --gateway-bin "$HIVE_GATEWAY_BIN" --gateway-log out/bench/conditional-d/telemetry-100mb/gateway.log --gateway-broker-control-response-timeout-ms 120000 --gateway-broker-telemetry-response-timeout-ms 120000 --gateway-control-write-retry-window-ms 1200 --no-retries --strict-control-errors --tail-bytes 8192 --fast-ramp --scenario telemetry-100mb --error-budget-rate 0.01 --log-dir out/bench/conditional-d/telemetry-100mb --log-prefix telemetry-100mb`
+- `.venv/bin/python scripts/rest_perf_harness.py --mode simulate --population-mode host-model --no-qemu --gateway-mock --gateway-bin "$HIVE_GATEWAY_BIN" --gateway-log out/bench/conditional-d/telemetry-1gb/gateway.log --gateway-broker-control-response-timeout-ms 120000 --gateway-broker-telemetry-response-timeout-ms 120000 --gateway-control-write-retry-window-ms 1200 --no-retries --strict-control-errors --tail-bytes 8192 --fast-ramp --scenario telemetry-1gb --error-budget-rate 0.01 --log-dir out/bench/conditional-d/telemetry-1gb --log-prefix telemetry-1gb`
+
+The retained comparator leaves `seed=null` and requires
+`strict_control_errors=true`, so every typed bounded refusal remains an error.
+Changing either value, the gateway retry window,
+or any timeout defines a different comparator and requires separately named
+evidence. The harness applies the three explicit gateway values above to the
+fresh process it owns.
 
 Pass criteria:
 - Every run exits `0`.
 - Summary artifacts exist (`*.summary.json`, `*.ops.csv`, `*.ramp.csv`, `*.ramp.svg`).
 - `error_budget_pass=true` and `error_rate <= 0.01` in each summary JSON.
-- `no_retries=true`, `fast_ramp=true`, and `scenario` equals the requested preset in each summary JSON.
+- `no_retries=true`, `fast_ramp=true`, and `scenario` equals the requested preset in each summary JSON; `no_retries` describes harness operation attempts, not the external gateway.
+- `report.workload.strict_control_errors=true` in every summary JSON; a typed
+  control refusal must not be projected as success.
+- `report.workload.tail_bytes=8192` in every summary JSON.
+- Every exercised schedule, lease, or export semantic-capacity refusal is
+  classified losslessly as `buffer-full` in the applicable reliability and
+  retained-state fields and retains the canonical error text. Generic HTTP
+  `503`, `other`, or `unclassified` attribution for that refusal is
+  non-qualifying even when the aggregate error rate remains within budget.
+- `report.population.backend_class=host-model`,
+  `report.population.proof_class=host-model`,
+  `report.capacity_boundary.worker_cap_limited=false`, and
+  `report.capacity_boundary.configured_endpoint_observed=true`; a target-backed,
+  unknown, or cap-limited population is non-qualifying even if its process exits
+  zero.
 
 Failure policy:
 - Any scenario above the error budget is a release-blocking defect.
+- Any host-model/backend mismatch fails before a benchmark marker or target
+  mutation and must not be converted into a capacity result.
 - Do not use retry flags or ad-hoc rerun wrappers to mask failures; tune/fix code and re-run the same matrix.
-- On slower physical targets, keep `--ready-timeout-secs` greater than the gateway broker response timeout and pass explicit harness overrides such as `--gateway-broker-control-response-timeout-ms 120000 --gateway-broker-telemetry-response-timeout-ms 120000` rather than lowering the error budget or enabling retries.
+- Physical-target gateway deadlines belong to the independently named fresh-Pi
+  target-performance lane; Conditional D always uses its harness-owned
+  host-model gateway and supplies no Pi target evidence.
 
 ### Conditional E — Multi-hive federation relay (Milestone 25h)
 When the `federation` claim is selected, run this matrix with three independent
@@ -5021,6 +5417,36 @@ extraction directory, never from repository build output.
 - Do not progress beyond this stage until all prior attestations verify and the
   due-diligence gate is green.
 
+In the Stage 04 PASS state above, Stage 05 attempt
+`20260814T161937.357994Z-20575-399d58a7497f` retained source
+`sha256:c9736b7be1f5c14d16a2606f1259588e523b3fa03e33c774ac3f5040a80a4886`.
+`required-audit-assets` and `staged-evidence-state` passed. The first failed
+proof layer was `stage-01-attestation`: recorded context
+`sha256:bc69f60f93bd1a670a3eb13e71476bb9c01cb8d086805f3d255599a75f1bec7d`
+recomputed as
+`sha256:a40a397cce804241bad65a1d8b0da96c0f5ee4167f6fb83985dbc7a00dc7a973`.
+Forensic reconstruction established that the verifier received exactly three
+wrapper-injected additions: `DD_GATE_LOG_DIR`,
+`DD_REUSE_STAGED_EVIDENCE_FROM`, and `DD_REUSE_STAGED_EVIDENCE_TARGET`.
+Source, toolchain, action, and dependency identities were unchanged. The gate
+failed closed at that check; no later Stage 05 gate ran.
+
+The reused-stage verifier remains a direct call. Context capture passes the
+stage into `test_plan_evidence.selected_environment(scope, stage)`, which
+records `DD_*` controls only for Stage 05 and ignores them for Stages 01-04,
+where they do not govern behavior. Applicable `TP_*` selectors, toolchain,
+source, and target remain bound in every stage context; inherited documented
+Stage 05 controls are neither cleared nor hidden from the stage they govern.
+Focused regression
+`test_due_diligence_selectors_bind_only_stage_five_context` passed, proving
+inherited `DD_COLLECT_ALL`, `DD_GATE_LOG_DIR`, and
+`DD_REUSE_STAGED_EVIDENCE_TARGET` are absent from Stage 01, exact in Stage 05,
+and `TP_HOST_JOBS` remains exact in both. The complete evidence suite passed 30
+tests plus 5 subtests, and the complete due-diligence lifecycle suite passed 27
+tests plus 2 subtests. These host tests close the selector-isolation defect
+only. Stage 05 and full acceptance remain open until a fresh source-bound
+all-stage run passes.
+
 ### Milestone 26e production-surface and fallback-retirement gate
 
 The compiler-owned source is `configs/implementation_surfaces.toml`; the only
@@ -5101,7 +5527,7 @@ mismatch, fewer than two total refills, missing consumed-time evidence, and an
 active SC that aliases another task. QEMU and Pi each reserve 1,000 us of every
 10,000 us core window. The Pi table includes seven linked-driver records; the
 default QEMU table deliberately does not fabricate those hardware TCBs.
-Manifest `root_task.schema = "1.11"` adds exactly one fixed, root-retained
+Manifest `root_task.schema = "1.14"` retains exactly one fixed, root-retained
 NineDoor bootstrap SC outside the steady temporal-task topology. Resource
 admission must therefore total 18 SCs for QEMU and 25 for Pi; the former 17/24
 totals, a zero-object NineDoor SC inventory, or double-counting the one-shot
@@ -5114,18 +5540,51 @@ real `root-control` domain and exactly four distinct restricted children:
 missing kernel object, shared child CNode/TCB/SC/Reply/retention cap, wrong core,
 idle/trampoline entrypoint, or activation before registry seal. Critical
 permanent-domain retention caps are not grouped reclaimable untyped anchors.
-The QEMU and Pi compiler fixtures must both assert the exact `root-control`
-candidate: `2750 us / 10000 us`, `2500 us` WCET, `5100 us` response, and
-`m26e-qemu-root-exclusive-predispatch-candidate-v23` provenance. The
-QEMU root row must select
+The QEMU compiler fixture must assert root-control remains on core 0 with
+`5500 us / 10000 us`, `5000 us` WCET, `7600 us` response, and
+`m26e-qemu-root-adjacent-refill-natural-postpone-candidate-v35` provenance. Pi must retain
+core 0, `2750 us / 10000 us`, `2500 us` WCET, `5100 us` response, and
+`m26e-pi4-root-adjacent-refill-natural-postpone-candidate-v24` provenance. The QEMU root row must select
 `virtio_operator_serial_io_bytes_per_turn = 64`; the Pi root row and every
 non-root row must select zero. Validation must reject every QEMU root value
 other than exact `64`, including `0`, `65`, `1024`, and `u32::MAX`, plus a
-nonzero non-VirtIO root bound or a nonzero non-root bound. The fixtures must
-also assert the exact active `console-network-service` candidate:
-`3000 us / 10000 us`,
-`2400 us` WCET, `7500 us` response, and
-`m26e-qemu-console-bounded-stack-steps-candidate-v6` provenance.
+nonzero non-VirtIO root bound or a nonzero non-root bound. The QEMU fixture
+must place the active `console-network-service` task, matching service config,
+and SchedControl on core 2 with `3000 us / 10000 us`, `3000 us` WCET,
+`3000 us` response, and
+`m26e-qemu-console-received-progress-retention-candidate-v18` provenance; its
+GPU and LoRA peers must each derive `3600 us` response. It must
+assert exact core-0/core-2 demands `8750/3800 us`. Pi must retain its earlier
+console core 0, derive `8100 us` response, retain GPU/LoRA `1200 us`
+responses, and preserve exact `9000/9000 us` admission truth while selecting
+the same V18 child provenance and ABI v3. Both fixtures must select
+`NaturalPostpone` for the active console child and their selected root-control
+row, retain each timeout cap/badge/resource/registry identity, and prove both
+TCB timeout-handler slots are left empty while their standard fault endpoints
+remain terminal. All budgets, periods, deadlines, WCETs, response bounds,
+priorities, MCPs, refill counts, placements, reserves, and the separate QEMU
+24 MHz/Pi 54 MHz clocks remain unchanged.
+The focused runtime regression must authenticate over the real smoltcp socket,
+drive the child-side TCP state through `FinWait2`, queue complete late output,
+and prove that free send capacity without `can_send()` neither calls
+`send_slice` nor returns an error, commits bytes, or publishes
+`OutputDrained`. A subsequent peer close must reach `Closed`, publish exactly
+one `Disconnected`, clear the ended connection state, and relisten. The normal
+Established-state complete-frame send remains covered, and no other Session
+backpressure or error source may be reclassified as successful continuation.
+A distinct real two-stack regression must authenticate, close the client socket
+without root disconnect control, observe the server enter `CloseWait`, and prove
+that V12 requests the existing graceful disconnect. Exact-generation output
+remains queued until `close_ready`; the existing close path must then reach
+`LastAck`/`Closed`, publish exactly one `Disconnected`, clear the ended
+generation, and restore LISTEN so a replacement client can connect. The test
+must add no retry, polling loop, timeout, or fabricated root wake.
+A separate V13 real-stack regression must drive a locally initiated close
+through `FinWait2` into `TimeWait`, call `TransportSession::end` before aborting
+the completed TCP control block, restore LISTEN immediately, and authenticate a
+replacement connection with identity 2. It must prove one old-generation
+`Disconnected`, cleared old authentication/output state, unchanged `Closed`
+handling, and no modeled `10 s` expiry, retry, polling loop, or root wake.
 They must independently assert the exact `root-fault` candidate:
 `3000 us / 10000 us`, `2400 us` per-unit WCET, `2600 us` per-unit response,
 and `m26e-qemu-root-fault-service-units-candidate-v6` provenance. No
@@ -5157,11 +5616,22 @@ Network turn. The later live v5 run raised child timeout badge `0x26ee0007` at
 `Send` after `publish_exchange` with exactly `3000 us` consumed, then raised
 root timeout badge `0x26ee0001` at the sole outer `seL4_Yield` after
 containment/quarantine with exactly `2750 us` consumed. Those failures disprove
-the multi-material child turn and whole-containment Recovery turn. The `5100 us`
-response is per-phase scheduler admission, not
-end-to-end host/TCP latency. They must also assert the derived
-core-0 demand of `9000 us` and the console-network response bound of `7500 us`;
-stale pre-live values fail closed.
+the multi-material child turn and whole-containment Recovery turn. The
+historical `5100 us` V24 response was per-phase scheduler admission, not
+end-to-end host/TCP latency. The exact V24 snapshot at
+`out/m26e-qemu/ack-split-v24-20260813T122117Z/v24-gdb-readonly-snapshot.txt`
+binds current-fault label `5`, badge `0x26ee0001`, FaultIP `0x5361c` in
+`KernelSerialDriver::read_byte`, LR `0x5391c` in
+`SerialPort::poll_rx_current_tcb`, outer successor Runtime, and Operator
+successor SerialDispatch. The child remained healthy at Wait `0x21360c` while
+root-fault received and emergency was fail-stop. V18 retains V17's temporal
+envelope and authenticated oversize transition while retaining private service
+after nonzero bounded socket receive progress: current
+fixtures must assert root
+budget/WCET/response `5500/5000/7600 us`, child budget/WCET/response
+`3000/3000/3000 us`, GPU/LoRA response `3600 us`, and core-0/core-2 demand
+`8750/3800 us`; stale V15 child values fail closed. Passing offline recurrence proves admission for this
+conservative pending envelope, not that the values are numerically minimal.
 The canonical v6 root ELF SHA-256 was
 `0059fd675b476106888d6ca62c8bba21f9b340b9aa607e000fbf96997fd29900`.
 That run raised root timeout badge `0x26ee0001` after exactly `2750 us` at the
@@ -5415,31 +5885,705 @@ and badge `0x26ee0001`; Classify was already committed. Record these as exact
 failure evidence for v21's composed predispatch and root-fault v4's unprimed
 first Receive respectively, not as child v6 failure or qualification evidence.
 
-The v23 root-control, V6 root-fault, v6 child, and unchanged v15 supervisor
-candidates must start with a
-fresh canonical QEMU convergence canary through authentication and
-standard/timeout fault injection. Stop at its first failed target layer; run
+The later V23/V6 image exposed a systemic execution-profile defect that
+supersedes further source-leaf attribution until repaired. Exact root ELF
+`e3d757a79f2fa186a405e3199d8b62633dbf22fb9c12462341f8344e94c04731`
+failed under ordinary wall-clock TCG at changing boundaries across otherwise
+independent root and child owners. The byte-identical image under
+`-icount shift=0,sleep=off` completed `OK AUTH` and the Secure9P write/read
+portion of `9p_batch.coh`; that establishes diagnostic path reachability only.
+Its first HVF exception was the pre-seL4 FP/ASIMD trap EC `0x07` at
+`cpio_get_file+28` (`ldr q25`), where release libcpio had been auto-vectorized
+without the elfloader's required `-mgeneral-regs-only`. The old profile also
+embedded the TCG-oriented SMC DTB and 62.5 MHz timer value while this supported
+Mac exposes 24 MHz under HVF. A historical macOS release independently reached
+seL4 and root bootstrap under HVF on the same host. Therefore `-icount`,
+wall-clock TCG, and CNTFRQ-dilated runs remain non-claiming diagnostics; they
+must not trigger another owner split or qualify `.coh`, REST, or performance.
+
+The immutable V23/V6 diagnostic artifact
+`out/cohesix-m26e-hvf-20260813T054027Z` binds rootserver SHA-256
+`48ae02bd3faae9626a03c29932ca15b809d30f9552404ddfbe81051d24dace95`,
+console child SHA-256
+`89c241b6198a140170744b02b707a6000486acf39dee0799a302d74605fde52b`,
+and CPIO SHA-256
+`0619e47f1157815f43629ab56c03b39f342e44460b931efd822bc93e42e0c689`.
+The fresh TCG gateway map
+`out/m26e-qemu/v23-v6-tcg-gateway-fault-map-20260813T172000Z` recorded the
+console TCB at FaultIP/NextIP `0x213d58` (`BRK`), LR `0x21373c`, and `x0 = 5`
+(`RuntimeError::Backpressure`) after `poll_session_unit`. A breakpoint on the
+old image's shared send/backpressure exit at `0x21832c` then hit with smoltcp
+TCP state `FinWait2`, proving that the capacity-only send predicate admitted a
+closed transmit half. This is diagnostic localization of the v6 defect, not
+target acceptance for v7.
+
+The canonical HVF V24 artifact
+`out/cohesix-v24-attach-fastpath-hvf-qemu10-20260813T081651Z` bound rootserver
+SHA-256 `e2386dc044fb78ab2cf757db3304bf918847b99990f7aa7869eb366647cbdcb7`,
+console child SHA-256
+`b1689774784e6e2ab11d5ac878fee173f42150deb6c371baa26017a8a81f18db`,
+CPIO SHA-256
+`d9dc4058acb5f97d65af7ff17219dfc4034e0527c407b063f2bcd482ea97316b`,
+and kernel SHA-256
+`8aa06eaf462a87d3aa6c1f8500ad1d1ed5632f5ad8031c5eab53fdd2095257da`.
+Sequential run `out/m26e-qemu/v24-attach-sequential-20260813T083057Z`
+completed `OK AUTH` and `OK ATTACH role=queen`, then `boot_v0.coh` timed out
+waiting for the first `TAIL /log/queen.log` response. UART explicitly reported
+`terminal-fault class=Standard`. The read-only map placed the child at
+FaultIP/NextIP `0x213d80` (`BRK`) with LR `0x2136cc`; the TCB fault payload had
+already been consumed/zero. SC offset `+0x30` still contained the configured
+timeout-handler badge `0x26ee0007`, which is configuration state and must not
+be cited as evidence that the initiating fault class was Timeout. Exact
+source/state mapping identified retained `ApplyControl(SendLine)` after the
+owning session ended and `AuthState` became inactive. V7 read the control page
+but discarded its connection identity, so the already-staged old-generation
+record entered the current unauthenticated terminal-error path. This is exact
+V7 stale-generation failure evidence, not V8 qualification and not evidence
+that `ATTACH` failed.
+
+The exact V8 HVF artifact
+`out/cohesix-v8-stale-control-hvf-qemu10-20260813T090943Z` bound rootserver
+SHA-256 `f200ecf56021e5eb712e28ecd3ea290d476552166ba2ce3a6b6b5d959f811910`,
+console child SHA-256
+`ed0b2b7ecbf2c9f302a30d087d54fbfe264fbfe6857f1717f94319ae4735b551`,
+CPIO SHA-256
+`991ea1d85fa8fb5a2d1146cbe9b183eaf3c204301d8348d4f18a722cb490156d`,
+and kernel SHA-256
+`8aa06eaf462a87d3aa6c1f8500ad1d1ed5632f5ad8031c5eab53fdd2095257da`.
+Its live run `out/m26e-qemu/v8-stale-control-live-20260813T092000Z`
+reached `root-console.start.ok` without a target fault. Two sequential TCP
+connections each wrote the complete 18-byte AUTH frame, read zero bytes, and
+timed out. This is exact failure evidence for V8's unconditional post-unit
+blocking Wait: child-owned publication and service continuations could remain
+durable but unrunnable until an unrelated later root signal. It does not
+invalidate V8's stale-generation fence and is not later-candidate qualification.
+
+The immutable V25/V11 artifact
+`out/m26e-qemu/temporal-v25-20260813T125130Z/artifact` completed the first raw
+AUTH, but replacement raw connections were reset at `+1 s` and again at
+`+10 s`; `raw-auth-twice.log` and `raw-auth-after-10s.log` retain that evidence.
+A live read-only snapshot, for which no transcript was retained, showed root
+current fault `NullFault`, root-control fully replenished at budget `5500 us`,
+and the healthy child blocked in core-2 Wait. Source comparison localized the
+failure to peer FIN advancing the isolated socket to `CloseWait` without the
+server half-close/relisten transition that M26b Complete `72288c7d` had owned.
+This is V25/V11 reachability and failure evidence, not V12 qualification.
+
+The immutable V12 target set
+`out/m26e-qemu/peer-close-v12-20260813T133000Z` bound source digest
+`sha256:c047b0886ba42ba1dfe0004009a8e9377d4d2cbd98e997e8dfd463e4bc80eaa0`.
+Raw session-1 AUTH, host close, and same-boot raw session-2 AUTH passed. A third
+`cohsh` session passed AUTH, ATTACH, four-line TAIL, END, and QUIT. Replacement
+authentication timed out at `+5 s`; a raw replacement still timed out at
+`+30 s`. UART recorded no fault. The read-only GDB reproduction under
+`out/m26e-qemu/peer-close-v12-20260813T133000Z/attached-teardown-gdb-20260813T134100Z`
+found all CPUs kernel-idle. Smoltcp 0.13.1 had the sole socket in `TimeWait`:
+its fixed `10 s` close delay is re-armed by each incoming replacement SYN.
+M26b Complete `72288c7d` treated `TimeWait` as terminal; V13 restores that
+boundary by ending the old generation, aborting the completed TCP control
+block, and relistening immediately. This is V12 failure evidence for V13, not
+V13 qualification.
+
+The immutable V13 target failure is retained in
+`out/m26e-qemu/peer-close-timewait-v13-20260813T140319Z/same-boot-two-complete-sessions-20260813T141000Z`.
+It binds rootserver SHA-256
+`d91c89bc9e076097e45085c92a368760ecf39cb36fbf1fede2faa9099d87f31d`,
+console child SHA-256
+`4057c1b6a850ae806e2d9d5fde018ad88a831b66c606f4cf7a105ea38fe3f387`,
+and CPIO SHA-256
+`bb60bfaf2b9b0775361ecc111b972ab8f8f9ae1b0d9d9afd672bac3e56e4cdf1`.
+Direct session A completed AUTH, ATTACH, four-line TAIL, END, and QUIT. Same-boot
+session B connected twice, but each AUTH wrote 18 bytes and read zero before the
+script failed after 21 seconds. QEMU remained alive, UART showed no runtime
+fault, and exact child disassembly retained V13's `TimeWait -> end -> abort ->
+listen` path. Root source and cursor audit found the earlier boundary: a
+successful Disconnect left `disconnect_requested` set; `ControlCompleted`
+reopened the control slot and `OutputDrained` marked that new control drained.
+The next `ObserveChild -> StageOutput -> Disconnect` pass therefore published
+Disconnect again, and each successful signal reset the lower cursor to
+ObserveChild. This repeated transaction starved Ingress and ServiceTick, so the
+peer ACK/FIN never reached the child and V13's packaged branch never ran. V26
+adds a per-connection issued latch that commits only after successful
+publication, remains clear on backpressure, survives completion/drain while the
+Quit reason remains requested, and clears on the connection/generation terminal
+paths. The post-completion Disconnect visit must then be a no-op and advance to
+Ingress and ServiceTick. This is V13 failure evidence for V26, not V26
+qualification.
+
+The V35 root-control, V6 root-fault, V18 child, and unchanged V15 supervisor
+candidates must start with a fresh, validator-clean HVF QEMU profile and
+exact-artifact convergence canary through bounded TAIL/CAT response progress,
+the fixed one-socket HELP/NETSTATS/CACHELOG9/SMP matrix, standard-fault
+terminal containment, and budget-exhaustion natural-postponement
+liveness/isolation. The
+retained V26/V13 artifact already passed two sequential direct sessions on one
+boot. Exact V27/V15 artifact
+`out/m26e-qemu/bounded-response-v27-v15-20260813T164606Z/artifact` and evidence
+`sendbatch-tail64-cat-20260813T165110Z` completed boot, AUTH, ATTACH, the
+64-record TAIL, bounded CAT, and host-side script exit zero, then QUIT reached
+`closing session` before UART fail-closed at `response-completion-sequence`.
+That is exact failure evidence: child-side drain admitted Disconnect before the
+root-owned terminal response lane had retired its exact completion/drain, ACK
+debt, copied egress, and queued-output identity. Neither historical result
+qualifies V30/V15. The immutable V28/V15 artifact
+`out/m26e-qemu/terminal-disconnect-fence-v28-v15-20260813T171339Z/artifact`
+and evidence `two-session-sendbatch-20260813T171736Z` recorded both sessions
+exit zero, one connection per session, 25 retained TAIL/CAT records in session
+one, and no UART terminal fault. That result qualifies only V28's terminal
+Disconnect fence and same-boot reconnect; it does not qualify generalized
+synchronous producers, Stage 03, REST, performance, or Milestone 26e. The
+immutable V29/V15 artifact
+`out/m26e-qemu/bounded-sync-response-v29-v15-20260813T190157Z/artifact`
+binds rootserver SHA-256
+`f60d716573afe3387360689b20f5e9012171a0c4e34ebdd7d4b21bf89811b9a6`
+and resolved-manifest SHA-256
+`983b5433ec4b4138ebc5bc05401393bcd6f623bae96e46d9ca4ad52694889adc`.
+Its fixed matrix completed AUTH and ATTACH, then HELP returned zero bytes before
+the unchanged 30-second timeout. A read-only snapshot showed clean root and
+child state. Breakpoints proved HELP finished command handling with
+`capture_started=false`, and the selected live `DefaultNetStack` vtable used
+the trait-default bounded identity returning `None`. Source audit found V29's
+four isolated response hooks and the preexisting pending-event hook were not
+delegated through the selected wrapper. This is exact V29 failure evidence for
+V30, not V30 qualification.
+The immutable V30/V15 artifact
+`out/m26e-qemu/default-netstack-response-v30-v15-20260813T200444Z/artifact`
+completed HELP and NETSTATS, then the child terminalized at the Yield SVC with
+two adjacent refills totalling exactly `3000 us`. The non-claiming local-Poll
+diagnostic
+`out/m26e-qemu/local-poll-diagnostic-v30-v15-20260813T204840Z/artifact`
+completed HELP, NETSTATS, and the correct first-call SMP body count of 16 on
+its first boot; the host's then-expected 26 was oracle drift. A second fresh
+boot of the same bytes reached `root-console.start.ok` and emitted
+`root-emergency fail-stop` before any TCP probe. These results disprove the
+V15 terminal-timeout/local-Poll combination and are not V16 qualification.
+The later non-claiming V30/V17 Stage 03 artifact
+`sha256:466f8210e6aa98757f6393758bfed0cee24e15272f95e680a5263feab26ea90e`
+bound root SHA-256
+`47df96e2a444e507a6872bf43af5ddd47133f960c8daebdc2dba71d10f53b690`
+and resolved-manifest SHA-256
+`eb274d4358345ddef0d4a191d75fd2bd40ff98c6577f0135fd18cd599f9afbd0`.
+Its fixed matrix, `boot_v0.coh`, `9p_batch.coh`, and `host_absent.coh` passed.
+`observe_watch.coh` received the exact typed invalid-path CAT error, but retained
+an uncommitted ordinary stream shell with no END pending; same-connection QUIT
+then timed out before dispatch. This is V30/V17 failure evidence for V31, not a
+Stage 03 pass.
+
+The next non-claiming V31/V17 Stage 03 run
+`out/m26e-qemu/stage03-v31-v17-20260814T005001Z` bound invocation/source SHA-256
+`21b37c19572ef05accf6258c602442d21cd2ee24ff9594a2a3e0d2ab489bfae3`.
+Its base launch record SHA-256 was
+`099e8de70ece2c38f38ebf1cd7d1b1acaf730e5baa5d7ca20d3ba6021ce2d94e`,
+with artifact ID
+`sha256:a1f6953065daa1dac388ba249c302a0acf8563e3e75546da9f94a1ab9a1454f5`,
+resolved-manifest SHA-256
+`29f5c8c7a044fa3b9c611bad06be30904a6f77db43d17cabce53e30cfa89545e`,
+rootserver SHA-256
+`919de64dfe7e69e627e7461e1f6822cc7714f3fbaf2171cb84b59592189084f9`,
+CPIO SHA-256
+`62ba464d2613206526f8d2b3d001cbea233ba3b32d5a81e95885a2ec426bf12e`,
+and kernel SHA-256
+`8aa06eaf462a87d3aa6c1f8500ad1d1ed5632f5ad8031c5eab53fdd2095257da`.
+The fixed matrix passed 7/7, then `boot_v0.coh`, `9p_batch.coh`, and
+`host_absent.coh` passed. In `observe_watch.coh`, its first two rapid TAILs
+passed; the third reached target command begin, `tail.start`,
+`tail.stop reason=eof`, and command end with status OK, but `cohsh` received no
+complete response before the unchanged five-second deadline. CAT and QUIT were
+not reached. The gated image was built but never target-run: launch record
+SHA-256
+`2925c2c8540e3b1034d0d949c4852a16d97b64439bde8eb9e5ddfad0a5820f04`,
+artifact ID
+`sha256:650b5b5c171f2cc18c0ad2ba3ffa2f65157625cd49c11b951e57c69f41765000`,
+resolved-manifest SHA-256
+`2ae9b9afdcd3bf9c1cf90db81822636ca69cbbe66774bddb3aab542e099dd100`,
+rootserver SHA-256
+`e1dc0c5664c4834e451c5bbc396cd98b9dc30130802e0a209f8a04fb198df0ee`,
+and CPIO SHA-256
+`cfa93f1591b50928622ac8fc3a638afa2ab000c926e9830c6f099aad7270bfb8`,
+with the same source and kernel. This is V31 failure evidence for V32, not a
+Stage 03 pass or qualification of either image.
+
+The subsequent immutable non-claiming V32/V17 Stage 03 run
+`out/m26e-qemu/stage03-v32-v17-20260814T014606Z` bound invocation/source
+SHA-256
+`3e1d02dac334fbe0019f517b34a3aad13f483e52e9d07570b52d122391a14eb1`.
+Its base artifact ID was
+`sha256:105b33911515641a19cde0a7c670c848911c16e14134bdf00efcdeba418c0483`,
+with launch-record SHA-256
+`94d409d0b5bdae883c929defaf801ee3cbaeb2d88688bf690b71f40ff983199b`,
+resolved-manifest SHA-256
+`03f72150a556b78a897ae291752c81d9def8cf283a930a8cd8b55b92464270e1`,
+rootserver SHA-256
+`592b60dc45597f1ca29d646ae9cf0fd4c8df86298f393016ee915f0e91ce161e`,
+CPIO SHA-256
+`2fd94dad9e75b43ea7eb8f42c38a4a587dc5e07a1c8f33cb10c2a6444fa29500`,
+console-child SHA-256
+`513ec72cf5174c2765d46696a41d28610b1171ee880b23720cfab0b261f51f40`,
+and kernel SHA-256
+`8aa06eaf462a87d3aa6c1f8500ad1d1ed5632f5ad8031c5eab53fdd2095257da`.
+The fixed matrix passed 7/7 and `boot_v0.coh` passed. `9p_batch.coh` then
+successfully wrote `batch-1`, `batch-2`, and `batch-3` but failed its line-12
+exact ordered-substring check because V32 routine command/session diagnostics
+entered public `/log/queen.log` and contaminated the bounded CAT preview. One
+of 17 selected operational `.coh` scripts passed before the runner stopped.
+The gated image was built but never target-run: artifact ID
+`sha256:6b9b281b4c872c588154f5d9a309797d4ec20e263943e0920e49ca0af492f1f0`,
+launch-record SHA-256
+`b4d7babfad21b2a70aa9311900e7f0692ecfbb6a4a772f5d933bd31909f8ace9`,
+resolved-manifest SHA-256
+`aeb4e263793c7b25bc1c4fc00983e25de033298c71fa8ce447a5a24eae19e101`,
+rootserver SHA-256
+`841ed16776c3dca1b1e3b1c6b7599d5a7b001e67f83f6a98cc889c33740688ad`,
+and CPIO SHA-256
+`22c24fc9d72c4c66a820986869786ca596efe9f0707a1404e089ed8c2636d40f`,
+with the same source, child, and kernel. This is V32 failure evidence for V33,
+not a Stage 03 pass or qualification of either image.
+
+The next immutable non-claiming V33/V17 Stage 03 run
+`out/m26e-qemu/stage03-v33-v17-20260814T024137Z` bound invocation/source
+SHA-256
+`4c186a1114d06b7fc1744ff49f7553363d49f6924fec9d4fc2a431cebfde94ec`.
+Its base artifact ID was
+`sha256:e3f5108fdeb3e4e190a879dd7ec63b7857cbffaf9b1a28bb08badad700ee1cf2`,
+with resolved-manifest SHA-256
+`aeb07bd7f8c78a2f070a156817f19d00d1789070feeb18c5cd5f9b61abc312e1`,
+rootserver SHA-256
+`8cdcfb9de60aa91f5e1758ee853e2835fc7c8dc94dc69b443d5c92022d64c508`,
+CPIO SHA-256
+`07f4a9eb864467e98aca709ac7e1bbc6851695adfa8830c841f2d49569d04d5e`,
+and kernel SHA-256
+`8aa06eaf462a87d3aa6c1f8500ad1d1ed5632f5ad8031c5eab53fdd2095257da`.
+The fixed matrix and seven base `.coh` scripts through
+`busy_backpressure.coh` passed. `cas_roundtrip.coh` then failed at line 22:
+the first two 96-byte fragments were incomplete CBOR and correctly returned
+`OK`; the third completed a manifest signed by fixture key
+`207a067892821e25d770f1fba0c47c11ff4b813e54162ece9eb839e076231ab6`,
+while the operational base verified against public key
+`9d96cc26689b84db3ab037d159f040eb0375a74ec0af387337dd9323d3efede8` and correctly
+returned `ERR ECHO reason=policy detail=denied ... EPERM`. The gated artifact
+was built but never target-run: artifact ID
+`sha256:9391ad8b68ec149909cd9364b723567d1efdd6da801d0acd1331a5bf6def84e3`,
+resolved-manifest SHA-256
+`d043d827ea98f57248d6838b2bff6d56f18fd4ba6fd2250545b5f76a8d66699f`,
+rootserver SHA-256
+`e91855a1814174ddb60d18d7f2c1f3108d92c8610a02714f609e91e25090162c`,
+and CPIO SHA-256
+`ebf9b4d377efd922e1c8c668530c0a7bfa221f971b53d104377ca4bfa74cdd33`,
+with the same source and kernel. This is a harness trust-profile routing
+failure, not a target CAS defect or Stage 03 qualification.
+
+The subsequent immutable non-claiming V33/V17 Stage 03 run
+`out/m26e-qemu/stage03-v33-v17-20260814T031936Z` bound source digest
+`sha256:6e5a11b51a744d584a1d839421a047b21bd2093aa2d4840ecee2797100ca668c`.
+Its base artifact ID was
+`sha256:33007af1046bbf1bb4b09a60182104f5224d807e1f17c2c3ad0929f5675af238`,
+with rootserver SHA-256
+`7c4a8eaca8aba695a3aefd294e06379d831f5d2b8719627a08a5342a6df398ef`,
+resolved-manifest SHA-256
+`aeb07bd7f8c78a2f070a156817f19d00d1789070feeb18c5cd5f9b61abc312e1`,
+CPIO SHA-256
+`af683916fdbd2eba0bf6eca3c3e3e15613482484933ea763dcfbaf941441c938`,
+and launch-record SHA-256
+`0ea06f80a124dd474215e04214587236b504e65a15ea2dbdd3726d8e9883345b`.
+Its gated artifact ID was
+`sha256:de3a14760a8d6df84c69f24e289f0c51f54de16a4802d6ec880b9358e5055dbb`,
+with rootserver SHA-256
+`11460ae9449bcaa6a6ff462dc0f00ea58f454e09f101a630f9e41a46dfdb80d1`,
+resolved-manifest SHA-256
+`d043d827ea98f57248d6838b2bff6d56f18fd4ba6fd2250545b5f76a8d66699f`,
+CPIO SHA-256
+`de7bf9c197b39fc17325c2c0b36288f553d6f42e83a3ad1a89e3fb606acc7c01`,
+and launch-record SHA-256
+`b452eb2f1a671928899d711bf82d83c0e9506d21ffe411c195ae44eaa717fdde`.
+The base fixed matrix passed 7/7, then `boot_v0.coh` and `9p_batch.coh`
+passed. Immediately after the final successful QUIT audit and before
+`host_absent.coh` authenticated, UART emitted
+`[critical] root-emergency fail-stop`. Exact same-base-artifact GDB evidence
+at `out/m26e-qemu/v33-post-9p-critical-gdb-20260814T035000Z` caught root-fault
+classification at `commit_root_fault_suspend` with task index `0`, timeout
+badge `0x26ee0001`, and seL4 Timeout label `5`: root-control exhausted its
+temporal budget, and the emergency plus later AUTH timeouts were downstream.
+No gated target workload ran after that first failed proof layer. This is V33
+failure evidence for V34, not a Stage 03 pass or qualification of either image.
+
+The next immutable non-claiming V34/V17 Stage 03 run
+`out/m26e-qemu/stage03-v34-v17-20260814T040349Z` bound source digest
+`sha256:9852bb0c7dfc5fb7029f84e434ee1831acac5eb6716d94d3a83223ae5d107fc6`.
+Its base artifact ID was
+`sha256:054abe6b2e33bb22d3ff30c18c35c1f6292c64a687d1b1308e0ca96de9ab0ef2`,
+with rootserver SHA-256
+`8d476189ee8f17c7d3514285082a2a9e0cab0bc7e3452b97523d8d5c4fff5ed3`,
+resolved-manifest SHA-256
+`df9fec5f01854a873437fe9938443ac8f67fc7a3f3778b5ad517fd3199110ae3`,
+CPIO SHA-256
+`e358bf089084a0fde0d7c7b76ebbaa50ad95f06b2d03fb5774a80de0332b6248`,
+and launch-record SHA-256
+`2b476508b62a48a693b8605c4becb16ceafe1ca683c269fceb0405e135eb8a50`.
+The fixed matrix passed 7/7 and all ten base scripts passed. The fresh
+base-telemetry boot then completed the expired-ticket, scope-denial, spawn,
+twelve telemetry writes, wrap, and 64-line TAIL paths, but
+`telemetry_ring.coh` line 56 expected `ERR ... ELIMIT` from a later CAT and
+received `OK CAT`. The ticket had only a one-request-per-second `/log` scope,
+the selected `131072`-byte default bandwidth, and a telemetry-only cursor
+advance. A multi-turn TAIL may cross that rate window, `/log/queen.log` is not
+a telemetry cursor path, and selected-QEMU routine diagnostics remain private.
+This is a stale test oracle, not a target quota defect. The gated artifact ID
+`sha256:b71799152fed6e06124a62933d256b22f4091557abf79c71c671168bbe2dcece`
+was built but never target-run. This run remains failure evidence and cannot
+qualify either image.
+
+The later staged V34/V17 attempt
+`out/test-plan/m26e-console-qemu-v34-v17-20260814T063134Z`, attempt
+`20260814T074732.814568Z-34073-6859f9f8537f`, bound source digest
+`sha256:599240eb411428ac7c973c8b346300ff3f9f9fa7e3b46bb2363573fbf5aa327c`.
+Stage 01 passed all 21 actions and Stage 02 passed both actions. Its Stage 03
+base artifact ID was
+`sha256:61f24940ce81779d1372e801839e29ad5c36da805c1e58bbca8cb08762e5ca4a`,
+with rootserver SHA-256
+`792d3a79b475a0d103f96221a3cfe0c745bf6e26f82a9b2d84ea58dd5ec7a330`,
+resolved-manifest SHA-256
+`df9fec5f01854a873437fe9938443ac8f67fc7a3f3778b5ad517fd3199110ae3`,
+CPIO SHA-256
+`7d2d7afa5840adfde384c9e20769bd22c6a8082aec2527ef527a131806107912`,
+and launch-record SHA-256
+`2725b8d3fd7f51c53638fdd34c831c0f9e144bd46599038f7472d7f56f15eee5`.
+Its packaged `cohsh` SHA-256 was
+`689b523b32655681ae0005413c0d2d9c7e70dc39b58761d9c0728d36e3bec01d`.
+The fixed matrix passed 7/7 and nine base `.coh` scripts passed through
+`tcp_basic.coh`. `session_pool.coh` line 5 then failed during its ordinary
+64-operation baseline, before the deliberate eight-byte short-write injection:
+the peer closed, and four replacement TCP connections received no AUTH response.
+No pool result, group result, later target group, root-emergency, fail-stop,
+panic, or unhandled target-fault marker was recorded. The gated artifact ID
+`sha256:ff567e69fef939430276775a0088921e1c1e08b530fd1ddcf30e82f08491fc85`,
+with rootserver SHA-256
+`9a7eb8a9d88778009bf3689049f5c30118e92056155e50ce59ee2137f5fd5c74`,
+resolved-manifest SHA-256
+`3c7956af210a2e4b131c853e90315ff61c8c1a3d02176af401b9c48493d836e3`,
+CPIO SHA-256
+`a7d3feb2b2da5b271b31a3304cf930b6ed33b8b3b6b36674ae438df8253ba235`,
+and launch-record SHA-256
+`1298815ff35ecc121d7e109a2a5458f97a64735a27ca354b90ccb1758f189c81`,
+was built but never booted.
+
+This first failure restores Reopened Milestone 20f task
+`m20f-cohsh-tcp-pool-safety` within the discovering
+`m26e-console-network-service-isolation` task. The pooled wrapper had regressed
+from host-local logical lease allocation to one wire ATTACH per checkout; its
+24 logical telemetry checkouts advanced the target from the script's primary
+sid 11 through sid 35 before baseline ECHO progress stopped. A pooled checkout
+must validate and normalize the requested ticket, reuse the wire only when the
+live attached connection has the exact cached role and normalized ticket, and
+then allocate a distinct host-local session ID without a wire frame. Cold,
+disconnected, reset, or changed authority must still perform the existing real
+ATTACH, and pooled QUIT remains a no-op. A deterministic framed-listener
+regression must prove one AUTH plus one ATTACH for 24 exact-authority leases,
+deterministic 25th-lease exhaustion, a later PING, a second ATTACH for changed
+normalized authority, and zero pooled QUIT. Fresh same-boot Stage 03 must prove
+that `session_pool.coh` emits no redundant pool ATTACH before its deliberate
+short write, recovers the replacement connection, reports exact
+`expected=64 observed=64` with zero failures, and completes QUIT/EOF before any
+later group may qualify. A mixed old-target/current-host replay that failed
+before reaching the pool workload is non-claiming and cannot close this gate.
+
+The subsequent canonical V34/V17 staged state
+`out/test-plan/m26e-console-qemu-v34-v17-poolfix-timerfix-20260814T092311Z`,
+resumed Stage 03 attempt `20260814T094657.522207Z-26353-639b8740c198`,
+bound source digest
+`sha256:e69fb97d01a4199c77ff7f44b4a071d73e615a9d36e0f8013422545decbd0e62`.
+Its base artifact ID was
+`sha256:61453059dcc4f6eb91ee636e4eb3a7f52cb7ad056b90b640e0ffe7348e32eead`;
+its built but unbooted gated artifact ID was
+`sha256:f0b27ffef079cd5494d19e12e12797d969d1b050a55b514e668cd4c093d114a1`.
+The canonical QEMU 10.1.0 resume passed the fixed response matrix 7/7 and
+`boot_v0.coh`. `9p_batch.coh` then completed three writes, exact ordered CAT,
+and authenticated oversize `ERR FRAME reason=invalid-length`, but line 15 QUIT
+timed out with no response. The target recorded the frame error with no
+root-emergency, fail-stop, panic, or unhandled fault. This is exact V17 failure
+evidence for V18, not Stage 03 qualification.
+
+The first broken transition was child-private receive retention. V17's Session
+unit returned `Continuation` only after committing an outbound wire frame.
+When a bounded read consumed only part of the already-buffered oversize body,
+it returned `Complete`, child scheduler `service_pending` cleared, and the child
+blocked even though later body fragments and QUIT remained in smoltcp's receive
+queue. V18 makes every nonzero successful socket receive durable private
+progress: it retains one fresh `StackIngress -> StackEgress -> Session` cycle,
+while only zero received bytes plus no committed wire frame returns `Complete`.
+The focused real two-stack regression
+`buffered_oversize_body_and_quit_retain_service_until_same_connection_parse`
+must buffer the oversize body and QUIT together, prove at least four bounded
+Session reads without a fresh packet/control notification, parse QUIT on the
+same authenticated connection, and quiesce on the first zero-progress cycle.
+No poller, synthetic wake, retry, timer, delay, or clock-speed assumption may
+substitute for retained state.
+
+The first fresh V18 staged state
+`out/test-plan/m26e-console-qemu-v34-v18-full-20260814T102424Z`, Stage 01
+attempt `20260814T102527.190708Z-45453-417ba8e027f2`, bound test-plan source
+identity
+`4d08f51747f6a00ef04aeb858506436a91039b229f03e20f691692733bcc9ba2`.
+It passed the first 17 actions through the driver-coverage contract, then
+`host.python-tests` found the one stale V17 structural expression in
+`tests/test_console_network_runtime_packaging.py` after 1,773 tests and 7
+subtests had passed. The source guard now requires exact
+`Ok(committed_wire_frame || received != 0)` ordering while preserving the
+independent complete-send/commit flag transition. Its focused file passed
+11/11 and the complete standalone Python gate passed 1,774 tests plus 7
+subtests. This host repair is not Stage 01 qualification; restart with a fresh
+state and source identity, and do not reuse the failed attempt.
+
+The next immutable V34/V18 staged state
+`out/test-plan/m26e-console-qemu-v34-v18-oraclefix-20260814T104728Z`, Stage 03
+attempt `20260814T105938.465736Z-11947-27f75501fecd`, bound source digest
+`sha256:f514ef3dfe5a76cd31e778a90b76e97b6cb78016a97be11b1be0b6587ed3ffab`.
+Stage 01 and Stage 02 passed. Its Stage 03 base artifact ID was
+`sha256:11921e2eedbf8e9c46f781c500b89acdcb9669ebda42eb6db0ed21a4eb47dac3`,
+with rootserver SHA-256
+`546de0283fd03b2bcfedc4876a96f5f41ea2071ce5b94aac627f4cf741638832`,
+resolved-manifest SHA-256
+`7d267475fa010c369cb47f60a201f77186505f05222b73bdc89645f2b0a392fc`,
+CPIO SHA-256
+`d44e33b75876129cdb60b8510088b48ad67d686bff2b943b13d11a286036281b`,
+and launch-record SHA-256
+`3cab273fd5bac9f936194090384e278e45698b032e1eda5ddd25b486fc3607bd`.
+Its gated artifact ID was
+`sha256:46ce91c8bffae218f557fedb19ec125cdded39118db641aee70db9e63949163b`,
+with rootserver SHA-256
+`f28934ee16357b1aef5ac201b1cd654097cbd9bc0d1cbb5b0dde439cf78fdfbe`,
+resolved-manifest SHA-256
+`8e3a9d1f2ab1b83715fbb42ee58672bcb57941ab76df98066c1bcafeded038fa`,
+CPIO SHA-256
+`54ee771686e8e89164c1591a0a49308c4697d05f069b59da2640881d59c86e05`,
+and launch-record SHA-256
+`5b8c27efeb8f2dbf4333392a93fe489cfa61f82521cda94b985fbbcc0ccd2de4`.
+The fixed matrix passed 7/7. All ten base scripts passed: `boot_v0.coh`,
+`9p_batch.coh`, `host_absent.coh`, `observe_watch.coh`,
+`root_cut_basic.coh`, `session_lifecycle.coh`, `busy_backpressure.coh`,
+`cas_fixture_signature_rejected.coh`, `tcp_basic.coh`, and
+`session_pool.coh`. The fresh base-telemetry boot passed
+`telemetry_ring.coh`. `telemetry_push_create.coh` then reached its expected
+invalid-path CAT denial, the peer closed, and the oversized-push check failed
+because each replacement connection wrote the complete 18-byte AUTH frame and
+read zero bytes. The runner stopped at this first failed action; Stage 03 did
+not pass and no later REST, host-tool, Python, performance, or Pi result may be
+inferred.
+
+Exact immutable replay of that base artifact proved root-control task index
+`0`, timeout badge `0x26ee0001`, and seL4 Timeout label `5`; the saved PC was
+immediately after the sole outer `seL4_Yield`. Retained successors identified
+ordinary `Network` and selected `Timer`. Tick `356343` was not divisible by
+8,000, so the timer-trace branch did not run. The adjacent refill amounts were
+the exhausted current `38,090` counter ticks and the already-valid next
+`93,910` ticks. Their sum is the unchanged configured `132,000` ticks, or
+`5,500 us` at generated QEMU `24,000,000 Hz`. The installed terminal timeout
+endpoint converted exhaustion of only the current refill, despite the valid
+adjacent refill, into root-fault classification and downstream
+`root-emergency` fail-stop. It does not falsify V18, timer arithmetic, the
+console grammar, or a host surface.
+
+Under active discovery task `m26e-console-network-service-isolation` and the
+reopened Milestone 25 root-service temporal-restoration authority carried by
+`m26e-root-tcb-target-proof`, selected QEMU root-control advances from
+historical V34 to
+`m26e-qemu-root-adjacent-refill-natural-postpone-candidate-v35`; selected Pi
+root-control advances from historical V23 to
+`m26e-pi4-root-adjacent-refill-natural-postpone-candidate-v24`. Both select
+`NaturalPostpone`, retain their timeout cap/badge/resource/registry identity,
+omit the TCB timeout endpoint, and keep the standard fault endpoint terminal.
+Every numeric, placement, resource, and the distinct QEMU 24 MHz/Pi 54 MHz
+clocks remain unchanged. Common child provenance remains V18. The repair
+changes no schema, API, wire frame, namespace, command or ACK/ERR/END contract,
+workload, retry, timeout, host-tool implementation, Python-library contract,
+benchmark implementation, evidence record, or report schema.
+
+Stop at its first failed target layer; run
 the focused deterministic regressions below only after the target canary
 reaches the changed live path. For the shortest target-first integration path,
 then run the focused direct base `.coh` batch, Hive Gateway REST core/parity
-batches plus the Python smoke, and Conditional D's no-retry `telemetry-1mb`,
-`telemetry-10mb`, `telemetry-100mb`, and `telemetry-1gb` matrix. Broad host closure and complete staged
-acceptance follow only after convergence passes.
+batches plus the Python smoke, and Conditional B2's exact-three executable QEMU
+pressure. Run Conditional D's no-retry `telemetry-1mb`, `telemetry-10mb`,
+`telemetry-100mb`, and `telemetry-1gb` matrix separately against the exact
+packaged gateway's explicit host-model backend. Broad host closure and complete
+staged acceptance follow only after convergence passes.
 
-Compatibility review for v23/root-fault-V6/child-V6 and bounded NineDoor containment covers
-`cohsh`, `coh`, all `.coh` scripts, SwarmUI, Hive Gateway,
-`tools/cohesix-py`, `m26e_qemu_pressure.sh`, and `rest_perf_harness.py`. The
-repairs change no verb, frame, ACK/ERR/END state, namespace or authority path,
-timeout, quota, benchmark workload, retry policy, evidence record, or report
-schema, so those implementations and fixtures require no hand-authored change.
-The NineDoor cursor changes only target recovery scheduling. V23 preserves
-v21's separate Timer and Nic visits plus the exclusive NETDIAG visit. Successful
+The strict four-scenario Conditional D diagnostic retained at
+`out/bench/conditional-d-strict-rolling-endpoint-final-20260815` kept
+`strict_control_errors=true`, `no_retries=true`, `backend_class=host-model`,
+`proof_class=host-model`, and observed the configured `120/120` endpoint.
+`telemetry-1mb` recorded `9,730/9,687/43` attempted/success/error operations at
+rate `0.004419321685508736`, summary SHA-256
+`e81ea8d40043d4b5f3f9462e8a44d80242c64572f64360cf2a00bb557e240929`;
+`telemetry-10mb` recorded `9,924/9,854/70` at `0.007053607416364369`,
+SHA-256
+`a690509e030adf62b9c2881b36f77caa77aa99f1cb6a53e52e8831a1532528f2`;
+`telemetry-100mb` recorded `3,235/3,235/0`, SHA-256
+`63e2e69cf594988de7a410fe51e2a20bc891fb8f8caf81b770d4e6c836021186`;
+and `telemetry-1gb` recorded `528/528/0`, SHA-256
+`ae269cf8e3102a4e09decf46854182085bdbd635f725a988c31819dcd92bb345`.
+The first two runs admitted exactly 256 schedule entries, then classified all
+43 and 70 semantic-capacity failures as generic HTTP 503 `other_errors`, with
+`buffer_full_errors=0`. Their aggregate error budgets passed, although the
+first interval-budget crossings were `0.02821522309711286` at the final
+`telemetry-1mb` interval and `0.01749271137026239` at `telemetry-10mb` step 13.
+Aggregate `report.reliability.error_budget_pass` remains the scenario verdict
+and interval crossings remain diagnostics, but the required lossless
+bounded-refusal classification did not pass. The matrix is diagnostic and
+non-qualifying. The locally present release gateway was SHA-256
+`e4a1a57ad868536b25ad17d9bfdabed7a7dd53b1a2d6d733515ca34835d56188`,
+but the summaries contain no source, Git, or gateway-binary identity and cannot
+establish exact-source Conditional D provenance.
+
+Restore only the exact in-process `NineDoorError::Protocol { code: TooBig,
+... }` schedule, lease, and export capacity cases to the canonical
+`ERR ECHO reason=quota detail=buffer-full path=<path> error=buffer full`.
+Retain the typed source error and leave unmatched paths, messages, and codes
+generic. Hive Gateway preserves the semantic refusal as HTTP `200` with
+`GatewayResponse.status=ERR`. Conditional D's joint strict-plus-no-retries
+handling counts each returned refusal once and performs no harness retry; the
+gateway's independent bounded retry window, cooldown, and counters remain
+unchanged.
+
+The following staged attempt retained at
+`out/test-plan/m26e-console-qemu-v35-v18-strict-perf-final-20260814T214011Z/evidence/attempts/stage-01/20260814T214030.244940Z-23431-989e20fcd8a5`
+bound source digest
+`6fa1cb471dc3191c8b035ddda2cfc7842e0fb77298a0a66221f6474ec095bf25`
+and context digest
+`89edf724bc379cc2406a75040e597113c972a233698fd523318cc25eb0892076`.
+Actions 1–20 passed; action 21, `host.rust-risk-ratchet`, stopped with exit
+`130`. Its action-record SHA-256 is
+`a5c6fcb017aee6dd8fc491265c0b5c59014e7fb42682aa5e50015e6efdc8b5bd`,
+action-log-slice SHA-256
+`c1e9a2f3ef002979417cab98044f949773d9b7bae78028cadaaa37dfa11a680f`,
+failed Stage 01 record SHA-256
+`a04d82aa5116c553cee929f47e5dc59f26e5beed2605729f692cd64c0bcc1c45`,
+and complete stage-log SHA-256
+`b6f6512724d754d683f8b78c86299941b740f4b74565895eb15ed4b64210a551`.
+Stage 01 emitted no pass attestation; Stages 02–05 and exact-source
+Conditional D did not run. Nothing from this state may be reused as staged or
+Conditional D PASS evidence.
+
+Compatibility review for V35/root-fault-V6/child-V18, Pi V24/V18, and bounded NineDoor containment covers
+the complete host-tool suite, all `.coh` scripts, `tools/cohesix-py`,
+`m26e_qemu_pressure.sh`, and `rest_perf_harness.py`. Those target repairs change no
+external verb, line frame, ACK/ERR/END state, namespace or authority path,
+client timeout, quota, Python contract, benchmark workload, retry policy,
+evidence record, or report schema, so those public implementations, workloads,
+and report schemas require no contract change. The separate Stage 04 repair
+changes only the host filesystem-operation response window according to the
+composed gateway deadlines documented above; it leaves every named external
+contract, Python public default, benchmark workload, retry policy, and report
+schema unchanged. The reopened M20f repair changes
+only `cohsh` pooled connection reuse and must be exercised through Hive Gateway;
+all other host-tool, Python, and performance implementations retain their
+existing contracts and still require exact-version execution after full staged
+target qualification. The pool repair introduces no target timer read, delay,
+spin, or retry. V18 changes only child-private progress retention and likewise
+adds no timer, wake, delay, retry, or clock-derived transition. QEMU's generated
+24 MHz timer and Pi 4's generated 54 MHz timer remain separate unchanged truths;
+the common child provenance remains selected on both targets. Fresh exact V35
+QEMU must pass the complete staged path, fixed matrix, full `.coh` regression
+harness, standard-fault terminal and root budget-exhaustion postponement
+injections, REST core/parity and Python smoke, every host tool, the Python
+library, Conditional B2 exact-three executable target pressure, and the
+companion Conditional D host-model gateway matrix. QEMU cannot qualify Pi;
+fresh V24 Pi acceptance separately requires a generated 54 MHz build, exact
+flash/readback and cold boot, applicable staged/hardware proof, both fault
+injections, host-tool/Python compatibility, and a Pi-selected target-performance
+path. Conditional D may establish companion host-model gateway behavior but
+cannot supply fresh-Pi target evidence.
+`telemetry_ring.coh` must prove target `ELIMIT` before its operational workload
+with a bootstrap-signed Queen ticket that grants rate-unlimited `/log` read
+scope and explicitly caps `bandwidth_bytes=8`. After the existing write-scope
+`EPERM`, one `cat /log/queen.log` must receive exact quota `ELIMIT`; the script
+then detaches and uses the unchanged operational ticket for spawn, twelve
+90-byte writes, wrap, TAIL, and the existing final telemetry-read refusal. It
+must not derive a quota result from a second read completing within one
+wall-clock rate window or from incidental public-log volume. The cohsh
+structural regression must verify
+the fixture MAC, decoded role/scopes/quota, early EPERM/ELIMIT order, absence of
+a later log CAT, and exact token-stream hash. This changes only script authority
+and coverage; target code, manifests, generated artifacts, quota semantics,
+grammar, timeout, retry, and workload payload remain unchanged.
+V12 changed only the child-internal peer-close lifecycle. V13 adds only the
+completed active-close `TimeWait` terminal transition and provenance; it adds
+no host timeout or retry and changes no REST or performance surface.
+V26 changed only the root-internal successful Disconnect transaction from
+repeatable to per-connection single-issue. V14 added internal binary SendBatch;
+V15 admitted its observed 60-page ELF footprint; V16 changes only the
+manifest-owned console timeout policy, local-work cadence, and derived temporal
+inputs. V17 corrects only authenticated oversize rejection, exact declared-body
+drain, and same-connection framing continuation. V18 retains the same framing
+contract while keeping one fresh private service cycle after every nonzero
+bounded socket receive. V27 adds the bounded
+authenticated response lane and ordinary-debt turn, V28 adds the root-local
+terminal-response Disconnect fence, V29 adds root-local capture, sealing, and
+bounded later flushing for HELP, NETSTATS, SMP, and CACHELOG, and V30 delegates
+the four response hooks plus `console_event_pending` through `DefaultNetStack`.
+CACHELOG uses
+one immutable newest-first snapshot taken under one bounded lock acquisition
+and rendered after releasing the lock. No
+declared retry, client timeout, grammar, evidence, workload, or report contract changes.
+V31 additionally retires only a refused ordinary stream producer. V32 changes
+only the internal delivery path of routine command, session, TAIL, and
+NineDoor audit diagnostics after bounded logging or the linked serial owner is
+active: their existing text is appended to the bounded log rather than emitted
+per byte on the synchronous debug UART. Pre-handoff routine audit and
+critical/fatal call sites retain the existing diagnostic helper; V32 does not
+change those sites. The V32 target run disproved that route because those
+records contaminated public `/log/queen.log`. V33 replaces it only on the
+selected QEMU VirtIO composition with an EventPump-private capacity-four FIFO.
+Saturation or an oversized record drops the new best-effort diagnostic while
+retaining older FIFO order. The final-idle `RoutineAudit` Operator unit attempts
+one nonblocking serial admission and removes the head only after success;
+response/input/stream/flush, retained-output, containment, network, and display
+work all take precedence. Once admitted, a QEMU-only `SerialPort` provenance
+flag identifies the complete staged TX backlog as audit-only. Ordinary
+`SerialDispatch` skips retrying that exact backlog while the UART would block,
+so late `NetEvent` and `NetLine` work stays live; a later final-idle
+`RoutineAudit` may retry it. Admission of any nonempty ordinary serial record
+or bytes promotes the backlog to ordinary dispatch priority without changing
+FIFO or exact `\r\n` byte order. The FIFO never enters public
+`/log/queen.log`. Compile-time `net-backend-virtio` selection excludes its
+type, storage, provenance flag, and unit from Pi, while linked-runtime, legacy/non-VirtIO, ordinary
+console-failure, critical/fatal, and fail-stop paths retain their prior raw
+diagnostic route. This requires no `coh`, `cohsh`, `.coh`, SwarmUI, Hive
+Gateway, `tools/cohesix-py`, benchmark workload, evidence-record, or report-schema
+change; the unchanged timeout, retry, command grammar, and response ordering
+remain target gates.
+This reviewed set includes V8's stale-generation disposition, V11's explicit
+Observe-to-ACK publication credit, root unauthenticated-output retention, the
+all-ready IPC fast gate, and the ATTACH
+logger transition. Gateway cold readiness changes already present remain
+compatible. The fixed functional response matrix remains a required target
+execution; unchanged host schemas cannot substitute for it.
+V34 additionally narrows only selected-QEMU physical routine-audit TX to one
+byte per eligible final-idle Operator visit. The complete record and its
+audit-only provenance tag remain retained across visits; every response,
+input, retained-output, containment, network, display, and ordinary serial
+priority remains unchanged. The NineDoor cursor changes only target recovery
+scheduling. V34 preserves V33/V32/V31/V30/V29's capture contract, V28's terminal fence, V27's response cadence, V25's temporal envelope, V24's
+ACK split, and V23's separate Timer and Nic
+visits plus the exclusive NETDIAG visit and makes
+publication ACK a distinct highest-priority QEMU Network unit. Successful
 predispatch housekeeping returns before phase selection; bounded backpressure
 may run exactly one Operator unit without ordinary-phase advance. The NIC still
 runs once per three featured Network visits; the
 unchanged performance workload must therefore be rerun rather than assumed equivalent. Their
 compiler-owned default/QEMU/Pi projections must still regenerate exactly; any
 unexplained drift blocks the target canary.
+
+The HVF profile repair changes the internal target execution envelope but no
+external protocol or report schema. `coh`, `cohsh`, `.coh` scripts, SwarmUI,
+Hive Gateway, and `tools/cohesix-py` therefore require compatibility execution,
+not grammar changes. QEMU artifact, pressure, convergence, release-runner, and
+REST-performance launchers must all select the same HVF/off/HVC/24 MHz profile;
+any TCG or 62.5 MHz QEMU record is a comparator only. After AUTH, the fastest
+ordered gate is direct `boot_v0.coh`, direct `9p_batch.coh`, one gateway-owned
+REST core batch, REST parity batch, Python SDK smoke, then serial no-retry
+`telemetry-1mb`, `10mb`, `100mb`, and `1gb`. Do not run direct TCP `cohsh`
+concurrently with the gateway, and reuse an existing QEMU/gateway in the
+performance harness only with both `--no-qemu` and `--no-gateway`.
 
 The intervening v14 artifact set at
 `out/cohesix-v14-qemu-20260812T021853Z` bound root ELF SHA-256
@@ -5625,31 +6769,122 @@ work, and global atomic or HAL hints must not manufacture work. Zero-selector,
 Pi, and non-VirtIO counterfactuals must retain their existing behavior, and the
 ordinary and Runtime successors must remain unchanged.
 
-The active child regression must prove that one active-MCS replenishment closes
-at most one logical unit in retained-first priority: completion publication,
-service-event publication, egress publication, service-poll continuation, new
-ingress, then new control. Every unit must commit fully or remain pending. After
-the initial Ready signal and every later nonterminal unit, including idle or
-backpressure retention, source order and behavior tests must prove exactly one
-`seL4_Yield` followed by exactly one `seL4_Wait`. Subsequent progress must be
-caused by replenishment plus the existing root service tick and notification;
-retained scheduler state must survive. Terminal revoke/shutdown must use only
-its wait-only park. Tests must reject zero or two active yields, Wait-before-Yield,
-a new cap, ABI/schema change, or numeric timing drift.
-Within the retained `ChildTurnUnit::PollService`, the v6 child regression must
+The V18 active-child regression must prove retained-first priority: completion
+publication, service-event publication, egress publication, service-poll
+continuation, new ingress, then new control. Every unit must commit fully or
+remain pending, and the badge/publication-credit gates must be rechecked before
+the next unit. `seL4_Poll` is legal only for exact eligible internal
+`PollService`, `IngestPacket`, or `ApplyControl` work, which mutates only private
+state. Idle or publication-uncredited work must call blocking `seL4_Wait`
+directly with no ordinary `seL4_Yield`; internal units preserve credit and one Publish consumes it before mutation.
+Ready has no credit, and ordinary wakes never grant one. A
+stable empty packet/control page must clear that exact hint before retaining
+one three-unit service cycle, then reach idle without a self-Poll loop. Tests
+must prove completion plus service-event and event plus egress cannot overwrite
+either one-slot page, retained service survives publication preemption, and
+root ACK debt is set only after every indicated record is valid and copied,
+then cleared before post-retention Release+Signal, which forces ObserveChild.
+Revoke parks without publication; shutdown waits for credit, publishes its
+terminal record, retires debt without ACK, and starts bounded containment.
+Tests must reject an ordinary child Yield, Poll when the exact local gate is
+false, publication without credit, ordinary-wake credit, duplicate/late ACK,
+an installed console timeout handler, or numeric drift.
+V18 framing tests must preserve V17's pre-authenticated fail-closed rule while
+proving both authenticated oversize classes: a payload above the 2304-byte
+command bound and a declared payload above the child frame buffer. Each queues
+exactly one `ERR FRAME reason=invalid-length`, emits no rejected-auth event,
+retains the authenticated connection, and drains exactly the declared payload
+across arbitrary fragments before accepting a following frame from the same
+ingest buffer or a later read. The discarded bytes must never be interpreted
+as frame prefixes or commands, and neither case may allocate from the declared
+peer length.
+Within the retained `ChildTurnUnit::PollService`, the v11 child regression must
 prove a private `ServicePollUnit::StackIngress ->
 ServicePollUnit::StackEgress -> ServicePollUnit::Session` cursor and public
 `ServicePollOutcome::{Continuation, Complete}`. The successor must commit
 before the selected work. `StackIngress` performs exactly one
 `Interface::poll_ingress_single` call and returns `Continuation`;
 `StackEgress` performs exactly one `Interface::poll_egress` call and returns
-`Continuation`. The kernel retains `scheduler.service_pending`, executes the
-existing Yield-then-Wait seam, and later dispatches the successor. `Session`
-owns connection/session RX, tick, TX, close, and relisten work and returns
-`Complete`; only `Complete` clears `service_pending`. Errors must not call
-scheduler completion. Retained completion, event, or egress publication may
+`Continuation`. The kernel retains `scheduler.service_pending`, rechecks the
+gates, and uses the eligible local-Poll path when no publication preempts it, then later
+dispatches the successor. `Session`
+owns connection/session RX, tick, TX, close, and relisten work. A nonzero
+bounded receive or complete wire-frame commit returns `Continuation` and
+retains a fresh three-unit cycle; only zero receive plus no commit returns
+`Complete`, and only that `Complete` clears `service_pending`. The focused
+`buffered_oversize_body_and_quit_retain_service_until_same_connection_parse`
+real two-stack regression must buffer the oversize body and following QUIT
+together, span at least four Session reads without a fresh root notification,
+parse QUIT on the same authenticated connection, then quiesce on the first
+zero-progress cycle. Errors must not call scheduler completion. Retained
+completion, event, or egress publication may
 preempt either pending stack successor without losing it, and coalesced badges
-remain hints rather than permission to compose poll units in one refill.
+remain hints rather than permission to bypass the gates.
+Session output must require both `socket.can_send()` and complete-frame
+capacity before `send_slice`. A `FinWait2` socket with free capacity must
+retain output without commit, `OutputDrained`, or error; after peer close the
+existing end path must publish one `Disconnected`, clear the ended connection,
+and relisten. Other Session errors remain terminal.
+
+The V12 lifecycle guard is separate from those V11 scheduling and historical
+V7 sendability invariants. When peer FIN produces `CloseWait`, Session must set
+the existing idempotent close-after-flush intent, retain exact-generation
+output, and reuse `close_ready` plus the existing `Closed`/`end`/`listen` path.
+It must emit one `Disconnected` and restore the sole listener without adding a
+unit, cursor, wake, timeout, retry, or root-side disconnect command.
+
+The V13 lifecycle guard is distinct from V12's peer-FIN `CloseWait` repair.
+After a server-active close reaches smoltcp `TimeWait`, Session must call
+`TransportSession::end` exactly once before aborting the completed TCP control
+block and restoring LISTEN in that same bounded Session unit. A real two-stack
+test must authenticate replacement connection 2 immediately and prove that an
+incoming SYN cannot re-arm smoltcp's `10 s` close delay indefinitely. The old
+generation must publish one `Disconnected` and clear its auth/output state;
+the existing `Closed` path and all retry/timeout policies remain unchanged.
+
+The V26 root lifecycle guard is distinct from V13's child `TimeWait` repair.
+After one successful root Disconnect publication, neither `ControlCompleted`
+nor `OutputDrained` may reopen that semantic transaction for the same
+connection. Backpressure must leave the issued latch clear; success must set it
+without clearing the requested Quit reason. The following lower-cursor pass
+must skip Disconnect and reach Ingress then ServiceTick. `Connected`,
+`Disconnected`, no-active, graceful terminal, and fail-closed transitions must
+clear the latch at their existing generation boundaries.
+
+Control-lifecycle tests must independently prove that the child reader returns
+the committed nonzero `connection_id` with sequence/kind/payload, validates
+kind and payload before stale disposition, and calls application with that
+identity. For connection 1, exact pre-authentication `SendLine` remains
+`Unauthenticated`; identity zero and malformed stale records remain
+`ConsoleFrame`. After connection 1 ends, its well-formed retained `SendLine`
+must return `StaleConnection`, enqueue zero bytes, and leave output empty. After
+authenticated connection 2 begins, the same connection-1 control must neither
+enter, clear, nor reorder connection-2 output, while connection-2 `SendLine`
+returns `Applied`. Kernel/source coverage must prove both outcomes advance the
+exact accepted control sequence and queue `ControlCompleted`; only stale sets
+the same sequence as already drained, so it cannot later mint
+`OutputDrained`. Root-boundary coverage must prove `Disconnected` does not
+release or overwrite the one-slot in-flight control and only its exact
+`ControlCompleted` does. The isolated root adapter must return `false` before
+normalization or output-queue mutation when no authenticated connection exists,
+retaining the pending stream cursor.
+
+ATTACH coverage must prove target namespace preparation precedes NineDoor's
+local role/ticket plus attached commit; that commit precedes audit, logger, and
+tracer observation; root session authority and `OK ATTACH` occur only after the
+bridge succeeds; and post-commit diagnostic failure cannot roll back the local
+namespace context. Logger tests must prove bridge attachment selects
+UART+EP mirroring without changing the ping token and that only a later
+explicit promotion request can run the ping/ack self-test and select EP-only.
+No test may weaken the namespace prepare gate or delete UART/EP functionality.
+
+IPC source coverage must prove the wrapper reads endpoint ready, endpoint
+validated, send unlocked, and post-commit unlocked before its all-ready return;
+the fast section must contain no bootstrap counter increment, tracer snapshot,
+formatting, allocation, lock, or UART emission. The separately cold outlined
+path must retain the bounded trace/snapshot and diagnose the exact caller-read
+values. This is a steady-state cost guard, not permission to bypass any failed
+readiness bit.
 
 Before each selected phase, the regression must prove
 console-network mailbox precedence and permit a NineDoor probe only when the
@@ -5765,8 +7000,8 @@ The focused source guards are
 `root_fault_cold_activation_primes_receive_before_any_fault_association` and
 `terminal_critical_fault_commits_one_resumable_action_per_refill`.
 
-NineDoor and temporal-contract schema tests must require
-`root_task.schema = "1.11"` and reject schema 1.10 or older. They must admit
+NineDoor, temporal-contract, console-ACK, SendBatch, and NaturalPostpone schema
+tests must require `root_task.schema = "1.14"` and reject schema 1.13 or older. They must admit
 exactly one root-retained, one-shot scheduling context with
 object bits 8, `3000 us / 10000 us`, and `max_refills = 2`; any different value,
 missing fixed SC accounting, child-Cspace SC or SchedControl cap, or NineDoor
@@ -5887,44 +7122,105 @@ does not satisfy this gate and cannot qualify Pi containment.
 
 ### Milestone 26e console-network service-isolation gate
 
-Run the fixed ABI, child transport, root boundary, packaging, and target checks
-before the QEMU boot:
+Run the fixed compiler provenance, ABI, child transport, root boundary,
+bounded synchronous-capture, harness, packaging, and target checks before the
+QEMU boot:
 
 ```bash
+cargo test -p coh-rtc root_control_turn_candidate_is_exactly_accounted
+cargo test -p coh-rtc supervisor_cold_activation_candidates_are_profile_scoped
+cargo test -p coh-rtc --test ai_lora_contract
 cargo test -p console-network-abi -p console-network-runtime
+cargo test -p nine-door --test policyfs --test host_sidecar_policy
 cargo test -p root-task --test console_network_service
-.venv/bin/python -m pytest -q tests/test_console_network_runtime_packaging.py
+cargo test -p root-task --no-default-features --features driver-tests-qemu \
+  isolated_response_lane_pays_exactly_one_ordinary_debt_after_eight_units \
+  -- --test-threads=1
+cargo test -p root-task --no-default-features --features driver-tests-qemu \
+  isolated_help_capture_publishes_complete_body_then_one_terminal \
+  -- --test-threads=1
+cargo test -p root-task --no-default-features --features driver-tests-qemu \
+  isolated_fixed_synchronous_producers_cross_batch_depth_without_end \
+  -- --test-threads=1
+cargo test -p root-task --no-default-features --features driver-tests-qemu \
+  bounded_sync_capture_overflow_emits_only_typed_terminal_and_reconciles_metrics \
+  -- --test-threads=1
+cargo test -p root-task --no-default-features --features driver-tests-qemu \
+  bounded_sync_cache_snapshot_crosses_batch_depth_and_tombstones_on_quiet_cut \
+  -- --test-threads=1
+cargo test -p root-task --no-default-features --features driver-tests-qemu \
+  bounded_sync_response_is_retired_on_exact_identity_loss \
+  -- --test-threads=1
+cargo test -p root-task --no-default-features --features driver-tests-qemu \
+  pinned_network_line_cannot_dispatch_to_a_replacement_connection \
+  -- --test-threads=1
+cargo test -p root-task --no-default-features --features driver-tests-qemu \
+  physical_progress_is_bounded_while_heavy_producers_preserve_network_owner \
+  -- --test-threads=1
+cargo test -p root-task --no-default-features --features driver-tests-qemu \
+  blocked_physical_producer_retains_an_ordered_busy_terminal_and_prompt \
+  -- --test-threads=1
+cargo test -p root-task --no-default-features --features driver-tests-qemu \
+  hal::cache::tests -- --test-threads=1
+cargo test -p root-task --no-default-features \
+  --test isolated_virtio_network_phasing -- --test-threads=1
+.venv/bin/python -m pytest -q \
+  tests/test_console_network_runtime_packaging.py \
+  tests/test_qemu_tcp_response_matrix.py \
+  scripts/ci/test_run_regression_batch.py
+cargo test -p cohsh --features tcp \
+  pooled_tcp_uses_one_wire_attach_for_twenty_four_exact_authority_leases \
+  -- --exact --test-threads=1
+cargo test -p cohsh --features tcp -- --test-threads=1
+cargo test -p hive-gateway -- --test-threads=1
 SEL4_BUILD_DIR="$PWD/out/sel4/profile-v2/qemu-smp-production" \
   cargo check -p console-network-runtime --target aarch64-unknown-none
 scripts/check-generated.sh
+python3 scripts/ci/test_plan_catalog.py recommend \
+  scripts/qemu_tcp_response_matrix.py tests/test_qemu_tcp_response_matrix.py
+python3 scripts/ci/test_plan_catalog.py converge --target qemu --format json \
+  scripts/qemu_tcp_response_matrix.py tests/test_qemu_tcp_response_matrix.py
 scripts/cohsh/run_regression_batch.sh
 scripts/ci/test_plan_run.sh --target qemu \
-  --state-dir out/test-plan/m26e-console-qemu
+  --state-dir out/test-plan/m26e-console-qemu-v17
 ```
 
 The compiler and root-boundary tests must agree on the exact image path and
-entrypoint, retained anchor, one-MiB child untyped, 59 image pages, 32 stack
-pages, one IPC page, one init page, and four shared pages: 97 frames total.
-They must also agree on eight translation objects, 121 retained root slots, 16
+entrypoint, retained anchor, one-MiB child untyped, 60 image pages, 32 stack
+pages, one IPC page, one init page, and four shared pages: 98 frames total.
+They must also agree on eight translation objects, 123 retained root slots, 16
 child CSpace slots, the 32-page stack at `0x72030000..0x72050000`, notification
-slots/badges, sole port 31337 listener, active SC `3000 us / 10000 us` budget,
-`2400 us` WCET, `7500 us` response candidate, refills, and standard/timeout
-fault identities. Any drift, cap-slot alias, anchor collision, second listener,
+slots/badges including the distinct publication ACK badge 64, sole port 31337 listener, active SC `3000 us / 10000 us` budget,
+`3000 us` WCET, QEMU core-2 placement with `3000 us` response candidate, Pi
+core-0 placement with `8100 us` response candidate, refills, and
+standard/timeout fault identities. The timeout cap/badge/resource/registry row
+must remain reserved, but the console TCB timeout-handler slot must be empty.
+Any drift, cap-slot alias, anchor collision, second listener,
 W+X page, unbound or tampered image, broad fault/signal rights, root SC
 borrowing, or non-pointer-free record fails before launch. These stack and
 temporal values are a measured repair candidate, not qualified truth: live
 four-core GICv3 QEMU must still complete authentication, the canonical `.coh`
-regression, and standard/timeout fault injection without stack or budget
-failure.
+regression, standard-fault containment, and budget-exhaustion natural
+postponement without stack failure or loss of liveness/isolation.
 
 The compiler resource tests must additionally derive QEMU fixed/maximum
-frame-slot totals of `2017/4056` and `2065/4248`, and Pi fixed/maximum totals of
-`4065/8960` and `4113/9152`, respectively. Capacity, post-construction reserve,
-per-Worker costs, and the eight translation objects remain unchanged. Adding
-the unchanged reserve must therefore yield admitted capacity-check totals of
-`2577/6296` for QEMU and `4625/11200` for Pi.
+frame-slot totals of `2018/4058` and `2066/4250`, and Pi fixed/maximum totals of
+`4066/8962` and `4114/9154`, respectively. The post-construction reserve,
+per-Worker costs, eight translation objects, untyped bytes, and fifth root
+Write-only publication-ACK mint remain unchanged; V15 adds exactly one image
+frame and its retained root slot. Adding the unchanged reserve must therefore
+yield admitted capacity-check totals of `2578/6298` for QEMU and `4626/11202`
+for Pi.
 
-The fixed-layout tests must also prove that console-network ABI v1 still uses
+The exact V14 build failure is the oracle for this reconciliation, not target
+evidence: child ELF SHA-256
+`e16fc715975d4d73959c6536d9c4246058857040339c3c05a68721223a2d3f16` was
+73,568 bytes with page-rounded PT_LOAD span `0x200000..0x23c000` and final
+LOAD end `0x23b540`, while generated truth admitted only 59 pages. V15 must
+bind that 60-page shape exactly; any further ELF growth, shrinkage, span drift,
+or source/generated disagreement fails before root linking and QEMU launch.
+
+The fixed-layout tests must also prove that console-network ABI v3 still uses
 the same four 4096-byte pages, offsets, lengths, and record schemas while the
 live helpers touch only a 40-byte packet or 64-byte control/event scalar header
 plus the validated active payload. A publisher must clear commit, perform a
@@ -5937,6 +7233,134 @@ are non-authoritative and must not be scanned or copied during a normal turn;
 construction zeroing and containment scrub remain required. Capability
 inspection must show that the child's packet-ingress and control mappings are
 read-only and its packet-egress and event mappings are read-write.
+
+Schema 1.14 must reject the immediate 1.13 predecessor and any ACK badge other
+than the ABI v3 value 64. The root must retain the fifth Write-only cap on the
+existing root-to-child Notification without adding a child slot or Notification
+object. Source and deterministic state-machine tests must prove
+`NaturalPostpone` is selected for the active console child and for both selected
+QEMU V35/Pi V24 root-control records, standard faults remain terminal, and
+each reserved timeout cap is not installed on that TCB.
+Ready has no credit; ordinary wakes never grant credit; exact eligible internal
+work may Poll and preserves credit; idle or publication-uncredited work calls
+Wait directly with no ordinary Yield; one publication consumes its credit
+before page mutation; root refuses another
+poll while ACK is owed; and ACK debt is set only after all indicated records
+validate/copy, then cleared before Release+Signal after adapter retention.
+Malformed, stale, retention-failed, revoke, and containment paths grant no ACK.
+Graceful ShutdownComplete consumes one credit, retires root debt without ACK,
+starts bounded containment, and becomes teardown-terminal only after the exact
+proof completes; terminal plus egress coalescing fails closed.
+
+ABI v3 tests must prove `SendBatch = 3` binary encoding version 1 with exact
+eight-byte header, one through eight records, exact `used_bytes`, reserved zero,
+and each `1..=256`-byte UTF-8 record free of CR/LF. Empty, ninth, oversized,
+malformed UTF-8, truncated, trailing, overlapping, stale-identity, and
+second-batch-while-pending cases fail without partial queue mutation. A valid
+batch is accepted atomically, but each replenishment-bounded child Session unit
+stages at most one external frame. `ControlCompleted` and `OutputDrained` must
+refer to the exact control sequence and connection; terminal drain evidence
+from an old connection cannot release a replacement response.
+After each successful complete-frame Session commit, including the last batch
+frame, tests must observe exactly one retained following
+`StackIngress -> StackEgress -> Session` cycle. The next no-progress Session
+must complete and quiesce. A pending batch without a commit and a
+capacity/sendability failure must retain zero new cycles; neither a root
+ServiceTick-per-record dependency nor a local self-Poll loop is accepted.
+
+Root V34 tests must preserve V33/V32/V31/V30/V29's capture plus V27's one exact
+generation/connection-bound lane,
+at most eight useful producer/Network response units, then exactly one
+preserved ordinary Operator/Runtime/Network debt turn. HELP, NETSTATS, SMP, and
+CACHELOG body plus exact ACK or ERR terminal are captured root-locally, sealed
+immutable before publication, and drained on later Network visits through the
+existing response lane. Backpressure retains the exact identity and cursor;
+identity loss discards the response without publishing it to a replacement
+connection. CACHELOG reserves a bounded owned vector before taking the live-log
+lock, copies at most the existing 1920-record ring under one lock acquisition,
+then renders newest-first after releasing the lock. Allocation failure becomes
+one typed bounded terminal rather than a partial response. Conflicting physical
+synchronous producers receive bounded BUSY while the network response owns
+shared state; physical input, permitted bounded commands, fatal output, timers,
+and ordinary cursors remain live. The terminal lane retires only after exact
+terminal `ControlCompleted` plus `OutputDrained`. Disconnect publication must
+remain ineligible while that lane retains terminal completion,
+publication-ACK debt, copied egress, or queued output, even when child-side
+drain is true. Backpressure must leave the existing issued latch clear; after
+exact lane retirement one successful publication sets it and every later
+Disconnect visit for that connection is a no-op. The 1920-record ring capacity
+is an implementation bound, not a separate five-second promotion gate.
+For CAT, LS, TAIL, and LOG only, a typed command refusal must retire the
+provisional ordinary stream shell exactly when no stream END was committed.
+The regression must queue a refused command followed by QUIT on one
+authenticated connection, observe the exact typed ERR, then exact `OK QUIT`
+and peer EOF without retry or reconnect. It must prove `pending_stream=None`
+and `stream_end_pending=false` before QUIT dispatch. Successful streams,
+committed END/prompt state, synchronous capture/sealed modes, and other failed
+commands must remain unchanged.
+
+The compatibility matrix is a hard promotion gate, not an assumed consequence
+of source or host tests. Its fixed one-socket functional mode must authenticate
+and attach once, then return HELP `11 + OK`, isolated QEMU VirtIO NETSTATS
+`15 + OK`, first-call selected-QEMU SMP activity at `max_cores = 4` `16 + OK`,
+and CACHELOG9 `9 + OK`, then complete PING and QUIT on that socket without
+retry or reconnect and within the existing client timeout. Stage 03 base runs
+the fixed matrix before its `.coh` group. A missing, duplicate, reordered, or
+unexpected body or terminal frame, timeout, retry, or reconnect fails the
+matrix. The authenticated oversize regression must then use one connection to
+receive exact `ERR FRAME reason=invalid-length`, drain the complete declared
+oversized body even when it spans reads, send QUIT on that same authenticated
+connection, receive exact `OK QUIT`, half-close the client write side, and
+observe peer EOF. Any `ERR AUTH`, close, reconnect, retry, parsing of body bytes
+as a new length prefix, or missing QUIT EOF fails the gate.
+
+The operational QEMU Stage 03 `.coh` selection must exclude
+`scripts/cohsh/host_sidecar_mock.coh`. That script is an explicitly named,
+non-production fixture whose predefined systemd topology contradicts the
+operational `/host` contract: providers start `unavailable source=none`, with
+no predefined units or controls until an authenticated host snapshot populates
+them. Stage 03 still exercises the operational absent-host behavior. The
+independent `policyfs` and `host_sidecar_policy` NineDoor fixtures retain the
+non-Queen `EPERM`, missing-approval `EPERM`, approved Queen write, one-shot
+approval consumption, and audit assertions; those fixture results cannot
+become live target host-provider evidence.
+
+The common gated `policy_gate.coh` and `replay_journal.coh` target lanes must
+also remain independent of host snapshots. They use uniquely named,
+session-local `/queen/ctl` binds from `/proc/boot`: PolicyFS requires one
+approval, proves its consumption and alias readability, then refuses reuse;
+ReplayFS records two approved controls, verifies a cursor-zero match, and
+refuses a future cursor. `QUIT` clears those binds. The intended bounded audit
+and decision records may persist for later same-boot scripts, but no Worker,
+lifecycle transition, provider child, or predefined `/host` node may be
+created or assumed.
+
+CAS trust material is routed just as strictly. `cas_roundtrip.coh` contains
+repository-fixture signatures and may run only in the QEMU gated artifact,
+whose regression manifest selects
+`resources/fixtures/cas_verification_key.hex`; it never runs in operational
+base QEMU or Pi. Operational base QEMU and Pi instead run
+`cas_fixture_signature_rejected.coh`, which requires the same first two
+incomplete manifest fragments to return `OK` and the completing fixture-signed
+fragment to return `ERR ... EPERM`. Do not replace either operational public
+verification key with fixture trust material and do not add an operational
+private signing key to the repository. Positive live operational upload
+continues to require the external `COH_CAS_SIGNING_KEY` flow below. The full
+QEMU selection is exactly 18 `.coh` scripts plus the fixed response matrix: 10
+base, two telemetry, one shard, four common gated, and one QEMU-only gated CAS
+fixture. The full Pi selection remains exactly 17 `.coh` scripts: 10 base, two
+telemetry, one shard, and four common gated, with neither the fixed matrix nor
+the fixture-positive CAS upload. Therefore focused QEMU base records 11
+workloads, focused QEMU gated records five, focused Pi base records 10, and
+focused Pi gated records four. Any cross-profile fixture routing or count drift
+fails Stage 03 before a target claim.
+
+Until fresh exact-artifact V35/V18 evidence passes the fixed matrix,
+standard-fault terminal containment, budget-exhaustion natural-postponement
+liveness/isolation, and all later
+applicable stages, Stage 03, REST, performance, and Milestone 26e acceptance
+remain withheld. A bounded TAIL/CAT QEMU operation is only a non-claiming
+convergence diagnostic.
 
 Retain target disassembly evidence for all four runtime page helpers. It must
 show bounded small helper frames, active-length copies, and no compiler-expanded
@@ -6053,8 +7477,10 @@ timed out at outer-Yield PC `0xf66dc` after completed Network. Lower successor
 `Ingress(3)` proves selected `Disconnect(2)` was a no-op without child signal;
 pending egress was empty, the child was healthy at Wait PC `0x21343c`, and
 root `smoltcp_polls` was `250098`. Record this only as failure evidence for the
-post-leaf counter-refresh, NETDIAG, and NineDoor aggregate. The v23/root-fault-V6/child-V6
-target canary must repeat authentication and standard/timeout injection before
+post-leaf counter-refresh, NETDIAG, and NineDoor aggregate. The current
+V35/root-fault-V6/child-V18 target canary must repeat the ordered
+peer-close/relisten gate, prove the fixed response matrix, and run
+standard-fault containment plus budget-exhaustion/postponement proof before
 Stage 03, Hive Gateway pressure benchmarks, broad host closure, or complete
 host-tool validation proceeds; none of the prior failures is qualification
 evidence.
@@ -6182,25 +7608,108 @@ dispatch to separate noinline `poll_deferred_diagnostic_unit`,
 child signal may force the final cursor back to ObserveChild. Operator, not
 Network, drains at most one retained console lifecycle event per visit.
 
-Child-loop source and behavior tests must separately prove one closed logical
-unit per active-MCS replenishment in the retained-first order completion publication
--> service-event publication -> egress publication -> service-poll continuation
--> new ingress -> new control. A coalesced badge may
-retain several later units, but the current turn performs only the first
-eligible one. After Ready and every later nonterminal unit, including idle or
-backpressure retention, it must execute exactly one `seL4_Yield` and then one
-`seL4_Wait`; retained state and the existing root service tick drive the
-successor without any new notification cap. Terminal revoke/shutdown uses only
-its wait-only park.
-Within `ChildTurnUnit::PollService`, the v6 source guard must prove
+V18 child-loop source and behavior tests must prove the retained-first order
+completion publication -> service-event publication -> egress publication ->
+service-poll continuation -> new ingress -> new control, with badge and
+publication-credit gates rechecked between units. Exact eligible retained
+private work uses `seL4_Poll`; publication-uncredited and idle paths call
+`seL4_Wait` directly with no ordinary `seL4_Yield`. SC exhaustion must rely on
+native postponement, not a console Timeout handler. Ready and ordinary wakes
+grant no publication credit; internal work preserves credit and one Publish
+consumes it before mutation. Stable empty hints retire before a separate
+service cycle. Root ACK is owed only after valid copy, sent only after durable
+adapter retention, cleared before signal, and forces ObserveChild. Revoke parks;
+graceful shutdown consumes credit, retires debt without ACK, and contains.
+Within `ChildTurnUnit::PollService`, the v11 source guard must prove
 `ServicePollUnit::StackIngress -> StackEgress -> Session` successor commit
 before dispatch and `ServicePollOutcome::{Continuation, Complete}`.
 `StackIngress` owns exactly one `Interface::poll_ingress_single` call;
 `StackEgress` owns exactly one `Interface::poll_egress` call. Each returns
-`Continuation` and retains `service_pending` across Yield then Wait. `Session`
-owns connection/session RX, tick, TX, close, and relisten; only `Complete`
-clears the unit. An error or preempting retained publication must not lose the
-pending successor.
+`Continuation` and retains `service_pending` across the gate recheck and
+eligible local-Poll path. `Session`
+owns connection/session RX, tick, TX, close, and relisten. Nonzero receive or a
+complete wire-frame commit returns `Continuation`; only zero receive with no
+commit returns `Complete` and clears the unit. The exact real-stack source
+regression above must prove already-buffered oversize fragments plus QUIT make
+progress without another packet/control wake. An error or preempting retained
+publication must not lose the pending successor.
+
+The V12 source and behavior guard must additionally prove that the exact
+`TcpState::CloseWait` observation calls the existing idempotent
+`request_disconnect`, that queued exact-generation output remains retained
+until `close_ready`, and that the pre-existing close/end/listen path emits one
+`Disconnected`, clears the generation, and restores LISTEN. No root wake,
+additional poll unit, or modeled TCP shortcut may substitute for the real
+two-stack peer-FIN regression.
+
+The V13 source and behavior guard must prove that exact
+`TcpState::TimeWait` observation performs old-generation `end` before TCP
+`abort` and immediate `listen`, while `TcpState::Closed` retains its prior
+path. The focused exact real-stack regression
+`tests::fin_wait_retains_unsendable_output_until_peer_close_relistens` must
+authenticate replacement connection 2 without advancing modeled time through
+the smoltcp close delay and must observe exactly one old-generation
+`Disconnected`.
+
+The V26 source and behavior guard must prove that root's per-connection issued
+latch is tested before publication and set only in the successful
+`stage_disconnect` arm. `BoundaryError::Backpressure` must not set it. A focused
+lower-cursor regression must model the exact first successful Disconnect,
+subsequent `ControlCompleted` and `OutputDrained`, refusal to restage, and
+progress through Ingress to ServiceTick while retaining Quit attribution until
+`Disconnected`.
+
+The V15 source and behavior guard must preserve V14's complete SendBatch validation
+before mutation, exclusive pending-batch ownership, one external frame staged
+per Session unit, and exact control/drain identity. The V34 guard must preserve
+V33/V32/V31/V30/V29's capture, V28's terminal Disconnect fence, and V27 response-lane identity reset on
+generation/connection transition. It must prove root-local capture and sealing
+before publication, immutable terminal ordering, exact cursor retention across
+backpressure, stale-identity discard, and CACHELOG snapshot allocation before
+one lock acquisition followed by lock-free rendering. Each response Network
+visit selects one useful unit without serializing routine success diagnostics,
+and the ninth response opportunity pays exactly one ordinary phase debt before
+resuming. Terminal completion must require the exact terminal batch's
+`ControlCompleted` and `OutputDrained`; a conflicting physical synchronous
+producer must retain its bounded BUSY terminal and prompt without replacing the
+network owner. A selected-wrapper regression must additionally prove
+`DefaultNetStack` delegates terminal-line publication, bounded identity,
+response-lane inspection, response-budget polling, and
+`console_event_pending` to the concrete VirtIO backend.
+
+The V34 routine-diagnostic regression must preserve V33's private four-record
+FIFO, FIFO order, drop-new saturation/overlength behavior, and exclusion from
+the public log buffer. The event source guard must route
+routine command begin/end, session attach/detach, TAIL start/stop, NineDoor
+error, and CAT acknowledgment to that FIFO only for the selected QEMU VirtIO
+composition. It must prove terminal response admission precedes diagnostic
+retention. Serial/local-seat input, response ownership, stream END/prompt,
+pending stream/flush, retained output, containment, network event/line, and
+display work must each prevent the final-idle `RoutineAudit` unit. Initial
+admission may attempt only the FIFO head and may pop it only after the complete
+record is staged atomically; a full serial queue retains the same FIFO head for
+a later idle turn. Each eligible visit with an admitted audit-only backlog may
+physically transmit at most one byte. Every remaining byte and the audit-only
+tag must survive across visits, and the tag may clear only after the final
+`\r\n` byte drains. A focused stalled-UART regression must stage one exact
+audit-only record, make device TX return would-block, and prove ordinary
+`SerialDispatch` does not retry it ahead of a newly arriving `NetEvent` and its
+following `NetLine`. Both network units must complete while the tagged bytes
+remain unchanged and unemitted; after TX becomes writable, successive eligible
+final-idle visits must emit exactly one byte apiece and reconstruct that record
+once with exact `\r\n`, without loss, duplication, or reordering. A separate `SerialPort` regression
+must prove every nonempty ordinary record, direct enqueue, and best-effort
+enqueue promotes the tag, restores ordinary dispatch priority, and preserves
+exact audit-before-ordinary bytes without loss, duplication, or reordering.
+Compile-time `net-backend-virtio` guards must remove the FIFO storage,
+provenance flag, and unit from Pi. Pi, linked-runtime, legacy/non-VirtIO, ordinary console-failure,
+critical/fatal, and fail-stop sites must retain the existing raw diagnostic
+helper. Existing `9p_batch.coh` must prove `/log/queen.log` still returns exact
+ordered `batch-1|batch-2|batch-3` without routine-diagnostic contamination.
+Target execution must repeat the rapid three-TAIL `observe_watch.coh` sequence
+within the unchanged client deadline and prove that private diagnostic draining
+does not alter response lines, terminal order, retry count, connection count,
+or peer-EOF behavior.
 
 The isolated VirtIO regression must repeat the same phase-order and ownership
 assertions after console-network quarantine. Quarantine must preserve the outer
@@ -6245,10 +7754,33 @@ precede NineDoor, queue admission must precede diagnostic commit, backpressure
 must retain the record without eviction, and admission plus flush must occur on
 distinct ordinary turns.
 The QEMU run must additionally show that all generated sources are constructed
-suspended, the exact fault registry is sealed before the console child resumes,
-one authenticated `cohsh` session observes the existing ACK/ERR/END fixtures,
-malformed/authentication load cannot bypass root policy, and child fault or
-timeout leaves serial, local-seat, root-fault, and root-emergency progress live.
+suspended and the exact fault registry is sealed before the console child
+resumes. The retained V26/V13 lifecycle canary uses one exact boot and no concurrent gateway
+owner. A raw session 1 must authenticate, the host must close that socket, and
+a same-boot raw session 2 must authenticate, proving peer-close relisten before
+two sequential direct `cohsh` sessions run. The first direct session
+authenticates, attaches, begins a bounded streamed response, and closes only
+after an exact control is staged or demonstrably retained; it must complete END
+and QUIT so the server-active close reaches the changed `TimeWait` boundary.
+Without a `10 s` delay, reconnect retry, or host-timeout change, the second
+direct session must then authenticate and attach. The old connection-1 control
+must produce exactly one completion,
+zero session-2 bytes, zero child fault, and no false `OutputDrained`; session 2
+must receive its own bounded ACK/TAIL/END response and the listener must remain
+live. The transcript must bind both connection identities and the exact
+root/child/CPIO/kernel hashes. A serial prompt, one successful ATTACH, or the
+host client's timeout alone is insufficient. After that canary, the existing
+ACK/ERR/END fixtures, malformed/authentication load, and separate fresh-boot
+standard-fault containment plus budget-exhaustion/postponement injection must
+prove root policy cannot be bypassed and both paths leave serial, local-seat,
+root-fault, and root-emergency progress live. The postponement path must not
+expect a console Timeout teardown.
+The immutable V26 run and retained narrow V28 result completed that two-session
+direct gate for their own transitions. The later V34/V17 and V34/V18 boots
+remain failure evidence for their respective first failed layers. The current
+V35/V18 boot must repeat the gate as a regression after the fixed response matrix;
+historical success cannot
+substitute for current artifact identity.
 Simultaneous console-network and NineDoor fault injection must show two
 or more root-control Recovery refills as required by their retained unit
 cursors, with every console unit preceding every NineDoor unit, an outer yield
@@ -6257,11 +7789,15 @@ The QEMU MCS transcript must contain no `TCB.SetAffinity` or affinity-failure ma
 root bridge attachment is bookkeeping, while execution placement comes only
 from the generated SchedControl/SC binding. A live VM fault in the console
 entry stack-zero loop or a root-fault timeout during `TCB.Suspend` is a failed
-stack/temporal contract, not acceptable containment evidence. A root-control
-timeout in or after one admitted Runtime unit, Network unit, child logical unit,
-or Recovery primitive fails the v23/root-fault-V6/child-V6 candidates; a PC after publication or at
-the outer yield still fails the bound. Passing compilation or compiler admission
-cannot replace that live check.
+stack/temporal contract, not acceptable containment evidence. A standard
+root-control fault in or after one admitted Runtime unit, Network unit, or
+Recovery primitive remains terminal and fails the V35/root-fault-V6
+candidates. Root-control and child V18 budget exhaustion must naturally
+postpone rather than terminalize: their TCB timeout endpoint slots must be
+empty, their already-valid adjacent refill must remain usable, and the
+standard fault endpoint must remain installed. A Timeout label 5 at the root
+outer yield fails V35. Passing compilation or compiler admission cannot
+replace that live check.
 Scale back network mirroring before command responses; never starve the
 physical operator queues or fatal output. This gate deliberately performs no
 Pi 4 execution and cannot qualify NineDoor containment, GENET, CYW43, or SDIO
@@ -6312,13 +7848,16 @@ open; until later fresh Pi tests pass, the Milestone task is not a Pi PASS.
 - `trace.hash`: `sha256`
 - `trace.max_bytes`: `1048576`
 - `trace.max_frame_bytes`: `8192`
-- `trace.max_ack_bytes`: `256`
+- `trace.max_ack_bytes`: `2304`
 
-_Generated by coh-rtc (sha256: `c502a57721e43d5c38f5499767a8668eb593ac74f25cb2389632804c4d7f15f2`)._
+_Generated by coh-rtc (sha256: `fa11c64fe53b859365c45c8e33e565d428029a87529be00cd158fd6336b6484e`)._
 <!-- coh-rtc:trace-policy:end -->
 
 ## Manifest fingerprints
-- `configs/generated/root_task_resolved.json` — `sha256:013304cfbc552744a142a91d4cc5d95fcc274308cb00db15cc0c2d77fcaeb590`
+- `configs/root_task.toml` — `sha256:5ac269ae1f3c81e6188aeb3dd97b6a0fa82cfeda27227642f7f301506fca04b0`
+- `configs/generated/root_task_resolved.json` — `sha256:72b6fdbd175150ec352f9345d99791a1d576cf01de47363aed2a64ad0c463a93`
+- `configs/root_task_pi4_uboot_aarch64.toml` — `sha256:84b090f5b1f627270718b0b153d48d3e7bf2cb39c3d739b8dbbe5198c8598101`
+- Pi `pi4_production` transient resolved binding — `sha256:4b0d93e078caaae6d24b7b9908c9d8f878c6ee4af41e937fef3554d6572fcfb4`
 
 ## Transcript fixture hashes
 - `tests/fixtures/transcripts/boot_v0/serial.txt` — `sha256:2ea58218a937f0c702fd67dac83aa838a8c49b9d1fba1e0165dfa93a44ab3c6d`

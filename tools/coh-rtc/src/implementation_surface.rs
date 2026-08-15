@@ -128,6 +128,7 @@ struct ReleaseSource {
     host_assets: Vec<String>,
     operator_scripts: Vec<String>,
     python_artifacts: Vec<String>,
+    cas_fixtures: Vec<String>,
     trace_fixtures: Vec<String>,
     transcript_fixtures: Vec<String>,
     ui_assets: Vec<String>,
@@ -465,6 +466,7 @@ fn validate_release(release: &ReleaseSource) -> Result<()> {
         ("host_assets", &release.host_assets),
         ("operator_scripts", &release.operator_scripts),
         ("python_artifacts", &release.python_artifacts),
+        ("cas_fixtures", &release.cas_fixtures),
         ("trace_fixtures", &release.trace_fixtures),
         ("transcript_fixtures", &release.transcript_fixtures),
         ("ui_assets", &release.ui_assets),
@@ -489,6 +491,7 @@ fn validate_release(release: &ReleaseSource) -> Result<()> {
         .chain(&release.host_assets)
         .chain(&release.operator_scripts)
         .chain(&release.python_artifacts)
+        .chain(&release.cas_fixtures)
         .chain(&release.trace_fixtures)
         .chain(&release.transcript_fixtures)
         .chain(&release.ui_assets)
@@ -592,6 +595,7 @@ fn compile_release(
         ("host_asset", release.host_assets.as_slice()),
         ("operator_script", release.operator_scripts.as_slice()),
         ("python_artifact", release.python_artifacts.as_slice()),
+        ("cas_fixture", release.cas_fixtures.as_slice()),
         ("trace_fixture", release.trace_fixtures.as_slice()),
         ("transcript_fixture", release.transcript_fixtures.as_slice()),
         ("ui_asset", release.ui_assets.as_slice()),
@@ -657,6 +661,14 @@ fn release_destination(kind: &str, source: &str, version: &str) -> Result<String
                 .strip_prefix("tools/cohesix-py/")
                 .ok_or_else(|| anyhow::anyhow!(
                     "Python release path is outside tools/cohesix-py: {source}"
+                ))?
+        ),
+        "cas_fixture" => format!(
+            "cas/{}",
+            source
+                .strip_prefix("tests/fixtures/cas/")
+                .ok_or_else(|| anyhow::anyhow!(
+                    "CAS fixture is outside tests/fixtures/cas: {source}"
                 ))?
         ),
         "trace_fixture" => format!(

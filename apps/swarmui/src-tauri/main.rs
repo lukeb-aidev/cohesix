@@ -29,6 +29,28 @@ use swarmui::{
     TraceTransportFactory,
 };
 
+const SWARMUI_HELP: &str = "\
+SwarmUI desktop client for Cohesix
+
+Usage: swarmui [OPTIONS]
+
+Options:
+      --replay <FILE>             Load a Hive CBOR snapshot for offline replay
+      --replay-trace <FILE>       Load a Secure9P trace for offline replay
+      --mint-ticket               Mint a capability ticket and exit
+      --role <ROLE>               Role for --mint-ticket
+      --ticket-subject <SUBJECT>  Subject identity for --mint-ticket
+      --ticket-config <FILE>      Ticket configuration for --mint-ticket
+      --ticket-secret <SECRET>    Ticket signing secret for --mint-ticket
+  -h, --help                      Print help
+";
+
+fn help_requested(args: &[String]) -> bool {
+    args.iter()
+        .skip(1)
+        .any(|arg| matches!(arg.as_str(), "-h" | "--help"))
+}
+
 enum SwarmUiService {
     Secure9p(SwarmUiBackend<TcpTransportFactory>),
     Trace(SwarmUiBackend<TraceTransportFactory>),
@@ -346,6 +368,10 @@ fn swarmui_mode(state: State<'_, AppState>) -> SwarmUiMode {
 
 fn main() {
     let args: Vec<String> = env::args().collect();
+    if help_requested(&args) {
+        print!("{SWARMUI_HELP}");
+        return;
+    }
     let mint_args = parse_mint_args(&args);
     let replay_path = parse_replay_path(&args);
     let trace_replay_path = parse_trace_replay_path(&args);

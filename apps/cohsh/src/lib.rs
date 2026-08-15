@@ -79,9 +79,9 @@ use cohsh_core::{normalize_ticket, role_label, ConsoleVerb, TicketPolicy};
 use cohsh_core::{RoleParseMode, MAX_ECHO_LEN};
 use log::info;
 #[cfg(feature = "in-process")]
-use nine_door::{InProcessConnection, NineDoor};
+use nine_door::{InProcessConnection, NineDoor, NineDoorError};
 #[cfg(feature = "in-process")]
-use secure9p_codec::OpenMode;
+use secure9p_codec::{ErrorCode, OpenMode};
 use secure9p_codec::{SessionId, MAX_MSIZE};
 use serde::Serialize;
 
@@ -764,6 +764,34 @@ impl NineDoorTransport {
         }
     }
 
+    fn write_error(verb: &str, path: &str, err: NineDoorError) -> anyhow::Error {
+        let capacity_refusal = match &err {
+            NineDoorError::Protocol {
+                code: ErrorCode::TooBig,
+                message,
+            } => match path {
+                CLIENT_QUEEN_SCHEDULE_CTL_PATH => message == "schedule queue full",
+                CLIENT_QUEEN_LEASE_CTL_PATH => matches!(
+                    message.as_str(),
+                    "lease active list full"
+                        | "lease preemptions list full"
+                        | "lease quota list full"
+                ),
+                CLIENT_QUEEN_EXPORT_CTL_PATH => message == "export window list full",
+                _ => false,
+            },
+            _ => false,
+        };
+        let err = anyhow::Error::new(err);
+        if capacity_refusal {
+            err.context(format!(
+                "ERR {verb} reason=quota detail=buffer-full path={path} error=buffer full"
+            ))
+        } else {
+            err.context(format!("failed to write {path}"))
+        }
+    }
+
     fn read_lines(&mut self, path: &str) -> Result<Vec<String>> {
         let components = parse_path(path)?;
         let fid = self.allocate_fid();
@@ -976,7 +1004,7 @@ impl Transport for NineDoorTransport {
             }
         };
         let fid = self.allocate_fid();
-        let result = (|| {
+        let result: Result<u32> = (|| {
             let connection = self
                 .connection
                 .as_mut()
@@ -989,14 +1017,19 @@ impl Transport for NineDoorTransport {
                 .with_context(|| format!("failed to open {path}"))?;
             let written = connection
                 .write(fid, payload)
-                .with_context(|| format!("failed to write {path}"))?;
+                .map_err(|err| Self::write_error(verb, path, err))?;
             connection.clunk(fid).context("failed to clunk fid")?;
             Ok(written)
         })();
         let written = match result {
             Ok(written) => written,
             Err(err) => {
-                let detail = format!("path={path} reason={err}");
+                let rendered = err.to_string();
+                let typed_prefix = format!("ERR {verb} ");
+                let detail = rendered
+                    .strip_prefix(typed_prefix.as_str())
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| format!("path={path} reason={rendered}"));
                 self.push_ack(AckStatus::Err, verb, Some(detail.as_str()));
                 return Err(err);
             }
@@ -1117,6 +1150,86 @@ impl Transport for NineDoorTransport {
 }
 
 const DEFAULT_QEMU_SMP_TOPO: &str = "4,cores=4,threads=1,sockets=1";
+const QEMU_PROFILE_CPU: &str = "cortex-a57";
+const QEMU_PROFILE_TIMER_CLOCK_HZ: u64 = 24_000_000;
+
+#[derive(Debug, Eq, PartialEq)]
+struct QemuExecutionEnvelope {
+    default_accel_args: Vec<String>,
+    machine: String,
+    cpu: String,
+    diagnostic: bool,
+}
+
+fn qemu_accel_override(extra_args: &[String]) -> Result<Option<String>> {
+    let mut arguments = extra_args.iter();
+    while let Some(argument) = arguments.next() {
+        if argument == "-machine"
+            || argument == "--machine"
+            || argument == "-M"
+            || argument == "-cpu"
+            || argument == "--cpu"
+            || argument.starts_with("-machine=")
+            || argument.starts_with("--machine=")
+            || argument.starts_with("-M=")
+            || argument.starts_with("-cpu=")
+            || argument.starts_with("--cpu=")
+        {
+            bail!("QEMU machine and CPU are profile-owned and cannot be overridden");
+        }
+        if argument == "-accel" {
+            let accel = arguments
+                .next()
+                .and_then(|value| value.split(',').next())
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| anyhow!("QEMU -accel requires a non-empty value"))?;
+            return Ok(Some(accel.to_owned()));
+        }
+        if let Some(value) = argument.strip_prefix("-accel=") {
+            let accel = value
+                .split(',')
+                .next()
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| anyhow!("QEMU -accel requires a non-empty value"))?;
+            return Ok(Some(accel.to_owned()));
+        }
+    }
+    Ok(None)
+}
+
+fn qemu_execution_envelope(
+    gic_version: &str,
+    extra_args: &[String],
+    darwin: bool,
+) -> Result<QemuExecutionEnvelope> {
+    if gic_version != "3" {
+        bail!("canonical QEMU profile requires GICv3; got GIC{gic_version}");
+    }
+    let accel_override = qemu_accel_override(extra_args)?;
+    let default_accel_args = if darwin && accel_override.is_none() {
+        vec!["-accel".to_owned(), "hvf".to_owned()]
+    } else {
+        Vec::new()
+    };
+    let effective_accel = accel_override
+        .as_deref()
+        .or(if darwin { Some("hvf") } else { None });
+    let cpu = if effective_accel == Some("tcg") {
+        format!("{QEMU_PROFILE_CPU},cntfrq={QEMU_PROFILE_TIMER_CLOCK_HZ}")
+    } else {
+        QEMU_PROFILE_CPU.to_owned()
+    };
+    let mut machine = format!("virt,gic-version={gic_version},virtualization=off");
+    if darwin {
+        machine.push_str(",kernel-irqchip=off");
+    }
+    Ok(QemuExecutionEnvelope {
+        default_accel_args,
+        machine,
+        cpu,
+        diagnostic: effective_accel == Some("tcg"),
+    })
+}
 
 fn resolve_qemu_smp_arg() -> Result<String> {
     if let Some(arg) = read_env_nonempty(&["COHESIX_QEMU_SMP_TOPO", "QEMU_SMP_TOPO"]) {
@@ -1343,13 +1456,24 @@ impl Transport for QemuTransport {
 
         let (elfloader, kernel, rootserver, cpio) = self.artefacts()?;
         let qemu_smp_arg = resolve_qemu_smp_arg()?;
+        let envelope = qemu_execution_envelope(
+            &self.gic_version,
+            &self.extra_qemu_args,
+            cfg!(target_os = "macos"),
+        )?;
+        if envelope.diagnostic {
+            eprintln!(
+                "[cohsh] TCG is an explicit diagnostic envelope; this run is claim-ineligible"
+            );
+        }
         *self.log_lines.lock().expect("log mutex poisoned") = Vec::new();
 
         let mut cmd = Command::new(&self.qemu_bin);
-        cmd.arg("-machine")
-            .arg(format!("virt,gic-version={}", self.gic_version))
+        cmd.args(&envelope.default_accel_args)
+            .arg("-machine")
+            .arg(&envelope.machine)
             .arg("-cpu")
-            .arg("cortex-a57")
+            .arg(&envelope.cpu)
             .arg("-m")
             .arg("1024")
             .arg("-smp")
@@ -2609,15 +2733,22 @@ impl<T: Transport, W: Write> Shell<T, W> {
                         transcript,
                     );
                 }
-                if let Some(session) = self.session.as_ref() {
-                    let _ = self.transport.quit(session);
-                }
+                let quit_result = match self.session.as_ref() {
+                    Some(session) => self.transport.quit(session),
+                    None => Ok(()),
+                };
                 self.session = None;
                 if let Some(pool) = self.pool.as_ref() {
                     pool.shutdown();
                 }
-                transcript.output_lines.push("closing session".to_owned());
-                Ok(CommandStatus::Quit)
+                transcript.ack_lines = self.transport.drain_acknowledgements();
+                match quit_result {
+                    Ok(()) => {
+                        transcript.output_lines.push("closing session".to_owned());
+                        Ok(CommandStatus::Quit)
+                    }
+                    Err(err) => Err(err),
+                }
             }
             unknown => Err(anyhow!("unknown command '{unknown}'")),
         };
@@ -3767,13 +3898,16 @@ impl<T: Transport, W: Write> Shell<T, W> {
                 if parts.next().is_some() {
                     return Err(anyhow!("detach does not take any arguments"));
                 }
-                if let Some(session) = self.session.as_ref() {
-                    let _ = self.transport.quit(session);
-                }
+                let quit_result = match self.session.as_ref() {
+                    Some(session) => self.transport.quit(session),
+                    None => Ok(()),
+                };
                 self.session = None;
                 if let Some(pool) = self.pool.as_ref() {
                     pool.shutdown();
                 }
+                quit_result?;
+                self.drain_ack_lines()?;
                 self.write_line("OK DETACH")?;
                 Ok(CommandStatus::Continue)
             }
@@ -3782,14 +3916,16 @@ impl<T: Transport, W: Write> Shell<T, W> {
                     return Err(anyhow!("quit does not take any arguments"));
                 }
                 info!("audit quit.recv");
-                if let Some(session) = self.session.as_ref() {
-                    if let Err(err) = self.transport.quit(session) {
-                        self.write_line(&format!("quit: {err}"))?;
-                    }
-                }
+                let quit_result = match self.session.as_ref() {
+                    Some(session) => self.transport.quit(session),
+                    None => Ok(()),
+                };
+                self.session = None;
                 if let Some(pool) = self.pool.as_ref() {
                     pool.shutdown();
                 }
+                quit_result?;
+                self.drain_ack_lines()?;
                 self.write_line("closing session")?;
                 Ok(CommandStatus::Quit)
             }
@@ -4877,6 +5013,51 @@ mod tests {
     }
 
     #[test]
+    fn qemu_darwin_envelope_is_hvf_profile_exact() {
+        let envelope = qemu_execution_envelope("3", &[], true).expect("Darwin envelope");
+        assert_eq!(
+            envelope,
+            QemuExecutionEnvelope {
+                default_accel_args: vec!["-accel".to_owned(), "hvf".to_owned()],
+                machine: "virt,gic-version=3,virtualization=off,kernel-irqchip=off".to_owned(),
+                cpu: "cortex-a57".to_owned(),
+                diagnostic: false,
+            }
+        );
+    }
+
+    #[test]
+    fn qemu_explicit_tcg_envelope_preserves_profile_timer_clock() {
+        let extra_args = vec!["-accel".to_owned(), "tcg,thread=multi".to_owned()];
+        let envelope = qemu_execution_envelope("3", &extra_args, true).expect("TCG envelope");
+        assert!(envelope.default_accel_args.is_empty());
+        assert_eq!(
+            envelope.machine,
+            "virt,gic-version=3,virtualization=off,kernel-irqchip=off"
+        );
+        assert_eq!(envelope.cpu, "cortex-a57,cntfrq=24000000");
+        assert!(envelope.diagnostic);
+    }
+
+    #[test]
+    fn qemu_envelope_rejects_machine_and_cpu_overrides() {
+        for extra_args in [
+            vec!["-machine".to_owned(), "virt,gic-version=2".to_owned()],
+            vec!["-cpu=max".to_owned()],
+        ] {
+            let error = qemu_execution_envelope("3", &extra_args, true)
+                .expect_err("profile-owned override must fail");
+            assert!(error.to_string().contains("profile-owned"));
+        }
+    }
+
+    #[test]
+    fn qemu_envelope_rejects_non_profile_gic() {
+        let error = qemu_execution_envelope("2", &[], true).expect_err("non-profile GIC must fail");
+        assert!(error.to_string().contains("requires GICv3"));
+    }
+
+    #[test]
     fn attach_and_tail_logs() {
         let transport = NineDoorTransport::new(NineDoor::new());
         let buffer = Vec::new();
@@ -4888,6 +5069,85 @@ mod tests {
         let rendered = String::from_utf8(output).unwrap();
         assert!(rendered.contains("Cohesix boot: root-task online"));
         assert!(rendered.contains("tick 1"));
+    }
+
+    #[test]
+    fn in_process_capacity_errors_keep_typed_source_and_canonical_ack() {
+        for (path, message) in [
+            (CLIENT_QUEEN_SCHEDULE_CTL_PATH, "schedule queue full"),
+            (CLIENT_QUEEN_LEASE_CTL_PATH, "lease active list full"),
+            (CLIENT_QUEEN_LEASE_CTL_PATH, "lease preemptions list full"),
+            (CLIENT_QUEEN_LEASE_CTL_PATH, "lease quota list full"),
+            (CLIENT_QUEEN_EXPORT_CTL_PATH, "export window list full"),
+        ] {
+            let err = NineDoorTransport::write_error(
+                "ECHO",
+                path,
+                NineDoorError::Protocol {
+                    code: ErrorCode::TooBig,
+                    message: message.to_owned(),
+                },
+            );
+
+            assert_eq!(
+                err.to_string(),
+                format!("ERR ECHO reason=quota detail=buffer-full path={path} error=buffer full")
+            );
+            assert!(matches!(
+                err.downcast_ref::<NineDoorError>(),
+                Some(NineDoorError::Protocol {
+                    code: ErrorCode::TooBig,
+                    message: retained,
+                }) if retained == message
+            ));
+        }
+    }
+
+    #[test]
+    fn in_process_capacity_mapping_requires_exact_path_and_source_message() {
+        for (path, message) in [
+            (CLIENT_QUEEN_SCHEDULE_CTL_PATH, "unrelated capacity full"),
+            (CLIENT_QUEEN_CTL_PATH, "schedule queue full"),
+        ] {
+            let err = NineDoorTransport::write_error(
+                "ECHO",
+                path,
+                NineDoorError::Protocol {
+                    code: ErrorCode::TooBig,
+                    message: message.to_owned(),
+                },
+            );
+
+            assert_eq!(err.to_string(), format!("failed to write {path}"));
+            assert!(matches!(
+                err.downcast_ref::<NineDoorError>(),
+                Some(NineDoorError::Protocol {
+                    code: ErrorCode::TooBig,
+                    message: retained,
+                }) if retained == message
+            ));
+        }
+    }
+
+    #[test]
+    fn in_process_non_capacity_error_keeps_generic_failure() {
+        let err = NineDoorTransport::write_error(
+            "ECHO",
+            CLIENT_QUEEN_SCHEDULE_CTL_PATH,
+            NineDoorError::Protocol {
+                code: ErrorCode::Busy,
+                message: "schedule owner busy".to_owned(),
+            },
+        );
+
+        assert_eq!(err.to_string(), "failed to write /queen/schedule/ctl");
+        assert!(matches!(
+            err.downcast_ref::<NineDoorError>(),
+            Some(NineDoorError::Protocol {
+                code: ErrorCode::Busy,
+                message,
+            }) if message == "schedule owner busy"
+        ));
     }
 
     #[test]
@@ -4982,6 +5242,26 @@ mod tests {
     }
 
     #[test]
+    fn execute_detach_propagates_transport_close_failure() {
+        let transport = RestoreTestTransport {
+            quit_failure: true,
+            ..RestoreTestTransport::default()
+        };
+        let mut output = Vec::new();
+        {
+            let mut shell = Shell::new(transport, &mut output);
+            shell.attach(Role::Queen, None).unwrap();
+            let error = shell
+                .execute("detach")
+                .expect_err("failed QUIT close must fail DETACH");
+            assert!(error.to_string().contains("injected QUIT close failure"));
+            assert!(shell.execute("ping").is_err());
+        }
+        let rendered = String::from_utf8(output).unwrap();
+        assert!(!rendered.contains("OK DETACH"));
+    }
+
+    #[test]
     fn worker_attach_requires_identity() {
         let mut transport = NineDoorTransport::new(NineDoor::new());
         let err = transport
@@ -5041,6 +5321,7 @@ mod tests {
     #[derive(Default)]
     struct RestoreTestTransport {
         attaches: u32,
+        quit_failure: bool,
     }
 
     impl Transport for RestoreTestTransport {
@@ -5086,6 +5367,14 @@ mod tests {
             Ok(vec![format!(
                 "stub console command={command} ack={expected_ack}"
             )])
+        }
+
+        fn quit(&mut self, _session: &Session) -> Result<()> {
+            if self.quit_failure {
+                Err(anyhow!("injected QUIT close failure"))
+            } else {
+                Ok(())
+            }
         }
     }
 

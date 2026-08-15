@@ -4,6 +4,7 @@
 // Author: Lukas Bower
 
 use anyhow::{bail, Context, Result};
+use cohesix_cas::CAS_MANIFEST_MAX_CHUNKS;
 use cohsh_core::MAX_LINE_LEN;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -14,9 +15,10 @@ use std::path::{Path, PathBuf};
 use crate::resource_admission::{KernelObjectBudget, WorkerResourceAdmissionConfig};
 use crate::temporal::{
     SchedulerArchitecture, TemporalAuthorityConfig, TemporalExecution, TemporalTaskKind,
+    TimeoutPolicy,
 };
 
-const SCHEMA_VERSION: &str = "1.11";
+const SCHEMA_VERSION: &str = "1.14";
 const VIRT_AARCH64_ROOT_CONTROL_SERIAL_IO_BYTES_PER_TURN: u32 = 64;
 const PI4_PROFILE_NAME: &str = "pi4-uboot-aarch64";
 const PI4_PROFILE_LEGACY_ALIAS: &str = "uefi-aarch64";
@@ -29,7 +31,6 @@ const EVENT_PUMP_TELEMETRY_BUDGET_BYTES: u32 = 32 * 1024;
 const EVENT_PUMP_MAX_TELEMETRY_WORKERS: u32 = 8;
 const EVENT_PUMP_CAS_BUDGET_BYTES: u32 = 32 * 1024;
 const EVENT_PUMP_SIDECAR_BUDGET_BYTES: u32 = 16 * 1024;
-const CAS_MAX_CHUNKS: u32 = 8;
 const MAX_POLICY_QUEUE_ENTRIES: u16 = 256;
 const MAX_POLICY_RULE_ID_LEN: usize = 64;
 const MAX_REPLAY_ENTRIES: u16 = 256;
@@ -1675,6 +1676,7 @@ impl Manifest {
             || task.period_us != service.period_us
             || task.max_refills != service.max_refills
             || task.timeout_badge != service.timeout_badge
+            || task.timeout_policy != TimeoutPolicy::NaturalPostpone
             || !task.allowed_donors.is_empty()
             || task.reply_objects != 0
             || task.max_donation_depth != 0
@@ -2824,12 +2826,16 @@ impl Manifest {
                 self.secure9p.msize
             );
         }
-        let required = self.cas.store.chunk_bytes.saturating_mul(CAS_MAX_CHUNKS);
+        let required = self
+            .cas
+            .store
+            .chunk_bytes
+            .saturating_mul(CAS_MANIFEST_MAX_CHUNKS as u32);
         if required > EVENT_PUMP_CAS_BUDGET_BYTES {
             bail!(
                 "cas.store.chunk_bytes {} with max_chunks {} exceeds event-pump budget {}",
                 self.cas.store.chunk_bytes,
-                CAS_MAX_CHUNKS,
+                CAS_MANIFEST_MAX_CHUNKS,
                 EVENT_PUMP_CAS_BUDGET_BYTES
             );
         }
@@ -3510,7 +3516,7 @@ mod tests {
         load_manifest, AffinityPolicy, AttestationPolicy, DmaProtectionProfile,
         DriverAffinityPolicy, DriverRuntimeBusLinkSpec, DriverRuntimeImagePolicy,
         DriverRuntimeImageSpec, DriverRuntimeIrqSpec, DriverRuntimeIrqTrigger, HardwareDevice,
-        HardwareDeviceKind, NetworkBackendKind, NetworkInterfacePolicy, NetworkMode,
+        HardwareDeviceKind, NetworkBackendKind, NetworkInterfacePolicy, NetworkMode, TimeoutPolicy,
         WorkerSchedulingProfile,
     };
     use std::path::PathBuf;
@@ -3992,14 +3998,71 @@ mod tests {
         service
             .validate()
             .expect("default console-network object inventory");
-        assert_eq!(service.objects.frames, 59 + 32 + 1 + 1 + 4);
-        assert_eq!(service.objects.cspace_slots, service.objects.frames + 24);
+        assert_eq!(service.objects.frames, 60 + 32 + 1 + 1 + 4);
+        assert_eq!(service.objects.cspace_slots, service.objects.frames + 25);
         service.objects.frames = service.objects.frames.saturating_sub(1);
         let error = service
             .validate()
             .expect_err("undersized child frame budget must fail closed");
         assert!(
             error.to_string().contains("exact child constructor"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn console_network_service_requires_natural_postpone_policy() {
+        let manifest_path = repo_root().join("configs/root_task.toml");
+        let mut manifest = load_manifest(&manifest_path).expect("load QEMU manifest");
+        let task = manifest
+            .temporal_authority
+            .tasks
+            .iter_mut()
+            .find(|task| task.id == "console-network-service")
+            .expect("console-network temporal task");
+        task.timeout_policy = TimeoutPolicy::Terminal;
+
+        let error = manifest
+            .validate_with_base(Some(repo_root().as_path()))
+            .expect_err("terminal timeout delivery must fail the natural-postpone contract");
+        assert!(
+            error
+                .to_string()
+                .contains("object/SC inventory disagrees with temporal task"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn console_network_service_rejects_publication_ack_badge_drift() {
+        let service = super::ConsoleNetworkServiceConfig {
+            publication_ack_badge: 128,
+            ..super::ConsoleNetworkServiceConfig::default()
+        };
+        let error = service
+            .validate()
+            .expect_err("noncanonical publication ACK badge must fail closed");
+        assert!(
+            error
+                .to_string()
+                .contains("must match ABI v3 values 1,2,4,8,16,32,64"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn console_network_service_rejects_the_pre_send_batch_abi() {
+        let service = super::ConsoleNetworkServiceConfig {
+            abi_version: 2,
+            ..super::ConsoleNetworkServiceConfig::default()
+        };
+        let error = service
+            .validate()
+            .expect_err("console-network ABI v2 must fail after SendBatch selection");
+        assert!(
+            error
+                .to_string()
+                .contains("console_network_service.abi_version must be 3"),
             "unexpected error: {error}"
         );
     }
@@ -5581,6 +5644,7 @@ pub struct ConsoleNetworkServiceConfig {
     pub revoke_badge: u64,
     pub packet_tx_ready_badge: u64,
     pub event_ready_badge: u64,
+    pub publication_ack_badge: u64,
     pub fault_badge: u64,
     pub core: u8,
     pub scheduling_context_slot: u32,
@@ -5598,8 +5662,8 @@ pub struct ConsoleNetworkServiceConfig {
 
 impl ConsoleNetworkServiceConfig {
     fn validate(&self) -> Result<()> {
-        if self.abi_version != 1 {
-            bail!("console_network_service.abi_version must be 1");
+        if self.abi_version != 3 {
+            bail!("console_network_service.abi_version must be 3");
         }
         if self.image_id != "console-network-runtime"
             || self.image_path != "cohesix/artifacts/console-network-runtime"
@@ -5619,14 +5683,14 @@ impl ConsoleNetworkServiceConfig {
             vspaces: 1,
             page_tables: 8,
             asids: 1,
-            frames: 97,
+            frames: 98,
             endpoints: 0,
             notifications: 2,
             fault_caps: 1,
             timeout_fault_caps: 1,
             reply_objects: 0,
             scheduling_contexts: 1,
-            cspace_slots: 121,
+            cspace_slots: 123,
             untyped_bytes: 1_048_576,
         };
         if self.revoke_anchor_slot == 0
@@ -5700,7 +5764,11 @@ impl ConsoleNetworkServiceConfig {
             self.revoke_badge,
             self.packet_tx_ready_badge,
             self.event_ready_badge,
+            self.publication_ack_badge,
         ];
+        if bits != [1, 2, 4, 8, 16, 32, 64] {
+            bail!("console_network_service badges must match ABI v3 values 1,2,4,8,16,32,64");
+        }
         let mut combined = 0u64;
         for bit in bits {
             if bit == 0 || !bit.is_power_of_two() || combined & bit != 0 {
@@ -5735,7 +5803,7 @@ impl Default for ConsoleNetworkServiceConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            abi_version: 1,
+            abi_version: 3,
             image_id: "console-network-runtime".to_owned(),
             image_path: "cohesix/artifacts/console-network-runtime".to_owned(),
             entry_symbol: "_start".to_owned(),
@@ -5750,14 +5818,14 @@ impl Default for ConsoleNetworkServiceConfig {
                 vspaces: 1,
                 page_tables: 8,
                 asids: 1,
-                frames: 97,
+                frames: 98,
                 endpoints: 0,
                 notifications: 2,
                 fault_caps: 1,
                 timeout_fault_caps: 1,
                 reply_objects: 0,
                 scheduling_contexts: 1,
-                cspace_slots: 121,
+                cspace_slots: 123,
                 untyped_bytes: 1_048_576,
             },
             packet_rx_notification_slot: 2,
@@ -5783,6 +5851,7 @@ impl Default for ConsoleNetworkServiceConfig {
             revoke_badge: 8,
             packet_tx_ready_badge: 16,
             event_ready_badge: 32,
+            publication_ack_badge: 64,
             fault_badge: 0x26e4_0001,
             core: 0,
             scheduling_context_slot: 6,

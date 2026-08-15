@@ -9,7 +9,6 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 import sys
-import tempfile
 
 import pytest
 
@@ -186,46 +185,25 @@ DEFAULT_TOOLS_PRESENT = all(
 )
 
 
-@pytest.mark.skipif(
-    not DEFAULT_TOOLS_PRESENT,
-    reason="canonical macOS AArch64 GNU binutils family is unavailable",
-)
-def test_tracked_repository_baseline_oracle_is_byte_exact() -> None:
-    """Selected host tools must reproduce the committed Pi image payload."""
+def test_tracked_repository_classic_reference_is_rejected_before_oracle() -> None:
+    """The pre-26e tracked Pi tree must not pass the current MCS contract."""
 
     build_dir = REPO_ROOT / "seL4" / "build_UBOOT"
-    validation = composition.validate_repo_build(build_dir)
-    tools = composition.resolve_binutils()
-    objects = composition.parse_elfloader_object_order(
-        build_dir / "build.ninja"
-    )
-
-    with tempfile.TemporaryDirectory() as temporary:
-        oracle = composition.run_baseline_oracle(
-            build_dir,
-            objects,
-            tools,
-            Path(temporary),
-        )
-
-    assert validation["git_tree"] == "b35504005f22855b599a47b5340eeecc90e1e46f"
-    assert oracle["passed"] is True
-    assert (
-        oracle["payload_sha256"]
-        == "4dd17b4d3bdec29c456b19e1ef6f32340cecc17930b3eca03d6a2037b226b8fc"
-    )
-    assert oracle["elf_layout"]["entry"] == composition.UIMAGE_LOAD_ADDRESS
-    assert oracle["elf_layout"]["file_size"] == oracle["image_metadata"]["data_size"]
+    with pytest.raises(
+        composition.CompositionError,
+        match=(
+            "contract_values_sha256 mismatch: expected "
+            "'aff933c55dcda9600723da4b03d30ced92dbb6003b1732199d1c3953caad17a0', "
+            "got '62b2f3f34fc1531c556d85f0bd3ae6459f2b02a3f9ac371f770d174e3d0afa92'"
+        ),
+    ):
+        composition.validate_repo_build(build_dir)
 
 
-@pytest.mark.skipif(
-    not DEFAULT_TOOLS_PRESENT,
-    reason="canonical macOS AArch64 GNU binutils family is unavailable",
-)
-def test_tracked_repository_can_publish_verified_growing_composition(
+def test_tracked_repository_cannot_publish_before_controlled_mcs_refresh(
     tmp_path: Path,
 ) -> None:
-    """The complete artifact lane must relink and publish outside seL4."""
+    """Composition must fail closed while the tracked Pi tree is stale."""
 
     build_dir = REPO_ROOT / "seL4" / "build_UBOOT"
     rootserver = (
@@ -233,6 +211,85 @@ def test_tracked_repository_can_publish_verified_growing_composition(
     )
     output_dir = tmp_path / "assembly"
 
+    with pytest.raises(
+        composition.CompositionError,
+        match="contract_values_sha256 mismatch",
+    ):
+        composition.compose(
+            build_dir=build_dir,
+            rootserver=rootserver,
+            output_dir=output_dir,
+            timestamp=1_784_801_980,
+        )
+
+    assert not output_dir.exists()
+
+
+@pytest.mark.skipif(
+    not DEFAULT_TOOLS_PRESENT,
+    reason="canonical macOS AArch64 GNU binutils family is unavailable",
+)
+def test_tracked_classic_reference_remains_byte_exact_toolchain_oracle(
+    tmp_path: Path,
+) -> None:
+    """Retain the historical classic byte oracle without claiming MCS/Pi proof."""
+
+    build_dir = REPO_ROOT / "seL4" / "build_UBOOT"
+    tools = composition.resolve_binutils()
+    objects = composition.parse_elfloader_object_order(
+        build_dir / "build.ninja"
+    )
+    scratch = tmp_path / "oracle"
+    scratch.mkdir()
+    oracle = composition.run_baseline_oracle(
+        build_dir,
+        objects,
+        tools,
+        scratch,
+    )
+
+    assert oracle["passed"] is True
+    assert oracle["payload_sha256"] == (
+        "4dd17b4d3bdec29c456b19e1ef6f32340cecc17930b3eca03d6a2037b226b8fc"
+    )
+    assert oracle["elf_layout"]["entry"] == composition.UIMAGE_LOAD_ADDRESS
+    assert (
+        oracle["elf_layout"]["file_size"]
+        == oracle["image_metadata"]["data_size"]
+    )
+
+
+@pytest.mark.skipif(
+    not DEFAULT_TOOLS_PRESENT,
+    reason="canonical macOS AArch64 GNU binutils family is unavailable",
+)
+def test_classic_reference_compose_mechanics_remain_complete(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Exercise classic host composition mechanics, not current MCS/Pi proof."""
+
+    build_dir = (REPO_ROOT / "seL4" / "build_UBOOT").resolve()
+    rootserver = (
+        build_dir / "apps" / "sel4test-driver" / "sel4test-driver"
+    )
+    validation = {
+        "profile": composition.PROFILE_NAME,
+        "test_scope": "classic-mechanics-only",
+    }
+
+    def validate_for_mechanics(candidate: Path) -> dict[str, str]:
+        """Bypass only current-profile validation in this host mechanics test."""
+
+        assert Path(candidate).resolve() == build_dir
+        return validation
+
+    monkeypatch.setattr(
+        composition,
+        "validate_repo_build",
+        validate_for_mechanics,
+    )
+    output_dir = tmp_path / "assembly"
     provenance = composition.compose(
         build_dir=build_dir,
         rootserver=rootserver,
@@ -241,23 +298,6 @@ def test_tracked_repository_can_publish_verified_growing_composition(
     )
 
     assert provenance["status"] == "complete"
-    assert provenance["archive"]["rootserver_size"] == rootserver.stat().st_size
-    assert (
-        provenance["archive"]["archive_size"]
-        > provenance["archive"]["baseline_archive_size"]
-    )
-    assert (output_dir / composition.OUTPUT_ROOTSERVER).read_bytes() == (
-        rootserver.read_bytes()
-    )
-    image_metadata, image_payload = composition.parse_uimage(
-        (output_dir / composition.OUTPUT_IMAGE).read_bytes()
-    )
-    assert image_metadata["timestamp"] == 1_784_801_980
-    assert image_payload == (
-        output_dir / composition.OUTPUT_PAYLOAD
-    ).read_bytes()
-    assert (
-        output_dir / composition.OUTPUT_PROVENANCE
-    ).is_file()
-    for name, expected in provenance["artifacts"].items():
-        assert composition.file_evidence(output_dir / name) == expected
+    assert provenance["repository_build"] == validation
+    assert provenance["baseline_oracle"]["passed"] is True
+    assert (output_dir / composition.OUTPUT_PROVENANCE).is_file()

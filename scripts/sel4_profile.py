@@ -23,6 +23,9 @@ from typing import Any, Iterable, Mapping, Sequence
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONTRACT = ROOT / "configs" / "sel4" / "profiles.toml"
 WRAPPER_PROJECT = ROOT / "tools" / "sel4-profile-project"
+KERNEL_PROFILE_HOOK = WRAPPER_PROJECT / "sel4-kernel-profile-hook.cmake"
+ELFLOADER_PSCI_HVC = WRAPPER_PROJECT / "elfloader-psci-hvc.c"
+ELFLOADER_PSCI_HVC_ASM = WRAPPER_PROJECT / "elfloader-psci-hvc.S"
 TRACKED_SEL4_ROOT = ROOT / "seL4"
 REPO_MANAGED_PROFILE_BUILDS = {
     "pi4_diagnostic": TRACKED_SEL4_ROOT / "build_UBOOT",
@@ -542,6 +545,41 @@ def load_contract(path: Path = DEFAULT_CONTRACT) -> dict[str, Any]:
             raise ProfileError(
                 f"seL4 profile {name!r} compiler prefix does not match toolchain pin"
             )
+        if profile.get("target") == "qemu":
+            qemu_gic = profile.get("qemu_gic_version")
+            qemu_virtualization = profile.get("qemu_virtualization")
+            qemu_cpu = profile.get("qemu_cpu")
+            timer_clock_hz = profile.get("timer_clock_hz")
+            if qemu_gic not in (2, 3):
+                raise ProfileError(
+                    f"QEMU profile {name!r} must select GIC version 2 or 3"
+                )
+            if not isinstance(qemu_virtualization, bool):
+                raise ProfileError(
+                    f"QEMU profile {name!r} qemu_virtualization must be boolean"
+                )
+            if not isinstance(qemu_cpu, str) or not qemu_cpu:
+                raise ProfileError(f"QEMU profile {name!r} has no qemu_cpu")
+            if cmake.get("ARM_CPU") != qemu_cpu:
+                raise ProfileError(
+                    f"QEMU profile {name!r} ARM_CPU does not match qemu_cpu"
+                )
+            if (
+                not isinstance(timer_clock_hz, int)
+                or isinstance(timer_clock_hz, bool)
+                or timer_clock_hz < 1
+            ):
+                raise ProfileError(
+                    f"QEMU profile {name!r} timer_clock_hz must be positive"
+                )
+            expected_psci = "smc" if qemu_virtualization else "hvc"
+            required_dts = profile.get("required_dts_literals")
+            if not isinstance(required_dts, list) or (
+                f'method = "{expected_psci}"' not in required_dts
+            ):
+                raise ProfileError(
+                    f"QEMU profile {name!r} DTB does not require PSCI {expected_psci}"
+                )
         minimum_archive = profile.get("minimum_elfloader_archive_bytes")
         reserve_bytes = cmake.get("COHESIX_ROOTSERVER_ARCHIVE_RESERVE_BYTES")
         if profile.get("target") == "qemu" and release_eligible:
@@ -1277,10 +1315,23 @@ def wrapper_build_inputs(
     )
 
     return {
-        "schema": "cohesix-sel4-wrapper-host-inputs/v4",
+        "schema": "cohesix-sel4-wrapper-host-inputs/v6",
         "profile": profile_name,
         "target": "rootserver_image",
         "wrapper_sha256": sha256_file(WRAPPER_CMAKE),
+        "kernel_profile_hook": (
+            file_evidence(KERNEL_PROFILE_HOOK)
+            if profile.get("target") == "qemu"
+            else None
+        ),
+        "elfloader_psci_hvc": (
+            {
+                "dispatch": file_evidence(ELFLOADER_PSCI_HVC),
+                "conduit": file_evidence(ELFLOADER_PSCI_HVC_ASM),
+            }
+            if profile.get("target") == "qemu"
+            else None
+        ),
         "compiler": compiler_supply_chain_inputs(contract),
         "python_tool": python_supply_chain_inputs(contract, profile),
         "cpio_tool": cpio_tool,
@@ -2581,6 +2632,105 @@ def read_timer_clock_hz(build_dir: Path) -> int | None:
     return None
 
 
+def elfloader_cpio_compile_evidence(
+    build_dir: Path,
+) -> tuple[dict[str, Any], list[str]]:
+    """Prove the shared elfloader CPIO object cannot use FP/SIMD registers."""
+
+    graph = build_dir / "build.ninja"
+    record: dict[str, Any] = {
+        "build_graph": file_evidence(graph),
+        "objects": [],
+        "required_flag": "-mgeneral-regs-only",
+    }
+    errors: list[str] = []
+    if not graph.is_file():
+        errors.append(f"generated Ninja build graph is missing: {graph}")
+        return record, errors
+    lines = graph.read_text(encoding="utf-8", errors="strict").splitlines()
+    for index, line in enumerate(lines):
+        if (
+            not line.startswith("build ")
+            or "libcpio/" not in line
+            or "cpio.c.obj:" not in line
+        ):
+            continue
+        flags: str | None = None
+        cursor = index + 1
+        while cursor < len(lines) and lines[cursor].startswith("  "):
+            attribute = lines[cursor].strip()
+            if attribute.startswith("FLAGS = "):
+                flags = attribute.removeprefix("FLAGS = ")
+            cursor += 1
+        record["objects"].append(
+            {
+                "build_line": line,
+                "flags": flags,
+                "general_regs_only": bool(
+                    flags
+                    and re.search(
+                        r"(?:^|\s)-mgeneral-regs-only(?:\s|$)",
+                        flags,
+                    )
+                ),
+            }
+        )
+    objects = record["objects"]
+    if len(objects) != 1:
+        errors.append(
+            "expected exactly one generated libcpio cpio.c compile edge, "
+            f"found {len(objects)}"
+        )
+    elif not objects[0]["general_regs_only"]:
+        errors.append(
+            "elfloader libcpio must compile with -mgeneral-regs-only before "
+            "FP/SIMD state is initialized"
+        )
+    return record, errors
+
+
+def elfloader_psci_compile_evidence(
+    build_dir: Path,
+) -> tuple[dict[str, Any], list[str]]:
+    """Prove QEMU elfloader uses only the wrapper-owned PSCI SMP driver."""
+
+    graph = build_dir / "build.ninja"
+    record: dict[str, Any] = {
+        "build_graph": file_evidence(graph),
+        "dispatch_objects": [],
+        "conduit_objects": [],
+        "upstream_objects": [],
+    }
+    errors: list[str] = []
+    if not graph.is_file():
+        errors.append(f"generated Ninja build graph is missing: {graph}")
+        return record, errors
+    for line in graph.read_text(encoding="utf-8", errors="strict").splitlines():
+        if not line.startswith("build ") or ".obj:" not in line:
+            continue
+        if "elfloader-psci-hvc.c.obj:" in line:
+            record["dispatch_objects"].append(line)
+        elif "elfloader-psci-hvc.S.obj:" in line:
+            record["conduit_objects"].append(line)
+        elif "src/arch-arm/drivers/smp-psci.c.obj:" in line:
+            record["upstream_objects"].append(line)
+    if len(record["dispatch_objects"]) != 1:
+        errors.append(
+            "expected exactly one wrapper elfloader PSCI dispatch object, "
+            f"found {len(record['dispatch_objects'])}"
+        )
+    if len(record["conduit_objects"]) != 1:
+        errors.append(
+            "expected exactly one wrapper elfloader HVC conduit object, "
+            f"found {len(record['conduit_objects'])}"
+        )
+    if record["upstream_objects"]:
+        errors.append(
+            "upstream elfloader PSCI driver remains in the QEMU build graph"
+        )
+    return record, errors
+
+
 def read_cmake_set(path: Path, symbol: str) -> str | None:
     """Read one quoted or unquoted set() value from generated CMake metadata."""
 
@@ -3049,11 +3199,25 @@ def validate_build(
                 f"expected {expected_kernel_gic_v3}, got {actual_kernel_gic_v3!r}"
             )
         qemu_machine = cache.get("QEMU_MACHINE", "")
-        expected_fragment = f"gic-version={qemu_gic}"
-        if expected_fragment not in qemu_machine:
+        expected_machine = qemu_machine_value(profile, build_dir)
+        if qemu_machine != expected_machine:
             errors.append(
-                f"QEMU_MACHINE must contain {expected_fragment!r}; got {qemu_machine!r}"
+                "QEMU_MACHINE does not match the profile-owned DTB machine: "
+                f"expected {expected_machine!r}, got {qemu_machine!r}"
             )
+        qemu_timer = profile.get("timer_clock_hz")
+        qemu_cache_expectations = {
+            "COHESIX_TIMER_CLOCK_HZ": str(qemu_timer),
+            "KernelTimerFrequency": str(qemu_timer),
+            "CMAKE_PROJECT_seL4_INCLUDE": str(KERNEL_PROFILE_HOOK),
+        }
+        for key, expected in qemu_cache_expectations.items():
+            actual = cache.get(key)
+            cache_values[key] = {"expected": expected, "actual": actual}
+            if actual != expected:
+                errors.append(
+                    f"CMake {key} mismatch: expected {expected!r}, got {actual!r}"
+                )
         config_header = launcher_gic_header(build_dir)
         launcher_gic = {
             "detector": file_evidence(GIC_DETECTOR),
@@ -3088,6 +3252,18 @@ def validate_build(
             errors.append(
                 f"TIMER_CLOCK_HZ mismatch: expected {expected_timer}, got {actual_timer}"
             )
+
+    elfloader_cpio: dict[str, Any] | None = None
+    elfloader_psci: dict[str, Any] | None = None
+    if (
+        build_mode == "wrapper"
+        and str(expected_cache.get("KernelSel4Arch", "")) == "aarch64"
+    ):
+        elfloader_cpio, cpio_errors = elfloader_cpio_compile_evidence(build_dir)
+        errors.extend(cpio_errors)
+        if profile.get("target") == "qemu":
+            elfloader_psci, psci_errors = elfloader_psci_compile_evidence(build_dir)
+            errors.extend(psci_errors)
 
     elfloader_platform_info: dict[str, Any] | None = None
     if str(expected_cache.get("ElfloaderRootserversLast", "")).upper() == "ON":
@@ -3299,6 +3475,8 @@ def validate_build(
         },
         "generated_headers": generated_headers,
         "elfloader_platform_info": elfloader_platform_info,
+        "elfloader_cpio": elfloader_cpio,
+        "elfloader_psci": elfloader_psci,
         "build_input_stamp": build_input_stamp,
         "dts": dts_evidence,
         "dtb": dtb_evidence,
@@ -3334,6 +3512,19 @@ def validate_build(
             "contract": contract_record,
             "validator": file_evidence(VALIDATOR),
             "wrapper": wrapper_record,
+            "kernel_profile_hook": (
+                file_evidence(KERNEL_PROFILE_HOOK)
+                if profile.get("target") == "qemu"
+                else None
+            ),
+            "elfloader_psci_hvc": (
+                {
+                    "dispatch": file_evidence(ELFLOADER_PSCI_HVC),
+                    "conduit": file_evidence(ELFLOADER_PSCI_HVC_ASM),
+                }
+                if profile.get("target") == "qemu"
+                else None
+            ),
             "python_tool": python_tool_record,
             "objcopy_stdout_wrapper": objcopy_wrapper_record,
             "mkimage_tool": mkimage_tool_record,
@@ -3454,6 +3645,21 @@ def ensure_fresh_build_dir(build_dir: Path) -> Path:
     return resolved
 
 
+def qemu_machine_value(profile: Mapping[str, Any], build_dir: Path) -> str:
+    """Return the exact QEMU machine used to generate a profile-owned DTB."""
+
+    qemu_gic = profile.get("qemu_gic_version")
+    qemu_virtualization = profile.get("qemu_virtualization")
+    if qemu_gic not in (2, 3) or not isinstance(qemu_virtualization, bool):
+        raise ProfileError("QEMU profile machine contract is incomplete")
+    virtualization = "on" if qemu_virtualization else "off"
+    dtb = build_dir.expanduser().resolve() / "qemu-arm-virt.dtb"
+    return (
+        "virt,secure=off,"
+        f"virtualization={virtualization},gic-version={qemu_gic},dumpdtb={dtb}"
+    )
+
+
 def wrapper_configure_command(
     profile: Mapping[str, Any],
     source_root: Path,
@@ -3490,15 +3696,20 @@ def wrapper_configure_command(
         command.append(f"-D{key}={cmake_values[key]}")
     qemu_gic = profile.get("qemu_gic_version")
     if qemu_gic is not None:
-        dtb = build_dir / "qemu-arm-virt.dtb"
-        qemu_machine = (
-            "virt,secure=off,virtualization=on,"
-            f"gic-version={qemu_gic},dumpdtb={dtb}"
-        )
+        timer_clock_hz = profile.get("timer_clock_hz")
+        if (
+            not isinstance(timer_clock_hz, int)
+            or isinstance(timer_clock_hz, bool)
+            or timer_clock_hz < 1
+        ):
+            raise ProfileError("QEMU profile timer_clock_hz must be positive")
+        qemu_machine = qemu_machine_value(profile, build_dir)
         command.extend(
             (
                 f"-DQEMU_GIC_VERSION={qemu_gic}",
                 f"-DQEMU_MACHINE={qemu_machine}",
+                f"-DCOHESIX_TIMER_CLOCK_HZ={timer_clock_hz}",
+                f"-DCMAKE_PROJECT_seL4_INCLUDE={KERNEL_PROFILE_HOOK}",
             )
         )
     return command

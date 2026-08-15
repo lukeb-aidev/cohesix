@@ -6,6 +6,7 @@
 
 #![allow(unsafe_code)]
 
+use crate::rust_alloc::vec::Vec as AllocVec;
 use core::cmp::min;
 use core::convert::TryFrom;
 use core::fmt;
@@ -35,7 +36,7 @@ const ARMVSPACE_UNIFY_LABEL: seL4_Word = sel4_sys::ARMVSpaceUnify_Instruction as
 // Logging policy: per-op traces are gated to TRACE (or the `cache-trace` feature).
 // DEBUG emits rate-limited summaries only when trace logging is enabled;
 // WARN dumps recent ops on errors.
-const CACHE_RING_CAPACITY: usize = 1920;
+pub const CACHE_RING_CAPACITY: usize = 1920;
 const CACHE_DUMP_CHUNK: usize = 64;
 const ERROR_DUMP_RECENT: usize = 64;
 const SUMMARY_INTERVAL_MS: u64 = 1_000;
@@ -148,6 +149,59 @@ struct CacheOpRecord {
     err: seL4_Error,
     caller_file: &'static str,
     caller_line: u32,
+}
+
+/// Deterministic failure while taking an owned cache-operation snapshot.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum CacheLogSnapshotError {
+    /// The bounded record vector could not reserve its complete capacity.
+    Allocation,
+}
+
+impl fmt::Display for CacheLogSnapshotError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Allocation => f.write_str("cache-log-snapshot-allocation"),
+        }
+    }
+}
+
+/// Immutable newest-first cache-operation snapshot with lazy line rendering.
+///
+/// Records are copied while holding the cache log lock once. Rendering and
+/// cursor advancement happen after the lock has been released, so a caller can
+/// emit at most one bounded line per event-pump turn without retaining a lock.
+#[derive(Debug)]
+pub struct CacheLogSnapshot {
+    records: AllocVec<CacheOpRecord>,
+    cursor: usize,
+}
+
+impl CacheLogSnapshot {
+    /// Number of records captured by this immutable snapshot.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.records.len()
+    }
+
+    /// Whether the snapshot captured no records.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.records.is_empty()
+    }
+
+    /// Number of captured records that have not yet been rendered.
+    #[must_use]
+    pub fn remaining(&self) -> usize {
+        self.records.len().saturating_sub(self.cursor)
+    }
+
+    /// Render and advance by one bounded cache-operation line.
+    pub fn next_line(&mut self) -> Option<heapless::String<192>> {
+        let record = self.records.get(self.cursor)?;
+        self.cursor = self.cursor.saturating_add(1);
+        Some(render_record_line(record))
+    }
 }
 
 #[derive(Debug)]
@@ -323,6 +377,76 @@ static CACHE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[cfg(any(test, feature = "cache-maintenance"))]
 static CACHE_TEST_ERROR: Mutex<Option<seL4_Error>> = Mutex::new(None);
+
+fn snapshot_recent_from(
+    log: &Mutex<CacheLogState>,
+    count: usize,
+) -> Result<CacheLogSnapshot, CacheLogSnapshotError> {
+    snapshot_recent_from_with_reserve(log, count, |records, limit| {
+        records
+            .try_reserve_exact(limit)
+            .map_err(|_| CacheLogSnapshotError::Allocation)
+    })
+}
+
+fn snapshot_recent_from_with_reserve(
+    log: &Mutex<CacheLogState>,
+    count: usize,
+    reserve: impl FnOnce(&mut AllocVec<CacheOpRecord>, usize) -> Result<(), CacheLogSnapshotError>,
+) -> Result<CacheLogSnapshot, CacheLogSnapshotError> {
+    let limit = min(count, CACHE_RING_CAPACITY);
+    let mut records = AllocVec::new();
+    reserve(&mut records, limit)?;
+
+    if limit != 0 {
+        let state = log.lock();
+        let take = min(limit, state.ring.len());
+        debug_assert!(records.capacity() >= take);
+        for record in state.ring.iter().rev().take(take) {
+            records.push(*record);
+        }
+    }
+
+    Ok(CacheLogSnapshot { records, cursor: 0 })
+}
+
+/// Capture up to `count` recent cache operations in newest-first order.
+///
+/// The request is clamped to [`CACHE_RING_CAPACITY`]. Complete vector capacity
+/// is reserved before the cache log is locked; the lock is then held once only
+/// long enough to copy the records. Allocation failure is reported without
+/// observing or partially copying the live ring.
+pub fn snapshot_recent_ops(count: usize) -> Result<CacheLogSnapshot, CacheLogSnapshotError> {
+    snapshot_recent_from(&CACHE_LOG, count)
+}
+
+/// Build an owned cache snapshot without mutating the process-global cache log.
+///
+/// This is available only to crate tests that exercise cross-module ownership
+/// and quiet-containment retirement of the snapshot allocation.
+#[cfg(test)]
+pub(crate) fn test_snapshot_from_sequences(sequences: &[u64]) -> CacheLogSnapshot {
+    let mut records = AllocVec::new();
+    for &seq in sequences {
+        let address = usize::try_from(seq)
+            .unwrap_or(0)
+            .saturating_mul(CACHE_LINE_BYTES);
+        records.push(CacheOpRecord {
+            seq,
+            timestamp_ms: seq.saturating_mul(10),
+            op: CacheOpKind::Clean,
+            vspace: 1,
+            vaddr: address,
+            len: CACHE_LINE_BYTES,
+            aligned_start: address,
+            aligned_len: CACHE_LINE_BYTES,
+            err: seL4_NoError,
+            caller_file: "cache-snapshot-test.rs",
+            caller_line: u32::try_from(seq).unwrap_or(u32::MAX),
+        });
+    }
+    CacheLogSnapshot { records, cursor: 0 }
+}
 
 /// Cache maintenance wrapper binding operations to a VSpace capability.
 #[derive(Copy, Clone, Debug)]
@@ -767,6 +891,34 @@ unsafe fn call_arm_vspace_op(
 mod tests {
     use super::*;
 
+    fn test_record(seq: u64) -> CacheOpRecord {
+        CacheOpRecord {
+            seq,
+            timestamp_ms: seq.saturating_mul(10),
+            op: CacheOpKind::Clean,
+            vspace: 1,
+            vaddr: usize::try_from(seq)
+                .unwrap_or(0)
+                .saturating_mul(CACHE_LINE_BYTES),
+            len: CACHE_LINE_BYTES,
+            aligned_start: usize::try_from(seq)
+                .unwrap_or(0)
+                .saturating_mul(CACHE_LINE_BYTES),
+            aligned_len: CACHE_LINE_BYTES,
+            err: seL4_NoError,
+            caller_file: "cache-snapshot-test.rs",
+            caller_line: u32::try_from(seq).unwrap_or(u32::MAX),
+        }
+    }
+
+    fn test_log(sequences: impl IntoIterator<Item = u64>) -> Mutex<CacheLogState> {
+        let mut state = CacheLogState::new();
+        for seq in sequences {
+            assert!(state.ring.push_back(test_record(seq)).is_ok());
+        }
+        Mutex::new(state)
+    }
+
     #[test]
     fn cache_labels_use_sel4_aarch64_vspace_invocations() {
         assert_eq!(
@@ -806,5 +958,88 @@ mod tests {
             Err(CacheError::new(seL4_InvalidArgument)),
         );
         assert_eq!(cache_clean_bounded(1, 0x1_001, 63), Ok(()));
+    }
+
+    #[test]
+    fn cache_log_snapshot_is_newest_first() {
+        let log = test_log([1, 2, 3]);
+        let mut snapshot = snapshot_recent_from(&log, 2).expect("snapshot should reserve");
+
+        assert_eq!(snapshot.len(), 2);
+        assert_eq!(snapshot.remaining(), 2);
+        assert!(snapshot
+            .next_line()
+            .expect("newest line")
+            .as_str()
+            .contains("seq=3 "));
+        assert_eq!(snapshot.remaining(), 1);
+        assert!(snapshot
+            .next_line()
+            .expect("second-newest line")
+            .as_str()
+            .contains("seq=2 "));
+    }
+
+    #[test]
+    fn cache_log_snapshot_is_stable_after_live_ring_mutation() {
+        let log = test_log([1, 2, 3]);
+        let mut snapshot = snapshot_recent_from(&log, 3).expect("snapshot should reserve");
+
+        {
+            let mut state = log.lock();
+            state.ring.clear();
+            assert!(state.ring.push_back(test_record(99)).is_ok());
+        }
+
+        for expected in [3, 2, 1] {
+            let line = snapshot.next_line().expect("captured line remains present");
+            assert!(line.as_str().contains(format!("seq={expected} ").as_str()));
+        }
+    }
+
+    #[test]
+    fn cache_log_snapshot_clamps_to_ring_capacity() {
+        let log = test_log((1..=CACHE_RING_CAPACITY).map(|seq| seq as u64));
+        let mut snapshot =
+            snapshot_recent_from(&log, usize::MAX).expect("bounded snapshot should reserve");
+
+        assert_eq!(snapshot.len(), CACHE_RING_CAPACITY);
+        assert!(snapshot
+            .next_line()
+            .expect("newest line")
+            .as_str()
+            .contains(format!("seq={} ", CACHE_RING_CAPACITY).as_str()));
+        for _ in 1..CACHE_RING_CAPACITY {
+            let _ = snapshot.next_line();
+        }
+        assert_eq!(snapshot.remaining(), 0);
+    }
+
+    #[test]
+    fn cache_log_snapshot_reports_exhaustion_without_replaying() {
+        let log = test_log([7]);
+        let mut snapshot = snapshot_recent_from(&log, 1).expect("snapshot should reserve");
+
+        assert!(!snapshot.is_empty());
+        assert!(snapshot.next_line().is_some());
+        assert!(snapshot.next_line().is_none());
+        assert!(snapshot.next_line().is_none());
+        assert_eq!(snapshot.remaining(), 0);
+    }
+
+    #[test]
+    fn cache_log_snapshot_reports_reservation_failure_without_partial_capture() {
+        let log = test_log([1, 2, 3]);
+        let result = snapshot_recent_from_with_reserve(&log, 3, |_records, limit| {
+            assert_eq!(limit, 3);
+            Err(CacheLogSnapshotError::Allocation)
+        });
+
+        assert!(matches!(result, Err(CacheLogSnapshotError::Allocation)));
+        assert_eq!(
+            CacheLogSnapshotError::Allocation.to_string(),
+            "cache-log-snapshot-allocation"
+        );
+        assert_eq!(log.lock().ring.len(), 3);
     }
 }

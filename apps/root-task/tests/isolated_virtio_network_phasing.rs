@@ -24,6 +24,131 @@ fn marker(source: &str, value: &str) -> usize {
 }
 
 #[test]
+fn routine_audit_handoff_cannot_delay_terminal_response_admission() {
+    let debug_uart = include_str!("../src/debug_uart.rs");
+    assert!(!debug_uart.contains("routine_audit_line"));
+
+    let critical = section(
+        debug_uart,
+        "pub fn debug_uart_line(line: &str)",
+        "#[cfg(not(feature = \"kernel\"))]",
+    );
+    assert!(critical.contains("crate::sel4::debug_put_line_unlocked(line.as_bytes())"));
+    assert!(!critical.contains("log_channel_active"));
+
+    let event = include_str!("../src/event/mod.rs");
+    let queue = section(
+        event,
+        "struct RoutineAuditQueue",
+        "const fn isolated_routine_audit_drain_allowed",
+    );
+    assert!(queue.contains("HeaplessDeque<"));
+    assert!(queue.contains("self.pending.push_back(record)"));
+    assert!(queue.contains("self.dropped = self.dropped.saturating_add(1);"));
+    assert!(!queue.contains("log_buffer"));
+
+    let routing = section(
+        event,
+        "fn retain_routine_audit_line(&mut self",
+        "fn end_session(&mut self",
+    );
+    let isolated = marker(routing, "if self.isolated_virtio_compact_path_attached()");
+    let retained = marker(routing, "self.routine_audits.retain(line)");
+    let legacy = marker(routing, "crate::debug_uart::debug_uart_line(line);");
+    assert!(isolated < retained && retained < legacy);
+    assert!(!routing.contains("log_buffer"));
+
+    let routine_audits = section(
+        event,
+        "fn audit_tcp_cmd_begin(&mut self",
+        "fn session_role_label(&self)",
+    );
+    assert_eq!(
+        routine_audits
+            .matches("self.retain_routine_audit_line(message.as_str());")
+            .count(),
+        7,
+    );
+    assert!(!routine_audits.contains("crate::debug_uart::debug_uart_line"));
+
+    let dispatch = section(
+        event,
+        "pub(crate) fn handle_command(&mut self",
+        "fn forward_to_ninedoor(&mut self",
+    );
+    let terminal_admission = marker(
+        dispatch,
+        "if result.is_ok() {\n            self.emit_stream_end_if_pending();",
+    );
+    let deferred_audit = marker(
+        dispatch,
+        "self.audit_tcp_cmd_end(conn_id, end_sid, verb_label, cmd_status, term);",
+    );
+    assert!(terminal_admission < deferred_audit);
+
+    let console_emit = section(
+        event,
+        "pub fn emit_console_line(&mut self",
+        "fn service_local_seat_keyboard_during_output",
+    );
+    assert!(console_emit.contains("crate::debug_uart::debug_uart_line(message.as_str());"));
+    assert!(!console_emit.contains("crate::debug_uart::routine_audit_line"));
+
+    let cat = section(
+        event,
+        "let detail = format_message(format_args!(\n                                                \"path={} data={}\"",
+        "self.metrics.ui_reads =",
+    );
+    let cat_response = marker(cat, "self.emit_ack_ok(verb_label, Some(detail.as_str()));");
+    let cat_audit = marker(cat, "self.retain_routine_audit_line(message.as_str());");
+    assert!(cat_response < cat_audit);
+
+    let operator = section(
+        event,
+        "fn poll_one_split_ordinary_virtio_operator_unit(&mut self)",
+        "fn poll_split_ordinary_virtio_serial_io_unit",
+    );
+    let buffered_command = marker(operator, "self.poll_split_ordinary_virtio_net_line_unit();");
+    let retained_output = marker(operator, "if !self.pending_console_output.is_empty()");
+    let display = marker(
+        operator,
+        "self.poll_split_ordinary_virtio_display_attach_unit();",
+    );
+    let audit_drain = marker(operator, "isolated_routine_audit_drain_allowed(");
+    assert!(buffered_command < retained_output);
+    assert!(retained_output < display);
+    assert!(display < audit_drain);
+    assert!(operator.contains("self.network_response_owner_active(),"));
+    assert!(operator.contains("self.pending_net_flush.active(),"));
+
+    let drain = section(
+        event,
+        "fn poll_split_ordinary_virtio_routine_audit_unit(&mut self)",
+        "fn poll_split_ordinary_virtio_operator_turn",
+    );
+    let nonblocking = marker(
+        drain,
+        "self.serial.try_enqueue_routine_audit_line_record(line)",
+    );
+    let commit = marker(drain, "self.routine_audits.pop_front();");
+    assert!(nonblocking < commit);
+    assert!(!drain.contains("debug_uart"));
+    assert!(!drain.contains("log_buffer"));
+
+    let legacy_stack = include_str!("../src/net/stack.rs");
+    assert!(!legacy_stack.contains("routine_audit_line"));
+
+    let critical_tcb = include_str!("../src/hal/critical_tcb.rs");
+    let fail_stop = section(
+        critical_tcb,
+        "fn target_fail_stop(reason: &'static str",
+        "fn publish_target_worker_fault",
+    );
+    assert!(fail_stop.contains("crate::debug_uart::debug_uart_line(reason);"));
+    assert!(!fail_stop.contains("routine_audit_line"));
+}
+
+#[test]
 fn split_runtime_commits_then_uses_only_the_compact_timer_reconcile_prelude() {
     let source = include_str!("../src/event/mod.rs");
     let timer = section(
@@ -251,7 +376,7 @@ fn compact_serial_probe_and_dispatch_are_distinct_operator_units() {
     );
     let probe = marker(
         selector,
-        "self.poll_split_ordinary_virtio_serial_io_unit(serial_tx_pending_at_entry)",
+        "self.poll_split_ordinary_virtio_serial_io_unit(\n            serial_tx_pending_at_entry,\n            routine_audit_only_pending,\n        )",
     );
     let idle_reset = selector[probe..]
         .find("self.ordinary_operator_unit = OrdinaryOperatorUnit::SerialIo;")
@@ -434,6 +559,8 @@ fn isolated_network_poll_maps_one_selected_unit_in_strict_source_order() {
     let selector = marker(poll, "select_isolated_network_turn(");
     let successor_commit = marker(poll, "self.lower_cursor = selection.successor();");
     let dispatch = marker(poll, "let outcome = match selection.unit() {");
+    let acknowledge_guard = marker(poll, "IsolatedNetworkTurnUnit::AcknowledgePublication =>");
+    let acknowledge = marker(poll, "self.poll_acknowledge_publication_unit()");
     let deferred_guard = marker(poll, "IsolatedNetworkTurnUnit::DeferredDiagnostic =>");
     let deferred = marker(poll, "self.poll_deferred_diagnostic_unit()");
     let transmit_guard = marker(poll, "IsolatedNetworkTurnUnit::TransmitEgress =>");
@@ -452,7 +579,9 @@ fn isolated_network_poll_maps_one_selected_unit_in_strict_source_order() {
     assert!(
         selector < successor_commit
             && successor_commit < dispatch
-            && dispatch < deferred_guard
+            && dispatch < acknowledge_guard
+            && acknowledge_guard < acknowledge
+            && acknowledge < deferred_guard
             && deferred_guard < deferred
             && deferred < transmit_guard
             && transmit_guard < transmit
@@ -475,6 +604,7 @@ fn isolated_network_poll_maps_one_selected_unit_in_strict_source_order() {
         "fn poll_deferred_diagnostic_unit",
         "fn poll_transmit_egress_unit",
         "fn poll_observe_child_unit",
+        "fn poll_acknowledge_publication_unit",
         "fn poll_stage_output_unit",
         "fn poll_disconnect_unit",
         "fn poll_ingress_unit",
@@ -607,13 +737,29 @@ fn generic_net_diag_preserves_snapshot_first_and_late_progress_read() {
 }
 
 #[test]
+fn exact_lower_cursor_constructor_preserves_selected_unit() {
+    use isolated_network_turn::{IsolatedNetworkLowerCursor, IsolatedNetworkLowerUnit};
+
+    for unit in [
+        IsolatedNetworkLowerUnit::ObserveChild,
+        IsolatedNetworkLowerUnit::StageOutput,
+        IsolatedNetworkLowerUnit::Disconnect,
+        IsolatedNetworkLowerUnit::Ingress,
+        IsolatedNetworkLowerUnit::ServiceTick,
+    ] {
+        assert_eq!(IsolatedNetworkLowerCursor::for_unit(unit).unit(), unit);
+    }
+}
+
+#[test]
 fn empty_stage_output_commits_disconnect_without_forcing_child_observation() {
     use isolated_network_turn::{
         select_isolated_network_turn, IsolatedNetworkLowerCursor, IsolatedNetworkLowerUnit,
         IsolatedNetworkTurnOutcome, IsolatedNetworkTurnUnit,
     };
 
-    let observe = select_isolated_network_turn(false, false, IsolatedNetworkLowerCursor::new());
+    let observe =
+        select_isolated_network_turn(false, false, false, IsolatedNetworkLowerCursor::new());
     assert_eq!(
         observe.unit(),
         IsolatedNetworkTurnUnit::Lower(IsolatedNetworkLowerUnit::ObserveChild),
@@ -622,7 +768,7 @@ fn empty_stage_output_commits_disconnect_without_forcing_child_observation() {
     assert!(!activity);
     assert_eq!(stage_output.unit(), IsolatedNetworkLowerUnit::StageOutput);
 
-    let selected = select_isolated_network_turn(false, false, stage_output);
+    let selected = select_isolated_network_turn(false, false, false, stage_output);
     assert_eq!(
         selected.unit(),
         IsolatedNetworkTurnUnit::Lower(IsolatedNetworkLowerUnit::StageOutput),
@@ -636,6 +782,328 @@ fn empty_stage_output_commits_disconnect_without_forcing_child_observation() {
         selected.finish(IsolatedNetworkTurnOutcome::child_signal_attempt(false));
     assert!(!activity);
     assert_eq!(disconnect.unit(), IsolatedNetworkLowerUnit::Disconnect);
+}
+
+#[test]
+fn disconnect_control_is_one_shot_and_releases_ingress_after_completion() {
+    use isolated_network_turn::{
+        select_isolated_network_turn, IsolatedNetworkLowerCursor, IsolatedNetworkLowerUnit,
+        IsolatedNetworkTurnOutcome, IsolatedNetworkTurnUnit,
+    };
+
+    #[derive(Clone, Copy)]
+    struct DisconnectTransaction {
+        requested: bool,
+        issued: bool,
+        response_lane_active: bool,
+        attempts: usize,
+    }
+
+    impl DisconnectTransaction {
+        fn attempt(&mut self, stage_succeeds: bool) -> bool {
+            if !self.requested || self.issued || self.response_lane_active {
+                return false;
+            }
+            self.attempts += 1;
+            if !stage_succeeds {
+                return false;
+            }
+            self.issued = true;
+            true
+        }
+    }
+
+    let source = include_str!("../src/net/isolated_console.rs");
+    let fields = section(
+        source,
+        "pub struct IsolatedVirtioConsole",
+        "impl IsolatedVirtioConsole",
+    );
+    assert!(fields.contains("disconnect_requested: bool,"));
+    assert!(fields.contains("disconnect_issued: bool,"));
+
+    let stage = section(
+        source,
+        "fn stage_disconnect_if_drained(&mut self) -> bool",
+        "fn refresh_device_counters(&mut self)",
+    );
+    let issued_guard = marker(stage, "|| self.disconnect_issued");
+    let response_lane_guard = marker(stage, "|| self.response_lane.is_some()");
+    let output_guard = marker(stage, "|| !self.output.is_empty()");
+    let publish = marker(
+        stage,
+        "match self.runtime.stage_disconnect(self.last_now_ms)",
+    );
+    let issue_commit = marker(stage, "self.disconnect_issued = true;");
+    let backpressure = marker(stage, "Err(BoundaryError::Backpressure) => false,");
+    assert!(issued_guard < response_lane_guard);
+    assert!(response_lane_guard < output_guard);
+    assert!(output_guard < publish && publish < issue_commit && issue_commit < backpressure);
+    assert_eq!(stage.matches("self.disconnect_issued = true;").count(), 1);
+
+    let mut transaction = DisconnectTransaction {
+        requested: true,
+        issued: false,
+        response_lane_active: true,
+        attempts: 0,
+    };
+    assert!(
+        !transaction.attempt(true),
+        "QUIT must not publish Disconnect while its terminal response lane still owns completion identity"
+    );
+    assert_eq!(transaction.attempts, 0);
+
+    transaction.response_lane_active = false;
+    assert!(!transaction.attempt(false), "backpressure is not issuance");
+    assert!(!transaction.issued);
+    assert_eq!(transaction.attempts, 1);
+
+    let mut cursor = IsolatedNetworkLowerCursor::new();
+    for expected in [
+        IsolatedNetworkLowerUnit::ObserveChild,
+        IsolatedNetworkLowerUnit::StageOutput,
+    ] {
+        let selected = select_isolated_network_turn(false, false, false, cursor);
+        assert_eq!(selected.unit(), IsolatedNetworkTurnUnit::Lower(expected));
+        (cursor, _) = selected.finish(IsolatedNetworkTurnOutcome::complete(false));
+    }
+    assert_eq!(cursor.unit(), IsolatedNetworkLowerUnit::Disconnect);
+
+    let selected = select_isolated_network_turn(false, false, false, cursor);
+    assert!(transaction.attempt(true));
+    (cursor, _) = selected.finish(IsolatedNetworkTurnOutcome::child_signal_attempt(true));
+    assert!(transaction.issued);
+    assert_eq!(transaction.attempts, 2);
+    assert_eq!(cursor.unit(), IsolatedNetworkLowerUnit::ObserveChild);
+
+    // ControlCompleted and OutputDrained retire the boundary records, but do
+    // not reopen the semantic Disconnect transaction for this connection.
+    for expected in [
+        IsolatedNetworkLowerUnit::ObserveChild,
+        IsolatedNetworkLowerUnit::StageOutput,
+    ] {
+        let selected = select_isolated_network_turn(false, false, false, cursor);
+        assert_eq!(selected.unit(), IsolatedNetworkTurnUnit::Lower(expected));
+        (cursor, _) = selected.finish(IsolatedNetworkTurnOutcome::complete(false));
+    }
+    assert_eq!(cursor.unit(), IsolatedNetworkLowerUnit::Disconnect);
+
+    let selected = select_isolated_network_turn(false, false, false, cursor);
+    assert!(
+        !transaction.attempt(true),
+        "Disconnect must not be restaged"
+    );
+    (cursor, _) = selected.finish(IsolatedNetworkTurnOutcome::child_signal_attempt(false));
+    assert_eq!(transaction.attempts, 2);
+    assert_eq!(cursor.unit(), IsolatedNetworkLowerUnit::Ingress);
+
+    let selected = select_isolated_network_turn(false, false, false, cursor);
+    assert_eq!(
+        selected.unit(),
+        IsolatedNetworkTurnUnit::Lower(IsolatedNetworkLowerUnit::Ingress)
+    );
+    (cursor, _) = selected.finish(IsolatedNetworkTurnOutcome::child_signal_attempt(false));
+    assert_eq!(cursor.unit(), IsolatedNetworkLowerUnit::ServiceTick);
+}
+
+#[test]
+fn console_publication_ack_is_exactly_once_and_post_retention() {
+    let hal = include_str!("../src/hal/console_network.rs");
+    let pending = section(
+        hal,
+        "pub const fn publication_ack_pending(&self)",
+        "pub fn poll_turn(&mut self)",
+    );
+    assert!(pending.contains("self.activated && !self.contained && self.publication_ack_owed"));
+
+    let poll = section(
+        hal,
+        "pub fn poll_turn(&mut self)",
+        "pub fn acknowledge_publication(&mut self)",
+    );
+    let owed_guard = marker(poll, "|| self.publication_ack_owed");
+    let empty_poll = section(poll, "if badge == 0 {", "if badge &");
+    let event_accept = marker(poll, ".accept_event(");
+    let egress_accept = marker(poll, ".accept_egress(");
+    let latch = marker(
+        poll,
+        "self.publication_ack_owed = event.is_some() || egress.is_some();",
+    );
+    assert!(owed_guard < event_accept && event_accept < egress_accept && egress_accept < latch);
+    assert!(empty_poll.contains("event: None"));
+    assert!(empty_poll.contains("egress: None"));
+    assert!(!empty_poll.contains("publication_ack_owed"));
+    assert!(!poll.contains("signal_unchecked"));
+
+    let acknowledge = section(
+        hal,
+        "pub fn acknowledge_publication(&mut self)",
+        "pub fn retire_terminal_publication(&mut self)",
+    );
+    let requires_owed = marker(acknowledge, "|| !self.publication_ack_owed");
+    let clear = marker(acknowledge, "self.publication_ack_owed = false;");
+    let release = marker(acknowledge, "fence(Ordering::Release);");
+    let signal = marker(
+        acknowledge,
+        "signal_unchecked(self.root_wake_caps[ROOT_PUBLICATION_ACK_WAKE_INDEX])",
+    );
+    assert!(requires_owed < clear && clear < release && release < signal);
+    assert_eq!(
+        acknowledge
+            .matches("self.publication_ack_owed = false;")
+            .count(),
+        1,
+        "one successful ACK must consume the latch exactly once",
+    );
+    assert_eq!(acknowledge.matches("signal_unchecked").count(), 1);
+
+    let supervisor_fault = section(
+        hal,
+        "pub fn record_supervisor_fault(&mut self)",
+        "pub fn activate(&mut self)",
+    );
+    let record_fault = marker(supervisor_fault, "self.boundary.record_fault();");
+    let clear_debt = marker(supervisor_fault, "self.publication_ack_owed = false;");
+    assert!(record_fault < clear_debt);
+
+    let revoke = section(
+        hal,
+        "pub fn signal_revoke(&mut self)",
+        "pub const fn publication_ack_pending(&self)",
+    );
+    let revoke_clear = marker(revoke, "self.publication_ack_owed = false;");
+    let revoke_release = marker(revoke, "fence(Ordering::Release);");
+    let revoke_signal = marker(
+        revoke,
+        "signal_unchecked(self.root_wake_caps[ROOT_REVOKE_WAKE_INDEX])",
+    );
+    assert!(revoke_clear < revoke_release && revoke_release < revoke_signal);
+
+    let terminal = section(
+        hal,
+        "pub fn retire_terminal_publication(&mut self)",
+        "pub fn contain_one_turn(",
+    );
+    assert!(terminal.contains("self.boundary.state() != ServiceState::Terminal"));
+    assert!(terminal.contains("self.publication_ack_owed = false;"));
+    assert!(!terminal.contains("signal_unchecked"));
+
+    let adapter = include_str!("../src/net/isolated_console.rs");
+    let output = section(
+        adapter,
+        "fn poll_child_output(&mut self)",
+        "fn transmit_pending_egress",
+    );
+    let handle = marker(output, "self.handle_event(event);");
+    let event_fault_gate = marker(output, "if self.faulted {");
+    let terminal_retire = marker(output, "self.runtime.retire_terminal_publication()");
+    let containment_start = marker(output, "self.runtime.begin_containment()");
+    let overwrite_guard = marker(output, "if self.pending_egress.is_some()");
+    let retain_egress = marker(output, "self.pending_egress = Some(egress);");
+    assert!(
+        handle < event_fault_gate
+            && event_fault_gate < terminal_retire
+            && terminal_retire < containment_start
+            && containment_start < overwrite_guard
+            && overwrite_guard < retain_egress
+    );
+    assert!(output.contains("self.fail_closed(\"egress-overwrite\")"));
+    assert!(!output.contains("acknowledge_publication"));
+    assert!(!output.contains("signal_unchecked"));
+
+    let fail_closed = section(
+        adapter,
+        "fn fail_closed(&mut self",
+        "fn handle_event(&mut self",
+    );
+    assert!(fail_closed.contains("self.runtime.signal_revoke()"));
+
+    let observe = section(
+        adapter,
+        "fn poll_observe_child_unit(&mut self)",
+        "fn poll_acknowledge_publication_unit(&mut self)",
+    );
+    assert!(observe.contains("IsolatedNetworkTurnOutcome::complete(self.poll_child_output())"));
+    assert!(!observe.contains("child_signaled"));
+    assert!(!observe.contains("acknowledge_publication"));
+
+    let acknowledge_unit = section(
+        adapter,
+        "fn poll_acknowledge_publication_unit(&mut self)",
+        "fn poll_stage_output_unit(&mut self)",
+    );
+    assert_eq!(
+        acknowledge_unit
+            .matches("self.runtime.acknowledge_publication()")
+            .count(),
+        1
+    );
+    assert!(acknowledge_unit.contains("IsolatedNetworkTurnOutcome::child_signaled(false)"));
+    assert!(acknowledge_unit.contains("self.fail_closed(\"publication-ack\")"));
+
+    let adapter_poll = section(
+        adapter,
+        "impl NetPoller for IsolatedVirtioConsole",
+        "fn driver_task_contract",
+    );
+    let pending_input = marker(adapter_poll, "self.runtime.publication_ack_pending()");
+    let selector = marker(adapter_poll, "select_isolated_network_turn(");
+    let ack_dispatch = marker(
+        adapter_poll,
+        "IsolatedNetworkTurnUnit::AcknowledgePublication =>",
+    );
+    assert!(selector < pending_input && pending_input < ack_dispatch);
+
+    let turn_selector = include_str!("../src/net/isolated_network_turn.rs");
+    let selection = section(
+        turn_selector,
+        "pub(crate) fn select_isolated_network_turn(",
+        "#[cfg(test)]",
+    );
+    let ack_priority = marker(selection, "if publication_ack_pending");
+    let diagnostic_priority = marker(selection, "else if deferred_diagnostic");
+    let egress_priority = marker(selection, "else if pending_egress");
+    assert!(ack_priority < diagnostic_priority && diagnostic_priority < egress_priority);
+
+    let terminal_handler = section(adapter, "fn handle_event(&mut self", "fn poll_child_output");
+    assert!(terminal_handler.contains("self.fail_closed("));
+    let shutdown = terminal_handler
+        .split("ExchangeKind::ShutdownComplete => {")
+        .nth(1)
+        .expect("ShutdownComplete handler")
+        .split("ExchangeKind::SendLine")
+        .next()
+        .expect("bounded ShutdownComplete arm");
+    assert!(shutdown.contains("self.graceful_teardown_pending = true;"));
+    assert!(!shutdown.contains("self.terminal = true;"));
+    assert!(!shutdown.contains("acknowledge_publication"));
+
+    let containment = section(
+        adapter,
+        "pub fn contain_one_turn(",
+        "pub fn contain_if_faulted(",
+    );
+    let proof_complete = marker(containment, "proof.complete()");
+    let clear_pending = marker(containment, "self.graceful_teardown_pending = false;");
+    let mark_terminal = marker(containment, "self.terminal = true;");
+    assert!(proof_complete < clear_pending && clear_pending < mark_terminal);
+
+    let gate = section(
+        adapter,
+        "pub const fn containment_required(&self)",
+        "pub fn contain_one_turn(",
+    );
+    assert!(gate.contains("!self.terminal"));
+    assert!(gate.contains("self.graceful_teardown_pending"));
+    assert!(gate.contains("self.runtime.containment_active()"));
+    let stack = include_str!("../src/net/stack.rs");
+    let stack_gate = section(
+        stack,
+        "pub fn console_network_child_faulted(&self)",
+        "pub fn contain_console_network_child(",
+    );
+    assert!(stack_gate.contains("stack.containment_required()"));
+    assert!(!stack_gate.contains("stack.faulted()"));
 }
 
 #[test]
@@ -661,6 +1129,168 @@ fn isolated_budget_is_charged_before_any_turn_side_effect() {
     );
     assert!(turn_bytes.contains("console_network_abi::CONSOLE_PAYLOAD_BYTES"));
     assert!(turn_bytes.contains("console_network_abi::ETHERNET_FRAME_BYTES"));
+}
+
+#[test]
+fn isolated_output_backpressures_until_a_connection_is_authenticated() {
+    let source = include_str!("../src/net/isolated_console.rs");
+    let output = section(
+        source,
+        "fn queue_console_output(&mut self, line: &str, terminal: bool) -> bool",
+        "fn complete_response_lane_if_drained(&mut self)",
+    );
+    let admission = marker(output, "if self.faulted || self.terminal {");
+    let rejection = marker(output, "return false;");
+    let identity = marker(
+        output,
+        "let connection_id = match self.authenticated_connection",
+    );
+    let unauthenticated = marker(output, "None => return false,");
+    let normalization = marker(output, "let line = line.trim_end_matches");
+    let queue = marker(output, ".push_back(QueuedConsoleOutput");
+
+    assert!(admission < rejection);
+    assert!(rejection < identity && identity < unauthenticated);
+    assert!(unauthenticated < normalization && normalization < queue);
+    assert!(!output.contains("return !self.faulted && !self.terminal;"));
+
+    let trait_output = section(
+        source,
+        "fn send_console_line(&mut self, line: &str) -> bool",
+        "fn send_console_terminal_line(&mut self, line: &str) -> bool",
+    );
+    assert!(trait_output.contains("self.queue_console_output(line, false)"));
+}
+
+#[test]
+fn default_net_stack_preserves_every_isolated_response_hook() {
+    let source = include_str!("../src/net/stack.rs");
+    let implementation = section(
+        source,
+        "impl NetPoller for DefaultNetStack",
+        "/// Cooperative polling loop",
+    );
+
+    for signature in [
+        "fn send_console_terminal_line(&mut self, line: &str) -> bool",
+        "fn bounded_console_response_identity(&self) -> Option<ConsoleResponseIdentity>",
+        "fn console_response_lane(&self) -> Option<ConsoleResponseLane>",
+        "fn poll_console_response_with_budget(",
+        "fn console_event_pending(&self) -> bool",
+    ] {
+        assert!(
+            implementation.contains(signature),
+            "DefaultNetStack must preserve {signature}"
+        );
+    }
+    for delegated in [
+        "Self::Virtio(stack) => stack.send_console_terminal_line(line)",
+        "Self::Virtio(stack) => stack.bounded_console_response_identity()",
+        "Self::Virtio(stack) => stack.console_response_lane()",
+        "Self::Virtio(stack) => stack.poll_console_response_with_budget(now_ms, budget)",
+        "Self::Virtio(stack) => stack.console_event_pending()",
+    ] {
+        assert!(
+            implementation.contains(delegated),
+            "selected Virtio wrapper must preserve {delegated}"
+        );
+    }
+}
+
+#[test]
+fn isolated_console_input_never_crosses_connection_identity_boundaries() {
+    let source = include_str!("../src/net/isolated_console.rs");
+    let handler = section(source, "fn handle_event(&mut self", "fn poll_child_output");
+    let connected = handler
+        .split("ExchangeKind::Connected => {")
+        .nth(1)
+        .expect("Connected handler")
+        .split("ExchangeKind::Authenticated")
+        .next()
+        .expect("bounded Connected arm");
+    let authenticated = handler
+        .split("ExchangeKind::Authenticated => {")
+        .nth(1)
+        .expect("Authenticated handler")
+        .split("ExchangeKind::Command")
+        .next()
+        .expect("bounded Authenticated arm");
+    let command = handler
+        .split("ExchangeKind::Command => {")
+        .nth(1)
+        .expect("Command handler")
+        .split("ExchangeKind::Disconnected")
+        .next()
+        .expect("bounded Command arm");
+    let disconnected = handler
+        .split("ExchangeKind::Disconnected => {")
+        .nth(1)
+        .expect("Disconnected handler")
+        .split("ExchangeKind::Backpressure")
+        .next()
+        .expect("bounded Disconnected arm");
+    let shutdown = handler
+        .split("ExchangeKind::ShutdownComplete => {")
+        .nth(1)
+        .expect("ShutdownComplete handler")
+        .split("ExchangeKind::SendLine")
+        .next()
+        .expect("bounded ShutdownComplete arm");
+
+    for (boundary, arm) in [
+        ("Connected", connected),
+        ("Disconnected", disconnected),
+        ("ShutdownComplete", shutdown),
+    ] {
+        assert_eq!(
+            arm.matches("self.lines.clear();").count(),
+            1,
+            "{boundary} must retire every retained command line",
+        );
+    }
+    assert!(
+        marker(connected, "self.lines.clear();")
+            < marker(connected, "self.active_connection = Some(connection_id);")
+    );
+    assert!(
+        marker(disconnected, "self.lines.clear();")
+            < marker(disconnected, "self.active_connection = None;")
+    );
+    assert!(
+        marker(shutdown, "self.lines.clear();")
+            < marker(shutdown, "self.active_connection = None;")
+    );
+
+    // A replacement identity starts unauthenticated, can authenticate only
+    // against its exact active connection, and can then enqueue fresh input.
+    assert!(connected.contains("self.authenticated_connection = None;"));
+    assert!(authenticated.contains("self.active_connection != Some(connection_id)"));
+    assert!(authenticated.contains("self.authenticated_connection = Some(connection_id);"));
+    let command_identity = marker(
+        command,
+        "self.authenticated_connection != Some(connection_id)",
+    );
+    let command_enqueue = marker(command, ".push_back(ConsoleLine::for_connection(");
+    assert!(command_identity < command_enqueue);
+    assert!(command.contains("event.now_ms(),"));
+    assert!(command.contains("connection_id,"));
+}
+
+#[test]
+fn exact_console_drain_includes_root_retained_egress_and_response_lane() {
+    let source = include_str!("../src/net/isolated_console.rs");
+    let drain = section(
+        source,
+        "fn console_output_drained(&self, connection_id: u64) -> bool",
+        "fn drain_console_events",
+    );
+    let local_output = marker(drain, "self.output.is_empty()");
+    let copied_egress = marker(drain, "self.pending_egress.is_none()");
+    let response_lane = marker(drain, "self.response_lane.is_none()");
+    let child_drain = marker(drain, "self.runtime.console_output_drained(connection_id)");
+    assert!(local_output < copied_egress);
+    assert!(copied_egress < response_lane);
+    assert!(response_lane < child_drain);
 }
 
 #[test]
@@ -699,7 +1329,7 @@ fn successful_publish_defers_one_record_and_never_scrubs_after_notify() {
         "healthy atomic publication must not synchronously format Info records",
     );
 
-    let submit = section(source, "fn submit_tx(&mut self", "fn submit_tx_v2");
+    let submit = section(source, "fn submit_tx(", "fn submit_tx_v2");
     let enqueue = marker(submit, ".enqueue_tx_chain_checked");
     let deferred = marker(submit, "self.queue_deferred_tx_diagnostic");
     assert!(
@@ -714,12 +1344,16 @@ fn successful_publish_defers_one_record_and_never_scrubs_after_notify() {
 }
 
 #[test]
-fn isolated_tx_visit_cannot_drain_its_own_success_diagnostic() {
+fn isolated_tx_visit_neither_selects_nor_drains_routine_diagnostic_inline() {
     let source = include_str!("../src/net/isolated_console.rs");
     let transmit = section(source, "fn transmit_pending_egress", "fn stage_one_ingress");
     assert!(transmit.contains("self.device.transmit_isolated(timestamp)"));
     assert!(!transmit.contains("emit_one_deferred_tx_diagnostic"));
-    assert!(transmit.contains("deferred_tx_diagnostic_pending()"));
+    assert!(!transmit.contains("deferred_tx_diagnostic_pending()"));
+
+    let response = section(source, "fn poll_response_turn", "impl NetPoller");
+    assert!(!response.contains("deferred_tx_diagnostic_pending()"));
+    assert!(!response.contains("poll_deferred_diagnostic_unit"));
 }
 
 #[test]

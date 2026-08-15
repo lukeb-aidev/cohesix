@@ -17,7 +17,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 #[cfg(feature = "tcp")]
 use std::sync::Mutex;
-#[cfg(feature = "tcp")]
+#[cfg(any(feature = "tcp", feature = "rest"))]
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
@@ -163,8 +163,8 @@ struct Cli {
     #[arg(long, default_value = "out/cohesix")]
     qemu_out_dir: PathBuf,
 
-    /// Optional override for the GIC version passed to QEMU.
-    #[arg(long, default_value = "2")]
+    /// GIC version selected by the validated QEMU profile (must be 3).
+    #[arg(long, default_value = "3")]
     qemu_gic_version: String,
 
     /// Extra arguments forwarded to QEMU when using the qemu transport.
@@ -204,6 +204,11 @@ struct Cli {
     #[cfg(feature = "rest")]
     #[arg(long)]
     rest_auth_token: Option<String>,
+
+    /// Response envelope for REST file operations, in milliseconds.
+    #[cfg(feature = "rest")]
+    #[arg(long)]
+    rest_response_timeout_ms: Option<u64>,
 }
 
 fn init_logging(verbose: bool) {
@@ -347,6 +352,19 @@ fn resolve_rest_auth_token(cli_value: Option<&str>) -> Option<String> {
     None
 }
 
+#[cfg(feature = "rest")]
+fn build_rest_transport(
+    rest_url: String,
+    rest_auth_token: Option<String>,
+    response_timeout: Option<Duration>,
+) -> Result<RestTransport> {
+    let transport = RestTransport::new(rest_url, rest_auth_token);
+    match response_timeout {
+        Some(timeout) => transport.with_operation_response_timeout(timeout),
+        None => Ok(transport),
+    }
+}
+
 #[cfg(feature = "tcp")]
 const INSECURE_PLACEHOLDER_TOKEN: &str = concat!("change", "me");
 
@@ -477,6 +495,13 @@ fn main() -> Result<()> {
         )
     })?;
 
+    #[cfg(feature = "rest")]
+    let rest_response_timeout = env_override(
+        cli.rest_response_timeout_ms,
+        "COHSH_REST_RESPONSE_TIMEOUT_MS",
+    )?
+    .map(Duration::from_millis);
+
     if let Some(script_path) = cli.check {
         let file = File::open(&script_path)
             .with_context(|| format!("failed to open script {script_path:?}"))?;
@@ -586,14 +611,20 @@ fn main() -> Result<()> {
                     let rest_auth_token = resolve_rest_auth_token(cli.rest_auth_token.as_deref());
                     let pool_url = rest_url.clone();
                     let pool_token = rest_auth_token.clone();
+                    let pool_response_timeout = rest_response_timeout;
                     let factory = Arc::new(move || {
-                        Ok(
-                            Box::new(RestTransport::new(pool_url.clone(), pool_token.clone()))
-                                as Box<dyn Transport + Send>,
-                        )
+                        Ok(Box::new(build_rest_transport(
+                            pool_url.clone(),
+                            pool_token.clone(),
+                            pool_response_timeout,
+                        )?) as Box<dyn Transport + Send>)
                     });
                     (
-                        Box::new(RestTransport::new(rest_url, rest_auth_token)),
+                        Box::new(build_rest_transport(
+                            rest_url,
+                            rest_auth_token,
+                            rest_response_timeout,
+                        )?),
                         Some(factory),
                     )
                 }
@@ -646,24 +677,4 @@ fn main() -> Result<()> {
     }
 
     run_result
-}
-
-#[cfg(all(test, feature = "rest"))]
-mod tests {
-    use super::*;
-    use clap::Parser;
-
-    #[test]
-    fn parse_rest_transport_args() {
-        let cli = Cli::try_parse_from([
-            "cohsh",
-            "--transport",
-            "rest",
-            "--rest-url",
-            "http://127.0.0.1:8080",
-        ])
-        .expect("parse rest transport args");
-        assert!(matches!(cli.transport, TransportKind::Rest));
-        assert_eq!(cli.rest_url.as_deref(), Some("http://127.0.0.1:8080"));
-    }
 }

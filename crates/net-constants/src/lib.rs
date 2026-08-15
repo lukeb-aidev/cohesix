@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright © 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Defines the net-constants library and public module surface.
 // Author: Lukas Bower
@@ -15,3 +15,17 @@ pub const COHESIX_TCP_CONSOLE_PORT: u16 = 31337;
 pub const COHSH_TCP_PORT: u16 = COHESIX_TCP_CONSOLE_PORT;
 /// Alias for the TCP console port constant.
 pub const TCP_CONSOLE_PORT: u16 = COHESIX_TCP_CONSOLE_PORT;
+
+/// Maximum time the Hive Gateway broker may spend admitting one queued request.
+pub const HIVE_GATEWAY_BROKER_QUEUE_WAIT_LIMIT_MS: u64 = 5_000;
+/// Default time the Hive Gateway broker may wait for one target response.
+pub const HIVE_GATEWAY_DEFAULT_BROKER_RESPONSE_TIMEOUT_MS: u64 = 120_000;
+/// Client-side grace after broker queue and response deadlines for HTTP delivery.
+pub const HIVE_GATEWAY_REST_RESPONSE_GRACE_MS: u64 = 5_000;
+/// Short HTTP timeout retained for metadata, resolution, connection, and response bodies.
+pub const HIVE_GATEWAY_REST_IO_TIMEOUT_MS: u64 = 3_000;
+/// Default `/v1/fs/*` receive-response timeout covering the full broker contract.
+pub const HIVE_GATEWAY_REST_OPERATION_RESPONSE_TIMEOUT_MS: u64 =
+    HIVE_GATEWAY_BROKER_QUEUE_WAIT_LIMIT_MS
+        + HIVE_GATEWAY_DEFAULT_BROKER_RESPONSE_TIMEOUT_MS
+        + HIVE_GATEWAY_REST_RESPONSE_GRACE_MS;

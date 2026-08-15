@@ -6,6 +6,7 @@
 use crate::codegen::{cas, hash_bytes};
 use crate::ir::{Manifest, NetworkBackendKind};
 use anyhow::{Context, Result};
+use cohesix_cas::CAS_MANIFEST_MAX_CHUNKS;
 use std::fmt::Write as _;
 use std::fs;
 use std::path::Path;
@@ -2227,6 +2228,14 @@ impl DocFragments {
             .ok();
             writeln!(
                 cas_interfaces_md,
+                "- Manifest-v1 capacity: at most `{}` chunks and `{}` payload bytes for this profile.",
+                CAS_MANIFEST_MAX_CHUNKS,
+                u64::from(manifest.cas.store.chunk_bytes)
+                    .saturating_mul(CAS_MANIFEST_MAX_CHUNKS as u64)
+            )
+            .ok();
+            writeln!(
+                cas_interfaces_md,
                 "- `cas.delta.enable`: `{}`",
                 manifest.cas.delta.enable
             )
@@ -2265,7 +2274,11 @@ impl DocFragments {
                 "- Payloads are appended as raw bytes or `b64:`-prefixed base64."
             )
             .ok();
-            writeln!(cas_interfaces_md, "- CAS manifest template:").ok();
+            writeln!(
+                cas_interfaces_md,
+                "- CAS host packaging template (`limits` is tooling-only; CBOR manifest-v1 remains eight fields):"
+            )
+            .ok();
             writeln!(cas_interfaces_md, "```json").ok();
             writeln!(cas_interfaces_md, "{}", cas_template.json).ok();
             writeln!(cas_interfaces_md, "```").ok();

@@ -6,7 +6,7 @@ author = "Lukas Bower"
 purpose = "Pi4 U-Boot aarch64 root-task manifest input for coh-rtc."
 
 [root_task]
-schema = "1.11"
+schema = "1.14"
 
 [root_task.affinity]
 enabled = true
@@ -356,10 +356,10 @@ max_refills = 2
 priority = 200
 mcp = 200
 timeout_badge = 653131777
-timeout_policy = "terminal"
+timeout_policy = "natural-postpone"
 consumed_time_evidence = true
 wcet_us = 2500
-wcet_provenance = "m26e-qemu-root-exclusive-predispatch-candidate-v23"
+wcet_provenance = "m26e-pi4-root-adjacent-refill-natural-postpone-candidate-v24"
 virtio_operator_serial_io_bytes_per_turn = 0
 fault_handler = "root-fault"
 critical_reserve = true
@@ -550,21 +550,21 @@ period_us = 10000
 deadline_us = 10000
 blocking_us = 0
 jitter_us = 0
-response_time_us = 7500
+response_time_us = 8100
 admitted = true
 max_refills = 2
 priority = 180
 mcp = 200
 timeout_badge = 653131783
-timeout_policy = "terminal"
+timeout_policy = "natural-postpone"
 consumed_time_evidence = true
-wcet_us = 2400
-wcet_provenance = "m26e-qemu-console-bounded-stack-steps-candidate-v6"
+wcet_us = 3000
+wcet_provenance = "m26e-qemu-console-received-progress-retention-candidate-v18"
 fault_handler = "root-fault"
 
 [console_network_service]
 enabled = true
-abi_version = 1
+abi_version = 3
 image_id = "console-network-runtime"
 image_path = "cohesix/artifacts/console-network-runtime"
 entry_symbol = "_start"
@@ -596,6 +596,7 @@ shutdown_badge = 4
 revoke_badge = 8
 packet_tx_ready_badge = 16
 event_ready_badge = 32
+publication_ack_badge = 64
 fault_badge = 652476417
 core = 0
 scheduling_context_slot = 6
@@ -616,14 +617,14 @@ cnodes = 1
 vspaces = 1
 page_tables = 8
 asids = 1
-frames = 97
+frames = 98
 endpoints = 0
 notifications = 2
 fault_caps = 1
 timeout_fault_caps = 1
 reply_objects = 0
 scheduling_contexts = 1
-cspace_slots = 121
+cspace_slots = 123
 untyped_bytes = 1048576
 
 [[temporal_authority.tasks]]
@@ -936,14 +937,14 @@ cnodes = 14
 vspaces = 14
 page_tables = 512
 asids = 14
-frames = 4065
+frames = 4066
 endpoints = 31
 notifications = 32
 fault_caps = 14
 timeout_fault_caps = 14
 reply_objects = 13
 scheduling_contexts = 14
-cspace_slots = 8960
+cspace_slots = 8962
 untyped_bytes = 100663296
 
 [[worker_resource_admission.executable_roles]]

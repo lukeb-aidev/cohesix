@@ -1371,6 +1371,25 @@ impl TcpTransport {
         Ok(ticket_check.ticket.map(str::to_owned))
     }
 
+    fn attach_pooled(&mut self, role: Role, ticket: Option<&str>) -> Result<Session> {
+        let ticket_payload = Self::normalise_ticket(role, ticket)?;
+        let reuse_attached_authority = self.authenticated
+            && self.auth_state == AuthState::Attached
+            && self.stream.is_some()
+            && self.reader.is_some()
+            && self.session_cache.as_ref().is_some_and(|cache| {
+                cache.role == role && cache.ticket.as_deref() == ticket_payload.as_deref()
+            });
+
+        if reuse_attached_authority {
+            let session = Session::new(SessionId::from_raw(self.next_session_id), role);
+            self.next_session_id = self.next_session_id.wrapping_add(1);
+            return Ok(session);
+        }
+
+        Transport::attach(self, role, ticket_payload.as_deref())
+    }
+
     fn map_ticket_error(role: Role, err: cohsh_core::TicketError) -> anyhow::Error {
         match err {
             cohsh_core::TicketError::Missing => {
@@ -1611,6 +1630,22 @@ impl TcpTransport {
             ceiling
         } else {
             doubled
+        }
+    }
+
+    fn read_quit_event(&mut self, deadline: Instant, phase: &str) -> Result<ReadStatus> {
+        loop {
+            if Instant::now() >= deadline {
+                return Err(anyhow!("timeout waiting for {phase}"));
+            }
+            match self.read_line_internal()? {
+                ReadStatus::Timeout => {
+                    if Instant::now() >= deadline {
+                        return Err(anyhow!("timeout waiting for {phase}"));
+                    }
+                }
+                status => return Ok(status),
+            }
         }
     }
 }
@@ -1950,46 +1985,62 @@ impl Transport for TcpTransport {
 
     fn quit(&mut self, _session: &Session) -> Result<()> {
         info!("audit quit.transport.begin");
-        if let Err(err) = self.send_line("quit") {
-            self.session_cache = None;
-            self.requested_role = None;
-            self.reset_connection();
-            return Err(err);
-        }
-        let mut timeouts = 0usize;
-        let result = loop {
-            match self.read_line_internal()? {
+        let result = (|| {
+            if self.auth_state != AuthState::Attached
+                || self.session_cache.is_none()
+                || self.stream.is_none()
+                || self.reader.is_none()
+            {
+                return Err(anyhow!("TCP QUIT requires one attached connection"));
+            }
+
+            let ack_deadline = self.stream_deadline();
+            self.send_line_raw("quit")
+                .context("failed to send QUIT on the attached connection")?;
+
+            match self.read_quit_event(ack_deadline, "OK QUIT")? {
                 ReadStatus::Line(line) => {
-                    let trimmed = Self::trim_line(&line);
-                    if let Some(ack) = parse_ack(trimmed.as_str()) {
-                        let _ = self.record_ack(trimmed.as_str());
-                        if ack.verb.eq_ignore_ascii_case("QUIT") {
-                            if matches!(ack.status, AckStatus::Err) {
-                                info!("audit quit.transport.end reason=err");
-                                break Err(anyhow!("quit rejected: {trimmed}"));
-                            }
-                            info!("audit quit.transport.end reason=ack");
-                            break Ok(());
-                        }
-                        continue;
+                    let line = Self::trim_line(&line);
+                    if line != "OK QUIT" {
+                        return Err(anyhow!("expected exact OK QUIT, received {line:?}"));
                     }
-                }
-                ReadStatus::Timeout => {
-                    timeouts += 1;
-                    if timeouts > self.max_retries {
-                        info!("audit quit.transport.end reason=timeout");
-                        break Ok(());
-                    }
+                    let _ = self.record_ack(&line);
                 }
                 ReadStatus::Closed => {
-                    info!("audit quit.transport.end reason=closed");
-                    break Ok(());
+                    return Err(anyhow!("connection closed before OK QUIT"));
+                }
+                ReadStatus::Timeout => {
+                    return Err(anyhow!("timeout waiting for OK QUIT"));
                 }
             }
-        };
+
+            self.stream
+                .as_ref()
+                .context("attached QUIT stream disappeared before half-close")?
+                .shutdown(Shutdown::Write)
+                .context("failed to half-close the attached QUIT connection")?;
+
+            let close_deadline = self.stream_deadline();
+            match self.read_quit_event(close_deadline, "QUIT peer close")? {
+                ReadStatus::Closed if self.has_partial_frame() => Err(anyhow!(
+                    "connection closed with a partial frame after OK QUIT"
+                )),
+                ReadStatus::Closed => Ok(()),
+                ReadStatus::Line(line) => Err(anyhow!(
+                    "received unexpected frame after OK QUIT: {:?}",
+                    Self::trim_line(&line)
+                )),
+                ReadStatus::Timeout => Err(anyhow!("timeout waiting for QUIT peer close")),
+            }
+        })();
+
         self.session_cache = None;
         self.requested_role = None;
         self.reset_connection();
+        match &result {
+            Ok(()) => info!("audit quit.transport.end reason=peer-eof"),
+            Err(err) => info!("audit quit.transport.end reason=error detail={err}"),
+        }
         result
     }
 
@@ -2103,7 +2154,7 @@ impl Transport for SharedTcpTransport {
 impl Transport for PooledTcpTransport {
     fn attach(&mut self, role: Role, ticket: Option<&str>) -> Result<Session> {
         let mut inner = self.lock();
-        inner.attach(role, ticket)
+        inner.attach_pooled(role, ticket)
     }
 
     fn kind(&self) -> &'static str {
@@ -2188,15 +2239,20 @@ impl Transport for PooledTcpTransport {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashSet;
     use std::io::Read;
     use std::net::TcpListener;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::mpsc;
     use std::sync::Arc;
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     use cohesix_proto::REASON_INVALID_TOKEN;
     use cohesix_ticket::{BudgetSpec, MountSpec, TicketClaims, TicketIssuer};
     use sha2::{Digest, Sha256};
+
+    use crate::{PoolKind, SessionPool, TransportFactory};
+
     const TEST_AUTH_TOKEN: &str = "test-auth-token";
 
     fn write_frame(stream: &mut TcpStream, line: &str) {
@@ -2220,6 +2276,28 @@ mod tests {
             return None;
         }
         String::from_utf8(payload).ok()
+    }
+
+    fn attached_transport(port: u16, timeout: Duration) -> (TcpTransport, Session) {
+        let stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        stream.set_read_timeout(Some(timeout)).unwrap();
+        stream.set_write_timeout(Some(timeout)).unwrap();
+        let reader_stream = stream.try_clone().unwrap();
+        reader_stream.set_read_timeout(Some(timeout)).unwrap();
+        let mut transport = TcpTransport::new("127.0.0.1", port)
+            .with_timeout(timeout)
+            .with_max_retries(1)
+            .with_auth_token(TEST_AUTH_TOKEN);
+        transport.stream = Some(stream);
+        transport.reader = Some(BufReader::new(reader_stream));
+        transport.authenticated = true;
+        transport.auth_state = AuthState::Attached;
+        transport.requested_role = Some(Role::Queen);
+        transport.session_cache = Some(SessionCache {
+            role: Role::Queen,
+            ticket: None,
+        });
+        (transport, Session::new(SessionId::from_raw(2), Role::Queen))
     }
 
     fn write_frame_split(stream: &mut TcpStream, line: &str, delay: Duration) {
@@ -2273,12 +2351,261 @@ mod tests {
     }
 
     #[test]
+    fn pooled_tcp_uses_one_wire_attach_for_twenty_four_exact_authority_leases() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let observed = Arc::new(Mutex::new(Vec::<String>::new()));
+        let server_observed = Arc::clone(&observed);
+        let (stop_tx, stop_rx) = mpsc::channel();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_millis(50)))
+                .unwrap();
+            write_frame(&mut stream, "OK AUTH detail=present-token");
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            loop {
+                if stop_rx.try_recv().is_ok() {
+                    break;
+                }
+                let Some(line) = read_frame(&mut reader) else {
+                    continue;
+                };
+                server_observed.lock().unwrap().push(line.clone());
+                let trimmed = line.trim();
+                if trimmed == format!("AUTH {TEST_AUTH_TOKEN}") {
+                    write_frame(&mut stream, "OK AUTH");
+                } else if trimmed.starts_with("ATTACH queen") {
+                    write_frame(&mut stream, "OK ATTACH role=queen");
+                } else if trimmed == "PING" {
+                    write_frame(&mut stream, "PONG");
+                    write_frame(&mut stream, "OK PING reply=pong");
+                } else {
+                    panic!("unexpected pooled TCP frame: {trimmed}");
+                }
+            }
+        });
+
+        let shared = Arc::new(Mutex::new(
+            TcpTransport::new("127.0.0.1", port)
+                .with_timeout(Duration::from_millis(250))
+                .with_max_retries(1)
+                .with_auth_token(TEST_AUTH_TOKEN),
+        ));
+        let factory_shared = Arc::clone(&shared);
+        let factory: Arc<dyn TransportFactory> = Arc::new(move || {
+            Ok(
+                Box::new(PooledTcpTransport::new(Arc::clone(&factory_shared)))
+                    as Box<dyn Transport + Send>,
+            )
+        });
+        let pool = SessionPool::new(1, 24, factory);
+        pool.attach(Role::Queen, None).unwrap();
+
+        let mut leases = Vec::new();
+        let mut session_ids = HashSet::new();
+        for _ in 0..24 {
+            let lease = pool.checkout(PoolKind::Telemetry).unwrap();
+            assert!(session_ids.insert(lease.session().id().into_raw()));
+            leases.push(lease);
+        }
+        assert_eq!(session_ids.len(), 24);
+        match pool.checkout(PoolKind::Telemetry) {
+            Ok(_) => panic!("twenty-fifth telemetry checkout must exhaust the pool"),
+            Err(error) => assert_eq!(error.to_string(), "session pool exhausted for Telemetry"),
+        }
+
+        let ping_session = leases[0].session().clone();
+        assert_eq!(
+            leases[0].transport_mut().ping(&ping_session).unwrap(),
+            "pong"
+        );
+        let initial_frames = observed.lock().unwrap().clone();
+        assert_eq!(
+            initial_frames
+                .iter()
+                .filter(|line| line.starts_with("AUTH "))
+                .count(),
+            1
+        );
+        assert_eq!(
+            initial_frames
+                .iter()
+                .filter(|line| line.starts_with("ATTACH "))
+                .count(),
+            1
+        );
+        assert_eq!(initial_frames.last().map(String::as_str), Some("PING"));
+
+        let changed_ticket = TicketIssuer::new("changed-queen-authority")
+            .issue(TicketClaims::new(
+                Role::Queen,
+                BudgetSpec::unbounded(),
+                None,
+                MountSpec::empty(),
+                unix_time_ms(),
+            ))
+            .unwrap()
+            .encode()
+            .unwrap();
+        let mut changed_authority = PooledTcpTransport::new(Arc::clone(&shared));
+        changed_authority
+            .attach(Role::Queen, Some(changed_ticket.as_str()))
+            .unwrap();
+        assert_eq!(
+            observed
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|line| line.starts_with("ATTACH "))
+                .count(),
+            2,
+            "a changed normalized authority must perform a real ATTACH"
+        );
+
+        drop(leases);
+        pool.shutdown();
+        stop_tx.send(()).unwrap();
+        server.join().unwrap();
+        assert!(observed
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|line| !line.eq_ignore_ascii_case("QUIT")));
+    }
+
+    #[test]
     fn stream_wait_excludes_heartbeat_and_retry_window() {
         let transport = TcpTransport::new("127.0.0.1", 31337)
             .with_timeout(Duration::from_millis(250))
             .with_heartbeat_interval(Duration::from_secs(30))
             .with_max_retries(8);
         assert_eq!(transport.stream_wait(), Duration::from_millis(250));
+    }
+
+    #[test]
+    fn quit_requires_exact_ack_then_half_closes_and_observes_peer_eof() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(1)))
+                .unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let command = read_frame(&mut reader).expect("QUIT command");
+            write_frame(&mut stream, "OK QUIT");
+            let mut trailing = [0u8; 1];
+            assert_eq!(
+                stream.read(&mut trailing).unwrap(),
+                0,
+                "client must half-close after reading OK QUIT"
+            );
+            command
+        });
+
+        let (mut transport, session) = attached_transport(port, Duration::from_millis(250));
+        transport
+            .quit(&session)
+            .expect("exact QUIT close handshake");
+        assert_eq!(transport.drain_acknowledgements(), vec!["OK QUIT"]);
+        assert_eq!(transport.metrics().reconnects, 0);
+        assert_eq!(server.join().unwrap(), "quit");
+    }
+
+    #[test]
+    fn quit_rejects_peer_close_before_ack_without_reconnecting() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream);
+            read_frame(&mut reader).expect("QUIT command")
+        });
+
+        let (mut transport, session) = attached_transport(port, Duration::from_millis(250));
+        let error = transport
+            .quit(&session)
+            .expect_err("EOF before OK QUIT must fail");
+        assert!(error.to_string().contains("closed before OK QUIT"));
+        assert_eq!(transport.metrics().reconnects, 0);
+        assert_eq!(server.join().unwrap(), "quit");
+    }
+
+    #[test]
+    fn quit_rejects_timeout_before_ack() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (release_tx, release_rx) = mpsc::channel();
+        let server = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream);
+            let command = read_frame(&mut reader).expect("QUIT command");
+            release_rx.recv().unwrap();
+            command
+        });
+
+        let (mut transport, session) = attached_transport(port, Duration::from_millis(50));
+        let error = transport
+            .quit(&session)
+            .expect_err("missing OK QUIT must time out");
+        assert!(error.to_string().contains("timeout waiting for OK QUIT"));
+        assert_eq!(transport.metrics().reconnects, 0);
+        release_tx.send(()).unwrap();
+        assert_eq!(server.join().unwrap(), "quit");
+    }
+
+    #[test]
+    fn quit_rejects_post_ack_frame() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let command = read_frame(&mut reader).expect("QUIT command");
+            write_frame(&mut stream, "OK QUIT");
+            write_frame(&mut stream, "OK PING reply=pong");
+            let mut trailing = [0u8; 1];
+            assert_eq!(stream.read(&mut trailing).unwrap(), 0);
+            command
+        });
+
+        let (mut transport, session) = attached_transport(port, Duration::from_millis(250));
+        let error = transport
+            .quit(&session)
+            .expect_err("frame after OK QUIT must fail");
+        assert!(error.to_string().contains("unexpected frame after OK QUIT"));
+        assert_eq!(transport.metrics().reconnects, 0);
+        assert_eq!(server.join().unwrap(), "quit");
+    }
+
+    #[test]
+    fn quit_rejects_missing_peer_eof_after_exact_ack() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (release_tx, release_rx) = mpsc::channel();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let command = read_frame(&mut reader).expect("QUIT command");
+            write_frame(&mut stream, "OK QUIT");
+            let mut trailing = [0u8; 1];
+            assert_eq!(stream.read(&mut trailing).unwrap(), 0);
+            release_rx.recv().unwrap();
+            command
+        });
+
+        let (mut transport, session) = attached_transport(port, Duration::from_millis(50));
+        let error = transport
+            .quit(&session)
+            .expect_err("missing peer EOF must fail");
+        assert!(error
+            .to_string()
+            .contains("timeout waiting for QUIT peer close"));
+        assert_eq!(transport.drain_acknowledgements(), vec!["OK QUIT"]);
+        assert_eq!(transport.metrics().reconnects, 0);
+        release_tx.send(()).unwrap();
+        assert_eq!(server.join().unwrap(), "quit");
     }
 
     #[test]

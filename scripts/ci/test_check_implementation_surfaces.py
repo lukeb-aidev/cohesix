@@ -152,6 +152,7 @@ const MARKER: &str = "LORA_EXPORT_FIXTURE_ADMISSION";
             "host_assets": ["resources/keys/cas_verification_key.hex"],
             "operator_scripts": ["scripts/cohsh/boot_v0.coh"],
             "python_artifacts": ["tools/cohesix-py/cohesix/client.py"],
+            "cas_fixtures": ["tests/fixtures/cas/max_chunks_v1.txt"],
             "trace_fixtures": ["tests/fixtures/traces/trace_v0.trace"],
             "transcript_fixtures": [
                 "tests/fixtures/transcripts/boot_v0/core.txt"

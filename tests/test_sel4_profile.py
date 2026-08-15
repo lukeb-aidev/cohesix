@@ -202,12 +202,21 @@ def _write_build_tree(
         )
         cache_lines.append(
             "QEMU_MACHINE:UNINITIALIZED="
-            "virt,secure=off,virtualization=on,"
-            f"gic-version={profile['qemu_gic_version']},dumpdtb=/tmp/qemu.dtb"
+            f"{sel4_profile.qemu_machine_value(profile, build_dir)}"
         )
         cache_lines.append(
             "KernelArmGicV3:BOOL="
             f"{'ON' if profile['qemu_gic_version'] == 3 else 'OFF'}"
+        )
+        cache_lines.extend(
+            (
+                "COHESIX_TIMER_CLOCK_HZ:UNINITIALIZED="
+                f"{profile['timer_clock_hz']}",
+                "KernelTimerFrequency:INTERNAL="
+                f"{profile['timer_clock_hz']}",
+                "CMAKE_PROJECT_seL4_INCLUDE:UNINITIALIZED="
+                f"{sel4_profile.KERNEL_PROFILE_HOOK}",
+            )
         )
     (build_dir / "CMakeCache.txt").write_text(
         "\n".join(cache_lines) + "\n",
@@ -217,10 +226,24 @@ def _write_build_tree(
         json.dumps(profile["generated"], indent=2) + "\n",
         encoding="utf-8",
     )
-    (build_dir / "build.ninja").write_text(
-        "# synthetic profile-test build graph\n",
-        encoding="utf-8",
-    )
+    build_graph = "# synthetic profile-test build graph\n"
+    if (
+        profile["build_mode"] == "wrapper"
+        and profile["cmake"].get("KernelSel4Arch") == "aarch64"
+    ):
+        build_graph += (
+            "build apps/sel4test-driver/util_libs/libcpio/"
+            "CMakeFiles/cpio.dir/src/cpio.c.obj: synthetic cpio.c\n"
+            "  FLAGS = -march=armv8-a -mgeneral-regs-only -fpic\n"
+        )
+        if profile.get("target") == "qemu":
+            build_graph += (
+                "build elfloader/CMakeFiles/elfloader.dir/"
+                "elfloader-psci-hvc.c.obj: synthetic elfloader-psci-hvc.c\n"
+                "build elfloader/CMakeFiles/elfloader.dir/"
+                "elfloader-psci-hvc.S.obj: synthetic elfloader-psci-hvc.S\n"
+            )
+    (build_dir / "build.ninja").write_text(build_graph, encoding="utf-8")
     if "qemu_gic_version" in profile:
         gic_enabled = profile["qemu_gic_version"] == 3
         (generated_dir / "gen_config.h").write_text(
@@ -1412,8 +1435,8 @@ def test_operational_profiles_are_mcs_only_with_exact_virtual_counter_truth(
     contract: dict[str, Any],
 ) -> None:
     expected_timer_hz = {
-        "qemu_smp_production": 62_500_000,
-        "qemu_smp_diagnostic": 62_500_000,
+        "qemu_smp_production": 24_000_000,
+        "qemu_smp_diagnostic": 24_000_000,
         "pi4_production": 54_000_000,
         "pi4_diagnostic": 54_000_000,
     }
@@ -1482,10 +1505,82 @@ def test_qemu_configure_sets_arch_without_unused_qemu_smp(
     )
     assert f"-DPYTHON3={expected_python}" in command
     assert "-DQEMU_GIC_VERSION=3" in command
-    assert any(argument.startswith("-DQEMU_MACHINE=") for argument in command)
+    assert (
+        "-DQEMU_MACHINE="
+        f"{sel4_profile.qemu_machine_value(profile, tmp_path / 'build')}"
+    ) in command
+    assert "-DARM_CPU=cortex-a57" in command
+    assert "-DCOHESIX_TIMER_CLOCK_HZ=24000000" in command
+    assert f"-DCMAKE_PROJECT_seL4_INCLUDE={sel4_profile.KERNEL_PROFILE_HOOK}" in command
     assert "-DKernelArmGicV3=ON" not in command
     assert not any(argument.startswith("-DQEMU_SMP=") for argument in command)
     assert "-DSEL4_CACHE_DIR=" in command
+
+
+def test_runtime_qemu_profiles_bind_hvf_execution_contract(
+    contract: dict[str, Any],
+) -> None:
+    for profile_name in ("qemu_smp_production", "qemu_smp_diagnostic"):
+        profile = contract["profiles"][profile_name]
+
+        assert profile["qemu_virtualization"] is False, profile_name
+        assert profile["qemu_cpu"] == "cortex-a57", profile_name
+        assert profile["cmake"]["ARM_CPU"] == "cortex-a57", profile_name
+        assert profile["timer_clock_hz"] == 24_000_000, profile_name
+        assert 'method = "hvc"' in profile["required_dts_literals"], profile_name
+        assert "method=hvc" in profile["dtb"][
+            "required_string_properties"
+        ], profile_name
+
+
+def test_wrapper_closes_aarch64_elfloader_cpio_register_boundary() -> None:
+    wrapper = sel4_profile.WRAPPER_CMAKE.read_text(encoding="utf-8")
+
+    assert "if(KernelSel4ArchAarch64)" in wrapper
+    assert "target_compile_options(cpio PRIVATE -mgeneral-regs-only)" in wrapper
+    assert wrapper.index("target_compile_options(cpio PRIVATE") > wrapper.index(
+        '"${_cohesix_sel4test_dir}/apps/sel4test-driver"'
+    )
+
+
+def test_qemu_wrapper_replaces_upstream_elfloader_psci_with_hvc_dispatch() -> None:
+    wrapper = sel4_profile.WRAPPER_CMAKE.read_text(encoding="utf-8")
+    driver = sel4_profile.ELFLOADER_PSCI_HVC.read_text(encoding="utf-8")
+    conduit = sel4_profile.ELFLOADER_PSCI_HVC_ASM.read_text(encoding="utf-8")
+
+    assert 'KernelPlatform STREQUAL "qemu-arm-virt"' in wrapper
+    assert "_cohesix_upstream_psci_driver_count EQUAL 1" in wrapper
+    assert "list(REMOVE_ITEM _cohesix_elfloader_sources" in wrapper
+    assert "target_sources(" in wrapper
+    assert "hvc #0" in conduit
+    assert "cpu->extra_data == PSCI_METHOD_HVC" in driver
+    assert "psci_cpu_on(cpu->cpu_id" in driver
+
+
+def test_elfloader_cpio_without_general_register_constraint_fails_closed(
+    tmp_path: Path,
+    contract: dict[str, Any],
+) -> None:
+    build_dir = _write_build_tree(tmp_path, contract, "qemu_smp_production")
+    graph = build_dir / "build.ninja"
+    graph.write_text(
+        graph.read_text(encoding="utf-8").replace(
+            " -mgeneral-regs-only",
+            "",
+        ),
+        encoding="utf-8",
+    )
+
+    evidence = sel4_profile.validate_build(
+        contract,
+        "qemu_smp_production",
+        build_dir,
+    )
+
+    assert evidence["valid"] is False
+    assert "elfloader libcpio must compile with -mgeneral-regs-only" in _errors(
+        evidence
+    )
 
 
 def test_qemu_production_reserves_rootserver_archive_capacity() -> None:
@@ -1944,7 +2039,16 @@ def test_wrapper_host_inputs_bind_exact_gnu_cpio(
         contract["profiles"]["qemu_smp_production"],
     )
 
-    assert inputs["schema"] == "cohesix-sel4-wrapper-host-inputs/v4"
+    assert inputs["schema"] == "cohesix-sel4-wrapper-host-inputs/v6"
+    assert inputs["kernel_profile_hook"] == sel4_profile.file_evidence(
+        sel4_profile.KERNEL_PROFILE_HOOK
+    )
+    assert inputs["elfloader_psci_hvc"] == {
+        "dispatch": sel4_profile.file_evidence(sel4_profile.ELFLOADER_PSCI_HVC),
+        "conduit": sel4_profile.file_evidence(
+            sel4_profile.ELFLOADER_PSCI_HVC_ASM
+        ),
+    }
     assert inputs["cpio_tool"] == sel4_profile.gnu_cpio_supply_chain_input(
         contract
     )
@@ -2722,7 +2826,7 @@ def test_each_qemu_dtb_must_independently_match_gic_and_psci(
     assert evidence["valid"] is False
     errors = _errors(evidence)
     assert "DTB qemu_dtb lacks compatible value 'arm,gic-v3'" in errors
-    assert "DTB qemu_dtb lacks required string property method='smc'" in errors
+    assert "DTB qemu_dtb lacks required string property method='hvc'" in errors
     assert "DTB kernel_dtb lacks compatible" not in errors
 
 

@@ -5,7 +5,7 @@
 ### Root-task manifest schema (generated)
 - `meta.author`: `Lukas Bower`
 - `meta.purpose`: `Root-task manifest input for coh-rtc.`
-- `root_task.schema`: `1.11`
+- `root_task.schema`: `1.14`
 - `temporal_authority.root-control.virtio_operator_serial_io_bytes_per_turn`: `64`
 - `root_task.affinity.enabled`: `true`
 - `root_task.affinity.max_cores`: `4`
@@ -232,7 +232,7 @@
 - `sharding.shard_bits`: `8`
 - `sharding.legacy_worker_alias`: `true`
 - `tickets`: 5 entries
-- `manifest.sha256`: `013304cfbc552744a142a91d4cc5d95fcc274308cb00db15cc0c2d77fcaeb590`
+- `manifest.sha256`: `72b6fdbd175150ec352f9345d99791a1d576cf01de47363aed2a64ad0c463a93`
 
 ### Namespace mounts (generated)
 - service `logs` → `/log`
@@ -291,4 +291,4 @@
 - `ecosystem.models.enable`: `false`
 - Nodes appear only when enabled.
 
-_Generated from `configs/root_task.toml` (sha256: `013304cfbc552744a142a91d4cc5d95fcc274308cb00db15cc0c2d77fcaeb590`)._
+_Generated from `configs/root_task.toml` (sha256: `72b6fdbd175150ec352f9345d99791a1d576cf01de47363aed2a64ad0c463a93`)._

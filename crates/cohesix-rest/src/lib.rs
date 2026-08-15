@@ -8,12 +8,41 @@
 //! REST client helpers for the Cohesix hive-gateway.
 
 use anyhow::{anyhow, Context, Result};
+use cohesix_net_constants::{
+    HIVE_GATEWAY_BROKER_QUEUE_WAIT_LIMIT_MS, HIVE_GATEWAY_REST_IO_TIMEOUT_MS,
+    HIVE_GATEWAY_REST_OPERATION_RESPONSE_TIMEOUT_MS, HIVE_GATEWAY_REST_RESPONSE_GRACE_MS,
+};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
-/// Default REST timeout applied to hive-gateway requests.
-const DEFAULT_TIMEOUT: Duration = Duration::from_secs(3);
+/// Short timeout retained for metadata, resolution, connection, and response bodies.
+const DEFAULT_IO_TIMEOUT: Duration = Duration::from_millis(HIVE_GATEWAY_REST_IO_TIMEOUT_MS);
+/// Default `/v1/fs/*` response envelope covering queue, target, and delivery bounds.
+pub const DEFAULT_OPERATION_RESPONSE_TIMEOUT: Duration =
+    Duration::from_millis(HIVE_GATEWAY_REST_OPERATION_RESPONSE_TIMEOUT_MS);
+const DEFAULT_OPERATION_GLOBAL_TIMEOUT: Duration = Duration::from_millis(
+    HIVE_GATEWAY_REST_OPERATION_RESPONSE_TIMEOUT_MS + HIVE_GATEWAY_REST_IO_TIMEOUT_MS * 3,
+);
+
+/// Compose the client deadline from the gateway's selected broker timeouts.
+pub fn compose_operation_response_timeout(
+    control_response_timeout: Duration,
+    telemetry_response_timeout: Duration,
+) -> Result<Duration> {
+    let queue_wait = Duration::from_millis(HIVE_GATEWAY_BROKER_QUEUE_WAIT_LIMIT_MS);
+    let response_grace = Duration::from_millis(HIVE_GATEWAY_REST_RESPONSE_GRACE_MS);
+    if control_response_timeout < queue_wait || telemetry_response_timeout < queue_wait {
+        return Err(anyhow!(
+            "gateway broker response timeouts must be at least {}ms",
+            queue_wait.as_millis()
+        ));
+    }
+    queue_wait
+        .checked_add(control_response_timeout.max(telemetry_response_timeout))
+        .and_then(|timeout| timeout.checked_add(response_grace))
+        .ok_or_else(|| anyhow!("gateway operation response timeout overflow"))
+}
 
 type HttpResponse = ureq::http::Response<ureq::Body>;
 
@@ -21,7 +50,8 @@ type HttpResponse = ureq::http::Response<ureq::Body>;
 #[derive(Debug, Clone)]
 pub struct GatewayClient {
     base_url: String,
-    agent: ureq::Agent,
+    metadata_agent: ureq::Agent,
+    operation_agent: Box<ureq::Agent>,
     request_auth_token: Option<String>,
 }
 
@@ -32,19 +62,64 @@ impl GatewayClient {
         while base.ends_with('/') {
             base.pop();
         }
-        let config = ureq::Agent::config_builder()
-            .timeout_send_request(Some(DEFAULT_TIMEOUT))
-            .timeout_send_body(Some(DEFAULT_TIMEOUT))
-            .timeout_recv_response(Some(DEFAULT_TIMEOUT))
-            .timeout_recv_body(Some(DEFAULT_TIMEOUT))
-            .http_status_as_error(false)
-            .build();
-        let agent = config.into();
         Self {
             base_url: base,
-            agent,
+            metadata_agent: Self::build_agent(DEFAULT_IO_TIMEOUT, DEFAULT_IO_TIMEOUT),
+            operation_agent: Box::new(Self::build_agent(
+                DEFAULT_OPERATION_RESPONSE_TIMEOUT,
+                DEFAULT_OPERATION_GLOBAL_TIMEOUT,
+            )),
             request_auth_token: None,
         }
+    }
+
+    /// Override the bounded response envelope for `/v1/fs/*` operations.
+    ///
+    /// The timeout must cover the gateway's queue-wait limit, its selected
+    /// control/telemetry response timeout, and the fixed HTTP delivery grace.
+    pub fn with_operation_response_timeout(mut self, timeout: Duration) -> Result<Self> {
+        self.set_operation_response_timeout(timeout)?;
+        Ok(self)
+    }
+
+    /// Configure `/v1/fs/*` timing from selected gateway broker timeouts.
+    pub fn with_broker_response_timeouts(
+        self,
+        control_response_timeout: Duration,
+        telemetry_response_timeout: Duration,
+    ) -> Result<Self> {
+        self.with_operation_response_timeout(compose_operation_response_timeout(
+            control_response_timeout,
+            telemetry_response_timeout,
+        )?)
+    }
+
+    /// Set the bounded response envelope for `/v1/fs/*` operations.
+    pub fn set_operation_response_timeout(&mut self, timeout: Duration) -> Result<()> {
+        let minimum = Duration::from_millis(
+            HIVE_GATEWAY_BROKER_QUEUE_WAIT_LIMIT_MS
+                .saturating_mul(2)
+                .saturating_add(HIVE_GATEWAY_REST_RESPONSE_GRACE_MS),
+        );
+        if timeout < minimum {
+            return Err(anyhow!(
+                "gateway operation response timeout must be at least {}ms",
+                minimum.as_millis()
+            ));
+        }
+        let global_timeout = Self::operation_global_timeout(timeout)
+            .ok_or_else(|| anyhow!("gateway operation global timeout overflow"))?;
+        *self.operation_agent = Self::build_agent(timeout, global_timeout);
+        Ok(())
+    }
+
+    /// Return the configured `/v1/fs/*` response envelope.
+    pub fn operation_response_timeout(&self) -> Duration {
+        self.operation_agent
+            .config()
+            .timeouts()
+            .recv_response
+            .unwrap_or(DEFAULT_OPERATION_RESPONSE_TIMEOUT)
     }
 
     /// Configure a per-request auth token for mutating routes.
@@ -80,7 +155,7 @@ impl GatewayClient {
     pub fn list(&self, path: &str) -> Result<Vec<String>> {
         let path = urlencoding::encode(path);
         let url = format!("{}/v1/fs/ls?path={}", self.base_url, path);
-        let response = self.get(&url);
+        let response = self.get_operation(&url);
         let parsed = handle_response("LS", response)?;
         Ok(parsed.lines)
     }
@@ -92,7 +167,7 @@ impl GatewayClient {
             "{}/v1/fs/cat?path={}&max_bytes={}",
             self.base_url, path, max_bytes
         );
-        let response = self.get(&url);
+        let response = self.get_operation(&url);
         let parsed = handle_response("CAT", response)?;
         Ok(parsed.lines)
     }
@@ -118,7 +193,7 @@ impl GatewayClient {
             url.push_str("&lines=");
             url.push_str(&lines.to_string());
         }
-        let response = self.get(&url);
+        let response = self.get_operation(&url);
         let parsed = handle_response("TAIL", response)?;
         Ok(parsed.lines)
     }
@@ -136,8 +211,28 @@ impl GatewayClient {
     }
 
     fn get(&self, url: &str) -> Result<HttpResponse, ureq::Error> {
-        let request = self.agent.get(url);
-        if let Some(token) = self.request_auth_token.as_deref() {
+        Self::get_with_agent(
+            &self.metadata_agent,
+            self.request_auth_token.as_deref(),
+            url,
+        )
+    }
+
+    fn get_operation(&self, url: &str) -> Result<HttpResponse, ureq::Error> {
+        Self::get_with_agent(
+            &self.operation_agent,
+            self.request_auth_token.as_deref(),
+            url,
+        )
+    }
+
+    fn get_with_agent(
+        agent: &ureq::Agent,
+        request_auth_token: Option<&str>,
+        url: &str,
+    ) -> Result<HttpResponse, ureq::Error> {
+        let request = agent.get(url);
+        if let Some(token) = request_auth_token {
             request
                 .header("Authorization", format!("Bearer {token}"))
                 .header("x-cohesix-auth", token)
@@ -148,7 +243,7 @@ impl GatewayClient {
     }
 
     fn post_json<T: Serialize>(&self, url: &str, payload: &T) -> Result<HttpResponse, ureq::Error> {
-        let request = self.agent.post(url);
+        let request = self.operation_agent.post(url);
         if let Some(token) = self.request_auth_token.as_deref() {
             request
                 .header("Authorization", format!("Bearer {token}"))
@@ -157,6 +252,31 @@ impl GatewayClient {
         } else {
             request.send_json(payload)
         }
+    }
+
+    fn operation_global_timeout(response_timeout: Duration) -> Option<Duration> {
+        response_timeout
+            .checked_add(DEFAULT_IO_TIMEOUT)
+            .and_then(|timeout| timeout.checked_add(DEFAULT_IO_TIMEOUT))
+            .and_then(|timeout| timeout.checked_add(DEFAULT_IO_TIMEOUT))
+    }
+
+    fn build_agent(response_timeout: Duration, global_timeout: Duration) -> ureq::Agent {
+        // ureq 3.x carries send-phase deadlines forward while awaiting
+        // response headers, so request send, body send, and response receive
+        // share the composed broker bound. Resolve, connect, and body-read keep
+        // their short phase bounds; the global cap includes all three.
+        ureq::Agent::config_builder()
+            .timeout_global(Some(global_timeout))
+            .timeout_resolve(Some(DEFAULT_IO_TIMEOUT))
+            .timeout_connect(Some(DEFAULT_IO_TIMEOUT))
+            .timeout_send_request(Some(response_timeout))
+            .timeout_send_body(Some(response_timeout))
+            .timeout_recv_response(Some(response_timeout))
+            .timeout_recv_body(Some(DEFAULT_IO_TIMEOUT))
+            .http_status_as_error(false)
+            .build()
+            .into()
     }
 }
 
@@ -727,12 +847,117 @@ fn ensure_ok(verb: &str, response: GatewayResponse) -> Result<GatewayResponse> {
 
 #[cfg(test)]
 mod tests {
-    use super::{BoundsResponse, GatewayClient, GatewayStatusResponse};
+    use super::{
+        compose_operation_response_timeout, BoundsResponse, GatewayClient, GatewayStatusResponse,
+        DEFAULT_IO_TIMEOUT, DEFAULT_OPERATION_GLOBAL_TIMEOUT, DEFAULT_OPERATION_RESPONSE_TIMEOUT,
+    };
     use std::io::{Read, Write};
     use std::net::TcpListener;
     use std::sync::mpsc::{self, Receiver};
     use std::thread::{self, JoinHandle};
     use std::time::Duration;
+
+    #[test]
+    fn gateway_client_separates_metadata_and_operation_deadlines() {
+        let client = GatewayClient::new("http://127.0.0.1:1");
+        let metadata = client.metadata_agent.config().timeouts();
+        let operation = client.operation_agent.config().timeouts();
+
+        assert_eq!(metadata.global, Some(DEFAULT_IO_TIMEOUT));
+        assert_eq!(metadata.resolve, Some(DEFAULT_IO_TIMEOUT));
+        assert_eq!(metadata.connect, Some(DEFAULT_IO_TIMEOUT));
+        assert_eq!(metadata.send_request, Some(DEFAULT_IO_TIMEOUT));
+        assert_eq!(metadata.send_body, Some(DEFAULT_IO_TIMEOUT));
+        assert_eq!(metadata.recv_response, Some(DEFAULT_IO_TIMEOUT));
+        assert_eq!(metadata.recv_body, Some(DEFAULT_IO_TIMEOUT));
+
+        assert_eq!(operation.global, Some(DEFAULT_OPERATION_GLOBAL_TIMEOUT));
+        assert_eq!(operation.resolve, Some(DEFAULT_IO_TIMEOUT));
+        assert_eq!(operation.connect, Some(DEFAULT_IO_TIMEOUT));
+        assert_eq!(
+            operation.send_request,
+            Some(DEFAULT_OPERATION_RESPONSE_TIMEOUT)
+        );
+        assert_eq!(
+            operation.send_body,
+            Some(DEFAULT_OPERATION_RESPONSE_TIMEOUT)
+        );
+        assert_eq!(
+            operation.recv_response,
+            Some(DEFAULT_OPERATION_RESPONSE_TIMEOUT)
+        );
+        assert_eq!(operation.recv_body, Some(DEFAULT_IO_TIMEOUT));
+    }
+
+    #[test]
+    fn gateway_client_validates_and_applies_operation_deadline_override() {
+        let minimum = Duration::from_millis(
+            cohesix_net_constants::HIVE_GATEWAY_BROKER_QUEUE_WAIT_LIMIT_MS * 2
+                + cohesix_net_constants::HIVE_GATEWAY_REST_RESPONSE_GRACE_MS,
+        );
+        let err = GatewayClient::new("http://127.0.0.1:1")
+            .with_operation_response_timeout(minimum - Duration::from_millis(1))
+            .expect_err("queue plus delivery without a response budget must fail");
+        assert_eq!(
+            err.to_string(),
+            "gateway operation response timeout must be at least 15000ms"
+        );
+
+        let selected = Duration::from_millis(190_000);
+        let client = GatewayClient::new("http://127.0.0.1:1")
+            .with_operation_response_timeout(selected)
+            .expect("valid operation timeout");
+        let operation = client.operation_agent.config().timeouts();
+        assert_eq!(client.operation_response_timeout(), selected);
+        assert_eq!(
+            operation.global,
+            GatewayClient::operation_global_timeout(selected)
+        );
+        assert_eq!(operation.send_request, Some(selected));
+        assert_eq!(operation.send_body, Some(selected));
+        assert_eq!(operation.recv_response, Some(selected));
+        assert_eq!(operation.resolve, Some(DEFAULT_IO_TIMEOUT));
+        assert_eq!(operation.connect, Some(DEFAULT_IO_TIMEOUT));
+        assert_eq!(operation.recv_body, Some(DEFAULT_IO_TIMEOUT));
+
+        let err = GatewayClient::new("http://127.0.0.1:1")
+            .with_operation_response_timeout(Duration::MAX)
+            .expect_err("global timeout overflow must fail closed");
+        assert_eq!(err.to_string(), "gateway operation global timeout overflow");
+    }
+
+    #[test]
+    fn operation_deadline_composes_queue_larger_response_and_delivery_grace() {
+        assert_eq!(
+            DEFAULT_OPERATION_RESPONSE_TIMEOUT,
+            Duration::from_millis(130_000)
+        );
+        assert_eq!(
+            compose_operation_response_timeout(
+                Duration::from_millis(120_000),
+                Duration::from_millis(120_000),
+            )
+            .expect("canonical timeout composition"),
+            Duration::from_millis(130_000)
+        );
+        assert_eq!(
+            compose_operation_response_timeout(
+                Duration::from_millis(120_000),
+                Duration::from_millis(180_000),
+            )
+            .expect("telemetry override composition"),
+            Duration::from_millis(190_000)
+        );
+        assert!(compose_operation_response_timeout(
+            Duration::from_millis(4_999),
+            Duration::from_millis(120_000),
+        )
+        .is_err());
+        assert!(
+            compose_operation_response_timeout(Duration::MAX, Duration::from_millis(120_000),)
+                .is_err()
+        );
+    }
 
     fn serve_once(status: &str, response_body: &str) -> (String, Receiver<String>, JoinHandle<()>) {
         let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind loopback test server");

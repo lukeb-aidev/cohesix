@@ -7,6 +7,7 @@ from __future__ import annotations
 import hashlib
 import json
 import subprocess
+import tomllib
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -27,6 +28,42 @@ def _write(path: Path, value: dict[str, object]) -> bytes:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(raw)
     return raw
+
+
+def _claiming_qemu_context(root: Path) -> tuple[dict[str, object], dict[str, object]]:
+    qemu = root / "qemu-system-aarch64"
+    qemu.write_text(
+        "#!/bin/sh\n"
+        "if [ \"$1\" = \"--version\" ]; then "
+        "printf 'QEMU emulator version 10.1.0\\n'; exit 0; fi\n",
+        encoding="utf-8",
+    )
+    qemu.chmod(0o755)
+    raw = qemu.read_bytes()
+    return (
+        {
+            "host_system": "Darwin",
+            "binary": {
+                "path": str(qemu.resolve()),
+                "bytes": len(raw),
+                "sha256": hashlib.sha256(raw).hexdigest(),
+                "version": "QEMU emulator version 10.1.0",
+            },
+            "accelerator": "hvf",
+            "machine": "virt",
+            "virtualization": "off",
+            "machine_extra": "kernel-irqchip=off",
+            "cpu": "cortex-a57",
+            "timer_clock_hz": 24_000_000,
+            "smp": "4,cores=4,threads=1,sockets=1",
+            "net_backend": "virtio",
+        },
+        {
+            "eligible": True,
+            "tier": "qemu-integration",
+            "reason": "canonical production envelope",
+        },
+    )
 
 
 def _session(target: str) -> dict[str, str]:
@@ -213,13 +250,36 @@ def _generated_record(target: str) -> dict[str, object]:
         "temporal_authority": {
             "tasks": [
                 {
-                    "id": f"{role}-slot-0",
-                    "kind": "worker",
-                    "core": core,
-                    "budget_us": budget,
+                    "id": "root-control",
+                    "kind": "root-control",
+                    "execution": "active",
+                    "admitted": True,
+                    "critical_reserve": True,
+                    "budget_us": 5_500 if target == "qemu" else 2_750,
                     "period_us": 10_000,
-                }
-                for role, core, budget in role_config
+                    "max_refills": 2,
+                    "timeout_policy": "natural-postpone",
+                },
+                {
+                    "id": "console-network-service",
+                    "kind": "service",
+                    "execution": "active",
+                    "admitted": True,
+                    "budget_us": 3_000,
+                    "period_us": 10_000,
+                    "timeout_badge": 653_131_783,
+                    "timeout_policy": "natural-postpone",
+                },
+                *(
+                    {
+                        "id": f"{role}-slot-0",
+                        "kind": "worker",
+                        "core": core,
+                        "budget_us": budget,
+                        "period_us": 10_000,
+                    }
+                    for role, core, budget in role_config
+                ),
             ]
         },
         "worker_resource_admission": {
@@ -253,7 +313,12 @@ def _generated_record(target: str) -> dict[str, object]:
             },
         },
         "ninedoor_service": {},
-        "console_network_service": {},
+        "console_network_service": {
+            "budget_us": 3_000,
+            "period_us": 10_000,
+            "timeout_badge": 653_131_783,
+            "objects": {"timeout_fault_caps": 1},
+        },
     }
     return {
         "schema": evidence.GENERATED_INVENTORY_SCHEMA,
@@ -486,6 +551,7 @@ def _live_qemu_inputs(root_dir: Path) -> SimpleNamespace:
             }
         )
     launch_record_path = qemu_out / "cohesix-qemu-launch-artifacts.json"
+    qemu_context, qemu_claim = _claiming_qemu_context(root_dir)
     _write(
         launch_record_path,
         {
@@ -494,7 +560,10 @@ def _live_qemu_inputs(root_dir: Path) -> SimpleNamespace:
             "cargo_target": "aarch64-unknown-none",
             "root_task_features": "release-qemu,bootstrap-trace",
             "sel4_build_dir": str(sel4_build.resolve()),
+            "sel4_profile": "qemu_smp_production",
             "gic_version": "3",
+            "qemu": qemu_context,
+            "claim": qemu_claim,
             "artifacts": launch_rows,
         },
     )
@@ -563,7 +632,10 @@ def _live_qemu_inputs(root_dir: Path) -> SimpleNamespace:
         {"core": core, "capacity_us": 10_000, "reserve_us": 1_000}
         for core in range(4)
     ]
-    for index, task in enumerate(temporal["tasks"]):
+    worker_temporal_tasks = [
+        task for task in temporal["tasks"] if task.get("kind") == "worker"
+    ]
+    for index, task in enumerate(worker_temporal_tasks):
         task["admitted"] = True
         task["timeout_badge"] = 653_131_784 + index
     generated["topology_sha256"] = evidence._canonical_json_sha256(  # noqa: SLF001
@@ -585,11 +657,7 @@ def _live_qemu_inputs(root_dir: Path) -> SimpleNamespace:
             "executable_roles"
         ]
     }
-    worker_tasks = [
-        task
-        for task in temporal["tasks"]
-        if task.get("kind") == "worker"
-    ]
+    worker_tasks = worker_temporal_tasks
     fault_base = generated["topology"]["worker_resource_admission"]["handoff"][
         "worker_fault_badges"
     ]["base"]
@@ -801,18 +869,11 @@ def _live_qemu_inputs(root_dir: Path) -> SimpleNamespace:
                 ]
             )
         else:
-            if mode == "budget-exhaustion-timeout":
-                lines.append(
-                    "M26E_GDB_SERVICE_INJECTION service=console-network "
-                    f"phase=budget-exhaustion symbol={handler} "
-                    "action=redirect-timeout-spin result=continued"
-                )
-            else:
-                lines.append(
-                    f"M26E_GDB_SERVICE_INJECTION service={service} "
-                    f"phase=during-call symbol={handler} "
-                    "action=redirect-standard-fault result=continued"
-                )
+            lines.append(
+                f"M26E_GDB_SERVICE_INJECTION service={service} "
+                f"phase=during-call symbol={handler} "
+                "action=redirect-standard-fault result=continued"
+            )
         return "\n".join(lines) + "\n"
 
     critical_gdb_text = "\n".join(
@@ -855,9 +916,6 @@ def _live_qemu_inputs(root_dir: Path) -> SimpleNamespace:
         "[ninedoor-service] generation=1 terminal-revoke state=local\n"
         f"{ninedoor_teardown}\n",
         "[console-network] generation=1 terminal-fault class=Standard sequence=1\n"
-        + console_teardown.format(generation=1)
-        + "\n",
-        "[console-network] generation=1 terminal-fault class=Timeout sequence=1\n"
         + console_teardown.format(generation=1)
         + "\n",
     )
@@ -1128,13 +1186,17 @@ def _qemu_target_session_inputs(root_dir: Path) -> SimpleNamespace:
                 "sha256": hashlib.sha256(raw).hexdigest(),
             }
         )
+    qemu_context, qemu_claim = _claiming_qemu_context(repo)
     launch_record = {
         "schema": evidence.QEMU_LAUNCH_SCHEMA,
         "profile": "release",
         "cargo_target": "aarch64-unknown-none",
         "root_task_features": "release-qemu,bootstrap-trace",
         "sel4_build_dir": str(sel4_build.resolve()),
+        "sel4_profile": "qemu_smp_production",
         "gic_version": "3",
+        "qemu": qemu_context,
+        "claim": qemu_claim,
         "artifacts": launch_rows,
     }
     _write(qemu_out / "cohesix-qemu-launch-artifacts.json", launch_record)
@@ -1556,12 +1618,6 @@ def test_qemu_service_and_critical_gdb_runners_bind_exact_elfs(
                 f"service={service} phase=during-call symbol={handler} "
                 "action=redirect-standard-fault result=continued"
             ]
-        if mode == "budget-exhaustion-timeout":
-            rows = [
-                "M26E_GDB_SERVICE_INJECTION service=console-network "
-                f"phase=budget-exhaustion symbol={handler} "
-                "action=redirect-timeout-spin result=continued"
-            ]
         fake_gdb.write_text(
             "#!/bin/sh\nprintf '%s\\n' "
             + " ".join(repr(row) for row in rows)
@@ -1776,6 +1832,98 @@ def test_component_emitter_rejects_generated_and_observed_topology_drift(
             )
         )
     assert not observed_output.exists()
+
+
+def test_root_and_console_natural_postpone_are_source_and_generated_contracts() -> None:
+    assert evidence.QEMU_SERVICE_EVIDENCE_PLAN == (
+        ("ninedoor-service", "during-call-standard"),
+        ("ninedoor-service", "between-calls-revoke"),
+        ("console-network", "during-call-standard"),
+    )
+    for relative, root_budget, root_provenance in (
+        (
+            "configs/root_task.toml",
+            5_500,
+            "m26e-qemu-root-adjacent-refill-natural-postpone-candidate-v35",
+        ),
+        (
+            "configs/root_task_pi4_uboot_aarch64.toml",
+            2_750,
+            "m26e-pi4-root-adjacent-refill-natural-postpone-candidate-v24",
+        ),
+    ):
+        manifest = tomllib.loads((ROOT / relative).read_text(encoding="utf-8"))
+        root_matches = [
+            task
+            for task in manifest["temporal_authority"]["tasks"]
+            if task["id"] == "root-control"
+        ]
+        matches = [
+            task
+            for task in manifest["temporal_authority"]["tasks"]
+            if task["id"] == "console-network-service"
+        ]
+        assert len(root_matches) == 1
+        assert root_matches[0]["execution"] == "active"
+        assert root_matches[0]["timeout_policy"] == "natural-postpone"
+        assert root_matches[0]["admitted"] is True
+        assert root_matches[0]["budget_us"] == root_budget
+        assert root_matches[0]["period_us"] == 10_000
+        assert root_matches[0]["max_refills"] == 2
+        assert root_matches[0]["wcet_provenance"] == root_provenance
+        assert len(matches) == 1
+        assert matches[0]["execution"] == "active"
+        assert matches[0]["timeout_policy"] == "natural-postpone"
+        assert matches[0]["admitted"] is True
+
+    generated = _generated_record("qemu")
+    topology, _inventory_row = evidence._generated_inventory(  # noqa: SLF001
+        generated,
+        "qemu",
+        _session("qemu"),
+    )
+    root_task = next(
+        task
+        for task in topology["temporal_authority"]["tasks"]
+        if task["id"] == "root-control"
+    )
+    console_task = next(
+        task
+        for task in topology["temporal_authority"]["tasks"]
+        if task["id"] == "console-network-service"
+    )
+    assert root_task["timeout_policy"] == "natural-postpone"
+    assert (
+        topology["worker_resource_admission"]["fixed_objects"][
+            "timeout_fault_caps"
+        ]
+        == 7
+    )
+    assert console_task["timeout_policy"] == "natural-postpone"
+    assert topology["console_network_service"]["objects"]["timeout_fault_caps"] == 1
+
+    root_task["timeout_policy"] = "terminal"
+    generated["topology_sha256"] = evidence._canonical_json_sha256(  # noqa: SLF001
+        generated["topology"]
+    )
+    with pytest.raises(evidence.EvidenceError, match="natural-postpone contract"):
+        evidence._generated_inventory(  # noqa: SLF001
+            generated,
+            "qemu",
+            _session("qemu"),
+        )
+
+    root_task["timeout_policy"] = "natural-postpone"
+    console_task["timeout_policy"] = "terminal"
+    generated["topology_sha256"] = evidence._canonical_json_sha256(  # noqa: SLF001
+        generated["topology"]
+    )
+    with pytest.raises(evidence.EvidenceError, match="natural-postpone contract"):
+        evidence._generated_inventory(  # noqa: SLF001
+            generated,
+            "qemu",
+            _session("qemu"),
+        )
 
 
 def test_root_emitter_binds_component_topology_and_exact_inventories(

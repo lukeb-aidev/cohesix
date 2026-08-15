@@ -12,12 +12,16 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import platform
+import re
+import shutil
 import stat
+import subprocess
 import tempfile
 from typing import Any
 
 
-SCHEMA = "cohesix-qemu-launch-artifacts/v1"
+SCHEMA = "cohesix-qemu-launch-artifacts/v2"
 RECORD_NAME = "cohesix-qemu-launch-artifacts.json"
 ARTIFACTS = (
     ("elfloader", Path("staging/elfloader")),
@@ -26,6 +30,19 @@ ARTIFACTS = (
     ("initrd", Path("cohesix-system.cpio")),
 )
 SHA256_HEX_LEN = 64
+CANONICAL_SEL4_PROFILE = "qemu_smp_production"
+CANONICAL_MACHINE = "virt"
+CANONICAL_GIC_VERSION = "3"
+CANONICAL_VIRTUALIZATION = "off"
+CANONICAL_MACHINE_EXTRA = "kernel-irqchip=off"
+CANONICAL_CPU = "cortex-a57"
+CANONICAL_TIMER_CLOCK_HZ = 24_000_000
+CANONICAL_SMP = "4,cores=4,threads=1,sockets=1"
+CANONICAL_NET_BACKEND = "virtio"
+TIMER_HEADERS = (
+    Path("kernel/gen_headers/plat/platform_gen.h"),
+    Path("kernel/gen_headers/plat/machine/devices_gen.h"),
+)
 
 
 class LaunchArtifactError(ValueError):
@@ -64,6 +81,143 @@ def _require_regular_file(out_dir: Path, relative: Path) -> Path:
     return current
 
 
+def _resolve_executable(value: str) -> Path:
+    """Resolve one executable without accepting PATH or symlink drift."""
+
+    candidate = shutil.which(value) if os.sep not in value else value
+    if candidate is None:
+        raise LaunchArtifactError(f"QEMU binary is not on PATH: {value}")
+    try:
+        resolved = Path(candidate).resolve(strict=True)
+    except OSError as error:
+        raise LaunchArtifactError(f"QEMU binary is missing: {value}") from error
+    if not resolved.is_file() or not os.access(resolved, os.X_OK):
+        raise LaunchArtifactError(f"QEMU binary is not executable: {resolved}")
+    return resolved
+
+
+def _qemu_version(binary: Path) -> str:
+    try:
+        completed = subprocess.run(
+            [str(binary), "--version"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise LaunchArtifactError(
+            f"cannot execute QEMU binary {binary}: {error}"
+        ) from error
+    first_line = completed.stdout.splitlines()[:1]
+    if completed.returncode != 0 or not first_line or not first_line[0].strip():
+        raise LaunchArtifactError(f"cannot determine QEMU version from {binary}")
+    return first_line[0].strip()
+
+
+def _qemu_identity(value: str) -> dict[str, Any]:
+    binary = _resolve_executable(value)
+    return {
+        "path": str(binary),
+        "bytes": binary.stat().st_size,
+        "sha256": _sha256(binary),
+        "version": _qemu_version(binary),
+    }
+
+
+def _require_qemu_accelerator(value: str, accelerator: str) -> None:
+    binary = _resolve_executable(value)
+    try:
+        completed = subprocess.run(
+            [str(binary), "-accel", "help"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise LaunchArtifactError(
+            f"cannot inspect QEMU accelerators from {binary}: {error}"
+        ) from error
+    advertised = f"{completed.stdout}\n{completed.stderr}".split()
+    if accelerator not in advertised:
+        raise LaunchArtifactError(
+            f"QEMU accelerator {accelerator!r} is not advertised by {binary}"
+        )
+
+
+def _timer_clock_hz(sel4_build_dir: Path) -> int:
+    timer_pattern = re.compile(
+        r"^\s*#define\s+TIMER_CLOCK_HZ\s+"
+        r"(?:ULL_CONST\(\s*)?([0-9]+)(?:\s*\))?\s*$",
+        flags=re.MULTILINE,
+    )
+    for relative in TIMER_HEADERS:
+        header = sel4_build_dir / relative
+        if not header.is_file():
+            continue
+        try:
+            matches = timer_pattern.findall(header.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError) as error:
+            raise LaunchArtifactError(
+                f"cannot read selected seL4 timer header {header}: {error}"
+            ) from error
+        if len(matches) != 1:
+            raise LaunchArtifactError(
+                "selected seL4 timer header must define TIMER_CLOCK_HZ exactly once"
+            )
+        return int(matches[0])
+    raise LaunchArtifactError(
+        f"cannot find selected seL4 timer header under {sel4_build_dir}"
+    )
+
+
+def _claim(
+    *,
+    host_system: str,
+    accelerator: str,
+    sel4_profile: str,
+    timer_clock_hz: int,
+    gic_version: str,
+    virtualization: str,
+    machine_extra: str,
+    cpu: str,
+    smp: str,
+    net_backend: str,
+) -> dict[str, Any]:
+    reasons = []
+    if host_system == "Darwin" and accelerator != "hvf":
+        reasons.append("Darwin claiming runs require HVF")
+    elif host_system == "Linux" and accelerator != "kvm":
+        reasons.append("Linux claiming runs require KVM")
+    elif host_system not in {"Darwin", "Linux"}:
+        reasons.append(f"unsupported claiming host {host_system}")
+    if accelerator == "tcg":
+        reasons.append("TCG is diagnostic-only")
+    if sel4_profile != CANONICAL_SEL4_PROFILE:
+        reasons.append("selected seL4 profile is not qemu_smp_production")
+    if gic_version != CANONICAL_GIC_VERSION:
+        reasons.append("machine does not use GICv3")
+    if virtualization != CANONICAL_VIRTUALIZATION:
+        reasons.append("machine virtualization is not off")
+    if machine_extra != CANONICAL_MACHINE_EXTRA:
+        reasons.append("machine does not use exact kernel-irqchip=off envelope")
+    if cpu != CANONICAL_CPU:
+        reasons.append("CPU is not cortex-a57")
+    if timer_clock_hz != CANONICAL_TIMER_CLOCK_HZ:
+        reasons.append("selected seL4 timer is not 24 MHz")
+    if smp != CANONICAL_SMP:
+        reasons.append("QEMU SMP topology is not the four-core production envelope")
+    if net_backend != CANONICAL_NET_BACKEND:
+        reasons.append("QEMU network backend is not virtio")
+    eligible = not reasons
+    return {
+        "eligible": eligible,
+        "tier": "qemu-integration" if eligible else "qemu-diagnostic",
+        "reason": "canonical production envelope" if eligible else "; ".join(reasons),
+    }
+
+
 def _context(
     *,
     out_dir: Path,
@@ -72,6 +226,14 @@ def _context(
     cargo_target: str,
     root_task_features: str,
     gic_version: str,
+    sel4_profile: str,
+    qemu: str,
+    accelerator: str,
+    virtualization: str,
+    machine_extra: str,
+    cpu: str,
+    smp: str,
+    net_backend: str,
 ) -> dict[str, Any]:
     if not out_dir.is_absolute() or out_dir != out_dir.resolve(strict=True):
         raise LaunchArtifactError("output directory must be an existing resolved path")
@@ -83,15 +245,53 @@ def _context(
         raise LaunchArtifactError("Cargo profile must not be empty")
     if not cargo_target:
         raise LaunchArtifactError("Cargo target must not be empty")
-    if gic_version != "3":
-        raise LaunchArtifactError("immutable operational QEMU launches require GICv3")
+    if not sel4_profile:
+        raise LaunchArtifactError("selected seL4 profile must not be empty")
+    if accelerator not in {"hvf", "kvm", "tcg"}:
+        raise LaunchArtifactError(f"unsupported QEMU accelerator: {accelerator}")
+    if virtualization not in {"on", "off"}:
+        raise LaunchArtifactError(
+            f"unsupported QEMU virtualization setting: {virtualization}"
+        )
+    if not smp:
+        raise LaunchArtifactError("QEMU SMP topology must not be empty")
+    if net_backend not in {"virtio", "rtl8139"}:
+        raise LaunchArtifactError(f"unsupported QEMU network backend: {net_backend}")
+    _require_qemu_accelerator(qemu, accelerator)
+    timer_clock_hz = _timer_clock_hz(sel4_build_dir)
+    host_system = platform.system()
     return {
         "schema": SCHEMA,
         "profile": profile,
         "cargo_target": cargo_target,
         "root_task_features": root_task_features,
         "sel4_build_dir": str(sel4_build_dir.resolve(strict=True)),
+        "sel4_profile": sel4_profile,
         "gic_version": gic_version,
+        "qemu": {
+            "host_system": host_system,
+            "binary": _qemu_identity(qemu),
+            "accelerator": accelerator,
+            "machine": CANONICAL_MACHINE,
+            "virtualization": virtualization,
+            "machine_extra": machine_extra,
+            "cpu": cpu,
+            "timer_clock_hz": timer_clock_hz,
+            "smp": smp,
+            "net_backend": net_backend,
+        },
+        "claim": _claim(
+            host_system=host_system,
+            accelerator=accelerator,
+            sel4_profile=sel4_profile,
+            timer_clock_hz=timer_clock_hz,
+            gic_version=gic_version,
+            virtualization=virtualization,
+            machine_extra=machine_extra,
+            cpu=cpu,
+            smp=smp,
+            net_backend=net_backend,
+        ),
     }
 
 
@@ -118,6 +318,14 @@ def write_record(
     cargo_target: str,
     root_task_features: str,
     gic_version: str,
+    sel4_profile: str,
+    qemu: str,
+    accelerator: str,
+    virtualization: str,
+    machine_extra: str,
+    cpu: str,
+    smp: str,
+    net_backend: str,
 ) -> Path:
     """Atomically write the immutable QEMU launch-artifact record."""
 
@@ -128,6 +336,14 @@ def write_record(
         cargo_target=cargo_target,
         root_task_features=root_task_features,
         gic_version=gic_version,
+        sel4_profile=sel4_profile,
+        qemu=qemu,
+        accelerator=accelerator,
+        virtualization=virtualization,
+        machine_extra=machine_extra,
+        cpu=cpu,
+        smp=smp,
+        net_backend=net_backend,
     )
     document["artifacts"] = _artifact_rows(out_dir)
     record = out_dir / RECORD_NAME
@@ -157,6 +373,14 @@ def verify_record(
     cargo_target: str,
     root_task_features: str,
     gic_version: str,
+    sel4_profile: str,
+    qemu: str,
+    accelerator: str,
+    virtualization: str,
+    machine_extra: str,
+    cpu: str,
+    smp: str,
+    net_backend: str,
 ) -> Path:
     """Verify context and byte identity for the exact QEMU launch set."""
 
@@ -167,6 +391,14 @@ def verify_record(
         cargo_target=cargo_target,
         root_task_features=root_task_features,
         gic_version=gic_version,
+        sel4_profile=sel4_profile,
+        qemu=qemu,
+        accelerator=accelerator,
+        virtualization=virtualization,
+        machine_extra=machine_extra,
+        cpu=cpu,
+        smp=smp,
+        net_backend=net_backend,
     )
     record = _require_regular_file(out_dir, Path(RECORD_NAME))
     try:
@@ -222,6 +454,14 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--cargo-target", required=True)
     parser.add_argument("--root-task-features", default="")
     parser.add_argument("--gic-version", required=True)
+    parser.add_argument("--sel4-profile", required=True)
+    parser.add_argument("--qemu", required=True)
+    parser.add_argument("--accelerator", choices=("hvf", "kvm", "tcg"), required=True)
+    parser.add_argument("--virtualization", choices=("on", "off"), required=True)
+    parser.add_argument("--machine-extra", required=True)
+    parser.add_argument("--cpu", required=True)
+    parser.add_argument("--smp", required=True)
+    parser.add_argument("--net-backend", choices=("virtio", "rtl8139"), required=True)
     return parser
 
 
@@ -238,6 +478,14 @@ def main() -> int:
             cargo_target=args.cargo_target,
             root_task_features=args.root_task_features,
             gic_version=args.gic_version,
+            sel4_profile=args.sel4_profile,
+            qemu=args.qemu,
+            accelerator=args.accelerator,
+            virtualization=args.virtualization,
+            machine_extra=args.machine_extra,
+            cpu=args.cpu,
+            smp=args.smp,
+            net_backend=args.net_backend,
         )
     except LaunchArtifactError as error:
         raise SystemExit(f"qemu-launch-artifacts: error: {error}") from error

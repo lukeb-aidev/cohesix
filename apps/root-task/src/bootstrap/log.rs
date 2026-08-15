@@ -328,7 +328,9 @@ fn maybe_enter_post_commit_transports() {
     }
     EP_ATTACH_WAIT_LOGGED.store(false, Ordering::Release);
     enter_mirrored_transport();
-    try_enter_ep_only();
+    // Bridge attachment runs inside the bounded operator command turn. Keep
+    // that transition to the non-blocking UART+EP mirror; the optional EP-only
+    // ping/ack probe may run only from a later explicit promotion request.
 }
 
 fn record_drop() {
@@ -1027,6 +1029,68 @@ mod tests {
         POST_COMMIT_IPC_UNLOCKED.store(false, Ordering::Release);
         set_no_bridge_mode_inner(false);
     }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn bridge_attach_does_not_run_ep_only_self_test() {
+        let _guard = LOGGER_STATE_TEST_LOCK.lock();
+
+        init_logger_bootstrap_only_inner();
+        set_no_bridge_mode_inner(false);
+        POST_COMMIT_IPC_UNLOCKED.store(true, Ordering::Release);
+        sel4::set_ep(0x1234);
+        sel4::set_ep_validated(true);
+        sel4::unlock_ipc_send();
+
+        notify_bridge_created_inner();
+        switch_logger_to_userland_inner().expect("switch request should succeed");
+        allow_ep_only_transport_inner();
+        assert!(EP_ONLY_PERMITTED.load(Ordering::Acquire));
+
+        let ping_token = PING_TOKEN.load(Ordering::Acquire);
+        notify_bridge_attached_inner();
+
+        assert!(matches!(LOGGER.transport(), LogTransport::UartMirroredEp));
+        assert_eq!(PING_TOKEN.load(Ordering::Acquire), ping_token);
+
+        notify_bridge_detached_inner();
+        sel4::clear_ep();
+        sel4::lock_ipc_send();
+        POST_COMMIT_IPC_UNLOCKED.store(false, Ordering::Release);
+        set_no_bridge_mode_inner(false);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn explicit_post_attach_request_can_promote_ep_only() {
+        let _guard = LOGGER_STATE_TEST_LOCK.lock();
+
+        init_logger_bootstrap_only_inner();
+        set_no_bridge_mode_inner(false);
+        POST_COMMIT_IPC_UNLOCKED.store(true, Ordering::Release);
+        sel4::set_ep(0x1234);
+        sel4::set_ep_validated(true);
+        sel4::unlock_ipc_send();
+
+        notify_bridge_created_inner();
+        switch_logger_to_userland_inner().expect("switch request should succeed");
+        notify_bridge_attached_inner();
+        assert!(matches!(LOGGER.transport(), LogTransport::UartMirroredEp));
+
+        let ping_token = PING_TOKEN.load(Ordering::Acquire).wrapping_add(1);
+        PING_ACK.store(ping_token, Ordering::Release);
+        allow_ep_only_transport_inner();
+
+        assert!(matches!(LOGGER.transport(), LogTransport::EpOnly));
+        assert_eq!(PING_TOKEN.load(Ordering::Acquire), ping_token);
+
+        notify_bridge_detached_inner();
+        PING_ACK.store(0, Ordering::Release);
+        sel4::clear_ep();
+        sel4::lock_ipc_send();
+        POST_COMMIT_IPC_UNLOCKED.store(false, Ordering::Release);
+        set_no_bridge_mode_inner(false);
+    }
 }
 
 fn run_self_test() -> bool {
@@ -1224,7 +1288,10 @@ fn notify_bridge_detached_inner() {
     }
 }
 
-/// Allow the logger transport to switch to EP-only once userland is stable.
+/// Request an EP-only promotion once userland is stable and already mirrored.
+///
+/// A request made before bridge attachment records permission without running
+/// the ping/ack self-test in the later attachment command turn.
 pub fn allow_ep_only_transport() {
     with_logger_state_lock(allow_ep_only_transport_inner);
 }

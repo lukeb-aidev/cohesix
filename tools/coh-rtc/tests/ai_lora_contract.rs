@@ -93,14 +93,68 @@ fn schema_1_10_is_rejected_after_operator_serial_contract_change() {
     let manifest_path = temp_dir.path().join("schema-1.10.toml");
     let manifest = fs::read_to_string(repo_path("configs/root_task.toml"))
         .expect("read default manifest")
-        .replacen("schema = \"1.11\"", "schema = \"1.10\"", 1);
+        .replacen("schema = \"1.14\"", "schema = \"1.10\"", 1);
     fs::write(&manifest_path, manifest).expect("write legacy-schema manifest");
 
     let options = options_for(manifest_path, &temp_dir.path().join("legacy"));
     let error = compile(&options).expect_err("schema 1.10 must be rejected");
     let message = format!("{error:#}");
     assert!(
-        message.contains("unsupported root_task.schema 1.10 (expected 1.11)"),
+        message.contains("unsupported root_task.schema 1.10 (expected 1.14)"),
+        "unexpected rejection: {message}"
+    );
+}
+
+#[test]
+fn schema_1_11_is_rejected_after_publication_ack_contract_change() {
+    let temp_dir = TempDir::new().expect("create tempdir");
+    let manifest_path = temp_dir.path().join("schema-1.11.toml");
+    let manifest = fs::read_to_string(repo_path("configs/root_task.toml"))
+        .expect("read default manifest")
+        .replacen("schema = \"1.14\"", "schema = \"1.11\"", 1);
+    fs::write(&manifest_path, manifest).expect("write legacy-schema manifest");
+
+    let options = options_for(manifest_path, &temp_dir.path().join("legacy-ack"));
+    let error = compile(&options).expect_err("schema 1.11 must be rejected");
+    let message = format!("{error:#}");
+    assert!(
+        message.contains("unsupported root_task.schema 1.11 (expected 1.14)"),
+        "unexpected rejection: {message}"
+    );
+}
+
+#[test]
+fn schema_1_12_is_rejected_after_send_batch_contract_change() {
+    let temp_dir = TempDir::new().expect("create tempdir");
+    let manifest_path = temp_dir.path().join("schema-1.12.toml");
+    let manifest = fs::read_to_string(repo_path("configs/root_task.toml"))
+        .expect("read default manifest")
+        .replacen("schema = \"1.14\"", "schema = \"1.12\"", 1);
+    fs::write(&manifest_path, manifest).expect("write legacy-schema manifest");
+
+    let options = options_for(manifest_path, &temp_dir.path().join("legacy-batch"));
+    let error = compile(&options).expect_err("schema 1.12 must be rejected");
+    let message = format!("{error:#}");
+    assert!(
+        message.contains("unsupported root_task.schema 1.12 (expected 1.14)"),
+        "unexpected rejection: {message}"
+    );
+}
+
+#[test]
+fn schema_1_13_is_rejected_after_natural_postpone_contract_change() {
+    let temp_dir = TempDir::new().expect("create tempdir");
+    let manifest_path = temp_dir.path().join("schema-1.13.toml");
+    let manifest = fs::read_to_string(repo_path("configs/root_task.toml"))
+        .expect("read default manifest")
+        .replacen("schema = \"1.14\"", "schema = \"1.13\"", 1);
+    fs::write(&manifest_path, manifest).expect("write legacy-schema manifest");
+
+    let options = options_for(manifest_path, &temp_dir.path().join("legacy-timeout"));
+    let error = compile(&options).expect_err("schema 1.13 must be rejected");
+    let message = format!("{error:#}");
+    assert!(
+        message.contains("unsupported root_task.schema 1.13 (expected 1.14)"),
         "unexpected rejection: {message}"
     );
 }
@@ -127,11 +181,104 @@ fn checked_in_profiles_compile_without_radio_sidecar_output() {
 
         let resolved: Value = serde_json::from_str(&resolved)
             .unwrap_or_else(|error| panic!("parse resolved manifest for {profile}: {error}"));
+        assert_eq!(resolved["root_task"]["schema"], "1.14", "{profile}");
+        assert_eq!(
+            resolved["console_network_service"]["abi_version"], 3,
+            "{profile}"
+        );
         let worker_lora = resolved["worker_runtime"]["roles"]
             .as_array()
             .and_then(|roles| roles.iter().find(|role| role["role"] == "worker-lora"))
             .unwrap_or_else(|| panic!("worker-lora role missing from {profile}"));
         assert_eq!(worker_lora["ticket_scope"], "/worker", "{profile}");
         assert_eq!(worker_lora["lease_path_template"], "", "{profile}");
+
+        if matches!(
+            *profile,
+            "configs/root_task.toml" | "configs/root_task_pi4_uboot_aarch64.toml"
+        ) {
+            let tasks = resolved["temporal_authority"]["tasks"]
+                .as_array()
+                .unwrap_or_else(|| panic!("temporal tasks missing from {profile}"));
+            let root = tasks
+                .iter()
+                .find(|task| task["id"] == "root-control")
+                .unwrap_or_else(|| panic!("root-control missing from {profile}"));
+            let child = tasks
+                .iter()
+                .find(|task| task["id"] == "console-network-service")
+                .unwrap_or_else(|| panic!("console-network-service missing from {profile}"));
+            let (expected_root, expected_budget, expected_timer_clock_hz) =
+                if *profile == "configs/root_task.toml" {
+                    (
+                        "m26e-qemu-root-adjacent-refill-natural-postpone-candidate-v35",
+                        5_500,
+                        24_000_000,
+                    )
+                } else {
+                    (
+                        "m26e-pi4-root-adjacent-refill-natural-postpone-candidate-v24",
+                        2_750,
+                        54_000_000,
+                    )
+                };
+            assert_eq!(root["wcet_provenance"], expected_root, "{profile}");
+            assert_eq!(root["timeout_policy"], "natural-postpone", "{profile}");
+            assert_eq!(root["budget_us"], expected_budget, "{profile}");
+            assert_eq!(root["period_us"], 10_000, "{profile}");
+            assert_eq!(root["max_refills"], 2, "{profile}");
+            assert_eq!(
+                resolved["console_network_service"]["timer_clock_hz"], expected_timer_clock_hz,
+                "{profile}"
+            );
+            assert_eq!(
+                child["wcet_provenance"],
+                "m26e-qemu-console-received-progress-retention-candidate-v18",
+                "{profile}"
+            );
+            assert_eq!(child["timeout_policy"], "natural-postpone", "{profile}");
+            assert_eq!(child["wcet_us"], 3_000, "{profile}");
+        }
     }
+}
+
+#[test]
+fn regression_profile_preserves_selected_m26e_operational_topology() {
+    let temp_dir = TempDir::new().expect("create tempdir");
+    let mut resolved_profiles = Vec::new();
+
+    for (label, manifest) in [
+        ("base", "configs/root_task.toml"),
+        ("regression", "configs/root_task_regression.toml"),
+    ] {
+        let work_root = temp_dir.path().join(label);
+        let options = options_for(repo_path(manifest), &work_root);
+        compile(&options).unwrap_or_else(|error| panic!("{manifest} must compile: {error:#}"));
+        let resolved = fs::read_to_string(&options.manifest_out)
+            .unwrap_or_else(|error| panic!("read resolved manifest for {manifest}: {error}"));
+        resolved_profiles.push(
+            serde_json::from_str::<Value>(&resolved)
+                .unwrap_or_else(|error| panic!("parse resolved manifest for {manifest}: {error}")),
+        );
+    }
+
+    let base = &resolved_profiles[0];
+    let regression = &resolved_profiles[1];
+    for section in [
+        "root_task",
+        "worker_runtime",
+        "temporal_authority",
+        "ninedoor_service",
+        "console_network_service",
+        "worker_resource_admission",
+    ] {
+        assert_eq!(
+            regression[section], base[section],
+            "regression manifest must preserve selected M26e operational section {section}"
+        );
+    }
+    assert_eq!(
+        regression["console_network_service"]["timer_clock_hz"],
+        24_000_000
+    );
 }

@@ -28,6 +28,7 @@ shell_scripts=(
   scripts/ci/test_plan_stage_04_rest_multiplexer.sh
   scripts/ci/test_plan_stage_05_due_diligence.sh
   scripts/ci/test_plan_target_canary.sh
+  scripts/ci/test_plan_target_root_check.sh
   scripts/cohsh/REST_regression_batch.sh
   scripts/cohsh/run_regression_batch.sh
 )

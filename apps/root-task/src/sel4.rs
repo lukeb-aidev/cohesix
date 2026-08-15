@@ -1115,10 +1115,9 @@ static BOOTSTRAP_SEND_INSTRUMENT_COUNT: AtomicUsize = AtomicUsize::new(0);
 
 /// Close the bounded UART IPC trace before temporal child duties are resumed.
 ///
-/// The readiness trap remains active for every syscall. Only its first-three
-/// diagnostic UART writes are disabled, because charging those synchronous
-/// boot breadcrumbs to a restricted child's sub-millisecond SC would violate
-/// the generated steady-state budget boundary.
+/// Legal all-ready IPC bypasses bootstrap diagnostics entirely. This explicit
+/// boundary also prevents a later readiness regression from emitting the
+/// first-three synchronous breadcrumbs on a restricted scheduling context.
 #[cfg(feature = "kernel")]
 pub fn complete_bootstrap_ipc_trace() {
     BOOTSTRAP_SEND_INSTRUMENT_COUNT.store(3, Ordering::Release);
@@ -1143,11 +1142,46 @@ pub enum IpcSyscallKind {
 }
 
 #[cfg(feature = "kernel")]
+#[inline(always)]
 fn ipc_bootstrap_trap(kind: IpcSyscallKind, dest: seL4_CPtr, location: &Location) -> bool {
     let ready = ep_ready();
     let validated = ep_validated();
     let unlocked = ipc_send_unlocked();
     let post_commit = boot_log::post_commit_ipc_unlocked();
+
+    // Steady-state IPC must not contend on bootstrap diagnostics. In
+    // particular, every restricted MCS duty enters through these wrappers;
+    // sharing the trace counter and BootTracer lock after readiness can spend
+    // a duty's complete refill before its blocking syscall. Keep the four
+    // readiness guards live on every call and isolate all diagnostic work on
+    // the pre-readiness path.
+    if ready && validated && unlocked && post_commit {
+        return false;
+    }
+
+    ipc_bootstrap_trap_slow(
+        kind,
+        dest,
+        location,
+        ready,
+        validated,
+        unlocked,
+        post_commit,
+    )
+}
+
+#[cfg(feature = "kernel")]
+#[cold]
+#[inline(never)]
+fn ipc_bootstrap_trap_slow(
+    kind: IpcSyscallKind,
+    dest: seL4_CPtr,
+    location: &Location,
+    ready: bool,
+    validated: bool,
+    unlocked: bool,
+    post_commit: bool,
+) -> bool {
     let snapshot = crate::bootstrap::boot_tracer().snapshot();
 
     let trace_count = BOOTSTRAP_SEND_INSTRUMENT_COUNT.fetch_add(1, Ordering::Relaxed);
@@ -1166,10 +1200,6 @@ fn ipc_bootstrap_trap(kind: IpcSyscallKind, dest: seL4_CPtr, location: &Location
             location.line(),
         );
         emit_illegal_send_line(trace_line.as_str());
-    }
-
-    if ready && validated && unlocked && post_commit {
-        return false;
     }
 
     let mut info_line = HeaplessString::<IPC_TRAP_LINE_CAP>::new();

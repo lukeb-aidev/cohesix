@@ -91,7 +91,7 @@ TARGET_SESSION_KEYS = {
     "worker_image_manifest_sha256",
     "worker_abi_sha256",
 }
-QEMU_LAUNCH_SCHEMA = "cohesix-qemu-launch-artifacts/v1"
+QEMU_LAUNCH_SCHEMA = "cohesix-qemu-launch-artifacts/v2"
 QEMU_AUTH_OBSERVATION_SCHEMA = "cohesix-target-observation/v1"
 QEMU_AUTH_OBSERVATION_PROFILE = "qemu_smp_production / configs/root_task.toml"
 QEMU_AUTH_UART_MARKER = "[cohsh-net][auth] auth OK, session established"
@@ -213,7 +213,6 @@ QEMU_SERVICE_SYMBOLS = {
     "console-network": (
         "cohesix_console_network_qemu_evidence_control_handler",
         "cohesix_console_network_qemu_evidence_standard_fault",
-        "cohesix_console_network_qemu_evidence_timeout_spin",
     ),
 }
 QEMU_NINEDOOR_ROOT_SYMBOLS = (
@@ -228,14 +227,12 @@ QEMU_SERVICE_MODES = {
     ),
     "console-network": (
         "during-call-standard",
-        "budget-exhaustion-timeout",
     ),
 }
 QEMU_SERVICE_EVIDENCE_PLAN = (
     ("ninedoor-service", "during-call-standard"),
     ("ninedoor-service", "between-calls-revoke"),
     ("console-network", "during-call-standard"),
-    ("console-network", "budget-exhaustion-timeout"),
 )
 QEMU_CRITICAL_SYMBOLS = (
     "cohesix_root_fault_qemu_evidence_turn",
@@ -1152,6 +1149,56 @@ def _generated_inventory(
     topology_sha256 = _hash(value["topology_sha256"], "generated topology")
     if topology_sha256 != _canonical_json_sha256(topology):
         raise EvidenceError("generated topology digest mismatch")
+    temporal = topology.get("temporal_authority")
+    tasks = temporal.get("tasks") if isinstance(temporal, dict) else None
+    tasks = _bounded_list(tasks, "generated temporal tasks")
+    root_tasks = [
+        task
+        for task in tasks
+        if isinstance(task, dict) and task.get("id") == "root-control"
+    ]
+    console_tasks = [
+        task
+        for task in tasks
+        if isinstance(task, dict) and task.get("id") == "console-network-service"
+    ]
+    console = topology.get("console_network_service")
+    admission = topology.get("worker_resource_admission")
+    if (
+        len(root_tasks) != 1
+        or len(console_tasks) != 1
+        or not isinstance(console, dict)
+        or not isinstance(admission, dict)
+    ):
+        raise EvidenceError(
+            "generated topology lacks the root and console natural-postpone contracts"
+        )
+    root_task = root_tasks[0]
+    console_task = console_tasks[0]
+    objects = console.get("objects")
+    fixed_objects = admission.get("fixed_objects")
+    if (
+        root_task.get("kind") != "root-control"
+        or root_task.get("execution") != "active"
+        or root_task.get("admitted") is not True
+        or root_task.get("critical_reserve") is not True
+        or root_task.get("timeout_policy") != "natural-postpone"
+        or not isinstance(fixed_objects, dict)
+        or not isinstance(fixed_objects.get("timeout_fault_caps"), int)
+        or fixed_objects["timeout_fault_caps"] < 1
+        or console_task.get("kind") != "service"
+        or console_task.get("execution") != "active"
+        or console_task.get("admitted") is not True
+        or console_task.get("timeout_policy") != "natural-postpone"
+        or not isinstance(objects, dict)
+        or objects.get("timeout_fault_caps") != 1
+        or console_task.get("timeout_badge") != console.get("timeout_badge")
+        or console_task.get("budget_us") != console.get("budget_us")
+        or console_task.get("period_us") != console.get("period_us")
+    ):
+        raise EvidenceError(
+            "generated root or console service differs from the natural-postpone contract"
+        )
     inventory = _inventory(value["inventory"], "generated inventory")
     if inventory != _maximum_inventory(topology):
         raise EvidenceError("generated inventory differs from compiler topology")
@@ -1739,7 +1786,10 @@ def _validate_qemu_launch_artifacts(
             "cargo_target",
             "root_task_features",
             "sel4_build_dir",
+            "sel4_profile",
             "gic_version",
+            "qemu",
+            "claim",
             "artifacts",
         },
         context="QEMU launch record",
@@ -1749,6 +1799,7 @@ def _validate_qemu_launch_artifacts(
         or record["profile"] != "release"
         or record["cargo_target"] != "aarch64-unknown-none"
         or record["root_task_features"] != "release-qemu,bootstrap-trace"
+        or record["sel4_profile"] != "qemu_smp_production"
         or record["gic_version"] != "3"
     ):
         raise EvidenceError("QEMU launch record is not the exact pressure profile")
@@ -1758,6 +1809,88 @@ def _validate_qemu_launch_artifacts(
     build_dir = _resolved_directory(Path(build_dir_raw), "selected seL4 build directory")
     if str(build_dir) != build_dir_raw:
         raise EvidenceError("QEMU launch record aliases its seL4 build directory")
+
+    qemu = record["qemu"]
+    if not isinstance(qemu, dict):
+        raise EvidenceError("QEMU launch context must be an object")
+    _exact_keys(
+        qemu,
+        {
+            "host_system",
+            "binary",
+            "accelerator",
+            "machine",
+            "virtualization",
+            "machine_extra",
+            "cpu",
+            "timer_clock_hz",
+            "smp",
+            "net_backend",
+        },
+        context="QEMU launch context",
+    )
+    expected_accelerator = {"Darwin": "hvf", "Linux": "kvm"}.get(
+        qemu["host_system"]
+    )
+    if (
+        expected_accelerator is None
+        or qemu["accelerator"] != expected_accelerator
+        or qemu["machine"] != "virt"
+        or qemu["virtualization"] != "off"
+        or qemu["machine_extra"] != "kernel-irqchip=off"
+        or qemu["cpu"] != "cortex-a57"
+        or qemu["timer_clock_hz"] != 24_000_000
+        or qemu["smp"] != "4,cores=4,threads=1,sockets=1"
+        or qemu["net_backend"] != "virtio"
+    ):
+        raise EvidenceError("QEMU launch context is outside the claiming envelope")
+
+    binary = qemu["binary"]
+    if not isinstance(binary, dict):
+        raise EvidenceError("QEMU binary identity must be an object")
+    _exact_keys(
+        binary,
+        {"path", "bytes", "sha256", "version"},
+        context="QEMU binary identity",
+    )
+    binary_path_raw = binary["path"]
+    if not isinstance(binary_path_raw, str) or not Path(binary_path_raw).is_absolute():
+        raise EvidenceError("QEMU binary identity has an invalid path")
+    qemu_raw = _read_frozen_artifact(Path(binary_path_raw), "QEMU binary")
+    if binary["bytes"] != len(qemu_raw) or binary["sha256"] != _sha256(qemu_raw):
+        raise EvidenceError("QEMU binary identity differs from the launch record")
+    try:
+        version = subprocess.run(
+            [binary_path_raw, "--version"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise EvidenceError(f"cannot verify QEMU binary version: {exc}") from exc
+    version_lines = version.stdout.splitlines()[:1]
+    if (
+        version.returncode != 0
+        or not version_lines
+        or version_lines[0].strip() != binary["version"]
+    ):
+        raise EvidenceError("QEMU binary version differs from the launch record")
+
+    claim = record["claim"]
+    if not isinstance(claim, dict):
+        raise EvidenceError("QEMU launch claim must be an object")
+    _exact_keys(
+        claim,
+        {"eligible", "tier", "reason"},
+        context="QEMU launch claim",
+    )
+    if claim != {
+        "eligible": True,
+        "tier": "qemu-integration",
+        "reason": "canonical production envelope",
+    }:
+        raise EvidenceError("QEMU pressure evidence requires a claim-eligible launch")
 
     rows = record["artifacts"]
     if not isinstance(rows, list) or len(rows) != len(QEMU_LAUNCH_ARTIFACTS):
@@ -2661,7 +2794,7 @@ def _validate_service_gdb_markers(
     root_raw: bytes,
 ) -> None:
     if len(texts) != len(QEMU_SERVICE_EVIDENCE_PLAN):
-        raise EvidenceError("preflight requires the exact four service GDB transcripts")
+        raise EvidenceError("preflight requires the exact three service GDB transcripts")
     observed_plan: list[tuple[str, str]] = []
     for text, expected_plan in zip(
         texts, QEMU_SERVICE_EVIDENCE_PLAN, strict=True
@@ -2762,14 +2895,6 @@ def _validate_service_gdb_markers(
                     "between-calls",
                     QEMU_NINEDOOR_ROOT_SYMBOLS[0],
                     "redirect-local-revoke",
-                    "continued",
-                )
-            },
-            "budget-exhaustion-timeout": {
-                (
-                    "budget-exhaustion",
-                    handler,
-                    "redirect-timeout-spin",
                     "continued",
                 )
             },
@@ -2884,7 +3009,7 @@ def _validate_service_uart_markers(texts: Sequence[str]) -> None:
     """Validate terminal service outcomes from their distinct fresh boots."""
 
     if len(texts) != len(QEMU_SERVICE_EVIDENCE_PLAN):
-        raise EvidenceError("preflight requires four ordered fresh service UART boots")
+        raise EvidenceError("preflight requires three ordered fresh service UART boots")
     fault_pattern = re.compile(
         r"\[(ninedoor-service|console-network)\] generation=([1-9][0-9]*) "
         r"terminal-fault class=(Standard|Timeout) sequence=[1-9][0-9]*"
@@ -2956,15 +3081,6 @@ def _validate_service_uart_markers(texts: Sequence[str]) -> None:
             if len(ninedoor) != 1 or faults or revokes != teardown_generations:
                 raise EvidenceError(
                     "between-Calls NineDoor boot lacks one local revoke and teardown"
-                )
-        elif mode == "budget-exhaustion-timeout":
-            expected = {
-                ("console-network", generation, "Timeout")
-                for generation in teardown_generations
-            }
-            if len(console) != 1 or faults != expected or revokes:
-                raise EvidenceError(
-                    "console-network boot lacks one timeout fault and teardown"
                 )
         else:  # pragma: no cover - exact evidence plan owns the mode set
             raise EvidenceError(f"unsupported service UART evidence mode: {mode}")
@@ -3799,26 +3915,6 @@ end
                 "redirect-standard-fault",
                 "continued",
             )
-        }
-    elif args.mode == "budget-exhaustion-timeout":
-        timeout_spin = addresses[symbols[2]]
-        command_body = f"""hbreak *0x{handler:x}
-commands 1
-  silent
-  printf "M26E_GDB_SERVICE_INJECTION service=console-network phase=budget-exhaustion symbol={symbols[0]} action=redirect-timeout-spin result=continued\\n"
-  set $pc = 0x{timeout_spin:x}
-  disable 1
-  detach
-  quit
-end
-"""
-        expected = {
-            (
-                "budget-exhaustion",
-                symbols[0],
-                "redirect-timeout-spin",
-                "continued",
-            ),
         }
     command_text = f"""set pagination off
 set confirm off

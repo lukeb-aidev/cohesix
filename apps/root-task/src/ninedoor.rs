@@ -41,7 +41,7 @@ use alloc::{
     vec::Vec,
 };
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
-use cohesix_cas::{CasManifest, CasManifestError, CAS_MANIFEST_SCHEMA};
+use cohesix_cas::{CasManifest, CasManifestError, CAS_MANIFEST_MAX_CHUNKS, CAS_MANIFEST_SCHEMA};
 use cohesix_ticket::TicketToken;
 use core::fmt::{self, Write};
 use core::str;
@@ -135,7 +135,6 @@ const BOOT_HEADER: &str = "Cohesix boot: root-task online";
 const MAX_STREAM_LINES: usize = log_buffer::LOG_SNAPSHOT_LINES;
 const MAX_WORKERS: usize = 1500;
 const MAX_BINDS: usize = 8;
-const CAS_MAX_CHUNKS: usize = 8;
 const CAS_MAX_UPDATES: usize = 8;
 const CAS_MAX_MODELS: usize = 8;
 const CAS_QUARANTINE_LIMIT: usize = 8;
@@ -1068,6 +1067,15 @@ impl NineDoorBridge {
     ) -> Result<(), NineDoorBridgeError> {
         let prepared = self.prepare_namespace(NamespaceOpcode::Attach, "", role)?;
         let role = prepared.payload();
+        let newly_attached = !self.attached;
+
+        // The validated namespace response is the sole fallible application
+        // attach gate. Commit local authority before best-effort audit, logger,
+        // or tracer diagnostics so those observers cannot veto or roll back a
+        // successfully prepared session.
+        self.update_session_context(role, ticket);
+        self.attached = true;
+
         let ticket_repr = ticket.unwrap_or("<none>");
         let mut message = HeaplessString::<128>::new();
         if write!(
@@ -1079,29 +1087,16 @@ impl NineDoorBridge {
             // Truncated audit line is acceptable.
         }
         audit.info(message.as_str());
-        if self.attached {
-            self.update_session_context(role, ticket);
-            return Ok(());
-        }
         #[cfg(feature = "kernel")]
-        {
+        if newly_attached {
             boot_log::notify_bridge_attached();
-            if boot_log::bridge_disabled()
-                || !boot_log::bridge_attach_requested()
-                || boot_log::ep_only_active()
-            {
-                self.attached = true;
-                boot_tracer().advance(BootPhase::EPAttachOk);
-                self.update_session_context(role, ticket);
-                return Ok(());
-            }
-            return Err(NineDoorBridgeError::AttachTimeout);
+            // Namespace preparation above is the application attach
+            // transaction. The optional logger EP self-test controls only
+            // UART mirroring versus EP-only output and cannot veto namespace
+            // authority after the target service has replied successfully.
+            boot_tracer().advance(BootPhase::EPAttachOk);
         }
-        #[cfg(not(feature = "kernel"))]
-        {
-            self.update_session_context(role, ticket);
-            Ok(())
-        }
+        Ok(())
     }
 
     /// Handle a `tail` request.
@@ -4386,7 +4381,7 @@ impl CasState {
         if manifest.payload_bytes != expected_bytes {
             return Err(NineDoorBridgeError::InvalidPayload);
         }
-        if manifest.chunks.len() > CAS_MAX_CHUNKS {
+        if manifest.chunks.len() > CAS_MANIFEST_MAX_CHUNKS {
             return Err(NineDoorBridgeError::BufferFull);
         }
         if let Some(delta) = &manifest.delta {
@@ -4568,7 +4563,7 @@ impl CasState {
         if self.chunk_bytes() == 0 {
             return false;
         }
-        let max_bytes = self.chunk_bytes().saturating_mul(CAS_MAX_CHUNKS);
+        let max_bytes = self.chunk_bytes().saturating_mul(CAS_MANIFEST_MAX_CHUNKS);
         self.bytes_used.saturating_add(additional) <= max_bytes
     }
 
@@ -10524,7 +10519,7 @@ mod tests {
     use super::*;
     use crate::{bootstrap::log as boot_log, event::AuditSink};
     use alloc::vec;
-    use cohesix_cas::{CasManifest, CAS_MANIFEST_SCHEMA};
+    use cohesix_cas::{CasManifest, CAS_MANIFEST_MAX_CHUNKS, CAS_MANIFEST_SCHEMA};
     use ed25519_dalek::{Signature, SigningKey};
     use sha2::{Digest, Sha256};
     use signature::Signer;
@@ -11026,6 +11021,31 @@ mod tests {
     }
 
     #[test]
+    fn attach_authority_survives_post_commit_audit_failure() {
+        struct PanickingAudit;
+
+        impl AuditSink for PanickingAudit {
+            fn info(&mut self, _message: &str) {
+                panic!("injected post-commit audit failure");
+            }
+
+            fn denied(&mut self, _message: &str) {}
+        }
+
+        let mut bridge = NineDoorBridge::new();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            bridge
+                .attach("queen", Some("ticket-1"), &mut PanickingAudit)
+                .expect("namespace preparation must succeed before audit");
+        }));
+
+        assert!(result.is_err(), "test audit must interrupt diagnostics");
+        assert!(bridge.attached());
+        assert!(bridge.is_queen());
+        assert_eq!(bridge.session_ticket.as_deref(), Some("ticket-1"));
+    }
+
+    #[test]
     fn quiet_session_retirement_moves_allocations_once_without_overwrite() {
         let mut bridge = NineDoorBridge::new();
         bridge.attached = true;
@@ -11227,6 +11247,55 @@ mod tests {
             .expect("upload manifest");
         cas.append_manifest(epoch, u64::MAX, &manifest_cbor)
             .expect("reupload manifest");
+    }
+
+    #[test]
+    fn cas_ninth_chunk_quota_refusal_preserves_exact_eight_chunk_state() {
+        const FIRST_BASE64_SEGMENT_CHARS: usize = 124;
+        let config = generated::cas_config();
+        let chunk_bytes = config.chunk_bytes as usize;
+        let mut cas = CasState::new(config);
+        let mut committed = Vec::new();
+        for index in 0..CAS_MANIFEST_MAX_CHUNKS {
+            let payload = vec![b'A' + index as u8; chunk_bytes];
+            let digest = Sha256::digest(&payload);
+            let mut digest_bytes = [0u8; 32];
+            digest_bytes.copy_from_slice(&digest);
+            cas.append_chunk("1", &digest_bytes, u64::MAX, &payload)
+                .expect("admit chunk within manifest capacity");
+            committed.push((digest_bytes, payload));
+        }
+
+        let bytes_before = cas.bytes_used;
+        let chunks_before = cas.chunks.len();
+        let pending_before = cas.pending_chunks.len();
+        let ninth_payload = vec![b'Z'; chunk_bytes];
+        let ninth_digest = Sha256::digest(&ninth_payload);
+        let mut ninth_digest_bytes = [0u8; 32];
+        ninth_digest_bytes.copy_from_slice(&ninth_digest);
+        let ninth_encoded = BASE64_STANDARD.encode(&ninth_payload);
+        assert_eq!(ninth_encoded.len(), 172);
+        let ninth_first_segment = format!("b64:{}", &ninth_encoded[..FIRST_BASE64_SEGMENT_CHARS]);
+        let err = cas
+            .append_chunk(
+                "1",
+                &ninth_digest_bytes,
+                u64::MAX,
+                ninth_first_segment.as_bytes(),
+            )
+            .expect_err("first segment of ninth chunk must exceed fixed store capacity");
+        assert!(matches!(err, NineDoorBridgeError::BufferFull));
+
+        assert_eq!(cas.bytes_used, bytes_before);
+        assert_eq!(cas.chunks.len(), chunks_before);
+        assert_eq!(cas.pending_chunks.len(), pending_before);
+        assert!(!cas.chunks.contains_key(&ninth_digest_bytes));
+        for (digest, payload) in committed {
+            assert_eq!(
+                cas.read_chunk(&digest).expect("read committed chunk"),
+                payload
+            );
+        }
     }
 
     fn build_signed_manifest(

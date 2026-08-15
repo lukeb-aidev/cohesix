@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright © 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Encode and decode Cohesix CAS manifest CBOR payloads.
 // Author: Lukas Bower
@@ -6,11 +6,17 @@
 
 extern crate alloc;
 
+#[cfg(test)]
+extern crate std;
+
 use alloc::{borrow::ToOwned, string::String, vec::Vec};
 use core::fmt;
 
 /// CAS manifest schema identifier.
 pub const CAS_MANIFEST_SCHEMA: &str = "cohesix-cas/manifest-v1";
+
+/// Maximum number of content chunks admitted by a manifest-v1 update.
+pub const CAS_MANIFEST_MAX_CHUNKS: usize = 8;
 
 /// CAS manifest representation used across Cohesix components.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -385,5 +391,29 @@ impl<'a> Decoder<'a> {
             return Err(CasManifestError::InvalidCbor("expected null"));
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloc::vec;
+
+    #[test]
+    fn manifest_v1_wire_remains_an_eight_field_array() {
+        assert_eq!(CAS_MANIFEST_MAX_CHUNKS, 8);
+        let manifest = CasManifest {
+            schema: CAS_MANIFEST_SCHEMA.to_owned(),
+            epoch: "1".to_owned(),
+            chunk_bytes: 128,
+            payload_bytes: 128,
+            payload_sha256: [1u8; 32],
+            chunks: vec![[2u8; 32]],
+            delta: None,
+            signature: None,
+        };
+        let encoded = manifest.encode_signed().expect("encode manifest-v1");
+        assert_eq!(encoded.first().copied(), Some(0x88));
+        assert_eq!(CasManifest::decode(&encoded), Ok(manifest));
     }
 }

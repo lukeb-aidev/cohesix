@@ -340,7 +340,7 @@ def safe_environment_value(key: str, value: str) -> str:
     )
 
 
-def selected_environment(scope: str) -> dict[str, str]:
+def selected_environment(scope: str, stage: int) -> dict[str, str]:
     """Collect non-secret environment selectors that affect test behavior."""
 
     excluded = {
@@ -365,7 +365,8 @@ def selected_environment(scope: str) -> dict[str, str]:
         if key in excluded or any(term in key.upper() for term in SECRET_TERMS):
             continue
         relevant = (
-            key.startswith(("SEL4_", "RUST", "CARGO_", "TP_", "DD_"))
+            key.startswith(("SEL4_", "RUST", "CARGO_", "TP_"))
+            or (stage == 5 and key.startswith("DD_"))
             or key
             in {
                 "CC",
@@ -590,7 +591,7 @@ def capture_context(
             file_record(root, relative, modes.get(relative))
             for relative in sorted(config_paths)
         ],
-        "environment": selected_environment(scope),
+        "environment": selected_environment(scope, stage),
         "external": external_sel4_records(root, target, scope),
     }
     config_digest = canonical_digest(config)

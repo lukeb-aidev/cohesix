@@ -1622,7 +1622,7 @@ mod tests {
         }
         .valid());
         assert!(!NamespaceRuntimeInitDescriptor {
-            request_frame_vaddr: u64::MAX & !4095,
+            request_frame_vaddr: !4095,
             ..descriptor
         }
         .valid());

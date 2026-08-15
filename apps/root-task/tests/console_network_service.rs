@@ -4,8 +4,8 @@
 // Author: Lukas Bower
 
 use console_network_abi::{
-    ExchangeKind, ExchangePage, PacketDirection, PacketPage, EXCHANGE_COMMIT_OFFSET,
-    PACKET_COMMIT_OFFSET, SHARED_PAGE_BYTES,
+    ExchangeKind, ExchangePage, PacketDirection, PacketPage, SendBatchBuilder,
+    CONSOLE_PAYLOAD_BYTES, EXCHANGE_COMMIT_OFFSET, PACKET_COMMIT_OFFSET, SHARED_PAGE_BYTES,
 };
 use root_task::console_network_service::{
     BoundaryError, ConsoleNetworkBoundary, ConsoleNetworkContainmentCursor,
@@ -50,9 +50,11 @@ fn generated_contract_is_single_listener_active_mcs_authority() {
     assert_eq!(plan.revoke_anchor_slot, 16_136);
     assert_eq!(plan.objects.scheduling_contexts, 1);
     assert_eq!(plan.objects.reply_objects, 0);
-    assert_eq!(plan.objects.frames, 97);
-    assert_eq!(plan.objects.cspace_slots, 121);
-    assert_eq!(plan.image_pages, 59);
+    assert_eq!(plan.objects.fault_caps, 1);
+    assert_eq!(plan.objects.timeout_fault_caps, 1);
+    assert_eq!(plan.objects.frames, 98);
+    assert_eq!(plan.objects.cspace_slots, 123);
+    assert_eq!(plan.image_pages, 60);
     assert_eq!(contract.stack_vaddr, 0x7203_0000);
     assert_eq!(contract.stack_pages, 32);
     assert_eq!(
@@ -61,6 +63,12 @@ fn generated_contract_is_single_listener_active_mcs_authority() {
     );
     assert!(contract.budget_us > 0);
     assert!(contract.period_us >= contract.budget_us);
+    assert_eq!(contract.timeout_badge, 0x26ee_0007);
+    assert_eq!(contract.standard_fault_badge, 0x26e4_0001);
+    assert_eq!(
+        contract.timeout_policy,
+        root_task::generated::TimeoutPolicy::NaturalPostpone
+    );
     assert!(!boundary.borrows_root_scheduling_context());
     assert!(!boundary.permits_second_listener());
 
@@ -222,6 +230,71 @@ fn authenticated_commands_and_exact_packet_control_completions_are_bounded() {
     assert_eq!(staged_disconnect.sequence(), disconnect_sequence);
     assert_eq!(staged_disconnect.connection_id(), 42);
     assert!(staged_disconnect.payload().is_empty());
+}
+
+#[test]
+fn authorized_batch_is_one_exact_control_and_one_exact_drain_fence() {
+    let mut boundary = ConsoleNetworkBoundary::new(10).expect("generated contract");
+    let generation = boundary.generation();
+    for (sequence, kind, connection_id, payload) in [
+        (1, ExchangeKind::Ready, 0, READY_IDENTITY.as_bytes()),
+        (2, ExchangeKind::Connected, 77, &[][..]),
+        (3, ExchangeKind::Authenticated, 77, &[][..]),
+    ] {
+        boundary
+            .accept_event(&event_page(
+                generation,
+                sequence,
+                kind,
+                connection_id,
+                0,
+                payload,
+            ))
+            .expect("ordered authenticated lifecycle");
+    }
+
+    let mut batch_storage = [0u8; CONSOLE_PAYLOAD_BYTES];
+    let mut builder = SendBatchBuilder::new(&mut batch_storage);
+    assert_eq!(builder.try_push_line("OK CAT path=/proc/demo"), Ok(true));
+    assert_eq!(builder.try_push_line("record-1"), Ok(true));
+    assert_eq!(builder.try_push_line("END"), Ok(true));
+    let payload = builder.finish().expect("bounded batch");
+    let mut control = [0u8; SHARED_PAGE_BYTES];
+    let sequence = boundary
+        .stage_authorized_batch(payload, 20, &mut control)
+        .expect("one exact SendBatch control");
+    let staged = ExchangePage::decode_bounded(&control, generation, 0, true)
+        .expect("root batch publication");
+    assert_eq!(staged.kind(), ExchangeKind::SendBatch);
+    assert_eq!(staged.connection_id(), 77);
+    assert_eq!(staged.payload(), payload);
+    assert_eq!(
+        boundary.stage_authorized_batch(payload, 21, &mut control),
+        Err(BoundaryError::Backpressure)
+    );
+
+    boundary
+        .accept_event(&event_page(
+            generation,
+            4,
+            ExchangeKind::ControlCompleted,
+            0,
+            sequence,
+            &[],
+        ))
+        .expect("control page released");
+    assert!(!boundary.console_output_drained(77));
+    boundary
+        .accept_event(&event_page(
+            generation,
+            5,
+            ExchangeKind::OutputDrained,
+            77,
+            sequence,
+            &[],
+        ))
+        .expect("whole batch left child TCP queue");
+    assert!(boundary.console_output_drained(77));
 }
 
 #[test]

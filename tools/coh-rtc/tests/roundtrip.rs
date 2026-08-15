@@ -4,6 +4,7 @@
 // Author: Lukas Bower
 
 use coh_rtc::{compile, CompileOptions};
+use cohesix_cas::CAS_MANIFEST_MAX_CHUNKS;
 use std::fs;
 use std::path::PathBuf;
 use tempfile::TempDir;
@@ -111,6 +112,21 @@ fn manifest_codegen_is_deterministic() {
     );
     let baseline_manifest = fs::read(&manifest_out).expect("manifest json");
     let baseline_cas_template = fs::read(&cas_manifest_template).expect("cas template json");
+    let baseline_cas_template_json: serde_json::Value =
+        serde_json::from_slice(&baseline_cas_template).expect("parse cas template json");
+    let limits = baseline_cas_template_json
+        .get("limits")
+        .expect("generated cas template limits");
+    assert_eq!(
+        limits.get("max_chunks").and_then(serde_json::Value::as_u64),
+        Some(CAS_MANIFEST_MAX_CHUNKS as u64)
+    );
+    assert_eq!(
+        limits
+            .get("max_payload_bytes")
+            .and_then(serde_json::Value::as_u64),
+        Some(128 * CAS_MANIFEST_MAX_CHUNKS as u64)
+    );
     let baseline_cli = fs::read(&cli_script).expect("cli script");
     let baseline_docs = fs::read(&doc_snippet).expect("docs snippet");
     let baseline_obs_interfaces =
@@ -216,7 +232,7 @@ fn invalid_manifest_rejected() {
 # Author: Lukas Bower
 # Purpose: Invalid manifest sample for coh-rtc tests.
 [root_task]
-schema = "1.11"
+schema = "1.14"
 
 [profile]
 name = "virt-aarch64"
@@ -306,7 +322,7 @@ fn cache_kernel_ops_required_for_dma() {
 # Author: Lukas Bower
 # Purpose: Invalid cache manifest sample for coh-rtc tests.
 [root_task]
-schema = "1.11"
+schema = "1.14"
 
 [profile]
 name = "virt-aarch64"
@@ -388,7 +404,7 @@ fn sharding_shard_bits_over_max_rejected() {
 # Author: Lukas Bower
 # Purpose: Invalid sharding manifest sample for coh-rtc tests.
 [root_task]
-schema = "1.11"
+schema = "1.14"
 
 [profile]
 name = "virt-aarch64"
@@ -469,7 +485,7 @@ fn legacy_worker_paths_rejected_when_alias_disabled() {
 # Author: Lukas Bower
 # Purpose: Invalid alias manifest sample for coh-rtc tests.
 [root_task]
-schema = "1.11"
+schema = "1.14"
 
 [profile]
 name = "virt-aarch64"
@@ -557,7 +573,7 @@ fn sharding_requires_walk_depth() {
 # Author: Lukas Bower
 # Purpose: Invalid walk depth manifest sample for coh-rtc tests.
 [root_task]
-schema = "1.11"
+schema = "1.14"
 
 [profile]
 name = "virt-aarch64"

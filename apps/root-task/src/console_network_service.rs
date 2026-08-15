@@ -17,7 +17,7 @@ use heapless::Vec as HeaplessVec;
 /// Compiler-selected service task ID.
 pub const SERVICE_TASK_ID: &str = "console-network-service";
 /// Runtime READY identity accepted before packet or console admission.
-pub const READY_IDENTITY: &str = "console-network-service/v1";
+pub const READY_IDENTITY: &str = "console-network-service/v3";
 
 mod generated_image_identity {
     ::core::include!(::core::concat!(
@@ -98,6 +98,8 @@ pub struct ConsoleNetworkContract {
     pub period_us: u32,
     /// Total seL4 replenishment bound.
     pub max_refills: u8,
+    /// Generated kernel action when the active SC exhausts its budget.
+    pub timeout_policy: crate::generated::TimeoutPolicy,
     /// Compiler-owned timeout fault badge.
     pub timeout_badge: u64,
     /// Compiler-owned standard fault badge.
@@ -130,14 +132,14 @@ impl ConsoleNetworkContract {
             || config.objects.vspaces != 1
             || config.objects.page_tables != 8
             || config.objects.asids != 1
-            || config.objects.frames != 97
+            || config.objects.frames != 98
             || config.objects.endpoints != 0
             || config.objects.notifications != 2
             || config.objects.fault_caps != 1
             || config.objects.timeout_fault_caps != 1
             || config.objects.reply_objects != 0
             || config.objects.scheduling_contexts != 1
-            || config.objects.cspace_slots != 121
+            || config.objects.cspace_slots != 123
             || config.objects.untyped_bytes != 1_048_576
             || config.packet_rx_notification_slot != CHILD_WAKE_NOTIFICATION_SLOT
             || config.packet_tx_wake_notification_slot != PACKET_TX_WAKE_NOTIFICATION_SLOT
@@ -162,6 +164,7 @@ impl ConsoleNetworkContract {
             || config.revoke_badge != console_network_abi::WAKE_REVOKE
             || config.packet_tx_ready_badge != console_network_abi::WAKE_PACKET_TX_READY
             || config.event_ready_badge != console_network_abi::WAKE_EVENT_READY
+            || config.publication_ack_badge != console_network_abi::WAKE_PUBLICATION_ACK
             || config.fault_badge == 0
             || config.timer_clock_hz == 0
         {
@@ -182,6 +185,7 @@ impl ConsoleNetworkContract {
             || temporal.budget_us != config.budget_us
             || temporal.period_us != config.period_us
             || temporal.max_refills != config.max_refills
+            || temporal.timeout_policy != crate::generated::TimeoutPolicy::NaturalPostpone
             || temporal.timeout_badge != config.timeout_badge
             || !temporal.allowed_donors.is_empty()
             || temporal.reply_objects != 0
@@ -218,6 +222,7 @@ impl ConsoleNetworkContract {
             budget_us: config.budget_us,
             period_us: config.period_us,
             max_refills: config.max_refills,
+            timeout_policy: temporal.timeout_policy,
             timeout_badge: config.timeout_badge,
             standard_fault_badge: config.fault_badge,
             timer_clock_hz: config.timer_clock_hz,
@@ -344,7 +349,7 @@ pub enum ServiceState {
     Closing,
     /// A timeout or child fault requires supervisor containment.
     Faulted,
-    /// Old authority is completely torn down.
+    /// A terminal child record stopped admission; kernel containment follows.
     Terminal,
 }
 
@@ -692,6 +697,26 @@ impl ConsoleNetworkBoundary {
         )
     }
 
+    /// Publish one validated root-authorized response batch.
+    pub fn stage_authorized_batch(
+        &mut self,
+        payload: &[u8],
+        now_ms: u64,
+        output_page: &mut [u8],
+    ) -> Result<u64, BoundaryError> {
+        let connection_id = self
+            .authenticated_connection()
+            .ok_or(BoundaryError::InvalidState)?;
+        console_network_abi::SendBatchCursor::validate(payload)?;
+        self.stage_control(
+            ExchangeKind::SendBatch,
+            connection_id,
+            now_ms,
+            payload,
+            output_page,
+        )
+    }
+
     /// Publish a close-after-flush request for the active connection.
     pub fn stage_disconnect(
         &mut self,
@@ -834,7 +859,7 @@ impl ConsoleNetworkBoundary {
                 self.state = ServiceState::Terminal;
                 self.connection_id = None;
             }
-            ExchangeKind::SendLine | ExchangeKind::Disconnect => {
+            ExchangeKind::SendLine | ExchangeKind::SendBatch | ExchangeKind::Disconnect => {
                 return Err(BoundaryError::InvalidRecord)
             }
         }

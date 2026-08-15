@@ -10,11 +10,12 @@ use core::sync::atomic::{fence, Ordering};
 use console_network_runtime::abi::{
     ExchangeKind, ExchangePage, ExchangePageHeader, PacketDirection, PacketPage, PacketPageHeader,
     RuntimeInitDescriptor, CONSOLE_PAYLOAD_BYTES, ETHERNET_FRAME_BYTES,
-    RUNTIME_INIT_DESCRIPTOR_BYTES, WAKE_CONTROL, WAKE_PACKET_RX, WAKE_REVOKE, WAKE_SHUTDOWN,
+    RUNTIME_INIT_DESCRIPTOR_BYTES, WAKE_CONTROL, WAKE_PACKET_RX, WAKE_PUBLICATION_ACK, WAKE_REVOKE,
+    WAKE_SHUTDOWN,
 };
 use console_network_runtime::{
-    ChildTurnReadiness, ChildTurnScheduler, ChildTurnUnit, ConsoleNetworkService, RuntimeError,
-    ServicePollOutcome,
+    ChildTurnReadiness, ChildTurnScheduler, ChildTurnUnit, ConsoleNetworkService,
+    ControlApplyOutcome, RuntimeError, ServicePollOutcome,
 };
 use heapless::Deque;
 use smoltcp::iface::SocketStorage;
@@ -108,7 +109,7 @@ pub unsafe extern "C" fn _start(descriptor: *const u8) -> ! {
     let event = descriptor.event_vaddr as *mut ExchangePage;
     let mut last_packet_sequence = 0u64;
     let mut last_control_sequence = 0u64;
-    let mut last_output_drained_sequence = 0u64;
+    let mut pending_output_control: Option<(u64, u64)> = None;
     let mut packet_tx_sequence = 0u64;
     let mut event_sequence = 1u64;
     let mut completions: Deque<(ExchangeKind, u64, u64), COMPLETION_DEPTH> = Deque::new();
@@ -121,33 +122,57 @@ pub unsafe extern "C" fn _start(descriptor: *const u8) -> ! {
         0,
         now_ms(descriptor.timer_clock_hz),
         0,
-        b"console-network-service/v1",
+        b"console-network-service/v3",
     );
     signal_slot(descriptor.supervisor_wake_notification_slot);
+    // Ready occupies the one-slot event page. Only root's explicit ACK after it
+    // has accepted that record grants one publication credit. Internal units
+    // preserve the credit, and exactly one later publication consumes it.
+    let mut publication_credit_available = false;
+    let mut shutdown_pending = false;
 
     loop {
-        let badge = wait_for_work(descriptor);
+        let readiness = ChildTurnReadiness::new(
+            !completions.is_empty(),
+            service.service_event_pending(),
+            service.egress_pending(),
+        );
+        let local_poll_eligible = if shutdown_pending {
+            publication_credit_available
+        } else {
+            turn_scheduler.local_poll_eligible(publication_credit_available, readiness)
+        };
+        let badge = wait_for_work(descriptor, local_poll_eligible);
         if badge & !descriptor.root_wake_mask != 0 {
             enter_standard_fault();
         }
         if badge & WAKE_REVOKE != 0 {
             service.revoke();
-            event_sequence = next_sequence(event_sequence);
-            publish_exchange(
-                event,
-                descriptor.generation,
-                ExchangeKind::ShutdownComplete,
-                event_sequence,
-                0,
-                now_ms(descriptor.timer_clock_hz),
-                0,
-                b"reason=revoked",
-            );
-            signal_slot(descriptor.supervisor_wake_notification_slot);
+            // Immediate containment neither needs nor permits reuse of an
+            // unacknowledged event page. Root already fenced the generation
+            // before signalling revoke and will suspend/revoke this TCB.
             park_for_teardown(descriptor);
+        }
+
+        if badge & WAKE_PUBLICATION_ACK != 0 {
+            if publication_credit_available {
+                // An ACK is causal proof for exactly one newly observed page.
+                // A second credit before the prior one is consumed would make
+                // notification coalescing ambiguous, so fail closed.
+                enter_standard_fault();
+            }
+            publication_credit_available = true;
         }
         if badge & WAKE_SHUTDOWN != 0 {
             service.revoke();
+            shutdown_pending = true;
+        }
+        if shutdown_pending {
+            if !core::mem::take(&mut publication_credit_available) {
+                // The prior event page remains root-owned until Observe->ACK.
+                // Retain graceful shutdown without reusing that one-slot page.
+                continue;
+            }
             event_sequence = next_sequence(event_sequence);
             publish_exchange(
                 event,
@@ -171,6 +196,18 @@ pub unsafe extern "C" fn _start(descriptor: *const u8) -> ! {
             service.service_event_pending(),
             service.egress_pending(),
         ));
+        if unit.is_publication() {
+            if !publication_credit_available {
+                // An ordinary packet/control wake may return from Wait while a
+                // previously retained publication still has priority. Retain
+                // both and wait for the causal Observe->ACK; never treat that
+                // unrelated wake as permission to reuse a one-slot page.
+                continue;
+            }
+            // Consume before touching retained state or the shared page. A
+            // fault during publication cannot leave reusable page authority.
+            publication_credit_available = false;
+        }
         match unit {
             ChildTurnUnit::PublishCompletion => {
                 let Some((kind, related_sequence, connection_id)) = completions.pop_front() else {
@@ -231,19 +268,23 @@ pub unsafe extern "C" fn _start(descriptor: *const u8) -> ! {
                     Err(_) => enter_standard_fault(),
                 };
                 if outcome == ServicePollOutcome::Complete {
-                    if last_control_sequence > last_output_drained_sequence {
-                        if let Some(connection_id) = service.output_drained_connection() {
+                    if let Some((control_sequence, control_connection_id)) = pending_output_control
+                    {
+                        if service.active_connection_id() != Some(control_connection_id) {
+                            pending_output_control = None;
+                        } else if service.output_drained_connection() == Some(control_connection_id)
+                        {
                             if completions
                                 .push_back((
                                     ExchangeKind::OutputDrained,
-                                    last_control_sequence,
-                                    connection_id,
+                                    control_sequence,
+                                    control_connection_id,
                                 ))
                                 .is_err()
                             {
                                 enter_standard_fault();
                             }
-                            last_output_drained_sequence = last_control_sequence;
+                            pending_output_control = None;
                         }
                     }
                     turn_scheduler.complete(ChildTurnUnit::PollService);
@@ -266,7 +307,15 @@ pub unsafe extern "C" fn _start(descriptor: *const u8) -> ! {
                         turn_scheduler.complete(ChildTurnUnit::IngestPacket);
                         turn_scheduler.request_service();
                     }
-                    Err(RuntimeError::Backpressure) => turn_scheduler.request_service(),
+                    Err(RuntimeError::Backpressure) => {
+                        // The sequence-last page proved that this coalesced
+                        // notification carried no newer packet. Retire only
+                        // that hint; a later publish-and-signal remains
+                        // independently observable after the local service
+                        // cycle completes.
+                        turn_scheduler.complete(ChildTurnUnit::IngestPacket);
+                        turn_scheduler.request_service();
+                    }
                     Err(_) => enter_standard_fault(),
                 }
             }
@@ -274,15 +323,27 @@ pub unsafe extern "C" fn _start(descriptor: *const u8) -> ! {
                 #[cfg(feature = "qemu-evidence")]
                 cohesix_console_network_qemu_evidence_control_handler();
                 match read_control(command, descriptor.generation, last_control_sequence) {
-                    Ok((sequence, kind, payload)) => {
-                        let payload = match core::str::from_utf8(payload.as_slice()) {
-                            Ok(payload) => payload,
-                            Err(_) => enter_standard_fault(),
-                        };
-                        if service.apply_control(kind, payload).is_err() {
-                            enter_standard_fault();
-                        }
+                    Ok((sequence, connection_id, kind, payload)) => {
+                        let outcome =
+                            match service.apply_control(connection_id, kind, payload.as_slice()) {
+                                Ok(outcome) => outcome,
+                                Err(_) => enter_standard_fault(),
+                            };
                         last_control_sequence = sequence;
+                        if outcome == ControlApplyOutcome::Applied {
+                            if matches!(kind, ExchangeKind::SendLine | ExchangeKind::SendBatch) {
+                                if pending_output_control.is_some() {
+                                    // Root's one-slot control contract must not
+                                    // replace undrained output evidence.
+                                    enter_standard_fault();
+                                }
+                                pending_output_control = Some((sequence, connection_id));
+                            }
+                        } else {
+                            // The exact stale input is durably consumed below,
+                            // but it did not authorize output. Preserve any
+                            // independently pending exact-current drain record.
+                        }
                         if completions
                             .push_back((ExchangeKind::ControlCompleted, sequence, 0))
                             .is_err()
@@ -292,7 +353,15 @@ pub unsafe extern "C" fn _start(descriptor: *const u8) -> ! {
                         turn_scheduler.complete(ChildTurnUnit::ApplyControl);
                         turn_scheduler.request_service();
                     }
-                    Err(RuntimeError::Backpressure) => turn_scheduler.request_service(),
+                    Err(RuntimeError::Backpressure) => {
+                        // WAKE_CONTROL also carries root's service tick. Once
+                        // the stable page proves that no newer control exists,
+                        // consume this empty hint before retaining exactly one
+                        // local service cycle. Otherwise local Poll progress
+                        // would revisit the same empty control forever.
+                        turn_scheduler.complete(ChildTurnUnit::ApplyControl);
+                        turn_scheduler.request_service();
+                    }
                     Err(_) => enter_standard_fault(),
                 }
             }
@@ -309,26 +378,37 @@ fn install_ipc_buffer(descriptor: RuntimeInitDescriptor) {
     }
 }
 
-/// Cross an MCS refill boundary before admitting the next material child unit.
+/// Admit one material child unit through the exact notification gate.
 ///
 /// The first call follows the published `Ready` event, and every ordinary
-/// child-unit arm falls through to another call on loop re-entry.  Yielding
-/// before the wait prevents an already-active notification from composing the
-/// next unit on the current refill.  Terminal teardown deliberately uses its
-/// separate wait-only park loop because it performs no further service work.
-fn wait_for_work(descriptor: RuntimeInitDescriptor) -> u64 {
+/// child-unit arm falls through to another call on loop re-entry. Retained
+/// private work and an explicitly credited publication use one nonblocking
+/// Poll, so every iteration still validates newly coalesced revoke, shutdown,
+/// ACK, packet, and control bits before selecting one successor. The existing
+/// MCS budget remains the cumulative temporal bound for that finite retained
+/// burst. Genuine idle and an uncredited publication block directly, so they
+/// cannot consume budget while awaiting root authority. Terminal teardown
+/// deliberately uses its separate wait-only park loop.
+fn wait_for_work(descriptor: RuntimeInitDescriptor, local_poll_eligible: bool) -> u64 {
     let mut badge: sel4_sys::seL4_Word = 0;
     // SAFETY: Validation fixes this CPtr to the child's sole Read notification
-    // cap. On MCS, Yield charges the complete remaining head refill without
-    // raising a timeout fault; the following Wait then blocks when no admitted
-    // work is pending. Keeping both syscalls in this existing block preserves
-    // the unsafe surface while enforcing one material unit per refill.
+    // cap. Poll is used only when retained scheduler state or publication
+    // credit already authorizes exactly one successor; the next loop iteration
+    // rechecks every notification bit before another unit. Otherwise Wait
+    // blocks directly for an idle prompt or the causal ACK after publication.
+    // Keeping the syscalls in this existing block preserves the unsafe surface.
     let _ = unsafe {
-        sel4_sys::seL4_Yield();
-        sel4_sys::seL4_Wait(
-            descriptor.child_wake_notification_slot as sel4_sys::seL4_CPtr,
-            &mut badge,
-        )
+        if local_poll_eligible {
+            sel4_sys::seL4_Poll(
+                descriptor.child_wake_notification_slot as sel4_sys::seL4_CPtr,
+                &mut badge,
+            )
+        } else {
+            sel4_sys::seL4_Wait(
+                descriptor.child_wake_notification_slot as sel4_sys::seL4_CPtr,
+                &mut badge,
+            )
+        }
     };
     badge as u64
 }
@@ -403,6 +483,7 @@ fn read_control(
 ) -> Result<
     (
         u64,
+        u64,
         ExchangeKind,
         heapless::Vec<u8, { console_network_runtime::abi::CONSOLE_PAYLOAD_BYTES }>,
     ),
@@ -453,7 +534,7 @@ fn read_control(
         payload
             .extend_from_slice(&bytes[..payload_len])
             .map_err(|_| RuntimeError::ConsoleFrame)?;
-        Ok((header.sequence, kind, payload))
+        Ok((header.sequence, header.connection_id, kind, payload))
     }
 }
 

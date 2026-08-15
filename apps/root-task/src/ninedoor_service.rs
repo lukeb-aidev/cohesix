@@ -1305,11 +1305,13 @@ mod tests {
             .split_once("fn install_caps_and_mcs")
             .unwrap()
             .1
-            .split_once("fn scrub_root_mapping")
+            .split_once("fn scrub_clean_root_mapping")
             .unwrap()
             .0;
         let configure = install_mcs.find("configure_sched_context").unwrap();
         let bind = install_mcs.find("set_tcb_sched_params_mcs").unwrap();
+        assert_eq!(install_mcs.matches("configure_sched_context").count(), 1);
+        assert_eq!(install_mcs.matches("set_tcb_sched_params_mcs").count(), 1);
         assert!(configure < bind);
         assert!(!install_mcs.contains("resume_tcb"));
         assert!(!install_mcs.contains("set_tcb_affinity"));
@@ -1332,11 +1334,18 @@ mod tests {
             .split_once("pub fn fail_bootstrap")
             .unwrap()
             .1
-            .split_once("pub fn contain(")
+            .split_once("pub const fn containment_active")
             .unwrap()
             .0;
         let failed_state = fail_bootstrap.find("BootstrapState::Failed").unwrap();
         let suspend = fail_bootstrap.find("suspend_tcb").unwrap();
+        assert_eq!(
+            fail_bootstrap
+                .matches("self.bootstrap_state = BootstrapState::Failed;")
+                .count(),
+            1
+        );
+        assert_eq!(fail_bootstrap.matches("suspend_tcb(self.tcb)").count(), 1);
         assert!(failed_state < suspend);
 
         let runtime_source = include_str!("../../nine-door-runtime/src/kernel.rs");

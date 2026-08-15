@@ -13,17 +13,19 @@
 use core::fmt;
 use core::fmt::Write as _;
 
-use console_network_abi::ExchangeKind;
+use console_network_abi::{
+    ExchangeKind, SendBatchBuilder, CONSOLE_PAYLOAD_BYTES, SEND_BATCH_MAX_RECORDS,
+};
 use heapless::{Deque, String as HeaplessString, Vec as HeaplessVec};
 use smoltcp::phy::{RxToken, TxToken};
 use smoltcp::time::Instant;
 use smoltcp::wire::{EthernetAddress, Ipv4Address};
 
 use super::{
-    select_isolated_network_turn, ConsoleLine, ConsoleNetConfig, IsolatedNetworkLowerCursor,
-    IsolatedNetworkLowerUnit, IsolatedNetworkTurnOutcome, IsolatedNetworkTurnSelection,
-    IsolatedNetworkTurnUnit, NetConsoleDisconnectReason, NetConsoleEvent, NetCounters, NetDevice,
-    NetPoller, NetStatusReport, NetTelemetry, NET_STAGE,
+    select_isolated_network_turn, select_isolated_response_turn, ConsoleLine, ConsoleNetConfig,
+    IsolatedNetworkLowerCursor, IsolatedNetworkLowerUnit, IsolatedNetworkTurnOutcome,
+    IsolatedNetworkTurnSelection, IsolatedNetworkTurnUnit, NetConsoleDisconnectReason,
+    NetConsoleEvent, NetCounters, NetDevice, NetPoller, NetStatusReport, NetTelemetry, NET_STAGE,
 };
 use crate::console_network_service::{BoundaryError, ConsoleNetworkContainmentTurn, ServiceState};
 use crate::drivers::virtio::net::{DriverError as VirtioDriverError, VirtioNetStatic};
@@ -39,6 +41,37 @@ const EVENT_QUEUE_DEPTH: usize = 8;
 const ISOLATED_NETWORK_TURN_FRAMES: u16 = 2;
 const ISOLATED_NETWORK_TURN_BYTES: u32 =
     (console_network_abi::CONSOLE_PAYLOAD_BYTES + console_network_abi::ETHERNET_FRAME_BYTES) as u32;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct QueuedConsoleOutput {
+    line: HeaplessString<DEFAULT_LINE_CAPACITY>,
+    terminal: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ResponseLane {
+    generation: u64,
+    connection_id: u64,
+    awaiting_batch_sequence: Option<u64>,
+    terminal_sequence: Option<u64>,
+    terminal_control_completed: bool,
+    terminal_output_drained: bool,
+    terminal_queued: bool,
+}
+
+impl ResponseLane {
+    const fn new(generation: u64, connection_id: u64) -> Self {
+        Self {
+            generation,
+            connection_id,
+            awaiting_batch_sequence: None,
+            terminal_sequence: None,
+            terminal_control_completed: false,
+            terminal_output_drained: false,
+            terminal_queued: false,
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ConsoleNetworkContainmentDiagnostic {
@@ -143,15 +176,18 @@ pub struct IsolatedVirtioConsole {
     listen_port: u16,
     lines: Deque<ConsoleLine, LINE_QUEUE_DEPTH>,
     events: Deque<NetConsoleEvent, EVENT_QUEUE_DEPTH>,
-    output: Deque<HeaplessString<DEFAULT_LINE_CAPACITY>, LINE_QUEUE_DEPTH>,
+    output: Deque<QueuedConsoleOutput, LINE_QUEUE_DEPTH>,
+    response_lane: Option<ResponseLane>,
     pending_egress: Option<HeaplessVec<u8, { console_network_abi::ETHERNET_FRAME_BYTES }>>,
     lower_cursor: IsolatedNetworkLowerCursor,
     active_connection: Option<u64>,
     authenticated_connection: Option<u64>,
     listener_ready: bool,
     disconnect_requested: bool,
+    disconnect_issued: bool,
     output_issued: bool,
     faulted: bool,
+    graceful_teardown_pending: bool,
     terminal: bool,
     pending_containment_fault_diagnostic: Option<ConsoleNetworkContainmentDiagnostic>,
     pending_containment_failure_diagnostic: Option<ConsoleNetworkContainmentDiagnostic>,
@@ -211,14 +247,17 @@ impl IsolatedVirtioConsole {
             lines: Deque::new(),
             events: Deque::new(),
             output: Deque::new(),
+            response_lane: None,
             pending_egress: None,
             lower_cursor: IsolatedNetworkLowerCursor::new(),
             active_connection: None,
             authenticated_connection: None,
             listener_ready: false,
             disconnect_requested: false,
+            disconnect_issued: false,
             output_issued: false,
             faulted: false,
+            graceful_teardown_pending: false,
             terminal: false,
             pending_containment_fault_diagnostic: None,
             pending_containment_failure_diagnostic: None,
@@ -250,6 +289,15 @@ impl IsolatedVirtioConsole {
         self.faulted || matches!(self.runtime.boundary().state(), ServiceState::Faulted)
     }
 
+    /// Whether a fault or validated graceful terminal still needs containment.
+    #[must_use]
+    pub const fn containment_required(&self) -> bool {
+        !self.terminal
+            && (self.faulted()
+                || self.graceful_teardown_pending
+                || self.runtime.containment_active())
+    }
+
     /// Advance the exact child generation by one containment unit.
     pub fn contain_one_turn(
         &mut self,
@@ -268,6 +316,7 @@ impl IsolatedVirtioConsole {
         };
         match turn {
             ConsoleNetworkContainmentTurn::Complete(proof) if proof.complete() => {
+                self.graceful_teardown_pending = false;
                 self.terminal = true;
                 self.listener_ready = false;
                 if self.pending_containment_teardown_diagnostic.is_none() {
@@ -425,21 +474,91 @@ impl IsolatedVirtioConsole {
         self.listener_ready = false;
         self.active_connection = None;
         self.authenticated_connection = None;
+        self.disconnect_requested = false;
+        self.disconnect_issued = false;
         self.lines.clear();
         self.events.clear();
         self.output.clear();
+        self.response_lane = None;
         self.pending_egress = None;
+    }
+
+    fn queue_console_output(&mut self, line: &str, terminal: bool) -> bool {
+        if self.faulted || self.terminal {
+            return false;
+        }
+        let connection_id = match self.authenticated_connection {
+            Some(connection_id) => connection_id,
+            None => return false,
+        };
+        let line = line.trim_end_matches(['\r', '\n']);
+        if line.is_empty() {
+            return true;
+        }
+        let generation = self.runtime.generation();
+        let lane = self
+            .response_lane
+            .get_or_insert_with(|| ResponseLane::new(generation, connection_id));
+        if lane.generation != generation
+            || lane.connection_id != connection_id
+            || lane.terminal_queued
+        {
+            return false;
+        }
+        let mut bounded = HeaplessString::new();
+        if bounded.push_str(line).is_err()
+            || self
+                .output
+                .push_back(QueuedConsoleOutput {
+                    line: bounded,
+                    terminal,
+                })
+                .is_err()
+        {
+            return false;
+        }
+        if terminal {
+            if let Some(lane) = self.response_lane.as_mut() {
+                lane.terminal_queued = true;
+            }
+        }
+        true
+    }
+
+    fn complete_response_lane_if_drained(&mut self) {
+        let complete = self.response_lane.is_some_and(|lane| {
+            lane.terminal_sequence.is_some()
+                && lane.terminal_control_completed
+                && lane.terminal_output_drained
+                && lane.awaiting_batch_sequence.is_none()
+                && self.output.is_empty()
+                && !self.runtime.publication_ack_pending()
+                && self.pending_egress.is_none()
+        });
+        if complete {
+            self.response_lane = None;
+            self.output_issued = false;
+        }
     }
 
     fn handle_event(&mut self, event: crate::console_network_service::ConsoleNetworkEvent) {
         let connection_id = event.connection_id();
         match event.kind() {
-            ExchangeKind::Ready => self.listener_ready = true,
+            ExchangeKind::Ready => {
+                self.listener_ready = true;
+                self.disconnect_requested = false;
+                self.disconnect_issued = false;
+            }
             ExchangeKind::Connected => {
+                // A new child connection identity cannot inherit commands
+                // retained for any earlier authenticated peer.
+                self.lines.clear();
                 self.active_connection = Some(connection_id);
                 self.authenticated_connection = None;
                 self.disconnect_requested = false;
+                self.disconnect_issued = false;
                 self.output_issued = false;
+                self.response_lane = None;
                 self.connection_bytes_read = 0;
                 self.connection_bytes_written = 0;
                 if self
@@ -484,7 +603,11 @@ impl IsolatedVirtioConsole {
                 if line.push_str(payload).is_err()
                     || self
                         .lines
-                        .push_back(ConsoleLine::new(line, event.now_ms()))
+                        .push_back(ConsoleLine::for_connection(
+                            line,
+                            event.now_ms(),
+                            connection_id,
+                        ))
                         .is_err()
                 {
                     self.ingest_backpressure = self.ingest_backpressure.saturating_add(1);
@@ -502,6 +625,10 @@ impl IsolatedVirtioConsole {
                     self.counters.tcp_console_recv_ready.saturating_add(1);
             }
             ExchangeKind::Disconnected => {
+                // Root observes lifecycle events before command lines. Retire
+                // every not-yet-dispatched command with the disconnected
+                // identity so it cannot execute after a replacement connects.
+                self.lines.clear();
                 let reason = if self.disconnect_requested {
                     NetConsoleDisconnectReason::Quit
                 } else {
@@ -523,21 +650,57 @@ impl IsolatedVirtioConsole {
                 self.active_connection = None;
                 self.authenticated_connection = None;
                 self.disconnect_requested = false;
+                self.disconnect_issued = false;
                 self.output_issued = false;
                 self.output.clear();
+                self.response_lane = None;
             }
             ExchangeKind::Backpressure => self.fail_closed("child-event-backpressure"),
-            ExchangeKind::Rejected
-            | ExchangeKind::PacketConsumed
-            | ExchangeKind::ControlCompleted
-            | ExchangeKind::OutputDrained => {}
+            ExchangeKind::ControlCompleted => {
+                if let Some(lane) = self.response_lane.as_mut() {
+                    if lane.awaiting_batch_sequence != Some(event.related_sequence()) {
+                        self.fail_closed("response-completion-sequence");
+                        return;
+                    }
+                    if lane.terminal_sequence == Some(event.related_sequence()) {
+                        lane.terminal_control_completed = true;
+                    }
+                }
+            }
+            ExchangeKind::OutputDrained => {
+                if let Some(lane) = self.response_lane.as_mut() {
+                    if lane.generation != self.runtime.generation()
+                        || lane.connection_id != connection_id
+                    {
+                        self.fail_closed("response-drain-identity");
+                        return;
+                    }
+                    if lane.awaiting_batch_sequence != Some(event.related_sequence()) {
+                        self.fail_closed("response-drain-sequence");
+                        return;
+                    }
+                    lane.awaiting_batch_sequence = None;
+                    if lane.terminal_sequence == Some(event.related_sequence()) {
+                        lane.terminal_output_drained = true;
+                    }
+                }
+            }
+            ExchangeKind::Rejected | ExchangeKind::PacketConsumed => {}
             ExchangeKind::ShutdownComplete => {
-                self.terminal = true;
+                // Terminal child shutdown is also an input-authority boundary.
+                self.lines.clear();
+                // The child has consumed its last credit and parked, but its
+                // TCB/SC/mappings/caps are not terminal until bounded root
+                // containment publishes the complete teardown proof.
+                self.graceful_teardown_pending = true;
                 self.listener_ready = false;
                 self.active_connection = None;
                 self.authenticated_connection = None;
+                self.disconnect_requested = false;
+                self.disconnect_issued = false;
+                self.response_lane = None;
             }
-            ExchangeKind::SendLine | ExchangeKind::Disconnect => {
+            ExchangeKind::SendLine | ExchangeKind::SendBatch | ExchangeKind::Disconnect => {
                 self.fail_closed("child-published-root-control-kind")
             }
         }
@@ -555,12 +718,34 @@ impl IsolatedVirtioConsole {
         if let Some(event) = turn.event {
             activity = true;
             self.handle_event(event);
+            if self.faulted {
+                return activity;
+            }
+            if self.graceful_teardown_pending {
+                if turn.egress.is_some() {
+                    // One global credit cannot authorize ShutdownComplete and
+                    // an egress publication together. Treat the copied pair as
+                    // a protocol violation and contain it without ACK.
+                    self.fail_closed("terminal-egress-coalescing");
+                    return activity;
+                }
+                if self.runtime.retire_terminal_publication().is_err() {
+                    self.fail_closed("terminal-publication-retirement");
+                    return activity;
+                }
+                if self.runtime.begin_containment().is_err() {
+                    self.fail_closed("terminal-containment-start");
+                }
+                return activity;
+            }
         }
         if let Some(egress) = turn.egress {
             activity = true;
-            if self.pending_egress.replace(egress).is_some() {
+            if self.pending_egress.is_some() {
                 self.fail_closed("egress-overwrite");
+                return activity;
             }
+            self.pending_egress = Some(egress);
         }
         activity
     }
@@ -569,10 +754,6 @@ impl IsolatedVirtioConsole {
         let Some(frame) = self.pending_egress.take() else {
             return false;
         };
-        debug_assert!(
-            !self.device.deferred_tx_diagnostic_pending(),
-            "isolated TX must drain the preceding success diagnostic in its own turn"
-        );
         let Some(token) = self.device.transmit_isolated(timestamp) else {
             self.pending_egress = Some(frame);
             return false;
@@ -617,21 +798,61 @@ impl IsolatedVirtioConsole {
     }
 
     fn stage_one_output(&mut self) -> bool {
-        if !self.runtime.control_available() {
+        if !self.runtime.control_available()
+            || self
+                .response_lane
+                .is_some_and(|lane| lane.awaiting_batch_sequence.is_some())
+        {
             return false;
         }
-        let Some(line) = self.output.front() else {
+        if self.output.is_empty() {
             return false;
+        }
+        let mut storage = [0u8; CONSOLE_PAYLOAD_BYTES];
+        let mut builder = SendBatchBuilder::new(&mut storage);
+        let mut count = 0usize;
+        let mut bytes = 0usize;
+        let mut terminal = false;
+        for queued in self.output.iter().take(SEND_BATCH_MAX_RECORDS) {
+            match builder.try_push_line(queued.line.as_str()) {
+                Ok(true) => {
+                    count = count.saturating_add(1);
+                    bytes = bytes.saturating_add(queued.line.len());
+                    terminal |= queued.terminal;
+                }
+                Ok(false) => break,
+                Err(_) => {
+                    self.fail_closed("output-batch-encoding");
+                    return false;
+                }
+            }
+        }
+        let payload = match builder.finish() {
+            Ok(payload) => payload,
+            Err(_) => {
+                self.fail_closed("output-batch-empty");
+                return false;
+            }
         };
-        match self.runtime.stage_authorized_line(line, self.last_now_ms) {
-            Ok(_) => {
-                let length = line.len();
-                let _ = self.output.pop_front();
+        match self
+            .runtime
+            .stage_authorized_batch(payload, self.last_now_ms)
+        {
+            Ok(sequence) => {
+                for _ in 0..count {
+                    let _ = self.output.pop_front();
+                }
+                if let Some(lane) = self.response_lane.as_mut() {
+                    lane.awaiting_batch_sequence = Some(sequence);
+                    if terminal {
+                        lane.terminal_sequence = Some(sequence);
+                    }
+                }
                 self.output_issued = true;
                 self.connection_bytes_written =
-                    self.connection_bytes_written.saturating_add(length as u64);
+                    self.connection_bytes_written.saturating_add(bytes as u64);
                 self.counters.tcp_tx_bytes =
-                    self.counters.tcp_tx_bytes.saturating_add(length as u64);
+                    self.counters.tcp_tx_bytes.saturating_add(bytes as u64);
                 true
             }
             Err(BoundaryError::Backpressure) => false,
@@ -645,9 +866,12 @@ impl IsolatedVirtioConsole {
     fn stage_disconnect_if_drained(&mut self) -> bool {
         let Some(connection_id) = self.active_connection else {
             self.disconnect_requested = false;
+            self.disconnect_issued = false;
             return false;
         };
         if !self.disconnect_requested
+            || self.disconnect_issued
+            || self.response_lane.is_some()
             || !self.output.is_empty()
             || !self.runtime.control_available()
         {
@@ -657,7 +881,10 @@ impl IsolatedVirtioConsole {
             return false;
         }
         match self.runtime.stage_disconnect(self.last_now_ms) {
-            Ok(_) => true,
+            Ok(_) => {
+                self.disconnect_issued = true;
+                true
+            }
             Err(BoundaryError::Backpressure) => false,
             Err(_) => {
                 self.fail_closed("disconnect-publication");
@@ -704,6 +931,17 @@ impl IsolatedVirtioConsole {
     }
 
     #[inline(never)]
+    fn poll_acknowledge_publication_unit(&mut self) -> IsolatedNetworkTurnOutcome {
+        match self.runtime.acknowledge_publication() {
+            Ok(()) => IsolatedNetworkTurnOutcome::child_signaled(false),
+            Err(_) => {
+                self.fail_closed("publication-ack");
+                IsolatedNetworkTurnOutcome::complete(false)
+            }
+        }
+    }
+
+    #[inline(never)]
     fn poll_stage_output_unit(&mut self) -> IsolatedNetworkTurnOutcome {
         IsolatedNetworkTurnOutcome::child_signal_attempt(self.stage_one_output())
     }
@@ -728,6 +966,68 @@ impl IsolatedVirtioConsole {
             }
         }
     }
+
+    #[inline(never)]
+    fn poll_response_turn(&mut self, now_ms: u64) -> bool {
+        self.last_now_ms = now_ms;
+        self.telemetry.last_poll_ms = now_ms;
+        if self.faulted || self.terminal || !self.runtime.activated() {
+            self.telemetry.link_up = false;
+            return false;
+        }
+        self.counters.smoltcp_polls = self.counters.smoltcp_polls.saturating_add(1);
+
+        let lane = self.response_lane;
+        let stage_output_ready = !self.output.is_empty()
+            && self.runtime.control_available()
+            && lane.is_some_and(|lane| lane.awaiting_batch_sequence.is_none());
+        let response_progress_outstanding =
+            lane.is_some_and(|lane| lane.awaiting_batch_sequence.is_some() || lane.terminal_queued);
+        let selection = select_isolated_response_turn(
+            self.pending_egress.is_some(),
+            self.runtime.publication_ack_pending(),
+            stage_output_ready,
+            response_progress_outstanding,
+            self.lower_cursor,
+        );
+        self.lower_cursor = selection.successor();
+        let outcome = match selection.unit() {
+            IsolatedNetworkTurnUnit::AcknowledgePublication => {
+                self.poll_acknowledge_publication_unit()
+            }
+            IsolatedNetworkTurnUnit::TransmitEgress => self.poll_transmit_egress_unit(now_ms),
+            IsolatedNetworkTurnUnit::Lower(IsolatedNetworkLowerUnit::ObserveChild) => {
+                self.poll_observe_child_unit()
+            }
+            IsolatedNetworkTurnUnit::Lower(IsolatedNetworkLowerUnit::StageOutput) => {
+                self.poll_stage_output_unit()
+            }
+            IsolatedNetworkTurnUnit::Lower(IsolatedNetworkLowerUnit::Ingress) => {
+                self.poll_ingress_unit()
+            }
+            IsolatedNetworkTurnUnit::Lower(IsolatedNetworkLowerUnit::ServiceTick) => {
+                self.poll_service_tick_unit()
+            }
+            IsolatedNetworkTurnUnit::Lower(IsolatedNetworkLowerUnit::Disconnect)
+            | IsolatedNetworkTurnUnit::DeferredDiagnostic => {
+                self.fail_closed("invalid-response-turn-unit");
+                IsolatedNetworkTurnOutcome::complete(false)
+            }
+        };
+        let (lower_cursor, activity) = selection.finish(outcome);
+        self.lower_cursor =
+            if selection.unit() == IsolatedNetworkTurnUnit::TransmitEgress && activity {
+                // A retained child TCP egress publication has now crossed the NIC
+                // boundary. The only useful unobserved reciprocal work is exact
+                // host ingress; skip a blind child-notification observation.
+                IsolatedNetworkLowerCursor::for_unit(IsolatedNetworkLowerUnit::Ingress)
+            } else {
+                lower_cursor
+            };
+        self.complete_response_lane_if_drained();
+        self.refresh_device_counters();
+        activity && !self.faulted
+    }
 }
 
 impl NetPoller for IsolatedVirtioConsole {
@@ -744,12 +1044,16 @@ impl NetPoller for IsolatedVirtioConsole {
         let selection: IsolatedNetworkTurnSelection = select_isolated_network_turn(
             self.device.deferred_tx_diagnostic_pending(),
             self.pending_egress.is_some(),
+            self.runtime.publication_ack_pending(),
             self.lower_cursor,
         );
         // Commit the ordinary successor before any selected unit can block or
         // fault. Only a successful child notification may force ObserveChild.
         self.lower_cursor = selection.successor();
         let outcome = match selection.unit() {
+            IsolatedNetworkTurnUnit::AcknowledgePublication => {
+                self.poll_acknowledge_publication_unit()
+            }
             IsolatedNetworkTurnUnit::DeferredDiagnostic => self.poll_deferred_diagnostic_unit(),
             IsolatedNetworkTurnUnit::TransmitEgress => self.poll_transmit_egress_unit(now_ms),
             IsolatedNetworkTurnUnit::Lower(IsolatedNetworkLowerUnit::ObserveChild) => {
@@ -770,6 +1074,7 @@ impl NetPoller for IsolatedVirtioConsole {
         };
         let (lower_cursor, activity) = selection.finish(outcome);
         self.lower_cursor = lower_cursor;
+        self.complete_response_lane_if_drained();
         if self.faulted {
             self.refresh_device_counters();
             return false;
@@ -791,6 +1096,17 @@ impl NetPoller for IsolatedVirtioConsole {
         budget.charge_frames(ISOLATED_NETWORK_TURN_FRAMES)?;
         budget.charge_bytes(ISOLATED_NETWORK_TURN_BYTES)?;
         Ok(self.poll(now_ms))
+    }
+
+    fn poll_console_response_with_budget(
+        &mut self,
+        now_ms: u64,
+        budget: &mut DriverServiceBudget,
+    ) -> Result<bool, DriverServiceBudgetError> {
+        budget.charge_ops(1)?;
+        budget.charge_frames(ISOLATED_NETWORK_TURN_FRAMES)?;
+        budget.charge_bytes(ISOLATED_NETWORK_TURN_BYTES)?;
+        Ok(self.poll_response_turn(now_ms))
     }
 
     fn driver_task_contract(&self) -> DriverTaskContract {
@@ -827,18 +1143,38 @@ impl NetPoller for IsolatedVirtioConsole {
     }
 
     fn send_console_line(&mut self, line: &str) -> bool {
-        if self.faulted || self.terminal || self.authenticated_connection.is_none() {
-            return !self.faulted && !self.terminal;
+        self.queue_console_output(line, false)
+    }
+
+    fn send_console_terminal_line(&mut self, line: &str) -> bool {
+        self.queue_console_output(line, true)
+    }
+
+    fn bounded_console_response_identity(&self) -> Option<super::ConsoleResponseIdentity> {
+        let connection_id = self.authenticated_connection?;
+        if self.faulted
+            || self.terminal
+            || self.active_connection != Some(connection_id)
+            || !self.runtime.activated()
+        {
+            return None;
         }
-        let line = line.trim_end_matches(['\r', '\n']);
-        if line.is_empty() {
-            return true;
-        }
-        let mut bounded = HeaplessString::new();
-        if bounded.push_str(line).is_err() || self.output.push_back(bounded).is_err() {
-            return false;
-        }
-        true
+        Some(super::ConsoleResponseIdentity {
+            generation: self.runtime.generation(),
+            connection_id,
+        })
+    }
+
+    fn console_response_lane(&self) -> Option<super::ConsoleResponseLane> {
+        let lane = self.response_lane?;
+        Some(super::ConsoleResponseLane {
+            generation: lane.generation,
+            connection_id: lane.connection_id,
+            queued_lines: self.output.len(),
+            available_lines: LINE_QUEUE_DEPTH.saturating_sub(self.output.len()),
+            awaiting_batch_drain: lane.awaiting_batch_sequence.is_some(),
+            terminal_queued: lane.terminal_queued,
+        })
     }
 
     fn request_disconnect(&mut self) {
@@ -850,6 +1186,8 @@ impl NetPoller for IsolatedVirtioConsole {
     fn console_output_drained(&self, connection_id: u64) -> bool {
         !self.faulted
             && self.output.is_empty()
+            && self.pending_egress.is_none()
+            && self.response_lane.is_none()
             && self.runtime.console_output_drained(connection_id)
     }
 

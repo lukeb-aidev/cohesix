@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, VecDeque};
 use std::fmt::Write as _;
 
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
-use cohesix_cas::{CasManifest, CasManifestError, CAS_MANIFEST_SCHEMA};
+use cohesix_cas::{CasManifest, CasManifestError, CAS_MANIFEST_MAX_CHUNKS, CAS_MANIFEST_SCHEMA};
 use ed25519_dalek::{Signature, VerifyingKey};
 use secure9p_codec::ErrorCode;
 use sha2::{Digest, Sha256};
@@ -20,7 +20,6 @@ use super::cbor::{CborError, CborWriter};
 use super::ui::UI_MAX_STREAM_BYTES;
 use crate::NineDoorError;
 
-const CAS_MAX_CHUNKS: usize = 8;
 const CAS_MAX_UPDATES: usize = 8;
 const CAS_MAX_MODELS: usize = 8;
 const CAS_QUARANTINE_LIMIT: usize = 8;
@@ -658,7 +657,7 @@ impl CasStore {
                 "manifest payload_bytes mismatch",
             ));
         }
-        if manifest.chunks.len() > CAS_MAX_CHUNKS {
+        if manifest.chunks.len() > CAS_MANIFEST_MAX_CHUNKS {
             return Err(NineDoorError::protocol(
                 ErrorCode::TooBig,
                 "manifest chunk count exceeds limit",
@@ -871,7 +870,10 @@ impl CasStore {
         if self.config.chunk_bytes == 0 {
             return false;
         }
-        let max_bytes = self.config.chunk_bytes.saturating_mul(CAS_MAX_CHUNKS);
+        let max_bytes = self
+            .config
+            .chunk_bytes
+            .saturating_mul(CAS_MANIFEST_MAX_CHUNKS);
         self.bytes_used.saturating_add(additional) <= max_bytes
     }
 }
@@ -1186,4 +1188,63 @@ fn read_slice(data: &[u8], offset: u64, count: u32) -> Vec<u8> {
     }
     let end = start.saturating_add(count as usize).min(data.len());
     data[start..end].to_vec()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn chunk(byte: u8, chunk_bytes: usize) -> ([u8; 32], Vec<u8>) {
+        let payload = vec![byte; chunk_bytes];
+        let digest = Sha256::digest(&payload);
+        let mut digest_bytes = [0u8; 32];
+        digest_bytes.copy_from_slice(&digest);
+        (digest_bytes, payload)
+    }
+
+    #[test]
+    fn ninth_chunk_quota_refusal_preserves_exact_eight_chunk_state() {
+        const FIRST_BASE64_SEGMENT_CHARS: usize = 124;
+        let chunk_bytes = 128;
+        let mut store = CasStore::new(CasConfig::enabled(chunk_bytes, false, false, None, false));
+        let mut committed = Vec::new();
+        for index in 0..CAS_MANIFEST_MAX_CHUNKS {
+            let (digest, payload) = chunk(b'A' + index as u8, chunk_bytes);
+            store
+                .append_chunk("1", &digest, u64::MAX, &payload)
+                .expect("admit chunk within manifest capacity");
+            committed.push((digest, payload));
+        }
+
+        let bytes_before = store.bytes_used;
+        let chunks_before = store.chunks.len();
+        let pending_before = store.pending_chunks.len();
+        let (ninth_digest, ninth_payload) = chunk(b'Z', chunk_bytes);
+        let ninth_encoded = BASE64_STANDARD.encode(&ninth_payload);
+        assert_eq!(ninth_encoded.len(), 172);
+        let ninth_first_segment = format!("b64:{}", &ninth_encoded[..FIRST_BASE64_SEGMENT_CHARS]);
+        let err = store
+            .append_chunk("1", &ninth_digest, u64::MAX, ninth_first_segment.as_bytes())
+            .expect_err("first segment of ninth chunk must exceed fixed store capacity");
+        match err {
+            NineDoorError::Protocol { code, message } => {
+                assert_eq!(code, ErrorCode::TooBig);
+                assert_eq!(message, "cas store capacity exceeded");
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+
+        assert_eq!(store.bytes_used, bytes_before);
+        assert_eq!(store.chunks.len(), chunks_before);
+        assert_eq!(store.pending_chunks.len(), pending_before);
+        assert!(!store.chunks.contains_key(&ninth_digest));
+        for (digest, payload) in committed {
+            assert_eq!(
+                store
+                    .read_chunk(&digest, 0, chunk_bytes as u32)
+                    .expect("read committed chunk"),
+                payload
+            );
+        }
+    }
 }

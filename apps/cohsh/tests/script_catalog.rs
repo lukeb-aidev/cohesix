@@ -8,6 +8,7 @@ use std::fs::{self, File};
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
 
+use cohesix_ticket::{Role, TicketKey, TicketToken, TicketVerb};
 use cohsh::{tokenize_script, validate_script};
 use sha2::{Digest, Sha256};
 
@@ -98,6 +99,7 @@ fn script_feature_inventory_is_stable() {
         "CMD:ls".to_owned(),
         "CMD:ping".to_owned(),
         "CMD:quit".to_owned(),
+        "CMD:smp".to_owned(),
         "CMD:spawn".to_owned(),
         "CMD:telemetry".to_owned(),
         "CMD:tail".to_owned(),
@@ -107,6 +109,100 @@ fn script_feature_inventory_is_stable() {
         "WAIT".to_owned(),
     ]);
     assert_eq!(features, expected);
+}
+
+#[test]
+fn shard_regression_uses_distinct_admitted_role_slots() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/cohsh/shard_1k.coh");
+    let content = fs::read_to_string(path).expect("read shard regression script");
+    let tokens =
+        tokenize_script(BufReader::new(content.as_bytes())).expect("tokenize shard script");
+    let spawns: Vec<&str> = tokens
+        .iter()
+        .map(String::as_str)
+        .filter(|token| token.starts_with("spawn "))
+        .collect();
+
+    assert_eq!(
+        spawns,
+        vec!["spawn heartbeat ticks=10 ttl_s=60", "spawn lora"]
+    );
+    let rendered = tokens.join("\n");
+    for path in [
+        "/shard/13/worker/worker-1/telemetry",
+        "/worker/worker-1/telemetry",
+        "/shard/1c/worker/worker-2/telemetry",
+        "/worker/worker-2/telemetry",
+    ] {
+        assert!(
+            rendered.contains(path),
+            "missing shard or alias path {path}"
+        );
+    }
+}
+
+#[test]
+fn telemetry_regression_uses_explicit_bandwidth_fixture_before_workload() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/cohsh/telemetry_ring.coh");
+    let content = fs::read_to_string(path).expect("read telemetry regression script");
+    let tokens =
+        tokenize_script(BufReader::new(content.as_bytes())).expect("tokenize telemetry script");
+    let key = TicketKey::from_secret("bootstrap");
+
+    let (quota_idx, quota_token) = tokens
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, token)| {
+            let encoded = token.strip_prefix("attach queen ")?;
+            let decoded = TicketToken::decode(encoded, &key).ok()?;
+            (decoded.claims().quotas.bandwidth_bytes == Some(8)).then_some((idx, decoded))
+        })
+        .next()
+        .expect("explicit bandwidth fixture ticket");
+    let claims = quota_token.claims();
+    assert_eq!(claims.role, Role::Queen);
+    assert_eq!(claims.quotas.bandwidth_bytes, Some(8));
+    assert_eq!(claims.quotas.cursor_resumes, None);
+    assert_eq!(claims.quotas.cursor_advances, None);
+    assert_eq!(
+        claims
+            .scopes
+            .iter()
+            .map(|scope| (scope.path.as_str(), scope.verb, scope.rate_per_s))
+            .collect::<Vec<_>>(),
+        vec![
+            ("/log", TicketVerb::Read, 0),
+            ("/queen", TicketVerb::Write, 0),
+            ("/shard", TicketVerb::Write, 0),
+        ]
+    );
+
+    assert_eq!(tokens[quota_idx + 1], "EXPECT OK");
+    assert_eq!(tokens[quota_idx + 2], "echo forbidden > /log/queen.log");
+    assert_eq!(tokens[quota_idx + 3], "EXPECT ERR");
+    assert_eq!(tokens[quota_idx + 4], "EXPECT SUBSTR EPERM");
+    assert_eq!(tokens[quota_idx + 5], "cat /log/queen.log");
+    assert_eq!(tokens[quota_idx + 6], "EXPECT ERR");
+    assert_eq!(tokens[quota_idx + 7], "EXPECT SUBSTR ELIMIT");
+    assert_eq!(tokens[quota_idx + 8], "detach");
+    assert_eq!(tokens[quota_idx + 9], "EXPECT OK");
+
+    let log_cat_positions = tokens
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, token)| (token == "cat /log/queen.log").then_some(idx))
+        .collect::<Vec<_>>();
+    assert_eq!(log_cat_positions, vec![quota_idx + 5]);
+    let tail_idx = tokens
+        .iter()
+        .position(|token| token == "tail /log/queen.log")
+        .expect("operational log tail");
+    let spawn_idx = tokens
+        .iter()
+        .position(|token| token.starts_with("spawn heartbeat "))
+        .expect("operational telemetry spawn");
+    assert!(quota_idx < spawn_idx);
+    assert!(spawn_idx < tail_idx);
 }
 
 #[test]
@@ -131,7 +227,13 @@ fn script_token_stream_is_stable() {
             .to_owned(),
         "busy_backpressure.coh:0bfb61ee8f7a5eb87b9401e6e85d197b6ea2e134cf0c3b1c940a09afec8f7cd6"
             .to_owned(),
-        "cas_roundtrip.coh:cb8982bb4e62088dd08501995e4cdf2707a2ccd97380f85c486f1fbd8f3e9315"
+        "cas_fixture_signature_rejected.coh:1191d3e9fd32a5af24c6382b79d7dd183c30aac503958250b3760cd55462e323"
+            .to_owned(),
+        "cas_roundtrip.coh:3c4f9c57ba91c2910b69155a36676b220c7aa889923dfadc7e554fbfcf88d427"
+            .to_owned(),
+        "converge_target_activity.coh:a013b830df74aec56efc723005c7391465fdefcdb219b9f75dc720b98f453404"
+            .to_owned(),
+        "converge_worker.coh:93a947c051021ea88e56af66758e0aa7fd2de168adc66d2107e04a0209a3abf1"
             .to_owned(),
         "host_absent.coh:f86f0aee6f7199034b7414d55788edbe2900ac8754f68296edf975816a7919df"
             .to_owned(),
@@ -149,9 +251,9 @@ fn script_token_stream_is_stable() {
             .to_owned(),
         "peft_roundtrip.coh:3657c33c1e8e8660fad19e774495622bbe7620bfe7da684f09ed75e25ca5bcea"
             .to_owned(),
-        "policy_gate.coh:6d7ad6b827641b2578843e3db0bedcd9ffcf911f48520a6e0478d468860f239f"
+        "policy_gate.coh:e6fe5b2fa36a36d9805b893a441a9eccf596046b635c55c2977c65a628ab7ee6"
             .to_owned(),
-        "replay_journal.coh:8bc1578f3283b727ecfc9f5e29a72937221ecbc0ce8e7ecb9881ad87dcd1877d"
+        "replay_journal.coh:8152fc5c9a3cbbf80689267f0e4fc07c89b5c883279d38cb5a30621038b514cb"
             .to_owned(),
         "rest_control_plane_smoke.coh:d9caa417b846e6af631a608d9f3b61dcc35d88f55ebe66a60ab5c75a72e6eb84"
             .to_owned(),
@@ -163,7 +265,7 @@ fn script_token_stream_is_stable() {
             .to_owned(),
         "session_pool.coh:ba523237c1933fbce09df879e871e4269013b74b5b8f8a046adbd2de00e7395e"
             .to_owned(),
-        "shard_1k.coh:d4ce5a6d7a8dff0b2d26382cdec8edc2486ac20b6766b6a51f009e811691620a"
+        "shard_1k.coh:18cb0d8b12f71488f3874650c0739beed554d7775998a47e56f3f5e374d84574"
             .to_owned(),
         "sidecar_integration.coh:7371003a707d038727841bc7e0e6d005767d048ecdd83806400d9687ad316aa3"
             .to_owned(),
@@ -173,7 +275,7 @@ fn script_token_stream_is_stable() {
             .to_owned(),
         "telemetry_push_create.coh:5fd750c00e702d1660c35a96b141f067dd5fa5de14f11720524f3a1ef0cc154c"
             .to_owned(),
-        "telemetry_ring.coh:4d0d4d260b6e0dd8f5508ee1be9971b8da93c3a3b1e77dd78b5eb95a545e6784"
+        "telemetry_ring.coh:e2eb77dd05985279182a59c027132dcb84353b9d4cf81b5beb30dbf43f6c6698"
             .to_owned(),
         "worker_host_model.coh:971fad19faabe4ffd7f322f61944b9bb548810229d3617ab65090765a996122e"
             .to_owned(),

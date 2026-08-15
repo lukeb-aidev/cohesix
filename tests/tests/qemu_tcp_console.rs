@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright © 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Defines tests for tests qemu_tcp_console.
 // Author: Lukas Bower
@@ -74,6 +74,15 @@ fn tcp_console_script_recovers_from_disconnect() -> Result<()> {
                 } else if trimmed == "PING" {
                     write_frame(&mut stream, "PONG");
                     write_frame(&mut stream, "OK PING reply=pong");
+                } else if trimmed.eq_ignore_ascii_case("quit") {
+                    write_frame(&mut stream, "OK QUIT");
+                    let mut trailing = [0u8; 1];
+                    assert_eq!(
+                        stream.read(&mut trailing).unwrap(),
+                        0,
+                        "cohsh must half-close after OK QUIT"
+                    );
+                    break;
                 }
             }
             if attempts >= 2 {

@@ -5,6 +5,11 @@
 
 set -euo pipefail
 
+# Lock ownership is runner-private state. A nested or externally launched
+# runner must acquire the lock for its own state directory instead of trusting
+# an inherited parent-runner identity.
+unset TEST_PLAN_RUNNER_LOCK_HELD TEST_PLAN_LOCK_OWNER_ID
+
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd "${script_dir}/../.." && pwd)
 # shellcheck source=scripts/ci/test_plan_common.sh

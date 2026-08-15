@@ -398,6 +398,12 @@ def main() -> int:
         ),
         "Stage 03",
     )
+    forbid(
+        errors,
+        stage_03,
+        ("TP_STAGE3_QUIT_CLOSE_TIMEOUT", "QUIT_CLOSE_TIMEOUT"),
+        "Stage 03",
+    )
     require(
         errors,
         stage_04,
@@ -471,7 +477,12 @@ def main() -> int:
     forbid(
         errors,
         due_diligence,
-        ("cargo test -p secure9p-codec", "cargo test -p tests"),
+        (
+            "cargo test -p secure9p-codec",
+            "cargo test -p tests",
+            "DD_REGRESSION_QUIT_TIMEOUT",
+            "QUIT_CLOSE_TIMEOUT",
+        ),
         "standalone due diligence",
     )
 

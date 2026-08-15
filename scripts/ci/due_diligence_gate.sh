@@ -26,7 +26,6 @@
 #   DD_REGRESSION_READY_TIMEOUT  Override run_regression_batch READY_TIMEOUT (default: 900)
 #   DD_REGRESSION_PORT_TIMEOUT   Override run_regression_batch PORT_TIMEOUT (default: 60)
 #   DD_REGRESSION_AUTH_TIMEOUT   Override run_regression_batch AUTH_READY_TIMEOUT (default: 120)
-#   DD_REGRESSION_QUIT_TIMEOUT   Override run_regression_batch QUIT_CLOSE_TIMEOUT (default: 60)
 
 set -euo pipefail
 
@@ -44,7 +43,6 @@ log_root="${DD_GATE_LOG_DIR:-${repo_root}/out/audit/gate/${run_id}}"
 dd_regression_ready_timeout="${DD_REGRESSION_READY_TIMEOUT:-900}"
 dd_regression_port_timeout="${DD_REGRESSION_PORT_TIMEOUT:-60}"
 dd_regression_auth_timeout="${DD_REGRESSION_AUTH_TIMEOUT:-120}"
-dd_regression_quit_timeout="${DD_REGRESSION_QUIT_TIMEOUT:-60}"
 dd_reuse_regression_batch_from="${DD_REUSE_REGRESSION_BATCH_FROM:-}"
 dd_reuse_staged_evidence_from="${DD_REUSE_STAGED_EVIDENCE_FROM:-}"
 dd_reuse_staged_evidence_target="${DD_REUSE_STAGED_EVIDENCE_TARGET:-}"
@@ -1000,7 +998,6 @@ else
     READY_TIMEOUT="${dd_regression_ready_timeout}" \
     PORT_TIMEOUT="${dd_regression_port_timeout}" \
     AUTH_READY_TIMEOUT="${dd_regression_auth_timeout}" \
-    QUIT_CLOSE_TIMEOUT="${dd_regression_quit_timeout}" \
     scripts/cohsh/run_regression_batch.sh
 fi
 run_step "release-guardrails-findings" check_blocking_findings

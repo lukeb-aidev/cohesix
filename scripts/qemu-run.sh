@@ -8,6 +8,17 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 HOST_OS="$(uname -s 2>/dev/null || true)"
+CANONICAL_QEMU_CPU="cortex-a57"
+CANONICAL_QEMU_TIMER_CLOCK_HZ="24000000"
+CANONICAL_QEMU_VIRT="off"
+QEMU_MACHINE_EXTRA="${COHESIX_QEMU_MACHINE_EXTRA:-${QEMU_MACHINE_EXTRA:-}}"
+if [[ -z "$QEMU_MACHINE_EXTRA" && "$HOST_OS" == "Darwin" ]]; then
+    QEMU_MACHINE_EXTRA="kernel-irqchip=off"
+fi
+QEMU_VIRT_RAW="${COHESIX_QEMU_VIRT:-${QEMU_VIRT:-}}"
+if [[ -z "$QEMU_VIRT_RAW" ]]; then
+    QEMU_VIRT_RAW="$CANONICAL_QEMU_VIRT"
+fi
 
 log() {
     echo "[qemu-run] $*"
@@ -48,6 +59,11 @@ built for aarch64.
 Env overrides:
   COHESIX_QEMU_SMP / QEMU_SMP (default: 4; ignored when *_QEMU_SMP_TOPO is set)
   COHESIX_QEMU_SMP_TOPO / QEMU_SMP_TOPO (default: 4,cores=4,threads=1,sockets=1)
+  COHESIX_QEMU_VIRT / QEMU_VIRT (must be off; profile-owned machine contract)
+  COHESIX_QEMU_ACCEL / QEMU_ACCEL (default: hvf on macOS, kvm/tcg on Linux;
+                        explicit tcg is diagnostic and claim-ineligible)
+  COHESIX_QEMU_MACHINE_EXTRA / QEMU_MACHINE_EXTRA (appended to -machine;
+                        must not override machine type, GIC, or virtualization)
 USAGE
 }
 
@@ -209,15 +225,51 @@ resolve_qemu_accel() {
     fi
     if [[ "$accel" == "kvm" && "$HOST_OS" == "Linux" ]]; then
         if ! has_kvm_device; then
-            log "Requested QEMU accelerator 'kvm' but /dev/kvm is unavailable; falling back to tcg"
+            log "Requested QEMU accelerator 'kvm' but /dev/kvm is unavailable; falling back to tcg" >&2
             accel="tcg"
         fi
     fi
     if ! qemu_accel_supported "$accel"; then
-        log "Requested QEMU accelerator '$accel' not supported by $QEMU_BIN; falling back to tcg"
+        if [[ "$HOST_OS" == "Darwin" && "$accel" == "hvf" ]]; then
+            log "Canonical Darwin QEMU requires HVF, but $QEMU_BIN does not advertise it; set COHESIX_QEMU_ACCEL=tcg only for a claim-ineligible diagnostic run" >&2
+            exit 1
+        fi
+        log "Requested QEMU accelerator '$accel' not supported by $QEMU_BIN; falling back to tcg" >&2
         accel="tcg"
     fi
     echo "$accel"
+}
+
+resolve_qemu_virt_arg() {
+    if [[ -n "$QEMU_VIRT_RAW" ]]; then
+        echo "$QEMU_VIRT_RAW"
+        return
+    fi
+    echo "$CANONICAL_QEMU_VIRT"
+}
+
+validate_qemu_virt_arg() {
+    local arg="$1"
+    if [[ "$arg" != "$CANONICAL_QEMU_VIRT" ]]; then
+        log "Selected QEMU profile requires virtualization=off; got $arg" >&2
+        exit 1
+    fi
+}
+
+format_qemu_machine_arg() {
+    local machine="virt,gic-version=${GIC_VER},virtualization=${QEMU_VIRT_ARG}"
+    if [[ "$QEMU_MACHINE_EXTRA" == *"gic-version"* \
+        || "$QEMU_MACHINE_EXTRA" == *"virtualization"* \
+        || "$QEMU_MACHINE_EXTRA" == *"virt,"* \
+        || "$QEMU_MACHINE_EXTRA" == *"machine="* \
+        || "$QEMU_MACHINE_EXTRA" == *"type="* ]]; then
+        log "QEMU machine extras must not override the profile-owned machine" >&2
+        exit 1
+    fi
+    if [[ -n "$QEMU_MACHINE_EXTRA" ]]; then
+        machine="${machine},${QEMU_MACHINE_EXTRA}"
+    fi
+    echo "$machine"
 }
 
 resolve_qemu_smp_arg() {
@@ -320,16 +372,34 @@ QEMU_VERSION="$($QEMU_BIN --version | head -n1)"
 log "Using QEMU binary: $QEMU_BIN ($QEMU_VERSION)"
 
 GIC_VER="$(detect_gic_version)"
+if [[ "$GIC_VER" != "3" ]]; then
+    log "Selected operational QEMU build must use GICv3; detected GIC${GIC_VER}" >&2
+    exit 1
+fi
 log "Auto-detected GIC version: gic-version=$GIC_VER"
 QEMU_ACCEL="$(resolve_qemu_accel)"
 log "Using QEMU accel: $QEMU_ACCEL"
+if [[ "$QEMU_ACCEL" == "tcg" ]]; then
+    log "TCG is an explicit diagnostic envelope; this run is claim-ineligible"
+elif [[ "$HOST_OS" == "Darwin" && "$QEMU_ACCEL" != "hvf" ]]; then
+    log "Non-HVF Darwin acceleration is outside the production envelope; this run is claim-ineligible"
+fi
 QEMU_SMP_ARG="$(resolve_qemu_smp_arg)"
 validate_qemu_smp_arg "$QEMU_SMP_ARG"
 log "Using QEMU SMP: $QEMU_SMP_ARG"
+QEMU_VIRT_ARG="$(resolve_qemu_virt_arg)"
+validate_qemu_virt_arg "$QEMU_VIRT_ARG"
+QEMU_MACHINE_ARG="$(format_qemu_machine_arg)"
+QEMU_CPU_ARG="$CANONICAL_QEMU_CPU"
+if [[ "$QEMU_ACCEL" == "tcg" ]]; then
+    QEMU_CPU_ARG="${QEMU_CPU_ARG},cntfrq=${CANONICAL_QEMU_TIMER_CLOCK_HZ}"
+fi
+log "Using QEMU machine: $QEMU_MACHINE_ARG"
+log "Using QEMU CPU: $QEMU_CPU_ARG"
 
 QEMU_ARGS=(-accel "$QEMU_ACCEL" \
-    -machine "virt,gic-version=${GIC_VER}" \
-    -cpu cortex-a57 \
+    -machine "$QEMU_MACHINE_ARG" \
+    -cpu "$QEMU_CPU_ARG" \
     -m 1024 \
     -smp "$QEMU_SMP_ARG" \
     -serial stdio \

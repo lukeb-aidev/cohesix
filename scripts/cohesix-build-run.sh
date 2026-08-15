@@ -12,6 +12,9 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 GENERATED_CONFIG_DIR="$PROJECT_ROOT/configs/generated"
 CANONICAL_QEMU_PROFILE="qemu_smp_production"
 CANONICAL_QEMU_BUILD_DIR="$PROJECT_ROOT/out/sel4/profile-v2/qemu-smp-production"
+CANONICAL_QEMU_CPU="cortex-a57"
+CANONICAL_QEMU_TIMER_CLOCK_HZ="24000000"
+CANONICAL_QEMU_VIRT="off"
 HOST_OS="$(uname -s)"
 QEMU_MACHINE_EXTRA="${COHESIX_QEMU_MACHINE_EXTRA:-${QEMU_MACHINE_EXTRA:-}}"
 if [[ -z "$QEMU_MACHINE_EXTRA" && "$HOST_OS" == "Darwin" ]]; then
@@ -19,7 +22,7 @@ if [[ -z "$QEMU_MACHINE_EXTRA" && "$HOST_OS" == "Darwin" ]]; then
 fi
 QEMU_VIRT_RAW="${COHESIX_QEMU_VIRT:-${QEMU_VIRT:-}}"
 if [[ -z "$QEMU_VIRT_RAW" ]]; then
-    QEMU_VIRT_RAW="on"
+    QEMU_VIRT_RAW="$CANONICAL_QEMU_VIRT"
 fi
 
 usage() {
@@ -31,8 +34,9 @@ boot the system under QEMU. The script expects an existing seL4 build tree that
 already produced `elfloader`, `kernel.elf`, and support artefacts. By default it
 uses the validated `qemu_smp_production` contract at
 `$PROJECT_ROOT/out/sel4/profile-v2/qemu-smp-production`.
-That contract must report GICv3; launch always uses `virt,gic-version=3` and
-rejects command-line or environment attempts to replace the machine/GIC truth.
+That contract must report GICv3; launch always uses the profile-owned
+`virt,gic-version=3,virtualization=off` and `cortex-a57` envelope and rejects
+command-line or environment attempts to replace that truth.
 
 Options:
   --sel4-build <dir>    Path to the seL4 build output
@@ -66,10 +70,11 @@ to cohsh via --qemu-arg when --transport qemu is selected).
 Env overrides:
   COHESIX_QEMU_SMP / QEMU_SMP (default: 4; ignored when *_QEMU_SMP_TOPO is set)
   COHESIX_QEMU_SMP_TOPO / QEMU_SMP_TOPO (default: 4,cores=4,threads=1,sockets=1)
-  COHESIX_QEMU_VIRT / QEMU_VIRT (on|off; default: on)
-  COHESIX_QEMU_ACCEL / QEMU_ACCEL (auto; default tcg on macOS, kvm/tcg on Linux)
+  COHESIX_QEMU_VIRT / QEMU_VIRT (must be off; profile-owned machine contract)
+  COHESIX_QEMU_ACCEL / QEMU_ACCEL (default: hvf on macOS, kvm/tcg on Linux;
+                        explicit tcg is diagnostic and claim-ineligible)
   COHESIX_QEMU_MACHINE_EXTRA / QEMU_MACHINE_EXTRA (appended to -machine)
-                        (must not override machine type or gic-version)
+                        (must not override machine type, GIC, or virtualization)
   COHESIX_SEL4_PROFILE (qemu_smp_production|qemu_smp_diagnostic; validates an
                         explicitly selected build tree against that contract)
   COHESIX_DRIVER_CLASSIC_COMPARATOR_RECORD (immutable comparator record;
@@ -125,6 +130,36 @@ qemu_args_have_accel() {
     return 1
 }
 
+qemu_args_accel_value() {
+    local expect_value=0
+    local arg
+    local value
+    for arg in "$@"; do
+        if [[ "$expect_value" -eq 1 ]]; then
+            value="${arg%%,*}"
+            [[ -n "$value" ]] || fail "QEMU -accel requires a non-empty value"
+            echo "$value"
+            return 0
+        fi
+        case "$arg" in
+            -accel)
+                expect_value=1
+                ;;
+            -accel=*)
+                value="${arg#-accel=}"
+                value="${value%%,*}"
+                [[ -n "$value" ]] || fail "QEMU -accel requires a non-empty value"
+                echo "$value"
+                return 0
+                ;;
+        esac
+    done
+    if [[ "$expect_value" -eq 1 ]]; then
+        fail "QEMU -accel requires a value"
+    fi
+    return 1
+}
+
 detect_qemu_accel() {
     local accel="${COHESIX_QEMU_ACCEL:-${QEMU_ACCEL:-}}"
     if [[ -n "$accel" ]]; then
@@ -136,7 +171,7 @@ detect_qemu_accel() {
     host_os="$(uname -s 2>/dev/null || true)"
     case "$host_os" in
         Darwin)
-            echo "tcg"
+            echo "hvf"
             ;;
         Linux)
             if [[ -c /dev/kvm && -r /dev/kvm && -w /dev/kvm ]]; then
@@ -173,12 +208,15 @@ resolve_qemu_accel() {
     fi
     if [[ "$accel" == "kvm" && "$HOST_OS" == "Linux" ]]; then
         if ! has_kvm_device; then
-            log "Requested QEMU accelerator 'kvm' but /dev/kvm is unavailable; falling back to tcg"
+            log "Requested QEMU accelerator 'kvm' but /dev/kvm is unavailable; falling back to tcg" >&2
             accel="tcg"
         fi
     fi
     if ! qemu_accel_supported "$accel"; then
-        log "Requested QEMU accelerator '$accel' not supported by $QEMU_BIN; falling back to tcg"
+        if [[ "$HOST_OS" == "Darwin" && "$accel" == "hvf" ]]; then
+            fail "canonical Darwin QEMU requires HVF, but $QEMU_BIN does not advertise it; set COHESIX_QEMU_ACCEL=tcg only for a claim-ineligible diagnostic run"
+        fi
+        log "Requested QEMU accelerator '$accel' not supported by $QEMU_BIN; falling back to tcg" >&2
         accel="tcg"
     fi
     echo "$accel"
@@ -269,20 +307,71 @@ resolve_qemu_virt_arg() {
         echo "$QEMU_VIRT_RAW"
         return
     fi
-    echo "on"
+    echo "$CANONICAL_QEMU_VIRT"
 }
 
 validate_qemu_virt_arg() {
     local arg="$1"
 
-    case "$arg" in
-        on|off)
-            return
-            ;;
-        *)
-            fail "Invalid QEMU virtualization setting (use on|off): ${arg}"
-            ;;
-    esac
+    [[ "$arg" == "$CANONICAL_QEMU_VIRT" ]] || \
+        fail "selected QEMU profile requires virtualization=off; got ${arg}"
+}
+
+validate_generated_timer_clock() {
+    local resolved_manifest="$1"
+    local platform_header="$2"
+    local timer_clock_hz
+
+    if ! timer_clock_hz="$(python3 - "$resolved_manifest" "$platform_header" <<'PY'
+import json
+from pathlib import Path
+import re
+import sys
+
+manifest_path = Path(sys.argv[1])
+header_path = Path(sys.argv[2])
+try:
+    document = json.loads(manifest_path.read_text(encoding="utf-8"))
+except (OSError, UnicodeError, json.JSONDecodeError) as error:
+    raise SystemExit(f"cannot read resolved root-task manifest: {error}") from error
+
+service = document.get("console_network_service")
+if not isinstance(service, dict):
+    raise SystemExit("resolved manifest has no console_network_service object")
+manifest_hz = service.get("timer_clock_hz")
+if (
+    not isinstance(manifest_hz, int)
+    or isinstance(manifest_hz, bool)
+    or manifest_hz < 1
+):
+    raise SystemExit("resolved manifest timer_clock_hz must be a positive integer")
+
+try:
+    header = header_path.read_text(encoding="utf-8")
+except (OSError, UnicodeError) as error:
+    raise SystemExit(f"cannot read selected seL4 timer header: {error}") from error
+matches = re.findall(
+    r"^\s*#define\s+TIMER_CLOCK_HZ\s+(?:ULL_CONST\(\s*)?([0-9]+)(?:\s*\))?\s*$",
+    header,
+    flags=re.MULTILINE,
+)
+if len(matches) != 1:
+    raise SystemExit(
+        "selected seL4 timer header must define TIMER_CLOCK_HZ exactly once"
+    )
+kernel_hz = int(matches[0])
+if manifest_hz != kernel_hz:
+    raise SystemExit(
+        "timer clock mismatch: "
+        f"console_network_service.timer_clock_hz={manifest_hz}, "
+        f"selected seL4 TIMER_CLOCK_HZ={kernel_hz}"
+    )
+print(kernel_hz)
+PY
+)"; then
+        fail "generated console-network timer clock does not match selected seL4"
+    fi
+    log "Validated console-network/seL4 timer clock: ${timer_clock_hz} Hz"
 }
 
 validate_qemu_smp_arg() {
@@ -524,36 +613,37 @@ validate_gicv3_override_safety() {
     local arg
     local -a cohsh_args=()
     if [[ "$QEMU_MACHINE_EXTRA" == *"gic-version"* \
+        || "$QEMU_MACHINE_EXTRA" == *"virtualization"* \
         || "$QEMU_MACHINE_EXTRA" == *"virt,"* \
         || "$QEMU_MACHINE_EXTRA" == *"machine="* \
         || "$QEMU_MACHINE_EXTRA" == *"type="* ]]; then
-        fail "QEMU machine extras must not override virt or gic-version; GICv3 is profile-owned"
+        fail "QEMU machine extras must not override virt, gic-version, or virtualization; the machine is profile-owned"
     fi
     # Bash 3.2 on macOS treats an empty array as unset under `set -u`; the
     # `+` expansion preserves zero iterations while retaining argument bounds.
     for arg in "${EXTRA_QEMU_ARGS[@]+"${EXTRA_QEMU_ARGS[@]}"}"; do
-        case "$arg" in
-            -machine|--machine|-machine=*|--machine=*|-M|-M*|*gic-version*)
-                fail "extra QEMU arguments must not override the profile-owned virt,gic-version=3 machine"
-                ;;
-        esac
         if [[ "${LAUNCH_EXISTING:-0}" -eq 1 ]] && \
             qemu_arg_replaces_immutable_input "$arg"; then
             fail "--launch-existing extra arguments must not replace immutable QEMU inputs or topology"
         fi
+        case "$arg" in
+            -machine|--machine|-machine=*|--machine=*|-M|-M*|*gic-version*|*virtualization*|-cpu|--cpu|-cpu=*|--cpu=*)
+                fail "extra QEMU arguments must not override the profile-owned virt,gic-version=3 machine or CPU"
+                ;;
+        esac
     done
     if [[ -n "${COHSH_QEMU_ARGS:-}" ]]; then
         read -r -a cohsh_args <<< "${COHSH_QEMU_ARGS}"
         for arg in "${cohsh_args[@]+"${cohsh_args[@]}"}"; do
-            case "$arg" in
-                -machine|--machine|-machine=*|--machine=*|-M|-M*|*gic-version*)
-                    fail "COHSH_QEMU_ARGS must not override the profile-owned virt,gic-version=3 machine"
-                    ;;
-            esac
             if [[ "${LAUNCH_EXISTING:-0}" -eq 1 ]] && \
                 qemu_arg_replaces_immutable_input "$arg"; then
                 fail "--launch-existing COHSH_QEMU_ARGS must not replace immutable QEMU inputs or topology"
             fi
+            case "$arg" in
+                -machine|--machine|-machine=*|--machine=*|-M|-M*|*gic-version*|*virtualization*|-cpu|--cpu|-cpu=*|--cpu=*)
+                    fail "COHSH_QEMU_ARGS must not override the profile-owned virt,gic-version=3 machine or CPU"
+                    ;;
+            esac
         done
     fi
 }
@@ -581,7 +671,12 @@ launch_qemu_artifacts() {
 
     # Serial output from the PL011 console and root-task logger is expected on
     # stdio via -serial mon:stdio; keep this wiring intact for every launch.
-    BASE_QEMU_ARGS=("${ACCEL_ARGS[@]}" -machine "${machine_arg}" -cpu cortex-a57 -m 1024 -smp "$QEMU_SMP_ARG" -serial mon:stdio -display none -kernel "$ELFLOADER_STAGE_PATH" -initrd "$CPIO_PATH" -device loader,file="$KERNEL_STAGE_PATH",addr=$KERNEL_LOAD_ADDR,force-raw=on -device loader,file="$ROOTSERVER_STAGE_PATH",addr=$ROOTSERVER_LOAD_ADDR,force-raw=on)
+    local cpu_arg="$CANONICAL_QEMU_CPU"
+    if [[ "${QEMU_ACCEL:-}" == "tcg" ]]; then
+        cpu_arg="${cpu_arg},cntfrq=${CANONICAL_QEMU_TIMER_CLOCK_HZ}"
+    fi
+    log "Using QEMU CPU: ${cpu_arg}"
+    BASE_QEMU_ARGS=("${ACCEL_ARGS[@]}" -machine "${machine_arg}" -cpu "$cpu_arg" -m 1024 -smp "$QEMU_SMP_ARG" -serial mon:stdio -display none -kernel "$ELFLOADER_STAGE_PATH" -initrd "$CPIO_PATH" -device loader,file="$KERNEL_STAGE_PATH",addr=$KERNEL_LOAD_ADDR,force-raw=on -device loader,file="$ROOTSERVER_STAGE_PATH",addr=$ROOTSERVER_LOAD_ADDR,force-raw=on)
 
     if [[ "$TRANSPORT" == "tcp" ]]; then
         if [[ "$NET_BACKEND" == "virtio" ]]; then
@@ -935,12 +1030,9 @@ PY
         fi
     fi
 
-    declare -a REQUIRED_COMMANDS=(python3)
+    declare -a REQUIRED_COMMANDS=(python3 "$QEMU_BIN")
     if [[ "$LAUNCH_EXISTING" -eq 0 ]]; then
         REQUIRED_COMMANDS+=(cargo cpio)
-    fi
-    if [[ "$RUN_QEMU" -eq 1 ]]; then
-        REQUIRED_COMMANDS+=("$QEMU_BIN")
     fi
     for cmd in "${REQUIRED_COMMANDS[@]}"; do
         command -v "$cmd" >/dev/null 2>&1 || fail "Required command not found in PATH: $cmd"
@@ -962,7 +1054,8 @@ PY
         if [[ "$TRANSPORT" == "qemu" && -n "${COHSH_QEMU_ARGS:-}" ]]; then
             read -r -a COHSH_QEMU_ARGS_ARR <<< "${COHSH_QEMU_ARGS}"
             if qemu_args_have_accel "${COHSH_QEMU_ARGS_ARR[@]}"; then
-                log "QEMU accel override detected in COHSH_QEMU_ARGS; skipping auto accel selection"
+                QEMU_ACCEL="$(qemu_args_accel_value "${COHSH_QEMU_ARGS_ARR[@]}")"
+                log "QEMU accel override detected in COHSH_QEMU_ARGS; this launch is claim-ineligible"
             else
                 QEMU_ACCEL="$(resolve_qemu_accel)"
                 ACCEL_ARGS=(-accel "$QEMU_ACCEL")
@@ -974,7 +1067,16 @@ PY
             log "Using QEMU accel: $QEMU_ACCEL"
         fi
     else
-        log "QEMU accel overridden via extra QEMU args"
+        QEMU_ACCEL="$(qemu_args_accel_value "${EXTRA_QEMU_ARGS[@]}")"
+        log "QEMU accel overridden via extra QEMU args; this launch is claim-ineligible"
+    fi
+
+    if [[ "${QEMU_ACCEL:-}" == "tcg" ]]; then
+        log "TCG is an explicit diagnostic envelope; this run is claim-ineligible"
+    elif [[ "$HOST_OS" == "Darwin" \
+        && -n "${QEMU_ACCEL:-}" \
+        && "$QEMU_ACCEL" != "hvf" ]]; then
+        log "Non-HVF Darwin acceleration is outside the production envelope; this run is claim-ineligible"
     fi
 
     ELFLOADER_PATH="$SEL4_BUILD_DIR/elfloader/elfloader"
@@ -1024,7 +1126,15 @@ PY
             --profile "$PROFILE_DIR" \
             --cargo-target "$CARGO_TARGET" \
             --root-task-features "$ROOT_TASK_FEATURES" \
-            --gic-version "$GIC_VER" >/dev/null || \
+            --gic-version "$GIC_VER" \
+            --sel4-profile "${SEL4_PROFILE:-unselected}" \
+            --qemu "$QEMU_BIN" \
+            --accelerator "$QEMU_ACCEL" \
+            --virtualization "$QEMU_VIRT_ARG" \
+            --machine-extra "$QEMU_MACHINE_EXTRA" \
+            --cpu "$CANONICAL_QEMU_CPU" \
+            --smp "$QEMU_SMP_ARG" \
+            --net-backend "$NET_BACKEND" >/dev/null || \
             fail "immutable QEMU launch artifact verification failed"
         launch_qemu_artifacts
         return $?
@@ -1069,6 +1179,10 @@ PY
         --cohesix-py-defaults "$PROJECT_ROOT/tools/cohesix-py/cohesix/generated.py" \
         --cohesix-py-doc "$PROJECT_ROOT/docs/snippets/cohesix_py_defaults.md" \
         --coh-doctor-doc "$PROJECT_ROOT/docs/snippets/coh_doctor_checks.md"
+
+    validate_generated_timer_clock \
+        "$GENERATED_CONFIG_DIR/root_task_resolved.json" \
+        "$SEL4_BUILD_DIR/kernel/gen_headers/plat/platform_gen.h"
 
     log "Regenerating target-qualified Python projection contracts"
     cargo run -p coh-rtc --bin coh-rtc-python-profile -- \
@@ -1458,7 +1572,15 @@ PY
         --profile "$PROFILE_DIR" \
         --cargo-target "$CARGO_TARGET" \
         --root-task-features "$ROOT_TASK_FEATURES" \
-        --gic-version "$GIC_VER" >/dev/null || \
+        --gic-version "$GIC_VER" \
+        --sel4-profile "${SEL4_PROFILE:-unselected}" \
+        --qemu "$QEMU_BIN" \
+        --accelerator "$QEMU_ACCEL" \
+        --virtualization "$QEMU_VIRT_ARG" \
+        --machine-extra "$QEMU_MACHINE_EXTRA" \
+        --cpu "$CANONICAL_QEMU_CPU" \
+        --smp "$QEMU_SMP_ARG" \
+        --net-backend "$NET_BACKEND" >/dev/null || \
         fail "could not bind immutable QEMU launch artifacts"
     log "Bound immutable QEMU launch artifacts: $LAUNCH_ARTIFACT_RECORD"
 

@@ -69,16 +69,21 @@ trigger_paths = [
 [[convergence_focus]]
 id = "console-network"
 targets = ["qemu"]
-description = "Isolated console service, live TCP transport, and console scheduling changes."
+description = "Isolated console service, ABI v3 SendBatch, bounded synchronous response capture, and live TCP transport changes."
 profile = "qemu_smp_production / configs/root_task.toml"
-authoritative_evidence = "canonical QEMU boot, isolated console READY, and one authenticated live TCP operation"
+authoritative_evidence = "canonical QEMU boot, isolated console READY v3, and the fixed one-socket HELP/NETSTATS/SMP/CACHELOG matrix"
 priority = 90
 trigger_paths = [
   "apps/console-network-runtime/**",
+  "crates/console-network-abi/**",
+  "apps/root-task/src/event/**",
   "apps/root-task/src/console_network_service.rs",
+  "apps/root-task/src/hal/cache.rs",
   "apps/root-task/src/hal/console_network.rs",
   "apps/root-task/src/net/**",
   "apps/root-task/tests/console_network_service.rs",
+  "scripts/qemu_tcp_response_matrix.py",
+  "tests/test_qemu_tcp_response_matrix.py",
 ]
 
 [[convergence_focus]]
@@ -411,7 +416,7 @@ targets = ["qemu", "pi4"]
 description = "Run repository Python discovery and due-diligence lifecycle tests in one pinned pytest process."
 command = "scripts/ci/python_test_gate.sh --tests"
 timeout_seconds = 3600
-trigger_paths = ["tests/**/*.py", "tools/cohesix-py/**/*.py", "scripts/**/*.py"]
+trigger_paths = ["tests/*.py", "tests/**/*.py", "tools/cohesix-py/**/*.py", "scripts/*.py", "scripts/**/*.py", "scripts/ci/python_test_gate.sh", "configs/test-plan-python-requirements.lock"]
 expected_evidence = ["command-result", "pytest-summary"]
 test_policy = "nonzero"
 minimum_test_count = 1
@@ -482,10 +487,10 @@ stage = 2
 tier = "qemu-integration"
 scope = "provisioned-target"
 targets = ["qemu"]
-description = "Compile the exact root-task QEMU release feature set against the selected profile."
-command = "SEL4_BUILD_DIR=\"${TEST_PLAN_ROOT}/out/sel4/profile-v2/qemu-smp-production\" cargo check -p root-task --target aarch64-unknown-none --no-default-features --features release-qemu"
+description = "Verify that the selected QEMU manifest matches the compiled generated root-task identity, then build fresh isolated components and compile the exact 24 MHz release feature set."
+command = "scripts/ci/test_plan_target_root_check.sh --target qemu --sel4-build \"${TEST_PLAN_ROOT}/out/sel4/profile-v2/qemu-smp-production\" --profile qemu_smp_production --features release-qemu --timer-clock-hz 24000000"
 timeout_seconds = 1800
-trigger_paths = ["apps/root-task/**", "configs/root_task.toml", "configs/sel4/**", "Cargo.lock"]
+trigger_paths = ["apps/root-task/**", "apps/console-network-runtime/**", "apps/nine-door-runtime/**", "apps/pi4-driver-runtime/**", "apps/worker-*/**", "crates/console-network-abi/**", "crates/pi4-driver-abi/**", "crates/secure9p-transport/**", "crates/worker-task-abi/**", "configs/root_task.toml", "configs/sel4/**", "configs/driver_runtime_classic_comparator.toml", "scripts/ci/test_plan_target_root_check.sh", "scripts/driver_runtime_manifest.py", "scripts/worker_image_manifest.py", "tools/coh-rtc/**", "Cargo.lock"]
 expected_evidence = ["command-result", "sel4-profile-identity"]
 test_policy = "none"
 
@@ -510,10 +515,10 @@ stage = 2
 tier = "pi4-transport"
 scope = "provisioned-target"
 targets = ["pi4"]
-description = "Compile the exact root-task Pi 4 release feature set against the canonical seL4 16 diagnostic profile."
-command = "SEL4_BUILD_DIR=\"${TEST_PLAN_ROOT}/seL4/build_UBOOT\" cargo check -p root-task --target aarch64-unknown-none --no-default-features --features release-pi4"
+description = "Fail closed unless the selected Pi 4 manifest matches the compiled generated root-task identity, then build fresh isolated components and compile the exact 54 MHz release feature set."
+command = "scripts/ci/test_plan_target_root_check.sh --target pi4 --sel4-build \"${TEST_PLAN_ROOT}/seL4/build_UBOOT\" --profile pi4_diagnostic --features release-pi4 --timer-clock-hz 54000000"
 timeout_seconds = 1800
-trigger_paths = ["apps/root-task/**", "configs/root_task_pi4_uboot_aarch64.toml", "configs/sel4/**", "seL4/build_UBOOT/**", "Cargo.lock"]
+trigger_paths = ["apps/root-task/**", "apps/console-network-runtime/**", "apps/nine-door-runtime/**", "apps/pi4-driver-runtime/**", "apps/worker-*/**", "crates/console-network-abi/**", "crates/pi4-driver-abi/**", "crates/secure9p-transport/**", "crates/worker-task-abi/**", "configs/root_task_pi4_uboot_aarch64.toml", "configs/sel4/**", "configs/driver_runtime_classic_comparator.toml", "scripts/ci/test_plan_target_root_check.sh", "scripts/driver_runtime_manifest.py", "scripts/worker_image_manifest.py", "tools/coh-rtc/**", "seL4/build_UBOOT/**", "Cargo.lock"]
 expected_evidence = ["command-result", "sel4-profile-identity"]
 test_policy = "none"
 
@@ -523,10 +528,10 @@ stage = 3
 tier = "qemu-integration"
 scope = "target"
 targets = ["qemu"]
-description = "Build each unique QEMU manifest once and run every cohsh group in a fresh boot."
+description = "Build each unique QEMU manifest once and run every cohsh group in a fresh boot, including the fixed synchronous response matrix on the base boot."
 command = "scripts/cohsh/run_regression_batch.sh"
 timeout_seconds = 5400
-trigger_paths = ["apps/root-task/**", "apps/cohsh/**", "scripts/cohsh/**", "configs/root_task*.toml", "crates/**"]
+trigger_paths = ["apps/root-task/**", "apps/cohsh/**", "scripts/cohsh/**", "scripts/qemu_tcp_response_matrix.py", "tests/test_qemu_tcp_response_matrix.py", "configs/root_task*.toml", "crates/**"]
 expected_evidence = ["qemu-artifact-manifest", "qemu-boot-result-manifests", "regression-summary"]
 test_policy = "artifact-count"
 
@@ -553,7 +558,7 @@ targets = ["qemu"]
 description = "Reuse the validated Stage 03 image and run REST parity in a fresh QEMU boot."
 command = "scripts/ci/test_plan_stage_04_rest_multiplexer.sh"
 timeout_seconds = 3600
-trigger_paths = ["apps/hive-gateway/**", "apps/coh/**", "apps/cohsh/**", "scripts/cohsh/**", "tools/cohesix-py/**"]
+trigger_paths = ["apps/hive-gateway/**", "apps/coh/**", "apps/cohsh/**", "crates/cohesix-rest/**", "crates/net-constants/**", "scripts/ci/test_plan_stage_04_rest_multiplexer.sh", "scripts/ci/test_rest_regression_batch.py", "scripts/cohsh/**", "tools/cohesix-py/**"]
 expected_evidence = ["qemu-boot-result-manifest", "rest-regression-summary"]
 test_policy = "artifact-count"
 
@@ -566,7 +571,7 @@ targets = ["pi4"]
 description = "Run REST parity through a gateway bound to the same Pi 4 boot evidence."
 command = "scripts/ci/test_plan_stage_04_rest_multiplexer.sh"
 timeout_seconds = 3600
-trigger_paths = ["apps/hive-gateway/**", "apps/coh/**", "apps/cohsh/**", "scripts/cohsh/**", "tools/cohesix-py/**"]
+trigger_paths = ["apps/hive-gateway/**", "apps/coh/**", "apps/cohsh/**", "crates/cohesix-rest/**", "crates/net-constants/**", "scripts/ci/test_plan_stage_04_rest_multiplexer.sh", "scripts/ci/test_rest_regression_batch.py", "scripts/cohsh/**", "tools/cohesix-py/**"]
 expected_evidence = ["pi4-target-evidence", "rest-regression-summary"]
 test_policy = "artifact-count"
 allow_duplicate_command = true
@@ -591,7 +596,7 @@ tier = "non-claiming"
 evidence_class = "diagnostic"
 scope = "conditional"
 targets = ["qemu"]
-description = "Boot the immutable canonical M26e QEMU image, prove focus-specific readiness, and perform one live operation."
+description = "Boot the immutable canonical M26e QEMU image, prove focus-specific readiness, and perform one live operation; a core TAIL/CAT canary remains non-claiming and does not close the over-eight-line diagnostic matrix."
 command = "scripts/ci/test_plan_target_canary.sh --target qemu"
 timeout_seconds = 3600
 trigger_paths = ["apps/root-task/**", "apps/*-runtime/**", "apps/cohsh/**", "configs/root_task.toml", "scripts/cohsh/**"]
@@ -629,10 +634,10 @@ tier = "non-claiming"
 evidence_class = "diagnostic"
 scope = "conditional"
 targets = ["qemu"]
-description = "Freeze the target-discovered root MCS activation-order invariant after the QEMU canary."
-command = "cargo test -p root-task --no-default-features --features driver-tests-qemu --test mcs_activation_order -- --test-threads=1"
+description = "Freeze the target-discovered root MCS activation and timeout-endpoint invariants after the QEMU canary."
+command = "cargo test -p root-task --no-default-features --test mcs_activation_order -- --test-threads=1"
 timeout_seconds = 900
-trigger_paths = ["apps/root-task/**"]
+trigger_paths = ["apps/root-task/**", "configs/root_task*.toml"]
 expected_evidence = ["focused-regression-result"]
 test_policy = "nonzero"
 minimum_test_count = 1
@@ -680,10 +685,10 @@ tier = "non-claiming"
 evidence_class = "diagnostic"
 scope = "conditional"
 targets = ["qemu"]
-description = "Freeze the target-discovered isolated-console service invariant after one real TCP operation."
-command = "cargo test -p root-task --no-default-features --features driver-tests-qemu --test console_network_service -- --test-threads=1"
+description = "Freeze ABI v3 SendBatch, bounded synchronous capture, immutable CACHELOG snapshots, exact drain, and eight-response-units-to-one-ordinary-debt invariants after one real TCP operation."
+command = "cargo test -p console-network-abi && cargo test -p console-network-runtime && cargo test -p root-task --test console_network_service && cargo test -p root-task --no-default-features --features driver-tests-qemu isolated_response_lane_pays_exactly_one_ordinary_debt_after_eight_units -- --test-threads=1 && cargo test -p root-task --no-default-features --features driver-tests-qemu isolated_help_capture_publishes_complete_body_then_one_terminal -- --test-threads=1 && cargo test -p root-task --no-default-features --features driver-tests-qemu isolated_fixed_synchronous_producers_cross_batch_depth_without_end -- --test-threads=1 && cargo test -p root-task --no-default-features --features driver-tests-qemu bounded_sync_capture_overflow_emits_only_typed_terminal_and_reconciles_metrics -- --test-threads=1 && cargo test -p root-task --no-default-features --features driver-tests-qemu bounded_sync_cache_snapshot_crosses_batch_depth_and_tombstones_on_quiet_cut -- --test-threads=1 && cargo test -p root-task --no-default-features --features driver-tests-qemu bounded_sync_response_is_retired_on_exact_identity_loss -- --test-threads=1 && cargo test -p root-task --no-default-features --features driver-tests-qemu pinned_network_line_cannot_dispatch_to_a_replacement_connection -- --test-threads=1 && cargo test -p root-task --no-default-features --features driver-tests-qemu physical_progress_is_bounded_while_heavy_producers_preserve_network_owner -- --test-threads=1 && cargo test -p root-task --no-default-features --features driver-tests-qemu blocked_physical_producer_retains_an_ordered_busy_terminal_and_prompt -- --test-threads=1 && cargo test -p root-task --no-default-features --features driver-tests-qemu hal::cache::tests -- --test-threads=1 && cargo test -p root-task --no-default-features --test isolated_virtio_network_phasing -- --test-threads=1 && .venv/bin/python -m pytest -q tests/test_console_network_runtime_packaging.py tests/test_qemu_tcp_response_matrix.py scripts/ci/test_run_regression_batch.py"
 timeout_seconds = 900
-trigger_paths = ["apps/console-network-runtime/**", "apps/root-task/src/console_network_service.rs", "apps/root-task/src/net/**"]
+trigger_paths = ["apps/console-network-runtime/**", "crates/console-network-abi/**", "apps/root-task/src/console_network_service.rs", "apps/root-task/src/event/**", "apps/root-task/src/hal/cache.rs", "apps/root-task/src/net/**", "scripts/qemu_tcp_response_matrix.py", "tests/test_qemu_tcp_response_matrix.py"]
 expected_evidence = ["focused-regression-result"]
 test_policy = "nonzero"
 minimum_test_count = 1

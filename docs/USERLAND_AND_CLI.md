@@ -186,12 +186,43 @@ child. It forwards only a bounded command after authentication. Root still
 performs every role, ticket, quota, namespace, and command-policy decision and
 returns already-authorized response lines. This internal split adds no command,
 prompt, listener, or host-visible framing change: `cohsh` continues to observe
-the same `OK`/`ERR`/`END` stream. A child fault or timeout closes the network
-session fail-closed without taking ownership of the serial or local-seat input
-queues. When no authenticated TCP session is active, root services serial and
+the same `OK`/`ERR`/`END` stream. A child standard/protocol fault closes the
+network session fail-closed without taking ownership of the serial or
+local-seat input queues. Console SC exhaustion instead uses native seL4
+postponement and does not manufacture a console Timeout teardown. When no
+authenticated TCP session is active, root services serial and
 then local-seat input first. During an authenticated session it gives bounded
 TCP response flushing priority while continuing to service both physical
 inputs and fatal output.
+
+The selected internal contract is manifest schema 1.14 and console ABI/READY
+v3. Root may authorize one through eight already-ordered response lines in one
+binary `SendBatch` control, but the child still emits one ordinary
+length-prefixed line per replenishment-bounded Session unit. For one exact
+isolated authenticated connection, root captures synchronous HELP, NETSTATS,
+SMP, or CACHELOG output and its exact terminal before publication, then drains
+that immutable response through the same lane. The lane may perform eight
+useful response units before paying exactly one ordinary
+Operator/Runtime/Network debt turn. These are internal scheduling and
+shared-page changes only; clients must not send, parse, or depend on SendBatch.
+After each committed frame the child retains one following service cycle, then
+quiesces on a no-progress Session; pending state or capacity failure cannot
+spin. Exact eligible retained work uses local Poll; idle or
+publication-uncredited work goes directly to Wait with no ordinary Yield. The
+child's TCB timeout handler is empty under `NaturalPostpone`, while its standard
+fault remains terminal and its reserved timeout capability/resource stays
+accounted. These scheduling details are likewise invisible to clients.
+
+Full host compatibility is not yet accepted. The fixed one-socket target matrix
+must return HELP 12 total lines, NETSTATS 16, first-call selected-QEMU SMP
+activity 17, and CACHELOG 10 for count nine, then PING and QUIT without
+reconnect, using the preexisting client response timeout. CACHELOG captures one
+immutable bounded snapshot under a single short lock hold; later live-ring
+changes cannot alter the response. Its internal 1920-record ring capacity is
+not a separate five-second promotion gate. Until fresh exact-artifact evidence
+passes the fixed matrix, standard-fault containment, and budget-exhaustion
+postponement liveness/isolation, these commands block
+Stage 03/REST/performance/26e promotion.
 
 This is QEMU-first as-built behavior. It does not claim that the current Pi 4
 network adapter has been moved or that GENET, CYW43, or SDIO has been exercised;
@@ -250,6 +281,25 @@ resolves the URL from `--rest-url`, `COHSH_REST_URL`, `COH_REST_URL`, or
 `COHSH_REST_AUTH_TOKEN`, `COH_REST_AUTH_TOKEN`, or
 `HIVE_GATEWAY_REQUEST_AUTH_TOKEN`.
 
+REST filesystem operations use a response window composed from the gateway's
+declared broker profile:
+
+```text
+5000 ms queue admission
++ max(control_response_ms, telemetry_response_ms)
++ 5000 ms HTTP response-delivery grace
+```
+
+The canonical `120000/120000 ms` Hive Gateway profile therefore uses a
+`130000 ms` client window. `cohsh` accepts an explicit
+`--rest-response-timeout-ms`; when the flag is absent it resolves
+`COHSH_REST_RESPONSE_TIMEOUT_MS` before using the shared canonical default.
+The selected value is applied to the primary REST transport and every pooled
+REST transport and must be no smaller than the composed gateway window.
+Metadata, name resolution, connection establishment, and response-body
+transfer retain separate short bounds. This setting does not add retries or
+change the REST request, response, console, or ACK/ERR/END contract.
+
 `--role` attaches immediately. Without it, the shell starts detached and
 expects `attach <role> [ticket]`. Supported role selectors are `queen`,
 `worker-heartbeat` (alias `worker`), `worker-gpu`, `worker-bus`, and
@@ -303,6 +353,10 @@ duplicated here. Use [INTERFACES.md](INTERFACES.md).
 - Interactive TCP mode reconnects with bounded backoff after a transport loss;
   the operator must re-establish the attachment when required.
 - Script mode fails the run on an unrecoverable transport or command error.
+- TCP `quit` succeeds only after the client receives exact `OK QUIT`,
+  half-closes its write side, and observes peer EOF on that same connection.
+  A missing acknowledgement, timeout, post-terminal frame, or missing EOF
+  fails script mode; QUIT is never retried on a replacement connection.
 - Heartbeats and retry limits come from generated policy unless explicitly
   overridden.
 - The `qemu` transport launches the staged QEMU artifacts and is diagnostic;
@@ -472,8 +526,8 @@ inputs and regenerate every affected output.
 
 <!-- coh-rtc:cohsh-policy:start -->
 ### cohsh client policy (generated)
-- `manifest.sha256`: `297127865662372f9bb7589e17601e4054c7a589a2f07af87f2fb23389ffb9e1`
-- `policy.sha256`: `b3be51afd834a74b15747a5cdb9ebc64cb09c58a8beca060629bbf507295dbbe`
+- `manifest.sha256`: `72b6fdbd175150ec352f9345d99791a1d576cf01de47363aed2a64ad0c463a93`
+- `policy.sha256`: `614376076f2d2f78b681831e896a656a16bf09dd14e598c976d638702158df80`
 - `cohsh.pool.control_sessions`: `2`
 - `cohsh.pool.telemetry_sessions`: `24`
 - `cohsh.tail.poll_ms_default`: `1000`
@@ -490,7 +544,7 @@ inputs and regenerate every affected output.
 - `heartbeat.interval_ms`: `15000`
 - `trace.max_bytes`: `1048576`
 
-_Generated from `configs/root_task.toml` (sha256: `297127865662372f9bb7589e17601e4054c7a589a2f07af87f2fb23389ffb9e1`)._
+_Generated from `configs/root_task.toml` (sha256: `72b6fdbd175150ec352f9345d99791a1d576cf01de47363aed2a64ad0c463a93`)._
 <!-- coh-rtc:cohsh-policy:end -->
 
 </details>
@@ -500,7 +554,7 @@ _Generated from `configs/root_task.toml` (sha256: `297127865662372f9bb7589e17601
 
 <!-- coh-rtc:cohsh-client:start -->
 ### cohsh client defaults (generated)
-- `manifest.sha256`: `297127865662372f9bb7589e17601e4054c7a589a2f07af87f2fb23389ffb9e1`
+- `manifest.sha256`: `72b6fdbd175150ec352f9345d99791a1d576cf01de47363aed2a64ad0c463a93`
 - `worker.task_abi_schema`: `worker-task-abi/v1`
 - `worker.task_abi_version`: `1`
 - `worker.observation_schema`: `cohesix-worker-observation/v1`
@@ -535,7 +589,7 @@ _Generated from `configs/root_task.toml` (sha256: `297127865662372f9bb7589e17601
 - `telemetry_ingest.max_reference_bytes_per_segment`: `1073741824`
 - `telemetry_ingest.eviction_policy`: `evict-oldest`
 
-_Generated from `configs/root_task.toml` (sha256: `297127865662372f9bb7589e17601e4054c7a589a2f07af87f2fb23389ffb9e1`)._
+_Generated from `configs/root_task.toml` (sha256: `72b6fdbd175150ec352f9345d99791a1d576cf01de47363aed2a64ad0c463a93`)._
 <!-- coh-rtc:cohsh-client:end -->
 
 </details>
@@ -602,8 +656,8 @@ _Generated by coh-rtc (sha256: `1b869521f68c26d43c1ad278fbc557f2442e438ab12d443a
 
 <!-- coh-rtc:coh-policy:start -->
 ### coh policy defaults (generated)
-- `manifest.sha256`: `297127865662372f9bb7589e17601e4054c7a589a2f07af87f2fb23389ffb9e1`
-- `policy.sha256`: `c170831865b28858da7ece57107d75b83d3fec9165bbde23f60bea2db135a1f1`
+- `manifest.sha256`: `72b6fdbd175150ec352f9345d99791a1d576cf01de47363aed2a64ad0c463a93`
+- `policy.sha256`: `2c107f907fff48b7bb71d9655f13745bbb02420ea485ed80f2344e935a044999`
 - `coh.worker.task_abi_schema`: `worker-task-abi/v1`
 - `coh.worker.task_abi_version`: `1`
 - `coh.worker.observation_schema`: `cohesix-worker-observation/v1`
@@ -671,8 +725,8 @@ _Generated by coh-rtc (sha256: `8ff5f5a73c1e4d454f1263e3235d01d2bde35adb6553bd57
 
 <!-- coh-rtc:cohesix-py:start -->
 ### Cohesix Python defaults (generated)
-- `manifest.sha256`: `297127865662372f9bb7589e17601e4054c7a589a2f07af87f2fb23389ffb9e1`
-- `cohesix.defaults.sha256`: `59ba8940a79214d582abcabdfdd51d903c23925f3e654d40488884b80a96f2b6`
+- `manifest.sha256`: `72b6fdbd175150ec352f9345d99791a1d576cf01de47363aed2a64ad0c463a93`
+- `cohesix.defaults.sha256`: `254d03380f746c0d78f567e89935c3e2d066ffa08f55e7f67829ac6671fe2a29`
 - `secure9p.msize`: `8192`
 - `secure9p.walk_depth`: `8`
 - `console.max_line_len`: `2304`
@@ -690,7 +744,7 @@ _Generated by coh-rtc (sha256: `8ff5f5a73c1e4d454f1263e3235d01d2bde35adb6553bd57
 - `coh.run.breadcrumb.max_line_bytes`: `512`
 - `coh.peft.import.registry_root`: `out/model_registry`
 
-_Generated by coh-rtc (sha256: `050d42d8dbd02a786634395956ea74fc38d68e1c826f0b6c3faa9dda583c7c31`)._
+_Generated by coh-rtc (sha256: `0b10b0c4401d5dac7d155b26013b1aa04acf048e0a38d96f5858ec1ea157c114`)._
 <!-- coh-rtc:cohesix-py:end -->
 
 </details>
@@ -700,8 +754,8 @@ _Generated by coh-rtc (sha256: `050d42d8dbd02a786634395956ea74fc38d68e1c826f0b6c
 
 <!-- coh-rtc:swarmui-defaults:start -->
 ### SwarmUI defaults (generated)
-- `manifest.sha256`: `297127865662372f9bb7589e17601e4054c7a589a2f07af87f2fb23389ffb9e1`
-- `swarmui.defaults.sha256`: `984e34dc75e39341e24740b980b710942a246eeda0cd2b2025d8c614d0bf7dae`
+- `manifest.sha256`: `72b6fdbd175150ec352f9345d99791a1d576cf01de47363aed2a64ad0c463a93`
+- `swarmui.defaults.sha256`: `5f2d51236f7fa4cfa82a873a1c2f57f610bc285ba573a792a3dd0793b315c2b6`
 - `swarmui.ticket_scope`: `per-ticket`
 - `swarmui.cache.enabled`: `false`
 - `swarmui.cache.max_bytes`: `262144`
@@ -735,7 +789,7 @@ _Generated by coh-rtc (sha256: `050d42d8dbd02a786634395956ea74fc38d68e1c826f0b6c
 - `swarmui.worker_runtime.role.worker-lora`: declaration=`executable`, executable_slots=`1`
 - `trace.max_bytes`: `1048576`
 
-_Generated from `configs/root_task.toml` (sha256: `297127865662372f9bb7589e17601e4054c7a589a2f07af87f2fb23389ffb9e1`)._
+_Generated from `configs/root_task.toml` (sha256: `72b6fdbd175150ec352f9345d99791a1d576cf01de47363aed2a64ad0c463a93`)._
 <!-- coh-rtc:swarmui-defaults:end -->
 
 </details>

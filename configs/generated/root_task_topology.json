@@ -1,17 +1,17 @@
 {
   "schema": "cohesix-root-tcb-generated-inventory/v1",
   "profile": "virt-aarch64",
-  "manifest_sha256": "013304cfbc552744a142a91d4cc5d95fcc274308cb00db15cc0c2d77fcaeb590",
-  "topology_sha256": "f8be29974fcb1a2b049da4c5362f51f22d10a1c516ab3dcdb40b75be62e08320",
+  "manifest_sha256": "72b6fdbd175150ec352f9345d99791a1d576cf01de47363aed2a64ad0c463a93",
+  "topology_sha256": "ffd82217fb9d5ac2cd0bd661e2b25d04aac0cb53497c96efee1bb2af1db01aaa",
   "topology": {
     "console_network_service": {
-      "abi_version": 1,
+      "abi_version": 3,
       "auth_timeout_ms": 5000,
       "budget_us": 3000,
       "child_cspace_slots": 16,
       "command_vaddr": 1912741888,
       "control_badge": 2,
-      "core": 0,
+      "core": 2,
       "enabled": true,
       "entry_symbol": "_start",
       "ethernet_frame_bytes": 1536,
@@ -33,10 +33,10 @@
       "objects": {
         "asids": 1,
         "cnodes": 1,
-        "cspace_slots": 121,
+        "cspace_slots": 123,
         "endpoints": 0,
         "fault_caps": 1,
-        "frames": 97,
+        "frames": 98,
         "notifications": 2,
         "page_tables": 8,
         "reply_objects": 0,
@@ -54,6 +54,7 @@
       "packet_tx_wake_notification_slot": 3,
       "period_us": 10000,
       "priority": 180,
+      "publication_ack_badge": 64,
       "revoke_anchor_bits": 20,
       "revoke_anchor_slot": 16136,
       "revoke_badge": 8,
@@ -66,7 +67,7 @@
       "stack_vaddr": 1912799232,
       "supervisor_wake_notification_slot": 4,
       "timeout_badge": 653131783,
-      "timer_clock_hz": 62500000
+      "timer_clock_hz": 24000000
     },
     "ninedoor_service": {
       "abi_version": 1,
@@ -327,7 +328,7 @@
         ],
         "required": true
       },
-      "schema": "1.11"
+      "schema": "1.14"
     },
     "temporal_authority": {
       "admission_window_us": 10000,
@@ -362,7 +363,7 @@
           "admitted": true,
           "allowed_donors": [],
           "blocking_us": 0,
-          "budget_us": 2750,
+          "budget_us": 5500,
           "consumed_time_evidence": true,
           "core": 0,
           "critical_reserve": true,
@@ -379,15 +380,15 @@
           "period_us": 10000,
           "priority": 200,
           "reply_objects": 0,
-          "response_time_us": 5100,
+          "response_time_us": 7600,
           "sched_control_core": 0,
           "scheduling_context_bits": 7,
           "scheduling_context_slot": 1,
           "timeout_badge": 653131777,
-          "timeout_policy": "terminal",
+          "timeout_policy": "natural-postpone",
           "virtio_operator_serial_io_bytes_per_turn": 64,
-          "wcet_provenance": "m26e-qemu-root-exclusive-predispatch-candidate-v23",
-          "wcet_us": 2500
+          "wcet_provenance": "m26e-qemu-root-adjacent-refill-natural-postpone-candidate-v35",
+          "wcet_us": 5000
         },
         {
           "admitted": true,
@@ -552,7 +553,7 @@
           "blocking_us": 0,
           "budget_us": 3000,
           "consumed_time_evidence": true,
-          "core": 0,
+          "core": 2,
           "critical_reserve": false,
           "deadline_us": 10000,
           "execution": "active",
@@ -567,15 +568,15 @@
           "period_us": 10000,
           "priority": 180,
           "reply_objects": 0,
-          "response_time_us": 7500,
-          "sched_control_core": 0,
+          "response_time_us": 3000,
+          "sched_control_core": 2,
           "scheduling_context_bits": 8,
           "scheduling_context_slot": 6,
           "timeout_badge": 653131783,
-          "timeout_policy": "terminal",
+          "timeout_policy": "natural-postpone",
           "virtio_operator_serial_io_bytes_per_turn": 0,
-          "wcet_provenance": "m26e-qemu-console-bounded-stack-steps-candidate-v6",
-          "wcet_us": 2400
+          "wcet_provenance": "m26e-qemu-console-received-progress-retention-candidate-v18",
+          "wcet_us": 3000
         },
         {
           "admitted": true,
@@ -629,7 +630,7 @@
           "period_us": 10000,
           "priority": 96,
           "reply_objects": 0,
-          "response_time_us": 600,
+          "response_time_us": 3600,
           "sched_control_core": 2,
           "scheduling_context_bits": 8,
           "scheduling_context_slot": 8,
@@ -660,7 +661,7 @@
           "period_us": 10000,
           "priority": 96,
           "reply_objects": 0,
-          "response_time_us": 600,
+          "response_time_us": 3600,
           "sched_control_core": 2,
           "scheduling_context_bits": 8,
           "scheduling_context_slot": 9,
@@ -845,10 +846,10 @@
       "fixed_objects": {
         "asids": 7,
         "cnodes": 7,
-        "cspace_slots": 4056,
+        "cspace_slots": 4058,
         "endpoints": 15,
         "fault_caps": 7,
-        "frames": 2017,
+        "frames": 2018,
         "notifications": 16,
         "page_tables": 256,
         "reply_objects": 6,
@@ -1054,14 +1055,14 @@
     "vspaces": 10,
     "page_tables": 280,
     "asids": 10,
-    "frames": 2065,
+    "frames": 2066,
     "endpoints": 15,
     "notifications": 19,
     "fault_caps": 10,
     "timeout_fault_caps": 10,
     "reply_objects": 6,
     "scheduling_contexts": 10,
-    "cspace_slots": 4248,
+    "cspace_slots": 4250,
     "untyped_bytes": 70254592
   }
 }

@@ -13,6 +13,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import re
 import shlex
 import shutil
 import socket
@@ -23,11 +24,22 @@ from typing import Any, Iterable, Mapping, Sequence
 from urllib.parse import urlsplit
 
 
-ARTIFACT_SCHEMA = "cohesix.test-plan.qemu-artifact.v1"
-RESULT_SCHEMA = "cohesix.test-plan.transport-result.v1"
-AGGREGATE_SCHEMA = "cohesix.test-plan.transport-aggregate.v1"
+ARTIFACT_SCHEMA = "cohesix.test-plan.qemu-artifact.v2"
+RESULT_SCHEMA = "cohesix.test-plan.transport-result.v2"
+AGGREGATE_SCHEMA = "cohesix.test-plan.transport-aggregate.v2"
 TARGET_EVIDENCE_SCHEMA = "cohesix.test-plan.target-evidence.v1"
 SOURCE_PREFIX = "sha256:"
+QEMU_INTEGRATION_TIER = "qemu-integration"
+QEMU_DIAGNOSTIC_TIER = "qemu-diagnostic"
+CANONICAL_SEL4_PROFILE = "qemu_smp_production"
+CANONICAL_MACHINE = "virt"
+CANONICAL_GIC_VERSION = "3"
+CANONICAL_VIRTUALIZATION = "off"
+CANONICAL_MACHINE_EXTRA = "kernel-irqchip=off"
+CANONICAL_CPU = "cortex-a57"
+CANONICAL_TIMER_CLOCK_HZ = 24_000_000
+CANONICAL_SMP = "4,cores=4,threads=1,sockets=1"
+CANONICAL_NET_BACKEND = "virtio"
 QEMU_REQUIRED_FILES = (
     "staging/elfloader",
     "staging/kernel.elf",
@@ -36,6 +48,12 @@ QEMU_REQUIRED_FILES = (
     "host-tools/cohsh",
     "host-tools/hive-gateway",
     "host-tools/coh",
+    "host-tools/cas-tool",
+    "host-tools/gpu-bridge-host",
+    "host-tools/host-sidecar-bridge",
+    "host-tools/host-ticket-agent",
+    "host-tools/swarmui",
+    "cohesix-qemu-launch-artifacts.json",
 )
 
 
@@ -215,6 +233,136 @@ def detect_gic(config: Path, detector: Path) -> str:
     return value
 
 
+def find_sel4_timer_header(sel4_build: Path) -> Path:
+    """Locate the generated platform header that owns TIMER_CLOCK_HZ."""
+
+    candidates = (
+        "kernel/gen_headers/plat/platform_gen.h",
+        "kernel/gen_headers/plat/machine/devices_gen.h",
+    )
+    for relative in candidates:
+        candidate = sel4_build / relative
+        if candidate.is_file():
+            return candidate.resolve()
+    raise EvidenceError(
+        f"cannot find selected seL4 timer header under {sel4_build}"
+    )
+
+
+def detect_timer_clock_hz(header: Path) -> int:
+    """Read the single generated TIMER_CLOCK_HZ definition."""
+
+    try:
+        contents = header.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        raise EvidenceError(f"cannot read seL4 timer header {header}: {exc}") from exc
+    matches = re.findall(
+        r"^\s*#define\s+TIMER_CLOCK_HZ\s+"
+        r"(?:ULL_CONST\(\s*)?([0-9]+)(?:\s*\))?\s*$",
+        contents,
+        flags=re.MULTILINE,
+    )
+    if len(matches) != 1:
+        raise EvidenceError(
+            "selected seL4 timer header must define TIMER_CLOCK_HZ exactly once"
+        )
+    return int(matches[0])
+
+
+def resolve_qemu_binary(value: str) -> Path:
+    """Resolve one executable QEMU binary for immutable identity binding."""
+
+    candidate = shutil.which(value) if os.sep not in value else value
+    if candidate is None:
+        raise EvidenceError(f"QEMU binary is not on PATH: {value}")
+    binary = require_file(Path(candidate), "QEMU binary")
+    if not os.access(binary, os.X_OK):
+        raise EvidenceError(f"QEMU binary is not executable: {binary}")
+    return binary
+
+
+def qemu_version(binary: Path) -> str:
+    """Return the exact first QEMU version line or fail closed."""
+
+    try:
+        completed = subprocess.run(
+            [str(binary), "--version"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise EvidenceError(f"cannot execute QEMU binary {binary}: {exc}") from exc
+    lines = completed.stdout.splitlines()[:1]
+    if completed.returncode != 0 or not lines or not lines[0].strip():
+        raise EvidenceError(f"cannot determine QEMU version from {binary}")
+    return lines[0].strip()
+
+
+def qemu_binary_record(value: str) -> dict[str, Any]:
+    """Bind path, bytes, digest, and reported version for QEMU."""
+
+    binary = resolve_qemu_binary(value)
+    return {
+        "path": str(binary),
+        "size": binary.stat().st_size,
+        "sha256": sha256_file(binary),
+        "version": qemu_version(binary),
+    }
+
+
+def qemu_claim(
+    *,
+    host_system: str,
+    accelerator: str,
+    sel4_profile: str,
+    machine: str,
+    gic_version: str,
+    virtualization: str,
+    machine_extra: str,
+    cpu: str,
+    timer_clock_hz: int,
+    smp: str,
+    net_backend: str,
+) -> dict[str, Any]:
+    """Classify the exact launch envelope without upgrading diagnostics."""
+
+    reasons = []
+    if host_system == "Darwin" and accelerator != "hvf":
+        reasons.append("Darwin claiming runs require HVF")
+    elif host_system == "Linux" and accelerator != "kvm":
+        reasons.append("Linux claiming runs require KVM")
+    elif host_system not in {"Darwin", "Linux"}:
+        reasons.append(f"unsupported claiming host {host_system}")
+    if accelerator == "tcg":
+        reasons.append("TCG is diagnostic-only")
+    if sel4_profile != CANONICAL_SEL4_PROFILE:
+        reasons.append("selected seL4 profile is not qemu_smp_production")
+    if machine != CANONICAL_MACHINE:
+        reasons.append("machine type is not virt")
+    if gic_version != CANONICAL_GIC_VERSION:
+        reasons.append("machine does not use GICv3")
+    if virtualization != CANONICAL_VIRTUALIZATION:
+        reasons.append("machine virtualization is not off")
+    if machine_extra != CANONICAL_MACHINE_EXTRA:
+        reasons.append("machine does not use exact kernel-irqchip=off envelope")
+    if cpu != CANONICAL_CPU:
+        reasons.append("CPU is not cortex-a57")
+    if timer_clock_hz != CANONICAL_TIMER_CLOCK_HZ:
+        reasons.append("selected seL4 timer is not 24 MHz")
+    if smp != CANONICAL_SMP:
+        reasons.append("QEMU SMP topology is not the four-core production envelope")
+    if net_backend != CANONICAL_NET_BACKEND:
+        reasons.append("QEMU network backend is not virtio")
+    eligible = not reasons
+    return {
+        "eligible": eligible,
+        "tier": QEMU_INTEGRATION_TIER if eligible else QEMU_DIAGNOSTIC_TIER,
+        "reason": "canonical production envelope" if eligible else "; ".join(reasons),
+    }
+
+
 def source_digest(repo_root: Path) -> str:
     """Hash Git identity, modes, submodules, and present checkout sources."""
 
@@ -372,6 +520,151 @@ def verify_file_record(root: Path, record: Mapping[str, Any]) -> None:
         )
 
 
+def verify_qemu_launch_contract(document: Mapping[str, Any]) -> dict[str, Any]:
+    """Verify immutable host, binary, accelerator, and machine claim truth."""
+
+    qemu = document.get("qemu")
+    if not isinstance(qemu, dict):
+        raise EvidenceError("artifact QEMU launch context must be an object")
+    expected_keys = {
+        "host_system",
+        "binary",
+        "accelerator",
+        "machine",
+        "gic_version",
+        "virtualization",
+        "machine_extra",
+        "cpu",
+        "timer_clock_hz",
+        "net_backend",
+        "smp",
+        "claim",
+    }
+    if set(qemu) != expected_keys:
+        raise EvidenceError("artifact QEMU launch context has invalid fields")
+    host_system = qemu.get("host_system")
+    if host_system != platform.system():
+        raise EvidenceError(
+            "artifact QEMU host differs from the verifying host: "
+            f"expected {host_system}, got {platform.system()}"
+        )
+    binary = qemu.get("binary")
+    if not isinstance(binary, dict) or set(binary) != {
+        "path",
+        "size",
+        "sha256",
+        "version",
+    }:
+        raise EvidenceError("artifact QEMU binary identity has invalid fields")
+    binary_path = binary.get("path")
+    if not isinstance(binary_path, str) or not Path(binary_path).is_absolute():
+        raise EvidenceError("artifact QEMU binary path must be absolute")
+    resolved_binary = resolve_qemu_binary(binary_path)
+    if (
+        str(resolved_binary) != binary_path
+        or resolved_binary.stat().st_size != binary.get("size")
+        or sha256_file(resolved_binary) != binary.get("sha256")
+        or not isinstance(binary.get("version"), str)
+        or not str(binary["version"]).strip()
+    ):
+        raise EvidenceError("artifact QEMU binary identity changed")
+    accelerator = qemu.get("accelerator")
+    if accelerator not in {"hvf", "kvm", "tcg"}:
+        raise EvidenceError(f"unsupported recorded QEMU accelerator: {accelerator!r}")
+
+    sel4 = document.get("sel4")
+    if not isinstance(sel4, Mapping):
+        raise EvidenceError("artifact seL4 context must be an object")
+    timer_clock_hz = sel4.get("timer_clock_hz")
+    if qemu.get("timer_clock_hz") != timer_clock_hz:
+        raise EvidenceError("artifact QEMU and seL4 timer clocks differ")
+    claim = qemu_claim(
+        host_system=str(host_system),
+        accelerator=str(accelerator),
+        sel4_profile=str(sel4.get("profile", "")),
+        machine=str(qemu.get("machine", "")),
+        gic_version=str(qemu.get("gic_version", "")),
+        virtualization=str(qemu.get("virtualization", "")),
+        machine_extra=str(qemu.get("machine_extra", "")),
+        cpu=str(qemu.get("cpu", "")),
+        timer_clock_hz=timer_clock_hz if isinstance(timer_clock_hz, int) else -1,
+        smp=str(qemu.get("smp", "")),
+        net_backend=str(qemu.get("net_backend", "")),
+    )
+    if qemu.get("claim") != claim:
+        raise EvidenceError("artifact QEMU claim classification is invalid")
+    return claim
+
+
+def verify_embedded_launch_record(
+    document: Mapping[str, Any],
+    artifact_root: Path,
+) -> None:
+    """Require the reusable launch record to describe the identical envelope."""
+
+    path = safe_relative_file(
+        artifact_root,
+        "cohesix-qemu-launch-artifacts.json",
+    )
+    launch = read_json(path)
+    if set(launch) != {
+        "schema",
+        "profile",
+        "cargo_target",
+        "root_task_features",
+        "sel4_build_dir",
+        "sel4_profile",
+        "gic_version",
+        "qemu",
+        "claim",
+        "artifacts",
+    } or launch.get("schema") != "cohesix-qemu-launch-artifacts/v2":
+        raise EvidenceError("embedded QEMU launch record is not schema v2")
+    launch_qemu = launch.get("qemu")
+    launch_binary = launch_qemu.get("binary") if isinstance(launch_qemu, dict) else None
+    qemu = document["qemu"]
+    binary = qemu["binary"]
+    if not isinstance(launch_binary, Mapping):
+        raise EvidenceError("embedded QEMU launch record has no binary identity")
+    binary_matches = (
+        launch_binary.get("path") == binary.get("path")
+        and launch_binary.get("bytes") == binary.get("size")
+        and f"{SOURCE_PREFIX}{launch_binary.get('sha256')}" == binary.get("sha256")
+        and launch_binary.get("version") == binary.get("version")
+    )
+    launch_qemu_matches = isinstance(launch_qemu, Mapping) and all(
+        launch_qemu.get(key) == qemu.get(key)
+        for key in (
+            "host_system",
+            "accelerator",
+            "machine",
+            "virtualization",
+            "machine_extra",
+            "cpu",
+            "timer_clock_hz",
+            "smp",
+            "net_backend",
+        )
+    )
+    sel4 = document["sel4"]
+    build = document["build"]
+    if (
+        not binary_matches
+        or not launch_qemu_matches
+        or launch.get("gic_version") != qemu.get("gic_version")
+        or launch.get("claim") != qemu.get("claim")
+        or launch.get("sel4_build_dir") != sel4.get("build_dir")
+        or launch.get("sel4_profile") != sel4.get("profile")
+        or launch_qemu.get("timer_clock_hz") != sel4.get("timer_clock_hz")
+        or launch.get("profile") != build.get("cargo_profile")
+        or launch.get("cargo_target") != build.get("cargo_target")
+        or launch.get("root_task_features") != build.get("root_task_features")
+    ):
+        raise EvidenceError(
+            "embedded QEMU launch record differs from the artifact launch context"
+        )
+
+
 def verify_artifact_document(
     path: Path,
     *,
@@ -428,10 +721,24 @@ def verify_artifact_document(
     records = document.get("files")
     if not isinstance(records, list) or not records:
         raise EvidenceError("artifact manifest has no file records")
+    record_paths: set[str] = set()
     for record in records:
         if not isinstance(record, dict):
             raise EvidenceError("artifact file record must be an object")
+        relative = str(record.get("path", ""))
+        if relative in record_paths:
+            raise EvidenceError(f"duplicate artifact file record: {relative}")
+        record_paths.add(relative)
         verify_file_record(artifact_root, record)
+    missing_required = sorted(set(QEMU_REQUIRED_FILES) - record_paths)
+    if missing_required:
+        raise EvidenceError(
+            "artifact manifest is missing required file records: "
+            + ", ".join(missing_required)
+        )
+
+    verify_qemu_launch_contract(document)
+    verify_embedded_launch_record(document, artifact_root)
 
     expected_id = sha256_bytes(canonical_bytes(artifact_identity_material(document)))
     if document.get("artifact_id") != expected_id:
@@ -580,9 +887,34 @@ def command_record(args: argparse.Namespace) -> int:
 
     sel4_config = find_sel4_config(sel4_build)
     gic_version = detect_gic(sel4_config, args.detect_gic_script)
+    timer_header = find_sel4_timer_header(sel4_build)
+    timer_clock_hz = detect_timer_clock_hz(timer_header)
+    selected_accelerator = qemu_accelerator(
+        args.qemu,
+        requested=args.accelerator,
+    )
+    binary_record = qemu_binary_record(args.qemu)
+    host_system = platform.system()
+    claim = qemu_claim(
+        host_system=host_system,
+        accelerator=selected_accelerator,
+        sel4_profile=args.sel4_profile,
+        machine=args.machine,
+        gic_version=gic_version,
+        virtualization=args.virtualization,
+        machine_extra=args.machine_extra,
+        cpu=args.cpu,
+        timer_clock_hz=timer_clock_hz,
+        smp=args.smp,
+        net_backend=args.net_backend,
+    )
     sel4_config_copy = copy_evidence_file(
         sel4_config,
         evidence_dir / "sel4_kernel_config.h",
+    )
+    timer_header_copy = copy_evidence_file(
+        timer_header,
+        evidence_dir / "sel4_platform_gen.h",
     )
 
     relative_files = list(QEMU_REQUIRED_FILES)
@@ -592,6 +924,7 @@ def command_record(args: argparse.Namespace) -> int:
             "evidence/root_task_resolved.json",
             "evidence/cohsh_policy.toml",
             "evidence/sel4_kernel_config.h",
+            "evidence/sel4_platform_gen.h",
         )
     )
     if attempt_record is not None:
@@ -614,6 +947,10 @@ def command_record(args: argparse.Namespace) -> int:
         sel4_config_copy,
         "evidence/sel4_kernel_config.h",
     )
+    timer_record = file_record(
+        timer_header_copy,
+        "evidence/sel4_platform_gen.h",
+    )
 
     document: dict[str, Any] = {
         "schema": ARTIFACT_SCHEMA,
@@ -630,18 +967,29 @@ def command_record(args: argparse.Namespace) -> int:
         "policy": policy_record,
         "sel4": {
             "profile": args.sel4_profile,
+            "build_dir": str(sel4_build),
             "kernel_config": sel4_record,
+            "timer_header": timer_record,
+            "timer_clock_hz": timer_clock_hz,
         },
         "build": {
+            "cargo_profile": args.cargo_profile,
             "cargo_target": args.cargo_target,
             "root_task_features": args.root_task_features,
         },
         "qemu": {
+            "host_system": host_system,
+            "binary": binary_record,
+            "accelerator": selected_accelerator,
+            "machine": args.machine,
             "gic_version": gic_version,
             "machine_extra": args.machine_extra,
             "net_backend": args.net_backend,
             "smp": args.smp,
             "virtualization": args.virtualization,
+            "cpu": args.cpu,
+            "timer_clock_hz": timer_clock_hz,
+            "claim": claim,
         },
         "files": records,
     }
@@ -675,28 +1023,34 @@ def command_verify(args: argparse.Namespace) -> int:
     return 0
 
 
-def qemu_accelerator(qemu: str) -> str:
-    """Select an available deterministic QEMU accelerator."""
+def qemu_accelerator(qemu: str, requested: str | None = None) -> str:
+    """Select an available accelerator without silent claim-tier fallback."""
 
-    selected = os.environ.get("COHESIX_QEMU_ACCEL") or os.environ.get(
+    selected = requested or os.environ.get("COHESIX_QEMU_ACCEL") or os.environ.get(
         "QEMU_ACCEL"
     )
     if not selected:
-        selected = "tcg"
-        if platform.system() == "Linux" and os.access("/dev/kvm", os.R_OK | os.W_OK):
+        host_system = platform.system()
+        selected = "hvf" if host_system == "Darwin" else "tcg"
+        if host_system == "Linux" and os.access("/dev/kvm", os.R_OK | os.W_OK):
             selected = "kvm"
+    binary = resolve_qemu_binary(qemu)
     try:
         result = subprocess.run(
-            [qemu, "-accel", "help"],
+            [str(binary), "-accel", "help"],
             check=False,
             capture_output=True,
             text=True,
+            timeout=10,
         )
-    except OSError as exc:
-        raise EvidenceError(f"cannot execute QEMU binary {qemu}: {exc}") from exc
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise EvidenceError(f"cannot execute QEMU binary {binary}: {exc}") from exc
     help_text = f"{result.stdout}\n{result.stderr}"
-    if help_text.strip() and selected not in help_text.split():
-        selected = "tcg"
+    if not help_text.strip() or selected not in help_text.split():
+        raise EvidenceError(
+            f"QEMU accelerator {selected!r} is not advertised by {binary}; "
+            "select tcg explicitly only for diagnostic evidence"
+        )
     return selected
 
 
@@ -740,8 +1094,17 @@ def build_qemu_command(
 
     root = Path(str(document["_resolved_artifact_root"]))
     qemu_record = document["qemu"]
+    recorded_binary = Path(str(qemu_record["binary"]["path"]))
+    requested_binary = resolve_qemu_binary(qemu)
+    if requested_binary != recorded_binary:
+        raise EvidenceError(
+            "launch QEMU binary differs from the artifact record: "
+            f"expected {recorded_binary}, got {requested_binary}"
+        )
+    accelerator = str(qemu_record["accelerator"])
+    qemu_accelerator(str(recorded_binary), requested=accelerator)
     machine = (
-        "virt,"
+        f"{qemu_record['machine']},"
         f"gic-version={qemu_record['gic_version']},"
         f"virtualization={qemu_record['virtualization']}"
     )
@@ -749,14 +1112,17 @@ def build_qemu_command(
     if machine_extra:
         machine = f"{machine},{machine_extra}"
 
+    cpu = str(qemu_record["cpu"])
+    if accelerator == "tcg":
+        cpu = f"{cpu},cntfrq={qemu_record['timer_clock_hz']}"
     command = [
-        qemu,
+        str(recorded_binary),
         "-accel",
-        qemu_accelerator(qemu),
+        accelerator,
         "-machine",
         machine,
         "-cpu",
-        "cortex-a57",
+        cpu,
         "-m",
         "1024",
         "-smp",
@@ -816,12 +1182,9 @@ def command_launch(args: argparse.Namespace) -> int:
     require_port_available(args.console_port, "console port", socket.SOCK_STREAM)
     require_port_available(args.udp_port, "UDP port", socket.SOCK_DGRAM)
     require_port_available(args.smoke_port, "smoke port", socket.SOCK_STREAM)
-    qemu = args.qemu
-    if os.sep not in qemu and shutil.which(qemu) is None:
-        raise EvidenceError(f"QEMU binary is not on PATH: {qemu}")
     command = build_qemu_command(
         document,
-        qemu=qemu,
+        qemu=args.qemu,
         console_port=args.console_port,
         udp_port=args.udp_port,
         smoke_port=args.smoke_port,
@@ -1217,8 +1580,10 @@ def command_result(args: argparse.Namespace) -> int:
 
     boot_id = args.boot_id
     if args.target == "qemu":
-        if args.claim_tier != "qemu-integration":
-            raise EvidenceError("QEMU results must use claim tier qemu-integration")
+        if args.claim_tier not in {QEMU_INTEGRATION_TIER, QEMU_DIAGNOSTIC_TIER}:
+            raise EvidenceError(
+                "QEMU results must use qemu-integration or qemu-diagnostic tier"
+            )
         if args.artifact_manifest is None:
             raise EvidenceError("QEMU result requires --artifact-manifest")
         if not args.artifact_action_id or not args.artifact_catalog_action_digest:
@@ -1231,11 +1596,24 @@ def command_result(args: argparse.Namespace) -> int:
             expected_action_id=args.artifact_action_id,
             expected_catalog_action_digest=args.artifact_catalog_action_digest,
         )
+        artifact_claim = artifact["qemu"]["claim"]
+        if artifact_claim["tier"] != args.claim_tier:
+            raise EvidenceError(
+                "QEMU result tier does not match the immutable launch record: "
+                f"expected {artifact_claim['tier']}, got {args.claim_tier}"
+            )
+        if (
+            args.claim_tier == QEMU_INTEGRATION_TIER
+            and artifact_claim["eligible"] is not True
+        ):
+            raise EvidenceError("claim-ineligible QEMU launch cannot produce integration PASS")
         artifact_record: dict[str, Any] | None = {
             "artifact_id": artifact["artifact_id"],
             "action_id": artifact["action_id"],
             "catalog_action_digest": artifact["catalog_action_digest"],
             "manifest_sha256": sha256_file(args.artifact_manifest),
+            "claim_tier": artifact_claim["tier"],
+            "claim_eligible": artifact_claim["eligible"],
         }
         try:
             artifact_manifest = require_file(
@@ -1253,6 +1631,10 @@ def command_result(args: argparse.Namespace) -> int:
                 )
         target_record = None
         if args.target_evidence is not None:
+            if args.claim_tier != QEMU_INTEGRATION_TIER:
+                raise EvidenceError(
+                    "qemu-diagnostic results cannot consume integration target evidence"
+                )
             target_document = verify_qemu_target_evidence(
                 args.target_evidence,
                 expected_source_digest=source,
@@ -1276,7 +1658,7 @@ def command_result(args: argparse.Namespace) -> int:
             target_record = {
                 "path": target_relative,
                 "evidence_sha256": sha256_file(target_path),
-                "upstream_claim_tier": "qemu-integration",
+                "upstream_claim_tier": QEMU_INTEGRATION_TIER,
             }
         elif boot_id is None or not boot_id.strip():
             raise EvidenceError("QEMU result boot_id must not be empty")
@@ -1440,9 +1822,20 @@ def verify_result_document(
             raise EvidenceError(f"target evidence hash mismatch in {path}")
 
     artifact_record = document.get("artifact")
+    if expected_target == "qemu" and not isinstance(artifact_record, Mapping):
+        raise EvidenceError(f"QEMU result has no artifact binding in {path}")
     if artifact_record is not None:
         if not isinstance(artifact_record, Mapping):
             raise EvidenceError(f"artifact record is invalid in {path}")
+        if expected_target == "qemu":
+            expected_eligibility = expected_tier == QEMU_INTEGRATION_TIER
+            if (
+                artifact_record.get("claim_tier") != expected_tier
+                or artifact_record.get("claim_eligible") is not expected_eligibility
+            ):
+                raise EvidenceError(
+                    f"artifact claim classification mismatch in {path}"
+                )
         manifest_relative = artifact_record.get("manifest_path")
         if artifact_record.get("action_id") == expected_action_id:
             if not isinstance(manifest_relative, str) or not manifest_relative:
@@ -1468,6 +1861,13 @@ def verify_result_document(
             )
             if artifact.get("artifact_id") != artifact_record.get("artifact_id"):
                 raise EvidenceError(f"artifact ID mismatch in {path}")
+            artifact_claim = artifact["qemu"]["claim"]
+            if (
+                artifact_claim.get("tier") != artifact_record.get("claim_tier")
+                or artifact_claim.get("eligible")
+                is not artifact_record.get("claim_eligible")
+            ):
+                raise EvidenceError(f"artifact launch claim mismatch in {path}")
     expected_id = sha256_bytes(canonical_bytes(result_identity_material(document)))
     if document.get("result_id") != expected_id:
         raise EvidenceError(f"transport result ID mismatch in {path}")
@@ -1616,6 +2016,14 @@ def command_verify_qemu_target(args: argparse.Namespace) -> int:
         expected_action_id=args.artifact_action_id,
         expected_catalog_action_digest=catalog_digest,
     )
+    if artifact["qemu"]["claim"] != {
+        "eligible": True,
+        "tier": QEMU_INTEGRATION_TIER,
+        "reason": "canonical production envelope",
+    }:
+        raise EvidenceError(
+            "external QEMU integration evidence requires a claim-eligible launch"
+        )
     target = verify_qemu_target_evidence(
         args.target_evidence,
         expected_source_digest=source,
@@ -1796,6 +2204,17 @@ def build_parser() -> argparse.ArgumentParser:
     record_parser.add_argument("--attempt-manifest", type=Path)
     record_parser.add_argument("--sel4-build", type=Path, required=True)
     record_parser.add_argument("--sel4-profile", required=True)
+    record_parser.add_argument(
+        "--qemu",
+        default=os.environ.get("QEMU_BIN", "qemu-system-aarch64"),
+    )
+    record_parser.add_argument(
+        "--accelerator",
+        choices=("hvf", "kvm", "tcg"),
+    )
+    record_parser.add_argument("--machine", default=CANONICAL_MACHINE)
+    record_parser.add_argument("--cpu", default=CANONICAL_CPU)
+    record_parser.add_argument("--cargo-profile", default="release")
     record_parser.add_argument("--root-task-features", required=True)
     record_parser.add_argument("--cargo-target", required=True)
     record_parser.add_argument("--smp", required=True)
@@ -1852,7 +2271,7 @@ def build_parser() -> argparse.ArgumentParser:
     result_parser.add_argument("--catalog-action-digest", required=True)
     result_parser.add_argument(
         "--claim-tier",
-        choices=("qemu-integration", "pi4-transport"),
+        choices=(QEMU_INTEGRATION_TIER, QEMU_DIAGNOSTIC_TIER, "pi4-transport"),
         required=True,
     )
     result_parser.add_argument("--target", choices=("qemu", "pi4"), required=True)
@@ -1882,7 +2301,7 @@ def build_parser() -> argparse.ArgumentParser:
     aggregate_parser.add_argument("--catalog-action-digest", required=True)
     aggregate_parser.add_argument(
         "--claim-tier",
-        choices=("qemu-integration", "pi4-transport"),
+        choices=(QEMU_INTEGRATION_TIER, QEMU_DIAGNOSTIC_TIER, "pi4-transport"),
         required=True,
     )
     aggregate_parser.add_argument(
@@ -1912,7 +2331,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     result_verify_parser.add_argument(
         "--claim-tier",
-        choices=("qemu-integration", "pi4-transport"),
+        choices=(QEMU_INTEGRATION_TIER, QEMU_DIAGNOSTIC_TIER, "pi4-transport"),
         required=True,
     )
     result_verify_parser.add_argument(
@@ -2000,7 +2419,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     aggregate_verify_parser.add_argument(
         "--claim-tier",
-        choices=("qemu-integration", "pi4-transport"),
+        choices=(QEMU_INTEGRATION_TIER, QEMU_DIAGNOSTIC_TIER, "pi4-transport"),
         required=True,
     )
     aggregate_verify_parser.add_argument(

@@ -15,6 +15,7 @@ import socket
 import subprocess
 import sys
 import tomllib
+import urllib.error
 from typing import Optional
 
 MODULE_PATH = (
@@ -32,6 +33,36 @@ sys.modules[spec.name] = rest_perf
 spec.loader.exec_module(rest_perf)
 
 
+class ReadinessClient:
+    """Record readiness-probe order without issuing network requests."""
+
+    def __init__(self, *, connected: bool, root_status: str = "OK") -> None:
+        self.connected = connected
+        self.root_status = root_status
+        self.calls: list[str] = []
+        self.bounds = {"manifest_sha256": "demo"}
+
+    def get_json(self, path: str) -> dict:
+        self.calls.append(path)
+        if path == "/v1/meta/status":
+            return {"connected": self.connected}
+        if path == "/v1/meta/bounds":
+            return self.bounds
+        raise AssertionError(f"unexpected readiness GET {path}")
+
+    def ls(self, path: str) -> rest_perf.GatewayResponse:
+        self.calls.append(f"LS {path}")
+        return rest_perf.GatewayResponse(
+            status=self.root_status,
+            verb="LS",
+            path=path,
+            end=True,
+            lines=[],
+            bytes=None,
+            error=None,
+        )
+
+
 def test_normalize_rest_url_trims_slashes() -> None:
     assert rest_perf.normalize_rest_url("http://127.0.0.1:8080/") == (
         "http://127.0.0.1:8080"
@@ -39,6 +70,73 @@ def test_normalize_rest_url_trims_slashes() -> None:
     assert rest_perf.normalize_rest_url("http://127.0.0.1:8080") == (
         "http://127.0.0.1:8080"
     )
+
+
+def test_rest_client_retains_target_refusal_from_http_200(monkeypatch) -> None:
+    detail = (
+        "ERR ECHO reason=quota detail=buffer-full "
+        "path=/queen/schedule/ctl error=buffer full"
+    )
+    payload = json.dumps(
+        {
+            "status": "ERR",
+            "verb": "ECHO",
+            "path": "/queen/schedule/ctl",
+            "end": True,
+            "lines": [],
+            "bytes": None,
+            "error": detail,
+        }
+    ).encode("utf-8")
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, _exc_type, _exc, _traceback) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return payload
+
+    def accept_request(_request, timeout: float) -> Response:
+        assert timeout == 1.0
+        return Response()
+
+    monkeypatch.setattr(rest_perf.urllib.request, "urlopen", accept_request)
+    client = rest_perf.RestClient("http://127.0.0.1:8080", 1.0)
+
+    response = client.echo("/queen/schedule/ctl", "{}")
+
+    assert response.status == "ERR"
+    assert response.error == detail
+    assert rest_perf.is_buffer_full_response(response)
+
+
+def test_gateway_readiness_rejects_disconnected_status_before_bounds() -> None:
+    client = ReadinessClient(connected=False)
+
+    try:
+        rest_perf.probe_gateway_readiness(client)
+    except rest_perf.RestError as exc:
+        assert str(exc) == "Gateway not ready: backend is not connected"
+    else:
+        raise AssertionError("disconnected gateway must not pass readiness")
+
+    assert client.calls == ["/v1/meta/status"]
+
+
+def test_gateway_readiness_checks_status_then_bounds_then_root() -> None:
+    client = ReadinessClient(connected=True)
+
+    bounds = rest_perf.probe_gateway_readiness(client)
+
+    assert bounds is client.bounds
+    assert client.calls == [
+        "/v1/meta/status",
+        "/v1/meta/bounds",
+        "LS /",
+    ]
 
 
 def test_apply_entropy_extremes() -> None:
@@ -506,7 +604,7 @@ def test_latest_telemetry_segment_requires_matching_complete_cat() -> None:
         )
 
 
-def test_echo_with_policy_retry_queues_on_buffer_full() -> None:
+def test_relaxed_echo_with_policy_retry_queues_on_buffer_full() -> None:
     class DummyClient:
         def __init__(self) -> None:
             self.calls = []
@@ -572,12 +670,87 @@ def test_echo_with_policy_retry_queues_on_buffer_full() -> None:
     client = DummyClient()
     response = rest_perf._echo_with_policy_retry_inner(client, "/queen/ctl", "{}", state)
 
-    assert [call[0] for call in client.calls[:3]] == [
+    assert [call[0] for call in client.calls] == [
         "/queen/ctl",
         "/actions/queue",
         "/queen/ctl",
     ]
+    assert client.queen_calls == 2
     assert response.status == "OK"
+
+
+def test_strict_echo_buffer_full_attempts_once_without_approval() -> None:
+    refusal = rest_perf.GatewayResponse(
+        status="ERR",
+        verb="ECHO",
+        path="/queen/ctl",
+        end=True,
+        lines=[],
+        bytes=None,
+        error="ERR ECHO reason=quota detail=buffer-full path=/queen/ctl",
+    )
+
+    class DummyClient:
+        def __init__(self) -> None:
+            self.calls = []
+            self.queen_calls = 0
+
+        def echo(self, path: str, line: str) -> rest_perf.GatewayResponse:
+            self.calls.append((path, line))
+            if path == "/actions/queue":
+                return rest_perf.GatewayResponse(
+                    status="OK",
+                    verb="ECHO",
+                    path=path,
+                    end=True,
+                    lines=[],
+                    bytes=None,
+                    error=None,
+                )
+            if path != "/queen/ctl":
+                raise AssertionError(f"unexpected path {path}")
+            self.queen_calls += 1
+            if self.queen_calls == 1:
+                return refusal
+            return rest_perf.GatewayResponse(
+                status="OK",
+                verb="ECHO",
+                path=path,
+                end=True,
+                lines=[],
+                bytes=None,
+                error=None,
+            )
+
+    state = rest_perf.SimState(
+        bounds={},
+        rest_url="http://127.0.0.1:8080",
+        rng=rest_perf.random.Random(0),
+        entropy=0.0,
+        tail_bytes=0,
+        policy_enabled=True,
+        actions_enabled=True,
+        telemetry_enabled=False,
+        include_lifecycle=False,
+        auto_approve=True,
+        transient_retries=True,
+        strict_control_errors=True,
+    )
+    client = DummyClient()
+
+    try:
+        rest_perf.echo_with_policy_retry(client, "/queen/ctl", "{}", state)
+    except rest_perf.RestError as exc:
+        assert str(exc) == (
+            "ECHO /queen/ctl failed: "
+            "ERR ECHO reason=quota detail=buffer-full path=/queen/ctl"
+        )
+        assert exc.response is refusal
+    else:
+        raise AssertionError("strict buffer-full refusal must fail")
+
+    assert [call[0] for call in client.calls] == ["/queen/ctl"]
+    assert client.queen_calls == 1
 
 
 def test_echo_with_policy_retry_waits_for_policy_consumption() -> None:
@@ -827,6 +1000,14 @@ def test_apply_fast_ramp_defaults_preserves_explicit_inputs() -> None:
     assert args.ramp_step_secs == 11
     assert args.base_rps == 3.5
     assert args.max_inflight == 77
+
+
+def test_ramp_progress_holds_the_configured_endpoint_for_final_step() -> None:
+    assert rest_perf.ramp_progress(0.0, 120.0, 8.0) == 0.0
+    assert rest_perf.ramp_progress(56.0, 120.0, 8.0) == 0.5
+    assert rest_perf.ramp_progress(112.0, 120.0, 8.0) == 1.0
+    assert rest_perf.ramp_progress(120.0, 120.0, 8.0) == 1.0
+    assert rest_perf.ramp_progress(0.0, 8.0, 8.0) == 1.0
 
 
 def test_error_rate_helper() -> None:
@@ -1195,6 +1376,7 @@ def test_parse_args_no_retries_alias_disables_transient_retries() -> None:
             "--auth-token",
             "changeme",
             "--no-retries",
+            "--strict-control-errors",
             "--scenario",
             "telemetry-1mb",
             "--error-budget-rate",
@@ -1205,6 +1387,7 @@ def test_parse_args_no_retries_alias_disables_transient_retries() -> None:
         sys.argv = original_argv
     assert args.no_transient_retries
     assert not args.transient_retries
+    assert args.strict_control_errors
     assert args.scenario == "telemetry-1mb"
     assert abs(args.error_budget_rate - 0.01) < 1e-9
     assert args.timeout == rest_perf.DEFAULT_SIMULATE_TIMEOUT_SECS
@@ -1550,6 +1733,137 @@ def test_executable_telemetry_operation_fails_closed_without_canonical_path() ->
         raise AssertionError("executable mode must not fall back to /worker")
 
 
+def test_host_model_telemetry_operation_uses_complete_worker_state_bound() -> None:
+    worker_id = "worker-3"
+    state = rest_perf.SimState(
+        bounds={},
+        rest_url="http://127.0.0.1:8080",
+        rng=rest_perf.random.Random(0),
+        entropy=0.0,
+        tail_bytes=rest_perf.DEFAULT_TAIL_BYTES,
+        policy_enabled=False,
+        actions_enabled=False,
+        telemetry_enabled=False,
+        include_lifecycle=False,
+        auto_approve=False,
+        transient_retries=False,
+        strict_control_errors=True,
+    )
+    operation = next(
+        operation
+        for operation in rest_perf.build_operations(
+            state.bounds,
+            ["worker"],
+            [],
+            [],
+            state,
+        )
+        if operation.name == "tail_worker_telemetry"
+    )
+    assert (operation.name, operation.weight, operation.category) == (
+        "tail_worker_telemetry",
+        1.2,
+        "telemetry",
+    )
+    observation = json.dumps(
+        {
+            "schema": "cohesix-worker-observation/v1",
+            "public_instance_id": worker_id,
+            "identity": {
+                "role": "worker-heartbeat",
+                "slot": 0,
+                "lease_epoch": 1,
+                "supervisor_generation": 1,
+                "cap_generation": 1,
+            },
+            "state": {
+                "declaration": "executable",
+                "lifecycle": "ready",
+                "artifact": "missing",
+                "receipt": "none",
+                "execution_proof": "host-model",
+            },
+            "request_admitted": True,
+            "provider_completed": False,
+            "receipt_sequence": 0,
+        },
+        separators=(",", ":"),
+    )
+    assert len(observation) == 381
+
+    class DummyClient:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, int]] = []
+
+        def tail(self, path: str, max_bytes: int) -> rest_perf.GatewayResponse:
+            self.calls.append((path, max_bytes))
+            return rest_perf.GatewayResponse(
+                "OK",
+                "TAIL",
+                path,
+                True,
+                [observation],
+                len(observation),
+                None,
+            )
+
+    client = DummyClient()
+    operation.func(client, worker_id, state)
+    assert client.calls == [
+        (
+            f"/worker/{worker_id}/telemetry",
+            8192,
+        )
+    ]
+
+
+def test_executable_telemetry_operation_uses_canonical_path_once() -> None:
+    worker_id = "opaque-instance-7"
+    telemetry_path = f"/shard/ab/worker/{worker_id}/telemetry"
+    state = rest_perf.SimState(
+        bounds=executable_bounds(),
+        rest_url="http://127.0.0.1:8080",
+        rng=rest_perf.random.Random(0),
+        entropy=0.0,
+        tail_bytes=rest_perf.DEFAULT_TAIL_BYTES,
+        policy_enabled=False,
+        actions_enabled=False,
+        telemetry_enabled=False,
+        include_lifecycle=False,
+        auto_approve=False,
+        transient_retries=False,
+        strict_control_errors=True,
+        population_mode=rest_perf.POPULATION_EXECUTABLE,
+        maximum_live_tasks=3,
+        worker_telemetry_paths={worker_id: telemetry_path},
+    )
+    operation = next(
+        operation
+        for operation in rest_perf.build_operations(
+            state.bounds,
+            ["worker"],
+            [],
+            [],
+            state,
+        )
+        if operation.name == "tail_worker_telemetry"
+    )
+
+    class DummyClient:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, int]] = []
+
+        def tail(self, path: str, max_bytes: int) -> rest_perf.GatewayResponse:
+            self.calls.append((path, max_bytes))
+            return rest_perf.GatewayResponse(
+                "OK", "TAIL", path, True, ["state"], 5, None
+            )
+
+    client = DummyClient()
+    operation.func(client, worker_id, state)
+    assert client.calls == [(telemetry_path, 8192)]
+
+
 def test_gateway_population_proof_requires_validated_acceptance_summary() -> None:
     class ConnectedOnly:
         def status(self) -> dict:
@@ -1577,6 +1891,343 @@ def test_gateway_population_proof_requires_validated_acceptance_summary() -> Non
     assert rest_perf.gateway_population_axes(
         Accepted(), rest_perf.POPULATION_EXECUTABLE, executable_bounds()
     ) == ("console-projection", "qemu")
+
+
+def test_host_model_population_requires_exact_host_model_backend() -> None:
+    class BackendClient:
+        def __init__(self, connected: bool, backend: str | None) -> None:
+            self.connected = connected
+            self.backend = backend
+
+        def status(self) -> dict:
+            return {
+                "connected": self.connected,
+                "backend_class": self.backend,
+            }
+
+    assert rest_perf.gateway_population_axes(
+        BackendClient(True, "host-model"),
+        rest_perf.POPULATION_HOST_MODEL,
+    ) == ("host-model", "host-model")
+
+    for client, expected in (
+        (BackendClient(True, "console-projection"), "executable population"),
+        (BackendClient(True, None), "backend_class=host-model"),
+        (BackendClient(False, "host-model"), "connected backend"),
+    ):
+        try:
+            rest_perf.gateway_population_axes(
+                client,
+                rest_perf.POPULATION_HOST_MODEL,
+            )
+        except rest_perf.RestError as exc:
+            assert expected in str(exc)
+        else:
+            raise AssertionError("invalid host-model backend must fail closed")
+
+
+def test_gateway_observation_axes_do_not_require_synthetic_population() -> None:
+    class BackendClient:
+        def __init__(self, connected: bool, backend: str) -> None:
+            self.connected = connected
+            self.backend = backend
+
+        def status(self) -> dict:
+            return {
+                "connected": self.connected,
+                "backend_class": self.backend,
+            }
+
+    assert rest_perf.gateway_observation_axes(
+        BackendClient(True, "console-projection")
+    ) == ("console-projection", "none")
+    assert rest_perf.gateway_observation_axes(
+        BackendClient(True, "host-model")
+    ) == ("host-model", "host-model")
+    assert rest_perf.gateway_observation_axes(
+        BackendClient(False, "host-model")
+    ) == ("host-model", "none")
+
+
+def test_read_only_perf_accepts_console_projection_without_population_admission(
+    monkeypatch,
+    tmp_path: pathlib.Path,
+) -> None:
+    class Logger:
+        def __init__(self, path: pathlib.Path) -> None:
+            self.path = str(path)
+            self.lines: list[str] = []
+
+        def log(self, message: str) -> None:
+            self.lines.append(message)
+
+    class ConsoleProjectionClient:
+        def request_auth_headers(self) -> dict[str, str]:
+            return {}
+
+        def status(self) -> dict:
+            return {
+                "connected": True,
+                "backend_class": "console-projection",
+            }
+
+    client = ConsoleProjectionClient()
+    markers: list[str] = []
+    monkeypatch.setattr(rest_perf, "RestClient", lambda *_args: client)
+    monkeypatch.setattr(rest_perf, "fetch_json", lambda *_args: {})
+    monkeypatch.setattr(rest_perf, "build_status_specs", lambda _bounds: [])
+    monkeypatch.setattr(rest_perf, "measure", lambda *_args: ([0.01], [0.01]))
+    monkeypatch.setattr(rest_perf, "report", lambda *_args: None)
+    monkeypatch.setattr(
+        rest_perf,
+        "fetch_gateway_status_snapshot",
+        lambda *_args: {},
+    )
+    monkeypatch.setattr(rest_perf, "gateway_status_delta", lambda *_args: {})
+    monkeypatch.setattr(
+        rest_perf,
+        "emit_benchmark_marker",
+        lambda *_args, **kwargs: markers.append(str(kwargs["phase"])),
+    )
+    logger = Logger(tmp_path / "perf.log")
+    args = argparse.Namespace(
+        rest_url="http://127.0.0.1:8080",
+        timeout=1.0,
+        request_auth_token="gateway-secret",
+        population_mode=rest_perf.POPULATION_HOST_MODEL,
+        max_workers=8,
+        suite="status",
+        runs=1,
+        assert_min_ratio=None,
+        logger=logger,
+    )
+
+    assert rest_perf.run_perf(args) == 0
+    assert markers == ["start", "end"]
+    summary_path = tmp_path / "perf.perf-summary.json"
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    assert summary["population"] == {
+        "backend_class": "console-projection",
+        "discovered": 0,
+        "maximum_live_tasks": None,
+        "mode": "host-model",
+        "proof_class": "none",
+        "ready": 0,
+        "requested": 8,
+    }
+
+
+def test_host_model_backend_metadata_error_preserves_cause() -> None:
+    class BrokenStatusClient:
+        def status(self) -> dict:
+            raise ValueError("status unavailable")
+
+    try:
+        rest_perf.gateway_population_axes(
+            BrokenStatusClient(),
+            rest_perf.POPULATION_HOST_MODEL,
+        )
+    except rest_perf.RestError as exc:
+        assert str(exc) == "host-model population requires gateway backend metadata"
+        assert isinstance(exc.__cause__, ValueError)
+    else:
+        raise AssertionError("missing backend metadata must fail closed")
+
+
+def test_host_model_backend_mismatch_fails_before_population_mutation() -> None:
+    class ConsoleProjectionClient:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def status(self) -> dict:
+            self.calls.append("status")
+            return {
+                "connected": True,
+                "backend_class": "console-projection",
+            }
+
+        def ls(self, path: str) -> rest_perf.GatewayResponse:
+            self.calls.append(f"LS {path}")
+            raise AssertionError("host-model mismatch must not list Workers")
+
+        def echo(self, path: str, line: str) -> rest_perf.GatewayResponse:
+            self.calls.append(f"ECHO {path} {line}")
+            raise AssertionError("host-model mismatch must not mutate the target")
+
+    client = ConsoleProjectionClient()
+    state = rest_perf.SimState(
+        bounds={},
+        rest_url="http://127.0.0.1:8080",
+        rng=rest_perf.random.Random(0),
+        entropy=0.0,
+        tail_bytes=256,
+        policy_enabled=False,
+        actions_enabled=False,
+        telemetry_enabled=False,
+        include_lifecycle=False,
+        auto_approve=True,
+        transient_retries=False,
+        strict_control_errors=False,
+    )
+
+    try:
+        rest_perf.ensure_workers(client, state, 24)
+    except rest_perf.RestError as exc:
+        assert "console-projection targets require executable population" in str(exc)
+    else:
+        raise AssertionError("target-backed host-model population must fail closed")
+
+    assert client.calls == ["status"]
+    assert state.approval_seq == 0
+    assert state.population_observations == []
+
+
+def test_run_simulation_rejects_backend_before_marker_or_discovery(
+    monkeypatch,
+) -> None:
+    class Logger:
+        def log(self, _message: str) -> None:
+            pass
+
+    class ConsoleProjectionClient:
+        def status(self) -> dict:
+            return {
+                "connected": True,
+                "backend_class": "console-projection",
+            }
+
+    client = ConsoleProjectionClient()
+    monkeypatch.setattr(rest_perf, "RestClient", lambda *_args: client)
+    monkeypatch.setattr(rest_perf, "wait_for_gateway", lambda *_args: {})
+    monkeypatch.setattr(
+        rest_perf,
+        "emit_benchmark_marker",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("backend mismatch must precede benchmark marker")
+        ),
+    )
+    monkeypatch.setattr(
+        rest_perf,
+        "discover_root_entries",
+        lambda *_args: (_ for _ in ()).throw(
+            AssertionError("backend mismatch must precede discovery")
+        ),
+    )
+    args = argparse.Namespace(
+        seed=26,
+        entropy=0,
+        version=None,
+        bundle=None,
+        qemu_run=None,
+        gateway_bin=None,
+        gateway_mock=False,
+        rest_url="http://127.0.0.1:8080",
+        gateway_bind=None,
+        no_qemu=True,
+        no_gateway=True,
+        tcp_host="127.0.0.1",
+        tcp_port=31337,
+        ready_timeout_secs=1.0,
+        qemu_smp="clusters=1,cores=4,threads=1",
+        qemu_log="unused-qemu.log",
+        auth_token="",
+        request_auth_token="gateway-secret",
+        timeout=1.0,
+        population_mode=rest_perf.POPULATION_HOST_MODEL,
+        logger=Logger(),
+    )
+
+    try:
+        rest_perf.run_simulation(args)
+    except rest_perf.RestError as exc:
+        assert "console-projection targets require executable population" in str(exc)
+    else:
+        raise AssertionError("target-backed host-model run must fail closed")
+
+
+def test_managed_gateway_mock_skips_target_tcp_preflight(monkeypatch) -> None:
+    class StopAfterBackend(RuntimeError):
+        pass
+
+    class Logger:
+        def log(self, _message: str) -> None:
+            pass
+
+    class HostModelClient:
+        def status(self) -> dict:
+            return {"connected": True, "backend_class": "host-model"}
+
+    launched: list[list[str]] = []
+    monkeypatch.setattr(rest_perf, "assert_bind_available", lambda *_args: None)
+    monkeypatch.setattr(
+        rest_perf,
+        "wait_for_port",
+        lambda *_args: (_ for _ in ()).throw(
+            AssertionError("managed gateway mock must not probe target TCP")
+        ),
+    )
+    monkeypatch.setattr(
+        rest_perf,
+        "validate_tcp_auth",
+        lambda *_args: (_ for _ in ()).throw(
+            AssertionError("managed gateway mock must not authenticate target TCP")
+        ),
+    )
+    monkeypatch.setattr(
+        rest_perf,
+        "launch_process",
+        lambda command, _env, _log: launched.append(list(command)) or object(),
+    )
+    monkeypatch.setattr(rest_perf, "terminate_process", lambda *_args: None)
+    monkeypatch.setattr(rest_perf, "RestClient", lambda *_args: HostModelClient())
+    monkeypatch.setattr(rest_perf, "wait_for_gateway", lambda *_args: {})
+    monkeypatch.setattr(
+        rest_perf,
+        "discover_root_entries",
+        lambda *_args: (_ for _ in ()).throw(StopAfterBackend()),
+    )
+    args = argparse.Namespace(
+        seed=26,
+        entropy=0,
+        version=None,
+        bundle=None,
+        qemu_run=None,
+        gateway_bin="hive-gateway",
+        gateway_mock=True,
+        rest_url="http://127.0.0.1:8080",
+        gateway_bind="127.0.0.1:8080",
+        no_qemu=True,
+        no_gateway=False,
+        tcp_host="127.0.0.1",
+        tcp_port=31337,
+        ready_timeout_secs=1.0,
+        qemu_smp="clusters=1,cores=4,threads=1",
+        qemu_log="unused-qemu.log",
+        gateway_log="mock-gateway.log",
+        auth_token="",
+        request_auth_token="gateway-secret",
+        timeout=1.0,
+        population_mode=rest_perf.POPULATION_HOST_MODEL,
+        role="queen",
+        worker_acceptance_root=None,
+        worker_acceptance_evidence=None,
+        target_session=None,
+        gateway_pool_control_sessions=None,
+        gateway_pool_telemetry_sessions=None,
+        gateway_broker_control_response_timeout_ms=None,
+        gateway_broker_telemetry_response_timeout_ms=None,
+        gateway_control_write_retry_window_ms=None,
+        logger=Logger(),
+    )
+
+    try:
+        rest_perf.run_simulation(args)
+    except StopAfterBackend:
+        pass
+    else:
+        raise AssertionError("test sentinel was not reached")
+
+    assert launched == [["hive-gateway", "--bind", "127.0.0.1:8080", "--mock"]]
 
 
 def test_executable_acceptance_rejects_backend_and_manifest_drift() -> None:
@@ -1824,6 +2475,72 @@ def test_parse_args_external_gateway_does_not_require_console_secret(
         sys.argv = original_argv
 
 
+def test_parse_args_managed_gateway_mock_needs_no_console_secret(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("HIVE_GATEWAY_MOCK", raising=False)
+    for name in ("COH_AUTH_TOKEN", "COHSH_AUTH_TOKEN"):
+        monkeypatch.delenv(name, raising=False)
+    original_argv = list(sys.argv)
+    try:
+        sys.argv = [
+            "rest_perf_harness.py",
+            "--mode",
+            "simulate",
+            "--no-qemu",
+            "--gateway-mock",
+            "--request-auth-token",
+            "gateway-secret",
+        ]
+        args = rest_perf.parse_args()
+        assert args.gateway_mock is True
+        assert args.auth_token == ""
+        assert args.tail_bytes == 8192
+    finally:
+        sys.argv = original_argv
+
+
+def test_parse_args_gateway_mock_rejects_incompatible_topologies(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("HIVE_GATEWAY_MOCK", raising=False)
+    cases = (
+        (["--gateway-mock"], "requires --no-qemu"),
+        (
+            ["--gateway-mock", "--no-qemu", "--no-gateway"],
+            "cannot be combined with --no-gateway",
+        ),
+        (
+            [
+                "--gateway-mock",
+                "--no-qemu",
+                "--population-mode",
+                "executable",
+            ],
+            "requires host-model population",
+        ),
+    )
+    original_argv = list(sys.argv)
+    try:
+        for extra, expected in cases:
+            sys.argv = [
+                "rest_perf_harness.py",
+                "--mode",
+                "simulate",
+                "--request-auth-token",
+                "gateway-secret",
+                *extra,
+            ]
+            try:
+                rest_perf.parse_args()
+            except SystemExit as exc:
+                assert expected in str(exc)
+            else:
+                raise AssertionError("incompatible gateway mock topology must fail")
+    finally:
+        sys.argv = original_argv
+
+
 def pressure_runner_source() -> str:
     return PRESSURE_RUNNER_PATH.read_text(encoding="utf-8")
 
@@ -1870,8 +2587,15 @@ def test_m26e_qemu_pressure_runner_has_exact_orchestration_contract() -> None:
         'find "$REPO_ROOT/target" -depth -mindepth 1 -delete',
         'find "$REPO_ROOT/out" -depth -mindepth 1 -delete',
         'rmdir "$REPO_ROOT/target"',
+        "selected QEMU binary does not support the canonical HVF accelerator",
+        'export COHESIX_QEMU_ACCEL=hvf',
+        'export COHESIX_QEMU_VIRT=off',
         'COHESIX_QEMU_SMP_TOPO=4,cores=4,threads=1,sockets=1',
-        'exact_option("-machine", "virt,gic-version=3,virtualization=on,kernel-irqchip=off")',
+        'exact_option("-accel", "hvf")',
+        (
+            'exact_option("-machine", '
+            '"virt,gic-version=3,virtualization=off,kernel-irqchip=off")'
+        ),
         '"$BUILD_RUN" --launch-existing',
         'run_pressure_boot medium 4 1 16 2604',
         'run_pressure_boot high 8 4 32 2608',
@@ -1894,17 +2618,14 @@ def test_m26e_qemu_pressure_runner_has_exact_orchestration_contract() -> None:
         '--preflight-service-gdb-log "$RUN_DIR/ninedoor-during-call/service.gdb.log"',
         '--preflight-service-gdb-log "$RUN_DIR/ninedoor-between-calls/service.gdb.log"',
         '--preflight-service-gdb-log "$RUN_DIR/console-standard-fault/service.gdb.log"',
-        '--preflight-service-gdb-log "$RUN_DIR/console-timeout-fault/service.gdb.log"',
         '--preflight-service-uart "$RUN_DIR/ninedoor-during-call/service.uart.log"',
         '--preflight-service-uart "$RUN_DIR/ninedoor-between-calls/service.uart.log"',
         '--preflight-service-uart "$RUN_DIR/console-standard-fault/service.uart.log"',
-        '--preflight-service-uart "$RUN_DIR/console-timeout-fault/service.uart.log"',
         '--auth-observation "$AUTH_OBSERVATION"',
         '--mode "$mode"',
         'ninedoor-during-call ninedoor-service during-call-standard',
         'ninedoor-between-calls ninedoor-service between-calls-revoke',
         'console-standard-fault console-network during-call-standard',
-        'console-timeout-fault console-network budget-exhaustion-timeout',
         '--preflight-critical-gdb-log "$RUN_DIR/medium/critical.gdb.log"',
         '--pressure "$RUN_DIR/medium/pressure.summary.json"',
         '--pressure "$RUN_DIR/high/pressure.summary.json"',
@@ -1945,9 +2666,6 @@ def test_m26e_qemu_pressure_runner_has_exact_orchestration_contract() -> None:
     console_standard_boot = source.index(
         "console-standard-fault console-network during-call-standard"
     )
-    console_timeout_boot = source.index(
-        "console-timeout-fault console-network budget-exhaustion-timeout"
-    )
     medium_boot = source.index("run_pressure_boot medium 4 1 16 2604")
     high_boot = source.index("run_pressure_boot high 8 4 32 2608")
     staged_plan = source.index(
@@ -1964,13 +2682,17 @@ def test_m26e_qemu_pressure_runner_has_exact_orchestration_contract() -> None:
         < during_call_boot
         < between_calls_boot
         < console_standard_boot
-        < console_timeout_boot
         < medium_boot
         < high_boot
         < staged_plan
         < final_collection
     )
     assert "rebuilding the exact pressure artifact set" not in source
+    assert "export COHESIX_QEMU_ACCEL=tcg" not in source
+    assert "export COHESIX_QEMU_VIRT=on" not in source
+    assert "canonical TCG accelerator" not in source
+    assert "console-timeout-fault" not in source
+    assert "budget-exhaustion-timeout" not in source
     assert "qemu-gdb-services" not in source
     assert "staging/cohesix/artifacts/cohesix-driver-runtimes.cpio" not in source
     assert "--auth-token" not in source
@@ -1979,6 +2701,16 @@ def test_m26e_qemu_pressure_runner_has_exact_orchestration_contract() -> None:
     assert 'source_inventory = {' not in source
     assert 'find "$REPO_ROOT"' not in source
     preserve = source.index('PRESERVE_ROOT="$(mktemp -d ')
+    canonical_run_dir = source.index(
+        'RUN_DIR="$(canonical_future_dir "$RUN_DIR" "$OUT_DIR")"'
+    )
+    canonical_gdb = source.index(
+        'GDB_BIN="$(canonical_existing_file "$GDB_BIN" "$COMPILER_DIR" yes)"'
+    )
+    branch_guard = source.index(
+        '[[ "$(git branch --show-current)" == "main" ]]'
+    )
+    assert canonical_run_dir < canonical_gdb < branch_guard < preserve
     assert source.index("COH_AUTH_TOKEN differs from the compiler-selected") < preserve
     assert source.index("gateway request secret must be 64 lowercase") < preserve
 

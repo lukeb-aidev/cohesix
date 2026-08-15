@@ -103,17 +103,18 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_OWNER_ACTIVE, DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_POISONED,
     DRIVER_RUNTIME_ENGINE_INIT_AUX, DRIVER_RUNTIME_FRAMEBUFFER_FORMAT_RGB888,
     DRIVER_RUNTIME_FRAMEBUFFER_FORMAT_XRGB8888, DRIVER_RUNTIME_FRAMEBUFFER_VADDR,
-    DRIVER_RUNTIME_INIT_AUX, DRIVER_RUNTIME_INIT_FLAG_BUS_LINKS,
-    DRIVER_RUNTIME_INIT_FLAG_FRAMEBUFFER, DRIVER_RUNTIME_INIT_FLAG_IRQS_BOUND,
-    DRIVER_RUNTIME_INIT_FLAG_POLL_ONLY, DRIVER_RUNTIME_INIT_MAGIC,
-    DRIVER_RUNTIME_INIT_MAX_BUS_LINKS, DRIVER_RUNTIME_INIT_MAX_DMA_PAGES,
-    DRIVER_RUNTIME_INIT_MAX_IRQS, DRIVER_RUNTIME_INIT_MAX_MMIO_PAGES,
-    DRIVER_RUNTIME_INIT_MAX_RESOURCE_RANGES, DRIVER_RUNTIME_INIT_MAX_SHARED_PAGES,
-    DRIVER_RUNTIME_INIT_REQUIRED_FLAGS, DRIVER_RUNTIME_INIT_VERSION,
-    DRIVER_RUNTIME_IRQ_TRIGGER_LEVEL, DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT,
-    DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX, DRIVER_RUNTIME_NET_INIT_AUX,
-    DRIVER_RUNTIME_PCIE_OP_PORT_READ, DRIVER_RUNTIME_PCIE_OP_PORT_WRITE,
-    DRIVER_RUNTIME_PCIE_OP_POSTED_WRITE_FLUSH, DRIVER_RUNTIME_REJECT_CYW43_CONTROL_OWNER_MISMATCH,
+    DRIVER_RUNTIME_INIT_AUX, DRIVER_RUNTIME_INIT_DESCRIPTOR_APERTURE_BYTES,
+    DRIVER_RUNTIME_INIT_FLAG_BUS_LINKS, DRIVER_RUNTIME_INIT_FLAG_FRAMEBUFFER,
+    DRIVER_RUNTIME_INIT_FLAG_IRQS_BOUND, DRIVER_RUNTIME_INIT_FLAG_POLL_ONLY,
+    DRIVER_RUNTIME_INIT_MAGIC, DRIVER_RUNTIME_INIT_MAX_BUS_LINKS,
+    DRIVER_RUNTIME_INIT_MAX_DMA_PAGES, DRIVER_RUNTIME_INIT_MAX_IRQS,
+    DRIVER_RUNTIME_INIT_MAX_MMIO_PAGES, DRIVER_RUNTIME_INIT_MAX_RESOURCE_RANGES,
+    DRIVER_RUNTIME_INIT_MAX_SHARED_PAGES, DRIVER_RUNTIME_INIT_REQUIRED_FLAGS,
+    DRIVER_RUNTIME_INIT_VERSION, DRIVER_RUNTIME_IRQ_TRIGGER_LEVEL,
+    DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT, DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX,
+    DRIVER_RUNTIME_NET_INIT_AUX, DRIVER_RUNTIME_PCIE_OP_PORT_READ,
+    DRIVER_RUNTIME_PCIE_OP_PORT_WRITE, DRIVER_RUNTIME_PCIE_OP_POSTED_WRITE_FLUSH,
+    DRIVER_RUNTIME_REJECT_CYW43_CONTROL_OWNER_MISMATCH,
     DRIVER_RUNTIME_REJECT_SDIO_GENERATION_COMMIT_ADMISSION,
     DRIVER_RUNTIME_REJECT_SDIO_GENERATION_RESET_ROUTE_MISSING,
     DRIVER_RUNTIME_REJECT_SDIO_INTAKE_SEAL_BUSY, DRIVER_RUNTIME_REJECT_SDIO_INTAKE_SEAL_MISSING,
@@ -7441,6 +7442,18 @@ impl DriverFrameDescriptor {
                 .is_some_and(|end| end <= DRIVER_TASK_RING_PAGE_BYTES)
     }
 
+    fn in_runtime_init_payload(self) -> bool {
+        let offset = self.offset as usize;
+        let len = self.len as usize;
+        offset == DRIVER_TASK_RING_FRAME_OFFSET
+            && len == core::mem::size_of::<DriverRuntimeInitDescriptor>()
+            && len <= usize::from(DRIVER_RUNTIME_INIT_DESCRIPTOR_APERTURE_BYTES)
+            && offset.checked_add(len).is_some_and(|end| {
+                end <= DRIVER_TASK_RING_FRAME_OFFSET
+                    + usize::from(DRIVER_RUNTIME_INIT_DESCRIPTOR_APERTURE_BYTES)
+            })
+    }
+
     fn in_ring_page_payload(self) -> bool {
         let offset = self.offset as usize;
         let len = self.len as usize;
@@ -10721,7 +10734,7 @@ fn service_runtime_init(
     task_key: usize,
     command: DriverTaskCommandRecord,
 ) -> DriverTaskCompletionRecord {
-    if !command.frame.in_ring_payload() {
+    if !command.frame.in_runtime_init_payload() {
         return DriverTaskCompletionRecord::fault(command.sequence, FAULT_REJECTED_COMMAND);
     }
     let descriptor_addr = DRIVER_TASK_RING_VADDR + command.frame.offset as usize;
@@ -75847,6 +75860,17 @@ mod tests {
                 flags: 0,
             },
         };
+
+        assert!(!command.frame.in_ring_payload());
+        assert!(command.frame.in_runtime_init_payload());
+        assert!(usize::from(command.frame.len) > MAX_DRIVER_TASK_FRAME_BYTES);
+        assert_eq!(DRIVER_RUNTIME_INIT_DESCRIPTOR_APERTURE_BYTES, 1664);
+        let mut wrong_offset = command.frame;
+        wrong_offset.offset = wrong_offset.offset.saturating_add(1);
+        assert!(!wrong_offset.in_runtime_init_payload());
+        let mut wrong_len = command.frame;
+        wrong_len.len = wrong_len.len.saturating_sub(1);
+        assert!(!wrong_len.in_runtime_init_payload());
 
         assert_eq!(
             service_runtime_init_for_test(

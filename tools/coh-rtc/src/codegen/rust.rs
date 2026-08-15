@@ -214,6 +214,7 @@ pub fn emit_rust(
     writeln!(mod_contents, "#[derive(Clone, Copy, Debug, PartialEq, Eq)]")?;
     writeln!(mod_contents, "pub enum TimeoutPolicy {{")?;
     writeln!(mod_contents, "    Terminal,")?;
+    writeln!(mod_contents, "    NaturalPostpone,")?;
     writeln!(mod_contents, "    ReplenishOnce,")?;
     writeln!(mod_contents, "    ReturnError,")?;
     writeln!(mod_contents, "    FailStop,")?;
@@ -236,8 +237,16 @@ pub fn emit_rust(
     writeln!(mod_contents, "    pub max_refills: u8,")?;
     writeln!(mod_contents, "    pub priority: u8,")?;
     writeln!(mod_contents, "    pub mcp: u8,")?;
+    writeln!(
+        mod_contents,
+        "    /// Non-zero identity reserved by SC configuration; delivered only when a timeout endpoint is installed."
+    )?;
     writeln!(mod_contents, "    pub timeout_badge: u64,")?;
     writeln!(mod_contents, "    pub timeout_policy: TimeoutPolicy,")?;
+    writeln!(
+        mod_contents,
+        "    /// Kernel SC consumed-time accounting is required; this does not assert timeout IPC delivery."
+    )?;
     writeln!(mod_contents, "    pub consumed_time_evidence: bool,")?;
     writeln!(mod_contents, "    pub wcet_us: u32,")?;
     writeln!(mod_contents, "    pub response_time_us: u32,")?;
@@ -382,6 +391,7 @@ pub fn emit_rust(
         "revoke_badge",
         "packet_tx_ready_badge",
         "event_ready_badge",
+        "publication_ack_badge",
         "fault_badge",
     ] {
         writeln!(mod_contents, "    pub {field}: u64,")?;
@@ -1991,7 +2001,7 @@ pub fn emit_rust(
     let console = &manifest.console_network_service;
     writeln!(
         bootstrap_contents,
-        "pub const CONSOLE_NETWORK_SERVICE_CONFIG: ConsoleNetworkServiceConfig = ConsoleNetworkServiceConfig {{ enabled: {}, abi_version: {}, image_id: \"{}\", image_path: \"{}\", entry_symbol: \"{}\", listener_port: {}, single_listener: {}, child_cspace_slots: {}, revoke_anchor_slot: {}, revoke_anchor_bits: {}, objects: {}, packet_rx_notification_slot: {}, packet_tx_wake_notification_slot: {}, supervisor_wake_notification_slot: {}, fault_endpoint_slot: {}, ipc_buffer_vaddr: {}, init_vaddr: {}, stack_vaddr: {}, stack_pages: {}, packet_rx_vaddr: {}, packet_tx_vaddr: {}, command_vaddr: {}, event_vaddr: {}, shared_frame_bytes: {}, ethernet_frame_bytes: {}, max_packets_per_wake: {}, max_commands_per_wake: {}, max_control_inflight: {}, packet_rx_badge: {}, control_badge: {}, shutdown_badge: {}, revoke_badge: {}, packet_tx_ready_badge: {}, event_ready_badge: {}, fault_badge: {}, core: {}, scheduling_context_slot: {}, scheduling_context_bits: {}, priority: {}, mcp: {}, budget_us: {}, period_us: {}, max_refills: {}, timeout_badge: {}, timer_clock_hz: {}, auth_timeout_ms: {}, idle_timeout_ms: {} }};\n",
+        "pub const CONSOLE_NETWORK_SERVICE_CONFIG: ConsoleNetworkServiceConfig = ConsoleNetworkServiceConfig {{ enabled: {}, abi_version: {}, image_id: \"{}\", image_path: \"{}\", entry_symbol: \"{}\", listener_port: {}, single_listener: {}, child_cspace_slots: {}, revoke_anchor_slot: {}, revoke_anchor_bits: {}, objects: {}, packet_rx_notification_slot: {}, packet_tx_wake_notification_slot: {}, supervisor_wake_notification_slot: {}, fault_endpoint_slot: {}, ipc_buffer_vaddr: {}, init_vaddr: {}, stack_vaddr: {}, stack_pages: {}, packet_rx_vaddr: {}, packet_tx_vaddr: {}, command_vaddr: {}, event_vaddr: {}, shared_frame_bytes: {}, ethernet_frame_bytes: {}, max_packets_per_wake: {}, max_commands_per_wake: {}, max_control_inflight: {}, packet_rx_badge: {}, control_badge: {}, shutdown_badge: {}, revoke_badge: {}, packet_tx_ready_badge: {}, event_ready_badge: {}, publication_ack_badge: {}, fault_badge: {}, core: {}, scheduling_context_slot: {}, scheduling_context_bits: {}, priority: {}, mcp: {}, budget_us: {}, period_us: {}, max_refills: {}, timeout_badge: {}, timer_clock_hz: {}, auth_timeout_ms: {}, idle_timeout_ms: {} }};\n",
         console.enabled,
         console.abi_version,
         escape_literal(&console.image_id),
@@ -2026,6 +2036,7 @@ pub fn emit_rust(
         console.revoke_badge,
         console.packet_tx_ready_badge,
         console.event_ready_badge,
+        console.publication_ack_badge,
         console.fault_badge,
         console.core,
         console.scheduling_context_slot,
@@ -3077,6 +3088,7 @@ fn temporal_task_kind_to_rust(kind: TemporalTaskKind) -> &'static str {
 fn timeout_policy_to_rust(policy: TimeoutPolicy) -> &'static str {
     match policy {
         TimeoutPolicy::Terminal => "TimeoutPolicy::Terminal",
+        TimeoutPolicy::NaturalPostpone => "TimeoutPolicy::NaturalPostpone",
         TimeoutPolicy::ReplenishOnce => "TimeoutPolicy::ReplenishOnce",
         TimeoutPolicy::ReturnError => "TimeoutPolicy::ReturnError",
         TimeoutPolicy::FailStop => "TimeoutPolicy::FailStop",

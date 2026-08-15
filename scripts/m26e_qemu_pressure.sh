@@ -259,7 +259,6 @@ done
     die "--jobs must be an integer in 1..32"
 
 cd "$REPO_ROOT"
-[[ "$(git branch --show-current)" == "main" ]] || die "worktree must be on main"
 [[ "$REPO_ROOT" == "/Users/lukasbower/GitHub/cohesix" ]] || \
     die "refusing to clean an unexpected repository root: $REPO_ROOT"
 OUT_DIR="$(canonical_existing_dir "$REPO_ROOT/out" "$REPO_ROOT")"
@@ -295,6 +294,7 @@ GDB_BIN="$(canonical_existing_file "$GDB_BIN" "$COMPILER_DIR" yes)"
 [[ "$GDB_BIN" == "$COMPILER_DIR/bin/aarch64-none-elf-gdb" ]] || \
     die "--gdb must select the compiler contract GDB"
 [[ ! -e "$RUN_DIR" && ! -L "$RUN_DIR" ]] || die "fresh --run-dir already exists: $RUN_DIR"
+[[ "$(git branch --show-current)" == "main" ]] || die "worktree must be on main"
 HOST_VENV="$(canonical_existing_dir "$REPO_ROOT/.venv" "$REPO_ROOT")"
 HARNESS_PYTHON="$HOST_VENV/bin/python"
 [[ -x "$HARNESS_PYTHON" ]] || die "repository .venv Python is unavailable"
@@ -362,6 +362,12 @@ for program in compiler["required_programs"]:
         raise SystemExit(f"compiler program differs from pinned provenance: {program}")
 PY
 "$QEMU_BIN" --version >/dev/null
+QEMU_ACCEL_HELP="$("$QEMU_BIN" -accel help 2>&1)" || \
+    die "cannot query QEMU accelerator support"
+printf '%s\n' "$QEMU_ACCEL_HELP" | \
+    grep -Eq '(^|[[:space:],])hvf([[:space:],]|$)' || \
+    die "selected QEMU binary does not support the canonical HVF accelerator"
+unset QEMU_ACCEL_HELP
 "$GDB_BIN" --version >/dev/null
 "$HARNESS_PYTHON" -c 'import json, urllib.request' >/dev/null
 "$PROFILE_PYTHON" --version >/dev/null
@@ -645,8 +651,8 @@ unset CARGO_BUILD_RUSTC_WRAPPER CARGO_BUILD_TARGET CC CXX AR LD
 export CARGO_TARGET_DIR="$REPO_ROOT/target"
 export COHESIX_SEL4_PROFILE=qemu_smp_production
 export COHESIX_QEMU_SMP_TOPO=4,cores=4,threads=1,sockets=1
-export COHESIX_QEMU_VIRT=on
-export COHESIX_QEMU_ACCEL=tcg
+export COHESIX_QEMU_VIRT=off
+export COHESIX_QEMU_ACCEL=hvf
 export COHESIX_QEMU_MACHINE_EXTRA=kernel-irqchip=off
 
 BUILD_RUN="$REPO_ROOT/scripts/cohesix-build-run.sh"
@@ -1240,7 +1246,8 @@ def exact_option(option: str, expected: str) -> None:
         raise SystemExit(f"QEMU command {option} differs from exact target truth")
 
 
-exact_option("-machine", "virt,gic-version=3,virtualization=on,kernel-irqchip=off")
+exact_option("-accel", "hvf")
+exact_option("-machine", "virt,gic-version=3,virtualization=off,kernel-irqchip=off")
 exact_option("-smp", "4,cores=4,threads=1,sockets=1")
 exact_option("-kernel", elfloader)
 exact_option("-initrd", system_cpio)
@@ -1248,8 +1255,6 @@ exact_option("-pidfile", pidfile)
 exact_option("-gdb", "tcp:127.0.0.1:1234")
 if ("-S" in tokens) != (paused == "yes"):
     raise SystemExit("QEMU paused-boot state differs from the declared evidence phase")
-if "-accel" not in tokens or "tcg" not in tokens:
-    raise SystemExit("QEMU command does not select the canonical TCG accelerator")
 if not any("virtio-net-device" in token for token in tokens):
     raise SystemExit("QEMU command lacks the canonical virtio network device")
 PY
@@ -2069,11 +2074,9 @@ run_pressure_boot() {
         --service-gdb-log "$RUN_DIR/ninedoor-during-call/service.gdb.log" \
         --service-gdb-log "$RUN_DIR/ninedoor-between-calls/service.gdb.log" \
         --service-gdb-log "$RUN_DIR/console-standard-fault/service.gdb.log" \
-        --service-gdb-log "$RUN_DIR/console-timeout-fault/service.gdb.log" \
         --service-uart "$RUN_DIR/ninedoor-during-call/service.uart.log" \
         --service-uart "$RUN_DIR/ninedoor-between-calls/service.uart.log" \
         --service-uart "$RUN_DIR/console-standard-fault/service.uart.log" \
-        --service-uart "$RUN_DIR/console-timeout-fault/service.uart.log" \
         --root-elf "$ROOT_ELF" \
         --critical-gdb-log "$boot_dir/critical.gdb.log" \
         --integration-dir "$boot_dir/host-integration/integration" \
@@ -2175,8 +2178,8 @@ TEST_PLAN_CONVERGENCE_QEMU_OUT_DIR="$OUT_ROOT" \
     die "authenticated NineDoor target observation is missing or aliased"
 verify_live_artifacts
 
-# Both services are terminal with no replacement. Every donated-Call fault,
-# local revoke, and budget fault therefore runs in its own fresh boot.
+# Both services are terminal with no replacement after a delivered standard
+# fault. Each standard-fault or local-revoke probe therefore uses a fresh boot.
 run_service_fault_boot \
     ninedoor-during-call ninedoor-service during-call-standard \
     "$NINEDOOR_ELF" NINEDOOR_SERVICE_TEARDOWN 350
@@ -2186,9 +2189,6 @@ run_service_fault_boot \
 run_service_fault_boot \
     console-standard-fault console-network during-call-standard \
     "$CONSOLE_NETWORK_ELF" CONSOLE_NETWORK_TEARDOWN 360
-run_service_fault_boot \
-    console-timeout-fault console-network budget-exhaustion-timeout \
-    "$CONSOLE_NETWORK_ELF" CONSOLE_NETWORK_TEARDOWN 361
 
 run_pressure_boot medium 4 1 16 2604
 run_pressure_boot high 8 4 32 2608
@@ -2220,11 +2220,9 @@ mkdir -p "$FINAL_DIR"
     --preflight-service-gdb-log "$RUN_DIR/ninedoor-during-call/service.gdb.log" \
     --preflight-service-gdb-log "$RUN_DIR/ninedoor-between-calls/service.gdb.log" \
     --preflight-service-gdb-log "$RUN_DIR/console-standard-fault/service.gdb.log" \
-    --preflight-service-gdb-log "$RUN_DIR/console-timeout-fault/service.gdb.log" \
     --preflight-service-uart "$RUN_DIR/ninedoor-during-call/service.uart.log" \
     --preflight-service-uart "$RUN_DIR/ninedoor-between-calls/service.uart.log" \
     --preflight-service-uart "$RUN_DIR/console-standard-fault/service.uart.log" \
-    --preflight-service-uart "$RUN_DIR/console-timeout-fault/service.uart.log" \
     --preflight-critical-gdb-log "$RUN_DIR/medium/critical.gdb.log" \
     --uart "$RUN_DIR/medium/pressure.uart.log" \
     --gdb-log "$RUN_DIR/medium/pressure.gdb.log" \

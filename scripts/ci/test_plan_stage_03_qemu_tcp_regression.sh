@@ -40,7 +40,6 @@ fi
 
 ready_timeout="${TP_STAGE3_READY_TIMEOUT:-900}"
 port_timeout="${TP_STAGE3_PORT_TIMEOUT:-60}"
-quit_close_timeout="${TP_STAGE3_QUIT_CLOSE_TIMEOUT:-60}"
 auth_ready_timeout="${TP_STAGE3_AUTH_READY_TIMEOUT:-120}"
 
 artifact_helper="${TEST_PLAN_ROOT}/scripts/ci/qemu_artifact.py"
@@ -75,7 +74,6 @@ fi
 export \
   READY_TIMEOUT="${ready_timeout}" \
   PORT_TIMEOUT="${port_timeout}" \
-  QUIT_CLOSE_TIMEOUT="${quit_close_timeout}" \
   AUTH_READY_TIMEOUT="${auth_ready_timeout}" \
   COHSH_LOG_ROOT="${transport_root}" \
   COHSH_QEMU_ARTIFACT_ROOT="${artifact_root}" \

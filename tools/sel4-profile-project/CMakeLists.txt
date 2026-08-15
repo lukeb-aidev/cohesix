@@ -120,6 +120,38 @@ if((NOT Sel4testAllowSettingsOverride) AND (KernelArchARM OR KernelArchRiscV))
 endif()
 elfloader_import_project()
 
+# QEMU HVF cannot expose guest virtualization extensions, so its SMP-capable
+# virt machine advertises PSCI HVC. Upstream seL4 v16's elfloader rejects that
+# conduit and implements CPU_ON only with SMC. Replace just its PSCI SMP driver
+# in QEMU AArch64 profiles while retaining SMC for platforms that select it.
+if(KernelPlatform STREQUAL "qemu-arm-virt" AND KernelSel4ArchAarch64)
+    set(
+        _cohesix_upstream_psci_driver
+        "${COHESIX_SEL4_PROJECT_ROOT}/tools/seL4/elfloader-tool/src/arch-arm/drivers/smp-psci.c"
+    )
+    get_target_property(_cohesix_elfloader_sources elfloader SOURCES)
+    set(_cohesix_upstream_psci_driver_count 0)
+    foreach(_cohesix_elfloader_source IN LISTS _cohesix_elfloader_sources)
+        if("${_cohesix_elfloader_source}" STREQUAL "${_cohesix_upstream_psci_driver}")
+            math(EXPR _cohesix_upstream_psci_driver_count "${_cohesix_upstream_psci_driver_count} + 1")
+        endif()
+    endforeach()
+    if(NOT _cohesix_upstream_psci_driver_count EQUAL 1)
+        message(
+            FATAL_ERROR
+            "expected exactly one upstream elfloader PSCI driver, found ${_cohesix_upstream_psci_driver_count}"
+        )
+    endif()
+    list(REMOVE_ITEM _cohesix_elfloader_sources "${_cohesix_upstream_psci_driver}")
+    set_property(TARGET elfloader PROPERTY SOURCES "${_cohesix_elfloader_sources}")
+    target_sources(
+        elfloader
+        PRIVATE
+            "${CMAKE_CURRENT_LIST_DIR}/elfloader-psci-hvc.c"
+            "${CMAKE_CURRENT_LIST_DIR}/elfloader-psci-hvc.S"
+    )
+endif()
+
 # Upstream uses a fixed image address for bcm2711 and emits an intentionally
 # empty platform_info.h in that mode. Cohesix also loads rootservers last, whose
 # elfloader path requires the generated physical-memory map. Recreate the same
@@ -165,6 +197,17 @@ add_subdirectory(
     "${_cohesix_sel4test_dir}/apps/sel4test-driver"
     "${CMAKE_CURRENT_BINARY_DIR}/apps/sel4test-driver"
 )
+
+# elfloader imports libcpio before its AArch64 directory compile options are
+# established, while sel4test creates the shared cpio target later. Apply the
+# same pre-MMU register constraint directly to that late-created target: FP and
+# SIMD state is not initialized when elfloader first parses its archive.
+if(KernelSel4ArchAarch64)
+    if(NOT TARGET cpio)
+        message(FATAL_ERROR "AArch64 elfloader build is missing the cpio target")
+    endif()
+    target_compile_options(cpio PRIVATE -mgeneral-regs-only)
+endif()
 
 # The operational QEMU build replaces the wrapper rootserver inside the
 # elfloader CPIO without mutating the validated seL4 tree. Reserve explicit,

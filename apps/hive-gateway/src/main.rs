@@ -25,7 +25,10 @@ use axum::response::{Html, IntoResponse};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use clap::Parser;
-use cohesix_net_constants::COHESIX_TCP_CONSOLE_PORT;
+use cohesix_net_constants::{
+    COHESIX_TCP_CONSOLE_PORT, HIVE_GATEWAY_BROKER_QUEUE_WAIT_LIMIT_MS,
+    HIVE_GATEWAY_DEFAULT_BROKER_RESPONSE_TIMEOUT_MS,
+};
 use cohesix_ticket::Role;
 use cohesix_worker_evidence::{
     parse_evidence, parse_target_session, ArtifactState, ExecutionProof, KernelObjectInventory,
@@ -70,9 +73,11 @@ const AUTHORIZATION_BEARER_PREFIX: &str = "bearer ";
 const INSECURE_PLACEHOLDER_TOKEN: &str = concat!("change", "me");
 const DEFAULT_PROC_CACHE_TTL_MS: u64 = 2_000;
 const DEFAULT_PROC_CACHE_MAX_ENTRIES: usize = 64;
-const BROKER_QUEUE_WAIT_LIMIT_MS: u64 = 5_000;
-const DEFAULT_BROKER_CONTROL_RESPONSE_TIMEOUT_MS: u64 = 120_000;
-const DEFAULT_BROKER_TELEMETRY_RESPONSE_TIMEOUT_MS: u64 = 120_000;
+const BROKER_QUEUE_WAIT_LIMIT_MS: u64 = HIVE_GATEWAY_BROKER_QUEUE_WAIT_LIMIT_MS;
+const DEFAULT_BROKER_CONTROL_RESPONSE_TIMEOUT_MS: u64 =
+    HIVE_GATEWAY_DEFAULT_BROKER_RESPONSE_TIMEOUT_MS;
+const DEFAULT_BROKER_TELEMETRY_RESPONSE_TIMEOUT_MS: u64 =
+    HIVE_GATEWAY_DEFAULT_BROKER_RESPONSE_TIMEOUT_MS;
 const BROKER_ENQUEUE_RETRY_SLEEP_MS: u64 = 5;
 const BROKER_CONTROL_QUEUE_CAPACITY: usize = 256;
 const BROKER_TELEMETRY_QUEUE_CAPACITY: usize = 1024;
@@ -1974,7 +1979,7 @@ fn execute_broker_request(
 ) -> Result<BrokerResponse> {
     match request {
         BrokerRequest::Attach { role, ticket } => {
-            pool.attach(role, ticket.as_deref())?;
+            attach_and_prime_pool(pool, role, ticket.as_deref())?;
             Ok(BrokerResponse::Unit)
         }
         BrokerRequest::Ping => with_pool_once(pool, kind, |transport, session| {
@@ -2015,6 +2020,29 @@ fn execute_broker_request(
             })
         }
     }
+}
+
+fn attach_and_prime_pool(pool: &SharedPool, role: Role, ticket: Option<&str>) -> Result<()> {
+    let result = (|| {
+        pool.attach(role, ticket)?;
+
+        // Readiness covers both logical request lanes; remaining configured capacity stays lazy.
+        let control = pool
+            .checkout(PoolKind::Control)
+            .context("prime gateway control session")?;
+        drop(control);
+
+        let telemetry = pool
+            .checkout(PoolKind::Telemetry)
+            .context("prime gateway telemetry session")?;
+        drop(telemetry);
+        Ok(())
+    })();
+
+    if result.is_err() {
+        pool.shutdown();
+    }
+    result
 }
 
 fn execute_broker_write_batch(
@@ -2079,8 +2107,13 @@ fn spawn_connection_manager(state: AppState, host: String, port: u16) {
                     attempt = 0;
                     backoff = Duration::from_millis(state.inner.policy.retry.backoff_ms);
                     info!("hive-gateway connected");
+                    // AUTH plus the shared wire ATTACH establish initial readiness for both
+                    // logical lanes. Keep the first steady-state PING behind one normal interval
+                    // so it cannot block first use.
+                    thread::sleep(heartbeat);
                 }
                 Err(err) => {
+                    state.inner.pool.shutdown();
                     state.mark_disconnected(err);
                     thread::sleep(backoff);
                     backoff = next_delay(backoff, ceiling);
@@ -2240,9 +2273,7 @@ impl AppState {
         if self.is_connected() {
             return Ok(());
         }
-        self.attach()?;
-        self.mark_connected();
-        Ok(())
+        anyhow::bail!("gateway transport unavailable: backend is not connected")
     }
 
     fn list(&self, path: &str) -> Result<Vec<String>> {
@@ -3667,6 +3698,73 @@ mod tests {
     }
 
     #[test]
+    fn in_process_schedule_capacity_surfaces_one_typed_buffer_full_refusal() {
+        let server = NineDoor::new_with_shard_layout(ShardLayout::enabled(8, true));
+        let factory: Arc<dyn TransportFactory> = Arc::new(move || {
+            Ok(Box::new(NineDoorTransport::new(server.clone()))
+                as Box<dyn cohsh::Transport + Send>)
+        });
+        let pool = SessionPool::new(3, 5, factory);
+        execute_broker_request(
+            &pool,
+            PoolKind::Control,
+            BrokerRequest::Attach {
+                role: Role::Queen,
+                ticket: None,
+            },
+        )
+        .expect("in-process broker attach");
+
+        for index in 0..CONTROL_SCHEDULE_QUEUE_MAX_ENTRIES {
+            let payload = format!(
+                "{{\"id\":\"sched-{index}\",\"role\":\"worker-heartbeat\",\"priority\":1,\"ticks\":1,\"budget_ms\":1}}"
+            )
+            .into_bytes();
+            execute_broker_request(
+                &pool,
+                PoolKind::Control,
+                BrokerRequest::Write {
+                    path: CLIENT_QUEEN_SCHEDULE_CTL_PATH.to_owned(),
+                    payload,
+                },
+            )
+            .expect("admitted schedule entry");
+        }
+
+        let refused_payload = format!(
+            "{{\"id\":\"sched-{CONTROL_SCHEDULE_QUEUE_MAX_ENTRIES}\",\"role\":\"worker-heartbeat\",\"priority\":1,\"ticks\":1,\"budget_ms\":1}}"
+        )
+        .into_bytes();
+        let err = match execute_broker_request(
+            &pool,
+            PoolKind::Control,
+            BrokerRequest::Write {
+                path: CLIENT_QUEEN_SCHEDULE_CTL_PATH.to_owned(),
+                payload: refused_payload,
+            },
+        ) {
+            Ok(_) => panic!("first over-capacity schedule entry must be refused"),
+            Err(err) => err,
+        };
+
+        assert_eq!(
+            err.to_string(),
+            "ERR ECHO reason=quota detail=buffer-full path=/queen/schedule/ctl error=buffer full"
+        );
+        assert!(is_retryable_control_write_error(err.to_string().as_str()));
+        assert!(is_vm_control_queue_full_error(err.to_string().as_str()));
+        let (status, body) = response_transport_err("ECHO", CLIENT_QUEEN_SCHEDULE_CTL_PATH, err);
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.0.status, "ERR");
+        assert_eq!(
+            body.0.error.as_deref(),
+            Some(
+                "ERR ECHO reason=quota detail=buffer-full path=/queen/schedule/ctl error=buffer full"
+            )
+        );
+    }
+
+    #[test]
     fn validate_tail_lines_enforces_cli_bound() {
         assert_eq!(validate_tail_lines(None).unwrap(), None);
         assert_eq!(validate_tail_lines(Some(1)).unwrap(), Some(1));
@@ -4004,6 +4102,77 @@ mod tests {
             telemetry_segment_id_from_ack_lines("/queen/telemetry/bench/latest", valid.as_slice()),
             None
         );
+    }
+
+    #[test]
+    fn broker_attach_primes_exactly_one_control_and_one_telemetry_session() {
+        let creates = Arc::new(AtomicUsize::new(0));
+        let factory_creates = creates.clone();
+        let server = NineDoor::new_with_shard_layout(ShardLayout::enabled(8, true));
+        let factory: Arc<dyn TransportFactory> = Arc::new(move || {
+            factory_creates.fetch_add(1, Ordering::Relaxed);
+            Ok(Box::new(NineDoorTransport::new(server.clone()))
+                as Box<dyn cohsh::Transport + Send>)
+        });
+        let pool = SessionPool::new(3, 5, factory);
+
+        let response = execute_broker_request(
+            &pool,
+            PoolKind::Control,
+            BrokerRequest::Attach {
+                role: Role::Queen,
+                ticket: None,
+            },
+        )
+        .expect("broker attach must prime both gateway lanes");
+
+        assert!(matches!(response, BrokerResponse::Unit));
+        assert_eq!(creates.load(Ordering::Relaxed), 2);
+
+        let control = pool
+            .checkout(PoolKind::Control)
+            .expect("primed control session must be idle");
+        let telemetry = pool
+            .checkout(PoolKind::Telemetry)
+            .expect("primed telemetry session must be idle");
+        assert_eq!(creates.load(Ordering::Relaxed), 2);
+        drop(control);
+        drop(telemetry);
+    }
+
+    #[test]
+    fn broker_attach_failure_closes_partially_primed_pool() {
+        let creates = Arc::new(AtomicUsize::new(0));
+        let factory_creates = creates.clone();
+        let server = NineDoor::new_with_shard_layout(ShardLayout::enabled(8, true));
+        let factory: Arc<dyn TransportFactory> = Arc::new(move || {
+            let create_index = factory_creates.fetch_add(1, Ordering::Relaxed);
+            if create_index == 1 {
+                return Err(anyhow!("injected telemetry prime failure"));
+            }
+            Ok(Box::new(NineDoorTransport::new(server.clone()))
+                as Box<dyn cohsh::Transport + Send>)
+        });
+        let pool = SessionPool::new(2, 2, factory);
+
+        let err = match execute_broker_request(
+            &pool,
+            PoolKind::Control,
+            BrokerRequest::Attach {
+                role: Role::Queen,
+                ticket: None,
+            },
+        ) {
+            Ok(_) => panic!("telemetry prime failure must reject broker attach"),
+            Err(err) => err,
+        };
+
+        assert!(err.to_string().contains("prime gateway telemetry session"));
+        assert_eq!(creates.load(Ordering::Relaxed), 2);
+        match pool.checkout(PoolKind::Control) {
+            Ok(_) => panic!("failed attach must leave the pool closed"),
+            Err(err) => assert_eq!(err.to_string(), "session pool is closed"),
+        }
     }
 
     #[test]
@@ -4401,6 +4570,28 @@ mod tests {
                 .timeout_rejections
                 .load(Ordering::Relaxed),
             0
+        );
+    }
+
+    #[test]
+    fn uncached_request_fails_fast_while_gateway_is_disconnected() {
+        let state = disconnected_cached_state();
+
+        let err = state
+            .read_uncached("/proc/root/reachable")
+            .expect_err("uncached request must not attach on the request path");
+
+        assert_eq!(
+            err.to_string(),
+            "gateway transport unavailable: backend is not connected"
+        );
+        assert!(!state.is_connected());
+        let (status, body) = response_transport_err("CAT", "/proc/root/reachable", err);
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(body.0.status, "ERR");
+        assert_eq!(
+            body.0.error.as_deref(),
+            Some("gateway transport unavailable: backend is not connected")
         );
     }
 

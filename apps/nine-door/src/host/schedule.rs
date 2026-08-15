@@ -685,12 +685,24 @@ fn append_log_line(
     let bytes = line.as_bytes();
     let needs_newline = !bytes.ends_with(b"\n");
     let extra = if needs_newline { 1 } else { 0 };
-    let new_len = log.len().saturating_add(bytes.len()).saturating_add(extra);
-    if new_len > max_bytes {
+    let line_len = bytes.len().saturating_add(extra);
+    if line_len > max_bytes {
         return Err(NineDoorError::protocol(
             ErrorCode::Invalid,
             format!("{label} exceeds max bytes {}", max_bytes),
         ));
+    }
+    let new_len = log.len().saturating_add(line_len);
+    if new_len > max_bytes {
+        let mut drop_len = new_len.saturating_sub(max_bytes);
+        if drop_len < log.len() {
+            if let Some(position) = log[drop_len..].iter().position(|byte| *byte == b'\n') {
+                drop_len = drop_len.saturating_add(position + 1);
+            } else {
+                drop_len = log.len();
+            }
+        }
+        log.drain(0..drop_len);
     }
     log.extend_from_slice(bytes);
     if needs_newline {
@@ -798,6 +810,32 @@ mod tests {
     use super::*;
 
     #[test]
+    fn control_log_retains_newest_complete_lines_within_bound() {
+        let mut log = Vec::new();
+        append_log_line(&mut log, "line1", 16, "control").expect("append line1");
+        append_log_line(&mut log, "line2", 16, "control").expect("append line2");
+        append_log_line(&mut log, "line3", 16, "control").expect("append line3");
+
+        assert_eq!(log, b"line2\nline3\n");
+    }
+
+    #[test]
+    fn control_log_rejects_one_oversize_line_without_mutation() {
+        let mut log = b"kept\n".to_vec();
+        let err = append_log_line(&mut log, "0123456789", 8, "control")
+            .expect_err("one over-limit line must fail");
+
+        assert!(matches!(
+            err,
+            NineDoorError::Protocol {
+                code: ErrorCode::Invalid,
+                ..
+            }
+        ));
+        assert_eq!(log, b"kept\n");
+    }
+
+    #[test]
     fn schedule_queue_enforces_configured_capacity() {
         let mut state = ScheduleState::new(
             ScheduleControlConfig {
@@ -824,12 +862,43 @@ mod tests {
             .append_line(overflow)
             .expect_err("schedule queue should be full");
         assert!(matches!(
-            err,
+            &err,
             NineDoorError::Protocol {
                 code: ErrorCode::TooBig,
-                ..
-            }
+                message,
+            } if message == "schedule queue full"
         ));
+    }
+
+    #[test]
+    fn schedule_state_keeps_accepting_valid_entries_when_control_log_rolls() {
+        let mut state = ScheduleState::new(
+            ScheduleControlConfig {
+                enable: true,
+                queue_max_entries: 3,
+                ctl_max_bytes: 96,
+            },
+            ProcScheduleConfig {
+                summary: false,
+                queue: false,
+                summary_bytes: 0,
+                queue_bytes: 0,
+            },
+        );
+        for id in ["s1", "s2", "s3"] {
+            state
+                .append_line(&format!(
+                    r#"{{"id":"{id}","role":"worker-gpu","priority":1,"ticks":1,"budget_ms":1}}"#
+                ))
+                .expect("valid schedule entry");
+        }
+
+        assert_eq!(state.queue.len(), 3);
+        assert!(state.ctl_log.len() <= 96);
+        assert_eq!(
+            state.ctl_log,
+            b"{\"id\":\"s3\",\"role\":\"worker-gpu\",\"priority\":1,\"ticks\":1,\"budget_ms\":1}\n"
+        );
     }
 
     #[test]
@@ -863,11 +932,11 @@ mod tests {
             )
             .expect_err("active list should be full");
         assert!(matches!(
-            active_err,
+            &active_err,
             NineDoorError::Protocol {
                 code: ErrorCode::TooBig,
-                ..
-            }
+                message,
+            } if message == "lease active list full"
         ));
 
         for id in ["l1", "l2"] {
@@ -884,11 +953,124 @@ mod tests {
             .append_line(r#"{"op":"preempt","id":"l3","reason":"x"}"#)
             .expect_err("preemptions list should be full");
         assert!(matches!(
-            preempt_err,
+            &preempt_err,
             NineDoorError::Protocol {
                 code: ErrorCode::TooBig,
-                ..
-            }
+                message,
+            } if message == "lease preemptions list full"
+        ));
+
+        for (subject, resource) in [("s1", "r1"), ("s2", "r2")] {
+            state
+                .append_line(&format!(
+                    r#"{{"op":"quota","subject":"{subject}","resource":"{resource}","max_active":1,"max_preemptions":1}}"#
+                ))
+                .expect("set lease quota");
+        }
+        let quota_err = state
+            .append_line(
+                r#"{"op":"quota","subject":"s3","resource":"r3","max_active":1,"max_preemptions":1}"#,
+            )
+            .expect_err("quota list should be full");
+        assert!(matches!(
+            &quota_err,
+            NineDoorError::Protocol {
+                code: ErrorCode::TooBig,
+                message,
+            } if message == "lease quota list full"
+        ));
+    }
+
+    #[test]
+    fn lease_state_keeps_accepting_valid_transitions_when_control_log_rolls() {
+        let mut state = LeaseState::new(
+            LeaseControlConfig {
+                enable: true,
+                active_max_entries: 2,
+                preemptions_max_entries: 2,
+                ctl_max_bytes: 128,
+            },
+            ProcLeaseConfig {
+                summary: false,
+                active: false,
+                preemptions: false,
+                summary_bytes: 0,
+                active_bytes: 0,
+                preemptions_bytes: 0,
+            },
+        );
+        state
+            .append_line(
+                r#"{"op":"grant","id":"l1","subject":"queen","resource":"gpu0","ttl_s":1,"priority":1}"#,
+            )
+            .expect("grant lease");
+        state
+            .append_line(
+                r#"{"op":"quota","subject":"queen","resource":"gpu0","max_active":1,"max_preemptions":1}"#,
+            )
+            .expect("set quota");
+        state
+            .append_line(r#"{"op":"preempt","id":"l1","reason":"benchmark"}"#)
+            .expect("preempt lease");
+
+        assert!(state.active.is_empty());
+        assert_eq!(state.preemptions.len(), 1);
+        assert_eq!(state.quotas.len(), 1);
+        assert!(state.ctl_log.len() <= 128);
+        assert_eq!(
+            state.ctl_log,
+            b"{\"op\":\"preempt\",\"id\":\"l1\",\"reason\":\"benchmark\"}\n"
+        );
+    }
+
+    #[test]
+    fn export_state_keeps_accepting_valid_transitions_when_control_log_rolls() {
+        let mut state = ExportState::new(ExportControlConfig {
+            enable: true,
+            ctl_max_bytes: 64,
+        });
+        state
+            .append_line(r#"{"op":"open","id":"w1","ttl_s":1}"#)
+            .expect("open first export window");
+        state
+            .append_line(r#"{"op":"open","id":"w2","ttl_s":1}"#)
+            .expect("open second export window");
+        state
+            .append_line(r#"{"op":"close","id":"w1","reason":"complete"}"#)
+            .expect("close first export window");
+
+        assert_eq!(state.windows.len(), 1);
+        assert_eq!(state.windows[0].id, "w2");
+        assert!(state.ctl_log.len() <= 64);
+        assert_eq!(
+            state.ctl_log,
+            b"{\"op\":\"close\",\"id\":\"w1\",\"reason\":\"complete\"}\n"
+        );
+    }
+
+    #[test]
+    fn export_windows_enforce_configured_capacity() {
+        let mut state = ExportState::new(ExportControlConfig {
+            enable: true,
+            ctl_max_bytes: 4096,
+        });
+        for index in 0..EXPORT_MAX_WINDOWS {
+            state
+                .append_line(&format!(
+                    r#"{{"op":"open","id":"window-{index}","ttl_s":1}}"#
+                ))
+                .expect("open export window");
+        }
+
+        let err = state
+            .append_line(r#"{"op":"open","id":"window-overflow","ttl_s":1}"#)
+            .expect_err("export window list should be full");
+        assert!(matches!(
+            &err,
+            NineDoorError::Protocol {
+                code: ErrorCode::TooBig,
+                message,
+            } if message == "export window list full"
         ));
     }
 }

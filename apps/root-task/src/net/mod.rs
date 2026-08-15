@@ -512,13 +512,33 @@ pub struct ConsoleLine {
     pub text: HeaplessString<{ cohsh_core::MAX_LINE_LEN }>,
     /// Monotonic ingest timestamp in milliseconds.
     pub ingest_ms: u64,
+    /// Exact child connection identity that admitted this command line.
+    pub connection_id: Option<u64>,
 }
 
 impl ConsoleLine {
     /// Construct a console line with the supplied ingest timestamp.
     #[must_use]
     pub fn new(text: HeaplessString<{ cohsh_core::MAX_LINE_LEN }>, ingest_ms: u64) -> Self {
-        Self { text, ingest_ms }
+        Self {
+            text,
+            ingest_ms,
+            connection_id: None,
+        }
+    }
+
+    /// Construct a console line pinned to one authenticated connection.
+    #[must_use]
+    pub fn for_connection(
+        text: HeaplessString<{ cohsh_core::MAX_LINE_LEN }>,
+        ingest_ms: u64,
+        connection_id: u64,
+    ) -> Self {
+        Self {
+            text,
+            ingest_ms,
+            connection_id: Some(connection_id),
+        }
     }
 }
 
@@ -1342,6 +1362,37 @@ pub trait NetPoller {
     /// Queue a console line for transmission to remote clients.
     fn send_console_line(&mut self, line: &str) -> bool;
 
+    /// Queue the terminal line of one ordered authenticated response.
+    ///
+    /// Non-isolated transports retain their existing line behavior. The QEMU
+    /// isolated adapter overrides this hook to fence response completion to
+    /// the exact child generation, connection, control sequence, and drain.
+    fn send_console_terminal_line(&mut self, line: &str) -> bool {
+        self.send_console_line(line)
+    }
+
+    /// Return the exact isolated child/authenticated-connection identity that
+    /// may own a root-buffered bounded response. Non-isolated transports do
+    /// not opt into root-side response capture.
+    fn bounded_console_response_identity(&self) -> Option<ConsoleResponseIdentity> {
+        None
+    }
+
+    /// Snapshot an active isolated authenticated response, when supported.
+    fn console_response_lane(&self) -> Option<ConsoleResponseLane> {
+        None
+    }
+
+    /// Poll one isolated response-network unit through the normal driver-task
+    /// budget. Other transports retain their ordinary polling contract.
+    fn poll_console_response_with_budget(
+        &mut self,
+        now_ms: u64,
+        budget: &mut DriverServiceBudget,
+    ) -> Result<bool, DriverServiceBudgetError> {
+        self.poll_with_budget(now_ms, budget)
+    }
+
     /// Request the active TCP console connection to close after flushing responses.
     fn request_disconnect(&mut self) {}
 
@@ -1495,6 +1546,32 @@ pub trait NetPoller {
     }
 }
 
+/// Exact isolated-service identity permitted to own one bounded response.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ConsoleResponseIdentity {
+    /// Compiler-owned child generation carrying the response.
+    pub generation: u64,
+    /// Child-created authenticated connection carrying the response.
+    pub connection_id: u64,
+}
+
+/// Side-effect-free state for one exact authenticated response lane.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ConsoleResponseLane {
+    /// Compiler-owned child generation carrying the response.
+    pub generation: u64,
+    /// Child-created authenticated connection carrying the response.
+    pub connection_id: u64,
+    /// Root-authorized lines retained in the adapter queue.
+    pub queued_lines: usize,
+    /// Remaining bounded line slots in that queue.
+    pub available_lines: usize,
+    /// Whether one published batch still awaits exact child drain evidence.
+    pub awaiting_batch_drain: bool,
+    /// Whether the response's terminal line has been retained.
+    pub terminal_queued: bool,
+}
+
 #[cfg(any(
     test,
     all(
@@ -1515,8 +1592,9 @@ mod isolated_network_turn;
     sel4_config_kernel_mcs
 ))]
 pub(crate) use isolated_network_turn::{
-    select_isolated_network_turn, IsolatedNetworkLowerCursor, IsolatedNetworkLowerUnit,
-    IsolatedNetworkTurnOutcome, IsolatedNetworkTurnSelection, IsolatedNetworkTurnUnit,
+    select_isolated_network_turn, select_isolated_response_turn, IsolatedNetworkLowerCursor,
+    IsolatedNetworkLowerUnit, IsolatedNetworkTurnOutcome, IsolatedNetworkTurnSelection,
+    IsolatedNetworkTurnUnit,
 };
 
 /// Connection lifecycle notifications surfaced by TCP console transports.

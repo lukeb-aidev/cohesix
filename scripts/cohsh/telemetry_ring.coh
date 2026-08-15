@@ -1,5 +1,5 @@
 # Author: Lukas Bower
-# Purpose: Exercise telemetry ring wraparound, ticket scope denials, rate limits, and stale cursor handling.
+# Purpose: Exercise telemetry ring wraparound, ticket scope denials, bandwidth quotas, and stale cursor handling.
 # Copyright 2026 Lukas Bower
 attach queen cohesix-ticket-0100040000000000000000000000000000000000000000.e9b8bc4e26e2f06725347bdd8983fb3efc170658fc6af53cabb746bef58deddb
 EXPECT ERR
@@ -7,11 +7,14 @@ EXPECT SUBSTR expired
 attach queen cohesix-ticket-0100040000000000000000000000000000000000000000.e9b8bc4e26e2f06725347bdd8983fb3efc170658fc6af53cabb746bef58deddb
 EXPECT ERR
 EXPECT SUBSTR expired
-attach queen cohesix-ticket-0100300000000000000000000000000304002f6c6f67000100000006002f717565656e010000000006002f7368617264010000000000000000000000000000000001000000.0c714a86a89a2abc049395e486dbd2a8ce6ba7076ce508a02431a22319629672
+attach queen cohesix-ticket-0100300000000000000000000000000304002f6c6f67000000000006002f717565656e010000000006002f7368617264010000000008000000000000000000000000000000.47c085dcfed63146dfa7d26a9e854e8c2c2da22b2847d5ffd98ecfc77e8f9b74
 EXPECT OK
 echo forbidden > /log/queen.log
 EXPECT ERR
 EXPECT SUBSTR EPERM
+cat /log/queen.log
+EXPECT ERR
+EXPECT SUBSTR ELIMIT
 detach
 EXPECT OK
 attach queen
@@ -52,9 +55,6 @@ EXPECT OK
 WAIT 200
 tail /log/queen.log
 EXPECT OK
-cat /log/queen.log
-EXPECT ERR
-EXPECT SUBSTR ELIMIT
 cat /shard/13/worker/worker-1/telemetry
 EXPECT ERR
 quit

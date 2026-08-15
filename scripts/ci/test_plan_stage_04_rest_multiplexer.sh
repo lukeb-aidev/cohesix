@@ -96,6 +96,192 @@ qemu_pid=0
 gateway_pid=0
 cohsh_bin="${COHSH_BIN:-${TEST_PLAN_ROOT}/out/cohesix/host-tools/cohsh}"
 coh_bin="${TP_COH_BIN:-${TEST_PLAN_ROOT}/out/cohesix/host-tools/coh}"
+readonly stage4_gateway_queue_wait_limit_ms=5000
+readonly stage4_rest_response_delivery_grace_ms=5000
+readonly stage4_default_gateway_control_response_timeout_ms=120000
+readonly stage4_default_gateway_telemetry_response_timeout_ms=120000
+readonly stage4_max_gateway_response_timeout_ms=1200000
+readonly stage4_max_rest_client_response_timeout_ms=1210000
+readonly stage4_context_environment_names=(
+  COHESIX_GATEWAY_URL
+  COHSH_REST_RESPONSE_TIMEOUT_MS
+  COHSH_REST_URL
+  COH_REST_URL
+  HIVE_GATEWAY_BROKER_CONTROL_RESPONSE_TIMEOUT_MS
+  HIVE_GATEWAY_BROKER_TELEMETRY_RESPONSE_TIMEOUT_MS
+  HIVE_GATEWAY_REQUEST_AUTH_TOKEN
+  HIVE_GATEWAY_URL
+  TP_STAGE4_FUSE_COH_BIN
+  TP_STAGE4_FUSE_MOUNT_DIR
+  TP_STAGE4_FUSE_MOUNT_LOG
+)
+stage4_context_environment_present=()
+stage4_context_environment_values=()
+
+stage4_capture_context_environment() {
+  local index
+  local name
+  for ((index = 0; index < ${#stage4_context_environment_names[@]}; index += 1)); do
+    name="${stage4_context_environment_names[index]}"
+    if [[ -n "${!name+x}" ]]; then
+      stage4_context_environment_present[index]=1
+      stage4_context_environment_values[index]="${!name}"
+    else
+      stage4_context_environment_present[index]=0
+      stage4_context_environment_values[index]=""
+    fi
+  done
+}
+
+stage4_restore_context_environment() {
+  local index
+  local name
+  for ((index = 0; index < ${#stage4_context_environment_names[@]}; index += 1)); do
+    name="${stage4_context_environment_names[index]}"
+    if [[ "${stage4_context_environment_present[index]}" == "1" ]]; then
+      printf -v "${name}" '%s' "${stage4_context_environment_values[index]}"
+      export "${name}"
+    else
+      unset "${name}"
+    fi
+  done
+}
+
+# Stage 04 exports its resolved endpoint and timeout contract for child tools.
+# Preserve the inherited input context so those runner-owned values cannot be
+# misclassified as source/configuration drift when the attempt is finalized.
+stage4_capture_context_environment
+
+stage4_validate_timeout_ms() {
+  local label="$1"
+  local value="$2"
+  local minimum="$3"
+  local maximum="$4"
+  if [[ ! "${value}" =~ ^[0-9]+$ ]] || [[ "${#value}" -gt 10 ]]; then
+    tp_log "FAIL  ${label} must be a decimal millisecond value" >&2
+    return 1
+  fi
+  value="$((10#${value}))"
+  if (( value < minimum || value > maximum )); then
+    tp_log "FAIL  ${label} must be within ${minimum}..${maximum}ms, got ${value}ms" >&2
+    return 1
+  fi
+  printf '%s\n' "${value}"
+}
+
+stage4_resolve_timeout_override() {
+  local label="$1"
+  local harness_name="$2"
+  local product_name="$3"
+  local default_value="$4"
+  local require_explicit="$5"
+  local minimum="$6"
+  local maximum="$7"
+  local harness_value="${!harness_name-}"
+  local product_value="${!product_name-}"
+  local normalized_harness=""
+  local normalized_product=""
+
+  if [[ -n "${harness_value}" ]]; then
+    normalized_harness="$(
+      stage4_validate_timeout_ms \
+        "${harness_name}" \
+        "${harness_value}" \
+        "${minimum}" \
+        "${maximum}"
+    )" || return 1
+  fi
+  if [[ -n "${product_value}" ]]; then
+    normalized_product="$(
+      stage4_validate_timeout_ms \
+        "${product_name}" \
+        "${product_value}" \
+        "${minimum}" \
+        "${maximum}"
+    )" || return 1
+  fi
+  if [[ -n "${normalized_harness}" \
+    && -n "${normalized_product}" \
+    && "${normalized_harness}" != "${normalized_product}" ]]; then
+    tp_log "FAIL  conflicting ${label}: ${harness_name}=${normalized_harness} ${product_name}=${normalized_product}" >&2
+    return 1
+  fi
+  if [[ -n "${normalized_harness}" ]]; then
+    printf '%s\n' "${normalized_harness}"
+    return 0
+  fi
+  if [[ -n "${normalized_product}" ]]; then
+    printf '%s\n' "${normalized_product}"
+    return 0
+  fi
+  if [[ "${require_explicit}" == "1" ]]; then
+    tp_log "FAIL  external gateway requires explicit ${label} via ${harness_name} or ${product_name}" >&2
+    return 1
+  fi
+  stage4_validate_timeout_ms \
+    "default ${label}" \
+    "${default_value}" \
+    "${minimum}" \
+    "${maximum}"
+}
+
+stage4_resolve_timeout_contract() {
+  local external_gateway="$1"
+  local require_gateway_declaration=0
+  local maximum_gateway_timeout_ms
+  local minimum_client_timeout_ms
+  if [[ "${external_gateway}" == "1" ]]; then
+    require_gateway_declaration=1
+    stage4_gateway_timeout_declaration="external-explicit"
+  else
+    stage4_gateway_timeout_declaration="local-configured"
+  fi
+
+  stage4_gateway_control_response_timeout_ms="$(
+    stage4_resolve_timeout_override \
+      "gateway control broker response timeout" \
+      TP_STAGE4_GATEWAY_CONTROL_RESPONSE_TIMEOUT_MS \
+      HIVE_GATEWAY_BROKER_CONTROL_RESPONSE_TIMEOUT_MS \
+      "${stage4_default_gateway_control_response_timeout_ms}" \
+      "${require_gateway_declaration}" \
+      "${stage4_gateway_queue_wait_limit_ms}" \
+      "${stage4_max_gateway_response_timeout_ms}"
+  )" || return 1
+  stage4_gateway_telemetry_response_timeout_ms="$(
+    stage4_resolve_timeout_override \
+      "gateway telemetry broker response timeout" \
+      TP_STAGE4_GATEWAY_TELEMETRY_RESPONSE_TIMEOUT_MS \
+      HIVE_GATEWAY_BROKER_TELEMETRY_RESPONSE_TIMEOUT_MS \
+      "${stage4_default_gateway_telemetry_response_timeout_ms}" \
+      "${require_gateway_declaration}" \
+      "${stage4_gateway_queue_wait_limit_ms}" \
+      "${stage4_max_gateway_response_timeout_ms}"
+  )" || return 1
+  maximum_gateway_timeout_ms="${stage4_gateway_control_response_timeout_ms}"
+  if (( stage4_gateway_telemetry_response_timeout_ms > maximum_gateway_timeout_ms )); then
+    maximum_gateway_timeout_ms="${stage4_gateway_telemetry_response_timeout_ms}"
+  fi
+  minimum_client_timeout_ms=$((
+    stage4_gateway_queue_wait_limit_ms
+    + maximum_gateway_timeout_ms
+    + stage4_rest_response_delivery_grace_ms
+  ))
+  stage4_rest_client_response_timeout_ms="$(
+    stage4_resolve_timeout_override \
+      "REST client response timeout" \
+      TP_STAGE4_REST_CLIENT_TIMEOUT_MS \
+      COHSH_REST_RESPONSE_TIMEOUT_MS \
+      "${minimum_client_timeout_ms}" \
+      0 \
+      "${minimum_client_timeout_ms}" \
+      "${stage4_max_rest_client_response_timeout_ms}"
+  )" || return 1
+
+  export \
+    HIVE_GATEWAY_BROKER_CONTROL_RESPONSE_TIMEOUT_MS="${stage4_gateway_control_response_timeout_ms}" \
+    HIVE_GATEWAY_BROKER_TELEMETRY_RESPONSE_TIMEOUT_MS="${stage4_gateway_telemetry_response_timeout_ms}" \
+    COHSH_REST_RESPONSE_TIMEOUT_MS="${stage4_rest_client_response_timeout_ms}"
+}
 
 stage4_process_tree() {
   local pid="$1"
@@ -172,6 +358,7 @@ stage4_cleanup() {
   if [[ "${status}" -eq 0 && "${cleanup_status}" -ne 0 ]]; then
     status="${cleanup_status}"
   fi
+  stage4_restore_context_environment
   tp_stage_exit_trap "${status}" || true
   exit "${status}"
 }
@@ -360,9 +547,9 @@ print(f"{parsed.scheme.lower()}://{host}:{port}")
 PY
 }
 
-stage4_wait_port_ready() {
-  local host="$1"
-  local port="$2"
+stage4_wait_log_marker() {
+  local path="$1"
+  local marker="$2"
   local timeout="$3"
   local pid="$4"
   local deadline=$((SECONDS + timeout))
@@ -370,78 +557,9 @@ stage4_wait_port_ready() {
     if ! kill -0 "${pid}" >/dev/null 2>&1; then
       return 1
     fi
-    if stage4_check_port_open "${host}" "${port}"; then
+    if [[ -f "${path}" ]] && grep -Fq -- "${marker}" "${path}"; then
       return 0
     fi
-    sleep 0.2
-  done
-  return 2
-}
-
-stage4_check_auth_ready() {
-  local host="$1"
-  local port="$2"
-  local token="$3"
-  "${python_bin}" - "${host}" "${port}" "${token}" <<'PY'
-import socket
-import sys
-
-host = sys.argv[1]
-port = int(sys.argv[2])
-token = sys.argv[3]
-payload = f"AUTH {token}".encode()
-frame = (len(payload) + 4).to_bytes(4, "little") + payload
-try:
-    with socket.create_connection((host, port), timeout=0.5) as sock:
-        sock.settimeout(0.8)
-        sock.sendall(frame)
-        header = sock.recv(4)
-        if len(header) != 4:
-            raise SystemExit(1)
-        total = int.from_bytes(header, "little")
-        if total < 4 or total > 4096:
-            raise SystemExit(1)
-        body = bytearray()
-        while len(body) < total - 4:
-            chunk = sock.recv(total - 4 - len(body))
-            if not chunk:
-                break
-            body.extend(chunk)
-except OSError:
-    raise SystemExit(1)
-
-if b"OK AUTH" in body:
-    raise SystemExit(0)
-if b"ERR AUTH" in body:
-    raise SystemExit(3)
-raise SystemExit(1)
-PY
-}
-
-stage4_wait_auth_ready() {
-  local host="$1"
-  local port="$2"
-  local token="$3"
-  local timeout="$4"
-  local pid="$5"
-  local deadline=$((SECONDS + timeout))
-  local status
-  while (( SECONDS < deadline )); do
-    if ! kill -0 "${pid}" >/dev/null 2>&1; then
-      return 1
-    fi
-    set +e
-    stage4_check_auth_ready "${host}" "${port}" "${token}"
-    status=$?
-    set -e
-    case "${status}" in
-      0)
-        return 0
-        ;;
-      3)
-        return 3
-        ;;
-    esac
     sleep 0.2
   done
   return 2
@@ -467,6 +585,7 @@ EOF
     fi
     if COHSH_REST_URL="${url}" \
       HIVE_GATEWAY_REQUEST_AUTH_TOKEN="${token}" \
+      COHSH_REST_RESPONSE_TIMEOUT_MS="${stage4_rest_client_response_timeout_ms}" \
       "${bin}" --transport rest --role queen --script "${ready_script}" \
       >>"${TP_LOG_FILE}" 2>&1; then
       return 0
@@ -483,6 +602,13 @@ if [[ -n "${gateway_url}" ]]; then
   external_gateway=1
   export COHESIX_GATEWAY_URL="${gateway_url}"
 fi
+stage4_resolve_timeout_contract "${external_gateway}"
+tp_log "INFO  gateway-timeout-declaration=${stage4_gateway_timeout_declaration}"
+tp_log "INFO  gateway-broker-queue-wait-limit-ms=${stage4_gateway_queue_wait_limit_ms}"
+tp_log "INFO  gateway-broker-control-response-timeout-ms=${stage4_gateway_control_response_timeout_ms}"
+tp_log "INFO  gateway-broker-telemetry-response-timeout-ms=${stage4_gateway_telemetry_response_timeout_ms}"
+tp_log "INFO  rest-response-delivery-grace-ms=${stage4_rest_response_delivery_grace_ms}"
+tp_log "INFO  cohsh-rest-response-timeout-ms=${stage4_rest_client_response_timeout_ms}"
 if [[ "${target}" == "pi4" ]]; then
   if [[ -z "${gateway_url}" ]]; then
     tp_log "FAIL  Pi 4 Stage 04 requires an existing REST gateway"
@@ -681,21 +807,12 @@ if [[ -z "${gateway_url}" ]]; then
   qemu_pid=$!
 
   ready_timeout="${TP_STAGE4_READY_TIMEOUT:-900}"
-  auth_ready_timeout="${TP_STAGE4_AUTH_READY_TIMEOUT:-120}"
-  if ! stage4_wait_port_ready 127.0.0.1 "${qemu_tcp_port}" "${ready_timeout}" "${qemu_pid}"; then
-    tp_log "FAIL  local QEMU TCP console did not become reachable"
-    tail -n 80 "${qemu_log}" >&2 || true
-    exit 1
-  fi
-  if stage4_wait_auth_ready 127.0.0.1 "${qemu_tcp_port}" "${console_auth_token}" "${auth_ready_timeout}" "${qemu_pid}"; then
-    :
-  else
-    auth_status=$?
-    if [[ "${auth_status}" -eq 3 ]]; then
-      tp_log "FAIL  local QEMU TCP auth rejected the selected console token"
-    else
-      tp_log "FAIL  local QEMU TCP auth endpoint did not become responsive"
-    fi
+  if ! stage4_wait_log_marker \
+    "${qemu_log}" \
+    "[mark] root-console.start.ok" \
+    "${ready_timeout}" \
+    "${qemu_pid}"; then
+    tp_log "FAIL  local QEMU root-console ready marker not observed"
     tail -n 80 "${qemu_log}" >&2 || true
     exit 1
   fi
@@ -711,6 +828,8 @@ if [[ -z "${gateway_url}" ]]; then
     --bind "${gateway_bind}" \
     --tcp-host 127.0.0.1 \
     --tcp-port "${qemu_tcp_port}" \
+    --broker-control-response-timeout-ms "${stage4_gateway_control_response_timeout_ms}" \
+    --broker-telemetry-response-timeout-ms "${stage4_gateway_telemetry_response_timeout_ms}" \
     >"${gateway_log}" 2>&1 &
   gateway_pid=$!
 
@@ -753,6 +872,7 @@ tp_run_cmd \
   COHSH_LOG_ROOT="${rest_log_root}" \
   COHSH_BATCH_NAME="rest-regression-core" \
   COHSH_PARALLELISM="${core_parallelism}" \
+  COHSH_REST_RESPONSE_TIMEOUT_MS="${stage4_rest_client_response_timeout_ms}" \
   COHSH_SCRIPT_LIST="${core_scripts}" \
   "${TEST_PLAN_ROOT}/scripts/cohsh/REST_regression_batch.sh"
 
@@ -763,6 +883,7 @@ tp_run_cmd \
   COHSH_LOG_ROOT="${rest_log_root}" \
   COHSH_BATCH_NAME="rest-regression-parity" \
   COHSH_PARALLELISM=1 \
+  COHSH_REST_RESPONSE_TIMEOUT_MS="${stage4_rest_client_response_timeout_ms}" \
   COHSH_SCRIPT_LIST="${parity_scripts}" \
   "${TEST_PLAN_ROOT}/scripts/cohsh/REST_regression_batch.sh"
 
@@ -787,7 +908,7 @@ from cohesix.backends import RestBackend
 gateway_url = os.environ[\"COHESIX_GATEWAY_URL\"]
 backend = RestBackend(
     gateway_url,
-    timeout_s=10.0,
+    timeout_s=float(os.environ[\"COHSH_REST_RESPONSE_TIMEOUT_MS\"]) / 1000.0,
     max_attempts=6,
     backoff_ms=200,
     backoff_ceiling_ms=2000,
@@ -1013,6 +1134,12 @@ stage4_summary="${stage4_result_dir}/summary.log"
   printf 'claim_tier=%s\n' "${claim_tier}"
   printf 'action_id=%s\n' "${action_id}"
   printf 'source_digest=%s\n' "${source_digest}"
+  printf 'gateway_timeout_declaration=%s\n' "${stage4_gateway_timeout_declaration}"
+  printf 'gateway_broker_queue_wait_limit_ms=%s\n' "${stage4_gateway_queue_wait_limit_ms}"
+  printf 'gateway_broker_control_response_timeout_ms=%s\n' "${stage4_gateway_control_response_timeout_ms}"
+  printf 'gateway_broker_telemetry_response_timeout_ms=%s\n' "${stage4_gateway_telemetry_response_timeout_ms}"
+  printf 'rest_response_delivery_grace_ms=%s\n' "${stage4_rest_response_delivery_grace_ms}"
+  printf 'cohsh_rest_response_timeout_ms=%s\n' "${stage4_rest_client_response_timeout_ms}"
   printf 'gateway_kind=%s\n' "$(
     if [[ "${external_gateway}" == "1" ]]; then
       printf 'external'
@@ -1093,4 +1220,5 @@ if [[ "${TEST_PLAN_ITERATION:-0}" != "1" ]]; then
     --root "${stage4_root}" \
     --pointer "${TEST_PLAN_STATE_DIR}/stage_04_artifact_root.path"
 fi
+stage4_restore_context_environment
 tp_stage_complete 4

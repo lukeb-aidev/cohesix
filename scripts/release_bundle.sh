@@ -352,6 +352,7 @@ source_keys = (
     "host_assets",
     "operator_scripts",
     "python_artifacts",
+    "cas_fixtures",
     "trace_fixtures",
     "transcript_fixtures",
     "ui_assets",
@@ -598,6 +599,12 @@ bundle_release() {
     "${bundle_dir}/python/m26e-python-package.json"
 
   while IFS= read -r selected_path; do
+    local destination="cas/${selected_path#tests/fixtures/cas/}"
+    mkdir -p "$(dirname "${bundle_dir}/${destination}")"
+    cp -p "${ROOT_DIR}/${selected_path}" "${bundle_dir}/${destination}"
+  done < <(release_inventory_values cas_fixtures)
+
+  while IFS= read -r selected_path; do
     local destination="traces/${selected_path#tests/fixtures/traces/}"
     mkdir -p "$(dirname "${bundle_dir}/${destination}")"
     cp -p "${ROOT_DIR}/${selected_path}" "${bundle_dir}/${destination}"
@@ -652,12 +659,12 @@ TCP_PORT="${TCP_PORT:-31337}"
 UDP_PORT="${UDP_PORT:-31338}"
 SMOKE_PORT="${SMOKE_PORT:-31339}"
 DEFAULT_QEMU_SMP_TOPO="4,cores=4,threads=1,sockets=1"
-DEFAULT_QEMU_VIRT="on"
+DEFAULT_QEMU_VIRT="off"
 DEFAULT_QEMU_ACCEL=""
 DEFAULT_QEMU_MACHINE_EXTRA=""
 if [[ "$HOST_OS" == "Darwin" ]]; then
-  DEFAULT_QEMU_ACCEL="tcg"
-  DEFAULT_QEMU_VIRT="on"
+  DEFAULT_QEMU_ACCEL="hvf"
+  DEFAULT_QEMU_VIRT="off"
   DEFAULT_QEMU_MACHINE_EXTRA="kernel-irqchip=off"
 fi
 QEMU_SMP_RAW="${COHESIX_QEMU_SMP:-${QEMU_SMP:-}}"
@@ -749,6 +756,10 @@ resolve_qemu_accel() {
     fi
   fi
   if ! qemu_accel_supported "$accel"; then
+    if [[ "$HOST_OS" == "Darwin" && "$accel" == "hvf" ]]; then
+      echo "[qemu] canonical Darwin QEMU requires HVF, but ${QEMU_BIN} does not advertise it; set COHESIX_QEMU_ACCEL=tcg only for a claim-ineligible diagnostic run" >&2
+      exit 1
+    fi
     echo "[qemu] Requested QEMU accelerator '$accel' not supported by ${QEMU_BIN}; falling back to tcg" >&2
     accel="tcg"
   fi
@@ -822,22 +833,22 @@ validate_qemu_smp_arg() {
 validate_qemu_virt_arg() {
   local arg="$1"
 
-  case "$arg" in
-    on|off)
-      return
-      ;;
-    *)
-      echo "[qemu] Invalid QEMU virtualization setting (use on|off): $arg" >&2
-      exit 1
-      ;;
-  esac
+  if [[ "$arg" != "off" ]]; then
+    echo "[qemu] selected release profile requires virtualization=off; got $arg" >&2
+    exit 1
+  fi
 }
 
 format_qemu_machine_arg() {
   local virt="$1"
-  local machine="virt,gic-version=${GIC_VER}"
-  if [[ "$HOST_OS" != "Darwin" ]] || [[ -n "$QEMU_VIRT_RAW" ]]; then
-    machine="${machine},virtualization=${virt}"
+  local machine="virt,gic-version=${GIC_VER},virtualization=${virt}"
+  if [[ "$QEMU_MACHINE_EXTRA_RAW" == *"gic-version"* \
+      || "$QEMU_MACHINE_EXTRA_RAW" == *"virtualization"* \
+      || "$QEMU_MACHINE_EXTRA_RAW" == *"virt,"* \
+      || "$QEMU_MACHINE_EXTRA_RAW" == *"machine="* \
+      || "$QEMU_MACHINE_EXTRA_RAW" == *"type="* ]]; then
+    echo "[qemu] machine extras must not override the profile-owned machine" >&2
+    exit 1
   fi
   if [[ -n "$QEMU_MACHINE_EXTRA_RAW" ]]; then
     machine="${machine},${QEMU_MACHINE_EXTRA_RAW}"
@@ -847,6 +858,11 @@ format_qemu_machine_arg() {
 
 QEMU_ACCEL="$(resolve_qemu_accel)"
 echo "[qemu] Using QEMU accel: ${QEMU_ACCEL}"
+if [[ "$QEMU_ACCEL" == "tcg" ]]; then
+  echo "[qemu] TCG is an explicit diagnostic envelope; this run is claim-ineligible"
+elif [[ "$HOST_OS" == "Darwin" && "$QEMU_ACCEL" != "hvf" ]]; then
+  echo "[qemu] non-HVF Darwin acceleration is outside the release envelope; this run is claim-ineligible"
+fi
 QEMU_SMP_ARG="$(resolve_qemu_smp_arg)"
 validate_qemu_smp_arg "$QEMU_SMP_ARG"
 echo "[qemu] Using QEMU SMP: ${QEMU_SMP_ARG}"
@@ -854,11 +870,16 @@ QEMU_VIRT_ARG="$(resolve_qemu_virt_arg)"
 validate_qemu_virt_arg "$QEMU_VIRT_ARG"
 QEMU_MACHINE_ARG="$(format_qemu_machine_arg "$QEMU_VIRT_ARG")"
 echo "[qemu] Using QEMU machine: ${QEMU_MACHINE_ARG}"
+QEMU_CPU_ARG="cortex-a57"
+if [[ "$QEMU_ACCEL" == "tcg" ]]; then
+  QEMU_CPU_ARG="${QEMU_CPU_ARG},cntfrq=24000000"
+fi
+echo "[qemu] Using QEMU CPU: ${QEMU_CPU_ARG}"
 
 "${QEMU_BIN}" \
   -accel "${QEMU_ACCEL}" \
   -machine "${QEMU_MACHINE_ARG}" \
-  -cpu cortex-a57 \
+  -cpu "${QEMU_CPU_ARG}" \
   -m 1024 \
   -smp "${QEMU_SMP_ARG}" \
   -serial mon:stdio \
@@ -885,6 +906,11 @@ digest = hashlib.sha256(trace.read_bytes()).hexdigest()
 hive = Path("releases") / release / "traces" / "trace_v0.hive.cbor"
 hive_digest = hashlib.sha256(hive.read_bytes()).hexdigest()
 (hive.parent / "trace_v0.hive.cbor.sha256").write_text(hive_digest + "\n", encoding="utf-8")
+cas_fixture = Path("releases") / release / "cas" / "max_chunks_v1.txt"
+cas_fixture_digest = hashlib.sha256(cas_fixture.read_bytes()).hexdigest()
+(cas_fixture.parent / "max_chunks_v1.txt.sha256").write_text(
+    cas_fixture_digest + "\n", encoding="utf-8"
+)
 PY
 
   printf "%s\n" "${RELEASE_VERSION}" > "${bundle_dir}/VERSION.txt"
@@ -1020,6 +1046,7 @@ require_file "${GENERATED_CONFIG_DIR}/coh_policy.toml"
 require_file "${GENERATED_CONFIG_DIR}/coh_policy.toml.sha256"
 require_file "${ROOT_DIR}/tests/fixtures/traces/trace_v0.trace"
 require_file "${ROOT_DIR}/tests/fixtures/traces/trace_v0.hive.cbor"
+require_file "${ROOT_DIR}/tests/fixtures/cas/max_chunks_v1.txt"
 require_file "${ROOT_DIR}/scripts/setup_environment.sh"
 require_dir "${ROOT_DIR}/apps/swarmui/frontend"
 require_dir "${ROOT_DIR}/docs"

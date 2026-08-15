@@ -44,7 +44,8 @@ DEFAULT_RUNS = 3
 DEFAULT_TIMEOUT_SECS = 3.0
 DEFAULT_SIMULATE_TIMEOUT_SECS = 10.0
 DEFAULT_MAX_WORKERS = 4
-DEFAULT_TAIL_BYTES = 256
+MAX_WORKER_STATE_TAIL_BYTES = 8192
+DEFAULT_TAIL_BYTES = MAX_WORKER_STATE_TAIL_BYTES
 DEFAULT_LOG_TAIL_BYTES = 32768
 DEFAULT_QEMU_SMP = "4,cores=4,threads=1,sockets=1"
 DEFAULT_WORKERS_MIN = 8
@@ -137,7 +138,6 @@ WORKER_LIFECYCLE_STATES = frozenset(
 WORKER_RUNTIME_STATE_SCHEMA = "worker-runtime-state/v1"
 MAX_DISCOVERED_SHARDS = 256
 MAX_DISCOVERED_WORKERS = 64
-MAX_WORKER_STATE_TAIL_BYTES = 8192
 EXECUTABLE_UART_MARKERS = (
     "WORKER_TASK_ADMISSION",
     "WORKER_TASK_READY",
@@ -256,6 +256,10 @@ class RestError(RuntimeError):
         self.response = response
 
 
+class _StrictControlRefusal(RestError):
+    """Typed strict-mode refusal that must bypass every harness retry loop."""
+
+
 @dataclass
 class RunLogger:
     """Simple run logger that writes to a timestamped file."""
@@ -277,6 +281,8 @@ class RunLogger:
 
 
 def is_transient_error(error: Exception) -> bool:
+    if isinstance(error, _StrictControlRefusal):
+        return False
     message = str(error).lower()
     if "http 503" in message or "http 502" in message or "service unavailable" in message:
         return True
@@ -1061,19 +1067,43 @@ def gateway_population_axes(
     bounds: Optional[dict] = None,
 ) -> Tuple[str, str]:
     """Return backend and proof axes without deriving proof from connectivity."""
-    try:
-        status = client.status()
-    except Exception:
-        status = {}
-    backend_class = status.get("backend_class", "unknown")
-    if backend_class not in ("host-model", "console-projection", "unknown"):
-        backend_class = "unknown"
     if population_mode == POPULATION_HOST_MODEL:
-        return str(backend_class), "host-model"
+        try:
+            status = client.status()
+        except Exception as exc:
+            raise RestError(
+                "host-model population requires gateway backend metadata"
+            ) from exc
+        backend_class = status.get("backend_class")
+        if status.get("connected") is not True:
+            raise RestError("host-model population requires a connected backend")
+        if backend_class != "host-model":
+            raise RestError(
+                "host-model population requires backend_class=host-model; "
+                "console-projection targets require executable population"
+            )
+        return "host-model", "host-model"
     if bounds is None:
         raise RestError("executable population requires generated bounds")
     executable_qemu_acceptance_binding(client, bounds)
     return "console-projection", "qemu"
+
+
+def gateway_observation_axes(client: RestClient) -> Tuple[str, str]:
+    """Describe a read-only gateway without granting target execution proof."""
+    try:
+        status = client.status()
+    except Exception:
+        return "unknown", "none"
+    backend_class = status.get("backend_class", "unknown")
+    if backend_class not in ("host-model", "console-projection"):
+        backend_class = "unknown"
+    proof_class = (
+        "host-model"
+        if backend_class == "host-model" and status.get("connected") is True
+        else "none"
+    )
+    return str(backend_class), proof_class
 
 
 def executable_population_snapshot(
@@ -1859,6 +1889,14 @@ def apply_fast_ramp_defaults(args: argparse.Namespace) -> None:
         args.max_inflight = FAST_RAMP_MAX_INFLIGHT
 
 
+def ramp_progress(elapsed_s: float, duration_s: float, ramp_step_s: float) -> float:
+    """Return progress that holds the configured endpoint for the final step."""
+    endpoint_start_s = max(duration_s - ramp_step_s, 0.0)
+    if endpoint_start_s <= 0.0:
+        return 1.0
+    return min(1.0, max(0.0, elapsed_s / endpoint_start_s))
+
+
 def apply_multi_hive_defaults(args: argparse.Namespace, argv_tokens: Sequence[str]) -> None:
     """Derive workers-min/max from federation shape unless explicitly overridden."""
     if not args.multi_hive:
@@ -1948,7 +1986,10 @@ def parse_args() -> argparse.Namespace:
         "--tail-bytes",
         type=int,
         default=DEFAULT_TAIL_BYTES,
-        help="Max bytes per telemetry tail request.",
+        help=(
+            "Max bytes per Worker telemetry tail request; the default admits "
+            "one complete bounded structured Worker-state response."
+        ),
     )
     perf.add_argument(
         "--assert-min-ratio",
@@ -2002,6 +2043,18 @@ def parse_args() -> argparse.Namespace:
         "--gateway-bin",
         default=None,
         help="Path to hive-gateway binary (overrides bundle).",
+    )
+    launch.add_argument(
+        "--gateway-mock",
+        action="store_true",
+        default=(
+            os.environ.get("HIVE_GATEWAY_MOCK", "").strip()
+            not in ("", "0", "false", "off", "no")
+        ),
+        help=(
+            "Launch hive-gateway with its in-process mock backend; requires "
+            "--no-qemu and host-model population."
+        ),
     )
     launch.add_argument(
         "--gateway-bind",
@@ -2289,7 +2342,16 @@ def parse_args() -> argparse.Namespace:
             args.no_transient_retries = True
         args.auto_approve = not args.no_auto_approve
         args.transient_retries = not args.no_transient_retries
-        if not args.auth_token.strip() and not (args.no_qemu and args.no_gateway):
+        if args.gateway_mock:
+            if not args.no_qemu:
+                raise SystemExit("--gateway-mock requires --no-qemu")
+            if args.no_gateway:
+                raise SystemExit("--gateway-mock cannot be combined with --no-gateway")
+            if args.population_mode != POPULATION_HOST_MODEL:
+                raise SystemExit("--gateway-mock requires host-model population")
+        if not args.auth_token.strip() and not (
+            args.no_qemu and (args.no_gateway or args.gateway_mock)
+        ):
             raise SystemExit(
                 "simulate mode requires --auth-token (or COH_AUTH_TOKEN/COHSH_AUTH_TOKEN)"
             )
@@ -2491,20 +2553,25 @@ def validate_tcp_auth(host: str, port: int, token: str, timeout_s: float) -> Non
     raise TimeoutError(f"TCP auth handshake did not succeed for {host}:{port}")
 
 
+def probe_gateway_readiness(client: RestClient) -> dict:
+    """Require a connected backend before probing bounds and the root namespace."""
+    status = client.get_json("/v1/meta/status")
+    if status.get("connected") is not True:
+        raise RestError("Gateway not ready: backend is not connected")
+    bounds = client.get_json("/v1/meta/bounds")
+    root = client.ls("/")
+    if root.status != "OK":
+        raise RestError(f"Gateway not ready: LS / returned {root.status}")
+    return bounds
+
+
 def wait_for_gateway(client: RestClient, timeout_s: float) -> dict:
-    """Wait for the gateway to respond to /v1/meta/bounds."""
+    """Wait for the gateway backend and root namespace to become ready."""
     deadline = time.time() + timeout_s
     last_error: Optional[Exception] = None
     while time.time() < deadline:
         try:
-            bounds = client.get_json("/v1/meta/bounds")
-            client.get_json("/v1/meta/status")
-            root = client.ls("/")
-            if root.status == "OK":
-                return bounds
-            last_error = RestError(
-                f"Gateway not ready: LS / returned {root.status}"
-            )
+            return probe_gateway_readiness(client)
         except Exception as exc:
             last_error = exc
             time.sleep(0.5)
@@ -2800,20 +2867,36 @@ def _echo_with_policy_retry_inner(
         if not error:
             return False
         err_lower = error.lower()
-        return (
-            "policy" in err_lower
-            or "buffer full" in err_lower
-            or "buffer-full" in err_lower
+        return "policy" in err_lower or (
+            not state.strict_control_errors
+            and ("buffer full" in err_lower or "buffer-full" in err_lower)
         )
 
     admitted_response: Optional[GatewayResponse] = None
 
+    def echo_once() -> GatewayResponse:
+        try:
+            return client.echo(path, line)
+        except RestError as exc:
+            if (
+                state.strict_control_errors
+                and exc.response is not None
+                and is_buffer_full_response(exc.response)
+            ):
+                raise _StrictControlRefusal(str(exc), exc.response) from exc
+            raise
+
     def attempt() -> None:
         nonlocal admitted_response
-        response = client.echo(path, line)
+        response = echo_once()
         if response.status == "OK":
             admitted_response = response
             return
+        if state.strict_control_errors and is_buffer_full_response(response):
+            raise _StrictControlRefusal(
+                f"ECHO {path} failed: {response.error}",
+                response,
+            )
         if (
             path == "/queen/ctl"
             and state.auto_approve
@@ -2826,10 +2909,18 @@ def _echo_with_policy_retry_inner(
                 max_rounds = 24
                 for round_idx in range(max_rounds):
                     queue_approval(client, path, state)
-                    response_retry = client.echo(path, line)
+                    response_retry = echo_once()
                     if response_retry.status == "OK":
                         admitted_response = response_retry
                         return
+                    if (
+                        state.strict_control_errors
+                        and is_buffer_full_response(response_retry)
+                    ):
+                        raise _StrictControlRefusal(
+                            f"ECHO {path} failed: {response_retry.error}",
+                            response_retry,
+                        )
                     response = response_retry
                     if not is_policy_retryable(response_retry.error):
                         break
@@ -3761,6 +3852,10 @@ def ensure_workers(
         }
         return [instance.worker_id for instance in instances], []
 
+    backend_class, proof_class = gateway_population_axes(
+        client,
+        POPULATION_HOST_MODEL,
+    )
     current = expand_bounded_worker_listing(list_workers(client), target)
     seed_next_worker_seq(state, current)
     spawned: List[str] = []
@@ -3791,10 +3886,6 @@ def ensure_workers(
             spawned,
             "ensure",
         )
-    backend_class, proof_class = gateway_population_axes(
-        client,
-        POPULATION_HOST_MODEL,
-    )
     state.record_population(
         PopulationSnapshot(
             requested=target,
@@ -3826,6 +3917,10 @@ def adjust_workers(
         }
         return [instance.worker_id for instance in instances], []
 
+    backend_class, proof_class = gateway_population_axes(
+        client,
+        POPULATION_HOST_MODEL,
+    )
     current = list(worker_ids)
     capacity_limited = False
     if len(current) < target:
@@ -3861,10 +3956,6 @@ def adjust_workers(
             kill_worker(client, state, victim)
             if victim in current:
                 current.remove(victim)
-    backend_class, proof_class = gateway_population_axes(
-        client,
-        POPULATION_HOST_MODEL,
-    )
     state.record_population(
         PopulationSnapshot(
             requested=target,
@@ -3916,6 +4007,11 @@ def run_simulation(args: argparse.Namespace) -> int:
                     args.logger,
                     "using external gateway; skipping direct TCP auth preflight",
                 )
+            elif args.gateway_mock:
+                emit(
+                    args.logger,
+                    "using managed host-model gateway; skipping target TCP auth preflight",
+                )
             else:
                 wait_for_port(args.tcp_host, args.tcp_port, args.ready_timeout_secs)
                 validate_tcp_auth(
@@ -3945,6 +4041,8 @@ def run_simulation(args: argparse.Namespace) -> int:
             env["COH_ROLE"] = args.role
             env["HIVE_GATEWAY_BIND"] = args.gateway_bind
             gateway_cmd = [gateway_bin, "--bind", args.gateway_bind]
+            if args.gateway_mock:
+                gateway_cmd.append("--mock")
             if args.worker_acceptance_root is not None:
                 gateway_cmd.extend(
                     ["--worker-acceptance-root", args.worker_acceptance_root]
@@ -4010,6 +4108,11 @@ def run_simulation(args: argparse.Namespace) -> int:
 
         client = RestClient(rest_url, args.timeout, args.request_auth_token)
         bounds = wait_for_gateway(client, args.ready_timeout_secs)
+        if args.population_mode == POPULATION_HOST_MODEL:
+            # A target-backed console projection owns only compiler-admitted
+            # executable slots. Synthetic 24..120 Worker populations belong to
+            # the explicit host-model backend and must fail before any mutation.
+            gateway_population_axes(client, POPULATION_HOST_MODEL)
         maximum_live_tasks: Optional[int] = None
         acceptance_binding: Optional[Dict[str, object]] = None
         if args.population_mode == POPULATION_EXECUTABLE:
@@ -4125,7 +4228,8 @@ def run_simulation(args: argparse.Namespace) -> int:
 
         duration_s = args.duration_mins * 60
         ramp_step = max(1, args.ramp_step_secs)
-        end_time = time.time() + duration_s
+        start_time = time.time()
+        end_time = start_time + duration_s
         gateway_control_retry_window = (
             args.gateway_control_write_retry_window_ms
             if args.gateway_control_write_retry_window_ms is not None
@@ -4171,7 +4275,11 @@ def run_simulation(args: argparse.Namespace) -> int:
                 step_index = 0
                 while time.time() < end_time:
                     now = time.time()
-                    progress = min(1.0, max(0.0, 1.0 - (end_time - now) / duration_s))
+                    progress = ramp_progress(
+                        now - start_time,
+                        duration_s,
+                        ramp_step,
+                    )
                     target_workers = int(
                         round(
                             args.workers_min
@@ -5128,10 +5236,7 @@ def run_perf(args: argparse.Namespace) -> int:
             **population.as_dict(),
         }
     else:
-        backend_class, proof_class = gateway_population_axes(
-            client,
-            POPULATION_HOST_MODEL,
-        )
+        backend_class, proof_class = gateway_observation_axes(client)
         perf_population = {
             "mode": POPULATION_HOST_MODEL,
             "maximum_live_tasks": None,

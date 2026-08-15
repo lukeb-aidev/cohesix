@@ -110,7 +110,14 @@ def test_release_manifest_selects_hash_bound_python_wheel_and_contracts() -> Non
     assert "configs/generated/cohesix_python_pi4_production.json" in release[
         "generated_configs"
     ]
+    assert "configs/generated/root_task_topology.json" in release[
+        "generated_configs"
+    ]
     assert "tools/cohesix-py/cohesix/worker.py" in release["python_artifacts"]
+    assert "tests/fixtures/cas/max_chunks_v1.txt" in release["cas_fixtures"]
+    assert "cas/max_chunks_v1.txt.sha256" in release[
+        "generated_bundle_files"
+    ]
     assert "python/dist/cohesix-0.2.0a2-py3-none-any.whl" in release[
         "generated_bundle_files"
     ]

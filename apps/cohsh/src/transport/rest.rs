@@ -5,6 +5,7 @@
 //! REST transport backend for the Cohesix shell.
 
 use std::collections::VecDeque;
+use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
 use cohesix_rest::{BoundsResponse, GatewayClient, GatewayStatusResponse};
@@ -56,6 +57,17 @@ impl RestTransport {
     pub fn with_max_tail_bytes(mut self, max_bytes: u32) -> Self {
         self.max_tail_bytes = max_bytes.max(1);
         self
+    }
+
+    /// Override the bounded response envelope for gateway file operations.
+    pub fn with_operation_response_timeout(mut self, timeout: Duration) -> Result<Self> {
+        self.client.set_operation_response_timeout(timeout)?;
+        Ok(self)
+    }
+
+    /// Return the configured gateway file-operation response envelope.
+    pub fn operation_response_timeout(&self) -> Duration {
+        self.client.operation_response_timeout()
     }
 
     /// Fetch gateway connection and broker backpressure status.
@@ -227,6 +239,10 @@ impl Transport for RestTransport {
 
     fn ping(&mut self, _session: &Session) -> Result<String> {
         self.ensure_attached()?;
+        let status = self.client.status().context("rest ping status")?;
+        if !status.connected {
+            return Err(anyhow!("gateway backend is not connected"));
+        }
         let bounds = self.client.bounds().context("rest ping bounds")?;
         self.bounds = Some(bounds.clone());
         self.push_ack(AckStatus::Ok, ConsoleVerb::Ping.ack_label(), None);
@@ -346,10 +362,89 @@ impl Transport for RestTransport {
 mod tests {
     use super::*;
     use cohesix_rest::{
-        ConsoleBounds, ControlPlaneBounds, ExportBounds, LeaseBounds, ObservabilityBounds,
-        PathBounds, PolicyBounds, ProcLeaseBounds, ProcScheduleBounds, ScheduleBounds,
-        Secure9pBounds,
+        BrokerStatusResponse, ConsoleBounds, ControlPlaneBounds, ExportBounds, LeaseBounds,
+        ObservabilityBounds, PathBounds, PolicyBounds, ProcLeaseBounds, ProcScheduleBounds,
+        ScheduleBounds, Secure9pBounds,
     };
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::sync::mpsc::{self, Receiver};
+    use std::thread::{self, JoinHandle};
+    use std::time::Duration;
+
+    fn serve_json(responses: Vec<String>) -> (String, Receiver<Vec<String>>, JoinHandle<()>) {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind loopback test server");
+        let address = listener.local_addr().expect("read loopback server address");
+        let (requests_tx, requests_rx) = mpsc::channel();
+        let server = thread::spawn(move || {
+            let mut requests = Vec::with_capacity(responses.len());
+            for response_body in responses {
+                let (mut stream, _) = listener.accept().expect("accept loopback request");
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .expect("set loopback request timeout");
+                let mut request = Vec::new();
+                let mut buffer = [0_u8; 1024];
+                loop {
+                    let count = stream.read(&mut buffer).expect("read request");
+                    assert!(count != 0, "request ended before the HTTP headers");
+                    request.extend_from_slice(&buffer[..count]);
+                    if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                requests.push(String::from_utf8(request).expect("request is UTF-8"));
+
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response_body}",
+                    response_body.len(),
+                );
+                stream
+                    .write_all(response.as_bytes())
+                    .expect("write loopback response");
+            }
+            requests_tx
+                .send(requests)
+                .expect("publish captured requests");
+        });
+        (format!("http://{address}"), requests_rx, server)
+    }
+
+    fn sample_status(connected: bool) -> GatewayStatusResponse {
+        GatewayStatusResponse {
+            connected,
+            backend_class: None,
+            worker_acceptance: None,
+            worker_acceptance_diagnostic: None,
+            last_error: None,
+            last_change_unix_ms: None,
+            reconnects: 0,
+            connects: u64::from(connected),
+            broker: BrokerStatusResponse {
+                control_waiters: 0,
+                telemetry_waiters: 0,
+                control_waiters_high_water: 0,
+                telemetry_waiters_high_water: 0,
+                control_checkouts: 0,
+                telemetry_checkouts: 0,
+                pool_exhausted: 0,
+                checkout_retries: 0,
+                timeout_rejections: 0,
+                telemetry_yields: 0,
+                proc_cache_hits: 0,
+                proc_cache_misses: 0,
+                proc_cache_evictions: 0,
+                control_write_retryable_errors: 0,
+                control_write_retries: 0,
+                control_write_retry_sleep_ms: 0,
+                control_write_retry_exhaustions: 0,
+                control_write_success_after_retry: 0,
+                relay_queue_depth: 0,
+                relay_deduped: 0,
+                relay_remote_write_failures: 0,
+            },
+        }
+    }
 
     fn sample_bounds() -> BoundsResponse {
         BoundsResponse {
@@ -481,5 +576,69 @@ mod tests {
             RestTransport::bound_for_path("/proc/root/reachable", &bounds),
             None
         );
+    }
+
+    #[test]
+    fn operation_response_envelope_applies_to_primary_and_pooled_construction() {
+        let selected = Duration::from_millis(190_000);
+        let primary = RestTransport::new("http://127.0.0.1:8080", None)
+            .with_operation_response_timeout(selected)
+            .expect("configure primary REST transport");
+        let pooled = RestTransport::new("http://127.0.0.1:8080", None)
+            .with_operation_response_timeout(selected)
+            .expect("configure pooled REST transport");
+
+        assert_eq!(primary.operation_response_timeout(), selected);
+        assert_eq!(pooled.operation_response_timeout(), selected);
+    }
+
+    #[test]
+    fn ping_rejects_disconnected_status_without_fetching_bounds() {
+        let status = serde_json::to_string(&sample_status(false)).expect("serialize status");
+        let (base_url, requests_rx, server) = serve_json(vec![status]);
+        let mut transport = RestTransport::new(base_url, None);
+        let session = transport
+            .attach(Role::Queen, None)
+            .expect("attach local REST session");
+
+        let err = transport
+            .ping(&session)
+            .expect_err("disconnected gateway status must reject ping");
+
+        assert_eq!(err.to_string(), "gateway backend is not connected");
+        assert!(transport.bounds.is_none());
+        server.join().expect("join loopback test server");
+        let requests = requests_rx.recv().expect("receive captured requests");
+        assert_eq!(requests.len(), 1);
+        assert!(requests[0].starts_with("GET /v1/meta/status HTTP/1.1"));
+    }
+
+    #[test]
+    fn ping_fetches_bounds_only_after_connected_status() {
+        let status = serde_json::to_string(&sample_status(true)).expect("serialize status");
+        let bounds = serde_json::to_string(&sample_bounds()).expect("serialize bounds");
+        let (base_url, requests_rx, server) = serve_json(vec![status, bounds]);
+        let mut transport = RestTransport::new(base_url, None);
+        let session = transport
+            .attach(Role::Queen, None)
+            .expect("attach local REST session");
+
+        let response = transport
+            .ping(&session)
+            .expect("connected gateway status must permit bounds ping");
+
+        assert_eq!(response, "gateway ok manifest=demo");
+        assert_eq!(
+            transport
+                .bounds
+                .as_ref()
+                .map(|bounds| bounds.manifest_sha256.as_str()),
+            Some("demo")
+        );
+        server.join().expect("join loopback test server");
+        let requests = requests_rx.recv().expect("receive captured requests");
+        assert_eq!(requests.len(), 2);
+        assert!(requests[0].starts_with("GET /v1/meta/status HTTP/1.1"));
+        assert!(requests[1].starts_with("GET /v1/meta/bounds HTTP/1.1"));
     }
 }

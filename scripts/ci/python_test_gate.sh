@@ -8,6 +8,7 @@ set -euo pipefail
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 pytest_version="9.1.1"
 pyserial_version="3.5"
+setuptools_version="80.9.0"
 requirements_lock="${repo_root}/configs/test-plan-python-requirements.lock"
 requested_python="${TP_PYTHON_BIN:-python3}"
 
@@ -157,10 +158,14 @@ prepare_pytest() {
 
   if ! "${venv_python}" -c \
     'import importlib.metadata, sys
-expected = {"pytest": sys.argv[1], "pyserial": sys.argv[2]}
+expected = {
+    "pytest": sys.argv[1],
+    "pyserial": sys.argv[2],
+    "setuptools": sys.argv[3],
+}
 actual = {name: importlib.metadata.version(name) for name in expected}
 raise SystemExit(0 if actual == expected else 1)' \
-    "${pytest_version}" "${pyserial_version}" >/dev/null 2>&1
+    "${pytest_version}" "${pyserial_version}" "${setuptools_version}" >/dev/null 2>&1
   then
     printf "Installing hashed Python test requirements in %s\n" "${venv_dir}"
     "${venv_python}" -m pip \

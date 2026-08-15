@@ -55,11 +55,12 @@ use super::{
     console_srv::{SessionEvent, TcpConsoleServer},
     dhcp::{DhcpClient, DhcpEvent, DhcpLease, DhcpPhase, DHCP_CLIENT_PORT, DHCP_SERVER_PORT},
     outbound::{OutboundCoalescer, OutboundLane, SendError},
-    parse_icmp_echo_request, ConsoleLine, ConsoleNetConfig, NetBackend, NetConsoleDisconnectReason,
-    NetConsoleEvent, NetCounters, NetDevice, NetDriverError, NetInterfacePolicy, NetMode,
-    NetPoller, NetSelfTestReport, NetSelfTestResult, NetSelfTestStartResult, NetStage,
-    NetStatusReport, NetTelemetry, WifiCredentials, DEV_VIRT_GATEWAY, DEV_VIRT_IP, DEV_VIRT_PREFIX,
-    MAX_FRAME_LEN, NET_DIAG, NET_STAGE,
+    parse_icmp_echo_request, ConsoleLine, ConsoleNetConfig, ConsoleResponseIdentity,
+    ConsoleResponseLane, NetBackend, NetConsoleDisconnectReason, NetConsoleEvent, NetCounters,
+    NetDevice, NetDriverError, NetInterfacePolicy, NetMode, NetPoller, NetSelfTestReport,
+    NetSelfTestResult, NetSelfTestStartResult, NetStage, NetStatusReport, NetTelemetry,
+    WifiCredentials, DEV_VIRT_GATEWAY, DEV_VIRT_IP, DEV_VIRT_PREFIX, MAX_FRAME_LEN, NET_DIAG,
+    NET_STAGE,
 };
 #[cfg(all(
     feature = "net-backend-virtio",
@@ -8594,7 +8595,7 @@ impl DefaultNetStack {
                 target_os = "none",
                 sel4_config_kernel_mcs
             ))]
-            Self::Virtio(stack) => stack.faulted(),
+            Self::Virtio(stack) => stack.containment_required(),
             #[cfg(all(feature = "net-backend-virtio", not(target_os = "none")))]
             Self::Virtio(_) => false,
             Self::Rtl8139(_) | Self::GenetDriverTask(_) | Self::Cyw43DriverTask(_) => false,
@@ -9662,6 +9663,50 @@ impl NetPoller for DefaultNetStack {
         }
     }
 
+    fn send_console_terminal_line(&mut self, line: &str) -> bool {
+        match self {
+            Self::Rtl8139(stack) => stack.send_console_terminal_line(line),
+            Self::GenetDriverTask(stack) => stack.send_console_terminal_line(line),
+            Self::Cyw43DriverTask(stack) => stack.send_console_terminal_line(line),
+            #[cfg(feature = "net-backend-virtio")]
+            Self::Virtio(stack) => stack.send_console_terminal_line(line),
+        }
+    }
+
+    fn bounded_console_response_identity(&self) -> Option<ConsoleResponseIdentity> {
+        match self {
+            Self::Rtl8139(stack) => stack.bounded_console_response_identity(),
+            Self::GenetDriverTask(stack) => stack.bounded_console_response_identity(),
+            Self::Cyw43DriverTask(stack) => stack.bounded_console_response_identity(),
+            #[cfg(feature = "net-backend-virtio")]
+            Self::Virtio(stack) => stack.bounded_console_response_identity(),
+        }
+    }
+
+    fn console_response_lane(&self) -> Option<ConsoleResponseLane> {
+        match self {
+            Self::Rtl8139(stack) => stack.console_response_lane(),
+            Self::GenetDriverTask(stack) => stack.console_response_lane(),
+            Self::Cyw43DriverTask(stack) => stack.console_response_lane(),
+            #[cfg(feature = "net-backend-virtio")]
+            Self::Virtio(stack) => stack.console_response_lane(),
+        }
+    }
+
+    fn poll_console_response_with_budget(
+        &mut self,
+        now_ms: u64,
+        budget: &mut DriverServiceBudget,
+    ) -> Result<bool, DriverServiceBudgetError> {
+        match self {
+            Self::Rtl8139(stack) => stack.poll_console_response_with_budget(now_ms, budget),
+            Self::GenetDriverTask(stack) => stack.poll_console_response_with_budget(now_ms, budget),
+            Self::Cyw43DriverTask(stack) => stack.poll_console_response_with_budget(now_ms, budget),
+            #[cfg(feature = "net-backend-virtio")]
+            Self::Virtio(stack) => stack.poll_console_response_with_budget(now_ms, budget),
+        }
+    }
+
     fn request_disconnect(&mut self) {
         match self {
             Self::Rtl8139(stack) => stack.request_disconnect(),
@@ -9699,6 +9744,16 @@ impl NetPoller for DefaultNetStack {
             Self::Cyw43DriverTask(stack) => stack.take_console_event(),
             #[cfg(feature = "net-backend-virtio")]
             Self::Virtio(stack) => stack.take_console_event(),
+        }
+    }
+
+    fn console_event_pending(&self) -> bool {
+        match self {
+            Self::Rtl8139(stack) => stack.console_event_pending(),
+            Self::GenetDriverTask(stack) => stack.console_event_pending(),
+            Self::Cyw43DriverTask(stack) => stack.console_event_pending(),
+            #[cfg(feature = "net-backend-virtio")]
+            Self::Virtio(stack) => stack.console_event_pending(),
         }
     }
 

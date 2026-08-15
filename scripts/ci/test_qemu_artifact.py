@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import json
 from pathlib import Path
 import shutil
@@ -21,6 +22,7 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT_PATH = REPO_ROOT / "scripts" / "ci" / "qemu_artifact.py"
+REGRESSION_RUNNER_PATH = REPO_ROOT / "scripts" / "cohsh" / "run_regression_batch.sh"
 CATALOG_DIGEST = "sha256:" + ("e" * 64)
 
 
@@ -61,6 +63,11 @@ def create_artifact_inputs(tmp_path: Path) -> dict[str, Path]:
         "host-tools/cohsh",
         "host-tools/hive-gateway",
         "host-tools/coh",
+        "host-tools/cas-tool",
+        "host-tools/gpu-bridge-host",
+        "host-tools/host-sidecar-bridge",
+        "host-tools/host-ticket-agent",
+        "host-tools/swarmui",
     ):
         path = artifact / relative
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -70,6 +77,22 @@ def create_artifact_inputs(tmp_path: Path) -> dict[str, Path]:
     config = sel4 / "kernel" / "gen_config" / "kernel_config.h"
     config.parent.mkdir(parents=True)
     config.write_text("#define CONFIG_ARM_GIC_V3 1\n", encoding="utf-8")
+    timer_header = sel4 / "kernel" / "gen_headers" / "plat" / "platform_gen.h"
+    timer_header.parent.mkdir(parents=True)
+    timer_header.write_text(
+        "#define TIMER_CLOCK_HZ ULL_CONST(24000000)\n",
+        encoding="utf-8",
+    )
+
+    qemu = tmp_path / "qemu-system-aarch64"
+    write_executable(
+        qemu,
+        "#!/bin/sh\n"
+        "if [ \"$1\" = \"--version\" ]; then "
+        "printf 'QEMU emulator version 10.1.0\\n'; exit 0; fi\n"
+        "if [ \"$1\" = \"-accel\" ]; then "
+        "printf 'Accelerators: hvf kvm tcg\\n'; exit 0; fi\n",
+    )
 
     detector = tmp_path / "detect-gic"
     write_executable(detector, "#!/bin/sh\nprintf '3\\n'\n")
@@ -89,6 +112,7 @@ def create_artifact_inputs(tmp_path: Path) -> dict[str, Path]:
         "resolved": resolved,
         "policy": policy,
         "attempt": attempt,
+        "qemu": qemu,
     }
 
 
@@ -96,10 +120,76 @@ def record_artifact(
     helper: ModuleType,
     inputs: dict[str, Path],
     output: Path,
+    *,
+    accelerator: str | None = None,
 ) -> str:
     """Record one fixture artifact and return its ID."""
 
     source_digest = "sha256:" + ("a" * 64)
+    if accelerator is None:
+        accelerator = "hvf" if helper.platform.system() == "Darwin" else "kvm"
+    qemu_raw = inputs["qemu"].read_bytes()
+    launch_rows = []
+    for identifier, relative in (
+        ("elfloader", Path("staging/elfloader")),
+        ("kernel", Path("staging/kernel.elf")),
+        ("rootserver", Path("staging/rootserver")),
+        ("initrd", Path("cohesix-system.cpio")),
+    ):
+        raw = (inputs["artifact"] / relative).read_bytes()
+        launch_rows.append(
+            {
+                "id": identifier,
+                "path": relative.as_posix(),
+                "bytes": len(raw),
+                "sha256": hashlib.sha256(raw).hexdigest(),
+            }
+        )
+    claim = helper.qemu_claim(
+        host_system=helper.platform.system(),
+        accelerator=accelerator,
+        sel4_profile="qemu_smp_production",
+        machine="virt",
+        gic_version="3",
+        virtualization="off",
+        machine_extra="kernel-irqchip=off",
+        cpu="cortex-a57",
+        timer_clock_hz=24_000_000,
+        smp="4,cores=4,threads=1,sockets=1",
+        net_backend="virtio",
+    )
+    launch_record = {
+        "schema": "cohesix-qemu-launch-artifacts/v2",
+        "profile": "release",
+        "cargo_target": "aarch64-unknown-none",
+        "root_task_features": "cohesix-dev",
+        "sel4_build_dir": str(inputs["sel4"].resolve()),
+        "sel4_profile": "qemu_smp_production",
+        "gic_version": "3",
+        "qemu": {
+            "host_system": helper.platform.system(),
+            "binary": {
+                "path": str(inputs["qemu"].resolve()),
+                "bytes": len(qemu_raw),
+                "sha256": hashlib.sha256(qemu_raw).hexdigest(),
+                "version": "QEMU emulator version 10.1.0",
+            },
+            "accelerator": accelerator,
+            "machine": "virt",
+            "virtualization": "off",
+            "machine_extra": "kernel-irqchip=off",
+            "cpu": "cortex-a57",
+            "timer_clock_hz": 24_000_000,
+            "smp": "4,cores=4,threads=1,sockets=1",
+            "net_backend": "virtio",
+        },
+        "claim": claim,
+        "artifacts": launch_rows,
+    }
+    (inputs["artifact"] / "cohesix-qemu-launch-artifacts.json").write_text(
+        json.dumps(launch_record),
+        encoding="utf-8",
+    )
     status = helper.main(
         [
             "record",
@@ -121,6 +211,10 @@ def record_artifact(
             str(inputs["sel4"]),
             "--sel4-profile",
             "qemu_smp_production",
+            "--qemu",
+            str(inputs["qemu"]),
+            "--accelerator",
+            accelerator,
             "--root-task-features",
             "cohesix-dev",
             "--cargo-target",
@@ -128,7 +222,7 @@ def record_artifact(
             "--smp",
             "4,cores=4,threads=1,sockets=1",
             "--virtualization",
-            "on",
+            "off",
             "--machine-extra",
             "kernel-irqchip=off",
             "--net-backend",
@@ -156,6 +250,17 @@ def test_record_is_content_addressed_and_verify_fails_after_mutation(
     manifest = tmp_path / "qemu-artifact.json"
     artifact_id = record_artifact(helper, inputs, manifest)
     capsys.readouterr()
+    document = json.loads(manifest.read_text(encoding="utf-8"))
+    assert document["sel4"]["profile"] == "qemu_smp_production"
+    assert document["sel4"]["timer_clock_hz"] == 24_000_000
+    assert document["qemu"]["machine"] == "virt"
+    assert document["qemu"]["gic_version"] == "3"
+    assert document["qemu"]["virtualization"] == "off"
+    assert document["qemu"]["machine_extra"] == "kernel-irqchip=off"
+    assert document["qemu"]["cpu"] == "cortex-a57"
+    assert document["qemu"]["binary"]["version"] == (
+        "QEMU emulator version 10.1.0"
+    )
 
     assert helper.main(
         [
@@ -177,6 +282,72 @@ def test_record_is_content_addressed_and_verify_fails_after_mutation(
         ["verify", "--artifact-manifest", str(manifest)]
     ) == 1
     assert "artifact size mismatch" in capsys.readouterr().err
+
+
+def test_verify_rejects_incomplete_duplicate_or_mutated_packaged_host_tool(
+    helper: ModuleType,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Every packaged executable remains mandatory and content-bound."""
+
+    inputs = create_artifact_inputs(tmp_path)
+    manifest = tmp_path / "qemu-artifact.json"
+    record_artifact(helper, inputs, manifest)
+    capsys.readouterr()
+
+    swarmui = inputs["artifact"] / "host-tools" / "swarmui"
+    swarmui.write_bytes(b"mutated")
+    assert helper.main(["verify", "--artifact-manifest", str(manifest)]) == 1
+    assert "artifact size mismatch" in capsys.readouterr().err
+
+    swarmui.write_bytes(b"fixture:host-tools/swarmui")
+    document = json.loads(manifest.read_text(encoding="utf-8"))
+    document["files"] = [
+        record
+        for record in document["files"]
+        if record["path"] != "host-tools/swarmui"
+    ]
+    document["artifact_id"] = helper.sha256_bytes(
+        helper.canonical_bytes(helper.artifact_identity_material(document))
+    )
+    manifest.write_text(json.dumps(document), encoding="utf-8")
+    assert helper.main(["verify", "--artifact-manifest", str(manifest)]) == 1
+    assert "missing required file records" in capsys.readouterr().err
+
+    record_artifact(helper, inputs, manifest)
+    capsys.readouterr()
+    document = json.loads(manifest.read_text(encoding="utf-8"))
+    duplicate = next(
+        record
+        for record in document["files"]
+        if record["path"] == "host-tools/swarmui"
+    )
+    document["files"].append(duplicate)
+    document["artifact_id"] = helper.sha256_bytes(
+        helper.canonical_bytes(helper.artifact_identity_material(document))
+    )
+    manifest.write_text(json.dumps(document), encoding="utf-8")
+    assert helper.main(["verify", "--artifact-manifest", str(manifest)]) == 1
+    assert "duplicate artifact file record" in capsys.readouterr().err
+
+
+def test_verify_rejects_qemu_binary_drift(
+    helper: ModuleType,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    inputs = create_artifact_inputs(tmp_path)
+    manifest = tmp_path / "qemu-artifact.json"
+    record_artifact(helper, inputs, manifest)
+    capsys.readouterr()
+    write_executable(
+        inputs["qemu"],
+        "#!/bin/sh\nprintf 'QEMU emulator version 10.2.0\\n'\n",
+    )
+
+    assert helper.main(["verify", "--artifact-manifest", str(manifest)]) == 1
+    assert "QEMU binary identity changed" in capsys.readouterr().err
 
 
 def test_artifact_manifest_remains_valid_after_bundle_relocation(
@@ -318,12 +489,6 @@ def test_launch_prints_fresh_boot_command_without_rebuilding(
     manifest = tmp_path / "qemu-artifact.json"
     record_artifact(helper, inputs, manifest)
     capsys.readouterr()
-    qemu = tmp_path / "qemu-system-aarch64"
-    write_executable(
-        qemu,
-        "#!/bin/sh\n"
-        "if [ \"$1\" = \"-accel\" ]; then printf 'Accelerators: tcg\\n'; fi\n",
-    )
 
     assert helper.main(
         [
@@ -331,7 +496,7 @@ def test_launch_prints_fresh_boot_command_without_rebuilding(
             "--artifact-manifest",
             str(manifest),
             "--qemu",
-            str(qemu),
+            str(inputs["qemu"]),
             "--catalog-action-digest",
             CATALOG_DIGEST,
             "--console-port",
@@ -344,10 +509,108 @@ def test_launch_prints_fresh_boot_command_without_rebuilding(
         ]
     ) == 0
     command = capsys.readouterr().out
+    assert (
+        "-machine virt,gic-version=3,virtualization=off,kernel-irqchip=off"
+        in command
+    )
     assert "hostfwd=tcp:127.0.0.1:41001-:31337" in command
     assert "hostfwd=udp:127.0.0.1:41002-:31338" in command
     assert "staging/rootserver" in command
     assert "cohesix-build-run" not in command
+
+
+def test_darwin_defaults_to_hvf_but_preserves_explicit_accelerator(
+    helper: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Darwin uses HVF unless an accepted caller override selects another engine."""
+
+    qemu = tmp_path / "qemu-system-aarch64"
+    write_executable(
+        qemu,
+        "#!/bin/sh\n"
+        "if [ \"$1\" = \"-accel\" ]; then printf 'Accelerators: hvf tcg\\n'; fi\n",
+    )
+    monkeypatch.setattr(helper.platform, "system", lambda: "Darwin")
+    monkeypatch.delenv("COHESIX_QEMU_ACCEL", raising=False)
+    monkeypatch.delenv("QEMU_ACCEL", raising=False)
+
+    assert helper.qemu_accelerator(str(qemu)) == "hvf"
+
+    monkeypatch.setenv("QEMU_ACCEL", "tcg")
+    assert helper.qemu_accelerator(str(qemu)) == "tcg"
+
+    monkeypatch.setenv("COHESIX_QEMU_ACCEL", "hvf")
+    assert helper.qemu_accelerator(str(qemu)) == "hvf"
+
+
+def test_explicit_tcg_is_typed_diagnostic_and_cannot_claim_integration(
+    helper: ModuleType,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    inputs = create_artifact_inputs(tmp_path)
+    manifest = tmp_path / "qemu-artifact.json"
+    record_artifact(helper, inputs, manifest, accelerator="tcg")
+    artifact = json.loads(manifest.read_text(encoding="utf-8"))
+    assert artifact["qemu"]["accelerator"] == "tcg"
+    assert artifact["qemu"]["claim"]["eligible"] is False
+    assert artifact["qemu"]["claim"]["tier"] == "qemu-diagnostic"
+    capsys.readouterr()
+
+    log = tmp_path / "tcg.log"
+    log.write_text("diagnostic boot completed\n", encoding="utf-8")
+    common = [
+        "result",
+        "--output",
+        str(tmp_path / "tcg-result.json"),
+        "--action-id",
+        "stage-03-qemu-tcp",
+        "--catalog-action-digest",
+        CATALOG_DIGEST,
+        "--target",
+        "qemu",
+        "--source-digest",
+        "sha256:" + ("a" * 64),
+        "--evidence-root",
+        str(tmp_path),
+        "--artifact-manifest",
+        str(manifest),
+        "--artifact-action-id",
+        "stage-03-qemu-tcp",
+        "--artifact-catalog-action-digest",
+        CATALOG_DIGEST,
+        "--boot-id",
+        "tcg-diagnostic-boot",
+        "--group",
+        "base",
+        "--status",
+        "pass",
+        "--script",
+        "boot_v0.coh",
+        "--log",
+        str(log),
+    ]
+    integration = common.copy()
+    integration[1:1] = ["--claim-tier", "qemu-integration"]
+    assert helper.main(integration) == 1
+    assert "does not match" in capsys.readouterr().err
+
+    diagnostic = common.copy()
+    diagnostic[1:1] = ["--claim-tier", "qemu-diagnostic"]
+    assert helper.main(diagnostic) == 0
+    result = json.loads((tmp_path / "tcg-result.json").read_text(encoding="utf-8"))
+    assert result["claim_tier"] == "qemu-diagnostic"
+    assert result["artifact"]["claim_eligible"] is False
+
+
+def test_qemu_regression_artifact_defaults_virtualization_off() -> None:
+    """The canonical batch records the non-virtualized machine contract by default."""
+
+    source = REGRESSION_RUNNER_PATH.read_text(encoding="utf-8")
+    assert 'local virtualization="${COHESIX_QEMU_VIRT:-${QEMU_VIRT:-off}}"' in source
+    assert 'local virtualization="${COHESIX_QEMU_VIRT:-${QEMU_VIRT:-on}}"' not in source
 
 
 def test_qemu_results_aggregate_only_passing_content_addressed_records(
@@ -594,8 +857,6 @@ def test_launch_refuses_an_occupied_udp_forward(
     manifest = tmp_path / "qemu-artifact.json"
     record_artifact(helper, inputs, manifest)
     capsys.readouterr()
-    qemu = tmp_path / "qemu-system-aarch64"
-    write_executable(qemu, "#!/bin/sh\nprintf 'tcg\\n'\n")
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as occupied:
         occupied.bind(("127.0.0.1", 0))
         udp_port = occupied.getsockname()[1]
@@ -605,7 +866,7 @@ def test_launch_refuses_an_occupied_udp_forward(
                 "--artifact-manifest",
                 str(manifest),
                 "--qemu",
-                str(qemu),
+                str(inputs["qemu"]),
                 "--catalog-action-digest",
                 CATALOG_DIGEST,
                 "--console-port",

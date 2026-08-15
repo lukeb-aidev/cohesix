@@ -48,7 +48,8 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_CYW43_SDIO_CHILD_WORST_CASE_US, DRIVER_RUNTIME_DPC_EVENT_RING_BYTES,
     DRIVER_RUNTIME_DPC_EVENT_RING_DEPTH, DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET,
     DRIVER_RUNTIME_ENGINE_INIT_AUX, DRIVER_RUNTIME_FRAMEBUFFER_FORMAT_XRGB8888,
-    DRIVER_RUNTIME_FRAMEBUFFER_VADDR, DRIVER_RUNTIME_INIT_AUX, DRIVER_RUNTIME_INIT_FLAG_IRQS_BOUND,
+    DRIVER_RUNTIME_FRAMEBUFFER_VADDR, DRIVER_RUNTIME_INIT_AUX,
+    DRIVER_RUNTIME_INIT_DESCRIPTOR_APERTURE_BYTES, DRIVER_RUNTIME_INIT_FLAG_IRQS_BOUND,
     DRIVER_RUNTIME_INIT_FLAG_POLL_ONLY, DRIVER_RUNTIME_INIT_VERSION,
     DRIVER_RUNTIME_IRQ_TRIGGER_LEVEL, DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT,
     DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX, DRIVER_RUNTIME_NET_INIT_AUX,
@@ -5303,6 +5304,7 @@ fn driver_task_staging_segments_bytes(segments: &[DriverTaskStagingSegment<'_>])
     segments.iter().fold(0usize, |total, segment| {
         total.saturating_add(match segment {
             DriverTaskStagingSegment::Ring { payload, .. }
+            | DriverTaskStagingSegment::RuntimeInit { payload }
             | DriverTaskStagingSegment::Shared { payload, .. } => payload.len(),
         })
     })
@@ -7925,6 +7927,10 @@ fn record_observed_service_us(contract: DriverTaskContract, observed_us: u32) {
 #[cfg(feature = "kernel")]
 #[inline]
 fn driver_task_counter_frequency() -> Option<u64> {
+    #[cfg(test)]
+    if DRIVER_TASK_TEST_COUNTER_OVERRIDE_TICKS.with(|ticks| ticks.get().is_some()) {
+        return Some(1_000_000);
+    }
     #[cfg(all(target_arch = "aarch64", feature = "timers-arch-counter"))]
     {
         Some(timer_freq_hz())
@@ -7946,6 +7952,14 @@ fn driver_task_counter_frequency() -> Option<u64> {
 #[cfg(feature = "kernel")]
 #[inline]
 fn driver_task_counter_ticks() -> Option<u64> {
+    #[cfg(test)]
+    if let Some(tick) = DRIVER_TASK_TEST_COUNTER_OVERRIDE_TICKS.with(|ticks| {
+        let tick = ticks.get()?;
+        ticks.set(Some(tick.wrapping_add(1)));
+        Some(tick)
+    }) {
+        return Some(tick);
+    }
     #[cfg(all(target_arch = "aarch64", feature = "timers-arch-counter"))]
     {
         Some(timer_counter_ticks())
@@ -13086,6 +13100,12 @@ pub enum DriverTaskStagingSegment<'a> {
         /// Descriptor flags for the staged bytes.
         flags: u16,
     },
+    /// Exact pointer-free runtime-init descriptor copied into its dedicated
+    /// ring aperture.
+    RuntimeInit {
+        /// Complete descriptor bytes at the canonical frame offset.
+        payload: &'a [u8],
+    },
     /// Bytes copied into the bus-link shared payload window.
     Shared {
         /// Bytes to stage.
@@ -13113,6 +13133,11 @@ impl<'a> DriverTaskStagingSegment<'a> {
             payload,
             flags,
         }
+    }
+
+    /// Construct an exact runtime-init descriptor staging segment.
+    pub const fn runtime_init(payload: &'a [u8]) -> Self {
+        Self::RuntimeInit { payload }
     }
 
     /// Construct a bus-link shared-payload segment.
@@ -13372,6 +13397,9 @@ fn driver_task_staging_segment_valid(
             ring_root_ptr != 0
                 && describe_driver_task_ring_payload_at(offset, payload, flags).is_some()
         }
+        DriverTaskStagingSegment::RuntimeInit { payload } => {
+            ring_root_ptr != 0 && driver_runtime_init_frame_descriptor(payload, 0).is_some()
+        }
         DriverTaskStagingSegment::Shared { payload, flags } => {
             describe_driver_task_shared_payload(payload, flags).is_some()
                 && driver_task_shared_payload_pages_ready(slot, payload.len())
@@ -13407,6 +13435,11 @@ fn driver_task_stage_segment(
             driver_task_copy_ring_payload(slot, ring_root_ptr, offset, payload);
             Some(())
         }
+        DriverTaskStagingSegment::RuntimeInit { payload } => {
+            let frame = driver_runtime_init_frame_descriptor(payload, 0)?;
+            driver_task_copy_ring_payload(slot, ring_root_ptr, frame.offset as usize, payload);
+            Some(())
+        }
         DriverTaskStagingSegment::Shared { payload, flags } => {
             let _ = describe_driver_task_shared_payload(payload, flags)?;
             driver_task_copy_shared_payload(slot, payload)
@@ -13436,7 +13469,22 @@ pub fn stage_driver_runtime_init_descriptor(
     descriptor: &DriverRuntimeInitDescriptor,
 ) -> Option<DriverFrameDescriptor> {
     let bytes = driver_runtime_init_descriptor_bytes(descriptor)?;
-    stage_driver_task_ring_frame(contract, bytes, 0)
+    let frame = driver_runtime_init_frame_descriptor(bytes, 0)?;
+    let task_key = driver_task_contract_key(contract)?;
+    let slot = slot_for_task_key(task_key)?;
+    let _root_producer_guard = acquire_root_ring_producer(contract, slot)?;
+    let ring_root_ptr = slot.ring_root_ptr.load(Ordering::Acquire);
+    if ring_root_ptr == 0 {
+        return None;
+    }
+    if slot.active.load(Ordering::Acquire) != 0 {
+        if !driver_task_ring_payload_matches(ring_root_ptr, frame.offset as usize, bytes) {
+            return None;
+        }
+        return Some(frame);
+    }
+    driver_task_copy_ring_payload(slot, ring_root_ptr, frame.offset as usize, bytes);
+    Some(frame)
 }
 
 /// Describe a pointer-free runtime initialization descriptor without copying.
@@ -13445,7 +13493,36 @@ pub fn describe_driver_runtime_init_descriptor(
     descriptor: &DriverRuntimeInitDescriptor,
 ) -> Option<DriverFrameDescriptor> {
     let bytes = driver_runtime_init_descriptor_bytes(descriptor)?;
-    describe_driver_task_ring_frame(bytes, 0)
+    driver_runtime_init_frame_descriptor(bytes, 0)
+}
+
+#[cfg(feature = "kernel")]
+fn driver_runtime_init_frame_descriptor(
+    payload: &[u8],
+    flags: u16,
+) -> Option<DriverFrameDescriptor> {
+    driver_runtime_init_frame_descriptor_for_len(payload.len(), flags)
+}
+
+#[cfg(feature = "kernel")]
+fn driver_runtime_init_frame_descriptor_for_len(
+    len: usize,
+    flags: u16,
+) -> Option<DriverFrameDescriptor> {
+    if len != core::mem::size_of::<DriverRuntimeInitDescriptor>()
+        || len > usize::from(DRIVER_RUNTIME_INIT_DESCRIPTOR_APERTURE_BYTES)
+    {
+        return None;
+    }
+    let end = DRIVER_TASK_RING_FRAME_OFFSET.checked_add(len)?;
+    if end > usize::from(DRIVER_RUNTIME_CYW43_COMMAND_DESCRIPTOR_OFFSET) {
+        return None;
+    }
+    Some(DriverFrameDescriptor {
+        offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
+        len: u16::try_from(len).ok()?,
+        flags,
+    })
 }
 
 #[cfg(feature = "kernel")]
@@ -15411,7 +15488,7 @@ fn replay_cyw43_sdio_restart_descriptor_once(
     let Some(bytes) = driver_runtime_init_descriptor_bytes(&context.descriptor) else {
         return Cyw43SdioPairRestartOperationOutcome::Failed;
     };
-    let staging_segments = [DriverTaskStagingSegment::ring_frame(bytes, 0)];
+    let staging_segments = [DriverTaskStagingSegment::runtime_init(bytes)];
     let command = runtime_init_command(
         context.hot_path,
         DriverTaskBudgetGrant::from_contract(context.contract),
@@ -16748,7 +16825,7 @@ fn service_deferred_runtime_init_descriptor_turn(
         emit_deferred_runtime_init_status(contract, hot_path, "stage-failed");
         return (DriverTaskDescriptorReplayTurn::Failed("stage-failed"), None);
     };
-    let staging_segments = [DriverTaskStagingSegment::ring_frame(descriptor_bytes, 0)];
+    let staging_segments = [DriverTaskStagingSegment::runtime_init(descriptor_bytes)];
     let command = runtime_init_command(
         hot_path,
         DriverTaskBudgetGrant::from_contract(contract),
@@ -18757,6 +18834,15 @@ fn driver_task_staging_segments_fingerprint(segments: &[DriverTaskStagingSegment
                 hash = driver_task_ring_command_fingerprint_mix(hash, u32::from(flags));
                 hash = driver_task_staging_bytes_fingerprint(hash, payload);
             }
+            DriverTaskStagingSegment::RuntimeInit { payload } => {
+                hash = driver_task_ring_command_fingerprint_mix(hash, 0x494e_4954);
+                hash = driver_task_ring_command_fingerprint_mix(
+                    hash,
+                    DRIVER_TASK_RING_FRAME_OFFSET as u32,
+                );
+                hash = driver_task_ring_command_fingerprint_mix(hash, payload.len() as u32);
+                hash = driver_task_staging_bytes_fingerprint(hash, payload);
+            }
             DriverTaskStagingSegment::Shared { payload, flags } => {
                 hash = driver_task_ring_command_fingerprint_mix(hash, 0x5348_5244);
                 hash = driver_task_ring_command_fingerprint_mix(
@@ -18798,7 +18884,9 @@ fn driver_task_staged_cyw43_descriptor_header(
                 u16::from_le_bytes([payload[2], payload[3]]),
             ))
         }
-        DriverTaskStagingSegment::Ring { .. } | DriverTaskStagingSegment::Shared { .. } => None,
+        DriverTaskStagingSegment::Ring { .. }
+        | DriverTaskStagingSegment::RuntimeInit { .. }
+        | DriverTaskStagingSegment::Shared { .. } => None,
     })
 }
 
@@ -18825,7 +18913,9 @@ fn driver_task_staged_cyw43_descriptor(
         {
             Some(*payload)
         }
-        DriverTaskStagingSegment::Ring { .. } | DriverTaskStagingSegment::Shared { .. } => None,
+        DriverTaskStagingSegment::Ring { .. }
+        | DriverTaskStagingSegment::RuntimeInit { .. }
+        | DriverTaskStagingSegment::Shared { .. } => None,
     })?;
     let read_u16 = |offset: usize| u16::from_le_bytes([payload[offset], payload[offset + 1]]);
     let read_u32 = |offset: usize| {
@@ -18928,7 +19018,9 @@ fn driver_task_cyw43_steady_data_plane_command_matches(
         {
             Some(u16::from_be_bytes([payload[12], payload[13]]) == 0x888e)
         }
-        DriverTaskStagingSegment::Ring { .. } | DriverTaskStagingSegment::Shared { .. } => None,
+        DriverTaskStagingSegment::Ring { .. }
+        | DriverTaskStagingSegment::RuntimeInit { .. }
+        | DriverTaskStagingSegment::Shared { .. } => None,
     });
     match (expected, payload_is_eapol) {
         (Cyw43SteadyDataPlaneOp::EthTx, Some(false))
@@ -24034,9 +24126,26 @@ mod tests {
     }
 
     #[cfg(feature = "kernel")]
+    fn runtime_init_test_mcs_descriptor(task_key: u32) -> DriverRuntimeInitDescriptor {
+        DriverRuntimeInitDescriptor::empty().with_mcs_scheduler(
+            task_key,
+            32,
+            8,
+            1,
+            2,
+            1,
+            500,
+            10_000,
+            0x26e2_1000,
+            0x26ed_1000,
+        )
+    }
+
+    #[cfg(feature = "kernel")]
     fn usb_oldgood_test_descriptor() -> DriverRuntimeInitDescriptor {
         let hot_path = DriverTaskHotPath::UsbKeyboard;
-        let mut descriptor = DriverRuntimeInitDescriptor::empty();
+        let mut descriptor =
+            runtime_init_test_mcs_descriptor(DRIVER_TASK_KEY_USB_LOCAL_SEAT as u32);
         descriptor.hot_path = hot_path.as_u32();
         descriptor.role_bit = hot_path.role_bit() as u32;
         descriptor.flags = pi4_driver_abi::DRIVER_RUNTIME_INIT_REQUIRED_FLAGS
@@ -32649,9 +32758,8 @@ mod tests {
     #[cfg(feature = "kernel")]
     #[test]
     fn runtime_init_command_uses_pointer_free_descriptor_aux() {
-        let frame = DriverFrameDescriptor::new(
-            DRIVER_TASK_RING_FRAME_OFFSET as u32,
-            core::mem::size_of::<DriverRuntimeInitDescriptor>() as u16,
+        let frame = driver_runtime_init_frame_descriptor_for_len(
+            core::mem::size_of::<DriverRuntimeInitDescriptor>(),
             0,
         )
         .unwrap();
@@ -32665,7 +32773,62 @@ mod tests {
         assert_eq!(command.arg1, DriverTaskHotPath::PcieRoot.role_bit() as u32);
         assert_eq!(command.aux0, DRIVER_RUNTIME_INIT_AUX);
         assert_eq!(command.frame, frame);
+        assert!(usize::from(frame.len) > MAX_DRIVER_TASK_FRAME_BYTES);
+        assert_eq!(frame.offset as usize, DRIVER_TASK_RING_FRAME_OFFSET);
+        assert!(
+            frame.offset as usize + usize::from(frame.len)
+                <= usize::from(DRIVER_RUNTIME_CYW43_COMMAND_DESCRIPTOR_OFFSET)
+        );
         assert!(!command.owner_state_credit_eligible());
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn runtime_init_staging_uses_dedicated_aperture_without_widening_frames() {
+        let hot_path = DriverTaskHotPath::PcieRoot;
+        let contract = hot_path.contract();
+        let task_key = driver_task_contract_key(contract).unwrap() as u32;
+        let mut descriptor = runtime_init_test_mcs_descriptor(task_key);
+        descriptor.hot_path = hot_path.as_u32();
+        descriptor.role_bit = hot_path.role_bit() as u32;
+        descriptor.flags = pi4_driver_abi::DRIVER_RUNTIME_INIT_REQUIRED_FLAGS
+            | pi4_driver_abi::DRIVER_RUNTIME_INIT_FLAG_POLL_ONLY;
+        descriptor.shared_page_count = 1;
+        descriptor.shared_pages[0] = pi4_driver_abi::DriverRuntimePageDescriptor::new(0x4000_0000);
+        let descriptor = descriptor.with_sealed_identity(task_key, 0x5043_4945);
+        let expected = driver_runtime_init_descriptor_bytes(&descriptor).unwrap();
+
+        clear_driver_task_transport(contract);
+        let mut ring_page = [0u8; DRIVER_TASK_RING_PAGE_BYTES];
+        let reserved_offset = usize::from(DRIVER_RUNTIME_CYW43_COMMAND_DESCRIPTOR_OFFSET);
+        ring_page[reserved_offset] = 0xa5;
+        let ring_root_ptr = ring_page.as_mut_ptr() as usize;
+        publish_driver_task_ring(contract, ring_root_ptr);
+
+        let slot = slot_for_task_key(task_key as usize).unwrap();
+        let staging = [DriverTaskStagingSegment::runtime_init(expected)];
+        assert!(driver_task_staging_segments_valid(
+            slot,
+            ring_root_ptr,
+            &staging
+        ));
+        assert!(driver_task_stage_segment(slot, ring_root_ptr, staging[0]).is_some());
+        assert_eq!(driver_task_staging_segments_bytes(&staging), expected.len());
+
+        let frame = stage_driver_runtime_init_descriptor(contract, &descriptor).unwrap();
+        assert_eq!(usize::from(frame.len), expected.len());
+        assert_eq!(frame.offset as usize, DRIVER_TASK_RING_FRAME_OFFSET);
+        assert_eq!(
+            DriverFrameDescriptor::new(frame.offset, frame.len, frame.flags),
+            Err(DriverTaskRingError::FrameTooLarge)
+        );
+        assert_eq!(
+            &ring_page
+                [DRIVER_TASK_RING_FRAME_OFFSET..DRIVER_TASK_RING_FRAME_OFFSET + expected.len()],
+            expected
+        );
+        assert_eq!(ring_page[reserved_offset], 0xa5);
+        clear_driver_task_transport(contract);
     }
 
     #[cfg(feature = "kernel")]
@@ -33058,9 +33221,8 @@ mod tests {
     #[cfg(feature = "kernel")]
     #[test]
     fn pcie_runtime_descriptor_replay_keeps_gate_two_command_active() {
-        let frame = DriverFrameDescriptor::new(
-            DRIVER_TASK_RING_FRAME_OFFSET as u32,
-            core::mem::size_of::<DriverRuntimeInitDescriptor>() as u16,
+        let frame = driver_runtime_init_frame_descriptor_for_len(
+            core::mem::size_of::<DriverRuntimeInitDescriptor>(),
             0,
         )
         .unwrap();
@@ -33089,9 +33251,8 @@ mod tests {
     #[cfg(feature = "kernel")]
     #[test]
     fn sdio_runtime_descriptor_replay_keeps_gate_two_command_active() {
-        let frame = DriverFrameDescriptor::new(
-            DRIVER_TASK_RING_FRAME_OFFSET as u32,
-            core::mem::size_of::<DriverRuntimeInitDescriptor>() as u16,
+        let frame = driver_runtime_init_frame_descriptor_for_len(
+            core::mem::size_of::<DriverRuntimeInitDescriptor>(),
             DRIVER_TASK_RING_FLAG_INIT_DESCRIPTOR_NON_ACCEPTANCE,
         )
         .unwrap();
@@ -35938,16 +36099,15 @@ mod tests {
     #[test]
     fn deferred_runtime_init_descriptor_records_for_prompt_replay() {
         let hot_path = DriverTaskHotPath::PcieRoot;
-        let mut descriptor = DriverRuntimeInitDescriptor::empty();
+        let task_key = driver_task_contract_key(hot_path.contract()).unwrap() as u32;
+        let mut descriptor = runtime_init_test_mcs_descriptor(task_key);
         descriptor.hot_path = hot_path.as_u32();
         descriptor.role_bit = hot_path.role_bit() as u32;
         descriptor.flags = pi4_driver_abi::DRIVER_RUNTIME_INIT_REQUIRED_FLAGS
             | pi4_driver_abi::DRIVER_RUNTIME_INIT_FLAG_POLL_ONLY;
         descriptor.shared_page_count = 1;
         descriptor.shared_pages[0] = pi4_driver_abi::DriverRuntimePageDescriptor::new(0x4000_0000);
-        let task_key = driver_task_contract_key(hot_path.contract()).unwrap() as u32;
-        let artifact_hash = pi4_driver_task_runtime_artifact_hash(hot_path);
-        let descriptor = descriptor.with_sealed_identity(task_key, artifact_hash);
+        let descriptor = descriptor.with_sealed_identity(task_key, 0x5043_4945);
         assert!(descriptor.valid());
         assert!(descriptor.sealed_identity_valid_for_task(task_key));
 

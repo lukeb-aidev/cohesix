@@ -456,6 +456,17 @@ Requirements:
 - reject lengths or bus addresses outside admitted ranges; and
 - keep command-ring publication separate from payload-DMA publication.
 
+The authenticated `CACHELOG` operator view is diagnostic evidence, not device
+ownership or a DMA synchronization primitive. Root keeps the existing
+1920-record bound. A synchronous network request reserves the complete bounded
+snapshot allocation before taking the cache-log lock, holds that lock once only
+while copying the selected newest-first records, then renders and transmits one
+record at a time after release. Allocation failure returns a typed bounded
+error without a partial snapshot; live-ring mutation after capture cannot
+change, reorder, duplicate, or extend the response. This snapshot path adds no
+cache-maintenance operation, device transition, DMA authority, or Pi timing
+change.
+
 The Pi 4 profile uses `bounded-no-iommu`. It provides bounded allocation,
 range, ownership, and cache discipline; it is not hardware-enforced isolation
 from a malicious DMA-capable device. Do not claim SMMU/IOMMU protection for
@@ -952,6 +963,7 @@ cargo test -p pi4-driver-runtime -- --test-threads=1
 cargo test -p root-task --no-default-features --features driver-tests-qemu --lib -- --test-threads=1 --skip drivers::driver_task_net
 cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib -- --test-threads=1
 cargo test -p root-task --no-default-features --features cache-maintenance --test cache_maintenance
+cargo test -p root-task --no-default-features --features driver-tests-qemu --lib hal::cache::tests -- --test-threads=1
 python3 scripts/ci/check_driver_test_coverage.py
 ```
 

@@ -6,6 +6,7 @@
 use crate::codegen::hash_bytes;
 use crate::ir::Manifest;
 use anyhow::{Context, Result};
+use cohesix_cas::CAS_MANIFEST_MAX_CHUNKS;
 use serde_json::{Map, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -70,6 +71,19 @@ pub fn build_cas_template(manifest: &Manifest) -> CasTemplate {
         "chunks".to_owned(),
         Value::Array(vec![Value::String(TEMPLATE_SHA256.to_owned())]),
     );
+    let mut limits = Map::new();
+    limits.insert(
+        "max_chunks".to_owned(),
+        Value::Number(serde_json::Number::from(CAS_MANIFEST_MAX_CHUNKS as u64)),
+    );
+    limits.insert(
+        "max_payload_bytes".to_owned(),
+        Value::Number(serde_json::Number::from(
+            u64::from(manifest.cas.store.chunk_bytes)
+                .saturating_mul(CAS_MANIFEST_MAX_CHUNKS as u64),
+        )),
+    );
+    map.insert("limits".to_owned(), Value::Object(limits));
     let delta_value = if manifest.cas.delta.enable {
         let mut delta = Map::new();
         delta.insert(

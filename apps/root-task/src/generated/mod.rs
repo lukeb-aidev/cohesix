@@ -160,6 +160,7 @@ pub enum TemporalTaskKind {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TimeoutPolicy {
     Terminal,
+    NaturalPostpone,
     ReplenishOnce,
     ReturnError,
     FailStop,
@@ -182,8 +183,10 @@ pub struct TemporalTaskConfig {
     pub max_refills: u8,
     pub priority: u8,
     pub mcp: u8,
+    /// Non-zero identity reserved by SC configuration; delivered only when a timeout endpoint is installed.
     pub timeout_badge: u64,
     pub timeout_policy: TimeoutPolicy,
+    /// Kernel SC consumed-time accounting is required; this does not assert timeout IPC delivery.
     pub consumed_time_evidence: bool,
     pub wcet_us: u32,
     pub response_time_us: u32,
@@ -292,6 +295,7 @@ pub struct ConsoleNetworkServiceConfig {
     pub revoke_badge: u64,
     pub packet_tx_ready_badge: u64,
     pub event_ready_badge: u64,
+    pub publication_ack_badge: u64,
     pub fault_badge: u64,
     pub core: u8,
     pub scheduling_context_slot: u32,
@@ -1042,9 +1046,9 @@ pub struct AuditConfig {
     pub replay_status_max_bytes: u32,
 }
 
-pub const MANIFEST_SCHEMA: &str = "1.11";
+pub const MANIFEST_SCHEMA: &str = "1.14";
 pub const MANIFEST_SHA256: &str =
-    "013304cfbc552744a142a91d4cc5d95fcc274308cb00db15cc0c2d77fcaeb590";
+    "72b6fdbd175150ec352f9345d99791a1d576cf01de47363aed2a64ad0c463a93";
 pub const TICKET_TABLE_SHA256: &str = bootstrap::TICKET_TABLE_SHA256;
 pub const NAMESPACE_TABLE_SHA256: &str = bootstrap::NAMESPACE_TABLE_SHA256;
 pub const AUDIT_TABLE_SHA256: &str = bootstrap::AUDIT_TABLE_SHA256;

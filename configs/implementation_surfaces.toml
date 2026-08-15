@@ -833,6 +833,30 @@ evidence_requirement = "fixture cannot satisfy live QEMU acceptance"
 current_observed_mode = "identity_context_and_symlink_tamper_fixture"
 
 [[surfaces]]
+id = "tool:qemu-tcp-response-matrix"
+kind = "acceptance_runner"
+path = "scripts/qemu_tcp_response_matrix.py"
+class = "production_live"
+owner = "console-network-evidence"
+production_reachable = true
+selection_source = "QEMU Stage 03 base artifact response-matrix lane"
+package_disposition = "ci_acceptance_tool_not_release_bundled"
+evidence_requirement = "exact-artifact fixed one-socket HELP, NETSTATS, SMP, CACHELOG9, PING, and QUIT response matrix"
+current_observed_mode = "fixed_one_socket_qemu_response_matrix"
+
+[[surfaces]]
+id = "fixture:qemu-tcp-response-matrix-tests"
+kind = "test_source"
+path = "tests/test_qemu_tcp_response_matrix.py"
+class = "fixture"
+owner = "console-network-evidence-tests"
+production_reachable = false
+selection_source = "M26e bounded synchronous response-matrix host regression"
+package_disposition = "test_only"
+evidence_requirement = "loopback fixture cannot satisfy live QEMU acceptance"
+current_observed_mode = "fixed_framed_response_fixture"
+
+[[surfaces]]
 id = "runtime:worker-task-target-evidence"
 kind = "target_source"
 path = "apps/root-task/src/hal/worker_task.rs"
@@ -1051,7 +1075,11 @@ current_observed_mode = "example_playbook"
 id = "coh-scripts"
 prefix = "scripts/cohsh/"
 suffix = ".coh"
-exclude_exact = ["scripts/cohsh/host_sidecar_mock.coh"]
+exclude_exact = [
+  "scripts/cohsh/host_sidecar_mock.coh",
+  "scripts/cohsh/policy_gate.coh",
+  "scripts/cohsh/replay_journal.coh",
+]
 class = "diagnostic"
 owner = "host-shell"
 production_reachable = false
@@ -1070,6 +1098,28 @@ selection_source = "explicitly named mock fixture"
 package_disposition = "fixture_not_packaged_as_live"
 evidence_requirement = "fixture only"
 current_observed_mode = "mock_playbook"
+
+[[tracked_rules]]
+id = "coh-policy-gate-target-script"
+exact = "scripts/cohsh/policy_gate.coh"
+class = "diagnostic"
+owner = "host-shell"
+production_reachable = false
+selection_source = "QEMU and Pi gated Stage 03 target-local control group"
+package_disposition = "diagnostic_script"
+evidence_requirement = "target-bound policy denial approval consumption and replay-refusal transcript"
+current_observed_mode = "target_local_control_regression"
+
+[[tracked_rules]]
+id = "coh-replay-target-script"
+exact = "scripts/cohsh/replay_journal.coh"
+class = "diagnostic"
+owner = "host-shell"
+production_reachable = false
+selection_source = "QEMU and Pi gated Stage 03 target-local control group"
+package_disposition = "diagnostic_script"
+evidence_requirement = "target-bound audit export replay match and future-cursor-refusal transcript"
+current_observed_mode = "target_local_control_regression"
 
 [[tracked_rules]]
 id = "coh-shell-runner-scripts"
@@ -1127,6 +1177,17 @@ selection_source = "exact release UI asset list"
 package_disposition = "release_ui_asset"
 evidence_requirement = "asset hash and authenticated gateway integration"
 current_observed_mode = "live_host_ui"
+
+[[tracked_rules]]
+id = "release-cas-fixtures"
+prefix = "tests/fixtures/cas/"
+class = "fixture"
+owner = "cas-tests"
+production_reachable = false
+selection_source = "exact release CAS-fixture list"
+package_disposition = "release_fixture"
+evidence_requirement = "fixture only; structural eligibility is not target admission"
+current_observed_mode = "registered_cas_boundary_fixture"
 
 [[tracked_rules]]
 id = "release-trace-fixtures"
@@ -1383,6 +1444,7 @@ generated_configs = [
   "configs/generated/implementation_surface_inventory.json",
   "configs/generated/root_task_resolved.json",
   "configs/generated/root_task_resolved.json.sha256",
+  "configs/generated/root_task_topology.json",
   "configs/generated/swarmui_defaults.toml",
   "configs/generated/swarmui_defaults.toml.sha256",
 ]
@@ -1412,6 +1474,7 @@ operator_scripts = [
   "scripts/cohsh/REST_regression_batch.sh",
   "scripts/cohsh/boot_v0.coh",
   "scripts/cohsh/busy_backpressure.coh",
+  "scripts/cohsh/cas_fixture_signature_rejected.coh",
   "scripts/cohsh/cas_roundtrip.coh",
   "scripts/cohsh/fixtures/telemetry_push_oversize.txt",
   "scripts/cohsh/fixtures/telemetry_push_small.txt",
@@ -1486,6 +1549,10 @@ trace_fixtures = [
   "tests/fixtures/traces/trace_v0.trace",
 ]
 
+cas_fixtures = [
+  "tests/fixtures/cas/max_chunks_v1.txt",
+]
+
 transcript_fixtures = [
   "tests/fixtures/transcripts/abuse/core.txt",
   "tests/fixtures/transcripts/abuse/serial.txt",
@@ -1558,6 +1625,7 @@ generated_bundle_files = [
   "python/dist/cohesix-0.2.0a2-py3-none-any.whl",
   "python/m26e-python-package.json",
   "qemu/run.sh",
+  "cas/max_chunks_v1.txt.sha256",
   "traces/trace_v0.hive.cbor.sha256",
   "traces/trace_v0.trace.sha256",
 ]

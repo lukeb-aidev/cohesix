@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright © 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: CAS bundle packaging helpers for host tooling.
 // Author: Lukas Bower
@@ -8,7 +8,7 @@
 //! Helpers for packaging Cohesix CAS bundles and manifests.
 
 use anyhow::{bail, Context, Result};
-use cohesix_cas::{CasDelta, CasManifest, CAS_MANIFEST_SCHEMA};
+use cohesix_cas::{CasDelta, CasManifest, CAS_MANIFEST_MAX_CHUNKS, CAS_MANIFEST_SCHEMA};
 use ed25519_dalek::{Signature, SigningKey};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -21,6 +21,8 @@ use std::path::{Path, PathBuf};
 pub struct CasTemplateConfig {
     /// Chunk size in bytes.
     pub chunk_bytes: usize,
+    /// Maximum chunks accepted by the selected manifest-v1 target contract.
+    pub max_chunks: usize,
     /// Whether delta manifests are allowed.
     pub delta_allowed: bool,
     /// Whether signatures are required.
@@ -79,11 +81,81 @@ pub fn load_template_config(path: &Path) -> Result<CasTemplateConfig> {
         Some(Value::Null) | None => false,
         Some(_) => true,
     };
+    let max_chunks = match value.get("limits") {
+        None => CAS_MANIFEST_MAX_CHUNKS,
+        Some(Value::Object(limits)) => {
+            let configured = limits
+                .get("max_chunks")
+                .and_then(Value::as_u64)
+                .ok_or_else(|| anyhow::anyhow!("template limits missing max_chunks"))?;
+            let configured = usize::try_from(configured)
+                .map_err(|_| anyhow::anyhow!("template max_chunks exceeds host size"))?;
+            if configured == 0 {
+                bail!("template max_chunks must be greater than zero");
+            }
+            if configured != CAS_MANIFEST_MAX_CHUNKS {
+                bail!(
+                    "template max_chunks {} does not match manifest-v1 maximum {}",
+                    configured,
+                    CAS_MANIFEST_MAX_CHUNKS
+                );
+            }
+            let configured_payload_bytes = limits
+                .get("max_payload_bytes")
+                .and_then(Value::as_u64)
+                .ok_or_else(|| anyhow::anyhow!("template limits missing max_payload_bytes"))?;
+            let expected_payload_bytes = chunk_bytes.saturating_mul(configured as u64);
+            if configured_payload_bytes != expected_payload_bytes {
+                bail!(
+                    "template max_payload_bytes {} does not match chunk_bytes {} * max_chunks {}",
+                    configured_payload_bytes,
+                    chunk_bytes,
+                    configured
+                );
+            }
+            configured
+        }
+        Some(_) => bail!("template limits must be an object"),
+    };
     Ok(CasTemplateConfig {
         chunk_bytes: chunk_bytes as usize,
+        max_chunks,
         delta_allowed,
         signing_required,
     })
+}
+
+/// Validate exact manifest geometry and the selected target's payload capacity.
+pub fn validate_manifest_capacity(
+    payload_bytes: u64,
+    chunk_bytes: u32,
+    chunk_count: usize,
+    max_chunks: usize,
+) -> Result<()> {
+    if chunk_bytes == 0 {
+        bail!("manifest chunk_bytes must be greater than zero");
+    }
+    let represented_bytes = u64::from(chunk_bytes).saturating_mul(chunk_count as u64);
+    if payload_bytes != represented_bytes {
+        bail!(
+            "manifest payload_bytes {} does not match chunk_bytes {} * chunks {}",
+            payload_bytes,
+            chunk_bytes,
+            chunk_count
+        );
+    }
+    let max_payload_bytes = u64::from(chunk_bytes).saturating_mul(max_chunks as u64);
+    if chunk_count > max_chunks || payload_bytes > max_payload_bytes {
+        bail!(
+            "CAS manifest capacity exceeded: payload_bytes={} chunk_bytes={} chunks={} max_chunks={} max_payload_bytes={}",
+            payload_bytes,
+            chunk_bytes,
+            chunk_count,
+            max_chunks,
+            max_payload_bytes
+        );
+    }
+    Ok(())
 }
 
 /// Load an Ed25519 signing key from a hex file.
@@ -168,16 +240,30 @@ pub fn build_bundle(
     delta_base: Option<DeltaBase>,
     signing_key: Option<[u8; 32]>,
 ) -> Result<CasBundle> {
-    if template.signing_required && signing_key.is_none() {
-        bail!("signing key required by template");
-    }
-    if delta_base.is_some() && !template.delta_allowed {
-        bail!("delta packs are disabled by template");
+    if template.max_chunks != CAS_MANIFEST_MAX_CHUNKS {
+        bail!(
+            "template max_chunks {} does not match manifest-v1 maximum {}",
+            template.max_chunks,
+            CAS_MANIFEST_MAX_CHUNKS
+        );
     }
     let chunk_bytes = template.chunk_bytes;
     let chunks = chunk_payload(payload, chunk_bytes)?;
     if chunks.is_empty() {
         bail!("payload produced zero chunks");
+    }
+    validate_manifest_capacity(
+        (chunks.len() * chunk_bytes) as u64,
+        chunk_bytes as u32,
+        chunks.len(),
+        template.max_chunks,
+    )
+    .context("payload exceeds selected CAS manifest capacity")?;
+    if template.signing_required && signing_key.is_none() {
+        bail!("signing key required by template");
+    }
+    if delta_base.is_some() && !template.delta_allowed {
+        bail!("delta packs are disabled by template");
     }
     if let Some(base) = &delta_base {
         if base.chunk_bytes != chunk_bytes {
@@ -265,4 +351,21 @@ pub fn bundle_paths(bundle_dir: &Path) -> Result<(PathBuf, PathBuf)> {
         bail!("chunks dir not found at {}", chunks_dir.display());
     }
     Ok((manifest_path, chunks_dir))
+}
+
+/// Load and capacity-check a bundle manifest before any chunk or network I/O.
+pub fn load_upload_manifest(bundle_dir: &Path) -> Result<(CasManifest, Vec<u8>, PathBuf)> {
+    let (manifest_path, chunks_dir) = bundle_paths(bundle_dir)?;
+    let manifest_bytes = fs::read(&manifest_path)
+        .with_context(|| format!("read manifest {}", manifest_path.display()))?;
+    let manifest = CasManifest::decode(&manifest_bytes)
+        .map_err(|err| anyhow::anyhow!("decode manifest {}: {err}", manifest_path.display()))?;
+    validate_manifest_capacity(
+        manifest.payload_bytes,
+        manifest.chunk_bytes,
+        manifest.chunks.len(),
+        CAS_MANIFEST_MAX_CHUNKS,
+    )
+    .context("bundle exceeds CAS manifest-v1 target capacity")?;
+    Ok((manifest, manifest_bytes, chunks_dir))
 }

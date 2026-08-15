@@ -11,6 +11,7 @@ description = "Cohesix hive-gateway REST client"
 
 [dependencies]
 anyhow = { workspace = true }
+cohesix-net-constants = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 ureq = { version = "3.3.0", features = ["json"] }

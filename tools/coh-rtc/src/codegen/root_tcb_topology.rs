@@ -187,12 +187,18 @@ mod tests {
             admitted_frames,
             admitted_slots,
         ) in [
-            (qemu_manifest(), 2_017, 4_056, 2_065, 4_248, 2_577, 6_296),
-            (pi4_manifest(), 4_065, 8_960, 4_113, 9_152, 4_625, 11_200),
+            (qemu_manifest(), 2_018, 4_058, 2_066, 4_250, 2_578, 6_298),
+            (pi4_manifest(), 4_066, 8_962, 4_114, 9_154, 4_626, 11_202),
         ] {
+            let qemu = manifest.profile.name == "virt-aarch64";
             assert_eq!(manifest.console_network_service.stack_pages, 32);
-            assert_eq!(manifest.console_network_service.objects.frames, 97);
-            assert_eq!(manifest.console_network_service.objects.cspace_slots, 121);
+            assert_eq!(manifest.console_network_service.objects.frames, 98);
+            assert_eq!(manifest.console_network_service.objects.cspace_slots, 123);
+            assert_eq!(manifest.console_network_service.objects.fault_caps, 1);
+            assert_eq!(
+                manifest.console_network_service.objects.timeout_fault_caps,
+                1
+            );
             assert_eq!(
                 manifest.worker_resource_admission.fixed_objects.frames,
                 fixed_frames
@@ -208,6 +214,22 @@ mod tests {
                 .worker_resource_admission
                 .maximum_inventory()
                 .expect("maximum inventory");
+            assert_eq!(
+                manifest
+                    .worker_resource_admission
+                    .fixed_objects
+                    .timeout_fault_caps,
+                if qemu { 7 } else { 14 }
+            );
+            assert_eq!(maximum.timeout_fault_caps, if qemu { 10 } else { 17 });
+            assert_eq!(
+                maximum.timeout_fault_caps
+                    + manifest
+                        .worker_resource_admission
+                        .post_construction_reserve
+                        .timeout_fault_caps,
+                if qemu { 18 } else { 25 }
+            );
             assert_eq!(maximum.frames, maximum_frames);
             assert_eq!(maximum.cspace_slots, maximum_slots);
             assert_eq!(
@@ -232,28 +254,73 @@ mod tests {
     #[test]
     fn root_control_turn_candidate_is_exactly_accounted() {
         for manifest in [qemu_manifest(), pi4_manifest()] {
+            let qemu = manifest.profile.name == "virt-aarch64";
             let root_control = manifest
                 .temporal_authority
                 .tasks
                 .iter()
                 .find(|task| task.id == "root-control")
                 .expect("root-control temporal task");
-            assert_eq!(root_control.budget_us, 2_750);
-            assert_eq!(root_control.period_us, 10_000);
-            assert_eq!(root_control.wcet_us, 2_500);
-            assert_eq!(root_control.response_time_us, 5_100);
-            let expected_serial_io_bound = if manifest.profile.name == "virt-aarch64" {
-                64
+            let (
+                expected_root_budget,
+                expected_root_wcet,
+                expected_root_response,
+                expected_serial_io_bound,
+                expected_wcet_provenance,
+                expected_console_core,
+                expected_console_response,
+                expected_worker_response,
+                expected_core_zero_demand,
+                expected_core_two_demand,
+                expected_timer_clock_hz,
+            ) = if qemu {
+                (
+                    5_500,
+                    5_000,
+                    7_600,
+                    64,
+                    "m26e-qemu-root-adjacent-refill-natural-postpone-candidate-v35",
+                    2,
+                    3_000,
+                    3_600,
+                    8_750,
+                    3_800,
+                    24_000_000,
+                )
             } else {
-                0
+                (
+                    2_750,
+                    2_500,
+                    5_100,
+                    0,
+                    "m26e-pi4-root-adjacent-refill-natural-postpone-candidate-v24",
+                    0,
+                    8_100,
+                    1_200,
+                    9_000,
+                    1_600,
+                    54_000_000,
+                )
             };
+            assert_eq!(root_control.core, 0);
+            assert_eq!(root_control.sched_control_core, 0);
+            assert_eq!(root_control.budget_us, expected_root_budget);
+            assert_eq!(root_control.period_us, 10_000);
+            assert_eq!(root_control.max_refills, 2);
+            assert_eq!(
+                root_control.timeout_policy,
+                crate::temporal::TimeoutPolicy::NaturalPostpone
+            );
+            assert_eq!(root_control.wcet_us, expected_root_wcet);
+            assert_eq!(root_control.response_time_us, expected_root_response);
             assert_eq!(
                 root_control.virtio_operator_serial_io_bytes_per_turn,
                 expected_serial_io_bound
             );
+            assert_eq!(root_control.wcet_provenance, expected_wcet_provenance);
             assert_eq!(
-                root_control.wcet_provenance,
-                "m26e-qemu-root-exclusive-predispatch-candidate-v23"
+                manifest.console_network_service.timer_clock_hz,
+                expected_timer_clock_hz
             );
 
             assert!(manifest.temporal_authority.tasks.iter().all(|task| {
@@ -266,14 +333,34 @@ mod tests {
                 .iter()
                 .find(|task| task.id == "console-network-service")
                 .expect("console-network-service temporal task");
+            assert_eq!(console_network.core, expected_console_core);
+            assert_eq!(console_network.sched_control_core, expected_console_core);
+            assert_eq!(manifest.console_network_service.core, expected_console_core);
+            assert_eq!(manifest.console_network_service.abi_version, 3);
             assert_eq!(console_network.budget_us, 3_000);
             assert_eq!(console_network.period_us, 10_000);
-            assert_eq!(console_network.wcet_us, 2_400);
-            assert_eq!(console_network.response_time_us, 7_500);
+            assert_eq!(console_network.wcet_us, 3_000);
+            assert_eq!(console_network.response_time_us, expected_console_response);
+            assert_eq!(
+                console_network.timeout_policy,
+                crate::temporal::TimeoutPolicy::NaturalPostpone
+            );
             assert_eq!(
                 console_network.wcet_provenance,
-                "m26e-qemu-console-bounded-stack-steps-candidate-v6"
+                "m26e-qemu-console-received-progress-retention-candidate-v18"
             );
+
+            for worker_id in ["worker-gpu-slot-0", "worker-lora-slot-0"] {
+                let worker = manifest
+                    .temporal_authority
+                    .tasks
+                    .iter()
+                    .find(|task| task.id == worker_id)
+                    .expect("core-2 Worker temporal task");
+                assert_eq!(worker.core, 2);
+                assert_eq!(worker.sched_control_core, 2);
+                assert_eq!(worker.response_time_us, expected_worker_response);
+            }
 
             let core_zero_demand = manifest
                 .temporal_authority
@@ -284,7 +371,7 @@ mod tests {
                 })
                 .map(|task| task.budget_us)
                 .sum::<u32>();
-            assert_eq!(core_zero_demand, 9_000);
+            assert_eq!(core_zero_demand, expected_core_zero_demand);
             let core_zero_admission = manifest
                 .temporal_authority
                 .core_admission
@@ -293,9 +380,33 @@ mod tests {
                 .expect("core-0 temporal admission");
             assert_eq!(core_zero_admission.capacity_us, 10_000);
             assert_eq!(core_zero_admission.reserve_us, 1_000);
+            let core_zero_usable = core_zero_admission.capacity_us - core_zero_admission.reserve_us;
+            assert!(core_zero_demand <= core_zero_usable);
             assert_eq!(
-                core_zero_demand,
-                core_zero_admission.capacity_us - core_zero_admission.reserve_us
+                core_zero_usable - core_zero_demand,
+                if qemu { 250 } else { 0 }
+            );
+
+            let core_two_demand = manifest
+                .temporal_authority
+                .tasks
+                .iter()
+                .filter(|task| {
+                    task.core == 2 && task.execution == crate::temporal::TemporalExecution::Active
+                })
+                .map(|task| task.budget_us)
+                .sum::<u32>();
+            assert_eq!(core_two_demand, expected_core_two_demand);
+            let core_two_admission = manifest
+                .temporal_authority
+                .core_admission
+                .iter()
+                .find(|admission| admission.core == 2)
+                .expect("core-2 temporal admission");
+            assert_eq!(core_two_admission.capacity_us, 10_000);
+            assert_eq!(core_two_admission.reserve_us, 1_000);
+            assert!(
+                core_two_demand <= core_two_admission.capacity_us - core_two_admission.reserve_us
             );
         }
     }
@@ -443,10 +554,10 @@ mod tests {
         );
         assert_eq!(record["inventory"]["tcbs"], 10);
         assert_eq!(record["inventory"]["scheduling_contexts"], 10);
-        assert_eq!(record["inventory"]["frames"], 2065);
+        assert_eq!(record["inventory"]["frames"], 2066);
         assert_eq!(record["inventory"]["endpoints"], 15);
         assert_eq!(record["inventory"]["reply_objects"], 6);
-        assert_eq!(record["inventory"]["cspace_slots"], 4248);
+        assert_eq!(record["inventory"]["cspace_slots"], 4250);
 
         let canonical = canonical_json(&record["topology"]).expect("canonical topology");
         assert_eq!(

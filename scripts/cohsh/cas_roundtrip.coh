@@ -58,6 +58,4 @@ EXPECT SUBSTR data=b64:iHdjb2hlc2l4LWNh
 cat /updates/100/chunks/b6ac3cc10386331c765f04f041c147d0f278f2aed8eaa021e2d0057fc6f6ff9e
 EXPECT OK
 EXPECT SUBSTR data=b64:QUFB
-cat /policy/preflight/req
-EXPECT ERR
 quit

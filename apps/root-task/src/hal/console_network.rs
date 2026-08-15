@@ -3,11 +3,11 @@
 // Purpose: Construct and contain the generated isolated console-network child.
 // Author: Lukas Bower
 
-//! HAL-owned construction for `console-network-service/v1`.
+//! HAL-owned construction for `console-network-service/v3`.
 //!
 //! Every child object and translation table is retyped below one retained
 //! compiler-selected revoke anchor. The root keeps only copied packet/control
-//! pages, one receive notification, four badged send caps, and the TCB/SC caps
+//! pages, one receive notification, five badged send caps, and the TCB/SC caps
 //! needed for supervision. Construction leaves the TCB suspended until the
 //! complete target fault registry has been sealed.
 
@@ -15,7 +15,8 @@ use core::sync::atomic::{fence, Ordering};
 
 use console_network_abi::{
     CHILD_WAKE_MASK, RUNTIME_INIT_DESCRIPTOR_BYTES, SHARED_PAGE_BYTES, WAKE_CONTROL,
-    WAKE_EVENT_READY, WAKE_PACKET_RX, WAKE_PACKET_TX_READY, WAKE_REVOKE, WAKE_SHUTDOWN,
+    WAKE_EVENT_READY, WAKE_PACKET_RX, WAKE_PACKET_TX_READY, WAKE_PUBLICATION_ACK, WAKE_REVOKE,
+    WAKE_SHUTDOWN,
 };
 use heapless::Vec;
 use sel4_sys::{seL4_CPtr, seL4_Word};
@@ -27,7 +28,7 @@ use super::{
 use crate::console_network_service::{
     BoundaryError, ConsoleNetworkBoundary, ConsoleNetworkContainmentCursor,
     ConsoleNetworkContainmentProof, ConsoleNetworkContainmentTurn, ConsoleNetworkContainmentUnit,
-    ConsoleNetworkContract, ConsoleNetworkEvent, ConsoleNetworkObjectPlan,
+    ConsoleNetworkContract, ConsoleNetworkEvent, ConsoleNetworkObjectPlan, ServiceState,
     CONSOLE_NETWORK_IMAGE_IDENTITY_BOUND, CONSOLE_NETWORK_RUNTIME_ENTRY_VADDR,
     CONSOLE_NETWORK_RUNTIME_IMAGE, CONSOLE_NETWORK_RUNTIME_LOAD_BASE_VADDR,
     CONSOLE_NETWORK_RUNTIME_LOAD_LIMIT_VADDR, CONSOLE_NETWORK_RUNTIME_LOAD_PAGES, SERVICE_TASK_ID,
@@ -35,14 +36,14 @@ use crate::console_network_service::{
 use crate::critical_tcb::GenerationIdentity;
 use crate::sel4::{self, RamFrame, RevokeAnchorVSpaceTracker};
 
-const ROOT_SLOT_COUNT: usize = 121;
+const ROOT_SLOT_COUNT: usize = 123;
 const TRANSLATION_SLOT_COUNT: usize = 8;
-const FRAME_COUNT: usize = 97;
+const FRAME_COUNT: usize = 98;
 const IMAGE_FRAME_START: usize = 0;
-const STACK_FRAME_START: usize = 59;
-const IPC_FRAME_INDEX: usize = 91;
-const INIT_FRAME_INDEX: usize = 92;
-const SHARED_FRAME_START: usize = 93;
+const STACK_FRAME_START: usize = 60;
+const IPC_FRAME_INDEX: usize = 92;
+const INIT_FRAME_INDEX: usize = 93;
+const SHARED_FRAME_START: usize = 94;
 const SHARED_FRAME_COUNT: usize = 4;
 
 const TCB_SLOT_INDEX: usize = 0;
@@ -55,13 +56,14 @@ const FRAME_SLOT_START: usize = 6;
 const TRANSLATION_SLOT_START: usize = FRAME_SLOT_START + FRAME_COUNT;
 const SHARED_COPY_SLOT_START: usize = TRANSLATION_SLOT_START + TRANSLATION_SLOT_COUNT;
 const ROOT_WAKE_SLOT_START: usize = SHARED_COPY_SLOT_START + SHARED_FRAME_COUNT;
-const STANDARD_FAULT_SLOT_INDEX: usize = ROOT_WAKE_SLOT_START + 4;
+const STANDARD_FAULT_SLOT_INDEX: usize = ROOT_WAKE_SLOT_START + 5;
 const TIMEOUT_FAULT_SLOT_INDEX: usize = STANDARD_FAULT_SLOT_INDEX + 1;
 
 const ROOT_PACKET_RX_WAKE_INDEX: usize = 0;
 const ROOT_CONTROL_WAKE_INDEX: usize = 1;
 const ROOT_SHUTDOWN_WAKE_INDEX: usize = 2;
 const ROOT_REVOKE_WAKE_INDEX: usize = 3;
+const ROOT_PUBLICATION_ACK_WAKE_INDEX: usize = 4;
 
 const CHILD_CNODE_RADIX_BITS: u8 = 4;
 
@@ -71,12 +73,30 @@ const _: () = assert!(SHARED_FRAME_START + SHARED_FRAME_COUNT == FRAME_COUNT);
 const _: () = assert!(SHARED_FRAME_COUNT == ConsoleNetworkContainmentCursor::SHARED_FRAME_COUNT);
 const _: () = assert!(ConsoleNetworkContainmentCursor::FAULT_CAP_COUNT == 2);
 
+/// Whether this generated policy installs a TCB timeout endpoint.
+///
+/// Natural postponement retains the compiler-reserved timeout capability and
+/// SC badge, but deliberately leaves the TCB handler slot empty so seL4 delays
+/// the thread until its next replenishment. Every fault-delivering policy keeps
+/// the existing endpoint installation path.
+const fn requires_timeout_endpoint(policy: crate::generated::TimeoutPolicy) -> bool {
+    !matches!(policy, crate::generated::TimeoutPolicy::NaturalPostpone)
+}
+
 /// One nonblocking child-output turn copied into root-owned values.
 pub struct ConsoleNetworkTurn {
     /// Validated service event, when the event-ready bit was observed.
     pub event: Option<ConsoleNetworkEvent>,
     /// Validated Ethernet frame, when the packet-ready bit was observed.
     pub egress: Option<Vec<u8, { console_network_abi::ETHERNET_FRAME_BYTES }>>,
+}
+
+impl ConsoleNetworkTurn {
+    /// Whether at least one child publication was validated and copied.
+    #[must_use]
+    pub const fn publication_observed(&self) -> bool {
+        self.event.is_some() || self.egress.is_some()
+    }
 }
 
 /// Live kernel resources for one exact console-network generation.
@@ -88,7 +108,8 @@ pub struct ConsoleNetworkRuntime {
     tcb: seL4_CPtr,
     scheduling_context: seL4_CPtr,
     child_to_root_notification: seL4_CPtr,
-    root_wake_caps: [seL4_CPtr; 4],
+    root_wake_caps: [seL4_CPtr; 5],
+    publication_ack_owed: bool,
     standard_fault_cap: seL4_CPtr,
     timeout_fault_cap: seL4_CPtr,
     shared_frames: Vec<RamFrame, SHARED_FRAME_COUNT>,
@@ -141,6 +162,9 @@ impl ConsoleNetworkRuntime {
             return Err(HalError::Unsupported("console-network-containment-state"));
         }
         self.boundary.record_fault();
+        // Containment abandons any copied publication without granting the
+        // child new publication authority.
+        self.publication_ack_owed = false;
         self.activated = false;
         self.containment_started = true;
         Ok(())
@@ -149,6 +173,7 @@ impl ConsoleNetworkRuntime {
     /// Mark a critical-lane fault before root performs complete containment.
     pub fn record_supervisor_fault(&mut self) {
         self.boundary.record_fault();
+        self.publication_ack_owed = false;
     }
 
     /// Resume the child after the target fault registry is sealed.
@@ -181,6 +206,25 @@ impl ConsoleNetworkRuntime {
         }
         let sequence = self.boundary.stage_authorized_line(
             line,
+            now_ms,
+            self.shared_frames[2].as_mut_slice(),
+        )?;
+        fence(Ordering::Release);
+        sel4::signal_unchecked(self.root_wake_caps[ROOT_CONTROL_WAKE_INDEX]);
+        Ok(sequence)
+    }
+
+    /// Stage one bounded response batch and signal its exact control wake.
+    pub fn stage_authorized_batch(
+        &mut self,
+        payload: &[u8],
+        now_ms: u64,
+    ) -> Result<u64, BoundaryError> {
+        if !self.activated || self.contained {
+            return Err(BoundaryError::InvalidState);
+        }
+        let sequence = self.boundary.stage_authorized_batch(
+            payload,
             now_ms,
             self.shared_frames[2].as_mut_slice(),
         )?;
@@ -235,14 +279,23 @@ impl ConsoleNetworkRuntime {
             return Err(BoundaryError::InvalidState);
         }
         self.boundary.record_fault();
+        // The outstanding page is intentionally abandoned once revoke wins;
+        // never turn containment into a fresh publication credit.
+        self.publication_ack_owed = false;
         fence(Ordering::Release);
         sel4::signal_unchecked(self.root_wake_caps[ROOT_REVOKE_WAKE_INDEX]);
         Ok(())
     }
 
+    /// Whether one copied child publication still needs its one-shot ACK.
+    #[must_use]
+    pub const fn publication_ack_pending(&self) -> bool {
+        self.activated && !self.contained && self.publication_ack_owed
+    }
+
     /// Poll and validate all coalesced child output bits without blocking root.
     pub fn poll_turn(&mut self) -> Result<ConsoleNetworkTurn, BoundaryError> {
-        if !self.activated || self.contained {
+        if !self.activated || self.contained || self.publication_ack_owed {
             return Err(BoundaryError::InvalidState);
         }
         let mut badge = 0;
@@ -274,7 +327,38 @@ impl ConsoleNetworkRuntime {
         } else {
             None
         };
+        // A coalesced event+egress observation still earns one global credit:
+        // both records are root-owned before the single ACK is made available.
+        self.publication_ack_owed = event.is_some() || egress.is_some();
         Ok(ConsoleNetworkTurn { event, egress })
+    }
+
+    /// Grant one publication credit after the adapter retained all copied output.
+    pub fn acknowledge_publication(&mut self) -> Result<(), BoundaryError> {
+        if !self.activated || self.contained || !self.publication_ack_owed {
+            return Err(BoundaryError::InvalidState);
+        }
+        // Consume root's one-shot authority before signalling. Even a later
+        // erroneous duplicate call cannot credit an unobserved replacement.
+        self.publication_ack_owed = false;
+        fence(Ordering::Release);
+        sel4::signal_unchecked(self.root_wake_caps[ROOT_PUBLICATION_ACK_WAKE_INDEX]);
+        Ok(())
+    }
+
+    /// Retire a validated terminal publication without waking the parked child.
+    pub fn retire_terminal_publication(&mut self) -> Result<(), BoundaryError> {
+        if !self.activated
+            || self.contained
+            || !self.publication_ack_owed
+            || self.boundary.state() != ServiceState::Terminal
+        {
+            return Err(BoundaryError::InvalidState);
+        }
+        // ShutdownComplete consumes the child's last credit and parks it. The
+        // root closes its exactly-once latch but deliberately sends no ACK.
+        self.publication_ack_owed = false;
+        Ok(())
     }
 
     /// Perform at most one ordered containment unit for this recovery turn.
@@ -606,6 +690,7 @@ fn construct_generation(
         scheduling_context,
         child_to_root_notification,
         root_wake_caps,
+        publication_ack_owed: false,
         standard_fault_cap,
         timeout_fault_cap,
         shared_frames,
@@ -846,7 +931,7 @@ fn install_caps_and_mcs(
     ipc_vaddr: usize,
     entry: usize,
     generation: u64,
-) -> Result<([seL4_CPtr; 4], seL4_CPtr, seL4_CPtr), HalError> {
+) -> Result<([seL4_CPtr; 5], seL4_CPtr, seL4_CPtr), HalError> {
     let root_cnode = hal.env.init_cnode_cap();
     let root_depth = sel4::word_bits() as u8;
     let child_depth = CHILD_CNODE_RADIX_BITS;
@@ -881,8 +966,14 @@ fn install_caps_and_mcs(
         seL4_Word::from(WAKE_EVENT_READY),
     )?;
 
-    let wake_badges = [WAKE_PACKET_RX, WAKE_CONTROL, WAKE_SHUTDOWN, WAKE_REVOKE];
-    let mut root_wake_caps = [sel4_sys::seL4_CapNull; 4];
+    let wake_badges = [
+        WAKE_PACKET_RX,
+        WAKE_CONTROL,
+        WAKE_SHUTDOWN,
+        WAKE_REVOKE,
+        WAKE_PUBLICATION_ACK,
+    ];
+    let mut root_wake_caps = [sel4_sys::seL4_CapNull; 5];
     for (index, badge) in wake_badges.into_iter().enumerate() {
         let cap = slots[ROOT_WAKE_SLOT_START + index];
         mint(
@@ -976,7 +1067,9 @@ fn install_caps_and_mcs(
         standard_fault_cap,
     )
     .map_err(HalError::Sel4)?;
-    sel4::set_tcb_timeout_endpoint(tcb, timeout_fault_cap).map_err(HalError::Sel4)?;
+    if requires_timeout_endpoint(contract.timeout_policy) {
+        sel4::set_tcb_timeout_endpoint(tcb, timeout_fault_cap).map_err(HalError::Sel4)?;
+    }
     let stack_top = usize::try_from(contract.stack_vaddr)
         .ok()
         .and_then(|base| base.checked_add(usize::from(contract.stack_pages) << sel4::PAGE_BITS))
@@ -1060,11 +1153,11 @@ mod tests {
     #[test]
     fn fixed_slot_plan_accounts_every_generated_object() {
         assert_eq!(FRAME_SLOT_START, 6);
-        assert_eq!(TRANSLATION_SLOT_START, 103);
-        assert_eq!(SHARED_COPY_SLOT_START, 111);
-        assert_eq!(ROOT_WAKE_SLOT_START, 115);
-        assert_eq!(STANDARD_FAULT_SLOT_INDEX, 119);
-        assert_eq!(TIMEOUT_FAULT_SLOT_INDEX, 120);
+        assert_eq!(TRANSLATION_SLOT_START, 104);
+        assert_eq!(SHARED_COPY_SLOT_START, 112);
+        assert_eq!(ROOT_WAKE_SLOT_START, 116);
+        assert_eq!(STANDARD_FAULT_SLOT_INDEX, 121);
+        assert_eq!(TIMEOUT_FAULT_SLOT_INDEX, 122);
         assert_eq!(TIMEOUT_FAULT_SLOT_INDEX + 1, ROOT_SLOT_COUNT);
     }
 
@@ -1075,5 +1168,21 @@ mod tests {
             15
         );
         assert_eq!(WAKE_PACKET_TX_READY | WAKE_EVENT_READY, CHILD_WAKE_MASK);
+        assert_eq!(WAKE_PUBLICATION_ACK, 64);
+    }
+
+    #[test]
+    fn only_natural_postpone_omits_the_timeout_endpoint() {
+        use crate::generated::TimeoutPolicy;
+
+        assert!(!requires_timeout_endpoint(TimeoutPolicy::NaturalPostpone));
+        for policy in [
+            TimeoutPolicy::Terminal,
+            TimeoutPolicy::ReplenishOnce,
+            TimeoutPolicy::ReturnError,
+            TimeoutPolicy::FailStop,
+        ] {
+            assert!(requires_timeout_endpoint(policy));
+        }
     }
 }

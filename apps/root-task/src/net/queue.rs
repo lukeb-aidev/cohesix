@@ -1077,7 +1077,7 @@ mod tests {
         let (mut stack, _) = NetStack::new(Ipv4Address::new(10, 0, 2, 99));
         stack.enqueue_console_line("attach queen token\r\n");
         stack.enqueue_console_line("log\n");
-        let mut observed: heapless::Vec<HeaplessString<DEFAULT_LINE_CAPACITY>, 4> =
+        let mut observed: heapless::Vec<HeaplessString<{ cohsh_core::MAX_LINE_LEN }>, 4> =
             heapless::Vec::new();
         stack.drain_console_lines(10, &mut |line| {
             observed.push(line.text).unwrap();

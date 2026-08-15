@@ -145,9 +145,10 @@ Filesystem endpoints return a `GatewayResponse` object:
 ```
 
 On failure, `status` is `ERR`, `end` remains `true`, `lines` is empty, and
-`error` contains the bounded failure text. A target-level `ERR`, including a policy
-refusal, is returned with HTTP `200` so the console refusal is preserved.
-Clients must therefore check both the HTTP status and the JSON `status` field.
+`error` contains the bounded failure text. A target-level `ERR`, including a
+policy refusal, or the exact in-process host-model semantic-capacity equivalent
+is returned with HTTP `200` so the refusal is preserved. Clients must therefore
+check both the HTTP status and the JSON `status` field.
 
 After a successful `ECHO /queen/telemetry/<device_id>/ctl`, `lines` may contain
 the single provider-assigned segment ID already carried by the target's
@@ -159,12 +160,47 @@ write.
 
 | HTTP status | Meaning |
 | --- | --- |
-| `200` | Gateway completed the request; inspect JSON `status` for `OK` or target `ERR`. |
+| `200` | Gateway completed the request; inspect JSON `status` for `OK` or semantic `ERR`. |
 | `400` | Invalid path, bound, query, or request payload. |
 | `401` | Missing or invalid request-auth token on `POST /v1/fs/echo`. |
 | `429` | Bounded gateway broker queue is under backpressure. |
 | `503` | Upstream transport or gateway session is unavailable. |
 | `504` | Bounded broker response deadline expired. |
+
+## Broker and client deadline composition
+
+The gateway has independent bounded control and telemetry broker response
+deadlines. A filesystem client must leave room for all legal gateway phases:
+
+```text
+operation_response_ms =
+    5000
+    + max(control_response_ms, telemetry_response_ms)
+    + 5000
+```
+
+The first `5,000 ms` is the bounded broker-queue admission limit and the final
+`5,000 ms` is HTTP response-delivery grace. The canonical gateway deadlines are
+`120,000/120,000 ms`, producing a canonical client filesystem-operation window
+of `130,000 ms`. An externally owned gateway must declare both broker values;
+clients and test harnesses must not infer them from reachability or metadata.
+An explicit client value below the composition is invalid.
+
+The shared Rust client keeps metadata, name resolution, connection
+establishment, and response-body transfer on short independent bounds. Its
+filesystem-operation HTTP agent applies the composed window to request send,
+request-body send, and response-header receipt because the HTTP library carries
+the earlier send deadlines into response receipt. Request and response byte
+bounds remain unchanged. `cohsh` exposes the composed window through
+`--rest-response-timeout-ms` and `COHSH_REST_RESPONSE_TIMEOUT_MS`, including
+for pooled transports.
+
+This is a client/gateway liveness contract, not a new HTTP or target protocol
+field. A gateway-generated `504` still means the server's broker response
+deadline expired; a local client expiry remains a transport error and does not
+prove whether a write committed. Neither condition authorizes an automatic
+write retry. Endpoint schemas, target wire grammar, ACK/ERR/END meaning,
+request concurrency, pool size, and retry policy are unchanged.
 
 ## Bounds and namespace discovery
 

@@ -2143,6 +2143,20 @@ struct RuntimeInitDescriptorBuilder {
 }
 
 #[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct RuntimeInitSchedulerConfig {
+    scheduling_context_slot: u32,
+    scheduling_context_bits: u8,
+    sched_control_core: u8,
+    max_refills: u8,
+    affinity_core: u8,
+    budget_us: u32,
+    period_us: u32,
+    standard_fault_badge: u64,
+    timeout_fault_badge: u64,
+}
+
+#[cfg(feature = "kernel")]
 impl RuntimeInitDescriptorBuilder {
     fn new(
         spec: driver_task::DriverTaskRuntimeImageSpec,
@@ -2152,26 +2166,54 @@ impl RuntimeInitDescriptorBuilder {
     ) -> Result<Self, HalError> {
         let temporal = driver_task::driver_task_temporal_config(spec.hot_path)
             .ok_or(HalError::Unsupported("driver-runtime-temporal-config"))?;
-        if temporal.core != temporal.sched_control_core || temporal.budget_us > temporal.period_us {
-            return Err(HalError::Unsupported(
-                "driver-runtime-temporal-config-mismatch",
-            ));
-        }
         let standard_fault_badge = crate::critical_tcb::generated_standard_fault_badge(temporal.id)
             .ok_or(HalError::Unsupported(
                 "driver-runtime-temporal-standard-fault-badge",
             ))?;
+        Self::new_with_scheduler(
+            spec,
+            role_bit,
+            task_key,
+            artifact_hash,
+            RuntimeInitSchedulerConfig {
+                scheduling_context_slot: temporal.scheduling_context_slot,
+                scheduling_context_bits: temporal.scheduling_context_bits,
+                sched_control_core: temporal.sched_control_core,
+                max_refills: temporal.max_refills,
+                affinity_core: temporal.core,
+                budget_us: temporal.budget_us,
+                period_us: temporal.period_us,
+                standard_fault_badge,
+                timeout_fault_badge: temporal.timeout_badge,
+            },
+        )
+    }
+
+    fn new_with_scheduler(
+        spec: driver_task::DriverTaskRuntimeImageSpec,
+        role_bit: usize,
+        task_key: usize,
+        artifact_hash: u32,
+        scheduler: RuntimeInitSchedulerConfig,
+    ) -> Result<Self, HalError> {
+        if scheduler.affinity_core != scheduler.sched_control_core
+            || scheduler.budget_us > scheduler.period_us
+        {
+            return Err(HalError::Unsupported(
+                "driver-runtime-temporal-config-mismatch",
+            ));
+        }
         let mut descriptor = DriverRuntimeInitDescriptor::empty().with_mcs_scheduler(
             task_key as u32,
-            temporal.scheduling_context_slot,
-            temporal.scheduling_context_bits,
-            temporal.sched_control_core,
-            temporal.max_refills,
-            temporal.core,
-            temporal.budget_us,
-            temporal.period_us,
-            standard_fault_badge,
-            temporal.timeout_badge,
+            scheduler.scheduling_context_slot,
+            scheduler.scheduling_context_bits,
+            scheduler.sched_control_core,
+            scheduler.max_refills,
+            scheduler.affinity_core,
+            scheduler.budget_us,
+            scheduler.period_us,
+            scheduler.standard_fault_badge,
+            scheduler.timeout_fault_badge,
         );
         descriptor.hot_path = spec.hot_path.as_u32();
         descriptor.role_bit = role_bit as u32;
@@ -5466,9 +5508,8 @@ impl<'a> KernelHal<'a> {
                 );
                 return Err(HalError::Unsupported("driver-runtime-init-stage"));
             };
-            let staging_segments = [driver_task::DriverTaskStagingSegment::ring_frame(
+            let staging_segments = [driver_task::DriverTaskStagingSegment::runtime_init(
                 descriptor_bytes,
-                0,
             )];
             let command = driver_task::runtime_init_command(
                 spec.hot_path,
@@ -6353,7 +6394,34 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     fn runtime_init_test_artifact_hash(hot_path: super::driver_task::DriverTaskHotPath) -> u32 {
-        super::driver_task::pi4_driver_task_runtime_artifact_hash(hot_path)
+        0x5254_0000 | hot_path.as_u32()
+    }
+
+    #[cfg(feature = "kernel")]
+    fn runtime_init_test_builder(
+        spec: super::driver_task::DriverTaskRuntimeImageSpec,
+        role_bit: usize,
+    ) -> Result<super::RuntimeInitDescriptorBuilder, super::HalError> {
+        let hot_path = spec.hot_path;
+        let identity = u64::from(hot_path.as_u32());
+        let core = (hot_path.as_u32() % 4) as u8;
+        super::RuntimeInitDescriptorBuilder::new_with_scheduler(
+            spec,
+            role_bit,
+            runtime_init_test_task_key(hot_path),
+            runtime_init_test_artifact_hash(hot_path),
+            super::RuntimeInitSchedulerConfig {
+                scheduling_context_slot: 32 + hot_path.as_u32(),
+                scheduling_context_bits: 8,
+                sched_control_core: core,
+                max_refills: 2,
+                affinity_core: core,
+                budget_us: 500,
+                period_us: 10_000,
+                standard_fault_badge: 0x26e2_1000 + identity,
+                timeout_fault_badge: 0x26ed_1000 + identity,
+            },
+        )
     }
 
     #[cfg(feature = "kernel")]
@@ -6363,13 +6431,8 @@ mod tests {
         let spec = super::driver_task::DriverTaskRuntimeImageSpec::new(
             hot_path, 1, 1, 1, 1, 1, true, false,
         );
-        let mut builder = super::RuntimeInitDescriptorBuilder::new(
-            spec,
-            super::driver_task::DRIVER_TASK_ROLE_NET_BIT,
-            runtime_init_test_task_key(hot_path),
-            runtime_init_test_artifact_hash(hot_path),
-        )
-        .unwrap();
+        let mut builder =
+            runtime_init_test_builder(spec, super::driver_task::DRIVER_TASK_ROLE_NET_BIT).unwrap();
         builder.add_mmio_page(0xFD58_0000).unwrap();
         builder.add_dma_page(0x4000_0000).unwrap();
         builder.add_shared_page(0x5000_0000).unwrap();
@@ -6402,13 +6465,9 @@ mod tests {
         let spec = super::driver_task::DriverTaskRuntimeImageSpec::new(
             hot_path, 1, 1, 1, 1, 1, true, false,
         );
-        let mut builder = super::RuntimeInitDescriptorBuilder::new(
-            spec,
-            super::driver_task::DRIVER_TASK_ROLE_DISPLAY_BIT,
-            runtime_init_test_task_key(hot_path),
-            runtime_init_test_artifact_hash(hot_path),
-        )
-        .unwrap();
+        let mut builder =
+            runtime_init_test_builder(spec, super::driver_task::DRIVER_TASK_ROLE_DISPLAY_BIT)
+                .unwrap();
         builder.add_mmio_page(0xFE00_B000).unwrap();
         builder.add_dma_page(0x4000_0000).unwrap();
         builder.add_shared_page(0x5000_0000).unwrap();
@@ -6439,13 +6498,8 @@ mod tests {
         let spec = super::driver_task::DriverTaskRuntimeImageSpec::new(
             hot_path, 64, 16, 512, 128, 32, true, false,
         );
-        let mut builder = super::RuntimeInitDescriptorBuilder::new(
-            spec,
-            super::driver_task::DRIVER_TASK_ROLE_USB_BIT,
-            runtime_init_test_task_key(hot_path),
-            runtime_init_test_artifact_hash(hot_path),
-        )
-        .unwrap();
+        let mut builder =
+            runtime_init_test_builder(spec, super::driver_task::DRIVER_TASK_ROLE_USB_BIT).unwrap();
         for index in 0..pi4_driver_abi::DRIVER_RUNTIME_INIT_MAX_MMIO_PAGES {
             builder
                 .add_mmio_page(0x0000_0006_0000_0000usize + index * 0x1000)
@@ -6545,13 +6599,8 @@ mod tests {
             pi4_driver_abi::DRIVER_RUNTIME_CYW43_ROOT_WAKE_NOTIFICATION_SLOT as u8,
             pi4_driver_abi::DRIVER_RUNTIME_CYW43_ROOT_WAKE_NOTIFICATION_BADGE,
         );
-        let mut builder = super::RuntimeInitDescriptorBuilder::new(
-            spec,
-            super::driver_task::DRIVER_TASK_ROLE_NET_BIT,
-            runtime_init_test_task_key(hot_path),
-            runtime_init_test_artifact_hash(hot_path),
-        )
-        .unwrap();
+        let mut builder =
+            runtime_init_test_builder(spec, super::driver_task::DRIVER_TASK_ROLE_NET_BIT).unwrap();
         for index in 0..64 {
             builder
                 .add_shared_page(0x5000_0000usize + index * 0x1000)
@@ -6632,13 +6681,8 @@ mod tests {
             false,
             true,
         );
-        let mut builder = super::RuntimeInitDescriptorBuilder::new(
-            spec,
-            super::driver_task::DRIVER_TASK_ROLE_SDIO_BIT,
-            runtime_init_test_task_key(hot_path),
-            runtime_init_test_artifact_hash(hot_path),
-        )
-        .unwrap();
+        let mut builder =
+            runtime_init_test_builder(spec, super::driver_task::DRIVER_TASK_ROLE_SDIO_BIT).unwrap();
         let page_bytes = pi4_driver_abi::DRIVER_RUNTIME_RESOURCE_PAGE_BYTES as usize;
         for paddr in [0xFE30_0000, 0xFE00_B000, 0xFE00_7000] {
             builder.add_mmio_page(paddr).unwrap();
@@ -6762,13 +6806,8 @@ mod tests {
         let spec = super::driver_task::DriverTaskRuntimeImageSpec::new(
             hot_path, 64, 16, 6, 512, 32, true, false,
         );
-        let mut builder = super::RuntimeInitDescriptorBuilder::new(
-            spec,
-            super::driver_task::DRIVER_TASK_ROLE_NET_BIT,
-            runtime_init_test_task_key(hot_path),
-            runtime_init_test_artifact_hash(hot_path),
-        )
-        .unwrap();
+        let mut builder =
+            runtime_init_test_builder(spec, super::driver_task::DRIVER_TASK_ROLE_NET_BIT).unwrap();
         for index in 0..6 {
             builder
                 .add_mmio_page(0xfd58_0000usize + index * 0x1000)

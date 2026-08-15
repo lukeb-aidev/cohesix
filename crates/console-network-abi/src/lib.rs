@@ -7,7 +7,7 @@
 #![deny(unsafe_code)]
 #![warn(missing_docs)]
 
-//! Fixed-layout `console-network-service/v1` records.
+//! Fixed-layout `console-network-service/v3` records.
 //!
 //! The root remains the sole owner of operator policy and command execution.
 //! The child owns Ethernet/IP/TCP processing, transport authentication, and
@@ -28,7 +28,7 @@ pub const PACKET_PAGE_MAGIC: u32 = 0x434e_5031;
 /// Console exchange page magic (`CNE1`).
 pub const EXCHANGE_PAGE_MAGIC: u32 = 0x434e_4531;
 /// ABI version.
-pub const ABI_VERSION: u16 = 1;
+pub const ABI_VERSION: u16 = 3;
 /// Shared page size and alignment.
 pub const SHARED_PAGE_BYTES: usize = 4096;
 /// Maximum copied Ethernet frame, including VLAN headroom.
@@ -41,6 +41,16 @@ pub const ETHERNET_FRAME_BYTES: usize = 1536;
 pub const CONSOLE_PAYLOAD_BYTES: usize = 2368;
 /// Maximum root-authorized response line emitted by the child.
 pub const CONSOLE_OUTPUT_BYTES: usize = 512;
+/// Binary root-to-child response-batch encoding version.
+pub const SEND_BATCH_ENCODING_VERSION: u16 = 1;
+/// Exact bytes in the response-batch header.
+pub const SEND_BATCH_HEADER_BYTES: usize = 8;
+/// Exact bytes in each response-batch record header.
+pub const SEND_BATCH_RECORD_HEADER_BYTES: usize = 2;
+/// Maximum response records authorized by one root control.
+pub const SEND_BATCH_MAX_RECORDS: usize = 8;
+/// Maximum UTF-8 bytes in one batched root response line.
+pub const SEND_BATCH_LINE_BYTES: usize = 256;
 /// Maximum authenticated command bytes admitted to root's parser.
 pub const COMMAND_LINE_BYTES: usize = 2304;
 /// Maximum authentication token bytes passed only to the restricted child.
@@ -73,8 +83,11 @@ pub const WAKE_REVOKE: u64 = 8;
 pub const WAKE_PACKET_TX_READY: u64 = 16;
 /// Child has published one event in the event page.
 pub const WAKE_EVENT_READY: u64 = 32;
+/// Root has accepted the preceding child publication and grants one new slot credit.
+pub const WAKE_PUBLICATION_ACK: u64 = 64;
 /// All allowed root-to-child notification bits.
-pub const ROOT_WAKE_MASK: u64 = WAKE_PACKET_RX | WAKE_CONTROL | WAKE_SHUTDOWN | WAKE_REVOKE;
+pub const ROOT_WAKE_MASK: u64 =
+    WAKE_PACKET_RX | WAKE_CONTROL | WAKE_SHUTDOWN | WAKE_REVOKE | WAKE_PUBLICATION_ACK;
 /// All allowed child-to-root notification bits.
 pub const CHILD_WAKE_MASK: u64 = WAKE_PACKET_TX_READY | WAKE_EVENT_READY;
 
@@ -86,11 +99,14 @@ pub const INIT_FLAG_SEQUENCE_LAST: u32 = 1 << 1;
 pub const INIT_FLAG_SINGLE_LISTENER: u32 = 1 << 2;
 /// The child owns transport authentication and framing.
 pub const INIT_FLAG_CHILD_AUTH_FRAMING: u32 = 1 << 3;
+/// Root observation explicitly acknowledges one child publication slot.
+pub const INIT_FLAG_PUBLICATION_ACK: u32 = 1 << 4;
 /// Exact required runtime flags.
 pub const REQUIRED_INIT_FLAGS: u32 = INIT_FLAG_POINTER_FREE
     | INIT_FLAG_SEQUENCE_LAST
     | INIT_FLAG_SINGLE_LISTENER
-    | INIT_FLAG_CHILD_AUTH_FRAMING;
+    | INIT_FLAG_CHILD_AUTH_FRAMING
+    | INIT_FLAG_PUBLICATION_ACK;
 
 const PACKET_RESERVED_BYTES: usize = SHARED_PAGE_BYTES - 40 - ETHERNET_FRAME_BYTES;
 const EXCHANGE_RESERVED_BYTES: usize = SHARED_PAGE_BYTES - 64 - CONSOLE_PAYLOAD_BYTES;
@@ -163,6 +179,8 @@ pub enum ExchangeKind {
     SendLine = 1,
     /// Root asks the active connection to close after output drain.
     Disconnect = 2,
+    /// Root queues up to eight already-authorized response lines atomically.
+    SendBatch = 3,
     /// Child reports TCP accept before authentication.
     Connected = 16,
     /// Child reports successful transport authentication.
@@ -445,7 +463,7 @@ impl ExchangeRecord {
         self.related_sequence
     }
 
-    /// Initialized and UTF-8-validated payload bytes.
+    /// Initialized payload bytes validated according to [`Self::kind`].
     #[must_use]
     pub fn payload(&self) -> &[u8] {
         &self.payload[..self.payload_len as usize]
@@ -458,6 +476,7 @@ impl ExchangeKind {
         match value {
             1 => Ok(Self::SendLine),
             2 => Ok(Self::Disconnect),
+            3 => Ok(Self::SendBatch),
             16 => Ok(Self::Connected),
             17 => Ok(Self::Authenticated),
             18 => Ok(Self::Command),
@@ -476,13 +495,197 @@ impl ExchangeKind {
     /// Whether this kind may be produced by root.
     #[must_use]
     pub const fn root_to_child(self) -> bool {
-        matches!(self, Self::SendLine | Self::Disconnect)
+        matches!(self, Self::SendLine | Self::Disconnect | Self::SendBatch)
     }
 
     /// Whether this kind may be produced by the child.
     #[must_use]
     pub const fn child_to_root(self) -> bool {
         !self.root_to_child()
+    }
+}
+
+/// Incremental encoder for one bounded [`ExchangeKind::SendBatch`] payload.
+///
+/// The caller supplies the existing exchange-page payload storage. Only the
+/// returned active prefix is authoritative; the unused suffix is untouched.
+pub struct SendBatchBuilder<'a> {
+    output: &'a mut [u8; CONSOLE_PAYLOAD_BYTES],
+    cursor: usize,
+    record_count: u16,
+}
+
+impl<'a> SendBatchBuilder<'a> {
+    /// Begin an empty response batch in caller-owned bounded storage.
+    #[must_use]
+    pub fn new(output: &'a mut [u8; CONSOLE_PAYLOAD_BYTES]) -> Self {
+        output[..SEND_BATCH_HEADER_BYTES].fill(0);
+        Self {
+            output,
+            cursor: SEND_BATCH_HEADER_BYTES,
+            record_count: 0,
+        }
+    }
+
+    /// Append one canonical response line.
+    ///
+    /// Returns `Ok(false)` without mutation when the valid line would exceed
+    /// the eight-record or shared-payload bound. Terminal CR/LF bytes are
+    /// removed exactly as for the legacy single-line control.
+    pub fn try_push_line(&mut self, line: &str) -> Result<bool, AbiError> {
+        let line = line.trim_end_matches(['\r', '\n']);
+        if line.is_empty()
+            || line.len() > SEND_BATCH_LINE_BYTES
+            || line
+                .as_bytes()
+                .iter()
+                .any(|byte| matches!(byte, b'\r' | b'\n'))
+        {
+            return Err(AbiError::InvalidBound);
+        }
+        if usize::from(self.record_count) >= SEND_BATCH_MAX_RECORDS {
+            return Ok(false);
+        }
+        let Some(record_end) = self
+            .cursor
+            .checked_add(SEND_BATCH_RECORD_HEADER_BYTES)
+            .and_then(|offset| offset.checked_add(line.len()))
+        else {
+            return Err(AbiError::InvalidBound);
+        };
+        if record_end > self.output.len() {
+            return Ok(false);
+        }
+        let line_len = line.len() as u16;
+        self.output[self.cursor..self.cursor + SEND_BATCH_RECORD_HEADER_BYTES]
+            .copy_from_slice(&line_len.to_le_bytes());
+        let line_start = self.cursor + SEND_BATCH_RECORD_HEADER_BYTES;
+        self.output[line_start..record_end].copy_from_slice(line.as_bytes());
+        self.cursor = record_end;
+        self.record_count = self.record_count.saturating_add(1);
+        Ok(true)
+    }
+
+    /// Number of lines already encoded.
+    #[must_use]
+    pub const fn record_count(&self) -> usize {
+        self.record_count as usize
+    }
+
+    /// Finish the batch and return its exact active payload prefix.
+    pub fn finish(self) -> Result<&'a [u8], AbiError> {
+        if self.record_count == 0 {
+            return Err(AbiError::InvalidBound);
+        }
+        let used_bytes = self.cursor.saturating_sub(SEND_BATCH_HEADER_BYTES);
+        if used_bytes == 0 || used_bytes > u16::MAX as usize {
+            return Err(AbiError::InvalidBound);
+        }
+        self.output[0..2].copy_from_slice(&SEND_BATCH_ENCODING_VERSION.to_le_bytes());
+        self.output[2..4].copy_from_slice(&self.record_count.to_le_bytes());
+        self.output[4..6].copy_from_slice(&(used_bytes as u16).to_le_bytes());
+        self.output[6..8].copy_from_slice(&0u16.to_le_bytes());
+        Ok(&self.output[..self.cursor])
+    }
+}
+
+/// Validated cursor over one private copy of a response-batch payload.
+///
+/// The cursor owns no bytes and contains no pointer. A consumer may therefore
+/// validate shared input once, copy the exact active prefix into private
+/// storage, and retain this cursor across bounded service turns.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SendBatchCursor {
+    next_offset: u16,
+    end_offset: u16,
+    remaining: u16,
+}
+
+impl SendBatchCursor {
+    /// Validate the complete binary batch and return its initial cursor.
+    pub fn validate(payload: &[u8]) -> Result<Self, AbiError> {
+        if payload.len() < SEND_BATCH_HEADER_BYTES + SEND_BATCH_RECORD_HEADER_BYTES + 1
+            || payload.len() > CONSOLE_PAYLOAD_BYTES
+        {
+            return Err(AbiError::InvalidBound);
+        }
+        if read_u16(payload, 0) != SEND_BATCH_ENCODING_VERSION {
+            return Err(AbiError::InvalidIdentity);
+        }
+        let record_count = read_u16(payload, 2);
+        if record_count == 0 || usize::from(record_count) > SEND_BATCH_MAX_RECORDS {
+            return Err(AbiError::InvalidBound);
+        }
+        let used_bytes = usize::from(read_u16(payload, 4));
+        if read_u16(payload, 6) != 0
+            || used_bytes != payload.len().saturating_sub(SEND_BATCH_HEADER_BYTES)
+        {
+            return Err(AbiError::InvalidLayout);
+        }
+        let initial = Self {
+            next_offset: SEND_BATCH_HEADER_BYTES as u16,
+            end_offset: payload.len() as u16,
+            remaining: record_count,
+        };
+        let mut scan = initial;
+        while scan.next_line(payload)?.is_some() {}
+        Ok(initial)
+    }
+
+    /// Number of response lines not yet consumed.
+    #[must_use]
+    pub const fn remaining(&self) -> usize {
+        self.remaining as usize
+    }
+
+    /// Whether every validated record has been consumed.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.remaining == 0
+    }
+
+    /// Validate and advance over one exact UTF-8 response line.
+    pub fn next_line<'a>(&mut self, payload: &'a [u8]) -> Result<Option<&'a str>, AbiError> {
+        let end_offset = usize::from(self.end_offset);
+        let next_offset = usize::from(self.next_offset);
+        if payload.len() != end_offset || next_offset > end_offset {
+            return Err(AbiError::InvalidBound);
+        }
+        if self.remaining == 0 {
+            if next_offset != end_offset {
+                return Err(AbiError::InvalidLayout);
+            }
+            return Ok(None);
+        }
+        let Some(line_start) = next_offset.checked_add(SEND_BATCH_RECORD_HEADER_BYTES) else {
+            return Err(AbiError::InvalidBound);
+        };
+        if line_start > end_offset {
+            return Err(AbiError::InvalidBound);
+        }
+        let line_len = usize::from(read_u16(payload, next_offset));
+        if line_len == 0 || line_len > SEND_BATCH_LINE_BYTES {
+            return Err(AbiError::InvalidBound);
+        }
+        let Some(line_end) = line_start.checked_add(line_len) else {
+            return Err(AbiError::InvalidBound);
+        };
+        if line_end > end_offset {
+            return Err(AbiError::InvalidBound);
+        }
+        let line_bytes = &payload[line_start..line_end];
+        let line = core::str::from_utf8(line_bytes).map_err(|_| AbiError::InvalidBound)?;
+        if line_bytes.iter().any(|byte| matches!(byte, b'\r' | b'\n')) {
+            return Err(AbiError::InvalidBound);
+        }
+        let remaining = self.remaining - 1;
+        if (remaining == 0 && line_end != end_offset) || (remaining != 0 && line_end >= end_offset)
+        {
+            return Err(AbiError::InvalidLayout);
+        }
+        self.next_offset = line_end as u16;
+        self.remaining = remaining;
+        Ok(Some(line))
     }
 }
 
@@ -1062,7 +1265,7 @@ pub struct ExchangePage {
     pub related_sequence: u64,
     /// Written last; must equal `sequence`.
     pub committed_sequence: u64,
-    /// Bounded UTF-8 payload when required by the kind.
+    /// Bounded payload validated according to the exchange kind.
     pub payload: [u8; CONSOLE_PAYLOAD_BYTES],
     /// Reserved page tail; zero.
     pub reserved: [u8; EXCHANGE_RESERVED_BYTES],
@@ -1118,6 +1321,7 @@ impl ExchangePage {
         if output.len() != SHARED_PAGE_BYTES {
             return Err(AbiError::InvalidLayout);
         }
+        validate_exchange_payload(kind, payload)?;
         let header = ExchangePageHeader::staged(
             kind,
             generation,
@@ -1183,9 +1387,7 @@ impl ExchangePage {
         payload[..payload_len].copy_from_slice(
             &input[EXCHANGE_PAYLOAD_OFFSET..EXCHANGE_PAYLOAD_OFFSET + payload_len],
         );
-        if core::str::from_utf8(&payload[..payload_len]).is_err() {
-            return Err(AbiError::InvalidBound);
-        }
+        validate_exchange_payload(kind, &payload[..payload_len])?;
         fence(Ordering::Acquire);
         let second = read_u64(input, EXCHANGE_COMMIT_OFFSET);
         if first != second {
@@ -1224,10 +1426,15 @@ impl ExchangePage {
         related_sequence: u64,
         payload: &[u8],
     ) -> Result<(), AbiError> {
+        validate_exchange_payload(kind, payload)?;
         if sequence == 0 || payload.len() > self.payload.len() {
             return Err(AbiError::InvalidBound);
         }
-        if matches!(kind, ExchangeKind::SendLine | ExchangeKind::Command) && payload.is_empty() {
+        if matches!(
+            kind,
+            ExchangeKind::SendLine | ExchangeKind::SendBatch | ExchangeKind::Command
+        ) && payload.is_empty()
+        {
             return Err(AbiError::InvalidBound);
         }
         if kind == ExchangeKind::Command && payload.len() > COMMAND_LINE_BYTES {
@@ -1304,9 +1511,7 @@ impl ExchangePage {
         {
             return Err(AbiError::InvalidBound);
         }
-        if core::str::from_utf8(&self.payload[..len]).is_err() {
-            return Err(AbiError::InvalidBound);
-        }
+        validate_exchange_payload(kind, &self.payload[..len])?;
         let completion = matches!(
             kind,
             ExchangeKind::PacketConsumed
@@ -1411,7 +1616,11 @@ fn validate_exchange_metadata(
     if generation == 0 || sequence == 0 || payload_len > CONSOLE_PAYLOAD_BYTES {
         return Err(AbiError::InvalidBound);
     }
-    if matches!(kind, ExchangeKind::SendLine | ExchangeKind::Command) && payload_len == 0 {
+    if matches!(
+        kind,
+        ExchangeKind::SendLine | ExchangeKind::SendBatch | ExchangeKind::Command
+    ) && payload_len == 0
+    {
         return Err(AbiError::InvalidBound);
     }
     if kind == ExchangeKind::Command && payload_len > COMMAND_LINE_BYTES {
@@ -1438,6 +1647,16 @@ fn validate_exchange_metadata(
         return Err(AbiError::InvalidSequence);
     }
     Ok(())
+}
+
+fn validate_exchange_payload(kind: ExchangeKind, payload: &[u8]) -> Result<(), AbiError> {
+    if kind == ExchangeKind::SendBatch {
+        SendBatchCursor::validate(payload).map(|_| ())
+    } else if core::str::from_utf8(payload).is_err() {
+        Err(AbiError::InvalidBound)
+    } else {
+        Ok(())
+    }
 }
 
 const fn hash_byte(hash: u64, byte: u8) -> u64 {
@@ -1498,6 +1717,12 @@ const _: () = assert!(size_of::<RuntimeInitDescriptor>() == RUNTIME_INIT_DESCRIP
 const _: () = assert!(align_of::<ExchangePage>() == SHARED_PAGE_BYTES);
 const _: () = assert!(size_of::<PacketPageHeader>() == PACKET_HEADER_BYTES);
 const _: () = assert!(size_of::<ExchangePageHeader>() == EXCHANGE_HEADER_BYTES);
+const _: () = assert!(
+    SEND_BATCH_HEADER_BYTES
+        + SEND_BATCH_MAX_RECORDS * (SEND_BATCH_RECORD_HEADER_BYTES + SEND_BATCH_LINE_BYTES)
+        <= CONSOLE_PAYLOAD_BYTES
+);
+const _: () = assert!(SEND_BATCH_LINE_BYTES <= CONSOLE_OUTPUT_BYTES);
 const _: () = assert!(core::mem::offset_of!(PacketPage, packet_len) == PACKET_LENGTH_OFFSET);
 const _: () =
     assert!(core::mem::offset_of!(PacketPage, committed_sequence) == PACKET_COMMIT_OFFSET);
@@ -1574,7 +1799,7 @@ mod tests {
     }
 
     #[test]
-    fn bounded_packet_io_preserves_v1_layout_and_ignores_padding() {
+    fn bounded_packet_io_preserves_v3_layout_and_ignores_padding() {
         assert_eq!(PACKET_COMMIT_OFFSET, 24);
         assert_eq!(PACKET_LENGTH_OFFSET, 32);
         assert_eq!(PACKET_HEADER_BYTES, PACKET_PAYLOAD_OFFSET);
@@ -1645,6 +1870,187 @@ mod tests {
     }
 
     #[test]
+    fn send_batch_builder_and_cursor_preserve_exact_eight_record_bound() {
+        let max_line_bytes = [b'x'; SEND_BATCH_LINE_BYTES];
+        let max_line = core::str::from_utf8(&max_line_bytes).unwrap();
+        let mut storage = [0x5au8; CONSOLE_PAYLOAD_BYTES];
+        let active_len;
+        {
+            let mut builder = SendBatchBuilder::new(&mut storage);
+            for _ in 0..SEND_BATCH_MAX_RECORDS {
+                assert_eq!(builder.try_push_line(max_line), Ok(true));
+            }
+            assert_eq!(builder.record_count(), SEND_BATCH_MAX_RECORDS);
+            assert_eq!(builder.try_push_line("ninth"), Ok(false));
+            let payload = builder.finish().unwrap();
+            active_len = payload.len();
+            assert_eq!(active_len, 2_072);
+            assert_eq!(read_u16(payload, 0), SEND_BATCH_ENCODING_VERSION);
+            assert_eq!(usize::from(read_u16(payload, 2)), SEND_BATCH_MAX_RECORDS);
+            assert_eq!(usize::from(read_u16(payload, 4)), active_len - 8);
+            assert_eq!(read_u16(payload, 6), 0);
+
+            let mut cursor = SendBatchCursor::validate(payload).unwrap();
+            for remaining in (1..=SEND_BATCH_MAX_RECORDS).rev() {
+                assert_eq!(cursor.remaining(), remaining);
+                assert_eq!(cursor.next_line(payload).unwrap(), Some(max_line));
+            }
+            assert!(cursor.is_empty());
+            assert_eq!(cursor.next_line(payload), Ok(None));
+        }
+        assert!(storage[active_len..].iter().all(|byte| *byte == 0x5a));
+    }
+
+    #[test]
+    fn send_batch_rejects_noncanonical_or_inexact_binary_records() {
+        let mut storage = [0u8; CONSOLE_PAYLOAD_BYTES];
+        let active_len = {
+            let mut builder = SendBatchBuilder::new(&mut storage);
+            assert_eq!(builder.try_push_line("\r\n"), Err(AbiError::InvalidBound));
+            assert_eq!(
+                builder.try_push_line("ACK\nforged"),
+                Err(AbiError::InvalidBound)
+            );
+            assert_eq!(
+                builder.try_push_line("ACK\rforged"),
+                Err(AbiError::InvalidBound)
+            );
+            let oversized = [b'x'; SEND_BATCH_LINE_BYTES + 1];
+            let oversized = core::str::from_utf8(&oversized).unwrap();
+            assert_eq!(
+                builder.try_push_line(oversized),
+                Err(AbiError::InvalidBound)
+            );
+            assert_eq!(builder.try_push_line("ACK CAT"), Ok(true));
+            assert_eq!(builder.try_push_line("END CAT\r\n"), Ok(true));
+            builder.finish().unwrap().len()
+        };
+        assert!(SendBatchCursor::validate(&storage[..active_len]).is_ok());
+
+        let valid = storage;
+        storage[0..2].copy_from_slice(&2u16.to_le_bytes());
+        assert_eq!(
+            SendBatchCursor::validate(&storage[..active_len]),
+            Err(AbiError::InvalidIdentity)
+        );
+        storage = valid;
+        storage[2..4].copy_from_slice(&0u16.to_le_bytes());
+        assert_eq!(
+            SendBatchCursor::validate(&storage[..active_len]),
+            Err(AbiError::InvalidBound)
+        );
+        storage = valid;
+        storage[2..4].copy_from_slice(&((SEND_BATCH_MAX_RECORDS + 1) as u16).to_le_bytes());
+        assert_eq!(
+            SendBatchCursor::validate(&storage[..active_len]),
+            Err(AbiError::InvalidBound)
+        );
+        storage = valid;
+        storage[4..6].copy_from_slice(&1u16.to_le_bytes());
+        assert_eq!(
+            SendBatchCursor::validate(&storage[..active_len]),
+            Err(AbiError::InvalidLayout)
+        );
+        storage = valid;
+        storage[6..8].copy_from_slice(&1u16.to_le_bytes());
+        assert_eq!(
+            SendBatchCursor::validate(&storage[..active_len]),
+            Err(AbiError::InvalidLayout)
+        );
+        storage = valid;
+        storage[8..10].copy_from_slice(&0u16.to_le_bytes());
+        assert_eq!(
+            SendBatchCursor::validate(&storage[..active_len]),
+            Err(AbiError::InvalidBound)
+        );
+        storage = valid;
+        storage[8..10].copy_from_slice(&((SEND_BATCH_LINE_BYTES + 1) as u16).to_le_bytes());
+        assert_eq!(
+            SendBatchCursor::validate(&storage[..active_len]),
+            Err(AbiError::InvalidBound)
+        );
+        storage = valid;
+        storage[10] = 0xff;
+        assert_eq!(
+            SendBatchCursor::validate(&storage[..active_len]),
+            Err(AbiError::InvalidBound)
+        );
+        storage = valid;
+        storage[11] = b'\n';
+        assert_eq!(
+            SendBatchCursor::validate(&storage[..active_len]),
+            Err(AbiError::InvalidBound)
+        );
+        storage = valid;
+        storage[11] = b'\r';
+        assert_eq!(
+            SendBatchCursor::validate(&storage[..active_len]),
+            Err(AbiError::InvalidBound)
+        );
+        storage = valid;
+        storage[10 + usize::from(read_u16(&storage, 8)) - 1] = b'\n';
+        assert_eq!(
+            SendBatchCursor::validate(&storage[..active_len]),
+            Err(AbiError::InvalidBound)
+        );
+        assert_eq!(
+            SendBatchCursor::validate(&valid[..active_len - 1]),
+            Err(AbiError::InvalidLayout)
+        );
+        let mut trailing = valid;
+        trailing[active_len] = b'x';
+        assert_eq!(
+            SendBatchCursor::validate(&trailing[..active_len + 1]),
+            Err(AbiError::InvalidLayout)
+        );
+    }
+
+    #[test]
+    fn exchange_page_validates_send_batch_as_binary_not_whole_payload_utf8() {
+        let line_bytes = [b'x'; 200];
+        let line = core::str::from_utf8(&line_bytes).unwrap();
+        let mut batch_storage = [0u8; CONSOLE_PAYLOAD_BYTES];
+        let batch_len = {
+            let mut builder = SendBatchBuilder::new(&mut batch_storage);
+            assert_eq!(builder.try_push_line(line), Ok(true));
+            builder.finish().unwrap().len()
+        };
+        assert!(core::str::from_utf8(&batch_storage[..batch_len]).is_err());
+
+        let mut page = [0u8; SHARED_PAGE_BYTES];
+        ExchangePage::publish_related_into(
+            &mut page,
+            ExchangeKind::SendBatch,
+            7,
+            4,
+            9,
+            21,
+            0,
+            &batch_storage[..batch_len],
+        )
+        .unwrap();
+        let record = ExchangePage::decode_bounded(&page, 7, 0, true).unwrap();
+        assert_eq!(record.kind(), ExchangeKind::SendBatch);
+        let mut cursor = SendBatchCursor::validate(record.payload()).unwrap();
+        assert_eq!(cursor.next_line(record.payload()).unwrap(), Some(line));
+        assert_eq!(cursor.next_line(record.payload()), Ok(None));
+
+        assert_eq!(
+            ExchangePage::publish_related_into(
+                &mut page,
+                ExchangeKind::SendLine,
+                7,
+                5,
+                9,
+                22,
+                0,
+                &[0xff],
+            ),
+            Err(AbiError::InvalidBound)
+        );
+    }
+
+    #[test]
     fn directions_and_generations_fail_closed() {
         let mut exchange = ExchangePage::empty(7);
         exchange
@@ -1684,6 +2090,11 @@ mod tests {
     fn descriptor_seal_binds_authority_and_secret_tail() {
         let valid = descriptor();
         assert_eq!(valid.validate(), Ok(()));
+        assert_eq!(ABI_VERSION, 3);
+        assert_eq!(ExchangeKind::SendBatch as u16, 3);
+        assert_eq!(WAKE_PUBLICATION_ACK, 64);
+        assert_eq!(ROOT_WAKE_MASK, 79);
+        assert_eq!(REQUIRED_INIT_FLAGS & INIT_FLAG_PUBLICATION_ACK, 16);
         let mut broad = valid;
         broad.child_cspace_slots = 32;
         assert_eq!(broad.validate(), Err(AbiError::InvalidAuthority));

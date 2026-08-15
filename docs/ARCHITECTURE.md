@@ -49,12 +49,12 @@ object sizes, platform metadata, and timer truth.
 
 | Concern | Current selected implementation | Qualification boundary |
 | --- | --- | --- |
-| Kernel contract | seL4 16, AArch64, four nodes, one domain, non-hypervisor SMP+MCS. The QEMU contract requires `virt` with GICv3; no operational classic scheduler profile or runtime selector remains. | Source, generated-profile, and target-compile checks do not substitute for the pending exact-image four-core QEMU execution record or later Pi 4 execution. |
-| Temporal authority | Every generated live TCB is admitted as an active scheduling-context owner or as the allowlisted passive NineDoor donation chain. Manifest `root_task.schema = "1.11"` additionally accounts for one root-retained, one-shot NineDoor bootstrap SC outside the steady temporal topology and the profile-scoped root VirtIO Operator serial-I/O bound. Budgets, periods, deadlines, Reply objects, timeout faults, recovery owners, and fixed-priority response-time results are compiler checked. | The bootstrap candidate and observed steady SC donation/return, Reply, timeout, consumed-time, per-core reserve, and per-Operator serial-I/O behavior must match the generated inventory under normal, pressure, and injected-fault QEMU runs, then fresh Pi runs. |
+| Kernel contract | seL4 16, AArch64, four nodes, one domain, non-hypervisor SMP+MCS. On supported Apple-Silicon/macOS, QEMU uses HVF with `virt,gic-version=3,virtualization=off`, `cortex-a57`, QEMU-native HVC PSCI, and scalar pre-MMU elfloader code. The wrapper-owned elfloader dispatches secondary-CPU `CPU_ON` through HVC only when selected by the DTB and preserves the upstream SMC path otherwise; no operational classic scheduler profile or runtime selector remains. | Source, generated-profile, and target-compile checks do not substitute for the pending exact-image four-core QEMU execution record or later Pi 4 execution. TCG and `-icount` are diagnostic comparators only. |
+| Temporal authority | Every generated live TCB is admitted as an active scheduling-context owner or as the allowlisted passive NineDoor donation chain. Manifest `root_task.schema = "1.14"` retains the one root-retained, one-shot NineDoor bootstrap SC, profile-scoped root VirtIO Operator serial-I/O bound, explicit console publication-ACK contract, console ABI v3 SendBatch, and the bounded authenticated response lane. The selected QEMU V35 and Pi V24 root-control records and the active console child select `NaturalPostpone`: each TCB has no installed timeout endpoint, while its standard fault endpoint remains terminal and its reserved timeout capability/resource remains accounted. Budgets, periods, deadlines, Reply objects, fault owners, and fixed-priority response-time results are compiler checked. | The bootstrap candidate and observed steady SC donation/return, Reply, natural postponement, consumed-time, per-core reserve, per-Operator serial-I/O behavior, eight-response-unit burst, and ordinary-debt turn must match the generated inventory under normal, pressure, standard-fault, and budget-exhaustion QEMU runs, then fresh Pi runs at its distinct 54 MHz timer truth. |
 | Principal userspace authority | The init TCB remains the honest `root-control` owner. Four restricted active-SC children own root-fault, emergency, Worker-supervisor, and driver-supervisor duties. NineDoor and QEMU console/network parsing execute in separate restricted children. | Construction and target checks are implementation evidence only until the exact registry is sealed and the selected image proves independent progress and containment in QEMU. |
 | Workers | `worker-heartbeat`, `worker-gpu`, and `worker-lora` are separately packaged executable children with generated least-authority bundles and one active SC each. `worker-bus` alone remains model-only. | READY, receipt, fault, complete teardown, stale-authority refusal, and fresh-generation recreation require direct exact-image target evidence. |
 | Drivers | The shared driver-task ABI and selected driver runtimes use explicit MCS SC, Reply, command, completion, timeout-fault, and containment authority. QEMU selects no Pi physical-driver temporal rows. | Pi driver and unchanged CYW43 behavior remain unaccepted until the later exact-image hardware/coexistence phase. |
-| Target time | Operational QEMU and Pi manifests require exported `CNTVCT_EL0` truth and exact generated `TIMER_CLOCK_HZ`; dummy, read-count, bypass, and hard-coded frequency fallbacks fail closed. | Runtime evidence must bind the selected seL4 headers/configuration and demonstrate deadline/timeout behavior for that exact image. |
+| Target time | Operational QEMU and Pi manifests require exported `CNTVCT_EL0` truth and exact generated `TIMER_CLOCK_HZ`; QEMU/HVF binds 24,000,000 Hz and Pi binds 54,000,000 Hz. Dummy, read-count, bypass, artificial CNTFRQ, and hard-coded frequency fallbacks fail closed. | Runtime evidence must bind the selected seL4 headers/configuration and demonstrate deadline/timeout behavior for that exact image and accelerator. |
 | Attestation | When enabled, root hashes public policy/manifest data and installs generated static ticket keys. This is reproducible `measurement_only` metadata, not TPM or DICE attestation. | Reopened Milestone 26 adds real nonce-bound TPM2 Quote or device-bound DICE evidence and sealed/derived ticket keys before authority publication when attestation is required. |
 | Failure response | The accepted 26d classic artifact is retained only as an immutable behavioral comparator; it is not compiled into or selectable by the 26e operational closure. | Failure of an atomic 26e gate blocks promotion and requires returning to the owning implementation task; no shipped scheduler fallback is permitted. |
 
@@ -63,6 +63,116 @@ qualification: the current source and selected manifests describe the MCS
 candidate, but QEMU acceptance is still evidence-gated and Pi 4 build, flash,
 execution, coexistence, and acceptance remain deferred. No QEMU-only result can
 close the milestone or emit Worker-runtime release acceptance.
+
+The selected QEMU root is now
+`m26e-qemu-root-adjacent-refill-natural-postpone-candidate-v35`; the common
+console child is
+`m26e-qemu-console-received-progress-retention-candidate-v18`. Pi selects
+`m26e-pi4-root-adjacent-refill-natural-postpone-candidate-v24` with the common
+V18 child and unchanged 54 MHz timer truth, with no transfer of QEMU evidence to
+hardware. Historical root V34/V23, V30/V15 diagnostics, V29/V15,
+V28/V15, V27/V15, and V26/V13/schema-1.12 evidence below remains immutable
+chronology, not selected generated truth.
+
+V18 retains V17's natural-postponement, local-Poll/direct-Wait cadence, full
+budget WCET, placement, ABI v3, schema 1.14, and authenticated oversized-frame
+transition: the child queues exact
+`ERR FRAME reason=invalid-length`, drains the complete declared payload across
+fragments, and resumes framing on that same authenticated connection.
+Unauthenticated oversized frames retain the terminal authentication rejection.
+Each nonzero bounded socket receive now retains a fresh private
+`StackIngress -> StackEgress -> Session` cycle; only a zero-receive Session
+that commits no wire frame quiesces, so buffered body fragments and a following
+command cannot be stranded waiting for a notification that will not recur.
+V34 retains V33/V32/V31's failed-producer retirement, V30's bounded response
+capture and wrapper delegation, and every external response contract. On only
+the selected QEMU VirtIO composition, routine command, session, TAIL, and
+NineDoor diagnostics enter a private four-record EventPump FIFO. Saturation
+drops only the new best-effort diagnostic. A final-idle `RoutineAudit`
+Operator unit admits at most the FIFO head to serial with a nonblocking enqueue
+and removes it only after admission succeeds. Response or stream ownership,
+pending response flush, serial or local-seat input, retained output,
+containment, network command/event work, and display work all take precedence.
+The selected `SerialPort` tags the complete staged TX backlog as audit-only.
+While that exact provenance remains and the UART would block, ordinary
+`SerialDispatch` skips the audit retry so a late `NetEvent` and then `NetLine`
+can run before another final-idle `RoutineAudit` attempt. Any nonempty ordinary
+serial admission promotes the pending bytes to ordinary dispatch priority
+without changing their FIFO or exact `\r\n` order. V34 narrows only physical
+routine-audit TX: each eligible final-idle Operator visit may transmit at most
+one byte, while the complete record and audit-only tag remain retained across
+later visits. Network, input, response, retained-output, containment, display,
+and ordinary serial priorities are unchanged. The private FIFO never
+enters public `/log/queen.log`. Pi, linked-runtime, legacy/non-VirtIO,
+ordinary console-failure, critical/fatal, and fail-stop routes retain their
+pre-V32 raw diagnostic behavior and do not compile this provenance flag.
+
+The non-claiming V32/V17 Stage 03 run
+`out/m26e-qemu/stage03-v32-v17-20260814T014606Z` passed the fixed matrix and
+`boot_v0.coh`, then failed `9p_batch.coh` because V32 routine diagnostics
+entered public `/log/queen.log` and displaced the required ordered
+`batch-1|batch-2|batch-3` CAT preview. That result is immutable V32 failure
+evidence, not V33 qualification.
+
+The later immutable V33/V17 Stage 03 run
+`out/m26e-qemu/stage03-v33-v17-20260814T031936Z`, source digest
+`6e5a11b51a744d584a1d839421a047b21bd2093aa2d4840ecee2797100ca668c`,
+passed the fixed matrix 7/7 plus `boot_v0.coh` and `9p_batch.coh`. Immediately
+after the final successful QUIT audit and before `host_absent.coh`, the base
+artifact `sha256:33007af1046bbf1bb4b09a60182104f5224d807e1f17c2c3ad0929f5675af238`
+entered root-emergency. Exact same-artifact GDB evidence identified task 0,
+badge `0x26ee0001`, and label 5: a root-control timeout. The gated artifact
+`sha256:de3a14760a8d6df84c69f24e289f0c51f54de16a4802d6ec880b9358e5055dbb`
+was not target-run. Exact component and launch identities are retained in
+[TEST_PLAN.md](TEST_PLAN.md). This is V33 failure evidence for V34, not
+qualification.
+
+The later immutable V34/V18 Stage 03 state
+`out/test-plan/m26e-console-qemu-v34-v18-oraclefix-20260814T104728Z`, attempt
+`20260814T105938.465736Z-11947-27f75501fecd`, source
+digest `f514ef3dfe5a76cd31e778a90b76e97b6cb78016a97be11b1be0b6587ed3ffab`,
+passed Stage 01 and Stage 02. Stage 03 base artifact
+`sha256:11921e2eedbf8e9c46f781c500b89acdcb9669ebda42eb6db0ed21a4eb47dac3`
+passed the fixed matrix 7/7, all ten base scripts including `9p_batch.coh` and
+`session_pool.coh`, and `telemetry_ring.coh`; `telemetry_push_create.coh` then
+failed after peer close because each replacement connection wrote the complete
+18-byte AUTH frame and read zero bytes. Gated
+artifact `sha256:46ce91c8bffae218f557fedb19ec125cdded39118db641aee70db9e63949163b`
+was built but did not reach target work. Exact immutable base replay identified
+task 0, badge `0x26ee0001`, label 5 at the sole outer Yield, with retained
+ordinary phase `Network`, selected unit `Timer`, and tick `356343`, so the
+8,000-tick trace branch was inactive. The adjacent refill amounts were the
+exhausted current `38,090` ticks and the already-valid next `93,910` ticks;
+together they equal the configured `132,000` ticks or `5,500 us` at 24 MHz.
+The installed terminal timeout endpoint converted exhaustion of only the
+current refill into root-fault and downstream emergency instead of postponing onto that adjacent
+refill. V35/V24 therefore omit only the root-control TCB timeout endpoint while
+retaining its timeout cap, badge, resource, registry identity, all numerics, and
+terminal standard-fault endpoint. This is failure evidence for V35/V24, not
+qualification, and it does not falsify Timer arithmetic or child V18.
+The repair cites active discovery task
+`m26e-console-network-service-isolation` together with reopened Milestone 25
+root-service temporal-restoration authority carried by
+`m26e-root-tcb-target-proof`.
+This policy repair changes no schema, API, wire contract, workload, retry,
+timeout, host-tool, Python-library, benchmark, evidence-record, or report-schema
+surface; the complete cross-surface review requires no hand-authored interface
+edit. Fresh V35 QEMU must still pass the complete staged path, full `.coh`
+regression harness, REST, every host tool, Python, and performance gates. QEMU
+cannot qualify Pi; V24 separately requires a fresh generated 54 MHz build,
+flash/readback, cold boot, and applicable hardware/performance proof.
+
+The immutable V30/V15 artifact
+`out/m26e-qemu/default-netstack-response-v30-v15-20260813T200444Z/artifact`
+completed HELP and NETSTATS before the child terminalized at the Yield SVC with
+two adjacent refills totalling exactly `3000 us`. The non-claiming local-Poll
+diagnostic
+`out/m26e-qemu/local-poll-diagnostic-v30-v15-20260813T204840Z/artifact`
+then completed HELP, NETSTATS, and the correct first-call SMP body count of 16
+on its first boot; the host's then-expected 26 was oracle drift. A second fresh
+boot of the same bytes reached `root-console.start.ok` and emitted
+`root-emergency fail-stop` before any TCP probe. Those boots disprove the
+terminal-timeout V15/local-Poll combination and are not qualification evidence.
 
 ### 1.2 Evidence classes
 
@@ -123,7 +233,7 @@ is the authenticated console.
 | Upstream seL4 | Target kernel | Enforces objects, capabilities, address spaces, SMP+MCS scheduling contexts and budgets, Reply objects, timeout faults, notifications, IPC, interrupts, and kernel-generated platform truth. |
 | `root-task` | Target, `no_std` | Owns BootInfo/untyped allocation, CSpace/VSpace bootstrap, HAL admission, event pumping, serial/local-seat/HDMI handling, Queen policy, Worker model state, audit/evidence, and fault supervision. On QEMU it retains the VirtIO NIC adapter but copies Ethernet frames and authorized response bytes through the isolated console-network ABI; it owns no smoltcp or TCP/auth parser there. The current Pi network adapter remains outside that QEMU-first path pending hardware-phase wiring and evidence. |
 | `pi4-driver-*` | Pi 4 target, `no_std` child images | Own steady physical-device service behind HAL-admitted resources and the pointer-free driver-task ABI. |
-| `nine-door-runtime` | Target, `no_std` child | Implements the bounded pointer-free namespace request/response ABI, shared-frame validation, typed operation preparation, cancellation/revoke handling, and a real seL4 MCS receive/atomic-`ReplyRecv` loop. The schema-1.11 QEMU root constructor binds the selected ELF digest and W^X load plan, creates the child from its compiler-owned revoke anchor, retains a one-shot bootstrap SC and the dedicated fault-recovery Reply authority, and exposes only the bounded `Call` adapter. After one validated bootstrap exchange, the SC is unbound and the child is steady-state passive. Root remains the only Queen policy and namespace-mutation authority. A successful target check proves construction code and image identity, while a live selected-image QEMU boot remains the activation/containment evidence gate. |
+| `nine-door-runtime` | Target, `no_std` child | Implements the bounded pointer-free namespace request/response ABI, shared-frame validation, typed operation preparation, cancellation/revoke handling, and a real seL4 MCS receive/atomic-`ReplyRecv` loop. The selected schema-1.14 QEMU root constructor retains the NineDoor contract introduced in 1.11 and carried through later schemas: it binds the selected ELF digest and W^X load plan, creates the child from its compiler-owned revoke anchor, retains a one-shot bootstrap SC and the dedicated fault-recovery Reply authority, and exposes only the bounded `Call` adapter. After one validated bootstrap exchange, the SC is unbound and the child is steady-state passive. Root remains the only Queen policy and namespace-mutation authority. A successful target check proves construction code and image identity, while a live selected-image QEMU boot remains the activation/containment evidence gate. |
 | Executable Worker runtime and role/session model | Target children plus root/host projections | Root constructs suspended Heartbeat, GPU, and LoRA children from the compiler-owned image and authority inventory. Admission resumes exactly one selected role instance; READY gates publication; control, receipts, faults, teardown, and recreation retain exact five-part identity. WorkerBus remains model-only. |
 | Host NineDoor library/fixture adapter | Host, `std` | Implements the Secure9P model used by host builds and in-process compatibility tests. It is not a packaged target transport or proof of a live host service. |
 | `cohsh`, `coh`, SwarmUI, gateway, FUSE, GPU and provider bridges | Host | Provide host clients/adapters and execute only integrations whose selected implementation and observed mode are live; they do not create a new target authority path. |
@@ -214,10 +324,14 @@ root-emergency, Worker supervision, and driver supervision. The generated
 fault registry is sealed before any service or Worker child resumes; root-fault
 then becomes the sole receiver on one shared standard/timeout fault endpoint.
 It blocks in `Recv` with one Reply object and resolves the exact badge and class
-against the sealed registry after receive. Application service-turn and queue
-bounds remain mandatory beside kernel-enforced MCS budgets. Live QEMU
-qualification must still prove independent progress, exact timeout ownership,
-serialized Reply release, and containment for the selected image.
+against the sealed registry after receive. The selected console child retains
+its reserved timeout identity in that topology but does not install it as a TCB
+timeout handler; its budget exhaustion uses native postponement instead.
+Application service-turn and queue bounds remain mandatory beside
+kernel-enforced MCS budgets. Live QEMU qualification must still prove
+independent progress, console standard-fault containment, console
+budget-exhaustion postponement, serialized Reply release, and containment for
+the selected image.
 
 ### 3.2 Physical task isolation and memory authority
 
@@ -319,6 +433,15 @@ Both targets require exported `CNTVCT_EL0` and exact generated
 `TIMER_CLOCK_HZ`. A missing or zero frequency, dummy/read-count clock, bypass,
 hard-coded fallback, or null emergency-output selection is fatal for an
 operational profile.
+
+The canonical macOS QEMU profile is accelerator-bound because MCS charges
+elapsed virtual-counter time. It uses HVF, a 24 MHz counter, a QEMU-native HVC
+PSCI DTB, and an elfloader whose entire pre-MMU archive path avoids FP/ASIMD
+and whose DTB-selected HVC secondary-CPU conduit preserves upstream SMC
+behavior for SMC platforms. Wall-clock
+TCG exposed widespread false WCET attribution under the hardware-sized
+microsecond budgets, while instruction-counted TCG crossed AUTH and Secure9P
+diagnostically; neither TCG mode is an acceptance or benchmark substitute.
 
 The implementation dependency order is fixed:
 
@@ -434,9 +557,11 @@ provider parsing. The as-built source now supplies the pointer-free descriptor,
 bounded partial-frame and queue state machines, typed prepared-operation parser,
 seL4 shared-frame receive/atomic-`ReplyRecv` loop, and a fail-closed root client
 that accepts only an exact generated config paired with live disjoint root frame
-handles. Selected manifest `root_task.schema = "1.11"` freezes the bootstrap
-fields and the profile-scoped VirtIO Operator serial-I/O bound and rejects
-older schemas. On QEMU the HAL derives the complete generation
+handles. Selected manifest `root_task.schema = "1.14"` retains the bootstrap
+fields, profile-scoped VirtIO Operator serial-I/O bound, and console
+publication-ACK and ABI v3 SendBatch/response-lane fields, adds the
+NaturalPostpone console scheduling contract, and rejects older schemas. On
+QEMU the HAL derives the complete generation
 from revoke anchor slot 16137:
 one TCB, one 16-slot child CNode, one VSpace/ASID, eight page tables, 35 W^X
 image pages, eight stack pages, one IPC page, one read-only init page, exactly
@@ -489,9 +614,11 @@ bounded response priority. The as-built QEMU adapter retains the virtual NIC,
 copies only bounded Ethernet frames and authorized response bytes through four
 pointer-free pages, and consumes authenticated command records. It constructs
 the child suspended, resumes it only after the exact critical fault registry is
-sealed, and on a standard/timeout/protocol fault suspends, unbinds, scrubs, and
+sealed, and on a standard or protocol fault suspends, unbinds, scrubs, and
 revokes the complete retained-anchor generation before prohibiting replacement.
-The four pages retain their fixed 4096-byte console-network ABI v1 layouts, but
+The selected V18 console child has no TCB timeout handler: SC exhaustion is a
+native seL4 postponement until replenishment, not a terminal service fault.
+The four pages retain their fixed 4096-byte layouts under console-network ABI v3, but
 steady exchange touches only a compact scalar header and the active payload:
 40 bytes before packet payloads and 64 bytes before control/event payloads.
 Publication clears the sequence commit, executes a release fence, writes the
@@ -503,19 +630,76 @@ reserved page-tail bytes and inactive payload tails are non-authoritative:
 construction zeros them and containment scrubs them, but a normal service turn
 neither copies nor scans those tails. The child maps
 root-to-child packet ingress and control pages read-only, while its
-child-to-root packet-egress and event pages are read-write. This changes no ABI
-version, field offset, page layout, record schema, or external console grammar.
-The active child now closes at most one logical unit per active-MCS
-replenishment. Its retained-first priority is: one retained completion publication, one
-retained service-event publication, one retained egress publication, one
-retained service-poll continuation, one new packet-ingress admission, then one
-new root-control admission. A unit either commits its complete bounded state or
-leaves it pending. After the initial Ready signal and every later nonterminal
-unit, including idle or backpressure retention, the child executes exactly one
-`seL4_Yield` and then one `seL4_Wait`. Later progress uses the existing root
-service tick and existing wake notification; terminal revoke/shutdown uses only
-the wait-only park. This cut adds no capability, ABI field, schema, budget, or
-refill.
+child-to-root packet-egress and event pages are read-write. ABI v3 preserves
+those page offsets, publication-ACK authority, badge 64, and the fifth root
+Write-only mint while selecting Ready identity `console-network-service/v3`.
+Schema 1.14 owns the `NaturalPostpone` selection for the active console child
+and the selected QEMU V35/Pi V24 root-control records. It adds no notification
+object, child slot, page, or capability; each timeout capability, badge,
+resource, and registry identity remains reserved and accounted but is not
+installed as that TCB's timeout handler. Standard fault endpoints remain
+installed and terminal.
+Root control kind `SendBatch = 3` uses binary encoding v1 for one through eight
+length-prefixed UTF-8 lines of at most 256 bytes each, without CR/LF, inside
+the existing payload. The child validates the complete batch before mutation,
+retains it privately, and stages at most one external frame per Session unit.
+Each successful complete-frame commit retains exactly one following
+`StackIngress -> StackEgress -> Session` cycle, including after the final batch
+frame; that next no-progress Session completes and quiesces. Pending state or
+capacity/sendability failure alone cannot retain a cycle.
+The active child rechecks its coalesced badge and publication-credit gates
+between every logical unit. Its retained-first priority is: one retained
+completion publication, one retained service-event publication, one retained
+egress publication, one retained service-poll continuation, one new
+packet-ingress admission, then one new root-control admission. A unit either
+commits its complete bounded state or leaves it pending. Eligible retained
+private work uses local `seL4_Poll` and may continue only while those gates
+remain true. An idle or publication-uncredited child calls `seL4_Wait`
+directly, with no ordinary `seL4_Yield`; if the active SC exhausts during a retained burst,
+the kernel naturally postpones it until replenishment. Ready begins without
+publication credit. Root sets one exactly-once debt only after ObserveChild has
+validated and copied every indicated record; after the adapter durably handles
+the event and retains egress, it clears that debt before signalling the
+distinct ACK badge. That ACK alone grants one global child publication credit,
+internal units preserve it, and exactly one `Publish*` consumes it before
+touching retained state or a shared page. Ordinary root wakes never grant
+credit. ACK is a successful child signal, so root's next lower unit is again
+ObserveChild. Empty packet/control hints are retired after their stable page
+shows no newer sequence and retain exactly one service cycle, preventing a
+local-Poll loop while preserving any later independently signalled record.
+Immediate revoke parks without publication. Graceful shutdown retains intent
+until one ACK credit publishes `ShutdownComplete`, retires root debt without a
+further ACK, parks the child, and starts bounded containment; only the complete
+teardown proof marks the adapter terminal.
+For one exact authenticated generation/connection response, V27 introduced the
+work-conserving response lane and V28 added its terminal Disconnect fence. V29
+captures synchronous HELP, NETSTATS, SMP, and CACHELOG body lines plus the exact
+ACK or ERR terminal root-locally before publication, seals that response
+immutable, and drains it through the same lane on later Network visits. A
+selected `DefaultNetStack` wrapper must delegate terminal publication, bounded
+identity, lane inspection, response-budget polling, and pending console events
+to its concrete backend; V30 repairs that wrapper boundary without changing
+the V29 lane or capture state machines. A producer unit fills only the existing
+eight-line adapter queue; a Network unit
+performs one useful ACK, egress, batch-stage, ingress, or child-service action.
+After eight such units, exactly one ordinary Operator/Runtime/Network phase is
+paid as debt before the same response may resume. Ordinary cursors, physical
+input, fatal output, timer work, and retained diagnostics are preserved.
+Terminal completion is accepted only for the exact terminal batch sequence
+after both `ControlCompleted` and `OutputDrained`; Disconnect remains ineligible
+while exact response ownership, ACK debt, copied egress, or queued output
+remains.
+
+Fixed responses fit the existing bounded root capture. CACHELOG instead copies
+at most the existing 1920-record ring into one immutable newest-first snapshot,
+after reserving capacity and while holding the cache-log lock once, then renders
+one record at a time during later response turns. Allocation failure becomes a
+typed bounded terminal error without partial publication. The fixed target
+matrix proves HELP `11 + OK`, NETSTATS `15 + OK`, first-call selected-QEMU SMP
+activity `16 + OK`, and CACHELOG `9 + OK` followed by same-socket PING and QUIT.
+The ring capacity is an implementation bound, not a separate 1920-record or
+five-second promotion gate. That exact-artifact functional gate remains
+pending.
 Steady root-control uses three exclusive outer EventPump phases in the cyclic
 order Operator/Dispatch -> Runtime/IPC -> Network -> Operator/Dispatch. The
 public EventPump entry first checks the exact isolated QEMU VirtIO selector and
@@ -638,18 +822,35 @@ ownership and ordering. Console-network quarantine does not collapse the QEMU
 cycle or combine Operator with Runtime/IPC: the Network phase observes the
 quarantine and fences NIC work while all three exclusive phase boundaries
 remain active.
-The current measured repair candidate assigns 59 image pages, 32 stack pages,
-one IPC page, one init page, and four shared pages: 97 frames total and 121
+The current measured repair candidate assigns 60 image pages, 32 stack pages,
+one IPC page, one init page, and four shared pages: 98 frames total and 123
 retained root slots. It keeps the 32-page stack at
 `0x72030000..0x72050000` and an active-SC
-`3000 us / 10000 us` budget with `2400 us` WCET and `7500 us` response bound.
-The 47-page image reduction flows through the compiler-owned fixed and maximum
+`3000 us / 10000 us` budget with honest full-budget `3000 us` WCET. V18 keeps
+QEMU core-2 placement and derives a `3000 us` response, while Pi retains core 0
+and derives `8100 us`. Same-priority QEMU GPU/LoRA responses are `3600 us`;
+QEMU core-2 demand remains `3800/9000 us`, and Pi core-0 demand remains
+`9000/9000 us`.
+V14's first exact build stopped before root linking because child ELF SHA-256
+`e16fc715975d4d73959c6536d9c4246058857040339c3c05a68721223a2d3f16`
+was 73,568 bytes with page-rounded PT_LOAD span `0x200000..0x23c000` and final
+LOAD end `0x23b540`, while generated truth admitted 59 image pages. V15
+reconciles that first failed proof layer without treating the build as target
+evidence. The common Pi manifest admits the same source footprint, but its
+exact non-evidence ELF span remains a later Pi build-time identity check and no
+QEMU image observation transfers to Pi.
+The 46-page image reduction flows through the compiler-owned fixed and maximum
 profile inventories without changing any reserve or per-Worker budget:
 
 | Profile | Fixed frames | Fixed CSpace slots | Maximum frames | Maximum CSpace slots |
 | --- | ---: | ---: | ---: | ---: |
-| QEMU SMP production | 2,017 | 4,056 | 2,065 | 4,248 |
-| Pi 4 U-Boot production | 4,065 | 8,960 | 4,113 | 9,152 |
+| QEMU SMP production | 2,018 | 4,058 | 2,066 | 4,250 |
+| Pi 4 U-Boot production | 4,066 | 8,962 | 4,114 | 9,154 |
+
+With the unchanged post-construction reserve, maximum admitted frame/slot
+totals are `2578/6298` for QEMU and `4626/11202` for Pi. Untyped totals remain
+`67,108,864/70,254,592/103,809,024` bytes for QEMU fixed/maximum/admitted and
+`100,663,296/103,809,024/137,363,456` bytes for Pi.
 
 Those values remain candidate source/configuration truth until live four-core
 GICv3 QEMU completes console authentication, canonical `.coh` regression, and
@@ -813,11 +1014,13 @@ child remained healthy at `seL4_Wait`. Root-fault then timed out with badge
 evidence for v13 root-control and v2 root-fault, not child v5 qualification or
 failure.
 
-The `m26e-qemu-root-exclusive-predispatch-candidate-v23` root-control,
+The `m26e-qemu-root-disconnect-single-issue-candidate-v26` root-control,
 `m26e-qemu-root-fault-service-units-candidate-v6` root-fault, and
-`m26e-qemu-console-bounded-stack-steps-candidate-v6` child candidates keep
-every numeric budget, WCET, response bound, core-0 reserve result, capability,
-ABI, Recovery step, recurring outer yield, and outer phase boundary. The v10
+`m26e-qemu-console-peer-close-timewait-relisten-candidate-v13` child candidates keep every
+capability, external ABI layout, Recovery step, recurring outer yield, and
+outer phase boundary. V26 retains the complete V25 QEMU temporal envelope and
+placement stated below and changes only the root's successful Disconnect
+transaction to per-connection single-issue. The v10
 one-time post-activation yield and v11 persistent Runtime cursor remain. On the
 isolated QEMU VirtIO path, the retained v12 cut snapshots serviceable Operator work after its
 first bounded serial/local-seat/line-dispatch pass and returns before the
@@ -873,6 +1076,29 @@ single all-unit closure. A successful child signal may still force
 ObserveChild. Network retains but does not drain connection lifecycle events;
 the immediately following Operator admits at most one such event before any
 buffered command. Pi/non-VirtIO Runtime and Network behavior are unchanged.
+V24 preserves those V23 phase and cursor boundaries but makes the existing
+post-observation publication ACK a distinct QEMU Network unit. Once
+ObserveChild has validated and copied the indicated records and the adapter has
+durably retained them, it records ACK debt and returns. The next Network visit
+selects `AcknowledgePublication` ahead of diagnostics, egress, and lower work;
+that unit alone clears the debt before Release+Signal, and a successful signal
+forces the following lower unit to ObserveChild. Pi retains V23 root-control
+provenance, while every timing, child-V11, ABI, schema, capability, and reserve
+value remains unchanged.
+The exact V24 read-only snapshot then bound root-control timeout badge
+`0x26ee0001` to FaultIP `0x5361c` in `KernelSerialDriver::read_byte` with LR
+`0x5391c` in `SerialPort::poll_rx_current_tcb`; the outer successor was Runtime
+and the Operator successor SerialDispatch. The child was healthy at Wait
+`0x21360c`, root-fault was receiving, and emergency alone was fail-stop. V25
+therefore changes no product path: root-control stays on core 0 with
+budget/WCET/response `5500/5000/7600 us`; only the QEMU console child moves to
+core 2 and derives response `2400 us`, while core-2 GPU/LoRA responses become
+`3000 us`. Core-0/core-2 demand is `8750/3800 us`; Pi root-control remains
+V23, while the exact V25 artifact's child remained V11 under schema 1.12. V25
+is conservative and pending rather than proven numerically minimal. The
+V26-era child V13 retained V12's peer-close transition and changed only the completed
+active-close lifecycle and provenance; all V25 timing, placement, response,
+admission, ABI, and capability values remain.
 V6 retains `ChildTurnUnit::PollService` but replaces the unbounded composite
 interface poll with the private
 `ServicePollUnit::StackIngress -> ServicePollUnit::StackEgress ->
@@ -880,6 +1106,57 @@ ServicePollUnit::Session` cursor. Each invocation commits its successor before
 work and is separated from that successor by the existing child
 Yield-then-Wait boundary. Successful `StackIngress` and `StackEgress` return
 `ServicePollOutcome::Continuation`; `Session` alone returns `Complete`.
+V7 retains that cursor and changes only Session's TCP-send admission predicate:
+the socket must report both `can_send()` and sufficient send capacity before
+the child calls `send_slice`. A closing socket such as `FinWait2` may still
+report capacity even though its transmit half is no longer writable. In that
+state the child retains the complete queued output without committing bytes or
+publishing `OutputDrained`; peer close can still advance the socket to
+`Closed`, after which the existing `end` path publishes one `Disconnected`,
+clears the now-undeliverable connection output, and relistens. Other Session
+errors remain terminal and the one-unit-per-refill boundary is unchanged.
+V12 closes the separate peer-initiated lifecycle gap. When peer FIN produces
+`CloseWait`, Session sets the existing idempotent graceful-disconnect intent,
+retains exact-generation output until `close_ready`, and reuses the existing
+`Closed`/`end`/`listen` path to publish exactly one `Disconnected`, clear the
+ended generation, and restore LISTEN. M26b Complete `72288c7d` had explicitly
+entered its disconnect path on `CloseWait`; the isolated child had omitted that
+transition. No unit, cursor, wake, retry, timeout, ABI, schema, capability,
+timing, placement, grammar, or authority changes.
+The subsequent immutable V12 evidence set
+`out/m26e-qemu/peer-close-v12-20260813T133000Z`, with source digest
+`sha256:c047b0886ba42ba1dfe0004009a8e9377d4d2cbd98e997e8dfd463e4bc80eaa0`,
+passed raw session-1 AUTH, host close, and same-boot raw session-2 AUTH. A third
+`cohsh` session then passed AUTH, ATTACH, four-line TAIL, END, and QUIT. After
+that server-active close, replacement authentication timed out at `+5 s` and
+again on a raw attempt at `+30 s`; UART recorded no fault. The read-only GDB
+snapshot in
+`out/m26e-qemu/peer-close-v12-20260813T133000Z/attached-teardown-gdb-20260813T134100Z`
+found every CPU kernel-idle. Source and smoltcp 0.13.1 state-machine analysis
+then localized the live socket to `TimeWait`: its fixed `10 s` close delay is
+re-armed by each replacement SYN while the sole socket is unavailable. M26b
+Complete `72288c7d` already treated `TimeWait` as a terminal listener boundary.
+V13 restores that boundary only: Session first ends the old generation and
+publishes its one `Disconnected`, then aborts the completed TCP control block
+and immediately relistens. The existing `Closed` path is unchanged. This adds
+no ABI/READY identity, schema, timing, placement, grammar, retry, timeout,
+capability, cursor, wake, or authority change.
+The immutable V13 target failure
+`out/m26e-qemu/peer-close-timewait-v13-20260813T140319Z/same-boot-two-complete-sessions-20260813T141000Z`
+completed session A through AUTH, ATTACH, four-line TAIL, END, and QUIT, then
+session B connected twice but each authentication wrote 18 bytes and read zero.
+QEMU remained alive and UART recorded no runtime fault. The exact child ELF
+contained the V13 transition, but root kept the successful Disconnect request
+eligible after `ControlCompleted` and `OutputDrained`. Every reissued control
+signalled the child and reset the lower cursor to ObserveChild before Ingress or
+ServiceTick, so the peer ACK/FIN never reached V13's `TimeWait` branch. V26 adds
+one root-owned per-connection issued latch. Backpressure leaves it clear; a
+successful publication sets it while preserving the requested Quit reason, and
+connection/generation terminal paths clear it. Completion and drain do not
+reopen the transaction, so the unchanged lower cursor advances through Ingress
+and ServiceTick. At that V26 chronology point, Pi remained on root V23 and the
+common child remained V13; no ABI, schema, numeric, resource, timeout, declared
+retry, grammar, placement, or capability changed.
 The same V22 snapshot found secondary root-fault timeout badge `0x26ee0002` at
 FaultIP/NextIP `0x113e70`, immediately after the Receive turn's terminal Yield
 SVC at `0x113e6c`. LR `0x113e5c` was the return after publishing initiating
@@ -890,9 +1167,38 @@ yields before any endpoint receive, copied fault value, or Reply association.
 A fault arriving meanwhile remains queued on the already constructed shared
 endpoint until the replenished Receive blocks or accepts it. Released, driver,
 and SignalEmergency paths continue to commit Receive directly and retain every
-v4 recurring lane. The v23/root-fault-V6/child-V6 candidates remain pending fresh canonical
-QEMU proof.
-Schema 1.11 adds `virtio_operator_serial_io_bytes_per_turn`: QEMU root-control
+v4 recurring lane. The exact V8 artifact
+`out/cohesix-v8-stale-control-hvf-qemu10-20260813T090943Z` later reached
+`root-console.start.ok` without a target fault, but two sequential connections
+each wrote 18 AUTH bytes and received zero before timeout. That run exposed the
+separate unconditional-Wait liveness defect: retained local successors depended
+on an unrelated later root signal. V9 preserved V8's generation fence and
+tried a guarded local-Poll/publication fence. Its exact HVF artifact
+`out/cohesix-v9-retained-work-hvf-qemu10-20260813T095338Z` still wrote the
+complete 18-byte AUTH request and read zero before the child later failed; a
+root prompt was not causal proof that the prior one-slot publication had been
+accepted. V11 replaces that inference with the explicit Observe-to-ACK
+protocol above. The immutable V25/V11 artifact
+`out/m26e-qemu/temporal-v25-20260813T125130Z/artifact` completed its first raw
+AUTH but reset replacement connections at `+1 s` and `+10 s`. A live read-only
+snapshot, whose transcript was not retained, showed `NullFault`, fully
+replenished root-control budget `5500 us`, and a healthy child in core-2 Wait.
+That is lifecycle failure evidence, not V13 qualification. The later immutable
+V26 artifact completed both direct sessions on one boot, qualifying only the
+Disconnect/relisten transition. The V27 image failed after its bounded
+TAIL/CAT/QUIT path at `response-completion-sequence`. The retained V28 artifact
+then completed its narrow bounded response and two-session fence gate. The
+selected V29 artifact
+`out/m26e-qemu/bounded-sync-response-v29-v15-20260813T190157Z/artifact`
+completed AUTH and ATTACH, then HELP returned zero bytes before the unchanged
+30-second timeout. Clean root/child snapshots and breakpoint/live-vtable proof
+localized the defect to `DefaultNetStack` returning its default bounded
+identity instead of delegating the isolated hooks. The later V30/V15
+terminal-timeout and local-Poll diagnostics are recorded in section 1.1.
+Selected V35/root-fault-V6/child-V18 remains pending fresh exact-image fixed
+response, standard-fault containment, and budget-exhaustion/postponement proof.
+Schema 1.14 retains the 1.11 `virtio_operator_serial_io_bytes_per_turn` field:
+QEMU root-control
 selects `64`, every non-root task selects zero, and Pi/non-VirtIO root-control
 selects zero. The isolated VirtIO Operator creates that one shared credit at
 turn entry; every root-context serial poll and flush debits the same credit for
@@ -906,7 +1212,10 @@ Operator. Pi and non-VirtIO turns retain their existing two-record attempt
 limit. The persistent lower Network cursor remains the v7 repair. The physical
 serial driver contract remains `max_bytes=1024`; linked-runtime and Pi outer
 Runtime behavior are unchanged apart from Pi's one-time startup-period
-activation wait, while active-MCS child Yield-then-Wait semantics are universal.
+activation wait. The active-MCS child rechecks badges and publication credit
+between retained units, uses local Poll only while eligible, and takes
+Wait directly when idle or uncredited, with no ordinary Yield; natural postponement supplies the
+budget boundary.
 The exact v15 image (root ELF
 `6c145a1d81bd57e791781a052f62dfc6dd5d34c7c7ca0aa4e3311a9b5696018c`, CPIO
 `07b84ff5dc2a40e2b9039d49b1e37bb88824909fe2fd902c9dd0165b4a643529`,

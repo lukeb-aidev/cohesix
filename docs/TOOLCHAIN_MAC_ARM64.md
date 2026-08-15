@@ -276,9 +276,15 @@ when it agrees with that generated configuration. In seL4 16,
 `KernelArmGicV3=ON` or `QEMU_MACHINE=...,gic-version=3` alone is insufficient.
 The profile contract validates the source selector, its derived kernel option,
 the generated header consumed by the Cohesix launchers, each DTS, and parsed FDT
-semantics from both actual QEMU DTBs as one invariant. Each DTB must independently
-contain the selected GIC and PSCI `method=smc`; existence or a detached DTS is
-not sufficient. Pi 4 builds require the generated virtual-counter
+semantics from both actual QEMU DTBs as one invariant. Each QEMU DTB must
+independently contain GICv3 and PSCI `method=hvc` for the non-hypervisor HVF
+machine; existence or a detached DTS is not sufficient. The wrapper replaces
+only the upstream QEMU AArch64 PSCI SMP driver so an HVC-selected DTB invokes
+HVC `CPU_ON`, while SMC-selected platforms retain the upstream SMC conduit. The profile also binds
+`cortex-a57`, `virtualization=off`, scalar `-mgeneral-regs-only` elfloader/libcpio
+code, and `TIMER_CLOCK_HZ=24000000`, matching `hw.tbfrequency` on the supported
+Apple-Silicon host. A 62.5 MHz or SMC QEMU tree is a TCG comparator, not a
+runtime-eligible production input. Pi 4 builds require the generated virtual-counter
 export and `TIMER_CLOCK_HZ=54000000`; target timeout logic must not substitute
 CPU-speed loops or physical-counter access.
 

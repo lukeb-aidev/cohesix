@@ -10,11 +10,10 @@
 use anyhow::{Context, Result};
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use cas_tool::{
-    build_bundle, bundle_paths, load_delta_base, load_signing_key, load_template_config,
+    build_bundle, load_delta_base, load_signing_key, load_template_config, load_upload_manifest,
     write_bundle,
 };
 use clap::{Parser, Subcommand};
-use cohesix_cas::CasManifest;
 use cohesix_rest::GatewayClient;
 use cohesix_ticket::Role;
 use cohsh::{TcpTransport, Transport};
@@ -58,7 +57,7 @@ struct PackArgs {
     /// CAS manifest template JSON (defaults to configs/generated/cas_manifest_template.json).
     #[arg(long, default_value = "configs/generated/cas_manifest_template.json")]
     template: PathBuf,
-    /// Override chunk_bytes from the template.
+    /// Confirm chunk_bytes from the selected template; differing values are rejected.
     #[arg(long)]
     chunk_bytes: Option<usize>,
     /// Optional base bundle directory for delta manifests.
@@ -105,10 +104,16 @@ fn main() -> Result<()> {
 fn pack_bundle(args: PackArgs) -> Result<()> {
     let payload =
         fs::read(&args.input).with_context(|| format!("read payload {}", args.input.display()))?;
-    let mut template = load_template_config(&args.template)
+    let template = load_template_config(&args.template)
         .with_context(|| format!("load cas template {}", args.template.display()))?;
     if let Some(chunk_bytes) = args.chunk_bytes {
-        template.chunk_bytes = chunk_bytes;
+        if chunk_bytes != template.chunk_bytes {
+            anyhow::bail!(
+                "--chunk-bytes {} does not match selected template chunk_bytes {}",
+                chunk_bytes,
+                template.chunk_bytes
+            );
+        }
     }
     let delta_base = if let Some(base_dir) = args.delta_base.as_ref() {
         Some(load_delta_base(base_dir)?)
@@ -136,11 +141,7 @@ fn pack_bundle(args: PackArgs) -> Result<()> {
 }
 
 fn upload_bundle(args: UploadArgs) -> Result<()> {
-    let (manifest_path, chunks_dir) = bundle_paths(&args.bundle)?;
-    let manifest_bytes = fs::read(&manifest_path)
-        .with_context(|| format!("read manifest {}", manifest_path.display()))?;
-    let manifest = CasManifest::decode(&manifest_bytes)
-        .map_err(|err| anyhow::anyhow!("decode manifest {}: {err}", manifest_path.display()))?;
+    let (manifest, manifest_bytes, chunks_dir) = load_upload_manifest(&args.bundle)?;
     let chunk_bytes = manifest.chunk_bytes as usize;
 
     let mut chunks = Vec::new();

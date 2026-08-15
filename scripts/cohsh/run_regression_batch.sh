@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Author: Lukas Bower
-# Purpose: Run the cohsh .coh regression pack against QEMU or a live Pi 4 TCP console.
+# Purpose: Run the cohsh target pack with bounded QEMU proofs and exact generated-output restoration.
 # Copyright 2026 Lukas Bower
 
 # Note: select a target with COHSH_BATCH_TARGET=qemu|pi4; qemu is the default.
-# Note: override auth/timeouts via env vars, e.g. COHSH_AUTH_TOKEN=... READY_TIMEOUT=300 PORT_TIMEOUT=60 QUIT_CLOSE_TIMEOUT=60 scripts/cohsh/run_regression_batch.sh
+# Note: override auth/readiness bounds via env vars, e.g. COHSH_AUTH_TOKEN=... READY_TIMEOUT=300 PORT_TIMEOUT=60 scripts/cohsh/run_regression_batch.sh
 # Note: live Pi runs use COHSH_BATCH_TARGET=pi4 COHSH_TCP_HOST=<pi-ip> COHSH_TCP_PORT=31337.
 # Note: archive root defaults to out/regression-logs; override via COHSH_LOG_ROOT=/path/to/logs.
 # Note: set COHSH_BATCH_CLEAN_TARGET=1 for a forced clean rebuild before batch execution.
@@ -59,6 +59,7 @@
 set -euo pipefail
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+GENERATED_OUTPUT_LOCK_FILE="${PROJECT_ROOT}/out/.cohesix-locks/generated-outputs.lock"
 # shellcheck source=scripts/ci/test_plan_resources.sh
 source "${PROJECT_ROOT}/scripts/ci/test_plan_resources.sh"
 tp_configure_resource_limits
@@ -66,6 +67,9 @@ GENERATED_CONFIG_DIR="$PROJECT_ROOT/configs/generated"
 QEMU_ARTIFACT_HELPER="$PROJECT_ROOT/scripts/ci/qemu_artifact.py"
 TEST_PLAN_CATALOG="$PROJECT_ROOT/scripts/ci/test_plan_catalog.py"
 BUILD_RUN_BIN="${COHESIX_BUILD_RUN_BIN:-$PROJECT_ROOT/scripts/cohesix-build-run.sh}"
+QEMU_BIN="${QEMU_BIN:-qemu-system-aarch64}"
+QEMU_RESPONSE_MATRIX_SCRIPT="$PROJECT_ROOT/scripts/qemu_tcp_response_matrix.py"
+QEMU_RESPONSE_MATRIX_FIXED_LABEL="qemu_tcp_response_matrix.fixed"
 cd "$PROJECT_ROOT"
 
 canonical_path() {
@@ -83,12 +87,13 @@ validate_output_roots() {
         "$ARCHIVE_ROOT" \
         "$QEMU_ARTIFACT_ROOT" \
         "$TRANSPORT_RESULT_ROOT" \
-        "$TRANSPORT_EVIDENCE_ROOT" <<'PY'
+        "$TRANSPORT_EVIDENCE_ROOT" \
+        "$GENERATED_OUTPUT_LOCK_FILE" <<'PY'
 from pathlib import Path
 import tempfile
 import sys
 
-repo, archive, artifact, result, evidence = (
+repo, archive, artifact, result, evidence, generated_lock = (
     Path(value).resolve() for value in sys.argv[1:]
 )
 repo_out = (repo / "out").resolve()
@@ -131,6 +136,10 @@ for label, path in (
 ):
     if not within(path, evidence):
         raise SystemExit(f"{label} root escapes transport evidence root: {path}")
+    if within(generated_lock, path):
+        raise SystemExit(
+            f"{label} root contains the generated-output lock: {path}"
+        )
 PY
 }
 
@@ -138,12 +147,11 @@ BASE_SCRIPTS=(
     "boot_v0.coh"
     "9p_batch.coh"
     "host_absent.coh"
-    "host_sidecar_mock.coh"
     "observe_watch.coh"
     "root_cut_basic.coh"
     "session_lifecycle.coh"
     "busy_backpressure.coh"
-    "cas_roundtrip.coh"
+    "cas_fixture_signature_rejected.coh"
     "tcp_basic.coh"
     "session_pool.coh"
 )
@@ -153,10 +161,14 @@ BASE_TELEMETRY_SCRIPTS=(
     "telemetry_push_create.coh"
 )
 
+# The two-worker shard regression occupies the distinct heartbeat and LoRA
+# executable-role slots; the selected topology admits one live slot per role.
 BASE_SHARD_SCRIPTS=(
     "shard_1k.coh"
 )
 
+# Policy/audit coverage uses only session-local Queen controls. These scripts
+# must not depend on a host provider having populated /host.
 GATED_SCRIPTS=(
     "replay_journal.coh"
     "policy_gate.coh"
@@ -164,12 +176,17 @@ GATED_SCRIPTS=(
     "sidecar_integration.coh"
 )
 
+# These scripts consume repository-only fixture trust material and therefore
+# run only against the QEMU gated manifest, never an operational base or Pi.
+QEMU_GATED_FIXTURE_SCRIPTS=(
+    "cas_roundtrip.coh"
+)
+
 BASE_MANIFEST="${PROJECT_ROOT}/configs/root_task.toml"
 GATED_MANIFEST="${PROJECT_ROOT}/configs/root_task_regression.toml"
-READY_MARKER="Cohesix console ready"
+READY_MARKER="[mark] root-console.start.ok"
 READY_TIMEOUT="${READY_TIMEOUT:-180}"
 PORT_TIMEOUT="${PORT_TIMEOUT:-30}"
-QUIT_CLOSE_TIMEOUT="${QUIT_CLOSE_TIMEOUT:-30}"
 AUTH_READY_TIMEOUT="${AUTH_READY_TIMEOUT:-60}"
 SEL4_BUILD_DIR="${SEL4_BUILD_DIR:-${SEL4_BUILD:-${PROJECT_ROOT}/out/sel4/profile-v2/qemu-smp-production}}"
 BATCH_TARGET="${COHSH_BATCH_TARGET:-qemu}"
@@ -278,6 +295,11 @@ GENERATED_OUTPUT_PATHS=(
     "apps/root-task/src/generated"
     "configs/generated/root_task_resolved.json"
     "configs/generated/root_task_resolved.json.sha256"
+    "configs/generated/root_task_topology.json"
+    "configs/generated/cohesix_python_qemu_smp_production.json"
+    "configs/generated/cohesix_python_pi4_production.json"
+    "configs/generated/implementation_surface_inventory.json"
+    "configs/generated/host_integration_dependency.json"
     "configs/generated/cas_manifest_template.json"
     "configs/generated/cas_manifest_template.json.sha256"
     "scripts/cohsh/boot_v0.coh"
@@ -293,6 +315,7 @@ GENERATED_OUTPUT_PATHS=(
     "tools/cohesix-py/cohesix/generated.py"
     "docs/snippets/cohesix_py_defaults.md"
     "docs/snippets/coh_doctor_checks.md"
+    "docs/snippets/host_integration_dependency.md"
     "apps/cohsh/src/generated/policy.rs"
     "docs/snippets/cohsh_policy.md"
     "apps/cohsh/src/generated/client.rs"
@@ -311,45 +334,394 @@ GENERATED_OUTPUT_PATHS=(
     "configs/generated/swarmui_defaults.toml.sha256"
 )
 generated_snapshot_dir=""
+generated_snapshot_parent=""
 generated_snapshot_ready=0
+generated_output_lock_held=0
+# Bash 3.2 treats an expanded declared-but-empty array as unset under nounset.
+# Keep an inert sentinel so recovery cleanup remains portable to the macOS Bash.
+generated_preserved_restore_work_dirs=("")
 
-clear_generated_path() {
-    local relative="$1"
-    local absolute="${PROJECT_ROOT}/${relative}"
-    case "$absolute" in
-        "${PROJECT_ROOT}/"*)
+acquire_generated_output_lock() {
+    if [[ "$generated_output_lock_held" == "1" ]]; then
+        return 0
+    fi
+    local lock_parent
+    lock_parent="$(dirname "$GENERATED_OUTPUT_LOCK_FILE")"
+    mkdir -p "$lock_parent"
+    if ! exec 9<>"$GENERATED_OUTPUT_LOCK_FILE"; then
+        echo "Failed to open generated-output lock: $GENERATED_OUTPUT_LOCK_FILE" >&2
+        return 1
+    fi
+    if ! python3 - 9 "${COHSH_GENERATED_LOCK_TIMEOUT:-900}" "$$" <<'PY'
+import errno
+import fcntl
+import math
+import os
+import sys
+import time
+
+descriptor = int(sys.argv[1])
+try:
+    timeout = float(sys.argv[2])
+except ValueError:
+    raise SystemExit("COHSH_GENERATED_LOCK_TIMEOUT must be a number")
+if not math.isfinite(timeout) or timeout < 0:
+    raise SystemExit("COHSH_GENERATED_LOCK_TIMEOUT must be finite and non-negative")
+
+deadline = time.monotonic() + timeout
+while True:
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        break
+    except OSError as error:
+        if error.errno not in (errno.EACCES, errno.EAGAIN):
+            raise
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            os.lseek(descriptor, 0, os.SEEK_SET)
+            owner = os.read(descriptor, 4096).decode("utf-8", errors="replace").strip()
+            detail = owner or "owner metadata unavailable"
+            raise SystemExit(f"generated-output lock is busy: {detail}")
+        time.sleep(min(0.05, remaining))
+
+owner = f"pid={sys.argv[3]}\n"
+os.ftruncate(descriptor, 0)
+os.lseek(descriptor, 0, os.SEEK_SET)
+os.write(descriptor, owner.encode("utf-8"))
+os.fsync(descriptor)
+PY
+    then
+        exec 9>&-
+        return 1
+    fi
+    # The Python child and this shell share one inherited open-file
+    # description, so the kernel lock remains live until descriptor 9 closes.
+    # A killed owner cannot leave a stale lock; any old text is diagnostic only.
+    generated_output_lock_held=1
+}
+
+release_generated_output_lock() {
+    if [[ "$generated_output_lock_held" != "1" ]]; then
+        return 0
+    fi
+    # Mark inactive first so an EXIT re-entry cannot close a subsequently
+    # acquired descriptor. Closing the descriptor releases the kernel lock.
+    generated_output_lock_held=0
+    exec 9>&-
+}
+
+discard_generated_snapshot_dir() {
+    local snapshot_dir="$1"
+    local snapshot_parent="$2"
+    case "$snapshot_dir" in
+        "${snapshot_parent}/cohesix-generated."*)
             ;;
         *)
-            echo "Refusing to clear generated path outside repository: $absolute" >&2
+            echo "Refusing to discard generated snapshot directory: $snapshot_dir" >&2
             return 1
             ;;
     esac
-    if [[ -d "$absolute" && ! -L "$absolute" ]]; then
-        find "$absolute" -mindepth 1 -delete
-        rmdir "$absolute"
-    else
-        rm -f "$absolute"
+    if [[ "$(dirname "$snapshot_dir")" != "$snapshot_parent" \
+        || ! -d "$snapshot_dir" \
+        || -L "$snapshot_dir" ]]; then
+        echo "Invalid generated snapshot directory: $snapshot_dir" >&2
+        return 1
     fi
+    find "$snapshot_dir" -mindepth 1 -delete
+    rmdir "$snapshot_dir"
+}
+
+validate_generated_snapshot_metadata() {
+    local snapshot_dir="$1"
+    local snapshot_parent="$2"
+    if [[ -z "$snapshot_dir" \
+        || -z "$snapshot_parent" \
+        || "$(dirname "$snapshot_dir")" != "$snapshot_parent" \
+        || ! -d "$snapshot_dir" \
+        || -L "$snapshot_dir" ]]; then
+        echo "Generated snapshot directory metadata is invalid: $snapshot_dir" >&2
+        return 1
+    fi
+    python3 - "$snapshot_dir" "${GENERATED_OUTPUT_PATHS[@]}" <<'PY'
+from pathlib import Path, PurePosixPath
+import os
+import sys
+
+snapshot = Path(sys.argv[1])
+expected = sys.argv[2:]
+
+
+def fail(message: str) -> None:
+    raise SystemExit(f"invalid generated snapshot metadata: {message}")
+
+
+if not expected or len(expected) != len(set(expected)):
+    fail("generated-output inventory is empty or duplicated")
+for value in expected:
+    path = PurePosixPath(value)
+    if path.is_absolute() or not path.parts or any(
+        part in {"", ".", ".."} for part in path.parts
+    ):
+        fail(f"unsafe generated-output path {value!r}")
+
+allowed_root_entries = {"complete", "files", "missing", "present"}
+actual_root_entries = {path.name for path in snapshot.iterdir()}
+if not actual_root_entries.issubset(allowed_root_entries):
+    fail("snapshot contains unexpected root entries")
+
+metadata: dict[str, list[str]] = {}
+for name in ("present", "missing"):
+    path = snapshot / name
+    if not path.is_file() or path.is_symlink():
+        fail(f"{name} is not a regular metadata file")
+    try:
+        values = path.read_text(encoding="utf-8").splitlines()
+    except UnicodeError as error:
+        fail(f"{name} is not UTF-8: {error}")
+    if any(not value for value in values) or len(values) != len(set(values)):
+        fail(f"{name} contains an empty or duplicate entry")
+    metadata[name] = values
+
+complete = snapshot / "complete"
+if not complete.is_file() or complete.is_symlink():
+    fail("complete marker is missing or not regular")
+expected_marker = f"cohesix-generated-snapshot-v1 count={len(expected)}\n"
+if complete.read_text(encoding="utf-8") != expected_marker:
+    fail("complete marker does not bind the inventory size")
+
+present = metadata["present"]
+missing = metadata["missing"]
+if set(present).intersection(missing):
+    fail("present and missing inventories overlap")
+if set(present).union(missing) != set(expected):
+    fail("present and missing inventories do not exactly partition outputs")
+positions = {value: index for index, value in enumerate(expected)}
+if present != sorted(present, key=positions.__getitem__):
+    fail("present inventory is out of canonical order")
+if missing != sorted(missing, key=positions.__getitem__):
+    fail("missing inventory is out of canonical order")
+
+files_root = snapshot / "files"
+if present and (not files_root.is_dir() or files_root.is_symlink()):
+    fail("files tree is missing or not a directory")
+for value in present:
+    if not os.path.lexists(files_root / value):
+        fail(f"present snapshot payload is missing: {value}")
+for value in missing:
+    if os.path.lexists(files_root / value):
+        fail(f"missing output has a snapshot payload: {value}")
+
+allowed_paths = [PurePosixPath(value) for value in present]
+if files_root.is_symlink() or (files_root.exists() and not files_root.is_dir()):
+    fail("files tree has an invalid type")
+if files_root.exists():
+    for current, directories, filenames in os.walk(files_root, followlinks=False):
+        current_path = Path(current)
+        for name in [*directories, *filenames]:
+            relative = PurePosixPath(
+                (current_path / name).relative_to(files_root).as_posix()
+            )
+            if not any(
+                relative == allowed
+                or relative in allowed.parents
+                or allowed in relative.parents
+                for allowed in allowed_paths
+            ):
+                fail(f"unbound snapshot payload: {relative}")
+PY
+}
+
+discard_generated_restore_work_dir() {
+    local work_dir="$1"
+    case "$work_dir" in
+        "${PROJECT_ROOT}/"*/.cohesix-restore.*)
+            ;;
+        *)
+            echo "Refusing to discard generated restore work directory: $work_dir" >&2
+            return 1
+            ;;
+    esac
+    if [[ ! -e "$work_dir" && ! -L "$work_dir" ]]; then
+        return 0
+    fi
+    if [[ -d "$work_dir" && ! -L "$work_dir" ]]; then
+        find "$work_dir" -mindepth 1 -delete
+        rmdir "$work_dir"
+    else
+        echo "Invalid generated restore work directory: $work_dir" >&2
+        return 1
+    fi
+}
+
+discard_preserved_generated_restore_work_dirs() {
+    local work_dir
+    for work_dir in "${generated_preserved_restore_work_dirs[@]}"; do
+        if [[ -z "$work_dir" ]]; then
+            continue
+        fi
+        discard_generated_restore_work_dir "$work_dir" || return 1
+    done
+    generated_preserved_restore_work_dirs=("")
+}
+
+restore_present_generated_path() {
+    local relative="$1"
+    local source="${generated_snapshot_dir}/files/${relative}"
+    local target="${PROJECT_ROOT}/${relative}"
+    local target_parent
+    local target_name
+    local work_dir
+    local replacement
+    local previous
+    target_parent="$(dirname "$target")"
+    target_name="$(basename "$target")"
+    mkdir -p "$target_parent"
+    work_dir="$(mktemp -d "${target_parent}/.cohesix-restore.${target_name}.XXXXXX")"
+    replacement="${work_dir}/replacement"
+    previous="${work_dir}/previous"
+
+    # Materialize and verify the complete replacement before moving the live
+    # path. A failed or interrupted copy therefore cannot clear a generated
+    # directory such as apps/root-task/src/generated.
+    if ! cp -pR "$source" "$replacement"; then
+        discard_generated_restore_work_dir "$work_dir" || true
+        return 1
+    fi
+    if ! diff -qr "$source" "$replacement" >/dev/null; then
+        echo "Failed to stage generated output exactly: ${relative}" >&2
+        discard_generated_restore_work_dir "$work_dir" || true
+        return 1
+    fi
+
+    if [[ -e "$target" || -L "$target" ]]; then
+        if ! mv "$target" "$previous"; then
+            discard_generated_restore_work_dir "$work_dir" || true
+            return 1
+        fi
+    fi
+    if ! mv "$replacement" "$target"; then
+        if [[ -e "$previous" || -L "$previous" ]]; then
+            if ! mv "$previous" "$target"; then
+                generated_preserved_restore_work_dirs+=("$work_dir")
+                echo \
+                    "Failed to roll back generated output; previous retained at ${previous}: ${relative}" \
+                    >&2
+                return 1
+            fi
+        fi
+        discard_generated_restore_work_dir "$work_dir" || true
+        return 1
+    fi
+
+    discard_generated_restore_work_dir "$work_dir"
+}
+
+restore_missing_generated_path() {
+    local relative="$1"
+    local target="${PROJECT_ROOT}/${relative}"
+    local target_parent
+    local target_name
+    local work_dir
+    local previous
+    if [[ ! -e "$target" && ! -L "$target" ]]; then
+        return 0
+    fi
+    target_parent="$(dirname "$target")"
+    target_name="$(basename "$target")"
+    work_dir="$(mktemp -d "${target_parent}/.cohesix-restore.${target_name}.XXXXXX")"
+    previous="${work_dir}/previous"
+
+    # Moving a path that was absent at snapshot time reaches the desired
+    # repository state before recursive cleanup begins.
+    if ! mv "$target" "$previous"; then
+        discard_generated_restore_work_dir "$work_dir" || true
+        return 1
+    fi
+    discard_generated_restore_work_dir "$work_dir"
 }
 
 snapshot_generated_outputs() {
     if [[ "$generated_snapshot_ready" == "1" ]]; then
+        if [[ "$generated_output_lock_held" != "1" ]]; then
+            echo "Generated snapshot is active without its exclusion lock" >&2
+            return 1
+        fi
         return 0
     fi
-    generated_snapshot_dir="$(mktemp -d "${TMPDIR:-/tmp}/cohesix-generated.XXXXXX")"
-    : >"${generated_snapshot_dir}/present"
-    : >"${generated_snapshot_dir}/missing"
+    acquire_generated_output_lock || return 1
+    local requested_parent="${TMPDIR:-/tmp}"
+    if ! mkdir -p "$requested_parent"; then
+        release_generated_output_lock || true
+        return 1
+    fi
+    if ! generated_snapshot_parent="$(cd "$requested_parent" && pwd -P)"; then
+        generated_snapshot_parent=""
+        release_generated_output_lock || true
+        return 1
+    fi
+    if ! generated_snapshot_dir="$(
+        mktemp -d "${generated_snapshot_parent}/cohesix-generated.XXXXXX"
+    )"; then
+        generated_snapshot_parent=""
+        release_generated_output_lock || true
+        return 1
+    fi
+    if ! : >"${generated_snapshot_dir}/present" \
+        || ! : >"${generated_snapshot_dir}/missing"; then
+        local failed_dir="$generated_snapshot_dir"
+        local failed_parent="$generated_snapshot_parent"
+        generated_snapshot_dir=""
+        generated_snapshot_parent=""
+        discard_generated_snapshot_dir "$failed_dir" "$failed_parent" || true
+        release_generated_output_lock || true
+        return 1
+    fi
     local relative
     for relative in "${GENERATED_OUTPUT_PATHS[@]}"; do
         local source="${PROJECT_ROOT}/${relative}"
         if [[ -e "$source" || -L "$source" ]]; then
-            mkdir -p "${generated_snapshot_dir}/files/$(dirname "$relative")"
-            cp -pR "$source" "${generated_snapshot_dir}/files/${relative}"
-            printf '%s\n' "$relative" >>"${generated_snapshot_dir}/present"
+            if ! mkdir -p \
+                "${generated_snapshot_dir}/files/$(dirname "$relative")" \
+                || ! cp -pR \
+                    "$source" \
+                    "${generated_snapshot_dir}/files/${relative}" \
+                || ! printf '%s\n' \
+                    "$relative" >>"${generated_snapshot_dir}/present"; then
+                local failed_dir="$generated_snapshot_dir"
+                local failed_parent="$generated_snapshot_parent"
+                generated_snapshot_dir=""
+                generated_snapshot_parent=""
+                discard_generated_snapshot_dir \
+                    "$failed_dir" "$failed_parent" || true
+                release_generated_output_lock || true
+                return 1
+            fi
         else
-            printf '%s\n' "$relative" >>"${generated_snapshot_dir}/missing"
+            if ! printf '%s\n' \
+                "$relative" >>"${generated_snapshot_dir}/missing"; then
+                local failed_dir="$generated_snapshot_dir"
+                local failed_parent="$generated_snapshot_parent"
+                generated_snapshot_dir=""
+                generated_snapshot_parent=""
+                discard_generated_snapshot_dir \
+                    "$failed_dir" "$failed_parent" || true
+                release_generated_output_lock || true
+                return 1
+            fi
         fi
     done
+    if ! printf 'cohesix-generated-snapshot-v1 count=%s\n' \
+        "${#GENERATED_OUTPUT_PATHS[@]}" >"${generated_snapshot_dir}/complete" \
+        || ! validate_generated_snapshot_metadata \
+            "$generated_snapshot_dir" "$generated_snapshot_parent"; then
+        local failed_dir="$generated_snapshot_dir"
+        local failed_parent="$generated_snapshot_parent"
+        generated_snapshot_dir=""
+        generated_snapshot_parent=""
+        discard_generated_snapshot_dir "$failed_dir" "$failed_parent" || true
+        release_generated_output_lock || true
+        return 1
+    fi
     generated_snapshot_ready=1
 }
 
@@ -357,36 +729,64 @@ restore_generated_outputs() {
     if [[ "$generated_snapshot_ready" != "1" ]]; then
         return 0
     fi
+    if [[ "$generated_output_lock_held" != "1" ]]; then
+        echo "Refusing generated restore without its exclusion lock" >&2
+        return 1
+    fi
+    # Validate the complete partition and every declared snapshot payload
+    # before the first live generated path is moved.
+    if ! validate_generated_snapshot_metadata \
+        "$generated_snapshot_dir" "$generated_snapshot_parent"; then
+        echo "Generated snapshot retained for inspection: $generated_snapshot_dir" >&2
+        return 1
+    fi
     local relative
     for relative in "${GENERATED_OUTPUT_PATHS[@]}"; do
-        if [[ -e "${PROJECT_ROOT}/${relative}" || -L "${PROJECT_ROOT}/${relative}" ]]; then
-            clear_generated_path "$relative" || return 1
-        fi
         if grep -Fx "$relative" "${generated_snapshot_dir}/present" >/dev/null; then
-            mkdir -p "${PROJECT_ROOT}/$(dirname "$relative")"
-            cp -pR \
+            restore_present_generated_path "$relative" || return 1
+        else
+            restore_missing_generated_path "$relative" || return 1
+        fi
+    done
+    for relative in "${GENERATED_OUTPUT_PATHS[@]}"; do
+        if grep -Fx "$relative" "${generated_snapshot_dir}/present" >/dev/null; then
+            if ! diff -qr \
                 "${generated_snapshot_dir}/files/${relative}" \
-                "${PROJECT_ROOT}/${relative}" || return 1
-        fi
-    done
-    for relative in $(<"${generated_snapshot_dir}/present"); do
-        if ! diff -qr \
-            "${generated_snapshot_dir}/files/${relative}" \
-            "${PROJECT_ROOT}/${relative}" >/dev/null; then
-            echo "Failed to restore generated output exactly: ${relative}" >&2
-            return 1
-        fi
-    done
-    for relative in $(<"${generated_snapshot_dir}/missing"); do
-        if [[ -e "${PROJECT_ROOT}/${relative}" || -L "${PROJECT_ROOT}/${relative}" ]]; then
+                "${PROJECT_ROOT}/${relative}" >/dev/null; then
+                echo "Failed to restore generated output exactly: ${relative}" >&2
+                return 1
+            fi
+        elif [[ -e "${PROJECT_ROOT}/${relative}" \
+            || -L "${PROJECT_ROOT}/${relative}" ]]; then
             echo "Generated output should have been removed during restore: ${relative}" >&2
             return 1
         fi
     done
-    find "$generated_snapshot_dir" -mindepth 1 -delete
-    rmdir "$generated_snapshot_dir"
+    # A previous path retained after a double rename failure is no longer the
+    # sole backup once every live output exactly matches the validated
+    # snapshot. Dispose such recovery work only at this proven boundary.
+    if ! discard_preserved_generated_restore_work_dirs; then
+        return 1
+    fi
+    local completed_snapshot_dir="$generated_snapshot_dir"
+    local completed_snapshot_parent="$generated_snapshot_parent"
+    # The live tree is already exact. Make EXIT re-entry a no-op before
+    # disposal, because disposal itself can fail or be interrupted midway.
     generated_snapshot_dir=""
+    generated_snapshot_parent=""
     generated_snapshot_ready=0
+    local completion_status=0
+    if ! discard_generated_snapshot_dir \
+        "$completed_snapshot_dir" "$completed_snapshot_parent"; then
+        echo \
+            "Restored generated outputs, but failed to discard snapshot: ${completed_snapshot_dir}" \
+            >&2
+        completion_status=1
+    fi
+    if ! release_generated_output_lock; then
+        completion_status=1
+    fi
+    return "$completion_status"
 }
 
 group_selected() {
@@ -418,6 +818,9 @@ selected_script_count() {
     local total=0
     if group_selected "base"; then
         total=$((total + ${#BASE_SCRIPTS[@]}))
+        if [[ "$BATCH_TARGET" == "qemu" ]]; then
+            total=$((total + 1))
+        fi
     fi
     if group_selected "base-telemetry"; then
         total=$((total + ${#BASE_TELEMETRY_SCRIPTS[@]}))
@@ -427,6 +830,9 @@ selected_script_count() {
     fi
     if group_selected "gated"; then
         total=$((total + ${#GATED_SCRIPTS[@]}))
+        if [[ "$BATCH_TARGET" == "qemu" ]]; then
+            total=$((total + ${#QEMU_GATED_FIXTURE_SCRIPTS[@]}))
+        fi
     fi
     printf "%s\n" "$total"
 }
@@ -680,40 +1086,6 @@ wait_log_marker() {
     return 2
 }
 
-count_log_pattern() {
-    local file="$1"
-    local pattern="$2"
-    python3 - "$file" "$pattern" <<'PY'
-import pathlib
-import sys
-
-path = pathlib.Path(sys.argv[1])
-pattern = sys.argv[2].encode()
-if not path.exists():
-    print(0)
-    sys.exit(0)
-data = path.read_bytes()
-print(data.count(pattern))
-PY
-}
-
-wait_log_count_increase() {
-    local file="$1"
-    local pattern="$2"
-    local start_count="$3"
-    local timeout="$4"
-    local deadline=$((SECONDS + timeout))
-    while (( SECONDS < deadline )); do
-        local current
-        current=$(count_log_pattern "$file" "$pattern")
-        if (( current > start_count )); then
-            return 0
-        fi
-        sleep 0.2
-    done
-    return 1
-}
-
 script_path_for() {
     local script="$1"
     case "$script" in
@@ -752,6 +1124,9 @@ script_path_for() {
             ;;
         cas_roundtrip.coh)
             echo "scripts/cohsh/cas_roundtrip.coh"
+            ;;
+        cas_fixture_signature_rejected.coh)
+            echo "scripts/cohsh/cas_fixture_signature_rejected.coh"
             ;;
         tcp_basic.coh)
             echo "scripts/cohsh/tcp_basic.coh"
@@ -832,7 +1207,7 @@ prepare_qemu_artifact() {
     local build_log="${ARCHIVE_ROOT}/build/${variant}.log"
     local selected_profile="${COHESIX_SEL4_PROFILE:-qemu_smp_production}"
     local smp="${COHESIX_QEMU_SMP_TOPO:-${QEMU_SMP_TOPO:-4,cores=4,threads=1,sockets=1}}"
-    local virtualization="${COHESIX_QEMU_VIRT:-${QEMU_VIRT:-on}}"
+    local virtualization="${COHESIX_QEMU_VIRT:-${QEMU_VIRT:-off}}"
     local machine_extra="${COHESIX_QEMU_MACHINE_EXTRA:-${QEMU_MACHINE_EXTRA:-}}"
     if [[ -z "$machine_extra" && "$(uname -s)" == "Darwin" ]]; then
         machine_extra="kernel-irqchip=off"
@@ -849,6 +1224,7 @@ prepare_qemu_artifact() {
         --sel4-build "$SEL4_BUILD_DIR" \
         --out-dir "$artifact_dir" \
         --profile release \
+        --qemu "$QEMU_BIN" \
         --root-task-features cohesix-dev \
         --cargo-target aarch64-unknown-none \
         --transport tcp \
@@ -865,6 +1241,7 @@ prepare_qemu_artifact() {
         --source-digest "$TEST_SOURCE_DIGEST"
         --sel4-build "$SEL4_BUILD_DIR"
         --sel4-profile "$selected_profile"
+        --qemu "$QEMU_BIN"
         --root-task-features cohesix-dev
         --cargo-target aarch64-unknown-none
         --smp "$smp"
@@ -875,6 +1252,17 @@ prepare_qemu_artifact() {
         --action-id "$TEST_ACTION_ID"
         --catalog-action-digest "$TEST_ACTION_DIGEST"
     )
+    local launch_accelerator
+    launch_accelerator="$(python3 - "$artifact_dir/cohesix-qemu-launch-artifacts.json" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+document = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+print(document["qemu"]["accelerator"])
+PY
+)"
+    record_args+=(--accelerator "$launch_accelerator")
     if [[ -n "$TEST_ATTEMPT_MANIFEST" && -f "$TEST_ATTEMPT_MANIFEST" ]]; then
         record_args+=(--attempt-manifest "$TEST_ATTEMPT_MANIFEST")
     elif [[ -n "$TEST_ATTEMPT_MANIFEST" ]]; then
@@ -882,6 +1270,23 @@ prepare_qemu_artifact() {
             >>"$build_log"
     fi
     "$QEMU_ARTIFACT_HELPER" "${record_args[@]}" >>"$build_log"
+    local artifact_claim_tier
+    artifact_claim_tier="$(python3 - "$artifact_manifest" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+document = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+print(document["qemu"]["claim"]["tier"])
+PY
+)"
+    if [[ -z "$QEMU_ARTIFACT_CLAIM_TIER" ]]; then
+        QEMU_ARTIFACT_CLAIM_TIER="$artifact_claim_tier"
+        TEST_CLAIM_TIER="$artifact_claim_tier"
+    elif [[ "$artifact_claim_tier" != "$QEMU_ARTIFACT_CLAIM_TIER" ]]; then
+        echo "QEMU artifact variants have different claim tiers" >&2
+        return 1
+    fi
     echo "INFO: QEMU artifact ready variant=${variant} manifest=${artifact_manifest}"
 
     case "$variant" in
@@ -896,6 +1301,35 @@ prepare_qemu_artifact() {
             return 1
             ;;
     esac
+}
+
+run_qemu_response_matrix() {
+    local label="$1"
+    local log_root="$2"
+    local archive_root="$3"
+    local qemu_log="$4"
+    local matrix_log="${log_root}/${label}.out.log"
+    local arguments=(
+        python3
+        "$QEMU_RESPONSE_MATRIX_SCRIPT"
+        --host "$QEMU_TCP_HOST"
+        --port "$QEMU_TCP_PORT"
+        --mode fixed
+    )
+
+    echo "=== Running base/${label} ==="
+    if ! COHSH_AUTH_TOKEN="$COHSH_AUTH_TOKEN" "${arguments[@]}" >"$matrix_log" 2>&1; then
+        echo "FAIL: QEMU TCP response matrix" >&2
+        cp "$qemu_log" "${archive_root}/${label}.qemu.log" || true
+        cp "$matrix_log" "${archive_root}/${label}.out.log" || true
+        return 1
+    fi
+    # The matrix itself requires exact OK QUIT followed by target EOF on the
+    # same socket. The isolated console child owns TCP close/relisten, so a
+    # legacy root-stack UART close marker is neither required nor authoritative.
+    cp "$qemu_log" "${archive_root}/${label}.qemu.log"
+    cp "$matrix_log" "${archive_root}/${label}.out.log"
+    echo "PASS: ${label}"
 }
 
 write_qemu_result() {
@@ -937,6 +1371,7 @@ run_batch() {
     local artifact_manifest="$2"
     shift 2
     local scripts=("$@")
+    local evidence_scripts=("${scripts[@]}")
 
     if ! check_port_available "$QEMU_TCP_HOST" "$QEMU_TCP_PORT" tcp; then
         echo "QEMU console port already in use: ${QEMU_TCP_PORT}" >&2
@@ -967,6 +1402,7 @@ run_batch() {
     mkdir -p "$log_root" "$archive_root"
     "$QEMU_ARTIFACT_HELPER" launch \
         --artifact-manifest "$artifact_manifest" \
+        --qemu "$QEMU_BIN" \
         --source-digest "$TEST_SOURCE_DIGEST" \
         --action-id "$TEST_ACTION_ID" \
         --catalog-action-digest "$TEST_ACTION_DIGEST" \
@@ -976,47 +1412,38 @@ run_batch() {
         >"$qemu_log" 2>&1 &
     qemu_pid=$!
 
-    if ! wait_port_ready "$QEMU_TCP_HOST" "$QEMU_TCP_PORT" "$READY_TIMEOUT" "$qemu_pid"; then
-        echo "FAIL: TCP console not ready" >&2
+    if ! wait_log_marker "$qemu_log" "$READY_MARKER" "$READY_TIMEOUT" "$qemu_pid"; then
+        echo "FAIL: root console ready marker not observed" >&2
         tail -n 50 "$qemu_log" >&2 || true
         return 1
     fi
-    echo "INFO: TCP console reachable on ${QEMU_TCP_HOST}:${QEMU_TCP_PORT}"
-
-    if ! log_has "$qemu_log" "$READY_MARKER"; then
-        echo "WARN: console ready marker not seen; proceeding because TCP console is reachable" >&2
-    fi
-
-    echo "INFO: waiting for TCP auth handshake readiness"
-    if ! wait_auth_ready "$QEMU_TCP_HOST" "$QEMU_TCP_PORT" "$COHSH_AUTH_TOKEN" "$AUTH_READY_TIMEOUT" "$qemu_pid"; then
-        echo "FAIL: TCP console auth endpoint not ready" >&2
-        tail -n 50 "$qemu_log" >&2 || true
-        return 1
-    fi
-    echo "INFO: TCP auth handshake is responsive"
+    echo "INFO: root console ready marker observed"
 
     COHSH_BIN="${artifact_dir}/host-tools/cohsh"
     COHSH_RUN_TCP_HOST="$QEMU_TCP_HOST"
     COHSH_RUN_TCP_PORT="$QEMU_TCP_PORT"
     COHSH_RUN_POLICY="${artifact_dir}/evidence/cohsh_policy.toml"
 
+    if [[ "$name" == "base" ]]; then
+        run_qemu_response_matrix \
+            "$QEMU_RESPONSE_MATRIX_FIXED_LABEL" \
+            "$log_root" \
+            "$archive_root" \
+            "$qemu_log" || return 1
+        evidence_scripts+=("$QEMU_RESPONSE_MATRIX_FIXED_LABEL")
+    fi
+
     for script in "${scripts[@]}"; do
         local script_name="${script%.coh}"
         echo "=== Running ${name}/${script} ==="
 
-        local close_count_before
-        close_count_before=$(count_log_pattern "$qemu_log" "audit tcp.conn.close")
         local coh_log="${log_root}/${script_name}.out.log"
 
+        # A successful cohsh exit includes the TCP transport's exact OK QUIT
+        # followed by peer EOF. Do not substitute a root UART audit marker for
+        # that same-connection protocol proof.
         if ! run_cohsh "$script" > "$coh_log" 2>&1; then
             echo "FAIL: cohsh script ${script}" >&2
-            cp "$qemu_log" "${archive_root}/${script_name}.qemu.log" || true
-            cp "$coh_log" "${archive_root}/${script_name}.out.log" || true
-            return 1
-        fi
-
-        if ! wait_log_count_increase "$qemu_log" "audit tcp.conn.close" "$close_count_before" "$QUIT_CLOSE_TIMEOUT"; then
-            echo "FAIL: connection did not close after ${script} within ${QUIT_CLOSE_TIMEOUT}s" >&2
             cp "$qemu_log" "${archive_root}/${script_name}.qemu.log" || true
             cp "$coh_log" "${archive_root}/${script_name}.out.log" || true
             return 1
@@ -1037,7 +1464,7 @@ run_batch() {
         "$artifact_manifest" \
         "$boot_id" \
         "$qemu_log" \
-        "${scripts[@]}"
+        "${evidence_scripts[@]}"
     return 0
 }
 
@@ -1314,6 +1741,10 @@ pi_total=0
 cleanup() {
     local status=$?
     local cleanup_status=0
+    # Cleanup owns generated-output restoration. Ignore repeated termination
+    # signals before touching the snapshot so they cannot interrupt the EXIT
+    # transaction and strand a live generated path or inherited lock.
+    trap '' HUP INT TERM
     set +e
     if (( qemu_pid > 0 )); then
         if kill -0 "$qemu_pid" 2>/dev/null; then
@@ -1324,13 +1755,26 @@ cleanup() {
     if ! restore_generated_outputs; then
         cleanup_status=1
     fi
+    if ! release_generated_output_lock; then
+        cleanup_status=1
+    fi
     if (( cleanup_status != 0 )); then
         status=1
     fi
     trap - EXIT
     exit "$status"
 }
+terminate_batch() {
+    local status="$1"
+    # Ignore a second signal before entering EXIT cleanup. Resetting these
+    # handlers to their defaults creates a window where cleanup can be killed.
+    trap '' HUP INT TERM
+    exit "$status"
+}
 trap cleanup EXIT
+trap 'terminate_batch 129' HUP
+trap 'terminate_batch 130' INT
+trap 'terminate_batch 143' TERM
 
 if [[ "$BATCH_TARGET" == "pi4" ]]; then
     if [[ -n "$TARGET_EVIDENCE_FILE" ]]; then
@@ -1361,6 +1805,7 @@ fi
 reset_scoped_directory "$ARCHIVE_ROOT"
 BASE_QEMU_ARTIFACT_MANIFEST=""
 GATED_QEMU_ARTIFACT_MANIFEST=""
+QEMU_ARTIFACT_CLAIM_TIER=""
 
 if group_selected "base" \
     || group_selected "base-telemetry" \
@@ -1418,7 +1863,11 @@ else
 fi
 
 if group_selected "gated"; then
-    if ! run_batch "gated" "$GATED_QEMU_ARTIFACT_MANIFEST" "${GATED_SCRIPTS[@]}"; then
+    if ! run_batch \
+        "gated" \
+        "$GATED_QEMU_ARTIFACT_MANIFEST" \
+        "${GATED_SCRIPTS[@]}" \
+        "${QEMU_GATED_FIXTURE_SCRIPTS[@]}"; then
         exit 1
     fi
 else

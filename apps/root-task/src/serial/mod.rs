@@ -1392,6 +1392,10 @@ pub struct SerialPort<
     driver_local: SerialDriverLocalRuntimeRecord,
     telemetry: SerialTelemetryCounters,
     ordinary_root_control_turn: OrdinaryRootControlSerialTurn,
+    #[cfg(feature = "net-backend-virtio")]
+    routine_audit_only_pending: bool,
+    #[cfg(feature = "net-backend-virtio")]
+    routine_audit_tx_attempts_left: Option<u8>,
     #[cfg(feature = "kernel")]
     root_context_rx_only_service: bool,
     #[cfg(feature = "kernel")]
@@ -1426,6 +1430,10 @@ where
             driver_local: SerialDriverLocalRuntimeRecord::new(),
             telemetry: SerialTelemetryCounters::default(),
             ordinary_root_control_turn: OrdinaryRootControlSerialTurn::default(),
+            #[cfg(feature = "net-backend-virtio")]
+            routine_audit_only_pending: false,
+            #[cfg(feature = "net-backend-virtio")]
+            routine_audit_tx_attempts_left: None,
             #[cfg(feature = "kernel")]
             root_context_rx_only_service: false,
             #[cfg(feature = "kernel")]
@@ -1464,6 +1472,89 @@ where
     #[must_use]
     pub fn tx_pending(&self) -> bool {
         self.logical_tx_len() != 0
+    }
+
+    /// Whether the complete ordinary TX backlog belongs only to one deferred
+    /// QEMU routine-audit record.
+    ///
+    /// The isolated Operator may let network work preempt retries only while
+    /// this provenance remains exact. Every ordinary TX admission clears it.
+    #[cfg(feature = "net-backend-virtio")]
+    #[must_use]
+    pub(crate) fn routine_audit_only_pending(&self) -> bool {
+        self.routine_audit_only_pending && self.tx_pending()
+    }
+
+    /// Atomically stage one low-priority QEMU routine-audit line.
+    ///
+    /// Admission requires the complete ordinary TX path to be empty so later
+    /// retries can be identified without inspecting or reordering bytes.
+    #[cfg(feature = "net-backend-virtio")]
+    pub(crate) fn try_enqueue_routine_audit_line_record(&mut self, line: &str) -> bool {
+        if self.tx_pending() {
+            return false;
+        }
+        let total = line.len().saturating_add(2);
+        if total > TX.saturating_sub(1) {
+            self.telemetry.tx_overflow();
+            return false;
+        }
+        let mut admitted = 0usize;
+        for &byte in line.as_bytes().iter().chain(b"\r\n") {
+            if self.tx.enqueue(byte).is_err() {
+                self.telemetry.tx_overflow();
+                while admitted != 0 {
+                    let _ = self.tx.dequeue();
+                    admitted = admitted.saturating_sub(1);
+                }
+                self.routine_audit_only_pending = false;
+                return false;
+            }
+            admitted = admitted.saturating_add(1);
+        }
+        self.routine_audit_only_pending = true;
+        true
+    }
+
+    #[cfg(feature = "net-backend-virtio")]
+    fn promote_routine_audit_tx(&mut self) {
+        self.routine_audit_only_pending = false;
+    }
+
+    #[cfg(feature = "net-backend-virtio")]
+    fn clear_routine_audit_tx_if_drained(&mut self) {
+        if !self.tx_pending() {
+            self.routine_audit_only_pending = false;
+        }
+    }
+
+    /// Attempt at most one physical TX byte from the tagged routine-audit record.
+    ///
+    /// The limit is carried through the synchronous QEMU root-context callback.
+    /// `WouldBlock` keeps the exact byte and record tag for a later Operator
+    /// visit. Ordinary flushes do not inherit this private diagnostic limit.
+    #[cfg(feature = "net-backend-virtio")]
+    pub(crate) fn flush_one_routine_audit_tx_byte(&mut self) {
+        if !self.routine_audit_only_pending() {
+            return;
+        }
+        debug_assert!(self.routine_audit_tx_attempts_left.is_none());
+        self.routine_audit_tx_attempts_left = Some(1);
+        self.flush_tx_locked();
+        self.routine_audit_tx_attempts_left = None;
+        self.clear_routine_audit_tx_if_drained();
+    }
+
+    #[cfg(feature = "net-backend-virtio")]
+    fn routine_audit_tx_attempt_available(&self) -> bool {
+        !matches!(self.routine_audit_tx_attempts_left, Some(0))
+    }
+
+    #[cfg(feature = "net-backend-virtio")]
+    fn charge_routine_audit_tx_attempt(&mut self) {
+        if let Some(attempts_left) = self.routine_audit_tx_attempts_left.as_mut() {
+            *attempts_left = attempts_left.saturating_sub(1);
+        }
     }
 
     /// Whether pre-cutover software queues and the selected UART are both idle.
@@ -1520,6 +1611,8 @@ where
         self.linked_tx_idle.poison();
         let _ = self.driver_local.take_pending_tx();
         while self.tx.dequeue().is_some() {}
+        #[cfg(feature = "net-backend-virtio")]
+        self.promote_routine_audit_tx();
         if newly_poisoned {
             self.telemetry.driver_task_budget_overrun();
         }
@@ -1583,6 +1676,8 @@ where
                     break 'bytes;
                 }
             }
+            #[cfg(feature = "net-backend-virtio")]
+            self.promote_routine_audit_tx();
             if self.tx.enqueue(byte).is_err() {
                 self.telemetry.tx_overflow();
                 break;
@@ -1607,6 +1702,8 @@ where
                 self.telemetry.tx_overflow();
                 break;
             }
+            #[cfg(feature = "net-backend-virtio")]
+            self.promote_routine_audit_tx();
             if self.tx.enqueue(byte).is_err() {
                 self.telemetry.tx_overflow();
                 break;
@@ -1637,6 +1734,10 @@ where
             self.telemetry.tx_overflow();
             return false;
         }
+        #[cfg(feature = "net-backend-virtio")]
+        if total != 0 {
+            self.promote_routine_audit_tx();
+        }
         for part in parts {
             for &byte in *part {
                 if self.tx.enqueue(byte).is_err() {
@@ -1656,6 +1757,8 @@ where
     /// Flush currently staged TX bytes without polling RX.
     pub fn flush_tx(&mut self) {
         self.flush_tx_locked();
+        #[cfg(feature = "net-backend-virtio")]
+        self.clear_routine_audit_tx_if_drained();
     }
 
     /// Emit bytes directly to the device while holding the shared UART TX lock.
@@ -2499,6 +2602,12 @@ where
             .min(contract.budget.max_bytes_per_turn as usize)
             .min(crate::hal::driver_task::MAX_DRIVER_TASK_FRAME_BYTES)
             .min(SERIAL_LINKED_TX_TURN_BYTES);
+        #[cfg(feature = "net-backend-virtio")]
+        let turn_limit = self
+            .routine_audit_tx_attempts_left
+            .map_or(turn_limit, |attempts_left| {
+                turn_limit.min(usize::from(attempts_left))
+            });
         if self.linked_tx.bytes.is_empty() {
             if let Some(byte) = self.driver_local.take_pending_tx() {
                 let _ = self.linked_tx.bytes.push(byte);
@@ -2609,6 +2718,11 @@ where
     fn flush_tx_unlocked(&mut self, budget: &mut DriverServiceBudget) {
         // Flush staged TX bytes to the device until it reports back-pressure.
         if let Some(byte) = self.driver_local.take_pending_tx() {
+            #[cfg(feature = "net-backend-virtio")]
+            if !self.routine_audit_tx_attempt_available() {
+                self.driver_local.set_pending_tx(Some(byte));
+                return;
+            }
             match self.serial_byte_budget_available(budget) {
                 Ok(true) => {}
                 Ok(false) => {
@@ -2621,6 +2735,8 @@ where
                     return;
                 }
             }
+            #[cfg(feature = "net-backend-virtio")]
+            self.charge_routine_audit_tx_attempt();
             match self.driver.write_byte(byte) {
                 Ok(()) => {
                     if self.charge_serial_byte(budget).is_err() {
@@ -2640,6 +2756,10 @@ where
         }
 
         while !self.tx.is_empty() {
+            #[cfg(feature = "net-backend-virtio")]
+            if !self.routine_audit_tx_attempt_available() {
+                return;
+            }
             match self.serial_byte_budget_available(budget) {
                 Ok(true) => {}
                 Ok(false) => return,
@@ -2651,6 +2771,8 @@ where
             let Some(byte) = self.tx.dequeue() else {
                 break;
             };
+            #[cfg(feature = "net-backend-virtio")]
+            self.charge_routine_audit_tx_attempt();
             match self.driver.write_byte(byte) {
                 Ok(()) => {
                     if self.charge_serial_byte(budget).is_err() {
@@ -3598,6 +3720,63 @@ mod tests {
         let record = port.owner_runtime_record();
         assert_eq!(record.rx_depth, 0);
         assert_eq!(record.line_len, 2);
+    }
+
+    #[cfg(feature = "net-backend-virtio")]
+    #[test]
+    fn routine_audit_tx_tag_survives_empty_record_and_promotes_on_ordinary_admission() {
+        let driver = LoopbackSerial::<128>::new();
+        let mut port: SerialPort<_, 16, 64, 16> = SerialPort::new(driver);
+
+        assert!(port.try_enqueue_routine_audit_line_record("audit"));
+        assert!(port.routine_audit_only_pending());
+        assert!(port.try_enqueue_tx_record(&[]));
+        assert!(port.routine_audit_only_pending());
+
+        assert!(port.try_enqueue_tx_record(&[b"ordinary"]));
+        assert!(!port.routine_audit_only_pending());
+        port.flush_tx();
+
+        assert_eq!(
+            port.driver_mut().drain_tx().as_slice(),
+            b"audit\r\nordinary",
+        );
+        assert!(!port.tx_pending());
+
+        assert!(port.try_enqueue_routine_audit_line_record("direct"));
+        port.enqueue_tx(b"-ordinary");
+        assert!(!port.routine_audit_only_pending());
+        port.flush_tx();
+        assert_eq!(
+            port.driver_mut().drain_tx().as_slice(),
+            b"direct\r\n-ordinary",
+        );
+
+        assert!(port.try_enqueue_routine_audit_line_record("best-effort"));
+        assert_eq!(port.enqueue_tx_best_effort(b"-ordinary"), 9);
+        assert!(!port.routine_audit_only_pending());
+        port.flush_tx();
+        assert_eq!(
+            port.driver_mut().drain_tx().as_slice(),
+            b"best-effort\r\n-ordinary",
+        );
+    }
+
+    #[cfg(feature = "net-backend-virtio")]
+    #[test]
+    fn routine_audit_tx_admission_requires_empty_capacity_and_is_atomic() {
+        let driver = LoopbackSerial::<64>::new();
+        let mut port: SerialPort<_, 16, 8, 16> = SerialPort::new(driver);
+
+        assert!(port.try_enqueue_tx_record(&[b"x"]));
+        assert!(!port.try_enqueue_routine_audit_line_record("audit"));
+        assert!(!port.routine_audit_only_pending());
+        port.flush_tx();
+        assert_eq!(port.driver_mut().drain_tx().as_slice(), b"x");
+
+        assert!(!port.try_enqueue_routine_audit_line_record("123456"));
+        assert!(!port.tx_pending());
+        assert!(!port.routine_audit_only_pending());
     }
 
     #[cfg(feature = "kernel")]

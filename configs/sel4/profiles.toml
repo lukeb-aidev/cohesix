@@ -105,12 +105,14 @@ runtime_eligible = true
 source_policy = "clean"
 memoization_cache = "disabled"
 forbidden_cache_keys = ["KernelDomainSchedule"]
-required_dts_literals = ["arm,gic-v3", "method = \"smc\""]
-forbidden_dts_literals = ["arm,cortex-a15-gic"]
+required_dts_literals = ["arm,gic-v3", "method = \"hvc\""]
+forbidden_dts_literals = ["arm,cortex-a15-gic", "method = \"smc\""]
 dts_files = ["kernel/kernel.dts", "qemu-arm-virt.dts"]
 qemu_gic_version = 3
+qemu_virtualization = false
+qemu_cpu = "cortex-a57"
 minimum_elfloader_archive_bytes = 8388608
-timer_clock_hz = 62500000
+timer_clock_hz = 24000000
 
 [profiles.qemu_smp_production.artifact_policy]
 class = "upstream-sel4test-profile-validation"
@@ -127,10 +129,11 @@ artifacts = ["kernel_dtb", "qemu_dtb"]
 required_compatible = ["arm,gic-v3"]
 forbidden_compatible = ["arm,cortex-a15-gic"]
 required_nodes = []
-required_string_properties = ["method=smc"]
+required_string_properties = ["method=hvc"]
 
 [profiles.qemu_smp_production.cmake]
 AARCH64 = "ON"
+ARM_CPU = "cortex-a57"
 CROSS_COMPILER_PREFIX = "aarch64-none-elf-"
 PLATFORM = "qemu-arm-virt"
 KernelPlatform = "qemu-arm-virt"
@@ -172,7 +175,10 @@ COHESIX_ROOTSERVER_ARCHIVE_RESERVE_BYTES = "7340032"
 [profiles.qemu_smp_production.generated]
 PLAT_QEMU_ARM_VIRT = true
 PLAT_BCM2711 = false
+ARM_CORTEX_A53 = false
+ARM_CORTEX_A57 = true
 ARM_GIC_V3_SUPPORT = true
+TIMER_FREQUENCY = "24000000"
 MAX_NUM_NODES = "4"
 NUM_DOMAINS = "1"
 KERNEL_MCS = true
@@ -199,11 +205,13 @@ runtime_eligible = true
 source_policy = "clean"
 memoization_cache = "disabled"
 forbidden_cache_keys = ["KernelDomainSchedule"]
-required_dts_literals = ["arm,gic-v3", "method = \"smc\""]
-forbidden_dts_literals = ["arm,cortex-a15-gic"]
+required_dts_literals = ["arm,gic-v3", "method = \"hvc\""]
+forbidden_dts_literals = ["arm,cortex-a15-gic", "method = \"smc\""]
 dts_files = ["kernel/kernel.dts", "qemu-arm-virt.dts"]
 qemu_gic_version = 3
-timer_clock_hz = 62500000
+qemu_virtualization = false
+qemu_cpu = "cortex-a57"
+timer_clock_hz = 24000000
 
 [profiles.qemu_smp_diagnostic.artifact_policy]
 class = "upstream-sel4test-diagnostic-validation"
@@ -220,10 +228,11 @@ artifacts = ["kernel_dtb", "qemu_dtb"]
 required_compatible = ["arm,gic-v3"]
 forbidden_compatible = ["arm,cortex-a15-gic"]
 required_nodes = []
-required_string_properties = ["method=smc"]
+required_string_properties = ["method=hvc"]
 
 [profiles.qemu_smp_diagnostic.cmake]
 AARCH64 = "ON"
+ARM_CPU = "cortex-a57"
 CROSS_COMPILER_PREFIX = "aarch64-none-elf-"
 PLATFORM = "qemu-arm-virt"
 KernelPlatform = "qemu-arm-virt"
@@ -264,7 +273,10 @@ CMAKE_BUILD_TYPE = "Debug"
 [profiles.qemu_smp_diagnostic.generated]
 PLAT_QEMU_ARM_VIRT = true
 PLAT_BCM2711 = false
+ARM_CORTEX_A53 = false
+ARM_CORTEX_A57 = true
 ARM_GIC_V3_SUPPORT = true
+TIMER_FREQUENCY = "24000000"
 MAX_NUM_NODES = "4"
 NUM_DOMAINS = "1"
 KERNEL_MCS = true

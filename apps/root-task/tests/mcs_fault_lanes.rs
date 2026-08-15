@@ -321,7 +321,15 @@ fn generated_console_and_ninedoor_faults_select_exact_service_units() {
     );
     assert_eq!(console.kind, generated::TemporalTaskKind::Service);
     assert_eq!(console.execution, generated::TemporalExecution::Active);
-    assert_eq!(console.timeout_policy, generated::TimeoutPolicy::Terminal);
+    assert_eq!(
+        console.timeout_policy,
+        generated::TimeoutPolicy::NaturalPostpone
+    );
+    assert_ne!(
+        console.timeout_policy,
+        generated::TimeoutPolicy::ReplenishOnce,
+        "standard console faults retain terminal no-Reply containment",
+    );
     assert_eq!(ninedoor.timeout_badge, ninedoor_config.timeout_badge);
     assert_eq!(console.timeout_badge, console_config.timeout_badge);
     assert_eq!(

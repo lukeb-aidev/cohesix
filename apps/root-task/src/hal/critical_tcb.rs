@@ -1963,11 +1963,22 @@ fn configure_active_sc_with_sched_control(
         standard_fault_cap,
     )
     .map_err(|error| sel4_error("critical.tcb-sched-params", error))?;
-    if timeout_fault_cap != sel4_sys::seL4_CapNull {
+    if requires_timeout_endpoint(task.timeout_policy) && timeout_fault_cap != sel4_sys::seL4_CapNull
+    {
         sel4::set_tcb_timeout_endpoint(tcb, timeout_fault_cap)
             .map_err(|error| sel4_error("critical.tcb-timeout-endpoint", error))?;
     }
     Ok(())
+}
+
+/// Whether the generated policy installs the separately reserved timeout cap.
+///
+/// Natural postponement leaves the timeout cap minted, registered, and
+/// accounted, but lets seL4 advance an adjacent refill without converting that
+/// ordinary replenishment boundary into a terminal fault. The standard fault
+/// endpoint remains installed through `set_tcb_sched_params_mcs` above.
+const fn requires_timeout_endpoint(policy: TimeoutPolicy) -> bool {
+    !matches!(policy, TimeoutPolicy::NaturalPostpone)
 }
 
 fn allocate_stack(

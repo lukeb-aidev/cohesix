@@ -1,0 +1,17 @@
+# Author: Lukas Bower
+# Purpose: Prove operational profiles reject the repository CAS signing fixture.
+# Copyright 2026 Lukas Bower
+attach queen
+EXPECT OK
+
+# The first two fragments are incomplete CBOR and remain pending.
+echo b64:iHdjb2hlc2l4LWNhcy9tYW5pZmVzdC12MWMxMDAYgBiAWCC2rDzBA4YzHHZfBPBBwUfQ8njyrtjqoCHi0AV/xvb/noFY > /updates/100/manifest.cbor
+EXPECT OK
+echo b64:ILasPMEDhjMcdl8E8EHBR9DyePKu2OqgIeLQBX/G9v+e9lhA0/pTLGggvKyIJWrubYvLArn3amDh5F69l1QB5HN2E4x/ > /updates/100/manifest.cbor
+EXPECT OK
+
+# Completion exposes the fixture signature to the operational verification key.
+echo b64:jHteTYAevo4zucMQHXfA8daes6xX9hC3Kt6gtyjADQ== > /updates/100/manifest.cbor
+EXPECT ERR
+EXPECT SUBSTR EPERM
+quit

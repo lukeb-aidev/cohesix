@@ -8,6 +8,10 @@
     "base_sha256": "<sha256-hex>"
   },
   "epoch": "<epoch>",
+  "limits": {
+    "max_chunks": 8,
+    "max_payload_bytes": 1024
+  },
   "payload_bytes": "<payload-bytes>",
   "payload_sha256": "<sha256-hex>",
   "schema": "cohesix-cas/manifest-v1",

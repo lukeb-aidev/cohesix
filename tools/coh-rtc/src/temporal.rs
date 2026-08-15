@@ -76,6 +76,8 @@ pub enum TimeoutPolicy {
     /// Suspend and tear down the exact task generation.
     #[default]
     Terminal,
+    /// Install no timeout endpoint and let seL4 postpone until replenishment.
+    NaturalPostpone,
     /// Apply one generated replenishment and reply exactly once.
     ReplenishOnce,
     /// Return one typed failure to a blocked caller, then contain the task.
@@ -103,8 +105,12 @@ pub struct TemporalTaskConfig {
     pub max_refills: u8,
     pub priority: u8,
     pub mcp: u8,
+    /// Non-zero identity reserved by SC configuration. The badge is delivered
+    /// only when the TCB has a timeout endpoint installed.
     pub timeout_badge: u64,
     pub timeout_policy: TimeoutPolicy,
+    /// Whether the active SC exposes kernel consumed-time accounting. This
+    /// does not assert that budget exhaustion delivers timeout IPC.
     pub consumed_time_evidence: bool,
     pub wcet_us: u32,
     pub response_time_us: u32,
@@ -204,7 +210,7 @@ impl TemporalTaskConfig {
                 }
                 if !self.consumed_time_evidence {
                     bail!(
-                        "active temporal task {} requires timeout identity and consumed-time evidence",
+                        "active temporal task {} requires kernel SC consumed-time accounting",
                         self.id
                     );
                 }
@@ -237,6 +243,12 @@ impl TemporalTaskConfig {
                 }
             }
             TemporalExecution::Passive => {
+                if self.timeout_policy == TimeoutPolicy::NaturalPostpone {
+                    bail!(
+                        "passive temporal task {} cannot select natural MCS postponement",
+                        self.id
+                    );
+                }
                 if self.scheduling_context_slot != 0
                     || self.scheduling_context_bits != 0
                     || self.budget_us != 0
@@ -792,6 +804,22 @@ mod tests {
     #[test]
     fn exact_critical_topology_is_admitted() {
         valid_config().validate().expect("valid MCS topology");
+    }
+
+    #[test]
+    fn natural_postpone_retains_kernel_consumed_time_accounting_contract() {
+        let mut config = valid_config();
+        config.tasks[0].timeout_policy = TimeoutPolicy::NaturalPostpone;
+        config
+            .validate()
+            .expect("natural postponement retains SC accounting without timeout IPC");
+
+        config.tasks[0].consumed_time_evidence = false;
+        assert!(config
+            .validate()
+            .expect_err("active SC accounting remains required")
+            .to_string()
+            .contains("requires kernel SC consumed-time accounting"));
     }
 
     #[test]

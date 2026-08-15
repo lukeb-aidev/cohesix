@@ -7235,7 +7235,7 @@ impl VirtioNet {
         self.verify_tx_canary("tx_prepare");
         if NET_VIRTIO_TX_V2 {
             if self.tx_publish_blocked() {
-                return VirtioTxToken::new(driver_ptr, None);
+                return VirtioTxToken::new(driver_ptr, None, routine_diagnostics);
             }
             if self.tx_free_count() == 0 {
                 if routine_diagnostics {
@@ -7249,7 +7249,7 @@ impl VirtioNet {
                 }
             }
             if let Some(reservation) = self.reserve_tx_slot() {
-                return VirtioTxToken::new(driver_ptr, Some(reservation));
+                return VirtioTxToken::new(driver_ptr, Some(reservation), routine_diagnostics);
             }
             let inflight = self.tx_inflight_count();
             let free = self.tx_free_count();
@@ -7258,13 +7258,13 @@ impl VirtioNet {
             if inflight > 0 {
                 self.tx_alloc_blocked_inflight = self.tx_alloc_blocked_inflight.saturating_add(1);
             }
-            return VirtioTxToken::new(driver_ptr, None);
+            return VirtioTxToken::new(driver_ptr, None, routine_diagnostics);
         }
         if self.tx_publish_blocked() {
-            return VirtioTxToken::new(driver_ptr, None);
+            return VirtioTxToken::new(driver_ptr, None, routine_diagnostics);
         }
         if let Some(reservation) = self.reserve_tx_slot() {
-            return VirtioTxToken::new(driver_ptr, Some(reservation));
+            return VirtioTxToken::new(driver_ptr, Some(reservation), routine_diagnostics);
         }
         let inflight = self.tx_inflight_count();
         let free = self.tx_free_count();
@@ -7273,7 +7273,7 @@ impl VirtioNet {
         if inflight > 0 {
             self.tx_alloc_blocked_inflight = self.tx_alloc_blocked_inflight.saturating_add(1);
         }
-        VirtioTxToken::new(driver_ptr, None)
+        VirtioTxToken::new(driver_ptr, None, routine_diagnostics)
     }
 
     fn next_tx_attempt_seq(&mut self) -> u64 {
@@ -7951,13 +7951,20 @@ impl VirtioNet {
         self.tx_stats.record_kick();
     }
 
-    fn submit_tx(&mut self, id: u16, len: usize, attempt: u64, console_tcp: bool) {
+    fn submit_tx(
+        &mut self,
+        id: u16,
+        len: usize,
+        attempt: u64,
+        console_tcp: bool,
+        routine_diagnostics: bool,
+    ) {
         if NET_VIRTIO_TX_V2 {
             self.submit_tx_v2(id, len);
             return;
         }
         self.verify_tx_canary("tx_submit_v1");
-        if self.deferred_tx_diagnostic_pending() {
+        if routine_diagnostics && self.deferred_tx_diagnostic_pending() {
             error!(
                 target: "net-console",
                 "[virtio-net][tx-anomaly] publish attempted before deferred success diagnostic drained head={} attempt={}",
@@ -8013,7 +8020,9 @@ impl VirtioNet {
             // header and payload byte is zero-initialised before reuse. Do not
             // scrub the inactive tail after notify: ownership has transferred
             // to the device until a bounded used-ring reclaim returns it.
-            let _ = self.queue_deferred_tx_diagnostic(attempt, id, length, console_tcp);
+            if routine_diagnostics {
+                let _ = self.queue_deferred_tx_diagnostic(attempt, id, length, console_tcp);
+            }
         }
     }
 
@@ -9190,13 +9199,19 @@ impl RxToken for VirtioRxToken {
 pub struct VirtioTxToken {
     driver: *mut VirtioNet,
     reservation: Cell<Option<TxReservation>>,
+    routine_diagnostics: bool,
 }
 
 impl VirtioTxToken {
-    fn new(driver: *mut VirtioNet, reservation: Option<TxReservation>) -> Self {
+    fn new(
+        driver: *mut VirtioNet,
+        reservation: Option<TxReservation>,
+        routine_diagnostics: bool,
+    ) -> Self {
         Self {
             driver,
             reservation: Cell::new(reservation),
+            routine_diagnostics,
         }
     }
 
@@ -9316,7 +9331,13 @@ impl TxToken for VirtioTxToken {
                 return result;
             };
             debug_assert!(total_len > 0, "tx total_len must be non-zero before submit");
-            driver.submit_tx(id, total_len, attempt_seq, console_tcp);
+            driver.submit_tx(
+                id,
+                total_len,
+                attempt_seq,
+                console_tcp,
+                self.routine_diagnostics,
+            );
             driver.tx_packets = driver.tx_packets.saturating_add(1);
             result
         }
@@ -12200,7 +12221,7 @@ mod tx_tests {
             slot_gen: Some(9),
             snapshot: TxReserveSnapshot::default(),
         };
-        let token = VirtioTxToken::new(core::ptr::null_mut(), Some(reservation));
+        let token = VirtioTxToken::new(core::ptr::null_mut(), Some(reservation), true);
         assert_eq!(
             token.take_reservation(),
             Some(reservation),

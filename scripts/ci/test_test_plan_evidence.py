@@ -288,6 +288,22 @@ class RunnerFixture:
         """Return an isolated environment with optional fake tool identities."""
 
         environment = os.environ.copy()
+        for name in (
+            "TEST_PLAN_ATTEMPT_ID",
+            "TEST_PLAN_ATTEMPT_MANIFEST",
+            "TEST_PLAN_CONTEXT_DIGEST",
+            "TEST_PLAN_FORCE",
+            "TEST_PLAN_ITERATION",
+            "TEST_PLAN_LOCK_OWNER_ID",
+            "TEST_PLAN_RUNNER_LOCK_HELD",
+            "TEST_PLAN_SOURCE_DIGEST",
+            "TEST_PLAN_STAGED_RUN",
+            "TEST_PLAN_STATE_DIR",
+            "TEST_PLAN_TARGET",
+            "SEL4_BUILD",
+            "SEL4_BUILD_DIR",
+        ):
+            environment.pop(name, None)
         environment["TP_PYTHON_BIN"] = sys.executable
         if extra:
             environment.update(extra)
@@ -448,6 +464,29 @@ class TestPlanEvidenceTests(unittest.TestCase):
         self.assertIn("state directory is already active", result.stderr)
         self.assertIn("first-writer", result.stderr)
         self.assertFalse((state / "stage_01.done").exists())
+
+    def test_nested_runner_ignores_inherited_parent_lock_identity(self) -> None:
+        state = self.fixture.state("nested-lock-identity")
+
+        with mock.patch.dict(
+            os.environ,
+            {
+                "TEST_PLAN_FORCE": "1",
+                "TEST_PLAN_ITERATION": "1",
+                "TEST_PLAN_STAGED_RUN": "1",
+            },
+        ):
+            result = self.fixture.run(
+                state,
+                stage=1,
+                extra_environment={
+                    "TEST_PLAN_RUNNER_LOCK_HELD": "1",
+                    "TEST_PLAN_LOCK_OWNER_ID": "parent-runner",
+                },
+            )
+
+        self.assert_success(result)
+        self.assertFalse((state / ".test-plan.lock").exists())
 
     def test_resume_and_force_are_mutually_exclusive(self) -> None:
         state = self.fixture.state("resume-force")
@@ -817,6 +856,65 @@ class TestPlanEvidenceTests(unittest.TestCase):
             "https://pi.example:8443/private",
         )
 
+    def test_due_diligence_selectors_bind_only_stage_five_context(self) -> None:
+        """DD controls cannot stale stages they do not govern."""
+
+        state = self.fixture.state("stage-scoped-dd-environment")
+        state.mkdir(parents=True)
+        environment = self.fixture.environment(
+            {
+                "DD_COLLECT_ALL": "1",
+                "DD_GATE_LOG_DIR": "/tmp/cohesix-dd-fixture",
+                "DD_REUSE_STAGED_EVIDENCE_TARGET": "qemu",
+                "TP_HOST_JOBS": "3",
+            }
+        )
+
+        recorded = {}
+        for stage in (1, 5):
+            context = state / f"stage-{stage}.json"
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    "scripts/ci/test_plan_evidence.py",
+                    "capture-context",
+                    "--root",
+                    str(self.fixture.root),
+                    "--state-dir",
+                    str(state),
+                    "--stage",
+                    str(stage),
+                    "--target",
+                    "qemu",
+                    "--output",
+                    str(context),
+                ],
+                cwd=self.fixture.root,
+                env=environment,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            recorded[stage] = json.loads(
+                context.read_text(encoding="utf-8")
+            )["config"]["environment"]
+
+        self.assertEqual(recorded[1]["TP_HOST_JOBS"], "3")
+        self.assertNotIn("DD_COLLECT_ALL", recorded[1])
+        self.assertNotIn("DD_GATE_LOG_DIR", recorded[1])
+        self.assertNotIn("DD_REUSE_STAGED_EVIDENCE_TARGET", recorded[1])
+        self.assertEqual(recorded[5]["DD_COLLECT_ALL"], "1")
+        self.assertEqual(
+            recorded[5]["DD_GATE_LOG_DIR"],
+            "/tmp/cohesix-dd-fixture",
+        )
+        self.assertEqual(
+            recorded[5]["DD_REUSE_STAGED_EVIDENCE_TARGET"],
+            "qemu",
+        )
+        self.assertEqual(recorded[5]["TP_HOST_JOBS"], "3")
+
     def test_catalog_shell_ignores_profiles_and_environment_hooks(self) -> None:
         hook_marker = self.fixture.base / "shell-hook-ran"
         hook = self.fixture.base / "shell-hook.sh"
@@ -1115,6 +1213,7 @@ class TestPlanEvidenceTests(unittest.TestCase):
         first = subprocess.run(
             command,
             cwd=self.fixture.root,
+            env=self.fixture.environment(),
             check=False,
             capture_output=True,
             text=True,
@@ -1141,6 +1240,7 @@ class TestPlanEvidenceTests(unittest.TestCase):
         second = subprocess.run(
             command,
             cwd=self.fixture.root,
+            env=self.fixture.environment(),
             check=False,
             capture_output=True,
             text=True,
@@ -1155,6 +1255,7 @@ class TestPlanEvidenceTests(unittest.TestCase):
         third = subprocess.run(
             command,
             cwd=self.fixture.root,
+            env=self.fixture.environment(),
             check=False,
             capture_output=True,
             text=True,

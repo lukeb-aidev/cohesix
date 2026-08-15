@@ -62,6 +62,66 @@ fn bootstrap_ipc_trace_finishes_before_restricted_children_run() {
 }
 
 #[test]
+fn steady_ipc_bypasses_shared_bootstrap_diagnostics() {
+    let source = include_str!("../src/sel4.rs");
+    assert!(
+        source.contains(
+            "#[inline(always)]\nfn ipc_bootstrap_trap(kind: IpcSyscallKind, dest: seL4_CPtr, location: &Location)"
+        ),
+        "the four-read steady IPC gate must remain available for syscall-wrapper optimization",
+    );
+    assert!(
+        source.contains("#[cold]\n#[inline(never)]\nfn ipc_bootstrap_trap_slow("),
+        "bootstrap diagnostics must remain a cold outlined function",
+    );
+    let fast_start = source
+        .find("fn ipc_bootstrap_trap(kind:")
+        .expect("IPC wrappers must retain the bootstrap readiness guard");
+    let slow_start = source[fast_start..]
+        .find("fn ipc_bootstrap_trap_slow(")
+        .map(|offset| fast_start + offset)
+        .expect("bootstrap diagnostics must live in a separate slow path");
+    let fast = &source[fast_start..slow_start];
+    let slow_end = source[slow_start..]
+        .find("\n#[inline(never)]\nfn ensure_endpoint(")
+        .map(|offset| slow_start + offset)
+        .expect("bootstrap diagnostics must end before the endpoint helper");
+    let slow = &source[slow_start..slow_end];
+
+    let ready = fast
+        .find("if ready && validated && unlocked && post_commit")
+        .expect("steady IPC must revalidate all four readiness guards");
+    let dispatch = fast
+        .find("ipc_bootstrap_trap_slow(")
+        .expect("pre-readiness IPC must retain the diagnostic trap");
+    assert!(
+        ready < dispatch,
+        "the steady readiness return must precede slow diagnostic dispatch",
+    );
+    assert!(
+        !fast.contains("BOOTSTRAP_SEND_INSTRUMENT_COUNT.fetch_add")
+            && !fast.contains("boot_tracer().snapshot()")
+            && !fast.contains("HeaplessString")
+            && !fast.contains("write!(")
+            && !fast.contains("emit_illegal_send_line"),
+        "steady IPC must not contend on bootstrap trace state",
+    );
+    assert!(
+        slow.contains("BOOTSTRAP_SEND_INSTRUMENT_COUNT.fetch_add")
+            && slow.contains("boot_tracer().snapshot()"),
+        "pre-readiness diagnostics must retain the bounded trace and snapshot",
+    );
+    assert_eq!(
+        slow.matches("ep_ready()").count()
+            + slow.matches("ep_validated()").count()
+            + slow.matches("ipc_send_unlocked()").count()
+            + slow.matches("post_commit_ipc_unlocked()").count(),
+        0,
+        "the cold path must diagnose the exact readiness values selected by the caller",
+    );
+}
+
+#[test]
 fn root_control_temporal_activation_exists_only_at_userland_loop_seams() {
     const ACTIVATE_CALL: &str = "activate_root_control_temporal_or_fail(ctx);";
     let kernel = include_str!("../src/kernel.rs");
@@ -175,6 +235,100 @@ fn root_control_temporal_activation_exists_only_at_userland_loop_seams() {
         0,
         "the deferred supervisor must use the universal guard rather than minting another seam yield",
     );
+}
+
+#[test]
+fn root_control_natural_postpone_keeps_exact_target_budgets_and_fault_routes() {
+    fn root_control_section(manifest: &str) -> &str {
+        const START: &str = "[[temporal_authority.tasks]]\nid = \"root-control\"";
+        let start = manifest.find(START).expect("root-control manifest record");
+        let tail = &manifest[start..];
+        let end = tail[START.len()..]
+            .find("\n[[temporal_authority.tasks]]")
+            .map_or(tail.len(), |offset| START.len() + offset);
+        &tail[..end]
+    }
+
+    fn assert_exact_line(section: &str, line: &str) {
+        assert_eq!(
+            section
+                .lines()
+                .filter(|candidate| *candidate == line)
+                .count(),
+            1,
+            "missing or duplicate exact manifest line: {line}",
+        );
+    }
+
+    let qemu = include_str!("../../../configs/root_task.toml");
+    let regression = include_str!("../../../configs/root_task_regression.toml");
+    let pi4 = include_str!("../../../configs/root_task_pi4_uboot_aarch64.toml");
+    for (manifest, budget, provenance) in [
+        (
+            qemu,
+            5_500,
+            "m26e-qemu-root-adjacent-refill-natural-postpone-candidate-v35",
+        ),
+        (
+            regression,
+            5_500,
+            "m26e-qemu-root-adjacent-refill-natural-postpone-candidate-v35",
+        ),
+        (
+            pi4,
+            2_750,
+            "m26e-pi4-root-adjacent-refill-natural-postpone-candidate-v24",
+        ),
+    ] {
+        let root = root_control_section(manifest);
+        assert_exact_line(root, &format!("budget_us = {budget}"));
+        assert_exact_line(root, "period_us = 10000");
+        assert_exact_line(root, "max_refills = 2");
+        assert_exact_line(root, "timeout_policy = \"natural-postpone\"");
+        assert_exact_line(root, &format!("wcet_provenance = \"{provenance}\""));
+    }
+    assert!(qemu.contains("timer_clock_hz = 24000000"));
+    assert!(regression.contains("timer_clock_hz = 24000000"));
+    assert!(pi4.contains("timer_clock_hz = 54000000"));
+
+    let source = include_str!("../src/hal/critical_tcb.rs");
+    let configure_start = source
+        .find("fn configure_active_sc_with_sched_control(")
+        .expect("critical SC configuration helper");
+    let configure_end = source[configure_start..]
+        .find("\nfn allocate_stack(")
+        .map(|offset| configure_start + offset)
+        .expect("bounded critical SC configuration section");
+    let configure = &source[configure_start..configure_end];
+    let standard = configure
+        .find("sel4::set_tcb_sched_params_mcs(")
+        .expect("standard fault endpoint installation");
+    let timeout_guard = configure
+        .find("if requires_timeout_endpoint(task.timeout_policy)")
+        .expect("policy-controlled timeout endpoint installation");
+    let timeout = configure
+        .find("sel4::set_tcb_timeout_endpoint(tcb, timeout_fault_cap)")
+        .expect("timeout endpoint installation path");
+    assert!(standard < timeout_guard && timeout_guard < timeout);
+    assert!(configure[standard..timeout_guard].contains("standard_fault_cap"));
+    assert!(configure.contains("!matches!(policy, TimeoutPolicy::NaturalPostpone)"));
+
+    let classifier_start = source
+        .find("fn handle_target_fault(")
+        .expect("critical fault classifier");
+    let classifier_end = source[classifier_start..]
+        .find("\nextern \"C\" fn root_fault_entry")
+        .map(|offset| classifier_start + offset)
+        .expect("bounded critical fault classifier");
+    let classifier = &source[classifier_start..classifier_end];
+    let root_control = classifier
+        .find("TemporalTaskKind::RootControl")
+        .expect("root-control standard-fault class");
+    let service = classifier[root_control..]
+        .find("TemporalTaskKind::Service")
+        .map(|offset| root_control + offset)
+        .expect("service class after critical duties");
+    assert!(classifier[root_control..service].contains("FaultReplyDisposition::CriticalTerminal {"));
 }
 
 #[test]
@@ -475,6 +629,7 @@ fn console_containment_progress_is_exclusive_and_final_proof_is_exact() {
         "NineDoorSessionScope",
         "NineDoorSessionBinds",
         "PendingStreamCursor",
+        "PendingStreamCacheSnapshot",
         "PendingStream",
         "Finalize",
         "Complete",
@@ -1077,4 +1232,85 @@ fn ninedoor_attachment_does_not_attempt_classic_tcb_affinity_under_mcs() {
     assert!(attach.contains("pump.attach_ninedoor(ninedoor);"));
     assert!(!attach.contains("with_role_affinity"));
     assert!(!attach.contains("set_tcb_affinity"));
+}
+
+#[test]
+fn attach_commits_only_after_ninedoor_success() {
+    let event = include_str!("../src/event/mod.rs");
+    let branch_start = event
+        .find("Command::Attach { role, ticket } => match self.handle_attach(role, ticket)")
+        .expect("ATTACH dispatch branch");
+    let branch_end = event[branch_start..]
+        .find("Command::Tail {")
+        .map(|offset| branch_start + offset)
+        .expect("ATTACH branch must end before TAIL");
+    let branch = &event[branch_start..branch_end];
+    assert!(branch.contains("result = Err(err);"));
+    assert!(
+        !branch.contains("forwarded"),
+        "ATTACH must not be forwarded again after its transaction completes",
+    );
+
+    let handler_start = event
+        .find("fn handle_attach(")
+        .expect("root ATTACH transaction helper");
+    let handler_end = event[handler_start..]
+        .find("\n}\n\n#[cfg(test)]")
+        .map(|offset| handler_start + offset)
+        .expect("bounded ATTACH helper section");
+    let handler = &event[handler_start..handler_end];
+    assert!(handler.contains(") -> Result<bool, CommandDispatchError>"));
+    let namespace_attach = handler
+        .find("bridge\n                    .attach(")
+        .expect("NineDoor namespace attach must be part of the transaction");
+    let session_commit = handler
+        .find("self.session = SessionRole::from_role(requested_role);")
+        .expect("root session commit");
+    let success_response = handler
+        .find("self.emit_ack_ok(ConsoleVerb::Attach.ack_label()")
+        .expect("ATTACH success response");
+    assert!(
+        namespace_attach < session_commit && session_commit < success_response,
+        "NineDoor success must precede root authority and OK ATTACH",
+    );
+
+    let ninedoor = include_str!("../src/ninedoor.rs");
+    let attach_start = ninedoor
+        .find("pub fn attach(\n")
+        .expect("NineDoor ATTACH implementation");
+    let attach_end = ninedoor[attach_start..]
+        .find("/// Handle a `tail` request.")
+        .map(|offset| attach_start + offset)
+        .expect("bounded NineDoor ATTACH section");
+    let attach = &ninedoor[attach_start..attach_end];
+    let prepare = attach
+        .find("self.prepare_namespace(NamespaceOpcode::Attach")
+        .expect("target namespace preparation");
+    let logger_notice = attach
+        .find("boot_log::notify_bridge_attached();")
+        .expect("post-namespace logger notification");
+    let bridge_commit = attach
+        .find("self.attached = true;")
+        .expect("NineDoor session commit");
+    let session_commit = attach
+        .find("self.update_session_context(role, ticket);")
+        .expect("NineDoor session context commit");
+    let audit_notice = attach
+        .find("audit.info(message.as_str());")
+        .expect("post-commit attach audit");
+    let tracer_notice = attach
+        .find("boot_tracer().advance(BootPhase::EPAttachOk);")
+        .expect("post-commit attach tracer");
+    assert!(
+        prepare < session_commit
+            && session_commit < bridge_commit
+            && bridge_commit < audit_notice
+            && audit_notice < logger_notice
+            && logger_notice < tracer_notice,
+        "local NineDoor authority must commit before attach diagnostics",
+    );
+    assert!(
+        !attach.contains("return Err(NineDoorBridgeError::AttachTimeout)"),
+        "optional logger EP-only promotion cannot veto a completed namespace attach",
+    );
 }

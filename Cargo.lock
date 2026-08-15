@@ -738,6 +738,7 @@ name = "cohesix-rest"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "cohesix-net-constants",
  "serde",
  "serde_json",
  "ureq",

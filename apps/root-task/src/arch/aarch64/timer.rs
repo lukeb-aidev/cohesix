@@ -7,7 +7,7 @@
 
 #![allow(unsafe_code)]
 
-#[cfg(feature = "timers-arch-counter")]
+#[cfg(all(feature = "timers-arch-counter", target_os = "none"))]
 use core::arch::asm;
 
 /// Return the architected timer frequency configured by the seL4 kernel for
@@ -19,7 +19,7 @@ use core::arch::asm;
 /// is fatal instead of degrading to a platform constant.
 #[must_use]
 pub fn timer_freq_hz() -> u64 {
-    #[cfg(feature = "timers-arch-counter")]
+    #[cfg(all(feature = "timers-arch-counter", target_os = "none"))]
     {
         let frequency = option_env!("SEL4_TIMER_CLOCK_HZ")
             .and_then(parse_u64)
@@ -31,7 +31,7 @@ pub fn timer_freq_hz() -> u64 {
         frequency
     }
 
-    #[cfg(not(feature = "timers-arch-counter"))]
+    #[cfg(not(all(feature = "timers-arch-counter", target_os = "none")))]
     {
         0
     }
@@ -59,11 +59,11 @@ pub fn timer_period_cycles(freq_hz: u64, period_ms: u64) -> u64 {
 /// cooperative timer polling.
 #[must_use]
 pub fn timer_counter_ticks() -> u64 {
-    #[cfg(feature = "timers-arch-counter")]
+    #[cfg(all(feature = "timers-arch-counter", target_os = "none"))]
     {
         read_cntvct()
     }
-    #[cfg(not(feature = "timers-arch-counter"))]
+    #[cfg(not(all(feature = "timers-arch-counter", target_os = "none")))]
     {
         0
     }
@@ -73,7 +73,7 @@ fn parse_u64(value: &str) -> Option<u64> {
     value.parse().ok()
 }
 
-#[cfg(feature = "timers-arch-counter")]
+#[cfg(all(feature = "timers-arch-counter", target_os = "none"))]
 #[inline]
 fn read_cntvct() -> u64 {
     let value: u64;
@@ -92,7 +92,7 @@ mod tests {
 
     #[test]
     fn generated_frequency_parser_distinguishes_zero_and_invalid_truth() {
-        assert_eq!(parse_u64("62500000"), Some(62_500_000));
+        assert_eq!(parse_u64("24000000"), Some(24_000_000));
         assert_eq!(parse_u64("0"), Some(0));
         assert_eq!(parse_u64("not-a-clock"), None);
     }
@@ -104,6 +104,6 @@ mod tests {
 
     #[test]
     fn qemu_five_ms_period_uses_virt_clock() {
-        assert_eq!(timer_period_cycles(62_500_000, 5), 312_500);
+        assert_eq!(timer_period_cycles(24_000_000, 5), 120_000);
     }
 }

@@ -1,6 +1,6 @@
 {
   "schema": "cohesix-implementation-surface-inventory/v1",
-  "source_sha256": "f939fd01d6f07c6d59e6ec0d9d2ce99ca433fe4313c7d328b4995b5446228513",
+  "source_sha256": "adf3d0449d2d45f9753224bf693ca2e512f4183e3f9a3367d5d2d500f7cc0eef",
   "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
   "forbidden_runtime_features": [
     "bootstrap-early-exit",
@@ -3166,6 +3166,20 @@
       "evidence_eligible": false
     },
     {
+      "id": "fixture:qemu-tcp-response-matrix-tests",
+      "kind": "test_source",
+      "path": "tests/test_qemu_tcp_response_matrix.py",
+      "implementation_class": "fixture",
+      "owner": "console-network-evidence-tests",
+      "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
+      "production_reachable": false,
+      "selection_source": "M26e bounded synchronous response-matrix host regression",
+      "package_disposition": "test_only",
+      "evidence_requirement": "loopback fixture cannot satisfy live QEMU acceptance",
+      "current_observed_mode": "fixed_framed_response_fixture",
+      "evidence_eligible": false
+    },
+    {
       "id": "fixture:worker-task-evidence-tests",
       "kind": "test_source",
       "path": "tests/test_worker_task_evidence.py",
@@ -3583,6 +3597,20 @@
       "package_disposition": "build_support_tool",
       "evidence_requirement": "exact GICv3 elfloader kernel rootserver and initrd hashes",
       "current_observed_mode": "same_artifact_multi_boot_verifier",
+      "evidence_eligible": true
+    },
+    {
+      "id": "tool:qemu-tcp-response-matrix",
+      "kind": "acceptance_runner",
+      "path": "scripts/qemu_tcp_response_matrix.py",
+      "implementation_class": "production_live",
+      "owner": "console-network-evidence",
+      "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
+      "production_reachable": true,
+      "selection_source": "QEMU Stage 03 base artifact response-matrix lane",
+      "package_disposition": "ci_acceptance_tool_not_release_bundled",
+      "evidence_requirement": "exact-artifact fixed one-socket HELP, NETSTATS, SMP, CACHELOG9, PING, and QUIT response matrix",
+      "current_observed_mode": "fixed_one_socket_qemu_response_matrix",
       "evidence_eligible": true
     },
     {
@@ -5856,6 +5884,20 @@
       "evidence_eligible": false
     },
     {
+      "id": "tracked:scripts/cohsh/cas_fixture_signature_rejected.coh",
+      "kind": "tracked_surface",
+      "path": "scripts/cohsh/cas_fixture_signature_rejected.coh",
+      "implementation_class": "diagnostic",
+      "owner": "host-shell",
+      "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
+      "production_reachable": false,
+      "selection_source": "explicit script invocation; rule=coh-scripts",
+      "package_disposition": "diagnostic_script",
+      "evidence_requirement": "script result requires target-bound receipt",
+      "current_observed_mode": "operator_playbook",
+      "evidence_eligible": false
+    },
+    {
       "id": "tracked:scripts/cohsh/cas_roundtrip.coh",
       "kind": "tracked_surface",
       "path": "scripts/cohsh/cas_roundtrip.coh",
@@ -6045,10 +6087,10 @@
       "owner": "host-shell",
       "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
       "production_reachable": false,
-      "selection_source": "explicit script invocation; rule=coh-scripts",
+      "selection_source": "QEMU and Pi gated Stage 03 target-local control group; rule=coh-policy-gate-target-script",
       "package_disposition": "diagnostic_script",
-      "evidence_requirement": "script result requires target-bound receipt",
-      "current_observed_mode": "operator_playbook",
+      "evidence_requirement": "target-bound policy denial approval consumption and replay-refusal transcript",
+      "current_observed_mode": "target_local_control_regression",
       "evidence_eligible": false
     },
     {
@@ -6059,10 +6101,10 @@
       "owner": "host-shell",
       "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
       "production_reachable": false,
-      "selection_source": "explicit script invocation; rule=coh-scripts",
+      "selection_source": "QEMU and Pi gated Stage 03 target-local control group; rule=coh-replay-target-script",
       "package_disposition": "diagnostic_script",
-      "evidence_requirement": "script result requires target-bound receipt",
-      "current_observed_mode": "operator_playbook",
+      "evidence_requirement": "target-bound audit export replay match and future-cursor-refusal transcript",
+      "current_observed_mode": "target_local_control_regression",
       "evidence_eligible": false
     },
     {
@@ -6273,6 +6315,20 @@
       "package_disposition": "source_reference_only",
       "evidence_requirement": "selected generated kernel artefacts remain authoritative",
       "current_observed_mode": "upstream_reference_document",
+      "evidence_eligible": false
+    },
+    {
+      "id": "tracked:tests/fixtures/cas/max_chunks_v1.txt",
+      "kind": "tracked_surface",
+      "path": "tests/fixtures/cas/max_chunks_v1.txt",
+      "implementation_class": "fixture",
+      "owner": "cas-tests",
+      "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
+      "production_reachable": false,
+      "selection_source": "exact release CAS-fixture list; rule=release-cas-fixtures",
+      "package_disposition": "release_fixture",
+      "evidence_requirement": "fixture only; structural eligibility is not target admission",
+      "current_observed_mode": "registered_cas_boundary_fixture",
       "evidence_eligible": false
     },
     {
@@ -7353,6 +7409,7 @@
       "configs/generated/implementation_surface_inventory.json",
       "configs/generated/root_task_resolved.json",
       "configs/generated/root_task_resolved.json.sha256",
+      "configs/generated/root_task_topology.json",
       "configs/generated/swarmui_defaults.toml",
       "configs/generated/swarmui_defaults.toml.sha256"
     ],
@@ -7382,6 +7439,7 @@
       "scripts/cohsh/REST_regression_batch.sh",
       "scripts/cohsh/boot_v0.coh",
       "scripts/cohsh/busy_backpressure.coh",
+      "scripts/cohsh/cas_fixture_signature_rejected.coh",
       "scripts/cohsh/cas_roundtrip.coh",
       "scripts/cohsh/fixtures/telemetry_push_oversize.txt",
       "scripts/cohsh/fixtures/telemetry_push_small.txt",
@@ -7448,6 +7506,9 @@
       "tools/cohesix-py/tests/test_rest_backend_auth.py",
       "tools/cohesix-py/tests/test_tcp_backend_auth.py",
       "tools/cohesix-py/tests/test_worker_compatibility.py"
+    ],
+    "cas_fixtures": [
+      "tests/fixtures/cas/max_chunks_v1.txt"
     ],
     "trace_fixtures": [
       "tests/fixtures/traces/trace_v0.hive.cbor",
@@ -7521,6 +7582,7 @@
       "python/dist/cohesix-0.2.0a2-py3-none-any.whl",
       "python/m26e-python-package.json",
       "qemu/run.sh",
+      "cas/max_chunks_v1.txt.sha256",
       "traces/trace_v0.hive.cbor.sha256",
       "traces/trace_v0.trace.sha256"
     ],
@@ -7545,6 +7607,8 @@
       "bin/host-sidecar-bridge",
       "bin/host-ticket-agent",
       "bin/swarmui",
+      "cas/max_chunks_v1.txt",
+      "cas/max_chunks_v1.txt.sha256",
       "configs/generated/cas_manifest_template.json",
       "configs/generated/cas_manifest_template.json.sha256",
       "configs/generated/coh_policy.toml",
@@ -7557,6 +7621,7 @@
       "configs/generated/implementation_surface_inventory.json",
       "configs/generated/root_task_resolved.json",
       "configs/generated/root_task_resolved.json.sha256",
+      "configs/generated/root_task_topology.json",
       "configs/generated/swarmui_defaults.toml",
       "configs/generated/swarmui_defaults.toml.sha256",
       "configs/root_task.toml",
@@ -7627,6 +7692,7 @@
       "scripts/cohsh/REST_regression_batch.sh",
       "scripts/cohsh/boot_v0.coh",
       "scripts/cohsh/busy_backpressure.coh",
+      "scripts/cohsh/cas_fixture_signature_rejected.coh",
       "scripts/cohsh/cas_roundtrip.coh",
       "scripts/cohsh/fixtures/telemetry_push_oversize.txt",
       "scripts/cohsh/fixtures/telemetry_push_small.txt",
@@ -7907,6 +7973,34 @@
         "evidence_eligible": true
       },
       {
+        "id": "release-asset:cas/max_chunks_v1.txt",
+        "kind": "cas_fixture",
+        "path": "cas/max_chunks_v1.txt",
+        "implementation_class": "fixture",
+        "owner": "cas-tests",
+        "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
+        "production_reachable": false,
+        "selection_source": "exact release CAS-fixture list; rule=release-cas-fixtures; exact release source `tests/fixtures/cas/max_chunks_v1.txt`",
+        "package_disposition": "release_fixture",
+        "evidence_requirement": "fixture only; structural eligibility is not target admission",
+        "current_observed_mode": "registered_cas_boundary_fixture",
+        "evidence_eligible": false
+      },
+      {
+        "id": "release-asset:cas/max_chunks_v1.txt.sha256",
+        "kind": "generated_bundle_file",
+        "path": "cas/max_chunks_v1.txt.sha256",
+        "implementation_class": "contract",
+        "owner": "release-tooling",
+        "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
+        "production_reachable": false,
+        "selection_source": "compiler-generated exact release manifest; exact release source `release builder`",
+        "package_disposition": "generated_release_contract",
+        "evidence_requirement": "exact file-set and SHA-256 validation",
+        "current_observed_mode": "generated_release_metadata",
+        "evidence_eligible": false
+      },
+      {
         "id": "release-asset:configs/generated/cas_manifest_template.json",
         "kind": "generated_config",
         "path": "configs/generated/cas_manifest_template.json",
@@ -8069,6 +8163,20 @@
         "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
         "production_reachable": false,
         "selection_source": "compiler-generated exact release manifest; exact release source `configs/generated/root_task_resolved.json.sha256`",
+        "package_disposition": "generated_release_contract",
+        "evidence_requirement": "exact file-set and SHA-256 validation",
+        "current_observed_mode": "generated_contract",
+        "evidence_eligible": false
+      },
+      {
+        "id": "release-asset:configs/generated/root_task_topology.json",
+        "kind": "generated_config",
+        "path": "configs/generated/root_task_topology.json",
+        "implementation_class": "contract",
+        "owner": "release-tooling",
+        "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
+        "production_reachable": false,
+        "selection_source": "compiler-generated exact release manifest; exact release source `configs/generated/root_task_topology.json`",
         "package_disposition": "generated_release_contract",
         "evidence_requirement": "exact file-set and SHA-256 validation",
         "current_observed_mode": "generated_contract",
@@ -9055,6 +9163,20 @@
         "evidence_eligible": false
       },
       {
+        "id": "release-asset:scripts/cohsh/cas_fixture_signature_rejected.coh",
+        "kind": "operator_script",
+        "path": "scripts/cohsh/cas_fixture_signature_rejected.coh",
+        "implementation_class": "diagnostic",
+        "owner": "host-shell",
+        "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
+        "production_reachable": false,
+        "selection_source": "explicit script invocation; rule=coh-scripts; exact release source `scripts/cohsh/cas_fixture_signature_rejected.coh`",
+        "package_disposition": "diagnostic_script",
+        "evidence_requirement": "script result requires target-bound receipt",
+        "current_observed_mode": "operator_playbook",
+        "evidence_eligible": false
+      },
+      {
         "id": "release-asset:scripts/cohsh/cas_roundtrip.coh",
         "kind": "operator_script",
         "path": "scripts/cohsh/cas_roundtrip.coh",
@@ -9216,10 +9338,10 @@
         "owner": "host-shell",
         "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
         "production_reachable": false,
-        "selection_source": "explicit script invocation; rule=coh-scripts; exact release source `scripts/cohsh/policy_gate.coh`",
+        "selection_source": "QEMU and Pi gated Stage 03 target-local control group; rule=coh-policy-gate-target-script; exact release source `scripts/cohsh/policy_gate.coh`",
         "package_disposition": "diagnostic_script",
-        "evidence_requirement": "script result requires target-bound receipt",
-        "current_observed_mode": "operator_playbook",
+        "evidence_requirement": "target-bound policy denial approval consumption and replay-refusal transcript",
+        "current_observed_mode": "target_local_control_regression",
         "evidence_eligible": false
       },
       {
@@ -9230,10 +9352,10 @@
         "owner": "host-shell",
         "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
         "production_reachable": false,
-        "selection_source": "explicit script invocation; rule=coh-scripts; exact release source `scripts/cohsh/replay_journal.coh`",
+        "selection_source": "QEMU and Pi gated Stage 03 target-local control group; rule=coh-replay-target-script; exact release source `scripts/cohsh/replay_journal.coh`",
         "package_disposition": "diagnostic_script",
-        "evidence_requirement": "script result requires target-bound receipt",
-        "current_observed_mode": "operator_playbook",
+        "evidence_requirement": "target-bound audit export replay match and future-cursor-refusal transcript",
+        "current_observed_mode": "target_local_control_regression",
         "evidence_eligible": false
       },
       {

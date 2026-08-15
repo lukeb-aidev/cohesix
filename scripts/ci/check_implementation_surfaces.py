@@ -188,6 +188,7 @@ def validate_tracked_coverage(
             "host_assets",
             "operator_scripts",
             "python_artifacts",
+            "cas_fixtures",
             "trace_fixtures",
             "transcript_fixtures",
             "ui_assets",
@@ -545,6 +546,7 @@ def validate_release_manifest(payload: dict[str, Any]) -> list[str]:
         "host_assets",
         "operator_scripts",
         "python_artifacts",
+        "cas_fixtures",
         "trace_fixtures",
         "transcript_fixtures",
         "ui_assets",
@@ -589,6 +591,8 @@ def validate_release_manifest(payload: dict[str, Any]) -> list[str]:
             return "python/cohesix-py/" + source.removeprefix(
                 "tools/cohesix-py/"
             )
+        if kind == "cas_fixtures":
+            return "cas/" + source.removeprefix("tests/fixtures/cas/")
         if kind == "trace_fixtures":
             return "traces/" + source.removeprefix("tests/fixtures/traces/")
         if kind == "transcript_fixtures":
@@ -612,6 +616,7 @@ def validate_release_manifest(payload: dict[str, Any]) -> list[str]:
         "host_assets",
         "operator_scripts",
         "python_artifacts",
+        "cas_fixtures",
         "trace_fixtures",
         "transcript_fixtures",
         "ui_assets",

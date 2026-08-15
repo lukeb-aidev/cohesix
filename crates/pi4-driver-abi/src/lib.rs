@@ -565,7 +565,7 @@ pub const DRIVER_RUNTIME_INIT_MAX_IRQS: usize = 4;
 /// Maximum bus-link descriptors carried in one init descriptor.
 /// Current fixed ABI bound: each isolated runtime may participate in one
 /// compiler-declared owner/client bus link. Keeping this bound at one leaves
-/// the sealed init descriptor within the 1,536-byte command-frame budget.
+/// the sealed init descriptor within its dedicated command-ring aperture.
 pub const DRIVER_RUNTIME_INIT_MAX_BUS_LINKS: usize = 1;
 /// Maximum semantic resource ranges carried in one init descriptor.
 pub const DRIVER_RUNTIME_INIT_MAX_RESOURCE_RANGES: usize = 8;
@@ -587,6 +587,13 @@ pub const DRIVER_RUNTIME_CYW43_SDPCM_TX_FRAME_OFFSET: u16 = 2048;
 /// Keeping the 28-byte descriptor on its own cache line at `1920` makes those
 /// writers disjoint; root's command sequence remains the sole publication bit.
 pub const DRIVER_RUNTIME_CYW43_COMMAND_DESCRIPTOR_OFFSET: u16 = 1920;
+/// Bytes reserved for the contiguous runtime-init descriptor at the canonical
+/// ring-frame offset.
+///
+/// This init-only aperture ends before the dedicated CYW43 parent-command
+/// cache line. Ordinary data frames retain their independent 1,536-byte bound.
+pub const DRIVER_RUNTIME_INIT_DESCRIPTOR_APERTURE_BYTES: u16 =
+    DRIVER_RUNTIME_CYW43_COMMAND_DESCRIPTOR_OFFSET - DRIVER_RUNTIME_RING_FRAME_OFFSET;
 /// Fixed offset of the SDIO owner's passive host/card clock snapshot.
 ///
 /// The snapshot occupies the otherwise unused cache line between the
@@ -6741,10 +6748,17 @@ mod tests {
 
     #[test]
     fn init_descriptor_is_bounded_for_ring_payload() {
+        assert_eq!(DRIVER_RUNTIME_INIT_DESCRIPTOR_APERTURE_BYTES, 1664);
         assert!(
-            core::mem::size_of::<DriverRuntimeInitDescriptor>() <= 2048,
+            core::mem::size_of::<DriverRuntimeInitDescriptor>()
+                <= usize::from(DRIVER_RUNTIME_INIT_DESCRIPTOR_APERTURE_BYTES),
             "descriptor bytes={}",
             core::mem::size_of::<DriverRuntimeInitDescriptor>()
+        );
+        assert!(
+            usize::from(DRIVER_RUNTIME_RING_FRAME_OFFSET)
+                + core::mem::size_of::<DriverRuntimeInitDescriptor>()
+                <= usize::from(DRIVER_RUNTIME_CYW43_COMMAND_DESCRIPTOR_OFFSET)
         );
         assert_eq!(core::mem::align_of::<DriverRuntimeInitDescriptor>(), 8);
         assert!(DRIVER_RUNTIME_INIT_MAX_DMA_PAGES >= 80);

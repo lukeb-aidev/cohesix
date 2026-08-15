@@ -1,5 +1,5 @@
 # Author: Lukas Bower
-# Purpose: Guard Pi 4 manifest defaults required for DHCP driver-task bring-up.
+# Purpose: Guard Pi 4 networking, scheduling, and timer manifest defaults.
 # Copyright 2026 Lukas Bower
 
 """Tests for the Pi 4 U-Boot root-task manifest defaults."""
@@ -42,3 +42,27 @@ def test_pi4_manifest_enables_local_seat_and_fourth_core_net_drivers() -> None:
     assert local_seat["display_device"] == "hdmi0"
     assert driver_affinity["bcmgenet-v5"] == 3
     assert driver_affinity["cyw43455"] == 3
+
+
+def test_pi4_root_naturally_postpones_at_the_generated_54mhz_clock() -> None:
+    """Pi keeps its exact clock and budget while omitting terminal timeouts."""
+
+    manifest = load_pi4_manifest()
+    root = next(
+        task
+        for task in manifest["temporal_authority"]["tasks"]
+        if task["id"] == "root-control"
+    )
+    console = manifest["console_network_service"]
+
+    assert root["timeout_policy"] == "natural-postpone"
+    assert root["budget_us"] == 2_750
+    assert root["period_us"] == 10_000
+    assert root["max_refills"] == 2
+    assert root["wcet_us"] == 2_500
+    assert root["response_time_us"] == 5_100
+    assert (
+        root["wcet_provenance"]
+        == "m26e-pi4-root-adjacent-refill-natural-postpone-candidate-v24"
+    )
+    assert console["timer_clock_hz"] == 54_000_000
