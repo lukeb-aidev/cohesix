@@ -4279,7 +4279,7 @@ fn bootstrap<P: Platform>(
         control = ep_slot,
         fault = fault_ep_slot,
     );
-    boot_log::force_uart_line(endpoint_diag.as_str());
+    boot_log::force_uart_line_raw(endpoint_diag.as_str());
 
     boot_guard.record_endpoints(ep_slot, fault_ep_slot);
     let endpoints = KernelEndpoints::new(ep_slot, fault_ep_slot);
@@ -4292,7 +4292,7 @@ fn bootstrap<P: Platform>(
         control = endpoints.control.raw(),
         fault = endpoints.fault.raw(),
     );
-    boot_log::force_uart_line(ipc_ctor_diag.as_str());
+    boot_log::force_uart_line_raw(ipc_ctor_diag.as_str());
     boot_guard.record_substep("commit.minimal.ready");
     boot_guard.commit_minimal();
     if sel4::ep_ready() && sel4::ep_validated() {
@@ -4559,7 +4559,7 @@ fn bootstrap<P: Platform>(
                 "critical MCS topology construction failed: {error:?}"
             ))
         })?;
-        let mut mcs_diag = HeaplessString::<344>::new();
+    let mut mcs_diag = HeaplessString::<344>::new();
         let _ = write!(
             mcs_diag,
             "[diag] mcs slots control=0x{control:04x} fault=0x{fault_ep:04x} control_reply=0x{control_reply:04x} fault_reply=0x{fault_reply:04x} emergency_reply=0x{emergency_reply:04x} fault_endpoint=0x{fault_endpoint:04x} emergency_endpoint=0x{emergency_endpoint:04x} signals(worker=0x{worker:04x},driver=0x{driver:04x},emergency=0x{emergency_signal:04x},root_fault_release=0x{root_fault_release:04x})",
@@ -4575,7 +4575,7 @@ fn bootstrap<P: Platform>(
             emergency_signal = runtime.signals.emergency,
             root_fault_release = runtime.signals.root_fault_release,
         );
-        boot_log::force_uart_line(mcs_diag.as_str());
+        boot_log::force_uart_line_raw(mcs_diag.as_str());
         boot_log::force_uart_line(
             "[critical] root-control accounted; four restricted TCBs constructed suspended",
         );
@@ -7540,7 +7540,7 @@ impl KernelIpc {
                 call = self.control_ep.raw(),
                 bootstrap = if bootstrap { 1u8 } else { 0u8 },
             );
-            boot_log::force_uart_line(recv_call_diag.as_str());
+            boot_log::force_uart_line_raw(recv_call_diag.as_str());
             let mut poll_diag = HeaplessString::<164>::new();
             let _ = write!(
                 poll_diag,
@@ -7550,7 +7550,7 @@ impl KernelIpc {
                 bootstrap = if bootstrap { 1u8 } else { 0u8 },
                 now_ms = now_ms,
             );
-            boot_log::force_uart_line(poll_diag.as_str());
+            boot_log::force_uart_line_raw(poll_diag.as_str());
             self.debug_uart_announced = true;
         }
         let mut badge: sel4_sys::seL4_Word = 0;
