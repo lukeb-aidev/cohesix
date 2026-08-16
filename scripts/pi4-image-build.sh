@@ -1648,23 +1648,92 @@ build_pi4_image() {
     fi
     capture_build_repository_state
 
-    log "Building Pi4 isolated driver runtime images"
-    cargo build \
-      --locked \
-      --target aarch64-unknown-none \
-      --release \
-      -p pi4-driver-runtime
+    local sel4_target="aarch64-unknown-none"
+    local sel4_profile="release"
+    local sel4_artifact_dir
+    local worker_output_dir
+    local worker_output_canonical_dir
+    local worker_image_archive
+    local worker_image_manifest
+    local worker_manifest_tool
+    local console_network_runtime_path
+    local nine_door_runtime_path
+    local sel4_target_package
+    local -a sel4_runtime_packages=(
+        nine-door-runtime
+        console-network-runtime
+        worker-heart
+        worker-gpu
+        worker-lora
+        pi4-driver-runtime
+    )
+    sel4_artifact_dir="$(root_task_target_dir)/${sel4_target}/${sel4_profile}"
+    local -a required_sel4_runtime_paths=(
+        "${sel4_artifact_dir}/nine-door-runtime"
+        "${sel4_artifact_dir}/console-network-runtime"
+        "${sel4_artifact_dir}/worker-heart"
+        "${sel4_artifact_dir}/worker-gpu"
+        "${sel4_artifact_dir}/worker-lora"
+    )
+    console_network_runtime_path="${sel4_artifact_dir}/console-network-runtime"
+    nine_door_runtime_path="${sel4_artifact_dir}/nine-door-runtime"
+    worker_output_dir="${ROOT_DIR}/out/pi4-worker-images"
+    worker_output_canonical_dir="${worker_output_dir}/canonical"
+    worker_image_archive="${worker_output_dir}/cohesix-worker-images.cpio"
+    worker_image_manifest="${worker_output_dir}/cohesix-worker-image-manifest.json"
+    worker_manifest_tool="${SCRIPT_DIR}/worker_image_manifest.py"
 
-    mkdir -p "${DRIVER_RUNTIME_EMBED_DIR}"
+    log "Building 26e child/runtime images for Pi4 root-task"
+    local -a sel4_runtime_build_args=(build --locked --target "$sel4_target" --release)
+    for sel4_target_package in "${sel4_runtime_packages[@]}"; do
+        sel4_runtime_build_args+=( -p "$sel4_target_package" )
+    done
+    cargo "${sel4_runtime_build_args[@]}"
+
+    for sel4_target_package in "${required_sel4_runtime_paths[@]}"; do
+        require_file "$sel4_target_package"
+    done
+
+    [[ -f "$worker_manifest_tool" ]] || fail "Worker image manifest tool is missing: $worker_manifest_tool"
+    mkdir -p "$worker_output_dir"
+    python3 "$worker_manifest_tool" build \
+      --image-dir "$sel4_artifact_dir" \
+      --output-dir "$worker_output_canonical_dir" \
+      --archive "$worker_image_archive" \
+      --manifest "$worker_image_manifest" \
+      --target "$sel4_target" \
+      --profile "$sel4_profile"
+    python3 "$worker_manifest_tool" verify \
+      --archive "$worker_image_archive" \
+      --manifest "$worker_image_manifest"
+    require_file "$worker_image_archive"
+    require_file "$worker_image_manifest"
+    [[ -s "$worker_image_archive" ]] || \
+      fail "Worker image archive is empty: ${worker_image_archive}"
+    [[ -s "$worker_image_manifest" ]] || \
+      fail "Worker image manifest is empty: ${worker_image_manifest}"
+    worker_image_archive="$(realpath_py "$worker_image_archive")"
+    worker_image_manifest="$(realpath_py "$worker_image_manifest")"
+    log "Using worker image archive: ${worker_image_archive}"
+    log "Using worker image manifest: ${worker_image_manifest}"
+
     local embedded_runtime_cpio="${DRIVER_RUNTIME_EMBED_DIR}/${DRIVER_RUNTIME_EMBED_CPIO_NAME}"
-    package_driver_runtime_raw_cpio "${embedded_runtime_cpio}"
+    mkdir -p "${DRIVER_RUNTIME_EMBED_DIR}"
+
+    log "Packaging Pi4 isolated driver runtime images"
+    package_driver_runtime_raw_cpio "$embedded_runtime_cpio" "$sel4_artifact_dir"
+
 
     log "Building root-task (${ROOT_TASK_FEATURES})"
     require_dir "${PI4_WIFI_FIRMWARE_DIR}"
     log "Using Pi4 WiFi firmware bundle: ${PI4_WIFI_FIRMWARE_DIR}"
-    COHESIX_BUILD_STAMP="$EXACT_BUILD_TIMESTAMP" \
+      COHESIX_BUILD_STAMP="$EXACT_BUILD_TIMESTAMP" \
       COHESIX_EXACT_GIT_COMMIT="$EXACT_GIT_COMMIT" \
       COHESIX_EXACT_SOURCE_CLEAN=1 \
+      COHESIX_CONSOLE_NETWORK_RUNTIME_IMAGE="$console_network_runtime_path" \
+      COHESIX_NINEDOOR_RUNTIME_IMAGE="$nine_door_runtime_path" \
+      COHESIX_WORKER_IMAGE_ARCHIVE="$worker_image_archive" \
+      COHESIX_WORKER_IMAGE_MANIFEST="$worker_image_manifest" \
       COHESIX_PI4_DRIVER_RUNTIME_PAYLOAD="${embedded_runtime_cpio}" \
       COHESIX_PI4_WIFI_FIRMWARE_DIR="${PI4_WIFI_FIRMWARE_DIR}" \
       cargo build \
@@ -1982,15 +2051,19 @@ PY
 
 package_driver_runtime_raw_cpio() {
     local raw_cpio="$1"
+    local artifact_dir="${2:-${ROOT_DIR}/target/aarch64-unknown-none/release}"
+    local cpio_bin
     local raw_dir
     raw_dir="$(dirname "$raw_cpio")"
     local runtime_root="${raw_dir}/driver-runtime-root"
     local runtime_bin="${runtime_root}/cohesix/bin"
-    local runtime_artifact_dir="${ROOT_DIR}/target/aarch64-unknown-none/release"
     local strip_tool
     local bin
 
-    assert_driver_runtime_elf_budgets "$runtime_artifact_dir"
+    cpio_bin="$(resolve_cpio)"
+    configure_cpio_path "$cpio_bin"
+
+    assert_driver_runtime_elf_budgets "$artifact_dir"
     strip_tool="$(find_aarch64_strip)"
     mkdir -p "$raw_dir"
     rm -rf "$runtime_root"
@@ -2004,8 +2077,8 @@ package_driver_runtime_raw_cpio() {
         pi4-driver-sdio \
         pi4-driver-pcie
     do
-        require_file "${runtime_artifact_dir}/${bin}"
-        install -m 0755 "${runtime_artifact_dir}/${bin}" "${runtime_bin}/${bin}"
+        require_file "${artifact_dir}/${bin}"
+        install -m 0755 "${artifact_dir}/${bin}" "${runtime_bin}/${bin}"
         "$strip_tool" \
             --strip-all \
             --remove-section=.comment \
