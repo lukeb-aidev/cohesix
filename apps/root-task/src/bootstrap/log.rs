@@ -583,6 +583,33 @@ fn force_uart_line_raw_with_console_seq_inner(line: &str, console_seq: u32, refr
     );
 }
 
+/// Emit a serial-only raw diagnostic line used for bounded bootstrap probes.
+///
+/// Unlike `force_uart_line_raw`, this bypasses linked-runtime ownership
+/// suppression and does not mirror into queen.log.
+pub fn force_uart_line_raw_bootstrap_probe(line: &str) {
+    force_uart_line_raw_bootstrap_probe_with_console_seq(line, next_console_event_seq());
+}
+
+/// Emit a serial-only raw diagnostic with a caller-supplied ordering id.
+pub fn force_uart_line_raw_bootstrap_probe_with_console_seq(line: &str, console_seq: u32) {
+    if line.trim().is_empty() {
+        return;
+    }
+    let prompt_refresh = serial_raw_prompt_refresh_allowed(
+        true,
+        SERIAL_PROMPT_REFRESH_AFTER_LOGS.load(Ordering::Acquire),
+        line.as_bytes(),
+    );
+    let suffix = console_ordering_suffix(console_seq, "serial", prompt_refresh);
+    emit_uart_payload_with_suffix(
+        line.as_bytes(),
+        Some(suffix.as_bytes()),
+        true,
+        prompt_refresh,
+    );
+}
+
 /// Emit a diagnostic line to raw UART and retain it in `/log/queen.log`.
 ///
 /// Use this for hardware-fault telemetry that must survive log-channel handoff

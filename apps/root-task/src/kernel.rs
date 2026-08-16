@@ -4279,7 +4279,7 @@ fn bootstrap<P: Platform>(
         control = ep_slot,
         fault = fault_ep_slot,
     );
-    boot_log::force_uart_line_raw(endpoint_diag.as_str());
+    boot_log::force_uart_line_raw_bootstrap_probe(endpoint_diag.as_str());
 
     boot_guard.record_endpoints(ep_slot, fault_ep_slot);
     let endpoints = KernelEndpoints::new(ep_slot, fault_ep_slot);
@@ -4292,7 +4292,7 @@ fn bootstrap<P: Platform>(
         control = endpoints.control.raw(),
         fault = endpoints.fault.raw(),
     );
-    boot_log::force_uart_line_raw(ipc_ctor_diag.as_str());
+    boot_log::force_uart_line_raw_bootstrap_probe(ipc_ctor_diag.as_str());
     boot_guard.record_substep("commit.minimal.ready");
     boot_guard.commit_minimal();
     if sel4::ep_ready() && sel4::ep_validated() {
@@ -4575,7 +4575,7 @@ fn bootstrap<P: Platform>(
             emergency_signal = runtime.signals.emergency,
             root_fault_release = runtime.signals.root_fault_release,
         );
-        boot_log::force_uart_line_raw(mcs_diag.as_str());
+        boot_log::force_uart_line_raw_bootstrap_probe(mcs_diag.as_str());
         boot_log::force_uart_line(
             "[critical] root-control accounted; four restricted TCBs constructed suspended",
         );
@@ -7540,7 +7540,7 @@ impl KernelIpc {
                 call = self.control_ep.raw(),
                 bootstrap = if bootstrap { 1u8 } else { 0u8 },
             );
-            boot_log::force_uart_line_raw(recv_call_diag.as_str());
+            boot_log::force_uart_line_raw_bootstrap_probe(recv_call_diag.as_str());
             let mut poll_diag = HeaplessString::<164>::new();
             let _ = write!(
                 poll_diag,
@@ -7550,7 +7550,7 @@ impl KernelIpc {
                 bootstrap = if bootstrap { 1u8 } else { 0u8 },
                 now_ms = now_ms,
             );
-            boot_log::force_uart_line_raw(poll_diag.as_str());
+            boot_log::force_uart_line_raw_bootstrap_probe(poll_diag.as_str());
             self.debug_uart_announced = true;
         }
         let mut badge: sel4_sys::seL4_Word = 0;
