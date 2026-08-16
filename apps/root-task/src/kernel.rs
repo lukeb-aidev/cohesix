@@ -4272,7 +4272,7 @@ fn bootstrap<P: Platform>(
             }
         }
     }
-    let mut endpoint_diag = HeaplessString::<192>::new();
+    let mut endpoint_diag = HeaplessString::<256>::new();
     let _ = write!(
         endpoint_diag,
         "[diag] bootstrap endpoints control=0x{control:04x} fault=0x{fault:04x}",
@@ -4285,6 +4285,14 @@ fn bootstrap<P: Platform>(
     let endpoints = KernelEndpoints::new(ep_slot, fault_ep_slot);
     #[allow(unused_mut)]
     let mut bootstrap_ipc = KernelIpc::new(endpoints.control, endpoints.fault);
+    let mut ipc_ctor_diag = HeaplessString::<176>::new();
+    let _ = write!(
+        ipc_ctor_diag,
+        "[diag] KernelIpc::new inputs control=0x{control:04x} fault=0x{fault:04x}",
+        control = endpoints.control.raw(),
+        fault = endpoints.fault.raw(),
+    );
+    boot_log::force_uart_line(ipc_ctor_diag.as_str());
     boot_guard.record_substep("commit.minimal.ready");
     boot_guard.commit_minimal();
     if sel4::ep_ready() && sel4::ep_validated() {
@@ -4554,12 +4562,14 @@ fn bootstrap<P: Platform>(
         let mut mcs_diag = HeaplessString::<344>::new();
         let _ = write!(
             mcs_diag,
-            "[diag] mcs slots control_reply=0x{control_reply:04x} fault_reply=0x{fault_reply:04x} emergency_reply=0x{emergency_reply:04x} fault_endpoint=0x{fault:04x} emergency_endpoint=0x{emergency:04x} signals(worker=0x{worker:04x},driver=0x{driver:04x},emergency=0x{emergency_signal:04x},root_fault_release=0x{root_fault_release:04x})",
+            "[diag] mcs slots control=0x{control:04x} fault=0x{fault_ep:04x} control_reply=0x{control_reply:04x} fault_reply=0x{fault_reply:04x} emergency_reply=0x{emergency_reply:04x} fault_endpoint=0x{fault_endpoint:04x} emergency_endpoint=0x{emergency_endpoint:04x} signals(worker=0x{worker:04x},driver=0x{driver:04x},emergency=0x{emergency_signal:04x},root_fault_release=0x{root_fault_release:04x})",
+            control = endpoints.control.raw(),
+            fault_ep = endpoints.fault.raw(),
             control_reply = runtime.handles[0].reply_cap,
             fault_reply = runtime.faults.root_fault_reply,
             emergency_reply = runtime.faults.root_emergency_reply,
-            fault = runtime.faults.fault_endpoint,
-            emergency = runtime.faults.emergency_endpoint,
+            fault_endpoint = runtime.faults.fault_endpoint,
+            emergency_endpoint = runtime.faults.emergency_endpoint,
             worker = runtime.signals.worker_supervisor,
             driver = runtime.signals.driver_supervisor,
             emergency_signal = runtime.signals.emergency,
@@ -7523,6 +7533,14 @@ impl KernelIpc {
 
         if !self.debug_uart_announced {
             debug_uart_str("[dbg] EP 0x0130: dispatcher loop about to recv\n");
+            let mut recv_call_diag = HeaplessString::<176>::new();
+            let _ = write!(
+                recv_call_diag,
+                "[diag] first poll call cptr=0x{call:04x} bootstrap={bootstrap}",
+                call = self.control_ep.raw(),
+                bootstrap = if bootstrap { 1u8 } else { 0u8 },
+            );
+            boot_log::force_uart_line(recv_call_diag.as_str());
             let mut poll_diag = HeaplessString::<164>::new();
             let _ = write!(
                 poll_diag,
