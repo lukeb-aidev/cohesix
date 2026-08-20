@@ -10710,17 +10710,35 @@ fn validate_runtime_init_descriptor_with_wait_support(
     RUNTIME_DESCRIPTOR.store(descriptor);
     RUNTIME_INIT_HOT_PATH.store(descriptor.hot_path, Ordering::Release);
     RUNTIME_INIT_FLAGS.store(descriptor.flags, Ordering::Release);
+    publish_runtime_progress(
+        command.sequence,
+        DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_DESCRIPTOR_VALID,
+        command.aux0,
+    );
     mark_descriptor_ready(descriptor.hot_path);
     if descriptor.hot_path == HOT_PATH_HDMI_TEXT
-        && descriptor_resources_ready(&descriptor, HOT_PATH_HDMI_TEXT)
+        && descriptor_resources_ready_with_progress(
+            &descriptor,
+            HOT_PATH_HDMI_TEXT,
+            command.sequence,
+            command.aux0,
+        )
     {
-        hdmi_render_boot_diagnostics(&descriptor);
+        // Runtime-init publishes immutable framebuffer authority only. A full
+        // physical clear used to run here before the descriptor Reply, which
+        // cannot fit the generated HDMI MCS service turn on the Pi. Keep every
+        // framebuffer mutation behind an explicit bounded display command.
         HDMI_RUNTIME_FLAGS.fetch_or(
             ENGINE_STATE_INITIALIZED
                 | ENGINE_STATE_DESCRIPTOR_READY
                 | ENGINE_STATE_RESOURCE_READY
                 | ENGINE_STATE_HW_READY,
             Ordering::AcqRel,
+        );
+        publish_runtime_progress(
+            command.sequence,
+            DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_READY,
+            command.aux0,
         );
     }
     if descriptor.hot_path == HOT_PATH_PCIE_ROOT {
@@ -11042,8 +11060,10 @@ fn runtime_engine_init_usb(
 }
 
 #[inline(never)]
-fn runtime_engine_init_hdmi(descriptor: &DriverRuntimeInitDescriptor) -> Result<u16, u16> {
-    hdmi_render_boot_diagnostics(descriptor);
+fn runtime_engine_init_hdmi(_descriptor: &DriverRuntimeInitDescriptor) -> Result<u16, u16> {
+    // Descriptor validation already proves the framebuffer mapping. Engine
+    // admission must not perform an unbounded physical clear; the first
+    // explicit HDMI frame owns the first display mutation.
     Ok(FAULT_NONE)
 }
 
@@ -44054,23 +44074,6 @@ fn hdmi_render_frame(frame: DriverFrameDescriptor) -> usize {
     })
 }
 
-fn hdmi_render_boot_diagnostics(descriptor: &DriverRuntimeInitDescriptor) {
-    let mut state = HdmiRenderState::from_descriptor(descriptor);
-    state.clear_full_framebuffer();
-    state.put_str("Cohesix HDMI linked runtime\n");
-    state.put_str("framebuffer descriptor ready\n");
-    state.put_str("waiting for console mirror\n");
-    HDMI_CURSOR_ROW.store(0, Ordering::Release);
-    HDMI_CURSOR_COL.store(0, Ordering::Release);
-    HDMI_ESCAPE_STATE.store(0, Ordering::Release);
-    HDMI_CSI_VALUE.store(0, Ordering::Release);
-    HDMI_CSI_VALUE_2.store(0, Ordering::Release);
-    HDMI_CSI_PARAM_INDEX.store(0, Ordering::Release);
-    HDMI_CSI_DIGITS_SEEN.store(0, Ordering::Release);
-    HDMI_SAVED_CURSOR_ROW.store(0, Ordering::Release);
-    HDMI_SAVED_CURSOR_COL.store(0, Ordering::Release);
-}
-
 struct HdmiRenderState {
     framebuffer: usize,
     framebuffer_len: usize,
@@ -44286,6 +44289,7 @@ impl HdmiRenderState {
             .min(self.cols.saturating_sub(1));
     }
 
+    #[cfg(test)]
     fn put_str(&mut self, text: &str) {
         for byte in text.bytes() {
             self.put_byte(byte);
@@ -112098,6 +112102,11 @@ mod tests {
                 flags: 0,
             },
         };
+        let admission_sentinel = 0x1357_9bdf;
+        write_framebuffer_u32(
+            DRIVER_RUNTIME_FRAMEBUFFER_VADDR as usize,
+            admission_sentinel,
+        );
         assert_eq!(
             service_runtime_init_for_test(
                 runtime_task_key_for_hot_path(HOT_PATH_HDMI_TEXT),
@@ -112105,6 +112114,11 @@ mod tests {
                 descriptor
             ),
             DriverTaskCompletionRecord::progress(30, HOT_PATH_HDMI_TEXT)
+        );
+        assert_eq!(
+            read_framebuffer_u32(DRIVER_RUNTIME_FRAMEBUFFER_VADDR as usize),
+            admission_sentinel,
+            "descriptor admission must not mutate the physical framebuffer",
         );
         let engine_init = DriverTaskCommandRecord {
             sequence: 31,
@@ -112120,6 +112134,11 @@ mod tests {
         assert_eq!(
             service_command(0, engine_init),
             DriverTaskCompletionRecord::progress(31, 1)
+        );
+        assert_eq!(
+            read_framebuffer_u32(DRIVER_RUNTIME_FRAMEBUFFER_VADDR as usize),
+            admission_sentinel,
+            "engine admission must leave rendering to explicit frame turns",
         );
         let frame = DriverTaskCommandRecord {
             sequence: 32,
