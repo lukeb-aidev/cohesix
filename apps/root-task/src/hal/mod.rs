@@ -5014,19 +5014,39 @@ impl<'a> KernelHal<'a> {
                 ))?;
         let root_cnode = self.env.init_cnode_cap();
         let root_depth = sel4::word_bits() as u8;
-        let endpoint_err = sel4::cnode_mint_depth(
+        let pcie_command_badge = pi4_driver_abi::driver_runtime_command_badge(
+            driver_task::DRIVER_TASK_KEY_PCIE_ROOT as u32,
+        );
+        let mut cap_line = heapless::String::<256>::new();
+        fmt::write(
+            &mut cap_line,
+            format_args!(
+                "DRIVER_TASK_BUS_LINK_CAP channel=usb-pcie operation=copy-preserve-badge source_cptr=0x{:04x} expected_badge=0x{:016x} dest_slot=0x{:04x} rights=write+grantreply status=begin",
+                pcie_endpoint,
+                pcie_command_badge,
+                driver_task::DRIVER_TASK_CHILD_PCIE_BUS_ENDPOINT_SLOT,
+            ),
+        )
+        .map_err(|_| HalError::Unsupported("driver-runtime-usb-pcie-cap-log-overflow"))?;
+        crate::bootstrap::log::force_uart_line(cap_line.as_str());
+        // The MCS owner publishes an already-badged command cap. Copy preserves
+        // that identity while applying the same least-authority rights filter;
+        // minting again would ask seL4 to mutate a nonzero endpoint badge.
+        let endpoint_err = sel4::cnode_copy_depth(
             child_cnode,
             driver_task::DRIVER_TASK_CHILD_PCIE_BUS_ENDPOINT_SLOT,
             child_depth,
             root_cnode,
             pcie_endpoint,
             root_depth,
-            sel4_sys::seL4_CapRights_All,
-            0,
+            driver_runtime_command_endpoint_send_rights(),
         );
         if endpoint_err != seL4_NoError {
             return Err(HalError::Sel4(endpoint_err));
         }
+        crate::bootstrap::log::force_uart_line(
+            "DRIVER_TASK_BUS_LINK_CAP channel=usb-pcie operation=copy-preserve-badge dest_slot=0x0009 rights=write+grantreply status=ready",
+        );
         self.env
             .map_page_copy_into_vspace(
                 pcie_ring_frame,
