@@ -68,6 +68,8 @@ use super::{
     sel4_config_kernel_mcs
 ))]
 use super::{IsolatedConsoleInitError, IsolatedVirtioConsole};
+#[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
+use super::{IsolatedCyw43Console, IsolatedNetworkConsole};
 use crate::bootstrap::bootinfo_snapshot::{BootInfoCanaryError, BootInfoState};
 use crate::debug::maybe_report_str_write;
 use crate::drivers::driver_task_net::{
@@ -927,7 +929,7 @@ impl From<IsolatedConsoleInitError> for DefaultDriverError {
 pub enum DefaultNetStack {
     Rtl8139(Box<NetStack<Rtl8139Device>>),
     GenetDriverTask(Box<NetStack<GenetDriverTaskDevice>>),
-    Cyw43DriverTask(Box<NetStack<Cyw43DriverTaskDevice>>),
+    Cyw43DriverTask(Box<Cyw43NetStack>),
     #[cfg(feature = "net-backend-virtio")]
     Virtio(Box<DefaultVirtioStack>),
 }
@@ -1959,6 +1961,35 @@ pub struct NetStack<D: NetDevice> {
     budgeted_phase: BudgetedNetPhase,
 }
 
+/// CYW43 network owner that changes exactly once from root-only DHCP bootstrap
+/// to the pre-constructed isolated console child.
+pub struct Cyw43NetStack {
+    state: Cyw43NetState,
+    config: Option<ConsoleNetConfig>,
+}
+
+enum Cyw43NetState {
+    Root(Box<NetStack<Cyw43DriverTaskDevice>>),
+    #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
+    Deferred {
+        stack: Box<NetStack<Cyw43DriverTaskDevice>>,
+        runtime: crate::hal::console_network::ConsoleNetworkRuntime,
+    },
+    #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
+    Isolated {
+        console: Box<IsolatedCyw43Console>,
+        policy: Box<NetStack<Cyw43DriverTaskDevice>>,
+    },
+    #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
+    Failed {
+        _runtime: crate::hal::console_network::ConsoleNetworkRuntime,
+        policy: Box<NetStack<Cyw43DriverTaskDevice>>,
+        status: NetStatusReport,
+    },
+    #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
+    Transitioning,
+}
+
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 struct PollSnapshot {
     session_active: bool,
@@ -2798,7 +2829,9 @@ where
     let stack = NetStack::<Cyw43DriverTaskDevice>::new(hal, config, backend)
         .map_err(convert_console_error::<DriverTaskNetError>)?;
     check_bootinfo_wrap(mark)?;
-    Ok(DefaultNetStack::Cyw43DriverTask(stack))
+    Ok(DefaultNetStack::Cyw43DriverTask(Box::new(
+        Cyw43NetStack::root(stack),
+    )))
 }
 
 /// Construct the root-side smoltcp shell after the retained CYW43 supervisor
@@ -2812,6 +2845,8 @@ where
 pub fn finish_cyw43_net_console_after_bootstrap<H>(
     hal: &mut H,
     config: ConsoleNetConfig,
+    #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
+    console_runtime: crate::hal::console_network::ConsoleNetworkRuntime,
 ) -> Result<DefaultNetStack, DefaultNetConsoleError>
 where
     H: Hardware<Error = HalError>,
@@ -2826,7 +2861,16 @@ where
     let stack = NetStack::<Cyw43DriverTaskDevice>::new(hal, config, backend)
         .map_err(convert_console_error::<DriverTaskNetError>)?;
     check_bootinfo_wrap(mark)?;
-    Ok(DefaultNetStack::Cyw43DriverTask(stack))
+    #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
+    {
+        return Ok(DefaultNetStack::Cyw43DriverTask(Box::new(
+            Cyw43NetStack::deferred(stack, console_runtime, config),
+        )));
+    }
+    #[cfg(not(all(target_os = "none", sel4_config_kernel_mcs)))]
+    Ok(DefaultNetStack::Cyw43DriverTask(Box::new(
+        Cyw43NetStack::root(stack),
+    )))
 }
 
 /// Map a retained supervisor failure into the public network-console error
@@ -8567,6 +8611,612 @@ impl<D: NetDevice> NetStack<D> {
     }
 }
 
+impl NetStack<Cyw43DriverTaskDevice> {
+    fn prepare_isolated_console_handoff(&mut self) {
+        self.stage_policy.allow_tcp = false;
+        self.stage_policy.allow_console_io = false;
+        self.listener_defer_reason = Some("isolated-child-pending-dhcp");
+    }
+
+    fn take_device_for_isolated_console(&mut self) -> Cyw43DriverTaskDevice {
+        core::mem::take(self.device.as_mut())
+    }
+
+    #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
+    fn poll_isolated_policy_turn(&mut self, now_ms: u64) -> Cyw43IsolatedPolicyTurn {
+        crate::hal::driver_task::register_driver_task_pointer_free_ring_service(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            crate::hal::driver_task::DriverTaskHotPath::Cyw43Wifi.as_u32() as usize,
+            crate::drivers::driver_task_net::runtime_ring_service,
+        );
+        if self.sync_wifi_connection_generation(now_ms) {
+            return Cyw43IsolatedPolicyTurn::blocked(true);
+        }
+        if self.wifi_association_claims_runtime_turn(now_ms) {
+            let activity = self.service_wifi_host_eapol_slice_with_limit(now_ms, 1);
+            return Cyw43IsolatedPolicyTurn::blocked(activity);
+        }
+
+        let mut activity = self.service_wifi_host_eapol_slice_with_limit(now_ms, 1);
+        let host_eapol_blocked =
+            wifi_host_eapol_blocks_data_path(self.device.bringup_status_label());
+        activity |= self.service_cyw43_data_pre_poll_burst(CYW43_WIFI_DRIVER_TASK_CONTRACT);
+        if self.sync_wifi_connection_generation(now_ms) {
+            return Cyw43IsolatedPolicyTurn::blocked(true);
+        }
+        activity |= self.retry_blocked_cyw43_rx_admission(now_ms);
+        Cyw43IsolatedPolicyTurn {
+            activity,
+            data_admitted: !host_eapol_blocked && !self.wifi_rx_admission_blocked,
+        }
+    }
+
+    #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
+    fn poll_isolated_policy_turn_with_budget(
+        &mut self,
+        now_ms: u64,
+        budget: &mut DriverServiceBudget,
+    ) -> Result<Cyw43IsolatedPolicyTurn, DriverServiceBudgetError> {
+        budget.charge_ops(1)?;
+        crate::hal::driver_task::register_driver_task_pointer_free_ring_service(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            crate::hal::driver_task::DriverTaskHotPath::Cyw43Wifi.as_u32() as usize,
+            crate::drivers::driver_task_net::runtime_ring_service,
+        );
+        if self.sync_wifi_connection_generation(now_ms) {
+            return Ok(Cyw43IsolatedPolicyTurn::blocked(true));
+        }
+        if self.wifi_association_claims_runtime_turn(now_ms) {
+            Self::charge_wifi_host_eapol_budget(budget)?;
+            let activity = self.service_wifi_host_eapol_slice_with_limit(now_ms, 1);
+            return Ok(Cyw43IsolatedPolicyTurn::blocked(activity));
+        }
+
+        let host_eapol_blocked =
+            wifi_host_eapol_blocks_data_path(self.device.bringup_status_label());
+        if host_eapol_blocked {
+            Self::charge_wifi_host_eapol_budget(budget)?;
+        }
+        let mut activity = self.service_wifi_host_eapol_slice_with_limit(now_ms, 1);
+        activity |= self
+            .service_cyw43_data_pre_poll_burst_budgeted(CYW43_WIFI_DRIVER_TASK_CONTRACT, budget);
+        if self.sync_wifi_connection_generation(now_ms) {
+            return Ok(Cyw43IsolatedPolicyTurn::blocked(true));
+        }
+        activity |= self.retry_blocked_cyw43_rx_admission(now_ms);
+        Ok(Cyw43IsolatedPolicyTurn {
+            activity,
+            data_admitted: !host_eapol_blocked && !self.wifi_rx_admission_blocked,
+        })
+    }
+}
+
+#[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Cyw43IsolatedPolicyTurn {
+    activity: bool,
+    data_admitted: bool,
+}
+
+#[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
+impl Cyw43IsolatedPolicyTurn {
+    const fn blocked(activity: bool) -> Self {
+        Self {
+            activity,
+            data_admitted: false,
+        }
+    }
+}
+
+impl Cyw43NetStack {
+    fn root(stack: Box<NetStack<Cyw43DriverTaskDevice>>) -> Self {
+        Self {
+            state: Cyw43NetState::Root(stack),
+            config: None,
+        }
+    }
+
+    #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
+    fn deferred(
+        mut stack: Box<NetStack<Cyw43DriverTaskDevice>>,
+        runtime: crate::hal::console_network::ConsoleNetworkRuntime,
+        config: ConsoleNetConfig,
+    ) -> Self {
+        stack.prepare_isolated_console_handoff();
+        Self {
+            state: Cyw43NetState::Deferred { stack, runtime },
+            config: Some(config),
+        }
+    }
+
+    fn inner(&self) -> Option<&dyn NetPoller> {
+        match &self.state {
+            Cyw43NetState::Root(stack) => Some(stack.as_ref()),
+            #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
+            Cyw43NetState::Deferred { stack, .. } => Some(stack.as_ref()),
+            #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
+            Cyw43NetState::Isolated { console, .. } => Some(console.as_ref()),
+            #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
+            Cyw43NetState::Failed { .. } | Cyw43NetState::Transitioning => None,
+        }
+    }
+
+    fn inner_mut(&mut self) -> Option<&mut dyn NetPoller> {
+        match &mut self.state {
+            Cyw43NetState::Root(stack) => Some(stack.as_mut()),
+            #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
+            Cyw43NetState::Deferred { stack, .. } => Some(stack.as_mut()),
+            #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
+            Cyw43NetState::Isolated { console, .. } => Some(console.as_mut()),
+            #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
+            Cyw43NetState::Failed { .. } | Cyw43NetState::Transitioning => None,
+        }
+    }
+
+    #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
+    fn transition_ready(&self) -> bool {
+        let Cyw43NetState::Deferred { stack, .. } = &self.state else {
+            return false;
+        };
+        let status = stack.status_report();
+        status.address_source == "dhcp-lease"
+            && status.dhcp_phase == "bound"
+            && stack.ipv4_address() != Ipv4Address::UNSPECIFIED
+            && stack.prefix_len() != 0
+    }
+
+    #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
+    fn transition_after_dhcp(&mut self, hal: &mut KernelHal<'_>) -> bool {
+        if !self.transition_ready() {
+            return false;
+        }
+        let state = core::mem::replace(&mut self.state, Cyw43NetState::Transitioning);
+        let Cyw43NetState::Deferred {
+            mut stack,
+            mut runtime,
+        } = state
+        else {
+            self.state = state;
+            return false;
+        };
+        let Some(config) = self.config else {
+            self.state = Cyw43NetState::Failed {
+                _runtime: runtime,
+                policy: stack,
+                status: NetStatusReport::default(),
+            };
+            return false;
+        };
+        let mac = stack.hardware_address();
+        let ip = stack.ipv4_address();
+        let prefix_len = stack.prefix_len();
+        let gateway = stack.gateway();
+        let status = stack.status_report();
+        let device = stack.take_device_for_isolated_console();
+        let console_tcb = runtime.tcb_cptr();
+
+        let transition_result = (|| {
+            runtime.finalize_descriptor(
+                hal,
+                mac.0,
+                ip.octets(),
+                prefix_len,
+                gateway.map_or([0; 4], |address| address.octets()),
+                config.auth_token,
+            )?;
+            runtime.activate()
+        })();
+        match transition_result {
+            Ok(()) => {
+                self.state = Cyw43NetState::Isolated {
+                    console: Box::new(IsolatedNetworkConsole::from_existing(
+                        device,
+                        runtime,
+                        mac,
+                        ip,
+                        prefix_len,
+                        gateway,
+                        config.listen_port,
+                        config.backend.label(),
+                        "cyw43",
+                        "cyw43",
+                        config.policy.mode.as_str(),
+                        config.policy.interface.as_str(),
+                        "wifi",
+                        "dhcp-lease",
+                        "bound",
+                    )),
+                    policy: stack,
+                };
+                let mut line = heapless::String::<224>::new();
+                let _ = fmt::write(
+                    &mut line,
+                    format_args!(
+                        "CONSOLE_NETWORK_HANDOFF phase=dhcp-bound tcb=0x{:04x} ip={}/{} gateway={} mac={} descriptor=finalized state=active owner=isolated-child root_tcp=disabled",
+                        console_tcb,
+                        ip,
+                        prefix_len,
+                        gateway.unwrap_or(Ipv4Address::UNSPECIFIED),
+                        mac,
+                    ),
+                );
+                crate::bootstrap::log::force_uart_line(line.as_str());
+                true
+            }
+            Err(error) => {
+                let mut failed = status;
+                failed.address_source = "isolated-child-transition-failed";
+                failed.dhcp_phase = "bound";
+                failed.tcp_ready = false;
+                self.state = Cyw43NetState::Failed {
+                    _runtime: runtime,
+                    policy: stack,
+                    status: failed,
+                };
+                let mut line = heapless::String::<224>::new();
+                let _ = fmt::write(
+                    &mut line,
+                    format_args!(
+                        "CONSOLE_NETWORK_HANDOFF phase=dhcp-bound tcb=0x{:04x} status=failed state=suspended root_tcp=disabled err={error}",
+                        console_tcb,
+                    ),
+                );
+                crate::bootstrap::log::force_uart_line(line.as_str());
+                false
+            }
+        }
+    }
+
+    #[must_use]
+    pub fn hardware_address(&self) -> EthernetAddress {
+        match &self.state {
+            Cyw43NetState::Root(stack) => stack.hardware_address(),
+            #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
+            Cyw43NetState::Deferred { stack, .. } => stack.hardware_address(),
+            #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
+            Cyw43NetState::Isolated { console, .. } => console.hardware_address(),
+            #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
+            Cyw43NetState::Failed { .. } | Cyw43NetState::Transitioning => EthernetAddress([0; 6]),
+        }
+    }
+
+    #[must_use]
+    pub fn ipv4_address(&self) -> Ipv4Address {
+        match &self.state {
+            Cyw43NetState::Root(stack) => stack.ipv4_address(),
+            #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
+            Cyw43NetState::Deferred { stack, .. } => stack.ipv4_address(),
+            #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
+            Cyw43NetState::Isolated { console, .. } => console.ipv4_address(),
+            #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
+            Cyw43NetState::Failed { .. } | Cyw43NetState::Transitioning => Ipv4Address::UNSPECIFIED,
+        }
+    }
+
+    #[must_use]
+    pub fn prefix_len(&self) -> u8 {
+        match &self.state {
+            Cyw43NetState::Root(stack) => stack.prefix_len(),
+            #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
+            Cyw43NetState::Deferred { stack, .. } => stack.prefix_len(),
+            #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
+            Cyw43NetState::Isolated { console, .. } => console.prefix_len(),
+            #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
+            Cyw43NetState::Failed { .. } | Cyw43NetState::Transitioning => 0,
+        }
+    }
+
+    #[must_use]
+    pub fn gateway(&self) -> Option<Ipv4Address> {
+        match &self.state {
+            Cyw43NetState::Root(stack) => stack.gateway(),
+            #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
+            Cyw43NetState::Deferred { stack, .. } => stack.gateway(),
+            #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
+            Cyw43NetState::Isolated { console, .. } => console.gateway(),
+            #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
+            Cyw43NetState::Failed { .. } | Cyw43NetState::Transitioning => None,
+        }
+    }
+}
+
+impl NetPoller for Cyw43NetStack {
+    fn poll(&mut self, now_ms: u64) -> bool {
+        #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
+        match &mut self.state {
+            Cyw43NetState::Isolated { console, policy } => {
+                let policy_turn = policy.poll_isolated_policy_turn(now_ms);
+                let console_activity = policy_turn.data_admitted && console.poll(now_ms);
+                return policy_turn.activity || console_activity;
+            }
+            Cyw43NetState::Failed { policy, .. } => {
+                return policy.poll_isolated_policy_turn(now_ms).activity;
+            }
+            _ => {}
+        }
+        self.inner_mut().is_some_and(|inner| inner.poll(now_ms))
+    }
+
+    fn poll_with_budget(
+        &mut self,
+        now_ms: u64,
+        budget: &mut DriverServiceBudget,
+    ) -> Result<bool, DriverServiceBudgetError> {
+        #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
+        match &mut self.state {
+            Cyw43NetState::Isolated { console, policy } => {
+                let policy_turn = policy.poll_isolated_policy_turn_with_budget(now_ms, budget)?;
+                let console_activity = if policy_turn.data_admitted {
+                    console.poll_with_budget(now_ms, budget)?
+                } else {
+                    false
+                };
+                return Ok(policy_turn.activity || console_activity);
+            }
+            Cyw43NetState::Failed { policy, .. } => {
+                return policy
+                    .poll_isolated_policy_turn_with_budget(now_ms, budget)
+                    .map(|turn| turn.activity);
+            }
+            _ => {}
+        }
+        self.inner_mut()
+            .map_or(Ok(false), |inner| inner.poll_with_budget(now_ms, budget))
+    }
+
+    fn flush_tcp_with_budget(
+        &mut self,
+        now_ms: u64,
+        budget: &mut DriverServiceBudget,
+    ) -> Result<bool, DriverServiceBudgetError> {
+        #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
+        match &mut self.state {
+            Cyw43NetState::Isolated { console, policy } => {
+                let policy_turn = policy.poll_isolated_policy_turn_with_budget(now_ms, budget)?;
+                let console_activity = if policy_turn.data_admitted {
+                    console.flush_tcp_with_budget(now_ms, budget)?
+                } else {
+                    false
+                };
+                return Ok(policy_turn.activity || console_activity);
+            }
+            Cyw43NetState::Failed { policy, .. } => {
+                return policy
+                    .poll_isolated_policy_turn_with_budget(now_ms, budget)
+                    .map(|turn| turn.activity);
+            }
+            _ => {}
+        }
+        self.inner_mut().map_or(Ok(false), |inner| {
+            inner.flush_tcp_with_budget(now_ms, budget)
+        })
+    }
+
+    fn driver_task_contract(&self) -> crate::hal::driver_task::DriverTaskContract {
+        CYW43_WIFI_DRIVER_TASK_CONTRACT
+    }
+
+    fn telemetry(&self) -> NetTelemetry {
+        self.inner()
+            .map_or(NetTelemetry::default(), NetPoller::telemetry)
+    }
+
+    fn stats(&self) -> NetCounters {
+        self.inner()
+            .map_or(NetCounters::default(), NetPoller::stats)
+    }
+
+    fn drain_console_lines(&mut self, now_ms: u64, visitor: &mut dyn FnMut(ConsoleLine)) {
+        if let Some(inner) = self.inner_mut() {
+            inner.drain_console_lines(now_ms, visitor);
+        }
+    }
+
+    fn drain_console_lines_bounded(
+        &mut self,
+        now_ms: u64,
+        max_lines: usize,
+        visitor: &mut dyn FnMut(ConsoleLine),
+    ) -> usize {
+        self.inner_mut().map_or(0, |inner| {
+            inner.drain_console_lines_bounded(now_ms, max_lines, visitor)
+        })
+    }
+
+    fn send_console_line(&mut self, line: &str) -> bool {
+        self.inner_mut()
+            .is_some_and(|inner| inner.send_console_line(line))
+    }
+
+    fn send_console_terminal_line(&mut self, line: &str) -> bool {
+        self.inner_mut()
+            .is_some_and(|inner| inner.send_console_terminal_line(line))
+    }
+
+    fn bounded_console_response_identity(&self) -> Option<ConsoleResponseIdentity> {
+        self.inner()
+            .and_then(NetPoller::bounded_console_response_identity)
+    }
+
+    fn console_response_lane(&self) -> Option<ConsoleResponseLane> {
+        self.inner().and_then(NetPoller::console_response_lane)
+    }
+
+    fn poll_console_response_with_budget(
+        &mut self,
+        now_ms: u64,
+        budget: &mut DriverServiceBudget,
+    ) -> Result<bool, DriverServiceBudgetError> {
+        #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
+        if let Cyw43NetState::Isolated { console, policy } = &mut self.state {
+            let policy_turn = policy.poll_isolated_policy_turn_with_budget(now_ms, budget)?;
+            let console_activity = if policy_turn.data_admitted {
+                console.poll_console_response_with_budget(now_ms, budget)?
+            } else {
+                false
+            };
+            return Ok(policy_turn.activity || console_activity);
+        }
+        self.inner_mut().map_or(Ok(false), |inner| {
+            inner.poll_console_response_with_budget(now_ms, budget)
+        })
+    }
+
+    fn request_disconnect(&mut self) {
+        if let Some(inner) = self.inner_mut() {
+            inner.request_disconnect();
+        }
+    }
+
+    fn console_output_drained(&self, conn_id: u64) -> bool {
+        self.inner()
+            .is_some_and(|inner| inner.console_output_drained(conn_id))
+    }
+
+    fn take_console_event(&mut self) -> Option<NetConsoleEvent> {
+        self.inner_mut().and_then(NetPoller::take_console_event)
+    }
+
+    fn console_event_pending(&self) -> bool {
+        self.inner().is_some_and(NetPoller::console_event_pending)
+    }
+
+    fn drain_console_events(&mut self, visitor: &mut dyn FnMut(NetConsoleEvent)) {
+        if let Some(inner) = self.inner_mut() {
+            inner.drain_console_events(visitor);
+        }
+    }
+
+    fn ingest_snapshot(&self) -> IngestSnapshot {
+        self.inner()
+            .map_or(IngestSnapshot::default(), NetPoller::ingest_snapshot)
+    }
+
+    fn buffered_console_lines_pending(&self) -> bool {
+        self.inner()
+            .is_some_and(NetPoller::buffered_console_lines_pending)
+    }
+
+    fn active_console_conn_id(&self) -> Option<u64> {
+        self.inner().and_then(NetPoller::active_console_conn_id)
+    }
+
+    fn authenticated_console_conn_id(&self) -> Option<u64> {
+        self.inner()
+            .and_then(NetPoller::authenticated_console_conn_id)
+    }
+
+    fn console_service_pending(&self) -> bool {
+        self.inner().is_some_and(NetPoller::console_service_pending)
+    }
+
+    fn icmp_echo_service_due(&self, now_ms: u64) -> bool {
+        self.inner()
+            .is_some_and(|inner| inner.icmp_echo_service_due(now_ms))
+    }
+
+    fn cyw43_association_runtime_turn_pending(&self, now_ms: u64) -> bool {
+        #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
+        match &self.state {
+            Cyw43NetState::Isolated { policy, .. } | Cyw43NetState::Failed { policy, .. } => {
+                return policy.wifi_association_claims_runtime_turn(now_ms);
+            }
+            _ => {}
+        }
+        self.inner()
+            .is_some_and(|inner| inner.cyw43_association_runtime_turn_pending(now_ms))
+    }
+
+    fn inject_console_line(&mut self, line: &str) {
+        if let Some(inner) = self.inner_mut() {
+            inner.inject_console_line(line);
+        }
+    }
+
+    fn reset(&mut self) {
+        if let Some(inner) = self.inner_mut() {
+            inner.reset();
+        }
+    }
+
+    fn console_listen_port(&self) -> u16 {
+        self.inner()
+            .map_or(crate::net::CONSOLE_TCP_PORT, NetPoller::console_listen_port)
+    }
+
+    fn console_listener_ready(&self) -> bool {
+        self.inner().is_some_and(NetPoller::console_listener_ready)
+    }
+
+    fn start_self_test(&mut self, now_ms: u64) -> NetSelfTestStartResult {
+        self.inner_mut()
+            .map_or(NetSelfTestStartResult::Unsupported, |inner| {
+                inner.start_self_test(now_ms)
+            })
+    }
+
+    fn self_test_report(&self) -> NetSelfTestReport {
+        self.inner()
+            .map_or(NetSelfTestReport::default(), NetPoller::self_test_report)
+    }
+
+    fn status_report(&self) -> NetStatusReport {
+        #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
+        if let Cyw43NetState::Failed { status, .. } = &self.state {
+            return status.clone();
+        }
+        self.inner()
+            .map_or(NetStatusReport::default(), NetPoller::status_report)
+    }
+
+    #[cfg(feature = "kernel")]
+    fn service_deferred_console_network_handoff(
+        &mut self,
+        hal: &mut KernelHal<'_>,
+    ) -> Result<bool, HalError> {
+        #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
+        {
+            return Ok(self.transition_after_dhcp(hal));
+        }
+        #[cfg(not(all(target_os = "none", sel4_config_kernel_mcs)))]
+        {
+            let _ = hal;
+            Ok(false)
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    fn contain_faulted_console_service(
+        &mut self,
+        hal: &mut KernelHal<'_>,
+    ) -> Result<crate::console_network_service::ConsoleNetworkContainmentTurn, HalError> {
+        self.inner_mut().map_or(
+            Ok(crate::console_network_service::ConsoleNetworkContainmentTurn::Idle),
+            |inner| inner.contain_faulted_console_service(hal),
+        )
+    }
+
+    #[cfg(feature = "kernel")]
+    fn console_network_containment_diagnostic_pending(&self) -> bool {
+        self.inner()
+            .is_some_and(NetPoller::console_network_containment_diagnostic_pending)
+    }
+
+    #[cfg(feature = "kernel")]
+    fn pending_console_network_containment_diagnostic(
+        &self,
+    ) -> Option<HeaplessString<{ crate::serial::DEFAULT_LINE_CAPACITY }>> {
+        self.inner()
+            .and_then(NetPoller::pending_console_network_containment_diagnostic)
+    }
+
+    #[cfg(feature = "kernel")]
+    fn commit_console_network_containment_diagnostic(&mut self, expected_line: &str) -> bool {
+        self.inner_mut()
+            .is_some_and(|inner| inner.commit_console_network_containment_diagnostic(expected_line))
+    }
+}
+
 impl DefaultNetStack {
     /// Activate the QEMU console child after the exact fault registry seal.
     pub fn activate_console_network_child(&mut self) -> Result<bool, HalError> {
@@ -9898,14 +10548,28 @@ impl NetPoller for DefaultNetStack {
     }
 
     #[cfg(feature = "kernel")]
+    fn service_deferred_console_network_handoff(
+        &mut self,
+        hal: &mut KernelHal<'_>,
+    ) -> Result<bool, HalError> {
+        match self {
+            Self::Rtl8139(_) | Self::GenetDriverTask(_) => Ok(false),
+            Self::Cyw43DriverTask(stack) => stack.service_deferred_console_network_handoff(hal),
+            #[cfg(feature = "net-backend-virtio")]
+            Self::Virtio(stack) => stack.service_deferred_console_network_handoff(hal),
+        }
+    }
+
+    #[cfg(feature = "kernel")]
     fn contain_faulted_console_service(
         &mut self,
         hal: &mut KernelHal<'_>,
     ) -> Result<crate::console_network_service::ConsoleNetworkContainmentTurn, HalError> {
         match self {
-            Self::Rtl8139(_) | Self::GenetDriverTask(_) | Self::Cyw43DriverTask(_) => {
+            Self::Rtl8139(_) | Self::GenetDriverTask(_) => {
                 Ok(crate::console_network_service::ConsoleNetworkContainmentTurn::Idle)
             }
+            Self::Cyw43DriverTask(stack) => stack.contain_faulted_console_service(hal),
             #[cfg(feature = "net-backend-virtio")]
             Self::Virtio(stack) => stack.contain_faulted_console_service(hal),
         }
@@ -9914,7 +10578,8 @@ impl NetPoller for DefaultNetStack {
     #[cfg(feature = "kernel")]
     fn console_network_containment_diagnostic_pending(&self) -> bool {
         match self {
-            Self::Rtl8139(_) | Self::GenetDriverTask(_) | Self::Cyw43DriverTask(_) => false,
+            Self::Rtl8139(_) | Self::GenetDriverTask(_) => false,
+            Self::Cyw43DriverTask(stack) => stack.console_network_containment_diagnostic_pending(),
             #[cfg(feature = "net-backend-virtio")]
             Self::Virtio(stack) => stack.console_network_containment_diagnostic_pending(),
         }
@@ -9925,7 +10590,8 @@ impl NetPoller for DefaultNetStack {
         &self,
     ) -> Option<HeaplessString<{ crate::serial::DEFAULT_LINE_CAPACITY }>> {
         match self {
-            Self::Rtl8139(_) | Self::GenetDriverTask(_) | Self::Cyw43DriverTask(_) => None,
+            Self::Rtl8139(_) | Self::GenetDriverTask(_) => None,
+            Self::Cyw43DriverTask(stack) => stack.pending_console_network_containment_diagnostic(),
             #[cfg(feature = "net-backend-virtio")]
             Self::Virtio(stack) => stack.pending_console_network_containment_diagnostic(),
         }
@@ -9934,7 +10600,10 @@ impl NetPoller for DefaultNetStack {
     #[cfg(feature = "kernel")]
     fn commit_console_network_containment_diagnostic(&mut self, expected_line: &str) -> bool {
         match self {
-            Self::Rtl8139(_) | Self::GenetDriverTask(_) | Self::Cyw43DriverTask(_) => false,
+            Self::Rtl8139(_) | Self::GenetDriverTask(_) => false,
+            Self::Cyw43DriverTask(stack) => {
+                stack.commit_console_network_containment_diagnostic(expected_line)
+            }
             #[cfg(feature = "net-backend-virtio")]
             Self::Virtio(stack) => {
                 stack.commit_console_network_containment_diagnostic(expected_line)

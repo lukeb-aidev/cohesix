@@ -3099,6 +3099,15 @@ pub struct BootContext {
     pub(crate) net_unavailable_detail: RefCell<Option<HeaplessString<192>>>,
     #[cfg(feature = "net-console")]
     pub(crate) net_deferred_config: RefCell<Option<crate::net::ConsoleNetConfig>>,
+    #[cfg(all(
+        feature = "net-console",
+        feature = "kernel",
+        target_arch = "aarch64",
+        target_os = "none",
+        sel4_config_kernel_mcs
+    ))]
+    pub(crate) net_deferred_console_runtime:
+        RefCell<Option<crate::hal::console_network::ConsoleNetworkRuntime>>,
     #[cfg(feature = "kernel")]
     pub(crate) ninedoor: RefCell<Option<&'static mut NineDoorBridge>>,
     #[cfg(feature = "kernel")]
@@ -5385,6 +5394,13 @@ fn bootstrap<P: Platform>(
                 }
             }
         };
+        #[cfg(all(feature = "net-console", feature = "kernel", sel4_config_kernel_mcs))]
+        let mut net_stack = net_stack;
+        #[cfg(all(feature = "net-console", not(feature = "kernel")))]
+        let net_stack = None::<()>;
+        #[cfg(not(feature = "net-console"))]
+        let net_stack = None::<()>;
+
         #[cfg(all(
             feature = "net-console",
             feature = "kernel",
@@ -5392,11 +5408,25 @@ fn bootstrap<P: Platform>(
             target_os = "none",
             sel4_config_kernel_mcs
         ))]
-        let mut net_stack = net_stack;
-        #[cfg(all(feature = "net-console", not(feature = "kernel")))]
-        let net_stack = None::<()>;
-        #[cfg(not(feature = "net-console"))]
-        let net_stack = None::<()>;
+        let net_deferred_console_runtime = if net_stack.is_none() && net_deferred_config.is_some() {
+            let runtime = hal
+                .construct_console_network_runtime_shell(1)
+                .map_err(|error| {
+                    BootError::Fatal(format!(
+                        "deferred isolated console-network shell construction failed before registry seal: {error}"
+                    ))
+                })?;
+            let mut line = HeaplessString::<192>::new();
+            let _ = write!(
+                &mut line,
+                "[console-network] shell constructed generation=1 tcb=0x{:04x} state=suspended descriptor=pending-dhcp fault_registry=registered",
+                runtime.tcb_cptr(),
+            );
+            boot_log::force_uart_line(line.as_str());
+            Some(runtime)
+        } else {
+            None
+        };
 
         // NineDoor is deliberately constructed after the active console-network
         // child. Its constructor performs the final QEMU fault-source
@@ -5535,28 +5565,30 @@ fn bootstrap<P: Platform>(
 
             #[cfg(feature = "net-console")]
             {
-                let activated = net_stack
-                    .as_mut()
-                    .ok_or_else(|| {
-                        BootError::Fatal(
-                            "isolated console-network missing after exact registry seal".into(),
-                        )
-                    })?
-                    .activate_console_network_child()
-                    .map_err(|error| {
+                if let Some(stack) = net_stack.as_mut() {
+                    let activated = stack.activate_console_network_child().map_err(|error| {
                         BootError::Fatal(format!(
                             "isolated console-network failed to activate: {error}"
                         ))
                     })?;
-                if !activated {
+                    if !activated {
+                        return Err(BootError::Fatal(
+                            "selected immediate-network MCS profile did not activate isolated console-network"
+                                .into(),
+                        ));
+                    }
+                    boot_log::force_uart_line(
+                        "[console-network] isolated child active fault_receiver=active",
+                    );
+                } else if net_deferred_console_runtime.is_some() {
+                    boot_log::force_uart_line(
+                        "[console-network] isolated child retained state=suspended descriptor=pending-dhcp fault_receiver=active",
+                    );
+                } else {
                     return Err(BootError::Fatal(
-                        "selected MCS QEMU profile did not activate isolated console-network"
-                            .into(),
+                        "isolated console-network missing after exact registry seal".into(),
                     ));
                 }
-                boot_log::force_uart_line(
-                    "[console-network] isolated child active fault_receiver=active",
-                );
             }
         }
 
@@ -5866,6 +5898,13 @@ fn bootstrap<P: Platform>(
             net_stack: RefCell::new(net_stack),
             net_unavailable_detail: RefCell::new(net_init_error),
             net_deferred_config: RefCell::new(net_deferred_config),
+            #[cfg(all(
+                feature = "kernel",
+                target_arch = "aarch64",
+                target_os = "none",
+                sel4_config_kernel_mcs
+            ))]
+            net_deferred_console_runtime: RefCell::new(net_deferred_console_runtime),
             #[cfg(feature = "kernel")]
             ninedoor: RefCell::new(Some(ninedoor)),
             #[cfg(feature = "kernel")]
@@ -5894,6 +5933,14 @@ fn bootstrap<P: Platform>(
             net_unavailable_detail: RefCell::new(None),
             #[cfg(feature = "net-console")]
             net_deferred_config: RefCell::new(None),
+            #[cfg(all(
+                feature = "net-console",
+                feature = "kernel",
+                target_arch = "aarch64",
+                target_os = "none",
+                sel4_config_kernel_mcs
+            ))]
+            net_deferred_console_runtime: RefCell::new(None),
             #[cfg(feature = "kernel")]
             ninedoor: RefCell::new(None),
             #[cfg(feature = "kernel")]

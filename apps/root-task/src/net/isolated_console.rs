@@ -1,11 +1,11 @@
 // Copyright 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
-// Purpose: Adapt the QEMU virtual NIC to the isolated console-network child.
+// Purpose: Adapt admitted network devices to the isolated console-network child.
 // Author: Lukas Bower
 
-//! QEMU-only root adapter for the isolated console-network service.
+//! Root NIC adapter for the isolated console-network service.
 //!
-//! Root retains the virtual NIC and console policy. Ethernet, IP, TCP,
+//! Root retains the admitted NIC and console policy. Ethernet, IP, TCP,
 //! authentication, and framing are owned by the compiler-declared child. Every
 //! crossing copies through the four fixed ABI pages; no root pointer or NIC cap
 //! enters the child.
@@ -17,22 +17,26 @@ use console_network_abi::{
     ExchangeKind, SendBatchBuilder, CONSOLE_PAYLOAD_BYTES, SEND_BATCH_MAX_RECORDS,
 };
 use heapless::{Deque, String as HeaplessString, Vec as HeaplessVec};
-use smoltcp::phy::{RxToken, TxToken};
 use smoltcp::time::Instant;
 use smoltcp::wire::{EthernetAddress, Ipv4Address};
 
 use super::{
-    select_isolated_network_turn, select_isolated_response_turn, ConsoleLine, ConsoleNetConfig,
+    select_isolated_network_turn, select_isolated_response_turn, ConsoleLine,
     IsolatedNetworkLowerCursor, IsolatedNetworkLowerUnit, IsolatedNetworkTurnOutcome,
     IsolatedNetworkTurnSelection, IsolatedNetworkTurnUnit, NetConsoleDisconnectReason,
-    NetConsoleEvent, NetCounters, NetDevice, NetPoller, NetStatusReport, NetTelemetry, NET_STAGE,
+    NetConsoleEvent, NetCounters, NetDevice, NetPoller, NetStatusReport, NetTelemetry,
 };
+#[cfg(feature = "net-backend-virtio")]
+use super::{ConsoleNetConfig, NET_STAGE};
 use crate::console_network_service::{BoundaryError, ConsoleNetworkContainmentTurn, ServiceState};
+use crate::drivers::driver_task_net::Cyw43DriverTaskDevice;
+#[cfg(feature = "net-backend-virtio")]
 use crate::drivers::virtio::net::{DriverError as VirtioDriverError, VirtioNetStatic};
 use crate::hal::console_network::ConsoleNetworkRuntime;
 use crate::hal::driver_task::{DriverServiceBudget, DriverServiceBudgetError, DriverTaskContract};
 use crate::hal::{HalError, KernelHal};
 use crate::observe::IngestSnapshot;
+#[cfg(feature = "net-backend-virtio")]
 use crate::rust_alloc::boxed::Box;
 use crate::serial::DEFAULT_LINE_CAPACITY;
 
@@ -148,6 +152,7 @@ impl ConsoleNetworkContainmentDiagnostic {
 #[derive(Debug)]
 pub enum IsolatedConsoleInitError {
     /// Virtual NIC discovery or construction failed.
+    #[cfg(feature = "net-backend-virtio")]
     Driver(VirtioDriverError),
     /// Child object, mapping, capability, or MCS construction failed.
     Hal(HalError),
@@ -158,6 +163,7 @@ pub enum IsolatedConsoleInitError {
 impl fmt::Display for IsolatedConsoleInitError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            #[cfg(feature = "net-backend-virtio")]
             Self::Driver(error) => write!(formatter, "{error}"),
             Self::Hal(error) => write!(formatter, "{error}"),
             Self::InvalidConfig(reason) => formatter.write_str(reason),
@@ -165,9 +171,9 @@ impl fmt::Display for IsolatedConsoleInitError {
     }
 }
 
-/// Sole QEMU network-console owner visible through [`NetPoller`].
-pub struct IsolatedVirtioConsole {
-    device: VirtioNetStatic,
+/// Sole network-console owner visible through [`NetPoller`].
+pub struct IsolatedNetworkConsole<D: NetDevice> {
+    device: D,
     runtime: ConsoleNetworkRuntime,
     mac: EthernetAddress,
     ip: Ipv4Address,
@@ -199,9 +205,25 @@ pub struct IsolatedVirtioConsole {
     connection_bytes_written: u64,
     ingest_backpressure: u64,
     ingest_dropped: u64,
+    profile_backend: &'static str,
+    backend: &'static str,
+    active_driver: &'static str,
+    mode: &'static str,
+    interface_policy: &'static str,
+    active_interface: &'static str,
+    address_source: &'static str,
+    dhcp_phase: &'static str,
 }
 
-impl IsolatedVirtioConsole {
+/// QEMU VirtIO specialization retaining its exact bounded driver seams.
+#[cfg(feature = "net-backend-virtio")]
+pub type IsolatedVirtioConsole = IsolatedNetworkConsole<VirtioNetStatic>;
+
+/// Physical Pi CYW43 specialization used after root-only DHCP bootstrap.
+pub type IsolatedCyw43Console = IsolatedNetworkConsole<Cyw43DriverTaskDevice>;
+
+#[cfg(feature = "net-backend-virtio")]
+impl IsolatedNetworkConsole<VirtioNetStatic> {
     /// Construct the NIC plus suspended compiler-declared child generation.
     pub fn new(
         hal: &mut KernelHal<'_>,
@@ -236,14 +258,54 @@ impl IsolatedVirtioConsole {
             )
             .map_err(IsolatedConsoleInitError::Hal)?;
         let gateway = config.address.gateway.map(Ipv4Address::from);
-        Ok(Box::new(Self {
+        Ok(Box::new(Self::from_existing(
             device,
             runtime,
             mac,
             ip,
-            prefix_len: config.address.prefix_len,
+            config.address.prefix_len,
             gateway,
-            listen_port: config.listen_port,
+            config.listen_port,
+            "virtio-net",
+            "virtio-net",
+            "virtio-net",
+            "static",
+            "wired",
+            "wired",
+            "dev-virt-isolated-child",
+            "disabled",
+        )))
+    }
+}
+
+impl<D: NetDevice> IsolatedNetworkConsole<D> {
+    /// Bind an already-admitted NIC and finalized child generation.
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_existing(
+        device: D,
+        runtime: ConsoleNetworkRuntime,
+        mac: EthernetAddress,
+        ip: Ipv4Address,
+        prefix_len: u8,
+        gateway: Option<Ipv4Address>,
+        listen_port: u16,
+        profile_backend: &'static str,
+        backend: &'static str,
+        active_driver: &'static str,
+        mode: &'static str,
+        interface_policy: &'static str,
+        active_interface: &'static str,
+        address_source: &'static str,
+        dhcp_phase: &'static str,
+    ) -> Self {
+        Self {
+            device,
+            runtime,
+            mac,
+            ip,
+            prefix_len,
+            gateway,
+            listen_port,
             lines: Deque::new(),
             events: Deque::new(),
             output: Deque::new(),
@@ -273,7 +335,15 @@ impl IsolatedVirtioConsole {
             connection_bytes_written: 0,
             ingest_backpressure: 0,
             ingest_dropped: 0,
-        }))
+            profile_backend,
+            backend,
+            active_driver,
+            mode,
+            interface_policy,
+            active_interface,
+            address_source,
+            dhcp_phase,
+        }
     }
 
     /// Resume the child only after the exact target fault registry is sealed.
@@ -754,12 +824,13 @@ impl IsolatedVirtioConsole {
         let Some(frame) = self.pending_egress.take() else {
             return false;
         };
-        let Some(token) = self.device.transmit_isolated(timestamp) else {
+        if !self
+            .device
+            .transmit_isolated_frame(timestamp, frame.as_slice())
+        {
             self.pending_egress = Some(frame);
             return false;
-        };
-        let length = frame.len();
-        token.consume(length, |output| output.copy_from_slice(frame.as_slice()));
+        }
         true
     }
 
@@ -768,18 +839,18 @@ impl IsolatedVirtioConsole {
             return false;
         }
         self.device.begin_smoltcp_rx_transaction();
-        let staged = if let Some(receive) = self.device.receive_isolated() {
+        let staged = {
             let runtime = &mut self.runtime;
-            let result = receive.consume(|packet| {
-                if packet.is_empty() {
-                    Ok(None)
-                } else {
-                    runtime.stage_ingress(packet).map(Some)
-                }
-            });
-            Some(result)
-        } else {
-            None
+            self.device.consume_isolated_rx(
+                Instant::from_millis(self.last_now_ms.min(i64::MAX as u64) as i64),
+                |packet| {
+                    if packet.is_empty() {
+                        Ok(None)
+                    } else {
+                        runtime.stage_ingress(packet).map(Some)
+                    }
+                },
+            )
         };
         self.device.end_smoltcp_rx_transaction();
         match staged {
@@ -912,7 +983,7 @@ impl IsolatedVirtioConsole {
     fn poll_deferred_diagnostic_unit(&mut self) -> IsolatedNetworkTurnOutcome {
         // A successful TX owned the prior Network visit. Drain its one compact
         // routine record before another operation can overwrite that slot.
-        let emitted = self.device.emit_one_deferred_tx_diagnostic();
+        let emitted = self.device.emit_one_isolated_deferred_tx_diagnostic();
         debug_assert!(emitted, "selected deferred diagnostic must exist");
         IsolatedNetworkTurnOutcome::complete(emitted)
     }
@@ -1030,7 +1101,7 @@ impl IsolatedVirtioConsole {
     }
 }
 
-impl NetPoller for IsolatedVirtioConsole {
+impl<D: NetDevice> NetPoller for IsolatedNetworkConsole<D> {
     #[inline(never)]
     fn poll(&mut self, now_ms: u64) -> bool {
         self.last_now_ms = now_ms;
@@ -1042,7 +1113,7 @@ impl NetPoller for IsolatedVirtioConsole {
         self.counters.smoltcp_polls = self.counters.smoltcp_polls.saturating_add(1);
 
         let selection: IsolatedNetworkTurnSelection = select_isolated_network_turn(
-            self.device.deferred_tx_diagnostic_pending(),
+            self.device.isolated_deferred_tx_diagnostic_pending(),
             self.pending_egress.is_some(),
             self.runtime.publication_ack_pending(),
             self.lower_cursor,
@@ -1110,7 +1181,7 @@ impl NetPoller for IsolatedVirtioConsole {
     }
 
     fn driver_task_contract(&self) -> DriverTaskContract {
-        VirtioNetStatic::driver_task_contract()
+        D::driver_task_contract()
     }
 
     fn telemetry(&self) -> NetTelemetry {
@@ -1253,17 +1324,17 @@ impl NetPoller for IsolatedVirtioConsole {
             self.gateway.unwrap_or(Ipv4Address::UNSPECIFIED)
         );
         NetStatusReport {
-            profile_backend: "virtio-net",
-            backend: "virtio-net",
-            active_driver: "virtio-net",
-            mode: "static",
-            interface_policy: "wired",
-            active_interface: "wired",
+            profile_backend: self.profile_backend,
+            backend: self.backend,
+            active_driver: self.active_driver,
+            mode: self.mode,
+            interface_policy: self.interface_policy,
+            active_interface: self.active_interface,
             standby_interface: "none",
-            address_source: "dev-virt-isolated-child",
+            address_source: self.address_source,
             ip,
             gateway,
-            dhcp_phase: "disabled",
+            dhcp_phase: self.dhcp_phase,
             tcp_ready: self.console_listener_ready(),
         }
     }

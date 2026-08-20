@@ -9082,6 +9082,29 @@ impl NetDevice for VirtioNetStatic {
         self.driver.tx_drop_count()
     }
 
+    fn consume_isolated_rx<R, F>(&mut self, _timestamp: Instant, consume: F) -> Option<R>
+    where
+        F: FnOnce(&[u8]) -> R,
+    {
+        self.receive_isolated().map(|token| token.consume(consume))
+    }
+
+    fn transmit_isolated_frame(&mut self, timestamp: Instant, frame: &[u8]) -> bool {
+        let Some(token) = self.transmit_isolated(timestamp) else {
+            return false;
+        };
+        token.consume(frame.len(), |output| output.copy_from_slice(frame));
+        true
+    }
+
+    fn isolated_deferred_tx_diagnostic_pending(&self) -> bool {
+        self.deferred_tx_diagnostic_pending()
+    }
+
+    fn emit_one_isolated_deferred_tx_diagnostic(&mut self) -> bool {
+        self.emit_one_deferred_tx_diagnostic()
+    }
+
     fn debug_scan_tx_avail_duplicates(&mut self) {
         self.driver.debug_scan_tx_avail_duplicates();
     }

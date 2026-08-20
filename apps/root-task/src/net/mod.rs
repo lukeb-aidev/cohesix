@@ -7,7 +7,8 @@
 
 #[cfg(all(feature = "kernel", feature = "net-console"))]
 use smoltcp::{
-    phy::Device,
+    phy::{Device, RxToken, TxToken},
+    time::Instant,
     wire::{EthernetAddress, Ipv4Address},
 };
 
@@ -1056,6 +1057,44 @@ pub trait NetDevice: Device {
     /// immediate egress paired with the current ingress packet.
     fn end_smoltcp_rx_transaction(&mut self) {}
 
+    /// Consume at most one raw Ethernet frame for the isolated child adapter.
+    ///
+    /// The default preserves a driver's ordinary smoltcp receive contract and
+    /// immediately drops the paired TX token. Drivers with stricter bounded-turn
+    /// seams may override it without changing the child-facing adapter.
+    fn consume_isolated_rx<R, F>(&mut self, timestamp: Instant, consume: F) -> Option<R>
+    where
+        F: FnOnce(&[u8]) -> R,
+        Self: Sized,
+    {
+        let (rx, tx) = self.receive(timestamp)?;
+        let result = rx.consume(consume);
+        drop(tx);
+        Some(result)
+    }
+
+    /// Publish one raw Ethernet frame produced by the isolated child.
+    fn transmit_isolated_frame(&mut self, timestamp: Instant, frame: &[u8]) -> bool
+    where
+        Self: Sized,
+    {
+        let Some(token) = self.transmit(timestamp) else {
+            return false;
+        };
+        token.consume(frame.len(), |output| output.copy_from_slice(frame));
+        true
+    }
+
+    /// Whether a bounded driver diagnostic must precede another isolated TX.
+    fn isolated_deferred_tx_diagnostic_pending(&self) -> bool {
+        false
+    }
+
+    /// Emit at most one deferred isolated-TX diagnostic.
+    fn emit_one_isolated_deferred_tx_diagnostic(&mut self) -> bool {
+        false
+    }
+
     /// Total TX drops recorded by the driver.
     fn tx_drop_count(&self) -> u32;
 
@@ -1515,6 +1554,20 @@ pub trait NetPoller {
         NetStatusReport::default()
     }
 
+    /// Finalize and resume a pre-registered console child after address truth.
+    ///
+    /// The root event loop supplies its exclusive HAL borrow and gives this
+    /// fixed kernel-operation sequence a turn of its own. Ordinary network
+    /// polling therefore never manufactures capability authority or hides
+    /// lifecycle work inside a driver-service budget.
+    #[cfg(feature = "kernel")]
+    fn service_deferred_console_network_handoff(
+        &mut self,
+        _hal: &mut crate::hal::KernelHal<'_>,
+    ) -> Result<bool, crate::hal::HalError> {
+        Ok(false)
+    }
+
     /// Consume and contain a terminal isolated-service fault, when supported.
     #[cfg(feature = "kernel")]
     fn contain_faulted_console_service(
@@ -1577,7 +1630,6 @@ pub struct ConsoleResponseLane {
     all(
         feature = "kernel",
         feature = "net-console",
-        feature = "net-backend-virtio",
         target_os = "none",
         sel4_config_kernel_mcs
     )
@@ -1587,7 +1639,6 @@ mod isolated_network_turn;
 #[cfg(all(
     feature = "kernel",
     feature = "net-console",
-    feature = "net-backend-virtio",
     target_os = "none",
     sel4_config_kernel_mcs
 ))]
@@ -1651,7 +1702,6 @@ mod console_srv;
 #[cfg(all(
     feature = "kernel",
     feature = "net-console",
-    feature = "net-backend-virtio",
     target_os = "none",
     sel4_config_kernel_mcs
 ))]
@@ -1663,7 +1713,16 @@ mod isolated_console;
     target_os = "none",
     sel4_config_kernel_mcs
 ))]
-pub use isolated_console::{IsolatedConsoleInitError, IsolatedVirtioConsole};
+pub use isolated_console::IsolatedVirtioConsole;
+#[cfg(all(
+    feature = "kernel",
+    feature = "net-console",
+    target_os = "none",
+    sel4_config_kernel_mcs
+))]
+pub use isolated_console::{
+    IsolatedConsoleInitError, IsolatedCyw43Console, IsolatedNetworkConsole,
+};
 
 #[cfg(all(
     feature = "kernel",

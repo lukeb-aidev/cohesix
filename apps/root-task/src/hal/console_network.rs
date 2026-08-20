@@ -113,6 +113,10 @@ pub struct ConsoleNetworkRuntime {
     standard_fault_cap: seL4_CPtr,
     timeout_fault_cap: seL4_CPtr,
     shared_frames: Vec<RamFrame, SHARED_FRAME_COUNT>,
+    entry: usize,
+    stack_top: usize,
+    init_vaddr: usize,
+    descriptor_finalized: bool,
     activated: bool,
     containment_started: bool,
     contained: bool,
@@ -150,6 +154,133 @@ impl ConsoleNetworkRuntime {
         self.activated && !self.contained
     }
 
+    /// Whether the immutable ABI-v3 descriptor and initial registers are ready.
+    #[must_use]
+    pub const fn descriptor_finalized(&self) -> bool {
+        self.descriptor_finalized
+    }
+
+    /// Exact TCB capability used by bounded bootstrap/handoff diagnostics.
+    #[must_use]
+    pub(crate) const fn tcb_cptr(&self) -> seL4_CPtr {
+        self.tcb
+    }
+
+    /// Install the immutable ABI-v3 descriptor after physical address acquisition.
+    ///
+    /// The child remains suspended throughout this operation. The root creates
+    /// one temporary writable alias of the already read-only child init frame,
+    /// writes and cleans the descriptor, removes that alias, and only then
+    /// commits the initial register state. No device capability or mutable
+    /// descriptor authority enters the child.
+    #[allow(clippy::too_many_arguments)]
+    pub fn finalize_descriptor(
+        &mut self,
+        hal: &mut KernelHal<'_>,
+        mac: [u8; 6],
+        ipv4: [u8; 4],
+        prefix_len: u8,
+        gateway: [u8; 4],
+        auth_token: &str,
+    ) -> Result<(), HalError> {
+        if self.descriptor_finalized || self.activated || self.contained {
+            return Err(HalError::Unsupported(
+                "console-network-descriptor-finalization-state",
+            ));
+        }
+        let contract = ConsoleNetworkContract::from_generated()
+            .map_err(|_| HalError::Unsupported("console-network-generated-contract"))?;
+        let descriptor = contract
+            .runtime_init(
+                self.generation(),
+                mac,
+                ipv4,
+                prefix_len,
+                gateway,
+                auth_token,
+            )
+            .map_err(|_| HalError::Unsupported("console-network-runtime-init"))?;
+        let mut begin_line = heapless::String::<224>::new();
+        let _ = core::fmt::write(
+            &mut begin_line,
+            format_args!(
+                "CONSOLE_NETWORK_DESCRIPTOR phase=finalize-begin tcb=0x{:04x} init_frame=0x{:04x} state=suspended abi=v3",
+                self.tcb,
+                self.slots[FRAME_SLOT_START + INIT_FRAME_INDEX],
+            ),
+        );
+        crate::bootstrap::log::force_uart_line(begin_line.as_str());
+
+        let root_cnode = hal.env.init_cnode_cap();
+        let root_depth = sel4::word_bits() as u8;
+        let alias = hal.env.try_allocate_slot().map_err(HalError::Sel4)?;
+        let init_frame = self.slots[FRAME_SLOT_START + INIT_FRAME_INDEX];
+        let copy_error = sel4::cnode_copy_depth(
+            root_cnode,
+            alias,
+            root_depth,
+            root_cnode,
+            init_frame,
+            root_depth,
+            sel4_sys::seL4_CapRights_ReadWrite,
+        );
+        if copy_error != sel4_sys::seL4_NoError {
+            return Err(HalError::Sel4(copy_error));
+        }
+        let mapped = hal
+            .env
+            .map_revoke_anchor_frame_in_root(alias, runtime_cacheable_xn_attributes());
+        let mut frame = match mapped {
+            Ok(frame) => frame,
+            Err(error) => {
+                let _ = sel4::cnode_delete(root_cnode, alias, root_depth);
+                return Err(HalError::Sel4(error));
+            }
+        };
+        frame.as_mut_slice().fill(0);
+        let mut encoded = [0u8; RUNTIME_INIT_DESCRIPTOR_BYTES];
+        let write_result = descriptor
+            .encode(&mut encoded)
+            .map_err(|_| HalError::Unsupported("console-network-init-encode"))
+            .and_then(|_| {
+                frame.as_mut_slice()[..encoded.len()].copy_from_slice(&encoded);
+                super::cache::cache_clean(
+                    sel4_sys::seL4_CapInitThreadVSpace,
+                    frame.ptr().as_ptr() as usize,
+                    SHARED_PAGE_BYTES,
+                )
+                .map_err(|error| HalError::Sel4(error.code()))
+            });
+        let unmap_result = hal.env.unmap_page_cap(alias).map_err(HalError::Sel4);
+        let delete_error = sel4::cnode_delete(root_cnode, alias, root_depth);
+        write_result?;
+        unmap_result?;
+        if delete_error != sel4_sys::seL4_NoError {
+            return Err(HalError::Sel4(delete_error));
+        }
+
+        sel4::write_tcb_registers(
+            self.tcb,
+            self.entry,
+            self.stack_top,
+            seL4_Word::try_from(self.init_vaddr)
+                .map_err(|_| HalError::Unsupported("console-network-init-arg"))?,
+            false,
+        )
+        .map_err(HalError::Sel4)?;
+        self.descriptor_finalized = true;
+        let mut ready_line = heapless::String::<224>::new();
+        let _ = core::fmt::write(
+            &mut ready_line,
+            format_args!(
+                "CONSOLE_NETWORK_DESCRIPTOR phase=finalize-ready tcb=0x{:04x} init_frame=0x{:04x} root_alias=0x{:04x} state=suspended root_alias_state=deleted abi=v3",
+                self.tcb, init_frame, alias,
+            ),
+        );
+        crate::bootstrap::log::force_uart_line(ready_line.as_str());
+        Ok(())
+    }
+
     /// Whether the exact terminal generation has entered containment.
     #[must_use]
     pub const fn containment_active(&self) -> bool {
@@ -178,6 +309,11 @@ impl ConsoleNetworkRuntime {
 
     /// Resume the child after the target fault registry is sealed.
     pub fn activate(&mut self) -> Result<(), HalError> {
+        if !self.descriptor_finalized {
+            return Err(HalError::Unsupported(
+                "console-network-descriptor-not-finalized",
+            ));
+        }
         if self.activated || self.contained {
             return Err(HalError::Unsupported("console-network-activation-state"));
         }
@@ -468,28 +604,29 @@ impl ConsoleNetworkRuntime {
 }
 
 impl<'a> KernelHal<'a> {
-    /// Construct the exact child generation and register its fault source.
+    /// Construct the exact child generation without an address descriptor.
     ///
-    /// The returned TCB is suspended. Callers must construct every generated
-    /// target, seal the critical fault registry, and only then call
-    /// [`ConsoleNetworkRuntime::activate`].
-    pub fn construct_console_network_runtime(
+    /// This is the physical-Pi pre-seal phase: every object, MCS binding, and
+    /// fault identity exists, but the TCB is suspended and has no initial
+    /// registers until DHCP truth is available.
+    pub fn construct_console_network_runtime_shell(
         &mut self,
         generation: u64,
-        mac: [u8; 6],
-        ipv4: [u8; 4],
-        prefix_len: u8,
-        gateway: [u8; 4],
-        auth_token: &str,
     ) -> Result<ConsoleNetworkRuntime, HalError> {
+        let mut begin_line = heapless::String::<128>::new();
+        let _ = core::fmt::write(
+            &mut begin_line,
+            format_args!(
+                "CONSOLE_NETWORK_SHELL phase=begin generation={} state=suspended descriptor=pending",
+                generation,
+            ),
+        );
+        crate::bootstrap::log::force_uart_line(begin_line.as_str());
         let contract = ConsoleNetworkContract::from_generated()
             .map_err(|_| HalError::Unsupported("console-network-generated-contract"))?;
         let object_plan = ConsoleNetworkObjectPlan::from_generated()
             .map_err(|_| HalError::Unsupported("console-network-object-plan"))?;
         validate_object_plan(object_plan)?;
-        let descriptor = contract
-            .runtime_init(generation, mac, ipv4, prefix_len, gateway, auth_token)
-            .map_err(|_| HalError::Unsupported("console-network-runtime-init"))?;
 
         let anchor = self
             .env
@@ -512,6 +649,19 @@ impl<'a> KernelHal<'a> {
                 }
             }
         }
+        let mut slots_line = heapless::String::<224>::new();
+        let _ = core::fmt::write(
+            &mut slots_line,
+            format_args!(
+                "CONSOLE_NETWORK_SHELL phase=root-slots-ready generation={} anchor=0x{:04x} first=0x{:04x} last=0x{:04x} count={}",
+                generation,
+                anchor,
+                slots[0],
+                slots[ROOT_SLOT_COUNT - 1],
+                ROOT_SLOT_COUNT,
+            ),
+        );
+        crate::bootstrap::log::force_uart_line(slots_line.as_str());
         let translation_slots: [seL4_CPtr; TRANSLATION_SLOT_COUNT] = slots
             [TRANSLATION_SLOT_START..TRANSLATION_SLOT_START + TRANSLATION_SLOT_COUNT]
             .try_into()
@@ -523,7 +673,7 @@ impl<'a> KernelHal<'a> {
             self,
             contract,
             object_plan,
-            descriptor,
+            generation,
             anchor,
             slots,
             &mut tracker,
@@ -538,6 +688,25 @@ impl<'a> KernelHal<'a> {
                 .revoke_anchor_descendants_and_reset_vspace(anchor, &mut tracker);
         }
         result
+    }
+
+    /// Construct the exact child generation and register its fault source.
+    ///
+    /// The returned TCB is suspended. Callers must construct every generated
+    /// target, seal the critical fault registry, and only then call
+    /// [`ConsoleNetworkRuntime::activate`].
+    pub fn construct_console_network_runtime(
+        &mut self,
+        generation: u64,
+        mac: [u8; 6],
+        ipv4: [u8; 4],
+        prefix_len: u8,
+        gateway: [u8; 4],
+        auth_token: &str,
+    ) -> Result<ConsoleNetworkRuntime, HalError> {
+        let mut runtime = self.construct_console_network_runtime_shell(generation)?;
+        runtime.finalize_descriptor(self, mac, ipv4, prefix_len, gateway, auth_token)?;
+        Ok(runtime)
     }
 }
 
@@ -563,7 +732,7 @@ fn construct_generation(
     hal: &mut KernelHal<'_>,
     contract: ConsoleNetworkContract,
     object_plan: ConsoleNetworkObjectPlan,
-    descriptor: console_network_abi::RuntimeInitDescriptor,
+    generation: u64,
     anchor: seL4_CPtr,
     slots: [seL4_CPtr; ROOT_SLOT_COUNT],
     tracker: &mut RevokeAnchorVSpaceTracker<TRANSLATION_SLOT_COUNT>,
@@ -627,6 +796,15 @@ fn construct_generation(
             hal,
         )?;
     }
+    let mut objects_line = heapless::String::<224>::new();
+    let _ = core::fmt::write(
+        &mut objects_line,
+        format_args!(
+            "CONSOLE_NETWORK_SHELL phase=objects-ready generation={} tcb=0x{:04x} cnode=0x{:04x} vspace=0x{:04x} sc=0x{:04x} frames={}",
+            generation, tcb, child_cnode, vspace, scheduling_context, FRAME_COUNT,
+        ),
+    );
+    crate::bootstrap::log::force_uart_line(objects_line.as_str());
 
     map_image(hal, anchor, vspace, tracker, &slots, image_plan)?;
     map_zeroed_range(
@@ -654,7 +832,7 @@ fn construct_generation(
         ipc_vaddr,
         sel4_sys::seL4_CapRights_ReadWrite,
     )?;
-    map_init_descriptor(hal, anchor, vspace, tracker, &slots, contract, descriptor)?;
+    map_empty_init_frame(hal, anchor, vspace, tracker, &slots, contract)?;
     let shared_frames = map_shared_frames(hal, anchor, vspace, tracker, &slots, contract)?;
     hal.env
         .seal_revoke_anchor_translation_reserve(anchor, tracker)
@@ -662,6 +840,18 @@ fn construct_generation(
     if tracker.mapped_table_count() > TRANSLATION_SLOT_COUNT || tracker.remaining_slots() != 0 {
         return Err(HalError::Unsupported("console-network-page-table-budget"));
     }
+    let mut mappings_line = heapless::String::<192>::new();
+    let _ = core::fmt::write(
+        &mut mappings_line,
+        format_args!(
+            "CONSOLE_NETWORK_SHELL phase=mappings-ready generation={} tcb=0x{:04x} tables={} frames={} init_rights=read-only",
+            generation,
+            tcb,
+            tracker.mapped_table_count(),
+            FRAME_COUNT,
+        ),
+    );
+    crate::bootstrap::log::force_uart_line(mappings_line.as_str());
 
     let (root_wake_caps, standard_fault_cap, timeout_fault_cap) = install_caps_and_mcs(
         hal,
@@ -675,11 +865,30 @@ fn construct_generation(
         child_to_root_notification,
         contract,
         ipc_vaddr,
-        image_plan.entry,
-        descriptor.generation,
+        generation,
     )?;
+    let mut mcs_line = heapless::String::<256>::new();
+    let _ = core::fmt::write(
+        &mut mcs_line,
+        format_args!(
+            "CONSOLE_NETWORK_SHELL phase=mcs-ready generation={} tcb=0x{:04x} sc=0x{:04x} standard_fault=0x{:04x} timeout_fault=0x{:04x} registry=registered registers=unset state=suspended",
+            generation,
+            tcb,
+            scheduling_context,
+            standard_fault_cap,
+            timeout_fault_cap,
+        ),
+    );
+    crate::bootstrap::log::force_uart_line(mcs_line.as_str());
 
-    let boundary = ConsoleNetworkBoundary::new(descriptor.generation)
+    let stack_top = usize::try_from(contract.stack_vaddr)
+        .ok()
+        .and_then(|base| base.checked_add(usize::from(contract.stack_pages) << sel4::PAGE_BITS))
+        .ok_or(HalError::Unsupported("console-network-stack-top"))?
+        & !0xf;
+    let init_vaddr = usize::try_from(contract.init_vaddr)
+        .map_err(|_| HalError::Unsupported("console-network-init-vaddr"))?;
+    let boundary = ConsoleNetworkBoundary::new(generation)
         .map_err(|_| HalError::Unsupported("console-network-boundary"))?;
     Ok(ConsoleNetworkRuntime {
         boundary,
@@ -694,6 +903,10 @@ fn construct_generation(
         standard_fault_cap,
         timeout_fault_cap,
         shared_frames,
+        entry: image_plan.entry,
+        stack_top,
+        init_vaddr,
+        descriptor_finalized: false,
         activated: false,
         containment_started: false,
         contained: false,
@@ -808,14 +1021,13 @@ fn map_zeroed_range(
     Ok(())
 }
 
-fn map_init_descriptor(
+fn map_empty_init_frame(
     hal: &mut KernelHal<'_>,
     anchor: seL4_CPtr,
     vspace: seL4_CPtr,
     tracker: &mut RevokeAnchorVSpaceTracker<TRANSLATION_SLOT_COUNT>,
     slots: &[seL4_CPtr; ROOT_SLOT_COUNT],
     contract: ConsoleNetworkContract,
-    descriptor: console_network_abi::RuntimeInitDescriptor,
 ) -> Result<(), HalError> {
     let frame_cap = slots[FRAME_SLOT_START + INIT_FRAME_INDEX];
     let mut frame = hal
@@ -823,11 +1035,6 @@ fn map_init_descriptor(
         .map_revoke_anchor_frame_in_root(frame_cap, runtime_cacheable_xn_attributes())
         .map_err(HalError::Sel4)?;
     frame.as_mut_slice().fill(0);
-    let mut encoded = [0u8; RUNTIME_INIT_DESCRIPTOR_BYTES];
-    descriptor
-        .encode(&mut encoded)
-        .map_err(|_| HalError::Unsupported("console-network-init-encode"))?;
-    frame.as_mut_slice()[..encoded.len()].copy_from_slice(&encoded);
     super::cache::cache_clean(
         sel4_sys::seL4_CapInitThreadVSpace,
         frame.ptr().as_ptr() as usize,
@@ -929,7 +1136,6 @@ fn install_caps_and_mcs(
     child_to_root_notification: seL4_CPtr,
     contract: ConsoleNetworkContract,
     ipc_vaddr: usize,
-    entry: usize,
     generation: u64,
 ) -> Result<([seL4_CPtr; 5], seL4_CPtr, seL4_CPtr), HalError> {
     let root_cnode = hal.env.init_cnode_cap();
@@ -1070,21 +1276,6 @@ fn install_caps_and_mcs(
     if requires_timeout_endpoint(contract.timeout_policy) {
         sel4::set_tcb_timeout_endpoint(tcb, timeout_fault_cap).map_err(HalError::Sel4)?;
     }
-    let stack_top = usize::try_from(contract.stack_vaddr)
-        .ok()
-        .and_then(|base| base.checked_add(usize::from(contract.stack_pages) << sel4::PAGE_BITS))
-        .ok_or(HalError::Unsupported("console-network-stack-top"))?
-        & !0xf;
-    sel4::write_tcb_registers(
-        tcb,
-        entry,
-        stack_top,
-        seL4_Word::try_from(contract.init_vaddr)
-            .map_err(|_| HalError::Unsupported("console-network-init-arg"))?,
-        false,
-    )
-    .map_err(HalError::Sel4)?;
-
     let task_index = crate::generated::temporal_tasks()
         .iter()
         .position(|task| task.id == SERVICE_TASK_ID)
@@ -1184,5 +1375,42 @@ mod tests {
         ] {
             assert!(requires_timeout_endpoint(policy));
         }
+    }
+
+    #[test]
+    fn suspended_shell_cannot_activate_before_descriptor_finalization() {
+        let tracker = RevokeAnchorVSpaceTracker::new([1, 2, 3, 4, 5, 6, 7, 8])
+            .expect("distinct translation slots");
+        let runtime = ConsoleNetworkRuntime {
+            boundary: ConsoleNetworkBoundary::new(1).expect("valid generation"),
+            anchor: 0,
+            slots: [0; ROOT_SLOT_COUNT],
+            tracker,
+            tcb: 0,
+            scheduling_context: 0,
+            child_to_root_notification: 0,
+            root_wake_caps: [0; 5],
+            publication_ack_owed: false,
+            standard_fault_cap: 0,
+            timeout_fault_cap: 0,
+            shared_frames: Vec::new(),
+            entry: 0,
+            stack_top: 0,
+            init_vaddr: 0,
+            descriptor_finalized: false,
+            activated: false,
+            containment_started: false,
+            contained: false,
+            containment: ConsoleNetworkContainmentCursor::new(),
+        };
+        assert!(!runtime.descriptor_finalized());
+        let mut runtime = runtime;
+        assert!(matches!(
+            runtime.activate(),
+            Err(HalError::Unsupported(
+                "console-network-descriptor-not-finalized"
+            ))
+        ));
+        assert!(!runtime.activated());
     }
 }

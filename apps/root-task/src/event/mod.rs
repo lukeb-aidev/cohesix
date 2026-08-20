@@ -5076,11 +5076,25 @@ where
         self.console_network_quarantine_cleanup_pending = true;
     }
 
-    /// Consume and contain one terminal isolated console-network fault.
+    /// Finalize one pre-registered console child after DHCP truth is available.
     ///
-    /// Only the QEMU isolated adapter overrides this service-owner hook. The
-    /// existing physical-network pollers return `Idle`, so this bounded
-    /// root-control turn neither inspects nor changes CYW43/SDIO behavior.
+    /// The fixed descriptor/map/register/resume sequence owns this complete
+    /// root-control turn. It cannot overlap ordinary CYW43 polling or borrow
+    /// HAL authority through the network driver-service interface.
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    pub fn service_deferred_console_network_handoff(
+        &mut self,
+        hal: &mut crate::hal::KernelHal<'_>,
+    ) -> bool {
+        match self.net.as_deref_mut() {
+            Some(net) => net
+                .service_deferred_console_network_handoff(hal)
+                .unwrap_or(true),
+            None => false,
+        }
+    }
+
+    /// Consume and contain one terminal isolated console-network fault.
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     pub fn contain_faulted_console_network(&mut self, hal: &mut crate::hal::KernelHal<'_>) -> bool {
         use crate::console_network_service::ConsoleNetworkContainmentTurn;

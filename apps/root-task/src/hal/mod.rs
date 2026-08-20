@@ -1254,6 +1254,7 @@ impl<T> Hardware for T where T: PciHal + Cyw43Hal {}
 pub struct KernelHal<'a> {
     env: KernelEnv<'a>,
     driver_tasks: heapless::Vec<KernelDriverTaskHandle, MAX_KERNEL_DRIVER_TASKS>,
+    dormant_driver_tcbs: heapless::Vec<(DriverTaskContract, seL4_CPtr), 3>,
     driver_task_report: DriverTaskBootstrapReport,
 }
 
@@ -1300,6 +1301,17 @@ const PHYSICAL_PI_DRIVER_TASK_BOOTSTRAP_CONTRACTS_BASE: &[DriverTaskContract] = 
     HDMI_TEXT_DRIVER_TASK_CONTRACT,
 ];
 
+#[cfg(feature = "kernel")]
+const PHYSICAL_PI_DRIVER_TASK_FAULT_CONTRACTS: &[DriverTaskContract] = &[
+    SERIAL_DRIVER_TASK_CONTRACT,
+    PCIE_ROOT_DRIVER_TASK_CONTRACT,
+    USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
+    HDMI_TEXT_DRIVER_TASK_CONTRACT,
+    SDIO_HOST_DRIVER_TASK_CONTRACT,
+    CYW43_WIFI_DRIVER_TASK_CONTRACT,
+    GENET_DRIVER_TASK_CONTRACT,
+];
+
 /// Conservative non-payload capability allowance for each isolated runtime.
 ///
 /// This covers the task objects, command/recovery caps, translation
@@ -1316,6 +1328,14 @@ const DRIVER_TASK_CSPACE_FIXED_CAPS_PER_RUNTIME: usize = 64;
 /// of admission rather than an optimistic post-bootstrap observation.
 #[cfg(feature = "kernel")]
 const DRIVER_TASK_CSPACE_POST_BOOT_RESERVE: usize = 2048;
+
+/// Root slots consumed by one suspended fault-only driver identity.
+///
+/// This covers the CNode, TCB, command endpoint origin and badge, VSpace,
+/// Reply, completion notification origin and receive cap, two fault caps, and
+/// scheduling context. Child-CNode slots do not consume root CSpace slots.
+#[cfg(feature = "kernel")]
+const DORMANT_DRIVER_FAULT_IDENTITY_ROOT_SLOTS: usize = 11;
 
 /// Maximum framebuffer span accepted by the HDMI runtime mapper.
 #[cfg(feature = "kernel")]
@@ -1336,6 +1356,7 @@ struct DriverTaskCspaceBudget {
     available_slots: usize,
     reserve_slots: usize,
     contract_count: usize,
+    dormant_contract_count: usize,
 }
 
 #[cfg(feature = "kernel")]
@@ -3044,6 +3065,32 @@ fn register_driver_task_fault_source(
     .map_err(|_| HalError::Unsupported("driver-runtime-mcs-fault-register"))
 }
 
+#[cfg(all(feature = "kernel", sel4_config_kernel_mcs))]
+fn register_dormant_driver_task_fault_source(
+    contract: DriverTaskContract,
+    tcb: seL4_CPtr,
+) -> Result<(), HalError> {
+    const IDENTITY_ONLY_CAP_GENERATION: u32 = 1;
+
+    let spec = driver_task::pi4_driver_task_runtime_image_spec_for_contract(contract)
+        .ok_or(HalError::Unsupported("driver-runtime-mcs-image-spec"))?;
+    let temporal = driver_task::driver_task_temporal_config(spec.hot_path)
+        .ok_or(HalError::Unsupported("driver-runtime-mcs-temporal-config"))?;
+    let slot = driver_task::driver_runtime_registry_slot(contract)
+        .ok_or(HalError::Unsupported("driver-runtime-mcs-registry-slot"))?;
+    critical_tcb::register_target_fault_source(
+        temporal.id,
+        tcb,
+        crate::critical_tcb::GenerationIdentity {
+            slot,
+            lease_epoch: 1,
+            supervisor_generation: 1,
+            cap_generation: IDENTITY_ONLY_CAP_GENERATION,
+        },
+    )
+    .map_err(|_| HalError::Unsupported("driver-runtime-mcs-dormant-fault-register"))
+}
+
 #[cfg(feature = "kernel")]
 fn runtime_elf_page_mapping(fill: RuntimeElfPageFill) -> Result<RuntimeElfPageMapping, HalError> {
     if fill.writable && fill.executable {
@@ -3523,10 +3570,18 @@ fn bind_driver_tcb_notification_for_boot(
 }
 
 #[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DriverTaskTcbBootState {
+    Active,
+    Dormant,
+}
+
+#[cfg(feature = "kernel")]
 fn configure_driver_tcb_priority_for_boot(
     contract: DriverTaskContract,
     tcb: seL4_CPtr,
     mcs: DriverTaskMcsObjects,
+    boot_state: DriverTaskTcbBootState,
 ) -> Result<(u8, u8), HalError> {
     #[cfg(sel4_config_kernel_mcs)]
     {
@@ -3550,27 +3605,47 @@ fn configure_driver_tcb_priority_for_boot(
         )
         .map_err(HalError::Sel4)?;
         sel4::set_tcb_timeout_endpoint(tcb, mcs.timeout_fault_endpoint).map_err(HalError::Sel4)?;
-        let mut line = heapless::String::<224>::new();
-        let _ = fmt::write(
-            &mut line,
-            format_args!(
-                "DRIVER_TASK_MCS_ACTIVE contract={} tcb=0x{:04x} sc=0x{:04x} core={} budget_us={} period_us={} priority={} mcp={}",
-                contract.name,
-                tcb,
-                mcs.sched_context,
-                temporal.core,
-                temporal.budget_us,
-                temporal.period_us,
-                temporal.priority,
-                temporal.mcp,
-            ),
-        );
+        let mut line = heapless::String::<240>::new();
+        match boot_state {
+            DriverTaskTcbBootState::Active => {
+                let _ = fmt::write(
+                    &mut line,
+                    format_args!(
+                        "DRIVER_TASK_MCS_ACTIVE contract={} tcb=0x{:04x} sc=0x{:04x} core={} budget_us={} period_us={} priority={} mcp={}",
+                        contract.name,
+                        tcb,
+                        mcs.sched_context,
+                        temporal.core,
+                        temporal.budget_us,
+                        temporal.period_us,
+                        temporal.priority,
+                        temporal.mcp,
+                    ),
+                );
+            }
+            DriverTaskTcbBootState::Dormant => {
+                let _ = fmt::write(
+                    &mut line,
+                    format_args!(
+                        "DRIVER_TASK_MCS_DORMANT contract={} tcb=0x{:04x} sc=0x{:04x} core={} budget_us={} period_us={} priority={} mcp={} state=suspended",
+                        contract.name,
+                        tcb,
+                        mcs.sched_context,
+                        temporal.core,
+                        temporal.budget_us,
+                        temporal.period_us,
+                        temporal.priority,
+                        temporal.mcp,
+                    ),
+                );
+            }
+        }
         crate::bootstrap::log::force_uart_line(line.as_str());
         return Ok((temporal.priority, temporal.priority));
     }
 
     #[cfg(not(sel4_config_kernel_mcs))]
-    let _ = mcs;
+    let _ = (mcs, boot_state);
     #[cfg(not(sel4_config_kernel_mcs))]
     {
         let steady_priority = contract.sel4_priority();
@@ -3700,6 +3775,7 @@ impl<'a> KernelHal<'a> {
         Self {
             env,
             driver_tasks: heapless::Vec::new(),
+            dormant_driver_tcbs: heapless::Vec::new(),
             driver_task_report: DriverTaskBootstrapReport::default(),
         }
     }
@@ -3765,6 +3841,17 @@ impl<'a> KernelHal<'a> {
                 .checked_add(contract_slots)
                 .ok_or(DriverTaskCspacePreflightError::ArithmeticOverflow)?;
         }
+        let dormant_contract_count = PHYSICAL_PI_DRIVER_TASK_FAULT_CONTRACTS
+            .iter()
+            .filter(|contract| !contracts.contains(contract))
+            .count();
+        required_slots = required_slots
+            .checked_add(
+                dormant_contract_count
+                    .checked_mul(DORMANT_DRIVER_FAULT_IDENTITY_ROOT_SLOTS)
+                    .ok_or(DriverTaskCspacePreflightError::ArithmeticOverflow)?,
+            )
+            .ok_or(DriverTaskCspacePreflightError::ArithmeticOverflow)?;
 
         let available_slots = self.env.snapshot().cspace_remaining;
         if available_slots < required_slots {
@@ -3778,6 +3865,7 @@ impl<'a> KernelHal<'a> {
             available_slots,
             reserve_slots: DRIVER_TASK_CSPACE_POST_BOOT_RESERVE,
             contract_count: contracts.len(),
+            dormant_contract_count,
         })
     }
 
@@ -3814,8 +3902,9 @@ impl<'a> KernelHal<'a> {
                     let _ = fmt::write(
                         &mut line,
                         format_args!(
-                            "DRIVER_TASK_CSPACE_PREFLIGHT status=ready contracts={} required={} available={} reserve={} framebuffer_pages_max={}",
+                            "DRIVER_TASK_CSPACE_PREFLIGHT status=ready contracts={} dormant_fault_identities={} required={} available={} reserve={} framebuffer_pages_max={}",
                             budget.contract_count,
+                            budget.dormant_contract_count,
                             budget.required_slots,
                             budget.available_slots,
                             budget.reserve_slots,
@@ -3959,10 +4048,144 @@ impl<'a> KernelHal<'a> {
             }
         }
 
+        if driver_task::physical_pi_driver_task_only_owner_state_active() {
+            for contract in PHYSICAL_PI_DRIVER_TASK_FAULT_CONTRACTS
+                .iter()
+                .copied()
+                .filter(|contract| !bootstrap_contracts.contains(contract))
+            {
+                match self.construct_dormant_driver_fault_identity(contract) {
+                    Ok(tcb) => {
+                        if self.dormant_driver_tcbs.push((contract, tcb)).is_err() {
+                            report.failed_count = report.failed_count.saturating_add(1);
+                            crate::bootstrap::log::force_uart_line(
+                                "DRIVER_TASK_DORMANT status=failed err=dormant-handle-capacity",
+                            );
+                        }
+                    }
+                    Err(error) => {
+                        report.failed_count = report.failed_count.saturating_add(1);
+                        let mut line = heapless::String::<224>::new();
+                        let _ = fmt::write(
+                            &mut line,
+                            format_args!(
+                                "DRIVER_TASK_DORMANT contract={} role={} status=failed err={}",
+                                contract.name,
+                                contract.kind.proof_role(),
+                                error,
+                            ),
+                        );
+                        crate::bootstrap::log::force_uart_line(line.as_str());
+                    }
+                }
+            }
+        }
+
         finalize_driver_task_bootstrap_report(&mut report, bootstrap_contracts.len());
         self.driver_task_report = report;
         driver_task::publish_driver_task_bootstrap_report(report);
         report
+    }
+
+    /// Construct one non-selected Pi driver as a suspended MCS fault identity.
+    ///
+    /// The alternate driver receives no MMIO, DMA, IRQ, shared ring, published
+    /// transport, entry registers, or bus-service registration. Its TCB, CSpace,
+    /// VSpace, SC, Reply/notification objects, and generated fault caps exist so
+    /// the exact target registry can seal without admitting a second physical
+    /// dataplane owner.
+    #[cfg(sel4_config_kernel_mcs)]
+    fn construct_dormant_driver_fault_identity(
+        &mut self,
+        contract: DriverTaskContract,
+    ) -> Result<seL4_CPtr, HalError> {
+        contract.validate().map_err(HalError::DriverTaskContract)?;
+        let mut begin_line = heapless::String::<160>::new();
+        let _ = fmt::write(
+            &mut begin_line,
+            format_args!(
+                "DRIVER_TASK_DORMANT contract={} role={} phase=allocate-begin state=suspended hardware_authority=none",
+                contract.name,
+                contract.kind.proof_role(),
+            ),
+        );
+        crate::bootstrap::log::force_uart_line(begin_line.as_str());
+        let task_key = driver_task::driver_task_contract_key(contract)
+            .ok_or(HalError::Unsupported("driver-task-key"))?;
+        let child_depth = driver_task::DRIVER_TASK_CHILD_CNODE_RADIX_BITS;
+        let child_cnode = self.env.alloc_cnode(child_depth).map_err(HalError::Sel4)?;
+        let tcb = self.env.alloc_tcb().map_err(HalError::Sel4)?;
+        let command_endpoint_origin = self.env.alloc_endpoint().map_err(HalError::Sel4)?;
+        let vspace = self.env.alloc_vspace_root().map_err(HalError::Sel4)?;
+        self.env
+            .assign_vspace_asid_from_init_pool(vspace)
+            .map_err(HalError::Sel4)?;
+        let mut objects_line = heapless::String::<224>::new();
+        let _ = fmt::write(
+            &mut objects_line,
+            format_args!(
+                "DRIVER_TASK_DORMANT contract={} phase=objects-ready tcb=0x{:04x} cnode=0x{:04x} endpoint_origin=0x{:04x} vspace=0x{:04x}",
+                contract.name, tcb, child_cnode, command_endpoint_origin, vspace,
+            ),
+        );
+        crate::bootstrap::log::force_uart_line(objects_line.as_str());
+        let mcs = allocate_driver_task_mcs_objects(
+            &mut self.env,
+            contract,
+            task_key,
+            child_cnode,
+            child_depth,
+            command_endpoint_origin,
+            sel4_sys::seL4_CapNull,
+        )?;
+        let guard_bits = sel4::word_bits().saturating_sub(child_depth as seL4_Word);
+        sel4::set_tcb_space(
+            tcb,
+            mcs.standard_fault_endpoint,
+            child_cnode,
+            sel4::cap_data_guard(0, guard_bits),
+            vspace,
+            0,
+        )
+        .map_err(HalError::Sel4)?;
+        let _ = configure_driver_tcb_priority_for_boot(
+            contract,
+            tcb,
+            mcs,
+            DriverTaskTcbBootState::Dormant,
+        )?;
+        let affinity_core = apply_driver_tcb_affinity_for_boot(contract, tcb)?;
+        register_dormant_driver_task_fault_source(contract, tcb)?;
+        sel4::suspend_tcb(tcb).map_err(HalError::Sel4)?;
+
+        let mut line = heapless::String::<320>::new();
+        let _ = fmt::write(
+            &mut line,
+            format_args!(
+                "DRIVER_TASK_DORMANT contract={} role={} tcb=0x{:04x} cnode=0x{:04x} vspace=0x{:04x} sc=0x{:04x} standard_fault=0x{:04x} timeout_fault=0x{:04x} core={} state=suspended registers=unset transport=unpublished hardware_authority=none registry=registered",
+                contract.name,
+                contract.kind.proof_role(),
+                tcb,
+                child_cnode,
+                vspace,
+                mcs.sched_context,
+                mcs.standard_fault_endpoint,
+                mcs.timeout_fault_endpoint,
+                affinity_core.map_or(-1, i32::from),
+            ),
+        );
+        crate::bootstrap::log::force_uart_line(line.as_str());
+        Ok(tcb)
+    }
+
+    #[cfg(not(sel4_config_kernel_mcs))]
+    fn construct_dormant_driver_fault_identity(
+        &mut self,
+        _contract: DriverTaskContract,
+    ) -> Result<seL4_CPtr, HalError> {
+        Err(HalError::Unsupported(
+            "driver-task-dormant-identity-requires-mcs",
+        ))
     }
 
     /// Publishes an inactive driver-task substrate when a profile must preserve
@@ -4230,8 +4453,12 @@ impl<'a> KernelHal<'a> {
         #[cfg(not(sel4_config_kernel_mcs))]
         let affinity_core = apply_driver_tcb_affinity_for_boot(contract, tcb)?;
 
-        let (bootstrap_priority, steady_priority) =
-            configure_driver_tcb_priority_for_boot(contract, tcb, mcs)?;
+        let (bootstrap_priority, steady_priority) = configure_driver_tcb_priority_for_boot(
+            contract,
+            tcb,
+            mcs,
+            DriverTaskTcbBootState::Active,
+        )?;
         #[cfg(sel4_config_kernel_mcs)]
         let affinity_core = apply_driver_tcb_affinity_for_boot(contract, tcb)?;
         driver_task::publish_driver_task_scheduler(contract, tcb as usize, steady_priority);
@@ -5440,8 +5667,12 @@ impl<'a> KernelHal<'a> {
         #[cfg(not(sel4_config_kernel_mcs))]
         let affinity_core = apply_driver_tcb_affinity_for_boot(contract, tcb)?;
 
-        let (bootstrap_priority, steady_priority) =
-            configure_driver_tcb_priority_for_boot(contract, tcb, mcs)?;
+        let (bootstrap_priority, steady_priority) = configure_driver_tcb_priority_for_boot(
+            contract,
+            tcb,
+            mcs,
+            DriverTaskTcbBootState::Active,
+        )?;
         #[cfg(sel4_config_kernel_mcs)]
         let affinity_core = apply_driver_tcb_affinity_for_boot(contract, tcb)?;
         driver_task::publish_driver_task_scheduler(contract, tcb as usize, steady_priority);
@@ -7709,6 +7940,35 @@ mod tests {
         assert!(!base.contains(&super::driver_task::GENET_DRIVER_TASK_CONTRACT));
         assert!(!base.contains(&super::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT));
         assert!(!base.contains(&super::driver_task::SDIO_HOST_DRIVER_TASK_CONTRACT));
+
+        let fault_topology = super::PHYSICAL_PI_DRIVER_TASK_FAULT_CONTRACTS;
+        assert_eq!(fault_topology.len(), 7);
+        assert!(fault_topology.iter().all(|contract| !matches!(
+            *contract,
+            super::driver_task::RTL8139_DRIVER_TASK_CONTRACT
+                | super::driver_task::VIRTIO_NET_DRIVER_TASK_CONTRACT
+        )));
+        let wifi_dormant: heapless::Vec<_, 3> = fault_topology
+            .iter()
+            .copied()
+            .filter(|contract| !wifi.contains(contract))
+            .collect();
+        assert_eq!(
+            wifi_dormant.as_slice(),
+            &[super::driver_task::GENET_DRIVER_TASK_CONTRACT]
+        );
+        let wired_dormant: heapless::Vec<_, 3> = fault_topology
+            .iter()
+            .copied()
+            .filter(|contract| !wired.contains(contract))
+            .collect();
+        assert_eq!(
+            wired_dormant.as_slice(),
+            &[
+                super::driver_task::SDIO_HOST_DRIVER_TASK_CONTRACT,
+                super::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            ]
+        );
     }
 
     #[cfg(feature = "kernel")]
@@ -7719,7 +7979,7 @@ mod tests {
         const OBSERVED_EMPTY_START: usize = 0x0a6a;
 
         fn required_slots(contracts: &[super::DriverTaskContract], code_pages: usize) -> usize {
-            contracts
+            let active = contracts
                 .iter()
                 .try_fold(
                     super::DRIVER_TASK_CSPACE_POST_BOOT_RESERVE,
@@ -7736,7 +7996,12 @@ mod tests {
                         total.checked_add(slots)
                     },
                 )
-                .expect("generated Pi contracts have a bounded CSpace estimate")
+                .expect("generated Pi contracts have a bounded CSpace estimate");
+            let dormant_count = super::PHYSICAL_PI_DRIVER_TASK_FAULT_CONTRACTS
+                .iter()
+                .filter(|contract| !contracts.contains(contract))
+                .count();
+            active + dormant_count * super::DORMANT_DRIVER_FAULT_IDENTITY_ROOT_SLOTS
         }
 
         let capacity_13 = (1usize << 13) - OBSERVED_EMPTY_START;
@@ -7760,6 +8025,7 @@ mod tests {
                 );
             }
         }
+        assert_eq!(super::DORMANT_DRIVER_FAULT_IDENTITY_ROOT_SLOTS, 11);
     }
 
     #[cfg(feature = "kernel")]

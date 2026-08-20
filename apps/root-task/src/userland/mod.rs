@@ -149,6 +149,14 @@ pub fn main(ctx: BootContext) -> ! {
     let mut net_unavailable_detail = take_net_unavailable_detail(&ctx);
     #[cfg(feature = "net-console")]
     let mut net_deferred_config = take_net_deferred_config(&ctx);
+    #[cfg(all(
+        feature = "net-console",
+        feature = "kernel",
+        target_arch = "aarch64",
+        target_os = "none",
+        sel4_config_kernel_mcs
+    ))]
+    let mut net_deferred_console_runtime = take_net_deferred_console_runtime(&ctx);
     log::info!(
         target: "userland",
         "[userland] event-pump: building console runtime (serial + timer + ipc)"
@@ -290,6 +298,22 @@ pub fn main(ctx: BootContext) -> ! {
                     if !pump.queue_cyw43_bootstrap_operator_line(resume_line) {
                         boot_log::force_uart_line(resume_line);
                     }
+                    #[cfg(all(
+                        target_arch = "aarch64",
+                        target_os = "none",
+                        sel4_config_kernel_mcs
+                    ))]
+                    enter_root_console_loop_with_deferred_net_supervisor(
+                        &mut pump,
+                        config,
+                        net_deferred_console_runtime.take(),
+                        &ctx,
+                    );
+                    #[cfg(not(all(
+                        target_arch = "aarch64",
+                        target_os = "none",
+                        sel4_config_kernel_mcs
+                    )))]
                     enter_root_console_loop_with_deferred_net_supervisor(&mut pump, config, &ctx);
                 }
             }
@@ -481,6 +505,13 @@ where
             recovery_turn =
                 with_deferred_root_hal(hal_ptr, |hal| pump.contain_faulted_ninedoor(hal))
                     .unwrap_or(false);
+        }
+        #[cfg(feature = "net-console")]
+        if !recovery_turn && hal_ptr != 0 {
+            recovery_turn = with_deferred_root_hal(hal_ptr, |hal| {
+                pump.service_deferred_console_network_handoff(hal)
+            })
+            .unwrap_or(false);
         }
         if !recovery_turn {
             pump.poll();
@@ -1863,6 +1894,10 @@ fn enter_root_console_loop_with_deferred_net_supervisor<
 >(
     pump: &mut EventPump<'a, D, T, I, V, RX, TX, LINE>,
     config: crate::net::ConsoleNetConfig,
+    #[cfg(all(target_arch = "aarch64", target_os = "none", sel4_config_kernel_mcs))]
+    mut net_deferred_console_runtime: Option<
+        crate::hal::console_network::ConsoleNetworkRuntime,
+    >,
     ctx: &BootContext,
 ) -> !
 where
@@ -2569,11 +2604,36 @@ where
                     sel4::yield_now();
                     continue;
                 }
+                #[cfg(all(target_arch = "aarch64", target_os = "none", sel4_config_kernel_mcs))]
+                let console_runtime = {
+                    let Some(console_runtime) = net_deferred_console_runtime.take() else {
+                        let mut detail = HeaplessString::<192>::new();
+                        let _ = detail.push_str("deferred isolated console shell missing");
+                        emit_deferred_net_console_failure(pump, &detail, false);
+                        run_root_console_pump(pump);
+                    };
+                    console_runtime
+                };
+                #[cfg(all(target_arch = "aarch64", target_os = "none", sel4_config_kernel_mcs))]
                 let Some(stack_result) = with_deferred_root_hal(hal_ptr, |hal| {
-                    crate::net::finish_cyw43_net_console_after_bootstrap(hal, bootstrap.config())
+                    crate::net::finish_cyw43_net_console_after_bootstrap(
+                        hal,
+                        bootstrap.config(),
+                        console_runtime,
+                    )
                 }) else {
                     // The same validated leaked pointer is reused only after
                     // the retained operation above has released its borrow.
+                    run_root_console_pump(pump);
+                };
+                #[cfg(not(all(
+                    target_arch = "aarch64",
+                    target_os = "none",
+                    sel4_config_kernel_mcs
+                )))]
+                let Some(stack_result) = with_deferred_root_hal(hal_ptr, |hal| {
+                    crate::net::finish_cyw43_net_console_after_bootstrap(hal, bootstrap.config())
+                }) else {
                     run_root_console_pump(pump);
                 };
                 let stack = match stack_result {
@@ -2824,6 +2884,19 @@ fn take_net_unavailable_detail(ctx: &BootContext) -> Option<HeaplessString<192>>
 #[cfg(feature = "net-console")]
 fn take_net_deferred_config(ctx: &BootContext) -> Option<crate::net::ConsoleNetConfig> {
     ctx.net_deferred_config.borrow_mut().take()
+}
+
+#[cfg(all(
+    feature = "net-console",
+    feature = "kernel",
+    target_arch = "aarch64",
+    target_os = "none",
+    sel4_config_kernel_mcs
+))]
+fn take_net_deferred_console_runtime(
+    ctx: &BootContext,
+) -> Option<crate::hal::console_network::ConsoleNetworkRuntime> {
+    ctx.net_deferred_console_runtime.borrow_mut().take()
 }
 
 #[cfg(not(feature = "net-console"))]
