@@ -698,6 +698,15 @@ impl FaultRegistry {
     pub const fn is_empty(&self) -> bool {
         self.len == 0
     }
+
+    /// Whether one generated temporal-task index has an exact live entry.
+    #[must_use]
+    pub fn contains_task_index(&self, task_index: u16) -> bool {
+        self.entries[..self.len]
+            .iter()
+            .flatten()
+            .any(|entry| entry.task_index == task_index)
+    }
 }
 
 /// Return the compiler-owned standard-fault badge for one exact temporal task.
@@ -1187,6 +1196,10 @@ mod tests {
                 .expect("register exact TCB");
         }
         assert_eq!(registry.len(), generated_capacity);
+        for task_index in 0..generated_capacity as u16 {
+            assert!(registry.contains_task_index(task_index));
+        }
+        assert!(!registry.contains_task_index(generated_capacity as u16));
         assert_eq!(
             registry.register(FaultRegistration {
                 task_index: 99,

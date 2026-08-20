@@ -3395,7 +3395,20 @@ fn apply_driver_tcb_affinity_for_boot(
             .ok_or(HalError::Unsupported("driver-runtime-mcs-image-spec"))?;
         let temporal = driver_task::driver_task_temporal_config(spec.hot_path)
             .ok_or(HalError::Unsupported("driver-runtime-mcs-temporal-config"))?;
-        sel4::set_tcb_affinity(tcb, temporal.core).map_err(HalError::Sel4)?;
+        if temporal.sched_control_core != temporal.core {
+            return Err(HalError::Unsupported(
+                "driver-runtime-mcs-sched-control-core-mismatch",
+            ));
+        }
+        let mut line = heapless::String::<192>::new();
+        let _ = fmt::write(
+            &mut line,
+            format_args!(
+                "DRIVER_TASK_AFFINITY_MCS contract={} tcb=0x{:04x} core={} source=sched-control-sc-bind direct-set-affinity=no status=configured",
+                contract.name, tcb, temporal.core,
+            ),
+        );
+        crate::bootstrap::log::force_uart_line(line.as_str());
         return Ok(Some(temporal.core));
     }
     #[cfg(not(sel4_config_kernel_mcs))]
@@ -4214,10 +4227,13 @@ impl<'a> KernelHal<'a> {
             .bind_child_ipc_buffer(tcb, ipc_frame.cap(), ipc_vaddr)
             .map_err(HalError::Sel4)?;
 
+        #[cfg(not(sel4_config_kernel_mcs))]
         let affinity_core = apply_driver_tcb_affinity_for_boot(contract, tcb)?;
 
         let (bootstrap_priority, steady_priority) =
             configure_driver_tcb_priority_for_boot(contract, tcb, mcs)?;
+        #[cfg(sel4_config_kernel_mcs)]
+        let affinity_core = apply_driver_tcb_affinity_for_boot(contract, tcb)?;
         driver_task::publish_driver_task_scheduler(contract, tcb as usize, steady_priority);
         #[cfg(sel4_config_kernel_mcs)]
         if !driver_task::publish_driver_task_mcs_kernel_objects(
@@ -5401,10 +5417,13 @@ impl<'a> KernelHal<'a> {
             )
             .map_err(HalError::Sel4)?;
 
+        #[cfg(not(sel4_config_kernel_mcs))]
         let affinity_core = apply_driver_tcb_affinity_for_boot(contract, tcb)?;
 
         let (bootstrap_priority, steady_priority) =
             configure_driver_tcb_priority_for_boot(contract, tcb, mcs)?;
+        #[cfg(sel4_config_kernel_mcs)]
+        let affinity_core = apply_driver_tcb_affinity_for_boot(contract, tcb)?;
         driver_task::publish_driver_task_scheduler(contract, tcb as usize, steady_priority);
         #[cfg(sel4_config_kernel_mcs)]
         if !driver_task::publish_driver_task_mcs_kernel_objects(

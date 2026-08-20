@@ -3981,7 +3981,33 @@ catalogued Pi runtime suite covers the atomic DPC
 word-write and Linux-ordered post-F2 production-chain invariants; do not replay
 those tests as name filters.
 
-The Pi 4 manifest defaults place both `bcmgenet-v5` and `cyw43455` on core `3`; hardware captures must show `DRIVER_TASK_BOOT ... contract=bcmgenet-v5 ... affinity_core=3` and `DRIVER_TASK_BOOT ... contract=cyw43455 ... affinity_core=3` before claiming fourth-core driver placement. Physical Pi owner-state boots apply `seL4_TCB_SetAffinity` directly to each driver child TCB. That is distinct from the root-authority affinity wrapper used around in-process NineDoor and Worker-model operations; neither NineDoor nor a general Worker has a separate TCB in the current profile. Any `DRIVER_TASK_AFFINITY_DEFERRED ... reason=pi4-child-tcb-affinity-boot-stall-guard` line is stale mitigation evidence and must fail placement proof. Non-CYW43/SDIO runtimes may still emit `DRIVER_TASK_NOTIFICATION_BIND_DEFERRED ... reason=pi4-early-tcb-notification-bind-boot-stall-guard`, which keeps their notification lifecycle proof red while their endpoint-backed command-ring startup proceeds. The generated CYW43 and SDIO peers must instead emit `DRIVER_TASK_NOTIFICATION_BOUND ... source=generated-cyw43-sdio-topology`; a deferred bind for either peer fails Wi-Fi proof because ordinary exact grants and the persistent op11 parent/child contract use their bound notifications only as scheduling prompts. QEMU virtio compatibility boots may prove isolated VSpace/ASID allocation, runtime-image transport-region mapping, and pointer-free ring transport after virtio networking is online, but that is transport-substrate evidence only. Fresh Pi hardware proof is still required before claiming Wi-Fi/DHCP, GENET/DHCP, USB keyboard, HDMI, or strongest isolated-driver hardware acceptance.
+The Pi 4 manifest defaults place both `bcmgenet-v5` and `cyw43455` on core `3`;
+hardware captures must show `DRIVER_TASK_BOOT ... contract=<selected-network>
+... affinity_core=3` for the selected network contract before claiming
+fourth-core driver placement. Under MCS, every selected driver must instead
+emit `DRIVER_TASK_MCS_ACTIVE ... core=<manifest-core>` followed by
+`DRIVER_TASK_AFFINITY_MCS ... source=sched-control-sc-bind
+direct-set-affinity=no status=configured`; any `TCB.SetAffinity` or affinity
+failure marker invalidates placement proof because the per-core SchedControl/SC
+bind is the sole MCS placement mechanism. This is distinct from the retired
+classic-SMP child-TCB affinity path and from the root-authority affinity wrapper
+used around legacy in-process operations. Any
+`DRIVER_TASK_AFFINITY_DEFERRED ...
+reason=pi4-child-tcb-affinity-boot-stall-guard` line is stale mitigation
+evidence and must fail placement proof. Non-CYW43/SDIO runtimes may still emit
+`DRIVER_TASK_NOTIFICATION_BIND_DEFERRED ...
+reason=pi4-early-tcb-notification-bind-boot-stall-guard`, which keeps their
+notification lifecycle proof red while their endpoint-backed command-ring
+startup proceeds. The generated CYW43 and SDIO peers must instead emit
+`DRIVER_TASK_NOTIFICATION_BOUND ... source=generated-cyw43-sdio-topology`; a
+deferred bind for either peer fails Wi-Fi proof because ordinary exact grants
+and the persistent op11 parent/child contract use their bound notifications
+only as scheduling prompts. QEMU virtio compatibility boots may prove isolated
+VSpace/ASID allocation, runtime-image transport-region mapping, and
+pointer-free ring transport after virtio networking is online, but that is
+transport-substrate evidence only. Fresh Pi hardware proof is still required
+before claiming Wi-Fi/DHCP, GENET/DHCP, USB keyboard, HDMI, or strongest
+isolated-driver hardware acceptance.
 
 Strict Pi SDIO command/data calls, fixed-layout SDIO CMD52/CMD53 descriptors, CYW43 firmware/NVRAM/SDPCM command records, direct-root-port xHCI keyboard polling, GENET RX/TX descriptor-ring service, and PCIe port read/write/flush helpers now compile in isolated runtime code before any root hardware execution; host coverage must keep proving those ring turns while preserving the fresh-Pi board-proof boundary.
 

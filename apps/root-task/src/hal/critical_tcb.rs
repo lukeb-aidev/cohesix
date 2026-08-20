@@ -517,6 +517,20 @@ pub fn register_target_fault_source(
         terminal: task.timeout_policy != TimeoutPolicy::ReplenishOnce,
     })?;
     install_root_fault_tcb_control_cap(task_index, tcb_cap)?;
+    let mut line = heapless::String::<256>::new();
+    let _ = core::fmt::write(
+        &mut line,
+        format_args!(
+            "[diag fault-registry/v1] register index={} id={} kind={:?} tcb=0x{:04x} standard_badge=0x{:08x} timeout_badge=0x{:08x}",
+            task_index,
+            task_id,
+            task.kind,
+            tcb_cap,
+            standard_badge,
+            timeout_badge,
+        ),
+    );
+    crate::bootstrap::log::force_uart_line(line.as_str());
     Ok(())
 }
 
@@ -564,8 +578,41 @@ pub fn seal_target_fault_registry() -> Result<(), CriticalTcbConstructionError> 
     if TARGET_FAULT_REGISTRY_SEALED.load(Ordering::Acquire) {
         return Err(CriticalTcbConstructionError::RegistrySealed);
     }
-    TARGET_FAULT_REGISTRY.lock().seal()?;
+    let tasks = generated::temporal_tasks();
+    let mut registry = TARGET_FAULT_REGISTRY.lock();
+    let mut summary = heapless::String::<128>::new();
+    let _ = core::fmt::write(
+        &mut summary,
+        format_args!(
+            "[diag fault-registry/v1] seal begin registered={} expected={}",
+            registry.len(),
+            tasks.len(),
+        ),
+    );
+    crate::bootstrap::log::force_uart_line(summary.as_str());
+    if registry.len() != tasks.len() {
+        for (index, task) in tasks.iter().enumerate() {
+            let Ok(task_index) = u16::try_from(index) else {
+                break;
+            };
+            if registry.contains_task_index(task_index) {
+                continue;
+            }
+            let mut missing = heapless::String::<160>::new();
+            let _ = core::fmt::write(
+                &mut missing,
+                format_args!(
+                    "[diag fault-registry/v1] missing index={} id={} kind={:?}",
+                    task_index, task.id, task.kind,
+                ),
+            );
+            crate::bootstrap::log::force_uart_line(missing.as_str());
+        }
+    }
+    registry.seal()?;
+    drop(registry);
     TARGET_FAULT_REGISTRY_SEALED.store(true, Ordering::Release);
+    crate::bootstrap::log::force_uart_line("[diag fault-registry/v1] seal result=ok");
     Ok(())
 }
 
