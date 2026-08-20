@@ -91,6 +91,16 @@ use spin::Mutex;
 
 const EARLY_DUMP_LIMIT: usize = 512;
 const DEVICE_FRAME_BITS: usize = 12;
+const ROOT_BOOTSTRAP_DIAG_CAPACITY: usize = 512;
+
+/// Emit one bounded, serial-first record for the active root-bootstrap probe schema.
+#[inline(never)]
+fn emit_root_bootstrap_diag(args: fmt::Arguments<'_>) {
+    let mut line = HeaplessString::<ROOT_BOOTSTRAP_DIAG_CAPACITY>::new();
+    let _ = line.push_str("[diag root-bootstrap/v2] ");
+    let _ = line.write_fmt(args);
+    boot_log::force_uart_line_raw_bootstrap_probe(line.as_str());
+}
 
 #[cfg(all(feature = "kernel", not(sel4_config_printing)))]
 use sel4_panicking::{self, DebugSink};
@@ -3986,14 +3996,16 @@ fn bootstrap<P: Platform>(
     boot_log::force_uart_line("[mark] ep.bootstrap.begin");
     boot_guard.record_substep("bootstrap_ep.pre");
     let mut ep_report = crate::boot::ep::RootEpReport::default();
-    let mut ep_probe = heapless::String::<160>::new();
-    let _ = write!(
-        ep_probe,
-        "[boot] root-ep preflight ep_ready={} first_free=0x{slot:04x}",
+    let (ep_empty_start, ep_empty_end) = bootinfo_view.init_cnode_empty_range();
+    emit_root_bootstrap_diag(format_args!(
+        "control-endpoint begin ready={} root=0x{root:04x} bits={bits} next=0x{slot:04x} empty=[0x{start:04x}..0x{end:04x})",
         sel4::ep_ready() as u8,
+        root = boot_cspace.root(),
+        bits = boot_cspace.depth(),
         slot = boot_cspace.next_free_slot(),
-    );
-    boot_log::force_uart_line(ep_probe.as_str());
+        start = ep_empty_start,
+        end = ep_empty_end,
+    ));
     let (ep_slot, boot_ep_retyped) = match ep::bootstrap_ep(
         &bootinfo_snapshot,
         &mut boot_cspace,
@@ -4015,6 +4027,7 @@ fn bootstrap<P: Platform>(
                 error_name(err)
             );
             console.writeln_prefixed(line.as_str());
+            boot_log::force_uart_line_raw_bootstrap_probe(line.as_str());
             #[cfg(feature = "strict-bootstrap")]
             {
                 panic!("bootstrap_ep failed: {}", error_name(err));
@@ -4044,7 +4057,7 @@ fn bootstrap<P: Platform>(
                     retype = ep_report.retype_err,
                     ident = ep_report.slot_ident,
                 );
-                boot_log::force_uart_line(structured.as_str());
+                boot_log::force_uart_line_raw_bootstrap_probe(structured.as_str());
                 let fallback_slot = validated_root_endpoint_fallback(
                     sel4::ep_ready(),
                     sel4::ep_validated(),
@@ -4066,17 +4079,14 @@ fn bootstrap<P: Platform>(
             }
         }
     };
-    let mut ep_status = heapless::String::<192>::new();
-    let _ = write!(
-        ep_status,
-        "[boot] root-ep report slot=0x{slot:04x} verify={verify:?} retype={retype:?} ident=0x{ident:04x} preexisting={preexisting}",
+    emit_root_bootstrap_diag(format_args!(
+        "control-endpoint result slot=0x{slot:04x} verify={verify:?} retype={retype:?} ident=0x{ident:08x} preexisting={preexisting}",
         slot = ep_report.ep_slot,
         verify = ep_report.verify_err,
         retype = ep_report.retype_err,
         ident = ep_report.slot_ident,
         preexisting = ep_report.preexisting as u8,
-    );
-    boot_log::force_uart_line(ep_status.as_str());
+    ));
     probe_canary("[probe] after.bootstrap_ep");
 
     if boot_ep_retyped {
@@ -4246,6 +4256,12 @@ fn bootstrap<P: Platform>(
 
     let mut fault_ep_slot = ep_slot;
     if ep_slot != sel4_sys::seL4_CapNull {
+        emit_root_bootstrap_diag(format_args!(
+            "fault-endpoint begin root=0x{root:04x} bits={bits} next=0x{next:04x}",
+            root = boot_cspace.root(),
+            bits = boot_cspace.depth(),
+            next = boot_cspace.next_free_slot(),
+        ));
         match crate::boot::ep::bootstrap_fault_ep(&bootinfo_snapshot, &mut boot_cspace) {
             Ok(slot) => {
                 fault_ep_slot = slot;
@@ -4256,6 +4272,12 @@ fn bootstrap<P: Platform>(
                 );
             }
             Err(err) => {
+                emit_root_bootstrap_diag(format_args!(
+                    "fault-endpoint result next=0x{next:04x} err={err} ({name})",
+                    next = boot_cspace.next_free_slot(),
+                    err = err as i32,
+                    name = error_name(err),
+                ));
                 if cfg!(sel4_config_kernel_mcs) {
                     return Err(BootError::Fatal(format!(
                         "dedicated MCS fault endpoint construction failed: {} ({})",
@@ -4272,27 +4294,27 @@ fn bootstrap<P: Platform>(
             }
         }
     }
-    let mut endpoint_diag = HeaplessString::<256>::new();
-    let _ = write!(
-        endpoint_diag,
-        "[diag] bootstrap endpoints control=0x{control:04x} fault=0x{fault:04x}",
+    let control_ident = ep_report.slot_ident;
+    let fault_ident = if fault_ep_slot == sel4_sys::seL4_CapNull {
+        0
+    } else {
+        sel4::debug_cap_identify(fault_ep_slot)
+    };
+    emit_root_bootstrap_diag(format_args!(
+        "endpoints root=0x{root:04x} bits={bits} next=0x{next:04x} control=0x{control:04x}/ident=0x{control_ident:08x} fault=0x{fault:04x}/ident=0x{fault_ident:08x} verify={verify:?} retype={retype:?}",
+        root = boot_cspace.root(),
+        bits = boot_cspace.depth(),
+        next = boot_cspace.next_free_slot(),
         control = ep_slot,
         fault = fault_ep_slot,
-    );
-    boot_log::force_uart_line_raw_bootstrap_probe(endpoint_diag.as_str());
+        verify = ep_report.verify_err,
+        retype = ep_report.retype_err,
+    ));
 
     boot_guard.record_endpoints(ep_slot, fault_ep_slot);
     let endpoints = KernelEndpoints::new(ep_slot, fault_ep_slot);
     #[allow(unused_mut)]
     let mut bootstrap_ipc = KernelIpc::new(endpoints.control, endpoints.fault);
-    let mut ipc_ctor_diag = HeaplessString::<176>::new();
-    let _ = write!(
-        ipc_ctor_diag,
-        "[diag] KernelIpc::new inputs control=0x{control:04x} fault=0x{fault:04x}",
-        control = endpoints.control.raw(),
-        fault = endpoints.fault.raw(),
-    );
-    boot_log::force_uart_line_raw_bootstrap_probe(ipc_ctor_diag.as_str());
     boot_guard.record_substep("commit.minimal.ready");
     boot_guard.commit_minimal();
     if sel4::ep_ready() && sel4::ep_validated() {
@@ -4314,6 +4336,15 @@ fn bootstrap<P: Platform>(
         let guard_bits =
             sel4::word_bits().saturating_sub(bootinfo_ref.init_cnode_bits() as sel4_sys::seL4_Word);
         let guard_data = sel4::cap_data_guard(0, guard_bits);
+        emit_root_bootstrap_diag(format_args!(
+            "fault-install begin tcb=0x{tcb:04x} ep=0x{ep:04x} root=0x{root:04x} bits={bits} next=0x{next:04x} guard=0x{guard:016x}",
+            tcb = sel4_sys::seL4_CapInitThreadTCB,
+            ep = fault_ep_slot,
+            root = boot_cspace.root(),
+            bits = boot_cspace.depth(),
+            next = boot_cspace.next_free_slot(),
+            guard = guard_data,
+        ));
         match install_fault_handler_for_tcb(
             &mut boot_cspace,
             sel4_sys::seL4_CapInitThreadTCB,
@@ -4559,10 +4590,8 @@ fn bootstrap<P: Platform>(
                 "critical MCS topology construction failed: {error:?}"
             ))
         })?;
-    let mut mcs_diag = HeaplessString::<344>::new();
-        let _ = write!(
-            mcs_diag,
-            "[diag] mcs slots control=0x{control:04x} fault=0x{fault_ep:04x} control_reply=0x{control_reply:04x} fault_reply=0x{fault_reply:04x} emergency_reply=0x{emergency_reply:04x} fault_endpoint=0x{fault_endpoint:04x} emergency_endpoint=0x{emergency_endpoint:04x} signals(worker=0x{worker:04x},driver=0x{driver:04x},emergency=0x{emergency_signal:04x},root_fault_release=0x{root_fault_release:04x})",
+        emit_root_bootstrap_diag(format_args!(
+            "mcs slots control=0x{control:04x} fault=0x{fault_ep:04x} control_reply=0x{control_reply:04x} fault_reply=0x{fault_reply:04x} emergency_reply=0x{emergency_reply:04x} fault_endpoint=0x{fault_endpoint:04x} emergency_endpoint=0x{emergency_endpoint:04x} signals(worker=0x{worker:04x},driver=0x{driver:04x},emergency=0x{emergency_signal:04x},root_fault_release=0x{root_fault_release:04x})",
             control = endpoints.control.raw(),
             fault_ep = endpoints.fault.raw(),
             control_reply = runtime.handles[0].reply_cap,
@@ -4574,8 +4603,7 @@ fn bootstrap<P: Platform>(
             driver = runtime.signals.driver_supervisor,
             emergency_signal = runtime.signals.emergency,
             root_fault_release = runtime.signals.root_fault_release,
-        );
-        boot_log::force_uart_line_raw_bootstrap_probe(mcs_diag.as_str());
+        ));
         boot_log::force_uart_line(
             "[critical] root-control accounted; four restricted TCBs constructed suspended",
         );
@@ -6693,6 +6721,19 @@ fn mint_fault_cap_for_tcb(
     let slot = cspace.alloc_slot()?;
     let rights = crate::cspace::cap_rights_read_write_grant();
     let err = cspace.mint_here(slot, cspace.root(), fault_ep_slot, rights, badge);
+    let ident = if err == sel4_sys::seL4_NoError {
+        sel4::debug_cap_identify(slot)
+    } else {
+        0
+    };
+    emit_root_bootstrap_diag(format_args!(
+        "fault-mint root=0x{root:04x} depth={depth} dst=0x{dst:04x}/ident=0x{ident:08x} src=0x{src:04x} rights=rwg badge=0x{badge:04x} err={err}",
+        root = cspace.root(),
+        depth = sel4::word_bits(),
+        dst = slot,
+        src = fault_ep_slot,
+        err = err as i32,
+    ));
     if err != sel4_sys::seL4_NoError {
         cspace.release_slot(slot);
         return Err(err);
@@ -6718,6 +6759,14 @@ fn install_fault_handler_for_tcb(
 ) -> Result<sel4_sys::seL4_Word, sel4_sys::seL4_Error> {
     let badge = alloc_fault_badge();
     let badged_cap = mint_fault_cap_for_tcb(cspace, fault_ep_slot, badge)?;
+    emit_root_bootstrap_diag(format_args!(
+        "fault-setspace begin tcb=0x{tcb:04x} fault_cap=0x{cap:04x} root=0x{root:04x} guard=0x{guard:016x} vspace=0x{vspace:04x}",
+        tcb = tcb_slot,
+        cap = badged_cap,
+        root = cspace.root(),
+        guard = guard_data,
+        vspace = sel4_sys::seL4_CapInitThreadVSpace,
+    ));
     let handler_err = unsafe {
         sel4_sys::seL4_TCB_SetFaultHandler(
             tcb_slot,
@@ -6728,6 +6777,12 @@ fn install_fault_handler_for_tcb(
             0,
         )
     };
+    emit_root_bootstrap_diag(format_args!(
+        "fault-setspace result tcb=0x{tcb:04x} fault_cap=0x{cap:04x} badge=0x{badge:04x} err={err}",
+        tcb = tcb_slot,
+        cap = badged_cap,
+        err = handler_err as i32,
+    ));
 
     if handler_err != sel4_sys::seL4_NoError {
         cspace.release_slot(badged_cap);
@@ -7212,15 +7267,12 @@ fn current_node_id() -> sel4_sys::seL4_Word {
 
 impl KernelIpc {
     pub(crate) fn new(control_ep: ControlEndpoint, fault_endpoint: FaultEndpoint) -> Self {
-        let mut diag = HeaplessString::<168>::new();
-        let _ = write!(
-            diag,
-            "[diag] KernelIpc::new control=0x{control:04x} fault=0x{fault:04x} fault_valid={valid}",
+        emit_root_bootstrap_diag(format_args!(
+            "KernelIpc::new control=0x{control:04x} fault=0x{fault:04x} fault_valid={valid}",
             control = control_ep.raw(),
             fault = fault_endpoint.raw(),
             valid = if fault_endpoint.is_valid() { 1u8 } else { 0u8 },
-        );
-        boot_log::force_uart_line(diag.as_str());
+        ));
         log::info!(
             "[ipc] root EP installed at slot=0x{ep:04x} (role=LOG+CONTROL / QUEEN bootstrap)",
             ep = control_ep.raw()
@@ -7533,24 +7585,18 @@ impl KernelIpc {
 
         if !self.debug_uart_announced {
             debug_uart_str("[dbg] EP 0x0130: dispatcher loop about to recv\n");
-            let mut recv_call_diag = HeaplessString::<176>::new();
-            let _ = write!(
-                recv_call_diag,
-                "[diag] first poll call cptr=0x{call:04x} bootstrap={bootstrap}",
+            emit_root_bootstrap_diag(format_args!(
+                "first poll call cptr=0x{call:04x} bootstrap={bootstrap}",
                 call = self.control_ep.raw(),
                 bootstrap = if bootstrap { 1u8 } else { 0u8 },
-            );
-            boot_log::force_uart_line_raw_bootstrap_probe(recv_call_diag.as_str());
-            let mut poll_diag = HeaplessString::<164>::new();
-            let _ = write!(
-                poll_diag,
-                "[diag] first poll on control=0x{control:04x} fault=0x{fault:04x} bootstrap={bootstrap} now_ms={now_ms}",
+            ));
+            emit_root_bootstrap_diag(format_args!(
+                "first poll on control=0x{control:04x} fault=0x{fault:04x} bootstrap={bootstrap} now_ms={now_ms}",
                 control = self.control_ep.raw(),
                 fault = self.fault_endpoint.raw(),
                 bootstrap = if bootstrap { 1u8 } else { 0u8 },
                 now_ms = now_ms,
-            );
-            boot_log::force_uart_line_raw_bootstrap_probe(poll_diag.as_str());
+            ));
             self.debug_uart_announced = true;
         }
         let mut badge: sel4_sys::seL4_Word = 0;
