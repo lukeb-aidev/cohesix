@@ -10,11 +10,6 @@
 
 #[cfg(all(test, not(target_os = "none")))]
 use crate::rust_alloc::boxed::Box;
-#[cfg(any(
-    all(feature = "kernel", target_arch = "aarch64", sel4_config_printing),
-    all(feature = "kernel", target_arch = "aarch64", sel4_config_debug_build)
-))]
-use core::arch::asm;
 use core::{
     convert::TryInto,
     fmt,
@@ -1476,21 +1471,7 @@ pub fn take_debug_uart_capture() -> HeaplessVec<u8, DEBUG_UART_CAPTURE_LEN> {
 #[no_mangle]
 /// Executes the `DebugPutChar` seL4 syscall to emit a byte on the debug console.
 pub unsafe extern "C" fn seL4_DebugPutChar(byte: u8) {
-    const SYS_DEBUG_PUT_CHAR: u64 = (!0u64).wrapping_sub(8); // -9
-    unsafe {
-        asm!(
-            "svc #0",
-            in("x0") u64::from(byte),
-            lateout("x1") _,
-            lateout("x2") _,
-            lateout("x3") _,
-            lateout("x4") _,
-            lateout("x5") _,
-            lateout("x6") _,
-            in("x7") SYS_DEBUG_PUT_CHAR,
-            options(nostack, preserves_flags),
-        );
-    }
+    sel4_sys::debug_put_char(byte);
 }
 
 #[cfg(all(feature = "kernel", target_arch = "aarch64", not(sel4_config_printing)))]
@@ -1502,22 +1483,7 @@ pub unsafe extern "C" fn seL4_DebugPutChar(_byte: u8) {}
 #[inline(always)]
 /// Requests the kernel to halt execution of the current thread via the debug syscall.
 pub fn debug_halt() {
-    const SYS_DEBUG_HALT: u64 = (!0u64).wrapping_sub(10); // -11
-
-    unsafe {
-        asm!(
-            "svc #0",
-            inout("x0") 0usize => _,
-            lateout("x1") _,
-            lateout("x2") _,
-            lateout("x3") _,
-            lateout("x4") _,
-            lateout("x5") _,
-            lateout("x6") _,
-            in("x7") SYS_DEBUG_HALT,
-            options(nostack, preserves_flags),
-        );
-    }
+    sel4_sys::debug_halt();
 }
 
 #[cfg(not(all(feature = "kernel", target_arch = "aarch64", sel4_config_debug_build)))]

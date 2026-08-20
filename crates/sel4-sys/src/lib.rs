@@ -20,6 +20,16 @@ mod imp {
         "/sel4_config_consts.rs"
     ));
 
+    #[cfg(all(sel4_sys_config_printing, not(sel4_sys_has_debug_put_char_syscall)))]
+    compile_error!(
+        "selected seL4 printing profile does not expose its generated DebugPutChar syscall ID"
+    );
+
+    #[cfg(all(sel4_sys_config_debug_build, not(sel4_sys_has_debug_halt_syscall)))]
+    compile_error!(
+        "selected seL4 debug profile does not expose its generated DebugHalt syscall ID"
+    );
+
     /// Number of machine words in an AArch64 `seL4_UserContext`.
     pub const SEL4_AARCH64_USER_CONTEXT_REGISTER_COUNT: seL4_Word = 36;
     const SEL4_TCB_WRITE_REGISTERS_MESSAGE_LENGTH: seL4_Word =
@@ -134,6 +144,66 @@ mod imp {
     #[inline(always)]
     pub unsafe fn seL4_SetMR(index: seL4_Word, value: seL4_Word) {
         (*seL4_GetIPCBuffer()).msg[index as usize] = value;
+    }
+
+    /// Emits one byte using the selected kernel's generated debug syscall ABI.
+    #[cfg(all(sel4_sys_has_debug_put_char_syscall, sel4_sys_config_printing))]
+    #[inline(always)]
+    pub fn debug_put_char(c: u8) {
+        let mut unused0 = 0;
+        let mut unused1 = 0;
+        let mut unused2 = 0;
+        let mut unused3 = 0;
+        let mut unused4 = 0;
+        let mut unused5 = 0;
+
+        // SAFETY: all register operands are initialized machine words, every
+        // output points to live local storage, and the selected printing
+        // profile supplies the syscall ID checked by this function's cfg.
+        unsafe {
+            arm_sys_send_recv(
+                seL4_Syscall_ID_seL4_SysDebugPutChar as seL4_Word,
+                seL4_Word::from(c),
+                &mut unused0,
+                0,
+                &mut unused1,
+                &mut unused2,
+                &mut unused3,
+                &mut unused4,
+                &mut unused5,
+                0,
+            );
+        }
+    }
+
+    /// Requests a halt using the selected kernel's generated debug syscall ABI.
+    #[cfg(all(sel4_sys_has_debug_halt_syscall, sel4_sys_config_debug_build))]
+    #[inline(always)]
+    pub fn debug_halt() {
+        let mut unused0 = 0;
+        let mut unused1 = 0;
+        let mut unused2 = 0;
+        let mut unused3 = 0;
+        let mut unused4 = 0;
+        let mut unused5 = 0;
+
+        // SAFETY: all register operands are initialized machine words, every
+        // output points to live local storage, and the selected debug profile
+        // supplies the syscall ID checked by this function's cfg.
+        unsafe {
+            arm_sys_send_recv(
+                seL4_Syscall_ID_seL4_SysDebugHalt as seL4_Word,
+                0,
+                &mut unused0,
+                0,
+                &mut unused1,
+                &mut unused2,
+                &mut unused3,
+                &mut unused4,
+                &mut unused5,
+                0,
+            );
+        }
     }
 
     #[cfg(all(sel4_sys_has_debug_cap_identify_syscall, sel4_sys_config_debug_build))]
@@ -3274,6 +3344,16 @@ mod imp {
     #[inline(always)]
     pub fn seL4_DebugPutChar(_c: u8) {
         // Host tests have no kernel debug console.
+    }
+
+    #[inline(always)]
+    pub fn debug_put_char(_c: u8) {
+        // Host tests have no kernel debug console.
+    }
+
+    #[inline(always)]
+    pub fn debug_halt() {
+        // Host tests have no kernel halt syscall.
     }
 
     #[inline(always)]

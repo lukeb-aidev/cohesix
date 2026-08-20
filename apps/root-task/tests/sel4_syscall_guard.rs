@@ -4,6 +4,7 @@
 // Author: Lukas Bower
 //! Guard to ensure all IPC syscalls go through the tracked sel4 wrappers.
 
+use std::fs;
 use std::process::Command;
 
 #[test]
@@ -32,4 +33,26 @@ fn no_direct_sel4_syscall_invocations() {
             panic!("direct seL4 syscall found outside sel4 wrappers: {line}");
         }
     }
+}
+
+#[test]
+fn debug_syscalls_use_selected_sel4_sys_abi() {
+    let source = fs::read_to_string("src/sel4.rs")
+        .expect("root sel4 wrapper source must be readable for ABI guard");
+
+    for forbidden in [
+        "core::arch::asm",
+        "SYS_DEBUG_PUT_CHAR",
+        "SYS_DEBUG_HALT",
+        "wrapping_sub(8)",
+        "wrapping_sub(10)",
+    ] {
+        assert!(
+            !source.contains(forbidden),
+            "root debug wrapper must not encode a profile-specific syscall ABI: {forbidden}"
+        );
+    }
+
+    assert!(source.contains("sel4_sys::debug_put_char(byte)"));
+    assert!(source.contains("sel4_sys::debug_halt()"));
 }

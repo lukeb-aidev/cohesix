@@ -38,6 +38,8 @@ fn main() {
     println!("cargo:rustc-check-cfg=cfg(sel4_sys_bindings_have_debug_dump_scheduler)");
     println!("cargo:rustc-check-cfg=cfg(sel4_sys_bindings_have_debug_dump_cpuinfo)");
     println!("cargo:rustc-check-cfg=cfg(sel4_sys_has_debug_cap_identify_syscall)");
+    println!("cargo:rustc-check-cfg=cfg(sel4_sys_has_debug_put_char_syscall)");
+    println!("cargo:rustc-check-cfg=cfg(sel4_sys_has_debug_halt_syscall)");
     println!("cargo:rustc-check-cfg=cfg(sel4_sys_has_debug_dump_scheduler_syscall)");
     println!("cargo:rerun-if-env-changed=SEL4_BUILD_DIR");
     println!("cargo:rerun-if-env-changed=SEL4_BUILD");
@@ -100,6 +102,12 @@ fn main() {
             }
             if contents.contains("seL4_Syscall_ID_seL4_SysDebugCapIdentify") {
                 println!("cargo:rustc-cfg=sel4_sys_has_debug_cap_identify_syscall");
+            }
+            if contents.contains("seL4_Syscall_ID_seL4_SysDebugPutChar") {
+                println!("cargo:rustc-cfg=sel4_sys_has_debug_put_char_syscall");
+            }
+            if contents.contains("seL4_Syscall_ID_seL4_SysDebugHalt") {
+                println!("cargo:rustc-cfg=sel4_sys_has_debug_halt_syscall");
             }
             if contents.contains("seL4_Syscall_ID_seL4_SysDebugDumpScheduler") {
                 println!("cargo:rustc-cfg=sel4_sys_has_debug_dump_scheduler_syscall");
