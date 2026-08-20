@@ -1973,8 +1973,18 @@ where
     let mut serial_retry = DeferredSerialRouteRetry::new(crate::hal::timebase().now_ms());
     let mut turn_status = DeferredCyw43TurnStatus::new();
     let mut supervisor_phase = DeferredCyw43SupervisorPhase::Operator;
+    let mut driver_fault_diagnostic_sequence = 0u64;
 
     'supervisor: loop {
+        if let Some((sequence, line)) =
+            crate::hal::driver_task::driver_supervisor_fault_diagnostic_line(
+                driver_fault_diagnostic_sequence,
+            )
+        {
+            let raw_fallback_allowed = pump.serial_root_uart_cutover_owner_active();
+            emit_deferred_net_operator_line(pump, line.as_str(), raw_fallback_allowed);
+            driver_fault_diagnostic_sequence = sequence;
+        }
         if let Some(pending) = recovery_diagnostic_pending.as_ref() {
             if !pump.queue_cyw43_pair_recovery_diagnostic_transaction(
                 pending.recovery,

@@ -3066,6 +3066,63 @@ fn register_driver_task_fault_source(
 }
 
 #[cfg(all(feature = "kernel", sel4_config_kernel_mcs))]
+fn install_driver_task_supervisor_authority(
+    contract: DriverTaskContract,
+    tcb: seL4_CPtr,
+    command_endpoint_origin: seL4_CPtr,
+    mcs: DriverTaskMcsObjects,
+) -> Result<(), HalError> {
+    let configured = crate::generated::worker_resource_admission_config()
+        .handoff
+        .driver_fault_records;
+    if configured == 0 {
+        return Ok(());
+    }
+    let runtime_slot = driver_task::driver_runtime_registry_slot(contract)
+        .filter(|slot| *slot < configured)
+        .ok_or(HalError::Unsupported(
+            "driver-runtime-supervisor-authority-slot",
+        ))?;
+    let local = critical_tcb::install_driver_supervisor_runtime_caps(
+        runtime_slot,
+        critical_tcb::DriverSupervisorRuntimeRootCaps {
+            tcb,
+            command_endpoint_origin,
+            command_reply: mcs.command_reply,
+            completion_notification_origin: mcs.completion_notification_origin,
+            sched_context: mcs.sched_context,
+            standard_fault_endpoint: mcs.standard_fault_endpoint,
+            timeout_fault_endpoint: mcs.timeout_fault_endpoint,
+        },
+    )
+    .map_err(|_| HalError::Unsupported("driver-runtime-supervisor-authority-install"))?;
+    if !driver_task::publish_driver_task_supervisor_authority(contract, local) {
+        return Err(HalError::Unsupported(
+            "driver-runtime-supervisor-authority-publish",
+        ));
+    }
+    let mut line = heapless::String::<320>::new();
+    let _ = fmt::write(
+        &mut line,
+        format_args!(
+            "DRIVER_TASK_SUPERVISOR_AUTHORITY schema=v1 contract={} runtime_slot={} root_tcb=0x{:04x} local_tcb=0x{:02x} local_command_origin=0x{:02x} local_reply=0x{:02x} local_completion_origin=0x{:02x} local_sc=0x{:02x} local_standard_fault=0x{:02x} local_timeout_fault=0x{:02x} root_origins=moved state=ready",
+            contract.name,
+            runtime_slot,
+            tcb,
+            local.tcb,
+            local.command_endpoint_origin,
+            local.command_reply,
+            local.completion_notification_origin,
+            local.sched_context,
+            local.standard_fault_endpoint,
+            local.timeout_fault_endpoint,
+        ),
+    );
+    crate::bootstrap::log::force_uart_line(line.as_str());
+    Ok(())
+}
+
+#[cfg(all(feature = "kernel", sel4_config_kernel_mcs))]
 fn register_dormant_driver_task_fault_source(
     contract: DriverTaskContract,
     tcb: seL4_CPtr,
@@ -4476,6 +4533,8 @@ impl<'a> KernelHal<'a> {
         }
         #[cfg(sel4_config_kernel_mcs)]
         register_driver_task_fault_source(contract, tcb)?;
+        #[cfg(sel4_config_kernel_mcs)]
+        install_driver_task_supervisor_authority(contract, tcb, command_endpoint_origin, mcs)?;
 
         let _notification_bound =
             bind_driver_tcb_notification_for_boot(contract, tcb, notification)?;
@@ -5690,6 +5749,8 @@ impl<'a> KernelHal<'a> {
         }
         #[cfg(sel4_config_kernel_mcs)]
         register_driver_task_fault_source(contract, tcb)?;
+        #[cfg(sel4_config_kernel_mcs)]
+        install_driver_task_supervisor_authority(contract, tcb, command_endpoint_origin, mcs)?;
 
         let _notification_bound =
             bind_driver_tcb_notification_for_boot(contract, tcb, notification)?;

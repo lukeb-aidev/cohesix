@@ -26,6 +26,8 @@ const MAX_EXECUTABLE_ROLES: usize = 8;
 const MAX_ROLE_MIXES: usize = 8;
 const MAX_CRITICAL_TCBS: usize = 8;
 const MAX_ID_BYTES: usize = 64;
+const DRIVER_SUPERVISOR_FIXED_CAPS: usize = 8;
+const DRIVER_SUPERVISOR_RUNTIME_CAPS_PER_DRIVER: usize = 7;
 const SEL4_16_AARCH64_SMP_MCS: &str = "sel4-16.0.0-aarch64-smp-mcs";
 const SEL4_16_AARCH64_SMP_MCS_OBJECT_BITS: KernelObjectBits = KernelObjectBits {
     tcb: 11,
@@ -838,6 +840,29 @@ impl WorkerResourceAdmissionConfig {
         {
             bail!("critical handoff capacities do not match admitted Worker/driver slots");
         }
+        if drivers != 0 {
+            let driver_supervisor = self
+                .critical_tcbs
+                .iter()
+                .find(|critical| critical.id == "root-driver-supervisor")
+                .ok_or_else(|| anyhow::anyhow!("root-driver-supervisor resource is missing"))?;
+            let required_caps = DRIVER_SUPERVISOR_FIXED_CAPS
+                .checked_add(
+                    usize::from(drivers)
+                        .checked_mul(DRIVER_SUPERVISOR_RUNTIME_CAPS_PER_DRIVER)
+                        .ok_or_else(|| {
+                            anyhow::anyhow!("driver-supervisor CSpace arithmetic overflows")
+                        })?,
+                )
+                .ok_or_else(|| anyhow::anyhow!("driver-supervisor CSpace arithmetic overflows"))?;
+            if usize::from(driver_supervisor.cspace_cap_count) != required_caps {
+                bail!(
+                    "driver-supervisor CSpace cap count {} does not match fixed lanes + seven-cap containment rows {}",
+                    driver_supervisor.cspace_cap_count,
+                    required_caps
+                );
+            }
+        }
         let wake_badges = [
             handoff.worker_wake_badge,
             handoff.driver_wake_badge,
@@ -1123,7 +1148,13 @@ mod tests {
                 .map(|(index, id)| CriticalTcbResource {
                     id: (*id).to_owned(),
                     cnode_radix_bits: 5,
-                    cspace_cap_count: if *id == "root-fault" { 16 } else { 8 },
+                    cspace_cap_count: if *id == "root-fault" {
+                        16
+                    } else if *id == "root-driver-supervisor" {
+                        15
+                    } else {
+                        8
+                    },
                     revoke_anchor_slot: index as u32 + 1,
                     ipc_buffer_pages: 1,
                     stack_pages: 2,
@@ -1343,6 +1374,23 @@ mod tests {
         assert!(error
             .to_string()
             .contains("cannot contain every temporal TCB"));
+    }
+
+    #[test]
+    fn worker_admission_rejects_driver_supervisor_without_complete_containment_rows() {
+        let mut config = admission();
+        config
+            .critical_tcbs
+            .iter_mut()
+            .find(|task| task.id == "root-driver-supervisor")
+            .expect("unit driver supervisor resource")
+            .cspace_cap_count = 14;
+        let error = config
+            .validate(&temporal())
+            .expect_err("each admitted driver needs one complete seven-cap containment row");
+        assert!(error
+            .to_string()
+            .contains("fixed lanes + seven-cap containment rows"));
     }
 
     #[test]

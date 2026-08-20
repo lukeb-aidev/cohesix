@@ -80,6 +80,14 @@ pub struct FaultHandoffRecord {
     pub identity: GenerationIdentity,
     pub fault_badge: u64,
     pub fault_class: FaultClass,
+    /// Raw seL4 fault label copied before root-fault yields.
+    pub fault_label: u64,
+    /// Exact message length supplied by the kernel.
+    pub fault_length: u16,
+    /// First two raw message registers. Timeout faults encode Data/Consumed
+    /// here; standard faults retain their class-specific leading operands.
+    pub fault_mr0: u64,
+    pub fault_mr1: u64,
     pub tcb_cap: usize,
 }
 
@@ -1098,6 +1106,10 @@ mod tests {
             identity: identity(0),
             fault_badge: 0x26e1_0000 + u64::from(worker_ordinal),
             fault_class: FaultClass::Standard,
+            fault_label: 1,
+            fault_length: 2,
+            fault_mr0: 0,
+            fault_mr1: 0,
             tcb_cap: 0x100 + usize::from(worker_ordinal),
         }
     }

@@ -1074,7 +1074,7 @@ fault_reply_lanes = 1
 [[worker_resource_admission.critical_tcbs]]
 id = "root-driver-supervisor"
 cnode_radix_bits = 6
-cspace_cap_count = 20
+cspace_cap_count = 57
 revoke_anchor_slot = 16132
 ipc_buffer_pages = 1
 stack_pages = 2

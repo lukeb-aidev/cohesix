@@ -46,6 +46,21 @@ const CHILD_WORKER_SIGNAL_SLOT: seL4_CPtr = 7;
 const CHILD_DRIVER_RELEASE_SIGNAL_SLOT: seL4_CPtr = 7;
 const CHILD_DRIVER_SIGNAL_SLOT: seL4_CPtr = 8;
 const CHILD_EMERGENCY_SIGNAL_SLOT: seL4_CPtr = 9;
+const CHILD_SELF_CNODE_SLOT: seL4_CPtr = 10;
+
+// Slots 11..14 remain reserved for future fixed critical-control lanes. Each
+// admitted linked driver then owns one exact seven-capability containment row:
+// TCB, command origin, command Reply, completion origin, SC, standard fault,
+// and timeout fault. Seven rows exactly fill the Pi supervisor's 64-slot CNode.
+const DRIVER_SUPERVISOR_RUNTIME_CAP_SLOT_BASE: seL4_CPtr = 15;
+const DRIVER_SUPERVISOR_RUNTIME_CAP_STRIDE: seL4_CPtr = 7;
+const DRIVER_SUPERVISOR_RUNTIME_TCB_OFFSET: seL4_CPtr = 0;
+const DRIVER_SUPERVISOR_RUNTIME_COMMAND_ORIGIN_OFFSET: seL4_CPtr = 1;
+const DRIVER_SUPERVISOR_RUNTIME_COMMAND_REPLY_OFFSET: seL4_CPtr = 2;
+const DRIVER_SUPERVISOR_RUNTIME_COMPLETION_ORIGIN_OFFSET: seL4_CPtr = 3;
+const DRIVER_SUPERVISOR_RUNTIME_SC_OFFSET: seL4_CPtr = 4;
+const DRIVER_SUPERVISOR_RUNTIME_STANDARD_FAULT_OFFSET: seL4_CPtr = 5;
+const DRIVER_SUPERVISOR_RUNTIME_TIMEOUT_FAULT_OFFSET: seL4_CPtr = 6;
 
 const ROOT_CONTROL_ID: &str = "root-control";
 const ROOT_FAULT_ID: &str = "root-fault";
@@ -158,6 +173,30 @@ pub enum CriticalTcbConstructionError {
     },
 }
 
+/// Root-Cspace capabilities transferred into one driver-supervisor row.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DriverSupervisorRuntimeRootCaps {
+    pub tcb: seL4_CPtr,
+    pub command_endpoint_origin: seL4_CPtr,
+    pub command_reply: seL4_CPtr,
+    pub completion_notification_origin: seL4_CPtr,
+    pub sched_context: seL4_CPtr,
+    pub standard_fault_endpoint: seL4_CPtr,
+    pub timeout_fault_endpoint: seL4_CPtr,
+}
+
+/// Child-local capability identities consumed by driver containment.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DriverSupervisorRuntimeLocalCaps {
+    pub tcb: seL4_CPtr,
+    pub command_endpoint_origin: seL4_CPtr,
+    pub command_reply: seL4_CPtr,
+    pub completion_notification_origin: seL4_CPtr,
+    pub sched_context: seL4_CPtr,
+    pub standard_fault_endpoint: seL4_CPtr,
+    pub timeout_fault_endpoint: seL4_CPtr,
+}
+
 impl From<CriticalTopologyError> for CriticalTcbConstructionError {
     fn from(value: CriticalTopologyError) -> Self {
         Self::Generated(value)
@@ -185,6 +224,9 @@ static TARGET_FAULT_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 static TARGET_RECOVERED_TIMEOUTS: AtomicU64 = AtomicU64::new(0);
 static TARGET_PENDING_FAULT_LABEL: AtomicU64 = AtomicU64::new(0);
 static TARGET_PENDING_FAULT_BADGE: AtomicU64 = AtomicU64::new(0);
+static TARGET_PENDING_FAULT_LENGTH: AtomicUsize = AtomicUsize::new(0);
+static TARGET_PENDING_FAULT_MR0: AtomicU64 = AtomicU64::new(0);
+static TARGET_PENDING_FAULT_MR1: AtomicU64 = AtomicU64::new(0);
 static TARGET_PENDING_FAULT_VALID: AtomicBool = AtomicBool::new(false);
 static TARGET_ROOT_FAULT_TURN: AtomicUsize =
     AtomicUsize::new(RootFaultCriticalTurn::PrimeReceive as usize);
@@ -198,12 +240,17 @@ static TARGET_ROOT_FAULT_SERVICE_IDENTITY_SUPERVISOR: AtomicUsize = AtomicUsize:
 static TARGET_ROOT_FAULT_SERVICE_IDENTITY_CAP: AtomicUsize = AtomicUsize::new(0);
 static TARGET_ROOT_FAULT_SERVICE_BADGE: AtomicU64 = AtomicU64::new(0);
 static TARGET_ROOT_FAULT_SERVICE_CLASS: AtomicUsize = AtomicUsize::new(0);
+static TARGET_ROOT_FAULT_SERVICE_LABEL: AtomicU64 = AtomicU64::new(0);
+static TARGET_ROOT_FAULT_SERVICE_LENGTH: AtomicUsize = AtomicUsize::new(0);
+static TARGET_ROOT_FAULT_SERVICE_MR0: AtomicU64 = AtomicU64::new(0);
+static TARGET_ROOT_FAULT_SERVICE_MR1: AtomicU64 = AtomicU64::new(0);
 static TARGET_ROOT_FAULT_SERVICE_ROOT_TCB: AtomicUsize = AtomicUsize::new(0);
 static TARGET_ROOT_FAULT_SERVICE_HANDLER_TCB: AtomicUsize = AtomicUsize::new(0);
 static TARGET_ROOT_FAULT_SERVICE_RECOVER_PASSIVE: AtomicBool = AtomicBool::new(false);
 static DRIVER_FAULT_REPLY_BUSY: AtomicBool = AtomicBool::new(false);
 static TARGET_FAULT_ENDPOINT: AtomicUsize = AtomicUsize::new(0);
 static TARGET_ROOT_FAULT_CNODE: AtomicUsize = AtomicUsize::new(0);
+static TARGET_DRIVER_SUPERVISOR_CNODE: AtomicUsize = AtomicUsize::new(0);
 static TARGET_ROOT_FAULT_TCB_CAP_SLOTS: [AtomicUsize; FAULT_REGISTRY_CAPACITY] =
     [const { AtomicUsize::new(0) }; FAULT_REGISTRY_CAPACITY];
 static TARGET_ROOT_CONTROL_TEMPORAL_ACTIVE: AtomicBool = AtomicBool::new(false);
@@ -483,6 +530,193 @@ fn root_fault_tcb_control_cap(task_index: u16) -> Result<seL4_CPtr, CriticalTcbC
         return Err(CriticalTcbConstructionError::RuntimeNotReady);
     }
     Ok(cap)
+}
+
+fn driver_supervisor_runtime_cap_slot(
+    runtime_slot: u16,
+    offset: seL4_CPtr,
+) -> Result<seL4_CPtr, CriticalTcbConstructionError> {
+    let configured = generated::worker_resource_admission_config()
+        .handoff
+        .driver_fault_records;
+    if runtime_slot >= configured || offset >= DRIVER_SUPERVISOR_RUNTIME_CAP_STRIDE {
+        return Err(CriticalTcbConstructionError::MissingGeneratedRecord);
+    }
+    DRIVER_SUPERVISOR_RUNTIME_CAP_SLOT_BASE
+        .checked_add(
+            seL4_CPtr::from(runtime_slot)
+                .checked_mul(DRIVER_SUPERVISOR_RUNTIME_CAP_STRIDE)
+                .ok_or(CriticalTcbConstructionError::InvalidCapabilityRights)?,
+        )
+        .and_then(|slot| slot.checked_add(offset))
+        .ok_or(CriticalTcbConstructionError::InvalidCapabilityRights)
+}
+
+/// Transfer one linked runtime's retained origins into driver-supervisor.
+///
+/// The TCB is copied because root-fault and root-control retain their own
+/// separately declared views. Every other supplied cap is moved, preserving
+/// its MDB ancestry so a revoke issued against the child-local origin removes
+/// the old generation's derived root/driver caps without exposing root CSpace.
+pub fn install_driver_supervisor_runtime_caps(
+    runtime_slot: u16,
+    caps: DriverSupervisorRuntimeRootCaps,
+) -> Result<DriverSupervisorRuntimeLocalCaps, CriticalTcbConstructionError> {
+    if [
+        caps.tcb,
+        caps.command_endpoint_origin,
+        caps.command_reply,
+        caps.completion_notification_origin,
+        caps.sched_context,
+        caps.standard_fault_endpoint,
+        caps.timeout_fault_endpoint,
+    ]
+    .contains(&sel4_sys::seL4_CapNull)
+    {
+        return Err(CriticalTcbConstructionError::RuntimeNotReady);
+    }
+    let supervisor_cnode = TARGET_DRIVER_SUPERVISOR_CNODE.load(Ordering::Acquire) as seL4_CPtr;
+    if supervisor_cnode == sel4_sys::seL4_CapNull {
+        return Err(CriticalTcbConstructionError::RuntimeNotReady);
+    }
+    let resource = critical_resource(DRIVER_SUPERVISOR_ID)?;
+    let child_depth = resource.cnode_radix_bits;
+    let child_slots = 1usize
+        .checked_shl(u32::from(child_depth))
+        .ok_or(CriticalTcbConstructionError::InvalidCapabilityRights)?;
+    let tcb_slot =
+        driver_supervisor_runtime_cap_slot(runtime_slot, DRIVER_SUPERVISOR_RUNTIME_TCB_OFFSET)?;
+    let final_slot = driver_supervisor_runtime_cap_slot(
+        runtime_slot,
+        DRIVER_SUPERVISOR_RUNTIME_TIMEOUT_FAULT_OFFSET,
+    )?;
+    if final_slot as usize >= child_slots {
+        return Err(CriticalTcbConstructionError::InvalidCapabilityRights);
+    }
+    let root_cnode = sel4_sys::seL4_CapInitThreadCNode;
+    let root_depth = sel4::word_bits() as u8;
+    let copy_error = sel4::cnode_copy_depth(
+        supervisor_cnode,
+        tcb_slot,
+        child_depth,
+        root_cnode,
+        caps.tcb,
+        root_depth,
+        sel4_sys::seL4_CapRights_All,
+    );
+    if copy_error != sel4_sys::seL4_NoError {
+        return Err(sel4_error(
+            "critical.driver-supervisor-tcb-control-copy",
+            copy_error,
+        ));
+    }
+
+    let move_rows = [
+        (
+            caps.command_endpoint_origin,
+            DRIVER_SUPERVISOR_RUNTIME_COMMAND_ORIGIN_OFFSET,
+        ),
+        (
+            caps.command_reply,
+            DRIVER_SUPERVISOR_RUNTIME_COMMAND_REPLY_OFFSET,
+        ),
+        (
+            caps.completion_notification_origin,
+            DRIVER_SUPERVISOR_RUNTIME_COMPLETION_ORIGIN_OFFSET,
+        ),
+        (caps.sched_context, DRIVER_SUPERVISOR_RUNTIME_SC_OFFSET),
+        (
+            caps.standard_fault_endpoint,
+            DRIVER_SUPERVISOR_RUNTIME_STANDARD_FAULT_OFFSET,
+        ),
+        (
+            caps.timeout_fault_endpoint,
+            DRIVER_SUPERVISOR_RUNTIME_TIMEOUT_FAULT_OFFSET,
+        ),
+    ];
+    let mut moved = 0usize;
+    for (root_slot, offset) in move_rows {
+        let child_slot = driver_supervisor_runtime_cap_slot(runtime_slot, offset)?;
+        let error = sel4::cnode_move_depth(
+            supervisor_cnode,
+            child_slot,
+            child_depth,
+            root_cnode,
+            root_slot,
+            root_depth,
+        );
+        if error != sel4_sys::seL4_NoError {
+            for rollback in (0..moved).rev() {
+                let (prior_root_slot, prior_offset) = move_rows[rollback];
+                let prior_child_slot =
+                    driver_supervisor_runtime_cap_slot(runtime_slot, prior_offset)?;
+                let _ = sel4::cnode_move_depth(
+                    root_cnode,
+                    prior_root_slot,
+                    root_depth,
+                    supervisor_cnode,
+                    prior_child_slot,
+                    child_depth,
+                );
+            }
+            let _ = sel4::cnode_delete(supervisor_cnode, tcb_slot, child_depth);
+            return Err(sel4_error(
+                "critical.driver-supervisor-authority-move",
+                error,
+            ));
+        }
+        moved = moved.saturating_add(1);
+    }
+
+    Ok(DriverSupervisorRuntimeLocalCaps {
+        tcb: tcb_slot,
+        command_endpoint_origin: driver_supervisor_runtime_cap_slot(
+            runtime_slot,
+            DRIVER_SUPERVISOR_RUNTIME_COMMAND_ORIGIN_OFFSET,
+        )?,
+        command_reply: driver_supervisor_runtime_cap_slot(
+            runtime_slot,
+            DRIVER_SUPERVISOR_RUNTIME_COMMAND_REPLY_OFFSET,
+        )?,
+        completion_notification_origin: driver_supervisor_runtime_cap_slot(
+            runtime_slot,
+            DRIVER_SUPERVISOR_RUNTIME_COMPLETION_ORIGIN_OFFSET,
+        )?,
+        sched_context: driver_supervisor_runtime_cap_slot(
+            runtime_slot,
+            DRIVER_SUPERVISOR_RUNTIME_SC_OFFSET,
+        )?,
+        standard_fault_endpoint: driver_supervisor_runtime_cap_slot(
+            runtime_slot,
+            DRIVER_SUPERVISOR_RUNTIME_STANDARD_FAULT_OFFSET,
+        )?,
+        timeout_fault_endpoint: driver_supervisor_runtime_cap_slot(
+            runtime_slot,
+            DRIVER_SUPERVISOR_RUNTIME_TIMEOUT_FAULT_OFFSET,
+        )?,
+    })
+}
+
+/// Revoke descendants of one exact driver-supervisor-local origin cap.
+pub fn driver_supervisor_revoke_local_cap(cap: seL4_CPtr) -> seL4_Error {
+    let depth = critical_resource(DRIVER_SUPERVISOR_ID)
+        .map(|resource| resource.cnode_radix_bits)
+        .unwrap_or(0);
+    if depth == 0 {
+        return sel4_sys::seL4_FailedLookup;
+    }
+    sel4::cnode_revoke(CHILD_SELF_CNODE_SLOT, cap, depth)
+}
+
+/// Delete one exact driver-supervisor-local retained cap.
+pub fn driver_supervisor_delete_local_cap(cap: seL4_CPtr) -> seL4_Error {
+    let depth = critical_resource(DRIVER_SUPERVISOR_ID)
+        .map(|resource| resource.cnode_radix_bits)
+        .unwrap_or(0);
+    if depth == 0 {
+        return sel4_sys::seL4_FailedLookup;
+    }
+    sel4::cnode_delete(CHILD_SELF_CNODE_SLOT, cap, depth)
 }
 
 /// Register one constructed live TCB in the exact target fault registry.
@@ -914,6 +1148,20 @@ pub fn construct_critical_tcb_runtime(
     TARGET_ROOT_FAULT_CNODE
         .compare_exchange(0, root_fault_cnode, Ordering::AcqRel, Ordering::Acquire)
         .map_err(|_| CriticalTcbConstructionError::RuntimeNotReady)?;
+    let driver_supervisor_cnode = handles
+        .iter()
+        .find(|handle| handle.id == DRIVER_SUPERVISOR_ID)
+        .map(|handle| handle.cnode_cap)
+        .filter(|cap| *cap != 0)
+        .ok_or(CriticalTcbConstructionError::MissingGeneratedRecord)?;
+    TARGET_DRIVER_SUPERVISOR_CNODE
+        .compare_exchange(
+            0,
+            driver_supervisor_cnode,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        )
+        .map_err(|_| CriticalTcbConstructionError::RuntimeNotReady)?;
     for (index, handle) in handles.iter().enumerate() {
         register_target_fault_source(
             handle.id,
@@ -1051,6 +1299,9 @@ enum FaultReplyDisposition {
 struct PendingTargetFault {
     fault_label: seL4_Word,
     fault_badge: seL4_Word,
+    fault_length: u16,
+    fault_mr0: seL4_Word,
+    fault_mr1: seL4_Word,
 }
 
 #[inline(never)]
@@ -1062,6 +1313,9 @@ fn publish_pending_target_fault(
     }
     TARGET_PENDING_FAULT_LABEL.store(pending.fault_label, Ordering::Relaxed);
     TARGET_PENDING_FAULT_BADGE.store(pending.fault_badge, Ordering::Relaxed);
+    TARGET_PENDING_FAULT_LENGTH.store(usize::from(pending.fault_length), Ordering::Relaxed);
+    TARGET_PENDING_FAULT_MR0.store(pending.fault_mr0, Ordering::Relaxed);
+    TARGET_PENDING_FAULT_MR1.store(pending.fault_mr1, Ordering::Relaxed);
     TARGET_PENDING_FAULT_VALID.store(true, Ordering::Release);
     Ok(())
 }
@@ -1074,6 +1328,9 @@ fn pending_target_fault() -> Option<PendingTargetFault> {
     Some(PendingTargetFault {
         fault_label: TARGET_PENDING_FAULT_LABEL.load(Ordering::Relaxed),
         fault_badge: TARGET_PENDING_FAULT_BADGE.load(Ordering::Relaxed),
+        fault_length: TARGET_PENDING_FAULT_LENGTH.load(Ordering::Relaxed) as u16,
+        fault_mr0: TARGET_PENDING_FAULT_MR0.load(Ordering::Relaxed),
+        fault_mr1: TARGET_PENDING_FAULT_MR1.load(Ordering::Relaxed),
     })
 }
 
@@ -1117,6 +1374,10 @@ fn publish_pending_target_service_fault(
         },
         Ordering::Relaxed,
     );
+    TARGET_ROOT_FAULT_SERVICE_LABEL.store(record.fault_label, Ordering::Relaxed);
+    TARGET_ROOT_FAULT_SERVICE_LENGTH.store(usize::from(record.fault_length), Ordering::Relaxed);
+    TARGET_ROOT_FAULT_SERVICE_MR0.store(record.fault_mr0, Ordering::Relaxed);
+    TARGET_ROOT_FAULT_SERVICE_MR1.store(record.fault_mr1, Ordering::Relaxed);
     TARGET_ROOT_FAULT_SERVICE_ROOT_TCB.store(record.tcb_cap, Ordering::Relaxed);
     TARGET_ROOT_FAULT_SERVICE_HANDLER_TCB
         .store(pending.fault_handler_tcb_cap as usize, Ordering::Relaxed);
@@ -1150,6 +1411,10 @@ fn pending_target_service_fault() -> Option<PendingTargetServiceFault> {
                 1 => FaultClass::Timeout,
                 _ => return None,
             },
+            fault_label: TARGET_ROOT_FAULT_SERVICE_LABEL.load(Ordering::Relaxed),
+            fault_length: TARGET_ROOT_FAULT_SERVICE_LENGTH.load(Ordering::Relaxed) as u16,
+            fault_mr0: TARGET_ROOT_FAULT_SERVICE_MR0.load(Ordering::Relaxed),
+            fault_mr1: TARGET_ROOT_FAULT_SERVICE_MR1.load(Ordering::Relaxed),
             tcb_cap: TARGET_ROOT_FAULT_SERVICE_ROOT_TCB.load(Ordering::Relaxed),
         },
         fault_handler_tcb_cap: TARGET_ROOT_FAULT_SERVICE_HANDLER_TCB.load(Ordering::Relaxed)
@@ -1221,6 +1486,9 @@ fn is_generated_service_fault_badge(badge: seL4_Word) -> bool {
 fn prepare_target_service_fault(
     fault_label: seL4_Word,
     badge: seL4_Word,
+    fault_length: u16,
+    fault_mr0: seL4_Word,
+    fault_mr1: seL4_Word,
 ) -> Result<PendingTargetServiceFault, CriticalTcbConstructionError> {
     let (registration, fault_class) = resolve_target_fault(badge)?;
     let task = generated::temporal_tasks()
@@ -1249,6 +1517,10 @@ fn prepare_target_service_fault(
             identity: registration.identity,
             fault_badge: badge,
             fault_class,
+            fault_label,
+            fault_length,
+            fault_mr0,
+            fault_mr1,
             tcb_cap: registration.tcb_cap,
         },
         fault_handler_tcb_cap: root_fault_tcb_control_cap(registration.task_index)?,
@@ -1261,6 +1533,9 @@ fn prepare_target_service_fault(
 fn handle_target_fault(
     fault_label: seL4_Word,
     badge: seL4_Word,
+    fault_length: u16,
+    fault_mr0: seL4_Word,
+    fault_mr1: seL4_Word,
 ) -> Result<FaultReplyDisposition, CriticalTcbConstructionError> {
     let (registration, fault_class) = resolve_target_fault(badge)?;
     let task = generated::temporal_tasks()
@@ -1296,6 +1571,10 @@ fn handle_target_fault(
         identity: registration.identity,
         fault_badge: badge,
         fault_class,
+        fault_label,
+        fault_length,
+        fault_mr0,
+        fault_mr1,
         tcb_cap: registration.tcb_cap,
     };
     let fault_handler_tcb_cap = root_fault_tcb_control_cap(registration.task_index)?;
@@ -1354,6 +1633,7 @@ extern "C" fn root_fault_entry(_arg0: seL4_Word) -> ! {
                 cohesix_root_fault_qemu_evidence_turn();
                 let mut badge = 0;
                 let info = sel4::recv_with_reply(CHILD_INBOX_SLOT, &mut badge, CHILD_REPLY_SLOT);
+                let fault_length = info.length().min(seL4_Word::from(u16::MAX)) as u16;
                 // Only copied message values cross this refill boundary. The
                 // single Reply object stays in its fixed child CSpace slot,
                 // and no second receive can replace its association before
@@ -1361,6 +1641,17 @@ extern "C" fn root_fault_entry(_arg0: seL4_Word) -> ! {
                 if publish_pending_target_fault(PendingTargetFault {
                     fault_label: info.label(),
                     fault_badge: badge,
+                    fault_length,
+                    fault_mr0: if fault_length > 0 {
+                        sel4::message_register(0)
+                    } else {
+                        0
+                    },
+                    fault_mr1: if fault_length > 1 {
+                        sel4::message_register(1)
+                    } else {
+                        0
+                    },
                 })
                 .is_err()
                 {
@@ -1375,6 +1666,9 @@ extern "C" fn root_fault_entry(_arg0: seL4_Word) -> ! {
                 let PendingTargetFault {
                     fault_label,
                     fault_badge,
+                    fault_length,
+                    fault_mr0,
+                    fault_mr1,
                 } = match pending_target_fault() {
                     Some(fault) => fault,
                     None => target_fail_stop(
@@ -1387,7 +1681,13 @@ extern "C" fn root_fault_entry(_arg0: seL4_Word) -> ! {
                     sel4::yield_now();
                 } else {
                     clear_pending_target_fault();
-                    let disposition = match handle_target_fault(fault_label, fault_badge) {
+                    let disposition = match handle_target_fault(
+                        fault_label,
+                        fault_badge,
+                        fault_length,
+                        fault_mr0,
+                        fault_mr1,
+                    ) {
                         Ok(disposition) => disposition,
                         Err(_) => target_fail_stop(
                             "[critical] root-fault classification failed",
@@ -1424,6 +1724,9 @@ extern "C" fn root_fault_entry(_arg0: seL4_Word) -> ! {
                 let PendingTargetFault {
                     fault_label,
                     fault_badge,
+                    fault_length,
+                    fault_mr0,
+                    fault_mr1,
                 } = match pending_target_fault() {
                     Some(fault) => fault,
                     None => target_fail_stop(
@@ -1432,7 +1735,13 @@ extern "C" fn root_fault_entry(_arg0: seL4_Word) -> ! {
                     ),
                 };
                 commit_root_fault_turn(RootFaultCriticalTurn::SuspendService);
-                match prepare_target_service_fault(fault_label, fault_badge) {
+                match prepare_target_service_fault(
+                    fault_label,
+                    fault_badge,
+                    fault_length,
+                    fault_mr0,
+                    fault_mr1,
+                ) {
                     Ok(pending) => {
                         if publish_pending_target_service_fault(pending).is_err() {
                             target_fail_stop(
@@ -1886,6 +2195,15 @@ fn construct_restricted_child(
                 root_depth,
                 "critical.driver-supervisor-root-fault-release",
             )?;
+            copy_child_cap(
+                cnode,
+                child_depth,
+                CHILD_SELF_CNODE_SLOT,
+                root_cnode,
+                cnode,
+                root_depth,
+                "critical.driver-supervisor-self-cnode",
+            )?;
         }
     }
     copy_child_cap(
@@ -2084,7 +2402,8 @@ fn critical_standard_badge(id: &str) -> Result<u64, CriticalTcbConstructionError
 }
 
 fn validate_generated_rights() -> Result<(), CriticalTcbConstructionError> {
-    let handoff = generated::worker_resource_admission_config().handoff;
+    let admission = generated::worker_resource_admission_config();
+    let handoff = admission.handoff;
     if handoff.supervisor_signal_rights
         != (generated::CapabilityRights {
             read: false,
@@ -2115,6 +2434,32 @@ fn validate_generated_rights() -> Result<(), CriticalTcbConstructionError> {
             })
     {
         return Err(CriticalTcbConstructionError::InvalidCapabilityRights);
+    }
+    if handoff.driver_fault_records != 0 {
+        let resource = admission
+            .critical_tcbs
+            .iter()
+            .find(|resource| resource.id == DRIVER_SUPERVISOR_ID)
+            .ok_or(CriticalTcbConstructionError::MissingGeneratedRecord)?;
+        let required_caps = 8usize
+            .checked_add(
+                usize::from(handoff.driver_fault_records)
+                    .checked_mul(DRIVER_SUPERVISOR_RUNTIME_CAP_STRIDE as usize)
+                    .ok_or(CriticalTcbConstructionError::InvalidCapabilityRights)?,
+            )
+            .ok_or(CriticalTcbConstructionError::InvalidCapabilityRights)?;
+        let final_slot = driver_supervisor_runtime_cap_slot(
+            handoff.driver_fault_records.saturating_sub(1),
+            DRIVER_SUPERVISOR_RUNTIME_TIMEOUT_FAULT_OFFSET,
+        )?;
+        let child_slots = 1usize
+            .checked_shl(u32::from(resource.cnode_radix_bits))
+            .ok_or(CriticalTcbConstructionError::InvalidCapabilityRights)?;
+        if usize::from(resource.cspace_cap_count) != required_caps
+            || final_slot as usize >= child_slots
+        {
+            return Err(CriticalTcbConstructionError::InvalidCapabilityRights);
+        }
     }
     Ok(())
 }

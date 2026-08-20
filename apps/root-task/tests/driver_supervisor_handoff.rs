@@ -21,6 +21,10 @@ fn fault(slot: u16) -> FaultHandoffRecord {
         },
         fault_badge: 0x26e2_0000 + u64::from(slot),
         fault_class: FaultClass::Standard,
+        fault_label: 1,
+        fault_length: 2,
+        fault_mr0: 0,
+        fault_mr1: 0,
         tcb_cap: 0x500 + usize::from(slot),
     }
 }

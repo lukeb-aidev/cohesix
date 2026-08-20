@@ -28,6 +28,10 @@ fn fault(worker_ordinal: u16, sequence: u64) -> FaultHandoffRecord {
         identity: identity(0),
         fault_badge: 0x26e1_0000 + u64::from(worker_ordinal),
         fault_class: FaultClass::Standard,
+        fault_label: 1,
+        fault_length: 2,
+        fault_mr0: 0,
+        fault_mr1: 0,
         tcb_cap: 0x100 + usize::from(worker_ordinal),
     }
 }
@@ -49,6 +53,10 @@ fn service_fault(task_index: u16, sequence: u64) -> FaultHandoffRecord {
         identity: identity(0),
         fault_badge: 0x26e2_0000 + u64::from(task_index),
         fault_class: FaultClass::Standard,
+        fault_label: 1,
+        fault_length: 2,
+        fault_mr0: 0,
+        fault_mr1: 0,
         tcb_cap: 0x200 + usize::from(task_index),
     }
 }

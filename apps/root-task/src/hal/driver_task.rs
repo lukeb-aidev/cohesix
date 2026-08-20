@@ -4445,12 +4445,14 @@ fn driver_task_ring_read_usb_oldgood_receipt(
 #[cfg(feature = "kernel")]
 struct DriverTaskCommandSlot {
     tcb: AtomicUsize,
+    mcs_supervisor_tcb: AtomicUsize,
     mcs_command_endpoint_origin: AtomicUsize,
     mcs_command_reply: AtomicUsize,
     mcs_completion_notification_origin: AtomicUsize,
     mcs_sched_context: AtomicUsize,
     mcs_standard_fault_endpoint: AtomicUsize,
     mcs_timeout_fault_endpoint: AtomicUsize,
+    mcs_supervisor_authority_ready: AtomicU32,
     mcs_cap_generation: AtomicU32,
     mcs_call_sequence: AtomicU32,
     mcs_call_phase: AtomicU32,
@@ -5114,12 +5116,14 @@ impl DriverTaskCommandSlot {
     const fn new() -> Self {
         Self {
             tcb: AtomicUsize::new(0),
+            mcs_supervisor_tcb: AtomicUsize::new(0),
             mcs_command_endpoint_origin: AtomicUsize::new(0),
             mcs_command_reply: AtomicUsize::new(0),
             mcs_completion_notification_origin: AtomicUsize::new(0),
             mcs_sched_context: AtomicUsize::new(0),
             mcs_standard_fault_endpoint: AtomicUsize::new(0),
             mcs_timeout_fault_endpoint: AtomicUsize::new(0),
+            mcs_supervisor_authority_ready: AtomicU32::new(0),
             mcs_cap_generation: AtomicU32::new(0),
             mcs_call_sequence: AtomicU32::new(0),
             mcs_call_phase: AtomicU32::new(0),
@@ -8246,11 +8250,63 @@ pub fn publish_driver_task_mcs_kernel_objects(
         .store(standard_fault_endpoint, Ordering::Relaxed);
     slot.mcs_timeout_fault_endpoint
         .store(timeout_fault_endpoint, Ordering::Relaxed);
+    slot.mcs_supervisor_tcb.store(0, Ordering::Relaxed);
+    slot.mcs_supervisor_authority_ready
+        .store(0, Ordering::Relaxed);
     slot.mcs_call_sequence.store(0, Ordering::Relaxed);
     slot.mcs_call_phase
         .store(DRIVER_TASK_MCS_CALL_IDLE, Ordering::Relaxed);
     slot.mcs_command_admission_open.store(1, Ordering::Relaxed);
     slot.mcs_cap_generation.store(generation, Ordering::Release);
+    true
+}
+
+/// Publish the exact child-local capability row after root has transferred
+/// every retained origin into the restricted driver-supervisor CSpace.
+#[cfg(all(feature = "kernel", sel4_config_kernel_mcs))]
+pub fn publish_driver_task_supervisor_authority(
+    contract: DriverTaskContract,
+    caps: crate::hal::critical_tcb::DriverSupervisorRuntimeLocalCaps,
+) -> bool {
+    if [
+        caps.tcb,
+        caps.command_endpoint_origin,
+        caps.command_reply,
+        caps.completion_notification_origin,
+        caps.sched_context,
+        caps.standard_fault_endpoint,
+        caps.timeout_fault_endpoint,
+    ]
+    .contains(&sel4_sys::seL4_CapNull)
+    {
+        return false;
+    }
+    let Some(slot) = driver_task_slot_for_contract(contract) else {
+        return false;
+    };
+    if slot.mcs_cap_generation.load(Ordering::Acquire) == 0
+        || slot.mcs_supervisor_authority_ready.load(Ordering::Acquire) != 0
+    {
+        return false;
+    }
+    slot.mcs_supervisor_tcb
+        .store(caps.tcb as usize, Ordering::Relaxed);
+    slot.mcs_command_endpoint_origin
+        .store(caps.command_endpoint_origin as usize, Ordering::Relaxed);
+    slot.mcs_command_reply
+        .store(caps.command_reply as usize, Ordering::Relaxed);
+    slot.mcs_completion_notification_origin.store(
+        caps.completion_notification_origin as usize,
+        Ordering::Relaxed,
+    );
+    slot.mcs_sched_context
+        .store(caps.sched_context as usize, Ordering::Relaxed);
+    slot.mcs_standard_fault_endpoint
+        .store(caps.standard_fault_endpoint as usize, Ordering::Relaxed);
+    slot.mcs_timeout_fault_endpoint
+        .store(caps.timeout_fault_endpoint as usize, Ordering::Relaxed);
+    slot.mcs_supervisor_authority_ready
+        .store(1, Ordering::Release);
     true
 }
 
@@ -8317,6 +8373,172 @@ pub enum DriverSupervisorContainmentError {
     Kernel(sel4_sys::seL4_Error),
 }
 
+const DRIVER_SUPERVISOR_DIAG_EMPTY: u8 = 0;
+const DRIVER_SUPERVISOR_DIAG_CONTAINING: u8 = 1;
+const DRIVER_SUPERVISOR_DIAG_COMPLETE: u8 = 2;
+const DRIVER_SUPERVISOR_DIAG_FAILED: u8 = 3;
+
+const DRIVER_SUPERVISOR_DIAG_STAGE_IDENTITY: u8 = 1;
+const DRIVER_SUPERVISOR_DIAG_STAGE_BADGE: u8 = 2;
+const DRIVER_SUPERVISOR_DIAG_STAGE_PHASE: u8 = 3;
+const DRIVER_SUPERVISOR_DIAG_STAGE_REPLY: u8 = 4;
+const DRIVER_SUPERVISOR_DIAG_STAGE_SUSPEND: u8 = 5;
+const DRIVER_SUPERVISOR_DIAG_STAGE_UNBIND: u8 = 6;
+const DRIVER_SUPERVISOR_DIAG_STAGE_REVOKE_COMMAND: u8 = 7;
+const DRIVER_SUPERVISOR_DIAG_STAGE_REVOKE_REPLY: u8 = 8;
+const DRIVER_SUPERVISOR_DIAG_STAGE_REVOKE_COMPLETION: u8 = 9;
+const DRIVER_SUPERVISOR_DIAG_STAGE_DELETE_STANDARD: u8 = 10;
+const DRIVER_SUPERVISOR_DIAG_STAGE_DELETE_TIMEOUT: u8 = 11;
+const DRIVER_SUPERVISOR_DIAG_STAGE_DONE: u8 = 12;
+
+#[cfg(all(feature = "kernel", sel4_config_kernel_mcs))]
+#[derive(Clone, Copy, Debug)]
+struct DriverSupervisorFaultDiagnostic {
+    record: crate::critical_tcb::FaultHandoffRecord,
+    contract: DriverTaskContract,
+    local_tcb: usize,
+    local_sc: usize,
+    prior_call_phase: u32,
+    stage: u8,
+    kernel_error: isize,
+    state: u8,
+}
+
+#[cfg(all(feature = "kernel", sel4_config_kernel_mcs))]
+impl DriverSupervisorFaultDiagnostic {
+    const fn empty() -> Self {
+        Self {
+            record: crate::critical_tcb::FaultHandoffRecord {
+                sequence: 0,
+                task_index: 0,
+                identity: crate::critical_tcb::GenerationIdentity {
+                    slot: 0,
+                    lease_epoch: 0,
+                    supervisor_generation: 0,
+                    cap_generation: 0,
+                },
+                fault_badge: 0,
+                fault_class: crate::critical_tcb::FaultClass::Standard,
+                fault_label: 0,
+                fault_length: 0,
+                fault_mr0: 0,
+                fault_mr1: 0,
+                tcb_cap: 0,
+            },
+            contract: SERIAL_DRIVER_TASK_CONTRACT,
+            local_tcb: 0,
+            local_sc: 0,
+            prior_call_phase: 0,
+            stage: 0,
+            kernel_error: 0,
+            state: DRIVER_SUPERVISOR_DIAG_EMPTY,
+        }
+    }
+}
+
+#[cfg(all(feature = "kernel", sel4_config_kernel_mcs))]
+static DRIVER_SUPERVISOR_FAULT_DIAGNOSTIC: spin::Mutex<DriverSupervisorFaultDiagnostic> =
+    spin::Mutex::new(DriverSupervisorFaultDiagnostic::empty());
+
+#[cfg(all(feature = "kernel", sel4_config_kernel_mcs))]
+fn begin_driver_supervisor_fault_diagnostic(
+    record: crate::critical_tcb::FaultHandoffRecord,
+    contract: DriverTaskContract,
+    local_tcb: usize,
+    local_sc: usize,
+    prior_call_phase: u32,
+) {
+    *DRIVER_SUPERVISOR_FAULT_DIAGNOSTIC.lock() = DriverSupervisorFaultDiagnostic {
+        record,
+        contract,
+        local_tcb,
+        local_sc,
+        prior_call_phase,
+        stage: DRIVER_SUPERVISOR_DIAG_STAGE_IDENTITY,
+        kernel_error: 0,
+        state: DRIVER_SUPERVISOR_DIAG_CONTAINING,
+    };
+}
+
+#[cfg(all(feature = "kernel", sel4_config_kernel_mcs))]
+fn complete_driver_supervisor_fault_diagnostic() {
+    let mut diagnostic = DRIVER_SUPERVISOR_FAULT_DIAGNOSTIC.lock();
+    diagnostic.stage = DRIVER_SUPERVISOR_DIAG_STAGE_DONE;
+    diagnostic.state = DRIVER_SUPERVISOR_DIAG_COMPLETE;
+}
+
+#[cfg(all(feature = "kernel", sel4_config_kernel_mcs))]
+fn fail_driver_supervisor_fault_diagnostic(
+    stage: u8,
+    error: DriverSupervisorContainmentError,
+) -> DriverSupervisorContainmentError {
+    let mut diagnostic = DRIVER_SUPERVISOR_FAULT_DIAGNOSTIC.lock();
+    diagnostic.stage = stage;
+    diagnostic.kernel_error = match error {
+        DriverSupervisorContainmentError::Kernel(kernel_error) => kernel_error as isize,
+        _ => 0,
+    };
+    diagnostic.state = DRIVER_SUPERVISOR_DIAG_FAILED;
+    error
+}
+
+/// Format one stable, terminal driver fault/containment record for root-control.
+/// The caller advances `after_sequence` only after it has retained the line.
+#[cfg(all(feature = "kernel", sel4_config_kernel_mcs))]
+pub fn driver_supervisor_fault_diagnostic_line(
+    after_sequence: u64,
+) -> Option<(u64, heapless::String<256>)> {
+    let diagnostic = *DRIVER_SUPERVISOR_FAULT_DIAGNOSTIC.try_lock()?;
+    if diagnostic.record.sequence <= after_sequence
+        || !matches!(
+            diagnostic.state,
+            DRIVER_SUPERVISOR_DIAG_COMPLETE | DRIVER_SUPERVISOR_DIAG_FAILED
+        )
+    {
+        return None;
+    }
+    let class = match diagnostic.record.fault_class {
+        crate::critical_tcb::FaultClass::Standard => "standard",
+        crate::critical_tcb::FaultClass::Timeout => "timeout",
+    };
+    let mut line = heapless::String::<256>::new();
+    let result = if diagnostic.state == DRIVER_SUPERVISOR_DIAG_COMPLETE {
+        "ok"
+    } else {
+        "fail"
+    };
+    core::fmt::write(
+        &mut line,
+        format_args!(
+            "DRIVER_FAULT_CONTAINMENT v1 q={:x} task={} c={} l={:x}/{} b={:x} m0={:x} m1={:x} t={:x} sc={:x} p={:x} res={} st={:x} e={:x}",
+            diagnostic.record.sequence,
+            diagnostic.contract.name,
+            class,
+            diagnostic.record.fault_label,
+            diagnostic.record.fault_length,
+            diagnostic.record.fault_badge,
+            diagnostic.record.fault_mr0,
+            diagnostic.record.fault_mr1,
+            diagnostic.local_tcb,
+            diagnostic.local_sc,
+            diagnostic.prior_call_phase,
+            result,
+            diagnostic.stage,
+            diagnostic.kernel_error,
+        ),
+    )
+    .ok()?;
+    Some((diagnostic.record.sequence, line))
+}
+
+/// Classic-kernel builds have no MCS driver fault-containment record.
+#[cfg(all(feature = "kernel", not(sel4_config_kernel_mcs)))]
+pub fn driver_supervisor_fault_diagnostic_line(
+    _after_sequence: u64,
+) -> Option<(u64, heapless::String<256>)> {
+    None
+}
+
 #[cfg(all(feature = "kernel", sel4_config_kernel_mcs))]
 pub fn driver_contract_for_runtime_slot(runtime_slot: u16) -> Option<DriverTaskContract> {
     match runtime_slot {
@@ -8353,12 +8575,28 @@ pub fn root_driver_supervisor_contain_fault(
         .ok_or(DriverSupervisorContainmentError::UnknownRuntimeSlot)?;
     let slot = driver_task_slot_for_contract(contract)
         .ok_or(DriverSupervisorContainmentError::UnknownRuntimeSlot)?;
-    let tcb = slot.tcb.load(Ordering::Acquire);
-    if tcb == 0
-        || record.tcb_cap != tcb
+    let root_tcb = slot.tcb.load(Ordering::Acquire);
+    let supervisor_tcb = slot.mcs_supervisor_tcb.load(Ordering::Acquire);
+    let supervisor_reply = slot.mcs_command_reply.load(Ordering::Acquire);
+    let supervisor_sc = slot.mcs_sched_context.load(Ordering::Acquire);
+    let prior = slot.mcs_call_phase.load(Ordering::Acquire);
+    begin_driver_supervisor_fault_diagnostic(
+        record,
+        contract,
+        supervisor_tcb,
+        supervisor_sc,
+        prior,
+    );
+    if root_tcb == 0
+        || supervisor_tcb == 0
+        || slot.mcs_supervisor_authority_ready.load(Ordering::Acquire) == 0
+        || record.tcb_cap != root_tcb
         || record.identity.cap_generation != slot.mcs_cap_generation.load(Ordering::Acquire)
     {
-        return Err(DriverSupervisorContainmentError::IdentityMismatch);
+        return Err(fail_driver_supervisor_fault_diagnostic(
+            DRIVER_SUPERVISOR_DIAG_STAGE_IDENTITY,
+            DriverSupervisorContainmentError::IdentityMismatch,
+        ));
     }
     let expected_badge = match record.fault_class {
         crate::critical_tcb::FaultClass::Standard => {
@@ -8379,12 +8617,17 @@ pub fn root_driver_supervisor_contain_fault(
         }
     };
     if record.fault_badge != expected_badge {
-        return Err(DriverSupervisorContainmentError::FaultBadgeMismatch);
+        return Err(fail_driver_supervisor_fault_diagnostic(
+            DRIVER_SUPERVISOR_DIAG_STAGE_BADGE,
+            DriverSupervisorContainmentError::FaultBadgeMismatch,
+        ));
     }
     slot.mcs_command_admission_open.store(0, Ordering::Release);
-    let prior = slot.mcs_call_phase.load(Ordering::Acquire);
     if prior != DRIVER_TASK_MCS_CALL_IDLE && prior != DRIVER_TASK_MCS_CALL_ASSOCIATED {
-        return Err(DriverSupervisorContainmentError::DuplicateOrOutOfOrder);
+        return Err(fail_driver_supervisor_fault_diagnostic(
+            DRIVER_SUPERVISOR_DIAG_STAGE_PHASE,
+            DriverSupervisorContainmentError::DuplicateOrOutOfOrder,
+        ));
     }
     slot.mcs_call_phase
         .compare_exchange(
@@ -8393,19 +8636,26 @@ pub fn root_driver_supervisor_contain_fault(
             Ordering::AcqRel,
             Ordering::Acquire,
         )
-        .map_err(|_| DriverSupervisorContainmentError::DuplicateOrOutOfOrder)?;
+        .map_err(|_| {
+            fail_driver_supervisor_fault_diagnostic(
+                DRIVER_SUPERVISOR_DIAG_STAGE_PHASE,
+                DriverSupervisorContainmentError::DuplicateOrOutOfOrder,
+            )
+        })?;
 
     if prior == DRIVER_TASK_MCS_CALL_ASSOCIATED {
-        let reply = slot.mcs_command_reply.load(Ordering::Acquire);
-        if reply == 0 || slot.mcs_call_sequence.load(Ordering::Acquire) == 0 {
-            return Err(DriverSupervisorContainmentError::MissingAuthority);
+        if supervisor_reply == 0 || slot.mcs_call_sequence.load(Ordering::Acquire) == 0 {
+            return Err(fail_driver_supervisor_fault_diagnostic(
+                DRIVER_SUPERVISOR_DIAG_STAGE_REPLY,
+                DriverSupervisorContainmentError::MissingAuthority,
+            ));
         }
         crate::sel4::set_message_register(
             0,
             pi4_driver_abi::DRIVER_RUNTIME_MCS_FAULTED_CALL_RESULT as sel4_sys::seL4_Word,
         );
         crate::sel4::reply_to(
-            reply as sel4_sys::seL4_CPtr,
+            supervisor_reply as sel4_sys::seL4_CPtr,
             sel4_sys::seL4_MessageInfo::new(0, 0, 0, 1),
         );
         slot.mcs_failure_replies.fetch_add(1, Ordering::AcqRel);
@@ -8414,53 +8664,94 @@ pub fn root_driver_supervisor_contain_fault(
     slot.mcs_call_phase
         .store(DRIVER_TASK_MCS_CALL_FAILURE_REPLIED, Ordering::Release);
 
-    crate::sel4::suspend_tcb(tcb as sel4_sys::seL4_CPtr)
-        .map_err(DriverSupervisorContainmentError::Kernel)?;
+    crate::sel4::suspend_tcb(supervisor_tcb as sel4_sys::seL4_CPtr).map_err(|error| {
+        fail_driver_supervisor_fault_diagnostic(
+            DRIVER_SUPERVISOR_DIAG_STAGE_SUSPEND,
+            DriverSupervisorContainmentError::Kernel(error),
+        )
+    })?;
     slot.mcs_call_phase
         .store(DRIVER_TASK_MCS_CALL_SUSPENDED, Ordering::Release);
-    let sched_context = slot.mcs_sched_context.load(Ordering::Acquire);
-    if sched_context == 0 {
-        return Err(DriverSupervisorContainmentError::MissingAuthority);
+    if supervisor_sc == 0 {
+        return Err(fail_driver_supervisor_fault_diagnostic(
+            DRIVER_SUPERVISOR_DIAG_STAGE_UNBIND,
+            DriverSupervisorContainmentError::MissingAuthority,
+        ));
     }
     crate::sel4::unbind_sched_context_object(
-        sched_context as sel4_sys::seL4_CPtr,
-        tcb as sel4_sys::seL4_CPtr,
+        supervisor_sc as sel4_sys::seL4_CPtr,
+        supervisor_tcb as sel4_sys::seL4_CPtr,
     )
-    .map_err(DriverSupervisorContainmentError::Kernel)?;
+    .map_err(|error| {
+        fail_driver_supervisor_fault_diagnostic(
+            DRIVER_SUPERVISOR_DIAG_STAGE_UNBIND,
+            DriverSupervisorContainmentError::Kernel(error),
+        )
+    })?;
     slot.mcs_call_phase
         .store(DRIVER_TASK_MCS_CALL_ASSOCIATIONS_CLEAR, Ordering::Release);
 
-    let root_cnode = sel4_sys::seL4_CapInitThreadCNode;
-    let root_depth = crate::sel4::word_bits() as u8;
-    for cap in [
-        slot.mcs_command_endpoint_origin.load(Ordering::Acquire),
-        slot.mcs_command_reply.load(Ordering::Acquire),
-        slot.mcs_completion_notification_origin
-            .load(Ordering::Acquire),
+    for (cap, stage) in [
+        (
+            slot.mcs_command_endpoint_origin.load(Ordering::Acquire),
+            DRIVER_SUPERVISOR_DIAG_STAGE_REVOKE_COMMAND,
+        ),
+        (
+            slot.mcs_command_reply.load(Ordering::Acquire),
+            DRIVER_SUPERVISOR_DIAG_STAGE_REVOKE_REPLY,
+        ),
+        (
+            slot.mcs_completion_notification_origin
+                .load(Ordering::Acquire),
+            DRIVER_SUPERVISOR_DIAG_STAGE_REVOKE_COMPLETION,
+        ),
     ] {
         if cap == 0 {
-            return Err(DriverSupervisorContainmentError::MissingAuthority);
+            return Err(fail_driver_supervisor_fault_diagnostic(
+                stage,
+                DriverSupervisorContainmentError::MissingAuthority,
+            ));
         }
-        let error = crate::sel4::cnode_revoke(root_cnode, cap as sel4_sys::seL4_CPtr, root_depth);
+        let error = crate::hal::critical_tcb::driver_supervisor_revoke_local_cap(
+            cap as sel4_sys::seL4_CPtr,
+        );
         if error != sel4_sys::seL4_NoError {
-            return Err(DriverSupervisorContainmentError::Kernel(error));
+            return Err(fail_driver_supervisor_fault_diagnostic(
+                stage,
+                DriverSupervisorContainmentError::Kernel(error),
+            ));
         }
     }
-    for cap in [
-        slot.mcs_standard_fault_endpoint.load(Ordering::Acquire),
-        slot.mcs_timeout_fault_endpoint.load(Ordering::Acquire),
+    for (cap, stage) in [
+        (
+            slot.mcs_standard_fault_endpoint.load(Ordering::Acquire),
+            DRIVER_SUPERVISOR_DIAG_STAGE_DELETE_STANDARD,
+        ),
+        (
+            slot.mcs_timeout_fault_endpoint.load(Ordering::Acquire),
+            DRIVER_SUPERVISOR_DIAG_STAGE_DELETE_TIMEOUT,
+        ),
     ] {
         if cap == 0 {
-            return Err(DriverSupervisorContainmentError::MissingAuthority);
+            return Err(fail_driver_supervisor_fault_diagnostic(
+                stage,
+                DriverSupervisorContainmentError::MissingAuthority,
+            ));
         }
-        let error = crate::sel4::cnode_delete(root_cnode, cap as sel4_sys::seL4_CPtr, root_depth);
+        let error = crate::hal::critical_tcb::driver_supervisor_delete_local_cap(
+            cap as sel4_sys::seL4_CPtr,
+        );
         if error != sel4_sys::seL4_NoError {
-            return Err(DriverSupervisorContainmentError::Kernel(error));
+            return Err(fail_driver_supervisor_fault_diagnostic(
+                stage,
+                DriverSupervisorContainmentError::Kernel(error),
+            ));
         }
     }
     slot.endpoint.store(0, Ordering::Release);
     slot.mcs_call_phase
         .store(DRIVER_TASK_MCS_CALL_REVOKED, Ordering::Release);
+    complete_driver_supervisor_fault_diagnostic();
     Ok(())
 }
 

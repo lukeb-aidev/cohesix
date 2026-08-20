@@ -2531,6 +2531,46 @@ pub fn cnode_copy_depth(
     }
 }
 
+/// Safe projection of `seL4_CNode_Move` between explicitly bounded CNodes.
+#[cfg(feature = "kernel")]
+#[inline(always)]
+pub fn cnode_move_depth(
+    dest_root: seL4_CNode,
+    dest_index: seL4_CPtr,
+    dest_depth: u8,
+    src_root: seL4_CNode,
+    src_index: seL4_CPtr,
+    src_depth: u8,
+) -> seL4_Error {
+    #[cfg(target_os = "none")]
+    {
+        let dest_depth_word: seL4_Word = dest_depth.into();
+        let src_depth_word: seL4_Word = src_depth.into();
+        // SAFETY: Callers supply validated CNode capabilities, empty
+        // destination slots, and explicit depths. seL4 preserves the moved
+        // capability's MDB ancestry, which the driver-supervisor generation
+        // anchor relies on for later bounded revoke.
+        unsafe {
+            seL4_CNode_Move(
+                dest_root,
+                dest_index,
+                dest_depth_word,
+                src_root,
+                src_index,
+                src_depth_word,
+            )
+        }
+    }
+
+    #[cfg(not(target_os = "none"))]
+    {
+        let _ = (
+            dest_root, dest_index, dest_depth, src_root, src_index, src_depth,
+        );
+        seL4_NoError
+    }
+}
+
 /// Safe projection of `seL4_CNode_Delete` for bootstrap modules.
 #[cfg(feature = "kernel")]
 #[inline(always)]
