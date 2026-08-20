@@ -1337,6 +1337,7 @@ pub extern "C" fn driver_task_entry(task_key: usize) -> ! {
         // The command was delivered by `seL4_Call`; the kernel installed a
         // reply capability for this TCB, and the single reply word mirrors the
         // already-published completion slot result.
+        #[cfg(not(sel4_config_kernel_mcs))]
         crate::sel4::set_message_register(0, result as sel4_sys::seL4_Word);
         #[cfg(not(sel4_config_kernel_mcs))]
         crate::sel4::reply(sel4_sys::seL4_MessageInfo::new(0, 0, 0, 1));
@@ -1344,6 +1345,7 @@ pub extern "C" fn driver_task_entry(task_key: usize) -> ! {
         crate::sel4::reply_to(
             pi4_driver_abi::DRIVER_RUNTIME_COMMAND_REPLY_SLOT as sel4_sys::seL4_CPtr,
             sel4_sys::seL4_MessageInfo::new(0, 0, 0, 1),
+            [result as sel4_sys::seL4_Word, 0, 0, 0],
         );
         DRIVER_TASK_ENTRY_HEARTBEATS.fetch_add(1, Ordering::AcqRel);
     }
@@ -8398,6 +8400,7 @@ struct DriverSupervisorFaultDiagnostic {
     contract: DriverTaskContract,
     local_tcb: usize,
     local_sc: usize,
+    ipc_buffer_vaddr: usize,
     prior_call_phase: u32,
     stage: u8,
     kernel_error: isize,
@@ -8428,6 +8431,7 @@ impl DriverSupervisorFaultDiagnostic {
             contract: SERIAL_DRIVER_TASK_CONTRACT,
             local_tcb: 0,
             local_sc: 0,
+            ipc_buffer_vaddr: 0,
             prior_call_phase: 0,
             stage: 0,
             kernel_error: 0,
@@ -8446,6 +8450,7 @@ fn begin_driver_supervisor_fault_diagnostic(
     contract: DriverTaskContract,
     local_tcb: usize,
     local_sc: usize,
+    ipc_buffer_vaddr: usize,
     prior_call_phase: u32,
 ) {
     *DRIVER_SUPERVISOR_FAULT_DIAGNOSTIC.lock() = DriverSupervisorFaultDiagnostic {
@@ -8453,6 +8458,7 @@ fn begin_driver_supervisor_fault_diagnostic(
         contract,
         local_tcb,
         local_sc,
+        ipc_buffer_vaddr,
         prior_call_phase,
         stage: DRIVER_SUPERVISOR_DIAG_STAGE_IDENTITY,
         kernel_error: 0,
@@ -8510,7 +8516,7 @@ pub fn driver_supervisor_fault_diagnostic_line(
     core::fmt::write(
         &mut line,
         format_args!(
-            "DRIVER_FAULT_CONTAINMENT v1 q={:x} task={} c={} l={:x}/{} b={:x} m0={:x} m1={:x} t={:x} sc={:x} p={:x} res={} st={:x} e={:x}",
+            "DRIVER_FAULT_CONTAINMENT v1 q={:x} task={} c={} l={:x}/{} b={:x} m0={:x} m1={:x} t={:x} sc={:x} ipc={:x} p={:x} res={} st={:x} e={:x}",
             diagnostic.record.sequence,
             diagnostic.contract.name,
             class,
@@ -8521,6 +8527,7 @@ pub fn driver_supervisor_fault_diagnostic_line(
             diagnostic.record.fault_mr1,
             diagnostic.local_tcb,
             diagnostic.local_sc,
+            diagnostic.ipc_buffer_vaddr,
             diagnostic.prior_call_phase,
             result,
             diagnostic.stage,
@@ -8570,6 +8577,7 @@ pub fn driver_runtime_registry_slot(contract: DriverTaskContract) -> Option<u16>
 #[cfg(all(feature = "kernel", sel4_config_kernel_mcs))]
 pub fn root_driver_supervisor_contain_fault(
     record: crate::critical_tcb::FaultHandoffRecord,
+    ipc_buffer_vaddr: usize,
 ) -> Result<(), DriverSupervisorContainmentError> {
     let contract = driver_contract_for_runtime_slot(record.identity.slot)
         .ok_or(DriverSupervisorContainmentError::UnknownRuntimeSlot)?;
@@ -8585,10 +8593,12 @@ pub fn root_driver_supervisor_contain_fault(
         contract,
         supervisor_tcb,
         supervisor_sc,
+        ipc_buffer_vaddr,
         prior,
     );
     if root_tcb == 0
         || supervisor_tcb == 0
+        || ipc_buffer_vaddr == 0
         || slot.mcs_supervisor_authority_ready.load(Ordering::Acquire) == 0
         || record.tcb_cap != root_tcb
         || record.identity.cap_generation != slot.mcs_cap_generation.load(Ordering::Acquire)
@@ -8650,13 +8660,15 @@ pub fn root_driver_supervisor_contain_fault(
                 DriverSupervisorContainmentError::MissingAuthority,
             ));
         }
-        crate::sel4::set_message_register(
-            0,
-            pi4_driver_abi::DRIVER_RUNTIME_MCS_FAULTED_CALL_RESULT as sel4_sys::seL4_Word,
-        );
         crate::sel4::reply_to(
             supervisor_reply as sel4_sys::seL4_CPtr,
             sel4_sys::seL4_MessageInfo::new(0, 0, 0, 1),
+            [
+                pi4_driver_abi::DRIVER_RUNTIME_MCS_FAULTED_CALL_RESULT as sel4_sys::seL4_Word,
+                0,
+                0,
+                0,
+            ],
         );
         slot.mcs_failure_replies.fetch_add(1, Ordering::AcqRel);
     }
@@ -8681,6 +8693,7 @@ pub fn root_driver_supervisor_contain_fault(
     crate::sel4::unbind_sched_context_object(
         supervisor_sc as sel4_sys::seL4_CPtr,
         supervisor_tcb as sel4_sys::seL4_CPtr,
+        Some(ipc_buffer_vaddr),
     )
     .map_err(|error| {
         fail_driver_supervisor_fault_diagnostic(
@@ -8759,6 +8772,7 @@ pub fn root_driver_supervisor_contain_fault(
 #[cfg(all(feature = "kernel", not(sel4_config_kernel_mcs)))]
 pub fn root_driver_supervisor_contain_fault(
     _record: crate::critical_tcb::FaultHandoffRecord,
+    _ipc_buffer_vaddr: usize,
 ) -> Result<(), DriverSupervisorContainmentError> {
     Err(DriverSupervisorContainmentError::UnsupportedScheduler)
 }

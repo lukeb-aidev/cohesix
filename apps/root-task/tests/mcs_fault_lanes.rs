@@ -580,7 +580,7 @@ fn driver_containment_clears_the_fault_association_before_reply_release() {
         .expect("driver supervisor entrypoint");
     let supervisor = &root_fault_source[supervisor_start..];
     let contain = supervisor
-        .find("root_driver_supervisor_contain_fault(record)")
+        .find("root_driver_supervisor_contain_fault(")
         .expect("driver containment call");
     let clear_busy = supervisor
         .find(".compare_exchange(true, false")
@@ -590,6 +590,46 @@ fn driver_containment_clears_the_fault_association_before_reply_release() {
         .expect("root-fault Reply release signal");
     assert!(contain < clear_busy);
     assert!(clear_busy < signal_release);
+}
+
+#[test]
+fn restricted_critical_ipc_uses_explicit_registers_and_bound_extra_cap_lane() {
+    let critical = include_str!("../src/hal/critical_tcb.rs");
+    let root_fault_start = critical
+        .find("extern \"C\" fn root_fault_entry")
+        .expect("root-fault entrypoint");
+    let root_fault_end = critical[root_fault_start..]
+        .find("extern \"C\" fn root_emergency_entry")
+        .map(|offset| root_fault_start + offset)
+        .expect("root-emergency follows root-fault");
+    let root_fault = &critical[root_fault_start..root_fault_end];
+    assert!(root_fault.contains("let (info, message_registers) ="));
+    assert!(root_fault.contains("fault_mr0: if fault_length > 0 {"));
+    assert!(root_fault.contains("message_registers[0]"));
+    assert!(root_fault.contains("message_registers[1]"));
+    assert!(!root_fault.contains("sel4::message_register("));
+
+    let construction = source_section(
+        critical,
+        "fn construct_restricted_child(",
+        "fn install_permanent_cnode_retention(",
+    );
+    assert!(construction.contains("let ipc_buffer_vaddr = ipc_frame.ptr().as_ptr() as usize;"));
+    assert!(construction.contains("ipc_buffer_vaddr as seL4_Word,"));
+
+    let driver = include_str!("../src/hal/driver_task.rs");
+    let containment = source_section(
+        driver,
+        "pub fn root_driver_supervisor_contain_fault(",
+        "/// Classic kernels cannot consume the MCS driver-supervisor hook.",
+    );
+    assert!(containment.contains("Some(ipc_buffer_vaddr)"));
+    assert!(containment.contains("crate::sel4::reply_to("));
+    assert!(!containment.contains("set_message_register"));
+
+    let syscall = include_str!("../src/sel4/syscall.rs");
+    assert!(syscall.contains("seL4_RecvWithMRs"));
+    assert!(syscall.contains("seL4_MCS_ReplyWithMRs"));
 }
 
 #[test]

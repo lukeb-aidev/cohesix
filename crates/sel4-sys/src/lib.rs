@@ -2119,8 +2119,13 @@ mod imp {
     pub unsafe fn seL4_SchedContext_UnbindObject(
         service: seL4_SchedContext,
         cap: seL4_CPtr,
+        ipc_buffer: *mut seL4_IPCBuffer,
     ) -> seL4_Error {
-        seL4_SetCap(0, cap);
+        if ipc_buffer.is_null() {
+            seL4_SetCap(0, cap);
+        } else {
+            (*ipc_buffer).caps_or_badges[0] = cap;
+        }
         invoke_mcs_object(
             service,
             invocation_label_SchedContextUnbindObject as seL4_Word,
@@ -3616,8 +3621,13 @@ mod imp {
     pub unsafe fn seL4_SchedContext_UnbindObject(
         _service: seL4_SchedContext,
         cap: seL4_CPtr,
+        ipc_buffer: *mut seL4_IPCBuffer,
     ) -> seL4_Error {
-        seL4_SetCap(0, cap);
+        if ipc_buffer.is_null() {
+            seL4_SetCap(0, cap);
+        } else {
+            (*ipc_buffer).caps_or_badges[0] = cap;
+        }
         host_record_mcs_invocation(MCS_INVOCATION_LABEL_SCHED_CONTEXT_UNBIND_OBJECT, 1, &[]);
         seL4_NoError
     }
@@ -4077,7 +4087,7 @@ mod tests {
 
         // SAFETY: Host stubs only record the exact invocation shape.
         assert_eq!(
-            unsafe { seL4_SchedContext_UnbindObject(0x90, 0x44) },
+            unsafe { seL4_SchedContext_UnbindObject(0x90, 0x44, core::ptr::null_mut()) },
             seL4_NoError
         );
         let tag = host_ipc_tag();
@@ -4087,6 +4097,22 @@ mod tests {
         );
         assert_eq!(tag.extra_caps(), 1);
         assert_eq!(tag.length(), 0);
+        assert_eq!(host_cap(0), 0x44);
+
+        let mut restricted_ipc_buffer = seL4_IPCBuffer::default();
+        // SAFETY: The host stub writes only the supplied live IPC buffer and
+        // records the invocation shape; no kernel operation is performed.
+        assert_eq!(
+            unsafe {
+                seL4_SchedContext_UnbindObject(
+                    0x90,
+                    0x55,
+                    core::ptr::addr_of_mut!(restricted_ipc_buffer),
+                )
+            },
+            seL4_NoError
+        );
+        assert_eq!(restricted_ipc_buffer.caps_or_badges[0], 0x55);
         assert_eq!(host_cap(0), 0x44);
 
         // SAFETY: Host stubs only record the exact invocation shape.

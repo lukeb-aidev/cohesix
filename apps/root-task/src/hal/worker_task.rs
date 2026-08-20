@@ -2476,8 +2476,12 @@ fn contain_generation(
         clean_root_frame(shared)?;
     }
     if slot.sc_bound {
-        sel4::unbind_sched_context_object(slot.slots[SC_SLOT_INDEX], slot.slots[TCB_SLOT_INDEX])
-            .map_err(|_| WorkerSupervisorError::ContainmentIncomplete)?;
+        sel4::unbind_sched_context_object(
+            slot.slots[SC_SLOT_INDEX],
+            slot.slots[TCB_SLOT_INDEX],
+            None,
+        )
+        .map_err(|_| WorkerSupervisorError::ContainmentIncomplete)?;
         slot.sc_bound = false;
     }
 

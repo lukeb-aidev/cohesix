@@ -514,7 +514,7 @@ impl ConsoleNetworkRuntime {
                 sel4::suspend_tcb_bounded(self.tcb).map_err(HalError::Sel4)
             }
             ConsoleNetworkContainmentUnit::UnbindSchedulingContext => {
-                sel4::unbind_sched_context_object(self.scheduling_context, self.tcb)
+                sel4::unbind_sched_context_object(self.scheduling_context, self.tcb, None)
                     .map_err(HalError::Sel4)
             }
             ConsoleNetworkContainmentUnit::ScrubCleanSharedFrame(frame_index) => {

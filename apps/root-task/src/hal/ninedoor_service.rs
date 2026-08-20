@@ -141,7 +141,7 @@ impl NineDoorServiceRuntime {
             return Err(HalError::Unsupported("ninedoor-bootstrap-state"));
         }
         if let Err(error) =
-            sel4::unbind_sched_context_object(self.bootstrap_scheduling_context, self.tcb)
+            sel4::unbind_sched_context_object(self.bootstrap_scheduling_context, self.tcb, None)
         {
             let close_result = self.fail_bootstrap();
             return match close_result {

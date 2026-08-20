@@ -1271,11 +1271,6 @@ fn recover_target_passive_service_call(
     if sequence == 0 {
         return Ok(());
     }
-    sel4::set_message_register(0, sequence as seL4_Word);
-    sel4::set_message_register(
-        1,
-        secure9p_transport::TransportError::Closed.wire_code() as seL4_Word,
-    );
     sel4::reply_to(
         reply_slot,
         sel4_sys::seL4_MessageInfo::new(
@@ -1284,6 +1279,12 @@ fn recover_target_passive_service_call(
             0,
             2,
         ),
+        [
+            sequence as seL4_Word,
+            secure9p_transport::TransportError::Closed.wire_code() as seL4_Word,
+            0,
+            0,
+        ],
     );
     Ok(())
 }
@@ -1556,6 +1557,7 @@ fn handle_target_fault(
             sel4::reply_to(
                 CHILD_REPLY_SLOT,
                 sel4_sys::seL4_MessageInfo::new(0, 0, 0, 0),
+                [0; 4],
             );
             return Ok(FaultReplyDisposition::Released);
         }
@@ -1632,7 +1634,8 @@ extern "C" fn root_fault_entry(_arg0: seL4_Word) -> ! {
                 #[cfg(all(feature = "bootstrap-trace", feature = "release-qemu"))]
                 cohesix_root_fault_qemu_evidence_turn();
                 let mut badge = 0;
-                let info = sel4::recv_with_reply(CHILD_INBOX_SLOT, &mut badge, CHILD_REPLY_SLOT);
+                let (info, message_registers) =
+                    sel4::recv_with_reply(CHILD_INBOX_SLOT, &mut badge, CHILD_REPLY_SLOT);
                 let fault_length = info.length().min(seL4_Word::from(u16::MAX)) as u16;
                 // Only copied message values cross this refill boundary. The
                 // single Reply object stays in its fixed child CSpace slot,
@@ -1643,12 +1646,12 @@ extern "C" fn root_fault_entry(_arg0: seL4_Word) -> ! {
                     fault_badge: badge,
                     fault_length,
                     fault_mr0: if fault_length > 0 {
-                        sel4::message_register(0)
+                        message_registers[0]
                     } else {
                         0
                     },
                     fault_mr1: if fault_length > 1 {
-                        sel4::message_register(1)
+                        message_registers[1]
                     } else {
                         0
                     },
@@ -1914,7 +1917,7 @@ extern "C" fn root_worker_supervisor_entry(_arg0: seL4_Word) -> ! {
     }
 }
 
-extern "C" fn root_driver_supervisor_entry(_arg0: seL4_Word) -> ! {
+extern "C" fn root_driver_supervisor_entry(ipc_buffer_vaddr: seL4_Word) -> ! {
     let expected_badge = generated::worker_resource_admission_config()
         .handoff
         .driver_wake_badge;
@@ -1941,7 +1944,12 @@ extern "C" fn root_driver_supervisor_entry(_arg0: seL4_Word) -> ! {
             let Some(record) = record else {
                 break;
             };
-            if crate::hal::driver_task::root_driver_supervisor_contain_fault(record).is_err() {
+            if crate::hal::driver_task::root_driver_supervisor_contain_fault(
+                record,
+                ipc_buffer_vaddr as usize,
+            )
+            .is_err()
+            {
                 target_fail_stop(
                     "[critical] driver supervisor containment failed",
                     Some(CHILD_EMERGENCY_SIGNAL_SLOT),
@@ -2230,7 +2238,8 @@ fn construct_restricted_child(
         0,
     )
     .map_err(|error| sel4_error("critical.child-space", error))?;
-    env.bind_child_ipc_buffer(tcb, ipc_frame.cap(), ipc_frame.ptr().as_ptr() as usize)
+    let ipc_buffer_vaddr = ipc_frame.ptr().as_ptr() as usize;
+    env.bind_child_ipc_buffer(tcb, ipc_frame.cap(), ipc_buffer_vaddr)
         .map_err(|error| sel4_error("critical.child-ipc-bind", error))?;
     configure_active_sc(
         env,
@@ -2248,7 +2257,7 @@ fn construct_restricted_child(
             .map_err(|error| sel4_error("critical.child-notification-bind", error))?;
     }
     install_permanent_cnode_retention(env, resource, cnode)?;
-    sel4::write_tcb_registers(tcb, entry, stack_top, 0, false)
+    sel4::write_tcb_registers(tcb, entry, stack_top, ipc_buffer_vaddr as seL4_Word, false)
         .map_err(|error| sel4_error("critical.child-registers", error))?;
 
     Ok(ConstructedChild {

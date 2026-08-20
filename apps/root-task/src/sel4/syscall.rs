@@ -11,8 +11,8 @@ use core::panic::Location;
 use super::{ipc_bootstrap_trap, IpcSyscallKind};
 #[cfg(target_os = "none")]
 use sel4_sys::{
-    seL4_CPtr, seL4_CallWithMRs, seL4_MessageInfo, seL4_NBSend, seL4_Send, seL4_Wait, seL4_Word,
-    seL4_Yield,
+    seL4_CPtr, seL4_CallWithMRs, seL4_MessageInfo, seL4_NBSend, seL4_RecvWithMRs, seL4_Send,
+    seL4_Wait, seL4_Word, seL4_Yield,
 };
 #[cfg(not(target_os = "none"))]
 use sel4_sys::{
@@ -20,9 +20,9 @@ use sel4_sys::{
     seL4_Yield,
 };
 #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
-use sel4_sys::{seL4_MCS_Reply, seL4_NBRecv, seL4_NBWait, seL4_Recv, seL4_ReplyRecv};
+use sel4_sys::{seL4_MCS_ReplyWithMRs, seL4_NBRecv, seL4_NBWait, seL4_ReplyRecv};
 #[cfg(all(target_os = "none", not(sel4_config_kernel_mcs)))]
-use sel4_sys::{seL4_NBRecv, seL4_Recv, seL4_Reply, seL4_ReplyRecv};
+use sel4_sys::{seL4_NBRecv, seL4_Recv, seL4_Reply, seL4_ReplyRecv, seL4_ReplyWithMRs};
 
 #[track_caller]
 pub(super) unsafe fn send(dest: seL4_CPtr, info: seL4_MessageInfo) {
@@ -96,25 +96,42 @@ pub(super) unsafe fn reply(info: seL4_MessageInfo) {
 
 /// Reply using the explicit Reply capability required by an MCS kernel.
 #[track_caller]
-pub(super) unsafe fn reply_to(reply_cap: seL4_CPtr, info: seL4_MessageInfo) {
+pub(super) unsafe fn reply_to(
+    reply_cap: seL4_CPtr,
+    info: seL4_MessageInfo,
+    message_registers: &[seL4_Word; 4],
+) {
     if ipc_bootstrap_trap(IpcSyscallKind::Reply, reply_cap, Location::caller()) {
         return;
     }
 
     #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
     unsafe {
-        seL4_MCS_Reply(reply_cap, info);
+        seL4_MCS_ReplyWithMRs(
+            reply_cap,
+            info,
+            &message_registers[0],
+            &message_registers[1],
+            &message_registers[2],
+            &message_registers[3],
+        );
     }
 
     #[cfg(all(target_os = "none", not(sel4_config_kernel_mcs)))]
     unsafe {
         let _ = reply_cap;
-        seL4_Reply(info);
+        seL4_ReplyWithMRs(
+            info,
+            &message_registers[0],
+            &message_registers[1],
+            &message_registers[2],
+            &message_registers[3],
+        );
     }
 
     #[cfg(not(target_os = "none"))]
     {
-        let _ = (reply_cap, info);
+        let _ = (reply_cap, info, message_registers);
         panic!("seL4 reply is unavailable on host targets");
     }
 }
@@ -205,6 +222,7 @@ pub(super) unsafe fn recv_with_reply(
     dest: seL4_CPtr,
     badge: *mut seL4_Word,
     reply: seL4_CPtr,
+    message_registers: &mut [seL4_Word; 4],
 ) -> seL4_MessageInfo {
     if ipc_bootstrap_trap(IpcSyscallKind::Recv, dest, Location::caller()) {
         return seL4_MessageInfo::new(0, 0, 0, 0);
@@ -212,19 +230,25 @@ pub(super) unsafe fn recv_with_reply(
 
     #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
     unsafe {
-        seL4_Recv(dest, badge, reply)
+        let [mr0, mr1, mr2, mr3] = message_registers;
+        seL4_RecvWithMRs(dest, badge, reply, mr0, mr1, mr2, mr3)
     }
 
     #[cfg(all(target_os = "none", not(sel4_config_kernel_mcs)))]
     unsafe {
         let _ = reply;
-        seL4_Recv(dest, badge)
+        let [mr0, mr1, mr2, mr3] = message_registers;
+        seL4_RecvWithMRs(dest, badge, mr0, mr1, mr2, mr3)
     }
 
     #[cfg(not(target_os = "none"))]
     unsafe {
         let _ = reply;
-        seL4_Recv(dest, badge)
+        let info = seL4_Recv(dest, badge);
+        for (index, value) in message_registers.iter_mut().enumerate() {
+            *value = sel4_sys::seL4_GetMR(index as seL4_Word);
+        }
+        info
     }
 }
 

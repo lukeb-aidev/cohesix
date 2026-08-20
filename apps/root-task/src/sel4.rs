@@ -953,9 +953,9 @@ pub fn reply(info: seL4_MessageInfo) {
 /// Issues an seL4 reply through an explicit single-use Reply capability.
 #[cfg(feature = "kernel")]
 #[inline]
-pub fn reply_to(reply_cap: seL4_CPtr, info: seL4_MessageInfo) {
+pub fn reply_to(reply_cap: seL4_CPtr, info: seL4_MessageInfo, message_registers: [seL4_Word; 4]) {
     unsafe {
-        syscall::reply_to(reply_cap, info);
+        syscall::reply_to(reply_cap, info, &message_registers);
     }
 }
 
@@ -974,8 +974,10 @@ pub fn recv_with_reply(
     dest: seL4_CPtr,
     badge: *mut seL4_Word,
     reply: seL4_CPtr,
-) -> seL4_MessageInfo {
-    unsafe { syscall::recv_with_reply(dest, badge, reply) }
+) -> (seL4_MessageInfo, [seL4_Word; 4]) {
+    let mut message_registers = [0; 4];
+    let info = unsafe { syscall::recv_with_reply(dest, badge, reply, &mut message_registers) };
+    (info, message_registers)
 }
 
 #[cfg(feature = "kernel")]
@@ -2201,10 +2203,26 @@ pub fn yield_to_sched_context(sched_context: seL4_CPtr) -> Result<u64, seL4_Erro
 pub fn unbind_sched_context_object(
     sched_context: seL4_CPtr,
     tcb_cap: seL4_CPtr,
+    current_ipc_buffer: Option<usize>,
 ) -> Result<(), seL4_Error> {
-    // SAFETY: Both CPtrs are retained by the root supervisor for the same
-    // constructed generation. seL4 validates object type and association.
-    let result = unsafe { sel4_sys::seL4_SchedContext_UnbindObject(sched_context, tcb_cap) };
+    let current_ipc_buffer = match current_ipc_buffer {
+        Some(address)
+            if address == 0 || address % core::mem::align_of::<sel4_sys::seL4_IPCBuffer>() != 0 =>
+        {
+            return Err(sel4_sys::seL4_InvalidArgument)
+        }
+        value => value,
+    };
+    let ipc_buffer = current_ipc_buffer.map_or(core::ptr::null_mut(), |address| {
+        address as *mut sel4_sys::seL4_IPCBuffer
+    });
+    // SAFETY: Both CPtrs are retained for the same constructed generation.
+    // The supplied IPC-buffer mapping is either null for the init TCB or the
+    // exact buffer bound to the restricted critical TCB and retained by its
+    // `CriticalChildBacking`. The syscall wrapper writes only that buffer's
+    // extra-cap lane, and seL4 validates the object type and association.
+    let result =
+        unsafe { sel4_sys::seL4_SchedContext_UnbindObject(sched_context, tcb_cap, ipc_buffer) };
     if result == seL4_NoError {
         Ok(())
     } else {
