@@ -3086,6 +3086,116 @@ enum LinkedRuntimeServicePhase {
     Display,
 }
 
+/// Select the only physical-driver phase eligible while required Pi local-seat
+/// ownership is still being published.
+///
+/// A stale generic `Network` cursor can be left behind by the ordinary linked
+/// runtime rotation. CYW43 is not yet admissible at this boundary, so consume
+/// that turn as the retained local-seat successor instead of entering an
+/// ineligible network phase.
+#[cfg(feature = "kernel")]
+const fn required_local_seat_preflight_entry_phase(
+    phase: LinkedRuntimeServicePhase,
+) -> LinkedRuntimeServicePhase {
+    match phase {
+        LinkedRuntimeServicePhase::Network => LinkedRuntimeServicePhase::LocalSeat,
+        phase => phase,
+    }
+}
+
+/// Keep the required Pi local-seat preflight on a bounded physical-operator
+/// rotation without changing the established ordinary linked-runtime phases.
+///
+/// Serial may discover a stale network hint before CYW43 admission; that hint
+/// yields to LocalSeat. Dispatch may ordinarily fall through to Network even
+/// when no NIC work is runnable; preflight closes that rotation at Serial.
+/// Display and containment remain independently serviceable.
+#[cfg(feature = "kernel")]
+const fn required_local_seat_preflight_followup_phase(
+    entry: LinkedRuntimeServicePhase,
+    scheduled: LinkedRuntimeServicePhase,
+) -> LinkedRuntimeServicePhase {
+    match (entry, scheduled) {
+        (LinkedRuntimeServicePhase::Serial, LinkedRuntimeServicePhase::Network) => {
+            LinkedRuntimeServicePhase::LocalSeat
+        }
+        (_, LinkedRuntimeServicePhase::Network) => LinkedRuntimeServicePhase::Serial,
+        (_, scheduled) => scheduled,
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn required_local_seat_preflight_frontier_key(
+    snapshot: crate::hal::driver_task::DriverTaskRetainedFrontierSnapshot,
+) -> usize {
+    let mut key = 0xcbf2_9ce4_8422_2325u64;
+    for byte in snapshot
+        .request_state
+        .as_bytes()
+        .iter()
+        .copied()
+        .chain(core::iter::once(0xff))
+        .chain(snapshot.phase_name.as_bytes().iter().copied())
+        .chain(core::iter::once(0xfe))
+        .chain(snapshot.progress_phase_name.as_bytes().iter().copied())
+    {
+        key ^= u64::from(byte);
+        key = key.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    for value in [
+        snapshot.active as u64,
+        u64::from(snapshot.request),
+        u64::from(snapshot.command_sequence),
+        u64::from(snapshot.completion_sequence),
+        snapshot.doorbell_issued as u64,
+        snapshot.endpoint_bound as u64,
+        snapshot.mcs_admission_open as u64,
+        u64::from(snapshot.mcs_cap_generation),
+        u64::from(snapshot.mcs_call_phase),
+        snapshot.mcs_producers as u64,
+        snapshot.progress_valid as u64,
+        u64::from(snapshot.progress_sequence),
+        u64::from(snapshot.progress_phase),
+        u64::from(snapshot.progress_aux0),
+    ] {
+        key ^= value;
+        key = key.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    (key as usize) | 1
+}
+
+#[cfg(feature = "kernel")]
+fn format_required_local_seat_preflight_frontier(
+    contract_name: &str,
+    frontier: crate::hal::driver_task::DriverTaskRetainedFrontierSnapshot,
+) -> Option<HeaplessString<DEFAULT_LINE_CAPACITY>> {
+    let mut line = HeaplessString::<DEFAULT_LINE_CAPACITY>::new();
+    write!(
+        line,
+        "PI4_PREFLIGHT schema=v1 c={} a={} s={} p={} r={:x} q={:x}/{:x} b={} e={} m={} g={}/{:x}/{:x}/{}/0x{:x} x={:x}/{:x}/{:x}",
+        contract_name,
+        usize::from(frontier.active),
+        frontier.request_state,
+        frontier.phase_name,
+        frontier.request,
+        frontier.command_sequence,
+        frontier.completion_sequence,
+        usize::from(frontier.doorbell_issued),
+        usize::from(frontier.endpoint_bound),
+        usize::from(frontier.mcs_admission_open),
+        usize::from(frontier.progress_valid),
+        frontier.progress_sequence,
+        frontier.progress_phase,
+        frontier.progress_phase_name,
+        frontier.progress_aux0,
+        frontier.send_attempts,
+        frontier.timeouts,
+        frontier.aborts,
+    )
+    .ok()?;
+    Some(line)
+}
+
 /// Root-control service cut used by the isolated QEMU VirtIO console path.
 ///
 /// Operator/dispatch, NIC service, and runtime IPC run on separate outer
@@ -4205,6 +4315,12 @@ where
     #[cfg(feature = "kernel")]
     cyw43_bootstrap_operator_turn_active: bool,
     #[cfg(feature = "kernel")]
+    cyw43_local_seat_preflight_scheduler_traced: bool,
+    #[cfg(feature = "kernel")]
+    required_local_seat_pcie_frontier_key: usize,
+    #[cfg(feature = "kernel")]
+    required_local_seat_usb_frontier_key: usize,
+    #[cfg(feature = "kernel")]
     cyw43_bootstrap_containment_diagnostic_due: bool,
     #[cfg(feature = "kernel")]
     cyw43_bootstrap_hdmi_pending: bool,
@@ -4864,6 +4980,12 @@ where
             wifi_diag_snapshot_sequence: 0,
             #[cfg(feature = "kernel")]
             cyw43_bootstrap_operator_turn_active: false,
+            #[cfg(feature = "kernel")]
+            cyw43_local_seat_preflight_scheduler_traced: false,
+            #[cfg(feature = "kernel")]
+            required_local_seat_pcie_frontier_key: 0,
+            #[cfg(feature = "kernel")]
+            required_local_seat_usb_frontier_key: 0,
             #[cfg(feature = "kernel")]
             cyw43_bootstrap_containment_diagnostic_due: false,
             #[cfg(feature = "kernel")]
@@ -7683,13 +7805,7 @@ where
     #[cfg(feature = "kernel")]
     pub fn poll_cyw43_bootstrap_supervisor_event_turn(&mut self) {
         if !self.cyw43_required_local_seat_preflight_ready() {
-            // The preceding supervisor/driver turn has released its HAL
-            // borrow. Use the ordinary Pi EventPump rotation to advance one
-            // retained PCIe/USB owner operation before CYW43 can acquire the
-            // next physical-driver turn. This is not concurrent device work:
-            // the ordinary poll returns before the supervisor rechecks
-            // admission on its next outer turn.
-            self.poll();
+            self.poll_required_local_seat_preflight_turn();
             return;
         }
         debug_assert!(!self.cyw43_bootstrap_operator_turn_active);
@@ -7763,6 +7879,80 @@ where
         let _ = self.queue_pending_console_output_for_linked_serial(false);
         self.serial_console_turn_active = false;
         self.cyw43_bootstrap_operator_turn_active = false;
+    }
+
+    /// Advance one explicit required-local-seat preflight phase on physical Pi.
+    ///
+    /// The preceding supervisor/driver turn has released its HAL borrow. The
+    /// existing linked-runtime phase bodies still perform every operation and
+    /// retain their one-operation bound; this wrapper only prevents their
+    /// generic Network fallback from consuming a turn before CYW43 is eligible.
+    /// Serial, local-seat, dispatch, display, and containment therefore remain
+    /// independently attributable, with a fresh outer yield between them.
+    #[cfg(feature = "kernel")]
+    fn poll_required_local_seat_preflight_turn(&mut self) {
+        if !self.cyw43_local_seat_preflight_scheduler_traced {
+            const LINE: &str = "CYW43_LOCAL_SEAT_PREFLIGHT scheduler=serial-local-seat-dispatch network=fenced state=active";
+            crate::log_buffer::append_log_line(LINE);
+            let _ =
+                self.queue_physical_console_output(PendingConsoleOutputKind::HighImpactLine, LINE);
+            self.cyw43_local_seat_preflight_scheduler_traced = true;
+        }
+
+        let entry = required_local_seat_preflight_entry_phase(self.linked_runtime_service_phase);
+        self.linked_runtime_service_phase = entry;
+        self.poll();
+        self.linked_runtime_service_phase =
+            required_local_seat_preflight_followup_phase(entry, self.linked_runtime_service_phase);
+        self.trace_required_local_seat_preflight_frontiers();
+    }
+
+    #[cfg(feature = "kernel")]
+    fn trace_required_local_seat_preflight_frontiers(&mut self) {
+        let pcie_prior = self.required_local_seat_pcie_frontier_key;
+        let pcie_key = self.trace_required_local_seat_preflight_frontier(
+            crate::hal::driver_task::PCIE_ROOT_DRIVER_TASK_CONTRACT,
+            pcie_prior,
+        );
+        self.required_local_seat_pcie_frontier_key = pcie_key;
+
+        let usb_prior = self.required_local_seat_usb_frontier_key;
+        let usb_key = self.trace_required_local_seat_preflight_frontier(
+            crate::hal::driver_task::USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
+            usb_prior,
+        );
+        self.required_local_seat_usb_frontier_key = usb_key;
+    }
+
+    #[cfg(feature = "kernel")]
+    fn trace_required_local_seat_preflight_frontier(
+        &mut self,
+        contract: crate::hal::driver_task::DriverTaskContract,
+        prior_key: usize,
+    ) -> usize {
+        let Some(frontier) =
+            crate::hal::driver_task::driver_task_retained_frontier_snapshot(contract)
+        else {
+            return prior_key;
+        };
+        let key = required_local_seat_preflight_frontier_key(frontier);
+        if key == prior_key {
+            return key;
+        }
+
+        if let Some(line) = format_required_local_seat_preflight_frontier(contract.name, frontier) {
+            crate::log_buffer::append_log_line(line.as_str());
+            let _ = self.queue_physical_console_output(
+                PendingConsoleOutputKind::HighImpactLine,
+                line.as_str(),
+            );
+        } else {
+            const LINE: &str = "PI4_PREFLIGHT schema=v1 state=diagnostic-overflow";
+            crate::log_buffer::append_log_line(LINE);
+            let _ =
+                self.queue_physical_console_output(PendingConsoleOutputKind::HighImpactLine, LINE);
+        }
+        key
     }
 
     /// Promote one due gate frontier into the dedicated coalescing HDMI slot.
@@ -40670,6 +40860,146 @@ mod tests {
         assert!(physical_pi_cyw43_local_seat_preflight_ready(
             true, true, true, true, true
         ));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn pi_required_local_seat_preflight_never_enters_network_before_controller() {
+        assert_eq!(
+            required_local_seat_preflight_entry_phase(LinkedRuntimeServicePhase::Network),
+            LinkedRuntimeServicePhase::LocalSeat,
+            "a stale ordinary Network cursor must advance the retained PCIe/USB owner"
+        );
+        assert_eq!(
+            required_local_seat_preflight_followup_phase(
+                LinkedRuntimeServicePhase::Serial,
+                LinkedRuntimeServicePhase::Network,
+            ),
+            LinkedRuntimeServicePhase::LocalSeat,
+            "a stale network hint after Serial must yield to the required local seat"
+        );
+        assert_eq!(
+            required_local_seat_preflight_followup_phase(
+                LinkedRuntimeServicePhase::Dispatch,
+                LinkedRuntimeServicePhase::Network,
+            ),
+            LinkedRuntimeServicePhase::Serial,
+            "Dispatch closes the explicit preflight rotation without NIC service"
+        );
+        assert_eq!(
+            required_local_seat_preflight_followup_phase(
+                LinkedRuntimeServicePhase::LocalSeat,
+                LinkedRuntimeServicePhase::Dispatch,
+            ),
+            LinkedRuntimeServicePhase::Dispatch,
+        );
+        assert_eq!(
+            required_local_seat_preflight_followup_phase(
+                LinkedRuntimeServicePhase::Dispatch,
+                LinkedRuntimeServicePhase::Display,
+            ),
+            LinkedRuntimeServicePhase::Display,
+            "bounded HDMI service remains independent while USB ownership converges"
+        );
+        assert_eq!(
+            required_local_seat_preflight_followup_phase(
+                LinkedRuntimeServicePhase::ContainmentDiagnostic,
+                LinkedRuntimeServicePhase::Serial,
+            ),
+            LinkedRuntimeServicePhase::Serial,
+            "containment retains its established return edge"
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn pi_required_local_seat_preflight_frontier_reports_only_material_transitions() {
+        let frontier = crate::hal::driver_task::DriverTaskRetainedFrontierSnapshot {
+            active: true,
+            request_state: "prepared",
+            phase_name: "committed",
+            request: 1,
+            command_sequence: 1,
+            completion_sequence: 0,
+            doorbell_issued: false,
+            endpoint_bound: true,
+            mcs_admission_open: true,
+            mcs_cap_generation: 1,
+            mcs_call_phase: 0,
+            mcs_producers: 0,
+            progress_valid: true,
+            progress_sequence: 0,
+            progress_phase: 202,
+            progress_phase_name: "runtime-poll-ready",
+            progress_aux0: 8,
+            send_attempts: 0,
+            same_request_resumes: 0,
+            timeouts: 0,
+            keep_active_timeouts: 0,
+            aborts: 0,
+        };
+        let baseline = required_local_seat_preflight_frontier_key(frontier);
+        assert_ne!(baseline, 0);
+
+        let mut counters_only = frontier;
+        counters_only.send_attempts = u64::MAX;
+        counters_only.timeouts = u64::MAX;
+        counters_only.aborts = u64::MAX;
+        assert_eq!(
+            required_local_seat_preflight_frontier_key(counters_only),
+            baseline,
+            "counter churn must not turn the bounded diagnostic into a firehose"
+        );
+
+        let mut issued = frontier;
+        issued.phase_name = "issued";
+        issued.doorbell_issued = true;
+        assert_ne!(
+            required_local_seat_preflight_frontier_key(issued),
+            baseline,
+            "the child notification boundary must emit a new frontier"
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn pi_required_local_seat_preflight_frontier_fits_serial_line_bound() {
+        let frontier = crate::hal::driver_task::DriverTaskRetainedFrontierSnapshot {
+            active: true,
+            request_state: "unreadable",
+            phase_name: "ready-to-complete",
+            request: u32::MAX,
+            command_sequence: u32::MAX,
+            completion_sequence: u32::MAX,
+            doorbell_issued: true,
+            endpoint_bound: true,
+            mcs_admission_open: true,
+            mcs_cap_generation: u32::MAX,
+            mcs_call_phase: u32::MAX,
+            mcs_producers: usize::MAX,
+            progress_valid: true,
+            progress_sequence: u32::MAX,
+            progress_phase: u32::MAX,
+            progress_phase_name: "engine-init-resource-check-failed",
+            progress_aux0: u32::MAX,
+            send_attempts: u64::MAX,
+            same_request_resumes: u64::MAX,
+            timeouts: u64::MAX,
+            keep_active_timeouts: u64::MAX,
+            aborts: u64::MAX,
+        };
+
+        for contract in [
+            crate::hal::driver_task::PCIE_ROOT_DRIVER_TASK_CONTRACT,
+            crate::hal::driver_task::USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
+        ] {
+            let line = format_required_local_seat_preflight_frontier(contract.name, frontier)
+                .expect("the bounded Pi preflight frontier must fit one serial line");
+            assert!(line.len() <= DEFAULT_LINE_CAPACITY);
+            assert!(line.starts_with("PI4_PREFLIGHT schema=v1"));
+            assert!(line.contains(contract.name));
+            assert!(line.contains("engine-init-resource-check-failed"));
+        }
     }
 
     #[cfg(feature = "kernel")]
