@@ -9250,6 +9250,14 @@ where
         #[cfg(feature = "kernel")]
         let log_channel_switched_before_prompt =
             self.ninedoor.is_some() && boot_log::switch_logger_to_log_buffer();
+        #[cfg(feature = "kernel")]
+        if let Some(elapsed_us) = crate::kernel::pi4_root_boot_elapsed_us() {
+            let timing = format_message(format_args!(
+                "BOOT_TIMING stage=root-console-ready elapsed_us={} source=cntvct-el0",
+                elapsed_us
+            ));
+            self.emit_serial_line_atomic(timing.as_str());
+        }
         self.emit_serial_line_atomic("Cohesix console ready");
         self.emit_help_serial_only_atomic();
         #[cfg(feature = "net-console")]

@@ -91,7 +91,12 @@ impl Log for BootstrapLogger {
             // Avoid clobbering console prompts once the log buffer is active.
             return;
         }
-        let use_log_buffer = log_buffer_active && !skip_buffer;
+        let retain_pi4_bootstrap_info = pi4_bootstrap_info_uses_log_buffer(
+            cfg!(feature = "release-pi4"),
+            log_buffer_active,
+            record.level(),
+        );
+        let use_log_buffer = (log_buffer_active && !skip_buffer) || retain_pi4_bootstrap_info;
         self.emit(line.as_slice(), use_log_buffer);
     }
 
@@ -248,6 +253,14 @@ pub(crate) fn suppress_uart_log_output() -> UartLogSuppression {
 
 fn uart_log_output_suppressed() -> bool {
     UART_LOG_SUPPRESSION_DEPTH.load(Ordering::Acquire) != 0
+}
+
+const fn pi4_bootstrap_info_uses_log_buffer(
+    physical_pi_release: bool,
+    log_buffer_active: bool,
+    level: Level,
+) -> bool {
+    physical_pi_release && !log_buffer_active && matches!(level, Level::Info)
 }
 
 impl Drop for UartLogSuppression {
@@ -1118,6 +1131,22 @@ mod tests {
         POST_COMMIT_IPC_UNLOCKED.store(false, Ordering::Release);
         set_no_bridge_mode_inner(false);
     }
+
+    #[test]
+    fn physical_pi_bootstrap_retains_info_off_uart_until_log_handoff() {
+        assert!(pi4_bootstrap_info_uses_log_buffer(true, false, Level::Info));
+        assert!(!pi4_bootstrap_info_uses_log_buffer(
+            true,
+            false,
+            Level::Warn
+        ));
+        assert!(!pi4_bootstrap_info_uses_log_buffer(true, true, Level::Info));
+        assert!(!pi4_bootstrap_info_uses_log_buffer(
+            false,
+            false,
+            Level::Info
+        ));
+    }
 }
 
 fn run_self_test() -> bool {
@@ -1231,6 +1260,9 @@ fn init_logger_bootstrap_only_inner() {
     EP_ATTACH_WAIT_LOGGED.store(false, Ordering::Release);
     POST_COMMIT_IPC_UNLOCKED.store(false, Ordering::Release);
     SERIAL_PROMPT_REFRESH_AFTER_LOGS.store(false, Ordering::Release);
+    // Pi Info records are retained in `/log/queen.log` by the logger while the
+    // physical fallback UART is active; warnings/errors remain serial-first.
+    // QEMU keeps its established Info-level bootstrap transcript.
     ::log::set_max_level(LevelFilter::Info);
 }
 
@@ -1242,6 +1274,7 @@ pub fn switch_logger_to_log_buffer() -> bool {
     if !log_buffer::enable_log_channel() {
         return false;
     }
+    ::log::set_max_level(LevelFilter::Info);
     log_buffer::append_log_line("[INFO audit] log.channel=LOGFILE path=/log/queen.log");
     log_buffer::append_log_line(
         "[INFO audit] log.retention path=/log/queen.log lines=2048 export_batch=64",

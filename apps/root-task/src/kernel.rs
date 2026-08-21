@@ -92,6 +92,33 @@ use spin::Mutex;
 const EARLY_DUMP_LIMIT: usize = 512;
 const DEVICE_FRAME_BITS: usize = 12;
 const ROOT_BOOTSTRAP_DIAG_CAPACITY: usize = 512;
+static PI4_ROOT_ENTRY_TICKS: AtomicU64 = AtomicU64::new(0);
+
+fn counter_elapsed_us(start: u64, end: u64, frequency_hz: u64) -> Option<u64> {
+    if start == 0 || end < start || frequency_hz == 0 {
+        return None;
+    }
+    let ticks = end.saturating_sub(start);
+    u64::try_from((u128::from(ticks) * 1_000_000u128) / u128::from(frequency_hz)).ok()
+}
+
+pub(crate) fn pi4_root_boot_elapsed_us() -> Option<u64> {
+    if !cfg!(feature = "release-pi4") {
+        return None;
+    }
+    #[cfg(all(feature = "kernel", target_arch = "aarch64"))]
+    {
+        return counter_elapsed_us(
+            PI4_ROOT_ENTRY_TICKS.load(Ordering::Acquire),
+            timer_counter_ticks(),
+            timer_freq_hz(),
+        );
+    }
+    #[cfg(not(all(feature = "kernel", target_arch = "aarch64")))]
+    {
+        None
+    }
+}
 
 /// Emit one bounded, serial-first record for the active root-bootstrap probe schema.
 #[inline(never)]
@@ -164,7 +191,11 @@ fn validated_root_endpoint_fallback(
 
 fn emit_manifest_boot_lines<P: Platform>(console: &mut DebugConsole<'_, P>) {
     for line in generated::initial_audit_lines() {
-        console.writeln_prefixed(line);
+        if !cfg!(feature = "release-pi4") || pi4_boot_manifest_line_is_decision_bearing(line) {
+            console.writeln_prefixed(line);
+        } else {
+            crate::log_buffer::append_log_line(line);
+        }
     }
 
     let mut summary = HeaplessString::<160>::new();
@@ -187,6 +218,23 @@ fn emit_manifest_boot_lines<P: Platform>(console: &mut DebugConsole<'_, P>) {
         }
         console.writeln_prefixed(line.as_str());
     }
+}
+
+fn pi4_boot_manifest_line_is_decision_bearing(line: &str) -> bool {
+    line.starts_with("manifest.schema=")
+        || line.starts_with("manifest.profile=")
+        || line.starts_with("manifest.sha256=")
+        || line.starts_with("manifest.worker_runtime.scheduling.profile=")
+        || line.starts_with("manifest.temporal_authority.architecture=")
+        || line.starts_with("manifest.temporal_authority.tasks=")
+        || line.starts_with("manifest.features.net_console=")
+        || line.starts_with("manifest.hw.no_nic=")
+        || line.starts_with("manifest.hw.network.enabled=")
+        || line.starts_with("manifest.hw.network.backend=")
+        || line.starts_with("manifest.hw.network.mode=")
+        || line.starts_with("manifest.hw.network.interface=")
+        || line.starts_with("manifest.hw.local_seat.enabled=")
+        || line.starts_with("manifest.hw.local_seat.required=")
 }
 
 fn role_boot_label(role: Role) -> &'static str {
@@ -3285,6 +3333,10 @@ pub fn start<P: Platform>(bootinfo: &'static BootInfo, platform: &P) -> ! {
         }
     }
 
+    #[cfg(target_arch = "aarch64")]
+    if cfg!(feature = "release-pi4") {
+        PI4_ROOT_ENTRY_TICKS.store(timer_counter_ticks(), Ordering::Release);
+    }
     boot_log::force_uart_line("[kernel:entry] root-task entry reached");
     boot_log::force_uart_line("[MARK] boot_state=COLD");
     log::info!("[kernel:entry] root-task entry reached");
@@ -8166,6 +8218,42 @@ mod tests {
     fn pi4_profile_keeps_live_driver_task_bootstrap_enabled_by_default() {
         assert!(super::should_bootstrap_live_driver_tasks(false));
         assert_eq!(super::live_driver_task_bootstrap_skip_reason(false), None);
+    }
+
+    #[test]
+    fn pi4_physical_manifest_projection_keeps_identity_and_selected_policy() {
+        for line in [
+            "manifest.schema=1.14",
+            "manifest.profile=pi4-uboot-aarch64",
+            "manifest.sha256=abc",
+            "manifest.worker_runtime.scheduling.profile=mcs",
+            "manifest.temporal_authority.architecture=smp-mcs",
+            "manifest.temporal_authority.tasks=17",
+            "manifest.hw.network.mode=dhcp",
+            "manifest.hw.network.interface=auto",
+            "manifest.hw.local_seat.required=true",
+        ] {
+            assert!(super::pi4_boot_manifest_line_is_decision_bearing(line));
+        }
+        for line in [
+            "manifest.secure9p.msize=8192",
+            "manifest.sharding.shard_count=256",
+            "manifest.cache.dma_clean=true",
+            "manifest.worker_runtime.service_turn_budget=64",
+        ] {
+            assert!(!super::pi4_boot_manifest_line_is_decision_bearing(line));
+        }
+    }
+
+    #[test]
+    fn counter_elapsed_time_rejects_invalid_samples_and_scales_exactly() {
+        assert_eq!(
+            super::counter_elapsed_us(54_000, 108_000, 54_000_000),
+            Some(1_000)
+        );
+        assert_eq!(super::counter_elapsed_us(0, 108_000, 54_000_000), None);
+        assert_eq!(super::counter_elapsed_us(108_000, 54_000, 54_000_000), None);
+        assert_eq!(super::counter_elapsed_us(54_000, 108_000, 0), None);
     }
 
     #[test]

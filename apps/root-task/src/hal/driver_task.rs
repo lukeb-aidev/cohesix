@@ -24575,11 +24575,27 @@ const fn driver_task_boot_contract_proof_line_uses_raw(emission_index: u32) -> b
 
 #[cfg(feature = "kernel")]
 fn emit_driver_task_boot_contract_line(line: &str, use_raw_uart: bool) {
+    if cfg!(feature = "release-pi4")
+        && (!use_raw_uart || !pi4_boot_contract_line_is_decision_bearing(line))
+    {
+        crate::log_buffer::append_log_line(line);
+        return;
+    }
     if use_raw_uart {
         crate::bootstrap::log::force_uart_line_raw(line);
     } else {
         crate::bootstrap::log::force_log_buffer_line_or_uart_without_prompt_refresh(line);
     }
+}
+
+#[cfg(feature = "kernel")]
+fn pi4_boot_contract_line_is_decision_bearing(line: &str) -> bool {
+    line.starts_with("DRIVER_TASK_DEFAULT ")
+        || line.starts_with("DRIVER_TASK_SELECTED ")
+        || line.starts_with("DRIVER_TASK_SUBSTRATE ")
+        || line.starts_with("DRIVER_TASK_COUNTER ")
+        || line.starts_with("DRIVER_TASK_OWNER_STATE ")
+        || line.starts_with("DRIVER_TASK_ACCEPTANCE ")
 }
 
 #[cfg(feature = "kernel")]
@@ -25013,6 +25029,29 @@ mod tests {
             assert!(missing.contains("artifact_hash=unknown"));
             assert!(missing.contains("bus_link_seal=missing"));
             assert!(missing.contains("root_pointer=unknown"));
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn pi4_boot_contract_uart_projection_keeps_only_live_decision_rows() {
+        for line in [
+            "DRIVER_TASK_DEFAULT requested=dedicated",
+            "DRIVER_TASK_SELECTED profile=pi4-hardware",
+            "DRIVER_TASK_SUBSTRATE active=yes",
+            "DRIVER_TASK_COUNTER contract=pcie-root",
+            "DRIVER_TASK_OWNER_STATE contract=serial",
+            "DRIVER_TASK_ACCEPTANCE dedicated_ready=no",
+        ] {
+            assert!(pi4_boot_contract_line_is_decision_bearing(line));
+        }
+        for line in [
+            "SCHED_CONTRACT contract=serial",
+            "DRIVER_TASK role=serial",
+            "DRIVER_TASK_SUMMARY contracts=6",
+            "DRIVER_TASK_DMA_PROOF contract=serial",
+        ] {
+            assert!(!pi4_boot_contract_line_is_decision_bearing(line));
         }
     }
 

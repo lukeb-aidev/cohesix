@@ -1128,6 +1128,18 @@ or a relaxed host-EAPOL `wsec_key` gate.
 
 Reopened Milestones 26a/26b also require HAL driver-task contract coverage before hardware claims: `hal::driver_task` must validate the serial, USB/local-seat, HDMI, GENET, CYW43, SDIO host, PCIe root, RTL8139, and virtio-net contracts. Historical M26B completion evidence remains a compatibility baseline, not reopened acceptance proof. Reopened Pi 4 captures must include compact `DRIVER_TASK_*`, `SCHED_CONTRACT`, `BUDGET_OVERRUN`, observed per-driver latency, `SERIAL_ECHO`, `USB_BURST`, and `HDMI_RESPONSIVE` evidence; `scripts/pi4_trace_normalize.py --gate-summary` exposes those as machine-checkable hardware proof fields.
 
+The Pi 4 release cold-boot UART is intentionally a decision-bearing
+projection: identity, selected policy, live owner/counter/acceptance rows, and
+failures remain physical, while repeated/static contract detail is retained in
+the bounded Queen log. A convergence boot may route the first failed invariant
+from that projection, but the projection alone is not reopened acceptance.
+Before `--require-driver-task-proof` is claimed, the same boot must export the
+retained `SCHED_CONTRACT` and other required `DRIVER_TASK_*` rows into its
+evidence bundle; evidence must not be joined across boots. The physical
+transcript must also contain `BOOT_TIMING stage=root-console-ready
+elapsed_us=<nonzero> source=cntvct-el0`; host file timestamps are not target
+latency proof.
+
 Dedicated-driver-task closure is stricter than contract declaration: `DRIVER_TASK_DEDICATED` must cover the required active roles, `DRIVER_TASK_COMPATIBILITY` must be `0`, `DRIVER_TASK_DEDICATED_READY=yes` must be present, `DRIVER_TASK_FAILED_COUNT=0` must be present, serial, USB/local-seat, display, selected network, selected-role SDIO (`DRIVER_TASK_SDIO_DEDICATED=yes`) for Wi-Fi, and PCIe role booleans must all be `yes`, and substrate/capset/fault/revoke/scheduling/per-driver-affinity/VSpace plus pointer-free IPC, owner-state proof, sealed runtime descriptor proof, and active-network identity fields must all be `yes` when `scripts/pi4_gate_proof.sh --require-driver-task-proof` is used. Physical Pi bootstrap is limited to the selected generated isolated runtime hardware contracts; RTL8139 and virtio-net remain QEMU compatibility contract coverage only. Owner-state proof requires one `DRIVER_TASK_OWNER_STATE ... hot_path=<exact> owner_state=driver-owned descriptor=present descriptor_version=8 descriptor_seal=valid artifact_hash=nonzero root_pointer=no` line for each current acceptance hot path: `serial-console`, `usb-keyboard`, `hdmi-text`, `pcie-root`, and the selected network path (`genet-nic` for wired or `cyw43-wifi` plus `sdio-host` for Wi-Fi). The canonical sealed descriptor fragment is `DRIVER_TASK_OWNER_STATE ... descriptor=present descriptor_version=8 descriptor_seal=valid`. Split clients must carry `bus_link_seal=valid` for USB-to-PCIe or CYW43-to-SDIO while non-split roles report `bus_link_seal=none`. Aggregate owner-state text, inferred hot paths, inactive-network hot paths, truthy aliases such as `owner_state=yes`, historical descriptor versions, or pre-seal `descriptor=present root_pointer=no` logs without descriptor-seal fields must fail current closure.
 Pi serial migration proof additionally requires
 `DRIVER_TASK_IRQ_TOPOLOGY contract=serial irq=125 badge=126 handler_slot=4 notification_slot=3 trigger=level status=bound proof_effect=irq-rx-ready`

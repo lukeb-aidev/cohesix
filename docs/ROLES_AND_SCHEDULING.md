@@ -1146,6 +1146,18 @@ priority rules in `AGENTS.md`; nonessential mirroring and verbose output may be
 reduced under load, but command acknowledgements and emergency diagnostics must
 remain live.
 
+On the Pi 4 release profile, the root-owned pre-handoff mini-UART is a bounded
+bootstrap projection rather than a bulk trace sink. It emits exact build and
+manifest identity, selected temporal/network policy, root and driver lifecycle
+transitions, current driver owner/counter/acceptance rows, and every warning or
+failure. Successful per-syscall guard breadcrumbs, repeated full driver
+contract reports, unselected manifest detail, and Info-level narration are
+retained in the bounded Queen log instead of being synchronously paid by the
+root TCB at 115200 baud. QEMU retains its established Info-level transcript.
+The Pi emits `BOOT_TIMING stage=root-console-ready ... source=cntvct-el0` before
+the prompt so physical root-entry-to-console latency is measured from the
+generated virtual-counter frequency rather than inferred from host timestamps.
+
 ### 3. Namespace schedule queue
 
 `/queen/schedule/ctl` is a bounded control-plane queue. Its JSONL entries and

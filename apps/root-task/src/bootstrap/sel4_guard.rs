@@ -40,7 +40,18 @@ pub fn install_bootinfo(view: &BootInfoView) {
 pub fn uart_breadcrumb(stage: &str, call: &str, detail: &str) {
     let mut line = String::<192>::new();
     let _ = write!(line, "[guard] stage={stage} call={call} {detail}");
+    if !bootstrap_guard_breadcrumb_is_projected(cfg!(feature = "release-pi4")) {
+        crate::log_buffer::append_log_line(line.as_str());
+        return;
+    }
     force_uart_line(line.as_str());
+}
+
+const fn bootstrap_guard_breadcrumb_is_projected(physical_pi_release: bool) -> bool {
+    // The failed call still emits through `guard_cptr`, call-result checks, or
+    // the fault path. The successful pre-call breadcrumb stream is retained on
+    // QEMU but is no longer paid synchronously by every Pi bootstrap syscall.
+    !physical_pi_release
 }
 
 /// Guards a capability pointer, panicking via UART if it resolves to `seL4_CapNull`.
@@ -66,4 +77,15 @@ pub fn guard_cptr(stage: &str, cap_name: &str, cptr: seL4_CPtr) -> seL4_CPtr {
         panic!("[sel4-guard] null capability used during {stage} ({cap_name})");
     }
     cptr
+}
+
+#[cfg(test)]
+mod tests {
+    use super::bootstrap_guard_breadcrumb_is_projected;
+
+    #[test]
+    fn pi4_suppresses_success_breadcrumbs_without_weakening_failure_guard() {
+        assert!(!bootstrap_guard_breadcrumb_is_projected(true));
+        assert!(bootstrap_guard_breadcrumb_is_projected(false));
+    }
 }
