@@ -34,6 +34,14 @@ Breaking changes require the process in `AGENTS.md`: manifest schema changes
 where applicable, regenerated artifacts, updated fixtures, tests, and canonical
 documentation in the same authorized change.
 
+### MCS operator-inspection records
+
+Milestone 26e preserves bare `caps`, bare `smp`, and the first `bi` record while
+adding strict `caps mcs`, `smp mcs`, `[bi:v2]`, `[caps:mcs/v1]`, and
+`[smp:mcs/v1]`. Every record labels kernel, generated, or runtime authority.
+Early-console and registry contention are typed unavailable states; generated
+rows never fabricate live registration, binding, activation, or containment.
+
 ## Pi 4 pre-kernel policy interface
 
 The Pi 4 U-Boot menu is a bounded pre-kernel configuration surface, not a new

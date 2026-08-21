@@ -34,6 +34,15 @@ immutable research snapshots; a backport exists only when the corresponding
 release notes explicitly identify it. Never assume that an older bundle has the
 security posture of the current tree.
 
+## Operator diagnostic authority
+
+`bi`, `caps mcs`, and `smp mcs` are bounded projections on an already admitted
+operator surface. Printed slots, badges, and generations are identifiers, not
+transferred authority. The live registry is copied with a non-blocking lock and
+released before output. Inspection performs no debug dump, capability or
+scheduling mutation, or `seL4_SchedContext_Consumed` call; generated state is
+never labelled live and early console never claims activation.
+
 ## Security objectives and non-goals
 
 Cohesix aims to:

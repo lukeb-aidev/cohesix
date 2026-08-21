@@ -33,13 +33,35 @@ pub const MAX_ECHO_LEN: usize = 2048;
 /// Maximum line count accepted by the `tail <path> [lines]` command.
 pub const MAX_TAIL_LINES: u16 = 256;
 
-/// Diagnostic mode selected for the `smp [activity|dump]` console command.
+/// Diagnostic mode selected for the `caps [mcs]` console command.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CapsMode {
+    /// Preserve the legacy root-CNode, endpoint, and UART summary.
+    Summary,
+    /// Show bounded MCS capability-authority and object-count state.
+    Mcs,
+}
+
+impl CapsMode {
+    /// Stable label used in diagnostics and ACK details.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Summary => "summary",
+            Self::Mcs => "mcs",
+        }
+    }
+}
+
+/// Diagnostic mode selected for the `smp [activity|mcs|dump]` console command.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SmpMode {
     /// Raw kernel debug scheduler snapshot, available only in safe debug contexts.
     Snapshot,
     /// Userspace activity snapshot sourced from bounded root-task telemetry.
     Activity,
+    /// Generated temporal topology joined to a non-blocking live registry snapshot.
+    Mcs,
 }
 
 impl SmpMode {
@@ -49,6 +71,7 @@ impl SmpMode {
         match self {
             Self::Snapshot => "snapshot",
             Self::Activity => "activity",
+            Self::Mcs => "mcs",
         }
     }
 }
@@ -70,7 +93,9 @@ const COOLDOWN_MS: u64 = 90_000;
 pub enum Command {
     Help,
     BootInfo,
-    Caps,
+    Caps {
+        mode: CapsMode,
+    },
     Smp {
         mode: SmpMode,
     },
@@ -114,7 +139,7 @@ impl Command {
         match self {
             Self::Help => ConsoleVerb::Help,
             Self::BootInfo => ConsoleVerb::BootInfo,
-            Self::Caps => ConsoleVerb::Caps,
+            Self::Caps { .. } => ConsoleVerb::Caps,
             Self::Smp { .. } => ConsoleVerb::Smp,
             Self::Mem => ConsoleVerb::Mem,
             Self::Ping => ConsoleVerb::Ping,
@@ -296,7 +321,9 @@ fn parse_line_inner(line: &str) -> Result<Command, ConsoleError> {
     match verb {
         ConsoleVerb::Help => Ok(Command::Help),
         ConsoleVerb::BootInfo => Ok(Command::BootInfo),
-        ConsoleVerb::Caps => Ok(Command::Caps),
+        ConsoleVerb::Caps => Ok(Command::Caps {
+            mode: parse_caps_mode(remainder)?,
+        }),
         ConsoleVerb::Smp => Ok(Command::Smp {
             mode: parse_smp_mode(remainder)?,
         }),
@@ -451,6 +478,17 @@ fn parse_line_inner(line: &str) -> Result<Command, ConsoleError> {
     }
 }
 
+fn parse_caps_mode(remainder: &str) -> Result<CapsMode, ConsoleError> {
+    let mut tokens = remainder.split_whitespace();
+    let Some(mode) = tokens.next() else {
+        return Ok(CapsMode::Summary);
+    };
+    if tokens.next().is_some() || !mode.eq_ignore_ascii_case("mcs") {
+        return Err(ConsoleError::InvalidValue("caps"));
+    }
+    Ok(CapsMode::Mcs)
+}
+
 fn parse_smp_mode(remainder: &str) -> Result<SmpMode, ConsoleError> {
     let mut tokens = remainder.split_whitespace();
     let Some(mode) = tokens.next() else {
@@ -461,6 +499,8 @@ fn parse_smp_mode(remainder: &str) -> Result<SmpMode, ConsoleError> {
     }
     if mode.eq_ignore_ascii_case("activity") {
         Ok(SmpMode::Activity)
+    } else if mode.eq_ignore_ascii_case("mcs") {
+        Ok(SmpMode::Mcs)
     } else if mode.eq_ignore_ascii_case("dump") {
         Ok(SmpMode::Snapshot)
     } else {
@@ -500,7 +540,9 @@ mod tests {
         let commands = [
             Command::Help,
             Command::BootInfo,
-            Command::Caps,
+            Command::Caps {
+                mode: CapsMode::Summary,
+            },
             Command::Smp {
                 mode: SmpMode::Activity,
             },
@@ -559,6 +601,26 @@ mod tests {
     }
 
     #[test]
+    fn caps_modes_parse_and_reject_extra_arguments() {
+        assert_eq!(
+            parse("caps\n").unwrap(),
+            Command::Caps {
+                mode: CapsMode::Summary
+            }
+        );
+        assert_eq!(
+            parse("caps MCS\n").unwrap(),
+            Command::Caps {
+                mode: CapsMode::Mcs
+            }
+        );
+        assert_eq!(
+            parse("caps mcs extra\n").unwrap_err(),
+            ConsoleError::InvalidValue("caps")
+        );
+    }
+
+    #[test]
     fn smp_activity_mode_parses() {
         assert_eq!(
             parse("smp activity\n").unwrap(),
@@ -587,6 +649,14 @@ mod tests {
             Command::Smp {
                 mode: SmpMode::Snapshot
             }
+        );
+    }
+
+    #[test]
+    fn smp_mcs_mode_parses() {
+        assert_eq!(
+            parse("smp mcs\n").unwrap(),
+            Command::Smp { mode: SmpMode::Mcs }
         );
     }
 

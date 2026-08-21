@@ -18,7 +18,8 @@ mod io;
 pub use io::Console;
 
 pub use cohsh_core::{
-    Command, CommandParser, ConsoleError, SmpMode, MAX_LINE_LEN, MAX_ROLE_LEN, MAX_TICKET_LEN,
+    CapsMode, Command, CommandParser, ConsoleError, SmpMode, MAX_LINE_LEN, MAX_ROLE_LEN,
+    MAX_TICKET_LEN,
 };
 
 #[cfg(all(feature = "kernel", sel4_config_debug_build))]
@@ -159,9 +160,51 @@ impl CohesixConsole {
             let _ = line.push_str("ipc=<none>");
         }
         self.emit_line(line.as_str());
+        let mut kernel = String::<{ crate::serial::DEFAULT_LINE_CAPACITY }>::new();
+        let _ = write!(kernel, "[bi:v2] source=kernel node={} nodes={} extra_bytes={} untyped=[0x{:04x}..0x{:04x}) untyped_count={} ", crate::sel4::bootinfo_node_id(bi), bi.numNodes, bi.extraLen, bi.untyped.start, bi.untyped.end, bi.untyped.end.saturating_sub(bi.untyped.start));
+        #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
+        {
+            let _ = write!(
+                kernel,
+                "schedcontrol=[0x{:04x}..0x{:04x}) schedcontrol_count={}",
+                bi.schedcontrol.start,
+                bi.schedcontrol.end,
+                bi.schedcontrol.end.saturating_sub(bi.schedcontrol.start)
+            );
+        }
+        #[cfg(not(all(target_os = "none", sel4_config_kernel_mcs)))]
+        let _ = kernel.push_str("schedcontrol=unavailable");
+        self.emit_line(kernel.as_str());
+        let temporal = crate::generated::temporal_authority_config();
+        let admission = crate::generated::worker_resource_admission_config();
+        let timer = crate::generated::console_network_service_config();
+        let architecture = match temporal.architecture {
+            crate::generated::SchedulerArchitecture::Classic => "classic",
+            crate::generated::SchedulerArchitecture::SmpMcs => "smp-mcs",
+        };
+        let mut generated = String::<{ crate::serial::DEFAULT_LINE_CAPACITY }>::new();
+        let _ = write!(
+            generated,
+            "[bi:v2] source=generated kernel={} architecture={} cores={} timer_hz={}",
+            admission.selected_kernel, architecture, temporal.cores, timer.timer_clock_hz
+        );
+        self.emit_line(generated.as_str());
     }
 
-    fn print_caps(&mut self) {
+    fn print_caps(&mut self, mode: CapsMode) {
+        if mode == CapsMode::Mcs {
+            self.emit_line("[caps:mcs/v1] source=runtime state=unavailable reason=early-console");
+            let admission = crate::generated::worker_resource_admission_config();
+            for (scope, objects) in [
+                ("fixed", admission.fixed_objects),
+                ("capacity", admission.capacity),
+            ] {
+                let mut line = String::<{ crate::serial::DEFAULT_LINE_CAPACITY }>::new();
+                let _ = write!(line, "[caps:mcs/v1] source=generated scope={} tcbs={} scs={} replies={} fault_caps={} timeout_fault_caps={} cspace_slots={}", scope, objects.tcbs, objects.scheduling_contexts, objects.reply_objects, objects.fault_caps, objects.timeout_fault_caps, objects.cspace_slots);
+                self.emit_line(line.as_str());
+            }
+            return;
+        }
         let bi = self.bootinfo();
         let mut line = String::<128>::new();
         let _ = write!(
@@ -199,6 +242,26 @@ impl CohesixConsole {
         self.emit_line("[smp] activity end");
     }
 
+    fn print_smp_mcs(&mut self) {
+        let temporal = crate::generated::temporal_authority_config();
+        let architecture = match temporal.architecture {
+            crate::generated::SchedulerArchitecture::Classic => "classic",
+            crate::generated::SchedulerArchitecture::SmpMcs => "smp-mcs",
+        };
+        let mut line = String::<{ crate::serial::DEFAULT_LINE_CAPACITY }>::new();
+        let _ = write!(
+            line,
+            "[smp:mcs/v1] source=generated architecture={} cores={} tasks={} window_us={}",
+            architecture,
+            temporal.cores,
+            temporal.tasks.len(),
+            temporal.admission_window_us
+        );
+        self.emit_line(line.as_str());
+        self.emit_line("[smp:mcs/v1] source=runtime state=unavailable reason=early-console use=post-handoff-root-shell");
+        self.emit_line("[smp:mcs/v1] end");
+    }
+
     fn print_mem(&mut self) {
         let bi = self.bootinfo();
         let count = (bi.untyped.end - bi.untyped.start) as usize;
@@ -223,13 +286,14 @@ impl CohesixConsole {
         match command {
             Command::Help => self.print_help(),
             Command::BootInfo => self.print_bootinfo(),
-            Command::Caps => self.print_caps(),
+            Command::Caps { mode } => self.print_caps(mode),
             Command::Smp {
                 mode: SmpMode::Snapshot,
             } => self.print_smp_dump(),
             Command::Smp {
                 mode: SmpMode::Activity,
             } => self.print_smp_activity(),
+            Command::Smp { mode: SmpMode::Mcs } => self.print_smp_mcs(),
             Command::Mem => self.print_mem(),
             Command::Ping => self.emit_line("pong"),
             Command::Test => self.emit_line("test not supported on root console"),

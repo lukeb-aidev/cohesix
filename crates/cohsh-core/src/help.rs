@@ -9,8 +9,8 @@
 pub const ROOT_CONSOLE_HELP_LINES: &[&str] = &[
     "  help  - Show this help",
     "  bi    - Show bootinfo summary",
-    "  caps  - Show capability slots",
-    "  smp [activity|dump] - Show activity; dump raw debug scheduler state",
+    "  caps [mcs] - Show capability slots or bounded MCS authority state",
+    "  smp [activity|mcs|dump] - Show activity, MCS topology, or raw debug state",
     "  mem   - Show untyped summary",
     "  ping  - Respond with pong",
     "  cachelog [n] - Dump recent cache operations",

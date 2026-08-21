@@ -19,8 +19,8 @@ use crate::critical_tcb::{
     service_fault_mailbox_index, validate_critical_temporal_graph, validate_worker_supervisor_wake,
     CriticalHandoff, CriticalTcbHandle, CriticalTcbInventory, CriticalTcbOrigin,
     CriticalTopologyError, FaultClass, FaultHandoffError, FaultHandoffRecord, FaultRegistration,
-    FaultRegistry, FaultRegistryError, GenerationIdentity, PublishResult, WorkerControlRecord,
-    WorkerSupervisorItem, CRITICAL_TCB_COUNT, DRIVER_FAULT_RECORD_CAPACITY,
+    FaultRegistry, FaultRegistryError, FaultRegistrySnapshot, GenerationIdentity, PublishResult,
+    WorkerControlRecord, WorkerSupervisorItem, CRITICAL_TCB_COUNT, DRIVER_FAULT_RECORD_CAPACITY,
     FAULT_REGISTRY_CAPACITY, SERVICE_FAULT_RECORD_CAPACITY, WORKER_CONTROL_QUEUE_CAPACITY,
     WORKER_FAULT_MAILBOX_CAPACITY,
 };
@@ -260,6 +260,39 @@ static TARGET_SERVICE_RECOVERY_STATES: [AtomicUsize; SERVICE_FAULT_RECORD_CAPACI
     [const { AtomicUsize::new(0) }; SERVICE_FAULT_RECORD_CAPACITY];
 static TARGET_SERVICE_CALL_SEQUENCES: [AtomicU64; SERVICE_FAULT_RECORD_CAPACITY] =
     [const { AtomicU64::new(0) }; SERVICE_FAULT_RECORD_CAPACITY];
+
+/// Coherent, copied live MCS state used by bounded operator diagnostics.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TargetMcsRuntimeSnapshot {
+    pub registry: FaultRegistrySnapshot,
+    pub registry_sealed: bool,
+    pub fault_receiver_active: bool,
+    pub root_control_active: bool,
+    pub fatal: bool,
+    pub recovered_timeout_mask: u64,
+    pub pending_fault: bool,
+    pub fault_endpoint_present: bool,
+    pub root_fault_cnode_present: bool,
+    pub driver_supervisor_cnode_present: bool,
+}
+
+#[must_use]
+pub fn target_mcs_runtime_snapshot() -> Option<TargetMcsRuntimeSnapshot> {
+    let registry = TARGET_FAULT_REGISTRY.try_lock()?.snapshot();
+    Some(TargetMcsRuntimeSnapshot {
+        registry,
+        registry_sealed: TARGET_FAULT_REGISTRY_SEALED.load(Ordering::Acquire),
+        fault_receiver_active: TARGET_FAULT_RECEIVER_ACTIVE.load(Ordering::Acquire),
+        root_control_active: TARGET_ROOT_CONTROL_TEMPORAL_ACTIVE.load(Ordering::Acquire),
+        fatal: TARGET_FATAL.load(Ordering::Acquire),
+        recovered_timeout_mask: TARGET_RECOVERED_TIMEOUTS.load(Ordering::Acquire),
+        pending_fault: TARGET_PENDING_FAULT_VALID.load(Ordering::Acquire),
+        fault_endpoint_present: TARGET_FAULT_ENDPOINT.load(Ordering::Acquire) != 0,
+        root_fault_cnode_present: TARGET_ROOT_FAULT_CNODE.load(Ordering::Acquire) != 0,
+        driver_supervisor_cnode_present: TARGET_DRIVER_SUPERVISOR_CNODE.load(Ordering::Acquire)
+            != 0,
+    })
+}
 
 const SERVICE_RECOVERY_UNREGISTERED: usize = 0;
 const SERVICE_RECOVERY_READY: usize = 1;

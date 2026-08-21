@@ -27,7 +27,7 @@ pub mod wire;
 pub mod tcp;
 
 pub use command::{
-    Command, CommandParser, ConsoleError, RateLimiter, SmpMode, MAX_ECHO_LEN, MAX_ID_LEN,
+    CapsMode, Command, CommandParser, ConsoleError, RateLimiter, SmpMode, MAX_ECHO_LEN, MAX_ID_LEN,
     MAX_JSON_LEN, MAX_LINE_LEN, MAX_PATH_LEN, MAX_ROLE_LEN, MAX_TAIL_LINES, MAX_TICKET_LEN,
 };
 pub use secure9p::{ClientError as Secure9pError, Secure9pClient, Secure9pTransport};

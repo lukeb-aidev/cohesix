@@ -256,7 +256,7 @@ impl ConsoleHarness {
                 lines
             }
             ConsoleCommand::BootInfo
-            | ConsoleCommand::Caps
+            | ConsoleCommand::Caps { .. }
             | ConsoleCommand::Smp { .. }
             | ConsoleCommand::Mem
             | ConsoleCommand::Test

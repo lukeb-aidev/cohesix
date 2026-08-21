@@ -29,6 +29,11 @@ A convergence PASS never satisfies, bypasses, or promotes an acceptance gate.
 Run the full acceptance workflow again against the exact final source, image,
 target, profile, and topology before making a claim.
 
+Milestone 26e `bi`, `caps mcs`, and `smp mcs` are convergence diagnostics.
+Parser/fixture and `mcs_operator_inspection` tests prove bounded rendering and
+snapshot behavior. QEMU proves only QEMU; Pi observations require a fresh exact
+image. Neither diagnostic may call `seL4_SchedContext_Consumed`.
+
 ### Target-first convergence entry point
 
 Use the separate runner during active Milestone 26e work:

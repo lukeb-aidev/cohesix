@@ -12,9 +12,9 @@ pub enum ConsoleVerb {
     Help,
     /// `bi`
     BootInfo,
-    /// `caps`
+    /// `caps [mcs]`
     Caps,
-    /// `smp [activity|dump]`
+    /// `smp [activity|mcs|dump]`
     Smp,
     /// `mem`
     Mem,
@@ -102,13 +102,13 @@ pub const VERB_SPECS: [VerbSpec; VERB_SPEC_COUNT] = [
     },
     VerbSpec {
         verb: ConsoleVerb::Caps,
-        usage: "caps",
+        usage: "caps [mcs]",
         example: "caps",
     },
     VerbSpec {
         verb: ConsoleVerb::Smp,
-        usage: "smp [activity|dump]",
-        example: "smp",
+        usage: "smp [activity|mcs|dump]",
+        example: "smp mcs",
     },
     VerbSpec {
         verb: ConsoleVerb::Mem,

@@ -5,8 +5,8 @@
 ### cohsh console grammar (generated)
 - `help`
 - `bi`
-- `caps`
-- `smp [activity|dump]`
+- `caps [mcs]`
+- `smp [activity|mcs|dump]`
 - `mem`
 - `ping`
 - `test`

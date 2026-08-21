@@ -112,7 +112,67 @@ use heapless::{String as HeaplessString, Vec as HeaplessVec};
 #[cfg(feature = "kernel")]
 use crate::bootstrap::log as boot_log;
 use crate::console::proto::{render_ack, AckLine, AckStatus, LineFormatError};
-use crate::console::{Command, CommandParser, ConsoleError, SmpMode, MAX_ROLE_LEN, MAX_TICKET_LEN};
+use crate::console::{
+    CapsMode, Command, CommandParser, ConsoleError, SmpMode, MAX_ROLE_LEN, MAX_TICKET_LEN,
+};
+
+const fn scheduler_architecture_label(
+    value: crate::generated::SchedulerArchitecture,
+) -> &'static str {
+    match value {
+        crate::generated::SchedulerArchitecture::Classic => "classic",
+        crate::generated::SchedulerArchitecture::SmpMcs => "smp-mcs",
+    }
+}
+const fn temporal_execution_label(value: crate::generated::TemporalExecution) -> &'static str {
+    match value {
+        crate::generated::TemporalExecution::Active => "active",
+        crate::generated::TemporalExecution::Passive => "passive",
+    }
+}
+const fn temporal_kind_label(value: crate::generated::TemporalTaskKind) -> &'static str {
+    match value {
+        crate::generated::TemporalTaskKind::RootControl => "root-control",
+        crate::generated::TemporalTaskKind::RootFault => "root-fault",
+        crate::generated::TemporalTaskKind::RootEmergency => "root-emergency",
+        crate::generated::TemporalTaskKind::WorkerSupervisor => "worker-supervisor",
+        crate::generated::TemporalTaskKind::DriverSupervisor => "driver-supervisor",
+        crate::generated::TemporalTaskKind::Service => "service",
+        crate::generated::TemporalTaskKind::Driver => "driver",
+        crate::generated::TemporalTaskKind::Worker => "worker",
+        crate::generated::TemporalTaskKind::Drain => "drain",
+    }
+}
+const fn timeout_policy_label(value: crate::generated::TimeoutPolicy) -> &'static str {
+    match value {
+        crate::generated::TimeoutPolicy::Terminal => "terminal",
+        crate::generated::TimeoutPolicy::NaturalPostpone => "natural-postpone",
+        crate::generated::TimeoutPolicy::ReplenishOnce => "replenish-once",
+        crate::generated::TimeoutPolicy::ReturnError => "return-error",
+        crate::generated::TimeoutPolicy::FailStop => "fail-stop",
+    }
+}
+const fn yes_no(value: bool) -> &'static str {
+    if value {
+        "yes"
+    } else {
+        "no"
+    }
+}
+const fn active_inactive(value: bool) -> &'static str {
+    if value {
+        "active"
+    } else {
+        "inactive"
+    }
+}
+const fn present_absent(value: bool) -> &'static str {
+    if value {
+        "present"
+    } else {
+        "absent"
+    }
+}
 #[cfg(feature = "kernel")]
 use crate::debug_uart::debug_uart_str;
 #[cfg(feature = "net-console")]
@@ -11644,6 +11704,37 @@ where
             let _ = line.push_str("ipc=<none>");
         }
         self.emit_console_line(line.as_str());
+        let mut kernel = HeaplessString::<DEFAULT_LINE_CAPACITY>::new();
+        let _ = write!(kernel, "[bi:v2] source=kernel node={} nodes={} extra_bytes={} untyped=[0x{:04x}..0x{:04x}) untyped_count={} ", crate::sel4::bootinfo_node_id(header), header.numNodes, context.bootinfo.extra_bytes(), header.untyped.start, header.untyped.end, header.untyped.end.saturating_sub(header.untyped.start));
+        #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
+        {
+            let _ = write!(
+                kernel,
+                "schedcontrol=[0x{:04x}..0x{:04x}) schedcontrol_count={}",
+                header.schedcontrol.start,
+                header.schedcontrol.end,
+                header
+                    .schedcontrol
+                    .end
+                    .saturating_sub(header.schedcontrol.start)
+            );
+        }
+        #[cfg(not(all(target_os = "none", sel4_config_kernel_mcs)))]
+        let _ = kernel.push_str("schedcontrol=unavailable");
+        self.emit_console_line(kernel.as_str());
+        let temporal = crate::generated::temporal_authority_config();
+        let admission = crate::generated::worker_resource_admission_config();
+        let timer = crate::generated::console_network_service_config();
+        let mut generated = HeaplessString::<DEFAULT_LINE_CAPACITY>::new();
+        let _ = write!(
+            generated,
+            "[bi:v2] source=generated kernel={} architecture={} cores={} timer_hz={}",
+            admission.selected_kernel,
+            scheduler_architecture_label(temporal.architecture),
+            temporal.cores,
+            timer.timer_clock_hz
+        );
+        self.emit_console_line(generated.as_str());
         true
     }
 
@@ -11654,7 +11745,11 @@ where
     }
 
     #[cfg(feature = "kernel")]
-    fn emit_caps(&mut self) -> bool {
+    fn emit_caps(&mut self, mode: CapsMode) -> bool {
+        if mode == CapsMode::Mcs {
+            self.emit_caps_mcs();
+            return true;
+        }
         let context = match self.console_context {
             Some(context) => context,
             None => return false,
@@ -11672,9 +11767,13 @@ where
     }
 
     #[cfg(not(feature = "kernel"))]
-    fn emit_caps(&mut self) -> bool {
-        let _ = self;
-        false
+    fn emit_caps(&mut self, mode: CapsMode) -> bool {
+        if mode == CapsMode::Mcs {
+            self.emit_caps_mcs();
+            true
+        } else {
+            false
+        }
     }
 
     fn emit_smp(&mut self, mode: SmpMode) -> Option<&'static str> {
@@ -11684,7 +11783,125 @@ where
                 self.emit_smp_activity();
                 Some("mode=activity")
             }
+            SmpMode::Mcs => {
+                self.emit_smp_mcs();
+                Some("mode=mcs")
+            }
         }
+    }
+
+    fn emit_caps_generated(&mut self) {
+        let admission = crate::generated::worker_resource_admission_config();
+        for (scope, objects) in [
+            ("fixed", admission.fixed_objects),
+            ("capacity", admission.capacity),
+        ] {
+            let mut line = HeaplessString::<DEFAULT_LINE_CAPACITY>::new();
+            let _ = write!(line, "[caps:mcs/v1] source=generated scope={} tcbs={} scs={} replies={} fault_caps={} timeout_fault_caps={} cspace_slots={}", scope, objects.tcbs, objects.scheduling_contexts, objects.reply_objects, objects.fault_caps, objects.timeout_fault_caps, objects.cspace_slots);
+            self.emit_console_line(line.as_str());
+        }
+    }
+
+    #[cfg(all(feature = "kernel", sel4_config_kernel_mcs))]
+    fn emit_caps_mcs(&mut self) {
+        let admission = crate::generated::worker_resource_admission_config();
+        if let Some(snapshot) = crate::hal::critical_tcb::target_mcs_runtime_snapshot() {
+            let mut line = HeaplessString::<DEFAULT_LINE_CAPACITY>::new();
+            let _ = write!(line, "[caps:mcs/v1] source=runtime registry={}/{} sealed={} fault_rx={} root_control={} fatal={}", snapshot.registry.len, admission.fault_registry.capacity, yes_no(snapshot.registry_sealed && snapshot.registry.sealed), active_inactive(snapshot.fault_receiver_active), active_inactive(snapshot.root_control_active), yes_no(snapshot.fatal));
+            self.emit_console_line(line.as_str());
+            let mut authority = HeaplessString::<DEFAULT_LINE_CAPACITY>::new();
+            let _ = write!(authority, "[caps:mcs/v1] source=runtime fault_endpoint={} root_fault_cnode={} driver_supervisor_cnode={} pending_fault={} recovered_timeout_mask=0x{:016x}", present_absent(snapshot.fault_endpoint_present), present_absent(snapshot.root_fault_cnode_present), present_absent(snapshot.driver_supervisor_cnode_present), yes_no(snapshot.pending_fault), snapshot.recovered_timeout_mask);
+            self.emit_console_line(authority.as_str());
+        } else {
+            self.emit_console_line(
+                "[caps:mcs/v1] source=runtime state=unavailable reason=registry-busy",
+            );
+        }
+        self.emit_caps_generated();
+    }
+
+    #[cfg(not(all(feature = "kernel", sel4_config_kernel_mcs)))]
+    fn emit_caps_mcs(&mut self) {
+        self.emit_console_line(
+            "[caps:mcs/v1] source=runtime state=unavailable reason=kernel-disabled",
+        );
+        self.emit_caps_generated();
+    }
+
+    fn emit_smp_mcs(&mut self) {
+        let temporal = crate::generated::temporal_authority_config();
+        #[cfg(all(feature = "kernel", sel4_config_kernel_mcs))]
+        let runtime = crate::hal::critical_tcb::target_mcs_runtime_snapshot();
+        let mut summary = HeaplessString::<DEFAULT_LINE_CAPACITY>::new();
+        let _ = write!(
+            summary,
+            "[smp:mcs/v1] source=generated architecture={} cores={} tasks={} window_us={}",
+            scheduler_architecture_label(temporal.architecture),
+            temporal.cores,
+            temporal.tasks.len(),
+            temporal.admission_window_us
+        );
+        self.emit_console_line(summary.as_str());
+        #[cfg(all(feature = "kernel", sel4_config_kernel_mcs))]
+        if let Some(snapshot) = runtime {
+            let mut live = HeaplessString::<DEFAULT_LINE_CAPACITY>::new();
+            let _ = write!(live, "[smp:mcs/v1] source=runtime registry={}/{} sealed={} fault_rx={} root_control={} fatal={}", snapshot.registry.len, temporal.tasks.len(), yes_no(snapshot.registry_sealed && snapshot.registry.sealed), active_inactive(snapshot.fault_receiver_active), active_inactive(snapshot.root_control_active), yes_no(snapshot.fatal));
+            self.emit_console_line(live.as_str());
+        } else {
+            self.emit_console_line(
+                "[smp:mcs/v1] source=runtime state=unavailable reason=registry-busy",
+            );
+        }
+        #[cfg(not(all(feature = "kernel", sel4_config_kernel_mcs)))]
+        self.emit_console_line(
+            "[smp:mcs/v1] source=runtime state=unavailable reason=kernel-disabled",
+        );
+        for core in temporal.core_admission {
+            let demand = temporal
+                .tasks
+                .iter()
+                .filter(|task| {
+                    task.execution == crate::generated::TemporalExecution::Active
+                        && task.core == core.core
+                        && task.period_us != 0
+                })
+                .fold(0_u64, |total, task| {
+                    total.saturating_add(
+                        u64::from(task.budget_us)
+                            .saturating_mul(u64::from(temporal.admission_window_us))
+                            / u64::from(task.period_us),
+                    )
+                });
+            let mut line = HeaplessString::<DEFAULT_LINE_CAPACITY>::new();
+            let _ = write!(line, "[smp:mcs/v1] source=generated core={} demand_us={} capacity_us={} reserve_us={} usable_us={}", core.core, demand, core.capacity_us, core.reserve_us, core.capacity_us.saturating_sub(core.reserve_us));
+            self.emit_console_line(line.as_str());
+        }
+        #[cfg(all(feature = "kernel", sel4_config_kernel_mcs))]
+        let mut task_index = 0_u16;
+        for task in temporal.tasks {
+            let mut line = HeaplessString::<DEFAULT_LINE_CAPACITY>::new();
+            let _ = write!(line, "[smp:mcs/v1] source=generated task={} kind={} exec={} core={} sc=0x{:04x} sc_core={} budget_us={} period_us={} deadline_us={} refills={} prio={} mcp={} timeout={} admitted={}", task.id, temporal_kind_label(task.kind), temporal_execution_label(task.execution), task.core, task.scheduling_context_slot, task.sched_control_core, task.budget_us, task.period_us, task.deadline_us, task.max_refills, task.priority, task.mcp, timeout_policy_label(task.timeout_policy), yes_no(task.admitted));
+            self.emit_console_line(line.as_str());
+            #[cfg(all(feature = "kernel", sel4_config_kernel_mcs))]
+            {
+                if let Some(snapshot) = runtime {
+                    let mut live = HeaplessString::<DEFAULT_LINE_CAPACITY>::new();
+                    if let Some(registration) = snapshot.registry.registration(task_index) {
+                        let id = registration.identity;
+                        let _ = write!(live, "[smp:mcs/v1] source=runtime task={} registration=present generation={}/{}/{} terminal={}", task.id, id.lease_epoch, id.supervisor_generation, id.cap_generation, yes_no(registration.terminal));
+                    } else {
+                        let _ = write!(
+                            live,
+                            "[smp:mcs/v1] source=runtime task={} registration=missing",
+                            task.id
+                        );
+                    }
+                    self.emit_console_line(live.as_str());
+                }
+                task_index = task_index.saturating_add(1);
+            }
+        }
+        self.emit_console_line("[smp:mcs/v1] end");
     }
 
     #[allow(unsafe_code)]
@@ -24600,7 +24817,12 @@ where
         let sync_capture = audit_net
             && matches!(
                 &command,
-                Command::Help | Command::Smp { .. } | Command::CacheLog { .. } | Command::NetStats
+                Command::Help
+                    | Command::BootInfo
+                    | Command::Caps { .. }
+                    | Command::Smp { .. }
+                    | Command::CacheLog { .. }
+                    | Command::NetStats
             )
             && self.begin_sync_response_capture(verb_label);
         let mut result: Result<(), CommandDispatchError> = Ok(());
@@ -24625,10 +24847,10 @@ where
                     );
                 }
             }
-            Command::Caps => {
-                if self.emit_caps() {
+            Command::Caps { mode } => {
+                if self.emit_caps(mode) {
                     self.metrics.accepted_commands += 1;
-                    self.emit_ack_ok(verb_label, None);
+                    self.emit_ack_ok(verb_label, (mode == CapsMode::Mcs).then_some("mode=mcs"));
                 } else {
                     self.metrics.denied_commands += 1;
                     cmd_status = "err";
@@ -26101,7 +26323,7 @@ where
             Command::Help
             | Command::Quit
             | Command::BootInfo
-            | Command::Caps
+            | Command::Caps { .. }
             | Command::Smp { .. }
             | Command::Mem
             | Command::CacheLog { .. }
@@ -36130,6 +36352,66 @@ mod tests {
         assert!(mirrored
             .iter()
             .any(|line| line.contains("[smp] activity end")));
+    }
+
+    #[test]
+    fn mcs_operator_inspection_is_bounded_and_source_labelled() {
+        let driver = LoopbackSerial::<16384>::new();
+        let serial = SerialPort::<_, 512, 16384, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent {
+            tick: 1,
+            now_ms: 42,
+        });
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit);
+        pump.serial_mut()
+            .driver_mut()
+            .push_rx(b"caps mcs\nsmp mcs\n");
+        for _ in 0..8 {
+            pump.poll();
+            pump.serial_mut().flush_tx();
+        }
+        let rendered = String::from_utf8(
+            pump.serial_mut()
+                .driver_mut()
+                .drain_tx()
+                .into_iter()
+                .collect(),
+        )
+        .expect("serial output must be utf8");
+        assert!(
+            rendered.contains("[caps:mcs/v1] source=generated"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("[smp:mcs/v1] source=generated architecture=smp-mcs"),
+            "{rendered}"
+        );
+        assert!(rendered.contains("source=runtime"), "{rendered}");
+        assert!(rendered.contains("OK CAPS mode=mcs"), "{rendered}");
+        assert!(rendered.contains("OK SMP mode=mcs"), "{rendered}");
+        assert!(!rendered.contains("debug scheduler dump"), "{rendered}");
+        let task_lines: Vec<_> = rendered
+            .lines()
+            .filter(|line| line.contains("[smp:mcs/v1] source=generated task="))
+            .collect();
+        assert_eq!(
+            task_lines.len(),
+            crate::generated::temporal_tasks().len(),
+            "{rendered}"
+        );
+        assert!(
+            task_lines.iter().all(|line| line.contains("admitted=")),
+            "{rendered}"
+        );
+        for line in rendered.lines() {
+            assert!(
+                line.len() <= DEFAULT_LINE_CAPACITY,
+                "oversized line: {line}"
+            );
+        }
     }
 
     #[cfg(not(all(feature = "kernel", sel4_config_debug_build)))]

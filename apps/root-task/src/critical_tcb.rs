@@ -501,6 +501,25 @@ pub struct FaultRegistry {
     sealed: bool,
 }
 
+/// Lock-independent copy of the bounded live fault registry for diagnostics.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FaultRegistrySnapshot {
+    pub entries: [Option<FaultRegistration>; FAULT_REGISTRY_CAPACITY],
+    pub len: usize,
+    pub sealed: bool,
+}
+
+impl FaultRegistrySnapshot {
+    #[must_use]
+    pub fn registration(&self, task_index: u16) -> Option<FaultRegistration> {
+        self.entries[..self.len]
+            .iter()
+            .flatten()
+            .find(|entry| entry.task_index == task_index)
+            .copied()
+    }
+}
+
 impl Default for FaultRegistry {
     fn default() -> Self {
         Self::new()
@@ -714,6 +733,15 @@ impl FaultRegistry {
             .iter()
             .flatten()
             .any(|entry| entry.task_index == task_index)
+    }
+
+    #[must_use]
+    pub const fn snapshot(&self) -> FaultRegistrySnapshot {
+        FaultRegistrySnapshot {
+            entries: self.entries,
+            len: self.len,
+            sealed: self.sealed,
+        }
     }
 }
 
@@ -1211,6 +1239,13 @@ mod tests {
         for task_index in 0..generated_capacity as u16 {
             assert!(registry.contains_task_index(task_index));
         }
+        let snapshot = registry.snapshot();
+        assert_eq!(snapshot.len, generated_capacity);
+        assert!(!snapshot.sealed);
+        assert_eq!(
+            snapshot.registration(0).map(|entry| entry.identity),
+            Some(identity(0))
+        );
         assert!(!registry.contains_task_index(generated_capacity as u16));
         assert_eq!(
             registry.register(FaultRegistration {

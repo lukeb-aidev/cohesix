@@ -56,10 +56,12 @@ the most precise description of that boot.
 | Command | Behavior |
 | --- | --- |
 | `help` | Print commands available in the selected profile. |
-| `bi` | Print the bounded seL4 bootinfo summary. |
-| `caps` | Print key capability slots. |
+| `bi` | Preserve the legacy line, then print source-labelled `[bi:v2]` kernel BootInfo and generated-profile records. |
+| `caps` | Print the legacy key capability-slot summary. |
+| `caps mcs` | Print bounded live MCS authority presence and generated fixed/capacity object counts. |
 | `smp` | Print bounded userspace activity and assignment diagnostics without claiming kernel CPU utilization. This is the preferred spelling. |
 | `smp activity` | Compatibility spelling for `smp`; it produces the same bounded userspace activity report. |
+| `smp mcs` | Print `[smp:mcs/v1]` generated per-core/per-task admission joined to one copied live registry snapshot. |
 | `smp dump` | Request the raw kernel scheduler snapshot. This debug-only path is unavailable after linked-UART cutover. |
 | `mem` | Print the RAM/device untyped summary. |
 | `ping` | Return the liveness response. |
@@ -78,7 +80,11 @@ evidence rather than being replaced by an unrelated driver's counters. Use
 `smp dump` only when investigating kernel scheduler state on a compatible debug
 profile before linked-UART cutover; the raw kernel text is UART-only. The
 explicit `smp activity` spelling remains accepted for scripts and older
-runbooks. The `serial_rx_drop` and `serial_rx_backpressure` values in this
+runbooks. `smp mcs` labels compiler truth `source=generated`, BootInfo
+`source=kernel`, and copied live state `source=runtime`; unavailable is not a
+missing registration. It never calls `seL4_SchedContext_Consumed`, which would
+reset the accounting interval. QEMU output proves only its exact boot, while Pi
+state requires a fresh exact-image Pi boot. The `serial_rx_drop` and `serial_rx_backpressure` values in this
 report describe the root serial queue only. A zero value does not claim that
 the isolated serial runtime queue or the mini-UART hardware FIFO could not
 have overrun; paced serial acceptance still requires a complete command and
@@ -601,8 +607,8 @@ _Generated from `configs/root_task.toml` (sha256: `72b6fdbd175150ec352f9345d9979
 ### cohsh console grammar (generated)
 - `help`
 - `bi`
-- `caps`
-- `smp [activity|dump]`
+- `caps [mcs]`
+- `smp [activity|mcs|dump]`
 - `mem`
 - `ping`
 - `test`

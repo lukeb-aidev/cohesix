@@ -10186,10 +10186,31 @@ publication-uncredited, with no ordinary Yield; natural SC postponement
 supplies the budget boundary.
 Deliverables: Restricted console/network child with bounded compact shared-page IPC, ABI v3 SendBatch plus explicit publication ACK, exact-identity bounded synchronous capture, a bounded authenticated response lane with ordinary-service debt, preserved external operator semantics, fixed response-matrix evidence, target-disassembly evidence, and live four-core GICv3 QEMU containment evidence.
 
+Title/ID: m26e-mcs-operator-inspection
+Milestone: Milestone 26e — Root-Service Compartmentalization + Worker Task Isolation + SMP+MCS Temporal Isolation / bounded root-shell MCS operator inspection
+Goal: Expose source-labelled generated and live seL4 MCS state through `bi`, `caps mcs`, and `smp mcs` without perturbing scheduler accounting.
+Inputs: `m26e-mcs-abi-foundation`, `m26e-worker-resource-admission-critical-tcbs`, `m26e-console-network-service-isolation`, selected seL4 BootInfo, generated temporal/resource-admission records, live fault-registry and critical-domain state, crates/cohsh-core/**, apps/root-task/src/{console,event,critical_tcb.rs,hal/critical_tcb.rs}, docs/{INTERFACES,USERLAND_AND_CLI,SECURITY,TEST_PLAN}.md.
+Changes:
+  - crates/cohsh-core/** + generated grammar/fixtures — preserve bare `caps` and `smp`; add strict `caps mcs` and `smp mcs`; update every parser/help/transcript consumer.
+  - apps/root-task/src/{console,event}/** — retain the legacy `bi` line and append bounded kernel BootInfo and generated profile records.
+  - apps/root-task/src/{critical_tcb.rs,hal/critical_tcb.rs,event/**} — copy the live registry nonblockingly, release its lock before output, and render authority/object, per-core admission, and per-task temporal/registration/generation state. Never call `seL4_SchedContext_Consumed`, mutate accounting, perform a debug dump, or create authority.
+  - docs and compatibility — document provenance and separate QEMU/Pi evidence; review `coh`, `cohsh`, SwarmUI, Hive Gateway, `.coh`, `tools/cohesix-py`, fixtures, release, and performance surfaces without changing their semantics.
+Commands:
+  - cargo test -p cohsh-core
+  - cargo test -p root-task mcs_operator_inspection
+  - scripts/cohesix-build-run.sh --clean --no-run --cargo-target aarch64-unknown-none
+  - python3 -m pytest -q tests/test_qemu_tcp_response_matrix.py
+  - scripts/check-generated.sh
+  - scripts/ci/check_test_plan.sh
+  - scripts/ci/test_plan_run.sh --target qemu --state-dir out/test-plan/m26e-mcs-operator-inspection-qemu
+  - scripts/ci/test_plan_run.sh --target pi4 --state-dir out/test-plan/m26e-mcs-operator-inspection-pi4
+Checks: legacy behavior remains; output is strict and bounded; generated/live sources stay distinct; missing, contended, early, and fatal state are explicit; QEMU and fresh-Pi evidence remain separate.
+Deliverables: Additive root-shell MCS inspection, grammar compatibility, deterministic tests, and separate exact-target evidence.
+
 Title/ID: m26e-worker-abi-identity-notifications
 Milestone: Milestone 26e — Root-Service Compartmentalization + Worker Task Isolation + SMP+MCS Temporal Isolation / Worker task ABI v1 and exact executable-role matrix
 Goal: Freeze one pointer-free namespace-projection ABI, collision-free instance identity, seL4-correct notification contract, and non-vacuous Heartbeat/GPU/LoRA role matrix before any Worker image or supervisor depends on it.
-Inputs: `m26e-mcs-abi-foundation`, `m26e-worker-resource-admission-critical-tcbs`, apps/worker-heart/**, apps/worker-gpu/**, apps/worker-lora/**, apps/root-task/src/worker_authority.rs, tools/coh-rtc/src/**, configs/root_task*.toml, docs/INTERFACES.md, docs/ROLES_AND_SCHEDULING.md, docs/USERLAND_AND_CLI.md, docs/WORKER_TICKETS.md, docs/GPU_NODES.md.
+Inputs: `m26e-mcs-abi-foundation`, `m26e-worker-resource-admission-critical-tcbs`, `m26e-mcs-operator-inspection`, apps/worker-heart/**, apps/worker-gpu/**, apps/worker-lora/**, apps/root-task/src/worker_authority.rs, tools/coh-rtc/src/**, configs/root_task*.toml, docs/INTERFACES.md, docs/ROLES_AND_SCHEDULING.md, docs/USERLAND_AND_CLI.md, docs/WORKER_TICKETS.md, docs/GPU_NODES.md.
 Changes:
   - crates/worker-task-abi/** — add `worker-task-abi/v1` runtime-init, identity, bounded control/completion, READY, telemetry/receipt, shutdown, standard-fault, timeout-fault, and evidence records with fixed layouts, explicit version/length/sequence/epoch/generation fields, release/acquire rules, and no pointers or extra caps. Define exact `GPU_LEASE_RECEIPT` and `PEFT_RECEIPT` labels/records carrying the generated action code, confirmed/rejected outcome, receipt sequence, full Worker identity, and fixed SHA-256 idempotency/operation/subject/result digests, plus their bounded `worker-gpu-receipt/v1` and `worker-lora-receipt/v1` canonical telemetry encodings.
   - tools/coh-rtc/src/** + configs/root_task*.toml — generate immutable `(role, slot, lease_epoch, supervisor_generation, cap_generation)` endpoint/fault identities; lifecycle and supervisor-wake notification objects; reserved disjoint endpoint/notification badge ranges; per-slot one-hot lifecycle/completion bits and precedence; per-slot durable control/completion records; exact holders/slots/rights/syscalls; one active Worker SC bound only to its TCB; zero normal-IPC blocking Send/Call/Reply/donation depth; standard/timeout fault caps with `Write + GrantReply`; exactly one root-fault Read cap and one serialized receive Reply; per-role slots/images; accepted host-ticket request/result schema sets; the action/receipt-mode version matrix; root-pinned version-2 Worker bindings; and Heartbeat/GPU/LoRA `implemented = true` candidate contracts while WorkerBus remains model-only.
