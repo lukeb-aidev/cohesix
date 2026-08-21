@@ -49579,6 +49579,11 @@ fn xhci_clean_dma_turn(sequence: u32, aux0: u32, dma_base: usize, cleaned: usize
         .min(XHCI_DMA_ZERO_DIAGNOSTIC_CHUNK_BYTES);
     dma_clean_range(dma_base.saturating_add(cleaned), chunk);
     let next = cleaned.saturating_add(chunk).min(XHCI_DMA_ZERO_BYTES);
+    publish_runtime_progress(
+        sequence,
+        pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DMA_CLEAN_BEGIN,
+        aux0,
+    );
     publish_runtime_cadence(
         HOT_PATH_USB_KEYBOARD,
         sequence,
@@ -108203,6 +108208,38 @@ mod tests {
         assert_eq!(
             read_dma_byte(DRIVER_TASK_DMA_BUFFER_VADDR + XHCI_DMA_ZERO_DIAGNOSTIC_CHUNK_BYTES),
             0xa5
+        );
+    }
+
+    #[test]
+    fn usb_dma_clean_turn_republishes_retained_semantic_progress() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        const SEQUENCE: u32 = 0x434c_4541;
+        publish_runtime_progress(
+            SEQUENCE,
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_COMMAND_OBSERVED,
+            DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX,
+        );
+
+        let next = xhci_clean_dma_turn(
+            SEQUENCE,
+            DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX,
+            DRIVER_TASK_DMA_BUFFER_VADDR,
+            0,
+        );
+
+        assert_eq!(next, XHCI_DMA_ZERO_DIAGNOSTIC_CHUNK_BYTES);
+        let offset = DRIVER_RUNTIME_RING_PROGRESS_OFFSET as usize;
+        assert_eq!(read_ring_u32(offset), DRIVER_RUNTIME_RING_PROGRESS_MAGIC);
+        assert_eq!(read_ring_u32(offset + 4), SEQUENCE);
+        assert_eq!(
+            read_ring_u32(offset + 8),
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DMA_CLEAN_BEGIN
+        );
+        assert_eq!(
+            read_ring_u32(offset + 12),
+            DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX
         );
     }
 
