@@ -1954,6 +1954,7 @@ extern "C" fn root_driver_supervisor_entry(ipc_buffer_vaddr: seL4_Word) -> ! {
     let expected_badge = generated::worker_resource_admission_config()
         .handoff
         .driver_wake_badge;
+    let mut deferred_record: Option<FaultHandoffRecord> = None;
     loop {
         #[cfg(all(feature = "bootstrap-trace", feature = "release-qemu"))]
         cohesix_driver_supervisor_qemu_evidence_wait();
@@ -1966,27 +1967,42 @@ extern "C" fn root_driver_supervisor_entry(ipc_buffer_vaddr: seL4_Word) -> ! {
             );
         }
         for _ in 0..DRIVER_FAULT_RECORD_CAPACITY {
-            let record = {
-                let Some(mut handoff) = TARGET_HANDOFF.try_lock() else {
-                    // Publication precedes the wake, so a racing producer
-                    // leaves a notification pending for the next bounded turn.
-                    break;
-                };
-                handoff.drain_driver()
+            let record = match deferred_record.take() {
+                Some(record) => Some(record),
+                None => {
+                    let Some(mut handoff) = TARGET_HANDOFF.try_lock() else {
+                        // Publication precedes the wake, so a racing producer
+                        // leaves a notification pending for the next bounded turn.
+                        break;
+                    };
+                    handoff.drain_driver()
+                }
             };
             let Some(record) = record else {
                 break;
             };
-            if crate::hal::driver_task::root_driver_supervisor_contain_fault(
+            match crate::hal::driver_task::root_driver_supervisor_contain_fault(
                 record,
                 ipc_buffer_vaddr as usize,
-            )
-            .is_err()
-            {
-                target_fail_stop(
-                    "[critical] driver supervisor containment failed",
-                    Some(CHILD_EMERGENCY_SIGNAL_SLOT),
-                );
+            ) {
+                Ok(()) => {}
+                Err(
+                    crate::hal::driver_task::DriverSupervisorContainmentError::RootProducerActive,
+                ) => {
+                    // Admission and publication are already fenced. Preserve
+                    // this exact record in the supervisor's own stack and
+                    // retry on another bounded notification turn after the
+                    // root producer observes closure and drops its guard.
+                    deferred_record = Some(record);
+                    sel4::signal_unchecked(CHILD_DRIVER_SIGNAL_SLOT);
+                    break;
+                }
+                Err(_) => {
+                    target_fail_stop(
+                        "[critical] driver supervisor containment failed",
+                        Some(CHILD_EMERGENCY_SIGNAL_SLOT),
+                    );
+                }
             }
             if DRIVER_FAULT_REPLY_BUSY
                 .compare_exchange(true, false, Ordering::AcqRel, Ordering::Acquire)

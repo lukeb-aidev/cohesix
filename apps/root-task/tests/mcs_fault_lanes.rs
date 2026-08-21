@@ -577,12 +577,16 @@ fn driver_containment_clears_the_fault_association_before_reply_release() {
     let endpoint_fence = containment
         .find("slot.endpoint.store(0")
         .expect("published endpoint fence");
+    let producer_drain = containment
+        .find("mcs_nonblocking_root_producers")
+        .expect("active nonblocking root-producer drain fence");
     let command_revoke = containment
         .find("DRIVER_SUPERVISOR_DIAG_STAGE_REVOKE_COMMAND")
         .expect("retained command-origin revoke");
     let success = containment.find("Ok(())").expect("successful containment");
     assert!(admission_close < endpoint_fence);
-    assert!(endpoint_fence < command_revoke);
+    assert!(endpoint_fence < producer_drain);
+    assert!(producer_drain < command_revoke);
     assert!(suspend < association_clear);
     assert!(association_clear < success);
     assert_eq!(containment.matches("slot.endpoint.store(0").count(), 1);
@@ -595,14 +599,46 @@ fn driver_containment_clears_the_fault_association_before_reply_release() {
     let contain = supervisor
         .find("root_driver_supervisor_contain_fault(")
         .expect("driver containment call");
+    let producer_deferred = supervisor
+        .find("DriverSupervisorContainmentError::RootProducerActive")
+        .expect("active producer defers containment");
+    let retain_record = supervisor
+        .find("deferred_record = Some(record)")
+        .expect("exact fault record retained across drain turn");
     let clear_busy = supervisor
         .find(".compare_exchange(true, false")
         .expect("Reply association busy clear");
     let signal_release = supervisor
         .find("sel4::signal_unchecked(CHILD_DRIVER_RELEASE_SIGNAL_SLOT)")
         .expect("root-fault Reply release signal");
-    assert!(contain < clear_busy);
+    assert!(contain < producer_deferred);
+    assert!(producer_deferred < retain_record);
+    assert!(retain_record < clear_busy);
     assert!(clear_busy < signal_release);
+
+    let command_path = source_section(
+        containment_source,
+        "fn run_driver_task_ring_command_with_mode_and_staging_deadline(",
+        "/// Execute a bounded compatibility callback on the contract's live driver TCB.",
+    );
+    let acquire_producer = command_path
+        .find("acquire_mcs_nonblocking_root_producer(contract, slot, mode)")
+        .expect("nonblocking MCS producer acquisition");
+    let load_endpoint = command_path
+        .find("let endpoint = slot.endpoint.load(Ordering::Acquire);")
+        .expect("endpoint load after producer acquisition");
+    assert!(acquire_producer < load_endpoint);
+    let retry_loop = command_path
+        .find("for attempt in 0..attempts {")
+        .expect("bounded nonblocking retry loop");
+    let retry_path = &command_path[retry_loop..];
+    let admission_recheck = retry_path
+        .find("mcs_nonblocking_root_producer_allows_send(slot, endpoint)")
+        .expect("admission recheck inside retry loop");
+    let send = retry_path
+        .find("crate::sel4::send_nb_unchecked(endpoint")
+        .expect("nonblocking endpoint send");
+    assert!(admission_recheck < send);
 }
 
 #[test]

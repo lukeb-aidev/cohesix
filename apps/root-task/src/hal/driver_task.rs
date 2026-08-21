@@ -4504,6 +4504,8 @@ struct DriverTaskCommandSlot {
     active: AtomicUsize,
     ring_producer: AtomicUsize,
     root_ring_writers: AtomicUsize,
+    mcs_nonblocking_root_producers: AtomicUsize,
+    mcs_producer_drain_reported: AtomicU32,
     active_command_fingerprint: AtomicU32,
     semantic_terminal_request: AtomicU32,
     semantic_terminal_fingerprint: AtomicU32,
@@ -5180,6 +5182,8 @@ impl DriverTaskCommandSlot {
             active: AtomicUsize::new(0),
             ring_producer: AtomicUsize::new(SDIO_RING_PRODUCER_ROOT_BOOTSTRAP),
             root_ring_writers: AtomicUsize::new(0),
+            mcs_nonblocking_root_producers: AtomicUsize::new(0),
+            mcs_producer_drain_reported: AtomicU32::new(0),
             active_command_fingerprint: AtomicU32::new(0),
             semantic_terminal_request: AtomicU32::new(0),
             semantic_terminal_fingerprint: AtomicU32::new(0),
@@ -5274,6 +5278,109 @@ fn acquire_root_ring_producer<'a>(
         slot,
         tracked: true,
     })
+}
+
+#[cfg(feature = "kernel")]
+struct McsNonblockingRootProducerGuard<'a> {
+    slot: &'a DriverTaskCommandSlot,
+    contract: DriverTaskContract,
+    tracked: bool,
+}
+
+const MCS_PRODUCER_DRAIN_UNREPORTED: u32 = 0;
+const MCS_PRODUCER_DRAIN_ROOT_OBSERVED: u32 = 1;
+const MCS_PRODUCER_DRAIN_CONTAINMENT_RESUMED: u32 = 2;
+
+#[cfg(feature = "kernel")]
+impl Drop for McsNonblockingRootProducerGuard<'_> {
+    fn drop(&mut self) {
+        if !self.tracked {
+            return;
+        }
+        let prior = self
+            .slot
+            .mcs_nonblocking_root_producers
+            .fetch_sub(1, Ordering::AcqRel);
+        if prior == 1
+            && self.slot.mcs_command_admission_open.load(Ordering::Acquire) == 0
+            && self
+                .slot
+                .mcs_producer_drain_reported
+                .compare_exchange(
+                    MCS_PRODUCER_DRAIN_UNREPORTED,
+                    MCS_PRODUCER_DRAIN_ROOT_OBSERVED,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                )
+                .is_ok()
+        {
+            let mut line = heapless::String::<192>::new();
+            let _ = core::fmt::write(
+                &mut line,
+                format_args!(
+                    "DRIVER_TASK_COMMAND_DRAIN schema=v1 contract={} state=drained active=0 phase={} generation={}",
+                    self.contract.name,
+                    self.slot.mcs_call_phase.load(Ordering::Acquire),
+                    self.slot.mcs_cap_generation.load(Ordering::Acquire),
+                ),
+            );
+            crate::bootstrap::log::force_uart_line_raw_without_prompt_refresh(line.as_str());
+        }
+    }
+}
+
+#[cfg(feature = "kernel")]
+const fn driver_task_mcs_nonblocking_root_producer_requires_tracking(
+    kernel_mcs: bool,
+    cap_generation: u32,
+    bounded_send: bool,
+) -> bool {
+    kernel_mcs && cap_generation != 0 && bounded_send
+}
+
+#[cfg(feature = "kernel")]
+fn acquire_mcs_nonblocking_root_producer<'a>(
+    contract: DriverTaskContract,
+    slot: &'a DriverTaskCommandSlot,
+    mode: DriverTaskRingCommandMode,
+) -> Option<McsNonblockingRootProducerGuard<'a>> {
+    let tracked = driver_task_mcs_nonblocking_root_producer_requires_tracking(
+        cfg!(sel4_config_kernel_mcs),
+        slot.mcs_cap_generation.load(Ordering::Acquire),
+        driver_task_ring_mode_uses_bounded_send(mode),
+    );
+    if !tracked {
+        return Some(McsNonblockingRootProducerGuard {
+            slot,
+            contract,
+            tracked: false,
+        });
+    }
+    if slot.mcs_command_admission_open.load(Ordering::Acquire) == 0 {
+        return None;
+    }
+    slot.mcs_nonblocking_root_producers
+        .fetch_add(1, Ordering::AcqRel);
+    if slot.mcs_command_admission_open.load(Ordering::Acquire) == 0 {
+        slot.mcs_nonblocking_root_producers
+            .fetch_sub(1, Ordering::AcqRel);
+        return None;
+    }
+    Some(McsNonblockingRootProducerGuard {
+        slot,
+        contract,
+        tracked: true,
+    })
+}
+
+#[cfg(feature = "kernel")]
+fn mcs_nonblocking_root_producer_allows_send(
+    slot: &DriverTaskCommandSlot,
+    endpoint: usize,
+) -> bool {
+    slot.mcs_cap_generation.load(Ordering::Acquire) == 0
+        || (slot.mcs_command_admission_open.load(Ordering::Acquire) != 0
+            && slot.endpoint.load(Ordering::Acquire) == endpoint)
 }
 
 #[cfg(feature = "kernel")]
@@ -8241,6 +8348,9 @@ pub fn publish_driver_task_mcs_kernel_objects(
     let Some(slot) = driver_task_slot_for_contract(contract) else {
         return false;
     };
+    if slot.mcs_nonblocking_root_producers.load(Ordering::Acquire) != 0 {
+        return false;
+    }
     let generation = slot
         .mcs_cap_generation
         .load(Ordering::Acquire)
@@ -8265,6 +8375,8 @@ pub fn publish_driver_task_mcs_kernel_objects(
     slot.mcs_call_phase
         .store(DRIVER_TASK_MCS_CALL_IDLE, Ordering::Relaxed);
     slot.mcs_command_admission_open.store(1, Ordering::Relaxed);
+    slot.mcs_producer_drain_reported
+        .store(MCS_PRODUCER_DRAIN_UNREPORTED, Ordering::Relaxed);
     slot.mcs_cap_generation.store(generation, Ordering::Release);
     true
 }
@@ -8376,6 +8488,7 @@ pub enum DriverSupervisorContainmentError {
     UnknownRuntimeSlot,
     IdentityMismatch,
     FaultBadgeMismatch,
+    RootProducerActive,
     DuplicateOrOutOfOrder,
     MissingAuthority,
     Kernel(sel4_sys::seL4_Error),
@@ -8385,6 +8498,7 @@ const DRIVER_SUPERVISOR_DIAG_EMPTY: u8 = 0;
 const DRIVER_SUPERVISOR_DIAG_CONTAINING: u8 = 1;
 const DRIVER_SUPERVISOR_DIAG_COMPLETE: u8 = 2;
 const DRIVER_SUPERVISOR_DIAG_FAILED: u8 = 3;
+const DRIVER_SUPERVISOR_DIAG_DEFERRED: u8 = 4;
 
 const DRIVER_SUPERVISOR_DIAG_STAGE_IDENTITY: u8 = 1;
 const DRIVER_SUPERVISOR_DIAG_STAGE_BADGE: u8 = 2;
@@ -8398,6 +8512,7 @@ const DRIVER_SUPERVISOR_DIAG_STAGE_REVOKE_COMPLETION: u8 = 9;
 const DRIVER_SUPERVISOR_DIAG_STAGE_DELETE_STANDARD: u8 = 10;
 const DRIVER_SUPERVISOR_DIAG_STAGE_DELETE_TIMEOUT: u8 = 11;
 const DRIVER_SUPERVISOR_DIAG_STAGE_DONE: u8 = 12;
+const DRIVER_SUPERVISOR_DIAG_STAGE_PRODUCER_DRAIN: u8 = 13;
 
 #[cfg(all(feature = "kernel", sel4_config_kernel_mcs))]
 #[derive(Clone, Copy, Debug)]
@@ -8458,8 +8573,13 @@ fn begin_driver_supervisor_fault_diagnostic(
     local_sc: usize,
     ipc_buffer_vaddr: usize,
     prior_call_phase: u32,
-) {
-    *DRIVER_SUPERVISOR_FAULT_DIAGNOSTIC.lock() = DriverSupervisorFaultDiagnostic {
+) -> bool {
+    let mut diagnostic = DRIVER_SUPERVISOR_FAULT_DIAGNOSTIC.lock();
+    let resumed_after_producer_drain = diagnostic.record.sequence == record.sequence
+        && diagnostic.contract == contract
+        && diagnostic.state == DRIVER_SUPERVISOR_DIAG_DEFERRED
+        && diagnostic.stage == DRIVER_SUPERVISOR_DIAG_STAGE_PRODUCER_DRAIN;
+    *diagnostic = DriverSupervisorFaultDiagnostic {
         record,
         contract,
         local_tcb,
@@ -8470,6 +8590,14 @@ fn begin_driver_supervisor_fault_diagnostic(
         kernel_error: 0,
         state: DRIVER_SUPERVISOR_DIAG_CONTAINING,
     };
+    resumed_after_producer_drain
+}
+
+#[cfg(all(feature = "kernel", sel4_config_kernel_mcs))]
+fn defer_driver_supervisor_fault_diagnostic() {
+    let mut diagnostic = DRIVER_SUPERVISOR_FAULT_DIAGNOSTIC.lock();
+    diagnostic.stage = DRIVER_SUPERVISOR_DIAG_STAGE_PRODUCER_DRAIN;
+    diagnostic.state = DRIVER_SUPERVISOR_DIAG_DEFERRED;
 }
 
 #[cfg(all(feature = "kernel", sel4_config_kernel_mcs))]
@@ -8617,7 +8745,7 @@ pub fn root_driver_supervisor_contain_fault(
     let supervisor_reply = slot.mcs_command_reply.load(Ordering::Acquire);
     let supervisor_sc = slot.mcs_sched_context.load(Ordering::Acquire);
     let prior = slot.mcs_call_phase.load(Ordering::Acquire);
-    begin_driver_supervisor_fault_diagnostic(
+    let resumed_after_producer_drain = begin_driver_supervisor_fault_diagnostic(
         record,
         contract,
         supervisor_tcb,
@@ -8667,6 +8795,14 @@ pub fn root_driver_supervisor_contain_fault(
     // containment sequence lets any later-stage failure turn every display or
     // service retry into an unbounded null-cap syscall loop.
     slot.endpoint.store(0, Ordering::Release);
+    if slot.mcs_nonblocking_root_producers.load(Ordering::Acquire) != 0 {
+        defer_driver_supervisor_fault_diagnostic();
+        return Err(DriverSupervisorContainmentError::RootProducerActive);
+    }
+    if resumed_after_producer_drain {
+        slot.mcs_producer_drain_reported
+            .store(MCS_PRODUCER_DRAIN_CONTAINMENT_RESUMED, Ordering::Release);
+    }
     if prior != DRIVER_TASK_MCS_CALL_IDLE && prior != DRIVER_TASK_MCS_CALL_ASSOCIATED {
         return Err(fail_driver_supervisor_fault_diagnostic(
             DRIVER_SUPERVISOR_DIAG_STAGE_PHASE,
@@ -19767,6 +19903,17 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
         );
         return None;
     };
+    let Some(_mcs_nonblocking_root_producer_guard) =
+        acquire_mcs_nonblocking_root_producer(contract, slot, mode)
+    else {
+        emit_driver_task_ring_resource_submit_status(
+            contract,
+            command,
+            "runtime-ring-submit",
+            "mcs-command-admission-closed",
+        );
+        return None;
+    };
     let endpoint = slot.endpoint.load(Ordering::Acquire);
     let ring_root_ptr = slot.ring_root_ptr.load(Ordering::Acquire);
     if endpoint == 0 {
@@ -20538,6 +20685,10 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
             return None;
         }
         let info = sel4_sys::seL4_MessageInfo::new(0, 0, 0, 1);
+        if !mcs_nonblocking_root_producer_allows_send(slot, endpoint) {
+            cache_counter_batch.flush(slot);
+            return None;
+        }
         if !mark_driver_task_retained_priority_lease_issued(slot, false) {
             fail_driver_task_retained_priority_lease(slot, contract);
             cache_counter_batch.flush(slot);
@@ -20589,6 +20740,9 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
             let mut send_attempts = 0usize;
             let mut yield_count = 0usize;
             for attempt in 0..attempts {
+                if !mcs_nonblocking_root_producer_allows_send(slot, endpoint) {
+                    break;
+                }
                 if !driver_task_ring_deadline_allows_attempt(recovery_deadline.as_deref_mut()) {
                     break;
                 }
@@ -38234,6 +38388,51 @@ mod tests {
         assert!(driver_task_endpoint_identity_matches(true, 4, 4));
         assert!(!driver_task_endpoint_identity_matches(true, 4, 0));
         assert!(DRIVER_TASK_ENDPOINT_LIFETIME_PROBE_LIMIT >= 3);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn nonblocking_mcs_root_producers_drain_before_revoked_endpoint_use() {
+        assert!(driver_task_mcs_nonblocking_root_producer_requires_tracking(
+            true, 1, true,
+        ));
+        assert!(!driver_task_mcs_nonblocking_root_producer_requires_tracking(false, 1, true,));
+        assert!(!driver_task_mcs_nonblocking_root_producer_requires_tracking(true, 0, true,));
+        assert!(!driver_task_mcs_nonblocking_root_producer_requires_tracking(true, 1, false,));
+
+        for contract in [
+            USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
+            HDMI_TEXT_DRIVER_TASK_CONTRACT,
+            GENET_DRIVER_TASK_CONTRACT,
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            SDIO_HOST_DRIVER_TASK_CONTRACT,
+        ] {
+            let slot = DriverTaskCommandSlot::new();
+            slot.mcs_cap_generation.store(1, Ordering::Release);
+            slot.mcs_command_admission_open.store(1, Ordering::Release);
+            slot.endpoint.store(0x0fd7, Ordering::Release);
+            slot.mcs_nonblocking_root_producers
+                .store(1, Ordering::Release);
+            let guard = McsNonblockingRootProducerGuard {
+                slot: &slot,
+                contract,
+                tracked: true,
+            };
+            assert!(mcs_nonblocking_root_producer_allows_send(&slot, 0x0fd7));
+
+            slot.mcs_command_admission_open.store(0, Ordering::Release);
+            slot.endpoint.store(0, Ordering::Release);
+            assert!(!mcs_nonblocking_root_producer_allows_send(&slot, 0x0fd7,));
+            slot.mcs_producer_drain_reported
+                .store(MCS_PRODUCER_DRAIN_ROOT_OBSERVED, Ordering::Release);
+            drop(guard);
+            assert_eq!(
+                slot.mcs_nonblocking_root_producers.load(Ordering::Acquire),
+                0,
+                "{} producer must drain before revoke",
+                contract.name,
+            );
+        }
     }
 
     #[test]
