@@ -513,6 +513,25 @@ const fn local_seat_usb_service_pending_state(
         || (first_byte_ready && (recovery_aux_pending || no_reply_streak != 0))
 }
 
+/// Decide whether the physical network bootstrap may follow local-seat setup.
+///
+/// A required Pi local seat must first publish the PCIe and USB controller
+/// owner chain. Keyboard command admission remains an independent downstream
+/// gate, so this cut never makes an HID report a prerequisite for Wi-Fi.
+#[cfg(any(test, feature = "kernel"))]
+const fn physical_pi_cyw43_local_seat_preflight_ready(
+    physical_pi_owner_state: bool,
+    local_seat_enabled: bool,
+    local_seat_required: bool,
+    local_seat_runtime_attached: bool,
+    usb_controller_ready: bool,
+) -> bool {
+    !physical_pi_owner_state
+        || !local_seat_enabled
+        || !local_seat_required
+        || (local_seat_runtime_attached && usb_controller_ready)
+}
+
 #[cfg(any(test, feature = "kernel"))]
 const fn usb_physical_input_proven(linked_runtime_first_byte: bool, parser_ingress: bool) -> bool {
     linked_runtime_first_byte && parser_ingress
@@ -7655,11 +7674,24 @@ where
     /// Serial RX/TX uses fail-closed helpers with no root-context or current-TCB
     /// UART fallback. A retained high-impact Wi-Fi status may instead receive a
     /// dedicated display turn, alternating with serial so neither operator
-    /// surface can starve. USB polling, network service, and hardware-facing
-    /// commands remain fenced. The caller invokes this method only after
-    /// releasing the prior turn's scoped `KernelHal` borrow.
+    /// surface can starve. Before CYW43 admission, a required local seat may
+    /// use the ordinary EventPump to finish its PCIe/USB controller owner
+    /// publication. Once that prerequisite is true, USB polling, network
+    /// service, and unrelated hardware-facing commands remain fenced. The
+    /// caller invokes this method only after releasing the prior turn's scoped
+    /// `KernelHal` borrow.
     #[cfg(feature = "kernel")]
     pub fn poll_cyw43_bootstrap_supervisor_event_turn(&mut self) {
+        if !self.cyw43_required_local_seat_preflight_ready() {
+            // The preceding supervisor/driver turn has released its HAL
+            // borrow. Use the ordinary Pi EventPump rotation to advance one
+            // retained PCIe/USB owner operation before CYW43 can acquire the
+            // next physical-driver turn. This is not concurrent device work:
+            // the ordinary poll returns before the supervisor rechecks
+            // admission on its next outer turn.
+            self.poll();
+            return;
+        }
         debug_assert!(!self.cyw43_bootstrap_operator_turn_active);
         self.cyw43_bootstrap_operator_turn_active = true;
         self.reconcile_physical_response_barrier();
@@ -8487,7 +8519,25 @@ where
     pub fn cyw43_bootstrap_may_begin(&self) -> bool {
         !self.reboot_pending
             && (!crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active()
-                || crate::serial::serial_linked_runtime_transport_active())
+                || (crate::serial::serial_linked_runtime_transport_active()
+                    && self.cyw43_required_local_seat_preflight_ready()))
+    }
+
+    #[cfg(feature = "kernel")]
+    fn cyw43_required_local_seat_preflight_ready(&self) -> bool {
+        let local_seat = crate::generated::hardware_config().local_seat;
+        #[cfg(all(feature = "usb", target_arch = "aarch64", target_os = "none"))]
+        let usb_controller_ready = crate::local_seat::linked_local_seat_usb_controller_ready();
+        #[cfg(not(all(feature = "usb", target_arch = "aarch64", target_os = "none")))]
+        let usb_controller_ready = false;
+
+        physical_pi_cyw43_local_seat_preflight_ready(
+            crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active(),
+            local_seat.enabled,
+            local_seat.required,
+            self.local_seat.is_some(),
+            usb_controller_ready,
+        )
     }
 
     #[must_use]
@@ -40598,6 +40648,28 @@ mod tests {
         assert_eq!(serial_chunk_bytes, 32);
         assert!(burst_passes * KEYBOARD_POLL_CHUNK_BYTES <= 512);
         assert!(serial_chunk_bytes <= crate::serial::DEFAULT_TX_CAPACITY / 2);
+    }
+
+    #[test]
+    fn pi_cyw43_preflight_waits_only_for_required_local_seat_controller() {
+        assert!(physical_pi_cyw43_local_seat_preflight_ready(
+            false, true, true, false, false
+        ));
+        assert!(physical_pi_cyw43_local_seat_preflight_ready(
+            true, false, true, false, false
+        ));
+        assert!(physical_pi_cyw43_local_seat_preflight_ready(
+            true, true, false, false, false
+        ));
+        assert!(!physical_pi_cyw43_local_seat_preflight_ready(
+            true, true, true, false, false
+        ));
+        assert!(!physical_pi_cyw43_local_seat_preflight_ready(
+            true, true, true, true, false
+        ));
+        assert!(physical_pi_cyw43_local_seat_preflight_ready(
+            true, true, true, true, true
+        ));
     }
 
     #[cfg(feature = "kernel")]

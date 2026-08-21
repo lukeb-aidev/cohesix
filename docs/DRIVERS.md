@@ -680,6 +680,12 @@ reusable ownership pattern.
   established attach sequence performs PCIe descriptor/prep and owner
   registration, then USB descriptor replay and runtime initialization; it
   registers the USB owner once controller init is ready, before enumeration.
+  On a physical Pi profile that marks local-seat required, the deferred
+  CYW43/SDIO supervisor cannot take its first driver turn while that PCIe/USB
+  controller-owner chain is still retained. Its operator phase routes ordinary
+  one-operation EventPump turns until the USB controller owner is ready, then
+  rechecks Wi-Fi admission. Keyboard command readiness and first-byte proof
+  remain independent downstream USB gates and are not prerequisites for Wi-Fi.
   `LocalSeat` does not
   add a second proof-scheduling phase after endpoint completion and does not
   cache a completion or HID bytes while waiting for another descriptor/owner

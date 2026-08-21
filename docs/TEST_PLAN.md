@@ -4028,6 +4028,16 @@ transport-substrate evidence only. Fresh Pi hardware proof is still required
 before claiming Wi-Fi/DHCP, GENET/DHCP, USB keyboard, HDMI, or strongest
 isolated-driver hardware acceptance.
 
+For the physical Wi-Fi profile with required local-seat, CYW43 bootstrap
+admission must not overtake an active PCIe/USB controller-owner publication.
+The trace must reach PCIe descriptor completion and owner registration, USB
+descriptor completion, and USB controller-ready before the first
+`CYW43_BOOTSTRAP_SUPERVISOR attempt=1 status=begin`. Each retained transition
+occupies its own ordinary EventPump turn. USB keyboard command-ready and
+first-byte evidence remain independent gates; neither is required to start
+Wi-Fi. This ordering is Pi-only and cannot be inferred from the QEMU VirtIO
+transport path.
+
 Strict Pi SDIO command/data calls, fixed-layout SDIO CMD52/CMD53 descriptors, CYW43 firmware/NVRAM/SDPCM command records, direct-root-port xHCI keyboard polling, GENET RX/TX descriptor-ring service, and PCIe port read/write/flush helpers now compile in isolated runtime code before any root hardware execution; host coverage must keep proving those ring turns while preserving the fresh-Pi board-proof boundary.
 
 Current Wi-Fi acceptance also requires one exact
