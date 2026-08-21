@@ -2727,9 +2727,13 @@ Linked serial output is exact-ticket retained work after cutover. Each CYW43
 bootstrap/recovery operator turn may send or poll only the current immutable
 serial command, with no queue-tail restoration after an unknown result. A valid
 partial completion advances only the written prefix; its FIFO suffix receives a
-new action ticket. TX is limited to 128 bytes per action and alternates with RX
-after every completed chunk, so large startup output cannot hide a paced serial
-command. The ordinary linked EventPump uses the fixed `Serial`, `LocalSeat`,
+new action ticket. Root may stage at most 128 bytes per action, while the Pi
+child samples mini-UART transmitter-empty once and fills at most the known
+eight-byte FIFO capacity before publishing that action's exact partial
+completion. It never waits for a later empty sample inside the same MCS turn.
+TX alternates with RX after every completed chunk, so large startup output
+cannot hide a paced serial command. The ordinary linked EventPump uses the
+fixed `Serial`, `LocalSeat`,
 `Dispatch`, `Network`, and `Display` outer-turn order. `Serial` admits one
 TX-first serial-ring turn. `LocalSeat` then performs one retained USB keyboard
 turn, so new physical input is buffered before network weighting begins.

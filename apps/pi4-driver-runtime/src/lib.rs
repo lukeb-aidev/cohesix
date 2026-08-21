@@ -7265,10 +7265,12 @@ const MINI_UART_LSR_TX_EMPTY: u32 = 1 << 5;
 #[cfg(target_os = "none")]
 const MINI_UART_LSR_TX_IDLE: u32 = 1 << 6;
 // The BCM2711 mini-UART FIFO accepts eight bytes. A 26e serial runtime owns a
-// 500-us MCS budget, so one child turn may fill only the immediately available
-// FIFO prefix and must publish that partial completion before waiting for wire
-// time. Blocking for a later FIFO vacancy can exhaust the SC before the
-// sequence-last completion becomes visible to root.
+// 500-us MCS budget, so one child turn may fill only one FIFO prefix after an
+// empty sample and must publish that partial completion before waiting for wire
+// time. Re-sampling TX_EMPTY after every byte collapses this safe prefix to one
+// byte because the flag describes an empty FIFO, not remaining FIFO capacity.
+// Blocking for a later empty sample can exhaust the SC before the sequence-last
+// completion becomes visible to root.
 const MINI_UART_TX_IMMEDIATE_TURN_BYTES: usize = 8;
 const MINI_UART_RX_DRAIN_LIMIT: usize = 128;
 const MINI_UART_RX_QUEUE_CAPACITY: usize = 512;
@@ -56088,7 +56090,7 @@ fn serial_write_frame(frame: DriverFrameDescriptor, limit: usize) -> usize {
     let turn_limit = (frame.len as usize)
         .min(limit)
         .min(MINI_UART_TX_IMMEDIATE_TURN_BYTES);
-    let written = serial_write_immediately_available_with(
+    let written = serial_write_empty_fifo_prefix_with(
         turn_limit,
         || {
             // SAFETY: The serial runtime image maps the UART MMIO page at
@@ -56119,7 +56121,7 @@ fn serial_write_frame(frame: DriverFrameDescriptor, limit: usize) -> usize {
     written
 }
 
-fn serial_write_immediately_available_with<Ready, Write>(
+fn serial_write_empty_fifo_prefix_with<Ready, Write>(
     limit: usize,
     mut ready: Ready,
     mut write: Write,
@@ -56128,11 +56130,11 @@ where
     Ready: FnMut() -> bool,
     Write: FnMut(usize),
 {
+    if limit == 0 || !ready() {
+        return 0;
+    }
     let mut written = 0usize;
     while written < limit {
-        if !ready() {
-            break;
-        }
         write(written);
         written = written.saturating_add(1);
     }
@@ -72461,26 +72463,26 @@ mod tests {
     }
 
     #[test]
-    fn serial_tx_turn_returns_the_immediately_available_prefix_without_waiting() {
-        let mut readiness = [true, true, false].into_iter();
+    fn serial_tx_turn_fills_one_fifo_prefix_after_one_empty_sample() {
+        let mut readiness = [true, false].into_iter();
         let mut writes = Vec::new();
 
-        let written = serial_write_immediately_available_with(
+        let written = serial_write_empty_fifo_prefix_with(
             8,
             || readiness.next().unwrap_or(false),
             |index| writes.push(index),
         );
 
-        assert_eq!(written, 2);
-        assert_eq!(writes, [0, 1]);
-        assert_eq!(readiness.next(), None);
+        assert_eq!(written, 8);
+        assert_eq!(writes, (0..8).collect::<Vec<_>>());
+        assert_eq!(readiness.next(), Some(false));
     }
 
     #[test]
     fn serial_tx_turn_never_exceeds_one_fifo_prefix() {
         let mut writes = Vec::new();
 
-        let written = serial_write_immediately_available_with(
+        let written = serial_write_empty_fifo_prefix_with(
             MINI_UART_TX_IMMEDIATE_TURN_BYTES,
             || true,
             |index| writes.push(index),
@@ -72493,6 +72495,20 @@ mod tests {
             writes.last(),
             Some(&(MINI_UART_TX_IMMEDIATE_TURN_BYTES - 1))
         );
+    }
+
+    #[test]
+    fn serial_tx_turn_does_not_write_when_fifo_is_not_empty() {
+        let mut writes = Vec::new();
+
+        let written = serial_write_empty_fifo_prefix_with(
+            MINI_UART_TX_IMMEDIATE_TURN_BYTES,
+            || false,
+            |index| writes.push(index),
+        );
+
+        assert_eq!(written, 0);
+        assert!(writes.is_empty());
     }
 
     #[test]
