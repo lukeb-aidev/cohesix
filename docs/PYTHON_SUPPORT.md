@@ -28,17 +28,24 @@ acceptance.
 Python 3.11 or later is required. Use an isolated environment:
 
 ```bash
-python3 -m venv .venv
+# Created by either canonical host installer:
+# ./toolchain/setup_macos_arm64.sh
+# ./toolchain/setup_linux_arm64.sh
 source .venv/bin/activate
-python3 -m pip install --upgrade pip
-python3 -m pip install -e tools/cohesix-py
 ```
 
+The installers populate `.venv` from the hash-locked host-test requirements and
+install `tools/cohesix-py` in editable mode without optional integrations. To
+create only that environment with an already installed Python 3.11 or later,
+run `./toolchain/setup_repo_venv.sh --python python3`.
+
 The editable path above is for a source checkout. From a release-bundle root,
-install the bundled, non-editable package instead:
+the runtime setup creates `.venv` and installs the bundle's exact wheel without
+resolving optional dependencies:
 
 ```bash
-python3 -m pip install ./python/cohesix-py
+./scripts/setup_environment.sh
+source .venv/bin/activate
 ```
 
 Optional dependency groups are explicit:

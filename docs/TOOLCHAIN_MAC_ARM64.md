@@ -14,10 +14,11 @@ not vendor, upstream seL4 build outputs.
 | Component | Current contract | Source of truth |
 | --- | --- | --- |
 | Rust | 1.97.1 minimal profile, `rustfmt`, `clippy`, `aarch64-unknown-none` | `rust-toolchain.toml` |
-| Host packages | Git, CMake, Ninja, LLVM 17, CPython 3.13, QEMU, coreutils, GNU `cpio`, `jq`, protobuf, `repo`, GNU make, OpenSSL 3, and `pkgconf` | `toolchain/setup_macos_arm64.sh` |
+| Host packages | Xcode Command Line Tools, Git, CMake, Ninja, LLVM 17, CPython 3.13, QEMU, coreutils, GNU `cpio`, `jq`, protobuf, `repo`, GNU make, OpenSSL 3, `pkgconf`, and ripgrep | `toolchain/setup_macos_arm64.sh` |
 | AArch64 compiler | Official Arm GNU Toolchain 15.2.Rel1 macOS Arm64 archive; GCC 15.2.1; target `aarch64-none-elf` | `configs/sel4/profiles.toml` |
 | seL4 archive tool | GNU `cpio` 2.15 at the exact Apple Silicon Homebrew Cellar path, with pinned binary SHA-256 and archive options | `configs/sel4/profiles.toml` |
 | seL4 Python environment | Dedicated `out/toolchain/sel4-profile-venv`; two hash locks; exact 38-distribution closure | `configs/sel4/python-bootstrap.lock`, `configs/sel4/python-build-requirements.lock` |
+| Repository Python environment | `.venv`; hash-locked host-test requirements plus editable `tools/cohesix-py` | `configs/test-plan-python-requirements.lock`, `toolchain/setup_repo_venv.sh` |
 | Pi packaging tool | `mkimage` built from the official DENX U-Boot 2026.01 release tarball | `configs/sel4/profiles.toml` |
 | Kernel baseline | Complete upstream seL4Test manifest 16.0.0 source set, including seL4 commit `6e7c3b733d296cfd88d5fbf635c96e447a882374` | `configs/sel4/profiles.toml`, `docs/audit/M26D_SEL4_16_PROVENANCE.md` |
 | CAmkES companion | Upstream CAmkES 3.13.0 is the release paired with seL4 16.0.0 | Reference/smoke-test surface only; CAmkES is not a Cohesix build or target dependency |
@@ -33,13 +34,16 @@ The repository script is the canonical setup path:
 ```bash
 ./toolchain/setup_macos_arm64.sh
 source "$HOME/.cargo/env"
+source .venv/bin/activate
 ```
 
 It uses Homebrew only for the declared host packages and CPython base, installs
 the pinned Rust toolchain and components, verifies and extracts the official Arm
 GNU archive, recreates the dedicated hash-locked seL4 Python environment, and
-builds `mkimage` from the verified official DENX U-Boot archive. It verifies
-`qemu-system-aarch64`; it does not build seL4 or download target artifacts.
+builds `mkimage` from the verified official DENX U-Boot archive. It also creates
+the separate repository `.venv` for host tests and the Cohesix Python client.
+It verifies `qemu-system-aarch64` and HVF; it does not build seL4 or download
+target artifacts.
 
 Verify the result:
 
@@ -57,11 +61,19 @@ PROFILE_CC=out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-e
 "$PROFILE_CC" -dumpmachine
 protoc --version
 repo version
+.venv/bin/python -c \
+  'import cohesix, pytest, serial; print("repository Python environment ready")'
 out/toolchain/sel4-profile-venv/bin/python -c \
   'import importlib.metadata; print(*(importlib.metadata.version(name) for name in ("sel4-deps", "protobuf", "setuptools")))'
 out/toolchain/u-boot-tools-build/tools/mkimage -V
 shasum -a 256 out/toolchain/u-boot-tools-build/tools/mkimage
 ```
+
+The repository `.venv` and `out/toolchain/sel4-profile-venv` are intentionally
+different. The former runs host tests and the Python client; the latter is the
+exact seL4 construction dependency closure. Do not substitute one for the
+other. Use `--skip-venv` only when a separately managed repository environment
+is intentional.
 
 `configs/sel4/profiles.toml` pins the compiler archive URL, size, SHA-256
 `37084c99bc05fda43a6c48900c638ae4fd6d93e2287ceb3e9bcda55437f1aadd`,

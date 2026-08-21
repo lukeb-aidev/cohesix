@@ -161,7 +161,9 @@ authenticated `cohsh`, and benchmark results are separate proof states. The
 Versioned bundles under [releases/](releases/) include release-specific
 `QUICKSTART.md` instructions. The common QEMU flow is:
 
-1. Extract the bundle and install its documented dependencies.
+1. Extract the bundle and run `./scripts/setup_environment.sh`. This installs
+   QEMU/runtime libraries and creates `.venv` when the bundled Python client is
+   present.
 2. Start `./qemu/run.sh` in one terminal.
 3. In another terminal, provide the deployment's TCP console authentication
    token without echoing it and connect as Queen:
@@ -179,19 +181,34 @@ through an authenticated tunnel.
 
 ### Build the current source tree
 
-The primary path is macOS 26 on Apple Silicon with the repository's external
-seL4 16.0.0 build outputs. QEMU, Rust, Python 3, and the selected seL4 profile
-must already be available. Follow the current-tree
-[Quickstart](docs/QUICKSTART.md); use
-[Toolchain setup](docs/TOOLCHAIN_MAC_ARM64.md) for the pinned host and external
-seL4 prerequisites. The repo-managed `seL4/` build, SMP, U-Boot, manual, and
-elfloader reference artifacts have all been refreshed to v16; fresh acceptance
-claims still validate their causal `out/sel4/profile-v2` builds.
+Run one setup command from the repository root. Both installers pin Rust and
+create `.venv`; rerunning either command is safe.
+
+macOS 26 or later on Apple Silicon (full pinned seL4 build host):
 
 ```bash
 ./toolchain/setup_macos_arm64.sh
-source "$HOME/.cargo/env"
 ```
+
+Ubuntu 22.04, 24.04, or 26.04 on ARM64 (host tools and diagnostic QEMU):
+
+```bash
+./toolchain/setup_linux_arm64.sh
+```
+
+Then enter the installed environments:
+
+```bash
+source "$HOME/.cargo/env"
+source .venv/bin/activate
+```
+
+The Linux installer builds Cohesix host tools and provides QEMU/TCG. It does
+not create the pinned macOS seL4 compiler/profile inputs or turn a diagnostic
+QEMU run into release acceptance. Follow the current-tree
+[Quickstart](docs/QUICKSTART.md) for the shortest mock and QEMU paths, and
+[Toolchain setup](docs/TOOLCHAIN_MAC_ARM64.md) when constructing fresh seL4
+16.0.0 target artifacts on the primary host.
 
 Build and start the QEMU TCP-console profile:
 

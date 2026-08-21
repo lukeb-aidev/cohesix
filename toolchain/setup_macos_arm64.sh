@@ -5,6 +5,52 @@
 
 set -euo pipefail
 
+usage() {
+    cat <<'EOF'
+Usage: toolchain/setup_macos_arm64.sh [--skip-venv]
+
+Install the pinned Cohesix host, seL4 profile, Rust, and QEMU dependencies on
+macOS 26 or later on Apple Silicon. By default the script also creates the
+repository .venv and installs the Cohesix Python client.
+EOF
+}
+
+fail() {
+    printf '[toolchain] error: %s\n' "$*" >&2
+    exit 1
+}
+
+SKIP_REPO_VENV=0
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --skip-venv)
+            SKIP_REPO_VENV=1
+            shift
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        *)
+            fail "unknown argument: $1"
+            ;;
+    esac
+done
+
+[[ "$(uname -s)" == "Darwin" ]] || fail "this installer requires macOS"
+[[ "$(uname -m)" == "arm64" ]] || \
+    fail "this installer requires Apple Silicon; detected $(uname -m)"
+MACOS_VERSION="$(sw_vers -productVersion 2>/dev/null)" || \
+    fail "unable to determine the macOS version"
+MACOS_MAJOR="${MACOS_VERSION%%.*}"
+[[ "${MACOS_MAJOR}" =~ ^[0-9]+$ ]] || \
+    fail "invalid macOS version: ${MACOS_VERSION}"
+(( MACOS_MAJOR >= 26 )) || \
+    fail "macOS 26 or later is required; detected ${MACOS_VERSION}"
+if ! xcode-select -p >/dev/null 2>&1 || ! xcrun --find clang >/dev/null 2>&1; then
+    fail "Xcode Command Line Tools are required; run: xcode-select --install"
+fi
+
 # Keep setup non-interactive and prevent Homebrew from cleaning up or
 # autoremoving unrelated user packages while satisfying this repository's
 # explicitly scoped prerequisites.
@@ -29,11 +75,13 @@ BREW_PACKAGES=(
     make
     openssl@3
     pkgconf
+    ripgrep
 )
 RUST_TOOLCHAIN_VERSION="1.97.1"
 RUST_TARGET="aarch64-unknown-none"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+SETUP_REPO_VENV="${SCRIPT_DIR}/setup_repo_venv.sh"
 TOOLCHAIN_ROOT="${REPO_ROOT}/out/toolchain"
 COMPILER_RELEASE="15.2.Rel1"
 COMPILER_VERSION="15.2.1"
@@ -439,12 +487,13 @@ if ! command -v rustup >/dev/null 2>&1; then
     echo "Installing rustup..."
     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- \
         -y --profile minimal --default-toolchain "$RUST_TOOLCHAIN_VERSION"
-    # shellcheck source=/dev/null
-    source "$HOME/.cargo/env"
-else
+fi
+if [[ -f "$HOME/.cargo/env" ]]; then
     # shellcheck source=/dev/null
     source "$HOME/.cargo/env"
 fi
+command -v rustup >/dev/null 2>&1 || \
+    fail "rustup is unavailable after installation"
 
 echo "Ensuring Rust toolchain $RUST_TOOLCHAIN_VERSION is installed..."
 rustup toolchain install "$RUST_TOOLCHAIN_VERSION" --profile minimal
@@ -475,5 +524,17 @@ echo "Cross compiler: $(aarch64-none-elf-gcc --version | head -n1)"
 echo "Protobuf compiler: $(protoc --version)"
 echo "Profile Python: $("${PROFILE_VENV}/bin/python" --version)"
 echo "mkimage: $("${MKIMAGE}" -V 2>&1)"
+
+if ! qemu-system-aarch64 -accel help 2>/dev/null |
+    grep -Eq '(^|[[:space:]])hvf($|[[:space:]])'
+then
+    fail "QEMU does not report the required HVF accelerator"
+fi
+
+if [[ "${SKIP_REPO_VENV}" -eq 0 ]]; then
+    "${SETUP_REPO_VENV}" --python "${HOMEBREW_PYTHON}"
+else
+    echo "Skipping repository .venv setup by request."
+fi
 
 echo "Toolchain setup complete."

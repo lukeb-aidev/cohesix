@@ -31,6 +31,10 @@ shell_scripts=(
   scripts/ci/test_plan_target_root_check.sh
   scripts/cohsh/REST_regression_batch.sh
   scripts/cohsh/run_regression_batch.sh
+  scripts/setup_environment.sh
+  toolchain/setup_linux_arm64.sh
+  toolchain/setup_macos_arm64.sh
+  toolchain/setup_repo_venv.sh
 )
 bash -n "${shell_scripts[@]}"
 

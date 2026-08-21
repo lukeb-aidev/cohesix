@@ -262,6 +262,28 @@ Checks: all six affected packages compile and test under exact Rust 1.97.1; depe
 Deliverables: synchronized manifests, lockfile, generated-doc embedding, and bounded validation evidence with Milestone 0 returned to Complete.
 ```
 
+```
+Title/ID: m0-host-setup-parity-repair
+Milestone: Reopened Milestone 0 — Repository Skeleton & Toolchain / macOS and Ubuntu ARM64 host setup parity repair
+Goal: Make one canonical setup command provision each supported host-build lane and a shared repository Python environment without overstating Linux target acceptance.
+Inputs: toolchain/setup_macos_arm64.sh, toolchain/setup_linux_arm64.sh, scripts/setup_environment.sh, configs/test-plan-python-requirements.lock, tools/cohesix-py/pyproject.toml, README.md, docs/QUICKSTART.md, docs/TOOLCHAIN_MAC_ARM64.md, docs/PYTHON_SUPPORT.md, release inventory, and host setup tests.
+Changes:
+  - toolchain/setup_macos_arm64.sh — enforce macOS 26+, Apple Silicon, Xcode Command Line Tools, ripgrep, and HVF prerequisites before completing the existing pinned seL4 host setup.
+  - toolchain/setup_linux_arm64.sh — enforce Ubuntu 22.04/24.04/26.04 ARM64, install the correct QEMU ARM system package and complete host-tool build dependencies, select Python 3.11+ per LTS, and verify diagnostic TCG.
+  - toolchain/setup_repo_venv.sh — create the non-symlinked repository `.venv` from the hash-locked host-test closure and install `tools/cohesix-py` editable without optional integration or ML dependencies.
+  - scripts/setup_environment.sh — keep the release-bundle path runtime-only, correct Ubuntu QEMU/GTK package selection, support the three ARM64 LTS releases, enable Universe only when installation is needed, fail closed on incompatible hosts, verify HVF or TCG, and install the exact bundled Python wheel into a protected `.venv` without conflating runtime readiness with target acceptance.
+  - README.md + docs/QUICKSTART.md + docs/TOOLCHAIN_MAC_ARM64.md + docs/PYTHON_SUPPORT.md — project one-command setup for each OS and retain the distinct macOS construction, Linux diagnostic-QEMU, and target-acceptance boundaries.
+  - tests/test_toolchain_setup.py + scripts/ci/check_test_plan.sh — guard platform, package, Python, documentation, and shell-syntax contracts. The complete host-tool suite, `tools/cohesix-py`, and performance benchmark scripts were reviewed; only Python environment installation is affected, with no protocol, benchmark workload, or report-schema change.
+Commands:
+  - bash -n toolchain/setup_macos_arm64.sh toolchain/setup_linux_arm64.sh toolchain/setup_repo_venv.sh
+  - scripts/setup_environment.sh --check
+  - .venv/bin/python -m pytest -q tests/test_toolchain_setup.py
+  - scripts/check-generated.sh
+  - scripts/ci/check_test_plan.sh
+Checks: both installers reject hosts outside their exact support envelope before mutation, expose help without platform preflight, install the shared locked `.venv` by default, and preserve separate full-construction, diagnostic-QEMU, and acceptance claims; focused tests and repository consistency gates pass.
+Deliverables: corrected canonical host installers, a shared repository Python bootstrap, simplified macOS/Linux quickstart documentation, and deterministic regression coverage with Milestone 0 returned to Complete.
+```
+
 **M0 dependency-refresh evidence (2026-07-28)**
 - All 47 direct crates.io dependencies resolve to their current stable releases.
   Required breaking migrations cover AES, Axum, Base64, CBOR, Ed25519/signature,

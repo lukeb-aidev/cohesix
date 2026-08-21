@@ -24,13 +24,33 @@ hardware workflow. A successful build or QEMU boot is not Pi 4 proof.
 
 ## Prerequisites
 
-The primary development host is macOS 26 on Apple Silicon. Install the pinned
-host and Rust tools:
+From the repository root, run the installer for your host. Each installer pins
+Rust 1.97.1 and creates the repository `.venv`.
+
+macOS 26 or later on Apple Silicon is the primary, fully pinned seL4 build
+host:
 
 ```bash
 ./toolchain/setup_macos_arm64.sh
-source "$HOME/.cargo/env"
 ```
+
+Ubuntu 22.04, 24.04, or 26.04 on ARM64 supports Cohesix host-tool builds and
+diagnostic QEMU/TCG runs:
+
+```bash
+./toolchain/setup_linux_arm64.sh
+```
+
+After either installer:
+
+```bash
+source "$HOME/.cargo/env"
+source .venv/bin/activate
+```
+
+The Linux path does not construct the pinned macOS seL4 compiler/profile
+inputs. It can consume an explicitly supplied, compatible seL4 output tree for
+diagnostic QEMU, but that run is not target or release acceptance.
 
 For a QEMU target run, the selected seL4 16.0.0 output directory must already
 contain the kernel, elfloader, generated headers, and configuration for that
