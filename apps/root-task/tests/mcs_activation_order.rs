@@ -363,6 +363,17 @@ fn root_control_containment_serializes_before_the_ordinary_pump_turn() {
         .find("recovery_turn =")
         .map(|offset| ninedoor_guard + offset)
         .expect("NineDoor containment result must own recovery_turn");
+    let handoff_guard = root_loop[ninedoor..]
+        .find("if !recovery_turn && hal_ptr != 0 {")
+        .map(|offset| ninedoor + offset)
+        .expect("deferred console-network handoff must follow containment");
+    let handoff = root_loop
+        .find("pump.service_deferred_console_network_handoff(hal)")
+        .expect("deferred console-network handoff probe must remain present");
+    let handoff_assignment = root_loop[handoff_guard..handoff]
+        .find("recovery_turn =")
+        .map(|offset| handoff_guard + offset)
+        .expect("deferred console-network handoff must own recovery_turn");
     let pump_guard = root_loop
         .find("if !recovery_turn {")
         .expect("ordinary pump must be guarded by both containment results");
@@ -379,13 +390,17 @@ fn root_control_containment_serializes_before_the_ordinary_pump_turn() {
             && console < ninedoor_guard
             && ninedoor_guard < ninedoor_assignment
             && ninedoor_assignment < ninedoor
-            && ninedoor < pump_guard
+            && ninedoor < handoff_guard
+            && handoff_guard < handoff_assignment
+            && handoff_assignment < handoff
+            && handoff < pump_guard
             && pump_guard < pump
             && pump < outer_yield,
         "containment/pump/yield source order drifted: \
          activation={activation}, console_assignment={console_assignment}, console={console}, \
          ninedoor_guard={ninedoor_guard}, ninedoor_assignment={ninedoor_assignment}, \
-         ninedoor={ninedoor}, \
+         ninedoor={ninedoor}, handoff_guard={handoff_guard}, \
+         handoff_assignment={handoff_assignment}, handoff={handoff}, \
          pump_guard={pump_guard}, pump={pump}, yield={outer_yield}",
     );
     assert_eq!(
@@ -410,9 +425,15 @@ fn root_control_containment_serializes_before_the_ordinary_pump_turn() {
         1,
     );
     assert_eq!(
+        root_loop
+            .matches("pump.service_deferred_console_network_handoff(hal)")
+            .count(),
+        1,
+    );
+    assert_eq!(
         root_loop.matches(".unwrap_or(false);").count(),
-        2,
-        "both optional HAL probes must preserve false-on-no-probe semantics",
+        3,
+        "all optional HAL probes must preserve false-on-no-probe semantics",
     );
     assert!(
         root_loop.contains("if !recovery_turn {\n            pump.poll();\n        }"),
