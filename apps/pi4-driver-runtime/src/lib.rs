@@ -7264,8 +7264,12 @@ const MINI_UART_LSR_RX_OVERRUN: u32 = 1 << 1;
 const MINI_UART_LSR_TX_EMPTY: u32 = 1 << 5;
 #[cfg(target_os = "none")]
 const MINI_UART_LSR_TX_IDLE: u32 = 1 << 6;
-#[cfg(target_os = "none")]
-const MINI_UART_TX_SPIN_LIMIT: usize = 65_536;
+// The BCM2711 mini-UART FIFO accepts eight bytes. A 26e serial runtime owns a
+// 500-us MCS budget, so one child turn may fill only the immediately available
+// FIFO prefix and must publish that partial completion before waiting for wire
+// time. Blocking for a later FIFO vacancy can exhaust the SC before the
+// sequence-last completion becomes visible to root.
+const MINI_UART_TX_IMMEDIATE_TURN_BYTES: usize = 8;
 const MINI_UART_RX_DRAIN_LIMIT: usize = 128;
 const MINI_UART_RX_QUEUE_CAPACITY: usize = 512;
 #[cfg(target_os = "none")]
@@ -56080,55 +56084,59 @@ fn serial_drain_queue_to_frame(queue: &mut SerialRuntimeRxQueue, limit: usize) -
 
 #[cfg(target_os = "none")]
 fn serial_write_frame(frame: DriverFrameDescriptor, limit: usize) -> usize {
-    let mut written = 0usize;
     let src = (DRIVER_TASK_RING_VADDR + frame.offset as usize) as *const u8;
-    let uart = DRIVER_TASK_DEVICE_MMIO_VADDR as *mut u32;
-    for index in 0..(frame.len as usize).min(limit) {
-        if index != 0 && index % 8 == 0 {
-            let _ = serial_preserve_rx_into_runtime_queue(MINI_UART_RX_DRAIN_LIMIT);
-        }
-        // SAFETY: The frame descriptor is validated by `service_serial`, the
-        // ring page is mapped at `DRIVER_TASK_RING_VADDR`, and byte reads stay
-        // within the fixed page-local payload region.
-        let byte = unsafe { core::ptr::read_volatile(src.add(index)) };
-        if !wait_for_mini_uart_tx(uart) {
-            break;
-        }
-        // SAFETY: The serial runtime image maps exactly the declared UART MMIO
-        // page at `DRIVER_TASK_DEVICE_MMIO_VADDR`; the MU_IO offset is within
-        // that page and accepts 32-bit writes of one transmit byte.
-        unsafe {
-            core::ptr::write_volatile(
-                (DRIVER_TASK_DEVICE_MMIO_VADDR + MINI_UART_IO_OFFSET) as *mut u32,
-                u32::from(byte),
-            );
-        }
-        written = written.saturating_add(1);
-    }
+    let turn_limit = (frame.len as usize)
+        .min(limit)
+        .min(MINI_UART_TX_IMMEDIATE_TURN_BYTES);
+    let written = serial_write_immediately_available_with(
+        turn_limit,
+        || {
+            // SAFETY: The serial runtime image maps the UART MMIO page at
+            // `DRIVER_TASK_DEVICE_MMIO_VADDR`; MU_LSR is read-only and belongs
+            // solely to this runtime.
+            let lsr = unsafe {
+                core::ptr::read_volatile(
+                    (DRIVER_TASK_DEVICE_MMIO_VADDR + MINI_UART_LSR_OFFSET) as *const u32,
+                )
+            };
+            lsr & MINI_UART_LSR_TX_EMPTY != 0
+        },
+        |index| {
+            // SAFETY: `index < turn_limit <= frame.len`, and `service_serial`
+            // validated the page-local frame before this helper was entered.
+            let byte = unsafe { core::ptr::read_volatile(src.add(index)) };
+            // SAFETY: The runtime owns this admitted mini-UART MMIO page;
+            // MU_IO accepts a 32-bit write containing one transmit byte.
+            unsafe {
+                core::ptr::write_volatile(
+                    (DRIVER_TASK_DEVICE_MMIO_VADDR + MINI_UART_IO_OFFSET) as *mut u32,
+                    u32::from(byte),
+                );
+            }
+        },
+    );
     let _ = serial_preserve_rx_into_runtime_queue(MINI_UART_RX_DRAIN_LIMIT);
     written
 }
 
-#[cfg(target_os = "none")]
-fn wait_for_mini_uart_tx(_uart: *mut u32) -> bool {
-    let mut spin = 0usize;
-    let mut deadline = runtime_deadline_from_legacy_spins(MINI_UART_TX_SPIN_LIMIT);
-    while spin < MINI_UART_TX_SPIN_LIMIT && !runtime_deadline_expired(&mut deadline) {
-        // SAFETY: The serial runtime image maps the UART MMIO page at
-        // `DRIVER_TASK_DEVICE_MMIO_VADDR`; the MU_LSR offset is in the same
-        // page and is read-only for this polling check.
-        let lsr = unsafe {
-            core::ptr::read_volatile(
-                (DRIVER_TASK_DEVICE_MMIO_VADDR + MINI_UART_LSR_OFFSET) as *const u32,
-            )
-        };
-        if lsr & MINI_UART_LSR_TX_EMPTY != 0 {
-            return true;
+fn serial_write_immediately_available_with<Ready, Write>(
+    limit: usize,
+    mut ready: Ready,
+    mut write: Write,
+) -> usize
+where
+    Ready: FnMut() -> bool,
+    Write: FnMut(usize),
+{
+    let mut written = 0usize;
+    while written < limit {
+        if !ready() {
+            break;
         }
-        spin = spin.saturating_add(1);
-        runtime_poll_pause();
+        write(written);
+        written = written.saturating_add(1);
     }
-    false
+    written
 }
 
 #[cfg(not(target_os = "none"))]
@@ -72449,6 +72457,41 @@ mod tests {
         assert_eq!(
             service_command(0, command),
             DriverTaskCompletionRecord::progress(15, payload.len() as u32)
+        );
+    }
+
+    #[test]
+    fn serial_tx_turn_returns_the_immediately_available_prefix_without_waiting() {
+        let mut readiness = [true, true, false].into_iter();
+        let mut writes = Vec::new();
+
+        let written = serial_write_immediately_available_with(
+            8,
+            || readiness.next().unwrap_or(false),
+            |index| writes.push(index),
+        );
+
+        assert_eq!(written, 2);
+        assert_eq!(writes, [0, 1]);
+        assert_eq!(readiness.next(), None);
+    }
+
+    #[test]
+    fn serial_tx_turn_never_exceeds_one_fifo_prefix() {
+        let mut writes = Vec::new();
+
+        let written = serial_write_immediately_available_with(
+            MINI_UART_TX_IMMEDIATE_TURN_BYTES,
+            || true,
+            |index| writes.push(index),
+        );
+
+        assert_eq!(written, MINI_UART_TX_IMMEDIATE_TURN_BYTES);
+        assert_eq!(writes.len(), MINI_UART_TX_IMMEDIATE_TURN_BYTES);
+        assert_eq!(writes.first(), Some(&0));
+        assert_eq!(
+            writes.last(),
+            Some(&(MINI_UART_TX_IMMEDIATE_TURN_BYTES - 1))
         );
     }
 
