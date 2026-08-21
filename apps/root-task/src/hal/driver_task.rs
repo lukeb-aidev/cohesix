@@ -4487,6 +4487,9 @@ struct DriverTaskCommandSlot {
     retained_persistent_transaction_start_ticks: AtomicU64,
     retained_persistent_signal_returned_request: AtomicU32,
     endpoint: AtomicUsize,
+    endpoint_expected_ident: AtomicUsize,
+    endpoint_lifetime_probes: AtomicU32,
+    endpoint_lifetime_failure: AtomicU32,
     root_notification: AtomicUsize,
     root_wake_notification: AtomicUsize,
     root_wake_badge: AtomicU32,
@@ -5158,6 +5161,9 @@ impl DriverTaskCommandSlot {
             retained_persistent_transaction_start_ticks: AtomicU64::new(0),
             retained_persistent_signal_returned_request: AtomicU32::new(0),
             endpoint: AtomicUsize::new(0),
+            endpoint_expected_ident: AtomicUsize::new(0),
+            endpoint_lifetime_probes: AtomicU32::new(0),
+            endpoint_lifetime_failure: AtomicU32::new(0),
             root_notification: AtomicUsize::new(0),
             root_wake_notification: AtomicUsize::new(0),
             root_wake_badge: AtomicU32::new(0),
@@ -8488,6 +8494,29 @@ fn fail_driver_supervisor_fault_diagnostic(
     error
 }
 
+#[cfg(all(feature = "kernel", sel4_config_kernel_mcs))]
+fn driver_supervisor_fault_diagnostic_state(contract: DriverTaskContract) -> (u64, u8, u8, isize) {
+    let Some(diagnostic) = DRIVER_SUPERVISOR_FAULT_DIAGNOSTIC.try_lock() else {
+        return (0, DRIVER_SUPERVISOR_DIAG_CONTAINING, 0, 0);
+    };
+    if diagnostic.contract != contract {
+        return (0, DRIVER_SUPERVISOR_DIAG_EMPTY, 0, 0);
+    }
+    (
+        diagnostic.record.sequence,
+        diagnostic.state,
+        diagnostic.stage,
+        diagnostic.kernel_error,
+    )
+}
+
+#[cfg(all(feature = "kernel", not(sel4_config_kernel_mcs)))]
+const fn driver_supervisor_fault_diagnostic_state(
+    _contract: DriverTaskContract,
+) -> (u64, u8, u8, isize) {
+    (0, 0, 0, 0)
+}
+
 /// Format one stable, terminal driver fault/containment record for root-control.
 /// The caller advances `after_sequence` only after it has retained the line.
 #[cfg(all(feature = "kernel", sel4_config_kernel_mcs))]
@@ -8633,6 +8662,11 @@ pub fn root_driver_supervisor_contain_fault(
         ));
     }
     slot.mcs_command_admission_open.store(0, Ordering::Release);
+    // Root must lose the published send CPtr before the supervisor can revoke
+    // its retained origin. Keeping a stale nonzero CPtr until the end of the
+    // containment sequence lets any later-stage failure turn every display or
+    // service retry into an unbounded null-cap syscall loop.
+    slot.endpoint.store(0, Ordering::Release);
     if prior != DRIVER_TASK_MCS_CALL_IDLE && prior != DRIVER_TASK_MCS_CALL_ASSOCIATED {
         return Err(fail_driver_supervisor_fault_diagnostic(
             DRIVER_SUPERVISOR_DIAG_STAGE_PHASE,
@@ -8761,7 +8795,6 @@ pub fn root_driver_supervisor_contain_fault(
             ));
         }
     }
-    slot.endpoint.store(0, Ordering::Release);
     slot.mcs_call_phase
         .store(DRIVER_TASK_MCS_CALL_REVOKED, Ordering::Release);
     complete_driver_supervisor_fault_diagnostic();
@@ -8967,7 +9000,134 @@ pub fn publish_driver_task_command_endpoint(contract: DriverTaskContract, endpoi
     let Some(slot) = slot_for_task_key(task_key) else {
         return;
     };
+    let expected_ident = if physical_driver_endpoint_identify_available() {
+        crate::sel4::debug_cap_identify(endpoint as sel4_sys::seL4_CPtr) as usize
+    } else {
+        0
+    };
+    slot.endpoint_expected_ident
+        .store(expected_ident, Ordering::Relaxed);
+    slot.endpoint_lifetime_probes.store(0, Ordering::Relaxed);
+    slot.endpoint_lifetime_failure.store(0, Ordering::Relaxed);
     slot.endpoint.store(endpoint, Ordering::Release);
+    if contract == HDMI_TEXT_DRIVER_TASK_CONTRACT && expected_ident != 0 {
+        emit_driver_task_endpoint_lifetime_checkpoint(contract, "publish");
+    }
+}
+
+const DRIVER_TASK_ENDPOINT_LIFETIME_PROBE_LIMIT: u32 = 4;
+
+#[cfg(feature = "kernel")]
+const fn physical_driver_endpoint_identify_available() -> bool {
+    cfg!(all(
+        target_arch = "aarch64",
+        target_os = "none",
+        sel4_config_debug_build
+    ))
+}
+
+#[cfg(feature = "kernel")]
+const fn driver_task_endpoint_identity_matches(
+    identify_available: bool,
+    expected_ident: usize,
+    observed_ident: usize,
+) -> bool {
+    !identify_available || expected_ident == 0 || observed_ident == expected_ident
+}
+
+/// Emit one bounded root-side command-cap identity checkpoint.
+#[cfg(feature = "kernel")]
+pub fn emit_driver_task_endpoint_lifetime_checkpoint(
+    contract: DriverTaskContract,
+    checkpoint: &'static str,
+) {
+    if !physical_driver_endpoint_identify_available() {
+        return;
+    }
+    let Some(slot) = driver_task_slot_for_contract(contract) else {
+        return;
+    };
+    let endpoint = slot.endpoint.load(Ordering::Acquire);
+    let expected_ident = slot.endpoint_expected_ident.load(Ordering::Acquire);
+    if endpoint == 0 || expected_ident == 0 {
+        return;
+    }
+    let observed_ident = crate::sel4::debug_cap_identify(endpoint as sel4_sys::seL4_CPtr) as usize;
+    let mut line = heapless::String::<224>::new();
+    let _ = core::fmt::write(
+        &mut line,
+        format_args!(
+            "DRIVER_TASK_ENDPOINT_LIFETIME schema=v1 contract={} checkpoint={} endpoint=0x{:04x} ident=0x{:x} expected=0x{:x} action=observe",
+            contract.name, checkpoint, endpoint, observed_ident, expected_ident,
+        ),
+    );
+    crate::bootstrap::log::force_uart_line_raw_without_prompt_refresh(line.as_str());
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_endpoint_lifetime_allows_submit(
+    contract: DriverTaskContract,
+    slot: &DriverTaskCommandSlot,
+    endpoint: usize,
+) -> bool {
+    if contract != HDMI_TEXT_DRIVER_TASK_CONTRACT || !physical_driver_endpoint_identify_available()
+    {
+        return true;
+    }
+    let expected_ident = slot.endpoint_expected_ident.load(Ordering::Acquire);
+    if expected_ident == 0 {
+        return true;
+    }
+    let probe = slot.endpoint_lifetime_probes.fetch_add(1, Ordering::AcqRel);
+    if probe >= DRIVER_TASK_ENDPOINT_LIFETIME_PROBE_LIMIT {
+        return slot.endpoint_lifetime_failure.load(Ordering::Acquire) == 0;
+    }
+    let observed_ident = crate::sel4::debug_cap_identify(endpoint as sel4_sys::seL4_CPtr) as usize;
+    if driver_task_endpoint_identity_matches(true, expected_ident, observed_ident) {
+        return true;
+    }
+
+    let _ = slot
+        .endpoint
+        .compare_exchange(endpoint, 0, Ordering::AcqRel, Ordering::Acquire);
+    slot.mcs_command_admission_open.store(0, Ordering::Release);
+    if slot
+        .endpoint_lifetime_failure
+        .compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire)
+        .is_ok()
+    {
+        let (diag_sequence, diag_state, diag_stage, diag_error) =
+            driver_supervisor_fault_diagnostic_state(contract);
+        let mut line = heapless::String::<384>::new();
+        let _ = core::fmt::write(
+            &mut line,
+            format_args!(
+                "DRIVER_TASK_ENDPOINT_LIFETIME schema=v1 contract={} checkpoint=submit endpoint=0x{:04x} ident=0x{:x} expected=0x{:x} action=fence probe={} admission={} phase={} sequence={} generation={} normal_replies={} failure_replies={} supervisor_ready={} diag_q={} diag_state={} diag_stage={} diag_error={} submitted={} completed={} faults={} timeouts={}",
+                contract.name,
+                endpoint,
+                observed_ident,
+                expected_ident,
+                probe.saturating_add(1),
+                slot.mcs_command_admission_open.load(Ordering::Acquire),
+                slot.mcs_call_phase.load(Ordering::Acquire),
+                slot.mcs_call_sequence.load(Ordering::Acquire),
+                slot.mcs_cap_generation.load(Ordering::Acquire),
+                slot.mcs_normal_replies.load(Ordering::Acquire),
+                slot.mcs_failure_replies.load(Ordering::Acquire),
+                slot.mcs_supervisor_authority_ready.load(Ordering::Acquire),
+                diag_sequence,
+                diag_state,
+                diag_stage,
+                diag_error,
+                slot.counters.submitted_turns.load(Ordering::Acquire),
+                slot.counters.completed_turns.load(Ordering::Acquire),
+                slot.counters.fault_turns.load(Ordering::Acquire),
+                slot.counters.timeouts.load(Ordering::Acquire),
+            ),
+        );
+        crate::bootstrap::log::force_uart_line_raw_without_prompt_refresh(line.as_str());
+    }
+    false
 }
 
 /// Publish root's send-only, reserved-badge cap for one runtime notification.
@@ -19615,6 +19775,15 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
             command,
             "runtime-ring-submit",
             "no-endpoint",
+        );
+        return None;
+    }
+    if !driver_task_endpoint_lifetime_allows_submit(contract, slot, endpoint) {
+        emit_driver_task_ring_resource_submit_status(
+            contract,
+            command,
+            "runtime-ring-submit",
+            "endpoint-identity-lost",
         );
         return None;
     }
@@ -38055,6 +38224,16 @@ mod tests {
         assert!(root_compatibility_service_allowed_for_profile(
             DriverTaskRuntimeProfile::HostTest
         ));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn endpoint_lifetime_probe_fails_only_on_observed_identity_loss() {
+        assert!(driver_task_endpoint_identity_matches(false, 4, 0));
+        assert!(driver_task_endpoint_identity_matches(true, 0, 0));
+        assert!(driver_task_endpoint_identity_matches(true, 4, 4));
+        assert!(!driver_task_endpoint_identity_matches(true, 4, 0));
+        assert!(DRIVER_TASK_ENDPOINT_LIFETIME_PROBE_LIMIT >= 3);
     }
 
     #[test]

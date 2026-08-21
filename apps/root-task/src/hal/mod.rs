@@ -2691,6 +2691,7 @@ fn bootstrap_linked_runtime_engine_for_early_console(
                     && done.result != 0
         );
     }
+    driver_task::emit_driver_task_endpoint_lifetime_checkpoint(contract, "early-draw");
     let mut line = heapless::String::<160>::new();
     let _ = fmt::Write::write_fmt(
         &mut line,

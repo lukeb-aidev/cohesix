@@ -560,19 +560,32 @@ fn passive_service_recovery_replies_once_during_call_and_zero_between_calls() {
 #[test]
 fn driver_containment_clears_the_fault_association_before_reply_release() {
     let containment_source = include_str!("../src/hal/driver_task.rs");
-    let containment_start = containment_source
-        .find("pub fn root_driver_supervisor_contain_fault(")
-        .expect("MCS driver containment entrypoint");
-    let containment = &containment_source[containment_start..];
+    let containment = source_section(
+        containment_source,
+        "pub fn root_driver_supervisor_contain_fault(",
+        "/// Classic kernels cannot consume the MCS driver-supervisor hook.",
+    );
     let suspend = containment
         .find("crate::sel4::suspend_tcb(")
         .expect("driver TCB suspension");
     let association_clear = containment
         .find("DRIVER_TASK_MCS_CALL_ASSOCIATIONS_CLEAR")
         .expect("driver fault-association clear state");
+    let admission_close = containment
+        .find("slot.mcs_command_admission_open.store(0")
+        .expect("root command admission fence");
+    let endpoint_fence = containment
+        .find("slot.endpoint.store(0")
+        .expect("published endpoint fence");
+    let command_revoke = containment
+        .find("DRIVER_SUPERVISOR_DIAG_STAGE_REVOKE_COMMAND")
+        .expect("retained command-origin revoke");
     let success = containment.find("Ok(())").expect("successful containment");
+    assert!(admission_close < endpoint_fence);
+    assert!(endpoint_fence < command_revoke);
     assert!(suspend < association_clear);
     assert!(association_clear < success);
+    assert_eq!(containment.matches("slot.endpoint.store(0").count(), 1);
 
     let root_fault_source = include_str!("../src/hal/critical_tcb.rs");
     let supervisor_start = root_fault_source
