@@ -19,6 +19,13 @@ use core::{
     ptr::{self, NonNull},
 };
 
+/// First display mutation admitted during early Pi HDMI bootstrap.
+///
+/// A form-feed would clear the complete framebuffer and cannot fit the
+/// bootstrap driver's bounded MCS turn. The steady local-seat path owns later
+/// redraw and clearing work.
+const HDMI_EARLY_BANNER_PAYLOAD: &[u8] = b"Starting HDMI\n";
+
 #[cfg(any(feature = "kernel", feature = "cache-maintenance"))]
 pub mod cache;
 
@@ -2605,7 +2612,7 @@ fn bootstrap_linked_runtime_engine_for_early_console(
         None,
     );
     let mut banner = false;
-    let banner_payload = b"\x0cStarting HDMI\n";
+    let banner_payload = HDMI_EARLY_BANNER_PAYLOAD;
     let frame = driver_task::describe_driver_task_ring_frame(banner_payload, 0).ok_or(
         HalError::Unsupported("driver-runtime-hdmi-early-banner-stage"),
     )?;
@@ -6463,6 +6470,13 @@ mod tests {
     };
     #[cfg(feature = "kernel")]
     use pi4_driver_abi::DRIVER_RUNTIME_RESERVED_ROOT_BADGE;
+
+    #[test]
+    fn early_hdmi_banner_is_a_bounded_text_only_mutation() {
+        assert_eq!(super::HDMI_EARLY_BANNER_PAYLOAD, b"Starting HDMI\n");
+        assert!(!super::HDMI_EARLY_BANNER_PAYLOAD.contains(&0x0c));
+        assert!(!super::HDMI_EARLY_BANNER_PAYLOAD.contains(&0x1b));
+    }
 
     #[cfg(feature = "kernel")]
     #[test]

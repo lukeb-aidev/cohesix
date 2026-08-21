@@ -842,6 +842,15 @@ pub(crate) const fn local_seat_linked_display_service_allowed(
     !physical_pi_owner_state || display_attached || !display_failed
 }
 
+/// Return whether a high-impact status line may consume a linked HDMI turn.
+///
+/// Before the root console reaches steady state, serial is the authoritative
+/// progress surface and HDMI work is limited to its bounded bootstrap banner.
+#[must_use]
+pub(crate) const fn local_seat_high_impact_hdmi_mirror_allowed(root_console_ready: bool) -> bool {
+    root_console_ready
+}
+
 /// Return whether linked local-seat service may use the steady driver-task path.
 #[must_use]
 pub(crate) const fn local_seat_prompt_steady_service_allowed(
@@ -7486,6 +7495,9 @@ fn mirror_high_impact_line_via_linked_hdmi(
     root_console_ready: bool,
     reason: &'static str,
 ) -> bool {
+    if !local_seat_high_impact_hdmi_mirror_allowed(root_console_ready) {
+        return false;
+    }
     if !crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active() {
         return false;
     }
@@ -9217,6 +9229,12 @@ mod tests {
         assert!(local_seat_linked_display_service_allowed(
             false, false, true
         ));
+    }
+
+    #[test]
+    fn high_impact_hdmi_mirroring_waits_for_root_console_steady_state() {
+        assert!(!local_seat_high_impact_hdmi_mirror_allowed(false));
+        assert!(local_seat_high_impact_hdmi_mirror_allowed(true));
     }
 
     #[test]
