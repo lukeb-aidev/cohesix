@@ -4041,12 +4041,7 @@ impl Cyw43BootstrapSupervisor {
                             false,
                         )
                     }
-                    Err(failure) => {
-                        let _ = (failure.kind(), failure.action(), failure.status());
-                        self.fail(DriverTaskNetError::RuntimeInit(
-                            "cyw43-sdio-pair-restart-begin",
-                        ))
-                    }
+                    Err(failure) => self.fail(cyw43_pair_restart_failure_error(failure)),
                 }
             }
             Cyw43RecoveryPhase::StepPairRestart => {
@@ -4135,9 +4130,8 @@ impl Cyw43BootstrapSupervisor {
                                 self.retain_cyw43_engine_terminal_diagnostic(completion);
                             }
                         }
-                        let _ = (failure.kind(), failure.action(), failure.status());
                         self.recovery_cursor = None;
-                        self.fail(DriverTaskNetError::RuntimeInit("cyw43-sdio-pair-restart"))
+                        self.fail(cyw43_pair_restart_failure_error(failure))
                     }
                 }
             }
@@ -13086,6 +13080,22 @@ pub enum DriverTaskNetError {
     RuntimePending(&'static str),
     /// The driver-task runtime could not initialise the real hardware backend.
     RuntimeInit(&'static str),
+    /// The retained CYW43/SDIO pair restart failed and completed its fence.
+    #[cfg(feature = "kernel")]
+    RuntimePairRestart {
+        /// Stable first-failure class.
+        kind: &'static str,
+        /// Canonical restart action.
+        action: &'static str,
+        /// Exact retained sub-operation.
+        operation: &'static str,
+        /// First causal status before fencing.
+        cause: &'static str,
+        /// Compact deterministic-fence result.
+        fence: &'static str,
+        /// Root-side SDHCI virtual address admitted to the restart.
+        sdhci_root_ptr: usize,
+    },
 }
 
 impl fmt::Display for DriverTaskNetError {
@@ -13095,7 +13105,43 @@ impl fmt::Display for DriverTaskNetError {
                 write!(f, "{role} driver-task runtime is pending hardware service")
             }
             Self::RuntimeInit(role) => write!(f, "{role} driver-task runtime init failed"),
+            #[cfg(feature = "kernel")]
+            Self::RuntimePairRestart {
+                kind,
+                action,
+                operation,
+                cause,
+                fence,
+                sdhci_root_ptr,
+            } => write!(
+                f,
+                "cyw43-pair k={kind} a={action} op={operation} c={cause} f={fence} mmio=0x{sdhci_root_ptr:x}",
+            ),
         }
+    }
+}
+
+#[cfg(feature = "kernel")]
+const fn cyw43_pair_restart_fence_label(status: &str) -> &'static str {
+    match status.as_bytes() {
+        b"failed-suspend-unproven-no-mmio-root-fenced" => "suspend-unproven",
+        b"failed-runtimes-suspended-card-int-unproven-root-fenced" => "card-int-unproven",
+        b"failed-fenced" => "fenced",
+        _ => "other",
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_pair_restart_failure_error(
+    failure: crate::hal::driver_task::Cyw43SdioPairRestartFailure,
+) -> DriverTaskNetError {
+    DriverTaskNetError::RuntimePairRestart {
+        kind: failure.kind().as_str(),
+        action: failure.action(),
+        operation: failure.operation(),
+        cause: failure.cause_status(),
+        fence: cyw43_pair_restart_fence_label(failure.status()),
+        sdhci_root_ptr: failure.sdhci_root_ptr(),
     }
 }
 
@@ -38778,6 +38824,27 @@ mod tests {
         }
         assert!(DriverTaskNetError::RuntimePending("descriptor-replay")
             .cyw43_bootstrap_failure_is_transient());
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn pair_restart_failure_display_preserves_cause_and_fits_operator_detail() {
+        let error = DriverTaskNetError::RuntimePairRestart {
+            kind: "action-failed",
+            action: "mask-card-int",
+            operation: "read-card-int-enable",
+            cause: "card-int-mask-failed",
+            fence: "card-int-unproven",
+            sdhci_root_ptr: 0xffff_ffff_ffff_f000,
+        };
+        let rendered = error.to_string();
+
+        assert_eq!(
+            rendered,
+            "cyw43-pair k=action-failed a=mask-card-int op=read-card-int-enable c=card-int-mask-failed f=card-int-unproven mmio=0xfffffffffffff000",
+        );
+        assert!(rendered.len() < 192);
+        assert!(error.cyw43_bootstrap_failure_is_transient());
     }
 
     #[test]

@@ -7400,6 +7400,16 @@ pub(crate) fn linked_local_seat_usb_runtime_detail() -> u16 {
     LINKED_LOCAL_SEAT_USB_LAST_DETAIL.load(Ordering::Acquire) as u16
 }
 
+#[cfg(not(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+)))]
+pub(crate) const fn linked_local_seat_usb_runtime_detail() -> u16 {
+    0
+}
+
 #[cfg(all(
     feature = "kernel",
     feature = "usb",
@@ -7408,6 +7418,16 @@ pub(crate) fn linked_local_seat_usb_runtime_detail() -> u16 {
 ))]
 pub(crate) fn linked_local_seat_usb_runtime_result() -> u32 {
     LINKED_LOCAL_SEAT_USB_LAST_RESULT.load(Ordering::Acquire) as u32
+}
+
+#[cfg(not(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+)))]
+pub(crate) const fn linked_local_seat_usb_runtime_result() -> u32 {
+    0
 }
 
 #[cfg(all(

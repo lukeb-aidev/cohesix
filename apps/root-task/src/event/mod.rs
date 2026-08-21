@@ -10681,11 +10681,20 @@ where
         let mut line = HeaplessString::<192>::new();
         match feedback {
             UsbConsoleStartupFeedbackEvent::Progress { stage, elapsed_ms } => {
+                let ring_active = crate::hal::driver_task::driver_task_ring_command_active(
+                    crate::hal::driver_task::USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
+                );
+                let detail = crate::local_seat::linked_local_seat_usb_runtime_detail();
+                let result = crate::local_seat::linked_local_seat_usb_runtime_result();
                 let _ = write!(
                     line,
-                    "[drivers] USB console starting stage={} elapsed_ms={} action=wait",
+                    "[drivers] USB console starting stage={} elapsed_ms={} action=wait frontier={} ring_active={} detail=0x{:04x} result=0x{:08x}",
                     stage.label(),
                     elapsed_ms,
+                    frontier,
+                    Self::yes_no(ring_active),
+                    detail,
+                    result,
                 );
             }
             UsbConsoleStartupFeedbackEvent::Ready {

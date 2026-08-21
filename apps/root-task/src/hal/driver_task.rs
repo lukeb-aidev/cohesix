@@ -15527,6 +15527,22 @@ pub enum Cyw43SdioPairRestartFailureKind {
     ActionFailed,
 }
 
+#[cfg(feature = "kernel")]
+impl Cyw43SdioPairRestartFailureKind {
+    /// Return the stable operator-facing reason class.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::AlreadyInProgress => "already-in-progress",
+            Self::ContextMissing => "context-missing",
+            Self::CounterUnavailable => "counter-unavailable",
+            Self::PhysicalLifetimeUnavailable => "physical-lifetime-unavailable",
+            Self::DeadlineExpired => "deadline-expired",
+            Self::ActionFailed => "action-failed",
+        }
+    }
+}
+
 /// Supervisor-proven origin of one CYW43/SDIO pair transaction.
 ///
 /// `ColdBootstrap` is a one-shot authority for the canonical first physical
@@ -15548,7 +15564,10 @@ pub(crate) enum Cyw43SdioPairRestartProvenance {
 pub struct Cyw43SdioPairRestartFailure {
     kind: Cyw43SdioPairRestartFailureKind,
     action: &'static str,
+    operation: &'static str,
+    cause_status: &'static str,
     status: &'static str,
+    sdhci_root_ptr: usize,
     completion: Option<DriverTaskCompletionRecord>,
 }
 
@@ -15566,10 +15585,28 @@ impl Cyw43SdioPairRestartFailure {
         self.action
     }
 
+    /// Return the exact retained sub-operation active at first failure.
+    #[must_use]
+    pub const fn operation(self) -> &'static str {
+        self.operation
+    }
+
+    /// Return the first causal status before the deterministic fence ran.
+    #[must_use]
+    pub const fn cause_status(self) -> &'static str {
+        self.cause_status
+    }
+
     /// Return the stable fence/admission status.
     #[must_use]
     pub const fn status(self) -> &'static str {
         self.status
+    }
+
+    /// Return the root-side SDHCI virtual address admitted to this restart.
+    #[must_use]
+    pub const fn sdhci_root_ptr(self) -> usize {
+        self.sdhci_root_ptr
     }
 
     /// Return the exact terminal runtime completion that caused an engine
@@ -16348,7 +16385,14 @@ fn enter_cyw43_sdio_pair_restart_failure(
     kind: Cyw43SdioPairRestartFailureKind,
     status: &'static str,
 ) {
-    enter_cyw43_sdio_pair_restart_failure_with_completion(cursor, action, kind, status, None);
+    enter_cyw43_sdio_pair_restart_failure_with_operation(
+        cursor,
+        action,
+        action.as_str(),
+        kind,
+        status,
+        None,
+    );
 }
 
 #[cfg(feature = "kernel")]
@@ -16359,6 +16403,25 @@ fn enter_cyw43_sdio_pair_restart_failure_with_completion(
     status: &'static str,
     completion: Option<DriverTaskCompletionRecord>,
 ) {
+    enter_cyw43_sdio_pair_restart_failure_with_operation(
+        cursor,
+        action,
+        action.as_str(),
+        kind,
+        status,
+        completion,
+    );
+}
+
+#[cfg(feature = "kernel")]
+fn enter_cyw43_sdio_pair_restart_failure_with_operation(
+    cursor: &mut Cyw43SdioPairRestartCursor,
+    action: Cyw43SdioPairRestartAction,
+    operation: &'static str,
+    kind: Cyw43SdioPairRestartFailureKind,
+    cause_status: &'static str,
+    completion: Option<DriverTaskCompletionRecord>,
+) {
     latch_cyw43_sdio_pair_restart_request(Cyw43SdioPairRestartCause::RecoveryContinuation);
     CYW43_SDIO_PAIR_CONTEXT_REPLAY_STATE.store(0, Ordering::Release);
     cursor.substep = 0;
@@ -16367,7 +16430,10 @@ fn enter_cyw43_sdio_pair_restart_failure_with_completion(
         origin: Cyw43SdioPairRestartFailure {
             kind,
             action: action.as_str(),
-            status,
+            operation,
+            cause_status,
+            status: cause_status,
+            sdhci_root_ptr: cursor.sdio.sdhci_root_ptr,
             completion,
         },
         failed_action: action,
@@ -16547,11 +16613,13 @@ fn step_running_cyw43_sdio_pair_restart<E: Cyw43SdioPairRestartExecutor>(
                 }
             }
             Cyw43SdioCardIntTurn::Failed { operation } => {
-                enter_cyw43_sdio_pair_restart_failure(
+                enter_cyw43_sdio_pair_restart_failure_with_operation(
                     cursor,
                     action,
+                    operation,
                     Cyw43SdioPairRestartFailureKind::ActionFailed,
                     "card-int-mask-failed",
+                    None,
                 );
                 Cyw43SdioPairRestartTurn::Pending {
                     action: action_label,
@@ -16876,7 +16944,10 @@ fn step_fenced_cyw43_sdio_pair_restart<E: Cyw43SdioPairRestartExecutor>(
         let failure = Cyw43SdioPairRestartFailure {
             kind: Cyw43SdioPairRestartFailureKind::ActionFailed,
             action: "failure-fence",
+            operation: "failure-fence",
+            cause_status: "invalid-fence-state",
             status: "invalid-fence-state",
+            sdhci_root_ptr: cursor.sdio.sdhci_root_ptr,
             completion: None,
         };
         return finish_cyw43_sdio_pair_restart_failure(cursor, failure);
@@ -17123,7 +17194,10 @@ pub(crate) fn begin_cyw43_sdio_pair_restart(
         return Err(Cyw43SdioPairRestartFailure {
             kind: Cyw43SdioPairRestartFailureKind::ActionFailed,
             action: "begin",
+            operation: "begin",
+            cause_status: "cold-bootstrap-provenance-invalid",
             status: "cold-bootstrap-provenance-invalid",
+            sdhci_root_ptr: 0,
             completion: None,
         });
     }
@@ -17132,7 +17206,10 @@ pub(crate) fn begin_cyw43_sdio_pair_restart(
         return Err(Cyw43SdioPairRestartFailure {
             kind: Cyw43SdioPairRestartFailureKind::AlreadyInProgress,
             action: "begin",
+            operation: "begin",
+            cause_status: "already-in-progress",
             status: "already-in-progress",
+            sdhci_root_ptr: 0,
             completion: None,
         });
     }
@@ -17145,7 +17222,10 @@ pub(crate) fn begin_cyw43_sdio_pair_restart(
         return Err(Cyw43SdioPairRestartFailure {
             kind: Cyw43SdioPairRestartFailureKind::AlreadyInProgress,
             action: "begin",
+            operation: "begin",
+            cause_status: "already-in-progress",
             status: "already-in-progress",
+            sdhci_root_ptr: 0,
             completion: None,
         });
     }
@@ -17159,7 +17239,10 @@ pub(crate) fn begin_cyw43_sdio_pair_restart(
         return Err(Cyw43SdioPairRestartFailure {
             kind: Cyw43SdioPairRestartFailureKind::ContextMissing,
             action: "begin",
+            operation: "begin",
+            cause_status: "cyw43-context-missing",
             status: "cyw43-context-missing",
+            sdhci_root_ptr: 0,
             completion: None,
         });
     };
@@ -17172,7 +17255,10 @@ pub(crate) fn begin_cyw43_sdio_pair_restart(
         return Err(Cyw43SdioPairRestartFailure {
             kind: Cyw43SdioPairRestartFailureKind::ContextMissing,
             action: "begin",
+            operation: "begin",
+            cause_status: "sdio-context-missing",
             status: "sdio-context-missing",
+            sdhci_root_ptr: 0,
             completion: None,
         });
     };
@@ -17187,7 +17273,10 @@ pub(crate) fn begin_cyw43_sdio_pair_restart(
         return Err(Cyw43SdioPairRestartFailure {
             kind: Cyw43SdioPairRestartFailureKind::PhysicalLifetimeUnavailable,
             action: "begin",
+            operation: "begin",
+            cause_status: "physical-lifetime-unavailable",
             status: "physical-lifetime-unavailable",
+            sdhci_root_ptr: sdio.sdhci_root_ptr,
             completion: None,
         });
     };
@@ -17201,7 +17290,10 @@ pub(crate) fn begin_cyw43_sdio_pair_restart(
         return Err(Cyw43SdioPairRestartFailure {
             kind: Cyw43SdioPairRestartFailureKind::CounterUnavailable,
             action: "begin",
+            operation: "begin",
+            cause_status: "counter-unavailable",
             status: "counter-unavailable",
+            sdhci_root_ptr: sdio.sdhci_root_ptr,
             completion: None,
         });
     };
@@ -26777,6 +26869,44 @@ mod tests {
                 expected_fence = Some(fence);
             }
         }
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn retained_pair_restart_preserves_first_card_int_operation_and_cause_through_fence() {
+        let mut success_cursor = retained_pair_restart_test_cursor();
+        let mut success_executor = RetainedPairRestartTestExecutor::success();
+        assert!(matches!(
+            drive_retained_pair_restart_test(&mut success_cursor, &mut success_executor),
+            Cyw43SdioPairRestartTurn::Complete { .. }
+        ));
+        let cut = success_executor
+            .calls
+            .iter()
+            .position(|(_, operation)| {
+                *operation
+                    == Cyw43SdioPairRestartOperation::ReadCardInterrupt(
+                        Cyw43SdioCardIntRegister::InterruptEnable,
+                    )
+            })
+            .expect("canonical restart reads INT_ENABLE");
+
+        let mut cursor = retained_pair_restart_test_cursor();
+        let mut executor = RetainedPairRestartTestExecutor::failure_at(cut);
+        let Cyw43SdioPairRestartTurn::Failed(failure) =
+            drive_retained_pair_restart_test(&mut cursor, &mut executor)
+        else {
+            panic!("injected INT_ENABLE read failure did not fence");
+        };
+        assert_eq!(
+            failure.kind(),
+            Cyw43SdioPairRestartFailureKind::ActionFailed
+        );
+        assert_eq!(failure.action(), "mask-card-int");
+        assert_eq!(failure.operation(), "read-card-int-enable");
+        assert_eq!(failure.cause_status(), "card-int-mask-failed");
+        assert_eq!(failure.status(), "failed-fenced");
+        assert_eq!(failure.sdhci_root_ptr(), 0x8000);
     }
 
     #[cfg(feature = "kernel")]
