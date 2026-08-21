@@ -7251,6 +7251,8 @@ static CYW43_BUS_EPISODE_PUBLISHER: RuntimeStateSlot<Cyw43BusEpisodePublisher> =
 static CYW43_CONTROL_REQUEST: Cyw43ControlRequestSlot = Cyw43ControlRequestSlot::new();
 static SERIAL_RUNTIME_RX_QUEUE: RuntimeStateSlot<SerialRuntimeRxQueue> =
     RuntimeStateSlot::new(SerialRuntimeRxQueue::new());
+static SERIAL_RUNTIME_TX_CURSOR: RuntimeStateSlot<SerialRuntimeTxCursor> =
+    RuntimeStateSlot::new(SerialRuntimeTxCursor::new());
 
 #[cfg(target_os = "none")]
 const MINI_UART_IO_OFFSET: usize = 0x40;
@@ -7272,6 +7274,7 @@ const MINI_UART_LSR_TX_IDLE: u32 = 1 << 6;
 // Blocking for a later empty sample can exhaust the SC before the sequence-last
 // completion becomes visible to root.
 const MINI_UART_TX_IMMEDIATE_TURN_BYTES: usize = 8;
+const MINI_UART_TX_BACKPRESSURE_TURN_LIMIT: u16 = 64;
 const MINI_UART_RX_DRAIN_LIMIT: usize = 128;
 const MINI_UART_RX_QUEUE_CAPACITY: usize = 512;
 #[cfg(target_os = "none")]
@@ -7289,6 +7292,93 @@ struct SerialRuntimeRxQueue {
     queue_full_events: u32,
     received_bytes: u32,
     irq_ack_pending: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct SerialRuntimeTxCursor {
+    command: Option<DriverTaskCommandRecord>,
+    admitted_len: usize,
+    written: usize,
+    backpressure_turns: u16,
+}
+
+impl SerialRuntimeTxCursor {
+    const fn new() -> Self {
+        Self {
+            command: None,
+            admitted_len: 0,
+            written: 0,
+            backpressure_turns: 0,
+        }
+    }
+
+    fn reset(&mut self) {
+        *self = Self::new();
+    }
+
+    fn service_turn_with<Write>(
+        &mut self,
+        command: DriverTaskCommandRecord,
+        admitted_len: usize,
+        mut write: Write,
+    ) -> RuntimeCommandTurn
+    where
+        Write: FnMut(DriverFrameDescriptor, usize, usize) -> usize,
+    {
+        if admitted_len == 0 {
+            self.reset();
+            return RuntimeCommandTurn::Complete(DriverTaskCompletionRecord::idle(
+                command.sequence,
+            ));
+        }
+        match self.command {
+            None => {
+                self.command = Some(command);
+                self.admitted_len = admitted_len;
+                self.written = 0;
+                self.backpressure_turns = 0;
+            }
+            Some(active) if active == command && self.admitted_len == admitted_len => {}
+            Some(_) => {
+                self.reset();
+                return RuntimeCommandTurn::Complete(DriverTaskCompletionRecord::fault(
+                    command.sequence,
+                    FAULT_REJECTED_COMMAND,
+                ));
+            }
+        }
+        let remaining = self.admitted_len.saturating_sub(self.written);
+        let accepted = write(command.frame, self.written, remaining);
+        if accepted > remaining {
+            self.reset();
+            return RuntimeCommandTurn::Complete(DriverTaskCompletionRecord::fault(
+                command.sequence,
+                FAULT_REJECTED_COMMAND,
+            ));
+        }
+        if accepted == 0 {
+            self.backpressure_turns = self.backpressure_turns.saturating_add(1);
+            if self.backpressure_turns >= MINI_UART_TX_BACKPRESSURE_TURN_LIMIT {
+                self.reset();
+                return RuntimeCommandTurn::Complete(DriverTaskCompletionRecord::fault(
+                    command.sequence,
+                    FAULT_DEVICE_UNAVAILABLE,
+                ));
+            }
+            return RuntimeCommandTurn::Pending;
+        }
+        self.backpressure_turns = 0;
+        self.written = self.written.saturating_add(accepted);
+        if self.written != self.admitted_len {
+            return RuntimeCommandTurn::Pending;
+        }
+        let result = self.admitted_len as u32;
+        self.reset();
+        RuntimeCommandTurn::Complete(DriverTaskCompletionRecord::progress(
+            command.sequence,
+            result,
+        ))
+    }
 }
 
 impl SerialRuntimeRxQueue {
@@ -8843,7 +8933,9 @@ fn service_command_turn(task_key: usize, command: DriverTaskCommandRecord) -> Ru
         return turn;
     }
 
-    let turn = if let Some(turn) = service_sdio_pwrseq_command_turn(command) {
+    let turn = if let Some(turn) = service_serial_tx_command_turn(command) {
+        turn
+    } else if let Some(turn) = service_sdio_pwrseq_command_turn(command) {
         turn
     } else if let Some(turn) = service_sdio_external_dma_command_turn(command) {
         turn
@@ -8869,6 +8961,34 @@ fn service_command_turn(task_key: usize, command: DriverTaskCommandRecord) -> Ru
         return turn;
     }
     turn
+}
+
+fn service_serial_tx_command_turn(command: DriverTaskCommandRecord) -> Option<RuntimeCommandTurn> {
+    if command.sequence == 0
+        || command.opcode != OPCODE_SERVICE
+        || command.arg0 != HOT_PATH_SERIAL_CONSOLE
+        || command.arg1 != ROLE_SERIAL
+        || command.aux0 != 0
+        || command.frame.len == 0
+    {
+        return None;
+    }
+    if RUNTIME_INIT_HOT_PATH.load(Ordering::Acquire) != HOT_PATH_SERIAL_CONSOLE {
+        SERIAL_RUNTIME_TX_CURSOR.with_mut(SerialRuntimeTxCursor::reset);
+        return Some(RuntimeCommandTurn::Complete(
+            DriverTaskCompletionRecord::fault(command.sequence, FAULT_DEVICE_UNAVAILABLE),
+        ));
+    }
+    if !command.frame.in_ring_payload() {
+        SERIAL_RUNTIME_TX_CURSOR.with_mut(SerialRuntimeTxCursor::reset);
+        return Some(RuntimeCommandTurn::Complete(
+            DriverTaskCompletionRecord::fault(command.sequence, FAULT_REJECTED_COMMAND),
+        ));
+    }
+    let admitted_len = serial_frame_budget_limit(command.budget, command.frame.len);
+    Some(SERIAL_RUNTIME_TX_CURSOR.with_mut(|cursor| {
+        cursor.service_turn_with(command, admitted_len, serial_write_frame_from_offset)
+    }))
 }
 
 fn service_command_immediate(
@@ -55875,6 +55995,7 @@ fn serial_runtime_initialize(descriptor: &DriverRuntimeInitDescriptor) -> bool {
     let Some(irq) = descriptor_serial_irq(descriptor) else {
         return false;
     };
+    SERIAL_RUNTIME_TX_CURSOR.with_mut(SerialRuntimeTxCursor::reset);
     SERIAL_RUNTIME_RX_QUEUE.with_mut(|queue| {
         serial_runtime_takeover_with(
             queue,
@@ -56086,8 +56207,20 @@ fn serial_drain_queue_to_frame(queue: &mut SerialRuntimeRxQueue, limit: usize) -
 
 #[cfg(target_os = "none")]
 fn serial_write_frame(frame: DriverFrameDescriptor, limit: usize) -> usize {
+    serial_write_frame_from_offset(frame, 0, limit)
+}
+
+#[cfg(target_os = "none")]
+fn serial_write_frame_from_offset(
+    frame: DriverFrameDescriptor,
+    offset: usize,
+    limit: usize,
+) -> usize {
+    if offset >= frame.len as usize {
+        return 0;
+    }
     let src = (DRIVER_TASK_RING_VADDR + frame.offset as usize) as *const u8;
-    let turn_limit = (frame.len as usize)
+    let turn_limit = (frame.len as usize - offset)
         .min(limit)
         .min(MINI_UART_TX_IMMEDIATE_TURN_BYTES);
     let written = serial_write_empty_fifo_prefix_with(
@@ -56104,9 +56237,9 @@ fn serial_write_frame(frame: DriverFrameDescriptor, limit: usize) -> usize {
             lsr & MINI_UART_LSR_TX_EMPTY != 0
         },
         |index| {
-            // SAFETY: `index < turn_limit <= frame.len`, and `service_serial`
-            // validated the page-local frame before this helper was entered.
-            let byte = unsafe { core::ptr::read_volatile(src.add(index)) };
+            // SAFETY: `offset + index < frame.len`, and the serial command
+            // admission validated the page-local frame before this helper.
+            let byte = unsafe { core::ptr::read_volatile(src.add(offset + index)) };
             // SAFETY: The runtime owns this admitted mini-UART MMIO page;
             // MU_IO accepts a 32-bit write containing one transmit byte.
             unsafe {
@@ -56144,6 +56277,15 @@ where
 #[cfg(not(target_os = "none"))]
 fn serial_write_frame(frame: DriverFrameDescriptor, limit: usize) -> usize {
     (frame.len as usize).min(limit)
+}
+
+#[cfg(not(target_os = "none"))]
+fn serial_write_frame_from_offset(
+    frame: DriverFrameDescriptor,
+    offset: usize,
+    limit: usize,
+) -> usize {
+    (frame.len as usize).saturating_sub(offset).min(limit)
 }
 
 #[cfg(target_os = "none")]
@@ -59540,6 +59682,7 @@ mod tests {
             state.recovery_required = false;
         });
         SERIAL_RUNTIME_RX_QUEUE.with_mut(SerialRuntimeRxQueue::reset);
+        SERIAL_RUNTIME_TX_CURSOR.with_mut(SerialRuntimeTxCursor::reset);
     }
 
     fn drive_cyw43_release_phases_for_test(
@@ -72509,6 +72652,165 @@ mod tests {
 
         assert_eq!(written, 0);
         assert!(writes.is_empty());
+    }
+
+    #[test]
+    fn serial_tx_cursor_retains_one_frame_across_bounded_fifo_turns() {
+        let command = DriverTaskCommandRecord {
+            sequence: 16,
+            opcode: OPCODE_SERVICE,
+            flags: 0,
+            arg0: HOT_PATH_SERIAL_CONSOLE,
+            arg1: ROLE_SERIAL,
+            aux0: 0,
+            aux1: 0,
+            budget: DriverTaskBudgetGrant {
+                max_ops: 20,
+                max_frames: 1,
+                max_bytes: 20,
+            },
+            frame: DriverFrameDescriptor {
+                offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
+                len: 20,
+                flags: 0,
+            },
+        };
+        let mut cursor = SerialRuntimeTxCursor::new();
+        let mut offsets = Vec::new();
+
+        for expected in [
+            RuntimeCommandTurn::Pending,
+            RuntimeCommandTurn::Pending,
+            RuntimeCommandTurn::Complete(DriverTaskCompletionRecord::progress(16, 20)),
+        ] {
+            let turn = cursor.service_turn_with(command, 20, |_, offset, remaining| {
+                offsets.push(offset);
+                remaining.min(MINI_UART_TX_IMMEDIATE_TURN_BYTES)
+            });
+            assert_eq!(turn, expected);
+        }
+
+        assert_eq!(offsets, vec![0, 8, 16]);
+        assert_eq!(cursor, SerialRuntimeTxCursor::new());
+    }
+
+    #[test]
+    fn serial_tx_cursor_treats_fifo_backpressure_as_pending_not_completion() {
+        let command = DriverTaskCommandRecord {
+            sequence: 17,
+            opcode: OPCODE_SERVICE,
+            flags: 0,
+            arg0: HOT_PATH_SERIAL_CONSOLE,
+            arg1: ROLE_SERIAL,
+            aux0: 0,
+            aux1: 0,
+            budget: DriverTaskBudgetGrant {
+                max_ops: 8,
+                max_frames: 1,
+                max_bytes: 8,
+            },
+            frame: DriverFrameDescriptor {
+                offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
+                len: 8,
+                flags: 0,
+            },
+        };
+        let mut cursor = SerialRuntimeTxCursor::new();
+
+        assert_eq!(
+            cursor.service_turn_with(command, 8, |_, _, _| 0),
+            RuntimeCommandTurn::Pending,
+        );
+        assert_eq!(
+            cursor.service_turn_with(command, 8, |_, offset, remaining| {
+                assert_eq!(offset, 0);
+                remaining
+            }),
+            RuntimeCommandTurn::Complete(DriverTaskCompletionRecord::progress(17, 8)),
+        );
+        assert_eq!(cursor, SerialRuntimeTxCursor::new());
+    }
+
+    #[test]
+    fn serial_tx_cursor_fails_closed_after_bounded_fifo_backpressure() {
+        let command = DriverTaskCommandRecord {
+            sequence: 18,
+            opcode: OPCODE_SERVICE,
+            flags: 0,
+            arg0: HOT_PATH_SERIAL_CONSOLE,
+            arg1: ROLE_SERIAL,
+            aux0: 0,
+            aux1: 0,
+            budget: DriverTaskBudgetGrant {
+                max_ops: 8,
+                max_frames: 1,
+                max_bytes: 8,
+            },
+            frame: DriverFrameDescriptor {
+                offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
+                len: 8,
+                flags: 0,
+            },
+        };
+        let mut cursor = SerialRuntimeTxCursor::new();
+
+        for _ in 1..MINI_UART_TX_BACKPRESSURE_TURN_LIMIT {
+            assert_eq!(
+                cursor.service_turn_with(command, 8, |_, _, _| 0),
+                RuntimeCommandTurn::Pending,
+            );
+        }
+        assert_eq!(
+            cursor.service_turn_with(command, 8, |_, _, _| 0),
+            RuntimeCommandTurn::Complete(DriverTaskCompletionRecord::fault(
+                18,
+                FAULT_DEVICE_UNAVAILABLE,
+            )),
+        );
+        assert_eq!(cursor, SerialRuntimeTxCursor::new());
+    }
+
+    #[test]
+    fn serial_tx_cursor_rejects_a_different_active_command() {
+        let command = DriverTaskCommandRecord {
+            sequence: 19,
+            opcode: OPCODE_SERVICE,
+            flags: 0,
+            arg0: HOT_PATH_SERIAL_CONSOLE,
+            arg1: ROLE_SERIAL,
+            aux0: 0,
+            aux1: 0,
+            budget: DriverTaskBudgetGrant {
+                max_ops: 16,
+                max_frames: 1,
+                max_bytes: 16,
+            },
+            frame: DriverFrameDescriptor {
+                offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
+                len: 16,
+                flags: 0,
+            },
+        };
+        let mut cursor = SerialRuntimeTxCursor::new();
+        assert_eq!(
+            cursor.service_turn_with(command, 16, |_, _, remaining| {
+                remaining.min(MINI_UART_TX_IMMEDIATE_TURN_BYTES)
+            }),
+            RuntimeCommandTurn::Pending,
+        );
+
+        let mut different = command;
+        different.sequence = 20;
+        assert_eq!(
+            cursor.service_turn_with(different, 16, |_, _, _| {
+                panic!("a mismatched command must not reach the UART")
+            }),
+            RuntimeCommandTurn::Complete(DriverTaskCompletionRecord::fault(
+                20,
+                FAULT_REJECTED_COMMAND,
+            )),
+        );
+        assert_eq!(cursor, SerialRuntimeTxCursor::new());
     }
 
     #[test]
