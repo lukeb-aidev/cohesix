@@ -1143,7 +1143,9 @@ const XHCI_DMA_HID_OUTPUT_BUFFER_OFFSET: usize = 0x28000;
 const XHCI_MAX_SCRATCHPAD_BUFFERS: usize = 32;
 const XHCI_DMA_ZERO_BYTES: usize =
     XHCI_DMA_SCRATCHPAD_OFFSET + XHCI_MAX_SCRATCHPAD_BUFFERS * DRIVER_TASK_RING_PAGE_BYTES;
-const XHCI_DMA_ZERO_DIAGNOSTIC_CHUNK_BYTES: usize = 64 * 1024;
+const XHCI_DMA_ZERO_DIAGNOSTIC_CHUNK_BYTES: usize = 32 * 1024;
+const DMA_ZERO_WORD_BYTES: usize = core::mem::size_of::<u64>();
+const DMA_ZERO_BURST_WORDS: usize = 8;
 const XHCI_COMMAND_RING_TRBS: usize = 256;
 const XHCI_COMMAND_RING_BYTES: usize = XHCI_COMMAND_RING_TRBS * XHCI_TRB_BYTES;
 const XHCI_EVENT_RING_TRBS: usize = 256;
@@ -46885,6 +46887,37 @@ fn write_dma_byte(addr: usize, value: u8) {
 fn write_dma_byte(_addr: usize, _value: u8) {}
 
 #[cfg(target_os = "none")]
+fn write_dma_zero_word(addr: usize) {
+    debug_assert_eq!(addr & (DMA_ZERO_WORD_BYTES - 1), 0);
+    // SAFETY: `zero_dma_range` admits this primitive only for a naturally
+    // aligned eight-byte subrange of descriptor-validated DMA RAM. This is
+    // ordinary HAL-mapped uncached RAM, not MMIO, and volatile stores preserve
+    // the existing explicit-zero-before-publication contract.
+    unsafe {
+        core::ptr::write_volatile(addr as *mut u64, 0);
+    }
+}
+
+#[cfg(all(not(target_os = "none"), test))]
+fn write_dma_zero_word(addr: usize) {
+    assert_test_state_guard_held();
+    let Some(offset) = test_dma_offset(addr) else {
+        return;
+    };
+    assert_eq!(addr & (DMA_ZERO_WORD_BYTES - 1), 0);
+    assert!(offset + DMA_ZERO_WORD_BYTES <= XHCI_DMA_ZERO_BYTES);
+    // SAFETY: Runtime tests hold `test_guard`; the assertions above bound the
+    // naturally aligned word inside the process-local fixed DMA buffer.
+    unsafe {
+        let buffer = &mut *TEST_DMA_BUFFER.0.get();
+        buffer[offset..offset + DMA_ZERO_WORD_BYTES].fill(0);
+    }
+}
+
+#[cfg(all(not(target_os = "none"), not(test)))]
+fn write_dma_zero_word(_addr: usize) {}
+
+#[cfg(target_os = "none")]
 fn genet_read32(offset: usize) -> u32 {
     // SAFETY: GENET offsets are bounded constants within the mapped GENET MMIO
     // range declared by the runtime descriptor.
@@ -47040,8 +47073,26 @@ const fn xhci_portsc_neutral(status: u32) -> u32 {
 }
 
 fn zero_dma_range(vaddr: usize, len: usize) {
-    for index in 0..len {
-        write_dma_byte(vaddr + index, 0);
+    let mut offset = 0usize;
+    while offset < len && (vaddr + offset) & (DMA_ZERO_WORD_BYTES - 1) != 0 {
+        write_dma_byte(vaddr + offset, 0);
+        offset += 1;
+    }
+
+    let burst_bytes = DMA_ZERO_WORD_BYTES * DMA_ZERO_BURST_WORDS;
+    while len.saturating_sub(offset) >= burst_bytes {
+        for word in 0..DMA_ZERO_BURST_WORDS {
+            write_dma_zero_word(vaddr + offset + word * DMA_ZERO_WORD_BYTES);
+        }
+        offset += burst_bytes;
+    }
+    while len.saturating_sub(offset) >= DMA_ZERO_WORD_BYTES {
+        write_dma_zero_word(vaddr + offset);
+        offset += DMA_ZERO_WORD_BYTES;
+    }
+    while offset < len {
+        write_dma_byte(vaddr + offset, 0);
+        offset += 1;
     }
 }
 
@@ -109012,6 +109063,31 @@ mod tests {
             XHCI_BOOT_REPORT_BYTES as u32
         );
         assert_eq!(xhci_keyboard_transfer_payload(8), 8);
+    }
+
+    #[test]
+    fn dma_zero_uses_words_without_crossing_unaligned_range_boundaries() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let base = DRIVER_TASK_DMA_BUFFER_VADDR;
+        let initialized_bytes = 96usize;
+        for offset in 0..initialized_bytes {
+            write_dma_byte(base + offset, 0xa5);
+        }
+
+        let zero_offset = 3usize;
+        let zero_len = 77usize;
+        zero_dma_range(base + zero_offset, zero_len);
+
+        for offset in 0..zero_offset {
+            assert_eq!(read_dma_byte(base + offset), 0xa5);
+        }
+        for offset in zero_offset..zero_offset + zero_len {
+            assert_eq!(read_dma_byte(base + offset), 0);
+        }
+        for offset in zero_offset + zero_len..initialized_bytes {
+            assert_eq!(read_dma_byte(base + offset), 0xa5);
+        }
     }
 
     #[test]
