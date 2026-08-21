@@ -7267,18 +7267,29 @@ const MINI_UART_LSR_TX_EMPTY: u32 = 1 << 5;
 #[cfg(target_os = "none")]
 const MINI_UART_LSR_TX_IDLE: u32 = 1 << 6;
 // The BCM2711 mini-UART FIFO accepts eight bytes. A 26e serial runtime owns a
-// 500-us MCS budget, so one child turn may fill only one FIFO prefix after an
-// empty sample and must publish that partial completion before waiting for wire
-// time. Re-sampling TX_EMPTY after every byte collapses this safe prefix to one
-// byte because the flag describes an empty FIFO, not remaining FIFO capacity.
-// Blocking for a later empty sample can exhaust the SC before the sequence-last
-// completion becomes visible to root.
+// 500-us MCS budget, so one activation may fill only one FIFO prefix after an
+// empty sample. Re-sampling TX_EMPTY after every byte collapses this safe prefix
+// to one byte because the flag describes an empty FIFO, not remaining FIFO
+// capacity. The owner blocks on its local TX-empty IRQ between fills, consuming
+// no SC while the wire drains, and publishes only the aggregate completion.
 const MINI_UART_TX_IMMEDIATE_TURN_BYTES: usize = 8;
 const MINI_UART_TX_BACKPRESSURE_TURN_LIMIT: u16 = 64;
 const MINI_UART_RX_DRAIN_LIMIT: usize = 128;
 const MINI_UART_RX_QUEUE_CAPACITY: usize = 512;
-#[cfg(target_os = "none")]
 const MINI_UART_IER_RX_INTERRUPT: u32 = 1;
+const MINI_UART_IER_TX_INTERRUPT: u32 = 1 << 1;
+
+const fn serial_mini_uart_irq_mask(rx_enabled: bool, tx_enabled: bool) -> u32 {
+    (if rx_enabled {
+        MINI_UART_IER_RX_INTERRUPT
+    } else {
+        0
+    }) | (if tx_enabled {
+        MINI_UART_IER_TX_INTERRUPT
+    } else {
+        0
+    })
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct SerialRuntimeRxQueue {
@@ -7505,6 +7516,62 @@ where
     }
     serial_record_irq_ack(queue, ack());
     true
+}
+
+/// Advance one retained serial frame from one owner-local UART IRQ wake.
+///
+/// The IRQ is a scheduling hint, never counted byte authority. The immutable
+/// command and cursor determine the only admissible prefix. Source-clearing
+/// work (one TX FIFO fill plus bounded RX drain) precedes handler ACK; the TX
+/// source is disabled before ACKing the terminal fill so it cannot immediately
+/// reassert after the aggregate completion becomes visible to root.
+fn serial_service_tx_irq_turn_with<Drain, Write, SetTxIrq, Ack>(
+    queue: &mut SerialRuntimeRxQueue,
+    cursor: &mut SerialRuntimeTxCursor,
+    command: DriverTaskCommandRecord,
+    admitted_len: usize,
+    badge: u32,
+    mut drain: Drain,
+    mut write: Write,
+    mut set_tx_irq: SetTxIrq,
+    mut ack: Ack,
+) -> Option<RuntimeCommandTurn>
+where
+    Drain: FnMut(&mut SerialRuntimeRxQueue) -> SerialRxDrainOutcome,
+    Write: FnMut(DriverFrameDescriptor, usize, usize) -> usize,
+    SetTxIrq: FnMut(bool),
+    Ack: FnMut() -> bool,
+{
+    if badge != DRIVER_RUNTIME_SERIAL_IRQ_BADGE {
+        return None;
+    }
+    queue.irq_wakes = queue.irq_wakes.saturating_add(1);
+    let turn = cursor.service_turn_with(command, admitted_len, &mut write);
+    let drained = drain(queue);
+    if drained.source_pending {
+        // Root must regain the completion boundary before it can drain a full RX
+        // software queue. Leave the level IRQ unacknowledged and fail this TX
+        // frame closed instead of sleeping forever behind a masked handler.
+        queue.irq_ack_pending = true;
+        set_tx_irq(false);
+        cursor.reset();
+        return Some(RuntimeCommandTurn::Complete(
+            DriverTaskCompletionRecord::fault(command.sequence, FAULT_DEVICE_UNAVAILABLE),
+        ));
+    }
+    if matches!(turn, RuntimeCommandTurn::Complete(_)) {
+        set_tx_irq(false);
+    }
+    let acked = ack();
+    serial_record_irq_ack(queue, acked);
+    if !acked {
+        set_tx_irq(false);
+        cursor.reset();
+        return Some(RuntimeCommandTurn::Complete(
+            DriverTaskCompletionRecord::fault(command.sequence, FAULT_DEVICE_UNAVAILABLE),
+        ));
+    }
+    Some(turn)
 }
 
 /// Shared-buffer descriptor passed over the pointer-free driver-task ring.
@@ -8986,9 +9053,58 @@ fn service_serial_tx_command_turn(command: DriverTaskCommandRecord) -> Option<Ru
         ));
     }
     let admitted_len = serial_frame_budget_limit(command.budget, command.frame.len);
-    Some(SERIAL_RUNTIME_TX_CURSOR.with_mut(|cursor| {
+    let turn = SERIAL_RUNTIME_TX_CURSOR.with_mut(|cursor| {
         cursor.service_turn_with(command, admitted_len, serial_write_frame_from_offset)
-    }))
+    });
+    #[cfg(target_os = "none")]
+    if matches!(turn, RuntimeCommandTurn::Pending) {
+        return Some(serial_finish_pending_tx_from_irqs(command, admitted_len));
+    }
+    Some(turn)
+}
+
+#[cfg(target_os = "none")]
+fn serial_finish_pending_tx_from_irqs(
+    command: DriverTaskCommandRecord,
+    admitted_len: usize,
+) -> RuntimeCommandTurn {
+    // The first command activation already filled at most one FIFO prefix.
+    // Enable TX-empty only after that write so the local notification wakes
+    // this retained command lifetime when the wire can accept the next
+    // bounded prefix. RX remains enabled throughout the lifetime.
+    serial_set_mini_uart_irqs(true, true);
+    loop {
+        let Some(raw_badge) = wait_runtime_local_notification() else {
+            serial_set_mini_uart_irqs(true, false);
+            SERIAL_RUNTIME_TX_CURSOR.with_mut(SerialRuntimeTxCursor::reset);
+            return RuntimeCommandTurn::Complete(DriverTaskCompletionRecord::fault(
+                command.sequence,
+                FAULT_DEVICE_UNAVAILABLE,
+            ));
+        };
+        let badge = runtime_notification_wake_badge(RuntimeNotificationRoute::Serial, raw_badge);
+        let turn = SERIAL_RUNTIME_RX_QUEUE.with_mut(|queue| {
+            SERIAL_RUNTIME_TX_CURSOR.with_mut(|cursor| {
+                serial_service_tx_irq_turn_with(
+                    queue,
+                    cursor,
+                    command,
+                    admitted_len,
+                    badge,
+                    |queue| serial_drain_hardware_to_queue(queue, MINI_UART_RX_DRAIN_LIMIT),
+                    serial_write_frame_prefix_from_offset,
+                    |enabled| serial_set_mini_uart_irqs(true, enabled),
+                    || runtime_irq_handler_ack(DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT),
+                )
+            })
+        });
+        match turn {
+            Some(RuntimeCommandTurn::Pending) | None => continue,
+            Some(RuntimeCommandTurn::Complete(completion)) => {
+                return RuntimeCommandTurn::Complete(completion);
+            }
+        }
+    }
 }
 
 fn service_command_immediate(
@@ -55944,24 +56060,25 @@ const fn sdio_host_control_readback_matches(readback: u8, requested: u8) -> bool
 }
 
 #[cfg(target_os = "none")]
-fn serial_set_mini_uart_rx_irq(enabled: bool) {
+fn serial_set_mini_uart_irqs(rx_enabled: bool, tx_enabled: bool) {
     // SAFETY: Descriptor admission gives the serial runtime exclusive access
-    // to the mapped mini-UART page. MU_IER is inside that page and only the RX
-    // interrupt bit is enabled for this single-lane receive design.
+    // to the mapped mini-UART page. MU_IER is inside that page. RX remains the
+    // persistent input source; TX is enabled only while the same owner retains
+    // one admitted immutable frame across bounded FIFO fills.
     unsafe {
         core::ptr::write_volatile(
             (DRIVER_TASK_DEVICE_MMIO_VADDR + MINI_UART_IER_OFFSET) as *mut u32,
-            if enabled {
-                MINI_UART_IER_RX_INTERRUPT
-            } else {
-                0
-            },
+            serial_mini_uart_irq_mask(rx_enabled, tx_enabled),
         );
     }
 }
 
 #[cfg(not(target_os = "none"))]
-fn serial_set_mini_uart_rx_irq(_enabled: bool) {}
+fn serial_set_mini_uart_irqs(_rx_enabled: bool, _tx_enabled: bool) {}
+
+fn serial_set_mini_uart_rx_irq(enabled: bool) {
+    serial_set_mini_uart_irqs(enabled, false);
+}
 
 fn serial_runtime_takeover_with<Drain, SetIrq, Ack>(
     queue: &mut SerialRuntimeRxQueue,
@@ -56216,6 +56333,17 @@ fn serial_write_frame_from_offset(
     offset: usize,
     limit: usize,
 ) -> usize {
+    let written = serial_write_frame_prefix_from_offset(frame, offset, limit);
+    let _ = serial_preserve_rx_into_runtime_queue(MINI_UART_RX_DRAIN_LIMIT);
+    written
+}
+
+#[cfg(target_os = "none")]
+fn serial_write_frame_prefix_from_offset(
+    frame: DriverFrameDescriptor,
+    offset: usize,
+    limit: usize,
+) -> usize {
     if offset >= frame.len as usize {
         return 0;
     }
@@ -56223,7 +56351,7 @@ fn serial_write_frame_from_offset(
     let turn_limit = (frame.len as usize - offset)
         .min(limit)
         .min(MINI_UART_TX_IMMEDIATE_TURN_BYTES);
-    let written = serial_write_empty_fifo_prefix_with(
+    serial_write_empty_fifo_prefix_with(
         turn_limit,
         || {
             // SAFETY: The serial runtime image maps the UART MMIO page at
@@ -56249,9 +56377,7 @@ fn serial_write_frame_from_offset(
                 );
             }
         },
-    );
-    let _ = serial_preserve_rx_into_runtime_queue(MINI_UART_RX_DRAIN_LIMIT);
-    written
+    )
 }
 
 fn serial_write_empty_fifo_prefix_with<Ready, Write>(
@@ -72652,6 +72778,203 @@ mod tests {
 
         assert_eq!(written, 0);
         assert!(writes.is_empty());
+    }
+
+    #[test]
+    fn serial_uart_irq_mask_adds_tx_only_for_retained_frame() {
+        assert_eq!(serial_mini_uart_irq_mask(false, false), 0);
+        assert_eq!(
+            serial_mini_uart_irq_mask(true, false),
+            MINI_UART_IER_RX_INTERRUPT
+        );
+        assert_eq!(
+            serial_mini_uart_irq_mask(true, true),
+            MINI_UART_IER_RX_INTERRUPT | MINI_UART_IER_TX_INTERRUPT
+        );
+    }
+
+    #[test]
+    fn serial_tx_irq_fill_clears_source_before_ack_and_completes_once() {
+        use std::cell::RefCell;
+
+        let command = DriverTaskCommandRecord {
+            sequence: 116,
+            opcode: OPCODE_SERVICE,
+            flags: 0,
+            arg0: HOT_PATH_SERIAL_CONSOLE,
+            arg1: ROLE_SERIAL,
+            aux0: 0,
+            aux1: 0,
+            budget: DriverTaskBudgetGrant {
+                max_ops: 16,
+                max_frames: 1,
+                max_bytes: 16,
+            },
+            frame: DriverFrameDescriptor {
+                offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
+                len: 16,
+                flags: 0,
+            },
+        };
+        let mut cursor = SerialRuntimeTxCursor::new();
+        assert_eq!(
+            cursor.service_turn_with(command, 16, |_, offset, remaining| {
+                assert_eq!(offset, 0);
+                remaining.min(MINI_UART_TX_IMMEDIATE_TURN_BYTES)
+            }),
+            RuntimeCommandTurn::Pending,
+        );
+        let mut queue = SerialRuntimeRxQueue::new();
+        let order = RefCell::new(Vec::new());
+
+        let turn = serial_service_tx_irq_turn_with(
+            &mut queue,
+            &mut cursor,
+            command,
+            16,
+            DRIVER_RUNTIME_SERIAL_IRQ_BADGE,
+            |_| {
+                order.borrow_mut().push("drain-rx");
+                SerialRxDrainOutcome::default()
+            },
+            |_, offset, remaining| {
+                order.borrow_mut().push("fill-tx");
+                assert_eq!(offset, 8);
+                remaining.min(MINI_UART_TX_IMMEDIATE_TURN_BYTES)
+            },
+            |enabled| {
+                assert!(!enabled);
+                order.borrow_mut().push("disable-tx");
+            },
+            || {
+                order.borrow_mut().push("ack");
+                true
+            },
+        );
+
+        assert_eq!(
+            turn,
+            Some(RuntimeCommandTurn::Complete(
+                DriverTaskCompletionRecord::progress(116, 16)
+            ))
+        );
+        assert_eq!(
+            order.into_inner(),
+            vec!["fill-tx", "drain-rx", "disable-tx", "ack"]
+        );
+        assert_eq!(queue.irq_wakes, 1);
+        assert_eq!(queue.irq_acks, 1);
+        assert!(!queue.irq_ack_pending);
+        assert_eq!(cursor, SerialRuntimeTxCursor::new());
+    }
+
+    #[test]
+    fn serial_tx_irq_retains_frame_until_later_empty_wake() {
+        let command = DriverTaskCommandRecord {
+            sequence: 117,
+            opcode: OPCODE_SERVICE,
+            flags: 0,
+            arg0: HOT_PATH_SERIAL_CONSOLE,
+            arg1: ROLE_SERIAL,
+            aux0: 0,
+            aux1: 0,
+            budget: DriverTaskBudgetGrant {
+                max_ops: 24,
+                max_frames: 1,
+                max_bytes: 24,
+            },
+            frame: DriverFrameDescriptor {
+                offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
+                len: 24,
+                flags: 0,
+            },
+        };
+        let mut cursor = SerialRuntimeTxCursor::new();
+        assert_eq!(
+            cursor.service_turn_with(command, 24, |_, _, remaining| {
+                remaining.min(MINI_UART_TX_IMMEDIATE_TURN_BYTES)
+            }),
+            RuntimeCommandTurn::Pending,
+        );
+        let mut queue = SerialRuntimeRxQueue::new();
+        let mut acked = false;
+
+        assert_eq!(
+            serial_service_tx_irq_turn_with(
+                &mut queue,
+                &mut cursor,
+                command,
+                24,
+                DRIVER_RUNTIME_SERIAL_IRQ_BADGE,
+                |_| SerialRxDrainOutcome::default(),
+                |_, _, remaining| remaining.min(MINI_UART_TX_IMMEDIATE_TURN_BYTES),
+                |_| panic!("TX IRQ remains enabled while bytes are retained"),
+                || {
+                    acked = true;
+                    true
+                },
+            ),
+            Some(RuntimeCommandTurn::Pending),
+        );
+        assert!(acked);
+        assert_eq!(cursor.written, 16);
+        assert_eq!(queue.irq_acks, 1);
+    }
+
+    #[test]
+    fn serial_tx_irq_fails_closed_before_ack_when_rx_source_cannot_clear() {
+        let command = DriverTaskCommandRecord {
+            sequence: 118,
+            opcode: OPCODE_SERVICE,
+            flags: 0,
+            arg0: HOT_PATH_SERIAL_CONSOLE,
+            arg1: ROLE_SERIAL,
+            aux0: 0,
+            aux1: 0,
+            budget: DriverTaskBudgetGrant {
+                max_ops: 16,
+                max_frames: 1,
+                max_bytes: 16,
+            },
+            frame: DriverFrameDescriptor {
+                offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
+                len: 16,
+                flags: 0,
+            },
+        };
+        let mut cursor = SerialRuntimeTxCursor::new();
+        assert_eq!(
+            cursor.service_turn_with(command, 16, |_, _, remaining| {
+                remaining.min(MINI_UART_TX_IMMEDIATE_TURN_BYTES)
+            }),
+            RuntimeCommandTurn::Pending,
+        );
+        let mut queue = SerialRuntimeRxQueue::new();
+        let mut tx_disabled = false;
+
+        assert_eq!(
+            serial_service_tx_irq_turn_with(
+                &mut queue,
+                &mut cursor,
+                command,
+                16,
+                DRIVER_RUNTIME_SERIAL_IRQ_BADGE,
+                |_| SerialRxDrainOutcome {
+                    source_pending: true,
+                    ..SerialRxDrainOutcome::default()
+                },
+                |_, _, remaining| remaining.min(MINI_UART_TX_IMMEDIATE_TURN_BYTES),
+                |enabled| tx_disabled = !enabled,
+                || panic!("an asserted level source must not be acknowledged"),
+            ),
+            Some(RuntimeCommandTurn::Complete(
+                DriverTaskCompletionRecord::fault(118, FAULT_DEVICE_UNAVAILABLE)
+            )),
+        );
+        assert!(tx_disabled);
+        assert!(queue.irq_ack_pending);
+        assert_eq!(queue.irq_acks, 0);
+        assert_eq!(cursor, SerialRuntimeTxCursor::new());
     }
 
     #[test]
