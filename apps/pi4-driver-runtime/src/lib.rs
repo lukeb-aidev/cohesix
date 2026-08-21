@@ -2372,6 +2372,81 @@ struct UsbKeyboardFirstTransferWatch {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum UsbRootPortResetPass {
+    Primary,
+    StaleCleanup,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum UsbRootPortResetPhase {
+    Idle,
+    AttemptBegin,
+    ConnectWait,
+    ResetPoll,
+    EnableSettle,
+    RetryDelay,
+    InterPassSettle,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct UsbRootPortResetCursor {
+    command: DriverTaskCommandRecord,
+    port: u8,
+    force_probe: bool,
+    pass: UsbRootPortResetPass,
+    phase: UsbRootPortResetPhase,
+    attempt: u8,
+    next_attempt: u8,
+    first_speed: u32,
+    pending_speed: u32,
+    deadline: RuntimeDeadline,
+}
+
+impl UsbRootPortResetCursor {
+    const fn idle() -> Self {
+        Self {
+            command: DriverTaskCommandRecord::empty(),
+            port: 0,
+            force_probe: false,
+            pass: UsbRootPortResetPass::Primary,
+            phase: UsbRootPortResetPhase::Idle,
+            attempt: 0,
+            next_attempt: 0,
+            first_speed: 0,
+            pending_speed: 0,
+            deadline: RuntimeDeadline::Iterations { remaining: 0 },
+        }
+    }
+
+    const fn begin(command: DriverTaskCommandRecord, port: u8, force_probe: bool) -> Self {
+        Self {
+            command,
+            port,
+            force_probe,
+            pass: UsbRootPortResetPass::Primary,
+            phase: UsbRootPortResetPhase::AttemptBegin,
+            attempt: 0,
+            next_attempt: 0,
+            first_speed: 0,
+            pending_speed: 0,
+            deadline: RuntimeDeadline::Iterations { remaining: 0 },
+        }
+    }
+
+    const fn active(&self) -> bool {
+        !matches!(self.phase, UsbRootPortResetPhase::Idle)
+    }
+
+    fn active_for(&self, command: DriverTaskCommandRecord) -> bool {
+        self.active() && self.command == command
+    }
+
+    fn reset(&mut self) {
+        *self = Self::idle();
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct UsbRuntimeState {
     initialized: bool,
     init_detail: u16,
@@ -2446,6 +2521,7 @@ struct UsbRuntimeState {
     enumeration_root_scan_pass: u8,
     enumeration_root_next_port: u8,
     enumeration_best_detail: u16,
+    root_port_reset: UsbRootPortResetCursor,
     hub_port_status_sample: UsbHubPortStatusSample,
     hub_child_address_failure_seen: bool,
     last_keys: [u8; 6],
@@ -2540,6 +2616,7 @@ impl UsbRuntimeState {
             enumeration_root_scan_pass: 0,
             enumeration_root_next_port: 1,
             enumeration_best_detail: DRIVER_RUNTIME_USB_INIT_DETAIL_XHCI_READY,
+            root_port_reset: UsbRootPortResetCursor::idle(),
             hub_port_status_sample: UsbHubPortStatusSample::empty(),
             hub_child_address_failure_seen: false,
             last_keys: [0; 6],
@@ -43972,6 +44049,7 @@ fn usb_reset_enumeration_cursor(state: &mut UsbRuntimeState) {
     state.enumeration_root_next_port = 1;
     state.enumeration_best_detail = state.init_detail;
     state.enumeration_retry_window_exhausted = false;
+    state.root_port_reset.reset();
     state.hub_child_address_failure_seen = false;
 }
 
@@ -44111,37 +44189,44 @@ fn usb_runtime_retry_keyboard_enumeration_turn(
             return UsbEnumerationRetryTurn::Pending;
         }
         state.enumeration_retry_window_exhausted = false;
-        if usb_keyboard_enumerate(command.sequence, command.aux0, state, descriptor, dma_range) {
-            state.init_detail = DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY;
-            state.enumeration_retry_cooldown = 0;
-            state.enumeration_cold_reinit_attempts = 0;
-            usb_reset_deep_cold_reinit_frontier(
-                state,
-                DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY,
-            );
-            UsbEnumerationRetryTurn::Complete(Some(DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY))
-        } else {
-            if state.enumeration_retry_window_exhausted {
-                let detail = state.init_detail;
-                if let Some(deep_attempt) = usb_prepare_deep_cold_reinit_attempt(state, detail) {
-                    let command_attempts = state.enumeration_cold_reinit_attempts;
-                    begin_usb_cold_reinit(
-                        command,
-                        detail,
-                        command_attempts,
-                        deep_attempt,
-                        detail,
-                        false,
-                    );
-                    return UsbEnumerationRetryTurn::Pending;
-                }
+        match usb_keyboard_enumerate(command, state, descriptor, dma_range) {
+            UsbKeyboardEnumerationTurn::Pending => UsbEnumerationRetryTurn::Pending,
+            UsbKeyboardEnumerationTurn::Complete(true) => {
+                state.init_detail = DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY;
+                state.enumeration_retry_cooldown = 0;
+                state.enumeration_cold_reinit_attempts = 0;
+                usb_reset_deep_cold_reinit_frontier(
+                    state,
+                    DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY,
+                );
+                UsbEnumerationRetryTurn::Complete(Some(
+                    DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY,
+                ))
             }
-            if state.init_detail != before || state.port_event_candidate_mask != 0 {
-                UsbEnumerationRetryTurn::Complete(Some(state.init_detail))
-            } else {
-                UsbEnumerationRetryTurn::Complete(
-                    usb_runtime_enumeration_detail(state).or(Some(state.init_detail)),
-                )
+            UsbKeyboardEnumerationTurn::Complete(false) => {
+                if state.enumeration_retry_window_exhausted {
+                    let detail = state.init_detail;
+                    if let Some(deep_attempt) = usb_prepare_deep_cold_reinit_attempt(state, detail)
+                    {
+                        let command_attempts = state.enumeration_cold_reinit_attempts;
+                        begin_usb_cold_reinit(
+                            command,
+                            detail,
+                            command_attempts,
+                            deep_attempt,
+                            detail,
+                            false,
+                        );
+                        return UsbEnumerationRetryTurn::Pending;
+                    }
+                }
+                if state.init_detail != before || state.port_event_candidate_mask != 0 {
+                    UsbEnumerationRetryTurn::Complete(Some(state.init_detail))
+                } else {
+                    UsbEnumerationRetryTurn::Complete(
+                        usb_runtime_enumeration_detail(state).or(Some(state.init_detail)),
+                    )
+                }
             }
         }
     })
@@ -49758,6 +49843,7 @@ fn xhci_root_port_candidate_mask(state: &UsbRuntimeState) -> u32 {
     xhci_live_connected_root_port_mask(state) & valid_mask
 }
 
+#[cfg(not(target_os = "none"))]
 fn xhci_reset_root_port_once(
     sequence: u32,
     aux0: u32,
@@ -49866,6 +49952,7 @@ const fn usb_root_port_reset_retry_delay_spins(attempt: usize) -> usize {
     }
 }
 
+#[cfg(not(target_os = "none"))]
 fn xhci_reset_root_port_with_uboot_retries(
     sequence: u32,
     aux0: u32,
@@ -49897,6 +49984,7 @@ fn xhci_reset_root_port_with_uboot_retries(
     None
 }
 
+#[cfg(not(target_os = "none"))]
 fn xhci_reset_root_port(
     sequence: u32,
     aux0: u32,
@@ -49932,6 +50020,259 @@ fn xhci_reset_root_port(
         }
     } else {
         Some(first_speed)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum UsbRootPortResetTurn {
+    Pending,
+    Ready(u32),
+    Failed,
+}
+
+#[cfg(target_os = "none")]
+fn xhci_root_port_reset_store_pending(
+    state: &mut UsbRuntimeState,
+    cursor: UsbRootPortResetCursor,
+) -> UsbRootPortResetTurn {
+    state.root_port_reset = cursor;
+    UsbRootPortResetTurn::Pending
+}
+
+#[cfg(target_os = "none")]
+fn xhci_root_port_reset_finish(
+    state: &mut UsbRuntimeState,
+    cursor: UsbRootPortResetCursor,
+    result: UsbRootPortResetTurn,
+) -> UsbRootPortResetTurn {
+    debug_assert!(!matches!(result, UsbRootPortResetTurn::Pending));
+    debug_assert!(cursor.active());
+    state.root_port_reset.reset();
+    result
+}
+
+#[cfg(target_os = "none")]
+fn xhci_root_port_reset_finish_failed(
+    state: &mut UsbRuntimeState,
+    cursor: UsbRootPortResetCursor,
+) -> UsbRootPortResetTurn {
+    publish_runtime_progress(
+        cursor.command.sequence,
+        DRIVER_RUNTIME_RING_PROGRESS_USB_ROOT_PORT_RESET_FAILED,
+        cursor.command.aux0,
+    );
+    if cursor.pass == UsbRootPortResetPass::StaleCleanup && cursor.first_speed != 0 {
+        publish_runtime_progress(
+            cursor.command.sequence,
+            DRIVER_RUNTIME_RING_PROGRESS_USB_ROOT_PORT_STALE_CLEANUP_FAILED,
+            cursor.command.aux0,
+        );
+        xhci_root_port_reset_finish(
+            state,
+            cursor,
+            UsbRootPortResetTurn::Ready(cursor.first_speed),
+        )
+    } else {
+        xhci_root_port_reset_finish(state, cursor, UsbRootPortResetTurn::Failed)
+    }
+}
+
+#[cfg(target_os = "none")]
+fn xhci_root_port_reset_schedule_retry(
+    state: &mut UsbRuntimeState,
+    mut cursor: UsbRootPortResetCursor,
+) -> UsbRootPortResetTurn {
+    cursor.next_attempt = cursor.attempt.saturating_add(1);
+    if usize::from(cursor.next_attempt) < USB_ROOT_PORT_RESET_MAX_TRIES {
+        publish_runtime_progress(
+            cursor.command.sequence,
+            DRIVER_RUNTIME_RING_PROGRESS_USB_ROOT_PORT_RESET_RETRY,
+            cursor.command.aux0,
+        );
+    }
+    cursor.deadline = runtime_deadline_from_legacy_spins(usb_root_port_reset_retry_delay_spins(
+        usize::from(cursor.attempt),
+    ));
+    cursor.phase = UsbRootPortResetPhase::RetryDelay;
+    xhci_root_port_reset_store_pending(state, cursor)
+}
+
+/// Advance one bounded activation of the old-good U-Boot-shaped root-port
+/// reset envelope.
+///
+/// The PORTSC values, retry counts, delays, stale-controller second reset, and
+/// terminal publication order are unchanged. Only the polling shape changes:
+/// one activation performs one bounded PORTSC transition (a sample and, where
+/// required, its paired write) and returns the exact request as pending, so an
+/// MCS replenishment never resumes inside an opaque multi-millisecond spin loop.
+#[cfg(target_os = "none")]
+fn xhci_root_port_reset_turn(state: &mut UsbRuntimeState) -> UsbRootPortResetTurn {
+    let mut cursor = state.root_port_reset;
+    if !cursor.active() {
+        return UsbRootPortResetTurn::Failed;
+    }
+    let Some(portsc) = xhci_root_portsc_offset(state, cursor.port) else {
+        return xhci_root_port_reset_schedule_retry(state, cursor);
+    };
+    match cursor.phase {
+        UsbRootPortResetPhase::Idle => UsbRootPortResetTurn::Failed,
+        UsbRootPortResetPhase::AttemptBegin => {
+            let status = usb_read32(portsc);
+            if status & XHCI_PORTSC_CCS == 0 {
+                if !xhci_write_portsc(
+                    state,
+                    portsc,
+                    xhci_portsc_neutral(status) | XHCI_PORTSC_PP | XHCI_PORTSC_CHANGE_BITS,
+                ) {
+                    return xhci_root_port_reset_schedule_retry(state, cursor);
+                }
+                publish_runtime_progress(
+                    cursor.command.sequence,
+                    DRIVER_RUNTIME_RING_PROGRESS_USB_ROOT_PORT_RESET_POWER_WRITE_DONE,
+                    cursor.command.aux0,
+                );
+                if !cursor.force_probe {
+                    return xhci_root_port_reset_schedule_retry(state, cursor);
+                }
+                publish_runtime_progress(
+                    cursor.command.sequence,
+                    DRIVER_RUNTIME_RING_PROGRESS_USB_ROOT_PORT_CONNECT_WAIT_BEGIN,
+                    cursor.command.aux0,
+                );
+                cursor.deadline =
+                    runtime_deadline_from_legacy_spins(USB_ROOT_PORT_POWER_SETTLE_SPINS);
+                cursor.phase = UsbRootPortResetPhase::ConnectWait;
+                return xhci_root_port_reset_store_pending(state, cursor);
+            }
+            if !xhci_write_portsc(
+                state,
+                portsc,
+                xhci_portsc_neutral(status) | XHCI_PORTSC_PP | XHCI_PORTSC_PR,
+            ) {
+                return xhci_root_port_reset_schedule_retry(state, cursor);
+            }
+            publish_runtime_progress(
+                cursor.command.sequence,
+                DRIVER_RUNTIME_RING_PROGRESS_USB_ROOT_PORT_RESET_PR_SET,
+                cursor.command.aux0,
+            );
+            publish_runtime_progress(
+                cursor.command.sequence,
+                DRIVER_RUNTIME_RING_PROGRESS_USB_ROOT_PORT_RESET_POLL_BEGIN,
+                cursor.command.aux0,
+            );
+            cursor.deadline = runtime_deadline_from_legacy_spins(USB_XHCI_SPINS);
+            cursor.phase = UsbRootPortResetPhase::ResetPoll;
+            xhci_root_port_reset_store_pending(state, cursor)
+        }
+        UsbRootPortResetPhase::ConnectWait => {
+            if runtime_deadline_expired(&mut cursor.deadline) {
+                publish_runtime_progress(
+                    cursor.command.sequence,
+                    DRIVER_RUNTIME_RING_PROGRESS_USB_ROOT_PORT_CONNECT_TIMEOUT,
+                    cursor.command.aux0,
+                );
+                return xhci_root_port_reset_schedule_retry(state, cursor);
+            }
+            if usb_read32(portsc) & XHCI_PORTSC_CCS != 0 {
+                cursor.phase = UsbRootPortResetPhase::AttemptBegin;
+            }
+            xhci_root_port_reset_store_pending(state, cursor)
+        }
+        UsbRootPortResetPhase::ResetPoll => {
+            if runtime_deadline_expired(&mut cursor.deadline) {
+                publish_runtime_progress(
+                    cursor.command.sequence,
+                    DRIVER_RUNTIME_RING_PROGRESS_USB_ROOT_PORT_RESET_TIMEOUT,
+                    cursor.command.aux0,
+                );
+                return xhci_root_port_reset_schedule_retry(state, cursor);
+            }
+            let status = usb_read32(portsc);
+            if status & XHCI_PORTSC_PR == 0 && status & XHCI_PORTSC_PRC != 0 {
+                publish_runtime_progress(
+                    cursor.command.sequence,
+                    DRIVER_RUNTIME_RING_PROGRESS_USB_ROOT_PORT_RESET_PRC_SEEN,
+                    cursor.command.aux0,
+                );
+                if !xhci_write_portsc(
+                    state,
+                    portsc,
+                    xhci_portsc_neutral(status) | XHCI_PORTSC_CHANGE_BITS,
+                ) {
+                    return xhci_root_port_reset_schedule_retry(state, cursor);
+                }
+                if status & XHCI_PORTSC_PED != 0 {
+                    cursor.pending_speed =
+                        (status >> XHCI_PORTSC_SPEED_SHIFT) & XHCI_PORTSC_SPEED_MASK;
+                    cursor.deadline =
+                        runtime_deadline_from_legacy_spins(USB_ROOT_PORT_POWER_SETTLE_SPINS);
+                    cursor.phase = UsbRootPortResetPhase::EnableSettle;
+                    return xhci_root_port_reset_store_pending(state, cursor);
+                }
+                publish_runtime_progress(
+                    cursor.command.sequence,
+                    DRIVER_RUNTIME_RING_PROGRESS_USB_ROOT_PORT_ENABLE_TIMEOUT,
+                    cursor.command.aux0,
+                );
+            }
+            xhci_root_port_reset_store_pending(state, cursor)
+        }
+        UsbRootPortResetPhase::EnableSettle => {
+            if !runtime_deadline_expired(&mut cursor.deadline) {
+                return xhci_root_port_reset_store_pending(state, cursor);
+            }
+            if cursor.pass == UsbRootPortResetPass::Primary
+                && USB_LINKED_RUNTIME_SECOND_ROOT_PORT_RESET
+            {
+                cursor.first_speed = cursor.pending_speed;
+                cursor.deadline = runtime_deadline_from_legacy_spins(
+                    USB_STALE_UBOOT_ROOT_PORT_RESET_SETTLE_SPINS,
+                );
+                cursor.phase = UsbRootPortResetPhase::InterPassSettle;
+                return xhci_root_port_reset_store_pending(state, cursor);
+            }
+            if cursor.pass == UsbRootPortResetPass::StaleCleanup {
+                publish_runtime_progress(
+                    cursor.command.sequence,
+                    DRIVER_RUNTIME_RING_PROGRESS_USB_ROOT_PORT_STALE_CLEANUP_DONE,
+                    cursor.command.aux0,
+                );
+            }
+            xhci_root_port_reset_finish(
+                state,
+                cursor,
+                UsbRootPortResetTurn::Ready(cursor.pending_speed),
+            )
+        }
+        UsbRootPortResetPhase::RetryDelay => {
+            if !runtime_deadline_expired(&mut cursor.deadline) {
+                return xhci_root_port_reset_store_pending(state, cursor);
+            }
+            if usize::from(cursor.next_attempt) >= USB_ROOT_PORT_RESET_MAX_TRIES {
+                return xhci_root_port_reset_finish_failed(state, cursor);
+            }
+            cursor.attempt = cursor.next_attempt;
+            cursor.phase = UsbRootPortResetPhase::AttemptBegin;
+            xhci_root_port_reset_store_pending(state, cursor)
+        }
+        UsbRootPortResetPhase::InterPassSettle => {
+            if !runtime_deadline_expired(&mut cursor.deadline) {
+                return xhci_root_port_reset_store_pending(state, cursor);
+            }
+            publish_runtime_progress(
+                cursor.command.sequence,
+                DRIVER_RUNTIME_RING_PROGRESS_USB_ROOT_PORT_STALE_CLEANUP_BEGIN,
+                cursor.command.aux0,
+            );
+            cursor.pass = UsbRootPortResetPass::StaleCleanup;
+            cursor.force_probe = true;
+            cursor.attempt = 0;
+            cursor.next_attempt = 0;
+            cursor.pending_speed = 0;
+            cursor.phase = UsbRootPortResetPhase::AttemptBegin;
+            xhci_root_port_reset_store_pending(state, cursor)
+        }
     }
 }
 
@@ -52743,14 +53084,19 @@ fn usb_hid_attach_control_ready(
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum UsbKeyboardEnumerationTurn {
+    Pending,
+    Complete(bool),
+}
+
 fn usb_keyboard_enumerate(
-    sequence: u32,
-    aux0: u32,
+    command: DriverTaskCommandRecord,
     state: &mut UsbRuntimeState,
     descriptor: &DriverRuntimeInitDescriptor,
     dma_range: DriverRuntimeResourceRangeDescriptor,
-) -> bool {
-    usb_scan_root_ports_for_keyboard(sequence, aux0, state, descriptor, dma_range)
+) -> UsbKeyboardEnumerationTurn {
+    usb_scan_root_ports_for_keyboard(command, state, descriptor, dma_range)
 }
 
 fn xhci_probe_command_path(
@@ -52900,24 +53246,98 @@ const fn usb_root_port_frontier_publish_required(current_detail: u16, candidate_
 }
 
 fn usb_scan_root_ports_for_keyboard(
-    sequence: u32,
-    aux0: u32,
+    command: DriverTaskCommandRecord,
     state: &mut UsbRuntimeState,
     descriptor: &DriverRuntimeInitDescriptor,
     dma_range: DriverRuntimeResourceRangeDescriptor,
-) -> bool {
+) -> UsbKeyboardEnumerationTurn {
+    let sequence = command.sequence;
+    let aux0 = command.aux0;
     let mut next_device_index = 0usize;
     let mut best_detail = state.enumeration_best_detail;
+
+    #[cfg(target_os = "none")]
+    if state.root_port_reset.active() {
+        let cursor = state.root_port_reset;
+        if !cursor.active_for(command) {
+            publish_runtime_progress(
+                sequence,
+                DRIVER_RUNTIME_RING_PROGRESS_USB_ROOT_PORT_RESET_FAILED,
+                aux0,
+            );
+            state.root_port_reset.reset();
+            state.init_detail = best_detail;
+            return UsbKeyboardEnumerationTurn::Complete(false);
+        }
+        let port = cursor.port;
+        let speed = match xhci_root_port_reset_turn(state) {
+            UsbRootPortResetTurn::Pending => return UsbKeyboardEnumerationTurn::Pending,
+            UsbRootPortResetTurn::Failed => {
+                usb_remember_best_enumeration_detail(&mut best_detail, state.init_detail);
+                state.enumeration_best_detail = best_detail;
+                state.init_detail = best_detail;
+                return UsbKeyboardEnumerationTurn::Complete(false);
+            }
+            UsbRootPortResetTurn::Ready(speed) => speed,
+        };
+        publish_runtime_progress(
+            sequence,
+            DRIVER_RUNTIME_RING_PROGRESS_USB_ROOT_PORT_RESET_DONE,
+            aux0,
+        );
+        state.init_detail = DRIVER_RUNTIME_USB_INIT_DETAIL_ROOT_PORT_CONNECTED;
+        usb_remember_best_enumeration_detail(&mut best_detail, state.init_detail);
+        state.port_event_candidate_mask &= !(1u32 << (port - 1));
+        let root = UsbEnumerationDevice {
+            root_port: port,
+            route: 0,
+            speed,
+            depth: 0,
+            ..UsbEnumerationDevice::empty()
+        };
+        let Some(root) = xhci_address_topology_device(
+            sequence,
+            aux0,
+            state,
+            descriptor,
+            dma_range,
+            root,
+            &mut next_device_index,
+        ) else {
+            usb_remember_best_enumeration_detail(&mut best_detail, state.init_detail);
+            state.enumeration_best_detail = best_detail;
+            return UsbKeyboardEnumerationTurn::Complete(false);
+        };
+        usb_remember_best_enumeration_detail(&mut best_detail, state.init_detail);
+        if usb_probe_device_for_keyboard(
+            sequence,
+            aux0,
+            state,
+            descriptor,
+            dma_range,
+            root,
+            &mut next_device_index,
+            USB_ENUM_MAX_DEPTH,
+        ) {
+            return UsbKeyboardEnumerationTurn::Complete(true);
+        }
+        let _ = xhci_disable_slot(state, descriptor, root.slot);
+        xhci_drain_events_preserving_port_changes(state, descriptor);
+        usb_remember_best_enumeration_detail(&mut best_detail, state.init_detail);
+        state.enumeration_best_detail = best_detail;
+        return UsbKeyboardEnumerationTurn::Complete(false);
+    }
+
     if !state.enumeration_root_powered {
         if !xhci_power_root_ports(state) {
             state.init_detail = best_detail;
-            return false;
+            return UsbKeyboardEnumerationTurn::Complete(false);
         }
         state.enumeration_root_powered = true;
         state.enumeration_root_scan_pass = 0;
         state.enumeration_root_next_port = 1;
         state.enumeration_best_detail = state.init_detail;
-        return false;
+        return UsbKeyboardEnumerationTurn::Complete(false);
     }
 
     if !state.command_path_proven {
@@ -52925,14 +53345,14 @@ fn usb_scan_root_ports_for_keyboard(
         usb_remember_best_enumeration_detail(&mut best_detail, state.init_detail);
         state.enumeration_best_detail = best_detail;
         state.init_detail = best_detail;
-        return false;
+        return UsbKeyboardEnumerationTurn::Complete(false);
     }
 
     if state.enumeration_root_scan_pass >= USB_ROOT_PORT_SCAN_PASSES as u8 {
         state.init_detail = best_detail;
         usb_reset_enumeration_cursor(state);
         state.enumeration_retry_window_exhausted = true;
-        return false;
+        return UsbKeyboardEnumerationTurn::Complete(false);
     }
 
     xhci_drain_events_preserving_port_changes(state, descriptor);
@@ -52941,7 +53361,7 @@ fn usb_scan_root_ports_for_keyboard(
         state.init_detail = DRIVER_RUNTIME_USB_INIT_DETAIL_ROOT_PORT_CONNECTED;
         usb_remember_best_enumeration_detail(&mut best_detail, state.init_detail);
         state.enumeration_best_detail = best_detail;
-        return false;
+        return UsbKeyboardEnumerationTurn::Complete(false);
     }
     let max_port = state.max_ports.min(u32::BITS as u8);
     if candidate_mask == 0 || state.enumeration_root_next_port > max_port {
@@ -52949,7 +53369,7 @@ fn usb_scan_root_ports_for_keyboard(
         state.enumeration_best_detail = best_detail;
         state.enumeration_root_scan_pass = state.enumeration_root_scan_pass.saturating_add(1);
         state.enumeration_root_next_port = 1;
-        return false;
+        return UsbKeyboardEnumerationTurn::Complete(false);
     }
 
     for port in state.enumeration_root_next_port.max(1)..=max_port {
@@ -52963,6 +53383,18 @@ fn usb_scan_root_ports_for_keyboard(
             DRIVER_RUNTIME_RING_PROGRESS_USB_ROOT_PORT_RESET_BEGIN,
             aux0,
         );
+
+        #[cfg(target_os = "none")]
+        {
+            state.root_port_reset = UsbRootPortResetCursor::begin(
+                command,
+                port,
+                state.port_event_candidate_mask & bit != 0,
+            );
+            return UsbKeyboardEnumerationTurn::Pending;
+        }
+
+        #[cfg(not(target_os = "none"))]
         if let Some(speed) = xhci_reset_root_port(
             sequence,
             aux0,
@@ -52996,7 +53428,7 @@ fn usb_scan_root_ports_for_keyboard(
             ) else {
                 usb_remember_best_enumeration_detail(&mut best_detail, state.init_detail);
                 state.enumeration_best_detail = best_detail;
-                return false;
+                return UsbKeyboardEnumerationTurn::Complete(false);
             };
             usb_remember_best_enumeration_detail(&mut best_detail, state.init_detail);
             if usb_probe_device_for_keyboard(
@@ -53009,13 +53441,13 @@ fn usb_scan_root_ports_for_keyboard(
                 &mut next_device_index,
                 USB_ENUM_MAX_DEPTH,
             ) {
-                return true;
+                return UsbKeyboardEnumerationTurn::Complete(true);
             }
             let _ = xhci_disable_slot(state, descriptor, root.slot);
             xhci_drain_events_preserving_port_changes(state, descriptor);
             usb_remember_best_enumeration_detail(&mut best_detail, state.init_detail);
             state.enumeration_best_detail = best_detail;
-            return false;
+            return UsbKeyboardEnumerationTurn::Complete(false);
         }
     }
 
@@ -53025,7 +53457,7 @@ fn usb_scan_root_ports_for_keyboard(
     state.enumeration_root_next_port = 1;
     usb_remember_best_enumeration_detail(&mut best_detail, state.init_detail);
     state.init_detail = best_detail;
-    false
+    UsbKeyboardEnumerationTurn::Complete(false)
 }
 
 fn xhci_queue_keyboard_interrupt_in(
@@ -109478,14 +109910,24 @@ mod tests {
         state.enumeration_root_scan_pass = 0;
         state.enumeration_root_next_port = 1;
         state.max_ports = 2;
+        let command = DriverTaskCommandRecord {
+            sequence: 1,
+            opcode: OPCODE_SERVICE,
+            arg0: HOT_PATH_USB_KEYBOARD,
+            arg1: ROLE_USB,
+            aux0: DRIVER_RUNTIME_USB_ENUMERATE_AUX,
+            ..DriverTaskCommandRecord::empty()
+        };
 
-        assert!(!usb_keyboard_enumerate(
-            1,
-            DRIVER_RUNTIME_USB_ENUMERATE_AUX,
-            &mut state,
-            &DriverRuntimeInitDescriptor::empty(),
-            DriverRuntimeResourceRangeDescriptor::empty()
-        ));
+        assert_eq!(
+            usb_keyboard_enumerate(
+                command,
+                &mut state,
+                &DriverRuntimeInitDescriptor::empty(),
+                DriverRuntimeResourceRangeDescriptor::empty()
+            ),
+            UsbKeyboardEnumerationTurn::Complete(false)
+        );
         assert!(state.enumeration_root_powered);
         assert_eq!(state.enumeration_root_scan_pass, 0);
         assert_eq!(state.enumeration_root_next_port, 1);
@@ -109521,14 +109963,24 @@ mod tests {
         state.enumeration_root_powered = true;
         state.enumeration_root_next_port = 1;
         state.enumeration_best_detail = DRIVER_RUNTIME_USB_INIT_DETAIL_XHCI_READY;
+        let command = DriverTaskCommandRecord {
+            sequence: 1,
+            opcode: OPCODE_SERVICE,
+            arg0: HOT_PATH_USB_KEYBOARD,
+            arg1: ROLE_USB,
+            aux0: DRIVER_RUNTIME_USB_ENUMERATE_AUX,
+            ..DriverTaskCommandRecord::empty()
+        };
 
-        assert!(!usb_scan_root_ports_for_keyboard(
-            1,
-            DRIVER_RUNTIME_USB_ENUMERATE_AUX,
-            &mut state,
-            &DriverRuntimeInitDescriptor::empty(),
-            DriverRuntimeResourceRangeDescriptor::empty()
-        ));
+        assert_eq!(
+            usb_scan_root_ports_for_keyboard(
+                command,
+                &mut state,
+                &DriverRuntimeInitDescriptor::empty(),
+                DriverRuntimeResourceRangeDescriptor::empty()
+            ),
+            UsbKeyboardEnumerationTurn::Complete(false)
+        );
         assert!(!state.command_path_proven);
         assert_eq!(
             state.init_detail,
@@ -113715,6 +114167,61 @@ mod tests {
         );
         assert_eq!(neutral & (XHCI_PORTSC_PED | XHCI_PORTSC_PR), 0);
         assert_eq!(neutral & XHCI_PORTSC_CHANGE_BITS, 0);
+    }
+
+    #[test]
+    fn usb_root_port_reset_cursor_is_exact_request_bound() {
+        let command = DriverTaskCommandRecord {
+            sequence: 87,
+            opcode: OPCODE_SERVICE,
+            arg0: HOT_PATH_USB_KEYBOARD,
+            arg1: ROLE_USB,
+            aux0: DRIVER_RUNTIME_USB_ENUMERATE_AUX,
+            budget: DriverTaskBudgetGrant {
+                max_ops: 1,
+                max_frames: 1,
+                max_bytes: 1,
+            },
+            ..DriverTaskCommandRecord::empty()
+        };
+        let mut cursor = UsbRootPortResetCursor::begin(command, 2, true);
+
+        assert!(cursor.active());
+        assert!(cursor.active_for(command));
+        assert!(!cursor.active_for(DriverTaskCommandRecord {
+            sequence: 88,
+            ..command
+        }));
+        assert!(!cursor.active_for(DriverTaskCommandRecord {
+            aux0: DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX,
+            ..command
+        }));
+        assert!(!cursor.active_for(DriverTaskCommandRecord {
+            budget: DriverTaskBudgetGrant {
+                max_ops: 2,
+                ..command.budget
+            },
+            ..command
+        }));
+        assert_eq!(cursor.command, command);
+        assert_eq!(cursor.port, 2);
+        assert_eq!(cursor.pass, UsbRootPortResetPass::Primary);
+        assert_eq!(cursor.phase, UsbRootPortResetPhase::AttemptBegin);
+        assert_eq!(cursor.attempt, 0);
+
+        cursor.reset();
+        assert!(!cursor.active());
+        assert_eq!(cursor, UsbRootPortResetCursor::idle());
+    }
+
+    #[test]
+    fn usb_root_port_reset_retains_oldgood_retry_envelope() {
+        assert_eq!(USB_ROOT_PORT_RESET_MAX_TRIES, 5);
+        assert_eq!(usb_root_port_reset_retry_delay_spins(0), 20_000);
+        assert_eq!(usb_root_port_reset_retry_delay_spins(1), 200_000);
+        assert_eq!(usb_root_port_reset_retry_delay_spins(4), 200_000);
+        assert_eq!(USB_STALE_UBOOT_ROOT_PORT_RESET_SETTLE_SPINS, 200_000);
+        assert!(USB_LINKED_RUNTIME_SECOND_ROOT_PORT_RESET);
     }
 
     #[test]
