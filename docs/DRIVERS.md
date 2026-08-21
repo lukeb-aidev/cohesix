@@ -17,6 +17,9 @@ in [HARDWARE_BRINGUP.md](HARDWARE_BRINGUP.md), test procedures in
 canonical documentation set. Update this guide only when the reusable driver
 development contract changes.
 
+See the [Glossary](GLOSSARY.md) for Cohesix-specific runtime, authority, and
+evidence terms.
+
 ## 1. Start with the governing contract
 
 Before changing a driver, read:
@@ -641,14 +644,9 @@ reusable ownership pattern.
 - Represent retained work as typed `Pending`, `Complete`, or `Failed`.
 - Keep the fixed 48-byte, pointer-free `DriverRuntimeUsbOldgoodReceipt` ABI slot
   at shared-ring offset 192 reserved for compatibility, but do not stage or
-  publish its partial or terminal state from the isolated USB runtime. Fresh
-  exact-image boots with that instrumentation stopped immediately after
-  otherwise successful control-transfer phases 198, 316, and 412. The scoped
-  Milestone 26b repair therefore restores the previously reliable physical
-  enumeration path and its one-deep interrupt-IN/command-ready behavior. Root
-  may continue to stable-read and passively project the reserved zero record;
-  that projection grants no admission, scheduling, recovery, or acceptance
-  authority.
+  publish its partial or terminal state from the isolated USB runtime. Root may
+  stable-read and passively project the reserved zero record; that projection
+  grants no admission, scheduling, recovery, or acceptance authority.
 - Give enumeration and recovery finite attempt and elapsed-time bounds.
 - Expose active, outstanding, and active-without-progress state separately;
   cached readiness must not hide a retained request that has stopped making
@@ -676,9 +674,8 @@ reusable ownership pattern.
   `usb-physical-input-unproven`. Gate 10, command readiness, or first-report
   readiness alone must never be relabelled as first-byte evidence and cannot
   produce a `usb-post-first-byte-*` blocker.
-- Preserve the known-working `2668c34f76ff` command/first-report path. The
-  established attach sequence performs PCIe descriptor/prep and owner
-  registration, then USB descriptor replay and runtime initialization; it
+- The attach sequence performs PCIe descriptor preparation and owner
+  registration, then USB descriptor replay and runtime initialization. It
   registers the USB owner once controller init is ready, before enumeration.
   On a physical Pi profile that marks local-seat required, the deferred
   CYW43/SDIO supervisor cannot take its first driver turn while that PCIe/USB
@@ -686,8 +683,8 @@ reusable ownership pattern.
   one-operation EventPump turns until the USB controller owner is ready, then
   rechecks Wi-Fi admission. Keyboard command readiness and first-byte proof
   remain independent downstream USB gates and are not prerequisites for Wi-Fi.
-  `LocalSeat` does not
-  add a second proof-scheduling phase after endpoint completion and does not
+  `LocalSeat` does not add a second proof-scheduling phase after endpoint
+  completion and does not
   cache a completion or HID bytes while waiting for another descriptor/owner
   pass. A valid linked input frame follows the existing parser-admission path
   once, and a valid first-report completion follows the existing command-ready
@@ -697,13 +694,6 @@ reusable ownership pattern.
   alone cannot satisfy those gates. An ordinary pending enumeration retry may
   retain the existing pre-prompt deferral, but that deferral is not descriptor
   or owner proof authority.
-- Exact image `7a10b8fd6acc` is the operator-approved Milestone 26b exception:
-  no key was typed, so `physical_input_proven=no` remains the truthful state.
-  Repeated Gate 10, one-deep idle-report, command-ready, recovery-free, and
-  HDMI-complete sentinels plus exact restoration of the previously board-proven
-  path were accepted for that image only. This grants no parser authority and
-  does not weaken the default fresh-input requirement after a physical-path
-  change.
 - Withhold the interactive HDMI prompt until current USB command admission and
   display retry health both hold. Before that boundary, project bounded
   controller, keyboard-enumeration, and first-report feedback through the
@@ -734,7 +724,7 @@ reusable ownership pattern.
   a completed display-runtime turn with no outstanding submission or exhausted
   retry; mirroring or queueing a line is insufficient.
 - Bind current outstanding status to the display driver's active request. An
-  inactive historical submitted/completed counter gap remains cumulative
+  inactive submitted/completed counter gap remains cumulative
   timeout telemetry and cannot fabricate live display work. Passive acceptance
   requires the adjacent current `hdmi: driver` record with present counters,
   no active request, at least one completion, no no-reply streak, and no stale
@@ -790,8 +780,8 @@ transport:
   requires the record's physical epoch and consumer sequence to match that
   ring. A torn, raced, or stale sample is rerun-required evidence, not
   admission, notification, wake, issue, retry, rearm, recovery, deadline,
-  scheduling, or physical-owner authority. The older additive v11 completion
-  trace remains historical/compatibility input, not current client truth.
+  scheduling, or physical-owner authority. The additive completion trace is
+  compatibility input, not current client truth.
 - A physical or logical generation change invalidates stale work; it does not
   authorize relabelling or replay under the new generation.
 - Recovery reuses the same ownership path after containment. It does not
@@ -876,7 +866,7 @@ Every retained or compact-owner row is at most 243 bytes. The emitter
 preflights the whole batch and reserves 32 body rows for the ordinary `smp`
 activity report within the 69-row body capacity; if identity changes or the
 whole batch does not fit, none of it is emitted. These rows are passive
-historical-prefix evidence, not live traffic evidence. The normalizer accepts
+retained-prefix evidence, not live traffic evidence. The normalizer accepts
 only the newest exact contiguous transaction, quarantines older complete proof
 after a later malformed/incomplete reserved record, Join, Gate 8 lifecycle, or
 recovery boundary, and requires later same-generation netstats, authenticated
@@ -1064,7 +1054,7 @@ Keep these claims separate:
 
 Do not promote evidence between tiers. Generated eligibility is not a running
 child. A running child is not useful I/O. Eventual success is not first-attempt
-repeatability. A historical accepted image is not proof of the current image.
+repeatability. An accepted image is not proof of another image.
 
 ### 10.2 Capture the first broken transition
 

@@ -8,6 +8,8 @@ Cohesix keeps GPU discovery, drivers, CUDA/NVML, model storage, and workload
 execution outside the VM trusted computing base. The VM receives only bounded,
 manifest-authorized control records and host-published descriptions.
 
+See the [Glossary](GLOSSARY.md) for Cohesix-specific role and authority terms.
+
 This document distinguishes the live root-task surface from host simulation.
 It does not describe a general GPU scheduler or an in-VM compute API.
 

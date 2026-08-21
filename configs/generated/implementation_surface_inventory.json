@@ -4610,6 +4610,20 @@
       "evidence_eligible": false
     },
     {
+      "id": "tracked:docs/STATUS.md",
+      "kind": "tracked_surface",
+      "path": "docs/STATUS.md",
+      "implementation_class": "contract",
+      "owner": "documentation",
+      "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
+      "production_reachable": false,
+      "selection_source": "tracked current documentation; rule=current-docs",
+      "package_disposition": "selected_release_subset_or_source_only",
+      "evidence_requirement": "docs-as-built drift review",
+      "current_observed_mode": "documentation_or_generated_claim",
+      "evidence_eligible": false
+    },
+    {
       "id": "tracked:docs/TEST_PLAN.md",
       "kind": "tracked_surface",
       "path": "docs/TEST_PLAN.md",

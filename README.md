@@ -21,8 +21,10 @@ Each Cohesix hive has a Queen—the central orchestration authority—and a smal
 set of narrowly focused Worker roles for heartbeat telemetry, GPU lease and
 status records, and LoRA adapter/model lifecycle receipts. These Workers are
 control-plane roles inside Cohesix, not the macOS or Linux machines in the
-fleet. In the checked-in target profiles they are root/host model and session
-views; no general Worker child TCB is launched yet.
+fleet. The checked-in target profiles declare Heartbeat, GPU, and LoRA as
+executable roles with bounded target-task authority; WorkerBus remains a
+model/session-only role. That declaration is not evidence that a particular
+QEMU or Pi run created or accepted those tasks.
 
 Cohesix is designed to coordinate large, mixed-platform hives of GPU-backed AI
 systems. Linux GPU nodes and macOS or Linux operator and AI hosts keep their
@@ -104,7 +106,7 @@ flowchart LR
     Root[root-task authority]
     Namespace[NineDoorBridge namespace]
     Queen["Queen role\nin root-task"]
-    Workers["Worker model/session roles\nno general child TCBs"]
+    Workers["Bounded Worker roles\nthree executable, one model-only"]
     Drivers[Isolated driver runtimes]
     Kernel[seL4 capabilities and scheduling]
     Console --> Root
@@ -139,20 +141,15 @@ the existing host transport semantics and adds no target authority.
 
 ## Current project status
 
-Work is tracked in the [Build Plan](docs/BUILD_PLAN.md), including future planned Milestones.
+Milestone 26e is in QEMU-first implementation and qualification. The selected
+profiles declare an SMP+MCS target with isolated root services, executable
+Heartbeat/GPU/LoRA Workers, and isolated physical drivers. Full promotion still
+requires separate exact-artifact QEMU and fresh-Pi evidence.
 
-| Surface | Current state | Evidence boundary |
-| --- | --- | --- |
-| QEMU `aarch64/virt` | Reference development and regression target on seL4 16.0.0; fresh static profiles and linked `--no-run` packaging pass | Booted target-qualified evidence is still required; QEMU is not hardware proof. |
-| Raspberry Pi 4 boot | Pi firmware → U-Boot → seL4 binary image → root task; fresh v16 Pi profiles and direct `~/seL4_16` diagnostic build pass | Implemented and previously board-proven; a clean exact image and current-tree live revalidation remain part of Milestone 26d. |
-| Pi 4 wired networking | Isolated GENETv5 runtime with DHCP and TCP | Accepted Milestone 26c evidence exists for its recorded image; a new image must prove its own state. |
-| Pi 4 Wi-Fi | Linked CYW43455 and SDIO runtimes implemented | Accepted Milestone 26b evidence binds exact image `7a10b8fd6acc` to association, DHCP, usable raw TCP, no-retry pressure, USB command readiness, and a same-image GENET control; future changed images must prove their own state. |
-| Host tools | macOS 26 on Apple Silicon is the primary development host | Host success does not prove target or Pi hardware behavior. |
-| AWS/UEFI | Planned profile | Milestone 30 is pending; AWS is not a current Cohesix VM target. |
-
-Building, flashing, current-image boot, saved policy, device readiness, raw TCP,
-authenticated `cohsh`, and benchmark results are separate proof states. The
-[hardware runbook](docs/HARDWARE_BRINGUP.md) explains how to prove each one.
+See [Current status](docs/STATUS.md) for the capability and evidence snapshot,
+and the [Build Plan](docs/BUILD_PLAN.md) for the complete record of planned and
+implemented scope. Building, flashing, booting, device readiness, raw TCP,
+authenticated `cohsh`, and benchmark results remain separate proof states.
 
 ## Get started
 
@@ -239,49 +236,57 @@ an image is not proof that the board booted that image.
 
 ## Documentation
 
-Each document owns one part of the public contract. Generated values remain in
-`docs/snippets/` and the selected resolved manifest.
+Choose a document by what you want to do. The [Glossary](docs/GLOSSARY.md)
+defines Cohesix terminology; generated values remain in `docs/snippets/` and
+the selected resolved manifest.
 
-### Design and contracts
+### Understand Cohesix
 
-| Document | Owns |
+| Document | Use it to |
 | --- | --- |
-| [Glossary](docs/GLOSSARY.md) | Plain-language definitions of Cohesix concepts, terminology, and evidence boundaries |
-| [Architecture](docs/ARCHITECTURE.md) | Trust boundaries, components, and major data flows |
-| [Interfaces](docs/INTERFACES.md) | Namespaces, payloads, console behavior, and compatibility |
-| [Secure9P](docs/SECURE9P.md) | 9P layering, bounds, session invariants, and policy hooks |
-| [Roles and scheduling](docs/ROLES_AND_SCHEDULING.md) | Queen/Worker authority, lifecycle, and scheduling policy |
-| [Drivers](docs/DRIVERS.md) | HAL, isolated runtimes, device status, and proof method |
-| [GPU nodes](docs/GPU_NODES.md) | Host-only GPU boundary, leases, and telemetry |
+| [Current status](docs/STATUS.md) | Distinguish checked-in capability from QEMU, Pi, release, and use-case acceptance |
+| [Architecture](docs/ARCHITECTURE.md) | Understand trust boundaries, components, and major data flows |
+| [Roles and scheduling](docs/ROLES_AND_SCHEDULING.md) | Understand Queen/Worker authority, lifecycle, and scheduling layers |
+| [GPU nodes](docs/GPU_NODES.md) | Understand the host-only GPU boundary, leases, and telemetry |
+| [Use cases](docs/USE_CASES.md) | Assess capability-fit patterns without treating them as acceptance claims |
+| [Security](docs/SECURITY.md) | Understand security objectives, controls, limits, and vulnerability reporting |
 
-### Operator and integration guides
+### Try and operate Cohesix
 
-| Document | Owns |
+| Document | Use it to |
 | --- | --- |
-| [Quickstart](docs/QUICKSTART.md) | Shortest safe mock and current-source QEMU paths |
-| [Userland and CLI](docs/USERLAND_AND_CLI.md) | Console, `cohsh`, `.coh` grammar, and command semantics |
-| [Host tools](docs/HOST_TOOLS.md) | Executable catalogue, transports, and composition rules |
-| [API guidelines](docs/API_GUIDELINES.md) | REST projection, authentication, and compatibility |
-| [Python support](docs/PYTHON_SUPPORT.md) | Python backends, bounded APIs, and examples |
-| [Operator walkthrough](docs/OPERATOR_WALKTHROUGH.md) | End-to-end preflight, operation, and evidence capture |
-| [Operator recipes](docs/OPERATOR_RECIPES.md) | Evidence, mount, lifecycle, host-ticket, federation, and PEFT tasks |
-| [Failure modes](docs/FAILURE_MODES.md) | Symptoms, evidence, recovery, and escalation |
+| [Quickstart](docs/QUICKSTART.md) | Run the shortest safe mock or current-source QEMU path |
+| [Operator walkthrough](docs/OPERATOR_WALKTHROUGH.md) | Complete one end-to-end live workflow |
+| [Operator recipes](docs/OPERATOR_RECIPES.md) | Perform advanced evidence, mount, lifecycle, ticket, federation, and PEFT tasks |
+| [Failure modes](docs/FAILURE_MODES.md) | Diagnose and recover from observable failures |
+| [Hardware bring-up](docs/HARDWARE_BRINGUP.md) | Build, flash, boot, and prove QEMU or Pi 4 behavior |
 
-### Targets, evidence, and planning
+### Look up a contract
 
-| Document | Owns |
+| Document | Use it to |
 | --- | --- |
-| [Hardware bring-up](docs/HARDWARE_BRINGUP.md) | Image, flash, boot, and hardware-proof workflow |
-| [Boot reference](docs/BOOT_REFERENCE.md) | Boot stages, prompts, and fail-closed invariants |
-| [Benchmarks](docs/BENCHMARKS.md) | Workloads, provenance, and regression decisions |
-| [Use cases](docs/USE_CASES.md) | Capability-fit patterns, not acceptance claims |
-| [Build plan](docs/BUILD_PLAN.md) | Normative milestone scope, task authorization, and status |
-| [Toolchain setup](docs/TOOLCHAIN_MAC_ARM64.md) | Pinned macOS host tools and external seL4 artifact contract |
-| [Security](docs/SECURITY.md) | Private reporting, trust boundaries, controls, and generated limits |
+| [Userland and CLI](docs/USERLAND_AND_CLI.md) | Look up console, `cohsh`, `.coh`, and command semantics |
+| [Host tools](docs/HOST_TOOLS.md) | Choose host executables and compose transports safely |
+| [API guidelines](docs/API_GUIDELINES.md) | Implement against the REST projection and compatibility rules |
+| [Python support](docs/PYTHON_SUPPORT.md) | Use Python backends, bounded APIs, and generated target contracts |
+| [Interfaces](docs/INTERFACES.md) | Look up namespaces, payloads, console behavior, and compatibility |
+| [Secure9P](docs/SECURE9P.md) | Look up 9P layering, bounds, session invariants, and policy hooks |
+| [Boot reference](docs/BOOT_REFERENCE.md) | Interpret boot stages, prompts, and fail-closed markers |
+| [Benchmarks](docs/BENCHMARKS.md) | Run and interpret reproducible performance measurements |
+
+### Develop and contribute
+
+| Document | Use it to |
+| --- | --- |
+| [Toolchain setup](docs/TOOLCHAIN_MAC_ARM64.md) | Reproduce the pinned macOS build environment and external seL4 contract |
+| [Drivers](docs/DRIVERS.md) | Design, implement, test, and qualify a physical driver |
+| [Contributing](CONTRIBUTING.md) | Propose, implement, validate, and submit a scoped change |
+| [Build plan](docs/BUILD_PLAN.md) | Read the normative record of planned and implemented project scope |
 
 ## Help and contributing
 
-- New to Cohesix? Start with the [glossary](docs/GLOSSARY.md), then follow the
+- New to Cohesix? Read [current status](docs/STATUS.md), use the
+  [glossary](docs/GLOSSARY.md) as terms arise, then follow the
   [operator walkthrough](docs/OPERATOR_WALKTHROUGH.md); use
   [failure modes](docs/FAILURE_MODES.md) for diagnosis and recovery.
 - Contributions must follow [`AGENTS.md`](AGENTS.md),

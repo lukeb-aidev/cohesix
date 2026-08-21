@@ -15,6 +15,8 @@ in [INTERFACES.md](INTERFACES.md), role views in
 [ROLES_AND_SCHEDULING.md](ROLES_AND_SCHEDULING.md), and the system boundary in
 [ARCHITECTURE.md](ARCHITECTURE.md).
 
+See the [Glossary](GLOSSARY.md) for NineDoor, ticket, role, and authority terms.
+
 ## As-built boundary
 
 The implementation is split deliberately:

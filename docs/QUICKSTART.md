@@ -13,6 +13,8 @@ Cohesix is a pre-production research OS. QEMU is the reference development
 target, while Raspberry Pi 4 acceptance requires a separate, image-qualified
 hardware workflow. A successful build or QEMU boot is not Pi 4 proof.
 
+See the [Glossary](GLOSSARY.md) whenever a Cohesix-specific term is unfamiliar.
+
 ## Choose a first run
 
 | Goal | Path | Target required |
@@ -56,7 +58,7 @@ For a QEMU target run, the selected seL4 16.0.0 output directory must already
 contain the kernel, elfloader, generated headers, and configuration for that
 profile. The canonical operational/release input is
 `out/sel4/profile-v2/qemu-smp-production`; preserved `seL4/*` trees are
-explicit diagnostic or historical inputs only. The complete construction and
+explicit archived diagnostic inputs only. The complete construction and
 validation contract is in [Toolchain setup](TOOLCHAIN_MAC_ARM64.md) and
 [Hardware bring-up](HARDWARE_BRINGUP.md#qemu-runbook).
 

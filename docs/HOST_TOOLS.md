@@ -16,6 +16,9 @@ belongs in [USERLAND_AND_CLI.md](USERLAND_AND_CLI.md), REST behavior in
 mount, ticket, federation, lifecycle, and PEFT procedures live in
 [OPERATOR_RECIPES.md](OPERATOR_RECIPES.md).
 
+See the [Glossary](GLOSSARY.md) for Cohesix-specific role, namespace, and
+evidence terms.
+
 ## Generated integration truth
 
 `coh-rtc` compiles
@@ -24,145 +27,16 @@ into the exact
 [`host-integration-dependency/v1`](../configs/generated/host_integration_dependency.json)
 graph. The generated [support table](snippets/host_integration_dependency.md)
 binds each advertised host binary, library API, use case, and built-in Python
-playbook to its required mode, package, evidence lane, and owning milestone.
+playbook to its required mode, package, evidence lane, and acceptance owner.
 Executable-Worker proof, provider availability, package presence, mock or
 dry-run success, and use-case promotion are independent states.
 
-### V35/V24 adjacent-refill compatibility boundary
-
-Discovery task `m26e-console-network-service-isolation` and reopened Milestone
-25 root-service temporal restoration carried by `m26e-root-tcb-target-proof`
-select
-`m26e-qemu-root-adjacent-refill-natural-postpone-candidate-v35` for QEMU and
-`m26e-pi4-root-adjacent-refill-natural-postpone-candidate-v24` for Pi. Both
-root-control TCBs use `NaturalPostpone`: generated timeout capabilities,
-badges, resources, and registry identities remain reserved, the timeout
-endpoint is omitted, and standard faults remain terminal. All scheduling
-numerics and the distinct generated QEMU 24 MHz and Pi 54 MHz clocks remain
-unchanged; common child provenance remains V18.
-
-This target-internal scheduling-policy repair changes no schema, public API,
-wire frame, console grammar, namespace, workload, retry, client or protocol
-timeout, host-tool implementation, Python-library contract, benchmark
-implementation, evidence record, or report schema. The complete compatibility
-review covers `coh`, `cohsh`, `coh-status`, Hive Gateway, SwarmUI,
-`gpu-bridge-host`, `host-ticket-agent`, `host-sidecar-bridge`, `sidecar-bus`,
-`cas-tool`, every `.coh` script, `tools/cohesix-py`,
-`scripts/m26e_qemu_pressure.sh`, and `scripts/rest_perf_harness.py`; no host
-surface requires a contract edit. Exact-version execution is still mandatory:
-fresh QEMU must pass staged acceptance, the full `.coh` regression harness,
-REST core/parity, every host tool, Python, Conditional B2 executable target
-pressure, and the companion Conditional D host-model gateway matrix. QEMU
-cannot qualify Pi; Pi V24 separately requires a fresh generated 54 MHz build,
-exact flash/readback, cold boot, applicable hardware suite, host-tool/Python
-checks, and a Pi-selected target-performance proof. Conditional D does not
-supply QEMU or Pi target evidence.
-
-The immutable V34/V18 Stage 03 state
-`out/test-plan/m26e-console-qemu-v34-v18-oraclefix-20260814T104728Z`, attempt
-`20260814T105938.465736Z-11947-27f75501fecd`, passed Stage 01 and Stage 02. Its
-base/gated artifact IDs were
-`sha256:11921e2eedbf8e9c46f781c500b89acdcb9669ebda42eb6db0ed21a4eb47dac3`
-and
-`sha256:46ce91c8bffae218f557fedb19ec125cdded39118db641aee70db9e63949163b`.
-The fixed matrix passed 7/7, all ten base scripts passed including 9P and
-`session_pool.coh`, and a fresh telemetry boot passed `telemetry_ring.coh`;
-`telemetry_push_create.coh` then failed after each replacement connection wrote
-the complete 18-byte AUTH frame and read zero bytes. Immutable replay proved
-task 0, timeout badge `0x26ee0001`, label 5, at
-the outer Yield after ordinary Network/Timer, with no trace and tick `356343`,
-not divisible by 8,000. The adjacent refill amounts were the exhausted current
-`38,090` ticks and already-valid next `93,910` ticks; their sum is the unchanged
-`132,000` ticks or `5,500 us` at QEMU 24 MHz. The installed terminal timeout
-endpoint converted exhaustion of only the current refill, despite the valid
-adjacent refill, into root-fault and downstream fail-stop. This is failure
-evidence, not host-tool or Stage 03 qualification.
-
-### Stage 04 REST operation deadline
-
-The subsequent V35/V18 run passed the complete Stage 03 fixed matrix and all 18
-selected `.coh` scripts, then exposed a host-only Stage 04 deadline mismatch:
-the shared Rust REST client stopped a filesystem operation after three seconds
-while Hive Gateway could legally spend five seconds on bounded broker-queue
-admission and 120 seconds waiting for the target response. The repair cites
-active `m26e-console-network-service-isolation`, reopened
-`m24e-rest-client`, `m24e-cohsh-rest-transport`,
-`m25-smp-rest-regression-batch`, and the deadline-composition portion of
-`m25f-gateway-broker-refactor`.
-
-For filesystem operations, clients compose the response window as
-`5,000 ms + max(control_response_ms, telemetry_response_ms) + 5,000 ms`.
-The canonical Hive Gateway broker deadlines are `120,000/120,000 ms`, so the
-canonical filesystem-operation response window is `130,000 ms`. Metadata,
-name resolution, connection establishment, and response-body transfer keep
-their short bounds. The underlying HTTP library carries request-send deadlines
-into response-header receipt, so the filesystem-operation agent gives request
-send, request body, and response-header receipt the same composed window; this
-does not enlarge the allowed request body, response body, queue, or namespace.
-
-All eight packaged host executables were reviewed:
-
-- `hive-gateway` owns and reports the two broker response deadlines;
-- `cas-tool`, `coh`, `cohsh`, `gpu-bridge-host`, `host-sidecar-bridge`,
-  `host-ticket-agent`, and `swarmui` consume the shared safe Rust default when
-  they use REST;
-- `cohsh` additionally accepts `--rest-response-timeout-ms` or
-  `COHSH_REST_RESPONSE_TIMEOUT_MS`; the checked value reaches both the primary
-  transport and every pooled REST transport.
-
-The Stage 04 runner applies the same resolved window to its Python
-`RestBackend` smoke. This is an explicit test-call setting, not a change to the
-Python library's public default. `scripts/rest_perf_harness.py` retains its
-existing workloads, no-retry meaning, error budget, and report schema. No
-endpoint, HTTP or target wire schema, command grammar, ACK/ERR/END meaning,
-authority, batch concurrency, pool size, or retry policy changes. A fresh
-Stage 04 run and later exact-version host-tool, Python, and performance gates
-remain required; deadline alignment alone is not acceptance.
-
-### Performance backend selection
-
-`hive-gateway` reports `backend_class=host-model` only for its explicit
-in-process `--mock`/`HIVE_GATEWAY_MOCK=1` backend. The performance harness's
-`--gateway-mock` mode launches that backend and skips target TCP preflight. A TCP-console gateway reports
-`backend_class=console-projection`. The REST performance harness requires that
-distinction before population work: synthetic high-count `host-model` loads run
-only against the host model, while target-backed executable loads use generated
-role slots plus accepted target evidence. A mismatch fails before Worker
-discovery, policy approval, or `/queen/ctl` mutation; generic target `busy`
-remains non-retryable and is not reclassified as capacity.
-
-Conditional D measures the exact packaged gateway and large-reference
-telemetry path with a fresh host-model process for each scenario. Conditional
-B2 separately owns QEMU's three generated executable roles. The currently
-generated QEMU and Pi profiles each declare one Heartbeat, one GPU, and one LoRA
-slot, but their manifest identities and target evidence differ. The packaged
-QEMU gateway contract and QEMU acceptance validator cannot qualify Pi; a Pi
-performance run requires a Pi-selected gateway contract and fresh-Pi evidence.
-Conditional D passes `--tail-bytes 8192` explicitly. That is one complete,
-fail-closed structured Worker-state read; it does not retry, truncate, or alter
-the gateway endpoint. The historical 256-byte harness default predates the
-381-byte host-model observation and is not a valid comparator for this lane.
-It also passes `--strict-control-errors`, ensuring every typed bounded refusal
-is retained as an error rather than relaxed into a successful host-model
-operation.
-
-The in-process host model matches target schedule, lease, and export control
-mirror behavior: an individually valid JSONL record rotates oldest complete
-mirror records within `ctl_max_bytes`, while the independent semantic
-queue/list/window capacities still refuse deterministically. The fast ramp
-holds the configured Worker/intensity maximum for its final interval; a summary
-that stops below that endpoint is not qualifying evidence.
-
-The in-process transport maps only exact `TooBig` schedule, lease, and export
-semantic-capacity errors to the canonical
-`ERR ECHO reason=quota detail=buffer-full path=<path> error=buffer full`, while
-retaining the typed source error. Hive Gateway projects that semantic refusal
-as HTTP `200` with `GatewayResponse.status=ERR`; unmatched paths, messages, or
-error codes remain generic failures. Conditional D's joint
-`--strict-control-errors` plus `--no-retries` contract counts a returned
-refusal once without harness retry. The gateway's independent bounded retry
-window and counters remain unchanged.
-
+Target scheduling and service-compartment details are intentionally absent
+from this catalogue because they do not change host-tool composition. Host
+tools consume the stable console, namespace, REST, and generated target-profile
+contracts. Use [Roles and Scheduling](ROLES_AND_SCHEDULING.md) for target
+temporal policy, [API Guidelines](API_GUIDELINES.md) for REST deadline and
+refusal semantics, and [Benchmarking](BENCHMARKS.md) for backend proof classes.
 ## Choose one live topology
 
 The target TCP console is single-client. Use direct mode for one foreground tool or

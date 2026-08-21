@@ -11,6 +11,9 @@ defined in [HOST_TOOLS.md](HOST_TOOLS.md); the canonical live workflow is in
 [OPERATOR_WALKTHROUGH.md](OPERATOR_WALKTHROUGH.md); and advanced, task-oriented
 procedures are in [OPERATOR_RECIPES.md](OPERATOR_RECIPES.md).
 
+See the [Glossary](GLOSSARY.md) for Cohesix-specific shell, namespace, and role
+terms.
+
 ## Command surfaces
 
 | Surface | Runs on | Primary use | Authority |

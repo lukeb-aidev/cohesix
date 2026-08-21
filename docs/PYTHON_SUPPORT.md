@@ -14,6 +14,9 @@ semantics are defined in [API_GUIDELINES.md](API_GUIDELINES.md), control schemas
 in [INTERFACES.md](INTERFACES.md), and live topology in
 [HOST_TOOLS.md](HOST_TOOLS.md).
 
+See the [Glossary](GLOSSARY.md) for Cohesix-specific role, namespace, and
+evidence terms.
+
 Python support consumes the compiler-owned
 [`host-integration-dependency/v1`](../configs/generated/host_integration_dependency.json)
 graph. Its `python-sdk-projection` row is release-required, while each external
@@ -218,7 +221,7 @@ The package exports these primary surfaces from `cohesix`:
 | `WorkerAcceptanceAxes` | Keeps admission, READY, provider, receipt, artifact, proof, release, and use-case state separate |
 | `CohesixError` | Package error type for validation, transport, and server refusals |
 
-## Milestone 26e target contracts and Worker API
+## Target contracts and Worker API
 
 The wheel is target-neutral. Its generated `DEFAULTS` object contains bounded
 fallback expectations, `manifest_sha256=None`, and `execution_proof="none"`.

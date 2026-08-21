@@ -8,6 +8,9 @@ This runbook maps observable symptoms to bounded evidence and recovery. It does
 not redefine protocol errors; canonical response and path semantics are in
 [INTERFACES.md](INTERFACES.md).
 
+See the [Glossary](GLOSSARY.md) for Cohesix-specific error, role, and evidence
+terms.
+
 An explicit target `ERR` has no side effects unless the interface contract says
 otherwise. A connection loss or client-side timeout is different: completion
 may be unknown, so inspect read-only state before repeating a mutation.

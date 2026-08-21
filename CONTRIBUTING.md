@@ -13,6 +13,9 @@ artifacts, tests, and public documentation describe the same as-built system.
 Do not report a suspected vulnerability in a public issue. Follow the private
 process in [Security](docs/SECURITY.md#reporting-a-vulnerability).
 
+See the [Glossary](docs/GLOSSARY.md) for Cohesix-specific role, interface, and
+evidence terms.
+
 ## 1. Establish scope before editing
 
 Read these sources in order:

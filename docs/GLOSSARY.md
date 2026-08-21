@@ -189,10 +189,11 @@ ambient administrator power.
 
 ### Authority epoch
 
-A generation number reserved for a future executable Worker's endpoint
-authority. In such a profile, revocation or replacement can make an older
-badged capability stale. Current profiles carry only reserved epoch metadata;
-they install no Worker endpoint capability.
+A generation number attached to executable Worker authority. Revocation,
+teardown, or replacement advances the generation so an older endpoint badge,
+record, notification, or receipt cannot be reused as current authority. A
+generated epoch is configuration truth; only target evidence proves that the
+matching capability was created, delivered, exercised, and revoked.
 
 ## B
 
@@ -205,10 +206,9 @@ expected safety mechanism, not automatically a crash or data-plane failure.
 ### Badge
 
 A small value seL4 can attach to an endpoint or notification capability.
-Cohesix uses live badges on implemented root/driver paths and reserves generated
-Worker badge ranges for a future executable profile. A reserved value does not
-identify a live sender or grant authority until the corresponding capability is
-minted, delivered, and invoked.
+Cohesix uses badges on root, driver, and executable Worker paths. A generated or
+reserved value does not identify a live sender or grant authority until the
+corresponding capability is minted, delivered, and invoked on the target.
 
 ### Batch frame
 
@@ -636,10 +636,11 @@ and model-pointer records; it does not own the GPU device.
 
 ### GPU Worker / `worker-gpu`
 
-The recognized Worker session/model role scoped to its telemetry and generated
-GPU lease view. Current profiles do not launch it as a target task. It has no
-GPU MMIO, device node, CUDA, or NVML access and does not automatically reload a
-host model runtime.
+The executable Worker role scoped to its telemetry, lifecycle, receipts, and
+generated GPU lease view. The checked-in QEMU and Pi profiles declare one
+executable slot. The task has no GPU MMIO, device node, CUDA, or NVML access and
+does not automatically reload a host model runtime; those effects remain
+host-side.
 
 ## H
 
@@ -1219,11 +1220,11 @@ serial runtime or network path is unavailable.
 
 ### Service turn
 
-One bounded unit of work. For current driver runtimes, root-task submits the
-turn through the fixed driver-task ABI and then completes, yields, or times out.
-For current Worker roles, the event pump advances root-owned model state
-in-process; only a future executable Worker could receive a separate task turn.
-Service turns prevent one device or role from monopolizing the event pump.
+One bounded unit of work. Driver runtimes receive turns through the fixed
+driver-task ABI. Executable Workers receive independently scheduled target-task
+work through their compiler-declared ABI, while model/session-only roles remain
+root-owned projections. Service turns prevent one device, role, or operator
+surface from monopolizing progress.
 
 ### Shard / sharding
 
@@ -1309,11 +1310,10 @@ window is refused.
 
 ### Target / VM
 
-The Cohesix environment running seL4, root-task, root-owned Worker session/model
-state, and any profile-selected driver runtimes. Current profiles launch no
-Worker child tasks. QEMU supplies the reference virtual machine; Pi 4 is
-physical target hardware. The host and target have different trust, tooling,
-and evidence boundaries.
+The Cohesix environment running seL4, root-task, profile-selected service and
+Worker tasks, and any profile-selected driver runtimes. QEMU supplies the
+reference virtual machine; Pi 4 is physical target hardware. The host and
+target have different trust, tooling, and evidence boundaries.
 
 ### Target-qualified evidence
 
@@ -1435,11 +1435,10 @@ its target profile and selected seL4 build.
 
 ### VSpace
 
-A task's seL4-managed virtual address space. Separate VSpaces can prevent a
-future executable Worker or a current driver runtime from directly reading
-root-task or peer memory unless HAL and the generated capability layout
-explicitly share pages. Current profiles provide this boundary for selected
-driver runtimes, not Worker roles.
+A task's seL4-managed virtual address space. Separate VSpaces prevent an
+executable Worker, service child, or driver runtime from directly reading
+root-task or peer memory unless the generated capability layout explicitly
+shares bounded pages.
 
 ## W
 
@@ -1465,16 +1464,19 @@ operator path. It does not run target-side leader election.
 ### Worker
 
 A narrowly authorized role in the ticket, namespace, lifecycle, and telemetry
-model. A profile may make a Worker executable only by declaring and proving its
-target image, task objects, capabilities, notifications, scheduling, faults,
-and revocation. Current profiles launch no Worker child tasks. Workers are not
-generic AI agents, physical drivers, host daemons, or unrestricted subprocesses.
+model. The checked-in profiles declare Heartbeat, GPU, and LoRA as executable
+roles with one bounded slot each; WorkerBus remains model/session-only. A
+declaration is not target acceptance: a run must separately prove the image,
+task objects, capabilities, notifications, scheduling, faults, and revocation.
+Workers are not generic AI agents, physical drivers, host daemons, or
+unrestricted subprocesses. See [Roles and Scheduling](ROLES_AND_SCHEDULING.md)
+and [Current Status](STATUS.md).
 
 ### WorkerHeartbeat / `worker-heartbeat` / `worker-heart`
 
-The recognized Worker session/model role for liveness telemetry and the minimal
-Worker observability view. Current profiles do not launch it as a target task.
-`worker-heart` is the historical crate or project shorthand;
+The executable Worker role for bounded liveness telemetry and the minimal
+Worker observability view. The checked-in profiles declare one slot.
+`worker-heart` is the crate or project shorthand;
 `worker-heartbeat` is the public role label.
 
 ### WorkerGpu / `worker-gpu`
@@ -1485,12 +1487,10 @@ host-side.
 
 ### WorkerLora / `worker-lora`
 
-See [LoRA](#lora). This recognized session/model role observes ticket,
-lifecycle-model, receipt, and telemetry state through its Worker view. Current
-profiles do not launch it as a target task or enable its reserved endpoint and
-notification ranges. It has no separate root namespace or file-backed LoRA
-lease. It does not train or execute models, access GPU hardware, import
-artifacts, or reload a host model.
+See [LoRA](#lora). This executable role receives bounded lifecycle, receipt,
+and telemetry records through its Worker view. The checked-in profiles declare
+one slot. It does not train or execute models, access GPU hardware, import
+artifacts, or reload a host model; those effects remain host-side.
 
 ### WorkerBus / `worker-bus`
 
@@ -1500,11 +1500,11 @@ label does not make it active target authority.
 
 ### Worker authority
 
-Two distinct layers: valid session role/ticket authority, and, only for a future
-executable target Worker, current cap-backed seL4 invocation authority. Current
-profiles implement only the session layer. Reserved endpoint badges,
-notification values, and scheduling records are metadata and cannot substitute
-for live task objects and delivered capabilities.
+Two distinct layers: session role/ticket authority and executable target-task
+authority backed by seL4 capabilities. The selected profiles declare both for
+Heartbeat, GPU, and LoRA, while WorkerBus has only the session/model layer.
+Generated endpoint badges, notification values, and scheduling records prove
+configuration, not live task objects or delivered capabilities.
 
 ### Worker ticket
 

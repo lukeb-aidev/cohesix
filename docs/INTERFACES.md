@@ -15,6 +15,9 @@ in [ROLES_AND_SCHEDULING.md](ROLES_AND_SCHEDULING.md), system boundaries in
 [ARCHITECTURE.md](ARCHITECTURE.md), and operator command usage in
 [USERLAND_AND_CLI.md](USERLAND_AND_CLI.md).
 
+See the [Glossary](GLOSSARY.md) for Cohesix-specific protocol, role, and
+authority terms.
+
 ## Stability and authority
 
 The selected profile manifest, resolved manifest, generated tables, and
@@ -36,8 +39,8 @@ documentation in the same authorized change.
 
 ### MCS operator-inspection records
 
-Milestone 26e preserves bare `caps`, bare `smp`, and the first `bi` record while
-adding strict `caps mcs`, `smp mcs`, `[bi:v2]`, `[caps:mcs/v1]`, and
+The console provides bare `caps`, bare `smp`, and the first `bi` record plus
+strict `caps mcs`, `smp mcs`, `[bi:v2]`, `[caps:mcs/v1]`, and
 `[smp:mcs/v1]`. Every record labels kernel, generated, or runtime authority.
 Early-console and registry contention are typed unavailable states; generated
 rows never fabricate live registration, binding, activation, or containment.
@@ -128,612 +131,74 @@ does not synthesize a 9P frame on the wire.
 
 ### Internal target namespace-service ABI
 
-`nine-door-runtime` uses `namespace-service/v1` only inside the target. It is
-not an operator transport, a host RPC, or a second policy plane. The
-pointer-free 32-byte request header carries exact ABI/header versions,
-operation, zero flags, sequence, supervisor generation, bounded path/payload
-lengths, and zero reserved bytes. Path and payload bytes occupy a distinct
-shared frame bounded to 256 and 4096 bytes respectively. The child accepts only
-`attach`, `tail`, `spawn`, `kill`, `echo`, `cat`, `list`, and `log`; absolute
-paths have at most eight components and reject `.` and `..`.
+`namespace-service/v1` is an internal, pointer-free ABI between root and the
+restricted `nine-door-runtime` child. It is not an operator transport, host
+RPC, or second policy plane.
 
-The child response repeats the operation, exact sequence and generation, typed
-status, and bounded prepared path/payload. The root-side client contract exposes
-exact response validation that must succeed before ticket/Queen policy or
-authoritative mutation. Its call cap is exactly Write + GrantReply, without
-Read or Grant; the child receive cap is Read-only. Root maps the request window
-read-write and response window read-only; the child receives the complementary
-read-only and read-write mappings. Each direction is exactly two 4 KiB pages,
-uses distinct frame capabilities and physical pages, and carries no pointers in
-the shared record. The target adapter sends only sequence and encoded length in
-two message registers and rejects extra or unwrapped caps, unknown labels,
-short replies, stale identities, mismatched prepared bytes, and unknown error
-codes. The sealed 72-byte `namespace-runtime-init/v2` descriptor carries the
-aligned child IPC-buffer address in its formerly reserved word; the child
-validates that mapping and installs it as the libsel4 IPC buffer before its
-first receive. The QEMU constructor binds the exact selected ELF digest and
-entry/load span, maps image pages W^X, and creates the child from generated revoke anchor
-16137 without allocator fallback. While the child remains suspended, root
-configures and binds one compiler-budgeted, root-retained bootstrap scheduling
-context. After registry seal and root-fault activation, root resumes the child,
-validates an empty `Log` parser probe, observes the atomic `ReplyRecv` transition
-into the next receive, and unbinds that exact scheduling context. Only then is
-the child passive and only `root-control` donates on the single-inflight,
-one-deep Call chain. Activation, probe, or unbind failure revokes the namespace
-boundary and suspends the child where possible. The child owns one receive-loop
-Reply object but no scheduling-context cap or `SchedControl` authority, and no
-`SetAffinity` path is used. Root-fault retains a copy in its generated CSpace slot 10
-solely to return `NAMESPACE_REJECTED` with typed `Closed` once when a fault
-interrupts an outstanding Call. It then publishes the owner mailbox for scrub,
-unmap, and anchor revoke. No Reply is issued between calls, and the active
-console-network service cannot use this path. Queue-full, partial-frame, close,
-cancellation, stale-generation, and revoke outcomes are explicit and bounded.
-The ABI supplies no target TCP listener, namespace-wide capability, device
-capability, scheduling-context or `SchedControl` capability, ticket-execution
-authority, or root CSpace access. The bootstrap scheduling-context candidate
-remains subject to live QEMU qualification.
-`apps/nine-door` remains a host library/fixture provider and has no target or
-print-and-exit binary. A live QEMU boot is still required to promote these
-constructed interfaces to target execution evidence.
+The 32-byte request header carries the ABI and header versions, operation,
+sequence, supervisor generation, bounded path and payload lengths, and
+zero-valued reserved fields. Path and payload bytes occupy separate shared
+frames bounded to 256 and 4096 bytes. The child prepares only the declared
+`attach`, `tail`, `spawn`, `kill`, `echo`, `cat`, `list`, and `log`
+operations; absolute paths have at most eight components and reject `.` and
+`..`.
 
-The steady IPC wrapper retains four independent readiness checks: endpoint
-ready, endpoint validated, send unlocked, and post-commit unlocked. When all
-four are true, the wrapper takes an inline fast gate before the bootstrap trace
-counter, tracer snapshot, formatting, lock, or UART diagnostics. Any false
-condition enters the existing cold diagnostic/refusal path. This changes no
-endpoint right, message register, Reply behavior, ABI record, or failure rule.
+The response repeats the operation, sequence, and generation with a typed
+status and bounded prepared bytes. Root independently validates that identity
+before ticket, Queen-policy, or mutation authority is exercised. Unknown
+labels, operations, error codes, extra capabilities, short replies, stale
+generations, mismatched bytes, and partial records fail closed.
 
-For application `ATTACH`, the target namespace preparation is the sole fallible
-namespace transaction. Once its validated response succeeds, NineDoor commits
-the attached role/ticket context before best-effort audit, logger, or tracer
-observation; root commits its console session and emits `OK ATTACH` only after
-that bridge transaction returns success. Bridge notification enters
-UART+EP-mirrored logging without running a synchronous ping/ack loop. A later
-explicit request may still test and promote EP-only logging, but that optional
-transport optimization cannot veto or roll back namespace authority.
+Each direction uses two distinct 4 KiB pages with complementary read/write
+mappings. Shared records contain no pointers. Root's endpoint capability is
+Write + GrantReply without Read or Grant; the child's receive capability is
+Read-only. The selected child image is digest-bound and mapped W^X.
+
+The service receives one compiler-budgeted bootstrap scheduling context while
+suspended. After registry seal, root resumes it, validates one empty parser
+probe, observes its atomic `ReplyRecv` transition, and removes that scheduling
+context. Steady-state work runs only on the bounded root-donated Call/Reply
+chain. Fault or activation failure closes any exact outstanding caller, scrubs
+and unmaps the shared frames, removes Reply authority, and revokes the retained
+child anchor before reuse.
 
 ### Internal target console-network ABI
 
-`console-network-runtime` is an active-SC child, not the passive NineDoor
-donation chain and not a second external transport. Its console-network ABI v3
-retains four fixed 4096-byte, pointer-free, sequence-last pages: root-produced
-packet ingress and control are read-only in the child; child-produced packet
-egress and events are read-write there. Compact 40-byte packet and 64-byte
-control/event headers plus the validated active payload are authoritative;
-inactive tails are not protocol fields.
+`console-network-runtime` is an active-SC child that owns target Ethernet/IP/TCP
+state, frame parsing, transport authentication, and bounded response emission.
+It is not the passive NineDoor service and is not a second external protocol.
 
-ABI v3 adds root control kind `SendBatch = 3` without changing a page or
-offset. Its binary payload uses encoding version 1 and an eight-byte header
-`(version, count, used_bytes, reserved=0)`, followed by one through eight
-records. Each record is a little-endian `u16` length and `1..=256` UTF-8 bytes;
-CR/LF is forbidden. `used_bytes` must exactly cover every record header and
-byte, and trailing data is rejected. Root encodes the complete batch before
-publication; the child validates the complete copied payload before mutation
-and emits at most one record per Session unit. Legacy `SendLine = 1` and
-Disconnect remain valid controls.
+The console-network ABI uses four fixed 4096-byte pointer-free, sequence-last
+pages:
 
-After a Session unit commits one complete retained wire frame, including the
-last batch frame, it retains exactly one next
-`StackIngress -> StackEgress -> Session` cycle. The following no-progress
-Session completes and quiesces. Merely having a pending batch or lacking
-sendability/capacity cannot retain that cycle; this is a scheduling rule, not a
-new ABI field or wake.
+- root-produced packet ingress and control, mapped read-only in the child; and
+- child-produced packet egress and events, mapped read-write in the child.
 
-The descriptor's existing `timer_clock_hz` field is target truth rather than a
-portable default. QEMU/HVF emits `24000000`, matching the selected seL4 header
-and host virtual counter; Pi retains its independently generated frequency.
-This value correction changes no ABI field, size, version, notification,
-console grammar, Secure9P behavior, or host-tool schema.
+Compact packet and control/event headers plus the validated active payload are
+authoritative. Inactive tails are not protocol fields. Producers clear commit,
+write the validated fields and bytes, publish the final sequence with release
+ordering, and signal only afterward. Consumers accept a record only when the
+surrounding commit observations agree and all reserved fields are zero.
 
-The child rechecks its coalesced badge and publication-credit gates between
-logical units. The retained-first priority is completion publication,
-service-event publication, egress publication, service-poll continuation, new
-ingress, then new control. Exact eligible retained private work uses
-`seL4_Poll`. Idle or publication-uncredited work calls `seL4_Wait` directly,
-with no ordinary `seL4_Yield`. Ready starts with no publication credit. Only
-badge 64, signalled after root ObserveChild has
-validated/copied every indicated record and the adapter has durably handled the
-event and retained egress, grants one global credit. Internal units preserve
-it; exactly one publication consumes it before page mutation. Ordinary wakes
-never grant credit, and root clears its one-shot ACK debt before signalling.
-Root records ACK debt in ObserveChild but performs no signal in that unit. The
-next QEMU Network visit selects the distinct `AcknowledgePublication` unit
-ahead of diagnostic, egress, and lower work; that unit alone clears debt before
-Release+Signal, and its successful signal forces the following lower root unit
-back to ObserveChild. An empty packet/control hint is retired after the
-stable page proves there is no newer sequence, then drives exactly one retained
-service cycle; it cannot manufacture a permanent local Poll loop. Terminal
-revoke parks without publication. Graceful shutdown waits for one credit,
-publishes `ShutdownComplete`, retires ACK debt without another signal, and
-starts bounded containment. This scheduling cut changes only the internal ABI,
-manifest, and capability contract, not any external console verb. Root keeps
-`ChildTurnUnit::PollService` as the ABI-neutral scheduler unit, while v6
-internally resumes it across private `StackIngress`, `StackEgress`, and
-`Session` steps. The first two return `ServicePollOutcome::Continuation` and
-retain `service_pending` across the gate recheck and eligible local-Poll path; only
-`Session` returns `Complete` and clears it. This adds no shared
-record, notification, or external state. Root
-containment is separately resumable: one exclusive Recovery turn advances at
-most one fixed-order material unit, preserves both retained Runtime- and
-Network-unit cursors, and
-reaches the sole outer yield without ordinary-pump fallthrough. Console-network
-has precedence until its pending sequence completes; only then may NineDoor
-containment advance. Root V34 preserves V33/V32/V31/V30/V29's capture of HELP, NETSTATS, SMP,
-and CACHELOG for one
-exact child generation and authenticated connection, seals the complete body
-and terminal before publication, and drains through V27's retained response
-lane. The selected `DefaultNetStack` delegates terminal publication, bounded
-identity, lane inspection, response-budget polling, and pending console events
-to its concrete backend. One producer unit may fill only the existing
-eight-line adapter queue;
-one Network unit performs one useful ACK, egress, batch-stage, ingress, or
-child-service action. Exactly one ordinary Operator/Runtime/Network debt turn
-follows every eight response units. The external wire remains the same ordered
-per-line body followed by its exact `OK` or `ERR`; streamed namespace responses
-retain their documented `END`. The exact terminal batch must receive both
-`ControlCompleted` and `OutputDrained` before the lane retires. Disconnect is
-not eligible while that root-owned lane retains terminal completion, ACK debt,
-copied egress, or queued output; child-side drain alone does not authorize the
-transition.
+Control kind `SendBatch = 3` carries encoding version 1, one through eight
+records, exact used length, zero reserved fields, and `1..=256` bytes of valid
+UTF-8 per record with no CR or LF. Root encodes the complete batch before
+publication; the child validates the complete copied payload before emitting
+one record per bounded Session unit. Legacy `SendLine = 1` and Disconnect
+remain valid controls.
 
-No command, frame, line, terminal, retry, or client-timeout contract changes. The
-fixed target matrix requires HELP 12 total frames, NETSTATS 16, first-call
-selected-QEMU SMP activity 17, and CACHELOG 10 for count nine, then PING and
-QUIT on the same socket using the preexisting client response timeout and no
-retry or reconnect. The internal 1920-record ring capacity is not a separate
-five-second promotion gate.
+One complete wire-frame commit may retain one following bounded service cycle.
+A no-progress cycle quiesces; pending state without sendability or capacity does
+not create an uncredited spin. Publication requires explicit credit returned
+only after root has validated and durably handled every indicated event and
+egress record. Duplicate, stale, late, or identity-mismatched acknowledgements
+fail closed.
 
-The
-`m26e-qemu-console-received-progress-retention-candidate-v18` child and
-`m26e-qemu-root-adjacent-refill-natural-postpone-candidate-v35` root-control plus
-`m26e-qemu-root-fault-service-units-candidate-v6` root-fault candidates
-remain pending fresh exact QEMU fixed-matrix, standard-fault terminal
-containment, and budget-exhaustion natural-postponement liveness/isolation
-evidence. The preceding V26/V13 immutable
-image passed two complete direct sessions on one boot. The V27/V15 bounded
-TAIL/CAT canary later failed after QUIT at exact root reason
-`response-completion-sequence`; the retained V28/V15 result then qualified only
-the terminal-response fence and reconnect transition. The immutable V29/V15
-artifact completed AUTH and ATTACH, then HELP returned zero bytes before the
-unchanged 30-second timeout because the selected wrapper returned its default
-bounded identity instead of delegating the isolated hooks. None qualifies
-V30/V15. The later V30/V15 terminal-timeout artifact completed HELP and
-NETSTATS before terminalizing at the Yield SVC with adjacent refills totalling
-`3000 us`. A non-claiming local-Poll diagnostic completed HELP, NETSTATS, and
-correct SMP16 on its first boot; a second fresh boot reached
-`root-console.start.ok` then emitted `root-emergency fail-stop` before a TCP
-probe. These are failure diagnostics, not qualification.
-The later V31/V17 Stage 03 run passed the fixed matrix and its first three
-operational `.coh` scripts; the third rapid TAIL in `observe_watch.coh` reached
-target command begin, `tail.start`, `tail.stop reason=eof`, and command end,
-but did not deliver a complete response before the unchanged five-second
-client deadline. Its later CAT and QUIT were therefore not dispatched. This is
-V31 failure evidence for V32, not Stage 03 qualification.
-The subsequent V32/V17 Stage 03 run passed the same fixed matrix and
-`boot_v0.coh`, then failed `9p_batch.coh`: routine command/session diagnostics
-had entered public `/log/queen.log`, so the bounded CAT preview no longer
-contained the required ordered `batch-1|batch-2|batch-3` payload. Only one of
-the 17 selected operational `.coh` scripts passed before the stop. This is V32
-failure evidence for V33, not Stage 03 qualification.
-The later V33/V17 Stage 03 run
-`out/m26e-qemu/stage03-v33-v17-20260814T031936Z` passed the fixed matrix 7/7,
-`boot_v0.coh`, and `9p_batch.coh`, then exact same-artifact fault evidence
-identified a root-control timeout at task index 0, badge `0x26ee0001`, label 5,
-immediately after the final QUIT audit and before `host_absent.coh`. The base
-and gated artifact identities are retained in [TEST_PLAN.md](TEST_PLAN.md).
-This is V33 failure evidence for V34, not Stage 03 qualification.
-The subsequent immutable V34/V18 state
-`out/test-plan/m26e-console-qemu-v34-v18-oraclefix-20260814T104728Z`, Stage 03
-attempt `20260814T105938.465736Z-11947-27f75501fecd`, passed Stage 01 and
-Stage 02. Its Stage 03 base/gated artifact IDs were
-`sha256:11921e2eedbf8e9c46f781c500b89acdcb9669ebda42eb6db0ed21a4eb47dac3`
-and
-`sha256:46ce91c8bffae218f557fedb19ec125cdded39118db641aee70db9e63949163b`.
-The fixed matrix passed 7/7, all ten base scripts passed including 9P and
-`session_pool.coh`, and the fresh base-telemetry boot passed
-`telemetry_ring.coh`; `telemetry_push_create.coh` then failed when each
-replacement connection wrote the complete 18-byte AUTH frame and read zero
-bytes. Immutable replay proved root-control task 0, timeout
-badge `0x26ee0001`, label 5, at the outer Yield after ordinary Network/Timer,
-with no timer trace and tick `356343`, not divisible by 8,000. The adjacent
-refill amounts were the exhausted current `38,090` ticks and already-valid next
-`93,910` ticks; their sum is the unchanged `132,000` ticks or `5,500 us` at
-24 MHz. The terminal endpoint converted exhaustion of only the current refill,
-despite the valid adjacent refill, into fail-stop. The selected V35 QEMU and
-V24 Pi root records therefore omit only the root TCB timeout endpoint under
-`NaturalPostpone`; the timeout capability/badge/resource identity remains
-reserved and standard faults remain terminal. This repair cites discovery
-task `m26e-console-network-service-isolation` and reopened Milestone 25
-root-service temporal restoration carried by `m26e-root-tcb-target-proof`.
-It changes no schema, external API, wire frame, grammar, namespace, workload,
-retry, or timeout contract; no host-tool, Python-library, benchmark, workload,
-evidence-record, or report-schema implementation changes are required, and the
-V34/V18 state remains failure evidence. The complete exact-version QEMU
-staged, `.coh`, REST, host-tool, Python, and performance gates remain required,
-and Pi separately requires a fresh 54 MHz build, flash, and hardware proof.
-The selected manifest contract is schema 1.14, ABI v3, Ready identity v3, ACK
-badge 64, and the existing fifth root Write-only mint while page layouts and
-external console grammar remain unchanged. `NaturalPostpone` leaves the child
-and selected QEMU V35/Pi V24 root-control TCB timeout-handler slots empty, so
-seL4 postpones an exhausted active SC until replenishment. Standard faults
-remain terminal. Each reserved timeout cap, badge, resource, and registry
-identity remains accounted but is not installed as that TCB's timeout handler.
-
-Fresh V35/V18 state
-`out/test-plan/m26e-console-qemu-v35-v18-full-20260814T134855Z`, source identity
-`sha256:0a1c64ec92fc9f80d74e423972c2579872fc067fbf76370c54daf14e823b2821`,
-then passed Stage 03's fixed matrix `7/7` and all 18 selected `.coh` scripts
-using base/gated artifact IDs
-`sha256:d7f978d66935e93318892a09a7be426bc6083e55fc7237aaaea5d9ff332523f9`
-and
-`sha256:d0141863625f009280bab8f3bcbc085c0adc36dcdf978c116c9b42f0ac67c981`.
-Stage 04 attempt `20260814T142002.169146Z-32864-8dc11c8651a4` passed REST
-`boot_v0.coh` and failed `observe_watch.coh` line 8 when the three-second Rust
-client deadline expired inside the gateway's legal queue/response envelope.
-The target remained responsive, the gateway retained one connection and one
-upstream ATTACH, and no root-emergency, fail-stop, panic, or target fault was
-recorded. This is host deadline failure evidence, not a target or Stage 04
-interface failure.
-
-Under active `m26e-console-network-service-isolation`, reopened
-`m24e-rest-client`, `m24e-cohsh-rest-transport`,
-`m25-smp-rest-regression-batch`, and the deadline-composition portion of
-`m25f-gateway-broker-refactor`, REST filesystem clients reserve
-`5,000 ms + max(control_response_ms, telemetry_response_ms) + 5,000 ms`.
-Canonical broker deadlines `120,000/120,000 ms` therefore produce a
-`130,000 ms` client response window. This is host-side liveness configuration:
-it adds no REST field, endpoint, target wire frame, command, line, terminal,
-namespace, authority, ACK/ERR/END, concurrency, pool, or retry change. Metadata
-and other short HTTP phases remain separately bounded, and an ambiguous write
-is never retried merely because the client deadline expired.
-
-V35 retains V34/V33/V32/V31/V30/V29's bounded synchronous capture, V27's bounded response
-lane, V26 lifecycle fencing, V28 terminal-response Disconnect fence, V30's
-selected-wrapper delegation, and V31's failed-producer retirement. It changes
-only selected-QEMU internal routine-audit delivery: command, session, TAIL, and
-NineDoor diagnostics enter a private capacity-four EventPump FIFO, never
-public `/log/queen.log`. Saturation drops the new best-effort record while
-preserving older FIFO order. A final-idle Operator unit attempts one
-nonblocking serial admission and retains the head on backpressure. V34 permits
-at most one physical audit byte per eligible final-idle visit and retains the
-complete record and audit-only tag across later visits; response,
-stream, flush, input, retained-output, containment, network, and display work
-all take precedence. Pi, linked-runtime, legacy/non-VirtIO, ordinary
-console-failure, critical/fatal, and fail-stop routes retain their prior raw
-diagnostic behavior. It changes no command grammar, response order, timeout,
-retry, external interface field, namespace data, or authority and retains
-V25's complete temporal envelope. QEMU
-root-control stays on core 0 with budget/WCET/response
-`5500/5000/7600 us`; the console task and its SchedControl/service placement
-remain on core 2, where budget/WCET/response are `3000/3000/3000 us`.
-GPU/LoRA response admission on that core is `3600 us`, while demand remains
-`3800/9000 us`. Pi root-control selects
-`m26e-pi4-root-adjacent-refill-natural-postpone-candidate-v24` while retaining
-V23 placement and timing; its child advances to common V18 provenance under
-schema 1.14 with response `8100 us` and demand `9000/9000 us`. The envelope remains conservative and is not a
-claim of numeric minimality.
-
-Historical child V7 retains the private v6 three-unit cursor and changes only the internal
-smoltcp send precondition. Session requires both `can_send()` and capacity for
-the complete retained frame before `send_slice`; capacity alone cannot admit a
-write in FIN-WAIT or another closing state. Skipped output is not committed and
-cannot produce `OutputDrained`. When the peer finishes TCP teardown, the
-existing `end` transition clears the closed connection generation, publishes
-one `Disconnected`, and relistens. This adds no ABI page, field, event kind,
-notification, console verb, retry policy, or host-visible framing rule.
-
-Child V8 retains that guard and gives the already-present control-page
-`connection_id` its lifecycle meaning at application time. The child validates
-the control kind, bounded payload, and nonzero identity before classifying a
-well-formed record for an ended or different connection as `StaleConnection`.
-That record advances its exact sequence and publishes `ControlCompleted`, but
-enqueues no bytes, publishes no `OutputDrained`, and raises no fault. A malformed
-record or a matching-current control that violates authentication or queue
-rules remains an error. Consequently an old control cannot cross into a newly
-authenticated connection. Root retains its one-slot control ownership across
-`Disconnected` until the exact completion arrives; before staging, a root
-adapter with no authenticated connection returns backpressure so its stream
-cursor does not advance silently. These are generation-fence semantics over
-existing v1 fields and event kinds, not an ABI, schema, framing, grammar,
-capability, notification, timeout, or numeric change.
-
-The exact V24 HVF diagnostic completed `OK AUTH` and `OK ATTACH`, then timed
-out on `TAIL /log/queen.log`; its child standard fault mapped to retained
-`ApplyControl(SendLine)` after the owning connection had ended and
-authentication was inactive. That evidence falsifies V7's lifecycle
-disposition only. It does not change the external ACK/ERR/END contract or
-qualify V8.
-
-The exact V8 artifact
-`out/cohesix-v8-stale-control-hvf-qemu10-20260813T090943Z` subsequently reached
-the root prompt with no fault, but both live transport attempts wrote 18 AUTH
-bytes and received zero. V9 preserved V8's connection-generation disposition
-but its local-Poll/publication-fence artifact also wrote 18 AUTH bytes and read
-zero. V11 retains private internal Poll and replaces inferred wake credit with
-explicit Observe-to-ACK badge 64: one ACK grants and one publication consumes
-one credit. This moves the internal contract to schema 1.12 and ABI/READY v2
-with a fifth root Write-only mint on the existing notification. There is no
-external framing, ACK/ERR/END, timeout, retry, or namespace change.
-
-Child V12 adds only the missing peer-close lifecycle transition. A peer FIN
-that produces `CloseWait` sets the existing idempotent graceful-disconnect
-intent, retains already-authorized exact-generation output until `close_ready`,
-and then reuses the existing `Closed`/`end`/`listen` path to publish exactly one
-`Disconnected`, clear that generation, and restore the sole listener. The
-immutable V25/V11 artifact
-`out/m26e-qemu/temporal-v25-20260813T125130Z/artifact` completed its first raw
-AUTH but reset replacement connections at `+1 s` and `+10 s`; a healthy-child,
-`NullFault` read-only snapshot localized this to lifecycle rather than a new
-interface fault, but retained no transcript. V12 changes no page, field, badge,
-event kind, ABI/READY identity, schema, capability, external framing, grammar,
-namespace, timeout, or retry contract and is not qualified by that V25 run.
-
-The immutable V12 evidence set
-`out/m26e-qemu/peer-close-v12-20260813T133000Z` bound source digest
-`sha256:c047b0886ba42ba1dfe0004009a8e9377d4d2cbd98e997e8dfd463e4bc80eaa0`.
-Raw AUTH 1, host close, and same-boot raw AUTH 2 passed, followed by a `cohsh`
-session that passed AUTH, ATTACH, four-line TAIL, END, and QUIT. Replacement
-authentication timed out at `+5 s` and raw authentication still timed out at
-`+30 s`; UART showed no fault, and a read-only GDB reproduction found all CPUs
-kernel-idle. QUIT had made the server the active closer, leaving the sole
-smoltcp socket in `TimeWait`; smoltcp 0.13.1 uses a fixed `10 s` close delay
-and re-arms it for each incoming replacement SYN. M26b Complete `72288c7d`
-already treated that state as terminal. V13 ends the old connection generation,
-aborts only the completed TCP control block, and immediately relistens; the
-existing `Closed` path is unchanged. This changes no page, field, badge, event
-kind, ABI/READY identity, schema, capability, framing, grammar, namespace,
-timing, placement, retry, or timeout contract. V12 is failure evidence for the
-V13 repair, not qualification.
-
-The immutable V13 target failure is
-`out/m26e-qemu/peer-close-timewait-v13-20260813T140319Z/same-boot-two-complete-sessions-20260813T141000Z`.
-Session A completed AUTH, ATTACH, four-line TAIL, END, and QUIT. Same-boot
-session B connected twice but each AUTH wrote 18 bytes and read zero; QEMU
-remained alive and UART showed no runtime fault. The exact child ELF contained
-V13's TimeWait terminal transition. Root instead left the successful Disconnect
-eligible after `ControlCompleted` and `OutputDrained`, republished it on every
-strict lower-cursor pass, and reset the cursor to ObserveChild before Ingress or
-ServiceTick. V26 makes that existing root control per-connection single-issue:
-backpressure remains retryable, successful publication latches until the
-connection ends, and the requested Quit reason remains intact. This is an
-internal transaction disposition over existing control/event kinds. It changes
-no page, field, badge, ABI/READY identity, schema, capability, external framing,
-ACK/ERR/END behavior, namespace, numeric, grammar, declared retry, or timeout
-contract. Pi root provenance remains V23 and child provenance remains V13.
-
-V23 and root-fault V6 change internal turn boundaries only. Successful compact
-physical-tail/prompt housekeeping returns before ordinary phase selection;
-bounded backpressure may fall through to exactly one compact Operator unit
-without phase advance. Root-fault's one-time PrimeReceive commits Receive and
-yields before accepting a fault, so an early sender may queue on the existing
-endpoint but no fault value or Reply association crosses that prime boundary.
-The V6 service branch adds only internal `ResolveService`, `SuspendService`,
-optional passive `RecoverPassiveService`, and `PublishService` turns. Active
-console service faults issue no recovery Reply; passive service recovery may
-issue at most one. Neither change adds an endpoint, message, field, right, verb,
-or response.
-
-V18 retains v17's exact isolated QEMU VirtIO selection at the public EventPump
-entry, before the generic EventPump frame is allocated. Its tiny noinline dispatcher
-commits the outer successor and cannot call generic Operator or Runtime bodies.
-The compact Operator begins the existing shared serial and one-record output
-credits. A retained SerialDispatch is selected first; otherwise an RX-only
-SerialIo probe may retain SerialDispatch for a later Operator. SerialIo admits
-no TX, dispatch, flush, or raw-UART RX trace formatting while the admitted
-ordinary root-control turn is active; SerialDispatch commits its successor before
-bounded consume/echo plus TX flush and does not probe RX. The Operator admits
-at most one eligible
-material noinline leaf in strict priority: serial RX or retained dispatch/TX, local-seat input,
-ordered physical-response output, one lifecycle event, one buffered
-authenticated line, background/high-impact pending output, then
-display/frontier/attach. Every material leaf commits its
-recorded successor before work. This is internal temporal decomposition only:
-it changes no frame, event, line, response, ACK/ERR/END, authentication,
-authority, or ordering contract visible to a host client. Pi, linked-runtime,
-physical-owner, and non-VirtIO paths retain the generic EventPump.
-
-This split follows exact v17 failure evidence: root ELF
-`3d0641bac42d21ce383c47f38628a05db0d2474fab69fc6e14b67ba39a71bd47`,
-unchanged child ELF
-`920883c5e706688a65e7f168a643dbc527d09d7f48584bfb41fbd0c0ae823cb6`,
-and CPIO
-`fa478638d6d2b93b654a2615e4dcd1e1d7f666d0945d4e012adcf28da2292af1`.
-Four authentication attempts each wrote 18 bytes and read zero. Root-control
-faulted at outer-Yield PC `0xf6624`; saved ordinary, Runtime, and Operator
-successors were `Runtime`, `Worker`, and `SerialDispatch`, identifying the
-remaining composed SerialIo leaf. This internal split changes no external
-frame, event, line, response, ACK/ERR/END, authentication, authority, or
-ordering contract.
-
-The exact v18 artifact bound root ELF
-`e7d34f018ff308c575fedb79ca7cef5542a7da8e753c09ddb9d55cf9daa79d4e`
-and system CPIO
-`0dca41cc6fdd9a877144dcd2db610beaeafef95423a81ce6896b01bb9b8f5cf5`.
-Four authentication attempts each wrote 18 bytes and read zero. Root-control
-timed out after Network at outer-Yield FaultIP `0xf66e4`; successor
-`Operator(0)` and lower successor `Disconnect(2)` identify selected no-op
-`StageOutput(1)`, with no pending egress or child signal. V19 therefore changed
-only the internal QEMU Network prelude: it retained the timer prelude and one
-retained NIC unit but did not reconcile CYW43/HDMI state. Runtime and generic/Pi
-paths retained that behavior. The exact clean v19 root/CPIO hashes were
-`0737a6f008197fd5b931af104c95164ddcd925fa04a8440439895c1e76b26fca`
-and `51e7b955b449b42b7a0cad569aa187e19a0f71464ffb81080d29733a589e7ed0`.
-Four authentication attempts each wrote 18 bytes and read zero. Root-control
-timed out at outer-Yield PC `0xf66dc` after Network; lower successor
-`Ingress(3)` proves selected `Disconnect(2)` was a no-op without child signal.
-Pending egress was empty, the child was healthy at Wait PC `0x21343c`, and
-root `smoltcp_polls` was `250098`, isolating the composed post-leaf diagnostic
-aggregate. V20 retains one compact telemetry, originating-time, and
-last-RX-progress observation after the timer-plus-one-NIC visit. The next
-Network visit takes it and runs NETDIAG only before returning, while immediate
-flush, connection-id, and NineDoor ingest accounting remain unchanged. No ABI v1 field, frame, notification, capability,
-verb, ACK/ERR/END state, authentication rule, or host-visible ordering changes.
-The exact v20 root/CPIO hashes were
-`ed5cb9f587d0d63e6121f8b00b083e68f5a0a7dd23dd6d2bbf0c899e1e85e80f`
-and `ca2a52038eb0814a17c8609f03bec32ff357fdd524edee3e7080ac69ceb7823b`.
-The image reached the root marker and prompt, then root-control timed out at
-outer-Yield PC `0xf680c`. Successor Operator and retained NETDIAG prove timer
-plus NIC completed and the diagnostic had not run; lower-cursor, egress, and
-child state remain unconfirmed. V21 splits those internal Timer and Nic units
-through a successor-before-work QEMU cursor. A retained diagnostic preempts
-without advancing it, giving Timer -> Nic -> DeferredDiagnostic -> Timer.
-Quarantine clears the diagnostic but preserves the cursor; generic/Pi paths do
-not use it. This adds no external interface field or ordering state.
-
-The QEMU VirtIO root adapter also persists an internal lower-service cursor:
-ObserveChild -> StageOutput -> Disconnect -> Ingress -> ServiceTick. One Network
-visit attempts exactly one selected unit, even when it is a no-op. A no-op
-advances the cursor; a successful unit that signals the child forces the next
-lower attempt to ObserveChild. A pending deferred diagnostic or retained TX
-preempts without changing the cursor or forced-observe state. This is an
-internal scheduling contract only: it adds no console-network ABI field, page,
-notification, capability, verb, or external ordering rule. Live v7 evidence
-then located the next bound inside root's startup Operator: the exact image
-timed out in serial queue dequeue from `SerialPort::flush_tx_unlocked` while
-the UART-visible `[mark] root-console.start.ok` remained queued, before Network
-or Recovery. The missing wire marker is not a source lifecycle boundary.
-Schema 1.11 therefore adds the
-internal temporal field `virtio_operator_serial_io_bytes_per_turn`. QEMU
-root-control selects `64`; every non-root task and Pi/non-VirtIO root-control
-selects zero. One credit is shared across every serial RX poll and TX flush in
-that Operator turn. Entry-time TX backlog reserves `32` bytes for TX and limits
-RX to `32`; without entry backlog RX may use all `64`. Exhaustion retains
-unfinished bytes for a later turn.
-
-V14 introduced the ABI-neutral lower cursor through the compact
-`poll_split_ordinary_virtio_network_turn`. V21 adds the separate private
-`OrdinaryVirtioNetworkUnit::{Timer, Nic}` cursor. With no retained diagnostic,
-the cursor successor commits before Timer calls only
-`poll_runtime_timer_prelude` or Nic calls one budgeted NIC unit and retains the
-compact diagnostic. The following Network visit takes that observation and
-runs only NETDIAG without advancing the Timer/Nic cursor; quarantine clears the
-observation while preserving the cursor. The former composite Network prelude
-is absent. The distinct split Runtime prelude retains network-ready-HDMI
-reconciliation, and generic/Pi behavior is unchanged. The
-adapter commits the ordinary lower successor before one distinct noinline unit
-helper, avoiding a compiler-expanded closure that contains every unit. A
-successful child signal may still force the retained cursor to ObserveChild.
-Network may retain one lifecycle event but does not drain it; the immediately
-following Operator admits at most one retained event before buffered command
-dispatch. No shared record, event schema, ordering promise, or host-visible
-interface changes.
-The canonical v8 root ELF
-`5052e7a5070987c252d3c1f5cf6f27172bd5ece1836a8f6c2a5c329c789a0a61`
-still consumed the complete `2750 us` root-control refill and raised
-current-fault `Timeout`, badge `0x26ee0001`, at PC `0xede84` immediately after
-`emit_prompt_now`. The internal v9 scheduling rule therefore permits at most
-one retained output-record attempt in an Operator whose generated VirtIO
-serial limit is nonzero. Remaining FIFO and response-tail records stay ordered
-for later Operators; Pi and non-VirtIO turns keep their existing two-record
-attempt limit.
-The canonical v9 root ELF
-`fa488c9367136f0eadef7182a18691664c3ae51c2ac2974e12000ff5d27f38ed`
-and CPIO
-`aca549e99e0d86299e9f98348d896b730259277654544ebd22a74595b61e9bfb`
-then consumed the complete first post-bind `2750 us` refill and raised
-current-fault `Timeout`, badge `0x26ee0001`, at PC `0x13a798`, the first
-`compiler_builtins` `memmove` instruction reached from
-`heapless::Vec<PendingConsoleOutput, 72>::remove(0)` (LR `0x79ccc`, prospective
-`x2 = 0x110`). No byte was copied, serial was idle, the one-record cursor was
-full, and the marker plus initial prompt stayed queued. This is aggregate
-first-post-bind refill exhaustion rather than copy-cost evidence or a failure
-of the one-record rule.
-V10 therefore inserts one universal MCS `seL4_Yield` after the steady SC and
-timeout endpoint are installed but before either containment probe or the first
-Operator. It sacrifices the partial activation refill and waits for the next
-replenishment without draining retained output under bootstrap authority. The
-yield is a one-time internal activation seam, distinct from the sole recurring
-outer yield. It adds no interface, capability, schema field, or numeric change;
-Pi adds one startup-period wait while retaining its existing phase behavior.
-The exact v10 root ELF
-`022908395c954f73a67136f70fe4404d96e0cf1ff16f4531fa95eae7a6f57cb5`
-crossed that seam and emitted the retained startup marker and prompt, then
-timed out with badge `0x26ee0001` in the second fresh Runtime at PC `0xce98c`,
-the root-endpoint nonblocking receive. V11 retains every external interface and
-gives isolated QEMU Runtime the internal Worker -> ControlEndpoint ->
-BootstrapDrain -> StreamFlush -> RebootTail cursor with one selected unit per
-visit and successor commit before its prelude. Worker handles one
-pending mailbox operation or one retained role-slot check; ControlEndpoint
-performs at most one poll and its immediate forward; BootstrapDrain takes one
-staged `Option`; RebootTail owns its visit. MCS fault polling is absent from the
-cursor. StreamFlush uses one visit per line;
-after the retained final-line visit, a later selected no-line visit finalizes
-cursor/bandwidth state only and the following selected visit emits END only.
-Legacy Pi/non-VirtIO Runtime keeps its 48-line/16-KiB behavior.
-The exact v11/v4 artifacts were root ELF
-`44971429e4941d751248c216082256f01e187930d9a6d40028e5c89d8611b597`,
-console child ELF
-`af08f817191cc51c9354b61f09f3eeb50c8cdf875c660c7231987a426886666d`,
-and CPIO
-`9fbb58e1dc6dc508361f37ce0c24219e3e9029dae101e2be789df1bcb1a5b11d`.
-There were four TCP connects. The first three completed authentication attempts
-each wrote 18 bytes and read zero; the fourth connect had no completed
-authentication record. The child timed out with badge `0x26ee0007` after
-`3000 us` at PC `0x213458`, the `seL4_Yield` immediately after the composite
-`PollService` completed and cleared; saved retained state identified
-`PollService` as that completed unit. Containment
-reached `Complete(6)`; root then timed out with badge `0x26ee0001` at outer
-Yield PC `0xf5fbc` after an empty Operator and `2750 us`, with successors
-`Runtime` and `ControlEndpoint` and empty output. V11/v4 are failure evidence,
-so Stage 03 and pressure were withheld. V12 keeps the external interface
-unchanged and returns an isolated QEMU VirtIO Operator before its repeated tail
-when the bounded priority pass leaves no serviceable work.
-
-The non-claiming v12/v5 run
-`out/test-plan-convergence/v12-v5-auth-20260812T010200Z` bound root ELF
-`7cec5bd582d063adc73830af8cc62e0ec8dbbb33d91bd4701db09ca69e32e6ca`,
-console child ELF
-`920883c5e706688a65e7f168a643dbc527d09d7f48584bfb41fbd0c0ae823cb6`,
-and CPIO
-`dc36495a5de0df13bfb853ffa33fdc6e7ccc3bbf3a1a3c8c4cd74c8551160c16`.
-All four authentication attempts wrote 18 bytes and read zero. Root-control was
-the only timeout: badge `0x26ee0001`, exact `2750 us`, outer-Yield PC
-`0xf612c`. Stored successors `Network(2)` and `StreamFlush(3)` prove the prior
-ordinary phase was Runtime and the selected unit was `BootstrapDrain`; its
-staged `Option` was `None`. Fault sequence 2 and the child healthy at
-Yield-then-Wait exclude a prior child fault or Recovery. The observation
-embedded dirty source commit
-`a533290ffe264f0a2bf0af3db4bb4c45d1a4a278`, while repository HEAD later
-advanced to `84934dda6`, so it is diagnostic/failure evidence only.
-
-V13 changes no external interface. It preserves the same cursor and replaces
-only the split isolated-VirtIO Runtime's generic Runtime-without-control tail
-with a compact prelude. It reads HAL timebase and polls the timer once; an
-observed tick updates `now_ms`, increments the timer metric, publishes HAL
-timebase, and runs the existing conditional timer trace, while no tick refreshes
-`now_ms` from the read timebase. It then reconciles CYW43 network-ready HDMI
-state before the already-selected unit. Pi/non-VirtIO Runtime remains unchanged.
-This does not change the external serial grammar, the physical driver's
-`max_bytes=1024` contract, the outer Operator/Dispatch -> Runtime/IPC -> Network
-cycle, the sole recurring outer yield, resumable Recovery, or Pi/non-VirtIO
-outer Runtime behavior. In that historical V13 contract, active-MCS child
-Yield-then-Wait semantics were universal; selected V18 retains V17's local
-Poll and direct blocking Wait under NaturalPostpone, and retains a fresh
-private service cycle after each nonzero bounded socket receive.
-
-The exact v16 image bound root ELF
-`4fab7abc8707b9829ba66ac525efdfc7afefa812df4bab9abb8cb67d504a76a6`
-and CPIO
-`456558cac05e4d136d3cbc18d1290cc48bebf619ba5459cd623b667dbfff3e96`.
-The prompt serial/output completed, but root-control consumed the full
-`2750 us` and faulted at outer-Yield PC `0xf61c4`; saved successors were
-`Runtime` and `ControlEndpoint`. Target disassembly showed approximately
-`0x42c0` bytes of generic EventPump frame plus `0x12a0` bytes of generic
-Operator frame still preceded the bounded output leaf. Root-fault consumed the
-full `3000 us` at its first post-classification Yield, PC `0x113938`, before
-suspension or emergency signal. This is failure evidence for v16/v3, not
-interface or child-v5 failure.
-
-Root-fault v4 preserves the same endpoint, badges, Reply, and release
-interfaces while splitting `Receive -> Classify -> SuspendCritical ->
-SignalEmergency`. Receive commits Classify before the blocking receive, copies
-only label/badge, and yields. Released classifications yield before the next
-Receive; RetainedByDriver waits for and validates the exact release then
-yields; Critical commits SuspendCritical then yields. SuspendCritical commits
-SignalEmergency, suspends, and yields; SignalEmergency commits Receive,
-signals, and yields. These internal refill boundaries introduce no externally
-observable field, verb, error, or authority.
-
+The generated descriptor supplies target timer frequency, image identity,
+mappings, capabilities, notifications, scheduling authority, and fault routes.
+Root policy, role attachment, namespace mutation, and command execution remain
+outside the child. The public `AUTH`/`ATTACH` and `OK`/`ERR`/`END`
+contract is unchanged.
 ## Target TCP console sequence
 
 ```mermaid

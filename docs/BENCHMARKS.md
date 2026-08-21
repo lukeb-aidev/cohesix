@@ -1,6 +1,6 @@
 <!-- Copyright 2026 Lukas Bower -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
-<!-- Purpose: Define Cohesix benchmark methodology, evidence qualification, artifact requirements, and current findings. -->
+<!-- Purpose: Define Cohesix benchmark methodology, evidence qualification, and artifact requirements. -->
 <!-- Author: Lukas Bower -->
 # Cohesix Benchmarking
 
@@ -14,652 +14,42 @@ and device proof belongs in [HARDWARE_BRINGUP.md](HARDWARE_BRINGUP.md), staged
 acceptance in [TEST_PLAN.md](TEST_PLAN.md), and milestone authorization in
 [BUILD_PLAN.md](BUILD_PLAN.md).
 
-## Active Scope
+See the [Glossary](GLOSSARY.md) for Cohesix-specific backend, role, and evidence
+terms.
 
-The active performance task is Milestone 26d,
-`m26d-benchmark-revalidation-and-tuning`. It may improve provenance,
-classification, strictness, and bounded implementation defects exposed by the
-same workload. It must not relax error accounting, change authority semantics,
-hide `buffer-full`, or convert a benchmark shortcut into production behavior.
+## Scope and proof classes
 
-Milestone 26e additionally requires a full same-harness comparison because it
-changes target scheduling, root-service IPC, and Worker execution. Its current
-lane is QEMU-first on four-core AArch64 `virt` with GICv3. Pi 4 measurements
-remain a later independent hardware lane and cannot be copied from, predicted
-by, or replaced with QEMU results.
+Cohesix performance evidence is classified by the system that produced it.
+Results from different classes are useful for different questions, but they are
+not interchangeable.
 
-The canonical macOS QEMU benchmark lane is HVF with
-`virt,gic-version=3,virtualization=off`, `cortex-a57`, QEMU-native HVC PSCI,
-and exact
-24,000,000 Hz generated timer truth. The seL4 profile, root-task build metadata,
-console-network descriptor, immutable launch record, and recorded QEMU command
-must all agree. Wall-clock TCG, `-icount`, and artificial CNTFRQ variants are
-useful causal diagnostics only: they change the execution/time model and must
-never be compared as accepted latency or throughput evidence. The historical
-M26d TCG tables below remain correctly labelled historical and are not silently
-reclassified as the M26e baseline.
-
-The current `m26e-qemu-root-adjacent-refill-natural-postpone-candidate-v35`
-root paired with
-`m26e-qemu-console-received-progress-retention-candidate-v18` is
-performance-relevant even though it changes no REST endpoint, workload, retry
-policy, client timeout, or report schema. It preserves V29's bounded synchronous capture,
-V28's terminal Disconnect fence, V27's
-response cadence, V26's disconnect lifecycle, V25's temporal envelope, V24's ACK split,
-V23's predispatch boundary, and v21's
-separate successor-before-work
-Timer and Nic Network visits and the following NETDIAG-only visit, so the
-featured sequence remains Timer -> Nic -> DeferredDiagnostic -> Timer and the
-NIC remains serviced once per three featured Network visits. V23 makes compact
-predispatch completion success-sensitive. A physical-tail reconciliation or
-prompt-tail queue attempt returns exclusively when it clears its predicate; if
-the bounded attempt leaves the predicate pending, exactly one compact Operator
-unit may run before return without advancing the ordinary phase. Ready reboot
-remains an exclusive pre-phase return. Runtime and Network never share a turn
-with this housekeeping, while an Operator fallback may advance only its private
-subcursor. Do not infer parity from green compiler or protocol tests.
-Historical QEMU V24 additionally made a pending publication ACK its own highest-priority
-QEMU Network unit. ObserveChild records debt only after valid copy and durable
-retention; a later visit clears and signals that debt, then forces the lower
-cursor back to ObserveChild. Selected Pi root-control is now
-`m26e-pi4-root-adjacent-refill-natural-postpone-candidate-v24`; it retains
-V23's placement, all timing numerics, the generated 54 MHz clock, capability,
-workload, and report-schema values.
-The exact V24 snapshot instead placed root timeout badge `0x26ee0001` at
-FaultIP `0x5361c` in `KernelSerialDriver::read_byte`, with LR `0x5391c` in
-`SerialPort::poll_rx_current_tcb`; the child was healthy at Wait `0x21360c`.
-V25 kept root on core 0 and changed its QEMU budget/WCET/response to
-`5500/5000/7600 us`; V18 keeps the console child on core 2 with
-budget/WCET/response `3000/3000/3000 us` and raises same-priority GPU/LoRA
-responses to `3600 us` while core-2 demand remains `3800/9000 us`. Pi child
-response is `8100 us` with core-0 demand `9000/9000 us`. This changes the
-target scheduling envelope, so prior performance
-cannot be inherited; requests, timeouts, retries, workloads, and report schema
-remain fixed for an honest rerun. The historical Pi root-control was V23; its child
-was V11 in the exact V25 artifact under schema 1.12. Historical V13 retained
-V12 and changed only lifecycle provenance and the completed active-close
-terminal transition. V26 added only per-connection single-issue bookkeeping.
-The selected V15 child retains V14's ABI v3 SendBatch and admits its observed
-60-page footprint; V27 adds the bounded authenticated response lane; V28 adds
-only the terminal-response Disconnect fence; V29 adds root-local immutable
-synchronous capture; V30 delegates those hooks through the selected net-stack
-wrapper. Every V25 timing and placement value remains fixed.
-V25's inherited envelope remains conservative, not a claim that these values
-are numerically minimal.
-First pass fresh raw session-1 AUTH, host close, same-boot raw session-2 AUTH,
-two sequential direct `cohsh` sessions, standard-fault terminal containment,
-and budget-exhaustion natural-postponement liveness/isolation,
-then the focused direct base `.coh` batch, then Hive Gateway REST core/parity
-plus the Python smoke. After those functional gates, run Conditional B2's
-exact-three executable-Worker QEMU pressure against accepted same-boot target
-evidence. Run Conditional D separately with the exact packaged Hive Gateway's
-explicit host-model backend for the canonical `telemetry-1mb`,
-`telemetry-10mb`, `telemetry-100mb`, and `telemetry-1gb` scenarios. Conditional
-D preserves the 24-to-120 synthetic comparator and does not create QEMU or Pi
-target proof. Preserve each lane's fixed inputs and summary schema; report any
-error-budget or latency regression rather than masking it with retry or timeout
-changes.
-
-The paired child candidate is now
-`m26e-qemu-console-received-progress-retention-candidate-v18`. It retains
-V7's closing-state sendability guard and v6's split of the former private
-composite smoltcp poll into one ingress attempt, one egress pass, and Session
-on separate child replenishments. V8 additionally consumes a well-formed
-control only for its exact connection generation: an ended or replacement
-connection completes the stale sequence without output or fault, while
-malformed and matching-current errors remain fail-closed. Root also reports
-backpressure instead of silently consuming a not-yet-staged line when no
-authenticated connection exists. V11 preserves those semantics and uses an
-explicit Observe-to-ACK protocol for each one-slot child publication. Root
-issues ACK badge 64 only after it has validated and copied the indicated record
-and the adapter has durably handled the event and retained any egress. One ACK
-grants one publication credit; ordinary packet, control, shutdown, and revoke
-wakes never do. Internal private work may still Poll after Yield without a
-credit, while publication waits and consumes one credit before page mutation.
-V12 additionally treats peer-initiated `CloseWait` as the existing graceful
-close-after-flush intent. It retains exact-generation output until
-`close_ready`, then reuses `Closed`/`end`/`listen` to emit one `Disconnected`
-and restore the sole listener; it adds no retry, timeout, wake, or benchmark
-cadence.
-V13 additionally treats the completed server-active-close `TimeWait` state as
-terminal for the sole listener. It ends the old generation, aborts the
-completed TCP control block, and relistens immediately; the existing `Closed`
-path is unchanged. It adds no benchmark retry, timeout, request, workload, or
-measurement cadence.
-
-V14 batches root authorization/publication only: one binary control carries up
-to eight `1..=256`-byte UTF-8 response lines, but the child still stages one
-external frame per Session unit. V34 retains V33/V32/V31/V30/V29/V27's eight useful response units
-before exactly one preserved ordinary phase debt turn. This removes the former
-one-line-per-fifteen-root-visits cursor limit without changing the benchmark
-request, external per-line framing, retries, or timeout. Performance must be
-measured rather than inferred from this bound.
-Each successful child full-frame commit retains exactly one following
-three-unit service cycle, including for the final batch record; the next
-no-progress Session quiesces. This removes a root ServiceTick-per-record
-dependency without creating a pending-state or capacity-failure spin.
-V18 additionally treats every nonzero bounded socket receive as private
-progress and retains a fresh three-unit service cycle. Only a zero-receive,
-no-wire-commit Session quiesces. This removes a notification dependency for
-already-buffered oversize-body fragments and the following command without
-adding a benchmark retry, timer, synthetic wake, or workload change.
-Disconnect becomes eligible only after the root-owned response lane has retired
-terminal completion/drain identity, ACK debt, copied egress, and queued output;
-child-side drain alone cannot start the existing one-shot transaction. This
-internal V28 fence, V29 capture, and V30 wrapper delegation change no benchmark
-input, retry, timeout, or schema.
-
-The exact V24 HVF canary completed `OK AUTH` and `OK ATTACH`, then timed out
-waiting for `TAIL /log/queen.log`; the child fault mapped to retained
-`ApplyControl(SendLine)` after that connection had ended and authentication was
-inactive. This is failure evidence, so no throughput or latency claim may be
-derived from V24. A fresh same-boot two-session canary must prove that a delayed
-session-1 control completes once without entering session 2 and that session 2
-receives its own ACK/TAIL/END before benchmarks begin.
-
-The exact V8 artifact
-`out/cohesix-v8-stale-control-hvf-qemu10-20260813T090943Z` reached the root
-prompt without a target fault, but two sequential live connections each wrote
-18 AUTH bytes and received zero before timeout. The later exact V9 artifact
-`out/cohesix-v9-retained-work-hvf-qemu10-20260813T095338Z` still wrote 18 AUTH
-bytes and read zero before timeout, so its prompt/fence rule is also failure
-evidence and supplies no latency or throughput result.
-
-The immutable V25/V11 artifact
-`out/m26e-qemu/temporal-v25-20260813T125130Z/artifact` completed the first raw
-AUTH, but replacement raw connections reset at `+1 s` and `+10 s`. A live
-read-only snapshot, whose transcript was not retained, showed root
-`NullFault`, fully replenished root-control budget `5500 us`, and the healthy
-child blocked in core-2 Wait. Source audit localized the failure to the omitted
-peer-FIN `CloseWait` server half-close/relisten transition, which M26b Complete
-`72288c7d` had handled explicitly. This is V25/V11 reachability and failure
-evidence, not a V12 performance result.
-
-The immutable V12 evidence set
-`out/m26e-qemu/peer-close-v12-20260813T133000Z`, source digest
-`sha256:c047b0886ba42ba1dfe0004009a8e9377d4d2cbd98e997e8dfd463e4bc80eaa0`,
-passed raw AUTH 1, host close, same-boot raw AUTH 2, and a following `cohsh`
-AUTH/ATTACH/four-line-TAIL/END/QUIT session. Replacement AUTH timed out at
-`+5 s` and raw AUTH still timed out at `+30 s`; there was no UART fault, and a
-read-only GDB reproduction found all CPUs kernel-idle. Smoltcp 0.13.1 held the
-server-active close in `TimeWait` for `10 s`, with each incoming replacement
-SYN re-arming that delay. M26b Complete `72288c7d` already treated `TimeWait`
-as terminal; V13 restores that listener boundary. This is lifecycle failure
-evidence and supplies no V13 throughput or latency result.
-
-The immutable V13 target failure
-`out/m26e-qemu/peer-close-timewait-v13-20260813T140319Z/same-boot-two-complete-sessions-20260813T141000Z`
-completed direct session A through AUTH, ATTACH, four-line TAIL, END, and QUIT.
-Same-boot session B connected twice but each authentication wrote 18 bytes and
-read zero, then failed after 21 seconds; QEMU remained alive and UART showed no
-runtime fault. The exact child contained V13's TimeWait transition. Root had
-instead republished the successful Disconnect after each
-`ControlCompleted`/`OutputDrained`, resetting the lower cursor before Ingress or
-ServiceTick and preventing the peer ACK/FIN from reaching the child. V26 latches
-that successful root transaction once per connection, leaving backpressure
-retryable and every V25 scheduling value unchanged. This is liveness failure
-evidence and supplies no V26 throughput or latency result.
-
-The immutable V26 artifact
-`out/m26e-qemu/disconnect-single-issue-v26-20260813T145200Z/artifact` and
-same-boot evidence `same-boot-two-complete-sessions-20260813T150000Z` then
-completed two direct AUTH/ATTACH/four-line-TAIL/END/QUIT sessions without a
-reconnect or target fault. This is passing lifecycle evidence only. A first
-gateway on that same V26 boot also completed one-line TAIL, but measured
-end-to-end time was 4.42 seconds and a separate three-second request returned
-HTTP 000; neither observation is a V28/V15 performance result.
-
-The immutable V29 artifact
-`out/m26e-qemu/bounded-sync-response-v29-v15-20260813T190157Z/artifact`
-completed AUTH and ATTACH, then HELP returned zero bytes before the unchanged
-30-second timeout. Clean root/child snapshots and breakpoint plus live-vtable
-proof localized the result to `DefaultNetStack` returning its default bounded
-identity instead of delegating the isolated hooks. It provides no latency or
-throughput result.
-
-V16, V17, V27, V28, V29, V30, V31, V32, V33, V34, QEMU V35, and Pi V24 change no benchmark request, REST endpoint, retry policy, client timeout,
-workload, evidence field, or report schema. The all-ready IPC fast gate and the
-ATTACH logger change likewise alter only target-internal scheduling: successful
-ATTACH retains UART+EP mirroring and defers the optional EP-only ping/ack probe
-to a later explicit request. Compatibility review of the complete host-tool
-suite, every `.coh` script, `tools/cohesix-py`, and benchmark scripts therefore
-requires no external protocol, Python contract, workload, or report-schema
-change. The internal
-generated contract advances to schema 1.14 and console ABI/READY identity v3
-while retaining the existing publication-ACK mint and all page/resource
-numerics. `NaturalPostpone` leaves the console child and selected QEMU V35/Pi
-V24 root-control TCB timeout handlers empty; standard faults remain terminal,
-and each reserved timeout resource remains accounted. V33 changed only the selected-QEMU internal delivery route for
-routine diagnostics. V34 retains that private four-record FIFO and narrows
-only physical audit TX to one byte per eligible final-idle Operator visit,
-retaining the complete record and audit-only tag across later visits. The FIFO uses bounded drop-new
-saturation and a final-idle Operator unit to attempt one nonblocking serial
-admission; it never writes public `/log/queen.log` and cannot run while
-response, input, retained-output, containment, network, or display work is
-eligible. Pi, linked-runtime, and legacy/non-VirtIO diagnostics retain their
-prior raw route. This changes no benchmark request, response grammar, timeout,
-retry policy, workload, or report schema, but fresh measurement remains
-required rather than inferred. The unchanged direct `.coh`, Hive Gateway REST,
-Python, and no-retry telemetry surfaces remain withheld until fresh
-V35/root-fault-V6/child-V18
-fixed response, standard-fault containment, and budget-exhaustion postponement
-gates pass.
-
-The non-claiming V32/V17 Stage 03 run passed the fixed matrix and
-`boot_v0.coh`, then failed `9p_batch.coh` when routine diagnostics entered
-public `/log/queen.log` and displaced the expected ordered ECHO payload from
-the bounded CAT preview. It produced no latency or throughput result and is
-failure evidence only.
-
-The later non-claiming V33/V17 Stage 03 run
-`out/m26e-qemu/stage03-v33-v17-20260814T031936Z` passed the fixed matrix 7/7,
-`boot_v0.coh`, and `9p_batch.coh`, then exact same-artifact evidence identified
-a root-control timeout at task index 0, badge `0x26ee0001`, label 5, after the
-final QUIT audit and before `host_absent.coh`. Its exact base/gated identities
-are retained in [TEST_PLAN.md](TEST_PLAN.md). It produced no accepted latency
-or throughput result and is V33 failure evidence for V34.
-
-The subsequent immutable V34/V18 staged state
-`out/test-plan/m26e-console-qemu-v34-v18-oraclefix-20260814T104728Z`, Stage 03
-attempt `20260814T105938.465736Z-11947-27f75501fecd`, passed Stage 01 and
-Stage 02. Its Stage 03 base/gated artifact IDs were
-`sha256:11921e2eedbf8e9c46f781c500b89acdcb9669ebda42eb6db0ed21a4eb47dac3`
-and
-`sha256:46ce91c8bffae218f557fedb19ec125cdded39118db641aee70db9e63949163b`.
-The fixed matrix passed 7/7, all ten base scripts passed including 9P and
-`session_pool.coh`, and the fresh base-telemetry boot passed
-`telemetry_ring.coh`; `telemetry_push_create.coh` then failed after each
-replacement connection wrote the complete 18-byte AUTH frame and read zero
-bytes. Immutable replay proved root-control task 0,
-timeout badge `0x26ee0001`, label 5, at the outer Yield after ordinary
-Network/Timer, with no timer trace and tick `356343`, not divisible by 8,000.
-The adjacent refill amounts were the exhausted current `38,090` ticks and the
-already-valid next `93,910` ticks; their sum is the unchanged `132,000` ticks,
-or `5,500 us` at generated QEMU 24 MHz. The terminal timeout endpoint converted
-exhaustion of only the current refill, despite the valid adjacent refill, into
-fail-stop. This run produced no accepted latency or throughput result.
-
-Under discovery task `m26e-console-network-service-isolation` and reopened
-Milestone 25 root-service temporal restoration carried by
-`m26e-root-tcb-target-proof`, QEMU V35 and Pi V24 select `NaturalPostpone` for
-root-control with every numeric and the 24/54 MHz clocks unchanged. The timeout
-cap, badge, resource, and registry identity remain reserved; the TCB timeout
-endpoint is omitted and standard faults remain terminal. This changes no
-benchmark implementation, request, workload, retry, timeout, evidence record,
-report schema, host-tool, or Python-library contract. Fresh V35 QEMU staged,
-`.coh`, REST, complete host-tool, Python, Conditional B2 executable pressure,
-and the companion Conditional D host-model gateway matrix remain required;
-fresh Pi V24 target performance requires its own 54 MHz build, flash, and
-hardware proof and cannot inherit QEMU or Conditional D results.
-
-The later fresh V35/V18 staged state
-`out/test-plan/m26e-console-qemu-v35-v18-full-20260814T134855Z`, source identity
-`sha256:0a1c64ec92fc9f80d74e423972c2579872fc067fbf76370c54daf14e823b2821`,
-passed Stage 01 `21/21`, Stage 02 `2/2`, the fixed matrix `7/7`, and all 18
-selected `.coh` scripts. Stage 03 used base/gated artifact IDs
-`sha256:d7f978d66935e93318892a09a7be426bc6083e55fc7237aaaea5d9ff332523f9`
-and
-`sha256:d0141863625f009280bab8f3bcbc085c0adc36dcdf978c116c9b42f0ac67c981`.
-Stage 04 attempt `20260814T142002.169146Z-32864-8dc11c8651a4` then passed REST
-`boot_v0.coh` and failed `observe_watch.coh` because its shared Rust client
-expired at three seconds while the gateway still held accepted work inside its
-legal five-second queue plus 120-second broker-response envelope. QEMU remained
-responsive, the gateway retained one connection and one upstream ATTACH, and no
-target fault was recorded. This failure produces no accepted REST latency,
-throughput, or performance result.
-
-The bounded repair composes the filesystem-operation client response window as
-`5,000 ms + max(control_response_ms, telemetry_response_ms) + 5,000 ms`, or
-`130,000 ms` for the canonical `120,000/120,000 ms` broker profile. It cites
-active `m26e-console-network-service-isolation`, reopened
-`m24e-rest-client`, `m24e-cohsh-rest-transport`,
-`m25-smp-rest-regression-batch`, and only the deadline-composition portion of
-`m25f-gateway-broker-refactor`. This alignment changes a host operation
-deadline but does not change benchmark scenarios, payloads, concurrency,
-retries, no-retry interpretation, error budgets, performance evidence fields,
-or report schemas. `tools/cohesix-py` keeps its public default while the Stage 04 smoke
-supplies the resolved window explicitly. The eight packaged host executables,
-Python gate, and unchanged Conditional D matrix still require fresh execution;
-the longer legal wait cannot be reported as a performance improvement or used
-to mask a server deadline, target failure, or error-budget regression.
-
-Historical V34 preserves V33/V32/V31/V30/V29's capture of each fixed synchronous body and terminal before
-publication and
-uses an immutable bounded snapshot for CACHELOG. The fixed one-socket matrix
-proves HELP `11 + OK`, NETSTATS `15 + OK`, first-call selected-QEMU SMP activity
-`16 + OK`, and CACHELOG `9 + OK`, then PING and QUIT. Fresh exact V35 evidence
-must pass that functional matrix before Stage 03, REST, or performance work;
-the 1920-record internal ring capacity is not a separate five-second gate.
-The V30/V15 artifact that completed HELP and NETSTATS before terminalizing at
-the Yield SVC, and the local-Poll diagnostic whose first boot completed correct
-SMP16 but whose second fresh boot fail-stopped before a TCP probe, are failure
-diagnostics only. Fresh exact V18 evidence must also pass the standard-fault
-and postponement gates before downstream work
-proceeds; retained V29 failure evidence, V28 lifecycle evidence, and host
-fixtures cannot enter a benchmark table or acceptance claim.
-
-### Milestone 26e QEMU-first evidence contract
-
-The 26e benchmark artifacts are inputs to target evidence; they are not proof
-merely because a benchmark process or QEMU instance started. Retain exact bytes
-and publish their lowercase SHA-256 and byte length in the relevant
-`raw_evidence` list:
-
-| Evidence layer | Required explicit benchmark/target inputs |
-| --- | --- |
-| Worker component | Direct target transcript covering the complete Heartbeat, GPU receipt, LoRA receipt, saturation, timeout, fault, teardown, revocation, fresh-generation, operator-liveness, and driver-liveness outcome matrix; the matching live role-required integration records; medium- and high-pressure REST summaries when they exercise Worker/MCS behavior. |
-| Root TCB | Compiler-generated admitted-maximum topology/inventory, the separate constructed-actual critical-duty census and live Worker/service attachment receipts, fault-containment transcript, operator-liveness transcript, and pressure/latency summaries. |
-| Full system | Exact accepted component/root digests, four-core admission totals, no-classic-scheduler proof, normal/overload/timeout/fault/recovery results, protocol regression, target-selected same-harness performance, and the target-qualified CYW43 coexistence-record binding. |
-
-The component record exposes each Worker's attach/fault badges, assigned core,
-scheduling-context budget and period, and full compiler-budget object inventory
-as typed fields. The component emitter checks those fields against
-`coh-rtc`'s canonical `root_task_topology.json`, including the role's exact
-temporal task and per-slot object bundle. The root record exposes the generated
-maximum-role inventory as an admitted budget, not an allocation census. Its
-projected admitted-maximum copy must match compiler truth exactly across TCB,
-CNode, VSpace, page-table, ASID, frame, endpoint, notification,
-standard/timeout fault-cap, Reply, scheduling-context, CSpace-slot, and
-untyped-byte totals. Independently, `ROOT_CRITICAL_OBJECTS
-scope=constructed-actual` and the live service/Worker markers bind what was
-actually constructed, attached, faulted, and torn down; those observations are
-checked against their own bounds and are never required to equal the maximum
-budget. The full-system run input names the component and root digests
-explicitly. All three records carry complete sorted outcome matrices
-and hash-only raw-artifact descriptors. The emitters also bind their exact
-observation, compiler-topology/inventory, and target-session input bytes, so an
-edited observation invalidates downstream evidence. The compiler topology hash
-is recomputed from deterministic compact JSON and the maximum inventory is
-re-derived before either component or root promotion.
-
-QEMU qualification must retain both medium and high pressure runs with retries
-disabled, strict control-error accounting enabled, bounded in-flight work, and
-separate requested/discovered/READY Worker population counts. Record latency,
-throughput, every error class, console/operator liveness, per-core admission,
-budget exhaustion, timeout attribution, fault recovery, and post-teardown
-object/capability counts. A numerical improvement does not excuse a missing
-receipt, semantic error, liveness loss, inventory drift, or leaked authority.
-Conversely, an explicit bounded refusal remains an error for the stated error
-budget and must not be retried or reclassified away.
-
-Schedule, lease, and export control-file mirrors are rolling complete-record
-windows, not lifetime byte quotas. Host-model and target providers both evict
-oldest complete mirror records before appending an individually valid record;
-their separately generated queue, list, and window capacities remain the
-semantic refusal points. Benchmark traffic must not fail merely because prior
-accepted control records filled the observational mirror.
-
-Until those direct observations exist, the QEMU 26e evidence state is
-unaccepted. The staged Test Plan may pass its ordinary QEMU regression tier
-without emitting a 26e component/root/system PASS. Runtime release promotion
-remains impossible until an independent fresh-Pi graph supplies the matching
-three accepted records and positive hardware coexistence evidence.
-
-## Current Qualified State
-
-| Evidence | Qualification |
-| --- | --- |
-| Current QEMU Test Plan | Stages 01-05 pass under `out/test-plan/m26d-repository-gates-qemu`. This qualifies the current QEMU regression environment, not a mixed-load numerical baseline. |
-| Focused seL4 15 QEMU read microbenchmarks | The retained M26d provenance ledger records status-suite runs and their exact artifacts. Telemetry was skipped because the selected run exposed no discoverable worker entries. These results qualify only the measured status read path. See [M26D_SEL4_15_PROVENANCE.md](audit/M26D_SEL4_15_PROVENANCE.md). |
-| seL4 16 refresh | Fresh v16 source, five-profile, direct external Pi-source, root-task target-check, and linked QEMU `--no-run` validation passed on 2026-07-23. The exact `a94903514f72...` Pi image now supplies the transport-specific hardware comparison below, but it does not qualify the later source candidate. The v15 results above remain a historical comparator and must not be relabeled as v16 Pi evidence. |
-| Historical Pi 4 wired GENET | M26c retains a coherent GENET Stage 01-05, runtime/DMA, DHCP, raw TCP, and authenticated `cohsh` proof chain. It is accepted historical target readiness, not current-tree throughput proof. See [M26C_AS_BUILT_BLOCKERS.md](audit/M26C_AS_BUILT_BLOCKERS.md). |
-| Current Pi 4 source candidate | Hardware-free and offline source checks do not qualify live performance. The candidate after exact image `a94903514f72...` has not been measured on Pi hardware; it still requires an exact rebuild/readback, repeated first-pair Wi-Fi boots, TCP/`cohsh`, pressure, pcap, and unchanged GENET control. |
-| Exact `a949` Pi 4 Wi-Fi | Five powered warm reboots passed Gate 8a-8h on their first pair, but the power-off boot consumed recovery after first-pair failure and was correctly rejected. The measured TCP flow was clean, while latency and the no-retry pressure result materially failed the accepted envelope. This is diagnostic hardware evidence, not cold-repeatability or performance qualification. |
-| Exact `a949` Pi 4 GENET control | The same-image wired control completed 8,983 of 8,983 pressure operations with zero errors and approximately 1.2-ms request-to-first-payload latency. It qualifies the common TCP/console/REST/gateway stack as the control for this comparison, not the later source candidate or Wi-Fi capacity. |
-
-### Exact `a949` Pi 4 Wi-Fi/GENET Comparison (2026-07-30)
-
-This group measures source commit
-`190786fac51acf9a84b8db0650e316a3b48347ba` in exact read-back image
-`a94903514f72b5f2ac26a7565a4cf89951abaf945b318200468e48fa0135e51b`.
-The later source candidate is not this image and has no measured performance
-result. The figures below therefore remain bound to `a949`; they are a
-transport comparison and defect baseline, not evidence that the candidate has
-reached its target.
-
-| Evidence | Pi Wi-Fi / CYW43 | Pi wired / GENET control |
+| Class | What it measures | What it cannot establish |
 | --- | --- | --- |
-| Boot frontier | The power-off boot lost its first-pair owner, consumed the sole recovery allowance, and was correctly rejected as `supervisor-in-attempt-recovery-used`. Five subsequent powered warm reboots were 5/5 first-pair Gate 8a-8h successes with zero recovery. This does not close the cold failure. | One wired/DHCP boot supplied the unchanged common-stack control. |
-| First-connection `.coh` | `boot_v0.coh` 2.524 s; `tcp_basic.coh` 2.633 s; `smp_parity.coh` 3.074 s. | The same scripts completed in 0.597 s, 0.079 s, and 0.019 s. |
-| Link setup and latency | Ping averaged approximately 160.7 ms; SYN-to-SYN/ACK was 202-213 ms. | DHCP DORA completed in 8.133 ms; ping averaged 0.440 ms; SYN-to-SYN/ACK was 0.351 ms. |
-| Request to first payload | Mean 314.653 ms, p95 407.430 ms, maximum 572.289 ms; approximately 2.9 sequential requests/s. | Mean 1.232 ms, p95 1.464 ms; measured goodput 165.164 kbit/s. |
-| No-retry mid/high pressure | 309 of 824 operations succeeded; 515 timed out. | 8,983 of 8,983 operations succeeded with zero errors. |
-| Paired-capture TCP quality | The persistent flow was clean: no sequence gap, out-of-order segment, reset, zero window, SACK, or SYN retry. That clean transport does not excuse the application timeouts or latency failure. | One retransmission accompanied an approximately 252-ms `CAT` stall, with no reset, reconnect, sustained loss, or material flow defect. |
+| Host model | Gateway, REST projection, report generation, and synthetic population handling on the host. | Target execution, seL4 scheduling, driver behavior, or physical-network performance. |
+| QEMU | The selected seL4 image, executable target Workers, console transport, and host projection under the recorded QEMU configuration. | Raspberry Pi timing, devices, or physical-network behavior. |
+| Raspberry Pi 4 | The exact read-back image and physical transport used for the run. | A different image, transport, board, or later source tree. |
+| Host microbenchmark | A named parser, replay, report, visualization, or host-tool operation. | End-to-end target capacity. |
 
-Artifacts:
+The report's `backend_class` identifies the execution backend;
+`proof_class` records the strongest evidence actually imported and validated.
+A connected gateway, successful build, or reachable target does not by itself
+upgrade the proof class.
 
-- Wi-Fi: `out/bench/pi4-wifi-a949-20260729T212254Z`.
-- GENET: `out/bench/pi4-genet-a949-20260729T214633Z`.
+The canonical macOS QEMU lane uses HVF with
+`virt,gic-version=3,virtualization=off`, `cortex-a57`, QEMU-native HVC PSCI,
+and the generated timer frequency. TCG, `-icount`, and artificial timer
+variants are diagnostic execution models and must not be compared as accepted
+latency or throughput evidence.
 
-GENET used the same smoltcp console, REST harness, and hive gateway and therefore
-isolates the material delay to the CYW43 linked-runtime/HAL cadence rather than
-the common TCP/application stack. The earlier proposed tenfold Wi-Fi floor of
-request-to-first-payload p95 at or below 40 ms and at least 29 successful
-sequential requests/s is retained as a non-blocking optimization target. The
-aggressive stretch target remains p95 at or below 10 ms and at least 100
-successful sequential requests/s. Milestone 26b closure instead uses the
-operator-approved usable, repeatable, no-semantic-loss envelope recorded in the
-Build Plan, with honest recovered-retransmission and RF-exclusion accounting
-and unchanged GENET control. Source and model results alone cannot satisfy that
-hardware gate.
+Target scheduling values, Worker bounds, console descriptors, and component
+identities come from the selected generated build. Benchmark commands must
+record them; this document does not duplicate their current values. See
+[STATUS.md](STATUS.md) for the current implementation boundary and
+[ROLES_AND_SCHEDULING.md](ROLES_AND_SCHEDULING.md) for the scheduling contract.
 
-### M26d QEMU Gateway Cache/Coalescing Revalidation (2026-07-16)
-
-This diagnostic ledger covers Milestone 26d
-`m26d-benchmark-revalidation-and-tuning` and the reopened Milestone 26b
-`m26b-rest-normalized-parity` guarantee that cache/coalescing remains a
-host-only projection with no write bypass. The candidate source commit is
-`eed905d0edfe1e65f4dc83af652626a055cfcb4e`.
-
-The retained 8-to-1000-worker baseline and final runs use the same mixed
-workload: intensity 6, 120 seconds, seed-controlled ramp, target range
-28.8-to-3600 requests/second, maximum 256 in flight, transient retries off,
-strict control errors on, and a 1% error budget.
-
-| Metric | Baseline | Final aligned | Interpretation |
-| --- | ---: | ---: | --- |
-| Successful / attempted operations | 96,458 / 104,023 | 100,437 / 108,316 | More successful work completed under the same two-minute workload. |
-| Average latency | 45.7 ms | 22.6 ms | Improved; diagnostic QEMU REST result only. |
-| p95 latency | 135.8 ms | 41.6 ms | Improved without retry masking. |
-| p99 latency | 2.407 s | 248.4 ms | Improved; the tail remains workload- and QEMU-specific. |
-| Telemetry waiter high-water | 139 | 47 | Reduced gateway contention. |
-| Gateway pool exhaustion / timeout rejection | 0 / 0 | 0 / 0 | No gateway pool or timeout failure was observed. |
-| Gateway read-cache hit rate (`proc_cache_*` counters) | 83.95% | 81.06% | Both runs exercised the cache; hit rate is descriptive, not a verdict. |
-| Overall strict-control error rate | 7.272% | 7.274% | **FAIL** against the 1% budget in both runs. |
-
-Artifacts:
-
-- Baseline: `out/bench/m26d-high-pressure-baseline_20260715T115501Z.summary.json`.
-- Final aligned: `out/bench/m26d-high-pressure-final-aligned_20260715T124018Z.summary.json`.
-- Fresh bounded smoke using the candidate source: `out/bench/hive-cache-simulate_20260715T212758Z.summary.json` (`8` workers, intensity `2`, `96/96` operations successful, no retry, no gateway pool exhaustion or timeout rejection).
-- Fresh affected-read microbenchmark: `out/bench/hive-cache-perf-status_20260715T213118Z.perf-summary.json` (`5` status runs, `108` cache hits, `12` misses, no gateway pool exhaustion or timeout rejection, measured sequential/parallel ratio `267.62x`). The first cold sequential sample dominates the average, so this ratio is not a general capacity claim.
-- Companion gates: `out/test-plan/m26d-gateway-cache-20260715` Stages 01-04 and `out/audit/gate/20260715T212429Z` due diligence.
-
-All 27 REST read operation kinds in the final aligned stress artifact completed
-90,305 attempts with zero errors. The overall stress run is nevertheless not
-an accepted capacity envelope: all 7,879 errors are explicit bounded VM
-schedule/lease `buffer-full` refusals (5,367 lease and 2,512 schedule). That
-upstream bounded-pressure debt blocks an 8-to-1000-worker acceptance claim but
-does not justify hiding retries, widening queues, or treating cache reads as
-failed. This ledger is QEMU gateway evidence only; it is not Pi 4, GENET,
-CYW43/SDIO, Wi-Fi, or repeated-boot proof.
-
-### M26d GICv3 High-Pressure Safe-Tuning Revalidation (2026-07-16)
-
-This follow-up is authorized by Milestone 26d
-`m26d-benchmark-revalidation-and-tuning`. It compares two baseline and two
-final two-minute runs against byte-identical seL4/root-task images. Only the
-host `hive-gateway` binary differs. The selected external seL4 15 build is
-`/Users/lukasbower/seL4/SMP_build_gic3_smp4_v15`; its generated configuration,
-device tree, and every retained QEMU log identify GICv3 and four CPUs. The QEMU
-machine is `virt,gic-version=3,virtualization=on,kernel-irqchip=off` under TCG.
-
-Both lanes use the same logical and request workload: workers ramp from 8 to
-1000, intensity is fixed at 6, duration is 120 seconds, ramp steps are 10
-seconds, seed is 2501, target load spans 28.8 to 3600 requests/second, and the
-configured in-flight limit is 256. Transient retries are off, strict control
-errors are on, the error budget remains 1%, the console is authenticated as
-queen, and REST mutation authentication is enabled on loopback. Default
-gateway pool, response-timeout, and control-write retry-window settings are
-unchanged.
-
-| Four-minute aggregate | Baseline | Final | Change |
-| --- | ---: | ---: | ---: |
-| Attempted operations | 221,719 | 224,348 | +1.19% |
-| Successful operations | 205,428 | 210,937 | +2.68% |
-| Errors | 16,291 | 13,411 | -17.68% |
-| Strict error rate | 7.3476% | 5.9778% | -1.370 percentage points |
-| Attempted throughput | 923.83/s | 934.78/s | +1.19% |
-| Successful throughput | 855.95/s | 878.90/s | +2.68% |
-| Average latency | 22.596 ms | 12.466 ms | -44.8% |
-| p50 latency | 0.218 ms | 0.214 ms | -1.8% |
-| p95 latency | 40.371 ms | 24.170 ms | -40.1% |
-| p99 latency | 508.460 ms | 104.989 ms | -79.4% |
-| Maximum latency | 2.939 s | 2.258 s | -23.2% |
-| Gateway cache hit rate | 81.15% | 90.29% | +9.14 percentage points |
-| Gateway cache misses | 31,230 | 16,293 | -47.8% |
-| Gateway control + telemetry checkouts | 63,619 | 58,280 | -8.4% |
-| Gateway pool exhaustion / checkout retry / timeout rejection | 0 / 0 / 0 | 0 / 0 / 0 | Unchanged |
-
-Counts are exact pooled totals. Aggregate percentile rows are count-weighted
-estimates from the two canonical summaries per lane because the harness does
-not retain raw samples. Both final repetitions independently improve p95 and
-p99. The meaningful residual read regression is `/proc/lease/summary` (p95
-22.467 ms to 49.458 ms): successful quota mutations must invalidate that
-count-bearing view. Quota-write latency is not directly comparable because the
-baseline mostly measured incorrect fast collateral refusals while the final
-lane executes every quota write at the target.
-
-The four bounded changes are:
-
-- expose the exact telemetry segment ID already present in the successful
-  target `ECHO` acknowledgement, while retaining a validated `/latest` read for
-  compatibility and the canonical comparator workload;
-- isolate the 250 ms cached control refusal by operation so a failed lease
-  grant or preempt cannot suppress unrelated renew or quota writes;
-- invalidate only read-cache views an accepted write can change, including
-  lease-operation-specific summary, active, and preemption paths; and
-- share immutable cache-fill results with `Arc<[String]>`, copying into caller
-  responses only after releasing cache locks.
-
-The canonical harness still performs one segment-create `ECHO` plus one
-`/latest` `CAT`. It prefers a valid receipt when another creator advances
-`latest`, and uses the validated `CAT` result only as a compatibility fallback.
-An intermediate receipt-only diagnostic changed the raw request workload and
-exposed rapid four-segment eviction churn; it is intentionally excluded from
-the qualified comparison. No segment bound, eviction rule, queue, timeout,
-retry budget, error classification, authority check, or ACK/ERR/END behavior
-was relaxed.
-
-Artifacts and identity:
-
-- Baseline summaries:
-  `out/bench/m26d-high-pressure-gicv3-baseline_20260715T220607Z.summary.json`
-  and
-  `out/bench/m26d-high-pressure-gicv3-baseline-rep2_20260715T221458Z.summary.json`.
-- Final summaries:
-  `out/bench/m26d-high-pressure-gicv3-final-current_20260715T225703Z.summary.json`
-  and
-  `out/bench/m26d-high-pressure-gicv3-final-current-rep2_20260715T225923Z.summary.json`.
-- Final QEMU logs:
-  `out/bench/m26d-high-pressure-gicv3-final-current-qemu.log` and
-  `out/bench/m26d-high-pressure-gicv3-final-current-rep2-qemu.log`.
-- Baseline gateway SHA-256:
-  `25b01a9ea2c27d6b748eaf16b6119ae8bd146f4bf85cad5863cb254c0ed3d19d`;
-  final gateway SHA-256:
-  `20ed7c0257137e2096654fe62085b1a95526dd3814aa6772ce93b777f5cf42f9`.
-- Final REST harness SHA-256:
-  `527d856d00375d052c59a7e45be73a36d20507d4c6ccd485795c280f06839cca`.
-- Shared target hashes: elfloader
-  `18073401eebcc754961ebd6163861b812ed2b4b56ddcdfc94a93aafc677e0bcc`,
-  kernel
-  `26877c4fdf79a6186ee7bfd54128dd6b81cf2b41ec160a232608c405b02478a8`,
-  rootserver
-  `60546dd33d4a7f2bdcaffdce7161c8f9c56563c098783cc1d225bb6637a32519`,
-  and 2,542,080-byte rootfs CPIO
-  `275cc3a5a5de327170c42de99e9eac2c6812c27884e291a03f0cb4fbcf4b8101`.
-  The runtime manifest reports
-  `376f09a49cdb37c07ae8ef007d4d4c715df4b4f949d4d6c1546002108d495599`.
-- Final status-read companion:
-  `out/bench/m26d-gicv3-final-read-status_20260715T223511Z.perf-summary.json`
-  (5 runs, 108 cache hits, 12 misses, no pool exhaustion, checkout retry, or
-  timeout rejection). Its first cold sequential sample dominates the reported
-  31.11x sequential/parallel ratio, so that ratio is not a general capacity
-  claim.
-- Current-tree companion gates: QEMU Stages 01-05 under
-  `out/test-plan/m26d-gicv3-safe-optimizations-20260716` and due diligence under
-  `out/audit/gate/20260715T225244Z`.
-
-This result is safely better than the paired GICv3 baseline but remains
-**diagnostic, not an accepted 1000-worker envelope**. All four runs fail the
-unchanged 1% budget. The final 13,411 errors are explicit bounded target
-schedule, lease-grant, and lease-preemption capacity refusals; quota has zero
-errors, telemetry has zero errors, and no failure was hidden or retried. This
-QEMU result also provides no current Pi 4, GENET, CYW43/SDIO, Wi-Fi, or
-repeated-boot proof.
-
-### M26d Async Cache-Hit Fast-Path Revalidation (2026-07-16)
-
-This tuning pass is also authorized by Milestone 26d
-`m26d-benchmark-revalidation-and-tuning`. For validated cacheable `LS` and
-`CAT` requests, `hive-gateway` now probes the existing read cache before
-dispatching blocking work. A hit copies the immutable cached lines after
-releasing the cache lock. A miss, expired entry, in-flight fill, or contended
-lock follows the existing blocking/coalescing path, which remains the sole
-place that accounts a miss and performs target I/O. Path and `max_bytes`
-validation still occurs before the probe, and successful `CAT` responses use
-the same byte-bound response builder in both paths.
-
-The strongest changed-layer comparison is a same-QEMU-boot, gateway-restart
-A/B using 100 `status` runs per binary. Excluding the first cold sample,
-sequential latency improved from 1.578 ms to 1.469 ms (-6.90%) and parallel
-latency improved from 1.604 ms to 1.577 ms (-1.68%). Both lanes recorded
-exactly 2,388 cache hits, 12 misses, and 12 telemetry checkouts, with zero pool
-exhaustion, checkout retry, or timeout rejection. The retained summaries are:
-
-- pre-fast-path control:
-  `out/bench/m26d-gicv3-cache-hit-control-status-100_20260716T022400Z.perf-summary.json`;
-- cache-hit fast path:
-  `out/bench/m26d-gicv3-cache-hit-fastpath-status-100_20260716T022432Z.perf-summary.json`.
-
-Three full high-pressure repetitions retained the unchanged 8-to-1000-worker
-workload described above. Together they attempted 334,725 operations, completed
-315,004 successfully, and returned 19,721 explicit bounded errors (5.8917%).
-Their count-weighted average latency was 9.612 ms and estimated p50 was
-0.201 ms. Against the preceding two-run final aggregate, those values improve
-by 22.9% and 6.0%, respectively, while attempted and successful throughput are
-effectively flat (-0.53% and -0.44%). Estimated p95 and p99 were mixed at
-29.177 ms and 176.221 ms (+20.7% and +67.8%), so this pass makes no broad tail
-latency or capacity-envelope claim. Two interleaved pre-fast-path controls also
-show substantial QEMU/telemetry tail variance. No candidate or control run
-observed gateway pool exhaustion, checkout retry, or timeout rejection.
-
-Full-pressure artifacts are:
-
-- candidate repetitions:
-  `out/bench/m26d-high-pressure-gicv3-cache-hit-fastpath_20260716T020540Z.summary.json`,
-  `out/bench/m26d-high-pressure-gicv3-cache-hit-fastpath-rep2_20260716T020807Z.summary.json`,
-  and
-  `out/bench/m26d-high-pressure-gicv3-cache-hit-fastpath-rep3_20260716T021541Z.summary.json`;
-- interleaved controls:
-  `out/bench/m26d-high-pressure-gicv3-cache-hit-control_20260716T021312Z.summary.json`
-  and
-  `out/bench/m26d-high-pressure-gicv3-cache-hit-control-rep2_20260716T022051Z.summary.json`.
-
-The pre-fast-path gateway SHA-256 is
-`20ed7c0257137e2096654fe62085b1a95526dd3814aa6772ce93b777f5cf42f9`;
-the candidate gateway SHA-256 is
-`9020a2213bf21216b201f4445311f9954d25f66c4d367b9ad96f0b1241bc918c`.
-The REST harness and target hashes are byte-identical to the preceding GICv3
-ledger. No cache TTL or capacity, queue, timeout, retry policy, authority check,
-error classification, API field, or ACK/ERR/END behavior changed. The tuning is
-retained for its reproducible hot-read benefit, not as permission to weaken the
-unchanged 1% budget or bounded target refusal behavior.
-
-No current mixed-load `simulate` worker envelope is accepted by this document.
-The former 1500-worker result and later local 400/600/1200-worker observations
-lack a retained, current, fully qualified artifact index here. They may guide a
-new experiment but must not be quoted as the active capacity limit.
+Exact measured findings belong in immutable benchmark artifacts and their
+qualified audit records. A result becomes a public claim only when its source,
+image, target, workload, comparator, and required Test Plan state are complete.
 
 ## Qualification Rules
 
@@ -837,13 +227,13 @@ harness's existing complete structured Worker-state bound. The host-model
 implicit 256-byte ceiling therefore rejected a valid record before pressure.
 This ceiling revision adds no retry or truncation and changes no response
 bytes, but it is a declared comparator input: do not compare the revised
-results directly with historical 256-byte Worker-tail runs.
+results directly with runs that used a 256-byte Worker-tail ceiling.
 
 Conditional D also enables `--strict-control-errors`. Every typed bounded
 control refusal remains a failed operation and counts against the unchanged 1%
 budget; the harness must not use relaxed buffer-full handling for this lane.
 
-### Existing Accepted Target
+### Establishing a target-backed run
 
 First establish an accepted QEMU or physical-target boot and a gateway already
 backed by that target. A target gateway reports
@@ -866,7 +256,7 @@ That canonical runner owns the exact accepted QEMU artifact/session/component
 inputs and emits fixed-three executable pressure. It is distinct from
 Conditional D's 24-to-120 host-model gateway comparator.
 
-### Milestone 26e QEMU executable-Worker pressure
+### QEMU executable-Worker pressure
 
 Use `executable` only against a live QEMU boot whose gateway projects generated
 Worker bounds and imports a matching, same-boot staged component record as
@@ -934,7 +324,7 @@ For both reports, retain `report.population` and require `mode=executable`,
 `maximum_live_tasks=3`, `requested=3`, `discovered=3`, `ready=3`,
 `backend_class=console-projection`, and `proof_class=qemu`. Re-derive the
 numerical maximum from `/v1/meta/bounds` if the selected generated profile
-changes; never raise the command to preserve a historical value. A control
+changes; never raise the command merely to preserve an earlier value. A control
 write outcome is `admitted`, not accepted or READY. Preserve all timeouts,
 bounded refusals, and liveness failures as measured errors; a completed QEMU
 launch or connected gateway alone leaves proof class `none`.
@@ -961,7 +351,7 @@ For a focused read-path run:
   --no-gateway \
   --rest-url "$COH_REST_URL" \
   --log-dir out/bench \
-  --log-prefix candidate-read-path
+  --log-prefix qemu-read-path
 ```
 
 ### Split Cardinality from Steady-State Performance
@@ -978,7 +368,7 @@ fill, or worker-scale mutation capacity from a read microbenchmark.
 
 #### Retained-state cardinality and refusal
 
-Run each repetition from a fresh target state. The retained M26d pressure
+Run each repetition from a fresh target state. The retained-state pressure
 method uses the following exact workload:
 
 ```bash
@@ -1037,10 +427,10 @@ held through that interval; failure to observe that endpoint is non-qualifying.
 
 #### Bounded fixed-cardinality mixed load
 
-Use equal worker minima/maxima and equal intensity minima/maxima, as in the
-`candidate-fixed100-i4` example above. Start every repetition from equivalent
-fresh state, keep the seed and operation mix fixed, and change only one load
-dimension at a time. Use separate prefixes for every candidate.
+Use equal worker minima/maxima and equal intensity minima/maxima. Start every
+repetition from equivalent fresh state, keep the seed and operation mix fixed,
+and change only one load dimension at a time. Use a separate prefix for every
+run.
 
 This method is valid only while all control operations remain successful and
 the target's retained collections stay within their generated bounds. Total
@@ -1099,8 +489,8 @@ A Pi result is not interpretable until the same boot proves:
 
 For Wi-Fi, additionally require the current DPC/IRQ proof, association and host
 EAPOL completion, DHCP, ARP/data progress, and accepted same-image repeatability.
-Do not substitute a historical wired boot, another Wi-Fi image, or ambient
-traffic for the benchmark boot.
+Do not substitute a wired boot from another image, another Wi-Fi image, or
+ambient traffic for the benchmark boot.
 
 ## Reading a Result
 

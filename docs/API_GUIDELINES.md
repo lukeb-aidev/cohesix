@@ -15,6 +15,9 @@ and payload semantics remain canonical in [INTERFACES.md](INTERFACES.md);
 [HOST_API.md](HOST_API.md) is the narrative HTTP reference and must agree with
 the embedded OpenAPI document.
 
+See the [Glossary](GLOSSARY.md) for Cohesix-specific role, namespace, and
+authority terms.
+
 ## Design contract
 
 - Authority remains in the target. HTTP operations project `LS`, `CAT`, `TAIL`,

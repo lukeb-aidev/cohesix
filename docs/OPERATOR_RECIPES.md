@@ -16,6 +16,9 @@ should replace `cargo run -p <package> --` with the corresponding `./bin/<tool>`
 and use the bundle's `QUICKSTART.md`. These procedures never relax manifest,
 role, ticket, lifecycle, policy, or request-size checks.
 
+See the [Glossary](GLOSSARY.md) for Cohesix-specific role, namespace, and
+evidence terms.
+
 ## Evidence packs, CI, and SIEM
 
 ### Capture an evidence pack

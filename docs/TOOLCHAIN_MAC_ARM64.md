@@ -9,6 +9,8 @@ macOS 26 on Apple Silicon is the primary Cohesix development host. This guide
 installs host dependencies and explains how the current tree consumes, but does
 not vendor, upstream seL4 build outputs.
 
+See the [Glossary](GLOSSARY.md) for Cohesix-specific build and evidence terms.
+
 ## Supported toolchain
 
 | Component | Current contract | Source of truth |
@@ -257,15 +259,12 @@ The five fresh source-build profiles use isolated `profile-v2` trees:
 | `out/sel4/profile-v2/pi4-diagnostic` | Pi 4 diagnostic source-build audit | Fresh-source audit lane only; not an input to the CYW43 exact-image lane |
 | `out/sel4/profile-v2/bcm2711-proof-eligibility` | BCM2711 proof eligibility | Upstream configuration compatibility only; not a Cohesix proof |
 
-The repo-managed `seL4/` trees remain immutable seL4 16 Milestone 26d
-references. Milestone 26e changes the operational scheduler contract to
-SMP+MCS, so those classic-scheduler mirrors are no longer current profile
-outputs. In particular, `seL4/build_UBOOT` is intentionally rejected by the
-current `pi4_diagnostic` contract until the later fresh-Pi phase rebuilds and
-deliberately refreshes that tracked artifact set. QEMU-first work uses only the
-fresh validated `out/sel4/profile-v2/qemu-smp-*` trees. It must not relabel a
-tracked classic artifact, update only its stamp, or use it as MCS evidence.
-Pi composition never configures or builds `seL4/build_UBOOT` in place.
+Repo-managed `seL4/` trees are immutable comparator inputs, not automatically
+current profile outputs. A tree is eligible for an SMP+MCS build or evidence
+claim only when the selected profile validator accepts its complete source,
+configuration, and artifact set. Never relabel a classic-scheduler artifact,
+update only its stamp, or use it as MCS evidence. Pi composition never
+configures or builds `seL4/build_UBOOT` in place.
 
 These build directories contain generated kernel truth, not vendored seL4
 source. The selected directory must match the intended target and root-task
@@ -301,9 +300,9 @@ export and `TIMER_CLOCK_HZ=54000000`; target timeout logic must not substitute
 CPU-speed loops or physical-counter access.
 
 All operational QEMU and Pi profiles select a 14-bit initial root CNode. This
-is required by the compiler-owned M26e retention-anchor slots at `0x3f00` and
-above; a kernel that falls back to the upstream 13-bit default cannot construct
-the critical MCS topology and is not a valid Cohesix runtime profile.
+is required by compiler-owned retention-anchor slots at `0x3f00` and above; a
+kernel that falls back to the upstream 13-bit default cannot construct the
+critical MCS topology and is not a valid Cohesix runtime profile.
 
 Validate cache, generated JSON, DTS, source provenance and evidence class as
 one contract. This command is expected to fail for stale GICv2, old-project or
@@ -317,7 +316,7 @@ out/toolchain/sel4-profile-venv/bin/python scripts/sel4_profile.py validate \
   --require-source \
   --require-artifacts \
   --for-release \
-  --evidence out/audit/m26d-profile-v2-qemu-smp-production.json
+  --evidence out/audit/qemu-smp-production.json
 ```
 
 `--for-release` means that the seL4 **profile configuration** is eligible to
@@ -425,14 +424,12 @@ out/toolchain/sel4-profile-venv/bin/python scripts/sel4_profile.py validate \
   --require-source \
   --require-artifacts \
   --for-release \
-  --evidence out/audit/m26d-profile-v2-qemu-smp-production.json
+  --evidence out/audit/qemu-smp-production.json
 ```
 
-The historical Pi exact-image lane used the tracked diagnostic artifact tree
-directly. Under the active Milestone 26e SMP+MCS contract the following
-validation is expected to reject the pre-26e tree; do not proceed to root-task
-or image composition until a later fresh-Pi rebuild and controlled tracked-tree
-refresh makes it pass:
+The repository-managed Pi diagnostic lane validates the tracked artifact tree
+directly. Do not proceed to root-task or image composition unless this check
+passes for the selected tree:
 
 ```bash
 .venv/bin/python scripts/sel4_profile.py validate \
@@ -450,7 +447,7 @@ Before Pi composition is re-enabled, the tracked
 `pi4_diagnostic`, and artifact/configuration identities that relocate under
 `seL4/build_UBOOT` without any byte change. Validation rejects a dirty tracked
 tree, an untracked entry, a changed contract, a missing artifact, or an identity
-mismatch. It deliberately does not require the historical absolute source,
+mismatch. It deliberately does not require the original absolute source,
 CMake, or build paths to exist.
 
 `scripts/pi4-image-build.sh` hashes the complete immutable input tree before
@@ -481,7 +478,7 @@ invocation:
 ```bash
 out/toolchain/sel4-profile-venv/bin/python scripts/sel4_profile.py validate --all \
   --require-source --require-artifacts \
-  --evidence out/audit/m26d-profile-v2-all.json
+  --evidence out/audit/sel4-profile-all.json
 ```
 
 This command is intentionally fail-closed and requires both complete source
@@ -500,7 +497,7 @@ out/toolchain/sel4-profile-venv/bin/python scripts/sel4_profile.py validate \
   --all --diagnostic-relaxed
 ```
 
-That command cannot establish milestone closure. Full evidence binds the
+That command cannot establish source, target, or release acceptance. Full evidence binds the
 Cohesix commit and dirty-state digest; hashes the contract, validator, wrapper,
 CMake cache, generated JSON/headers, every DTS/DTB and target artifact; embeds
 the expected/observed configuration values; and records compiler, Python,

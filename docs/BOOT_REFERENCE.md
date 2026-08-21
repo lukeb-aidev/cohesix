@@ -11,6 +11,7 @@ the selected seL4 build and manifest profile.
 
 Use [HARDWARE_BRINGUP.md](HARDWARE_BRINGUP.md) for build, flash, capture, and
 recovery procedures. Use [TEST_PLAN.md](TEST_PLAN.md) for acceptance criteria.
+See the [Glossary](GLOSSARY.md) for Cohesix-specific boot and evidence terms.
 
 ## Boot Paths
 
@@ -75,8 +76,8 @@ shasum -a 256 configs/generated/root_task_resolved.json
 
 Target builds must compare against the resolved manifest selected for that
 target before committed default-profile output is restored. A hash from QEMU
-must not be used to validate a Pi image, and a historical log must not be used
-to validate a rebuilt image.
+must not be used to validate a Pi image, and a log from another image must not
+be used to validate a rebuilt image.
 
 ### Secure9P and Console Bounds
 
@@ -108,9 +109,10 @@ A TCP-enabled development boot normally includes:
 - the net-console configuration and listener;
 - a responsive `cohsh` authentication and attach sequence.
 
-The current workspace has a target-qualified QEMU Stage 01-05 pass under
-`out/test-plan/m26d-repository-gates-qemu`. This is the current-source QEMU
-regression boundary; it is not Pi hardware proof.
+A QEMU claim requires the applicable target-qualified Test Plan stages and
+their exact source, image, launch, and transcript identities. It is not Pi
+hardware proof. See [Current Status](STATUS.md) for the public evidence
+snapshot.
 
 ### Raspberry Pi 4
 
@@ -134,17 +136,11 @@ confirmation and returns to that state; save and reset report success only
 after bounded FAT write and exact readback verification succeed, and only the
 explicit **Save settings and restart** action invokes restart.
 
-Historical Milestone 26c evidence contains an accepted wired GENET boot,
-authenticated `cohsh`, runtime/DMA proof, and Pi Stage 01-05 result. That
-evidence is retained in [M26C_AS_BUILT_BLOCKERS.md](audit/M26C_AS_BUILT_BLOCKERS.md)
-and [M26C_TARGET_RUNNER_BASELINE.md](audit/M26C_TARGET_RUNNER_BASELINE.md); it
-does not prove the current source tree or a newly flashed image.
-
-For the current tree, Pi-qualified offline Stages 01-02 pass under
-`out/test-plan/m26d-repository-gates-pi4`. Current-image live Pi stages,
-including Wi-Fi association, DHCP, ARP, raw TCP, authenticated `cohsh`, and
-repeatability, remain pending after rebuild, flash, independent readback, and
-fresh capture.
+A Pi claim requires the applicable offline and live Test Plan stages, including
+the selected physical transport, raw TCP, authenticated `cohsh`, and required
+repeatability. Evidence from another source tree, image, or boot is a
+comparator only. See [Current Status](STATUS.md) for the public evidence
+snapshot.
 
 ## Minimal Evidence Pattern
 

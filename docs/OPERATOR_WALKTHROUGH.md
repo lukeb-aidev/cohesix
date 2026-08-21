@@ -16,6 +16,8 @@ details live in:
 - [OPERATOR_RECIPES.md](OPERATOR_RECIPES.md) for advanced evidence, mount,
   ticket, lifecycle, and PEFT workflows after this topology is healthy.
 
+See the [Glossary](GLOSSARY.md) whenever a Cohesix-specific term is unfamiliar.
+
 The same host workflow can target a Pi 4 Queen after hardware boot and network
 proof, but board acceptance remains governed by
 [HARDWARE_BRINGUP.md](HARDWARE_BRINGUP.md) and [DRIVERS.md](DRIVERS.md).

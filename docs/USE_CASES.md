@@ -15,6 +15,9 @@ protocol, cloud, GPU, or compliance regime is supported out of the box.
 Deployment-specific integrations remain host-side and require their own design,
 validation, and operational acceptance.
 
+See the [Glossary](GLOSSARY.md) for Cohesix-specific role, authority, and
+evidence terms used in the scenarios below.
+
 ## How to Read Maturity Claims
 
 | Term | Meaning |
@@ -42,7 +45,7 @@ adapter succeeds; every required row needs independently correlated evidence.
 | --- | --- |
 | Operator control | Authenticated console grammar projected by `cohsh`, `coh`, the REST gateway, and other host tools. There is no independent in-VM 9P/TCP listener. |
 | Authority | Role-scoped tickets, manifest-defined namespaces, bounded file operations, and explicit policy gates. |
-| Orchestration | Queen control files plus profile-declared Worker model/session roles and telemetry paths. The default profile declares heartbeat, GPU, bus, and AI LoRA records with `implemented=false`; these records do not launch target Worker tasks. |
+| Orchestration | Queen control files plus profile-declared Worker roles and telemetry paths. The default profile declares Heartbeat, GPU, and LoRA executable with one slot each; WorkerBus remains model/session-only. Configured execution is separate from target and use-case acceptance. |
 | Observability | Bounded `/proc`, `/log`, worker telemetry, driver counters, and host-projected status. Retention and durability depend on the selected profile and host integration. |
 | Host integration | REST, Python, GPU inventory, model-registry descriptors, and host-side adapters project existing Cohesix semantics; they do not create new VM authority. |
 | Heavy runtimes | CUDA, NVML, Kubernetes, systemd, Docker, model training, field protocols, and application data planes remain outside the VM trusted computing base. |
@@ -52,7 +55,7 @@ flowchart LR
   Operator["Operator or automation"] --> Tools["Host tools and approved adapters"]
   Tools -->|"authenticated console semantics"| Root["root-task\npolicy and HAL admission"]
   Root --> Namespace["manifest-defined namespace\n/queen /proc /log /shard /gpu /host"]
-  Namespace --> Workers["profile-declared Worker model/session views\ncontrol and telemetry"]
+  Namespace --> Workers["profile-declared Worker roles\ncontrol, telemetry, and receipts"]
   External["External systems\nGPU stacks, registries, OT, cloud"] --> Adapters["Host-side adapters"]
   Adapters -->|"bounded publish or ticket"| Tools
   Namespace -->|"bounded evidence"| Tools
@@ -68,8 +71,9 @@ The Queen and Workers are control-plane roles, not language models running
 inside the VM. Models and agent frameworks stay on a host and can propose
 intent; a Queen-scoped client submits an allowed bounded operation, while
 specialized Workers contribute scoped telemetry, lease state, or receipts.
-In current profiles those Worker roles are root-owned model/session views, not
-loaded child tasks.
+The checked-in profiles declare Heartbeat, GPU, and LoRA as executable target
+roles while WorkerBus remains a root-owned model/session view. An executable
+slot does not prove a live task or promote a deployment scenario.
 
 ### 1. The Agent Action Airlock
 
@@ -182,17 +186,18 @@ the authority and result inspectable.
 
 ### 5. The Private LoRA Foundry
 
-**Maturity: as-built root-owned Worker LoRA receipt model and bounded host PEFT
-helpers; profile-dependent integration pattern.**
+**Maturity: as-built executable Worker LoRA receipt path and bounded host PEFT
+helpers; target and provider acceptance remain profile-dependent.**
 
 A private training pool can export a bounded job package, train an adapter on
 the host, import size-checked and hashed adapter metadata into a host registry,
-and request activation through the Queen. The current root-owned Worker LoRA
-model records control receipts; it never performs training. Current profiles do
-not launch a Worker LoRA VM task or deliver Worker endpoint authority. Any
-future executable profile must declare and prove that target authority before
-using it as acceptance evidence. Lowercase `lora` in paths, files, and source
-identifiers is the ASCII form of this same low-rank-adaptation lifecycle.
+and request activation through the Queen. WorkerLora records bounded terminal
+receipts but never performs training. The selected profiles declare one
+executable slot; a target run must still prove its image, capability bundle,
+READY state, receipt path, teardown, and fresh-generation behavior before that
+execution can be used as acceptance evidence. Lowercase `lora` in paths, files,
+and source identifiers is the ASCII form of this same low-rank-adaptation
+lifecycle.
 
 Model training, data governance, evaluation, artifact scanning, and runtime
 reload remain host-side acceptance responsibilities. Use the generated PEFT
@@ -262,8 +267,8 @@ Before adopting a pattern, answer these questions:
 3. What ticket, path, bounds, and refusal behavior govern every mutation?
 4. Which host adapter performs the external side effect, and how is it
    allowlisted, cancelled, and audited?
-5. Which evidence lane proves the target: repository tests, QEMU, historical Pi
-   GENET, or fresh current-image hardware?
+5. Which evidence lane proves the target: repository tests, QEMU, an archived
+   Pi comparator, or fresh current-image hardware?
 6. What remains diagnostic, simulated, site-specific, or planned?
 7. How are secrets, offline state, rollback, and recovery handled without
    widening VM authority?
