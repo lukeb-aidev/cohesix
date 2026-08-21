@@ -3609,11 +3609,15 @@ impl<T: Transport, W: Write> Shell<T, W> {
                 self.write_line(console_lines[0])?;
                 self.write_line(console_lines[1])?;
                 self.write_line("  bi                           - Show target bootinfo summary")?;
+                self.write_line("  caps                         - Show target capability slots")?;
                 self.write_line(
-                    "  caps [mcs]                   - Show target capability or MCS authority state",
+                    "  caps mcs                     - Show target bounded MCS authority state",
                 )?;
                 self.write_line(
-                    "  smp [activity|mcs|dump]      - Show target activity or MCS topology",
+                    "  smp [activity|dump]          - Show target activity or raw debug state",
+                )?;
+                self.write_line(
+                    "  smp mcs                      - Show target generated/live MCS topology",
                 )?;
                 self.write_line("  login <role> [ticket]        - Alias for attach")?;
                 self.write_line("  detach                       - Close the current session")?;
@@ -5374,6 +5378,8 @@ mod tests {
         }
         let rendered = String::from_utf8(output).unwrap();
         assert!(rendered.contains("Cohesix command surface:"));
+        assert!(rendered.contains("  caps mcs "));
+        assert!(rendered.contains("  smp mcs "));
         assert!(rendered.contains("tail <path>"));
         assert!(rendered.contains("ls <path>"));
         assert!(rendered.contains("mount <service> <path>"));

@@ -10213,7 +10213,7 @@ Milestone: Milestone 26e — Root-Service Compartmentalization + Worker Task Iso
 Goal: Expose source-labelled generated and live seL4 MCS state through `bi`, `caps mcs`, and `smp mcs` without perturbing scheduler accounting.
 Inputs: `m26e-mcs-abi-foundation`, `m26e-worker-resource-admission-critical-tcbs`, `m26e-console-network-service-isolation`, selected seL4 BootInfo, generated temporal/resource-admission records, live fault-registry and critical-domain state, crates/cohsh-core/**, apps/root-task/src/{console,event,critical_tcb.rs,hal/critical_tcb.rs}, docs/{INTERFACES,USERLAND_AND_CLI,SECURITY,TEST_PLAN}.md.
 Changes:
-  - crates/cohsh-core/** + generated grammar/fixtures — preserve bare `caps` and `smp`; add strict `caps mcs` and `smp mcs`; update every parser/help/transcript consumer.
+  - crates/cohsh-core/** + generated grammar/fixtures — preserve bare `caps` and `smp`; add strict `caps mcs` and `smp mcs`; list both MCS spellings as explicit root-shell and host-client help rows; update every parser/help/transcript consumer.
   - apps/root-task/src/{console,event}/** — retain the legacy `bi` line and append bounded kernel BootInfo and generated profile records.
   - apps/root-task/src/{critical_tcb.rs,hal/critical_tcb.rs,event/**} — copy the live registry nonblockingly, release its lock before output, and render authority/object, per-core admission, and per-task temporal/registration/generation state. Never call `seL4_SchedContext_Consumed`, mutate accounting, perform a debug dump, or create authority.
   - docs and compatibility — document provenance and separate QEMU/Pi evidence; review `coh`, `cohsh`, SwarmUI, Hive Gateway, `.coh`, `tools/cohesix-py`, fixtures, release, and performance surfaces without changing their semantics.

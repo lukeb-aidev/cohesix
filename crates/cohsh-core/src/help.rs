@@ -9,8 +9,10 @@
 pub const ROOT_CONSOLE_HELP_LINES: &[&str] = &[
     "  help  - Show this help",
     "  bi    - Show bootinfo summary",
-    "  caps [mcs] - Show capability slots or bounded MCS authority state",
-    "  smp [activity|mcs|dump] - Show activity, MCS topology, or raw debug state",
+    "  caps  - Show capability slots",
+    "  caps mcs - Show bounded live MCS authority and object counts",
+    "  smp [activity|dump] - Show activity or raw debug scheduler state",
+    "  smp mcs - Show generated and live MCS admission state",
     "  mem   - Show untyped summary",
     "  ping  - Respond with pong",
     "  cachelog [n] - Dump recent cache operations",
@@ -34,3 +36,18 @@ pub const COHSH_CONSOLE_HELP_LINES: &[&str] = &[
     "  kill <worker_id>             - Queue worker termination",
     "  quit                         - Close the session and exit",
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::ROOT_CONSOLE_HELP_LINES;
+
+    #[test]
+    fn root_help_lists_mcs_diagnostics_as_explicit_commands() {
+        assert!(ROOT_CONSOLE_HELP_LINES
+            .iter()
+            .any(|line| line.trim_start().starts_with("caps mcs ")));
+        assert!(ROOT_CONSOLE_HELP_LINES
+            .iter()
+            .any(|line| line.trim_start().starts_with("smp mcs ")));
+    }
+}
