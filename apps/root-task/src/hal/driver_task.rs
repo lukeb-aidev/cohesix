@@ -19290,6 +19290,18 @@ fn driver_task_ring_timeout_keep_active_limit(
     } else if matches!(
         mode,
         DriverTaskRingCommandMode::NonBlocking | DriverTaskRingCommandMode::PromptSlice
+    ) && matches!(contract.kind, DriverTaskKind::LocalSeatUsb)
+        && driver_task_engine_init_aux(command.aux0)
+    {
+        // USB engine initialization owns the same retained controller lifetime
+        // as local-seat initialization. Its isolated MCS task may require
+        // several replenishments to zero and publish the admitted DMA arena;
+        // root must continue observing the one active sequence instead of
+        // aborting it through the generic short bootstrap timeout.
+        DRIVER_TASK_USB_ENUM_TIMEOUT_KEEP_ACTIVE_LIMIT
+    } else if matches!(
+        mode,
+        DriverTaskRingCommandMode::NonBlocking | DriverTaskRingCommandMode::PromptSlice
     ) && matches!(contract.kind, DriverTaskKind::PcieRoot)
         && (command.aux0 == DRIVER_RUNTIME_INIT_AUX || driver_task_engine_init_aux(command.aux0))
     {
@@ -19555,6 +19567,14 @@ const fn driver_task_ring_usb_enum_controller_reset_phase(phase: u32) -> bool {
             | DRIVER_RUNTIME_RING_PROGRESS_USB_RESET_WAIT_BEGIN
             | DRIVER_RUNTIME_RING_PROGRESS_USB_CNR_WAIT_BEGIN
             | DRIVER_RUNTIME_RING_PROGRESS_USB_RESET_DONE
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DMA_ZERO_BEGIN
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DMA_ZERO_PROGRESS
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DMA_ZERO_DONE
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_RING_GRAPH_BEGIN
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_RING_GRAPH_DONE
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DMA_CLEAN_BEGIN
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DMA_CLEAN_DONE
+            | DRIVER_RUNTIME_RING_PROGRESS_USB_DMA_READY
             | DRIVER_RUNTIME_RING_PROGRESS_USB_RUN_BEGIN
             | DRIVER_RUNTIME_RING_PROGRESS_USB_RUN_WAIT_BEGIN
     )
@@ -35495,6 +35515,98 @@ mod tests {
                 DRIVER_TASK_USB_ENUM_ROOT_RESET_TIMEOUT_KEEP_ACTIVE_LIMIT
             )
         );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn usb_engine_init_dma_publication_keeps_one_mcs_request_active() {
+        let contract = USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT;
+        let command = runtime_engine_init_command(
+            DriverTaskHotPath::UsbKeyboard,
+            DriverTaskBudgetGrant::from_contract(contract),
+        );
+        assert_eq!(command.aux0, DRIVER_RUNTIME_ENGINE_INIT_AUX);
+        assert_eq!(
+            driver_task_ring_timeout_keep_active_limit(
+                contract,
+                command,
+                DriverTaskRingCommandMode::NonBlocking,
+            ),
+            DRIVER_TASK_USB_ENUM_TIMEOUT_KEEP_ACTIVE_LIMIT,
+        );
+        assert_eq!(
+            driver_task_ring_timeout_keep_active_limit(
+                contract,
+                command,
+                DriverTaskRingCommandMode::Steady,
+            ),
+            0,
+            "ordinary USB traffic must not inherit the bootstrap lifetime",
+        );
+
+        let request = 2;
+        for phase in [
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DMA_ZERO_BEGIN,
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DMA_ZERO_PROGRESS,
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DMA_ZERO_DONE,
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_RING_GRAPH_BEGIN,
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_RING_GRAPH_DONE,
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DMA_CLEAN_BEGIN,
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DMA_CLEAN_DONE,
+            DRIVER_RUNTIME_RING_PROGRESS_USB_DMA_READY,
+        ] {
+            let slot = DriverTaskCommandSlot::new();
+            record_driver_task_ring_progress(
+                &slot,
+                DriverTaskRingProgressRecord {
+                    magic: DRIVER_RUNTIME_RING_PROGRESS_MAGIC,
+                    sequence: request,
+                    phase,
+                    aux0: command.aux0,
+                },
+            );
+            assert_eq!(
+                driver_task_ring_timeout_keep_active_limit_for_progress(
+                    &slot,
+                    contract,
+                    command,
+                    DriverTaskRingCommandMode::NonBlocking,
+                    request,
+                ),
+                DRIVER_TASK_USB_ENUM_ROOT_RESET_TIMEOUT_KEEP_ACTIVE_LIMIT,
+            );
+            assert_eq!(
+                driver_task_ring_timeout_keep_decision(
+                    &slot,
+                    contract,
+                    command,
+                    DriverTaskRingCommandMode::NonBlocking,
+                    request,
+                    true,
+                ),
+                (true, 0),
+                "semantic DMA progress must rebase the bounded timeout",
+            );
+            slot.timeout_resumes.store(
+                DRIVER_TASK_USB_ENUM_ROOT_RESET_TIMEOUT_KEEP_ACTIVE_LIMIT - 1,
+                Ordering::Release,
+            );
+            assert_eq!(
+                driver_task_ring_timeout_keep_decision(
+                    &slot,
+                    contract,
+                    command,
+                    DriverTaskRingCommandMode::NonBlocking,
+                    request,
+                    false,
+                ),
+                (
+                    false,
+                    DRIVER_TASK_USB_ENUM_ROOT_RESET_TIMEOUT_KEEP_ACTIVE_LIMIT,
+                ),
+                "an unchanged DMA phase must still end at the controller bound",
+            );
+        }
     }
 
     #[cfg(feature = "kernel")]
