@@ -14784,6 +14784,7 @@ fn service_usb_controller_init_command_turn(
 }
 
 #[inline(never)]
+#[cfg(not(target_os = "none"))]
 fn usb_runtime_init(
     sequence: u32,
     aux0: u32,
@@ -44000,6 +44001,7 @@ const fn usb_detail_warrants_deep_cold_reinit(detail: u16) -> bool {
     )
 }
 
+#[cfg(not(target_os = "none"))]
 fn usb_runtime_reinitialize_controller(
     sequence: u32,
     aux0: u32,
@@ -44145,6 +44147,7 @@ fn usb_runtime_retry_keyboard_enumeration_turn(
     })
 }
 
+#[cfg(not(target_os = "none"))]
 fn usb_runtime_retry_keyboard_enumeration(
     sequence: u32,
     aux0: u32,
@@ -49608,6 +49611,7 @@ fn xhci_clean_dma_turn(sequence: u32, aux0: u32, dma_base: usize, cleaned: usize
     next
 }
 
+#[cfg(not(target_os = "none"))]
 fn xhci_prepare_dma_structures(
     sequence: u32,
     aux0: u32,
@@ -54314,6 +54318,7 @@ fn usb_runtime_configure_controller(
 }
 
 #[inline(never)]
+#[cfg(not(target_os = "none"))]
 fn usb_runtime_init_hw(
     sequence: u32,
     aux0: u32,
