@@ -2563,6 +2563,117 @@ impl UsbRuntimeState {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum UsbControllerInitPurpose {
+    Idle,
+    EngineInit,
+    ColdReinit,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum UsbControllerInitPhase {
+    Idle,
+    Reset,
+    DmaZero,
+    RingGraph,
+    DmaClean,
+    Configure,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct UsbControllerInitCursor {
+    command: DriverTaskCommandRecord,
+    purpose: UsbControllerInitPurpose,
+    phase: UsbControllerInitPhase,
+    zeroed_bytes: usize,
+    cleaned_bytes: usize,
+    fallback_detail: u16,
+    command_cold_attempts: u8,
+    deep_cold_attempts: u8,
+    deep_cold_detail: u16,
+    reset_deep_frontier_on_ready: bool,
+}
+
+impl UsbControllerInitCursor {
+    const fn idle() -> Self {
+        Self {
+            command: DriverTaskCommandRecord::empty(),
+            purpose: UsbControllerInitPurpose::Idle,
+            phase: UsbControllerInitPhase::Idle,
+            zeroed_bytes: 0,
+            cleaned_bytes: 0,
+            fallback_detail: DRIVER_RUNTIME_USB_INIT_DETAIL_XHCI_READY,
+            command_cold_attempts: 0,
+            deep_cold_attempts: 0,
+            deep_cold_detail: DRIVER_RUNTIME_USB_INIT_DETAIL_XHCI_READY,
+            reset_deep_frontier_on_ready: false,
+        }
+    }
+
+    const fn engine_init(command: DriverTaskCommandRecord) -> Self {
+        Self {
+            command,
+            purpose: UsbControllerInitPurpose::EngineInit,
+            phase: UsbControllerInitPhase::Reset,
+            zeroed_bytes: 0,
+            cleaned_bytes: 0,
+            fallback_detail: DRIVER_RUNTIME_USB_INIT_DETAIL_XHCI_READY,
+            command_cold_attempts: 0,
+            deep_cold_attempts: 0,
+            deep_cold_detail: DRIVER_RUNTIME_USB_INIT_DETAIL_XHCI_READY,
+            reset_deep_frontier_on_ready: false,
+        }
+    }
+
+    const fn cold_reinit(
+        command: DriverTaskCommandRecord,
+        fallback_detail: u16,
+        command_cold_attempts: u8,
+        deep_cold_attempts: u8,
+        deep_cold_detail: u16,
+        reset_deep_frontier_on_ready: bool,
+    ) -> Self {
+        Self {
+            command,
+            purpose: UsbControllerInitPurpose::ColdReinit,
+            phase: UsbControllerInitPhase::Reset,
+            zeroed_bytes: 0,
+            cleaned_bytes: 0,
+            fallback_detail,
+            command_cold_attempts,
+            deep_cold_attempts,
+            deep_cold_detail,
+            reset_deep_frontier_on_ready,
+        }
+    }
+
+    const fn active(&self) -> bool {
+        !matches!(self.phase, UsbControllerInitPhase::Idle)
+    }
+
+    fn active_for(&self, command: DriverTaskCommandRecord) -> bool {
+        self.active() && self.command == command
+    }
+
+    fn reset(&mut self) {
+        *self = Self::idle();
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum UsbControllerInitStep {
+    Pending,
+    Ready(u16),
+    Fault,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum UsbControllerPrepare {
+    Dma(DriverRuntimeResourceRangeDescriptor),
+    Ready(u16),
+    Fault,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct UsbEnumerationDevice {
     slot: u8,
     root_port: u8,
@@ -7239,6 +7350,8 @@ static PCIE_RUNTIME_STATE: RuntimeStateSlot<PcieRuntimeState> =
     RuntimeStateSlot::new(PcieRuntimeState::new());
 static USB_RUNTIME_STATE: RuntimeStateSlot<UsbRuntimeState> =
     RuntimeStateSlot::new(UsbRuntimeState::new());
+static USB_CONTROLLER_INIT_CURSOR: RuntimeStateSlot<UsbControllerInitCursor> =
+    RuntimeStateSlot::new(UsbControllerInitCursor::idle());
 static SDIO_RUNTIME_STATE: RuntimeStateSlot<SdioRuntimeState> =
     RuntimeStateSlot::new(SdioRuntimeState::new());
 static CYW43_RUNTIME_STATE: RuntimeStateSlot<Cyw43RuntimeState> =
@@ -9004,7 +9117,9 @@ fn service_command_turn(task_key: usize, command: DriverTaskCommandRecord) -> Ru
         return turn;
     }
 
-    let turn = if let Some(turn) = service_serial_tx_command_turn(command) {
+    let turn = if let Some(turn) = service_usb_controller_init_command_turn(command) {
+        turn
+    } else if let Some(turn) = service_serial_tx_command_turn(command) {
         turn
     } else if let Some(turn) = service_sdio_pwrseq_command_turn(command) {
         turn
@@ -10953,6 +11068,9 @@ fn validate_runtime_init_descriptor_with_wait_support(
     {
         return DriverTaskCompletionRecord::fault(command.sequence, FAULT_REJECTED_COMMAND);
     }
+    if descriptor.hot_path == HOT_PATH_USB_KEYBOARD {
+        USB_CONTROLLER_INIT_CURSOR.with_mut(UsbControllerInitCursor::reset);
+    }
     RUNTIME_DESCRIPTOR.store(descriptor);
     RUNTIME_INIT_HOT_PATH.store(descriptor.hot_path, Ordering::Release);
     RUNTIME_INIT_FLAGS.store(descriptor.flags, Ordering::Release);
@@ -11302,7 +11420,19 @@ fn runtime_engine_init_usb(
     aux0: u32,
     descriptor: &DriverRuntimeInitDescriptor,
 ) -> Result<u16, u16> {
-    usb_runtime_init(sequence, aux0, descriptor).ok_or(FAULT_DEVICE_UNAVAILABLE)
+    #[cfg(target_os = "none")]
+    {
+        // Production USB engine initialization is admitted only by
+        // `service_usb_controller_init_command_turn`, which retains the exact
+        // command across bounded DMA-maintenance phases. Never reintroduce a
+        // synchronous whole-controller fallback under an MCS service turn.
+        let _ = (sequence, aux0, descriptor);
+        Err(FAULT_DEVICE_UNAVAILABLE)
+    }
+    #[cfg(not(target_os = "none"))]
+    {
+        usb_runtime_init(sequence, aux0, descriptor).ok_or(FAULT_DEVICE_UNAVAILABLE)
+    }
 }
 
 #[inline(never)]
@@ -14276,6 +14406,383 @@ fn serial_rx_budget_limit(budget: DriverTaskBudgetGrant) -> usize {
         .min(MAX_DRIVER_TASK_FRAME_BYTES)
 }
 
+const fn usb_engine_init_command_candidate(command: DriverTaskCommandRecord) -> bool {
+    command.sequence != 0
+        && command.opcode == OPCODE_SERVICE
+        && command.arg0 == HOT_PATH_USB_KEYBOARD
+        && command.arg1 == ROLE_USB
+        && command_is_engine_init_aux(command.aux0)
+        && command.frame.len == 0
+}
+
+const fn usb_enumeration_command_candidate(command: DriverTaskCommandRecord) -> bool {
+    command.sequence != 0
+        && command.opcode == OPCODE_SERVICE
+        && command.arg0 == HOT_PATH_USB_KEYBOARD
+        && command.arg1 == ROLE_USB
+        && command.aux0 == DRIVER_RUNTIME_USB_ENUMERATE_AUX
+        && command.frame.len == 0
+}
+
+fn begin_usb_engine_init(command: DriverTaskCommandRecord) -> Result<(), u16> {
+    publish_runtime_progress(
+        command.sequence,
+        DRIVER_RUNTIME_RING_PROGRESS_COMMAND_VALIDATED,
+        command.aux0,
+    );
+    if RUNTIME_INIT_HOT_PATH.load(Ordering::Acquire) != HOT_PATH_USB_KEYBOARD {
+        publish_runtime_progress(
+            command.sequence,
+            DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_MISMATCH,
+            command.aux0,
+        );
+        return Err(FAULT_DEVICE_UNAVAILABLE);
+    }
+    publish_runtime_progress(
+        command.sequence,
+        DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_READY,
+        command.aux0,
+    );
+    publish_service_dispatch_progress(command);
+    for phase in [
+        DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_DISPATCH,
+        DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_ENTER,
+        DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_AUX_MATCH,
+        DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_FRAME_READY,
+        DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_BEGIN,
+        DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_MARK_ENTER,
+        DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_DESCRIPTOR_LOADED,
+    ] {
+        publish_runtime_progress(command.sequence, phase, command.aux0);
+    }
+    RUNTIME_DESCRIPTOR.with_ref(|descriptor| {
+        if descriptor.hot_path != HOT_PATH_USB_KEYBOARD {
+            publish_runtime_progress(
+                command.sequence,
+                DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_HOT_PATH_MISMATCH,
+                command.aux0,
+            );
+            return Err(DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_HOT_PATH_MISMATCH as u16);
+        }
+        publish_runtime_progress(
+            command.sequence,
+            DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_DESCRIPTOR_READY,
+            command.aux0,
+        );
+        publish_runtime_progress(
+            command.sequence,
+            DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_RESOURCE_CHECK_BEGIN,
+            command.aux0,
+        );
+        if !descriptor_resources_ready_with_progress(
+            descriptor,
+            HOT_PATH_USB_KEYBOARD,
+            command.sequence,
+            command.aux0,
+        ) {
+            publish_runtime_progress(
+                command.sequence,
+                DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_RESOURCE_CHECK_FAILED,
+                command.aux0,
+            );
+            return Err(DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_RESOURCE_CHECK_FAILED as u16);
+        }
+        publish_runtime_progress(
+            command.sequence,
+            DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_RESOURCES_READY,
+            command.aux0,
+        );
+        publish_runtime_progress(
+            command.sequence,
+            DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_HW_BEGIN,
+            command.aux0,
+        );
+        Ok(())
+    })?;
+    USB_RUNTIME_FLAGS.fetch_and(
+        !(ENGINE_STATE_INITIALIZED | ENGINE_STATE_HW_READY),
+        Ordering::AcqRel,
+    );
+    USB_CONTROLLER_INIT_CURSOR
+        .with_mut(|cursor| *cursor = UsbControllerInitCursor::engine_init(command));
+    Ok(())
+}
+
+fn begin_usb_cold_reinit(
+    command: DriverTaskCommandRecord,
+    fallback_detail: u16,
+    command_cold_attempts: u8,
+    deep_cold_attempts: u8,
+    deep_cold_detail: u16,
+    reset_deep_frontier_on_ready: bool,
+) {
+    USB_CONTROLLER_INIT_CURSOR.with_mut(|cursor| {
+        *cursor = UsbControllerInitCursor::cold_reinit(
+            command,
+            fallback_detail,
+            command_cold_attempts,
+            deep_cold_attempts,
+            deep_cold_detail,
+            reset_deep_frontier_on_ready,
+        );
+    });
+}
+
+fn usb_controller_init_step(command: DriverTaskCommandRecord) -> UsbControllerInitStep {
+    let cursor = USB_CONTROLLER_INIT_CURSOR.with_ref(|cursor| *cursor);
+    if !cursor.active_for(command) {
+        USB_CONTROLLER_INIT_CURSOR.with_mut(UsbControllerInitCursor::reset);
+        return UsbControllerInitStep::Fault;
+    }
+    let descriptor = RUNTIME_DESCRIPTOR.load();
+    match cursor.phase {
+        UsbControllerInitPhase::Idle => UsbControllerInitStep::Fault,
+        UsbControllerInitPhase::Reset => {
+            let prepared = USB_RUNTIME_STATE.with_mut(|state| {
+                if cursor.purpose == UsbControllerInitPurpose::EngineInit && state.initialized {
+                    return UsbControllerPrepare::Ready(state.init_detail);
+                }
+                state.reset();
+                if cursor.purpose == UsbControllerInitPurpose::ColdReinit {
+                    state.enumeration_cold_reinit_attempts = cursor.command_cold_attempts;
+                    state.enumeration_deep_cold_reinit_attempts = cursor.deep_cold_attempts;
+                    state.enumeration_deep_cold_reinit_detail = cursor.deep_cold_detail;
+                }
+                usb_runtime_prepare_controller(command.sequence, command.aux0, &descriptor, state)
+            });
+            match prepared {
+                UsbControllerPrepare::Dma(_) => {
+                    xhci_begin_dma_zero(command.sequence, command.aux0);
+                    USB_CONTROLLER_INIT_CURSOR.with_mut(|cursor| {
+                        cursor.zeroed_bytes = 0;
+                        cursor.cleaned_bytes = 0;
+                        cursor.phase = UsbControllerInitPhase::DmaZero;
+                    });
+                    UsbControllerInitStep::Pending
+                }
+                UsbControllerPrepare::Ready(detail) => UsbControllerInitStep::Ready(detail),
+                UsbControllerPrepare::Fault => UsbControllerInitStep::Fault,
+            }
+        }
+        UsbControllerInitPhase::DmaZero => {
+            let Some(dma_range) = runtime_resource_range(
+                &descriptor,
+                DRIVER_RUNTIME_RESOURCE_KIND_DMA,
+                DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA,
+            ) else {
+                return UsbControllerInitStep::Fault;
+            };
+            let next = xhci_zero_dma_turn(
+                command.sequence,
+                command.aux0,
+                dma_range.vaddr as usize,
+                cursor.zeroed_bytes,
+            );
+            USB_CONTROLLER_INIT_CURSOR.with_mut(|cursor| {
+                cursor.zeroed_bytes = next;
+                if next == XHCI_DMA_ZERO_BYTES {
+                    cursor.phase = UsbControllerInitPhase::RingGraph;
+                }
+            });
+            UsbControllerInitStep::Pending
+        }
+        UsbControllerInitPhase::RingGraph => {
+            let Some(dma_range) = runtime_resource_range(
+                &descriptor,
+                DRIVER_RUNTIME_RESOURCE_KIND_DMA,
+                DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA,
+            ) else {
+                return UsbControllerInitStep::Fault;
+            };
+            let ready = USB_RUNTIME_STATE.with_mut(|state| {
+                xhci_prepare_dma_ring_graph(
+                    command.sequence,
+                    command.aux0,
+                    state,
+                    &descriptor,
+                    dma_range,
+                )
+            });
+            if !ready {
+                return UsbControllerInitStep::Fault;
+            }
+            xhci_begin_dma_clean(command.sequence, command.aux0);
+            USB_CONTROLLER_INIT_CURSOR.with_mut(|cursor| {
+                cursor.cleaned_bytes = 0;
+                cursor.phase = UsbControllerInitPhase::DmaClean;
+            });
+            UsbControllerInitStep::Pending
+        }
+        UsbControllerInitPhase::DmaClean => {
+            let Some(dma_range) = runtime_resource_range(
+                &descriptor,
+                DRIVER_RUNTIME_RESOURCE_KIND_DMA,
+                DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA,
+            ) else {
+                return UsbControllerInitStep::Fault;
+            };
+            let next = xhci_clean_dma_turn(
+                command.sequence,
+                command.aux0,
+                dma_range.vaddr as usize,
+                cursor.cleaned_bytes,
+            );
+            USB_CONTROLLER_INIT_CURSOR.with_mut(|cursor| {
+                cursor.cleaned_bytes = next;
+                if next == XHCI_DMA_ZERO_BYTES {
+                    cursor.phase = UsbControllerInitPhase::Configure;
+                }
+            });
+            UsbControllerInitStep::Pending
+        }
+        UsbControllerInitPhase::Configure => USB_RUNTIME_STATE.with_mut(|state| {
+            usb_runtime_configure_controller(command.sequence, command.aux0, &descriptor, state)
+                .map_or(UsbControllerInitStep::Fault, UsbControllerInitStep::Ready)
+        }),
+    }
+}
+
+fn finish_usb_controller_init(
+    command: DriverTaskCommandRecord,
+    cursor: UsbControllerInitCursor,
+    detail: u16,
+) -> DriverTaskCompletionRecord {
+    USB_CONTROLLER_INIT_CURSOR.with_mut(UsbControllerInitCursor::reset);
+    USB_RUNTIME_STATE.with_mut(|state| {
+        state.initialized = true;
+        state.init_detail = detail;
+        usb_reset_enumeration_cursor(state);
+        if cursor.purpose == UsbControllerInitPurpose::ColdReinit
+            && cursor.reset_deep_frontier_on_ready
+        {
+            usb_reset_deep_cold_reinit_frontier(state, detail);
+        }
+    });
+    USB_RUNTIME_FLAGS.fetch_or(
+        ENGINE_STATE_INITIALIZED
+            | ENGINE_STATE_DESCRIPTOR_READY
+            | ENGINE_STATE_RESOURCE_READY
+            | ENGINE_STATE_HW_READY,
+        Ordering::AcqRel,
+    );
+    if cursor.purpose == UsbControllerInitPurpose::EngineInit {
+        publish_runtime_progress(
+            command.sequence,
+            DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_HW_DONE,
+            command.aux0,
+        );
+        publish_runtime_progress(
+            command.sequence,
+            DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_DONE,
+            command.aux0,
+        );
+    }
+    if cursor.purpose == UsbControllerInitPurpose::EngineInit {
+        DriverTaskCompletionRecord::progress_with_detail(command.sequence, detail, 1)
+    } else {
+        USB_RUNTIME_STATE.with_ref(|state| {
+            usb_runtime_enumeration_completion(
+                command.sequence,
+                detail,
+                usb_runtime_enumeration_result(state),
+                state,
+            )
+        })
+    }
+}
+
+fn fail_usb_controller_init(
+    command: DriverTaskCommandRecord,
+    cursor: UsbControllerInitCursor,
+) -> DriverTaskCompletionRecord {
+    USB_CONTROLLER_INIT_CURSOR.with_mut(UsbControllerInitCursor::reset);
+    if cursor.purpose == UsbControllerInitPurpose::EngineInit {
+        publish_runtime_progress(
+            command.sequence,
+            DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_HW_FAILED,
+            command.aux0,
+        );
+        DriverTaskCompletionRecord::fault(command.sequence, FAULT_DEVICE_UNAVAILABLE)
+    } else {
+        USB_RUNTIME_STATE.with_mut(|state| {
+            state.initialized = true;
+            state.init_detail = cursor.fallback_detail;
+        });
+        USB_RUNTIME_STATE.with_ref(|state| {
+            usb_runtime_enumeration_completion(
+                command.sequence,
+                cursor.fallback_detail,
+                usb_runtime_enumeration_result(state),
+                state,
+            )
+        })
+    }
+}
+
+fn service_usb_enumeration_command_turn(command: DriverTaskCommandRecord) -> RuntimeCommandTurn {
+    if !engine_initialized(&USB_RUNTIME_FLAGS) {
+        return RuntimeCommandTurn::Complete(DriverTaskCompletionRecord::fault(
+            command.sequence,
+            FAULT_DEVICE_UNAVAILABLE,
+        ));
+    }
+    let retry = USB_RUNTIME_STATE.with_mut(|state| {
+        state.enumeration_retry_cooldown = 0;
+        usb_runtime_retry_keyboard_enumeration_turn(command, state)
+    });
+    match retry {
+        UsbEnumerationRetryTurn::Pending => RuntimeCommandTurn::Pending,
+        UsbEnumerationRetryTurn::Complete(Some(detail)) => {
+            RuntimeCommandTurn::Complete(USB_RUNTIME_STATE.with_ref(|state| {
+                usb_runtime_enumeration_completion(
+                    command.sequence,
+                    detail,
+                    usb_runtime_enumeration_result(state),
+                    state,
+                )
+            }))
+        }
+        UsbEnumerationRetryTurn::Complete(None) => RuntimeCommandTurn::Complete(
+            DriverTaskCompletionRecord::fault(command.sequence, FAULT_DEVICE_UNAVAILABLE),
+        ),
+    }
+}
+
+fn service_usb_controller_init_command_turn(
+    command: DriverTaskCommandRecord,
+) -> Option<RuntimeCommandTurn> {
+    let active = USB_CONTROLLER_INIT_CURSOR.with_ref(|cursor| *cursor);
+    if !active.active() {
+        if usb_enumeration_command_candidate(command) {
+            return Some(service_usb_enumeration_command_turn(command));
+        }
+        if !usb_engine_init_command_candidate(command) {
+            return None;
+        }
+        if let Err(detail) = begin_usb_engine_init(command) {
+            return Some(RuntimeCommandTurn::Complete(
+                DriverTaskCompletionRecord::fault(command.sequence, detail),
+            ));
+        }
+        return Some(RuntimeCommandTurn::Pending);
+    }
+    if !active.active_for(command) {
+        USB_CONTROLLER_INIT_CURSOR.with_mut(UsbControllerInitCursor::reset);
+        return Some(RuntimeCommandTurn::Complete(
+            DriverTaskCompletionRecord::fault(command.sequence, FAULT_REJECTED_COMMAND),
+        ));
+    }
+    Some(match usb_controller_init_step(command) {
+        UsbControllerInitStep::Pending => RuntimeCommandTurn::Pending,
+        UsbControllerInitStep::Ready(detail) => {
+            RuntimeCommandTurn::Complete(finish_usb_controller_init(command, active, detail))
+        }
+        UsbControllerInitStep::Fault => {
+            RuntimeCommandTurn::Complete(fail_usb_controller_init(command, active))
+        }
+    })
+}
+
 #[inline(never)]
 fn usb_runtime_init(
     sequence: u32,
@@ -17181,19 +17688,32 @@ fn service_usb_keyboard(command: DriverTaskCommandRecord) -> DriverTaskCompletio
         return DriverTaskCompletionRecord::fault(command.sequence, FAULT_DEVICE_UNAVAILABLE);
     }
     if command.aux0 == DRIVER_RUNTIME_USB_ENUMERATE_AUX {
-        let status = USB_RUNTIME_STATE.with_mut(|state| {
-            state.enumeration_retry_cooldown = 0;
-            let detail =
-                usb_runtime_retry_keyboard_enumeration(command.sequence, command.aux0, state)
-                    .or(Some(state.init_detail));
-            detail.map(|detail| (detail, usb_runtime_enumeration_result(state)))
-        });
-        return match status {
-            Some((detail, result)) => USB_RUNTIME_STATE.with_ref(|state| {
-                usb_runtime_enumeration_completion(command.sequence, detail, result, state)
-            }),
-            None => DriverTaskCompletionRecord::fault(command.sequence, FAULT_DEVICE_UNAVAILABLE),
-        };
+        #[cfg(target_os = "none")]
+        {
+            // The outer turn handler owns production enumeration so a cold
+            // controller retry can retain this exact command. Reaching the
+            // immediate path would lose that cursor and is therefore a
+            // fail-closed dispatch error.
+            return DriverTaskCompletionRecord::fault(command.sequence, FAULT_DEVICE_UNAVAILABLE);
+        }
+        #[cfg(not(target_os = "none"))]
+        {
+            let status = USB_RUNTIME_STATE.with_mut(|state| {
+                state.enumeration_retry_cooldown = 0;
+                let detail =
+                    usb_runtime_retry_keyboard_enumeration(command.sequence, command.aux0, state)
+                        .or(Some(state.init_detail));
+                detail.map(|detail| (detail, usb_runtime_enumeration_result(state)))
+            });
+            return match status {
+                Some((detail, result)) => USB_RUNTIME_STATE.with_ref(|state| {
+                    usb_runtime_enumeration_completion(command.sequence, detail, result, state)
+                }),
+                None => {
+                    DriverTaskCompletionRecord::fault(command.sequence, FAULT_DEVICE_UNAVAILABLE)
+                }
+            };
+        }
     }
     if command.frame.len == 0 {
         let produced = USB_RUNTIME_STATE
@@ -43537,51 +44057,59 @@ fn usb_mark_enumeration_fault(state: &mut UsbRuntimeState, detail: u16) {
     }
 }
 
-fn usb_runtime_retry_keyboard_enumeration(
-    sequence: u32,
-    aux0: u32,
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum UsbEnumerationRetryTurn {
+    Pending,
+    Complete(Option<u16>),
+}
+
+fn usb_runtime_retry_keyboard_enumeration_turn(
+    command: DriverTaskCommandRecord,
     state: &mut UsbRuntimeState,
-) -> Option<u16> {
+) -> UsbEnumerationRetryTurn {
     if !state.initialized {
-        return None;
+        return UsbEnumerationRetryTurn::Complete(None);
     }
     if usb_keyboard_poll_ready_state(state) {
         state.init_detail = DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY;
-        return Some(DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY);
+        return UsbEnumerationRetryTurn::Complete(Some(
+            DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY,
+        ));
     }
     if state.enumeration_retry_cooldown != 0 {
         state.enumeration_retry_cooldown = state.enumeration_retry_cooldown.saturating_sub(1);
-        return usb_runtime_enumeration_detail(state).or(Some(state.init_detail));
+        return UsbEnumerationRetryTurn::Complete(
+            usb_runtime_enumeration_detail(state).or(Some(state.init_detail)),
+        );
     }
     state.enumeration_retry_cooldown = USB_ENUMERATION_RETRY_COOLDOWN_TURNS;
     RUNTIME_DESCRIPTOR.with_ref(|descriptor| {
-        let dma_range = runtime_resource_range(
+        let Some(dma_range) = runtime_resource_range(
             descriptor,
             DRIVER_RUNTIME_RESOURCE_KIND_DMA,
             DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA,
-        )?;
-        let mut before = state.init_detail;
+        ) else {
+            return UsbEnumerationRetryTurn::Complete(None);
+        };
+        let before = state.init_detail;
         if usb_detail_warrants_cold_reinit(before)
             && state.enumeration_cold_reinit_attempts < USB_ENUMERATION_COLD_REINIT_LIMIT
         {
             let next_attempt = state.enumeration_cold_reinit_attempts.saturating_add(1);
             let deep_attempts = state.enumeration_deep_cold_reinit_attempts;
             let deep_detail = state.enumeration_deep_cold_reinit_detail;
-            usb_runtime_reinitialize_controller(
-                sequence,
-                aux0,
-                state,
-                descriptor,
+            begin_usb_cold_reinit(
+                command,
                 before,
                 next_attempt,
                 deep_attempts,
                 deep_detail,
+                true,
             );
-            usb_reset_deep_cold_reinit_frontier(state, state.init_detail);
-            before = state.init_detail;
+            return UsbEnumerationRetryTurn::Pending;
         }
         state.enumeration_retry_window_exhausted = false;
-        if usb_keyboard_enumerate(sequence, aux0, state, descriptor, dma_range) {
+        if usb_keyboard_enumerate(command.sequence, command.aux0, state, descriptor, dma_range) {
             state.init_detail = DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY;
             state.enumeration_retry_cooldown = 0;
             state.enumeration_cold_reinit_attempts = 0;
@@ -43589,32 +44117,58 @@ fn usb_runtime_retry_keyboard_enumeration(
                 state,
                 DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY,
             );
-            Some(DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY)
+            UsbEnumerationRetryTurn::Complete(Some(DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY))
         } else {
             if state.enumeration_retry_window_exhausted {
                 let detail = state.init_detail;
                 if let Some(deep_attempt) = usb_prepare_deep_cold_reinit_attempt(state, detail) {
                     let command_attempts = state.enumeration_cold_reinit_attempts;
-                    let reinit_detail = usb_runtime_reinitialize_controller(
-                        sequence,
-                        aux0,
-                        state,
-                        descriptor,
+                    begin_usb_cold_reinit(
+                        command,
                         detail,
                         command_attempts,
                         deep_attempt,
                         detail,
+                        false,
                     );
-                    return Some(reinit_detail);
+                    return UsbEnumerationRetryTurn::Pending;
                 }
             }
             if state.init_detail != before || state.port_event_candidate_mask != 0 {
-                Some(state.init_detail)
+                UsbEnumerationRetryTurn::Complete(Some(state.init_detail))
             } else {
-                usb_runtime_enumeration_detail(state).or(Some(state.init_detail))
+                UsbEnumerationRetryTurn::Complete(
+                    usb_runtime_enumeration_detail(state).or(Some(state.init_detail)),
+                )
             }
         }
     })
+}
+
+fn usb_runtime_retry_keyboard_enumeration(
+    sequence: u32,
+    aux0: u32,
+    state: &mut UsbRuntimeState,
+) -> Option<u16> {
+    let command = DriverTaskCommandRecord {
+        sequence,
+        opcode: OPCODE_SERVICE,
+        flags: 0,
+        arg0: HOT_PATH_USB_KEYBOARD,
+        arg1: ROLE_USB,
+        aux0,
+        aux1: 0,
+        budget: DriverTaskBudgetGrant {
+            max_ops: 1,
+            max_frames: 1,
+            max_bytes: 1,
+        },
+        frame: DriverFrameDescriptor::empty(),
+    };
+    match usb_runtime_retry_keyboard_enumeration_turn(command, state) {
+        UsbEnumerationRetryTurn::Pending => Some(state.init_detail),
+        UsbEnumerationRetryTurn::Complete(detail) => detail,
+    }
 }
 
 #[cfg(test)]
@@ -48853,14 +49407,7 @@ fn xhci_evaluate_hub_context(
     .is_some()
 }
 
-fn xhci_prepare_dma_structures(
-    sequence: u32,
-    aux0: u32,
-    state: &mut UsbRuntimeState,
-    descriptor: &DriverRuntimeInitDescriptor,
-    dma_range: DriverRuntimeResourceRangeDescriptor,
-) -> bool {
-    let dma_base = dma_range.vaddr as usize;
+fn xhci_begin_dma_zero(sequence: u32, aux0: u32) {
     publish_runtime_progress(
         sequence,
         pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DMA_ZERO_BEGIN,
@@ -48876,46 +49423,59 @@ fn xhci_prepare_dma_structures(
         pi4_driver_abi::DRIVER_RUNTIME_CADENCE_FLAG_WORK_REMAINS
             | pi4_driver_abi::DRIVER_RUNTIME_CADENCE_FLAG_WORK_BYTES,
     );
-    let mut zeroed = 0usize;
-    while zeroed < XHCI_DMA_ZERO_BYTES {
-        let chunk = XHCI_DMA_ZERO_BYTES
-            .saturating_sub(zeroed)
-            .min(XHCI_DMA_ZERO_DIAGNOSTIC_CHUNK_BYTES);
-        zero_dma_range(dma_base + zeroed, chunk);
-        zeroed = zeroed.saturating_add(chunk);
-        publish_runtime_progress(
-            sequence,
-            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DMA_ZERO_PROGRESS,
-            aux0,
-        );
-        publish_runtime_cadence(
-            HOT_PATH_USB_KEYBOARD,
-            sequence,
-            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DMA_ZERO_PROGRESS,
-            zeroed as u32,
-            XHCI_DMA_ZERO_BYTES as u32,
-            pi4_driver_abi::DRIVER_RUNTIME_CADENCE_EXIT_PROGRESS,
-            (if zeroed < XHCI_DMA_ZERO_BYTES {
-                pi4_driver_abi::DRIVER_RUNTIME_CADENCE_FLAG_WORK_REMAINS
-            } else {
-                0
-            }) | pi4_driver_abi::DRIVER_RUNTIME_CADENCE_FLAG_WORK_BYTES,
-        );
-    }
+}
+
+fn xhci_zero_dma_turn(sequence: u32, aux0: u32, dma_base: usize, zeroed: usize) -> usize {
+    let chunk = XHCI_DMA_ZERO_BYTES
+        .saturating_sub(zeroed)
+        .min(XHCI_DMA_ZERO_DIAGNOSTIC_CHUNK_BYTES);
+    zero_dma_range(dma_base.saturating_add(zeroed), chunk);
+    let next = zeroed.saturating_add(chunk).min(XHCI_DMA_ZERO_BYTES);
     publish_runtime_progress(
         sequence,
-        pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DMA_ZERO_DONE,
+        pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DMA_ZERO_PROGRESS,
         aux0,
     );
     publish_runtime_cadence(
         HOT_PATH_USB_KEYBOARD,
         sequence,
-        pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DMA_ZERO_DONE,
-        XHCI_DMA_ZERO_BYTES as u32,
+        pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DMA_ZERO_PROGRESS,
+        next as u32,
         XHCI_DMA_ZERO_BYTES as u32,
         pi4_driver_abi::DRIVER_RUNTIME_CADENCE_EXIT_PROGRESS,
-        pi4_driver_abi::DRIVER_RUNTIME_CADENCE_FLAG_WORK_BYTES,
+        (if next < XHCI_DMA_ZERO_BYTES {
+            pi4_driver_abi::DRIVER_RUNTIME_CADENCE_FLAG_WORK_REMAINS
+        } else {
+            0
+        }) | pi4_driver_abi::DRIVER_RUNTIME_CADENCE_FLAG_WORK_BYTES,
     );
+    if next == XHCI_DMA_ZERO_BYTES {
+        publish_runtime_progress(
+            sequence,
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DMA_ZERO_DONE,
+            aux0,
+        );
+        publish_runtime_cadence(
+            HOT_PATH_USB_KEYBOARD,
+            sequence,
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DMA_ZERO_DONE,
+            XHCI_DMA_ZERO_BYTES as u32,
+            XHCI_DMA_ZERO_BYTES as u32,
+            pi4_driver_abi::DRIVER_RUNTIME_CADENCE_EXIT_PROGRESS,
+            pi4_driver_abi::DRIVER_RUNTIME_CADENCE_FLAG_WORK_BYTES,
+        );
+    }
+    next
+}
+
+fn xhci_prepare_dma_ring_graph(
+    sequence: u32,
+    aux0: u32,
+    state: &mut UsbRuntimeState,
+    descriptor: &DriverRuntimeInitDescriptor,
+    dma_range: DriverRuntimeResourceRangeDescriptor,
+) -> bool {
+    let dma_base = dma_range.vaddr as usize;
     publish_runtime_progress(
         sequence,
         pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_RING_GRAPH_BEGIN,
@@ -48929,7 +49489,6 @@ fn xhci_prepare_dma_structures(
     else {
         return false;
     };
-    let event_base = dma_base + XHCI_DMA_EVENT_RING_OFFSET;
     let cmd_base = dma_base + XHCI_DMA_COMMAND_RING_OFFSET;
     write_xhci_trb(
         cmd_base,
@@ -49000,27 +49559,76 @@ fn xhci_prepare_dma_structures(
         pi4_driver_abi::DRIVER_RUNTIME_CADENCE_EXIT_PROGRESS,
         0,
     );
+    true
+}
+
+fn xhci_begin_dma_clean(sequence: u32, aux0: u32) {
     publish_runtime_progress(
         sequence,
         pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DMA_CLEAN_BEGIN,
         aux0,
     );
-    dma_clean_range(dma_base, XHCI_DMA_ZERO_BYTES);
-    publish_runtime_progress(
-        sequence,
-        pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DMA_CLEAN_DONE,
-        aux0,
-    );
+}
+
+fn xhci_clean_dma_turn(sequence: u32, aux0: u32, dma_base: usize, cleaned: usize) -> usize {
+    let chunk = XHCI_DMA_ZERO_BYTES
+        .saturating_sub(cleaned)
+        .min(XHCI_DMA_ZERO_DIAGNOSTIC_CHUNK_BYTES);
+    dma_clean_range(dma_base.saturating_add(cleaned), chunk);
+    let next = cleaned.saturating_add(chunk).min(XHCI_DMA_ZERO_BYTES);
     publish_runtime_cadence(
         HOT_PATH_USB_KEYBOARD,
         sequence,
-        pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DMA_CLEAN_DONE,
-        XHCI_DMA_ZERO_BYTES as u32,
+        pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DMA_CLEAN_BEGIN,
+        next as u32,
         XHCI_DMA_ZERO_BYTES as u32,
         pi4_driver_abi::DRIVER_RUNTIME_CADENCE_EXIT_PROGRESS,
-        pi4_driver_abi::DRIVER_RUNTIME_CADENCE_FLAG_WORK_BYTES,
+        (if next < XHCI_DMA_ZERO_BYTES {
+            pi4_driver_abi::DRIVER_RUNTIME_CADENCE_FLAG_WORK_REMAINS
+        } else {
+            0
+        }) | pi4_driver_abi::DRIVER_RUNTIME_CADENCE_FLAG_WORK_BYTES,
     );
-    let _ = event_base;
+    if next == XHCI_DMA_ZERO_BYTES {
+        publish_runtime_progress(
+            sequence,
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DMA_CLEAN_DONE,
+            aux0,
+        );
+        publish_runtime_cadence(
+            HOT_PATH_USB_KEYBOARD,
+            sequence,
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DMA_CLEAN_DONE,
+            XHCI_DMA_ZERO_BYTES as u32,
+            XHCI_DMA_ZERO_BYTES as u32,
+            pi4_driver_abi::DRIVER_RUNTIME_CADENCE_EXIT_PROGRESS,
+            pi4_driver_abi::DRIVER_RUNTIME_CADENCE_FLAG_WORK_BYTES,
+        );
+    }
+    next
+}
+
+fn xhci_prepare_dma_structures(
+    sequence: u32,
+    aux0: u32,
+    state: &mut UsbRuntimeState,
+    descriptor: &DriverRuntimeInitDescriptor,
+    dma_range: DriverRuntimeResourceRangeDescriptor,
+) -> bool {
+    let dma_base = dma_range.vaddr as usize;
+    xhci_begin_dma_zero(sequence, aux0);
+    let mut zeroed = 0usize;
+    while zeroed < XHCI_DMA_ZERO_BYTES {
+        zeroed = xhci_zero_dma_turn(sequence, aux0, dma_base, zeroed);
+    }
+    if !xhci_prepare_dma_ring_graph(sequence, aux0, state, descriptor, dma_range) {
+        return false;
+    }
+    xhci_begin_dma_clean(sequence, aux0);
+    let mut cleaned = 0usize;
+    while cleaned < XHCI_DMA_ZERO_BYTES {
+        cleaned = xhci_clean_dma_turn(sequence, aux0, dma_base, cleaned);
+    }
     true
 }
 
@@ -53379,21 +53987,21 @@ fn usb_xhci_reset_with_settle(
 }
 
 #[inline(never)]
-fn usb_runtime_init_hw(
+fn usb_runtime_prepare_controller(
     sequence: u32,
     aux0: u32,
     descriptor: &DriverRuntimeInitDescriptor,
     state: &mut UsbRuntimeState,
-) -> Option<u16> {
+) -> UsbControllerPrepare {
     let Some(dma_range) = runtime_resource_range(
         descriptor,
         DRIVER_RUNTIME_RESOURCE_KIND_DMA,
         DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA,
     ) else {
-        return None;
+        return UsbControllerPrepare::Fault;
     };
     if dma_range.page_count < USB_REQUIRED_DMA_PAGES {
-        return None;
+        return UsbControllerPrepare::Fault;
     }
     publish_runtime_progress(
         sequence,
@@ -53424,7 +54032,7 @@ fn usb_runtime_init_hw(
             state.rt_offset = 0x2000;
             state.context_bytes = 32;
             usb_reset_enumeration_cursor(state);
-            return Some(DRIVER_RUNTIME_USB_INIT_DETAIL_XHCI_READY);
+            return UsbControllerPrepare::Ready(DRIVER_RUNTIME_USB_INIT_DETAIL_XHCI_READY);
         }
         #[cfg(target_os = "none")]
         {
@@ -53433,7 +54041,7 @@ fn usb_runtime_init_hw(
                 DRIVER_RUNTIME_RING_PROGRESS_USB_CAPS_INVALID,
                 aux0,
             );
-            return None;
+            return UsbControllerPrepare::Fault;
         }
     }
     let op_base = cap_length as usize;
@@ -53455,7 +54063,7 @@ fn usb_runtime_init_hw(
         op_base + XHCI_USBCMD,
         halt_command,
     ) {
-        return None;
+        return UsbControllerPrepare::Fault;
     }
     publish_runtime_progress(
         sequence,
@@ -53463,7 +54071,7 @@ fn usb_runtime_init_hw(
         aux0,
     );
     if !usb_wait_status(op_base, XHCI_USBSTS_HCH, XHCI_USBSTS_HCH) {
-        return None;
+        return UsbControllerPrepare::Fault;
     }
     publish_runtime_progress(sequence, DRIVER_RUNTIME_RING_PROGRESS_USB_HALTED, aux0);
     let mut reset_attempt = 0usize;
@@ -53473,17 +54081,32 @@ fn usb_runtime_init_hw(
         }
         reset_attempt = reset_attempt.saturating_add(1);
         if reset_attempt >= USB_XHCI_RESET_ATTEMPTS {
-            return None;
+            return UsbControllerPrepare::Fault;
         }
         runtime_spin(USB_XHCI_RESET_WAIT_SETTLE_SPINS.saturating_mul(16));
     }
     if reset_attempt >= USB_XHCI_RESET_ATTEMPTS {
-        return None;
+        return UsbControllerPrepare::Fault;
     }
     publish_runtime_progress(sequence, DRIVER_RUNTIME_RING_PROGRESS_USB_RESET_DONE, aux0);
-    if !xhci_prepare_dma_structures(sequence, aux0, state, descriptor, dma_range) {
-        return None;
-    }
+    UsbControllerPrepare::Dma(dma_range)
+}
+
+#[inline(never)]
+fn usb_runtime_configure_controller(
+    sequence: u32,
+    aux0: u32,
+    descriptor: &DriverRuntimeInitDescriptor,
+    state: &mut UsbRuntimeState,
+) -> Option<u16> {
+    let dma_range = runtime_resource_range(
+        descriptor,
+        DRIVER_RUNTIME_RESOURCE_KIND_DMA,
+        DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA,
+    )?;
+    let op_base = state.cap_length as usize;
+    let max_slots = state.max_slots;
+    let rt_offset = state.rt_offset;
     publish_runtime_progress(sequence, DRIVER_RUNTIME_RING_PROGRESS_USB_DMA_READY, aux0);
     let Some(dcbaa) = xhci_dma_bus_addr(descriptor, dma_range, XHCI_DMA_DCBBA_OFFSET) else {
         return None;
@@ -53688,6 +54311,24 @@ fn usb_runtime_init_hw(
     }
     state.init_detail = DRIVER_RUNTIME_USB_INIT_DETAIL_XHCI_READY;
     Some(DRIVER_RUNTIME_USB_INIT_DETAIL_XHCI_READY)
+}
+
+#[inline(never)]
+fn usb_runtime_init_hw(
+    sequence: u32,
+    aux0: u32,
+    descriptor: &DriverRuntimeInitDescriptor,
+    state: &mut UsbRuntimeState,
+) -> Option<u16> {
+    let dma_range = match usb_runtime_prepare_controller(sequence, aux0, descriptor, state) {
+        UsbControllerPrepare::Dma(dma_range) => dma_range,
+        UsbControllerPrepare::Ready(detail) => return Some(detail),
+        UsbControllerPrepare::Fault => return None,
+    };
+    if !xhci_prepare_dma_structures(sequence, aux0, state, descriptor, dma_range) {
+        return None;
+    }
+    usb_runtime_configure_controller(sequence, aux0, descriptor, state)
 }
 
 #[cfg(target_os = "none")]
@@ -60099,6 +60740,7 @@ mod tests {
         GENET_RUNTIME_STATE.with_mut(GenetRuntimeState::reset);
         PCIE_RUNTIME_STATE.with_mut(PcieRuntimeState::reset);
         USB_RUNTIME_STATE.with_mut(UsbRuntimeState::reset);
+        USB_CONTROLLER_INIT_CURSOR.with_mut(UsbControllerInitCursor::reset);
         SDIO_RUNTIME_STATE.with_mut(SdioRuntimeState::reset);
         CYW43_RUNTIME_STATE.with_mut(|state| {
             // A process-local test reset models a new linked-runtime lifetime,
@@ -107532,6 +108174,99 @@ mod tests {
     }
 
     #[test]
+    fn usb_dma_zero_turn_advances_exactly_one_bounded_chunk() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        // SAFETY: `test_guard` serializes the process-local DMA fixture.
+        unsafe {
+            (*TEST_DMA_BUFFER.0.get()).fill(0xa5);
+        }
+
+        let next = xhci_zero_dma_turn(
+            1,
+            DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX,
+            DRIVER_TASK_DMA_BUFFER_VADDR,
+            0,
+        );
+
+        assert_eq!(next, XHCI_DMA_ZERO_DIAGNOSTIC_CHUNK_BYTES);
+        assert_eq!(read_dma_byte(DRIVER_TASK_DMA_BUFFER_VADDR), 0);
+        assert_eq!(
+            read_dma_byte(DRIVER_TASK_DMA_BUFFER_VADDR + XHCI_DMA_ZERO_DIAGNOSTIC_CHUNK_BYTES - 1),
+            0
+        );
+        assert_eq!(
+            read_dma_byte(DRIVER_TASK_DMA_BUFFER_VADDR + XHCI_DMA_ZERO_DIAGNOSTIC_CHUNK_BYTES),
+            0xa5
+        );
+    }
+
+    #[test]
+    fn usb_controller_init_cursor_seals_the_complete_parent_command() {
+        let command = DriverTaskCommandRecord {
+            sequence: 0x5555,
+            opcode: OPCODE_SERVICE,
+            flags: 0,
+            arg0: HOT_PATH_USB_KEYBOARD,
+            arg1: ROLE_USB,
+            aux0: DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX,
+            aux1: 0,
+            budget: budget(),
+            frame: DriverFrameDescriptor::empty(),
+        };
+        let cursor = UsbControllerInitCursor::engine_init(command);
+        assert!(cursor.active_for(command));
+        assert!(!cursor.active_for(DriverTaskCommandRecord {
+            sequence: command.sequence.wrapping_add(1),
+            ..command
+        }));
+        assert!(!cursor.active_for(DriverTaskCommandRecord {
+            budget: DriverTaskBudgetGrant {
+                max_ops: command.budget.max_ops.saturating_add(1),
+                ..command.budget
+            },
+            ..command
+        }));
+    }
+
+    #[test]
+    fn usb_controller_init_rejects_identity_change_before_another_phase() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        init_runtime_for_test(HOT_PATH_USB_KEYBOARD, ROLE_USB);
+        let command = DriverTaskCommandRecord {
+            sequence: 0x5656,
+            opcode: OPCODE_SERVICE,
+            flags: 0,
+            arg0: HOT_PATH_USB_KEYBOARD,
+            arg1: ROLE_USB,
+            aux0: DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX,
+            aux1: 0,
+            budget: budget(),
+            frame: DriverFrameDescriptor::empty(),
+        };
+
+        assert_eq!(
+            service_command_turn(0, command),
+            RuntimeCommandTurn::Pending
+        );
+        assert_eq!(
+            service_command_turn(
+                0,
+                DriverTaskCommandRecord {
+                    sequence: command.sequence.wrapping_add(1),
+                    ..command
+                }
+            ),
+            RuntimeCommandTurn::Complete(DriverTaskCompletionRecord::fault(
+                command.sequence.wrapping_add(1),
+                FAULT_REJECTED_COMMAND
+            ))
+        );
+        assert!(!USB_CONTROLLER_INIT_CURSOR.with_ref(UsbControllerInitCursor::active));
+    }
+
+    #[test]
     fn usb_hub_topology_helpers_encode_route_tt_and_speed() {
         let root_hub = UsbEnumerationDevice {
             slot: 1,
@@ -110882,7 +111617,7 @@ mod tests {
             state.enumeration_root_next_port = 4;
             state.enumeration_best_detail = DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_ATTACH_FAILED;
         });
-        let enumerate = DriverTaskCommandRecord {
+        let mut enumerate = DriverTaskCommandRecord {
             sequence: 95,
             opcode: OPCODE_SERVICE,
             flags: 0,
@@ -110899,12 +111634,12 @@ mod tests {
             DriverTaskCompletionRecord::progress_with_detail(
                 95,
                 DRIVER_RUNTIME_USB_INIT_DETAIL_XHCI_READY,
-                USB_ENUM_RESULT_SNAPSHOT | USB_ENUM_RESULT_ROOT_POWERED
+                USB_ENUM_RESULT_SNAPSHOT
             )
         );
         USB_RUNTIME_STATE.with_mut(|state| {
             assert_eq!(state.enumeration_cold_reinit_attempts, 1);
-            assert!(state.enumeration_root_powered);
+            assert!(!state.enumeration_root_powered);
             assert_eq!(state.enumeration_root_scan_pass, 0);
             assert_eq!(state.enumeration_root_next_port, 1);
             assert_eq!(
@@ -110912,6 +111647,15 @@ mod tests {
                 DRIVER_RUNTIME_USB_INIT_DETAIL_XHCI_READY
             );
         });
+        enumerate.sequence = 96;
+        assert_eq!(
+            service_command(0, enumerate),
+            DriverTaskCompletionRecord::progress_with_detail(
+                96,
+                DRIVER_RUNTIME_USB_INIT_DETAIL_XHCI_READY,
+                USB_ENUM_RESULT_SNAPSHOT | USB_ENUM_RESULT_ROOT_POWERED
+            )
+        );
     }
 
     #[test]
