@@ -58,7 +58,7 @@ the most precise description of that boot.
 | `help` | Print commands available in the selected profile. |
 | `bi` | Preserve the legacy line, then print source-labelled `[bi:v2]` kernel BootInfo and generated-profile records. |
 | `caps` | Print the legacy key capability-slot summary. |
-| `caps mcs` | Print bounded live MCS authority presence and generated fixed/capacity object counts. |
+| `caps mcs` | Print bounded live MCS authority presence and generated fixed/capacity object counts as source-labelled records that fit the Pi linked-HDMI fallback width. |
 | `smp` | Print bounded userspace activity and assignment diagnostics without claiming kernel CPU utilization. This is the preferred spelling. |
 | `smp activity` | Compatibility spelling for `smp`; it produces the same bounded userspace activity report. |
 | `smp mcs` | Print `[smp:mcs/v1]` generated per-core/per-task admission joined to one copied live registry snapshot. |

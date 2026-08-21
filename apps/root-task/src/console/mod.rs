@@ -196,12 +196,18 @@ impl CohesixConsole {
             self.emit_line("[caps:mcs/v1] source=runtime state=unavailable reason=early-console");
             let admission = crate::generated::worker_resource_admission_config();
             for (scope, objects) in [
-                ("fixed", admission.fixed_objects),
-                ("capacity", admission.capacity),
+                (
+                    crate::mcs_operator_inspection::CapsObjectScope::Fixed,
+                    admission.fixed_objects,
+                ),
+                (
+                    crate::mcs_operator_inspection::CapsObjectScope::Capacity,
+                    admission.capacity,
+                ),
             ] {
-                let mut line = String::<{ crate::serial::DEFAULT_LINE_CAPACITY }>::new();
-                let _ = write!(line, "[caps:mcs/v1] source=generated scope={} tcbs={} scs={} replies={} fault_caps={} timeout_fault_caps={} cspace_slots={}", scope, objects.tcbs, objects.scheduling_contexts, objects.reply_objects, objects.fault_caps, objects.timeout_fault_caps, objects.cspace_slots);
-                self.emit_line(line.as_str());
+                for line in crate::mcs_operator_inspection::caps_generated_lines(scope, objects) {
+                    self.emit_line(line.as_str());
+                }
             }
             return;
         }

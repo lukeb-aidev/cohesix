@@ -44,6 +44,7 @@ pub mod event;
 pub mod features;
 /// Local diagnostics seat policy helpers for Milestone 26 bring-up.
 pub mod local_seat;
+mod mcs_operator_inspection;
 /// Observability metric helpers shared with the event pump.
 pub mod observe;
 /// Compile-time profile surface exposed to kernels and tests.

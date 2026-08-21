@@ -10214,7 +10214,7 @@ Goal: Expose source-labelled generated and live seL4 MCS state through `bi`, `ca
 Inputs: `m26e-mcs-abi-foundation`, `m26e-worker-resource-admission-critical-tcbs`, `m26e-console-network-service-isolation`, selected seL4 BootInfo, generated temporal/resource-admission records, live fault-registry and critical-domain state, crates/cohsh-core/**, apps/root-task/src/{console,event,critical_tcb.rs,hal/critical_tcb.rs}, docs/{INTERFACES,USERLAND_AND_CLI,SECURITY,TEST_PLAN}.md.
 Changes:
   - crates/cohsh-core/** + generated grammar/fixtures — preserve bare `caps` and `smp`; add strict `caps mcs` and `smp mcs`; list both MCS spellings as explicit root-shell and host-client help rows; update every parser/help/transcript consumer.
-  - apps/root-task/src/{console,event}/** — retain the legacy `bi` line and append bounded kernel BootInfo and generated profile records.
+  - apps/root-task/src/{console,event}/** — retain the legacy `bi` line, source every production help path from the shared root-console inventory, and emit bounded kernel BootInfo and generated profile records; keep every `caps mcs` record within the 77-byte Pi linked-HDMI fallback width without dropping fields.
   - apps/root-task/src/{critical_tcb.rs,hal/critical_tcb.rs,event/**} — copy the live registry nonblockingly, release its lock before output, and render authority/object, per-core admission, and per-task temporal/registration/generation state. Never call `seL4_SchedContext_Consumed`, mutate accounting, perform a debug dump, or create authority.
   - docs and compatibility — document provenance and separate QEMU/Pi evidence; review `coh`, `cohsh`, SwarmUI, Hive Gateway, `.coh`, `tools/cohesix-py`, fixtures, release, and performance surfaces without changing their semantics.
 Commands:
@@ -10226,7 +10226,7 @@ Commands:
   - scripts/ci/check_test_plan.sh
   - scripts/ci/test_plan_run.sh --target qemu --state-dir out/test-plan/m26e-mcs-operator-inspection-qemu
   - scripts/ci/test_plan_run.sh --target pi4 --state-dir out/test-plan/m26e-mcs-operator-inspection-pi4
-Checks: legacy behavior remains; output is strict and bounded; generated/live sources stay distinct; missing, contended, early, and fatal state are explicit; QEMU and fresh-Pi evidence remain separate.
+Checks: legacy behavior remains; every production help path lists literal `caps mcs` and `smp mcs`; output is strict and bounded; every `caps mcs` field survives the Pi linked-HDMI fallback width; generated/live sources stay distinct; missing, contended, early, and fatal state are explicit; QEMU and fresh-Pi evidence remain separate.
 Deliverables: Additive root-shell MCS inspection, grammar compatibility, deterministic tests, and separate exact-target evidence.
 
 Title/ID: m26e-worker-abi-identity-notifications

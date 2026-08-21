@@ -166,13 +166,6 @@ const fn active_inactive(value: bool) -> &'static str {
         "inactive"
     }
 }
-const fn present_absent(value: bool) -> &'static str {
-    if value {
-        "present"
-    } else {
-        "absent"
-    }
-}
 #[cfg(feature = "kernel")]
 use crate::debug_uart::debug_uart_str;
 #[cfg(feature = "net-console")]
@@ -11530,14 +11523,9 @@ where
 
     fn emit_help(&mut self) {
         self.emit_console_line("Commands:");
-        self.emit_console_line("  help  - Show this help");
-        self.emit_console_line("  bi    - Show bootinfo summary");
-        self.emit_console_line("  caps  - Show capability slots");
-        self.emit_console_line(
-            "  smp [activity|dump] - Show activity; dump raw debug scheduler state",
-        );
-        self.emit_console_line("  mem   - Show untyped summary");
-        self.emit_console_line("  ping  - Respond with pong");
+        for line in cohsh_core::help::ROOT_CONSOLE_HELP_LINES {
+            self.emit_console_line(line);
+        }
         self.emit_console_line("  test  - Self-test (host-only; use cohsh)");
         self.emit_console_line("  nettest  - Run network self-test");
         self.emit_console_line("  netstats - Show network counters");
@@ -11550,14 +11538,9 @@ where
 
     fn emit_help_serial_only(&mut self) {
         self.emit_serial_line("Commands:");
-        self.emit_serial_line("  help  - Show this help");
-        self.emit_serial_line("  bi    - Show bootinfo summary");
-        self.emit_serial_line("  caps  - Show capability slots");
-        self.emit_serial_line(
-            "  smp [activity|dump] - Show activity; dump raw debug scheduler state",
-        );
-        self.emit_serial_line("  mem   - Show untyped summary");
-        self.emit_serial_line("  ping  - Respond with pong");
+        for line in cohsh_core::help::ROOT_CONSOLE_HELP_LINES {
+            self.emit_serial_line(line);
+        }
         self.emit_serial_line("  test  - Self-test (host-only; use cohsh)");
         self.emit_serial_line("  nettest  - Run network self-test");
         self.emit_serial_line("  netstats - Show network counters");
@@ -11570,14 +11553,9 @@ where
 
     fn emit_help_serial_only_atomic(&mut self) {
         self.emit_serial_line_atomic("Commands:");
-        self.emit_serial_line_atomic("  help  - Show this help");
-        self.emit_serial_line_atomic("  bi    - Show bootinfo summary");
-        self.emit_serial_line_atomic("  caps  - Show capability slots");
-        self.emit_serial_line_atomic(
-            "  smp [activity|dump] - Show activity; dump raw debug scheduler state",
-        );
-        self.emit_serial_line_atomic("  mem   - Show untyped summary");
-        self.emit_serial_line_atomic("  ping  - Respond with pong");
+        for line in cohsh_core::help::ROOT_CONSOLE_HELP_LINES {
+            self.emit_serial_line_atomic(line);
+        }
         self.emit_serial_line_atomic("  test  - Self-test (host-only; use cohsh)");
         self.emit_serial_line_atomic("  nettest  - Run network self-test");
         self.emit_serial_line_atomic("  netstats - Show network counters");
@@ -11802,12 +11780,18 @@ where
     fn emit_caps_generated(&mut self) {
         let admission = crate::generated::worker_resource_admission_config();
         for (scope, objects) in [
-            ("fixed", admission.fixed_objects),
-            ("capacity", admission.capacity),
+            (
+                crate::mcs_operator_inspection::CapsObjectScope::Fixed,
+                admission.fixed_objects,
+            ),
+            (
+                crate::mcs_operator_inspection::CapsObjectScope::Capacity,
+                admission.capacity,
+            ),
         ] {
-            let mut line = HeaplessString::<DEFAULT_LINE_CAPACITY>::new();
-            let _ = write!(line, "[caps:mcs/v1] source=generated scope={} tcbs={} scs={} replies={} fault_caps={} timeout_fault_caps={} cspace_slots={}", scope, objects.tcbs, objects.scheduling_contexts, objects.reply_objects, objects.fault_caps, objects.timeout_fault_caps, objects.cspace_slots);
-            self.emit_console_line(line.as_str());
+            for line in crate::mcs_operator_inspection::caps_generated_lines(scope, objects) {
+                self.emit_console_line(line.as_str());
+            }
         }
     }
 
@@ -11815,12 +11799,22 @@ where
     fn emit_caps_mcs(&mut self) {
         let admission = crate::generated::worker_resource_admission_config();
         if let Some(snapshot) = crate::hal::critical_tcb::target_mcs_runtime_snapshot() {
-            let mut line = HeaplessString::<DEFAULT_LINE_CAPACITY>::new();
-            let _ = write!(line, "[caps:mcs/v1] source=runtime registry={}/{} sealed={} fault_rx={} root_control={} fatal={}", snapshot.registry.len, admission.fault_registry.capacity, yes_no(snapshot.registry_sealed && snapshot.registry.sealed), active_inactive(snapshot.fault_receiver_active), active_inactive(snapshot.root_control_active), yes_no(snapshot.fatal));
-            self.emit_console_line(line.as_str());
-            let mut authority = HeaplessString::<DEFAULT_LINE_CAPACITY>::new();
-            let _ = write!(authority, "[caps:mcs/v1] source=runtime fault_endpoint={} root_fault_cnode={} driver_supervisor_cnode={} pending_fault={} recovered_timeout_mask=0x{:016x}", present_absent(snapshot.fault_endpoint_present), present_absent(snapshot.root_fault_cnode_present), present_absent(snapshot.driver_supervisor_cnode_present), yes_no(snapshot.pending_fault), snapshot.recovered_timeout_mask);
-            self.emit_console_line(authority.as_str());
+            let state = crate::mcs_operator_inspection::CapsRuntimeState {
+                registry_len: snapshot.registry.len,
+                registry_capacity: admission.fault_registry.capacity,
+                registry_sealed: snapshot.registry_sealed && snapshot.registry.sealed,
+                fault_receiver_active: snapshot.fault_receiver_active,
+                root_control_active: snapshot.root_control_active,
+                fatal: snapshot.fatal,
+                fault_endpoint_present: snapshot.fault_endpoint_present,
+                root_fault_cnode_present: snapshot.root_fault_cnode_present,
+                driver_supervisor_cnode_present: snapshot.driver_supervisor_cnode_present,
+                pending_fault: snapshot.pending_fault,
+                recovered_timeout_mask: snapshot.recovered_timeout_mask,
+            };
+            for line in crate::mcs_operator_inspection::caps_runtime_lines(state) {
+                self.emit_console_line(line.as_str());
+            }
         } else {
             self.emit_console_line(
                 "[caps:mcs/v1] source=runtime state=unavailable reason=registry-busy",
@@ -29445,6 +29439,8 @@ mod tests {
         let ready_transcript = core::str::from_utf8(ready_emitted.as_slice()).unwrap();
         assert!(ready_transcript.contains("Cohesix console ready"));
         assert!(ready_transcript.contains("Commands:"));
+        assert!(ready_transcript.contains("  caps mcs "));
+        assert!(ready_transcript.contains("  smp mcs "));
         assert!(ready_transcript.ends_with(CONSOLE_PROMPT));
         #[cfg(all(feature = "kernel", feature = "usb"))]
         assert!(pump.post_prompt_local_seat_attach_pending_for_test());
@@ -33585,6 +33581,8 @@ mod tests {
         let sent: std::vec::Vec<&str> = net.sent.iter().map(|line| line.as_str()).collect();
         assert_eq!(sent.first(), Some(&"Commands:"));
         assert_eq!(sent.last(), Some(&"OK HELP"));
+        assert!(sent.iter().any(|line| line.starts_with("  caps mcs ")));
+        assert!(sent.iter().any(|line| line.starts_with("  smp mcs ")));
         assert!(sent.len() > 8, "test must cross the old adapter depth");
         assert_eq!(
             net.terminal_sent
@@ -36402,6 +36400,30 @@ mod tests {
         assert!(rendered.contains("OK CAPS mode=mcs"), "{rendered}");
         assert!(rendered.contains("OK SMP mode=mcs"), "{rendered}");
         assert!(!rendered.contains("debug scheduler dump"), "{rendered}");
+        for field in [
+            "tcbs=",
+            "scs=",
+            "replies=",
+            "fault_caps=",
+            "timeout_fault_caps=",
+            "cspace_slots=",
+        ] {
+            assert!(
+                rendered.lines().any(|line| {
+                    line.starts_with("[caps:mcs/v1] source=generated") && line.contains(field)
+                }),
+                "missing {field}: {rendered}"
+            );
+        }
+        for line in rendered
+            .lines()
+            .filter(|line| line.starts_with("[caps:mcs/v1]"))
+        {
+            assert!(
+                line.len() <= crate::mcs_operator_inspection::MCS_OPERATOR_DISPLAY_LINE_CAPACITY,
+                "caps mcs line exceeds local-seat width: {line}"
+            );
+        }
         let task_lines: Vec<_> = rendered
             .lines()
             .filter(|line| line.contains("[smp:mcs/v1] source=generated task="))

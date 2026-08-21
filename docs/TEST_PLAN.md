@@ -31,8 +31,10 @@ target, profile, and topology before making a claim.
 
 Milestone 26e `bi`, `caps mcs`, and `smp mcs` are convergence diagnostics.
 Parser/fixture and `mcs_operator_inspection` tests prove bounded rendering and
-snapshot behavior. QEMU proves only QEMU; Pi observations require a fresh exact
-image. Neither diagnostic may call `seL4_SchedContext_Consumed`.
+snapshot behavior. The `caps mcs` records must preserve every field within the
+77-byte Pi linked-HDMI fallback width. QEMU proves only QEMU; Pi observations
+require a fresh exact image. Neither diagnostic may call
+`seL4_SchedContext_Consumed`.
 
 ### Target-first convergence entry point
 

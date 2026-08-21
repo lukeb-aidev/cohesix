@@ -41,6 +41,10 @@ adding strict `caps mcs`, `smp mcs`, `[bi:v2]`, `[caps:mcs/v1]`, and
 `[smp:mcs/v1]`. Every record labels kernel, generated, or runtime authority.
 Early-console and registry contention are typed unavailable states; generated
 rows never fabricate live registration, binding, activation, or containment.
+`[caps:mcs/v1]` emits one or more independently source-labelled records per
+runtime or generated scope. Each record is at most 77 bytes so the Pi linked
+HDMI fallback preserves every field; consumers join records by command,
+`source`, and `scope` rather than assuming one positional row per scope.
 
 ## Pi 4 pre-kernel policy interface
 
