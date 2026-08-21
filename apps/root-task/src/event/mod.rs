@@ -3128,14 +3128,29 @@ const fn required_local_seat_preflight_followup_phase(
 fn required_local_seat_preflight_frontier_key(
     snapshot: crate::hal::driver_task::DriverTaskRetainedFrontierSnapshot,
 ) -> usize {
+    let child_active = snapshot.active
+        && snapshot.request != 0
+        && snapshot.command_sequence == snapshot.request
+        && snapshot.completion_sequence != snapshot.request
+        && snapshot.progress_valid
+        && snapshot.progress_sequence == snapshot.request;
+    let request_state = if child_active {
+        "child-active"
+    } else {
+        snapshot.request_state
+    };
+    let phase_name = if child_active {
+        "child-active"
+    } else {
+        snapshot.phase_name
+    };
     let mut key = 0xcbf2_9ce4_8422_2325u64;
-    for byte in snapshot
-        .request_state
+    for byte in request_state
         .as_bytes()
         .iter()
         .copied()
         .chain(core::iter::once(0xff))
-        .chain(snapshot.phase_name.as_bytes().iter().copied())
+        .chain(phase_name.as_bytes().iter().copied())
         .chain(core::iter::once(0xfe))
         .chain(snapshot.progress_phase_name.as_bytes().iter().copied())
     {
@@ -3147,21 +3162,93 @@ fn required_local_seat_preflight_frontier_key(
         u64::from(snapshot.request),
         u64::from(snapshot.command_sequence),
         u64::from(snapshot.completion_sequence),
-        snapshot.doorbell_issued as u64,
+        if child_active {
+            1
+        } else {
+            snapshot.doorbell_issued as u64
+        },
         snapshot.endpoint_bound as u64,
         snapshot.mcs_admission_open as u64,
         u64::from(snapshot.mcs_cap_generation),
-        u64::from(snapshot.mcs_call_phase),
-        snapshot.mcs_producers as u64,
+        if child_active {
+            0
+        } else {
+            u64::from(snapshot.mcs_call_phase)
+        },
+        if child_active {
+            0
+        } else {
+            snapshot.mcs_producers as u64
+        },
         snapshot.progress_valid as u64,
         u64::from(snapshot.progress_sequence),
         u64::from(snapshot.progress_phase),
         u64::from(snapshot.progress_aux0),
+        required_local_seat_preflight_counter_bucket(snapshot.timeouts),
     ] {
         key ^= value;
         key = key.wrapping_mul(0x0000_0100_0000_01b3);
     }
     (key as usize) | 1
+}
+
+#[cfg(feature = "kernel")]
+const fn required_local_seat_preflight_counter_bucket(value: u64) -> u64 {
+    if value == 0 {
+        0
+    } else {
+        u64::BITS as u64 - value.leading_zeros() as u64
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn runtime_cadence_key(record: pi4_driver_abi::DriverRuntimeCadenceRecord) -> usize {
+    let mut key = 0xcbf2_9ce4_8422_2325u64;
+    for value in [
+        u64::from(record.phase),
+        u64::from(record.work_completed),
+        u64::from(record.work_total),
+        u64::from(record.exit_reason),
+        u64::from(record.flags),
+    ] {
+        key ^= value;
+        key = key.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    (key as usize) | 1
+}
+
+#[cfg(feature = "kernel")]
+const fn runtime_cadence_exit_label(exit_reason: u16) -> &'static str {
+    match exit_reason {
+        pi4_driver_abi::DRIVER_RUNTIME_CADENCE_EXIT_ENTER => "enter",
+        pi4_driver_abi::DRIVER_RUNTIME_CADENCE_EXIT_PROGRESS => "progress",
+        pi4_driver_abi::DRIVER_RUNTIME_CADENCE_EXIT_YIELD => "yield",
+        pi4_driver_abi::DRIVER_RUNTIME_CADENCE_EXIT_TERMINAL => "terminal",
+        _ => "invalid",
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn format_runtime_cadence(
+    contract_name: &str,
+    record: pi4_driver_abi::DriverRuntimeCadenceRecord,
+) -> Option<HeaplessString<DEFAULT_LINE_CAPACITY>> {
+    let mut line = HeaplessString::<DEFAULT_LINE_CAPACITY>::new();
+    write!(
+        line,
+        "PI4_CADENCE schema=v1 c={} q={:x} p={}/{} dt={:x} w={:x}/{:x} e={} f={:x}",
+        contract_name,
+        record.sequence,
+        record.phase,
+        crate::hal::driver_task::driver_task_ring_progress_phase_label(record.phase),
+        record.last_cntvct.wrapping_sub(record.entry_cntvct),
+        record.work_completed,
+        record.work_total,
+        runtime_cadence_exit_label(record.exit_reason),
+        record.flags,
+    )
+    .ok()?;
+    Some(line)
 }
 
 #[cfg(feature = "kernel")]
@@ -4321,6 +4408,8 @@ where
     #[cfg(feature = "kernel")]
     required_local_seat_usb_frontier_key: usize,
     #[cfg(feature = "kernel")]
+    required_local_seat_cadence_keys: [usize; 4],
+    #[cfg(feature = "kernel")]
     cyw43_bootstrap_containment_diagnostic_due: bool,
     #[cfg(feature = "kernel")]
     cyw43_bootstrap_hdmi_pending: bool,
@@ -4986,6 +5075,8 @@ where
             required_local_seat_pcie_frontier_key: 0,
             #[cfg(feature = "kernel")]
             required_local_seat_usb_frontier_key: 0,
+            #[cfg(feature = "kernel")]
+            required_local_seat_cadence_keys: [0; 4],
             #[cfg(feature = "kernel")]
             cyw43_bootstrap_containment_diagnostic_due: false,
             #[cfg(feature = "kernel")]
@@ -7922,6 +8013,50 @@ where
             usb_prior,
         );
         self.required_local_seat_usb_frontier_key = usb_key;
+
+        for (index, contract) in [
+            crate::hal::driver_task::SERIAL_DRIVER_TASK_CONTRACT,
+            crate::hal::driver_task::USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
+            crate::hal::driver_task::HDMI_TEXT_DRIVER_TASK_CONTRACT,
+            crate::hal::driver_task::PCIE_ROOT_DRIVER_TASK_CONTRACT,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let prior_key = self.required_local_seat_cadence_keys[index];
+            let key = self.trace_required_local_seat_runtime_cadence(contract, prior_key);
+            self.required_local_seat_cadence_keys[index] = key;
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    fn trace_required_local_seat_runtime_cadence(
+        &mut self,
+        contract: crate::hal::driver_task::DriverTaskContract,
+        prior_key: usize,
+    ) -> usize {
+        let Some(record) = crate::hal::driver_task::driver_task_runtime_cadence_snapshot(contract)
+        else {
+            return prior_key;
+        };
+        let key = runtime_cadence_key(record);
+        if key == prior_key {
+            return key;
+        }
+
+        if let Some(line) = format_runtime_cadence(contract.name, record) {
+            crate::log_buffer::append_log_line(line.as_str());
+            let _ = self.queue_physical_console_output(
+                PendingConsoleOutputKind::HighImpactLine,
+                line.as_str(),
+            );
+        } else {
+            const LINE: &str = "PI4_CADENCE schema=v1 state=diagnostic-overflow";
+            crate::log_buffer::append_log_line(LINE);
+            let _ =
+                self.queue_physical_console_output(PendingConsoleOutputKind::HighImpactLine, LINE);
+        }
+        key
     }
 
     #[cfg(feature = "kernel")]
@@ -40943,7 +41078,6 @@ mod tests {
 
         let mut counters_only = frontier;
         counters_only.send_attempts = u64::MAX;
-        counters_only.timeouts = u64::MAX;
         counters_only.aborts = u64::MAX;
         assert_eq!(
             required_local_seat_preflight_frontier_key(counters_only),
@@ -40959,6 +41093,76 @@ mod tests {
             baseline,
             "the child notification boundary must emit a new frontier"
         );
+
+        let mut first_timeout = frontier;
+        first_timeout.timeouts = 1;
+        assert_ne!(
+            required_local_seat_preflight_frontier_key(first_timeout),
+            baseline,
+            "the first persistent timeout must remain visible"
+        );
+        let mut second_timeout = frontier;
+        second_timeout.timeouts = 2;
+        let mut third_timeout = frontier;
+        third_timeout.timeouts = 3;
+        assert_eq!(
+            required_local_seat_preflight_frontier_key(second_timeout),
+            required_local_seat_preflight_frontier_key(third_timeout),
+            "timeouts within one logarithmic bucket must not flood serial"
+        );
+
+        let mut child_active = frontier;
+        child_active.request_state = "issued";
+        child_active.command_sequence = child_active.request;
+        child_active.progress_sequence = child_active.request;
+        let child_active_key = required_local_seat_preflight_frontier_key(child_active);
+        let mut root_lease_churn = child_active;
+        root_lease_churn.phase_name = "issued";
+        root_lease_churn.doorbell_issued = true;
+        root_lease_churn.mcs_call_phase = u32::MAX;
+        root_lease_churn.mcs_producers = usize::MAX;
+        assert_eq!(
+            required_local_seat_preflight_frontier_key(root_lease_churn),
+            child_active_key,
+            "root lease churn cannot repeat an exact active child frontier"
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn pi_runtime_cadence_reports_semantic_progress_without_timestamp_churn() {
+        let mut first = pi4_driver_abi::DriverRuntimeCadenceRecord::staged(
+            2,
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DMA_ZERO_PROGRESS,
+            100,
+            200,
+            64 * 1024,
+            320 * 1024,
+            pi4_driver_abi::DRIVER_RUNTIME_CADENCE_EXIT_PROGRESS,
+            pi4_driver_abi::DRIVER_RUNTIME_CADENCE_FLAG_WORK_REMAINS
+                | pi4_driver_abi::DRIVER_RUNTIME_CADENCE_FLAG_WORK_BYTES,
+        );
+        first.committed_sequence = first.sequence;
+        let mut later_same_frontier = first;
+        later_same_frontier.sequence = 3;
+        later_same_frontier.entry_cntvct = 300;
+        later_same_frontier.last_cntvct = 900;
+        later_same_frontier.committed_sequence = later_same_frontier.sequence;
+        assert_eq!(
+            runtime_cadence_key(first),
+            runtime_cadence_key(later_same_frontier),
+            "sequence and timestamp churn must not repeat an unchanged cadence frontier"
+        );
+
+        let mut progressed = first;
+        progressed.work_completed = 128 * 1024;
+        assert_ne!(runtime_cadence_key(progressed), runtime_cadence_key(first));
+
+        let line = format_runtime_cadence("driver-usb", first)
+            .expect("bounded cadence evidence must fit one serial line");
+        assert!(line.starts_with("PI4_CADENCE schema=v1"));
+        assert!(line.contains("usb-dma-zero-progress"));
+        assert!(line.len() <= DEFAULT_LINE_CAPACITY);
     }
 
     #[cfg(feature = "kernel")]

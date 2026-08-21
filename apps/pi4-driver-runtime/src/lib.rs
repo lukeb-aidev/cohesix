@@ -1143,6 +1143,7 @@ const XHCI_DMA_HID_OUTPUT_BUFFER_OFFSET: usize = 0x28000;
 const XHCI_MAX_SCRATCHPAD_BUFFERS: usize = 32;
 const XHCI_DMA_ZERO_BYTES: usize =
     XHCI_DMA_SCRATCHPAD_OFFSET + XHCI_MAX_SCRATCHPAD_BUFFERS * DRIVER_TASK_RING_PAGE_BYTES;
+const XHCI_DMA_ZERO_DIAGNOSTIC_CHUNK_BYTES: usize = 64 * 1024;
 const XHCI_COMMAND_RING_TRBS: usize = 256;
 const XHCI_COMMAND_RING_BYTES: usize = XHCI_COMMAND_RING_TRBS * XHCI_TRB_BYTES;
 const XHCI_EVENT_RING_TRBS: usize = 256;
@@ -7176,6 +7177,7 @@ static RUNTIME_DESCRIPTOR: RuntimeDescriptorSlot = RuntimeDescriptorSlot::new();
 static RUNTIME_INIT_HOT_PATH: AtomicU32 = AtomicU32::new(0);
 static RUNTIME_INIT_FLAGS: AtomicU32 = AtomicU32::new(0);
 static USB_RUNTIME_FLAGS: AtomicU32 = AtomicU32::new(0);
+static RUNTIME_CADENCE_ENTRY_TICKS: AtomicU64 = AtomicU64::new(0);
 static HDMI_RUNTIME_FLAGS: AtomicU32 = AtomicU32::new(0);
 static HDMI_CURSOR_ROW: AtomicU32 = AtomicU32::new(0);
 static HDMI_CURSOR_COL: AtomicU32 = AtomicU32::new(0);
@@ -46065,6 +46067,11 @@ fn write_ring_u32(offset: usize, value: u32) {
     write_ring_byte(offset + 3, ((value >> 24) & 0xff) as u8);
 }
 
+fn write_ring_u64(offset: usize, value: u64) {
+    write_ring_u32(offset, value as u32);
+    write_ring_u32(offset + 4, (value >> 32) as u32);
+}
+
 fn write_ring_u16(offset: usize, value: u16) {
     write_ring_byte(offset, (value & 0xff) as u8);
     write_ring_byte(offset + 1, (value >> 8) as u8);
@@ -46080,6 +46087,72 @@ fn publish_runtime_progress(sequence: u32, phase: u32, aux0: u32) {
     driver_task_shared_clean_range(
         DRIVER_TASK_RING_VADDR + offset,
         DRIVER_RUNTIME_RING_PROGRESS_BYTES as usize,
+    );
+}
+
+const fn runtime_cadence_supported_hot_path(hot_path: u32) -> bool {
+    matches!(
+        hot_path,
+        HOT_PATH_SERIAL_CONSOLE
+            | HOT_PATH_USB_KEYBOARD
+            | HOT_PATH_HDMI_TEXT
+            | HOT_PATH_GENET_NIC
+            | HOT_PATH_PCIE_ROOT
+    )
+}
+
+fn publish_runtime_cadence(
+    hot_path: u32,
+    sequence: u32,
+    phase: u32,
+    work_completed: u32,
+    work_total: u32,
+    exit_reason: u16,
+    flags: u16,
+) {
+    if sequence == 0 || !runtime_cadence_supported_hot_path(hot_path) {
+        return;
+    }
+    let now = runtime_timer_counter_ticks();
+    let entry = if exit_reason == pi4_driver_abi::DRIVER_RUNTIME_CADENCE_EXIT_ENTER {
+        RUNTIME_CADENCE_ENTRY_TICKS.store(now, Ordering::Release);
+        now
+    } else {
+        RUNTIME_CADENCE_ENTRY_TICKS.load(Ordering::Acquire)
+    };
+    let record = pi4_driver_abi::DriverRuntimeCadenceRecord::staged(
+        sequence,
+        phase,
+        entry,
+        now,
+        work_completed,
+        work_total,
+        exit_reason,
+        flags,
+    );
+    let offset = pi4_driver_abi::DRIVER_RUNTIME_CADENCE_OFFSET as usize;
+
+    // Sequence-last publication keeps this passive diagnostic incapable of
+    // becoming scheduling or continuation authority.
+    write_ring_u32(offset + 44, 0);
+    driver_task_shared_store_barrier();
+    write_ring_u32(offset, record.magic);
+    write_ring_u16(offset + 4, record.version);
+    write_ring_u16(offset + 6, record.len);
+    write_ring_u32(offset + 8, record.sequence);
+    write_ring_u32(offset + 12, record.phase);
+    write_ring_u64(offset + 16, record.entry_cntvct);
+    write_ring_u64(offset + 24, record.last_cntvct);
+    write_ring_u32(offset + 32, record.work_completed);
+    write_ring_u32(offset + 36, record.work_total);
+    write_ring_u16(offset + 40, record.exit_reason);
+    write_ring_u16(offset + 42, record.flags);
+    driver_task_shared_store_barrier();
+    write_ring_u32(offset + 44, record.sequence);
+    driver_task_shared_store_barrier();
+    driver_task_shared_clean_range(
+        DRIVER_TASK_RING_VADDR + offset,
+        pi4_driver_abi::DRIVER_RUNTIME_CADENCE_BYTES as usize,
     );
 }
 
@@ -48730,12 +48803,73 @@ fn xhci_evaluate_hub_context(
 }
 
 fn xhci_prepare_dma_structures(
+    sequence: u32,
+    aux0: u32,
     state: &mut UsbRuntimeState,
     descriptor: &DriverRuntimeInitDescriptor,
     dma_range: DriverRuntimeResourceRangeDescriptor,
 ) -> bool {
     let dma_base = dma_range.vaddr as usize;
-    zero_dma_range(dma_base, XHCI_DMA_ZERO_BYTES);
+    publish_runtime_progress(
+        sequence,
+        pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DMA_ZERO_BEGIN,
+        aux0,
+    );
+    publish_runtime_cadence(
+        HOT_PATH_USB_KEYBOARD,
+        sequence,
+        pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DMA_ZERO_BEGIN,
+        0,
+        XHCI_DMA_ZERO_BYTES as u32,
+        pi4_driver_abi::DRIVER_RUNTIME_CADENCE_EXIT_PROGRESS,
+        pi4_driver_abi::DRIVER_RUNTIME_CADENCE_FLAG_WORK_REMAINS
+            | pi4_driver_abi::DRIVER_RUNTIME_CADENCE_FLAG_WORK_BYTES,
+    );
+    let mut zeroed = 0usize;
+    while zeroed < XHCI_DMA_ZERO_BYTES {
+        let chunk = XHCI_DMA_ZERO_BYTES
+            .saturating_sub(zeroed)
+            .min(XHCI_DMA_ZERO_DIAGNOSTIC_CHUNK_BYTES);
+        zero_dma_range(dma_base + zeroed, chunk);
+        zeroed = zeroed.saturating_add(chunk);
+        publish_runtime_progress(
+            sequence,
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DMA_ZERO_PROGRESS,
+            aux0,
+        );
+        publish_runtime_cadence(
+            HOT_PATH_USB_KEYBOARD,
+            sequence,
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DMA_ZERO_PROGRESS,
+            zeroed as u32,
+            XHCI_DMA_ZERO_BYTES as u32,
+            pi4_driver_abi::DRIVER_RUNTIME_CADENCE_EXIT_PROGRESS,
+            (if zeroed < XHCI_DMA_ZERO_BYTES {
+                pi4_driver_abi::DRIVER_RUNTIME_CADENCE_FLAG_WORK_REMAINS
+            } else {
+                0
+            }) | pi4_driver_abi::DRIVER_RUNTIME_CADENCE_FLAG_WORK_BYTES,
+        );
+    }
+    publish_runtime_progress(
+        sequence,
+        pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DMA_ZERO_DONE,
+        aux0,
+    );
+    publish_runtime_cadence(
+        HOT_PATH_USB_KEYBOARD,
+        sequence,
+        pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DMA_ZERO_DONE,
+        XHCI_DMA_ZERO_BYTES as u32,
+        XHCI_DMA_ZERO_BYTES as u32,
+        pi4_driver_abi::DRIVER_RUNTIME_CADENCE_EXIT_PROGRESS,
+        pi4_driver_abi::DRIVER_RUNTIME_CADENCE_FLAG_WORK_BYTES,
+    );
+    publish_runtime_progress(
+        sequence,
+        pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_RING_GRAPH_BEGIN,
+        aux0,
+    );
     let Some(cmd_ring_bus) = xhci_dma_bus_addr(descriptor, dma_range, XHCI_DMA_COMMAND_RING_OFFSET)
     else {
         return false;
@@ -48801,7 +48935,40 @@ fn xhci_prepare_dma_structures(
     state.enumeration_retry_cooldown = 0;
     state.enumeration_retry_window_exhausted = false;
     usb_reset_enumeration_cursor(state);
+    publish_runtime_progress(
+        sequence,
+        pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_RING_GRAPH_DONE,
+        aux0,
+    );
+    publish_runtime_cadence(
+        HOT_PATH_USB_KEYBOARD,
+        sequence,
+        pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_RING_GRAPH_DONE,
+        1,
+        1,
+        pi4_driver_abi::DRIVER_RUNTIME_CADENCE_EXIT_PROGRESS,
+        0,
+    );
+    publish_runtime_progress(
+        sequence,
+        pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DMA_CLEAN_BEGIN,
+        aux0,
+    );
     dma_clean_range(dma_base, XHCI_DMA_ZERO_BYTES);
+    publish_runtime_progress(
+        sequence,
+        pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DMA_CLEAN_DONE,
+        aux0,
+    );
+    publish_runtime_cadence(
+        HOT_PATH_USB_KEYBOARD,
+        sequence,
+        pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DMA_CLEAN_DONE,
+        XHCI_DMA_ZERO_BYTES as u32,
+        XHCI_DMA_ZERO_BYTES as u32,
+        pi4_driver_abi::DRIVER_RUNTIME_CADENCE_EXIT_PROGRESS,
+        pi4_driver_abi::DRIVER_RUNTIME_CADENCE_FLAG_WORK_BYTES,
+    );
     let _ = event_base;
     true
 }
@@ -53263,7 +53430,7 @@ fn usb_runtime_init_hw(
         return None;
     }
     publish_runtime_progress(sequence, DRIVER_RUNTIME_RING_PROGRESS_USB_RESET_DONE, aux0);
-    if !xhci_prepare_dma_structures(state, descriptor, dma_range) {
+    if !xhci_prepare_dma_structures(sequence, aux0, state, descriptor, dma_range) {
         return None;
     }
     publish_runtime_progress(sequence, DRIVER_RUNTIME_RING_PROGRESS_USB_DMA_READY, aux0);
@@ -57441,6 +57608,15 @@ pub fn runtime_main(task_key: usize) -> ! {
                 command.aux0,
             );
         }
+        publish_runtime_cadence(
+            command.arg0,
+            command.sequence,
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_COMMAND_OBSERVED,
+            0,
+            0,
+            pi4_driver_abi::DRIVER_RUNTIME_CADENCE_EXIT_ENTER,
+            pi4_driver_abi::DRIVER_RUNTIME_CADENCE_FLAG_WORK_REMAINS,
+        );
         if delegated_admission_progress_due {
             if let RuntimeDelegatedGenerationAdmission::Admitted(generation) = delegated_generation
             {
@@ -57822,6 +57998,15 @@ pub fn runtime_main(task_key: usize) -> ! {
                     command,
                     completion,
                     completion_committed,
+                );
+                publish_runtime_cadence(
+                    command.arg0,
+                    command.sequence,
+                    pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_COMPLETION_PUBLISH,
+                    0,
+                    0,
+                    pi4_driver_abi::DRIVER_RUNTIME_CADENCE_EXIT_TERMINAL,
+                    0,
                 );
             },
         );
@@ -58878,6 +59063,73 @@ mod tests {
             | (u32::from(read_runtime_payload_byte_physical(offset + 1)) << 8)
             | (u32::from(read_runtime_payload_byte_physical(offset + 2)) << 16)
             | (u32::from(read_runtime_payload_byte_physical(offset + 3)) << 24)
+    }
+
+    #[test]
+    fn runtime_cadence_publication_is_commit_last_and_excludes_cyw43_sdio() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        RUNTIME_CADENCE_ENTRY_TICKS.store(0, Ordering::Release);
+        let base = usize::from(pi4_driver_abi::DRIVER_RUNTIME_CADENCE_OFFSET);
+
+        publish_runtime_cadence(
+            HOT_PATH_USB_KEYBOARD,
+            2,
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_COMMAND_OBSERVED,
+            0,
+            0,
+            pi4_driver_abi::DRIVER_RUNTIME_CADENCE_EXIT_ENTER,
+            pi4_driver_abi::DRIVER_RUNTIME_CADENCE_FLAG_WORK_REMAINS,
+        );
+        assert_eq!(
+            read_ring_u32(base),
+            pi4_driver_abi::DRIVER_RUNTIME_CADENCE_MAGIC
+        );
+        assert_eq!(read_ring_u32(base + 8), 2);
+        assert_eq!(
+            read_ring_u16(base + 40),
+            pi4_driver_abi::DRIVER_RUNTIME_CADENCE_EXIT_ENTER
+        );
+        assert_eq!(read_ring_u32(base + 44), 2);
+
+        publish_runtime_cadence(
+            HOT_PATH_CYW43_WIFI,
+            3,
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_COMMAND_OBSERVED,
+            0,
+            0,
+            pi4_driver_abi::DRIVER_RUNTIME_CADENCE_EXIT_ENTER,
+            pi4_driver_abi::DRIVER_RUNTIME_CADENCE_FLAG_WORK_REMAINS,
+        );
+        publish_runtime_cadence(
+            HOT_PATH_SDIO_HOST,
+            4,
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_COMMAND_OBSERVED,
+            0,
+            0,
+            pi4_driver_abi::DRIVER_RUNTIME_CADENCE_EXIT_ENTER,
+            pi4_driver_abi::DRIVER_RUNTIME_CADENCE_FLAG_WORK_REMAINS,
+        );
+        assert_eq!(
+            read_ring_u32(base + 44),
+            2,
+            "network roles must retain their specialized episode evidence"
+        );
+
+        publish_runtime_cadence(
+            HOT_PATH_USB_KEYBOARD,
+            2,
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_COMPLETION_PUBLISH,
+            0,
+            0,
+            pi4_driver_abi::DRIVER_RUNTIME_CADENCE_EXIT_TERMINAL,
+            0,
+        );
+        assert_eq!(
+            read_ring_u16(base + 40),
+            pi4_driver_abi::DRIVER_RUNTIME_CADENCE_EXIT_TERMINAL
+        );
+        assert_eq!(read_ring_u32(base + 44), 2);
     }
 
     fn read_cyw43_bus_episode_u16_for_test(field_offset: usize) -> u16 {

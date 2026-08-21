@@ -728,6 +728,119 @@ pub const DRIVER_RUNTIME_PERSISTENT_WAIT_RECEIPT_MAGIC: u32 = 0x4452_5057;
 pub const DRIVER_RUNTIME_RING_PROGRESS_BYTES: u16 = 16;
 /// Runtime progress-marker magic.
 pub const DRIVER_RUNTIME_RING_PROGRESS_MAGIC: u32 = 0x4452_5047;
+/// Fixed offset of the non-network runtime cadence record.
+///
+/// This role-local range is used only by serial, USB, HDMI, GENET, and PCIe
+/// runtime images. The SDIO owner deliberately uses the same numeric range for
+/// its physical-lifetime and DPC records, so CYW43/SDIO must continue to use
+/// their existing episode evidence instead of publishing this record.
+pub const DRIVER_RUNTIME_CADENCE_OFFSET: u16 = 144;
+/// Bytes in one sequence-last runtime cadence record.
+pub const DRIVER_RUNTIME_CADENCE_BYTES: u16 = 48;
+/// Magic value for a runtime cadence record (`DRCD`).
+pub const DRIVER_RUNTIME_CADENCE_MAGIC: u32 = 0x4452_4344;
+/// Runtime cadence layout version.
+pub const DRIVER_RUNTIME_CADENCE_VERSION: u16 = 1;
+/// Cadence exit: one command has entered its runtime service episode.
+pub const DRIVER_RUNTIME_CADENCE_EXIT_ENTER: u16 = 1;
+/// Cadence exit: bounded useful work completed and the same episode continues.
+pub const DRIVER_RUNTIME_CADENCE_EXIT_PROGRESS: u16 = 2;
+/// Cadence exit: the runtime is yielding with a retained command.
+pub const DRIVER_RUNTIME_CADENCE_EXIT_YIELD: u16 = 3;
+/// Cadence exit: the exact command reached a terminal completion.
+pub const DRIVER_RUNTIME_CADENCE_EXIT_TERMINAL: u16 = 4;
+/// Cadence flag: useful work remains in the same command episode.
+pub const DRIVER_RUNTIME_CADENCE_FLAG_WORK_REMAINS: u16 = 1 << 0;
+/// Cadence flag: `work_completed` and `work_total` count bytes.
+pub const DRIVER_RUNTIME_CADENCE_FLAG_WORK_BYTES: u16 = 1 << 1;
+
+/// Passive sequence-last evidence for one non-network runtime service episode.
+///
+/// The record is diagnostic only: it carries no capability, notification,
+/// continuation, retry, or scheduling authority. A producer clears
+/// `committed_sequence`, writes the complete body, then repeats `sequence` in
+/// the final word. Readers accept two identical valid samples.
+#[repr(C, align(8))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DriverRuntimeCadenceRecord {
+    /// [`DRIVER_RUNTIME_CADENCE_MAGIC`].
+    pub magic: u32,
+    /// [`DRIVER_RUNTIME_CADENCE_VERSION`].
+    pub version: u16,
+    /// Exact record size.
+    pub len: u16,
+    /// Exact root command sequence being measured.
+    pub sequence: u32,
+    /// Most recent durable runtime progress phase.
+    pub phase: u32,
+    /// Virtual-counter sample taken when this command entered service.
+    pub entry_cntvct: u64,
+    /// Virtual-counter sample represented by this publication.
+    pub last_cntvct: u64,
+    /// Bounded useful work completed at this phase.
+    pub work_completed: u32,
+    /// Complete bounded work extent, or zero when not applicable.
+    pub work_total: u32,
+    /// One `DRIVER_RUNTIME_CADENCE_EXIT_*` value.
+    pub exit_reason: u16,
+    /// `DRIVER_RUNTIME_CADENCE_FLAG_*` evidence bits.
+    pub flags: u16,
+    /// Sequence-last commit; exactly repeats `sequence`.
+    pub committed_sequence: u32,
+}
+
+impl DriverRuntimeCadenceRecord {
+    /// Construct one uncommitted cadence body.
+    #[must_use]
+    pub const fn staged(
+        sequence: u32,
+        phase: u32,
+        entry_cntvct: u64,
+        last_cntvct: u64,
+        work_completed: u32,
+        work_total: u32,
+        exit_reason: u16,
+        flags: u16,
+    ) -> Self {
+        Self {
+            magic: DRIVER_RUNTIME_CADENCE_MAGIC,
+            version: DRIVER_RUNTIME_CADENCE_VERSION,
+            len: core::mem::size_of::<Self>() as u16,
+            sequence,
+            phase,
+            entry_cntvct,
+            last_cntvct,
+            work_completed,
+            work_total,
+            exit_reason,
+            flags,
+            committed_sequence: 0,
+        }
+    }
+
+    /// Return whether this is one complete authority-free publication.
+    #[must_use]
+    pub const fn valid(self) -> bool {
+        self.magic == DRIVER_RUNTIME_CADENCE_MAGIC
+            && self.version == DRIVER_RUNTIME_CADENCE_VERSION
+            && self.len as usize == core::mem::size_of::<Self>()
+            && self.sequence != 0
+            && self.committed_sequence == self.sequence
+            && matches!(
+                self.exit_reason,
+                DRIVER_RUNTIME_CADENCE_EXIT_ENTER
+                    | DRIVER_RUNTIME_CADENCE_EXIT_PROGRESS
+                    | DRIVER_RUNTIME_CADENCE_EXIT_YIELD
+                    | DRIVER_RUNTIME_CADENCE_EXIT_TERMINAL
+            )
+            && self.flags
+                & !(DRIVER_RUNTIME_CADENCE_FLAG_WORK_REMAINS
+                    | DRIVER_RUNTIME_CADENCE_FLAG_WORK_BYTES)
+                == 0
+            && (self.work_total == 0 || self.work_completed <= self.work_total)
+    }
+}
+
 /// Root-to-runtime entry marker requesting a cold local-state reset before receive admission.
 pub const DRIVER_RUNTIME_TASK_KEY_RESTART_FLAG: u32 = 1 << 31;
 /// Runtime has observed the staged command.
@@ -1215,6 +1328,20 @@ pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HID_INTERRUPT_QUEUE_READY: u32 = 269;
 pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HID_INTERRUPT_QUEUE_FAILED: u32 = 270;
 /// USB runtime found keyboard data outside an empty boot-looking HID payload window.
 pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HID_REPORT_FLEXIBLE_KEY_FALLBACK: u32 = 0x0416;
+/// USB runtime is about to zero the complete xHCI DMA arena.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_DMA_ZERO_BEGIN: u32 = 0x0417;
+/// USB runtime completed another bounded DMA-zero diagnostic chunk.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_DMA_ZERO_PROGRESS: u32 = 0x0418;
+/// USB runtime completed the complete xHCI DMA-arena zero.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_DMA_ZERO_DONE: u32 = 0x0419;
+/// USB runtime is constructing the xHCI ring/context graph.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_RING_GRAPH_BEGIN: u32 = 0x041a;
+/// USB runtime constructed the xHCI ring/context graph.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_RING_GRAPH_DONE: u32 = 0x041b;
+/// USB runtime is about to publish the complete xHCI DMA arena to PoC.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_DMA_CLEAN_BEGIN: u32 = 0x041c;
+/// USB runtime published the complete xHCI DMA arena to PoC.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_DMA_CLEAN_DONE: u32 = 0x041d;
 /// USB keyboard service result bit offset for the last HID report classification.
 pub const DRIVER_RUNTIME_USB_KEYBOARD_RESULT_REPORT_STATUS_SHIFT: u32 = 9;
 /// USB keyboard service result mask for the last HID report classification.
@@ -8056,6 +8183,37 @@ mod tests {
         assert!(!invalid.valid());
         invalid = snapshot;
         invalid.reserved = 1;
+        assert!(!invalid.valid());
+    }
+
+    #[test]
+    fn cadence_record_is_fixed_commit_last_and_non_authority_bearing() {
+        assert_eq!(core::mem::size_of::<DriverRuntimeCadenceRecord>(), 48);
+        assert_eq!(core::mem::align_of::<DriverRuntimeCadenceRecord>(), 8);
+        assert_eq!(DRIVER_RUNTIME_CADENCE_OFFSET, 144);
+        assert_eq!(DRIVER_RUNTIME_CADENCE_MAGIC, 0x4452_4344);
+
+        let staged = DriverRuntimeCadenceRecord::staged(
+            7,
+            DRIVER_RUNTIME_RING_PROGRESS_USB_RESET_DONE,
+            1_000,
+            2_000,
+            64 * 1024,
+            320 * 1024,
+            DRIVER_RUNTIME_CADENCE_EXIT_PROGRESS,
+            DRIVER_RUNTIME_CADENCE_FLAG_WORK_REMAINS | DRIVER_RUNTIME_CADENCE_FLAG_WORK_BYTES,
+        );
+        assert!(!staged.valid());
+
+        let mut committed = staged;
+        committed.committed_sequence = committed.sequence;
+        assert!(committed.valid());
+
+        let mut invalid = committed;
+        invalid.work_completed = invalid.work_total + 1;
+        assert!(!invalid.valid());
+        invalid = committed;
+        invalid.flags = 1 << 15;
         assert!(!invalid.valid());
     }
 

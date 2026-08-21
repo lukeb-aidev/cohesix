@@ -22,7 +22,7 @@ use heapless::Deque;
 #[cfg(feature = "kernel")]
 use pi4_driver_abi::{
     driver_runtime_continuation_action_fingerprint, driver_runtime_is_cyw43_root_continuation,
-    DriverRuntimeContinuationGrant, DriverRuntimeCounterSnapshot,
+    DriverRuntimeCadenceRecord, DriverRuntimeContinuationGrant, DriverRuntimeCounterSnapshot,
     DriverRuntimeCyw43BusEpisodeRecord, DriverRuntimeCyw43CommandDescriptor,
     DriverRuntimeCyw43DpcChildTimingEntry, DriverRuntimeCyw43DpcChildTimingRecord,
     DriverRuntimeCyw43DpcClientRecord, DriverRuntimeDpcEventRing,
@@ -35,6 +35,7 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_BUS_LINK_FLAG_DPC_EVENT_RING, DRIVER_RUNTIME_BUS_LINK_FLAG_NOTIFICATIONS,
     DRIVER_RUNTIME_BUS_LINK_FLAG_OWNER, DRIVER_RUNTIME_BUS_LINK_FLAG_POINTER_FREE,
     DRIVER_RUNTIME_BUS_LINK_PCIE_ENDPOINT_SLOT, DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_SLOT,
+    DRIVER_RUNTIME_CADENCE_BYTES, DRIVER_RUNTIME_CADENCE_OFFSET,
     DRIVER_RUNTIME_COMMAND_FLAG_PERSISTENT_TRANSACTION,
     DRIVER_RUNTIME_COMMAND_FLAG_STEADY_SERVICE_LEASE, DRIVER_RUNTIME_CONTINUATION_GRANT_BYTES,
     DRIVER_RUNTIME_CONTINUATION_GRANT_MAGIC, DRIVER_RUNTIME_CONTINUATION_GRANT_OFFSET,
@@ -3937,6 +3938,32 @@ struct DriverTaskRingProgressRecord {
     sequence: u32,
     phase: u32,
     aux0: u32,
+}
+
+/// Read one stable authority-free linked-runtime cadence publication.
+#[cfg(feature = "kernel")]
+fn driver_task_ring_read_cadence_record(
+    ring_root_ptr: usize,
+) -> Option<DriverRuntimeCadenceRecord> {
+    if ring_root_ptr == 0 {
+        return None;
+    }
+    let cadence_ptr = (ring_root_ptr + usize::from(DRIVER_RUNTIME_CADENCE_OFFSET))
+        as *const DriverRuntimeCadenceRecord;
+    let read = || {
+        driver_task_ring_invalidate_root_range(
+            cadence_ptr as usize,
+            usize::from(DRIVER_RUNTIME_CADENCE_BYTES),
+        );
+        // SAFETY: The cadence record is primitive-only, naturally aligned at
+        // a fixed page-local offset, and read passively from HAL-owned shared
+        // memory. Sequence-last validation rejects staged or torn samples.
+        unsafe { core::ptr::read_volatile(cadence_ptr) }
+    };
+    let first = read();
+    fence(Ordering::Acquire);
+    let second = read();
+    (first == second && second.valid()).then_some(second)
 }
 
 #[cfg(feature = "kernel")]
@@ -7859,6 +7886,16 @@ pub(crate) fn driver_task_retained_frontier_snapshot(
     let task_key = driver_task_contract_key(contract)?;
     let slot = slot_for_task_key(task_key)?;
     driver_task_retained_frontier_snapshot_for_slot(task_key, slot)
+}
+
+/// Snapshot passive runtime cadence without advancing command or lease state.
+#[cfg(feature = "kernel")]
+pub(crate) fn driver_task_runtime_cadence_snapshot(
+    contract: DriverTaskContract,
+) -> Option<DriverRuntimeCadenceRecord> {
+    let task_key = driver_task_contract_key(contract)?;
+    let slot = slot_for_task_key(task_key)?;
+    driver_task_ring_read_cadence_record(slot.ring_root_ptr.load(Ordering::Acquire))
 }
 
 #[cfg(feature = "kernel")]
@@ -17979,7 +18016,7 @@ fn driver_task_ring_progress_blocker(
 }
 
 #[cfg(feature = "kernel")]
-fn driver_task_ring_progress_phase_label(phase: u32) -> &'static str {
+pub(crate) fn driver_task_ring_progress_phase_label(phase: u32) -> &'static str {
     match phase {
         0 => "none",
         DRIVER_RUNTIME_RING_PROGRESS_COMMAND_OBSERVED => "command-observed",
@@ -18048,6 +18085,15 @@ fn driver_task_ring_progress_phase_label(phase: u32) -> &'static str {
         DRIVER_RUNTIME_RING_PROGRESS_USB_RESET_WAIT_BEGIN => "usb-reset-wait-begin",
         DRIVER_RUNTIME_RING_PROGRESS_USB_CNR_WAIT_BEGIN => "usb-cnr-wait-begin",
         DRIVER_RUNTIME_RING_PROGRESS_USB_RESET_DONE => "usb-reset-done",
+        pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DMA_ZERO_BEGIN => "usb-dma-zero-begin",
+        pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DMA_ZERO_PROGRESS => {
+            "usb-dma-zero-progress"
+        }
+        pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DMA_ZERO_DONE => "usb-dma-zero-done",
+        pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_RING_GRAPH_BEGIN => "usb-ring-graph-begin",
+        pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_RING_GRAPH_DONE => "usb-ring-graph-done",
+        pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DMA_CLEAN_BEGIN => "usb-dma-clean-begin",
+        pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DMA_CLEAN_DONE => "usb-dma-clean-done",
         DRIVER_RUNTIME_RING_PROGRESS_USB_DMA_READY => "usb-dma-ready",
         DRIVER_RUNTIME_RING_PROGRESS_USB_DCBAAP_BEGIN => "usb-dcbaap-begin",
         DRIVER_RUNTIME_RING_PROGRESS_USB_DCBAAP_LOW_WRITTEN => "usb-dcbaap-low-written",
@@ -25477,6 +25523,47 @@ mod tests {
     #[cfg(feature = "kernel")]
     #[repr(align(4096))]
     struct AlignedDriverTaskRing([u32; DRIVER_TASK_RING_PAGE_BYTES / 4]);
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn runtime_cadence_reader_accepts_only_stable_sequence_last_evidence() {
+        let mut ring = AlignedDriverTaskRing([0; DRIVER_TASK_RING_PAGE_BYTES / 4]);
+        let ring_root_ptr = ring.0.as_mut_ptr() as usize;
+        let cadence_ptr = (ring_root_ptr + usize::from(DRIVER_RUNTIME_CADENCE_OFFSET))
+            as *mut DriverRuntimeCadenceRecord;
+        let mut record = DriverRuntimeCadenceRecord::staged(
+            2,
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DMA_ZERO_PROGRESS,
+            100,
+            200,
+            64 * 1024,
+            320 * 1024,
+            pi4_driver_abi::DRIVER_RUNTIME_CADENCE_EXIT_PROGRESS,
+            pi4_driver_abi::DRIVER_RUNTIME_CADENCE_FLAG_WORK_REMAINS
+                | pi4_driver_abi::DRIVER_RUNTIME_CADENCE_FLAG_WORK_BYTES,
+        );
+        record.committed_sequence = record.sequence;
+        // SAFETY: The aligned test page owns the complete fixed ABI record.
+        unsafe { core::ptr::write_volatile(cadence_ptr, record) };
+        assert_eq!(
+            driver_task_ring_read_cadence_record(ring_root_ptr),
+            Some(record)
+        );
+
+        let staged = DriverRuntimeCadenceRecord::staged(
+            3,
+            DRIVER_RUNTIME_RING_PROGRESS_COMMAND_OBSERVED,
+            300,
+            300,
+            0,
+            0,
+            pi4_driver_abi::DRIVER_RUNTIME_CADENCE_EXIT_ENTER,
+            pi4_driver_abi::DRIVER_RUNTIME_CADENCE_FLAG_WORK_REMAINS,
+        );
+        // SAFETY: Same page-local fixed record; the zero commit is deliberate.
+        unsafe { core::ptr::write_volatile(cadence_ptr, staged) };
+        assert_eq!(driver_task_ring_read_cadence_record(ring_root_ptr), None);
+    }
 
     #[cfg(feature = "kernel")]
     #[test]
