@@ -2493,6 +2493,24 @@ impl<T: Transport, W: Write> Shell<T, W> {
         };
         let mut transcript = CommandTranscript::default();
         let result = match cmd {
+            "bi" | "caps" | "smp" => {
+                let parsed = match cohsh_core::CommandParser::parse_line_str(line) {
+                    Ok(parsed) => parsed,
+                    Err(err) => return CommandExecution::err(anyhow!(err.to_string()), transcript),
+                };
+                let expected_ack = match parsed {
+                    cohsh_core::Command::BootInfo => "BI",
+                    cohsh_core::Command::Caps { .. } => "CAPS",
+                    cohsh_core::Command::Smp { .. } => "SMP",
+                    _ => {
+                        return CommandExecution::err(
+                            anyhow!("unsupported root diagnostic command"),
+                            transcript,
+                        )
+                    }
+                };
+                return self.run_test_console_command(line, expected_ack);
+            }
             "ping" => {
                 let session = match self.session.as_ref() {
                     Some(session) => session,
@@ -3097,6 +3115,33 @@ impl<T: Transport, W: Write> Shell<T, W> {
         }
     }
 
+    fn run_test_console_command(&mut self, command: &str, expected_ack: &str) -> CommandExecution {
+        let mut transcript = CommandTranscript::default();
+        let session = match self.session.as_ref() {
+            Some(session) => session,
+            None => {
+                return CommandExecution::err(
+                    anyhow!("attach to a session before running console commands"),
+                    transcript,
+                )
+            }
+        };
+        match self
+            .transport
+            .console_command(session, command, expected_ack)
+        {
+            Ok(lines) => {
+                transcript.ack_lines = self.transport.drain_acknowledgements();
+                transcript.output_lines = lines;
+                CommandExecution::ok(CommandStatus::Continue, transcript)
+            }
+            Err(err) => {
+                transcript.ack_lines = self.transport.drain_acknowledgements();
+                CommandExecution::err(err, transcript)
+            }
+        }
+    }
+
     fn read_lifecycle_state(&mut self, session: &Session) -> Result<LifecycleState> {
         let lines = self.transport.read(session, PROC_LIFECYCLE_STATE_PATH)?;
         let _ = self.transport.drain_acknowledgements();
@@ -3563,6 +3608,13 @@ impl<T: Transport, W: Write> Shell<T, W> {
                 let console_lines = cohsh_core::help::COHSH_CONSOLE_HELP_LINES;
                 self.write_line(console_lines[0])?;
                 self.write_line(console_lines[1])?;
+                self.write_line("  bi                           - Show target bootinfo summary")?;
+                self.write_line(
+                    "  caps [mcs]                   - Show target capability or MCS authority state",
+                )?;
+                self.write_line(
+                    "  smp [activity|mcs|dump]      - Show target activity or MCS topology",
+                )?;
                 self.write_line("  login <role> [ticket]        - Alias for attach")?;
                 self.write_line("  detach                       - Close the current session")?;
                 self.write_line(console_lines[2])?;
@@ -3598,6 +3650,18 @@ impl<T: Transport, W: Write> Shell<T, W> {
                     "  telemetry push <src> --device <id> - Push bounded telemetry segment",
                 )?;
                 self.write_line(console_lines[14])?;
+                Ok(CommandStatus::Continue)
+            }
+            "bi" | "caps" | "smp" => {
+                let parsed = cohsh_core::CommandParser::parse_line_str(line)
+                    .map_err(|err| anyhow!(err.to_string()))?;
+                let expected_ack = match parsed {
+                    cohsh_core::Command::BootInfo => "BI",
+                    cohsh_core::Command::Caps { .. } => "CAPS",
+                    cohsh_core::Command::Smp { .. } => "SMP",
+                    _ => return Err(anyhow!("unsupported root diagnostic command")),
+                };
+                self.run_console_command(line, expected_ack)?;
                 Ok(CommandStatus::Continue)
             }
             "tail" => {
@@ -5392,6 +5456,70 @@ mod tests {
         assert!(rendered.contains("stub console command=netstats ack=NETSTATS"));
         assert!(rendered.contains("stub console command=nettest ack=NETTEST"));
         assert!(rendered.contains("stub console command=reboot ack=REBOOT"));
+    }
+
+    #[test]
+    fn root_diagnostic_verbs_forward_to_transport() {
+        let mut output = Vec::new();
+        {
+            let mut shell = Shell::new(RestoreTestTransport::default(), &mut output);
+            shell.attach(Role::Queen, None).unwrap();
+            shell.execute("bi").expect("bi should forward");
+            shell.execute("caps mcs").expect("caps mcs should forward");
+            shell
+                .execute("smp activity")
+                .expect("smp activity should forward");
+            shell.execute("smp mcs").expect("smp mcs should forward");
+        }
+        let rendered = String::from_utf8(output).expect("utf8 output");
+        assert!(rendered.contains("stub console command=bi ack=BI"));
+        assert!(rendered.contains("stub console command=caps mcs ack=CAPS"));
+        assert!(rendered.contains("stub console command=smp activity ack=SMP"));
+        assert!(rendered.contains("stub console command=smp mcs ack=SMP"));
+    }
+
+    #[test]
+    fn scripted_root_diagnostic_verbs_forward_to_transport() {
+        let mut output = Vec::new();
+        let mut shell = Shell::new(RestoreTestTransport::default(), &mut output);
+        shell.attach(Role::Queen, None).unwrap();
+        for (command, expected) in [
+            ("bi", "stub console command=bi ack=BI"),
+            ("caps mcs", "stub console command=caps mcs ack=CAPS"),
+            ("smp activity", "stub console command=smp activity ack=SMP"),
+            ("smp mcs", "stub console command=smp mcs ack=SMP"),
+        ] {
+            let execution = shell.execute_test_command(command);
+            assert!(
+                execution.error.is_none(),
+                "{command}: {:?}",
+                execution.error
+            );
+            assert!(
+                execution
+                    .transcript
+                    .output_lines
+                    .iter()
+                    .any(|line| line == expected),
+                "{command}: {:?}",
+                execution.transcript
+            );
+        }
+    }
+
+    #[test]
+    fn root_diagnostic_verbs_reject_invalid_arguments_locally() {
+        let mut output = Vec::new();
+        let mut shell = Shell::new(RestoreTestTransport::default(), &mut output);
+        shell.attach(Role::Queen, None).unwrap();
+        let err = shell
+            .execute("caps mcs extra")
+            .expect_err("invalid caps arguments should fail");
+        assert!(err.to_string().contains("invalid value for argument caps"));
+        let err = shell
+            .execute("smp unknown")
+            .expect_err("invalid smp mode should fail");
+        assert!(err.to_string().contains("invalid value for argument smp"));
     }
 
     #[test]
