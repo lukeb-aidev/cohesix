@@ -3218,6 +3218,20 @@ fn runtime_cadence_key(record: pi4_driver_abi::DriverRuntimeCadenceRecord) -> us
 }
 
 #[cfg(feature = "kernel")]
+const fn runtime_cadence_projects_to_physical_serial(
+    contract: crate::hal::driver_task::DriverTaskContract,
+) -> bool {
+    // Projecting the serial runtime's own cadence through that runtime creates
+    // a new serial command, whose enter/terminal transition would itself be
+    // projected indefinitely. Keep the record available in the bounded qlog
+    // while every other runtime remains visible on the physical UART.
+    !matches!(
+        contract.kind,
+        crate::hal::driver_task::DriverTaskKind::Serial
+    )
+}
+
+#[cfg(feature = "kernel")]
 const fn runtime_cadence_exit_label(exit_reason: u16) -> &'static str {
     match exit_reason {
         pi4_driver_abi::DRIVER_RUNTIME_CADENCE_EXIT_ENTER => "enter",
@@ -8046,15 +8060,19 @@ where
 
         if let Some(line) = format_runtime_cadence(contract.name, record) {
             crate::log_buffer::append_log_line(line.as_str());
-            let _ = self.queue_physical_console_output(
-                PendingConsoleOutputKind::HighImpactLine,
-                line.as_str(),
-            );
+            if runtime_cadence_projects_to_physical_serial(contract) {
+                let _ = self.queue_physical_console_output(
+                    PendingConsoleOutputKind::HighImpactLine,
+                    line.as_str(),
+                );
+            }
         } else {
             const LINE: &str = "PI4_CADENCE schema=v1 state=diagnostic-overflow";
             crate::log_buffer::append_log_line(LINE);
-            let _ =
-                self.queue_physical_console_output(PendingConsoleOutputKind::HighImpactLine, LINE);
+            if runtime_cadence_projects_to_physical_serial(contract) {
+                let _ = self
+                    .queue_physical_console_output(PendingConsoleOutputKind::HighImpactLine, LINE);
+            }
         }
         key
     }
@@ -41163,6 +41181,21 @@ mod tests {
         assert!(line.starts_with("PI4_CADENCE schema=v1"));
         assert!(line.contains("usb-dma-zero-progress"));
         assert!(line.len() <= DEFAULT_LINE_CAPACITY);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn pi_runtime_cadence_never_self_projects_serial_through_serial() {
+        assert!(!runtime_cadence_projects_to_physical_serial(
+            crate::hal::driver_task::SERIAL_DRIVER_TASK_CONTRACT,
+        ));
+        for contract in [
+            crate::hal::driver_task::USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
+            crate::hal::driver_task::HDMI_TEXT_DRIVER_TASK_CONTRACT,
+            crate::hal::driver_task::PCIE_ROOT_DRIVER_TASK_CONTRACT,
+        ] {
+            assert!(runtime_cadence_projects_to_physical_serial(contract));
+        }
     }
 
     #[cfg(feature = "kernel")]
