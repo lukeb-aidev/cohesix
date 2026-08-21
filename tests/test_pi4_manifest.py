@@ -66,3 +66,20 @@ def test_pi4_root_naturally_postpones_at_the_generated_54mhz_clock() -> None:
         == "m26e-pi4-root-adjacent-refill-natural-postpone-candidate-v24"
     )
     assert console["timer_clock_hz"] == 54_000_000
+
+
+def test_pi4_serial_tracks_one_frame_of_fifo_empty_refills() -> None:
+    """Pi serial admits every bounded FIFO episode without raising its budget."""
+
+    manifest = load_pi4_manifest()
+    serial = next(
+        task
+        for task in manifest["temporal_authority"]["tasks"]
+        if task["id"] == "driver-serial"
+    )
+
+    assert serial["scheduling_context_bits"] == 9
+    assert serial["max_refills"] == 18
+    assert serial["budget_us"] == 500
+    assert serial["period_us"] == 10_000
+    assert serial["wcet_us"] == 400

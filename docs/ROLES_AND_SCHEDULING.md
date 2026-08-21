@@ -239,6 +239,13 @@ selects the ABI v3 SendBatch/response-lane contract, and declares
 `NaturalPostpone` for the active console child and the selected QEMU V35 and
 Pi V24 root-control records.
 
+The Pi mini-UART owner keeps its `500 us / 10000 us` CPU reservation, but its
+9-bit SC admits 18 total refill entries. This bounds the replenishment
+fragmentation created by all 8-byte FIFO-empty episodes of one admitted
+128-byte serial frame without converting each owner-local interrupt wait into a
+new 10 ms-period delay. The larger SC and refill list do not increase the
+driver's CPU budget or grant another task access to the UART.
+
 QEMU admission is meaningful only inside the selected execution envelope.
 The supported macOS profile uses HVF, `cortex-a57`, a non-hypervisor HVC DTB,
 the wrapper-owned DTB-selected HVC secondary-CPU conduit, and the host-visible
