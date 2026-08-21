@@ -5457,6 +5457,39 @@ pub(crate) struct DriverTaskRetainedGrantSnapshot {
     pub(crate) exact: bool,
 }
 
+/// Passive causal frontier for one retained linked-runtime command.
+///
+/// This snapshot never advances the lease, touches scheduling state, or
+/// consumes a completion. It exists so a single physical boot can distinguish
+/// an unissued root command, a lost wake, child execution, and a hidden
+/// terminal without changing the driver protocol being diagnosed.
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct DriverTaskRetainedFrontierSnapshot {
+    pub(crate) active: bool,
+    pub(crate) request_state: &'static str,
+    pub(crate) phase_name: &'static str,
+    pub(crate) request: u32,
+    pub(crate) command_sequence: u32,
+    pub(crate) completion_sequence: u32,
+    pub(crate) doorbell_issued: bool,
+    pub(crate) endpoint_bound: bool,
+    pub(crate) mcs_admission_open: bool,
+    pub(crate) mcs_cap_generation: u32,
+    pub(crate) mcs_call_phase: u32,
+    pub(crate) mcs_producers: usize,
+    pub(crate) progress_valid: bool,
+    pub(crate) progress_sequence: u32,
+    pub(crate) progress_phase: u32,
+    pub(crate) progress_phase_name: &'static str,
+    pub(crate) progress_aux0: u32,
+    pub(crate) send_attempts: u64,
+    pub(crate) same_request_resumes: u64,
+    pub(crate) timeouts: u64,
+    pub(crate) keep_active_timeouts: u64,
+    pub(crate) aborts: u64,
+}
+
 /// Passive root view of the CYW43 child-to-root RX wake route.
 #[cfg(feature = "kernel")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -7815,6 +7848,77 @@ pub(crate) fn driver_task_retained_grant_snapshot(
         shared_grant_id: grant.map_or(0, |grant| grant.grant_id),
         consumed_grant_id: grant.map_or(0, |grant| grant.consumed_grant_id),
         exact,
+    })
+}
+
+/// Snapshot the complete immediate causal chain for one retained command.
+#[cfg(feature = "kernel")]
+pub(crate) fn driver_task_retained_frontier_snapshot(
+    contract: DriverTaskContract,
+) -> Option<DriverTaskRetainedFrontierSnapshot> {
+    let task_key = driver_task_contract_key(contract)?;
+    let slot = slot_for_task_key(task_key)?;
+    driver_task_retained_frontier_snapshot_for_slot(task_key, slot)
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_retained_frontier_snapshot_for_slot(
+    task_key: usize,
+    slot: &DriverTaskCommandSlot,
+) -> Option<DriverTaskRetainedFrontierSnapshot> {
+    let active = slot.active.load(Ordering::Acquire) != 0;
+    let state = active.then(|| active_driver_task_retained_request_for_slot(slot));
+    let request_state = match state.flatten() {
+        Some(DriverTaskRetainedRequestState::Prepared { .. }) => "prepared",
+        Some(DriverTaskRetainedRequestState::Issued { .. }) => "issued",
+        Some(DriverTaskRetainedRequestState::Invalid { .. }) => "invalid",
+        None if active => "unreadable",
+        None => "inactive",
+    };
+    let phase_name = DriverTaskRetainedLeasePhase::from_usize(
+        slot.retained_priority_lease_phase.load(Ordering::Acquire),
+    )
+    .map_or("invalid", DriverTaskRetainedLeasePhase::as_str);
+    let ring_root_ptr = slot.ring_root_ptr.load(Ordering::Acquire);
+    let command_sequence = (ring_root_ptr != 0)
+        .then(|| DriverTaskRingView::new(ring_root_ptr))
+        .flatten()
+        .and_then(|ring| ring.read_u32(core::mem::offset_of!(DriverTaskCommandRecord, sequence)))
+        .unwrap_or(0);
+    let completion_sequence = (ring_root_ptr != 0)
+        .then(|| DriverTaskRingView::new(ring_root_ptr))
+        .flatten()
+        .and_then(|ring| ring.read_u32(DRIVER_TASK_RING_COMPLETION_OFFSET))
+        .unwrap_or(0);
+    let progress_magic = slot.last_progress_magic.load(Ordering::Acquire);
+    let progress_phase = slot.last_progress_phase.load(Ordering::Acquire);
+    let counters = slot.counters.snapshot(
+        hot_path_for_task_key(task_key)?,
+        slot.request_seq.load(Ordering::Acquire),
+    );
+    Some(DriverTaskRetainedFrontierSnapshot {
+        active,
+        request_state,
+        phase_name,
+        request: u32::try_from(slot.request_seq.load(Ordering::Acquire)).unwrap_or(0),
+        command_sequence,
+        completion_sequence,
+        doorbell_issued: slot.retained_doorbell_issued.load(Ordering::Acquire) != 0,
+        endpoint_bound: slot.endpoint.load(Ordering::Acquire) != 0,
+        mcs_admission_open: slot.mcs_command_admission_open.load(Ordering::Acquire) != 0,
+        mcs_cap_generation: slot.mcs_cap_generation.load(Ordering::Acquire),
+        mcs_call_phase: slot.mcs_call_phase.load(Ordering::Acquire),
+        mcs_producers: slot.mcs_nonblocking_root_producers.load(Ordering::Acquire),
+        progress_valid: progress_magic == DRIVER_RUNTIME_RING_PROGRESS_MAGIC,
+        progress_sequence: slot.last_progress_sequence.load(Ordering::Acquire),
+        progress_phase,
+        progress_phase_name: driver_task_ring_progress_phase_label(progress_phase),
+        progress_aux0: slot.last_progress_aux0.load(Ordering::Acquire),
+        send_attempts: counters.send_attempts,
+        same_request_resumes: counters.same_request_resumes,
+        timeouts: counters.timeouts,
+        keep_active_timeouts: counters.keep_active_timeouts,
+        aborts: counters.aborts,
     })
 }
 
@@ -15006,6 +15110,59 @@ fn emit_cyw43_sdio_pair_restart_failure(
 }
 
 #[cfg(feature = "kernel")]
+fn format_cyw43_sdio_pair_restart_frontier(
+    action: Cyw43SdioPairRestartAction,
+    operation: &'static str,
+    cause_status: &'static str,
+    frontier: DriverTaskRetainedFrontierSnapshot,
+) -> heapless::String<512> {
+    let mut line = heapless::String::<512>::new();
+    let _ = core::fmt::write(
+        &mut line,
+        format_args!(
+            "CYW43_SDIO_PAIR_FRONTIER schema=v1 action={} op={} cause={} active={} state={} lease={} seq={}/{}/{} wake={}/{}/{}/{}/{}/{} progress={}/{}/{}/{}/0x{:x} counters={}/{}/{}/{}/{}",
+            action.as_str(),
+            operation,
+            cause_status,
+            frontier.active,
+            frontier.request_state,
+            frontier.phase_name,
+            frontier.request,
+            frontier.command_sequence,
+            frontier.completion_sequence,
+            frontier.doorbell_issued,
+            frontier.endpoint_bound,
+            frontier.mcs_admission_open,
+            frontier.mcs_cap_generation,
+            frontier.mcs_call_phase,
+            frontier.mcs_producers,
+            frontier.progress_valid,
+            frontier.progress_sequence,
+            frontier.progress_phase,
+            frontier.progress_phase_name,
+            frontier.progress_aux0,
+            frontier.send_attempts,
+            frontier.same_request_resumes,
+            frontier.timeouts,
+            frontier.keep_active_timeouts,
+            frontier.aborts,
+        ),
+    );
+    line
+}
+
+#[cfg(feature = "kernel")]
+fn emit_cyw43_sdio_pair_restart_frontier(
+    action: Cyw43SdioPairRestartAction,
+    operation: &'static str,
+    cause_status: &'static str,
+    frontier: DriverTaskRetainedFrontierSnapshot,
+) {
+    let line = format_cyw43_sdio_pair_restart_frontier(action, operation, cause_status, frontier);
+    crate::bootstrap::log::force_log_buffer_line_or_uart_without_prompt_refresh(line.as_str());
+}
+
+#[cfg(feature = "kernel")]
 fn cyw43_sdio_restart_mmio_barrier(instruction_sync: bool) {
     #[cfg(target_arch = "aarch64")]
     // SAFETY: This helper issues only architectural ordering instructions. It
@@ -16422,6 +16579,20 @@ fn enter_cyw43_sdio_pair_restart_failure_with_operation(
     cause_status: &'static str,
     completion: Option<DriverTaskCompletionRecord>,
 ) {
+    let command_frontier = match action {
+        Cyw43SdioPairRestartAction::ReplayCyw43Descriptor
+        | Cyw43SdioPairRestartAction::ReplayCyw43Engine => {
+            driver_task_retained_frontier_snapshot(CYW43_WIFI_DRIVER_TASK_CONTRACT)
+        }
+        Cyw43SdioPairRestartAction::ReplaySdioDescriptor
+        | Cyw43SdioPairRestartAction::ReplaySdioEngine => {
+            driver_task_retained_frontier_snapshot(SDIO_HOST_DRIVER_TASK_CONTRACT)
+        }
+        _ => None,
+    };
+    if let Some(frontier) = command_frontier {
+        emit_cyw43_sdio_pair_restart_frontier(action, operation, cause_status, frontier);
+    }
     latch_cyw43_sdio_pair_restart_request(Cyw43SdioPairRestartCause::RecoveryContinuation);
     CYW43_SDIO_PAIR_CONTEXT_REPLAY_STATE.store(0, Ordering::Release);
     cursor.substep = 0;
@@ -25267,6 +25438,134 @@ mod tests {
     #[cfg(feature = "kernel")]
     #[repr(align(4096))]
     struct AlignedDriverTaskRing([u32; DRIVER_TASK_RING_PAGE_BYTES / 4]);
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn retained_frontier_snapshot_preserves_root_wake_child_and_counter_state() {
+        let slot = DriverTaskCommandSlot::new();
+        let mut ring = AlignedDriverTaskRing([0; DRIVER_TASK_RING_PAGE_BYTES / 4]);
+        let ring_root_ptr = ring.0.as_mut_ptr() as usize;
+        let command = DriverTaskCommandRecord::pi4_hot_path(
+            7,
+            DriverTaskHotPath::UsbKeyboard,
+            DriverTaskBudgetGrant::from_contract(USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT),
+            DriverFrameDescriptor {
+                offset: 0,
+                len: 0,
+                flags: 0,
+            },
+        );
+        // SAFETY: The aligned test page owns both fixed ABI records for the
+        // complete duration of this snapshot.
+        unsafe {
+            core::ptr::write_volatile(ring_root_ptr as *mut DriverTaskCommandRecord, command);
+            core::ptr::write_volatile(
+                (ring_root_ptr + DRIVER_TASK_RING_COMPLETION_OFFSET) as *mut u32,
+                6,
+            );
+        }
+        slot.ring_root_ptr.store(ring_root_ptr, Ordering::Release);
+        slot.active.store(1, Ordering::Release);
+        slot.request_seq.store(7, Ordering::Release);
+        slot.retained_priority_lease_phase.store(
+            DriverTaskRetainedLeasePhase::Issued.as_usize(),
+            Ordering::Release,
+        );
+        slot.retained_doorbell_issued.store(1, Ordering::Release);
+        slot.endpoint.store(0x1234, Ordering::Release);
+        slot.mcs_command_admission_open.store(1, Ordering::Release);
+        slot.mcs_cap_generation.store(3, Ordering::Release);
+        slot.mcs_call_phase.store(2, Ordering::Release);
+        slot.mcs_nonblocking_root_producers
+            .store(1, Ordering::Release);
+        slot.last_progress_magic
+            .store(DRIVER_RUNTIME_RING_PROGRESS_MAGIC, Ordering::Release);
+        slot.last_progress_sequence.store(7, Ordering::Release);
+        slot.last_progress_phase.store(
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_BEGIN,
+            Ordering::Release,
+        );
+        slot.last_progress_aux0.store(0x44, Ordering::Release);
+        slot.counters.send_attempts.store(5, Ordering::Release);
+        slot.counters
+            .same_request_resumes
+            .store(4, Ordering::Release);
+        slot.counters.timeouts.store(3, Ordering::Release);
+        slot.counters
+            .keep_active_timeouts
+            .store(2, Ordering::Release);
+        slot.counters.aborts.store(1, Ordering::Release);
+
+        let snapshot =
+            driver_task_retained_frontier_snapshot_for_slot(DRIVER_TASK_KEY_USB_LOCAL_SEAT, &slot)
+                .expect("USB retained frontier must be available");
+
+        assert!(snapshot.active);
+        assert_eq!(snapshot.request_state, "issued");
+        assert_eq!(snapshot.phase_name, "issued");
+        assert_eq!(snapshot.request, 7);
+        assert_eq!(snapshot.command_sequence, 7);
+        assert_eq!(snapshot.completion_sequence, 6);
+        assert!(snapshot.doorbell_issued);
+        assert!(snapshot.endpoint_bound);
+        assert!(snapshot.mcs_admission_open);
+        assert_eq!(snapshot.mcs_cap_generation, 3);
+        assert_eq!(snapshot.mcs_call_phase, 2);
+        assert_eq!(snapshot.mcs_producers, 1);
+        assert!(snapshot.progress_valid);
+        assert_eq!(snapshot.progress_sequence, 7);
+        assert_eq!(
+            snapshot.progress_phase,
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_BEGIN
+        );
+        assert_eq!(snapshot.progress_aux0, 0x44);
+        assert_eq!(snapshot.send_attempts, 5);
+        assert_eq!(snapshot.same_request_resumes, 4);
+        assert_eq!(snapshot.timeouts, 3);
+        assert_eq!(snapshot.keep_active_timeouts, 2);
+        assert_eq!(snapshot.aborts, 1);
+
+        let line = format_cyw43_sdio_pair_restart_frontier(
+            Cyw43SdioPairRestartAction::ReplaySdioEngine,
+            "replay-sdio-engine",
+            "aggregate-deadline-expired",
+            snapshot,
+        );
+        assert_eq!(
+            line.as_str(),
+            "CYW43_SDIO_PAIR_FRONTIER schema=v1 action=replay-sdio-engine op=replay-sdio-engine cause=aggregate-deadline-expired active=true state=issued lease=issued seq=7/7/6 wake=true/true/true/3/2/1 progress=true/7/3/engine-init-begin/0x44 counters=5/4/3/2/1",
+        );
+        assert!(line.len() < line.capacity());
+
+        let mut maximum_width = snapshot;
+        maximum_width.request_state = "unreadable";
+        maximum_width.phase_name = "ready-to-complete";
+        maximum_width.request = u32::MAX;
+        maximum_width.command_sequence = u32::MAX;
+        maximum_width.completion_sequence = u32::MAX;
+        maximum_width.mcs_cap_generation = u32::MAX;
+        maximum_width.mcs_call_phase = u32::MAX;
+        maximum_width.mcs_producers = usize::MAX;
+        maximum_width.progress_sequence = u32::MAX;
+        maximum_width.progress_phase = u32::MAX;
+        maximum_width.progress_phase_name = "engine-init-resource-check-failed";
+        maximum_width.progress_aux0 = u32::MAX;
+        maximum_width.send_attempts = u64::MAX;
+        maximum_width.same_request_resumes = u64::MAX;
+        maximum_width.timeouts = u64::MAX;
+        maximum_width.keep_active_timeouts = u64::MAX;
+        maximum_width.aborts = u64::MAX;
+        let maximum_line = format_cyw43_sdio_pair_restart_frontier(
+            Cyw43SdioPairRestartAction::ReplaySdioEngine,
+            "replay-sdio-engine",
+            "aggregate-deadline-expired",
+            maximum_width,
+        );
+        assert!(maximum_line.len() < maximum_line.capacity());
+        assert!(maximum_line.ends_with(
+            "counters=18446744073709551615/18446744073709551615/18446744073709551615/18446744073709551615/18446744073709551615"
+        ));
+    }
 
     #[cfg(feature = "kernel")]
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]

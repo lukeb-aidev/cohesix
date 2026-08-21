@@ -1157,7 +1157,7 @@ const POST_PROMPT_LOCAL_SEAT_ATTACH_EXHAUSTED_ATTEMPTS: u16 = 32;
 const POST_PROMPT_LOCAL_SEAT_ATTACH_FORCE_BLOCKED_TURNS: u16 = 4;
 
 #[cfg(any(test, all(feature = "kernel", feature = "usb")))]
-const USB_CONSOLE_STARTUP_FEEDBACK_INTERVAL_MS: u64 = 2_000;
+const USB_CONSOLE_STARTUP_FEEDBACK_INTERVAL_MS: u64 = 10_000;
 
 #[cfg(any(test, all(feature = "kernel", feature = "usb")))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1209,6 +1209,7 @@ struct UsbConsoleStartupFeedback {
     keyboard_ready_ms: Option<u64>,
     last_feedback_ms: Option<u64>,
     last_stage: Option<UsbConsoleStartupStage>,
+    last_frontier: Option<&'static str>,
     ready_logged: bool,
 }
 
@@ -1263,13 +1264,18 @@ impl UsbConsoleStartupFeedback {
         }
 
         let stage_changed = self.last_stage != Some(stage);
+        let frontier_changed = self
+            .last_frontier
+            .is_some_and(|last_frontier| last_frontier != frontier);
         let heartbeat_due = self.last_feedback_ms.is_none_or(|last_ms| {
             now_ms.saturating_sub(last_ms) >= USB_CONSOLE_STARTUP_FEEDBACK_INTERVAL_MS
         });
-        if !stage_changed && !heartbeat_due {
+        if !stage_changed && !frontier_changed && !heartbeat_due {
+            self.last_frontier = Some(frontier);
             return None;
         }
         self.last_stage = Some(stage);
+        self.last_frontier = Some(frontier);
         self.last_feedback_ms = Some(now_ms);
         Some(UsbConsoleStartupFeedbackEvent::Progress {
             stage,
@@ -10671,7 +10677,7 @@ where
             return;
         };
 
-        let mut line = HeaplessString::<192>::new();
+        let mut line = HeaplessString::<512>::new();
         match feedback {
             UsbConsoleStartupFeedbackEvent::Progress { stage, elapsed_ms } => {
                 let ring_active = crate::hal::driver_task::driver_task_ring_command_active(
@@ -10679,16 +10685,55 @@ where
                 );
                 let detail = crate::local_seat::linked_local_seat_usb_runtime_detail();
                 let result = crate::local_seat::linked_local_seat_usb_runtime_result();
-                let _ = write!(
-                    line,
-                    "[drivers] USB console starting stage={} elapsed_ms={} action=wait frontier={} ring_active={} detail=0x{:04x} result=0x{:08x}",
-                    stage.label(),
-                    elapsed_ms,
-                    frontier,
-                    Self::yes_no(ring_active),
-                    detail,
-                    result,
-                );
+                if let Some(snapshot) =
+                    crate::hal::driver_task::driver_task_retained_frontier_snapshot(
+                        crate::hal::driver_task::USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
+                    )
+                {
+                    let _ = write!(
+                        line,
+                        "[drivers] USB console starting stage={} elapsed_ms={} action=wait frontier={} ring_active={} detail=0x{:04x} result=0x{:08x} q={}/{}/{}/{} seq={}/{} wake={}/{}/{}/{}/{}/{} prog={}/{}/{}/{}/0x{:x} ctr={}/{}/{}/{}/{}",
+                        stage.label(),
+                        elapsed_ms,
+                        frontier,
+                        Self::yes_no(ring_active),
+                        detail,
+                        result,
+                        Self::yes_no(snapshot.active),
+                        snapshot.request,
+                        snapshot.request_state,
+                        snapshot.phase_name,
+                        snapshot.command_sequence,
+                        snapshot.completion_sequence,
+                        Self::yes_no(snapshot.doorbell_issued),
+                        Self::yes_no(snapshot.endpoint_bound),
+                        Self::yes_no(snapshot.mcs_admission_open),
+                        snapshot.mcs_cap_generation,
+                        snapshot.mcs_call_phase,
+                        snapshot.mcs_producers,
+                        Self::yes_no(snapshot.progress_valid),
+                        snapshot.progress_sequence,
+                        snapshot.progress_phase,
+                        snapshot.progress_phase_name,
+                        snapshot.progress_aux0,
+                        snapshot.send_attempts,
+                        snapshot.same_request_resumes,
+                        snapshot.timeouts,
+                        snapshot.keep_active_timeouts,
+                        snapshot.aborts,
+                    );
+                } else {
+                    let _ = write!(
+                        line,
+                        "[drivers] USB console starting stage={} elapsed_ms={} action=wait frontier={} ring_active={} detail=0x{:04x} result=0x{:08x} retained_frontier=missing",
+                        stage.label(),
+                        elapsed_ms,
+                        frontier,
+                        Self::yes_no(ring_active),
+                        detail,
+                        result,
+                    );
+                }
             }
             UsbConsoleStartupFeedbackEvent::Ready {
                 controller_ms,
@@ -30289,37 +30334,48 @@ mod tests {
             None,
         );
         assert_eq!(
-            feedback.observe(2_100, "usb-runtime-descriptor-replay-ready", false),
+            feedback.observe(10_099, "usb-runtime-not-started", false),
+            None,
+        );
+        assert_eq!(
+            feedback.observe(10_100, "usb-runtime-not-started", false),
             Some(UsbConsoleStartupFeedbackEvent::Progress {
                 stage: UsbConsoleStartupStage::Controller,
-                elapsed_ms: 2_000,
+                elapsed_ms: 10_000,
             }),
         );
         assert_eq!(
-            feedback.observe(2_200, "usb-xhci-ready", false),
+            feedback.observe(10_200, "usb-runtime-descriptor-replay-ready", false),
+            Some(UsbConsoleStartupFeedbackEvent::Progress {
+                stage: UsbConsoleStartupStage::Controller,
+                elapsed_ms: 10_100,
+            }),
+        );
+        assert_eq!(
+            feedback.observe(10_300, "usb-xhci-ready", false),
             Some(UsbConsoleStartupFeedbackEvent::Progress {
                 stage: UsbConsoleStartupStage::KeyboardEnumeration,
-                elapsed_ms: 2_100,
+                elapsed_ms: 10_200,
             }),
         );
         assert_eq!(
-            feedback.observe(2_300, "usb-keyboard-ready", false),
+            feedback.observe(10_400, "usb-keyboard-ready", false),
             Some(UsbConsoleStartupFeedbackEvent::Progress {
                 stage: UsbConsoleStartupStage::FirstReport,
-                elapsed_ms: 2_200,
+                elapsed_ms: 10_300,
             }),
         );
         assert_eq!(
-            feedback.observe(2_400, "usb-keyboard-ready", true),
+            feedback.observe(10_500, "usb-keyboard-ready", true),
             Some(UsbConsoleStartupFeedbackEvent::Ready {
-                controller_ms: 2_100,
+                controller_ms: 10_200,
                 enumeration_ms: 100,
                 command_ms: 100,
-                total_ms: 2_300,
+                total_ms: 10_400,
             }),
         );
         assert_eq!(
-            feedback.observe(4_400, "usb-keyboard-ready", true),
+            feedback.observe(20_500, "usb-keyboard-ready", true),
             None,
             "the terminal timing record is emitted once",
         );
