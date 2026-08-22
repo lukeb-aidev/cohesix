@@ -28,6 +28,53 @@ fn qemu_children_seal_before_any_service_activation() {
 }
 
 #[test]
+fn wired_console_child_registers_before_seal_and_hands_off_only_after_dhcp() {
+    let kernel = include_str!("../src/kernel.rs");
+    let requires = kernel
+        .find("requires_preseal_console_network_runtime")
+        .expect("wired stack must declare its pre-seal console child");
+    let construct = kernel[requires..]
+        .find("construct_console_network_runtime_shell(1)")
+        .map(|offset| requires + offset)
+        .expect("wired console child must be constructed before seal");
+    let attach = kernel[construct..]
+        .find("attach_preseal_console_network_runtime(runtime)")
+        .map(|offset| construct + offset)
+        .expect("wired stack must retain the constructed child");
+    let ninedoor = kernel[attach..]
+        .find("construct_ninedoor_service_runtime(1)")
+        .map(|offset| attach + offset)
+        .expect("NineDoor must remain the final child constructor");
+    let seal = kernel[ninedoor..]
+        .find("seal_target_fault_registry()")
+        .map(|offset| ninedoor + offset)
+        .expect("exact registry seal must follow every child constructor");
+    assert!(requires < construct && construct < attach && attach < ninedoor && ninedoor < seal);
+
+    let network = include_str!("../src/net/stack.rs");
+    let defer = network
+        .find("fn attach_console_runtime(")
+        .expect("GENET must accept the pre-seal runtime");
+    let dhcp = network[defer..]
+        .find("fn transition_ready(&self)")
+        .map(|offset| defer + offset)
+        .expect("GENET handoff must retain an address-readiness gate");
+    let finalize = network[dhcp..]
+        .find("runtime.finalize_descriptor(")
+        .map(|offset| dhcp + offset)
+        .expect("GENET must finalize the descriptor after DHCP");
+    let activate = network[finalize..]
+        .find("runtime.activate()")
+        .map(|offset| finalize + offset)
+        .expect("GENET must activate only after descriptor finalization");
+    let move_device = network[activate..]
+        .find("IsolatedNetworkConsole::from_existing(")
+        .map(|offset| activate + offset)
+        .expect("GENET device must move into the isolated console adapter");
+    assert!(defer < dhcp && dhcp < finalize && finalize < activate && activate < move_device);
+}
+
+#[test]
 fn boot_logs_compiler_sized_registry_without_a_literal_source_count() {
     let source = include_str!("../src/kernel.rs");
     assert!(source.contains("worker_resource_admission_config()"));

@@ -5476,6 +5476,43 @@ fn bootstrap<P: Platform>(
             );
             boot_log::force_uart_line(line.as_str());
             Some(runtime)
+        } else if net_stack
+            .as_ref()
+            .is_some_and(crate::net::DefaultNetStack::requires_preseal_console_network_runtime)
+        {
+            let runtime = hal
+                .construct_console_network_runtime_shell(1)
+                .map_err(|error| {
+                    BootError::Fatal(format!(
+                        "wired isolated console-network shell construction failed before registry seal: {error}"
+                    ))
+                })?;
+            let tcb = runtime.tcb_cptr();
+            let Some(stack) = net_stack.as_mut() else {
+                return Err(BootError::Fatal(
+                    "wired pre-seal console requirement lost its network stack".into(),
+                ));
+            };
+            let attached = stack
+                .attach_preseal_console_network_runtime(runtime)
+                .map_err(|error| {
+                    BootError::Fatal(format!(
+                        "wired isolated console-network shell attachment failed before registry seal: {error}"
+                    ))
+                })?;
+            if !attached {
+                return Err(BootError::Fatal(
+                    "wired network stack rejected required pre-seal console child".into(),
+                ));
+            }
+            let mut line = HeaplessString::<192>::new();
+            let _ = write!(
+                &mut line,
+                "[console-network] shell constructed generation=1 tcb=0x{:04x} state=suspended descriptor=pending-dhcp fault_registry=registered backend=bcmgenet-v5",
+                tcb,
+            );
+            boot_log::force_uart_line(line.as_str());
+            None
         } else {
             None
         };
@@ -5629,9 +5666,15 @@ fn bootstrap<P: Platform>(
                                 .into(),
                         ));
                     }
-                    boot_log::force_uart_line(
-                        "[console-network] isolated child active fault_receiver=active",
-                    );
+                    if stack.console_network_child_deferred() {
+                        boot_log::force_uart_line(
+                            "[console-network] isolated child retained state=suspended descriptor=pending-dhcp fault_receiver=active",
+                        );
+                    } else {
+                        boot_log::force_uart_line(
+                            "[console-network] isolated child active fault_receiver=active",
+                        );
+                    }
                 } else if net_deferred_console_runtime.is_some() {
                     boot_log::force_uart_line(
                         "[console-network] isolated child retained state=suspended descriptor=pending-dhcp fault_receiver=active",
