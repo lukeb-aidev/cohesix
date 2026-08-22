@@ -247,6 +247,15 @@ reserved and accounted even though they are not installed as TCB timeout
 handlers. This policy does not change client deadlines, retries, console
 grammar, or fault authority.
 
+The selected Pi profile applies the same kernel mechanism to the resumable
+serial, USB, HDMI, CYW43, and SDIO physical runtimes. Their active SCs remain
+independent and numerically unchanged, but ordinary current-refill exhaustion
+postpones execution instead of converting a retained multi-turn device lifetime
+into a terminal driver fault. Standard faults and explicit device deadlines
+remain terminal, and PCIe plus dormant GENET retain their selected terminal
+timeout policies. This Pi-only selection changes neither QEMU scheduling nor
+driver protocol/ownership semantics.
+
 QEMU and Pi use independently generated counter frequencies and response-time
 analysis. QEMU/TCG and artificial counter modes are diagnostic comparators, not
 alternate accepted scheduler profiles. Exact temporal values belong to the

@@ -1,6 +1,6 @@
 // Copyright 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
-// Purpose: Validate Pi 4 U-Boot profile codegen against the active Milestone 26b contract.
+// Purpose: Validate Pi 4 U-Boot profile codegen against the active Milestone 26e contract.
 // Author: Lukas Bower
 
 use coh_rtc::{compile, CompileOptions};
@@ -82,6 +82,30 @@ fn pi4_uboot_profile_emits_network_policy() {
     assert_eq!(local_seat["display_device"], "hdmi0");
     assert_eq!(local_seat["line_bytes"], 160);
     assert_eq!(local_seat["buffer_lines"], 128);
+
+    let temporal_tasks = manifest["temporal_authority"]["tasks"]
+        .as_array()
+        .expect("temporal tasks");
+    for task_id in [
+        "driver-serial",
+        "driver-usb",
+        "driver-hdmi",
+        "driver-cyw43",
+        "driver-sdio",
+    ] {
+        assert_eq!(
+            temporal_timeout_policy(temporal_tasks, task_id),
+            "natural-postpone",
+            "resumable Pi driver {task_id} must cross ordinary MCS refill boundaries without a false terminal fault"
+        );
+    }
+    for task_id in ["driver-genet", "driver-pcie"] {
+        assert_eq!(
+            temporal_timeout_policy(temporal_tasks, task_id),
+            "terminal",
+            "unimplicated Pi driver {task_id} must retain its existing timeout policy"
+        );
+    }
 
     let devices = manifest["hw"]["devices"].as_array().expect("devices array");
     assert!(devices
@@ -214,6 +238,16 @@ fn runtime_bool(images: &[Value], hot_path: &str, field: &str) -> bool {
         .get(field)
         .and_then(Value::as_bool)
         .unwrap_or_else(|| panic!("{field} for {hot_path}"))
+}
+
+fn temporal_timeout_policy<'a>(tasks: &'a [Value], task_id: &str) -> &'a str {
+    tasks
+        .iter()
+        .find(|task| task["id"] == task_id)
+        .unwrap_or_else(|| panic!("temporal task {task_id}"))
+        .get("timeout_policy")
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| panic!("timeout policy for {task_id}"))
 }
 
 fn runtime_pages(images: &[Value], hot_path: &str, field: &str) -> u64 {

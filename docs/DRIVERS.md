@@ -179,6 +179,16 @@ Describe the state machine as bounded transitions. For every command, define:
 Never use a retry counter as a substitute for elapsed time. Never use a timeout
 to silently switch to another owner or implementation.
 
+A resumable active driver may select MCS `NaturalPostpone` in its target
+manifest when one immutable physical lifetime intentionally spans multiple SC
+refills. That policy leaves the exact budget, period, standard-fault endpoint,
+explicit device deadline, owner, and terminal publication unchanged; it only
+prevents ordinary current-refill exhaustion from becoming a false terminal
+timeout fault. Generated timeout capability identity and resource accounting
+remain present. The selection requires target evidence for bounded progress and
+cannot replace a device deadline, no-progress detector, or fault-containment
+test.
+
 ### 3.4 Acceptance plan
 
 State the evidence needed at each tier before coding:

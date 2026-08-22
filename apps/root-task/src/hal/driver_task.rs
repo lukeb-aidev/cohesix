@@ -8267,7 +8267,7 @@ fn driver_task_spins_to_cycles_at_hz(spins: usize, freq_hz: u64) -> u64 {
     cycles.clamp(1, u64::MAX as u128) as u64
 }
 
-#[cfg(feature = "kernel")]
+#[cfg(any(feature = "kernel", test))]
 const fn driver_task_micros_to_cycles_at_hz(micros: u64, freq_hz: u64) -> u64 {
     if micros == 0 || freq_hz == 0 {
         return 0;
