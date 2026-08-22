@@ -1977,6 +1977,8 @@ pub struct Cyw43NetStack {
 pub struct GenetNetStack {
     state: GenetNetState,
     config: ConsoleNetConfig,
+    #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
+    handoff_decision_logged: bool,
 }
 
 enum GenetNetState {
@@ -2021,6 +2023,18 @@ enum Cyw43NetState {
     },
     #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
     Transitioning,
+}
+
+fn deferred_console_handoff_ready(
+    address_source: &str,
+    dhcp_phase: &str,
+    ip: Ipv4Address,
+    prefix_len: u8,
+) -> bool {
+    address_source == "dhcp-lease"
+        && dhcp_phase == "bound"
+        && ip != Ipv4Address::UNSPECIFIED
+        && prefix_len != 0
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -8663,6 +8677,8 @@ impl GenetNetStack {
         Self {
             state: GenetNetState::Root(stack),
             config,
+            #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
+            handoff_decision_logged: false,
         }
     }
 
@@ -8702,15 +8718,49 @@ impl GenetNetStack {
             return false;
         };
         let status = stack.status_report();
-        status.address_source == "dhcp-lease"
-            && status.dhcp_phase == "bound"
-            && stack.ipv4_address() != Ipv4Address::UNSPECIFIED
-            && stack.prefix_len() != 0
+        deferred_console_handoff_ready(
+            status.address_source,
+            status.dhcp_phase,
+            stack.ipv4_address(),
+            stack.prefix_len(),
+        )
     }
 
     #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
     fn transition_after_dhcp(&mut self, hal: &mut KernelHal<'_>) -> bool {
-        if !self.transition_ready() {
+        let ready = self.transition_ready();
+        if !self.handoff_decision_logged {
+            let decision = match &self.state {
+                GenetNetState::Deferred { stack, .. } => {
+                    let status = stack.status_report();
+                    let ip = stack.ipv4_address();
+                    let prefix_len = stack.prefix_len();
+                    (status.address_source == "dhcp-lease"
+                        || status.dhcp_phase == "bound"
+                        || ip != Ipv4Address::UNSPECIFIED)
+                        .then_some((status.address_source, status.dhcp_phase, ip, prefix_len))
+                }
+                _ => None,
+            };
+            if let Some((address_source, dhcp_phase, ip, prefix_len)) = decision {
+                self.handoff_decision_logged = true;
+                let mut line = heapless::String::<224>::new();
+                let _ = fmt::write(
+                    &mut line,
+                    format_args!(
+                        "CONSOLE_NETWORK_HANDOFF_DECISION schema=v1 state=deferred source={} dhcp={} ip={}/{} hal=admitted ready={} action={}",
+                        address_source,
+                        dhcp_phase,
+                        ip,
+                        prefix_len,
+                        if ready { "yes" } else { "no" },
+                        if ready { "finalize-resume" } else { "retain-suspended" },
+                    ),
+                );
+                crate::bootstrap::log::force_uart_line(line.as_str());
+            }
+        }
+        if !ready {
             return false;
         }
         let state = core::mem::replace(&mut self.state, GenetNetState::Transitioning);
@@ -9027,10 +9077,12 @@ impl Cyw43NetStack {
             return false;
         };
         let status = stack.status_report();
-        status.address_source == "dhcp-lease"
-            && status.dhcp_phase == "bound"
-            && stack.ipv4_address() != Ipv4Address::UNSPECIFIED
-            && stack.prefix_len() != 0
+        deferred_console_handoff_ready(
+            status.address_source,
+            status.dhcp_phase,
+            stack.ipv4_address(),
+            stack.prefix_len(),
+        )
     }
 
     #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
@@ -13230,6 +13282,41 @@ mod tests {
                 tcp_accepts: 1,
                 ..counters
             }
+        ));
+    }
+
+    #[test]
+    fn deferred_console_handoff_requires_complete_dhcp_address_truth() {
+        let assigned = Ipv4Address::new(192, 168, 10, 50);
+        assert!(deferred_console_handoff_ready(
+            "dhcp-lease",
+            "bound",
+            assigned,
+            24,
+        ));
+        assert!(!deferred_console_handoff_ready(
+            "dhcp-pending",
+            "bound",
+            assigned,
+            24,
+        ));
+        assert!(!deferred_console_handoff_ready(
+            "dhcp-lease",
+            "requesting",
+            assigned,
+            24,
+        ));
+        assert!(!deferred_console_handoff_ready(
+            "dhcp-lease",
+            "bound",
+            Ipv4Address::UNSPECIFIED,
+            24,
+        ));
+        assert!(!deferred_console_handoff_ready(
+            "dhcp-lease",
+            "bound",
+            assigned,
+            0,
         ));
     }
 

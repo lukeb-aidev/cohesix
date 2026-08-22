@@ -483,6 +483,8 @@ where
     }
     activate_root_control_temporal_or_fail(ctx);
     let hal_ptr = ctx.wifi_debug_hal_ptr;
+    #[cfg(feature = "net-console")]
+    let mut deferred_wired_handoff_admission_logged = false;
     loop {
         #[cfg(any(
             feature = "net-console",
@@ -505,6 +507,26 @@ where
             recovery_turn =
                 with_deferred_root_hal(hal_ptr, |hal| pump.contain_faulted_ninedoor(hal))
                     .unwrap_or(false);
+        }
+        #[cfg(feature = "net-console")]
+        if !deferred_wired_handoff_admission_logged
+            && crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active()
+            && pump.net_console_active_interface() == Some("wired")
+        {
+            deferred_wired_handoff_admission_logged = true;
+            let mut line = HeaplessString::<192>::new();
+            let _ = write!(
+                line,
+                "CONSOLE_NETWORK_HANDOFF_ADMISSION schema=v1 hal={} recovery={} net=attached action={}",
+                if hal_ptr == 0 { "missing" } else { "present" },
+                if recovery_turn { "reserved" } else { "idle" },
+                if recovery_turn || hal_ptr == 0 {
+                    "defer"
+                } else {
+                    "evaluate"
+                },
+            );
+            boot_log::force_uart_line(line.as_str());
         }
         #[cfg(feature = "net-console")]
         if !recovery_turn && hal_ptr != 0 {
