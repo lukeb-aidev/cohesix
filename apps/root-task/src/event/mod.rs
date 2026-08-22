@@ -3250,9 +3250,10 @@ fn format_runtime_cadence(
     let mut line = HeaplessString::<DEFAULT_LINE_CAPACITY>::new();
     write!(
         line,
-        "PI4_CADENCE schema=v1 c={} q={:x} p={}/{} dt={:x} w={:x}/{:x} e={} f={:x}",
+        "PI4_CADENCE schema=v2 c={} q={:x} et={:x} p={}/{} dt={:x} w={:x}/{:x} e={} f={:x}",
         contract_name,
         record.sequence,
+        record.entry_cntvct,
         record.phase,
         crate::hal::driver_task::driver_task_ring_progress_phase_label(record.phase),
         record.last_cntvct.wrapping_sub(record.entry_cntvct),
@@ -8067,7 +8068,7 @@ where
                 );
             }
         } else {
-            const LINE: &str = "PI4_CADENCE schema=v1 state=diagnostic-overflow";
+            const LINE: &str = "PI4_CADENCE schema=v2 state=diagnostic-overflow";
             crate::log_buffer::append_log_line(LINE);
             if runtime_cadence_projects_to_physical_serial(contract) {
                 let _ = self
@@ -41178,7 +41179,8 @@ mod tests {
 
         let line = format_runtime_cadence("driver-usb", first)
             .expect("bounded cadence evidence must fit one serial line");
-        assert!(line.starts_with("PI4_CADENCE schema=v1"));
+        assert!(line.starts_with("PI4_CADENCE schema=v2"));
+        assert!(line.contains(" et=64 "));
         assert!(line.contains("usb-dma-zero-progress"));
         assert!(line.len() <= DEFAULT_LINE_CAPACITY);
     }

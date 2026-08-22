@@ -12644,36 +12644,61 @@ fn driver_task_retained_uses_root_grant(
         && command.flags & DRIVER_RUNTIME_COMMAND_FLAG_STEADY_SERVICE_LEASE == 0
 }
 
-/// Decide whether one retained foreground wake is inside its generated period.
+/// Decide whether one retained foreground boundary is inside its generated period.
 ///
-/// The first wake is always admitted. Later wakes use wrapping counter
-/// subtraction so a long-running system remains correct across CNTVCT wrap.
-/// A zero or unavailable temporal contract is never valid for the physical
-/// Pi/MCS admission path.
+/// A zero boundary contributes no constraint. Nonzero boundaries use wrapping
+/// counter subtraction so a long-running system remains correct across CNTVCT
+/// wrap. A zero or unavailable temporal contract is never valid for the
+/// physical Pi/MCS admission path.
 #[cfg(any(feature = "kernel", test))]
 const fn driver_task_retained_foreground_wake_due_at(
-    previous_ticks: u64,
+    boundary_ticks: u64,
     current_ticks: u64,
     period_us: u32,
     counter_frequency: u64,
 ) -> bool {
-    if previous_ticks == 0 {
+    if boundary_ticks == 0 {
         return true;
     }
     let period_ticks = driver_task_micros_to_cycles_at_hz(period_us as u64, counter_frequency);
-    period_ticks != 0 && current_ticks.wrapping_sub(previous_ticks) >= period_ticks
+    period_ticks != 0 && current_ticks.wrapping_sub(boundary_ticks) >= period_ticks
+}
+
+#[cfg(any(feature = "kernel", test))]
+const fn driver_task_retained_foreground_boundaries_due_at(
+    previous_root_release_ticks: u64,
+    latest_runtime_entry_ticks: u64,
+    current_ticks: u64,
+    period_us: u32,
+    counter_frequency: u64,
+) -> bool {
+    driver_task_retained_foreground_wake_due_at(
+        previous_root_release_ticks,
+        current_ticks,
+        period_us,
+        counter_frequency,
+    ) && driver_task_retained_foreground_wake_due_at(
+        latest_runtime_entry_ticks,
+        current_ticks,
+        period_us,
+        counter_frequency,
+    )
 }
 
 /// Admit at most one root-issued retained foreground quantum per generated
-/// MCS period on the physical Pi.
+/// MCS period on the physical Pi, aligned with the child's actual activation.
 ///
 /// Each linked runtime blocks after a `Pending` device phase and preserves the
 /// exact command intake until root supplies the next endpoint rendezvous or
 /// typed root grant. The ordinary EventPump can revisit that retained request
 /// many times inside one 10 ms replenishment period; issuing on every revisit
 /// collapses several individually bounded phases into one SC budget and causes
-/// a timeout fault. This gate binds the producer wake to compiler-owned
-/// temporal truth without changing device state, retry policy, or reservation.
+/// a timeout fault. A root-send timestamp alone is insufficient because seL4
+/// replenishes from the later instant at which the child actually consumes its
+/// SC. Require both boundaries: the last root release prevents duplicate sends
+/// before the child publishes cadence, while the stable runtime entry counter
+/// aligns the next release with the refill that execution created. This changes
+/// no device state, retry policy, budget, period, or timeout semantics.
 #[cfg(feature = "kernel")]
 fn admit_driver_task_retained_foreground_wake(
     slot: &DriverTaskCommandSlot,
@@ -12694,8 +12719,12 @@ fn admit_driver_task_retained_foreground_wake(
         return false;
     };
     let previous_ticks = slot.retained_foreground_wake_ticks.load(Ordering::Acquire);
-    if !driver_task_retained_foreground_wake_due_at(
+    let ring_root_ptr = slot.ring_root_ptr.load(Ordering::Acquire);
+    let runtime_entry_ticks =
+        driver_task_ring_read_cadence_record(ring_root_ptr).map_or(0, |record| record.entry_cntvct);
+    if !driver_task_retained_foreground_boundaries_due_at(
         previous_ticks,
+        runtime_entry_ticks,
         current_ticks,
         temporal.period_us,
         counter_frequency,
@@ -26535,6 +26564,39 @@ mod tests {
             1,
             2,
             0,
+            PI_COUNTER_HZ,
+        ));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn retained_foreground_wake_waits_for_root_and_runtime_boundaries() {
+        const PI_COUNTER_HZ: u64 = 54_000_000;
+        const DRIVER_PERIOD_US: u32 = 10_000;
+        const PERIOD_TICKS: u64 = 540_000;
+        let current = 2_000_000;
+        let root_release = current - PERIOD_TICKS;
+        let delayed_runtime_entry = root_release + 4_000;
+
+        assert!(driver_task_retained_foreground_boundaries_due_at(
+            root_release,
+            0,
+            current,
+            DRIVER_PERIOD_US,
+            PI_COUNTER_HZ,
+        ));
+        assert!(!driver_task_retained_foreground_boundaries_due_at(
+            root_release,
+            delayed_runtime_entry,
+            current,
+            DRIVER_PERIOD_US,
+            PI_COUNTER_HZ,
+        ));
+        assert!(driver_task_retained_foreground_boundaries_due_at(
+            root_release,
+            delayed_runtime_entry,
+            delayed_runtime_entry + PERIOD_TICKS,
+            DRIVER_PERIOD_US,
             PI_COUNTER_HZ,
         ));
     }
