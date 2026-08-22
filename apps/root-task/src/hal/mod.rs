@@ -2980,9 +2980,12 @@ fn allocate_driver_task_mcs_objects(
     if err != seL4_NoError {
         return Err(HalError::Sel4(err));
     }
-    let completion_badge =
-        seL4_Word::try_from(pi4_driver_abi::driver_runtime_completion_badge(task_key))
-            .map_err(|_| HalError::Unsupported("driver-runtime-mcs-completion-badge"))?;
+    let completion_task_key = u32::try_from(task_key)
+        .map_err(|_| HalError::Unsupported("driver-runtime-mcs-task-key"))?;
+    let completion_badge = seL4_Word::try_from(pi4_driver_abi::driver_runtime_completion_badge(
+        completion_task_key,
+    ))
+    .map_err(|_| HalError::Unsupported("driver-runtime-mcs-completion-badge"))?;
     let err = sel4::cnode_mint_depth(
         child_cnode,
         pi4_driver_abi::DRIVER_RUNTIME_COMPLETION_NOTIFICATION_SLOT as seL4_CPtr,
@@ -5473,8 +5476,11 @@ impl<'a> KernelHal<'a> {
             || contract == SDIO_HOST_DRIVER_TASK_CONTRACT
         {
             #[cfg(sel4_config_kernel_mcs)]
-            let endpoint =
-                mint_driver_runtime_command_endpoint(self.env, command_endpoint_origin, task_key)?;
+            let endpoint = mint_driver_runtime_command_endpoint(
+                &mut self.env,
+                command_endpoint_origin,
+                task_key,
+            )?;
             #[cfg(not(sel4_config_kernel_mcs))]
             let endpoint = self
                 .env
