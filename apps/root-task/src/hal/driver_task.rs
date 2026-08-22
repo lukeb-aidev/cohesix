@@ -4513,6 +4513,7 @@ struct DriverTaskCommandSlot {
     retained_priority_lease_mask: AtomicUsize,
     retained_doorbell_issued: AtomicUsize,
     retained_grant_id: AtomicU32,
+    retained_foreground_wake_ticks: AtomicU64,
     retained_steady_tx_fast_lane: AtomicUsize,
     retained_steady_tx_last_progress_slice: AtomicU32,
     retained_steady_tx_last_progress_ticks: AtomicU64,
@@ -5189,6 +5190,7 @@ impl DriverTaskCommandSlot {
             retained_priority_lease_mask: AtomicUsize::new(0),
             retained_doorbell_issued: AtomicUsize::new(0),
             retained_grant_id: AtomicU32::new(0),
+            retained_foreground_wake_ticks: AtomicU64::new(0),
             retained_steady_tx_fast_lane: AtomicUsize::new(0),
             retained_steady_tx_last_progress_slice: AtomicU32::new(0),
             retained_steady_tx_last_progress_ticks: AtomicU64::new(0),
@@ -12640,6 +12642,77 @@ fn driver_task_retained_uses_root_grant(
         && command.aux0 == DRIVER_RUNTIME_CYW43_COMMAND_AUX
         && command.flags & DRIVER_RUNTIME_COMMAND_FLAG_PERSISTENT_TRANSACTION == 0
         && command.flags & DRIVER_RUNTIME_COMMAND_FLAG_STEADY_SERVICE_LEASE == 0
+}
+
+/// Decide whether one retained foreground wake is inside its generated period.
+///
+/// The first wake is always admitted. Later wakes use wrapping counter
+/// subtraction so a long-running system remains correct across CNTVCT wrap.
+/// A zero or unavailable temporal contract is never valid for the physical
+/// Pi/MCS admission path.
+#[cfg(any(feature = "kernel", test))]
+const fn driver_task_retained_foreground_wake_due_at(
+    previous_ticks: u64,
+    current_ticks: u64,
+    period_us: u32,
+    counter_frequency: u64,
+) -> bool {
+    if previous_ticks == 0 {
+        return true;
+    }
+    let period_ticks = driver_task_micros_to_cycles_at_hz(period_us as u64, counter_frequency);
+    period_ticks != 0 && current_ticks.wrapping_sub(previous_ticks) >= period_ticks
+}
+
+/// Admit at most one root-issued retained foreground quantum per generated
+/// MCS period on the physical Pi.
+///
+/// Each linked runtime blocks after a `Pending` device phase and preserves the
+/// exact command intake until root supplies the next endpoint rendezvous or
+/// typed root grant. The ordinary EventPump can revisit that retained request
+/// many times inside one 10 ms replenishment period; issuing on every revisit
+/// collapses several individually bounded phases into one SC budget and causes
+/// a timeout fault. This gate binds the producer wake to compiler-owned
+/// temporal truth without changing device state, retry policy, or reservation.
+#[cfg(feature = "kernel")]
+fn admit_driver_task_retained_foreground_wake(
+    slot: &DriverTaskCommandSlot,
+    contract: DriverTaskContract,
+) -> bool {
+    if !cfg!(sel4_config_kernel_mcs) || !physical_pi_driver_task_only_owner_state_active() {
+        return true;
+    }
+    let Some(spec) = pi4_driver_task_runtime_image_spec_for_contract(contract) else {
+        return false;
+    };
+    let Some(temporal) = driver_task_temporal_config(spec.hot_path) else {
+        return false;
+    };
+    let (Some(current_ticks), Some(counter_frequency)) =
+        (driver_task_counter_ticks(), driver_task_counter_frequency())
+    else {
+        return false;
+    };
+    let previous_ticks = slot.retained_foreground_wake_ticks.load(Ordering::Acquire);
+    if !driver_task_retained_foreground_wake_due_at(
+        previous_ticks,
+        current_ticks,
+        temporal.period_us,
+        counter_frequency,
+    ) {
+        return false;
+    }
+    // Zero is the sentinel for "no wake yet". CNTVCT may legally read zero at
+    // reset, so preserve the first admitted boundary as tick one in that case.
+    let committed_ticks = current_ticks.max(1);
+    slot.retained_foreground_wake_ticks
+        .compare_exchange(
+            previous_ticks,
+            committed_ticks,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        )
+        .is_ok()
 }
 
 #[cfg(feature = "kernel")]
@@ -20990,6 +21063,14 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
             cache_counter_batch.flush(slot);
             return None;
         }
+        if !admit_driver_task_retained_foreground_wake(slot, contract) {
+            // Keep Committed/Granted and the exact command immutable. A later
+            // EventPump turn rechecks the architectural counter; no endpoint,
+            // grant, device state, retry counter, or MCS reservation changes
+            // while this generated-period boundary is closed.
+            cache_counter_batch.flush(slot);
+            return None;
+        }
         // The command is already immutable and visible. Root-generation
         // CYW43 descriptor continuations signal the child-bound notification;
         // unrelated runtime contracts retain their endpoint rendezvous.
@@ -26417,6 +26498,45 @@ mod tests {
         assert_eq!(driver_task_spins_to_cycles_at_hz(0, 54_000_000), 0);
         assert_eq!(driver_task_spins_to_cycles_at_hz(1, 54_000_000), 1);
         assert_eq!(driver_task_spins_to_cycles_at_hz(1, 0), 0);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn retained_foreground_wake_obeys_generated_period_boundary() {
+        const PI_COUNTER_HZ: u64 = 54_000_000;
+        const DRIVER_PERIOD_US: u32 = 10_000;
+        const PERIOD_TICKS: u64 = 540_000;
+
+        assert!(driver_task_retained_foreground_wake_due_at(
+            0,
+            17,
+            DRIVER_PERIOD_US,
+            PI_COUNTER_HZ,
+        ));
+        assert!(!driver_task_retained_foreground_wake_due_at(
+            1_000_000,
+            1_000_000 + PERIOD_TICKS - 1,
+            DRIVER_PERIOD_US,
+            PI_COUNTER_HZ,
+        ));
+        assert!(driver_task_retained_foreground_wake_due_at(
+            1_000_000,
+            1_000_000 + PERIOD_TICKS,
+            DRIVER_PERIOD_US,
+            PI_COUNTER_HZ,
+        ));
+        assert!(driver_task_retained_foreground_wake_due_at(
+            u64::MAX - 10,
+            PERIOD_TICKS - 11,
+            DRIVER_PERIOD_US,
+            PI_COUNTER_HZ,
+        ));
+        assert!(!driver_task_retained_foreground_wake_due_at(
+            1,
+            2,
+            0,
+            PI_COUNTER_HZ,
+        ));
     }
 
     #[cfg(feature = "kernel")]
