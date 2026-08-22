@@ -29,7 +29,7 @@ use pi4_driver_abi::{
     DriverRuntimeFramebufferDescriptor, DriverRuntimeInitDescriptor,
     DriverRuntimePersistentWaitReceipt, DriverRuntimeSdioClockSnapshot,
     DriverRuntimeSdioDeadlineArm, DriverRuntimeSdioPhysicalLifetimeRecord,
-    DriverRuntimeSteadyServiceProgress, DriverRuntimeUsbOldgoodReceipt,
+    DriverRuntimeSerialRxState, DriverRuntimeSteadyServiceProgress, DriverRuntimeUsbOldgoodReceipt,
     DRIVER_RUNTIME_BUS_LINK_CHANNEL_CYW43_SDIO, DRIVER_RUNTIME_BUS_LINK_CHANNEL_USB_PCIE,
     DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT, DRIVER_RUNTIME_BUS_LINK_FLAG_CLIENT,
     DRIVER_RUNTIME_BUS_LINK_FLAG_DPC_EVENT_RING, DRIVER_RUNTIME_BUS_LINK_FLAG_NOTIFICATIONS,
@@ -440,7 +440,8 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_SDIO_IRQ, DRIVER_RUNTIME_SDIO_IRQ_BADGE,
     DRIVER_RUNTIME_SDIO_PHYSICAL_LIFETIME_BYTES, DRIVER_RUNTIME_SDIO_PHYSICAL_LIFETIME_OFFSET,
     DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_BYTES, DRIVER_RUNTIME_SERIAL_IRQ,
-    DRIVER_RUNTIME_SERIAL_IRQ_BADGE, DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE,
+    DRIVER_RUNTIME_SERIAL_IRQ_BADGE, DRIVER_RUNTIME_SERIAL_RX_STATE_BYTES,
+    DRIVER_RUNTIME_SERIAL_RX_STATE_OFFSET, DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE,
     DRIVER_RUNTIME_STEADY_SERVICE_PROGRESS_BYTES, DRIVER_RUNTIME_STEADY_SERVICE_PROGRESS_MAGIC,
     DRIVER_RUNTIME_STEADY_SERVICE_PROGRESS_OFFSET, DRIVER_RUNTIME_TASK_KEY_RESTART_FLAG,
     DRIVER_RUNTIME_USB_ENUMERATE_AUX, DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_AUX,
@@ -3964,6 +3965,32 @@ fn driver_task_ring_read_cadence_record(
         // a fixed page-local offset, and read passively from HAL-owned shared
         // memory. Sequence-last validation rejects staged or torn samples.
         unsafe { core::ptr::read_volatile(cadence_ptr) }
+    };
+    let first = read();
+    fence(Ordering::Acquire);
+    let second = read();
+    (first == second && second.valid()).then_some(second)
+}
+
+/// Read one stable authority-free serial owner RX/IRQ publication.
+#[cfg(feature = "kernel")]
+fn driver_task_ring_read_serial_rx_state(
+    ring_root_ptr: usize,
+) -> Option<DriverRuntimeSerialRxState> {
+    if ring_root_ptr == 0 {
+        return None;
+    }
+    let state_ptr = (ring_root_ptr + usize::from(DRIVER_RUNTIME_SERIAL_RX_STATE_OFFSET))
+        as *const DriverRuntimeSerialRxState;
+    let read = || {
+        driver_task_ring_invalidate_root_range(
+            state_ptr as usize,
+            usize::from(DRIVER_RUNTIME_SERIAL_RX_STATE_BYTES),
+        );
+        // SAFETY: The serial record is primitive-only, naturally aligned at a
+        // fixed role-local offset, and read passively from HAL-owned shared
+        // memory. Sequence-last validation rejects staged or torn samples.
+        unsafe { core::ptr::read_volatile(state_ptr) }
     };
     let first = read();
     fence(Ordering::Acquire);
@@ -7903,6 +7930,14 @@ pub(crate) fn driver_task_runtime_cadence_snapshot(
     let task_key = driver_task_contract_key(contract)?;
     let slot = slot_for_task_key(task_key)?;
     driver_task_ring_read_cadence_record(slot.ring_root_ptr.load(Ordering::Acquire))
+}
+
+/// Snapshot passive serial-owner RX/IRQ evidence without advancing its ring.
+#[cfg(feature = "kernel")]
+pub(crate) fn driver_task_serial_rx_state_snapshot() -> Option<DriverRuntimeSerialRxState> {
+    let task_key = driver_task_contract_key(SERIAL_DRIVER_TASK_CONTRACT)?;
+    let slot = slot_for_task_key(task_key)?;
+    driver_task_ring_read_serial_rx_state(slot.ring_root_ptr.load(Ordering::Acquire))
 }
 
 #[cfg(feature = "kernel")]
@@ -12664,6 +12699,24 @@ const fn driver_task_retained_foreground_wake_due_at(
     period_ticks != 0 && current_ticks.wrapping_sub(boundary_ticks) >= period_ticks
 }
 
+/// Decide whether a runtime entry proves consumption of the preceding wake.
+///
+/// A zero boundary or zero entry contributes no constraint, matching runtimes
+/// that do not publish the optional cadence record. Otherwise the entry must
+/// be strictly after the root release within the unambiguous half of the
+/// wrapping counter domain.
+#[cfg(any(feature = "kernel", test))]
+const fn driver_task_runtime_entry_consumed_root_wake(
+    previous_root_release_ticks: u64,
+    latest_runtime_entry_ticks: u64,
+) -> bool {
+    if previous_root_release_ticks == 0 || latest_runtime_entry_ticks == 0 {
+        return true;
+    }
+    let elapsed = latest_runtime_entry_ticks.wrapping_sub(previous_root_release_ticks);
+    elapsed != 0 && elapsed < (1u64 << 63)
+}
+
 #[cfg(any(feature = "kernel", test))]
 const fn driver_task_retained_foreground_boundaries_due_at(
     previous_root_release_ticks: u64,
@@ -12671,18 +12724,36 @@ const fn driver_task_retained_foreground_boundaries_due_at(
     current_ticks: u64,
     period_us: u32,
     counter_frequency: u64,
+    natural_postpone: bool,
 ) -> bool {
-    driver_task_retained_foreground_wake_due_at(
+    let root_period_due = driver_task_retained_foreground_wake_due_at(
         previous_root_release_ticks,
         current_ticks,
         period_us,
         counter_frequency,
-    ) && driver_task_retained_foreground_wake_due_at(
-        latest_runtime_entry_ticks,
-        current_ticks,
-        period_us,
-        counter_frequency,
-    )
+    );
+    if !root_period_due {
+        return false;
+    }
+    if natural_postpone {
+        // Natural-postpone runtimes need proof that the previous root wake was
+        // consumed, but the kernel—not root—owns their slightly later refill
+        // instant. Waiting a second complete period from that entry quantizes
+        // a 10 ms service to 20 ms when root samples just before replenishment.
+        driver_task_runtime_entry_consumed_root_wake(
+            previous_root_release_ticks,
+            latest_runtime_entry_ticks,
+        )
+    } else {
+        // Terminal/fail-stop runtimes retain the conservative second boundary:
+        // waking them before the child-relative refill can produce a timeout.
+        driver_task_retained_foreground_wake_due_at(
+            latest_runtime_entry_ticks,
+            current_ticks,
+            period_us,
+            counter_frequency,
+        )
+    }
 }
 
 /// Admit at most one root-issued retained foreground quantum per generated
@@ -12693,12 +12764,12 @@ const fn driver_task_retained_foreground_boundaries_due_at(
 /// typed root grant. The ordinary EventPump can revisit that retained request
 /// many times inside one 10 ms replenishment period; issuing on every revisit
 /// collapses several individually bounded phases into one SC budget and causes
-/// a timeout fault. A root-send timestamp alone is insufficient because seL4
-/// replenishes from the later instant at which the child actually consumes its
-/// SC. Require both boundaries: the last root release prevents duplicate sends
-/// before the child publishes cadence, while the stable runtime entry counter
-/// aligns the next release with the refill that execution created. This changes
-/// no device state, retry policy, budget, period, or timeout semantics.
+/// a timeout fault. Terminal runtimes therefore keep both full-period
+/// boundaries. A natural-postpone runtime instead admits the next root-period
+/// wake once its stable entry proves the preceding wake was consumed; seL4
+/// safely postpones execution to the child-relative refill if root samples a
+/// few ticks early. This changes no device state, retry policy, budget, period,
+/// or timeout semantics.
 #[cfg(feature = "kernel")]
 fn admit_driver_task_retained_foreground_wake(
     slot: &DriverTaskCommandSlot,
@@ -12728,6 +12799,7 @@ fn admit_driver_task_retained_foreground_wake(
         current_ticks,
         temporal.period_us,
         counter_frequency,
+        temporal.timeout_policy == crate::generated::TimeoutPolicy::NaturalPostpone,
     ) {
         return false;
     }
@@ -25702,6 +25774,52 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
+    fn serial_rx_state_reader_accepts_only_stable_sequence_last_evidence() {
+        let mut ring = AlignedDriverTaskRing([0; DRIVER_TASK_RING_PAGE_BYTES / 4]);
+        let ring_root_ptr = ring.0.as_mut_ptr() as usize;
+        let state_ptr = (ring_root_ptr + usize::from(DRIVER_RUNTIME_SERIAL_RX_STATE_OFFSET))
+            as *mut DriverRuntimeSerialRxState;
+        let mut record = DriverRuntimeSerialRxState {
+            magic: pi4_driver_abi::DRIVER_RUNTIME_SERIAL_RX_STATE_MAGIC,
+            version: pi4_driver_abi::DRIVER_RUNTIME_SERIAL_RX_STATE_VERSION,
+            len: DRIVER_RUNTIME_SERIAL_RX_STATE_BYTES,
+            publication: 2,
+            irq_wakes: 7,
+            irq_acks: 6,
+            irq_ack_failures: 1,
+            hardware_overrun_events: 3,
+            queue_full_events: 4,
+            received_bytes: 19,
+            queued_bytes: 5,
+            flags: 0,
+            last_cntvct_lo: 0x44,
+            committed_publication: 0,
+        };
+        record.committed_publication = record.publication;
+        // SAFETY: The aligned test page owns the complete fixed ABI record.
+        unsafe { core::ptr::write_volatile(state_ptr, record) };
+        assert_eq!(
+            driver_task_ring_read_serial_rx_state(ring_root_ptr),
+            Some(record)
+        );
+
+        let staged = DriverRuntimeSerialRxState {
+            publication: 3,
+            irq_wakes: 8,
+            irq_acks: 7,
+            received_bytes: 20,
+            queued_bytes: 0,
+            last_cntvct_lo: 0x55,
+            committed_publication: 0,
+            ..record
+        };
+        // SAFETY: Same page-local fixed record; the zero commit is deliberate.
+        unsafe { core::ptr::write_volatile(state_ptr, staged) };
+        assert_eq!(driver_task_ring_read_serial_rx_state(ring_root_ptr), None);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
     fn retained_frontier_snapshot_preserves_root_wake_child_and_counter_state() {
         let slot = DriverTaskCommandSlot::new();
         let mut ring = AlignedDriverTaskRing([0; DRIVER_TASK_RING_PAGE_BYTES / 4]);
@@ -26570,7 +26688,7 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn retained_foreground_wake_waits_for_root_and_runtime_boundaries() {
+    fn retained_foreground_wake_is_policy_aware_after_runtime_entry() {
         const PI_COUNTER_HZ: u64 = 54_000_000;
         const DRIVER_PERIOD_US: u32 = 10_000;
         const PERIOD_TICKS: u64 = 540_000;
@@ -26584,6 +26702,7 @@ mod tests {
             current,
             DRIVER_PERIOD_US,
             PI_COUNTER_HZ,
+            false,
         ));
         assert!(!driver_task_retained_foreground_boundaries_due_at(
             root_release,
@@ -26591,6 +26710,7 @@ mod tests {
             current,
             DRIVER_PERIOD_US,
             PI_COUNTER_HZ,
+            false,
         ));
         assert!(driver_task_retained_foreground_boundaries_due_at(
             root_release,
@@ -26598,6 +26718,23 @@ mod tests {
             delayed_runtime_entry + PERIOD_TICKS,
             DRIVER_PERIOD_US,
             PI_COUNTER_HZ,
+            false,
+        ));
+        assert!(driver_task_retained_foreground_boundaries_due_at(
+            root_release,
+            delayed_runtime_entry,
+            current,
+            DRIVER_PERIOD_US,
+            PI_COUNTER_HZ,
+            true,
+        ));
+        assert!(!driver_task_retained_foreground_boundaries_due_at(
+            root_release,
+            root_release - 1,
+            current,
+            DRIVER_PERIOD_US,
+            PI_COUNTER_HZ,
+            true,
         ));
     }
 

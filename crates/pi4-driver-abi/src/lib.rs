@@ -644,6 +644,20 @@ pub const DRIVER_RUNTIME_USB_OLDGOOD_RECEIPT_BYTES: u16 = 48;
 pub const DRIVER_RUNTIME_USB_OLDGOOD_RECEIPT_MAGIC: u32 = 0x5553_4f47;
 /// Layout version for [`DriverRuntimeUsbOldgoodReceipt`].
 pub const DRIVER_RUNTIME_USB_OLDGOOD_RECEIPT_VERSION: u16 = 1;
+/// Fixed offset of the serial owner's passive receive/IRQ state.
+///
+/// Serial owns this range only in its role-local command ring. USB uses the
+/// same numeric range for its old-good receipt in a distinct HAL-mapped ring
+/// page, so the compiler-declared runtime role remains part of the address.
+pub const DRIVER_RUNTIME_SERIAL_RX_STATE_OFFSET: u16 = 192;
+/// Bytes in one sequence-last serial receive/IRQ state record.
+pub const DRIVER_RUNTIME_SERIAL_RX_STATE_BYTES: u16 = 48;
+/// Magic value for a serial receive/IRQ state record (`SRXS`).
+pub const DRIVER_RUNTIME_SERIAL_RX_STATE_MAGIC: u32 = 0x5352_5853;
+/// Layout version for [`DriverRuntimeSerialRxState`].
+pub const DRIVER_RUNTIME_SERIAL_RX_STATE_VERSION: u16 = 1;
+/// Serial receive-state flag: the owner still owes an IRQ-handler ACK.
+pub const DRIVER_RUNTIME_SERIAL_RX_STATE_FLAG_ACK_PENDING: u16 = 1 << 0;
 /// USB old-good step: xHCI reached its runtime-owned ready terminal.
 pub const DRIVER_RUNTIME_USB_OLDGOOD_STEP_XHCI_READY: u32 = 1 << 0;
 /// USB old-good step: the linked runtime consumed a successful command event.
@@ -870,6 +884,58 @@ impl DriverRuntimeCadenceRecord {
                     | DRIVER_RUNTIME_CADENCE_FLAG_PREVIOUS_ENTRY_VALID)
                 == 0
             && (self.work_total == 0 || self.work_completed <= self.work_total)
+    }
+}
+
+/// Passive sequence-last evidence for the isolated serial owner's RX path.
+///
+/// The record is diagnostic only. It carries no command, completion, IRQ,
+/// notification, scheduling, or retry authority. The runtime publishes it
+/// after initialization, explicit root RX turns, and exceptional IRQ state;
+/// root accepts only two identical complete samples.
+#[repr(C, align(8))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DriverRuntimeSerialRxState {
+    /// [`DRIVER_RUNTIME_SERIAL_RX_STATE_MAGIC`].
+    pub magic: u32,
+    /// [`DRIVER_RUNTIME_SERIAL_RX_STATE_VERSION`].
+    pub version: u16,
+    /// Exact record size.
+    pub len: u16,
+    /// Monotonic nonzero diagnostic publication identity.
+    pub publication: u32,
+    /// Bound-notification wakes accepted by the serial owner.
+    pub irq_wakes: u32,
+    /// Successful serial IRQ-handler acknowledgements.
+    pub irq_acks: u32,
+    /// Failed serial IRQ-handler acknowledgement attempts.
+    pub irq_ack_failures: u32,
+    /// Mini-UART hardware-overrun observations.
+    pub hardware_overrun_events: u32,
+    /// RX software-queue-full observations.
+    pub queue_full_events: u32,
+    /// Bytes accepted into the owner's bounded RX queue.
+    pub received_bytes: u32,
+    /// Bytes currently retained in that queue.
+    pub queued_bytes: u16,
+    /// [`DRIVER_RUNTIME_SERIAL_RX_STATE_FLAG_ACK_PENDING`] and future flags.
+    pub flags: u16,
+    /// Low virtual-counter word sampled at publication.
+    pub last_cntvct_lo: u32,
+    /// Sequence-last commit; exactly repeats `publication`.
+    pub committed_publication: u32,
+}
+
+impl DriverRuntimeSerialRxState {
+    /// Return whether this is one complete authority-free publication.
+    #[must_use]
+    pub const fn valid(self) -> bool {
+        self.magic == DRIVER_RUNTIME_SERIAL_RX_STATE_MAGIC
+            && self.version == DRIVER_RUNTIME_SERIAL_RX_STATE_VERSION
+            && self.len as usize == core::mem::size_of::<Self>()
+            && self.publication != 0
+            && self.committed_publication == self.publication
+            && self.flags & !DRIVER_RUNTIME_SERIAL_RX_STATE_FLAG_ACK_PENDING == 0
     }
 }
 
@@ -8266,6 +8332,52 @@ mod tests {
         assert!(with_previous.valid());
         assert_eq!(with_previous.previous_entry_cntvct_lo, 1_000);
         assert_eq!(with_previous.last_cntvct_lo, 2_500);
+    }
+
+    #[test]
+    fn serial_rx_state_is_fixed_commit_last_and_non_authority_bearing() {
+        assert_eq!(core::mem::size_of::<DriverRuntimeSerialRxState>(), 48);
+        assert_eq!(core::mem::align_of::<DriverRuntimeSerialRxState>(), 8);
+        assert_eq!(DRIVER_RUNTIME_SERIAL_RX_STATE_OFFSET, 192);
+        assert_eq!(DRIVER_RUNTIME_SERIAL_RX_STATE_BYTES, 48);
+        assert_eq!(
+            core::mem::offset_of!(DriverRuntimeSerialRxState, committed_publication),
+            44
+        );
+        assert!(
+            DRIVER_RUNTIME_SERIAL_RX_STATE_OFFSET + DRIVER_RUNTIME_SERIAL_RX_STATE_BYTES
+                <= DRIVER_RUNTIME_RING_FRAME_OFFSET
+        );
+
+        let staged = DriverRuntimeSerialRxState {
+            magic: DRIVER_RUNTIME_SERIAL_RX_STATE_MAGIC,
+            version: DRIVER_RUNTIME_SERIAL_RX_STATE_VERSION,
+            len: DRIVER_RUNTIME_SERIAL_RX_STATE_BYTES,
+            publication: 7,
+            irq_wakes: 11,
+            irq_acks: 10,
+            irq_ack_failures: 1,
+            hardware_overrun_events: 2,
+            queue_full_events: 3,
+            received_bytes: 64,
+            queued_bytes: 4,
+            flags: 0,
+            last_cntvct_lo: 0x1234,
+            committed_publication: 0,
+        };
+        assert!(!staged.valid());
+
+        let mut committed = staged;
+        committed.committed_publication = committed.publication;
+        assert!(committed.valid());
+
+        let mut invalid = committed;
+        invalid.publication = 0;
+        invalid.committed_publication = 0;
+        assert!(!invalid.valid());
+        invalid = committed;
+        invalid.flags = 1 << 15;
+        assert!(!invalid.valid());
     }
 
     #[test]

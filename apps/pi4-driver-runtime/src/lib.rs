@@ -7450,6 +7450,7 @@ static SERIAL_RUNTIME_RX_QUEUE: RuntimeStateSlot<SerialRuntimeRxQueue> =
     RuntimeStateSlot::new(SerialRuntimeRxQueue::new());
 static SERIAL_RUNTIME_TX_CURSOR: RuntimeStateSlot<SerialRuntimeTxCursor> =
     RuntimeStateSlot::new(SerialRuntimeTxCursor::new());
+static SERIAL_RUNTIME_RX_STATE_PUBLICATION: AtomicU32 = AtomicU32::new(0);
 
 #[cfg(target_os = "none")]
 const MINI_UART_IO_OFFSET: usize = 0x40;
@@ -7632,6 +7633,14 @@ impl SerialRuntimeRxQueue {
         self.head = (self.head + 1) % MINI_UART_RX_QUEUE_CAPACITY;
         self.len -= 1;
         Some(byte)
+    }
+
+    const fn exceptional_state(&self) -> (u32, u32, u32) {
+        (
+            self.irq_ack_failures,
+            self.hardware_overrun_events,
+            self.queue_full_events,
+        )
     }
 }
 
@@ -9283,8 +9292,9 @@ fn serial_finish_pending_tx_from_irqs(
         };
         let badge = runtime_notification_wake_badge(RuntimeNotificationRoute::Serial, raw_badge);
         let turn = SERIAL_RUNTIME_RX_QUEUE.with_mut(|queue| {
+            let exceptional_before = queue.exceptional_state();
             SERIAL_RUNTIME_TX_CURSOR.with_mut(|cursor| {
-                serial_service_tx_irq_turn_with(
+                let turn = serial_service_tx_irq_turn_with(
                     queue,
                     cursor,
                     command,
@@ -9294,7 +9304,11 @@ fn serial_finish_pending_tx_from_irqs(
                     serial_write_frame_prefix_from_offset,
                     |enabled| serial_set_mini_uart_irqs(true, enabled),
                     || runtime_irq_handler_ack(DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT),
-                )
+                );
+                if queue.exceptional_state() != exceptional_before {
+                    publish_serial_runtime_rx_state(queue);
+                }
+                turn
             })
         });
         match turn {
@@ -46818,6 +46832,68 @@ fn publish_runtime_cadence(
     );
 }
 
+/// Publish passive serial RX/IRQ evidence without granting runtime authority.
+fn publish_serial_runtime_rx_state(queue: &SerialRuntimeRxQueue) {
+    let previous = match SERIAL_RUNTIME_RX_STATE_PUBLICATION.fetch_update(
+        Ordering::AcqRel,
+        Ordering::Acquire,
+        |current| Some(current.wrapping_add(1).max(1)),
+    ) {
+        Ok(previous) | Err(previous) => previous,
+    };
+    let publication = previous.wrapping_add(1).max(1);
+    let flags = if queue.irq_ack_pending {
+        pi4_driver_abi::DRIVER_RUNTIME_SERIAL_RX_STATE_FLAG_ACK_PENDING
+    } else {
+        0
+    };
+    let record = pi4_driver_abi::DriverRuntimeSerialRxState {
+        magic: pi4_driver_abi::DRIVER_RUNTIME_SERIAL_RX_STATE_MAGIC,
+        version: pi4_driver_abi::DRIVER_RUNTIME_SERIAL_RX_STATE_VERSION,
+        len: pi4_driver_abi::DRIVER_RUNTIME_SERIAL_RX_STATE_BYTES,
+        publication,
+        irq_wakes: queue.irq_wakes,
+        irq_acks: queue.irq_acks,
+        irq_ack_failures: queue.irq_ack_failures,
+        hardware_overrun_events: queue.hardware_overrun_events,
+        queue_full_events: queue.queue_full_events,
+        received_bytes: queue.received_bytes,
+        queued_bytes: match u16::try_from(queue.len) {
+            Ok(len) => len,
+            Err(_) => u16::MAX,
+        },
+        flags,
+        last_cntvct_lo: runtime_timer_counter_ticks() as u32,
+        committed_publication: 0,
+    };
+    let offset = usize::from(pi4_driver_abi::DRIVER_RUNTIME_SERIAL_RX_STATE_OFFSET);
+
+    // Sequence-last publication keeps this record outside scheduling and IRQ
+    // authority. Root rejects a staged or torn sample.
+    write_ring_u32(offset + 44, 0);
+    driver_task_shared_store_barrier();
+    write_ring_u32(offset, record.magic);
+    write_ring_u16(offset + 4, record.version);
+    write_ring_u16(offset + 6, record.len);
+    write_ring_u32(offset + 8, record.publication);
+    write_ring_u32(offset + 12, record.irq_wakes);
+    write_ring_u32(offset + 16, record.irq_acks);
+    write_ring_u32(offset + 20, record.irq_ack_failures);
+    write_ring_u32(offset + 24, record.hardware_overrun_events);
+    write_ring_u32(offset + 28, record.queue_full_events);
+    write_ring_u32(offset + 32, record.received_bytes);
+    write_ring_u16(offset + 36, record.queued_bytes);
+    write_ring_u16(offset + 38, record.flags);
+    write_ring_u32(offset + 40, record.last_cntvct_lo);
+    driver_task_shared_store_barrier();
+    write_ring_u32(offset + 44, record.publication);
+    driver_task_shared_store_barrier();
+    driver_task_shared_clean_range(
+        DRIVER_TASK_RING_VADDR + offset,
+        usize::from(pi4_driver_abi::DRIVER_RUNTIME_SERIAL_RX_STATE_BYTES),
+    );
+}
+
 #[cfg(any(target_os = "none", test))]
 fn read_ring_u32(offset: usize) -> u32 {
     let b0 = u32::from(read_ring_byte(offset));
@@ -57431,9 +57507,10 @@ fn serial_runtime_initialize(descriptor: &DriverRuntimeInitDescriptor) -> bool {
     let Some(irq) = descriptor_serial_irq(descriptor) else {
         return false;
     };
+    SERIAL_RUNTIME_RX_STATE_PUBLICATION.store(0, Ordering::Release);
     SERIAL_RUNTIME_TX_CURSOR.with_mut(SerialRuntimeTxCursor::reset);
     SERIAL_RUNTIME_RX_QUEUE.with_mut(|queue| {
-        serial_runtime_takeover_with(
+        let initialized = serial_runtime_takeover_with(
             queue,
             |queue| {
                 #[cfg(target_os = "none")]
@@ -57448,7 +57525,9 @@ fn serial_runtime_initialize(descriptor: &DriverRuntimeInitDescriptor) -> bool {
             },
             serial_set_mini_uart_rx_irq,
             || runtime_irq_handler_ack(irq.handler_slot),
-        )
+        );
+        publish_serial_runtime_rx_state(queue);
+        initialized
     })
 }
 
@@ -57495,7 +57574,8 @@ fn serial_drain_hardware_to_queue(
 
 fn serial_runtime_service_notification(badge: u32) -> bool {
     SERIAL_RUNTIME_RX_QUEUE.with_mut(|queue| {
-        serial_service_irq_with(
+        let exceptional_before = queue.exceptional_state();
+        let handled = serial_service_irq_with(
             queue,
             badge,
             |queue| {
@@ -57510,7 +57590,11 @@ fn serial_runtime_service_notification(badge: u32) -> bool {
                 }
             },
             || runtime_irq_handler_ack(DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT),
-        )
+        );
+        if queue.exceptional_state() != exceptional_before {
+            publish_serial_runtime_rx_state(queue);
+        }
+        handled
     })
 }
 
@@ -57604,7 +57688,7 @@ where
 fn serial_read_frame(budget: DriverTaskBudgetGrant) -> usize {
     let grant = serial_rx_budget_limit(budget);
     SERIAL_RUNTIME_RX_QUEUE.with_mut(|queue| {
-        serial_owner_rx_turn_with(
+        let read = serial_owner_rx_turn_with(
             queue,
             grant,
             |queue, remaining| {
@@ -57612,7 +57696,9 @@ fn serial_read_frame(budget: DriverTaskBudgetGrant) -> usize {
             },
             serial_drain_queue_to_frame,
             || runtime_irq_handler_ack(DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT),
-        )
+        );
+        publish_serial_runtime_rx_state(queue);
+        read
     })
 }
 
@@ -60303,6 +60389,43 @@ mod tests {
         assert_eq!(read_ring_u32(base + 44), 2);
     }
 
+    #[test]
+    fn serial_rx_state_publication_is_commit_last_and_preserves_owner_counters() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        SERIAL_RUNTIME_RX_STATE_PUBLICATION.store(0, Ordering::Release);
+        TEST_RUNTIME_TIMER_COUNTER_TICKS.store(0x1234, Ordering::Release);
+        let mut queue = SerialRuntimeRxQueue::new();
+        queue.irq_wakes = 7;
+        queue.irq_acks = 6;
+        queue.irq_ack_failures = 1;
+        queue.hardware_overrun_events = 2;
+        queue.queue_full_events = 3;
+        queue.received_bytes = 19;
+        queue.len = 5;
+        queue.irq_ack_pending = true;
+
+        publish_serial_runtime_rx_state(&queue);
+        let base = usize::from(pi4_driver_abi::DRIVER_RUNTIME_SERIAL_RX_STATE_OFFSET);
+        assert_eq!(
+            read_ring_u32(base),
+            pi4_driver_abi::DRIVER_RUNTIME_SERIAL_RX_STATE_MAGIC
+        );
+        assert_eq!(read_ring_u32(base + 8), 1);
+        assert_eq!(read_ring_u32(base + 12), 7);
+        assert_eq!(read_ring_u32(base + 20), 1);
+        assert_eq!(read_ring_u32(base + 24), 2);
+        assert_eq!(read_ring_u32(base + 28), 3);
+        assert_eq!(read_ring_u32(base + 32), 19);
+        assert_eq!(read_ring_u16(base + 36), 5);
+        assert_eq!(
+            read_ring_u16(base + 38),
+            pi4_driver_abi::DRIVER_RUNTIME_SERIAL_RX_STATE_FLAG_ACK_PENDING
+        );
+        assert_eq!(read_ring_u32(base + 40), 0x1234);
+        assert_eq!(read_ring_u32(base + 44), 1);
+    }
+
     fn read_cyw43_bus_episode_u16_for_test(field_offset: usize) -> u16 {
         read_runtime_payload_u16_for_test(
             usize::from(pi4_driver_abi::DRIVER_RUNTIME_CYW43_BUS_EPISODE_OFFSET) + field_offset,
@@ -61231,6 +61354,7 @@ mod tests {
             state.dpc_sequence_errors = 0;
             state.recovery_required = false;
         });
+        SERIAL_RUNTIME_RX_STATE_PUBLICATION.store(0, Ordering::Release);
         SERIAL_RUNTIME_RX_QUEUE.with_mut(SerialRuntimeRxQueue::reset);
         SERIAL_RUNTIME_TX_CURSOR.with_mut(SerialRuntimeTxCursor::reset);
     }

@@ -3252,6 +3252,46 @@ fn runtime_cadence_key(record: pi4_driver_abi::DriverRuntimeCadenceRecord) -> us
 }
 
 #[cfg(feature = "kernel")]
+fn serial_rx_exception_key(record: pi4_driver_abi::DriverRuntimeSerialRxState) -> usize {
+    let mut key = 0xcbf2_9ce4_8422_2325u64;
+    for value in [
+        u64::from(record.irq_ack_failures),
+        u64::from(record.hardware_overrun_events),
+        u64::from(record.queue_full_events),
+        u64::from(record.flags),
+    ] {
+        key ^= value;
+        key = key.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    (key as usize) | 1
+}
+
+#[cfg(feature = "kernel")]
+fn format_serial_rx_state(
+    record: pi4_driver_abi::DriverRuntimeSerialRxState,
+) -> Option<HeaplessString<DEFAULT_LINE_CAPACITY>> {
+    let mut line = HeaplessString::<DEFAULT_LINE_CAPACITY>::new();
+    write!(
+        line,
+        "PI4_SERIAL_RX schema=v1 pub={} irq={} ack={} ackfail={} overrun={} qfull={} recv={} queued={} pending={} cntvct_lo={:x}",
+        record.publication,
+        record.irq_wakes,
+        record.irq_acks,
+        record.irq_ack_failures,
+        record.hardware_overrun_events,
+        record.queue_full_events,
+        record.received_bytes,
+        record.queued_bytes,
+        usize::from(
+            record.flags & pi4_driver_abi::DRIVER_RUNTIME_SERIAL_RX_STATE_FLAG_ACK_PENDING != 0
+        ),
+        record.last_cntvct_lo,
+    )
+    .ok()?;
+    Some(line)
+}
+
+#[cfg(feature = "kernel")]
 const fn runtime_cadence_projects_to_physical_serial(
     contract: crate::hal::driver_task::DriverTaskContract,
 ) -> bool {
@@ -4470,6 +4510,8 @@ where
     #[cfg(feature = "kernel")]
     required_local_seat_cadence_keys: [usize; 4],
     #[cfg(feature = "kernel")]
+    serial_rx_exception_key: usize,
+    #[cfg(feature = "kernel")]
     cyw43_bootstrap_containment_diagnostic_due: bool,
     #[cfg(feature = "kernel")]
     cyw43_bootstrap_hdmi_pending: bool,
@@ -5137,6 +5179,8 @@ where
             required_local_seat_usb_frontier_key: 0,
             #[cfg(feature = "kernel")]
             required_local_seat_cadence_keys: [0; 4],
+            #[cfg(feature = "kernel")]
+            serial_rx_exception_key: 0,
             #[cfg(feature = "kernel")]
             cyw43_bootstrap_containment_diagnostic_due: false,
             #[cfg(feature = "kernel")]
@@ -8035,6 +8079,7 @@ where
         self.serial_console_turn_active = true;
         if self.cyw43_bootstrap_containment_diagnostic_due {
             let serial_rx_activity = self.serial.service_linked_runtime_only_turn();
+            self.trace_serial_rx_exception_state();
             let serial_input = self.consume_serial();
             let local_input = if serial_input {
                 false
@@ -8058,6 +8103,7 @@ where
         }
         let _ = self.queue_pending_console_output_for_linked_serial(false);
         let serial_rx_activity = self.serial.service_linked_runtime_only_turn();
+        self.trace_serial_rx_exception_state();
         let serial_input = self.consume_serial();
         let local_input = self.consume_local_seat_buffered_only(LocalSeatConsumePhase::PreRuntime);
         if local_input {
@@ -8125,6 +8171,8 @@ where
 
     #[cfg(feature = "kernel")]
     fn trace_required_local_seat_preflight_frontiers(&mut self) {
+        self.trace_serial_rx_exception_state();
+
         let pcie_prior = self.required_local_seat_pcie_frontier_key;
         let pcie_key = self.trace_required_local_seat_preflight_frontier(
             crate::hal::driver_task::PCIE_ROOT_DRIVER_TASK_CONTRACT,
@@ -8151,6 +8199,31 @@ where
             let prior_key = self.required_local_seat_cadence_keys[index];
             let key = self.trace_required_local_seat_runtime_cadence(contract, prior_key);
             self.required_local_seat_cadence_keys[index] = key;
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    fn trace_serial_rx_exception_state(&mut self) {
+        let Some(record) = crate::hal::driver_task::driver_task_serial_rx_state_snapshot() else {
+            return;
+        };
+        let key = serial_rx_exception_key(record);
+        if key == self.serial_rx_exception_key {
+            return;
+        }
+        self.serial_rx_exception_key = key;
+
+        if let Some(line) = format_serial_rx_state(record) {
+            crate::log_buffer::append_log_line(line.as_str());
+            let _ = self.queue_physical_console_output(
+                PendingConsoleOutputKind::HighImpactLine,
+                line.as_str(),
+            );
+        } else {
+            const LINE: &str = "PI4_SERIAL_RX schema=v1 state=diagnostic-overflow";
+            crate::log_buffer::append_log_line(LINE);
+            let _ =
+                self.queue_physical_console_output(PendingConsoleOutputKind::HighImpactLine, LINE);
         }
     }
 
@@ -41763,6 +41836,49 @@ mod tests {
         ] {
             assert!(runtime_cadence_projects_to_physical_serial(contract));
         }
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn pi_serial_rx_diagnostic_reports_only_exception_transitions() {
+        let mut baseline = pi4_driver_abi::DriverRuntimeSerialRxState {
+            magic: pi4_driver_abi::DRIVER_RUNTIME_SERIAL_RX_STATE_MAGIC,
+            version: pi4_driver_abi::DRIVER_RUNTIME_SERIAL_RX_STATE_VERSION,
+            len: pi4_driver_abi::DRIVER_RUNTIME_SERIAL_RX_STATE_BYTES,
+            publication: 2,
+            irq_wakes: 7,
+            irq_acks: 7,
+            irq_ack_failures: 0,
+            hardware_overrun_events: 0,
+            queue_full_events: 0,
+            received_bytes: 16,
+            queued_bytes: 3,
+            flags: 0,
+            last_cntvct_lo: 0x44,
+            committed_publication: 0,
+        };
+        baseline.committed_publication = baseline.publication;
+        let baseline_key = serial_rx_exception_key(baseline);
+
+        let mut ordinary_progress = baseline;
+        ordinary_progress.publication = 3;
+        ordinary_progress.committed_publication = 3;
+        ordinary_progress.irq_wakes = 8;
+        ordinary_progress.irq_acks = 8;
+        ordinary_progress.received_bytes = 32;
+        ordinary_progress.queued_bytes = 0;
+        ordinary_progress.last_cntvct_lo = 0x55;
+        assert_eq!(serial_rx_exception_key(ordinary_progress), baseline_key);
+
+        let mut overrun = ordinary_progress;
+        overrun.hardware_overrun_events = 1;
+        assert_ne!(serial_rx_exception_key(overrun), baseline_key);
+        let line = format_serial_rx_state(overrun)
+            .expect("bounded serial RX evidence must fit one serial line");
+        assert!(line.starts_with("PI4_SERIAL_RX schema=v1"));
+        assert!(line.contains("overrun=1"));
+        assert!(line.contains("recv=32"));
+        assert!(line.len() <= DEFAULT_LINE_CAPACITY);
     }
 
     #[cfg(feature = "kernel")]
