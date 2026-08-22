@@ -280,6 +280,17 @@ without starving serial/local-seat input, fatal output, timers, containment, or
 ordinary service. Large responses are divided into bounded units with an
 ordinary service turn between bursts.
 
+On the physical Pi MCS path, one root-control turn may compose one complete
+local-operator rotation before its explicit cooperative yield when Network is
+not yet admissible or has been quarantined. Each Serial, LocalSeat, Dispatch,
+and Display visit retains its existing one-operation bound; the quarantined
+Network cursor is a hardware-free transition. The preflight and quarantined
+rotors have hard limits of four and five polls respectively and stop early for
+reboot, containment, or a completed cycle. This composition changes no SC
+budget or period: the generated per-driver period gate still admits at most one
+wake for each child runtime inside its period. Active Network service, QEMU,
+and non-MCS profiles retain their established single-poll outer turn.
+
 Notifications are wakeups rather than queues. Durable shared records carry
 identity and completion; producers publish a complete record before signalling,
 and consumers validate the committed identity before acting. A missing,

@@ -3092,6 +3092,34 @@ enum LinkedRuntimeServicePhase {
     Display,
 }
 
+/// Maximum number of independently bounded Pi linked-runtime polls admitted
+/// before root-control performs its explicit cooperative yield.
+///
+/// Serial, USB/local-seat, command dispatch, and HDMI each use a distinct
+/// bounded phase. A quarantined Network cursor is a fifth, hardware-free
+/// transition that releases the rotor to Display. The physical runtimes use
+/// independent scheduling contexts, so serializing this rotor across whole
+/// root-control periods multiplied every retained driver interval by its
+/// width. The existing per-driver generated-period gate remains authoritative
+/// for child wake admission, so composing one complete local rotation cannot
+/// issue a second wake to the same runtime inside its period.
+#[cfg(feature = "kernel")]
+const PI4_LOCAL_OPERATOR_POLLS_PER_EXPLICIT_YIELD: usize = 5;
+
+/// Required local-seat preflight cannot enter Network and therefore has only
+/// the four useful local-operator phases in its bounded rotor.
+#[cfg(feature = "kernel")]
+const PI4_LOCAL_SEAT_PREFLIGHT_POLLS_PER_EXPLICIT_YIELD: usize = 4;
+
+#[cfg(feature = "kernel")]
+const fn pi4_local_operator_quantum_enabled(
+    physical_driver_owner: bool,
+    linked_serial_owner: bool,
+    network_quarantined: bool,
+) -> bool {
+    physical_driver_owner && linked_serial_owner && network_quarantined
+}
+
 /// Select the only physical-driver phase eligible while required Pi local-seat
 /// ownership is still being published.
 ///
@@ -5788,6 +5816,53 @@ where
         self.poll_generic();
     }
 
+    /// Service one complete Pi local-operator rotation before the caller's
+    /// explicit root-control yield when no network owner is runnable.
+    ///
+    /// Each `poll` retains its existing one-phase and one-device-operation
+    /// bound. This wrapper only stops distinct driver scheduling contexts from
+    /// being serialized across whole root-control periods after Wi-Fi has been
+    /// quarantined. Active network ownership, QEMU, non-MCS profiles,
+    /// containment, and reboot retain the established single-poll boundary.
+    #[inline(never)]
+    pub fn poll_root_control_quantum(&mut self) {
+        #[cfg(feature = "kernel")]
+        self.poll_root_control_quantum_for_state(
+            crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active(),
+            crate::serial::serial_linked_runtime_transport_active(),
+            self.network_service_quarantined,
+        );
+        #[cfg(not(feature = "kernel"))]
+        self.poll();
+    }
+
+    #[cfg(feature = "kernel")]
+    fn poll_root_control_quantum_for_state(
+        &mut self,
+        physical_driver_owner: bool,
+        linked_serial_owner: bool,
+        network_quarantined: bool,
+    ) {
+        if pi4_local_operator_quantum_enabled(
+            physical_driver_owner,
+            linked_serial_owner,
+            network_quarantined,
+        ) {
+            let starting_phase = self.linked_runtime_service_phase;
+            for _ in 0..PI4_LOCAL_OPERATOR_POLLS_PER_EXPLICIT_YIELD {
+                self.poll();
+                if self.reboot_pending || self.deferred_containment_work_pending() {
+                    break;
+                }
+                if self.linked_runtime_service_phase == starting_phase {
+                    break;
+                }
+            }
+            return;
+        }
+        self.poll();
+    }
+
     /// Return whether this is the exact isolated QEMU VirtIO service path.
     ///
     /// Physical owner state and linked serial retain the generic Pi ordering,
@@ -8004,14 +8079,16 @@ where
         self.cyw43_bootstrap_operator_turn_active = false;
     }
 
-    /// Advance one explicit required-local-seat preflight phase on physical Pi.
+    /// Advance one complete required-local-seat service quantum on physical Pi.
     ///
     /// The preceding supervisor/driver turn has released its HAL borrow. The
     /// existing linked-runtime phase bodies still perform every operation and
     /// retain their one-operation bound; this wrapper only prevents their
     /// generic Network fallback from consuming a turn before CYW43 is eligible.
     /// Serial, local-seat, dispatch, display, and containment therefore remain
-    /// independently attributable, with a fresh outer yield between them.
+    /// independently attributable. The existing per-driver generated-period
+    /// gate permits at most one child wake in this composed root quantum; the
+    /// caller yields only after the complete bounded local-operator rotation.
     #[cfg(feature = "kernel")]
     fn poll_required_local_seat_preflight_turn(&mut self) {
         if !self.cyw43_local_seat_preflight_scheduler_traced {
@@ -8022,12 +8099,28 @@ where
             self.cyw43_local_seat_preflight_scheduler_traced = true;
         }
 
-        let entry = required_local_seat_preflight_entry_phase(self.linked_runtime_service_phase);
-        self.linked_runtime_service_phase = entry;
-        self.poll();
-        self.linked_runtime_service_phase =
-            required_local_seat_preflight_followup_phase(entry, self.linked_runtime_service_phase);
-        self.trace_required_local_seat_preflight_frontiers();
+        let starting_phase =
+            required_local_seat_preflight_entry_phase(self.linked_runtime_service_phase);
+        for _ in 0..PI4_LOCAL_SEAT_PREFLIGHT_POLLS_PER_EXPLICIT_YIELD {
+            if self.cyw43_required_local_seat_preflight_ready() {
+                break;
+            }
+            let entry =
+                required_local_seat_preflight_entry_phase(self.linked_runtime_service_phase);
+            self.linked_runtime_service_phase = entry;
+            self.poll();
+            self.linked_runtime_service_phase = required_local_seat_preflight_followup_phase(
+                entry,
+                self.linked_runtime_service_phase,
+            );
+            self.trace_required_local_seat_preflight_frontiers();
+            if self.reboot_pending || self.deferred_containment_work_pending() {
+                break;
+            }
+            if self.linked_runtime_service_phase == starting_phase {
+                break;
+            }
+        }
     }
 
     #[cfg(feature = "kernel")]
@@ -41453,6 +41546,35 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
+    fn pi_local_operator_quantum_requires_the_exact_physical_quarantine_cut() {
+        assert!(pi4_local_operator_quantum_enabled(true, true, true));
+        for state in [
+            (false, true, true),
+            (true, false, true),
+            (true, true, false),
+            (false, false, true),
+            (false, true, false),
+            (true, false, false),
+            (false, false, false),
+        ] {
+            assert!(
+                !pi4_local_operator_quantum_enabled(state.0, state.1, state.2),
+                "QEMU, pre-cutover serial, and active Network must retain one poll per explicit yield: {state:?}"
+            );
+        }
+        assert_eq!(
+            PI4_LOCAL_OPERATOR_POLLS_PER_EXPLICIT_YIELD,
+            5,
+            "four useful local phases plus the quarantined Network transition form the hard rotor cap"
+        );
+        assert_eq!(
+            PI4_LOCAL_SEAT_PREFLIGHT_POLLS_PER_EXPLICIT_YIELD, 4,
+            "preflight excludes Network and retains only the useful local phases"
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
     fn pi_required_local_seat_preflight_never_enters_network_before_controller() {
         assert_eq!(
             required_local_seat_preflight_entry_phase(LinkedRuntimeServicePhase::Network),
@@ -46623,6 +46745,80 @@ mod tests {
             wake_after, wake_before,
             "quarantine must not consume the poisoned-generation hint"
         );
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn quarantined_pi_quantum_composes_one_complete_local_operator_rotation() {
+        struct LinkedRuntimeTestReset;
+
+        impl Drop for LinkedRuntimeTestReset {
+            fn drop(&mut self) {
+                crate::serial::test_end_linked_runtime_only_transport();
+            }
+        }
+
+        let _progress_guard = wifi_driver_task_progress_test_guard();
+        crate::serial::test_begin_linked_runtime_only_transport();
+        let _reset = LinkedRuntimeTestReset;
+        let mut serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(
+            LoopbackSerial::<32768>::new(),
+        );
+        assert_eq!(serial.enqueue_tx_best_effort(&[b'x'; 300]), 300);
+        let timer = TestTimer::repeated(8, 1);
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut wifi = FakeNet::new();
+        wifi.driver_contract = crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT;
+        let mut local_seat = LocalSeatRuntime::new(crate::local_seat::LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 192,
+            buffer_lines: 64,
+        });
+        local_seat.mark_root_console_ready();
+        local_seat.inject_linked_hdmi_pending_bytes_for_test(8);
+
+        {
+            let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit)
+                .with_network(&mut wifi)
+                .with_local_seat(&mut local_seat);
+            pump.network_service_quarantined = true;
+            pump.linked_runtime_service_phase = LinkedRuntimeServicePhase::Network;
+
+            pump.poll_root_control_quantum_for_state(true, true, true);
+
+            assert_eq!(
+                pump.linked_runtime_service_phase,
+                LinkedRuntimeServicePhase::Display,
+                "persistent display debt may reroute Dispatch only after every local phase received one bounded turn"
+            );
+            assert_eq!(pump.metrics.net_cyw43_service_turns, 0);
+            assert_eq!(
+                crate::serial::test_take_linked_runtime_only_tx().len(),
+                128,
+                "the composed rotation must perform one bounded linked-serial operation"
+            );
+
+            pump.poll_root_control_quantum_for_state(true, true, true);
+
+            assert_eq!(
+                pump.linked_runtime_service_phase,
+                LinkedRuntimeServicePhase::Display,
+                "the complete successor rotation must stop before repeating persistent Display work"
+            );
+            assert_eq!(pump.metrics.net_cyw43_service_turns, 0);
+            assert!(
+                pump.local_seat
+                    .as_ref()
+                    .expect("local seat remains attached")
+                    .linked_hdmi_pending_work(),
+                "persistent HDMI debt must not turn the bounded root quantum into a redraw loop"
+            );
+        }
+
+        assert_eq!(wifi.polls, 0, "quarantine must never poll CYW43");
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]

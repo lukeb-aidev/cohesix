@@ -420,8 +420,8 @@ fn root_control_containment_serializes_before_the_ordinary_pump_turn() {
         .find("if !recovery_turn {")
         .expect("ordinary pump must be guarded by both containment results");
     let pump = root_loop
-        .find("pump.poll();")
-        .expect("ordinary pump call must remain present");
+        .find("pump.poll_root_control_quantum();")
+        .expect("bounded root-control quantum must remain present");
     let outer_yield = root_loop
         .find("sel4::yield_now();")
         .expect("root-control loop must retain its sole outer yield");
@@ -452,7 +452,17 @@ fn root_control_containment_serializes_before_the_ordinary_pump_turn() {
         1,
         "the serial path crosses the activation seam exactly once before containment",
     );
-    assert_eq!(root_loop.matches("pump.poll();").count(), 1);
+    assert_eq!(
+        root_loop
+            .matches("pump.poll_root_control_quantum();")
+            .count(),
+        1,
+    );
+    assert_eq!(
+        root_loop.matches("pump.poll();").count(),
+        0,
+        "the root loop must not bypass the platform-gated quantum wrapper",
+    );
     assert_eq!(root_loop.matches("sel4::yield_now();").count(), 1);
     assert_eq!(
         root_loop
@@ -478,7 +488,9 @@ fn root_control_containment_serializes_before_the_ordinary_pump_turn() {
         "all optional HAL probes must preserve false-on-no-probe semantics",
     );
     assert!(
-        root_loop.contains("if !recovery_turn {\n            pump.poll();\n        }"),
+        root_loop.contains(
+            "if !recovery_turn {\n            pump.poll_root_control_quantum();\n        }"
+        ),
         "either containment result must exclude the ordinary pump from that turn",
     );
 }

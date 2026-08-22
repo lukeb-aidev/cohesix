@@ -933,6 +933,19 @@ in-episode `run`. A missing previous-entry validity bit renders `gap=na`.
 Neither field is scheduling authority, and the old `dt` duration must not be
 interpreted as an inter-entry gap.
 
+Physical Pi root-control service must not multiply a driver's generated period
+by serializing every independent local-operator phase across separate explicit
+yields. While required local-seat preflight excludes Network, root may compose
+one bounded Serial/LocalSeat/Dispatch/Display rotation. After terminal network
+quarantine, it may compose the same useful rotation plus the hardware-free
+quarantined Network transition. Every phase retains its existing one-operation
+bound, the hard poll limits are four and five respectively, and reboot or
+containment ends the composition immediately. The existing generated-period
+admission gate remains authoritative and must reject a second wake for the same
+driver inside its period. Active Network ownership, QEMU, device protocol
+state, retry/deadline logic, and SC parameters are outside this Pi-only cadence
+correction.
+
 ### 8.2 Passive versus active commands
 
 A passive status or diagnostic command reads a bounded snapshot and performs

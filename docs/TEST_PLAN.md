@@ -4068,6 +4068,23 @@ in-episode `run`, render `gap=na` before a previous entry exists, and never
 restore the ambiguous schema-v1 `dt` interpretation. Cadence remains passive
 source evidence; only fresh target behavior can qualify scheduling.
 
+Physical Pi cadence convergence must separately prove the root-control
+composition policy. Deterministic state-machine tests must require the exact
+physical-owner, linked-serial, network-quarantined cut, preserve a single poll
+for QEMU and active Network, cap preflight at four polls, cap quarantined local
+service at five polls, and prove persistent display debt cannot create an
+unbounded redraw loop or poll quarantined CYW43. The next fresh exact-image Pi
+boot must pair serial and captures and compare same-driver cadence against the
+generated 10 ms periods: USB must retain Gate 10, one-deep HID/parser proof,
+zero drops, zero current no-reply streak, and materially lower controller,
+enumeration, command, and total startup latency; serial command response and
+HDMI echo/completion must materially improve without a driver fault or root
+timeout. The same boot must report whether SDIO request 2 advances beyond
+phase 157 `sdio-hw-entry` to first MMIO or a typed terminal. Offline tests,
+QEMU, a changed counter gap, or USB readiness alone cannot qualify the Pi
+repair, and no SDIO/CYW43 device-semantic change is authorized until that
+fresh cadence boot is harvested.
+
 Current Wi-Fi acceptance also requires one exact
 `CYW43_SDIO_DPC generation=<n> captures=<n> published=<n> consumed=<n>
 rearms=<n> overruns=<n> epoch_errors=<n> sequence_errors=<n>

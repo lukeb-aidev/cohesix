@@ -514,7 +514,7 @@ where
             .unwrap_or(false);
         }
         if !recovery_turn {
-            pump.poll();
+            pump.poll_root_control_quantum();
         }
         #[cfg(not(any(
             feature = "net-console",
@@ -536,7 +536,7 @@ where
     V: CapabilityValidator,
 {
     loop {
-        pump.poll();
+        pump.poll_root_control_quantum();
         sel4::yield_now();
     }
 }
@@ -2121,7 +2121,7 @@ where
             // HDMI, diagnostics, authentication, and reboot live, while the
             // terminal state prevents another child operation. An attached
             // poisoned stack was quarantined before this mode was entered.
-            pump.poll();
+            pump.poll_root_control_quantum();
             sel4::yield_now();
             continue;
         }
