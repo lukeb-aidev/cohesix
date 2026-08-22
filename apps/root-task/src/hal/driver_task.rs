@@ -12717,6 +12717,23 @@ const fn driver_task_runtime_entry_consumed_root_wake(
     elapsed != 0 && elapsed < (1u64 << 63)
 }
 
+/// Whether cadence entry proves enough to use only the root-period boundary.
+///
+/// USB and HDMI bounded phases complete back through their endpoint before a
+/// later retained wake is useful. Serial is different: after accepting a TX
+/// prefix it may service IRQ notification continuity before returning to
+/// endpoint receive. Its cadence entry therefore proves wake consumption but
+/// not receive readiness, so it must retain the child-relative guard. Network
+/// roles do not publish this optional cadence record and retain their existing
+/// zero-entry behavior.
+#[cfg(any(feature = "kernel", test))]
+const fn driver_task_runtime_entry_is_endpoint_returning(contract: DriverTaskContract) -> bool {
+    matches!(
+        contract.kind,
+        DriverTaskKind::LocalSeatUsb | DriverTaskKind::HdmiText
+    )
+}
+
 #[cfg(any(feature = "kernel", test))]
 const fn driver_task_retained_foreground_boundaries_due_at(
     previous_root_release_ticks: u64,
@@ -12724,7 +12741,7 @@ const fn driver_task_retained_foreground_boundaries_due_at(
     current_ticks: u64,
     period_us: u32,
     counter_frequency: u64,
-    natural_postpone: bool,
+    root_period_only_after_entry: bool,
 ) -> bool {
     let root_period_due = driver_task_retained_foreground_wake_due_at(
         previous_root_release_ticks,
@@ -12735,18 +12752,20 @@ const fn driver_task_retained_foreground_boundaries_due_at(
     if !root_period_due {
         return false;
     }
-    if natural_postpone {
-        // Natural-postpone runtimes need proof that the previous root wake was
-        // consumed, but the kernel—not root—owns their slightly later refill
-        // instant. Waiting a second complete period from that entry quantizes
-        // a 10 ms service to 20 ms when root samples just before replenishment.
+    if root_period_only_after_entry {
+        // Endpoint-returning natural-postpone runtimes need proof that the
+        // previous root wake was consumed, but the kernel—not root—owns their
+        // slightly later refill instant. Waiting a second complete period from
+        // that entry quantizes a 10 ms service to 20 ms when root samples just
+        // before replenishment.
         driver_task_runtime_entry_consumed_root_wake(
             previous_root_release_ticks,
             latest_runtime_entry_ticks,
         )
     } else {
-        // Terminal/fail-stop runtimes retain the conservative second boundary:
-        // waking them before the child-relative refill can produce a timeout.
+        // Terminal/fail-stop runtimes and IRQ-continuing serial retain the
+        // conservative second boundary. Terminal work can fault if it executes
+        // early; serial cadence entry alone does not prove endpoint readiness.
         driver_task_retained_foreground_wake_due_at(
             latest_runtime_entry_ticks,
             current_ticks,
@@ -12765,11 +12784,12 @@ const fn driver_task_retained_foreground_boundaries_due_at(
 /// many times inside one 10 ms replenishment period; issuing on every revisit
 /// collapses several individually bounded phases into one SC budget and causes
 /// a timeout fault. Terminal runtimes therefore keep both full-period
-/// boundaries. A natural-postpone runtime instead admits the next root-period
-/// wake once its stable entry proves the preceding wake was consumed; seL4
-/// safely postpones execution to the child-relative refill if root samples a
-/// few ticks early. This changes no device state, retry policy, budget, period,
-/// or timeout semantics.
+/// boundaries. An endpoint-returning natural-postpone runtime instead admits
+/// the next root-period wake once its stable entry proves the preceding wake
+/// was consumed; seL4 safely postpones execution to the child-relative refill
+/// if root samples a few ticks early. IRQ-continuing serial retains the second
+/// boundary because entry is not receive-readiness proof. This changes no
+/// device state, retry policy, budget, period, or timeout semantics.
 #[cfg(feature = "kernel")]
 fn admit_driver_task_retained_foreground_wake(
     slot: &DriverTaskCommandSlot,
@@ -12799,7 +12819,8 @@ fn admit_driver_task_retained_foreground_wake(
         current_ticks,
         temporal.period_us,
         counter_frequency,
-        temporal.timeout_policy == crate::generated::TimeoutPolicy::NaturalPostpone,
+        temporal.timeout_policy == crate::generated::TimeoutPolicy::NaturalPostpone
+            && driver_task_runtime_entry_is_endpoint_returning(contract),
     ) {
         return false;
     }
@@ -26736,6 +26757,30 @@ mod tests {
             PI_COUNTER_HZ,
             true,
         ));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn root_period_only_cadence_entry_requires_endpoint_returning_runtime() {
+        assert!(driver_task_runtime_entry_is_endpoint_returning(
+            USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT
+        ));
+        assert!(driver_task_runtime_entry_is_endpoint_returning(
+            HDMI_TEXT_DRIVER_TASK_CONTRACT
+        ));
+        for contract in [
+            SERIAL_DRIVER_TASK_CONTRACT,
+            PCIE_ROOT_DRIVER_TASK_CONTRACT,
+            GENET_DRIVER_TASK_CONTRACT,
+            SDIO_HOST_DRIVER_TASK_CONTRACT,
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+        ] {
+            assert!(
+                !driver_task_runtime_entry_is_endpoint_returning(contract),
+                "{} must retain its established admission boundary",
+                contract.name
+            );
+        }
     }
 
     #[cfg(feature = "kernel")]
