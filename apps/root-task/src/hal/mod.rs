@@ -3641,6 +3641,17 @@ enum DriverTaskTcbBootState {
     Dormant,
 }
 
+/// Whether the selected generated policy installs a driver TCB timeout endpoint.
+///
+/// Natural postponement retains the separately reserved timeout capability,
+/// badge, registry identity, and supervisor authority, but leaves the TCB
+/// handler slot empty so seL4 postpones current-refill exhaustion. Every other
+/// policy retains the existing timeout-fault delivery path.
+#[cfg(any(all(feature = "kernel", sel4_config_kernel_mcs), test))]
+const fn driver_task_requires_timeout_endpoint(policy: crate::generated::TimeoutPolicy) -> bool {
+    !matches!(policy, crate::generated::TimeoutPolicy::NaturalPostpone)
+}
+
 #[cfg(feature = "kernel")]
 fn configure_driver_tcb_priority_for_boot(
     contract: DriverTaskContract,
@@ -3669,14 +3680,19 @@ fn configure_driver_tcb_priority_for_boot(
             mcs.standard_fault_endpoint,
         )
         .map_err(HalError::Sel4)?;
-        sel4::set_tcb_timeout_endpoint(tcb, mcs.timeout_fault_endpoint).map_err(HalError::Sel4)?;
+        let install_timeout_endpoint =
+            driver_task_requires_timeout_endpoint(temporal.timeout_policy);
+        if install_timeout_endpoint {
+            sel4::set_tcb_timeout_endpoint(tcb, mcs.timeout_fault_endpoint)
+                .map_err(HalError::Sel4)?;
+        }
         let mut line = heapless::String::<240>::new();
         match boot_state {
             DriverTaskTcbBootState::Active => {
                 let _ = fmt::write(
                     &mut line,
                     format_args!(
-                        "DRIVER_TASK_MCS_ACTIVE contract={} tcb=0x{:04x} sc=0x{:04x} core={} budget_us={} period_us={} priority={} mcp={}",
+                        "DRIVER_TASK_MCS_ACTIVE contract={} tcb=0x{:04x} sc=0x{:04x} core={} budget_us={} period_us={} priority={} mcp={} timeout_policy={:?} timeout_endpoint={}",
                         contract.name,
                         tcb,
                         mcs.sched_context,
@@ -3685,6 +3701,12 @@ fn configure_driver_tcb_priority_for_boot(
                         temporal.period_us,
                         temporal.priority,
                         temporal.mcp,
+                        temporal.timeout_policy,
+                        if install_timeout_endpoint {
+                            "installed"
+                        } else {
+                            "omitted"
+                        },
                     ),
                 );
             }
@@ -3692,7 +3714,7 @@ fn configure_driver_tcb_priority_for_boot(
                 let _ = fmt::write(
                     &mut line,
                     format_args!(
-                        "DRIVER_TASK_MCS_DORMANT contract={} tcb=0x{:04x} sc=0x{:04x} core={} budget_us={} period_us={} priority={} mcp={} state=suspended",
+                        "DRIVER_TASK_MCS_DORMANT contract={} tcb=0x{:04x} sc=0x{:04x} core={} budget_us={} period_us={} priority={} mcp={} timeout_policy={:?} timeout_endpoint={} state=suspended",
                         contract.name,
                         tcb,
                         mcs.sched_context,
@@ -3701,6 +3723,12 @@ fn configure_driver_tcb_priority_for_boot(
                         temporal.period_us,
                         temporal.priority,
                         temporal.mcp,
+                        temporal.timeout_policy,
+                        if install_timeout_endpoint {
+                            "installed"
+                        } else {
+                            "omitted"
+                        },
                     ),
                 );
             }
@@ -6477,6 +6505,23 @@ mod tests {
         assert_eq!(super::HDMI_EARLY_BANNER_PAYLOAD, b"Starting HDMI\n");
         assert!(!super::HDMI_EARLY_BANNER_PAYLOAD.contains(&0x0c));
         assert!(!super::HDMI_EARLY_BANNER_PAYLOAD.contains(&0x1b));
+    }
+
+    #[test]
+    fn driver_timeout_endpoint_installation_follows_generated_policy() {
+        use crate::generated::TimeoutPolicy;
+
+        assert!(!super::driver_task_requires_timeout_endpoint(
+            TimeoutPolicy::NaturalPostpone
+        ));
+        for policy in [
+            TimeoutPolicy::Terminal,
+            TimeoutPolicy::ReplenishOnce,
+            TimeoutPolicy::ReturnError,
+            TimeoutPolicy::FailStop,
+        ] {
+            assert!(super::driver_task_requires_timeout_endpoint(policy));
+        }
     }
 
     #[cfg(feature = "kernel")]

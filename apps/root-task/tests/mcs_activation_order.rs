@@ -332,6 +332,48 @@ fn root_control_natural_postpone_keeps_exact_target_budgets_and_fault_routes() {
 }
 
 #[test]
+fn driver_tcb_constructor_honors_natural_postpone_policy() {
+    let source = include_str!("../src/hal/mod.rs");
+    let configure_start = source
+        .find("fn configure_driver_tcb_priority_for_boot(")
+        .expect("driver TCB MCS configuration helper");
+    let configure_end = source[configure_start..]
+        .find("\n#[cfg(feature = \"kernel\")]\nfn restore_driver_tcb_steady_priority(")
+        .map(|offset| configure_start + offset)
+        .expect("bounded driver TCB configuration section");
+    let configure = &source[configure_start..configure_end];
+
+    let standard = configure
+        .find("sel4::set_tcb_sched_params_mcs(")
+        .expect("standard fault endpoint installation");
+    let selected_policy = configure
+        .find("driver_task_requires_timeout_endpoint(temporal.timeout_policy)")
+        .expect("generated driver timeout policy selection");
+    let timeout_guard = configure[selected_policy..]
+        .find("if install_timeout_endpoint {")
+        .map(|offset| selected_policy + offset)
+        .expect("policy-controlled driver timeout endpoint guard");
+    let timeout = configure
+        .find("sel4::set_tcb_timeout_endpoint(tcb, mcs.timeout_fault_endpoint)")
+        .expect("driver timeout endpoint installation path");
+
+    assert!(
+        standard < selected_policy && selected_policy < timeout_guard && timeout_guard < timeout
+    );
+    assert!(configure[standard..selected_policy].contains("mcs.standard_fault_endpoint"));
+    assert!(configure.contains("timeout_policy={:?} timeout_endpoint={}"));
+
+    let predicate_start = source
+        .find("const fn driver_task_requires_timeout_endpoint(")
+        .expect("driver timeout endpoint predicate");
+    let predicate_end = source[predicate_start..]
+        .find("\n}\n")
+        .map(|offset| predicate_start + offset + 2)
+        .expect("bounded driver timeout endpoint predicate");
+    assert!(source[predicate_start..predicate_end].contains("TimeoutPolicy::NaturalPostpone"));
+}
+
+#[test]
 fn root_control_containment_serializes_before_the_ordinary_pump_turn() {
     let userland = include_str!("../src/userland/mod.rs");
     let loop_start = userland

@@ -4015,7 +4015,8 @@ The Pi 4 manifest defaults place both `bcmgenet-v5` and `cyw43455` on core `3`;
 hardware captures must show `DRIVER_TASK_BOOT ... contract=<selected-network>
 ... affinity_core=3` for the selected network contract before claiming
 fourth-core driver placement. Under MCS, every selected driver must instead
-emit `DRIVER_TASK_MCS_ACTIVE ... core=<manifest-core>` followed by
+emit `DRIVER_TASK_MCS_ACTIVE ... core=<manifest-core>
+timeout_policy=<generated-policy> timeout_endpoint=<installed|omitted>` followed by
 `DRIVER_TASK_AFFINITY_MCS ... source=sched-control-sc-bind
 direct-set-affinity=no status=configured`; any `TCB.SetAffinity` or affinity
 failure marker invalidates placement proof because the per-core SchedControl/SC
@@ -4038,6 +4039,14 @@ pointer-free ring transport after virtio networking is online, but that is
 transport-substrate evidence only. Fresh Pi hardware proof is still required
 before claiming Wi-Fi/DHCP, GENET/DHCP, USB keyboard, HDMI, or strongest
 isolated-driver hardware acceptance.
+
+For the selected Pi profile, serial, USB, HDMI, CYW43, and SDIO must report
+`timeout_policy=NaturalPostpone timeout_endpoint=omitted`; PCIe and dormant
+GENET must report `timeout_policy=Terminal timeout_endpoint=installed`. The
+standard fault endpoint, reserved timeout cap/badge/resource, registry entry,
+and supervisor authority remain present for every row. Any timeout containment
+from a selected natural-postpone runtime is a constructor-policy failure unless
+a later explicit device deadline independently classifies the operation.
 
 For the physical Wi-Fi profile with required local-seat, CYW43 bootstrap
 admission must not overtake an active PCIe/USB controller-owner publication.

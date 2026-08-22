@@ -255,6 +255,10 @@ into a terminal driver fault. Standard faults and explicit device deadlines
 remain terminal, and PCIe plus dormant GENET retain their selected terminal
 timeout policies. This Pi-only selection changes neither QEMU scheduling nor
 driver protocol/ownership semantics.
+The driver TCB constructor applies that selection at the actual timeout-handler
+installation boundary and reports `timeout_policy` plus `timeout_endpoint` in
+its existing bounded MCS construction record. A reserved timeout identity is
+not evidence that the handler was installed.
 
 QEMU and Pi use independently generated counter frequencies and response-time
 analysis. QEMU/TCG and artificial counter modes are diagnostic comparators, not

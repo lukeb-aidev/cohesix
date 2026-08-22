@@ -188,6 +188,10 @@ timeout fault. Generated timeout capability identity and resource accounting
 remain present. The selection requires target evidence for bounded progress and
 cannot replace a device deadline, no-progress detector, or fault-containment
 test.
+The driver TCB constructor must consume this generated policy at the actual
+`TCB.SetTimeoutEndpoint` boundary. Its bounded construction record reports both
+the policy and whether the timeout endpoint was installed or omitted; manifest
+selection without matching kernel-object construction is a failed invariant.
 
 ### 3.4 Acceptance plan
 
