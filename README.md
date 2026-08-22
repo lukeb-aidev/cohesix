@@ -278,14 +278,14 @@ the selected resolved manifest.
 | [Toolchain setup](docs/TOOLCHAIN_MAC_ARM64.md) | Reproduce the pinned macOS build environment and external seL4 contract |
 | [Drivers](docs/DRIVERS.md) | Design, implement, test, and qualify a physical driver |
 | [Contributing](CONTRIBUTING.md) | Propose, implement, validate, and submit a scoped change |
-- Contributions must follow [`AGENTS.md`](AGENTS.md),
-  [Contributing](CONTRIBUTING.md), and align to the active task in the
-  [build plan](docs/BUILD_PLAN.md).
 | [API guidelines](docs/API_GUIDELINES.md) | Implement against the REST projection and compatibility rules |
 | [Interfaces](docs/INTERFACES.md) | Look up namespaces, payloads, console behavior, and compatibility |
 | [Secure9P](docs/SECURE9P.md) | Look up 9P layering, bounds, session invariants, and policy hooks |
 | [Build plan](docs/BUILD_PLAN.md) | Read the normative record of planned and implemented project scope |
-
+- Contributions must follow [`AGENTS.md`](AGENTS.md),
+  [Contributing](CONTRIBUTING.md), and align to the active task in the
+  [build plan](docs/BUILD_PLAN.md).
+  
 ## Help
 
 - New to Cohesix? Read [current status](docs/STATUS.md), use the
