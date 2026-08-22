@@ -19,18 +19,9 @@ use core::{
     ptr::{self, NonNull},
 };
 
-/// First display mutation admitted during early Pi HDMI bootstrap.
-///
-/// A form-feed would clear the complete framebuffer and cannot fit the
-/// bootstrap driver's bounded MCS turn. The steady local-seat path owns later
-/// redraw and clearing work.
-const HDMI_EARLY_BANNER_PAYLOAD: &[u8] = b"Starting HDMI\n";
-#[cfg(feature = "kernel")]
-// One nonblocking HDMI frame attempt already yields through 65,536 bounded
-// completion polls. Retain the exact request for at most four such outer
-// attempts so an unusually delayed first-frame clear can cross replenishments
-// without turning a stalled display into an unbounded root bootstrap wait.
-const HDMI_EARLY_FRAME_RETAINED_TURN_LIMIT: usize = 4;
+// Early Pi HDMI bootstrap admits the engine and owner descriptor only. The
+// steady local-seat retained-frame path owns the first framebuffer mutation,
+// its completion receipt, and every later redraw.
 
 #[cfg(any(feature = "kernel", feature = "cache-maintenance"))]
 pub mod cache;
@@ -2599,26 +2590,6 @@ fn runtime_init_descriptor_expected_bus_links(
 }
 
 #[cfg(feature = "kernel")]
-fn run_hdmi_first_frame_retained_with<Attempt, Handoff>(
-    mut attempt: Attempt,
-    mut handoff: Handoff,
-) -> Option<driver_task::DriverTaskCompletionRecord>
-where
-    Attempt: FnMut() -> Option<driver_task::DriverTaskCompletionRecord>,
-    Handoff: FnMut(),
-{
-    for turn in 0..HDMI_EARLY_FRAME_RETAINED_TURN_LIMIT {
-        if let Some(completion) = attempt() {
-            return Some(completion);
-        }
-        if turn.saturating_add(1) != HDMI_EARLY_FRAME_RETAINED_TURN_LIMIT {
-            handoff();
-        }
-    }
-    None
-}
-
-#[cfg(feature = "kernel")]
 fn bootstrap_linked_runtime_engine_for_early_console(
     contract: DriverTaskContract,
     spec: driver_task::DriverTaskRuntimeImageSpec,
@@ -2629,7 +2600,6 @@ fn bootstrap_linked_runtime_engine_for_early_console(
         return Ok(false);
     }
 
-    let mut engine_ready = true;
     driver_task::emit_driver_task_resource_init_status(
         contract,
         driver_task::DriverTaskHotPath::HdmiText,
@@ -2637,104 +2607,16 @@ fn bootstrap_linked_runtime_engine_for_early_console(
         "ready",
         None,
     );
-    let mut banner = false;
-    let banner_payload = HDMI_EARLY_BANNER_PAYLOAD;
-    let frame = driver_task::describe_driver_task_ring_frame(banner_payload, 0).ok_or(
-        HalError::Unsupported("driver-runtime-hdmi-early-banner-stage"),
-    )?;
-    let draw_command = driver_task::DriverTaskCommandRecord::pi4_hot_path(
-        0,
-        spec.hot_path,
-        driver_task::DriverTaskBudgetGrant::from_contract(contract),
-        frame,
-    );
-    let banner_segments = [driver_task::DriverTaskStagingSegment::ring_frame(
-        banner_payload,
-        0,
-    )];
-    let draw_completion = run_hdmi_first_frame_retained_with(
-        || {
-            driver_task::run_driver_task_ring_command_nonblocking_staged(
-                contract,
-                draw_command,
-                &banner_segments,
-            )
-        },
-        sel4::yield_now,
-    );
-    let draw_ready = matches!(
-        draw_completion,
-        Some(done)
-            if done.code == driver_task::DriverTaskCompletionCode::Progress.as_u16()
-                && done.result != 0
-    );
-    let draw_status = if draw_ready {
-        "ready"
-    } else if draw_completion.is_some() {
-        "unexpected-completion"
-    } else {
-        "no-reply"
-    };
-    driver_task::emit_driver_task_resource_init_status(
-        contract,
-        driver_task::DriverTaskHotPath::HdmiText,
-        "hdmi-first-draw",
-        draw_status,
-        draw_completion,
-    );
-    if draw_ready {
-        banner = true;
-    } else {
-        engine_ready = false;
-    }
-    if !engine_ready {
-        crate::bootstrap::log::force_uart_line(
-            "DRIVER_TASK_HDMI_EARLY_READY contract=hdmi-text engine_init=no owner_state=no banner=no action=serial-continues",
-        );
-        return Ok(false);
-    }
-
     let owner_state = driver_task::register_driver_task_runtime_owner_state(
         driver_task::DriverTaskHotPath::HdmiText,
     );
-    if owner_state && !banner {
-        let frame = driver_task::describe_driver_task_ring_frame(banner_payload, 0).ok_or(
-            HalError::Unsupported("driver-runtime-hdmi-early-banner-stage"),
-        )?;
-        let command = driver_task::DriverTaskCommandRecord::pi4_hot_path(
-            0,
-            spec.hot_path,
-            driver_task::DriverTaskBudgetGrant::from_contract(contract),
-            frame,
-        );
-        let banner_segments = [driver_task::DriverTaskStagingSegment::ring_frame(
-            banner_payload,
-            0,
-        )];
-        banner = matches!(
-            run_hdmi_first_frame_retained_with(
-                || {
-                    driver_task::run_driver_task_ring_command_nonblocking_staged(
-                        contract,
-                        command,
-                        &banner_segments,
-                    )
-                },
-                sel4::yield_now,
-            ),
-            Some(done)
-                if done.code == driver_task::DriverTaskCompletionCode::Progress.as_u16()
-                    && done.result != 0
-        );
-    }
     driver_task::emit_driver_task_endpoint_lifetime_checkpoint(contract, "early-draw");
-    let mut line = heapless::String::<160>::new();
+    let mut line = heapless::String::<192>::new();
     let _ = fmt::Write::write_fmt(
         &mut line,
         format_args!(
-            "DRIVER_TASK_HDMI_EARLY_READY contract=hdmi-text engine_init=yes owner_state={} banner={} action=boot-progress-mirror",
+            "DRIVER_TASK_HDMI_EARLY_READY contract=hdmi-text engine_init=yes owner_state={} banner=deferred action=steady-local-seat-retained-frame",
             if owner_state { "yes" } else { "no" },
-            if banner { "yes" } else { "no" },
         ),
     );
     crate::bootstrap::log::force_uart_line(line.as_str());
@@ -6565,41 +6447,6 @@ mod tests {
     };
     #[cfg(feature = "kernel")]
     use pi4_driver_abi::DRIVER_RUNTIME_RESERVED_ROOT_BADGE;
-
-    #[test]
-    fn early_hdmi_banner_is_a_bounded_text_only_mutation() {
-        assert_eq!(super::HDMI_EARLY_BANNER_PAYLOAD, b"Starting HDMI\n");
-        assert!(!super::HDMI_EARLY_BANNER_PAYLOAD.contains(&0x0c));
-        assert!(!super::HDMI_EARLY_BANNER_PAYLOAD.contains(&0x1b));
-    }
-
-    #[cfg(feature = "kernel")]
-    #[test]
-    fn early_hdmi_first_frame_retains_one_identity_until_terminal() {
-        use core::cell::Cell;
-
-        let attempts = Cell::new(0usize);
-        let handoffs = Cell::new(0usize);
-        let completion = super::run_hdmi_first_frame_retained_with(
-            || {
-                let attempt = attempts.get().saturating_add(1);
-                attempts.set(attempt);
-                (attempt == 3).then_some(super::driver_task::DriverTaskCompletionRecord::progress(
-                    7, 14,
-                ))
-            },
-            || handoffs.set(handoffs.get().saturating_add(1)),
-        );
-
-        assert_eq!(
-            completion,
-            Some(super::driver_task::DriverTaskCompletionRecord::progress(
-                7, 14
-            ))
-        );
-        assert_eq!(attempts.get(), 3);
-        assert_eq!(handoffs.get(), 2);
-    }
 
     #[test]
     fn driver_timeout_endpoint_installation_follows_generated_policy() {
