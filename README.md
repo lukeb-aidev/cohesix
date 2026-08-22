@@ -251,7 +251,7 @@ the selected resolved manifest.
 | [Use cases](docs/USE_CASES.md) | Assess capability-fit patterns without treating them as acceptance claims |
 | [Security](docs/SECURITY.md) | Understand security objectives, controls, limits, and vulnerability reporting |
 
-### Try and operate Cohesix
+### Use Cohesix
 
 | Document | Use it to |
 | --- | --- |
@@ -261,16 +261,13 @@ the selected resolved manifest.
 | [Failure modes](docs/FAILURE_MODES.md) | Diagnose and recover from observable failures |
 | [Hardware bring-up](docs/HARDWARE_BRINGUP.md) | Build, flash, boot, and prove QEMU or Pi 4 behavior |
 
-### Look up a contract
+### Guides
 
 | Document | Use it to |
 | --- | --- |
 | [Userland and CLI](docs/USERLAND_AND_CLI.md) | Look up console, `cohsh`, `.coh`, and command semantics |
 | [Host tools](docs/HOST_TOOLS.md) | Choose host executables and compose transports safely |
-| [API guidelines](docs/API_GUIDELINES.md) | Implement against the REST projection and compatibility rules |
 | [Python support](docs/PYTHON_SUPPORT.md) | Use Python backends, bounded APIs, and generated target contracts |
-| [Interfaces](docs/INTERFACES.md) | Look up namespaces, payloads, console behavior, and compatibility |
-| [Secure9P](docs/SECURE9P.md) | Look up 9P layering, bounds, session invariants, and policy hooks |
 | [Boot reference](docs/BOOT_REFERENCE.md) | Interpret boot stages, prompts, and fail-closed markers |
 | [Benchmarks](docs/BENCHMARKS.md) | Run and interpret reproducible performance measurements |
 
@@ -281,17 +278,20 @@ the selected resolved manifest.
 | [Toolchain setup](docs/TOOLCHAIN_MAC_ARM64.md) | Reproduce the pinned macOS build environment and external seL4 contract |
 | [Drivers](docs/DRIVERS.md) | Design, implement, test, and qualify a physical driver |
 | [Contributing](CONTRIBUTING.md) | Propose, implement, validate, and submit a scoped change |
+- Contributions must follow [`AGENTS.md`](AGENTS.md),
+  [Contributing](CONTRIBUTING.md), and align to the active task in the
+  [build plan](docs/BUILD_PLAN.md).
+| [API guidelines](docs/API_GUIDELINES.md) | Implement against the REST projection and compatibility rules |
+| [Interfaces](docs/INTERFACES.md) | Look up namespaces, payloads, console behavior, and compatibility |
+| [Secure9P](docs/SECURE9P.md) | Look up 9P layering, bounds, session invariants, and policy hooks |
 | [Build plan](docs/BUILD_PLAN.md) | Read the normative record of planned and implemented project scope |
 
-## Help and contributing
+## Help
 
 - New to Cohesix? Read [current status](docs/STATUS.md), use the
   [glossary](docs/GLOSSARY.md) as terms arise, then follow the
   [operator walkthrough](docs/OPERATOR_WALKTHROUGH.md); use
   [failure modes](docs/FAILURE_MODES.md) for diagnosis and recovery.
-- Contributions must follow [`AGENTS.md`](AGENTS.md),
-  [Contributing](CONTRIBUTING.md), and the active task in the
-  [build plan](docs/BUILD_PLAN.md).
 - Cohesix is maintained by Lukas Bower. Use GitHub Issues for reproducible,
   non-sensitive bugs and scoped design discussions. Report vulnerabilities
   through the private process in [Security](docs/SECURITY.md); never put secrets
