@@ -700,8 +700,15 @@ impl DeferredCyw43TurnStatus {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum DeferredCyw43SupervisorPhase {
     Operator,
-    Driver,
+    Driver { turns_remaining: u8 },
 }
+
+#[cfg(all(
+    feature = "serial-console",
+    feature = "kernel",
+    feature = "net-console"
+))]
+const DEFERRED_CYW43_DRIVER_TURNS_PER_OPERATOR: u8 = 4;
 
 #[cfg(all(
     feature = "serial-console",
@@ -758,19 +765,27 @@ const fn deferred_cyw43_supervisor_phase_step(
     match (phase, may_begin, driver_turn_due) {
         (DeferredCyw43SupervisorPhase::Operator, true, true) => (
             DeferredCyw43SupervisorTurn::Operator,
-            DeferredCyw43SupervisorPhase::Driver,
+            DeferredCyw43SupervisorPhase::Driver {
+                turns_remaining: DEFERRED_CYW43_DRIVER_TURNS_PER_OPERATOR,
+            },
         ),
         (DeferredCyw43SupervisorPhase::Operator, _, false)
         | (DeferredCyw43SupervisorPhase::Operator, false, true) => (
             DeferredCyw43SupervisorTurn::Operator,
             DeferredCyw43SupervisorPhase::Operator,
         ),
-        (DeferredCyw43SupervisorPhase::Driver, true, true) => (
+        (DeferredCyw43SupervisorPhase::Driver { turns_remaining }, true, true) => (
             DeferredCyw43SupervisorTurn::Driver,
-            DeferredCyw43SupervisorPhase::Operator,
+            if turns_remaining > 1 {
+                DeferredCyw43SupervisorPhase::Driver {
+                    turns_remaining: turns_remaining - 1,
+                }
+            } else {
+                DeferredCyw43SupervisorPhase::Operator
+            },
         ),
-        (DeferredCyw43SupervisorPhase::Driver, _, false)
-        | (DeferredCyw43SupervisorPhase::Driver, false, true) => (
+        (DeferredCyw43SupervisorPhase::Driver { .. }, _, false)
+        | (DeferredCyw43SupervisorPhase::Driver { .. }, false, true) => (
             DeferredCyw43SupervisorTurn::Blocked,
             DeferredCyw43SupervisorPhase::Operator,
         ),
@@ -2470,8 +2485,9 @@ where
 
         if supervisor_phase == DeferredCyw43SupervisorPhase::Operator {
             // Operator service and CYW43/SDIO service occupy distinct outer
-            // turns. Even an active serial command therefore cannot compose
-            // with a Wi-Fi child operation in one scheduler iteration.
+            // turns. A bounded four-turn driver burst amortizes the physical
+            // Pi service cadence while preserving an operator checkpoint at
+            // least every fifth supervisor turn.
             pump.poll_cyw43_bootstrap_supervisor_event_turn();
             let may_begin = pump.cyw43_bootstrap_may_begin();
             if may_begin {
@@ -2585,6 +2601,7 @@ where
                 }
             }
             Cyw43BootstrapTurnOutcome::Complete => {
+                supervisor_phase = DeferredCyw43SupervisorPhase::Operator;
                 turn_status.reset();
                 if !bootstrap.is_ready() || bootstrap.ready_generation().is_none() {
                     let mut detail = HeaplessString::<192>::new();
@@ -2729,6 +2746,7 @@ where
                 attempt_active = false;
             }
             Cyw43BootstrapTurnOutcome::Failed(driver_error) => {
+                supervisor_phase = DeferredCyw43SupervisorPhase::Operator;
                 turn_status.reset();
                 let err = crate::net::map_cyw43_bootstrap_error(driver_error);
                 let failure_now_ms = crate::hal::timebase().now_ms();
@@ -4509,15 +4527,32 @@ mod tests {
             true,
         );
         assert_eq!(operator, super::DeferredCyw43SupervisorTurn::Operator);
-        assert_eq!(after_operator, super::DeferredCyw43SupervisorPhase::Driver);
+        assert_eq!(
+            after_operator,
+            super::DeferredCyw43SupervisorPhase::Driver {
+                turns_remaining: super::DEFERRED_CYW43_DRIVER_TURNS_PER_OPERATOR,
+            }
+        );
 
-        let (driver, after_driver) =
-            super::deferred_cyw43_supervisor_phase_step(after_operator, true, true);
+        let mut phase = after_operator;
+        for expected_remaining in [3, 2, 1] {
+            let (driver, after_driver) =
+                super::deferred_cyw43_supervisor_phase_step(phase, true, true);
+            assert_eq!(driver, super::DeferredCyw43SupervisorTurn::Driver);
+            assert_eq!(
+                after_driver,
+                super::DeferredCyw43SupervisorPhase::Driver {
+                    turns_remaining: expected_remaining,
+                }
+            );
+            phase = after_driver;
+        }
+        let (driver, after_driver) = super::deferred_cyw43_supervisor_phase_step(phase, true, true);
         assert_eq!(driver, super::DeferredCyw43SupervisorTurn::Driver);
         assert_eq!(after_driver, super::DeferredCyw43SupervisorPhase::Operator);
 
         let (blocked, after_blocked) = super::deferred_cyw43_supervisor_phase_step(
-            super::DeferredCyw43SupervisorPhase::Driver,
+            super::DeferredCyw43SupervisorPhase::Driver { turns_remaining: 3 },
             false,
             true,
         );
@@ -4545,7 +4580,9 @@ mod tests {
         assert_eq!(resumed, super::DeferredCyw43SupervisorTurn::Operator);
         assert_eq!(
             after_resumed,
-            super::DeferredCyw43SupervisorPhase::Driver,
+            super::DeferredCyw43SupervisorPhase::Driver {
+                turns_remaining: super::DEFERRED_CYW43_DRIVER_TURNS_PER_OPERATOR,
+            },
             "a terminal or fault condition must restore the consume turn",
         );
     }
