@@ -25976,6 +25976,99 @@ static GENET_PENDING_RX_QUEUE: Mutex<
     heapless::Deque<DriverTaskNetRxToken, GENET_PENDING_RX_QUEUE_CAP>,
 > = Mutex::new(heapless::Deque::new());
 
+#[cfg(feature = "kernel")]
+// Match the physical descriptor window while bounding root-owned acceptance.
+// The linked runtime still owns all DMA issue and completion; this queue only
+// preserves immutable smoltcp frames until their exact MCS command completes.
+const GENET_PENDING_TX_QUEUE_CAP: usize = 16;
+
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct GenetPendingTxFrame {
+    len: u16,
+    bytes: [u8; MAX_FRAME_LEN],
+}
+
+#[cfg(feature = "kernel")]
+impl GenetPendingTxFrame {
+    fn from_frame(frame: &[u8]) -> Option<Self> {
+        if frame.is_empty() || frame.len() > MAX_FRAME_LEN {
+            return None;
+        }
+        let mut bytes = [0u8; MAX_FRAME_LEN];
+        bytes[..frame.len()].copy_from_slice(frame);
+        Some(Self {
+            len: frame.len() as u16,
+            bytes,
+        })
+    }
+
+    fn as_bytes(&self) -> &[u8] {
+        &self.bytes[..usize::from(self.len)]
+    }
+}
+
+#[cfg(feature = "kernel")]
+static GENET_PENDING_TX_QUEUE: Mutex<
+    heapless::Deque<GenetPendingTxFrame, GENET_PENDING_TX_QUEUE_CAP>,
+> = Mutex::new(heapless::Deque::new());
+
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum GenetSteadyOperation {
+    Poll { flags: u16 },
+    Transmit(GenetPendingTxFrame),
+}
+
+#[cfg(feature = "kernel")]
+impl GenetSteadyOperation {
+    const fn is_transmit(self) -> bool {
+        matches!(self, Self::Transmit(_))
+    }
+}
+
+#[cfg(feature = "kernel")]
+#[derive(Debug)]
+struct GenetSteadyCoordinator {
+    active: Option<GenetSteadyOperation>,
+    prefer_transmit: bool,
+}
+
+#[cfg(feature = "kernel")]
+impl GenetSteadyCoordinator {
+    const fn new() -> Self {
+        Self {
+            active: None,
+            prefer_transmit: false,
+        }
+    }
+
+    fn select(&mut self, flags: u16) -> GenetSteadyOperation {
+        if let Some(active) = self.active.take() {
+            return active;
+        }
+        if self.prefer_transmit {
+            if let Some(frame) = GENET_PENDING_TX_QUEUE.lock().front().copied() {
+                return GenetSteadyOperation::Transmit(frame);
+            }
+        }
+        GenetSteadyOperation::Poll { flags }
+    }
+
+    fn retain(&mut self, operation: GenetSteadyOperation) {
+        self.active = Some(operation);
+    }
+
+    fn finish(&mut self, operation: GenetSteadyOperation) {
+        self.active = None;
+        self.prefer_transmit = !operation.is_transmit();
+    }
+}
+
+#[cfg(feature = "kernel")]
+static GENET_STEADY_COORDINATOR: Mutex<GenetSteadyCoordinator> =
+    Mutex::new(GenetSteadyCoordinator::new());
+
 fn driver_task_ethertype(frame: &[u8]) -> Option<u16> {
     let ethertype = frame.get(12..14)?;
     Some(u16::from_be_bytes([ethertype[0], ethertype[1]]))
@@ -26160,6 +26253,11 @@ fn submit_driver_task_frame(
 ) -> bool {
     if hot_path == DriverTaskHotPath::Cyw43Wifi {
         return submit_cyw43_driver_task_eth_frame(contract, frame);
+    }
+    if hot_path == DriverTaskHotPath::GenetNic
+        && crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active()
+    {
+        return enqueue_genet_pending_tx_frame(frame);
     }
     let Some(descriptor) = crate::hal::driver_task::describe_driver_task_ring_frame(frame, 0)
     else {
@@ -27271,6 +27369,87 @@ pub(crate) fn consume_cyw43_persistent_sideband_rx_batch() -> bool {
         return false;
     }
     true
+}
+
+/// Advance one exact Pi GENET steady command across an outer MCS service turn.
+///
+/// The coordinator keeps an RX poll or staged TX frame immutable until the
+/// linked runtime publishes the matching terminal. A successor command cannot
+/// replace the active ring slot merely because one nonblocking turn ended.
+#[cfg(feature = "kernel")]
+pub(crate) fn service_genet_driver_task_steady_turn(
+    contract: DriverTaskContract,
+    poll_flags: u16,
+) -> DriverTaskRetainedServiceTurn {
+    if contract != GENET_DRIVER_TASK_CONTRACT {
+        return DriverTaskRetainedServiceTurn::Failed;
+    }
+    let operation = GENET_STEADY_COORDINATOR.lock().select(poll_flags);
+    let turn = match operation {
+        GenetSteadyOperation::Poll { flags } => {
+            let command = DriverTaskCommandRecord::pi4_hot_path(
+                0,
+                DriverTaskHotPath::GenetNic,
+                DriverTaskBudgetGrant::from_contract(contract),
+                DriverFrameDescriptor {
+                    offset: 0,
+                    len: 0,
+                    flags,
+                },
+            );
+            crate::hal::driver_task::run_driver_task_ring_service_retained_service_turn(
+                contract, command,
+            )
+        }
+        GenetSteadyOperation::Transmit(frame) => {
+            let Some(descriptor) =
+                crate::hal::driver_task::describe_driver_task_ring_frame(frame.as_bytes(), 0)
+            else {
+                GENET_STEADY_COORDINATOR.lock().finish(operation);
+                let _ = retire_genet_pending_tx_frame(frame);
+                GENET_TX_DROPPED.fetch_add(1, Ordering::AcqRel);
+                return DriverTaskRetainedServiceTurn::Failed;
+            };
+            let command = DriverTaskCommandRecord::pi4_hot_path(
+                0,
+                DriverTaskHotPath::GenetNic,
+                DriverTaskBudgetGrant::from_contract(contract),
+                descriptor,
+            );
+            let staging_segments = [DriverTaskStagingSegment::ring_frame(frame.as_bytes(), 0)];
+            run_driver_task_net_service_retained_turn_staged(contract, command, &staging_segments)
+        }
+    };
+    match turn {
+        DriverTaskRetainedServiceTurn::Pending => {
+            GENET_STEADY_COORDINATOR.lock().retain(operation);
+        }
+        DriverTaskRetainedServiceTurn::Complete(completion) => {
+            GENET_STEADY_COORDINATOR.lock().finish(operation);
+            if let GenetSteadyOperation::Transmit(frame) = operation {
+                let terminal_accepts_frame = driver_task_tx_completion_submitted(completion);
+                let terminal_proves_not_issued =
+                    completion.code == DriverTaskCompletionCode::Idle.as_u16();
+                if terminal_accepts_frame {
+                    if !retire_genet_pending_tx_frame(frame) {
+                        GENET_TX_DROPPED.fetch_add(1, Ordering::AcqRel);
+                        return DriverTaskRetainedServiceTurn::Failed;
+                    }
+                } else if !terminal_proves_not_issued {
+                    let _ = retire_genet_pending_tx_frame(frame);
+                    GENET_TX_DROPPED.fetch_add(1, Ordering::AcqRel);
+                }
+            }
+        }
+        DriverTaskRetainedServiceTurn::Failed => {
+            GENET_STEADY_COORDINATOR.lock().finish(operation);
+            if let GenetSteadyOperation::Transmit(frame) = operation {
+                let _ = retire_genet_pending_tx_frame(frame);
+                GENET_TX_DROPPED.fetch_add(1, Ordering::AcqRel);
+            }
+        }
+    }
+    turn
 }
 
 #[cfg(feature = "kernel")]
@@ -28792,6 +28971,12 @@ fn receive_driver_task_frame(
         if let Some(token) = take_genet_pending_rx_token() {
             return Some(token);
         }
+        if crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active() {
+            // The centralized pre-poll coordinator owns the sole physical
+            // request. A smoltcp receive probe may consume copied frames, but
+            // cannot publish an independent successor command.
+            return None;
+        }
     }
     let command = DriverTaskCommandRecord::pi4_hot_path(
         0,
@@ -29801,6 +29986,34 @@ fn genet_pending_rx_queue_len() -> u64 {
 }
 
 #[cfg(feature = "kernel")]
+fn genet_pending_tx_capacity_available() -> bool {
+    GENET_PENDING_TX_QUEUE.lock().len() < GENET_PENDING_TX_QUEUE_CAP
+}
+
+#[cfg(feature = "kernel")]
+fn enqueue_genet_pending_tx_frame(frame: &[u8]) -> bool {
+    let Some(pending) = GenetPendingTxFrame::from_frame(frame) else {
+        return false;
+    };
+    GENET_PENDING_TX_QUEUE.lock().push_back(pending).is_ok()
+}
+
+#[cfg(feature = "kernel")]
+fn genet_pending_tx_queue_len() -> usize {
+    GENET_PENDING_TX_QUEUE.lock().len()
+}
+
+#[cfg(feature = "kernel")]
+fn retire_genet_pending_tx_frame(expected: GenetPendingTxFrame) -> bool {
+    let mut queue = GENET_PENDING_TX_QUEUE.lock();
+    if queue.front() != Some(&expected) {
+        return false;
+    }
+    let _ = queue.pop_front();
+    true
+}
+
+#[cfg(feature = "kernel")]
 fn cyw43_pending_rx_token_occupied() -> bool {
     !CYW43_PENDING_RX_QUEUE.lock().is_empty()
 }
@@ -30082,6 +30295,13 @@ macro_rules! driver_task_nic {
                 _timestamp: Instant,
             ) -> Option<(Self::RxToken<'_>, Self::TxToken<'_>)> {
                 #[cfg(feature = "kernel")]
+                if matches!(DriverTaskHotPath::$hot_path, DriverTaskHotPath::GenetNic)
+                    && crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active()
+                    && !genet_pending_tx_capacity_available()
+                {
+                    return None;
+                }
+                #[cfg(feature = "kernel")]
                 let mut cyw43_queue_reservation =
                     if matches!(DriverTaskHotPath::$hot_path, DriverTaskHotPath::Cyw43Wifi) {
                         match reserve_cyw43_data_tx_queue_slot($contract, true) {
@@ -30144,6 +30364,13 @@ macro_rules! driver_task_nic {
             }
 
             fn transmit(&mut self, _timestamp: Instant) -> Option<Self::TxToken<'_>> {
+                #[cfg(feature = "kernel")]
+                if matches!(DriverTaskHotPath::$hot_path, DriverTaskHotPath::GenetNic)
+                    && crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active()
+                    && !genet_pending_tx_capacity_available()
+                {
+                    return None;
+                }
                 #[cfg(feature = "kernel")]
                 let cyw43_transfer_candidate =
                     matches!(DriverTaskHotPath::$hot_path, DriverTaskHotPath::Cyw43Wifi)
@@ -30792,6 +31019,7 @@ mod tests {
     use smoltcp::phy::{Device, RxToken, TxToken};
     use smoltcp::time::Instant;
 
+    static GENET_STATUS_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
     static CYW43_STATUS_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
     static CYW43_SUPERVISOR_RING_TURNS: AtomicU32 = AtomicU32::new(0);
     static CYW43_SUPERVISOR_LAST_OP: AtomicU32 = AtomicU32::new(0);
@@ -56442,6 +56670,74 @@ mod tests {
 
         GENET_PENDING_RX_HIGH_WATER.store(0, Ordering::Release);
         GENET_PENDING_RX_DROPS.store(0, Ordering::Release);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn genet_steady_coordinator_retains_exact_command_and_alternates_tx_with_rx() {
+        let _lock = GENET_STATUS_TEST_LOCK
+            .lock()
+            .expect("GENET steady-state tests must serialize");
+        GENET_PENDING_TX_QUEUE.lock().clear();
+        let mut coordinator = GenetSteadyCoordinator::new();
+
+        let first_poll = coordinator.select(0x31);
+        assert_eq!(first_poll, GenetSteadyOperation::Poll { flags: 0x31 });
+        coordinator.retain(first_poll);
+        assert_eq!(
+            coordinator.select(0x52),
+            first_poll,
+            "a successor caller must resume the exact retained poll"
+        );
+        coordinator.finish(first_poll);
+
+        let payload = [0xabu8; 64];
+        assert!(enqueue_genet_pending_tx_frame(&payload));
+        let transmit = coordinator.select(0x73);
+        assert!(matches!(transmit, GenetSteadyOperation::Transmit(_)));
+        coordinator.retain(transmit);
+        assert_eq!(
+            coordinator.select(0x94),
+            transmit,
+            "staged bytes remain immutable until the matching terminal"
+        );
+        coordinator.finish(transmit);
+        let GenetSteadyOperation::Transmit(frame) = transmit else {
+            unreachable!("the selected operation is a transmit")
+        };
+        assert!(retire_genet_pending_tx_frame(frame));
+
+        assert_eq!(
+            coordinator.select(0xb5),
+            GenetSteadyOperation::Poll { flags: 0xb5 },
+            "one completed TX yields to receive service"
+        );
+        assert_eq!(genet_pending_tx_queue_len(), 0);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn genet_pending_tx_queue_is_bounded_and_preserves_wire_order() {
+        let _lock = GENET_STATUS_TEST_LOCK
+            .lock()
+            .expect("GENET steady-state tests must serialize");
+        GENET_PENDING_TX_QUEUE.lock().clear();
+
+        for slot in 0..GENET_PENDING_TX_QUEUE_CAP {
+            assert!(enqueue_genet_pending_tx_frame(&[slot as u8; 32]));
+        }
+        assert!(!genet_pending_tx_capacity_available());
+        assert!(!enqueue_genet_pending_tx_frame(&[0xff; 32]));
+
+        for slot in 0..GENET_PENDING_TX_QUEUE_CAP {
+            let frame = GENET_PENDING_TX_QUEUE
+                .lock()
+                .pop_front()
+                .expect("every admitted frame remains queued");
+            assert_eq!(frame.as_bytes(), &[slot as u8; 32]);
+        }
+        assert!(genet_pending_tx_capacity_available());
+        assert_eq!(genet_pending_tx_queue_len(), 0);
     }
 
     #[cfg(feature = "kernel")]

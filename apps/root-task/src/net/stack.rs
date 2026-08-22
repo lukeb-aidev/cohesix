@@ -10610,6 +10610,26 @@ fn service_driver_task_pre_poll_once(
     hot_path: crate::hal::driver_task::DriverTaskHotPath,
     flags: u16,
 ) -> Option<(bool, bool)> {
+    if hot_path == crate::hal::driver_task::DriverTaskHotPath::GenetNic
+        && crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active()
+    {
+        return match crate::drivers::driver_task_net::service_genet_driver_task_steady_turn(
+            contract, flags,
+        ) {
+            crate::hal::driver_task::DriverTaskRetainedServiceTurn::Pending => Some((false, false)),
+            crate::hal::driver_task::DriverTaskRetainedServiceTurn::Complete(completion) => {
+                let progress =
+                    crate::drivers::driver_task_net::preserve_driver_task_pre_poll_completion(
+                        contract, hot_path, completion,
+                    );
+                // One physical retained command terminal is the complete GENET
+                // service quantum. A successor starts only on a later caller
+                // turn, preserving independent root/child scheduling bounds.
+                Some((progress, false))
+            }
+            crate::hal::driver_task::DriverTaskRetainedServiceTurn::Failed => None,
+        };
+    }
     let completion = if hot_path == crate::hal::driver_task::DriverTaskHotPath::Cyw43Wifi {
         crate::drivers::driver_task_net::poll_cyw43_driver_task_steady_data_completion(contract)?
     } else {
