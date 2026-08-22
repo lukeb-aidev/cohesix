@@ -824,6 +824,10 @@ const CHAR_WIDTH: usize = 8;
 const CHAR_HEIGHT: usize = 16;
 const HDMI_SAFE_AREA_MARGIN_DIVISOR: usize = 50;
 const HDMI_SCROLL_LINES: usize = 10;
+// The Pi HDMI runtime has a 400-us / 10-ms generated MCS reservation. Clear
+// only this many scanlines in one retained first-frame turn so framebuffer
+// takeover cannot consume an entire synchronous service call.
+const HDMI_FIRST_FRAME_CLEAR_ROWS_PER_TURN: usize = 8;
 const FB_BYTES_PER_PIXEL_32: usize = 4;
 const HDMI_FG_COLOR: u32 = 0xffff_ffff;
 const HDMI_BG_COLOR: u32 = 0xff00_0000;
@@ -7381,6 +7385,9 @@ static HDMI_CSI_PARAM_INDEX: AtomicU32 = AtomicU32::new(0);
 static HDMI_CSI_DIGITS_SEEN: AtomicU32 = AtomicU32::new(0);
 static HDMI_SAVED_CURSOR_ROW: AtomicU32 = AtomicU32::new(0);
 static HDMI_SAVED_CURSOR_COL: AtomicU32 = AtomicU32::new(0);
+static HDMI_FIRST_FRAME_CLEARED: AtomicBool = AtomicBool::new(false);
+static HDMI_FIRST_FRAME_CURSOR: RuntimeStateSlot<HdmiFirstFrameCursor> =
+    RuntimeStateSlot::new(HdmiFirstFrameCursor::idle());
 static GENET_RUNTIME_FLAGS: AtomicU32 = AtomicU32::new(0);
 static GENET_TX_COUNT: AtomicU32 = AtomicU32::new(0);
 static GENET_RX_COUNT: AtomicU32 = AtomicU32::new(0);
@@ -9206,7 +9213,9 @@ fn service_command_turn(task_key: usize, command: DriverTaskCommandRecord) -> Ru
         return turn;
     }
 
-    let turn = if let Some(turn) = service_usb_controller_init_command_turn(command) {
+    let turn = if let Some(turn) = service_hdmi_first_frame_command_turn(command) {
+        turn
+    } else if let Some(turn) = service_usb_controller_init_command_turn(command) {
         turn
     } else if let Some(turn) = service_serial_tx_command_turn(command) {
         turn
@@ -11532,8 +11541,11 @@ fn runtime_engine_init_usb(
 #[inline(never)]
 fn runtime_engine_init_hdmi(_descriptor: &DriverRuntimeInitDescriptor) -> Result<u16, u16> {
     // Descriptor validation already proves the framebuffer mapping. Engine
-    // admission must not perform an unbounded physical clear; the first
-    // explicit HDMI frame owns the first display mutation.
+    // admission must not perform an unbounded physical clear. Reset the
+    // retained takeover cursor so the first explicit HDMI frame clears the
+    // complete admitted surface across bounded MCS turns before it renders.
+    HDMI_FIRST_FRAME_CURSOR.with_mut(HdmiFirstFrameCursor::reset);
+    HDMI_FIRST_FRAME_CLEARED.store(false, Ordering::Release);
     Ok(FAULT_NONE)
 }
 
@@ -44957,6 +44969,123 @@ fn usb_hid_usage_to_ascii(code: u8, shifted: bool) -> Option<u8> {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum HdmiFirstFramePhase {
+    Idle,
+    Clear,
+    Render,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct HdmiFirstFrameCursor {
+    phase: HdmiFirstFramePhase,
+    command: DriverTaskCommandRecord,
+    next_row: u32,
+}
+
+impl HdmiFirstFrameCursor {
+    const fn idle() -> Self {
+        Self {
+            phase: HdmiFirstFramePhase::Idle,
+            command: DriverTaskCommandRecord::empty(),
+            next_row: 0,
+        }
+    }
+
+    fn active_for(self, command: DriverTaskCommandRecord) -> bool {
+        !matches!(self.phase, HdmiFirstFramePhase::Idle) && self.command == command
+    }
+
+    fn begin(&mut self, command: DriverTaskCommandRecord) {
+        *self = Self {
+            phase: HdmiFirstFramePhase::Clear,
+            command,
+            next_row: 0,
+        };
+    }
+
+    fn reset(&mut self) {
+        *self = Self::idle();
+    }
+}
+
+const fn hdmi_first_frame_command_candidate(command: DriverTaskCommandRecord) -> bool {
+    command.sequence != 0
+        && command.opcode == OPCODE_SUBMIT_FRAME
+        && command.arg0 == HOT_PATH_HDMI_TEXT
+        && command.arg1 == ROLE_DISPLAY
+        && command.aux0 == 0
+        && command.frame.len != 0
+}
+
+fn hdmi_first_frame_command_ready(command: DriverTaskCommandRecord) -> bool {
+    hdmi_first_frame_command_candidate(command)
+        && command.frame.in_ring_payload()
+        && engine_initialized(&HDMI_RUNTIME_FLAGS)
+        && RUNTIME_INIT_HOT_PATH.load(Ordering::Acquire) == HOT_PATH_HDMI_TEXT
+        && RUNTIME_DESCRIPTOR.with_ref(|descriptor| descriptor.hdmi_ready())
+}
+
+fn service_hdmi_first_frame_command_turn(
+    command: DriverTaskCommandRecord,
+) -> Option<RuntimeCommandTurn> {
+    if HDMI_FIRST_FRAME_CLEARED.load(Ordering::Acquire)
+        || !hdmi_first_frame_command_candidate(command)
+    {
+        return None;
+    }
+    if !hdmi_first_frame_command_ready(command) {
+        HDMI_FIRST_FRAME_CURSOR.with_mut(HdmiFirstFrameCursor::reset);
+        return None;
+    }
+
+    let phase = HDMI_FIRST_FRAME_CURSOR.with_mut(|cursor| {
+        if matches!(cursor.phase, HdmiFirstFramePhase::Idle) {
+            cursor.begin(command);
+        }
+        if !cursor.active_for(command) {
+            cursor.reset();
+            return None;
+        }
+        Some(cursor.phase)
+    });
+    let Some(phase) = phase else {
+        return Some(RuntimeCommandTurn::Complete(
+            DriverTaskCompletionRecord::fault(command.sequence, FAULT_REJECTED_COMMAND),
+        ));
+    };
+
+    match phase {
+        HdmiFirstFramePhase::Idle => Some(RuntimeCommandTurn::Complete(
+            DriverTaskCompletionRecord::fault(command.sequence, FAULT_REJECTED_COMMAND),
+        )),
+        HdmiFirstFramePhase::Clear => {
+            let start_row = HDMI_FIRST_FRAME_CURSOR.with_ref(|cursor| cursor.next_row as usize);
+            let height =
+                RUNTIME_DESCRIPTOR.with_ref(|descriptor| descriptor.framebuffer.height as usize);
+            let end_row = start_row
+                .saturating_add(HDMI_FIRST_FRAME_CLEAR_ROWS_PER_TURN)
+                .min(height);
+            RUNTIME_DESCRIPTOR.with_ref(|descriptor| {
+                let mut state = HdmiRenderState::from_descriptor(descriptor);
+                state.clear_full_framebuffer_rows(start_row, end_row.saturating_sub(start_row));
+            });
+            HDMI_FIRST_FRAME_CURSOR.with_mut(|cursor| {
+                cursor.next_row = end_row as u32;
+                if end_row == height {
+                    cursor.phase = HdmiFirstFramePhase::Render;
+                }
+            });
+            Some(RuntimeCommandTurn::Pending)
+        }
+        HdmiFirstFramePhase::Render => {
+            HDMI_FIRST_FRAME_CURSOR.with_mut(HdmiFirstFrameCursor::reset);
+            HDMI_FIRST_FRAME_CLEARED.store(true, Ordering::Release);
+            Some(RuntimeCommandTurn::Complete(service_hdmi_text(command)))
+        }
+    }
+}
+
 fn hdmi_render_frame(frame: DriverFrameDescriptor) -> usize {
     RUNTIME_DESCRIPTOR.with_ref(|descriptor| {
         let mut state = HdmiRenderState::from_descriptor(descriptor);
@@ -45413,18 +45542,24 @@ impl HdmiRenderState {
     }
 
     fn clear_full_framebuffer(&mut self) {
+        self.clear_full_framebuffer_rows(0, self.framebuffer_height);
+    }
+
+    fn clear_full_framebuffer_rows(&mut self, start_row: usize, row_count: usize) {
         if self.framebuffer_width == 0
             || self.framebuffer_height == 0
             || self.pitch == 0
             || self.framebuffer_len == 0
+            || start_row >= self.framebuffer_height
+            || row_count == 0
         {
             return;
         }
         self.fill_physical_rect(
             0,
-            0,
+            start_row,
             self.framebuffer_width,
-            self.framebuffer_height,
+            row_count.min(self.framebuffer_height.saturating_sub(start_row)),
             HDMI_BG_COLOR,
         );
     }
@@ -61282,6 +61417,8 @@ mod tests {
         HDMI_CSI_DIGITS_SEEN.store(0, Ordering::Release);
         HDMI_SAVED_CURSOR_ROW.store(0, Ordering::Release);
         HDMI_SAVED_CURSOR_COL.store(0, Ordering::Release);
+        HDMI_FIRST_FRAME_CLEARED.store(false, Ordering::Release);
+        HDMI_FIRST_FRAME_CURSOR.with_mut(HdmiFirstFrameCursor::reset);
         GENET_RUNTIME_FLAGS.store(0, Ordering::Release);
         GENET_TX_COUNT.store(0, Ordering::Release);
         GENET_RX_COUNT.store(0, Ordering::Release);
@@ -114621,10 +114758,47 @@ mod tests {
                 flags: 0,
             },
         };
-        assert_eq!(
-            service_command(0, frame),
-            DriverTaskCompletionRecord::progress(32, 5)
+        stage_bytes(DRIVER_TASK_RING_FRAME_OFFSET, b"hello");
+        let first_uncleared_row = HDMI_FIRST_FRAME_CLEAR_ROWS_PER_TURN;
+        let uncleared_addr = DRIVER_RUNTIME_FRAMEBUFFER_VADDR as usize
+            + first_uncleared_row * descriptor.framebuffer.pitch as usize;
+        let takeover_sentinel = 0x2468_ace0;
+        fill_framebuffer_u32(
+            DRIVER_RUNTIME_FRAMEBUFFER_VADDR as usize,
+            takeover_sentinel,
+            descriptor.framebuffer.pitch as usize * descriptor.framebuffer.height as usize / 4,
         );
+        assert_eq!(
+            service_command_turn(0, frame),
+            RuntimeCommandTurn::Pending,
+            "the first display mutation must retain the command while clearing one bounded row batch",
+        );
+        assert_eq!(
+            read_framebuffer_u32(DRIVER_RUNTIME_FRAMEBUFFER_VADDR as usize),
+            HDMI_BG_COLOR,
+        );
+        assert_eq!(
+            read_framebuffer_u32(uncleared_addr),
+            takeover_sentinel,
+            "one MCS turn must not clear beyond its admitted scanline batch",
+        );
+        let expected_clear_turns =
+            (descriptor.framebuffer.height as usize).div_ceil(HDMI_FIRST_FRAME_CLEAR_ROWS_PER_TURN);
+        let mut pending_turns = 1usize;
+        let completion = loop {
+            match service_command_turn(0, frame) {
+                RuntimeCommandTurn::Pending => {
+                    pending_turns = pending_turns.saturating_add(1);
+                }
+                RuntimeCommandTurn::Complete(completion) => break completion,
+            }
+        };
+        assert_eq!(pending_turns, expected_clear_turns);
+        assert_eq!(completion, DriverTaskCompletionRecord::progress(32, 5));
+        let final_pixel_addr = DRIVER_RUNTIME_FRAMEBUFFER_VADDR as usize
+            + descriptor.framebuffer.pitch as usize * (descriptor.framebuffer.height as usize - 1);
+        assert_eq!(read_framebuffer_u32(final_pixel_addr), HDMI_BG_COLOR);
+        assert!(HDMI_FIRST_FRAME_CLEARED.load(Ordering::Acquire));
         assert_eq!(HDMI_CURSOR_ROW.load(Ordering::Acquire), 0);
         assert_eq!(HDMI_CURSOR_COL.load(Ordering::Acquire), 5);
         stage_bytes(DRIVER_TASK_RING_FRAME_OFFSET, b"a\nb");

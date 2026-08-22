@@ -300,6 +300,7 @@ def test_pi4_image_build_keeps_firmware_second_stage_debug_quiet() -> None:
     config_template = source[config_start : source.index("\nEOF", config_start)]
 
     assert "enable_uart=1" in config_template
+    assert "disable_overscan=1" in config_template
     assert "uart_2ndstage=1" not in config_template
 
 

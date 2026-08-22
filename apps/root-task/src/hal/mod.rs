@@ -25,6 +25,12 @@ use core::{
 /// bootstrap driver's bounded MCS turn. The steady local-seat path owns later
 /// redraw and clearing work.
 const HDMI_EARLY_BANNER_PAYLOAD: &[u8] = b"Starting HDMI\n";
+#[cfg(feature = "kernel")]
+// One nonblocking HDMI frame attempt already yields through 65,536 bounded
+// completion polls. Retain the exact request for at most four such outer
+// attempts so an unusually delayed first-frame clear can cross replenishments
+// without turning a stalled display into an unbounded root bootstrap wait.
+const HDMI_EARLY_FRAME_RETAINED_TURN_LIMIT: usize = 4;
 
 #[cfg(any(feature = "kernel", feature = "cache-maintenance"))]
 pub mod cache;
@@ -2593,6 +2599,26 @@ fn runtime_init_descriptor_expected_bus_links(
 }
 
 #[cfg(feature = "kernel")]
+fn run_hdmi_first_frame_retained_with<Attempt, Handoff>(
+    mut attempt: Attempt,
+    mut handoff: Handoff,
+) -> Option<driver_task::DriverTaskCompletionRecord>
+where
+    Attempt: FnMut() -> Option<driver_task::DriverTaskCompletionRecord>,
+    Handoff: FnMut(),
+{
+    for turn in 0..HDMI_EARLY_FRAME_RETAINED_TURN_LIMIT {
+        if let Some(completion) = attempt() {
+            return Some(completion);
+        }
+        if turn.saturating_add(1) != HDMI_EARLY_FRAME_RETAINED_TURN_LIMIT {
+            handoff();
+        }
+    }
+    None
+}
+
+#[cfg(feature = "kernel")]
 fn bootstrap_linked_runtime_engine_for_early_console(
     contract: DriverTaskContract,
     spec: driver_task::DriverTaskRuntimeImageSpec,
@@ -2626,10 +2652,15 @@ fn bootstrap_linked_runtime_engine_for_early_console(
         banner_payload,
         0,
     )];
-    let draw_completion = driver_task::run_driver_task_ring_command_nonblocking_staged(
-        contract,
-        draw_command,
-        &banner_segments,
+    let draw_completion = run_hdmi_first_frame_retained_with(
+        || {
+            driver_task::run_driver_task_ring_command_nonblocking_staged(
+                contract,
+                draw_command,
+                &banner_segments,
+            )
+        },
+        sel4::yield_now,
     );
     let draw_ready = matches!(
         draw_completion,
@@ -2681,10 +2712,15 @@ fn bootstrap_linked_runtime_engine_for_early_console(
             0,
         )];
         banner = matches!(
-            driver_task::run_driver_task_ring_command_nonblocking_staged(
-                contract,
-                command,
-                &banner_segments,
+            run_hdmi_first_frame_retained_with(
+                || {
+                    driver_task::run_driver_task_ring_command_nonblocking_staged(
+                        contract,
+                        command,
+                        &banner_segments,
+                    )
+                },
+                sel4::yield_now,
             ),
             Some(done)
                 if done.code == driver_task::DriverTaskCompletionCode::Progress.as_u16()
@@ -6535,6 +6571,34 @@ mod tests {
         assert_eq!(super::HDMI_EARLY_BANNER_PAYLOAD, b"Starting HDMI\n");
         assert!(!super::HDMI_EARLY_BANNER_PAYLOAD.contains(&0x0c));
         assert!(!super::HDMI_EARLY_BANNER_PAYLOAD.contains(&0x1b));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn early_hdmi_first_frame_retains_one_identity_until_terminal() {
+        use core::cell::Cell;
+
+        let attempts = Cell::new(0usize);
+        let handoffs = Cell::new(0usize);
+        let completion = super::run_hdmi_first_frame_retained_with(
+            || {
+                let attempt = attempts.get().saturating_add(1);
+                attempts.set(attempt);
+                (attempt == 3).then_some(super::driver_task::DriverTaskCompletionRecord::progress(
+                    7, 14,
+                ))
+            },
+            || handoffs.set(handoffs.get().saturating_add(1)),
+        );
+
+        assert_eq!(
+            completion,
+            Some(super::driver_task::DriverTaskCompletionRecord::progress(
+                7, 14
+            ))
+        );
+        assert_eq!(attempts.get(), 3);
+        assert_eq!(handoffs.get(), 2);
     }
 
     #[test]

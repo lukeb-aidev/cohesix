@@ -2784,7 +2784,10 @@ const CYW43_SDIO_PAIR_RESTART_MMIO_DELAY_POLL_CAP: usize = 1_000_000;
 const SDHCI_INTERRUPT_ENABLE_OFFSET: usize = 0x34;
 const SDHCI_SIGNAL_ENABLE_OFFSET: usize = 0x38;
 const SDHCI_INTERRUPT_CARD_INT: u32 = 1 << 8;
-const DRIVER_TASK_HDMI_FRAME_TIMEOUT_KEEP_ACTIVE_LIMIT: usize = 0;
+// First display ownership clears the firmware framebuffer in bounded child
+// turns. Preserve the exact ring request across the root poll-window boundary;
+// the caller applies the same finite four-attempt outer limit.
+const DRIVER_TASK_HDMI_FRAME_TIMEOUT_KEEP_ACTIVE_LIMIT: usize = 4;
 const DRIVER_TASK_RING_CACHE_POLL_INTERVAL: usize = 64;
 const SDIO_RING_PRODUCER_ROOT_BOOTSTRAP: usize = 0;
 const SDIO_RING_PRODUCER_TRANSITION: usize = 1;
@@ -34959,7 +34962,7 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn hdmi_payload_timeouts_clear_active_slot() {
+    fn hdmi_payload_timeouts_retain_exact_first_frame_with_finite_limit() {
         let contract = HDMI_TEXT_DRIVER_TASK_CONTRACT;
         clear_driver_task_transport(contract);
         let command = DriverTaskCommandRecord::pi4_hot_path(
@@ -34985,7 +34988,7 @@ mod tests {
             ),
             DRIVER_TASK_HDMI_FRAME_TIMEOUT_KEEP_ACTIVE_LIMIT
         );
-        assert!(!driver_task_ring_timeout_keeps_active(
+        assert!(driver_task_ring_timeout_keeps_active(
             contract,
             command,
             DriverTaskRingCommandMode::NonBlocking
@@ -34999,9 +35002,9 @@ mod tests {
                 1,
                 false
             ),
-            (false, 0)
+            (true, 1)
         );
-        assert_eq!(slot.timeout_resumes.load(Ordering::Acquire), 0);
+        assert_eq!(slot.timeout_resumes.load(Ordering::Acquire), 1);
 
         clear_driver_task_transport(contract);
     }

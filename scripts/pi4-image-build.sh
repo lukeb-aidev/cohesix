@@ -2223,6 +2223,7 @@ arm_64bit=1
 arm_boost=1
 enable_uart=1
 enable_gic=1
+disable_overscan=1
 kernel=u-boot.bin
 dtoverlay=upstream-pi4
 # Keep mini-UART on GPIO14/15 to match seL4 bcm2711 serial1 console routing.
