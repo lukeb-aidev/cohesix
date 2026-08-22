@@ -114,7 +114,16 @@ operator to the host-side `cohsh` implementation. Pi 4 profiles may add `usb`
 and `wifi` diagnostic families. Their gate meanings are documented in
 [DRIVERS.md](DRIVERS.md).
 The advertised Wi-Fi inventory is passive: `wifi help`, `wifi dump-state`, and
-`wifi diag`. Legacy `wifi probe-ht`, `wifi load-fw`, and `wifi retry` spellings
+`wifi diag`. `wifi diag` is the bounded causal-triage surface: it emits at most
+eight preflighted body lines plus its terminal/status/ACK tail, leads with the
+first known failing gate, and carries retained CYW43/SDIO progress, physical
+epoch/logical generation, parent/child identity, latest child timing receipts,
+grant consumption, wake counters, and exact fault identity. Its snapshot is
+explicitly `best-effort-multi-record`; downstream gates are `not-reached`
+instead of being presented as current acceptance after an earlier failure.
+`wifi dump-state` is the verbose acceptance, DPC, association, maintenance,
+queue, TX, and Gate 7/8 inspection surface. Legacy `wifi probe-ht`, `wifi
+load-fw`, and `wifi retry` spellings
 remain recognized only to return one typed linked-runtime ownership refusal;
 they do not invoke a debug callback, snapshot traversal, or physical operation.
 The Pi USB inventory separates passive inspection from active operations:

@@ -1460,7 +1460,7 @@ prove all of the following:
   `pi4_driver_abi::DRIVER_RUNTIME_CYW43_RX_QUEUE_CAP=50`. They must reject
   divergent private capacities, prove the root can preserve one complete child
   backlog, and keep queue saturation subject to the Gate 8h rules above.
-- `wifi diag` and `wifi dump-state` formatting coverage must preserve the
+- `wifi dump-state` formatting coverage must preserve the
   untruncated passive `wifi: data_handoff` records: generation/commit/baseline
   tokens, baseline generation, and `queue=<used>/50`; one stable root RX-queue
   snapshot; one stable runtime RX-batch snapshot; an RX notification-hint
@@ -1505,6 +1505,17 @@ prove all of the following:
   `wifi_post_dhcp_rx` coverage must increment exactly once at each actual
   smoltcp delivery boundary and must prove that trace-only `rx-preserve` and
   `rx-deliver` observations do not double-count one frame.
+- `wifi diag` coverage must enforce schema v2's maximum eight body lines and
+  2,048 body bytes, an untruncated matching begin/frontier/transport/complete
+  identity, terminal status and ACK/prompt liveness, and zero physical device
+  operations. The first failing gate must precede downstream state. The causal
+  episode must bind physical epoch, logical generation, immutable parent, SDIO
+  child, terminal/exit, and pending mask; the latest child-timing row must keep
+  publication, intake, issue, terminal, and final-consumer acceptance distinct;
+  grant and wake fields remain evidence rather than authority. A multi-record
+  snapshot must say so and cannot replace Gate 7/8, DPC, DHCP, nettest, TCP, or
+  authenticated-`cohsh` acceptance. Historical verbose `wifi diag` fixtures
+  remain parseable, while new verbose proof belongs to `wifi dump-state`.
 - A current-generation association creates the post-association BSSID
   obligation independently of the EAPOL-Start timer, but only the secure-keys
   boundary may issue it; tests must prove M1/M2 cannot open BSSID maintenance
@@ -2257,7 +2268,7 @@ GPIO34-GPIO39 ALT3, CLK pull-none, and CMD/DAT0-DAT3 pull-up with BCM2711
 register-native value `1`. Pure readback tests must accept the exact selected
 fields while preserving unrelated bits and reject every single selected-field
 function or pull mismatch. Target bootstrap must fail closed if that stable
-readback was not published, and passive `wifi diag` must render both complete
+readback was not published, and passive `wifi dump-state` must render both complete
 GPFSEL3/GPPUPPDN2 words and the expected masked values.
 
 Gate 4 coverage must exercise the ABI, SDIO owner, and passive root reader as
@@ -2269,7 +2280,7 @@ current completed-lifetime snapshot and prove a 50,000,000 Hz request becomes
 41,666,666 Hz from the 250,000,000 Hz source and divisor `6`, with final
 internal-stable/card-enable, CCCR `EHS`, host/card 4-bit, and generated
 54,000,000 Hz `CNTVCT_EL0` timer evidence. Root ring tests must decode the same
-record without a write or child turn. `wifi diag` tests must prove a current
+record without a write or child turn. `wifi dump-state` tests must prove a current
 snapshot can pass Gate 4 and that a missing or stale snapshot fails Gate 4 with
 explicit `unavailable` fields; `clock=0Hz width=unknown` is forbidden for the
 linked-runtime path. A separate owner test must prove snapshot-publication
@@ -2810,7 +2821,7 @@ netstats: cyw43_priority_lease state=<inactive|acquiring|open|closing|restoring|
 netstats: cyw43_priority_lease_counts opens=<n> closes=<n> restores=<n> recovery_revocations=<n> amortized_requests=<n> failures=<n>
 ```
 
-`wifi diag` and `wifi dump-state` must report stable RX queue generation,
+`wifi dump-state` must report stable RX queue generation,
 depth/capacity, flags and commit sequence; batch parent, generation,
 queue-commit, count, remaining and final committed parent; and the passive
 constant `rx_hint observed=no authority=none history=none` plus the fault-only
@@ -4040,13 +4051,21 @@ transport path.
 
 Strict Pi SDIO command/data calls, fixed-layout SDIO CMD52/CMD53 descriptors, CYW43 firmware/NVRAM/SDPCM command records, direct-root-port xHCI keyboard polling, GENET RX/TX descriptor-ring service, and PCIe port read/write/flush helpers now compile in isolated runtime code before any root hardware execution; host coverage must keep proving those ring turns while preserving the fresh-Pi board-proof boundary.
 
+Non-network cadence coverage must preserve the 48-byte ABI footprint and
+version-2 validation, reject staged/torn/unknown-flag records, and prove the
+second runtime entry carries a valid previous-entry sample. Formatter and
+normalizer tests must distinguish modulo-32-bit entry-to-entry `gap` from
+in-episode `run`, render `gap=na` before a previous entry exists, and never
+restore the ambiguous schema-v1 `dt` interpretation. Cadence remains passive
+source evidence; only fresh target behavior can qualify scheduling.
+
 Current Wi-Fi acceptance also requires one exact
 `CYW43_SDIO_DPC generation=<n> captures=<n> published=<n> consumed=<n>
 rearms=<n> overruns=<n> epoch_errors=<n> sequence_errors=<n>
 ack_failures=<n> owner_active=yes|no poisoned=yes|no masked=yes|no` diagnostic
 in the current boot
 slice and `WIFI_DPC_PROOF=yes` from
-`scripts/pi4_trace_normalize.py --gate-summary`. `wifi diag` preserves that
+`scripts/pi4_trace_normalize.py --gate-summary`. `wifi dump-state` preserves that
 bounded accounting grammar and immediately follows it with
 `CYW43_SDIO_DPC_SCOPE captures=event-attempts published=ring-events
 poisoned=aggregate-client-or-ring source=card-int-or-source-probe
@@ -4080,7 +4099,7 @@ other=<n> spur=<n> done=<n> dpc=<n> child=<n> owner=<n> fdpc=<n>
 fown=<n>`. The additive v11 completion trace retains those fields only for
 historical/compatibility decoding and cannot satisfy current proof. All five
 lines must remain complete at maximum counter widths. The
-same `wifi diag` lifetime must report `sdio_deadline_hints=<count>` from the
+same `wifi dump-state` lifetime must report `sdio_deadline_hints=<count>` from the
 fault-only arm relay; ordinary accepted traffic requires zero and a nonzero
 value cannot be normalized away as a successful transport wake. The
 accounting `poisoned` value is the
@@ -4111,7 +4130,7 @@ p2r=<...> r2a=<...> sat=<n> inv=<n>
 slow=<total>/<s2q>/<q2p>/<p2r>/<r2a>`,
 then
 `wifi_tx_queue gen=<n> depth=<n> reserved=<n> hwm=<n> drops=<n>
-stale_purged=<n>`; `wifi diag` must emit equivalent `wifi: tx_phase*` and
+stale_purged=<n>`; `wifi dump-state` must emit equivalent `wifi: tx_phase*` and
 `wifi: tx_queue` records. Focused tests must prove generation reset, ticket
 deduplication, same-turn issue/terminal ordering with `i2t=0`, later terminal
 sampling, terminal-to-successor timing, saturating counters, bounded formatting,
@@ -4221,14 +4240,16 @@ evidence, `t2n` includes ordinary idle time and later TxToken arrival.
 `successor_issues` counts only a later actual op7 issue, not TxToken admission,
 an earlier local promotion, or general smoltcp delay.
 
-`wifi diag` emits the proof only after identical stable reads of the admitted
+`wifi dump-state` emits the proof only after identical stable reads of the admitted
 SDIO owner ring surround one stable valid read of the current 128-byte CYW43
 DPC-client record for that exact physical bus-link epoch and live consumer.
 The normalizer binds that record only within the exact production command
-window `wifi: debug subcommand=diag action=begin` -> adjacent
-accounting/scope/truth triplet -> matching `wifi: diag_begin`. A missing,
+window `wifi: debug subcommand=dump-state action=begin` -> adjacent
+accounting/scope/truth triplet -> matching dump-state completion. A missing,
 malformed, clipped, or cross-command sample is acceptance-red and requires a
-bounded rerun; no prior command's healthy triplet may be reused.
+bounded rerun; no prior command's healthy triplet may be reused. Historical
+verbose `wifi diag` windows remain parseable but do not define the new command
+split.
 The v11 completion layout preserves the complete v10 prefix for old-capture
 parsing only; neither version supplies current client truth.
 `rearms` counts generation-scoped owner-rearm signal attempts, not separately
@@ -5219,17 +5240,14 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
     `WIFI_GATE7_LAST=7e`, and `WIFI_GATE7_MISSING=none`; the latest
     `WIFI_SUBGATE=7e` alone cannot hide a missing or reordered join,
     association, M1, M2/M3/M4/PTK/GTK, or secure-release step. Retained Gate 7
-    and current Gate 8 rows are accepted only from one bracketed `wifi diag`
-    transaction: nonzero `diag_begin id=<id>` and matching
-    `diag_complete id=<id>` must carry the same pair and generation, the compact
-    Gate 7 row must carry that `id`/pair/generation, and every intervening Gate 8
-    row must carry the same pair/generation. Standalone, prior, reordered,
-    malformed, scrubbed, clipped-without-an-exact-current-terminal, or
-    cross-identity rows fail closed. Its `src=sm` means current retained
-    host-EAPOL state-machine proof, not generic Gate 8 inference. If the outer
-    `wifi: debug subcommand=diag action=complete` row is present, it must follow
-    the matching `diag_complete`; a capture clipped after that inner terminal
-    need not invent the missing outer row. The separate old-good prefix comes
+    and current Gate 8 rows are accepted from their production atomic commits
+    and the separate retained old-good transaction below. New schema-v2
+    `wifi diag` causal rows cannot replace them. Historical logs with the old
+    bracketed verbose `wifi diag` transaction remain accepted only when nonzero
+    matching begin/complete identity, Gate 7 identity, intervening Gate 8
+    pair/generation, ordering, and terminal rules all hold; standalone, prior,
+    malformed, scrubbed, clipped, or cross-identity rows fail closed. The
+    separate old-good prefix comes
     only from a physical-console `smp` or `smp activity` request. It is one
     all-or-nothing 37-line batch: six compact current owner rows in the exact
     `(hot_path, contract, bus_link_seal)` order
@@ -5344,7 +5362,7 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
     - for static boots sourced from the U-Boot wizard, `/chosen/cohesix,static-ipv4`, `/chosen/cohesix,static-prefix-len`, and optional `/chosen/cohesix,static-gateway` appear in the U-Boot handoff log
     - for DHCP boots, `[net-console] pending-dhcp ...` followed by `[dhcp] lease bound ...`; DHCP-bound evidence is address proof only, while acceptance still requires listener/command evidence (`netstatus ... tcp_ready=yes`, authenticated `cohsh`, or successful `nettest`).
     - USB cold-boot proof shows `USB_BOOTLOADER_HANDOFF_SEEN=no` and `USB_COLD_BOOT_SEEN=yes`; any U-Boot xHCI handoff, stop-seed, preserve-state, bootloader-authorized reset, or `run-uboot` label fails the Pi 4 USB gate.
-    - USB keyboard proof reaches `USB_GATE=10` / `USB_BLOCKER=none` with `USB_COMMAND_READY=yes`, `USB_FIRST_REPORT_READY=yes`, `USB_LOCAL_SEAT_STATE=ready`, `USB_BUSY_AFTER_READY=no`, current USB and PCIe descriptor/owner proof, and the single interrupt-IN lane stably armed by a current `queue_valid=yes queued_reports=1` record; missing queue evidence is acceptance-red, zero is empty, and any larger active depth is an invariant failure, independent of the cumulative transfer-event count. An explicit `queue_valid=no` revokes the queue sample: companion `queued_reports` and `transfer_events` fields may be untyped bytes from an earlier enumeration result and the normalizer must not export or classify them as HID queue counters. Current health uses the consecutive no-reply streak, not historical no-reply totals. The dormant USB old-good receipt is not hardware acceptance authority. The first HID report and first byte must be sourced from `linked-runtime-hid`; `usb status` must remain honest with `physical_input_proven=no` until that linked-runtime byte also reaches parser ingress. A linked first-byte latch or parser ingress reported only as `local-seat-queue-diagnostic`, local-seat queue text, or `source=first-byte` is diagnostic by itself and never sets the proof. A printable-key line such as `runtime keyboard first-printable-byte ...`, `physical_input_proven=yes`, visible HDMI echo, and a post-`usb diag` `USB_DIAG_LIVENESS_STATUS=pass` remain the default user-experience evidence. Sustained USB acceptance additionally requires `USB_POST_FIRST_BYTE_BLOCKER=none`, no `recovery-failed` report status, no post-first-byte queue collapse, and no growing no-reply or dropped-byte pressure during typing, arrow-history, and lock-key bursts. HDMI completion proof uses the current driver-task active request; an inactive historical submitted/completed counter gap remains telemetry and cannot fabricate a live outstanding turn. The passive status and immediately adjacent `hdmi: driver` row must jointly prove present counters, inactive authority, at least one completion, zero outstanding work, zero current no-reply streak, and no stale snapshot. `USB_EVENT_LOOP_RUNTIME_SKIPPED` may grow when those turns intentionally service input first and is not itself a blocker. Exact image `7a10b8fd6acc` is the recorded exception: no key was typed, `physical_input_proven=no` remained truthful, and the operator accepted repeated Gate 10/one-deep/command-ready/recovery-free/HDMI-complete sentinels plus exact restoration of the board-proven path. That exception is not parser authority and expires when the physical USB path changes.
+    - USB keyboard proof reaches `USB_GATE=10` / `USB_BLOCKER=none` with `USB_COMMAND_READY=yes`, `USB_FIRST_REPORT_READY=yes`, `USB_LOCAL_SEAT_STATE=ready`, `USB_BUSY_AFTER_READY=no`, current USB and PCIe descriptor/owner proof, and the single interrupt-IN lane stably armed by a current `queue_valid=yes queued_reports=1` record; missing queue evidence is acceptance-red, zero is empty, and any larger active depth is an invariant failure, independent of the cumulative transfer-event count. An explicit `queue_valid=no` revokes the queue sample: current target output must render companion `queued_reports`, doorbell, preserved-event, `transfer_events`, and report-status fields as `unknown`. Historical logs may contain untyped bytes from an earlier enumeration result, and the normalizer must not export or classify them as HID queue counters. Current health uses the consecutive no-reply streak, not historical no-reply totals. The dormant USB old-good receipt is not hardware acceptance authority. The first HID report and first byte must be sourced from `linked-runtime-hid`; `usb status` must remain honest with `physical_input_proven=no` until that linked-runtime byte also reaches parser ingress. A linked first-byte latch or parser ingress reported only as `local-seat-queue-diagnostic`, local-seat queue text, or `source=first-byte` is diagnostic by itself and never sets the proof. A printable-key line such as `runtime keyboard first-printable-byte ...`, `physical_input_proven=yes`, visible HDMI echo, and a post-`usb diag` `USB_DIAG_LIVENESS_STATUS=pass` remain the default user-experience evidence. Sustained USB acceptance additionally requires `USB_POST_FIRST_BYTE_BLOCKER=none`, no `recovery-failed` report status, no post-first-byte queue collapse, and no growing no-reply or dropped-byte pressure during typing, arrow-history, and lock-key bursts. HDMI completion proof uses the current driver-task active request; an inactive historical submitted/completed counter gap remains telemetry and cannot fabricate a live outstanding turn. The passive status and immediately adjacent `hdmi: driver` row must jointly prove present counters, inactive authority, at least one completion, zero outstanding work, zero current no-reply streak, and no stale snapshot. `USB_EVENT_LOOP_RUNTIME_SKIPPED` may grow when those turns intentionally service input first and is not itself a blocker. Exact image `7a10b8fd6acc` is the recorded exception: no key was typed, `physical_input_proven=no` remained truthful, and the operator accepted repeated Gate 10/one-deep/command-ready/recovery-free/HDMI-complete sentinels plus exact restoration of the board-proven path. That exception is not parser authority and expires when the physical USB path changes.
     - if the attached keyboard exposes lock LEDs, Caps Lock, Num Lock, and Scroll Lock testing either proves the preallocated EP0 OUT DMA path (`xhci-control-out-prealloc` plus `pi4 keyboard led sync ready ...`) or cleanly logs `keyboard led sync unavailable ... action=disabled` without blocking input.
     - HDMI local-seat acceptance observes typed USB keyboard bytes echoing at
       parser ingress on the live prompt row, boot/progress messages refreshing

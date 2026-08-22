@@ -1355,7 +1355,7 @@ struct Cyw43DeferredRecovery {
 /// Passive first-cause record retained after the recovery owner consumes its ticket.
 ///
 /// The record contains only immutable command identity and terminal metadata;
-/// it deliberately excludes payload bytes and payload digests. `wifi diag`
+/// it deliberately excludes payload bytes and payload digests. `wifi dump-state`
 /// reads one copy without taking the live recovery ticket or touching either
 /// linked runtime.
 #[cfg(feature = "kernel")]
@@ -10024,7 +10024,7 @@ pub(crate) struct Cyw43MaintenanceActionDiagnostic {
     pub turns: u16,
 }
 
-/// Passive, generation-bound maintenance telemetry for `wifi diag`.
+/// Passive, generation-bound maintenance telemetry for `wifi dump-state`.
 ///
 /// Reading this snapshot copies the retained cursor under its existing lock.
 /// It performs no driver-runtime, HAL, register, or recovery operation.
@@ -10888,7 +10888,7 @@ pub(crate) struct Cyw43AssociationServiceOutcome {
     pub(crate) host_eapol_allowed: bool,
 }
 
-/// Passive, generation-bound association telemetry for `wifi diag`.
+/// Passive, generation-bound association telemetry for `wifi dump-state`.
 ///
 /// This snapshot reports only retained root/runtime state. It performs no
 /// register access and never submits a driver action, so operator diagnostics
@@ -10970,7 +10970,7 @@ impl Cyw43AssociationDiagnostic {
 
 /// Passive decomposition of the aggregate Gate 8g host-EAPOL work fence.
 ///
-/// `wifi diag` uses this snapshot to name the retained leaf obligation without
+/// `wifi dump-state` uses this snapshot to name the retained leaf obligation without
 /// polling the runtime or changing ownership. Counts are generation-local and
 /// bounded by fixed-capacity queues.
 #[cfg(feature = "kernel")]
@@ -11713,7 +11713,7 @@ pub(crate) fn cyw43_association_diagnostic() -> Cyw43AssociationDiagnostic {
     }
 }
 
-/// Return a same-generation, fail-closed Gate 7 receipt for `wifi diag`.
+/// Return a same-generation, fail-closed Gate 7 receipt for `wifi dump-state`.
 #[cfg(feature = "kernel")]
 #[must_use]
 pub(crate) fn cyw43_gate7_diagnostic() -> Option<Cyw43Gate7Diagnostic> {
@@ -51821,7 +51821,7 @@ mod tests {
                 bssid_obligation: false,
                 causal_continuation: false,
             },
-            "wifi diag must identify the exact leaf behind the aggregate 8g fence"
+            "wifi dump-state must identify the exact leaf behind the aggregate 8g fence"
         );
         assert!(!cyw43_gate8_publication_quiescent(generation));
         assert_eq!(

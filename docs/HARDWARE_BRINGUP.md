@@ -454,6 +454,7 @@ netstats
 smp activity
 nettest
 netstats
+wifi dump-state
 wifi diag
 usb diag
 usb status
@@ -469,6 +470,17 @@ contiguous stream. It carries at most the marker-length-minus-one tail into the
 next prompt wait; unrelated intervening bytes cannot complete the marker. This
 allows a prompt whose leading byte arrived with the guarded `ping` result
 without sending the next diagnostic early.
+
+The legacy `pi4_gate_proof.sh` live-capture path now enforces the same minimum
+barriers: it waits for the attempt-1 supervisor terminal, polls `netstats` only
+after that terminal, and skips `nettest` unless current Wi-Fi DHCP is bound.
+Its default convergence sequence omits the verbose `wifi dump-state`; it cannot
+create missing acceptance evidence. `--require-wifi-ready` inserts the verbose
+command immediately before compact causal triage and then requires its
+command-bound DPC proof. For complete boot-bound settling, DHCP,
+paired-pcap, verbose state, and terminal-verdict handling,
+`pi4_serial_reboot.py` remains the canonical live helper; gate-proof
+`--normalize-only` remains safe for historical logs.
 
 `OK NETTEST detail=started run_generation=<n>` proves only admission. Wait at
 least 15 seconds, then issue the final `netstats` before continuing. It must
@@ -505,8 +517,9 @@ unavailable `nettest` work rather than accepting a stale prior verdict. These
 waits keep retained bootstrap output from colliding with serial commands. They
 do not alter the GENET diagnostic order or its existing timeouts.
 
-The production helper issues only guarded, paced `wifi diag` for Wi-Fi owner
-evidence. It never submits the legacy `wifi probe-ht`, `wifi load-fw`, or
+The production helper issues guarded, paced `wifi dump-state` for verbose
+acceptance evidence followed by compact `wifi diag` causal triage. It never
+submits the legacy `wifi probe-ht`, `wifi load-fw`, or
 `wifi retry` verbs. Those spellings remain parser-compatible, but root refuses
 each with one typed `pi4-wifi-driver-task-runtime-required` terminal before a
 debug handle, retained snapshot, or physical operation can be reached. Any
@@ -610,12 +623,18 @@ explicitly intended.
 keyboard-ready latch with a still-pending request instead reports
 `probe_result=keyboard-unavailable continuation=pending`.
 
-The command effects are intentionally distinct. `wifi diag`, `usb diag`,
-`netstats`, and `smp` read retained state and must not submit a device
-operation; `wifi diag` labels cached progress as `last_progress` and
+The command effects are intentionally distinct. `wifi diag`, `wifi dump-state`,
+`usb diag`, `netstats`, and `smp` read retained state and must not submit a
+device operation. `wifi diag` is a compact, preflighted causal response capped
+at eight body lines and 2,048 body bytes. It reports the first known failed
+gate before downstream state, the latest parent/child episode, timing receipts,
+grant consumption, wake hint, and fault; its explicit
+`snapshot=best-effort-multi-record` label prevents cross-record state from being
+mistaken for one atomic acceptance snapshot. `wifi dump-state` retains the
+verbose acceptance surface and labels cached progress as `last_progress` and
 `superseded=yes` when a terminal fault is newer. On the physical linked-runtime
-profile it also emits bounded passive `wifi: association state`, `progress`,
-and `retained` records. They name the current connection generation, explicitly
+profile it emits passive `wifi: association state`, `progress`, and `retained`
+records. They name the current connection generation, explicitly
 mark whether session progress belongs to it, report primary-join,
 association/link and host-EAPOL state, preserve poll/event counters, and expose
 the retained prompt/TX/key/drain owner, generation, request, issuance, and HAL
@@ -937,8 +956,9 @@ error that discards the exact runtime completion fails the boot.
 
 #### Route the first failed invariant
 
-Capture serial from power-on and run `wifi diag` only after the boot reaches a
-stable terminal or the current first failure is unambiguous. Preserve the
+Capture serial from power-on and run guarded `wifi dump-state` followed by
+`wifi diag` only after the boot reaches a stable terminal or the current first
+failure is unambiguous. Preserve the
 newest non-empty serial log and, once network traffic begins, its paired capture.
 Do not combine markers or counters from different boots.
 
@@ -967,8 +987,9 @@ After Gate 8 and address binding:
 2. prove bidirectional raw TCP on the target listener;
 3. complete authenticated `cohsh` on that same boot;
 4. run the applicable focused `.coh` checks;
-5. collect passive `wifi diag`, owner, DPC, queue, deadline, fault, and
-   recovery counters; and
+5. collect passive verbose `wifi dump-state` owner, DPC, queue, deadline,
+   fault, and recovery counters, followed by compact `wifi diag` causal
+   triage; and
 6. only then run REST, hive, or performance workloads.
 
 Performance evidence must retain per-lifetime loss, error, reconnect, timeout,

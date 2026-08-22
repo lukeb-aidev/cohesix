@@ -204,6 +204,64 @@ WIFI_DIAG_BEGIN_RE = re.compile(
     r"generation=(?P<generation>[1-9][0-9]*) "
     r"snapshot=current$"
 )
+WIFI_CAUSAL_DIAG_BEGIN_RE = re.compile(
+    r"^wifi: diag_begin "
+    r"id=(?P<snapshot_sequence>[1-9][0-9]*) "
+    r"schema=v2 snapshot=best-effort-multi-record "
+    r"pair=(?P<pair_epoch>[0-9]+) gen=(?P<generation>[0-9]+) "
+    r"source=(?P<source>[a-z0-9-]+)$"
+)
+WIFI_CAUSAL_DIAG_FRONTIER_RE = re.compile(
+    r"^wifi: causal_frontier "
+    r"id=(?P<snapshot_sequence>[1-9][0-9]*) "
+    r"gate=(?P<gate>[0-9]|10) "
+    r"status=(?P<status>[a-z0-9-]+) "
+    r"blocker=(?P<blocker>[a-z0-9-]+) "
+    r"downstream=(?P<downstream>not-reached|complete)$"
+)
+WIFI_CAUSAL_DIAG_PROGRESS_RE = re.compile(
+    r"^wifi: causal_progress "
+    r"id=(?P<snapshot_sequence>[1-9][0-9]*) "
+    r"cyw43=[0-9]+/[0-9]+/[a-z0-9-]+ "
+    r"sdio=[0-9]+/[0-9]+/[a-z0-9-]+ "
+    r"replay=[a-z0-9-]+/[a-z0-9-]+$"
+)
+WIFI_CAUSAL_DIAG_EPISODE_RE = re.compile(
+    r"^wifi: causal_episode "
+    r"id=(?P<snapshot_sequence>[1-9][0-9]*) "
+    r"(?:state=unavailable|"
+    r"pub=[0-9]+ episode=[0-9]+ phys=[0-9]+ logical=[0-9]+ "
+    r"parent=[0-9]+/[0-9a-f]{4} "
+    r"child=[0-9]+/[0-9a-f]{4}/[0-9a-f]{4}/[0-9a-f]{8} "
+    r"exit=[0-9]+/[0-9a-f]{4}/[0-9a-f]{8} "
+    r"pending=[0-9a-f]{8})$"
+)
+WIFI_CAUSAL_DIAG_GRANT_RE = re.compile(
+    r"^wifi: causal_grant "
+    r"id=(?P<snapshot_sequence>[1-9][0-9]*) "
+    r"(?:state=unavailable|"
+    r"active=(?:yes|no) phase=[a-z0-9-]+ request=[0-9]+ "
+    r"generation=[0-9]+ command=[0-9]+ issued=(?:yes|no) "
+    r"producer=[0-9]+ shared=[0-9]+ consumed=[0-9]+ exact=(?:yes|no))$"
+)
+WIFI_CAUSAL_DIAG_FAULT_RE = re.compile(
+    r"^wifi: causal_fault "
+    r"id=(?P<snapshot_sequence>[1-9][0-9]*) "
+    r"(?:state=none|"
+    r"stage=[a-z0-9-]+ op=[0-9a-f]{4} flags=[0-9a-f]{4} "
+    r"target=[0-9a-f]{8} payload=[0-9]+/[0-9]+ total=[0-9]+ "
+    r"detail=[0-9a-f]{4} reason=[a-z0-9-]+ result=[0-9a-f]{8})$"
+)
+WIFI_CAUSAL_DIAG_TRANSPORT_RE = re.compile(
+    r"^wifi: diag_transport "
+    r"id=(?P<snapshot_sequence>[1-9][0-9]*) "
+    r"body_lines=(?P<body_lines>[0-9]+) "
+    r"body_bytes=(?P<body_bytes>[0-9]+) "
+    r"max_lines=(?P<max_lines>[0-9]+) "
+    r"max_bytes=(?P<max_bytes>[0-9]+) "
+    r"backlog_before=(?P<backlog_before>[0-9]+) "
+    r"wake=bound/badge/polls/hits:(?P<wake>[a-z0-9/]+)$"
+)
 WIFI_DIAG_CONTEXT_RE = re.compile(
     r"^wifi: diag_context "
     r"id=(?P<snapshot_sequence>[1-9][0-9]*) "
@@ -222,15 +280,55 @@ WIFI_DIAG_COMPLETE_RE = re.compile(
     r"status=(?P<status>[a-z0-9-]+) "
     r"block=(?P<blocker>[a-z0-9-]+)$"
 )
+WIFI_LEGACY_DIAG_COMPLETE_RE = re.compile(
+    r"^wifi: diag_complete causal=(?:yes|no) detail=(?:yes|no) "
+    r"scope=[a-z0-9-]+ frontier=[a-z0-9-]+ status=[a-z0-9-]+ "
+    r"blocker=[a-z0-9-]+$"
+)
+WIFI_CAUSAL_DIAG_COMPLETE_RE = re.compile(
+    r"^wifi: diag_complete "
+    r"id=(?P<snapshot_sequence>[1-9][0-9]*) "
+    r"causal=yes detail=(?P<detail>yes|no) schema=v2 "
+    r"gate=(?P<gate>[0-9]|10) "
+    r"status=(?P<status>[a-z0-9-]+) "
+    r"blocker=(?P<blocker>[a-z0-9-]+) "
+    r"body_lines=(?P<body_lines>[0-9]+) "
+    r"body_bytes=(?P<body_bytes>[0-9]+)$"
+)
+WIFI_DIAG_COMMAND_BEGIN_RE = re.compile(
+    r"^wifi: debug subcommand=diag action=begin "
+    r"profile=(?:bounded|bounded-causal) mode=one-shot$"
+)
+# Historical fixture spelling retained for old-log compatibility tests.
 WIFI_DIAG_COMMAND_BEGIN_LINE = (
-    "wifi: debug subcommand=diag action=begin "
-    "profile=bounded mode=one-shot"
+    "wifi: debug subcommand=diag action=begin profile=bounded mode=one-shot"
 )
 WIFI_DIAG_COMMAND_COMPLETE_RE = re.compile(
     r"^wifi: debug subcommand=diag action=complete "
-    r"profile=bounded mode=one-shot "
-    r"(?:result=ok(?: source=(?:linked-runtime-retained-state|live-net-status))?"
+    r"profile=(?:bounded|bounded-causal) mode=one-shot "
+    r"(?:result=ok(?: source=(?:linked-runtime-retained-state|live-net-status|causal-triage))?"
     r"|result=error error=unsupported operation: wifi-debug-unavailable)$"
+)
+WIFI_DUMP_STATE_COMMAND_BEGIN_RE = re.compile(
+    r"^wifi: debug subcommand=dump-state action=begin "
+    r"profile=verbose mode=one-shot$"
+)
+WIFI_DUMP_STATE_COMMAND_COMPLETE_RE = re.compile(
+    r"^wifi: debug subcommand=dump-state action=complete "
+    r"profile=verbose mode=one-shot "
+    r"result=ok(?: source=(?:linked-runtime-retained-state|live-net-status))?$"
+)
+PI4_CADENCE_V2_RE = re.compile(
+    r"^PI4_CADENCE schema=v2 "
+    r"c=(?P<contract>[a-z0-9-]+) "
+    r"q=(?P<sequence>[0-9a-f]+) "
+    r"entry=(?P<entry>[0-9a-f]+) "
+    r"prev=(?P<previous>valid|none) "
+    r"gap=(?P<gap>[0-9a-f]+|na) "
+    r"run=(?P<run>[0-9a-f]+) "
+    r"p=(?P<phase>[0-9a-f]+)/(?P<phase_name>[a-z0-9-]+) "
+    r"w=(?P<work_completed>[0-9a-f]+)/(?P<work_total>[0-9a-f]+) "
+    r"e=(?P<exit>[a-z0-9-]+) f=(?P<flags>[0-9a-f]+)$"
 )
 CYW43_BUS_EPISODE_RE = re.compile(
     r"^CYW43_BUS_EPISODE "
@@ -1011,6 +1109,8 @@ class GateSummary:
     wifi_diag_cause: str = "none"
     wifi_diag_trigger: str = "none"
     wifi_diag_retained: str = "none"
+    wifi_diag_body_lines: int = 0
+    wifi_diag_body_bytes: int = 0
     serial_clean: bool = True
     boot_halted: bool = False
     timer_irq27_seen: bool = False
@@ -1253,6 +1353,10 @@ class GateSummary:
     usb_runtime_transfer_events: int = 0
     usb_runtime_report_status: str = "unknown"
     usb_runtime_queue_valid: str = "unknown"
+    usb_runtime_cadence_previous: str = "unknown"
+    usb_runtime_cadence_gap_ticks: int | str = "UNKNOWN"
+    usb_runtime_cadence_run_ticks: int | str = "UNKNOWN"
+    usb_runtime_cadence_line: int = 0
     usb_runtime_doorbell_pending: str = "unknown"
     usb_runtime_recovery_diag_valid: str = "unknown"
     usb_runtime_endpoint_recoveries: int = 0
@@ -1354,6 +1458,8 @@ class GateSummary:
             "WIFI_DIAG_CAUSE": self.wifi_diag_cause,
             "WIFI_DIAG_TRIGGER": self.wifi_diag_trigger,
             "WIFI_DIAG_RETAINED": self.wifi_diag_retained,
+            "WIFI_DIAG_BODY_LINES": self.wifi_diag_body_lines,
+            "WIFI_DIAG_BODY_BYTES": self.wifi_diag_body_bytes,
             "SERIAL_CLEAN": "yes" if self.serial_clean else "no",
             "BOOT_HALTED": "yes" if self.boot_halted else "no",
             "TIMER_IRQ27_SEEN": "yes" if self.timer_irq27_seen else "no",
@@ -1377,6 +1483,10 @@ class GateSummary:
             "USB_STALE_UEFI_HINT_SEEN": (
                 "yes" if self.usb_stale_uefi_hint_seen else "no"
             ),
+            "USB_RUNTIME_CADENCE_PREVIOUS": self.usb_runtime_cadence_previous,
+            "USB_RUNTIME_CADENCE_GAP_TICKS": self.usb_runtime_cadence_gap_ticks,
+            "USB_RUNTIME_CADENCE_RUN_TICKS": self.usb_runtime_cadence_run_ticks,
+            "USB_RUNTIME_CADENCE_LINE": self.usb_runtime_cadence_line,
             "USB_EVENT_RING_ALIVE": "yes" if self.usb_event_ring_alive else "no",
             "USB_PSC_DRAIN_COUNT": self.usb_psc_drain_count,
             "USB_PSC_DRAIN_MASK": f"0x{self.usb_psc_drain_mask:08x}",
@@ -2254,6 +2364,7 @@ def classify_domain(line: str) -> str | None:
         return "wifi"
     if (
         "DRIVER_TASK" in line
+        or line.startswith("PI4_CADENCE ")
         or "SCHED_CONTRACT" in line
         or "BUDGET_OVERRUN" in line
         or "[driver-task]" in lower
@@ -4733,6 +4844,11 @@ def refine_wifi_gate8_from_diag_complete(
                 ready_line=0,
             )
         return proof
+    if WIFI_CAUSAL_DIAG_COMPLETE_RE.fullmatch(summary.raw) is not None:
+        # Schema v2 is causal triage, not a replacement Gate 7/8 acceptance
+        # table. Preserve independently observed gate proof without trying to
+        # infer omitted downstream rows.
+        return proof
     trailing_transaction_rows = [
         event for event in transaction_rows if event.line > summary.line
     ]
@@ -5047,6 +5163,15 @@ def summarize_wifi_diag_complete(
     )
     if summary is None or field_lower(summary, "causal") != "yes":
         return "unknown", "unknown", "none", "none", "none"
+    causal_match = WIFI_CAUSAL_DIAG_COMPLETE_RE.fullmatch(summary.raw)
+    if causal_match is not None:
+        return (
+            causal_match.group("detail"),
+            "best-effort-multi-record",
+            normalize_wifi_exact(causal_match.group("blocker")),
+            "causal-triage",
+            f"gate-{causal_match.group('gate')}",
+        )
     summary_sequence = parse_hex_int(summary.fields.get("id"))
     summary_match = WIFI_DIAG_COMPLETE_RE.fullmatch(summary.raw)
     if summary_sequence is not None and summary_match is None:
@@ -5082,6 +5207,216 @@ def summarize_wifi_diag_complete(
         or (field_lower(context, "retained") if context else "none")
         or "none",
     )
+
+
+def summarize_wifi_causal_diag(
+    events: Iterable[TraceEvent],
+) -> tuple[int, str, str, int, int, int]:
+    """Return the latest complete bounded schema-v2 causal transaction."""
+
+    event_list = list(events)
+    causal_rows = [
+        event
+        for event in event_list
+        if (
+            (
+                has_reserved_record_prefix(
+                    event.raw, "wifi: debug subcommand=diag"
+                )
+                and "profile=bounded-causal" in event.raw
+                and "action=begin" in event.raw
+            )
+            or (
+                has_reserved_record_prefix(event.raw, "wifi: diag_begin")
+                and "schema=v2" in event.raw
+            )
+            or event.raw.startswith("wifi: causal_")
+            or has_reserved_record_prefix(event.raw, "wifi: diag_transport")
+            or (
+                has_reserved_record_prefix(event.raw, "wifi: diag_complete")
+                and "schema=v2" in event.raw
+            )
+        )
+    ]
+    complete_event = next(
+        (
+            event
+            for event in reversed(causal_rows)
+            if has_reserved_record_prefix(event.raw, "wifi: diag_complete")
+        ),
+        None,
+    )
+    if complete_event is None:
+        if causal_rows:
+            return 0, "transaction-incomplete", "fail", 0, 0, causal_rows[-1].line
+        return 0, "none", "unknown", 0, 0, 0
+    complete = WIFI_CAUSAL_DIAG_COMPLETE_RE.fullmatch(complete_event.raw)
+    if complete is None or any(
+        event.line > complete_event.line for event in causal_rows
+    ):
+        return 0, "transaction-invalid", "fail", 0, 0, causal_rows[-1].line
+    sequence = int(complete.group("snapshot_sequence"), 10)
+    begin_event = next(
+        (
+            event
+            for event in reversed(event_list)
+            if event.line < complete_event.line
+            and (match := WIFI_CAUSAL_DIAG_BEGIN_RE.fullmatch(event.raw))
+            is not None
+            and int(match.group("snapshot_sequence"), 10) == sequence
+        ),
+        None,
+    )
+    frontier_event = next(
+        (
+            event
+            for event in reversed(event_list)
+            if event.line < complete_event.line
+            and (match := WIFI_CAUSAL_DIAG_FRONTIER_RE.fullmatch(event.raw))
+            is not None
+            and int(match.group("snapshot_sequence"), 10) == sequence
+        ),
+        None,
+    )
+    transport_event = next(
+        (
+            event
+            for event in reversed(event_list)
+            if event.line < complete_event.line
+            and (match := WIFI_CAUSAL_DIAG_TRANSPORT_RE.fullmatch(event.raw))
+            is not None
+            and int(match.group("snapshot_sequence"), 10) == sequence
+        ),
+        None,
+    )
+    if begin_event is None or frontier_event is None or transport_event is None:
+        return 0, "transaction-incomplete", "fail", 0, 0, complete_event.line
+    frontier = WIFI_CAUSAL_DIAG_FRONTIER_RE.fullmatch(frontier_event.raw)
+    transport = WIFI_CAUSAL_DIAG_TRANSPORT_RE.fullmatch(transport_event.raw)
+    assert frontier is not None and transport is not None
+    command_begin_event = next(
+        (
+            event
+            for event in reversed(event_list)
+            if event.line < begin_event.line
+            and has_reserved_record_prefix(
+                event.raw, "wifi: debug subcommand=diag"
+            )
+        ),
+        None,
+    )
+    command_complete_event = next(
+        (
+            event
+            for event in event_list
+            if event.line > complete_event.line
+            and has_reserved_record_prefix(
+                event.raw, "wifi: debug subcommand=diag"
+            )
+        ),
+        None,
+    )
+    body_events = [
+        event
+        for event in event_list
+        if begin_event.line <= event.line <= transport_event.line
+    ]
+    body_matchers = (
+        WIFI_CAUSAL_DIAG_BEGIN_RE,
+        WIFI_CAUSAL_DIAG_FRONTIER_RE,
+        WIFI_CAUSAL_DIAG_PROGRESS_RE,
+        WIFI_CAUSAL_DIAG_EPISODE_RE,
+        None,
+        WIFI_CAUSAL_DIAG_GRANT_RE,
+        WIFI_CAUSAL_DIAG_FAULT_RE,
+        WIFI_CAUSAL_DIAG_TRANSPORT_RE,
+    )
+    body_grammar_valid = len(body_events) == len(body_matchers)
+    if body_grammar_valid:
+        for index, (event, matcher) in enumerate(
+            zip(body_events, body_matchers, strict=True)
+        ):
+            if index == 4:
+                valid = (
+                    event.raw == "CYW43_DPC_CHILD_TIMING_ENTRY state=unavailable"
+                    or CYW43_DPC_CHILD_TIMING_ENTRY_RE.fullmatch(event.raw)
+                    is not None
+                )
+            else:
+                match = matcher.fullmatch(event.raw) if matcher is not None else None
+                valid = (
+                    match is not None
+                    and (
+                        "snapshot_sequence" not in match.groupdict()
+                        or int(match.group("snapshot_sequence"), 10) == sequence
+                    )
+                )
+            if not valid:
+                body_grammar_valid = False
+                break
+    body_lines = int(complete.group("body_lines"), 10)
+    body_bytes = int(complete.group("body_bytes"), 10)
+    max_lines = int(transport.group("max_lines"), 10)
+    max_bytes = int(transport.group("max_bytes"), 10)
+    transport_prefix_lines = int(transport.group("body_lines"), 10)
+    actual_body_bytes = sum(len(event.raw.encode("utf-8")) + 2 for event in body_events)
+    actual_prefix_bytes = sum(
+        len(event.raw.encode("utf-8")) + 2 for event in body_events[:-1]
+    )
+    if (
+        command_begin_event is None
+        or WIFI_DIAG_COMMAND_BEGIN_RE.fullmatch(command_begin_event.raw) is None
+        or command_begin_event.line + 1 != begin_event.line
+        or command_complete_event is None
+        or WIFI_DIAG_COMMAND_COMPLETE_RE.fullmatch(command_complete_event.raw) is None
+        or complete_event.line + 1 != command_complete_event.line
+        or not body_grammar_valid
+        or transport_event.line + 1 != complete_event.line
+        or body_lines != transport_prefix_lines + 1
+        or body_lines != len(body_events)
+        or transport_prefix_lines != len(body_events) - 1
+        or body_bytes != actual_body_bytes
+        or int(transport.group("body_bytes"), 10) != actual_prefix_bytes
+        or max_lines != 8
+        or max_bytes != 2048
+        or body_lines > max_lines
+        or body_bytes > max_bytes
+        or complete.group("detail") != "yes"
+        or frontier.group("gate") != complete.group("gate")
+        or frontier.group("status") != complete.group("status")
+        or frontier.group("blocker") != complete.group("blocker")
+    ):
+        return 0, "transaction-invalid", "fail", body_lines, body_bytes, complete_event.line
+    return (
+        int(frontier.group("gate"), 10),
+        normalize_wifi_exact(frontier.group("blocker")),
+        frontier.group("status"),
+        body_lines,
+        body_bytes,
+        complete_event.line,
+    )
+
+
+def summarize_usb_runtime_cadence(
+    events: Iterable[TraceEvent],
+) -> tuple[str, int | str, int | str, int]:
+    """Return the latest USB runtime gap and in-episode duration."""
+
+    for event in reversed(list(events)):
+        match = PI4_CADENCE_V2_RE.fullmatch(event.raw)
+        if match is None or "usb" not in match.group("contract"):
+            continue
+        previous = match.group("previous")
+        gap = match.group("gap")
+        if (previous == "valid") != (gap != "na"):
+            return "invalid", "UNKNOWN", "UNKNOWN", event.line
+        return (
+            previous,
+            int(gap, 16) if gap != "na" else "UNKNOWN",
+            int(match.group("run"), 16),
+            event.line,
+        )
+    return "unknown", "UNKNOWN", "UNKNOWN", 0
 
 
 def cyw43_field_yes(fields: dict[str, str], key: str) -> bool:
@@ -14997,6 +15332,15 @@ def summarize_wifi_gate7_proof(events: Iterable[TraceEvent]) -> WifiGate7Proof:
         event
         for event in event_list
         if has_reserved_record_prefix(event.raw, "wifi: diag_complete")
+        and WIFI_DIAG_COMPLETE_RE.fullmatch(event.raw) is not None
+    ]
+    invalid_terminal_rows = [
+        event
+        for event in event_list
+        if has_reserved_record_prefix(event.raw, "wifi: diag_complete")
+        and WIFI_DIAG_COMPLETE_RE.fullmatch(event.raw) is None
+        and WIFI_CAUSAL_DIAG_COMPLETE_RE.fullmatch(event.raw) is None
+        and WIFI_LEGACY_DIAG_COMPLETE_RE.fullmatch(event.raw) is None
     ]
     retained_rows = [
         event
@@ -15012,16 +15356,28 @@ def summarize_wifi_gate7_proof(events: Iterable[TraceEvent]) -> WifiGate7Proof:
         event
         for event in event_list
         if has_reserved_record_prefix(event.raw, "wifi: diag_begin")
+        and WIFI_CAUSAL_DIAG_BEGIN_RE.fullmatch(event.raw) is None
     ]
     snapshot_contexts = [
         event
         for event in event_list
         if has_reserved_record_prefix(event.raw, "wifi: diag_context")
     ]
-    if retained_rows or snapshot_summaries or snapshot_begins or snapshot_contexts:
+    if (
+        retained_rows
+        or snapshot_summaries
+        or snapshot_begins
+        or snapshot_contexts
+        or invalid_terminal_rows
+    ):
         if not terminal_rows:
             latest_transaction_row = max(
-                (*retained_rows, *snapshot_begins, *snapshot_contexts),
+                (
+                    *retained_rows,
+                    *snapshot_begins,
+                    *snapshot_contexts,
+                    *invalid_terminal_rows,
+                ),
                 key=lambda event: event.line,
             )
             return WifiGate7Proof(
@@ -15031,7 +15387,12 @@ def summarize_wifi_gate7_proof(events: Iterable[TraceEvent]) -> WifiGate7Proof:
         summary = terminal_rows[-1]
         trailing_transaction_rows = [
             event
-            for event in (*snapshot_begins, *retained_rows, *snapshot_contexts)
+            for event in (
+                *snapshot_begins,
+                *retained_rows,
+                *snapshot_contexts,
+                *invalid_terminal_rows,
+            )
             if event.line > summary.line
         ]
         if trailing_transaction_rows:
@@ -15040,7 +15401,11 @@ def summarize_wifi_gate7_proof(events: Iterable[TraceEvent]) -> WifiGate7Proof:
                 key=lambda event: event.line,
             )
             return WifiGate7Proof(
-                missing="retained-diag-incomplete",
+                missing=(
+                    "retained-diag-begin"
+                    if latest_transaction_row in invalid_terminal_rows
+                    else "retained-diag-incomplete"
+                ),
                 line=latest_transaction_row.line,
             )
         summary_match = WIFI_DIAG_COMPLETE_RE.fullmatch(summary.raw)
@@ -16667,6 +17032,10 @@ def current_wifi_diag_dpc_events(
     if not diag_begin_rows:
         return []
     diag_begin = diag_begin_rows[-1]
+    if WIFI_CAUSAL_DIAG_BEGIN_RE.fullmatch(diag_begin.raw) is not None:
+        # Compact schema v2 carries only the latest child timing receipt. DPC
+        # accounting remains an independently captured boot/dump-state proof.
+        return None
     command_begin_rows = [
         event for event in command_rows if event.line < diag_begin.line
     ]
@@ -16676,7 +17045,7 @@ def current_wifi_diag_dpc_events(
     ):
         return []
     command_begin = command_begin_rows[-1]
-    if command_begin.raw != WIFI_DIAG_COMMAND_BEGIN_LINE:
+    if WIFI_DIAG_COMMAND_BEGIN_RE.fullmatch(command_begin.raw) is None:
         return []
     previous_diag_complete = next(
         (
@@ -16728,6 +17097,48 @@ def current_wifi_diag_dpc_events(
         event
         for event in event_list
         if command_begin.line < event.line < diag_begin.line
+    ]
+
+
+def current_wifi_dump_state_dpc_events(
+    events: Iterable[TraceEvent],
+) -> list[TraceEvent] | None:
+    """Return the DPC sample owned by the latest verbose dump-state command."""
+
+    event_list = list(events)
+    command_rows = [
+        event
+        for event in event_list
+        if has_reserved_record_prefix(
+            event.raw, "wifi: debug subcommand=dump-state"
+        )
+    ]
+    if not command_rows:
+        return None
+    begin_rows = [
+        event
+        for event in command_rows
+        if WIFI_DUMP_STATE_COMMAND_BEGIN_RE.fullmatch(event.raw) is not None
+    ]
+    if not begin_rows:
+        return []
+    begin = begin_rows[-1]
+    trailing_command_rows = [
+        event for event in command_rows if event.line > begin.line
+    ]
+    if (
+        len(trailing_command_rows) != 1
+        or WIFI_DUMP_STATE_COMMAND_COMPLETE_RE.fullmatch(
+            trailing_command_rows[0].raw
+        )
+        is None
+    ):
+        return []
+    complete = trailing_command_rows[0]
+    return [
+        event
+        for event in event_list
+        if begin.line < event.line < complete.line
     ]
 
 
@@ -17054,6 +17465,7 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         )
     ]
     wifi_authority_event_list = wifi_oldgood_authority_events(event_list)
+    wifi_causal_event_list = wifi_oldgood_authority_events(source_event_list)
     wifi_gate8 = refine_wifi_gate8_from_diag_complete(
         wifi_authority_event_list,
         summarize_wifi_gate8_proof(wifi_authority_event_list),
@@ -17065,6 +17477,20 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         wifi_diag_trigger,
         wifi_diag_retained,
     ) = summarize_wifi_diag_complete(wifi_authority_event_list)
+    (
+        wifi_causal_gate,
+        wifi_causal_blocker,
+        wifi_causal_status,
+        wifi_diag_body_lines,
+        wifi_diag_body_bytes,
+        wifi_causal_line,
+    ) = summarize_wifi_causal_diag(wifi_causal_event_list)
+    (
+        usb_runtime_cadence_previous,
+        usb_runtime_cadence_gap_ticks,
+        usb_runtime_cadence_run_ticks,
+        usb_runtime_cadence_line,
+    ) = summarize_usb_runtime_cadence(source_event_list)
     cyw43_bootstrap_supervisor = summarize_cyw43_bootstrap_supervisor(
         wifi_authority_event_list
     )
@@ -17133,12 +17559,16 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
     else:
         acceptance_event_list = wifi_authority_event_list
         wifi_dpc = summarize_wifi_dpc_proof(wifi_authority_event_list)
+    current_dump_state_dpc = current_wifi_dump_state_dpc_events(
+        wifi_authority_event_list
+    )
     current_diag_dpc = current_wifi_diag_dpc_events(wifi_authority_event_list)
-    if current_diag_dpc is not None and wifi_gate8.complete:
-        # `wifi diag` samples DPC truth immediately after its production begin
-        # marker and before the same command's retained Gate 7/8 transaction.
-        # Do not reuse a healthy triplet emitted by an older command when the
-        # current ring/client/ring sandwich could not produce a sample.
+    if current_dump_state_dpc is not None and wifi_gate8.complete:
+        # The verbose command owns the current ring/client/ring sandwich. Do
+        # not reuse a healthy triplet from an older dump-state transaction.
+        wifi_dpc = summarize_wifi_dpc_proof(current_dump_state_dpc)
+    elif current_diag_dpc is not None and wifi_gate8.complete:
+        # Historical verbose `wifi diag` transactions remain parseable.
         wifi_dpc = summarize_wifi_dpc_proof(current_diag_dpc)
     usb_gate, usb_blocker = summarize_usb_gate(event_list)
     usb_oldgood = summarize_usb_oldgood_replay(event_list)
@@ -17322,6 +17752,11 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         wifi_service_eapol_m4,
     ) = summarize_wifi_service_turn(event_list)
     wifi_priority_episode = summarize_wifi_priority_episode(event_list)
+    wifi_causal_frontier = (
+        f"gate-{wifi_causal_gate}/{wifi_causal_status}/{wifi_causal_blocker}"
+        if wifi_causal_line != 0
+        else wifi_priority_episode.causal_frontier
+    )
     (
         wifi_rx_irq_preserve_count,
         wifi_rx_irq_preserve_reason,
@@ -18025,6 +18460,8 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         wifi_diag_cause=wifi_diag_cause,
         wifi_diag_trigger=wifi_diag_trigger,
         wifi_diag_retained=wifi_diag_retained,
+        wifi_diag_body_lines=wifi_diag_body_lines,
+        wifi_diag_body_bytes=wifi_diag_body_bytes,
         serial_clean=serial_clean(event_list),
         boot_halted=boot_halted,
         timer_irq27_seen=timer_irq27_seen,
@@ -18151,7 +18588,7 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         wifi_deferred_recovery_runtime_source_line=(
             wifi_priority_episode.scheduler_runtime_recovery_source_line
         ),
-        wifi_causal_frontier=wifi_priority_episode.causal_frontier,
+        wifi_causal_frontier=wifi_causal_frontier,
         wifi_rx_irq_preserve_count=wifi_rx_irq_preserve_count,
         wifi_rx_irq_preserve_reason=wifi_rx_irq_preserve_reason,
         wifi_rx_irq_preserve_int=wifi_rx_irq_preserve_int,
@@ -18351,6 +18788,10 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         usb_runtime_transfer_events=usb_runtime_queue_summary.transfer_events,
         usb_runtime_report_status=usb_runtime_queue_summary.report_status,
         usb_runtime_queue_valid=usb_runtime_queue_summary.queue_valid,
+        usb_runtime_cadence_previous=usb_runtime_cadence_previous,
+        usb_runtime_cadence_gap_ticks=usb_runtime_cadence_gap_ticks,
+        usb_runtime_cadence_run_ticks=usb_runtime_cadence_run_ticks,
+        usb_runtime_cadence_line=usb_runtime_cadence_line,
         usb_runtime_doorbell_pending=(
             usb_runtime_queue_summary.doorbell_pending
         ),

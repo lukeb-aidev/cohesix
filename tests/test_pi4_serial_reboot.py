@@ -681,6 +681,7 @@ def test_wifi_diagnostics_wait_for_supervisor_and_dhcp_before_nettest() -> None:
             NETTEST_RESULT,
             NETSTATS_TERMINAL_PASS,
             b"OK WIFI\ncohesix>",
+            b"OK WIFI\ncohesix>",
             b"OK USB\ncohesix>",
             b"OK USB\ncohesix>",
         ]
@@ -747,6 +748,7 @@ def test_wifi_failed_supervisor_fails_closed_without_nettest() -> None:
             NETSTATS_OK,
             NETSTATS_TERMINAL_PASS,
             b"OK WIFI\ncohesix>",
+            b"OK WIFI\ncohesix>",
             b"OK USB\ncohesix>",
             b"OK USB\ncohesix>",
         ]
@@ -775,6 +777,7 @@ def test_wifi_ready_observation_rejects_later_attempt_before_any_command() -> No
         [
             NETSTATS_OK,
             NETSTATS_OK,
+            b"OK WIFI\ncohesix>",
             b"OK WIFI\ncohesix>",
             b"OK USB\ncohesix>",
             b"OK USB\ncohesix>",
@@ -818,6 +821,7 @@ def test_wifi_ready_retraction_waits_for_permanent_before_diagnostics() -> None:
             NETSTATS_OK,
             NETSTATS_OK,
             b"OK WIFI\ncohesix>",
+            b"OK WIFI\ncohesix>",
             b"OK USB\ncohesix>",
             b"OK USB\ncohesix>",
         ]
@@ -841,6 +845,7 @@ def test_wifi_ready_retraction_waits_for_permanent_before_diagnostics() -> None:
         "smp activity",
         "netstats",
         "netstats",
+        "wifi dump-state",
         "wifi diag",
         "usb diag",
         "usb status",
@@ -959,6 +964,7 @@ def test_wifi_dhcp_timeout_preserves_later_diagnostics() -> None:
             b"OK SMP\ncohesix>",
             NETSTATS_OK,
             b"OK WIFI\ncohesix>",
+            b"OK WIFI\ncohesix>",
             b"OK USB\ncohesix>",
             b"OK USB\ncohesix>",
         ]
@@ -977,6 +983,7 @@ def test_wifi_dhcp_timeout_preserves_later_diagnostics() -> None:
         "netstats",
         "smp activity",
         "netstats",
+        "wifi dump-state",
         "wifi diag",
         "usb diag",
         "usb status",
@@ -985,6 +992,7 @@ def test_wifi_dhcp_timeout_preserves_later_diagnostics() -> None:
     assert 0 < controller.dhcp_result_timeout_s <= 0.5
     assert controller.diagnostic_deadlines[0] is not None
     assert controller.diagnostic_deadlines[1:] == [
+        None,
         None,
         None,
         None,
@@ -1076,6 +1084,7 @@ def test_diagnostics_reinforce_root_command_terminators() -> None:
             NETTEST_RESULT,
             NETSTATS_TERMINAL_PASS,
             b"OK WIFI\ncohesix>",
+            b"OK WIFI\ncohesix>",
             b"OK USB\ncohesix>",
             b"OK USB\ncohesix>",
         ]
@@ -1094,17 +1103,19 @@ def test_diagnostics_reinforce_root_command_terminators() -> None:
         "smp activity",
         "nettest",
         "netstats",
+        "wifi dump-state",
         "wifi diag",
         "usb diag",
         "usb status",
     ]
     assert controller.public_sent[0] == "netstats"
-    assert controller.reinforced == [True, True, True, True, True, True, True]
+    assert controller.reinforced == [True, True, True, True, True, True, True, True]
     assert controller.diagnostic_barriers == [
         "netstats",
         "smp activity-prefix",
         "nettest",
         "netstats-final",
+        "wifi dump-state",
         "wifi diag",
         "usb diag",
         "usb status",

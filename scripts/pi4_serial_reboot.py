@@ -59,6 +59,7 @@ DIAGNOSTIC_RESULT_MARKERS: dict[str, tuple[bytes, bytes]] = {
     "netstats": (b"OK NETSTATS", b"ERR NETSTATS"),
     "nettest": (b"OK NETTEST", b"ERR NETTEST"),
     "wifi diag": (b"OK WIFI", b"ERR WIFI"),
+    "wifi dump-state": (b"OK WIFI", b"ERR WIFI"),
     "usb status": (b"OK USB", b"ERR USB"),
     "usb diag": (b"OK USB", b"ERR USB"),
     "usb probe-kbd": (b"OK USB", b"ERR USB"),
@@ -1416,6 +1417,7 @@ def run_diagnostics(
         # order instead of asking the proof tool to stitch later diagnostics
         # ahead of earlier live traffic.
         commands.insert(0, ("smp activity", "smp activity-prefix"))
+        commands.append(("wifi dump-state", "wifi dump-state"))
         commands.append(("wifi diag", "wifi diag"))
     commands.extend(
         [

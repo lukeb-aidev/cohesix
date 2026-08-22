@@ -519,8 +519,13 @@ def test_gate_proof_runs_smp_activity_for_post_prompt_driver_proof() -> None:
     source = SCRIPT_PATH.read_text(encoding="utf-8")
 
     assert '"smp activity"' in source
+    assert source.index('"netstats"') < source.index('"smp activity"')
     assert source.index('"smp activity"') < source.index('"wifi diag"')
-    assert source.rindex('"netstats"') < source.rindex('"smp activity"')
+    assert source.index('"nettest"') < source.index('"wifi diag"')
+    assert "wait_for_wifi_supervisor_terminal" in source
+    assert "wait_for_wifi_dhcp_bound" in source
+    assert 'commands+=("wifi dump-state")' in source
+    assert '"${REQUIRE_WIFI_READY}" -eq 1' in source
 
 
 def test_gate_proof_defaults_to_passive_usb_diagnostics() -> None:
@@ -530,7 +535,7 @@ def test_gate_proof_defaults_to_passive_usb_diagnostics() -> None:
     defaults = source.split("DEFAULT_COMMANDS=(", 1)[1].split(")", 1)[0]
 
     assert '"usb diag"' in defaults
-    assert defaults.count('"usb status"') == 2
+    assert defaults.count('"usb status"') == 1
     assert '"usb probe-kbd"' not in defaults
     assert "--probe-usb-keyboard" in source
 

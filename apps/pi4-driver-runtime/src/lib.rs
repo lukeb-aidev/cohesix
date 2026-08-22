@@ -7368,6 +7368,9 @@ static RUNTIME_INIT_HOT_PATH: AtomicU32 = AtomicU32::new(0);
 static RUNTIME_INIT_FLAGS: AtomicU32 = AtomicU32::new(0);
 static USB_RUNTIME_FLAGS: AtomicU32 = AtomicU32::new(0);
 static RUNTIME_CADENCE_ENTRY_TICKS: AtomicU64 = AtomicU64::new(0);
+static RUNTIME_CADENCE_PREVIOUS_ENTRY_TICKS: AtomicU64 = AtomicU64::new(0);
+static RUNTIME_CADENCE_ENTRY_VALID: AtomicBool = AtomicBool::new(false);
+static RUNTIME_CADENCE_PREVIOUS_ENTRY_VALID: AtomicBool = AtomicBool::new(false);
 static HDMI_RUNTIME_FLAGS: AtomicU32 = AtomicU32::new(0);
 static HDMI_CURSOR_ROW: AtomicU32 = AtomicU32::new(0);
 static HDMI_CURSOR_COL: AtomicU32 = AtomicU32::new(0);
@@ -46758,17 +46761,31 @@ fn publish_runtime_cadence(
         return;
     }
     let now = runtime_timer_counter_ticks();
-    let entry = if exit_reason == pi4_driver_abi::DRIVER_RUNTIME_CADENCE_EXIT_ENTER {
-        RUNTIME_CADENCE_ENTRY_TICKS.store(now, Ordering::Release);
-        now
+    let (entry, previous_entry, previous_entry_valid) =
+        if exit_reason == pi4_driver_abi::DRIVER_RUNTIME_CADENCE_EXIT_ENTER {
+            let previous = RUNTIME_CADENCE_ENTRY_TICKS.swap(now, Ordering::AcqRel);
+            let previous_valid = RUNTIME_CADENCE_ENTRY_VALID.swap(true, Ordering::AcqRel);
+            RUNTIME_CADENCE_PREVIOUS_ENTRY_TICKS.store(previous, Ordering::Release);
+            RUNTIME_CADENCE_PREVIOUS_ENTRY_VALID.store(previous_valid, Ordering::Release);
+            (now, previous, previous_valid)
+        } else {
+            (
+                RUNTIME_CADENCE_ENTRY_TICKS.load(Ordering::Acquire),
+                RUNTIME_CADENCE_PREVIOUS_ENTRY_TICKS.load(Ordering::Acquire),
+                RUNTIME_CADENCE_PREVIOUS_ENTRY_VALID.load(Ordering::Acquire),
+            )
+        };
+    let flags = if previous_entry_valid {
+        flags | pi4_driver_abi::DRIVER_RUNTIME_CADENCE_FLAG_PREVIOUS_ENTRY_VALID
     } else {
-        RUNTIME_CADENCE_ENTRY_TICKS.load(Ordering::Acquire)
+        flags
     };
-    let record = pi4_driver_abi::DriverRuntimeCadenceRecord::staged(
+    let record = pi4_driver_abi::DriverRuntimeCadenceRecord::staged_with_previous_entry(
         sequence,
         phase,
         entry,
-        now,
+        previous_entry as u32,
+        now as u32,
         work_completed,
         work_total,
         exit_reason,
@@ -46786,7 +46803,8 @@ fn publish_runtime_cadence(
     write_ring_u32(offset + 8, record.sequence);
     write_ring_u32(offset + 12, record.phase);
     write_ring_u64(offset + 16, record.entry_cntvct);
-    write_ring_u64(offset + 24, record.last_cntvct);
+    write_ring_u32(offset + 24, record.previous_entry_cntvct_lo);
+    write_ring_u32(offset + 28, record.last_cntvct_lo);
     write_ring_u32(offset + 32, record.work_completed);
     write_ring_u32(offset + 36, record.work_total);
     write_ring_u16(offset + 40, record.exit_reason);
@@ -60204,6 +60222,9 @@ mod tests {
         let _guard = test_guard();
         reset_runtime_for_test();
         RUNTIME_CADENCE_ENTRY_TICKS.store(0, Ordering::Release);
+        RUNTIME_CADENCE_PREVIOUS_ENTRY_TICKS.store(0, Ordering::Release);
+        RUNTIME_CADENCE_ENTRY_VALID.store(false, Ordering::Release);
+        RUNTIME_CADENCE_PREVIOUS_ENTRY_VALID.store(false, Ordering::Release);
         let base = usize::from(pi4_driver_abi::DRIVER_RUNTIME_CADENCE_OFFSET);
 
         publish_runtime_cadence(
@@ -60227,6 +60248,22 @@ mod tests {
         assert_eq!(read_ring_u32(base + 44), 2);
 
         publish_runtime_cadence(
+            HOT_PATH_USB_KEYBOARD,
+            3,
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_COMMAND_OBSERVED,
+            0,
+            0,
+            pi4_driver_abi::DRIVER_RUNTIME_CADENCE_EXIT_ENTER,
+            pi4_driver_abi::DRIVER_RUNTIME_CADENCE_FLAG_WORK_REMAINS,
+        );
+        assert_ne!(
+            read_ring_u16(base + 42)
+                & pi4_driver_abi::DRIVER_RUNTIME_CADENCE_FLAG_PREVIOUS_ENTRY_VALID,
+            0,
+            "the second entry must identify a true inter-entry cadence sample"
+        );
+
+        publish_runtime_cadence(
             HOT_PATH_CYW43_WIFI,
             3,
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_COMMAND_OBSERVED,
@@ -60246,7 +60283,7 @@ mod tests {
         );
         assert_eq!(
             read_ring_u32(base + 44),
-            2,
+            3,
             "network roles must retain their specialized episode evidence"
         );
 

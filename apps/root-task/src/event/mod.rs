@@ -668,6 +668,12 @@ const LOCAL_SEAT_NET_MIRROR_INITIAL_LINES: u64 = 4;
 const CONSOLE_OUTPUT_BACKLOG_LINES: usize = 72;
 const CONSOLE_OUTPUT_BACKLOG_PROTOCOL_TAIL_RESERVE: usize = 3;
 #[cfg(feature = "kernel")]
+const USB_GATE_DEVICE_ADDRESSED: u8 = 6;
+#[cfg(feature = "kernel")]
+const WIFI_CAUSAL_DIAG_BODY_MAX_LINES: usize = 8;
+#[cfg(feature = "kernel")]
+const WIFI_CAUSAL_DIAG_BODY_MAX_BYTES: usize = 2_048;
+#[cfg(feature = "kernel")]
 const WIFI_OLDGOOD_RETAINED_PREFIX_LINE_COUNT: usize = 31;
 #[cfg(feature = "kernel")]
 const WIFI_OLDGOOD_OWNER_LINE_COUNT: usize = 6;
@@ -3248,15 +3254,26 @@ fn format_runtime_cadence(
     record: pi4_driver_abi::DriverRuntimeCadenceRecord,
 ) -> Option<HeaplessString<DEFAULT_LINE_CAPACITY>> {
     let mut line = HeaplessString::<DEFAULT_LINE_CAPACITY>::new();
+    let entry_cntvct_lo = record.entry_cntvct as u32;
+    let previous_entry_valid =
+        record.flags & pi4_driver_abi::DRIVER_RUNTIME_CADENCE_FLAG_PREVIOUS_ENTRY_VALID != 0;
+    let gap = entry_cntvct_lo.wrapping_sub(record.previous_entry_cntvct_lo);
+    let run = record.last_cntvct_lo.wrapping_sub(entry_cntvct_lo);
     write!(
         line,
-        "PI4_CADENCE schema=v2 c={} q={:x} et={:x} p={}/{} dt={:x} w={:x}/{:x} e={} f={:x}",
+        "PI4_CADENCE schema=v2 c={} q={:x} entry={:x} prev={} gap={} run={:x} p={}/{} w={:x}/{:x} e={} f={:x}",
         contract_name,
         record.sequence,
         record.entry_cntvct,
+        if previous_entry_valid { "valid" } else { "none" },
+        if previous_entry_valid {
+            format_message(format_args!("{gap:x}"))
+        } else {
+            format_message(format_args!("na"))
+        },
+        run,
         record.phase,
         crate::hal::driver_task::driver_task_ring_progress_phase_label(record.phase),
-        record.last_cntvct.wrapping_sub(record.entry_cntvct),
         record.work_completed,
         record.work_total,
         runtime_cadence_exit_label(record.exit_reason),
@@ -13604,11 +13621,9 @@ where
             self.emit_console_line("WiFi debug commands:");
             self.emit_console_line("  wifi help       - Show WiFi debug command help");
             self.emit_console_line(
-                "  wifi dump-state - Show cached SDIO, clock, and contract trace state",
+                "  wifi dump-state - Show verbose cached acceptance and runtime state",
             );
-            self.emit_console_line(
-                "  wifi diag       - Show passive cached linked-runtime gate and owner state",
-            );
+            self.emit_console_line("  wifi diag       - Show compact bounded causal triage");
             self.metrics.accepted_commands = self.metrics.accepted_commands.saturating_add(1);
             self.emit_ack_ok(
                 WIFI_DEBUG_ACK_LABEL,
@@ -13626,8 +13641,18 @@ where
         let _wifi_log_uart_guard = crate::bootstrap::log::suppress_uart_log_output();
 
         self.emit_wifi_debug_status(subcommand, "begin", profile, None);
-        if matches!(command, WifiDebugCommand::Diag) {
+        if matches!(command, WifiDebugCommand::DumpState) {
             self.emit_wifi_sdio_dpc_diagnostic();
+        }
+        if matches!(command, WifiDebugCommand::Diag)
+            && self.emit_wifi_driver_task_runtime_snapshot_if_present(
+                command,
+                subcommand,
+                profile,
+                "causal-triage",
+            )
+        {
+            return;
         }
         if self.wifi_debug.is_none()
             && self.emit_wifi_driver_task_runtime_snapshot_if_present(
@@ -14279,6 +14304,31 @@ where
         let queue_valid = Self::usb_runtime_detail_has_queue_result(linked_detail);
         let (queued_reports, doorbell_pending, preserved_events, transfer_events, report_status) =
             Self::usb_runtime_queue_render_fields(linked_detail, linked_result);
+        let queued_reports_rendered = if queue_valid {
+            format_message(format_args!("{queued_reports}"))
+        } else {
+            format_message(format_args!("unknown"))
+        };
+        let preserved_events_rendered = if queue_valid {
+            format_message(format_args!("{preserved_events}"))
+        } else {
+            format_message(format_args!("unknown"))
+        };
+        let transfer_events_rendered = if queue_valid {
+            format_message(format_args!("{transfer_events}"))
+        } else {
+            format_message(format_args!("unknown"))
+        };
+        let doorbell_rendered = if queue_valid {
+            Self::yes_no(doorbell_pending)
+        } else {
+            "unknown"
+        };
+        let report_status_rendered = if queue_valid {
+            Self::usb_runtime_keyboard_report_status_label(report_status)
+        } else {
+            "unknown"
+        };
         let mut line = format_message(format_args!(
             "usb: local-seat attached={} polling={}",
             if backend_attached { "yes" } else { "no" },
@@ -14310,11 +14360,11 @@ where
             Self::yes_no(queue_valid),
             linked_detail,
             linked_result,
-            queued_reports,
-            Self::yes_no(doorbell_pending),
-            preserved_events,
-            transfer_events,
-            Self::usb_runtime_keyboard_report_status_label(report_status),
+            queued_reports_rendered,
+            doorbell_rendered,
+            preserved_events_rendered,
+            transfer_events_rendered,
+            report_status_rendered,
         ));
         self.emit_console_line(queue_line.as_str());
         self.emit_usb_runtime_recovery(linked_frame);
@@ -14360,11 +14410,11 @@ where
         let stall_line = format_message(format_args!(
             "usb: stall_telemetry queue_valid={} queued_reports={} doorbell={} preserved={} transfer_events={} report_status={}",
             Self::yes_no(queue_valid),
-            queued_reports,
-            Self::yes_no(doorbell_pending),
-            preserved_events,
-            transfer_events,
-            Self::usb_runtime_keyboard_report_status_label(report_status),
+            queued_reports_rendered,
+            doorbell_rendered,
+            preserved_events_rendered,
+            transfer_events_rendered,
+            report_status_rendered,
         ));
         self.emit_console_line(stall_line.as_str());
         let stall_input_line = format_message(format_args!(
@@ -14419,9 +14469,9 @@ where
             Self::yes_no(queue_valid),
             linked_detail,
             linked_result,
-            queued_reports,
-            transfer_events,
-            Self::usb_runtime_keyboard_report_status_label(report_status),
+            queued_reports_rendered,
+            transfer_events_rendered,
+            report_status_rendered,
             local_trace.arming_bytes,
             local_trace.accepted_bytes,
             local_trace.drained_bytes,
@@ -17623,14 +17673,14 @@ where
                 "command-event-rings",
                 Self::usb_startup_gate_status(4, proof_gate, failing_gate),
                 format_args!(
-                    "blocker={} linked_detail=0x{:04x} queue_result={} queued_reports={} doorbell={} preserved_events={} transfer_events={}",
+                    "blocker={} linked_detail=0x{:04x} queue_valid={} queued_reports={} doorbell={} preserved_events={} transfer_events={}",
                     active_blocker,
                     linked_detail,
-                    if queue_result { "yes" } else { "no" },
-                    queued_reports,
-                    Self::yes_no(doorbell_pending),
-                    preserved_events,
-                    transfer_events,
+                    Self::yes_no(queue_result),
+                    if queue_result { format_message(format_args!("{queued_reports}")) } else { format_message(format_args!("unknown")) },
+                    if queue_result { Self::yes_no(doorbell_pending) } else { "unknown" },
+                    if queue_result { format_message(format_args!("{preserved_events}")) } else { format_message(format_args!("unknown")) },
+                    if queue_result { format_message(format_args!("{transfer_events}")) } else { format_message(format_args!("unknown")) },
                 ),
                 "root-port-connected",
             );
@@ -17645,9 +17695,13 @@ where
                 "device-addressed",
             );
             self.emit_usb_gate_line(
-                4,
+                USB_GATE_DEVICE_ADDRESSED,
                 "device-addressed",
-                Self::usb_startup_gate_status(6, proof_gate, failing_gate),
+                Self::usb_startup_gate_status(
+                    USB_GATE_DEVICE_ADDRESSED,
+                    proof_gate,
+                    failing_gate,
+                ),
                 format_args!(
                     "linked_detail=0x{:04x} progress_phase={} progress_phase_name={} progress_blocker={}",
                     linked_detail,
@@ -17694,12 +17748,13 @@ where
                 "first-hid-report",
                 Self::usb_startup_gate_status(9, proof_gate, failing_gate),
                 format_args!(
-                    "first_report={} queued_reports={} doorbell={} transfer_events={} report_status={}",
+                    "first_report={} queue_valid={} queued_reports={} doorbell={} transfer_events={} report_status={}",
                     Self::yes_no(first_report),
-                    queued_reports,
-                    Self::yes_no(doorbell_pending),
-                    transfer_events,
-                    Self::usb_runtime_keyboard_report_status_label(report_status),
+                    Self::yes_no(queue_result),
+                    if queue_result { format_message(format_args!("{queued_reports}")) } else { format_message(format_args!("unknown")) },
+                    if queue_result { Self::yes_no(doorbell_pending) } else { "unknown" },
+                    if queue_result { format_message(format_args!("{transfer_events}")) } else { format_message(format_args!("unknown")) },
+                    if queue_result { Self::usb_runtime_keyboard_report_status_label(report_status) } else { "unknown" },
                 ),
                 "command-input-ready",
             );
@@ -17734,12 +17789,12 @@ where
                         == pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HID_INTERRUPT_QUEUE_READY
                 });
             let evidence = format_message(format_args!(
-                "usb: evidence xhci queue_result={} transfer_ring_queued={} doorbell={} preserved_events={} transfer_events={} endpoint={} source=linked-runtime-result",
-                if queue_result { "yes" } else { "no" },
-                queued_reports,
-                Self::yes_no(doorbell_pending),
-                preserved_events,
-                transfer_events,
+                "usb: evidence xhci queue_valid={} transfer_ring_queued={} doorbell={} preserved_events={} transfer_events={} endpoint={} source=linked-runtime-result",
+                Self::yes_no(queue_result),
+                if queue_result { format_message(format_args!("{queued_reports}")) } else { format_message(format_args!("unknown")) },
+                if queue_result { Self::yes_no(doorbell_pending) } else { "unknown" },
+                if queue_result { format_message(format_args!("{preserved_events}")) } else { format_message(format_args!("unknown")) },
+                if queue_result { format_message(format_args!("{transfer_events}")) } else { format_message(format_args!("unknown")) },
                 if interrupt_in_proven {
                     "interrupt-in"
                 } else {
@@ -17861,7 +17916,8 @@ where
     const fn wifi_debug_command_profile(command: WifiDebugCommand) -> &'static str {
         match command {
             WifiDebugCommand::Help => "help",
-            WifiDebugCommand::DumpState | WifiDebugCommand::Diag => "bounded",
+            WifiDebugCommand::DumpState => "verbose",
+            WifiDebugCommand::Diag => "bounded-causal",
             WifiDebugCommand::ProbeHt
             | WifiDebugCommand::LoadFirmware
             | WifiDebugCommand::Retry => "unavailable",
@@ -19284,6 +19340,344 @@ where
     }
 
     #[cfg(feature = "kernel")]
+    fn wifi_causal_diag_lines(
+        snapshot_sequence: u64,
+        source: &str,
+        gate8: crate::drivers::driver_task_net::Cyw43Gate8Diagnostic,
+        bootstrap_failure: Option<crate::hal::driver_task::DriverTaskBootstrapFailure>,
+        fault: Option<crate::drivers::driver_task_net::Cyw43RuntimeCommandFaultStatus>,
+        sdio_status: Option<crate::drivers::driver_task_net::SdioRuntimeReplayStatus>,
+        backlog_before: usize,
+    ) -> Option<(
+        HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, WIFI_CAUSAL_DIAG_BODY_MAX_LINES>,
+        u8,
+        &'static str,
+        &'static str,
+        usize,
+    )> {
+        let gate8_frontier = gate8
+            .subgates
+            .iter()
+            .find(|subgate| {
+                subgate.status != crate::drivers::driver_task_net::Cyw43Gate8SubgateStatus::Pass
+            })
+            .copied();
+        let cyw43_progress = crate::hal::driver_task::latest_driver_task_ring_progress(
+            crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT,
+        );
+        let sdio_progress = crate::hal::driver_task::latest_driver_task_ring_progress(
+            crate::hal::driver_task::SDIO_HOST_DRIVER_TASK_CONTRACT,
+        );
+        let (frontier_gate, frontier_status, frontier_blocker) =
+            if let Some(failure) = bootstrap_failure {
+                (0, "fail", failure.reason.as_str())
+            } else if let Some(fault) = fault {
+                (
+                    cyw43_progress
+                        .and_then(|progress| {
+                            Self::wifi_contextual_nested_sdio_fault_gate(fault, progress)
+                        })
+                        .unwrap_or_else(|| Self::wifi_runtime_fault_gate(fault)),
+                    "fail",
+                    fault.reason,
+                )
+            } else if let Some((gate, blocker)) =
+                cyw43_progress.and_then(Self::wifi_causal_progress_failure)
+            {
+                (gate, "fail", blocker)
+            } else if let Some(status) =
+                sdio_status.filter(|status| !matches!(status.status, "ready" | "preserved-ready"))
+            {
+                (
+                    Self::wifi_sdio_runtime_replay_gate(status).unwrap_or(1),
+                    status.status,
+                    Self::wifi_sdio_runtime_replay_blocker(status),
+                )
+            } else if let Some(frontier) = gate8_frontier {
+                (8, frontier.status.as_str(), frontier.blocker)
+            } else {
+                // This compact command samples the current Gate 8 transaction but
+                // deliberately does not claim DHCP, nettest, or TCP acceptance.
+                (8, "pass", "none")
+            };
+        let downstream = if frontier_gate <= 8 {
+            "not-reached"
+        } else {
+            "complete"
+        };
+        let episode = crate::drivers::driver_task_net::cyw43_bus_episode_diagnostic();
+        let grant = crate::hal::driver_task::driver_task_retained_grant_snapshot(
+            crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT,
+        );
+        let wake = crate::hal::driver_task::cyw43_root_wake_snapshot();
+        let mut lines = HeaplessVec::<
+            HeaplessString<DEFAULT_LINE_CAPACITY>,
+            WIFI_CAUSAL_DIAG_BODY_MAX_LINES,
+        >::new();
+        lines
+            .push(format_message(format_args!(
+                "wifi: diag_begin id={} schema=v2 snapshot=best-effort-multi-record pair={} gen={} source={}",
+                snapshot_sequence, gate8.pair_scrub_epoch, gate8.generation, source,
+            )))
+            .ok()?;
+        lines
+            .push(format_message(format_args!(
+                "wifi: causal_frontier id={} gate={} status={} blocker={} downstream={}",
+                snapshot_sequence, frontier_gate, frontier_status, frontier_blocker, downstream,
+            )))
+            .ok()?;
+        lines
+            .push(format_message(format_args!(
+                "wifi: causal_progress id={} cyw43={}/{}/{} sdio={}/{}/{} replay={}/{}",
+                snapshot_sequence,
+                cyw43_progress.map_or(0, |progress| progress.sequence),
+                cyw43_progress.map_or(0, |progress| progress.phase),
+                cyw43_progress.map_or("unavailable", |progress| progress.phase_name),
+                sdio_progress.map_or(0, |progress| progress.sequence),
+                sdio_progress.map_or(0, |progress| progress.phase),
+                sdio_progress.map_or("unavailable", |progress| progress.phase_name),
+                sdio_status.map_or("unavailable", |status| status.stage),
+                sdio_status.map_or("unavailable", |status| status.status),
+            )))
+            .ok()?;
+        lines
+            .push(if let Some(episode) = episode {
+                format_message(format_args!(
+                    "wifi: causal_episode id={} pub={} episode={} phys={} logical={} parent={}/{:04x} child={}/{:04x}/{:04x}/{:08x} exit={}/{:04x}/{:08x} pending={:08x}",
+                    snapshot_sequence,
+                    episode.publication_sequence,
+                    episode.episode_sequence,
+                    episode.physical_epoch,
+                    episode.logical_generation,
+                    episode.parent_sequence,
+                    episode.parent_op,
+                    episode.child_sequence,
+                    episode.child_code,
+                    episode.child_detail,
+                    episode.child_result,
+                    episode.exit_reason,
+                    episode.exit_detail,
+                    episode.exit_result,
+                    episode.final_pending_mask,
+                ))
+            } else {
+                format_message(format_args!(
+                    "wifi: causal_episode id={} state=unavailable",
+                    snapshot_sequence,
+                ))
+            })
+            .ok()?;
+        lines
+            .push(
+                crate::drivers::driver_task_net::cyw43_dpc_child_timing_diagnostic()
+                    .and_then(|timing| {
+                        let frequency_hz = crate::drivers::driver_task_net::
+                            cyw43_dpc_child_timing_counter_freq_hz()?;
+                        let index = usize::from(timing.child_count).checked_sub(1)?;
+                        Self::wifi_cyw43_dpc_child_timing_entry_line(timing, index, frequency_hz)
+                            .ok()
+                    })
+                    .unwrap_or_else(|| {
+                        format_message(format_args!(
+                            "CYW43_DPC_CHILD_TIMING_ENTRY state=unavailable"
+                        ))
+                    }),
+            )
+            .ok()?;
+        lines
+            .push(if let Some(grant) = grant {
+                format_message(format_args!(
+                    "wifi: causal_grant id={} active={} phase={} request={} generation={} command={} issued={} producer={} shared={} consumed={} exact={}",
+                    snapshot_sequence,
+                    Self::yes_no(grant.active),
+                    grant.phase_name,
+                    grant.request,
+                    grant.generation,
+                    grant.command_sequence,
+                    Self::yes_no(grant.sequence_issued),
+                    grant.producer_grant_id,
+                    grant.shared_grant_id,
+                    grant.consumed_grant_id,
+                    Self::yes_no(grant.exact),
+                ))
+            } else {
+                format_message(format_args!(
+                    "wifi: causal_grant id={} state=unavailable",
+                    snapshot_sequence,
+                ))
+            })
+            .ok()?;
+        lines
+            .push(if let Some(fault) = fault {
+                format_message(format_args!(
+                    "wifi: causal_fault id={} stage={} op={:04x} flags={:04x} target={:08x} payload={}/{} total={} detail={:04x} reason={} result={:08x}",
+                    snapshot_sequence,
+                    fault.stage,
+                    fault.op,
+                    fault.flags,
+                    fault.target_addr,
+                    fault.payload_offset,
+                    fault.payload_len,
+                    fault.total_len,
+                    fault.detail,
+                    fault.reason,
+                    fault.result,
+                ))
+            } else {
+                format_message(format_args!(
+                    "wifi: causal_fault id={} state=none",
+                    snapshot_sequence,
+                ))
+            })
+            .ok()?;
+        let body_bytes_before_transport = lines
+            .iter()
+            .fold(0usize, |total, line| total.saturating_add(line.len() + 2));
+        let wake = wake.map_or_else(
+            || format_message(format_args!("unavailable")),
+            |wake| {
+                format_message(format_args!(
+                    "{}/{}/{}/{}",
+                    Self::yes_no(wake.bound),
+                    wake.badge,
+                    wake.polls,
+                    wake.hits,
+                ))
+            },
+        );
+        lines
+            .push(format_message(format_args!(
+                "wifi: diag_transport id={} body_lines={} body_bytes={} max_lines={} max_bytes={} backlog_before={} wake=bound/badge/polls/hits:{}",
+                snapshot_sequence,
+                lines.len(),
+                body_bytes_before_transport,
+                WIFI_CAUSAL_DIAG_BODY_MAX_LINES,
+                WIFI_CAUSAL_DIAG_BODY_MAX_BYTES,
+                backlog_before,
+                wake,
+            )))
+            .ok()?;
+        let body_bytes = lines
+            .iter()
+            .fold(0usize, |total, line| total.saturating_add(line.len() + 2));
+        if lines.len() > WIFI_CAUSAL_DIAG_BODY_MAX_LINES
+            || body_bytes > WIFI_CAUSAL_DIAG_BODY_MAX_BYTES
+            || lines
+                .iter()
+                .any(|line| line.ends_with(DIAGNOSTIC_TRUNCATION_MARKER))
+        {
+            return None;
+        }
+        Some((
+            lines,
+            frontier_gate,
+            frontier_status,
+            frontier_blocker,
+            body_bytes,
+        ))
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_causal_progress_failure(
+        progress: crate::hal::driver_task::DriverTaskRingProgressSnapshot,
+    ) -> Option<(u8, &'static str)> {
+        let gate = match progress.phase {
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ROOT_GRANT_REJECTED
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ROOT_GRANT_ACK_FAILED
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_RESOURCE_CHECK_FAILED
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_DESCRIPTOR_INVALID
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_HOT_PATH_MISMATCH
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_MMIO_MISSING
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_DMA_MISSING
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_SHARED_MISSING
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_BUS_LINK_MISSING
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_FORBIDDEN_PRESENT => 0,
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_FORBIDDEN_SDIO_MMIO
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_SHARED_CONTROL_MISSING => 1,
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_WAIT_TIMEOUT => 2,
+            _ => return None,
+        };
+        Some((
+            gate,
+            Self::wifi_cyw43_runtime_progress_blocker(progress.phase),
+        ))
+    }
+
+    #[cfg(feature = "kernel")]
+    fn emit_wifi_causal_diag(
+        &mut self,
+        subcommand: &str,
+        profile: &str,
+        source: &str,
+        gate8: crate::drivers::driver_task_net::Cyw43Gate8Diagnostic,
+        bootstrap_failure: Option<crate::hal::driver_task::DriverTaskBootstrapFailure>,
+        fault: Option<crate::drivers::driver_task_net::Cyw43RuntimeCommandFaultStatus>,
+        sdio_status: Option<crate::drivers::driver_task_net::SdioRuntimeReplayStatus>,
+        output_backpressure_before: u64,
+    ) {
+        self.wifi_diag_snapshot_sequence = self.wifi_diag_snapshot_sequence.wrapping_add(1);
+        if self.wifi_diag_snapshot_sequence == 0 {
+            self.wifi_diag_snapshot_sequence = 1;
+        }
+        let snapshot_sequence = self.wifi_diag_snapshot_sequence;
+        let backlog_before = self.pending_console_output.len();
+        let Some((lines, gate, status, blocker, body_bytes)) = Self::wifi_causal_diag_lines(
+            snapshot_sequence,
+            source,
+            gate8,
+            bootstrap_failure,
+            fault,
+            sdio_status,
+            backlog_before,
+        ) else {
+            self.emit_terminal_console_line(
+                "wifi: diag_complete causal=yes detail=no error=diagnostic-budget-overflow",
+            );
+            self.emit_wifi_debug_status(
+                subcommand,
+                "complete",
+                profile,
+                Some("result=err error=diagnostic-budget-overflow"),
+            );
+            self.metrics.denied_commands = self.metrics.denied_commands.saturating_add(1);
+            self.emit_refusal(
+                WIFI_DEBUG_ACK_LABEL,
+                RefusalReason::Busy,
+                Some("detail=subcommand=diag error=diagnostic-budget-overflow"),
+            );
+            return;
+        };
+        let body_lines = lines.len();
+        for line in lines {
+            self.emit_console_line(line.as_str());
+        }
+        let detail_complete =
+            self.metrics.physical_console_output_backpressure == output_backpressure_before;
+        let complete = format_message(format_args!(
+            "wifi: diag_complete id={} causal=yes detail={} schema=v2 gate={} status={} blocker={} body_lines={} body_bytes={}",
+            snapshot_sequence,
+            Self::yes_no(detail_complete),
+            gate,
+            status,
+            blocker,
+            body_lines,
+            body_bytes,
+        ));
+        self.emit_terminal_console_line(complete.as_str());
+        self.emit_wifi_debug_status(
+            subcommand,
+            "complete",
+            profile,
+            Some("result=ok source=causal-triage"),
+        );
+        self.metrics.accepted_commands = self.metrics.accepted_commands.saturating_add(1);
+        self.emit_ack_ok(
+            WIFI_DEBUG_ACK_LABEL,
+            Some("detail=subcommand=diag scope=serial-local source=causal-triage"),
+        );
+    }
+
+    #[cfg(feature = "kernel")]
     fn emit_wifi_driver_task_runtime_snapshot_if_present(
         &mut self,
         command: WifiDebugCommand,
@@ -19362,6 +19756,19 @@ where
         let sdio_status = crate::drivers::driver_task_net::latest_sdio_runtime_replay_status();
         let progress_present = Self::wifi_driver_task_runtime_progress_present();
         let pinctrl = crate::hal::pi4_wifi::wifi_sdio_pinctrl_snapshot();
+        if matches!(command, WifiDebugCommand::Diag) {
+            self.emit_wifi_causal_diag(
+                subcommand,
+                profile,
+                source,
+                gate8,
+                bootstrap_failure,
+                fault,
+                sdio_status,
+                output_backpressure_before,
+            );
+            return true;
+        }
         if source == "debug-handle-unavailable"
             && current_net_unavailable_detail.is_none()
             && host_eapol_observed.is_none()
@@ -31864,6 +32271,34 @@ mod tests {
     }
 
     #[cfg(feature = "kernel")]
+    #[test]
+    fn usb_startup_gate_numbers_are_ordered_and_device_addressed_is_gate_six() {
+        let expected = [
+            "hal-resources",
+            "pcie-vl805",
+            "xhci-operational",
+            "command-event-rings",
+            "root-port-connected",
+            "device-addressed",
+            "config-and-hid-descriptors",
+            "keyboard-ready",
+            "first-hid-report",
+            "command-input-ready",
+        ];
+        for (index, name) in expected.into_iter().enumerate() {
+            assert_eq!(
+                KernelConsoleTestPump::usb_startup_gate_name((index + 1) as u8),
+                name
+            );
+        }
+        assert_eq!(USB_GATE_DEVICE_ADDRESSED, 6);
+        assert_eq!(
+            KernelConsoleTestPump::usb_startup_gate_name(USB_GATE_DEVICE_ADDRESSED),
+            "device-addressed"
+        );
+    }
+
+    #[cfg(feature = "kernel")]
     type KernelConsoleTestPump =
         EventPump<'static, LoopbackSerial<32>, TestTimer, NullIpc, TicketTable<4>, 32, 32, 32>;
 
@@ -41165,7 +41600,8 @@ mod tests {
         let mut later_same_frontier = first;
         later_same_frontier.sequence = 3;
         later_same_frontier.entry_cntvct = 300;
-        later_same_frontier.last_cntvct = 900;
+        later_same_frontier.previous_entry_cntvct_lo = 100;
+        later_same_frontier.last_cntvct_lo = 900;
         later_same_frontier.committed_sequence = later_same_frontier.sequence;
         assert_eq!(
             runtime_cadence_key(first),
@@ -41180,9 +41616,16 @@ mod tests {
         let line = format_runtime_cadence("driver-usb", first)
             .expect("bounded cadence evidence must fit one serial line");
         assert!(line.starts_with("PI4_CADENCE schema=v2"));
-        assert!(line.contains(" et=64 "));
+        assert!(line.contains(" entry=64 "));
+        assert!(line.contains(" prev=none gap=na run=64 "));
         assert!(line.contains("usb-dma-zero-progress"));
         assert!(line.len() <= DEFAULT_LINE_CAPACITY);
+
+        let mut with_previous = later_same_frontier;
+        with_previous.flags |= pi4_driver_abi::DRIVER_RUNTIME_CADENCE_FLAG_PREVIOUS_ENTRY_VALID;
+        let line = format_runtime_cadence("driver-usb", with_previous)
+            .expect("inter-entry cadence evidence must fit one serial line");
+        assert!(line.contains(" prev=valid gap=c8 run=258 "), "{line}");
     }
 
     #[cfg(feature = "kernel")]
@@ -42536,52 +42979,21 @@ mod tests {
 
         assert!(
             rendered.contains(
-                "wifi: deferred_recovery retained=yes refinement=exact-owner logical_terminal_observed=yes cause=issued-owner-unknown subphase=cyw43-host-eapol-control-poll gate=8"
+                "wifi: causal_frontier id=1 gate=0 status=fail blocker=cyw43-root-grant-identity-rejected downstream=not-reached"
             ),
             "{rendered}"
         );
         assert!(
-            rendered.contains(
-                "wifi: deferred_recovery identity generation=0 owner_generation=0 ticket=1234605616436508552 completion_detail=0x5310 completion_result=0x43590008 completion_sequence=1345 turn=701"
-            ),
+            rendered.contains("wifi: causal_progress id=1 cyw43=1345/467/root-grant-rejected"),
             "{rendered}"
         );
         assert!(
-            rendered.contains(
-                "wifi: deferred_recovery descriptor op=0x000a flags=0x0003 target=0x00000000"
-            ),
+            !rendered.contains("cyw43-host-eapol-control-poll"),
             "{rendered}"
         );
         assert!(
-            rendered.contains(
-                "wifi: evidence first_causal_terminal authority=retained-first gate=8 stage=cyw43-host-eapol-data-poll request=3780 carrier_op=0x0008 detail=0x0001 result=0x00000000 current_state=secondary"
-            ),
-            "{rendered}"
-        );
-        assert!(
-            rendered.contains(
-                "wifi: cyw43 last_progress marker_valid=yes sequence=1345 phase=467 phase_name=root-grant-rejected"
-            ) && rendered.contains("gate=0 superseded=yes"),
-            "{rendered}"
-        );
-        assert!(
-            rendered.contains("wifi: gate 2 name=sdio-card-select status=blocked"),
-            "{rendered}"
-        );
-        assert!(
-            rendered.contains("wifi: gate 8 name=host-eapol status=blocked")
-                && rendered
-                    .contains("exact=cyw43-host-eapol-control-poll control_stage=host-eapol"),
-            "{rendered}"
-        );
-        assert!(
-            rendered.contains(
-                "wifi: next_action=inspect-root-request-fingerprint-and-generation blocker=cyw43-root-grant-identity-rejected proof_gate=0 target_gate=10"
-            ),
-            "{rendered}"
-        );
-        assert!(
-            rendered.contains("OK WIFI detail=subcommand=diag"),
+            rendered
+                .contains("OK WIFI detail=subcommand=diag scope=serial-local source=causal-triage"),
             "{rendered}"
         );
     }
@@ -49278,20 +49690,16 @@ mod tests {
         let rendered = String::from_utf8(transcript).expect("serial output must be utf8");
         assert!(
             rendered.contains(
-                "wifi: driver-task snapshot state=network-quarantined source=debug-handle-unavailable"
+                "wifi: causal_frontier id=1 gate=6 status=fail blocker=sdio-descriptor-transfer-failed downstream=not-reached"
             ),
             "{rendered}"
         );
         assert!(
-            rendered.contains("wifi: gate 6 name=firmware-upload status=fail"),
+            rendered.contains("wifi: causal_fault id=1 stage=cyw43-firmware-chunk op=0002"),
             "{rendered}"
         );
         assert!(
-            rendered.contains("wifi: gate 7 name=function2-ready status=blocked"),
-            "{rendered}"
-        );
-        assert!(
-            rendered.contains("active=quarantined active_driver=cyw43"),
+            rendered.contains("target=00198000 payload=0/64 total=609309 detail=5103"),
             "{rendered}"
         );
         assert!(
@@ -49299,15 +49707,16 @@ mod tests {
             "{rendered}"
         );
         assert!(
-            !rendered.contains("wifi: gate 10 name=nettest-netstats-cohsh status=pass"),
+            !rendered.contains("wifi-host-eapol-pending retained pre-quarantine state"),
             "{rendered}"
         );
         assert!(
             !rendered.contains("wifi: gate 8 name=host-eapol status=fail"),
-            "stale textual host-EAPOL cause suppressed the fresh Gate 6 fault: {rendered}"
+            "{rendered}"
         );
         assert!(
-            rendered.contains("OK WIFI detail=subcommand=diag"),
+            rendered
+                .contains("OK WIFI detail=subcommand=diag scope=serial-local source=causal-triage"),
             "{rendered}"
         );
 
@@ -49969,7 +50378,7 @@ mod tests {
         let rendered = String::from_utf8(transcript).expect("serial output must be utf8");
         assert!(
             rendered.contains(
-                "wifi: debug subcommand=dump-state action=begin profile=bounded mode=one-shot"
+                "wifi: debug subcommand=dump-state action=begin profile=verbose mode=one-shot"
             ),
             "{rendered}"
         );
@@ -50112,7 +50521,7 @@ mod tests {
         );
         assert!(
             rendered.contains(
-                "wifi: debug subcommand=dump-state action=complete profile=bounded mode=one-shot result=ok"
+                "wifi: debug subcommand=dump-state action=complete profile=verbose mode=one-shot result=ok"
             ),
             "{rendered}"
         );
@@ -50282,14 +50691,11 @@ mod tests {
             "{rendered}"
         );
         assert!(
-            rendered
-                .contains("wifi dump-state - Show cached SDIO, clock, and contract trace state"),
+            rendered.contains("wifi dump-state - Show verbose cached acceptance and runtime state"),
             "{rendered}"
         );
         assert!(
-            rendered.contains(
-                "wifi diag       - Show passive cached linked-runtime gate and owner state"
-            ),
+            rendered.contains("wifi diag       - Show compact bounded causal triage"),
             "{rendered}"
         );
         assert!(!rendered.contains("wifi probe-ht"), "{rendered}");
@@ -50359,89 +50765,58 @@ mod tests {
         transcript.extend(pump.serial_mut().driver_mut().drain_tx());
         drop(pump);
         let rendered = String::from_utf8(transcript).expect("serial output must be utf8");
-        assert!(wifi.breadcrumb_suppression_observed);
-        let dpc_line = "CYW43_SDIO_DPC generation=9 captures=12 published=12 consumed=12 rearms=12 overruns=0 epoch_errors=0 sequence_errors=0 ack_failures=0 owner_active=yes poisoned=no masked=no";
-        let dpc_scope = "CYW43_SDIO_DPC_SCOPE captures=event-attempts published=ring-events poisoned=aggregate-client-or-ring source=card-int-or-source-probe physical_card_irq=not-exported";
-        let dpc_truth = "CYW43_SDIO_DPC_TRUTH generation=9 owner_active=yes ring_poisoned=no client_sample_stale=no ring_consumer=12 sample_consumer=12";
-        let dpc_rearm = "CYW43_SDIO_DPC_REARM generation=9 counter=client-signal-attempts count=12 owner_irq=unmasked action=none";
-        assert!(rendered.contains(dpc_line), "{rendered}");
-        assert!(rendered.contains(dpc_scope), "{rendered}");
-        assert!(rendered.contains(dpc_truth), "{rendered}");
-        assert!(rendered.contains(dpc_rearm), "{rendered}");
-        assert!(rendered.contains(episode_line.as_str()), "{rendered}");
-        assert_eq!(
-            rendered.matches("CYW43_BUS_EPISODE ").count(),
-            1,
+        assert!(!wifi.breadcrumb_suppression_observed);
+        assert!(!rendered.contains(episode_line.as_str()), "{rendered}");
+        assert!(!rendered.contains("CYW43_SDIO_DPC "), "{rendered}");
+        assert!(
+            rendered.contains(
+                "wifi: debug subcommand=diag action=begin profile=bounded-causal mode=one-shot"
+            ),
             "{rendered}"
         );
-        assert_eq!(rendered.matches("CYW43_SDIO_DPC ").count(), 1, "{rendered}");
-        assert_eq!(
-            rendered.matches("CYW43_SDIO_DPC_SCOPE ").count(),
-            1,
+        assert!(
+            rendered.contains("wifi: diag_begin id=1 schema=v2 snapshot=best-effort-multi-record"),
             "{rendered}"
         );
-        assert_eq!(
-            rendered.matches("CYW43_SDIO_DPC_TRUTH ").count(),
-            1,
+        assert!(
+            rendered.contains("wifi: causal_frontier id=1 gate="),
             "{rendered}"
         );
-        assert_eq!(
-            rendered.matches("CYW43_SDIO_DPC_REARM ").count(),
-            1,
+        assert!(
+            rendered.contains("wifi: causal_progress id=1 "),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("wifi: causal_episode id=1 "),
+            "{rendered}"
+        );
+        assert!(rendered.contains("wifi: causal_grant id=1 "), "{rendered}");
+        assert!(rendered.contains("wifi: causal_fault id=1 "), "{rendered}");
+        assert!(
+            rendered.contains("wifi: diag_transport id=1 body_lines=7 body_bytes="),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("wifi: diag_complete id=1 causal=yes detail=yes schema=v2"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains(
+                "wifi: debug subcommand=diag action=complete profile=bounded-causal mode=one-shot result=ok source=causal-triage"
+            ),
             "{rendered}"
         );
         assert!(
             rendered
-                .contains("wifi: debug subcommand=diag action=begin profile=bounded mode=one-shot"),
-            "{rendered}"
-        );
-        assert!(
-            rendered.contains(
-                "wifi: diag snapshot=cached mutation=no ht_probe_eligible=yes reason=none"
-            ),
-            "{rendered}"
-        );
-        assert!(
-            rendered.contains("wifi: diag recorder=startup-blackbox mode=passive source=cached"),
-            "{rendered}"
-        );
-        assert!(
-            rendered.contains("wifi: gate 1 name=runtime-power-reset status=pass"),
-            "{rendered}"
-        );
-        assert!(
-            rendered.contains("wifi: gate 6 name=firmware-upload"),
-            "{rendered}"
-        );
-        assert!(rendered.contains("wifi: next_action="), "{rendered}");
-        assert!(
-            rendered.contains("wifi: ht_state chipclk=0x50"),
-            "{rendered}"
-        );
-        assert!(
-            rendered.contains("wifi: f2_gate policy=post-ht-proof gate=blocked-latched-not-ready"),
-            "{rendered}"
-        );
-        assert!(
-            !rendered.contains("wifi: firmware_proof source=cached upload=uploaded"),
-            "{rendered}"
-        );
-        assert!(
-            !rendered.contains("wifi: cccr_cached ioex=0x06 iordy=0x02"),
-            "{rendered}"
-        );
-        assert!(
-            rendered.contains(
-                "wifi: debug subcommand=diag action=complete profile=bounded mode=one-shot result=ok"
-            ),
-            "{rendered}"
-        );
-        assert!(
-            rendered.contains("OK WIFI detail=subcommand=diag"),
+                .contains("OK WIFI detail=subcommand=diag scope=serial-local source=causal-triage"),
             "{rendered}"
         );
         assert!(rendered.contains("cohesix> "), "{rendered}");
-        assert_eq!(wifi.calls.as_slice(), &["dump-state"]);
+        assert!(
+            rendered.lines().count() <= WIFI_CAUSAL_DIAG_BODY_MAX_LINES + 6,
+            "{rendered}"
+        );
+        assert!(wifi.calls.is_empty());
     }
 
     #[cfg(feature = "kernel")]
@@ -50502,20 +50877,25 @@ mod tests {
         transcript.extend(pump.serial_mut().driver_mut().drain_tx());
         drop(pump);
         let rendered = String::from_utf8(transcript).expect("serial output must be utf8");
-        assert!(wifi.breadcrumb_suppression_observed);
+        assert!(!wifi.breadcrumb_suppression_observed);
         assert!(
-            rendered.contains("wifi: diag snapshot=cached mutation=no ht_probe_eligible=no reason=preserved-control-plane-failure exact_error=cyw43-control-plane-partial-hint-visibility"),
+            rendered.contains("wifi: diag_begin id=1 schema=v2 snapshot=best-effort-multi-record"),
             "{rendered}"
         );
         assert!(
-            rendered.contains("wifi: debug subcommand=diag action=complete profile=bounded mode=one-shot result=ok"),
+            !rendered.contains("cyw43-control-plane-partial-hint-visibility"),
             "{rendered}"
         );
         assert!(
-            rendered.contains("OK WIFI detail=subcommand=diag"),
+            rendered.contains("wifi: debug subcommand=diag action=complete profile=bounded-causal mode=one-shot result=ok source=causal-triage"),
             "{rendered}"
         );
-        assert_eq!(wifi.calls.as_slice(), &["dump-state"]);
+        assert!(
+            rendered
+                .contains("OK WIFI detail=subcommand=diag scope=serial-local source=causal-triage"),
+            "{rendered}"
+        );
+        assert!(wifi.calls.is_empty());
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
@@ -50555,48 +50935,18 @@ mod tests {
         transcript.extend(pump.serial_mut().driver_mut().drain_tx());
         let rendered = String::from_utf8(transcript).expect("serial output must be utf8");
         assert!(
-            rendered.contains("wifi: driver-task replay failure detail=net-disabled cause=cyw43-command driver-task runtime init failed"),
+            rendered.contains("wifi: causal_frontier id=1 gate=0 status=fail blocker=driver-runtime-sdio-dma-mmio-not-covered downstream=not-reached"),
             "{rendered}"
         );
         assert!(
-            rendered.contains(
-                "wifi: diag recorder=startup-blackbox mode=passive source=debug-handle-unavailable"
-            ),
+            rendered.contains("wifi: diag_complete id=1 causal=yes detail=yes schema=v2 gate=0 status=fail blocker=driver-runtime-sdio-dma-mmio-not-covered"),
             "{rendered}"
         );
+        assert!(!rendered.contains("cause=cyw43-command"), "{rendered}");
         assert!(
-            rendered.contains("wifi: driver-task bootstrap failure contract=sdio-host reason=driver-runtime-sdio-dma-mmio-not-covered stage=runtime-resource-admission"),
+            rendered
+                .contains("OK WIFI detail=subcommand=diag scope=serial-local source=causal-triage"),
             "{rendered}"
-        );
-        assert!(
-            rendered.contains("wifi: prerequisite name=runtime-resource-admission status=fail contract=sdio-host fault_detail=driver-runtime-sdio-dma-mmio-not-covered next=runtime-power-reset"),
-            "{rendered}"
-        );
-        assert!(
-            rendered.contains("wifi: gate 1 owner_lifetime lifetime_begun=0 lifetime_completed=0 lifetime_failed=0 lifetime_active=unknown source=sdio-owner"),
-            "{rendered}"
-        );
-        assert!(
-            rendered.contains("wifi: gate 1 name=runtime-power-reset status=blocked evidence=power=unknown reset=unknown pwrseq_status=unknown pwrseq_phase=none dependency=runtime-resource-admission"),
-            "{rendered}"
-        );
-        assert!(
-            rendered.contains("wifi: next_action=repair-sdio-runtime-resource-admission blocker=driver-runtime-sdio-dma-mmio-not-covered proof_gate=0"),
-            "{rendered}"
-        );
-        assert!(rendered.contains("wifi: next_action="), "{rendered}");
-        assert!(
-            rendered.contains("wifi: debug subcommand=diag action=complete profile=bounded mode=one-shot result=ok source=linked-runtime-retained-state"),
-            "{rendered}"
-        );
-        assert!(
-            rendered.contains("OK WIFI detail=subcommand=diag scope=serial-local source=linked-runtime-retained-state"),
-            "{rendered}"
-        );
-        assert!(
-            rendered.lines().count() <= CONSOLE_OUTPUT_BACKLOG_LINES,
-            "wifi diag must fit the bounded linked-serial response backlog: {} lines",
-            rendered.lines().count()
         );
     }
 
@@ -50636,21 +50986,17 @@ mod tests {
         drop(pump);
         let rendered = String::from_utf8(transcript).expect("serial output must be utf8");
         assert!(
-            rendered.contains(
-                "wifi: driver-task snapshot state=net-state-unavailable source=debug-handle-unavailable"
-            ),
+            rendered
+                .contains("wifi: causal_progress id=1 cyw43=77/340/cyw43-control-rx-poll-begin"),
             "{rendered}"
         );
         assert!(
-            rendered.contains("wifi: cyw43 last_progress marker_valid=yes sequence=77"),
+            rendered
+                .contains("OK WIFI detail=subcommand=diag scope=serial-local source=causal-triage"),
             "{rendered}"
         );
         assert!(
-            rendered.contains("phase_name=cyw43-control-rx-poll-begin"),
-            "{rendered}"
-        );
-        assert!(
-            rendered.contains("OK WIFI detail=subcommand=diag scope=serial-local source=linked-runtime-retained-state"),
+            !rendered.contains("wifi: driver-task snapshot"),
             "{rendered}"
         );
     }
@@ -50706,25 +51052,24 @@ mod tests {
         drop(pump);
         let rendered = String::from_utf8(transcript).expect("serial output must be utf8");
         assert!(
-            rendered.contains("wifi: cyw43 last_progress marker_valid=yes sequence=3 phase=454 phase_name=cyw43-backplane-window-low"),
+            rendered.contains("wifi: causal_progress id=1 cyw43=3/454/cyw43-backplane-window-low"),
             "{rendered}"
         );
         assert!(
-            rendered.contains("wifi: gate 5 name=backplane-window status=fail"),
+            rendered.contains("wifi: causal_frontier id=1 gate=5 status=fail blocker=sdio-descriptor-transfer-failed downstream=not-reached"),
             "{rendered}"
         );
         assert!(
-            rendered.contains("wifi: gate 6 name=firmware-upload status=blocked"),
+            rendered.contains("wifi: causal_fault id=1 stage=cyw43-transport-init op=0001"),
             "{rendered}"
         );
         assert!(
-            rendered.contains("inferred_frontier_gate=4")
-                && rendered.contains("failing_gate=5")
-                && rendered.contains("failure_domain=sdio-descriptor-transfer-failed"),
+            rendered.contains("detail=5103 reason=sdio-descriptor-transfer-failed result=020c8000"),
             "{rendered}"
         );
         assert!(
-            rendered.contains("OK WIFI detail=subcommand=diag scope=serial-local source=linked-runtime-retained-state"),
+            rendered
+                .contains("OK WIFI detail=subcommand=diag scope=serial-local source=causal-triage"),
             "{rendered}"
         );
     }
@@ -50850,21 +51195,11 @@ mod tests {
 
         let prep_rendered = render();
         assert!(
-            prep_rendered.contains("wifi: gate 4 name=ht-clock status=fail"),
-            "{prep_rendered}"
-        );
-        assert!(
-            prep_rendered.contains("wifi: gate 6 name=firmware-upload status=blocked"),
-            "{prep_rendered}"
-        );
-        assert!(
             prep_rendered.contains(
-                "wifi: evidence firmware_prep status=failed semantic_gate=4 detail=0x5316"
-            ),
-            "{prep_rendered}"
-        );
-        assert!(
-            !prep_rendered.contains("status=failed semantic_gate=6 detail=0x5316"),
+                "wifi: causal_frontier id=1 gate=4 status=fail blocker=cyw43-card-bus-width"
+            ) && prep_rendered
+                .contains("wifi: causal_fault id=1 stage=cyw43-firmware-prep op=0009")
+                && prep_rendered.contains("detail=5316 reason=cyw43-card-bus-width"),
             "{prep_rendered}"
         );
 
@@ -50877,7 +51212,7 @@ mod tests {
         let caps_rendered = render();
         assert!(
             caps_rendered.contains(
-                "wifi: evidence firmware_prep status=failed semantic_gate=3 detail=0x5312"
+                "wifi: causal_frontier id=1 gate=3 status=fail blocker=cyw43-transport-card-init"
             ),
             "{caps_rendered}"
         );
@@ -50898,7 +51233,7 @@ mod tests {
         let passive_core_rendered = render();
         assert!(
             passive_core_rendered.contains(
-                "wifi: evidence firmware_prep status=failed semantic_gate=6 detail=0x531f"
+                "wifi: causal_frontier id=1 gate=6 status=fail blocker=cyw43-backplane-armcr4-reset"
             ),
             "{passive_core_rendered}"
         );
@@ -50924,32 +51259,12 @@ mod tests {
         );
         let stream_rendered = render();
         assert!(
-            stream_rendered.contains("wifi: gate 3 name=cccr-fbr-ready status=pass"),
-            "{stream_rendered}"
-        );
-        assert!(
-            stream_rendered
-                .contains("wifi: gate 4 name=ht-clock status=pass evidence=clock_snapshot=current"),
-            "{stream_rendered}"
-        );
-        assert!(
-            stream_rendered.contains("wifi: gate 5 name=backplane-window status=pass"),
-            "{stream_rendered}"
-        );
-        assert_eq!(
-            stream_rendered
-                .matches("sequencer_proof=firmware-prep-complete")
-                .count(),
-            2,
-            "{stream_rendered}"
-        );
-        assert!(
-            stream_rendered.contains("wifi: gate 6 name=firmware-upload status=fail"),
-            "{stream_rendered}"
-        );
-        assert!(
             stream_rendered.contains(
-                "wifi: evidence firmware_prep status=complete proof=later-operation-admitted armcr4_clear_write=issued postreset_cpuhalt_clock_flush=pass armcr4_resetctrl_read=advisory d11_reset_assert_write=issued d11_inreset_flush=pass d11_resetctrl_read=advisory"
+                "wifi: causal_frontier id=1 gate=6 status=fail blocker=sdio-descriptor-transfer-failed"
+            ) && stream_rendered.contains(
+                "wifi: causal_fault id=1 stage=cyw43-firmware-chunk op=0002"
+            ) && stream_rendered.contains(
+                "target=00198000 payload=0/32704 total=609309 detail=5103"
             ),
             "{stream_rendered}"
         );
@@ -50974,47 +51289,13 @@ mod tests {
             control_fault,
         );
         let control_rendered = render();
-        for gate in 1..=7 {
-            let gate_prefix = format!("wifi: gate {gate} name=");
-            let gate_line = control_rendered
-                .lines()
-                .find(|line| line.contains(&gate_prefix))
-                .expect("each completed startup gate must be rendered");
-            assert!(gate_line.contains("status=pass"), "{gate_line}");
-        }
         assert!(
             control_rendered.contains(
-                "wifi: gate 6 name=firmware-upload status=pass evidence=uploaded=yes verified=yes"
-            ),
-            "{control_rendered}"
-        );
-        assert!(
-            control_rendered.contains(
-                "wifi: gate 7 name=function2-ready status=pass evidence=f2_enabled=yes f2_ready=yes f2_state=post-release-ready"
-            ),
-            "{control_rendered}"
-        );
-        assert!(
-            control_rendered.contains(
-                "wifi: gate 8 name=control-exchange status=fail evidence=exact=cyw43-control-exchange"
-            ),
-            "{control_rendered}"
-        );
-        assert!(
-            control_rendered.contains(
-                "wifi: evidence cyw43_control op=11 cmd=263 cmd_hex=0x00000107 id=1 header_mode=plain response_len=0 pre_tx_drain=no timeout_reason=no-rframe timeout_value=0 tx_state=submitted"
-            ),
-            "{control_rendered}"
-        );
-        assert!(
-            control_rendered.contains(
-                "wifi: evidence control_exchange edge=post-function2-tx timeout_reason=no-rframe timeout_value=0 pre_tx_drain=no child_cmd53=completed-before-reply-wait"
-            ),
-            "{control_rendered}"
-        );
-        assert!(
-            control_rendered.contains(
-                "direct_proof_gate=7 inferred_frontier_gate=7 proof_gate=7 frontier_gate=7 failing_gate=8"
+                "wifi: causal_frontier id=1 gate=8 status=fail blocker=cyw43-control-exchange"
+            ) && control_rendered.contains(
+                "wifi: causal_fault id=1 stage=cyw43-control-txglomalign op=000b"
+            ) && control_rendered.contains(
+                "payload=0/36 total=36 detail=530b reason=cyw43-control-exchange result=43030000"
             ),
             "{control_rendered}"
         );
@@ -51031,16 +51312,13 @@ mod tests {
         let no_reply_rendered = render();
         assert!(
             no_reply_rendered.contains(
-                "wifi: evidence control_exchange edge=completion-unknown timeout_reason=none timeout_value=0 pre_tx_drain=yes function2_tx=not-proven child_cmd53=not-proven terminal=parent-no-reply"
-            ),
+                "wifi: causal_fault id=1 stage=cyw43-control-txglomalign op=000b flags=0008"
+            ) && no_reply_rendered
+                .contains("reason=cyw43-runtime-command-no-reply result=00000000"),
             "{no_reply_rendered}"
         );
         assert!(
-            !no_reply_rendered.contains(
-                "edge=post-function2-tx timeout_reason=none"
-            ) && !no_reply_rendered.contains(
-                "timeout_reason=none timeout_value=0 pre_tx_drain=yes child_cmd53=completed-before-reply-wait"
-            ),
+            !no_reply_rendered.contains("child_cmd53=completed-before-reply-wait"),
             "{no_reply_rendered}"
         );
         crate::drivers::driver_task_net::test_clear_cyw43_runtime_replay_status();
@@ -51073,31 +51351,11 @@ mod tests {
         transcript.extend(pump.serial_mut().driver_mut().drain_tx());
         let rendered = String::from_utf8(transcript).expect("serial output must be utf8");
         assert!(
-            rendered.contains("cause=host-eapol-required driver-task runtime init failed"),
+            rendered.contains("wifi: causal_frontier id=1 gate=8 status=pending blocker=linked-pair-pending downstream=not-reached"),
             "{rendered}"
         );
         assert!(
-            rendered.contains(
-                "wifi: evidence host_eapol_status exact=host-eapol-required authority=secondary-only gate8_frontier=8a-pair-generation"
-            ),
-            "{rendered}"
-        );
-        assert!(
-            rendered.contains(
-                "wifi: gate 8 subgate=8a-pair-generation status=pending pair_epoch=0 generation=0 blocker=linked-pair-pending"
-            ),
-            "{rendered}"
-        );
-        assert!(
-            rendered.contains(
-                "wifi: evidence boundary proof=gate-frontier direct_proof_gate=0 inferred_frontier_gate=0 proof_gate=0 frontier_gate=0 failing_gate=1 target_gate=10 failure_domain=wifi-power-reset"
-            ),
-            "{rendered}"
-        );
-        assert!(
-            rendered.contains(
-                "wifi: next_action=verify-linked-runtime-power-reset-resources blocker=wifi-power-reset proof_gate=0"
-            ),
+            !rendered.contains("host-eapol-required driver-task runtime init failed"),
             "{rendered}"
         );
         assert!(!rendered.contains("next_action=inspect-host-eapol-rx-path"));
@@ -51131,25 +51389,11 @@ mod tests {
         transcript.extend(pump.serial_mut().driver_mut().drain_tx());
         let rendered = String::from_utf8(transcript).expect("serial output must be utf8");
         assert!(
-            rendered.contains("cause=wifi-host-eapol-pending driver-task runtime init failed"),
+            rendered.contains("wifi: causal_frontier id=1 gate=8 status=pending blocker=linked-pair-pending downstream=not-reached"),
             "{rendered}"
         );
         assert!(
-            rendered.contains(
-                "wifi: evidence host_eapol_status exact=wifi-host-eapol-pending authority=secondary-only gate8_frontier=8a-pair-generation"
-            ),
-            "{rendered}"
-        );
-        assert!(
-            rendered.contains(
-                "wifi: gate 8 subgate=8a-pair-generation status=pending pair_epoch=0 generation=0 blocker=linked-pair-pending"
-            ),
-            "{rendered}"
-        );
-        assert!(
-            rendered.contains(
-                "wifi: evidence boundary proof=gate-frontier direct_proof_gate=0 inferred_frontier_gate=0 proof_gate=0 frontier_gate=0 failing_gate=1 target_gate=10 failure_domain=wifi-power-reset"
-            ),
+            !rendered.contains("wifi-host-eapol-pending driver-task runtime init failed"),
             "{rendered}"
         );
         assert!(!rendered.contains("next_action=inspect-host-eapol-rx-path"));
@@ -51188,26 +51432,13 @@ mod tests {
         transcript.extend(pump.serial_mut().driver_mut().drain_tx());
         let rendered = String::from_utf8(transcript).expect("serial output must be utf8");
         assert!(
-            rendered.contains(
-                "wifi: evidence host_eapol_status exact=wifi-host-eapol-pending authority=secondary-only gate8_frontier=8a-pair-generation"
-            ),
+            rendered.contains("wifi: causal_frontier id=1 gate=8 status=pending blocker=linked-pair-pending downstream=not-reached"),
             "{rendered}"
         );
-        assert!(
-            rendered.contains(
-                "wifi: gate 8 subgate=8a-pair-generation status=pending pair_epoch=0 generation=0 blocker=linked-pair-pending"
-            ),
-            "{rendered}"
-        );
-        assert!(
-            rendered.contains(
-                "wifi: evidence boundary proof=gate-frontier direct_proof_gate=0 inferred_frontier_gate=0 proof_gate=0 frontier_gate=0 failing_gate=1 target_gate=10 failure_domain=wifi-power-reset"
-            ),
-            "{rendered}"
-        );
+        assert!(!rendered.contains("wifi-host-eapol-pending"), "{rendered}");
         assert!(!rendered.contains("next_action=inspect-host-eapol-rx-path"));
         assert!(!rendered.contains("wifi: cyw43 fault "), "{rendered}");
-        assert_eq!(wifi.calls.as_slice(), &["dump-state"]);
+        assert!(wifi.calls.is_empty());
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
@@ -51429,57 +51660,25 @@ mod tests {
         let rendered = String::from_utf8(transcript).expect("serial output must be utf8");
         assert!(
             rendered.contains(
-                "wifi: driver-task replay state detail=live-net-frontier source=debug-handle-unavailable active=wifi address_source=dhcp-pending dhcp_phase=selecting ip=0.0.0.0 assoc=1 link=1 eapol_secure=1"
-            ),
-            "{rendered}"
-        );
-        let maintenance_line = rendered
-            .lines()
-            .find(|line| line.starts_with("wifi: maintenance generation="))
-            .expect("driver-task wifi diag emits passive maintenance state");
-        for field in [" current=", " pending=", " requested=0x", " next="] {
-            assert!(maintenance_line.contains(field), "{maintenance_line}");
-        }
-        assert!(
-            !maintenance_line.contains(DIAGNOSTIC_TRUNCATION_MARKER),
-            "{maintenance_line}"
-        );
-        let maintenance_action_line = rendered
-            .lines()
-            .find(|line| line.starts_with("wifi: maintenance action="))
-            .expect("driver-task wifi diag emits passive maintenance action state");
-        assert!(
-            !maintenance_action_line.contains(DIAGNOSTIC_TRUNCATION_MARKER),
-            "{maintenance_action_line}"
-        );
-        assert!(
-            rendered.contains(
-                "wifi: diag recorder=startup-blackbox mode=passive source=debug-handle-unavailable"
+                "wifi: causal_frontier id=1 gate=8 status=pending blocker=linked-pair-pending downstream=not-reached"
             ),
             "{rendered}"
         );
         assert!(
-            rendered.contains("wifi: gate 1 name=runtime-power-reset status=fail"),
+            rendered
+                .contains("wifi: causal_progress id=1 cyw43=77/340/cyw43-control-rx-poll-begin"),
             "{rendered}"
         );
         assert!(
-            rendered.contains(
-                "wifi: gate 8 subgate=8a-pair-generation status=pending pair_epoch=0 generation=0 blocker=linked-pair-pending"
-            ),
+            !rendered.contains("address_source=dhcp-pending"),
             "{rendered}"
         );
-        assert!(
-            rendered.contains(
-                "wifi: next_action=inspect-linked-cyw43-runtime-progress blocker=cyw43-linked-runtime-progress-no-reply proof_gate=0 target_gate=10 source=debug-handle-unavailable"
-            ),
-            "{rendered}"
-        );
-        assert!(
-            !rendered.contains("wifi: driver-task replay failure detail=net-state-unavailable"),
-            "{rendered}"
-        );
-        assert!(rendered.contains("wifi: cyw43 last_progress"), "{rendered}");
         assert!(!rendered.contains("source=live-net-status"), "{rendered}");
+        assert!(
+            rendered
+                .contains("OK WIFI detail=subcommand=diag scope=serial-local source=causal-triage"),
+            "{rendered}"
+        );
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
@@ -51573,33 +51772,24 @@ mod tests {
         drop(pump);
         let rendered = String::from_utf8(transcript).expect("serial output must be utf8");
         assert!(
-            rendered.contains("wifi: driver-task replay failure detail=net-disabled cause=cyw43-command driver-task runtime init failed"),
+            rendered.contains("wifi: causal_frontier id=1 gate=8 status=pending blocker=linked-pair-pending downstream=not-reached"),
             "{rendered}"
         );
         assert!(
-            rendered.contains(
-                "wifi: host_eapol work_pending=no blocker=none generation=0 open_network=no causal_continuation=no"
-            ),
+            rendered.contains("wifi: debug subcommand=diag action=complete profile=bounded-causal mode=one-shot result=ok source=causal-triage"),
             "{rendered}"
         );
         assert!(
-            rendered.contains("wifi: host_eapol detail deferred_reauth=no prompt_poll=no"),
+            rendered
+                .contains("OK WIFI detail=subcommand=diag scope=serial-local source=causal-triage"),
             "{rendered}"
         );
         assert!(
-            rendered.contains("wifi: debug subcommand=diag action=complete profile=bounded mode=one-shot result=ok source=linked-runtime-retained-state"),
-            "{rendered}"
-        );
-        assert!(
-            rendered.contains("OK WIFI detail=subcommand=diag scope=serial-local source=linked-runtime-retained-state"),
-            "{rendered}"
-        );
-        assert!(
-            rendered.lines().count() <= CONSOLE_OUTPUT_BACKLOG_LINES,
-            "wifi diag must fit the bounded linked-serial response backlog: {} lines",
+            rendered.lines().count() <= WIFI_CAUSAL_DIAG_BODY_MAX_LINES + 6,
+            "wifi diag must fit its strict response budget: {} lines",
             rendered.lines().count()
         );
-        assert_eq!(wifi.calls.as_slice(), &["dump-state"]);
+        assert!(wifi.calls.is_empty());
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
@@ -51748,7 +51938,7 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn serial_wifi_diag_unavailable_returns_error_and_prompt() {
+    fn serial_wifi_diag_without_debug_handle_returns_causal_snapshot() {
         #[cfg(feature = "net-console")]
         let _progress_guard = wifi_driver_task_progress_test_guard();
         #[cfg(feature = "net-console")]
@@ -51760,8 +51950,8 @@ mod tests {
                 crate::hal::driver_task::SDIO_HOST_DRIVER_TASK_CONTRACT,
             );
         }
-        let driver = LoopbackSerial::<1024>::new();
-        let serial = SerialPort::<_, 1024, 1024, DEFAULT_LINE_CAPACITY>::new(driver);
+        let driver = LoopbackSerial::<4096>::new();
+        let serial = SerialPort::<_, 4096, 4096, DEFAULT_LINE_CAPACITY>::new(driver);
         let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
         let ipc = NullIpc;
         let mut store: TicketTable<4> = TicketTable::new();
@@ -51771,7 +51961,7 @@ mod tests {
             EventPump::new(serial, timer, ipc, store, &mut audit).with_test_pi4_debug_commands();
 
         pump.serial_mut().driver_mut().push_rx(b"wifi diag\n");
-        for _ in 0..4 {
+        for _ in 0..32 {
             pump.poll();
         }
 
@@ -51783,16 +51973,18 @@ mod tests {
             .collect();
         let rendered = String::from_utf8(transcript).expect("serial output must be utf8");
         assert!(
+            rendered.contains(
+                "wifi: debug subcommand=diag action=begin profile=bounded-causal mode=one-shot"
+            ),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("wifi: causal_frontier id=1 gate=8 status=pending blocker=linked-pair-pending downstream=not-reached"),
+            "{rendered}"
+        );
+        assert!(
             rendered
-                .contains("wifi: debug subcommand=diag action=begin profile=bounded mode=one-shot"),
-            "{rendered}"
-        );
-        assert!(
-            rendered.contains("wifi: debug subcommand=diag action=complete profile=bounded mode=one-shot result=error error=unsupported operation: wifi-debug-unavailable"),
-            "{rendered}"
-        );
-        assert!(
-            rendered.contains("ERR WIFI reason=policy detail=subcommand=diag error=unsupported operation: wifi-debug-unavailable"),
+                .contains("OK WIFI detail=subcommand=diag scope=serial-local source=causal-triage"),
             "{rendered}"
         );
         assert!(rendered.contains("cohesix> "), "{rendered}");
@@ -51839,8 +52031,8 @@ mod tests {
     #[cfg(feature = "kernel")]
     #[test]
     fn serial_usb_debug_command_enables_local_seat_polling() {
-        let driver = LoopbackSerial::<2048>::new();
-        let serial = SerialPort::<_, 512, 2048, DEFAULT_LINE_CAPACITY>::new(driver);
+        let driver = LoopbackSerial::<8192>::new();
+        let serial = SerialPort::<_, 512, 8192, DEFAULT_LINE_CAPACITY>::new(driver);
         let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
         let ipc = NullIpc;
         let mut store: TicketTable<4> = TicketTable::new();
@@ -53478,20 +53670,20 @@ mod tests {
         let mirrored = local_seat.mirrored_lines_snapshot();
         assert!(
             mirrored.iter().any(|line| line.contains(
-                "wifi: debug subcommand=diag action=begin profile=bounded mode=one-shot"
+                "wifi: debug subcommand=diag action=begin profile=bounded-causal mode=one-shot"
             )),
             "{mirrored:?}"
         );
         assert!(
             mirrored
                 .iter()
-                .any(|line| line.contains("wifi: diag snapshot=cached mutation=no")),
+                .any(|line| line.contains("wifi: causal_frontier id=1 gate=")),
             "{mirrored:?}"
         );
         assert!(
             mirrored.iter().any(|line| {
                 line.contains(
-                    "wifi: debug subcommand=diag action=complete profile=bounded mode=one-shot result=ok",
+                    "wifi: debug subcommand=diag action=complete profile=bounded-causal mode=one-shot result=ok source=causal-triage",
                 )
             }),
             "{mirrored:?}"
@@ -53502,7 +53694,7 @@ mod tests {
                 .any(|line| line.contains("OK WIFI detail=subcommand=diag")),
             "{mirrored:?}"
         );
-        assert_eq!(wifi.calls.as_slice(), &["dump-state"]);
+        assert!(wifi.calls.is_empty());
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]

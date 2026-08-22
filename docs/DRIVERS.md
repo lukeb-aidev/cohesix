@@ -827,6 +827,9 @@ bounded detail records over an unbounded dump. A useful report answers:
 
 Distinguish `current`, `retained`, `inferred`, `stale`, and `unavailable` data.
 A boot-time readiness latch must not be presented as current liveness.
+When `usb: runtime_queue queue_valid=no`, the queue depth, doorbell,
+preserved-event, transfer-event, and report-status companions render as
+`unknown`; bytes carried in an enumeration result are not HID queue telemetry.
 
 When a verbose diagnostic can end before its causal state is shown, reserve a
 compact terminal summary before producing detail. For example, the Wi-Fi
@@ -835,14 +838,26 @@ scope, current and retained frontier, recovery cause, and first scheduler
 trigger. This terminal summary is evidence presentation only; it must not
 service, retry, or recover the driver.
 
-One current Wi-Fi diagnostic transaction begins with nonzero
-`wifi: diag_begin id=<id> pair_epoch=<pair> generation=<gen>
-snapshot=current`. Its compact retained Gate 7 row carries the same `id`,
-`pair`, and `gen`; `src=sm` names current retained host-EAPOL state-machine
-proof, never generic Gate 8 inference. Every intervening Gate 8 row carries the
-same pair and generation; and the closing `wifi: diag_complete id=<id> ... pair=<pair>
-gen=<gen> snapshot=current` repeats the complete identity. Standalone, prior,
-reordered, scrubbed, malformed, or cross-identity rows are not current proof.
+One current compact Wi-Fi causal transaction begins with nonzero
+`wifi: diag_begin id=<id> schema=v2 snapshot=best-effort-multi-record ...`.
+It contains at most eight preflighted body lines and closes with a matching
+`wifi: diag_complete ... schema=v2` that repeats the first gate, status,
+blocker, body-line count, and body-byte count. `wifi: causal_episode` binds the
+latest stable physical epoch, logical generation, immutable parent, SDIO child,
+terminal, pending mask, and exit. The latest
+`CYW43_DPC_CHILD_TIMING_ENTRY` distinguishes publication, intake, issue,
+terminal, and final-consumer acceptance. `wifi: causal_grant` and the transport
+row expose publication/consumption and root-wake badge/counters without making
+either notification an authority source. This multi-record snapshot is causal
+triage, not Gate 7/8 acceptance; an earlier failure renders downstream work
+`not-reached`.
+
+`wifi dump-state` retains the verbose DPC, association, maintenance, data-path,
+Gate 7, and Gate 8 inspection rows. Historical logs can contain the former
+bracketed `diag_begin ... snapshot=current` verbose transaction. The
+normalizer continues to accept that old grammar, but new compact `wifi diag`
+output cannot manufacture or replace the independently required verbose
+acceptance evidence.
 
 On a physical-console `smp` or `smp activity` request with Wi-Fi selected, a
 complete current old-good receipt is emitted before the ordinary activity
@@ -893,6 +908,16 @@ queue-collapse state, and real linked-runtime HID input reaching the parser and
 HDMI. The pair remains passive and each row is bounded to 243 bytes. Active
 `usb enable-kbd` and `usb probe-kbd` operations do not project either retained
 row.
+
+The non-network linked runtimes publish the fixed 48-byte
+`DriverRuntimeCadenceRecord` version 2 without moving the role-local ABI slot.
+The current entry remains a full 64-bit `CNTVCT_EL0` sample; the existing word
+formerly used only for `last_cntvct` now carries the low 32 bits of the
+previous entry and current publication. `PI4_CADENCE schema=v2` renders
+`prev=valid|none`, true modulo-32-bit entry-to-entry `gap`, and independent
+in-episode `run`. A missing previous-entry validity bit renders `gap=na`.
+Neither field is scheduling authority, and the old `dt` duration must not be
+interpreted as an inter-entry gap.
 
 ### 8.2 Passive versus active commands
 

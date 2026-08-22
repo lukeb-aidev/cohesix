@@ -740,7 +740,7 @@ pub const DRIVER_RUNTIME_CADENCE_BYTES: u16 = 48;
 /// Magic value for a runtime cadence record (`DRCD`).
 pub const DRIVER_RUNTIME_CADENCE_MAGIC: u32 = 0x4452_4344;
 /// Runtime cadence layout version.
-pub const DRIVER_RUNTIME_CADENCE_VERSION: u16 = 1;
+pub const DRIVER_RUNTIME_CADENCE_VERSION: u16 = 2;
 /// Cadence exit: one command has entered its runtime service episode.
 pub const DRIVER_RUNTIME_CADENCE_EXIT_ENTER: u16 = 1;
 /// Cadence exit: bounded useful work completed and the same episode continues.
@@ -753,6 +753,8 @@ pub const DRIVER_RUNTIME_CADENCE_EXIT_TERMINAL: u16 = 4;
 pub const DRIVER_RUNTIME_CADENCE_FLAG_WORK_REMAINS: u16 = 1 << 0;
 /// Cadence flag: `work_completed` and `work_total` count bytes.
 pub const DRIVER_RUNTIME_CADENCE_FLAG_WORK_BYTES: u16 = 1 << 1;
+/// Cadence flag: `previous_entry_cntvct_lo` identifies the preceding episode.
+pub const DRIVER_RUNTIME_CADENCE_FLAG_PREVIOUS_ENTRY_VALID: u16 = 1 << 2;
 
 /// Passive sequence-last evidence for one non-network runtime service episode.
 ///
@@ -775,8 +777,10 @@ pub struct DriverRuntimeCadenceRecord {
     pub phase: u32,
     /// Virtual-counter sample taken when this command entered service.
     pub entry_cntvct: u64,
-    /// Virtual-counter sample represented by this publication.
-    pub last_cntvct: u64,
+    /// Low counter word from the preceding command entry, when flagged valid.
+    pub previous_entry_cntvct_lo: u32,
+    /// Low counter word represented by this publication.
+    pub last_cntvct_lo: u32,
     /// Bounded useful work completed at this phase.
     pub work_completed: u32,
     /// Complete bounded work extent, or zero when not applicable.
@@ -802,6 +806,32 @@ impl DriverRuntimeCadenceRecord {
         exit_reason: u16,
         flags: u16,
     ) -> Self {
+        Self::staged_with_previous_entry(
+            sequence,
+            phase,
+            entry_cntvct,
+            0,
+            last_cntvct as u32,
+            work_completed,
+            work_total,
+            exit_reason,
+            flags,
+        )
+    }
+
+    /// Construct one uncommitted cadence body with an inter-entry sample.
+    #[must_use]
+    pub const fn staged_with_previous_entry(
+        sequence: u32,
+        phase: u32,
+        entry_cntvct: u64,
+        previous_entry_cntvct_lo: u32,
+        last_cntvct_lo: u32,
+        work_completed: u32,
+        work_total: u32,
+        exit_reason: u16,
+        flags: u16,
+    ) -> Self {
         Self {
             magic: DRIVER_RUNTIME_CADENCE_MAGIC,
             version: DRIVER_RUNTIME_CADENCE_VERSION,
@@ -809,7 +839,8 @@ impl DriverRuntimeCadenceRecord {
             sequence,
             phase,
             entry_cntvct,
-            last_cntvct,
+            previous_entry_cntvct_lo,
+            last_cntvct_lo,
             work_completed,
             work_total,
             exit_reason,
@@ -835,7 +866,8 @@ impl DriverRuntimeCadenceRecord {
             )
             && self.flags
                 & !(DRIVER_RUNTIME_CADENCE_FLAG_WORK_REMAINS
-                    | DRIVER_RUNTIME_CADENCE_FLAG_WORK_BYTES)
+                    | DRIVER_RUNTIME_CADENCE_FLAG_WORK_BYTES
+                    | DRIVER_RUNTIME_CADENCE_FLAG_PREVIOUS_ENTRY_VALID)
                 == 0
             && (self.work_total == 0 || self.work_completed <= self.work_total)
     }
@@ -8192,6 +8224,7 @@ mod tests {
         assert_eq!(core::mem::align_of::<DriverRuntimeCadenceRecord>(), 8);
         assert_eq!(DRIVER_RUNTIME_CADENCE_OFFSET, 144);
         assert_eq!(DRIVER_RUNTIME_CADENCE_MAGIC, 0x4452_4344);
+        assert_eq!(DRIVER_RUNTIME_CADENCE_VERSION, 2);
 
         let staged = DriverRuntimeCadenceRecord::staged(
             7,
@@ -8215,6 +8248,24 @@ mod tests {
         invalid = committed;
         invalid.flags = 1 << 15;
         assert!(!invalid.valid());
+
+        let mut with_previous = DriverRuntimeCadenceRecord::staged_with_previous_entry(
+            8,
+            DRIVER_RUNTIME_RING_PROGRESS_USB_RESET_DONE,
+            2_000,
+            1_000,
+            2_500,
+            64 * 1024,
+            320 * 1024,
+            DRIVER_RUNTIME_CADENCE_EXIT_PROGRESS,
+            DRIVER_RUNTIME_CADENCE_FLAG_WORK_REMAINS
+                | DRIVER_RUNTIME_CADENCE_FLAG_WORK_BYTES
+                | DRIVER_RUNTIME_CADENCE_FLAG_PREVIOUS_ENTRY_VALID,
+        );
+        with_previous.committed_sequence = with_previous.sequence;
+        assert!(with_previous.valid());
+        assert_eq!(with_previous.previous_entry_cntvct_lo, 1_000);
+        assert_eq!(with_previous.last_cntvct_lo, 2_500);
     }
 
     #[test]

@@ -1657,6 +1657,8 @@ def test_gate_summary_tracks_usb_command_ring_and_wifi_ht_blockers() -> None:
         "WIFI_DIAG_CAUSE": "none",
         "WIFI_DIAG_TRIGGER": "none",
         "WIFI_DIAG_RETAINED": "none",
+        "WIFI_DIAG_BODY_LINES": 0,
+        "WIFI_DIAG_BODY_BYTES": 0,
         "SERIAL_CLEAN": "yes",
         "BOOT_HALTED": "no",
         "TIMER_IRQ27_SEEN": "no",
@@ -1897,6 +1899,10 @@ def test_gate_summary_tracks_usb_command_ring_and_wifi_ht_blockers() -> None:
         "USB_RUNTIME_TRANSFER_EVENTS": 0,
         "USB_RUNTIME_REPORT_STATUS": "unknown",
         "USB_RUNTIME_QUEUE_VALID": "unknown",
+        "USB_RUNTIME_CADENCE_PREVIOUS": "unknown",
+        "USB_RUNTIME_CADENCE_GAP_TICKS": "UNKNOWN",
+        "USB_RUNTIME_CADENCE_RUN_TICKS": "UNKNOWN",
+        "USB_RUNTIME_CADENCE_LINE": 0,
         "USB_RUNTIME_DOORBELL_PENDING": "unknown",
         "USB_RUNTIME_RECOVERY_DIAG_VALID": "unknown",
         "USB_RUNTIME_ENDPOINT_RECOVERIES": 0,
@@ -9976,6 +9982,33 @@ def test_gate_summary_quarantines_invalid_usb_queue_enumeration_snapshot() -> No
     )
 
 
+def test_gate_summary_accepts_typed_unknown_invalid_usb_queue_companions() -> None:
+    """Current invalid queue output stays untyped and fail-closed."""
+
+    events = normalizer.parse_events(
+        [
+            "usb: runtime_queue queue_valid=no detail=0x0205 "
+            "result=0x0f000001 queued_reports=unknown "
+            "doorbell_pending=unknown preserved_events=unknown "
+            "transfer_events=unknown report_status=unknown",
+            "usb: stall_telemetry queue_valid=no queued_reports=unknown "
+            "doorbell=unknown preserved=unknown transfer_events=unknown "
+            "report_status=unknown",
+            "usb: runtime_gate keyboard=no first_report=no first_byte=no "
+            "command_ready=no proof_gate=7 target_gate=10 "
+            "blocker=hub-descriptor-transfer-failed",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["USB_RUNTIME_QUEUE_VALID"] == "no"
+    assert record["USB_RUNTIME_QUEUED_REPORTS"] == 0
+    assert record["USB_RUNTIME_TRANSFER_EVENTS"] == 0
+    assert record["USB_GATE"] == 7
+    assert record["USB_BLOCKER"] == "hub-descriptor-transfer-failed"
+
+
 def test_gate_summary_names_usb_hid_interrupt_no_completion() -> None:
     events = normalizer.parse_events(
         [
@@ -16528,6 +16561,50 @@ def test_current_wifi_diag_accepts_only_its_fresh_dpc_triplet() -> None:
     assert record["WIFI_DPC_CAPTURES"] == 8
 
 
+def test_current_wifi_dump_state_accepts_only_its_fresh_dpc_triplet() -> None:
+    """The verbose command owns the current DPC acceptance receipt."""
+
+    lines = [
+        *oldgood_wifi_resource_replay_lines(),
+        (
+            "wifi: debug subcommand=dump-state action=begin "
+            "profile=verbose mode=one-shot"
+        ),
+        *healthy_wifi_dpc_triplet(generation=12, captures=9),
+        (
+            "wifi: debug subcommand=dump-state action=complete "
+            "profile=verbose mode=one-shot result=ok"
+        ),
+    ]
+    record = normalizer.summarize_gates(
+        normalizer.parse_events(lines)
+    ).to_record()
+
+    assert record["WIFI_GATE"] == 10
+    assert record["WIFI_DPC_PROOF"] == "yes"
+    assert record["WIFI_DPC_GENERATION"] == 12
+    assert record["WIFI_DPC_CAPTURES"] == 9
+
+
+def test_incomplete_wifi_dump_state_cannot_reuse_an_older_dpc_sample() -> None:
+    """A later incomplete dump-state revokes older DPC sample authority."""
+
+    lines = [
+        *oldgood_wifi_resource_replay_lines(),
+        (
+            "wifi: debug subcommand=dump-state action=begin "
+            "profile=verbose mode=one-shot"
+        ),
+    ]
+    record = normalizer.summarize_gates(
+        normalizer.parse_events(lines)
+    ).to_record()
+
+    assert record["WIFI_GATE"] < 10
+    assert record["WIFI_DPC_PROOF"] == "no"
+    assert record["WIFI_DPC_REASON"] == "missing"
+
+
 def test_current_wifi_diag_complete_without_begin_cannot_reuse_dpc() -> None:
     """A terminal-only captured command cannot borrow an older DPC sample."""
 
@@ -16585,6 +16662,135 @@ def test_current_wifi_diag_complete_cannot_stitch_to_prior_command() -> None:
     assert record["WIFI_GATE"] < 10
     assert record["WIFI_DPC_PROOF"] == "no"
     assert record["WIFI_DPC_REASON"] == "missing"
+
+
+@pytest.mark.parametrize("gate", [0, 2])
+def test_schema_v2_wifi_diag_reports_bounded_causal_frontier(gate: int) -> None:
+    """Compact causal triage is validated without inventing Gate 7/8 proof."""
+
+    body = [
+        (
+            "wifi: diag_begin id=7 schema=v2 "
+            "snapshot=best-effort-multi-record pair=0 gen=0 "
+            "source=causal-triage"
+        ),
+        (
+            f"wifi: causal_frontier id=7 gate={gate} status=no-reply "
+            "blocker=sdio-engine-init downstream=not-reached"
+        ),
+        (
+            "wifi: causal_progress id=7 cyw43=0/0/unavailable "
+            "sdio=0/0/unavailable replay=engine-init/no-reply"
+        ),
+        "wifi: causal_episode id=7 state=unavailable",
+        "CYW43_DPC_CHILD_TIMING_ENTRY state=unavailable",
+        "wifi: causal_grant id=7 state=unavailable",
+        "wifi: causal_fault id=7 state=none",
+    ]
+    prefix_bytes = sum(len(line.encode("utf-8")) + 2 for line in body)
+    body.append(
+        "wifi: diag_transport id=7 "
+        f"body_lines=7 body_bytes={prefix_bytes} "
+        "max_lines=8 max_bytes=2048 backlog_before=0 "
+        "wake=bound/badge/polls/hits:yes/8/4/1"
+    )
+    body_bytes = sum(len(line.encode("utf-8")) + 2 for line in body)
+    lines = [
+        (
+            "wifi: debug subcommand=diag action=begin "
+            "profile=bounded-causal mode=one-shot"
+        ),
+        *body,
+        (
+            "wifi: diag_complete id=7 causal=yes detail=yes schema=v2 "
+            f"gate={gate} status=no-reply blocker=sdio-engine-init "
+            f"body_lines=8 body_bytes={body_bytes}"
+        ),
+        (
+            "wifi: debug subcommand=diag action=complete "
+            "profile=bounded-causal mode=one-shot result=ok "
+            "source=causal-triage"
+        ),
+    ]
+
+    record = normalizer.summarize_gates(
+        normalizer.parse_events(lines)
+    ).to_record()
+
+    assert record["WIFI_DIAG_DETAIL"] == "yes"
+    assert record["WIFI_DIAG_SCOPE"] == "best-effort-multi-record"
+    assert record["WIFI_DIAG_BODY_LINES"] == 8
+    assert record["WIFI_DIAG_BODY_BYTES"] == body_bytes
+    assert (
+        record["WIFI_CAUSAL_FRONTIER"]
+        == f"gate-{gate}/no-reply/sdio-engine-init"
+    )
+    assert record["WIFI_GATE7_COMPLETE"] == "no"
+    assert record["WIFI_GATE8_COMPLETE"] == "no"
+
+
+def test_schema_v2_wifi_diag_rejects_clipped_causal_body() -> None:
+    """A terminal marker cannot validate a clipped compact diagnostic body."""
+
+    lines = [
+        (
+            "wifi: debug subcommand=diag action=begin "
+            "profile=bounded-causal mode=one-shot"
+        ),
+        (
+            "wifi: diag_begin id=7 schema=v2 "
+            "snapshot=best-effort-multi-record pair=0 gen=0 "
+            "source=causal-triage"
+        ),
+        (
+            "wifi: causal_frontier id=7 gate=2 status=no-reply "
+            "blocker=sdio-engine-init downstream=not-reached"
+        ),
+        (
+            "wifi: diag_transport id=7 body_lines=7 body_bytes=300 "
+            "max_lines=8 max_bytes=2048 backlog_before=0 "
+            "wake=bound/badge/polls/hits:yes/8/4/1"
+        ),
+        (
+            "wifi: diag_complete id=7 causal=yes detail=yes schema=v2 "
+            "gate=2 status=no-reply blocker=sdio-engine-init "
+            "body_lines=8 body_bytes=450"
+        ),
+        (
+            "wifi: debug subcommand=diag action=complete "
+            "profile=bounded-causal mode=one-shot result=ok "
+            "source=causal-triage"
+        ),
+    ]
+
+    record = normalizer.summarize_gates(
+        normalizer.parse_events(lines)
+    ).to_record()
+
+    assert record["WIFI_CAUSAL_FRONTIER"] == "gate-0/fail/transaction-invalid"
+    assert record["WIFI_DIAG_BODY_LINES"] == 8
+    assert record["WIFI_DIAG_BODY_BYTES"] == 450
+
+
+def test_schema_v2_usb_cadence_splits_gap_from_run_duration() -> None:
+    """The normalizer must not reinterpret runtime duration as entry gap."""
+
+    lines = [
+        (
+            "PI4_CADENCE schema=v2 c=usb-local-seat q=2 entry=200 "
+            "prev=valid gap=100 run=20 p=7/usb-dma-zero-progress "
+            "w=100/500 e=progress f=7"
+        )
+    ]
+
+    record = normalizer.summarize_gates(
+        normalizer.parse_events(lines)
+    ).to_record()
+
+    assert record["USB_RUNTIME_CADENCE_PREVIOUS"] == "valid"
+    assert record["USB_RUNTIME_CADENCE_GAP_TICKS"] == 0x100
+    assert record["USB_RUNTIME_CADENCE_RUN_TICKS"] == 0x20
+    assert record["USB_RUNTIME_CADENCE_LINE"] == 1
 
 
 @pytest.mark.parametrize("complete_position", [1, -1])

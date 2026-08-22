@@ -25,6 +25,8 @@ CAPTURE_SECONDS=10
 COMMAND_DELAY_SECONDS=2
 COMMAND_CHAR_DELAY_SECONDS="${COHESIX_PI4_COMMAND_CHAR_DELAY_SECONDS:-0.06}"
 COMMAND_PROMPT_TIMEOUT_SECONDS=30
+WIFI_SUPERVISOR_TIMEOUT_SECONDS=180
+WIFI_DHCP_TIMEOUT_SECONDS=60
 SKIP_BUILD=0
 NO_CAPTURE=0
 NORMALIZE_ONLY=0
@@ -36,15 +38,13 @@ REQUIRE_DRIVER_TASK_PROOF=0
 REQUIRE_INPUT_RESPONSIVE=0
 
 DEFAULT_COMMANDS=(
+    "netstats"
     "smp activity"
-    "wifi diag"
     "nettest"
     "netstats"
-    "usb status"
+    "wifi diag"
     "usb diag"
     "usb status"
-    "netstats"
-    "smp activity"
 )
 EXTRA_COMMANDS=()
 EXPECTATIONS=()
@@ -132,14 +132,16 @@ Options:
   -h, --help                 Show this help
 
 Default proof commands:
+  netstats
   smp activity
-  wifi diag
   nettest
   netstats
-  usb status
+  wifi diag
   usb diag
   usb status
-  netstats
+
+`--require-wifi-ready` inserts `wifi dump-state` immediately before the compact
+WiFi diagnostic so DPC and verbose acceptance evidence are command-bound.
 USAGE
 }
 
@@ -319,6 +321,50 @@ wait_for_prompt_after_command() {
     fail "Cohesix prompt did not return within ${COMMAND_PROMPT_TIMEOUT_SECONDS}s after command: ${command}"
 }
 
+wifi_supervisor_terminal_status() {
+    rg -o 'CYW43_BOOTSTRAP_SUPERVISOR attempt=1 status=(ready|failed|permanent)' "${LOG_PATH}" \
+        | tail -n 1 \
+        | sed -E 's/.*status=//'
+}
+
+wait_for_wifi_supervisor_terminal() {
+    local deadline
+    local status
+
+    deadline=$((SECONDS + WIFI_SUPERVISOR_TIMEOUT_SECONDS))
+    while ((SECONDS <= deadline)); do
+        status="$(wifi_supervisor_terminal_status || true)"
+        if [[ -n "${status}" ]]; then
+            printf '%s' "${status}"
+            return
+        fi
+        sleep 1
+    done
+    fail "CYW43 bootstrap supervisor did not publish an attempt=1 terminal within ${WIFI_SUPERVISOR_TIMEOUT_SECONDS}s"
+}
+
+wifi_dhcp_bound_seen() {
+    rg -q 'active=wifi .*addr_src=dhcp-lease .*dhcp=bound|active=wifi .*dhcp=bound .*addr_src=dhcp-lease' "${LOG_PATH}"
+}
+
+wait_for_wifi_dhcp_bound() {
+    local deadline
+    local prompt_count_before
+
+    deadline=$((SECONDS + WIFI_DHCP_TIMEOUT_SECONDS))
+    while ((SECONDS <= deadline)); do
+        if wifi_dhcp_bound_seen; then
+            return 0
+        fi
+        prompt_count_before="$(console_prompt_count)"
+        log "console command: netstats (guarded DHCP poll)"
+        send_console_line "netstats"
+        wait_for_prompt_after_command "${prompt_count_before}" "netstats (guarded DHCP poll)"
+        sleep "${COMMAND_DELAY_SECONDS}"
+    done
+    return 1
+}
+
 send_console_line() {
     local line="$1"
     local index
@@ -336,12 +382,24 @@ run_capture() {
     local -a commands=()
     local command
     local index
+    local wifi_supervisor_status="not-required"
+    local wifi_dhcp_bound=0
+    local wifi_commands=0
 
     for ((index = 0; index < ${#DEFAULT_COMMANDS[@]}; index++)); do
+        if [[ "${REQUIRE_WIFI_READY}" -eq 1 && "${DEFAULT_COMMANDS[$index]}" == "wifi diag" ]]; then
+            commands+=("wifi dump-state")
+        fi
         commands+=("${DEFAULT_COMMANDS[$index]}")
     done
     for ((index = 0; index < ${#EXTRA_COMMANDS[@]}; index++)); do
         commands+=("${EXTRA_COMMANDS[$index]}")
+    done
+    for command in "${commands[@]}"; do
+        if [[ "${command}" == wifi\ * || "${command}" == "nettest" ]]; then
+            wifi_commands=1
+            break
+        fi
     done
 
     [[ -e "${SERIAL_DEVICE}" ]] || fail "serial device missing: ${SERIAL_DEVICE}"
@@ -356,8 +414,26 @@ run_capture() {
 
     sleep "${BOOT_WAIT_SECONDS}"
     wait_for_console_ready
+    if [[ "${wifi_commands}" -eq 1 ]]; then
+        wifi_supervisor_status="$(wait_for_wifi_supervisor_terminal)"
+        log "wifi supervisor terminal: ${wifi_supervisor_status}"
+    fi
     for command in "${commands[@]}"; do
         local prompt_count_before
+        if [[ "${command}" == "nettest" ]]; then
+            if [[ "${wifi_supervisor_status}" != "ready" ]]; then
+                log "skipping nettest: wifi supervisor status=${wifi_supervisor_status}"
+                continue
+            fi
+            if [[ "${wifi_dhcp_bound}" -eq 0 ]]; then
+                if wait_for_wifi_dhcp_bound; then
+                    wifi_dhcp_bound=1
+                else
+                    log "skipping nettest: WiFi DHCP did not bind within ${WIFI_DHCP_TIMEOUT_SECONDS}s"
+                    continue
+                fi
+            fi
+        fi
         prompt_count_before="$(console_prompt_count)"
         log "console command: ${command}"
         send_console_line "${command}"
