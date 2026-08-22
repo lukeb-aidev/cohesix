@@ -2862,6 +2862,38 @@ const fn driver_runtime_command_endpoint_send_rights() -> sel4_sys::seL4_CapRigh
     sel4_sys::seL4_CapRights::new(1, 0, 0, 1)
 }
 
+#[cfg(all(feature = "kernel", sel4_config_kernel_mcs))]
+fn driver_runtime_command_endpoint_badge(task_key: usize) -> Result<seL4_Word, HalError> {
+    let task_key = u32::try_from(task_key)
+        .map_err(|_| HalError::Unsupported("driver-runtime-mcs-task-key"))?;
+    seL4_Word::try_from(pi4_driver_abi::driver_runtime_command_badge(task_key))
+        .map_err(|_| HalError::Unsupported("driver-runtime-mcs-command-badge"))
+}
+
+#[cfg(all(feature = "kernel", sel4_config_kernel_mcs))]
+fn mint_driver_runtime_command_endpoint(
+    env: &mut KernelEnv<'_>,
+    command_endpoint_origin: seL4_CPtr,
+    task_key: usize,
+) -> Result<seL4_CPtr, HalError> {
+    let command_badge = driver_runtime_command_endpoint_badge(task_key)?;
+    let command_endpoint = env.allocate_slot();
+    let err = sel4::cnode_mint_depth(
+        env.init_cnode_cap(),
+        command_endpoint,
+        sel4::word_bits() as u8,
+        env.init_cnode_cap(),
+        command_endpoint_origin,
+        sel4::word_bits() as u8,
+        driver_runtime_command_endpoint_send_rights(),
+        command_badge,
+    );
+    if err != seL4_NoError {
+        return Err(HalError::Sel4(err));
+    }
+    Ok(command_endpoint)
+}
+
 #[cfg(feature = "kernel")]
 const fn driver_runtime_fault_send_rights() -> sel4_sys::seL4_CapRights {
     // The kernel delivers standard/timeout faults as Call-like IPC. Write plus
@@ -2906,8 +2938,6 @@ fn allocate_driver_task_mcs_objects(
         .ok_or(HalError::Unsupported("driver-runtime-mcs-image-spec"))?;
     let temporal = driver_task::driver_task_temporal_config(spec.hot_path)
         .ok_or(HalError::Unsupported("driver-runtime-mcs-temporal-config"))?;
-    let task_key = u32::try_from(task_key)
-        .map_err(|_| HalError::Unsupported("driver-runtime-mcs-task-key"))?;
     let fault_origin = critical_tcb::target_fault_endpoint_origin().ok_or(
         HalError::Unsupported("driver-runtime-mcs-critical-fault-endpoint"),
     )?;
@@ -2918,22 +2948,8 @@ fn allocate_driver_task_mcs_objects(
     let root_cnode = env.init_cnode_cap();
     let root_depth = sel4::word_bits() as u8;
 
-    let command_endpoint = env.allocate_slot();
-    let command_badge = seL4_Word::try_from(pi4_driver_abi::driver_runtime_command_badge(task_key))
-        .map_err(|_| HalError::Unsupported("driver-runtime-mcs-command-badge"))?;
-    let err = sel4::cnode_mint_depth(
-        root_cnode,
-        command_endpoint,
-        root_depth,
-        root_cnode,
-        command_endpoint_origin,
-        root_depth,
-        driver_runtime_command_endpoint_send_rights(),
-        command_badge,
-    );
-    if err != seL4_NoError {
-        return Err(HalError::Sel4(err));
-    }
+    let command_endpoint =
+        mint_driver_runtime_command_endpoint(env, command_endpoint_origin, task_key)?;
 
     let command_reply = env.alloc_reply().map_err(HalError::Sel4)?;
     let err = sel4::cnode_copy_depth(
@@ -5446,17 +5462,25 @@ impl<'a> KernelHal<'a> {
         let tcb = self.env.alloc_tcb().map_err(HalError::Sel4)?;
         let command_endpoint_origin = self.env.alloc_endpoint().map_err(HalError::Sel4)?;
         // Recovery keeps one private root cap that is never published as a
-        // steady producer. The normal SDIO handoff still deletes its ordinary
-        // root send cap; this copy is admitted only while both linked peers are
-        // suspended by the HAL pair-restart supervisor.
+        // steady producer. Under MCS it must carry the exact same task-key
+        // command badge and send-only rights as the ordinary command cap:
+        // restarted runtimes accept their first sequence-last ring turn
+        // without IPC, but every retained continuation validates that badge.
+        // The normal SDIO handoff still deletes its ordinary root send cap;
+        // this cap is admitted only while both linked peers are suspended by
+        // the HAL pair-restart supervisor.
         let recovery_endpoint = if contract == CYW43_WIFI_DRIVER_TASK_CONTRACT
             || contract == SDIO_HOST_DRIVER_TASK_CONTRACT
         {
-            Some(
-                self.env
-                    .copy_cap_to_new_slot(command_endpoint_origin, sel4_sys::seL4_CapRights_All)
-                    .map_err(HalError::Sel4)?,
-            )
+            #[cfg(sel4_config_kernel_mcs)]
+            let endpoint =
+                mint_driver_runtime_command_endpoint(self.env, command_endpoint_origin, task_key)?;
+            #[cfg(not(sel4_config_kernel_mcs))]
+            let endpoint = self
+                .env
+                .copy_cap_to_new_slot(command_endpoint_origin, sel4_sys::seL4_CapRights_All)
+                .map_err(HalError::Sel4)?;
+            Some(endpoint)
         } else {
             None
         };
@@ -7502,6 +7526,17 @@ mod tests {
             0b1001,
             "root command authority is Write + GrantReply without Grant or Read"
         );
+        #[cfg(sel4_config_kernel_mcs)]
+        for task_key in [
+            super::driver_task::DRIVER_TASK_KEY_CYW43455,
+            super::driver_task::DRIVER_TASK_KEY_SDIO_HOST,
+        ] {
+            assert_eq!(
+                super::driver_runtime_command_endpoint_badge(task_key).unwrap(),
+                pi4_driver_abi::driver_runtime_command_badge(task_key as u32),
+                "normal and recovery command caps must share the exact task-key badge"
+            );
+        }
         assert_eq!(
             super::driver_runtime_fault_send_rights().raw(),
             0b1001,

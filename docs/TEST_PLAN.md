@@ -4085,6 +4085,18 @@ QEMU, a changed counter gap, or USB readiness alone cannot qualify the Pi
 repair, and no SDIO/CYW43 device-semantic change is authorized until that
 fresh cadence boot is harvested.
 
+Exact physical image
+`1199991dc6bc4da9f2f349251169f6326035b6f709c22ff2bda530a77d055ae6`
+harvested that boundary: USB retained Gate 10, HDMI returned all submitted
+receipts, and SDIO request 2 stopped after phase 157 without entering the first
+power-sequence phase. The corresponding MCS capability audit must prove that
+the pair-recovery command cap is minted from the same endpoint object with the
+same task-key command badge and `Write + GrantReply` rights as the ordinary
+root command cap. The next fresh exact-image Pi boot must observe a later
+power-sequence phase and then either a typed terminal or SDHCI progress. A host
+test or QEMU result proves only the shared capability policy; it cannot promote
+SDIO, CYW43, or network gates.
+
 Current Wi-Fi acceptance also requires one exact
 `CYW43_SDIO_DPC generation=<n> captures=<n> published=<n> consumed=<n>
 rearms=<n> overruns=<n> epoch_errors=<n> sequence_errors=<n>
