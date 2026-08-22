@@ -735,6 +735,21 @@ enum LinkedHdmiPayloadReceipt {
     InputRow { generation: u64 },
 }
 
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
+#[derive(Debug)]
+struct LinkedHdmiRetainedFrame {
+    command: crate::hal::driver_task::DriverTaskCommandRecord,
+    payload: Vec<u8>,
+    reason: &'static str,
+    redraw: bool,
+    receipt: LinkedHdmiPayloadReceipt,
+}
+
 impl LinkedHdmiSnapshotGeometry {
     const fn fallback() -> Self {
         Self {
@@ -1993,6 +2008,13 @@ pub struct LocalSeatRuntime {
     hdmi_active_redraw_target_offset: usize,
     hdmi_active_redraw_input_generation: u64,
     hdmi_last_payload_receipt: LinkedHdmiPayloadReceipt,
+    #[cfg(all(
+        feature = "kernel",
+        feature = "usb",
+        target_arch = "aarch64",
+        target_os = "none"
+    ))]
+    hdmi_retained_frame: Option<LinkedHdmiRetainedFrame>,
     hdmi_input_escape_state: u8,
     hdmi_open_line: bool,
     hdmi_open_line_floor_bytes: usize,
@@ -2190,6 +2212,13 @@ impl LocalSeatRuntime {
             hdmi_active_redraw_target_offset: 0,
             hdmi_active_redraw_input_generation: 0,
             hdmi_last_payload_receipt: LinkedHdmiPayloadReceipt::None,
+            #[cfg(all(
+                feature = "kernel",
+                feature = "usb",
+                target_arch = "aarch64",
+                target_os = "none"
+            ))]
+            hdmi_retained_frame: None,
             hdmi_input_escape_state: 0,
             hdmi_open_line: false,
             hdmi_open_line_floor_bytes: 0,
@@ -3595,7 +3624,8 @@ impl LocalSeatRuntime {
     /// Return whether local-seat HDMI has queued work waiting for an idle turn.
     #[must_use]
     pub fn linked_hdmi_pending_work(&self) -> bool {
-        self.linked_hdmi_redraw_pending()
+        self.linked_hdmi_retained_frame_pending()
+            || self.linked_hdmi_redraw_pending()
             || !self.hdmi_pending_bytes.is_empty()
             || (self.hdmi_input_row_dirty && self.hdmi_scrollback_offset == 0)
             || (self.hdmi_rendered_viewport_valid
@@ -3630,6 +3660,26 @@ impl LocalSeatRuntime {
 
     fn linked_hdmi_redraw_pending(&self) -> bool {
         self.hdmi_pending_redraw || !self.hdmi_redraw_bytes.is_empty()
+    }
+
+    #[cfg(all(
+        feature = "kernel",
+        feature = "usb",
+        target_arch = "aarch64",
+        target_os = "none"
+    ))]
+    fn linked_hdmi_retained_frame_pending(&self) -> bool {
+        self.hdmi_retained_frame.is_some()
+    }
+
+    #[cfg(not(all(
+        feature = "kernel",
+        feature = "usb",
+        target_arch = "aarch64",
+        target_os = "none"
+    )))]
+    const fn linked_hdmi_retained_frame_pending(&self) -> bool {
+        false
     }
 
     fn linked_hdmi_snapshot_recovery_required(&self) -> bool {
@@ -3696,39 +3746,121 @@ impl LocalSeatRuntime {
                 crate::hal::driver_task::DriverTaskHotPath::HdmiText.as_u32() as usize,
                 display_runtime_ring_service_driver_task,
             );
-            if crate::hal::driver_task::driver_task_ring_command_active(contract) {
+            if self.hdmi_retained_frame.is_none()
+                && crate::hal::driver_task::driver_task_ring_command_active(contract)
+            {
                 self.hdmi_busy_frames = self.hdmi_busy_frames.saturating_add(1);
                 self.hdmi_deferred_frames = self.hdmi_deferred_frames.saturating_add(1);
                 return false;
             }
-            if self.linked_hdmi_retry_cooldown_active() {
-                return false;
+            if self.hdmi_retained_frame.is_none() {
+                if self.linked_hdmi_retry_cooldown_active() {
+                    return false;
+                }
+                let Some((payload, reason, redraw)) = self.next_linked_hdmi_payload() else {
+                    return false;
+                };
+                let receipt = self.hdmi_last_payload_receipt;
+                let retained = match build_linked_hdmi_retained_frame(
+                    contract, payload, reason, redraw, receipt,
+                ) {
+                    Ok(retained) => retained,
+                    Err(payload) => {
+                        self.record_linked_hdmi_submit_miss(payload.as_slice(), redraw);
+                        return false;
+                    }
+                };
+                self.hdmi_retained_frame = Some(retained);
             }
-            let Some((payload, reason, redraw)) = self.next_linked_hdmi_payload() else {
+            let Some(retained) = self.hdmi_retained_frame.as_ref() else {
                 return false;
             };
-            let receipt = self.hdmi_last_payload_receipt;
-            let display_trace = self.display_trace();
-            let submitted = submit_linked_hdmi_payload_via_linked_hdmi(
-                payload.as_slice(),
-                self.root_console_ready,
-                reason,
-                redraw,
-                Some(display_trace),
-            );
-            if submitted {
-                self.hdmi_submitted_frames = self.hdmi_submitted_frames.saturating_add(1);
-                self.hdmi_redraw_no_reply_streak = 0;
-                self.hdmi_no_reply_cooldown = 0;
-                if redraw {
-                    self.hdmi_stale_after_retry_exhaustion = false;
+            let command = retained.command;
+            let staging_segments = [
+                crate::hal::driver_task::DriverTaskStagingSegment::ring_frame(
+                    retained.payload.as_slice(),
+                    0,
+                ),
+            ];
+            let turn =
+                crate::hal::driver_task::run_driver_task_ring_service_retained_service_turn_staged(
+                    contract,
+                    command,
+                    &staging_segments,
+                );
+            match turn {
+                crate::hal::driver_task::DriverTaskRetainedServiceTurn::Pending => {
+                    // The child may have consumed its current MCS budget in the
+                    // middle of this exact frame. Keep both command identity
+                    // and staged bytes stable until its next replenishment.
+                    self.hdmi_deferred_frames = self.hdmi_deferred_frames.saturating_add(1);
+                    false
                 }
-                self.record_linked_hdmi_submit_success(receipt);
-                self.release_pending_linked_hdmi_prompt_if_display_ready();
-                true
-            } else {
-                self.record_linked_hdmi_submit_miss(payload.as_slice(), redraw);
-                false
+                crate::hal::driver_task::DriverTaskRetainedServiceTurn::Complete(completion) => {
+                    let Some(retained) = self.hdmi_retained_frame.take() else {
+                        return false;
+                    };
+                    let ready = completion.code
+                        == crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16()
+                        && completion.result != 0;
+                    emit_hdmi_frame_submit_state(
+                        retained.reason,
+                        retained.payload.len(),
+                        hdmi_payload_signature(retained.payload.as_slice()),
+                        0,
+                        1,
+                        retained.redraw,
+                        Some(self.display_trace()),
+                        self.root_console_ready,
+                        Some(completion),
+                        ready,
+                        false,
+                    );
+                    if !ready {
+                        self.record_linked_hdmi_submit_miss(
+                            retained.payload.as_slice(),
+                            retained.redraw,
+                        );
+                        return false;
+                    }
+                    let _ = credit_linked_display_runtime_frame_owner_state(
+                        retained.reason,
+                        self.root_console_ready,
+                        completion,
+                    );
+                    self.hdmi_submitted_frames = self.hdmi_submitted_frames.saturating_add(1);
+                    self.hdmi_redraw_no_reply_streak = 0;
+                    self.hdmi_no_reply_cooldown = 0;
+                    if retained.redraw {
+                        self.hdmi_stale_after_retry_exhaustion = false;
+                    }
+                    self.record_linked_hdmi_submit_success(retained.receipt);
+                    self.release_pending_linked_hdmi_prompt_if_display_ready();
+                    true
+                }
+                crate::hal::driver_task::DriverTaskRetainedServiceTurn::Failed => {
+                    let Some(retained) = self.hdmi_retained_frame.take() else {
+                        return false;
+                    };
+                    emit_hdmi_frame_submit_state(
+                        retained.reason,
+                        retained.payload.len(),
+                        hdmi_payload_signature(retained.payload.as_slice()),
+                        0,
+                        1,
+                        retained.redraw,
+                        Some(self.display_trace()),
+                        self.root_console_ready,
+                        None,
+                        false,
+                        false,
+                    );
+                    self.record_linked_hdmi_submit_miss(
+                        retained.payload.as_slice(),
+                        retained.redraw,
+                    );
+                    false
+                }
             }
         }
         #[cfg(not(all(
@@ -7728,52 +7860,22 @@ const fn local_seat_hdmi_input_echo_byte(byte: u8) -> bool {
     target_arch = "aarch64",
     target_os = "none"
 ))]
-fn submit_linked_hdmi_payload_via_linked_hdmi(
-    bytes: &[u8],
-    root_console_ready: bool,
+fn build_linked_hdmi_retained_frame(
+    contract: crate::hal::driver_task::DriverTaskContract,
+    payload: Vec<u8>,
     reason: &'static str,
-    redraw_chunk: bool,
-    display_trace: Option<LocalSeatDisplayTrace>,
-) -> bool {
-    if bytes.is_empty()
-        || !crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active()
-    {
-        return false;
-    }
-    let contract = crate::hal::driver_task::HDMI_TEXT_DRIVER_TASK_CONTRACT;
-    let _ = adopt_linked_display_runtime_owner_state(reason);
-    if !LINKED_LOCAL_SEAT_DISPLAY_ATTACHED.load(Ordering::Acquire)
-        && !LINKED_LOCAL_SEAT_DISPLAY_FAILED.load(Ordering::Acquire)
-    {
-        let _ = try_attach_linked_display_runtime(root_console_ready);
-        return false;
-    }
-    if !local_seat_linked_display_service_allowed(
-        true,
-        LINKED_LOCAL_SEAT_DISPLAY_ATTACHED.load(Ordering::Acquire),
-        LINKED_LOCAL_SEAT_DISPLAY_FAILED.load(Ordering::Acquire),
-    ) {
-        return false;
-    }
-    crate::hal::driver_task::register_driver_task_pointer_free_ring_service(
-        contract,
-        crate::hal::driver_task::DriverTaskHotPath::HdmiText.as_u32() as usize,
-        display_runtime_ring_service_driver_task,
-    );
-    if crate::hal::driver_task::driver_task_ring_command_active(contract) {
-        return false;
-    }
+    redraw: bool,
+    receipt: LinkedHdmiPayloadReceipt,
+) -> Result<LinkedHdmiRetainedFrame, Vec<u8>> {
     let chunk_limit = LINKED_LOCAL_SEAT_HDMI_FRAME_CHUNK_BYTES
-        .min(crate::hal::driver_task::MAX_DRIVER_TASK_FRAME_BYTES)
-        .max(1);
-    // `next_linked_hdmi_payload` owns the retained byte cursor and emits at
-    // most one bounded chunk. Reject an invalid direct caller rather than
-    // turning one outer EventPump turn into a private multi-command loop.
-    if bytes.len() > chunk_limit {
-        return false;
+        .clamp(1, crate::hal::driver_task::MAX_DRIVER_TASK_FRAME_BYTES);
+    if payload.is_empty() || payload.len() > chunk_limit {
+        return Err(payload);
     }
-    let Some(frame) = crate::hal::driver_task::describe_driver_task_ring_frame(bytes, 0) else {
-        return false;
+    let Some(frame) =
+        crate::hal::driver_task::describe_driver_task_ring_frame(payload.as_slice(), 0)
+    else {
+        return Err(payload);
     };
     let command = crate::hal::driver_task::DriverTaskCommandRecord::pi4_hot_path(
         0,
@@ -7781,47 +7883,13 @@ fn submit_linked_hdmi_payload_via_linked_hdmi(
         crate::hal::driver_task::DriverTaskBudgetGrant::from_contract(contract),
         frame,
     );
-    let staging_segments =
-        [crate::hal::driver_task::DriverTaskStagingSegment::ring_frame(bytes, 0)];
-    let completion = run_local_seat_driver_task_ring_service_with_prompt_state_and_staging(
-        contract,
+    Ok(LinkedHdmiRetainedFrame {
         command,
-        false,
-        &staging_segments,
-    );
-    let ready = completion.is_some_and(|completion| {
-        completion.code == crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16()
-            && completion.result != 0
-    });
-    emit_hdmi_frame_submit_state(
+        payload,
         reason,
-        bytes.len(),
-        hdmi_payload_signature(bytes),
-        0,
-        1,
-        redraw_chunk,
-        display_trace,
-        root_console_ready,
-        completion,
-        ready,
-        false,
-    );
-    if !ready {
-        if completion.is_none()
-            && local_seat_display_mirror_suspends_on_missing_reply(true, root_console_ready)
-            && !LINKED_LOCAL_SEAT_DISPLAY_NO_REPLY_LOGGED.swap(true, Ordering::AcqRel)
-        {
-            emit_hdmi_diagnostic_line(
-                "[local-seat] runtime display mirror deferred reason=driver-task-no-reply action=retry-next-frame",
-            );
-        }
-        return false;
-    }
-    if let Some(completion) = completion {
-        let _ =
-            credit_linked_display_runtime_frame_owner_state(reason, root_console_ready, completion);
-    }
-    true
+        redraw,
+        receipt,
+    })
 }
 
 #[cfg(all(

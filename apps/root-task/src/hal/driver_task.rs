@@ -2739,6 +2739,11 @@ const DRIVER_TASK_LONG_INIT_RING_ATTEMPTS: usize = 262_144;
 const DRIVER_TASK_CYW43_TRANSPORT_RING_ATTEMPTS: usize = 1_048_576;
 const DRIVER_TASK_USB_BOOTSTRAP_ENUM_RING_ATTEMPTS: usize = DRIVER_TASK_BOOTSTRAP_RING_ATTEMPTS * 4;
 const DRIVER_TASK_USB_ENUM_TIMEOUT_KEEP_ACTIVE_LIMIT: usize = 3;
+// A retained physical-owner command already has finite hardware/protocol
+// bounds inside the isolated runtime. Root completion-poll count is not elapsed
+// time and may advance many times before the runtime's next MCS replenishment;
+// it therefore cannot authorize clearing or reissuing that exact command.
+const DRIVER_TASK_RETAINED_OWNER_TERMINAL_KEEP_ACTIVE_LIMIT: usize = usize::MAX;
 const DRIVER_TASK_USB_RECOVERY_TIMEOUT_KEEP_ACTIVE_LIMIT: usize =
     DRIVER_TASK_USB_ENUM_STATUS_TIMEOUT_KEEP_ACTIVE_LIMIT;
 // A retained steady keyboard poll is a bounded protocol turn, not a lease on
@@ -19245,11 +19250,11 @@ fn driver_task_ring_timeout_keep_active_limit(
         if matches!(contract.kind, DriverTaskKind::LocalSeatUsb)
             && command.aux0 == DRIVER_RUNTIME_USB_ENUMERATE_AUX
         {
-            DRIVER_TASK_USB_ENUM_TIMEOUT_KEEP_ACTIVE_LIMIT
+            DRIVER_TASK_RETAINED_OWNER_TERMINAL_KEEP_ACTIVE_LIMIT
         } else if matches!(contract.kind, DriverTaskKind::LocalSeatUsb)
             && command.aux0 == DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX
         {
-            DRIVER_TASK_USB_ENUM_TIMEOUT_KEEP_ACTIVE_LIMIT
+            DRIVER_TASK_RETAINED_OWNER_TERMINAL_KEEP_ACTIVE_LIMIT
         } else if matches!(contract.kind, DriverTaskKind::LocalSeatUsb)
             && command.aux0 == DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_AUX
         {
@@ -35051,7 +35056,8 @@ mod tests {
                 command,
                 DriverTaskRingCommandMode::RetainedTurn,
             ),
-            DRIVER_TASK_USB_ENUM_TIMEOUT_KEEP_ACTIVE_LIMIT,
+            DRIVER_TASK_RETAINED_OWNER_TERMINAL_KEEP_ACTIVE_LIMIT,
+            "enumeration must retain its exact owner command across normal MCS replenishment",
         );
         command.aux0 = DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_AUX;
         assert_eq!(
