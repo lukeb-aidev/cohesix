@@ -3005,8 +3005,8 @@ def test_active_qemu_entrypoints_default_to_production_contract() -> None:
         "scripts/cohesix-build-run.sh",
         "scripts/release_bundle.sh",
         "scripts/qemu-run.sh",
-        "scripts/tcp_cohsh_smoke.sh",
-        "scripts/tcp_repro.sh",
+        "scripts/m26e_qemu_pressure.sh",
+        "scripts/ci/test_plan_target_canary.sh",
         "scripts/cohsh/run_regression_batch.sh",
         "configs/test_plan_actions.toml",
     )
@@ -3030,7 +3030,7 @@ def test_active_qemu_entrypoints_default_to_production_contract() -> None:
     assert "--profile qemu_smp_production" in release
     assert "--for-release" in release
 
-    for relative in entrypoints[5:]:
+    for relative in entrypoints[3:]:
         source = (sel4_profile.ROOT / relative).read_text(encoding="utf-8")
         assert "qemu_smp_production" in source, relative
 

@@ -389,6 +389,13 @@ _Generated from `apps/nine-door/out/metrics/telemetry_ring_latency.json`._
 This generated microbenchmark record is regression evidence for its named
 suite, not an end-to-end deployment latency claim. Benchmark methodology and
 publishable report requirements live in [Benchmarks](BENCHMARKS.md).
+Developers refresh the snippet and this embedded projection together:
+
+```sh
+scripts/ci/update_latency_metrics.sh \
+  apps/nine-door/out/metrics/telemetry_ring_latency.json \
+  docs/snippets/latency_metrics.md docs/SECURITY.md
+```
 
 ## Profile-qualified security claims
 

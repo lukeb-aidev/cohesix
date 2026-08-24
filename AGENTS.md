@@ -126,6 +126,14 @@ product implementation.
 
 - Keep each change within one authorized goal. Partial or speculative changes
   are not mergeable.
+- Tracked files under `scripts/` must implement a documented community or
+  developer workflow, a canonical CI/test/evidence gate, or support invoked by
+  a tracked build, release, or operator entry point. Temporary probes,
+  one-off reproducers, scratch generators, and ad-hoc test wrappers belong
+  under ignored `out/scripts/` (or an operating-system temporary directory),
+  never in the tracked `scripts/` tree. Promote a temporary script only with
+  its owning call site or documentation, focused tests where its logic merits
+  them, and removal of the superseded path in the same change.
 - Compile every affected implementation for its exact host/target profile.
   Documentation-only or policy-only changes run their applicable documentation,
   metadata, generated-consistency, and link checks; they do not invent a Rust

@@ -36,12 +36,7 @@
   cohsh/
     cas_roundtrip.coh
     observe_watch.coh
-  regression/
-    client_vs_console.sh
-    transcript_compare.sh
-    transcript_diff.sh
   ci/
-    convergence_tests.sh
     size_guard.sh
 /toolchain/
   setup_macos_arm64.sh

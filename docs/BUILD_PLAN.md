@@ -931,7 +931,10 @@ the feature gate) while keeping console output stable.
 - **Milestone 8a scope exception (authorized):** A narrow TCP/virtio-net stability effort is permitted to unblock console bring-up, limited to:
   - Minimal, feature-gated debug instrumentation in `apps/root-task/src/drivers/virtio/net.rs` and queue helpers.
   - TX/RX publish ordering + cache visibility fixes, without protocol or console grammar changes.
-  - A host repro harness script (e.g. `scripts/tcp_repro.sh`) that drives the existing QEMU TCP console and cohsh smoke flow.
+  - A host repro harness that drives the existing QEMU TCP console and cohsh
+    smoke flow. The original standalone helper was later retired when
+    `scripts/cohsh/run_regression_batch.sh` and
+    `scripts/qemu_tcp_response_matrix.py` became the canonical bounded paths.
   - No refactors, no new in-VM services, and no manifest/schema changes.
   - **Scope note (authorized):** Feature-flag consolidation for root-task bring-up (`cleanup-1-feature-flags-consolidation`) is permitted, limited to adding a single public `cohesix-dev` umbrella, removing dead flags, and updating scripts/docs without changing default behavior or console grammar.
   - **Scope note (authorized):** Instrumentation noise reduction (`cleanup-2-instrumentation-noise-reduction`) is permitted, limited to heapless rate-limited counters and demoting/rate-limiting net/event pump spam without changing console protocol lines, ordering, or CLI/ACK semantics.
@@ -1909,7 +1912,8 @@ Publish a reusable `cohsh-core` crate with shared verb grammar and transports th
 - `cargo run -p cohsh --features tcp -- --transport tcp --script scripts/cohsh/boot_v0.coh`
 
 **Checks (DoD)**
-- Console (serial/TCP) ≡ `cohsh` CLI ≡ `cohsh-core` tests (byte-for-byte ACK/ERR/END); regression harness compares transcripts.
+- Console serial/TCP and `cohsh-core` transport fixtures remain byte-identical;
+  focused `cohsh` tests bind the CLI projection to the shared grammar.
 - Heapless build passes; no unbounded allocations and no POSIX dependencies.
 - Abuse case: invalid ticket or throttled login returns deterministic ERR without advancing state; fixture captures denial.
 - UI/CLI/console equivalence MUST be preserved: ACK/ERR/END sequences must remain byte-stable relative to the 7c baseline.
@@ -1938,14 +1942,13 @@ Goal: Ensure transcript parity across console/TCP/core transports.
 Inputs: scripts/cohsh/boot_v0.coh, new tests in crates/cohsh-core/tests/transcripts.rs.
 Changes:
   - crates/cohsh-core/tests/transcripts.rs — compare serial vs TCP vs in-process transcripts.
-  - scripts/regression/transcript_diff.sh — automated diff runner (if existing harness, extend).
 Commands:
   - cargo run -p cohsh --features tcp -- --transport tcp --script scripts/cohsh/boot_v0.coh
   - cargo test -p cohsh-core --test transcripts
 Checks:
   - Transcript diff produces zero-byte delta; abuse case with throttled login emits ERR and matches across transports.
 Deliverables:
-  - Stored golden fixtures and updated regression harness documentation.
+  - Stored golden fixtures owned by the focused transcript test.
 ```
 
 ---
@@ -1998,7 +2001,8 @@ Goal: Replay sessions over 9P and compare to console baselines.
 Inputs: scripts/cohsh/session_pool.coh, new regression harness for 9P replay.
 Changes:
   - scripts/cohsh/session_pool.coh — add 9P-only replay path and abuse case for forbidden walk.
-  - scripts/regression/client_vs_console.sh — compares ACK/ERR across transports.
+  - apps/cohsh/tests/client_lib.rs — compares ACK/ERR across transports without
+    a one-line repository wrapper.
 Commands:
   - cargo run -p cohsh --features tcp -- --transport tcp --script scripts/cohsh/session_pool.coh
 Checks:
@@ -2336,17 +2340,29 @@ Deliverables:
 ## Milestone 20e — CLI/UI Convergence Tests <a id="20e"></a> 
 [Milestones](#Milestones)
 
-**Status:** Complete — Convergence harness, shared fixtures, and CI guards enforce byte-stable ACK/ERR/END parity with documented timing tolerance; regression pack is green.
+**Status:** Complete — the original convergence work established shared grammar
+and per-frontend transcript fixtures. After the canonical worker namespace
+became shard-qualified, SwarmUI and coh-status intentionally stopped sharing a
+zero-byte worker-path fixture with the legacy-alias console/cohsh lane;
+`docs/TEST_PLAN.md` records their distinct hashes. The obsolete aggregate shell
+harness was retired in the 2026-08-24 script audit. Current protection is the
+four focused tests below, not a cross-frontend zero-byte or timing claim.
 
-**Why now (compiler):** After UI/CLI/library convergence, we need hard regression proof across all frontends with deterministic timing windows.
+**Why now (compiler):** After UI/CLI/library convergence, each frontend needs
+deterministic fixture ownership against the shared grammar.
 
 **Goal**
-Establish a convergence harness comparing console, `cohsh`, `cohsh-core`, SwarmUI, and coh-status transcripts with CI enforcement.
+Establish deterministic transcript-fixture coverage for console, `cohsh`,
+`cohsh-core`, SwarmUI, and coh-status while keeping each frontend bound to the
+shared grammar and its current canonical namespace projection.
 
 **Deliverables**
-- Golden transcript harness comparing console, `cohsh`, `cohsh-core`, SwarmUI, and coh-status for `help → attach → log → spawn → tail → quit`.
-- CI job that fails on any byte-level drift in ACK/ERR/END and records timing deltas (< 50 ms tolerance: test harness tolerance; not a protocol contract) in artifacts.
-- Shared transcript fixtures stored in `tests/fixtures/transcripts/` consumed by all frontends.
+- Focused golden transcript tests for console, `cohsh`, `cohsh-core`, SwarmUI,
+  and coh-status.
+- Deterministic failure on unreviewed byte-level fixture drift within each
+  frontend contract.
+- Frontend-specific transcript fixtures stored in
+  `tests/fixtures/transcripts/` with hashes recorded by TEST_PLAN.
 
 **Commands**
 - `cargo test -p cohsh-core --test transcripts`
@@ -2355,9 +2371,12 @@ Establish a convergence harness comparing console, `cohsh`, `cohsh-core`, SwarmU
 - `cargo test -p coh-status --test transcript`
 
 **Checks (DoD)**
-- Script matches across all frontends; timing deltas < 50 ms in smoltcp simulation (tolerance documented).
-- Abuse case: intentionally corrupted transcript triggers CI failure and deterministic diff output.
-- UI/CLI/console equivalence MUST be preserved: ACK/ERR/END sequences must remain byte-stable relative to the 7c baseline.
+- Each frontend matches its own bound fixture and shared ACK/ERR/END grammar.
+- Abuse case: an intentionally corrupted fixture triggers a deterministic
+  failure.
+- Namespace-path differences are limited to the canonical shard path versus
+  an explicitly enabled legacy alias; they are not normalized into a false
+  zero-byte cross-frontend claim.
 
 **Compiler touchpoints**
 - Manifest fingerprints and transcript hashes recorded in docs/TEST_PLAN.md; regeneration guard verifies alignment.
@@ -2368,15 +2387,20 @@ Title/ID: m20e-transcript-suite
 Goal: Build shared transcript fixtures and comparison harness.
 Inputs: tests/fixtures/transcripts/, console + TCP outputs.
 Changes:
-  - scripts/regression/transcript_compare.sh — capture and diff transcripts.
-  - crates/cohsh-core/tests/transcripts.rs — reuse fixtures for unit validation.
+  - crates/cohsh-core/tests/transcripts.rs — own serial, TCP, and core fixture
+    parity.
+  - apps/cohsh/tests/transcripts.rs + apps/swarmui/tests/transcript.rs +
+    apps/coh-status/tests/transcript.rs — own each frontend's current namespace
+    projection and fixture.
 Commands:
   - cargo test -p cohsh-core --test transcripts
   - cargo test -p cohsh --test transcripts
 Checks:
-  - Corrupted fixture causes deterministic failure with clear diff; clean run matches byte-for-byte.
+  - Corrupted fixtures fail deterministically; each focused frontend transcript
+    matches its TEST_PLAN-bound fixture.
 Deliverables:
-  - Transcript fixtures stored; docs/TEST_PLAN.md references hashes.
+  - Transcript fixtures stored; docs/TEST_PLAN.md references their distinct
+    hashes.
 
 Title/ID: m20e-ui-cli-sync
 Goal: Integrate SwarmUI/coh-status into convergence CI.
@@ -2388,7 +2412,8 @@ Commands:
   - cargo test -p swarmui --test transcript
   - cargo test -p coh-status --test transcript
 Checks:
-  - UI/CLI/console produce identical ACK/ERR/END; timing tolerances enforced.
+  - UI/CLI/console retain shared ACK/ERR/END grammar while each current
+    namespace projection matches its bound fixture.
 Deliverables:
   - CI job definition referencing convergence tests; docs updated with expected tolerances.
 ```
@@ -2411,16 +2436,19 @@ Lock UI/CLI security quotas and console grammar parity while proving cohsh works
 - CLI/UI regression scripts prove permission denials and quota breaches across transports.
 - Cohsh multi-worker regression coverage exercises spawn/tail/kill across multiple worker telemetry paths without ID drift.
 - `scripts/cohsh/run_regression_batch.sh` is a reliable manual compliance pack for this milestone (base + gated, deterministic worker-id scripts).
-- SwarmUI/CLI transcripts remain byte-stable against cohsh-core fixtures; no ACK/ERR/END drift.
+- SwarmUI/CLI transcripts retain the shared ACK/ERR/END grammar; each
+  namespace projection remains byte-stable against its own TEST_PLAN-bound
+  fixture.
 - Cohsh and SwarmUI add host-only ticket mint one-shots that do not alter console grammar.
 
 **Commands**
 - `cargo test -p nine-door --test ui_security`
 - `cargo test -p cohsh-core`
+- `cargo test -p cohsh --test transcripts`
 - `cargo test -p cohsh --test script_catalog`
 - `cargo test -p swarmui --test security`
-- `scripts/regression/transcript_compare.sh`
-- `scripts/regression/client_vs_console.sh`
+- `cargo test -p coh-status --test transcript`
+- `cargo test -p cohsh --test client_lib`
 - `cargo run -p cohsh --features tcp -- --transport tcp --script scripts/cohsh/telemetry_ring.coh`
 - `scripts/cohsh/run_regression_batch.sh`
 
