@@ -53,7 +53,7 @@ fn qemu_and_pi_contracts_bind_distinct_selected_manifests() {
     assert_eq!(pi["target"], "pi4");
     assert_ne!(qemu["manifest_sha256"], pi["manifest_sha256"]);
     assert_ne!(qemu_bytes, pi_bytes);
-    assert_eq!(qemu["worker"]["maximum_live_tasks"], 3);
+    assert_eq!(qemu["worker"]["maximum_live_tasks"], 37);
     assert_eq!(pi["worker"]["maximum_live_tasks"], 3);
     assert_eq!(qemu["receipts"]["gpu_actions"].as_array().unwrap().len(), 3);
     assert_eq!(

@@ -55,14 +55,14 @@ const OUT_DIR_INCLUDE_CONTRACTS: [(&str, &str, &str, &str, &str); 8] = [
         "crates/sel4-sys/src/lib.rs",
         "bindings.rs",
         "crates/sel4-sys/build.rs",
-        "26eb919d45b0a47cc73c6883b9ccf06be4f4d29b3f7f16c96db04e835a708e43",
+        "f4f8758ff681abf47e1f3498ee2d0318bf6ee86332befe5add7737cf1b279112",
         "3e92c6248fd14a2bedd425108e6b31a4b41798ebc311df14c7afebeedf642b20",
     ),
     (
         "crates/sel4-sys/src/lib.rs",
         "sel4_config_consts.rs",
         "crates/sel4-sys/build.rs",
-        "26eb919d45b0a47cc73c6883b9ccf06be4f4d29b3f7f16c96db04e835a708e43",
+        "f4f8758ff681abf47e1f3498ee2d0318bf6ee86332befe5add7737cf1b279112",
         "3e92c6248fd14a2bedd425108e6b31a4b41798ebc311df14c7afebeedf642b20",
     ),
     (
@@ -126,7 +126,7 @@ const BUILD_SCRIPT_CONTRACTS: [(&str, &str, &str); 4] = [
     ),
     (
         "crates/sel4-sys/build.rs",
-        "26eb919d45b0a47cc73c6883b9ccf06be4f4d29b3f7f16c96db04e835a708e43",
+        "f4f8758ff681abf47e1f3498ee2d0318bf6ee86332befe5add7737cf1b279112",
         "3e92c6248fd14a2bedd425108e6b31a4b41798ebc311df14c7afebeedf642b20",
     ),
 ];

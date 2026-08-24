@@ -3,57 +3,87 @@
 // Purpose: Supervise isolated Worker children with transactional generation fencing.
 // Author: Lukas Bower
 
-//! The supervisor owns the only executable slot for each mandatory Worker role.
-//! Construction is transactional, READY is a durable ABI record rather than a
-//! successful control write, and every terminal path requires a complete
-//! backend containment proof before a slot can be reused.
+//! The supervisor owns every compiler-declared executable slot for each Worker
+//! role. Construction is transactional, READY is a durable ABI record rather
+//! than a successful control write, and every terminal path requires a complete
+//! backend containment proof before that exact role-local slot can be reused.
 
-#[cfg(all(feature = "kernel", sel4_config_kernel_mcs))]
+#[cfg(any(all(feature = "kernel", sel4_config_kernel_mcs), test))]
 use crate::critical_tcb::{
     FaultHandoffRecord, WorkerControlRecord as CriticalWorkerControlRecord,
-    WORKER_CONTROL_QUEUE_CAPACITY, WORKER_FAULT_MAILBOX_CAPACITY,
+    WORKER_FAULT_MAILBOX_CAPACITY,
 };
 use crate::generated::{self, TemporalTaskConfig, WorkerTaskAbiConfig};
 use crate::hal::worker_image::{
     WorkerImagePlan, WORKER_IMAGE_IDENTITIES, WORKER_IMAGE_IDENTITY_BOUND,
 };
 #[cfg(all(feature = "kernel", sel4_config_kernel_mcs))]
-use core::sync::atomic::{AtomicBool, Ordering};
-#[cfg(all(feature = "kernel", sel4_config_kernel_mcs))]
-use heapless::Deque;
-#[cfg(all(feature = "kernel", sel4_config_kernel_mcs))]
-use spin::Mutex;
+use core::sync::atomic::AtomicBool;
+#[cfg(any(all(feature = "kernel", sel4_config_kernel_mcs), test))]
+use core::sync::atomic::{AtomicU16, AtomicU32, AtomicU64, AtomicU8, AtomicUsize, Ordering};
+use rust_alloc::vec::Vec as AllocVec;
 use worker_task_abi::{
     Digest32, GpuLeaseReceiptRecord, PeftReceiptRecord, WorkerAbiError, WorkerCompletionRecord,
     WorkerCompletionStatus, WorkerControlRecord, WorkerIdentity, WorkerLifecycleBits,
     WorkerReadyRecord, WorkerRole, WorkerRuntimeInit,
 };
 
-const EXECUTABLE_ROLE_COUNT: usize = 3;
+const EXECUTABLE_ROLES: [WorkerRole; 3] =
+    [WorkerRole::Heartbeat, WorkerRole::Gpu, WorkerRole::Lora];
+/// Static ceiling for the boot-allocated compiler-declared executable Worker pool.
+/// The selected manifest remains the tighter runtime and admission bound, and
+/// the supervisor performs no allocation after construction.
+pub const MAX_EXECUTABLE_WORKER_SLOTS: usize = 64;
 
-/// Persistent role selector used by one-unit root-control Worker service.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct WorkerDeadlineCursor {
-    next: WorkerRole,
+/// Select the next pending Worker slot without privileging low manifest
+/// indices. The caller commits the returned successor before performing the
+/// selected operation, so a continuously busy early slot cannot starve any
+/// other admitted Worker.
+pub(crate) fn next_pending_worker_index(
+    pending: u64,
+    start: usize,
+    total: usize,
+) -> Result<Option<(usize, usize)>, WorkerSupervisorError> {
+    if total == 0 || total > MAX_EXECUTABLE_WORKER_SLOTS {
+        return Err(WorkerSupervisorError::NotEnabled);
+    }
+    let valid = if total == u64::BITS as usize {
+        u64::MAX
+    } else {
+        (1u64 << total) - 1
+    };
+    if pending & !valid != 0 {
+        return Err(WorkerSupervisorError::InvalidRecord);
+    }
+    let pending = pending & valid;
+    if pending == 0 {
+        return Ok(None);
+    }
+    let start = start % total;
+    let suffix = pending & (u64::MAX << start);
+    let selected = if suffix != 0 {
+        suffix.trailing_zeros() as usize
+    } else {
+        pending.trailing_zeros() as usize
+    };
+    Ok(Some((selected, (selected + 1) % total)))
 }
 
-impl Default for WorkerDeadlineCursor {
-    fn default() -> Self {
-        Self {
-            next: WorkerRole::Heartbeat,
-        }
-    }
+/// Persistent role selector used by one-unit root-control Worker service.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct WorkerDeadlineCursor {
+    next: usize,
 }
 
 impl WorkerDeadlineCursor {
-    pub(crate) fn take(&mut self) -> WorkerRole {
-        let role = self.next;
-        self.next = match role {
-            WorkerRole::Heartbeat => WorkerRole::Gpu,
-            WorkerRole::Gpu => WorkerRole::Lora,
-            WorkerRole::Lora => WorkerRole::Heartbeat,
-        };
-        role
+    pub(crate) fn take(&mut self) -> Result<(WorkerRole, u32), WorkerSupervisorError> {
+        let total = executable_worker_slot_count()?;
+        if self.next >= total {
+            self.next = 0;
+        }
+        let selected = role_slot_from_flat_index(self.next)?;
+        self.next = (self.next + 1) % total;
+        Ok(selected)
     }
 }
 
@@ -61,57 +91,192 @@ impl WorkerDeadlineCursor {
 /// root-control. The child owns wake validation and precedence; root-control
 /// remains the only thread with object-construction and teardown authority.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[cfg(all(feature = "kernel", sel4_config_kernel_mcs))]
+#[cfg(any(all(feature = "kernel", sel4_config_kernel_mcs), test))]
 pub enum TargetSupervisorWork {
     /// A durable Worker fault record requiring containment.
     Fault(FaultHandoffRecord),
+    /// A fault body is being committed; later work cannot overtake it.
+    FaultBarrier,
     /// One or more coalesced role-completion notification bits.
     Wake(u64),
     /// An admitted root-control lifecycle operation.
     Control(CriticalWorkerControlRecord),
 }
 
-#[cfg(all(feature = "kernel", sel4_config_kernel_mcs))]
-struct TargetSupervisorMailbox {
-    faults: [Option<FaultHandoffRecord>; WORKER_FAULT_MAILBOX_CAPACITY],
-    controls: Deque<CriticalWorkerControlRecord, WORKER_CONTROL_QUEUE_CAPACITY>,
-    wake_bits: u64,
+#[cfg(any(all(feature = "kernel", sel4_config_kernel_mcs), test))]
+struct AtomicFaultHandoffRecord {
+    state: AtomicU8,
+    sequence: AtomicU64,
+    task_index: AtomicU16,
+    identity_slot: AtomicU16,
+    lease_epoch: AtomicU32,
+    supervisor_generation: AtomicU32,
+    cap_generation: AtomicU32,
+    fault_badge: AtomicU64,
+    fault_class: AtomicU8,
+    fault_label: AtomicU64,
+    fault_length: AtomicU16,
+    fault_mr0: AtomicU64,
+    fault_mr1: AtomicU64,
+    tcb_cap: AtomicUsize,
 }
 
-#[cfg(all(feature = "kernel", sel4_config_kernel_mcs))]
+#[cfg(any(all(feature = "kernel", sel4_config_kernel_mcs), test))]
+impl AtomicFaultHandoffRecord {
+    const EMPTY: u8 = 0;
+    const WRITING: u8 = 1;
+    const READY: u8 = 2;
+
+    const fn new() -> Self {
+        Self {
+            state: AtomicU8::new(Self::EMPTY),
+            sequence: AtomicU64::new(0),
+            task_index: AtomicU16::new(0),
+            identity_slot: AtomicU16::new(0),
+            lease_epoch: AtomicU32::new(0),
+            supervisor_generation: AtomicU32::new(0),
+            cap_generation: AtomicU32::new(0),
+            fault_badge: AtomicU64::new(0),
+            fault_class: AtomicU8::new(0),
+            fault_label: AtomicU64::new(0),
+            fault_length: AtomicU16::new(0),
+            fault_mr0: AtomicU64::new(0),
+            fault_mr1: AtomicU64::new(0),
+            tcb_cap: AtomicUsize::new(0),
+        }
+    }
+
+    fn reset(&self) {
+        self.state.store(Self::EMPTY, Ordering::Release);
+    }
+
+    fn publication_pending(&self) -> bool {
+        self.state.load(Ordering::Acquire) == Self::WRITING
+    }
+
+    fn publish(&self, record: FaultHandoffRecord) -> Result<(), WorkerSupervisorError> {
+        if record.sequence == 0
+            || self
+                .state
+                .compare_exchange(
+                    Self::EMPTY,
+                    Self::WRITING,
+                    Ordering::Acquire,
+                    Ordering::Relaxed,
+                )
+                .is_err()
+        {
+            return Err(WorkerSupervisorError::ContainmentIncomplete);
+        }
+        self.sequence.store(record.sequence, Ordering::Relaxed);
+        self.task_index.store(record.task_index, Ordering::Relaxed);
+        self.identity_slot
+            .store(record.identity.slot, Ordering::Relaxed);
+        self.lease_epoch
+            .store(record.identity.lease_epoch, Ordering::Relaxed);
+        self.supervisor_generation
+            .store(record.identity.supervisor_generation, Ordering::Relaxed);
+        self.cap_generation
+            .store(record.identity.cap_generation, Ordering::Relaxed);
+        self.fault_badge
+            .store(record.fault_badge, Ordering::Relaxed);
+        self.fault_class.store(
+            match record.fault_class {
+                crate::critical_tcb::FaultClass::Standard => 1,
+                crate::critical_tcb::FaultClass::Timeout => 2,
+            },
+            Ordering::Relaxed,
+        );
+        self.fault_label
+            .store(record.fault_label, Ordering::Relaxed);
+        self.fault_length
+            .store(record.fault_length, Ordering::Relaxed);
+        self.fault_mr0.store(record.fault_mr0, Ordering::Relaxed);
+        self.fault_mr1.store(record.fault_mr1, Ordering::Relaxed);
+        self.tcb_cap.store(record.tcb_cap, Ordering::Relaxed);
+        self.state.store(Self::READY, Ordering::Release);
+        Ok(())
+    }
+
+    fn take(&self) -> Result<Option<FaultHandoffRecord>, WorkerSupervisorError> {
+        match self.state.load(Ordering::Acquire) {
+            Self::EMPTY | Self::WRITING => return Ok(None),
+            Self::READY => {}
+            _ => return Err(WorkerSupervisorError::InvalidRecord),
+        }
+        let fault_class = match self.fault_class.load(Ordering::Relaxed) {
+            1 => crate::critical_tcb::FaultClass::Standard,
+            2 => crate::critical_tcb::FaultClass::Timeout,
+            _ => return Err(WorkerSupervisorError::InvalidRecord),
+        };
+        let record = FaultHandoffRecord {
+            sequence: self.sequence.load(Ordering::Relaxed),
+            task_index: self.task_index.load(Ordering::Relaxed),
+            identity: crate::critical_tcb::GenerationIdentity {
+                slot: self.identity_slot.load(Ordering::Relaxed),
+                lease_epoch: self.lease_epoch.load(Ordering::Relaxed),
+                supervisor_generation: self.supervisor_generation.load(Ordering::Relaxed),
+                cap_generation: self.cap_generation.load(Ordering::Relaxed),
+            },
+            fault_badge: self.fault_badge.load(Ordering::Relaxed),
+            fault_class,
+            fault_label: self.fault_label.load(Ordering::Relaxed),
+            fault_length: self.fault_length.load(Ordering::Relaxed),
+            fault_mr0: self.fault_mr0.load(Ordering::Relaxed),
+            fault_mr1: self.fault_mr1.load(Ordering::Relaxed),
+            tcb_cap: self.tcb_cap.load(Ordering::Relaxed),
+        };
+        if record.sequence == 0 {
+            return Err(WorkerSupervisorError::InvalidRecord);
+        }
+        self.state.store(Self::EMPTY, Ordering::Release);
+        Ok(Some(record))
+    }
+}
+
+#[cfg(any(all(feature = "kernel", sel4_config_kernel_mcs), test))]
+struct TargetSupervisorMailbox {
+    faults: [AtomicFaultHandoffRecord; WORKER_FAULT_MAILBOX_CAPACITY],
+    wake_bits: AtomicU64,
+}
+
+#[cfg(any(all(feature = "kernel", sel4_config_kernel_mcs), test))]
 impl TargetSupervisorMailbox {
     const fn new() -> Self {
         Self {
-            faults: [None; WORKER_FAULT_MAILBOX_CAPACITY],
-            controls: Deque::new(),
-            wake_bits: 0,
+            faults: [const { AtomicFaultHandoffRecord::new() }; WORKER_FAULT_MAILBOX_CAPACITY],
+            wake_bits: AtomicU64::new(0),
         }
     }
 
-    fn reset(&mut self) {
-        self.faults.fill(None);
-        self.controls.clear();
-        self.wake_bits = 0;
+    fn reset(&self) {
+        for fault in &self.faults {
+            fault.reset();
+        }
+        self.wake_bits.store(0, Ordering::Release);
     }
 
-    fn take(&mut self) -> Option<TargetSupervisorWork> {
-        for mailbox in &mut self.faults {
-            if let Some(record) = mailbox.take() {
-                return Some(TargetSupervisorWork::Fault(record));
+    fn take(&self) -> Result<Option<TargetSupervisorWork>, WorkerSupervisorError> {
+        let mut fault_publication_pending = false;
+        for mailbox in &self.faults {
+            if let Some(record) = mailbox.take()? {
+                return Ok(Some(TargetSupervisorWork::Fault(record)));
             }
+            fault_publication_pending |= mailbox.publication_pending();
         }
-        if self.wake_bits != 0 {
-            let badge = self.wake_bits;
-            self.wake_bits = 0;
-            return Some(TargetSupervisorWork::Wake(badge));
+        if fault_publication_pending {
+            return Ok(Some(TargetSupervisorWork::FaultBarrier));
         }
-        self.controls.pop_front().map(TargetSupervisorWork::Control)
+        let badge = self.wake_bits.swap(0, Ordering::AcqRel);
+        if badge != 0 {
+            return Ok(Some(TargetSupervisorWork::Wake(badge)));
+        }
+        Ok(None)
     }
 }
 
 #[cfg(all(feature = "kernel", sel4_config_kernel_mcs))]
-static TARGET_SUPERVISOR_MAILBOX: Mutex<TargetSupervisorMailbox> =
-    Mutex::new(TargetSupervisorMailbox::new());
+static TARGET_SUPERVISOR_MAILBOX: TargetSupervisorMailbox = TargetSupervisorMailbox::new();
 #[cfg(all(feature = "kernel", sel4_config_kernel_mcs))]
 static TARGET_SUPERVISOR_READY: AtomicBool = AtomicBool::new(false);
 
@@ -163,6 +328,15 @@ pub enum WorkerConstructionPhase {
     Admit,
     /// Resume the configured child TCB.
     Resume,
+}
+
+/// Result of the backend's construction-time resume boundary.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WorkerResumeDisposition {
+    /// The child is runnable and its generated READY deadline starts now.
+    Running,
+    /// The child remains suspended until a later exact admission transition.
+    Deferred,
 }
 
 /// Terminal reason retained with the slot after containment.
@@ -278,8 +452,12 @@ pub trait WorkerKernelBackend {
         temporal: TemporalTaskConfig,
     ) -> Result<(), WorkerSupervisorError>;
 
-    /// Resume the fully configured child.
-    fn resume(&mut self, bundle: Self::Bundle) -> Result<(), WorkerSupervisorError>;
+    /// Attempt to resume the fully configured child and report whether the
+    /// backend deliberately retained it suspended for later admission.
+    fn resume(
+        &mut self,
+        bundle: Self::Bundle,
+    ) -> Result<WorkerResumeDisposition, WorkerSupervisorError>;
 
     /// Publish one durable control and then signal its one-hot control cause.
     fn publish_control(
@@ -338,16 +516,35 @@ impl From<WorkerAbiError> for WorkerSupervisorError {
     }
 }
 
+fn record_worker_construction_fault(
+    now_ms: u64,
+    sequence: u64,
+    identity: WorkerIdentity,
+    phase: &'static str,
+    error: WorkerSupervisorError,
+) {
+    let role = match identity.worker_role() {
+        Ok(role) => role_label(role),
+        Err(_) => "worker-invalid",
+    };
+    log::error!(
+        "WORKER_FLIGHT timestamp_ms={} component=worker-supervisor event=construction phase={} sequence={} generation={} role={} slot={} queue_depth=0 work_available=1 work_completed=0 work_remaining=1 exit=FAULT error={:?}",
+        now_ms,
+        phase,
+        sequence,
+        identity.supervisor_generation,
+        role,
+        identity.slot,
+        error,
+    );
+}
+
 /// Reset and publish the bounded mailbox before the restricted supervisor TCB
 /// is resumed. This does not transfer HAL or CSpace authority to that child.
 #[cfg(all(feature = "kernel", sel4_config_kernel_mcs))]
 pub fn prepare_target_supervisor_mailbox() -> Result<(), WorkerSupervisorError> {
     TARGET_SUPERVISOR_READY.store(false, Ordering::Release);
-    let Some(mut mailbox) = TARGET_SUPERVISOR_MAILBOX.try_lock() else {
-        return Err(WorkerSupervisorError::Backend);
-    };
-    mailbox.reset();
-    drop(mailbox);
+    TARGET_SUPERVISOR_MAILBOX.reset();
     TARGET_SUPERVISOR_READY.store(true, Ordering::Release);
     Ok(())
 }
@@ -357,10 +554,7 @@ pub fn prepare_target_supervisor_mailbox() -> Result<(), WorkerSupervisorError> 
 #[cfg(all(feature = "kernel", sel4_config_kernel_mcs))]
 pub fn clear_target_supervisor_mailbox() -> Result<(), WorkerSupervisorError> {
     TARGET_SUPERVISOR_READY.store(false, Ordering::Release);
-    let Some(mut mailbox) = TARGET_SUPERVISOR_MAILBOX.try_lock() else {
-        return Err(WorkerSupervisorError::Backend);
-    };
-    mailbox.reset();
+    TARGET_SUPERVISOR_MAILBOX.reset();
     Ok(())
 }
 
@@ -387,10 +581,9 @@ pub fn drain_target_wake(badge: u64) -> Result<(), WorkerSupervisorError> {
         return Err(WorkerSupervisorError::InvalidRecord);
     }
     let role_wakes = badge & role_mask;
-    let Some(mut mailbox) = TARGET_SUPERVISOR_MAILBOX.try_lock() else {
-        return Err(WorkerSupervisorError::Backend);
-    };
-    mailbox.wake_bits |= role_wakes;
+    TARGET_SUPERVISOR_MAILBOX
+        .wake_bits
+        .fetch_or(role_wakes, Ordering::AcqRel);
     Ok(())
 }
 
@@ -403,55 +596,22 @@ pub fn drain_critical_fault(record: FaultHandoffRecord) -> Result<(), WorkerSupe
     }
     let slot = crate::critical_tcb::worker_fault_mailbox_index(record.task_index)
         .ok_or(WorkerSupervisorError::InvalidRecord)?;
-    let Some(mut mailbox) = TARGET_SUPERVISOR_MAILBOX.try_lock() else {
-        return Err(WorkerSupervisorError::Backend);
-    };
-    let target = mailbox
+    let target = TARGET_SUPERVISOR_MAILBOX
         .faults
-        .get_mut(slot)
+        .get(slot)
         .ok_or(WorkerSupervisorError::InvalidRecord)?;
-    if target.is_some() {
-        return Err(WorkerSupervisorError::ContainmentIncomplete);
-    }
-    *target = Some(record);
-    Ok(())
+    target.publish(record)
 }
 
-/// Transfer one already admitted lifecycle operation into the bounded policy
-/// queue. Saturation is an explicit refusal, never a blocking send.
-#[cfg(all(feature = "kernel", sel4_config_kernel_mcs))]
-pub fn drain_critical_control(
-    record: CriticalWorkerControlRecord,
-) -> Result<(), WorkerSupervisorError> {
-    if !target_supervisor_startup_ready()
-        || record.sequence == 0
-        || crate::critical_tcb::worker_fault_mailbox_index(record.task_index).is_none()
-        || record.identity.supervisor_generation == 0
-        || record.identity.cap_generation == 0
-    {
-        return Err(WorkerSupervisorError::InvalidRecord);
-    }
-    let Some(mut mailbox) = TARGET_SUPERVISOR_MAILBOX.try_lock() else {
-        return Err(WorkerSupervisorError::Backend);
-    };
-    mailbox
-        .controls
-        .push_back(record)
-        .map_err(|_| WorkerSupervisorError::ControlBusy)
-}
-
-/// Nonblockingly take the next root-control work item in fault, durable-wake,
-/// then policy order. A contended mailbox is retried on a later root turn.
+/// Nonblockingly take the next root-control fault or durable-wake item.
+/// Critically validated policy follows through the zero-copy control pipeline.
 #[cfg(all(feature = "kernel", sel4_config_kernel_mcs))]
 pub fn take_target_supervisor_work() -> Result<Option<TargetSupervisorWork>, WorkerSupervisorError>
 {
     if !target_supervisor_startup_ready() {
         return Ok(None);
     }
-    let Some(mut mailbox) = TARGET_SUPERVISOR_MAILBOX.try_lock() else {
-        return Err(WorkerSupervisorError::Backend);
-    };
-    Ok(mailbox.take())
+    TARGET_SUPERVISOR_MAILBOX.take()
 }
 
 /// Receipt returned when root accepts and constructs one executable slot.
@@ -470,6 +630,8 @@ pub struct WorkerSpawnReceipt {
 pub struct WorkerSlotSnapshot {
     /// Exact Worker role for this executable slot.
     pub role: WorkerRole,
+    /// Manifest-declared slot within the role.
+    pub role_slot: u32,
     /// Current lifecycle.
     pub lifecycle: WorkerLifecycleState,
     /// Current/last immutable identity when present.
@@ -486,6 +648,7 @@ pub struct WorkerSlotSnapshot {
 
 struct WorkerSlot<Bundle: Copy> {
     role: WorkerRole,
+    role_slot: u32,
     lifecycle: WorkerLifecycleState,
     identity: Option<WorkerIdentity>,
     bundle: Option<Bundle>,
@@ -502,9 +665,10 @@ struct WorkerSlot<Bundle: Copy> {
 }
 
 impl<Bundle: Copy> WorkerSlot<Bundle> {
-    const fn empty(role: WorkerRole) -> Self {
+    const fn empty(role: WorkerRole, role_slot: u32) -> Self {
         Self {
             role,
+            role_slot,
             lifecycle: WorkerLifecycleState::Absent,
             identity: None,
             bundle: None,
@@ -524,6 +688,7 @@ impl<Bundle: Copy> WorkerSlot<Bundle> {
     fn snapshot(&self) -> WorkerSlotSnapshot {
         WorkerSlotSnapshot {
             role: self.role,
+            role_slot: self.role_slot,
             lifecycle: self.lifecycle,
             identity: self.identity,
             ready_sequence: self.ready_sequence,
@@ -534,28 +699,39 @@ impl<Bundle: Copy> WorkerSlot<Bundle> {
     }
 }
 
-/// Transactional supervisor for the exact Heartbeat/GPU/LoRA role matrix.
+/// Transactional supervisor for the exact compiler-declared Worker pool.
 pub struct WorkerSupervisor<Backend: WorkerKernelBackend> {
     backend: Backend,
-    slots: [WorkerSlot<Backend::Bundle>; EXECUTABLE_ROLE_COUNT],
+    slots: AllocVec<WorkerSlot<Backend::Bundle>>,
     supervisor_generation: u64,
     descriptor_sequence: u64,
 }
 
 impl<Backend: WorkerKernelBackend> WorkerSupervisor<Backend> {
     /// Create an empty supervisor; no authority is live until [`Self::spawn`].
-    #[must_use]
-    pub const fn new(backend: Backend) -> Self {
-        Self {
+    pub fn new(backend: Backend) -> Result<Self, WorkerSupervisorError> {
+        let slot_count = executable_worker_slot_count()?;
+        let mut slots = AllocVec::new();
+        slots
+            .try_reserve_exact(slot_count)
+            .map_err(|_| WorkerSupervisorError::Backend)?;
+        for role in EXECUTABLE_ROLES {
+            for role_slot in 0..executable_slots_for_role(role)? {
+                slots.push(WorkerSlot::empty(
+                    role,
+                    u32::try_from(role_slot).map_err(|_| WorkerSupervisorError::NotEnabled)?,
+                ));
+            }
+        }
+        if slots.is_empty() || slots.len() != slot_count {
+            return Err(WorkerSupervisorError::NotEnabled);
+        }
+        Ok(Self {
             backend,
-            slots: [
-                WorkerSlot::empty(WorkerRole::Heartbeat),
-                WorkerSlot::empty(WorkerRole::Gpu),
-                WorkerSlot::empty(WorkerRole::Lora),
-            ],
+            slots,
             supervisor_generation: 0,
             descriptor_sequence: 0,
-        }
+        })
     }
 
     /// Borrow the backend for target diagnostics or tests.
@@ -569,9 +745,27 @@ impl<Backend: WorkerKernelBackend> WorkerSupervisor<Backend> {
         &mut self.backend
     }
 
-    /// Return the bounded public state for one executable role.
-    pub fn snapshot(&self, role: WorkerRole) -> Result<WorkerSlotSnapshot, WorkerSupervisorError> {
-        Ok(self.slots[role_index(role)?].snapshot())
+    /// Return the bounded public state for one exact role-local slot.
+    pub fn snapshot(
+        &self,
+        role: WorkerRole,
+        role_slot: u32,
+    ) -> Result<WorkerSlotSnapshot, WorkerSupervisorError> {
+        Ok(self.slots[flat_slot_index(role, role_slot)?].snapshot())
+    }
+
+    /// Return the number of compiler-declared slots owned by this supervisor.
+    #[must_use]
+    pub fn slot_count(&self) -> usize {
+        self.slots.len()
+    }
+
+    /// Return one public slot snapshot by stable flat manifest order.
+    pub fn snapshot_at(&self, index: usize) -> Result<WorkerSlotSnapshot, WorkerSupervisorError> {
+        self.slots
+            .get(index)
+            .map(WorkerSlot::snapshot)
+            .ok_or(WorkerSupervisorError::RoleNotExecutable)
     }
 
     /// Return the sealed runtime descriptor for one live generation.
@@ -581,24 +775,24 @@ impl<Backend: WorkerKernelBackend> WorkerSupervisor<Backend> {
     pub fn runtime_init(
         &self,
         role: WorkerRole,
+        role_slot: u32,
     ) -> Result<WorkerRuntimeInit, WorkerSupervisorError> {
-        self.slots[role_index(role)?]
+        self.slots[flat_slot_index(role, role_slot)?]
             .init
             .ok_or(WorkerSupervisorError::InvalidState)
     }
 
-    /// Start the READY deadline when a preconstructed target child is actually
-    /// resumed. Target bootstrap may construct a complete generation before
-    /// the fault graph is sealed, so its construction-time timestamp is not an
-    /// admissible runtime deadline.
+    /// Advance one preconstructed generation from deferred to runnable and
+    /// start its READY deadline at the exact admission time.
     pub fn arm_preconstructed_ready_deadline(
         &mut self,
         role: WorkerRole,
+        role_slot: u32,
         now_ms: u64,
     ) -> Result<WorkerSpawnReceipt, WorkerSupervisorError> {
-        let index = role_index(role)?;
+        let index = flat_slot_index(role, role_slot)?;
         let slot = &mut self.slots[index];
-        if slot.lifecycle != WorkerLifecycleState::Starting {
+        if slot.lifecycle != WorkerLifecycleState::Queued {
             return Err(WorkerSupervisorError::InvalidState);
         }
         let identity = slot.identity.ok_or(WorkerSupervisorError::InvalidState)?;
@@ -607,6 +801,7 @@ impl<Backend: WorkerKernelBackend> WorkerSupervisor<Backend> {
         slot.ready_deadline_ms = now_ms
             .checked_add(u64::from(timeout_ms))
             .ok_or(WorkerSupervisorError::InvalidGeneration)?;
+        slot.lifecycle = WorkerLifecycleState::Starting;
         Ok(WorkerSpawnReceipt {
             identity,
             lifecycle: WorkerLifecycleState::Starting,
@@ -618,13 +813,14 @@ impl<Backend: WorkerKernelBackend> WorkerSupervisor<Backend> {
     pub fn spawn(
         &mut self,
         role: WorkerRole,
+        role_slot: u32,
         lease_epoch: u64,
         plan: &WorkerImagePlan,
         image: &[u8],
         now_ms: u64,
     ) -> Result<WorkerSpawnReceipt, WorkerSupervisorError> {
-        validate_static_contract(role, plan)?;
-        let index = role_index(role)?;
+        validate_static_contract(role, role_slot, plan)?;
+        let index = flat_slot_index(role, role_slot)?;
         let slot = &mut self.slots[index];
         if !matches!(
             slot.lifecycle,
@@ -649,7 +845,7 @@ impl<Backend: WorkerKernelBackend> WorkerSupervisor<Backend> {
             .ok_or(WorkerSupervisorError::InvalidGeneration)?;
         let identity = WorkerIdentity::new(
             role,
-            0,
+            role_slot,
             lease_epoch,
             self.supervisor_generation,
             slot.cap_generation,
@@ -673,7 +869,7 @@ impl<Backend: WorkerKernelBackend> WorkerSupervisor<Backend> {
         )
         .committed();
         init.validate_for_role(role)?;
-        let temporal = temporal_task(role)?;
+        let temporal = temporal_task(role, role_slot)?;
         slot.lifecycle = WorkerLifecycleState::Queued;
         slot.identity = Some(identity);
         slot.init = Some(init);
@@ -686,36 +882,78 @@ impl<Backend: WorkerKernelBackend> WorkerSupervisor<Backend> {
 
         let bundle = match self.backend.allocate(identity, contract) {
             Ok(bundle) => bundle,
-            Err(_) => {
+            Err(error) => {
+                record_worker_construction_fault(
+                    now_ms,
+                    self.descriptor_sequence,
+                    identity,
+                    "allocate",
+                    error,
+                );
                 slot.lifecycle = WorkerLifecycleState::Terminal;
                 slot.terminal_reason = Some(WorkerTerminalReason::ConstructionFailure);
                 return Err(WorkerSupervisorError::Backend);
             }
         };
         slot.bundle = Some(bundle);
-        if self.backend.map_image(bundle, plan, image).is_err() {
+        if let Err(error) = self.backend.map_image(bundle, plan, image) {
+            record_worker_construction_fault(
+                now_ms,
+                self.descriptor_sequence,
+                identity,
+                "map-image",
+                error,
+            );
             return self.fail_construction(index, identity, bundle);
         }
-        if self
-            .backend
-            .configure(bundle, init, plan.entry_vaddr)
-            .is_err()
-        {
+        if let Err(error) = self.backend.configure(bundle, init, plan.entry_vaddr) {
+            record_worker_construction_fault(
+                now_ms,
+                self.descriptor_sequence,
+                identity,
+                "configure",
+                error,
+            );
             return self.fail_construction(index, identity, bundle);
         }
-        if self.backend.admit(bundle, temporal).is_err() {
+        if let Err(error) = self.backend.admit(bundle, temporal) {
+            record_worker_construction_fault(
+                now_ms,
+                self.descriptor_sequence,
+                identity,
+                "admit",
+                error,
+            );
             return self.fail_construction(index, identity, bundle);
         }
-        if self.backend.resume(bundle).is_err() {
-            return self.fail_construction(index, identity, bundle);
+        let resume = match self.backend.resume(bundle) {
+            Ok(resume) => resume,
+            Err(error) => {
+                record_worker_construction_fault(
+                    now_ms,
+                    self.descriptor_sequence,
+                    identity,
+                    "resume",
+                    error,
+                );
+                return self.fail_construction(index, identity, bundle);
+            }
+        };
+        match resume {
+            WorkerResumeDisposition::Running => {
+                slot.lifecycle = WorkerLifecycleState::Starting;
+                slot.ready_deadline_ms = now_ms
+                    .checked_add(u64::from(contract.ready_timeout_ms))
+                    .ok_or(WorkerSupervisorError::InvalidGeneration)?;
+            }
+            WorkerResumeDisposition::Deferred => {
+                slot.lifecycle = WorkerLifecycleState::Queued;
+                slot.ready_deadline_ms = 0;
+            }
         }
-        slot.lifecycle = WorkerLifecycleState::Starting;
-        slot.ready_deadline_ms = now_ms
-            .checked_add(u64::from(contract.ready_timeout_ms))
-            .ok_or(WorkerSupervisorError::InvalidGeneration)?;
         Ok(WorkerSpawnReceipt {
             identity,
-            lifecycle: WorkerLifecycleState::Starting,
+            lifecycle: slot.lifecycle,
             ready_deadline_ms: slot.ready_deadline_ms,
         })
     }
@@ -751,7 +989,7 @@ impl<Backend: WorkerKernelBackend> WorkerSupervisor<Backend> {
             .identity
             .worker_role()
             .map_err(|_| WorkerSupervisorError::InvalidRecord)?;
-        let index = role_index(role)?;
+        let index = flat_slot_index(role, record.identity.slot)?;
         let slot = &mut self.slots[index];
         if slot.lifecycle != WorkerLifecycleState::Starting {
             return Err(WorkerSupervisorError::InvalidState);
@@ -775,7 +1013,7 @@ impl<Backend: WorkerKernelBackend> WorkerSupervisor<Backend> {
             .identity
             .worker_role()
             .map_err(|_| WorkerSupervisorError::InvalidRecord)?;
-        let index = role_index(role)?;
+        let index = flat_slot_index(role, control.identity.slot)?;
         let slot = &mut self.slots[index];
         if slot.lifecycle != WorkerLifecycleState::Ready {
             return Err(WorkerSupervisorError::InvalidState);
@@ -803,7 +1041,7 @@ impl<Backend: WorkerKernelBackend> WorkerSupervisor<Backend> {
         &mut self,
         receipt: GpuLeaseReceiptRecord,
     ) -> Result<WorkerSlotSnapshot, WorkerSupervisorError> {
-        let index = role_index(WorkerRole::Gpu)?;
+        let index = flat_slot_index(WorkerRole::Gpu, receipt.identity.slot)?;
         let slot = &mut self.slots[index];
         if slot.lifecycle != WorkerLifecycleState::Ready || slot.receipt_sequence != 0 {
             return Err(WorkerSupervisorError::InvalidState);
@@ -830,7 +1068,7 @@ impl<Backend: WorkerKernelBackend> WorkerSupervisor<Backend> {
         &mut self,
         receipt: PeftReceiptRecord,
     ) -> Result<WorkerSlotSnapshot, WorkerSupervisorError> {
-        let index = role_index(WorkerRole::Lora)?;
+        let index = flat_slot_index(WorkerRole::Lora, receipt.identity.slot)?;
         let slot = &mut self.slots[index];
         if slot.lifecycle != WorkerLifecycleState::Ready || slot.receipt_sequence != 0 {
             return Err(WorkerSupervisorError::InvalidState);
@@ -861,7 +1099,7 @@ impl<Backend: WorkerKernelBackend> WorkerSupervisor<Backend> {
             .identity
             .worker_role()
             .map_err(|_| WorkerSupervisorError::InvalidRecord)?;
-        let index = role_index(role)?;
+        let index = flat_slot_index(role, completion.identity.slot)?;
         let init = self.slots[index]
             .init
             .ok_or(WorkerSupervisorError::InvalidState)?;
@@ -920,9 +1158,10 @@ impl<Backend: WorkerKernelBackend> WorkerSupervisor<Backend> {
     pub fn begin_shutdown(
         &mut self,
         role: WorkerRole,
+        role_slot: u32,
         now_ms: u64,
     ) -> Result<WorkerSlotSnapshot, WorkerSupervisorError> {
-        let index = role_index(role)?;
+        let index = flat_slot_index(role, role_slot)?;
         let slot = &mut self.slots[index];
         if slot.lifecycle == WorkerLifecycleState::Closing {
             return Ok(slot.snapshot());
@@ -955,8 +1194,9 @@ impl<Backend: WorkerKernelBackend> WorkerSupervisor<Backend> {
     pub fn revoke(
         &mut self,
         role: WorkerRole,
+        role_slot: u32,
     ) -> Result<WorkerSlotSnapshot, WorkerSupervisorError> {
-        let index = role_index(role)?;
+        let index = flat_slot_index(role, role_slot)?;
         let slot = &self.slots[index];
         let init = slot.init.ok_or(WorkerSupervisorError::InvalidState)?;
         let bundle = slot.bundle.ok_or(WorkerSupervisorError::InvalidState)?;
@@ -975,7 +1215,7 @@ impl<Backend: WorkerKernelBackend> WorkerSupervisor<Backend> {
         let role = identity
             .worker_role()
             .map_err(|_| WorkerSupervisorError::InvalidRecord)?;
-        let index = role_index(role)?;
+        let index = flat_slot_index(role, identity.slot)?;
         if self.slots[index].identity != Some(identity) {
             return Err(WorkerSupervisorError::InvalidGeneration);
         }
@@ -998,16 +1238,17 @@ impl<Backend: WorkerKernelBackend> WorkerSupervisor<Backend> {
         Ok(contained)
     }
 
-    /// Enforce the generated deadline for one exact executable role.
+    /// Enforce the generated deadline for one exact executable role-local slot.
     ///
     /// Target bootstrap uses this to leave unclaimed, preconstructed children
     /// suspended without aging their READY deadlines.
-    pub fn enforce_role_deadline(
+    pub fn enforce_slot_deadline(
         &mut self,
         role: WorkerRole,
+        role_slot: u32,
         now_ms: u64,
     ) -> Result<bool, WorkerSupervisorError> {
-        self.enforce_deadline_index(role_index(role)?, now_ms)
+        self.enforce_deadline_index(flat_slot_index(role, role_slot)?, now_ms)
     }
 
     fn enforce_deadline_index(
@@ -1063,12 +1304,105 @@ impl<Backend: WorkerKernelBackend> WorkerSupervisor<Backend> {
     }
 }
 
-fn role_index(role: WorkerRole) -> Result<usize, WorkerSupervisorError> {
-    Ok(match role {
-        WorkerRole::Heartbeat => 0,
-        WorkerRole::Gpu => 1,
-        WorkerRole::Lora => 2,
-    })
+/// Return the compiler-declared slot count for one executable role.
+pub fn executable_slots_for_role(role: WorkerRole) -> Result<usize, WorkerSupervisorError> {
+    let label = role_label(role);
+    let count = generated::worker_resource_admission_config()
+        .executable_roles
+        .iter()
+        .find(|record| record.role == label)
+        .map(|record| usize::from(record.executable_slots))
+        .ok_or(WorkerSupervisorError::RoleNotExecutable)?;
+    if count == 0 || count > MAX_EXECUTABLE_WORKER_SLOTS {
+        return Err(WorkerSupervisorError::NotEnabled);
+    }
+    Ok(count)
+}
+
+/// Return the exact manifest-bounded executable population.
+pub fn executable_worker_slot_count() -> Result<usize, WorkerSupervisorError> {
+    let mut total = 0usize;
+    for role in EXECUTABLE_ROLES {
+        total = total
+            .checked_add(executable_slots_for_role(role)?)
+            .ok_or(WorkerSupervisorError::NotEnabled)?;
+    }
+    if total == 0 || total > MAX_EXECUTABLE_WORKER_SLOTS {
+        return Err(WorkerSupervisorError::NotEnabled);
+    }
+    Ok(total)
+}
+
+/// Convert an exact role-local slot to stable flat manifest order.
+pub fn flat_slot_index(role: WorkerRole, role_slot: u32) -> Result<usize, WorkerSupervisorError> {
+    let role_slot =
+        usize::try_from(role_slot).map_err(|_| WorkerSupervisorError::RoleNotExecutable)?;
+    let mut offset = 0usize;
+    for candidate in EXECUTABLE_ROLES {
+        let count = executable_slots_for_role(candidate)?;
+        if candidate == role {
+            return (role_slot < count)
+                .then_some(offset + role_slot)
+                .ok_or(WorkerSupervisorError::RoleNotExecutable);
+        }
+        offset = offset
+            .checked_add(count)
+            .ok_or(WorkerSupervisorError::NotEnabled)?;
+    }
+    Err(WorkerSupervisorError::RoleNotExecutable)
+}
+
+/// Convert stable flat manifest order to an exact role-local slot.
+pub fn role_slot_from_flat_index(index: usize) -> Result<(WorkerRole, u32), WorkerSupervisorError> {
+    let mut offset = 0usize;
+    for role in EXECUTABLE_ROLES {
+        let count = executable_slots_for_role(role)?;
+        let end = offset
+            .checked_add(count)
+            .ok_or(WorkerSupervisorError::NotEnabled)?;
+        if index < end {
+            let role_slot =
+                u32::try_from(index - offset).map_err(|_| WorkerSupervisorError::NotEnabled)?;
+            return Ok((role, role_slot));
+        }
+        offset = end;
+    }
+    Err(WorkerSupervisorError::RoleNotExecutable)
+}
+
+/// Select a free role slot while preserving unused compiler-declared capacity.
+///
+/// Terminal generations are eligible only after every absent slot for the
+/// role has been selected. The iterator must use stable manifest order.
+pub(crate) fn preferred_spawn_slot(
+    role: WorkerRole,
+    candidates: impl Iterator<Item = (usize, WorkerRole, WorkerLifecycleState)>,
+) -> Option<usize> {
+    let mut terminal = None;
+    for (index, candidate_role, lifecycle) in candidates {
+        if candidate_role != role {
+            continue;
+        }
+        match lifecycle {
+            WorkerLifecycleState::Absent => return Some(index),
+            WorkerLifecycleState::Terminal if terminal.is_none() => terminal = Some(index),
+            _ => {}
+        }
+    }
+    terminal
+}
+
+/// Return whether old terminal state was observed in the bounded reuse/admit window.
+///
+/// The caller separately proves the relevant identity relationship: a role
+/// hint has no generation authority, while a fault must identify the already
+/// contained supervisor generation exactly.
+pub(crate) fn contained_generation_precedes_reused_admit(
+    supervisor_lifecycle: WorkerLifecycleState,
+    projected_lifecycle: WorkerLifecycleState,
+) -> bool {
+    supervisor_lifecycle == WorkerLifecycleState::Terminal
+        && projected_lifecycle == WorkerLifecycleState::Queued
 }
 
 fn role_label(role: WorkerRole) -> &'static str {
@@ -1089,6 +1423,7 @@ fn image_name(role: WorkerRole) -> &'static str {
 
 fn validate_static_contract(
     role: WorkerRole,
+    role_slot: u32,
     plan: &WorkerImagePlan,
 ) -> Result<(), WorkerSupervisorError> {
     let runtime = generated::worker_runtime_config();
@@ -1108,7 +1443,7 @@ fn validate_static_contract(
         || !admission
             .executable_roles
             .iter()
-            .any(|record| record.role == label && record.executable_slots == 1)
+            .any(|record| record.role == label && role_slot < u32::from(record.executable_slots))
     {
         return Err(WorkerSupervisorError::RoleNotExecutable);
     }
@@ -1170,15 +1505,23 @@ fn child_contract(
     })
 }
 
-fn temporal_task(role: WorkerRole) -> Result<TemporalTaskConfig, WorkerSupervisorError> {
-    let id = match role {
-        WorkerRole::Heartbeat => "worker-heartbeat-slot-0",
-        WorkerRole::Gpu => "worker-gpu-slot-0",
-        WorkerRole::Lora => "worker-lora-slot-0",
+fn temporal_task(
+    role: WorkerRole,
+    role_slot: u32,
+) -> Result<TemporalTaskConfig, WorkerSupervisorError> {
+    let prefix = match role {
+        WorkerRole::Heartbeat => "worker-heartbeat-slot-",
+        WorkerRole::Gpu => "worker-gpu-slot-",
+        WorkerRole::Lora => "worker-lora-slot-",
     };
     generated::temporal_tasks()
         .iter()
-        .find(|task| task.id == id)
+        .find(|task| {
+            task.id
+                .strip_prefix(prefix)
+                .and_then(|suffix| suffix.parse::<u32>().ok())
+                == Some(role_slot)
+        })
         .copied()
         .ok_or(WorkerSupervisorError::NotEnabled)
 }
@@ -1211,15 +1554,123 @@ const fn hex_nibble(byte: u8) -> Option<u8> {
 
 #[cfg(test)]
 mod tests {
-    use super::{WorkerDeadlineCursor, WorkerRole};
+    use super::{
+        contained_generation_precedes_reused_admit, executable_worker_slot_count,
+        next_pending_worker_index, preferred_spawn_slot, role_slot_from_flat_index,
+        WorkerDeadlineCursor, WorkerLifecycleState, WorkerRole,
+    };
 
     #[test]
     fn isolated_runtime_deadline_cursor_retains_role_rotation() {
         let mut cursor = WorkerDeadlineCursor::default();
 
-        assert_eq!(cursor.take(), WorkerRole::Heartbeat);
-        assert_eq!(cursor.take(), WorkerRole::Gpu);
-        assert_eq!(cursor.take(), WorkerRole::Lora);
-        assert_eq!(cursor.take(), WorkerRole::Heartbeat);
+        let slot_count = executable_worker_slot_count().expect("generated Worker slots");
+        for index in 0..slot_count {
+            assert_eq!(cursor.take(), role_slot_from_flat_index(index));
+        }
+        assert_eq!(cursor.take(), role_slot_from_flat_index(0));
+    }
+
+    #[test]
+    fn pending_worker_selection_rotates_across_continuously_busy_slots() {
+        let pending = (1u64 << 0) | (1u64 << 4) | (1u64 << 36);
+        assert_eq!(next_pending_worker_index(pending, 0, 37), Ok(Some((0, 1))));
+        assert_eq!(next_pending_worker_index(pending, 1, 37), Ok(Some((4, 5))));
+        assert_eq!(next_pending_worker_index(pending, 5, 37), Ok(Some((36, 0))));
+        assert_eq!(next_pending_worker_index(pending, 0, 37), Ok(Some((0, 1))));
+    }
+
+    #[test]
+    fn pending_worker_selection_rejects_bits_outside_manifest_population() {
+        assert_eq!(
+            next_pending_worker_index(1u64 << 37, 0, 37),
+            Err(super::WorkerSupervisorError::InvalidRecord),
+        );
+        assert_eq!(next_pending_worker_index(0, 0, 37), Ok(None));
+    }
+
+    #[test]
+    fn spawn_selection_fills_absent_slots_before_reusing_terminal_generation() {
+        let candidates = [
+            (0, WorkerRole::Gpu, WorkerLifecycleState::Terminal),
+            (1, WorkerRole::Gpu, WorkerLifecycleState::Absent),
+            (2, WorkerRole::Gpu, WorkerLifecycleState::Terminal),
+        ];
+        assert_eq!(
+            preferred_spawn_slot(WorkerRole::Gpu, candidates.into_iter()),
+            Some(1),
+        );
+    }
+
+    #[test]
+    fn only_terminal_to_queued_pair_marks_the_reuse_admit_window() {
+        assert!(contained_generation_precedes_reused_admit(
+            WorkerLifecycleState::Terminal,
+            WorkerLifecycleState::Queued,
+        ));
+        assert!(!contained_generation_precedes_reused_admit(
+            WorkerLifecycleState::Ready,
+            WorkerLifecycleState::Queued,
+        ));
+        assert!(!contained_generation_precedes_reused_admit(
+            WorkerLifecycleState::Terminal,
+            WorkerLifecycleState::Starting,
+        ));
+    }
+
+    #[test]
+    fn atomic_target_mailbox_preserves_fault_commit_and_wake_precedence() {
+        use super::{AtomicFaultHandoffRecord, TargetSupervisorMailbox, TargetSupervisorWork};
+        use crate::critical_tcb::{
+            worker_fault_mailbox_index, FaultClass, FaultHandoffRecord, GenerationIdentity,
+        };
+        use crate::generated::{self, TemporalTaskKind};
+        use core::sync::atomic::Ordering;
+
+        let task_index = generated::temporal_tasks()
+            .iter()
+            .position(|task| task.kind == TemporalTaskKind::Worker)
+            .and_then(|index| u16::try_from(index).ok())
+            .expect("generated Worker task");
+        let slot = worker_fault_mailbox_index(task_index).expect("Worker mailbox");
+        let fault = FaultHandoffRecord {
+            sequence: 1,
+            task_index,
+            identity: GenerationIdentity {
+                slot: 0,
+                lease_epoch: 1,
+                supervisor_generation: 1,
+                cap_generation: 1,
+            },
+            fault_badge: 0x26e1_0001,
+            fault_class: FaultClass::Standard,
+            fault_label: 1,
+            fault_length: 2,
+            fault_mr0: 3,
+            fault_mr1: 4,
+            tcb_cap: 5,
+        };
+        let mailbox = TargetSupervisorMailbox::new();
+        mailbox.faults[slot]
+            .state
+            .store(AtomicFaultHandoffRecord::WRITING, Ordering::Release);
+        assert_eq!(mailbox.take(), Ok(Some(TargetSupervisorWork::FaultBarrier)));
+        mailbox.reset();
+
+        let role_wake = generated::worker_runtime_config().task_abi.gpu_wake_bit;
+        mailbox.wake_bits.store(role_wake, Ordering::Release);
+        mailbox.faults[slot].publish(fault).expect("fault publish");
+        assert_eq!(mailbox.take(), Ok(Some(TargetSupervisorWork::Fault(fault))));
+        assert_eq!(
+            mailbox.take(),
+            Ok(Some(TargetSupervisorWork::Wake(role_wake)))
+        );
+        assert_eq!(mailbox.take(), Ok(None));
+
+        mailbox.faults[slot].publish(fault).expect("first fault");
+        assert_eq!(
+            mailbox.faults[slot].publish(fault),
+            Err(super::WorkerSupervisorError::ContainmentIncomplete),
+        );
     }
 }

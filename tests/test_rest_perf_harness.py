@@ -16,6 +16,7 @@ import subprocess
 import sys
 import tomllib
 import urllib.error
+from dataclasses import replace
 from typing import Optional
 
 MODULE_PATH = (
@@ -67,6 +68,25 @@ def test_normalize_rest_url_trims_slashes() -> None:
     assert rest_perf.normalize_rest_url("http://127.0.0.1:8080/") == (
         "http://127.0.0.1:8080"
     )
+
+
+def test_worker_failure_context_is_relevant_recent_and_bounded() -> None:
+    lines = ["unrelated audit line"]
+    lines.extend(
+        f"WORKER_TASK_RECEIPT role=worker-lora slot=3 sequence={index}"
+        for index in range(20)
+    )
+    lines.append("worker-20 exact public identity")
+
+    context = rest_perf.select_worker_failure_context(
+        lines, "worker-20", "worker-lora", 3
+    )
+
+    assert "unrelated audit line" not in context
+    assert "sequence=7" not in context
+    assert "sequence=19" in context
+    assert "worker-20 exact public identity" in context
+    assert len(context) <= rest_perf.WORKER_FAILURE_CONTEXT_MAX_BYTES
     assert rest_perf.normalize_rest_url("http://127.0.0.1:8080") == (
         "http://127.0.0.1:8080"
     )
@@ -472,7 +492,7 @@ def test_telemetry_append_rotates_segment_on_quota() -> None:
     assert state.telemetry_segments["bench"] == "seg-000002"
 
 
-def test_telemetry_segment_receipt_validates_latest_with_safe_fallback() -> None:
+def test_telemetry_segment_receipt_avoids_duplicate_read_with_safe_fallback() -> None:
     class DummyClient:
         def __init__(
             self,
@@ -526,7 +546,7 @@ def test_telemetry_segment_receipt_validates_latest_with_safe_fallback() -> None
     receipt_client = DummyClient("seg-000123", latest="seg-000123")
     segment = rest_perf.create_telemetry_segment(receipt_client, state, "bench")
     assert segment == "seg-000123"
-    assert receipt_client.cat_calls == 1
+    assert receipt_client.cat_calls == 0
 
     fallback_client = DummyClient("../invalid")
     segment = rest_perf.create_telemetry_segment(fallback_client, state, "bench")
@@ -543,7 +563,55 @@ def test_telemetry_segment_receipt_validates_latest_with_safe_fallback() -> None
     stale_client = DummyClient("seg-000123", latest="seg-000124")
     segment = rest_perf.create_telemetry_segment(stale_client, state, "bench")
     assert segment == "seg-000123"
-    assert stale_client.cat_calls == 1
+    assert stale_client.cat_calls == 0
+
+
+def test_telemetry_append_holds_per_device_lifecycle_lock() -> None:
+    class TrackingLock:
+        def __init__(self) -> None:
+            self.depth = 0
+
+        def __enter__(self):
+            self.depth += 1
+            return self
+
+        def __exit__(self, _exc_type, _exc, _traceback) -> None:
+            self.depth -= 1
+
+    state = rest_perf.SimState(
+        bounds={},
+        rest_url="http://127.0.0.1:8080",
+        rng=rest_perf.random.Random(0),
+        entropy=0.0,
+        tail_bytes=0,
+        policy_enabled=True,
+        actions_enabled=True,
+        telemetry_enabled=True,
+        include_lifecycle=False,
+        auto_approve=False,
+        transient_retries=False,
+        strict_control_errors=True,
+    )
+    lock = TrackingLock()
+    state.telemetry_device_locks["bench"] = lock
+    state.telemetry_segments["bench"] = "seg-000001"
+
+    class DummyClient:
+        def echo(self, path: str, _line: str) -> rest_perf.GatewayResponse:
+            assert path == "/queen/telemetry/bench/seg/seg-000001"
+            assert lock.depth == 1
+            return rest_perf.GatewayResponse(
+                status="OK",
+                verb="ECHO",
+                path=path,
+                end=True,
+                lines=[],
+                bytes=1,
+                error=None,
+            )
+
+    rest_perf.telemetry_append_op(DummyClient(), "worker-1", state)
+    assert lock.depth == 0
 
 
 def test_parse_telemetry_segment_id_rejects_unsafe_components() -> None:
@@ -1188,6 +1256,54 @@ def test_default_stateful_control_operation_mix_is_unchanged() -> None:
     }
 
 
+def test_schedule_operation_closes_the_exact_fifo_lifecycle() -> None:
+    state = rest_perf.SimState(
+        bounds={},
+        rest_url="http://127.0.0.1:8080",
+        rng=rest_perf.random.Random(0),
+        entropy=0.0,
+        tail_bytes=0,
+        policy_enabled=False,
+        actions_enabled=False,
+        telemetry_enabled=False,
+        include_lifecycle=False,
+        auto_approve=False,
+        transient_retries=False,
+        strict_control_errors=True,
+        run_token="schedule-test",
+    )
+    operation = next(
+        operation
+        for operation in rest_perf.build_operations({}, ["queen"], [], [], state)
+        if operation.name == "schedule_write"
+    )
+
+    class ScheduleClient:
+        def __init__(self) -> None:
+            self.lines: list[dict[str, object]] = []
+
+        def echo(self, path: str, line: str) -> rest_perf.GatewayResponse:
+            assert path == "/queen/schedule/ctl"
+            self.lines.append(json.loads(line))
+            return rest_perf.GatewayResponse(
+                status="OK",
+                verb="ECHO",
+                path=path,
+                end=True,
+                lines=[],
+                bytes=len(line),
+                error=None,
+            )
+
+    client = ScheduleClient()
+    operation.func(client, "worker-1", state)
+
+    assert len(client.lines) == 2
+    request, dequeue = client.lines
+    assert request["id"] == "sched-schedule-test-000001"
+    assert dequeue == {"op": "dequeue", "id": request["id"]}
+
+
 def test_gateway_status_delta_saturates_missing_fields() -> None:
     before = {
         "broker": {
@@ -1512,7 +1628,7 @@ def acceptance_summary() -> dict:
                 "artifact": "verified",
                 "receipt": "none" if role == "worker-heartbeat" else "confirmed",
                 "execution_proof": "qemu",
-                "slot": index,
+                "slot": 0,
                 "lease_epoch": 10 + index,
                 "supervisor_generation": 20 + index,
                 "cap_generation": 30 + index,
@@ -1542,7 +1658,8 @@ def write_fault_logs(tmp_path: pathlib.Path) -> tuple[pathlib.Path, pathlib.Path
     for worker in acceptance["workers"]:
         uart_lines.append(
             "WORKER_TASK_ADMISSION "
-            f"role={worker['role']} image_sha256={worker['image_sha256']}"
+            f"role={worker['role']} slot={worker['slot']} "
+            f"image_sha256={worker['image_sha256']}"
         )
     uart = tmp_path / "qemu.uart.log"
     uart.write_text("\n".join(uart_lines) + "\n", encoding="utf-8")
@@ -1631,6 +1748,175 @@ def test_parse_worker_runtime_state_requires_structured_exact_role() -> None:
         raise AssertionError("generic ids must not default to Heartbeat")
 
 
+def test_parse_worker_runtime_state_accepts_bounded_v2_projection() -> None:
+    worker_id = "opaque-instance-8"
+    path = f"/shard/00/worker/{worker_id}/telemetry"
+    record = {
+        "schema": "worker-runtime-state/v2",
+        "worker_id": worker_id,
+        "role": "worker-gpu",
+        "state": "ready",
+        "identity": [1, 2, 3, 4],
+        "sequence": [5, 6, 7, 8],
+    }
+
+    instance = rest_perf.parse_worker_runtime_state(
+        [json.dumps(record)], worker_id, path
+    )
+    assert instance is not None
+    assert instance.slot == 1
+    assert instance.lease_epoch == 2
+    assert instance.supervisor_generation == 3
+    assert instance.cap_generation == 4
+    assert instance.ready_sequence == 5
+    assert instance.control_sequence == 6
+    assert instance.receipt_sequence == 7
+    assert instance.completion_sequence == 8
+
+    record["sequence"] = [5, 6, 7, 1 << 32]
+    try:
+        rest_perf.parse_worker_runtime_state([json.dumps(record)], worker_id, path)
+    except rest_perf.RestError as exc:
+        assert "malformed structured Worker state" in str(exc)
+    else:
+        raise AssertionError("v2 counters outside the wire bound must fail")
+
+
+def test_host_ticket_current_key_and_projection_are_exact_and_bounded() -> None:
+    assert rest_perf.host_ticket_correlation_digest("ticket-v2", "idem-v2") == (
+        "ce114e927e7cbec302f7c7a1d07be28c79b3602e8451636f1d0104a629ae39e8"
+    )
+    current = rest_perf.parse_host_ticket_current(
+        [
+            "HOST_TICKET_CURRENT schema=host-ticket-current/v1 "
+            "state=confirmed role=worker-gpu worker=worker-gpu-slot-7 "
+            "lifecycle=ready identity=7,2,3,4 sequence=5,0,9,9 admission=11"
+        ]
+    )
+    assert current == rest_perf.HostTicketCurrent(
+        state="confirmed",
+        role="worker-gpu",
+        worker_id="worker-gpu-slot-7",
+        lifecycle="ready",
+        slot=7,
+        lease_epoch=2,
+        supervisor_generation=3,
+        cap_generation=4,
+        ready_sequence=5,
+        control_sequence=0,
+        receipt_sequence=9,
+        completion_sequence=9,
+        admission_sequence=11,
+    )
+
+
+def test_host_ticket_current_projection_rejects_ambiguous_records() -> None:
+    valid = (
+        "HOST_TICKET_CURRENT schema=host-ticket-current/v1 "
+        "state=pending role=worker-lora worker=worker-lora-slot-1 "
+        "lifecycle=ready identity=1,1,1,1 sequence=1,0,0,0 admission=1"
+    )
+    for lines in ([valid, valid], [valid.replace("identity=1,1,1,1", "identity=1,1")]):
+        try:
+            rest_perf.parse_host_ticket_current(lines)
+        except rest_perf.RestError:
+            pass
+        else:
+            raise AssertionError("ambiguous ticket-current records must fail closed")
+
+
+def test_worker_projection_retains_incremental_tail_state() -> None:
+    state = rest_perf.SimState(
+        bounds=executable_bounds(),
+        rest_url="http://127.0.0.1:8080",
+        rng=rest_perf.random.Random(0),
+        entropy=0.0,
+        tail_bytes=256,
+        policy_enabled=False,
+        actions_enabled=False,
+        telemetry_enabled=False,
+        include_lifecycle=False,
+        auto_approve=False,
+        transient_retries=False,
+        strict_control_errors=True,
+        population_mode=rest_perf.POPULATION_EXECUTABLE_LOG,
+        maximum_live_tasks=3,
+    )
+    cached = rest_perf.WorkerInstance(
+        worker_id="worker-2",
+        role="worker-gpu",
+        lifecycle="ready",
+        telemetry_path="/shard/00/worker/worker-2/telemetry",
+        slot=0,
+        lease_epoch=1,
+        supervisor_generation=2,
+        cap_generation=1,
+        ready_sequence=1,
+        control_sequence=0,
+        receipt_sequence=0,
+        completion_sequence=0,
+    )
+    state.current_workers_by_id[cached.worker_id] = cached
+    advanced = replace(
+        cached,
+        receipt_sequence=1,
+        completion_sequence=1,
+    )
+    assert rest_perf.merge_current_worker_instances(state, []) == [cached]
+    observed = rest_perf.merge_current_worker_instances(state, [advanced])[0]
+    assert observed.receipt_sequence == 1
+    assert observed.completion_sequence == 1
+    assert rest_perf.merge_current_worker_instances(state, []) == [observed]
+
+
+def test_worker_projection_orders_control_receipt_completion() -> None:
+    state = rest_perf.SimState(
+        bounds=executable_bounds(),
+        rest_url="http://127.0.0.1:8080",
+        rng=rest_perf.random.Random(0),
+        entropy=0.0,
+        tail_bytes=256,
+        policy_enabled=False,
+        actions_enabled=False,
+        telemetry_enabled=False,
+        include_lifecycle=False,
+        auto_approve=False,
+        transient_retries=False,
+        strict_control_errors=True,
+        population_mode=rest_perf.POPULATION_EXECUTABLE_LOG,
+        maximum_live_tasks=3,
+    )
+    ready = rest_perf.WorkerInstance(
+        worker_id="worker-3",
+        role="worker-lora",
+        lifecycle="ready",
+        telemetry_path="/shard/00/worker/worker-3/telemetry",
+        slot=0,
+        lease_epoch=1,
+        supervisor_generation=3,
+        cap_generation=1,
+        ready_sequence=1,
+        control_sequence=0,
+        receipt_sequence=0,
+        completion_sequence=0,
+    )
+    state.current_workers_by_id[ready.worker_id] = ready
+    in_flight = replace(
+        ready,
+        control_sequence=1,
+        receipt_sequence=1,
+    )
+    completed = replace(
+        ready,
+        control_sequence=0,
+        receipt_sequence=1,
+        completion_sequence=1,
+    )
+    assert rest_perf.merge_current_worker_instances(state, [in_flight]) == [in_flight]
+    assert rest_perf.merge_current_worker_instances(state, []) == [in_flight]
+    assert rest_perf.merge_current_worker_instances(state, [completed]) == [completed]
+
+
 def test_executable_population_discovers_only_canonical_ready_workers() -> None:
     worker_id = "opaque-instance-7"
     label = rest_perf.expected_worker_shard_label(worker_id, 8)
@@ -1641,7 +1927,7 @@ def test_executable_population_discovers_only_canonical_ready_workers() -> None:
             "worker_id": worker_id,
             "role": "worker-lora",
             "state": "ready",
-            "slot": 2,
+            "slot": 0,
             "lease_epoch": 8,
             "supervisor_generation": 9,
             "cap_generation": 10,
@@ -1733,6 +2019,221 @@ def test_executable_telemetry_operation_fails_closed_without_canonical_path() ->
         raise AssertionError("executable mode must not fall back to /worker")
 
 
+def test_executable_receipt_operations_reuse_preflight_validated_subjects(
+    monkeypatch,
+) -> None:
+    state = rest_perf.SimState(
+        bounds=executable_bounds(),
+        rest_url="http://127.0.0.1:8080",
+        rng=rest_perf.random.Random(0),
+        entropy=0.0,
+        tail_bytes=256,
+        policy_enabled=False,
+        actions_enabled=False,
+        telemetry_enabled=False,
+        include_lifecycle=False,
+        auto_approve=False,
+        transient_retries=False,
+        strict_control_errors=True,
+        population_mode=rest_perf.POPULATION_EXECUTABLE_LOG,
+        maximum_live_tasks=3,
+        receipt_gpu_subject="GPU-0",
+        receipt_lora_subject="qemu-evidence-job",
+        receipt_gpu_lease_ids=["op-preflight-gpu-a", "op-preflight-gpu-b"],
+    )
+    observed: list[tuple[str, str, str, str | None]] = []
+
+    def record_receipt(
+        _client,
+        _state,
+        action: str,
+        role: str,
+        _args,
+        subject: str,
+        operation_id=None,
+    ) -> None:
+        observed.append((action, role, subject, operation_id))
+
+    monkeypatch.setattr(rest_perf, "run_v2_receipt_operation", record_receipt)
+    operations = {
+        operation.name: operation
+        for operation in rest_perf.build_operations(
+            state.bounds,
+            ["worker"],
+            [],
+            [],
+            state,
+        )
+    }
+    operations["worker_gpu_v2_receipt"].func(None, "worker-1", state)
+    operations["worker_gpu_v2_receipt"].func(None, "worker-2", state)
+    operations["worker_lora_v2_receipt"].func(None, "worker-2", state)
+
+    assert observed == [
+        ("gpu.lease.renew", "worker-gpu", "GPU-0", "op-preflight-gpu-a"),
+        ("gpu.lease.renew", "worker-gpu", "GPU-0", "op-preflight-gpu-b"),
+        ("peft.export", "worker-lora", "qemu-evidence-job", None),
+    ]
+
+
+def test_executable_receipt_lanes_bound_roles_independently() -> None:
+    state = rest_perf.SimState(
+        bounds=executable_bounds(),
+        rest_url="http://127.0.0.1:8080",
+        rng=rest_perf.random.Random(0),
+        entropy=0.0,
+        tail_bytes=256,
+        policy_enabled=False,
+        actions_enabled=False,
+        telemetry_enabled=False,
+        include_lifecycle=False,
+        auto_approve=False,
+        transient_retries=False,
+        strict_control_errors=True,
+        population_mode=rest_perf.POPULATION_EXECUTABLE_LOG,
+        maximum_live_tasks=3,
+    )
+    template = rest_perf.WorkerInstance(
+        worker_id="template",
+        role="worker-gpu",
+        lifecycle="ready",
+        telemetry_path="/shard/00/worker/template/telemetry",
+        slot=0,
+        lease_epoch=1,
+        supervisor_generation=1,
+        cap_generation=1,
+        ready_sequence=1,
+        control_sequence=0,
+        receipt_sequence=0,
+        completion_sequence=0,
+    )
+    instances = [
+        replace(template, worker_id="gpu-0", slot=0),
+        replace(template, worker_id="gpu-1", slot=1),
+        replace(template, worker_id="lora-0", role="worker-lora", slot=0),
+        replace(template, worker_id="lora-1", role="worker-lora", slot=1),
+    ]
+    rest_perf.merge_current_worker_instances(state, instances)
+    rest_perf.initialize_ticket_worker_lanes(state, instances)
+    gpu_lanes = state.ticket_worker_lanes["worker-gpu"]
+    lora_lanes = state.ticket_worker_lanes["worker-lora"]
+
+    assert gpu_lanes.qsize() == 2
+    assert lora_lanes.qsize() == 2
+    assert {gpu_lanes.get_nowait(), gpu_lanes.get_nowait()} == {"gpu-0", "gpu-1"}
+    assert lora_lanes.get_nowait() in {"lora-0", "lora-1"}
+    assert set(state.ticket_worker_locks) == {"gpu-0", "gpu-1", "lora-0", "lora-1"}
+
+
+def test_gpu_receipt_follow_up_uses_exact_lease_owner_lane() -> None:
+    state = rest_perf.SimState(
+        bounds=executable_bounds(),
+        rest_url="http://127.0.0.1:8080",
+        rng=rest_perf.random.Random(0),
+        entropy=0.0,
+        tail_bytes=256,
+        policy_enabled=False,
+        actions_enabled=False,
+        telemetry_enabled=False,
+        include_lifecycle=False,
+        auto_approve=False,
+        transient_retries=False,
+        strict_control_errors=True,
+        population_mode=rest_perf.POPULATION_EXECUTABLE_LOG,
+        maximum_live_tasks=3,
+    )
+    template = rest_perf.WorkerInstance(
+        worker_id="gpu-0",
+        role="worker-gpu",
+        lifecycle="ready",
+        telemetry_path="/shard/00/worker/gpu-0/telemetry",
+        slot=0,
+        lease_epoch=1,
+        supervisor_generation=1,
+        cap_generation=1,
+        ready_sequence=1,
+        control_sequence=0,
+        receipt_sequence=0,
+        completion_sequence=0,
+    )
+    instances = [
+        template,
+        replace(
+            template,
+            worker_id="gpu-1",
+            telemetry_path="/shard/00/worker/gpu-1/telemetry",
+            slot=1,
+            supervisor_generation=2,
+        ),
+        replace(
+            template,
+            worker_id="lora-0",
+            role="worker-lora",
+            telemetry_path="/shard/00/worker/lora-0/telemetry",
+            supervisor_generation=3,
+        ),
+    ]
+    rest_perf.merge_current_worker_instances(state, instances)
+    rest_perf.initialize_ticket_worker_lanes(state, instances)
+    indexed = {instance.worker_id: instance for instance in instances}
+
+    class ImmediateReceiptClient:
+        def __init__(self) -> None:
+            self.payloads: list[dict[str, object]] = []
+
+        def echo(self, path: str, line: str) -> rest_perf.GatewayResponse:
+            assert path == "/host/tickets/spec"
+            self.payloads.append(json.loads(line))
+            return rest_perf.GatewayResponse("OK", "ECHO", path, True, [], len(line), None)
+
+        def cat(self, path: str, max_bytes: int) -> rest_perf.GatewayResponse:
+            assert max_bytes == rest_perf.HOST_TICKET_CURRENT_MAX_BYTES
+            payload = self.payloads[-1]
+            expected_path = (
+                rest_perf.HOST_TICKET_CURRENT_PREFIX
+                + rest_perf.host_ticket_correlation_digest(
+                    str(payload["id"]), str(payload["idempotency_key"])
+                )
+            )
+            assert path == expected_path
+            worker = indexed[str(payload["receipt_worker_id"])]
+            sequence = len(self.payloads)
+            line = (
+                "HOST_TICKET_CURRENT schema=host-ticket-current/v1 "
+                f"state=confirmed role={worker.role} worker={worker.worker_id} "
+                f"lifecycle=ready identity={worker.slot},{worker.lease_epoch},"
+                f"{worker.supervisor_generation},{worker.cap_generation} "
+                f"sequence={worker.ready_sequence},0,{sequence},{sequence} "
+                f"admission={sequence}"
+            )
+            return rest_perf.GatewayResponse("OK", "CAT", path, True, [line], len(line), None)
+
+    client = ImmediateReceiptClient()
+    operation_id = rest_perf.run_v2_receipt_operation(
+        client,
+        state,
+        "gpu.lease.grant",
+        "worker-gpu",
+        {"ttl_s": 30, "priority": 1},
+        "GPU-0",
+    )
+    rest_perf.run_v2_receipt_operation(
+        client,
+        state,
+        "gpu.lease.renew",
+        "worker-gpu",
+        {"ttl_s": 30, "priority": 1},
+        "GPU-0",
+        operation_id=operation_id,
+    )
+
+    assert [payload["receipt_worker_id"] for payload in client.payloads] == [
+        "gpu-0",
+        "gpu-0",
+    ]
+    assert state.receipt_operation_workers[operation_id] == "gpu-0"
+
+
 def test_host_model_telemetry_operation_uses_complete_worker_state_bound() -> None:
     worker_id = "worker-3"
     state = rest_perf.SimState(
@@ -1812,7 +2313,7 @@ def test_host_model_telemetry_operation_uses_complete_worker_state_bound() -> No
     assert client.calls == [
         (
             f"/worker/{worker_id}/telemetry",
-            8192,
+            rest_perf.MAX_WORKER_STATE_TAIL_BYTES,
         )
     ]
 
@@ -1861,7 +2362,9 @@ def test_executable_telemetry_operation_uses_canonical_path_once() -> None:
 
     client = DummyClient()
     operation.func(client, worker_id, state)
-    assert client.calls == [(telemetry_path, 8192)]
+    assert client.calls == [
+        (telemetry_path, rest_perf.MAX_WORKER_STATE_TAIL_BYTES)
+    ]
 
 
 def test_gateway_population_proof_requires_validated_acceptance_summary() -> None:
@@ -2323,7 +2826,7 @@ def test_qemu_fixture_receipt_paths_require_explicit_fixture_mode() -> None:
                 "/host/tickets/spec.snapshot",
                 "/host/tickets/status",
             }
-            assert max_bytes == 8192
+            assert max_bytes == rest_perf.HOST_TICKET_LOG_TAIL_BYTES
             return rest_perf.GatewayResponse("OK", "TAIL", path, True, [], None, None)
 
     assert rest_perf.require_qemu_fixture_receipt_paths(
@@ -2495,7 +2998,7 @@ def test_parse_args_managed_gateway_mock_needs_no_console_secret(
         args = rest_perf.parse_args()
         assert args.gateway_mock is True
         assert args.auth_token == ""
-        assert args.tail_bytes == 8192
+        assert args.tail_bytes == 4096
     finally:
         sys.argv = original_argv
 
@@ -2566,6 +3069,7 @@ def embedded_python_blocks(source: str) -> list[str]:
 
 def test_m26e_qemu_pressure_runner_has_exact_orchestration_contract() -> None:
     source = pressure_runner_source()
+    assert "SYSTEM_CPIO_BYTES=\"$(stat -f" not in source
     assert os.access(PRESSURE_RUNNER_PATH, os.X_OK)
     assert subprocess.run(
         ["/bin/bash", "-n", str(PRESSURE_RUNNER_PATH)],
@@ -2587,15 +3091,43 @@ def test_m26e_qemu_pressure_runner_has_exact_orchestration_contract() -> None:
         'find "$REPO_ROOT/target" -depth -mindepth 1 -delete',
         'find "$REPO_ROOT/out" -depth -mindepth 1 -delete',
         'rmdir "$REPO_ROOT/target"',
-        "selected QEMU binary does not support the canonical HVF accelerator",
+        'mkdir -m 0700 "$RUN_DIR"',
+        "export QEMU_BIN",
+        "selected QEMU binary lacks the required host accelerator",
         'export COHESIX_QEMU_ACCEL=hvf',
         'export COHESIX_QEMU_VIRT=off',
         'COHESIX_QEMU_SMP_TOPO=4,cores=4,threads=1,sockets=1',
-        'exact_option("-accel", "hvf")',
+        'exact_option("-accel", accelerator)',
+        'exact_option("-machine", machine)',
+        'exact_option("-cpu", cpu)',
+        'wait_for_marker_count "$boot_dir/uart.live.log" "Cohesix console ready" 1 180',
+        "rest.wait_for_gateway(client, 60.0)",
+        'die "direct cohsh command attempted while hive-gateway owns the console"',
+        'kill -INT "$pid"',
+        'die "hive-gateway did not release the console gracefully"',
+        'GATEWAY_OPERATOR OK KILL role=worker-heartbeat',
+        'cp "$boot_dir/qemu-command.txt" "$boot_dir/preflight.qemu-command.txt"',
+        'wait_for_gateway_acceptance',
+        'diagnostic.get("code") != "read-failed"',
         (
-            'exact_option("-machine", '
-            '"virt,gic-version=3,virtualization=off,kernel-irqchip=off")'
+            'drive_worker_fault_plan "$boot_dir" worker-lora 300\n\n'
+            '    mkdir -p "$boot_dir/preflight"\n'
+            '    start_gateway \\\n'
+            '        "$boot_dir" \\\n'
+            '        "$boot_dir/preflight/worker-task-evidence.json" \\\n'
+            '        "$boot_dir/target-session.json"\n'
+            '    assert_gateway_unproven\n'
+            '    publish_gpu_fixture "$boot_dir"\n'
+            '    drive_receipt_matrix "$boot_dir"'
         ),
+        '--reuse-artifacts',
+        'export COHESIX_QEMU_ACCEL=kvm',
+        'export COHESIX_QEMU_CROSS_HOST_REPLAY=1',
+        'verify-artifacts',
+        'source-host-launch-record.json',
+        'cohesix-qemu-host-replay/v1',
+        'scripts/ci/test_plan_target_canary.sh --target qemu',
+        'TEST_PLAN_CONVERGENCE_QEMU_BIN="$QEMU_BIN"',
         '"$BUILD_RUN" --launch-existing',
         'run_pressure_boot medium 4 1 16 2604',
         'run_pressure_boot high 8 4 32 2608',
@@ -2650,9 +3182,14 @@ def test_m26e_qemu_pressure_runner_has_exact_orchestration_contract() -> None:
         assert literal in source
     assert source.count('"$BUILD_RUN" --launch-existing') == 3
     assert source.count('"$BUILD_RUN" --clean --no-run') == 1
+    assert source.count(
+        'wait_for_marker_count "$boot_dir/uart.live.log" '
+        '"Cohesix console ready" 1 180'
+    ) == 2
     canonical_build = source.index(
         'log "building canonical release-qemu,bootstrap-trace artifacts"'
     )
+    run_dir_creation = source.index('mkdir -m 0700 "$RUN_DIR"')
     target_session = source.index('TARGET_SESSION="$RUN_DIR/session/target-session.json"')
     authenticated_boot = source.index(
         'log "proving one prior authenticated NineDoor operation on the exact artifacts"'
@@ -2676,7 +3213,8 @@ def test_m26e_qemu_pressure_runner_has_exact_orchestration_contract() -> None:
         '"$HARNESS_PYTHON" scripts/worker_task_evidence.py collect-qemu \\\n'
     )
     assert (
-        canonical_build
+        run_dir_creation
+        < canonical_build
         < target_session
         < authenticated_boot
         < during_call_boot
@@ -2688,6 +3226,7 @@ def test_m26e_qemu_pressure_runner_has_exact_orchestration_contract() -> None:
         < final_collection
     )
     assert "rebuilding the exact pressure artifact set" not in source
+    assert "pressure QEMU pidfile is malformed" not in source
     assert "export COHESIX_QEMU_ACCEL=tcg" not in source
     assert "export COHESIX_QEMU_VIRT=on" not in source
     assert "canonical TCG accelerator" not in source

@@ -9,7 +9,7 @@ use crate::sel4;
 
 #[cfg(feature = "kernel")]
 mod types {
-    pub use crate::sel4::{seL4_CPtr, seL4_CapNull, seL4_Error, seL4_MessageInfo};
+    pub use crate::sel4::{seL4_CPtr, seL4_CapNull, seL4_Error, seL4_MessageInfo, seL4_Word};
     pub const FAILED_LOOKUP: seL4_Error = sel4_sys::seL4_FailedLookup;
 }
 
@@ -18,6 +18,7 @@ mod types {
 mod types {
     pub type seL4_CPtr = usize;
     pub type seL4_Error = isize;
+    pub type seL4_Word = usize;
     pub const seL4_CapNull: seL4_CPtr = 0;
     pub const FAILED_LOOKUP: seL4_Error = 6;
 
@@ -52,7 +53,7 @@ mod types {
     }
 }
 
-pub use types::{seL4_CPtr, seL4_CapNull, seL4_Error, seL4_MessageInfo};
+pub use types::{seL4_CPtr, seL4_CapNull, seL4_Error, seL4_MessageInfo, seL4_Word};
 /// Error code returned when an IPC attempt targets the null endpoint.
 pub const FAILED_LOOKUP_ERROR: seL4_Error = types::FAILED_LOOKUP;
 
@@ -100,6 +101,36 @@ pub fn try_call(ep: seL4_CPtr, info: seL4_MessageInfo) -> Result<seL4_MessageInf
     {
         let _ = ep;
         Ok(info)
+    }
+}
+
+/// Issues an seL4 call with caller-owned fast message registers.
+///
+/// On success the returned register array contains the reply MRs produced by
+/// the kernel. The fixed four-word bound matches the AArch64 fast IPC ABI.
+#[inline]
+pub fn try_call_with_message_registers(
+    ep: seL4_CPtr,
+    info: seL4_MessageInfo,
+    message_registers: [seL4_Word; 4],
+) -> Result<(seL4_MessageInfo, [seL4_Word; 4]), seL4_Error> {
+    if !ep_is_valid(ep) {
+        log::warn!("[ipc] skipped: null endpoint.");
+        return Err(FAILED_LOOKUP_ERROR);
+    }
+
+    #[cfg(feature = "kernel")]
+    {
+        return Ok(sel4::call_with_message_registers_unchecked(
+            ep,
+            info,
+            message_registers,
+        ));
+    }
+
+    #[cfg(not(feature = "kernel"))]
+    {
+        Ok((info, message_registers))
     }
 }
 

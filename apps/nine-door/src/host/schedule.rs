@@ -18,6 +18,7 @@ const MAX_LEASE_ID_LEN: usize = 32;
 const MAX_LEASE_SUBJECT_LEN: usize = 32;
 const MAX_LEASE_RESOURCE_LEN: usize = 48;
 const MAX_LEASE_REASON_LEN: usize = 24;
+const LEASE_REQUEST_TAG_BYTES: usize = 16;
 const MAX_EXPORT_ID_LEN: usize = 64;
 const EXPORT_MAX_WINDOWS: usize = 64;
 const LEASE_STATE_ACTIVE: &str = "active";
@@ -91,6 +92,19 @@ struct ScheduleRequest {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "op", rename_all = "lowercase", deny_unknown_fields)]
+enum ScheduleLifecycleCommand {
+    Dequeue { id: String },
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+enum ScheduleCommand {
+    Enqueue(ScheduleRequest),
+    Lifecycle(ScheduleLifecycleCommand),
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "op", rename_all = "lowercase", deny_unknown_fields)]
 enum LeaseCommand {
     Grant {
         id: String,
@@ -101,6 +115,15 @@ enum LeaseCommand {
     },
     Renew {
         id: String,
+        ttl_s: u32,
+        priority: u32,
+    },
+    #[serde(rename = "renew-bound")]
+    RenewBound {
+        id: String,
+        subject: String,
+        resource: String,
+        request: String,
         ttl_s: u32,
         priority: u32,
     },
@@ -191,50 +214,74 @@ impl ScheduleState {
                 "schedule control disabled",
             ));
         }
-        let request: ScheduleRequest = parse_json_line(line, "schedule control")?;
-        validate_schedule_id(&request.id)?;
-        validate_schedule_role(&request.role)?;
-        if request.ticks == 0 || request.budget_ms == 0 {
-            return Err(NineDoorError::protocol(
-                ErrorCode::Invalid,
-                "schedule ticks and budget_ms must be > 0",
-            ));
+        let command: ScheduleCommand = parse_json_line(line, "schedule control")?;
+        match command {
+            ScheduleCommand::Enqueue(request) => {
+                validate_schedule_id(&request.id)?;
+                validate_schedule_role(&request.role)?;
+                if request.ticks == 0 || request.budget_ms == 0 {
+                    return Err(NineDoorError::protocol(
+                        ErrorCode::Invalid,
+                        "schedule ticks and budget_ms must be > 0",
+                    ));
+                }
+                if self.queue_max_entries == 0 {
+                    return Err(NineDoorError::protocol(
+                        ErrorCode::Invalid,
+                        "schedule queue capacity is zero",
+                    ));
+                }
+                if self.queue.len() >= self.queue_max_entries {
+                    self.dropped = self.dropped.saturating_add(1);
+                    return Err(NineDoorError::protocol(
+                        ErrorCode::TooBig,
+                        "schedule queue full",
+                    ));
+                }
+                if self.queue.iter().any(|entry| entry.id == request.id) {
+                    return Err(NineDoorError::protocol(
+                        ErrorCode::Invalid,
+                        "schedule id already exists",
+                    ));
+                }
+                append_log_line(
+                    &mut self.ctl_log,
+                    line,
+                    self.ctl_max_bytes,
+                    "schedule control",
+                )?;
+                let seq = self.next_seq;
+                self.next_seq = self.next_seq.saturating_add(1);
+                self.queue.push_back(ScheduleEntry {
+                    id: request.id,
+                    role: request.role,
+                    priority: request.priority,
+                    ticks: request.ticks,
+                    budget_ms: request.budget_ms,
+                    seq,
+                });
+            }
+            ScheduleCommand::Lifecycle(ScheduleLifecycleCommand::Dequeue { id }) => {
+                validate_schedule_id(&id)?;
+                let front = self.queue.front().ok_or_else(|| {
+                    NineDoorError::protocol(ErrorCode::Invalid, "schedule queue is empty")
+                })?;
+                if front.id != id {
+                    return Err(NineDoorError::protocol(
+                        ErrorCode::Invalid,
+                        "schedule dequeue must match queue head",
+                    ));
+                }
+                append_log_line(
+                    &mut self.ctl_log,
+                    line,
+                    self.ctl_max_bytes,
+                    "schedule control",
+                )?;
+                let _ = self.queue.pop_front();
+                self.dequeued = self.dequeued.saturating_add(1);
+            }
         }
-        if self.queue_max_entries == 0 {
-            return Err(NineDoorError::protocol(
-                ErrorCode::Invalid,
-                "schedule queue capacity is zero",
-            ));
-        }
-        if self.queue.len() >= self.queue_max_entries {
-            self.dropped = self.dropped.saturating_add(1);
-            return Err(NineDoorError::protocol(
-                ErrorCode::TooBig,
-                "schedule queue full",
-            ));
-        }
-        if self.queue.iter().any(|entry| entry.id == request.id) {
-            return Err(NineDoorError::protocol(
-                ErrorCode::Invalid,
-                "schedule id already exists",
-            ));
-        }
-        append_log_line(
-            &mut self.ctl_log,
-            line,
-            self.ctl_max_bytes,
-            "schedule control",
-        )?;
-        let seq = self.next_seq;
-        self.next_seq = self.next_seq.saturating_add(1);
-        self.queue.push_back(ScheduleEntry {
-            id: request.id,
-            role: request.role,
-            priority: request.priority,
-            ticks: request.ticks,
-            budget_ms: request.budget_ms,
-            seq,
-        });
         Ok(())
     }
 
@@ -276,6 +323,7 @@ struct LeaseEntry {
     priority: u32,
     state: &'static str,
     seq: u64,
+    last_request_tag: Option<[u8; LEASE_REQUEST_TAG_BYTES]>,
 }
 
 #[derive(Debug, Clone)]
@@ -304,7 +352,8 @@ pub(crate) struct LeaseState {
     ctl_max_bytes: usize,
     ctl_log: Vec<u8>,
     active: Vec<LeaseEntry>,
-    preemptions: Vec<LeasePreemption>,
+    preemptions: VecDeque<LeasePreemption>,
+    preemptions_total: u64,
     quotas: Vec<LeaseQuota>,
     next_seq: u64,
     proc_summary: bool,
@@ -324,7 +373,8 @@ impl LeaseState {
             ctl_max_bytes: control.ctl_max_bytes,
             ctl_log: Vec::new(),
             active: Vec::new(),
-            preemptions: Vec::new(),
+            preemptions: VecDeque::new(),
+            preemptions_total: 0,
             quotas: Vec::new(),
             next_seq: 1,
             proc_summary: proc.summary,
@@ -410,6 +460,7 @@ impl LeaseState {
                     priority,
                     state: LEASE_STATE_ACTIVE,
                     seq,
+                    last_request_tag: None,
                 });
             }
             LeaseCommand::Renew {
@@ -438,6 +489,54 @@ impl LeaseState {
                 entry.priority = priority;
                 entry.seq = seq;
             }
+            LeaseCommand::RenewBound {
+                id,
+                subject,
+                resource,
+                request,
+                ttl_s,
+                priority,
+            } => {
+                validate_lease_id(&id)?;
+                validate_lease_subject(&subject)?;
+                validate_lease_resource(&resource)?;
+                let request = decode_lease_request_tag(&request)?;
+                if ttl_s == 0 {
+                    return Err(NineDoorError::protocol(
+                        ErrorCode::Invalid,
+                        "lease ttl_s must be > 0",
+                    ));
+                }
+                let entry = self
+                    .active
+                    .iter_mut()
+                    .find(|entry| entry.id == id)
+                    .ok_or_else(|| {
+                        NineDoorError::protocol(ErrorCode::Invalid, "lease id not found")
+                    })?;
+                if entry.subject != subject || entry.resource != resource {
+                    return Err(NineDoorError::protocol(
+                        ErrorCode::Invalid,
+                        "lease binding mismatch",
+                    ));
+                }
+                if entry.last_request_tag == Some(request) {
+                    if entry.ttl_s == ttl_s && entry.priority == priority {
+                        return Ok(());
+                    }
+                    return Err(NineDoorError::protocol(
+                        ErrorCode::Invalid,
+                        "lease request replay changed parameters",
+                    ));
+                }
+                append_log_line(&mut self.ctl_log, line, self.ctl_max_bytes, "lease control")?;
+                let seq = self.next_seq;
+                self.next_seq = self.next_seq.saturating_add(1);
+                entry.ttl_s = ttl_s;
+                entry.priority = priority;
+                entry.seq = seq;
+                entry.last_request_tag = Some(request);
+            }
             LeaseCommand::Preempt { id, reason } => {
                 validate_lease_id(&id)?;
                 validate_lease_reason(&reason)?;
@@ -448,25 +547,27 @@ impl LeaseState {
                     .ok_or_else(|| {
                         NineDoorError::protocol(ErrorCode::Invalid, "lease id not found")
                     })?;
-                if self.preemptions_max_entries == 0
-                    || self.preemptions.len() >= self.preemptions_max_entries
-                {
+                if self.preemptions_max_entries == 0 {
                     return Err(NineDoorError::protocol(
                         ErrorCode::TooBig,
-                        "lease preemptions list full",
+                        "lease preemptions capacity is zero",
                     ));
                 }
                 append_log_line(&mut self.ctl_log, line, self.ctl_max_bytes, "lease control")?;
                 let entry = self.active.swap_remove(position);
                 let seq = self.next_seq;
                 self.next_seq = self.next_seq.saturating_add(1);
-                self.preemptions.push(LeasePreemption {
+                if self.preemptions.len() == self.preemptions_max_entries {
+                    let _ = self.preemptions.pop_front();
+                }
+                self.preemptions.push_back(LeasePreemption {
                     id: entry.id,
                     subject: entry.subject,
                     resource: entry.resource,
                     reason,
                     seq,
                 });
+                self.preemptions_total = self.preemptions_total.saturating_add(1);
             }
             LeaseCommand::Quota {
                 subject,
@@ -520,7 +621,7 @@ impl LeaseState {
         let line = format!(
             "active={} preemptions={} quotas={} max_active={} max_preemptions={}\n",
             self.active.len(),
-            self.preemptions.len(),
+            self.preemptions_total,
             self.quotas.len(),
             self.active_max_entries,
             self.preemptions_max_entries
@@ -532,23 +633,43 @@ impl LeaseState {
     pub(crate) fn active_payload(&self) -> Result<Vec<u8>, NineDoorError> {
         let mut out = String::new();
         for entry in &self.active {
-            let line = format!(
-                "id={} subject={} resource={} ttl_s={} priority={} state={} seq={}\n",
-                entry.id,
-                entry.subject,
-                entry.resource,
-                entry.ttl_s,
-                entry.priority,
-                entry.state,
-                entry.seq
-            );
-            ensure_len("proc/lease/active", line.len(), self.proc_active_bytes)?;
+            let line = self.active_line(entry)?;
             if out.len().saturating_add(line.len()) > self.proc_active_bytes {
                 break;
             }
             out.push_str(&line);
         }
         Ok(out.into_bytes())
+    }
+
+    pub(crate) fn active_by_id_payloads(&self) -> Result<Vec<(String, Vec<u8>)>, NineDoorError> {
+        self.active
+            .iter()
+            .map(|entry| {
+                self.active_line(entry)
+                    .map(|line| (entry.id.clone(), line.into_bytes()))
+            })
+            .collect()
+    }
+
+    fn active_line(&self, entry: &LeaseEntry) -> Result<String, NineDoorError> {
+        let mut line = format!(
+            "id={} subject={} resource={} ttl_s={} priority={} state={} seq={}",
+            entry.id,
+            entry.subject,
+            entry.resource,
+            entry.ttl_s,
+            entry.priority,
+            entry.state,
+            entry.seq
+        );
+        if let Some(request) = entry.last_request_tag {
+            line.push_str(" request=");
+            line.push_str(hex::encode(request).as_str());
+        }
+        line.push('\n');
+        ensure_len("proc/lease/by-id", line.len(), self.proc_active_bytes)?;
+        Ok(line)
     }
 
     pub(crate) fn preemptions_payload(&self) -> Result<Vec<u8>, NineDoorError> {
@@ -801,6 +922,25 @@ fn validate_lease_reason(reason: &str) -> Result<(), NineDoorError> {
     validate_extended_token(reason, MAX_LEASE_REASON_LEN, "lease reason")
 }
 
+fn decode_lease_request_tag(value: &str) -> Result<[u8; LEASE_REQUEST_TAG_BYTES], NineDoorError> {
+    if value.len() != LEASE_REQUEST_TAG_BYTES * 2
+        || !value.bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
+        return Err(NineDoorError::protocol(
+            ErrorCode::Invalid,
+            "lease request must be a 128-bit hexadecimal tag",
+        ));
+    }
+    let mut tag = [0u8; LEASE_REQUEST_TAG_BYTES];
+    hex::decode_to_slice(value.as_bytes(), &mut tag).map_err(|_| {
+        NineDoorError::protocol(
+            ErrorCode::Invalid,
+            "lease request must be a 128-bit hexadecimal tag",
+        )
+    })?;
+    Ok(tag)
+}
+
 fn validate_export_id(id: &str) -> Result<(), NineDoorError> {
     validate_simple_token(id, MAX_EXPORT_ID_LEN, "export id")
 }
@@ -902,7 +1042,7 @@ mod tests {
     }
 
     #[test]
-    fn lease_lists_enforce_configured_capacity() {
+    fn lease_active_and_quota_lists_enforce_capacity_while_preemption_history_rolls() {
         let mut state = LeaseState::new(
             LeaseControlConfig {
                 enable: true,
@@ -949,16 +1089,13 @@ mod tests {
                 r#"{"op":"grant","id":"l3","subject":"s","resource":"r","ttl_s":1,"priority":1}"#,
             )
             .expect("grant after preemptions");
-        let preempt_err = state
+        state
             .append_line(r#"{"op":"preempt","id":"l3","reason":"x"}"#)
-            .expect_err("preemptions list should be full");
-        assert!(matches!(
-            &preempt_err,
-            NineDoorError::Protocol {
-                code: ErrorCode::TooBig,
-                message,
-            } if message == "lease preemptions list full"
-        ));
+            .expect("preemption control must outlive its bounded evidence history");
+        assert_eq!(state.preemptions_total, 3);
+        assert_eq!(state.preemptions.len(), 2);
+        assert_eq!(state.preemptions[0].id, "l2");
+        assert_eq!(state.preemptions[1].id, "l3");
 
         for (subject, resource) in [("s1", "r1"), ("s2", "r2")] {
             state
@@ -1021,6 +1158,108 @@ mod tests {
             state.ctl_log,
             b"{\"op\":\"preempt\",\"id\":\"l1\",\"reason\":\"benchmark\"}\n"
         );
+    }
+
+    #[test]
+    fn lease_bound_renew_is_atomic_correlated_and_idempotent() {
+        let mut state = LeaseState::new(
+            LeaseControlConfig {
+                enable: true,
+                active_max_entries: 2,
+                preemptions_max_entries: 2,
+                ctl_max_bytes: 1024,
+            },
+            ProcLeaseConfig {
+                summary: true,
+                active: true,
+                preemptions: true,
+                summary_bytes: 1024,
+                active_bytes: 1024,
+                preemptions_bytes: 1024,
+            },
+        );
+        state
+            .append_line(
+                r#"{"op":"grant","id":"l1","subject":"worker-1","resource":"gpu0","ttl_s":30,"priority":1}"#,
+            )
+            .expect("grant");
+        let renew = r#"{"op":"renew-bound","id":"l1","subject":"worker-1","resource":"gpu0","request":"00112233445566778899aabbccddeeff","ttl_s":60,"priority":2}"#;
+        state.append_line(renew).expect("bound renew");
+
+        assert_eq!(
+            String::from_utf8(state.active_payload().expect("active payload"))
+                .expect("utf8 active payload"),
+            "id=l1 subject=worker-1 resource=gpu0 ttl_s=60 priority=2 state=active seq=2 request=00112233445566778899aabbccddeeff\n"
+        );
+        let next_seq = state.next_seq;
+        let log = state.ctl_log.clone();
+        state.append_line(renew).expect("exact replay");
+        assert_eq!(state.next_seq, next_seq);
+        assert_eq!(state.ctl_log, log);
+
+        let changed_replay = r#"{"op":"renew-bound","id":"l1","subject":"worker-1","resource":"gpu0","request":"00112233445566778899aabbccddeeff","ttl_s":61,"priority":2}"#;
+        assert!(state.append_line(changed_replay).is_err());
+        let wrong_binding = r#"{"op":"renew-bound","id":"l1","subject":"worker-2","resource":"gpu0","request":"ffeeddccbbaa99887766554433221100","ttl_s":60,"priority":2}"#;
+        assert!(state.append_line(wrong_binding).is_err());
+        assert_eq!(state.next_seq, next_seq);
+        assert_eq!(state.ctl_log, log);
+    }
+
+    #[test]
+    fn lease_by_id_payloads_are_not_truncated_by_aggregate_budget() {
+        let control = LeaseControlConfig {
+            enable: true,
+            active_max_entries: 4,
+            preemptions_max_entries: 4,
+            ctl_max_bytes: 1024,
+        };
+        let mut sizing = LeaseState::new(
+            control,
+            ProcLeaseConfig {
+                summary: true,
+                active: true,
+                preemptions: true,
+                summary_bytes: 1024,
+                active_bytes: 1024,
+                preemptions_bytes: 1024,
+            },
+        );
+        sizing
+            .append_line(
+                r#"{"op":"grant","id":"lease-1","subject":"worker-1","resource":"gpu0","ttl_s":30,"priority":7}"#,
+            )
+            .expect("grant sizing lease");
+        let active_bytes = sizing.active_payload().expect("sizing payload").len();
+
+        let mut state = LeaseState::new(
+            control,
+            ProcLeaseConfig {
+                summary: true,
+                active: true,
+                preemptions: true,
+                summary_bytes: 1024,
+                active_bytes,
+                preemptions_bytes: 1024,
+            },
+        );
+        for index in 1..=3 {
+            state
+                .append_line(
+                    format!(
+                        r#"{{"op":"grant","id":"lease-{index}","subject":"worker-{index}","resource":"gpu0","ttl_s":30,"priority":7}}"#
+                    )
+                    .as_str(),
+                )
+                .expect("grant lease");
+        }
+
+        let aggregate = String::from_utf8(state.active_payload().expect("aggregate payload"))
+            .expect("utf8 aggregate");
+        assert_eq!(aggregate.lines().count(), 1);
+        let by_id = state.active_by_id_payloads().expect("exact payloads");
+        assert_eq!(by_id.len(), 3);
+        assert_eq!(by_id[2].0, "lease-3");
+        assert!(String::from_utf8_lossy(&by_id[2].1).starts_with("id=lease-3 "));
     }
 
     #[test]

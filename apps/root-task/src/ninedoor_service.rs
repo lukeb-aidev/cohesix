@@ -12,7 +12,7 @@
 //! closed unless the supervisor supplies a validated target-child config.
 
 #[cfg(all(target_arch = "aarch64", target_os = "none"))]
-use core::sync::atomic::{compiler_fence, Ordering};
+use core::sync::atomic::{fence, Ordering};
 
 #[cfg(not(all(target_arch = "aarch64", target_os = "none")))]
 use secure9p_transport::validate_namespace_parts;
@@ -157,6 +157,7 @@ impl NineDoorServiceContract {
             || temporal.timeout_badge != config.timeout_badge
             || temporal.timeout_policy != crate::generated::TimeoutPolicy::ReturnError
             || temporal.allowed_donors != ["root-control"]
+            || !temporal.locality_bound
             || temporal.reply_objects != 1
             || temporal.max_donation_depth != 1
             || temporal.scheduling_context_slot != 0
@@ -466,6 +467,7 @@ pub struct TargetNamespaceServiceResources {
     request_frames: [crate::sel4::RamFrame; 2],
     response_frames: [crate::sel4::RamFrame; 2],
     response_scratch: [u8; NAMESPACE_OPERATION_FRAME_BYTES],
+    last_failure: Option<NamespaceTransportFailureEvidence>,
 }
 
 #[cfg(all(target_arch = "aarch64", target_os = "none"))]
@@ -522,6 +524,7 @@ impl TargetNamespaceServiceResources {
             request_frames,
             response_frames,
             response_scratch: [0; NAMESPACE_OPERATION_FRAME_BYTES],
+            last_failure: None,
         })
     }
 
@@ -580,6 +583,7 @@ pub struct NamespaceServiceBoundary {
     next_sequence: u64,
     state: TransportState,
     outstanding: Option<OutstandingNamespaceRequest>,
+    revocation_evidence: Option<NamespaceTransportFailureEvidence>,
     #[cfg(all(target_arch = "aarch64", target_os = "none"))]
     target: Option<TargetNamespaceServiceResources>,
 }
@@ -589,6 +593,44 @@ pub struct NamespaceServiceBoundary {
 pub struct OutstandingNamespaceRequest {
     token: RequestToken,
     opcode: NamespaceOpcode,
+}
+
+/// Exact stage at which the isolated namespace exchange failed closed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum NamespaceTransportFailureStage {
+    /// Root explicitly revoked the generation outside an exchange.
+    ManualRevoke,
+    /// A compatibility exchange supplied no more specific evidence.
+    Exchange,
+    /// Generated root/child configuration or generation validation failed.
+    RequestContract,
+    /// Root-fault call bookkeeping did not match the completed exchange.
+    RecoveryBookkeeping,
+    /// Root-fault recovered the caller after a service timeout.
+    RecoveryTimeout,
+    /// Root-fault recovered the caller after a standard service fault.
+    RecoveryFault,
+    /// Reply label, length, cap metadata, or result bound was invalid.
+    ReplyMetadata,
+    /// Reply MR0 did not echo the exact request sequence.
+    ReplySequence,
+    /// The isolated child returned a typed terminal rejection.
+    ChildRejected,
+    /// The response shared-frame identity or bytes failed validation.
+    ResponseFrame,
+}
+
+/// Bounded scalar evidence retained before terminal generation revocation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct NamespaceTransportFailureEvidence {
+    /// Typed transport failure used by the public error mapping.
+    pub error: TransportError,
+    /// Exact validation stage that produced the failure.
+    pub stage: NamespaceTransportFailureStage,
+    /// Root-owned sequence for this exchange.
+    pub expected_sequence: u64,
+    /// Reply-visible sequence, or zero when none was available.
+    pub observed_sequence: u64,
 }
 
 impl OutstandingNamespaceRequest {
@@ -614,6 +656,11 @@ trait NamespaceServiceExchange {
         path: &str,
         payload: &str,
     ) -> Result<(), TransportError>;
+
+    /// Consume bounded failure evidence retained by a target exchange.
+    fn take_failure_evidence(&mut self) -> Option<NamespaceTransportFailureEvidence> {
+        None
+    }
 }
 
 #[cfg(not(all(target_arch = "aarch64", target_os = "none")))]
@@ -642,6 +689,7 @@ impl NamespaceServiceBoundary {
             next_sequence: 1,
             state: TransportState::Open,
             outstanding: None,
+            revocation_evidence: None,
             #[cfg(all(target_arch = "aarch64", target_os = "none"))]
             target: None,
         }
@@ -657,6 +705,7 @@ impl NamespaceServiceBoundary {
             next_sequence: 1,
             state: TransportState::Open,
             outstanding: None,
+            revocation_evidence: None,
             #[cfg(all(target_arch = "aarch64", target_os = "none"))]
             target: None,
         })
@@ -676,6 +725,7 @@ impl NamespaceServiceBoundary {
             next_sequence: 1,
             state: TransportState::Open,
             outstanding: None,
+            revocation_evidence: None,
             target: Some(resources),
         })
     }
@@ -726,7 +776,15 @@ impl NamespaceServiceBoundary {
                         | TransportError::StaleIdentity
                         | TransportError::InvalidAbi
                 ) {
-                    self.revoke();
+                    let evidence = exchange.take_failure_evidence().unwrap_or(
+                        NamespaceTransportFailureEvidence {
+                            error,
+                            stage: NamespaceTransportFailureStage::Exchange,
+                            expected_sequence: outstanding.token.sequence,
+                            observed_sequence: 0,
+                        },
+                    );
+                    self.revoke_with_evidence(evidence);
                 } else {
                     self.finish(outstanding);
                 }
@@ -811,8 +869,18 @@ impl NamespaceServiceBoundary {
 
     /// Revoke this generation. It cannot be reopened.
     pub fn revoke(&mut self) {
+        self.revoke_with_evidence(NamespaceTransportFailureEvidence {
+            error: TransportError::Revoked,
+            stage: NamespaceTransportFailureStage::ManualRevoke,
+            expected_sequence: self.next_sequence.saturating_sub(1),
+            observed_sequence: 0,
+        });
+    }
+
+    fn revoke_with_evidence(&mut self, evidence: NamespaceTransportFailureEvidence) {
         self.outstanding = None;
         self.state = TransportState::Revoked;
+        self.revocation_evidence = Some(evidence);
     }
 
     /// Fence the target generation and return its root mappings to the HAL for
@@ -835,6 +903,21 @@ impl NamespaceServiceBoundary {
     #[must_use]
     pub const fn state(&self) -> TransportState {
         self.state
+    }
+
+    /// Return the exact terminal transport cause retained before containment.
+    #[must_use]
+    pub const fn revocation_error(&self) -> Option<TransportError> {
+        match self.revocation_evidence {
+            Some(evidence) => Some(evidence.error),
+            None => None,
+        }
+    }
+
+    /// Return bounded stage and sequence evidence retained before revocation.
+    #[must_use]
+    pub(crate) const fn revocation_evidence(&self) -> Option<NamespaceTransportFailureEvidence> {
+        self.revocation_evidence
     }
 
     fn finish(&mut self, outstanding: OutstandingNamespaceRequest) {
@@ -864,36 +947,79 @@ fn validate_service_reply(
     meta: ServiceReplyMeta,
     response_frame: &[u8],
 ) -> Result<(), TransportError> {
+    validate_service_reply_detailed(request, path, payload, meta, response_frame)
+        .map_err(|evidence| evidence.error)
+}
+
+fn validate_service_reply_detailed(
+    request: NamespaceRequestHeader,
+    path: &str,
+    payload: &str,
+    meta: ServiceReplyMeta,
+    response_frame: &[u8],
+) -> Result<(), NamespaceTransportFailureEvidence> {
+    let evidence = |error, stage| NamespaceTransportFailureEvidence {
+        error,
+        stage,
+        expected_sequence: request.sequence,
+        observed_sequence: meta.sequence,
+    };
     if meta.length != 2 || meta.extra_caps != 0 || meta.caps_unwrapped != 0 {
-        return Err(TransportError::InvalidAbi);
+        return Err(evidence(
+            TransportError::InvalidAbi,
+            NamespaceTransportFailureStage::ReplyMetadata,
+        ));
     }
     if meta.sequence != request.sequence {
-        return Err(TransportError::StaleIdentity);
+        return Err(evidence(
+            TransportError::StaleIdentity,
+            NamespaceTransportFailureStage::ReplySequence,
+        ));
     }
     if meta.label == NAMESPACE_REJECTED_LABEL {
         return match TransportError::from_wire_code(meta.value) {
-            Ok(error) => Err(error),
-            Err(error) => Err(error),
+            Ok(error) | Err(error) => Err(evidence(
+                error,
+                NamespaceTransportFailureStage::ChildRejected,
+            )),
         };
     }
     if meta.label != NAMESPACE_PREPARED_LABEL {
-        return Err(TransportError::InvalidAbi);
+        return Err(evidence(
+            TransportError::InvalidAbi,
+            NamespaceTransportFailureStage::ReplyMetadata,
+        ));
     }
-    let response_len = usize::try_from(meta.value).map_err(|_| TransportError::InvalidLimits)?;
+    let response_len = usize::try_from(meta.value).map_err(|_| {
+        evidence(
+            TransportError::InvalidLimits,
+            NamespaceTransportFailureStage::ReplyMetadata,
+        )
+    })?;
     if !(NAMESPACE_HEADER_BYTES
         ..=NAMESPACE_HEADER_BYTES + NAMESPACE_PATH_MAX + NAMESPACE_PAYLOAD_MAX)
         .contains(&response_len)
         || response_frame.len() != response_len
     {
-        return Err(TransportError::InvalidLimits);
+        return Err(evidence(
+            TransportError::InvalidLimits,
+            NamespaceTransportFailureStage::ReplyMetadata,
+        ));
     }
     let response = validate_namespace_response(
         response_frame,
-        request.token()?,
-        NamespaceOpcode::try_from(request.opcode)?,
-    )?;
+        request
+            .token()
+            .map_err(|error| evidence(error, NamespaceTransportFailureStage::ResponseFrame))?,
+        NamespaceOpcode::try_from(request.opcode)
+            .map_err(|error| evidence(error, NamespaceTransportFailureStage::ResponseFrame))?,
+    )
+    .map_err(|error| evidence(error, NamespaceTransportFailureStage::ResponseFrame))?;
     if response.path() != path || response.payload() != payload {
-        return Err(TransportError::InvalidAbi);
+        return Err(evidence(
+            TransportError::InvalidAbi,
+            NamespaceTransportFailureStage::ResponseFrame,
+        ));
     }
     Ok(())
 }
@@ -906,7 +1032,14 @@ impl NamespaceServiceExchange for TargetNamespaceServiceResources {
         path: &str,
         payload: &str,
     ) -> Result<(), TransportError> {
+        self.last_failure = None;
         if !self.config.valid() || header.generation != self.config.generation {
+            self.last_failure = Some(NamespaceTransportFailureEvidence {
+                error: TransportError::InvalidAbi,
+                stage: NamespaceTransportFailureStage::RequestContract,
+                expected_sequence: header.sequence,
+                observed_sequence: 0,
+            });
             return Err(TransportError::InvalidAbi);
         }
         let request_len = NAMESPACE_HEADER_BYTES
@@ -933,35 +1066,88 @@ impl NamespaceServiceExchange for TargetNamespaceServiceResources {
             NAMESPACE_HEADER_BYTES + path.len(),
             payload.as_bytes(),
         )?;
-        compiler_fence(Ordering::Release);
+        // Publish every shared-frame store before the synchronous IPC makes
+        // the request sequence visible to another TCB. A compiler fence is
+        // insufficient on AArch64 because the SVC boundary is not the
+        // ownership protocol for ordinary cached shared memory.
+        fence(Ordering::Release);
 
-        crate::sel4::set_message_register(0, header.sequence as crate::sel4::seL4_Word);
-        crate::sel4::set_message_register(1, request_len as crate::sel4::seL4_Word);
         let request_tag = crate::ipc::seL4_MessageInfo::new(
             NAMESPACE_REQUEST_LABEL as crate::sel4::seL4_Word,
             0,
             0,
             2,
         );
+        let request_registers = [
+            header.sequence as crate::sel4::seL4_Word,
+            request_len as crate::sel4::seL4_Word,
+            0,
+            0,
+        ];
         crate::hal::critical_tcb::arm_target_service_call(SERVICE_TASK_ID, header.sequence)
             .map_err(|_| TransportError::Closed)?;
-        let reply_result = crate::ipc::try_call(self.config.endpoint_cptr, request_tag);
+        let reply_result = crate::ipc::try_call_with_message_registers(
+            self.config.endpoint_cptr,
+            request_tag,
+            request_registers,
+        );
         let recovery_result =
             crate::hal::critical_tcb::finish_target_service_call(SERVICE_TASK_ID, header.sequence);
-        let reply = reply_result.map_err(|_| TransportError::Closed)?;
-        recovery_result.map_err(|_| TransportError::InvalidAbi)?;
-        compiler_fence(Ordering::Acquire);
+        let (reply, reply_registers) = reply_result.map_err(|_| TransportError::Closed)?;
+        let completion = match recovery_result {
+            Ok(completion) => completion,
+            Err(_) => {
+                self.last_failure = Some(NamespaceTransportFailureEvidence {
+                    error: TransportError::InvalidAbi,
+                    stage: NamespaceTransportFailureStage::RecoveryBookkeeping,
+                    expected_sequence: header.sequence,
+                    observed_sequence: 0,
+                });
+                return Err(TransportError::InvalidAbi);
+            }
+        };
+        if let crate::hal::critical_tcb::TargetServiceCallCompletion::Recovered {
+            request_sequence,
+            fault_sequence: _,
+            fault_class,
+        } = completion
+        {
+            let stage = match fault_class {
+                crate::critical_tcb::FaultClass::Timeout => {
+                    NamespaceTransportFailureStage::RecoveryTimeout
+                }
+                crate::critical_tcb::FaultClass::Standard => {
+                    NamespaceTransportFailureStage::RecoveryFault
+                }
+            };
+            self.last_failure = Some(NamespaceTransportFailureEvidence {
+                error: TransportError::Closed,
+                stage,
+                expected_sequence: header.sequence,
+                observed_sequence: request_sequence,
+            });
+            return Err(TransportError::Closed);
+        }
+        // Pair with the child's release publication before validating bytes
+        // from its response mapping.
+        fence(Ordering::Acquire);
         let meta = ServiceReplyMeta {
             label: reply.label() as u64,
             length: reply.length() as usize,
             extra_caps: reply.extra_caps() as usize,
             caps_unwrapped: reply.caps_unwrapped() as usize,
-            sequence: crate::sel4::message_register(0) as u64,
-            value: crate::sel4::message_register(1) as u64,
+            sequence: reply_registers[0] as u64,
+            value: reply_registers[1] as u64,
         };
 
         if meta.label != NAMESPACE_PREPARED_LABEL {
-            return validate_service_reply(header, path, payload, meta, &[]);
+            return match validate_service_reply_detailed(header, path, payload, meta, &[]) {
+                Ok(()) => Ok(()),
+                Err(evidence) => {
+                    self.last_failure = Some(evidence);
+                    Err(evidence.error)
+                }
+            };
         }
         let response_len =
             usize::try_from(meta.value).map_err(|_| TransportError::InvalidLimits)?;
@@ -972,13 +1158,23 @@ impl NamespaceServiceExchange for TargetNamespaceServiceResources {
             &self.response_frames,
             &mut self.response_scratch[..response_len],
         )?;
-        validate_service_reply(
+        match validate_service_reply_detailed(
             header,
             path,
             payload,
             meta,
             &self.response_scratch[..response_len],
-        )
+        ) {
+            Ok(()) => Ok(()),
+            Err(evidence) => {
+                self.last_failure = Some(evidence);
+                Err(evidence.error)
+            }
+        }
+    }
+
+    fn take_failure_evidence(&mut self) -> Option<NamespaceTransportFailureEvidence> {
+        self.last_failure.take()
     }
 }
 
@@ -1143,6 +1339,7 @@ mod tests {
         assert_eq!(prepared.header().sequence, 1);
         assert_eq!(prepared.header().generation, 4);
         boundary.revoke();
+        assert_eq!(boundary.revocation_error(), Some(TransportError::Revoked));
         assert_eq!(
             boundary.prepare(NamespaceOpcode::Cat, "/proc/boot", ""),
             Err(TransportError::Revoked)
@@ -1213,6 +1410,19 @@ mod tests {
                 "",
             ),
             Err(TransportError::StaleIdentity)
+        );
+        assert_eq!(
+            boundary.revocation_error(),
+            Some(TransportError::StaleIdentity)
+        );
+        assert_eq!(
+            boundary.revocation_evidence(),
+            Some(NamespaceTransportFailureEvidence {
+                error: TransportError::StaleIdentity,
+                stage: NamespaceTransportFailureStage::Exchange,
+                expected_sequence: 2,
+                observed_sequence: 0,
+            })
         );
         assert_eq!(
             boundary.prepare(NamespaceOpcode::Cat, "/proc/boot", ""),
@@ -1350,22 +1560,40 @@ mod tests {
 
         let runtime_source = include_str!("../../nine-door-runtime/src/kernel.rs");
         let install_ipc_buffer = runtime_source.find("seL4_SetIPCBuffer(").unwrap();
-        let receive_syscall = runtime_source.find("seL4_Recv(").unwrap();
+        let receive_syscall = runtime_source.find("seL4_RecvWithMRs(").unwrap();
         let initial_receive = runtime_source
-            .find("let mut tag = receive(descriptor, &mut badge);")
+            .find("let mut tag = receive(descriptor, &mut badge, &mut message_registers);")
             .unwrap();
         let receive_loop =
             initial_receive + runtime_source[initial_receive..].find("loop {").unwrap();
         let atomic_reply_receive = runtime_source
-            .find("tag = reply_receive(descriptor, &mut badge, reply_label);")
+            .find(
+                "tag = reply_receive(descriptor, &mut badge, reply_label, &mut message_registers);",
+            )
             .unwrap();
         assert!(install_ipc_buffer < receive_syscall);
         assert!(initial_receive < receive_loop);
         assert!(receive_loop < atomic_reply_receive);
         assert_eq!(runtime_source.matches("seL4_SetIPCBuffer(").count(), 1);
-        assert_eq!(runtime_source.matches("seL4_Recv(").count(), 1);
-        assert_eq!(runtime_source.matches("seL4_ReplyRecv(").count(), 1);
+        assert_eq!(runtime_source.matches("seL4_RecvWithMRs(").count(), 1);
+        assert_eq!(runtime_source.matches("seL4_ReplyRecvWithMRs(").count(), 1);
+        assert!(!runtime_source.contains("seL4_GetMR("));
+        assert!(!runtime_source.contains("seL4_SetMR("));
         assert!(!runtime_source.contains("seL4_MCS_Reply("));
+        assert!(runtime_source.contains("fence(Ordering::Acquire)"));
+        assert!(runtime_source.contains("fence(Ordering::Release)"));
+        assert!(!runtime_source.contains("compiler_fence"));
+
+        let root_boundary_source = include_str!("ninedoor_service.rs")
+            .split_once("#[cfg(test)]\nmod tests")
+            .expect("test module boundary")
+            .0;
+        assert!(root_boundary_source.contains("fence(Ordering::Acquire)"));
+        assert!(root_boundary_source.contains("fence(Ordering::Release)"));
+        assert!(root_boundary_source.contains("try_call_with_message_registers("));
+        assert!(!root_boundary_source.contains("set_message_register("));
+        assert!(!root_boundary_source.contains("message_register(0)"));
+        assert!(!root_boundary_source.contains("compiler_fence"));
     }
 
     #[test]
@@ -1383,6 +1611,34 @@ mod tests {
         assert_eq!(
             validate_service_reply(header, "/proc/boot", "", base, &[]),
             Err(TransportError::InvalidAbi)
+        );
+        assert_eq!(
+            validate_service_reply_detailed(header, "/proc/boot", "", base, &[]),
+            Err(NamespaceTransportFailureEvidence {
+                error: TransportError::InvalidAbi,
+                stage: NamespaceTransportFailureStage::ReplyMetadata,
+                expected_sequence: 1,
+                observed_sequence: 1,
+            })
+        );
+        assert_eq!(
+            validate_service_reply_detailed(
+                header,
+                "/proc/boot",
+                "",
+                ServiceReplyMeta {
+                    extra_caps: 0,
+                    sequence: 2,
+                    ..base
+                },
+                &[],
+            ),
+            Err(NamespaceTransportFailureEvidence {
+                error: TransportError::StaleIdentity,
+                stage: NamespaceTransportFailureStage::ReplySequence,
+                expected_sequence: 1,
+                observed_sequence: 2,
+            })
         );
         assert_eq!(
             validate_service_reply(

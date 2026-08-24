@@ -34,7 +34,7 @@ from test_plan_evidence import environment_secret_values, redact_text
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 BANNER = "NON-CLAIMING TARGET DIAGNOSTIC"
 RESULT_SCHEMA = "cohesix-test-plan-convergence/v1"
-OBSERVATION_SCHEMA = "cohesix-target-observation/v1"
+OBSERVATION_SCHEMA = "cohesix-target-observation/v2"
 
 
 class ConvergenceError(ValueError):

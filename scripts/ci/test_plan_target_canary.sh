@@ -18,6 +18,7 @@ image_path=""
 image_identity_path=""
 profile=""
 operation_script=""
+operation_log=""
 qemu_pid=""
 
 usage() {
@@ -57,7 +58,8 @@ write_observation() {
     "${serial_source_log}" \
     "${image_path}" \
     "${image_identity_path}" \
-    "${operation_script}" <<'PY'
+    "${operation_script}" \
+    "${operation_log}" <<'PY'
 import hashlib
 import json
 import os
@@ -78,6 +80,7 @@ import sys
     image_raw,
     identity_raw,
     operation_raw,
+    operation_log_raw,
 ) = sys.argv[1:]
 
 
@@ -100,7 +103,7 @@ def file_record(raw: str):
 
 
 payload = {
-    "schema": "cohesix-target-observation/v1",
+    "schema": "cohesix-target-observation/v2",
     "banner": "NON-CLAIMING TARGET DIAGNOSTIC",
     "claiming": False,
     "result": result,
@@ -115,6 +118,7 @@ payload = {
     "built_image": file_record(image_raw),
     "image_identity": file_record(identity_raw),
     "operation_script": file_record(operation_raw),
+    "operation_log": file_record(operation_log_raw),
 }
 output = Path(output_raw).resolve()
 output.parent.mkdir(parents=True, exist_ok=True)
@@ -272,6 +276,7 @@ unexpected_faults() {
 qemu_canary() {
   profile="qemu_smp_production / configs/root_task.toml"
   local sel4_build="${repo_root}/out/sel4/profile-v2/qemu-smp-production"
+  local qemu_bin="${TEST_PLAN_CONVERGENCE_QEMU_BIN:-${QEMU_BIN:-qemu-system-aarch64}}"
   local launch_existing=${TEST_PLAN_CONVERGENCE_LAUNCH_EXISTING:-0}
   local qemu_out
   if [[ "${launch_existing}" == "1" ]]; then
@@ -294,6 +299,7 @@ PY
     --profile release
     --root-task-features release-qemu,bootstrap-trace
     --cargo-target aarch64-unknown-none
+    --qemu "${qemu_bin}"
     --transport tcp
     --tcp-port "${port}"
   )
@@ -366,9 +372,10 @@ PY
     worker_ready_before=$(marker_count \
       "${serial_log}" "WORKER_TASK_READY role=worker-heartbeat")
   fi
+  operation_log="${state_dir}/target-operation.log"
   run_live_operation \
     "${binary}" 127.0.0.1 "${port}" "${token}" \
-    "${state_dir}/target-operation.log" || \
+    "${operation_log}" || \
     die "live QEMU operation failed"
   if [[ "${focus}" == "worker" ]]; then
     current_layer="changed-service-ready"

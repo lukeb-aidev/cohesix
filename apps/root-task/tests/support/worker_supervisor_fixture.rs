@@ -11,7 +11,7 @@ use root_task::hal::worker_image::{
 };
 use root_task::worker_supervisor::{
     WorkerChildContract, WorkerConstructionPhase, WorkerContainmentProof, WorkerKernelBackend,
-    WorkerSupervisor, WorkerSupervisorError, WorkerTerminalReason,
+    WorkerResumeDisposition, WorkerSupervisor, WorkerSupervisorError, WorkerTerminalReason,
 };
 use sha2::{Digest, Sha256};
 use worker_task_abi::{
@@ -40,6 +40,7 @@ pub struct FakeBackend {
     pub events: Vec<Event>,
     pub fail_phase: Option<WorkerConstructionPhase>,
     pub containment_complete: bool,
+    pub defer_resume: bool,
     pub init: Option<WorkerRuntimeInit>,
 }
 
@@ -113,12 +114,17 @@ impl WorkerKernelBackend for FakeBackend {
         }
     }
 
-    fn resume(&mut self, _bundle: Self::Bundle) -> Result<(), WorkerSupervisorError> {
+    fn resume(
+        &mut self,
+        _bundle: Self::Bundle,
+    ) -> Result<WorkerResumeDisposition, WorkerSupervisorError> {
         self.events.push(Event::Resume);
         if self.fail(WorkerConstructionPhase::Resume) {
             Err(WorkerSupervisorError::Backend)
+        } else if self.defer_resume {
+            Ok(WorkerResumeDisposition::Deferred)
         } else {
-            Ok(())
+            Ok(WorkerResumeDisposition::Running)
         }
     }
 
@@ -236,9 +242,10 @@ pub fn image_fixture(role: WorkerRole) -> (Vec<u8>, WorkerImagePlan) {
 
 pub fn starting(role: WorkerRole, lease_epoch: u64) -> (WorkerSupervisor<FakeBackend>, Vec<u8>) {
     let (image, plan) = image_fixture(role);
-    let mut supervisor = WorkerSupervisor::new(FakeBackend::passing());
+    let mut supervisor =
+        WorkerSupervisor::new(FakeBackend::passing()).expect("generated Worker pool");
     supervisor
-        .spawn(role, lease_epoch, &plan, &image, 100)
+        .spawn(role, 0, lease_epoch, &plan, &image, 100)
         .expect("spawn must construct");
     (supervisor, image)
 }

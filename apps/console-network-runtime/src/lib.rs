@@ -12,8 +12,8 @@
 pub use console_network_abi as abi;
 
 use abi::{
-    ExchangeKind, RuntimeInitDescriptor, SendBatchCursor, COMMAND_LINE_BYTES, CONSOLE_OUTPUT_BYTES,
-    CONSOLE_PAYLOAD_BYTES,
+    CommandBatchBuilder, ExchangeKind, RuntimeInitDescriptor, SendBatchCursor,
+    COMMAND_BATCH_MAX_RECORDS, COMMAND_LINE_BYTES, CONSOLE_OUTPUT_BYTES, CONSOLE_PAYLOAD_BYTES,
 };
 use heapless::{Deque, Vec as HeaplessVec};
 use smoltcp::iface::{
@@ -309,7 +309,13 @@ impl ServiceEvent {
         self.now_ms
     }
 
-    /// Validated UTF-8 payload when present.
+    /// Exact initialized payload bytes.
+    #[must_use]
+    pub fn payload_bytes(&self) -> &[u8] {
+        self.payload.as_slice()
+    }
+
+    /// Validated UTF-8 payload when the event kind carries plain text.
     pub fn payload(&self) -> Result<&str, RuntimeError> {
         core::str::from_utf8(self.payload.as_slice()).map_err(|_| RuntimeError::ConsoleFrame)
     }
@@ -592,6 +598,72 @@ impl TransportSession {
     /// Pop one typed event for root policy.
     pub fn pop_event(&mut self) -> Option<ServiceEvent> {
         self.events.pop_front()
+    }
+
+    /// Pop one lifecycle event or coalesce a bounded consecutive command run.
+    ///
+    /// Lifecycle and connection-identity changes fence batching. The returned
+    /// command batch retains each command's exact observation timestamp and
+    /// consumes only commands that fit the fixed exchange-page payload.
+    pub fn pop_publication_event(
+        &mut self,
+        max_commands_per_wake: u16,
+    ) -> Result<Option<ServiceEvent>, RuntimeError> {
+        let Some(first) = self.events.pop_front() else {
+            return Ok(None);
+        };
+        let limit = usize::from(max_commands_per_wake).min(COMMAND_BATCH_MAX_RECORDS);
+        if first.kind != ExchangeKind::Command || limit <= 1 {
+            return Ok(Some(first));
+        }
+
+        let mut storage = [0u8; CONSOLE_PAYLOAD_BYTES];
+        let mut builder = CommandBatchBuilder::new(&mut storage);
+        let first_command = first.payload()?;
+        if !builder
+            .try_push_command(first.now_ms, first_command)
+            .map_err(|_| RuntimeError::ConsoleFrame)?
+        {
+            return Err(RuntimeError::ConsoleFrame);
+        }
+
+        while builder.record_count() < limit {
+            let Some(next) = self.events.front() else {
+                break;
+            };
+            if next.kind != ExchangeKind::Command || next.connection_id != first.connection_id {
+                break;
+            }
+            let command = next.payload()?;
+            if !builder
+                .try_push_command(next.now_ms, command)
+                .map_err(|_| RuntimeError::ConsoleFrame)?
+            {
+                break;
+            }
+            if self.events.pop_front().is_none() {
+                return Err(RuntimeError::ConsoleFrame);
+            }
+        }
+
+        if builder.record_count() == 1 {
+            return Ok(Some(first));
+        }
+
+        let payload_len = builder
+            .finish()
+            .map_err(|_| RuntimeError::ConsoleFrame)?
+            .len();
+        let mut payload = HeaplessVec::new();
+        payload
+            .extend_from_slice(&storage[..payload_len])
+            .map_err(|_| RuntimeError::ConsoleFrame)?;
+        Ok(Some(ServiceEvent {
+            kind: ExchangeKind::CommandBatch,
+            connection_id: first.connection_id,
+            now_ms: first.now_ms,
+            payload,
+        }))
     }
 
     /// Request a graceful close after all queued wire output is copied.
@@ -1224,6 +1296,14 @@ impl<'a> ConsoleNetworkService<'a> {
         self.session.pop_event()
     }
 
+    /// Pop one bounded publication event using the generated command quantum.
+    pub fn pop_publication_event(
+        &mut self,
+        max_commands_per_wake: u16,
+    ) -> Result<Option<ServiceEvent>, RuntimeError> {
+        self.session.pop_publication_event(max_commands_per_wake)
+    }
+
     /// Whether one typed service event is retained for publication.
     #[must_use]
     pub fn service_event_pending(&self) -> bool {
@@ -1500,7 +1580,7 @@ mod tests {
         publication_credit_available = false;
         assert!(
             !scheduler.local_poll_eligible(publication_credit_available, all_ready),
-            "ControlCompleted must be observed before another event or egress publication"
+            "one semantic publication must be observed before another event or egress publication"
         );
 
         // A later Observe->ACK grants exactly one new credit.
@@ -1817,6 +1897,70 @@ mod tests {
         let command = session.pop_event().unwrap();
         assert_eq!(command.kind(), ExchangeKind::Command);
         assert_eq!(command.payload().unwrap(), "cat /proc/boot");
+    }
+
+    #[test]
+    fn publication_event_coalesces_only_the_bounded_consecutive_command_run() {
+        let mut session = TransportSession::new(descriptor()).unwrap();
+        session.begin(1, 10).unwrap();
+        assert_eq!(session.pop_event().unwrap().kind(), ExchangeKind::Connected);
+        session.ingest(&framed(b"AUTH secret"), 20).unwrap();
+        assert_eq!(
+            session.pop_event().unwrap().kind(),
+            ExchangeKind::Authenticated
+        );
+
+        for (now_ms, command) in [
+            (30, b"help".as_slice()),
+            (31, b"smp"),
+            (32, b"bi"),
+            (33, b"caps"),
+        ] {
+            session.ingest(&framed(command), now_ms).unwrap();
+        }
+        let batch = session.pop_publication_event(3).unwrap().unwrap();
+        assert_eq!(batch.kind(), ExchangeKind::CommandBatch);
+        assert_eq!(batch.connection_id(), 1);
+        let mut cursor = abi::CommandBatchCursor::validate(batch.payload_bytes()).unwrap();
+        assert_eq!(
+            cursor.next_command(batch.payload_bytes()).unwrap(),
+            Some((30, "help"))
+        );
+        assert_eq!(
+            cursor.next_command(batch.payload_bytes()).unwrap(),
+            Some((31, "smp"))
+        );
+        assert_eq!(
+            cursor.next_command(batch.payload_bytes()).unwrap(),
+            Some((32, "bi"))
+        );
+        assert_eq!(cursor.next_command(batch.payload_bytes()), Ok(None));
+
+        let remaining = session.pop_publication_event(8).unwrap().unwrap();
+        assert_eq!(remaining.kind(), ExchangeKind::Command);
+        assert_eq!(remaining.payload().unwrap(), "caps");
+    }
+
+    #[test]
+    fn lifecycle_events_fence_command_publication_batches() {
+        let mut session = TransportSession::new(descriptor()).unwrap();
+        session.begin(1, 10).unwrap();
+        assert_eq!(session.pop_event().unwrap().kind(), ExchangeKind::Connected);
+        session.ingest(&framed(b"AUTH secret"), 20).unwrap();
+        assert_eq!(
+            session.pop_event().unwrap().kind(),
+            ExchangeKind::Authenticated
+        );
+        session.ingest(&framed(b"help"), 30).unwrap();
+        session.end(31).unwrap();
+
+        let command = session.pop_publication_event(8).unwrap().unwrap();
+        assert_eq!(command.kind(), ExchangeKind::Command);
+        assert_eq!(command.payload().unwrap(), "help");
+        assert_eq!(
+            session.pop_publication_event(8).unwrap().unwrap().kind(),
+            ExchangeKind::Disconnected
+        );
     }
 
     #[test]
@@ -2987,16 +3131,13 @@ mod tests {
             .unwrap();
 
         let mut scheduler = ChildTurnScheduler::new();
-        let mut completions: Deque<(ExchangeKind, u64, u64), 3> = Deque::new();
         let mut staged_packet: Option<std::vec::Vec<u8>> = None;
         let mut packet_signal = false;
         let mut packet_inflight = false;
-        let mut packet_sequence = 0u64;
         let mut units = std::vec::Vec::new();
         let mut poll_outcomes = std::vec::Vec::new();
         let mut event_creation_turns = std::vec::Vec::new();
         let mut published_events = std::vec::Vec::new();
-        let mut published_completion_turns = std::vec::Vec::new();
         let mut published_egress_turns = std::vec::Vec::new();
         let mut auth_sent = false;
         let mut received = std::vec::Vec::new();
@@ -3020,13 +3161,12 @@ mod tests {
                     staged_packet = Some(packet[..length].to_vec());
                     packet_signal = true;
                     packet_inflight = true;
-                    packet_sequence = packet_sequence.saturating_add(1).max(1);
                 }
             }
 
             let this_packet_signal = core::mem::take(&mut packet_signal);
             let readiness_before_gate = ChildTurnReadiness::new(
-                !completions.is_empty(),
+                false,
                 service.service_event_pending(),
                 service.egress_pending(),
             );
@@ -3053,7 +3193,7 @@ mod tests {
                 }
                 scheduler.retain_notification(this_packet_signal, control_signal);
                 let readiness = ChildTurnReadiness::new(
-                    !completions.is_empty(),
+                    false,
                     service.service_event_pending(),
                     service.egress_pending(),
                 );
@@ -3061,17 +3201,7 @@ mod tests {
                 units.push(unit);
                 match unit {
                     ChildTurnUnit::PublishCompletion => {
-                        assert!(publication_credit_available);
-                        credited_publication_polls += usize::from(local_poll_eligible);
-                        let (kind, related_sequence, _) = completions.pop_front().unwrap();
-                        published_completion_turns.push(turn);
-                        if kind == ExchangeKind::PacketConsumed {
-                            assert_eq!(related_sequence, packet_sequence);
-                            packet_inflight = false;
-                        }
-                        publication_credit_available = false;
-                        root_observed_publications = root_observed_publications.saturating_add(1);
-                        pending_publication_ack = true;
+                        panic!("input completion watermarks never consume the event slot")
                     }
                     ChildTurnUnit::PublishServiceEvent => {
                         assert!(publication_credit_available);
@@ -3108,9 +3238,10 @@ mod tests {
                     ChildTurnUnit::IngestPacket => {
                         let packet = staged_packet.take().unwrap();
                         service.ingest_packet(packet.as_slice()).unwrap();
-                        completions
-                            .push_back((ExchangeKind::PacketConsumed, packet_sequence, 0))
-                            .unwrap();
+                        // The child publishes this exact sequence in the
+                        // event-page trailer. It neither consumes publication
+                        // credit nor waits for a semantic event ACK.
+                        packet_inflight = false;
                         scheduler.complete(ChildTurnUnit::IngestPacket);
                         scheduler.request_service();
                     }
@@ -3171,7 +3302,7 @@ mod tests {
         assert!(authenticated_turn < ok_egress_turn);
         assert!(units.contains(&ChildTurnUnit::IngestPacket));
         assert!(units.contains(&ChildTurnUnit::PollService));
-        assert!(units.contains(&ChildTurnUnit::PublishCompletion));
+        assert!(!units.contains(&ChildTurnUnit::PublishCompletion));
         assert!(units.contains(&ChildTurnUnit::PublishServiceEvent));
         assert!(units.contains(&ChildTurnUnit::PublishEgress));
         assert!(poll_outcomes.len() >= 3);
@@ -3216,12 +3347,6 @@ mod tests {
         assert!(event_creation_turns
             .iter()
             .any(|(_, _, outcome)| *outcome == ServicePollOutcome::Continuation));
-        assert!(published_completion_turns.iter().all(|turn| {
-            !published_events
-                .iter()
-                .any(|(event_turn, _)| event_turn == turn)
-                && !published_egress_turns.contains(turn)
-        }));
         assert!(published_events
             .iter()
             .all(|(turn, _)| !published_egress_turns.contains(turn)));

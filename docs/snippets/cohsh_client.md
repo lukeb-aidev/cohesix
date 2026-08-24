@@ -3,12 +3,12 @@
 <!-- Copyright 2026 Lukas Bower -->
 
 ### cohsh client defaults (generated)
-- `manifest.sha256`: `72b6fdbd175150ec352f9345d99791a1d576cf01de47363aed2a64ad0c463a93`
+- `manifest.sha256`: `10f33db7f20f039701ec8d2c5d206aba45a67f4b7e359b22dc2e24a0cc055cbd`
 - `worker.task_abi_schema`: `worker-task-abi/v1`
 - `worker.task_abi_version`: `1`
 - `worker.observation_schema`: `cohesix-worker-observation/v1`
 - `worker.integration_evidence_schema`: `cohesix-worker-integration-evidence/v1`
-- `worker.maximum_live_tasks`: `3`
+- `worker.maximum_live_tasks`: `37`
 - `worker.canonical_telemetry_template`: `/shard/<label>/worker/<id>/telemetry`
 - `worker.shard_bits`: `8`
 - `worker.legacy_worker_alias`: `true`
@@ -17,9 +17,9 @@
 - `worker.artifact`: `missing, verified, mismatch`
 - `worker.execution_proof`: `none, host-model, qemu, fresh-pi`
 - `worker.role.worker-heartbeat`: declaration=`executable`, executable_slots=`1`
-- `worker.role.worker-gpu`: declaration=`executable`, executable_slots=`1`
+- `worker.role.worker-gpu`: declaration=`executable`, executable_slots=`15`
 - `worker.role.worker-bus`: declaration=`model-only`, executable_slots=`0`
-- `worker.role.worker-lora`: declaration=`executable`, executable_slots=`1`
+- `worker.role.worker-lora`: declaration=`executable`, executable_slots=`21`
 - `secure9p.msize`: `8192`
 - `secure9p.walk_depth`: `8`
 - `trace.max_bytes`: `1048576`
@@ -38,4 +38,4 @@
 - `telemetry_ingest.max_reference_bytes_per_segment`: `1073741824`
 - `telemetry_ingest.eviction_policy`: `evict-oldest`
 
-_Generated from `configs/root_task.toml` (sha256: `72b6fdbd175150ec352f9345d99791a1d576cf01de47363aed2a64ad0c463a93`)._
+_Generated from `configs/root_task.toml` (sha256: `10f33db7f20f039701ec8d2c5d206aba45a67f4b7e359b22dc2e24a0cc055cbd`)._

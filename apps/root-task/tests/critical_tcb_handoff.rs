@@ -6,7 +6,7 @@
 use root_task::critical_tcb::{
     service_fault_mailbox_index, validate_worker_supervisor_wake, worker_fault_mailbox_index,
     CriticalHandoff, FaultClass, FaultHandoffError, FaultHandoffRecord, GenerationIdentity,
-    PublishResult, WorkerControlOperation, WorkerControlRecord, WorkerSupervisorItem,
+    PublishResult, WorkerControlOperation, WorkerControlQueue, WorkerControlRecord,
     WORKER_CONTROL_QUEUE_CAPACITY,
 };
 use root_task::generated;
@@ -68,6 +68,7 @@ fn role_local_worker_slots_map_to_distinct_temporal_mailboxes() {
         .iter()
         .enumerate()
         .filter(|(_, task)| task.kind == generated::TemporalTaskKind::Worker)
+        .take(records.len())
         .map(|(index, _)| u16::try_from(index).expect("bounded temporal index"))
         .collect::<heapless::Vec<_, 3>>();
     assert_eq!(task_indices.len(), 3);
@@ -82,8 +83,9 @@ fn role_local_worker_slots_map_to_distinct_temporal_mailboxes() {
 fn simultaneous_faults_are_durable_and_precede_policy() {
     CriticalHandoff::validate_generated_contract().expect("generated handoff");
     let mut handoff = CriticalHandoff::default();
+    let controls = WorkerControlQueue::new();
     assert_eq!(
-        handoff.publish_worker_control(WorkerControlRecord {
+        controls.publish(WorkerControlRecord {
             sequence: 1,
             task_index: worker_task_index(0),
             identity: identity(0),
@@ -98,24 +100,66 @@ fn simultaneous_faults_are_durable_and_precede_policy() {
     }
     for mailbox in 0..3usize {
         assert!(matches!(
-            handoff.drain_worker(),
-            Some(WorkerSupervisorItem::Fault(record))
+            handoff.drain_worker_fault(),
+            Some(record)
                 if record.identity.slot == 0
                     && worker_fault_mailbox_index(record.task_index) == Some(mailbox)
         ));
     }
     assert!(matches!(
-        handoff.drain_worker(),
-        Some(WorkerSupervisorItem::Control(record)) if record.sequence == 1
+        controls.validate_next().expect("critical validation"),
+        Some(record) if record.sequence == 1
     ));
+    assert!(matches!(
+        controls.drain_validated().expect("root consume"),
+        Some(record) if record.sequence == 1
+    ));
+}
+
+#[test]
+fn critical_validation_exposes_policy_without_releasing_capacity() {
+    let controls = WorkerControlQueue::new();
+    let make_record = |sequence| WorkerControlRecord {
+        sequence,
+        task_index: worker_task_index(0),
+        identity: identity(0),
+        operation: WorkerControlOperation::Admit,
+    };
+
+    assert_eq!(controls.publish(make_record(1)), PublishResult::Published);
+    assert_eq!(controls.len(), 1);
+    assert_eq!(controls.unvalidated_len(), 1);
+    assert_eq!(controls.validated_len(), 0);
+    assert_eq!(controls.validate_next(), Ok(Some(make_record(1))));
+    assert_eq!(controls.len(), 1);
+    assert_eq!(controls.unvalidated_len(), 0);
+    assert_eq!(controls.validated_len(), 1);
+
+    for sequence in 2..=WORKER_CONTROL_QUEUE_CAPACITY as u64 {
+        assert_eq!(
+            controls.publish(make_record(sequence)),
+            PublishResult::Published
+        );
+    }
+    assert_eq!(
+        controls.publish(make_record(WORKER_CONTROL_QUEUE_CAPACITY as u64 + 1)),
+        PublishResult::Refused,
+        "critical validation must not release root-owned queue capacity",
+    );
+    assert_eq!(controls.drain_validated(), Ok(Some(make_record(1))));
+    assert_eq!(
+        controls.publish(make_record(WORKER_CONTROL_QUEUE_CAPACITY as u64 + 1)),
+        PublishResult::Published,
+    );
 }
 
 #[test]
 fn policy_saturation_refuses_but_fault_overwrite_is_fatal() {
     let mut handoff = CriticalHandoff::default();
-    for sequence in 0..WORKER_CONTROL_QUEUE_CAPACITY as u64 {
+    let controls = WorkerControlQueue::new();
+    for sequence in 1..=WORKER_CONTROL_QUEUE_CAPACITY as u64 {
         assert_eq!(
-            handoff.publish_worker_control(WorkerControlRecord {
+            controls.publish(WorkerControlRecord {
                 sequence,
                 task_index: worker_task_index(0),
                 identity: identity(0),
@@ -125,8 +169,8 @@ fn policy_saturation_refuses_but_fault_overwrite_is_fatal() {
         );
     }
     assert_eq!(
-        handoff.publish_worker_control(WorkerControlRecord {
-            sequence: 99,
+        controls.publish(WorkerControlRecord {
+            sequence: WORKER_CONTROL_QUEUE_CAPACITY as u64 + 1,
             task_index: worker_task_index(0),
             identity: identity(0),
             operation: WorkerControlOperation::Revoke,
@@ -155,9 +199,9 @@ fn non_worker_temporal_index_cannot_alias_a_worker_mailbox() {
 
 #[test]
 fn non_worker_temporal_index_cannot_alias_a_worker_control_record() {
-    let mut handoff = CriticalHandoff::default();
+    let controls = WorkerControlQueue::new();
     assert_eq!(
-        handoff.publish_worker_control(WorkerControlRecord {
+        controls.publish(WorkerControlRecord {
             sequence: 1,
             task_index: 0,
             identity: identity(0),
@@ -165,7 +209,8 @@ fn non_worker_temporal_index_cannot_alias_a_worker_control_record() {
         }),
         PublishResult::Refused
     );
-    assert_eq!(handoff.drain_worker(), None);
+    assert_eq!(controls.validate_next().expect("critical validation"), None);
+    assert_eq!(controls.drain_validated().expect("root consume"), None);
 }
 
 #[test]

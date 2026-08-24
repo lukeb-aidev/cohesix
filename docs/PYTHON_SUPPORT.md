@@ -210,7 +210,7 @@ The package exports these primary surfaces from `cohesix`:
 | `CohesixOrchestrator` | Typed approvals, scheduler records, leases, exports, host tickets, and `/proc` snapshots |
 | `ControlPlan` | Declarative collection of approval, schedule, lease, and export writes |
 | `ApprovalRequest` | Validated `/actions/queue` record |
-| `ScheduleRequest` | Validated `/queen/schedule/ctl` record |
+| `ScheduleRequest`, `ScheduleDequeue` | Validated producer and exact FIFO-consumer `/queen/schedule/ctl` records |
 | `LeaseRequest` | Validated `/queen/lease/ctl` record |
 | `ExportRequest` | Validated `/queen/export/ctl` record |
 | `HostTicketRequest`, `K8sRbacIntent` | Manifest-bounded host ticket records and Kubernetes intent conversion |
@@ -261,8 +261,10 @@ client.worker_teardown("heartbeat", "heartbeat-1")
 The mock in this example reports `execution_proof="host-model"`. It exercises
 the API but is never QEMU or Pi proof. The three executable roles are
 `worker-heartbeat`, `worker-gpu`, and `worker-lora`; their combined generated
-maximum is three live tasks. `worker-bus` remains model-only, and spawn or
-teardown returns a deterministic `CohesixError` before any backend write.
+maximum is 37 simultaneous tasks for QEMU (1 heartbeat, 15 GPU, and 21 LoRA)
+and three for Pi 4 (one per executable role). `worker-bus` remains model-only,
+and spawn or teardown returns a deterministic `CohesixError` before any backend
+write.
 
 Worker telemetry uses
 `/shard/<sha256(worker_id)[0]:02x>/worker/<id>/telemetry` in the checked-in

@@ -19,10 +19,63 @@ use crate::HostTicketSpec;
 
 /// Maximum durable bytes retained by the 26e receipt execution journal.
 pub const EXECUTION_JOURNAL_MAX_BYTES: usize = 1024 * 1024;
-/// Maximum version-2 operations retained in one journal.
+/// Maximum non-compacted version-2 operations retained in one journal.
 pub const EXECUTION_JOURNAL_MAX_ENTRIES: usize = 256;
+/// Maximum supported durable execution-lane count.
+pub const EXECUTION_LANE_MAX_COUNT: u8 = 64;
+
+const EXECUTION_LANE_TOPOLOGY_SCHEMA: &str = "host-ticket-execution-lanes/v1";
+const EXECUTION_JOURNAL_SCHEMA_V2: &str = "host-ticket-execution-journal/v2";
+const EXECUTION_JOURNAL_SCHEMA_V3: &str = "host-ticket-execution-journal/v3";
 
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct ExecutionLaneTopology {
+    schema: String,
+    lanes: u8,
+}
+
+/// Bind one journal family to an immutable execution-lane count.
+///
+/// Changing the modulo lane assignment while an operation is only provider-
+/// committed would orphan its journal and risk replay. The topology sidecar
+/// therefore fails closed until the operator selects a fresh state directory.
+pub fn bind_execution_lane_topology(journal_path: &Path, lanes: u8) -> Result<PathBuf> {
+    if lanes == 0 || lanes > EXECUTION_LANE_MAX_COUNT {
+        return Err(anyhow!(
+            "execution lane count must be within 1..={EXECUTION_LANE_MAX_COUNT}"
+        ));
+    }
+    let topology_path = journal_path.with_extension("topology.json");
+    match fs::read(&topology_path) {
+        Ok(payload) => {
+            let topology: ExecutionLaneTopology = serde_json::from_slice(&payload)
+                .with_context(|| format!("parse lane topology {}", topology_path.display()))?;
+            if topology.schema != EXECUTION_LANE_TOPOLOGY_SCHEMA || topology.lanes != lanes {
+                return Err(anyhow!(
+                    "execution lane topology mismatch: state has {} lanes, requested {lanes}",
+                    topology.lanes
+                ));
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            let topology = ExecutionLaneTopology {
+                schema: EXECUTION_LANE_TOPOLOGY_SCHEMA.to_owned(),
+                lanes,
+            };
+            let payload = serde_json::to_vec_pretty(&topology)
+                .context("serialize execution lane topology")?;
+            durable_atomic_write(&topology_path, &payload, 256, "execution lane topology")?;
+        }
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("read lane topology {}", topology_path.display()))
+        }
+    }
+    Ok(topology_path)
+}
 
 /// Relay WAL entry lifecycle state.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -261,13 +314,22 @@ pub struct ExecutionJournalEntry {
 #[serde(deny_unknown_fields)]
 pub struct ExecutionJournal {
     schema: String,
+    /// Highest global admission sequence durably completed by this lane.
+    ///
+    /// Every lane observes the same monotonically increasing root sequence.
+    /// Once its cursor has advanced through this value, all earlier work
+    /// assigned to the lane is terminal and its full recovery payload can be
+    /// removed without permitting provider replay.
+    #[serde(default)]
+    completed_through_admission_sequence: u64,
     entries: BTreeMap<String, ExecutionJournalEntry>,
 }
 
 impl Default for ExecutionJournal {
     fn default() -> Self {
         Self {
-            schema: "host-ticket-execution-journal/v2".to_owned(),
+            schema: EXECUTION_JOURNAL_SCHEMA_V3.to_owned(),
+            completed_through_admission_sequence: 0,
             entries: BTreeMap::new(),
         }
     }
@@ -291,8 +353,25 @@ impl ExecutionJournal {
                 EXECUTION_JOURNAL_MAX_BYTES
             ));
         }
-        let journal: Self = serde_json::from_slice(&payload)
+        let mut journal: Self = serde_json::from_slice(&payload)
             .with_context(|| format!("parse execution journal {}", path.display()))?;
+        match journal.schema.as_str() {
+            EXECUTION_JOURNAL_SCHEMA_V2 => {
+                // A v2 terminal entry proves that result publication and
+                // durable cursor advancement both completed. Promote that
+                // proof into the compact v3 fence during the rolling upgrade.
+                journal.completed_through_admission_sequence = journal
+                    .entries
+                    .values()
+                    .filter(|entry| entry.state == ExecutionJournalState::Terminal)
+                    .filter_map(|entry| entry.spec.admission_sequence)
+                    .max()
+                    .unwrap_or(0);
+                journal.schema = EXECUTION_JOURNAL_SCHEMA_V3.to_owned();
+            }
+            EXECUTION_JOURNAL_SCHEMA_V3 => {}
+            _ => return Err(anyhow!("unsupported execution journal schema")),
+        }
         journal.validate()?;
         Ok(journal)
     }
@@ -349,6 +428,62 @@ impl ExecutionJournal {
     #[must_use]
     pub fn get(&self, key: &TicketKey) -> Option<&ExecutionJournalEntry> {
         self.entries.get(&key.journal_key())
+    }
+
+    /// Highest root admission sequence covered by the durable completion fence.
+    #[must_use]
+    pub fn completed_through_admission_sequence(&self) -> u64 {
+        self.completed_through_admission_sequence
+    }
+
+    /// Whether a root admission is already covered by the durable completion fence.
+    pub fn is_compacted_terminal(&self, spec: &HostTicketSpec) -> Result<bool> {
+        crate::claim::validate_spec(spec, SpecSource::AdmittedSnapshot)?;
+        let admission_sequence = spec
+            .admission_sequence
+            .ok_or_else(|| anyhow!("version-2 journal entry lacks admission_sequence"))?;
+        Ok(admission_sequence <= self.completed_through_admission_sequence)
+    }
+
+    /// Compact completed recovery payloads after durable cursor advancement.
+    ///
+    /// Prepared, executing, and provider-result-persisted entries are never
+    /// removable. `ResultPublished` is removable only when the caller is
+    /// atomically advancing this journal's completion fence after the guest
+    /// publication; `Terminal` carries equivalent ordering proof from an
+    /// earlier journal lifecycle.
+    pub fn compact_completed_through(&mut self, admission_sequence: u64) -> Result<bool> {
+        if admission_sequence < self.completed_through_admission_sequence {
+            return Err(anyhow!(
+                "execution journal completion fence cannot move backward"
+            ));
+        }
+        let mut completed_keys = Vec::new();
+        for (key, entry) in &self.entries {
+            let entry_sequence = entry
+                .spec
+                .admission_sequence
+                .ok_or_else(|| anyhow!("version-2 journal entry lacks admission_sequence"))?;
+            if entry_sequence > admission_sequence {
+                continue;
+            }
+            if !matches!(
+                entry.state,
+                ExecutionJournalState::ResultPublished | ExecutionJournalState::Terminal
+            ) {
+                return Err(anyhow!(
+                    "execution journal cursor passed nonterminal admission {entry_sequence}"
+                ));
+            }
+            completed_keys.push(key.clone());
+        }
+        let changed = admission_sequence != self.completed_through_admission_sequence
+            || !completed_keys.is_empty();
+        for key in completed_keys {
+            self.entries.remove(&key);
+        }
+        self.completed_through_admission_sequence = admission_sequence;
+        Ok(changed)
     }
 
     /// Advance one entry to `executing` before provider dispatch.
@@ -431,7 +566,7 @@ impl ExecutionJournal {
     }
 
     fn validate(&self) -> Result<()> {
-        if self.schema != "host-ticket-execution-journal/v2" {
+        if self.schema != EXECUTION_JOURNAL_SCHEMA_V3 {
             return Err(anyhow!("unsupported execution journal schema"));
         }
         if self.entries.len() > EXECUTION_JOURNAL_MAX_ENTRIES {
@@ -450,6 +585,17 @@ impl ExecutionJournal {
             if expected != *key {
                 return Err(anyhow!(
                     "execution journal key does not match ticket identity"
+                ));
+            }
+            let admission_sequence = entry
+                .spec
+                .admission_sequence
+                .ok_or_else(|| anyhow!("version-2 journal entry lacks admission_sequence"))?;
+            if admission_sequence <= self.completed_through_admission_sequence
+                && entry.state != ExecutionJournalState::Terminal
+            {
+                return Err(anyhow!(
+                    "execution journal completion fence covers nonterminal entry"
                 ));
             }
             if entry.state >= ExecutionJournalState::ProviderResultPersisted
@@ -677,6 +823,24 @@ mod tests {
     }
 
     #[test]
+    fn execution_lane_topology_is_durable_and_immutable() {
+        let temp = tempfile::TempDir::new().expect("temp dir");
+        let journal = temp.path().join("execution-journal.json");
+        let topology = bind_execution_lane_topology(&journal, 8).expect("bind topology");
+        assert_eq!(
+            topology.file_name().and_then(|name| name.to_str()),
+            Some("execution-journal.topology.json")
+        );
+        assert_eq!(
+            bind_execution_lane_topology(&journal, 8).expect("reuse topology"),
+            topology
+        );
+        let error = bind_execution_lane_topology(&journal, 4)
+            .expect_err("lane-count change must fail closed");
+        assert!(error.to_string().contains("topology mismatch"));
+    }
+
+    #[test]
     fn execution_journal_persists_every_v2_phase() {
         let temp = tempfile::TempDir::new().expect("temp dir");
         let path = temp.path().join("execution.json");
@@ -731,6 +895,64 @@ mod tests {
             .file_name()
             .to_string_lossy()
             .contains("partial")));
+    }
+
+    #[test]
+    fn execution_journal_compacts_terminal_work_without_a_lifetime_ceiling() {
+        let mut journal = ExecutionJournal::default();
+        for admission_sequence in 1..=1_024_u64 {
+            let mut spec = admitted_v2_spec();
+            spec.id = format!("ticket-{admission_sequence}");
+            spec.idempotency_key = format!("idem-{admission_sequence}");
+            spec.operation_id = Some(format!("lease-{admission_sequence}"));
+            spec.admission_sequence = Some(admission_sequence);
+            let key = TicketKey::new(&spec.id, &spec.idempotency_key);
+            journal.prepare(&spec).expect("prepare bounded operation");
+            journal.mark_executing(&key).expect("mark executing");
+            journal
+                .persist_provider_result(
+                    &key,
+                    JournalProviderResult {
+                        outcome: JournalProviderOutcome::Confirmed,
+                        message: "provider committed".to_owned(),
+                        reconciled: false,
+                    },
+                )
+                .expect("persist provider result");
+            let line = crate::status::build_result_line(
+                &spec,
+                HOST_TICKET_RESULT_V2_SCHEMA,
+                "succeeded",
+                Some("provider committed"),
+                2048,
+            )
+            .expect("result line");
+            journal
+                .stage_result(&key, "/host/tickets/status", &line)
+                .expect("stage result");
+            journal.mark_result_published(&key).expect("published");
+            assert!(journal
+                .compact_completed_through(admission_sequence)
+                .expect("compact after durable cursor"));
+            assert!(journal.get(&key).is_none());
+            assert_eq!(journal.entries.len(), 0);
+        }
+        assert_eq!(journal.completed_through_admission_sequence(), 1_024);
+        journal.validate().expect("compacted journal remains valid");
+    }
+
+    #[test]
+    fn execution_journal_never_compacts_nonterminal_recovery_state() {
+        let spec = admitted_v2_spec();
+        let mut journal = ExecutionJournal::default();
+        journal.prepare(&spec).expect("prepare");
+        let error = journal
+            .compact_completed_through(spec.admission_sequence.expect("admission sequence"))
+            .expect_err("prepared operation must remain recoverable");
+        assert!(error.to_string().contains("passed nonterminal admission"));
+        assert!(journal
+            .get(&TicketKey::new(&spec.id, &spec.idempotency_key))
+            .is_some());
     }
 
     #[test]

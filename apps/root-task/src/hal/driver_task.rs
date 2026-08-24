@@ -3954,24 +3954,17 @@ struct DriverTaskRingProgressRecord {
 fn driver_task_ring_read_cadence_record(
     ring_root_ptr: usize,
 ) -> Option<DriverRuntimeCadenceRecord> {
-    if ring_root_ptr == 0 {
-        return None;
-    }
-    let cadence_ptr = (ring_root_ptr + usize::from(DRIVER_RUNTIME_CADENCE_OFFSET))
-        as *const DriverRuntimeCadenceRecord;
+    let ring = DriverTaskRingView::new(ring_root_ptr)?;
     let read = || {
         driver_task_ring_invalidate_root_range(
-            cadence_ptr as usize,
+            ring_root_ptr + usize::from(DRIVER_RUNTIME_CADENCE_OFFSET),
             usize::from(DRIVER_RUNTIME_CADENCE_BYTES),
         );
-        // SAFETY: The cadence record is primitive-only, naturally aligned at
-        // a fixed page-local offset, and read passively from HAL-owned shared
-        // memory. Sequence-last validation rejects staged or torn samples.
-        unsafe { core::ptr::read_volatile(cadence_ptr) }
+        ring.read_cadence_snapshot()
     };
-    let first = read();
+    let first = read()?;
     fence(Ordering::Acquire);
-    let second = read();
+    let second = read()?;
     (first == second && second.valid()).then_some(second)
 }
 
@@ -3980,44 +3973,34 @@ fn driver_task_ring_read_cadence_record(
 fn driver_task_ring_read_serial_rx_state(
     ring_root_ptr: usize,
 ) -> Option<DriverRuntimeSerialRxState> {
-    if ring_root_ptr == 0 {
-        return None;
-    }
-    let state_ptr = (ring_root_ptr + usize::from(DRIVER_RUNTIME_SERIAL_RX_STATE_OFFSET))
-        as *const DriverRuntimeSerialRxState;
+    let ring = DriverTaskRingView::new(ring_root_ptr)?;
     let read = || {
         driver_task_ring_invalidate_root_range(
-            state_ptr as usize,
+            ring_root_ptr + usize::from(DRIVER_RUNTIME_SERIAL_RX_STATE_OFFSET),
             usize::from(DRIVER_RUNTIME_SERIAL_RX_STATE_BYTES),
         );
-        // SAFETY: The serial record is primitive-only, naturally aligned at a
-        // fixed role-local offset, and read passively from HAL-owned shared
-        // memory. Sequence-last validation rejects staged or torn samples.
-        unsafe { core::ptr::read_volatile(state_ptr) }
+        ring.read_serial_rx_state_snapshot()
     };
-    let first = read();
+    let first = read()?;
     fence(Ordering::Acquire);
-    let second = read();
+    let second = read()?;
     (first == second && second.valid()).then_some(second)
 }
 
 #[cfg(feature = "kernel")]
 fn driver_task_ring_read_progress_record(ring_root_ptr: usize) -> DriverTaskRingProgressRecord {
-    let progress_ptr = (ring_root_ptr + DRIVER_RUNTIME_RING_PROGRESS_OFFSET as usize) as *const u32;
     driver_task_ring_invalidate_root_range(
-        progress_ptr as usize,
+        ring_root_ptr + DRIVER_RUNTIME_RING_PROGRESS_OFFSET as usize,
         core::mem::size_of::<DriverTaskRingProgressRecord>(),
     );
-    // SAFETY: The progress record is a fixed primitive-only record in the
-    // HAL-owned ring page and is bounded by the owner-state metadata region.
-    unsafe {
-        DriverTaskRingProgressRecord {
-            magic: core::ptr::read_volatile(progress_ptr),
-            sequence: core::ptr::read_volatile(progress_ptr.add(1)),
-            phase: core::ptr::read_volatile(progress_ptr.add(2)),
-            aux0: core::ptr::read_volatile(progress_ptr.add(3)),
-        }
-    }
+    DriverTaskRingView::new(ring_root_ptr)
+        .and_then(|ring| ring.read_progress_snapshot())
+        .unwrap_or(DriverTaskRingProgressRecord {
+            magic: 0,
+            sequence: 0,
+            phase: 0,
+            aux0: 0,
+        })
 }
 
 #[cfg(feature = "kernel")]
@@ -4076,6 +4059,96 @@ impl DriverTaskRingView {
         let shift = ((offset & 2) * 8) as u32;
         self.read_u32(aligned)
             .map(|word| ((word >> shift) & u32::from(u16::MAX)) as u16)
+    }
+
+    fn read_u64(&self, offset: usize) -> Option<u64> {
+        let low = u64::from(self.read_u32(offset)?);
+        let high = u64::from(self.read_u32(offset.checked_add(core::mem::size_of::<u32>())?)?);
+        Some(low | (high << 32))
+    }
+
+    fn read_cadence_snapshot(&self) -> Option<DriverRuntimeCadenceRecord> {
+        let base = usize::from(DRIVER_RUNTIME_CADENCE_OFFSET);
+        Some(DriverRuntimeCadenceRecord {
+            magic: self
+                .read_u32(base + core::mem::offset_of!(DriverRuntimeCadenceRecord, magic))?,
+            version: self
+                .read_u16(base + core::mem::offset_of!(DriverRuntimeCadenceRecord, version))?,
+            len: self.read_u16(base + core::mem::offset_of!(DriverRuntimeCadenceRecord, len))?,
+            sequence: self
+                .read_u32(base + core::mem::offset_of!(DriverRuntimeCadenceRecord, sequence))?,
+            phase: self
+                .read_u32(base + core::mem::offset_of!(DriverRuntimeCadenceRecord, phase))?,
+            entry_cntvct: self
+                .read_u64(base + core::mem::offset_of!(DriverRuntimeCadenceRecord, entry_cntvct))?,
+            previous_entry_cntvct_lo: self.read_u32(
+                base + core::mem::offset_of!(DriverRuntimeCadenceRecord, previous_entry_cntvct_lo),
+            )?,
+            last_cntvct_lo: self.read_u32(
+                base + core::mem::offset_of!(DriverRuntimeCadenceRecord, last_cntvct_lo),
+            )?,
+            work_completed: self.read_u32(
+                base + core::mem::offset_of!(DriverRuntimeCadenceRecord, work_completed),
+            )?,
+            work_total: self
+                .read_u32(base + core::mem::offset_of!(DriverRuntimeCadenceRecord, work_total))?,
+            exit_reason: self
+                .read_u16(base + core::mem::offset_of!(DriverRuntimeCadenceRecord, exit_reason))?,
+            flags: self
+                .read_u16(base + core::mem::offset_of!(DriverRuntimeCadenceRecord, flags))?,
+            committed_sequence: self.read_u32(
+                base + core::mem::offset_of!(DriverRuntimeCadenceRecord, committed_sequence),
+            )?,
+        })
+    }
+
+    fn read_serial_rx_state_snapshot(&self) -> Option<DriverRuntimeSerialRxState> {
+        let base = usize::from(DRIVER_RUNTIME_SERIAL_RX_STATE_OFFSET);
+        Some(DriverRuntimeSerialRxState {
+            magic: self
+                .read_u32(base + core::mem::offset_of!(DriverRuntimeSerialRxState, magic))?,
+            version: self
+                .read_u16(base + core::mem::offset_of!(DriverRuntimeSerialRxState, version))?,
+            len: self.read_u16(base + core::mem::offset_of!(DriverRuntimeSerialRxState, len))?,
+            publication: self
+                .read_u32(base + core::mem::offset_of!(DriverRuntimeSerialRxState, publication))?,
+            irq_wakes: self
+                .read_u32(base + core::mem::offset_of!(DriverRuntimeSerialRxState, irq_wakes))?,
+            irq_acks: self
+                .read_u32(base + core::mem::offset_of!(DriverRuntimeSerialRxState, irq_acks))?,
+            irq_ack_failures: self.read_u32(
+                base + core::mem::offset_of!(DriverRuntimeSerialRxState, irq_ack_failures),
+            )?,
+            hardware_overrun_events: self.read_u32(
+                base + core::mem::offset_of!(DriverRuntimeSerialRxState, hardware_overrun_events),
+            )?,
+            queue_full_events: self.read_u32(
+                base + core::mem::offset_of!(DriverRuntimeSerialRxState, queue_full_events),
+            )?,
+            received_bytes: self.read_u32(
+                base + core::mem::offset_of!(DriverRuntimeSerialRxState, received_bytes),
+            )?,
+            queued_bytes: self
+                .read_u16(base + core::mem::offset_of!(DriverRuntimeSerialRxState, queued_bytes))?,
+            flags: self
+                .read_u16(base + core::mem::offset_of!(DriverRuntimeSerialRxState, flags))?,
+            last_cntvct_lo: self.read_u32(
+                base + core::mem::offset_of!(DriverRuntimeSerialRxState, last_cntvct_lo),
+            )?,
+            committed_publication: self.read_u32(
+                base + core::mem::offset_of!(DriverRuntimeSerialRxState, committed_publication),
+            )?,
+        })
+    }
+
+    fn read_progress_snapshot(&self) -> Option<DriverTaskRingProgressRecord> {
+        let base = DRIVER_RUNTIME_RING_PROGRESS_OFFSET as usize;
+        Some(DriverTaskRingProgressRecord {
+            magic: self.read_u32(base)?,
+            sequence: self.read_u32(base.checked_add(core::mem::size_of::<u32>())?)?,
+            phase: self.read_u32(base.checked_add(2 * core::mem::size_of::<u32>())?)?,
+            aux0: self.read_u32(base.checked_add(3 * core::mem::size_of::<u32>())?)?,
+        })
     }
 
     fn read_frame(&self, offset: usize) -> Option<DriverFrameDescriptor> {

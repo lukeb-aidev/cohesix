@@ -61,7 +61,24 @@ pub fn timer_period_cycles(freq_hz: u64, period_ms: u64) -> u64 {
 pub fn timer_counter_ticks() -> u64 {
     #[cfg(all(feature = "timers-arch-counter", target_os = "none"))]
     {
-        read_cntvct()
+        read_timer_register(TimerRegister::VirtualCounter)
+    }
+    #[cfg(not(all(feature = "timers-arch-counter", target_os = "none")))]
+    {
+        0
+    }
+}
+
+/// Read the frequency advertised by the architectural counter register.
+///
+/// This is runtime evidence rather than generated configuration truth. QEMU
+/// startup uses it to prove that the selected accelerator presents the same
+/// counter rate that the seL4 image was built against.
+#[must_use]
+pub fn timer_counter_register_hz() -> u64 {
+    #[cfg(all(feature = "timers-arch-counter", target_os = "none"))]
+    {
+        read_timer_register(TimerRegister::Frequency)
     }
     #[cfg(not(all(feature = "timers-arch-counter", target_os = "none")))]
     {
@@ -74,14 +91,28 @@ fn parse_u64(value: &str) -> Option<u64> {
 }
 
 #[cfg(all(feature = "timers-arch-counter", target_os = "none"))]
+#[derive(Clone, Copy)]
+enum TimerRegister {
+    VirtualCounter,
+    Frequency,
+}
+
+#[cfg(all(feature = "timers-arch-counter", target_os = "none"))]
 #[inline]
-fn read_cntvct() -> u64 {
+fn read_timer_register(register: TimerRegister) -> u64 {
     let value: u64;
     // SAFETY: `timers-arch-counter` is accepted only when the selected seL4
-    // build exports CNTVCT_EL0/CNTFRQ_EL0 to EL0. CNTVCT is read-only and is
-    // used here only for bounded timer/latency telemetry.
+    // build exports CNTVCT_EL0/CNTFRQ_EL0 to EL0. Both registers are read-only
+    // at EL0 and are used only for bounded timer/latency telemetry.
     unsafe {
-        asm!("mrs {value}, cntvct_el0", value = out(reg) value, options(nomem, nostack, preserves_flags));
+        match register {
+            TimerRegister::VirtualCounter => {
+                asm!("mrs {value}, cntvct_el0", value = out(reg) value, options(nomem, nostack, preserves_flags));
+            }
+            TimerRegister::Frequency => {
+                asm!("mrs {value}, cntfrq_el0", value = out(reg) value, options(nomem, nostack, preserves_flags));
+            }
+        }
     }
     value
 }

@@ -35,11 +35,13 @@ The report's `backend_class` identifies the execution backend;
 A connected gateway, successful build, or reachable target does not by itself
 upgrade the proof class.
 
-The canonical macOS QEMU lane uses HVF with
-`virt,gic-version=3,virtualization=off`, `cortex-a57`, QEMU-native HVC PSCI,
-and the generated timer frequency. TCG, `-icount`, and artificial timer
-variants are diagnostic execution models and must not be compared as accepted
-latency or throughput evidence.
+The canonical QEMU target has two host execution envelopes. macOS uses HVF with
+`virt,gic-version=3,virtualization=off,kernel-irqchip=off` and `cortex-a57`;
+Linux AArch64 uses KVM with `virt,gic-version=3,virtualization=off`, the `host`
+CPU, and the in-kernel GICv3. Both use QEMU-native HVC PSCI, the same four-core
+topology, and the generated 24,000,000 Hz timer frequency. TCG, `-icount`, and
+artificial timer variants are diagnostic execution models and must not be
+compared as accepted latency or throughput evidence.
 
 Target scheduling values, Worker bounds, console descriptors, and component
 identities come from the selected generated build. Benchmark commands must
@@ -140,17 +142,18 @@ projections; automation and review decisions must use the versioned object.
 | `latency` | Overall average, minimum, maximum, p50, p90, p95, and p99 seconds. Use `operations` in the parent summary for per-operation latency. |
 | `reliability` | Counts, error rate, declared error budget, pass/fail result, and lossless classification of `buffer-full`, other, and unclassified errors. `all_errors_buffer_full` is `null` when no errors occurred; classification never removes an error from the total. Exact error strings remain in the parent `overall` and `operations` objects. |
 | `capacity_boundary` | Fixed-versus-ramped worker/intensity shape, configured/effective/observed worker maxima, whether each endpoint was observed, and bounded projections of the first error row and first row strictly over the declared error budget. A worker cap can make the effective endpoint lower than the configured endpoint. |
-| `retained_state` | Independent count/success/error/refusal projections for `schedule_write`, `lease_grant`, `lease_preempt`, and `lease_quota`. It identifies bounded `buffer-full` refusals without reclassifying them as success or changing the run verdict. |
+| `retained_state` | Independent count/success/error/refusal projections for `schedule_write`, `lease_grant`, `lease_preempt`, and `lease_quota`. `schedule_write` is one logical FIFO producer/consumer lifecycle: enqueue followed by exact-head dequeue under the Queen-owned consumer lock. It identifies bounded `buffer-full` refusals without reclassifying them as success or changing the run verdict. |
 | `concurrency` | Configured maximum, observed high-water mark, current in-flight count, and submitted/completed counts. |
 | `backpressure` | Gateway-status deltas for waiters/high-water marks, checkouts, pool exhaustion, checkout retries, timeout refusal, control-write retry behavior, and `/proc` cache effectiveness. Zero means no observed delta, not proof that another layer had no pressure. |
 | `top_operations_by_p95` | Up to ten operation rows ranked by p95 latency, including count, success, and error totals. |
 | `top_operations_by_error_rate` | Up to ten operation rows ranked by error rate, including count, success, and error totals. |
 | `visualization` | Canonical series names and recommended chart types; guidance only, not measured data. |
 
-These additive diagnostics do not alter operation selection, weights, random
-number consumption, retries, request ordering, strict-error behavior, or exit
-criteria. The regression suite locks the stateful control operation names and
-weights so a reporting change cannot silently redefine the workload.
+These additive diagnostics do not alter operation selection, weights, retries,
+strict-error behavior, or exit criteria. The regression suite locks the
+stateful control operation names and weights. The schedule operation issues two
+ordered target writes by contract; report counts remain logical operations, not
+raw HTTP or Secure9P request counts.
 
 A ramp holds its configured Worker and intensity maxima for the final ramp
 interval. `configured_endpoint_observed=false` is therefore a failed workload
@@ -280,6 +283,33 @@ scripts/m26e_qemu_pressure.sh \
 unset HIVE_GATEWAY_REQUEST_AUTH_TOKEN
 ```
 
+After transferring the immutable Mac-built guest artifacts, selected seL4
+build outputs, and matching source to an AArch64 Linux host, replay the same
+workload under KVM:
+
+```bash
+HIVE_GATEWAY_REQUEST_AUTH_TOKEN="$(openssl rand -hex 32)"
+export HIVE_GATEWAY_REQUEST_AUTH_TOKEN
+
+scripts/m26e_qemu_pressure.sh \
+  --reuse-artifacts \
+  --qemu /path/to/qemu-system-aarch64 \
+  --gdb /usr/bin/gdb \
+  --run-dir out/m26e-qemu-pressure-linux
+
+unset HIVE_GATEWAY_REQUEST_AUTH_TOKEN
+```
+
+The replay verifies every guest artifact against the source-host launch record
+before it rebuilds only the four native host tools. It preserves that record,
+then emits a second record binding the unchanged guest bytes to Linux KVM,
+`host,cntfrq=24000000`, and the in-kernel GICv3. The resulting medium/high
+artifacts are comparable QEMU performance and integration evidence; they are
+not a substitute for the macOS lane's source-host seL4 profile validation or
+complete staged release acceptance. The Linux orchestrator therefore runs the
+non-claiming target canary directly only after both guest-hash and rebound
+launch-record verification.
+
 The orchestrator cleans repository `target/` and `out/`, rebuilds the selected
 SMP+MCS seL4 profile, and performs one canonical
 `scripts/cohesix-build-run.sh --no-run` artifact build. It hash-binds immutable
@@ -310,13 +340,30 @@ as `bootstrap` and `bootstrap-trace` are not misclassified as leaked secrets.
 
 Before each load it exercises bounded fault/teardown/recreation and the exact
 host-ticket-v2 GPU/LoRA receipt matrix through existing control files and host
-agent execution. The GPU/model/export-job input is admitted only as
+agent execution. After the host-forwarded TCP port opens, the runner also waits
+for the target-emitted `Cohesix console ready` marker before starting the
+gateway, then uses the shared bounded readiness probe to require an
+authenticated backend and successful root listing; a host socket accept alone
+is not guest/backend readiness. The
+GPU/model/export-job input is admitted only as
 `mode=fixture` under `release-qemu,bootstrap-trace`; it is retained as fixture
-evidence and never relabelled provider-live or production. The normal pressure
-boot's UART prefix and Worker/service GDB files, together with a clearly
-separate same-artifact `-S` critical-duty transcript, produce the staged
-component imported by the gateway. The auxiliary critical boot is not labelled
-same-boot Worker or pressure evidence. The final component/root/system collector consumes the immutable preflight plus
+evidence and never relabelled provider-live or production. Direct `cohsh` fault
+injection finishes before the gateway first attaches, and the gateway remains
+the sole console owner for the rest of the normal pressure boot. That boot's
+UART prefix and Worker/service GDB files, together with a clearly separate
+same-artifact `-S` critical-duty transcript, produce the staged component. The
+gateway starts once with fixed trust-root, future-component, and
+current-target-session paths. It projects no executable acceptance while that
+component is missing or invalid, then promotes the first fully validated
+same-boot PASS component exactly once and keeps that accepted summary
+immutable. Pressure begins only after the shared validator confirms the
+promoted binding; no gateway restart or console-owner handoff occurs. The
+auxiliary critical boot is not labelled same-boot Worker or pressure evidence.
+Its collector pauses once at a QEMU-only
+post-SMP arm hook and then installs the four duty breakpoints after secondary
+core initialization, preventing host-accelerator debug-state resets from being
+misreported as missing guest duties. The hook performs no I/O or scheduling
+work. The final component/root/system collector consumes the immutable preflight plus
 medium/high reports afterward, avoiding a circular dependency on the record
 the pressure run is helping produce.
 
@@ -328,6 +375,18 @@ changes; never raise the command merely to preserve an earlier value. A control
 write outcome is `admitted`, not accepted or READY. Preserve all timeouts,
 bounded refusals, and liveness failures as measured errors; a completed QEMU
 launch or connected gateway alone leaves proof class `none`.
+
+For iterative medium/high performance diagnosis after a separate current-image
+correctness baseline, `--population-mode executable-log` may use the same three
+real target Workers with UART-bound READY identity instead of running the GDB
+acceptance collector. This is `proof_class=qemu-live-log`, not Conditional B2
+acceptance. Keep GDB out of the load/debug loop and retrieve
+`/proc/schedule/qemu-flight` after the run. Correlate its virtual-counter
+activation gaps, useful service units, queue-drainage ratio, queue high-water
+mark, and exit reasons with the report throughput and p50/p95/p99, gateway
+backpressure deltas, MCS timeout/fault scan, and host CPU/RSS samples. The
+flight recorder is diagnostic evidence only and cannot promote an otherwise
+unqualified image.
 
 Each summary also retains top-level `target_session_sha256` and
 `report.executable_state`: exact topology/session hashes; pre/post three-role
@@ -418,12 +477,19 @@ the budget is not the first crossing.
 `configured_endpoint_observed` describes only this artifact; it is not a claim
 that a separate fixed-point run confirmed the endpoint.
 
-The current mixed operation builder always includes unique schedule writes and
-lease grant/preempt/quota operations when `/queen` exists. It therefore exposes
-retained-state limits probabilistically through the fixed seed and operation
-mix; it does not directly assert a pure collection capacity. The configured
-Worker and intensity maxima begin no later than the final ramp interval and are
-held through that interval; failure to observe that endpoint is non-qualifying.
+The current mixed operation builder always includes unique schedule lifecycles
+and lease grant/preempt/quota operations when `/queen` exists. Each schedule
+lifecycle serializes only the Queen-owned producer/consumer edge, enqueues one
+unique request, and dequeues that exact FIFO head. The queue must therefore
+return to its prior depth; a retained schedule entry is a lifecycle failure,
+not benchmark cleanup. Active lease and quota state remain independently
+bounded. Completed preemptions use the production fixed-capacity observation
+ring: the newest records are retained, while `/proc/lease/summary` counts every
+successful preemption cumulatively. Evidence-ring turnover therefore cannot
+refuse an otherwise valid lease transition, and the harness must not add a
+cleanup operation or retry around it. The configured Worker and intensity maxima begin no later
+than the final ramp interval and are held through that interval; failure to
+observe that endpoint is non-qualifying.
 
 #### Bounded fixed-cardinality mixed load
 
@@ -433,10 +499,13 @@ and change only one load dimension at a time. Use a separate prefix for every
 run.
 
 This method is valid only while all control operations remain successful and
-the target's retained collections stay within their generated bounds. Total
+the target's authoritative retained collections stay within their generated bounds. Schedule
+depth must return to its pre-run value while `dequeued` advances once per
+successful `schedule_write`. Total
 lease-grant admissions may exceed the active-lease bound when successful
-preemption releases slots, so judge the run from exact operation outcomes and
-target state rather than raw cumulative admissions alone. If `buffer-full`
+preemption releases slots, and cumulative preemptions may exceed the bounded
+history capacity, so judge the run from exact operation outcomes and target
+state rather than raw cumulative admissions alone. If `buffer-full`
 appears, classify that repetition as a cardinality/refusal result from its first
 failing step; do not pool it into a steady-state throughput average. Never omit
 `--strict-control-errors`, enable retries, reuse dirty target state, or widen a
@@ -468,11 +537,12 @@ deltas. `perf` reports sequential and parallel batch timing; it does not offer
 a sustained target-RPS controller.
 
 The current CLI has no operation-family selector, custom operation weights,
-read-only `simulate` profile, bounded-ID recycler, schedule consumer, or lease
-expiry/reaping mode. Consequently, the existing harness cannot qualify a
-long-duration mixed-mutation steady state. Disabling strict errors merely hides
-the retained-state boundary and is invalid. Such a claim requires an explicit
-profile plus harness tests before it is added to this methodology.
+read-only `simulate` profile, or lease expiry/preemption-evidence drain.
+Consequently, the existing harness still cannot qualify a long-duration
+mixed-mutation steady state after a lease collection reaches its generated
+bound. Disabling strict errors merely hides the retained-state boundary and is
+invalid. Such a claim requires an explicit lifecycle plus harness tests before
+it is added to this methodology.
 
 ## Pi 4 Preconditions
 
@@ -506,7 +576,9 @@ Review in this order:
 5. **Throughput and concurrency:** compare observed work with target pressure
    and the maximum in-flight high-water mark.
 6. **Target health:** correlate the workload with console, driver, network, and
-   local-seat counters from the same run.
+   local-seat counters from the same run. On QEMU, also compare root-control
+   activation gaps, service quantum, and queue-drainage ratio from the bounded
+   same-run flight snapshot.
 7. **Moved layer:** name the client, gateway, Secure9P, root-task, driver
    runtime, physical transport, or presentation layer that changed.
 

@@ -33,10 +33,10 @@ fn lifecycle_bits_are_disjoint_and_shutdown_is_idempotent() {
 
     let (mut supervisor, identity) = ready(WorkerRole::Heartbeat, 1);
     let first = supervisor
-        .begin_shutdown(WorkerRole::Heartbeat, 100)
+        .begin_shutdown(WorkerRole::Heartbeat, 0, 100)
         .expect("shutdown accepted");
     let second = supervisor
-        .begin_shutdown(WorkerRole::Heartbeat, 101)
+        .begin_shutdown(WorkerRole::Heartbeat, 0, 101)
         .expect("repeat shutdown is idempotent");
     assert_eq!(first.lifecycle, WorkerLifecycleState::Closing);
     assert_eq!(first, second);

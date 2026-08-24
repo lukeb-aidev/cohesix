@@ -33,13 +33,14 @@ fn all_construction_failures_are_terminal_and_contained() {
             fail_phase: Some(phase),
             containment_complete: true,
             ..FakeBackend::default()
-        });
+        })
+        .expect("generated Worker pool");
         assert_eq!(
-            supervisor.spawn(WorkerRole::Heartbeat, 1, &plan, &image, 0),
+            supervisor.spawn(WorkerRole::Heartbeat, 0, 1, &plan, &image, 0),
             Err(WorkerSupervisorError::Backend)
         );
         let snapshot = supervisor
-            .snapshot(WorkerRole::Heartbeat)
+            .snapshot(WorkerRole::Heartbeat, 0)
             .expect("snapshot");
         assert_eq!(snapshot.lifecycle, WorkerLifecycleState::Terminal);
         assert_eq!(
@@ -58,12 +59,13 @@ fn all_construction_failures_are_terminal_and_contained() {
 #[test]
 fn ready_requires_exact_identity_and_slot_reuse_advances_generations() {
     let (image, plan) = image_fixture(WorkerRole::Heartbeat);
-    let mut supervisor = WorkerSupervisor::new(FakeBackend::passing());
+    let mut supervisor =
+        WorkerSupervisor::new(FakeBackend::passing()).expect("generated Worker pool");
     let first = supervisor
-        .spawn(WorkerRole::Heartbeat, 1, &plan, &image, 10)
+        .spawn(WorkerRole::Heartbeat, 0, 1, &plan, &image, 10)
         .expect("first spawn");
     assert_eq!(
-        supervisor.spawn(WorkerRole::Heartbeat, 2, &plan, &image, 10),
+        supervisor.spawn(WorkerRole::Heartbeat, 0, 2, &plan, &image, 10),
         Err(WorkerSupervisorError::SlotBusy)
     );
     let init = supervisor.backend().init.expect("init");
@@ -71,10 +73,10 @@ fn ready_requires_exact_identity_and_slot_reuse_advances_generations() {
         .accept_ready(ready_record(init, 1))
         .expect("exact READY");
     supervisor
-        .revoke(WorkerRole::Heartbeat)
+        .revoke(WorkerRole::Heartbeat, 0)
         .expect("complete revoke");
     let second = supervisor
-        .spawn(WorkerRole::Heartbeat, 2, &plan, &image, 20)
+        .spawn(WorkerRole::Heartbeat, 0, 2, &plan, &image, 20)
         .expect("fresh generation");
     assert!(second.identity.supervisor_generation > first.identity.supervisor_generation);
     assert!(second.identity.cap_generation > first.identity.cap_generation);

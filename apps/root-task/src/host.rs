@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright © 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Provide host-mode root-task simulation with authenticated ticket flows.
 // Author: Lukas Bower
@@ -40,7 +40,9 @@ pub fn run_with_writer<W: Write>(mut writer: W) -> Result<()> {
         BudgetSpec::default_heartbeat(),
     )?;
     let script = build_script(&queen_token, &worker_token);
-    seed_console_script(&injector, &script);
+    let mut next_script_line = 0usize;
+    seed_console_line(&injector, &script[next_script_line])?;
+    next_script_line += 1;
 
     let serial: SerialPort<
         _,
@@ -64,7 +66,12 @@ pub fn run_with_writer<W: Write>(mut writer: W) -> Result<()> {
     let mut metrics = PumpMetrics::default();
     for _ in 0..MAX_CYCLES {
         pump.poll();
+        injector.drain_tx()?;
         metrics = pump.metrics();
+        if next_script_line < script.len() && metrics.console_lines >= next_script_line as u64 {
+            seed_console_line(&injector, &script[next_script_line])?;
+            next_script_line += 1;
+        }
         if metrics.timer_ticks >= TICK_LIMIT && metrics.console_lines >= script.len() as u64 {
             break;
         }
@@ -131,11 +138,26 @@ fn build_script(queen_token: &str, worker_token: &str) -> Vec<String> {
     ]
 }
 
-fn seed_console_script(injector: &SerialInjector, script: &[String]) {
-    for line in script {
-        injector.push_rx(line.as_bytes());
-        injector.push_rx(b"\n");
+fn seed_console_line(injector: &SerialInjector, line: &str) -> Result<()> {
+    let mut guard = injector
+        .rx
+        .lock()
+        .map_err(|_| anyhow!("serial injector poisoned"))?;
+    let required = line
+        .len()
+        .checked_add(1)
+        .ok_or_else(|| anyhow!("scripted console line length overflow"))?;
+    if required > guard.capacity().saturating_sub(guard.len()) {
+        return Err(anyhow!(
+            "scripted console line exceeds host serial capacity"
+        ));
     }
+    guard
+        .extend_from_slice(line.as_bytes())
+        .map_err(|_| anyhow!("scripted console line exceeds host serial capacity"))?;
+    guard
+        .push(b'\n')
+        .map_err(|_| anyhow!("scripted console line exceeds host serial capacity"))
 }
 
 /// Sleep-backed timer that emits ticks at a fixed interval.
@@ -225,15 +247,17 @@ impl<W: Write> AuditSink for WriterAudit<'_, W> {
 /// Handle allowing scripted input to be injected into the serial driver.
 #[derive(Clone)]
 struct SerialInjector {
-    inner: std::sync::Arc<std::sync::Mutex<HeaplessVec<u8, 1024>>>,
+    rx: std::sync::Arc<std::sync::Mutex<HeaplessVec<u8, 1024>>>,
+    tx: std::sync::Arc<std::sync::Mutex<HeaplessVec<u8, 1024>>>,
 }
 
 impl SerialInjector {
-    fn push_rx(&self, bytes: &[u8]) {
-        let mut guard = self.inner.lock().expect("serial injector poisoned");
-        for &byte in bytes {
-            let _ = guard.push(byte);
-        }
+    fn drain_tx(&self) -> Result<()> {
+        self.tx
+            .lock()
+            .map_err(|_| anyhow!("serial transmitter poisoned"))?
+            .clear();
+        Ok(())
     }
 }
 
@@ -246,7 +270,10 @@ impl HostSerial {
     fn new() -> (Self, SerialInjector) {
         let rx = std::sync::Arc::new(std::sync::Mutex::new(HeaplessVec::new()));
         let tx = std::sync::Arc::new(std::sync::Mutex::new(HeaplessVec::new()));
-        let injector = SerialInjector { inner: rx.clone() };
+        let injector = SerialInjector {
+            rx: rx.clone(),
+            tx: tx.clone(),
+        };
         (Self { rx, tx }, injector)
     }
 
@@ -291,5 +318,14 @@ mod tests {
         assert!(transcript.contains("console: spawn"));
         assert!(transcript.contains("attach accepted role=Queen"));
         assert!(transcript.contains("console: tail"));
+    }
+
+    #[test]
+    fn scripted_line_overflow_is_rejected_without_partial_input() {
+        let (mut driver, injector) = HostSerial::new();
+        let oversized = "x".repeat(1024);
+
+        assert!(seed_console_line(&injector, &oversized).is_err());
+        assert!(matches!(driver.read_byte(), Err(nb::Error::WouldBlock)));
     }
 }

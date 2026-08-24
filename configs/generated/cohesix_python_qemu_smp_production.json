@@ -24,7 +24,7 @@
     "schema": "host-integration-dependency/v1"
   },
   "manifest_profile": "virt-aarch64",
-  "manifest_sha256": "72b6fdbd175150ec352f9345d99791a1d576cf01de47363aed2a64ad0c463a93",
+  "manifest_sha256": "10f33db7f20f039701ec8d2c5d206aba45a67f4b7e359b22dc2e24a0cc055cbd",
   "meta": {
     "author": "Lukas Bower",
     "purpose": "Bind the target-neutral Cohesix Python SDK to one selected 26e target manifest."
@@ -120,8 +120,8 @@
   },
   "worker": {
     "implementation_epoch": 26,
-    "maximum_live_tasks": 3,
-    "namespace_capacity_per_role": 8,
+    "maximum_live_tasks": 37,
+    "namespace_capacity_per_role": 64,
     "roles": [
       {
         "declaration": "executable",
@@ -133,7 +133,7 @@
       },
       {
         "declaration": "executable",
-        "executable_slots": 1,
+        "executable_slots": 15,
         "lease_path_template": "/gpu/<id>/lease",
         "role": "worker-gpu",
         "telemetry_path_template": "/shard/<label>/worker/<id>/telemetry",
@@ -149,7 +149,7 @@
       },
       {
         "declaration": "executable",
-        "executable_slots": 1,
+        "executable_slots": 21,
         "lease_path_template": "",
         "role": "worker-lora",
         "telemetry_path_template": "/shard/<label>/worker/<id>/telemetry",

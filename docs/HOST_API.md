@@ -164,6 +164,20 @@ curl --fail-with-body --silent --show-error \
   --data-binary '{"path":"/queen/schedule/ctl","line":"{\"id\":\"api-check-1\",\"role\":\"worker-gpu\",\"priority\":2,\"ticks\":3,\"budget_ms\":120}"}'
 ```
 
+After the Queen consumer accepts responsibility for the FIFO head, it removes
+that pending record with a separately authenticated write:
+
+```bash
+curl --fail-with-body --silent --show-error \
+  -X POST http://127.0.0.1:8080/v1/fs/echo \
+  -H "Authorization: Bearer ${HIVE_GATEWAY_REQUEST_AUTH_TOKEN}" \
+  -H 'Content-Type: application/json' \
+  --data-binary '{"path":"/queen/schedule/ctl","line":"{\"op\":\"dequeue\",\"id\":\"api-check-1\"}"}'
+```
+
+The dequeue ID must match the exact queue head. It is consumer acceptance, not
+Worker execution or completion evidence.
+
 ## Response Handling
 
 Filesystem responses preserve target `OK` or `ERR` status and terminal `END`

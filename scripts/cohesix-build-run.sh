@@ -12,8 +12,12 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 GENERATED_CONFIG_DIR="$PROJECT_ROOT/configs/generated"
 CANONICAL_QEMU_PROFILE="qemu_smp_production"
 CANONICAL_QEMU_BUILD_DIR="$PROJECT_ROOT/out/sel4/profile-v2/qemu-smp-production"
-CANONICAL_QEMU_CPU="cortex-a57"
+CANONICAL_QEMU_KVM_PROFILE="qemu_smp_kvm_production"
+CANONICAL_QEMU_KVM_BUILD_DIR="$PROJECT_ROOT/out/sel4/profile-v2/qemu-smp-kvm-production"
+CANONICAL_QEMU_EMULATED_CPU="cortex-a57"
+CANONICAL_QEMU_KVM_CPU="host"
 CANONICAL_QEMU_TIMER_CLOCK_HZ="24000000"
+QEMU_TIMER_CLOCK_HZ="$CANONICAL_QEMU_TIMER_CLOCK_HZ"
 CANONICAL_QEMU_VIRT="off"
 HOST_OS="$(uname -s)"
 QEMU_MACHINE_EXTRA="${COHESIX_QEMU_MACHINE_EXTRA:-${QEMU_MACHINE_EXTRA:-}}"
@@ -21,6 +25,7 @@ if [[ -z "$QEMU_MACHINE_EXTRA" && "$HOST_OS" == "Darwin" ]]; then
     QEMU_MACHINE_EXTRA="kernel-irqchip=off"
 fi
 QEMU_VIRT_RAW="${COHESIX_QEMU_VIRT:-${QEMU_VIRT:-}}"
+CROSS_HOST_REPLAY="${COHESIX_QEMU_CROSS_HOST_REPLAY:-0}"
 if [[ -z "$QEMU_VIRT_RAW" ]]; then
     QEMU_VIRT_RAW="$CANONICAL_QEMU_VIRT"
 fi
@@ -34,9 +39,10 @@ boot the system under QEMU. The script expects an existing seL4 build tree that
 already produced `elfloader`, `kernel.elf`, and support artefacts. By default it
 uses the validated `qemu_smp_production` contract at
 `$PROJECT_ROOT/out/sel4/profile-v2/qemu-smp-production`.
-That contract must report GICv3; launch always uses the profile-owned
-`virt,gic-version=3,virtualization=off` and `cortex-a57` envelope and rejects
-command-line or environment attempts to replace that truth.
+That contract must report GICv3. Launch uses the profile-owned
+`virt,gic-version=3,virtualization=off` machine with `cortex-a57` under macOS
+HVF or the KVM `host` CPU under Linux, and rejects command-line or environment
+attempts to replace that host-specific truth.
 
 Options:
   --sel4-build <dir>    Path to the seL4 build output
@@ -71,12 +77,16 @@ Env overrides:
   COHESIX_QEMU_SMP / QEMU_SMP (default: 4; ignored when *_QEMU_SMP_TOPO is set)
   COHESIX_QEMU_SMP_TOPO / QEMU_SMP_TOPO (default: 4,cores=4,threads=1,sockets=1)
   COHESIX_QEMU_VIRT / QEMU_VIRT (must be off; profile-owned machine contract)
-  COHESIX_QEMU_ACCEL / QEMU_ACCEL (default: hvf on macOS, kvm/tcg on Linux;
+  COHESIX_QEMU_ACCEL / QEMU_ACCEL (default: hvf on macOS, kvm on Linux;
                         explicit tcg is diagnostic and claim-ineligible)
   COHESIX_QEMU_MACHINE_EXTRA / QEMU_MACHINE_EXTRA (appended to -machine)
                         (must not override machine type, GIC, or virtualization)
-  COHESIX_SEL4_PROFILE (qemu_smp_production|qemu_smp_diagnostic; validates an
-                        explicitly selected build tree against that contract)
+  COHESIX_QEMU_CROSS_HOST_REPLAY (0|1; default: 0)
+                        Allow Linux to replay immutable Mac-built guest inputs;
+                        valid only with --launch-existing and a rebound record
+  COHESIX_SEL4_PROFILE (qemu_smp_production|qemu_smp_kvm_production|
+                        qemu_smp_diagnostic; validates an explicitly selected
+                        build tree against that contract)
   COHESIX_DRIVER_CLASSIC_COMPARATOR_RECORD (immutable comparator record;
                         defaults to configs/driver_runtime_classic_comparator.toml)
 USAGE
@@ -97,7 +107,7 @@ validate_selected_qemu_profile() {
     local profile_tool="$SCRIPT_DIR/sel4_profile.py"
 
     case "$profile_name" in
-        qemu_smp_production|qemu_smp_diagnostic)
+        qemu_smp_production|qemu_smp_kvm_production|qemu_smp_diagnostic)
             ;;
         *)
             fail "Unsupported QEMU seL4 profile contract: $profile_name"
@@ -174,14 +184,10 @@ detect_qemu_accel() {
             echo "hvf"
             ;;
         Linux)
-            if [[ -c /dev/kvm && -r /dev/kvm && -w /dev/kvm ]]; then
-                echo "kvm"
-            else
-                echo "tcg"
-            fi
+            echo "kvm"
             ;;
         *)
-            echo "tcg"
+            echo "unsupported"
             ;;
     esac
 }
@@ -203,23 +209,64 @@ qemu_accel_supported() {
 resolve_qemu_accel() {
     local accel
     accel="$(detect_qemu_accel)"
-    if [[ -z "$accel" ]]; then
-        accel="tcg"
-    fi
+    [[ -n "$accel" && "$accel" != "unsupported" ]] || \
+        fail "QEMU acceleration is unsupported on $HOST_OS"
     if [[ "$accel" == "kvm" && "$HOST_OS" == "Linux" ]]; then
         if ! has_kvm_device; then
-            log "Requested QEMU accelerator 'kvm' but /dev/kvm is unavailable; falling back to tcg" >&2
-            accel="tcg"
+            fail "Linux QEMU requires usable /dev/kvm; select tcg explicitly only for diagnostic evidence"
         fi
     fi
     if ! qemu_accel_supported "$accel"; then
         if [[ "$HOST_OS" == "Darwin" && "$accel" == "hvf" ]]; then
             fail "canonical Darwin QEMU requires HVF, but $QEMU_BIN does not advertise it; set COHESIX_QEMU_ACCEL=tcg only for a claim-ineligible diagnostic run"
         fi
-        log "Requested QEMU accelerator '$accel' not supported by $QEMU_BIN; falling back to tcg" >&2
-        accel="tcg"
+        fail "Requested QEMU accelerator '$accel' is not supported by $QEMU_BIN"
     fi
     echo "$accel"
+}
+
+resolve_qemu_cpu_model() {
+    local accel="$1"
+    if [[ "$HOST_OS" == "Linux" && "$accel" == "kvm" ]]; then
+        echo "$CANONICAL_QEMU_KVM_CPU"
+        return
+    fi
+    echo "$CANONICAL_QEMU_EMULATED_CPU"
+}
+
+resolve_qemu_cpu_arg() {
+    local accel="$1"
+    local cpu_model
+    cpu_model="$(resolve_qemu_cpu_model "$accel")"
+    if [[ "$accel" == "tcg" ]]; then
+        cpu_model="${cpu_model},cntfrq=${QEMU_TIMER_CLOCK_HZ}"
+    fi
+    echo "$cpu_model"
+}
+
+read_selected_timer_clock_hz() {
+    local platform_header="$1"
+    python3 - "$platform_header" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+header_path = Path(sys.argv[1])
+try:
+    header = header_path.read_text(encoding="utf-8")
+except (OSError, UnicodeError) as error:
+    raise SystemExit(f"cannot read selected seL4 timer header: {error}") from error
+matches = re.findall(
+    r"^\s*#define\s+TIMER_CLOCK_HZ\s+(?:ULL_CONST\(\s*)?([0-9]+)(?:\s*\))?\s*$",
+    header,
+    flags=re.MULTILINE,
+)
+if len(matches) != 1 or int(matches[0]) < 1:
+    raise SystemExit(
+        "selected seL4 timer header must define one positive TIMER_CLOCK_HZ"
+    )
+print(int(matches[0]))
+PY
 }
 
 append_root_task_feature() {
@@ -671,10 +718,8 @@ launch_qemu_artifacts() {
 
     # Serial output from the PL011 console and root-task logger is expected on
     # stdio via -serial mon:stdio; keep this wiring intact for every launch.
-    local cpu_arg="$CANONICAL_QEMU_CPU"
-    if [[ "${QEMU_ACCEL:-}" == "tcg" ]]; then
-        cpu_arg="${cpu_arg},cntfrq=${CANONICAL_QEMU_TIMER_CLOCK_HZ}"
-    fi
+    local cpu_arg
+    cpu_arg="$(resolve_qemu_cpu_arg "$QEMU_ACCEL")"
     log "Using QEMU CPU: ${cpu_arg}"
     BASE_QEMU_ARGS=("${ACCEL_ARGS[@]}" -machine "${machine_arg}" -cpu "$cpu_arg" -m 1024 -smp "$QEMU_SMP_ARG" -serial mon:stdio -display none -kernel "$ELFLOADER_STAGE_PATH" -initrd "$CPIO_PATH" -device loader,file="$KERNEL_STAGE_PATH",addr=$KERNEL_LOAD_ADDR,force-raw=on -device loader,file="$ROOTSERVER_STAGE_PATH",addr=$ROOTSERVER_LOAD_ADDR,force-raw=on)
 
@@ -909,6 +954,14 @@ main() {
     if [[ "$LAUNCH_EXISTING" -eq 1 && -n "$DTB_OVERRIDE" ]]; then
         fail "--launch-existing does not permit an unbound DTB override"
     fi
+    [[ "$CROSS_HOST_REPLAY" == "0" || "$CROSS_HOST_REPLAY" == "1" ]] || \
+        fail "COHESIX_QEMU_CROSS_HOST_REPLAY must be 0 or 1"
+    if [[ "$CROSS_HOST_REPLAY" == "1" ]]; then
+        [[ "$LAUNCH_EXISTING" -eq 1 ]] || \
+            fail "cross-host replay requires --launch-existing"
+        [[ "$HOST_OS" == "Linux" ]] || \
+            fail "cross-host replay is supported only on Linux"
+    fi
 
     command -v python3 >/dev/null 2>&1 || fail "Required command not found in PATH: python3"
     if [[ -L "$OUT_DIR" ]]; then
@@ -1008,8 +1061,16 @@ PY
 
     if [[ -z "$SEL4_PROFILE" && "$SEL4_BUILD_DIR" == "$CANONICAL_QEMU_BUILD_DIR" ]]; then
         SEL4_PROFILE="$CANONICAL_QEMU_PROFILE"
+    elif [[ -z "$SEL4_PROFILE" \
+        && "$SEL4_BUILD_DIR" == "$CANONICAL_QEMU_KVM_BUILD_DIR" ]]; then
+        SEL4_PROFILE="$CANONICAL_QEMU_KVM_PROFILE"
     fi
-    if [[ -n "$SEL4_PROFILE" ]]; then
+    if [[ "$CROSS_HOST_REPLAY" == "1" ]]; then
+        [[ "$SEL4_PROFILE" == "$CANONICAL_QEMU_PROFILE" \
+            || "$SEL4_PROFILE" == "$CANONICAL_QEMU_KVM_PROFILE" ]] || \
+            fail "cross-host replay requires a production QEMU profile"
+        log "Cross-host replay: trusting the immutable guest hashes and rebound Linux launch record"
+    elif [[ -n "$SEL4_PROFILE" ]]; then
         validate_selected_qemu_profile "$SEL4_PROFILE"
     else
         log "Explicit non-canonical seL4 build selected; this run is claim-ineligible unless COHESIX_SEL4_PROFILE names a passing contract"
@@ -1017,6 +1078,10 @@ PY
 
     export SEL4_BUILD_DIR
     export SEL4_BUILD="$SEL4_BUILD_DIR"
+    QEMU_TIMER_CLOCK_HZ="$(read_selected_timer_clock_hz \
+        "$SEL4_BUILD_DIR/kernel/gen_headers/plat/platform_gen.h")" || \
+        fail "cannot resolve selected seL4 TIMER_CLOCK_HZ"
+    export QEMU_TIMER_CLOCK_HZ
 
     if [[ "$CLEAN_OUT_DIR" -eq 1 ]]; then
         if [[ -d "$OUT_DIR" ]]; then
@@ -1078,6 +1143,7 @@ PY
         && "$QEMU_ACCEL" != "hvf" ]]; then
         log "Non-HVF Darwin acceleration is outside the production envelope; this run is claim-ineligible"
     fi
+    QEMU_CPU_MODEL="$(resolve_qemu_cpu_model "$QEMU_ACCEL")"
 
     ELFLOADER_PATH="$SEL4_BUILD_DIR/elfloader/elfloader"
     KERNEL_PATH="$SEL4_BUILD_DIR/kernel/kernel.elf"
@@ -1132,7 +1198,7 @@ PY
             --accelerator "$QEMU_ACCEL" \
             --virtualization "$QEMU_VIRT_ARG" \
             --machine-extra "$QEMU_MACHINE_EXTRA" \
-            --cpu "$CANONICAL_QEMU_CPU" \
+            --cpu "$QEMU_CPU_MODEL" \
             --smp "$QEMU_SMP_ARG" \
             --net-backend "$NET_BACKEND" >/dev/null || \
             fail "immutable QEMU launch artifact verification failed"
@@ -1145,6 +1211,7 @@ PY
     log "Regenerating the complete canonical coh-rtc output set from ${RTC_MANIFEST}"
     cargo run -p coh-rtc -- \
         "$RTC_MANIFEST" \
+        --timer-clock-hz "$QEMU_TIMER_CLOCK_HZ" \
         --out "$PROJECT_ROOT/apps/root-task/src/generated" \
         --manifest "$GENERATED_CONFIG_DIR/root_task_resolved.json" \
         --cas-manifest-template "$GENERATED_CONFIG_DIR/cas_manifest_template.json" \
@@ -1578,7 +1645,7 @@ PY
         --accelerator "$QEMU_ACCEL" \
         --virtualization "$QEMU_VIRT_ARG" \
         --machine-extra "$QEMU_MACHINE_EXTRA" \
-        --cpu "$CANONICAL_QEMU_CPU" \
+        --cpu "$QEMU_CPU_MODEL" \
         --smp "$QEMU_SMP_ARG" \
         --net-backend "$NET_BACKEND" >/dev/null || \
         fail "could not bind immutable QEMU launch artifacts"

@@ -75,3 +75,34 @@ fn lease_summary_reports_generated_bounds() {
     assert!(summary.contains(&format!("max_active={active_max}")));
     assert!(summary.contains(&format!("max_preemptions={preemptions_max}")));
 }
+
+#[test]
+fn exact_lease_view_reads_entries_beyond_aggregate_window() {
+    let server = NineDoor::new();
+    let mut client = attach_queen(&server);
+    let ctl_path = vec!["queen".to_owned(), "lease".to_owned(), "ctl".to_owned()];
+    client.walk(1, 2, &ctl_path).expect("walk lease ctl");
+    client
+        .open(2, OpenMode::write_append())
+        .expect("open lease ctl");
+
+    for index in 1..=6 {
+        let grant = format!(
+            r#"{{"op":"grant","id":"lease-{index}","subject":"worker-{index}","resource":"GPU-0","ttl_s":30,"priority":1}}"#
+        );
+        client.write(2, grant.as_bytes()).expect("grant lease");
+    }
+
+    let aggregate_path = vec!["proc".to_owned(), "lease".to_owned(), "active".to_owned()];
+    let aggregate = read_text(&mut client, 3, &aggregate_path);
+    assert!(!aggregate.contains("id=lease-6 "));
+
+    let exact_path = vec![
+        "proc".to_owned(),
+        "lease".to_owned(),
+        "by-id".to_owned(),
+        "lease-6".to_owned(),
+    ];
+    let exact = read_text(&mut client, 4, &exact_path);
+    assert!(exact.starts_with("id=lease-6 subject=worker-6 resource=GPU-0 "));
+}

@@ -78,11 +78,10 @@ pub fn run(expected_role: WorkerRole, shared_page_address: usize) -> ! {
     install_panic_context(page, init);
     clear_worker_publications(page);
     publish_ready(page, init);
-    signal_supervisor(init);
 
     let mut last_sequence = 0u64;
+    let mut badge = signal_supervisor_and_wait_for_lifecycle(init);
     loop {
-        let badge = wait_for_lifecycle(init);
         let event = match init.lifecycle_bits.classify(badge) {
             Ok(event) => event,
             Err(_) => publish_fault_and_trap(
@@ -94,34 +93,36 @@ pub fn run(expected_role: WorkerRole, shared_page_address: usize) -> ! {
         };
         match event {
             WorkerLifecycleEvent::Control => {
-                if let Some(control) = read_stable_control(page) {
-                    if control.sequence <= last_sequence {
-                        continue;
-                    }
-                    let Some(expected_sequence) = last_sequence.checked_add(1) else {
-                        publish_fault_and_trap(
-                            page,
-                            init,
-                            last_sequence,
-                            WorkerCompletionStatus::InvalidControl,
-                        );
-                    };
-                    if control.sequence != expected_sequence || control.validate_for(init).is_err()
-                    {
-                        publish_fault_and_trap(
-                            page,
-                            init,
-                            expected_sequence,
-                            WorkerCompletionStatus::InvalidControl,
-                        );
-                    }
-                    CURRENT_CONTROL_SEQUENCE.store(control.sequence, Ordering::Release);
-                    process_control(page, init, control);
-                    last_sequence = control.sequence;
-                    LAST_CONTROL_SEQUENCE.store(last_sequence, Ordering::Release);
-                    CURRENT_CONTROL_SEQUENCE.store(0, Ordering::Release);
-                    signal_supervisor(init);
+                let Some(control) = read_stable_control(page) else {
+                    badge = wait_for_lifecycle(init);
+                    continue;
+                };
+                if control.sequence <= last_sequence {
+                    badge = wait_for_lifecycle(init);
+                    continue;
                 }
+                let Some(expected_sequence) = last_sequence.checked_add(1) else {
+                    publish_fault_and_trap(
+                        page,
+                        init,
+                        last_sequence,
+                        WorkerCompletionStatus::InvalidControl,
+                    );
+                };
+                if control.sequence != expected_sequence || control.validate_for(init).is_err() {
+                    publish_fault_and_trap(
+                        page,
+                        init,
+                        expected_sequence,
+                        WorkerCompletionStatus::InvalidControl,
+                    );
+                }
+                CURRENT_CONTROL_SEQUENCE.store(control.sequence, Ordering::Release);
+                process_control(page, init, control);
+                last_sequence = control.sequence;
+                LAST_CONTROL_SEQUENCE.store(last_sequence, Ordering::Release);
+                CURRENT_CONTROL_SEQUENCE.store(0, Ordering::Release);
+                badge = signal_supervisor_and_wait_for_lifecycle(init);
             }
             WorkerLifecycleEvent::Timeout => {
                 let sequence = pending_or_next_sequence(page, last_sequence);
@@ -416,6 +417,26 @@ fn wait_for_lifecycle(init: WorkerRuntimeInit) -> u64 {
     // the active-SC Worker when idle and carries no IPC reply/donation path.
     let _ = unsafe {
         sel4_sys::seL4_Wait(
+            init.lifecycle_notification_slot as sel4_sys::seL4_CPtr,
+            &mut badge,
+        )
+    };
+    badge as u64
+}
+
+fn signal_supervisor_and_wait_for_lifecycle(init: WorkerRuntimeInit) -> u64 {
+    let mut badge: sel4_sys::seL4_Word = 0;
+    fence(Ordering::Release);
+    // SAFETY: Strict init validation proves a send-only supervisor wake slot
+    // and a distinct receive-only lifecycle slot. NBSendWait performs a
+    // nonblocking notification signal and a notification Wait in one atomic
+    // MCS syscall. It cannot donate this Worker's bound SC, installs no Reply
+    // object, and closes the post-completion window in which a new control
+    // signal could otherwise bypass an actual blocking point.
+    let _ = unsafe {
+        sel4_sys::seL4_NBSendWait(
+            init.supervisor_wake_notification_slot as sel4_sys::seL4_CPtr,
+            sel4_sys::seL4_MessageInfo::new(0, 0, 0, 0),
             init.lifecycle_notification_slot as sel4_sys::seL4_CPtr,
             &mut badge,
         )

@@ -118,6 +118,21 @@ class ScheduleRequest:
 
 
 @dataclass(frozen=True)
+class ScheduleDequeue:
+    """Exact FIFO consumer acknowledgement for `/queen/schedule/ctl`."""
+
+    request_id: str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self, "request_id", _normalize_token("request_id", self.request_id)
+        )
+
+    def to_payload(self) -> Dict[str, object]:
+        return {"op": "dequeue", "id": self.request_id}
+
+
+@dataclass(frozen=True)
 class LeaseRequest:
     """Single lease control request for `/queen/lease/ctl`."""
 
@@ -598,6 +613,22 @@ class CohesixOrchestrator:
             self.control_plane.get("schedule", {}).get("ctl_max_bytes", 8192)
         )
         payloads = [json.dumps(item.to_payload(), separators=(",", ":")) for item in requests]
+        return self._append_json_lines(path, payloads, max_bytes, audit)
+
+    def dequeue_schedule(
+        self,
+        requests: Iterable[ScheduleDequeue],
+        audit: Optional[CohesixAudit] = None,
+    ) -> List[ControlWriteResult]:
+        """Consume exact queue-head records after the Queen accepts their work."""
+
+        path = str(self.paths.get("queen_schedule_ctl", "/queen/schedule/ctl"))
+        max_bytes = int(
+            self.control_plane.get("schedule", {}).get("ctl_max_bytes", 8192)
+        )
+        payloads = [
+            json.dumps(item.to_payload(), separators=(",", ":")) for item in requests
+        ]
         return self._append_json_lines(path, payloads, max_bytes, audit)
 
     def apply_leases(

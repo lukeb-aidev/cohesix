@@ -1569,8 +1569,78 @@ impl ConsoleHiveSessionState {
 }
 
 #[derive(Debug, Deserialize)]
-struct WorkerRuntimeStateRecord {
+#[serde(untagged)]
+enum WorkerRuntimeStateWire {
+    V1(WorkerRuntimeStateV1),
+    V2(WorkerRuntimeStateV2),
+}
+
+impl WorkerRuntimeStateWire {
+    fn normalized(self) -> Option<WorkerRuntimeStateRecord> {
+        match self {
+            Self::V1(record) if record.schema == "worker-runtime-state/v1" => {
+                Some(WorkerRuntimeStateRecord {
+                    worker_id: record.worker_id,
+                    role: record.role,
+                    state: record.state,
+                    slot: record.slot,
+                    lease_epoch: record.lease_epoch,
+                    supervisor_generation: record.supervisor_generation,
+                    cap_generation: record.cap_generation,
+                    ready_sequence: record.ready_sequence,
+                })
+            }
+            Self::V2(record) if record.schema == "worker-runtime-state/v2" => {
+                if record
+                    .identity
+                    .iter()
+                    .chain(record.sequence.iter())
+                    .any(|value| *value > u64::from(u32::MAX))
+                {
+                    return None;
+                }
+                Some(WorkerRuntimeStateRecord {
+                    worker_id: record.worker_id,
+                    role: record.role,
+                    state: record.state,
+                    slot: u16::try_from(record.identity[0]).ok()?,
+                    lease_epoch: record.identity[1],
+                    supervisor_generation: record.identity[2],
+                    cap_generation: record.identity[3],
+                    ready_sequence: record.sequence[0],
+                })
+            }
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct WorkerRuntimeStateV1 {
     schema: String,
+    worker_id: String,
+    role: String,
+    state: String,
+    slot: u16,
+    lease_epoch: u64,
+    supervisor_generation: u64,
+    cap_generation: u64,
+    ready_sequence: u64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WorkerRuntimeStateV2 {
+    schema: String,
+    worker_id: String,
+    role: String,
+    state: String,
+    identity: [u64; 4],
+    sequence: [u64; 4],
+}
+
+#[derive(Debug)]
+struct WorkerRuntimeStateRecord {
     worker_id: String,
     role: String,
     state: String,
@@ -1591,13 +1661,15 @@ pub(crate) fn parse_worker_runtime_state(
     line: &str,
     expected_worker_id: &str,
 ) -> Result<Option<WorkerRuntimeObservation>, SwarmUiError> {
-    if !line.contains("worker-runtime-state/v1") {
+    if !line.contains("worker-runtime-state/v1") && !line.contains("worker-runtime-state/v2") {
         return Ok(None);
     }
-    let record: WorkerRuntimeStateRecord = serde_json::from_str(line)
+    let wire: WorkerRuntimeStateWire = serde_json::from_str(line)
         .map_err(|err| SwarmUiError::Hive(format!("malformed Worker runtime state: {err}")))?;
-    if record.schema != "worker-runtime-state/v1"
-        || record.worker_id != expected_worker_id
+    let record = wire.normalized().ok_or_else(|| {
+        SwarmUiError::Hive("Worker runtime state schema or wire bound is invalid".to_owned())
+    })?;
+    if record.worker_id != expected_worker_id
         || record.lease_epoch == 0
         || record.supervisor_generation == 0
         || record.cap_generation == 0

@@ -3,7 +3,7 @@
 // Purpose: Verify AI LoRA authority and the retired radio-sidecar schema boundary.
 // Author: Lukas Bower
 
-use coh_rtc::{compile, CompileOptions};
+use coh_rtc::{compile, compile_with_timer_clock_hz, CompileOptions};
 use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -85,6 +85,37 @@ mount_at = "/lora"
         message.contains("unknown field `lora`"),
         "unexpected rejection: {message}"
     );
+}
+
+#[test]
+fn selected_profile_timer_is_exact_in_resolved_and_rust_outputs() {
+    let temp_dir = TempDir::new().expect("create tempdir");
+    let options = options_for(
+        repo_path("configs/root_task.toml"),
+        &temp_dir.path().join("kvm-timer"),
+    );
+
+    compile_with_timer_clock_hz(&options, Some(31_250_000))
+        .expect("compile KVM timer-resolved manifest");
+    let resolved: Value = serde_json::from_slice(
+        &fs::read(&options.manifest_out).expect("read resolved KVM manifest"),
+    )
+    .expect("parse resolved KVM manifest");
+    assert_eq!(
+        resolved["console_network_service"]["timer_clock_hz"],
+        31_250_000
+    );
+    let bootstrap = fs::read_to_string(options.out_dir.join("bootstrap.rs"))
+        .expect("read generated KVM bootstrap");
+    assert!(bootstrap.contains("timer_clock_hz: 31250000"));
+
+    let zero_options = options_for(
+        repo_path("configs/root_task.toml"),
+        &temp_dir.path().join("zero-timer"),
+    );
+    let error = compile_with_timer_clock_hz(&zero_options, Some(0))
+        .expect_err("zero profile timer must fail closed");
+    assert!(format!("{error:#}").contains("timer_clock_hz must be nonzero"));
 }
 
 #[test]
@@ -183,7 +214,7 @@ fn checked_in_profiles_compile_without_radio_sidecar_output() {
             .unwrap_or_else(|error| panic!("parse resolved manifest for {profile}: {error}"));
         assert_eq!(resolved["root_task"]["schema"], "1.14", "{profile}");
         assert_eq!(
-            resolved["console_network_service"]["abi_version"], 3,
+            resolved["console_network_service"]["abi_version"], 4,
             "{profile}"
         );
         let worker_lora = resolved["worker_runtime"]["roles"]

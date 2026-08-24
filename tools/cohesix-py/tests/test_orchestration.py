@@ -25,6 +25,7 @@ from cohesix.orchestration import (  # noqa: E402
     HostTicketRequest,
     K8sRbacIntent,
     LeaseRequest,
+    ScheduleDequeue,
     ScheduleRequest,
 )
 
@@ -109,6 +110,20 @@ def test_read_proc_snapshot() -> None:
         assert snapshot.lease_summary.startswith("active=1")
         assert len(snapshot.lease_active) == 1
         assert snapshot.lease_preemptions == []
+
+
+def test_dequeue_schedule_writes_exact_consumer_record() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        backend = MockBackend(root=tmp)
+        orchestrator = CohesixOrchestrator(backend=backend)
+
+        writes = orchestrator.dequeue_schedule([ScheduleDequeue("sched-a")])
+
+        assert len(writes) == 1
+        schedule_path = Path(tmp) / "queen" / "schedule" / "ctl"
+        assert schedule_path.read_text(encoding="utf-8").strip() == (
+            '{"op":"dequeue","id":"sched-a"}'
+        )
 
 
 def test_from_env_selects_mock_backend() -> None:

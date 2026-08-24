@@ -2075,6 +2075,12 @@ impl DocFragments {
                     proc_lease.active_bytes
                 )
                 .ok();
+                writeln!(
+                    observability_interfaces_md,
+                    "- `/proc/lease/by-id/<id>` (read-only, max {} bytes): exact active-lease record using the `/proc/lease/active` line schema; an absent lease returns an empty payload.",
+                    proc_lease.active_bytes
+                )
+                .ok();
             }
             if proc_lease.preemptions {
                 writeln!(

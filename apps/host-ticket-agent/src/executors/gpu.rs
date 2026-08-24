@@ -8,12 +8,17 @@ use anyhow::{anyhow, Context, Result};
 use cohsh::{queen, Session, Transport, CLIENT_QUEEN_LEASE_CTL_PATH};
 use serde::Deserialize;
 use serde_json::json;
+use sha2::{Digest, Sha256};
 
 use super::{
     arg_str, arg_u64, provider_pending, read_last_line, target_components, ExecutorConfig,
     ReconcileOutcome,
 };
 use crate::{HostTicketSpec, HOST_TICKET_V2_SCHEMA};
+
+const LEASE_REQUEST_TAG_BYTES: usize = 16;
+const MAX_LEASE_ID_LEN: usize = 32;
+const PROC_LEASE_BY_ID_PREFIX: &str = "/proc/lease/by-id/";
 
 /// Execute GPU lease ticket actions.
 pub fn execute(
@@ -63,6 +68,7 @@ fn execute_v2(
         .receipt_worker_id
         .as_deref()
         .ok_or_else(|| anyhow!("host-ticket/v2 requires receipt_worker_id"))?;
+    let request_tag = lease_request_tag(spec.idempotency_key.as_str());
     let payload = match spec.action.as_str() {
         "gpu.lease.grant" => {
             validate_runtime_gpu_id(transport, session, subject_ref)?;
@@ -83,17 +89,17 @@ fn execute_v2(
             })
         }
         "gpu.lease.renew" => {
-            validate_runtime_gpu_id(transport, session, subject_ref)?;
-            validate_existing_lease_binding(
-                transport,
-                session,
-                operation_id,
-                receipt_worker_id,
-                subject_ref,
-            )?;
             let ttl_s = to_u32(arg_u64(spec, "ttl_s").unwrap_or(120), "ttl_s")?;
             let priority = arg_u64(spec, "priority").unwrap_or(0);
-            json!({"op": "renew", "id": operation_id, "ttl_s": ttl_s, "priority": priority})
+            json!({
+                "op": "renew-bound",
+                "id": operation_id,
+                "subject": receipt_worker_id,
+                "resource": subject_ref,
+                "request": request_tag.as_str(),
+                "ttl_s": ttl_s,
+                "priority": priority
+            })
         }
         "gpu.lease.release" => {
             validate_runtime_gpu_id(transport, session, subject_ref)?;
@@ -119,6 +125,12 @@ fn execute_v2(
             "GPU lease control write outcome is unknown and will be reconciled without replay: {error}"
         )));
     }
+    if spec.action == "gpu.lease.renew" {
+        return Ok(format!(
+            "gpu.lease.renew operation_id={operation_id} observed=active request={}",
+            request_tag
+        ));
+    }
     match observe_v2_operation(transport, session, spec)? {
         ReconcileOutcome::Committed(message) => Ok(message),
         ReconcileOutcome::Rejected(message) => Err(anyhow!(message)),
@@ -138,7 +150,7 @@ fn observe_v2_operation(
         .as_deref()
         .ok_or_else(|| anyhow!("host-ticket/v2 requires operation_id"))?;
     match spec.action.as_str() {
-        "gpu.lease.grant" | "gpu.lease.renew" => {
+        "gpu.lease.grant" => {
             let worker_id = spec
                 .receipt_worker_id
                 .as_deref()
@@ -166,6 +178,44 @@ fn observe_v2_operation(
                     "{} operation_id={operation_id} observed=active",
                     spec.action
                 )));
+            }
+            Ok(ReconcileOutcome::Ambiguous)
+        }
+        "gpu.lease.renew" => {
+            let worker_id = spec
+                .receipt_worker_id
+                .as_deref()
+                .ok_or_else(|| anyhow!("host-ticket/v2 requires receipt_worker_id"))?;
+            let gpu_id = spec
+                .subject_ref
+                .as_deref()
+                .ok_or_else(|| anyhow!("host-ticket/v2 requires subject_ref"))?;
+            if let Some(line) = find_active_lease(transport, session, operation_id)? {
+                let subject = format!("subject={worker_id}");
+                let resource = format!("resource={gpu_id}");
+                if !line
+                    .split_whitespace()
+                    .any(|field| field == subject.as_str())
+                    || !line
+                        .split_whitespace()
+                        .any(|field| field == resource.as_str())
+                {
+                    return Ok(ReconcileOutcome::Rejected(format!(
+                        "gpu.lease.renew operation_id={operation_id} observed=wrong-binding"
+                    )));
+                }
+                let request = format!(
+                    "request={}",
+                    lease_request_tag(spec.idempotency_key.as_str())
+                );
+                if line
+                    .split_whitespace()
+                    .any(|field| field == request.as_str())
+                {
+                    return Ok(ReconcileOutcome::Committed(format!(
+                        "gpu.lease.renew operation_id={operation_id} observed=active request=matched"
+                    )));
+                }
             }
             Ok(ReconcileOutcome::Ambiguous)
         }
@@ -253,11 +303,38 @@ fn find_active_lease(
     session: &Session,
     operation_id: &str,
 ) -> Result<Option<String>> {
-    let lines = transport.read(session, "/proc/lease/active")?;
+    if operation_id.is_empty()
+        || operation_id.len() > MAX_LEASE_ID_LEN
+        || !operation_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':'))
+    {
+        return Err(anyhow!(
+            "lease operation_id must be a 1..={MAX_LEASE_ID_LEN} byte simple token"
+        ));
+    }
+    let path = format!("{PROC_LEASE_BY_ID_PREFIX}{operation_id}");
+    let lines = transport.read(session, path.as_str())?;
+    if lines.len() > 1 {
+        return Err(anyhow!(
+            "exact lease lookup for operation_id {operation_id} returned multiple records"
+        ));
+    }
     let id = format!("id={operation_id}");
-    Ok(lines
-        .into_iter()
-        .find(|line| line.split_whitespace().any(|field| field == id.as_str())))
+    let Some(line) = lines.into_iter().next() else {
+        return Ok(None);
+    };
+    if !line.split_whitespace().any(|field| field == id.as_str()) {
+        return Err(anyhow!(
+            "exact lease lookup for operation_id {operation_id} returned a mismatched record"
+        ));
+    }
+    Ok(Some(line))
+}
+
+fn lease_request_tag(idempotency_key: &str) -> String {
+    let digest = Sha256::digest(idempotency_key.as_bytes());
+    hex::encode(&digest[..LEASE_REQUEST_TAG_BYTES])
 }
 
 fn execute_grant(
@@ -561,10 +638,71 @@ mod tests {
     }
 
     #[test]
+    fn v2_gpu_renew_uses_one_atomic_correlated_round_trip() {
+        let mut transport = GpuTransport::new(true);
+        let spec = v2_gpu_spec("gpu.lease.renew");
+        let result = execute(
+            &mut transport,
+            &Session::new(1.into(), Role::Queen),
+            &spec,
+            &ExecutorConfig::default(),
+        )
+        .expect("renew");
+
+        assert!(result.contains("observed=active"));
+        assert_eq!(transport.writes.len(), 1);
+        assert!(transport.writes[0].1.contains("\"op\":\"renew-bound\""));
+        assert!(transport.writes[0]
+            .1
+            .contains("\"subject\":\"gpu-worker-1\""));
+        assert!(transport.writes[0].1.contains("\"resource\":\"GPU-0\""));
+        assert!(transport.writes[0].1.contains(&format!(
+            "\"request\":\"{}\"",
+            lease_request_tag(spec.idempotency_key.as_str())
+        )));
+        assert!(transport.reads.is_empty());
+        assert!(transport.lists.is_empty());
+    }
+
+    #[test]
+    fn v2_gpu_renew_reconciliation_requires_exact_request_tag() {
+        let mut transport = GpuTransport::new(false);
+        let spec = v2_gpu_spec("gpu.lease.renew");
+        transport.files.insert(
+            "/proc/lease/by-id/lease-1".to_owned(),
+            vec![format!(
+                "id=lease-1 subject=gpu-worker-1 resource=GPU-0 request={}",
+                lease_request_tag(spec.idempotency_key.as_str())
+            )],
+        );
+        let outcome = reconcile(
+            &mut transport,
+            &Session::new(1.into(), Role::Queen),
+            &spec,
+            &ExecutorConfig::default(),
+        )
+        .expect("reconcile exact request");
+        assert!(matches!(outcome, ReconcileOutcome::Committed(_)));
+
+        transport.files.insert(
+            "/proc/lease/by-id/lease-1".to_owned(),
+            vec!["id=lease-1 subject=gpu-worker-1 resource=GPU-0 request=00000000000000000000000000000000".to_owned()],
+        );
+        let outcome = reconcile(
+            &mut transport,
+            &Session::new(1.into(), Role::Queen),
+            &spec,
+            &ExecutorConfig::default(),
+        )
+        .expect("reconcile stale request");
+        assert!(matches!(outcome, ReconcileOutcome::Ambiguous));
+    }
+
+    #[test]
     fn v2_gpu_release_preempts_without_killing_receipt_worker() {
         let mut transport = GpuTransport::new(true);
         transport.files.insert(
-            "/proc/lease/active".to_owned(),
+            "/proc/lease/by-id/lease-1".to_owned(),
             vec!["id=lease-1 subject=gpu-worker-1 resource=GPU-0".to_owned()],
         );
         let result = execute(
@@ -584,6 +722,8 @@ mod tests {
     struct GpuTransport {
         files: BTreeMap<String, Vec<String>>,
         writes: Vec<(String, String)>,
+        reads: Vec<String>,
+        lists: Vec<String>,
         publish_observation: bool,
     }
 
@@ -591,11 +731,13 @@ mod tests {
         fn new(publish_observation: bool) -> Self {
             let mut files = BTreeMap::new();
             files.insert("/gpu".to_owned(), vec!["GPU-0".to_owned()]);
-            files.insert("/proc/lease/active".to_owned(), Vec::new());
+            files.insert("/proc/lease/by-id/lease-1".to_owned(), Vec::new());
             files.insert("/proc/lease/preemptions".to_owned(), Vec::new());
             Self {
                 files,
                 writes: Vec::new(),
+                reads: Vec::new(),
+                lists: Vec::new(),
                 publish_observation,
             }
         }
@@ -620,10 +762,12 @@ mod tests {
         }
 
         fn read(&mut self, _session: &Session, path: &str) -> Result<Vec<String>> {
+            self.reads.push(path.to_owned());
             Ok(self.files.get(path).cloned().unwrap_or_default())
         }
 
         fn list(&mut self, _session: &Session, path: &str) -> Result<Vec<String>> {
+            self.lists.push(path.to_owned());
             Ok(self.files.get(path).cloned().unwrap_or_default())
         }
 
@@ -633,11 +777,35 @@ mod tests {
             if self.publish_observation && path == CLIENT_QUEEN_LEASE_CTL_PATH {
                 let value: Value = serde_json::from_str(&payload)?;
                 if value.get("op").and_then(Value::as_str) == Some("grant") {
+                    let id = value.get("id").and_then(Value::as_str).unwrap_or_default();
                     self.files.insert(
-                        "/proc/lease/active".to_owned(),
-                        vec!["id=lease-1 subject=gpu-worker-1 resource=GPU-0".to_owned()],
+                        format!("{PROC_LEASE_BY_ID_PREFIX}{id}"),
+                        vec![format!("id={id} subject=gpu-worker-1 resource=GPU-0")],
+                    );
+                } else if value.get("op").and_then(Value::as_str) == Some("renew-bound") {
+                    let id = value.get("id").and_then(Value::as_str).unwrap_or_default();
+                    let subject = value
+                        .get("subject")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default();
+                    let resource = value
+                        .get("resource")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default();
+                    let request = value
+                        .get("request")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default();
+                    self.files.insert(
+                        format!("{PROC_LEASE_BY_ID_PREFIX}{id}"),
+                        vec![format!(
+                            "id={id} subject={subject} resource={resource} request={request}"
+                        )],
                     );
                 } else if value.get("op").and_then(Value::as_str) == Some("preempt") {
+                    let id = value.get("id").and_then(Value::as_str).unwrap_or_default();
+                    self.files
+                        .remove(format!("{PROC_LEASE_BY_ID_PREFIX}{id}").as_str());
                     self.files.insert(
                         "/proc/lease/preemptions".to_owned(),
                         vec!["id=lease-1 subject=gpu-worker-1 resource=GPU-0".to_owned()],

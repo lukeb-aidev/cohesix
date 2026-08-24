@@ -9,9 +9,9 @@ use core::sync::atomic::{fence, Ordering};
 
 use console_network_runtime::abi::{
     ExchangeKind, ExchangePage, ExchangePageHeader, PacketDirection, PacketPage, PacketPageHeader,
-    RuntimeInitDescriptor, CONSOLE_PAYLOAD_BYTES, ETHERNET_FRAME_BYTES,
-    RUNTIME_INIT_DESCRIPTOR_BYTES, WAKE_CONTROL, WAKE_PACKET_RX, WAKE_PUBLICATION_ACK, WAKE_REVOKE,
-    WAKE_SHUTDOWN,
+    RuntimeInitDescriptor, CONSOLE_PAYLOAD_BYTES, CONTROL_CONSUMED_SEQUENCE_OFFSET,
+    ETHERNET_FRAME_BYTES, INGRESS_CONSUMED_SEQUENCE_OFFSET, RUNTIME_INIT_DESCRIPTOR_BYTES,
+    WAKE_CONTROL, WAKE_PACKET_RX, WAKE_PUBLICATION_ACK, WAKE_REVOKE, WAKE_SHUTDOWN,
 };
 use console_network_runtime::{
     ChildTurnReadiness, ChildTurnScheduler, ChildTurnUnit, ConsoleNetworkService,
@@ -122,7 +122,7 @@ pub unsafe extern "C" fn _start(descriptor: *const u8) -> ! {
         0,
         now_ms(descriptor.timer_clock_hz),
         0,
-        b"console-network-service/v3",
+        b"console-network-service/v4",
     );
     signal_slot(descriptor.supervisor_wake_notification_slot);
     // Ready occupies the one-slot event page. Only root's explicit ACK after it
@@ -227,13 +227,11 @@ pub unsafe extern "C" fn _start(descriptor: *const u8) -> ! {
                 signal_slot(descriptor.supervisor_wake_notification_slot);
             }
             ChildTurnUnit::PublishServiceEvent => {
-                let Some(runtime_event) = service.pop_event() else {
-                    enter_standard_fault();
-                };
-                let payload = match runtime_event.payload() {
-                    Ok(payload) => payload,
-                    Err(_) => enter_standard_fault(),
-                };
+                let runtime_event =
+                    match service.pop_publication_event(descriptor.max_commands_per_wake) {
+                        Ok(Some(event)) => event,
+                        Ok(None) | Err(_) => enter_standard_fault(),
+                    };
                 event_sequence = next_sequence(event_sequence);
                 publish_exchange(
                     event,
@@ -243,7 +241,7 @@ pub unsafe extern "C" fn _start(descriptor: *const u8) -> ! {
                     runtime_event.connection_id(),
                     runtime_event.now_ms(),
                     0,
-                    payload.as_bytes(),
+                    runtime_event.payload_bytes(),
                 );
                 signal_slot(descriptor.supervisor_wake_notification_slot);
             }
@@ -298,12 +296,8 @@ pub unsafe extern "C" fn _start(descriptor: *const u8) -> ! {
                             enter_standard_fault();
                         }
                         last_packet_sequence = sequence;
-                        if completions
-                            .push_back((ExchangeKind::PacketConsumed, sequence, 0))
-                            .is_err()
-                        {
-                            enter_standard_fault();
-                        }
+                        publish_completion_watermark(event, Some(sequence), None);
+                        signal_slot(descriptor.supervisor_wake_notification_slot);
                         turn_scheduler.complete(ChildTurnUnit::IngestPacket);
                         turn_scheduler.request_service();
                     }
@@ -344,12 +338,8 @@ pub unsafe extern "C" fn _start(descriptor: *const u8) -> ! {
                             // but it did not authorize output. Preserve any
                             // independently pending exact-current drain record.
                         }
-                        if completions
-                            .push_back((ExchangeKind::ControlCompleted, sequence, 0))
-                            .is_err()
-                        {
-                            enter_standard_fault();
-                        }
+                        publish_completion_watermark(event, None, Some(sequence));
+                        signal_slot(descriptor.supervisor_wake_notification_slot);
                         turn_scheduler.complete(ChildTurnUnit::ApplyControl);
                         turn_scheduler.request_service();
                     }
@@ -419,6 +409,38 @@ fn signal_slot(slot: u32) {
     // their one-hot badges are minted by the supervisor and not child-selected.
     unsafe {
         sel4_sys::seL4_Signal(slot as sel4_sys::seL4_CPtr);
+    }
+}
+
+/// Publish exact input ownership retirement without consuming the semantic
+/// event slot or its global publication credit.
+#[inline(never)]
+fn publish_completion_watermark(
+    event_page: *mut ExchangePage,
+    packet_sequence: Option<u64>,
+    control_sequence: Option<u64>,
+) {
+    if packet_sequence.is_none() && control_sequence.is_none() {
+        enter_standard_fault();
+    }
+    // SAFETY: Descriptor validation fixes this page-aligned child-produced
+    // mapping. The two aligned trailer words lie inside that page and are
+    // disjoint from the sequence-last event body. Root never writes them.
+    unsafe {
+        let page = event_page.cast::<u8>();
+        if let Some(sequence) = packet_sequence {
+            write_volatile(
+                page.add(INGRESS_CONSUMED_SEQUENCE_OFFSET).cast::<u64>(),
+                sequence.to_le(),
+            );
+        }
+        if let Some(sequence) = control_sequence {
+            write_volatile(
+                page.add(CONTROL_CONSUMED_SEQUENCE_OFFSET).cast::<u64>(),
+                sequence.to_le(),
+            );
+        }
+        fence(Ordering::Release);
     }
 }
 

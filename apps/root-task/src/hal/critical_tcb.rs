@@ -20,9 +20,9 @@ use crate::critical_tcb::{
     CriticalHandoff, CriticalTcbHandle, CriticalTcbInventory, CriticalTcbOrigin,
     CriticalTopologyError, FaultClass, FaultHandoffError, FaultHandoffRecord, FaultRegistration,
     FaultRegistry, FaultRegistryError, FaultRegistrySnapshot, GenerationIdentity, PublishResult,
-    WorkerControlRecord, WorkerSupervisorItem, CRITICAL_TCB_COUNT, DRIVER_FAULT_RECORD_CAPACITY,
-    FAULT_REGISTRY_CAPACITY, SERVICE_FAULT_RECORD_CAPACITY, WORKER_CONTROL_QUEUE_CAPACITY,
-    WORKER_FAULT_MAILBOX_CAPACITY,
+    WorkerControlQueue, WorkerControlQueueError, WorkerControlRecord, WorkerSupervisorItem,
+    CRITICAL_TCB_COUNT, DRIVER_FAULT_RECORD_CAPACITY, FAULT_REGISTRY_CAPACITY,
+    SERVICE_FAULT_RECORD_CAPACITY, WORKER_CONTROL_QUEUE_CAPACITY, WORKER_FAULT_MAILBOX_CAPACITY,
 };
 use crate::generated::{
     self, CriticalTcbResource, TemporalExecution, TemporalTaskConfig, TemporalTaskKind,
@@ -216,6 +216,7 @@ impl From<FaultHandoffError> for CriticalTcbConstructionError {
 }
 
 static TARGET_HANDOFF: Mutex<CriticalHandoff> = Mutex::new(CriticalHandoff::new());
+static TARGET_WORKER_CONTROL: WorkerControlQueue = WorkerControlQueue::new();
 static TARGET_FAULT_REGISTRY: Mutex<FaultRegistry> = Mutex::new(FaultRegistry::new());
 static TARGET_FAULT_REGISTRY_SEALED: AtomicBool = AtomicBool::new(false);
 static TARGET_FAULT_RECEIVER_ACTIVE: AtomicBool = AtomicBool::new(false);
@@ -260,6 +261,12 @@ static TARGET_SERVICE_RECOVERY_STATES: [AtomicUsize; SERVICE_FAULT_RECORD_CAPACI
     [const { AtomicUsize::new(0) }; SERVICE_FAULT_RECORD_CAPACITY];
 static TARGET_SERVICE_CALL_SEQUENCES: [AtomicU64; SERVICE_FAULT_RECORD_CAPACITY] =
     [const { AtomicU64::new(0) }; SERVICE_FAULT_RECORD_CAPACITY];
+static TARGET_SERVICE_RECOVERY_REQUEST_SEQUENCES: [AtomicU64; SERVICE_FAULT_RECORD_CAPACITY] =
+    [const { AtomicU64::new(0) }; SERVICE_FAULT_RECORD_CAPACITY];
+static TARGET_SERVICE_RECOVERY_FAULT_SEQUENCES: [AtomicU64; SERVICE_FAULT_RECORD_CAPACITY] =
+    [const { AtomicU64::new(0) }; SERVICE_FAULT_RECORD_CAPACITY];
+static TARGET_SERVICE_RECOVERY_FAULT_CLASSES: [AtomicUsize; SERVICE_FAULT_RECORD_CAPACITY] =
+    [const { AtomicUsize::new(0) }; SERVICE_FAULT_RECORD_CAPACITY];
 
 /// Coherent, copied live MCS state used by bounded operator diagnostics.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -297,6 +304,19 @@ pub fn target_mcs_runtime_snapshot() -> Option<TargetMcsRuntimeSnapshot> {
 const SERVICE_RECOVERY_UNREGISTERED: usize = 0;
 const SERVICE_RECOVERY_READY: usize = 1;
 const SERVICE_RECOVERY_REPLIED: usize = 2;
+
+/// Exact outcome of one root-to-service Call after the caller resumes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TargetServiceCallCompletion {
+    /// The service produced the ordinary protocol reply.
+    Normal,
+    /// Root-fault released the blocked caller after containing the service.
+    Recovered {
+        request_sequence: u64,
+        fault_sequence: u64,
+        fault_class: FaultClass,
+    },
+}
 
 /// Return the exact standard and timeout badge pair for one generated task.
 #[must_use]
@@ -346,6 +366,9 @@ pub fn register_target_service_recovery_reply(
         != SERVICE_RECOVERY_UNREGISTERED
         || TARGET_SERVICE_RECOVERY_SLOTS[mailbox].load(Ordering::Acquire) != 0
         || TARGET_SERVICE_CALL_SEQUENCES[mailbox].load(Ordering::Acquire) != 0
+        || TARGET_SERVICE_RECOVERY_REQUEST_SEQUENCES[mailbox].load(Ordering::Acquire) != 0
+        || TARGET_SERVICE_RECOVERY_FAULT_SEQUENCES[mailbox].load(Ordering::Acquire) != 0
+        || TARGET_SERVICE_RECOVERY_FAULT_CLASSES[mailbox].load(Ordering::Acquire) != 0
     {
         return Err(CriticalTcbConstructionError::RuntimeNotReady);
     }
@@ -394,17 +417,34 @@ pub fn arm_target_service_call(
 pub fn finish_target_service_call(
     task_id: &str,
     sequence: u64,
-) -> Result<(), CriticalTcbConstructionError> {
+) -> Result<TargetServiceCallCompletion, CriticalTcbConstructionError> {
     let mailbox = target_service_mailbox(task_id)?;
     match TARGET_SERVICE_RECOVERY_STATES[mailbox].load(Ordering::Acquire) {
         SERVICE_RECOVERY_READY => TARGET_SERVICE_CALL_SEQUENCES[mailbox]
             .compare_exchange(sequence, 0, Ordering::AcqRel, Ordering::Acquire)
-            .map(|_| ())
+            .map(|_| TargetServiceCallCompletion::Normal)
             .map_err(|_| CriticalTcbConstructionError::RuntimeNotReady),
         SERVICE_RECOVERY_REPLIED
             if TARGET_SERVICE_CALL_SEQUENCES[mailbox].load(Ordering::Acquire) == 0 =>
         {
-            Ok(())
+            let request_sequence =
+                TARGET_SERVICE_RECOVERY_REQUEST_SEQUENCES[mailbox].load(Ordering::Acquire);
+            let fault_sequence =
+                TARGET_SERVICE_RECOVERY_FAULT_SEQUENCES[mailbox].load(Ordering::Acquire);
+            let fault_class =
+                match TARGET_SERVICE_RECOVERY_FAULT_CLASSES[mailbox].load(Ordering::Acquire) {
+                    1 => FaultClass::Standard,
+                    2 => FaultClass::Timeout,
+                    _ => return Err(CriticalTcbConstructionError::RuntimeNotReady),
+                };
+            if request_sequence != sequence || fault_sequence == 0 {
+                return Err(CriticalTcbConstructionError::RuntimeNotReady);
+            }
+            Ok(TargetServiceCallCompletion::Recovered {
+                request_sequence,
+                fault_sequence,
+                fault_class,
+            })
         }
         _ => Err(CriticalTcbConstructionError::RuntimeNotReady),
     }
@@ -444,6 +484,9 @@ fn revoke_target_service_recovery_reply_with(
         return Err(sel4_error("critical.service-recovery-reply-delete", error));
     }
     TARGET_SERVICE_RECOVERY_SLOTS[mailbox].store(0, Ordering::Release);
+    TARGET_SERVICE_RECOVERY_REQUEST_SEQUENCES[mailbox].store(0, Ordering::Release);
+    TARGET_SERVICE_RECOVERY_FAULT_SEQUENCES[mailbox].store(0, Ordering::Release);
+    TARGET_SERVICE_RECOVERY_FAULT_CLASSES[mailbox].store(0, Ordering::Release);
     TARGET_SERVICE_RECOVERY_STATES[mailbox].store(SERVICE_RECOVERY_UNREGISTERED, Ordering::Release);
     Ok(())
 }
@@ -891,15 +934,18 @@ pub fn publish_worker_control(
     if worker_signal_cap == sel4_sys::seL4_CapNull || TARGET_FATAL.load(Ordering::Acquire) {
         return PublishResult::Refused;
     }
-    let Some(mut handoff) = TARGET_HANDOFF.try_lock() else {
-        return PublishResult::Refused;
-    };
-    let result = handoff.publish_worker_control(record);
-    drop(handoff);
+    let result = TARGET_WORKER_CONTROL.publish(record);
     if result == PublishResult::Published {
         sel4::signal_unchecked(worker_signal_cap);
     }
     result
+}
+
+/// Consume one record only after the restricted Worker-supervisor has
+/// validated it in place. Root-control remains the sole lifecycle authority.
+pub(crate) fn take_validated_worker_control(
+) -> Result<Option<WorkerControlRecord>, WorkerControlQueueError> {
+    TARGET_WORKER_CONTROL.drain_validated()
 }
 
 /// Nonblockingly take one suspended service fault for its root-control owner.
@@ -945,6 +991,8 @@ pub fn activate_critical_tcb_runtime(
     TARGET_FAULT_RECEIVER_ACTIVE
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
         .map_err(|_| CriticalTcbConstructionError::RuntimeNotReady)?;
+    #[cfg(all(feature = "bootstrap-trace", feature = "release-qemu"))]
+    cohesix_critical_runtime_qemu_evidence_arm();
     for index in 1..CRITICAL_TCB_COUNT {
         let tcb = runtime.handles[index].tcb_cap as seL4_CPtr;
         if let Err(error) = sel4::resume_tcb(tcb) {
@@ -962,6 +1010,18 @@ pub fn activate_critical_tcb_runtime(
         }
     }
     Ok(())
+}
+
+/// Stable external-QEMU observation point before any restricted duty resumes.
+///
+/// A halted SMP boot reaches this point only after seL4 has initialized every
+/// secondary core. The collector can therefore re-arm accelerator hardware
+/// breakpoints here without changing target scheduling or runtime authority.
+#[cfg(all(feature = "bootstrap-trace", feature = "release-qemu"))]
+#[inline(never)]
+#[no_mangle]
+pub extern "C" fn cohesix_critical_runtime_qemu_evidence_arm() {
+    core::hint::black_box(0x26e0_0000_u32);
 }
 
 /// Apply the generated root-control SC parameters at the steady event-loop boundary.
@@ -1278,13 +1338,26 @@ fn resolve_target_fault(
 
 #[inline(never)]
 fn recover_target_passive_service_call(
-    task_index: u16,
+    record: FaultHandoffRecord,
 ) -> Result<(), CriticalTcbConstructionError> {
-    let mailbox = service_fault_mailbox_index(task_index)
+    let mailbox = service_fault_mailbox_index(record.task_index)
         .ok_or(CriticalTcbConstructionError::MissingGeneratedRecord)?;
     let reply_slot = TARGET_SERVICE_RECOVERY_SLOTS[mailbox].load(Ordering::Acquire) as seL4_CPtr;
     if reply_slot == sel4_sys::seL4_CapNull {
         return Err(CriticalTcbConstructionError::RuntimeNotReady);
+    }
+    let request_sequence = TARGET_SERVICE_CALL_SEQUENCES[mailbox].load(Ordering::Acquire);
+    if request_sequence != 0 {
+        TARGET_SERVICE_RECOVERY_REQUEST_SEQUENCES[mailbox]
+            .store(request_sequence, Ordering::Relaxed);
+        TARGET_SERVICE_RECOVERY_FAULT_SEQUENCES[mailbox].store(record.sequence, Ordering::Relaxed);
+        TARGET_SERVICE_RECOVERY_FAULT_CLASSES[mailbox].store(
+            match record.fault_class {
+                FaultClass::Standard => 1,
+                FaultClass::Timeout => 2,
+            },
+            Ordering::Relaxed,
+        );
     }
     match TARGET_SERVICE_RECOVERY_STATES[mailbox].compare_exchange(
         SERVICE_RECOVERY_READY,
@@ -1825,7 +1898,7 @@ extern "C" fn root_fault_entry(_arg0: seL4_Word) -> ! {
                     ),
                 };
                 commit_root_fault_turn(RootFaultCriticalTurn::PublishService);
-                if recover_target_passive_service_call(pending.record.task_index).is_err() {
+                if recover_target_passive_service_call(pending.record).is_err() {
                     commit_root_fault_turn(RootFaultCriticalTurn::RecoverPassiveService);
                 }
                 sel4::yield_now();
@@ -1917,7 +1990,19 @@ extern "C" fn root_worker_supervisor_entry(_arg0: seL4_Word) -> ! {
                     // loss and must not convert normal coalescence into fatal.
                     break;
                 };
-                handoff.drain_worker()
+                let fault = handoff.drain_worker_fault();
+                drop(handoff);
+                match fault {
+                    Some(record) => Some(WorkerSupervisorItem::Fault(record)),
+                    None => match TARGET_WORKER_CONTROL.validate_next() {
+                        Ok(Some(record)) => Some(WorkerSupervisorItem::Control(record)),
+                        Ok(None) => None,
+                        Err(_) => target_fail_stop(
+                            "[critical] Worker control ring ownership failed",
+                            Some(CHILD_EMERGENCY_SIGNAL_SLOT),
+                        ),
+                    },
+                }
             };
             let Some(item) = item else {
                 break;
@@ -1926,9 +2011,7 @@ extern "C" fn root_worker_supervisor_entry(_arg0: seL4_Word) -> ! {
                 WorkerSupervisorItem::Fault(record) => {
                     crate::worker_supervisor::drain_critical_fault(record)
                 }
-                WorkerSupervisorItem::Control(record) => {
-                    crate::worker_supervisor::drain_critical_control(record)
-                }
+                WorkerSupervisorItem::Control(_) => Ok(()),
             };
             if result.is_err() {
                 target_fail_stop(
@@ -1938,7 +2021,9 @@ extern "C" fn root_worker_supervisor_entry(_arg0: seL4_Word) -> ! {
             }
         }
         let retry = match TARGET_HANDOFF.try_lock() {
-            Some(handoff) => handoff.worker_pending(),
+            Some(handoff) => {
+                handoff.worker_fault_pending() || TARGET_WORKER_CONTROL.validation_pending()
+            }
             None => true,
         };
         if retry {
@@ -2030,7 +2115,7 @@ extern "C" fn root_driver_supervisor_entry(ipc_buffer_vaddr: seL4_Word) -> ! {
 #[inline(never)]
 #[no_mangle]
 pub extern "C" fn cohesix_root_fault_qemu_evidence_turn() {
-    core::hint::black_box(());
+    core::hint::black_box(0x26e0_0001_u32);
 }
 
 /// Stable external-QEMU observation point before root-emergency blocks.
@@ -2038,7 +2123,7 @@ pub extern "C" fn cohesix_root_fault_qemu_evidence_turn() {
 #[inline(never)]
 #[no_mangle]
 pub extern "C" fn cohesix_root_emergency_qemu_evidence_wait() {
-    core::hint::black_box(());
+    core::hint::black_box(0x26e0_0002_u32);
 }
 
 /// Stable external-QEMU observation point before the Worker supervisor waits.
@@ -2046,7 +2131,7 @@ pub extern "C" fn cohesix_root_emergency_qemu_evidence_wait() {
 #[inline(never)]
 #[no_mangle]
 pub extern "C" fn cohesix_worker_supervisor_qemu_evidence_wait() {
-    core::hint::black_box(());
+    core::hint::black_box(0x26e0_0003_u32);
 }
 
 /// Stable external-QEMU observation point before the driver supervisor waits.
@@ -2054,7 +2139,7 @@ pub extern "C" fn cohesix_worker_supervisor_qemu_evidence_wait() {
 #[inline(never)]
 #[no_mangle]
 pub extern "C" fn cohesix_driver_supervisor_qemu_evidence_wait() {
-    core::hint::black_box(());
+    core::hint::black_box(0x26e0_0004_u32);
 }
 
 struct ConstructedChild {

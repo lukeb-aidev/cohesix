@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright © 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Provide CUDA driver/runtime probes for host GPU inventory.
 // Author: Lukas Bower
@@ -267,7 +267,7 @@ mod linux {
         let mut last_err = None;
         for name in names {
             // Safety: loading a dynamic library by name is required for CUDA probing.
-            match unsafe { Library::new(name) } {
+            match unsafe { Library::new(*name) } {
                 Ok(lib) => return Ok(lib),
                 Err(err) => last_err = Some(err),
             }

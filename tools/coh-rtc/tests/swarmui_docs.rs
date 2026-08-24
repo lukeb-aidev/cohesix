@@ -126,13 +126,13 @@ fn generated_swarmui_defaults_expose_worker_runtime_bounds() {
         .expect("read generated SwarmUI TOML defaults");
 
     for expected in [
-        "SWARMUI_WORKER_MAXIMUM_LIVE_TASKS: u16 = 3",
+        "SWARMUI_WORKER_MAXIMUM_LIVE_TASKS: u16 = 37",
         "SWARMUI_WORKER_CANONICAL_TELEMETRY_TEMPLATE: &str",
         "\"/shard/<label>/worker/<id>/telemetry\"",
         "SWARMUI_WORKER_SHARD_BITS: u8 = 8",
         "SWARMUI_WORKER_LEGACY_ALIAS: bool = true",
         "(\"worker-bus\", \"model-only\", 0)",
-        "(\"worker-lora\", \"executable\", 1)",
+        "(\"worker-lora\", \"executable\", 21)",
     ] {
         assert!(
             rust.contains(expected),
@@ -142,7 +142,7 @@ fn generated_swarmui_defaults_expose_worker_runtime_bounds() {
     for expected in [
         "worker_root = \"/shard\"",
         "[swarmui.worker_runtime]",
-        "maximum_live_tasks = 3",
+        "maximum_live_tasks = 37",
         "canonical_telemetry_template = \"/shard/<label>/worker/<id>/telemetry\"",
         "legacy_worker_alias = true",
     ] {

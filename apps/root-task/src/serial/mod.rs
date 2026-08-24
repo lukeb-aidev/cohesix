@@ -79,6 +79,8 @@ pub fn puts_once(_message: &'static str) {}
 
 #[cfg(feature = "kernel")]
 static UART_TX_LOCK: SpinMutex<()> = SpinMutex::new(());
+#[cfg(all(feature = "kernel", feature = "release-qemu"))]
+static QEMU_UART_TX_LOCK_DEFERRALS: AtomicU64 = AtomicU64::new(0);
 
 /// Serialize all physical UART TX access so debug/syslog bytes do not interleave
 /// with root-console traffic.
@@ -92,6 +94,43 @@ pub(crate) fn with_uart_tx_lock<R>(f: impl FnOnce() -> R) -> R {
     #[cfg(not(feature = "kernel"))]
     {
         f()
+    }
+}
+
+/// Attempt one serialized UART operation without waiting behind a preempted
+/// MCS owner. Callers retain their staged bytes when this returns `None`.
+#[cfg(feature = "release-qemu")]
+#[inline(always)]
+pub(crate) fn try_with_uart_tx_lock<R>(f: impl FnOnce() -> R) -> Option<R> {
+    #[cfg(feature = "kernel")]
+    {
+        let guard = UART_TX_LOCK.try_lock()?;
+        let result = f();
+        drop(guard);
+        Some(result)
+    }
+    #[cfg(not(feature = "kernel"))]
+    {
+        Some(f())
+    }
+}
+
+#[cfg(all(feature = "kernel", feature = "release-qemu"))]
+fn record_qemu_uart_tx_lock_deferral() {
+    QEMU_UART_TX_LOCK_DEFERRALS.fetch_add(1, AtomicOrdering::Relaxed);
+}
+
+/// Number of QEMU root-control UART flushes deferred rather than spinning
+/// behind a preempted lock owner.
+#[cfg(feature = "release-qemu")]
+pub(crate) fn qemu_uart_tx_lock_deferrals() -> u64 {
+    #[cfg(feature = "kernel")]
+    {
+        QEMU_UART_TX_LOCK_DEFERRALS.load(AtomicOrdering::Relaxed)
+    }
+    #[cfg(not(feature = "kernel"))]
+    {
+        0
     }
 }
 
@@ -2225,6 +2264,13 @@ where
         if budget_exhausted {
             self.telemetry.driver_task_budget_overrun();
         } else {
+            #[cfg(feature = "release-qemu")]
+            if self.ordinary_root_control_turn.active() {
+                if try_with_uart_tx_lock(|| self.flush_tx_unlocked(&mut budget)).is_none() {
+                    record_qemu_uart_tx_lock_deferral();
+                }
+                return rx_activity;
+            }
             with_uart_tx_lock(|| self.flush_tx_unlocked(&mut budget));
         }
         rx_activity
@@ -2712,6 +2758,13 @@ where
                 return;
             }
         };
+        #[cfg(feature = "release-qemu")]
+        if self.ordinary_root_control_turn.active() {
+            if try_with_uart_tx_lock(|| self.flush_tx_unlocked(&mut budget)).is_none() {
+                record_qemu_uart_tx_lock_deferral();
+            }
+            return;
+        }
         with_uart_tx_lock(|| self.flush_tx_unlocked(&mut budget));
     }
 

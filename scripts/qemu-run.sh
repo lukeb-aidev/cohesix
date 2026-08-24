@@ -8,7 +8,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 HOST_OS="$(uname -s 2>/dev/null || true)"
-CANONICAL_QEMU_CPU="cortex-a57"
+CANONICAL_QEMU_EMULATED_CPU="cortex-a57"
+CANONICAL_QEMU_KVM_CPU="host"
 CANONICAL_QEMU_TIMER_CLOCK_HZ="24000000"
 CANONICAL_QEMU_VIRT="off"
 QEMU_MACHINE_EXTRA="${COHESIX_QEMU_MACHINE_EXTRA:-${QEMU_MACHINE_EXTRA:-}}"
@@ -60,7 +61,7 @@ Env overrides:
   COHESIX_QEMU_SMP / QEMU_SMP (default: 4; ignored when *_QEMU_SMP_TOPO is set)
   COHESIX_QEMU_SMP_TOPO / QEMU_SMP_TOPO (default: 4,cores=4,threads=1,sockets=1)
   COHESIX_QEMU_VIRT / QEMU_VIRT (must be off; profile-owned machine contract)
-  COHESIX_QEMU_ACCEL / QEMU_ACCEL (default: hvf on macOS, kvm/tcg on Linux;
+  COHESIX_QEMU_ACCEL / QEMU_ACCEL (default: hvf on macOS, kvm on Linux;
                         explicit tcg is diagnostic and claim-ineligible)
   COHESIX_QEMU_MACHINE_EXTRA / QEMU_MACHINE_EXTRA (appended to -machine;
                         must not override machine type, GIC, or virtualization)
@@ -72,7 +73,11 @@ KERNEL=""
 ROOT_TASK=""
 OUT_DIR="out"
 QEMU_BIN="qemu-system-aarch64"
-SEL4_BUILD_DIR="${SEL4_BUILD_DIR:-${SEL4_BUILD:-$PROJECT_ROOT/out/sel4/profile-v2/qemu-smp-production}}"
+DEFAULT_SEL4_BUILD_DIR="$PROJECT_ROOT/out/sel4/profile-v2/qemu-smp-production"
+if [[ "$HOST_OS" == "Linux" ]]; then
+    DEFAULT_SEL4_BUILD_DIR="$PROJECT_ROOT/out/sel4/profile-v2/qemu-smp-kvm-production"
+fi
+SEL4_BUILD_DIR="${SEL4_BUILD_DIR:-${SEL4_BUILD:-$DEFAULT_SEL4_BUILD_DIR}}"
 DTB_OVERRIDE=""
 DEFAULT_TCP_PORT=31337
 TCP_PORT=""
@@ -191,14 +196,10 @@ detect_qemu_accel() {
             echo "hvf"
             ;;
         Linux)
-            if [[ -c /dev/kvm && -r /dev/kvm && -w /dev/kvm ]]; then
-                echo "kvm"
-            else
-                echo "tcg"
-            fi
+            echo "kvm"
             ;;
         *)
-            echo "tcg"
+            echo "unsupported"
             ;;
     esac
 }
@@ -220,13 +221,14 @@ qemu_accel_supported() {
 resolve_qemu_accel() {
     local accel
     accel="$(detect_qemu_accel)"
-    if [[ -z "$accel" ]]; then
-        accel="tcg"
+    if [[ -z "$accel" || "$accel" == "unsupported" ]]; then
+        log "QEMU acceleration is unsupported on $HOST_OS" >&2
+        exit 1
     fi
     if [[ "$accel" == "kvm" && "$HOST_OS" == "Linux" ]]; then
         if ! has_kvm_device; then
-            log "Requested QEMU accelerator 'kvm' but /dev/kvm is unavailable; falling back to tcg" >&2
-            accel="tcg"
+            log "Linux QEMU requires usable /dev/kvm; select tcg explicitly only for diagnostic evidence" >&2
+            exit 1
         fi
     fi
     if ! qemu_accel_supported "$accel"; then
@@ -234,10 +236,22 @@ resolve_qemu_accel() {
             log "Canonical Darwin QEMU requires HVF, but $QEMU_BIN does not advertise it; set COHESIX_QEMU_ACCEL=tcg only for a claim-ineligible diagnostic run" >&2
             exit 1
         fi
-        log "Requested QEMU accelerator '$accel' not supported by $QEMU_BIN; falling back to tcg" >&2
-        accel="tcg"
+        log "Requested QEMU accelerator '$accel' is not supported by $QEMU_BIN" >&2
+        exit 1
     fi
     echo "$accel"
+}
+
+resolve_qemu_cpu_arg() {
+    local accel="$1"
+    local cpu_model="$CANONICAL_QEMU_EMULATED_CPU"
+    if [[ "$HOST_OS" == "Linux" && "$accel" == "kvm" ]]; then
+        cpu_model="$CANONICAL_QEMU_KVM_CPU"
+    fi
+    if [[ "$accel" == "tcg" ]]; then
+        cpu_model="${cpu_model},cntfrq=${CANONICAL_QEMU_TIMER_CLOCK_HZ}"
+    fi
+    echo "$cpu_model"
 }
 
 resolve_qemu_virt_arg() {
@@ -390,10 +404,7 @@ log "Using QEMU SMP: $QEMU_SMP_ARG"
 QEMU_VIRT_ARG="$(resolve_qemu_virt_arg)"
 validate_qemu_virt_arg "$QEMU_VIRT_ARG"
 QEMU_MACHINE_ARG="$(format_qemu_machine_arg)"
-QEMU_CPU_ARG="$CANONICAL_QEMU_CPU"
-if [[ "$QEMU_ACCEL" == "tcg" ]]; then
-    QEMU_CPU_ARG="${QEMU_CPU_ARG},cntfrq=${CANONICAL_QEMU_TIMER_CLOCK_HZ}"
-fi
+QEMU_CPU_ARG="$(resolve_qemu_cpu_arg "$QEMU_ACCEL")"
 log "Using QEMU machine: $QEMU_MACHINE_ARG"
 log "Using QEMU CPU: $QEMU_CPU_ARG"
 

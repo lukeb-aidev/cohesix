@@ -69,7 +69,7 @@ trigger_paths = [
 [[convergence_focus]]
 id = "console-network"
 targets = ["qemu"]
-description = "Isolated console service, ABI v3 SendBatch, bounded synchronous response capture, and live TCP transport changes."
+description = "Isolated console service, ABI v4 SendBatch and CommandBatch, bounded synchronous response capture, and live TCP transport changes."
 profile = "qemu_smp_production / configs/root_task.toml"
 authoritative_evidence = "canonical QEMU boot, isolated console READY v3, and the fixed one-socket HELP/NETSTATS/SMP/CACHELOG matrix"
 priority = 90
@@ -669,7 +669,7 @@ evidence_class = "diagnostic"
 scope = "conditional"
 targets = ["qemu"]
 description = "Freeze the target-discovered NineDoor isolation invariant after one real 9P operation."
-command = "cargo test -p root-task --no-default-features --features driver-tests-qemu --test ninedoor_service_isolation -- --test-threads=1"
+command = "cargo test -p root-task --no-default-features --test ninedoor_service_isolation -- --test-threads=1"
 timeout_seconds = 900
 trigger_paths = ["apps/root-task/src/ninedoor_service.rs", "apps/root-task/tests/ninedoor_service_isolation.rs"]
 expected_evidence = ["focused-regression-result"]
@@ -685,7 +685,7 @@ tier = "non-claiming"
 evidence_class = "diagnostic"
 scope = "conditional"
 targets = ["qemu"]
-description = "Freeze ABI v3 SendBatch, bounded synchronous capture, immutable CACHELOG snapshots, exact drain, and eight-response-units-to-one-ordinary-debt invariants after one real TCP operation."
+description = "Freeze ABI v4 SendBatch and bounded CommandBatch, bounded synchronous capture, immutable CACHELOG snapshots, exact drain, and eight-response-units-to-one-ordinary-debt invariants after one real TCP operation."
 command = "cargo test -p console-network-abi && cargo test -p console-network-runtime && cargo test -p root-task --test console_network_service && cargo test -p root-task --no-default-features --features driver-tests-qemu isolated_response_lane_pays_exactly_one_ordinary_debt_after_eight_units -- --test-threads=1 && cargo test -p root-task --no-default-features --features driver-tests-qemu isolated_help_capture_publishes_complete_body_then_one_terminal -- --test-threads=1 && cargo test -p root-task --no-default-features --features driver-tests-qemu isolated_fixed_synchronous_producers_cross_batch_depth_without_end -- --test-threads=1 && cargo test -p root-task --no-default-features --features driver-tests-qemu bounded_sync_capture_overflow_emits_only_typed_terminal_and_reconciles_metrics -- --test-threads=1 && cargo test -p root-task --no-default-features --features driver-tests-qemu bounded_sync_cache_snapshot_crosses_batch_depth_and_tombstones_on_quiet_cut -- --test-threads=1 && cargo test -p root-task --no-default-features --features driver-tests-qemu bounded_sync_response_is_retired_on_exact_identity_loss -- --test-threads=1 && cargo test -p root-task --no-default-features --features driver-tests-qemu pinned_network_line_cannot_dispatch_to_a_replacement_connection -- --test-threads=1 && cargo test -p root-task --no-default-features --features driver-tests-qemu physical_progress_is_bounded_while_heavy_producers_preserve_network_owner -- --test-threads=1 && cargo test -p root-task --no-default-features --features driver-tests-qemu blocked_physical_producer_retains_an_ordered_busy_terminal_and_prompt -- --test-threads=1 && cargo test -p root-task --no-default-features --features driver-tests-qemu hal::cache::tests -- --test-threads=1 && cargo test -p root-task --no-default-features --test isolated_virtio_network_phasing -- --test-threads=1 && .venv/bin/python -m pytest -q tests/test_console_network_runtime_packaging.py tests/test_qemu_tcp_response_matrix.py scripts/ci/test_run_regression_batch.py"
 timeout_seconds = 900
 trigger_paths = ["apps/console-network-runtime/**", "crates/console-network-abi/**", "apps/root-task/src/console_network_service.rs", "apps/root-task/src/event/**", "apps/root-task/src/hal/cache.rs", "apps/root-task/src/net/**", "scripts/qemu_tcp_response_matrix.py", "tests/test_qemu_tcp_response_matrix.py"]

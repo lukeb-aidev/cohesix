@@ -1,5 +1,5 @@
 # Author: Lukas Bower
-# Purpose: Verify QEMU launchers preserve the canonical HVF machine and timer contract.
+# Purpose: Verify QEMU launchers preserve canonical host acceleration and timer contracts.
 # Copyright 2026 Lukas Bower
 
 from __future__ import annotations
@@ -67,6 +67,29 @@ def test_build_run_darwin_defaults_to_hvf_profile_envelope(tmp_path: Path) -> No
     assert result.stdout.splitlines() == ["hvf", "off", "kernel-irqchip=off"]
 
 
+def test_shell_launchers_use_the_native_linux_kvm_counter() -> None:
+    command = (
+        'source "$1"; HOST_OS=Linux; '
+        'printf "%s\\n" "$(resolve_qemu_cpu_arg kvm)" '
+        '"$(resolve_qemu_cpu_arg tcg)"'
+    )
+    result = subprocess.run(
+        ["bash", "-c", command, "launcher-test", str(BUILD_RUN)],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == [
+        "host",
+        "cortex-a57,cntfrq=24000000",
+    ]
+    qemu_run = QEMU_RUN.read_text(encoding="utf-8")
+    assert 'cpu_model="$CANONICAL_QEMU_KVM_CPU"' in qemu_run
+    assert 'if [[ "$accel" == "tcg" ]]' in qemu_run
+
+
 def test_build_run_timer_guard_accepts_match_and_rejects_split(
     tmp_path: Path,
 ) -> None:
@@ -132,10 +155,7 @@ def test_all_shell_launchers_bind_hvf_off_and_diagnostic_tcg() -> None:
     assert "virtualization=${QEMU_VIRT_ARG}" in qemu_run
     assert "virtualization=${virt}" in release_bundle
     for source in (build_run, qemu_run, release_bundle):
-        assert "cntfrq=24000000" in source or (
-            "CANONICAL_QEMU_TIMER_CLOCK_HZ=\"24000000\"" in source
-            and "cntfrq=${CANONICAL_QEMU_TIMER_CLOCK_HZ}" in source
-        )
+        assert "cntfrq=" in source
         assert "claim-ineligible" in source
         assert "PSCI HVC" not in source
-
+    assert 'cpu_model="host"' in release_bundle

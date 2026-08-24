@@ -1988,6 +1988,7 @@ impl Namespace {
             }
             if config.proc_lease.active {
                 self.ensure_read_only_file(&lease_path, "active", b"")?;
+                self.ensure_dir(&lease_path, "by-id")?;
             }
             if config.proc_lease.preemptions {
                 self.ensure_read_only_file(&lease_path, "preemptions", b"")?;
@@ -2844,6 +2845,23 @@ impl Namespace {
     pub fn set_proc_lease_active_payload(&mut self, data: &[u8]) -> Result<(), NineDoorError> {
         let parent = vec!["proc".to_owned(), "lease".to_owned()];
         self.set_read_only_file(&parent, "active", data)
+    }
+
+    /// Replace the bounded exact-entry files under `/proc/lease/by-id`.
+    pub(crate) fn set_proc_lease_by_id_payloads(
+        &mut self,
+        entries: &[(String, Vec<u8>)],
+    ) -> Result<(), NineDoorError> {
+        let parent = vec!["proc".to_owned(), "lease".to_owned(), "by-id".to_owned()];
+        let existing = self.lookup_mut(&parent)?.list_children();
+        let mut node = self.lookup_mut(&parent)?;
+        for name in existing {
+            node.remove_child(name.as_str());
+        }
+        for (id, payload) in entries {
+            node.ensure_file(id, FileNode::ReadOnly(payload.clone()));
+        }
+        Ok(())
     }
 
     /// Replace the `/proc/lease/preemptions` contents.

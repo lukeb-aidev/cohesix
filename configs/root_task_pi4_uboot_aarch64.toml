@@ -472,7 +472,7 @@ critical_reserve = true
 id = "ninedoor-service"
 kind = "service"
 execution = "passive"
-core = 1
+core = 0
 priority = 128
 mcp = 200
 timeout_badge = 653131782
@@ -482,6 +482,7 @@ allowed_donors = ["root-control"]
 reply_objects = 1
 max_donation_depth = 1
 fault_handler = "root-fault"
+locality_bound = true
 
 [ninedoor_service]
 enabled = true
@@ -517,7 +518,7 @@ root_request_rights = 3
 root_response_rights = 2
 child_request_rights = 2
 child_response_rights = 3
-core = 1
+core = 0
 priority = 128
 mcp = 200
 
@@ -564,7 +565,7 @@ fault_handler = "root-fault"
 
 [console_network_service]
 enabled = true
-abi_version = 3
+abi_version = 4
 image_id = "console-network-runtime"
 image_path = "cohesix/artifacts/console-network-runtime"
 entry_symbol = "_start"

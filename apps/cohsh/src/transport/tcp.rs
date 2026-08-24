@@ -24,7 +24,11 @@ use secure9p_codec::SessionId;
 
 use crate::cat_chunks::reassemble_cat_chunks;
 use crate::proto::{parse_ack, AckStatus};
-use crate::{CohshRetryPolicy, Session, TcpConnectionInfo, Transport, TransportMetrics};
+use crate::{
+    CohshRetryPolicy, ReadBatchOutcome, ReadBatchRequest, Session, TcpConnectionInfo, Transport,
+    TransportBatchOutcome, TransportBatchRequest, TransportBatchResponse, TransportMetrics,
+    TRANSPORT_COMMAND_BATCH_MAX, TRANSPORT_READ_BATCH_MAX,
+};
 
 /// Default TCP timeout applied to socket operations.
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(2);
@@ -47,7 +51,7 @@ const CONSOLE_LOCK_ENV: &str = "COHSH_CONSOLE_LOCK";
 const CONSOLE_LOCK_DISABLE_VALUES: &[&str] = &["0", "false", "off", "no"];
 const INSECURE_PLACEHOLDER_TOKEN: &str = concat!("change", "me");
 const TCP_BATCH_MAX_WRITE_BYTES: usize = 1_360;
-const TCP_BATCH_MAX_FRAMES: usize = 4;
+const TCP_BATCH_MAX_FRAMES: usize = TRANSPORT_COMMAND_BATCH_MAX;
 
 /// Return true when the supplied token is the documented insecure placeholder.
 pub fn is_insecure_placeholder_token(token: &str) -> bool {
@@ -1479,7 +1483,9 @@ impl TcpTransport {
                                     lines.push(summary);
                                 }
                             }
-                            return if verb.eq_ignore_ascii_case("CAT") {
+                            return if verb.eq_ignore_ascii_case("CAT")
+                                || verb.eq_ignore_ascii_case("TAIL")
+                            {
                                 reassemble_cat_chunks(lines)
                             } else {
                                 Ok(lines)
@@ -1505,6 +1511,223 @@ impl TcpTransport {
                 }
             }
         }
+    }
+
+    fn read_batched_stream_response(
+        &mut self,
+        request: &ReadBatchRequest,
+    ) -> Result<ReadBatchOutcome> {
+        let (verb, path) = match request {
+            ReadBatchRequest::Read { path } => ("CAT", path.as_str()),
+            ReadBatchRequest::List { path } => ("LS", path.as_str()),
+        };
+        let deadline = self.stream_deadline();
+        let mut lines = Vec::new();
+        let mut summary_line: Option<String> = None;
+        let mut matching_ack_seen = false;
+        loop {
+            match self.next_protocol_line_with_deadline(deadline, false)? {
+                Some(response) => {
+                    if let Some(ack) = parse_ack(&response) {
+                        if is_frame_error(&ack) {
+                            return Err(anyhow!("console frame rejected: {response}"));
+                        }
+                        let matches_request =
+                            ack.verb.eq_ignore_ascii_case(verb) && ack_path_matches(&ack, path);
+                        let parse_error = matches!(ack.status, AckStatus::Err)
+                            && ack.verb.eq_ignore_ascii_case("PARSE");
+                        if matches_request || parse_error {
+                            let _ = self.record_ack(&response);
+                            matching_ack_seen = true;
+                            if matches!(ack.status, AckStatus::Err) {
+                                return Ok(Err(format!("{verb} failed: {response}")));
+                            }
+                            if verb == "CAT" && summary_line.is_none() {
+                                if let Some(detail) = ack.detail {
+                                    if let Some(index) = detail.find("data=") {
+                                        let summary = detail[index + "data=".len()..].trim();
+                                        if !summary.is_empty() {
+                                            summary_line = Some(summary.to_owned());
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        continue;
+                    }
+                    if response == "END" {
+                        if !matching_ack_seen {
+                            return Err(anyhow!(
+                                "received END before matching {verb} acknowledgement for {path}"
+                            ));
+                        }
+                        if lines.is_empty() {
+                            if let Some(summary) = summary_line.take() {
+                                lines.push(summary);
+                            }
+                        }
+                        return if verb == "CAT" {
+                            reassemble_cat_chunks(lines).map(Ok)
+                        } else {
+                            Ok(Ok(lines))
+                        };
+                    }
+                    lines.push(response);
+                }
+                None => {
+                    return Err(anyhow!(
+                        "connection closed while awaiting batched {verb} response on {path}"
+                    ));
+                }
+            }
+        }
+    }
+
+    fn stream_read_batch(
+        &mut self,
+        requests: &[ReadBatchRequest],
+    ) -> Result<Vec<ReadBatchOutcome>> {
+        if requests.len() > TRANSPORT_READ_BATCH_MAX {
+            return Err(anyhow!(
+                "TCP read batch exceeds {} requests",
+                TRANSPORT_READ_BATCH_MAX
+            ));
+        }
+        if requests.is_empty() {
+            return Ok(Vec::new());
+        }
+        let commands: Vec<String> = requests
+            .iter()
+            .map(|request| match request {
+                ReadBatchRequest::Read { path } => format!("CAT {path}"),
+                ReadBatchRequest::List { path } => format!("LS {path}"),
+            })
+            .collect();
+        let mut attempts = 0usize;
+        loop {
+            if let Err(error) = self.send_lines_attached(commands.as_slice()) {
+                attempts = attempts.saturating_add(1);
+                if attempts > self.max_retries {
+                    return Err(error).context("failed to send bounded idempotent read batch");
+                }
+                self.recover_session()?;
+                continue;
+            }
+
+            let mut outcomes = Vec::with_capacity(requests.len());
+            let mut transport_error = None;
+            for request in requests {
+                match self.read_batched_stream_response(request) {
+                    Ok(outcome) => outcomes.push(outcome),
+                    Err(error) => {
+                        transport_error = Some(error);
+                        break;
+                    }
+                }
+            }
+            if let Some(error) = transport_error {
+                self.telemetry.log_disconnect(error.as_ref());
+                self.reset_connection();
+                attempts = attempts.saturating_add(1);
+                if attempts > self.max_retries {
+                    return Err(error).context("bounded idempotent read batch failed");
+                }
+                self.recover_session()?;
+                continue;
+            }
+            return Ok(outcomes);
+        }
+    }
+
+    fn write_batched_stream_response(&mut self, path: &str) -> Result<TransportBatchOutcome> {
+        let deadline = self.stream_deadline();
+        loop {
+            match self.next_protocol_line_with_deadline(deadline, false)? {
+                Some(response) => {
+                    if let Some(ack) = parse_ack(&response) {
+                        if is_frame_error(&ack) {
+                            return Err(anyhow!("console frame rejected: {response}"));
+                        }
+                        let matches_request =
+                            ack.verb.eq_ignore_ascii_case("ECHO") && ack_path_matches(&ack, path);
+                        let parse_error = matches!(ack.status, AckStatus::Err)
+                            && ack.verb.eq_ignore_ascii_case("PARSE");
+                        if matches_request || parse_error {
+                            let _ = self.record_ack(&response);
+                            if matches!(ack.status, AckStatus::Err) {
+                                return Ok(Err(format!("ECHO failed: {response}")));
+                            }
+                            return Ok(Ok(TransportBatchResponse::Written {
+                                acknowledgements: vec![response],
+                            }));
+                        }
+                        let _ = self.record_ack(&response);
+                        continue;
+                    }
+                    if response.starts_with("ERR") {
+                        return Ok(Err(format!("ECHO failed: {response}")));
+                    }
+                }
+                None => {
+                    return Err(anyhow!(
+                        "connection closed while awaiting batched ECHO response on {path}"
+                    ));
+                }
+            }
+        }
+    }
+
+    fn stream_command_batch(
+        &mut self,
+        requests: &[TransportBatchRequest],
+    ) -> Result<Vec<TransportBatchOutcome>> {
+        if requests.len() > TRANSPORT_COMMAND_BATCH_MAX {
+            return Err(anyhow!(
+                "TCP command batch exceeds {} requests",
+                TRANSPORT_COMMAND_BATCH_MAX
+            ));
+        }
+        if requests.is_empty() {
+            return Ok(Vec::new());
+        }
+        let commands = requests
+            .iter()
+            .map(|request| match request {
+                TransportBatchRequest::Read { path } => Ok(format!("CAT {path}")),
+                TransportBatchRequest::List { path } => Ok(format!("LS {path}")),
+                TransportBatchRequest::Write { path, payload } => {
+                    Self::build_echo_command(path, payload)
+                }
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        let mut outcomes = Vec::with_capacity(requests.len());
+        let mut start = 0usize;
+        while start < requests.len() {
+            let end = Self::bounded_batch_end(commands.as_slice(), start)
+                .map_err(|error| anyhow!("failed to bound TCP command batch: {error}"))?;
+            self.send_lines_attached(&commands[start..end])?;
+            for request in &requests[start..end] {
+                let outcome = match request {
+                    TransportBatchRequest::Read { path } => self
+                        .read_batched_stream_response(&ReadBatchRequest::Read {
+                            path: path.clone(),
+                        })?
+                        .map(TransportBatchResponse::Lines),
+                    TransportBatchRequest::List { path } => self
+                        .read_batched_stream_response(&ReadBatchRequest::List {
+                            path: path.clone(),
+                        })?
+                        .map(TransportBatchResponse::Lines),
+                    TransportBatchRequest::Write { path, .. } => {
+                        self.write_batched_stream_response(path)?
+                    }
+                };
+                outcomes.push(outcome);
+            }
+            start = end;
+        }
+        Ok(outcomes)
     }
 
     fn run_console_command(&mut self, command: &str, expected_ack: &str) -> Result<Vec<String>> {
@@ -1844,6 +2067,22 @@ impl Transport for TcpTransport {
         self.stream_command("LS", path)
     }
 
+    fn read_batch(
+        &mut self,
+        _session: &Session,
+        requests: &[ReadBatchRequest],
+    ) -> Result<Vec<ReadBatchOutcome>> {
+        self.stream_read_batch(requests)
+    }
+
+    fn command_batch(
+        &mut self,
+        _session: &Session,
+        requests: &[TransportBatchRequest],
+    ) -> Result<Vec<TransportBatchOutcome>> {
+        self.stream_command_batch(requests)
+    }
+
     fn write(&mut self, _session: &Session, path: &str, payload: &[u8]) -> Result<()> {
         let command = Self::build_echo_command(path, payload)?;
         let mut attempts = 0usize;
@@ -2095,6 +2334,24 @@ impl Transport for SharedTcpTransport {
         inner.list(session, path)
     }
 
+    fn read_batch(
+        &mut self,
+        session: &Session,
+        requests: &[ReadBatchRequest],
+    ) -> Result<Vec<ReadBatchOutcome>> {
+        let mut inner = self.lock();
+        inner.read_batch(session, requests)
+    }
+
+    fn command_batch(
+        &mut self,
+        session: &Session,
+        requests: &[TransportBatchRequest],
+    ) -> Result<Vec<TransportBatchOutcome>> {
+        let mut inner = self.lock();
+        inner.command_batch(session, requests)
+    }
+
     fn write(&mut self, session: &Session, path: &str, payload: &[u8]) -> Result<()> {
         let mut inner = self.lock();
         inner.write(session, path, payload)
@@ -2179,6 +2436,24 @@ impl Transport for PooledTcpTransport {
     fn list(&mut self, session: &Session, path: &str) -> Result<Vec<String>> {
         let mut inner = self.lock();
         inner.list(session, path)
+    }
+
+    fn read_batch(
+        &mut self,
+        session: &Session,
+        requests: &[ReadBatchRequest],
+    ) -> Result<Vec<ReadBatchOutcome>> {
+        let mut inner = self.lock();
+        inner.read_batch(session, requests)
+    }
+
+    fn command_batch(
+        &mut self,
+        session: &Session,
+        requests: &[TransportBatchRequest],
+    ) -> Result<Vec<TransportBatchOutcome>> {
+        let mut inner = self.lock();
+        inner.command_batch(session, requests)
     }
 
     fn write(&mut self, session: &Session, path: &str, payload: &[u8]) -> Result<()> {
@@ -2677,6 +2952,172 @@ mod tests {
             .stream_command("CAT", "/host/tickets/status")
             .expect("CAT reassembly");
         assert_eq!(output, vec![canonical]);
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn tail_transport_transparently_reassembles_bounded_chunk_frames() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let canonical = format!(
+            "{{\"schema\":\"host-ticket/v2\",\"args\":\"{}\"}}",
+            "x".repeat(500)
+        );
+        let frames = cat_chunk_frames(canonical.as_str(), 176);
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            assert_eq!(
+                read_frame(&mut reader).as_deref(),
+                Some("TAIL /host/tickets/spec")
+            );
+            for frame in frames {
+                write_frame(&mut stream, frame.as_str());
+            }
+            write_frame(&mut stream, "END");
+        });
+
+        let stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .unwrap();
+        let reader = BufReader::new(stream.try_clone().unwrap());
+        let mut transport = TcpTransport::new("127.0.0.1", port);
+        transport.stream = Some(stream);
+        transport.reader = Some(reader);
+        transport.authenticated = true;
+        transport.auth_state = AuthState::Attached;
+        let output = transport
+            .stream_command("TAIL", "/host/tickets/spec")
+            .expect("TAIL reassembly");
+        assert_eq!(output, vec![canonical]);
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn bounded_read_batch_sends_all_commands_before_ordered_responses() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(1)))
+                .unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let expected = ["CAT /proc/a", "LS /worker", "CAT /missing", "CAT /proc/c"];
+            for command in expected {
+                assert_eq!(read_frame(&mut reader).as_deref(), Some(command));
+            }
+
+            write_frame(&mut stream, "OK CAT path=/proc/a data=alpha");
+            write_frame(&mut stream, "END");
+            write_frame(&mut stream, "OK LS path=/worker entries=2");
+            write_frame(&mut stream, "worker-1");
+            write_frame(&mut stream, "worker-2");
+            write_frame(&mut stream, "END");
+            write_frame(&mut stream, "ERR CAT path=/missing reason=not-found");
+            write_frame(&mut stream, "OK CAT path=/proc/c");
+            write_frame(&mut stream, "charlie");
+            write_frame(&mut stream, "END");
+        });
+
+        let (mut transport, session) = attached_transport(port, Duration::from_secs(1));
+        let requests = [
+            ReadBatchRequest::Read {
+                path: "/proc/a".to_owned(),
+            },
+            ReadBatchRequest::List {
+                path: "/worker".to_owned(),
+            },
+            ReadBatchRequest::Read {
+                path: "/missing".to_owned(),
+            },
+            ReadBatchRequest::Read {
+                path: "/proc/c".to_owned(),
+            },
+        ];
+        let outcomes = transport.read_batch(&session, &requests).unwrap();
+        assert_eq!(outcomes.len(), requests.len());
+        assert_eq!(outcomes[0], Ok(vec!["alpha".to_owned()]));
+        assert_eq!(
+            outcomes[1],
+            Ok(vec!["worker-1".to_owned(), "worker-2".to_owned()])
+        );
+        assert!(outcomes[2]
+            .as_ref()
+            .is_err_and(|error| error.contains("reason=not-found")));
+        assert_eq!(outcomes[3], Ok(vec!["charlie".to_owned()]));
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn bounded_command_batch_preserves_mixed_order_and_per_request_errors() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(1)))
+                .unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let expected = [
+                "CAT /proc/a",
+                "ECHO /queen/ctl one",
+                "LS /worker",
+                "ECHO /queen/ctl denied",
+            ];
+            for command in expected {
+                assert_eq!(read_frame(&mut reader).as_deref(), Some(command));
+            }
+
+            write_frame(&mut stream, "OK CAT path=/proc/a data=alpha");
+            write_frame(&mut stream, "END");
+            write_frame(&mut stream, "OK ECHO path=/queen/ctl bytes=3");
+            write_frame(&mut stream, "OK LS path=/worker entries=1");
+            write_frame(&mut stream, "worker-1");
+            write_frame(&mut stream, "END");
+            write_frame(
+                &mut stream,
+                "ERR ECHO path=/queen/ctl reason=policy detail=denied",
+            );
+        });
+
+        let (mut transport, session) = attached_transport(port, Duration::from_secs(1));
+        let requests = [
+            TransportBatchRequest::Read {
+                path: "/proc/a".to_owned(),
+            },
+            TransportBatchRequest::Write {
+                path: "/queen/ctl".to_owned(),
+                payload: b"one".to_vec(),
+            },
+            TransportBatchRequest::List {
+                path: "/worker".to_owned(),
+            },
+            TransportBatchRequest::Write {
+                path: "/queen/ctl".to_owned(),
+                payload: b"denied".to_vec(),
+            },
+        ];
+        let outcomes = transport.command_batch(&session, &requests).unwrap();
+        assert_eq!(outcomes.len(), requests.len());
+        assert_eq!(
+            outcomes[0],
+            Ok(TransportBatchResponse::Lines(vec!["alpha".to_owned()]))
+        );
+        assert_eq!(
+            outcomes[1],
+            Ok(TransportBatchResponse::Written {
+                acknowledgements: vec!["OK ECHO path=/queen/ctl bytes=3".to_owned()],
+            })
+        );
+        assert_eq!(
+            outcomes[2],
+            Ok(TransportBatchResponse::Lines(vec!["worker-1".to_owned()]))
+        );
+        assert!(outcomes[3]
+            .as_ref()
+            .is_err_and(|error| error.contains("reason=policy")));
         server.join().unwrap();
     }
 

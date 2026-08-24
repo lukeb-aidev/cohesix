@@ -7,7 +7,7 @@
 
 //! Host ticket agent runtime and manifest-driven processing flow.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -17,6 +17,7 @@ use cohsh::{Session, Transport};
 use cohsh_core::MAX_ECHO_LEN;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 
 use crate::claim::{terminal_keys, TicketKey};
 use crate::executors::ExecutorConfig;
@@ -63,6 +64,10 @@ const REQUIRED_LIFECYCLE_STATES: &[&str] = &[
     "expired",
 ];
 const HOST_TICKET_V1_ECHO_COMPAT_MAX_BYTES: u32 = 224;
+const HOST_TICKET_CURRENT_PREFIX: &str = "/host/tickets/current/";
+const HOST_TICKET_CURRENT_SCHEMA: &str = "host-ticket-current/v1";
+const HOST_TICKET_CURRENT_MAX_BYTES: usize = 256;
+const HOST_TICKET_CORRELATION_DOMAIN: &[u8] = b"host-ticket-correlation/v1\0";
 
 /// Host ticket spec line (`/host/tickets/spec`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -610,12 +615,46 @@ impl ProcessSummary {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 struct CursorState {
     #[serde(default, alias = "next_spec_index")]
     raw_next_spec_index: usize,
     #[serde(default)]
     snapshot_next_spec_index: usize,
+    #[serde(default)]
+    snapshot_last_admission_sequence: u64,
+}
+
+/// Maximum unpersisted global admissions per execution lane.
+///
+/// Root retains 64 exact ticket-snapshot records. Checkpointing at half that
+/// bound keeps every post-crash replay candidate available while avoiding one
+/// file-plus-directory durability fence on every lane for every ticket.
+const V2_CURSOR_CHECKPOINT_STRIDE: u64 = 32;
+
+/// In-process progress for one deterministic execution lane.
+///
+/// The current cursor is deliberately retained between snapshot generations,
+/// while `durable_cursor` records the last stable-storage checkpoint. This
+/// lets a lane consume every observed admission without forcing one durable
+/// cursor replacement per lane per ticket. After a process restart, the
+/// retained root snapshot supplies the bounded replay window from the durable
+/// checkpoint.
+#[derive(Debug)]
+pub struct TicketLaneState {
+    cursor: CursorState,
+    durable_cursor: CursorState,
+}
+
+impl TicketLaneState {
+    /// Restore one lane's durable progress before entering its snapshot loop.
+    pub fn load(cursor_path: &Path) -> Result<Self> {
+        let cursor = load_cursor_state(cursor_path)?;
+        Ok(Self {
+            durable_cursor: cursor.clone(),
+            cursor,
+        })
+    }
 }
 
 /// Process one polling pass using the built-in executor and action observers.
@@ -650,7 +689,37 @@ pub fn process_tickets_once_with_journal(
     executor_config: &ExecutorConfig,
     now_unix_ms: u64,
 ) -> Result<ProcessSummary> {
-    process_tickets_once_with_hooks(
+    process_ticket_lane_once_with_journal(
+        transport,
+        session,
+        manifest,
+        cursor_path,
+        journal_path,
+        executor_config,
+        now_unix_ms,
+        0,
+        1,
+    )
+}
+
+/// Process one deterministic shard of a bounded multi-lane execution pass.
+///
+/// Version-2 admissions are assigned by immutable provider-resource identity.
+/// A stable lane count therefore preserves exactly-once recovery and serializes
+/// one provider resource while independent Worker identities execute concurrently.
+#[allow(clippy::too_many_arguments)]
+pub fn process_ticket_lane_once_with_journal(
+    transport: &mut dyn Transport,
+    session: &Session,
+    manifest: &HostTicketManifest,
+    cursor_path: &Path,
+    journal_path: &Path,
+    executor_config: &ExecutorConfig,
+    now_unix_ms: u64,
+    lane_index: usize,
+    lane_count: usize,
+) -> Result<ProcessSummary> {
+    process_tickets_once_with_hooks_lane(
         transport,
         session,
         manifest,
@@ -664,6 +733,88 @@ pub fn process_tickets_once_with_journal(
         |inner_transport, inner_session, spec, config| {
             executors::reconcile_action(inner_transport, inner_session, spec, config)
         },
+        lane_index,
+        lane_count,
+        None,
+        None,
+    )
+}
+
+/// Process one deterministic execution lane from a caller-fetched root snapshot.
+///
+/// A multi-lane agent uses this entry point to read the bounded root admission
+/// snapshot exactly once and fan the immutable lines out to every durable lane.
+#[allow(clippy::too_many_arguments)]
+pub fn process_ticket_lane_snapshot_once_with_journal(
+    transport: &mut dyn Transport,
+    session: &Session,
+    manifest: &HostTicketManifest,
+    cursor_path: &Path,
+    journal_path: &Path,
+    executor_config: &ExecutorConfig,
+    now_unix_ms: u64,
+    lane_index: usize,
+    lane_count: usize,
+    snapshot_lines: &[String],
+) -> Result<ProcessSummary> {
+    process_tickets_once_with_hooks_lane(
+        transport,
+        session,
+        manifest,
+        cursor_path,
+        journal_path,
+        executor_config,
+        now_unix_ms,
+        |inner_transport, inner_session, spec, config| {
+            executors::execute_action(inner_transport, inner_session, spec, config)
+        },
+        |inner_transport, inner_session, spec, config| {
+            executors::reconcile_action(inner_transport, inner_session, spec, config)
+        },
+        lane_index,
+        lane_count,
+        Some(snapshot_lines),
+        None,
+    )
+}
+
+/// Process one shared snapshot while preserving non-durable progress in memory.
+///
+/// Long-running multi-lane agents must use this entry point so global
+/// admissions assigned to other lanes are not forgotten between snapshot
+/// generations before the bounded cursor checkpoint becomes due.
+#[allow(clippy::too_many_arguments)]
+pub fn process_ticket_lane_snapshot_once_with_journal_state(
+    transport: &mut dyn Transport,
+    session: &Session,
+    manifest: &HostTicketManifest,
+    cursor_path: &Path,
+    journal_path: &Path,
+    executor_config: &ExecutorConfig,
+    now_unix_ms: u64,
+    lane_index: usize,
+    lane_count: usize,
+    snapshot_lines: &[String],
+    lane_state: &mut TicketLaneState,
+) -> Result<ProcessSummary> {
+    process_tickets_once_with_hooks_lane(
+        transport,
+        session,
+        manifest,
+        cursor_path,
+        journal_path,
+        executor_config,
+        now_unix_ms,
+        |inner_transport, inner_session, spec, config| {
+            executors::execute_action(inner_transport, inner_session, spec, config)
+        },
+        |inner_transport, inner_session, spec, config| {
+            executors::reconcile_action(inner_transport, inner_session, spec, config)
+        },
+        lane_index,
+        lane_count,
+        Some(snapshot_lines),
+        Some(lane_state),
     )
 }
 
@@ -708,8 +859,8 @@ pub fn process_tickets_once_with_hooks<F, R>(
     journal_path: &Path,
     executor_config: &ExecutorConfig,
     now_unix_ms: u64,
-    mut executor: F,
-    mut reconciler: R,
+    executor: F,
+    reconciler: R,
 ) -> Result<ProcessSummary>
 where
     F: FnMut(&mut dyn Transport, &Session, &HostTicketSpec, &ExecutorConfig) -> Result<String>,
@@ -720,6 +871,53 @@ where
         &ExecutorConfig,
     ) -> Result<executors::ReconcileOutcome>,
 {
+    process_tickets_once_with_hooks_lane(
+        transport,
+        session,
+        manifest,
+        cursor_path,
+        journal_path,
+        executor_config,
+        now_unix_ms,
+        executor,
+        reconciler,
+        0,
+        1,
+        None,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn process_tickets_once_with_hooks_lane<F, R>(
+    transport: &mut dyn Transport,
+    session: &Session,
+    manifest: &HostTicketManifest,
+    cursor_path: &Path,
+    journal_path: &Path,
+    executor_config: &ExecutorConfig,
+    now_unix_ms: u64,
+    mut executor: F,
+    mut reconciler: R,
+    lane_index: usize,
+    lane_count: usize,
+    snapshot_override: Option<&[String]>,
+    lane_state_override: Option<&mut TicketLaneState>,
+) -> Result<ProcessSummary>
+where
+    F: FnMut(&mut dyn Transport, &Session, &HostTicketSpec, &ExecutorConfig) -> Result<String>,
+    R: FnMut(
+        &mut dyn Transport,
+        &Session,
+        &HostTicketSpec,
+        &ExecutorConfig,
+    ) -> Result<executors::ReconcileOutcome>,
+{
+    if lane_count == 0 || lane_index >= lane_count {
+        return Err(anyhow!(
+            "ticket execution lane {lane_index} is outside lane count {lane_count}"
+        ));
+    }
     if !manifest.enabled {
         return Ok(ProcessSummary::default());
     }
@@ -728,18 +926,34 @@ where
     let snapshot_path = manifest.spec_snapshot_path();
     let status_path = manifest.status_path();
     let deadletter_path = manifest.deadletter_path();
-    let spec_lines = transport
-        .read(session, spec_path.as_str())
-        .with_context(|| format!("read {spec_path}"))?;
-    let snapshot_lines = transport
-        .read(session, snapshot_path.as_str())
-        .with_context(|| format!("read {snapshot_path}"))?;
-    let status_lines = transport
-        .read(session, status_path.as_str())
-        .with_context(|| format!("read {status_path}"))?;
-    let deadletter_lines = transport
-        .read(session, deadletter_path.as_str())
-        .with_context(|| format!("read {deadletter_path}"))?;
+    let spec_lines = if lane_index == 0 {
+        transport
+            .read(session, spec_path.as_str())
+            .with_context(|| format!("read {spec_path}"))?
+    } else {
+        Vec::new()
+    };
+    let snapshot_owned;
+    let snapshot_lines = if let Some(lines) = snapshot_override {
+        lines
+    } else {
+        snapshot_owned = transport
+            .read(session, snapshot_path.as_str())
+            .with_context(|| format!("read {snapshot_path}"))?;
+        snapshot_owned.as_slice()
+    };
+    let (status_lines, deadletter_lines) = if lane_index == 0 {
+        (
+            transport
+                .read(session, status_path.as_str())
+                .with_context(|| format!("read {status_path}"))?,
+            transport
+                .read(session, deadletter_path.as_str())
+                .with_context(|| format!("read {deadletter_path}"))?,
+        )
+    } else {
+        (Vec::new(), Vec::new())
+    };
 
     let raw_specs = claim::parse_spec_lines_from(
         &spec_lines,
@@ -748,7 +962,7 @@ where
         claim::SpecSource::RawRequest,
     )?;
     let admitted_specs = claim::parse_spec_lines_from(
-        &snapshot_lines,
+        snapshot_lines,
         &manifest.accepted_request_schemas,
         manifest.max_line_bytes,
         claim::SpecSource::AdmittedSnapshot,
@@ -768,72 +982,160 @@ where
     validate_snapshot_admission_order(&admitted_specs)?;
     let mut terminal = terminal_keys(&results);
 
-    let mut cursor = load_cursor_state(cursor_path)?;
+    let mut loaded_lane_state;
+    let lane_state = if let Some(state) = lane_state_override {
+        state
+    } else {
+        loaded_lane_state = TicketLaneState::load(cursor_path)?;
+        &mut loaded_lane_state
+    };
+    let cursor = &mut lane_state.cursor;
+    let durable_cursor = &mut lane_state.durable_cursor;
     cursor.raw_next_spec_index = cursor.raw_next_spec_index.min(raw_specs.len());
     cursor.snapshot_next_spec_index = cursor.snapshot_next_spec_index.min(admitted_specs.len());
-    save_cursor_state(cursor_path, &cursor)?;
     let mut journal = wal::ExecutionJournal::load(journal_path)?;
+    cursor.snapshot_last_admission_sequence = cursor
+        .snapshot_last_admission_sequence
+        .max(journal.completed_through_admission_sequence());
     let mut summary = ProcessSummary::default();
 
-    for spec in raw_specs.iter().skip(cursor.raw_next_spec_index) {
-        if spec.schema == HOST_TICKET_V2_SCHEMA {
-            // Caller bytes are intentionally never executable. Root must emit the
-            // corresponding enriched entry on spec.snapshot before it is claimable.
+    if lane_index == 0 {
+        for spec in raw_specs.iter().skip(cursor.raw_next_spec_index) {
+            if spec.schema == HOST_TICKET_V2_SCHEMA {
+                // Caller bytes are intentionally never executable. Root must emit the
+                // corresponding enriched entry on spec.snapshot before it is claimable.
+                cursor.raw_next_spec_index = cursor.raw_next_spec_index.saturating_add(1);
+                save_cursor_state(cursor_path, cursor)?;
+                *durable_cursor = cursor.clone();
+                continue;
+            }
+            process_v1_spec(
+                transport,
+                session,
+                manifest,
+                spec,
+                executor_config,
+                now_unix_ms,
+                &mut terminal,
+                &mut summary,
+                &mut executor,
+            )?;
             cursor.raw_next_spec_index = cursor.raw_next_spec_index.saturating_add(1);
-            save_cursor_state(cursor_path, &cursor)?;
-            continue;
+            save_cursor_state(cursor_path, cursor)?;
+            *durable_cursor = cursor.clone();
         }
-        process_v1_spec(
-            transport,
-            session,
-            manifest,
-            spec,
-            executor_config,
-            now_unix_ms,
-            &mut terminal,
-            &mut summary,
-            &mut executor,
-        )?;
-        cursor.raw_next_spec_index = cursor.raw_next_spec_index.saturating_add(1);
-        save_cursor_state(cursor_path, &cursor)?;
+    } else {
+        cursor.raw_next_spec_index = raw_specs.len();
     }
 
-    for spec in admitted_specs.iter().skip(cursor.snapshot_next_spec_index) {
+    for (snapshot_index, spec) in admitted_specs.iter().enumerate() {
         if spec.schema == HOST_TICKET_V1_SCHEMA {
             // Version 1 retains its raw compatibility path and cannot be
             // mistaken for root-admitted Worker receipt work.
-            cursor.snapshot_next_spec_index = cursor.snapshot_next_spec_index.saturating_add(1);
-            save_cursor_state(cursor_path, &cursor)?;
+            if snapshot_index < cursor.snapshot_next_spec_index {
+                continue;
+            }
+            cursor.snapshot_next_spec_index = cursor
+                .snapshot_next_spec_index
+                .max(snapshot_index.saturating_add(1));
             continue;
         }
-        process_v2_spec(
-            transport,
-            session,
-            manifest,
-            spec,
-            executor_config,
-            now_unix_ms,
-            &mut terminal,
-            &results,
-            &mut summary,
-            journal_path,
-            &mut journal,
-            &mut executor,
-            &mut reconciler,
-        )?;
-        cursor.snapshot_next_spec_index = cursor.snapshot_next_spec_index.saturating_add(1);
-        save_cursor_state(cursor_path, &cursor)?;
-        let key = TicketKey::new(&spec.id, &spec.idempotency_key);
-        if journal
-            .get(&key)
-            .is_some_and(|entry| entry.state == wal::ExecutionJournalState::ResultPublished)
+        let admission_sequence = spec
+            .admission_sequence
+            .ok_or_else(|| anyhow!("version-2 snapshot lacks admission_sequence"))?;
+        if admission_sequence <= cursor.snapshot_last_admission_sequence {
+            continue;
+        }
+        if cursor.snapshot_last_admission_sequence != 0
+            && admission_sequence != cursor.snapshot_last_admission_sequence.saturating_add(1)
         {
-            journal.mark_terminal(&key)?;
+            return Err(anyhow!(
+                "version-2 snapshot retention gap: expected admission_sequence {} but observed {}",
+                cursor.snapshot_last_admission_sequence.saturating_add(1),
+                admission_sequence,
+            ));
+        }
+        let assigned = ticket_lane_for_spec(spec, lane_count)? == lane_index;
+        if assigned {
+            process_v2_spec(
+                transport,
+                session,
+                manifest,
+                spec,
+                executor_config,
+                now_unix_ms,
+                &mut terminal,
+                &results,
+                &mut summary,
+                journal_path,
+                &mut journal,
+                &mut executor,
+                &mut reconciler,
+            )?;
+        }
+        cursor.snapshot_next_spec_index = cursor
+            .snapshot_next_spec_index
+            .max(snapshot_index.saturating_add(1));
+        cursor.snapshot_last_admission_sequence = admission_sequence;
+        if assigned && journal.compact_completed_through(admission_sequence)? {
             journal.save(journal_path)?;
         }
     }
 
+    let durable_snapshot_sequence = durable_cursor
+        .snapshot_last_admission_sequence
+        .max(journal.completed_through_admission_sequence());
+    let checkpoint_due = cursor
+        .snapshot_last_admission_sequence
+        .saturating_sub(durable_snapshot_sequence)
+        >= V2_CURSOR_CHECKPOINT_STRIDE;
+    if cursor.raw_next_spec_index != durable_cursor.raw_next_spec_index
+        || checkpoint_due
+        || (cursor.snapshot_last_admission_sequence == 0 && cursor != durable_cursor)
+    {
+        save_cursor_state(cursor_path, cursor)?;
+        *durable_cursor = cursor.clone();
+    }
     Ok(summary)
+}
+
+fn ticket_lane_for_spec(spec: &HostTicketSpec, lane_count: usize) -> Result<usize> {
+    if spec.admission_sequence.unwrap_or(0) == 0 || lane_count == 0 {
+        return Err(anyhow!("ticket lane assignment requires non-zero bounds"));
+    }
+    let (family, key) = if spec.action.starts_with("gpu.lease.") {
+        (
+            "gpu-lease",
+            spec.operation_id
+                .as_deref()
+                .ok_or_else(|| anyhow!("GPU ticket lane assignment requires operation_id"))?,
+        )
+    } else if spec.action.starts_with("peft.") {
+        (
+            "peft-subject",
+            spec.subject_ref
+                .as_deref()
+                .ok_or_else(|| anyhow!("PEFT ticket lane assignment requires subject_ref"))?,
+        )
+    } else {
+        return Err(anyhow!(
+            "version-2 ticket action {} has no execution-lane family",
+            spec.action
+        ));
+    };
+    let mut digest = Sha256::new();
+    digest.update(b"host-ticket-execution-lane/v1\0");
+    digest.update(family.as_bytes());
+    digest.update([0]);
+    digest.update(key.as_bytes());
+    let digest = digest.finalize();
+    let hash = u64::from_be_bytes(
+        digest[..8]
+            .try_into()
+            .map_err(|_| anyhow!("ticket lane digest width is invalid"))?,
+    );
+    let lane_count = u64::try_from(lane_count).context("ticket lane count exceeds u64")?;
+    usize::try_from(hash % lane_count).context("ticket lane index exceeds usize")
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -973,8 +1275,11 @@ where
         ));
     }
     let key = TicketKey::new(&spec.id, &spec.idempotency_key);
+    if journal.is_compacted_terminal(spec)? {
+        summary.skipped_terminal = summary.skipped_terminal.saturating_add(1);
+        return Ok(());
+    }
     journal.prepare(spec)?;
-    journal.save(journal_path)?;
     let mut state = journal
         .get(&key)
         .map(|entry| entry.state)
@@ -997,24 +1302,43 @@ where
             validate_result_binding(spec, result)?;
         }
         if state >= wal::ExecutionJournalState::ProviderResultPersisted {
-            let staged_line = journal
+            let entry = journal
                 .get(&key)
-                .and_then(|entry| entry.result_line.as_deref())
-                .ok_or_else(|| {
-                    anyhow!("terminal VM result exists without staged journal result")
-                })?;
+                .cloned()
+                .ok_or_else(|| anyhow!("execution journal entry disappeared"))?;
+            let provider_result = entry
+                .provider_result
+                .as_ref()
+                .ok_or_else(|| anyhow!("persisted journal state lacks provider result"))?;
+            let (result_path, expected_line) =
+                build_v2_provider_result_line(manifest, spec, provider_result)?;
+            if entry
+                .result_path
+                .as_deref()
+                .is_some_and(|path| path != result_path)
+                || entry
+                    .result_line
+                    .as_deref()
+                    .is_some_and(|line| line != expected_line)
+            {
+                return Err(anyhow!(
+                    "terminal VM result differs from deterministic journal reconstruction"
+                ));
+            }
             let exact_visible = visible_terminal.iter().any(|result| {
-                serde_json::to_string(result).is_ok_and(|encoded| encoded == staged_line)
+                serde_json::to_string(result).is_ok_and(|encoded| encoded == expected_line)
             });
             if !exact_visible {
                 return Err(anyhow!(
-                    "visible terminal VM result differs from the journal-staged result"
+                    "visible terminal VM result differs from the reconstructed journal result"
                 ));
+            }
+            if state == wal::ExecutionJournalState::ProviderResultPersisted {
+                journal.stage_result(&key, result_path.as_str(), expected_line.as_str())?;
             }
         }
         if state == wal::ExecutionJournalState::ProviderResultPersisted {
             journal.mark_result_published(&key)?;
-            journal.save(journal_path)?;
             state = wal::ExecutionJournalState::ResultPublished;
         }
         if matches!(
@@ -1029,41 +1353,21 @@ where
         ));
     }
     if state == wal::ExecutionJournalState::Terminal {
-        let entry = journal
-            .get(&key)
-            .ok_or_else(|| anyhow!("terminal execution journal entry disappeared"))?;
-        let path = entry
-            .result_path
-            .as_deref()
-            .ok_or_else(|| anyhow!("terminal execution journal entry lacks result path"))?;
-        let line = entry
-            .result_line
-            .as_deref()
-            .ok_or_else(|| anyhow!("terminal execution journal entry lacks result line"))?;
-        status::append_result_line(transport, session, path, line)?;
         summary.skipped_terminal = summary.skipped_terminal.saturating_add(1);
-        terminal.insert(key);
         return Ok(());
     }
     if state == wal::ExecutionJournalState::ResultPublished {
-        let entry = journal
-            .get(&key)
-            .ok_or_else(|| anyhow!("published execution journal entry disappeared"))?;
-        let path = entry
-            .result_path
-            .as_deref()
-            .ok_or_else(|| anyhow!("published execution journal entry lacks result path"))?;
-        let line = entry
-            .result_line
-            .as_deref()
-            .ok_or_else(|| anyhow!("published execution journal entry lacks result line"))?;
-        status::append_result_line(transport, session, path, line)?;
-        terminal.insert(key);
+        summary.skipped_terminal = summary.skipped_terminal.saturating_add(1);
         return Ok(());
     }
 
     if state == wal::ExecutionJournalState::Prepared {
         validate_ready_worker_binding(transport, session, spec)?;
+        // The single pre-provider durability barrier commits both the admitted
+        // request and its Executing transition. No external side effect occurs
+        // before this exact state reaches stable storage.
+        journal.mark_executing(&key)?;
+        journal.save(journal_path)?;
         append_result(
             transport,
             session,
@@ -1073,8 +1377,6 @@ where
             Some("root-admitted version-2 ticket claimed"),
             manifest.status_path().as_str(),
         )?;
-        journal.mark_executing(&key)?;
-        journal.save(journal_path)?;
         append_result(
             transport,
             session,
@@ -1152,27 +1454,14 @@ where
             .provider_result
             .as_ref()
             .ok_or_else(|| anyhow!("provider-result-persisted entry lacks result"))?;
-        let (state, path) = match provider_result.outcome {
-            wal::JournalProviderOutcome::Confirmed => ("succeeded", manifest.status_path()),
-            wal::JournalProviderOutcome::Rejected => ("failed", manifest.deadletter_path()),
-            wal::JournalProviderOutcome::Stale => ("expired", manifest.deadletter_path()),
-        };
-        let line = status::build_result_line(
-            spec,
-            manifest.result_schema_for(spec.schema.as_str())?,
-            state,
-            Some(provider_result.message.as_str()),
-            effective_result_line_limit(spec.schema.as_str(), manifest.max_line_bytes),
-        )?;
+        let (path, line) = build_v2_provider_result_line(manifest, spec, provider_result)?;
         journal.stage_result(&key, path.as_str(), line.as_str())?;
-        journal.save(journal_path)?;
 
         let already_visible = terminal.contains(&key);
         if !already_visible {
             status::append_result_line(transport, session, path.as_str(), line.as_str())?;
         }
         journal.mark_result_published(&key)?;
-        journal.save(journal_path)?;
         match provider_result.outcome {
             wal::JournalProviderOutcome::Confirmed => {
                 summary.succeeded = summary.succeeded.saturating_add(1);
@@ -1187,6 +1476,31 @@ where
         terminal.insert(key);
     }
     Ok(())
+}
+
+/// Reconstruct the exact terminal result bytes from the durable provider outcome.
+///
+/// This pure mapping makes a separate pre-publication journal rewrite
+/// unnecessary: after a crash, the same admitted binding and provider result
+/// deterministically produce the same line before observation or re-publication.
+fn build_v2_provider_result_line(
+    manifest: &HostTicketManifest,
+    spec: &HostTicketSpec,
+    provider_result: &wal::JournalProviderResult,
+) -> Result<(String, String)> {
+    let (state, path) = match provider_result.outcome {
+        wal::JournalProviderOutcome::Confirmed => ("succeeded", manifest.status_path()),
+        wal::JournalProviderOutcome::Rejected => ("failed", manifest.deadletter_path()),
+        wal::JournalProviderOutcome::Stale => ("expired", manifest.deadletter_path()),
+    };
+    let line = status::build_result_line(
+        spec,
+        manifest.result_schema_for(spec.schema.as_str())?,
+        state,
+        Some(provider_result.message.as_str()),
+        effective_result_line_limit(spec.schema.as_str(), manifest.max_line_bytes),
+    )?;
+    Ok((path, line))
 }
 
 /// Current unix timestamp in milliseconds.
@@ -1355,68 +1669,148 @@ fn validate_ready_worker_binding(
         .receipt_cap_generation
         .ok_or_else(|| anyhow!("host-ticket/v2 lacks receipt_cap_generation"))?;
 
-    let shards = transport
-        .list(session, "/shard")
-        .context("list canonical Worker shard root")?;
-    for shard in shards.into_iter().take(64) {
-        if normalise_token("shard label", shard.as_str()).is_err() {
-            continue;
-        }
-        let worker_root = format!("/shard/{shard}/worker");
-        let workers = transport.list(session, worker_root.as_str())?;
-        if !workers.iter().any(|candidate| candidate == worker_id) {
-            continue;
-        }
-        let telemetry = format!("{worker_root}/{worker_id}/telemetry");
-        let lines = transport.tail(session, telemetry.as_str(), None)?;
-        for line in lines.iter().rev().take(64) {
-            let Ok(snapshot) = serde_json::from_str::<WorkerRuntimeStateLine>(line.trim()) else {
-                continue;
-            };
-            if snapshot.schema != "worker-runtime-state/v1" || snapshot.worker_id != worker_id {
-                continue;
-            }
-            if snapshot.state != "ready"
-                || snapshot.role != expected_role
-                || snapshot.slot != expected_slot
-                || snapshot.lease_epoch != expected_lease_epoch
-                || snapshot.supervisor_generation != expected_supervisor_generation
-                || snapshot.cap_generation != expected_cap_generation
-                || snapshot.ready_sequence == 0
-            {
-                return Err(anyhow!(
-                    "receipt Worker {worker_id} is not READY at the exact root-pinned identity"
-                ));
-            }
-            return Ok(());
-        }
+    let current = read_host_ticket_current(transport, session, spec)?;
+    if current.state != "pending"
+        || current.role != expected_role
+        || current.worker_id != worker_id
+        || current.lifecycle != "ready"
+        || current.identity
+            != [
+                u64::from(expected_slot),
+                expected_lease_epoch,
+                expected_supervisor_generation,
+                expected_cap_generation,
+            ]
+        || current.sequence[0] == 0
+        || current.admission_sequence
+            != spec
+                .admission_sequence
+                .ok_or_else(|| anyhow!("host-ticket/v2 lacks admission_sequence"))?
+    {
         return Err(anyhow!(
-            "receipt Worker {worker_id} has no authoritative runtime-state projection"
+            "receipt Worker {worker_id} is not READY at the exact root-pinned identity"
         ));
     }
-    Err(anyhow!(
-        "receipt Worker {worker_id} is absent from canonical /shard projections"
+    Ok(())
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct HostTicketCurrent {
+    state: String,
+    role: String,
+    worker_id: String,
+    lifecycle: String,
+    identity: [u64; 4],
+    sequence: [u64; 4],
+    admission_sequence: u64,
+}
+
+fn read_host_ticket_current(
+    transport: &mut dyn Transport,
+    session: &Session,
+    spec: &HostTicketSpec,
+) -> Result<HostTicketCurrent> {
+    let path = host_ticket_current_path(spec)?;
+    let lines = transport
+        .read(session, path.as_str())
+        .with_context(|| format!("read exact root-owned ticket state {path}"))?;
+    if lines.len() != 1 {
+        return Err(anyhow!(
+            "exact root-owned ticket state must contain one record"
+        ));
+    }
+    parse_host_ticket_current(lines[0].as_str())
+}
+
+fn host_ticket_current_path(spec: &HostTicketSpec) -> Result<String> {
+    let id_len = u16::try_from(spec.id.len()).context("ticket id exceeds correlation bound")?;
+    let key_len = u16::try_from(spec.idempotency_key.len())
+        .context("ticket idempotency key exceeds correlation bound")?;
+    let mut digest = Sha256::new();
+    digest.update(HOST_TICKET_CORRELATION_DOMAIN);
+    digest.update(id_len.to_be_bytes());
+    digest.update(spec.id.as_bytes());
+    digest.update(key_len.to_be_bytes());
+    digest.update(spec.idempotency_key.as_bytes());
+    Ok(format!(
+        "{HOST_TICKET_CURRENT_PREFIX}{}",
+        hex::encode(digest.finalize())
     ))
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct WorkerRuntimeStateLine {
-    schema: String,
-    worker_id: String,
-    role: String,
-    state: String,
-    slot: u16,
-    lease_epoch: u64,
-    supervisor_generation: u64,
-    cap_generation: u64,
-    ready_sequence: u64,
-    #[serde(rename = "control_sequence")]
-    _control_sequence: u64,
-    #[serde(rename = "receipt_sequence")]
-    _receipt_sequence: u64,
-    #[serde(rename = "completion_sequence")]
-    _completion_sequence: u64,
+fn parse_host_ticket_current(line: &str) -> Result<HostTicketCurrent> {
+    if line.len() > HOST_TICKET_CURRENT_MAX_BYTES {
+        return Err(anyhow!("exact root-owned ticket state exceeds its bound"));
+    }
+    let mut tokens = line.split_whitespace();
+    if tokens.next() != Some("HOST_TICKET_CURRENT") {
+        return Err(anyhow!(
+            "exact root-owned ticket state has an invalid marker"
+        ));
+    }
+    let mut fields = HashMap::<&str, &str>::with_capacity(8);
+    for token in tokens {
+        let (key, value) = token
+            .split_once('=')
+            .ok_or_else(|| anyhow!("exact root-owned ticket state has a malformed field"))?;
+        if key.is_empty() || value.is_empty() || fields.insert(key, value).is_some() {
+            return Err(anyhow!(
+                "exact root-owned ticket state has duplicate or empty fields"
+            ));
+        }
+    }
+    let required = [
+        "schema",
+        "state",
+        "role",
+        "worker",
+        "lifecycle",
+        "identity",
+        "sequence",
+        "admission",
+    ];
+    if fields.len() != required.len() || required.iter().any(|key| !fields.contains_key(key)) {
+        return Err(anyhow!(
+            "exact root-owned ticket state has an invalid field set"
+        ));
+    }
+    let schema = fields["schema"];
+    let state = fields["state"];
+    if schema != HOST_TICKET_CURRENT_SCHEMA
+        || !matches!(state, "pending" | "confirmed" | "rejected" | "stale")
+    {
+        return Err(anyhow!(
+            "exact root-owned ticket state has an invalid schema or state"
+        ));
+    }
+    let admission_sequence = fields["admission"]
+        .parse::<u64>()
+        .context("parse exact ticket admission sequence")?;
+    if admission_sequence == 0 {
+        return Err(anyhow!("exact ticket admission sequence must be non-zero"));
+    }
+    Ok(HostTicketCurrent {
+        state: state.to_owned(),
+        role: fields["role"].to_owned(),
+        worker_id: fields["worker"].to_owned(),
+        lifecycle: fields["lifecycle"].to_owned(),
+        identity: parse_host_ticket_vector(fields["identity"], "identity")?,
+        sequence: parse_host_ticket_vector(fields["sequence"], "sequence")?,
+        admission_sequence,
+    })
+}
+
+fn parse_host_ticket_vector(value: &str, label: &str) -> Result<[u64; 4]> {
+    let values = value
+        .split(',')
+        .map(|part| {
+            part.parse::<u64>()
+                .with_context(|| format!("parse exact ticket {label}"))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    values
+        .try_into()
+        .map_err(|_| anyhow!("exact ticket {label} must contain four values"))
 }
 
 fn dedupe_tokens(values: Vec<String>) -> Vec<String> {
@@ -2003,16 +2397,27 @@ mod tests {
         );
         files.insert(manifest.status_path(), Vec::new());
         files.insert(manifest.deadletter_path(), Vec::new());
-        files.insert("/shard".to_owned(), vec!["s0".to_owned()]);
         files.insert(
-            "/shard/s0/worker".to_owned(),
-            vec!["gpu-worker-1".to_owned()],
-        );
-        files.insert(
-            "/shard/s0/worker/gpu-worker-1/telemetry".to_owned(),
-            vec!["{\"schema\":\"worker-runtime-state/v1\",\"worker_id\":\"gpu-worker-1\",\"role\":\"worker-gpu\",\"state\":\"ready\",\"slot\":0,\"lease_epoch\":4,\"supervisor_generation\":2,\"cap_generation\":3,\"ready_sequence\":1,\"control_sequence\":0,\"receipt_sequence\":0,\"completion_sequence\":0}".to_owned()],
+            host_ticket_current_path(&admitted).expect("current path"),
+            vec!["HOST_TICKET_CURRENT schema=host-ticket-current/v1 state=pending role=worker-gpu worker=gpu-worker-1 lifecycle=ready identity=0,4,2,3 sequence=1,0,0,0 admission=5".to_owned()],
         );
         files
+    }
+
+    #[test]
+    fn exact_current_record_preserves_root_pinned_receipt_identity() {
+        let record = parse_host_ticket_current(
+            "HOST_TICKET_CURRENT schema=host-ticket-current/v1 state=pending role=worker-gpu worker=gpu-worker-1 lifecycle=ready identity=0,4,2,3 sequence=1,0,0,0 admission=5",
+        )
+        .expect("parse exact-current record");
+
+        assert_eq!(record.state, "pending");
+        assert_eq!(record.role, "worker-gpu");
+        assert_eq!(record.worker_id, "gpu-worker-1");
+        assert_eq!(record.lifecycle, "ready");
+        assert_eq!(record.identity, [0, 4, 2, 3]);
+        assert_eq!(record.sequence, [1, 0, 0, 0]);
+        assert_eq!(record.admission_sequence, 5);
     }
 
     #[test]
@@ -2070,14 +2475,337 @@ mod tests {
     }
 
     #[test]
+    fn v2_cursor_tracks_global_admission_sequence_across_a_sliding_snapshot() {
+        let temp = tempfile::TempDir::new().expect("temp");
+        let cursor = temp.path().join("cursor.json");
+        let journal = temp.path().join("journal.json");
+        let manifest = v2_manifest();
+        let mut transport = FakeTransport {
+            files: v2_files(&manifest),
+            max_write_line_len: None,
+            fail_after_terminal_write_once: false,
+        };
+        let session = Session::new(1.into(), Role::Queen);
+        let config = ExecutorConfig::default();
+        process_tickets_once_with_hooks(
+            &mut transport,
+            &session,
+            &manifest,
+            &cursor,
+            &journal,
+            &config,
+            unix_time_ms_now(),
+            |_transport, _session, _spec, _config| Ok("first committed".to_owned()),
+            |_transport, _session, _spec, _config| {
+                unreachable!("fresh execution must not reconcile")
+            },
+        )
+        .expect("first admission");
+
+        let (_, mut second) = v2_specs();
+        second.id = "ticket-v2-next".to_owned();
+        second.idempotency_key = "idem-v2-next".to_owned();
+        second.operation_id = Some("lease-2".to_owned());
+        second.admission_sequence = Some(6);
+        transport.files.insert(
+            manifest.spec_snapshot_path(),
+            vec![serde_json::to_string(&second).expect("second admitted v2")],
+        );
+        transport.files.insert(
+            host_ticket_current_path(&second).expect("second current path"),
+            vec!["HOST_TICKET_CURRENT schema=host-ticket-current/v1 state=pending role=worker-gpu worker=gpu-worker-1 lifecycle=ready identity=0,4,2,3 sequence=1,0,0,0 admission=6".to_owned()],
+        );
+        let mut executions = 0usize;
+        let summary = process_tickets_once_with_hooks(
+            &mut transport,
+            &session,
+            &manifest,
+            &cursor,
+            &journal,
+            &config,
+            unix_time_ms_now(),
+            |_transport, _session, spec, _config| {
+                executions = executions.saturating_add(1);
+                assert_eq!(spec.admission_sequence, Some(6));
+                Ok("second committed".to_owned())
+            },
+            |_transport, _session, _spec, _config| {
+                unreachable!("fresh execution must not reconcile")
+            },
+        )
+        .expect("sliding snapshot admission");
+
+        assert_eq!(executions, 1);
+        assert_eq!(summary.succeeded, 1);
+        let persisted = load_cursor_state(&cursor).expect("cursor");
+        let journal = wal::ExecutionJournal::load(&journal).expect("journal");
+        assert_eq!(
+            persisted
+                .snapshot_last_admission_sequence
+                .max(journal.completed_through_admission_sequence()),
+            6,
+            "the journal completion fence is an equally durable replay cursor",
+        );
+        assert!(
+            6u64.saturating_sub(persisted.snapshot_last_admission_sequence)
+                < V2_CURSOR_CHECKPOINT_STRIDE
+        );
+    }
+
+    #[test]
+    fn v2_execution_lanes_partition_root_admissions_exactly_once() {
+        let temp = tempfile::TempDir::new().expect("temp");
+        let manifest = v2_manifest();
+        let (_, first) = v2_specs();
+        let mut second = first.clone();
+        second.id = "ticket-v2-next".to_owned();
+        second.idempotency_key = "idem-v2-next".to_owned();
+        second.admission_sequence = Some(6);
+        let first_lane = ticket_lane_for_spec(&first, 2).expect("first lane");
+        let second_lane = (0..128)
+            .find_map(|candidate| {
+                second.operation_id = Some(format!("independent-lease-{candidate}"));
+                let lane = ticket_lane_for_spec(&second, 2).expect("candidate lane");
+                (lane != first_lane).then_some(lane)
+            })
+            .expect("two independent GPU operations must cover both lanes");
+        let mut files = v2_files(&manifest);
+        files.insert(
+            manifest.spec_snapshot_path(),
+            vec![
+                serde_json::to_string(&first).expect("first admitted v2"),
+                serde_json::to_string(&second).expect("second admitted v2"),
+            ],
+        );
+        files.insert(
+            host_ticket_current_path(&second).expect("second current path"),
+            vec!["HOST_TICKET_CURRENT schema=host-ticket-current/v1 state=pending role=worker-gpu worker=gpu-worker-1 lifecycle=ready identity=0,4,2,3 sequence=1,0,0,0 admission=6".to_owned()],
+        );
+        let snapshot_lines = files
+            .remove(&manifest.spec_snapshot_path())
+            .expect("shared snapshot lines");
+        let mut transport = FakeTransport {
+            files,
+            max_write_line_len: None,
+            fail_after_terminal_write_once: false,
+        };
+        let cursor = temp.path().join("lane-cursor.json");
+        let journal = temp.path().join("lane-journal.json");
+        let mut executed = Vec::new();
+        let summary = process_tickets_once_with_hooks_lane(
+            &mut transport,
+            &Session::new(1.into(), Role::Queen),
+            &manifest,
+            &cursor,
+            &journal,
+            &ExecutorConfig::default(),
+            unix_time_ms_now(),
+            |_transport, _session, spec, _config| {
+                executed.push(spec.id.clone());
+                Ok("lane committed".to_owned())
+            },
+            |_transport, _session, _spec, _config| {
+                unreachable!("fresh lane execution must not reconcile")
+            },
+            second_lane,
+            2,
+            Some(&snapshot_lines),
+            None,
+        )
+        .expect("process assigned lane");
+
+        assert_eq!(executed, ["ticket-v2-next"]);
+        assert_eq!(summary.succeeded, 1);
+        let cursor = load_cursor_state(&cursor).expect("lane cursor");
+        let journal = wal::ExecutionJournal::load(&journal).expect("lane journal");
+        assert_eq!(journal.completed_through_admission_sequence(), 6);
+        assert_eq!(
+            cursor
+                .snapshot_last_admission_sequence
+                .max(journal.completed_through_admission_sequence()),
+            6,
+        );
+        assert!(journal
+            .get(&TicketKey::new(&second.id, &second.idempotency_key))
+            .is_none());
+        assert!(journal
+            .get(&TicketKey::new(&first.id, &first.idempotency_key))
+            .is_none());
+    }
+
+    #[test]
+    fn v2_lane_retains_observed_nonowner_progress_between_snapshot_generations() {
+        let temp = tempfile::TempDir::new().expect("temp");
+        let manifest = v2_manifest();
+        let (_, mut first) = v2_specs();
+        let first_operation = (0..128)
+            .find_map(|candidate| {
+                let operation_id = format!("owned-first-{candidate}");
+                first.operation_id = Some(operation_id.clone());
+                (ticket_lane_for_spec(&first, 2).expect("first lane") == 1).then_some(operation_id)
+            })
+            .expect("find lane-one operation");
+        first.operation_id = Some(first_operation);
+
+        let mut second = first.clone();
+        second.id = "ticket-v2-nonowner".to_owned();
+        second.idempotency_key = "idem-v2-nonowner".to_owned();
+        second.admission_sequence = Some(6);
+        let second_operation = (0..128)
+            .find_map(|candidate| {
+                let operation_id = format!("nonowner-middle-{candidate}");
+                second.operation_id = Some(operation_id.clone());
+                (ticket_lane_for_spec(&second, 2).expect("second lane") == 0)
+                    .then_some(operation_id)
+            })
+            .expect("find lane-zero operation");
+        second.operation_id = Some(second_operation);
+
+        let mut third = first.clone();
+        third.id = "ticket-v2-owned-last".to_owned();
+        third.idempotency_key = "idem-v2-owned-last".to_owned();
+        third.admission_sequence = Some(7);
+        let third_operation = (0..128)
+            .find_map(|candidate| {
+                let operation_id = format!("owned-last-{candidate}");
+                third.operation_id = Some(operation_id.clone());
+                (ticket_lane_for_spec(&third, 2).expect("third lane") == 1).then_some(operation_id)
+            })
+            .expect("find second lane-one operation");
+        third.operation_id = Some(third_operation);
+
+        let mut files = v2_files(&manifest);
+        files.insert(manifest.spec_path(), Vec::new());
+        files.insert(
+            host_ticket_current_path(&first).expect("first current path"),
+            vec!["HOST_TICKET_CURRENT schema=host-ticket-current/v1 state=pending role=worker-gpu worker=gpu-worker-1 lifecycle=ready identity=0,4,2,3 sequence=1,0,0,0 admission=5".to_owned()],
+        );
+        files.insert(
+            host_ticket_current_path(&third).expect("third current path"),
+            vec!["HOST_TICKET_CURRENT schema=host-ticket-current/v1 state=pending role=worker-gpu worker=gpu-worker-1 lifecycle=ready identity=0,4,2,3 sequence=1,0,0,0 admission=7".to_owned()],
+        );
+        let mut transport = FakeTransport {
+            files,
+            max_write_line_len: None,
+            fail_after_terminal_write_once: false,
+        };
+        let cursor = temp.path().join("lane-cursor.json");
+        let journal = temp.path().join("lane-journal.json");
+        let mut lane_state = TicketLaneState::load(&cursor).expect("lane state");
+        let session = Session::new(1.into(), Role::Queen);
+        let config = ExecutorConfig::default();
+        let mut executed = Vec::new();
+
+        for spec in [&first, &second, &third] {
+            let snapshot = vec![serde_json::to_string(spec).expect("admitted v2")];
+            process_tickets_once_with_hooks_lane(
+                &mut transport,
+                &session,
+                &manifest,
+                &cursor,
+                &journal,
+                &config,
+                unix_time_ms_now(),
+                |_transport, _session, spec, _config| {
+                    executed.push(spec.id.clone());
+                    Ok("lane committed".to_owned())
+                },
+                |_transport, _session, _spec, _config| {
+                    unreachable!("fresh lane execution must not reconcile")
+                },
+                1,
+                2,
+                Some(snapshot.as_slice()),
+                Some(&mut lane_state),
+            )
+            .expect("process delta snapshot");
+        }
+
+        assert_eq!(executed, [first.id.clone(), third.id.clone()]);
+        assert_eq!(lane_state.cursor.snapshot_last_admission_sequence, 7);
+        assert_eq!(
+            wal::ExecutionJournal::load(&journal)
+                .expect("lane journal")
+                .completed_through_admission_sequence(),
+            7,
+        );
+    }
+
+    #[test]
+    fn compact_completion_fence_does_not_republish_an_evicted_vm_result() {
+        let temp = tempfile::TempDir::new().expect("temp");
+        let cursor = temp.path().join("cursor.json");
+        let journal = temp.path().join("journal.json");
+        let manifest = v2_manifest();
+        let mut transport = FakeTransport {
+            files: v2_files(&manifest),
+            max_write_line_len: None,
+            fail_after_terminal_write_once: false,
+        };
+        let session = Session::new(1.into(), Role::Queen);
+        let config = ExecutorConfig::default();
+        process_tickets_once_with_hooks(
+            &mut transport,
+            &session,
+            &manifest,
+            &cursor,
+            &journal,
+            &config,
+            unix_time_ms_now(),
+            |_transport, _session, _spec, _config| Ok("committed".to_owned()),
+            |_transport, _session, _spec, _config| {
+                unreachable!("fresh execution must not reconcile")
+            },
+        )
+        .expect("initial publication");
+        transport
+            .files
+            .get_mut(&manifest.status_path())
+            .expect("status")
+            .clear();
+        save_cursor_state(&cursor, &CursorState::default()).expect("reset cursor");
+
+        let summary = process_tickets_once_with_hooks(
+            &mut transport,
+            &session,
+            &manifest,
+            &cursor,
+            &journal,
+            &config,
+            unix_time_ms_now(),
+            |_transport, _session, _spec, _config| {
+                unreachable!("terminal journal must prevent provider replay")
+            },
+            |_transport, _session, _spec, _config| {
+                unreachable!("terminal journal must not reconcile")
+            },
+        )
+        .expect("evicted result is already durable in the journal");
+
+        assert_eq!(summary, ProcessSummary::default());
+        assert_eq!(
+            load_cursor_state(&cursor)
+                .expect("cursor restored from journal fence")
+                .snapshot_last_admission_sequence,
+            5
+        );
+        assert!(transport
+            .files
+            .get(&manifest.status_path())
+            .expect("status")
+            .is_empty());
+    }
+
+    #[test]
     fn v2_refuses_not_ready_or_unpinned_worker_before_execution() {
         let temp = tempfile::TempDir::new().expect("temp");
         let manifest = v2_manifest();
         let mut files = v2_files(&manifest);
-        let telemetry = files
-            .get_mut("/shard/s0/worker/gpu-worker-1/telemetry")
-            .expect("telemetry");
-        telemetry[0] = telemetry[0].replace("\"state\":\"ready\"", "\"state\":\"starting\"");
+        let (_, admitted) = v2_specs();
+        let current = files
+            .get_mut(&host_ticket_current_path(&admitted).expect("current path"))
+            .expect("exact current state");
+        current[0] = current[0].replace("lifecycle=ready", "lifecycle=starting");
         let mut transport = FakeTransport {
             files,
             max_write_line_len: None,
@@ -2163,10 +2891,8 @@ mod tests {
         let state = wal::ExecutionJournal::load(&journal).expect("journal");
         let (_, admitted) = v2_specs();
         let key = TicketKey::new(&admitted.id, &admitted.idempotency_key);
-        assert_eq!(
-            state.get(&key).map(|entry| entry.state),
-            Some(wal::ExecutionJournalState::Terminal)
-        );
+        assert!(state.get(&key).is_none());
+        assert_eq!(state.completed_through_admission_sequence(), 5);
     }
 
     #[test]
@@ -2208,14 +2934,14 @@ mod tests {
         .expect("reconcile");
         assert_eq!(summary.succeeded, 1);
         let loaded = wal::ExecutionJournal::load(&journal_path).expect("journal");
-        assert_eq!(
-            loaded.get(&key).map(|entry| entry.state),
-            Some(wal::ExecutionJournalState::Terminal)
-        );
-        assert!(loaded
-            .get(&key)
-            .and_then(|entry| entry.provider_result.as_ref())
-            .is_some_and(|result| result.reconciled));
+        assert!(loaded.get(&key).is_none());
+        assert_eq!(loaded.completed_through_admission_sequence(), 5);
+        assert!(transport
+            .files
+            .get(&manifest.status_path())
+            .expect("status")
+            .iter()
+            .any(|line| line.contains("exact operation observed committed")));
     }
 
     #[test]

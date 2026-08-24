@@ -21,7 +21,6 @@
 #[cfg(all(target_os = "none", not(feature = "kernel")))]
 compile_error!("enable the `kernel` feature when building root-task for seL4 targets");
 
-#[cfg(any(feature = "kernel", feature = "cache-maintenance", test))]
 extern crate alloc as rust_alloc;
 
 /// Manifest-driven SMP affinity helpers.
@@ -132,6 +131,10 @@ pub mod readiness;
 #[cfg(feature = "kernel")]
 /// Bounded log buffer backing /log/queen.log after console handoff.
 pub mod log_buffer;
+
+#[cfg(all(feature = "kernel", feature = "release-qemu"))]
+/// Fixed-record QEMU activation telemetry decoded through NineDoor after a run.
+pub(crate) mod qemu_flight_recorder;
 
 #[cfg(feature = "kernel")]
 /// Deterministic lifecycle state machine for operator control.

@@ -13,18 +13,20 @@ usage() {
     cat <<'USAGE'
 Usage: scripts/m26e_qemu_pressure.sh [options]
 
-Clean-build the canonical four-core QEMU/GICv3 profile, then run separate
-same-artifact authenticated, service-injection, medium, and high pressure boots. This command
-deletes only the validated repository target/ and out/ contents after moving
-the explicit seL4/toolchain inputs to a temporary directory.
+Clean-build or replay the canonical four-core QEMU/GICv3 profile, then run
+separate same-artifact authenticated, service-injection, medium, and high
+pressure boots. The normal lane deletes only the validated repository target/
+and out/ contents after moving the explicit seL4/toolchain inputs to a temporary
+directory. The Linux replay lane never deletes or rebuilds guest artifacts.
 
 Options:
   --run-dir DIR          Fresh evidence directory under out/
                          (default: out/m26e-qemu-pressure)
   --sel4-source DIR      Clean upstream seL4 source input
                          (default: out/sel4/source-v16-clean)
-  --sel4-build DIR       Fresh qemu_smp_production build directory
-                         (default: out/sel4/profile-v2/qemu-smp-production)
+  --sel4-build DIR       Host-matched production build directory
+                         (macOS: qemu-smp-production; Linux replay:
+                         qemu-smp-kvm-production)
   --profile-python FILE  Profile virtualenv Python
                          (default: out/toolchain/sel4-profile-venv/bin/python)
   --compiler-dir DIR     Pinned AArch64 compiler installation
@@ -34,6 +36,9 @@ Options:
                          (default: /opt/homebrew/bin/qemu-system-aarch64)
   --gdb FILE             aarch64-none-elf-gdb executable
   --jobs N               seL4 build jobs, 1..32 (default: 10)
+  --reuse-artifacts      Replay already-transferred immutable guest artifacts.
+                        Rebuild only the four native pressure host tools, bind
+                        the Linux KVM launch record, and skip release gates.
   --check-only           Validate immutable inputs and print the plan; this
                          never cleans, builds, boots, or emits acceptance
   -h, --help             Show this help
@@ -228,6 +233,8 @@ validate_resolved_console_token() {
 RUN_DIR="out/m26e-qemu-pressure"
 SEL4_SOURCE="out/sel4/source-v16-clean"
 SEL4_BUILD="out/sel4/profile-v2/qemu-smp-production"
+SEL4_BUILD_EXPLICIT=0
+SEL4_PROFILE=qemu_smp_production
 PROFILE_PYTHON="out/toolchain/sel4-profile-venv/bin/python"
 COMPILER_DIR="out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf"
 COMPILER_ARCHIVE="out/toolchain/downloads/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf.tar.xz"
@@ -237,18 +244,20 @@ SOURCE_MANIFEST="$REPO_ROOT/configs/root_task.toml"
 RESOLVED_MANIFEST="$REPO_ROOT/configs/generated/root_task_resolved.json"
 JOBS=10
 CHECK_ONLY=0
+REUSE_ARTIFACTS=0
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --run-dir) [[ $# -ge 2 ]] || die "--run-dir requires a value"; RUN_DIR=$2; shift 2 ;;
         --sel4-source) [[ $# -ge 2 ]] || die "--sel4-source requires a value"; SEL4_SOURCE=$2; shift 2 ;;
-        --sel4-build) [[ $# -ge 2 ]] || die "--sel4-build requires a value"; SEL4_BUILD=$2; shift 2 ;;
+        --sel4-build) [[ $# -ge 2 ]] || die "--sel4-build requires a value"; SEL4_BUILD=$2; SEL4_BUILD_EXPLICIT=1; shift 2 ;;
         --profile-python) [[ $# -ge 2 ]] || die "--profile-python requires a value"; PROFILE_PYTHON=$2; shift 2 ;;
         --compiler-dir) [[ $# -ge 2 ]] || die "--compiler-dir requires a value"; COMPILER_DIR=$2; shift 2 ;;
         --compiler-archive) [[ $# -ge 2 ]] || die "--compiler-archive requires a value"; COMPILER_ARCHIVE=$2; shift 2 ;;
         --qemu) [[ $# -ge 2 ]] || die "--qemu requires a value"; QEMU_BIN=$2; shift 2 ;;
         --gdb) [[ $# -ge 2 ]] || die "--gdb requires a value"; GDB_BIN=$2; shift 2 ;;
         --jobs) [[ $# -ge 2 ]] || die "--jobs requires a value"; JOBS=$2; shift 2 ;;
+        --reuse-artifacts) REUSE_ARTIFACTS=1; shift ;;
         --check-only) CHECK_ONLY=1; shift ;;
         -h|--help) usage; exit 0 ;;
         *) die "unknown option: $1" ;;
@@ -259,8 +268,17 @@ done
     die "--jobs must be an integer in 1..32"
 
 cd "$REPO_ROOT"
-[[ "$REPO_ROOT" == "/Users/lukasbower/GitHub/cohesix" ]] || \
-    die "refusing to clean an unexpected repository root: $REPO_ROOT"
+PRESSURE_HOST_OS="$(uname -s)"
+if (( REUSE_ARTIFACTS == 1 )); then
+    SEL4_PROFILE=qemu_smp_kvm_production
+    if (( SEL4_BUILD_EXPLICIT == 0 )); then
+        SEL4_BUILD="out/sel4/profile-v2/qemu-smp-kvm-production"
+    fi
+fi
+if (( REUSE_ARTIFACTS == 0 )); then
+    [[ "$REPO_ROOT" == "/Users/lukasbower/GitHub/cohesix" ]] || \
+        die "refusing to clean an unexpected repository root: $REPO_ROOT"
+fi
 OUT_DIR="$(canonical_existing_dir "$REPO_ROOT/out" "$REPO_ROOT")"
 TARGET_DIR="$(canonical_existing_dir "$REPO_ROOT/target" "$REPO_ROOT")"
 [[ "$OUT_DIR" == "$REPO_ROOT/out" && "$TARGET_DIR" == "$REPO_ROOT/target" ]] || \
@@ -268,45 +286,62 @@ TARGET_DIR="$(canonical_existing_dir "$REPO_ROOT/target" "$REPO_ROOT")"
 RUN_DIR="$(canonical_future_dir "$RUN_DIR" "$OUT_DIR")"
 [[ "$(dirname "$RUN_DIR")" == "$OUT_DIR" ]] || \
     die "--run-dir must be a fresh direct child of the repository out directory"
-SEL4_SOURCE="$(canonical_existing_dir "$SEL4_SOURCE" "$OUT_DIR/sel4")"
-SEL4_BUILD="$(canonical_future_dir "$SEL4_BUILD" "$OUT_DIR/sel4")"
-PROFILE_PYTHON="$(canonical_profile_python "$PROFILE_PYTHON")"
-PROFILE_VENV="$(canonical_existing_dir "$(dirname "$(dirname "$PROFILE_PYTHON")")" "$OUT_DIR/toolchain")"
-COMPILER_DIR="$(canonical_existing_dir "$COMPILER_DIR" "$OUT_DIR/toolchain")"
-COMPILER_ARCHIVE="$(canonical_existing_file "$COMPILER_ARCHIVE" "$OUT_DIR/toolchain" no)"
 QEMU_BIN="$(canonical_existing_file "$QEMU_BIN" "" yes)"
-GDB_BIN="$(canonical_existing_file "$GDB_BIN" "$COMPILER_DIR" yes)"
-[[ "$SEL4_BUILD" != "$SEL4_SOURCE" && "$SEL4_SOURCE" != "$SEL4_BUILD"/* ]] || \
-    die "seL4 build must not alias or contain the preserved source"
-[[ "$PROFILE_VENV" != "$COMPILER_DIR" && "$COMPILER_ARCHIVE" != "$COMPILER_DIR"/* ]] || \
-    die "preserved toolchain inputs must be non-overlapping"
-[[ "$SEL4_SOURCE" == "$OUT_DIR/sel4/source-v16-clean" ]] || \
-    die "--sel4-source must select the canonical source-v16-clean input"
-[[ "$SEL4_BUILD" == "$OUT_DIR/sel4/profile-v2/qemu-smp-production" ]] || \
-    die "--sel4-build must select the qemu_smp_production contract path"
-[[ "$PROFILE_VENV" == "$OUT_DIR/toolchain/sel4-profile-venv" && \
-   "$PROFILE_PYTHON" == "$PROFILE_VENV/bin/python" ]] || \
-    die "--profile-python must select the canonical profile virtualenv"
-[[ "$COMPILER_DIR" == "$OUT_DIR/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf" ]] || \
-    die "--compiler-dir must select the compiler contract install path"
-[[ "$COMPILER_ARCHIVE" == "$OUT_DIR/toolchain/downloads/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf.tar.xz" ]] || \
-    die "--compiler-archive must select the compiler contract archive"
-[[ "$GDB_BIN" == "$COMPILER_DIR/bin/aarch64-none-elf-gdb" ]] || \
-    die "--gdb must select the compiler contract GDB"
+if (( REUSE_ARTIFACTS == 1 )); then
+    [[ "$PRESSURE_HOST_OS" == "Linux" ]] || die "--reuse-artifacts is Linux-only"
+    SEL4_BUILD="$(canonical_existing_dir "$SEL4_BUILD" "$OUT_DIR/sel4")"
+    GDB_BIN="$(canonical_existing_file "$GDB_BIN" "" yes)"
+    [[ "$SEL4_BUILD" == "$OUT_DIR/sel4/profile-v2/qemu-smp-kvm-production" ]] || \
+        die "--sel4-build must select the transferred qemu_smp_kvm_production path"
+else
+    SEL4_SOURCE="$(canonical_existing_dir "$SEL4_SOURCE" "$OUT_DIR/sel4")"
+    SEL4_BUILD="$(canonical_future_dir "$SEL4_BUILD" "$OUT_DIR/sel4")"
+    PROFILE_PYTHON="$(canonical_profile_python "$PROFILE_PYTHON")"
+    PROFILE_VENV="$(canonical_existing_dir "$(dirname "$(dirname "$PROFILE_PYTHON")")" "$OUT_DIR/toolchain")"
+    COMPILER_DIR="$(canonical_existing_dir "$COMPILER_DIR" "$OUT_DIR/toolchain")"
+    COMPILER_ARCHIVE="$(canonical_existing_file "$COMPILER_ARCHIVE" "$OUT_DIR/toolchain" no)"
+    GDB_BIN="$(canonical_existing_file "$GDB_BIN" "$COMPILER_DIR" yes)"
+    [[ "$SEL4_BUILD" != "$SEL4_SOURCE" && "$SEL4_SOURCE" != "$SEL4_BUILD"/* ]] || \
+        die "seL4 build must not alias or contain the preserved source"
+    [[ "$PROFILE_VENV" != "$COMPILER_DIR" && "$COMPILER_ARCHIVE" != "$COMPILER_DIR"/* ]] || \
+        die "preserved toolchain inputs must be non-overlapping"
+    [[ "$SEL4_SOURCE" == "$OUT_DIR/sel4/source-v16-clean" ]] || \
+        die "--sel4-source must select the canonical source-v16-clean input"
+    [[ "$SEL4_BUILD" == "$OUT_DIR/sel4/profile-v2/qemu-smp-production" ]] || \
+        die "--sel4-build must select the qemu_smp_production contract path"
+    [[ "$PROFILE_VENV" == "$OUT_DIR/toolchain/sel4-profile-venv" && \
+       "$PROFILE_PYTHON" == "$PROFILE_VENV/bin/python" ]] || \
+        die "--profile-python must select the canonical profile virtualenv"
+    [[ "$COMPILER_DIR" == "$OUT_DIR/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf" ]] || \
+        die "--compiler-dir must select the compiler contract install path"
+    [[ "$COMPILER_ARCHIVE" == "$OUT_DIR/toolchain/downloads/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf.tar.xz" ]] || \
+        die "--compiler-archive must select the compiler contract archive"
+    [[ "$GDB_BIN" == "$COMPILER_DIR/bin/aarch64-none-elf-gdb" ]] || \
+        die "--gdb must select the compiler contract GDB"
+fi
 [[ ! -e "$RUN_DIR" && ! -L "$RUN_DIR" ]] || die "fresh --run-dir already exists: $RUN_DIR"
 [[ "$(git branch --show-current)" == "main" ]] || die "worktree must be on main"
-HOST_VENV="$(canonical_existing_dir "$REPO_ROOT/.venv" "$REPO_ROOT")"
-HARNESS_PYTHON="$HOST_VENV/bin/python"
-[[ -x "$HARNESS_PYTHON" ]] || die "repository .venv Python is unavailable"
+if (( REUSE_ARTIFACTS == 1 )); then
+    HARNESS_PYTHON="$(canonical_existing_file "$(command -v python3)" "" yes)"
+else
+    HOST_VENV="$(canonical_existing_dir "$REPO_ROOT/.venv" "$REPO_ROOT")"
+    HARNESS_PYTHON="$HOST_VENV/bin/python"
+    [[ -x "$HARNESS_PYTHON" ]] || die "repository .venv Python is unavailable"
+fi
 
-for executable in cargo cpio git lsof shasum /usr/bin/script "$PROFILE_PYTHON" "$QEMU_BIN" "$GDB_BIN" "$HARNESS_PYTHON"; do
+REQUIRED_EXECUTABLES=(cargo git lsof /usr/bin/script "$QEMU_BIN" "$GDB_BIN" "$HARNESS_PYTHON")
+if (( REUSE_ARTIFACTS == 0 )); then
+    REQUIRED_EXECUTABLES+=(cpio shasum "$PROFILE_PYTHON")
+fi
+for executable in "${REQUIRED_EXECUTABLES[@]}"; do
     [[ -x "$executable" ]] || command -v "$executable" >/dev/null 2>&1 || \
         die "required executable is unavailable: $executable"
 done
-COMPILER_ARCHIVE_DIGEST="$(shasum -a 256 "$COMPILER_ARCHIVE" | cut -d ' ' -f 1)"
-[[ "$COMPILER_ARCHIVE_DIGEST" =~ ^[0-9a-f]{64}$ ]] || die "cannot hash compiler archive"
-python3 - "$REPO_ROOT/configs/sel4/profiles.toml" "$COMPILER_ARCHIVE" \
-    "$COMPILER_ARCHIVE_DIGEST" "$COMPILER_DIR" <<'PY'
+if (( REUSE_ARTIFACTS == 0 )); then
+    COMPILER_ARCHIVE_DIGEST="$(shasum -a 256 "$COMPILER_ARCHIVE" | cut -d ' ' -f 1)"
+    [[ "$COMPILER_ARCHIVE_DIGEST" =~ ^[0-9a-f]{64}$ ]] || die "cannot hash compiler archive"
+    python3 - "$REPO_ROOT/configs/sel4/profiles.toml" "$COMPILER_ARCHIVE" \
+        "$COMPILER_ARCHIVE_DIGEST" "$COMPILER_DIR" <<'PY'
 import hashlib
 import json
 from pathlib import Path
@@ -361,21 +396,31 @@ for program in compiler["required_programs"]:
     if actual != compiler[field_for_suffix[suffix]] or recorded.get(suffix) != actual:
         raise SystemExit(f"compiler program differs from pinned provenance: {program}")
 PY
+fi
 "$QEMU_BIN" --version >/dev/null
 QEMU_ACCEL_HELP="$("$QEMU_BIN" -accel help 2>&1)" || \
     die "cannot query QEMU accelerator support"
+REQUIRED_ACCEL=hvf
+if (( REUSE_ARTIFACTS == 1 )); then
+    REQUIRED_ACCEL=kvm
+fi
 printf '%s\n' "$QEMU_ACCEL_HELP" | \
-    grep -Eq '(^|[[:space:],])hvf([[:space:],]|$)' || \
-    die "selected QEMU binary does not support the canonical HVF accelerator"
+    grep -Eq "(^|[[:space:],])${REQUIRED_ACCEL}([[:space:],]|$)" || \
+    die "selected QEMU binary lacks the required host accelerator"
 unset QEMU_ACCEL_HELP
 "$GDB_BIN" --version >/dev/null
 "$HARNESS_PYTHON" -c 'import json, urllib.request' >/dev/null
-"$PROFILE_PYTHON" --version >/dev/null
-"$PROFILE_PYTHON" scripts/sel4_profile.py prepare-source \
-    --contract configs/sel4/profiles.toml \
-    --profile qemu_smp_production \
-    --source "$SEL4_SOURCE" \
-    --dry-run >/dev/null
+if (( REUSE_ARTIFACTS == 0 )); then
+    "$PROFILE_PYTHON" --version >/dev/null
+    "$PROFILE_PYTHON" scripts/sel4_profile.py prepare-source \
+        --contract configs/sel4/profiles.toml \
+        --profile qemu_smp_production \
+        --source "$SEL4_SOURCE" \
+        --dry-run >/dev/null
+else
+    [[ -c /dev/kvm && -r /dev/kvm && -w /dev/kvm ]] || \
+        die "--reuse-artifacts requires usable /dev/kvm"
+fi
 
 require_no_repo_output_writers() {
     python3 - "$OUT_DIR" "$TARGET_DIR" <<'PY'
@@ -487,7 +532,13 @@ if (( CHECK_ONLY == 1 )); then
     "$HARNESS_PYTHON" scripts/worker_task_evidence.py collect-qemu-preflight --help >/dev/null
     "$HARNESS_PYTHON" scripts/worker_task_evidence.py collect-qemu --help >/dev/null
     log "check-only PASS: inputs are present; no files or processes were changed"
-    log "plan: clean target/out, build once, prove AUTH, run distinct terminal service boots, collect critical/medium/high QEMU evidence, run staged gates, emit final acceptance"
+    if (( REUSE_ARTIFACTS == 1 )); then
+        "$HARNESS_PYTHON" scripts/lib/qemu_launch_artifacts.py verify-artifacts \
+            --out-dir "$REPO_ROOT/out/cohesix" >/dev/null
+        log "plan: verify transferred guest hashes, rebuild native host tools, prove AUTH, and collect service/medium/high Linux KVM evidence"
+    else
+        log "plan: clean target/out, build once, prove AUTH, run distinct terminal service boots, collect critical/medium/high QEMU evidence, run staged gates, emit final acceptance"
+    fi
     exit 0
 fi
 
@@ -521,10 +572,13 @@ if re.fullmatch(r"[0-9a-f]{64}", gateway) is None:
 PY
 unset COH_AUTH_TOKEN COHSH_AUTH_TOKEN HIVE_GATEWAY_REQUEST_AUTH_TOKEN
 
-PRESERVE_ROOT="$(mktemp -d /private/tmp/cohesix-m26e-qemu-inputs.XXXXXX)"
-if [[ "$(stat -f '%d' "$PRESERVE_ROOT")" != "$(stat -f '%d' "$OUT_DIR")" ]]; then
-    rmdir "$PRESERVE_ROOT"
-    die "preservation directory must share the repository out filesystem"
+PRESERVE_ROOT=""
+if (( REUSE_ARTIFACTS == 0 )); then
+    PRESERVE_ROOT="$(mktemp -d /private/tmp/cohesix-m26e-qemu-inputs.XXXXXX)"
+    if [[ "$(stat -f '%d' "$PRESERVE_ROOT")" != "$(stat -f '%d' "$OUT_DIR")" ]]; then
+        rmdir "$PRESERVE_ROOT"
+        die "preservation directory must share the repository out filesystem"
+    fi
 fi
 PRESERVED_ORIGINALS=()
 PRESERVED_TEMP=()
@@ -581,7 +635,7 @@ cleanup() {
     stop_pid "$QEMU_PID"
     stop_pid "$QEMU_LAUNCHER_PID"
     restore_preserved_inputs
-    if [[ -d "$PRESERVE_ROOT" ]]; then
+    if [[ -n "$PRESERVE_ROOT" && -d "$PRESERVE_ROOT" ]]; then
         find "$PRESERVE_ROOT" -depth -mindepth 1 -delete 2>/dev/null || true
         rmdir "$PRESERVE_ROOT" 2>/dev/null || true
     fi
@@ -599,63 +653,18 @@ preserve_input() {
     mv "$source" "$destination"
 }
 
-preserve_input "$SEL4_SOURCE"
-preserve_input "$COMPILER_DIR"
-preserve_input "$PROFILE_VENV"
-preserve_input "$COMPILER_ARCHIVE"
-
-log "cleaning validated repository target/ and out/"
-if [[ -e "$REPO_ROOT/target/CACHEDIR.TAG" ]]; then
-    cargo clean --manifest-path "$REPO_ROOT/Cargo.toml" --target-dir "$REPO_ROOT/target"
-fi
-if [[ -d "$REPO_ROOT/target" ]]; then
-    find "$REPO_ROOT/target" -depth -mindepth 1 -delete
-    rmdir "$REPO_ROOT/target"
-fi
-find "$REPO_ROOT/out" -depth -mindepth 1 -delete
-mkdir -p "$REPO_ROOT/out"
-restore_preserved_inputs
-PRESERVED_ORIGINALS=()
-PRESERVED_TEMP=()
-[[ "$(shasum -a 256 "$COMPILER_ARCHIVE" | cut -d ' ' -f 1)" == "$COMPILER_ARCHIVE_DIGEST" ]] || \
-    die "compiler archive changed during clean preservation"
-
-"$PROFILE_PYTHON" scripts/sel4_profile.py configure \
-    --contract configs/sel4/profiles.toml \
-    --profile qemu_smp_production \
-    --source "$SEL4_SOURCE" \
-    --build-dir "$SEL4_BUILD"
-"$PROFILE_PYTHON" scripts/sel4_profile.py build \
-    --contract configs/sel4/profiles.toml \
-    --profile qemu_smp_production \
-    --source "$SEL4_SOURCE" \
-    --build-dir "$SEL4_BUILD" \
-    --jobs "$JOBS"
-"$PROFILE_PYTHON" scripts/sel4_profile.py validate \
-    --contract configs/sel4/profiles.toml \
-    --profile qemu_smp_production \
-    --source "$SEL4_SOURCE" \
-    --build-dir "$SEL4_BUILD" \
-    --require-source \
-    --require-artifacts \
-    --for-release \
-    --for-runtime
-
-[[ "$(python3 scripts/lib/detect_gic_version.py "$SEL4_BUILD/kernel/gen_config/kernel/gen_config.h")" == "3" ]] || \
-    die "selected seL4 build is not GICv3"
-
 unset QEMU_SMP QEMU_SMP_TOPO QEMU_VIRT QEMU_ACCEL QEMU_MACHINE_EXTRA
 unset COHSH_QEMU_ARGS SEL4_BUILD_DIR SEL4_LD COH_RTC_MANIFEST
 unset RUSTFLAGS CARGO_ENCODED_RUSTFLAGS RUSTC RUSTC_WRAPPER
 unset CARGO_BUILD_RUSTC_WRAPPER CARGO_BUILD_TARGET CC CXX AR LD
 export CARGO_TARGET_DIR="$REPO_ROOT/target"
-export COHESIX_SEL4_PROFILE=qemu_smp_production
+export COHESIX_SEL4_PROFILE="$SEL4_PROFILE"
 export COHESIX_QEMU_SMP_TOPO=4,cores=4,threads=1,sockets=1
 export COHESIX_QEMU_VIRT=off
-export COHESIX_QEMU_ACCEL=hvf
-export COHESIX_QEMU_MACHINE_EXTRA=kernel-irqchip=off
+export QEMU_BIN
 
 BUILD_RUN="$REPO_ROOT/scripts/cohesix-build-run.sh"
+OUT_ROOT="$REPO_ROOT/out/cohesix"
 BUILD_ARGS=(
     --sel4-build "$SEL4_BUILD"
     --profile release
@@ -666,13 +675,105 @@ BUILD_ARGS=(
     --tcp-port 31337
 )
 
-log "building canonical release-qemu,bootstrap-trace artifacts"
-"$BUILD_RUN" --clean --no-run "${BUILD_ARGS[@]}"
+if (( REUSE_ARTIFACTS == 0 )); then
+    export COHESIX_QEMU_ACCEL=hvf
+    export COHESIX_QEMU_MACHINE_EXTRA=kernel-irqchip=off
+    EXPECTED_QEMU_ACCEL=hvf
+    EXPECTED_QEMU_MACHINE=virt,gic-version=3,virtualization=off,kernel-irqchip=off
+    EXPECTED_QEMU_CPU=cortex-a57
+    unset COHESIX_QEMU_CROSS_HOST_REPLAY
+    preserve_input "$SEL4_SOURCE"
+    preserve_input "$COMPILER_DIR"
+    preserve_input "$PROFILE_VENV"
+    preserve_input "$COMPILER_ARCHIVE"
+
+    log "cleaning validated repository target/ and out/"
+    if [[ -e "$REPO_ROOT/target/CACHEDIR.TAG" ]]; then
+        cargo clean --manifest-path "$REPO_ROOT/Cargo.toml" --target-dir "$REPO_ROOT/target"
+    fi
+    if [[ -d "$REPO_ROOT/target" ]]; then
+        find "$REPO_ROOT/target" -depth -mindepth 1 -delete
+        rmdir "$REPO_ROOT/target"
+    fi
+    find "$REPO_ROOT/out" -depth -mindepth 1 -delete
+    mkdir -p "$REPO_ROOT/out"
+    restore_preserved_inputs
+    mkdir -m 0700 "$RUN_DIR"
+    PRESERVED_ORIGINALS=()
+    PRESERVED_TEMP=()
+    [[ "$(shasum -a 256 "$COMPILER_ARCHIVE" | cut -d ' ' -f 1)" == "$COMPILER_ARCHIVE_DIGEST" ]] || \
+        die "compiler archive changed during clean preservation"
+
+    "$PROFILE_PYTHON" scripts/sel4_profile.py configure \
+        --contract configs/sel4/profiles.toml \
+        --profile qemu_smp_production \
+        --source "$SEL4_SOURCE" \
+        --build-dir "$SEL4_BUILD"
+    "$PROFILE_PYTHON" scripts/sel4_profile.py build \
+        --contract configs/sel4/profiles.toml \
+        --profile qemu_smp_production \
+        --source "$SEL4_SOURCE" \
+        --build-dir "$SEL4_BUILD" \
+        --jobs "$JOBS"
+    "$PROFILE_PYTHON" scripts/sel4_profile.py validate \
+        --contract configs/sel4/profiles.toml \
+        --profile qemu_smp_production \
+        --source "$SEL4_SOURCE" \
+        --build-dir "$SEL4_BUILD" \
+        --require-source \
+        --require-artifacts \
+        --for-release \
+        --for-runtime
+
+    [[ "$(python3 scripts/lib/detect_gic_version.py "$SEL4_BUILD/kernel/gen_config/kernel/gen_config.h")" == "3" ]] || \
+        die "selected seL4 build is not GICv3"
+    log "building canonical release-qemu,bootstrap-trace artifacts"
+    "$BUILD_RUN" --clean --no-run "${BUILD_ARGS[@]}"
+else
+    export COHESIX_QEMU_ACCEL=kvm
+    export COHESIX_QEMU_MACHINE_EXTRA=
+    export COHESIX_QEMU_CROSS_HOST_REPLAY=1
+    EXPECTED_QEMU_ACCEL=kvm
+    EXPECTED_QEMU_MACHINE=virt,gic-version=3,virtualization=off
+    EXPECTED_QEMU_CPU=host
+    mkdir -m 0700 "$RUN_DIR"
+    mkdir -m 0700 "$RUN_DIR/session"
+    LAUNCH_ARTIFACT_TOOL="$REPO_ROOT/scripts/lib/qemu_launch_artifacts.py"
+    "$HARNESS_PYTHON" "$LAUNCH_ARTIFACT_TOOL" verify-artifacts \
+        --out-dir "$OUT_ROOT" >/dev/null
+    cp "$OUT_ROOT/cohesix-qemu-launch-artifacts.json" \
+        "$RUN_DIR/session/source-host-launch-record.json"
+    [[ "$(python3 scripts/lib/detect_gic_version.py "$SEL4_BUILD/kernel/gen_config/kernel/gen_config.h")" == "3" ]] || \
+        die "transferred seL4 build is not GICv3"
+    log "building native Linux pressure host tools without rebuilding guest inputs"
+    cargo build --release -p gpu-bridge-host -p hive-gateway -p host-ticket-agent
+    cargo build --release -p cohsh --features tcp
+    mkdir -p "$OUT_ROOT/host-tools"
+    for tool in cohsh hive-gateway gpu-bridge-host host-ticket-agent; do
+        install -m 0755 "$TARGET_DIR/release/$tool" "$OUT_ROOT/host-tools/$tool"
+        "$OUT_ROOT/host-tools/$tool" --help >/dev/null
+    done
+    "$HARNESS_PYTHON" "$LAUNCH_ARTIFACT_TOOL" write \
+        --out-dir "$OUT_ROOT" \
+        --sel4-build "$SEL4_BUILD" \
+        --profile release \
+        --cargo-target aarch64-unknown-none \
+        --root-task-features release-qemu,bootstrap-trace \
+        --gic-version 3 \
+        --sel4-profile "$SEL4_PROFILE" \
+        --qemu "$QEMU_BIN" \
+        --accelerator kvm \
+        --virtualization off \
+        --machine-extra '' \
+        --cpu host \
+        --smp 4,cores=4,threads=1,sockets=1 \
+        --net-backend virtio >/dev/null
+    log "rebound exact guest inputs to the Linux KVM launch envelope"
+fi
 validate_resolved_console_token
 
 TEST_PLAN_STATE_DIR="$RUN_DIR/test-plan"
 
-OUT_ROOT="$REPO_ROOT/out/cohesix"
 HOST_TOOLS="$OUT_ROOT/host-tools"
 WORKER_ARCHIVE="$OUT_ROOT/worker-images/cohesix-worker-images.cpio"
 WORKER_MANIFEST="$OUT_ROOT/worker-images/cohesix-worker-image-manifest.json"
@@ -980,7 +1081,9 @@ PY
 
 verify_frozen_collector_artifacts
 
-SYSTEM_CPIO_BYTES="$(stat -f '%z' "$SYSTEM_CPIO")"
+SYSTEM_CPIO_BYTES="$("$HARNESS_PYTHON" -c \
+    'from pathlib import Path; import sys; print(Path(sys.argv[1]).stat().st_size)' \
+    "$SYSTEM_CPIO")"
 [[ "$SYSTEM_CPIO_BYTES" =~ ^[0-9]+$ ]] && (( SYSTEM_CPIO_BYTES < 4 * 1024 * 1024 )) || \
     die "QEMU rootfs CPIO is not below 4 MiB"
 
@@ -1042,6 +1145,9 @@ run_cohsh_command() {
     local command=$2
     local ordinal=$3
     local expectation=${4:-OK}
+    if [[ -n "$GATEWAY_PID" ]] && kill -0 "$GATEWAY_PID" >/dev/null 2>&1; then
+        die "direct cohsh command attempted while hive-gateway owns the console"
+    fi
     local script_path="$boot_dir/cohsh-command-$ordinal.coh"
     {
         printf '# Author: Lukas Bower\n'
@@ -1059,39 +1165,6 @@ run_cohsh_command() {
         --tcp-host 127.0.0.1 \
         --tcp-port 31337 \
         --script "$script_path" >> "$boot_dir/cohsh.log" 2>&1
-}
-
-current_worker_id() {
-    local role=$1
-    HIVE_GATEWAY_REQUEST_AUTH_TOKEN="$M26E_REST_AUTH_TOKEN" \
-    python3 - "$REPO_ROOT/scripts/rest_perf_harness.py" "$role" <<'PY'
-import importlib.util
-import os
-import sys
-
-module_path, role = sys.argv[1:]
-spec = importlib.util.spec_from_file_location("m26e_worker_lookup", module_path)
-if spec is None or spec.loader is None:
-    raise SystemExit("cannot load REST harness for Worker lookup")
-rest = importlib.util.module_from_spec(spec)
-sys.modules[spec.name] = rest
-spec.loader.exec_module(rest)
-client = rest.RestClient(
-    "http://127.0.0.1:8080",
-    10.0,
-    os.environ["HIVE_GATEWAY_REQUEST_AUTH_TOKEN"],
-)
-bounds = client.get_json("/v1/meta/bounds")
-instances, _ = rest.discover_executable_workers(client, bounds)
-matches = [
-    instance.worker_id
-    for instance in instances
-    if instance.role == role and instance.lifecycle == "ready"
-]
-if len(matches) != 1:
-    raise SystemExit(f"expected exactly one READY {role}, got {len(matches)}")
-print(matches[0])
-PY
 }
 
 spawn_command_for_role() {
@@ -1122,6 +1195,20 @@ temporary = destination.with_name(f".{destination.name}.{os.getpid()}")
 temporary.write_bytes(payload)
 temporary.replace(destination)
 PY
+}
+
+start_uart_capture() {
+    local uart=$1
+    shift
+    if [[ "$PRESSURE_HOST_OS" == "Darwin" ]]; then
+        exec /usr/bin/script -q -F "$uart" "$@"
+    fi
+    if [[ "$PRESSURE_HOST_OS" == "Linux" ]]; then
+        local command_line
+        printf -v command_line '%q ' "$@"
+        exec /usr/bin/script -q -f -c "$command_line" "$uart"
+    fi
+    die "unsupported UART capture host: $PRESSURE_HOST_OS"
 }
 
 verify_live_artifacts() {
@@ -1227,12 +1314,23 @@ verify_qemu_command() {
     local boot_dir=$1
     local paused=$2
     python3 - "$boot_dir/qemu-command.txt" "$QEMU_BIN" "$ELFLOADER_IMAGE" \
-        "$SYSTEM_CPIO" "$boot_dir/qemu.pid" "$paused" <<'PY'
+        "$SYSTEM_CPIO" "$boot_dir/qemu.pid" "$paused" \
+        "$EXPECTED_QEMU_ACCEL" "$EXPECTED_QEMU_MACHINE" "$EXPECTED_QEMU_CPU" <<'PY'
 from pathlib import Path
 import shlex
 import sys
 
-command_path, qemu, elfloader, system_cpio, pidfile, paused = sys.argv[1:]
+(
+    command_path,
+    qemu,
+    elfloader,
+    system_cpio,
+    pidfile,
+    paused,
+    accelerator,
+    machine,
+    cpu,
+) = sys.argv[1:]
 tokens = shlex.split(Path(command_path).read_text(encoding="utf-8"))
 if not tokens or Path(tokens[0]).resolve(strict=True) != Path(qemu):
     raise SystemExit("QEMU command does not bind the hashed executable")
@@ -1246,8 +1344,9 @@ def exact_option(option: str, expected: str) -> None:
         raise SystemExit(f"QEMU command {option} differs from exact target truth")
 
 
-exact_option("-accel", "hvf")
-exact_option("-machine", "virt,gic-version=3,virtualization=off,kernel-irqchip=off")
+exact_option("-accel", accelerator)
+exact_option("-machine", machine)
+exact_option("-cpu", cpu)
 exact_option("-smp", "4,cores=4,threads=1,sockets=1")
 exact_option("-kernel", elfloader)
 exact_option("-initrd", system_cpio)
@@ -1264,8 +1363,7 @@ start_gateway() {
     local boot_dir=$1
     local evidence=${2:-}
     local target_session=${3:-}
-    stop_pid "$GATEWAY_PID"
-    GATEWAY_PID=""
+    stop_gateway
     local gateway_args=(--bind 127.0.0.1:8080)
     if [[ -n "$evidence" ]]; then
         gateway_args+=(
@@ -1283,6 +1381,45 @@ start_gateway() {
         > "$boot_dir/gateway.log" 2>&1 &
     GATEWAY_PID=$!
     wait_for_port 127.0.0.1 8080 60
+    HIVE_GATEWAY_REQUEST_AUTH_TOKEN="$M26E_REST_AUTH_TOKEN" \
+    "$HARNESS_PYTHON" - "$REPO_ROOT/scripts/rest_perf_harness.py" <<'PY'
+import importlib.util
+import os
+import sys
+
+module_path = sys.argv[1]
+spec = importlib.util.spec_from_file_location("m26e_gateway_readiness", module_path)
+if spec is None or spec.loader is None:
+    raise SystemExit("cannot load REST harness for gateway readiness")
+rest = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = rest
+spec.loader.exec_module(rest)
+client = rest.RestClient(
+    "http://127.0.0.1:8080",
+    10.0,
+    os.environ["HIVE_GATEWAY_REQUEST_AUTH_TOKEN"],
+)
+rest.wait_for_gateway(client, 60.0)
+PY
+}
+
+stop_gateway() {
+    local pid=$GATEWAY_PID
+    if [[ -n "$pid" && "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" >/dev/null 2>&1; then
+        kill -INT "$pid" >/dev/null 2>&1 || \
+            die "cannot request graceful hive-gateway shutdown"
+        local deadline=$(( $(date +%s) + 10 ))
+        while kill -0 "$pid" >/dev/null 2>&1 && (( $(date +%s) < deadline )); do
+            sleep 0.1
+        done
+        if kill -0 "$pid" >/dev/null 2>&1; then
+            stop_pid "$pid"
+            GATEWAY_PID=""
+            die "hive-gateway did not release the console gracefully"
+        fi
+        wait "$pid" >/dev/null 2>&1 || true
+    fi
+    GATEWAY_PID=""
 }
 
 assert_gateway_unproven() {
@@ -1309,9 +1446,45 @@ if (
     status.get("backend_class") != "console-projection"
     or status.get("worker_acceptance") is not None
     or not isinstance(diagnostic, dict)
-    or diagnostic.get("code") != "not-configured"
+    or diagnostic.get("code") != "read-failed"
 ):
-    raise SystemExit("preflight gateway falsely projects executable acceptance")
+    raise SystemExit(
+        "configured preflight gateway did not remain fail-closed while evidence was pending"
+    )
+PY
+}
+
+wait_for_gateway_acceptance() {
+    HIVE_GATEWAY_REQUEST_AUTH_TOKEN="$M26E_REST_AUTH_TOKEN" \
+    "$HARNESS_PYTHON" - "$REPO_ROOT/scripts/rest_perf_harness.py" <<'PY'
+import importlib.util
+import os
+import sys
+import time
+
+spec = importlib.util.spec_from_file_location("m26e_acceptance_promotion", sys.argv[1])
+if spec is None or spec.loader is None:
+    raise SystemExit("cannot load REST harness for acceptance promotion")
+rest = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = rest
+spec.loader.exec_module(rest)
+client = rest.RestClient(
+    "http://127.0.0.1:8080",
+    10.0,
+    os.environ["HIVE_GATEWAY_REQUEST_AUTH_TOKEN"],
+)
+bounds = client.get_json("/v1/meta/bounds")
+deadline = time.monotonic() + 60.0
+last_error = None
+while time.monotonic() < deadline:
+    try:
+        rest.executable_qemu_acceptance_binding(client, bounds)
+        break
+    except Exception as exc:
+        last_error = exc
+        time.sleep(0.25)
+else:
+    raise SystemExit(f"same-boot Worker acceptance was not promoted: {last_error}")
 PY
 }
 
@@ -1349,6 +1522,7 @@ start_pressure_helpers() {
         --cursor "$state_dir/cursor.json" \
         --execution-journal "$state_dir/execution-journal.json" \
         --agent-lock "$state_dir/agent.lock" \
+        --execution-lanes 8 \
         --poll-ms 100 \
         --rest-url http://127.0.0.1:8080 \
         --registry-root "$boot_dir/peft-registry" \
@@ -1601,18 +1775,148 @@ drive_service_fault_plan() {
 
 drive_operator_lifecycle() {
     local boot_dir=$1
-    local heartbeat_id teardown_before ready_before
-    heartbeat_id="$(current_worker_id worker-heartbeat)"
-    teardown_before=$(grep -F -c 'WORKER_TASK_TEARDOWN role=worker-heartbeat ' "$boot_dir/uart.live.log" 2>/dev/null || true)
-    ready_before=$(grep -F -c 'WORKER_TASK_READY role=worker-heartbeat ' "$boot_dir/uart.live.log" 2>/dev/null || true)
-    run_cohsh_command "$boot_dir" "kill $heartbeat_id" 401 OK
-    wait_for_marker_count "$boot_dir/uart.live.log" 'WORKER_TASK_TEARDOWN role=worker-heartbeat ' $(( teardown_before + 1 )) 120
-    run_cohsh_command "$boot_dir" 'spawn heartbeat ticks=100 ttl_s=120 ops=500' 402 OK
-    wait_for_marker_count "$boot_dir/uart.live.log" 'WORKER_TASK_READY role=worker-heartbeat ' $(( ready_before + 1 )) 120
-    run_cohsh_command "$boot_dir" 'spawn heartbeat ticks=100 ttl_s=120 ops=500' 403 ERR
-    run_cohsh_command "$boot_dir" 'spawn worker-bus' 404 ERR
-    run_cohsh_command "$boot_dir" 'cat /gpu/bridge/status' 405 OK
-    run_cohsh_command "$boot_dir" 'ls /shard' 406 OK
+    HIVE_GATEWAY_REQUEST_AUTH_TOKEN="$M26E_REST_AUTH_TOKEN" \
+    "$HARNESS_PYTHON" - \
+        "$REPO_ROOT/scripts/rest_perf_harness.py" \
+        "$boot_dir/cohsh.log" <<'PY'
+import importlib.util
+import json
+import os
+from pathlib import Path
+import sys
+import time
+
+module_path, transcript_raw = sys.argv[1:]
+spec = importlib.util.spec_from_file_location("m26e_operator_lifecycle", module_path)
+if spec is None or spec.loader is None:
+    raise SystemExit("cannot load REST harness for operator lifecycle")
+rest = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = rest
+spec.loader.exec_module(rest)
+client = rest.RestClient(
+    "http://127.0.0.1:8080",
+    10.0,
+    os.environ["HIVE_GATEWAY_REQUEST_AUTH_TOKEN"],
+)
+bounds = client.get_json("/v1/meta/bounds")
+
+
+def instances():
+    rows, _ = rest.discover_executable_workers(client, bounds)
+    return rows
+
+
+def ready(role):
+    rows = [
+        row for row in instances()
+        if row.role == role and row.lifecycle == "ready"
+    ]
+    if len(rows) != 1:
+        raise RuntimeError(f"expected exactly one READY {role}, got {len(rows)}")
+    return rows[0]
+
+
+def require(response, status, label):
+    if response.status != status:
+        raise RuntimeError(
+            f"{label} expected {status}, got {response.status}: {response.error}"
+        )
+    return response
+
+
+def bounded_detail(value):
+    text = str(value or "none").replace("\n", " ").replace("\r", " ")
+    return text[:256]
+
+
+before = ready("worker-heartbeat")
+kill_response = require(
+    client.echo(
+        "/queen/ctl",
+        json.dumps({"kill": before.worker_id}, separators=(",", ":")),
+    ),
+    "OK",
+    "heartbeat kill",
+)
+deadline = time.monotonic() + 30.0
+while time.monotonic() < deadline:
+    old = next(
+        (row for row in instances() if row.worker_id == before.worker_id),
+        None,
+    )
+    if old is not None and old.lifecycle == "terminal":
+        break
+    time.sleep(0.1)
+else:
+    raise RuntimeError("Heartbeat teardown did not reach terminal")
+
+spawn_payload = json.dumps(
+    {
+        "spawn": "heartbeat",
+        "ticks": 100,
+        "budget": {"ttl_s": 120, "ops": 500},
+    },
+    separators=(",", ":"),
+)
+spawn_response = require(
+    client.echo("/queen/ctl", spawn_payload),
+    "OK",
+    "heartbeat recreate",
+)
+deadline = time.monotonic() + 30.0
+after = None
+while time.monotonic() < deadline:
+    candidate = ready("worker-heartbeat")
+    if candidate.supervisor_generation > before.supervisor_generation:
+        after = candidate
+        break
+    time.sleep(0.1)
+if after is None:
+    raise RuntimeError("fresh Heartbeat generation was not observed")
+
+duplicate = require(
+    client.echo("/queen/ctl", spawn_payload),
+    "ERR",
+    "second-live Heartbeat refusal",
+)
+duplicate_detail = bounded_detail(duplicate.error)
+if not any(token in duplicate_detail.lower() for token in ("slot", "busy", "already-live", "maximum")):
+    raise RuntimeError("second-live Heartbeat refusal lacks a bounded capacity reason")
+
+worker_bus = require(
+    client.echo(
+        "/queen/ctl",
+        json.dumps({"spawn": "worker-bus"}, separators=(",", ":")),
+    ),
+    "ERR",
+    "WorkerBus model-only refusal",
+)
+worker_bus_detail = bounded_detail(worker_bus.error)
+if "model-only" not in worker_bus_detail.lower():
+    raise RuntimeError("WorkerBus refusal does not preserve model-only semantics")
+
+gpu = require(client.cat("/gpu/bridge/status", 8192), "OK", "GPU fixture read")
+gpu_text = " ".join(gpu.lines)
+if "mode=fixture" not in gpu_text:
+    raise RuntimeError("GPU bridge operator read lacks mode=fixture")
+require(client.ls("/shard"), "OK", "canonical shard listing")
+
+lines = (
+    f"GATEWAY_OPERATOR OK KILL role=worker-heartbeat worker={before.worker_id} "
+    f"status={kill_response.status}",
+    f"GATEWAY_OPERATOR OK SPAWN role=worker-heartbeat worker={after.worker_id} "
+    f"status={spawn_response.status}",
+    "GATEWAY_OPERATOR ERR SPAWN role=worker-heartbeat "
+    f"reason={duplicate_detail}",
+    "GATEWAY_OPERATOR ERR SPAWN role=worker-bus reason=model-only "
+    f"detail={worker_bus_detail}",
+    f"GATEWAY_OPERATOR OK CAT path=/gpu/bridge/status {gpu_text}",
+    "GATEWAY_OPERATOR OK LS path=/shard",
+)
+with Path(transcript_raw).open("a", encoding="utf-8") as transcript:
+    for line in lines:
+        transcript.write(line + "\n")
+PY
 }
 
 drive_receipt_matrix() {
@@ -1943,7 +2247,7 @@ run_critical_observation_boot() {
     local boot_dir=$1
     local critical_dir="$boot_dir/critical"
     mkdir -p "$critical_dir"
-    /usr/bin/script -q -F "$critical_dir/uart.log" \
+    start_uart_capture "$critical_dir/uart.log" \
         "$BUILD_RUN" --launch-existing "${BUILD_ARGS[@]}" --raw-qemu -- \
         -pidfile "$critical_dir/qemu.pid" \
         -gdb tcp:127.0.0.1:1234 \
@@ -1986,7 +2290,7 @@ run_service_fault_boot() {
     local boot_dir="$RUN_DIR/$label"
     mkdir -p "$boot_dir"
 
-    /usr/bin/script -q -F "$boot_dir/uart.live.log" \
+    start_uart_capture "$boot_dir/uart.live.log" \
         "$BUILD_RUN" --launch-existing "${BUILD_ARGS[@]}" --raw-qemu -- \
         -pidfile "$boot_dir/qemu.pid" \
         -gdb tcp:127.0.0.1:1234 \
@@ -1998,6 +2302,7 @@ run_service_fault_boot() {
     ps -ww -p "$QEMU_PID" -o command= > "$boot_dir/qemu-command.txt"
     verify_qemu_command "$boot_dir" no
     wait_for_port 127.0.0.1 31337 180
+    wait_for_marker_count "$boot_dir/uart.live.log" "Cohesix console ready" 1 180
     verify_live_artifacts
 
     drive_service_fault_plan \
@@ -2022,7 +2327,7 @@ run_pressure_boot() {
     prepare_host_fixture "$boot_dir"
     run_critical_observation_boot "$boot_dir"
 
-    /usr/bin/script -q -F "$boot_dir/uart.live.log" \
+    start_uart_capture "$boot_dir/uart.live.log" \
         "$BUILD_RUN" --launch-existing "${BUILD_ARGS[@]}" --raw-qemu -- \
         -pidfile "$boot_dir/qemu.pid" \
         -gdb tcp:127.0.0.1:1234 \
@@ -2034,17 +2339,22 @@ run_pressure_boot() {
     ps -ww -p "$QEMU_PID" -o command= > "$boot_dir/qemu-command.txt"
     verify_qemu_command "$boot_dir" no
     wait_for_port 127.0.0.1 31337 180
+    wait_for_marker_count "$boot_dir/uart.live.log" "Cohesix console ready" 1 180
     verify_live_artifacts
-    start_gateway "$boot_dir"
-    assert_gateway_unproven
-    publish_gpu_fixture "$boot_dir"
-
     # Three role-specific GDB plans use only the qemu-evidence symbols and the
-    # existing spawn/fault/recreate lifecycle.
+    # existing spawn/fault/recreate lifecycle. They run before the first
+    # gateway attach so one live boot never changes console owner mid-session.
     drive_worker_fault_plan "$boot_dir" worker-heartbeat 100
     drive_worker_fault_plan "$boot_dir" worker-gpu 200
     drive_worker_fault_plan "$boot_dir" worker-lora 300
 
+    mkdir -p "$boot_dir/preflight"
+    start_gateway \
+        "$boot_dir" \
+        "$boot_dir/preflight/worker-task-evidence.json" \
+        "$boot_dir/target-session.json"
+    assert_gateway_unproven
+    publish_gpu_fixture "$boot_dir"
     drive_receipt_matrix "$boot_dir"
     publish_gpu_fixture "$boot_dir"
     drive_operator_lifecycle "$boot_dir"
@@ -2052,7 +2362,6 @@ run_pressure_boot() {
     cp "$boot_dir/cohsh.log" "$boot_dir/preflight.cohsh.log"
     emit_host_integration "$boot_dir" "$boot_dir/preflight.uart.log" "$boot_dir/preflight.cohsh.log"
 
-    mkdir -p "$boot_dir/preflight"
     "$HARNESS_PYTHON" scripts/worker_task_evidence.py collect-qemu-preflight \
         --target-session "$TARGET_SESSION" \
         --generated-inventory "$GENERATED_INVENTORY" \
@@ -2082,10 +2391,14 @@ run_pressure_boot() {
         --integration-dir "$boot_dir/host-integration/integration" \
         --out-dir "$boot_dir/preflight"
 
-    start_gateway \
-        "$boot_dir" \
-        "$boot_dir/preflight/worker-task-evidence.json" \
-        "$boot_dir/target-session.json"
+    # The gateway keeps sole ownership of the console after its first attach.
+    # It promotes only this fixed-path, fully validated same-boot record, once;
+    # the accepted summary is immutable for the remainder of the process.
+    cp "$boot_dir/qemu-command.txt" "$boot_dir/preflight.qemu-command.txt"
+    cp "$boot_dir/qemu-launch.log" "$boot_dir/preflight.qemu-launch.log"
+    cp "$boot_dir/gateway.log" "$boot_dir/preflight.gateway.log"
+    wait_for_gateway_acceptance
+    verify_live_artifacts
     publish_gpu_fixture "$boot_dir"
     start_pressure_helpers "$boot_dir"
 
@@ -2167,13 +2480,30 @@ PY
 }
 
 log "proving one prior authenticated NineDoor operation on the exact artifacts"
-COH_AUTH_TOKEN="$M26E_CONSOLE_AUTH_TOKEN" \
-TEST_PLAN_CONVERGENCE_QEMU_OUT_DIR="$OUT_ROOT" \
-"$HARNESS_PYTHON" scripts/ci/test_plan_converge.py \
-    --target qemu \
-    --focus ninedoor \
-    --state-dir "$AUTH_STATE_DIR" \
-    --launch-existing
+if (( REUSE_ARTIFACTS == 1 )); then
+    mkdir -m 0700 "$AUTH_STATE_DIR"
+    AUTH_RUN_ID="$("$HARNESS_PYTHON" -c \
+        'import datetime, uuid; print(datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex[:12])')"
+    COH_AUTH_TOKEN="$M26E_CONSOLE_AUTH_TOKEN" \
+    TEST_PLAN_CONVERGENCE=1 \
+    TEST_PLAN_CONVERGENCE_STATE_DIR="$AUTH_STATE_DIR" \
+    TEST_PLAN_CONVERGENCE_RUN_ID="$AUTH_RUN_ID" \
+    TEST_PLAN_CONVERGENCE_FOCUS=ninedoor \
+    TEST_PLAN_CONVERGENCE_TARGET=qemu \
+    TEST_PLAN_TARGET_OBSERVATION="$AUTH_OBSERVATION" \
+    TEST_PLAN_CONVERGENCE_LAUNCH_EXISTING=1 \
+    TEST_PLAN_CONVERGENCE_QEMU_OUT_DIR="$OUT_ROOT" \
+    TEST_PLAN_CONVERGENCE_QEMU_BIN="$QEMU_BIN" \
+    scripts/ci/test_plan_target_canary.sh --target qemu
+else
+    COH_AUTH_TOKEN="$M26E_CONSOLE_AUTH_TOKEN" \
+    TEST_PLAN_CONVERGENCE_QEMU_OUT_DIR="$OUT_ROOT" \
+    "$HARNESS_PYTHON" scripts/ci/test_plan_converge.py \
+        --target qemu \
+        --focus ninedoor \
+        --state-dir "$AUTH_STATE_DIR" \
+        --launch-existing
+fi
 [[ -s "$AUTH_OBSERVATION" && ! -L "$AUTH_OBSERVATION" ]] || \
     die "authenticated NineDoor target observation is missing or aliased"
 verify_live_artifacts
@@ -2196,6 +2526,115 @@ run_pressure_boot high 8 4 32 2608
 verify_live_artifacts
 verify_frozen_collector_artifacts
 require_quiescent_host
+if (( REUSE_ARTIFACTS == 1 )); then
+    FINAL_DIR="$RUN_DIR/final"
+    mkdir -p "$FINAL_DIR"
+    python3 - "$RUN_DIR" "$LAUNCH_ARTIFACT_RECORD" "$TARGET_SESSION" <<'PY'
+import hashlib
+import json
+from pathlib import Path
+import platform
+import sys
+
+run_dir, launch_path, session_path = map(Path, sys.argv[1:])
+
+
+def identity(path: Path) -> dict[str, object]:
+    raw = path.read_bytes()
+    if not raw:
+        raise SystemExit(f"host replay artifact is empty: {path}")
+    return {
+        "path": str(path.resolve(strict=True)),
+        "bytes": len(raw),
+        "sha256": hashlib.sha256(raw).hexdigest(),
+    }
+
+
+launch = json.loads(launch_path.read_text(encoding="utf-8"))
+if (
+    launch.get("claim", {}).get("eligible") is not True
+    or launch.get("qemu", {}).get("host_system") != "Linux"
+    or launch.get("qemu", {}).get("accelerator") != "kvm"
+):
+    raise SystemExit("host replay launch record is not eligible Linux KVM evidence")
+payload = {
+    "schema": "cohesix-qemu-host-replay/v1",
+    "result": "PASS",
+    "host": platform.node(),
+    "host_system": platform.system(),
+    "machine": platform.machine(),
+    "source_host_launch_record": identity(
+        run_dir / "session/source-host-launch-record.json"
+    ),
+    "linux_launch_record": identity(launch_path),
+    "target_session": identity(session_path),
+    "correctness": {
+        "authenticated_ninedoor": identity(
+            run_dir / "authenticated-ninedoor/target-observation.json"
+        ),
+        "service_containment": {
+            label: {
+                artifact: identity(run_dir / label / relative)
+                for artifact, relative in (
+                    ("gdb", "service.gdb.log"),
+                    ("uart", "service.uart.log"),
+                )
+            }
+            for label in (
+                "ninedoor-during-call",
+                "ninedoor-between-calls",
+                "console-standard-fault",
+            )
+        },
+    },
+    "pressure": {
+        profile: {
+            "summary": identity(run_dir / profile / "pressure.summary.json"),
+            "qemu_command": identity(run_dir / profile / "qemu-command.txt"),
+        }
+        for profile in ("medium", "high")
+    },
+    "guest_artifacts": launch["artifacts"],
+    "qemu": launch["qemu"],
+}
+(run_dir / "final/host-replay-result.json").write_text(
+    json.dumps(payload, indent=2, sort_keys=True) + "\n",
+    encoding="utf-8",
+)
+PY
+    M26E_SCAN_CONSOLE_TOKEN="$M26E_CONSOLE_AUTH_TOKEN" \
+    M26E_SCAN_REST_TOKEN="$M26E_REST_AUTH_TOKEN" \
+    python3 - "$RUN_DIR" <<'PY'
+import os
+from pathlib import Path
+import stat
+import sys
+
+root = Path(sys.argv[1])
+console = os.environ["M26E_SCAN_CONSOLE_TOKEN"].encode()
+rest = os.environ["M26E_SCAN_REST_TOKEN"].encode()
+forms = (
+    b"AUTH " + console,
+    b"COH_AUTH_TOKEN=" + console,
+    b"COHSH_AUTH_TOKEN=" + console,
+    b'"auth_token":"' + console,
+    b'"auth_token": "' + console,
+)
+for directory, names, files in os.walk(root, followlinks=False):
+    for name in [*names, *files]:
+        path = Path(directory) / name
+        info = path.lstat()
+        if stat.S_ISLNK(info.st_mode):
+            raise SystemExit(f"retained evidence contains an unexpected symlink: {path}")
+        if stat.S_ISREG(info.st_mode):
+            raw = path.read_bytes()
+            if rest in raw or any(form in raw for form in forms):
+                raise SystemExit(f"retained evidence contains credential bytes: {path}")
+PY
+    unset M26E_CONSOLE_AUTH_TOKEN M26E_REST_AUTH_TOKEN
+    log "PASS: immutable Linux KVM medium/high replay evidence collected under $RUN_DIR"
+    exit 0
+fi
 log "running the canonical five-stage QEMU test plan after immutable pressure capture"
 COH_AUTH_TOKEN="$M26E_CONSOLE_AUTH_TOKEN" \
 HIVE_GATEWAY_REQUEST_AUTH_TOKEN="$M26E_REST_AUTH_TOKEN" \

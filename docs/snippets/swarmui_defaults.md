@@ -3,8 +3,8 @@
 <!-- Copyright 2026 Lukas Bower -->
 
 ### SwarmUI defaults (generated)
-- `manifest.sha256`: `72b6fdbd175150ec352f9345d99791a1d576cf01de47363aed2a64ad0c463a93`
-- `swarmui.defaults.sha256`: `5f2d51236f7fa4cfa82a873a1c2f57f610bc285ba573a792a3dd0793b315c2b6`
+- `manifest.sha256`: `10f33db7f20f039701ec8d2c5d206aba45a67f4b7e359b22dc2e24a0cc055cbd`
+- `swarmui.defaults.sha256`: `9b2d2d48254a6056e27951cb9977317064c7b09665b34ce94edc29828b3df486`
 - `swarmui.ticket_scope`: `per-ticket`
 - `swarmui.cache.enabled`: `false`
 - `swarmui.cache.max_bytes`: `262144`
@@ -28,14 +28,14 @@
 - `swarmui.paths.proc_ingest_root`: `/proc/ingest`
 - `swarmui.paths.worker_root`: `/shard`
 - `swarmui.paths.namespace_roots`: `/proc, /queen, /shard, /worker, /log, /gpu`
-- `swarmui.worker_runtime.maximum_live_tasks`: `3`
+- `swarmui.worker_runtime.maximum_live_tasks`: `37`
 - `swarmui.worker_runtime.canonical_telemetry_template`: `/shard/<label>/worker/<id>/telemetry`
 - `swarmui.worker_runtime.shard_bits`: `8`
 - `swarmui.worker_runtime.legacy_worker_alias`: `true`
 - `swarmui.worker_runtime.role.worker-heartbeat`: declaration=`executable`, executable_slots=`1`
-- `swarmui.worker_runtime.role.worker-gpu`: declaration=`executable`, executable_slots=`1`
+- `swarmui.worker_runtime.role.worker-gpu`: declaration=`executable`, executable_slots=`15`
 - `swarmui.worker_runtime.role.worker-bus`: declaration=`model-only`, executable_slots=`0`
-- `swarmui.worker_runtime.role.worker-lora`: declaration=`executable`, executable_slots=`1`
+- `swarmui.worker_runtime.role.worker-lora`: declaration=`executable`, executable_slots=`21`
 - `trace.max_bytes`: `1048576`
 
-_Generated from `configs/root_task.toml` (sha256: `72b6fdbd175150ec352f9345d99791a1d576cf01de47363aed2a64ad0c463a93`)._
+_Generated from `configs/root_task.toml` (sha256: `10f33db7f20f039701ec8d2c5d206aba45a67f4b7e359b22dc2e24a0cc055cbd`)._

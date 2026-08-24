@@ -519,6 +519,67 @@ def test_launch_prints_fresh_boot_command_without_rebuilding(
     assert "cohesix-build-run" not in command
 
 
+def test_linux_kvm_claim_and_command_use_host_cpu_and_kernel_gic(
+    helper: ModuleType,
+    tmp_path: Path,
+) -> None:
+    claim = helper.qemu_claim(
+        host_system="Linux",
+        accelerator="kvm",
+        sel4_profile="qemu_smp_kvm_production",
+        machine="virt",
+        gic_version="3",
+        virtualization="off",
+        machine_extra="",
+        cpu="host",
+        timer_clock_hz=31_250_000,
+        smp="4,cores=4,threads=1,sockets=1",
+        net_backend="virtio",
+    )
+    assert claim["eligible"] is True
+
+    qemu = tmp_path / "qemu-system-aarch64"
+    write_executable(qemu, "#!/bin/sh\nexit 0\n")
+    document = {
+        "_resolved_artifact_root": str(tmp_path),
+        "qemu": {
+            "host_system": "Linux",
+            "binary": {"path": str(qemu.resolve())},
+            "accelerator": "kvm",
+            "machine": "virt",
+            "gic_version": "3",
+            "virtualization": "off",
+            "machine_extra": "",
+            "cpu": "host",
+            "timer_clock_hz": 31_250_000,
+            "smp": "4,cores=4,threads=1,sockets=1",
+            "net_backend": "virtio",
+        },
+        "artifacts": [
+            {"id": "elfloader", "path": "elfloader"},
+            {"id": "kernel", "path": "kernel.elf"},
+            {"id": "rootserver", "path": "rootserver"},
+            {"id": "initrd", "path": "cohesix-system.cpio"},
+        ],
+    }
+    original = helper.qemu_accelerator
+    helper.qemu_accelerator = lambda *_args, **_kwargs: "kvm"
+    try:
+        command = helper.build_qemu_command(
+            document,
+            qemu=str(qemu),
+            console_port=41001,
+            udp_port=41002,
+            smoke_port=41003,
+        )
+    finally:
+        helper.qemu_accelerator = original
+    cpu_index = command.index("-cpu")
+    machine_index = command.index("-machine")
+    assert command[cpu_index + 1] == "host"
+    assert command[machine_index + 1] == "virt,gic-version=3,virtualization=off"
+
+
 def test_darwin_defaults_to_hvf_but_preserves_explicit_accelerator(
     helper: ModuleType,
     tmp_path: Path,

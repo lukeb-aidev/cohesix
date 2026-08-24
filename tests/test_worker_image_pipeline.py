@@ -316,6 +316,24 @@ def test_qemu_evidence_symbols_are_gated_and_have_no_authority_path() -> None:
     assert "core::hint::spin_loop()" in runtime
 
 
+def test_worker_completion_wake_enters_lifecycle_wait_atomically() -> None:
+    runtime = (ROOT / "apps" / "worker-heart" / "src" / "target_runtime.rs").read_text(
+        encoding="utf-8"
+    )
+    run_body = runtime.split("pub fn run(", maxsplit=1)[1].split(
+        "/// Publish a bounded panic completion", maxsplit=1
+    )[0]
+    helper = runtime.split(
+        "fn signal_supervisor_and_wait_for_lifecycle(", maxsplit=1
+    )[1].split("fn signal_supervisor(", maxsplit=1)[0]
+
+    assert run_body.count("signal_supervisor_and_wait_for_lifecycle(init)") == 2
+    assert "seL4_NBSendWait(" in helper
+    assert "seL4_NBSendRecv" not in helper
+    assert "seL4_Signal" not in helper
+    assert "seL4_Wait" not in helper
+
+
 def test_root_build_requires_both_target_qualified_worker_identities() -> None:
     build_rs = (ROOT / "apps" / "root-task" / "build.rs").read_text(encoding="utf-8")
     assert "COHESIX_WORKER_IMAGE_MANIFEST" in build_rs

@@ -17,7 +17,9 @@ use crate::event::AuditSink;
 use crate::generated;
 use crate::lifecycle;
 use crate::log_buffer;
-use crate::ninedoor_service::NamespaceServiceBoundary;
+#[cfg(all(target_arch = "aarch64", target_os = "none", sel4_config_kernel_mcs))]
+use crate::ninedoor_service::NamespaceTransportFailureStage;
+use crate::ninedoor_service::{NamespaceServiceBoundary, NamespaceTransportFailureEvidence};
 use crate::observe::IngestSnapshot;
 use crate::serial::DEFAULT_LINE_CAPACITY;
 #[cfg(all(target_arch = "aarch64", target_os = "none", sel4_config_kernel_mcs))]
@@ -127,9 +129,13 @@ const PROC_PRESSURE_POLICY_PATH: &str = "/proc/pressure/policy";
 const PROC_SCHEDULE_ROOT_PATH: &str = "/proc/schedule";
 const PROC_SCHEDULE_SUMMARY_PATH: &str = "/proc/schedule/summary";
 const PROC_SCHEDULE_QUEUE_PATH: &str = "/proc/schedule/queue";
+#[cfg(feature = "release-qemu")]
+const PROC_SCHEDULE_QEMU_FLIGHT_PATH: &str = "/proc/schedule/qemu-flight";
 const PROC_LEASE_ROOT_PATH: &str = "/proc/lease";
 const PROC_LEASE_SUMMARY_PATH: &str = "/proc/lease/summary";
 const PROC_LEASE_ACTIVE_PATH: &str = "/proc/lease/active";
+const PROC_LEASE_BY_ID_PATH: &str = "/proc/lease/by-id";
+const PROC_LEASE_BY_ID_PREFIX: &str = "/proc/lease/by-id/";
 const PROC_LEASE_PREEMPTIONS_PATH: &str = "/proc/lease/preemptions";
 const BOOT_HEADER: &str = "Cohesix boot: root-task online";
 const MAX_STREAM_LINES: usize = log_buffer::LOG_SNAPSHOT_LINES;
@@ -171,6 +177,7 @@ const MAX_LEASE_ID_LEN: usize = 32;
 const MAX_LEASE_SUBJECT_LEN: usize = 32;
 const MAX_LEASE_RESOURCE_LEN: usize = 48;
 const MAX_LEASE_REASON_LEN: usize = 24;
+const LEASE_REQUEST_TAG_BYTES: usize = 16;
 const MAX_POLICY_REV_ID_LEN: usize = 64;
 const MAX_EXPORT_ID_LEN: usize = 64;
 const HOST_TICKET_ID_MAX_BYTES: usize = 128;
@@ -178,6 +185,8 @@ const HOST_TICKET_WORKER_ID_MAX_BYTES: usize = 32;
 const HOST_TICKET_REASON_MAX_BYTES: usize = 128;
 const HOST_TICKET_V2_REQUEST_SCHEMA: &str = "host-ticket/v2";
 const HOST_TICKET_V2_RESULT_SCHEMA: &str = "host-ticket-result/v2";
+const HOST_TICKET_CURRENT_SCHEMA: &str = "host-ticket-current/v1";
+const HOST_TICKET_CURRENT_PREFIX: &str = "/host/tickets/current/";
 const HOST_TICKET_MAX_ADMISSIONS: usize = 256;
 const HOST_TICKET_LOG_MAX_BYTES: usize = MAX_STREAM_LINES * DEFAULT_LINE_CAPACITY;
 const CAT_CHUNK_PREFIX: &str = "C1:";
@@ -268,6 +277,7 @@ pub(crate) enum NineDoorContainmentDiagnostic {
     },
     TransportRevoked {
         generation: u64,
+        evidence: NamespaceTransportFailureEvidence,
     },
     ContainmentFailed {
         generation: u64,
@@ -306,9 +316,16 @@ impl NineDoorContainmentDiagnostic {
                 line,
                 "[ninedoor-service] generation={generation} invalid fault mailbox action=contain"
             )?,
-            Self::TransportRevoked { generation } => write!(
+            Self::TransportRevoked {
+                generation,
+                evidence,
+            } => write!(
                 line,
-                "[ninedoor-service] generation={generation} terminal-revoke state=local"
+                "[ninedoor-service] generation={generation} terminal-revoke state=local reason={:?} stage={:?} expected_sequence={} observed_sequence={}",
+                evidence.error,
+                evidence.stage,
+                evidence.expected_sequence,
+                evidence.observed_sequence,
             )?,
             Self::ContainmentFailed { generation } => write!(
                 line,
@@ -869,7 +886,17 @@ impl NineDoorBridge {
             let mut faulted = self.namespace_service.state() == TransportState::Revoked;
             let generation = runtime.generation();
             let mut diagnostic =
-                faulted.then_some(NineDoorContainmentDiagnostic::TransportRevoked { generation });
+                faulted.then_some(NineDoorContainmentDiagnostic::TransportRevoked {
+                    generation,
+                    evidence: self.namespace_service.revocation_evidence().unwrap_or(
+                        NamespaceTransportFailureEvidence {
+                            error: TransportError::Revoked,
+                            stage: NamespaceTransportFailureStage::ManualRevoke,
+                            expected_sequence: 0,
+                            observed_sequence: 0,
+                        },
+                    ),
+                });
             match crate::hal::critical_tcb::take_target_service_fault(
                 crate::ninedoor_service::SERVICE_TASK_ID,
             ) {
@@ -1216,10 +1243,10 @@ impl NineDoorBridge {
                 .can_append_ticket_lines(snapshot_path.as_str(), owned.as_slice())?;
         }
         self.host
-            .append_ticket_lines_preflighted(path, owned.as_slice());
+            .append_ticket_lines_preflighted(path, owned.as_slice())?;
         if mirror_snapshot {
             self.host
-                .append_ticket_lines_preflighted(snapshot_path.as_str(), owned.as_slice());
+                .append_ticket_lines_preflighted(snapshot_path.as_str(), owned.as_slice())?;
         }
         Ok(())
     }
@@ -1235,17 +1262,19 @@ impl NineDoorBridge {
         validate_host_ticket_v2_subject(&raw, &self.gpu)?;
         let canonical_raw = serialize_host_ticket(&raw)?;
         let raw_digest = sha256_bytes(canonical_raw.as_bytes());
-        let key = (raw.id.clone(), raw.idempotency_key.clone());
-        if let Some(existing) = self.host.admissions.get(&key) {
-            return if existing.raw_digest == raw_digest {
+        let correlation_digest =
+            host_ticket_correlation_digest(raw.id.as_str(), raw.idempotency_key.as_str())?;
+        if let Some(existing) = self.host.admissions.get(&correlation_digest) {
+            return if existing.spec.id == raw.id
+                && existing.spec.idempotency_key == raw.idempotency_key
+                && existing.raw_digest == raw_digest
+            {
                 Ok(())
             } else {
                 Err(NineDoorBridgeError::InvalidPayload)
             };
         }
-        if self.host.admissions.len() >= HOST_TICKET_MAX_ADMISSIONS {
-            return Err(NineDoorBridgeError::Busy);
-        }
+        let retirement_digest = host_ticket_admission_retirement_candidate(&self.host.admissions)?;
         let snapshot = target_worker_namespace_snapshots()
             .into_iter()
             .find(|snapshot| snapshot.public_id() == Some(raw.receipt_worker_id.as_str()))
@@ -1261,14 +1290,12 @@ impl NineDoorBridge {
             identity,
             ready: snapshot.lifecycle == crate::worker_supervisor::WorkerLifecycleState::Ready,
             ready_sequence: snapshot.ready_sequence,
+            current_control_sequence: snapshot.control_sequence,
             last_control_sequence: snapshot.last_control_sequence,
         };
-        let minimum_sequence = binding
-            .last_control_sequence
-            .checked_add(1)
-            .ok_or(NineDoorBridgeError::Busy)?;
-        let sequence = self.host.next_admission_sequence.max(minimum_sequence);
-        let next_sequence = sequence.checked_add(1).ok_or(NineDoorBridgeError::Busy)?;
+        ensure_host_ticket_worker_available(&self.host.admissions, binding)?;
+        let (sequence, next_sequence) =
+            next_host_ticket_admission_sequence(self.host.next_admission_sequence)?;
         let admitted = admit_host_ticket_v2_spec(raw, binding, sequence)?;
         let canonical_snapshot = serialize_host_ticket(&admitted)?;
         let snapshot_path = self.host.ticket_snapshot_path(path)?;
@@ -1278,14 +1305,38 @@ impl NineDoorBridge {
             snapshot_path.as_str(),
             core::slice::from_ref(&canonical_snapshot),
         )?;
-        self.host
-            .append_ticket_lines_preflighted(path, core::slice::from_ref(&canonical_raw));
-        self.host.append_ticket_lines_preflighted(
-            snapshot_path.as_str(),
-            core::slice::from_ref(&canonical_snapshot),
-        );
+        // Active admissions are never retired. At the fixed tracking bound,
+        // reserve one slot by removing the oldest terminal admission only
+        // after all validation and log preflight have succeeded. Root is the
+        // sole owner of this state, so the selected digest cannot change
+        // between candidate selection and removal.
+        let retired = if let Some(digest) = retirement_digest {
+            let admission = self
+                .host
+                .admissions
+                .remove(&digest)
+                .ok_or(NineDoorBridgeError::InvalidPayload)?;
+            Some((digest, admission))
+        } else {
+            None
+        };
+        let append_result = self
+            .host
+            .append_ticket_lines_preflighted(path, core::slice::from_ref(&canonical_raw))
+            .and_then(|()| {
+                self.host.append_ticket_lines_preflighted(
+                    snapshot_path.as_str(),
+                    core::slice::from_ref(&canonical_snapshot),
+                )
+            });
+        if let Err(error) = append_result {
+            if let Some((digest, admission)) = retired {
+                self.host.admissions.insert(digest, admission);
+            }
+            return Err(error);
+        }
         self.host.admissions.insert(
-            key,
+            correlation_digest,
             HostTicketV2Admission {
                 spec: admitted,
                 raw_digest,
@@ -1312,11 +1363,12 @@ impl NineDoorBridge {
         path: &str,
         result: HostTicketV2Result,
     ) -> Result<(), NineDoorBridgeError> {
-        let key = (result.id.clone(), result.idempotency_key.clone());
+        let correlation_digest =
+            host_ticket_correlation_digest(result.id.as_str(), result.idempotency_key.as_str())?;
         let admission = self
             .host
             .admissions
-            .get(&key)
+            .get(&correlation_digest)
             .cloned()
             .ok_or(NineDoorBridgeError::InvalidPayload)?;
         validate_result_binding(&result, &admission.spec)?;
@@ -1339,11 +1391,11 @@ impl NineDoorBridge {
                 core::slice::from_ref(&canonical),
             )?;
             self.host
-                .append_ticket_lines_preflighted(path, core::slice::from_ref(&canonical));
+                .append_ticket_lines_preflighted(path, core::slice::from_ref(&canonical))?;
             self.host.append_ticket_lines_preflighted(
                 snapshot_path.as_str(),
                 core::slice::from_ref(&canonical),
-            );
+            )?;
             return Ok(());
         };
 
@@ -1358,11 +1410,20 @@ impl NineDoorBridge {
                 identity: snapshot.identity?,
                 ready: snapshot.lifecycle == crate::worker_supervisor::WorkerLifecycleState::Ready,
                 ready_sequence: snapshot.ready_sequence,
+                current_control_sequence: snapshot.control_sequence,
                 last_control_sequence: snapshot.last_control_sequence,
             })
         });
         let disposition =
             host_ticket_terminal_disposition(outcome, &admission.spec, current_binding)?;
+        let worker_control_sequence = match disposition {
+            HostTicketV2TerminalDisposition::Submit(_) => {
+                Some(next_host_ticket_worker_control_sequence(
+                    current_binding.ok_or(NineDoorBridgeError::InvalidPayload)?,
+                )?)
+            }
+            HostTicketV2TerminalDisposition::Stale => None,
+        };
         self.host
             .can_append_ticket_lines(path, core::slice::from_ref(&canonical))?;
         self.host
@@ -1370,20 +1431,25 @@ impl NineDoorBridge {
 
         if let HostTicketV2TerminalDisposition::Submit(outcome) = disposition {
             let admitted_time_ns = crate::hal::timebase().now_ms().saturating_mul(1_000_000);
-            let control = build_host_ticket_worker_control(&result, outcome, admitted_time_ns)?;
+            let control = build_host_ticket_worker_control(
+                &result,
+                outcome,
+                admitted_time_ns,
+                worker_control_sequence.ok_or(NineDoorBridgeError::InvalidPayload)?,
+            )?;
             self.submit_target_worker_operation(control)?;
         }
         self.host
-            .append_ticket_lines_preflighted(path, core::slice::from_ref(&canonical));
+            .append_ticket_lines_preflighted(path, core::slice::from_ref(&canonical))?;
         self.host.append_ticket_lines_preflighted(
             snapshot_path.as_str(),
             core::slice::from_ref(&canonical),
-        );
+        )?;
         let terminal_outcome = match disposition {
             HostTicketV2TerminalDisposition::Submit(outcome) => outcome,
             HostTicketV2TerminalDisposition::Stale => WorkerOutcome::Stale,
         };
-        if let Some(stored) = self.host.admissions.get_mut(&key) {
+        if let Some(stored) = self.host.admissions.get_mut(&correlation_digest) {
             stored.terminal_result_digest = Some(result_digest);
             stored.terminal_outcome = Some(terminal_outcome);
         }
@@ -1426,6 +1492,22 @@ impl NineDoorBridge {
             start_offset: read.start_offset,
             consumed_bytes: read.consumed_bytes,
         }))
+    }
+
+    /// Fill one bounded TAIL stream from a retained Worker ring or host node.
+    pub(crate) fn tail_stream_into(
+        &mut self,
+        path: &str,
+        cursor_offset: u64,
+        output: &mut HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
+    ) -> Result<Option<TelemetryTailMeta>, NineDoorBridgeError> {
+        if let Some(meta) = self.telemetry_tail_into(path, cursor_offset, output)? {
+            return Ok(Some(meta));
+        }
+        let Some((text, base_offset)) = self.host.entry_tail_window(path) else {
+            return Ok(None);
+        };
+        bounded_text_tail_into(text, base_offset, cursor_offset, output).map(Some)
     }
 
     /// Emit lines for `/proc/ingest/watch` with throttling applied.
@@ -2145,6 +2227,11 @@ impl NineDoorBridge {
             if path == PROC_SCHEDULE_QUEUE_PATH {
                 return self.schedule.queue_lines_into(output);
             }
+            #[cfg(feature = "release-qemu")]
+            if path == PROC_SCHEDULE_QEMU_FLIGHT_PATH {
+                crate::qemu_flight_recorder::snapshot_lines_into(output);
+                return Ok(());
+            }
         }
         if self.lease.proc_enabled() {
             if path == PROC_LEASE_SUMMARY_PATH {
@@ -2152,6 +2239,12 @@ impl NineDoorBridge {
             }
             if path == PROC_LEASE_ACTIVE_PATH {
                 return self.lease.active_lines_into(output);
+            }
+            if let Some(id) = parse_proc_lease_by_id_path(path)? {
+                if !self.lease.proc_active_enabled() {
+                    return Err(NineDoorBridgeError::InvalidPath);
+                }
+                return self.lease.active_line_into(id, output);
             }
             if path == PROC_LEASE_PREEMPTIONS_PATH {
                 return self.lease.preemptions_lines_into(output);
@@ -2266,6 +2359,33 @@ impl NineDoorBridge {
         }
         if let Some(bytes) = self.cas.read_path(path, self.is_queen())? {
             return cas_lines_from_bytes_into(&bytes, output);
+        }
+        if self.host.is_ticket_retention_path(path) {
+            return self.host.retention_lines_into(output);
+        }
+        if let Some(correlation_digest) = parse_host_ticket_current_path(path)? {
+            #[cfg(all(target_arch = "aarch64", target_os = "none", sel4_config_kernel_mcs))]
+            {
+                let admission = self
+                    .host
+                    .admissions
+                    .get(&correlation_digest)
+                    .ok_or(NineDoorBridgeError::InvalidPath)?;
+                let current = target_worker_namespace_snapshots()
+                    .into_iter()
+                    .find(|snapshot| {
+                        snapshot.public_id() == Some(admission.spec.receipt_worker_id.as_str())
+                    });
+                output
+                    .push(host_ticket_current_line(admission, current.as_ref())?)
+                    .map_err(|_| NineDoorBridgeError::BufferFull)?;
+                return Ok(());
+            }
+            #[cfg(not(all(target_arch = "aarch64", target_os = "none", sel4_config_kernel_mcs)))]
+            {
+                let _ = correlation_digest;
+                return Err(NineDoorBridgeError::InvalidPath);
+            }
         }
         if let Some(value) = self.host.entry_value(path) {
             return cat_lines_from_text_into(value, output);
@@ -2485,6 +2605,8 @@ impl NineDoorBridge {
                 return Err(NineDoorBridgeError::InvalidPath);
             }
             self.schedule.list_proc_into(output)?;
+            #[cfg(feature = "release-qemu")]
+            push_list_entry(output, "qemu-flight")?;
             return Ok(());
         }
         if path == PROC_LEASE_ROOT_PATH {
@@ -2492,6 +2614,13 @@ impl NineDoorBridge {
                 return Err(NineDoorBridgeError::InvalidPath);
             }
             self.lease.list_proc_into(output)?;
+            return Ok(());
+        }
+        if path == PROC_LEASE_BY_ID_PATH {
+            if !self.lease.proc_active_enabled() {
+                return Err(NineDoorBridgeError::InvalidPath);
+            }
+            self.lease.list_active_ids_into(output)?;
             return Ok(());
         }
         if path == "/queen" {
@@ -4722,6 +4851,7 @@ struct HostTicketV2WorkerBinding<'a> {
     identity: WorkerIdentity,
     ready: bool,
     ready_sequence: u64,
+    current_control_sequence: u64,
     last_control_sequence: u64,
 }
 
@@ -4737,6 +4867,12 @@ struct HostEntry {
     value: String,
     control: Option<&'static str>,
     writable: bool,
+    ticket_log: bool,
+    retained_wire_lines: usize,
+    base_offset: u64,
+    next_offset: u64,
+    dropped_lines: u64,
+    dropped_bytes: u64,
 }
 
 #[derive(Debug)]
@@ -4755,7 +4891,7 @@ struct HostState {
     ticket_receipt_action_allowlist: &'static [generated::HostTicketAction],
     ticket_lifecycle: &'static [generated::HostTicketLifecycleState],
     next_admission_sequence: u64,
-    admissions: BTreeMap<(String, String), HostTicketV2Admission>,
+    admissions: BTreeMap<[u8; 32], HostTicketV2Admission>,
     entries: Vec<HostEntry>,
 }
 
@@ -4856,9 +4992,15 @@ impl HostState {
                         "spec.snapshot",
                         "status.snapshot",
                         "deadletter.snapshot",
+                        "retention",
+                        "current",
                     ],
                     output,
                 ))
+            }
+            ["tickets", "current"] if self.tickets_enabled => {
+                output.clear();
+                Some(Ok(()))
             }
             [provider]
                 if self
@@ -4882,6 +5024,58 @@ impl HostState {
             .iter()
             .find(|entry| entry.path == path)
             .map(|entry| entry.value.as_str())
+    }
+
+    fn entry_tail_window(&self, path: &str) -> Option<(&str, u64)> {
+        if !self.enabled {
+            return None;
+        }
+        self.entries
+            .iter()
+            .find(|entry| entry.path == path)
+            .map(|entry| {
+                let base_offset = if entry.ticket_log {
+                    entry.base_offset
+                } else {
+                    0
+                };
+                (entry.value.as_str(), base_offset)
+            })
+    }
+
+    fn is_ticket_retention_path(&self, path: &str) -> bool {
+        self.tickets_enabled && path == format!("{}/tickets/retention", self.mount_at)
+    }
+
+    fn retention_lines_into(
+        &self,
+        output: &mut HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
+    ) -> Result<(), NineDoorBridgeError> {
+        output.clear();
+        for entry in self.entries.iter().filter(|entry| entry.ticket_log) {
+            let label = entry
+                .path
+                .rsplit('/')
+                .next()
+                .ok_or(NineDoorBridgeError::InvalidPath)?;
+            let mut line = HeaplessString::new();
+            write!(
+                line,
+                "HOST_TICKET_RETENTION schema=v1 path={} base={} next={} retained_bytes={} retained_wire_lines={} dropped_lines={} dropped_bytes={}",
+                label,
+                entry.base_offset,
+                entry.next_offset,
+                entry.value.len(),
+                entry.retained_wire_lines,
+                entry.dropped_lines,
+                entry.dropped_bytes,
+            )
+            .map_err(|_| NineDoorBridgeError::BufferFull)?;
+            output
+                .push(line)
+                .map_err(|_| NineDoorBridgeError::BufferFull)?;
+        }
+        Ok(())
     }
 
     fn control_label(&self, path: &str) -> Option<&'static str> {
@@ -4930,7 +5124,23 @@ impl HostState {
             return false;
         }
         if let Some(entry) = self.entries.iter_mut().find(|entry| entry.path == path) {
+            let retained_wire_lines = if entry.ticket_log {
+                let Ok(lines) = cat_wire_line_count(value) else {
+                    return false;
+                };
+                if value.len() > HOST_TICKET_LOG_MAX_BYTES || lines > MAX_STREAM_LINES {
+                    return false;
+                }
+                lines
+            } else {
+                0
+            };
             entry.value = String::from(value);
+            entry.retained_wire_lines = retained_wire_lines;
+            entry.base_offset = 0;
+            entry.next_offset = value.len() as u64;
+            entry.dropped_lines = 0;
+            entry.dropped_bytes = 0;
             return true;
         }
         false
@@ -4942,17 +5152,63 @@ impl HostState {
         lines: &[String],
     ) -> Result<(), NineDoorBridgeError> {
         self.can_append_ticket_lines(path, lines)?;
-        self.append_ticket_lines_preflighted(path, lines);
-        Ok(())
+        self.append_ticket_lines_preflighted(path, lines)
     }
 
-    fn append_ticket_lines_preflighted(&mut self, path: &str, lines: &[String]) {
-        if let Some(entry) = self.entries.iter_mut().find(|entry| entry.path == path) {
-            for line in lines {
-                entry.value.push_str(line);
-                entry.value.push('\n');
+    fn append_ticket_lines_preflighted(
+        &mut self,
+        path: &str,
+        lines: &[String],
+    ) -> Result<(), NineDoorBridgeError> {
+        let entry = self
+            .entries
+            .iter_mut()
+            .find(|entry| entry.path == path && entry.ticket_log)
+            .ok_or(NineDoorBridgeError::InvalidPath)?;
+        for line in lines {
+            let appended_bytes = line
+                .len()
+                .checked_add(1)
+                .ok_or(NineDoorBridgeError::BufferFull)?;
+            let appended_wire_lines = cat_wire_line_count(line.as_str())?;
+            while entry.value.len().saturating_add(appended_bytes) > HOST_TICKET_LOG_MAX_BYTES
+                || entry
+                    .retained_wire_lines
+                    .saturating_add(appended_wire_lines)
+                    > MAX_STREAM_LINES
+            {
+                if entry.value.is_empty() {
+                    return Err(NineDoorBridgeError::BufferFull);
+                }
+                let content_end = entry.value.find('\n').unwrap_or(entry.value.len());
+                let removed_bytes = if content_end < entry.value.len() {
+                    content_end.saturating_add(1)
+                } else {
+                    content_end
+                };
+                let removed_wire_lines = cat_wire_line_count(&entry.value[..content_end])?;
+                entry.value.drain(..removed_bytes);
+                entry.retained_wire_lines =
+                    entry.retained_wire_lines.saturating_sub(removed_wire_lines);
+                entry.base_offset = entry
+                    .base_offset
+                    .checked_add(removed_bytes as u64)
+                    .ok_or(NineDoorBridgeError::BufferFull)?;
+                entry.dropped_lines = entry.dropped_lines.saturating_add(1);
+                entry.dropped_bytes = entry.dropped_bytes.saturating_add(removed_bytes as u64);
             }
+            entry.value.push_str(line);
+            entry.value.push('\n');
+            entry.retained_wire_lines = entry
+                .retained_wire_lines
+                .checked_add(appended_wire_lines)
+                .ok_or(NineDoorBridgeError::BufferFull)?;
+            entry.next_offset = entry
+                .next_offset
+                .checked_add(appended_bytes as u64)
+                .ok_or(NineDoorBridgeError::BufferFull)?;
         }
+        Ok(())
     }
 
     fn ticket_snapshot_path(&self, path: &str) -> Result<String, NineDoorBridgeError> {
@@ -4975,8 +5231,11 @@ impl HostState {
             .iter()
             .find(|entry| entry.path == path)
             .ok_or(NineDoorBridgeError::InvalidPath)?;
-        let mut projected_bytes = entry.value.len();
-        let mut projected_wire_lines = cat_wire_line_count(entry.value.as_str())?;
+        if !entry.ticket_log {
+            return Err(NineDoorBridgeError::InvalidPath);
+        }
+        let mut projected_bytes = 0usize;
+        let mut projected_wire_lines = 0usize;
         for line in lines {
             self.validate_ticket_line_bytes(line)?;
             projected_bytes = projected_bytes
@@ -4989,6 +5248,10 @@ impl HostState {
         if projected_bytes > HOST_TICKET_LOG_MAX_BYTES || projected_wire_lines > MAX_STREAM_LINES {
             return Err(NineDoorBridgeError::BufferFull);
         }
+        entry
+            .next_offset
+            .checked_add(projected_bytes as u64)
+            .ok_or(NineDoorBridgeError::BufferFull)?;
         Ok(())
     }
 
@@ -5247,6 +5510,12 @@ impl HostState {
             value: String::from(value),
             control,
             writable: true,
+            ticket_log: parts.first() == Some(&"tickets"),
+            retained_wire_lines: usize::from(!value.is_empty()),
+            base_offset: 0,
+            next_offset: value.len() as u64,
+            dropped_lines: 0,
+            dropped_bytes: 0,
         });
     }
 
@@ -5257,6 +5526,12 @@ impl HostState {
             value: String::from(value),
             control: None,
             writable: false,
+            ticket_log: parts.first() == Some(&"tickets"),
+            retained_wire_lines: usize::from(!value.is_empty()),
+            base_offset: 0,
+            next_offset: value.len() as u64,
+            dropped_lines: 0,
+            dropped_bytes: 0,
         });
     }
 }
@@ -6902,28 +7177,43 @@ impl ScheduleState {
         if !self.enabled {
             return Err(NineDoorBridgeError::InvalidPath);
         }
-        let request = parse_schedule_ctl(payload)?;
-        if self.queue_max_entries == 0 {
-            return Err(NineDoorBridgeError::InvalidPayload);
+        match parse_schedule_ctl(payload)? {
+            ScheduleCtlCommand::Enqueue(request) => {
+                if self.queue_max_entries == 0 {
+                    return Err(NineDoorBridgeError::InvalidPayload);
+                }
+                if self.queue.len() >= self.queue_max_entries {
+                    self.dropped = self.dropped.saturating_add(1);
+                    return Err(NineDoorBridgeError::BufferFull);
+                }
+                if self.queue.iter().any(|entry| entry.id == request.id) {
+                    return Err(NineDoorBridgeError::InvalidPayload);
+                }
+                append_log_bytes(&mut self.ctl_log, payload, self.ctl_max_bytes)?;
+                let seq = self.next_seq;
+                self.next_seq = self.next_seq.saturating_add(1);
+                self.queue.push_back(ScheduleEntry {
+                    id: request.id,
+                    role: request.role,
+                    priority: request.priority,
+                    ticks: request.ticks,
+                    budget_ms: request.budget_ms,
+                    seq,
+                });
+            }
+            ScheduleCtlCommand::Dequeue { id } => {
+                let front = self
+                    .queue
+                    .front()
+                    .ok_or(NineDoorBridgeError::InvalidPayload)?;
+                if front.id != id {
+                    return Err(NineDoorBridgeError::InvalidPayload);
+                }
+                append_log_bytes(&mut self.ctl_log, payload, self.ctl_max_bytes)?;
+                let _ = self.queue.pop_front();
+                self.dequeued = self.dequeued.saturating_add(1);
+            }
         }
-        if self.queue.len() >= self.queue_max_entries {
-            self.dropped = self.dropped.saturating_add(1);
-            return Err(NineDoorBridgeError::BufferFull);
-        }
-        if self.queue.iter().any(|entry| entry.id == request.id) {
-            return Err(NineDoorBridgeError::InvalidPayload);
-        }
-        append_log_bytes(&mut self.ctl_log, payload, self.ctl_max_bytes)?;
-        let seq = self.next_seq;
-        self.next_seq = self.next_seq.saturating_add(1);
-        self.queue.push_back(ScheduleEntry {
-            id: request.id,
-            role: request.role,
-            priority: request.priority,
-            ticks: request.ticks,
-            budget_ms: request.budget_ms,
-            seq,
-        });
         Ok(())
     }
 
@@ -7000,6 +7290,7 @@ struct LeaseEntry {
     priority: u32,
     state: &'static str,
     seq: u64,
+    last_request_tag: Option<[u8; LEASE_REQUEST_TAG_BYTES]>,
 }
 
 #[derive(Debug, Clone)]
@@ -7027,7 +7318,8 @@ struct LeaseState {
     ctl_max_bytes: u32,
     ctl_log: Vec<u8>,
     active: Vec<LeaseEntry>,
-    preemptions: Vec<LeasePreemption>,
+    preemptions: VecDeque<LeasePreemption>,
+    preemptions_total: u64,
     quotas: Vec<LeaseQuota>,
     next_seq: u64,
     proc_summary: bool,
@@ -7050,7 +7342,8 @@ impl LeaseState {
             ctl_max_bytes: control.ctl_max_bytes,
             ctl_log: Vec::new(),
             active: Vec::new(),
-            preemptions: Vec::new(),
+            preemptions: VecDeque::new(),
+            preemptions_total: 0,
             quotas: Vec::new(),
             next_seq: 1,
             proc_summary: observability.summary,
@@ -7070,6 +7363,10 @@ impl LeaseState {
         self.proc_summary || self.proc_active || self.proc_preemptions
     }
 
+    fn proc_active_enabled(&self) -> bool {
+        self.proc_active
+    }
+
     fn ctl_log(&self) -> &[u8] {
         &self.ctl_log
     }
@@ -7083,9 +7380,21 @@ impl LeaseState {
         }
         if self.proc_active {
             push_list_entry(output, "active")?;
+            push_list_entry(output, "by-id")?;
         }
         if self.proc_preemptions {
             push_list_entry(output, "preemptions")?;
+        }
+        Ok(())
+    }
+
+    fn list_active_ids_into(
+        &self,
+        output: &mut HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
+    ) -> Result<(), NineDoorBridgeError> {
+        output.clear();
+        for entry in &self.active {
+            push_list_entry(output, entry.id.as_str())?;
         }
         Ok(())
     }
@@ -7123,6 +7432,7 @@ impl LeaseState {
                     priority,
                     state: LEASE_STATE_ACTIVE,
                     seq,
+                    last_request_tag: None,
                 });
             }
             LeaseCtlCommand::Renew {
@@ -7142,28 +7452,61 @@ impl LeaseState {
                 entry.priority = priority;
                 entry.seq = seq;
             }
+            LeaseCtlCommand::RenewBound {
+                id,
+                subject,
+                resource,
+                request,
+                ttl_s,
+                priority,
+            } => {
+                let entry = self
+                    .active
+                    .iter_mut()
+                    .find(|entry| entry.id == id)
+                    .ok_or(NineDoorBridgeError::InvalidPayload)?;
+                if entry.subject != subject || entry.resource != resource {
+                    return Err(NineDoorBridgeError::InvalidPayload);
+                }
+                if entry.last_request_tag == Some(request) {
+                    return if entry.ttl_s == ttl_s && entry.priority == priority {
+                        Ok(())
+                    } else {
+                        Err(NineDoorBridgeError::InvalidPayload)
+                    };
+                }
+                append_log_bytes(&mut self.ctl_log, payload, self.ctl_max_bytes)?;
+                let seq = self.next_seq;
+                self.next_seq = self.next_seq.saturating_add(1);
+                entry.ttl_s = ttl_s;
+                entry.priority = priority;
+                entry.seq = seq;
+                entry.last_request_tag = Some(request);
+            }
             LeaseCtlCommand::Preempt { id, reason } => {
                 let position = self
                     .active
                     .iter()
                     .position(|entry| entry.id == id)
                     .ok_or(NineDoorBridgeError::InvalidPayload)?;
-                if self.preemptions_max_entries == 0
-                    || self.preemptions.len() >= self.preemptions_max_entries
-                {
+                if self.preemptions_max_entries == 0 {
                     return Err(NineDoorBridgeError::BufferFull);
                 }
                 append_log_bytes(&mut self.ctl_log, payload, self.ctl_max_bytes)?;
                 let entry = self.active.swap_remove(position);
                 let seq = self.next_seq;
                 self.next_seq = self.next_seq.saturating_add(1);
-                self.preemptions.push(LeasePreemption {
+                if self.preemptions.len() == self.preemptions_max_entries {
+                    let _ = self.preemptions.pop_front();
+                }
+                self.preemptions.push_back(LeasePreemption {
                     id: entry.id,
                     subject: entry.subject,
                     resource: entry.resource,
                     reason,
                     seq,
                 });
+                self.preemptions_total = self.preemptions_total.saturating_add(1);
             }
             LeaseCtlCommand::Quota {
                 subject,
@@ -7219,7 +7562,7 @@ impl LeaseState {
             line,
             "active={} preemptions={} quotas={} max_active={} max_preemptions={}",
             self.active.len(),
-            self.preemptions.len(),
+            self.preemptions_total,
             self.quotas.len(),
             self.active_max_entries,
             self.preemptions_max_entries
@@ -7249,25 +7592,53 @@ impl LeaseState {
         output.clear();
         let mut used_bytes = 0usize;
         for entry in &self.active {
-            let mut line = HeaplessString::<DEFAULT_LINE_CAPACITY>::new();
-            write!(
-                line,
-                "id={} subject={} resource={} ttl_s={} priority={} state={} seq={}",
-                entry.id,
-                entry.subject,
-                entry.resource,
-                entry.ttl_s,
-                entry.priority,
-                entry.state,
-                entry.seq
-            )
-            .map_err(|_| NineDoorBridgeError::BufferFull)?;
+            let line = Self::active_line(entry)?;
             if !push_newline_accounted_line(output, line, &mut used_bytes, self.proc_active_bytes)?
             {
                 break;
             }
         }
         Ok(())
+    }
+
+    fn active_line_into(
+        &self,
+        id: &str,
+        output: &mut HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
+    ) -> Result<(), NineDoorBridgeError> {
+        output.clear();
+        let Some(entry) = self.active.iter().find(|entry| entry.id == id) else {
+            return Ok(());
+        };
+        let line = Self::active_line(entry)?;
+        let mut used_bytes = 0usize;
+        if !push_newline_accounted_line(output, line, &mut used_bytes, self.proc_active_bytes)? {
+            return Err(NineDoorBridgeError::BufferFull);
+        }
+        Ok(())
+    }
+
+    fn active_line(
+        entry: &LeaseEntry,
+    ) -> Result<HeaplessString<DEFAULT_LINE_CAPACITY>, NineDoorBridgeError> {
+        let mut line = HeaplessString::<DEFAULT_LINE_CAPACITY>::new();
+        write!(
+            line,
+            "id={} subject={} resource={} ttl_s={} priority={} state={} seq={}",
+            entry.id,
+            entry.subject,
+            entry.resource,
+            entry.ttl_s,
+            entry.priority,
+            entry.state,
+            entry.seq
+        )
+        .map_err(|_| NineDoorBridgeError::BufferFull)?;
+        if let Some(request) = entry.last_request_tag {
+            write!(line, " request={}", hex::encode(request))
+                .map_err(|_| NineDoorBridgeError::BufferFull)?;
+        }
+        Ok(line)
     }
 
     fn preemptions_lines(
@@ -8088,20 +8459,18 @@ impl WorkerTelemetry {
         let identity = snapshot
             .identity
             .ok_or(NineDoorBridgeError::InvalidPayload)?;
-        let line = format!(
-            "{{\"schema\":\"worker-runtime-state/v1\",\"worker_id\":\"{}\",\"role\":\"{}\",\"state\":\"{}\",\"slot\":{},\"lease_epoch\":{},\"supervisor_generation\":{},\"cap_generation\":{},\"ready_sequence\":{},\"control_sequence\":{},\"receipt_sequence\":{},\"completion_sequence\":{}}}",
-            self.id,
+        let line = render_worker_runtime_state_v2(
+            self.id.as_str(),
             target_worker_role_label(snapshot.role),
             snapshot.lifecycle.label(),
-            identity.slot,
-            identity.lease_epoch,
-            identity.supervisor_generation,
-            identity.cap_generation,
-            snapshot.ready_sequence,
-            snapshot.control_sequence,
-            snapshot.receipt_sequence,
-            snapshot.completion_sequence,
-        );
+            identity,
+            [
+                snapshot.ready_sequence,
+                snapshot.control_sequence,
+                snapshot.receipt_sequence,
+                snapshot.completion_sequence,
+            ],
+        )?;
         self.ring
             .append(line.as_bytes())
             .map_err(|_| NineDoorBridgeError::BufferFull)?;
@@ -8116,6 +8485,44 @@ impl WorkerTelemetry {
         }
         Ok(())
     }
+}
+
+fn render_worker_runtime_state_v2(
+    worker_id: &str,
+    role: &str,
+    state: &str,
+    identity: WorkerIdentity,
+    sequences: [u64; 4],
+) -> Result<HeaplessString<DEFAULT_LINE_CAPACITY>, NineDoorBridgeError> {
+    let lease_epoch =
+        u32::try_from(identity.lease_epoch).map_err(|_| NineDoorBridgeError::InvalidPayload)?;
+    let supervisor_generation = u32::try_from(identity.supervisor_generation)
+        .map_err(|_| NineDoorBridgeError::InvalidPayload)?;
+    let cap_generation =
+        u32::try_from(identity.cap_generation).map_err(|_| NineDoorBridgeError::InvalidPayload)?;
+    let ready_sequence =
+        u32::try_from(sequences[0]).map_err(|_| NineDoorBridgeError::InvalidPayload)?;
+    let control_sequence =
+        u32::try_from(sequences[1]).map_err(|_| NineDoorBridgeError::InvalidPayload)?;
+    let receipt_sequence =
+        u32::try_from(sequences[2]).map_err(|_| NineDoorBridgeError::InvalidPayload)?;
+    let completion_sequence =
+        u32::try_from(sequences[3]).map_err(|_| NineDoorBridgeError::InvalidPayload)?;
+    let mut line = HeaplessString::new();
+    write!(
+        line,
+        "{{\"schema\":\"worker-runtime-state/v2\",\"worker_id\":\"{worker_id}\",\"role\":\"{role}\",\"state\":\"{state}\",\"identity\":[{},{},{},{}],\"sequence\":[{},{},{},{}]}}\n",
+        identity.slot,
+        lease_epoch,
+        supervisor_generation,
+        cap_generation,
+        ready_sequence,
+        control_sequence,
+        receipt_sequence,
+        completion_sequence,
+    )
+    .map_err(|_| NineDoorBridgeError::BufferFull)?;
+    Ok(line)
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -8652,10 +9059,128 @@ fn admission_identity(
     Ok(identity)
 }
 
+fn next_host_ticket_admission_sequence(current: u64) -> Result<(u64, u64), NineDoorBridgeError> {
+    if current == 0 {
+        return Err(NineDoorBridgeError::InvalidPayload);
+    }
+    let next = current.checked_add(1).ok_or(NineDoorBridgeError::Busy)?;
+    Ok((current, next))
+}
+
+/// Select one deterministic terminal admission to retire when the bounded
+/// exact-current/idempotency window is full. Nonterminal admissions retain
+/// their Worker reservation and are never candidates; saturation by active
+/// work therefore remains an explicit `busy` result.
+fn host_ticket_admission_retirement_candidate(
+    admissions: &BTreeMap<[u8; 32], HostTicketV2Admission>,
+) -> Result<Option<[u8; 32]>, NineDoorBridgeError> {
+    if admissions.len() < HOST_TICKET_MAX_ADMISSIONS {
+        return Ok(None);
+    }
+    if admissions.len() != HOST_TICKET_MAX_ADMISSIONS {
+        return Err(NineDoorBridgeError::Busy);
+    }
+    admissions
+        .iter()
+        .filter(|(_, admission)| {
+            admission.terminal_result_digest.is_some() && admission.terminal_outcome.is_some()
+        })
+        .min_by(|(left_digest, left), (right_digest, right)| {
+            left.spec
+                .admission_sequence
+                .cmp(&right.spec.admission_sequence)
+                .then_with(|| left_digest.cmp(right_digest))
+        })
+        .map(|(digest, _)| Some(*digest))
+        .ok_or(NineDoorBridgeError::Busy)
+}
+
+fn ensure_host_ticket_worker_available(
+    admissions: &BTreeMap<[u8; 32], HostTicketV2Admission>,
+    binding: HostTicketV2WorkerBinding<'_>,
+) -> Result<(), NineDoorBridgeError> {
+    if binding.current_control_sequence != 0 {
+        return Err(NineDoorBridgeError::Busy);
+    }
+    for admission in admissions.values() {
+        if admission_identity(&admission.spec).ok() != Some(binding.identity)
+            || admission.spec.receipt_worker_id != binding.public_id
+        {
+            continue;
+        }
+        if admission.terminal_result_digest.is_none() {
+            return Err(NineDoorBridgeError::Busy);
+        }
+    }
+    Ok(())
+}
+
+fn next_host_ticket_worker_control_sequence(
+    binding: HostTicketV2WorkerBinding<'_>,
+) -> Result<u64, NineDoorBridgeError> {
+    if binding.current_control_sequence != 0 {
+        return Err(NineDoorBridgeError::Busy);
+    }
+    binding
+        .last_control_sequence
+        .checked_add(1)
+        .ok_or(NineDoorBridgeError::Busy)
+}
+
+#[cfg(all(target_arch = "aarch64", target_os = "none", sel4_config_kernel_mcs))]
+fn host_ticket_current_line(
+    admission: &HostTicketV2Admission,
+    current: Option<&TargetWorkerNamespaceSnapshot>,
+) -> Result<HeaplessString<DEFAULT_LINE_CAPACITY>, NineDoorBridgeError> {
+    let state = match admission.terminal_outcome {
+        None => "pending",
+        Some(WorkerOutcome::Confirmed) => "confirmed",
+        Some(WorkerOutcome::Rejected) => "rejected",
+        Some(WorkerOutcome::Stale) => "stale",
+        Some(WorkerOutcome::NotApplicable) => return Err(NineDoorBridgeError::InvalidPayload),
+    };
+    let expected_identity = admission_identity(&admission.spec)?;
+    let exact = current.filter(|snapshot| {
+        snapshot.identity == Some(expected_identity)
+            && snapshot.public_id() == Some(admission.spec.receipt_worker_id.as_str())
+    });
+    let lifecycle = exact.map_or("absent", |snapshot| snapshot.lifecycle.label());
+    let (ready, control, receipt, completion) = exact.map_or((0, 0, 0, 0), |snapshot| {
+        (
+            snapshot.ready_sequence,
+            snapshot.control_sequence,
+            snapshot.receipt_sequence,
+            snapshot.completion_sequence,
+        )
+    });
+    let mut line = HeaplessString::new();
+    write!(
+        line,
+        "HOST_TICKET_CURRENT schema={} state={} role={} worker={} lifecycle={} identity={},{},{},{} sequence={},{},{},{} admission={}",
+        HOST_TICKET_CURRENT_SCHEMA,
+        state,
+        admission.spec.receipt_worker_role,
+        admission.spec.receipt_worker_id,
+        lifecycle,
+        expected_identity.slot,
+        expected_identity.lease_epoch,
+        expected_identity.supervisor_generation,
+        expected_identity.cap_generation,
+        ready,
+        control,
+        receipt,
+        completion,
+        admission.spec.admission_sequence,
+    )
+    .map_err(|_| NineDoorBridgeError::BufferFull)?;
+    Ok(line)
+}
+
 fn build_host_ticket_worker_control(
     result: &HostTicketV2Result,
     outcome: WorkerOutcome,
     admitted_time_ns: u64,
+    worker_control_sequence: u64,
 ) -> Result<WorkerControlRecord, NineDoorBridgeError> {
     let action = host_ticket_action(result.action.as_str())?;
     let identity = WorkerIdentity::new(
@@ -8670,7 +9195,7 @@ fn build_host_ticket_worker_control(
         .map_err(|_| NineDoorBridgeError::InvalidPayload)?;
     let result_digest = decode_sha256(result.result_digest.as_str())?;
     Ok(WorkerControlRecord::staged(
-        result.admission_sequence,
+        worker_control_sequence,
         identity,
         action,
         outcome,
@@ -8741,6 +9266,47 @@ fn sha256_bytes(bytes: &[u8]) -> [u8; 32] {
     let mut output = [0u8; 32];
     output.copy_from_slice(&digest);
     output
+}
+
+fn host_ticket_correlation_digest(
+    id: &str,
+    idempotency_key: &str,
+) -> Result<[u8; 32], NineDoorBridgeError> {
+    let id_len = u16::try_from(id.len()).map_err(|_| NineDoorBridgeError::InvalidPayload)?;
+    let key_len =
+        u16::try_from(idempotency_key.len()).map_err(|_| NineDoorBridgeError::InvalidPayload)?;
+    let mut hasher = Sha256::new();
+    hasher.update(b"host-ticket-correlation/v1\0");
+    hasher.update(id_len.to_be_bytes());
+    hasher.update(id.as_bytes());
+    hasher.update(key_len.to_be_bytes());
+    hasher.update(idempotency_key.as_bytes());
+    let digest = hasher.finalize();
+    let mut output = [0u8; 32];
+    output.copy_from_slice(&digest);
+    Ok(output)
+}
+
+fn parse_host_ticket_current_path(path: &str) -> Result<Option<[u8; 32]>, NineDoorBridgeError> {
+    let Some(encoded) = path.strip_prefix(HOST_TICKET_CURRENT_PREFIX) else {
+        return Ok(None);
+    };
+    if encoded.is_empty() || encoded.contains('/') {
+        return Err(NineDoorBridgeError::InvalidPath);
+    }
+    decode_sha256(encoded)
+        .map(Some)
+        .map_err(|_| NineDoorBridgeError::InvalidPath)
+}
+
+fn parse_proc_lease_by_id_path(path: &str) -> Result<Option<&str>, NineDoorBridgeError> {
+    let Some(id) = path.strip_prefix(PROC_LEASE_BY_ID_PREFIX) else {
+        return Ok(None);
+    };
+    if id.is_empty() || id.contains('/') || validate_lease_id(id).is_err() {
+        return Err(NineDoorBridgeError::InvalidPath);
+    }
+    Ok(Some(id))
 }
 
 fn decode_sha256(value: &str) -> Result<[u8; 32], NineDoorBridgeError> {
@@ -8833,6 +9399,53 @@ fn cat_lines_from_text_into(
         }
     }
     Ok(())
+}
+
+fn bounded_text_tail_into(
+    text: &str,
+    base_offset: u64,
+    cursor_offset: u64,
+    output: &mut HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
+) -> Result<TelemetryTailMeta, NineDoorBridgeError> {
+    let retained_end = base_offset
+        .checked_add(text.len() as u64)
+        .ok_or(NineDoorBridgeError::BufferFull)?;
+    let start_offset = cursor_offset.max(base_offset).min(retained_end);
+    let start = usize::try_from(start_offset.saturating_sub(base_offset))
+        .map_err(|_| NineDoorBridgeError::BufferFull)?;
+    if !text.is_char_boundary(start) {
+        return Err(NineDoorBridgeError::InvalidPayload);
+    }
+    let unread = &text[start..];
+    let mut consumed_bytes = 0usize;
+    let mut wire_lines = 0usize;
+    for segment in unread.split_inclusive('\n') {
+        let line = segment.strip_suffix('\n').unwrap_or(segment);
+        let next_lines = if line.len() <= DEFAULT_LINE_CAPACITY {
+            1
+        } else {
+            cat_chunk_count(line)?
+        };
+        if consumed_bytes.saturating_add(segment.len()) > UI_MAX_STREAM_BYTES
+            || wire_lines.saturating_add(next_lines) > MAX_STREAM_LINES
+        {
+            break;
+        }
+        consumed_bytes = consumed_bytes
+            .checked_add(segment.len())
+            .ok_or(NineDoorBridgeError::BufferFull)?;
+        wire_lines = wire_lines
+            .checked_add(next_lines)
+            .ok_or(NineDoorBridgeError::BufferFull)?;
+    }
+    if consumed_bytes == 0 && !unread.is_empty() {
+        return Err(NineDoorBridgeError::BufferFull);
+    }
+    cat_lines_from_text_into(&unread[..consumed_bytes], output)?;
+    Ok(TelemetryTailMeta {
+        start_offset,
+        consumed_bytes,
+    })
 }
 
 fn join_path(mount: &str, parts: &[&str]) -> String {
@@ -9516,6 +10129,12 @@ struct ScheduleRequest {
 }
 
 #[derive(Debug)]
+enum ScheduleCtlCommand {
+    Enqueue(ScheduleRequest),
+    Dequeue { id: String },
+}
+
+#[derive(Debug)]
 enum LeaseCtlCommand {
     Grant {
         id: String,
@@ -9526,6 +10145,14 @@ enum LeaseCtlCommand {
     },
     Renew {
         id: String,
+        ttl_s: u32,
+        priority: u32,
+    },
+    RenewBound {
+        id: String,
+        subject: String,
+        resource: String,
+        request: [u8; LEASE_REQUEST_TAG_BYTES],
         ttl_s: u32,
         priority: u32,
     },
@@ -9553,7 +10180,17 @@ enum PolicyCtlCommand {
     Rollback { id: String },
 }
 
-fn parse_schedule_ctl(payload: &str) -> Result<ScheduleRequest, NineDoorBridgeError> {
+fn parse_schedule_ctl(payload: &str) -> Result<ScheduleCtlCommand, NineDoorBridgeError> {
+    if let Some(op) = parse_json_string_field(payload, "op") {
+        if op != "dequeue" {
+            return Err(NineDoorBridgeError::InvalidPayload);
+        }
+        validate_json_keys(payload, &["op", "id"])?;
+        let id =
+            parse_json_string_field(payload, "id").ok_or(NineDoorBridgeError::InvalidPayload)?;
+        validate_schedule_id(id)?;
+        return Ok(ScheduleCtlCommand::Dequeue { id: id.to_owned() });
+    }
     validate_json_keys(payload, &["id", "role", "priority", "ticks", "budget_ms"])?;
     let id = parse_json_string_field(payload, "id").ok_or(NineDoorBridgeError::InvalidPayload)?;
     let role =
@@ -9572,13 +10209,13 @@ fn parse_schedule_ctl(payload: &str) -> Result<ScheduleRequest, NineDoorBridgeEr
     if ticks == 0 || budget_ms == 0 {
         return Err(NineDoorBridgeError::InvalidPayload);
     }
-    Ok(ScheduleRequest {
+    Ok(ScheduleCtlCommand::Enqueue(ScheduleRequest {
         id: id.to_owned(),
         role: role.to_owned(),
         priority,
         ticks,
         budget_ms,
-    })
+    }))
 }
 
 fn parse_lease_ctl(payload: &str) -> Result<LeaseCtlCommand, NineDoorBridgeError> {
@@ -9633,6 +10270,44 @@ fn parse_lease_ctl(payload: &str) -> Result<LeaseCtlCommand, NineDoorBridgeError
             }
             Ok(LeaseCtlCommand::Renew {
                 id: id.to_owned(),
+                ttl_s,
+                priority,
+            })
+        }
+        "renew-bound" => {
+            validate_json_keys(
+                payload,
+                &[
+                    "op", "id", "subject", "resource", "request", "ttl_s", "priority",
+                ],
+            )?;
+            let id = parse_json_string_field(payload, "id")
+                .ok_or(NineDoorBridgeError::InvalidPayload)?;
+            let subject = parse_json_string_field(payload, "subject")
+                .ok_or(NineDoorBridgeError::InvalidPayload)?;
+            let resource = parse_json_string_field(payload, "resource")
+                .ok_or(NineDoorBridgeError::InvalidPayload)?;
+            let request = parse_json_string_field(payload, "request")
+                .ok_or(NineDoorBridgeError::InvalidPayload)?;
+            let ttl_s = parse_json_u64_field(payload, "ttl_s")
+                .ok_or(NineDoorBridgeError::InvalidPayload)?;
+            let priority = parse_json_u64_field(payload, "priority")
+                .ok_or(NineDoorBridgeError::InvalidPayload)?;
+            validate_lease_id(id)?;
+            validate_lease_subject(subject)?;
+            validate_lease_resource(resource)?;
+            let request = decode_lease_request_tag(request)?;
+            let ttl_s = u32::try_from(ttl_s).map_err(|_| NineDoorBridgeError::InvalidPayload)?;
+            let priority =
+                u32::try_from(priority).map_err(|_| NineDoorBridgeError::InvalidPayload)?;
+            if ttl_s == 0 {
+                return Err(NineDoorBridgeError::InvalidPayload);
+            }
+            Ok(LeaseCtlCommand::RenewBound {
+                id: id.to_owned(),
+                subject: subject.to_owned(),
+                resource: resource.to_owned(),
+                request,
                 ttl_s,
                 priority,
             })
@@ -9835,6 +10510,20 @@ fn validate_lease_resource(resource: &str) -> Result<(), NineDoorBridgeError> {
 
 fn validate_lease_reason(reason: &str) -> Result<(), NineDoorBridgeError> {
     validate_extended_token(reason, MAX_LEASE_REASON_LEN)
+}
+
+fn decode_lease_request_tag(
+    value: &str,
+) -> Result<[u8; LEASE_REQUEST_TAG_BYTES], NineDoorBridgeError> {
+    if value.len() != LEASE_REQUEST_TAG_BYTES * 2
+        || !value.bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
+        return Err(NineDoorBridgeError::InvalidPayload);
+    }
+    let mut tag = [0u8; LEASE_REQUEST_TAG_BYTES];
+    hex::decode_to_slice(value.as_bytes(), &mut tag)
+        .map_err(|_| NineDoorBridgeError::InvalidPayload)?;
+    Ok(tag)
 }
 
 fn validate_policy_revision_id(id: &str) -> Result<(), NineDoorBridgeError> {
@@ -10533,6 +11222,38 @@ mod tests {
         fn denied(&mut self, _message: &str) {}
     }
 
+    #[test]
+    fn worker_runtime_state_v2_fits_the_fixed_console_line() {
+        let line = render_worker_runtime_state_v2(
+            "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "worker-heartbeat",
+            "terminal",
+            WorkerIdentity::new(
+                WorkerRole::Heartbeat,
+                u32::MAX,
+                u64::from(u32::MAX),
+                u64::from(u32::MAX),
+                u64::from(u32::MAX),
+            ),
+            [u64::from(u32::MAX); 4],
+        )
+        .expect("maximum wire values fit one line");
+
+        assert_eq!(line.len(), 243);
+        assert!(line.ends_with("\n"));
+        assert!(line.len() <= DEFAULT_LINE_CAPACITY);
+        assert!(matches!(
+            render_worker_runtime_state_v2(
+                "worker-1",
+                "worker-gpu",
+                "ready",
+                WorkerIdentity::new(WorkerRole::Gpu, 0, u64::from(u32::MAX) + 1, 1, 1,),
+                [1, 0, 0, 0],
+            ),
+            Err(NineDoorBridgeError::InvalidPayload)
+        ));
+    }
+
     fn install_test_bus_adapter(bridge: &mut NineDoorBridge, scope: &str, mount: &str) {
         bridge.sidecars.bus.adapters.push(SidecarBusAdapterState {
             mount_root: sidecar_mount_root("/bus", mount),
@@ -10598,11 +11319,35 @@ mod tests {
                 identity: WorkerIdentity::new(WorkerRole::Gpu, 0, 4, 2, 3),
                 ready: true,
                 ready_sequence: 1,
+                current_control_sequence: 0,
                 last_control_sequence: 0,
             },
             5,
         )
         .expect("admit v2 request fixture")
+    }
+
+    #[test]
+    fn host_ticket_current_path_uses_bounded_correlation_digest() {
+        let digest =
+            host_ticket_correlation_digest("ticket-v2", "idem-v2").expect("correlation digest");
+        assert_eq!(
+            hex::encode(digest),
+            "ce114e927e7cbec302f7c7a1d07be28c79b3602e8451636f1d0104a629ae39e8"
+        );
+        let path = format!("{HOST_TICKET_CURRENT_PREFIX}{}", hex::encode(digest));
+        assert_eq!(
+            parse_host_ticket_current_path(path.as_str()).expect("current path"),
+            Some(digest)
+        );
+        assert!(matches!(
+            parse_host_ticket_current_path("/host/tickets/current/not-a-digest"),
+            Err(NineDoorBridgeError::InvalidPath)
+        ));
+        assert_eq!(
+            parse_host_ticket_current_path("/host/tickets/status").expect("unrelated path"),
+            None
+        );
     }
 
     fn host_ticket_v2_result_fixture(
@@ -10695,6 +11440,7 @@ mod tests {
                 identity: WorkerIdentity::new(WorkerRole::Gpu, 0, 4, 2, 3),
                 ready: true,
                 ready_sequence: 1,
+                current_control_sequence: 0,
                 last_control_sequence: 4,
             },
             5,
@@ -10749,6 +11495,7 @@ mod tests {
                 identity: WorkerIdentity::new(WorkerRole::Gpu, 0, 4, 2, 3),
                 ready: false,
                 ready_sequence: 1,
+                current_control_sequence: 0,
                 last_control_sequence: 0,
             },
             5,
@@ -10762,11 +11509,174 @@ mod tests {
                 identity: WorkerIdentity::new(WorkerRole::Gpu, 0, 4, 99, 3),
                 ready: true,
                 ready_sequence: 1,
+                current_control_sequence: 0,
                 last_control_sequence: 0,
             },
             5,
         );
         assert!(unpinned.is_err());
+    }
+
+    #[test]
+    fn host_ticket_admissions_are_global_and_worker_controls_are_per_identity() {
+        let gpu_binding = HostTicketV2WorkerBinding {
+            public_id: "worker-gpu-1",
+            role: WorkerRole::Gpu,
+            identity: WorkerIdentity::new(WorkerRole::Gpu, 0, 4, 2, 3),
+            ready: true,
+            ready_sequence: 1,
+            current_control_sequence: 0,
+            last_control_sequence: 0,
+        };
+        let lora_binding = HostTicketV2WorkerBinding {
+            public_id: "worker-lora-1",
+            role: WorkerRole::Lora,
+            identity: WorkerIdentity::new(WorkerRole::Lora, 0, 6, 4, 2),
+            ready: true,
+            ready_sequence: 1,
+            current_control_sequence: 0,
+            last_control_sequence: 0,
+        };
+        assert_eq!(
+            next_host_ticket_admission_sequence(1).expect("first global admission"),
+            (1, 2),
+        );
+        assert_eq!(
+            next_host_ticket_admission_sequence(2).expect("second global admission"),
+            (2, 3),
+        );
+        assert_eq!(
+            next_host_ticket_worker_control_sequence(gpu_binding).expect("first GPU control"),
+            1,
+        );
+        assert_eq!(
+            next_host_ticket_worker_control_sequence(lora_binding).expect("first LoRA control"),
+            1,
+        );
+        let mut admissions = BTreeMap::new();
+        ensure_host_ticket_worker_available(&admissions, gpu_binding).expect("GPU available");
+        ensure_host_ticket_worker_available(&admissions, lora_binding).expect("LoRA available");
+
+        let host = HostState::new();
+        let raw = parse_host_ticket_v2_spec(host_ticket_v2_request_fixture().as_str(), &host)
+            .expect("strict GPU request");
+        let first =
+            admit_host_ticket_v2_spec(raw.clone(), gpu_binding, 1).expect("first global admission");
+        let first_correlation =
+            host_ticket_correlation_digest(first.id.as_str(), first.idempotency_key.as_str())
+                .expect("first correlation digest");
+        admissions.insert(
+            first_correlation,
+            HostTicketV2Admission {
+                spec: first,
+                raw_digest: [0; 32],
+                terminal_result_digest: Some([1; 32]),
+                terminal_outcome: Some(WorkerOutcome::Confirmed),
+            },
+        );
+        ensure_host_ticket_worker_available(&admissions, gpu_binding)
+            .expect("terminal GPU admission releases reservation");
+        ensure_host_ticket_worker_available(&admissions, lora_binding)
+            .expect("unrelated LoRA remains available");
+        assert_eq!(
+            next_host_ticket_worker_control_sequence(HostTicketV2WorkerBinding {
+                last_control_sequence: 1,
+                ..gpu_binding
+            })
+            .expect("second GPU control"),
+            2,
+        );
+
+        let second =
+            admit_host_ticket_v2_spec(raw, gpu_binding, 2).expect("second global admission");
+        let second_correlation =
+            host_ticket_correlation_digest(second.id.as_str(), second.idempotency_key.as_str())
+                .expect("second correlation digest");
+        admissions.insert(
+            second_correlation,
+            HostTicketV2Admission {
+                spec: second,
+                raw_digest: [2; 32],
+                terminal_result_digest: None,
+                terminal_outcome: None,
+            },
+        );
+        assert!(matches!(
+            ensure_host_ticket_worker_available(&admissions, gpu_binding),
+            Err(NineDoorBridgeError::Busy)
+        ));
+        assert!(matches!(
+            next_host_ticket_worker_control_sequence(HostTicketV2WorkerBinding {
+                current_control_sequence: 1,
+                ..gpu_binding
+            }),
+            Err(NineDoorBridgeError::Busy)
+        ));
+    }
+
+    #[test]
+    fn host_ticket_admission_window_retires_only_the_oldest_terminal_entry() {
+        let template = host_ticket_v2_admitted_fixture();
+        let digest_for = |index: usize| {
+            let mut digest = [0u8; 32];
+            digest[..8].copy_from_slice(&(index as u64).to_be_bytes());
+            digest
+        };
+        let mut admissions = BTreeMap::new();
+        for index in 0..HOST_TICKET_MAX_ADMISSIONS {
+            let mut spec = template.clone();
+            spec.id = format!("ticket-{index}");
+            spec.idempotency_key = format!("idem-{index}");
+            spec.admission_sequence = (index as u64).saturating_add(2);
+            admissions.insert(
+                digest_for(index),
+                HostTicketV2Admission {
+                    spec,
+                    raw_digest: [index as u8; 32],
+                    terminal_result_digest: Some([index as u8; 32]),
+                    terminal_outcome: Some(WorkerOutcome::Confirmed),
+                },
+            );
+        }
+
+        let oldest_terminal = digest_for(173);
+        admissions
+            .get_mut(&oldest_terminal)
+            .expect("selected terminal admission exists")
+            .spec
+            .admission_sequence = 1;
+        assert_eq!(
+            host_ticket_admission_retirement_candidate(&admissions)
+                .expect("full terminal window has a retirement candidate"),
+            Some(oldest_terminal),
+        );
+
+        let active = admissions
+            .get_mut(&oldest_terminal)
+            .expect("selected active admission exists");
+        active.terminal_result_digest = None;
+        active.terminal_outcome = None;
+        assert_eq!(
+            host_ticket_admission_retirement_candidate(&admissions)
+                .expect("active oldest entry cannot block terminal retirement"),
+            Some(digest_for(0)),
+        );
+
+        for admission in admissions.values_mut() {
+            admission.terminal_result_digest = None;
+            admission.terminal_outcome = None;
+        }
+        assert!(matches!(
+            host_ticket_admission_retirement_candidate(&admissions),
+            Err(NineDoorBridgeError::Busy)
+        ));
+
+        admissions.remove(&digest_for(0));
+        assert_eq!(
+            host_ticket_admission_retirement_candidate(&admissions)
+                .expect("an underfull window needs no retirement"),
+            None,
+        );
     }
 
     #[test]
@@ -10804,10 +11714,10 @@ mod tests {
             canonical_host_ticket_v2_result_bytes(&parsed).expect("canonical digest preimage");
         assert_eq!(canonical.len(), 423);
 
-        let control = build_host_ticket_worker_control(&parsed, WorkerOutcome::Confirmed, 123)
+        let control = build_host_ticket_worker_control(&parsed, WorkerOutcome::Confirmed, 123, 1)
             .expect("receipt control");
-        assert_eq!(control.sequence, 5);
-        assert_eq!(control.committed_sequence, 5);
+        assert_eq!(control.sequence, 1);
+        assert_eq!(control.committed_sequence, 1);
         assert_eq!(
             control.identity,
             admission_identity(&admitted).expect("identity")
@@ -10865,6 +11775,7 @@ mod tests {
             identity: admission_identity(&admitted).expect("admitted identity"),
             ready: true,
             ready_sequence: 1,
+            current_control_sequence: 0,
             last_control_sequence: 0,
         };
         assert_eq!(
@@ -10924,6 +11835,87 @@ mod tests {
             host.can_append_ticket_lines("/host/tickets/status", lines.as_slice()),
             Err(NineDoorBridgeError::BufferFull)
         ));
+    }
+
+    #[test]
+    fn host_ticket_logs_evict_complete_lines_with_explicit_retention_accounting() {
+        let mut host = HostState::new();
+        let path = "/host/tickets/status";
+        let mut expected_next = 0u64;
+        let mut expected_base = 0u64;
+        for index in 0..70 {
+            let line = format!("line-{index}");
+            let bytes = (line.len() + 1) as u64;
+            if index < 6 {
+                expected_base = expected_base.saturating_add(bytes);
+            }
+            expected_next = expected_next.saturating_add(bytes);
+            host.append_ticket_lines(path, &[line])
+                .expect("bounded ticket append");
+        }
+
+        let entry = host
+            .entries
+            .iter()
+            .find(|entry| entry.path == path)
+            .expect("status entry");
+        assert_eq!(entry.value.lines().count(), MAX_STREAM_LINES);
+        assert_eq!(entry.retained_wire_lines, MAX_STREAM_LINES);
+        assert_eq!(entry.base_offset, expected_base);
+        assert_eq!(entry.next_offset, expected_next);
+        assert_eq!(entry.dropped_lines, 6);
+        assert_eq!(entry.dropped_bytes, expected_base);
+        assert!(entry.value.starts_with("line-6\n"));
+
+        let mut retention = HeaplessVec::new();
+        host.retention_lines_into(&mut retention)
+            .expect("retention summary");
+        assert!(retention.iter().any(|line| {
+            line.contains("path=status")
+                && line.contains("retained_wire_lines=64")
+                && line.contains("dropped_lines=6")
+        }));
+
+        let mut tail = HeaplessVec::new();
+        let meta = bounded_text_tail_into(entry.value.as_str(), entry.base_offset, 0, &mut tail)
+            .expect("stale cursor resumes at retained base");
+        assert_eq!(meta.start_offset, expected_base);
+        assert_eq!(tail.first().map(|line| line.as_str()), Some("line-6"));
+    }
+
+    #[test]
+    fn host_ticket_tail_chunks_long_lines_and_advances_exact_cursor() {
+        let mut bridge = NineDoorBridge::new();
+        let line = format!(
+            "{{\"schema\":\"host-ticket/v2\",\"args\":\"{}\"}}\n",
+            "x".repeat(500)
+        );
+        assert!(bridge
+            .host
+            .update_value("/host/tickets/spec", line.as_str()));
+        let mut output = HeaplessVec::new();
+        let meta = bridge
+            .tail_stream_into("/host/tickets/spec", 0, &mut output)
+            .expect("bounded host TAIL")
+            .expect("supported host TAIL path");
+
+        assert_eq!(meta.start_offset, 0);
+        assert_eq!(meta.consumed_bytes, line.len());
+        assert!(output.len() > 1);
+        assert!(output.iter().all(|entry| {
+            entry.starts_with(CAT_CHUNK_PREFIX) && entry.len() <= DEFAULT_LINE_CAPACITY
+        }));
+
+        let meta = bridge
+            .tail_stream_into(
+                "/host/tickets/spec",
+                u64::try_from(line.len()).expect("cursor"),
+                &mut output,
+            )
+            .expect("exhausted host TAIL")
+            .expect("supported host TAIL path");
+        assert_eq!(meta.consumed_bytes, 0);
+        assert!(output.is_empty());
     }
 
     #[test]
@@ -11427,6 +12419,145 @@ mod tests {
     }
 
     #[test]
+    fn lease_preemption_control_outlives_bounded_evidence_history() {
+        let control = generated::LeaseControlConfig {
+            enable: true,
+            active_max_entries: 2,
+            preemptions_max_entries: 2,
+            ctl_max_bytes: 1024,
+        };
+        let observability = generated::ProcLeaseConfig {
+            summary: true,
+            active: true,
+            preemptions: true,
+            summary_bytes: 1024,
+            active_bytes: 1024,
+            preemptions_bytes: 1024,
+        };
+        let mut lease = LeaseState::new(control, observability);
+
+        for index in 1..=3 {
+            lease
+                .append_ctl(
+                    format!(
+                        r#"{{"op":"grant","id":"lease-{index}","subject":"worker-{index}","resource":"gpu0","ttl_s":30,"priority":7}}"#
+                    )
+                    .as_str(),
+                )
+                .expect("grant lease");
+            lease
+                .append_ctl(
+                    format!(r#"{{"op":"preempt","id":"lease-{index}","reason":"quota"}}"#).as_str(),
+                )
+                .expect("preempt lease");
+        }
+
+        assert_eq!(lease.preemptions_total, 3);
+        assert_eq!(lease.preemptions.len(), 2);
+        assert_eq!(lease.preemptions[0].id, "lease-2");
+        assert_eq!(lease.preemptions[1].id, "lease-3");
+        let summary = lease.summary_lines().expect("render lease summary");
+        assert_eq!(
+            summary[0].as_str(),
+            "active=0 preemptions=3 quotas=0 max_active=2 max_preemptions=2"
+        );
+    }
+
+    #[test]
+    fn schedule_dequeue_is_fifo_bounded_and_counted() {
+        let control = generated::ScheduleControlConfig {
+            enable: true,
+            queue_max_entries: 4,
+            ctl_max_bytes: 1024,
+        };
+        let observability = generated::ProcScheduleConfig {
+            summary: true,
+            queue: true,
+            summary_bytes: 1024,
+            queue_bytes: 1024,
+        };
+        let mut schedule = ScheduleState::new(control, observability);
+        schedule
+            .append_ctl(
+                r#"{"id":"sched-1","role":"worker-gpu","priority":2,"ticks":3,"budget_ms":120}"#,
+            )
+            .expect("enqueue first schedule request");
+        schedule
+            .append_ctl(
+                r#"{"id":"sched-2","role":"worker-lora","priority":3,"ticks":4,"budget_ms":160}"#,
+            )
+            .expect("enqueue second schedule request");
+
+        assert!(matches!(
+            schedule.append_ctl(r#"{"op":"dequeue","id":"sched-2"}"#),
+            Err(NineDoorBridgeError::InvalidPayload)
+        ));
+        schedule
+            .append_ctl(r#"{"op":"dequeue","id":"sched-1"}"#)
+            .expect("dequeue FIFO head");
+
+        let summary = schedule.summary_lines().expect("render schedule summary");
+        assert_eq!(
+            summary[0].as_str(),
+            "queue=1 dequeued=1 dropped=0 max_entries=4"
+        );
+        let queue = schedule.queue_lines().expect("render schedule queue");
+        assert_eq!(queue.len(), 1);
+        assert!(queue[0].starts_with("id=sched-2 "));
+    }
+
+    #[test]
+    fn lease_bound_renew_is_atomic_correlated_and_idempotent() {
+        let control = generated::LeaseControlConfig {
+            enable: true,
+            active_max_entries: 4,
+            preemptions_max_entries: 4,
+            ctl_max_bytes: 1024,
+        };
+        let observability = generated::ProcLeaseConfig {
+            summary: true,
+            active: true,
+            preemptions: true,
+            summary_bytes: 1024,
+            active_bytes: 1024,
+            preemptions_bytes: 1024,
+        };
+        let mut lease = LeaseState::new(control, observability);
+        lease
+            .append_ctl(
+                r#"{"op":"grant","id":"lease-1","subject":"worker-1","resource":"gpu0","ttl_s":30,"priority":7}"#,
+            )
+            .expect("grant lease");
+        let renew = r#"{"op":"renew-bound","id":"lease-1","subject":"worker-1","resource":"gpu0","request":"00112233445566778899aabbccddeeff","ttl_s":60,"priority":9}"#;
+        lease.append_ctl(renew).expect("bound renew");
+
+        let active = lease.active_lines().expect("render renewed lease");
+        assert_eq!(
+            active[0].as_str(),
+            "id=lease-1 subject=worker-1 resource=gpu0 ttl_s=60 priority=9 state=ACTIVE seq=2 request=00112233445566778899aabbccddeeff"
+        );
+
+        let next_seq = lease.next_seq;
+        let log = lease.ctl_log.clone();
+        lease.append_ctl(renew).expect("exact replay");
+        assert_eq!(lease.next_seq, next_seq);
+        assert_eq!(lease.ctl_log, log);
+
+        let changed_replay = r#"{"op":"renew-bound","id":"lease-1","subject":"worker-1","resource":"gpu0","request":"00112233445566778899aabbccddeeff","ttl_s":61,"priority":9}"#;
+        assert!(matches!(
+            lease.append_ctl(changed_replay),
+            Err(NineDoorBridgeError::InvalidPayload)
+        ));
+        let wrong_binding = r#"{"op":"renew-bound","id":"lease-1","subject":"worker-2","resource":"gpu0","request":"ffeeddccbbaa99887766554433221100","ttl_s":60,"priority":9}"#;
+        assert!(matches!(
+            lease.append_ctl(wrong_binding),
+            Err(NineDoorBridgeError::InvalidPayload)
+        ));
+        assert_eq!(lease.next_seq, next_seq);
+        assert_eq!(lease.ctl_log, log);
+    }
+
+    #[test]
     fn lease_proc_lines_preserve_newline_counted_byte_budget() {
         let control = generated::LeaseControlConfig {
             enable: true,
@@ -11468,6 +12599,67 @@ mod tests {
             .active_lines_into(&mut active)
             .expect("render budgeted active leases");
         assert!(active.is_empty());
+    }
+
+    #[test]
+    fn lease_by_id_lookup_finds_entries_beyond_aggregate_byte_bound() {
+        let control = generated::LeaseControlConfig {
+            enable: true,
+            active_max_entries: 4,
+            preemptions_max_entries: 4,
+            ctl_max_bytes: 1024,
+        };
+        let mut observability = generated::ProcLeaseConfig {
+            summary: true,
+            active: true,
+            preemptions: true,
+            summary_bytes: 1024,
+            active_bytes: 1024,
+            preemptions_bytes: 1024,
+        };
+        let mut sizing = LeaseState::new(control, observability);
+        sizing
+            .append_ctl(
+                r#"{"op":"grant","id":"lease-1","subject":"worker-1","resource":"gpu0","ttl_s":30,"priority":7}"#,
+            )
+            .expect("grant sizing lease");
+        let sizing_lines = sizing.active_lines().expect("render sizing lease");
+        observability.active_bytes = (sizing_lines[0].len() + 1) as u32;
+
+        let mut lease = LeaseState::new(control, observability);
+        for index in 1..=3 {
+            lease
+                .append_ctl(
+                    format!(
+                        r#"{{"op":"grant","id":"lease-{index}","subject":"worker-{index}","resource":"gpu0","ttl_s":30,"priority":7}}"#
+                    )
+                    .as_str(),
+                )
+                .expect("grant lease");
+        }
+
+        let active = lease.active_lines().expect("render bounded aggregate");
+        assert_eq!(active.len(), 1);
+        assert!(active[0].starts_with("id=lease-1 "));
+
+        let mut exact: HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES> =
+            HeaplessVec::new();
+        lease
+            .active_line_into("lease-3", &mut exact)
+            .expect("render exact lease");
+        assert_eq!(exact.len(), 1);
+        assert!(exact[0].starts_with("id=lease-3 subject=worker-3 "));
+
+        lease
+            .active_line_into("lease-missing", &mut exact)
+            .expect("render absent exact lease");
+        assert!(exact.is_empty());
+        assert_eq!(
+            parse_proc_lease_by_id_path("/proc/lease/by-id/lease-3")
+                .expect("parse exact lease path"),
+            Some("lease-3")
+        );
+        assert!(parse_proc_lease_by_id_path("/proc/lease/by-id/lease-3/extra").is_err());
     }
 
     #[test]
@@ -11525,6 +12717,25 @@ mod tests {
             Some(BOOT_HEADER),
             "boot output should begin with header"
         );
+    }
+
+    #[cfg(feature = "release-qemu")]
+    #[test]
+    fn qemu_schedule_flight_recorder_is_bounded_and_discoverable() {
+        let mut bridge = NineDoorBridge::new();
+        let entries = bridge
+            .list(PROC_SCHEDULE_ROOT_PATH)
+            .expect("QEMU schedule directory");
+        assert!(entries.iter().any(|entry| entry == "qemu-flight"));
+
+        let lines = bridge
+            .cat(PROC_SCHEDULE_QEMU_FLIGHT_PATH)
+            .expect("QEMU flight recorder snapshot");
+        assert!(lines.len() >= 3);
+        assert!(lines.len() <= MAX_STREAM_LINES);
+        assert!(lines[0].starts_with("QEMU_FLIGHT_SUMMARY schema=v1"));
+        assert!(lines[1].starts_with("QEMU_FLIGHT_TIMING schema=v1"));
+        assert!(lines[2].starts_with("QEMU_FLIGHT_EXITS schema=v1"));
     }
 
     #[test]

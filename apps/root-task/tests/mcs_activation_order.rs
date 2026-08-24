@@ -464,10 +464,10 @@ fn root_control_containment_serializes_before_the_ordinary_pump_turn() {
         .map(|offset| handoff_guard + offset)
         .expect("deferred console-network handoff must own recovery_turn");
     let pump_guard = root_loop
-        .find("if !recovery_turn {")
+        .find("let explicit_yield_required = if recovery_turn {")
         .expect("ordinary pump must be guarded by both containment results");
     let pump = root_loop
-        .find("pump.poll_root_control_quantum();")
+        .find("pump.poll_root_control_quantum()")
         .expect("bounded root-control quantum must remain present");
     let outer_yield = root_loop
         .find("sel4::yield_now();")
@@ -501,7 +501,7 @@ fn root_control_containment_serializes_before_the_ordinary_pump_turn() {
     );
     assert_eq!(
         root_loop
-            .matches("pump.poll_root_control_quantum();")
+            .matches("pump.poll_root_control_quantum()")
             .count(),
         1,
     );
@@ -536,7 +536,7 @@ fn root_control_containment_serializes_before_the_ordinary_pump_turn() {
     );
     assert!(
         root_loop.contains(
-            "if !recovery_turn {\n            pump.poll_root_control_quantum();\n        }"
+            "let explicit_yield_required = if recovery_turn {\n            true\n        } else {\n            pump.poll_root_control_quantum()\n        };"
         ),
         "either containment result must exclude the ordinary pump from that turn",
     );

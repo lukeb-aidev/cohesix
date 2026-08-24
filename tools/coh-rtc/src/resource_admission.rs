@@ -78,6 +78,54 @@ impl KernelObjectBits {
         }
         Ok(())
     }
+
+    /// Compute the smallest generation-revocable untyped arena that can hold
+    /// the exact target Worker object construction order. Capability copies,
+    /// ASID assignments, and fault badges consume CSpace authority but no
+    /// bytes below the child untyped anchor.
+    pub(crate) fn minimum_worker_anchor_bytes(
+        &self,
+        bundle: KernelObjectBudget,
+        child_cnode_radix_bits: u8,
+        scheduling_context_bits: u8,
+    ) -> Result<u64> {
+        fn append_objects(cursor: &mut u64, count: u32, bits: u8) -> Result<()> {
+            let object_bytes = 1u64
+                .checked_shl(u32::from(bits))
+                .ok_or_else(|| anyhow::anyhow!("Worker object size overflows"))?;
+            let mask = object_bytes - 1;
+            *cursor = cursor
+                .checked_add(mask)
+                .map(|value| value & !mask)
+                .and_then(|value| value.checked_add(object_bytes.checked_mul(u64::from(count))?))
+                .ok_or_else(|| anyhow::anyhow!("Worker anchor packing overflows"))?;
+            Ok(())
+        }
+
+        let cnode_bits = self
+            .cnode_slot
+            .checked_add(child_cnode_radix_bits)
+            .ok_or_else(|| anyhow::anyhow!("Worker CNode object size overflows"))?;
+        if scheduling_context_bits < self.sched_context_min {
+            bail!("Worker scheduling-context bits are below the selected kernel minimum");
+        }
+        let mut bytes = 0u64;
+        // Keep this sequence synchronized with TargetWorkerBackend::construct_objects.
+        append_objects(&mut bytes, bundle.tcbs, self.tcb)?;
+        append_objects(&mut bytes, bundle.cnodes, cnode_bits)?;
+        append_objects(&mut bytes, bundle.vspaces, self.vspace)?;
+        append_objects(
+            &mut bytes,
+            bundle.scheduling_contexts,
+            scheduling_context_bits,
+        )?;
+        append_objects(&mut bytes, bundle.notifications, self.notification)?;
+        append_objects(&mut bytes, bundle.frames, self.page)?;
+        append_objects(&mut bytes, bundle.page_tables, self.page_table)?;
+        bytes
+            .checked_next_power_of_two()
+            .ok_or_else(|| anyhow::anyhow!("Worker anchor power-of-two bound overflows"))
+    }
 }
 
 /// Count and memory total for one kernel-object resource set.
@@ -395,6 +443,47 @@ impl WorkerResourceAdmissionConfig {
         self.validate_with_bootstrap_scheduling_contexts(temporal, 0)
     }
 
+    /// Validate that every declared Worker anchor can contain the exact
+    /// selected-kernel object pack used by the target runtime.
+    pub(crate) fn validate_worker_anchor_layout(
+        &self,
+        temporal: &TemporalAuthorityConfig,
+        child_cnode_radix_bits: u8,
+    ) -> Result<()> {
+        if !self.enabled {
+            return Ok(());
+        }
+        for role in &self.executable_roles {
+            let tasks: Vec<_> = temporal
+                .tasks
+                .iter()
+                .filter(|task| task.id.starts_with(&role.task_prefix))
+                .collect();
+            if tasks.len() != usize::from(role.executable_slots) {
+                bail!(
+                    "executable role {} cannot derive its Worker anchor layout",
+                    role.role
+                );
+            }
+            for task in tasks {
+                let required = self.object_bits.minimum_worker_anchor_bytes(
+                    role.per_slot,
+                    child_cnode_radix_bits,
+                    task.scheduling_context_bits,
+                )?;
+                if role.per_slot.untyped_bytes < required {
+                    bail!(
+                        "executable role {} Worker anchor is too small: declared={} required={}",
+                        role.role,
+                        role.per_slot.untyped_bytes,
+                        required
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Validate resources plus compiler-declared fixed bootstrap SCs that are
     /// intentionally absent from the steady temporal-task topology.
     pub(crate) fn validate_with_bootstrap_scheduling_contexts(
@@ -478,15 +567,21 @@ impl WorkerResourceAdmissionConfig {
                     role.role
                 );
             }
-            if role.revoke_anchor_slot == 0
-                || role.revoke_anchor_slot >= self.capacity.cspace_slots
-                || critical_anchors.contains(&role.revoke_anchor_slot)
-                || !worker_anchors.insert(role.revoke_anchor_slot)
-            {
-                bail!(
-                    "executable role {} has a zero, out-of-range, duplicate, or critical revoke-anchor slot",
-                    role.role
-                );
+            for role_slot in 0..u32::from(role.executable_slots) {
+                let anchor = role
+                    .revoke_anchor_slot
+                    .checked_add(role_slot)
+                    .ok_or_else(|| anyhow::anyhow!("Worker revoke-anchor range overflows"))?;
+                if anchor == 0
+                    || anchor >= self.capacity.cspace_slots
+                    || critical_anchors.contains(&anchor)
+                    || !worker_anchors.insert(anchor)
+                {
+                    bail!(
+                        "executable role {} has a zero, out-of-range, overlapping, or critical revoke-anchor slot/range",
+                        role.role
+                    );
+                }
             }
             if roles.insert(role.role.as_str(), role).is_some() {
                 bail!("duplicate executable role admission {}", role.role);
@@ -527,10 +622,15 @@ impl WorkerResourceAdmissionConfig {
                 && (role.per_slot.tcbs != 1
                     || role.per_slot.cnodes != 1
                     || role.per_slot.vspaces != 1
+                    || role.per_slot.page_tables != 8
                     || role.per_slot.asids != 1
+                    || role.per_slot.frames != 16
+                    || role.per_slot.endpoints != 0
+                    || role.per_slot.notifications != 1
                     || role.per_slot.scheduling_contexts != 1
                     || role.per_slot.fault_caps != 1
                     || role.per_slot.timeout_fault_caps != 1
+                    || role.per_slot.reply_objects != 0
                     || role.per_slot.cspace_slots == 0
                     || role.per_slot.untyped_bytes == 0
                     || !role.per_slot.untyped_bytes.is_power_of_two())
@@ -1104,6 +1204,25 @@ mod tests {
         }
     }
 
+    fn worker_budget() -> KernelObjectBudget {
+        KernelObjectBudget {
+            tcbs: 1,
+            cnodes: 1,
+            vspaces: 1,
+            page_tables: 8,
+            asids: 1,
+            frames: 16,
+            endpoints: 0,
+            notifications: 1,
+            fault_caps: 1,
+            timeout_fault_caps: 1,
+            reply_objects: 0,
+            scheduling_contexts: 1,
+            cspace_slots: 64,
+            untyped_bytes: 128 * 1024,
+        }
+    }
+
     fn admission() -> WorkerResourceAdmissionConfig {
         let temporal = temporal();
         let mut fixed_objects = budget(7);
@@ -1132,7 +1251,7 @@ mod tests {
                 executable_slots: 1,
                 core: 3,
                 revoke_anchor_slot: 16,
-                per_slot: budget(1),
+                per_slot: worker_budget(),
             }],
             allowed_role_mixes: vec![ExecutableRoleMix {
                 id: "maximum".to_owned(),
@@ -1426,5 +1545,25 @@ mod tests {
             .validate(&temporal())
             .expect_err("classic notification size cannot describe MCS");
         assert!(error.to_string().contains("selected-kernel object sizes"));
+    }
+
+    #[test]
+    fn worker_anchor_minimum_matches_exact_target_object_pack() {
+        let config = admission();
+        let required = config
+            .object_bits
+            .minimum_worker_anchor_bytes(worker_budget(), 6, 8)
+            .expect("exact Worker object pack");
+        assert_eq!(required, 128 * 1024);
+        config
+            .validate_worker_anchor_layout(&temporal(), 6)
+            .expect("128 KiB Worker anchor");
+
+        let mut undersized = config;
+        undersized.executable_roles[0].per_slot.untyped_bytes = 64 * 1024;
+        let error = undersized
+            .validate_worker_anchor_layout(&temporal(), 6)
+            .expect_err("64 KiB cannot contain the exact Worker object pack");
+        assert!(error.to_string().contains("Worker anchor is too small"));
     }
 }

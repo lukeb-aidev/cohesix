@@ -72,13 +72,14 @@ def test_runtime_and_compiler_contract_remain_no_std_and_path_identical() -> Non
     assert 'entry_symbol = "_start"' in compiler_manifest
 
 
-def test_abi_v3_batch_keeps_one_page_and_exact_eight_line_bound() -> None:
-    """SendBatch is binary within the existing exchange payload and cap set."""
+def test_abi_v4_batches_keep_one_page_and_exact_eight_record_bounds() -> None:
+    """Response and command batches remain binary, bounded, and cap-neutral."""
 
     source = ABI_LIB.read_text(encoding="utf-8")
 
-    assert "pub const ABI_VERSION: u16 = 3;" in source
+    assert "pub const ABI_VERSION: u16 = 4;" in source
     assert "SendBatch = 3," in source
+    assert "CommandBatch = 27," in source
     assert "pub const SHARED_PAGE_BYTES: usize = 4096;" in source
     assert "pub const CONSOLE_PAYLOAD_BYTES: usize = 2368;" in source
     assert "pub const SEND_BATCH_MAX_RECORDS: usize = 8;" in source
@@ -86,6 +87,10 @@ def test_abi_v3_batch_keeps_one_page_and_exact_eight_line_bound() -> None:
     assert "pub struct SendBatchBuilder" in source
     assert "pub struct SendBatchCursor" in source
     assert "SendBatchCursor::validate(payload)" in source
+    assert "pub const COMMAND_BATCH_MAX_RECORDS: usize = 8;" in source
+    assert "pub struct CommandBatchBuilder" in source
+    assert "pub struct CommandBatchCursor" in source
+    assert "CommandBatchCursor::validate(payload)" in source
 
 
 def test_runtime_qemu_fault_hooks_are_diagnostic_and_control_path_bound() -> None:
@@ -339,7 +344,10 @@ def test_runtime_shared_pages_use_bounded_sequence_last_io() -> None:
     assert "PacketPageHeader" in source
     assert "ExchangePageHeader" in source
     assert "copy_nonoverlapping" in source
-    assert source.count("unsafe {") == 12
+    assert "fn publish_completion_watermark(" in source
+    assert "INGRESS_CONSUMED_SEQUENCE_OFFSET" in source
+    assert "CONTROL_CONSUMED_SEQUENCE_OFFSET" in source
+    assert source.count("unsafe {") == 13
 
 
 def test_control_bytes_are_kind_validated_and_drain_tracks_exact_output() -> None:
@@ -364,12 +372,24 @@ def test_control_bytes_are_kind_validated_and_drain_tracks_exact_output() -> Non
         "pending_output_control = Some((sequence, connection_id));"
     )
     completion = apply_control.index(
-        "push_back((ExchangeKind::ControlCompleted, sequence, 0))"
+        "publish_completion_watermark(event, None, Some(sequence));"
     )
-    assert read < apply < payload_bytes < applied < output_kind < pending < completion
-    assert apply_control.count(
-        "push_back((ExchangeKind::ControlCompleted, sequence, 0))"
-    ) == 1
+    completion_signal = apply_control.index(
+        "signal_slot(descriptor.supervisor_wake_notification_slot);",
+        completion,
+    )
+    assert (
+        read
+        < apply
+        < payload_bytes
+        < applied
+        < output_kind
+        < pending
+        < completion
+        < completion_signal
+    )
+    assert apply_control.count("publish_completion_watermark(") == 1
+    assert "ExchangeKind::ControlCompleted" not in apply_control
     assert "core::str::from_utf8(payload.as_slice())" not in apply_control
     assert "Err(_) => enter_standard_fault()" in apply_control
 

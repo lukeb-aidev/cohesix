@@ -71,20 +71,38 @@ fn add_budget(
 }
 
 #[test]
-fn maximum_role_mix_reserves_exactly_three_executable_bundles() {
+fn maximum_role_mix_reserves_exact_generated_worker_population() {
     let admission = generated::worker_resource_admission_config();
     assert!(admission.enabled);
     assert_eq!(admission.executable_roles.len(), 3);
-    assert!(admission
-        .executable_roles
-        .iter()
-        .all(|role| role.namespace_capacity == 8 && role.executable_slots == 1));
+    let expected_roles = [
+        ("worker-heartbeat", 64, 1),
+        ("worker-gpu", 64, 15),
+        ("worker-lora", 64, 21),
+    ];
+    for (role, namespace_capacity, executable_slots) in expected_roles {
+        let generated = admission
+            .executable_roles
+            .iter()
+            .find(|generated| generated.role == role)
+            .expect("generated executable role");
+        assert_eq!(generated.namespace_capacity, namespace_capacity);
+        assert_eq!(generated.executable_slots, executable_slots);
+    }
     let maximum = admission
         .allowed_role_mixes
         .iter()
         .find(|role_mix| role_mix.maximum)
         .expect("one compiler-selected maximum role mix");
-    assert_eq!(maximum.roles.len(), WORKER_RESOURCE_POOL_CAPACITY);
+    assert_eq!(maximum.roles.len(), expected_roles.len());
+    assert_eq!(
+        maximum
+            .roles
+            .iter()
+            .map(|role| usize::from(role.count))
+            .sum::<usize>(),
+        37
+    );
 
     let mut admitted = admission.fixed_objects;
     for mix_role in maximum.roles {
@@ -93,8 +111,10 @@ fn maximum_role_mix_reserves_exactly_three_executable_bundles() {
             .iter()
             .find(|role| role.role == mix_role.role)
             .expect("maximum mix role");
-        assert_eq!(mix_role.count, 1);
-        admitted = add_budget(admitted, role.per_slot);
+        assert_eq!(mix_role.count, role.executable_slots);
+        for _ in 0..mix_role.count {
+            admitted = add_budget(admitted, role.per_slot);
+        }
     }
     let total = add_budget(admitted, admission.post_construction_reserve);
     assert_eq!(
@@ -106,34 +126,42 @@ fn maximum_role_mix_reserves_exactly_three_executable_bundles() {
             total.fault_caps,
             total.timeout_fault_caps,
         ),
-        (18, 18, 18, 18, 18, 18)
+        (52, 52, 52, 52, 52, 52)
     );
-    assert_eq!(total.page_tables, 344);
-    assert_eq!(total.frames, 2_578);
+    assert_eq!(total.page_tables, 616);
+    assert_eq!(total.frames, 3_122);
     assert_eq!(total.endpoints, 31);
-    assert_eq!(total.notifications, 35);
+    assert_eq!(total.notifications, 69);
     assert_eq!(total.reply_objects, 14);
-    assert_eq!(total.scheduling_contexts, 18);
-    assert_eq!(total.cspace_slots, 6_298);
-    assert_eq!(total.untyped_bytes, 103_809_024);
+    assert_eq!(total.scheduling_contexts, 52);
+    assert_eq!(total.cspace_slots, 8_474);
+    assert_eq!(total.untyped_bytes, 105_512_960);
     assert!(total.tcbs <= admission.capacity.tcbs);
     assert!(total.page_tables <= admission.capacity.page_tables);
     assert!(total.frames <= admission.capacity.frames);
     assert!(total.cspace_slots <= admission.capacity.cspace_slots);
     assert!(total.untyped_bytes <= admission.capacity.untyped_bytes);
-    assert_eq!(admission.fault_registry.capacity, 10);
+    assert_eq!(admission.fault_registry.capacity, 44);
     assert_eq!(admission.fault_registry.driver_tcbs, 0);
 
     let mut pool =
         SupervisorResourcePool::<WORKER_RESOURCE_POOL_CAPACITY>::from_generated().expect("pool");
-    for (index, role) in admission.executable_roles.iter().enumerate() {
-        pool.reserve(role.role, identity(0, index as u32 + 1), 0x4000 + index)
+    let mut generation = 0u32;
+    for role in admission.executable_roles {
+        for slot in 0..role.executable_slots {
+            generation += 1;
+            pool.reserve(
+                role.role,
+                identity(slot, generation),
+                0x4000 + generation as usize,
+            )
             .expect("complete executable bundle");
+        }
     }
-    assert_eq!(pool.len(), WORKER_RESOURCE_POOL_CAPACITY);
+    assert_eq!(pool.len(), 37);
     assert_eq!(
-        pool.reserve("worker-heartbeat", identity(0, 99), 0x5000),
-        Err(ResourcePoolError::PoolFull)
+        pool.reserve("worker-heartbeat", identity(1, 99), 0x5000),
+        Err(ResourcePoolError::InvalidIdentity)
     );
 }
 

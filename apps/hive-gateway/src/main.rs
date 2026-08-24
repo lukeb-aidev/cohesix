@@ -37,17 +37,18 @@ use cohesix_worker_evidence::{
 };
 use cohsh::policy::PolicyOverrides;
 use cohsh::{
-    CohshPolicy, PoolKind, Session, SessionPool, TransportFactory, CLIENT_LOG_PATH,
-    CLIENT_POLICY_CTL_PATH, CLIENT_QUEEN_CTL_PATH, CLIENT_QUEEN_EXPORT_CTL_PATH,
-    CLIENT_QUEEN_LEASE_CTL_PATH, CLIENT_QUEEN_LIFECYCLE_CTL_PATH, CLIENT_QUEEN_SCHEDULE_CTL_PATH,
-    CONTROL_EXPORT_CTL_MAX_BYTES, CONTROL_EXPORT_ENABLED, CONTROL_LEASE_ACTIVE_MAX_ENTRIES,
-    CONTROL_LEASE_CTL_MAX_BYTES, CONTROL_LEASE_ENABLED, CONTROL_LEASE_PREEMPTIONS_MAX_ENTRIES,
-    CONTROL_SCHEDULE_CTL_MAX_BYTES, CONTROL_SCHEDULE_ENABLED, CONTROL_SCHEDULE_QUEUE_MAX_ENTRIES,
-    POLICY_CTL_MAX_BYTES, POLICY_ENABLED, POLICY_QUEUE_MAX_BYTES, POLICY_QUEUE_MAX_ENTRIES,
-    PROC_LEASE_ACTIVE_BYTES, PROC_LEASE_ACTIVE_ENABLED, PROC_LEASE_PREEMPTIONS_BYTES,
-    PROC_LEASE_PREEMPTIONS_ENABLED, PROC_LEASE_SUMMARY_BYTES, PROC_LEASE_SUMMARY_ENABLED,
-    PROC_SCHEDULE_QUEUE_BYTES, PROC_SCHEDULE_QUEUE_ENABLED, PROC_SCHEDULE_SUMMARY_BYTES,
-    PROC_SCHEDULE_SUMMARY_ENABLED, SECURE9P_MSIZE, SECURE9P_WALK_DEPTH,
+    CohshPolicy, PoolKind, ReadBatchRequest, Session, SessionPool, TransportBatchRequest,
+    TransportBatchResponse, TransportFactory, CLIENT_LOG_PATH, CLIENT_POLICY_CTL_PATH,
+    CLIENT_QUEEN_CTL_PATH, CLIENT_QUEEN_EXPORT_CTL_PATH, CLIENT_QUEEN_LEASE_CTL_PATH,
+    CLIENT_QUEEN_LIFECYCLE_CTL_PATH, CLIENT_QUEEN_SCHEDULE_CTL_PATH, CONTROL_EXPORT_CTL_MAX_BYTES,
+    CONTROL_EXPORT_ENABLED, CONTROL_LEASE_ACTIVE_MAX_ENTRIES, CONTROL_LEASE_CTL_MAX_BYTES,
+    CONTROL_LEASE_ENABLED, CONTROL_LEASE_PREEMPTIONS_MAX_ENTRIES, CONTROL_SCHEDULE_CTL_MAX_BYTES,
+    CONTROL_SCHEDULE_ENABLED, CONTROL_SCHEDULE_QUEUE_MAX_ENTRIES, POLICY_CTL_MAX_BYTES,
+    POLICY_ENABLED, POLICY_QUEUE_MAX_BYTES, POLICY_QUEUE_MAX_ENTRIES, PROC_LEASE_ACTIVE_BYTES,
+    PROC_LEASE_ACTIVE_ENABLED, PROC_LEASE_PREEMPTIONS_BYTES, PROC_LEASE_PREEMPTIONS_ENABLED,
+    PROC_LEASE_SUMMARY_BYTES, PROC_LEASE_SUMMARY_ENABLED, PROC_SCHEDULE_QUEUE_BYTES,
+    PROC_SCHEDULE_QUEUE_ENABLED, PROC_SCHEDULE_SUMMARY_BYTES, PROC_SCHEDULE_SUMMARY_ENABLED,
+    SECURE9P_MSIZE, SECURE9P_WALK_DEPTH, TRANSPORT_COMMAND_BATCH_MAX, TRANSPORT_READ_BATCH_MAX,
 };
 use cohsh::{NineDoorTransport, PooledTcpTransport, TcpTransport};
 use cohsh_core::{
@@ -67,11 +68,18 @@ const PROC_SCHEDULE_SUMMARY_PATH: &str = "/proc/schedule/summary";
 const PROC_SCHEDULE_QUEUE_PATH: &str = "/proc/schedule/queue";
 const PROC_LEASE_SUMMARY_PATH: &str = "/proc/lease/summary";
 const PROC_LEASE_ACTIVE_PATH: &str = "/proc/lease/active";
+const PROC_LEASE_BY_ID_PATH: &str = "/proc/lease/by-id";
+const PROC_LEASE_BY_ID_PREFIX: &str = "/proc/lease/by-id/";
 const PROC_LEASE_PREEMPTIONS_PATH: &str = "/proc/lease/preemptions";
+const HOST_TICKET_CURRENT_PREFIX: &str = "/host/tickets/current/";
 const REQUEST_AUTH_HEADER: &str = "x-cohesix-auth";
 const AUTHORIZATION_BEARER_PREFIX: &str = "bearer ";
 const INSECURE_PLACEHOLDER_TOKEN: &str = concat!("change", "me");
 const DEFAULT_PROC_CACHE_TTL_MS: u64 = 2_000;
+// Exact Worker receipt state changes inside the guest after the host status
+// write returns. Retain short coalescing, but never impose the ordinary
+// provider-cache lifetime on that live completion projection.
+const HOST_TICKET_CURRENT_CACHE_TTL_MS: u64 = 250;
 const DEFAULT_PROC_CACHE_MAX_ENTRIES: usize = 64;
 const BROKER_QUEUE_WAIT_LIMIT_MS: u64 = HIVE_GATEWAY_BROKER_QUEUE_WAIT_LIMIT_MS;
 const DEFAULT_BROKER_CONTROL_RESPONSE_TIMEOUT_MS: u64 =
@@ -82,7 +90,11 @@ const BROKER_ENQUEUE_RETRY_SLEEP_MS: u64 = 5;
 const BROKER_CONTROL_QUEUE_CAPACITY: usize = 256;
 const BROKER_TELEMETRY_QUEUE_CAPACITY: usize = 1024;
 const BROKER_CONTROL_BURST: usize = 6;
+// Writes carry acknowledgements and therefore retain a smaller turn quantum
+// than idempotent reads to bound ordered-lane head-of-line latency.
 const TELEMETRY_WRITE_BATCH_MAX: usize = 4;
+const BROKER_COMMAND_BATCH_MAX: usize = TRANSPORT_COMMAND_BATCH_MAX;
+const BROKER_READ_BATCH_MAX: usize = TRANSPORT_READ_BATCH_MAX;
 const BROKER_IDLE_WAIT_MS: u64 = 20;
 const DEFAULT_CONTROL_WRITE_RETRY_WINDOW_MS: u64 = 1_200;
 const MAX_WORKER_ACCEPTANCE_EVIDENCE_BYTES: u64 = 256 * 1024;
@@ -93,15 +105,35 @@ const CONTROL_WRITE_BACKPRESSURE_COOLDOWN_MS: u64 = 250;
 const CACHE_INVALIDATE_CONTROL_NAMESPACES: &[&str] =
     &["/proc", "/queen", "/shard", "/worker", "/gpu"];
 const CACHE_INVALIDATE_HOST_NAMESPACES: &[&str] = &["/host"];
+const CACHE_INVALIDATE_HOST_TICKET_SPEC_PATHS: &[&str] = &[
+    "/host/tickets/spec",
+    "/host/tickets/spec.snapshot",
+    "/host/tickets/retention",
+];
+const CACHE_INVALIDATE_HOST_TICKET_STATUS_PATHS: &[&str] = &[
+    "/host/tickets/status",
+    "/host/tickets/status.snapshot",
+    "/host/tickets/retention",
+];
+const CACHE_INVALIDATE_HOST_TICKET_DEADLETTER_PATHS: &[&str] = &[
+    "/host/tickets/deadletter",
+    "/host/tickets/deadletter.snapshot",
+    "/host/tickets/retention",
+];
 const CACHE_INVALIDATE_GPU_NAMESPACES: &[&str] = &["/gpu"];
 const CACHE_INVALIDATE_SCHEDULE_NAMESPACES: &[&str] = &["/proc/schedule"];
 const CACHE_INVALIDATE_LEASE_NAMESPACES: &[&str] = &["/proc/lease"];
-const CACHE_INVALIDATE_LEASE_GRANT_PATHS: &[&str] =
-    &[PROC_LEASE_SUMMARY_PATH, PROC_LEASE_ACTIVE_PATH];
-const CACHE_INVALIDATE_LEASE_RENEW_PATHS: &[&str] = &[PROC_LEASE_ACTIVE_PATH];
+const CACHE_INVALIDATE_LEASE_GRANT_PATHS: &[&str] = &[
+    PROC_LEASE_SUMMARY_PATH,
+    PROC_LEASE_ACTIVE_PATH,
+    PROC_LEASE_BY_ID_PATH,
+];
+const CACHE_INVALIDATE_LEASE_RENEW_PATHS: &[&str] =
+    &[PROC_LEASE_ACTIVE_PATH, PROC_LEASE_BY_ID_PATH];
 const CACHE_INVALIDATE_LEASE_PREEMPT_PATHS: &[&str] = &[
     PROC_LEASE_SUMMARY_PATH,
     PROC_LEASE_ACTIVE_PATH,
+    PROC_LEASE_BY_ID_PATH,
     PROC_LEASE_PREEMPTIONS_PATH,
 ];
 const CACHE_INVALIDATE_LEASE_QUOTA_PATHS: &[&str] = &[PROC_LEASE_SUMMARY_PATH];
@@ -217,7 +249,7 @@ struct GatewayInner {
     control_write_retry_window_ms: u64,
     bounds: BoundsResponse,
     backend_class: BackendClass,
-    worker_acceptance: WorkerAcceptanceImport,
+    worker_acceptance: Mutex<WorkerAcceptanceState>,
     policy: CohshPolicy,
     broker: Arc<BrokerMetrics>,
     proc_cache: Mutex<ProcReadCache>,
@@ -389,6 +421,20 @@ struct WorkerAcceptanceDiagnostic {
 struct WorkerAcceptanceImport {
     summary: Option<WorkerAcceptanceSummary>,
     diagnostic: Option<WorkerAcceptanceDiagnostic>,
+}
+
+#[derive(Debug, Clone)]
+struct WorkerAcceptanceSource {
+    root: PathBuf,
+    evidence: PathBuf,
+    target_session: PathBuf,
+    expected_manifest_sha256: String,
+}
+
+#[derive(Debug)]
+struct WorkerAcceptanceState {
+    imported: WorkerAcceptanceImport,
+    pending_source: Option<WorkerAcceptanceSource>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -759,9 +805,17 @@ struct ProcReadCacheEntry {
     lines: SharedLines,
 }
 
+fn read_cache_ttl_ms(path: &str) -> u64 {
+    if path.starts_with(HOST_TICKET_CURRENT_PREFIX) {
+        HOST_TICKET_CURRENT_CACHE_TTL_MS
+    } else {
+        DEFAULT_PROC_CACHE_TTL_MS
+    }
+}
+
 fn read_cache_valid_entry(cache: &mut ProcReadCache, path: &str) -> Option<SharedLines> {
     let expired = cache.entries.get(path)?.inserted_at.elapsed()
-        > Duration::from_millis(DEFAULT_PROC_CACHE_TTL_MS);
+        > Duration::from_millis(read_cache_ttl_ms(path));
     if expired {
         cache.entries.remove(path);
         cache.order.retain(|value| value != path);
@@ -843,9 +897,132 @@ enum BrokerResponse {
 }
 
 struct TelemetryWriteBatch {
-    path: String,
-    payloads: Vec<Vec<u8>>,
+    requests: Vec<TransportBatchRequest>,
     response_txs: Vec<mpsc::Sender<Result<BrokerResponse>>>,
+}
+
+struct BrokerReadBatch {
+    kind: PoolKind,
+    requests: Vec<ReadBatchRequest>,
+    response_txs: Vec<mpsc::Sender<Result<BrokerResponse>>>,
+}
+
+struct BrokerCommandBatch {
+    kind: PoolKind,
+    requests: Vec<TransportBatchRequest>,
+    response_txs: Vec<mpsc::Sender<Result<BrokerResponse>>>,
+}
+
+impl BrokerCommandBatch {
+    fn from_command(
+        kind: PoolKind,
+        command: BrokerCommand,
+    ) -> std::result::Result<Self, BrokerCommand> {
+        if command.kind != kind {
+            return Err(command);
+        }
+        let response_tx = command.response_tx;
+        let request = match command.request {
+            BrokerRequest::Read { path } => TransportBatchRequest::Read { path },
+            BrokerRequest::List { path } => TransportBatchRequest::List { path },
+            BrokerRequest::Write { path, payload } => {
+                TransportBatchRequest::Write { path, payload }
+            }
+            request => {
+                return Err(BrokerCommand {
+                    kind: command.kind,
+                    request,
+                    response_tx,
+                });
+            }
+        };
+        Ok(Self {
+            kind,
+            requests: vec![request],
+            response_txs: vec![response_tx],
+        })
+    }
+
+    fn len(&self) -> usize {
+        self.requests.len()
+    }
+
+    fn try_push(&mut self, command: BrokerCommand) -> std::result::Result<(), BrokerCommand> {
+        if self.len() >= BROKER_COMMAND_BATCH_MAX || command.kind != self.kind {
+            return Err(command);
+        }
+        let response_tx = command.response_tx;
+        let request = match command.request {
+            BrokerRequest::Read { path } => TransportBatchRequest::Read { path },
+            BrokerRequest::List { path } => TransportBatchRequest::List { path },
+            BrokerRequest::Write { path, payload } => {
+                TransportBatchRequest::Write { path, payload }
+            }
+            request => {
+                return Err(BrokerCommand {
+                    kind: command.kind,
+                    request,
+                    response_tx,
+                });
+            }
+        };
+        self.requests.push(request);
+        self.response_txs.push(response_tx);
+        Ok(())
+    }
+}
+
+impl BrokerReadBatch {
+    fn from_command(
+        kind: PoolKind,
+        command: BrokerCommand,
+    ) -> std::result::Result<Self, BrokerCommand> {
+        if command.kind != kind {
+            return Err(command);
+        }
+        let response_tx = command.response_tx;
+        let request = match command.request {
+            BrokerRequest::Read { path } => ReadBatchRequest::Read { path },
+            BrokerRequest::List { path } => ReadBatchRequest::List { path },
+            request => {
+                return Err(BrokerCommand {
+                    kind: command.kind,
+                    request,
+                    response_tx,
+                });
+            }
+        };
+        Ok(Self {
+            kind,
+            requests: vec![request],
+            response_txs: vec![response_tx],
+        })
+    }
+
+    fn len(&self) -> usize {
+        self.requests.len()
+    }
+
+    fn try_push(&mut self, command: BrokerCommand) -> std::result::Result<(), BrokerCommand> {
+        if self.len() >= BROKER_READ_BATCH_MAX || command.kind != self.kind {
+            return Err(command);
+        }
+        let response_tx = command.response_tx;
+        let request = match command.request {
+            BrokerRequest::Read { path } => ReadBatchRequest::Read { path },
+            BrokerRequest::List { path } => ReadBatchRequest::List { path },
+            request => {
+                return Err(BrokerCommand {
+                    kind: command.kind,
+                    request,
+                    response_tx,
+                });
+            }
+        };
+        self.requests.push(request);
+        self.response_txs.push(response_tx);
+        Ok(())
+    }
 }
 
 impl TelemetryWriteBatch {
@@ -858,8 +1035,7 @@ impl TelemetryWriteBatch {
             BrokerRequest::Write { path, payload } => {
                 if is_batchable_telemetry_write_path(path.as_str()) {
                     Ok(Self {
-                        path,
-                        payloads: vec![payload],
+                        requests: vec![TransportBatchRequest::Write { path, payload }],
                         response_txs: vec![response_tx],
                     })
                 } else {
@@ -879,7 +1055,7 @@ impl TelemetryWriteBatch {
     }
 
     fn len(&self) -> usize {
-        self.payloads.len()
+        self.requests.len()
     }
 
     fn try_push(&mut self, command: BrokerCommand) -> std::result::Result<(), BrokerCommand> {
@@ -888,8 +1064,11 @@ impl TelemetryWriteBatch {
         }
         let response_tx = command.response_tx;
         match command.request {
-            BrokerRequest::Write { path, payload } if path == self.path => {
-                self.payloads.push(payload);
+            BrokerRequest::Write { path, payload }
+                if is_batchable_telemetry_write_path(path.as_str()) =>
+            {
+                self.requests
+                    .push(TransportBatchRequest::Write { path, payload });
                 self.response_txs.push(response_tx);
                 Ok(())
             }
@@ -961,13 +1140,13 @@ async fn main() -> Result<()> {
     );
     let pool = build_session_pool(&config, policy)?;
     let bounds = build_bounds().context("load generated Worker runtime bounds")?;
-    let worker_acceptance = load_worker_acceptance(
+    let worker_acceptance = worker_acceptance_state(
         config.worker_acceptance_root.as_deref(),
         config.worker_acceptance_evidence.as_deref(),
         config.target_session.as_deref(),
         CohshPolicy::manifest_hash(),
     );
-    if let Some(diagnostic) = worker_acceptance.diagnostic.as_ref() {
+    if let Some(diagnostic) = worker_acceptance.imported.diagnostic.as_ref() {
         warn!(
             "Worker acceptance evidence unavailable: {:?}",
             diagnostic.code
@@ -996,7 +1175,7 @@ async fn main() -> Result<()> {
             } else {
                 BackendClass::ConsoleProjection
             },
-            worker_acceptance,
+            worker_acceptance: Mutex::new(worker_acceptance),
             policy,
             broker: broker_metrics,
             proc_cache: Mutex::new(ProcReadCache::default()),
@@ -1379,6 +1558,52 @@ fn load_worker_acceptance(
         Ok(_) => acceptance_diagnostic(WorkerAcceptanceDiagnosticCode::UnsupportedRecordKind),
         Err(_) => acceptance_diagnostic(WorkerAcceptanceDiagnosticCode::InvalidEvidence),
     }
+}
+
+fn worker_acceptance_state(
+    root: Option<&Path>,
+    evidence: Option<&Path>,
+    target_session: Option<&Path>,
+    expected_manifest_sha256: &str,
+) -> WorkerAcceptanceState {
+    let imported = load_worker_acceptance(root, evidence, target_session, expected_manifest_sha256);
+    let pending_source = match (root, evidence, target_session) {
+        (Some(root), Some(evidence), Some(target_session)) if imported.summary.is_none() => {
+            Some(WorkerAcceptanceSource {
+                root: root.to_path_buf(),
+                evidence: evidence.to_path_buf(),
+                target_session: target_session.to_path_buf(),
+                expected_manifest_sha256: expected_manifest_sha256.to_owned(),
+            })
+        }
+        _ => None,
+    };
+    WorkerAcceptanceState {
+        imported,
+        pending_source,
+    }
+}
+
+fn refresh_worker_acceptance(state: &mut WorkerAcceptanceState) -> bool {
+    if state.imported.summary.is_some() {
+        state.pending_source = None;
+        return false;
+    }
+    let Some(source) = state.pending_source.as_ref() else {
+        return false;
+    };
+    let imported = load_worker_acceptance(
+        Some(&source.root),
+        Some(&source.evidence),
+        Some(&source.target_session),
+        &source.expected_manifest_sha256,
+    );
+    let promoted = imported.summary.is_some();
+    state.imported = imported;
+    if promoted {
+        state.pending_source = None;
+    }
+    promoted
 }
 
 fn acceptance_summary(
@@ -1832,11 +2057,15 @@ fn run_broker_dispatcher(
         }
 
         let mut dispatched = false;
-        for _ in 0..BROKER_CONTROL_BURST {
+        let mut control_dispatched = 0usize;
+        while control_dispatched < BROKER_CONTROL_BURST {
             match control_rx.try_recv() {
                 Ok(command) => {
                     dispatched = true;
-                    dispatch_broker_command(&pool, &metrics, command);
+                    let remaining = BROKER_CONTROL_BURST.saturating_sub(control_dispatched);
+                    control_dispatched = control_dispatched.saturating_add(
+                        dispatch_control_command(&pool, &metrics, command, &control_rx, remaining),
+                    );
                 }
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => break,
@@ -1862,7 +2091,13 @@ fn run_broker_dispatcher(
 
         match control_rx.recv_timeout(Duration::from_millis(BROKER_IDLE_WAIT_MS)) {
             Ok(command) => {
-                dispatch_broker_command(&pool, &metrics, command);
+                dispatch_control_command(
+                    &pool,
+                    &metrics,
+                    command,
+                    &control_rx,
+                    BROKER_COMMAND_BATCH_MAX,
+                );
                 continue;
             }
             Err(RecvTimeoutError::Timeout) => {}
@@ -1878,13 +2113,120 @@ fn run_broker_dispatcher(
     pool.shutdown();
 }
 
+fn dispatch_control_command(
+    pool: &SharedPool,
+    metrics: &BrokerMetrics,
+    command: BrokerCommand,
+    control_rx: &Receiver<BrokerCommand>,
+    max_commands: usize,
+) -> usize {
+    let max_commands = max_commands.clamp(1, BROKER_COMMAND_BATCH_MAX);
+    let mut batch = match BrokerCommandBatch::from_command(PoolKind::Control, command) {
+        Ok(batch) => batch,
+        Err(command) => {
+            dispatch_broker_command(pool, metrics, command);
+            return 1;
+        }
+    };
+    let mut deferred = None;
+    while batch.len() < max_commands {
+        match control_rx.try_recv() {
+            Ok(command) => match batch.try_push(command) {
+                Ok(()) => {}
+                Err(command) => {
+                    deferred = Some(command);
+                    break;
+                }
+            },
+            Err(TryRecvError::Empty) | Err(TryRecvError::Disconnected) => break,
+        }
+    }
+    let mut dispatched = batch.len();
+    dispatch_broker_command_batch(pool, metrics, batch);
+    if let Some(command) = deferred {
+        dispatch_broker_command(pool, metrics, command);
+        dispatched = dispatched.saturating_add(1);
+    }
+    dispatched
+}
+
+fn dispatch_broker_command_batch(
+    pool: &SharedPool,
+    metrics: &BrokerMetrics,
+    batch: BrokerCommandBatch,
+) {
+    let BrokerCommandBatch {
+        kind,
+        requests,
+        response_txs,
+    } = batch;
+    let request_count = response_txs.len();
+    for _ in 0..request_count {
+        decrement_counter(metrics.wait_counter(kind));
+    }
+    metrics
+        .checkout_counter(kind)
+        .fetch_add(1, Ordering::Relaxed);
+    let result = execute_broker_command_batch(pool, kind, requests)
+        .map_err(|error| map_broker_error(metrics, kind, error));
+    match result {
+        Ok(outcomes) if outcomes.len() == request_count => {
+            for (outcome, response_tx) in outcomes.into_iter().zip(response_txs) {
+                let response = outcome
+                    .map_err(anyhow::Error::msg)
+                    .map_err(|error| map_broker_error(metrics, kind, error));
+                let _ = response_tx.send(response);
+            }
+        }
+        Ok(outcomes) => {
+            let message = format!(
+                "transport returned {} outcomes for {request_count} batched commands",
+                outcomes.len()
+            );
+            for response_tx in response_txs {
+                let _ = response_tx.send(Err(anyhow::anyhow!(message.clone())));
+            }
+        }
+        Err(error) => {
+            let message = error.to_string();
+            for response_tx in response_txs {
+                let _ = response_tx.send(Err(anyhow::anyhow!(message.clone())));
+            }
+        }
+    }
+}
+
 fn dispatch_telemetry_command(
     pool: &SharedPool,
     metrics: &BrokerMetrics,
     command: BrokerCommand,
     telemetry_rx: &Receiver<BrokerCommand>,
 ) {
-    let mut batch = match TelemetryWriteBatch::from_command(command) {
+    let command = match TelemetryWriteBatch::from_command(command) {
+        Ok(mut batch) => {
+            let mut deferred = None;
+            while batch.len() < TELEMETRY_WRITE_BATCH_MAX {
+                match telemetry_rx.try_recv() {
+                    Ok(command) => match batch.try_push(command) {
+                        Ok(()) => {}
+                        Err(command) => {
+                            deferred = Some(command);
+                            break;
+                        }
+                    },
+                    Err(TryRecvError::Empty) | Err(TryRecvError::Disconnected) => break,
+                }
+            }
+            dispatch_telemetry_write_batch(pool, metrics, batch);
+            if let Some(command) = deferred {
+                dispatch_broker_command(pool, metrics, command);
+            }
+            return;
+        }
+        Err(command) => command,
+    };
+
+    let mut batch = match BrokerReadBatch::from_command(PoolKind::Telemetry, command) {
         Ok(batch) => batch,
         Err(command) => {
             dispatch_broker_command(pool, metrics, command);
@@ -1892,7 +2234,7 @@ fn dispatch_telemetry_command(
         }
     };
     let mut deferred = None;
-    while batch.len() < TELEMETRY_WRITE_BATCH_MAX {
+    while batch.len() < BROKER_READ_BATCH_MAX {
         match telemetry_rx.try_recv() {
             Ok(command) => match batch.try_push(command) {
                 Ok(()) => {}
@@ -1904,9 +2246,59 @@ fn dispatch_telemetry_command(
             Err(TryRecvError::Empty) | Err(TryRecvError::Disconnected) => break,
         }
     }
-    dispatch_telemetry_write_batch(pool, metrics, batch);
+    dispatch_telemetry_read_batch(pool, metrics, batch);
     if let Some(command) = deferred {
         dispatch_broker_command(pool, metrics, command);
+    }
+}
+
+fn dispatch_telemetry_read_batch(
+    pool: &SharedPool,
+    metrics: &BrokerMetrics,
+    batch: BrokerReadBatch,
+) {
+    dispatch_broker_read_batch(pool, metrics, batch);
+}
+
+fn dispatch_broker_read_batch(pool: &SharedPool, metrics: &BrokerMetrics, batch: BrokerReadBatch) {
+    let BrokerReadBatch {
+        kind,
+        requests,
+        response_txs,
+    } = batch;
+    let request_count = response_txs.len();
+    for _ in 0..request_count {
+        decrement_counter(metrics.wait_counter(kind));
+    }
+    metrics
+        .checkout_counter(kind)
+        .fetch_add(1, Ordering::Relaxed);
+    let result = execute_broker_read_batch(pool, kind, requests)
+        .map_err(|error| map_broker_error(metrics, kind, error));
+    match result {
+        Ok(outcomes) if outcomes.len() == request_count => {
+            for (outcome, response_tx) in outcomes.into_iter().zip(response_txs) {
+                let response = outcome
+                    .map(BrokerResponse::Lines)
+                    .map_err(anyhow::Error::msg);
+                let _ = response_tx.send(response);
+            }
+        }
+        Ok(outcomes) => {
+            let message = format!(
+                "transport returned {} outcomes for {request_count} batched reads",
+                outcomes.len()
+            );
+            for response_tx in response_txs {
+                let _ = response_tx.send(Err(anyhow::anyhow!(message.clone())));
+            }
+        }
+        Err(error) => {
+            let message = error.to_string();
+            for response_tx in response_txs {
+                let _ = response_tx.send(Err(anyhow::anyhow!(message.clone())));
+            }
+        }
     }
 }
 
@@ -1916,38 +2308,18 @@ fn dispatch_telemetry_write_batch(
     batch: TelemetryWriteBatch,
 ) {
     let TelemetryWriteBatch {
-        path,
-        payloads,
+        requests,
         response_txs,
     } = batch;
-    let payload_count = response_txs.len();
-    for _ in 0..payload_count {
-        decrement_counter(metrics.wait_counter(PoolKind::Telemetry));
-    }
-    metrics
-        .checkout_counter(PoolKind::Telemetry)
-        .fetch_add(1, Ordering::Relaxed);
-    let result = execute_broker_write_batch(pool, PoolKind::Telemetry, path, payloads)
-        .map_err(|err| map_broker_error(metrics, PoolKind::Telemetry, err));
-    match result {
-        Ok(written) => {
-            for (index, response_tx) in response_txs.into_iter().enumerate() {
-                if index < written {
-                    let _ = response_tx.send(Ok(BrokerResponse::Unit));
-                } else {
-                    let _ = response_tx.send(Err(anyhow::anyhow!(
-                        "telemetry write batch acknowledged {written}/{payload_count} payloads"
-                    )));
-                }
-            }
-        }
-        Err(err) => {
-            let message = err.to_string();
-            for response_tx in response_txs {
-                let _ = response_tx.send(Err(anyhow::anyhow!(message.clone())));
-            }
-        }
-    }
+    dispatch_broker_command_batch(
+        pool,
+        metrics,
+        BrokerCommandBatch {
+            kind: PoolKind::Telemetry,
+            requests,
+            response_txs,
+        },
+    );
 }
 
 fn dispatch_broker_command(pool: &SharedPool, metrics: &BrokerMetrics, command: BrokerCommand) {
@@ -2045,17 +2417,63 @@ fn attach_and_prime_pool(pool: &SharedPool, role: Role, ticket: Option<&str>) ->
     result
 }
 
-fn execute_broker_write_batch(
+fn execute_broker_read_batch(
     pool: &SharedPool,
     kind: PoolKind,
-    path: String,
-    payloads: Vec<Vec<u8>>,
-) -> Result<usize> {
+    requests: Vec<ReadBatchRequest>,
+) -> Result<Vec<cohsh::ReadBatchOutcome>> {
     let mut lease = pool.checkout(kind)?;
     let session = lease.session().clone();
     lease
         .transport_mut()
-        .write_batch(&session, path.as_str(), payloads.as_slice())
+        .read_batch(&session, requests.as_slice())
+}
+
+fn execute_broker_command_batch(
+    pool: &SharedPool,
+    kind: PoolKind,
+    requests: Vec<TransportBatchRequest>,
+) -> Result<Vec<std::result::Result<BrokerResponse, String>>> {
+    let mut lease = pool.checkout(kind)?;
+    let session = lease.session().clone();
+    let outcomes = lease
+        .transport_mut()
+        .command_batch(&session, requests.as_slice())?;
+    if outcomes.len() != requests.len() {
+        return Err(anyhow::anyhow!(
+            "transport returned {} outcomes for {} batched commands",
+            outcomes.len(),
+            requests.len()
+        ));
+    }
+    Ok(requests
+        .into_iter()
+        .zip(outcomes)
+        .map(|(request, outcome)| {
+            outcome.and_then(|response| match (request, response) {
+                (
+                    TransportBatchRequest::Read { .. } | TransportBatchRequest::List { .. },
+                    TransportBatchResponse::Lines(lines),
+                ) => Ok(BrokerResponse::Lines(lines)),
+                (
+                    TransportBatchRequest::Write { path, .. },
+                    TransportBatchResponse::Written { acknowledgements },
+                ) if is_telemetry_control_path(path.as_str()) => {
+                    let lines = telemetry_segment_id_from_ack_lines(
+                        path.as_str(),
+                        acknowledgements.as_slice(),
+                    )
+                    .into_iter()
+                    .collect();
+                    Ok(BrokerResponse::Lines(lines))
+                }
+                (TransportBatchRequest::Write { .. }, TransportBatchResponse::Written { .. }) => {
+                    Ok(BrokerResponse::Unit)
+                }
+                _ => Err("transport command batch response kind mismatch".to_owned()),
+            })
+        })
+        .collect())
 }
 
 fn with_pool_once<F>(pool: &SharedPool, kind: PoolKind, action: F) -> Result<BrokerResponse>
@@ -2305,8 +2723,9 @@ impl AppState {
 
     fn read_uncached(&self, path: &str) -> Result<Vec<String>> {
         self.ensure_connected()?;
+        let kind = read_pool_kind(path);
         match self.submit_broker(
-            PoolKind::Telemetry,
+            kind,
             BrokerRequest::Read {
                 path: path.to_owned(),
             },
@@ -2467,11 +2886,22 @@ impl AppState {
                 .ok()
                 .map(|duration| duration.as_millis())
         });
+        let worker_acceptance = {
+            let mut state = self
+                .inner
+                .worker_acceptance
+                .lock()
+                .expect("Worker acceptance lock poisoned");
+            if refresh_worker_acceptance(&mut state) {
+                info!("same-boot Worker acceptance evidence promoted");
+            }
+            state.imported.clone()
+        };
         GatewayStatusResponse {
             connected: status.connected,
             backend_class: Some(self.inner.backend_class),
-            worker_acceptance: self.inner.worker_acceptance.summary.clone(),
-            worker_acceptance_diagnostic: self.inner.worker_acceptance.diagnostic.clone(),
+            worker_acceptance: worker_acceptance.summary,
+            worker_acceptance_diagnostic: worker_acceptance.diagnostic,
             last_error: status.last_error,
             last_change_unix_ms,
             reconnects: status.reconnects,
@@ -2982,6 +3412,15 @@ fn cache_invalidation_namespaces(
     if write_path == CLIENT_POLICY_CTL_PATH {
         return Some(CACHE_INVALIDATE_POLICY_NAMESPACES);
     }
+    if write_path == "/host/tickets/spec" {
+        return Some(CACHE_INVALIDATE_HOST_TICKET_SPEC_PATHS);
+    }
+    if write_path == "/host/tickets/status" {
+        return Some(CACHE_INVALIDATE_HOST_TICKET_STATUS_PATHS);
+    }
+    if write_path == "/host/tickets/deadletter" {
+        return Some(CACHE_INVALIDATE_HOST_TICKET_DEADLETTER_PATHS);
+    }
     if write_path.starts_with("/queen/") || write_path.starts_with("/actions/") {
         return Some(CACHE_INVALIDATE_CONTROL_NAMESPACES);
     }
@@ -3003,6 +3442,14 @@ fn write_pool_kind(path: &str) -> PoolKind {
         PoolKind::Telemetry
     } else {
         PoolKind::Control
+    }
+}
+
+fn read_pool_kind(path: &str) -> PoolKind {
+    if path.starts_with(HOST_TICKET_CURRENT_PREFIX) || path.starts_with(PROC_LEASE_BY_ID_PREFIX) {
+        PoolKind::Control
+    } else {
+        PoolKind::Telemetry
     }
 }
 
@@ -3225,6 +3672,9 @@ fn max_ctl_bytes(path: &str, bounds: &BoundsResponse) -> Option<usize> {
 }
 
 fn max_proc_bytes(path: &str, bounds: &BoundsResponse) -> Option<usize> {
+    if path.starts_with(PROC_LEASE_BY_ID_PREFIX) {
+        return Some(bounds.observability.proc_lease.active_bytes as usize);
+    }
     match path {
         PROC_SCHEDULE_SUMMARY_PATH => {
             Some(bounds.observability.proc_schedule.summary_bytes as usize)
@@ -3249,7 +3699,9 @@ fn validate_proc_enabled(path: &str, bounds: &BoundsResponse) -> Result<(), Stri
     if path == PROC_LEASE_SUMMARY_PATH && !bounds.observability.proc_lease.summary {
         return Err("proc lease summary is disabled".to_owned());
     }
-    if path == PROC_LEASE_ACTIVE_PATH && !bounds.observability.proc_lease.active {
+    if (path == PROC_LEASE_ACTIVE_PATH || path.starts_with(PROC_LEASE_BY_ID_PREFIX))
+        && !bounds.observability.proc_lease.active
+    {
         return Err("proc lease active is disabled".to_owned());
     }
     if path == PROC_LEASE_PREEMPTIONS_PATH && !bounds.observability.proc_lease.preemptions {
@@ -3480,7 +3932,7 @@ mod tests {
     #[test]
     fn generated_worker_bounds_are_exact_and_bounded() {
         let bounds = build_worker_runtime_bounds().expect("generated Worker profile parses");
-        assert_eq!(bounds.maximum_live_tasks, 3);
+        assert_eq!(bounds.maximum_live_tasks, 37);
         assert_eq!(bounds.task_abi_schema, "worker-task-abi/v1");
         assert_eq!(bounds.task_abi_version, 1);
         assert_eq!(
@@ -3496,6 +3948,20 @@ mod tests {
                 .sum::<u16>(),
             bounds.maximum_live_tasks
         );
+        for (role, executable_slots) in [
+            ("worker-heartbeat", 1),
+            ("worker-gpu", 15),
+            ("worker-lora", 21),
+        ] {
+            assert_eq!(
+                bounds
+                    .roles
+                    .iter()
+                    .find(|contract| contract.role == role)
+                    .map(|contract| (&contract.declaration, contract.executable_slots)),
+                Some((&WorkerDeclaration::Executable, executable_slots))
+            );
+        }
         assert_eq!(
             bounds
                 .roles
@@ -3549,6 +4015,42 @@ mod tests {
         assert!(!serialized.contains(root.path().to_string_lossy().as_ref()));
         assert!(!serialized.contains("endpoint_badge"));
         assert!(!serialized.contains("fault_badge"));
+    }
+
+    #[test]
+    fn worker_acceptance_promotes_once_from_fixed_same_boot_paths() {
+        let root = tempfile::tempdir().expect("acceptance root");
+        let target_session = root.path().join("target-session.json");
+        let evidence = root.path().join("worker-component.json");
+        let manifest = CohshPolicy::manifest_hash();
+        let (session_bytes, evidence_bytes) = valid_target_component(manifest);
+        fs::write(&target_session, session_bytes).expect("write target session");
+
+        let mut state = worker_acceptance_state(
+            Some(root.path()),
+            Some(&evidence),
+            Some(&target_session),
+            manifest,
+        );
+        assert!(state.imported.summary.is_none());
+        assert_eq!(
+            state.imported.diagnostic.as_ref().map(|value| value.code),
+            Some(WorkerAcceptanceDiagnosticCode::ReadFailed)
+        );
+
+        fs::write(&evidence, evidence_bytes).expect("write component evidence");
+        assert!(refresh_worker_acceptance(&mut state));
+        let accepted = state
+            .imported
+            .summary
+            .clone()
+            .expect("same-boot evidence promoted");
+        assert!(state.pending_source.is_none());
+
+        fs::write(&evidence, b"{}").expect("replace evidence after promotion");
+        assert!(!refresh_worker_acceptance(&mut state));
+        assert_eq!(state.imported.summary, Some(accepted));
+        assert!(state.imported.diagnostic.is_none());
     }
 
     #[test]
@@ -3896,7 +4398,27 @@ mod tests {
         assert!(is_cacheable_read_path("/proc/root/reachable"));
         assert!(is_cacheable_read_path("/host/systemd/ssh.service/status"));
         assert!(is_cacheable_read_path("/gpu/bridge/status"));
+        assert!(is_cacheable_read_path(
+            "/host/tickets/current/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        ));
         assert!(!is_cacheable_read_path("/queen/ctl"));
+    }
+
+    #[test]
+    fn exact_ticket_current_uses_the_short_live_state_cache_bound() {
+        assert_eq!(
+            read_cache_ttl_ms(
+                "/host/tickets/current/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+            ),
+            HOST_TICKET_CURRENT_CACHE_TTL_MS,
+        );
+        const {
+            assert!(HOST_TICKET_CURRENT_CACHE_TTL_MS < DEFAULT_PROC_CACHE_TTL_MS);
+        }
+        assert_eq!(
+            read_cache_ttl_ms("/host/tickets/spec.snapshot"),
+            DEFAULT_PROC_CACHE_TTL_MS,
+        );
     }
 
     #[test]
@@ -3937,10 +4459,12 @@ mod tests {
             cache_invalidation_namespaces("/queen/lease/ctl", br#"{"op":"grant"}"#),
             Some(CACHE_INVALIDATE_LEASE_GRANT_PATHS)
         );
+        assert!(CACHE_INVALIDATE_LEASE_GRANT_PATHS.contains(&PROC_LEASE_BY_ID_PATH));
         assert_eq!(
             cache_invalidation_namespaces("/queen/lease/ctl", br#"{"op":"renew"}"#),
             Some(CACHE_INVALIDATE_LEASE_RENEW_PATHS)
         );
+        assert!(CACHE_INVALIDATE_LEASE_RENEW_PATHS.contains(&PROC_LEASE_BY_ID_PATH));
         assert_eq!(
             cache_invalidation_namespaces("/queen/lease/ctl", br#"{"op":"preempt"}"#),
             Some(CACHE_INVALIDATE_LEASE_PREEMPT_PATHS)
@@ -3960,6 +4484,18 @@ mod tests {
         assert_eq!(
             cache_invalidation_namespaces("/policy/ctl", br#"{}"#),
             Some(CACHE_INVALIDATE_POLICY_NAMESPACES)
+        );
+        assert_eq!(
+            cache_invalidation_namespaces("/host/tickets/spec", br#"{}"#),
+            Some(CACHE_INVALIDATE_HOST_TICKET_SPEC_PATHS)
+        );
+        assert_eq!(
+            cache_invalidation_namespaces("/host/tickets/status", br#"{}"#),
+            Some(CACHE_INVALIDATE_HOST_TICKET_STATUS_PATHS)
+        );
+        assert_eq!(
+            cache_invalidation_namespaces("/host/tickets/deadletter", br#"{}"#),
+            Some(CACHE_INVALIDATE_HOST_TICKET_DEADLETTER_PATHS)
         );
         assert_eq!(
             cache_invalidation_namespaces("/host/docker/status", br#"{}"#),
@@ -4065,6 +4601,220 @@ mod tests {
                 "unexpected batchable path: {path}"
             );
         }
+
+        assert_eq!(
+            read_pool_kind(
+                "/host/tickets/current/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+            ),
+            PoolKind::Control
+        );
+        assert_eq!(
+            read_pool_kind("/proc/lease/by-id/lease-1"),
+            PoolKind::Control
+        );
+        for path in [
+            "/host/tickets/status",
+            "/host/systemd/status",
+            "/proc/schedule/summary",
+            "/gpu/inventory",
+        ] {
+            assert_eq!(
+                read_pool_kind(path),
+                PoolKind::Telemetry,
+                "unexpected priority read path: {path}"
+            );
+        }
+    }
+
+    #[test]
+    fn broker_read_batch_accepts_only_bounded_same_lane_idempotent_reads() {
+        fn command(kind: PoolKind, request: BrokerRequest) -> BrokerCommand {
+            let (response_tx, _response_rx) = mpsc::channel();
+            BrokerCommand {
+                kind,
+                request,
+                response_tx,
+            }
+        }
+
+        let mut batch = BrokerReadBatch::from_command(
+            PoolKind::Telemetry,
+            command(
+                PoolKind::Telemetry,
+                BrokerRequest::Read {
+                    path: "/proc/a".to_owned(),
+                },
+            ),
+        )
+        .unwrap_or_else(|_| panic!("CAT starts a telemetry read batch"));
+        batch
+            .try_push(command(
+                PoolKind::Telemetry,
+                BrokerRequest::List {
+                    path: "/worker".to_owned(),
+                },
+            ))
+            .unwrap_or_else(|_| panic!("LS joins a read batch"));
+        while batch.len() < BROKER_READ_BATCH_MAX {
+            batch
+                .try_push(command(
+                    PoolKind::Telemetry,
+                    BrokerRequest::Read {
+                        path: format!("/proc/{}", batch.len()),
+                    },
+                ))
+                .unwrap_or_else(|_| panic!("read batch admits its exact bound"));
+        }
+        assert_eq!(batch.len(), TRANSPORT_READ_BATCH_MAX);
+        assert!(batch
+            .try_push(command(
+                PoolKind::Telemetry,
+                BrokerRequest::Read {
+                    path: "/proc/overflow".to_owned(),
+                },
+            ))
+            .is_err());
+        assert!(batch
+            .try_push(command(
+                PoolKind::Control,
+                BrokerRequest::Read {
+                    path: "/host/tickets/current/digest".to_owned(),
+                },
+            ))
+            .is_err());
+
+        let mut control_batch = BrokerReadBatch::from_command(
+            PoolKind::Control,
+            command(
+                PoolKind::Control,
+                BrokerRequest::Read {
+                    path: "/host/tickets/current/a".to_owned(),
+                },
+            ),
+        )
+        .unwrap_or_else(|_| panic!("CAT starts a control read batch"));
+        control_batch
+            .try_push(command(
+                PoolKind::Control,
+                BrokerRequest::Read {
+                    path: "/host/tickets/current/b".to_owned(),
+                },
+            ))
+            .unwrap_or_else(|_| panic!("adjacent control CAT joins the read batch"));
+        assert_eq!(control_batch.len(), 2);
+
+        assert!(BrokerReadBatch::from_command(
+            PoolKind::Telemetry,
+            command(
+                PoolKind::Telemetry,
+                BrokerRequest::Tail {
+                    path: "/log/queen.log".to_owned(),
+                    lines: Some(8),
+                },
+            ),
+        )
+        .is_err());
+        assert!(BrokerReadBatch::from_command(
+            PoolKind::Telemetry,
+            command(
+                PoolKind::Telemetry,
+                BrokerRequest::Write {
+                    path: "/queen/telemetry/bench/seg/current".to_owned(),
+                    payload: b"record".to_vec(),
+                },
+            ),
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn broker_command_batch_accepts_bounded_mixed_same_lane_commands() {
+        fn command(kind: PoolKind, request: BrokerRequest) -> BrokerCommand {
+            let (response_tx, _response_rx) = mpsc::channel();
+            BrokerCommand {
+                kind,
+                request,
+                response_tx,
+            }
+        }
+
+        let mut batch = BrokerCommandBatch::from_command(
+            PoolKind::Control,
+            command(
+                PoolKind::Control,
+                BrokerRequest::Read {
+                    path: "/proc/a".to_owned(),
+                },
+            ),
+        )
+        .unwrap_or_else(|_| panic!("CAT starts a control command batch"));
+        batch
+            .try_push(command(
+                PoolKind::Control,
+                BrokerRequest::Write {
+                    path: "/queen/ctl".to_owned(),
+                    payload: b"one".to_vec(),
+                },
+            ))
+            .unwrap_or_else(|_| panic!("ECHO joins a control command batch"));
+        batch
+            .try_push(command(
+                PoolKind::Control,
+                BrokerRequest::List {
+                    path: "/worker".to_owned(),
+                },
+            ))
+            .unwrap_or_else(|_| panic!("LS joins a control command batch"));
+        batch
+            .try_push(command(
+                PoolKind::Control,
+                BrokerRequest::Write {
+                    path: "/host/tickets/spec".to_owned(),
+                    payload: b"{}".to_vec(),
+                },
+            ))
+            .unwrap_or_else(|_| panic!("second ECHO joins the control command batch"));
+        while batch.len() < TRANSPORT_COMMAND_BATCH_MAX {
+            let index = batch.len();
+            batch
+                .try_push(command(
+                    PoolKind::Control,
+                    BrokerRequest::Read {
+                        path: format!("/proc/bounded-{index}"),
+                    },
+                ))
+                .unwrap_or_else(|_| panic!("bounded CAT reaches the exact batch bound"));
+        }
+        assert_eq!(batch.len(), TRANSPORT_COMMAND_BATCH_MAX);
+        assert!(batch
+            .try_push(command(
+                PoolKind::Control,
+                BrokerRequest::Read {
+                    path: "/proc/overflow".to_owned(),
+                },
+            ))
+            .is_err());
+        assert!(BrokerCommandBatch::from_command(
+            PoolKind::Control,
+            command(
+                PoolKind::Telemetry,
+                BrokerRequest::Read {
+                    path: "/proc/wrong-lane".to_owned(),
+                },
+            ),
+        )
+        .is_err());
+        assert!(BrokerCommandBatch::from_command(
+            PoolKind::Control,
+            command(
+                PoolKind::Control,
+                BrokerRequest::Tail {
+                    path: "/log/queen.log".to_owned(),
+                    lines: Some(8),
+                },
+            ),
+        )
+        .is_err());
     }
 
     #[test]
@@ -4278,7 +5028,7 @@ mod tests {
     }
 
     #[test]
-    fn telemetry_write_batch_accepts_only_same_segment_path() {
+    fn telemetry_write_batch_accepts_only_bounded_segment_appends() {
         let segment_path = "/queen/telemetry/bench/seg/current";
         let other_segment_path = "/queen/telemetry/bench/seg/next";
         let (command, _response_rx) = test_write_command(PoolKind::Telemetry, segment_path, b"one");
@@ -4296,13 +5046,18 @@ mod tests {
 
         let (other_path_command, _response_rx) =
             test_write_command(PoolKind::Telemetry, other_segment_path, b"three");
-        assert!(batch.try_push(other_path_command).is_err());
-        assert_eq!(batch.len(), 2);
+        assert!(batch.try_push(other_path_command).is_ok());
+        assert_eq!(batch.len(), 3);
+
+        let (control_path_command, _response_rx) =
+            test_write_command(PoolKind::Telemetry, "/queen/telemetry/bench/ctl", b"four");
+        assert!(batch.try_push(control_path_command).is_err());
+        assert_eq!(batch.len(), 3);
 
         let (control_command, _response_rx) =
-            test_write_command(PoolKind::Control, segment_path, b"four");
+            test_write_command(PoolKind::Control, segment_path, b"five");
         assert!(batch.try_push(control_command).is_err());
-        assert_eq!(batch.len(), 2);
+        assert_eq!(batch.len(), 3);
 
         for index in batch.len()..TELEMETRY_WRITE_BATCH_MAX {
             let payload = format!("payload-{index}");
@@ -4514,9 +5269,10 @@ mod tests {
                 control_write_retry_window_ms: DEFAULT_CONTROL_WRITE_RETRY_WINDOW_MS,
                 bounds: build_bounds().expect("compiled generated Worker bounds must parse"),
                 backend_class: BackendClass::Unknown,
-                worker_acceptance: acceptance_diagnostic(
-                    WorkerAcceptanceDiagnosticCode::NotConfigured,
-                ),
+                worker_acceptance: Mutex::new(WorkerAcceptanceState {
+                    imported: acceptance_diagnostic(WorkerAcceptanceDiagnosticCode::NotConfigured),
+                    pending_source: None,
+                }),
                 policy: CohshPolicy::from_generated(),
                 broker: Arc::new(BrokerMetrics::default()),
                 proc_cache: Mutex::new(ProcReadCache::default()),
@@ -5234,6 +5990,41 @@ mod tests {
         assert_eq!(lines, ["bounded=yes"]);
         assert_eq!(bypass_fetches.load(Ordering::Relaxed), 1);
         assert!(state.read_cache_get("/proc/bounded/overflow").is_none());
+    }
+
+    #[test]
+    fn host_ticket_writes_invalidate_only_the_changed_projection() {
+        let state = disconnected_cached_state();
+        for path in [
+            "/host/docker/status",
+            "/host/tickets/spec",
+            "/host/tickets/spec.snapshot",
+            "/host/tickets/status",
+            "/host/tickets/status.snapshot",
+            "/host/tickets/deadletter",
+            "/host/tickets/deadletter.snapshot",
+            "/host/tickets/retention",
+        ] {
+            state.read_cache_insert(path, vec![format!("cached={path}")]);
+        }
+
+        state.read_cache_invalidate_for_write("/host/tickets/status", br#"{}"#);
+        let cache = state.proc_cache_guard();
+        for invalidated in CACHE_INVALIDATE_HOST_TICKET_STATUS_PATHS {
+            assert!(!cache.entries.contains_key(*invalidated));
+        }
+        for preserved in [
+            "/host/docker/status",
+            "/host/tickets/spec",
+            "/host/tickets/spec.snapshot",
+            "/host/tickets/deadletter",
+            "/host/tickets/deadletter.snapshot",
+        ] {
+            assert!(
+                cache.entries.contains_key(preserved),
+                "status write unexpectedly invalidated {preserved}"
+            );
+        }
     }
 
     #[test]

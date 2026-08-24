@@ -78,6 +78,9 @@ SENSITIVE_MARKERS = (
     "capability_value",
     "raw_badge",
 )
+UART_SENSITIVE_MARKERS = tuple(
+    marker for marker in SENSITIVE_MARKERS if marker != "cptr"
+)
 TARGET_SESSION_KEYS = {
     "target",
     "source_sha256",
@@ -92,9 +95,13 @@ TARGET_SESSION_KEYS = {
     "worker_abi_sha256",
 }
 QEMU_LAUNCH_SCHEMA = "cohesix-qemu-launch-artifacts/v2"
-QEMU_AUTH_OBSERVATION_SCHEMA = "cohesix-target-observation/v1"
+QEMU_AUTH_OBSERVATION_SCHEMA = "cohesix-target-observation/v2"
 QEMU_AUTH_OBSERVATION_PROFILE = "qemu_smp_production / configs/root_task.toml"
-QEMU_AUTH_UART_MARKER = "[cohsh-net][auth] auth OK, session established"
+QEMU_AUTH_OPERATION_MARKERS = (
+    "[cohsh][tcp] remote NineDoor ready as role Queen",
+    "[console] OK AUTH",
+    "[console] OK ATTACH role=queen",
+)
 QEMU_LAUNCH_ARTIFACTS = (
     ("elfloader", Path("staging/elfloader")),
     ("kernel", Path("staging/kernel.elf")),
@@ -205,6 +212,13 @@ QEMU_WORKER_SYMBOLS = (
     "cohesix_worker_qemu_evidence_standard_fault",
     "cohesix_worker_qemu_evidence_timeout_spin",
 )
+QEMU_WORKER_ROLE_RAW = {
+    "worker-heartbeat": 1,
+    "worker-gpu": 2,
+    "worker-lora": 3,
+}
+WORKER_RUNTIME_INIT_MAGIC = 0x574B_4931
+WORKER_RUNTIME_INIT_IDENTITY_ROLE_OFFSET = 24
 QEMU_SERVICE_SYMBOLS = {
     "ninedoor-service": (
         "cohesix_ninedoor_qemu_evidence_request_handler",
@@ -240,6 +254,7 @@ QEMU_CRITICAL_SYMBOLS = (
     "cohesix_worker_supervisor_qemu_evidence_wait",
     "cohesix_driver_supervisor_qemu_evidence_wait",
 )
+QEMU_CRITICAL_ARM_SYMBOL = "cohesix_critical_runtime_qemu_evidence_arm"
 QEMU_CRITICAL_DUTIES = {
     "cohesix_root_fault_qemu_evidence_turn": "root-fault",
     "cohesix_root_emergency_qemu_evidence_wait": "root-emergency",
@@ -1383,7 +1398,11 @@ def _artifact_text(raw: bytes, label: str) -> str:
     if any(ord(character) < 0x20 and character not in "\n\r\t" for character in text):
         raise EvidenceError(f"{label} contains prohibited control bytes")
     lowered = text.lower()
-    if any(marker in lowered for marker in SENSITIVE_MARKERS):
+    # QEMU UART intentionally includes bounded public CPtr diagnostics such as
+    # the root control endpoint slot. Keep rejecting CPtr material from typed
+    # promoted evidence via _scan_sensitive(), while allowing those existing
+    # target logs to remain exact rather than rewriting the guest transcript.
+    if any(marker in lowered for marker in UART_SENSITIVE_MARKERS):
         raise EvidenceError(f"{label} contains prohibited sensitive material")
     return text
 
@@ -1832,13 +1851,20 @@ def _validate_qemu_launch_artifacts(
     expected_accelerator = {"Darwin": "hvf", "Linux": "kvm"}.get(
         qemu["host_system"]
     )
+    expected_machine_extra = {
+        "Darwin": "kernel-irqchip=off",
+        "Linux": "",
+    }.get(qemu["host_system"])
+    expected_cpu = {"Darwin": "cortex-a57", "Linux": "host"}.get(
+        qemu["host_system"]
+    )
     if (
         expected_accelerator is None
         or qemu["accelerator"] != expected_accelerator
         or qemu["machine"] != "virt"
         or qemu["virtualization"] != "off"
-        or qemu["machine_extra"] != "kernel-irqchip=off"
-        or qemu["cpu"] != "cortex-a57"
+        or qemu["machine_extra"] != expected_machine_extra
+        or qemu["cpu"] != expected_cpu
         or qemu["timer_clock_hz"] != 24_000_000
         or qemu["smp"] != "4,cores=4,threads=1,sockets=1"
         or qemu["net_backend"] != "virtio"
@@ -2929,6 +2955,14 @@ def _validate_critical_gdb_markers(
         or elf_rows[0]["root_image_sha256"] != session["root_image_sha256"]
     ):
         raise EvidenceError("critical GDB transcript differs from root ELF/image truth")
+    arm_rows = _marker_rows(
+        text,
+        "M26E_GDB_CRITICAL_ARM",
+        {"symbol", "result"},
+    )
+    arm_observed = {(row["symbol"], row["result"]) for row in arm_rows}
+    if arm_observed != {(QEMU_CRITICAL_ARM_SYMBOL, "observed")} or len(arm_rows) != 1:
+        raise EvidenceError("critical GDB transcript omits the post-SMP re-arm point")
     rows = _marker_rows(
         text,
         "M26E_GDB_CRITICAL_OBSERVATION",
@@ -3381,7 +3415,7 @@ def _rust_symbol_addresses(
 
     try:
         completed = subprocess.run(
-            [str(nm), "-g", "--defined-only", "--demangle", str(elf)],
+            [str(nm), "--defined-only", "--demangle", str(elf)],
             check=False,
             capture_output=True,
             text=True,
@@ -3411,6 +3445,30 @@ def _rust_symbol_addresses(
 
 def _worker_symbol_addresses(nm: Path, elf: Path) -> dict[str, int]:
     return _symbol_addresses(nm, elf, QEMU_WORKER_SYMBOLS, "Worker")
+
+
+def _worker_gdb_runtime_binding(
+    generated: Mapping[str, Any], role: str
+) -> tuple[int, int]:
+    try:
+        task_abi = generated["topology"]["worker_runtime"]["task_abi"]
+    except (KeyError, TypeError) as exc:
+        raise EvidenceError("generated topology lacks the Worker task ABI") from exc
+    shared_page_vaddr = task_abi.get("shared_page_vaddr")
+    shared_page_bytes = task_abi.get("shared_page_bytes")
+    if (
+        task_abi.get("enabled") is not True
+        or task_abi.get("version") != 1
+        or not isinstance(shared_page_vaddr, int)
+        or isinstance(shared_page_vaddr, bool)
+        or shared_page_vaddr <= 0
+        or shared_page_vaddr > (1 << 64) - 1
+        or shared_page_vaddr % 4096 != 0
+        or shared_page_bytes != 4096
+        or role not in QEMU_WORKER_ROLE_RAW
+    ):
+        raise EvidenceError("generated Worker task ABI cannot bind a QEMU VSpace")
+    return shared_page_vaddr, QEMU_WORKER_ROLE_RAW[role]
 
 
 def _validate_remote_and_tools(
@@ -3515,24 +3573,55 @@ def _qemu_gdb(args: argparse.Namespace) -> None:
     control = addresses["cohesix_worker_qemu_evidence_control_handler"]
     standard = addresses["cohesix_worker_qemu_evidence_standard_fault"]
     timeout_spin = addresses["cohesix_worker_qemu_evidence_timeout_spin"]
+    shared_page_vaddr, role_raw = _worker_gdb_runtime_binding(
+        generated, args.inject_role
+    )
     command_text = f"""set pagination off
 set confirm off
 set architecture aarch64
 file {_gdb_file_argument(inject_elf)}
 target remote {args.remote}
 delete breakpoints
+set $m26e_entry_hits = 0
 set $m26e_control_hits = 0
+set $m26e_worker_ttbr0 = 0
 hbreak *0x{entry:x}
 commands 1
   silent
-  printf "M26E_GDB_INJECTION role={args.inject_role} phase=pre-ready symbol=_start action=zero-x0 result=continued\\n"
-  set $x0 = 0
-  disable 1
+  if $x0 == 0x{shared_page_vaddr:x}
+    if *(unsigned int *)$x0 == 0x{WORKER_RUNTIME_INIT_MAGIC:x}
+      if *(unsigned short *)($x0 + {WORKER_RUNTIME_INIT_IDENTITY_ROLE_OFFSET}) == {role_raw}
+        set $m26e_entry_hits = $m26e_entry_hits + 1
+        set $m26e_worker_ttbr0 = $TTBR0_EL1
+        if $m26e_entry_hits == 1
+          printf "M26E_GDB_VSPACE_BIND role={args.inject_role} phase=pre-ready register=TTBR0_EL1 result=bound\\n"
+          printf "M26E_GDB_INJECTION role={args.inject_role} phase=pre-ready symbol=_start action=zero-x0 result=continued\\n"
+          set $x0 = 0
+          continue
+        end
+        if $m26e_entry_hits == 2
+          printf "M26E_GDB_VSPACE_BIND role={args.inject_role} phase=during-ipc register=TTBR0_EL1 result=bound\\n"
+          continue
+        end
+        if $m26e_entry_hits == 3
+          printf "M26E_GDB_VSPACE_BIND role={args.inject_role} phase=budget-exhaustion register=TTBR0_EL1 result=bound\\n"
+          disable 1
+          continue
+        end
+        printf "M26E_GDB_ABORT reason=unexpected-role-entry result=failed\\n"
+        detach
+        quit
+      end
+    end
+  end
   continue
 end
 hbreak *0x{control:x}
 commands 2
   silent
+  if $TTBR0_EL1 != $m26e_worker_ttbr0
+    continue
+  end
   set $m26e_control_hits = $m26e_control_hits + 1
   if $m26e_control_hits == 1
     printf "M26E_GDB_INJECTION role={args.inject_role} phase=during-ipc symbol=cohesix_worker_qemu_evidence_control_handler action=redirect-standard-fault result=continued\\n"
@@ -3576,6 +3665,19 @@ continue
     text = _artifact_text(transcript, "GDB transcript")
     if "M26E_GDB_ABORT" in text:
         raise EvidenceError("QEMU GDB injection hit an unexpected control turn")
+    binding_rows = _marker_rows(
+        text,
+        "M26E_GDB_VSPACE_BIND",
+        {"role", "phase", "register", "result"},
+    )
+    if len(binding_rows) != 3 or {
+        (row["role"], row["phase"], row["register"], row["result"])
+        for row in binding_rows
+    } != {
+        (args.inject_role, phase, "TTBR0_EL1", "bound")
+        for phase in ("pre-ready", "during-ipc", "budget-exhaustion")
+    }:
+        raise EvidenceError("QEMU GDB runner did not bind all three Worker VSpaces")
     injection_rows = _marker_rows(
         text,
         "M26E_GDB_INJECTION",
@@ -3732,6 +3834,7 @@ def _validate_authenticated_qemu_observation(
             "built_image",
             "image_identity",
             "operation_script",
+            "operation_log",
         },
         context="authenticated QEMU target observation",
     )
@@ -3770,14 +3873,22 @@ def _validate_authenticated_qemu_observation(
     )
     if observation["serial_source_log"] != str(serial_path):
         raise EvidenceError("authenticated QEMU UART source aliases its frozen transcript")
-    serial_text = _artifact_text(serial_raw, "authenticated QEMU UART transcript")
-    if QEMU_AUTH_UART_MARKER not in serial_text:
-        raise EvidenceError("prior QEMU PASS lacks a live authenticated cohsh session")
+    _artifact_text(serial_raw, "authenticated QEMU UART transcript")
     operation_path, _operation_raw = _observation_file(
         observation["operation_script"], "operation script"
     )
     if operation_path.parts[-3:] != ("scripts", "cohsh", "9p_batch.coh"):
         raise EvidenceError("prior QEMU PASS did not use the canonical NineDoor operation")
+    _operation_log_path, operation_log_raw = _observation_file(
+        observation["operation_log"], "authenticated QEMU operation transcript"
+    )
+    operation_text = _artifact_text(
+        operation_log_raw, "authenticated QEMU operation transcript"
+    )
+    if any(marker not in operation_text for marker in QEMU_AUTH_OPERATION_MARKERS):
+        raise EvidenceError("prior QEMU PASS lacks a live authenticated cohsh session")
+    if "[console] OK CAT path=" not in operation_text:
+        raise EvidenceError("prior QEMU PASS lacks the canonical NineDoor read operation")
 
     _validate_emitted_target_session_bundle(
         target_session_path, session, session_raw
@@ -3796,6 +3907,7 @@ def _validate_authenticated_qemu_observation(
         {
             "authenticated-qemu-observation": observation_raw,
             "authenticated-qemu-uart": serial_raw,
+            "authenticated-qemu-operation": operation_log_raw,
             "authenticated-qemu-launch-record": launch_record_raw,
             "authenticated-qemu-system-cpio": built_raw,
         },
@@ -3997,7 +4109,8 @@ def _qemu_critical_gdb(args: argparse.Namespace) -> None:
         raise EvidenceError("critical GDB target session/topology is invalid JSON") from exc
     _target_session(session, "qemu")
     _generated_inventory(generated, "qemu", session)
-    addresses = _symbol_addresses(nm, args.root_elf, QEMU_CRITICAL_SYMBOLS, "root-task")
+    critical_symbols = (QEMU_CRITICAL_ARM_SYMBOL, *QEMU_CRITICAL_SYMBOLS)
+    addresses = _symbol_addresses(nm, args.root_elf, critical_symbols, "root-task")
     command_lines = [
         "set pagination off",
         "set confirm off",
@@ -4005,9 +4118,14 @@ def _qemu_critical_gdb(args: argparse.Namespace) -> None:
         f"file {_gdb_file_argument(args.root_elf)}",
         f"target remote {args.remote}",
         "delete breakpoints",
+        f"hbreak *0x{addresses[QEMU_CRITICAL_ARM_SYMBOL]:x}",
+        "continue",
+        'printf "M26E_GDB_CRITICAL_ARM '
+        f'symbol={QEMU_CRITICAL_ARM_SYMBOL} result=observed\\n"',
+        "delete breakpoints",
         "set $m26e_critical_seen = 0",
     ]
-    for number, symbol in enumerate(QEMU_CRITICAL_SYMBOLS, start=1):
+    for number, symbol in enumerate(QEMU_CRITICAL_SYMBOLS, start=2):
         duty = QEMU_CRITICAL_DUTIES[symbol]
         command_lines.extend(
             (
@@ -4018,7 +4136,7 @@ def _qemu_critical_gdb(args: argparse.Namespace) -> None:
                 "  printf \"M26E_GDB_CRITICAL_OBSERVATION "
                 f"duty={duty} symbol={symbol} result=observed\\n\"",
                 f"  disable {number}",
-                "  if $m26e_critical_seen == 4",
+                f"  if $m26e_critical_seen == {len(QEMU_CRITICAL_SYMBOLS)}",
                 "    detach",
                 "    quit",
                 "  end",
@@ -4049,6 +4167,14 @@ def _qemu_critical_gdb(args: argparse.Namespace) -> None:
             "QEMU critical-lane GDB observation failed; no transcript was published"
         )
     text = _artifact_text(transcript, "critical GDB transcript")
+    arm_rows = _marker_rows(
+        text,
+        "M26E_GDB_CRITICAL_ARM",
+        {"symbol", "result"},
+    )
+    arm_observed = {(row["symbol"], row["result"]) for row in arm_rows}
+    if arm_observed != {(QEMU_CRITICAL_ARM_SYMBOL, "observed")} or len(arm_rows) != 1:
+        raise EvidenceError("QEMU critical GDB runner omitted the post-SMP re-arm point")
     rows = _marker_rows(
         text,
         "M26E_GDB_CRITICAL_OBSERVATION",

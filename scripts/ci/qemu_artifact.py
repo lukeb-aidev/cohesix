@@ -31,13 +31,19 @@ TARGET_EVIDENCE_SCHEMA = "cohesix.test-plan.target-evidence.v1"
 SOURCE_PREFIX = "sha256:"
 QEMU_INTEGRATION_TIER = "qemu-integration"
 QEMU_DIAGNOSTIC_TIER = "qemu-diagnostic"
-CANONICAL_SEL4_PROFILE = "qemu_smp_production"
+CANONICAL_DARWIN_SEL4_PROFILE = "qemu_smp_production"
+CANONICAL_LINUX_SEL4_PROFILE = "qemu_smp_kvm_production"
 CANONICAL_MACHINE = "virt"
 CANONICAL_GIC_VERSION = "3"
 CANONICAL_VIRTUALIZATION = "off"
-CANONICAL_MACHINE_EXTRA = "kernel-irqchip=off"
-CANONICAL_CPU = "cortex-a57"
-CANONICAL_TIMER_CLOCK_HZ = 24_000_000
+CANONICAL_DARWIN_MACHINE_EXTRA = "kernel-irqchip=off"
+CANONICAL_DARWIN_CPU = "cortex-a57"
+CANONICAL_LINUX_MACHINE_EXTRA = ""
+CANONICAL_LINUX_CPU = "host"
+PRODUCTION_PROFILE_TIMER_CLOCK_HZ = {
+    CANONICAL_DARWIN_SEL4_PROFILE: 24_000_000,
+    CANONICAL_LINUX_SEL4_PROFILE: 31_250_000,
+}
 CANONICAL_SMP = "4,cores=4,threads=1,sockets=1"
 CANONICAL_NET_BACKEND = "virtio"
 QEMU_REQUIRED_FILES = (
@@ -55,6 +61,15 @@ QEMU_REQUIRED_FILES = (
     "host-tools/swarmui",
     "cohesix-qemu-launch-artifacts.json",
 )
+
+
+def canonical_cpu(host_system: str | None = None) -> str:
+    """Return the production CPU model for one QEMU host implementation."""
+
+    selected_host = host_system or platform.system()
+    if selected_host == "Linux":
+        return CANONICAL_LINUX_CPU
+    return CANONICAL_DARWIN_CPU
 
 
 class EvidenceError(RuntimeError):
@@ -337,20 +352,40 @@ def qemu_claim(
         reasons.append(f"unsupported claiming host {host_system}")
     if accelerator == "tcg":
         reasons.append("TCG is diagnostic-only")
-    if sel4_profile != CANONICAL_SEL4_PROFILE:
-        reasons.append("selected seL4 profile is not qemu_smp_production")
+    expected_sel4_profile = {
+        "Darwin": CANONICAL_DARWIN_SEL4_PROFILE,
+        "Linux": CANONICAL_LINUX_SEL4_PROFILE,
+    }.get(host_system)
+    if expected_sel4_profile is not None and sel4_profile != expected_sel4_profile:
+        reasons.append("selected seL4 profile differs from the host production envelope")
     if machine != CANONICAL_MACHINE:
         reasons.append("machine type is not virt")
     if gic_version != CANONICAL_GIC_VERSION:
         reasons.append("machine does not use GICv3")
     if virtualization != CANONICAL_VIRTUALIZATION:
         reasons.append("machine virtualization is not off")
-    if machine_extra != CANONICAL_MACHINE_EXTRA:
-        reasons.append("machine does not use exact kernel-irqchip=off envelope")
-    if cpu != CANONICAL_CPU:
-        reasons.append("CPU is not cortex-a57")
-    if timer_clock_hz != CANONICAL_TIMER_CLOCK_HZ:
-        reasons.append("selected seL4 timer is not 24 MHz")
+    expected_machine_extra = {
+        "Darwin": CANONICAL_DARWIN_MACHINE_EXTRA,
+        "Linux": CANONICAL_LINUX_MACHINE_EXTRA,
+    }.get(host_system)
+    expected_cpu = {
+        "Darwin": CANONICAL_DARWIN_CPU,
+        "Linux": CANONICAL_LINUX_CPU,
+    }.get(host_system)
+    if expected_machine_extra is not None and machine_extra != expected_machine_extra:
+        reasons.append("machine extra differs from the host production envelope")
+    if expected_cpu is not None and cpu != expected_cpu:
+        reasons.append("CPU differs from the host production envelope")
+    expected_timer_clock_hz = (
+        PRODUCTION_PROFILE_TIMER_CLOCK_HZ.get(expected_sel4_profile)
+        if expected_sel4_profile is not None
+        else None
+    )
+    if (
+        expected_timer_clock_hz is not None
+        and timer_clock_hz != expected_timer_clock_hz
+    ):
+        reasons.append("selected seL4 timer differs from the host production envelope")
     if smp != CANONICAL_SMP:
         reasons.append("QEMU SMP topology is not the four-core production envelope")
     if net_backend != CANONICAL_NET_BACKEND:
@@ -2213,7 +2248,7 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("hvf", "kvm", "tcg"),
     )
     record_parser.add_argument("--machine", default=CANONICAL_MACHINE)
-    record_parser.add_argument("--cpu", default=CANONICAL_CPU)
+    record_parser.add_argument("--cpu", default=canonical_cpu())
     record_parser.add_argument("--cargo-profile", default="release")
     record_parser.add_argument("--root-task-features", required=True)
     record_parser.add_argument("--cargo-target", required=True)

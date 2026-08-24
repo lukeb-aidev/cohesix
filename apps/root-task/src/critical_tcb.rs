@@ -11,19 +11,23 @@
 //! silently dropping containment work would strand a TCB/SC/Reply relation.
 
 use crate::generated::{self, TemporalExecution, TemporalTaskKind, TimeoutPolicy};
-use heapless::Deque;
+use crate::worker_supervisor::MAX_EXECUTABLE_WORKER_SLOTS;
+use core::sync::atomic::{
+    AtomicBool, AtomicU16, AtomicU32, AtomicU64, AtomicU8, AtomicUsize, Ordering,
+};
 
 /// Exact maximum generated root-control queue depth.
-pub const WORKER_CONTROL_QUEUE_CAPACITY: usize = 8;
-/// Exact maximum generated executable Worker slots.
-pub const WORKER_FAULT_MAILBOX_CAPACITY: usize = 3;
+pub const WORKER_CONTROL_QUEUE_CAPACITY: usize = MAX_EXECUTABLE_WORKER_SLOTS;
+const WORKER_CONTROL_RING_STORAGE: usize = WORKER_CONTROL_QUEUE_CAPACITY + 1;
+/// Static storage ceiling for generated executable Worker fault owners.
+pub const WORKER_FAULT_MAILBOX_CAPACITY: usize = MAX_EXECUTABLE_WORKER_SLOTS;
 /// Storage ceiling for generated isolated-service fault owners.
 pub const SERVICE_FAULT_RECORD_CAPACITY: usize = 2;
 /// Exact maximum generated linked-driver fault records.
 pub const DRIVER_FAULT_RECORD_CAPACITY: usize = 7;
 /// Storage ceiling covering the larger Pi profile; QEMU seals its smaller
 /// generated as-built registry without fabricating Pi-only TCBs.
-pub const FAULT_REGISTRY_CAPACITY: usize = 18;
+pub const FAULT_REGISTRY_CAPACITY: usize = 80;
 /// Number of independent critical root duties.
 pub const CRITICAL_TCB_COUNT: usize = 5;
 
@@ -63,6 +67,275 @@ pub struct WorkerControlRecord {
     pub task_index: u16,
     pub identity: GenerationIdentity,
     pub operation: WorkerControlOperation,
+}
+
+impl WorkerControlOperation {
+    const fn encode(self) -> u8 {
+        match self {
+            Self::Admit => 1,
+            Self::Shutdown => 2,
+            Self::Revoke => 3,
+        }
+    }
+
+    const fn decode(value: u8) -> Option<Self> {
+        match value {
+            1 => Some(Self::Admit),
+            2 => Some(Self::Shutdown),
+            3 => Some(Self::Revoke),
+            _ => None,
+        }
+    }
+}
+
+struct AtomicWorkerControlRecord {
+    sequence: AtomicU64,
+    task_index: AtomicU16,
+    identity_slot: AtomicU16,
+    lease_epoch: AtomicU32,
+    supervisor_generation: AtomicU32,
+    cap_generation: AtomicU32,
+    operation: AtomicU8,
+}
+
+impl AtomicWorkerControlRecord {
+    const fn new() -> Self {
+        Self {
+            sequence: AtomicU64::new(0),
+            task_index: AtomicU16::new(0),
+            identity_slot: AtomicU16::new(0),
+            lease_epoch: AtomicU32::new(0),
+            supervisor_generation: AtomicU32::new(0),
+            cap_generation: AtomicU32::new(0),
+            operation: AtomicU8::new(0),
+        }
+    }
+
+    fn store(&self, record: WorkerControlRecord) {
+        self.sequence.store(record.sequence, Ordering::Relaxed);
+        self.task_index.store(record.task_index, Ordering::Relaxed);
+        self.identity_slot
+            .store(record.identity.slot, Ordering::Relaxed);
+        self.lease_epoch
+            .store(record.identity.lease_epoch, Ordering::Relaxed);
+        self.supervisor_generation
+            .store(record.identity.supervisor_generation, Ordering::Relaxed);
+        self.cap_generation
+            .store(record.identity.cap_generation, Ordering::Relaxed);
+        self.operation
+            .store(record.operation.encode(), Ordering::Relaxed);
+    }
+
+    fn load(&self) -> Result<WorkerControlRecord, WorkerControlQueueError> {
+        let operation = WorkerControlOperation::decode(self.operation.load(Ordering::Relaxed))
+            .ok_or(WorkerControlQueueError::InvalidRecord)?;
+        Ok(WorkerControlRecord {
+            sequence: self.sequence.load(Ordering::Relaxed),
+            task_index: self.task_index.load(Ordering::Relaxed),
+            identity: GenerationIdentity {
+                slot: self.identity_slot.load(Ordering::Relaxed),
+                lease_epoch: self.lease_epoch.load(Ordering::Relaxed),
+                supervisor_generation: self.supervisor_generation.load(Ordering::Relaxed),
+                cap_generation: self.cap_generation.load(Ordering::Relaxed),
+            },
+            operation,
+        })
+    }
+}
+
+/// Internal corruption or ownership violation in the atomic control ring.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WorkerControlQueueError {
+    /// A ring cell did not contain a valid compiler-declared operation.
+    InvalidRecord,
+    /// More than one critical validator attempted to advance the pipeline.
+    ValidatorContended,
+    /// More than one root consumer attempted to drain validated policy.
+    ConsumerContended,
+}
+
+/// Bounded wait-free root-control to Worker-supervisor policy pipeline.
+///
+/// Root-control publishes, the restricted Worker-supervisor validates, and
+/// root-control consumes the validated record. Three monotonic ring cursors
+/// preserve that ordering without copying records into a second queue or
+/// sharing a cross-core lock. Capacity is released only after final consume.
+pub struct WorkerControlQueue {
+    cells: [AtomicWorkerControlRecord; WORKER_CONTROL_RING_STORAGE],
+    head: AtomicUsize,
+    validated: AtomicUsize,
+    tail: AtomicUsize,
+    producer_active: AtomicBool,
+    validator_active: AtomicBool,
+    consumer_active: AtomicBool,
+}
+
+impl Default for WorkerControlQueue {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl WorkerControlQueue {
+    /// Create an empty bounded ring.
+    pub const fn new() -> Self {
+        Self {
+            cells: [const { AtomicWorkerControlRecord::new() }; WORKER_CONTROL_RING_STORAGE],
+            head: AtomicUsize::new(0),
+            validated: AtomicUsize::new(0),
+            tail: AtomicUsize::new(0),
+            producer_active: AtomicBool::new(false),
+            validator_active: AtomicBool::new(false),
+            consumer_active: AtomicBool::new(false),
+        }
+    }
+
+    const fn advance(index: usize) -> usize {
+        if index + 1 == WORKER_CONTROL_RING_STORAGE {
+            0
+        } else {
+            index + 1
+        }
+    }
+
+    fn len_from(head: usize, tail: usize) -> usize {
+        if tail >= head {
+            tail - head
+        } else {
+            WORKER_CONTROL_RING_STORAGE - head + tail
+        }
+    }
+
+    /// Publish one exact record without sharing the fault-mailbox lock.
+    pub fn publish(&self, record: WorkerControlRecord) -> PublishResult {
+        if worker_fault_mailbox_index(record.task_index).is_none()
+            || self
+                .producer_active
+                .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+                .is_err()
+        {
+            return PublishResult::Refused;
+        }
+        let tail = self.tail.load(Ordering::Relaxed);
+        let head = self.head.load(Ordering::Acquire);
+        let generated_capacity = usize::from(
+            generated::worker_resource_admission_config()
+                .handoff
+                .worker_control_queue_capacity,
+        );
+        if Self::len_from(head, tail) >= generated_capacity {
+            self.producer_active.store(false, Ordering::Release);
+            return PublishResult::Refused;
+        }
+        self.cells[tail].store(record);
+        self.tail.store(Self::advance(tail), Ordering::Release);
+        self.producer_active.store(false, Ordering::Release);
+        PublishResult::Published
+    }
+
+    /// Validate one published FIFO record on the sole restricted child.
+    pub fn validate_next(&self) -> Result<Option<WorkerControlRecord>, WorkerControlQueueError> {
+        if self
+            .validator_active
+            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .is_err()
+        {
+            return Err(WorkerControlQueueError::ValidatorContended);
+        }
+        let validated = self.validated.load(Ordering::Relaxed);
+        if validated == self.tail.load(Ordering::Acquire) {
+            self.validator_active.store(false, Ordering::Release);
+            return Ok(None);
+        }
+        let record = match self.cells[validated].load() {
+            Ok(record)
+                if record.sequence != 0
+                    && worker_fault_mailbox_index(record.task_index).is_some()
+                    && record.identity.supervisor_generation != 0
+                    && record.identity.cap_generation != 0 =>
+            {
+                record
+            }
+            _ => {
+                self.validator_active.store(false, Ordering::Release);
+                return Err(WorkerControlQueueError::InvalidRecord);
+            }
+        };
+        self.validated
+            .store(Self::advance(validated), Ordering::Release);
+        self.validator_active.store(false, Ordering::Release);
+        Ok(Some(record))
+    }
+
+    /// Drain one critically validated FIFO record on the sole root consumer.
+    pub fn drain_validated(&self) -> Result<Option<WorkerControlRecord>, WorkerControlQueueError> {
+        if self
+            .consumer_active
+            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .is_err()
+        {
+            return Err(WorkerControlQueueError::ConsumerContended);
+        }
+        let head = self.head.load(Ordering::Relaxed);
+        if head == self.validated.load(Ordering::Acquire) {
+            self.consumer_active.store(false, Ordering::Release);
+            return Ok(None);
+        }
+        let record = self.cells[head].load();
+        if record.is_ok() {
+            self.head.store(Self::advance(head), Ordering::Release);
+        }
+        self.consumer_active.store(false, Ordering::Release);
+        record.map(Some)
+    }
+
+    /// Number of published records not yet consumed.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        let head = self.head.load(Ordering::Acquire);
+        let tail = self.tail.load(Ordering::Acquire);
+        Self::len_from(head, tail)
+    }
+
+    /// Number of published records awaiting critical validation.
+    #[must_use]
+    pub fn unvalidated_len(&self) -> usize {
+        let validated = self.validated.load(Ordering::Acquire);
+        let tail = self.tail.load(Ordering::Acquire);
+        Self::len_from(validated, tail)
+    }
+
+    /// Number of critically validated records awaiting root consumption.
+    #[must_use]
+    pub fn validated_len(&self) -> usize {
+        let head = self.head.load(Ordering::Acquire);
+        let validated = self.validated.load(Ordering::Acquire);
+        Self::len_from(head, validated)
+    }
+
+    /// Whether the ring contains no published record.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Whether one published record remains.
+    #[must_use]
+    pub fn pending(&self) -> bool {
+        !self.is_empty()
+    }
+
+    /// Whether the restricted child has published policy left to validate.
+    #[must_use]
+    pub fn validation_pending(&self) -> bool {
+        self.unvalidated_len() != 0
+    }
+
+    /// Whether root-control has critically validated policy left to consume.
+    #[must_use]
+    pub fn validated_pending(&self) -> bool {
+        self.validated_len() != 0
+    }
 }
 
 /// Fault class routed to an independent supervisor.
@@ -272,7 +545,6 @@ pub fn validate_worker_supervisor_wake(badge: u64) -> Option<bool> {
 
 /// Bounded non-blocking handoff state shared by critical root TCBs.
 pub struct CriticalHandoff {
-    worker_control: Deque<WorkerControlRecord, WORKER_CONTROL_QUEUE_CAPACITY>,
     worker_faults: [Option<FaultHandoffRecord>; WORKER_FAULT_MAILBOX_CAPACITY],
     service_faults: [Option<FaultHandoffRecord>; SERVICE_FAULT_RECORD_CAPACITY],
     driver_faults: [Option<FaultHandoffRecord>; DRIVER_FAULT_RECORD_CAPACITY],
@@ -289,7 +561,6 @@ impl CriticalHandoff {
     /// Create empty bounded handoff state suitable for static target storage.
     pub const fn new() -> Self {
         Self {
-            worker_control: Deque::new(),
             worker_faults: [None; WORKER_FAULT_MAILBOX_CAPACITY],
             service_faults: [None; SERVICE_FAULT_RECORD_CAPACITY],
             driver_faults: [None; DRIVER_FAULT_RECORD_CAPACITY],
@@ -301,9 +572,11 @@ impl CriticalHandoff {
     pub fn validate_generated_contract() -> Result<(), CriticalTopologyError> {
         let config = generated::worker_resource_admission_config();
         if !config.enabled
+            || config.handoff.worker_control_queue_capacity == 0
             || usize::from(config.handoff.worker_control_queue_capacity)
-                != WORKER_CONTROL_QUEUE_CAPACITY
-            || usize::from(config.handoff.worker_fault_mailboxes) != WORKER_FAULT_MAILBOX_CAPACITY
+                > WORKER_CONTROL_QUEUE_CAPACITY
+            || config.handoff.worker_fault_mailboxes == 0
+            || usize::from(config.handoff.worker_fault_mailboxes) > WORKER_FAULT_MAILBOX_CAPACITY
             || usize::from(config.fault_registry.service_tcbs) > SERVICE_FAULT_RECORD_CAPACITY
             || config.handoff.service_fault_badges.count != config.fault_registry.service_tcbs
             || usize::from(config.handoff.driver_fault_records) > DRIVER_FAULT_RECORD_CAPACITY
@@ -317,18 +590,6 @@ impl CriticalHandoff {
             return Err(CriticalTopologyError::GeneratedCapacityMismatch);
         }
         Ok(())
-    }
-
-    /// Publish policy work without blocking. Saturation is an explicit refusal.
-    pub fn publish_worker_control(&mut self, record: WorkerControlRecord) -> PublishResult {
-        if worker_fault_mailbox_index(record.task_index).is_none() {
-            return PublishResult::Refused;
-        }
-        if self.worker_control.push_back(record).is_ok() {
-            PublishResult::Published
-        } else {
-            PublishResult::Refused
-        }
     }
 
     /// Publish one required Worker fault record into its exact slot mailbox.
@@ -399,16 +660,14 @@ impl CriticalHandoff {
         Ok(())
     }
 
-    /// Drain coalesced Worker wakeups in generated fault-before-policy order.
-    pub fn drain_worker(&mut self) -> Option<WorkerSupervisorItem> {
+    /// Drain one Worker fault before the caller considers policy work.
+    pub fn drain_worker_fault(&mut self) -> Option<FaultHandoffRecord> {
         for mailbox in &mut self.worker_faults {
             if let Some(record) = mailbox.take() {
-                return Some(WorkerSupervisorItem::Fault(record));
+                return Some(record);
             }
         }
-        self.worker_control
-            .pop_front()
-            .map(WorkerSupervisorItem::Control)
+        None
     }
 
     /// Drain one exact isolated-service fault for the generated owner.
@@ -441,16 +700,10 @@ impl CriticalHandoff {
         self.fatal_fault_handoff
     }
 
-    /// Number of pending noncritical policy records.
+    /// Whether any Worker fault record remains after a drain turn.
     #[must_use]
-    pub fn worker_control_len(&self) -> usize {
-        self.worker_control.len()
-    }
-
-    /// Whether any Worker fault or control record remains after a drain turn.
-    #[must_use]
-    pub fn worker_pending(&self) -> bool {
-        !self.worker_control.is_empty() || self.worker_faults.iter().any(Option::is_some)
+    pub fn worker_fault_pending(&self) -> bool {
+        self.worker_faults.iter().any(Option::is_some)
     }
 
     /// Whether any driver containment record remains after a drain turn.
@@ -1160,8 +1413,9 @@ mod tests {
     #[test]
     fn coalesced_worker_drain_prioritizes_faults() {
         let mut handoff = CriticalHandoff::default();
+        let controls = WorkerControlQueue::new();
         assert_eq!(
-            handoff.publish_worker_control(WorkerControlRecord {
+            controls.publish(WorkerControlRecord {
                 sequence: 1,
                 task_index: worker_task_index(0),
                 identity: identity(0),
@@ -1171,21 +1425,31 @@ mod tests {
         );
         handoff.publish_worker_fault(fault(1, 2)).expect("fault");
         assert!(matches!(
-            handoff.drain_worker(),
-            Some(WorkerSupervisorItem::Fault(record)) if record.sequence == 2
+            handoff.drain_worker_fault(),
+            Some(record) if record.sequence == 2
         ));
         assert!(matches!(
-            handoff.drain_worker(),
-            Some(WorkerSupervisorItem::Control(record)) if record.sequence == 1
+            controls.validate_next().expect("critical validation"),
+            Some(record) if record.sequence == 1
+        ));
+        assert!(matches!(
+            controls.drain_validated().expect("root consume"),
+            Some(record) if record.sequence == 1
         ));
     }
 
     #[test]
     fn policy_queue_refuses_and_fault_mailbox_fails_fatal() {
         let mut handoff = CriticalHandoff::default();
-        for sequence in 0..WORKER_CONTROL_QUEUE_CAPACITY as u64 {
+        let controls = WorkerControlQueue::new();
+        let generated_queue_capacity = u64::from(
+            generated::worker_resource_admission_config()
+                .handoff
+                .worker_control_queue_capacity,
+        );
+        for sequence in 1..=generated_queue_capacity {
             assert_eq!(
-                handoff.publish_worker_control(WorkerControlRecord {
+                controls.publish(WorkerControlRecord {
                     sequence,
                     task_index: worker_task_index(0),
                     identity: identity(0),
@@ -1195,8 +1459,8 @@ mod tests {
             );
         }
         assert_eq!(
-            handoff.publish_worker_control(WorkerControlRecord {
-                sequence: 99,
+            controls.publish(WorkerControlRecord {
+                sequence: generated_queue_capacity + 1,
                 task_index: worker_task_index(0),
                 identity: identity(0),
                 operation: WorkerControlOperation::Revoke,

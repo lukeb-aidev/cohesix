@@ -25,7 +25,11 @@ sys.modules[SPEC.name] = launch_artifacts
 SPEC.loader.exec_module(launch_artifacts)
 
 
-def _launch_tree(tmp_path: Path) -> tuple[Path, Path, Path]:
+def _launch_tree(
+    tmp_path: Path,
+    *,
+    timer_clock_hz: int = 24_000_000,
+) -> tuple[Path, Path, Path]:
     out_dir = tmp_path / "out" / "cohesix"
     sel4_build = tmp_path / "out" / "sel4" / "qemu-smp-production"
     out_dir.mkdir(parents=True)
@@ -33,7 +37,7 @@ def _launch_tree(tmp_path: Path) -> tuple[Path, Path, Path]:
     timer_header = sel4_build / "kernel/gen_headers/plat/platform_gen.h"
     timer_header.parent.mkdir(parents=True)
     timer_header.write_text(
-        "#define TIMER_CLOCK_HZ ULL_CONST(24000000)\n",
+        f"#define TIMER_CLOCK_HZ ULL_CONST({timer_clock_hz})\n",
         encoding="utf-8",
     )
     for index, (_artifact_id, relative) in enumerate(
@@ -154,6 +158,24 @@ def test_launch_record_rejects_artifact_and_context_drift(tmp_path: Path) -> Non
         )
 
 
+def test_cross_host_artifact_verification_ignores_host_local_binary_path(
+    tmp_path: Path,
+) -> None:
+    out_dir, sel4_build, qemu = _launch_tree(tmp_path)
+    record = _write(out_dir, sel4_build, qemu)
+    document = json.loads(record.read_text(encoding="utf-8"))
+    document["qemu"]["binary"]["path"] = "/source-host/qemu-system-aarch64"
+    record.write_text(json.dumps(document), encoding="utf-8")
+
+    assert launch_artifacts.verify_artifact_identity(out_dir) == record
+    (out_dir / "staging/rootserver").write_bytes(b"changed")
+    with pytest.raises(
+        launch_artifacts.LaunchArtifactError,
+        match="identity mismatch: rootserver",
+    ):
+        launch_artifacts.verify_artifact_identity(out_dir)
+
+
 def test_launch_record_rejects_symlinks_and_types_non_gicv3_diagnostic(
     tmp_path: Path,
 ) -> None:
@@ -219,6 +241,84 @@ def test_launch_record_types_tcg_as_claim_ineligible_diagnostic(
     assert "TCG is diagnostic-only" in claim["reason"]
 
 
+def test_linux_kvm_claim_requires_host_cpu_and_in_kernel_gic() -> None:
+    claim = launch_artifacts._claim(
+        host_system="Linux",
+        accelerator="kvm",
+        sel4_profile="qemu_smp_kvm_production",
+        timer_clock_hz=31_250_000,
+        gic_version="3",
+        virtualization="off",
+        machine_extra="",
+        cpu="host",
+        smp="4,cores=4,threads=1,sockets=1",
+        net_backend="virtio",
+    )
+    assert claim == {
+        "eligible": True,
+        "tier": "qemu-integration",
+        "reason": "canonical production envelope",
+    }
+
+    rejected = launch_artifacts._claim(
+        host_system="Linux",
+        accelerator="kvm",
+        sel4_profile="qemu_smp_kvm_production",
+        timer_clock_hz=31_250_000,
+        gic_version="3",
+        virtualization="off",
+        machine_extra="kernel-irqchip=off",
+        cpu="cortex-a57",
+        smp="4,cores=4,threads=1,sockets=1",
+        net_backend="virtio",
+    )
+    assert rejected["eligible"] is False
+    assert "machine extra differs" in rejected["reason"]
+    assert "CPU differs" in rejected["reason"]
+
+
+def test_cross_built_kvm_guest_is_rebindable_but_not_a_darwin_claim(
+    tmp_path: Path,
+) -> None:
+    out_dir, sel4_build, qemu = _launch_tree(
+        tmp_path,
+        timer_clock_hz=31_250_000,
+    )
+    record = launch_artifacts.write_record(
+        out_dir=out_dir,
+        sel4_build_dir=sel4_build,
+        profile="release",
+        cargo_target="aarch64-unknown-none",
+        root_task_features="release-qemu,bootstrap-trace",
+        gic_version="3",
+        sel4_profile="qemu_smp_kvm_production",
+        qemu=str(qemu),
+        accelerator="hvf",
+        virtualization="off",
+        machine_extra="kernel-irqchip=off",
+        cpu="cortex-a57",
+        smp="4,cores=4,threads=1,sockets=1",
+        net_backend="virtio",
+    )
+
+    document = json.loads(record.read_text(encoding="utf-8"))
+    assert document["claim"]["eligible"] is False
+    assert launch_artifacts.verify_artifact_identity(out_dir) == record
+    linux_claim = launch_artifacts._claim(
+        host_system="Linux",
+        accelerator="kvm",
+        sel4_profile="qemu_smp_kvm_production",
+        timer_clock_hz=31_250_000,
+        gic_version="3",
+        virtualization="off",
+        machine_extra="",
+        cpu="host",
+        smp="4,cores=4,threads=1,sockets=1",
+        net_backend="virtio",
+    )
+    assert linux_claim["eligible"] is True
+
+
 def test_launch_record_rejects_qemu_binary_and_timer_drift(tmp_path: Path) -> None:
     out_dir, sel4_build, qemu = _launch_tree(tmp_path)
     _write(out_dir, sel4_build, qemu)
@@ -239,4 +339,4 @@ def test_launch_record_rejects_qemu_binary_and_timer_drift(tmp_path: Path) -> No
     record = _write(out_dir, sel4_build, qemu)
     document = json.loads(record.read_text(encoding="utf-8"))
     assert document["claim"]["eligible"] is False
-    assert "not 24 MHz" in document["claim"]["reason"]
+    assert "timer differs from the host production envelope" in document["claim"]["reason"]

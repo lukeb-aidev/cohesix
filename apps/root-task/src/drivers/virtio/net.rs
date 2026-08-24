@@ -69,7 +69,14 @@ const fn env_flag(value: Option<&'static str>) -> bool {
     }
 }
 
-const VIRTQ_FORCE_CACHEABLE: bool = cfg!(feature = "dev-virt") || cfg!(feature = "cache-trace");
+// QEMU's VirtIO device model and an accelerated guest access the same RAM
+// through host and guest mappings. Keep those mappings Normal cacheable on the
+// production VirtIO path, then use the existing bounded DMA clean/invalidate
+// contract around ownership transfers. An uncached guest alias of QEMU's
+// cacheable host mapping is not a coherent DMA contract on AArch64 KVM.
+const VIRTQ_FORCE_CACHEABLE: bool = cfg!(feature = "net-backend-virtio")
+    || cfg!(feature = "dev-virt")
+    || cfg!(feature = "cache-trace");
 const VIRTQ_DIAG: bool = cfg!(feature = "dev-virt") || cfg!(feature = "cache-trace");
 const VIRTQ_DIAG_STRICT: bool = VIRTQ_DIAG && env_flag(option_env!("VIRTQ_DIAG_STRICT"));
 const VIRTQ_METADATA_UNCACHED: bool =
@@ -164,6 +171,10 @@ const TX_NOTIFY_BATCH_PACKETS: u16 = 4;
 const TX_NOTIFY_BATCH_BYTES: usize = 4096;
 const TX_RECLAIM_IRQ_BUDGET: u16 = 8;
 const TX_RECLAIM_POLL_BUDGET: u16 = 2;
+/// Bound idle MMIO health/interrupt observation without exiting accelerated
+/// QEMU on every used-ring probe. Packet visibility still comes directly from
+/// the device-owned used ring, so useful RX work bypasses this cadence.
+const RX_IDLE_MMIO_PROBE_MS: u64 = 10;
 #[cfg(debug_assertions)]
 const TX_RECLAIM_STALL_POLL_LIMIT: u16 = 32;
 const TX_STATS_LOG_MS: u64 = 1_000;
@@ -2345,6 +2356,7 @@ pub struct VirtioNet {
     mac: EthernetAddress,
     rx_poll_count: u64,
     rx_used_count: u64,
+    rx_last_mmio_probe_ms: u64,
     last_used_idx_debug: u16,
     last_snapshot_rx_used: u16,
     last_snapshot_tx_used: u16,
@@ -3015,6 +3027,7 @@ impl VirtioNet {
             mac,
             rx_poll_count: 0,
             rx_used_count: 0,
+            rx_last_mmio_probe_ms: 0,
             last_used_idx_debug: 0,
             last_snapshot_rx_used: 0,
             last_snapshot_tx_used: 0,
@@ -3156,6 +3169,10 @@ impl VirtioNet {
             return None;
         }
         self.rx_poll_count = self.rx_poll_count.wrapping_add(1);
+        if !self.rx_queue.used_entry_pending().unwrap_or(true) {
+            self.poll_idle_rx_mmio_if_due();
+            return None;
+        }
         self.poll_rx_interrupt_without_tx_work();
         if self.device_faulted {
             return None;
@@ -3174,6 +3191,22 @@ impl VirtioNet {
     }
 
     fn poll_rx_interrupt_without_tx_work(&mut self) {
+        self.rx_last_mmio_probe_ms = crate::hal::timebase().now_ms();
+        let (status, _) = self.regs.acknowledge_interrupts();
+        if status != 0 {
+            NET_DIAG.record_rx_irq();
+        }
+        self.check_device_health();
+    }
+
+    fn poll_idle_rx_mmio_if_due(&mut self) {
+        let now_ms = crate::hal::timebase().now_ms();
+        if self.rx_last_mmio_probe_ms != 0
+            && now_ms.saturating_sub(self.rx_last_mmio_probe_ms) < RX_IDLE_MMIO_PROBE_MS
+        {
+            return;
+        }
+        self.rx_last_mmio_probe_ms = now_ms;
         let (status, _) = self.regs.acknowledge_interrupts();
         if status != 0 {
             NET_DIAG.record_rx_irq();
@@ -10901,6 +10934,17 @@ impl VirtQueue {
     fn read_avail_idx(&self) -> u16 {
         let avail = self.avail.as_ptr();
         unsafe { u16::from_le(read_volatile(&(*avail).idx)) }
+    }
+
+    /// Observe whether the device has published useful work using shared-ring
+    /// memory only. Callers may therefore avoid an MMIO exit on the common
+    /// empty-poll path while retaining the existing validated `pop_used`
+    /// sequence for every material entry.
+    fn used_entry_pending(&self) -> Result<bool, DmaError> {
+        self.invalidate_used_header_for_cpu()?;
+        let used = self.used.as_ptr();
+        let used_idx = u16::from_le(unsafe { read_volatile(&(*used).idx) });
+        Ok(used_idx != self.last_used)
     }
 
     fn indices(&self) -> (u16, u16) {

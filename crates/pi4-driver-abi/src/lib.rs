@@ -809,7 +809,11 @@ pub struct DriverRuntimeCadenceRecord {
 
 impl DriverRuntimeCadenceRecord {
     /// Construct one uncommitted cadence body.
+    ///
+    /// Arguments intentionally mirror the fixed wire fields so call sites
+    /// cannot obscure which bounded measurement is published.
     #[must_use]
+    #[allow(clippy::too_many_arguments)]
     pub const fn staged(
         sequence: u32,
         phase: u32,
@@ -834,7 +838,11 @@ impl DriverRuntimeCadenceRecord {
     }
 
     /// Construct one uncommitted cadence body with an inter-entry sample.
+    ///
+    /// Arguments intentionally mirror the fixed wire fields so the two-entry
+    /// timing identity remains explicit at every publication site.
     #[must_use]
+    #[allow(clippy::too_many_arguments)]
     pub const fn staged_with_previous_entry(
         sequence: u32,
         phase: u32,

@@ -19,6 +19,19 @@ from scripts import worker_task_evidence as evidence
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_uart_allows_public_cptr_diagnostics_but_typed_evidence_rejects_them() -> None:
+    text = evidence._artifact_text(
+        b"[diag root-bootstrap/v2] first poll call cptr=0x0aa7\n",
+        "QEMU UART",
+    )
+    assert "cptr=0x0aa7" in text
+
+    with pytest.raises(evidence.EvidenceError, match="prohibited secret or capability"):
+        evidence._scan_sensitive({"detail": "cptr=0x0aa7"})
+    with pytest.raises(evidence.EvidenceError, match="prohibited sensitive"):
+        evidence._artifact_text(b"capability_value=0x0aa7\n", "QEMU UART")
+
+
 def _hash(label: str) -> str:
     return hashlib.sha256(label.encode("utf-8")).hexdigest()
 
@@ -245,7 +258,13 @@ def _generated_record(target: str) -> dict[str, object]:
                 "required": True,
                 "attach_badge_base": 638_324_736,
                 "epoch_bits": 8,
-            }
+            },
+            "task_abi": {
+                "enabled": True,
+                "version": 1,
+                "shared_page_bytes": 4096,
+                "shared_page_vaddr": 0x7100_1000,
+            },
         },
         "temporal_authority": {
             "tasks": [
@@ -594,6 +613,14 @@ def _live_qemu_inputs(root_dir: Path) -> SimpleNamespace:
     operation_path = root_dir / "scripts" / "cohsh" / "9p_batch.coh"
     operation_path.parent.mkdir(parents=True)
     operation_path.write_text("attach queen\nEXPECT OK\nls /\n", encoding="utf-8")
+    operation_log_path = root_dir / "target-operation.log"
+    operation_log_path.write_text(
+        "[cohsh][tcp] remote NineDoor ready as role Queen\n"
+        "[console] OK AUTH\n"
+        "[console] OK ATTACH role=queen\n"
+        "[console] OK CAT path=/proc/tests/9p_batch.txt bytes=7\n",
+        encoding="utf-8",
+    )
 
     def observation_file(path: Path) -> dict[str, object]:
         raw = path.read_bytes()
@@ -623,6 +650,7 @@ def _live_qemu_inputs(root_dir: Path) -> SimpleNamespace:
             "built_image": observation_file(qemu_out / "cohesix-system.cpio"),
             "image_identity": observation_file(launch_record_path),
             "operation_script": observation_file(operation_path),
+            "operation_log": observation_file(operation_log_path),
         },
     )
 
@@ -885,6 +913,8 @@ def _live_qemu_inputs(root_dir: Path) -> SimpleNamespace:
             "M26E_GDB_ROOT_ELF "
             f"elf_sha256={hashlib.sha256(root_elf_raw).hexdigest()} "
             f"root_image_sha256={session['root_image_sha256']}",
+            "M26E_GDB_CRITICAL_ARM "
+            f"symbol={evidence.QEMU_CRITICAL_ARM_SYMBOL} result=observed",
             *(
                 "M26E_GDB_CRITICAL_OBSERVATION "
                 f"duty={duty} symbol={symbol} result=observed"
@@ -1535,6 +1565,9 @@ def test_qemu_gdb_runner_binds_symbols_images_and_three_injections(
     fake_gdb.write_text(
         "#!/bin/sh\n"
         "printf '%s\\n' "
+        "'M26E_GDB_VSPACE_BIND role=worker-heartbeat phase=pre-ready register=TTBR0_EL1 result=bound' "
+        "'M26E_GDB_VSPACE_BIND role=worker-heartbeat phase=during-ipc register=TTBR0_EL1 result=bound' "
+        "'M26E_GDB_VSPACE_BIND role=worker-heartbeat phase=budget-exhaustion register=TTBR0_EL1 result=bound' "
         "'M26E_GDB_INJECTION role=worker-heartbeat phase=pre-ready symbol=_start action=zero-x0 result=continued' "
         "'M26E_GDB_INJECTION role=worker-heartbeat phase=during-ipc symbol=cohesix_worker_qemu_evidence_control_handler action=redirect-standard-fault result=continued' "
         "'M26E_GDB_INJECTION role=worker-heartbeat phase=budget-exhaustion symbol=cohesix_worker_qemu_evidence_control_handler action=redirect-timeout-spin result=continued'\n",
@@ -1570,8 +1603,37 @@ def test_qemu_gdb_runner_binds_symbols_images_and_three_injections(
     transcript = output.read_text(encoding="utf-8")
     assert transcript.count("M26E_QEMU_SESSION") == 1
     assert transcript.count("M26E_GDB_ELF") == 3
+    assert transcript.count("M26E_GDB_VSPACE_BIND") == 3
     assert transcript.count("M26E_GDB_INJECTION") == 3
     assert "gic_version=3" in transcript
+
+
+def test_rust_symbol_lookup_accepts_deliberately_local_evidence_symbols(
+    tmp_path: Path,
+) -> None:
+    fake_nm = tmp_path / "fake-rust-nm"
+    fake_nm.write_text(
+        "#!/bin/sh\n"
+        "case \" $* \" in *\" -g \"*) exit 42 ;; esac\n"
+        "printf '%s\\n' "
+        "'000000000006fc4c t root_task::ninedoor::cohesix_ninedoor_qemu_evidence_post_prepare' "
+        "'000000000006fc6c t root_task::ninedoor::cohesix_ninedoor_qemu_evidence_request_local_revoke'\n",
+        encoding="utf-8",
+    )
+    fake_nm.chmod(0o755)
+    root_elf = tmp_path / "root-task"
+    root_elf.write_bytes(b"root")
+
+    assert evidence._rust_symbol_addresses(  # noqa: SLF001
+        fake_nm,
+        root_elf,
+        evidence.QEMU_NINEDOOR_ROOT_SYMBOLS,
+        evidence.QEMU_NINEDOOR_ROOT_MODULE,
+        "root-task NineDoor evidence",
+    ) == {
+        evidence.QEMU_NINEDOOR_ROOT_SYMBOLS[0]: 0x6FC4C,
+        evidence.QEMU_NINEDOOR_ROOT_SYMBOLS[1]: 0x6FC6C,
+    }
 
 
 def test_qemu_service_and_critical_gdb_runners_bind_exact_elfs(
@@ -1592,7 +1654,7 @@ def test_qemu_service_and_critical_gdb_runners_bind_exact_elfs(
             f"{address:016x} T {evidence.QEMU_NINEDOOR_ROOT_MODULE}::{symbol}"
         )
         address += 0x100
-    for symbol in evidence.QEMU_CRITICAL_SYMBOLS:
+    for symbol in (evidence.QEMU_CRITICAL_ARM_SYMBOL, *evidence.QEMU_CRITICAL_SYMBOLS):
         symbol_lines.append(f"{address:016x} T {symbol}")
         address += 0x100
     fake_nm.write_text(
@@ -1653,10 +1715,14 @@ def test_qemu_service_and_critical_gdb_runners_bind_exact_elfs(
         )
 
     critical_rows = [
+        "M26E_GDB_CRITICAL_ARM "
+        f"symbol={evidence.QEMU_CRITICAL_ARM_SYMBOL} result=observed"
+    ]
+    critical_rows.extend(
         "M26E_GDB_CRITICAL_OBSERVATION "
         f"duty={duty} symbol={symbol} result=observed"
         for symbol, duty in evidence.QEMU_CRITICAL_DUTIES.items()
-    ]
+    )
     fake_gdb.write_text(
         "#!/bin/sh\nprintf '%s\\n' "
         + " ".join(repr(row) for row in critical_rows)
@@ -1690,11 +1756,13 @@ def test_qemu_service_evidence_rejects_auth_bypass_and_copied_session(
     session = json.loads(session_raw)
 
     observation = json.loads(inputs.auth_observation.read_text(encoding="utf-8"))
-    uart_path = Path(observation["serial_log"]["path"])
-    uart_path.write_text("Cohesix console ready\n", encoding="utf-8")
-    uart_raw = uart_path.read_bytes()
-    observation["serial_log"]["size_bytes"] = len(uart_raw)
-    observation["serial_log"]["sha256"] = hashlib.sha256(uart_raw).hexdigest()
+    operation_log_path = Path(observation["operation_log"]["path"])
+    operation_log_path.write_text("connected without authentication proof\n", encoding="utf-8")
+    operation_log_raw = operation_log_path.read_bytes()
+    observation["operation_log"]["size_bytes"] = len(operation_log_raw)
+    observation["operation_log"]["sha256"] = hashlib.sha256(
+        operation_log_raw
+    ).hexdigest()
     _write(inputs.auth_observation, observation)
     with pytest.raises(evidence.EvidenceError, match="live authenticated cohsh"):
         evidence._validate_authenticated_qemu_observation(  # noqa: SLF001

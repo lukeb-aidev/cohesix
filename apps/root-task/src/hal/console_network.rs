@@ -3,7 +3,7 @@
 // Purpose: Construct and contain the generated isolated console-network child.
 // Author: Lukas Bower
 
-//! HAL-owned construction for `console-network-service/v3`.
+//! HAL-owned construction for `console-network-service/v4`.
 //!
 //! Every child object and translation table is retyped below one retained
 //! compiler-selected revoke anchor. The root keeps only copied packet/control
@@ -85,10 +85,70 @@ const fn requires_timeout_endpoint(policy: crate::generated::TimeoutPolicy) -> b
 
 /// One nonblocking child-output turn copied into root-owned values.
 pub struct ConsoleNetworkTurn {
+    /// Exact root inputs newly consumed by the child.
+    pub input_completions: crate::console_network_service::ConsoleNetworkInputCompletions,
     /// Validated service event, when the event-ready bit was observed.
     pub event: Option<ConsoleNetworkEvent>,
     /// Validated Ethernet frame, when the packet-ready bit was observed.
     pub egress: Option<Vec<u8, { console_network_abi::ETHERNET_FRAME_BYTES }>>,
+}
+
+/// Exact validation stage that rejected one child-output observation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ConsoleNetworkPollStage {
+    /// Runtime lifecycle cannot admit observation.
+    State,
+    /// Notification badge contains undeclared authority.
+    Badge,
+    /// Child-published input-completion pair is invalid.
+    CompletionWatermarks,
+    /// Event-page committed sequence is not a valid readiness observation.
+    EventReadiness,
+    /// Semantic event body is invalid for the current state.
+    Event,
+    /// Egress packet body or identity is invalid.
+    Egress,
+}
+
+/// Bounded child-output failure retaining both protocol stage and boundary class.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ConsoleNetworkPollError {
+    stage: ConsoleNetworkPollStage,
+    boundary: BoundaryError,
+}
+
+impl ConsoleNetworkPollError {
+    const fn new(stage: ConsoleNetworkPollStage, boundary: BoundaryError) -> Self {
+        Self { stage, boundary }
+    }
+
+    /// Stable containment reason without formatting or allocation on the fault path.
+    #[must_use]
+    pub const fn reason(self) -> &'static str {
+        match (self.stage, self.boundary) {
+            (ConsoleNetworkPollStage::State, _) => "child-output-state",
+            (ConsoleNetworkPollStage::Badge, _) => "child-output-badge",
+            (ConsoleNetworkPollStage::CompletionWatermarks, BoundaryError::StaleIdentity) => {
+                "child-output-watermark-stale"
+            }
+            (ConsoleNetworkPollStage::CompletionWatermarks, _) => "child-output-watermark-invalid",
+            (ConsoleNetworkPollStage::EventReadiness, BoundaryError::StaleIdentity) => {
+                "child-output-event-readiness-stale"
+            }
+            (ConsoleNetworkPollStage::EventReadiness, _) => "child-output-event-readiness-invalid",
+            (ConsoleNetworkPollStage::Event, BoundaryError::InvalidState) => {
+                "child-output-event-state"
+            }
+            (ConsoleNetworkPollStage::Event, BoundaryError::StaleIdentity) => {
+                "child-output-event-stale"
+            }
+            (ConsoleNetworkPollStage::Event, _) => "child-output-event-invalid",
+            (ConsoleNetworkPollStage::Egress, BoundaryError::StaleIdentity) => {
+                "child-output-egress-stale"
+            }
+            (ConsoleNetworkPollStage::Egress, _) => "child-output-egress-invalid",
+        }
+    }
 }
 
 impl ConsoleNetworkTurn {
@@ -96,6 +156,12 @@ impl ConsoleNetworkTurn {
     #[must_use]
     pub const fn publication_observed(&self) -> bool {
         self.event.is_some() || self.egress.is_some()
+    }
+
+    /// Whether the child retired any exact root-owned input this turn.
+    #[must_use]
+    pub const fn input_progress_observed(&self) -> bool {
+        self.input_completions.any()
     }
 }
 
@@ -430,35 +496,72 @@ impl ConsoleNetworkRuntime {
     }
 
     /// Poll and validate all coalesced child output bits without blocking root.
-    pub fn poll_turn(&mut self) -> Result<ConsoleNetworkTurn, BoundaryError> {
+    pub fn poll_turn(&mut self) -> Result<ConsoleNetworkTurn, ConsoleNetworkPollError> {
         if !self.activated || self.contained || self.publication_ack_owed {
-            return Err(BoundaryError::InvalidState);
+            return Err(ConsoleNetworkPollError::new(
+                ConsoleNetworkPollStage::State,
+                BoundaryError::InvalidState,
+            ));
         }
         let mut badge = 0;
         let _ = sel4::poll(self.child_to_root_notification, &mut badge);
         if badge == 0 {
             return Ok(ConsoleNetworkTurn {
+                input_completions:
+                    crate::console_network_service::ConsoleNetworkInputCompletions::default(),
                 event: None,
                 egress: None,
             });
         }
         if badge & !(CHILD_WAKE_MASK as seL4_Word) != 0 {
             self.boundary.record_fault();
-            return Err(BoundaryError::InvalidRecord);
+            return Err(ConsoleNetworkPollError::new(
+                ConsoleNetworkPollStage::Badge,
+                BoundaryError::InvalidRecord,
+            ));
         }
         fence(Ordering::Acquire);
-        let event = if badge & seL4_Word::from(WAKE_EVENT_READY) != 0 {
-            Some(
-                self.boundary
-                    .accept_event(self.shared_frames[3].as_slice())?,
-            )
+        let event_ready = badge & seL4_Word::from(WAKE_EVENT_READY) != 0;
+        let input_completions = if event_ready {
+            self.boundary
+                .accept_completion_watermarks(self.shared_frames[3].as_slice())
+                .map_err(|boundary| {
+                    ConsoleNetworkPollError::new(
+                        ConsoleNetworkPollStage::CompletionWatermarks,
+                        boundary,
+                    )
+                })?
+        } else {
+            crate::console_network_service::ConsoleNetworkInputCompletions::default()
+        };
+        let event = if event_ready {
+            if self
+                .boundary
+                .event_publication_pending(self.shared_frames[3].as_slice())
+                .map_err(|boundary| {
+                    ConsoleNetworkPollError::new(ConsoleNetworkPollStage::EventReadiness, boundary)
+                })?
+            {
+                Some(
+                    self.boundary
+                        .accept_event(self.shared_frames[3].as_slice())
+                        .map_err(|boundary| {
+                            ConsoleNetworkPollError::new(ConsoleNetworkPollStage::Event, boundary)
+                        })?,
+                )
+            } else {
+                None
+            }
         } else {
             None
         };
         let egress = if badge & seL4_Word::from(WAKE_PACKET_TX_READY) != 0 {
             Some(
                 self.boundary
-                    .accept_egress(self.shared_frames[1].as_slice())?,
+                    .accept_egress(self.shared_frames[1].as_slice())
+                    .map_err(|boundary| {
+                        ConsoleNetworkPollError::new(ConsoleNetworkPollStage::Egress, boundary)
+                    })?,
             )
         } else {
             None
@@ -466,7 +569,11 @@ impl ConsoleNetworkRuntime {
         // A coalesced event+egress observation still earns one global credit:
         // both records are root-owned before the single ACK is made available.
         self.publication_ack_owed = event.is_some() || egress.is_some();
-        Ok(ConsoleNetworkTurn { event, egress })
+        Ok(ConsoleNetworkTurn {
+            input_completions,
+            event,
+            egress,
+        })
     }
 
     /// Grant one publication credit after the adapter retained all copied output.

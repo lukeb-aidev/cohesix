@@ -17,7 +17,7 @@ use worker_task_abi::WorkerRole;
 fn faults_before_and_after_ready_contain_exact_generation() {
     let (mut starting, _image) = starting(WorkerRole::Gpu, 1);
     let identity = starting
-        .snapshot(WorkerRole::Gpu)
+        .snapshot(WorkerRole::Gpu, 0)
         .expect("snapshot")
         .identity
         .expect("identity");
@@ -48,7 +48,7 @@ fn ready_and_shutdown_deadlines_force_terminal_containment() {
     );
     assert_eq!(supervisor.enforce_deadlines(5_100).expect("at bound"), 1);
     let snapshot = supervisor
-        .snapshot(WorkerRole::Heartbeat)
+        .snapshot(WorkerRole::Heartbeat, 0)
         .expect("snapshot");
     assert_eq!(
         snapshot.terminal_reason,
@@ -58,16 +58,34 @@ fn ready_and_shutdown_deadlines_force_terminal_containment() {
 
 #[test]
 fn preconstructed_ready_deadline_starts_at_actual_admission() {
-    let (mut supervisor, _image) = starting(WorkerRole::Heartbeat, 1);
+    let (image, plan) = image_fixture(WorkerRole::Heartbeat);
+    let mut supervisor = WorkerSupervisor::new(FakeBackend {
+        containment_complete: true,
+        defer_resume: true,
+        ..FakeBackend::default()
+    })
+    .expect("generated Worker pool");
+    let deferred = supervisor
+        .spawn(WorkerRole::Heartbeat, 0, 1, &plan, &image, 100)
+        .expect("preconstruct deferred Worker");
+    assert_eq!(deferred.lifecycle, WorkerLifecycleState::Queued);
+    assert_eq!(deferred.ready_deadline_ms, 0);
+    assert_eq!(
+        supervisor
+            .enforce_deadlines(100_000)
+            .expect("deferred Worker has no READY deadline"),
+        0
+    );
     let receipt = supervisor
-        .arm_preconstructed_ready_deadline(WorkerRole::Heartbeat, 10_000)
+        .arm_preconstructed_ready_deadline(WorkerRole::Heartbeat, 0, 10_000)
         .expect("arm deferred READY deadline");
+    assert_eq!(receipt.lifecycle, WorkerLifecycleState::Starting);
     assert_eq!(receipt.ready_deadline_ms, 15_000);
     assert!(!supervisor
-        .enforce_role_deadline(WorkerRole::Heartbeat, 14_999)
+        .enforce_slot_deadline(WorkerRole::Heartbeat, 0, 14_999)
         .expect("before refreshed bound"));
     assert!(supervisor
-        .enforce_role_deadline(WorkerRole::Heartbeat, 15_000)
+        .enforce_slot_deadline(WorkerRole::Heartbeat, 0, 15_000)
         .expect("at refreshed bound"));
 }
 
@@ -77,16 +95,17 @@ fn incomplete_containment_strands_slot_and_blocks_reuse() {
     let mut supervisor = WorkerSupervisor::new(FakeBackend {
         containment_complete: false,
         ..FakeBackend::default()
-    });
+    })
+    .expect("generated Worker pool");
     supervisor
-        .spawn(WorkerRole::Heartbeat, 1, &plan, &image, 0)
+        .spawn(WorkerRole::Heartbeat, 0, 1, &plan, &image, 0)
         .expect("construction");
     assert_eq!(
-        supervisor.revoke(WorkerRole::Heartbeat),
+        supervisor.revoke(WorkerRole::Heartbeat, 0),
         Err(WorkerSupervisorError::ContainmentIncomplete)
     );
     assert_eq!(
-        supervisor.spawn(WorkerRole::Heartbeat, 2, &plan, &image, 0),
+        supervisor.spawn(WorkerRole::Heartbeat, 0, 2, &plan, &image, 0),
         Err(WorkerSupervisorError::SlotBusy)
     );
 }

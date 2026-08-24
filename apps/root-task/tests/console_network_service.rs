@@ -4,8 +4,10 @@
 // Author: Lukas Bower
 
 use console_network_abi::{
-    ExchangeKind, ExchangePage, PacketDirection, PacketPage, SendBatchBuilder,
-    CONSOLE_PAYLOAD_BYTES, EXCHANGE_COMMIT_OFFSET, PACKET_COMMIT_OFFSET, SHARED_PAGE_BYTES,
+    CommandBatchBuilder, CommandBatchCursor, ExchangeKind, ExchangePage, PacketDirection,
+    PacketPage, SendBatchBuilder, CONSOLE_PAYLOAD_BYTES, CONTROL_CONSUMED_SEQUENCE_OFFSET,
+    EXCHANGE_COMMIT_OFFSET, INGRESS_CONSUMED_SEQUENCE_OFFSET, PACKET_COMMIT_OFFSET,
+    SHARED_PAGE_BYTES,
 };
 use root_task::console_network_service::{
     BoundaryError, ConsoleNetworkBoundary, ConsoleNetworkContainmentCursor,
@@ -36,6 +38,22 @@ fn event_page(
     event
         .encode(&mut page)
         .expect("test event must fill one exact shared page");
+    page
+}
+
+fn completion_page(
+    generation: u64,
+    packet_sequence: u64,
+    control_sequence: u64,
+) -> [u8; SHARED_PAGE_BYTES] {
+    let mut page = [0; SHARED_PAGE_BYTES];
+    ExchangePage::empty(generation)
+        .encode(&mut page)
+        .expect("test watermark page must fill one exact shared page");
+    page[INGRESS_CONSUMED_SEQUENCE_OFFSET..INGRESS_CONSUMED_SEQUENCE_OFFSET + 8]
+        .copy_from_slice(&packet_sequence.to_le_bytes());
+    page[CONTROL_CONSUMED_SEQUENCE_OFFSET..CONTROL_CONSUMED_SEQUENCE_OFFSET + 8]
+        .copy_from_slice(&control_sequence.to_le_bytes());
     page
 }
 
@@ -97,7 +115,7 @@ fn generated_contract_is_single_listener_active_mcs_authority() {
 }
 
 #[test]
-fn authenticated_commands_and_exact_packet_control_completions_are_bounded() {
+fn authenticated_commands_and_exact_packet_control_watermarks_are_bounded() {
     let mut boundary = ConsoleNetworkBoundary::new(9).expect("generated contract");
     let generation = boundary.generation();
     boundary
@@ -145,14 +163,7 @@ fn authenticated_commands_and_exact_packet_control_completions_are_bounded() {
         Err(BoundaryError::Backpressure)
     );
     boundary
-        .accept_event(&event_page(
-            generation,
-            4,
-            ExchangeKind::PacketConsumed,
-            0,
-            packet_sequence,
-            &[],
-        ))
+        .accept_completion_watermarks(&completion_page(generation, packet_sequence, 0))
         .expect("exact packet completion");
     boundary
         .stage_ingress(&[5], &mut ingress)
@@ -172,13 +183,10 @@ fn authenticated_commands_and_exact_packet_control_completions_are_bounded() {
         Err(BoundaryError::Backpressure)
     );
     boundary
-        .accept_event(&event_page(
+        .accept_completion_watermarks(&completion_page(
             generation,
-            5,
-            ExchangeKind::ControlCompleted,
-            0,
+            packet_sequence,
             control_sequence,
-            &[],
         ))
         .expect("exact control completion");
     let final_control_sequence = boundary
@@ -186,20 +194,17 @@ fn authenticated_commands_and_exact_packet_control_completions_are_bounded() {
         .expect("completion preserves ACK/ERR/END ordering");
     assert!(!boundary.console_output_drained(42));
     boundary
-        .accept_event(&event_page(
+        .accept_completion_watermarks(&completion_page(
             generation,
-            6,
-            ExchangeKind::ControlCompleted,
-            0,
+            packet_sequence,
             final_control_sequence,
-            &[],
         ))
         .expect("final control accepted by child");
     assert!(!boundary.console_output_drained(42));
     boundary
         .accept_event(&event_page(
             generation,
-            7,
+            4,
             ExchangeKind::OutputDrained,
             42,
             final_control_sequence,
@@ -211,7 +216,7 @@ fn authenticated_commands_and_exact_packet_control_completions_are_bounded() {
     let command = boundary
         .accept_event(&event_page(
             generation,
-            8,
+            5,
             ExchangeKind::Command,
             42,
             0,
@@ -274,20 +279,13 @@ fn authorized_batch_is_one_exact_control_and_one_exact_drain_fence() {
     );
 
     boundary
-        .accept_event(&event_page(
-            generation,
-            4,
-            ExchangeKind::ControlCompleted,
-            0,
-            sequence,
-            &[],
-        ))
+        .accept_completion_watermarks(&completion_page(generation, 0, sequence))
         .expect("control page released");
     assert!(!boundary.console_output_drained(77));
     boundary
         .accept_event(&event_page(
             generation,
-            5,
+            4,
             ExchangeKind::OutputDrained,
             77,
             sequence,
@@ -295,6 +293,62 @@ fn authorized_batch_is_one_exact_control_and_one_exact_drain_fence() {
         ))
         .expect("whole batch left child TCP queue");
     assert!(boundary.console_output_drained(77));
+}
+
+#[test]
+fn authenticated_command_batch_is_validated_and_copied_atomically() {
+    let mut boundary = ConsoleNetworkBoundary::new(12).expect("generated contract");
+    let generation = boundary.generation();
+    for (sequence, kind, connection_id, payload) in [
+        (1, ExchangeKind::Ready, 0, READY_IDENTITY.as_bytes()),
+        (2, ExchangeKind::Connected, 88, &[][..]),
+        (3, ExchangeKind::Authenticated, 88, &[][..]),
+    ] {
+        boundary
+            .accept_event(&event_page(
+                generation,
+                sequence,
+                kind,
+                connection_id,
+                0,
+                payload,
+            ))
+            .expect("ordered authenticated lifecycle");
+    }
+
+    let mut storage = [0u8; CONSOLE_PAYLOAD_BYTES];
+    let payload_len = {
+        let mut builder = CommandBatchBuilder::new(&mut storage);
+        assert_eq!(builder.try_push_command(101, "help"), Ok(true));
+        assert_eq!(builder.try_push_command(102, "smp mcs"), Ok(true));
+        assert_eq!(builder.try_push_command(103, "cat /proc/boot"), Ok(true));
+        builder.finish().expect("bounded command batch").len()
+    };
+    let event = boundary
+        .accept_event(&event_page(
+            generation,
+            4,
+            ExchangeKind::CommandBatch,
+            88,
+            0,
+            &storage[..payload_len],
+        ))
+        .expect("validated authenticated command batch");
+    assert_eq!(event.kind(), ExchangeKind::CommandBatch);
+    let mut cursor = CommandBatchCursor::validate(event.payload_bytes()).unwrap();
+    assert_eq!(
+        cursor.next_command(event.payload_bytes()).unwrap(),
+        Some((101, "help"))
+    );
+    assert_eq!(
+        cursor.next_command(event.payload_bytes()).unwrap(),
+        Some((102, "smp mcs"))
+    );
+    assert_eq!(
+        cursor.next_command(event.payload_bytes()).unwrap(),
+        Some((103, "cat /proc/boot"))
+    );
+    assert_eq!(cursor.next_command(event.payload_bytes()), Ok(None));
 }
 
 #[test]

@@ -14,7 +14,8 @@ use core::fmt;
 use core::fmt::Write as _;
 
 use console_network_abi::{
-    ExchangeKind, SendBatchBuilder, CONSOLE_PAYLOAD_BYTES, SEND_BATCH_MAX_RECORDS,
+    CommandBatchCursor, ExchangeKind, SendBatchBuilder, CONSOLE_PAYLOAD_BYTES,
+    SEND_BATCH_MAX_RECORDS,
 };
 use heapless::{Deque, String as HeaplessString, Vec as HeaplessVec};
 use smoltcp::time::Instant;
@@ -53,14 +54,35 @@ struct QueuedConsoleOutput {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct PendingResponseBatch {
+    sequence: u64,
+    terminal_count: u16,
+    control_completed: bool,
+    output_drained: bool,
+}
+
+impl PendingResponseBatch {
+    const fn new(sequence: u64, terminal_count: u16) -> Self {
+        Self {
+            sequence,
+            terminal_count,
+            control_completed: false,
+            output_drained: false,
+        }
+    }
+
+    const fn complete(self) -> bool {
+        self.control_completed && self.output_drained
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ResponseLane {
     generation: u64,
     connection_id: u64,
-    awaiting_batch_sequence: Option<u64>,
-    terminal_sequence: Option<u64>,
-    terminal_control_completed: bool,
-    terminal_output_drained: bool,
-    terminal_queued: bool,
+    awaiting_batch: Option<PendingResponseBatch>,
+    producer_open: bool,
+    completed_responses: u16,
 }
 
 impl ResponseLane {
@@ -68,11 +90,9 @@ impl ResponseLane {
         Self {
             generation,
             connection_id,
-            awaiting_batch_sequence: None,
-            terminal_sequence: None,
-            terminal_control_completed: false,
-            terminal_output_drained: false,
-            terminal_queued: false,
+            awaiting_batch: None,
+            producer_open: false,
+            completed_responses: 0,
         }
     }
 }
@@ -87,6 +107,7 @@ enum ConsoleNetworkContainmentDiagnostic {
     },
     LocalFault {
         generation: u64,
+        reason: &'static str,
     },
     InvalidMailbox {
         generation: u64,
@@ -123,9 +144,9 @@ impl ConsoleNetworkContainmentDiagnostic {
                 line,
                 "[console-network] fault generation mismatch expected={expected_generation} observed={observed_generation}"
             )?,
-            Self::LocalFault { generation } => write!(
+            Self::LocalFault { generation, reason } => write!(
                 line,
-                "[console-network] generation={generation} terminal-fault source=local"
+                "[console-network] generation={generation} terminal-fault source=local reason={reason}"
             )?,
             Self::InvalidMailbox { generation } => write!(
                 line,
@@ -418,8 +439,14 @@ impl<D: NetDevice> IsolatedNetworkConsole<D> {
         if !self.runtime.containment_active() {
             let generation = self.runtime.generation();
             let mut faulted = self.faulted();
-            let mut diagnostic =
-                faulted.then_some(ConsoleNetworkContainmentDiagnostic::LocalFault { generation });
+            let mut diagnostic = faulted.then(|| {
+                self.pending_containment_fault_diagnostic.unwrap_or(
+                    ConsoleNetworkContainmentDiagnostic::LocalFault {
+                        generation,
+                        reason: "runtime-boundary",
+                    },
+                )
+            });
             match crate::hal::critical_tcb::take_target_service_fault(
                 crate::console_network_service::SERVICE_TASK_ID,
             ) {
@@ -535,6 +562,13 @@ impl<D: NetDevice> IsolatedNetworkConsole<D> {
         if self.faulted {
             return;
         }
+        if self.pending_containment_fault_diagnostic.is_none() {
+            self.pending_containment_fault_diagnostic =
+                Some(ConsoleNetworkContainmentDiagnostic::LocalFault {
+                    generation: self.runtime.generation(),
+                    reason,
+                });
+        }
         log::error!(
             "[console-network] generation={} fail-closed reason={reason}",
             self.runtime.generation()
@@ -568,11 +602,8 @@ impl<D: NetDevice> IsolatedNetworkConsole<D> {
         let generation = self.runtime.generation();
         let lane = self
             .response_lane
-            .get_or_insert_with(|| ResponseLane::new(generation, connection_id));
-        if lane.generation != generation
-            || lane.connection_id != connection_id
-            || lane.terminal_queued
-        {
+            .unwrap_or_else(|| ResponseLane::new(generation, connection_id));
+        if lane.generation != generation || lane.connection_id != connection_id {
             return false;
         }
         let mut bounded = HeaplessString::new();
@@ -587,20 +618,42 @@ impl<D: NetDevice> IsolatedNetworkConsole<D> {
         {
             return false;
         }
+        let lane = self
+            .response_lane
+            .get_or_insert_with(|| ResponseLane::new(generation, connection_id));
+        lane.producer_open = !terminal;
         if terminal {
-            if let Some(lane) = self.response_lane.as_mut() {
-                lane.terminal_queued = true;
-            }
+            lane.completed_responses = lane.completed_responses.saturating_add(1);
         }
         true
     }
 
+    fn settle_completed_response_batch(&mut self) {
+        let terminal_count = self
+            .response_lane
+            .and_then(|lane| lane.awaiting_batch)
+            .filter(|batch| batch.complete())
+            .map(|batch| batch.terminal_count);
+        let Some(terminal_count) = terminal_count else {
+            return;
+        };
+        let Some(lane) = self.response_lane.as_mut() else {
+            return;
+        };
+        if lane.completed_responses < terminal_count {
+            self.fail_closed("response-terminal-underflow");
+            return;
+        }
+        lane.completed_responses -= terminal_count;
+        lane.awaiting_batch = None;
+    }
+
     fn complete_response_lane_if_drained(&mut self) {
+        self.settle_completed_response_batch();
         let complete = self.response_lane.is_some_and(|lane| {
-            lane.terminal_sequence.is_some()
-                && lane.terminal_control_completed
-                && lane.terminal_output_drained
-                && lane.awaiting_batch_sequence.is_none()
+            !lane.producer_open
+                && lane.completed_responses == 0
+                && lane.awaiting_batch.is_none()
                 && self.output.is_empty()
                 && !self.runtime.publication_ack_pending()
                 && self.pending_egress.is_none()
@@ -609,6 +662,21 @@ impl<D: NetDevice> IsolatedNetworkConsole<D> {
             self.response_lane = None;
             self.output_issued = false;
         }
+    }
+
+    fn handle_control_completed(&mut self, sequence: u64) {
+        if let Some(lane) = self.response_lane.as_mut() {
+            let Some(batch) = lane.awaiting_batch.as_mut() else {
+                self.fail_closed("response-completion-sequence");
+                return;
+            };
+            if batch.sequence != sequence {
+                self.fail_closed("response-completion-sequence");
+                return;
+            }
+            batch.control_completed = true;
+        }
+        self.settle_completed_response_batch();
     }
 
     fn handle_event(&mut self, event: crate::console_network_service::ConsoleNetworkEvent) {
@@ -694,6 +762,52 @@ impl<D: NetDevice> IsolatedNetworkConsole<D> {
                 self.counters.tcp_console_recv_ready =
                     self.counters.tcp_console_recv_ready.saturating_add(1);
             }
+            ExchangeKind::CommandBatch => {
+                if self.authenticated_connection != Some(connection_id) {
+                    self.fail_closed("command-batch-before-authentication");
+                    return;
+                }
+                let payload = event.payload_bytes();
+                let Ok(mut cursor) = CommandBatchCursor::validate(payload) else {
+                    self.fail_closed("command-batch-record");
+                    return;
+                };
+                if cursor.remaining() > LINE_QUEUE_DEPTH.saturating_sub(self.lines.len()) {
+                    self.ingest_backpressure = self.ingest_backpressure.saturating_add(1);
+                    self.fail_closed("command-batch-queue-backpressure");
+                    return;
+                }
+                loop {
+                    let command = match cursor.next_command(payload) {
+                        Ok(Some(command)) => command,
+                        Ok(None) => break,
+                        Err(_) => {
+                            self.fail_closed("command-batch-record");
+                            return;
+                        }
+                    };
+                    let (now_ms, command) = command;
+                    let mut line = HeaplessString::new();
+                    if line.push_str(command).is_err()
+                        || self
+                            .lines
+                            .push_back(ConsoleLine::for_connection(line, now_ms, connection_id))
+                            .is_err()
+                    {
+                        self.fail_closed("command-batch-admission");
+                        return;
+                    }
+                    self.connection_bytes_read = self
+                        .connection_bytes_read
+                        .saturating_add(command.len() as u64);
+                    self.counters.tcp_rx_bytes = self
+                        .counters
+                        .tcp_rx_bytes
+                        .saturating_add(command.len() as u64);
+                    self.counters.tcp_console_recv_ready =
+                        self.counters.tcp_console_recv_ready.saturating_add(1);
+                }
+            }
             ExchangeKind::Disconnected => {
                 // Root observes lifecycle events before command lines. Retire
                 // every not-yet-dispatched command with the disconnected
@@ -727,15 +841,7 @@ impl<D: NetDevice> IsolatedNetworkConsole<D> {
             }
             ExchangeKind::Backpressure => self.fail_closed("child-event-backpressure"),
             ExchangeKind::ControlCompleted => {
-                if let Some(lane) = self.response_lane.as_mut() {
-                    if lane.awaiting_batch_sequence != Some(event.related_sequence()) {
-                        self.fail_closed("response-completion-sequence");
-                        return;
-                    }
-                    if lane.terminal_sequence == Some(event.related_sequence()) {
-                        lane.terminal_control_completed = true;
-                    }
-                }
+                self.handle_control_completed(event.related_sequence());
             }
             ExchangeKind::OutputDrained => {
                 if let Some(lane) = self.response_lane.as_mut() {
@@ -745,15 +851,17 @@ impl<D: NetDevice> IsolatedNetworkConsole<D> {
                         self.fail_closed("response-drain-identity");
                         return;
                     }
-                    if lane.awaiting_batch_sequence != Some(event.related_sequence()) {
+                    let Some(batch) = lane.awaiting_batch.as_mut() else {
+                        self.fail_closed("response-drain-sequence");
+                        return;
+                    };
+                    if batch.sequence != event.related_sequence() {
                         self.fail_closed("response-drain-sequence");
                         return;
                     }
-                    lane.awaiting_batch_sequence = None;
-                    if lane.terminal_sequence == Some(event.related_sequence()) {
-                        lane.terminal_output_drained = true;
-                    }
+                    batch.output_drained = true;
                 }
+                self.settle_completed_response_batch();
             }
             ExchangeKind::Rejected | ExchangeKind::PacketConsumed => {}
             ExchangeKind::ShutdownComplete => {
@@ -776,20 +884,27 @@ impl<D: NetDevice> IsolatedNetworkConsole<D> {
         }
     }
 
-    fn poll_child_output(&mut self) -> bool {
+    fn poll_child_output(&mut self) -> IsolatedNetworkTurnOutcome {
         let turn = match self.runtime.poll_turn() {
             Ok(turn) => turn,
-            Err(_) => {
-                self.fail_closed("child-output-record");
-                return false;
+            Err(error) => {
+                self.fail_closed(error.reason());
+                return IsolatedNetworkTurnOutcome::complete(false);
             }
         };
-        let mut activity = false;
+        let publication_observed = turn.publication_observed();
+        let mut activity = turn.input_progress_observed();
+        if let Some(sequence) = turn.input_completions.control_sequence {
+            self.handle_control_completed(sequence);
+            if self.faulted {
+                return IsolatedNetworkTurnOutcome::complete(activity);
+            }
+        }
         if let Some(event) = turn.event {
             activity = true;
             self.handle_event(event);
             if self.faulted {
-                return activity;
+                return IsolatedNetworkTurnOutcome::complete(activity);
             }
             if self.graceful_teardown_pending {
                 if turn.egress.is_some() {
@@ -797,27 +912,35 @@ impl<D: NetDevice> IsolatedNetworkConsole<D> {
                     // an egress publication together. Treat the copied pair as
                     // a protocol violation and contain it without ACK.
                     self.fail_closed("terminal-egress-coalescing");
-                    return activity;
+                    return IsolatedNetworkTurnOutcome::complete(activity);
                 }
                 if self.runtime.retire_terminal_publication().is_err() {
                     self.fail_closed("terminal-publication-retirement");
-                    return activity;
+                    return IsolatedNetworkTurnOutcome::complete(activity);
                 }
                 if self.runtime.begin_containment().is_err() {
                     self.fail_closed("terminal-containment-start");
                 }
-                return activity;
+                return IsolatedNetworkTurnOutcome::complete(activity);
             }
         }
         if let Some(egress) = turn.egress {
             activity = true;
             if self.pending_egress.is_some() {
                 self.fail_closed("egress-overwrite");
-                return activity;
+                return IsolatedNetworkTurnOutcome::complete(activity);
             }
             self.pending_egress = Some(egress);
         }
-        activity
+        if publication_observed {
+            if self.runtime.acknowledge_publication().is_err() {
+                self.fail_closed("publication-ack");
+                return IsolatedNetworkTurnOutcome::complete(activity);
+            }
+            activity = true;
+            return IsolatedNetworkTurnOutcome::child_signaled(activity);
+        }
+        IsolatedNetworkTurnOutcome::complete(activity)
     }
 
     fn transmit_pending_egress(&mut self, timestamp: Instant) -> bool {
@@ -872,7 +995,7 @@ impl<D: NetDevice> IsolatedNetworkConsole<D> {
         if !self.runtime.control_available()
             || self
                 .response_lane
-                .is_some_and(|lane| lane.awaiting_batch_sequence.is_some())
+                .is_some_and(|lane| lane.awaiting_batch.is_some())
         {
             return false;
         }
@@ -883,13 +1006,13 @@ impl<D: NetDevice> IsolatedNetworkConsole<D> {
         let mut builder = SendBatchBuilder::new(&mut storage);
         let mut count = 0usize;
         let mut bytes = 0usize;
-        let mut terminal = false;
+        let mut terminal_count = 0u16;
         for queued in self.output.iter().take(SEND_BATCH_MAX_RECORDS) {
             match builder.try_push_line(queued.line.as_str()) {
                 Ok(true) => {
                     count = count.saturating_add(1);
                     bytes = bytes.saturating_add(queued.line.len());
-                    terminal |= queued.terminal;
+                    terminal_count = terminal_count.saturating_add(u16::from(queued.terminal));
                 }
                 Ok(false) => break,
                 Err(_) => {
@@ -914,10 +1037,7 @@ impl<D: NetDevice> IsolatedNetworkConsole<D> {
                     let _ = self.output.pop_front();
                 }
                 if let Some(lane) = self.response_lane.as_mut() {
-                    lane.awaiting_batch_sequence = Some(sequence);
-                    if terminal {
-                        lane.terminal_sequence = Some(sequence);
-                    }
+                    lane.awaiting_batch = Some(PendingResponseBatch::new(sequence, terminal_count));
                 }
                 self.output_issued = true;
                 self.connection_bytes_written =
@@ -998,18 +1118,7 @@ impl<D: NetDevice> IsolatedNetworkConsole<D> {
 
     #[inline(never)]
     fn poll_observe_child_unit(&mut self) -> IsolatedNetworkTurnOutcome {
-        IsolatedNetworkTurnOutcome::complete(self.poll_child_output())
-    }
-
-    #[inline(never)]
-    fn poll_acknowledge_publication_unit(&mut self) -> IsolatedNetworkTurnOutcome {
-        match self.runtime.acknowledge_publication() {
-            Ok(()) => IsolatedNetworkTurnOutcome::child_signaled(false),
-            Err(_) => {
-                self.fail_closed("publication-ack");
-                IsolatedNetworkTurnOutcome::complete(false)
-            }
-        }
+        self.poll_child_output()
     }
 
     #[inline(never)]
@@ -1051,21 +1160,21 @@ impl<D: NetDevice> IsolatedNetworkConsole<D> {
         let lane = self.response_lane;
         let stage_output_ready = !self.output.is_empty()
             && self.runtime.control_available()
-            && lane.is_some_and(|lane| lane.awaiting_batch_sequence.is_none());
-        let response_progress_outstanding =
-            lane.is_some_and(|lane| lane.awaiting_batch_sequence.is_some() || lane.terminal_queued);
+            && lane.is_some_and(|lane| lane.awaiting_batch.is_none());
+        let response_progress_outstanding = lane.is_some_and(|lane| {
+            lane.awaiting_batch.is_some()
+                || lane.completed_responses != 0
+                || lane.producer_open
+                || !self.output.is_empty()
+        });
         let selection = select_isolated_response_turn(
             self.pending_egress.is_some(),
-            self.runtime.publication_ack_pending(),
             stage_output_ready,
             response_progress_outstanding,
             self.lower_cursor,
         );
         self.lower_cursor = selection.successor();
         let outcome = match selection.unit() {
-            IsolatedNetworkTurnUnit::AcknowledgePublication => {
-                self.poll_acknowledge_publication_unit()
-            }
             IsolatedNetworkTurnUnit::TransmitEgress => self.poll_transmit_egress_unit(now_ms),
             IsolatedNetworkTurnUnit::Lower(IsolatedNetworkLowerUnit::ObserveChild) => {
                 self.poll_observe_child_unit()
@@ -1115,16 +1224,12 @@ impl<D: NetDevice> NetPoller for IsolatedNetworkConsole<D> {
         let selection: IsolatedNetworkTurnSelection = select_isolated_network_turn(
             self.device.isolated_deferred_tx_diagnostic_pending(),
             self.pending_egress.is_some(),
-            self.runtime.publication_ack_pending(),
             self.lower_cursor,
         );
         // Commit the ordinary successor before any selected unit can block or
         // fault. Only a successful child notification may force ObserveChild.
         self.lower_cursor = selection.successor();
         let outcome = match selection.unit() {
-            IsolatedNetworkTurnUnit::AcknowledgePublication => {
-                self.poll_acknowledge_publication_unit()
-            }
             IsolatedNetworkTurnUnit::DeferredDiagnostic => self.poll_deferred_diagnostic_unit(),
             IsolatedNetworkTurnUnit::TransmitEgress => self.poll_transmit_egress_unit(now_ms),
             IsolatedNetworkTurnUnit::Lower(IsolatedNetworkLowerUnit::ObserveChild) => {
@@ -1243,8 +1348,10 @@ impl<D: NetDevice> NetPoller for IsolatedNetworkConsole<D> {
             connection_id: lane.connection_id,
             queued_lines: self.output.len(),
             available_lines: LINE_QUEUE_DEPTH.saturating_sub(self.output.len()),
-            awaiting_batch_drain: lane.awaiting_batch_sequence.is_some(),
-            terminal_queued: lane.terminal_queued,
+            awaiting_batch_drain: lane.awaiting_batch.is_some(),
+            terminal_queued: lane.completed_responses != 0,
+            producer_open: lane.producer_open,
+            completed_responses: usize::from(lane.completed_responses),
         })
     }
 

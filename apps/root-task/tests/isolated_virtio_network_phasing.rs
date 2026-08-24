@@ -118,7 +118,7 @@ fn routine_audit_handoff_cannot_delay_terminal_response_admission() {
     assert!(buffered_command < retained_output);
     assert!(retained_output < display);
     assert!(display < audit_drain);
-    assert!(operator.contains("self.network_response_owner_active(),"));
+    assert!(operator.contains("self.network_response_owner_active() || response_lane_active,"));
     assert!(operator.contains("self.pending_net_flush.active(),"));
 
     let drain = section(
@@ -296,9 +296,12 @@ fn split_virtio_dispatch_bypasses_both_generic_eventpump_frames() {
         split
             .matches("self.poll_split_ordinary_virtio_compact_operator_turn();")
             .count(),
-        2,
-        "only the two no-progress predispatch paths may admit Operator work",
+        3,
+        "only two no-progress predispatch paths and the bounded completed-response burst may admit Operator work",
     );
+    assert!(split.contains("let completed_response_pipeline_dispatch_due = response_lane"));
+    assert!(split.contains("!lane.producer_open && lane.available_lines != 0"));
+    assert!(split.contains("if completed_response_pipeline_dispatch_due {"));
     for forbidden in [
         "begin_cyw43_outer_event_turn",
         "poll_driver_task_sdio_deadline_fault_hint",
@@ -552,15 +555,13 @@ fn isolated_network_poll_maps_one_selected_unit_in_strict_source_order() {
     let source = include_str!("../src/net/isolated_console.rs");
     let poll = section(
         source,
-        "impl NetPoller for IsolatedVirtioConsole",
+        "impl<D: NetDevice> NetPoller for IsolatedNetworkConsole<D>",
         "fn driver_task_contract",
     );
 
     let selector = marker(poll, "select_isolated_network_turn(");
     let successor_commit = marker(poll, "self.lower_cursor = selection.successor();");
     let dispatch = marker(poll, "let outcome = match selection.unit() {");
-    let acknowledge_guard = marker(poll, "IsolatedNetworkTurnUnit::AcknowledgePublication =>");
-    let acknowledge = marker(poll, "self.poll_acknowledge_publication_unit()");
     let deferred_guard = marker(poll, "IsolatedNetworkTurnUnit::DeferredDiagnostic =>");
     let deferred = marker(poll, "self.poll_deferred_diagnostic_unit()");
     let transmit_guard = marker(poll, "IsolatedNetworkTurnUnit::TransmitEgress =>");
@@ -579,9 +580,7 @@ fn isolated_network_poll_maps_one_selected_unit_in_strict_source_order() {
     assert!(
         selector < successor_commit
             && successor_commit < dispatch
-            && dispatch < acknowledge_guard
-            && acknowledge_guard < acknowledge
-            && acknowledge < deferred_guard
+            && dispatch < deferred_guard
             && deferred_guard < deferred
             && deferred < transmit_guard
             && transmit_guard < transmit
@@ -604,7 +603,6 @@ fn isolated_network_poll_maps_one_selected_unit_in_strict_source_order() {
         "fn poll_deferred_diagnostic_unit",
         "fn poll_transmit_egress_unit",
         "fn poll_observe_child_unit",
-        "fn poll_acknowledge_publication_unit",
         "fn poll_stage_output_unit",
         "fn poll_disconnect_unit",
         "fn poll_ingress_unit",
@@ -758,8 +756,7 @@ fn empty_stage_output_commits_disconnect_without_forcing_child_observation() {
         IsolatedNetworkTurnOutcome, IsolatedNetworkTurnUnit,
     };
 
-    let observe =
-        select_isolated_network_turn(false, false, false, IsolatedNetworkLowerCursor::new());
+    let observe = select_isolated_network_turn(false, false, IsolatedNetworkLowerCursor::new());
     assert_eq!(
         observe.unit(),
         IsolatedNetworkTurnUnit::Lower(IsolatedNetworkLowerUnit::ObserveChild),
@@ -768,7 +765,7 @@ fn empty_stage_output_commits_disconnect_without_forcing_child_observation() {
     assert!(!activity);
     assert_eq!(stage_output.unit(), IsolatedNetworkLowerUnit::StageOutput);
 
-    let selected = select_isolated_network_turn(false, false, false, stage_output);
+    let selected = select_isolated_network_turn(false, false, stage_output);
     assert_eq!(
         selected.unit(),
         IsolatedNetworkTurnUnit::Lower(IsolatedNetworkLowerUnit::StageOutput),
@@ -816,8 +813,8 @@ fn disconnect_control_is_one_shot_and_releases_ingress_after_completion() {
     let source = include_str!("../src/net/isolated_console.rs");
     let fields = section(
         source,
-        "pub struct IsolatedVirtioConsole",
-        "impl IsolatedVirtioConsole",
+        "pub struct IsolatedNetworkConsole<D: NetDevice>",
+        "impl<D: NetDevice> IsolatedNetworkConsole<D>",
     );
     assert!(fields.contains("disconnect_requested: bool,"));
     assert!(fields.contains("disconnect_issued: bool,"));
@@ -863,32 +860,32 @@ fn disconnect_control_is_one_shot_and_releases_ingress_after_completion() {
         IsolatedNetworkLowerUnit::ObserveChild,
         IsolatedNetworkLowerUnit::StageOutput,
     ] {
-        let selected = select_isolated_network_turn(false, false, false, cursor);
+        let selected = select_isolated_network_turn(false, false, cursor);
         assert_eq!(selected.unit(), IsolatedNetworkTurnUnit::Lower(expected));
         (cursor, _) = selected.finish(IsolatedNetworkTurnOutcome::complete(false));
     }
     assert_eq!(cursor.unit(), IsolatedNetworkLowerUnit::Disconnect);
 
-    let selected = select_isolated_network_turn(false, false, false, cursor);
+    let selected = select_isolated_network_turn(false, false, cursor);
     assert!(transaction.attempt(true));
     (cursor, _) = selected.finish(IsolatedNetworkTurnOutcome::child_signal_attempt(true));
     assert!(transaction.issued);
     assert_eq!(transaction.attempts, 2);
     assert_eq!(cursor.unit(), IsolatedNetworkLowerUnit::ObserveChild);
 
-    // ControlCompleted and OutputDrained retire the boundary records, but do
-    // not reopen the semantic Disconnect transaction for this connection.
+    // The control watermark and OutputDrained retire the boundary records,
+    // but do not reopen the semantic Disconnect transaction for this connection.
     for expected in [
         IsolatedNetworkLowerUnit::ObserveChild,
         IsolatedNetworkLowerUnit::StageOutput,
     ] {
-        let selected = select_isolated_network_turn(false, false, false, cursor);
+        let selected = select_isolated_network_turn(false, false, cursor);
         assert_eq!(selected.unit(), IsolatedNetworkTurnUnit::Lower(expected));
         (cursor, _) = selected.finish(IsolatedNetworkTurnOutcome::complete(false));
     }
     assert_eq!(cursor.unit(), IsolatedNetworkLowerUnit::Disconnect);
 
-    let selected = select_isolated_network_turn(false, false, false, cursor);
+    let selected = select_isolated_network_turn(false, false, cursor);
     assert!(
         !transaction.attempt(true),
         "Disconnect must not be restaged"
@@ -897,7 +894,7 @@ fn disconnect_control_is_one_shot_and_releases_ingress_after_completion() {
     assert_eq!(transaction.attempts, 2);
     assert_eq!(cursor.unit(), IsolatedNetworkLowerUnit::Ingress);
 
-    let selected = select_isolated_network_turn(false, false, false, cursor);
+    let selected = select_isolated_network_turn(false, false, cursor);
     assert_eq!(
         selected.unit(),
         IsolatedNetworkTurnUnit::Lower(IsolatedNetworkLowerUnit::Ingress)
@@ -922,17 +919,29 @@ fn console_publication_ack_is_exactly_once_and_post_retention() {
         "pub fn acknowledge_publication(&mut self)",
     );
     let owed_guard = marker(poll, "|| self.publication_ack_owed");
-    let empty_poll = section(poll, "if badge == 0 {", "if badge &");
+    let empty_badge = marker(poll, "if badge == 0");
+    let event_gate = marker(
+        poll,
+        "let event_ready = badge & seL4_Word::from(WAKE_EVENT_READY) != 0;",
+    );
+    let watermarks = marker(poll, ".accept_completion_watermarks(");
+    let event_pending = marker(poll, ".event_publication_pending(");
     let event_accept = marker(poll, ".accept_event(");
     let egress_accept = marker(poll, ".accept_egress(");
     let latch = marker(
         poll,
         "self.publication_ack_owed = event.is_some() || egress.is_some();",
     );
-    assert!(owed_guard < event_accept && event_accept < egress_accept && egress_accept < latch);
-    assert!(empty_poll.contains("event: None"));
-    assert!(empty_poll.contains("egress: None"));
-    assert!(!empty_poll.contains("publication_ack_owed"));
+    assert!(
+        owed_guard < empty_badge
+            && empty_badge < event_gate
+            && event_gate < watermarks
+            && watermarks < event_pending
+            && event_pending < event_accept
+            && event_accept < egress_accept
+            && egress_accept < latch
+    );
+    assert!(poll.contains("let input_completions = if event_ready"));
     assert!(!poll.contains("signal_unchecked"));
 
     let acknowledge = section(
@@ -994,21 +1003,31 @@ fn console_publication_ack_is_exactly_once_and_post_retention() {
         "fn poll_child_output(&mut self)",
         "fn transmit_pending_egress",
     );
+    let publication_snapshot = marker(
+        output,
+        "let publication_observed = turn.publication_observed();",
+    );
+    let completion = marker(output, "self.handle_control_completed(sequence);");
     let handle = marker(output, "self.handle_event(event);");
-    let event_fault_gate = marker(output, "if self.faulted {");
+    let completion_fault_gate = marker(output, "if self.faulted {");
     let terminal_retire = marker(output, "self.runtime.retire_terminal_publication()");
     let containment_start = marker(output, "self.runtime.begin_containment()");
     let overwrite_guard = marker(output, "if self.pending_egress.is_some()");
     let retain_egress = marker(output, "self.pending_egress = Some(egress);");
+    let inline_ack = marker(output, "self.runtime.acknowledge_publication()");
     assert!(
-        handle < event_fault_gate
-            && event_fault_gate < terminal_retire
+        publication_snapshot < completion
+            && completion < completion_fault_gate
+            && completion_fault_gate < handle
+            && handle < terminal_retire
             && terminal_retire < containment_start
             && containment_start < overwrite_guard
             && overwrite_guard < retain_egress
+            && retain_egress < inline_ack
     );
     assert!(output.contains("self.fail_closed(\"egress-overwrite\")"));
-    assert!(!output.contains("acknowledge_publication"));
+    assert_eq!(output.matches("acknowledge_publication").count(), 1);
+    assert!(output.contains("self.fail_closed(\"publication-ack\")"));
     assert!(!output.contains("signal_unchecked"));
 
     let fail_closed = section(
@@ -1021,38 +1040,20 @@ fn console_publication_ack_is_exactly_once_and_post_retention() {
     let observe = section(
         adapter,
         "fn poll_observe_child_unit(&mut self)",
-        "fn poll_acknowledge_publication_unit(&mut self)",
-    );
-    assert!(observe.contains("IsolatedNetworkTurnOutcome::complete(self.poll_child_output())"));
-    assert!(!observe.contains("child_signaled"));
-    assert!(!observe.contains("acknowledge_publication"));
-
-    let acknowledge_unit = section(
-        adapter,
-        "fn poll_acknowledge_publication_unit(&mut self)",
         "fn poll_stage_output_unit(&mut self)",
     );
-    assert_eq!(
-        acknowledge_unit
-            .matches("self.runtime.acknowledge_publication()")
-            .count(),
-        1
-    );
-    assert!(acknowledge_unit.contains("IsolatedNetworkTurnOutcome::child_signaled(false)"));
-    assert!(acknowledge_unit.contains("self.fail_closed(\"publication-ack\")"));
+    assert!(observe.contains("self.poll_child_output()"));
+    assert!(!observe.contains("acknowledge_publication"));
+
+    assert!(output.contains("IsolatedNetworkTurnOutcome::child_signaled(activity)"));
 
     let adapter_poll = section(
         adapter,
-        "impl NetPoller for IsolatedVirtioConsole",
+        "impl<D: NetDevice> NetPoller for IsolatedNetworkConsole<D>",
         "fn driver_task_contract",
     );
-    let pending_input = marker(adapter_poll, "self.runtime.publication_ack_pending()");
-    let selector = marker(adapter_poll, "select_isolated_network_turn(");
-    let ack_dispatch = marker(
-        adapter_poll,
-        "IsolatedNetworkTurnUnit::AcknowledgePublication =>",
-    );
-    assert!(selector < pending_input && pending_input < ack_dispatch);
+    assert!(!adapter_poll.contains("AcknowledgePublication"));
+    assert!(!adapter_poll.contains("poll_acknowledge_publication_unit"));
 
     let turn_selector = include_str!("../src/net/isolated_network_turn.rs");
     let selection = section(
@@ -1060,10 +1061,11 @@ fn console_publication_ack_is_exactly_once_and_post_retention() {
         "pub(crate) fn select_isolated_network_turn(",
         "#[cfg(test)]",
     );
-    let ack_priority = marker(selection, "if publication_ack_pending");
-    let diagnostic_priority = marker(selection, "else if deferred_diagnostic");
+    let diagnostic_priority = marker(selection, "if deferred_diagnostic");
     let egress_priority = marker(selection, "else if pending_egress");
-    assert!(ack_priority < diagnostic_priority && diagnostic_priority < egress_priority);
+    assert!(diagnostic_priority < egress_priority);
+    assert!(!selection.contains("publication_ack_pending"));
+    assert!(!selection.contains("AcknowledgePublication"));
 
     let terminal_handler = section(adapter, "fn handle_event(&mut self", "fn poll_child_output");
     assert!(terminal_handler.contains("self.fail_closed("));
@@ -1219,9 +1221,16 @@ fn isolated_console_input_never_crosses_connection_identity_boundaries() {
         .split("ExchangeKind::Command => {")
         .nth(1)
         .expect("Command handler")
-        .split("ExchangeKind::Disconnected")
+        .split("ExchangeKind::CommandBatch")
         .next()
         .expect("bounded Command arm");
+    let command_batch = handler
+        .split("ExchangeKind::CommandBatch => {")
+        .nth(1)
+        .expect("CommandBatch handler")
+        .split("ExchangeKind::Disconnected")
+        .next()
+        .expect("bounded CommandBatch arm");
     let disconnected = handler
         .split("ExchangeKind::Disconnected => {")
         .nth(1)
@@ -1274,6 +1283,19 @@ fn isolated_console_input_never_crosses_connection_identity_boundaries() {
     assert!(command_identity < command_enqueue);
     assert!(command.contains("event.now_ms(),"));
     assert!(command.contains("connection_id,"));
+    let batch_identity = marker(
+        command_batch,
+        "self.authenticated_connection != Some(connection_id)",
+    );
+    let batch_capacity = marker(
+        command_batch,
+        "cursor.remaining() > LINE_QUEUE_DEPTH.saturating_sub(self.lines.len())",
+    );
+    let batch_enqueue = marker(command_batch, ".push_back(ConsoleLine::for_connection(");
+    assert!(batch_identity < batch_capacity);
+    assert!(batch_capacity < batch_enqueue);
+    assert!(command_batch.contains("let (now_ms, command) = command;"));
+    assert!(command_batch.contains("ConsoleLine::for_connection(line, now_ms, connection_id)"));
 }
 
 #[test]
@@ -1347,11 +1369,15 @@ fn successful_publish_defers_one_record_and_never_scrubs_after_notify() {
 fn isolated_tx_visit_neither_selects_nor_drains_routine_diagnostic_inline() {
     let source = include_str!("../src/net/isolated_console.rs");
     let transmit = section(source, "fn transmit_pending_egress", "fn stage_one_ingress");
-    assert!(transmit.contains("self.device.transmit_isolated(timestamp)"));
+    assert!(transmit.contains(".transmit_isolated_frame(timestamp, frame.as_slice())"));
     assert!(!transmit.contains("emit_one_deferred_tx_diagnostic"));
     assert!(!transmit.contains("deferred_tx_diagnostic_pending()"));
 
-    let response = section(source, "fn poll_response_turn", "impl NetPoller");
+    let response = section(
+        source,
+        "fn poll_response_turn",
+        "impl<D: NetDevice> NetPoller for IsolatedNetworkConsole<D>",
+    );
     assert!(!response.contains("deferred_tx_diagnostic_pending()"));
     assert!(!response.contains("poll_deferred_diagnostic_unit"));
 }
@@ -1360,7 +1386,7 @@ fn isolated_tx_visit_neither_selects_nor_drains_routine_diagnostic_inline() {
 fn isolated_ingress_uses_the_single_silent_rx_seam() {
     let source = include_str!("../src/net/isolated_console.rs");
     let ingress = section(source, "fn stage_one_ingress", "fn stage_one_output");
-    assert!(ingress.contains("self.device.receive_isolated()"));
+    assert!(ingress.contains("self.device.consume_isolated_rx("));
     assert!(!ingress.contains("self.device.receive("));
     assert!(!ingress.contains("drop(transmit)"));
     assert!(ingress.contains("self.device.begin_smoltcp_rx_transaction()"));

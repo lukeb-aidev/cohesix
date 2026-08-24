@@ -26,6 +26,7 @@ from .orchestration import (
     HostTicketRequest,
     K8sRbacIntent,
     LeaseRequest,
+    ScheduleDequeue,
     ScheduleRequest,
 )
 from .playbooks import (
@@ -70,6 +71,7 @@ __all__ = [
     "MockBackend",
     "PlaybookReport",
     "RestBackend",
+    "ScheduleDequeue",
     "ScheduleRequest",
     "TimelineSummary",
     "TargetProfileContract",

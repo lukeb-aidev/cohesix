@@ -3,13 +3,13 @@
 <!-- Copyright 2026 Lukas Bower -->
 
 ### coh policy defaults (generated)
-- `manifest.sha256`: `72b6fdbd175150ec352f9345d99791a1d576cf01de47363aed2a64ad0c463a93`
-- `policy.sha256`: `2c107f907fff48b7bb71d9655f13745bbb02420ea485ed80f2344e935a044999`
+- `manifest.sha256`: `10f33db7f20f039701ec8d2c5d206aba45a67f4b7e359b22dc2e24a0cc055cbd`
+- `policy.sha256`: `d1fd19a8e2d1cba3cda05f2f8f36a0a0e7eb4782c46bd10a87110b31407ddb79`
 - `coh.worker.task_abi_schema`: `worker-task-abi/v1`
 - `coh.worker.task_abi_version`: `1`
 - `coh.worker.observation_schema`: `cohesix-worker-observation/v1`
 - `coh.worker.integration_evidence_schema`: `cohesix-worker-integration-evidence/v1`
-- `coh.worker.maximum_live_tasks`: `3`
+- `coh.worker.maximum_live_tasks`: `37`
 - `coh.worker.canonical_telemetry_template`: `/shard/<label>/worker/<id>/telemetry`
 - `coh.worker.shard_bits`: `8`
 - `coh.worker.legacy_worker_alias`: `true`
@@ -18,9 +18,9 @@
 - `coh.worker.artifact`: `missing, verified, mismatch`
 - `coh.worker.execution_proof`: `none, host-model, qemu, fresh-pi`
 - `coh.worker.role.worker-heartbeat`: declaration=`executable`, executable_slots=`1`
-- `coh.worker.role.worker-gpu`: declaration=`executable`, executable_slots=`1`
+- `coh.worker.role.worker-gpu`: declaration=`executable`, executable_slots=`15`
 - `coh.worker.role.worker-bus`: declaration=`model-only`, executable_slots=`0`
-- `coh.worker.role.worker-lora`: declaration=`executable`, executable_slots=`1`
+- `coh.worker.role.worker-lora`: declaration=`executable`, executable_slots=`21`
 - `coh.mount.root`: `/`
 - `coh.mount.allowlist`: `/proc, /queen, /shard, /worker, /log, /gpu, /host`
 - `coh.telemetry.root`: `/queen/telemetry`

@@ -193,6 +193,106 @@ EXPORT_PCNT_USER = false
 EXPORT_PTMR_USER = false
 EXPORT_VTMR_USER = false
 
+[profiles.qemu_smp_kvm_production]
+description = "Release-eligible four-core QEMU aarch64/virt SMP+MCS profile for KVM hosts exposing a 31.25 MHz architectural counter."
+build_mode = "wrapper"
+python_tool = "out/toolchain/sel4-profile-venv/bin/python"
+evidence_class = "production"
+target = "qemu"
+default_build_dir = "out/sel4/profile-v2/qemu-smp-kvm-production"
+release_eligible = true
+runtime_eligible = true
+source_policy = "clean"
+memoization_cache = "disabled"
+forbidden_cache_keys = ["KernelDomainSchedule"]
+required_dts_literals = ["arm,gic-v3", "method = \"hvc\""]
+forbidden_dts_literals = ["arm,cortex-a15-gic", "method = \"smc\""]
+dts_files = ["kernel/kernel.dts", "qemu-arm-virt.dts"]
+qemu_gic_version = 3
+qemu_virtualization = false
+qemu_cpu = "cortex-a57"
+minimum_elfloader_archive_bytes = 8388608
+timer_clock_hz = 31250000
+
+[profiles.qemu_smp_kvm_production.artifact_policy]
+class = "upstream-sel4test-profile-validation"
+shipping_eligible = false
+cohesix_system_image = false
+rwx_policy = "record-nonshipping-exception"
+elf_machine = 183
+elf_artifacts = ["kernel", "elfloader", "rootserver", "system_image"]
+exception_id = "upstream-sel4test-rwx-load"
+exception_reason = "Upstream seL4Test profile-validation ELFs are non-shipping inputs; Cohesix release-image W^X acceptance is a separate gate."
+
+[profiles.qemu_smp_kvm_production.dtb]
+artifacts = ["kernel_dtb", "qemu_dtb"]
+required_compatible = ["arm,gic-v3"]
+forbidden_compatible = ["arm,cortex-a15-gic"]
+required_nodes = []
+required_string_properties = ["method=hvc"]
+
+[profiles.qemu_smp_kvm_production.cmake]
+AARCH64 = "ON"
+ARM_CPU = "cortex-a57"
+CROSS_COMPILER_PREFIX = "aarch64-none-elf-"
+PLATFORM = "qemu-arm-virt"
+KernelPlatform = "qemu-arm-virt"
+KernelSel4Arch = "aarch64"
+Sel4testAllowSettingsOverride = "ON"
+SIMULATION = "OFF"
+RELEASE = "ON"
+VERIFICATION = "OFF"
+DOMAINS = "OFF"
+MCS = "ON"
+ARM_HYP = "OFF"
+SMP = "ON"
+NUM_NODES = "4"
+KernelMaxNumNodes = "4"
+KernelNumDomains = "1"
+KernelRootCNodeSizeBits = "14"
+KernelIsMCS = "ON"
+KernelArmHypervisorSupport = "OFF"
+KernelArmVtimerUpdateVOffset = "OFF"
+KernelVerificationBuild = "OFF"
+KernelDebugBuild = "OFF"
+KernelPrinting = "OFF"
+KernelBenchmarks = "none"
+KernelDangerousCodeInjection = "OFF"
+KernelFastpath = "ON"
+KernelArmSMMU = "OFF"
+KernelAllowSMCCalls = "OFF"
+HardwareDebugAPI = "OFF"
+KernelArmExportVCNTUser = "ON"
+KernelArmExportPCNTUser = "OFF"
+KernelArmExportPTMRUser = "OFF"
+KernelArmExportVTMRUser = "OFF"
+ElfloaderRootserversLast = "ON"
+ElfloaderImage = "elf"
+ElfloaderIncludeDtb = "ON"
+CMAKE_BUILD_TYPE = "Release"
+COHESIX_ROOTSERVER_ARCHIVE_RESERVE_BYTES = "7340032"
+
+[profiles.qemu_smp_kvm_production.generated]
+PLAT_QEMU_ARM_VIRT = true
+PLAT_BCM2711 = false
+ARM_CORTEX_A53 = false
+ARM_CORTEX_A57 = true
+ARM_GIC_V3_SUPPORT = true
+TIMER_FREQUENCY = "31250000"
+MAX_NUM_NODES = "4"
+NUM_DOMAINS = "1"
+KERNEL_MCS = true
+VERIFICATION_BUILD = false
+DEBUG_BUILD = false
+PRINTING = false
+KERNEL_BENCHMARK = "none"
+ARM_HYPERVISOR_SUPPORT = false
+VTIMER_UPDATE_VOFFSET = false
+EXPORT_VCNT_USER = true
+EXPORT_PCNT_USER = false
+EXPORT_PTMR_USER = false
+EXPORT_VTMR_USER = false
+
 [profiles.qemu_smp_diagnostic]
 description = "Four-core QEMU aarch64/virt SMP+MCS GICv3 profile for bring-up and diagnostic evidence only."
 build_mode = "wrapper"

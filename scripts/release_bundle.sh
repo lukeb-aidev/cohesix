@@ -766,6 +766,18 @@ resolve_qemu_accel() {
   echo "$accel"
 }
 
+resolve_qemu_cpu_arg() {
+  local accel="$1"
+  local cpu_model="cortex-a57"
+  if [[ "$HOST_OS" == "Linux" && "$accel" == "kvm" ]]; then
+    cpu_model="host"
+  fi
+  if [[ "$accel" == "tcg" || ( "$HOST_OS" == "Linux" && "$accel" == "kvm" ) ]]; then
+    cpu_model="${cpu_model},cntfrq=24000000"
+  fi
+  echo "$cpu_model"
+}
+
 resolve_qemu_smp_arg() {
   if [[ -n "$QEMU_SMP_TOPO_RAW" ]]; then
     echo "$QEMU_SMP_TOPO_RAW"
@@ -870,10 +882,7 @@ QEMU_VIRT_ARG="$(resolve_qemu_virt_arg)"
 validate_qemu_virt_arg "$QEMU_VIRT_ARG"
 QEMU_MACHINE_ARG="$(format_qemu_machine_arg "$QEMU_VIRT_ARG")"
 echo "[qemu] Using QEMU machine: ${QEMU_MACHINE_ARG}"
-QEMU_CPU_ARG="cortex-a57"
-if [[ "$QEMU_ACCEL" == "tcg" ]]; then
-  QEMU_CPU_ARG="${QEMU_CPU_ARG},cntfrq=24000000"
-fi
+QEMU_CPU_ARG="$(resolve_qemu_cpu_arg "$QEMU_ACCEL")"
 echo "[qemu] Using QEMU CPU: ${QEMU_CPU_ARG}"
 
 "${QEMU_BIN}" \

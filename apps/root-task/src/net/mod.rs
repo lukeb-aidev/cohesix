@@ -1621,8 +1621,14 @@ pub struct ConsoleResponseLane {
     pub available_lines: usize,
     /// Whether one published batch still awaits exact child drain evidence.
     pub awaiting_batch_drain: bool,
-    /// Whether the response's terminal line has been retained.
+    /// Whether at least one completed response is retained in the bounded
+    /// queue or exact child-drain pipeline.
     pub terminal_queued: bool,
+    /// Whether root has started a response whose terminal line is not yet
+    /// retained. A later command cannot begin while this producer is open.
+    pub producer_open: bool,
+    /// Number of complete ordered responses retained or awaiting exact drain.
+    pub completed_responses: usize,
 }
 
 #[cfg(any(

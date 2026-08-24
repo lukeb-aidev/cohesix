@@ -6,18 +6,19 @@
 //! Root-owned boundary for the isolated TCP console/network child.
 
 use console_network_abi::{
-    AbiError, ExchangeKind, ExchangePage, PacketDirection, PacketPage, RuntimeInitDescriptor,
-    ABI_VERSION, AUTH_TOKEN_BYTES, CHILD_CSPACE_SLOTS, CHILD_WAKE_MASK,
-    CHILD_WAKE_NOTIFICATION_SLOT, COMMAND_LINE_BYTES, ETHERNET_FRAME_BYTES, FAULT_ENDPOINT_SLOT,
-    PACKET_TX_WAKE_NOTIFICATION_SLOT, REQUIRED_INIT_FLAGS, ROOT_WAKE_MASK, RUNTIME_INIT_MAGIC,
-    SHARED_PAGE_BYTES, SUPERVISOR_WAKE_NOTIFICATION_SLOT,
+    AbiError, CommandBatchCursor, ExchangeKind, ExchangePage, PacketDirection, PacketPage,
+    RuntimeInitDescriptor, ABI_VERSION, AUTH_TOKEN_BYTES, CHILD_CSPACE_SLOTS, CHILD_WAKE_MASK,
+    CHILD_WAKE_NOTIFICATION_SLOT, COMMAND_BATCH_MAX_RECORDS, COMMAND_LINE_BYTES,
+    ETHERNET_FRAME_BYTES, FAULT_ENDPOINT_SLOT, PACKET_TX_WAKE_NOTIFICATION_SLOT,
+    REQUIRED_INIT_FLAGS, ROOT_WAKE_MASK, RUNTIME_INIT_MAGIC, SHARED_PAGE_BYTES,
+    SUPERVISOR_WAKE_NOTIFICATION_SLOT,
 };
 use heapless::Vec as HeaplessVec;
 
 /// Compiler-selected service task ID.
 pub const SERVICE_TASK_ID: &str = "console-network-service";
 /// Runtime READY identity accepted before packet or console admission.
-pub const READY_IDENTITY: &str = "console-network-service/v3";
+pub const READY_IDENTITY: &str = "console-network-service/v4";
 
 mod generated_image_identity {
     ::core::include!(::core::concat!(
@@ -156,7 +157,7 @@ impl ConsoleNetworkContract {
             || config.max_packets_per_wake == 0
             || config.max_packets_per_wake > 16
             || config.max_commands_per_wake == 0
-            || config.max_commands_per_wake > 16
+            || config.max_commands_per_wake as usize > COMMAND_BATCH_MAX_RECORDS
             || config.max_control_inflight != 1
             || config.packet_rx_badge != console_network_abi::WAKE_PACKET_RX
             || config.control_badge != console_network_abi::WAKE_CONTROL
@@ -420,7 +421,13 @@ impl ConsoleNetworkEvent {
         self.related_sequence
     }
 
-    /// Validated UTF-8 payload.
+    /// Exact initialized payload bytes.
+    #[must_use]
+    pub fn payload_bytes(&self) -> &[u8] {
+        self.payload.as_slice()
+    }
+
+    /// Validated UTF-8 payload when the event kind carries plain text.
     pub fn payload(&self) -> Result<&str, BoundaryError> {
         core::str::from_utf8(self.payload.as_slice()).map_err(|_| BoundaryError::InvalidRecord)
     }
@@ -564,6 +571,23 @@ pub enum ConsoleNetworkContainmentTurn {
     Complete(ConsoleNetworkContainmentProof),
 }
 
+/// Exact newly consumed root inputs observed from one stable watermark pair.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ConsoleNetworkInputCompletions {
+    /// Ingress packet sequence newly consumed by the child.
+    pub packet_sequence: Option<u64>,
+    /// Root-control sequence newly consumed by the child.
+    pub control_sequence: Option<u64>,
+}
+
+impl ConsoleNetworkInputCompletions {
+    /// Whether either independently bounded input made progress.
+    #[must_use]
+    pub const fn any(self) -> bool {
+        self.packet_sequence.is_some() || self.control_sequence.is_some()
+    }
+}
+
 /// Transactional root-side boundary for one isolated child generation.
 pub struct ConsoleNetworkBoundary {
     contract: ConsoleNetworkContract,
@@ -573,6 +597,8 @@ pub struct ConsoleNetworkBoundary {
     next_control_sequence: u64,
     last_event_sequence: u64,
     last_egress_sequence: u64,
+    last_packet_consumed_sequence: u64,
+    last_control_consumed_sequence: u64,
     packet_inflight: Option<u64>,
     control_inflight: Option<u64>,
     connection_id: Option<u64>,
@@ -596,6 +622,8 @@ impl ConsoleNetworkBoundary {
             next_control_sequence: 1,
             last_event_sequence: 0,
             last_egress_sequence: 0,
+            last_packet_consumed_sequence: 0,
+            last_control_consumed_sequence: 0,
             packet_inflight: None,
             control_inflight: None,
             connection_id: None,
@@ -648,6 +676,56 @@ impl ConsoleNetworkBoundary {
     pub const fn control_available(&self) -> bool {
         !matches!(self.state, ServiceState::Terminal | ServiceState::Faulted)
             && self.control_inflight.is_none()
+    }
+
+    /// Whether the event page contains a semantic publication newer than the
+    /// last one already copied by root.
+    pub fn event_publication_pending(&self, input_page: &[u8]) -> Result<bool, BoundaryError> {
+        ExchangePage::publication_pending(input_page, self.generation, self.last_event_sequence)
+            .map_err(Into::into)
+    }
+
+    /// Retire exact packet/control input ownership from the negotiated
+    /// child-published watermark pair.
+    pub fn accept_completion_watermarks(
+        &mut self,
+        input_page: &[u8],
+    ) -> Result<ConsoleNetworkInputCompletions, BoundaryError> {
+        let watermarks = ExchangePage::completion_watermarks(input_page, self.generation)?;
+        if watermarks.ingress_sequence < self.last_packet_consumed_sequence
+            || watermarks.control_sequence < self.last_control_consumed_sequence
+        {
+            return Err(BoundaryError::StaleIdentity);
+        }
+
+        let packet_sequence = if watermarks.ingress_sequence == self.last_packet_consumed_sequence {
+            None
+        } else if self.packet_inflight == Some(watermarks.ingress_sequence) {
+            Some(watermarks.ingress_sequence)
+        } else {
+            return Err(BoundaryError::StaleIdentity);
+        };
+        let control_sequence = if watermarks.control_sequence == self.last_control_consumed_sequence
+        {
+            None
+        } else if self.control_inflight == Some(watermarks.control_sequence) {
+            Some(watermarks.control_sequence)
+        } else {
+            return Err(BoundaryError::StaleIdentity);
+        };
+
+        if let Some(sequence) = packet_sequence {
+            self.packet_inflight = None;
+            self.last_packet_consumed_sequence = sequence;
+        }
+        if let Some(sequence) = control_sequence {
+            self.control_inflight = None;
+            self.last_control_consumed_sequence = sequence;
+        }
+        Ok(ConsoleNetworkInputCompletions {
+            packet_sequence,
+            control_sequence,
+        })
     }
 
     /// Publish one copied NIC packet, preserving one-slot backpressure.
@@ -812,6 +890,14 @@ impl ConsoleNetworkBoundary {
                     return Err(BoundaryError::InvalidState);
                 }
             }
+            ExchangeKind::CommandBatch => {
+                if self.state != ServiceState::Authenticated
+                    || self.connection_id != Some(record.connection_id())
+                    || CommandBatchCursor::validate(payload).is_err()
+                {
+                    return Err(BoundaryError::InvalidState);
+                }
+            }
             ExchangeKind::Disconnected => {
                 if self.connection_id != Some(record.connection_id()) {
                     return Err(BoundaryError::StaleIdentity);
@@ -830,16 +916,10 @@ impl ConsoleNetworkBoundary {
                 }
             }
             ExchangeKind::PacketConsumed => {
-                if self.packet_inflight != Some(record.related_sequence()) {
-                    return Err(BoundaryError::StaleIdentity);
-                }
-                self.packet_inflight = None;
+                return Err(BoundaryError::InvalidRecord);
             }
             ExchangeKind::ControlCompleted => {
-                if self.control_inflight != Some(record.related_sequence()) {
-                    return Err(BoundaryError::StaleIdentity);
-                }
-                self.control_inflight = None;
+                return Err(BoundaryError::InvalidRecord);
             }
             ExchangeKind::OutputDrained => {
                 if self.connection_id != Some(record.connection_id())
@@ -923,6 +1003,8 @@ impl ConsoleNetworkBoundary {
         self.next_control_sequence = 1;
         self.last_event_sequence = 0;
         self.last_egress_sequence = 0;
+        self.last_packet_consumed_sequence = 0;
+        self.last_control_consumed_sequence = 0;
         self.packet_inflight = None;
         self.control_inflight = None;
         self.connection_id = None;

@@ -608,6 +608,28 @@ const NET_POST_DISPATCH_FLUSH_POLLS: usize = 8;
 const NET_POST_DISPATCH_BACKLOG_FLUSH_POLLS: usize = 16;
 #[cfg(all(feature = "kernel", feature = "net-console"))]
 const ISOLATED_VIRTIO_RESPONSE_UNITS_PER_ORDINARY_DEBT: u8 = 8;
+/// A complete QEMU activation visits all five Runtime cursor units while the
+/// three-way service rotor preserves Operator and Network fairness.
+#[cfg(all(feature = "kernel", feature = "net-console", feature = "release-qemu"))]
+const QEMU_ROOT_CONTROL_QUANTUM_MIN_PROBE_UNITS: u16 = 15;
+/// Bound semantic drainage independently from empty/fairness probes. One
+/// completion consumes retained root-control work; a compact rotor probe may
+/// only advance a cursor. Conflating the two ended saturated activations while
+/// useful MCS budget remained.
+#[cfg(all(feature = "kernel", feature = "net-console", feature = "release-qemu"))]
+const QEMU_ROOT_CONTROL_QUANTUM_MAX_WORK_COMPLETIONS: u32 = 512;
+/// Mechanical activation ceiling when the architectural counter is absent or
+/// fails closed. Pressure evidence measured 512-probe saturated activations at
+/// 1.09--3.91 ms, so four bounded probe windows are required for the existing
+/// four-millisecond counter guard to govern the fastest observed rotor without
+/// admitting an unbounded loop.
+#[cfg(all(feature = "kernel", feature = "net-console", feature = "release-qemu"))]
+const QEMU_ROOT_CONTROL_QUANTUM_MAX_PROBE_UNITS: u16 = 2_048;
+/// Stop admitting fresh QEMU service units after four milliseconds. The
+/// selected root-control SC is 5.5 ms, leaving 1.5 ms for the final bounded
+/// leaf, flight-record write, and caller epilogue.
+#[cfg(all(feature = "kernel", feature = "net-console", feature = "release-qemu"))]
+const QEMU_ROOT_CONTROL_QUANTUM_GUARD_US: u64 = 4_000;
 #[cfg(all(
     feature = "kernel",
     feature = "net-console",
@@ -3073,6 +3095,20 @@ struct PendingNetFlush {
     remaining_turns: usize,
 }
 
+/// Exact terminal record retained when the isolated console adapter is full.
+///
+/// A completed response may contain one bounded body record followed by its
+/// ACK/ERR terminal.  Command batching can consume the adapter's final slot
+/// with that body record; the terminal must then survive until the older batch
+/// drains.  Keeping one fixed-size record here closes that response epoch
+/// without allocating, retrying the command, or weakening the child boundary.
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct PendingNetworkTerminal {
+    identity: ConsoleResponseIdentity,
+    line: HeaplessString<DEFAULT_LINE_CAPACITY>,
+}
+
 #[cfg(feature = "net-console")]
 impl PendingNetFlush {
     const fn active(self) -> bool {
@@ -3385,10 +3421,10 @@ fn format_required_local_seat_preflight_frontier(
 
 /// Root-control service cut used by the isolated QEMU VirtIO console path.
 ///
-/// Operator/dispatch, NIC service, and runtime IPC run on separate outer
-/// EventPump calls so the userland loop's existing `seL4_Yield` is the only
-/// MCS replenishment boundary. The next phase is committed before any turn
-/// starts, making every early return preserve deterministic rotation.
+/// Operator/dispatch, NIC service, and runtime IPC remain distinct bounded
+/// units. The persistent phase is committed before each unit begins, so a
+/// time-guarded activation can compose useful work without changing the
+/// ordering or replaying an early-returned unit.
 #[cfg(all(feature = "kernel", feature = "net-console"))]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum OrdinaryServicePhase {
@@ -3406,6 +3442,94 @@ impl OrdinaryServicePhase {
             Self::Runtime => Self::Network,
             Self::Network => Self::Operator,
         }
+    }
+
+    #[cfg(feature = "release-qemu")]
+    const fn flight_phase(self) -> crate::qemu_flight_recorder::RootControlPhase {
+        match self {
+            Self::Operator => crate::qemu_flight_recorder::RootControlPhase::Operator,
+            Self::Runtime => crate::qemu_flight_recorder::RootControlPhase::Runtime,
+            Self::Network => crate::qemu_flight_recorder::RootControlPhase::Network,
+        }
+    }
+}
+
+/// Side-effect-free root-retained work observed around one QEMU service unit.
+#[cfg(all(feature = "kernel", feature = "net-console", feature = "release-qemu"))]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct QemuRootControlWorkSnapshot {
+    queue_depth: u32,
+    work_available: u32,
+    generation: u64,
+}
+
+#[cfg(all(feature = "kernel", feature = "net-console", feature = "release-qemu"))]
+const fn qemu_root_control_quantum_guard_reached(
+    started_ticks: u64,
+    now_ticks: u64,
+    counter_hz: u64,
+) -> bool {
+    if started_ticks == 0 || now_ticks == 0 || counter_hz == 0 {
+        return false;
+    }
+    let guard_ticks = ((counter_hz as u128) * (QEMU_ROOT_CONTROL_QUANTUM_GUARD_US as u128)
+        / 1_000_000u128) as u64;
+    let guard_ticks = if guard_ticks == 0 { 1 } else { guard_ticks };
+    now_ticks.wrapping_sub(started_ticks) >= guard_ticks
+}
+
+/// Return whether an isolated-QEMU activation can voluntarily stop idle.
+///
+/// An activation that has already completed useful work retains the rest of
+/// its fixed four-millisecond envelope. That bounded hot window lets a local
+/// authenticated client submit dependent follow-on work without forcing an
+/// artificial MCS replenishment gap. A genuinely idle activation still exits
+/// after one complete Operator/Runtime/Network cursor sweep.
+#[cfg(all(feature = "kernel", feature = "net-console", feature = "release-qemu"))]
+const fn qemu_root_control_can_stop_idle(
+    service_units: u16,
+    work_remaining: u32,
+    useful_progress_observed: bool,
+) -> bool {
+    service_units >= QEMU_ROOT_CONTROL_QUANTUM_MIN_PROBE_UNITS
+        && work_remaining == 0
+        && !useful_progress_observed
+}
+
+/// Return whether the outer root loop must cooperatively yield after this
+/// bounded QEMU quantum. A mechanical quota may retain the current bounded
+/// activation window, but the counter guard must end it before another passive
+/// service call can consume the donor's MCS safety reserve.
+#[cfg(all(feature = "kernel", feature = "net-console", feature = "release-qemu"))]
+const fn qemu_root_control_explicit_yield_required(
+    exit_reason: crate::qemu_flight_recorder::ActivationExitReason,
+    work_remaining: u32,
+) -> bool {
+    use crate::qemu_flight_recorder::ActivationExitReason;
+
+    match exit_reason {
+        ActivationExitReason::Quota => work_remaining == 0,
+        ActivationExitReason::BudgetGuard => true,
+        ActivationExitReason::NoWork
+        | ActivationExitReason::Block
+        | ActivationExitReason::Yield
+        | ActivationExitReason::Timeout
+        | ActivationExitReason::Fault => true,
+    }
+}
+
+#[cfg(all(feature = "kernel", feature = "net-console", feature = "release-qemu"))]
+fn qemu_root_control_counter() -> (u64, u64) {
+    #[cfg(target_arch = "aarch64")]
+    {
+        (
+            crate::arch::aarch64::timer::timer_counter_ticks(),
+            crate::arch::aarch64::timer::timer_freq_hz(),
+        )
+    }
+    #[cfg(not(target_arch = "aarch64"))]
+    {
+        (0, 0)
     }
 }
 
@@ -4454,6 +4578,8 @@ where
     #[cfg(feature = "kernel")]
     pending_stream: Option<PendingStream>,
     #[cfg(all(feature = "kernel", feature = "net-console"))]
+    pending_network_terminal: Option<PendingNetworkTerminal>,
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
     retired_console_stream_cursor: Option<PendingCursor>,
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     retired_console_cache_snapshot: Option<crate::hal::cache::CacheLogSnapshot>,
@@ -4555,6 +4681,19 @@ where
     isolated_virtio_response_units: u8,
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     isolated_virtio_response_identity: Option<(u64, u64)>,
+    #[cfg(all(feature = "kernel", feature = "net-console", feature = "release-qemu"))]
+    qemu_root_control_quantum_sequence: u64,
+    #[cfg(all(feature = "kernel", feature = "net-console", feature = "release-qemu"))]
+    qemu_root_control_previous_activation_ticks: u64,
+    #[cfg(all(feature = "kernel", feature = "net-console", feature = "release-qemu"))]
+    qemu_root_control_window_started_ticks: u64,
+    #[cfg(all(
+        test,
+        feature = "kernel",
+        feature = "net-console",
+        feature = "release-qemu"
+    ))]
+    qemu_root_control_last_service_units: u16,
     #[cfg(all(
         feature = "kernel",
         feature = "net-console",
@@ -5123,6 +5262,8 @@ where
             #[cfg(feature = "kernel")]
             pending_stream: None,
             #[cfg(all(feature = "kernel", feature = "net-console"))]
+            pending_network_terminal: None,
+            #[cfg(all(feature = "kernel", feature = "net-console"))]
             retired_console_stream_cursor: None,
             #[cfg(all(feature = "kernel", feature = "net-console"))]
             retired_console_cache_snapshot: None,
@@ -5221,6 +5362,19 @@ where
             isolated_virtio_response_units: 0,
             #[cfg(all(feature = "kernel", feature = "net-console"))]
             isolated_virtio_response_identity: None,
+            #[cfg(all(feature = "kernel", feature = "net-console", feature = "release-qemu"))]
+            qemu_root_control_quantum_sequence: 0,
+            #[cfg(all(feature = "kernel", feature = "net-console", feature = "release-qemu"))]
+            qemu_root_control_previous_activation_ticks: 0,
+            #[cfg(all(feature = "kernel", feature = "net-console", feature = "release-qemu"))]
+            qemu_root_control_window_started_ticks: 0,
+            #[cfg(all(
+                test,
+                feature = "kernel",
+                feature = "net-console",
+                feature = "release-qemu"
+            ))]
+            qemu_root_control_last_service_units: 0,
             #[cfg(all(
                 feature = "kernel",
                 feature = "net-console",
@@ -5421,6 +5575,7 @@ where
 
         self.network_service_quarantined = true;
         self.pending_net_flush = PendingNetFlush::default();
+        self.pending_network_terminal = None;
         self.pending_ordinary_virtio_net_diag = None;
         self.cyw43_network_ready_hdmi_progress.clear(self.now_ms);
         self.pending_cyw43_bootstrap_hdmi_progress_milestone = None;
@@ -5560,6 +5715,7 @@ where
         self.pending_net_flush = PendingNetFlush::default();
         #[cfg(feature = "kernel")]
         {
+            self.pending_network_terminal = None;
             self.pending_ordinary_virtio_net_diag = None;
         }
         #[cfg(feature = "kernel")]
@@ -5866,18 +6022,22 @@ where
     /// Each `poll` retains its existing one-phase and one-device-operation
     /// bound. This wrapper only stops distinct driver scheduling contexts from
     /// being serialized across whole root-control periods after Wi-Fi has been
-    /// quarantined. Active network ownership, QEMU, non-MCS profiles,
-    /// containment, and reboot retain the established single-poll boundary.
+    /// quarantined. The isolated QEMU path uses its own unit/time-guarded
+    /// branch below; all other states retain their established boundary.
     #[inline(never)]
-    pub fn poll_root_control_quantum(&mut self) {
+    #[must_use = "the caller must honor the root-control yield decision"]
+    pub fn poll_root_control_quantum(&mut self) -> bool {
         #[cfg(feature = "kernel")]
-        self.poll_root_control_quantum_for_state(
+        return self.poll_root_control_quantum_for_state(
             crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active(),
             crate::serial::serial_linked_runtime_transport_active(),
             self.network_service_quarantined,
         );
         #[cfg(not(feature = "kernel"))]
-        self.poll();
+        {
+            self.poll();
+            true
+        }
     }
 
     #[cfg(feature = "kernel")]
@@ -5886,7 +6046,11 @@ where
         physical_driver_owner: bool,
         linked_serial_owner: bool,
         network_quarantined: bool,
-    ) {
+    ) -> bool {
+        #[cfg(all(feature = "net-console", feature = "release-qemu"))]
+        if self.isolated_virtio_compact_path_attached() {
+            return self.poll_isolated_virtio_root_control_quantum();
+        }
         if pi4_local_operator_quantum_enabled(
             physical_driver_owner,
             linked_serial_owner,
@@ -5902,9 +6066,10 @@ where
                     break;
                 }
             }
-            return;
+            return true;
         }
         self.poll();
+        true
     }
 
     /// Return whether this is the exact isolated QEMU VirtIO service path.
@@ -5919,6 +6084,218 @@ where
                 net.driver_task_contract()
                     == crate::hal::driver_task::VIRTIO_NET_DRIVER_TASK_CONTRACT
             })
+    }
+
+    /// Snapshot only retained work visible without issuing an IPC or NIC
+    /// operation. The score is diagnostic rather than an admission budget;
+    /// the fixed unit and time guards remain authoritative.
+    #[cfg(all(feature = "kernel", feature = "net-console", feature = "release-qemu"))]
+    fn qemu_root_control_work_snapshot(&self) -> QemuRootControlWorkSnapshot {
+        let (ingest_queued, event_pending, console_service_pending, response_lane) =
+            self.net.as_ref().map_or((0, false, false, None), |net| {
+                (
+                    net.ingest_snapshot().queued,
+                    net.console_event_pending(),
+                    net.console_service_pending(),
+                    net.console_response_lane(),
+                )
+            });
+        let response_queued = response_lane.map_or(0u32, |lane| {
+            u32::try_from(lane.queued_lines).unwrap_or(u32::MAX)
+        });
+        let response_flags = response_lane.map_or(0u32, |lane| {
+            u32::from(lane.awaiting_batch_drain)
+                .saturating_add(u32::from(lane.producer_open))
+                .saturating_add(u32::try_from(lane.completed_responses).unwrap_or(u32::MAX))
+        });
+        let stream_records = self.pending_stream.as_ref().map_or(0usize, |pending| {
+            pending
+                .lines
+                .len()
+                .saturating_sub(pending.next_line)
+                .saturating_add(usize::from(pending.log_cursor.is_some()))
+                .saturating_add(usize::from(pending.cache_snapshot.is_some()))
+                .saturating_add(usize::from(pending.terminal_line.is_some()))
+                .saturating_add(usize::from(pending.isolated_runtime_completion_deferred))
+        });
+        let stream_records = u32::try_from(stream_records).unwrap_or(u32::MAX);
+        let pending_output = u32::try_from(self.pending_console_output.len()).unwrap_or(u32::MAX);
+        #[cfg(feature = "net-backend-virtio")]
+        let routine_audits = u32::try_from(self.routine_audits.pending.len()).unwrap_or(u32::MAX);
+        #[cfg(not(feature = "net-backend-virtio"))]
+        let routine_audits = 0u32;
+        let pending_flush =
+            u32::try_from(self.pending_net_flush.remaining_turns).unwrap_or(u32::MAX);
+        let queue_depth = ingest_queued
+            .saturating_add(response_queued)
+            .saturating_add(stream_records)
+            .saturating_add(pending_output)
+            .saturating_add(routine_audits);
+        let boolean_work = [
+            event_pending,
+            console_service_pending,
+            self.physical_console_response_pending(),
+            self.stream_end_pending,
+            self.stream_prompt_pending,
+            self.tail_active,
+            self.reboot_pending,
+            self.deferred_containment_work_pending(),
+            self.pending_ordinary_virtio_net_diag.is_some(),
+            self.ipc.has_staged_bootstrap(),
+            self.serial.tx_pending(),
+            self.serial.interactive_input_active(),
+            self.split_ordinary_virtio_local_seat_input_pending(),
+            self.split_ordinary_virtio_display_attach_pending(),
+        ]
+        .into_iter()
+        .fold(0u32, |total, present| {
+            total.saturating_add(u32::from(present))
+        });
+        let generation = response_lane
+            .map(|lane| lane.generation)
+            .or_else(|| {
+                self.sync_response_identity()
+                    .map(|identity| identity.generation)
+            })
+            .unwrap_or(0);
+        QemuRootControlWorkSnapshot {
+            queue_depth,
+            work_available: queue_depth
+                .saturating_add(response_flags)
+                .saturating_add(pending_flush)
+                .saturating_add(boolean_work),
+            generation,
+        }
+    }
+
+    /// Compose fine-grained isolated VirtIO units while retaining both the
+    /// existing leaf bounds and a hard activation envelope.
+    #[cfg(all(feature = "kernel", feature = "net-console", feature = "release-qemu"))]
+    #[inline(never)]
+    fn poll_isolated_virtio_root_control_quantum(&mut self) -> bool {
+        use crate::qemu_flight_recorder::{
+            record_root_control_activation, ActivationExitReason, RootControlActivationRecord,
+            RootControlPhase,
+        };
+
+        let (started_ticks, counter_hz) = qemu_root_control_counter();
+        if self.qemu_root_control_window_started_ticks == 0 {
+            self.qemu_root_control_window_started_ticks = started_ticks;
+        }
+        let window_started_ticks = self.qemu_root_control_window_started_ticks;
+        self.qemu_root_control_quantum_sequence =
+            self.qemu_root_control_quantum_sequence.saturating_add(1);
+        let sequence = self.qemu_root_control_quantum_sequence;
+        let gap_ticks =
+            if self.qemu_root_control_previous_activation_ticks == 0 || started_ticks == 0 {
+                0
+            } else {
+                started_ticks.wrapping_sub(self.qemu_root_control_previous_activation_ticks)
+            };
+        self.qemu_root_control_previous_activation_ticks = started_ticks;
+        let phase = if self.network_response_owner_active() {
+            RootControlPhase::Response
+        } else {
+            self.ordinary_service_phase.flight_phase()
+        };
+        let mut before = self.qemu_root_control_work_snapshot();
+        let mut work_available = before.work_available;
+        let mut queue_depth = before.queue_depth;
+        let mut work_completed = 0u32;
+        let mut generation = before.generation;
+        let mut service_units = 0u16;
+        let mut useful_progress_observed = false;
+
+        let (exit_reason, remaining) = loop {
+            let (before_poll_ticks, _) = qemu_root_control_counter();
+            if qemu_root_control_quantum_guard_reached(
+                window_started_ticks,
+                before_poll_ticks,
+                counter_hz,
+            ) {
+                break (ActivationExitReason::BudgetGuard, before);
+            }
+            self.poll_split_ordinary_virtio_compact();
+            service_units = service_units.saturating_add(1);
+            let after = self.qemu_root_control_work_snapshot();
+            let completed_this_probe = before.work_available.saturating_sub(after.work_available);
+            work_completed = work_completed.saturating_add(completed_this_probe);
+            useful_progress_observed |= completed_this_probe != 0;
+            work_available = work_available.max(after.work_available);
+            queue_depth = queue_depth.max(after.queue_depth);
+            if after.generation != 0 {
+                generation = after.generation;
+            }
+
+            if self.deferred_containment_work_pending() {
+                break (ActivationExitReason::Fault, after);
+            }
+            if self.reboot_pending {
+                break (ActivationExitReason::Block, after);
+            }
+
+            let (now_ticks, _) = qemu_root_control_counter();
+            if qemu_root_control_quantum_guard_reached(window_started_ticks, now_ticks, counter_hz)
+            {
+                break (ActivationExitReason::BudgetGuard, after);
+            }
+            if qemu_root_control_can_stop_idle(
+                service_units,
+                after.work_available,
+                useful_progress_observed,
+            ) {
+                break (ActivationExitReason::NoWork, after);
+            }
+            if work_completed >= QEMU_ROOT_CONTROL_QUANTUM_MAX_WORK_COMPLETIONS {
+                break (ActivationExitReason::Quota, after);
+            }
+            if service_units >= QEMU_ROOT_CONTROL_QUANTUM_MAX_PROBE_UNITS {
+                let reason = if after.work_available == 0 {
+                    ActivationExitReason::NoWork
+                } else {
+                    ActivationExitReason::Quota
+                };
+                break (reason, after);
+            }
+            before = after;
+        };
+        let (finished_ticks, _) = qemu_root_control_counter();
+        let run_ticks = if started_ticks == 0 || finished_ticks == 0 {
+            0
+        } else {
+            finished_ticks.wrapping_sub(started_ticks)
+        };
+        // Work may arrive and drain inside one activation, so the largest
+        // instantaneous snapshot can be smaller than the number of completed
+        // transitions.  Retain a closed accounting envelope for the derived
+        // drainage ratio instead of reporting an impossible value above one.
+        work_available =
+            work_available.max(work_completed.saturating_add(remaining.work_available));
+        #[cfg(test)]
+        {
+            self.qemu_root_control_last_service_units = service_units;
+        }
+        record_root_control_activation(RootControlActivationRecord {
+            timestamp_ticks: started_ticks,
+            counter_hz,
+            gap_ticks,
+            run_ticks,
+            sequence,
+            generation,
+            phase,
+            queue_depth,
+            work_available,
+            work_completed,
+            work_remaining: remaining.work_available,
+            service_units,
+            exit_reason,
+        });
+        let explicit_yield_required =
+            qemu_root_control_explicit_yield_required(exit_reason, remaining.work_available);
+        if explicit_yield_required {
+            self.qemu_root_control_window_started_ticks = 0;
+        }
+        explicit_yield_required
     }
 
     /// Preserve the existing physical and unsplit EventPump composition.
@@ -6003,10 +6380,10 @@ where
     /// the generic CYW43/SDIO/linked-runtime EventPump frame.
     ///
     /// Successful tail-drain reconciliation and prompt-tail publication each
-    /// own a whole outer turn and preserve every ordinary cursor. Backpressure
+    /// own one material unit and preserve every ordinary cursor. Backpressure
     /// instead admits one Operator unit without advancing the phase so staged
     /// serial bytes or one retained record can make bounded progress. Only a
-    /// later turn may commit and execute the retained phase.
+    /// later unit may commit and execute the retained phase.
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[inline(never)]
     fn poll_split_ordinary_virtio_compact(&mut self) {
@@ -6049,6 +6426,20 @@ where
             .net
             .as_ref()
             .and_then(|net| net.console_response_lane());
+        let pending_terminal_identity = self.pending_network_terminal_identity();
+        if let Some(identity) = pending_terminal_identity {
+            if self
+                .net
+                .as_ref()
+                .and_then(|net| net.bounded_console_response_identity())
+                != Some(identity)
+            {
+                self.pending_network_terminal = None;
+                self.isolated_virtio_response_units = 0;
+                self.isolated_virtio_response_identity = None;
+                return;
+            }
+        }
         let sync_identity = self.sync_response_identity();
         if let Some(identity) = sync_identity {
             if self
@@ -6063,11 +6454,32 @@ where
                 return;
             }
         }
+        let completed_response_pipeline_dispatch_due = response_lane
+            .is_some_and(|lane| !lane.producer_open && lane.available_lines != 0)
+            && pending_terminal_identity.is_none()
+            && !self.stream_end_pending
+            && !self.pending_stream_active()
+            && !self.pending_net_flush.active()
+            && self
+                .net
+                .as_ref()
+                .is_some_and(|net| net.buffered_console_lines_pending());
+        if completed_response_pipeline_dispatch_due {
+            // Completed response records already have immutable FIFO order in
+            // the adapter. Admit one more hardware-free Operator unit while
+            // capacity remains instead of waiting for the older records to
+            // cross TCP. The eight-slot output queue is the burst bound; once
+            // full, exact child/control/drain progress resumes before another
+            // command can enter.
+            self.poll_split_ordinary_virtio_compact_operator_turn();
+            return;
+        }
         let active_identity = response_lane
             .map(|lane| ConsoleResponseIdentity {
                 generation: lane.generation,
                 connection_id: lane.connection_id,
             })
+            .or(pending_terminal_identity)
             .or(sync_identity);
         if let Some(active_identity) = active_identity {
             let identity = (active_identity.generation, active_identity.connection_id);
@@ -6096,9 +6508,7 @@ where
                 .pending_stream
                 .as_ref()
                 .is_some_and(PendingStream::sync_sealed)
-                && response_lane.is_none_or(|lane| {
-                    lane.available_lines != 0 && !lane.awaiting_batch_drain && !lane.terminal_queued
-                })
+                && response_lane.is_none_or(|lane| lane.available_lines != 0)
             {
                 self.flush_pending_sync_response();
             } else if let Some(lane) = response_lane {
@@ -6125,18 +6535,26 @@ where
     /// Execute one useful root-side response unit without advancing ordinary
     /// Operator/Runtime/Network cursors. A BuildBatch unit fills only the
     /// existing eight-line adapter queue; all NIC/child progress remains a
-    /// separate replenishment-bounded Network unit.
+    /// separate driver-budgeted Network unit.
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[inline(never)]
     fn poll_split_isolated_virtio_response_turn(&mut self, lane: ConsoleResponseLane) {
+        let pending_terminal_for_lane =
+            self.pending_network_terminal_identity()
+                .is_some_and(|identity| {
+                    identity.generation == lane.generation
+                        && identity.connection_id == lane.connection_id
+                });
+        if pending_terminal_for_lane
+            && lane.available_lines != 0
+            && self.flush_pending_network_terminal()
+        {
+            return;
+        }
         let stream_for_lane = self.stream_end_pending
             && self.stream_output_source == Some(ConsoleInputSource::Net)
             && self.stream_net_conn_id == Some(lane.connection_id);
-        if stream_for_lane
-            && lane.available_lines != 0
-            && !lane.awaiting_batch_drain
-            && !lane.terminal_queued
-        {
+        if stream_for_lane && lane.available_lines != 0 && lane.producer_open {
             self.flush_pending_stream();
             return;
         }
@@ -6268,7 +6686,9 @@ where
         if !self.network_service_quarantined
             && !self.pending_net_flush.active()
             && self.net.as_ref().is_some_and(|net| {
-                net.console_response_lane().is_none() && net.buffered_console_lines_pending()
+                net.console_response_lane()
+                    .is_none_or(|lane| !lane.producer_open && lane.available_lines != 0)
+                    && net.buffered_console_lines_pending()
             })
         {
             self.ordinary_operator_unit = OrdinaryOperatorUnit::NetLine.next();
@@ -6290,9 +6710,14 @@ where
 
         #[cfg(feature = "net-backend-virtio")]
         {
+            let response_lane_active = self
+                .net
+                .as_ref()
+                .and_then(|net| net.console_response_lane())
+                .is_some();
             if isolated_routine_audit_drain_allowed(
                 !self.routine_audits.is_empty() || self.serial.routine_audit_only_pending(),
-                self.network_response_owner_active(),
+                self.network_response_owner_active() || response_lane_active,
                 self.stream_end_pending,
                 self.stream_prompt_pending,
                 self.pending_stream.is_some(),
@@ -8011,9 +8436,15 @@ where
     #[cfg(feature = "net-console")]
     #[inline(never)]
     fn dispatch_one_buffered_network_line(&mut self) -> bool {
+        let response_pipeline_blocked = self
+            .net
+            .as_ref()
+            .and_then(|net| net.console_response_lane())
+            .is_some_and(|lane| lane.producer_open || lane.available_lines == 0);
         if self.network_service_quarantined
             || self.pending_net_flush.active()
             || self.network_response_owner_active()
+            || response_pipeline_blocked
             || self.stream_end_pending
             || self.pending_stream_active()
         {
@@ -9158,8 +9589,10 @@ where
 
         // Preserve only the timer/reconciliation prelude. The generic runtime
         // network monolith and composite control tail remain outside this
-        // isolated Runtime refill. Exactly one selected unit runs next and the
-        // userland loop supplies the only yield.
+        // isolated Runtime unit. Exactly one selected responsibility runs
+        // before control returns to the bounded activation composer; the
+        // Worker responsibility internally retains its generated fixed-size
+        // admission and lifecycle quantum.
         self.poll_split_ordinary_virtio_runtime_prelude();
         match unit {
             OrdinaryRuntimeUnit::Worker => self
@@ -9178,7 +9611,7 @@ where
     ///
     /// A retained diagnostic preempts both ordinary units without advancing
     /// their cursor. Otherwise the Timer/NIC successor is committed before
-    /// work and the userland loop supplies the only replenishment yield.
+    /// one independently driver-budgeted material unit runs.
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[inline(never)]
     fn poll_split_ordinary_virtio_network_turn(&mut self) {
@@ -11691,9 +12124,68 @@ where
         if self.sync_response_pending() {
             return true;
         }
+        #[cfg(feature = "kernel")]
+        if self.pending_network_terminal.is_some() {
+            return true;
+        }
         self.net
             .as_ref()
-            .is_some_and(|net| net.console_response_lane().is_some())
+            .and_then(|net| net.console_response_lane())
+            .is_some_and(|lane| lane.producer_open)
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    fn pending_network_terminal_identity(&self) -> Option<ConsoleResponseIdentity> {
+        self.pending_network_terminal
+            .as_ref()
+            .map(|pending| pending.identity)
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    fn retain_network_terminal(&mut self, identity: ConsoleResponseIdentity, line: &str) {
+        if self.pending_network_terminal.is_some() {
+            debug_assert!(
+                self.pending_network_terminal
+                    .as_ref()
+                    .is_some_and(|pending| {
+                        pending.identity == identity && pending.line.as_str() == line
+                    }),
+                "one response cannot own two deferred terminals"
+            );
+            return;
+        }
+        let Ok(line) = HeaplessString::try_from(line) else {
+            debug_assert!(false, "rendered console terminal exceeds the line ABI");
+            return;
+        };
+        self.pending_network_terminal = Some(PendingNetworkTerminal { identity, line });
+    }
+
+    /// Retry one previously rendered terminal after the adapter exposes a
+    /// slot. Returns `true` when the retained state was completed or revoked.
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    fn flush_pending_network_terminal(&mut self) -> bool {
+        let Some(pending) = self.pending_network_terminal.take() else {
+            return false;
+        };
+        let current_identity = self
+            .net
+            .as_ref()
+            .and_then(|net| net.bounded_console_response_identity());
+        if current_identity != Some(pending.identity) {
+            return true;
+        }
+        let sent = self
+            .net
+            .as_mut()
+            .is_some_and(|net| net.send_console_terminal_line(pending.line.as_str()));
+        if sent {
+            self.mirror_local_seat_network_line_if_ready(pending.line.as_str());
+            true
+        } else {
+            self.pending_network_terminal = Some(pending);
+            false
+        }
     }
 
     #[cfg(feature = "net-console")]
@@ -11939,14 +12431,29 @@ where
             let _ = self.try_emit_serial_line_with_kind(line, kind);
         } else {
             #[cfg(feature = "net-console")]
-            if let Some(net) = self.net.as_mut() {
+            {
                 let stream_response_active = self.stream_end_pending
                     && self.stream_output_source == Some(ConsoleInputSource::Net);
-                let _ = if stream_response_active {
-                    net.send_console_line(line)
-                } else {
-                    net.send_console_terminal_line(line)
-                };
+                let identity = (!stream_response_active)
+                    .then(|| {
+                        self.net
+                            .as_ref()
+                            .and_then(|net| net.bounded_console_response_identity())
+                    })
+                    .flatten();
+                let sent = self.net.as_mut().is_some_and(|net| {
+                    if stream_response_active {
+                        net.send_console_line(line)
+                    } else {
+                        net.send_console_terminal_line(line)
+                    }
+                });
+                #[cfg(feature = "kernel")]
+                if !sent {
+                    if let Some(identity) = identity {
+                        self.retain_network_terminal(identity, line);
+                    }
+                }
             }
         }
     }
@@ -25707,6 +26214,22 @@ where
         if self.network_service_quarantined {
             return;
         }
+        #[cfg(feature = "kernel")]
+        if self.isolated_virtio_compact_path_attached()
+            && self
+                .net
+                .as_ref()
+                .and_then(|net| net.bounded_console_response_identity())
+                .is_some()
+        {
+            // The isolated VirtIO response lane already retains the exact
+            // generation/connection until its terminal SendBatch receives
+            // ControlCompleted plus OutputDrained and all published egress has
+            // crossed the NIC boundary. The legacy post-response cursor would
+            // add up to eight redundant Network turns and block the next
+            // buffered command after this stronger drain proof completed.
+            return;
+        }
         let display_trace = self
             .local_seat
             .as_ref()
@@ -25765,6 +26288,13 @@ where
                 bytes_read,
                 bytes_written,
             } => {
+                #[cfg(feature = "kernel")]
+                if self
+                    .pending_network_terminal_identity()
+                    .is_some_and(|identity| identity.connection_id == conn_id)
+                {
+                    self.pending_network_terminal = None;
+                }
                 log::info!(
                     target: "net-console",
                     "[net-console] conn {}: closed reason={} (bytes_read={}, bytes_written={})",
@@ -25844,7 +26374,10 @@ where
                     | Command::BootInfo
                     | Command::Caps { .. }
                     | Command::Smp { .. }
+                    | Command::Mem
                     | Command::CacheLog { .. }
+                    | Command::Test
+                    | Command::NetTest
                     | Command::NetStats
             )
             && self.begin_sync_response_capture(verb_label);
@@ -26476,7 +27009,7 @@ where
                                     let pending =
                                         self.pending_stream.get_or_insert_with(PendingStream::new);
                                     pending.reset();
-                                    match bridge.telemetry_tail_into(
+                                    match bridge.tail_stream_into(
                                         path_str,
                                         cursor_offset,
                                         &mut pending.lines,
@@ -30554,6 +31087,8 @@ mod tests {
             available_lines: 0,
             awaiting_batch_drain: false,
             terminal_queued: true,
+            producer_open: false,
+            completed_responses: 1,
         });
 
         {
@@ -30579,7 +31114,10 @@ mod tests {
                 OrdinaryVirtioNetworkUnit::Timer
             );
         }
-        assert_eq!(net.response_polls, 8);
+        assert_eq!(
+            net.response_polls,
+            usize::from(ISOLATED_VIRTIO_RESPONSE_UNITS_PER_ORDINARY_DEBT)
+        );
         assert_eq!(
             net.polls, 0,
             "ordinary Operator debt must not compose NIC work"
@@ -34259,16 +34797,20 @@ mod tests {
         }
 
         fn queue_console_response_line(&mut self, line: &str, terminal: bool) -> bool {
-            let next_queued = if let Some(capacity) = self.response_batch_capacity {
-                let queued = self.response_lane.map_or(0, |lane| lane.queued_lines);
-                if queued >= capacity || self.response_lane.is_some_and(|lane| lane.terminal_queued)
-                {
-                    return false;
-                }
-                queued.saturating_add(1)
-            } else {
-                0
-            };
+            let (next_queued, producer_open, completed_responses) =
+                if let Some(capacity) = self.response_batch_capacity {
+                    let queued = self.response_lane.map_or(0, |lane| lane.queued_lines);
+                    if queued >= capacity {
+                        return false;
+                    }
+                    let completed = self
+                        .response_lane
+                        .map_or(0, |lane| lane.completed_responses)
+                        .saturating_add(usize::from(terminal));
+                    (queued.saturating_add(1), !terminal, completed)
+                } else {
+                    (0, false, 0)
+                };
             let mut buf = HeaplessString::new();
             if buf.push_str(line).is_err() || self.sent.push(buf).is_err() {
                 return false;
@@ -34293,7 +34835,9 @@ mod tests {
                     queued_lines: next_queued,
                     available_lines: capacity.saturating_sub(next_queued),
                     awaiting_batch_drain: next_queued == capacity,
-                    terminal_queued: terminal,
+                    terminal_queued: completed_responses != 0,
+                    producer_open,
+                    completed_responses,
                 });
             }
             true
@@ -34362,13 +34906,15 @@ mod tests {
             self.response_polls = self.response_polls.saturating_add(1);
             if let (Some(capacity), Some(lane)) = (self.response_batch_capacity, self.response_lane)
             {
-                if lane.terminal_queued {
+                if !lane.producer_open && lane.completed_responses != 0 {
                     self.response_lane = None;
                 } else {
                     self.response_lane = Some(ConsoleResponseLane {
                         queued_lines: 0,
                         available_lines: capacity,
                         awaiting_batch_drain: false,
+                        terminal_queued: false,
+                        completed_responses: 0,
                         ..lane
                     });
                 }
@@ -34895,6 +35441,143 @@ mod tests {
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[test]
+    fn isolated_virtio_pipeline_dispatches_completed_responses_before_drain() {
+        let driver = LoopbackSerial::<2048>::new();
+        let serial = SerialPort::<_, 2048, 2048, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 5 });
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        net.active_conn_id = Some(7);
+        net.authenticated_conn_id = Some(7);
+        net.response_batch_capacity = Some(8);
+        for sequence in 1..=2 {
+            net.lines
+                .push(ConsoleLine::for_connection(
+                    HeaplessString::try_from("ping").unwrap(),
+                    sequence,
+                    7,
+                ))
+                .unwrap();
+        }
+
+        {
+            let mut pump =
+                EventPump::new(serial, timer, NullIpc, store, &mut audit).with_network(&mut net);
+
+            assert!(pump.dispatch_one_buffered_network_line());
+            assert!(pump
+                .net
+                .as_ref()
+                .and_then(|net| net.console_response_lane())
+                .is_some_and(|lane| {
+                    lane.terminal_queued && !lane.producer_open && lane.completed_responses == 1
+                }));
+            assert!(
+                !pump.pending_net_flush.active(),
+                "the exact isolated response lane supersedes legacy flush debt"
+            );
+            pump.poll_split_ordinary_virtio_compact();
+            assert_eq!(pump.metrics.accepted_commands, 2);
+            let lane = pump
+                .net
+                .as_ref()
+                .and_then(|net| net.console_response_lane())
+                .expect("two completed responses remain in the adapter");
+            assert_eq!(lane.completed_responses, 2, "lane={lane:?}");
+            assert!(!lane.producer_open, "lane={lane:?}");
+            assert_eq!(lane.queued_lines + lane.available_lines, 8, "lane={lane:?}");
+            assert!(!pump.pending_net_flush.active());
+
+            pump.poll_split_ordinary_virtio_compact();
+            assert!(pump
+                .net
+                .as_ref()
+                .and_then(|net| net.console_response_lane())
+                .is_none());
+        }
+
+        assert_eq!(net.response_polls, 1);
+        assert_eq!(net.tcp_flushes, 0);
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn isolated_virtio_retries_terminal_after_body_fills_response_batch() {
+        let driver = LoopbackSerial::<2048>::new();
+        let serial = SerialPort::<_, 2048, 2048, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 5 });
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        net.active_conn_id = Some(7);
+        net.authenticated_conn_id = Some(7);
+        net.response_batch_capacity = Some(8);
+
+        {
+            let mut pump =
+                EventPump::new(serial, timer, NullIpc, store, &mut audit).with_network(&mut net);
+            pump.last_input_source = ConsoleInputSource::Net;
+            for sequence in 0..7 {
+                pump.emit_terminal_console_line(format!("OK ECHO sequence={sequence}").as_str());
+            }
+
+            pump.handle_command(Command::Ping).expect("PING dispatch");
+
+            let saturated = pump
+                .net
+                .as_ref()
+                .and_then(|net| net.console_response_lane())
+                .expect("seven terminals plus PONG fill the adapter");
+            assert_eq!(saturated.queued_lines, 8, "lane={saturated:?}");
+            assert!(saturated.producer_open, "lane={saturated:?}");
+            assert_eq!(
+                pump.pending_network_terminal
+                    .as_ref()
+                    .map(|pending| pending.line.as_str()),
+                Some("OK PING reply=pong"),
+            );
+
+            pump.poll_split_ordinary_virtio_compact();
+            assert!(
+                pump.pending_network_terminal.is_some(),
+                "the first response turn drains the saturated adapter batch"
+            );
+            pump.poll_split_ordinary_virtio_compact();
+            assert!(
+                pump.pending_network_terminal.is_none(),
+                "the following response turn publishes the retained terminal"
+            );
+            pump.poll_split_ordinary_virtio_compact();
+            assert!(pump
+                .net
+                .as_ref()
+                .and_then(|net| net.console_response_lane())
+                .is_none());
+        }
+
+        assert_eq!(
+            net.sent
+                .iter()
+                .map(|line| line.as_str())
+                .collect::<std::vec::Vec<_>>(),
+            [
+                "OK ECHO sequence=0",
+                "OK ECHO sequence=1",
+                "OK ECHO sequence=2",
+                "OK ECHO sequence=3",
+                "OK ECHO sequence=4",
+                "OK ECHO sequence=5",
+                "OK ECHO sequence=6",
+                "PONG",
+                "OK PING reply=pong",
+            ]
+        );
+        assert_eq!(net.response_polls, 2);
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
     fn invalid_cat_retires_provisional_stream_before_same_connection_quit() {
         let _root_guard = ReachableRootGuard::new(5);
         let driver = LoopbackSerial::<2048>::new();
@@ -34943,21 +35626,17 @@ mod tests {
                 .and_then(|net| net.console_response_lane())
                 .is_some_and(|lane| lane.terminal_queued));
             assert!(
-                !pump.dispatch_one_buffered_network_line(),
-                "QUIT must remain ordered behind the CAT terminal lane"
+                pump.dispatch_one_buffered_network_line(),
+                "QUIT may execute once CAT's complete terminal is retained"
             );
-
-            pump.poll_split_ordinary_virtio_compact();
+            assert!(pump.session.is_none());
             assert!(pump
                 .net
                 .as_ref()
                 .and_then(|net| net.console_response_lane())
-                .is_none());
-            pump.poll_one_split_ordinary_virtio_network_unit();
+                .is_some_and(|lane| lane.completed_responses == 2));
+            pump.poll_split_ordinary_virtio_compact();
             assert!(!pump.pending_net_flush.active());
-
-            assert!(pump.dispatch_one_buffered_network_line());
-            assert!(pump.session.is_none());
         }
 
         assert_eq!(net.disconnect_requests, 1);
@@ -35256,6 +35935,8 @@ mod tests {
             available_lines: 0,
             awaiting_batch_drain: true,
             terminal_queued: true,
+            producer_open: false,
+            completed_responses: 1,
         });
         let mut pump =
             EventPump::new(serial, timer, NullIpc, store, &mut audit).with_network(&mut net);
@@ -41632,7 +42313,7 @@ mod tests {
         ] {
             assert!(
                 !pi4_local_operator_quantum_enabled(state.0, state.1, state.2),
-                "QEMU, pre-cutover serial, and active Network must retain one poll per explicit yield: {state:?}"
+                "QEMU, pre-cutover serial, and active Network must not enter the Pi-specific quantum: {state:?}"
             );
         }
         assert_eq!(
@@ -41644,6 +42325,144 @@ mod tests {
             PI4_LOCAL_SEAT_PREFLIGHT_POLLS_PER_EXPLICIT_YIELD, 4,
             "preflight excludes Network and retains only the useful local phases"
         );
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console", feature = "release-qemu"))]
+    #[test]
+    fn qemu_quantum_stops_genuinely_idle_but_retains_a_progress_window() {
+        assert!(!qemu_root_control_can_stop_idle(
+            QEMU_ROOT_CONTROL_QUANTUM_MIN_PROBE_UNITS - 1,
+            0,
+            false,
+        ));
+        assert!(qemu_root_control_can_stop_idle(
+            QEMU_ROOT_CONTROL_QUANTUM_MIN_PROBE_UNITS,
+            0,
+            false,
+        ));
+        assert!(!qemu_root_control_can_stop_idle(
+            QEMU_ROOT_CONTROL_QUANTUM_MIN_PROBE_UNITS,
+            1,
+            false,
+        ));
+        assert!(!qemu_root_control_can_stop_idle(
+            QEMU_ROOT_CONTROL_QUANTUM_MIN_PROBE_UNITS,
+            0,
+            true,
+        ));
+        use crate::qemu_flight_recorder::ActivationExitReason;
+        assert!(!qemu_root_control_explicit_yield_required(
+            ActivationExitReason::Quota,
+            1,
+        ));
+        assert!(qemu_root_control_explicit_yield_required(
+            ActivationExitReason::BudgetGuard,
+            1,
+        ));
+        for reason in [
+            ActivationExitReason::NoWork,
+            ActivationExitReason::Block,
+            ActivationExitReason::Yield,
+            ActivationExitReason::Timeout,
+            ActivationExitReason::Fault,
+        ] {
+            assert!(qemu_root_control_explicit_yield_required(reason, 1));
+        }
+        assert!(qemu_root_control_explicit_yield_required(
+            ActivationExitReason::Quota,
+            0,
+        ));
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console", feature = "release-qemu"))]
+    #[test]
+    fn qemu_quantum_retains_startup_progress_to_the_hard_probe_cap() {
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<
+            32768,
+        >::new());
+        let timer = TestTimer::repeated(64, 1);
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+
+        {
+            let mut pump =
+                EventPump::new(serial, timer, NullIpc, store, &mut audit).with_network(&mut net);
+            let explicit_yield_required =
+                pump.poll_root_control_quantum_for_state(false, false, false);
+
+            assert_eq!(pump.qemu_root_control_quantum_sequence, 1);
+            assert_eq!(
+                pump.qemu_root_control_last_service_units,
+                QEMU_ROOT_CONTROL_QUANTUM_MAX_PROBE_UNITS,
+                "the no-counter host test must retain its bounded window after startup progress",
+            );
+            assert_eq!(pump.qemu_root_control_work_snapshot().work_available, 0);
+            assert!(
+                explicit_yield_required,
+                "a drained QEMU quantum must return to the scheduler"
+            );
+        }
+        assert!(
+            net.polls >= 2 && net.polls < usize::from(QEMU_ROOT_CONTROL_QUANTUM_MAX_PROBE_UNITS),
+            "the progress window must keep NIC admission bounded: {}",
+            net.polls,
+        );
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console", feature = "release-qemu"))]
+    #[test]
+    fn qemu_quantum_retains_persistent_work_only_to_the_hard_probe_cap() {
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<
+            32768,
+        >::new());
+        let timer = TestTimer::repeated(128, 1);
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        net.console_service_pending = true;
+
+        {
+            let mut pump =
+                EventPump::new(serial, timer, NullIpc, store, &mut audit).with_network(&mut net);
+            let explicit_yield_required =
+                pump.poll_root_control_quantum_for_state(false, false, false);
+
+            assert_eq!(pump.qemu_root_control_quantum_sequence, 1);
+            assert_eq!(
+                pump.qemu_root_control_last_service_units,
+                QEMU_ROOT_CONTROL_QUANTUM_MAX_PROBE_UNITS,
+                "persistent work must stop at the hard probe envelope when no counter is available",
+            );
+            assert!(
+                !explicit_yield_required,
+                "bounded retained work must consume available MCS budget before yielding"
+            );
+        }
+        let maximum_debt_turns = usize::from(QEMU_ROOT_CONTROL_QUANTUM_MAX_PROBE_UNITS)
+            / (usize::from(ISOLATED_VIRTIO_RESPONSE_UNITS_PER_ORDINARY_DEBT) + 1)
+            + 1;
+        assert!(
+            net.polls > 0 && net.polls <= maximum_debt_turns,
+            "persistent work preserves bounded phased NIC admission inside the fixed envelope: {} > {}",
+            net.polls,
+            maximum_debt_turns,
+        );
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console", feature = "release-qemu"))]
+    #[test]
+    fn qemu_quantum_counter_guard_uses_generated_frequency_units() {
+        assert!(!qemu_root_control_quantum_guard_reached(
+            10, 96_009, 24_000_000,
+        ));
+        assert!(qemu_root_control_quantum_guard_reached(
+            10, 96_010, 24_000_000,
+        ));
+        assert!(!qemu_root_control_quantum_guard_reached(
+            0, 96_010, 24_000_000
+        ));
+        assert!(!qemu_root_control_quantum_guard_reached(10, 96_010, 0));
     }
 
     #[cfg(feature = "kernel")]
@@ -46903,7 +47722,10 @@ mod tests {
             pump.network_service_quarantined = true;
             pump.linked_runtime_service_phase = LinkedRuntimeServicePhase::Network;
 
-            pump.poll_root_control_quantum_for_state(true, true, true);
+            assert!(
+                pump.poll_root_control_quantum_for_state(true, true, true),
+                "the physical Pi rotation retains its explicit-yield boundary"
+            );
 
             assert_eq!(
                 pump.linked_runtime_service_phase,
@@ -46917,7 +47739,10 @@ mod tests {
                 "the composed rotation must perform one bounded linked-serial operation"
             );
 
-            pump.poll_root_control_quantum_for_state(true, true, true);
+            assert!(
+                pump.poll_root_control_quantum_for_state(true, true, true),
+                "each physical Pi rotation returns to the scheduler"
+            );
 
             assert_eq!(
                 pump.linked_runtime_service_phase,
@@ -48339,7 +49164,15 @@ mod tests {
         let mut audit = AuditLog::new();
         let mut bridge = NineDoorBridge::new();
         bridge.retain_containment_diagnostic_for_test(
-            crate::ninedoor::NineDoorContainmentDiagnostic::TransportRevoked { generation: 23 },
+            crate::ninedoor::NineDoorContainmentDiagnostic::TransportRevoked {
+                generation: 23,
+                evidence: crate::ninedoor_service::NamespaceTransportFailureEvidence {
+                    error: secure9p_transport::TransportError::StaleIdentity,
+                    stage: crate::ninedoor_service::NamespaceTransportFailureStage::ChildRejected,
+                    expected_sequence: 47,
+                    observed_sequence: 47,
+                },
+            },
         );
         let mut net = FakeNet::new();
         net.events

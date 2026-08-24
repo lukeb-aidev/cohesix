@@ -23,6 +23,7 @@ import json
 import math
 import os
 import pathlib
+import queue
 import random
 import signal
 import socket
@@ -36,7 +37,7 @@ from datetime import datetime, timezone
 import urllib.error
 import urllib.parse
 import urllib.request
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple, TextIO
 
 DEFAULT_REST_URL = "http://127.0.0.1:8080"
@@ -44,9 +45,16 @@ DEFAULT_RUNS = 3
 DEFAULT_TIMEOUT_SECS = 3.0
 DEFAULT_SIMULATE_TIMEOUT_SECS = 10.0
 DEFAULT_MAX_WORKERS = 4
-MAX_WORKER_STATE_TAIL_BYTES = 8192
+MAX_WORKER_STATE_TAIL_BYTES = 4096
 DEFAULT_TAIL_BYTES = MAX_WORKER_STATE_TAIL_BYTES
 DEFAULT_LOG_TAIL_BYTES = 32768
+WORKER_FAILURE_CONTEXT_MAX_LINES = 12
+WORKER_FAILURE_CONTEXT_LINE_BYTES = 240
+WORKER_FAILURE_CONTEXT_MAX_BYTES = 2048
+# The target retains at most 64 complete 256-byte ticket wire records.
+HOST_TICKET_LOG_TAIL_BYTES = 64 * 256
+HOST_TICKET_CURRENT_MAX_BYTES = 256
+HOST_TICKET_CURRENT_PREFIX = "/host/tickets/current/"
 DEFAULT_QEMU_SMP = "4,cores=4,threads=1,sockets=1"
 DEFAULT_WORKERS_MIN = 8
 DEFAULT_WORKERS_MAX = 50
@@ -127,15 +135,26 @@ TELEMETRY_SCENARIO_BYTES = {
 TELEMETRY_REFERENCE_SCHEMA = "coh-ref-c/v1"
 POPULATION_HOST_MODEL = "host-model"
 POPULATION_EXECUTABLE = "executable"
+POPULATION_EXECUTABLE_LOG = "executable-log"
 EXECUTABLE_WORKER_ROLES = (
     "worker-heartbeat",
     "worker-gpu",
     "worker-lora",
 )
+
+
+def is_live_executable_population(population_mode: str) -> bool:
+    """Return whether traffic targets real compiler-admitted QEMU Workers."""
+    return population_mode in (POPULATION_EXECUTABLE, POPULATION_EXECUTABLE_LOG)
 WORKER_LIFECYCLE_STATES = frozenset(
     ("absent", "queued", "starting", "ready", "closing", "faulted", "terminal")
 )
-WORKER_RUNTIME_STATE_SCHEMA = "worker-runtime-state/v1"
+WORKER_RUNTIME_STATE_SCHEMA_V1 = "worker-runtime-state/v1"
+WORKER_RUNTIME_STATE_SCHEMA_V2 = "worker-runtime-state/v2"
+WORKER_RUNTIME_STATE_SCHEMAS = frozenset(
+    (WORKER_RUNTIME_STATE_SCHEMA_V1, WORKER_RUNTIME_STATE_SCHEMA_V2)
+)
+WORKER_RUNTIME_STATE_V2_MAX_COUNTER = (1 << 32) - 1
 MAX_DISCOVERED_SHARDS = 256
 MAX_DISCOVERED_WORKERS = 64
 EXECUTABLE_UART_MARKERS = (
@@ -226,6 +245,25 @@ class WorkerInstance:
             "supervisor_generation": self.supervisor_generation,
             "cap_generation": self.cap_generation,
         }
+
+
+@dataclass(frozen=True)
+class HostTicketCurrent:
+    """One bounded exact ticket/Worker projection from NineDoor."""
+
+    state: str
+    role: str
+    worker_id: str
+    lifecycle: str
+    slot: int
+    lease_epoch: int
+    supervisor_generation: int
+    cap_generation: int
+    ready_sequence: int
+    control_sequence: int
+    receipt_sequence: int
+    completion_sequence: int
+    admission_sequence: int
 
 
 @dataclass(frozen=True)
@@ -494,13 +532,15 @@ class SimState:
     next_worker_seq: int = 1
     approval_seq: int = 0
     policy_lock: threading.Lock = field(default_factory=threading.Lock)
+    schedule_lock: threading.Lock = field(default_factory=threading.Lock)
     lease_lock: threading.Lock = field(default_factory=threading.Lock)
     id_lock: threading.Lock = field(default_factory=threading.Lock)
     active_leases: List[str] = field(default_factory=list)
     policy_current: Optional[str] = None
     policy_previous: Optional[str] = None
     telemetry_segments: Dict[str, str] = field(default_factory=dict)
-    telemetry_lock: Optional[threading.Lock] = None
+    telemetry_lock: threading.Lock = field(default_factory=threading.Lock)
+    telemetry_device_locks: Dict[str, threading.RLock] = field(default_factory=dict)
     next_schedule_seq: int = 0
     next_lease_seq: int = 0
     logger: Optional[RunLogger] = None
@@ -517,9 +557,17 @@ class SimState:
     lifecycle_cycles: List[Dict[str, object]] = field(default_factory=list)
     receipt_operations: List[Dict[str, object]] = field(default_factory=list)
     fault_artifacts: Dict[str, Dict[str, object]] = field(default_factory=dict)
-    current_workers_by_role: Dict[str, WorkerInstance] = field(default_factory=dict)
-    ticket_lock: threading.Lock = field(default_factory=threading.Lock)
+    current_workers_by_id: Dict[str, WorkerInstance] = field(default_factory=dict)
+    ticket_worker_lanes: Dict[str, queue.Queue[str]] = field(default_factory=dict)
+    ticket_worker_locks: Dict[str, threading.Lock] = field(default_factory=dict)
+    ticket_quarantined_workers: set[str] = field(default_factory=set)
+    receipt_operation_workers: Dict[str, str] = field(default_factory=dict)
+    ticket_state_lock: threading.Lock = field(default_factory=threading.Lock)
     next_ticket_seq: int = 0
+    receipt_gpu_subject: Optional[str] = None
+    receipt_lora_subject: Optional[str] = None
+    receipt_gpu_lease_ids: List[str] = field(default_factory=list)
+    next_receipt_gpu_lease: int = 0
 
     def record_population(self, snapshot: PopulationSnapshot) -> None:
         """Retain a bounded population history for report provenance."""
@@ -618,6 +666,40 @@ class RestClient:
         if not params:
             return url
         return f"{url}?{urllib.parse.urlencode(params)}"
+
+
+def select_worker_failure_context(
+    lines: Sequence[str], worker_id: str, role: str, slot: int
+) -> str:
+    """Select a bounded, worker-relevant slice from the existing Queen log."""
+    identity_markers = (
+        worker_id,
+        f"role={role} slot={slot}",
+        "WORKER_TASK_COMPLETION_FAULT",
+        "WORKER_TASK_FAULT",
+    )
+    selected = [
+        line[:WORKER_FAILURE_CONTEXT_LINE_BYTES]
+        for line in lines
+        if any(marker in line for marker in identity_markers)
+    ][-WORKER_FAILURE_CONTEXT_MAX_LINES:]
+    return " || ".join(selected)[:WORKER_FAILURE_CONTEXT_MAX_BYTES]
+
+
+def read_worker_failure_context(
+    client: RestClient, worker_id: str, role: str, slot: int
+) -> str:
+    """Read bounded post-failure context without adding guest hot-path logging."""
+    try:
+        response = client.tail("/log/queen.log", DEFAULT_LOG_TAIL_BYTES)
+    except Exception as exc:
+        return f"qlog-unavailable={type(exc).__name__}"
+    if response.status != "OK":
+        return f"qlog-rejected={response.error or 'unknown'}"[
+            :WORKER_FAILURE_CONTEXT_MAX_BYTES
+        ]
+    context = select_worker_failure_context(response.lines, worker_id, role, slot)
+    return context or "qlog-no-matching-worker-event"
 
 
 def fetch_json(url: str, timeout: float, headers: Optional[Dict[str, str]] = None) -> dict:
@@ -788,6 +870,21 @@ def worker_runtime_bounds(bounds: dict) -> dict:
     return runtime
 
 
+def executable_role_slots(bounds: dict) -> Dict[str, int]:
+    """Return the exact compiler-declared executable slot count per role."""
+    runtime = worker_runtime_bounds(bounds)
+    slots = {
+        str(row["role"]): int(row["executable_slots"])
+        for row in runtime["roles"]
+        if row["declaration"] == "executable"
+    }
+    if set(slots) != set(EXECUTABLE_WORKER_ROLES) or any(
+        count <= 0 for count in slots.values()
+    ):
+        raise RestError("gateway executable Worker role topology is incomplete")
+    return slots
+
+
 def expected_worker_shard_label(worker_id: str, shard_bits: int) -> str:
     """Compute the compiler-defined two-digit shard label."""
     shard = hashlib.sha256(worker_id.encode("utf-8")).digest()[0]
@@ -825,19 +922,54 @@ def parse_worker_runtime_state(
             value = json.loads(line.strip())
         except (TypeError, ValueError):
             continue
-        if not isinstance(value, dict) or value.get("schema") != WORKER_RUNTIME_STATE_SCHEMA:
+        if not isinstance(value, dict) or value.get("schema") not in WORKER_RUNTIME_STATE_SCHEMAS:
             continue
+        schema = value["schema"]
         role = value.get("role")
         lifecycle = value.get("state")
-        slot = value.get("slot")
-        ready_sequence = value.get("ready_sequence")
-        control_sequence = value.get("control_sequence")
-        receipt_sequence = value.get("receipt_sequence")
-        completion_sequence = value.get("completion_sequence")
+        if schema == WORKER_RUNTIME_STATE_SCHEMA_V2:
+            identity_fields = value.get("identity")
+            sequence_fields = value.get("sequence")
+            if (
+                not isinstance(identity_fields, list)
+                or len(identity_fields) != 4
+                or not isinstance(sequence_fields, list)
+                or len(sequence_fields) != 4
+            ):
+                raise RestError(
+                    f"malformed structured Worker state at {telemetry_path}"
+                )
+            slot, lease_epoch, supervisor_generation, cap_generation = identity_fields
+            (
+                ready_sequence,
+                control_sequence,
+                receipt_sequence,
+                completion_sequence,
+            ) = sequence_fields
+            v2_values = (*identity_fields, *sequence_fields)
+            if any(
+                not isinstance(part, int)
+                or isinstance(part, bool)
+                or part < 0
+                or part > WORKER_RUNTIME_STATE_V2_MAX_COUNTER
+                for part in v2_values
+            ):
+                raise RestError(
+                    f"malformed structured Worker state at {telemetry_path}"
+                )
+        else:
+            slot = value.get("slot")
+            lease_epoch = value.get("lease_epoch")
+            supervisor_generation = value.get("supervisor_generation")
+            cap_generation = value.get("cap_generation")
+            ready_sequence = value.get("ready_sequence")
+            control_sequence = value.get("control_sequence")
+            receipt_sequence = value.get("receipt_sequence")
+            completion_sequence = value.get("completion_sequence")
         identity = (
-            positive_json_int(value.get("lease_epoch")),
-            positive_json_int(value.get("supervisor_generation")),
-            positive_json_int(value.get("cap_generation")),
+            positive_json_int(lease_epoch),
+            positive_json_int(supervisor_generation),
+            positive_json_int(cap_generation),
         )
         if (
             value.get("worker_id") != worker_id
@@ -981,9 +1113,11 @@ def executable_qemu_acceptance_binding(
     if target_session["manifest_sha256"] != bounds.get("manifest_sha256"):
         raise RestError("QEMU acceptance manifest does not match gateway bounds")
 
+    expected_role_slots = executable_role_slots(bounds)
+    expected_worker_count = sum(expected_role_slots.values())
     workers = acceptance.get("workers")
-    if not isinstance(workers, list) or len(workers) != len(EXECUTABLE_WORKER_ROLES):
-        raise RestError("QEMU acceptance requires the exact executable role matrix")
+    if not isinstance(workers, list) or len(workers) != expected_worker_count:
+        raise RestError("QEMU acceptance requires every executable Worker slot")
     required_inventory = {
         "tcbs",
         "scheduling_contexts",
@@ -1000,7 +1134,8 @@ def executable_qemu_acceptance_binding(
         "cspace_slots",
         "untyped_bytes",
     }
-    seen_roles = set()
+    seen_workers = set()
+    seen_role_slots = {role: set() for role in EXECUTABLE_WORKER_ROLES}
     for worker in workers:
         if not isinstance(worker, dict):
             raise RestError("QEMU acceptance contains a malformed Worker row")
@@ -1008,7 +1143,6 @@ def executable_qemu_acceptance_binding(
         expected_receipt = "none" if role == "worker-heartbeat" else "confirmed"
         if (
             role not in EXECUTABLE_WORKER_ROLES
-            or role in seen_roles
             or worker.get("lifecycle") != "ready"
             or worker.get("artifact") != "verified"
             or worker.get("receipt") != expected_receipt
@@ -1016,7 +1150,6 @@ def executable_qemu_acceptance_binding(
             or not valid_sha256(worker.get("image_sha256"))
         ):
             raise RestError("QEMU acceptance Worker state is incomplete")
-        seen_roles.add(role)
         for field in (
             "lease_epoch",
             "supervisor_generation",
@@ -1038,6 +1171,14 @@ def executable_qemu_acceptance_binding(
             or core > 3
         ):
             raise RestError("QEMU acceptance Worker slot/core is invalid")
+        worker_key = (role, slot)
+        if (
+            worker_key in seen_workers
+            or slot >= expected_role_slots[role]
+        ):
+            raise RestError("QEMU acceptance Worker role/slot identity is invalid")
+        seen_workers.add(worker_key)
+        seen_role_slots[role].add(slot)
         scheduling_context = worker.get("scheduling_context")
         if not isinstance(scheduling_context, dict):
             raise RestError("QEMU acceptance Worker SC is absent")
@@ -1056,8 +1197,9 @@ def executable_qemu_acceptance_binding(
                 or (field not in ("endpoints", "reply_objects") and value == 0)
             ):
                 raise RestError("QEMU acceptance Worker object inventory is invalid")
-    if seen_roles != set(EXECUTABLE_WORKER_ROLES):
-        raise RestError("QEMU acceptance omits an executable role")
+    for role, count in expected_role_slots.items():
+        if seen_role_slots[role] != set(range(count)):
+            raise RestError(f"QEMU acceptance omits an executable {role} slot")
     return json.loads(json.dumps(acceptance))
 
 
@@ -1085,6 +1227,15 @@ def gateway_population_axes(
         return "host-model", "host-model"
     if bounds is None:
         raise RestError("executable population requires generated bounds")
+    if population_mode == POPULATION_EXECUTABLE_LOG:
+        status = client.status()
+        if status.get("connected") is not True:
+            raise RestError("live-log executable population requires a connected target")
+        if status.get("backend_class") != "console-projection":
+            raise RestError(
+                "live-log executable population requires backend_class=console-projection"
+            )
+        return "console-projection", "qemu-live-log"
     executable_qemu_acceptance_binding(client, bounds)
     return "console-projection", "qemu"
 
@@ -1110,6 +1261,7 @@ def executable_population_snapshot(
     client: RestClient,
     bounds: dict,
     requested: int,
+    population_mode: str = POPULATION_EXECUTABLE,
 ) -> Tuple[List[WorkerInstance], PopulationSnapshot]:
     """Select an exact READY population without spawning or synthetic expansion."""
     runtime = worker_runtime_bounds(bounds)
@@ -1123,7 +1275,7 @@ def executable_population_snapshot(
     ready = [instance for instance in instances if instance.lifecycle == "ready"]
     backend_class, proof_class = gateway_population_axes(
         client,
-        POPULATION_EXECUTABLE,
+        population_mode,
         bounds,
     )
     snapshot = PopulationSnapshot(
@@ -1141,19 +1293,74 @@ def executable_population_snapshot(
     return ready[:requested], snapshot
 
 
-def acceptance_workers_by_role(binding: Dict[str, object]) -> Dict[str, dict]:
-    """Index the already validated acceptance projection by executable role."""
+def acceptance_workers_by_identity(
+    binding: Dict[str, object],
+) -> Dict[Tuple[str, int], dict]:
+    """Index the validated acceptance projection by exact role-local slot."""
     workers = binding.get("workers")
     if not isinstance(workers, list):
         raise RestError("QEMU acceptance Worker rows are absent")
-    indexed = {
-        str(worker["role"]): worker
-        for worker in workers
-        if isinstance(worker, dict) and isinstance(worker.get("role"), str)
-    }
-    if set(indexed) != set(EXECUTABLE_WORKER_ROLES):
-        raise RestError("QEMU acceptance Worker role index is incomplete")
+    indexed: Dict[Tuple[str, int], dict] = {}
+    for worker in workers:
+        if (
+            not isinstance(worker, dict)
+            or not isinstance(worker.get("role"), str)
+            or not isinstance(worker.get("slot"), int)
+            or isinstance(worker.get("slot"), bool)
+        ):
+            raise RestError("QEMU acceptance Worker identity is malformed")
+        key = (str(worker["role"]), int(worker["slot"]))
+        if key in indexed:
+            raise RestError("QEMU acceptance contains a duplicate Worker identity")
+        indexed[key] = worker
+    if not indexed:
+        raise RestError("QEMU acceptance Worker identity index is empty")
     return indexed
+
+
+def merge_current_worker_instances(
+    state: SimState,
+    observations: Sequence[WorkerInstance],
+) -> List[WorkerInstance]:
+    """Merge incremental telemetry into the exact per-instance projection."""
+    with state.ticket_state_lock:
+        for candidate in observations:
+            current = state.current_workers_by_id.get(candidate.worker_id)
+            if (
+                current is None
+                or worker_instance_ordering_key(candidate)
+                >= worker_instance_ordering_key(current)
+            ):
+                state.current_workers_by_id[candidate.worker_id] = candidate
+        return list(state.current_workers_by_id.values())
+
+
+def initialize_ticket_worker_lanes(
+    state: SimState,
+    instances: Sequence[WorkerInstance],
+) -> None:
+    """Create one bounded receipt lane per READY GPU/LoRA Worker instance."""
+    lanes: Dict[str, queue.Queue[str]] = {}
+    for role in ("worker-gpu", "worker-lora"):
+        worker_ids = sorted(
+            instance.worker_id
+            for instance in instances
+            if instance.role == role and instance.lifecycle == "ready"
+        )
+        if not worker_ids:
+            raise RestError(f"receipt pressure has no READY {role} Worker lanes")
+        role_lanes: queue.Queue[str] = queue.Queue(maxsize=len(worker_ids))
+        for worker_id in worker_ids:
+            role_lanes.put_nowait(worker_id)
+        lanes[role] = role_lanes
+    state.ticket_worker_lanes = lanes
+    state.ticket_worker_locks = {
+        instance.worker_id: threading.Lock()
+        for instance in instances
+        if instance.lifecycle == "ready"
+    }
+    state.ticket_quarantined_workers.clear()
+    state.receipt_operation_workers.clear()
 
 
 def capture_proc_pressure_state(client: RestClient, bounds: dict) -> Dict[str, object]:
@@ -1189,21 +1396,23 @@ def capture_executable_state(
     """Capture exact READY identities plus accepted SC/object topology."""
     if state.acceptance_binding is None:
         raise RestError("executable state capture requires acceptance binding")
-    accepted = acceptance_workers_by_role(state.acceptance_binding)
-    instances, _ = discover_executable_workers(client, state.bounds)
+    accepted = acceptance_workers_by_identity(state.acceptance_binding)
+    observations, _ = discover_executable_workers(client, state.bounds)
+    instances = merge_current_worker_instances(state, observations)
     ready = [instance for instance in instances if instance.lifecycle == "ready"]
-    ready_by_role = {instance.role: instance for instance in ready}
-    if len(ready) != len(EXECUTABLE_WORKER_ROLES) or set(ready_by_role) != set(
-        EXECUTABLE_WORKER_ROLES
-    ):
-        raise RestError("executable pressure requires exactly one READY Worker per role")
+    ready_by_identity: Dict[Tuple[str, int], WorkerInstance] = {}
+    for instance in ready:
+        key = (instance.role, instance.slot)
+        if key in ready_by_identity:
+            raise RestError("multiple READY Workers occupy one executable role slot")
+        ready_by_identity[key] = instance
+    if set(ready_by_identity) != set(accepted):
+        raise RestError("executable pressure lacks the exact accepted READY Worker pool")
 
     workers: List[Dict[str, object]] = []
-    for role in EXECUTABLE_WORKER_ROLES:
-        instance = ready_by_role[role]
-        accepted_worker = accepted[role]
-        if instance.slot != accepted_worker.get("slot"):
-            raise RestError(f"live {role} slot differs from accepted topology")
+    for role, slot in sorted(accepted):
+        instance = ready_by_identity[(role, slot)]
+        accepted_worker = accepted[(role, slot)]
         if require_accepted_identity:
             for field in (
                 "lease_epoch",
@@ -1212,7 +1421,9 @@ def capture_executable_state(
                 "ready_sequence",
             ):
                 if getattr(instance, field) != accepted_worker.get(field):
-                    raise RestError(f"live {role} {field} differs from accepted identity")
+                    raise RestError(
+                        f"live {role}/{slot} {field} differs from accepted identity"
+                    )
         workers.append(
             {
                 **instance.identity_dict(),
@@ -1229,7 +1440,6 @@ def capture_executable_state(
                 "object_inventory": accepted_worker["object_inventory"],
             }
         )
-    state.current_workers_by_role = ready_by_role
     state.worker_telemetry_paths = {
         instance.worker_id: instance.telemetry_path for instance in ready
     }
@@ -1323,11 +1533,12 @@ def validate_fault_session_binding(
     if sessions != [expected_session]:
         raise RestError("GDB transcript does not bind the exact QEMU target session")
 
-    accepted_workers = acceptance_workers_by_role(acceptance)
-    for role, worker in accepted_workers.items():
+    accepted_workers = acceptance_workers_by_identity(acceptance)
+    for (role, slot), worker in accepted_workers.items():
         image_sha256 = str(worker["image_sha256"])
         admission_match = any(
             fields.get("role") == role
+            and fields.get("slot") == str(slot)
             and fields.get("image_sha256") == image_sha256
             for line in uart_text.splitlines()
             if (fields := marker_fields(line.strip(), "WORKER_TASK_ADMISSION"))
@@ -1341,7 +1552,9 @@ def validate_fault_session_binding(
             if (fields := marker_fields(line.strip(), "M26E_GDB_ELF")) is not None
         )
         if not admission_match or not elf_match:
-            raise RestError(f"fault transcripts do not bind accepted {role} image identity")
+            raise RestError(
+                f"fault transcripts do not bind accepted {role}/{slot} image identity"
+            )
 
 
 def capture_fault_artifacts(
@@ -1394,7 +1607,7 @@ def require_qemu_fixture_receipt_paths(client: RestClient) -> Tuple[str, str]:
         "/host/tickets/spec.snapshot",
         "/host/tickets/status",
     ):
-        response = client.tail(path, 8192)
+        response = client.tail(path, HOST_TICKET_LOG_TAIL_BYTES)
         if response.status != "OK":
             raise RestError(
                 f"QEMU receipt pressure requires {path}: {response.error}",
@@ -1437,14 +1650,20 @@ def bounded_heartbeat_lifecycle_cycle(
     timeout_s: float,
 ) -> List[str]:
     """Kill, observe terminal teardown, and recreate Heartbeat through `/queen/ctl`."""
-    before = state.current_workers_by_role.get("worker-heartbeat")
-    if before is None:
-        raise RestError("lifecycle pressure requires a READY Heartbeat Worker")
+    heartbeat = [
+        instance
+        for instance in state.current_workers_by_id.values()
+        if instance.role == "worker-heartbeat" and instance.lifecycle == "ready"
+    ]
+    if len(heartbeat) != 1:
+        raise RestError("lifecycle pressure requires one READY Heartbeat Worker")
+    before = heartbeat[0]
     kill_worker(client, state, before.worker_id)
     deadline = time.time() + timeout_s
     terminal_observed = False
     while time.time() < deadline:
-        instances, _ = discover_executable_workers(client, state.bounds)
+        observations, _ = discover_executable_workers(client, state.bounds)
+        instances = merge_current_worker_instances(state, observations)
         old = next(
             (instance for instance in instances if instance.worker_id == before.worker_id),
             None,
@@ -1468,7 +1687,8 @@ def bounded_heartbeat_lifecycle_cycle(
     deadline = time.time() + timeout_s
     after: Optional[WorkerInstance] = None
     while time.time() < deadline:
-        instances, _ = discover_executable_workers(client, state.bounds)
+        observations, _ = discover_executable_workers(client, state.bounds)
+        instances = merge_current_worker_instances(state, observations)
         after = next(
             (
                 instance
@@ -1554,19 +1774,25 @@ def build_executable_report_state(
 
 
 def validate_executable_post_state(state: SimState) -> None:
-    """Require one bounded recreation and monotonic receipt state after pressure."""
+    """Require bounded recreation and monotonic exact-pool state after pressure."""
     if state.executable_pre_state is None or state.executable_post_state is None:
         raise RestError("executable pre/post state is absent")
     pre_rows = state.executable_pre_state.get("workers")
     post_rows = state.executable_post_state.get("workers")
     if not isinstance(pre_rows, list) or not isinstance(post_rows, list):
         raise RestError("executable pre/post Worker rows are malformed")
-    pre = {row.get("role"): row for row in pre_rows if isinstance(row, dict)}
-    post = {row.get("role"): row for row in post_rows if isinstance(row, dict)}
-    if set(pre) != set(EXECUTABLE_WORKER_ROLES) or set(post) != set(
-        EXECUTABLE_WORKER_ROLES
-    ):
-        raise RestError("executable pre/post Worker role matrix is incomplete")
+    pre = {
+        (row.get("role"), row.get("slot")): row
+        for row in pre_rows
+        if isinstance(row, dict)
+    }
+    post = {
+        (row.get("role"), row.get("slot")): row
+        for row in post_rows
+        if isinstance(row, dict)
+    }
+    if set(pre) != set(post) or not pre:
+        raise RestError("executable pre/post Worker slot matrix is incomplete")
     identity_fields = (
         "role",
         "slot",
@@ -1574,8 +1800,12 @@ def validate_executable_post_state(state: SimState) -> None:
         "supervisor_generation",
         "cap_generation",
     )
-    heartbeat_pre = pre["worker-heartbeat"]
-    heartbeat_post = post["worker-heartbeat"]
+    heartbeat_keys = [key for key in pre if key[0] == "worker-heartbeat"]
+    if len(heartbeat_keys) != 1:
+        raise RestError("executable state requires one Heartbeat slot")
+    heartbeat_key = heartbeat_keys[0]
+    heartbeat_pre = pre[heartbeat_key]
+    heartbeat_post = post[heartbeat_key]
     if (
         heartbeat_post["supervisor_generation"]
         <= heartbeat_pre["supervisor_generation"]
@@ -1583,14 +1813,26 @@ def validate_executable_post_state(state: SimState) -> None:
     ):
         raise RestError("Heartbeat pressure did not retain a fresh generation")
     for role in ("worker-gpu", "worker-lora"):
-        if any(pre[role][field] != post[role][field] for field in identity_fields):
-            raise RestError(f"{role} identity changed during receipt pressure")
-        if (
-            post[role]["receipt_sequence"] <= pre[role]["receipt_sequence"]
-            or post[role]["completion_sequence"]
-            <= pre[role]["completion_sequence"]
-        ):
-            raise RestError(f"{role} did not advance receipt/completion sequences")
+        advanced = False
+        role_keys = [key for key in pre if key[0] == role]
+        if not role_keys:
+            raise RestError(f"executable state omits {role} slots")
+        for key in role_keys:
+            if any(pre[key][field] != post[key][field] for field in identity_fields):
+                raise RestError(f"{role}/{key[1]} identity changed during pressure")
+            if (
+                post[key]["receipt_sequence"] < pre[key]["receipt_sequence"]
+                or post[key]["completion_sequence"]
+                < pre[key]["completion_sequence"]
+            ):
+                raise RestError(f"{role}/{key[1]} receipt state regressed")
+            advanced |= (
+                post[key]["receipt_sequence"] > pre[key]["receipt_sequence"]
+                and post[key]["completion_sequence"]
+                > pre[key]["completion_sequence"]
+            )
+        if not advanced:
+            raise RestError(f"{role} pool did not advance receipt/completion state")
 
 
 def parse_worker_seq(worker_id: str) -> Optional[int]:
@@ -1955,11 +2197,16 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--population-mode",
-        choices=(POPULATION_HOST_MODEL, POPULATION_EXECUTABLE),
+        choices=(
+            POPULATION_HOST_MODEL,
+            POPULATION_EXECUTABLE,
+            POPULATION_EXECUTABLE_LOG,
+        ),
         default=POPULATION_HOST_MODEL,
         help=(
             "Population authority: synthetic host model or real structured READY "
-            "Workers discovered through canonical /shard paths."
+            "Workers discovered through canonical /shard paths; executable-log "
+            "runs the same live Worker workload without claiming GDB qualification."
         ),
     )
 
@@ -2363,17 +2610,22 @@ def parse_args() -> argparse.Namespace:
         )
         apply_fast_ramp_defaults(args)
         apply_multi_hive_defaults(args, argv_tokens)
-        if args.population_mode == POPULATION_EXECUTABLE and args.multi_hive:
+        if is_live_executable_population(args.population_mode) and args.multi_hive:
             raise SystemExit(
                 "executable population mode does not permit synthetic multi-hive expansion"
             )
-        if args.population_mode == POPULATION_EXECUTABLE:
+        if is_live_executable_population(args.population_mode):
             args.qemu_uart_log = args.qemu_uart_log or args.qemu_log
-            if not args.qemu_uart_log or not args.qemu_gdb_log:
+            if not args.qemu_uart_log:
                 raise SystemExit(
-                    "executable population requires --qemu-uart-log and --qemu-gdb-log"
+                    "live executable population requires --qemu-uart-log"
                 )
-            if not args.no_gateway and not all(
+            if (
+                args.population_mode == POPULATION_EXECUTABLE
+                and not args.qemu_gdb_log
+            ):
+                raise SystemExit("qualified executable population requires --qemu-gdb-log")
+            if args.population_mode == POPULATION_EXECUTABLE and not args.no_gateway and not all(
                 (
                     args.worker_acceptance_root,
                     args.worker_acceptance_evidence,
@@ -3024,21 +3276,59 @@ def kill_worker(client: RestClient, state: SimState, worker_id: str) -> None:
     echo_with_policy_retry(client, "/queen/ctl", line, state)
 
 
-def latest_worker_instance(
-    client: RestClient,
-    state: SimState,
-    role: str,
-) -> WorkerInstance:
-    """Return the exact current READY instance for one executable role."""
-    instances, _ = discover_executable_workers(client, state.bounds)
-    matches = [
-        instance
-        for instance in instances
-        if instance.role == role and instance.lifecycle == "ready"
-    ]
-    if len(matches) != 1:
-        raise RestError(f"receipt pressure requires exactly one READY {role}")
-    return matches[0]
+def current_ready_worker_instance(state: SimState, worker_id: str) -> WorkerInstance:
+    """Return one exact cached READY Worker selected from the bounded lane pool."""
+    with state.ticket_state_lock:
+        current = state.current_workers_by_id.get(worker_id)
+    if current is None or current.lifecycle != "ready":
+        detail = "absent" if current is None else (
+            f"role={current.role} lifecycle={current.lifecycle} "
+            f"ready={current.ready_sequence} control={current.control_sequence} "
+            f"receipt={current.receipt_sequence} "
+            f"completion={current.completion_sequence}"
+        )
+        raise RestError(f"receipt Worker lane {worker_id} is not READY: {detail}")
+    return current
+
+
+def worker_instance_ordering_key(instance: WorkerInstance) -> Tuple[int, ...]:
+    """Order incremental Worker projections without regressing at completion.
+
+    The in-flight control field returns to zero when a completion commits, so
+    raw tuple ordering would incorrectly prefer the older in-flight record.
+    First order by the maximum operation sequence, then by its durable phase.
+    """
+    operation_sequence = max(
+        instance.control_sequence,
+        instance.receipt_sequence,
+        instance.completion_sequence,
+    )
+    operation_phase = 0
+    if operation_sequence != 0:
+        if instance.completion_sequence == operation_sequence:
+            operation_phase = 3
+        elif instance.receipt_sequence == operation_sequence:
+            operation_phase = 2
+        elif instance.control_sequence == operation_sequence:
+            operation_phase = 1
+    lifecycle_order = {
+        "absent": 0,
+        "queued": 1,
+        "starting": 2,
+        "ready": 3,
+        "closing": 4,
+        "faulted": 5,
+        "terminal": 6,
+    }
+    return (
+        instance.supervisor_generation,
+        instance.cap_generation,
+        instance.lease_epoch,
+        instance.ready_sequence,
+        operation_sequence,
+        operation_phase,
+        lifecycle_order[instance.lifecycle],
+    )
 
 
 def terminal_ticket_state(lines: Sequence[str], ticket_id: str) -> Optional[str]:
@@ -3060,6 +3350,111 @@ def terminal_ticket_state(lines: Sequence[str], ticket_id: str) -> Optional[str]
     return found
 
 
+def host_ticket_correlation_digest(ticket_id: str, idempotency_key: str) -> str:
+    """Return NineDoor's fixed-width exact-current lookup key."""
+    ticket_bytes = ticket_id.encode("utf-8")
+    key_bytes = idempotency_key.encode("utf-8")
+    if len(ticket_bytes) > 0xFFFF or len(key_bytes) > 0xFFFF:
+        raise RestError("v2 ticket correlation input exceeds the u16 wire bound")
+    digest = hashlib.sha256()
+    digest.update(b"host-ticket-correlation/v1\0")
+    digest.update(len(ticket_bytes).to_bytes(2, "big"))
+    digest.update(ticket_bytes)
+    digest.update(len(key_bytes).to_bytes(2, "big"))
+    digest.update(key_bytes)
+    return digest.hexdigest()
+
+
+def parse_host_ticket_current(lines: Sequence[str]) -> HostTicketCurrent:
+    """Parse one strict, bounded `/host/tickets/current` record."""
+    if len(lines) != 1:
+        raise RestError("ticket-current projection must contain exactly one record")
+    line = lines[0]
+    if len(line.encode("utf-8")) > HOST_TICKET_CURRENT_MAX_BYTES:
+        raise RestError("ticket-current projection exceeds its bounded record size")
+    tokens = line.split()
+    if not tokens or tokens[0] != "HOST_TICKET_CURRENT":
+        raise RestError("ticket-current projection has an invalid marker")
+    fields: Dict[str, str] = {}
+    for token in tokens[1:]:
+        key, separator, value = token.partition("=")
+        if not separator or not key or not value or key in fields:
+            raise RestError("ticket-current projection has malformed fields")
+        fields[key] = value
+    expected = {
+        "schema",
+        "state",
+        "role",
+        "worker",
+        "lifecycle",
+        "identity",
+        "sequence",
+        "admission",
+    }
+    if set(fields) != expected or fields["schema"] != "host-ticket-current/v1":
+        raise RestError("ticket-current projection has an invalid schema")
+    if fields["state"] not in {"pending", "confirmed", "rejected", "stale"}:
+        raise RestError("ticket-current projection has an invalid state")
+    if fields["role"] not in EXECUTABLE_WORKER_ROLES:
+        raise RestError("ticket-current projection has an invalid Worker role")
+    if fields["lifecycle"] not in WORKER_LIFECYCLE_STATES | {"absent"}:
+        raise RestError("ticket-current projection has an invalid Worker lifecycle")
+
+    def parse_vector(name: str, width: int) -> List[int]:
+        raw = fields[name].split(",")
+        if len(raw) != width:
+            raise RestError(f"ticket-current {name} vector has invalid width")
+        try:
+            values = [int(value, 10) for value in raw]
+        except ValueError as exc:
+            raise RestError(f"ticket-current {name} vector is not numeric") from exc
+        if any(value < 0 or value > 0xFFFFFFFFFFFFFFFF for value in values):
+            raise RestError(f"ticket-current {name} vector exceeds the u64 wire bound")
+        return values
+
+    identity = parse_vector("identity", 4)
+    sequence = parse_vector("sequence", 4)
+    try:
+        admission = int(fields["admission"], 10)
+    except ValueError as exc:
+        raise RestError("ticket-current admission sequence is not numeric") from exc
+    if (
+        identity[0] > 0xFFFFFFFF
+        or admission <= 0
+        or admission > 0xFFFFFFFFFFFFFFFF
+    ):
+        raise RestError("ticket-current identity or admission is outside its wire bound")
+    return HostTicketCurrent(
+        state=fields["state"],
+        role=fields["role"],
+        worker_id=fields["worker"],
+        lifecycle=fields["lifecycle"],
+        slot=identity[0],
+        lease_epoch=identity[1],
+        supervisor_generation=identity[2],
+        cap_generation=identity[3],
+        ready_sequence=sequence[0],
+        control_sequence=sequence[1],
+        receipt_sequence=sequence[2],
+        completion_sequence=sequence[3],
+        admission_sequence=admission,
+    )
+
+
+def read_host_ticket_current(
+    client: RestClient,
+    ticket_id: str,
+    idempotency_key: str,
+) -> HostTicketCurrent:
+    """Read one exact admission without scanning retained ticket logs."""
+    digest = host_ticket_correlation_digest(ticket_id, idempotency_key)
+    path = f"{HOST_TICKET_CURRENT_PREFIX}{digest}"
+    response = client.cat(path, HOST_TICKET_CURRENT_MAX_BYTES)
+    if response.status != "OK":
+        raise RestError(f"CAT {path} failed: {response.error}", response)
+    return parse_host_ticket_current(response.lines)
+
+
 def run_v2_receipt_operation(
     client: RestClient,
     state: SimState,
@@ -3067,22 +3462,66 @@ def run_v2_receipt_operation(
     role: str,
     args_value: Dict[str, object],
     subject_ref: str,
-) -> None:
+    operation_id: Optional[str] = None,
+) -> str:
     """Submit and observe one root-admitted v2 Worker receipt operation."""
-    with state.ticket_lock:
-        before = latest_worker_instance(client, state, role)
-        state.next_ticket_seq += 1
-        sequence = state.next_ticket_seq
+    operation_started = time.monotonic()
+    role_lanes = state.ticket_worker_lanes.get(role)
+    if role_lanes is None:
+        raise RestError(f"v2 receipt pressure has no bounded Worker pool for {role}")
+    preferred_worker: Optional[str] = None
+    if operation_id is not None:
+        with state.ticket_state_lock:
+            preferred_worker = state.receipt_operation_workers.get(operation_id)
+            if preferred_worker in state.ticket_quarantined_workers:
+                raise RestError(
+                    f"v2 receipt operation {operation_id} owns a quarantined Worker lane"
+                )
+    return_to_pool = preferred_worker is None
+    worker_id: Optional[str] = preferred_worker
+    lane_deadline = time.monotonic() + 15.0
+    while worker_id is None:
+        remaining = lane_deadline - time.monotonic()
+        if remaining <= 0.0:
+            raise RestError(f"v2 receipt pressure exhausted all {role} Worker lanes")
+        try:
+            candidate = role_lanes.get(timeout=remaining)
+        except queue.Empty as exc:
+            raise RestError(
+                f"v2 receipt pressure exhausted all {role} Worker lanes"
+            ) from exc
+        with state.ticket_state_lock:
+            if candidate in state.ticket_quarantined_workers:
+                continue
+        worker_id = candidate
+    lane_lock = state.ticket_worker_locks.get(worker_id)
+    if lane_lock is None:
+        raise RestError(f"v2 receipt Worker lane {worker_id} lacks its bounded lock")
+    remaining = max(0.0, lane_deadline - time.monotonic())
+    if not lane_lock.acquire(timeout=remaining):
+        if return_to_pool:
+            role_lanes.put_nowait(worker_id)
+        raise RestError(f"v2 receipt Worker lane {worker_id} remained busy")
+    lane_reusable = False
+    try:
+        lane_acquired = time.monotonic()
+        before = current_ready_worker_instance(state, worker_id)
+        if before.role != role:
+            raise RestError(f"receipt lane {worker_id} does not belong to {role}")
+        with state.ticket_state_lock:
+            state.next_ticket_seq += 1
+            sequence = state.next_ticket_seq
         ticket_id = f"bench-{state.run_token}-{sequence:06d}"
-        operation_id = f"op-{state.run_token}-{sequence:06d}"
+        idempotency_key = f"idem-{state.run_token}-{sequence:06d}"
+        resolved_operation_id = operation_id or f"op-{state.run_token}-{sequence:06d}"
         payload = {
             "schema": "host-ticket/v2",
             "id": ticket_id,
-            "idempotency_key": f"idem-{state.run_token}-{sequence:06d}",
+            "idempotency_key": idempotency_key,
             "action": action,
             "args": args_value,
             "receipt_mode": "worker",
-            "operation_id": operation_id,
+            "operation_id": resolved_operation_id,
             "subject_ref": subject_ref,
             "receipt_worker_role": role,
             "receipt_worker_id": before.worker_id,
@@ -3096,51 +3535,143 @@ def run_v2_receipt_operation(
         if response.status != "OK":
             raise RestError(f"v2 ticket admission failed: {response.error}", response)
 
-        deadline = time.time() + 15.0
-        terminal_state: Optional[str] = None
+        admitted_at = time.monotonic()
+        deadline = admitted_at + 15.0
         after: Optional[WorkerInstance] = None
-        while time.time() < deadline:
-            status = client.tail("/host/tickets/status", 8192)
-            if status.status != "OK":
-                raise RestError(f"TAIL /host/tickets/status failed: {status.error}", status)
-            terminal_state = terminal_ticket_state(status.lines, ticket_id)
-            candidate = latest_worker_instance(client, state, role)
+        terminal_state: Optional[str] = None
+        last_current: Optional[HostTicketCurrent] = None
+        terminal_context: Optional[str] = None
+        current_reads = 0
+        while time.monotonic() < deadline:
+            current = read_host_ticket_current(client, ticket_id, idempotency_key)
+            last_current = current
+            current_reads += 1
+            if current.state == "confirmed":
+                terminal_state = "succeeded"
+            elif current.state == "rejected":
+                terminal_state = "failed"
+            elif current.state == "stale":
+                terminal_state = "expired"
+            same_worker_identity = (
+                current.role == before.role
+                and current.worker_id == before.worker_id
+                and current.slot == before.slot
+                and current.lease_epoch == before.lease_epoch
+                and current.supervisor_generation == before.supervisor_generation
+                and current.cap_generation == before.cap_generation
+            )
             if (
                 terminal_state is not None
-                and candidate.worker_id == before.worker_id
-                and candidate.supervisor_generation == before.supervisor_generation
-                and candidate.cap_generation == before.cap_generation
-                and candidate.receipt_sequence > before.receipt_sequence
-                and candidate.completion_sequence > before.completion_sequence
+                and same_worker_identity
+                and current.lifecycle == "ready"
+                and current.receipt_sequence > before.receipt_sequence
+                and current.completion_sequence > before.completion_sequence
             ):
-                after = candidate
+                after = replace(
+                    before,
+                    lifecycle=current.lifecycle,
+                    ready_sequence=current.ready_sequence,
+                    control_sequence=current.control_sequence,
+                    receipt_sequence=current.receipt_sequence,
+                    completion_sequence=current.completion_sequence,
+                )
+                break
+            if (
+                terminal_state is not None
+                and same_worker_identity
+                and current.lifecycle in {"faulted", "terminal"}
+            ):
+                terminal_context = read_worker_failure_context(
+                    client,
+                    before.worker_id,
+                    before.role,
+                    before.slot,
+                )
+                if state.logger is not None:
+                    state.logger.log(
+                        "[worker-failure] "
+                        f"ticket={ticket_id} worker={before.worker_id} "
+                        f"context={terminal_context}"
+                    )
                 break
             time.sleep(0.1)
+        completed_at = time.monotonic()
         if terminal_state is None or after is None:
-            raise RestError(f"v2 {action} lacked a correlated terminal Worker receipt")
+            observed = (
+                "state=unobserved lifecycle=unobserved sequence=unobserved"
+                if last_current is None
+                else (
+                    f"state={last_current.state} lifecycle={last_current.lifecycle} "
+                    "sequence="
+                    f"{last_current.control_sequence},"
+                    f"{last_current.receipt_sequence},"
+                    f"{last_current.completion_sequence}"
+                )
+            )
+            raise RestError(
+                f"v2 {action} lacked a correlated terminal Worker receipt "
+                f"ticket={ticket_id} worker={before.worker_id} "
+                f"before={before.control_sequence},"
+                f"{before.receipt_sequence},"
+                f"{before.completion_sequence} "
+                f"{observed} reads={current_reads} "
+                f"diag={terminal_context or 'not-captured'}"
+            )
         if terminal_state != "succeeded":
             raise RestError(
                 f"v2 {action} pressure operation ended {terminal_state}, not succeeded"
             )
-        state.current_workers_by_role[role] = after
-        state.receipt_operations.append(
-            {
-                "action": action,
-                "role": role,
-                "worker_id": before.worker_id,
-                "sequence_before": {
-                    "receipt": before.receipt_sequence,
-                    "completion": before.completion_sequence,
-                },
-                "sequence_after": {
-                    "receipt": after.receipt_sequence,
-                    "completion": after.completion_sequence,
-                },
-                "status": terminal_state,
-            }
-        )
-        if len(state.receipt_operations) > 256:
-            state.receipt_operations.pop(0)
+        with state.ticket_state_lock:
+            owner = state.receipt_operation_workers.get(resolved_operation_id)
+            if owner is not None and owner != before.worker_id:
+                raise RestError(
+                    f"v2 receipt operation {resolved_operation_id} changed Worker owner"
+                )
+            state.receipt_operation_workers[resolved_operation_id] = before.worker_id
+            state.current_workers_by_id[before.worker_id] = after
+            state.receipt_operations.append(
+                {
+                    "action": action,
+                    "role": role,
+                    "worker_id": before.worker_id,
+                    "sequence_before": {
+                        "receipt": before.receipt_sequence,
+                        "completion": before.completion_sequence,
+                    },
+                    "sequence_after": {
+                        "receipt": after.receipt_sequence,
+                        "completion": after.completion_sequence,
+                    },
+                    "status": terminal_state,
+                    "timing_s": {
+                        "lane_wait": lane_acquired - operation_started,
+                        "admission": admitted_at - lane_acquired,
+                        "completion_wait": completed_at - admitted_at,
+                        "total": completed_at - operation_started,
+                    },
+                    "current_reads": current_reads,
+                }
+            )
+            if len(state.receipt_operations) > 256:
+                state.receipt_operations.pop(0)
+        lane_reusable = True
+        return resolved_operation_id
+    finally:
+        lane_lock.release()
+        if lane_reusable and return_to_pool:
+            try:
+                role_lanes.put_nowait(worker_id)
+            except queue.Full as exc:
+                raise RestError(
+                    f"v2 receipt lane pool duplicated {worker_id}"
+                ) from exc
+        elif not lane_reusable:
+            with state.ticket_state_lock:
+                state.ticket_quarantined_workers.add(worker_id)
+            if state.logger is not None:
+                state.logger.log(
+                    f"[worker-lane] quarantined role={role} worker={worker_id}"
+                )
 
 
 def build_operations(
@@ -3191,7 +3722,7 @@ def build_operations(
         [RestClient, str, SimState], None
     ]:
         def _run(client: RestClient, worker: str, sim_state: SimState) -> None:
-            if sim_state.population_mode == POPULATION_EXECUTABLE:
+            if is_live_executable_population(sim_state.population_mode):
                 path = sim_state.worker_telemetry_paths.get(worker)
                 if path is None:
                     raise RestError(
@@ -3283,6 +3814,45 @@ def build_operations(
                 timeout_s=5.0,
                 label=f"echo best-effort {path}",
             )
+
+        return _run
+
+    def op_schedule_lifecycle(path: str) -> Callable[[RestClient, str, SimState], None]:
+        def _run(client: RestClient, _worker: str, sim_state: SimState) -> None:
+            # One Queen owns the FIFO consumer edge. Keep enqueue and exact-head
+            # dequeue together so concurrent producers cannot manufacture an
+            # out-of-order completion or leave benchmark-only retained state.
+            with sim_state.schedule_lock:
+                schedule_id = allocate_schedule_id(sim_state)
+                request = json.dumps(
+                    {
+                        "id": schedule_id,
+                        "role": "worker-gpu",
+                        "priority": sim_state.rng.randint(1, 5),
+                        "ticks": sim_state.rng.randint(1, 5),
+                        "budget_ms": sim_state.rng.randint(50, 200),
+                    },
+                    separators=(",", ":"),
+                )
+                response = client.echo(path, request)
+                if response.status != "OK":
+                    if should_tolerate_buffer_full(response, sim_state):
+                        return
+                    raise RestError(
+                        f"ECHO {path} failed: {response.error}",
+                        response,
+                    )
+
+                dequeue = json.dumps(
+                    {"op": "dequeue", "id": schedule_id},
+                    separators=(",", ":"),
+                )
+                response = client.echo(path, dequeue)
+                if response.status != "OK":
+                    raise RestError(
+                        f"ECHO {path} dequeue failed: {response.error}",
+                        response,
+                    )
 
         return _run
 
@@ -3433,7 +4003,7 @@ def build_operations(
     for path in gpu_paths:
         ops.append(Operation(f"cat_{path}", 0.5, "gpu", op_cat(path, 2048)))
 
-    if state.population_mode == POPULATION_EXECUTABLE:
+    if is_live_executable_population(state.population_mode):
         ops.append(
             Operation(
                 "worker_gpu_v2_receipt",
@@ -3442,10 +4012,14 @@ def build_operations(
                 lambda client, _worker, sim_state: run_v2_receipt_operation(
                     client,
                     sim_state,
-                    "gpu.lease.grant",
+                    "gpu.lease.renew",
                     "worker-gpu",
                     {"ttl_s": 30, "priority": 1},
-                    "gpu",
+                    require_receipt_subject(
+                        sim_state.receipt_gpu_subject,
+                        "GPU",
+                    ),
+                    operation_id=select_receipt_gpu_lease(sim_state),
                 ),
             )
         )
@@ -3460,7 +4034,10 @@ def build_operations(
                     "peft.export",
                     "worker-lora",
                     {},
-                    "bench-lora",
+                    require_receipt_subject(
+                        sim_state.receipt_lora_subject,
+                        "LoRA",
+                    ),
                 ),
             )
         )
@@ -3471,19 +4048,7 @@ def build_operations(
                 "schedule_write",
                 0.6,
                 "control",
-                op_echo_best_effort(
-                    "/queen/schedule/ctl",
-                    lambda _w, st: json.dumps(
-                        {
-                            "id": allocate_schedule_id(st),
-                            "role": "worker-gpu",
-                            "priority": st.rng.randint(1, 5),
-                            "ticks": st.rng.randint(1, 5),
-                            "budget_ms": st.rng.randint(50, 200),
-                        },
-                        separators=(",", ":"),
-                    ),
-                ),
+                op_schedule_lifecycle("/queen/schedule/ctl"),
             )
         )
         ops.append(
@@ -3591,34 +4156,35 @@ def telemetry_append_op(client: RestClient, _worker: str, state: SimState) -> No
     payload = f"telemetry seq={state.rng.randint(1, 100000)}"
 
     def attempt() -> None:
-        segment = ensure_telemetry_segment(client, state, device_id)
-        last_response: Optional[GatewayResponse] = None
-        last_path = f"/queen/telemetry/{device_id}/seg/{segment}"
-        for _ in range(3):
-            path = f"/queen/telemetry/{device_id}/seg/{segment}"
-            last_path = path
-            response = client.echo(path, payload)
-            if response.status == "OK":
-                return
-            last_response = response
-            if is_buffer_full_response(response):
-                segment = ensure_telemetry_segment(
-                    client,
-                    state,
-                    device_id,
-                    force_new=True,
+        with telemetry_device_lock(state, device_id):
+            segment = ensure_telemetry_segment(client, state, device_id)
+            last_response: Optional[GatewayResponse] = None
+            last_path = f"/queen/telemetry/{device_id}/seg/{segment}"
+            for _ in range(3):
+                path = f"/queen/telemetry/{device_id}/seg/{segment}"
+                last_path = path
+                response = client.echo(path, payload)
+                if response.status == "OK":
+                    return
+                last_response = response
+                if is_buffer_full_response(response):
+                    segment = ensure_telemetry_segment(
+                        client,
+                        state,
+                        device_id,
+                        force_new=True,
+                    )
+                    continue
+                if is_telemetry_segment_missing_response(response):
+                    segment = refresh_telemetry_segment(client, state, device_id)
+                    continue
+                raise RestError(f"ECHO {path} failed: {response.error}", response)
+            if last_response is not None:
+                raise RestError(
+                    f"ECHO {last_path} failed: {last_response.error}",
+                    last_response,
                 )
-                continue
-            if is_telemetry_segment_missing_response(response):
-                segment = refresh_telemetry_segment(client, state, device_id)
-                continue
-            raise RestError(f"ECHO {path} failed: {response.error}", response)
-        if last_response is not None:
-            raise RestError(
-                f"ECHO {last_path} failed: {last_response.error}",
-                last_response,
-            )
-        raise RestError(f"ECHO {last_path} failed")
+            raise RestError(f"ECHO {last_path} failed")
 
     run_with_retry_policy(
         attempt,
@@ -3659,15 +4225,16 @@ def telemetry_reference_manifest_op(
     device_id = f"bench-{worker}"
 
     def attempt() -> None:
-        segment = ensure_telemetry_segment(client, state, device_id, force_new=True)
-        path = f"/queen/telemetry/{device_id}/seg/{segment}"
-        for line in records:
-            response = client.echo(path, line)
-            if response.status != "OK":
-                raise RestError(
-                    f"ECHO {path} failed: {response.error}",
-                    response,
-                )
+        with telemetry_device_lock(state, device_id):
+            segment = ensure_telemetry_segment(client, state, device_id, force_new=True)
+            path = f"/queen/telemetry/{device_id}/seg/{segment}"
+            for line in records:
+                response = client.echo(path, line)
+                if response.status != "OK":
+                    raise RestError(
+                        f"ECHO {path} failed: {response.error}",
+                        response,
+                    )
 
     timeout_s = max(10.0, float(len(records)) * 0.25)
     run_with_retry_policy(
@@ -3700,9 +4267,7 @@ def ensure_telemetry_segment(
     device_id: str,
     force_new: bool = False,
 ) -> str:
-    if state.telemetry_lock is None:
-        state.telemetry_lock = threading.Lock()
-    with state.telemetry_lock:
+    with telemetry_device_lock(state, device_id):
         existing = state.telemetry_segments.get(device_id)
         if existing and not force_new:
             return existing
@@ -3710,14 +4275,22 @@ def ensure_telemetry_segment(
 
 
 def refresh_telemetry_segment(client: RestClient, state: SimState, device_id: str) -> str:
-    if state.telemetry_lock is None:
-        state.telemetry_lock = threading.Lock()
-    with state.telemetry_lock:
+    with telemetry_device_lock(state, device_id):
         latest = read_latest_telemetry_segment(client, device_id)
         if latest is not None:
             state.telemetry_segments[device_id] = latest
             return latest
         return create_telemetry_segment(client, state, device_id)
+
+
+def telemetry_device_lock(state: SimState, device_id: str) -> threading.RLock:
+    """Return the bounded lifecycle lock for one telemetry device."""
+    with state.telemetry_lock:
+        lock = state.telemetry_device_locks.get(device_id)
+        if lock is None:
+            lock = threading.RLock()
+            state.telemetry_device_locks[device_id] = lock
+        return lock
 
 
 def create_telemetry_segment(client: RestClient, state: SimState, device_id: str) -> str:
@@ -3732,14 +4305,16 @@ def create_telemetry_segment(client: RestClient, state: SimState, device_id: str
         else ()
     )
     receipt = parse_telemetry_segment_id(receipt_lines)
+    if receipt is not None:
+        state.telemetry_segments[device_id] = receipt
+        return receipt
     latest = read_latest_telemetry_segment(client, device_id)
     if latest is None:
         raise RestError(
             f"Failed to read latest segment for {device_id}: latest unavailable"
         )
-    selected = receipt if receipt is not None else latest
-    state.telemetry_segments[device_id] = selected
-    return selected
+    state.telemetry_segments[device_id] = latest
+    return latest
 
 
 def read_latest_telemetry_segment(client: RestClient, device_id: str) -> Optional[str]:
@@ -3796,6 +4371,25 @@ def pick_weighted(rng: random.Random, choices: List[Tuple[Operation, float]]) ->
     return choices[-1][0]
 
 
+def require_receipt_subject(value: Optional[str], label: str) -> str:
+    """Return one preflight-validated fixture subject for receipt pressure."""
+    if value is None:
+        raise RestError(f"executable receipt pressure lacks a validated {label} subject")
+    return value
+
+
+def select_receipt_gpu_lease(state: SimState) -> str:
+    """Round-robin over exact per-Worker GPU leases without changing ownership."""
+    with state.ticket_state_lock:
+        if not state.receipt_gpu_lease_ids:
+            raise RestError(
+                "executable receipt pressure lacks preflight GPU Worker leases"
+            )
+        index = state.next_receipt_gpu_lease % len(state.receipt_gpu_lease_ids)
+        state.next_receipt_gpu_lease = (index + 1) % len(state.receipt_gpu_lease_ids)
+        return state.receipt_gpu_lease_ids[index]
+
+
 def normalize_weights(weights: Dict[str, float]) -> Dict[str, float]:
     total = sum(weights.values())
     if total <= 0:
@@ -3839,17 +4433,20 @@ def ensure_workers(
     state: SimState,
     target: int,
 ) -> Tuple[List[str], List[str]]:
-    if state.population_mode == POPULATION_EXECUTABLE:
+    if is_live_executable_population(state.population_mode):
         instances, snapshot = executable_population_snapshot(
             client,
             state.bounds,
             target,
+            state.population_mode,
         )
         state.record_population(snapshot)
         state.worker_cap = state.maximum_live_tasks
         state.worker_telemetry_paths = {
             instance.worker_id: instance.telemetry_path for instance in instances
         }
+        merge_current_worker_instances(state, instances)
+        initialize_ticket_worker_lanes(state, instances)
         return [instance.worker_id for instance in instances], []
 
     backend_class, proof_class = gateway_population_axes(
@@ -3905,16 +4502,20 @@ def adjust_workers(
     spawned: List[str],
     target: int,
 ) -> Tuple[List[str], List[str]]:
-    if state.population_mode == POPULATION_EXECUTABLE:
+    if is_live_executable_population(state.population_mode):
+        if target == len(worker_ids):
+            return list(worker_ids), []
         instances, snapshot = executable_population_snapshot(
             client,
             state.bounds,
             target,
+            state.population_mode,
         )
         state.record_population(snapshot)
         state.worker_telemetry_paths = {
             instance.worker_id: instance.telemetry_path for instance in instances
         }
+        merge_current_worker_instances(state, instances)
         return [instance.worker_id for instance in instances], []
 
     backend_class, proof_class = gateway_population_axes(
@@ -4115,7 +4716,9 @@ def run_simulation(args: argparse.Namespace) -> int:
             gateway_population_axes(client, POPULATION_HOST_MODEL)
         maximum_live_tasks: Optional[int] = None
         acceptance_binding: Optional[Dict[str, object]] = None
-        if args.population_mode == POPULATION_EXECUTABLE:
+        fixture_gpu_id: Optional[str] = None
+        fixture_lora_job: Optional[str] = None
+        if is_live_executable_population(args.population_mode):
             runtime = worker_runtime_bounds(bounds)
             maximum_live_tasks = int(runtime["maximum_live_tasks"])
             if args.workers_max > maximum_live_tasks:
@@ -4123,14 +4726,16 @@ def run_simulation(args: argparse.Namespace) -> int:
                     "executable workers-max exceeds generated maximum_live_tasks: "
                     f"{args.workers_max} > {maximum_live_tasks}"
                 )
-            acceptance_binding = executable_qemu_acceptance_binding(client, bounds)
+            if args.population_mode == POPULATION_EXECUTABLE:
+                acceptance_binding = executable_qemu_acceptance_binding(client, bounds)
             fixture_gpu_id, fixture_lora_job = require_qemu_fixture_receipt_paths(
                 client
             )
             # Validate the complete marker and identity binding before issuing
             # any benchmark traffic. The exact hashes are captured again after
             # the workload for the retained report.
-            capture_fault_artifacts(args, acceptance_binding)
+            if acceptance_binding is not None:
+                capture_fault_artifacts(args, acceptance_binding)
 
         root_entries = discover_root_entries(client)
         host_paths = discover_host_paths(client)
@@ -4165,6 +4770,8 @@ def run_simulation(args: argparse.Namespace) -> int:
             population_mode=args.population_mode,
             maximum_live_tasks=maximum_live_tasks,
             acceptance_binding=acceptance_binding,
+            receipt_gpu_subject=fixture_gpu_id,
+            receipt_lora_subject=fixture_lora_job,
         )
         emit_benchmark_marker(
             client,
@@ -4187,14 +4794,21 @@ def run_simulation(args: argparse.Namespace) -> int:
                 state,
                 float(args.ready_timeout_secs),
             )
-            run_v2_receipt_operation(
-                client,
-                state,
-                "gpu.lease.grant",
-                "worker-gpu",
-                {"ttl_s": 30, "priority": 1},
-                fixture_gpu_id,
-            )
+        if is_live_executable_population(args.population_mode):
+            gpu_lanes = state.ticket_worker_lanes.get("worker-gpu")
+            if gpu_lanes is None or gpu_lanes.maxsize <= 0:
+                raise RestError("executable pressure lacks READY GPU Worker lanes")
+            state.receipt_gpu_lease_ids = [
+                run_v2_receipt_operation(
+                    client,
+                    state,
+                    "gpu.lease.grant",
+                    "worker-gpu",
+                    {"ttl_s": 30, "priority": 1},
+                    fixture_gpu_id,
+                )
+                for _ in range(gpu_lanes.maxsize)
+            ]
             run_v2_receipt_operation(
                 client,
                 state,
@@ -4463,7 +5077,7 @@ def run_simulation(args: argparse.Namespace) -> int:
         latest_population = (
             (
                 state.population_observations[0]
-                if args.population_mode == POPULATION_EXECUTABLE
+                if is_live_executable_population(args.population_mode)
                 else state.population_observations[-1]
             )
             if state.population_observations
@@ -5218,7 +5832,7 @@ def run_perf(args: argparse.Namespace) -> int:
         return 1
     perf_population: Dict[str, object]
     executable_workers: Optional[List[WorkerInstance]] = None
-    if args.population_mode == POPULATION_EXECUTABLE:
+    if is_live_executable_population(args.population_mode):
         try:
             runtime = worker_runtime_bounds(bounds)
             requested = min(args.max_workers, int(runtime["maximum_live_tasks"]))
@@ -5226,12 +5840,13 @@ def run_perf(args: argparse.Namespace) -> int:
                 client,
                 bounds,
                 requested,
+                args.population_mode,
             )
         except Exception as exc:
             args.logger.log(f"Executable Worker discovery failed: {exc}")
             return 1
         perf_population = {
-            "mode": POPULATION_EXECUTABLE,
+            "mode": args.population_mode,
             "maximum_live_tasks": int(runtime["maximum_live_tasks"]),
             **population.as_dict(),
         }

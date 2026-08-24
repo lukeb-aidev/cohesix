@@ -149,7 +149,7 @@ def fake_catalog(*, fail_entry: bool = False) -> str:
         scope = "conditional"
         targets = ["qemu"]
         description = "Write one fake target observation."
-        command = '''printf '%s\n' '{{"schema":"cohesix-target-observation/v1","claiming":false,"result":"PASS"}}' > "$TEST_PLAN_TARGET_OBSERVATION"'''
+        command = '''printf '%s\n' '{{"schema":"cohesix-target-observation/v2","claiming":false,"result":"PASS"}}' > "$TEST_PLAN_TARGET_OBSERVATION"'''
         timeout_seconds = 30
         trigger_paths = ["apps/root-task/**"]
         expected_evidence = ["non-claiming-target-observation"]
@@ -225,6 +225,14 @@ class ConvergenceSelectionTests(unittest.TestCase):
         phases = [action["convergence_phase"] for action in actions]
         self.assertLess(phases.index("target-canary"), phases.index("focused-regression"))
         self.assertNotIn("host.workspace-tests", [action["id"] for action in actions])
+
+    def test_qemu_canary_forwards_selected_qemu_binary(self) -> None:
+        source = TARGET_CANARY.read_text(encoding="utf-8")
+        self.assertIn(
+            'local qemu_bin="${TEST_PLAN_CONVERGENCE_QEMU_BIN:-${QEMU_BIN:-qemu-system-aarch64}}"',
+            source,
+        )
+        self.assertIn('--qemu "${qemu_bin}"', source)
 
 
 class ConvergenceEvidenceTests(unittest.TestCase):

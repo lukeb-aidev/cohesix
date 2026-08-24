@@ -72,7 +72,8 @@ def test_qemu_and_pi_contracts_are_independent_exact_targets() -> None:
     assert pi4.target_profile == "pi4_production"
     assert qemu.manifest_sha256 != pi4.manifest_sha256
     assert qemu.contract_sha256 != pi4.contract_sha256
-    assert qemu.maximum_live_tasks == pi4.maximum_live_tasks == 3
+    assert qemu.maximum_live_tasks == 37
+    assert pi4.maximum_live_tasks == 3
     assert qemu.role_declaration("heartbeat") == "executable"
     assert qemu.role_declaration("gpu") == "executable"
     assert qemu.role_declaration("lora") == "executable"

@@ -60,10 +60,24 @@ _CONTROL_ROLE = {
     "worker-lora": "lora",
 }
 _ROLE_CONTRACT = {
-    "worker-heartbeat": ("executable", 1, "/worker", ""),
-    "worker-gpu": ("executable", 1, "/gpu", "/gpu/<id>/lease"),
-    "worker-bus": ("model-only", 0, "/bus", ""),
-    "worker-lora": ("executable", 1, "/worker", ""),
+    "worker-heartbeat": ("executable", "/worker", ""),
+    "worker-gpu": ("executable", "/gpu", "/gpu/<id>/lease"),
+    "worker-bus": ("model-only", "/bus", ""),
+    "worker-lora": ("executable", "/worker", ""),
+}
+_TARGET_ROLE_SLOTS = {
+    "qemu": {
+        "worker-heartbeat": 1,
+        "worker-gpu": 15,
+        "worker-bus": 0,
+        "worker-lora": 21,
+    },
+    "pi4": {
+        "worker-heartbeat": 1,
+        "worker-gpu": 1,
+        "worker-bus": 0,
+        "worker-lora": 1,
+    },
 }
 _PROHIBITED_KEYS = {
     "auth_token",
@@ -303,9 +317,8 @@ def load_profile_contract(
         seen_roles.add(role)
         declaration = str(record["declaration"])
         slots = _bounded_int(record["executable_slots"], "executable_slots", 0, 64)
-        expected_declaration, expected_slots, ticket_scope, lease_path = (
-            _ROLE_CONTRACT[role]
-        )
+        expected_declaration, ticket_scope, lease_path = _ROLE_CONTRACT[role]
+        expected_slots = _TARGET_ROLE_SLOTS[target][role]
         if (
             declaration != expected_declaration
             or slots != expected_slots
@@ -323,8 +336,6 @@ def load_profile_contract(
     )
     if maximum_live_tasks != executable_slots:
         raise CohesixError("profile contract maximum live task count is inconsistent")
-    if maximum_live_tasks != len(EXECUTABLE_ROLES):
-        raise CohesixError("profile contract must admit exactly three executable roles")
     if worker.get("task_abi_schema") != "worker-task-abi/v1" or worker.get(
         "task_abi_version"
     ) != 1:

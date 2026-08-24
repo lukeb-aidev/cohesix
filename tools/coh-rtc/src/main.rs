@@ -6,12 +6,13 @@
 use anyhow::Result;
 use clap::Parser;
 use coh_rtc::{
-    compile, default_cas_interfaces_snippet_path, default_cas_manifest_template_path,
-    default_cas_security_snippet_path, default_cbor_snippet_path, default_cli_script_path,
-    default_coh_doctor_doc_path, default_coh_policy_doc_path, default_coh_policy_path,
-    default_coh_policy_rust_path, default_cohesix_py_defaults_path, default_cohesix_py_doc_path,
-    default_cohsh_client_doc_path, default_cohsh_client_rust_path, default_cohsh_grammar_doc_path,
-    default_cohsh_policy_doc_path, default_cohsh_policy_path, default_cohsh_policy_rust_path,
+    compile_with_timer_clock_hz, default_cas_interfaces_snippet_path,
+    default_cas_manifest_template_path, default_cas_security_snippet_path,
+    default_cbor_snippet_path, default_cli_script_path, default_coh_doctor_doc_path,
+    default_coh_policy_doc_path, default_coh_policy_path, default_coh_policy_rust_path,
+    default_cohesix_py_defaults_path, default_cohesix_py_doc_path, default_cohsh_client_doc_path,
+    default_cohsh_client_rust_path, default_cohsh_grammar_doc_path, default_cohsh_policy_doc_path,
+    default_cohsh_policy_path, default_cohsh_policy_rust_path,
     default_cohsh_ticket_policy_doc_path, default_doc_snippet_path,
     default_gpu_breadcrumbs_snippet_path, default_host_integration_doc_path,
     default_host_integration_graph_path, default_host_integration_source_path,
@@ -33,6 +34,10 @@ struct Args {
     /// Output path for the resolved manifest JSON.
     #[arg(long = "manifest", alias = "manifest-out")]
     manifest_out: PathBuf,
+    /// Console-network counter frequency resolved from the validated target
+    /// profile. Omit only when the manifest value is already target-exact.
+    #[arg(long)]
+    timer_clock_hz: Option<u64>,
     /// Output path for the CAS manifest template JSON.
     #[arg(long, default_value_os_t = default_cas_manifest_template_path())]
     cas_manifest_template: PathBuf,
@@ -168,7 +173,7 @@ fn main() -> Result<()> {
         swarmui_defaults_rust_out: args.swarmui_defaults_rust,
         swarmui_defaults_doc_out: args.swarmui_defaults_doc,
     };
-    let output = compile(&options)?;
+    let output = compile_with_timer_clock_hz(&options, args.timer_clock_hz)?;
     let surface_output = coh_rtc::implementation_surface::compile_inventory(
         &args.implementation_surfaces,
         &args.implementation_surface_inventory,

@@ -178,7 +178,7 @@ mod tests {
             contract.integration_evidence_schema,
             "cohesix-worker-integration-evidence/v1"
         );
-        assert_eq!(contract.maximum_live_tasks, 3);
+        assert_eq!(contract.maximum_live_tasks, 37);
         assert_eq!(contract.shard_bits, 8);
         assert!(contract.legacy_worker_alias);
         assert_eq!(
@@ -193,9 +193,9 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![
                 ("worker-heartbeat", "executable", 1),
-                ("worker-gpu", "executable", 1),
+                ("worker-gpu", "executable", 15),
                 ("worker-bus", "model-only", 0),
-                ("worker-lora", "executable", 1),
+                ("worker-lora", "executable", 21),
             ]
         );
     }

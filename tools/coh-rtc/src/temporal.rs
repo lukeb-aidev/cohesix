@@ -276,12 +276,6 @@ impl TemporalTaskConfig {
                         self.id
                     );
                 }
-                if self.locality_bound {
-                    bail!(
-                        "locality-bound temporal task {} cannot use passive donation",
-                        self.id
-                    );
-                }
             }
         }
         Ok(())
@@ -858,6 +852,44 @@ mod tests {
             .expect_err("invalid fault route")
             .to_string()
             .contains("directly to root-fault"));
+    }
+
+    #[test]
+    fn passive_locality_requires_every_donor_on_the_same_core() {
+        let mut config = valid_config();
+        let mut service = active("passive-service", TemporalTaskKind::Service, 0, 0);
+        service.execution = TemporalExecution::Passive;
+        service.scheduling_context_slot = 0;
+        service.scheduling_context_bits = 0;
+        service.budget_us = 0;
+        service.period_us = 0;
+        service.deadline_us = 0;
+        service.blocking_us = 0;
+        service.jitter_us = 0;
+        service.max_refills = 0;
+        service.timeout_policy = TimeoutPolicy::ReturnError;
+        service.consumed_time_evidence = false;
+        service.wcet_us = 0;
+        service.response_time_us = 0;
+        service.admitted = false;
+        service.virtio_operator_serial_io_bytes_per_turn = 0;
+        service.allowed_donors = vec!["root-control".to_owned()];
+        service.reply_objects = 1;
+        service.max_donation_depth = 1;
+        service.critical_reserve = false;
+        service.locality_bound = true;
+        config.tasks.push(service);
+
+        config
+            .validate()
+            .expect("passive service accepts a co-located allowlisted donor");
+
+        config.tasks.last_mut().expect("passive service").core = 1;
+        assert!(config
+            .validate()
+            .expect_err("cross-core passive donor must fail locality")
+            .to_string()
+            .contains("has cross-core donor root-control"));
     }
 
     #[test]

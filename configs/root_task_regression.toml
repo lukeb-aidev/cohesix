@@ -223,7 +223,7 @@ protection_profile = "none"
 
 [worker_runtime]
 implementation_epoch = 26
-max_workers = 8
+max_workers = 64
 ticket_subject_required = true
 cap_backed_authority = true
 notification_lifecycle = true
@@ -305,8 +305,8 @@ profile = "mcs"
 priority = 96
 domain = 0
 service_turn_budget = 64
-mcs_budget_us = 400
-mcs_period_us = 10000
+mcs_budget_us = 800
+mcs_period_us = 20000
 timeout_endpoint_badge = 653132288
 consumed_budget_evidence = true
 
@@ -315,27 +315,27 @@ enabled = true
 architecture = "smp-mcs"
 cores = 4
 domains = 1
-admission_window_us = 10000
+admission_window_us = 20000
 
 [[temporal_authority.core_admission]]
 core = 0
-capacity_us = 10000
-reserve_us = 1000
+capacity_us = 20000
+reserve_us = 2000
 
 [[temporal_authority.core_admission]]
 core = 1
-capacity_us = 10000
-reserve_us = 1000
+capacity_us = 20000
+reserve_us = 2000
 
 [[temporal_authority.core_admission]]
 core = 2
-capacity_us = 10000
-reserve_us = 1000
+capacity_us = 20000
+reserve_us = 2000
 
 [[temporal_authority.core_admission]]
 core = 3
-capacity_us = 10000
-reserve_us = 1000
+capacity_us = 20000
+reserve_us = 2000
 
 [[temporal_authority.tasks]]
 id = "root-control"
@@ -472,7 +472,7 @@ critical_reserve = true
 id = "ninedoor-service"
 kind = "service"
 execution = "passive"
-core = 1
+core = 0
 priority = 128
 mcp = 200
 timeout_badge = 653131782
@@ -482,6 +482,7 @@ allowed_donors = ["root-control"]
 reply_objects = 1
 max_donation_depth = 1
 fault_handler = "root-fault"
+locality_bound = true
 
 [ninedoor_service]
 enabled = true
@@ -517,7 +518,7 @@ root_request_rights = 3
 root_response_rights = 2
 child_request_rights = 2
 child_response_rights = 3
-core = 1
+core = 0
 priority = 128
 mcp = 200
 
@@ -564,7 +565,7 @@ fault_handler = "root-fault"
 
 [console_network_service]
 enabled = true
-abi_version = 3
+abi_version = 4
 image_id = "console-network-runtime"
 image_path = "cohesix/artifacts/console-network-runtime"
 entry_symbol = "_start"
@@ -635,12 +636,12 @@ core = 3
 scheduling_context_slot = 7
 scheduling_context_bits = 8
 sched_control_core = 3
-budget_us = 300
-period_us = 10000
-deadline_us = 10000
+budget_us = 600
+period_us = 20000
+deadline_us = 20000
 blocking_us = 0
 jitter_us = 0
-response_time_us = 200
+response_time_us = 6500
 admitted = true
 max_refills = 2
 priority = 96
@@ -660,12 +661,12 @@ core = 2
 scheduling_context_slot = 8
 scheduling_context_bits = 8
 sched_control_core = 2
-budget_us = 400
-period_us = 10000
-deadline_us = 10000
+budget_us = 800
+period_us = 20000
+deadline_us = 20000
 blocking_us = 0
 jitter_us = 0
-response_time_us = 3600
+response_time_us = 7500
 admitted = true
 max_refills = 2
 priority = 96
@@ -677,20 +678,21 @@ wcet_us = 300
 wcet_provenance = "m26e-qemu-candidate-v1"
 fault_handler = "root-fault"
 
+
 [[temporal_authority.tasks]]
-id = "worker-lora-slot-0"
+id = "worker-gpu-slot-1"
 kind = "worker"
 execution = "active"
 core = 2
 scheduling_context_slot = 9
 scheduling_context_bits = 8
 sched_control_core = 2
-budget_us = 400
-period_us = 10000
-deadline_us = 10000
+budget_us = 800
+period_us = 20000
+deadline_us = 20000
 blocking_us = 0
 jitter_us = 0
-response_time_us = 3600
+response_time_us = 7500
 admitted = true
 max_refills = 2
 priority = 96
@@ -699,7 +701,858 @@ timeout_badge = 653131786
 timeout_policy = "terminal"
 consumed_time_evidence = true
 wcet_us = 300
+wcet_provenance = "m26e-qemu-multi-worker-v1"
+fault_handler = "root-fault"
+
+[[temporal_authority.tasks]]
+id = "worker-gpu-slot-2"
+kind = "worker"
+execution = "active"
+core = 2
+scheduling_context_slot = 10
+scheduling_context_bits = 8
+sched_control_core = 2
+budget_us = 800
+period_us = 20000
+deadline_us = 20000
+blocking_us = 0
+jitter_us = 0
+response_time_us = 7500
+admitted = true
+max_refills = 2
+priority = 96
+mcp = 128
+timeout_badge = 653131787
+timeout_policy = "terminal"
+consumed_time_evidence = true
+wcet_us = 300
+wcet_provenance = "m26e-qemu-multi-worker-v1"
+fault_handler = "root-fault"
+
+[[temporal_authority.tasks]]
+id = "worker-gpu-slot-3"
+kind = "worker"
+execution = "active"
+core = 2
+scheduling_context_slot = 11
+scheduling_context_bits = 8
+sched_control_core = 2
+budget_us = 800
+period_us = 20000
+deadline_us = 20000
+blocking_us = 0
+jitter_us = 0
+response_time_us = 7500
+admitted = true
+max_refills = 2
+priority = 96
+mcp = 128
+timeout_badge = 653131788
+timeout_policy = "terminal"
+consumed_time_evidence = true
+wcet_us = 300
+wcet_provenance = "m26e-qemu-multi-worker-v1"
+fault_handler = "root-fault"
+
+[[temporal_authority.tasks]]
+id = "worker-gpu-slot-4"
+kind = "worker"
+execution = "active"
+core = 2
+scheduling_context_slot = 12
+scheduling_context_bits = 8
+sched_control_core = 2
+budget_us = 800
+period_us = 20000
+deadline_us = 20000
+blocking_us = 0
+jitter_us = 0
+response_time_us = 7500
+admitted = true
+max_refills = 2
+priority = 96
+mcp = 128
+timeout_badge = 653131789
+timeout_policy = "terminal"
+consumed_time_evidence = true
+wcet_us = 300
+wcet_provenance = "m26e-qemu-multi-worker-v1"
+fault_handler = "root-fault"
+
+[[temporal_authority.tasks]]
+id = "worker-gpu-slot-5"
+kind = "worker"
+execution = "active"
+core = 2
+scheduling_context_slot = 13
+scheduling_context_bits = 8
+sched_control_core = 2
+budget_us = 800
+period_us = 20000
+deadline_us = 20000
+blocking_us = 0
+jitter_us = 0
+response_time_us = 7500
+admitted = true
+max_refills = 2
+priority = 96
+mcp = 128
+timeout_badge = 653131790
+timeout_policy = "terminal"
+consumed_time_evidence = true
+wcet_us = 300
+wcet_provenance = "m26e-qemu-multi-worker-v1"
+fault_handler = "root-fault"
+
+[[temporal_authority.tasks]]
+id = "worker-gpu-slot-6"
+kind = "worker"
+execution = "active"
+core = 2
+scheduling_context_slot = 14
+scheduling_context_bits = 8
+sched_control_core = 2
+budget_us = 800
+period_us = 20000
+deadline_us = 20000
+blocking_us = 0
+jitter_us = 0
+response_time_us = 7500
+admitted = true
+max_refills = 2
+priority = 96
+mcp = 128
+timeout_badge = 653131791
+timeout_policy = "terminal"
+consumed_time_evidence = true
+wcet_us = 300
+wcet_provenance = "m26e-qemu-multi-worker-v1"
+fault_handler = "root-fault"
+
+[[temporal_authority.tasks]]
+id = "worker-gpu-slot-7"
+kind = "worker"
+execution = "active"
+core = 2
+scheduling_context_slot = 15
+scheduling_context_bits = 8
+sched_control_core = 2
+budget_us = 800
+period_us = 20000
+deadline_us = 20000
+blocking_us = 0
+jitter_us = 0
+response_time_us = 7500
+admitted = true
+max_refills = 2
+priority = 96
+mcp = 128
+timeout_badge = 653131792
+timeout_policy = "terminal"
+consumed_time_evidence = true
+wcet_us = 300
+wcet_provenance = "m26e-qemu-multi-worker-v1"
+fault_handler = "root-fault"
+
+[[temporal_authority.tasks]]
+id = "worker-gpu-slot-8"
+kind = "worker"
+execution = "active"
+core = 2
+scheduling_context_slot = 16
+scheduling_context_bits = 8
+sched_control_core = 2
+budget_us = 800
+period_us = 20000
+deadline_us = 20000
+blocking_us = 0
+jitter_us = 0
+response_time_us = 7500
+admitted = true
+max_refills = 2
+priority = 96
+mcp = 128
+timeout_badge = 653131793
+timeout_policy = "terminal"
+consumed_time_evidence = true
+wcet_us = 300
+wcet_provenance = "m26e-qemu-multi-worker-v1"
+fault_handler = "root-fault"
+
+[[temporal_authority.tasks]]
+id = "worker-gpu-slot-9"
+kind = "worker"
+execution = "active"
+core = 2
+scheduling_context_slot = 17
+scheduling_context_bits = 8
+sched_control_core = 2
+budget_us = 800
+period_us = 20000
+deadline_us = 20000
+blocking_us = 0
+jitter_us = 0
+response_time_us = 7500
+admitted = true
+max_refills = 2
+priority = 96
+mcp = 128
+timeout_badge = 653131794
+timeout_policy = "terminal"
+consumed_time_evidence = true
+wcet_us = 300
+wcet_provenance = "m26e-qemu-multi-worker-v1"
+fault_handler = "root-fault"
+
+[[temporal_authority.tasks]]
+id = "worker-gpu-slot-10"
+kind = "worker"
+execution = "active"
+core = 2
+scheduling_context_slot = 18
+scheduling_context_bits = 8
+sched_control_core = 2
+budget_us = 800
+period_us = 20000
+deadline_us = 20000
+blocking_us = 0
+jitter_us = 0
+response_time_us = 7500
+admitted = true
+max_refills = 2
+priority = 96
+mcp = 128
+timeout_badge = 653131795
+timeout_policy = "terminal"
+consumed_time_evidence = true
+wcet_us = 300
+wcet_provenance = "m26e-qemu-multi-worker-v1"
+fault_handler = "root-fault"
+
+[[temporal_authority.tasks]]
+id = "worker-gpu-slot-11"
+kind = "worker"
+execution = "active"
+core = 2
+scheduling_context_slot = 19
+scheduling_context_bits = 8
+sched_control_core = 2
+budget_us = 800
+period_us = 20000
+deadline_us = 20000
+blocking_us = 0
+jitter_us = 0
+response_time_us = 7500
+admitted = true
+max_refills = 2
+priority = 96
+mcp = 128
+timeout_badge = 653131796
+timeout_policy = "terminal"
+consumed_time_evidence = true
+wcet_us = 300
+wcet_provenance = "m26e-qemu-multi-worker-v1"
+fault_handler = "root-fault"
+
+[[temporal_authority.tasks]]
+id = "worker-gpu-slot-12"
+kind = "worker"
+execution = "active"
+core = 2
+scheduling_context_slot = 20
+scheduling_context_bits = 8
+sched_control_core = 2
+budget_us = 800
+period_us = 20000
+deadline_us = 20000
+blocking_us = 0
+jitter_us = 0
+response_time_us = 7500
+admitted = true
+max_refills = 2
+priority = 96
+mcp = 128
+timeout_badge = 653131797
+timeout_policy = "terminal"
+consumed_time_evidence = true
+wcet_us = 300
+wcet_provenance = "m26e-qemu-multi-worker-v1"
+fault_handler = "root-fault"
+
+[[temporal_authority.tasks]]
+id = "worker-gpu-slot-13"
+kind = "worker"
+execution = "active"
+core = 2
+scheduling_context_slot = 21
+scheduling_context_bits = 8
+sched_control_core = 2
+budget_us = 800
+period_us = 20000
+deadline_us = 20000
+blocking_us = 0
+jitter_us = 0
+response_time_us = 7500
+admitted = true
+max_refills = 2
+priority = 96
+mcp = 128
+timeout_badge = 653131798
+timeout_policy = "terminal"
+consumed_time_evidence = true
+wcet_us = 300
+wcet_provenance = "m26e-qemu-multi-worker-v1"
+fault_handler = "root-fault"
+
+[[temporal_authority.tasks]]
+id = "worker-gpu-slot-14"
+kind = "worker"
+execution = "active"
+core = 2
+scheduling_context_slot = 22
+scheduling_context_bits = 8
+sched_control_core = 2
+budget_us = 800
+period_us = 20000
+deadline_us = 20000
+blocking_us = 0
+jitter_us = 0
+response_time_us = 7500
+admitted = true
+max_refills = 2
+priority = 96
+mcp = 128
+timeout_badge = 653131799
+timeout_policy = "terminal"
+consumed_time_evidence = true
+wcet_us = 300
+wcet_provenance = "m26e-qemu-multi-worker-v1"
+fault_handler = "root-fault"
+
+[[temporal_authority.tasks]]
+id = "worker-lora-slot-0"
+kind = "worker"
+execution = "active"
+core = 3
+scheduling_context_slot = 23
+scheduling_context_bits = 8
+sched_control_core = 3
+budget_us = 800
+period_us = 20000
+deadline_us = 20000
+blocking_us = 0
+jitter_us = 0
+response_time_us = 6500
+admitted = true
+max_refills = 2
+priority = 96
+mcp = 128
+timeout_badge = 653131800
+timeout_policy = "terminal"
+consumed_time_evidence = true
+wcet_us = 300
 wcet_provenance = "m26e-qemu-candidate-v1"
+fault_handler = "root-fault"
+
+
+[[temporal_authority.tasks]]
+id = "worker-lora-slot-1"
+kind = "worker"
+execution = "active"
+core = 3
+scheduling_context_slot = 24
+scheduling_context_bits = 8
+sched_control_core = 3
+budget_us = 800
+period_us = 20000
+deadline_us = 20000
+blocking_us = 0
+jitter_us = 0
+response_time_us = 6500
+admitted = true
+max_refills = 2
+priority = 96
+mcp = 128
+timeout_badge = 653131801
+timeout_policy = "terminal"
+consumed_time_evidence = true
+wcet_us = 300
+wcet_provenance = "m26e-qemu-multi-worker-v1"
+fault_handler = "root-fault"
+
+[[temporal_authority.tasks]]
+id = "worker-lora-slot-2"
+kind = "worker"
+execution = "active"
+core = 3
+scheduling_context_slot = 25
+scheduling_context_bits = 8
+sched_control_core = 3
+budget_us = 800
+period_us = 20000
+deadline_us = 20000
+blocking_us = 0
+jitter_us = 0
+response_time_us = 6500
+admitted = true
+max_refills = 2
+priority = 96
+mcp = 128
+timeout_badge = 653131802
+timeout_policy = "terminal"
+consumed_time_evidence = true
+wcet_us = 300
+wcet_provenance = "m26e-qemu-multi-worker-v1"
+fault_handler = "root-fault"
+
+[[temporal_authority.tasks]]
+id = "worker-lora-slot-3"
+kind = "worker"
+execution = "active"
+core = 3
+scheduling_context_slot = 26
+scheduling_context_bits = 8
+sched_control_core = 3
+budget_us = 800
+period_us = 20000
+deadline_us = 20000
+blocking_us = 0
+jitter_us = 0
+response_time_us = 6500
+admitted = true
+max_refills = 2
+priority = 96
+mcp = 128
+timeout_badge = 653131803
+timeout_policy = "terminal"
+consumed_time_evidence = true
+wcet_us = 300
+wcet_provenance = "m26e-qemu-multi-worker-v1"
+fault_handler = "root-fault"
+
+[[temporal_authority.tasks]]
+id = "worker-lora-slot-4"
+kind = "worker"
+execution = "active"
+core = 3
+scheduling_context_slot = 27
+scheduling_context_bits = 8
+sched_control_core = 3
+budget_us = 800
+period_us = 20000
+deadline_us = 20000
+blocking_us = 0
+jitter_us = 0
+response_time_us = 6500
+admitted = true
+max_refills = 2
+priority = 96
+mcp = 128
+timeout_badge = 653131804
+timeout_policy = "terminal"
+consumed_time_evidence = true
+wcet_us = 300
+wcet_provenance = "m26e-qemu-multi-worker-v1"
+fault_handler = "root-fault"
+
+[[temporal_authority.tasks]]
+id = "worker-lora-slot-5"
+kind = "worker"
+execution = "active"
+core = 3
+scheduling_context_slot = 28
+scheduling_context_bits = 8
+sched_control_core = 3
+budget_us = 800
+period_us = 20000
+deadline_us = 20000
+blocking_us = 0
+jitter_us = 0
+response_time_us = 6500
+admitted = true
+max_refills = 2
+priority = 96
+mcp = 128
+timeout_badge = 653131805
+timeout_policy = "terminal"
+consumed_time_evidence = true
+wcet_us = 300
+wcet_provenance = "m26e-qemu-multi-worker-v1"
+fault_handler = "root-fault"
+
+[[temporal_authority.tasks]]
+id = "worker-lora-slot-6"
+kind = "worker"
+execution = "active"
+core = 3
+scheduling_context_slot = 29
+scheduling_context_bits = 8
+sched_control_core = 3
+budget_us = 800
+period_us = 20000
+deadline_us = 20000
+blocking_us = 0
+jitter_us = 0
+response_time_us = 6500
+admitted = true
+max_refills = 2
+priority = 96
+mcp = 128
+timeout_badge = 653131806
+timeout_policy = "terminal"
+consumed_time_evidence = true
+wcet_us = 300
+wcet_provenance = "m26e-qemu-multi-worker-v1"
+fault_handler = "root-fault"
+
+[[temporal_authority.tasks]]
+id = "worker-lora-slot-7"
+kind = "worker"
+execution = "active"
+core = 3
+scheduling_context_slot = 30
+scheduling_context_bits = 8
+sched_control_core = 3
+budget_us = 800
+period_us = 20000
+deadline_us = 20000
+blocking_us = 0
+jitter_us = 0
+response_time_us = 6500
+admitted = true
+max_refills = 2
+priority = 96
+mcp = 128
+timeout_badge = 653131807
+timeout_policy = "terminal"
+consumed_time_evidence = true
+wcet_us = 300
+wcet_provenance = "m26e-qemu-multi-worker-v1"
+fault_handler = "root-fault"
+
+[[temporal_authority.tasks]]
+id = "worker-lora-slot-8"
+kind = "worker"
+execution = "active"
+core = 3
+scheduling_context_slot = 31
+scheduling_context_bits = 8
+sched_control_core = 3
+budget_us = 800
+period_us = 20000
+deadline_us = 20000
+blocking_us = 0
+jitter_us = 0
+response_time_us = 6500
+admitted = true
+max_refills = 2
+priority = 96
+mcp = 128
+timeout_badge = 653131808
+timeout_policy = "terminal"
+consumed_time_evidence = true
+wcet_us = 300
+wcet_provenance = "m26e-qemu-multi-worker-v1"
+fault_handler = "root-fault"
+
+[[temporal_authority.tasks]]
+id = "worker-lora-slot-9"
+kind = "worker"
+execution = "active"
+core = 3
+scheduling_context_slot = 32
+scheduling_context_bits = 8
+sched_control_core = 3
+budget_us = 800
+period_us = 20000
+deadline_us = 20000
+blocking_us = 0
+jitter_us = 0
+response_time_us = 6500
+admitted = true
+max_refills = 2
+priority = 96
+mcp = 128
+timeout_badge = 653131809
+timeout_policy = "terminal"
+consumed_time_evidence = true
+wcet_us = 300
+wcet_provenance = "m26e-qemu-multi-worker-v1"
+fault_handler = "root-fault"
+
+[[temporal_authority.tasks]]
+id = "worker-lora-slot-10"
+kind = "worker"
+execution = "active"
+core = 3
+scheduling_context_slot = 33
+scheduling_context_bits = 8
+sched_control_core = 3
+budget_us = 800
+period_us = 20000
+deadline_us = 20000
+blocking_us = 0
+jitter_us = 0
+response_time_us = 6500
+admitted = true
+max_refills = 2
+priority = 96
+mcp = 128
+timeout_badge = 653131810
+timeout_policy = "terminal"
+consumed_time_evidence = true
+wcet_us = 300
+wcet_provenance = "m26e-qemu-multi-worker-v1"
+fault_handler = "root-fault"
+
+[[temporal_authority.tasks]]
+id = "worker-lora-slot-11"
+kind = "worker"
+execution = "active"
+core = 3
+scheduling_context_slot = 34
+scheduling_context_bits = 8
+sched_control_core = 3
+budget_us = 800
+period_us = 20000
+deadline_us = 20000
+blocking_us = 0
+jitter_us = 0
+response_time_us = 6500
+admitted = true
+max_refills = 2
+priority = 96
+mcp = 128
+timeout_badge = 653131811
+timeout_policy = "terminal"
+consumed_time_evidence = true
+wcet_us = 300
+wcet_provenance = "m26e-qemu-multi-worker-v1"
+fault_handler = "root-fault"
+
+[[temporal_authority.tasks]]
+id = "worker-lora-slot-12"
+kind = "worker"
+execution = "active"
+core = 3
+scheduling_context_slot = 35
+scheduling_context_bits = 8
+sched_control_core = 3
+budget_us = 800
+period_us = 20000
+deadline_us = 20000
+blocking_us = 0
+jitter_us = 0
+response_time_us = 6500
+admitted = true
+max_refills = 2
+priority = 96
+mcp = 128
+timeout_badge = 653131812
+timeout_policy = "terminal"
+consumed_time_evidence = true
+wcet_us = 300
+wcet_provenance = "m26e-qemu-multi-worker-v1"
+fault_handler = "root-fault"
+
+[[temporal_authority.tasks]]
+id = "worker-lora-slot-13"
+kind = "worker"
+execution = "active"
+core = 3
+scheduling_context_slot = 36
+scheduling_context_bits = 8
+sched_control_core = 3
+budget_us = 800
+period_us = 20000
+deadline_us = 20000
+blocking_us = 0
+jitter_us = 0
+response_time_us = 6500
+admitted = true
+max_refills = 2
+priority = 96
+mcp = 128
+timeout_badge = 653131813
+timeout_policy = "terminal"
+consumed_time_evidence = true
+wcet_us = 300
+wcet_provenance = "m26e-qemu-multi-worker-v1"
+fault_handler = "root-fault"
+
+[[temporal_authority.tasks]]
+id = "worker-lora-slot-14"
+kind = "worker"
+execution = "active"
+core = 3
+scheduling_context_slot = 37
+scheduling_context_bits = 8
+sched_control_core = 3
+budget_us = 800
+period_us = 20000
+deadline_us = 20000
+blocking_us = 0
+jitter_us = 0
+response_time_us = 6500
+admitted = true
+max_refills = 2
+priority = 96
+mcp = 128
+timeout_badge = 653131814
+timeout_policy = "terminal"
+consumed_time_evidence = true
+wcet_us = 300
+wcet_provenance = "m26e-qemu-multi-worker-v1"
+fault_handler = "root-fault"
+
+[[temporal_authority.tasks]]
+id = "worker-lora-slot-15"
+kind = "worker"
+execution = "active"
+core = 3
+scheduling_context_slot = 38
+scheduling_context_bits = 8
+sched_control_core = 3
+budget_us = 800
+period_us = 20000
+deadline_us = 20000
+blocking_us = 0
+jitter_us = 0
+response_time_us = 6500
+admitted = true
+max_refills = 2
+priority = 96
+mcp = 128
+timeout_badge = 653131815
+timeout_policy = "terminal"
+consumed_time_evidence = true
+wcet_us = 300
+wcet_provenance = "m26e-qemu-multi-worker-v1"
+fault_handler = "root-fault"
+
+[[temporal_authority.tasks]]
+id = "worker-lora-slot-16"
+kind = "worker"
+execution = "active"
+core = 3
+scheduling_context_slot = 39
+scheduling_context_bits = 8
+sched_control_core = 3
+budget_us = 800
+period_us = 20000
+deadline_us = 20000
+blocking_us = 0
+jitter_us = 0
+response_time_us = 6500
+admitted = true
+max_refills = 2
+priority = 96
+mcp = 128
+timeout_badge = 653131816
+timeout_policy = "terminal"
+consumed_time_evidence = true
+wcet_us = 300
+wcet_provenance = "m26e-qemu-multi-worker-v1"
+fault_handler = "root-fault"
+
+[[temporal_authority.tasks]]
+id = "worker-lora-slot-17"
+kind = "worker"
+execution = "active"
+core = 3
+scheduling_context_slot = 40
+scheduling_context_bits = 8
+sched_control_core = 3
+budget_us = 800
+period_us = 20000
+deadline_us = 20000
+blocking_us = 0
+jitter_us = 0
+response_time_us = 6500
+admitted = true
+max_refills = 2
+priority = 96
+mcp = 128
+timeout_badge = 653131817
+timeout_policy = "terminal"
+consumed_time_evidence = true
+wcet_us = 300
+wcet_provenance = "m26e-qemu-multi-worker-v1"
+fault_handler = "root-fault"
+
+[[temporal_authority.tasks]]
+id = "worker-lora-slot-18"
+kind = "worker"
+execution = "active"
+core = 3
+scheduling_context_slot = 41
+scheduling_context_bits = 8
+sched_control_core = 3
+budget_us = 800
+period_us = 20000
+deadline_us = 20000
+blocking_us = 0
+jitter_us = 0
+response_time_us = 6500
+admitted = true
+max_refills = 2
+priority = 96
+mcp = 128
+timeout_badge = 653131818
+timeout_policy = "terminal"
+consumed_time_evidence = true
+wcet_us = 300
+wcet_provenance = "m26e-qemu-multi-worker-v1"
+fault_handler = "root-fault"
+
+[[temporal_authority.tasks]]
+id = "worker-lora-slot-19"
+kind = "worker"
+execution = "active"
+core = 3
+scheduling_context_slot = 42
+scheduling_context_bits = 8
+sched_control_core = 3
+budget_us = 800
+period_us = 20000
+deadline_us = 20000
+blocking_us = 0
+jitter_us = 0
+response_time_us = 6500
+admitted = true
+max_refills = 2
+priority = 96
+mcp = 128
+timeout_badge = 653131819
+timeout_policy = "terminal"
+consumed_time_evidence = true
+wcet_us = 300
+wcet_provenance = "m26e-qemu-multi-worker-v1"
+fault_handler = "root-fault"
+
+[[temporal_authority.tasks]]
+id = "worker-lora-slot-20"
+kind = "worker"
+execution = "active"
+core = 3
+scheduling_context_slot = 43
+scheduling_context_bits = 8
+sched_control_core = 3
+budget_us = 800
+period_us = 20000
+deadline_us = 20000
+blocking_us = 0
+jitter_us = 0
+response_time_us = 6500
+admitted = true
+max_refills = 2
+priority = 96
+mcp = 128
+timeout_badge = 653131820
+timeout_policy = "terminal"
+consumed_time_evidence = true
+wcet_us = 300
+wcet_provenance = "m26e-qemu-multi-worker-v1"
 fault_handler = "root-fault"
 
 [worker_resource_admission]
@@ -768,10 +1621,10 @@ untyped_bytes = 67108864
 [[worker_resource_admission.executable_roles]]
 role = "worker-heartbeat"
 task_prefix = "worker-heartbeat-slot-"
-namespace_capacity = 8
+namespace_capacity = 64
 executable_slots = 1
 core = 3
-revoke_anchor_slot = 16133
+revoke_anchor_slot = 16000
 
 [worker_resource_admission.executable_roles.per_slot]
 tcbs = 1
@@ -787,15 +1640,15 @@ timeout_fault_caps = 1
 reply_objects = 0
 scheduling_contexts = 1
 cspace_slots = 64
-untyped_bytes = 1048576
+untyped_bytes = 131072
 
 [[worker_resource_admission.executable_roles]]
 role = "worker-gpu"
 task_prefix = "worker-gpu-slot-"
-namespace_capacity = 8
-executable_slots = 1
+namespace_capacity = 64
+executable_slots = 15
 core = 2
-revoke_anchor_slot = 16134
+revoke_anchor_slot = 16001
 
 [worker_resource_admission.executable_roles.per_slot]
 tcbs = 1
@@ -811,15 +1664,15 @@ timeout_fault_caps = 1
 reply_objects = 0
 scheduling_contexts = 1
 cspace_slots = 64
-untyped_bytes = 1048576
+untyped_bytes = 131072
 
 [[worker_resource_admission.executable_roles]]
 role = "worker-lora"
 task_prefix = "worker-lora-slot-"
-namespace_capacity = 8
-executable_slots = 1
-core = 2
-revoke_anchor_slot = 16135
+namespace_capacity = 64
+executable_slots = 21
+core = 3
+revoke_anchor_slot = 16016
 
 [worker_resource_admission.executable_roles.per_slot]
 tcbs = 1
@@ -835,10 +1688,10 @@ timeout_fault_caps = 1
 reply_objects = 0
 scheduling_contexts = 1
 cspace_slots = 64
-untyped_bytes = 1048576
+untyped_bytes = 131072
 
 [[worker_resource_admission.allowed_role_mixes]]
-id = "maximum-three-role-mix"
+id = "maximum-multi-worker-mix"
 maximum = true
 
 [[worker_resource_admission.allowed_role_mixes.roles]]
@@ -847,11 +1700,11 @@ count = 1
 
 [[worker_resource_admission.allowed_role_mixes.roles]]
 role = "worker-gpu"
-count = 1
+count = 15
 
 [[worker_resource_admission.allowed_role_mixes.roles]]
 role = "worker-lora"
-count = 1
+count = 21
 
 [[worker_resource_admission.critical_tcbs]]
 id = "root-control"
@@ -865,7 +1718,7 @@ fault_reply_lanes = 1
 [[worker_resource_admission.critical_tcbs]]
 id = "root-fault"
 cnode_radix_bits = 6
-cspace_cap_count = 19
+cspace_cap_count = 53
 revoke_anchor_slot = 16129
 ipc_buffer_pages = 1
 stack_pages = 2
@@ -899,8 +1752,8 @@ stack_pages = 2
 fault_reply_lanes = 1
 
 [worker_resource_admission.handoff]
-worker_control_queue_capacity = 8
-worker_fault_mailboxes = 3
+worker_control_queue_capacity = 64
+worker_fault_mailboxes = 37
 driver_fault_records = 0
 worker_wake_badge = 1
 driver_wake_badge = 2
@@ -915,7 +1768,7 @@ driver_drain_precedence = ["driver-fault"]
 
 [worker_resource_admission.handoff.worker_fault_badges]
 base = 652279808
-count = 3
+count = 37
 stride = 1
 
 [worker_resource_admission.handoff.driver_fault_badges]
@@ -935,7 +1788,7 @@ stride = 1
 
 [worker_resource_admission.handoff.timeout_fault_badges]
 base = 653131777
-count = 10
+count = 44
 stride = 1
 
 [worker_resource_admission.handoff.supervisor_signal_rights]
@@ -965,9 +1818,9 @@ grant_reply = false
 [worker_resource_admission.fault_registry]
 critical_tcbs = 5
 service_tcbs = 2
-worker_tcbs = 3
+worker_tcbs = 37
 driver_tcbs = 0
-capacity = 10
+capacity = 44
 root_fault_tcb_control_slot_base = 16
 receive_endpoints = 1
 receive_reply_lanes = 1
@@ -982,6 +1835,10 @@ std_host_tools = false
 [namespaces]
 role_isolation = true
 
+[[namespaces.mounts]]
+service = "logs"
+target = ["log"]
+
 [sharding]
 enabled = true
 shard_bits = 8
@@ -994,15 +1851,31 @@ frame_schema = "legacy-plaintext"
 [telemetry.cursor]
 retain_on_boot = false
 
+[telemetry_ingest]
+max_segments_per_device = 4
+max_bytes_per_segment = 131072
+max_total_bytes_per_device = 524288
+max_reference_entries_per_segment = 1024
+max_reference_manifest_bytes_per_segment = 131072
+max_reference_bytes_per_segment = 1073741824
+eviction_policy = "evict-oldest"
+
+[lifecycle]
+initial_state = "BOOTING"
+
+[[lifecycle.auto_transitions]]
+from = "BOOTING"
+to = "ONLINE"
+
 [control_plane.schedule]
 enable = true
-queue_max_entries = 64
+queue_max_entries = 256
 ctl_max_bytes = 8192
 
 [control_plane.lease]
 enable = true
-active_max_entries = 64
-preemptions_max_entries = 64
+active_max_entries = 256
+preemptions_max_entries = 256
 ctl_max_bytes = 8192
 
 [control_plane.export]
@@ -1016,6 +1889,16 @@ short_writes = true
 sessions_bytes = 8192
 outstanding_bytes = 128
 short_writes_bytes = 128
+
+[observability.proc_9p_session]
+active = true
+state = true
+since_ms = true
+owner = true
+active_bytes = 128
+state_bytes = 64
+since_ms_bytes = 64
+owner_bytes = 96
 
 [observability.proc_ingest]
 p50_ms = true
@@ -1035,6 +1918,24 @@ watch_min_interval_ms = 50
 latency_samples = 32
 latency_tolerance_ms = 5
 counter_tolerance = 1
+
+[observability.proc_root]
+reachable = true
+last_seen_ms = true
+cut_reason = true
+reachable_bytes = 32
+last_seen_ms_bytes = 64
+cut_reason_bytes = 64
+
+[observability.proc_pressure]
+busy = true
+quota = true
+cut = true
+policy = true
+busy_bytes = 64
+quota_bytes = 64
+cut_bytes = 64
+policy_bytes = 64
 
 [observability.proc_schedule]
 summary = true
@@ -1061,8 +1962,8 @@ p95_ms = true
 backpressure = true
 
 [ui_providers.policy_preflight]
-req = true
-diff = true
+req = false
+diff = false
 
 [ui_providers.updates]
 manifest = true
@@ -1070,7 +1971,18 @@ status = true
 
 [client_policies.cohsh.pool]
 control_sessions = 2
-telemetry_sessions = 4
+telemetry_sessions = 24
+
+[client_policies.cohsh.tail]
+poll_ms_default = 1000
+poll_ms_min = 250
+poll_ms_max = 10000
+
+[client_policies.cohsh.host_telemetry]
+nvidia_poll_ms = 1000
+systemd_poll_ms = 2000
+docker_poll_ms = 2000
+k8s_poll_ms = 5000
 
 [client_policies.coh.mount]
 root = "/"
@@ -1080,8 +1992,18 @@ allowlist = ["/proc", "/queen", "/shard", "/worker", "/log", "/gpu", "/host"]
 root = "/queen/telemetry"
 max_devices = 32
 max_segments_per_device = 4
-max_bytes_per_segment = 32768
-max_total_bytes_per_device = 131072
+max_bytes_per_segment = 131072
+max_total_bytes_per_device = 524288
+
+[client_policies.coh.run.lease]
+schema = "gpu-lease/v1"
+active_state = "ACTIVE"
+max_bytes = 1024
+
+[client_policies.coh.run.breadcrumb]
+schema = "gpu-breadcrumb/v1"
+max_line_bytes = 512
+max_command_bytes = 256
 
 [client_policies.coh.peft.export]
 root = "/queen/export/lora_jobs"
@@ -1109,6 +2031,9 @@ timeout_ms = 5000
 [client_policies.heartbeat]
 interval_ms = 15000
 
+[client_policies.trace]
+max_bytes = 1048576
+
 [client_paths]
 queen_ctl = "/queen/ctl"
 queen_lifecycle_ctl = "/queen/lifecycle/ctl"
@@ -1127,7 +2052,7 @@ max_bytes = 262144
 ttl_s = 3600
 
 [swarmui.hive]
-frame_cap_fps = 60
+frame_cap_fps = 30
 step_ms = 16
 lod_zoom_out = 0.7
 lod_zoom_in = 1.25
@@ -1137,6 +2062,11 @@ overlay_lines = 3
 detail_lines = 50
 line_cap_bytes = 160
 per_worker_bytes = 2048
+pending_lines_per_worker = 64
+pending_event_cap = 4096
+poll_workers_per_tick = 32
+status_poll_ms = 500
+degrade_pressure = 1.0
 
 [swarmui.paths]
 telemetry_root = "/worker"
@@ -1173,16 +2103,8 @@ role = "worker-lora"
 secret = "worker-lora"
 
 [sidecars.modbus]
-enable = true
+enable = false
 mount_at = "/bus"
-
-[[sidecars.modbus.adapters]]
-id = "modbus-main"
-mount = "modbus-main"
-scope = "modbus-main"
-link = "serial"
-baud = 19200
-spool = { max_entries = 8, max_bytes = 512 }
 
 [sidecars.dnp3]
 enable = false
@@ -1190,22 +2112,97 @@ mount_at = "/bus"
 
 [ecosystem.host]
 enable = true
-providers = ["systemd", "k8s"]
+providers = ["systemd", "k8s", "docker", "nvidia"]
 mount_at = "/host"
 
-[ecosystem.audit]
+[ecosystem.host.tickets]
 enable = true
+request_schema = "host-ticket/v1"
+result_schema = "host-ticket-result/v1"
+accepted_request_schemas = ["host-ticket/v1", "host-ticket/v2"]
+accepted_result_schemas = ["host-ticket-result/v1", "host-ticket-result/v2"]
+max_line_bytes = 2048
+action_allowlist = [
+  "gpu.lease.grant",
+  "gpu.lease.renew",
+  "gpu.lease.release",
+  "peft.export",
+  "peft.import",
+  "peft.activate",
+  "peft.rollback",
+  "systemd.start",
+  "systemd.stop",
+  "systemd.restart",
+  "systemd.status-check",
+  "docker.restart",
+  "docker.stop",
+  "docker.status-check",
+  "k8s.cordon",
+  "k8s.drain",
+  "k8s.lease.sync",
+]
+receipt_action_allowlist = [
+  "gpu.lease.grant",
+  "gpu.lease.renew",
+  "gpu.lease.release",
+  "peft.export",
+  "peft.import",
+  "peft.activate",
+  "peft.rollback",
+]
+lifecycle = ["queued", "claimed", "running", "succeeded", "failed", "expired"]
+
+[ecosystem.host.federation]
+enable = true
+local_hive = "hive-a"
+action_allowlist = [
+  "gpu.lease.grant",
+  "gpu.lease.renew",
+  "gpu.lease.release",
+  "peft.export",
+  "peft.import",
+  "peft.activate",
+  "peft.rollback",
+  "systemd.start",
+  "systemd.stop",
+  "systemd.restart",
+  "systemd.status-check",
+  "docker.restart",
+  "docker.stop",
+  "docker.status-check",
+  "k8s.cordon",
+  "k8s.drain",
+  "k8s.lease.sync",
+]
+relay_queue_max_entries = 256
+relay_queue_max_bytes = 32768
+wal_max_entries = 1024
+wal_max_bytes = 524288
+relay_timeout_ms = 2000
+
+[[ecosystem.host.federation.peers]]
+name = "hive-b"
+rest_url = "http://127.0.0.1:8081"
+auth_ref = "COHESIX_RELAY_HIVE_B_TOKEN"
+
+[[ecosystem.host.federation.peers]]
+name = "hive-c"
+rest_url = "http://127.0.0.1:8082"
+auth_ref = "COHESIX_RELAY_HIVE_C_TOKEN"
+
+[ecosystem.audit]
+enable = false
 journal_max_bytes = 8192
 decisions_max_bytes = 4096
-replay_enable = true
+replay_enable = false
 replay_max_entries = 64
 replay_ctl_max_bytes = 1024
 replay_status_max_bytes = 1024
 
 [ecosystem.policy]
 enable = true
-queue_max_entries = 32
-queue_max_bytes = 4096
+queue_max_entries = 256
+queue_max_bytes = 8192
 ctl_max_bytes = 2048
 status_max_bytes = 512
 
@@ -1218,4 +2215,4 @@ id = "systemd-restart"
 target = "/host/systemd/*/restart"
 
 [ecosystem.models]
-enable = true
+enable = false

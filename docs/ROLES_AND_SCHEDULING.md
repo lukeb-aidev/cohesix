@@ -288,8 +288,28 @@ Network cursor is a hardware-free transition. The preflight and quarantined
 rotors have hard limits of four and five polls respectively and stop early for
 reboot, containment, or a completed cycle. This composition changes no SC
 budget or period: the generated per-driver period gate still admits at most one
-wake for each child runtime inside its period. Active Network service, QEMU,
+wake for each child runtime inside its period. Active physical Network service
 and non-MCS profiles retain their established single-poll outer turn.
+
+The isolated QEMU path instead composes a counter-, completion-, and
+probe-bounded root-control quantum. An idle, blocked, rebooting, or faulted
+quantum returns to the scheduler. A mechanical quota with durable work may
+immediately re-enter the outer root loop, but all such re-entries retain one
+continuous counter window. The counter guard is checked before every next leaf
+operation and requires a cooperative yield, preserving the generated epilogue
+and passive-call reserve before MCS exhaustion. The unchanged MCS scheduling
+context remains the hard execution bound, while every inner phase, queue, fault
+check, and operator-debt rule remains bounded. This QEMU service composition
+does not alter the physical Pi rotor or any Pi hardware owner.
+
+The passive NineDoor service is co-located with `root-control` on core 0 in
+every checked-in target manifest. Its compiler-validated `locality_bound`
+contract makes the sole permitted donor and service share one core, avoiding a
+cross-core synchronous handoff while retaining the same one-Reply-object,
+one-in-flight, depth-one donation and fault-containment bounds. This is a
+shared QEMU/Pi control-plane invariant, not a platform-specific tuning path.
+For active tasks, the same field continues to express physical-resource
+locality; for a passive service it constrains every allowlisted donor core.
 
 Notifications are wakeups rather than queues. Durable shared records carry
 identity and completion; producers publish a complete record before signalling,
@@ -305,9 +325,11 @@ budgets, or bypass role, ticket, lifecycle, policy, or quota checks.
 
 The provider validates the complete record before enqueueing it, retains
 deterministic FIFO order within the selected bound, and returns a typed refusal
-when full. Completion, cancellation, and evidence use the namespace contract in
-[External Interfaces](INTERFACES.md); target latency claims still require the
-appropriate target and benchmark evidence.
+when full. The Queen consumer removes only the exact FIFO head with the bounded
+`dequeue` record defined in [External Interfaces](INTERFACES.md); empty, stale,
+and out-of-order acknowledgements fail closed. Dequeue transfers responsibility
+for the request but is not Worker completion evidence. Target latency claims
+still require the appropriate target and benchmark evidence.
 ## Lifecycle and scheduling evidence
 
 Documentation must label evidence by layer and profile:

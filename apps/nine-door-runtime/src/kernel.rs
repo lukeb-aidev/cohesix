@@ -6,7 +6,7 @@
 #![allow(dead_code)]
 
 use core::panic::PanicInfo;
-use core::sync::atomic::{compiler_fence, Ordering};
+use core::sync::atomic::{fence, Ordering};
 
 use nine_door_runtime::{
     NamespaceRuntime, RuntimeInitDescriptor, PREPARED_LABEL, REJECTED_LABEL, REQUEST_LABEL,
@@ -55,19 +55,18 @@ pub unsafe extern "C" fn _start(descriptor: *const RuntimeInitDescriptor) -> ! {
     };
 
     let mut badge = 0;
-    let mut tag = receive(descriptor, &mut badge);
+    let mut message_registers = [0; 4];
+    let mut tag = receive(descriptor, &mut badge, &mut message_registers);
     loop {
         let length = tag.length();
         let label = tag.label();
         let request_sequence = if length >= 1 {
-            // SAFETY: The generated request ABI carries the exact sequence in MR0.
-            unsafe { sel4_sys::seL4_GetMR(0) as u64 }
+            message_registers[0] as u64
         } else {
             0
         };
         let shared_len = if length >= 2 {
-            // SAFETY: The generated request ABI carries bounded shared bytes in MR1.
-            unsafe { sel4_sys::seL4_GetMR(1) as usize }
+            message_registers[1] as usize
         } else {
             0
         };
@@ -87,14 +86,14 @@ pub unsafe extern "C" fn _start(descriptor: *const RuntimeInitDescriptor) -> ! {
             Ok(bytes) => (PREPARED_LABEL, bytes),
             Err(error) => (REJECTED_LABEL, error.wire_code() as usize),
         };
-        // SAFETY: MR0 and MR1 are the complete fixed reply: exact request
-        // sequence and response-byte count or typed rejection code.
-        unsafe {
-            sel4_sys::seL4_SetMR(0, request_sequence);
-            sel4_sys::seL4_SetMR(1, reply_bytes as u64);
-        }
-        compiler_fence(Ordering::Release);
-        tag = reply_receive(descriptor, &mut badge, reply_label);
+        message_registers = [
+            request_sequence as sel4_sys::seL4_Word,
+            reply_bytes as sel4_sys::seL4_Word,
+            0,
+            0,
+        ];
+        fence(Ordering::Release);
+        tag = reply_receive(descriptor, &mut badge, reply_label, &mut message_registers);
     }
 }
 
@@ -111,7 +110,8 @@ fn service_request(
     let request = unsafe {
         core::slice::from_raw_parts(descriptor.request_frame_vaddr as *const u8, shared_len)
     };
-    compiler_fence(Ordering::Acquire);
+    // Pair with root's release publication before decoding the shared frame.
+    fence(Ordering::Acquire);
     let header = NamespaceRequestHeader::decode(request)?;
     if header.sequence != request_sequence || header.generation != descriptor.generation {
         return Err(TransportError::StaleIdentity);
@@ -131,13 +131,16 @@ fn service_request(
         )
     };
     let encoded = prepared.encode(response)?;
-    compiler_fence(Ordering::Release);
+    // Publish the complete response frame before ReplyRecv makes its sequence
+    // and byte count visible to the donor.
+    fence(Ordering::Release);
     Ok(encoded)
 }
 
 fn receive(
     descriptor: RuntimeInitDescriptor,
     badge: &mut sel4_sys::seL4_Word,
+    message_registers: &mut [sel4_sys::seL4_Word; 4],
 ) -> sel4_sys::seL4_MessageInfo {
     // SAFETY: Descriptor validation proves the aligned IPC-buffer mapping and
     // names the fixed Read endpoint plus the single-owner Reply object. This is
@@ -145,7 +148,16 @@ fn receive(
     // exactly once before any syscall can store message registers through it.
     unsafe {
         sel4_sys::seL4_SetIPCBuffer(descriptor.ipc_buffer_vaddr as *mut sel4_sys::seL4_IPCBuffer);
-        sel4_sys::seL4_Recv(descriptor.endpoint_cptr, badge, descriptor.reply_cptr)
+        let [mr0, mr1, mr2, mr3] = message_registers;
+        sel4_sys::seL4_RecvWithMRs(
+            descriptor.endpoint_cptr,
+            badge,
+            descriptor.reply_cptr,
+            mr0,
+            mr1,
+            mr2,
+            mr3,
+        )
     }
 }
 
@@ -153,12 +165,25 @@ fn reply_receive(
     descriptor: RuntimeInitDescriptor,
     badge: &mut sel4_sys::seL4_Word,
     label: u64,
+    message_registers: &mut [sel4_sys::seL4_Word; 4],
 ) -> sel4_sys::seL4_MessageInfo {
     let tag = sel4_sys::seL4_MessageInfo::new(label, 0, 0, 2);
     // SAFETY: The runtime owns this Reply cap for exactly the outstanding
     // receive association. MCS ReplyRecv atomically replies and queues this
     // same TCB on its fixed endpoint before the caller can resume.
-    unsafe { sel4_sys::seL4_ReplyRecv(descriptor.endpoint_cptr, tag, badge, descriptor.reply_cptr) }
+    unsafe {
+        let [mr0, mr1, mr2, mr3] = message_registers;
+        sel4_sys::seL4_ReplyRecvWithMRs(
+            descriptor.endpoint_cptr,
+            tag,
+            badge,
+            mr0,
+            mr1,
+            mr2,
+            mr3,
+            descriptor.reply_cptr,
+        )
+    }
 }
 
 #[panic_handler]

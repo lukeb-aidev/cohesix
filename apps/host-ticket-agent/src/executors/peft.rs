@@ -59,11 +59,10 @@ pub fn reconcile(
     let subject = required_v2(spec.subject_ref.as_deref(), "subject_ref")?;
     match spec.action.as_str() {
         "peft.export" => {
-            let job_dir = confined_child(&config.export_root, subject, true)?;
-            if EXPORT_FILES.iter().all(|name| job_dir.join(name).is_file()) {
-                let digest = hash_directory_files(&job_dir, &EXPORT_FILES)?;
+            if let Some(export) = completed_export(&config.export_root, subject)? {
                 Ok(ReconcileOutcome::Committed(format!(
-                    "peft.export job={subject} observed=complete digest={digest}"
+                    "peft.export job={subject} observed=complete files={} bytes={} digest={}",
+                    export.files, export.bytes, export.digest
                 )))
             } else {
                 Ok(ReconcileOutcome::Ambiguous)
@@ -118,7 +117,19 @@ fn execute_v2(
     let subject = required_v2(spec.subject_ref.as_deref(), "subject_ref")?.to_owned();
     match spec.action.as_str() {
         "peft.export" => {
+            if let Some(export) = completed_export(&config.export_root, &subject)? {
+                return Ok(format!(
+                    "peft.export job={subject} observed=complete files={} bytes={} digest={}",
+                    export.files, export.bytes, export.digest
+                ));
+            }
             let _lock = PeftRootLock::acquire(&config.export_root, "export")?;
+            if let Some(export) = completed_export(&config.export_root, &subject)? {
+                return Ok(format!(
+                    "peft.export job={subject} observed=complete files={} bytes={} digest={}",
+                    export.files, export.bytes, export.digest
+                ));
+            }
             let export_root = confined_root(&config.export_root)?;
             let job_dir = prepare_confined_child(&export_root, &subject)?;
             let mut access = TransportAccess::new(transport, session);
@@ -514,6 +525,55 @@ fn hash_directory_files(root: &Path, names: &[&str]) -> Result<String> {
     Ok(hex::encode(aggregate.finalize()))
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct CompletedExport {
+    files: usize,
+    bytes: u64,
+    digest: String,
+}
+
+fn completed_export(root: &Path, subject: &str) -> Result<Option<CompletedExport>> {
+    validate_component(subject)?;
+    let root = confined_root(root)?;
+    let candidate = root.join(subject);
+    match fs::symlink_metadata(&candidate) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+            return Err(anyhow!(
+                "PEFT child {} is not a regular directory",
+                candidate.display()
+            ));
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(error).with_context(|| format!("stat PEFT child {}", candidate.display()))
+        }
+    }
+    let job_dir = confined_child(&root, subject, true)?;
+    let mut bytes = 0u64;
+    for name in EXPORT_FILES {
+        let path = job_dir.join(name);
+        let metadata = match fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => {
+                return Err(error).with_context(|| format!("stat PEFT file {}", path.display()))
+            }
+        };
+        if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len() == 0 {
+            return Ok(None);
+        }
+        bytes = bytes
+            .checked_add(metadata.len())
+            .ok_or_else(|| anyhow!("completed PEFT export byte count overflow"))?;
+    }
+    Ok(Some(CompletedExport {
+        files: EXPORT_FILES.len(),
+        bytes,
+        digest: hash_directory_files(&job_dir, &EXPORT_FILES)?,
+    }))
+}
+
 fn hash_file(path: &Path, max_bytes: u64) -> Result<String> {
     let metadata =
         fs::symlink_metadata(path).with_context(|| format!("stat PEFT file {}", path.display()))?;
@@ -601,5 +661,45 @@ mod tests {
             "0000000000000000000000000000000000000000000000000000000000000000"
         )
         .is_err());
+    }
+
+    #[test]
+    fn completed_export_requires_all_nonempty_regular_files() {
+        let temp = tempfile::TempDir::new().expect("temp");
+        let job = temp.path().join("job-1");
+        fs::create_dir(&job).expect("job directory");
+        fs::write(job.join(EXPORT_FILES[0]), b"telemetry").expect("telemetry");
+        assert_eq!(
+            completed_export(temp.path(), "job-1").expect("partial export"),
+            None
+        );
+
+        fs::write(job.join(EXPORT_FILES[1]), b"model").expect("model");
+        fs::write(job.join(EXPORT_FILES[2]), b"policy").expect("policy");
+        let completed = completed_export(temp.path(), "job-1")
+            .expect("complete export")
+            .expect("completion");
+        assert_eq!(completed.files, EXPORT_FILES.len());
+        assert_eq!(completed.bytes, 20);
+        assert_eq!(completed.digest.len(), 64);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn completed_export_does_not_follow_file_symlinks() {
+        let temp = tempfile::TempDir::new().expect("temp");
+        let job = temp.path().join("job-1");
+        fs::create_dir(&job).expect("job directory");
+        let outside = temp.path().join("outside");
+        fs::write(&outside, b"outside").expect("outside file");
+        std::os::unix::fs::symlink(&outside, job.join(EXPORT_FILES[0]))
+            .expect("create file symlink");
+        fs::write(job.join(EXPORT_FILES[1]), b"model").expect("model");
+        fs::write(job.join(EXPORT_FILES[2]), b"policy").expect("policy");
+
+        assert_eq!(
+            completed_export(temp.path(), "job-1").expect("symlink is incomplete"),
+            None
+        );
     }
 }

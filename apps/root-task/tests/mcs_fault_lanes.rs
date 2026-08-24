@@ -218,7 +218,7 @@ fn terminal_critical_fault_commits_one_resumable_action_per_refill() {
 
     let classify_turn = &entry[classify_start..resolve_service_start];
     let classify = classify_turn
-        .find("handle_target_fault(fault_label, fault_badge)")
+        .find("let disposition = match handle_target_fault(")
         .expect("sealed-registry classification");
     let released_start = classify_turn
         .find("FaultReplyDisposition::Released =>")
@@ -412,7 +412,7 @@ fn service_fault_cursor_retries_without_loss_and_admits_one_action_per_refill() 
         .find("commit_root_fault_turn(RootFaultCriticalTurn::SuspendService);")
         .expect("suspend successor before resolution");
     let resolve_action = resolve
-        .find("prepare_target_service_fault(fault_label, fault_badge)")
+        .find("match prepare_target_service_fault(")
         .expect("one registry resolution action");
     let snapshot_publish = resolve
         .find("publish_pending_target_service_fault(pending)")
@@ -462,7 +462,7 @@ fn service_fault_cursor_retries_without_loss_and_admits_one_action_per_refill() 
         .find("commit_root_fault_turn(RootFaultCriticalTurn::PublishService);")
         .expect("publish successor before passive recovery");
     let recover_action = recover
-        .find("recover_target_passive_service_call(pending.record.task_index)")
+        .find("recover_target_passive_service_call(pending.record)")
         .expect("one passive recovery action");
     let recover_retry = recover
         .find("commit_root_fault_turn(RootFaultCriticalTurn::RecoverPassiveService);")

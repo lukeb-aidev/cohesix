@@ -5,7 +5,7 @@
 
 #![cfg(feature = "kernel")]
 
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use heapless::{Deque, String as HeaplessString, Vec as HeaplessVec};
 use spin::Mutex;
@@ -279,6 +279,7 @@ impl UserRing {
 static LOG_RING: Mutex<LogRing> = Mutex::new(LogRing::new());
 static USER_RING: Mutex<UserRing> = Mutex::new(UserRing::new());
 static LOG_CHANNEL_ACTIVE: AtomicBool = AtomicBool::new(false);
+static LOG_CONTENTION_DROPPED_WRITES: AtomicU64 = AtomicU64::new(0);
 
 pub fn log_channel_active() -> bool {
     LOG_CHANNEL_ACTIVE.load(Ordering::Acquire)
@@ -290,12 +291,40 @@ pub fn enable_log_channel() -> bool {
         .is_ok()
 }
 
+fn try_append_log_bytes_to(
+    ring: &Mutex<LogRing>,
+    dropped_writes: &AtomicU64,
+    payload: &[u8],
+) -> bool {
+    let Some(mut ring) = ring.try_lock() else {
+        dropped_writes.fetch_add(1, Ordering::Relaxed);
+        return false;
+    };
+    ring.append_bytes(payload);
+    true
+}
+
+fn try_append_log_line_to(ring: &Mutex<LogRing>, dropped_writes: &AtomicU64, line: &str) -> bool {
+    let Some(mut ring) = ring.try_lock() else {
+        dropped_writes.fetch_add(1, Ordering::Relaxed);
+        return false;
+    };
+    ring.push_line(line);
+    true
+}
+
 pub fn append_log_bytes(payload: &[u8]) {
-    LOG_RING.lock().append_bytes(payload);
+    let _ = try_append_log_bytes_to(&LOG_RING, &LOG_CONTENTION_DROPPED_WRITES, payload);
 }
 
 pub fn append_log_line(line: &str) {
-    LOG_RING.lock().push_line(line);
+    let _ = try_append_log_line_to(&LOG_RING, &LOG_CONTENTION_DROPPED_WRITES, line);
+}
+
+/// Number of complete diagnostic writes dropped instead of spinning behind a
+/// preempted ring owner. This is monotonic for the root-task lifetime.
+pub fn contention_dropped_writes() -> u64 {
+    LOG_CONTENTION_DROPPED_WRITES.load(Ordering::Relaxed)
 }
 
 pub fn append_user_line(line: &str) {
@@ -348,6 +377,7 @@ pub fn clear_for_test() {
     LOG_RING.lock().clear_for_test();
     USER_RING.lock().lines.clear();
     LOG_CHANNEL_ACTIVE.store(false, Ordering::Release);
+    LOG_CONTENTION_DROPPED_WRITES.store(0, Ordering::Relaxed);
 }
 
 #[cfg(test)]
@@ -356,6 +386,29 @@ mod tests {
     use core::fmt::Write;
 
     static TEST_RING: Mutex<LogRing> = Mutex::new(LogRing::new());
+    static TEST_DROPPED_WRITES: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn contended_diagnostic_append_drops_without_waiting() {
+        TEST_RING.lock().clear_for_test();
+        TEST_DROPPED_WRITES.store(0, Ordering::Relaxed);
+        let held = TEST_RING.lock();
+        assert!(!try_append_log_line_to(
+            &TEST_RING,
+            &TEST_DROPPED_WRITES,
+            "dropped"
+        ));
+        assert_eq!(TEST_DROPPED_WRITES.load(Ordering::Relaxed), 1);
+        drop(held);
+
+        assert!(try_append_log_line_to(
+            &TEST_RING,
+            &TEST_DROPPED_WRITES,
+            "retained"
+        ));
+        assert_eq!(TEST_RING.lock().lines.len(), 1);
+        assert_eq!(TEST_DROPPED_WRITES.load(Ordering::Relaxed), 1);
+    }
 
     #[test]
     fn cursor_reads_retained_lines_in_order_across_batches() {

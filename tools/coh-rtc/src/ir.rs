@@ -265,6 +265,11 @@ impl Manifest {
                 &self.temporal_authority,
                 ninedoor_bootstrap_scheduling_contexts,
             )?;
+        self.worker_resource_admission
+            .validate_worker_anchor_layout(
+                &self.temporal_authority,
+                self.worker_runtime.task_abi.child_cnode_radix_bits,
+            )?;
         self.validate_ninedoor_service()?;
         self.validate_console_network_service()?;
         self.validate_control_plane()?;
@@ -1567,27 +1572,26 @@ impl Manifest {
         {
             bail!("executable Worker roles require enabled SMP+MCS temporal_authority");
         }
-        for task_id in [
-            "worker-heartbeat-slot-0",
-            "worker-gpu-slot-0",
-            "worker-lora-slot-0",
-        ] {
-            let task = self
-                .temporal_authority
-                .tasks
-                .iter()
-                .find(|task| task.id == task_id)
-                .ok_or_else(|| anyhow::anyhow!("missing executable Worker task {task_id}"))?;
-            if task.kind != TemporalTaskKind::Worker
-                || task.execution != TemporalExecution::Active
-                || !task.allowed_donors.is_empty()
-                || task.reply_objects != 0
-                || task.max_donation_depth != 0
-            {
-                bail!(
-                    "executable Worker task {} requires a dedicated active SC and zero donation",
-                    task_id
-                );
+        for admission in &self.worker_resource_admission.executable_roles {
+            for role_slot in 0..admission.executable_slots {
+                let task_id = format!("{}{}", admission.task_prefix, role_slot);
+                let task = self
+                    .temporal_authority
+                    .tasks
+                    .iter()
+                    .find(|task| task.id == task_id)
+                    .ok_or_else(|| anyhow::anyhow!("missing executable Worker task {task_id}"))?;
+                if task.kind != TemporalTaskKind::Worker
+                    || task.execution != TemporalExecution::Active
+                    || !task.allowed_donors.is_empty()
+                    || task.reply_objects != 0
+                    || task.max_donation_depth != 0
+                {
+                    bail!(
+                        "executable Worker task {} requires a dedicated active SC and zero donation",
+                        task_id
+                    );
+                }
             }
         }
         if self
@@ -1714,7 +1718,13 @@ impl Manifest {
                 .worker_resource_admission
                 .executable_roles
                 .iter()
-                .any(|entry| entry.revoke_anchor_slot == service.revoke_anchor_slot)
+                .any(|entry| {
+                    (entry.revoke_anchor_slot
+                        ..entry
+                            .revoke_anchor_slot
+                            .saturating_add(u32::from(entry.executable_slots)))
+                        .contains(&service.revoke_anchor_slot)
+                })
         {
             bail!("console_network_service.revoke_anchor_slot collides with another retained child anchor");
         }
@@ -1825,7 +1835,13 @@ impl Manifest {
                 .worker_resource_admission
                 .executable_roles
                 .iter()
-                .any(|entry| entry.revoke_anchor_slot == service.revoke_anchor_slot)
+                .any(|entry| {
+                    (entry.revoke_anchor_slot
+                        ..entry
+                            .revoke_anchor_slot
+                            .saturating_add(u32::from(entry.executable_slots)))
+                        .contains(&service.revoke_anchor_slot)
+                })
             || (self.console_network_service.enabled
                 && self.console_network_service.revoke_anchor_slot == service.revoke_anchor_slot)
         {
@@ -4045,24 +4061,24 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("must match ABI v3 values 1,2,4,8,16,32,64"),
+                .contains("must match ABI v4 values 1,2,4,8,16,32,64"),
             "unexpected error: {error}"
         );
     }
 
     #[test]
-    fn console_network_service_rejects_the_pre_send_batch_abi() {
+    fn console_network_service_rejects_the_pre_command_batch_abi() {
         let service = super::ConsoleNetworkServiceConfig {
-            abi_version: 2,
+            abi_version: 3,
             ..super::ConsoleNetworkServiceConfig::default()
         };
         let error = service
             .validate()
-            .expect_err("console-network ABI v2 must fail after SendBatch selection");
+            .expect_err("console-network ABI v3 must fail after CommandBatch selection");
         assert!(
             error
                 .to_string()
-                .contains("console_network_service.abi_version must be 3"),
+                .contains("console_network_service.abi_version must be 4"),
             "unexpected error: {error}"
         );
     }
@@ -4179,12 +4195,26 @@ mod tests {
             .iter_mut()
             .find(|task| task.id == "ninedoor-service")
             .expect("NineDoor temporal task")
-            .allowed_donors = vec!["root-driver-supervisor".to_owned()];
+            .allowed_donors = vec!["root-fault".to_owned()];
         assert!(manifest
             .validate_with_base(Some(repo_root().as_path()))
             .expect_err("unapproved donor must fail")
             .to_string()
             .contains("donation inventory"));
+
+        let mut manifest = load_manifest(&manifest_path).expect("reload fixture manifest");
+        manifest
+            .temporal_authority
+            .tasks
+            .iter_mut()
+            .find(|task| task.id == "ninedoor-service")
+            .expect("NineDoor temporal task")
+            .core = 1;
+        assert!(manifest
+            .validate_with_base(Some(repo_root().as_path()))
+            .expect_err("cross-core sole donor must fail")
+            .to_string()
+            .contains("has cross-core donor root-control"));
     }
 
     #[test]
@@ -4469,7 +4499,7 @@ mod tests {
             .all(|task| task.kind != super::TemporalTaskKind::Driver));
         assert_eq!(
             manifest.worker_resource_admission.fault_registry.capacity,
-            10
+            44
         );
         assert_eq!(
             manifest
@@ -5662,8 +5692,8 @@ pub struct ConsoleNetworkServiceConfig {
 
 impl ConsoleNetworkServiceConfig {
     fn validate(&self) -> Result<()> {
-        if self.abi_version != 3 {
-            bail!("console_network_service.abi_version must be 3");
+        if self.abi_version != 4 {
+            bail!("console_network_service.abi_version must be 4");
         }
         if self.image_id != "console-network-runtime"
             || self.image_path != "cohesix/artifacts/console-network-runtime"
@@ -5752,10 +5782,10 @@ impl ConsoleNetworkServiceConfig {
         if self.max_packets_per_wake == 0
             || self.max_packets_per_wake > 16
             || self.max_commands_per_wake == 0
-            || self.max_commands_per_wake > 16
+            || self.max_commands_per_wake > 8
             || self.max_control_inflight != 1
         {
-            bail!("console_network_service work bounds must be in 1..=16 with one control request in flight");
+            bail!("console_network_service packet work must be in 1..=16, command batching in 1..=8, with one control request in flight");
         }
         let bits = [
             self.packet_rx_badge,
@@ -5767,7 +5797,7 @@ impl ConsoleNetworkServiceConfig {
             self.publication_ack_badge,
         ];
         if bits != [1, 2, 4, 8, 16, 32, 64] {
-            bail!("console_network_service badges must match ABI v3 values 1,2,4,8,16,32,64");
+            bail!("console_network_service badges must match ABI v4 values 1,2,4,8,16,32,64");
         }
         let mut combined = 0u64;
         for bit in bits {
@@ -5803,7 +5833,7 @@ impl Default for ConsoleNetworkServiceConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            abi_version: 3,
+            abi_version: 4,
             image_id: "console-network-runtime".to_owned(),
             image_path: "cohesix/artifacts/console-network-runtime".to_owned(),
             entry_symbol: "_start".to_owned(),

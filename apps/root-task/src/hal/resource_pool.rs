@@ -12,9 +12,10 @@
 
 use crate::critical_tcb::GenerationIdentity;
 use crate::generated::{self, KernelObjectBudget};
+use crate::worker_supervisor::MAX_EXECUTABLE_WORKER_SLOTS;
 
 /// Maximum simultaneous Worker bundles in the selected 26e profile.
-pub const WORKER_RESOURCE_POOL_CAPACITY: usize = 3;
+pub const WORKER_RESOURCE_POOL_CAPACITY: usize = MAX_EXECUTABLE_WORKER_SLOTS;
 
 /// Resource-pool lifecycle for one exact generation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -68,7 +69,8 @@ impl<const N: usize> SupervisorResourcePool<N> {
             .map(|role| usize::from(role.executable_slots))
             .sum();
         if !config.enabled
-            || executable_slots != N
+            || executable_slots == 0
+            || executable_slots > N
             || !fits_after_reserve(
                 config.fixed_objects,
                 config.capacity,

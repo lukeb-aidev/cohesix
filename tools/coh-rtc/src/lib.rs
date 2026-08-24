@@ -48,6 +48,20 @@ pub struct CompileOptions {
 }
 
 pub fn compile(options: &CompileOptions) -> Result<codegen::GeneratedArtifacts> {
+    compile_with_timer_clock_hz(options, None)
+}
+
+/// Compile one manifest after resolving its console-network counter frequency
+/// from the selected target profile.
+///
+/// The checked override removes host counter frequency from the hand-authored
+/// QEMU manifest while keeping the resolved manifest and generated Rust exact.
+/// Callers must first validate the selected seL4 profile; zero is always
+/// rejected here so a missing profile value cannot silently disable timing.
+pub fn compile_with_timer_clock_hz(
+    options: &CompileOptions,
+    timer_clock_hz: Option<u64>,
+) -> Result<codegen::GeneratedArtifacts> {
     if !options.manifest_path.is_file() {
         bail!(
             "manifest path does not exist or is not a file: {}",
@@ -55,7 +69,13 @@ pub fn compile(options: &CompileOptions) -> Result<codegen::GeneratedArtifacts> 
         );
     }
 
-    let manifest = ir::load_manifest(&options.manifest_path)?;
+    let mut manifest = ir::load_manifest(&options.manifest_path)?;
+    if let Some(timer_clock_hz) = timer_clock_hz {
+        if timer_clock_hz == 0 {
+            bail!("selected target timer_clock_hz must be nonzero");
+        }
+        manifest.console_network_service.timer_clock_hz = timer_clock_hz;
+    }
     let manifest_dir = options.manifest_path.parent();
     manifest.validate_with_base(manifest_dir)?;
 

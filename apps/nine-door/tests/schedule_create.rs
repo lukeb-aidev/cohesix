@@ -51,3 +51,43 @@ fn schedule_ctl_appends_and_updates_proc() {
     let queue = read_text(&mut client, 4, &queue_path);
     assert!(queue.contains("id=sched-1"));
 }
+
+#[test]
+fn schedule_ctl_dequeues_only_the_exact_fifo_head() {
+    let server = NineDoor::new();
+    let mut client = attach_queen(&server);
+    let ctl_path = vec!["queen".to_owned(), "schedule".to_owned(), "ctl".to_owned()];
+    client.walk(1, 2, &ctl_path).expect("walk schedule ctl");
+    client
+        .open(2, OpenMode::write_append())
+        .expect("open schedule ctl");
+
+    for id in ["sched-1", "sched-2"] {
+        let payload = format!(
+            r#"{{"id":"{id}","role":"worker-gpu","priority":2,"ticks":3,"budget_ms":120}}"#
+        );
+        client
+            .write(2, payload.as_bytes())
+            .expect("enqueue schedule request");
+    }
+    let out_of_order = br#"{"op":"dequeue","id":"sched-2"}"#;
+    client
+        .write(2, out_of_order)
+        .expect_err("out-of-order dequeue must fail closed");
+    let dequeue = br#"{"op":"dequeue","id":"sched-1"}"#;
+    client.write(2, dequeue).expect("dequeue FIFO head");
+    client.clunk(2).expect("clunk schedule ctl");
+
+    let summary_path = vec![
+        "proc".to_owned(),
+        "schedule".to_owned(),
+        "summary".to_owned(),
+    ];
+    let summary = read_text(&mut client, 3, &summary_path);
+    assert!(summary.contains("queue=1 dequeued=1 dropped=0"));
+
+    let queue_path = vec!["proc".to_owned(), "schedule".to_owned(), "queue".to_owned()];
+    let queue = read_text(&mut client, 4, &queue_path);
+    assert!(!queue.contains("id=sched-1"));
+    assert!(queue.contains("id=sched-2"));
+}

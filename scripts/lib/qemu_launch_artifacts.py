@@ -30,13 +30,19 @@ ARTIFACTS = (
     ("initrd", Path("cohesix-system.cpio")),
 )
 SHA256_HEX_LEN = 64
-CANONICAL_SEL4_PROFILE = "qemu_smp_production"
+CANONICAL_DARWIN_SEL4_PROFILE = "qemu_smp_production"
+CANONICAL_LINUX_SEL4_PROFILE = "qemu_smp_kvm_production"
 CANONICAL_MACHINE = "virt"
 CANONICAL_GIC_VERSION = "3"
 CANONICAL_VIRTUALIZATION = "off"
-CANONICAL_MACHINE_EXTRA = "kernel-irqchip=off"
-CANONICAL_CPU = "cortex-a57"
-CANONICAL_TIMER_CLOCK_HZ = 24_000_000
+CANONICAL_DARWIN_MACHINE_EXTRA = "kernel-irqchip=off"
+CANONICAL_DARWIN_CPU = "cortex-a57"
+CANONICAL_LINUX_MACHINE_EXTRA = ""
+CANONICAL_LINUX_CPU = "host"
+PRODUCTION_PROFILE_TIMER_CLOCK_HZ = {
+    CANONICAL_DARWIN_SEL4_PROFILE: 24_000_000,
+    CANONICAL_LINUX_SEL4_PROFILE: 31_250_000,
+}
 CANONICAL_SMP = "4,cores=4,threads=1,sockets=1"
 CANONICAL_NET_BACKEND = "virtio"
 TIMER_HEADERS = (
@@ -194,18 +200,38 @@ def _claim(
         reasons.append(f"unsupported claiming host {host_system}")
     if accelerator == "tcg":
         reasons.append("TCG is diagnostic-only")
-    if sel4_profile != CANONICAL_SEL4_PROFILE:
-        reasons.append("selected seL4 profile is not qemu_smp_production")
+    expected_sel4_profile = {
+        "Darwin": CANONICAL_DARWIN_SEL4_PROFILE,
+        "Linux": CANONICAL_LINUX_SEL4_PROFILE,
+    }.get(host_system)
+    if expected_sel4_profile is not None and sel4_profile != expected_sel4_profile:
+        reasons.append("selected seL4 profile differs from the host production envelope")
     if gic_version != CANONICAL_GIC_VERSION:
         reasons.append("machine does not use GICv3")
     if virtualization != CANONICAL_VIRTUALIZATION:
         reasons.append("machine virtualization is not off")
-    if machine_extra != CANONICAL_MACHINE_EXTRA:
-        reasons.append("machine does not use exact kernel-irqchip=off envelope")
-    if cpu != CANONICAL_CPU:
-        reasons.append("CPU is not cortex-a57")
-    if timer_clock_hz != CANONICAL_TIMER_CLOCK_HZ:
-        reasons.append("selected seL4 timer is not 24 MHz")
+    expected_machine_extra = {
+        "Darwin": CANONICAL_DARWIN_MACHINE_EXTRA,
+        "Linux": CANONICAL_LINUX_MACHINE_EXTRA,
+    }.get(host_system)
+    expected_cpu = {
+        "Darwin": CANONICAL_DARWIN_CPU,
+        "Linux": CANONICAL_LINUX_CPU,
+    }.get(host_system)
+    if expected_machine_extra is not None and machine_extra != expected_machine_extra:
+        reasons.append("machine extra differs from the host production envelope")
+    if expected_cpu is not None and cpu != expected_cpu:
+        reasons.append("CPU differs from the host production envelope")
+    expected_timer_clock_hz = (
+        PRODUCTION_PROFILE_TIMER_CLOCK_HZ.get(expected_sel4_profile)
+        if expected_sel4_profile is not None
+        else None
+    )
+    if (
+        expected_timer_clock_hz is not None
+        and timer_clock_hz != expected_timer_clock_hz
+    ):
+        reasons.append("selected seL4 timer differs from the host production envelope")
     if smp != CANONICAL_SMP:
         reasons.append("QEMU SMP topology is not the four-core production envelope")
     if net_backend != CANONICAL_NET_BACKEND:
@@ -445,23 +471,159 @@ def verify_record(
     return record
 
 
+def verify_artifact_identity(out_dir: Path) -> Path:
+    """Verify guest input bytes without requiring the original host context."""
+
+    record = _require_regular_file(out_dir, Path(RECORD_NAME))
+    try:
+        document = json.loads(record.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise LaunchArtifactError(
+            f"launch artifact record is invalid: {error}"
+        ) from error
+    if not isinstance(document, dict) or set(document) != {
+        "schema",
+        "profile",
+        "cargo_target",
+        "root_task_features",
+        "sel4_build_dir",
+        "sel4_profile",
+        "gic_version",
+        "qemu",
+        "claim",
+        "artifacts",
+    }:
+        raise LaunchArtifactError("launch artifact record has an invalid shape")
+    if (
+        document.get("schema") != SCHEMA
+        or document.get("profile") != "release"
+        or document.get("cargo_target") != "aarch64-unknown-none"
+        or document.get("root_task_features")
+        != "release-qemu,bootstrap-trace"
+        or document.get("sel4_profile") not in PRODUCTION_PROFILE_TIMER_CLOCK_HZ
+        or document.get("gic_version") != CANONICAL_GIC_VERSION
+    ):
+        raise LaunchArtifactError("launch artifact record is not the pressure profile")
+    qemu = document.get("qemu")
+    if not isinstance(qemu, dict) or set(qemu) != {
+        "host_system",
+        "binary",
+        "accelerator",
+        "machine",
+        "virtualization",
+        "machine_extra",
+        "cpu",
+        "timer_clock_hz",
+        "smp",
+        "net_backend",
+    }:
+        raise LaunchArtifactError("launch artifact QEMU context has an invalid shape")
+    binary = qemu.get("binary")
+    if (
+        qemu.get("machine") != CANONICAL_MACHINE
+        or not isinstance(binary, dict)
+        or set(binary) != {"path", "bytes", "sha256", "version"}
+        or not isinstance(binary.get("sha256"), str)
+        or len(binary["sha256"]) != SHA256_HEX_LEN
+        or any(character not in "0123456789abcdef" for character in binary["sha256"])
+    ):
+        raise LaunchArtifactError("source host QEMU identity is invalid")
+    profile = document["sel4_profile"]
+    timer_clock_hz = qemu.get("timer_clock_hz")
+    if timer_clock_hz != PRODUCTION_PROFILE_TIMER_CLOCK_HZ[profile]:
+        raise LaunchArtifactError(
+            "source guest timer does not match its production seL4 profile"
+        )
+    expected_claim = _claim(
+        host_system=qemu["host_system"],
+        accelerator=qemu["accelerator"],
+        sel4_profile=document["sel4_profile"],
+        timer_clock_hz=qemu["timer_clock_hz"],
+        gic_version=document["gic_version"],
+        virtualization=qemu["virtualization"],
+        machine_extra=qemu["machine_extra"],
+        cpu=qemu["cpu"],
+        smp=qemu["smp"],
+        net_backend=qemu["net_backend"],
+    )
+    if document.get("claim") != expected_claim:
+        raise LaunchArtifactError("source host launch claim classification is invalid")
+    expected_accelerator = {"Darwin": "hvf", "Linux": "kvm"}.get(
+        qemu.get("host_system")
+    )
+    expected_machine_extra = {
+        "Darwin": CANONICAL_DARWIN_MACHINE_EXTRA,
+        "Linux": CANONICAL_LINUX_MACHINE_EXTRA,
+    }.get(qemu.get("host_system"))
+    expected_cpu = {
+        "Darwin": CANONICAL_DARWIN_CPU,
+        "Linux": CANONICAL_LINUX_CPU,
+    }.get(qemu.get("host_system"))
+    if (
+        expected_accelerator is None
+        or qemu.get("accelerator") != expected_accelerator
+        or qemu.get("virtualization") != CANONICAL_VIRTUALIZATION
+        or qemu.get("machine_extra") != expected_machine_extra
+        or qemu.get("cpu") != expected_cpu
+        or qemu.get("smp") != CANONICAL_SMP
+        or qemu.get("net_backend") != CANONICAL_NET_BACKEND
+    ):
+        raise LaunchArtifactError(
+            "source build record is outside a supported production host envelope"
+        )
+    rows = document.get("artifacts")
+    actual_rows = _artifact_rows(out_dir)
+    if not isinstance(rows, list) or len(rows) != len(actual_rows):
+        raise LaunchArtifactError("launch artifact record has the wrong artifact count")
+    for expected_row, actual_row in zip(rows, actual_rows, strict=True):
+        if not isinstance(expected_row, dict) or set(expected_row) != {
+            "id",
+            "path",
+            "bytes",
+            "sha256",
+        }:
+            raise LaunchArtifactError("launch artifact row has an invalid shape")
+        digest = expected_row.get("sha256")
+        if (
+            not isinstance(digest, str)
+            or len(digest) != SHA256_HEX_LEN
+            or any(character not in "0123456789abcdef" for character in digest)
+        ):
+            raise LaunchArtifactError("launch artifact row has an invalid SHA-256")
+        if expected_row != actual_row:
+            raise LaunchArtifactError(
+                f"launch artifact identity mismatch: {actual_row['id']}"
+            )
+    return record
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("write", "verify"))
-    parser.add_argument("--out-dir", type=Path, required=True)
-    parser.add_argument("--sel4-build", type=Path, required=True)
-    parser.add_argument("--profile", required=True)
-    parser.add_argument("--cargo-target", required=True)
-    parser.add_argument("--root-task-features", default="")
-    parser.add_argument("--gic-version", required=True)
-    parser.add_argument("--sel4-profile", required=True)
-    parser.add_argument("--qemu", required=True)
-    parser.add_argument("--accelerator", choices=("hvf", "kvm", "tcg"), required=True)
-    parser.add_argument("--virtualization", choices=("on", "off"), required=True)
-    parser.add_argument("--machine-extra", required=True)
-    parser.add_argument("--cpu", required=True)
-    parser.add_argument("--smp", required=True)
-    parser.add_argument("--net-backend", choices=("virtio", "rtl8139"), required=True)
+    subparsers = parser.add_subparsers(dest="command", required=True)
+    for command in ("write", "verify"):
+        context = subparsers.add_parser(command)
+        context.add_argument("--out-dir", type=Path, required=True)
+        context.add_argument("--sel4-build", type=Path, required=True)
+        context.add_argument("--profile", required=True)
+        context.add_argument("--cargo-target", required=True)
+        context.add_argument("--root-task-features", default="")
+        context.add_argument("--gic-version", required=True)
+        context.add_argument("--sel4-profile", required=True)
+        context.add_argument("--qemu", required=True)
+        context.add_argument(
+            "--accelerator", choices=("hvf", "kvm", "tcg"), required=True
+        )
+        context.add_argument(
+            "--virtualization", choices=("on", "off"), required=True
+        )
+        context.add_argument("--machine-extra", required=True)
+        context.add_argument("--cpu", required=True)
+        context.add_argument("--smp", required=True)
+        context.add_argument(
+            "--net-backend", choices=("virtio", "rtl8139"), required=True
+        )
+    identity = subparsers.add_parser("verify-artifacts")
+    identity.add_argument("--out-dir", type=Path, required=True)
     return parser
 
 
@@ -469,24 +631,27 @@ def main() -> int:
     """Run the artifact record writer or verifier."""
 
     args = _parser().parse_args()
-    operation = write_record if args.command == "write" else verify_record
     try:
-        record = operation(
-            out_dir=args.out_dir,
-            sel4_build_dir=args.sel4_build,
-            profile=args.profile,
-            cargo_target=args.cargo_target,
-            root_task_features=args.root_task_features,
-            gic_version=args.gic_version,
-            sel4_profile=args.sel4_profile,
-            qemu=args.qemu,
-            accelerator=args.accelerator,
-            virtualization=args.virtualization,
-            machine_extra=args.machine_extra,
-            cpu=args.cpu,
-            smp=args.smp,
-            net_backend=args.net_backend,
-        )
+        if args.command == "verify-artifacts":
+            record = verify_artifact_identity(args.out_dir)
+        else:
+            operation = write_record if args.command == "write" else verify_record
+            record = operation(
+                out_dir=args.out_dir,
+                sel4_build_dir=args.sel4_build,
+                profile=args.profile,
+                cargo_target=args.cargo_target,
+                root_task_features=args.root_task_features,
+                gic_version=args.gic_version,
+                sel4_profile=args.sel4_profile,
+                qemu=args.qemu,
+                accelerator=args.accelerator,
+                virtualization=args.virtualization,
+                machine_extra=args.machine_extra,
+                cpu=args.cpu,
+                smp=args.smp,
+                net_backend=args.net_backend,
+            )
     except LaunchArtifactError as error:
         raise SystemExit(f"qemu-launch-artifacts: error: {error}") from error
     print(record)

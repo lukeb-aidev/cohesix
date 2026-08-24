@@ -19,7 +19,8 @@ use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use crate::affinity;
 #[cfg(all(feature = "kernel", target_arch = "aarch64"))]
 use crate::arch::aarch64::timer::{
-    timer_counter_kind, timer_counter_ticks, timer_freq_hz, timer_period_cycles,
+    timer_counter_kind, timer_counter_register_hz, timer_counter_ticks, timer_freq_hz,
+    timer_period_cycles,
 };
 use crate::attest;
 #[cfg(feature = "kernel")]
@@ -3142,7 +3143,7 @@ pub struct BootContext {
     pub(crate) ipc: RefCell<Option<KernelIpc>>,
     pub(crate) tickets: RefCell<Option<TicketTable<{ generated::TICKET_COUNT }>>>,
     #[cfg(feature = "net-console")]
-    pub(crate) net_stack: RefCell<Option<NetStack>>,
+    pub(crate) net_stack: RefCell<Option<Box<NetStack>>>,
     #[cfg(feature = "net-console")]
     pub(crate) net_unavailable_detail: RefCell<Option<HeaplessString<192>>>,
     #[cfg(feature = "net-console")]
@@ -4672,13 +4673,14 @@ fn bootstrap<P: Platform>(
     };
     #[cfg(sel4_config_kernel_mcs)]
     {
-        let worker_runtime =
+        let worker_runtime = Box::new(
             crate::hal::worker_task::TargetWorkerRuntime::bootstrap(hal, critical_runtime, 0)
                 .map_err(|error| {
                     BootError::Fatal(format!(
                         "isolated Worker construction failed before registry seal: {error:?}"
                     ))
-                })?;
+                })?,
+        );
         bootstrap_ipc
             .install_worker_runtime(worker_runtime)
             .map_err(|error| {
@@ -5400,7 +5402,7 @@ fn bootstrap<P: Platform>(
                             boot_log::force_uart_line(line.as_str());
                         }
                         (
-                            Some(stack),
+                            Some(Box::new(stack)),
                             virtio_selected,
                             None,
                             active_backend_label,
@@ -5476,10 +5478,9 @@ fn bootstrap<P: Platform>(
             );
             boot_log::force_uart_line(line.as_str());
             Some(runtime)
-        } else if net_stack
-            .as_ref()
-            .is_some_and(crate::net::DefaultNetStack::requires_preseal_console_network_runtime)
-        {
+        } else if net_stack.as_ref().is_some_and(|stack| {
+            crate::net::DefaultNetStack::requires_preseal_console_network_runtime(stack.as_ref())
+        }) {
             let runtime = hal
                 .construct_console_network_runtime_shell(1)
                 .map_err(|error| {
@@ -6296,6 +6297,25 @@ impl KernelTimer {
             "[timers] init: timer_freq_hz={} Hz",
             freq_hz
         );
+        #[cfg(feature = "release-qemu")]
+        {
+            let register_hz = timer_counter_register_hz();
+            log::info!(
+                target: "root_task::kernel::timer",
+                "[timers] qemu-counter-contract configured_hz={} register_hz={} match={}",
+                freq_hz,
+                register_hz,
+                register_hz == freq_hz,
+            );
+            if register_hz != freq_hz {
+                log::error!(
+                    target: "root_task::kernel::timer",
+                    "[timers] qemu-counter-contract mismatch configured_hz={} register_hz={}",
+                    freq_hz,
+                    register_hz,
+                );
+            }
+        }
 
         log::info!(
             target: "root_task::kernel::timer",
@@ -7396,7 +7416,7 @@ pub(crate) struct KernelIpc {
     debug_uart_announced: bool,
     control_labels_logged: HeaplessVec<u64, 4>,
     #[cfg(sel4_config_kernel_mcs)]
-    worker_runtime: Option<crate::hal::worker_task::TargetWorkerRuntime>,
+    worker_runtime: Option<Box<crate::hal::worker_task::TargetWorkerRuntime>>,
 }
 
 fn current_node_id() -> sel4_sys::seL4_Word {
@@ -7452,7 +7472,7 @@ impl KernelIpc {
     #[cfg(sel4_config_kernel_mcs)]
     fn install_worker_runtime(
         &mut self,
-        runtime: crate::hal::worker_task::TargetWorkerRuntime,
+        runtime: Box<crate::hal::worker_task::TargetWorkerRuntime>,
     ) -> Result<(), crate::worker_supervisor::WorkerSupervisorError> {
         if self.worker_runtime.is_some() {
             return Err(crate::worker_supervisor::WorkerSupervisorError::InvalidState);
@@ -7473,30 +7493,41 @@ impl KernelIpc {
 
     #[cfg(sel4_config_kernel_mcs)]
     fn service_worker_runtime(&mut self, now_ms: u64) {
-        let result = self
-            .worker_runtime
-            .as_mut()
-            .ok_or(crate::worker_supervisor::WorkerSupervisorError::InvalidState)
-            .and_then(|runtime| runtime.service(now_ms));
-        Self::enforce_worker_runtime_result(result);
+        let (result, context) = match self.worker_runtime.as_mut() {
+            Some(runtime) => {
+                let result = runtime.service(now_ms);
+                (result, Some(runtime.last_service_context()))
+            }
+            None => (
+                Err(crate::worker_supervisor::WorkerSupervisorError::InvalidState),
+                None,
+            ),
+        };
+        Self::enforce_worker_runtime_result(result, context);
     }
 
     #[cfg(sel4_config_kernel_mcs)]
-    fn service_worker_runtime_one(&mut self, now_ms: u64) {
-        let result = self
-            .worker_runtime
-            .as_mut()
-            .ok_or(crate::worker_supervisor::WorkerSupervisorError::InvalidState)
-            .and_then(|runtime| runtime.service_one(now_ms));
-        Self::enforce_worker_runtime_result(result);
+    fn service_worker_runtime_quantum(&mut self, now_ms: u64) {
+        let (result, context) = match self.worker_runtime.as_mut() {
+            Some(runtime) => {
+                let result = runtime.service_quantum(now_ms);
+                (result, Some(runtime.last_service_context()))
+            }
+            None => (
+                Err(crate::worker_supervisor::WorkerSupervisorError::InvalidState),
+                None,
+            ),
+        };
+        Self::enforce_worker_runtime_result(result, context);
     }
 
     #[cfg(sel4_config_kernel_mcs)]
     fn enforce_worker_runtime_result(
         result: Result<usize, crate::worker_supervisor::WorkerSupervisorError>,
+        context: Option<crate::hal::worker_task::TargetWorkerServiceContext>,
     ) {
         if let Err(error) = result {
-            panic!("isolated Worker supervisor failed closed: {error:?}");
+            panic!("isolated Worker supervisor failed closed: {error:?} context={context:?}");
         }
     }
 
@@ -7936,7 +7967,7 @@ impl IpcDispatcher for KernelIpc {
         match unit {
             RuntimeIpcUnit::Worker => {
                 #[cfg(sel4_config_kernel_mcs)]
-                self.service_worker_runtime_one(now_ms);
+                self.service_worker_runtime_quantum(now_ms);
                 #[cfg(not(sel4_config_kernel_mcs))]
                 let _ = now_ms;
             }

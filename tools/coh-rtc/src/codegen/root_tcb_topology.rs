@@ -149,7 +149,7 @@ mod tests {
 
     #[test]
     fn ninedoor_bootstrap_candidate_is_exactly_accounted() {
-        for (manifest, fixed, maximum) in [(qemu_manifest(), 7, 10), (pi4_manifest(), 14, 17)] {
+        for (manifest, fixed, maximum) in [(qemu_manifest(), 7, 44), (pi4_manifest(), 14, 17)] {
             assert_eq!(manifest.ninedoor_service.objects.scheduling_contexts, 1);
             assert_eq!(
                 manifest.ninedoor_service.bootstrap_scheduling_context_bits,
@@ -187,7 +187,7 @@ mod tests {
             admitted_frames,
             admitted_slots,
         ) in [
-            (qemu_manifest(), 2_018, 4_058, 2_066, 4_250, 2_578, 6_298),
+            (qemu_manifest(), 2_018, 4_058, 2_610, 6_426, 3_122, 8_474),
             (pi4_manifest(), 4_066, 8_962, 4_114, 9_154, 4_626, 11_202),
         ] {
             let qemu = manifest.profile.name == "virt-aarch64";
@@ -221,14 +221,14 @@ mod tests {
                     .timeout_fault_caps,
                 if qemu { 7 } else { 14 }
             );
-            assert_eq!(maximum.timeout_fault_caps, if qemu { 10 } else { 17 });
+            assert_eq!(maximum.timeout_fault_caps, if qemu { 44 } else { 17 });
             assert_eq!(
                 maximum.timeout_fault_caps
                     + manifest
                         .worker_resource_admission
                         .post_construction_reserve
                         .timeout_fault_caps,
-                if qemu { 18 } else { 25 }
+                if qemu { 52 } else { 25 }
             );
             assert_eq!(maximum.frames, maximum_frames);
             assert_eq!(maximum.cspace_slots, maximum_slots);
@@ -269,7 +269,6 @@ mod tests {
                 expected_wcet_provenance,
                 expected_console_core,
                 expected_console_response,
-                expected_worker_response,
                 expected_core_zero_demand,
                 expected_core_two_demand,
                 expected_timer_clock_hz,
@@ -282,9 +281,8 @@ mod tests {
                     "m26e-qemu-root-adjacent-refill-natural-postpone-candidate-v35",
                     2,
                     3_000,
-                    3_600,
                     8_750,
-                    3_800,
+                    15_000,
                     24_000_000,
                 )
             } else {
@@ -296,7 +294,6 @@ mod tests {
                     "m26e-pi4-root-adjacent-refill-natural-postpone-candidate-v24",
                     0,
                     8_100,
-                    1_200,
                     9_000,
                     1_600,
                     54_000_000,
@@ -336,7 +333,7 @@ mod tests {
             assert_eq!(console_network.core, expected_console_core);
             assert_eq!(console_network.sched_control_core, expected_console_core);
             assert_eq!(manifest.console_network_service.core, expected_console_core);
-            assert_eq!(manifest.console_network_service.abi_version, 3);
+            assert_eq!(manifest.console_network_service.abi_version, 4);
             assert_eq!(console_network.budget_us, 3_000);
             assert_eq!(console_network.period_us, 10_000);
             assert_eq!(console_network.wcet_us, 3_000);
@@ -350,16 +347,27 @@ mod tests {
                 "m26e-qemu-console-received-progress-retention-candidate-v18"
             );
 
-            for worker_id in ["worker-gpu-slot-0", "worker-lora-slot-0"] {
+            let worker_expectations = if qemu {
+                [
+                    ("worker-gpu-slot-0", 2, 7_500),
+                    ("worker-lora-slot-0", 3, 6_500),
+                ]
+            } else {
+                [
+                    ("worker-gpu-slot-0", 2, 1_200),
+                    ("worker-lora-slot-0", 2, 1_200),
+                ]
+            };
+            for (worker_id, expected_core, expected_response) in worker_expectations {
                 let worker = manifest
                     .temporal_authority
                     .tasks
                     .iter()
                     .find(|task| task.id == worker_id)
-                    .expect("core-2 Worker temporal task");
-                assert_eq!(worker.core, 2);
-                assert_eq!(worker.sched_control_core, 2);
-                assert_eq!(worker.response_time_us, expected_worker_response);
+                    .expect("Worker temporal task");
+                assert_eq!(worker.core, expected_core);
+                assert_eq!(worker.sched_control_core, expected_core);
+                assert_eq!(worker.response_time_us, expected_response);
             }
 
             let core_zero_demand = manifest
@@ -378,13 +386,19 @@ mod tests {
                 .iter()
                 .find(|admission| admission.core == 0)
                 .expect("core-0 temporal admission");
-            assert_eq!(core_zero_admission.capacity_us, 10_000);
-            assert_eq!(core_zero_admission.reserve_us, 1_000);
+            assert_eq!(
+                core_zero_admission.capacity_us,
+                if qemu { 20_000 } else { 10_000 }
+            );
+            assert_eq!(
+                core_zero_admission.reserve_us,
+                if qemu { 2_000 } else { 1_000 }
+            );
             let core_zero_usable = core_zero_admission.capacity_us - core_zero_admission.reserve_us;
             assert!(core_zero_demand <= core_zero_usable);
             assert_eq!(
                 core_zero_usable - core_zero_demand,
-                if qemu { 250 } else { 0 }
+                if qemu { 9_250 } else { 0 }
             );
 
             let core_two_demand = manifest
@@ -403,8 +417,14 @@ mod tests {
                 .iter()
                 .find(|admission| admission.core == 2)
                 .expect("core-2 temporal admission");
-            assert_eq!(core_two_admission.capacity_us, 10_000);
-            assert_eq!(core_two_admission.reserve_us, 1_000);
+            assert_eq!(
+                core_two_admission.capacity_us,
+                if qemu { 20_000 } else { 10_000 }
+            );
+            assert_eq!(
+                core_two_admission.reserve_us,
+                if qemu { 2_000 } else { 1_000 }
+            );
             assert!(
                 core_two_demand <= core_two_admission.capacity_us - core_two_admission.reserve_us
             );
@@ -488,11 +508,13 @@ mod tests {
             .iter()
             .find(|admission| admission.core == 1)
             .expect("QEMU core-1 temporal admission");
-        assert_eq!(qemu_core_one_admission.capacity_us, 10_000);
-        assert_eq!(qemu_core_one_admission.reserve_us, 1_000);
+        assert_eq!(qemu_core_one_admission.capacity_us, 20_000);
+        assert_eq!(qemu_core_one_admission.reserve_us, 2_000);
         assert_eq!(
-            qemu_supervisor_demand + qemu.ninedoor_service.bootstrap_budget_us,
-            qemu_core_one_admission.capacity_us - qemu_core_one_admission.reserve_us
+            qemu_core_one_admission.capacity_us
+                - qemu_core_one_admission.reserve_us
+                - qemu_supervisor_demand,
+            12_000
         );
 
         let pi4 = pi4_manifest();
@@ -552,12 +574,12 @@ mod tests {
                 .len(),
             14
         );
-        assert_eq!(record["inventory"]["tcbs"], 10);
-        assert_eq!(record["inventory"]["scheduling_contexts"], 10);
-        assert_eq!(record["inventory"]["frames"], 2066);
+        assert_eq!(record["inventory"]["tcbs"], 44);
+        assert_eq!(record["inventory"]["scheduling_contexts"], 44);
+        assert_eq!(record["inventory"]["frames"], 2610);
         assert_eq!(record["inventory"]["endpoints"], 15);
         assert_eq!(record["inventory"]["reply_objects"], 6);
-        assert_eq!(record["inventory"]["cspace_slots"], 4250);
+        assert_eq!(record["inventory"]["cspace_slots"], 6426);
 
         let canonical = canonical_json(&record["topology"]).expect("canonical topology");
         assert_eq!(

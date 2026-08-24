@@ -1114,10 +1114,10 @@ mod tests {
 
         for expected in [
             "role: \"worker-heartbeat\", declaration: \"executable\", executable_slots: 1",
-            "role: \"worker-gpu\", declaration: \"executable\", executable_slots: 1",
+            "role: \"worker-gpu\", declaration: \"executable\", executable_slots: 15",
             "role: \"worker-bus\", declaration: \"model-only\", executable_slots: 0",
-            "role: \"worker-lora\", declaration: \"executable\", executable_slots: 1",
-            "pub const WORKER_MAXIMUM_LIVE_TASKS: u16 = 3;",
+            "role: \"worker-lora\", declaration: \"executable\", executable_slots: 21",
+            "pub const WORKER_MAXIMUM_LIVE_TASKS: u16 = 37;",
             "pub const WORKER_CANONICAL_TELEMETRY_TEMPLATE: &str = \"/shard/<label>/worker/<id>/telemetry\";",
             "pub const WORKER_SHARD_BITS: u8 = 8;",
             "pub const WORKER_LEGACY_ALIAS: bool = true;",
@@ -1130,7 +1130,7 @@ mod tests {
             assert!(rust.contains(expected), "missing Rust contract: {expected}");
         }
         assert!(doc.contains("`worker.role.worker-bus`: declaration=`model-only`"));
-        assert!(doc.contains("`worker.maximum_live_tasks`: `3`"));
+        assert!(doc.contains("`worker.maximum_live_tasks`: `37`"));
         assert!(doc.contains("`worker.artifact`: `missing, verified, mismatch`"));
     }
 }

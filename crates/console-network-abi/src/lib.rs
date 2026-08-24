@@ -7,7 +7,7 @@
 #![deny(unsafe_code)]
 #![warn(missing_docs)]
 
-//! Fixed-layout `console-network-service/v3` records.
+//! Fixed-layout `console-network-service/v4` records.
 //!
 //! The root remains the sole owner of operator policy and command execution.
 //! The child owns Ethernet/IP/TCP processing, transport authentication, and
@@ -15,8 +15,10 @@
 //! control request, or event at a time. A producer stages a complete body and
 //! writes `committed_sequence` last before signaling the peer. The consumer
 //! validates the generation and identical sequence fields before use. Page
-//! tails are construction-zeroed, containment-scrubbed, and carry no record
-//! authority. Bounded service turns never copy or scan those padding bytes.
+//! tails are construction-zeroed and containment-scrubbed. The sealed
+//! descriptor requires completion watermarks: the final 16 bytes of the
+//! child-owned event page carry exact ingress/control consumption sequences;
+//! all other tail bytes remain non-authoritative padding.
 
 use core::mem::{align_of, size_of};
 use core::sync::atomic::{fence, Ordering};
@@ -28,7 +30,7 @@ pub const PACKET_PAGE_MAGIC: u32 = 0x434e_5031;
 /// Console exchange page magic (`CNE1`).
 pub const EXCHANGE_PAGE_MAGIC: u32 = 0x434e_4531;
 /// ABI version.
-pub const ABI_VERSION: u16 = 3;
+pub const ABI_VERSION: u16 = 4;
 /// Shared page size and alignment.
 pub const SHARED_PAGE_BYTES: usize = 4096;
 /// Maximum copied Ethernet frame, including VLAN headroom.
@@ -51,6 +53,14 @@ pub const SEND_BATCH_RECORD_HEADER_BYTES: usize = 2;
 pub const SEND_BATCH_MAX_RECORDS: usize = 8;
 /// Maximum UTF-8 bytes in one batched root response line.
 pub const SEND_BATCH_LINE_BYTES: usize = 256;
+/// Binary child-to-root command-batch encoding version.
+pub const COMMAND_BATCH_ENCODING_VERSION: u16 = 1;
+/// Exact bytes in the command-batch header.
+pub const COMMAND_BATCH_HEADER_BYTES: usize = 8;
+/// Exact bytes in each command-batch record header (`now_ms`, `command_len`).
+pub const COMMAND_BATCH_RECORD_HEADER_BYTES: usize = 10;
+/// Maximum authenticated commands carried by one child publication.
+pub const COMMAND_BATCH_MAX_RECORDS: usize = 8;
 /// Maximum authenticated command bytes admitted to root's parser.
 pub const COMMAND_LINE_BYTES: usize = 2304;
 /// Maximum authentication token bytes passed only to the restricted child.
@@ -101,12 +111,15 @@ pub const INIT_FLAG_SINGLE_LISTENER: u32 = 1 << 2;
 pub const INIT_FLAG_CHILD_AUTH_FRAMING: u32 = 1 << 3;
 /// Root observation explicitly acknowledges one child publication slot.
 pub const INIT_FLAG_PUBLICATION_ACK: u32 = 1 << 4;
+/// Child reports consumed root inputs through exact event-page watermarks.
+pub const INIT_FLAG_COMPLETION_WATERMARKS: u32 = 1 << 5;
 /// Exact required runtime flags.
 pub const REQUIRED_INIT_FLAGS: u32 = INIT_FLAG_POINTER_FREE
     | INIT_FLAG_SEQUENCE_LAST
     | INIT_FLAG_SINGLE_LISTENER
     | INIT_FLAG_CHILD_AUTH_FRAMING
-    | INIT_FLAG_PUBLICATION_ACK;
+    | INIT_FLAG_PUBLICATION_ACK
+    | INIT_FLAG_COMPLETION_WATERMARKS;
 
 const PACKET_RESERVED_BYTES: usize = SHARED_PAGE_BYTES - 40 - ETHERNET_FRAME_BYTES;
 const EXCHANGE_RESERVED_BYTES: usize = SHARED_PAGE_BYTES - 64 - CONSOLE_PAYLOAD_BYTES;
@@ -126,6 +139,10 @@ pub const EXCHANGE_HEADER_BYTES: usize = 64;
 pub const EXCHANGE_LENGTH_OFFSET: usize = 10;
 /// Byte offset of the exchange payload within its shared page.
 pub const EXCHANGE_PAYLOAD_OFFSET: usize = EXCHANGE_HEADER_BYTES;
+/// Event-page offset of the child-published ingress-consumption watermark.
+pub const INGRESS_CONSUMED_SEQUENCE_OFFSET: usize = SHARED_PAGE_BYTES - 16;
+/// Event-page offset of the child-published control-consumption watermark.
+pub const CONTROL_CONSUMED_SEQUENCE_OFFSET: usize = SHARED_PAGE_BYTES - 8;
 const FNV64_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
 const FNV64_PRIME: u64 = 0x0000_0100_0000_01b3;
 
@@ -148,6 +165,15 @@ pub enum AbiError {
     InvalidSeal,
     /// The record kind is not legal for its direction.
     InvalidKind,
+}
+
+/// Stable child-published consumption state from the event-page trailer.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct CompletionWatermarks {
+    /// Newest exact ingress packet sequence consumed by the child.
+    pub ingress_sequence: u64,
+    /// Newest exact root-control sequence consumed by the child.
+    pub control_sequence: u64,
 }
 
 /// Direction of an Ethernet packet page.
@@ -203,6 +229,8 @@ pub enum ExchangeKind {
     ControlCompleted = 25,
     /// Child confirms one control's TCP bytes have left the send queue.
     OutputDrained = 26,
+    /// Child publishes up to eight authenticated commands atomically.
+    CommandBatch = 27,
 }
 
 /// Compact validated metadata for one packet-page publication.
@@ -488,6 +516,7 @@ impl ExchangeKind {
             24 => Ok(Self::PacketConsumed),
             25 => Ok(Self::ControlCompleted),
             26 => Ok(Self::OutputDrained),
+            27 => Ok(Self::CommandBatch),
             _ => Err(AbiError::InvalidKind),
         }
     }
@@ -689,6 +718,182 @@ impl SendBatchCursor {
     }
 }
 
+/// Incremental encoder for one bounded [`ExchangeKind::CommandBatch`] payload.
+///
+/// Commands retain the exact UTF-8 bytes accepted by the legacy single-command
+/// record. The caller supplies fixed exchange-page storage, and the builder
+/// stops before either the eight-command or shared-payload bound.
+pub struct CommandBatchBuilder<'a> {
+    output: &'a mut [u8; CONSOLE_PAYLOAD_BYTES],
+    cursor: usize,
+    record_count: u16,
+}
+
+impl<'a> CommandBatchBuilder<'a> {
+    /// Begin an empty command batch in caller-owned bounded storage.
+    #[must_use]
+    pub fn new(output: &'a mut [u8; CONSOLE_PAYLOAD_BYTES]) -> Self {
+        output[..COMMAND_BATCH_HEADER_BYTES].fill(0);
+        Self {
+            output,
+            cursor: COMMAND_BATCH_HEADER_BYTES,
+            record_count: 0,
+        }
+    }
+
+    /// Append one exact authenticated command.
+    ///
+    /// Returns `Ok(false)` without mutation when the valid command would exceed
+    /// the eight-record or shared-payload bound.
+    pub fn try_push_command(&mut self, now_ms: u64, command: &str) -> Result<bool, AbiError> {
+        if command.is_empty() || command.len() > COMMAND_LINE_BYTES {
+            return Err(AbiError::InvalidBound);
+        }
+        if usize::from(self.record_count) >= COMMAND_BATCH_MAX_RECORDS {
+            return Ok(false);
+        }
+        let Some(record_end) = self
+            .cursor
+            .checked_add(COMMAND_BATCH_RECORD_HEADER_BYTES)
+            .and_then(|offset| offset.checked_add(command.len()))
+        else {
+            return Err(AbiError::InvalidBound);
+        };
+        if record_end > self.output.len() {
+            return Ok(false);
+        }
+        let command_len = command.len() as u16;
+        self.output[self.cursor..self.cursor + 8].copy_from_slice(&now_ms.to_le_bytes());
+        self.output[self.cursor + 8..self.cursor + COMMAND_BATCH_RECORD_HEADER_BYTES]
+            .copy_from_slice(&command_len.to_le_bytes());
+        let command_start = self.cursor + COMMAND_BATCH_RECORD_HEADER_BYTES;
+        self.output[command_start..record_end].copy_from_slice(command.as_bytes());
+        self.cursor = record_end;
+        self.record_count = self.record_count.saturating_add(1);
+        Ok(true)
+    }
+
+    /// Number of commands already encoded.
+    #[must_use]
+    pub const fn record_count(&self) -> usize {
+        self.record_count as usize
+    }
+
+    /// Finish the batch and return its exact active payload prefix.
+    pub fn finish(self) -> Result<&'a [u8], AbiError> {
+        if self.record_count == 0 {
+            return Err(AbiError::InvalidBound);
+        }
+        let used_bytes = self.cursor.saturating_sub(COMMAND_BATCH_HEADER_BYTES);
+        if used_bytes == 0 || used_bytes > u16::MAX as usize {
+            return Err(AbiError::InvalidBound);
+        }
+        self.output[0..2].copy_from_slice(&COMMAND_BATCH_ENCODING_VERSION.to_le_bytes());
+        self.output[2..4].copy_from_slice(&self.record_count.to_le_bytes());
+        self.output[4..6].copy_from_slice(&(used_bytes as u16).to_le_bytes());
+        self.output[6..8].copy_from_slice(&0u16.to_le_bytes());
+        Ok(&self.output[..self.cursor])
+    }
+}
+
+/// Validated cursor over one private copy of a command-batch payload.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CommandBatchCursor {
+    next_offset: u16,
+    end_offset: u16,
+    remaining: u16,
+}
+
+impl CommandBatchCursor {
+    /// Validate the complete binary batch and return its initial cursor.
+    pub fn validate(payload: &[u8]) -> Result<Self, AbiError> {
+        if payload.len() < COMMAND_BATCH_HEADER_BYTES + COMMAND_BATCH_RECORD_HEADER_BYTES + 1
+            || payload.len() > CONSOLE_PAYLOAD_BYTES
+        {
+            return Err(AbiError::InvalidBound);
+        }
+        if read_u16(payload, 0) != COMMAND_BATCH_ENCODING_VERSION {
+            return Err(AbiError::InvalidIdentity);
+        }
+        let record_count = read_u16(payload, 2);
+        if record_count == 0 || usize::from(record_count) > COMMAND_BATCH_MAX_RECORDS {
+            return Err(AbiError::InvalidBound);
+        }
+        let used_bytes = usize::from(read_u16(payload, 4));
+        if read_u16(payload, 6) != 0
+            || used_bytes != payload.len().saturating_sub(COMMAND_BATCH_HEADER_BYTES)
+        {
+            return Err(AbiError::InvalidLayout);
+        }
+        let initial = Self {
+            next_offset: COMMAND_BATCH_HEADER_BYTES as u16,
+            end_offset: payload.len() as u16,
+            remaining: record_count,
+        };
+        let mut scan = initial;
+        while scan.next_command(payload)?.is_some() {}
+        Ok(initial)
+    }
+
+    /// Number of authenticated commands not yet consumed.
+    #[must_use]
+    pub const fn remaining(&self) -> usize {
+        self.remaining as usize
+    }
+
+    /// Whether every validated command has been consumed.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.remaining == 0
+    }
+
+    /// Validate and advance over one exact UTF-8 command.
+    pub fn next_command<'a>(
+        &mut self,
+        payload: &'a [u8],
+    ) -> Result<Option<(u64, &'a str)>, AbiError> {
+        let end_offset = usize::from(self.end_offset);
+        let next_offset = usize::from(self.next_offset);
+        if payload.len() != end_offset || next_offset > end_offset {
+            return Err(AbiError::InvalidBound);
+        }
+        if self.remaining == 0 {
+            if next_offset != end_offset {
+                return Err(AbiError::InvalidLayout);
+            }
+            return Ok(None);
+        }
+        let Some(command_start) = next_offset.checked_add(COMMAND_BATCH_RECORD_HEADER_BYTES) else {
+            return Err(AbiError::InvalidBound);
+        };
+        if command_start > end_offset {
+            return Err(AbiError::InvalidBound);
+        }
+        let now_ms = read_u64(payload, next_offset);
+        let command_len = usize::from(read_u16(payload, next_offset + 8));
+        if command_len == 0 || command_len > COMMAND_LINE_BYTES {
+            return Err(AbiError::InvalidBound);
+        }
+        let Some(command_end) = command_start.checked_add(command_len) else {
+            return Err(AbiError::InvalidBound);
+        };
+        if command_end > end_offset {
+            return Err(AbiError::InvalidBound);
+        }
+        let command = core::str::from_utf8(&payload[command_start..command_end])
+            .map_err(|_| AbiError::InvalidBound)?;
+        let remaining = self.remaining - 1;
+        if (remaining == 0 && command_end != end_offset)
+            || (remaining != 0 && command_end >= end_offset)
+        {
+            return Err(AbiError::InvalidLayout);
+        }
+        self.next_offset = command_end as u16;
+        self.remaining = remaining;
+        Ok(Some((now_ms, command)))
+    }
+}
+
 /// Pointer-free runtime descriptor mapped read-only into the child.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(C, align(8))]
@@ -699,7 +904,7 @@ pub struct RuntimeInitDescriptor {
     pub abi_version: u16,
     /// Exact `size_of::<Self>()`.
     pub descriptor_bytes: u16,
-    /// Exact [`REQUIRED_INIT_FLAGS`].
+    /// Required flags plus recognized optional transport extensions.
     pub flags: u32,
     /// Reserved; zero.
     pub reserved0: u32,
@@ -737,7 +942,7 @@ pub struct RuntimeInitDescriptor {
     pub listener_port: u16,
     /// Maximum packet records serviced per notification turn.
     pub max_packets_per_wake: u16,
-    /// Maximum control records serviced per notification turn.
+    /// Maximum authenticated commands coalesced per event publication.
     pub max_commands_per_wake: u16,
     /// One root control may be outstanding.
     pub max_control_inflight: u8,
@@ -805,7 +1010,7 @@ impl RuntimeInitDescriptor {
             || self.max_packets_per_wake == 0
             || self.max_packets_per_wake > 16
             || self.max_commands_per_wake == 0
-            || self.max_commands_per_wake > 16
+            || self.max_commands_per_wake as usize > COMMAND_BATCH_MAX_RECORDS
             || self.max_control_inflight != 1
             || self.prefix_len > 32
             || self.auth_token_len == 0
@@ -1284,6 +1489,31 @@ impl core::fmt::Debug for ExchangePage {
     }
 }
 
+fn classify_publication_commit(
+    first: u64,
+    second: u64,
+    after_sequence: u64,
+) -> Result<bool, AbiError> {
+    if first != second {
+        // Completion watermarks and semantic events deliberately share one
+        // notification bit. The child may therefore begin replacing the
+        // already-accepted event while root is handling an earlier watermark
+        // hint. A transition from the empty marker or the exact accepted
+        // commit is not yet observable; the publisher signals again only
+        // after the new body is committed. Any transition from an unaccepted
+        // commit would violate the one-credit publication invariant.
+        return if first == 0 || first == after_sequence {
+            Ok(false)
+        } else {
+            Err(AbiError::InvalidSequence)
+        };
+    }
+    if first != 0 && first < after_sequence {
+        return Err(AbiError::InvalidSequence);
+    }
+    Ok(first != 0 && first > after_sequence)
+}
+
 impl ExchangePage {
     /// Empty page for a nonzero generation.
     #[must_use]
@@ -1304,6 +1534,76 @@ impl ExchangePage {
             payload: [0; CONSOLE_PAYLOAD_BYTES],
             reserved: [0; EXCHANGE_RESERVED_BYTES],
         }
+    }
+
+    /// Determine whether the event page contains a publication newer than the
+    /// caller's last accepted sequence.
+    ///
+    /// Completion-watermark notifications share the event notification cap
+    /// without replacing the event body. This readiness check lets root
+    /// distinguish that bounded hint from a newly committed semantic event.
+    pub fn publication_pending(
+        input: &[u8],
+        generation: u64,
+        after_sequence: u64,
+    ) -> Result<bool, AbiError> {
+        if input.len() != SHARED_PAGE_BYTES {
+            return Err(AbiError::InvalidLayout);
+        }
+        let first = read_u64(input, EXCHANGE_COMMIT_OFFSET);
+        fence(Ordering::Acquire);
+        if read_u32(input, 0) != EXCHANGE_PAGE_MAGIC
+            || read_u16(input, 4) != ABI_VERSION
+            || read_u16(input, 8) as usize != SHARED_PAGE_BYTES
+            || read_u32(input, 12) != 0
+        {
+            return Err(AbiError::InvalidIdentity);
+        }
+        if read_u64(input, 16) != generation {
+            return Err(AbiError::StaleGeneration);
+        }
+        let second = read_u64(input, EXCHANGE_COMMIT_OFFSET);
+        classify_publication_commit(first, second, after_sequence)
+    }
+
+    /// Read a stable pair of exact input-consumption watermarks.
+    ///
+    /// The sealed runtime descriptor requires
+    /// [`INIT_FLAG_COMPLETION_WATERMARKS`]. Both words are independently
+    /// monotonic; the bounded retry only prevents a torn pair from being
+    /// interpreted as one observation.
+    pub fn completion_watermarks(
+        input: &[u8],
+        generation: u64,
+    ) -> Result<CompletionWatermarks, AbiError> {
+        if input.len() != SHARED_PAGE_BYTES {
+            return Err(AbiError::InvalidLayout);
+        }
+        if read_u32(input, 0) != EXCHANGE_PAGE_MAGIC
+            || read_u16(input, 4) != ABI_VERSION
+            || read_u16(input, 8) as usize != SHARED_PAGE_BYTES
+        {
+            return Err(AbiError::InvalidIdentity);
+        }
+        if read_u64(input, 16) != generation {
+            return Err(AbiError::StaleGeneration);
+        }
+        let mut attempt = 0;
+        while attempt < 2 {
+            let ingress_sequence = read_u64(input, INGRESS_CONSUMED_SEQUENCE_OFFSET);
+            let control_sequence = read_u64(input, CONTROL_CONSUMED_SEQUENCE_OFFSET);
+            fence(Ordering::Acquire);
+            if ingress_sequence == read_u64(input, INGRESS_CONSUMED_SEQUENCE_OFFSET)
+                && control_sequence == read_u64(input, CONTROL_CONSUMED_SEQUENCE_OFFSET)
+            {
+                return Ok(CompletionWatermarks {
+                    ingress_sequence,
+                    control_sequence,
+                });
+            }
+            attempt += 1;
+        }
+        Err(AbiError::InvalidSequence)
     }
 
     /// Publish one exchange directly into an already-zeroed shared page.
@@ -1432,7 +1732,10 @@ impl ExchangePage {
         }
         if matches!(
             kind,
-            ExchangeKind::SendLine | ExchangeKind::SendBatch | ExchangeKind::Command
+            ExchangeKind::SendLine
+                | ExchangeKind::SendBatch
+                | ExchangeKind::Command
+                | ExchangeKind::CommandBatch
         ) && payload.is_empty()
         {
             return Err(AbiError::InvalidBound);
@@ -1445,6 +1748,7 @@ impl ExchangePage {
             ExchangeKind::Connected
                 | ExchangeKind::Authenticated
                 | ExchangeKind::Command
+                | ExchangeKind::CommandBatch
                 | ExchangeKind::Disconnected
                 | ExchangeKind::Backpressure
                 | ExchangeKind::Rejected
@@ -1506,7 +1810,10 @@ impl ExchangePage {
         }
         let len = self.payload_len as usize;
         if len > self.payload.len()
-            || (matches!(kind, ExchangeKind::SendLine | ExchangeKind::Command) && len == 0)
+            || (matches!(
+                kind,
+                ExchangeKind::SendLine | ExchangeKind::Command | ExchangeKind::CommandBatch
+            ) && len == 0)
             || (kind == ExchangeKind::Command && len > COMMAND_LINE_BYTES)
         {
             return Err(AbiError::InvalidBound);
@@ -1618,7 +1925,10 @@ fn validate_exchange_metadata(
     }
     if matches!(
         kind,
-        ExchangeKind::SendLine | ExchangeKind::SendBatch | ExchangeKind::Command
+        ExchangeKind::SendLine
+            | ExchangeKind::SendBatch
+            | ExchangeKind::Command
+            | ExchangeKind::CommandBatch
     ) && payload_len == 0
     {
         return Err(AbiError::InvalidBound);
@@ -1631,6 +1941,7 @@ fn validate_exchange_metadata(
         ExchangeKind::Connected
             | ExchangeKind::Authenticated
             | ExchangeKind::Command
+            | ExchangeKind::CommandBatch
             | ExchangeKind::Disconnected
             | ExchangeKind::Backpressure
             | ExchangeKind::Rejected
@@ -1650,12 +1961,11 @@ fn validate_exchange_metadata(
 }
 
 fn validate_exchange_payload(kind: ExchangeKind, payload: &[u8]) -> Result<(), AbiError> {
-    if kind == ExchangeKind::SendBatch {
-        SendBatchCursor::validate(payload).map(|_| ())
-    } else if core::str::from_utf8(payload).is_err() {
-        Err(AbiError::InvalidBound)
-    } else {
-        Ok(())
+    match kind {
+        ExchangeKind::SendBatch => SendBatchCursor::validate(payload).map(|_| ()),
+        ExchangeKind::CommandBatch => CommandBatchCursor::validate(payload).map(|_| ()),
+        _ if core::str::from_utf8(payload).is_err() => Err(AbiError::InvalidBound),
+        _ => Ok(()),
     }
 }
 
@@ -1902,6 +2212,86 @@ mod tests {
     }
 
     #[test]
+    fn command_batch_preserves_order_timestamps_and_exact_eight_record_bound() {
+        let mut storage = [0x5au8; CONSOLE_PAYLOAD_BYTES];
+        let active_len;
+        {
+            let mut builder = CommandBatchBuilder::new(&mut storage);
+            for index in 0..COMMAND_BATCH_MAX_RECORDS {
+                assert_eq!(
+                    builder.try_push_command(100 + index as u64, "x\n"),
+                    Ok(true)
+                );
+            }
+            assert_eq!(builder.record_count(), COMMAND_BATCH_MAX_RECORDS);
+            assert_eq!(builder.try_push_command(999, "ninth"), Ok(false));
+            let payload = builder.finish().unwrap();
+            active_len = payload.len();
+            assert_eq!(active_len, 104);
+
+            let mut cursor = CommandBatchCursor::validate(payload).unwrap();
+            for index in 0..COMMAND_BATCH_MAX_RECORDS {
+                assert_eq!(cursor.remaining(), COMMAND_BATCH_MAX_RECORDS - index);
+                assert_eq!(
+                    cursor.next_command(payload).unwrap(),
+                    Some((100 + index as u64, "x\n"))
+                );
+            }
+            assert!(cursor.is_empty());
+            assert_eq!(cursor.next_command(payload), Ok(None));
+        }
+        assert!(storage[active_len..].iter().all(|byte| *byte == 0x5a));
+    }
+
+    #[test]
+    fn command_batch_rejects_inexact_records_and_respects_payload_capacity() {
+        let max_command_bytes = [b'x'; COMMAND_LINE_BYTES];
+        let max_command = core::str::from_utf8(&max_command_bytes).unwrap();
+        let mut storage = [0u8; CONSOLE_PAYLOAD_BYTES];
+        let active_len = {
+            let mut builder = CommandBatchBuilder::new(&mut storage);
+            assert_eq!(builder.try_push_command(7, max_command), Ok(true));
+            let second_bytes = [b'y'; 40];
+            let second = core::str::from_utf8(&second_bytes).unwrap();
+            assert_eq!(builder.try_push_command(8, second), Ok(false));
+            builder.finish().unwrap().len()
+        };
+        assert_eq!(
+            active_len,
+            COMMAND_BATCH_HEADER_BYTES + 10 + COMMAND_LINE_BYTES
+        );
+        assert!(CommandBatchCursor::validate(&storage[..active_len]).is_ok());
+
+        let valid = storage;
+        storage[2..4].copy_from_slice(&0u16.to_le_bytes());
+        assert_eq!(
+            CommandBatchCursor::validate(&storage[..active_len]),
+            Err(AbiError::InvalidBound)
+        );
+        storage = valid;
+        storage[4..6].copy_from_slice(&1u16.to_le_bytes());
+        assert_eq!(
+            CommandBatchCursor::validate(&storage[..active_len]),
+            Err(AbiError::InvalidLayout)
+        );
+        storage = valid;
+        storage[COMMAND_BATCH_HEADER_BYTES + 8..COMMAND_BATCH_HEADER_BYTES + 10]
+            .copy_from_slice(&0u16.to_le_bytes());
+        assert_eq!(
+            CommandBatchCursor::validate(&storage[..active_len]),
+            Err(AbiError::InvalidBound)
+        );
+
+        let mut page = ExchangePage::empty(7);
+        page.publish(ExchangeKind::CommandBatch, 1, 9, 20, &valid[..active_len])
+            .unwrap();
+        assert_eq!(
+            page.validate(7, 0, false).unwrap().0,
+            ExchangeKind::CommandBatch
+        );
+    }
+
+    #[test]
     fn send_batch_rejects_noncanonical_or_inexact_binary_records() {
         let mut storage = [0u8; CONSOLE_PAYLOAD_BYTES];
         let active_len = {
@@ -2064,6 +2454,74 @@ mod tests {
     }
 
     #[test]
+    fn completion_watermarks_preserve_the_semantic_event_slot() {
+        let generation = 7;
+        let mut page = [0u8; SHARED_PAGE_BYTES];
+        ExchangePage::empty(generation).encode(&mut page).unwrap();
+        assert_eq!(
+            ExchangePage::completion_watermarks(&page, generation),
+            Ok(CompletionWatermarks::default())
+        );
+        assert_eq!(
+            ExchangePage::publication_pending(&page, generation, 0),
+            Ok(false)
+        );
+
+        page[INGRESS_CONSUMED_SEQUENCE_OFFSET..INGRESS_CONSUMED_SEQUENCE_OFFSET + 8]
+            .copy_from_slice(&3u64.to_le_bytes());
+        page[CONTROL_CONSUMED_SEQUENCE_OFFSET..CONTROL_CONSUMED_SEQUENCE_OFFSET + 8]
+            .copy_from_slice(&5u64.to_le_bytes());
+        ExchangePage::publish_related_into(
+            &mut page,
+            ExchangeKind::Ready,
+            generation,
+            1,
+            0,
+            20,
+            0,
+            b"console-network-service/v4",
+        )
+        .unwrap();
+
+        assert_eq!(
+            ExchangePage::completion_watermarks(&page, generation),
+            Ok(CompletionWatermarks {
+                ingress_sequence: 3,
+                control_sequence: 5,
+            })
+        );
+        assert_eq!(
+            ExchangePage::publication_pending(&page, generation, 0),
+            Ok(true)
+        );
+        assert_eq!(
+            ExchangePage::publication_pending(&page, generation, 1),
+            Ok(false)
+        );
+        assert_eq!(
+            ExchangePage::completion_watermarks(&page, generation + 1),
+            Err(AbiError::StaleGeneration)
+        );
+    }
+
+    #[test]
+    fn event_readiness_admits_only_causal_in_progress_replacement() {
+        assert_eq!(classify_publication_commit(0, 2, 1), Ok(false));
+        assert_eq!(classify_publication_commit(1, 0, 1), Ok(false));
+        assert_eq!(classify_publication_commit(1, 2, 1), Ok(false));
+        assert_eq!(classify_publication_commit(2, 2, 1), Ok(true));
+        assert_eq!(classify_publication_commit(1, 1, 1), Ok(false));
+        assert_eq!(
+            classify_publication_commit(2, 0, 1),
+            Err(AbiError::InvalidSequence)
+        );
+        assert_eq!(
+            classify_publication_commit(1, 1, 2),
+            Err(AbiError::InvalidSequence)
+        );
+    }
+
+    #[test]
     fn command_and_output_drain_records_are_exactly_bounded() {
         let mut command = ExchangePage::empty(7);
         let oversized = [b'x'; COMMAND_LINE_BYTES + 1];
@@ -2090,11 +2548,13 @@ mod tests {
     fn descriptor_seal_binds_authority_and_secret_tail() {
         let valid = descriptor();
         assert_eq!(valid.validate(), Ok(()));
-        assert_eq!(ABI_VERSION, 3);
+        assert_eq!(ABI_VERSION, 4);
         assert_eq!(ExchangeKind::SendBatch as u16, 3);
+        assert_eq!(ExchangeKind::CommandBatch as u16, 27);
         assert_eq!(WAKE_PUBLICATION_ACK, 64);
         assert_eq!(ROOT_WAKE_MASK, 79);
         assert_eq!(REQUIRED_INIT_FLAGS & INIT_FLAG_PUBLICATION_ACK, 16);
+        assert_eq!(REQUIRED_INIT_FLAGS & INIT_FLAG_COMPLETION_WATERMARKS, 32);
         let mut broad = valid;
         broad.child_cspace_slots = 32;
         assert_eq!(broad.validate(), Err(AbiError::InvalidAuthority));

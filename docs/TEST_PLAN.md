@@ -152,6 +152,13 @@ unless one of those surfaces is itself the selected focus. `--launch-existing`
 validates and launches the bound `cohesix-qemu-launch-artifacts.json`; it never
 restages or silently rebuilds an immutable diagnostic artifact.
 
+The convergence runner emits `cohesix-target-observation/v2`. In addition to
+the UART and QEMU command records, it binds `operation_log` to the exact
+authenticated `cohsh` transcript. QEMU evidence consumers require that
+transcript to contain remote NineDoor readiness, successful authentication and
+Queen attachment, and one successful `CAT`; a boot-only UART marker cannot
+stand in for the operation.
+
 The QEMU proof ladder is:
 
 ```text
@@ -452,7 +459,10 @@ python3 scripts/worker_task_evidence.py qemu-service-gdb $SERVICE_GDB \
 
 Each NineDoor command above attaches to its own fresh exact-artifact boot; its
 matching `service.uart.log` is frozen after terminal teardown. The first is
-triggered by one authenticated ordinary Secure9P Call. The second counts two
+triggered by one authenticated ordinary Secure9P Call. The between-Calls probe
+resolves root-local evidence hooks by their exact defined, demangled Rust
+symbols; those hooks remain deliberately non-exported and the collector must
+not require a global control symbol. It counts two
 successful root post-prepare returns and requests local revoke between them and
 the next Call. Console-network Standard injection uses its own fresh
 exact-artifact boot because its containment is terminal and has no same-boot
@@ -463,7 +473,17 @@ pressure boots rather than by the obsolete terminal timeout-spin injection. No
 VM command or namespace fault-injection authority exists.
 
 The four critical-duty observation hooks occur during startup, so collect them
-on a separate halted boot of the exact same image/session:
+on a separate halted boot of the exact same image/session. The collector first
+continues to a fifth, post-SMP arm hook immediately before any restricted TCB
+resumes, then replaces that breakpoint with the four duty breakpoints. This
+post-secondary-core re-arm is required because accelerator hardware-debug
+state can be reset while seL4 initializes secondary cores. It changes no guest
+scheduling, budget, capability, or service behavior:
+
+The five `release-qemu,bootstrap-trace` hooks carry distinct opaque identity tags so
+release linking cannot fold separate duty addresses together. They perform no
+I/O, scheduling, or authority change; the collector rejects a missing or
+aliased address before it attaches GDB.
 
 ```bash
 mkdir -p "$RUN/critical"
@@ -850,7 +870,7 @@ from that catalog.
 | `diagnostic.pi4-canary` | NON-CLAIMING diagnostic | `non-claiming` | conditional / pi4 | `scripts/ci/test_plan_target_canary.sh --target pi4` |
 | `diagnostic.guard-root-mcs` | NON-CLAIMING diagnostic | `non-claiming` | conditional / qemu | `cargo test -p root-task --no-default-features --test mcs_activation_order -- --test-threads=1` |
 | `diagnostic.guard-worker` | NON-CLAIMING diagnostic | `non-claiming` | conditional / qemu | `cargo test -p root-task --no-default-features --features driver-tests-qemu --test worker_fault_lifecycle -- --test-threads=1` |
-| `diagnostic.guard-ninedoor` | NON-CLAIMING diagnostic | `non-claiming` | conditional / qemu | `cargo test -p root-task --no-default-features --features driver-tests-qemu --test ninedoor_service_isolation -- --test-threads=1` |
+| `diagnostic.guard-ninedoor` | NON-CLAIMING diagnostic | `non-claiming` | conditional / qemu | `cargo test -p root-task --no-default-features --test ninedoor_service_isolation -- --test-threads=1` |
 | `diagnostic.guard-console-network` | NON-CLAIMING diagnostic | `non-claiming` | conditional / qemu | `cargo test -p console-network-abi && cargo test -p console-network-runtime && cargo test -p root-task --test console_network_service && cargo test -p root-task --no-default-features --features driver-tests-qemu isolated_response_lane_pays_exactly_one_ordinary_debt_after_eight_units -- --test-threads=1 && cargo test -p root-task --no-default-features --features driver-tests-qemu isolated_help_capture_publishes_complete_body_then_one_terminal -- --test-threads=1 && cargo test -p root-task --no-default-features --features driver-tests-qemu isolated_fixed_synchronous_producers_cross_batch_depth_without_end -- --test-threads=1 && cargo test -p root-task --no-default-features --features driver-tests-qemu bounded_sync_capture_overflow_emits_only_typed_terminal_and_reconciles_metrics -- --test-threads=1 && cargo test -p root-task --no-default-features --features driver-tests-qemu bounded_sync_cache_snapshot_crosses_batch_depth_and_tombstones_on_quiet_cut -- --test-threads=1 && cargo test -p root-task --no-default-features --features driver-tests-qemu bounded_sync_response_is_retired_on_exact_identity_loss -- --test-threads=1 && cargo test -p root-task --no-default-features --features driver-tests-qemu pinned_network_line_cannot_dispatch_to_a_replacement_connection -- --test-threads=1 && cargo test -p root-task --no-default-features --features driver-tests-qemu physical_progress_is_bounded_while_heavy_producers_preserve_network_owner -- --test-threads=1 && cargo test -p root-task --no-default-features --features driver-tests-qemu blocked_physical_producer_retains_an_ordered_busy_terminal_and_prompt -- --test-threads=1 && cargo test -p root-task --no-default-features --features driver-tests-qemu hal::cache::tests -- --test-threads=1 && cargo test -p root-task --no-default-features --test isolated_virtio_network_phasing -- --test-threads=1 && .venv/bin/python -m pytest -q tests/test_console_network_runtime_packaging.py tests/test_qemu_tcp_response_matrix.py scripts/ci/test_run_regression_batch.py` |
 | `diagnostic.guard-pi4-driver` | NON-CLAIMING diagnostic | `non-claiming` | conditional / pi4 | `cargo test -p root-task --no-default-features --features driver-tests-pi4 --test driver_task_mcs -- --test-threads=1` |
 | `diagnostic.guard-live-transport` | NON-CLAIMING diagnostic | `non-claiming` | conditional / qemu, pi4 | `cargo test -p cohsh --no-default-features --features tcp` |
@@ -925,11 +945,13 @@ Validate the full Cohesix stack end-to-end: generated artifacts, QEMU boot, TCP 
   embedded QEMU `virt,gic-version=3,virtualization=off` DTB whose PSCI method is
   `hvc`. The wrapper must select HVC `CPU_ON` only for an HVC DTB, retain the
   upstream SMC path for SMC-selected platforms, and reject a duplicate or
-  missing PSCI SMP driver. On the supported Apple-Silicon/macOS target, the canonical accelerator
-  is HVF and generated `TIMER_CLOCK_HZ` plus the console-network descriptor must
-  both equal the host-visible 24,000,000 Hz virtual-counter frequency. TCG,
-  `-icount`, or a CNTFRQ override is diagnostic-only and cannot establish QEMU
-  acceptance or performance evidence.
+  missing PSCI SMP driver. Apple-Silicon/macOS uses HVF, `cortex-a57`, and
+  `kernel-irqchip=off`; AArch64 Linux uses KVM, the `host` CPU, and the
+  in-kernel GICv3. Both host envelopes require generated `TIMER_CLOCK_HZ` and
+  the console-network descriptor to equal the guest-visible 24,000,000 Hz
+  virtual-counter frequency. TCG, `-icount`, or any other timer frequency is
+  diagnostic-only and cannot establish QEMU acceptance or performance
+  evidence.
 - Milestone 26d profile closure requires all five fresh
   `out/sel4/profile-v2/*` defaults to pass the fail-closed aggregate validator
   with source and artifacts required. QEMU build, release, regression, and
@@ -947,10 +969,10 @@ Validate the full Cohesix stack end-to-end: generated artifacts, QEMU boot, TCP 
   seL4 source or build input may be selected below `out/`, and CMake or Ninja
   must never mutate `seL4/build_UBOOT`.
 - macOS: FUSE mount coverage is optional unless the MacFUSE runtime is installed and approved (verify `/dev/macfuse0` exists, or `/dev/osxfuse0` on older OSXFUSE).
-- If the host lacks EL2/virtualization support or KVM cannot provide the
-  selected GICv3 configuration, set `COHESIX_QEMU_VIRT=off` and/or
-  `COHESIX_QEMU_MACHINE_EXTRA=kernel-irqchip=off` when invoking the release
-  `qemu/run.sh`; the launcher must still agree with the generated GICv3 truth.
+- On Linux, KVM requires `/dev/kvm`, `-cpu host`, and the in-kernel GICv3;
+  `kernel-irqchip=off` is the macOS HVF envelope and is invalid for this KVM
+  configuration. The launcher must still agree with the generated GICv3 and
+  24,000,000 Hz timer truth.
 - Before any QEMU TCP run, start tcpdump and confirm the log path (example: `logs/tcpdump-new-YYYYMMDD-HHMMSS.log`). Use the same path in TCP correlation checks.
 - Headless Linux requires `xvfb-run` (`sudo apt-get install -y xvfb` if missing).
 - Ensure `/updates` and `/host` are enabled for host tool tests:
@@ -4993,8 +5015,8 @@ five-stage run, Stage 05, performance, release, or Milestone 26e acceptance.
 ### Conditional B2 — Milestone 26e QEMU executable-Worker REST pressure
 
 Run the canonical `scripts/m26e_qemu_pressure.sh` command in
-[BENCHMARKS.md](BENCHMARKS.md). It cleans repository `target/` and `out/`,
-rebuilds the selected SMP+MCS seL4 profile, and uses
+[BENCHMARKS.md](BENCHMARKS.md). The macOS lane cleans repository `target/` and
+`out/`, rebuilds the selected SMP+MCS seL4 profile, and uses
 `scripts/cohesix-build-run.sh` for one canonical artifact build. The runner
 then invokes the standalone exact-artifact session emitter once; it does not
 synthesize source, ABI, CYW43, or target-session records inline. The runner
@@ -5013,20 +5035,40 @@ the source and resolved manifests; an optional `COH_AUTH_TOKEN` must match it.
 The separately supplied REST mutation bearer must be a fresh 64-character
 lowercase hexadecimal value and must not appear anywhere in retained evidence.
 
+For the AArch64 Linux KVM comparison, transfer those immutable guest artifacts,
+the selected seL4 outputs, and the same source, then run the documented
+`--reuse-artifacts` command. Replay verifies the source-host artifact record,
+preserves it, rebuilds only native Linux host tools, and emits a Linux launch
+record for KVM, `host,cntfrq=24000000`, and the in-kernel GICv3 before booting.
+The macOS seL4 build-profile validator remains source-host/toolchain-bound, so
+replay does not relabel it as a Linux build. Instead, after both source-host
+guest-hash verification and Linux launch-record verification, the pressure
+orchestrator invokes the non-claiming QEMU target canary directly for root,
+NineDoor READY, authentication, attachment, and one real operation. It then
+executes the same service probes and medium/high workload but
+emits `cohesix-qemu-host-replay/v1` instead of claiming the macOS-only complete
+release gates. It is QEMU performance/integration evidence, not final release
+acceptance.
+
 Each normal pressure boot has two evidence stages. Before load, external GDB and the existing
 Queen/host-ticket paths must directly produce the complete Worker/service
 fault, teardown, fresh-generation, GPU/LoRA receipt, operator-liveness, and
-MCS observations. `collect-qemu-preflight` derives a same-boot component from
-that immutable UART prefix, the role-specific GDB transcripts, the exact
+MCS observations. Direct `cohsh` fault injection finishes before the gateway
+first attaches; after that attach, the gateway remains the sole console owner
+for the rest of the boot. `collect-qemu-preflight` derives a same-boot component
+from that immutable UART prefix, the role-specific GDB transcripts, the exact
 target-session/artifact graph, the separate same-artifact critical-duty GDB
 transcript, and the three live integration rows. The critical-duty boot is an
 explicit auxiliary fault transcript and is never relabelled as same-boot Worker
-or pressure evidence. The gateway
-starts with that component, its containing trust root, and the exact current
-target-session path. The final `collect-qemu` runs only after both pressure
-reports and their per-boot UART/GDB artifacts are immutable. A prior-boot
-component or the final component that the current pressure run is helping
-produce cannot admit load.
+or pressure evidence. The gateway starts once with a fixed trust root, the
+future same-boot component path, and the exact current target-session path. It
+remains fail-closed while that component is absent or invalid, then promotes
+the first fully validated PASS component exactly once; the accepted summary is
+immutable for that gateway process. Pressure starts only after the shared
+validator confirms the promoted current-session binding. The final
+`collect-qemu` runs only after both pressure reports and their per-boot UART/GDB
+artifacts are immutable. A prior-boot component or the final component that the
+current pressure run is helping produce cannot admit load.
 
 For each summary:
 
@@ -7331,7 +7373,7 @@ LOAD end `0x23b540`, while generated truth admitted only 59 pages. V15 must
 bind that 60-page shape exactly; any further ELF growth, shrinkage, span drift,
 or source/generated disagreement fails before root linking and QEMU launch.
 
-The fixed-layout tests must also prove that console-network ABI v3 still uses
+The fixed-layout tests must also prove that console-network ABI v4 still uses
 the same four 4096-byte pages, offsets, lengths, and record schemas while the
 live helpers touch only a 40-byte packet or 64-byte control/event scalar header
 plus the validated active payload. A publisher must clear commit, perform a
@@ -7346,7 +7388,7 @@ inspection must show that the child's packet-ingress and control mappings are
 read-only and its packet-egress and event mappings are read-write.
 
 Schema 1.14 must reject the immediate 1.13 predecessor and any ACK badge other
-than the ABI v3 value 64. The root must retain the fifth Write-only cap on the
+than the ABI v4 value 64. The root must retain the fifth Write-only cap on the
 existing root-to-child Notification without adding a child slot or Notification
 object. Source and deterministic state-machine tests must prove
 `NaturalPostpone` is selected for the active console child and for both selected
@@ -7363,7 +7405,7 @@ Graceful ShutdownComplete consumes one credit, retires root debt without ACK,
 starts bounded containment, and becomes teardown-terminal only after the exact
 proof completes; terminal plus egress coalescing fails closed.
 
-ABI v3 tests must prove `SendBatch = 3` binary encoding version 1 with exact
+ABI v4 tests must prove `SendBatch = 3` binary encoding version 1 with exact
 eight-byte header, one through eight records, exact `used_bytes`, reserved zero,
 and each `1..=256`-byte UTF-8 record free of CR/LF. Empty, ninth, oversized,
 malformed UTF-8, truncated, trailing, overlapping, stale-identity, and
@@ -7378,6 +7420,19 @@ frame, tests must observe exactly one retained following
 must complete and quiesce. A pending batch without a commit and a
 capacity/sendability failure must retain zero new cycles; neither a root
 ServiceTick-per-record dependency nor a local self-Poll loop is accepted.
+
+ABI v4 tests must additionally prove `CommandBatch = 27` with encoding version
+1, an exact eight-byte batch header, one through eight records, and per-record
+`now_ms`, command length, and exact UTF-8 command bytes. The child may coalesce
+only consecutive authenticated `Command` events for one connection, up to the
+generated `max_commands_per_wake <= 8` and fixed 2368-byte payload bounds.
+Connected, Authenticated, Rejected, Backpressure, Disconnected, and shutdown
+events fence the batch. Root must validate the complete copied batch and prove
+capacity for every command before the first queue mutation; malformed,
+oversized, ninth, cross-identity, or over-capacity input fails closed without
+partial command execution. Each command retains its original timestamp and FIFO
+order, while the complete batch consumes exactly one existing child publication
+credit and adds no page, capability, SC, timeout, retry, or public protocol.
 
 Root V34 tests must preserve V33/V32/V31/V30/V29's capture plus V27's one exact
 generation/connection-bound lane,
@@ -7965,9 +8020,9 @@ _Generated by coh-rtc (sha256: `fa11c64fe53b859365c45c8e33e565d428029a87529be00c
 <!-- coh-rtc:trace-policy:end -->
 
 ## Manifest fingerprints
-- `configs/root_task.toml` — `sha256:5ac269ae1f3c81e6188aeb3dd97b6a0fa82cfeda27227642f7f301506fca04b0`
-- `configs/generated/root_task_resolved.json` — `sha256:72b6fdbd175150ec352f9345d99791a1d576cf01de47363aed2a64ad0c463a93`
-- `configs/root_task_pi4_uboot_aarch64.toml` — `sha256:7223796cf64b6af77fa196867d5e349d13206046139f2adf340436c6c46bbfda`
+- `configs/root_task.toml` — `sha256:b41ee4fbcd5921767adcba5c9e4490eac49ad33a409959f548187b22f137002f`
+- `configs/generated/root_task_resolved.json` — `sha256:10f33db7f20f039701ec8d2c5d206aba45a67f4b7e359b22dc2e24a0cc055cbd`
+- `configs/root_task_pi4_uboot_aarch64.toml` — `sha256:5e26cc4bb9cdbcd04caa6105693aa6e96c5863efa8635532d29e5f0c5abc4d41`
 - Pi `pi4_production` transient resolved binding — `sha256:5ca99e2809e7dc0a42e0a29b4998b6d6abf87cc58ece11427aa2f1d2cf4a0d21`
 
 ## Transcript fixture hashes

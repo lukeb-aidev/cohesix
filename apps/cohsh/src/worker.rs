@@ -210,10 +210,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn generated_role_matrix_keeps_worker_bus_model_only() {
+    fn generated_role_matrix_preserves_multiworker_topology() {
         let roles = role_contracts();
         assert_eq!(roles.len(), 4);
-        assert_eq!(maximum_live_tasks(), 3);
+        assert_eq!(maximum_live_tasks(), 37);
+        for (role, executable_slots) in [
+            ("worker-heartbeat", 1),
+            ("worker-gpu", 15),
+            ("worker-lora", 21),
+        ] {
+            assert_eq!(
+                roles
+                    .iter()
+                    .find(|contract| contract.role == role)
+                    .map(|contract| (contract.declaration, contract.executable_slots)),
+                Some(("executable", executable_slots))
+            );
+        }
         assert_eq!(
             roles
                 .iter()

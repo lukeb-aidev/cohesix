@@ -535,15 +535,19 @@ where
             })
             .unwrap_or(false);
         }
-        if !recovery_turn {
-            pump.poll_root_control_quantum();
-        }
+        let explicit_yield_required = if recovery_turn {
+            true
+        } else {
+            pump.poll_root_control_quantum()
+        };
         #[cfg(not(any(
             feature = "net-console",
             all(target_arch = "aarch64", target_os = "none", sel4_config_kernel_mcs)
         )))]
         let _ = hal_ptr;
-        sel4::yield_now();
+        if explicit_yield_required {
+            sel4::yield_now();
+        }
     }
 }
 
@@ -558,8 +562,9 @@ where
     V: CapabilityValidator,
 {
     loop {
-        pump.poll_root_control_quantum();
-        sel4::yield_now();
+        if pump.poll_root_control_quantum() {
+            sel4::yield_now();
+        }
     }
 }
 
@@ -2143,8 +2148,9 @@ where
             // HDMI, diagnostics, authentication, and reboot live, while the
             // terminal state prevents another child operation. An attached
             // poisoned stack was quarantined before this mode was entered.
-            pump.poll_root_control_quantum();
-            sel4::yield_now();
+            if pump.poll_root_control_quantum() {
+                sel4::yield_now();
+            }
             continue;
         }
 
@@ -2904,7 +2910,7 @@ fn kernel_bootstrap_handler() -> Option<UserlandBootstrapHandler> {
 }
 
 #[cfg(feature = "net-console")]
-fn take_net_stack(ctx: &BootContext) -> Option<NetStackHandle> {
+fn take_net_stack(ctx: &BootContext) -> Option<Box<NetStackHandle>> {
     ctx.net_stack.borrow_mut().take()
 }
 

@@ -3779,6 +3779,19 @@ mod tests {
     }
 
     #[test]
+    fn canonical_worker_discovery_accepts_compact_runtime_state_v2() {
+        let observation = hive::parse_worker_runtime_state(
+            "{\"schema\":\"worker-runtime-state/v2\",\"worker_id\":\"worker-gpu-2\",\"role\":\"worker-gpu\",\"state\":\"ready\",\"identity\":[0,7,3,4],\"sequence\":[9,0,0,0]}",
+            "worker-gpu-2",
+        )
+        .expect("parse compact Worker state")
+        .expect("observe compact Worker state");
+
+        assert_eq!(observation.role, "worker-gpu");
+        assert_eq!(observation.lifecycle, SwarmUiWorkerLifecycle::Ready);
+    }
+
+    #[test]
     fn role_looking_id_and_provider_ready_remain_structurally_unknown() {
         let worker_id = "worker-gpu-looking";
         let namespace = canonical_worker_telemetry_path(worker_id).expect("canonical path");

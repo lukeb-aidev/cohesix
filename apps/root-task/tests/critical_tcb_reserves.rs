@@ -105,6 +105,36 @@ fn all_five_named_duties_finish_with_distinct_kernel_objects() {
 }
 
 #[test]
+fn qemu_critical_observation_hooks_have_distinct_linker_identities() {
+    let source = include_str!("../src/hal/critical_tcb.rs");
+    let hooks = [
+        (
+            "cohesix_critical_runtime_qemu_evidence_arm",
+            "0x26e0_0000_u32",
+        ),
+        ("cohesix_root_fault_qemu_evidence_turn", "0x26e0_0001_u32"),
+        (
+            "cohesix_root_emergency_qemu_evidence_wait",
+            "0x26e0_0002_u32",
+        ),
+        (
+            "cohesix_worker_supervisor_qemu_evidence_wait",
+            "0x26e0_0003_u32",
+        ),
+        (
+            "cohesix_driver_supervisor_qemu_evidence_wait",
+            "0x26e0_0004_u32",
+        ),
+    ];
+    for (symbol, identity) in hooks {
+        let declaration = format!(
+            "#[no_mangle]\npub extern \"C\" fn {symbol}() {{\n    core::hint::black_box({identity});"
+        );
+        assert!(source.contains(&declaration));
+    }
+}
+
+#[test]
 fn partial_inventory_is_fatal() {
     let task = generated::temporal_tasks()
         .iter()

@@ -129,10 +129,21 @@ Receipt-bearing GPU lease and PEFT actions require version 2. Root accepts the
 caller record only after it matches an exact live `worker-gpu` or
 `worker-lora`, then publishes a normalized read-only `spec.snapshot` containing
 the resolved slot, lease epoch, supervisor generation, cap generation, and a
-strictly increasing admission sequence. The host agent claims only that
-root-owned snapshot. A terminal result is digest-checked against the pinned
-identity before root publishes a confirmed, rejected, or stale Worker receipt;
-the host agent never creates or tears down the receipt Worker.
+globally increasing admission sequence. Root separately derives the executable
+Worker control sequence from that exact Worker's last accepted control and
+admits at most one unresolved receipt action per identity, so the Worker's
+single-slot control page cannot skip or overwrite a control. The host agent
+claims only that root-owned snapshot. A terminal result is digest-checked
+against the pinned identity before root publishes a confirmed, rejected, or
+stale Worker receipt; the host agent never creates or tears down the receipt
+Worker.
+
+GPU lease reconciliation reads `/proc/lease/by-id/<operation_id>` rather than
+scanning the byte-bounded `/proc/lease/active` aggregate. Each exact lookup is
+bounded by the same per-record byte limit, returns either one identity-bound
+record or an empty payload, and preserves one unresolved operation per receipt
+Worker. This permits independent GPU Workers to hold independent leases
+without making transaction recovery depend on an aggregate display window.
 
 ## 9. Common errors and recovery
 

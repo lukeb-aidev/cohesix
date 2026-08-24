@@ -1045,52 +1045,48 @@ pub fn send_nb_unchecked(dest: seL4_CPtr, info: seL4_MessageInfo) {
 #[track_caller]
 #[inline(always)]
 pub fn call_unchecked(dest: seL4_CPtr, info: seL4_MessageInfo) -> seL4_MessageInfo {
-    guard_ipc_destination("call_unchecked", dest);
     let length = info.length();
-
-    let mut mr0_val = 0;
-    let mut mr1_val = 0;
-    let mut mr2_val = 0;
-    let mut mr3_val = 0;
-
-    let mut mr0_ptr: *mut seL4_Word = ptr::null_mut();
-    let mut mr1_ptr: *mut seL4_Word = ptr::null_mut();
-    let mut mr2_ptr: *mut seL4_Word = ptr::null_mut();
-    let mut mr3_ptr: *mut seL4_Word = ptr::null_mut();
-
+    let mut message_registers = [0; 4];
     if length > 0 {
-        mr0_val = unsafe { sel4_sys::seL4_GetMR(0) };
-        mr0_ptr = &mut mr0_val;
+        message_registers[0] = unsafe { sel4_sys::seL4_GetMR(0) };
     }
     if length > 1 {
-        mr1_val = unsafe { sel4_sys::seL4_GetMR(1) };
-        mr1_ptr = &mut mr1_val;
+        message_registers[1] = unsafe { sel4_sys::seL4_GetMR(1) };
     }
     if length > 2 {
-        mr2_val = unsafe { sel4_sys::seL4_GetMR(2) };
-        mr2_ptr = &mut mr2_val;
+        message_registers[2] = unsafe { sel4_sys::seL4_GetMR(2) };
     }
     if length > 3 {
-        mr3_val = unsafe { sel4_sys::seL4_GetMR(3) };
-        mr3_ptr = &mut mr3_val;
+        message_registers[3] = unsafe { sel4_sys::seL4_GetMR(3) };
     }
-
-    let reply = unsafe { syscall::call_with_mrs(dest, info, mr0_ptr, mr1_ptr, mr2_ptr, mr3_ptr) };
-
-    if length > 0 {
-        unsafe { sel4_sys::seL4_SetMR(0, mr0_val) };
+    let (reply, message_registers) =
+        call_with_message_registers_unchecked(dest, info, message_registers);
+    // Match libsel4's Call contract: the four fast reply registers are always
+    // reflected into the caller's IPC buffer, independently of request length.
+    for (index, value) in [0, 1, 2, 3].into_iter().zip(message_registers) {
+        unsafe { sel4_sys::seL4_SetMR(index, value) };
     }
-    if length > 1 {
-        unsafe { sel4_sys::seL4_SetMR(1, mr1_val) };
-    }
-    if length > 2 {
-        unsafe { sel4_sys::seL4_SetMR(2, mr2_val) };
-    }
-    if length > 3 {
-        unsafe { sel4_sys::seL4_SetMR(3, mr3_val) };
-    }
-
     reply
+}
+
+/// Issues a raw seL4 call with four caller-owned fast message registers.
+///
+/// The returned array is the kernel reply state. Keeping a bounded IPC
+/// envelope in caller-owned locals avoids an unnecessary IPC-buffer
+/// round-trip while preserving the ordinary seL4 Call and Reply semantics.
+#[cfg(feature = "kernel")]
+#[track_caller]
+#[inline(always)]
+pub fn call_with_message_registers_unchecked(
+    dest: seL4_CPtr,
+    info: seL4_MessageInfo,
+    message_registers: [seL4_Word; 4],
+) -> (seL4_MessageInfo, [seL4_Word; 4]) {
+    guard_ipc_destination("call_with_message_registers_unchecked", dest);
+    let [mut mr0, mut mr1, mut mr2, mut mr3] = message_registers;
+    let reply =
+        unsafe { syscall::call_with_mrs(dest, info, &mut mr0, &mut mr1, &mut mr2, &mut mr3) };
+    (reply, [mr0, mr1, mr2, mr3])
 }
 
 /// Signals a notification capability without validating the destination pointer.
@@ -3662,7 +3658,49 @@ pub struct SlotAllocator {
     next: seL4_CPtr,
     end: seL4_CPtr,
     cnode_size_bits: seL4_Word,
-    reserved_slots: Vec<seL4_CPtr, 32>,
+    reserved_slots: ReservedSlotBitmap,
+}
+
+const ROOT_CSPACE_SLOT_CAPACITY: usize = 1 << 14;
+const RESERVED_SLOT_WORD_BITS: usize = u64::BITS as usize;
+const RESERVED_SLOT_WORDS: usize = ROOT_CSPACE_SLOT_CAPACITY / RESERVED_SLOT_WORD_BITS;
+
+/// Fixed, allocation-free exact reservation set for the complete root CNode.
+struct ReservedSlotBitmap {
+    words: [u64; RESERVED_SLOT_WORDS],
+}
+
+impl ReservedSlotBitmap {
+    const fn new() -> Self {
+        Self {
+            words: [0; RESERVED_SLOT_WORDS],
+        }
+    }
+
+    fn contains(&self, slot: seL4_CPtr) -> bool {
+        let Ok(index) = usize::try_from(slot) else {
+            return false;
+        };
+        let Some(word) = self.words.get(index / RESERVED_SLOT_WORD_BITS) else {
+            return false;
+        };
+        let bit = index % RESERVED_SLOT_WORD_BITS;
+        (*word & (1u64 << bit)) != 0
+    }
+
+    fn insert(&mut self, slot: seL4_CPtr) -> Result<(), seL4_Error> {
+        let index = usize::try_from(slot).map_err(|_| seL4_RangeError)?;
+        let word = self
+            .words
+            .get_mut(index / RESERVED_SLOT_WORD_BITS)
+            .ok_or(seL4_RangeError)?;
+        let mask = 1u64 << (index % RESERVED_SLOT_WORD_BITS);
+        if (*word & mask) != 0 {
+            return Err(sel4_sys::seL4_DeleteFirst);
+        }
+        *word |= mask;
+        Ok(())
+    }
 }
 
 /// Snapshot describing the init CNode empty-slot window.
@@ -3693,7 +3731,7 @@ impl SlotAllocator {
             next: region.start,
             end: region.end,
             cnode_size_bits,
-            reserved_slots: Vec::new(),
+            reserved_slots: ReservedSlotBitmap::new(),
         }
     }
 
@@ -3736,7 +3774,7 @@ impl SlotAllocator {
         }
         while self.next < self.end {
             while self.next < self.end
-                && (is_boot_reserved_slot(self.next) || self.reserved_slots.contains(&self.next))
+                && (is_boot_reserved_slot(self.next) || self.reserved_slots.contains(self.next))
             {
                 self.next += 1;
             }
@@ -3777,14 +3815,12 @@ impl SlotAllocator {
             || slot < self.start
             || slot >= self.end
             || is_boot_reserved_slot(slot)
-            || self.reserved_slots.contains(&slot)
+            || self.reserved_slots.contains(slot)
             || debug_cap_identify(slot) != 0
         {
             return Err(sel4_sys::seL4_DeleteFirst);
         }
-        self.reserved_slots
-            .push(slot)
-            .map_err(|_| seL4_NotEnoughMemory)
+        self.reserved_slots.insert(slot)
     }
 
     /// Marks the first `slots` entries in the bootinfo empty window as consumed.
@@ -7703,6 +7739,26 @@ impl Default for VSpaceTableTracker {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reserved_slot_bitmap_tracks_hundreds_of_exact_anchors() {
+        let mut reserved = ReservedSlotBitmap::new();
+        let first = ROOT_CSPACE_SLOT_CAPACITY - 384;
+        for index in first..ROOT_CSPACE_SLOT_CAPACITY {
+            let slot = seL4_CPtr::try_from(index).expect("root CSpace slot fits seL4 CPtr");
+            assert_eq!(reserved.insert(slot), Ok(()));
+            assert!(reserved.contains(slot));
+        }
+        let duplicate = seL4_CPtr::try_from(first).expect("root CSpace slot fits seL4 CPtr");
+        assert_eq!(reserved.insert(duplicate), Err(sel4_sys::seL4_DeleteFirst));
+        assert_eq!(
+            reserved.insert(
+                seL4_CPtr::try_from(ROOT_CSPACE_SLOT_CAPACITY)
+                    .expect("root CSpace capacity fits seL4 CPtr"),
+            ),
+            Err(sel4_sys::seL4_RangeError)
+        );
+    }
 
     #[test]
     fn revoke_anchor_vspace_tracker_rejects_aliases_and_bounds_slots() {

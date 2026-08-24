@@ -183,7 +183,7 @@ fn passive_fault_reply_precedes_durable_containment_publication() {
         .find("commit_root_fault_turn(RootFaultCriticalTurn::PublishService);")
         .expect("publish successor before donor recovery");
     let passive_recovery = recover
-        .find("recover_target_passive_service_call(pending.record.task_index)")
+        .find("recover_target_passive_service_call(pending.record)")
         .expect("passive donor recovery action");
     let mailbox = publish
         .find("publish_target_service_fault(pending.record)")

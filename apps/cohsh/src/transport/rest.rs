@@ -113,6 +113,9 @@ impl RestTransport {
     }
 
     fn bound_for_path(path: &str, bounds: &BoundsResponse) -> Option<u32> {
+        if path.starts_with("/proc/lease/by-id/") {
+            return Some(bounds.observability.proc_lease.active_bytes);
+        }
         match path {
             "/proc/schedule/summary" => Some(bounds.observability.proc_schedule.summary_bytes),
             "/proc/schedule/queue" => Some(bounds.observability.proc_schedule.queue_bytes),
@@ -530,6 +533,10 @@ mod tests {
         );
         assert_eq!(
             RestTransport::bound_for_path("/proc/lease/active", &bounds),
+            Some(256)
+        );
+        assert_eq!(
+            RestTransport::bound_for_path("/proc/lease/by-id/lease-1", &bounds),
             Some(256)
         );
         assert_eq!(

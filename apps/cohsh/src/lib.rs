@@ -112,6 +112,98 @@ pub struct TransportMetrics {
     pub heartbeats: usize,
 }
 
+/// Maximum number of namespace commands admitted in one transport batch.
+///
+/// Eight command frames match the isolated console service's fixed command
+/// batch and response-record bounds. The independent TCP byte ceiling may
+/// split a large batch into smaller writes without changing ordered response
+/// handling. Transports without native pipelining execute the same commands
+/// sequentially through the default trait implementation. A batch containing
+/// a write is never replayed after a partial send or response failure.
+pub const TRANSPORT_COMMAND_BATCH_MAX: usize = 8;
+
+/// Maximum number of idempotent namespace reads admitted in one transport batch.
+pub const TRANSPORT_READ_BATCH_MAX: usize = TRANSPORT_COMMAND_BATCH_MAX;
+
+/// One idempotent namespace operation eligible for bounded transport pipelining.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReadBatchRequest {
+    /// Read one file through the canonical `CAT` command.
+    Read {
+        /// Absolute NineDoor namespace path.
+        path: String,
+    },
+    /// List one directory through the canonical `LS` command.
+    List {
+        /// Absolute NineDoor namespace path.
+        path: String,
+    },
+}
+
+impl ReadBatchRequest {
+    /// Return the request's canonical namespace path.
+    #[must_use]
+    pub fn path(&self) -> &str {
+        match self {
+            Self::Read { path } | Self::List { path } => path,
+        }
+    }
+}
+
+/// Per-request outcome from one bounded transport read batch.
+///
+/// Operation failures remain independent so one denied path does not discard
+/// later in-order replies. An outer transport error means the complete
+/// idempotent batch could not be recovered.
+pub type ReadBatchOutcome = std::result::Result<Vec<String>, String>;
+
+/// One existing namespace command eligible for bounded ordered pipelining.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TransportBatchRequest {
+    /// Read one file through the canonical `CAT` command.
+    Read {
+        /// Absolute NineDoor namespace path.
+        path: String,
+    },
+    /// List one directory through the canonical `LS` command.
+    List {
+        /// Absolute NineDoor namespace path.
+        path: String,
+    },
+    /// Append one payload through the canonical `ECHO` command.
+    Write {
+        /// Absolute NineDoor namespace path.
+        path: String,
+        /// Already validated payload bytes.
+        payload: Vec<u8>,
+    },
+}
+
+impl TransportBatchRequest {
+    /// Return the request's canonical namespace path.
+    #[must_use]
+    pub fn path(&self) -> &str {
+        match self {
+            Self::Read { path } | Self::List { path } | Self::Write { path, .. } => path,
+        }
+    }
+}
+
+/// Successful per-command result from a bounded transport batch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TransportBatchResponse {
+    /// Lines returned by `CAT` or `LS`.
+    Lines(Vec<String>),
+    /// Exact acknowledgement lines returned by `ECHO`.
+    Written {
+        /// Matching bounded acknowledgement lines in wire order.
+        acknowledgements: Vec<String>,
+    },
+}
+
+/// Per-command outcome from one bounded ordered transport batch.
+pub type TransportBatchOutcome = std::result::Result<TransportBatchResponse, String>;
+
 /// Diagnostic snapshot for a TCP-backed console connection.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct TcpConnectionInfo {
@@ -587,6 +679,62 @@ pub trait Transport {
     /// List directory entries at the supplied path.
     fn list(&mut self, session: &Session, path: &str) -> Result<Vec<String>>;
 
+    /// Execute a bounded ordered batch of idempotent namespace reads.
+    fn read_batch(
+        &mut self,
+        session: &Session,
+        requests: &[ReadBatchRequest],
+    ) -> Result<Vec<ReadBatchOutcome>> {
+        if requests.len() > TRANSPORT_READ_BATCH_MAX {
+            bail!(
+                "transport read batch exceeds {} requests",
+                TRANSPORT_READ_BATCH_MAX
+            );
+        }
+        let outcomes = requests
+            .iter()
+            .map(|request| match request {
+                ReadBatchRequest::Read { path } => self.read(session, path),
+                ReadBatchRequest::List { path } => self.list(session, path),
+            })
+            .map(|result| result.map_err(|error| error.to_string()))
+            .collect();
+        Ok(outcomes)
+    }
+
+    /// Execute a bounded ordered batch of existing namespace commands.
+    fn command_batch(
+        &mut self,
+        session: &Session,
+        requests: &[TransportBatchRequest],
+    ) -> Result<Vec<TransportBatchOutcome>> {
+        if requests.len() > TRANSPORT_COMMAND_BATCH_MAX {
+            bail!(
+                "transport command batch exceeds {} requests",
+                TRANSPORT_COMMAND_BATCH_MAX
+            );
+        }
+        let outcomes = requests
+            .iter()
+            .map(|request| match request {
+                TransportBatchRequest::Read { path } => {
+                    self.read(session, path).map(TransportBatchResponse::Lines)
+                }
+                TransportBatchRequest::List { path } => {
+                    self.list(session, path).map(TransportBatchResponse::Lines)
+                }
+                TransportBatchRequest::Write { path, payload } => {
+                    let _ = self.drain_acknowledgements();
+                    let result = self.write(session, path, payload);
+                    let acknowledgements = self.drain_acknowledgements();
+                    result.map(|()| TransportBatchResponse::Written { acknowledgements })
+                }
+            })
+            .map(|result| result.map_err(|error| error.to_string()))
+            .collect();
+        Ok(outcomes)
+    }
+
     /// Append bytes to an append-only file within the NineDoor namespace.
     fn write(&mut self, session: &Session, path: &str, payload: &[u8]) -> Result<()>;
 
@@ -675,6 +823,14 @@ where
 
     fn list(&mut self, session: &Session, path: &str) -> Result<Vec<String>> {
         (**self).list(session, path)
+    }
+
+    fn read_batch(
+        &mut self,
+        session: &Session,
+        requests: &[ReadBatchRequest],
+    ) -> Result<Vec<ReadBatchOutcome>> {
+        (**self).read_batch(session, requests)
     }
 
     fn write(&mut self, session: &Session, path: &str, payload: &[u8]) -> Result<()> {

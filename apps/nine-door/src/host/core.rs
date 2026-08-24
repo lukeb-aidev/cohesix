@@ -2445,6 +2445,9 @@ impl ControlPlane {
         if self.lease.proc_active_enabled() {
             let payload = self.lease.active_payload()?;
             self.namespace.set_proc_lease_active_payload(&payload)?;
+            let by_id_payloads = self.lease.active_by_id_payloads()?;
+            self.namespace
+                .set_proc_lease_by_id_payloads(&by_id_payloads)?;
         }
         if self.lease.proc_preemptions_enabled() {
             let payload = self.lease.preemptions_payload()?;
