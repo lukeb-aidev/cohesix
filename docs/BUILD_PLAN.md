@@ -10516,7 +10516,11 @@ Cadence by milestone family:
   benchmark, timeout/fault-containment, admission, and operator-liveness gates
   because root-service IPC, network parsing, Worker execution, and the kernel
   scheduling model change together.
-- **27 persistence:** targeted spool/settings pressure plus a small REST/status sanity benchmark only for profiles with persistence enabled.
+- **27 persistence:** targeted QEMU/Pi spool/settings and block-pressure gates;
+  final Pi acceptance also reruns the established CYW43 same-harness workload
+  against the exact accepted pre-27 baseline, first with persistence idle and
+  then under representative storage load. QEMU does not qualify Pi storage or
+  Wi-Fi behavior, and 27 does not create a broader benchmark framework.
 - **27a verification:** no runtime benchmark; track verification-gate runtime and proof reproducibility only.
 - **27b core-local scheduling:** full same-harness QEMU/Pi benchmark gate with service-bucket counters and fresh target evidence.
 - **27c operator lanes:** full latency/fairness gate under mixed serial, USB local-seat, TCP console, HDMI, diagnostics, network, telemetry, and persistence pressure; throughput claims remain tied to 26d/27b baselines and must not collapse separated proof lanes.
@@ -10533,274 +10537,383 @@ Cadence by milestone family:
 ## Milestone 27 — Bounded VM-Local Persistence: Spool Stores + Settings <a id="27"></a>
 [Milestones](#Milestones)
 
-**Why now (resilience):** After Pi 4 U-Boot boot + identity (26), edge deployments need store/forward for telemetry and minimal settings that survive reboots and link outages without introducing a general filesystem or new protocols.
+**Status:** Pending. Milestone 26e is still in progress. M27 is inactive until
+the exact QEMU/Pi SMP+MCS topology, current-image CYW43 coexistence record, and
+same-harness Pi performance/repeatability baseline produced by
+`m26e-mcs-smp-target-acceptance` are accepted and frozen as the pre-M27
+comparator.
 
-**As-built alignment note:** Current code has host-side sidecar buffering, telemetry ring snapshot helpers, and U-Boot-owned network/Wi-Fi persistence, but it does **not** have VM-local persistent spool/settings storage, `persistence.*` manifest IR, isolated storage-runtime block service, root-task persistent-store client plumbing, or `/proc/spool/*` and `/queen/spool/*` providers. Milestone 27 introduces those surfaces; older docs or code comments that mention persistent spool as already available are drift unless backed by this milestone's acceptance evidence.
+**Why now (resilience):** Edge deployments need bounded store/forward and a
+small set of runtime-owned settings that survive reboot and link outage. The
+implementation must add that resilience without turning Cohesix into a
+filesystem project or destabilizing the accepted Pi 4 Wi-Fi path.
 
-**Non-negotiable constraints**
-- No changes to console grammar, 9P semantics, or TCP behavior vs VM unless profile‑gated and documented.
-- No POSIX VFS; no general filesystem.
-- Pure Rust userspace; no C‑FFI filesystems.
-- Persistence is exposed only through NineDoor nodes (file‑shaped, bounded).
-- `/proc` remains read-only observability. Milestone 27 must not introduce write-only or append-only controls under `/proc`; mutating spool/settings controls live under explicit role-scoped control roots.
-- Storage selection is profile-gated and role-selected. The default Pi 4 hardware profile uses a manifest-declared raw SD/MMC block region on the boot microSD card, separate from the FAT boot partition and separate from U-Boot-owned `cohesix.env` policy storage.
-- Persistence-enabled Pi 4 SD cards use a two-partition default layout: partition 1 is a 1 GiB FAT32 boot partition labeled by the flash script's `--disk-label` value (default `COHESIX`), and partition 2 is an unformatted raw M27 persistence region. The raw region has no filesystem label; host tooling may name or tag the partition `COHESIX-PERSIST` for operator visibility only. Flash tooling must check target SD size before erasing, fail closed when the card is too small, and leave any media beyond the manifest-declared persistence range unallocated/reserved unless a later profile explicitly opts into using the remainder.
-- Physical Pi 4 block-device service must use a manifest-declared isolated storage runtime. Root-task may admit HAL resources, publish region descriptors, submit bounded block service turns, validate records, and expose NineDoor state, but it must not contain a root-owned SD/MMC storage driver or direct steady-state SD/MMC MMIO path.
-- The storage runtime must reuse the accepted 26e driver constructor,
-  supervisor, fault/timeout, MCS, Reply, generation, complete-authority
-  inventory, containment, teardown, and fresh-generation readmission contract.
-  Milestone 27 must prove those basic runtime properties for `driver-storage`;
-  it may not defer safe revocation to 28g. Milestone 28g later projects the
-  already accepted storage bundle into the production driver ledger and adds
-  structured quarantine evidence when that stronger profile is selected.
-- The Pi 4 CYW43 SDIO Wi-Fi transport is not a persistence backend. Its `sdio-host` role remains a CYW43 bus role, not a generic SD-card block role.
-- USB mass storage is not the Milestone 27 default path. It may be added only as a later optional removable-media profile after USB local-seat/xHCI ownership is hardware-proved and cannot be a boot-critical dependency.
+**Current as-built and platform truth:** Cohesix has host-side sidecar buffering,
+telemetry snapshots, and U-Boot-owned `cohesix.env`, but no VM-local persistent
+spool/settings store, persistence manifest IR, storage runtime, block backend,
+or persistent NineDoor providers. The selected Pi manifest currently declares
+seven physical runtimes and gives the CYW43-linked `sdio-host` runtime the
+SDHCI controller at `0xfe300000`, the Wi-Fi power/DMA resources, GIC IRQ 158,
+and DMA IRQ 116. The boot microSD card is a different device on BCM2711 EMMC2
+at `0xfe340000`. The pinned Pi DTB and captured Linux topology also show that
+`mmc0` EMMC2 and `mmc1` CYW43 SDIO multiplex the same physical GIC IRQ 158.
+Existing `coh-rtc` validation rejects duplicate physical IRQ owners.
 
-### Prerequisite
-- Milestones **26a** and **26b**, plus Milestones **26c**, **26d**, and
-  **26e**, completed where they are dependencies for the selected profile: Pi 4
-  driver-task concurrency evidence is available, the 26b benchmark ledger is
-  closed or explicitly non-blocking for the selected persistence profile,
-  the 26c blocker ledger is clear or scoped, the seL4 baseline is current, and
-  root-service/Worker execution claims match the selected task inventory.
-  `m26e-mcs-smp-target-acceptance` must have accepted the sole QEMU/Pi SMP+MCS
-  architecture before the storage runtime adds another live task.
+The canonical QEMU launcher currently attaches virtio networking but no block
+device. Both the pinned QEMU 10.1.0 lane and the current host diagnostic QEMU
+advertise `sdhci-pci` plus `sd-card`, but that is a PCI SDHCI model, not BCM2711
+EMMC2. It does not represent Pi pin/card wiring, the shared IRQ-158 topology,
+the Pi DMA/cache path, or CYW43 coexistence.
 
-### Goal
-Provide **bounded, crash‑resilient on‑device persistence** for:
-1) telemetry store/forward (append‑only ring log), and  
-2) minimal settings (A/B committed pages),
-exposed through NineDoor without expanding the TCB.
+### Objective and closure boundary
 
-This milestone is **not** an extension of the existing host-side sidecar spool mounted at `/bus/<adapter>/spool`. That spool remains an in-memory, nonpersistent sidecar facility. Milestone 27 introduces a distinct **VM-local persistent spool** with read-only observability under `/proc/spool/*` and mutating control files under role-scoped spool control roots.
+M27 is complete only when the same bounded persistence semantics:
 
-### Deliverables
+1. work deterministically on QEMU through `virtio-blk`;
+2. work on the Pi 4 boot microSD through the EMMC2 controller and a
+   manifest-bounded raw region;
+3. coexist on real Pi hardware with the accepted CYW43/SDIO path without a
+   semantic regression;
+4. introduce no material CYW43 performance regression outside the accepted
+   same-harness repeatability envelope; and
+5. preserve compiler/HAL-enforced storage/CYW43 authority, containment, and
+   restart separation.
 
-#### A) Compiler + manifest admission
-- New `persistence.*` IR fields in `coh-rtc` for:
-  - spool bounds (`max_bytes`, `max_record_bytes`, `mode`)
-  - settings bounds and page sizing
-  - storage device/region declaration for profiles that enable persistence
-- Storage roles are explicit:
-  - `virtio-blk` for QEMU and CI parity.
-  - `pi4-sdmmc-raw` for the default Pi 4 hardware profile, backed by a fixed raw block region/partition on the boot microSD card and serviced by an isolated storage runtime over the fixed driver-task ABI.
-  - `usb-mass-storage` is optional/future and must be rejected unless that profile explicitly admits removable media.
-- Pi 4 validation rejects persistence if the profile attempts to bind storage to `cyw43455`, the CYW43 `sdio-host` bus role, `usb-local-seat`, root-task SD/MMC MMIO, or any FAT-path/U-Boot policy file. Runtime persistence must not read or write `cohesix.env`.
-- Persistence config is **separate** from existing `sidecars.*.adapters[].spool`; the names must not be reused or overloaded.
-- Generated docs snippets and manifest validation reject persistence when the selected boot profile does not declare a compatible storage region.
-- The isolated storage runtime has a generated MCS scheduling context, core,
-  budget/period/refill policy, timeout/overrun action, and Reply/donation
-  topology included in the same per-core admission calculation as the existing
-  26e tasks; persistence cannot introduce a non-MCS compatibility path.
+The target implementations need not be superficially symmetric. Root owns
+the bounded spool/settings semantics. QEMU may use the smallest direct virtual
+block HAL path. Pi physical I/O must use a separate isolated `driver-storage`
+runtime and the accepted 26e driver-supervisor contract.
 
-#### B) Storage plumbing (hardware + QEMU parity)
-- Block-device abstraction in HAL (role-selected devices, not model-selected) plus a fixed-layout block-service ABI for physical storage runtimes.
-- Root-task persistent-store semantics and NineDoor namespace are authoritative for the Pi 4 / seL4 path; physical block I/O is performed only by the isolated storage runtime, and host `nine-door` may mirror the same semantics for tests but does not define them.
-- QEMU reference uses `virtio-blk`; the Pi 4 default hardware path uses `pi4-sdmmc-raw`, a bounded SD/MMC block role for a manifest-declared raw region and an isolated `driver-storage` runtime image.
-- `pi4-sdmmc-raw` is a new storage role and must not reuse the CYW43 SDIO transport APIs, Wi-Fi SDIO runtime image, Wi-Fi SDHCI proof markers, or a root-owned SD/MMC compatibility driver as block-device proof.
-- The Pi 4 raw region must be outside the FAT boot assets used by firmware/U-Boot and outside any U-Boot environment/policy file. Root-task must access it only as a ring client through bounded block service turns, not a FAT parser or direct SD/MMC driver.
-- The selected storage runtime emits a generation-keyed inventory of its
-  endpoint, notification, SC/Reply, fault/timeout, ring, mapped-frame, IRQ,
-  MMIO, DMA, and shared-buffer authority as applicable. Fault, timeout, and
-  construction-failure tests must prove complete containment and fresh
-  readmission through the existing 26e driver supervisor before persistent
-  state is accepted.
-- USB mass storage support, if later admitted, must be a separate optional profile with explicit removal/error semantics, lower priority than USB keyboard/local-seat service, and tests proving keyboard responsiveness under storage I/O.
-- No `std` dependencies, no POSIX VFS, no general filesystem.
+### Non-negotiable scope and authority
 
-#### C) Telemetry spool store (append‑only ring log)
-- Backing: fixed-size block region/partition serviced by the profile-selected block backend; on Pi 4 hardware that backend is the isolated storage runtime, not root-task SD/MMC code.
-- Record format (versioned, bounded): `magic | version | kind | seq | ts | len | crc | payload`.
-- Crash rule: a record is valid only if header + checksum validate; partial tail records are ignored.
-- Bounded behavior:
-  - max record size and deterministic scan budget.
-  - explicit policy: **refuse when full** or **overwrite oldest only when acked**.
-- NineDoor exposure (names must align with `ARCHITECTURE.md`):
-  - `/proc/spool/status` (read-only summary)
-  - `/proc/spool/read` (read-only bounded stream)
-  - `/queen/spool/append` (queen-only append control, one record per write)
-  - `/queen/spool/ack` (queen-only cursor-advance control)
-  - Worker-origin telemetry continues through existing role-scoped telemetry paths unless a later milestone explicitly adds a worker-owned spool append path.
-- Existing `/bus/<adapter>/spool` semantics remain unchanged and continue to describe host-side sidecar buffering only.
+- No POSIX VFS, general filesystem, C-FFI filesystem, generic storage
+  framework, generic SDIO framework, scheduler redesign, or new testing
+  framework.
+- Persistence is distinct from the in-memory host-side
+  `sidecars.*.adapters[].spool` and `/bus/<adapter>/spool` contract.
+- `/proc` remains read-only. Mutating spool/settings operations use documented
+  role-scoped NineDoor control roots; M27 does not change console framing,
+  Secure9P bounds, or TCP grammar.
+- QEMU uses a deterministic per-run raw image behind `virtio-blk`. QEMU proves
+  the virtual block contract and persistence integration only; it proves no Pi
+  EMMC2, physical-media, DMA/cache, shared-IRQ, or Wi-Fi behavior.
+- Pi persistence uses only a manifest-declared raw partition/range outside the
+  FAT boot assets and `cohesix.env`. Routine reflashing continues to replace
+  only the exact existing FAT child. Creating or changing the two-partition
+  boot-plus-raw topology remains an explicit `--initialize-disk` operation
+  after whole-device size and identity checks; it is never an automatic
+  fallback.
+- The Pi storage runtime owns only EMMC2 MMIO at `0xfe340000`, its private
+  block queue/buffers, generated endpoint/notification/SC/Reply/fault caps, and
+  any later explicitly admitted storage-only DMA frames. It receives no
+  CYW43/SDIO bus link, Wi-Fi shared aperture, Wi-Fi power-sequence page,
+  BCM2835 SDIO DMA channel/page, IRQ 116, or IRQ 158 capability.
+- Existing generated uniqueness, range, badge, CSpace, temporal-admission,
+  descriptor-seal, and containment checks must prove the storage endpoint,
+  notifications, queues/buffers, mappings, SC/Reply, fault records, restart
+  generation, and any DMA frames are disjoint from CYW43/SDIO. Storage may use
+  the common driver-supervisor mechanism, but a storage fault or recovery can
+  revoke/restart only its own generation and EMMC2 controller; it cannot
+  quarantine, reset, wake, or otherwise act on the CYW43/SDIO pair.
+- Because EMMC2 and CYW43 SDIO share physical IRQ 158, initial Pi storage uses
+  bounded PIO/status-driven service turns with EMMC2 interrupt signalling
+  disabled. Each turn has a generated operation bound and virtual-counter
+  deadline; no background poller or unbounded wait is allowed. Retain this
+  simpler path if it satisfies M27. Add controller-local DMA only if early Pi
+  evidence shows it is necessary, and then only with disjoint generated
+  buffers and the existing bounded-no-IOMMU truth. If reliable storage would
+  require sharing IRQ 158, changing its accepted owner, or touching the
+  CYW43/SDIO runtime, M27 stops for an explicit authority redesign and full
+  CYW43 requalification.
+- Storage uses the accepted 26e constructor, MCS admission, driver supervisor,
+  generation, containment, teardown, and fresh readmission mechanisms. Its
+  CPU, service priority, core, budget/period, operation size, and recovery work
+  are derived from the smallest admitted bounds that pass the early target
+  canaries; this plan does not preselect a core or invent a new scheduler.
+- Every issue, completion, flush, scan, retry, recovery, and fault path is
+  bounded. Storage pressure or recovery cannot monopolize root-control,
+  `driver-storage`, the driver supervisor, or the CYW43/SDIO hot path.
 
-#### D) Settings store (A/B committed pages)
-- Two fixed pages/blocks with `generation + checksum`.
-- Update semantics: write inactive page fully, validate checksum, then commit by generation.
-- Bounded settings size; strict UTF‑8 validation and max key/value lengths (if KV).
-- Settings are limited to **runtime-owned local settings**. They explicitly exclude:
-  - network mode/interface/static IP/Wi-Fi credentials already persisted by the Pi 4 U-Boot flow in `cohesix.env`
-  - manifest-authored defaults or other boot-authoritative policy values already mirrored via `/chosen/cohesix,*`
+### Protected CYW43/SDIO baseline
 
-#### E) Identity binding
-- Spool/settings metadata binds to the **manifest fingerprint** from 26 (e.g., recorded in `/proc/boot`), without introducing new trust roots.
+The exact accepted pre-M27 CYW43/SDIO implementation and evidence contract are
+frozen inputs. Ordinary M27 work must not refactor, generalize, deduplicate,
+clean up, or otherwise modify:
 
-#### F) Testing + regression hardening
-- Crash‑fault simulation tests for both stores (power loss at every write boundary).
-- Fuzz record decoder with strict size limits; reject malformed frames.
-- Golden fixture: known block image → expected `status/read/ack` behavior.
-- Targeted performance guard for persistence-enabled profiles: measure spool append/read/ack pressure, settings roundtrip latency, and a small REST/status sanity run before and after enabling VM-local persistence. This is a microbenchmark gate only; it must not be treated as a fresh 26b/26d same-harness hardware parity run unless persistence changes the active physical network/runtime path.
-- Regression pack additions:
-  - `scripts/cohsh/spool_roundtrip.coh`
-  - `scripts/cohsh/settings_roundtrip.coh`
-- Security and compliance docs must update in the same change to describe VM-local data at rest, retention, erase/rekey behavior, manifest-fingerprint binding, and why persistence does not become a general filesystem.
+- CYW43 or SDIO runtime code and images;
+- the CYW43-SDIO ABI, shared aperture, notifications, CARD_INT/DPC path, IRQ
+  ownership, or completion rings;
+- Wi-Fi scheduling, deadlines, retry ceilings, restart/recovery order, error
+  classification, or operator proof semantics; or
+- the accepted Wi-Fi harness, counters, and repeatability classification,
+  except for the smallest evidence consumer needed to correlate an unchanged
+  counter with an M27 run.
+
+Generated source/configuration review must show whether these surfaces are
+byte-identical. Adding `driver-storage` may change the aggregate driver-archive
+hash, but the embedded CYW43 and SDIO component bytes and hashes must remain
+identical to the frozen inputs. A demonstrated need to touch one moves the
+change out of the ordinary storage lane and requires an explicit task revision,
+causal Pi evidence, and complete CYW43 requalification. Storage adapts to the
+accepted Wi-Fi boundary.
+
+### QEMU SDHCI decision
+
+`sdhci-pci` plus `sd-card` is not a mandatory M27 lane. In the current
+architecture it would require a new QEMU PCI storage attachment/admission path
+and exercise a different controller integration while leaving the decisive Pi
+EMMC2/shared-IRQ/CYW43 risks untouched. That work is not justified merely to
+claim SD parity.
+
+A bounded non-acceptance experiment may be run after the virtio raw-block
+canary. Promote it to a supplemental QEMU acceptance lane only if the Pi work
+has already produced a controller-independent SD/MMC command/block core and
+the remaining QEMU adapter is a thin, low-risk reuse with no new generic PCI
+or storage framework. Otherwise record the experiment or rationale and stop.
+A macOS `/dev/rdiskN` backend is likewise optional manual diagnostics only,
+after exact removable-media verification and unmount; it is never CI,
+canonical QEMU, or acceptance evidence and its absence cannot block M27.
+
+### Persistent semantics
+
+- **Telemetry spool:** fixed-size append-only ring; versioned bounded records
+  `magic | version | kind | seq | ts | len | crc | payload`; incomplete or
+  invalid tails are ignored; deterministic scan budget; explicit refuse-when-
+  full or overwrite-only-acked policy.
+- **Settings:** two fixed A/B pages with generation and checksum; write and
+  validate the inactive page before its generation becomes current; strict
+  byte/UTF-8/key/value bounds.
+- **Identity:** store metadata binds to the selected manifest fingerprint
+  without adding a trust root.
+- **Namespace:** `/proc/spool/{status,read}` is read-only;
+  `/queen/spool/{append,ack}` is Queen-controlled; settings use the smallest
+  role-scoped control/read surface agreed in `ARCHITECTURE.md` and
+  `INTERFACES.md`. Worker telemetry continues through its existing path.
+- **Policy separation:** settings cannot contain or override U-Boot-owned
+  network mode/interface/static-IP/Wi-Fi credentials in `cohesix.env`, or
+  manifest-authored boot policy mirrored through `/chosen/cohesix,*`.
+
+### Target-first evidence ladder
+
+1. Freeze the exact accepted pre-M27 CYW43 artifact/evidence baseline and add
+   only cheap deterministic tests for persistence encoding, bounds, A/B commit
+   selection, block ABI/layout, and manifest rejection.
+2. Boot the smallest raw read/write/flush/reopen canary on QEMU `virtio-blk`;
+   do not build the spool/settings stack first.
+3. Add the smallest EMMC2 PIO/no-signal `driver-storage` path and prove one
+   raw-region write/flush/reboot/read on Pi 4 as soon as it is buildable.
+4. On that same early Pi candidate, prove existing CYW43 association, DHCP,
+   raw TCP, bounded storage activity, no shared-IRQ assertion, and no Wi-Fi or
+   SDIO reset/restart before adding higher persistence semantics.
+5. Add spool semantics, repeat the cheap QEMU and Pi roundtrip/coexistence
+   gates, then add settings semantics and repeat them. Add a regression after a
+   target defect only when the cause is an independently testable deterministic
+   contract.
+6. After the feature set converges, run the complete exact-artifact QEMU and
+   Pi acceptance, storage fault/recovery, Wi-Fi repeatability, and same-harness
+   performance comparisons. Intermediate canaries remain non-claiming.
+
+Do not require exhaustive unit, fuzz, crash, or broad workspace testing before
+the first QEMU and Pi canaries. Deterministic tests cover semantic commit cuts,
+malformed input, and observed target defects; they do not simulate Pi IRQ,
+DMA/cache, scheduling, or media truth.
 
 ### Commands
-- `cargo test -p root-task`
-- `cargo test -p nine-door`
-- `cargo test -p pi4-driver-abi`
-- `cargo test -p pi4-driver-runtime`
-- `cohsh --script scripts/cohsh/spool_roundtrip.coh`
-- `cohsh --script scripts/cohsh/settings_roundtrip.coh`
-- `python3 scripts/rest_perf_harness.py --mode perf --suite status --runs 5 --log-dir out/bench --log-prefix m27-persistence-status-sanity`
+- `cargo test -p coh-rtc persistence`
+- `cargo test -p root-task --test persistence`
+- `cargo test -p pi4-driver-abi block`
+- `cargo test -p pi4-driver-runtime storage`
+- `scripts/ci/test_plan_converge.sh --target qemu --focus ninedoor --operation-script scripts/cohsh/spool_roundtrip.coh`
+- `scripts/ci/test_plan_converge.sh --target pi4 --focus pi4-driver --operation-script scripts/cohsh/spool_roundtrip.coh --pi4-target-evidence <current-target-evidence.json> --pi4-readback-image <current-readback.img> --pi4-identity-metadata <current-readback.identity.json> --pi4-serial-log <current-nonempty-uart.log> --pi4-host <pi-address>`
+- `scripts/ci/test_plan_run.sh --target qemu --state-dir out/test-plan/m27-qemu`
+- `scripts/ci/test_plan_run.sh --target pi4 --state-dir out/test-plan/m27-pi4`
+- the exact accepted CYW43 repeatability and performance commands named by the
+  frozen pre-M27 baseline; do not substitute a new M27-only harness
 
 ### Checks (DoD)
-- Spool append/read/ack semantics are deterministic and bounded; invalid tail records after crash are ignored.
-- Store/forward works offline and resumes correctly after reboot.
-- Settings updates are atomic across power loss (A/B semantics).
-- Runtime settings do not duplicate or override the Pi 4 U-Boot-owned network/Wi-Fi persistence contract.
-- Pi 4 default persistence uses only the manifest-declared raw SD/MMC region through the isolated storage runtime. CYW43 SDIO, USB keyboard/local-seat, FAT boot files, `cohesix.env`, and root-owned SD/MMC/MMIO paths are rejected as storage backends.
-- The Pi 4 storage runtime has a complete generation-keyed authority inventory;
-  injected construction, command, timeout, and fault failures leave no stale
-  caps, mappings, Reply/SC association, DMA/shared buffer, ring turn, or live
-  runtime generation, and recovery requires fresh generated admission.
-- No general filesystem or POSIX surface introduced.
-- `/proc` remains read-only; spool append/ack writes are accepted only through documented role-scoped control paths.
-- VM vs Pi 4 boot profile semantics remain byte‑stable unless explicitly profile‑gated.
-- Applicable regressions pass; canonical output fixtures remain authoritative,
-  while tests evolve only under `AGENTS.md` Test Discipline.
-- Persistence-enabled benchmark evidence shows bounded spool/settings latency and no material status-read regression against the accepted 26d rolling baseline; any full hardware throughput rerun is required only if the active network/runtime hot path changed.
+- QEMU proves deterministic raw-block, spool, settings, reboot/reopen, invalid-
+  tail, and selected fault/recovery behavior through `virtio-blk` on the exact
+  named image and initial disk bytes. It makes no Pi claim.
+- Pi proves the manifest-declared raw region through the isolated EMMC2 runtime,
+  with no root-owned storage MMIO and no storage cap or link for IRQ 158,
+  IRQ 116, `0xfe300000`, the Wi-Fi power/DMA pages, or CYW43 shared state.
+- Generated admission and the observed runtime inventory agree for MMIO,
+  endpoints, notifications, SC/Reply, faults, queues/buffers, DMA if present,
+  generation, containment anchors, and restart domain. Existing duplicate-IRQ
+  and resource-ownership evidence is reused rather than restated by a second
+  M27 proof system.
+- Storage completion, flush, scan, fault, teardown, and recovery remain within
+  declared service/deadline bounds. Fault injection leaves no stale caps,
+  mappings, ring work, Reply/SC association, DMA/shared buffer, or old runtime
+  generation; fresh service requires fresh generated readmission.
+- Spool append/read/ack and settings A/B semantics are deterministic and
+  bounded; offline store/forward and reboot recovery work on both targets;
+  malformed and partial state fails closed.
+- `/proc` stays read-only; U-Boot policy, FAT boot assets, sidecar spool
+  semantics, console/TCP behavior, and the absence of a general filesystem are
+  preserved.
+- On fresh exact-image Pi runs, persistence-disabled/pre-M27, M27-enabled-idle,
+  M27-under-load, and one meaningful storage fault/recovery case retain
+  comparable environmental and harness conditions. Every counted M27 Wi-Fi
+  boot reaches association, host EAPOL, DHCP, raw TCP, authenticated `cohsh`,
+  and the accepted focused workloads with no semantic error, CYW43/SDIO reset
+  or restart caused by storage, hidden timeout/retry success, authority leak,
+  unresolved storage/driver fault, or operator-liveness regression.
+- Compare exact pre-M27 baseline -> M27 idle and M27 idle -> representative
+  storage load using the existing accepted workload and counters. No arbitrary
+  percentage allowance is introduced. A material delta outside the established
+  same-harness repeatability envelope is investigated and blocks closure until
+  explained and resolved or explicitly requalified.
 
 ### Compiler touchpoints
-- `coh-rtc` emits persistence limits (record size, max bytes, policy mode), settings bounds, profile storage declarations, and physical storage-runtime descriptors into manifest IR; docs import the generated snippets.
-- Manifest validation rejects persistence when storage devices or required isolated storage-runtime descriptors are missing or mis-declared for the selected boot profile, including attempts to bind Pi 4 runtime persistence to CYW43 SDIO, USB local-seat, FAT boot files, U-Boot policy files, or root-owned SD/MMC MMIO.
-- Persistence IR is distinct from existing sidecar spool IR; docs and generated clients must keep those surfaces disambiguated.
+- `coh-rtc` emits persistence limits, settings bounds, backend and raw-region
+  selection, the Pi storage-runtime descriptor, temporal admission, and the
+  existing generation-keyed driver authority inventory.
+- Pi validation admits `pi4-emmc2-raw` only with EMMC2 `0xfe340000`, a bounded
+  raw region, an isolated MCS runtime, no physical IRQ row, no CYW43 bus link,
+  and disjoint runtime/shared/DMA resources. The existing duplicate-physical-
+  IRQ validator continues to reject any attempt to grant IRQ 158 twice.
+- Validation rejects CYW43, `sdio-host`, USB/local-seat, FAT, `cohesix.env`,
+  root-owned physical MMIO, or an undeclared region as a storage backend.
+  Persistence IR and generated clients remain distinct from sidecar spool IR.
 
 ### Task Breakdown
 ```
-Title/ID: m27-persistence-ir
-Milestone: Milestone 27 — Bounded VM-Local Persistence: Spool Stores + Settings / generated persistence contract compatibility
-Goal: Admit persistent spool/settings in compiler IR without overloading existing sidecar spool semantics.
-Inputs: tools/coh-rtc, tools/cohesix-py/cohesix/generated.py, docs/ARCHITECTURE.md, docs/INTERFACES.md.
+Title/ID: m27-contract-baseline-admission
+Milestone: Milestone 27 — Bounded VM-Local Persistence: Spool Stores + Settings / pre-M27 freeze and generated persistence admission
+Goal: Freeze the exact accepted CYW43 comparator and admit only the minimum target-specific persistence resources and semantics.
+Inputs: accepted `m26e-mcs-smp-target-acceptance` QEMU/Pi records and benchmark artifacts, configs/root_task.toml, configs/root_task_pi4_uboot_aarch64.toml, tools/coh-rtc/src/**, apps/root-task/src/hal/**, tools/cohesix-py/**, docs/ARCHITECTURE.md, docs/INTERFACES.md, docs/BENCHMARKS.md.
 Changes:
-  - tools/coh-rtc/src/ir.rs — `persistence.*` schema, validation, profile gating, and required storage-runtime MCS task/admission record.
-  - tools/coh-rtc/src/codegen/{docs,rust,cohsh,cohesix_py}.rs — generated limits, distinct VM-persistence versus sidecar-spool paths, Python defaults, and snippet updates.
+  - docs/BENCHMARKS.md + M27 evidence record — reference, without copying or reclassifying, the exact accepted pre-M27 CYW43 image, manifest, driver archive, repeatability set, workload, counters, and environmental notes used for final comparison.
+  - tools/coh-rtc/src/** + configs/root_task*.toml — add bounded `persistence.*` semantics/backend/region fields and the Pi `driver-storage` image/task record; QEMU selects `virtio-blk`, Pi selects `pi4-emmc2-raw`; generated paths remain distinct from host sidecar spool paths.
+  - compiler/HAL validation — Pi storage is exactly EMMC2 `0xfe340000`, has no physical IRQ row or CYW43 bus link, and cannot name or receive IRQ 158, IRQ 116, `sdio-host`, `cyw43455`, Wi-Fi MMIO/power/DMA/shared resources, USB/local-seat, FAT, `cohesix.env`, or root-owned physical MMIO. Reuse the existing duplicate-IRQ, image/hot-path uniqueness, temporal admission, cap-layout, descriptor-seal, generation, and containment invariants.
+  - compatibility review — record required generated/document changes for `cohsh`, `coh`, `.coh` fixtures, `hive-gateway`, `tools/cohesix-py`, release packaging, and performance scripts; do not add an independent client-side persistence authority.
 Commands:
-  - cargo test -p coh-rtc
+  - cargo test -p coh-rtc persistence
   - scripts/check-generated.sh
 Checks:
-  - Persistence and sidecar spool configs are distinct; invalid storage declarations are rejected.
-  - Generated Python defaults expose only the selected profile's bounded persistence paths and keep them distinct from host-side bus spool paths.
-  - Pi 4 admits `pi4-sdmmc-raw` only when a bounded raw region and isolated storage-runtime descriptor are declared, and rejects CYW43 SDIO, USB local-seat, FAT, root-task SD/MMC, or `cohesix.env` storage bindings.
+  - The comparator names immutable accepted M26e evidence, not historical M26b data or a newly selected favorable sample.
+  - Invalid/overlapping resources, a second IRQ-158 owner, non-MCS Pi storage, sidecar-spool aliasing, and forbidden settings keys fail generation.
+  - No CYW43/SDIO source, ABI, manifest resources, scheduling semantics, restart logic, harness, or evidence classification changes.
 Deliverables:
-  - Compiler-enforced persistence admission with docs snippets refreshed.
+  - Minimal generated persistence contract, exact pre-M27 comparison input, and compatibility-review record.
 
-Title/ID: m27-pi4-sd-partitioning
-Goal: Teach Pi 4 flash tooling to create the M27 boot-plus-raw-persistence SD layout without mounting or formatting the persistence region.
-Inputs: scripts/pi4-image-build.sh, docs/HARDWARE_BRINGUP.md, docs/BOOT_REFERENCE.md, persistence IR storage declarations.
+Title/ID: m27-qemu-virtio-raw-canary
+Milestone: Milestone 27 — Bounded VM-Local Persistence: Spool Stores + Settings / first target integration
+Goal: Prove the bounded raw-block contract on QEMU before implementing spool/settings or Pi controller detail.
+Inputs: `m27-contract-baseline-admission`, apps/root-task/src/hal/**, apps/root-task/src/drivers/virtio/**, scripts/qemu-run.sh, scripts/lib/qemu_launch_artifacts.py, canonical QEMU profiles.
 Changes:
-  - scripts/pi4-image-build.sh — add a persistence-aware partition planner and flasher path that works on macOS and Linux: inspect the target block-device size before any destructive operation, reject undersized media, create the default Pi-compatible partition table with partition 1 as a 1 GiB FAT32 `COHESIX` boot partition and partition 2 as an unformatted raw `COHESIX-PERSIST` role/partition sized from the M27 manifest declaration or conservative default cap, leave any tail outside the declared region unallocated/reserved, copy staged boot assets only to partition 1, and verify both partition geometry and boot-file hashes after flashing.
-  - scripts/pi4-image-build.sh — keep existing stage-only behavior unchanged and add a non-destructive dry-run/planner mode for CI that reports the selected partition table, start LBAs, sizes, labels/tags, host tool path (`diskutil` on macOS, `sfdisk`/`parted` plus `mkfs.vfat` on Linux), and the exact reason an SD target would be rejected.
-  - docs/HARDWARE_BRINGUP.md + docs/BOOT_REFERENCE.md — document the M27 SD layout, minimum-card-size policy, Mac/Linux host requirements, the fact that partition 2 has no filesystem, and the rule that U-Boot continues to load only from `mmc 0:1` / the FAT boot partition.
-  - tests/test_pi4_image_build_partitioning.py or an equivalent shell test — cover the dry-run planner for representative 4 GiB, 8 GiB, 16 GiB, and 32 GiB card sizes on macOS/Linux command profiles without touching real block devices.
+  - apps/root-task/src/hal/block.rs + apps/root-task/src/storage/layout.rs — the smallest role-selected bounded read/write/flush/reopen contract and raw-region bounds used by both target semantics.
+  - apps/root-task/src/drivers/virtio/** — `virtio-blk` backend for QEMU only; no Pi or physical-driver claim.
+  - QEMU launch/evidence tooling — create a deterministic initial raw disk image, copy it to one mutable per-run image, attach it to the canonical `virt` launch, and bind initial/final image identity and geometry without making a mutated disk invalidate immutable kernel/root launch evidence.
+  - optional diagnostic only — try `sdhci-pci` + `sd-card` only under the promotion rule above; do not create a PCI/storage framework or block this task on the result.
+Commands:
+  - cargo test -p root-task --test block_contract
+  - python3 -m pytest -q tests/test_qemu_launcher_profile.py tests/test_qemu_launch_artifacts.py
+  - scripts/ci/test_plan_converge.sh --target qemu --focus root-mcs --operation-script scripts/cohsh/storage_raw_roundtrip.coh
+Checks:
+  - One exact QEMU boot writes, flushes, reopens after reboot, and reads the expected bounded raw blocks with stable typed errors for bounds and injected I/O failure.
+  - No spool/settings implementation, Pi emulation claim, broad regression suite, or mandatory SDHCI lane precedes this canary.
+Deliverables:
+  - Non-claiming QEMU raw-block canary and an explicit retained/rejected QEMU-SDHCI decision.
+
+Title/ID: m27-pi4-emmc2-raw-canary
+Milestone: Milestone 27 — Bounded VM-Local Persistence: Spool Stores + Settings / early physical storage and Wi-Fi coexistence
+Goal: Prove the smallest isolated EMMC2 raw-block path on Pi 4 and immediately test it beside accepted CYW43.
+Inputs: `m27-qemu-virtio-raw-canary`, accepted 26e Pi driver constructor/supervisor, configs/root_task_pi4_uboot_aarch64.toml, pinned Pi DTB and Linux topology capture, crates/pi4-driver-abi/**, apps/pi4-driver-runtime/**, apps/root-task/src/hal/**, scripts/pi4-image-build.sh, docs/HARDWARE_BRINGUP.md.
+Changes:
+  - scripts/pi4-image-build.sh — extend only explicit `--initialize-disk` to create and verify the manifest-sized FAT boot plus unformatted raw persistence topology after exact whole-device identity/size checks; add a non-destructive planner test; leave routine exact-FAT-child reflashing, policy preservation, stage-only behavior, and U-Boot `mmc 0:1` loading unchanged.
+  - crates/pi4-driver-abi/** + apps/pi4-driver-runtime/** + HAL — add fixed pointer-free block request/completion records and isolated `driver-storage` service over EMMC2 `0xfe340000`; begin with bounded PIO/status completion, EMMC2 signal-enable clear, no physical IRQ cap, explicit device deadlines, and the accepted 26e MCS/supervisor/Reply/fault/generation lifecycle.
+  - selected Pi manifest/generated output — declare only storage-private ring/shared buffers and the derived temporal/resource budget; retain the existing three-entry physical IRQ topology and the complete existing CYW43-SDIO link unchanged.
+  - bounded fallback decision — retain PIO if it meets the canary. Consider controller-local DMA only after same-image evidence demonstrates a need; never borrow the accepted SDIO DMA page/channel, IRQ 116, or buffers.
 Commands:
   - bash -n scripts/pi4-image-build.sh
-  - python3 -m pytest tests/test_pi4_image_build_partitioning.py
+  - python3 -m pytest -q tests/test_pi4_image_build.py <focused-partition-planner-test>
+  - cargo test -p pi4-driver-abi block
+  - cargo test -p pi4-driver-runtime storage
+  - scripts/cohesix-build-run.sh --clean --no-run --cargo-target aarch64-unknown-none
+  - scripts/pi4-image-build.sh --manifest configs/root_task_pi4_uboot_aarch64.toml --clean
+  - scripts/ci/test_plan_converge.sh --target pi4 --focus pi4-driver --operation-script scripts/cohsh/storage_raw_roundtrip.coh --pi4-target-evidence <current-target-evidence.json> --pi4-readback-image <current-readback.img> --pi4-identity-metadata <current-readback.identity.json> --pi4-serial-log <current-nonempty-uart.log> --pi4-host <pi-address>
 Checks:
-  - Flash tooling never erases before the SD size, selected OS backend, FAT boot geometry, and raw persistence geometry have been validated.
-  - Partition 1 remains the only mounted/formatted partition and contains the staged boot assets with verified hashes.
-  - Partition 2 is never formatted as FAT/exFAT/ext/ext4, is never used for `cohesix.env`, and is emitted only as the manifest-declared raw region for `pi4-sdmmc-raw`.
-  - macOS and Linux dry-run planner output matches for the same byte-size inputs, apart from host command syntax.
+  - A fresh exact Pi image performs one raw-region write/flush/reboot/read through `driver-storage` with no root EMMC2 mapping, out-of-region access, unbounded wait, or stale generation.
+  - The same early candidate reaches accepted CYW43 association, DHCP, raw TCP, and authenticated `cohsh` while storage is idle and during a bounded raw-block burst; EMMC2 does not signal shared IRQ 158 and no CYW43/SDIO reset, restart, timeout masking, or semantic error occurs.
+  - Any failure that requires IRQ sharing or CYW43/SDIO edits stops this task; it is not patched as ordinary storage bring-up.
 Deliverables:
-  - Cross-platform Pi 4 SD partitioning/flashing plan and implementation ready for M27 raw persistence admission.
+  - Earliest useful boot-bound Pi EMMC2 proof and a go/no-go decision before higher persistence semantics.
 
-Title/ID: m27-block-hal
-Goal: Add bounded block-device plumbing for persistent regions without reintroducing root-owned physical storage drivers.
-Inputs: accepted 26e driver supervisor/containment contract, apps/root-task/src/hal/, crates/pi4-driver-abi, apps/pi4-driver-runtime, docs/ARCHITECTURE.md.
+Title/ID: m27-persistence-semantics-increments
+Milestone: Milestone 27 — Bounded VM-Local Persistence: Spool Stores + Settings / incremental stores and namespace
+Goal: Add demonstrated spool then settings semantics, repeating the cheapest meaningful QEMU and Pi gate after each increment.
+Inputs: `m27-pi4-emmc2-raw-canary`, apps/root-task/src/storage/**, apps/root-task/src/ninedoor.rs, apps/nine-door/**, scripts/cohsh/**, tools/cohesix-py/**, docs/ARCHITECTURE.md, docs/INTERFACES.md, docs/SECURITY.md, docs/SECURITY_NIST_800_53.md.
 Changes:
-  - apps/root-task/src/hal/block.rs + existing driver supervisor — block traits, role-selected storage admission, root-side ring-client binding, generated MCS Reply/donation/timeout ownership, complete generation-keyed resource inventory, containment, teardown, and fresh-generation readmission through the accepted 26e driver contract.
-  - apps/root-task/src/storage/layout.rs — persistent region selection and bounds.
-  - crates/pi4-driver-abi/src/** — fixed-layout block read/write/flush records and bounded completion evidence for physical storage runtimes.
-  - apps/pi4-driver-runtime/src/** — isolated `driver-storage` service for Pi 4 raw SD/MMC block-region access, separate from CYW43 SDIO and U-Boot FAT policy storage.
+  - spool increment — implement bounded ring records, partial-tail rejection, deterministic scan/ack/full policy, manifest binding, `/proc/spool/{status,read}`, and `/queen/spool/{append,ack}`; then rerun focused QEMU and same-boot Pi roundtrip/CYW43 coexistence before settings work.
+  - settings increment — implement bounded A/B generation/checksum selection for runtime-owned local settings, explicitly rejecting U-Boot network/Wi-Fi and manifest boot-policy keys; then repeat both target gates.
+  - deterministic guards — cover semantic commit cuts, malformed/bounded decoders, a known block-image fixture, authorization, and disabled/missing profiles. Use a host `nine-door` mirror only where it is the smallest fixture adapter; root-target semantics remain authoritative.
+  - compatibility and docs — add focused `.coh` roundtrips and generated Python availability/bounds, update security/data-at-rest/retention/erase posture and canonical interfaces, and keep sidecar spool names and behavior unchanged.
 Commands:
-  - cargo test -p root-task --test spool
-  - cargo test -p root-task --test storage_runtime_fault
-  - cargo test -p pi4-driver-abi
-  - cargo test -p pi4-driver-runtime
-Checks:
-  - QEMU `virtio-blk` path and Pi 4 isolated runtime `pi4-sdmmc-raw` path resolve the same bounded block contract.
-  - The storage runtime's SC/core/budget is included in generated per-core
-    admission and no non-MCS storage-service branch exists.
-  - Physical Pi 4 tests fail closed if persistence attempts direct root-task SD/MMC MMIO or a missing isolated storage-runtime descriptor.
-  - Storage runtime construction, command, timeout, and fault injection proves
-    complete cap/mapping/Reply/SC/ring/DMA containment and fresh-generation
-    readmission; no 28g production-ledger feature is needed to make the M27
-    runtime itself safe.
-  - USB mass storage is absent from the default Pi 4 persistence profile and cannot preempt USB keyboard/local-seat service.
-Deliverables:
-  - HAL storage admission plus an accepted, fully contained isolated-runtime
-    block service bundle ready for optional 28g production-ledger projection.
-
-Title/ID: m27-root-spool-namespace
-Goal: Implement persistent spool semantics in root-task and expose read-only `/proc/spool/*` plus role-scoped spool controls via the in-VM NineDoor bridge.
-Inputs: apps/root-task/src/ninedoor.rs, docs/ARCHITECTURE.md, docs/INTERFACES.md.
-Changes:
-  - apps/root-task/src/storage/spool.rs — ring log + checksum validation.
-  - apps/root-task/src/ninedoor.rs — `/proc/spool/{status,read}` provider plus `/queen/spool/{append,ack}` policy enforcement.
-Commands:
-  - cargo test -p root-task --test spool
-Checks:
-  - Partial tail records are ignored; bounded scan time and ack semantics are enforced in the VM path; `/proc` has no write endpoints.
-Deliverables:
-  - Authoritative seL4/root-task persistent spool namespace.
-
-Title/ID: m27-host-spool-mirror
-Goal: Mirror persistent spool semantics in host `nine-door` for host-mode tests without changing the VM contract owner.
-Inputs: apps/nine-door, root-task spool semantics, docs/INTERFACES.md.
-Changes:
-  - apps/nine-door/src/host/spool.rs — host-mode spool provider.
-  - apps/nine-door/src/host/namespace.rs — mount persistent spool provider for tests.
-Commands:
-  - cargo test -p nine-door --test spool
-Checks:
-  - Host-mode provider matches root-task spool semantics byte-for-byte for canonical fixtures.
-Deliverables:
-  - Test mirror of the persistent spool namespace.
-
-Title/ID: m27-settings-store
-Goal: Implement A/B settings persistence for runtime-owned local settings only.
-Inputs: HAL block traits, docs/ARCHITECTURE.md.
-Changes:
-  - apps/root-task/src/storage/settings.rs — A/B pages + checksum.
-  - docs/ARCHITECTURE.md / docs/INTERFACES.md / docs/SECURITY.md / docs/SECURITY_NIST_800_53.md — explicit data-at-rest posture plus exclusion of U-Boot-owned network/Wi-Fi settings.
-Commands:
-  - cargo test -p root-task --test settings
-Checks:
-  - Power‑loss simulations yield either old or new state, never corruption.
-  - Settings keys exclude U-Boot-owned network/Wi-Fi fields and manifest-authored boot policy.
-Deliverables:
-  - Settings store with atomic semantics and a single-source-of-truth boundary.
-
-Title/ID: m27-persistence-regressions
-Milestone: Milestone 27 — Bounded VM-Local Persistence: Spool Stores + Settings / persistence and Python projection regressions
-Goal: Add deterministic regression scripts and fixtures.
-Inputs: scripts/cohsh/, tests/fixtures/, coh-rtc-generated enabled/disabled persistence profile fixtures, generated persistence paths and bounds, tools/cohesix-py/cohesix/generated.py, tools/cohesix-py/tests/.
-Changes:
-  - scripts/cohsh/spool_roundtrip.coh — append/read/ack sequence.
-  - scripts/cohsh/settings_roundtrip.coh — set/get + A/B markers.
-  - tools/cohesix-py/tests/test_persistence.py — consume coh-rtc-produced enabled and disabled profile fixtures through the generated Python output and prove MockBackend, filesystem, TCP, and REST behavior for the generated `/proc/spool/*`, `/queen/spool/*`, settings paths, availability gates, and byte/record bounds. MockBackend remains explicit non-proof `host-model`; all backends preserve missing, disabled, denied, append/read/ack, and settings semantics without conflating VM persistence with the separate host-side `/bus/*/spool` contract or hand-editing `generated.py`.
-  - docs/BENCHMARKS.md — record persistence-enabled status/spool/settings microbenchmark artifacts without claiming fresh hardware throughput parity.
-Commands:
+  - cargo test -p root-task --test persistence
+  - cargo test -p nine-door --test persistence
   - cohsh --script scripts/cohsh/spool_roundtrip.coh
   - cohsh --script scripts/cohsh/settings_roundtrip.coh
   - python3 -m pytest -q tools/cohesix-py/tests/test_persistence.py
-  - python3 scripts/rest_perf_harness.py --mode perf --suite status --runs 5 --log-dir out/bench --log-prefix m27-persistence-status-sanity
+  - scripts/ci/test_plan_converge.sh --target qemu --focus ninedoor --operation-script scripts/cohsh/spool_roundtrip.coh
+  - scripts/ci/test_plan_converge.sh --target pi4 --focus pi4-driver --operation-script scripts/cohsh/spool_roundtrip.coh --pi4-target-evidence <current-target-evidence.json> --pi4-readback-image <current-readback.img> --pi4-identity-metadata <current-readback.identity.json> --pi4-serial-log <current-nonempty-uart.log> --pi4-host <pi-address>
 Checks:
-  - Scripts pass unchanged; transcripts stable.
-  - Python uses only generated paths and bounds; its results and refusals match the canonical cohsh fixtures, and it introduces no independent persistence authority or sidecar-spool alias.
-  - Status/spool/settings latency stays bounded against the accepted 26d rolling baseline for persistence-enabled profiles, or the delta is classified before 27 closes.
+  - Each store's deterministic contract passes before and after reboot on QEMU and Pi; target evidence, not a host model, establishes physical persistence.
+  - Each material increment retains the early Pi CYW43 functional/coexistence gate without broad reruns or speculative hardware simulations.
 Deliverables:
-  - Regression fixtures, Python persistence-compatibility coverage, and targeted persistence benchmark artifacts committed or archived and referenced in docs/TEST_PLAN.md.
+  - Bounded target-authoritative spool/settings namespace plus the smallest useful host/client regression surfaces.
+
+Title/ID: m27-target-acceptance
+Milestone: Milestone 27 — Bounded VM-Local Persistence: Spool Stores + Settings / frozen-artifact QEMU and Pi acceptance
+Goal: Accept deterministic persistence on both targets and prove Pi storage authority, failure containment, and CYW43 functional/performance non-regression.
+Inputs: all preceding M27 tasks, exact accepted pre-M27 comparator, frozen QEMU/Pi images and manifests, initial/final disk identities, fresh Pi readback/serial/capture evidence, existing CYW43 repeatability and performance harness, docs/TEST_PLAN.md, docs/BENCHMARKS.md.
+Changes:
+  - verification-only gate — make no runtime, manifest, generated-policy, harness, or image change; drift returns to the owning implementation task and invalidates affected evidence.
+  - QEMU acceptance — run deterministic raw-block/spool/settings/reboot/crash-cut/fault cases through `virtio-blk` and the applicable staged Test Plan. Any supplemental SDHCI result remains separately typed and cannot strengthen the Pi claim.
+  - Pi authority/fault acceptance — bind storage region, EMMC2 MMIO, absence of IRQ/DMA/CYW43 authority, generated/observed cap and runtime inventory, bounded MCS service, teardown, and fresh-generation recovery; exercise one meaningful storage failure/recovery while Wi-Fi stays live.
+  - Pi CYW43 acceptance — using comparable environmental conditions and the established workload/counters, compare exact pre-M27 baseline -> exact M27 persistence-enabled idle, then M27 idle -> representative sustained storage load. Preserve every run, error, timeout, retry, reset/restart, loss, reconnect, latency, throughput, DPC/IRQ, deadline, queue, fault, and operator-liveness classification already emitted by the accepted harness. Add instrumentation only if an observed delta cannot be decided or diagnosed from existing evidence.
+Commands:
+  - scripts/check-generated.sh
+  - scripts/ci/check_test_plan.sh
+  - scripts/ci/test_plan_run.sh --target qemu --state-dir out/test-plan/m27-qemu
+  - scripts/ci/test_plan_run.sh --target pi4 --state-dir out/test-plan/m27-pi4
+  - the exact frozen pre-M27 CYW43 repeatability and same-harness performance commands for baseline, M27 idle, and M27 storage-load runs
+Checks:
+  - QEMU and fresh Pi independently pass their applicable persistence and staged acceptance; neither target's record substitutes for the other.
+  - Wi-Fi is repeatably healthy with persistence enabled idle, under representative sustained storage, and through one storage fault/recovery; storage causes no CYW43/SDIO reset/restart, semantic/traffic error, authority leak, hidden timeout/retry success, or operator-liveness loss.
+  - Baseline-to-idle and idle-to-load results remain inside the established repeatability envelope. Any material delta is investigated from same-boot evidence rather than waived with a new percentage allowance.
+  - Complete storage fault containment and readmission are accepted in M27; later production-ledger projection cannot be used to defer basic safety.
+Deliverables:
+  - Separate exact-artifact QEMU and Pi M27 acceptance records plus a reviewable CYW43 non-regression comparison bound to the accepted pre-M27 baseline.
 ```
+
+### Rabbit-hole review
+
+The following work is deliberately absent or conditional because it does not
+change the M27 accept/reject decision at proportionate cost:
+
+- mandatory QEMU `sdhci-pci` parity, a QEMU hardware-emulation project, and a
+  canonical macOS raw-device dependency;
+- a generic filesystem, generic block/storage framework, generic SDIO layer,
+  USB mass-storage profile, scheduler redesign, or CYW43 cleanup;
+- a fixed storage CPU/core/priority topology or controller DMA before the early
+  Pi PIO canary establishes a need;
+- exhaustive byte-by-byte power-loss campaigns before target integration;
+  tests cover the store's defined commit cuts and observed failure contracts;
+- a new percentage performance allowance, a broad new Wi-Fi metric suite, or
+  full QEMU/Pi acceptance after every small edit; and
+- duplicate M27 resource proofs where the generated manifest, existing
+  duplicate-IRQ validator, sealed runtime descriptor, and 26e supervisor
+  evidence already establish the invariant.
+
+The questions intentionally left to early M27 experiments are whether bounded
+PIO with EMMC2 interrupt signalling disabled meets the needed persistence
+rate, whether controller-local DMA is therefore necessary, which existing
+storage fault injection gives the most decision-rich recovery case, and
+whether an already-factored SD/MMC core ever makes the optional QEMU SDHCI lane
+cheap enough to promote. None is a reason to design around Pi behavior before
+the first physical canary.
 
 ## Milestone 27a — Formal Verification Baseline + Proof-Carrying Manifests <a id="27a"></a>
 [Milestones](#Milestones)
