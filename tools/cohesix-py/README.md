@@ -73,7 +73,8 @@ separate bounded telemetry observation; under Mock its proof class is
 `host-model`. Heartbeat, GPU, and LoRA are executable. WorkerBus is model-only
 and is refused before any backend write. Telemetry uses the generated canonical
 `/shard/<label>/worker/<id>/telemetry` path; legacy `/worker` is gated by the
-selected contract.
+selected contract. A bound `MockBackend` derives the same target-specific shard
+width from that contract before it creates any Worker observation.
 
 `parse_receipt` preserves version-1 compatibility and accepts the
 generation-bound GPU/LoRA receipt encodings only when classified as

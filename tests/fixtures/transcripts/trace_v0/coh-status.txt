@@ -1,4 +1,4 @@
 OK ATTACH role=queen
-OK LS path=/shard/13/worker
-OK TAIL path=/shard/13/worker/worker-1/telemetry
+OK LS path=/shard/04/worker
+OK TAIL path=/shard/04/worker/worker-1/telemetry
 END

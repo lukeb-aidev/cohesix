@@ -47,7 +47,7 @@ pub struct DmaConfig {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WorkerSchedulingProfile {
     NonMcs,
-    Mcs,
+    McsPassive,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -92,12 +92,12 @@ pub struct WorkerTaskAbiConfig {
     pub stack_bottom_vaddr: u64,
     pub stack_pages: u16,
     pub child_cnode_radix_bits: u8,
-    pub lifecycle_notification_slot: u32,
+    pub service_endpoint_slot: u32,
+    pub service_reply_slot: u32,
     pub supervisor_wake_notification_slot: u32,
-    pub lifecycle_control_bit: u64,
-    pub lifecycle_timeout_bit: u64,
-    pub lifecycle_shutdown_bit: u64,
-    pub lifecycle_revoke_bit: u64,
+    pub control_call_label: u64,
+    pub shutdown_call_label: u64,
+    pub revoke_call_label: u64,
     pub heartbeat_wake_bit: u64,
     pub gpu_wake_bit: u64,
     pub lora_wake_bit: u64,
@@ -112,8 +112,10 @@ pub struct WorkerSchedulingConfig {
     pub priority: u8,
     pub domain: u8,
     pub service_turn_budget: u16,
-    pub mcs_budget_us: u32,
-    pub mcs_period_us: u32,
+    pub bootstrap_scheduling_context_bits: u8,
+    pub bootstrap_budget_us: u32,
+    pub bootstrap_period_us: u32,
+    pub bootstrap_max_refills: u8,
     pub timeout_endpoint_badge: u64,
     pub consumed_budget_evidence: bool,
 }
@@ -150,6 +152,7 @@ pub enum TemporalTaskKind {
     RootFault,
     RootEmergency,
     WorkerSupervisor,
+    WorkerExecutor,
     DriverSupervisor,
     Service,
     Driver,
@@ -268,6 +271,7 @@ pub struct ConsoleNetworkServiceConfig {
     pub entry_symbol: &'static str,
     pub listener_port: u16,
     pub single_listener: bool,
+    pub direct_virtio: bool,
     pub child_cspace_slots: u16,
     pub revoke_anchor_slot: u32,
     pub revoke_anchor_bits: u8,
@@ -1046,9 +1050,9 @@ pub struct AuditConfig {
     pub replay_status_max_bytes: u32,
 }
 
-pub const MANIFEST_SCHEMA: &str = "1.14";
+pub const MANIFEST_SCHEMA: &str = "1.15";
 pub const MANIFEST_SHA256: &str =
-    "10f33db7f20f039701ec8d2c5d206aba45a67f4b7e359b22dc2e24a0cc055cbd";
+    "cdbfdfa9f4de5c1cd8f8f9ef7233aff9465e15e5469cce6604bdde50872996ba";
 pub const TICKET_TABLE_SHA256: &str = bootstrap::TICKET_TABLE_SHA256;
 pub const NAMESPACE_TABLE_SHA256: &str = bootstrap::NAMESPACE_TABLE_SHA256;
 pub const AUDIT_TABLE_SHA256: &str = bootstrap::AUDIT_TABLE_SHA256;

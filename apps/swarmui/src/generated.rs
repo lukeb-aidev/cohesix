@@ -6,7 +6,7 @@
 #![allow(dead_code)]
 
 pub const MANIFEST_SHA256: &str =
-    "10f33db7f20f039701ec8d2c5d206aba45a67f4b7e359b22dc2e24a0cc055cbd";
+    "cdbfdfa9f4de5c1cd8f8f9ef7233aff9465e15e5469cce6604bdde50872996ba";
 pub const SECURE9P_MSIZE: u32 = 8192;
 pub const SECURE9P_WALK_DEPTH: u8 = 8;
 pub const SWARMUI_TICKET_SCOPE: &str = "per-ticket";
@@ -34,14 +34,14 @@ pub const SWARMUI_PROC_INGEST_ROOT: &str = "/proc/ingest";
 pub const SWARMUI_WORKER_ROOT: &str = "/shard";
 pub const SWARMUI_NAMESPACE_ROOTS: &[&str] =
     &["/proc", "/queen", "/shard", "/worker", "/log", "/gpu"];
-pub const SWARMUI_WORKER_MAXIMUM_LIVE_TASKS: u16 = 37;
+pub const SWARMUI_WORKER_MAXIMUM_LIVE_TASKS: u16 = 256;
 pub const SWARMUI_WORKER_CANONICAL_TELEMETRY_TEMPLATE: &str =
     "/shard/<label>/worker/<id>/telemetry";
-pub const SWARMUI_WORKER_SHARD_BITS: u8 = 8;
+pub const SWARMUI_WORKER_SHARD_BITS: u8 = 6;
 pub const SWARMUI_WORKER_LEGACY_ALIAS: bool = true;
 pub const SWARMUI_WORKER_ROLE_BOUNDS: &[(&str, &str, u16)] = &[
     ("worker-heartbeat", "executable", 1),
-    ("worker-gpu", "executable", 15),
+    ("worker-gpu", "executable", 127),
     ("worker-bus", "model-only", 0),
-    ("worker-lora", "executable", 21),
+    ("worker-lora", "executable", 128),
 ];

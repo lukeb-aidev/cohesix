@@ -313,13 +313,13 @@ fn root_control_natural_postpone_keeps_exact_target_budgets_and_fault_routes() {
     for (manifest, budget, provenance) in [
         (
             qemu,
-            5_500,
-            "m26e-qemu-root-adjacent-refill-natural-postpone-candidate-v35",
+            9_000,
+            "m26e-qemu-root-dedicated-core-bounded-quantum-v1",
         ),
         (
             regression,
-            5_500,
-            "m26e-qemu-root-adjacent-refill-natural-postpone-candidate-v35",
+            9_000,
+            "m26e-qemu-root-dedicated-core-bounded-quantum-v1",
         ),
         (
             pi4,
@@ -633,7 +633,8 @@ fn console_containment_advances_one_material_unit_per_recovery_turn() {
     assert_eq!(containment.matches(".unmap_page_cap(").count(), 1);
     assert_eq!(
         containment.matches("sel4::cnode_delete_bounded(").count(),
-        1
+        3,
+        "fault, direct IRQ-notification, and direct IRQHandler deletion arms must remain distinct",
     );
     assert_eq!(
         containment

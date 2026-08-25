@@ -22,12 +22,14 @@ default-profile values are summarized in
 [the generated manifest snippet](snippets/root_task_manifest.md). Do not copy
 generated badge bases or quotas into client code or hand-maintained prose.
 
-The default QEMU and Pi 4 profiles admit one executable slot each for
-WorkerHeartbeat, WorkerGpu, and WorkerLora. Cap-backed authority and lifecycle
-notifications are enabled for those three roles. WorkerBus remains a
-model/session-only role. A generated executable record proves configured
-admission; a QEMU or Pi claim still requires target evidence for the exact
-kernel, resolved manifest, root image, Worker archive, and ABI version.
+The default QEMU profile admits 256 executable instances: one
+WorkerHeartbeat, 127 WorkerGpu, and 128 WorkerLora. The Pi 4 profile admits 64:
+one, 31, and 32 respectively. All are passive children served by two active,
+role-bounded executor lanes. Cap-backed authority and lifecycle records remain
+per instance. WorkerBus remains a model/session-only role. A generated
+executable record proves configured admission; a QEMU or Pi claim still
+requires target evidence for the exact kernel, resolved manifest, root image,
+Worker archive, and ABI version.
 
 ## Role support matrix
 
@@ -36,10 +38,10 @@ The checked-in default and Pi 4 profiles currently declare the following:
 | Role | Ticket and host policy | Target worker in selected profiles | Authority scope |
 | --- | --- | --- | --- |
 | Queen | Implemented | Root-task authority, not a separate worker image | Hive-wide access to enabled control and observability providers. |
-| WorkerHeartbeat | Implemented | One admitted executable slot | Own telemetry and the minimal worker observability view. |
-| WorkerGpu | Implemented | One admitted executable slot | Worker view plus its generated GPU lease scope. GPU hardware remains host-side. |
+| WorkerHeartbeat | Implemented | One admitted passive executable slot | Own telemetry and the minimal worker observability view. |
+| WorkerGpu | Implemented | 127 QEMU / 31 Pi passive executable slots | Worker view plus its generated GPU lease scope. GPU hardware remains host-side. |
 | WorkerBus | Recognized | **Not executable; session/model only** | Host/sidecar policy can describe a bus scope, but the selected target profiles must reject it as target-task authority. |
-| WorkerLora | Implemented | One admitted executable slot | Own Worker view plus bounded AI LoRA model receipts. It receives no local GPU authority; PEFT execution remains host-side. |
+| WorkerLora | Implemented | 128 QEMU / 32 Pi passive executable slots | Own Worker view plus bounded AI LoRA model receipts. It receives no local GPU authority; PEFT execution remains host-side. |
 
 `implemented = true` means that the role has a compiler-owned task ABI,
 executable slot, object budget, temporal record, selected child image, and
@@ -85,13 +87,14 @@ deterministic algorithm:
    `shard_bits`; when `shard_bits = 8`, keep the full byte.
 3. Format the resulting value as two lowercase hexadecimal digits.
 
-For the checked-in `shard_bits = 8` profile, `sha256("worker-7")` begins with
-`8a`, so the canonical telemetry path is
-`/shard/8a/worker/worker-7/telemetry`. When sharding is disabled or
+The selected QEMU profile keeps the top six bits, so
+`sha256("worker-7")[0] == 0x8a` becomes label `22` and path
+`/shard/22/worker/worker-7/telemetry`. The selected Pi profile retains the full
+byte and therefore uses label `8a`. When sharding is disabled or
 `shard_bits = 0`, the label helper returns `00`; a disabled layout nevertheless
-uses `/worker/<id>/telemetry`, not `/shard/00/...`. This vector is suitable for
-checking clients that construct canonical paths locally; clients must still
-discover the active profile instead of assuming eight shard bits.
+uses `/worker/<id>/telemetry`, not `/shard/00/...`. These vectors are suitable
+for checking clients that construct canonical paths locally; clients must
+discover the active profile instead of assuming one target's shard width.
 
 A ticket scope such as `/worker`, `/gpu`, or `/bus` is an authority prefix; it
 does not replace the canonical telemetry path template generated for the role.
@@ -175,8 +178,9 @@ Worker authority has two distinct layers:
    and a Read-only lifecycle notification cap whose one-hot badges identify
    control, timeout, shutdown, and revoke. ABI action is a validated message
    label, while sequence and generation data live in bounded shared records;
-   badges do not carry structured data. The Worker's active scheduling context
-   binds only to its TCB, never to a notification.
+   badges do not carry structured data. The Worker's passive endpoint accepts
+   an SC only from its compiler-allowlisted role executor, through one
+   depth-one `Call` and its instance-owned Reply object.
 
 The root Worker supervisor owns construction, READY admission, one-in-flight
 control publication, bounded shutdown, fault teardown, revocation, and fresh
@@ -189,7 +193,7 @@ ordinal, not the role-local ABI slot: the current Heartbeat, GPU, and LoRA
 identities each use role-local slot zero and therefore cannot safely index a
 shared mailbox array by `identity.slot`.
 
-The fixed `worker-task-abi/v1` outcome field has the exact values
+The fixed `worker-task-abi/v2` outcome field has the exact values
 `NotApplicable=0`, `Confirmed=1`, `Rejected=2`, and `Stale=8`. The explicit
 stale value extends the existing fixed layout without changing its record
 sizes, magic values, or ABI version, and both GPU and LoRA receipt/completion
@@ -209,9 +213,10 @@ Revocation is bounded and explicit:
 2. The session or worker record is marked closed/revoked with a reason.
 3. Root publishes the generated one-hot lifecycle cause and waits only for the
    bounded completion/timeout window.
-4. The supervisor suspends the exact TCB generation, unbinds its active SC,
-   clears mappings, and revokes the role's grouped child-untyped derivations
-   before returning the executable slot to the pool.
+4. The supervisor suspends the exact TCB generation, resolves its Reply path
+   once, regains any donated executor SC, clears mappings, and revokes the
+   role's grouped child-untyped derivations before returning the executable
+   slot to the pool.
 5. Subsequent namespace and console operations fail rather than silently
    continuing; logs and enabled observability providers record the transition.
 
@@ -230,14 +235,18 @@ The selected QEMU and Pi profiles use four-core, one-domain seL4 SMP+MCS.
 Every active temporal record owns one generated scheduling context and declares
 its core, budget, period, refill bound, priority, maximum controlled priority,
 blocking, release jitter, WCET provenance, response time, and admission result.
-The passive NineDoor service is the single exception: it runs only on the
-compiler-allowlisted donated Call/Reply chain after its one-shot bootstrap
-scheduling context has been removed.
+NineDoor and every executable Worker are passive. NineDoor runs only on the
+root-control donation chain after one bootstrap activation. Workers run only
+on two generated active executors: GPU on core 2, LoRA plus Heartbeat on core
+3. Each executor selects from a fixed bounded fair queue and donates its SC to
+one exact instance at a time.
 
 `SchedControl` remains root-only. Active scheduling contexts bind to TCBs, not
 notifications. IRQ/locality-bound drivers, autonomous drains, the
-console-network child, supervisors, and executable Workers therefore retain
-their declared temporal owner and cannot borrow an undeclared execution lane.
+console-network child, supervisors, and Worker executors therefore retain
+their declared temporal owner. A passive Worker cannot borrow an undeclared
+lane, nest donation, or retain an executor SC after its exact Reply/fault
+boundary.
 
 The selected timeout policy for root control and the active console child is
 `NaturalPostpone`: exhausting the current refill postpones execution until a

@@ -149,7 +149,7 @@ mod tests {
 
     #[test]
     fn ninedoor_bootstrap_candidate_is_exactly_accounted() {
-        for (manifest, fixed, maximum) in [(qemu_manifest(), 7, 44), (pi4_manifest(), 14, 17)] {
+        for (manifest, fixed, maximum) in [(qemu_manifest(), 9, 265), (pi4_manifest(), 16, 80)] {
             assert_eq!(manifest.ninedoor_service.objects.scheduling_contexts, 1);
             assert_eq!(
                 manifest.ninedoor_service.bootstrap_scheduling_context_bits,
@@ -187,13 +187,19 @@ mod tests {
             admitted_frames,
             admitted_slots,
         ) in [
-            (qemu_manifest(), 2_018, 4_058, 2_610, 6_426, 3_122, 8_474),
-            (pi4_manifest(), 4_066, 8_962, 4_114, 9_154, 4_626, 11_202),
+            (qemu_manifest(), 2_024, 4_378, 5_096, 12_570, 5_608, 14_618),
+            (pi4_manifest(), 4_072, 9_230, 4_840, 11_278, 5_352, 13_326),
         ] {
             let qemu = manifest.profile.name == "virt-aarch64";
             assert_eq!(manifest.console_network_service.stack_pages, 32);
-            assert_eq!(manifest.console_network_service.objects.frames, 98);
-            assert_eq!(manifest.console_network_service.objects.cspace_slots, 123);
+            assert_eq!(
+                manifest.console_network_service.objects.frames,
+                if qemu { 134 } else { 98 }
+            );
+            assert_eq!(
+                manifest.console_network_service.objects.cspace_slots,
+                if qemu { 162 } else { 123 }
+            );
             assert_eq!(manifest.console_network_service.objects.fault_caps, 1);
             assert_eq!(
                 manifest.console_network_service.objects.timeout_fault_caps,
@@ -219,16 +225,16 @@ mod tests {
                     .worker_resource_admission
                     .fixed_objects
                     .timeout_fault_caps,
-                if qemu { 7 } else { 14 }
+                if qemu { 9 } else { 16 }
             );
-            assert_eq!(maximum.timeout_fault_caps, if qemu { 44 } else { 17 });
+            assert_eq!(maximum.timeout_fault_caps, if qemu { 265 } else { 80 });
             assert_eq!(
                 maximum.timeout_fault_caps
                     + manifest
                         .worker_resource_admission
                         .post_construction_reserve
                         .timeout_fault_caps,
-                if qemu { 52 } else { 25 }
+                if qemu { 273 } else { 88 }
             );
             assert_eq!(maximum.frames, maximum_frames);
             assert_eq!(maximum.cspace_slots, maximum_slots);
@@ -274,15 +280,15 @@ mod tests {
                 expected_timer_clock_hz,
             ) = if qemu {
                 (
-                    5_500,
-                    5_000,
-                    7_600,
+                    9_000,
+                    8_500,
+                    8_500,
                     64,
-                    "m26e-qemu-root-adjacent-refill-natural-postpone-candidate-v35",
+                    "m26e-qemu-root-dedicated-core-bounded-quantum-v1",
                     2,
                     3_000,
-                    8_750,
-                    15_000,
+                    9_000,
+                    8_000,
                     24_000_000,
                 )
             } else {
@@ -295,7 +301,7 @@ mod tests {
                     0,
                     8_100,
                     9_000,
-                    1_600,
+                    5_800,
                     54_000_000,
                 )
             };
@@ -349,13 +355,13 @@ mod tests {
 
             let worker_expectations = if qemu {
                 [
-                    ("worker-gpu-slot-0", 2, 7_500),
-                    ("worker-lora-slot-0", 3, 6_500),
+                    ("root-worker-executor-gpu", 2, 7_500),
+                    ("root-worker-executor-lora", 3, 7_200),
                 ]
             } else {
                 [
-                    ("worker-gpu-slot-0", 2, 1_200),
-                    ("worker-lora-slot-0", 2, 1_200),
+                    ("root-worker-executor-gpu", 2, 5_600),
+                    ("root-worker-executor-lora", 3, 8_200),
                 ]
             };
             for (worker_id, expected_core, expected_response) in worker_expectations {
@@ -398,7 +404,7 @@ mod tests {
             assert!(core_zero_demand <= core_zero_usable);
             assert_eq!(
                 core_zero_usable - core_zero_demand,
-                if qemu { 9_250 } else { 0 }
+                if qemu { 9_000 } else { 0 }
             );
 
             let core_two_demand = manifest
@@ -443,7 +449,14 @@ mod tests {
             assert_eq!(root_fault.budget_us, 3_000);
             assert_eq!(root_fault.period_us, 10_000);
             assert_eq!(root_fault.wcet_us, 2_400);
-            assert_eq!(root_fault.response_time_us, 2_600);
+            assert_eq!(
+                root_fault.response_time_us,
+                if manifest.profile.name == "virt-aarch64" {
+                    2_400
+                } else {
+                    2_600
+                }
+            );
             assert_eq!(
                 root_fault.wcet_provenance,
                 "m26e-qemu-root-fault-service-units-candidate-v6"
@@ -463,7 +476,7 @@ mod tests {
         assert_eq!(qemu_worker.budget_us, 3_000);
         assert_eq!(qemu_worker.period_us, 10_000);
         assert_eq!(qemu_worker.wcet_us, 2_400);
-        assert_eq!(qemu_worker.response_time_us, 4_800);
+        assert_eq!(qemu_worker.response_time_us, 7_200);
         assert_eq!(
             qemu_worker.wcet_provenance,
             "m26e-qemu-root-worker-supervisor-cold-activation-candidate-v15"
@@ -478,7 +491,7 @@ mod tests {
         assert_eq!(qemu_driver.budget_us, 3_000);
         assert_eq!(qemu_driver.period_us, 10_000);
         assert_eq!(qemu_driver.wcet_us, 2_400);
-        assert_eq!(qemu_driver.response_time_us, 2_400);
+        assert_eq!(qemu_driver.response_time_us, 4_800);
         assert_eq!(
             qemu_driver.wcet_provenance,
             "m26e-qemu-root-driver-supervisor-cold-activation-candidate-v15"
@@ -574,12 +587,12 @@ mod tests {
                 .len(),
             14
         );
-        assert_eq!(record["inventory"]["tcbs"], 44);
-        assert_eq!(record["inventory"]["scheduling_contexts"], 44);
-        assert_eq!(record["inventory"]["frames"], 2610);
-        assert_eq!(record["inventory"]["endpoints"], 15);
-        assert_eq!(record["inventory"]["reply_objects"], 6);
-        assert_eq!(record["inventory"]["cspace_slots"], 6426);
+        assert_eq!(record["inventory"]["tcbs"], 265);
+        assert_eq!(record["inventory"]["scheduling_contexts"], 265);
+        assert_eq!(record["inventory"]["frames"], 5096);
+        assert_eq!(record["inventory"]["endpoints"], 271);
+        assert_eq!(record["inventory"]["reply_objects"], 264);
+        assert_eq!(record["inventory"]["cspace_slots"], 12570);
 
         let canonical = canonical_json(&record["topology"]).expect("canonical topology");
         assert_eq!(

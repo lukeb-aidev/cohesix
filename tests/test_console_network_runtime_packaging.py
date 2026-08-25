@@ -118,7 +118,10 @@ def test_runtime_polls_retained_work_or_blocks_directly_and_spends_ack() -> None
 
     source = RUNTIME_KERNEL.read_text(encoding="utf-8")
     target = source.split("pub unsafe extern \"C\" fn _start", maxsplit=1)[1]
-    target = target.split("fn install_ipc_buffer", maxsplit=1)[0]
+    target = target.split(
+        '\n}\n\n#[cfg(feature = "direct-virtio")]\nfn acknowledge_direct_irq_handler',
+        maxsplit=1,
+    )[0]
     ready = target.index("ExchangeKind::Ready,")
     ready_signal = target.index(
         "signal_slot(descriptor.supervisor_wake_notification_slot);", ready
@@ -347,7 +350,7 @@ def test_runtime_shared_pages_use_bounded_sequence_last_io() -> None:
     assert "fn publish_completion_watermark(" in source
     assert "INGRESS_CONSUMED_SEQUENCE_OFFSET" in source
     assert "CONTROL_CONSUMED_SEQUENCE_OFFSET" in source
-    assert source.count("unsafe {") == 13
+    assert source.count("unsafe {") == 16
 
 
 def test_control_bytes_are_kind_validated_and_drain_tracks_exact_output() -> None:

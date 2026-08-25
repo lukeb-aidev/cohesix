@@ -1649,6 +1649,7 @@ mod isolated_network_turn;
     sel4_config_kernel_mcs
 ))]
 pub(crate) use isolated_network_turn::{
+    select_isolated_direct_network_turn, select_isolated_direct_response_turn,
     select_isolated_network_turn, select_isolated_response_turn, IsolatedNetworkLowerCursor,
     IsolatedNetworkLowerUnit, IsolatedNetworkTurnOutcome, IsolatedNetworkTurnSelection,
     IsolatedNetworkTurnUnit,

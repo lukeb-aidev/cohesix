@@ -104,7 +104,7 @@ fn append_tail(
 }
 
 fn worker_shards() -> ShardLayout {
-    ShardLayout::enabled(8, true)
+    ShardLayout::enabled(6, true)
 }
 
 fn worker_telemetry_path() -> String {

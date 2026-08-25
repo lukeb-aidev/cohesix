@@ -26,6 +26,11 @@ executable roles with bounded target-task authority; WorkerBus remains a
 model/session-only role. That declaration is not evidence that a particular
 QEMU or Pi run created or accepted those tasks.
 
+The selected QEMU topology admits 256 passive Worker instances across those
+three executable roles; the Pi topology admits 64. Two bounded executor lanes
+provide useful concurrency without multiplying active scheduling-context
+demand per Worker.
+
 Cohesix is designed to coordinate large, mixed-platform hives of GPU-backed AI
 systems. Linux GPU nodes and macOS or Linux operator and AI hosts keep their
 models, agents, training, inference, and hardware stacks in their native

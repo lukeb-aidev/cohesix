@@ -10,16 +10,18 @@ use std::collections::{BTreeMap, BTreeSet};
 const M26E_CORE_COUNT: u8 = 4;
 const M26E_DOMAIN_COUNT: u8 = 1;
 const MIN_SCHED_CONTEXT_BITS: u8 = 7;
-const MAX_TEMPORAL_TASKS: usize = 64;
+const MAX_TEMPORAL_TASKS: usize = 384;
 const MAX_RESPONSE_TIME_ITERATIONS: usize = 128;
 const MAX_TASK_ID_BYTES: usize = 64;
 const MAX_WCET_PROVENANCE_BYTES: usize = 160;
-const REQUIRED_CRITICAL_TASKS: [&str; 5] = [
+const REQUIRED_CRITICAL_TASKS: [&str; 7] = [
     "root-control",
     "root-fault",
     "root-emergency",
     "root-worker-supervisor",
     "root-driver-supervisor",
+    "root-worker-executor-gpu",
+    "root-worker-executor-lora",
 ];
 
 /// Kernel scheduler architecture selected by an operational manifest.
@@ -57,6 +59,8 @@ pub enum TemporalTaskKind {
     RootEmergency,
     /// Worker lifecycle supervisor.
     WorkerSupervisor,
+    /// Bounded active donor lane for passive Worker instances.
+    WorkerExecutor,
     /// Linked-driver containment supervisor.
     DriverSupervisor,
     /// Restricted namespace or protocol service.
@@ -291,6 +295,88 @@ pub struct TemporalCoreAdmission {
     pub reserve_us: u32,
 }
 
+/// Compact compiler source for a homogeneous passive Worker population.
+///
+/// The manifest still declares every security-relevant field, but cardinality
+/// no longer requires hundreds of mechanically duplicated task tables. The
+/// compiler expands this record into one ordinary [`TemporalTaskConfig`] per
+/// Worker before validation and code generation.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct TemporalWorkerClassConfig {
+    pub role: String,
+    pub task_prefix: String,
+    pub slots: u16,
+    pub execution: TemporalExecution,
+    pub core: u8,
+    pub priority: u8,
+    pub mcp: u8,
+    pub timeout_badge_base: u64,
+    pub timeout_policy: TimeoutPolicy,
+    pub allowed_donors: Vec<String>,
+    pub reply_objects: u8,
+    pub max_donation_depth: u8,
+    pub fault_handler: String,
+    pub locality_bound: bool,
+    pub wcet_provenance: String,
+}
+
+impl TemporalWorkerClassConfig {
+    fn expand(&self, slot: u16) -> Result<TemporalTaskConfig> {
+        if self.slots == 0
+            || slot >= self.slots
+            || self.execution != TemporalExecution::Passive
+            || self.timeout_policy != TimeoutPolicy::ReturnError
+            || self.allowed_donors.len() != 1
+            || self.reply_objects != 1
+            || self.max_donation_depth != 1
+            || !self.locality_bound
+        {
+            bail!(
+                "temporal Worker class {} requires passive depth-one Reply execution with one donor",
+                self.role
+            );
+        }
+        validate_name(
+            "temporal_authority.worker_classes.role",
+            &self.role,
+            MAX_TASK_ID_BYTES,
+        )?;
+        validate_name(
+            "temporal_authority.worker_classes.task_prefix",
+            &self.task_prefix,
+            MAX_TASK_ID_BYTES,
+        )?;
+        validate_name(
+            "temporal_authority.worker_classes.wcet_provenance",
+            &self.wcet_provenance,
+            MAX_WCET_PROVENANCE_BYTES,
+        )?;
+        let timeout_badge = self
+            .timeout_badge_base
+            .checked_add(u64::from(slot))
+            .filter(|badge| *badge != 0)
+            .ok_or_else(|| anyhow::anyhow!("temporal Worker timeout badge overflows"))?;
+        Ok(TemporalTaskConfig {
+            id: format!("{}{}", self.task_prefix, slot),
+            kind: TemporalTaskKind::Worker,
+            execution: self.execution,
+            core: self.core,
+            priority: self.priority,
+            mcp: self.mcp,
+            timeout_badge,
+            timeout_policy: self.timeout_policy,
+            allowed_donors: self.allowed_donors.clone(),
+            reply_objects: self.reply_objects,
+            max_donation_depth: self.max_donation_depth,
+            fault_handler: self.fault_handler.clone(),
+            locality_bound: self.locality_bound,
+            wcet_provenance: self.wcet_provenance.clone(),
+            ..TemporalTaskConfig::default()
+        })
+    }
+}
+
 /// Complete generated scheduling, donation, and fault-routing contract.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
@@ -302,6 +388,7 @@ pub struct TemporalAuthorityConfig {
     pub admission_window_us: u32,
     pub core_admission: Vec<TemporalCoreAdmission>,
     pub tasks: Vec<TemporalTaskConfig>,
+    pub worker_classes: Vec<TemporalWorkerClassConfig>,
 }
 
 impl Default for TemporalAuthorityConfig {
@@ -314,11 +401,37 @@ impl Default for TemporalAuthorityConfig {
             admission_window_us: 0,
             core_admission: Vec::new(),
             tasks: Vec::new(),
+            worker_classes: Vec::new(),
         }
     }
 }
 
 impl TemporalAuthorityConfig {
+    /// Expand compact passive Worker class records exactly once.
+    pub fn expand_worker_classes(&mut self) -> Result<()> {
+        if self.worker_classes.is_empty() {
+            return Ok(());
+        }
+        let mut expanded = Vec::<TemporalTaskConfig>::new();
+        for class in &self.worker_classes {
+            for slot in 0..class.slots {
+                expanded.push(class.expand(slot)?);
+            }
+        }
+        let existing = self
+            .tasks
+            .iter()
+            .filter(|task| task.kind == TemporalTaskKind::Worker)
+            .cloned()
+            .collect::<Vec<_>>();
+        if existing.is_empty() {
+            self.tasks.extend(expanded);
+        } else if existing != expanded {
+            bail!("expanded temporal Worker classes disagree with explicit Worker task records");
+        }
+        Ok(())
+    }
+
     /// Validate the complete topology and offline admission arithmetic.
     pub fn validate(&self) -> Result<()> {
         if !self.enabled {
@@ -326,6 +439,7 @@ impl TemporalAuthorityConfig {
                 || self.admission_window_us != 0
                 || !self.core_admission.is_empty()
                 || !self.tasks.is_empty()
+                || !self.worker_classes.is_empty()
             {
                 bail!(
                     "disabled temporal_authority must not claim an architecture, admission, or live tasks"
@@ -431,6 +545,9 @@ impl TemporalAuthorityConfig {
                 "root-emergency" => TemporalTaskKind::RootEmergency,
                 "root-worker-supervisor" => TemporalTaskKind::WorkerSupervisor,
                 "root-driver-supervisor" => TemporalTaskKind::DriverSupervisor,
+                "root-worker-executor-gpu" | "root-worker-executor-lora" => {
+                    TemporalTaskKind::WorkerExecutor
+                }
                 _ => bail!("unsupported critical temporal task {required}"),
             };
             let expected_sc_bits = if required == "root-control" {
@@ -767,6 +884,18 @@ mod tests {
                 1,
                 5,
             ),
+            active(
+                "root-worker-executor-gpu",
+                TemporalTaskKind::WorkerExecutor,
+                2,
+                6,
+            ),
+            active(
+                "root-worker-executor-lora",
+                TemporalTaskKind::WorkerExecutor,
+                3,
+                7,
+            ),
         ];
         for task in &mut tasks[1..] {
             task.scheduling_context_bits = 8;
@@ -778,6 +907,8 @@ mod tests {
         tasks[2].response_time_us = 1_200;
         tasks[3].response_time_us = 800;
         tasks[4].response_time_us = 800;
+        tasks[5].response_time_us = 400;
+        tasks[6].response_time_us = 400;
         TemporalAuthorityConfig {
             enabled: true,
             architecture: SchedulerArchitecture::SmpMcs,
@@ -792,6 +923,7 @@ mod tests {
                 })
                 .collect(),
             tasks,
+            worker_classes: Vec::new(),
         }
     }
 

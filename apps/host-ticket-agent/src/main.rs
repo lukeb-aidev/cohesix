@@ -232,20 +232,35 @@ struct SnapshotFeed {
 #[derive(Debug, Default)]
 struct SnapshotState {
     generation: u64,
-    dropped_through_generation: u64,
     admission_watermark: Option<u64>,
-    snapshots: VecDeque<(u64, Arc<Vec<String>>)>,
+    snapshots: VecDeque<SnapshotWindow>,
     closed: bool,
+}
+
+#[derive(Debug)]
+struct SnapshotWindow {
+    generation: u64,
+    first_admission: Option<u64>,
+    last_admission: Option<u64>,
+    lines: Arc<Vec<String>>,
 }
 
 const SNAPSHOT_FEED_CAPACITY: usize = 128;
 
-fn snapshot_admission_watermark(lines: &[String]) -> Option<u64> {
-    lines
+fn snapshot_admission_range(lines: &[String]) -> (Option<u64>, Option<u64>) {
+    let mut admissions = lines
         .iter()
         .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
-        .filter_map(|value| value.get("admission_sequence")?.as_u64())
-        .max()
+        .filter_map(|value| value.get("admission_sequence")?.as_u64());
+    let Some(first) = admissions.next() else {
+        return (None, None);
+    };
+    admissions.fold((Some(first), Some(first)), |(minimum, maximum), value| {
+        (
+            minimum.map(|current| current.min(value)),
+            maximum.map(|current| current.max(value)),
+        )
+    })
 }
 
 impl SnapshotFeed {
@@ -254,14 +269,14 @@ impl SnapshotFeed {
             .state
             .lock()
             .map_err(|_| anyhow::anyhow!("host-ticket snapshot feed lock poisoned"))?;
-        let admission_watermark = snapshot_admission_watermark(lines.as_slice());
+        let (first_admission, admission_watermark) = snapshot_admission_range(lines.as_slice());
         let unchanged = if admission_watermark.is_some() {
             state.generation != 0 && state.admission_watermark == admission_watermark
         } else {
             state
                 .snapshots
                 .back()
-                .is_some_and(|(_, current)| current.as_slice() == lines.as_slice())
+                .is_some_and(|current| current.lines.as_slice() == lines.as_slice())
         };
         if unchanged {
             return Ok(());
@@ -270,16 +285,17 @@ impl SnapshotFeed {
             .generation
             .checked_add(1)
             .ok_or_else(|| anyhow::anyhow!("host-ticket snapshot generation overflow"))?;
-        let generation = state.generation;
         if state.snapshots.len() == SNAPSHOT_FEED_CAPACITY {
-            let (dropped_generation, _) = state
-                .snapshots
-                .pop_front()
-                .ok_or_else(|| anyhow::anyhow!("host-ticket snapshot feed underflow"))?;
-            state.dropped_through_generation = dropped_generation;
+            state.snapshots.pop_front();
         }
+        let generation = state.generation;
         state.admission_watermark = admission_watermark;
-        state.snapshots.push_back((generation, Arc::new(lines)));
+        state.snapshots.push_back(SnapshotWindow {
+            generation,
+            first_admission,
+            last_admission: admission_watermark,
+            lines: Arc::new(lines),
+        });
         self.changed.notify_all();
         Ok(())
     }
@@ -297,6 +313,7 @@ impl SnapshotFeed {
     fn wait_after(
         &self,
         generation: u64,
+        admission_sequence: u64,
         running: &AtomicBool,
     ) -> Result<Option<(u64, Arc<Vec<String>>)>> {
         let mut state = self
@@ -310,18 +327,30 @@ impl SnapshotFeed {
                 .map_err(|_| anyhow::anyhow!("host-ticket snapshot feed wait poisoned"))?;
             state = waited.0;
         }
-        if generation < state.dropped_through_generation {
-            return Err(anyhow::anyhow!(
-                "host-ticket snapshot feed overrun: requested after generation {} but dropped through {}",
-                generation,
-                state.dropped_through_generation,
-            ));
-        }
-        Ok(state
+        let newer = state
             .snapshots
             .iter()
-            .find(|(candidate, _)| *candidate > generation)
-            .map(|(candidate, lines)| (*candidate, Arc::clone(lines))))
+            .filter(|window| window.generation > generation);
+        let selected = if admission_sequence == 0 {
+            newer
+                .clone()
+                .rev()
+                .find(|window| window.first_admission == Some(1))
+                .or_else(|| newer.clone().next_back())
+        } else {
+            let expected = admission_sequence.saturating_add(1);
+            newer
+                .clone()
+                .rev()
+                .find(|window| {
+                    window
+                        .first_admission
+                        .zip(window.last_admission)
+                        .is_some_and(|(first, last)| first <= expected && expected <= last)
+                })
+                .or_else(|| newer.clone().next())
+        };
+        Ok(selected.map(|window| (window.generation, Arc::clone(&window.lines))))
     }
 }
 
@@ -383,7 +412,11 @@ fn run_ticket_lane_from_snapshot(
     let mut lane_state = TicketLaneState::load(&cursor)?;
 
     while running.load(Ordering::Acquire) {
-        let Some((generation, snapshot_lines)) = feed.wait_after(snapshot_generation, running)?
+        let Some((generation, snapshot_lines)) = feed.wait_after(
+            snapshot_generation,
+            lane_state.admission_sequence(),
+            running,
+        )?
         else {
             break;
         };
@@ -639,7 +672,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn snapshot_feed_deduplicates_and_delivers_changed_generations_in_order() {
+    fn snapshot_feed_deduplicates_and_coalesces_to_latest_generation() {
         let feed = SnapshotFeed::default();
         let running = AtomicBool::new(true);
         feed.publish(vec!["first".to_owned()]).expect("first");
@@ -647,23 +680,16 @@ mod tests {
             .expect("duplicate first");
         feed.publish(vec!["latest".to_owned()]).expect("latest");
 
-        let (first_generation, first_lines) = feed
-            .wait_after(0, &running)
+        let (latest_generation, latest_lines) = feed
+            .wait_after(0, 0, &running)
             .expect("wait")
             .expect("published snapshot");
-        assert_eq!(first_generation, 1);
-        assert_eq!(first_lines.as_slice(), ["first"]);
-
-        let (latest_generation, latest_lines) = feed
-            .wait_after(first_generation, &running)
-            .expect("wait latest")
-            .expect("latest snapshot");
         assert_eq!(latest_generation, 2);
         assert_eq!(latest_lines.as_slice(), ["latest"]);
 
         feed.close().expect("close");
         assert!(feed
-            .wait_after(latest_generation, &running)
+            .wait_after(latest_generation, 0, &running)
             .expect("closed wait")
             .is_none());
     }
@@ -676,46 +702,67 @@ mod tests {
             r#"{"admission_sequence":7,"resolved_worker_slot":1}"#.to_owned()
         ])
         .expect("first admission");
-        feed.publish(vec![
-            r#"{"admission_sequence":7,"resolved_worker_slot":2}"#.to_owned()
-        ])
-        .expect("volatile update");
-        feed.publish(vec![
-            r#"{"admission_sequence":8,"resolved_worker_slot":2}"#.to_owned()
-        ])
-        .expect("next admission");
 
         let (first_generation, first_lines) = feed
-            .wait_after(0, &running)
+            .wait_after(0, 0, &running)
             .expect("wait first")
             .expect("first snapshot");
         assert_eq!(first_generation, 1);
         assert!(first_lines[0].contains(":7"));
 
+        feed.publish(vec![
+            r#"{"admission_sequence":7,"resolved_worker_slot":2}"#.to_owned()
+        ])
+        .expect("volatile update");
+        assert!(feed
+            .wait_after(first_generation, 7, &AtomicBool::new(false))
+            .expect("no volatile generation")
+            .is_none());
+
+        feed.publish(vec![
+            r#"{"admission_sequence":8,"resolved_worker_slot":2}"#.to_owned()
+        ])
+        .expect("next admission");
+
         let (second_generation, second_lines) = feed
-            .wait_after(first_generation, &running)
+            .wait_after(first_generation, 7, &running)
             .expect("wait second")
             .expect("second snapshot");
         assert_eq!(second_generation, 2);
         assert!(second_lines[0].contains(":8"));
         assert!(feed
-            .wait_after(second_generation, &AtomicBool::new(false))
+            .wait_after(second_generation, 8, &AtomicBool::new(false))
             .expect("no third generation")
             .is_none());
     }
 
     #[test]
-    fn snapshot_feed_fails_closed_when_a_consumer_exceeds_the_bound() {
+    fn snapshot_feed_coalesces_to_newest_contiguous_retained_window() {
         let feed = SnapshotFeed::default();
         let running = AtomicBool::new(true);
-        for generation in 0..=SNAPSHOT_FEED_CAPACITY {
-            feed.publish(vec![generation.to_string()])
-                .expect("bounded publish");
+        for last in 1u64..=257 {
+            let first = last.saturating_sub(63).max(1);
+            let lines = (first..=last)
+                .map(|admission| format!(r#"{{"admission_sequence":{admission}}}"#))
+                .collect();
+            feed.publish(lines).expect("bounded publish");
         }
 
-        let error = feed
-            .wait_after(0, &running)
-            .expect_err("evicted generation must fail closed");
-        assert!(error.to_string().contains("snapshot feed overrun"));
+        let (generation, lines) = feed
+            .wait_after(0, 192, &running)
+            .expect("wait contiguous")
+            .expect("contiguous snapshot");
+        assert_eq!(generation, 256);
+        assert!(lines.first().is_some_and(|line| line.contains(":193}")));
+        assert!(lines.last().is_some_and(|line| line.contains(":256}")));
+
+        let (oldest_generation, oldest_lines) = feed
+            .wait_after(0, 1, &running)
+            .expect("wait retained")
+            .expect("oldest retained snapshot");
+        assert_eq!(oldest_generation, 130);
+        assert!(oldest_lines
+            .first()
+            .is_some_and(|line| line.contains(":67}")));
     }
 }

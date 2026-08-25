@@ -55,9 +55,9 @@ SHT_SYMTAB = 2
 SHT_STRTAB = 3
 SHT_DYNSYM = 11
 WORKER_METADATA_NAME = ".cohesix.worker"
-WORKER_METADATA_MAGIC = 0x574B4D31
-WORKER_ABI_VERSION = 1
-WORKER_ENTRY_VERSION = 1
+WORKER_METADATA_MAGIC = 0x574B4D32
+WORKER_ABI_VERSION = 2
+WORKER_ENTRY_VERSION = 2
 WORKER_METADATA_FLAGS = 3
 WORKER_METADATA_BYTES = 64
 WORKER_ENTRY_SYMBOL = b"_start"
@@ -654,7 +654,7 @@ def verify_manifest(manifest_path: Path, archive_path: Path) -> dict[str, object
             or row.get("ipc_buffer_bytes") != IPC_BUFFER_BYTES
             or row.get("shared_page_bytes") != PAGE_BYTES
         ):
-            raise WorkerImageError("Worker image ABI bounds differ from version 1")
+            raise WorkerImageError("Worker image ABI bounds differ from version 2")
         metadata_vaddr = row.get("metadata_vaddr")
         metadata_sha = row.get("metadata_sha256")
         if not isinstance(metadata_vaddr, int) or not isinstance(metadata_sha, str):

@@ -11,17 +11,17 @@ echo '{"id":"shard-spawn-2","target":"/queen/ctl","decision":"approve"}' > /acti
 EXPECT SUBSTR path=/actions/queue
 spawn lora
 EXPECT OK
-# worker-1 shard label = sha256("worker-1")[0] = 0x13
-echo shard-ok-1 > /shard/13/worker/worker-1/telemetry
+# worker-1 shard label = top 6 bits of sha256("worker-1")[0] = 0x04
+echo shard-ok-1 > /shard/04/worker/worker-1/telemetry
 EXPECT OK
-EXPECT SUBSTR path=/shard/13/worker/worker-1/telemetry
+EXPECT SUBSTR path=/shard/04/worker/worker-1/telemetry
 echo legacy-ok-1 > /worker/worker-1/telemetry
 EXPECT OK
 EXPECT SUBSTR path=/worker/worker-1/telemetry
-# worker-2 shard label = sha256("worker-2")[0] = 0x1c
-echo shard-ok-2 > /shard/1c/worker/worker-2/telemetry
+# worker-2 shard label = top 6 bits of sha256("worker-2")[0] = 0x07
+echo shard-ok-2 > /shard/07/worker/worker-2/telemetry
 EXPECT OK
-EXPECT SUBSTR path=/shard/1c/worker/worker-2/telemetry
+EXPECT SUBSTR path=/shard/07/worker/worker-2/telemetry
 echo legacy-ok-2 > /worker/worker-2/telemetry
 EXPECT OK
 EXPECT SUBSTR path=/worker/worker-2/telemetry

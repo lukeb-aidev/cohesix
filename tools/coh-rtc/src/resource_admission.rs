@@ -15,12 +15,14 @@ use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
-const REQUIRED_CRITICAL_TCBS: [&str; 5] = [
+const REQUIRED_CRITICAL_TCBS: [&str; 7] = [
     "root-control",
     "root-fault",
     "root-emergency",
     "root-worker-supervisor",
     "root-driver-supervisor",
+    "root-worker-executor-gpu",
+    "root-worker-executor-lora",
 ];
 const MAX_EXECUTABLE_ROLES: usize = 8;
 const MAX_ROLE_MIXES: usize = 8;
@@ -449,6 +451,7 @@ impl WorkerResourceAdmissionConfig {
         &self,
         temporal: &TemporalAuthorityConfig,
         child_cnode_radix_bits: u8,
+        bootstrap_scheduling_context_bits: u8,
     ) -> Result<()> {
         if !self.enabled {
             return Ok(());
@@ -465,11 +468,11 @@ impl WorkerResourceAdmissionConfig {
                     role.role
                 );
             }
-            for task in tasks {
+            for _task in tasks {
                 let required = self.object_bits.minimum_worker_anchor_bytes(
                     role.per_slot,
                     child_cnode_radix_bits,
-                    task.scheduling_context_bits,
+                    bootstrap_scheduling_context_bits,
                 )?;
                 if role.per_slot.untyped_bytes < required {
                     bail!(
@@ -601,12 +604,14 @@ impl WorkerResourceAdmissionConfig {
             }
             if tasks.iter().any(|task| {
                 task.kind != TemporalTaskKind::Worker
-                    || task.execution != TemporalExecution::Active
+                    || task.execution != TemporalExecution::Passive
                     || task.core != role.core
-                    || !task.allowed_donors.is_empty()
+                    || task.allowed_donors.len() != 1
+                    || task.reply_objects != 1
+                    || task.max_donation_depth != 1
             }) {
                 bail!(
-                    "executable role {} does not map to dedicated active Worker SCs",
+                    "executable role {} does not map to bounded passive Worker receivers",
                     role.role
                 );
             }
@@ -624,13 +629,13 @@ impl WorkerResourceAdmissionConfig {
                     || role.per_slot.vspaces != 1
                     || role.per_slot.page_tables != 8
                     || role.per_slot.asids != 1
-                    || role.per_slot.frames != 16
-                    || role.per_slot.endpoints != 0
-                    || role.per_slot.notifications != 1
+                    || role.per_slot.frames != 12
+                    || role.per_slot.endpoints != 1
+                    || role.per_slot.notifications != 0
                     || role.per_slot.scheduling_contexts != 1
                     || role.per_slot.fault_caps != 1
                     || role.per_slot.timeout_fault_caps != 1
-                    || role.per_slot.reply_objects != 0
+                    || role.per_slot.reply_objects != 1
                     || role.per_slot.cspace_slots == 0
                     || role.per_slot.untyped_bytes == 0
                     || !role.per_slot.untyped_bytes.is_power_of_two())
@@ -713,7 +718,7 @@ impl WorkerResourceAdmissionConfig {
         if self.critical_tcbs.len() != REQUIRED_CRITICAL_TCBS.len()
             || self.critical_tcbs.len() > MAX_CRITICAL_TCBS
         {
-            bail!("critical TCB resource table must contain exactly five records");
+            bail!("critical TCB resource table must contain exactly seven records");
         }
         let mut ids = BTreeSet::new();
         let mut anchors = BTreeSet::new();
@@ -809,7 +814,10 @@ impl WorkerResourceAdmissionConfig {
         let passive_reply_objects = temporal
             .tasks
             .iter()
-            .filter(|task| task.execution == TemporalExecution::Passive)
+            .filter(|task| {
+                task.kind != TemporalTaskKind::Worker
+                    && task.execution == TemporalExecution::Passive
+            })
             .try_fold(0u32, |total, task| {
                 total.checked_add(u32::from(task.reply_objects))
             })
@@ -1149,6 +1157,18 @@ mod tests {
                 true,
             ),
             temporal_task(
+                "root-worker-executor-gpu",
+                TemporalTaskKind::WorkerExecutor,
+                3,
+                true,
+            ),
+            temporal_task(
+                "root-worker-executor-lora",
+                TemporalTaskKind::WorkerExecutor,
+                2,
+                true,
+            ),
+            temporal_task(
                 "console-network-service",
                 TemporalTaskKind::Service,
                 0,
@@ -1157,14 +1177,40 @@ mod tests {
             temporal_task("driver-net", TemporalTaskKind::Driver, 3, false),
             temporal_task("worker-heart-slot-0", TemporalTaskKind::Worker, 3, false),
         ];
+        let worker = tasks.last_mut().expect("unit Worker task");
+        worker.execution = TemporalExecution::Passive;
+        worker.scheduling_context_slot = 0;
+        worker.scheduling_context_bits = 0;
+        worker.budget_us = 0;
+        worker.period_us = 0;
+        worker.deadline_us = 0;
+        worker.blocking_us = 0;
+        worker.jitter_us = 0;
+        worker.max_refills = 0;
+        worker.timeout_policy = TimeoutPolicy::ReturnError;
+        worker.consumed_time_evidence = false;
+        worker.wcet_us = 0;
+        worker.response_time_us = 0;
+        worker.admitted = false;
+        worker.allowed_donors = vec!["root-worker-executor-gpu".to_owned()];
+        worker.reply_objects = 1;
+        worker.max_donation_depth = 1;
+        worker.locality_bound = true;
         for (index, task) in tasks.iter_mut().enumerate() {
-            task.scheduling_context_slot = index as u32 + 1;
+            if task.execution == TemporalExecution::Active {
+                task.scheduling_context_slot = index as u32 + 1;
+            }
             task.timeout_badge = 0x26ee_0000 + index as u64;
         }
         for index in 0..tasks.len() {
+            if tasks[index].execution == TemporalExecution::Passive {
+                continue;
+            }
             let peers = tasks
                 .iter()
-                .filter(|task| task.core == tasks[index].core)
+                .filter(|task| {
+                    task.execution == TemporalExecution::Active && task.core == tasks[index].core
+                })
                 .count();
             tasks[index].response_time_us = u32::try_from(peers).expect("bounded peer count") * 80;
         }
@@ -1182,6 +1228,7 @@ mod tests {
                 })
                 .collect(),
             tasks,
+            worker_classes: Vec::new(),
         }
     }
 
@@ -1211,12 +1258,12 @@ mod tests {
             vspaces: 1,
             page_tables: 8,
             asids: 1,
-            frames: 16,
-            endpoints: 0,
-            notifications: 1,
+            frames: 12,
+            endpoints: 1,
+            notifications: 0,
             fault_caps: 1,
             timeout_fault_caps: 1,
-            reply_objects: 0,
+            reply_objects: 1,
             scheduling_contexts: 1,
             cspace_slots: 64,
             untyped_bytes: 128 * 1024,
@@ -1225,8 +1272,8 @@ mod tests {
 
     fn admission() -> WorkerResourceAdmissionConfig {
         let temporal = temporal();
-        let mut fixed_objects = budget(7);
-        fixed_objects.reply_objects = 6;
+        let mut fixed_objects = budget(9);
+        fixed_objects.reply_objects = 8;
         WorkerResourceAdmissionConfig {
             enabled: true,
             selected_kernel: SEL4_16_AARCH64_SMP_MCS.to_owned(),
@@ -1268,7 +1315,7 @@ mod tests {
                     id: (*id).to_owned(),
                     cnode_radix_bits: 5,
                     cspace_cap_count: if *id == "root-fault" {
-                        16
+                        19
                     } else if *id == "root-driver-supervisor" {
                         15
                     } else {
@@ -1300,7 +1347,7 @@ mod tests {
                 },
                 critical_fault_badges: BadgeRange {
                     base: 0x26e3_0000,
-                    count: 5,
+                    count: 7,
                     stride: 1,
                 },
                 service_fault_badges: BadgeRange {
@@ -1328,7 +1375,7 @@ mod tests {
                 driver_drain_precedence: vec![HandoffClass::DriverFault],
             },
             fault_registry: FaultRegistryAdmission {
-                critical_tcbs: 5,
+                critical_tcbs: 7,
                 service_tcbs: 1,
                 worker_tcbs: 1,
                 driver_tcbs: 1,
@@ -1468,19 +1515,22 @@ mod tests {
         service.reply_objects = 1;
 
         let mut config = admission();
-        config.fixed_objects.reply_objects = 7;
-        config.fixed_objects.scheduling_contexts = 6;
+        config.fixed_objects.reply_objects = 9;
+        config.fixed_objects.scheduling_contexts = 8;
         config
             .critical_tcbs
             .iter_mut()
             .find(|task| task.id == "root-fault")
             .expect("unit root-fault resource")
-            .cspace_cap_count = 17;
+            .cspace_cap_count = 20;
         config.fault_registry.root_fault_tcb_control_slot_base = 10;
         let error = config
             .validate(&temporal)
             .expect_err("TCB controls must not overlap passive recovery slot 10");
-        assert!(error.to_string().contains("passive recovery caps"));
+        assert!(
+            error.to_string().contains("passive recovery caps"),
+            "unexpected admission error: {error}"
+        );
     }
 
     #[test]
@@ -1556,13 +1606,13 @@ mod tests {
             .expect("exact Worker object pack");
         assert_eq!(required, 128 * 1024);
         config
-            .validate_worker_anchor_layout(&temporal(), 6)
+            .validate_worker_anchor_layout(&temporal(), 6, 8)
             .expect("128 KiB Worker anchor");
 
         let mut undersized = config;
         undersized.executable_roles[0].per_slot.untyped_bytes = 64 * 1024;
         let error = undersized
-            .validate_worker_anchor_layout(&temporal(), 6)
+            .validate_worker_anchor_layout(&temporal(), 6, 8)
             .expect_err("64 KiB cannot contain the exact Worker object pack");
         assert!(error.to_string().contains("Worker anchor is too small"));
     }

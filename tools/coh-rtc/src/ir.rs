@@ -18,7 +18,7 @@ use crate::temporal::{
     TimeoutPolicy,
 };
 
-const SCHEMA_VERSION: &str = "1.14";
+const SCHEMA_VERSION: &str = "1.15";
 const VIRT_AARCH64_ROOT_CONTROL_SERIAL_IO_BYTES_PER_TURN: u32 = 64;
 const PI4_PROFILE_NAME: &str = "pi4-uboot-aarch64";
 const PI4_PROFILE_LEGACY_ALIAS: &str = "uefi-aarch64";
@@ -269,6 +269,9 @@ impl Manifest {
             .validate_worker_anchor_layout(
                 &self.temporal_authority,
                 self.worker_runtime.task_abi.child_cnode_radix_bits,
+                self.worker_runtime
+                    .scheduling
+                    .bootstrap_scheduling_context_bits,
             )?;
         self.validate_ninedoor_service()?;
         self.validate_console_network_service()?;
@@ -1564,8 +1567,8 @@ impl Manifest {
                 );
             }
         }
-        if self.worker_runtime.scheduling.profile != WorkerSchedulingProfile::Mcs {
-            bail!("executable Worker roles require worker_runtime.scheduling.profile=mcs");
+        if self.worker_runtime.scheduling.profile != WorkerSchedulingProfile::McsPassive {
+            bail!("executable Worker roles require worker_runtime.scheduling.profile=mcs-passive");
         }
         if !self.temporal_authority.enabled
             || self.temporal_authority.architecture != SchedulerArchitecture::SmpMcs
@@ -1573,6 +1576,16 @@ impl Manifest {
             bail!("executable Worker roles require enabled SMP+MCS temporal_authority");
         }
         for admission in &self.worker_resource_admission.executable_roles {
+            let expected_donor = match admission.role.as_str() {
+                "worker-heartbeat" | "worker-lora" => "root-worker-executor-lora",
+                "worker-gpu" => "root-worker-executor-gpu",
+                _ => {
+                    bail!(
+                        "worker_resource_admission contains unknown passive Worker role {}",
+                        admission.role
+                    )
+                }
+            };
             for role_slot in 0..admission.executable_slots {
                 let task_id = format!("{}{}", admission.task_prefix, role_slot);
                 let task = self
@@ -1582,13 +1595,16 @@ impl Manifest {
                     .find(|task| task.id == task_id)
                     .ok_or_else(|| anyhow::anyhow!("missing executable Worker task {task_id}"))?;
                 if task.kind != TemporalTaskKind::Worker
-                    || task.execution != TemporalExecution::Active
-                    || !task.allowed_donors.is_empty()
-                    || task.reply_objects != 0
-                    || task.max_donation_depth != 0
+                    || task.execution != TemporalExecution::Passive
+                    || task.allowed_donors.len() != 1
+                    || task.reply_objects != 1
+                    || task.max_donation_depth != 1
+                    || task.timeout_policy != TimeoutPolicy::ReturnError
+                    || !task.locality_bound
+                    || task.allowed_donors.as_slice() != [expected_donor]
                 {
                     bail!(
-                        "executable Worker task {} requires a dedicated active SC and zero donation",
+                        "executable Worker task {} requires one locality-bound depth-one passive executor donor",
                         task_id
                     );
                 }
@@ -1651,6 +1667,16 @@ impl Manifest {
             return Ok(());
         }
         service.validate()?;
+        if service.direct_virtio
+            && !matches!(
+                self.hw.network.backend,
+                NetworkBackendKind::Auto | NetworkBackendKind::VirtioNet
+            )
+        {
+            bail!(
+                "console_network_service.direct_virtio requires an auto or VirtIO network backend"
+            );
+        }
         if !self.features.net_console {
             bail!("console_network_service.enabled requires features.net_console=true");
         }
@@ -4196,6 +4222,14 @@ mod tests {
             .find(|task| task.id == "ninedoor-service")
             .expect("NineDoor temporal task")
             .allowed_donors = vec!["root-fault".to_owned()];
+        manifest
+            .temporal_authority
+            .tasks
+            .iter_mut()
+            .find(|task| task.id == "ninedoor-service")
+            .expect("NineDoor temporal task")
+            .core = 1;
+        manifest.ninedoor_service.core = 1;
         assert!(manifest
             .validate_with_base(Some(repo_root().as_path()))
             .expect_err("unapproved donor must fail")
@@ -4499,7 +4533,7 @@ mod tests {
             .all(|task| task.kind != super::TemporalTaskKind::Driver));
         assert_eq!(
             manifest.worker_resource_admission.fault_registry.capacity,
-            44
+            265
         );
         assert_eq!(
             manifest
@@ -4528,7 +4562,7 @@ mod tests {
         );
         assert_eq!(
             manifest.worker_resource_admission.fault_registry.capacity,
-            17
+            80
         );
     }
 
@@ -4537,7 +4571,7 @@ mod tests {
         let path = repo_root().join("configs/root_task.toml");
         let mut manifest = load_manifest(&path).expect("load checked-in QEMU manifest");
         manifest.worker_runtime.task_abi.gpu_wake_bit =
-            manifest.worker_runtime.task_abi.lifecycle_shutdown_bit;
+            manifest.worker_runtime.task_abi.lora_wake_bit;
         let err = manifest
             .validate_with_base(path.parent())
             .expect_err("Worker notification aliases must fail");
@@ -4631,12 +4665,12 @@ mod tests {
     #[test]
     fn mcs_worker_runtime_requires_budget_and_timeout_evidence() {
         let mut manifest = fixture_manifest();
-        manifest.worker_runtime.scheduling.profile = WorkerSchedulingProfile::Mcs;
+        manifest.worker_runtime.scheduling.profile = WorkerSchedulingProfile::McsPassive;
         let err = manifest
             .validate_with_base(Some(repo_root().as_path()))
             .expect_err("MCS budget fields are required");
         assert!(
-            err.to_string().contains("MCS profile requires"),
+            err.to_string().contains("passive MCS profile requires"),
             "unexpected error: {err}"
         );
     }
@@ -5647,6 +5681,7 @@ pub struct ConsoleNetworkServiceConfig {
     pub entry_symbol: String,
     pub listener_port: u16,
     pub single_listener: bool,
+    pub direct_virtio: bool,
     pub child_cspace_slots: u16,
     pub revoke_anchor_slot: u32,
     pub revoke_anchor_bits: u8,
@@ -5713,14 +5748,14 @@ impl ConsoleNetworkServiceConfig {
             vspaces: 1,
             page_tables: 8,
             asids: 1,
-            frames: 98,
+            frames: 98 + if self.direct_virtio { 36 } else { 0 },
             endpoints: 0,
             notifications: 2,
             fault_caps: 1,
             timeout_fault_caps: 1,
             reply_objects: 0,
             scheduling_contexts: 1,
-            cspace_slots: 123,
+            cspace_slots: 123 + if self.direct_virtio { 39 } else { 0 },
             untyped_bytes: 1_048_576,
         };
         if self.revoke_anchor_slot == 0
@@ -5839,6 +5874,7 @@ impl Default for ConsoleNetworkServiceConfig {
             entry_symbol: "_start".to_owned(),
             listener_port: 31_337,
             single_listener: true,
+            direct_virtio: false,
             child_cspace_slots: 16,
             revoke_anchor_slot: 16_136,
             revoke_anchor_bits: 20,
@@ -6057,12 +6093,12 @@ pub struct WorkerTaskAbiConfig {
     pub stack_bottom_vaddr: u64,
     pub stack_pages: u16,
     pub child_cnode_radix_bits: u8,
-    pub lifecycle_notification_slot: u32,
+    pub service_endpoint_slot: u32,
+    pub service_reply_slot: u32,
     pub supervisor_wake_notification_slot: u32,
-    pub lifecycle_control_bit: u64,
-    pub lifecycle_timeout_bit: u64,
-    pub lifecycle_shutdown_bit: u64,
-    pub lifecycle_revoke_bit: u64,
+    pub control_call_label: u64,
+    pub shutdown_call_label: u64,
+    pub revoke_call_label: u64,
     pub heartbeat_wake_bit: u64,
     pub gpu_wake_bit: u64,
     pub lora_wake_bit: u64,
@@ -6076,8 +6112,8 @@ impl WorkerTaskAbiConfig {
         if !self.enabled {
             bail!("worker_runtime.task_abi.enabled must be true for executable Workers");
         }
-        if self.version != 1 || self.shared_page_bytes != 4096 {
-            bail!("worker_runtime.task_abi requires ABI v1 and one 4096-byte shared page");
+        if self.version != 2 || self.shared_page_bytes != 4096 {
+            bail!("worker_runtime.task_abi requires ABI v2 and one 4096-byte shared page");
         }
         if self.ipc_buffer_vaddr == 0 || !self.ipc_buffer_vaddr.is_multiple_of(4096) {
             bail!("worker_runtime.task_abi.ipc_buffer_vaddr must be non-zero and page aligned");
@@ -6089,10 +6125,10 @@ impl WorkerTaskAbiConfig {
             || !self.stack_bottom_vaddr.is_multiple_of(4096)
             || self.stack_pages == 0
             || self.stack_pages > 64
-            || !(6..=12).contains(&self.child_cnode_radix_bits)
+            || !(2..=12).contains(&self.child_cnode_radix_bits)
         {
             bail!(
-                "worker_runtime.task_abi requires disjoint page-aligned IPC/shared/stack layout, 1..=64 stack pages, and child CNode radix 6..=12"
+                "worker_runtime.task_abi requires disjoint page-aligned IPC/shared/stack layout, 1..=64 stack pages, and child CNode radix 2..=12"
             );
         }
         let stack_bytes = u64::from(self.stack_pages)
@@ -6128,17 +6164,27 @@ impl WorkerTaskAbiConfig {
         ) {
             bail!("worker_runtime.task_abi IPC/shared/stack mappings overlap");
         }
-        if self.lifecycle_notification_slot == 0
+        if self.service_endpoint_slot == 0
+            || self.service_reply_slot == 0
             || self.supervisor_wake_notification_slot == 0
-            || self.lifecycle_notification_slot == self.supervisor_wake_notification_slot
+            || self.service_endpoint_slot == self.service_reply_slot
+            || self.service_endpoint_slot == self.supervisor_wake_notification_slot
+            || self.service_reply_slot == self.supervisor_wake_notification_slot
         {
-            bail!("worker_runtime.task_abi notification slots must be non-zero and distinct");
+            bail!("worker_runtime.task_abi service and wake slots must be non-zero and distinct");
+        }
+        let labels = [
+            ("control_call_label", self.control_call_label),
+            ("shutdown_call_label", self.shutdown_call_label),
+            ("revoke_call_label", self.revoke_call_label),
+        ];
+        let mut combined_labels = BTreeSet::new();
+        for (name, label) in labels {
+            if label == 0 || !combined_labels.insert(label) {
+                bail!("worker_runtime.task_abi.{name} must be non-zero and distinct");
+            }
         }
         let bits = [
-            ("lifecycle_control_bit", self.lifecycle_control_bit),
-            ("lifecycle_timeout_bit", self.lifecycle_timeout_bit),
-            ("lifecycle_shutdown_bit", self.lifecycle_shutdown_bit),
-            ("lifecycle_revoke_bit", self.lifecycle_revoke_bit),
             ("heartbeat_wake_bit", self.heartbeat_wake_bit),
             ("gpu_wake_bit", self.gpu_wake_bit),
             ("lora_wake_bit", self.lora_wake_bit),
@@ -6173,19 +6219,19 @@ impl Default for WorkerTaskAbiConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            version: 1,
+            version: 2,
             shared_page_bytes: 4096,
             ipc_buffer_vaddr: 0x7100_0000,
             shared_page_vaddr: 0x7100_1000,
             stack_bottom_vaddr: 0x7100_3000,
-            stack_pages: 8,
-            child_cnode_radix_bits: 6,
-            lifecycle_notification_slot: 1,
-            supervisor_wake_notification_slot: 2,
-            lifecycle_control_bit: 1,
-            lifecycle_timeout_bit: 2,
-            lifecycle_shutdown_bit: 4,
-            lifecycle_revoke_bit: 8,
+            stack_pages: 4,
+            child_cnode_radix_bits: 2,
+            service_endpoint_slot: 1,
+            service_reply_slot: 2,
+            supervisor_wake_notification_slot: 3,
+            control_call_label: 1,
+            shutdown_call_label: 2,
+            revoke_call_label: 3,
             heartbeat_wake_bit: 0x100,
             gpu_wake_bit: 0x200,
             lora_wake_bit: 0x400,
@@ -6201,14 +6247,14 @@ impl Default for WorkerTaskAbiConfig {
 pub enum WorkerSchedulingProfile {
     #[default]
     NonMcs,
-    Mcs,
+    McsPassive,
 }
 
 impl WorkerSchedulingProfile {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::NonMcs => "non-mcs",
-            Self::Mcs => "mcs",
+            Self::McsPassive => "mcs-passive",
         }
     }
 }
@@ -6220,8 +6266,10 @@ pub struct WorkerSchedulingConfig {
     pub priority: u8,
     pub domain: u8,
     pub service_turn_budget: u16,
-    pub mcs_budget_us: u32,
-    pub mcs_period_us: u32,
+    pub bootstrap_scheduling_context_bits: u8,
+    pub bootstrap_budget_us: u32,
+    pub bootstrap_period_us: u32,
+    pub bootstrap_max_refills: u8,
     pub timeout_endpoint_badge: u64,
     pub consumed_budget_evidence: bool,
 }
@@ -6233,17 +6281,24 @@ impl WorkerSchedulingConfig {
                 if self.service_turn_budget == 0 {
                     bail!("worker_runtime.scheduling.service_turn_budget must be > 0 for non-mcs profiles");
                 }
-                if self.mcs_budget_us != 0
-                    || self.mcs_period_us != 0
+                if self.bootstrap_scheduling_context_bits != 0
+                    || self.bootstrap_budget_us != 0
+                    || self.bootstrap_period_us != 0
+                    || self.bootstrap_max_refills != 0
                     || self.timeout_endpoint_badge != 0
                     || self.consumed_budget_evidence
                 {
                     bail!("worker_runtime.scheduling non-mcs profile must not claim MCS budget, timeout endpoint, or consumed-budget evidence");
                 }
             }
-            WorkerSchedulingProfile::Mcs => {
-                if self.mcs_budget_us == 0 || self.mcs_period_us == 0 {
-                    bail!("worker_runtime.scheduling MCS profile requires mcs_budget_us and mcs_period_us");
+            WorkerSchedulingProfile::McsPassive => {
+                if self.bootstrap_scheduling_context_bits < 7
+                    || self.bootstrap_budget_us == 0
+                    || self.bootstrap_period_us == 0
+                    || self.bootstrap_budget_us > self.bootstrap_period_us
+                    || self.bootstrap_max_refills < 2
+                {
+                    bail!("worker_runtime.scheduling passive MCS profile requires a bounded bootstrap SC");
                 }
                 if self.timeout_endpoint_badge == 0 || !self.consumed_budget_evidence {
                     bail!("worker_runtime.scheduling MCS profile requires timeout endpoint badge and consumed-budget evidence");
@@ -6261,8 +6316,10 @@ impl Default for WorkerSchedulingConfig {
             priority: 96,
             domain: 0,
             service_turn_budget: 64,
-            mcs_budget_us: 0,
-            mcs_period_us: 0,
+            bootstrap_scheduling_context_bits: 0,
+            bootstrap_budget_us: 0,
+            bootstrap_period_us: 0,
+            bootstrap_max_refills: 0,
             timeout_endpoint_badge: 0,
             consumed_budget_evidence: false,
         }
@@ -7944,8 +8001,9 @@ fn validate_host_federation_token(label: &str, value: &str, max_len: usize) -> R
 pub fn load_manifest(path: &Path) -> Result<Manifest> {
     let contents = fs::read_to_string(path)
         .with_context(|| format!("failed to read manifest {}", path.display()))?;
-    let manifest: Manifest = toml::from_str(&contents)
+    let mut manifest: Manifest = toml::from_str(&contents)
         .with_context(|| format!("invalid manifest TOML in {}", path.display()))?;
+    manifest.temporal_authority.expand_worker_classes()?;
     Ok(manifest)
 }
 

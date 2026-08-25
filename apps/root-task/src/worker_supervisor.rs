@@ -23,8 +23,8 @@ use core::sync::atomic::AtomicBool;
 use core::sync::atomic::{AtomicU16, AtomicU32, AtomicU64, AtomicU8, AtomicUsize, Ordering};
 use rust_alloc::vec::Vec as AllocVec;
 use worker_task_abi::{
-    Digest32, GpuLeaseReceiptRecord, PeftReceiptRecord, WorkerAbiError, WorkerCompletionRecord,
-    WorkerCompletionStatus, WorkerControlRecord, WorkerIdentity, WorkerLifecycleBits,
+    Digest32, GpuLeaseReceiptRecord, PeftReceiptRecord, WorkerAbiError, WorkerCallLabels,
+    WorkerCompletionRecord, WorkerCompletionStatus, WorkerControlRecord, WorkerIdentity,
     WorkerReadyRecord, WorkerRole, WorkerRuntimeInit,
 };
 
@@ -33,40 +33,101 @@ const EXECUTABLE_ROLES: [WorkerRole; 3] =
 /// Static ceiling for the boot-allocated compiler-declared executable Worker pool.
 /// The selected manifest remains the tighter runtime and admission bound, and
 /// the supervisor performs no allocation after construction.
-pub const MAX_EXECUTABLE_WORKER_SLOTS: usize = 64;
+pub const MAX_EXECUTABLE_WORKER_SLOTS: usize = 256;
+const WORKER_PENDING_WORDS: usize = MAX_EXECUTABLE_WORKER_SLOTS / u64::BITS as usize;
+const _: () = assert!(MAX_EXECUTABLE_WORKER_SLOTS.is_multiple_of(u64::BITS as usize));
+
+/// Fixed, allocation-free pending set for the complete executable Worker pool.
+///
+/// A scalar mask made manifest capacity an accidental 64-instance ABI. This
+/// word array keeps selection and mutation bounded while allowing the compiler
+/// to admit a hive-sized population without a dynamic collection on the root
+/// hot path.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct WorkerPendingSet {
+    words: [u64; WORKER_PENDING_WORDS],
+}
+
+impl WorkerPendingSet {
+    /// Return an empty pending set.
+    #[must_use]
+    pub(crate) const fn empty() -> Self {
+        Self {
+            words: [0; WORKER_PENDING_WORDS],
+        }
+    }
+
+    pub(crate) fn insert(&mut self, index: usize) -> Result<(), WorkerSupervisorError> {
+        let (word, bit) = pending_position(index)?;
+        self.words[word] |= bit;
+        Ok(())
+    }
+
+    pub(crate) fn remove(&mut self, index: usize) -> Result<(), WorkerSupervisorError> {
+        let (word, bit) = pending_position(index)?;
+        self.words[word] &= !bit;
+        Ok(())
+    }
+
+    pub(crate) fn contains(&self, index: usize) -> Result<bool, WorkerSupervisorError> {
+        let (word, bit) = pending_position(index)?;
+        Ok(self.words[word] & bit != 0)
+    }
+
+    fn validate_population(&self, total: usize) -> Result<(), WorkerSupervisorError> {
+        if total == 0 || total > MAX_EXECUTABLE_WORKER_SLOTS {
+            return Err(WorkerSupervisorError::NotEnabled);
+        }
+        let final_word = (total - 1) / u64::BITS as usize;
+        let final_bits = total % u64::BITS as usize;
+        for (index, word) in self.words.iter().copied().enumerate() {
+            let valid = if index < final_word {
+                u64::MAX
+            } else if index == final_word {
+                if final_bits == 0 {
+                    u64::MAX
+                } else {
+                    (1u64 << final_bits) - 1
+                }
+            } else {
+                0
+            };
+            if word & !valid != 0 {
+                return Err(WorkerSupervisorError::InvalidRecord);
+            }
+        }
+        Ok(())
+    }
+}
+
+fn pending_position(index: usize) -> Result<(usize, u64), WorkerSupervisorError> {
+    if index >= MAX_EXECUTABLE_WORKER_SLOTS {
+        return Err(WorkerSupervisorError::InvalidRecord);
+    }
+    Ok((
+        index / u64::BITS as usize,
+        1u64 << (index % u64::BITS as usize),
+    ))
+}
 
 /// Select the next pending Worker slot without privileging low manifest
 /// indices. The caller commits the returned successor before performing the
 /// selected operation, so a continuously busy early slot cannot starve any
 /// other admitted Worker.
 pub(crate) fn next_pending_worker_index(
-    pending: u64,
+    pending: &WorkerPendingSet,
     start: usize,
     total: usize,
 ) -> Result<Option<(usize, usize)>, WorkerSupervisorError> {
-    if total == 0 || total > MAX_EXECUTABLE_WORKER_SLOTS {
-        return Err(WorkerSupervisorError::NotEnabled);
-    }
-    let valid = if total == u64::BITS as usize {
-        u64::MAX
-    } else {
-        (1u64 << total) - 1
-    };
-    if pending & !valid != 0 {
-        return Err(WorkerSupervisorError::InvalidRecord);
-    }
-    let pending = pending & valid;
-    if pending == 0 {
-        return Ok(None);
-    }
+    pending.validate_population(total)?;
     let start = start % total;
-    let suffix = pending & (u64::MAX << start);
-    let selected = if suffix != 0 {
-        suffix.trailing_zeros() as usize
-    } else {
-        pending.trailing_zeros() as usize
-    };
-    Ok(Some((selected, (selected + 1) % total)))
+    for offset in 0..total {
+        let selected = (start + offset) % total;
+        if pending.contains(selected)? {
+            return Ok(Some((selected, (selected + 1) % total)));
+        }
+    }
+    Ok(None)
 }
 
 /// Persistent role selector used by one-unit root-control Worker service.
@@ -369,12 +430,16 @@ pub struct WorkerChildContract {
     pub shared_page_bytes: u32,
     /// Child IPC-buffer virtual address.
     pub ipc_buffer_vaddr: u64,
-    /// Receive-only lifecycle notification CPtr in the child CSpace.
-    pub lifecycle_notification_slot: u32,
+    /// Receive-only service endpoint CPtr in the child CSpace.
+    pub service_endpoint_slot: u32,
+    /// Single-owner Reply-object CPtr in the child CSpace.
+    pub service_reply_slot: u32,
     /// Send-only supervisor wake CPtr in the child CSpace.
     pub supervisor_wake_notification_slot: u32,
-    /// Four one-hot lifecycle causes.
-    pub lifecycle_bits: WorkerLifecycleBits,
+    /// Exact synchronous operation labels.
+    pub call_labels: WorkerCallLabels,
+    /// Exact badge minted on the executor's Call cap.
+    pub request_badge: u64,
     /// One-hot role/slot completion bit minted to this child only.
     pub supervisor_wake_bit: u64,
     /// READY deadline relative to resume.
@@ -459,19 +524,23 @@ pub trait WorkerKernelBackend {
         bundle: Self::Bundle,
     ) -> Result<WorkerResumeDisposition, WorkerSupervisorError>;
 
-    /// Publish one durable control and then signal its one-hot control cause.
+    /// Unbind the one-shot bootstrap SC after READY proves the child is blocked.
+    fn finish_ready(&mut self, bundle: Self::Bundle) -> Result<(), WorkerSupervisorError>;
+
+    /// Publish one durable control and enqueue its exact synchronous Call.
     fn publish_control(
         &mut self,
         bundle: Self::Bundle,
         control: WorkerControlRecord,
-        control_bit: u64,
+        call_label: u64,
     ) -> Result<(), WorkerSupervisorError>;
 
-    /// Signal a generated one-hot shutdown or revoke cause.
-    fn signal_lifecycle(
+    /// Enqueue one generated terminal synchronous Call.
+    fn request_lifecycle(
         &mut self,
         bundle: Self::Bundle,
-        badge: u64,
+        sequence: u64,
+        call_label: u64,
     ) -> Result<(), WorkerSupervisorError>;
 
     /// Execute the full suspend/clear/unbind/scrub/revoke/delete sequence.
@@ -797,7 +866,8 @@ impl<Backend: WorkerKernelBackend> WorkerSupervisor<Backend> {
         }
         let identity = slot.identity.ok_or(WorkerSupervisorError::InvalidState)?;
         let timeout_ms =
-            child_contract(role, generated::worker_runtime_config().task_abi)?.ready_timeout_ms;
+            child_contract(role, role_slot, generated::worker_runtime_config().task_abi)?
+                .ready_timeout_ms;
         slot.ready_deadline_ms = now_ms
             .checked_add(u64::from(timeout_ms))
             .ok_or(WorkerSupervisorError::InvalidGeneration)?;
@@ -854,15 +924,17 @@ impl<Backend: WorkerKernelBackend> WorkerSupervisor<Backend> {
             .validate_for_role(role)
             .map_err(|_| WorkerSupervisorError::InvalidGeneration)?;
         let task_abi = generated::worker_runtime_config().task_abi;
-        let contract = child_contract(role, task_abi)?;
+        let contract = child_contract(role, role_slot, task_abi)?;
         let contract_digest = generated_manifest_digest()?;
         let init = WorkerRuntimeInit::staged(
             self.descriptor_sequence,
             identity,
             contract.ipc_buffer_vaddr,
-            u64::from(contract.lifecycle_notification_slot),
+            u64::from(contract.service_endpoint_slot),
+            u64::from(contract.service_reply_slot),
             u64::from(contract.supervisor_wake_notification_slot),
-            contract.lifecycle_bits,
+            contract.call_labels,
+            contract.request_badge,
             contract.supervisor_wake_bit,
             Digest32::new(plan.image_sha256),
             contract_digest,
@@ -990,15 +1062,23 @@ impl<Backend: WorkerKernelBackend> WorkerSupervisor<Backend> {
             .worker_role()
             .map_err(|_| WorkerSupervisorError::InvalidRecord)?;
         let index = flat_slot_index(role, record.identity.slot)?;
-        let slot = &mut self.slots[index];
-        if slot.lifecycle != WorkerLifecycleState::Starting {
+        if self.slots[index].lifecycle != WorkerLifecycleState::Starting {
             return Err(WorkerSupervisorError::InvalidState);
         }
-        let init = slot.init.ok_or(WorkerSupervisorError::InvalidState)?;
+        let init = self.slots[index]
+            .init
+            .ok_or(WorkerSupervisorError::InvalidState)?;
         record.validate_for(init)?;
-        if record.sequence <= slot.ready_sequence {
+        if record.sequence <= self.slots[index].ready_sequence {
             return Err(WorkerSupervisorError::InvalidRecord);
         }
+        let bundle = self.slots[index]
+            .bundle
+            .ok_or(WorkerSupervisorError::InvalidState)?;
+        self.backend
+            .finish_ready(bundle)
+            .map_err(|_| WorkerSupervisorError::Backend)?;
+        let slot = &mut self.slots[index];
         slot.ready_sequence = record.sequence;
         slot.lifecycle = WorkerLifecycleState::Ready;
         Ok(slot.snapshot())
@@ -1021,14 +1101,18 @@ impl<Backend: WorkerKernelBackend> WorkerSupervisor<Backend> {
         if slot.pending_control.is_some() {
             return Err(WorkerSupervisorError::ControlBusy);
         }
-        if control.sequence <= slot.last_control_sequence {
+        let expected_sequence = slot
+            .last_control_sequence
+            .checked_add(1)
+            .ok_or(WorkerSupervisorError::InvalidGeneration)?;
+        if control.sequence != expected_sequence {
             return Err(WorkerSupervisorError::InvalidRecord);
         }
         let init = slot.init.ok_or(WorkerSupervisorError::InvalidState)?;
         control.validate_for(init)?;
         let bundle = slot.bundle.ok_or(WorkerSupervisorError::InvalidState)?;
         self.backend
-            .publish_control(bundle, control, init.lifecycle_bits.control)
+            .publish_control(bundle, control, init.call_labels.control)
             .map_err(|_| WorkerSupervisorError::Backend)?;
         slot.last_control_sequence = control.sequence;
         slot.pending_control = Some(control);
@@ -1162,21 +1246,35 @@ impl<Backend: WorkerKernelBackend> WorkerSupervisor<Backend> {
         now_ms: u64,
     ) -> Result<WorkerSlotSnapshot, WorkerSupervisorError> {
         let index = flat_slot_index(role, role_slot)?;
-        let slot = &mut self.slots[index];
-        if slot.lifecycle == WorkerLifecycleState::Closing {
-            return Ok(slot.snapshot());
+        if self.slots[index].lifecycle == WorkerLifecycleState::Closing {
+            return Ok(self.slots[index].snapshot());
         }
         if !matches!(
-            slot.lifecycle,
+            self.slots[index].lifecycle,
             WorkerLifecycleState::Starting | WorkerLifecycleState::Ready
         ) {
             return Err(WorkerSupervisorError::InvalidState);
         }
-        let init = slot.init.ok_or(WorkerSupervisorError::InvalidState)?;
-        let bundle = slot.bundle.ok_or(WorkerSupervisorError::InvalidState)?;
+        if self.slots[index].pending_control.is_some() {
+            return Err(WorkerSupervisorError::ControlBusy);
+        }
+        let init = self.slots[index]
+            .init
+            .ok_or(WorkerSupervisorError::InvalidState)?;
+        let bundle = self.slots[index]
+            .bundle
+            .ok_or(WorkerSupervisorError::InvalidState)?;
+        let sequence = self.slots[index]
+            .last_control_sequence
+            .checked_add(1)
+            .ok_or(WorkerSupervisorError::InvalidGeneration)?;
+        self.backend
+            .request_lifecycle(bundle, sequence, init.call_labels.shutdown)
+            .map_err(|_| WorkerSupervisorError::Backend)?;
+        let slot = &mut self.slots[index];
         slot.lifecycle = WorkerLifecycleState::Closing;
-        slot.pending_control = None;
         slot.receipt_sequence = 0;
+        slot.last_control_sequence = sequence;
         slot.shutdown_deadline_ms = now_ms
             .checked_add(u64::from(
                 generated::worker_runtime_config()
@@ -1184,9 +1282,6 @@ impl<Backend: WorkerKernelBackend> WorkerSupervisor<Backend> {
                     .shutdown_grace_ms,
             ))
             .ok_or(WorkerSupervisorError::InvalidGeneration)?;
-        self.backend
-            .signal_lifecycle(bundle, init.lifecycle_bits.shutdown)
-            .map_err(|_| WorkerSupervisorError::Backend)?;
         Ok(slot.snapshot())
     }
 
@@ -1197,12 +1292,9 @@ impl<Backend: WorkerKernelBackend> WorkerSupervisor<Backend> {
         role_slot: u32,
     ) -> Result<WorkerSlotSnapshot, WorkerSupervisorError> {
         let index = flat_slot_index(role, role_slot)?;
-        let slot = &self.slots[index];
-        let init = slot.init.ok_or(WorkerSupervisorError::InvalidState)?;
-        let bundle = slot.bundle.ok_or(WorkerSupervisorError::InvalidState)?;
-        let _ = self
-            .backend
-            .signal_lifecycle(bundle, init.lifecycle_bits.revoke);
+        if self.slots[index].pending_control.is_some() {
+            return Err(WorkerSupervisorError::ControlBusy);
+        }
         self.finish_containment(index, WorkerTerminalReason::Revoked)
     }
 
@@ -1468,37 +1560,43 @@ fn role_matches(role: cohesix_ticket::Role, expected: WorkerRole) -> bool {
 
 fn child_contract(
     role: WorkerRole,
+    role_slot: u32,
     config: WorkerTaskAbiConfig,
 ) -> Result<WorkerChildContract, WorkerSupervisorError> {
     if !config.enabled
-        || config.version != 1
+        || config.version != 2
         || config.shared_page_bytes != 4096
         || config.max_control_inflight != 1
     {
         return Err(WorkerSupervisorError::NotEnabled);
     }
-    let lifecycle_bits = WorkerLifecycleBits {
-        control: config.lifecycle_control_bit,
-        timeout: config.lifecycle_timeout_bit,
-        shutdown: config.lifecycle_shutdown_bit,
-        revoke: config.lifecycle_revoke_bit,
+    let call_labels = WorkerCallLabels {
+        control: config.control_call_label,
+        shutdown: config.shutdown_call_label,
+        revoke: config.revoke_call_label,
     };
-    lifecycle_bits.validate()?;
+    call_labels.validate()?;
     let supervisor_wake_bit = match role {
         WorkerRole::Heartbeat => config.heartbeat_wake_bit,
         WorkerRole::Gpu => config.gpu_wake_bit,
         WorkerRole::Lora => config.lora_wake_bit,
     };
-    if !supervisor_wake_bit.is_power_of_two() || lifecycle_bits.mask() & supervisor_wake_bit != 0 {
+    if !supervisor_wake_bit.is_power_of_two() {
         return Err(WorkerSupervisorError::InvalidRecord);
     }
+    let request_badge = u64::try_from(flat_slot_index(role, role_slot)?)
+        .map_err(|_| WorkerSupervisorError::InvalidRecord)?
+        .checked_add(1)
+        .ok_or(WorkerSupervisorError::InvalidRecord)?;
     Ok(WorkerChildContract {
         abi_version: config.version,
         shared_page_bytes: config.shared_page_bytes,
         ipc_buffer_vaddr: config.ipc_buffer_vaddr,
-        lifecycle_notification_slot: config.lifecycle_notification_slot,
+        service_endpoint_slot: config.service_endpoint_slot,
+        service_reply_slot: config.service_reply_slot,
         supervisor_wake_notification_slot: config.supervisor_wake_notification_slot,
-        lifecycle_bits,
+        call_labels,
+        request_badge,
         supervisor_wake_bit,
         ready_timeout_ms: config.ready_timeout_ms,
         shutdown_grace_ms: config.shutdown_grace_ms,
@@ -1557,7 +1655,7 @@ mod tests {
     use super::{
         contained_generation_precedes_reused_admit, executable_worker_slot_count,
         next_pending_worker_index, preferred_spawn_slot, role_slot_from_flat_index,
-        WorkerDeadlineCursor, WorkerLifecycleState, WorkerRole,
+        WorkerDeadlineCursor, WorkerLifecycleState, WorkerPendingSet, WorkerRole,
     };
 
     #[test]
@@ -1573,20 +1671,48 @@ mod tests {
 
     #[test]
     fn pending_worker_selection_rotates_across_continuously_busy_slots() {
-        let pending = (1u64 << 0) | (1u64 << 4) | (1u64 << 36);
-        assert_eq!(next_pending_worker_index(pending, 0, 37), Ok(Some((0, 1))));
-        assert_eq!(next_pending_worker_index(pending, 1, 37), Ok(Some((4, 5))));
-        assert_eq!(next_pending_worker_index(pending, 5, 37), Ok(Some((36, 0))));
-        assert_eq!(next_pending_worker_index(pending, 0, 37), Ok(Some((0, 1))));
+        let mut pending = WorkerPendingSet::empty();
+        for index in [0, 4, 36, 191, 255] {
+            pending.insert(index).unwrap();
+        }
+        assert_eq!(
+            next_pending_worker_index(&pending, 0, 256),
+            Ok(Some((0, 1)))
+        );
+        assert_eq!(
+            next_pending_worker_index(&pending, 1, 256),
+            Ok(Some((4, 5)))
+        );
+        assert_eq!(
+            next_pending_worker_index(&pending, 5, 256),
+            Ok(Some((36, 37)))
+        );
+        assert_eq!(
+            next_pending_worker_index(&pending, 37, 256),
+            Ok(Some((191, 192)))
+        );
+        assert_eq!(
+            next_pending_worker_index(&pending, 192, 256),
+            Ok(Some((255, 0)))
+        );
+        assert_eq!(
+            next_pending_worker_index(&pending, 0, 256),
+            Ok(Some((0, 1)))
+        );
     }
 
     #[test]
     fn pending_worker_selection_rejects_bits_outside_manifest_population() {
+        let mut pending = WorkerPendingSet::empty();
+        pending.insert(37).unwrap();
         assert_eq!(
-            next_pending_worker_index(1u64 << 37, 0, 37),
+            next_pending_worker_index(&pending, 0, 37),
             Err(super::WorkerSupervisorError::InvalidRecord),
         );
-        assert_eq!(next_pending_worker_index(0, 0, 37), Ok(None));
+        assert_eq!(
+            next_pending_worker_index(&WorkerPendingSet::empty(), 0, 37),
+            Ok(None),
+        );
     }
 
     #[test]

@@ -70,9 +70,10 @@ fn generated_contract_is_single_listener_active_mcs_authority() {
     assert_eq!(plan.objects.reply_objects, 0);
     assert_eq!(plan.objects.fault_caps, 1);
     assert_eq!(plan.objects.timeout_fault_caps, 1);
-    assert_eq!(plan.objects.frames, 98);
-    assert_eq!(plan.objects.cspace_slots, 123);
-    assert_eq!(plan.image_pages, 60);
+    assert!(contract.direct_virtio);
+    assert_eq!(plan.objects.frames, 134);
+    assert_eq!(plan.objects.cspace_slots, 162);
+    assert_eq!(plan.image_pages, 62);
     assert_eq!(contract.stack_vaddr, 0x7203_0000);
     assert_eq!(contract.stack_pages, 32);
     assert_eq!(
@@ -81,7 +82,7 @@ fn generated_contract_is_single_listener_active_mcs_authority() {
     );
     assert!(contract.budget_us > 0);
     assert!(contract.period_us >= contract.budget_us);
-    assert_eq!(contract.timeout_badge, 0x26ee_0007);
+    assert_eq!(contract.timeout_badge, 0x26ee_0009);
     assert_eq!(contract.standard_fault_badge, 0x26e4_0001);
     assert_eq!(
         contract.timeout_policy,

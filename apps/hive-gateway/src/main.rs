@@ -71,7 +71,10 @@ const PROC_LEASE_ACTIVE_PATH: &str = "/proc/lease/active";
 const PROC_LEASE_BY_ID_PATH: &str = "/proc/lease/by-id";
 const PROC_LEASE_BY_ID_PREFIX: &str = "/proc/lease/by-id/";
 const PROC_LEASE_PREEMPTIONS_PATH: &str = "/proc/lease/preemptions";
+const HOST_TICKET_SPEC_SNAPSHOT_PATH: &str = "/host/tickets/spec.snapshot";
 const HOST_TICKET_CURRENT_PREFIX: &str = "/host/tickets/current/";
+const HOST_TICKET_STATUS_PATH: &str = "/host/tickets/status";
+const HOST_TICKET_DEADLETTER_PATH: &str = "/host/tickets/deadletter";
 const REQUEST_AUTH_HEADER: &str = "x-cohesix-auth";
 const AUTHORIZATION_BEARER_PREFIX: &str = "bearer ";
 const INSECURE_PLACEHOLDER_TOKEN: &str = concat!("change", "me");
@@ -87,15 +90,17 @@ const DEFAULT_BROKER_CONTROL_RESPONSE_TIMEOUT_MS: u64 =
 const DEFAULT_BROKER_TELEMETRY_RESPONSE_TIMEOUT_MS: u64 =
     HIVE_GATEWAY_DEFAULT_BROKER_RESPONSE_TIMEOUT_MS;
 const BROKER_ENQUEUE_RETRY_SLEEP_MS: u64 = 5;
+const BROKER_EXECUTION_QUEUE_CAPACITY: usize = 64;
 const BROKER_CONTROL_QUEUE_CAPACITY: usize = 256;
 const BROKER_TELEMETRY_QUEUE_CAPACITY: usize = 1024;
-const BROKER_CONTROL_BURST: usize = 6;
+const BROKER_EXECUTION_BURST: usize = TRANSPORT_COMMAND_BATCH_MAX;
+const BROKER_CONTROL_BURST: usize = TRANSPORT_COMMAND_BATCH_MAX;
 // Writes carry acknowledgements and therefore retain a smaller turn quantum
 // than idempotent reads to bound ordered-lane head-of-line latency.
 const TELEMETRY_WRITE_BATCH_MAX: usize = 4;
 const BROKER_COMMAND_BATCH_MAX: usize = TRANSPORT_COMMAND_BATCH_MAX;
 const BROKER_READ_BATCH_MAX: usize = TRANSPORT_READ_BATCH_MAX;
-const BROKER_IDLE_WAIT_MS: u64 = 20;
+const BROKER_IDLE_WAIT_MS: u64 = 1;
 const DEFAULT_CONTROL_WRITE_RETRY_WINDOW_MS: u64 = 1_200;
 const MAX_WORKER_ACCEPTANCE_EVIDENCE_BYTES: u64 = 256 * 1024;
 const MAX_CONTROL_WRITE_RETRY_WINDOW_MS: u64 = 60_000;
@@ -541,6 +546,10 @@ struct BrokerMetrics {
     telemetry_waiters_high_water: AtomicU64,
     control_checkouts: AtomicU64,
     telemetry_checkouts: AtomicU64,
+    control_requests: AtomicU64,
+    telemetry_requests: AtomicU64,
+    control_batch_high_water: AtomicU64,
+    telemetry_batch_high_water: AtomicU64,
     pool_exhausted: AtomicU64,
     checkout_retries: AtomicU64,
     timeout_rejections: AtomicU64,
@@ -580,6 +589,20 @@ impl BrokerMetrics {
         }
     }
 
+    fn request_counter(&self, kind: PoolKind) -> &AtomicU64 {
+        match kind {
+            PoolKind::Control => &self.control_requests,
+            PoolKind::Telemetry => &self.telemetry_requests,
+        }
+    }
+
+    fn batch_high_water_counter(&self, kind: PoolKind) -> &AtomicU64 {
+        match kind {
+            PoolKind::Control => &self.control_batch_high_water,
+            PoolKind::Telemetry => &self.telemetry_batch_high_water,
+        }
+    }
+
     fn snapshot(&self) -> BrokerStatusResponse {
         BrokerStatusResponse {
             control_waiters: self.control_waiters.load(Ordering::Relaxed),
@@ -588,6 +611,10 @@ impl BrokerMetrics {
             telemetry_waiters_high_water: self.telemetry_waiters_high_water.load(Ordering::Relaxed),
             control_checkouts: self.control_checkouts.load(Ordering::Relaxed),
             telemetry_checkouts: self.telemetry_checkouts.load(Ordering::Relaxed),
+            control_requests: self.control_requests.load(Ordering::Relaxed),
+            telemetry_requests: self.telemetry_requests.load(Ordering::Relaxed),
+            control_batch_high_water: self.control_batch_high_water.load(Ordering::Relaxed),
+            telemetry_batch_high_water: self.telemetry_batch_high_water.load(Ordering::Relaxed),
             pool_exhausted: self.pool_exhausted.load(Ordering::Relaxed),
             checkout_retries: self.checkout_retries.load(Ordering::Relaxed),
             timeout_rejections: self.timeout_rejections.load(Ordering::Relaxed),
@@ -853,6 +880,10 @@ struct BrokerStatusResponse {
     telemetry_waiters_high_water: u64,
     control_checkouts: u64,
     telemetry_checkouts: u64,
+    control_requests: u64,
+    telemetry_requests: u64,
+    control_batch_high_water: u64,
+    telemetry_batch_high_water: u64,
     pool_exhausted: u64,
     checkout_retries: u64,
     timeout_rejections: u64,
@@ -872,6 +903,7 @@ struct BrokerStatusResponse {
 
 #[derive(Clone)]
 struct GatewayBrokerClient {
+    execution_tx: SyncSender<BrokerCommand>,
     control_tx: SyncSender<BrokerCommand>,
     telemetry_tx: SyncSender<BrokerCommand>,
 }
@@ -883,12 +915,38 @@ struct BrokerCommand {
 }
 
 enum BrokerRequest {
-    Attach { role: Role, ticket: Option<String> },
+    Attach {
+        role: Role,
+        ticket: Option<String>,
+    },
     Ping,
-    List { path: String },
-    Read { path: String },
-    Tail { path: String, lines: Option<u16> },
-    Write { path: String, payload: Vec<u8> },
+    List {
+        path: String,
+    },
+    Read {
+        path: String,
+    },
+    Tail {
+        path: String,
+        lines: Option<u16>,
+    },
+    Write {
+        path: String,
+        payload: Vec<u8>,
+    },
+    WriteBatch {
+        path: String,
+        payloads: Vec<Vec<u8>>,
+    },
+}
+
+impl BrokerRequest {
+    fn command_count(&self) -> usize {
+        match self {
+            Self::WriteBatch { payloads, .. } => payloads.len(),
+            _ => 1,
+        }
+    }
 }
 
 enum BrokerResponse {
@@ -910,7 +968,19 @@ struct BrokerReadBatch {
 struct BrokerCommandBatch {
     kind: PoolKind,
     requests: Vec<TransportBatchRequest>,
-    response_txs: Vec<mpsc::Sender<Result<BrokerResponse>>>,
+    responses: Vec<BrokerBatchResponse>,
+}
+
+#[derive(Clone, Copy)]
+enum BrokerBatchResponseKind {
+    Single,
+    WriteBatch,
+}
+
+struct BrokerBatchResponse {
+    kind: BrokerBatchResponseKind,
+    request_count: usize,
+    response_tx: mpsc::Sender<Result<BrokerResponse>>,
 }
 
 impl BrokerCommandBatch {
@@ -918,19 +988,41 @@ impl BrokerCommandBatch {
         kind: PoolKind,
         command: BrokerCommand,
     ) -> std::result::Result<Self, BrokerCommand> {
-        if command.kind != kind {
+        let command_count = command.request.command_count();
+        if command.kind != kind || command_count == 0 || command_count > BROKER_COMMAND_BATCH_MAX {
             return Err(command);
         }
-        let response_tx = command.response_tx;
-        let request = match command.request {
-            BrokerRequest::Read { path } => TransportBatchRequest::Read { path },
-            BrokerRequest::List { path } => TransportBatchRequest::List { path },
-            BrokerRequest::Write { path, payload } => {
-                TransportBatchRequest::Write { path, payload }
-            }
+        let BrokerCommand {
+            kind: command_kind,
+            request,
+            response_tx,
+        } = command;
+        let (requests, response_kind) = match request {
+            BrokerRequest::Read { path } => (
+                vec![TransportBatchRequest::Read { path }],
+                BrokerBatchResponseKind::Single,
+            ),
+            BrokerRequest::List { path } => (
+                vec![TransportBatchRequest::List { path }],
+                BrokerBatchResponseKind::Single,
+            ),
+            BrokerRequest::Write { path, payload } => (
+                vec![TransportBatchRequest::Write { path, payload }],
+                BrokerBatchResponseKind::Single,
+            ),
+            BrokerRequest::WriteBatch { path, payloads } => (
+                payloads
+                    .into_iter()
+                    .map(|payload| TransportBatchRequest::Write {
+                        path: path.clone(),
+                        payload,
+                    })
+                    .collect(),
+                BrokerBatchResponseKind::WriteBatch,
+            ),
             request => {
                 return Err(BrokerCommand {
-                    kind: command.kind,
+                    kind: command_kind,
                     request,
                     response_tx,
                 });
@@ -938,8 +1030,12 @@ impl BrokerCommandBatch {
         };
         Ok(Self {
             kind,
-            requests: vec![request],
-            response_txs: vec![response_tx],
+            requests,
+            responses: vec![BrokerBatchResponse {
+                kind: response_kind,
+                request_count: command_count,
+                response_tx,
+            }],
         })
     }
 
@@ -948,26 +1044,55 @@ impl BrokerCommandBatch {
     }
 
     fn try_push(&mut self, command: BrokerCommand) -> std::result::Result<(), BrokerCommand> {
-        if self.len() >= BROKER_COMMAND_BATCH_MAX || command.kind != self.kind {
+        let command_count = command.request.command_count();
+        if command.kind != self.kind
+            || command_count == 0
+            || self.len().saturating_add(command_count) > BROKER_COMMAND_BATCH_MAX
+        {
             return Err(command);
         }
-        let response_tx = command.response_tx;
-        let request = match command.request {
-            BrokerRequest::Read { path } => TransportBatchRequest::Read { path },
-            BrokerRequest::List { path } => TransportBatchRequest::List { path },
-            BrokerRequest::Write { path, payload } => {
-                TransportBatchRequest::Write { path, payload }
-            }
+        let BrokerCommand {
+            kind: command_kind,
+            request,
+            response_tx,
+        } = command;
+        let (requests, response_kind) = match request {
+            BrokerRequest::Read { path } => (
+                vec![TransportBatchRequest::Read { path }],
+                BrokerBatchResponseKind::Single,
+            ),
+            BrokerRequest::List { path } => (
+                vec![TransportBatchRequest::List { path }],
+                BrokerBatchResponseKind::Single,
+            ),
+            BrokerRequest::Write { path, payload } => (
+                vec![TransportBatchRequest::Write { path, payload }],
+                BrokerBatchResponseKind::Single,
+            ),
+            BrokerRequest::WriteBatch { path, payloads } => (
+                payloads
+                    .into_iter()
+                    .map(|payload| TransportBatchRequest::Write {
+                        path: path.clone(),
+                        payload,
+                    })
+                    .collect(),
+                BrokerBatchResponseKind::WriteBatch,
+            ),
             request => {
                 return Err(BrokerCommand {
-                    kind: command.kind,
+                    kind: command_kind,
                     request,
                     response_tx,
                 });
             }
         };
-        self.requests.push(request);
-        self.response_txs.push(response_tx);
+        self.requests.extend(requests);
+        self.responses.push(BrokerBatchResponse {
+            kind: response_kind,
+            request_count: command_count,
+            response_tx,
+        });
         Ok(())
     }
 }
@@ -1105,6 +1230,12 @@ struct EchoRequest {
     line: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct EchoBatchRequest {
+    path: String,
+    lines: Vec<String>,
+}
+
 #[derive(Debug, Serialize)]
 struct GatewayResponse {
     status: &'static str,
@@ -1197,6 +1328,7 @@ async fn main() -> Result<()> {
         .route("/v1/fs/cat", get(fs_cat))
         .route("/v1/fs/tail", get(fs_tail))
         .route("/v1/fs/echo", post(fs_echo))
+        .route("/v1/fs/echo-batch", post(fs_echo_batch))
         .route("/v1/openapi.yaml", get(openapi_yaml))
         .route("/docs", get(swagger_ui))
         .with_state(state.clone());
@@ -2033,12 +2165,21 @@ fn build_gateway_broker(
     metrics: Arc<BrokerMetrics>,
     shutdown: Arc<AtomicBool>,
 ) -> GatewayBrokerClient {
+    let (execution_tx, execution_rx) = mpsc::sync_channel(BROKER_EXECUTION_QUEUE_CAPACITY);
     let (control_tx, control_rx) = mpsc::sync_channel(BROKER_CONTROL_QUEUE_CAPACITY);
     let (telemetry_tx, telemetry_rx) = mpsc::sync_channel(BROKER_TELEMETRY_QUEUE_CAPACITY);
     thread::spawn(move || {
-        run_broker_dispatcher(pool, metrics, shutdown, control_rx, telemetry_rx);
+        run_broker_dispatcher(
+            pool,
+            metrics,
+            shutdown,
+            execution_rx,
+            control_rx,
+            telemetry_rx,
+        );
     });
     GatewayBrokerClient {
+        execution_tx,
         control_tx,
         telemetry_tx,
     }
@@ -2048,6 +2189,7 @@ fn run_broker_dispatcher(
     pool: SharedPool,
     metrics: Arc<BrokerMetrics>,
     shutdown: Arc<AtomicBool>,
+    execution_rx: Receiver<BrokerCommand>,
     control_rx: Receiver<BrokerCommand>,
     telemetry_rx: Receiver<BrokerCommand>,
 ) {
@@ -2057,6 +2199,26 @@ fn run_broker_dispatcher(
         }
 
         let mut dispatched = false;
+        let mut execution_dispatched = 0usize;
+        while execution_dispatched < BROKER_EXECUTION_BURST {
+            match execution_rx.try_recv() {
+                Ok(command) => {
+                    dispatched = true;
+                    let remaining = BROKER_EXECUTION_BURST.saturating_sub(execution_dispatched);
+                    execution_dispatched =
+                        execution_dispatched.saturating_add(dispatch_control_command(
+                            &pool,
+                            &metrics,
+                            command,
+                            &execution_rx,
+                            remaining,
+                        ));
+                }
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => break,
+            }
+        }
+
         let mut control_dispatched = 0usize;
         while control_dispatched < BROKER_CONTROL_BURST {
             match control_rx.try_recv() {
@@ -2089,26 +2251,10 @@ fn run_broker_dispatcher(
             continue;
         }
 
-        match control_rx.recv_timeout(Duration::from_millis(BROKER_IDLE_WAIT_MS)) {
-            Ok(command) => {
-                dispatch_control_command(
-                    &pool,
-                    &metrics,
-                    command,
-                    &control_rx,
-                    BROKER_COMMAND_BATCH_MAX,
-                );
-                continue;
-            }
-            Err(RecvTimeoutError::Timeout) => {}
-            Err(RecvTimeoutError::Disconnected) => {}
-        }
-
-        match telemetry_rx.recv_timeout(Duration::from_millis(BROKER_IDLE_WAIT_MS)) {
-            Ok(command) => dispatch_telemetry_command(&pool, &metrics, command, &telemetry_rx),
-            Err(RecvTimeoutError::Timeout) => {}
-            Err(RecvTimeoutError::Disconnected) => {}
-        }
+        // `std::sync::mpsc` has no multi-receiver select. A bounded one-
+        // millisecond idle poll avoids imposing the former 20--40 ms channel-
+        // ordering delay on an otherwise idle operator or execution request.
+        thread::sleep(Duration::from_millis(BROKER_IDLE_WAIT_MS));
     }
     pool.shutdown();
 }
@@ -2144,10 +2290,24 @@ fn dispatch_control_command(
     let mut dispatched = batch.len();
     dispatch_broker_command_batch(pool, metrics, batch);
     if let Some(command) = deferred {
+        let command_count = command.request.command_count();
         dispatch_broker_command(pool, metrics, command);
-        dispatched = dispatched.saturating_add(1);
+        dispatched = dispatched.saturating_add(command_count);
     }
     dispatched
+}
+
+fn record_broker_transaction(metrics: &BrokerMetrics, kind: PoolKind, requests: usize) {
+    let requests = u64::try_from(requests).unwrap_or(u64::MAX);
+    metrics
+        .checkout_counter(kind)
+        .fetch_add(1, Ordering::Relaxed);
+    metrics
+        .request_counter(kind)
+        .fetch_add(requests, Ordering::Relaxed);
+    metrics
+        .batch_high_water_counter(kind)
+        .fetch_max(requests, Ordering::Relaxed);
 }
 
 fn dispatch_broker_command_batch(
@@ -2158,24 +2318,54 @@ fn dispatch_broker_command_batch(
     let BrokerCommandBatch {
         kind,
         requests,
-        response_txs,
+        responses,
     } = batch;
-    let request_count = response_txs.len();
-    for _ in 0..request_count {
+    let request_count = requests.len();
+    for _ in 0..responses.len() {
         decrement_counter(metrics.wait_counter(kind));
     }
-    metrics
-        .checkout_counter(kind)
-        .fetch_add(1, Ordering::Relaxed);
+    record_broker_transaction(metrics, kind, request_count);
     let result = execute_broker_command_batch(pool, kind, requests)
         .map_err(|error| map_broker_error(metrics, kind, error));
     match result {
         Ok(outcomes) if outcomes.len() == request_count => {
-            for (outcome, response_tx) in outcomes.into_iter().zip(response_txs) {
-                let response = outcome
-                    .map_err(anyhow::Error::msg)
-                    .map_err(|error| map_broker_error(metrics, kind, error));
-                let _ = response_tx.send(response);
+            let mut outcomes = outcomes.into_iter();
+            for response in responses {
+                let mut grouped = outcomes.by_ref().take(response.request_count);
+                let result = match response.kind {
+                    BrokerBatchResponseKind::Single => grouped
+                        .next()
+                        .unwrap_or_else(|| {
+                            Err("transport omitted a single command outcome".to_owned())
+                        })
+                        .map_err(anyhow::Error::msg)
+                        .map_err(|error| map_broker_error(metrics, kind, error)),
+                    BrokerBatchResponseKind::WriteBatch => {
+                        let mut error = None;
+                        for outcome in grouped {
+                            match outcome {
+                                Ok(BrokerResponse::Unit) => {}
+                                Ok(BrokerResponse::Lines(_)) => {
+                                    error.get_or_insert_with(|| {
+                                        anyhow::anyhow!(
+                                            "write batch returned unexpected response lines"
+                                        )
+                                    });
+                                }
+                                Err(message) => {
+                                    error.get_or_insert_with(|| {
+                                        map_broker_error(metrics, kind, anyhow::Error::msg(message))
+                                    });
+                                }
+                            }
+                        }
+                        match error {
+                            Some(error) => Err(error),
+                            None => Ok(BrokerResponse::Unit),
+                        }
+                    }
+                };
+                let _ = response.response_tx.send(result);
             }
         }
         Ok(outcomes) => {
@@ -2183,14 +2373,18 @@ fn dispatch_broker_command_batch(
                 "transport returned {} outcomes for {request_count} batched commands",
                 outcomes.len()
             );
-            for response_tx in response_txs {
-                let _ = response_tx.send(Err(anyhow::anyhow!(message.clone())));
+            for response in responses {
+                let _ = response
+                    .response_tx
+                    .send(Err(anyhow::anyhow!(message.clone())));
             }
         }
         Err(error) => {
             let message = error.to_string();
-            for response_tx in response_txs {
-                let _ = response_tx.send(Err(anyhow::anyhow!(message.clone())));
+            for response in responses {
+                let _ = response
+                    .response_tx
+                    .send(Err(anyhow::anyhow!(message.clone())));
             }
         }
     }
@@ -2270,9 +2464,7 @@ fn dispatch_broker_read_batch(pool: &SharedPool, metrics: &BrokerMetrics, batch:
     for _ in 0..request_count {
         decrement_counter(metrics.wait_counter(kind));
     }
-    metrics
-        .checkout_counter(kind)
-        .fetch_add(1, Ordering::Relaxed);
+    record_broker_transaction(metrics, kind, request_count);
     let result = execute_broker_read_batch(pool, kind, requests)
         .map_err(|error| map_broker_error(metrics, kind, error));
     match result {
@@ -2317,16 +2509,21 @@ fn dispatch_telemetry_write_batch(
         BrokerCommandBatch {
             kind: PoolKind::Telemetry,
             requests,
-            response_txs,
+            responses: response_txs
+                .into_iter()
+                .map(|response_tx| BrokerBatchResponse {
+                    kind: BrokerBatchResponseKind::Single,
+                    request_count: 1,
+                    response_tx,
+                })
+                .collect(),
         },
     );
 }
 
 fn dispatch_broker_command(pool: &SharedPool, metrics: &BrokerMetrics, command: BrokerCommand) {
     decrement_counter(metrics.wait_counter(command.kind));
-    metrics
-        .checkout_counter(command.kind)
-        .fetch_add(1, Ordering::Relaxed);
+    record_broker_transaction(metrics, command.kind, command.request.command_count());
     let result = execute_broker_request(pool, command.kind, command.request)
         .map_err(|err| map_broker_error(metrics, command.kind, err));
     let _ = command.response_tx.send(result);
@@ -2389,6 +2586,18 @@ fn execute_broker_request(
                     transport.write(session, path.as_str(), payload.as_slice())?;
                     Ok(BrokerResponse::Unit)
                 }
+            })
+        }
+        BrokerRequest::WriteBatch { path, payloads } => {
+            with_pool_once(pool, kind, move |transport, session| {
+                let expected = payloads.len();
+                let written = transport.write_batch(session, path.as_str(), payloads.as_slice())?;
+                if written != expected {
+                    return Err(anyhow::anyhow!(
+                        "transport wrote {written} of {expected} batched records"
+                    ));
+                }
+                Ok(BrokerResponse::Unit)
             })
         }
     }
@@ -2566,11 +2775,36 @@ async fn shutdown_signal(state: AppState) {
 
 impl AppState {
     fn submit_broker(&self, kind: PoolKind, request: BrokerRequest) -> Result<BrokerResponse> {
-        let queue_deadline = Instant::now() + Duration::from_millis(BROKER_QUEUE_WAIT_LIMIT_MS);
         let tx = match kind {
             PoolKind::Control => &self.inner.broker_client.control_tx,
             PoolKind::Telemetry => &self.inner.broker_client.telemetry_tx,
         };
+        self.submit_broker_on(kind, tx, request)
+    }
+
+    fn submit_execution_broker(&self, request: BrokerRequest) -> Result<BrokerResponse> {
+        self.submit_broker_on(
+            PoolKind::Control,
+            &self.inner.broker_client.execution_tx,
+            request,
+        )
+    }
+
+    fn submit_write_broker(&self, path: &str, request: BrokerRequest) -> Result<BrokerResponse> {
+        if is_host_ticket_result_path(path) {
+            self.submit_execution_broker(request)
+        } else {
+            self.submit_broker(write_pool_kind(path), request)
+        }
+    }
+
+    fn submit_broker_on(
+        &self,
+        kind: PoolKind,
+        tx: &SyncSender<BrokerCommand>,
+        request: BrokerRequest,
+    ) -> Result<BrokerResponse> {
+        let queue_deadline = Instant::now() + Duration::from_millis(BROKER_QUEUE_WAIT_LIMIT_MS);
         let (response_tx, response_rx) = mpsc::channel();
         let mut command = BrokerCommand {
             kind,
@@ -2723,13 +2957,15 @@ impl AppState {
 
     fn read_uncached(&self, path: &str) -> Result<Vec<String>> {
         self.ensure_connected()?;
-        let kind = read_pool_kind(path);
-        match self.submit_broker(
-            kind,
-            BrokerRequest::Read {
-                path: path.to_owned(),
-            },
-        )? {
+        let request = BrokerRequest::Read {
+            path: path.to_owned(),
+        };
+        let response = if is_execution_ingress_read_path(path) {
+            self.submit_execution_broker(request)?
+        } else {
+            self.submit_broker(read_pool_kind(path), request)?
+        };
+        match response {
             BrokerResponse::Lines(lines) => Ok(lines),
             BrokerResponse::Unit => Ok(Vec::new()),
         }
@@ -2775,12 +3011,11 @@ impl AppState {
         let retry_window = Duration::from_millis(self.inner.control_write_retry_window_ms);
         let deadline = Instant::now() + retry_window;
         let retry_deadline_enabled = is_retryable_control_write_path(write_path.as_str());
-        let write_kind = write_pool_kind(write_path.as_str());
         let mut first_retryable_error: Option<String> = None;
         let mut retry_delay = Duration::from_millis(CONTROL_WRITE_RETRY_SLEEP_MS);
         loop {
-            let result = self.submit_broker(
-                write_kind,
+            let result = self.submit_write_broker(
+                write_path.as_str(),
                 BrokerRequest::Write {
                     path: write_path.clone(),
                     payload: payload.clone(),
@@ -2866,6 +3101,40 @@ impl AppState {
                     );
                 }
             }
+        }
+    }
+
+    fn write_batch(&self, path: &str, payloads: Vec<Vec<u8>>) -> Result<()> {
+        self.ensure_connected()?;
+        if payloads.is_empty() || payloads.len() > TRANSPORT_COMMAND_BATCH_MAX {
+            anyhow::bail!(
+                "gateway write batch must contain 1..={} records",
+                TRANSPORT_COMMAND_BATCH_MAX
+            );
+        }
+        if !is_host_ticket_result_path(path) {
+            anyhow::bail!(
+                "gateway write batch path must be an append-only host ticket result path"
+            );
+        }
+        let invalidation_payload = payloads
+            .last()
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("gateway write batch is empty"))?;
+        match self.submit_write_broker(
+            path,
+            BrokerRequest::WriteBatch {
+                path: path.to_owned(),
+                payloads,
+            },
+        )? {
+            BrokerResponse::Unit => {
+                self.read_cache_invalidate_for_write(path, invalidation_payload.as_slice());
+                Ok(())
+            }
+            BrokerResponse::Lines(_) => Err(anyhow::anyhow!(
+                "gateway write batch returned an unexpected line response"
+            )),
         }
     }
 
@@ -3164,6 +3433,23 @@ async fn fs_echo(
     handle_echo(state, payload).await.into_response()
 }
 
+async fn fs_echo_batch(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<EchoBatchRequest>,
+) -> axum::response::Response {
+    if let Err(err) = validate_request_auth(&headers, state.request_auth_token()) {
+        return response_err(
+            "ECHO_BATCH",
+            payload.path.as_str(),
+            err,
+            StatusCode::UNAUTHORIZED,
+        )
+        .into_response();
+    }
+    handle_echo_batch(state, payload).await.into_response()
+}
+
 async fn handle_list(state: AppState, path: String) -> impl axum::response::IntoResponse {
     let verb = "LS";
     if let Err(err) = validate_path(&path) {
@@ -3372,6 +3658,80 @@ async fn handle_echo(state: AppState, payload: EchoRequest) -> impl axum::respon
     }
 }
 
+async fn handle_echo_batch(
+    state: AppState,
+    payload: EchoBatchRequest,
+) -> impl axum::response::IntoResponse {
+    let verb = "ECHO_BATCH";
+    if let Err(err) = validate_path(&payload.path) {
+        return response_err(verb, &payload.path, err, StatusCode::BAD_REQUEST);
+    }
+    if let Err(err) = validate_control_enabled(&payload.path, &state.bounds()) {
+        return response_err(verb, &payload.path, err, StatusCode::BAD_REQUEST);
+    }
+    if !is_host_ticket_result_path(payload.path.as_str()) {
+        return response_err(
+            verb,
+            &payload.path,
+            "batch writes are limited to append-only host ticket result paths",
+            StatusCode::BAD_REQUEST,
+        );
+    }
+    if payload.lines.is_empty() || payload.lines.len() > TRANSPORT_COMMAND_BATCH_MAX {
+        return response_err(
+            verb,
+            &payload.path,
+            format!(
+                "lines must contain 1..={} records",
+                TRANSPORT_COMMAND_BATCH_MAX
+            ),
+            StatusCode::BAD_REQUEST,
+        );
+    }
+    let mut raw_bytes = 0usize;
+    let mut payloads = Vec::with_capacity(payload.lines.len());
+    for line in &payload.lines {
+        raw_bytes = match raw_bytes.checked_add(line.len()) {
+            Some(bytes) => bytes,
+            None => {
+                return response_err(
+                    verb,
+                    &payload.path,
+                    "batch byte count overflow",
+                    StatusCode::BAD_REQUEST,
+                )
+            }
+        };
+        let trimmed = match normalise_payload(line, &payload.path) {
+            Ok(value) => value,
+            Err(err) => return response_err(verb, &payload.path, err, StatusCode::BAD_REQUEST),
+        };
+        if let Some(limit) = max_ctl_bytes(&payload.path, &state.bounds()) {
+            if trimmed.len() > limit {
+                return response_err(
+                    verb,
+                    &payload.path,
+                    format!("payload exceeds ctl_max_bytes {limit}"),
+                    StatusCode::BAD_REQUEST,
+                );
+            }
+        }
+        payloads.push(trimmed.into_bytes());
+    }
+    let path = payload.path.clone();
+    let result = tokio::task::spawn_blocking(move || state.write_batch(&path, payloads)).await;
+    match result {
+        Ok(Ok(())) => response_ok(verb, payload.path, Vec::new(), Some(raw_bytes)),
+        Ok(Err(err)) => response_transport_err(verb, &payload.path, err),
+        Err(err) => response_err(
+            verb,
+            &payload.path,
+            err.to_string(),
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ),
+    }
+}
+
 fn is_cacheable_read_path(path: &str) -> bool {
     path.starts_with("/proc/") || path.starts_with("/host/") || path.starts_with("/gpu/")
 }
@@ -3437,6 +3797,10 @@ fn is_retryable_control_write_path(path: &str) -> bool {
     path.starts_with("/queen/") || path == CLIENT_POLICY_CTL_PATH || path.starts_with("/actions/")
 }
 
+fn is_host_ticket_result_path(path: &str) -> bool {
+    matches!(path, HOST_TICKET_STATUS_PATH | HOST_TICKET_DEADLETTER_PATH)
+}
+
 fn write_pool_kind(path: &str) -> PoolKind {
     if is_batchable_telemetry_write_path(path) {
         PoolKind::Telemetry
@@ -3451,6 +3815,10 @@ fn read_pool_kind(path: &str) -> PoolKind {
     } else {
         PoolKind::Telemetry
     }
+}
+
+fn is_execution_ingress_read_path(path: &str) -> bool {
+    path == HOST_TICKET_SPEC_SNAPSHOT_PATH
 }
 
 fn is_batchable_telemetry_write_path(path: &str) -> bool {
@@ -3932,9 +4300,9 @@ mod tests {
     #[test]
     fn generated_worker_bounds_are_exact_and_bounded() {
         let bounds = build_worker_runtime_bounds().expect("generated Worker profile parses");
-        assert_eq!(bounds.maximum_live_tasks, 37);
-        assert_eq!(bounds.task_abi_schema, "worker-task-abi/v1");
-        assert_eq!(bounds.task_abi_version, 1);
+        assert_eq!(bounds.maximum_live_tasks, 256);
+        assert_eq!(bounds.task_abi_schema, "worker-task-abi/v2");
+        assert_eq!(bounds.task_abi_version, 2);
         assert_eq!(
             bounds.canonical_telemetry_template,
             "/shard/<label>/worker/<id>/telemetry"
@@ -3950,8 +4318,8 @@ mod tests {
         );
         for (role, executable_slots) in [
             ("worker-heartbeat", 1),
-            ("worker-gpu", 15),
-            ("worker-lora", 21),
+            ("worker-gpu", 127),
+            ("worker-lora", 128),
         ] {
             assert_eq!(
                 bounds
@@ -4602,11 +4970,18 @@ mod tests {
             );
         }
 
+        assert!(is_execution_ingress_read_path(
+            HOST_TICKET_SPEC_SNAPSHOT_PATH
+        ));
+        assert!(is_host_ticket_result_path(HOST_TICKET_STATUS_PATH));
+        assert!(is_host_ticket_result_path(HOST_TICKET_DEADLETTER_PATH));
+        assert!(!is_host_ticket_result_path("/host/tickets/spec"));
         assert_eq!(
             read_pool_kind(
                 "/host/tickets/current/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
             ),
-            PoolKind::Control
+            PoolKind::Control,
+            "receipt observation must outrank unrelated bulk telemetry"
         );
         assert_eq!(
             read_pool_kind("/proc/lease/by-id/lease-1"),
@@ -4614,6 +4989,7 @@ mod tests {
         );
         for path in [
             "/host/tickets/status",
+            HOST_TICKET_SPEC_SNAPSHOT_PATH,
             "/host/systemd/status",
             "/proc/schedule/summary",
             "/gpu/inventory",
@@ -4768,12 +5144,19 @@ mod tests {
         batch
             .try_push(command(
                 PoolKind::Control,
-                BrokerRequest::Write {
-                    path: "/host/tickets/spec".to_owned(),
-                    payload: b"{}".to_vec(),
+                BrokerRequest::WriteBatch {
+                    path: HOST_TICKET_STATUS_PATH.to_owned(),
+                    payloads: vec![b"claimed".to_vec(), b"running".to_vec()],
                 },
             ))
-            .unwrap_or_else(|_| panic!("second ECHO joins the control command batch"));
+            .unwrap_or_else(|_| panic!("bounded ECHO batch joins the control command batch"));
+        assert_eq!(batch.len(), 5);
+        assert_eq!(batch.responses.len(), 4);
+        assert_eq!(batch.responses[3].request_count, 2);
+        assert!(matches!(
+            batch.responses[3].kind,
+            BrokerBatchResponseKind::WriteBatch
+        ));
         while batch.len() < TRANSPORT_COMMAND_BATCH_MAX {
             let index = batch.len();
             batch
@@ -4815,6 +5198,17 @@ mod tests {
             ),
         )
         .is_err());
+    }
+
+    #[test]
+    fn broker_transaction_metrics_measure_batch_amplification() {
+        let metrics = BrokerMetrics::default();
+        record_broker_transaction(&metrics, PoolKind::Control, 6);
+        record_broker_transaction(&metrics, PoolKind::Control, 2);
+        assert_eq!(metrics.control_checkouts.load(Ordering::Relaxed), 2);
+        assert_eq!(metrics.control_requests.load(Ordering::Relaxed), 8);
+        assert_eq!(metrics.control_batch_high_water.load(Ordering::Relaxed), 6);
+        assert_eq!(metrics.telemetry_requests.load(Ordering::Relaxed), 0);
     }
 
     #[test]
@@ -5237,6 +5631,7 @@ mod tests {
     }
 
     fn disconnected_cached_state() -> AppState {
+        let (execution_tx, _execution_rx) = mpsc::sync_channel(0);
         let (control_tx, _control_rx) = mpsc::sync_channel(0);
         let (telemetry_tx, _telemetry_rx) = mpsc::sync_channel(0);
         let factory: Arc<dyn TransportFactory> = Arc::new(|| {
@@ -5248,6 +5643,7 @@ mod tests {
             inner: Arc::new(GatewayInner {
                 pool: SessionPool::new(1, 1, factory),
                 broker_client: GatewayBrokerClient {
+                    execution_tx,
                     control_tx,
                     telemetry_tx,
                 },

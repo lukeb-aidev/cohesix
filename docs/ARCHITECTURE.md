@@ -52,8 +52,8 @@ build outputs, and generated tables rather than this overview.
 | Kernel | seL4 16.0.0 on AArch64 with SMP+MCS, per-core scheduling control, Reply objects, timeout-fault resources, and generated virtual-counter truth. | Configuration and compilation do not prove target execution or timing. |
 | Root authority | The init TCB remains `root-control`; restricted root-fault, emergency, Worker-supervisor, and driver-supervisor duties have independent active scheduling contexts. | The exact image must prove progress, fault handling, and containment. |
 | Namespace service | `nine-door-runtime` is a restricted passive child reached through a bounded donated Call/Reply chain after one compiler-budgeted bootstrap exchange. | Host NineDoor is a separate implementation and is not a transport to this child. |
-| Console network | `console-network-runtime` owns target TCP, smoltcp, framing, and transport authentication; root receives only copied authenticated commands and returns bounded response records. | The public console grammar is unchanged and remains the only in-target TCP service. |
-| Workers | Heartbeat, GPU, and LoRA are separately packaged executable roles with one generated slot each; WorkerBus remains model/session-only. | A declared slot or packaged image is not READY, runtime, teardown, or acceptance evidence. |
+| Console network | `console-network-runtime` owns target TCP, smoltcp, framing, and transport authentication. On QEMU the same child directly owns the HAL-admitted VirtIO MMIO, IRQ, and fixed coherent DMA queues; root receives only copied authenticated commands and returns bounded responses. | The public console grammar is unchanged and remains the only in-target TCP service. QEMU device evidence does not qualify a Pi network driver. |
+| Workers | Heartbeat, GPU, and LoRA are separately packaged passive executable roles served by two compiler-bounded active executor lanes. The QEMU profile admits 256 instances and the Pi profile 64; WorkerBus remains model/session-only. | A declared slot or packaged image is not READY, runtime, teardown, or acceptance evidence. |
 | Drivers | Selected physical devices use HAL-admitted isolated runtimes with fixed pointer-free ABIs and explicit temporal authority. | QEMU does not qualify Pi MMIO, DMA, IRQ, USB, display, GENET, SDIO, or CYW43 behavior. |
 | Attestation | Current target metadata is deterministic `measurement_only` hashing with generated static authority material. | It is not TPM Quote, DICE, measured boot, device identity, or secret-unsealing evidence. |
 
@@ -116,10 +116,10 @@ is the authenticated console.
 | Component | Runtime | Current responsibility |
 | --- | --- | --- |
 | Upstream seL4 | Target kernel | Enforces objects, capabilities, address spaces, SMP+MCS scheduling contexts and budgets, Reply objects, timeout faults, notifications, IPC, interrupts, and kernel-generated platform truth. |
-| `root-task` | Target, `no_std` | Owns BootInfo/untyped allocation, CSpace/VSpace bootstrap, HAL admission, event pumping, serial/local-seat/HDMI handling, Queen policy, Worker model state, audit/evidence, and fault supervision. On QEMU it retains the VirtIO NIC adapter but copies Ethernet frames and authorized response bytes through the isolated console-network ABI; it owns no smoltcp or TCP/auth parser there. Pi physical networking follows the manifest-declared isolated-driver boundary and requires independent hardware evidence. |
+| `root-task` | Target, `no_std` | Owns BootInfo/untyped allocation, CSpace/VSpace bootstrap, HAL admission, event pumping, serial/local-seat/HDMI handling, Queen policy, Worker model state, audit/evidence, and fault supervision. On QEMU it admits and maps VirtIO resources into `console-network-runtime`, but owns no steady-state MMIO, IRQ, DMA, smoltcp, TCP, or authentication path. Pi physical networking follows its manifest-declared isolated-driver boundary and requires independent hardware evidence. |
 | `pi4-driver-*` | Pi 4 target, `no_std` child images | Own steady physical-device service behind HAL-admitted resources and the pointer-free driver-task ABI. |
-| `nine-door-runtime` | Target, `no_std` child | Implements the bounded pointer-free namespace request/response ABI, shared-frame validation, typed operation preparation, cancellation/revoke handling, and a real seL4 MCS receive/atomic-`ReplyRecv` loop. The selected schema-1.14 QEMU root constructor retains the NineDoor contract introduced in 1.11 and carried through later schemas: it binds the selected ELF digest and W^X load plan, creates the child from its compiler-owned revoke anchor, retains a one-shot bootstrap SC and the dedicated fault-recovery Reply authority, and exposes only the bounded `Call` adapter. After one validated bootstrap exchange, the SC is unbound and the child is steady-state passive. Root remains the only Queen policy and namespace-mutation authority. A successful target check proves construction code and image identity, while a live selected-image QEMU boot remains the activation/containment evidence gate. |
-| Executable Worker runtime and role/session model | Target children plus root/host projections | Root constructs suspended Heartbeat, GPU, and LoRA children from the compiler-owned image and authority inventory. Admission resumes exactly one selected role instance; READY gates publication; control, receipts, faults, teardown, and recreation retain exact five-part identity. WorkerBus remains model-only. |
+| `nine-door-runtime` | Target, `no_std` child | Implements the bounded pointer-free namespace request/response ABI, shared-frame validation, typed operation preparation, cancellation/revoke handling, and a real seL4 MCS receive/atomic-`ReplyRecv` loop. The selected schema-1.15 QEMU root constructor retains the NineDoor contract introduced in 1.11 and carried through later schemas: it binds the selected ELF digest and W^X load plan, creates the child from its compiler-owned revoke anchor, retains a one-shot bootstrap SC and the dedicated fault-recovery Reply authority, and exposes only the bounded `Call` adapter. After one validated bootstrap exchange, the SC is unbound and the child is steady-state passive. Root remains the only Queen policy and namespace-mutation authority. A successful target check proves construction code and image identity, while a live selected-image QEMU boot remains the activation/containment evidence gate. |
+| Executable Worker runtime and role/session model | Target children plus root/host projections | Root constructs suspended Heartbeat, GPU, and LoRA children from the compiler-owned image and authority inventory. Instances are passive and accept a donated SC only from their generated role executor. READY gates publication; control, receipts, faults, teardown, and recreation retain exact five-part identity. WorkerBus remains model-only. |
 | Host NineDoor library/fixture adapter | Host, `std` | Implements the Secure9P model used by host builds and in-process compatibility tests. It is not a packaged target transport or proof of a live host service. |
 | `cohsh`, `coh`, SwarmUI, gateway, FUSE, GPU and provider bridges | Host | Provide host clients/adapters and execute only integrations whose selected implementation and observed mode are live; they do not create a new target authority path. |
 | `coh-rtc` | Build host | Validates manifest IR and generates Rust tables, resolved manifests, policy defaults, scripts, and documentation snippets. |
@@ -242,11 +242,23 @@ Queen is root-task orchestration authority exposed through the console and
 NineDoor control surfaces; it is not a separate host RPC service or target TCB.
 The selected operational profiles expose executable Heartbeat, GPU, and LoRA
 roles plus model-only WorkerBus. Root constructs each executable image as a
-suspended, W^X, least-authority child with a dedicated active SC. A successful
+suspended, W^X, least-authority passive child. Two active executor lanes own
+the generated Worker-core budgets: the GPU lane serves only GPU instances; the
+LoRA lane serves LoRA and Heartbeat. A fixed fair queue selects one exact
+instance, donates the lane SC through a depth-one endpoint `Call`, and regains
+it only through that instance's generation-scoped Reply object. A successful
 admission request queues or resumes only its exact role instance; it is not a
 READY receipt. Namespace publication follows the child's durable READY record,
 and control/receipt completion is accepted only for the pinned role, slot,
 logical lease epoch, supervisor generation, and capability generation.
+
+This topology makes Worker cardinality an object/isolation question rather
+than one active-SC reservation per instance. The QEMU manifest expands to one
+Heartbeat, 127 GPU, and 128 LoRA instances; the Pi manifest expands to one,
+31, and 32 respectively. Code and read-only role-image frames may be shared
+only under an exact sealed image identity. Writable image pages, stacks, IPC
+buffers, ABI pages, CSpaces, VSpaces, Reply objects, and fault identity remain
+per-instance.
 
 A Worker ticket still does not prove execution by itself. `ATTACH` remains
 session binding, not task creation. Direct target evidence must observe the
@@ -346,8 +358,9 @@ generation-stamped READY record.
 Control and receipt results are pinned to role, slot, lease epoch, supervisor
 generation, and capability generation. Kill, shutdown, fault, and construction
 failure converge on one idempotent teardown that suspends execution, resolves
-Reply state, clears records and signals, unbinds the scheduling context, unmaps
-memory, revokes capabilities, and excludes the old generation before reuse.
+the instance Reply state exactly once, returns any donated executor SC, clears
+records and signals, unmaps private memory, revokes capabilities, and excludes
+the old generation before reuse.
 Host NineDoor performs analogous role and namespace validation only against its
 separate host-model or fixture state; it cannot create a target child.
 

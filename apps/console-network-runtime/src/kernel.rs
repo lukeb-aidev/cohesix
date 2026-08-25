@@ -7,12 +7,18 @@ use core::panic::PanicInfo;
 use core::ptr::{addr_of, addr_of_mut, copy_nonoverlapping, read_volatile, write_volatile};
 use core::sync::atomic::{fence, Ordering};
 
+#[cfg(feature = "direct-virtio")]
+use console_network_runtime::abi::{
+    DirectVirtioLayout, DIRECT_VIRTIO_LAYOUT_BYTES, DIRECT_VIRTIO_LAYOUT_OFFSET,
+};
 use console_network_runtime::abi::{
     ExchangeKind, ExchangePage, ExchangePageHeader, PacketDirection, PacketPage, PacketPageHeader,
     RuntimeInitDescriptor, CONSOLE_PAYLOAD_BYTES, CONTROL_CONSUMED_SEQUENCE_OFFSET,
     ETHERNET_FRAME_BYTES, INGRESS_CONSUMED_SEQUENCE_OFFSET, RUNTIME_INIT_DESCRIPTOR_BYTES,
     WAKE_CONTROL, WAKE_PACKET_RX, WAKE_PUBLICATION_ACK, WAKE_REVOKE, WAKE_SHUTDOWN,
 };
+#[cfg(feature = "direct-virtio")]
+use console_network_runtime::abi::{DIRECT_VIRTIO_IRQ_HANDLER_SLOT, WAKE_DIRECT_VIRTIO_IRQ};
 use console_network_runtime::{
     ChildTurnReadiness, ChildTurnScheduler, ChildTurnUnit, ConsoleNetworkService,
     ControlApplyOutcome, RuntimeError, ServicePollOutcome,
@@ -20,8 +26,13 @@ use console_network_runtime::{
 use heapless::Deque;
 use smoltcp::iface::SocketStorage;
 
+#[cfg(feature = "direct-virtio")]
+use crate::direct_virtio::{DirectVirtioError, DirectVirtioNet};
+
 const TCP_BUFFER_BYTES: usize = 32 * 1024;
 const COMPLETION_DEPTH: usize = 3;
+#[cfg(feature = "direct-virtio")]
+const DIRECT_SERVICE_QUANTUM_UNITS: usize = 64;
 
 static mut TCP_RX: [u8; TCP_BUFFER_BYTES] = [0; TCP_BUFFER_BYTES];
 static mut TCP_TX: [u8; TCP_BUFFER_BYTES] = [0; TCP_BUFFER_BYTES];
@@ -67,6 +78,7 @@ pub unsafe extern "C" fn _start(descriptor: *const u8) -> ! {
     {
         enter_standard_fault();
     }
+    let init_page = descriptor;
     let mut descriptor_bytes = [0u8; RUNTIME_INIT_DESCRIPTOR_BYTES];
     let mut index = 0usize;
     while index < descriptor_bytes.len() {
@@ -81,6 +93,33 @@ pub unsafe extern "C" fn _start(descriptor: *const u8) -> ! {
         Err(_) => enter_standard_fault(),
     };
     if descriptor.validate().is_err() {
+        enter_standard_fault();
+    }
+    #[cfg(feature = "direct-virtio")]
+    let mut direct_device = if descriptor.direct_virtio() {
+        let mut layout_bytes = [0u8; DIRECT_VIRTIO_LAYOUT_BYTES];
+        let mut layout_index = 0usize;
+        while layout_index < layout_bytes.len() {
+            // SAFETY: Descriptor validation proves the base init page. The
+            // direct-layout offset and exact size are compile-time bounded to
+            // that same read-only page.
+            layout_bytes[layout_index] =
+                unsafe { read_volatile(init_page.add(DIRECT_VIRTIO_LAYOUT_OFFSET + layout_index)) };
+            layout_index += 1;
+        }
+        let layout = match DirectVirtioLayout::decode(&layout_bytes) {
+            Ok(layout) => layout,
+            Err(_) => enter_standard_fault(),
+        };
+        match DirectVirtioNet::new(layout, descriptor.mac) {
+            Ok(device) => Some(device),
+            Err(error) => enter_direct_virtio_fault(error),
+        }
+    } else {
+        None
+    };
+    #[cfg(not(feature = "direct-virtio"))]
+    if descriptor.direct_virtio() {
         enter_standard_fault();
     }
     install_ipc_buffer(descriptor);
@@ -98,7 +137,19 @@ pub unsafe extern "C" fn _start(descriptor: *const u8) -> ! {
             ),
         )
     };
-    let mut service = match ConsoleNetworkService::new(descriptor, tcp_rx, tcp_tx, socket_storage) {
+    #[cfg(feature = "direct-virtio")]
+    let service_mac = direct_device
+        .as_ref()
+        .map_or(descriptor.mac, DirectVirtioNet::mac);
+    #[cfg(not(feature = "direct-virtio"))]
+    let service_mac = descriptor.mac;
+    let mut service = match ConsoleNetworkService::new_with_mac(
+        descriptor,
+        service_mac,
+        tcp_rx,
+        tcp_tx,
+        socket_storage,
+    ) {
         Ok(service) => service,
         Err(_) => enter_standard_fault(),
     };
@@ -130,15 +181,36 @@ pub unsafe extern "C" fn _start(descriptor: *const u8) -> ! {
     // preserve the credit, and exactly one later publication consumes it.
     let mut publication_credit_available = false;
     let mut shutdown_pending = false;
+    #[cfg(feature = "direct-virtio")]
+    let mut direct_service_pending = direct_device.is_some();
 
     loop {
+        #[cfg(feature = "direct-virtio")]
+        let direct_transport = direct_device.is_some();
+        #[cfg(not(feature = "direct-virtio"))]
+        let direct_transport = false;
+        let egress_publication_pending = !direct_transport && service.egress_pending();
         let readiness = ChildTurnReadiness::new(
             !completions.is_empty(),
             service.service_event_pending(),
-            service.egress_pending(),
+            egress_publication_pending,
         );
+        let selected_unit = turn_scheduler.take_next(readiness);
         let local_poll_eligible = if shutdown_pending {
             publication_credit_available
+        } else if direct_transport {
+            match selected_unit {
+                ChildTurnUnit::PublishCompletion
+                | ChildTurnUnit::PublishServiceEvent
+                | ChildTurnUnit::PublishEgress => publication_credit_available,
+                ChildTurnUnit::PollService
+                | ChildTurnUnit::IngestPacket
+                | ChildTurnUnit::ApplyControl => true,
+                #[cfg(feature = "direct-virtio")]
+                ChildTurnUnit::Idle => direct_service_pending,
+                #[cfg(not(feature = "direct-virtio"))]
+                ChildTurnUnit::Idle => false,
+            }
         } else {
             turn_scheduler.local_poll_eligible(publication_credit_available, readiness)
         };
@@ -152,6 +224,19 @@ pub unsafe extern "C" fn _start(descriptor: *const u8) -> ! {
             // unacknowledged event page. Root already fenced the generation
             // before signalling revoke and will suspend/revoke this TCB.
             park_for_teardown(descriptor);
+        }
+        #[cfg(feature = "direct-virtio")]
+        if badge & WAKE_DIRECT_VIRTIO_IRQ != 0 {
+            let Some(device) = direct_device.as_ref() else {
+                enter_standard_fault();
+            };
+            if let Err(error) = device.acknowledge_interrupt() {
+                enter_direct_virtio_fault(error);
+            }
+            if !acknowledge_direct_irq_handler() {
+                enter_standard_fault();
+            }
+            direct_service_pending = true;
         }
 
         if badge & WAKE_PUBLICATION_ACK != 0 {
@@ -188,14 +273,110 @@ pub unsafe extern "C" fn _start(descriptor: *const u8) -> ! {
             park_for_teardown(descriptor);
         }
 
-        let packet_wake = badge & WAKE_PACKET_RX != 0;
+        let packet_wake = !direct_transport && badge & WAKE_PACKET_RX != 0;
         let control_wake = badge & WAKE_CONTROL != 0;
+        #[cfg(feature = "direct-virtio")]
+        if direct_transport && control_wake {
+            direct_service_pending = true;
+        }
         turn_scheduler.retain_notification(packet_wake, control_wake);
-        let unit = turn_scheduler.take_next(ChildTurnReadiness::new(
+        let mut unit = turn_scheduler.take_next(ChildTurnReadiness::new(
             !completions.is_empty(),
             service.service_event_pending(),
-            service.egress_pending(),
+            !direct_transport && service.egress_pending(),
         ));
+        #[cfg(feature = "direct-virtio")]
+        if direct_transport && direct_service_pending && unit == ChildTurnUnit::Idle {
+            let Some(device) = direct_device.as_mut() else {
+                enter_standard_fault();
+            };
+            direct_service_pending = false;
+            let mut quantum_units = 0usize;
+            let mut cycle_progress = false;
+            while quantum_units < DIRECT_SERVICE_QUANTUM_UNITS
+                && completions.is_empty()
+                && !service.service_event_pending()
+            {
+                if let Err(error) = device.poll() {
+                    enter_direct_virtio_fault(error);
+                }
+                if service.ingress_available() {
+                    let mut ingress = [0u8; ETHERNET_FRAME_BYTES];
+                    match device.receive(&mut ingress) {
+                        Ok(Some(length)) => {
+                            if service.ingest_packet(&ingress[..length]).is_err() {
+                                enter_standard_fault();
+                            }
+                            cycle_progress = true;
+                        }
+                        Ok(None) => {}
+                        Err(error) => enter_direct_virtio_fault(error),
+                    }
+                }
+
+                let outcome = match service.poll_service_unit(now_ms(descriptor.timer_clock_hz)) {
+                    Ok(outcome) => outcome,
+                    Err(_) => enter_standard_fault(),
+                };
+                if service.egress_pending() {
+                    match device.can_transmit() {
+                        Ok(true) => {
+                            let mut egress = [0u8; ETHERNET_FRAME_BYTES];
+                            let length = match service.take_packet(&mut egress) {
+                                Ok(Some(length)) => length,
+                                Ok(None) | Err(_) => enter_standard_fault(),
+                            };
+                            if let Err(error) = device.transmit(&egress[..length]) {
+                                enter_direct_virtio_fault(error);
+                            }
+                            cycle_progress = true;
+                        }
+                        Ok(false) => {}
+                        Err(error) => enter_direct_virtio_fault(error),
+                    }
+                }
+                quantum_units += 1;
+
+                if outcome == ServicePollOutcome::Complete {
+                    if let Some((control_sequence, control_connection_id)) = pending_output_control
+                    {
+                        if service.active_connection_id() != Some(control_connection_id) {
+                            pending_output_control = None;
+                        } else if service.output_drained_connection() == Some(control_connection_id)
+                        {
+                            if completions
+                                .push_back((
+                                    ExchangeKind::OutputDrained,
+                                    control_sequence,
+                                    control_connection_id,
+                                ))
+                                .is_err()
+                            {
+                                enter_standard_fault();
+                            }
+                            pending_output_control = None;
+                        }
+                    }
+                    if !cycle_progress && !service.egress_pending() {
+                        break;
+                    }
+                    cycle_progress = false;
+                }
+            }
+            device.flush_notifications();
+            if quantum_units == DIRECT_SERVICE_QUANTUM_UNITS
+                || !completions.is_empty()
+                || service.service_event_pending()
+                || service.egress_pending()
+            {
+                direct_service_pending = true;
+            }
+            unit = turn_scheduler.take_next(ChildTurnReadiness::new(
+                !completions.is_empty(),
+                service.service_event_pending(),
+                false,
+            ));
+        }
         if unit.is_publication() {
             if !publication_credit_available {
                 // An ordinary packet/control wake may return from Wait while a
@@ -341,7 +522,14 @@ pub unsafe extern "C" fn _start(descriptor: *const u8) -> ! {
                         publish_completion_watermark(event, None, Some(sequence));
                         signal_slot(descriptor.supervisor_wake_notification_slot);
                         turn_scheduler.complete(ChildTurnUnit::ApplyControl);
-                        turn_scheduler.request_service();
+                        if !direct_transport {
+                            turn_scheduler.request_service();
+                        } else {
+                            #[cfg(feature = "direct-virtio")]
+                            {
+                                direct_service_pending = true;
+                            }
+                        }
                     }
                     Err(RuntimeError::Backpressure) => {
                         // WAKE_CONTROL also carries root's service tick. Once
@@ -350,13 +538,49 @@ pub unsafe extern "C" fn _start(descriptor: *const u8) -> ! {
                         // local service cycle. Otherwise local Poll progress
                         // would revisit the same empty control forever.
                         turn_scheduler.complete(ChildTurnUnit::ApplyControl);
-                        turn_scheduler.request_service();
+                        if !direct_transport {
+                            turn_scheduler.request_service();
+                        } else {
+                            #[cfg(feature = "direct-virtio")]
+                            {
+                                direct_service_pending = true;
+                            }
+                        }
                     }
                     Err(_) => enter_standard_fault(),
                 }
             }
             ChildTurnUnit::Idle => {}
         }
+    }
+}
+
+#[cfg(feature = "direct-virtio")]
+fn acknowledge_direct_irq_handler() -> bool {
+    let mut mr0 = 0;
+    let mut mr1 = 0;
+    let mut mr2 = 0;
+    let mut mr3 = 0;
+    // SAFETY: Descriptor admission and child construction prove that slot 7
+    // contains only the IRQHandler for the exclusively admitted QEMU VirtIO
+    // device. Device status is cleared before this exact libsel4 Ack shape,
+    // so a subsequent edge represents new queue or configuration work.
+    unsafe {
+        let tag = sel4_sys::seL4_MessageInfo::new(
+            sel4_sys::invocation_label_IRQAckIRQ as sel4_sys::seL4_Word,
+            0,
+            0,
+            0,
+        );
+        let output = sel4_sys::seL4_CallWithMRs(
+            DIRECT_VIRTIO_IRQ_HANDLER_SLOT as sel4_sys::seL4_CPtr,
+            tag,
+            &mut mr0,
+            &mut mr1,
+            &mut mr2,
+            &mut mr3,
+        );
+        sel4_sys::seL4_MessageInfo_get_label(output) == sel4_sys::seL4_NoError as u64
     }
 }
 
@@ -687,5 +911,35 @@ fn enter_standard_fault() -> ! {
     // standard fault endpoint and performs no memory access.
     unsafe {
         core::arch::asm!("brk #0", options(noreturn, nostack, nomem));
+    }
+}
+
+#[cfg(feature = "direct-virtio")]
+fn enter_direct_virtio_fault(error: DirectVirtioError) -> ! {
+    match error {
+        DirectVirtioError::InvalidDevice => enter_direct_fault_code::<1>(),
+        DirectVirtioError::FeatureNegotiation => enter_direct_fault_code::<2>(),
+        DirectVirtioError::QueueUnavailable => enter_direct_fault_code::<3>(),
+        DirectVirtioError::QueueCorrupt => enter_direct_fault_code::<4>(),
+        DirectVirtioError::MacMismatch => enter_direct_fault_code::<5>(),
+        DirectVirtioError::FrameBound => enter_direct_fault_code::<6>(),
+        DirectVirtioError::TxBackpressure => enter_direct_fault_code::<7>(),
+        DirectVirtioError::RxDescriptorCorrupt => enter_direct_fault_code::<8>(),
+        DirectVirtioError::RxLengthZero => enter_direct_fault_code::<9>(),
+        DirectVirtioError::RxLengthHeaderOnly => enter_direct_fault_code::<10>(),
+        DirectVirtioError::RxLengthTooLong => enter_direct_fault_code::<11>(),
+        DirectVirtioError::RxBufferCountCorrupt => enter_direct_fault_code::<12>(),
+    }
+}
+
+#[cfg(feature = "direct-virtio")]
+#[cold]
+#[inline(never)]
+fn enter_direct_fault_code<const CODE: u16>() -> ! {
+    // SAFETY: The immediate is a typed, bounded VirtIO terminal-fault reason.
+    // `brk` transfers control to the supervisor-installed standard fault
+    // endpoint and performs no memory access.
+    unsafe {
+        core::arch::asm!("brk #{code}", code = const CODE, options(noreturn, nostack, nomem));
     }
 }

@@ -24,7 +24,7 @@
     "schema": "host-integration-dependency/v1"
   },
   "manifest_profile": "virt-aarch64",
-  "manifest_sha256": "10f33db7f20f039701ec8d2c5d206aba45a67f4b7e359b22dc2e24a0cc055cbd",
+  "manifest_sha256": "cdbfdfa9f4de5c1cd8f8f9ef7233aff9465e15e5469cce6604bdde50872996ba",
   "meta": {
     "author": "Lukas Bower",
     "purpose": "Bind the target-neutral Cohesix Python SDK to one selected 26e target manifest."
@@ -32,7 +32,7 @@
   "namespace": {
     "legacy_telemetry_path_template": "/worker/<id>/telemetry",
     "legacy_worker_alias": true,
-    "shard_bits": 8,
+    "shard_bits": 6,
     "sharding_enabled": true,
     "telemetry_path_template": "/shard/<label>/worker/<id>/telemetry"
   },
@@ -120,8 +120,8 @@
   },
   "worker": {
     "implementation_epoch": 26,
-    "maximum_live_tasks": 37,
-    "namespace_capacity_per_role": 64,
+    "maximum_live_tasks": 256,
+    "namespace_capacity_per_role": 256,
     "roles": [
       {
         "declaration": "executable",
@@ -133,7 +133,7 @@
       },
       {
         "declaration": "executable",
-        "executable_slots": 15,
+        "executable_slots": 127,
         "lease_path_template": "/gpu/<id>/lease",
         "role": "worker-gpu",
         "telemetry_path_template": "/shard/<label>/worker/<id>/telemetry",
@@ -149,15 +149,15 @@
       },
       {
         "declaration": "executable",
-        "executable_slots": 21,
+        "executable_slots": 128,
         "lease_path_template": "",
         "role": "worker-lora",
         "telemetry_path_template": "/shard/<label>/worker/<id>/telemetry",
         "ticket_scope": "/worker"
       }
     ],
-    "scheduling_profile": "mcs",
-    "task_abi_schema": "worker-task-abi/v1",
-    "task_abi_version": 1
+    "scheduling_profile": "mcs-passive",
+    "task_abi_schema": "worker-task-abi/v2",
+    "task_abi_version": 2
   }
 }

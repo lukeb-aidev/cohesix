@@ -526,7 +526,7 @@ fn render_client_rust(manifest: &Manifest, manifest_hash: &str) -> String {
     writeln!(contents).ok();
     writeln!(
         contents,
-        "pub const WORKER_TASK_ABI_SCHEMA: &str = \"worker-task-abi/v1\";"
+        "pub const WORKER_TASK_ABI_SCHEMA: &str = \"worker-task-abi/v2\";"
     )
     .ok();
     writeln!(
@@ -866,7 +866,7 @@ fn render_client_doc(manifest: &Manifest, manifest_hash: &str) -> String {
     writeln!(contents).ok();
     writeln!(contents, "### cohsh client defaults (generated)").ok();
     writeln!(contents, "- `manifest.sha256`: `{}`", manifest_hash).ok();
-    writeln!(contents, "- `worker.task_abi_schema`: `worker-task-abi/v1`").ok();
+    writeln!(contents, "- `worker.task_abi_schema`: `worker-task-abi/v2`").ok();
     writeln!(
         contents,
         "- `worker.task_abi_version`: `{}`",
@@ -1114,12 +1114,12 @@ mod tests {
 
         for expected in [
             "role: \"worker-heartbeat\", declaration: \"executable\", executable_slots: 1",
-            "role: \"worker-gpu\", declaration: \"executable\", executable_slots: 15",
+            "role: \"worker-gpu\", declaration: \"executable\", executable_slots: 127",
             "role: \"worker-bus\", declaration: \"model-only\", executable_slots: 0",
-            "role: \"worker-lora\", declaration: \"executable\", executable_slots: 21",
-            "pub const WORKER_MAXIMUM_LIVE_TASKS: u16 = 37;",
+            "role: \"worker-lora\", declaration: \"executable\", executable_slots: 128",
+            "pub const WORKER_MAXIMUM_LIVE_TASKS: u16 = 256;",
             "pub const WORKER_CANONICAL_TELEMETRY_TEMPLATE: &str = \"/shard/<label>/worker/<id>/telemetry\";",
-            "pub const WORKER_SHARD_BITS: u8 = 8;",
+            "pub const WORKER_SHARD_BITS: u8 = 6;",
             "pub const WORKER_LEGACY_ALIAS: bool = true;",
             "cohesix-worker-observation/v1",
             "cohesix-worker-integration-evidence/v1",
@@ -1130,7 +1130,7 @@ mod tests {
             assert!(rust.contains(expected), "missing Rust contract: {expected}");
         }
         assert!(doc.contains("`worker.role.worker-bus`: declaration=`model-only`"));
-        assert!(doc.contains("`worker.maximum_live_tasks`: `37`"));
+        assert!(doc.contains("`worker.maximum_live_tasks`: `256`"));
         assert!(doc.contains("`worker.artifact`: `missing, verified, mismatch`"));
     }
 }

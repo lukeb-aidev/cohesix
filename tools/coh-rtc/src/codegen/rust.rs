@@ -85,7 +85,7 @@ pub fn emit_rust(
     writeln!(mod_contents, "#[derive(Clone, Copy, Debug, PartialEq, Eq)]")?;
     writeln!(mod_contents, "pub enum WorkerSchedulingProfile {{")?;
     writeln!(mod_contents, "    NonMcs,")?;
-    writeln!(mod_contents, "    Mcs,")?;
+    writeln!(mod_contents, "    McsPassive,")?;
     writeln!(mod_contents, "}}")?;
     writeln!(mod_contents)?;
     writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
@@ -133,16 +133,16 @@ pub fn emit_rust(
     writeln!(mod_contents, "    pub stack_bottom_vaddr: u64,")?;
     writeln!(mod_contents, "    pub stack_pages: u16,")?;
     writeln!(mod_contents, "    pub child_cnode_radix_bits: u8,")?;
-    writeln!(mod_contents, "    pub lifecycle_notification_slot: u32,")?;
+    writeln!(mod_contents, "    pub service_endpoint_slot: u32,")?;
+    writeln!(mod_contents, "    pub service_reply_slot: u32,")?;
     writeln!(
         mod_contents,
         "    pub supervisor_wake_notification_slot: u32,"
     )?;
     for field in [
-        "lifecycle_control_bit",
-        "lifecycle_timeout_bit",
-        "lifecycle_shutdown_bit",
-        "lifecycle_revoke_bit",
+        "control_call_label",
+        "shutdown_call_label",
+        "revoke_call_label",
         "heartbeat_wake_bit",
         "gpu_wake_bit",
         "lora_wake_bit",
@@ -160,8 +160,13 @@ pub fn emit_rust(
     writeln!(mod_contents, "    pub priority: u8,")?;
     writeln!(mod_contents, "    pub domain: u8,")?;
     writeln!(mod_contents, "    pub service_turn_budget: u16,")?;
-    writeln!(mod_contents, "    pub mcs_budget_us: u32,")?;
-    writeln!(mod_contents, "    pub mcs_period_us: u32,")?;
+    writeln!(
+        mod_contents,
+        "    pub bootstrap_scheduling_context_bits: u8,"
+    )?;
+    writeln!(mod_contents, "    pub bootstrap_budget_us: u32,")?;
+    writeln!(mod_contents, "    pub bootstrap_period_us: u32,")?;
+    writeln!(mod_contents, "    pub bootstrap_max_refills: u8,")?;
     writeln!(mod_contents, "    pub timeout_endpoint_badge: u64,")?;
     writeln!(mod_contents, "    pub consumed_budget_evidence: bool,")?;
     writeln!(mod_contents, "}}")?;
@@ -204,6 +209,7 @@ pub fn emit_rust(
     writeln!(mod_contents, "    RootFault,")?;
     writeln!(mod_contents, "    RootEmergency,")?;
     writeln!(mod_contents, "    WorkerSupervisor,")?;
+    writeln!(mod_contents, "    WorkerExecutor,")?;
     writeln!(mod_contents, "    DriverSupervisor,")?;
     writeln!(mod_contents, "    Service,")?;
     writeln!(mod_contents, "    Driver,")?;
@@ -355,6 +361,7 @@ pub fn emit_rust(
     writeln!(mod_contents, "    pub entry_symbol: &'static str,")?;
     writeln!(mod_contents, "    pub listener_port: u16,")?;
     writeln!(mod_contents, "    pub single_listener: bool,")?;
+    writeln!(mod_contents, "    pub direct_virtio: bool,")?;
     writeln!(mod_contents, "    pub child_cspace_slots: u16,")?;
     writeln!(mod_contents, "    pub revoke_anchor_slot: u32,")?;
     writeln!(mod_contents, "    pub revoke_anchor_bits: u8,")?;
@@ -1835,7 +1842,7 @@ pub fn emit_rust(
     let scheduling = &manifest.worker_runtime.scheduling;
     writeln!(
         bootstrap_contents,
-        "pub const WORKER_TASK_ABI_CONFIG: WorkerTaskAbiConfig = WorkerTaskAbiConfig {{ enabled: {}, version: {}, shared_page_bytes: {}, ipc_buffer_vaddr: {}, shared_page_vaddr: {}, stack_bottom_vaddr: {}, stack_pages: {}, child_cnode_radix_bits: {}, lifecycle_notification_slot: {}, supervisor_wake_notification_slot: {}, lifecycle_control_bit: {}, lifecycle_timeout_bit: {}, lifecycle_shutdown_bit: {}, lifecycle_revoke_bit: {}, heartbeat_wake_bit: {}, gpu_wake_bit: {}, lora_wake_bit: {}, ready_timeout_ms: {}, shutdown_grace_ms: {}, max_control_inflight: {} }};\n",
+        "pub const WORKER_TASK_ABI_CONFIG: WorkerTaskAbiConfig = WorkerTaskAbiConfig {{ enabled: {}, version: {}, shared_page_bytes: {}, ipc_buffer_vaddr: {}, shared_page_vaddr: {}, stack_bottom_vaddr: {}, stack_pages: {}, child_cnode_radix_bits: {}, service_endpoint_slot: {}, service_reply_slot: {}, supervisor_wake_notification_slot: {}, control_call_label: {}, shutdown_call_label: {}, revoke_call_label: {}, heartbeat_wake_bit: {}, gpu_wake_bit: {}, lora_wake_bit: {}, ready_timeout_ms: {}, shutdown_grace_ms: {}, max_control_inflight: {} }};\n",
         task_abi.enabled,
         task_abi.version,
         task_abi.shared_page_bytes,
@@ -1844,12 +1851,12 @@ pub fn emit_rust(
         task_abi.stack_bottom_vaddr,
         task_abi.stack_pages,
         task_abi.child_cnode_radix_bits,
-        task_abi.lifecycle_notification_slot,
+        task_abi.service_endpoint_slot,
+        task_abi.service_reply_slot,
         task_abi.supervisor_wake_notification_slot,
-        task_abi.lifecycle_control_bit,
-        task_abi.lifecycle_timeout_bit,
-        task_abi.lifecycle_shutdown_bit,
-        task_abi.lifecycle_revoke_bit,
+        task_abi.control_call_label,
+        task_abi.shutdown_call_label,
+        task_abi.revoke_call_label,
         task_abi.heartbeat_wake_bit,
         task_abi.gpu_wake_bit,
         task_abi.lora_wake_bit,
@@ -1859,7 +1866,7 @@ pub fn emit_rust(
     )?;
     writeln!(
         bootstrap_contents,
-        "pub const WORKER_RUNTIME_CONFIG: WorkerRuntimeConfig = WorkerRuntimeConfig {{ implementation_epoch: {}, max_workers: {}, ticket_subject_required: {}, cap_backed_authority: {}, notification_lifecycle: {}, roles: &WORKER_RUNTIME_ROLES, endpoint_caps: WorkerEndpointCapConfig {{ required: {}, attach_badge_base: {}, telemetry_badge_base: {}, lease_badge_base: {}, receipt_badge_base: {}, revoke_badge_base: {}, epoch_bits: {}, role_bits: {} }}, notifications: WorkerNotificationConfig {{ enabled: {}, revoke_badge: {}, shutdown_badge: {}, lease_expiry_badge: {}, telemetry_pressure_badge: {}, irq_badge: {} }}, task_abi: WORKER_TASK_ABI_CONFIG, scheduling: WorkerSchedulingConfig {{ profile: {}, priority: {}, domain: {}, service_turn_budget: {}, mcs_budget_us: {}, mcs_period_us: {}, timeout_endpoint_badge: {}, consumed_budget_evidence: {} }} }};\n",
+        "pub const WORKER_RUNTIME_CONFIG: WorkerRuntimeConfig = WorkerRuntimeConfig {{ implementation_epoch: {}, max_workers: {}, ticket_subject_required: {}, cap_backed_authority: {}, notification_lifecycle: {}, roles: &WORKER_RUNTIME_ROLES, endpoint_caps: WorkerEndpointCapConfig {{ required: {}, attach_badge_base: {}, telemetry_badge_base: {}, lease_badge_base: {}, receipt_badge_base: {}, revoke_badge_base: {}, epoch_bits: {}, role_bits: {} }}, notifications: WorkerNotificationConfig {{ enabled: {}, revoke_badge: {}, shutdown_badge: {}, lease_expiry_badge: {}, telemetry_pressure_badge: {}, irq_badge: {} }}, task_abi: WORKER_TASK_ABI_CONFIG, scheduling: WorkerSchedulingConfig {{ profile: {}, priority: {}, domain: {}, service_turn_budget: {}, bootstrap_scheduling_context_bits: {}, bootstrap_budget_us: {}, bootstrap_period_us: {}, bootstrap_max_refills: {}, timeout_endpoint_badge: {}, consumed_budget_evidence: {} }} }};\n",
         manifest.worker_runtime.implementation_epoch,
         manifest.worker_runtime.max_workers,
         manifest.worker_runtime.ticket_subject_required,
@@ -1883,8 +1890,10 @@ pub fn emit_rust(
         scheduling.priority,
         scheduling.domain,
         scheduling.service_turn_budget,
-        scheduling.mcs_budget_us,
-        scheduling.mcs_period_us,
+        scheduling.bootstrap_scheduling_context_bits,
+        scheduling.bootstrap_budget_us,
+        scheduling.bootstrap_period_us,
+        scheduling.bootstrap_max_refills,
         scheduling.timeout_endpoint_badge,
         scheduling.consumed_budget_evidence,
     )?;
@@ -2001,7 +2010,7 @@ pub fn emit_rust(
     let console = &manifest.console_network_service;
     writeln!(
         bootstrap_contents,
-        "pub const CONSOLE_NETWORK_SERVICE_CONFIG: ConsoleNetworkServiceConfig = ConsoleNetworkServiceConfig {{ enabled: {}, abi_version: {}, image_id: \"{}\", image_path: \"{}\", entry_symbol: \"{}\", listener_port: {}, single_listener: {}, child_cspace_slots: {}, revoke_anchor_slot: {}, revoke_anchor_bits: {}, objects: {}, packet_rx_notification_slot: {}, packet_tx_wake_notification_slot: {}, supervisor_wake_notification_slot: {}, fault_endpoint_slot: {}, ipc_buffer_vaddr: {}, init_vaddr: {}, stack_vaddr: {}, stack_pages: {}, packet_rx_vaddr: {}, packet_tx_vaddr: {}, command_vaddr: {}, event_vaddr: {}, shared_frame_bytes: {}, ethernet_frame_bytes: {}, max_packets_per_wake: {}, max_commands_per_wake: {}, max_control_inflight: {}, packet_rx_badge: {}, control_badge: {}, shutdown_badge: {}, revoke_badge: {}, packet_tx_ready_badge: {}, event_ready_badge: {}, publication_ack_badge: {}, fault_badge: {}, core: {}, scheduling_context_slot: {}, scheduling_context_bits: {}, priority: {}, mcp: {}, budget_us: {}, period_us: {}, max_refills: {}, timeout_badge: {}, timer_clock_hz: {}, auth_timeout_ms: {}, idle_timeout_ms: {} }};\n",
+        "pub const CONSOLE_NETWORK_SERVICE_CONFIG: ConsoleNetworkServiceConfig = ConsoleNetworkServiceConfig {{ enabled: {}, abi_version: {}, image_id: \"{}\", image_path: \"{}\", entry_symbol: \"{}\", listener_port: {}, single_listener: {}, direct_virtio: {}, child_cspace_slots: {}, revoke_anchor_slot: {}, revoke_anchor_bits: {}, objects: {}, packet_rx_notification_slot: {}, packet_tx_wake_notification_slot: {}, supervisor_wake_notification_slot: {}, fault_endpoint_slot: {}, ipc_buffer_vaddr: {}, init_vaddr: {}, stack_vaddr: {}, stack_pages: {}, packet_rx_vaddr: {}, packet_tx_vaddr: {}, command_vaddr: {}, event_vaddr: {}, shared_frame_bytes: {}, ethernet_frame_bytes: {}, max_packets_per_wake: {}, max_commands_per_wake: {}, max_control_inflight: {}, packet_rx_badge: {}, control_badge: {}, shutdown_badge: {}, revoke_badge: {}, packet_tx_ready_badge: {}, event_ready_badge: {}, publication_ack_badge: {}, fault_badge: {}, core: {}, scheduling_context_slot: {}, scheduling_context_bits: {}, priority: {}, mcp: {}, budget_us: {}, period_us: {}, max_refills: {}, timeout_badge: {}, timer_clock_hz: {}, auth_timeout_ms: {}, idle_timeout_ms: {} }};\n",
         console.enabled,
         console.abi_version,
         escape_literal(&console.image_id),
@@ -2009,6 +2018,7 @@ pub fn emit_rust(
         escape_literal(&console.entry_symbol),
         console.listener_port,
         console.single_listener,
+        console.direct_virtio,
         console.child_cspace_slots,
         console.revoke_anchor_slot,
         console.revoke_anchor_bits,
@@ -3053,7 +3063,7 @@ fn dma_protection_profile_to_rust(profile: DmaProtectionProfile) -> &'static str
 fn worker_scheduling_profile_to_rust(profile: WorkerSchedulingProfile) -> &'static str {
     match profile {
         WorkerSchedulingProfile::NonMcs => "WorkerSchedulingProfile::NonMcs",
-        WorkerSchedulingProfile::Mcs => "WorkerSchedulingProfile::Mcs",
+        WorkerSchedulingProfile::McsPassive => "WorkerSchedulingProfile::McsPassive",
     }
 }
 
@@ -3077,6 +3087,7 @@ fn temporal_task_kind_to_rust(kind: TemporalTaskKind) -> &'static str {
         TemporalTaskKind::RootFault => "TemporalTaskKind::RootFault",
         TemporalTaskKind::RootEmergency => "TemporalTaskKind::RootEmergency",
         TemporalTaskKind::WorkerSupervisor => "TemporalTaskKind::WorkerSupervisor",
+        TemporalTaskKind::WorkerExecutor => "TemporalTaskKind::WorkerExecutor",
         TemporalTaskKind::DriverSupervisor => "TemporalTaskKind::DriverSupervisor",
         TemporalTaskKind::Service => "TemporalTaskKind::Service",
         TemporalTaskKind::Driver => "TemporalTaskKind::Driver",

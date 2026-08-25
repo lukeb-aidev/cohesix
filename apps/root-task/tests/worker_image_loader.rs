@@ -60,11 +60,11 @@ fn fixture() -> (Vec<u8>, ExpectedWorkerImage) {
     put_u64(&mut image, second + 40, 4);
     put_u64(&mut image, second + 48, 0x1000);
 
-    put_u32(&mut image, METADATA_OFFSET, 0x574b_4d31);
-    put_u16(&mut image, METADATA_OFFSET + 4, 1);
+    put_u32(&mut image, METADATA_OFFSET, 0x574b_4d32);
+    put_u16(&mut image, METADATA_OFFSET + 4, 2);
     put_u16(&mut image, METADATA_OFFSET + 6, 64);
     put_u16(&mut image, METADATA_OFFSET + 8, 1);
-    put_u16(&mut image, METADATA_OFFSET + 10, 1);
+    put_u16(&mut image, METADATA_OFFSET + 10, 2);
     put_u32(&mut image, METADATA_OFFSET + 12, 3);
     image[METADATA_OFFSET + 16..METADATA_OFFSET + 22].copy_from_slice(b"_start");
     image[TEXT_OFFSET..].copy_from_slice(&[0xc0, 0x03, 0x5f, 0xd6]);

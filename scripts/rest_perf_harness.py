@@ -156,7 +156,7 @@ WORKER_RUNTIME_STATE_SCHEMAS = frozenset(
 )
 WORKER_RUNTIME_STATE_V2_MAX_COUNTER = (1 << 32) - 1
 MAX_DISCOVERED_SHARDS = 256
-MAX_DISCOVERED_WORKERS = 64
+MAX_DISCOVERED_WORKERS = 256
 EXECUTABLE_UART_MARKERS = (
     "WORKER_TASK_ADMISSION",
     "WORKER_TASK_READY",
@@ -3067,9 +3067,15 @@ def remember_lease_id(state: SimState, lease_id: str) -> None:
     with state.lease_lock:
         if lease_id in state.active_leases:
             return
+        lease_config = state.bounds.get("control_plane", {}).get("lease", {})
+        active_max_entries = int(lease_config.get("active_max_entries", 256))
+        if active_max_entries <= 0:
+            raise RestError("generated active lease bound must be positive")
+        if len(state.active_leases) >= active_max_entries:
+            raise RestError(
+                "successful lease grant exceeded the generated active lease bound"
+            )
         state.active_leases.append(lease_id)
-        if len(state.active_leases) > 128:
-            state.active_leases.pop(0)
 
 
 def choose_lease_id(state: SimState) -> Optional[str]:

@@ -655,6 +655,12 @@ impl TicketLaneState {
             cursor,
         })
     }
+
+    /// Highest root-owned admission sequence consumed by this lane in process.
+    #[must_use]
+    pub const fn admission_sequence(&self) -> u64 {
+        self.cursor.snapshot_last_admission_sequence
+    }
 }
 
 /// Process one polling pass using the built-in executor and action observers.
@@ -1110,9 +1116,21 @@ fn ticket_lane_for_spec(spec: &HostTicketSpec, lane_count: usize) -> Result<usiz
                 .as_deref()
                 .ok_or_else(|| anyhow!("GPU ticket lane assignment requires operation_id"))?,
         )
+    } else if spec.action == "peft.export" {
+        // A completed export is immutable and may be observed concurrently by
+        // independent receipt operations. The executor's exclusive export
+        // lock still elects exactly one producer when the subject is not yet
+        // complete; contenders remain pending and reconcile the same durable
+        // result instead of repeating provider work.
+        (
+            "peft-export-operation",
+            spec.operation_id
+                .as_deref()
+                .ok_or_else(|| anyhow!("PEFT export lane assignment requires operation_id"))?,
+        )
     } else if spec.action.starts_with("peft.") {
         (
-            "peft-subject",
+            "peft-mutating-subject",
             spec.subject_ref
                 .as_deref()
                 .ok_or_else(|| anyhow!("PEFT ticket lane assignment requires subject_ref"))?,
@@ -1368,22 +1386,15 @@ where
         // before this exact state reaches stable storage.
         journal.mark_executing(&key)?;
         journal.save(journal_path)?;
-        append_result(
+        append_result_batch(
             transport,
             session,
             manifest,
             spec,
-            "claimed",
-            Some("root-admitted version-2 ticket claimed"),
-            manifest.status_path().as_str(),
-        )?;
-        append_result(
-            transport,
-            session,
-            manifest,
-            spec,
-            "running",
-            Some("version-2 executor started"),
+            &[
+                ("claimed", Some("root-admitted version-2 ticket claimed")),
+                ("running", Some("version-2 executor started")),
+            ],
             manifest.status_path().as_str(),
         )?;
         let result = if is_expired(spec, now_unix_ms) {
@@ -1530,6 +1541,30 @@ fn append_result(
         line_limit,
     )?;
     status::append_result_line(transport, session, path, line.as_str())
+}
+
+fn append_result_batch(
+    transport: &mut dyn Transport,
+    session: &Session,
+    manifest: &HostTicketManifest,
+    spec: &HostTicketSpec,
+    records: &[(&str, Option<&str>)],
+    path: &str,
+) -> Result<()> {
+    let line_limit = effective_result_line_limit(spec.schema.as_str(), manifest.max_line_bytes);
+    let lines = records
+        .iter()
+        .map(|(state, message)| {
+            status::build_result_line(
+                spec,
+                manifest.result_schema_for(spec.schema.as_str())?,
+                state,
+                *message,
+                line_limit,
+            )
+        })
+        .collect::<Result<Vec<_>>>()?;
+    status::append_result_lines(transport, session, path, lines.as_slice())
 }
 
 fn effective_result_line_limit(request_schema: &str, max_line_bytes: u32) -> u32 {
@@ -2631,6 +2666,38 @@ mod tests {
         assert!(journal
             .get(&TicketKey::new(&first.id, &first.idempotency_key))
             .is_none());
+    }
+
+    #[test]
+    fn v2_execution_lanes_parallelize_immutable_exports_but_serialize_mutations() {
+        let (_, mut first) = v2_specs();
+        first.action = "peft.export".to_owned();
+        first.subject_ref = Some("job-shared".to_owned());
+        first.operation_id = Some("export-first".to_owned());
+        let first_lane = ticket_lane_for_spec(&first, 8).expect("first export lane");
+
+        let mut second = first.clone();
+        let second_operation = (0..128)
+            .find_map(|candidate| {
+                let operation = format!("export-second-{candidate}");
+                second.operation_id = Some(operation.clone());
+                (ticket_lane_for_spec(&second, 8).expect("second export lane") != first_lane)
+                    .then_some(operation)
+            })
+            .expect("independent export operations must span execution lanes");
+        second.operation_id = Some(second_operation);
+        assert_ne!(
+            ticket_lane_for_spec(&first, 8).expect("first export lane"),
+            ticket_lane_for_spec(&second, 8).expect("second export lane")
+        );
+
+        first.action = "peft.import".to_owned();
+        second.action = "peft.import".to_owned();
+        assert_eq!(
+            ticket_lane_for_spec(&first, 8).expect("first mutation lane"),
+            ticket_lane_for_spec(&second, 8).expect("second mutation lane"),
+            "mutations of one PEFT subject must retain FIFO serialization",
+        );
     }
 
     #[test]

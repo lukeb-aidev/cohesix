@@ -6,7 +6,7 @@ author = "Lukas Bower"
 purpose = "Pi4 U-Boot aarch64 root-task manifest input for coh-rtc."
 
 [root_task]
-schema = "1.14"
+schema = "1.15"
 
 [root_task.affinity]
 enabled = true
@@ -223,7 +223,7 @@ protection_profile = "bounded-no-iommu"
 
 [worker_runtime]
 implementation_epoch = 26
-max_workers = 8
+max_workers = 256
 ticket_subject_required = true
 cap_backed_authority = true
 notification_lifecycle = true
@@ -280,19 +280,19 @@ irq_badge = 638361600
 
 [worker_runtime.task_abi]
 enabled = true
-version = 1
+version = 2
 shared_page_bytes = 4096
 ipc_buffer_vaddr = 1895825408
 shared_page_vaddr = 1895829504
 stack_bottom_vaddr = 1895837696
-stack_pages = 8
-child_cnode_radix_bits = 6
-lifecycle_notification_slot = 1
-supervisor_wake_notification_slot = 2
-lifecycle_control_bit = 1
-lifecycle_timeout_bit = 2
-lifecycle_shutdown_bit = 4
-lifecycle_revoke_bit = 8
+stack_pages = 4
+child_cnode_radix_bits = 2
+service_endpoint_slot = 1
+service_reply_slot = 2
+supervisor_wake_notification_slot = 3
+control_call_label = 1
+shutdown_call_label = 2
+revoke_call_label = 3
 heartbeat_wake_bit = 256
 gpu_wake_bit = 512
 lora_wake_bit = 1024
@@ -301,12 +301,14 @@ shutdown_grace_ms = 1000
 max_control_inflight = 1
 
 [worker_runtime.scheduling]
-profile = "mcs"
+profile = "mcs-passive"
 priority = 96
 domain = 0
 service_turn_budget = 64
-mcs_budget_us = 400
-mcs_period_us = 10000
+bootstrap_scheduling_context_bits = 8
+bootstrap_budget_us = 400
+bootstrap_period_us = 10000
+bootstrap_max_refills = 2
 timeout_endpoint_badge = 653132288
 consumed_budget_evidence = true
 
@@ -469,13 +471,65 @@ fault_handler = "root-fault"
 critical_reserve = true
 
 [[temporal_authority.tasks]]
+id = "root-worker-executor-gpu"
+kind = "worker-executor"
+execution = "active"
+core = 2
+scheduling_context_slot = 7
+scheduling_context_bits = 8
+sched_control_core = 2
+budget_us = 5000
+period_us = 10000
+deadline_us = 10000
+blocking_us = 0
+jitter_us = 0
+response_time_us = 5600
+admitted = true
+max_refills = 8
+priority = 80
+mcp = 200
+timeout_badge = 653131782
+timeout_policy = "terminal"
+consumed_time_evidence = true
+wcet_us = 5000
+wcet_provenance = "m26e-passive-worker-executor-gpu-v1"
+fault_handler = "root-fault"
+critical_reserve = true
+
+[[temporal_authority.tasks]]
+id = "root-worker-executor-lora"
+kind = "worker-executor"
+execution = "active"
+core = 3
+scheduling_context_slot = 8
+scheduling_context_bits = 8
+sched_control_core = 3
+budget_us = 5000
+period_us = 10000
+deadline_us = 10000
+blocking_us = 0
+jitter_us = 0
+response_time_us = 8200
+admitted = true
+max_refills = 8
+priority = 80
+mcp = 200
+timeout_badge = 653131783
+timeout_policy = "terminal"
+consumed_time_evidence = true
+wcet_us = 5000
+wcet_provenance = "m26e-passive-worker-executor-lora-v1"
+fault_handler = "root-fault"
+critical_reserve = true
+
+[[temporal_authority.tasks]]
 id = "ninedoor-service"
 kind = "service"
 execution = "passive"
 core = 0
 priority = 128
 mcp = 200
-timeout_badge = 653131782
+timeout_badge = 653131784
 timeout_policy = "return-error"
 wcet_provenance = "m26e-qemu-candidate-v1"
 allowed_donors = ["root-control"]
@@ -511,7 +565,7 @@ shared_frame_bytes = 8192
 max_inflight = 1
 request_badge = 1
 fault_badge = 652476416
-timeout_badge = 653131782
+timeout_badge = 653131784
 root_call_rights = 9
 child_receive_rights = 2
 root_request_rights = 3
@@ -556,7 +610,7 @@ admitted = true
 max_refills = 2
 priority = 180
 mcp = 200
-timeout_badge = 653131783
+timeout_badge = 653131785
 timeout_policy = "natural-postpone"
 consumed_time_evidence = true
 wcet_us = 3000
@@ -607,7 +661,7 @@ mcp = 200
 budget_us = 3000
 period_us = 10000
 max_refills = 2
-timeout_badge = 653131783
+timeout_badge = 653131785
 timer_clock_hz = 54000000
 auth_timeout_ms = 5000
 idle_timeout_ms = 300000
@@ -628,80 +682,56 @@ scheduling_contexts = 1
 cspace_slots = 123
 untyped_bytes = 1048576
 
-[[temporal_authority.tasks]]
-id = "worker-heartbeat-slot-0"
-kind = "worker"
-execution = "active"
+[[temporal_authority.worker_classes]]
+role = "worker-heartbeat"
+task_prefix = "worker-heartbeat-slot-"
+slots = 1
+execution = "passive"
 core = 3
-scheduling_context_slot = 7
-scheduling_context_bits = 8
-sched_control_core = 3
-budget_us = 300
-period_us = 10000
-deadline_us = 10000
-blocking_us = 0
-jitter_us = 0
-response_time_us = 3400
-admitted = true
-max_refills = 2
 priority = 96
 mcp = 128
-timeout_badge = 653131784
-timeout_policy = "terminal"
-consumed_time_evidence = true
-wcet_us = 200
-wcet_provenance = "m26e-qemu-candidate-v1"
+timeout_badge_base = 653131793
+timeout_policy = "return-error"
+allowed_donors = ["root-worker-executor-lora"]
+reply_objects = 1
+max_donation_depth = 1
 fault_handler = "root-fault"
+locality_bound = true
+wcet_provenance = "m26e-passive-worker-executor-v1"
 
-[[temporal_authority.tasks]]
-id = "worker-gpu-slot-0"
-kind = "worker"
-execution = "active"
+[[temporal_authority.worker_classes]]
+role = "worker-gpu"
+task_prefix = "worker-gpu-slot-"
+slots = 31
+execution = "passive"
 core = 2
-scheduling_context_slot = 8
-scheduling_context_bits = 8
-sched_control_core = 2
-budget_us = 400
-period_us = 10000
-deadline_us = 10000
-blocking_us = 0
-jitter_us = 0
-response_time_us = 1200
-admitted = true
-max_refills = 2
 priority = 96
 mcp = 128
-timeout_badge = 653131785
-timeout_policy = "terminal"
-consumed_time_evidence = true
-wcet_us = 300
-wcet_provenance = "m26e-qemu-candidate-v1"
+timeout_badge_base = 653131794
+timeout_policy = "return-error"
+allowed_donors = ["root-worker-executor-gpu"]
+reply_objects = 1
+max_donation_depth = 1
 fault_handler = "root-fault"
+locality_bound = true
+wcet_provenance = "m26e-passive-worker-executor-v1"
 
-[[temporal_authority.tasks]]
-id = "worker-lora-slot-0"
-kind = "worker"
-execution = "active"
-core = 2
-scheduling_context_slot = 9
-scheduling_context_bits = 8
-sched_control_core = 2
-budget_us = 400
-period_us = 10000
-deadline_us = 10000
-blocking_us = 0
-jitter_us = 0
-response_time_us = 1200
-admitted = true
-max_refills = 2
+[[temporal_authority.worker_classes]]
+role = "worker-lora"
+task_prefix = "worker-lora-slot-"
+slots = 32
+execution = "passive"
+core = 3
 priority = 96
 mcp = 128
-timeout_badge = 653131786
-timeout_policy = "terminal"
-consumed_time_evidence = true
-wcet_us = 300
-wcet_provenance = "m26e-qemu-candidate-v1"
+timeout_badge_base = 653131825
+timeout_policy = "return-error"
+allowed_donors = ["root-worker-executor-lora"]
+reply_objects = 1
+max_donation_depth = 1
 fault_handler = "root-fault"
+locality_bound = true
+wcet_provenance = "m26e-passive-worker-executor-v1"
 
 [[temporal_authority.tasks]]
 id = "driver-serial"
@@ -721,7 +751,7 @@ admitted = true
 max_refills = 18
 priority = 192
 mcp = 220
-timeout_badge = 653131787
+timeout_badge = 653131786
 timeout_policy = "natural-postpone"
 consumed_time_evidence = true
 wcet_us = 400
@@ -747,7 +777,7 @@ admitted = true
 max_refills = 2
 priority = 176
 mcp = 220
-timeout_badge = 653131788
+timeout_badge = 653131787
 timeout_policy = "natural-postpone"
 consumed_time_evidence = true
 wcet_us = 800
@@ -768,12 +798,12 @@ period_us = 10000
 deadline_us = 10000
 blocking_us = 0
 jitter_us = 0
-response_time_us = 1200
+response_time_us = 600
 admitted = true
 max_refills = 2
 priority = 96
 mcp = 220
-timeout_badge = 653131789
+timeout_badge = 653131788
 timeout_policy = "natural-postpone"
 consumed_time_evidence = true
 wcet_us = 300
@@ -799,7 +829,7 @@ admitted = true
 max_refills = 2
 priority = 160
 mcp = 220
-timeout_badge = 653131790
+timeout_badge = 653131789
 timeout_policy = "terminal"
 consumed_time_evidence = true
 wcet_us = 800
@@ -825,7 +855,7 @@ admitted = true
 max_refills = 2
 priority = 184
 mcp = 220
-timeout_badge = 653131791
+timeout_badge = 653131790
 timeout_policy = "natural-postpone"
 consumed_time_evidence = true
 wcet_us = 1200
@@ -851,7 +881,7 @@ admitted = true
 max_refills = 2
 priority = 184
 mcp = 220
-timeout_badge = 653131792
+timeout_badge = 653131791
 timeout_policy = "natural-postpone"
 consumed_time_evidence = true
 wcet_us = 1200
@@ -877,7 +907,7 @@ admitted = true
 max_refills = 2
 priority = 112
 mcp = 220
-timeout_badge = 653131793
+timeout_badge = 653131792
 timeout_policy = "terminal"
 consumed_time_evidence = true
 wcet_us = 300
@@ -901,18 +931,18 @@ page_table = 12
 vspace = 12
 
 [worker_resource_admission.capacity]
-tcbs = 64
-cnodes = 64
-vspaces = 64
-page_tables = 1024
-asids = 64
+tcbs = 512
+cnodes = 512
+vspaces = 512
+page_tables = 4096
+asids = 512
 frames = 8192
-endpoints = 128
+endpoints = 512
 notifications = 128
-fault_caps = 64
-timeout_fault_caps = 64
-reply_objects = 64
-scheduling_contexts = 64
+fault_caps = 512
+timeout_fault_caps = 512
+reply_objects = 512
+scheduling_contexts = 512
 cspace_slots = 16384
 untyped_bytes = 268435456
 
@@ -933,28 +963,28 @@ cspace_slots = 2048
 untyped_bytes = 33554432
 
 [worker_resource_admission.fixed_objects]
-tcbs = 14
-cnodes = 14
-vspaces = 14
-page_tables = 512
-asids = 14
-frames = 4066
+tcbs = 16
+cnodes = 16
+vspaces = 16
+page_tables = 528
+asids = 16
+frames = 4072
 endpoints = 31
-notifications = 32
-fault_caps = 14
-timeout_fault_caps = 14
-reply_objects = 13
-scheduling_contexts = 14
-cspace_slots = 8962
+notifications = 34
+fault_caps = 16
+timeout_fault_caps = 16
+reply_objects = 15
+scheduling_contexts = 16
+cspace_slots = 9230
 untyped_bytes = 100663296
 
 [[worker_resource_admission.executable_roles]]
 role = "worker-heartbeat"
 task_prefix = "worker-heartbeat-slot-"
-namespace_capacity = 8
+namespace_capacity = 256
 executable_slots = 1
 core = 3
-revoke_anchor_slot = 16133
+revoke_anchor_slot = 15000
 
 [worker_resource_admission.executable_roles.per_slot]
 tcbs = 1
@@ -962,23 +992,23 @@ cnodes = 1
 vspaces = 1
 page_tables = 8
 asids = 1
-frames = 16
-endpoints = 0
-notifications = 1
+frames = 12
+endpoints = 1
+notifications = 0
 fault_caps = 1
 timeout_fault_caps = 1
-reply_objects = 0
+reply_objects = 1
 scheduling_contexts = 1
-cspace_slots = 64
-untyped_bytes = 1048576
+cspace_slots = 32
+untyped_bytes = 131072
 
 [[worker_resource_admission.executable_roles]]
 role = "worker-gpu"
 task_prefix = "worker-gpu-slot-"
-namespace_capacity = 8
-executable_slots = 1
+namespace_capacity = 256
+executable_slots = 31
 core = 2
-revoke_anchor_slot = 16134
+revoke_anchor_slot = 15001
 
 [worker_resource_admission.executable_roles.per_slot]
 tcbs = 1
@@ -986,23 +1016,23 @@ cnodes = 1
 vspaces = 1
 page_tables = 8
 asids = 1
-frames = 16
-endpoints = 0
-notifications = 1
+frames = 12
+endpoints = 1
+notifications = 0
 fault_caps = 1
 timeout_fault_caps = 1
-reply_objects = 0
+reply_objects = 1
 scheduling_contexts = 1
-cspace_slots = 64
-untyped_bytes = 1048576
+cspace_slots = 32
+untyped_bytes = 131072
 
 [[worker_resource_admission.executable_roles]]
 role = "worker-lora"
 task_prefix = "worker-lora-slot-"
-namespace_capacity = 8
-executable_slots = 1
-core = 2
-revoke_anchor_slot = 16135
+namespace_capacity = 256
+executable_slots = 32
+core = 3
+revoke_anchor_slot = 15032
 
 [worker_resource_admission.executable_roles.per_slot]
 tcbs = 1
@@ -1010,15 +1040,15 @@ cnodes = 1
 vspaces = 1
 page_tables = 8
 asids = 1
-frames = 16
-endpoints = 0
-notifications = 1
+frames = 12
+endpoints = 1
+notifications = 0
 fault_caps = 1
 timeout_fault_caps = 1
-reply_objects = 0
+reply_objects = 1
 scheduling_contexts = 1
-cspace_slots = 64
-untyped_bytes = 1048576
+cspace_slots = 32
+untyped_bytes = 131072
 
 [[worker_resource_admission.allowed_role_mixes]]
 id = "maximum-three-role-mix"
@@ -1030,11 +1060,11 @@ count = 1
 
 [[worker_resource_admission.allowed_role_mixes.roles]]
 role = "worker-gpu"
-count = 1
+count = 31
 
 [[worker_resource_admission.allowed_role_mixes.roles]]
 role = "worker-lora"
-count = 1
+count = 32
 
 [[worker_resource_admission.critical_tcbs]]
 id = "root-control"
@@ -1047,8 +1077,8 @@ fault_reply_lanes = 1
 
 [[worker_resource_admission.critical_tcbs]]
 id = "root-fault"
-cnode_radix_bits = 6
-cspace_cap_count = 26
+cnode_radix_bits = 8
+cspace_cap_count = 153
 revoke_anchor_slot = 16129
 ipc_buffer_pages = 1
 stack_pages = 2
@@ -1081,9 +1111,27 @@ ipc_buffer_pages = 1
 stack_pages = 2
 fault_reply_lanes = 1
 
+[[worker_resource_admission.critical_tcbs]]
+id = "root-worker-executor-gpu"
+cnode_radix_bits = 8
+cspace_cap_count = 37
+revoke_anchor_slot = 16133
+ipc_buffer_pages = 1
+stack_pages = 2
+fault_reply_lanes = 1
+
+[[worker_resource_admission.critical_tcbs]]
+id = "root-worker-executor-lora"
+cnode_radix_bits = 8
+cspace_cap_count = 39
+revoke_anchor_slot = 16134
+ipc_buffer_pages = 1
+stack_pages = 2
+fault_reply_lanes = 1
+
 [worker_resource_admission.handoff]
-worker_control_queue_capacity = 8
-worker_fault_mailboxes = 3
+worker_control_queue_capacity = 64
+worker_fault_mailboxes = 64
 driver_fault_records = 7
 worker_wake_badge = 1
 driver_wake_badge = 2
@@ -1098,7 +1146,7 @@ driver_drain_precedence = ["driver-fault"]
 
 [worker_resource_admission.handoff.worker_fault_badges]
 base = 652279808
-count = 3
+count = 64
 stride = 1
 
 [worker_resource_admission.handoff.driver_fault_badges]
@@ -1108,7 +1156,7 @@ stride = 1
 
 [worker_resource_admission.handoff.critical_fault_badges]
 base = 652410880
-count = 5
+count = 7
 stride = 1
 
 [worker_resource_admission.handoff.service_fault_badges]
@@ -1118,7 +1166,7 @@ stride = 1
 
 [worker_resource_admission.handoff.timeout_fault_badges]
 base = 653131777
-count = 17
+count = 80
 stride = 1
 
 [worker_resource_admission.handoff.supervisor_signal_rights]
@@ -1146,12 +1194,12 @@ grant = false
 grant_reply = false
 
 [worker_resource_admission.fault_registry]
-critical_tcbs = 5
+critical_tcbs = 7
 service_tcbs = 2
-worker_tcbs = 3
+worker_tcbs = 64
 driver_tcbs = 7
-capacity = 17
-root_fault_tcb_control_slot_base = 16
+capacity = 80
+root_fault_tcb_control_slot_base = 75
 receive_endpoints = 1
 receive_reply_lanes = 1
 recoverable_timeout_tasks = []

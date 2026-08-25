@@ -38,10 +38,12 @@ upgrade the proof class.
 The canonical QEMU target has two host execution envelopes. macOS uses HVF with
 `virt,gic-version=3,virtualization=off,kernel-irqchip=off` and `cortex-a57`;
 Linux AArch64 uses KVM with `virt,gic-version=3,virtualization=off`, the `host`
-CPU, and the in-kernel GICv3. Both use QEMU-native HVC PSCI, the same four-core
-topology, and the generated 24,000,000 Hz timer frequency. TCG, `-icount`, and
-artificial timer variants are diagnostic execution models and must not be
-compared as accepted latency or throughput evidence.
+CPU, and the in-kernel GICv3. Both use QEMU-native HVC PSCI and the same
+four-core topology. The macOS `qemu_smp_production` profile generates
+24,000,000 Hz; Jetson KVM cannot override its architectural counter and uses
+the separately generated `qemu_smp_kvm_production` value, currently 31,250,000
+Hz. TCG, `-icount`, and artificial timer variants are diagnostic execution
+models and must not be compared as accepted latency or throughput evidence.
 
 Target scheduling values, Worker bounds, console descriptors, and component
 identities come from the selected generated build. Benchmark commands must
@@ -256,7 +258,7 @@ unset HIVE_GATEWAY_REQUEST_AUTH_TOKEN
 ```
 
 That canonical runner owns the exact accepted QEMU artifact/session/component
-inputs and emits fixed-three executable pressure. It is distinct from
+inputs and emits generated-population executable pressure. It is distinct from
 Conditional D's 24-to-120 host-model gateway comparator.
 
 ### QEMU executable-Worker pressure
@@ -265,9 +267,10 @@ Use `executable` only against a live QEMU boot whose gateway projects generated
 Worker bounds and imports a matching, same-boot staged component record as
 described in [HOST_API.md](HOST_API.md). The harness fails before load unless
 the gateway is a connected `console-projection`, the shared validator accepted
-the exact current target session, and the three canonical `/shard/<label>/worker/<id>/telemetry`
-records are structured READY instances matching that component. It never
-expands ids, substitutes `/worker`, or treats reachability as target proof.
+the exact current target session, and every generated canonical
+`/shard/<label>/worker/<id>/telemetry` record is a structured READY instance
+matching that component. It never invents ids, substitutes `/worker`, or
+treats reachability as target proof.
 
 The canonical Mac command performs the clean build and runs medium first, then
 high against a separate fresh equivalent four-core HVF
@@ -283,9 +286,8 @@ scripts/m26e_qemu_pressure.sh \
 unset HIVE_GATEWAY_REQUEST_AUTH_TOKEN
 ```
 
-After transferring the immutable Mac-built guest artifacts, selected seL4
-build outputs, and matching source to an AArch64 Linux host, replay the same
-workload under KVM:
+After transferring the exact source and reviewed patch to an AArch64 Linux
+host, build the KVM timer profile and replay the same workload under KVM:
 
 ```bash
 HIVE_GATEWAY_REQUEST_AUTH_TOKEN="$(openssl rand -hex 32)"
@@ -294,21 +296,20 @@ export HIVE_GATEWAY_REQUEST_AUTH_TOKEN
 scripts/m26e_qemu_pressure.sh \
   --reuse-artifacts \
   --qemu /path/to/qemu-system-aarch64 \
-  --gdb /usr/bin/gdb \
+  --sel4-build out/sel4/profile-v2/qemu-smp-kvm-production \
   --run-dir out/m26e-qemu-pressure-linux
 
 unset HIVE_GATEWAY_REQUEST_AUTH_TOKEN
 ```
 
-The replay verifies every guest artifact against the source-host launch record
-before it rebuilds only the four native host tools. It preserves that record,
-then emits a second record binding the unchanged guest bytes to Linux KVM,
-`host,cntfrq=24000000`, and the in-kernel GICv3. The resulting medium/high
-artifacts are comparable QEMU performance and integration evidence; they are
-not a substitute for the macOS lane's source-host seL4 profile validation or
-complete staged release acceptance. The Linux orchestrator therefore runs the
-non-claiming target canary directly only after both guest-hash and rebound
-launch-record verification.
+The Linux lane verifies the same source commit and patch identity, then binds
+its profile-qualified guest bytes to `-cpu host`, the native architectural
+counter, and the in-kernel GICv3. Mac and Linux guest hashes are recorded
+separately and are not expected to match. Results are comparable when their
+generated topology, Worker population, root/service bounds, workload, and
+source patch are equivalent; they are not a substitute for the macOS lane's
+seL4 profile validation or complete staged release acceptance. A launch record
+must match the selected host profile before load.
 
 The orchestrator cleans repository `target/` and `out/`, rebuilds the selected
 SMP+MCS seL4 profile, and performs one canonical
@@ -322,7 +323,7 @@ Final acceptance requires that plan to pass and consumes the frozen collector
 copies, so later host or regression builds cannot replace the ELFs, archives,
 manifest, topology, or target session that produced the pressure evidence. It
 retains the actual QEMU command, pidfile,
-flushed UART, three role-specific GDB injection transcripts, GPU fixture status,
+flushed UART, any separately required fault transcripts, GPU fixture status,
 cohsh and host-agent transcripts, staged component, and exact target-session
 and image/archive manifests. The driver hash always comes from
 `out/cohesix/driver-runtimes/cohesix-driver-runtimes.cpio`; the large archive is
@@ -348,10 +349,12 @@ is not guest/backend readiness. The
 GPU/model/export-job input is admitted only as
 `mode=fixture` under `release-qemu,bootstrap-trace`; it is retained as fixture
 evidence and never relabelled provider-live or production. Direct `cohsh` fault
-injection finishes before the gateway first attaches, and the gateway remains
-the sole console owner for the rest of the normal pressure boot. That boot's
-UART prefix and Worker/service GDB files, together with a clearly separate
-same-artifact `-S` critical-duty transcript, produce the staged component. The
+injection, when required by the independent acceptance lane, finishes before
+the gateway first attaches, and the gateway remains the sole console owner for
+the rest of the normal pressure boot. GDB is never part of the iterative
+medium/high benchmark or diagnosis loop. That boot's UART and bounded flight
+records, together with any clearly separate same-artifact critical-duty
+transcript required for acceptance, produce the staged component. The
 gateway starts once with fixed trust-root, future-component, and
 current-target-session paths. It projects no executable acceptance while that
 component is missing or invalid, then promotes the first fully validated
@@ -368,7 +371,8 @@ medium/high reports afterward, avoiding a circular dependency on the record
 the pressure run is helping produce.
 
 For both reports, retain `report.population` and require `mode=executable`,
-`maximum_live_tasks=3`, `requested=3`, `discovered=3`, `ready=3`,
+with `maximum_live_tasks`, `requested`, `discovered`, and `ready` all equal to
+the selected generated population (256 for the current QEMU profile),
 `backend_class=console-projection`, and `proof_class=qemu`. Re-derive the
 numerical maximum from `/v1/meta/bounds` if the selected generated profile
 changes; never raise the command merely to preserve an earlier value. A control
@@ -377,10 +381,11 @@ bounded refusals, and liveness failures as measured errors; a completed QEMU
 launch or connected gateway alone leaves proof class `none`.
 
 For iterative medium/high performance diagnosis after a separate current-image
-correctness baseline, `--population-mode executable-log` may use the same three
-real target Workers with UART-bound READY identity instead of running the GDB
-acceptance collector. This is `proof_class=qemu-live-log`, not Conditional B2
-acceptance. Keep GDB out of the load/debug loop and retrieve
+correctness baseline, `--population-mode executable-log` may use every
+generated real target Worker with UART-bound READY identity instead of running
+the independent fault-containment collector. This is
+`proof_class=qemu-live-log`, not Conditional B2 acceptance. Keep GDB out of the
+load/debug loop and retrieve
 `/proc/schedule/qemu-flight` after the run. Correlate its virtual-counter
 activation gaps, useful service units, queue-drainage ratio, queue high-water
 mark, and exit reasons with the report throughput and p50/p95/p99, gateway
@@ -390,14 +395,69 @@ unqualified image.
 
 Each summary also retains top-level `target_session_sha256` and
 `report.executable_state`: exact topology/session hashes; pre/post three-role
-identities, READY/control/receipt/completion sequences, SCs and per-slot
-compiler-admission object bundles (not a claimed live retype census);
+identities, READY/control/receipt/completion sequences, executor-lane SCs,
+per-instance Reply identities, and per-slot compiler-admission object bundles
+(not a claimed live retype census);
 five canonical `/proc` snapshots; bounded lifecycle cycles; live receipt
-operations; and exact UART/GDB hashes plus required-marker index. Medium/high
+operations; and exact UART plus any separately required fault-evidence hashes
+and marker index. Medium/high
 must have distinct intensities, a clean error budget, increasing GPU/LoRA
 receipt sequences, and a fresh Heartbeat supervisor generation. Missing target
 fault markers, service teardown, fixture status/job files, or immutable
 artifact equality fails closed rather than producing executable evidence.
+
+### Accepted 2026-08-25 cross-host QEMU performance candidate
+
+The v152 candidate is accepted `qemu-live-log` performance evidence after a
+separate clean correctness baseline on each host. It is not the independent
+fault-injection collector or final milestone-acceptance proof. Both hosts used
+the same source base `f356c73a944b0e5ba1d9cf1bc30d511efa7038d9` plus the
+same retained candidate changes, QEMU 10.1.0, four vCPUs, 256 requested,
+discovered, and structured READY Workers, and the fixed two-minute workloads:
+MEDIUM `intensity=4 base_rps=4 max_inflight=16 seed=2604`; HIGH
+`intensity=8 base_rps=4 max_inflight=32 seed=2608`. Transient retries were off
+and strict control errors were on.
+
+| Host/profile | Successful/total | Successful throughput | Overall p50/p95/p99 | GPU receipt p95/p99 | LoRA receipt p95/p99 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| macOS HVF MEDIUM | 75,420/75,536 | 628.500/s | 0.330/71.660/363.500 ms | 0.383/0.969 s | 0.386/0.998 s |
+| macOS HVF HIGH | 80,859/80,884 | 673.825/s | 0.793/348.250/471.680 ms | 0.695/1.086 s | 0.681/0.722 s |
+| Jetson KVM MEDIUM | 11,177/11,177 | 93.142/s | 24.765/644.500/1,083.400 ms | 1.928/2.385 s | 1.821/2.269 s |
+| Jetson KVM HIGH | 12,078/12,078 | 100.650/s | 55.967/1,136.000/3,450.000 ms | 2.441/3.261 s | 2.565/3.436 s |
+
+Mac's 116 MEDIUM and 25 HIGH unsuccessful operations were exact immediate
+`/queen/lease/ctl` `quota/buffer-full` refusals at the generated 256-entry
+retained-state bound; every other operation and every Worker receipt
+completed. They remain measured overload outcomes, not silently retried or
+reclassified. Jetson recorded no operation error. Both hosts retained root
+operator reachability under HIGH pressure: p99 was 63.4 ms on Mac and 701 ms
+on Jetson.
+
+The HIGH flight record rules out microscopic MCS turns as the active ceiling:
+
+| Host | Activation gap p50/p95/p99 | Service quantum p50/p95/p99 | Drainage aggregate/p50 | Queue HWM | Exit regression |
+| --- | ---: | ---: | ---: | ---: | --- |
+| macOS HVF | 3.949/11.360/11.445 ms | 4,096/4,096/4,096 units | 0.994/0.998 | 65 | `YIELD=0 TIMEOUT=0 FAULT=0` |
+| Jetson KVM | 3.953/10.015/10.018 ms | 4,096/4,096/4,096 units | 0.844/0.667 | 64 | `YIELD=0 TIMEOUT=0 FAULT=0` |
+
+Mac QEMU averaged 100.864% host CPU and Jetson 84.709%, where 100% is one host
+CPU. The slower Jetson wall-clock distribution therefore reflects its 1.728
+GHz host core and KVM/QEMU execution envelope rather than a guest queue or
+memory-pressure regression. Compared with the initial same-harness Mac
+37-Worker baseline, MEDIUM/HIGH successful throughput improved approximately
+14.3x/14.2x while the isolated Worker population increased 6.9x. This is the
+accepted performance envelope of the current single authenticated target
+connection. The next material architectural step, if higher aggregate
+throughput is required, is compiler-declared target-control sharding across
+cores and authenticated sessions; increasing quanta, queues, timeouts, or
+retries is not supported by this evidence.
+
+Immutable evidence:
+
+- Mac: `~/cohesix/qemu/perf/macos-windowed-execution-v152/{medium,high}`.
+- Jetson: `/mnt/nvme/cohesix-dev/perf/26e-v138-f356c73a/perf/jetson-windowed-execution-v152/{medium,high}`.
+- Setup and artifact identities: `~/cohesix/26e.md`; concise experiment ledger:
+  `~/cohesix/26e-qemu-perf.md`.
 
 For a focused read-path run:
 

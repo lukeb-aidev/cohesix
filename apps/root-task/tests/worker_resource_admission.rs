@@ -76,9 +76,9 @@ fn maximum_role_mix_reserves_exact_generated_worker_population() {
     assert!(admission.enabled);
     assert_eq!(admission.executable_roles.len(), 3);
     let expected_roles = [
-        ("worker-heartbeat", 64, 1),
-        ("worker-gpu", 64, 15),
-        ("worker-lora", 64, 21),
+        ("worker-heartbeat", 256, 1),
+        ("worker-gpu", 256, 127),
+        ("worker-lora", 256, 128),
     ];
     for (role, namespace_capacity, executable_slots) in expected_roles {
         let generated = admission
@@ -101,7 +101,7 @@ fn maximum_role_mix_reserves_exact_generated_worker_population() {
             .iter()
             .map(|role| usize::from(role.count))
             .sum::<usize>(),
-        37
+        256
     );
 
     let mut admitted = admission.fixed_objects;
@@ -126,22 +126,22 @@ fn maximum_role_mix_reserves_exact_generated_worker_population() {
             total.fault_caps,
             total.timeout_fault_caps,
         ),
-        (52, 52, 52, 52, 52, 52)
+        (273, 273, 273, 273, 273, 273)
     );
-    assert_eq!(total.page_tables, 616);
-    assert_eq!(total.frames, 3_122);
-    assert_eq!(total.endpoints, 31);
-    assert_eq!(total.notifications, 69);
-    assert_eq!(total.reply_objects, 14);
-    assert_eq!(total.scheduling_contexts, 52);
-    assert_eq!(total.cspace_slots, 8_474);
-    assert_eq!(total.untyped_bytes, 105_512_960);
+    assert_eq!(total.page_tables, 2_384);
+    assert_eq!(total.frames, 5_608);
+    assert_eq!(total.endpoints, 287);
+    assert_eq!(total.notifications, 34);
+    assert_eq!(total.reply_objects, 272);
+    assert_eq!(total.scheduling_contexts, 273);
+    assert_eq!(total.cspace_slots, 14_618);
+    assert_eq!(total.untyped_bytes, 134_217_728);
     assert!(total.tcbs <= admission.capacity.tcbs);
     assert!(total.page_tables <= admission.capacity.page_tables);
     assert!(total.frames <= admission.capacity.frames);
     assert!(total.cspace_slots <= admission.capacity.cspace_slots);
     assert!(total.untyped_bytes <= admission.capacity.untyped_bytes);
-    assert_eq!(admission.fault_registry.capacity, 44);
+    assert_eq!(admission.fault_registry.capacity, 265);
     assert_eq!(admission.fault_registry.driver_tcbs, 0);
 
     let mut pool =
@@ -158,7 +158,7 @@ fn maximum_role_mix_reserves_exact_generated_worker_population() {
             .expect("complete executable bundle");
         }
     }
-    assert_eq!(pool.len(), 37);
+    assert_eq!(pool.len(), 256);
     assert_eq!(
         pool.reserve("worker-heartbeat", identity(1, 99), 0x5000),
         Err(ResourcePoolError::InvalidIdentity)

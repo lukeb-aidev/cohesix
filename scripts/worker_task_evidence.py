@@ -217,7 +217,7 @@ QEMU_WORKER_ROLE_RAW = {
     "worker-gpu": 2,
     "worker-lora": 3,
 }
-WORKER_RUNTIME_INIT_MAGIC = 0x574B_4931
+WORKER_RUNTIME_INIT_MAGIC = 0x574B_4932
 WORKER_RUNTIME_INIT_IDENTITY_ROLE_OFFSET = 24
 QEMU_SERVICE_SYMBOLS = {
     "ninedoor-service": (
@@ -2012,9 +2012,9 @@ def _worker_abi_identity(
     if (
         not isinstance(task_abi, dict)
         or task_abi.get("enabled") is not True
-        or task_abi.get("version") != 1
+        or task_abi.get("version") != 2
     ):
-        raise EvidenceError("generated topology lacks Worker task ABI version 1")
+        raise EvidenceError("generated topology lacks Worker task ABI version 2")
     files = []
     for relative in WORKER_ABI_FILES:
         path = _bounded_artifact_path(repo_root, relative, "Worker ABI source")
@@ -2028,8 +2028,8 @@ def _worker_abi_identity(
         )
     record = {
         "schema": WORKER_ABI_IDENTITY_SCHEMA,
-        "task_abi_schema": "worker-task-abi/v1",
-        "task_abi_version": 1,
+        "task_abi_schema": "worker-task-abi/v2",
+        "task_abi_version": 2,
         "files": files,
     }
     raw = (

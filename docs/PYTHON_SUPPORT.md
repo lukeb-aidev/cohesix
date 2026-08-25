@@ -112,8 +112,10 @@ finally:
 
 `FilesystemBackend` requires an already active `coh mount`; it neither creates
 nor owns that mount. `MockBackend` seeds a deterministic local tree and may
-reuse prior state at the selected root. The REST and TCP constructors perform
-live operations and must follow the ownership rules in
+reuse prior state at the selected root. When a `CohesixClient` binds a generated
+profile, future mock Worker observations use that profile's exact shard width.
+The REST and TCP constructors perform live operations and must follow the
+ownership rules in
 [HOST_TOOLS.md#choose-one-live-topology](HOST_TOOLS.md#choose-one-live-topology).
 
 ## Backend selection from the environment
@@ -261,16 +263,17 @@ client.worker_teardown("heartbeat", "heartbeat-1")
 The mock in this example reports `execution_proof="host-model"`. It exercises
 the API but is never QEMU or Pi proof. The three executable roles are
 `worker-heartbeat`, `worker-gpu`, and `worker-lora`; their combined generated
-maximum is 37 simultaneous tasks for QEMU (1 heartbeat, 15 GPU, and 21 LoRA)
-and three for Pi 4 (one per executable role). `worker-bus` remains model-only,
-and spawn or teardown returns a deterministic `CohesixError` before any backend
-write.
+maximum is 256 simultaneous tasks for QEMU (1 Heartbeat, 127 GPU, and 128 LoRA)
+and 64 for Pi 4 (1 Heartbeat, 31 GPU, and 32 LoRA). `worker-bus` remains
+model-only, and spawn or teardown returns a deterministic `CohesixError` before
+any backend write.
 
 Worker telemetry uses
-`/shard/<sha256(worker_id)[0]:02x>/worker/<id>/telemetry` in the checked-in
-eight-bit profiles. The legacy `/worker/<id>/telemetry` path is returned only
-when the selected contract enables `legacy_worker_alias`. No client should
-infer a role from an instance-id prefix.
+`/shard/<label>/worker/<id>/telemetry`, where the selected QEMU contract keeps
+the top six digest bits and the Pi contract keeps all eight. The legacy
+`/worker/<id>/telemetry` path is returned only when the selected contract
+enables `legacy_worker_alias`. No client should infer a role from an
+instance-id prefix.
 
 ### Lifecycle, receipt, and proof boundaries
 

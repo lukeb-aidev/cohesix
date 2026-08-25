@@ -213,11 +213,11 @@ mod tests {
     fn generated_role_matrix_preserves_multiworker_topology() {
         let roles = role_contracts();
         assert_eq!(roles.len(), 4);
-        assert_eq!(maximum_live_tasks(), 37);
+        assert_eq!(maximum_live_tasks(), 256);
         for (role, executable_slots) in [
             ("worker-heartbeat", 1),
-            ("worker-gpu", 15),
-            ("worker-lora", 21),
+            ("worker-gpu", 127),
+            ("worker-lora", 128),
         ] {
             assert_eq!(
                 roles
@@ -240,7 +240,7 @@ mod tests {
     fn canonical_path_uses_generated_shard_and_gates_alias() {
         assert_eq!(
             canonical_telemetry_path("worker-1").expect("canonical path"),
-            "/shard/13/worker/worker-1/telemetry"
+            "/shard/04/worker/worker-1/telemetry"
         );
         assert_eq!(
             legacy_telemetry_path("worker-1").expect("enabled compatibility alias"),

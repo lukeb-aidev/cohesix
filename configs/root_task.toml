@@ -6,7 +6,7 @@ author = "Lukas Bower"
 purpose = "Root-task manifest input for coh-rtc."
 
 [root_task]
-schema = "1.14"
+schema = "1.15"
 
 [root_task.affinity]
 enabled = true
@@ -223,7 +223,7 @@ protection_profile = "none"
 
 [worker_runtime]
 implementation_epoch = 26
-max_workers = 64
+max_workers = 256
 ticket_subject_required = true
 cap_backed_authority = true
 notification_lifecycle = true
@@ -280,19 +280,19 @@ irq_badge = 638361600
 
 [worker_runtime.task_abi]
 enabled = true
-version = 1
+version = 2
 shared_page_bytes = 4096
 ipc_buffer_vaddr = 1895825408
 shared_page_vaddr = 1895829504
 stack_bottom_vaddr = 1895837696
-stack_pages = 8
-child_cnode_radix_bits = 6
-lifecycle_notification_slot = 1
-supervisor_wake_notification_slot = 2
-lifecycle_control_bit = 1
-lifecycle_timeout_bit = 2
-lifecycle_shutdown_bit = 4
-lifecycle_revoke_bit = 8
+stack_pages = 4
+child_cnode_radix_bits = 2
+service_endpoint_slot = 1
+service_reply_slot = 2
+supervisor_wake_notification_slot = 3
+control_call_label = 1
+shutdown_call_label = 2
+revoke_call_label = 3
 heartbeat_wake_bit = 256
 gpu_wake_bit = 512
 lora_wake_bit = 1024
@@ -301,12 +301,14 @@ shutdown_grace_ms = 1000
 max_control_inflight = 1
 
 [worker_runtime.scheduling]
-profile = "mcs"
+profile = "mcs-passive"
 priority = 96
 domain = 0
 service_turn_budget = 64
-mcs_budget_us = 800
-mcs_period_us = 20000
+bootstrap_scheduling_context_bits = 8
+bootstrap_budget_us = 800
+bootstrap_period_us = 20000
+bootstrap_max_refills = 2
 timeout_endpoint_badge = 653132288
 consumed_budget_evidence = true
 
@@ -345,12 +347,12 @@ core = 0
 scheduling_context_slot = 1
 scheduling_context_bits = 7
 sched_control_core = 0
-budget_us = 5500
+budget_us = 9000
 period_us = 10000
 deadline_us = 10000
 blocking_us = 0
 jitter_us = 0
-response_time_us = 7600
+response_time_us = 8500
 admitted = true
 max_refills = 2
 priority = 200
@@ -358,8 +360,8 @@ mcp = 200
 timeout_badge = 653131777
 timeout_policy = "natural-postpone"
 consumed_time_evidence = true
-wcet_us = 5000
-wcet_provenance = "m26e-qemu-root-adjacent-refill-natural-postpone-candidate-v35"
+wcet_us = 8500
+wcet_provenance = "m26e-qemu-root-dedicated-core-bounded-quantum-v1"
 virtio_operator_serial_io_bytes_per_turn = 64
 fault_handler = "root-fault"
 critical_reserve = true
@@ -368,16 +370,16 @@ critical_reserve = true
 id = "root-fault"
 kind = "root-fault"
 execution = "active"
-core = 0
+core = 1
 scheduling_context_slot = 2
 scheduling_context_bits = 8
-sched_control_core = 0
+sched_control_core = 1
 budget_us = 3000
 period_us = 10000
 deadline_us = 10000
 blocking_us = 0
 jitter_us = 0
-response_time_us = 2600
+response_time_us = 2400
 admitted = true
 max_refills = 2
 priority = 252
@@ -394,10 +396,10 @@ critical_reserve = true
 id = "root-emergency"
 kind = "root-emergency"
 execution = "active"
-core = 0
+core = 3
 scheduling_context_slot = 3
 scheduling_context_bits = 8
-sched_control_core = 0
+sched_control_core = 3
 budget_us = 250
 period_us = 10000
 deadline_us = 10000
@@ -429,7 +431,7 @@ period_us = 10000
 deadline_us = 10000
 blocking_us = 0
 jitter_us = 0
-response_time_us = 4800
+response_time_us = 7200
 admitted = true
 max_refills = 2
 priority = 210
@@ -455,7 +457,7 @@ period_us = 10000
 deadline_us = 10000
 blocking_us = 0
 jitter_us = 0
-response_time_us = 2400
+response_time_us = 4800
 admitted = true
 max_refills = 2
 priority = 220
@@ -469,13 +471,65 @@ fault_handler = "root-fault"
 critical_reserve = true
 
 [[temporal_authority.tasks]]
+id = "root-worker-executor-gpu"
+kind = "worker-executor"
+execution = "active"
+core = 2
+scheduling_context_slot = 7
+scheduling_context_bits = 8
+sched_control_core = 2
+budget_us = 5000
+period_us = 10000
+deadline_us = 10000
+blocking_us = 0
+jitter_us = 0
+response_time_us = 7500
+admitted = true
+max_refills = 8
+priority = 80
+mcp = 200
+timeout_badge = 653131782
+timeout_policy = "terminal"
+consumed_time_evidence = true
+wcet_us = 4500
+wcet_provenance = "m26e-passive-worker-executor-gpu-v1"
+fault_handler = "root-fault"
+critical_reserve = true
+
+[[temporal_authority.tasks]]
+id = "root-worker-executor-lora"
+kind = "worker-executor"
+execution = "active"
+core = 3
+scheduling_context_slot = 8
+scheduling_context_bits = 8
+sched_control_core = 3
+budget_us = 8000
+period_us = 10000
+deadline_us = 10000
+blocking_us = 0
+jitter_us = 0
+response_time_us = 7200
+admitted = true
+max_refills = 8
+priority = 80
+mcp = 200
+timeout_badge = 653131783
+timeout_policy = "terminal"
+consumed_time_evidence = true
+wcet_us = 7000
+wcet_provenance = "m26e-passive-worker-executor-lora-v1"
+fault_handler = "root-fault"
+critical_reserve = true
+
+[[temporal_authority.tasks]]
 id = "ninedoor-service"
 kind = "service"
 execution = "passive"
 core = 0
 priority = 128
 mcp = 200
-timeout_badge = 653131782
+timeout_badge = 653131784
 timeout_policy = "return-error"
 wcet_provenance = "m26e-qemu-candidate-v1"
 allowed_donors = ["root-control"]
@@ -511,7 +565,7 @@ shared_frame_bytes = 8192
 max_inflight = 1
 request_badge = 1
 fault_badge = 652476416
-timeout_badge = 653131782
+timeout_badge = 653131784
 root_call_rights = 9
 child_receive_rights = 2
 root_request_rights = 3
@@ -556,7 +610,7 @@ admitted = true
 max_refills = 2
 priority = 180
 mcp = 200
-timeout_badge = 653131783
+timeout_badge = 653131785
 timeout_policy = "natural-postpone"
 consumed_time_evidence = true
 wcet_us = 3000
@@ -571,6 +625,7 @@ image_path = "cohesix/artifacts/console-network-runtime"
 entry_symbol = "_start"
 listener_port = 31337
 single_listener = true
+direct_virtio = true
 child_cspace_slots = 16
 revoke_anchor_slot = 16136
 revoke_anchor_bits = 20
@@ -607,7 +662,7 @@ mcp = 200
 budget_us = 3000
 period_us = 10000
 max_refills = 2
-timeout_badge = 653131783
+timeout_badge = 653131785
 timer_clock_hz = 24000000
 auth_timeout_ms = 5000
 idle_timeout_ms = 300000
@@ -618,942 +673,66 @@ cnodes = 1
 vspaces = 1
 page_tables = 8
 asids = 1
-frames = 98
+frames = 134
 endpoints = 0
 notifications = 2
 fault_caps = 1
 timeout_fault_caps = 1
 reply_objects = 0
 scheduling_contexts = 1
-cspace_slots = 123
+cspace_slots = 162
 untyped_bytes = 1048576
 
-[[temporal_authority.tasks]]
-id = "worker-heartbeat-slot-0"
-kind = "worker"
-execution = "active"
+[[temporal_authority.worker_classes]]
+role = "worker-heartbeat"
+task_prefix = "worker-heartbeat-slot-"
+slots = 1
+execution = "passive"
 core = 3
-scheduling_context_slot = 7
-scheduling_context_bits = 8
-sched_control_core = 3
-budget_us = 600
-period_us = 20000
-deadline_us = 20000
-blocking_us = 0
-jitter_us = 0
-response_time_us = 6500
-admitted = true
-max_refills = 2
 priority = 96
 mcp = 128
-timeout_badge = 653131784
-timeout_policy = "terminal"
-consumed_time_evidence = true
-wcet_us = 200
-wcet_provenance = "m26e-qemu-candidate-v1"
+timeout_badge_base = 653131786
+timeout_policy = "return-error"
+allowed_donors = ["root-worker-executor-lora"]
+reply_objects = 1
+max_donation_depth = 1
 fault_handler = "root-fault"
+locality_bound = true
+wcet_provenance = "m26e-passive-worker-executor-v1"
 
-[[temporal_authority.tasks]]
-id = "worker-gpu-slot-0"
-kind = "worker"
-execution = "active"
+[[temporal_authority.worker_classes]]
+role = "worker-gpu"
+task_prefix = "worker-gpu-slot-"
+slots = 127
+execution = "passive"
 core = 2
-scheduling_context_slot = 8
-scheduling_context_bits = 8
-sched_control_core = 2
-budget_us = 800
-period_us = 20000
-deadline_us = 20000
-blocking_us = 0
-jitter_us = 0
-response_time_us = 7500
-admitted = true
-max_refills = 2
 priority = 96
 mcp = 128
-timeout_badge = 653131785
-timeout_policy = "terminal"
-consumed_time_evidence = true
-wcet_us = 300
-wcet_provenance = "m26e-qemu-candidate-v1"
+timeout_badge_base = 653131787
+timeout_policy = "return-error"
+allowed_donors = ["root-worker-executor-gpu"]
+reply_objects = 1
+max_donation_depth = 1
 fault_handler = "root-fault"
+locality_bound = true
+wcet_provenance = "m26e-passive-worker-executor-v1"
 
-
-[[temporal_authority.tasks]]
-id = "worker-gpu-slot-1"
-kind = "worker"
-execution = "active"
-core = 2
-scheduling_context_slot = 9
-scheduling_context_bits = 8
-sched_control_core = 2
-budget_us = 800
-period_us = 20000
-deadline_us = 20000
-blocking_us = 0
-jitter_us = 0
-response_time_us = 7500
-admitted = true
-max_refills = 2
-priority = 96
-mcp = 128
-timeout_badge = 653131786
-timeout_policy = "terminal"
-consumed_time_evidence = true
-wcet_us = 300
-wcet_provenance = "m26e-qemu-multi-worker-v1"
-fault_handler = "root-fault"
-
-[[temporal_authority.tasks]]
-id = "worker-gpu-slot-2"
-kind = "worker"
-execution = "active"
-core = 2
-scheduling_context_slot = 10
-scheduling_context_bits = 8
-sched_control_core = 2
-budget_us = 800
-period_us = 20000
-deadline_us = 20000
-blocking_us = 0
-jitter_us = 0
-response_time_us = 7500
-admitted = true
-max_refills = 2
-priority = 96
-mcp = 128
-timeout_badge = 653131787
-timeout_policy = "terminal"
-consumed_time_evidence = true
-wcet_us = 300
-wcet_provenance = "m26e-qemu-multi-worker-v1"
-fault_handler = "root-fault"
-
-[[temporal_authority.tasks]]
-id = "worker-gpu-slot-3"
-kind = "worker"
-execution = "active"
-core = 2
-scheduling_context_slot = 11
-scheduling_context_bits = 8
-sched_control_core = 2
-budget_us = 800
-period_us = 20000
-deadline_us = 20000
-blocking_us = 0
-jitter_us = 0
-response_time_us = 7500
-admitted = true
-max_refills = 2
-priority = 96
-mcp = 128
-timeout_badge = 653131788
-timeout_policy = "terminal"
-consumed_time_evidence = true
-wcet_us = 300
-wcet_provenance = "m26e-qemu-multi-worker-v1"
-fault_handler = "root-fault"
-
-[[temporal_authority.tasks]]
-id = "worker-gpu-slot-4"
-kind = "worker"
-execution = "active"
-core = 2
-scheduling_context_slot = 12
-scheduling_context_bits = 8
-sched_control_core = 2
-budget_us = 800
-period_us = 20000
-deadline_us = 20000
-blocking_us = 0
-jitter_us = 0
-response_time_us = 7500
-admitted = true
-max_refills = 2
-priority = 96
-mcp = 128
-timeout_badge = 653131789
-timeout_policy = "terminal"
-consumed_time_evidence = true
-wcet_us = 300
-wcet_provenance = "m26e-qemu-multi-worker-v1"
-fault_handler = "root-fault"
-
-[[temporal_authority.tasks]]
-id = "worker-gpu-slot-5"
-kind = "worker"
-execution = "active"
-core = 2
-scheduling_context_slot = 13
-scheduling_context_bits = 8
-sched_control_core = 2
-budget_us = 800
-period_us = 20000
-deadline_us = 20000
-blocking_us = 0
-jitter_us = 0
-response_time_us = 7500
-admitted = true
-max_refills = 2
-priority = 96
-mcp = 128
-timeout_badge = 653131790
-timeout_policy = "terminal"
-consumed_time_evidence = true
-wcet_us = 300
-wcet_provenance = "m26e-qemu-multi-worker-v1"
-fault_handler = "root-fault"
-
-[[temporal_authority.tasks]]
-id = "worker-gpu-slot-6"
-kind = "worker"
-execution = "active"
-core = 2
-scheduling_context_slot = 14
-scheduling_context_bits = 8
-sched_control_core = 2
-budget_us = 800
-period_us = 20000
-deadline_us = 20000
-blocking_us = 0
-jitter_us = 0
-response_time_us = 7500
-admitted = true
-max_refills = 2
-priority = 96
-mcp = 128
-timeout_badge = 653131791
-timeout_policy = "terminal"
-consumed_time_evidence = true
-wcet_us = 300
-wcet_provenance = "m26e-qemu-multi-worker-v1"
-fault_handler = "root-fault"
-
-[[temporal_authority.tasks]]
-id = "worker-gpu-slot-7"
-kind = "worker"
-execution = "active"
-core = 2
-scheduling_context_slot = 15
-scheduling_context_bits = 8
-sched_control_core = 2
-budget_us = 800
-period_us = 20000
-deadline_us = 20000
-blocking_us = 0
-jitter_us = 0
-response_time_us = 7500
-admitted = true
-max_refills = 2
-priority = 96
-mcp = 128
-timeout_badge = 653131792
-timeout_policy = "terminal"
-consumed_time_evidence = true
-wcet_us = 300
-wcet_provenance = "m26e-qemu-multi-worker-v1"
-fault_handler = "root-fault"
-
-[[temporal_authority.tasks]]
-id = "worker-gpu-slot-8"
-kind = "worker"
-execution = "active"
-core = 2
-scheduling_context_slot = 16
-scheduling_context_bits = 8
-sched_control_core = 2
-budget_us = 800
-period_us = 20000
-deadline_us = 20000
-blocking_us = 0
-jitter_us = 0
-response_time_us = 7500
-admitted = true
-max_refills = 2
-priority = 96
-mcp = 128
-timeout_badge = 653131793
-timeout_policy = "terminal"
-consumed_time_evidence = true
-wcet_us = 300
-wcet_provenance = "m26e-qemu-multi-worker-v1"
-fault_handler = "root-fault"
-
-[[temporal_authority.tasks]]
-id = "worker-gpu-slot-9"
-kind = "worker"
-execution = "active"
-core = 2
-scheduling_context_slot = 17
-scheduling_context_bits = 8
-sched_control_core = 2
-budget_us = 800
-period_us = 20000
-deadline_us = 20000
-blocking_us = 0
-jitter_us = 0
-response_time_us = 7500
-admitted = true
-max_refills = 2
-priority = 96
-mcp = 128
-timeout_badge = 653131794
-timeout_policy = "terminal"
-consumed_time_evidence = true
-wcet_us = 300
-wcet_provenance = "m26e-qemu-multi-worker-v1"
-fault_handler = "root-fault"
-
-[[temporal_authority.tasks]]
-id = "worker-gpu-slot-10"
-kind = "worker"
-execution = "active"
-core = 2
-scheduling_context_slot = 18
-scheduling_context_bits = 8
-sched_control_core = 2
-budget_us = 800
-period_us = 20000
-deadline_us = 20000
-blocking_us = 0
-jitter_us = 0
-response_time_us = 7500
-admitted = true
-max_refills = 2
-priority = 96
-mcp = 128
-timeout_badge = 653131795
-timeout_policy = "terminal"
-consumed_time_evidence = true
-wcet_us = 300
-wcet_provenance = "m26e-qemu-multi-worker-v1"
-fault_handler = "root-fault"
-
-[[temporal_authority.tasks]]
-id = "worker-gpu-slot-11"
-kind = "worker"
-execution = "active"
-core = 2
-scheduling_context_slot = 19
-scheduling_context_bits = 8
-sched_control_core = 2
-budget_us = 800
-period_us = 20000
-deadline_us = 20000
-blocking_us = 0
-jitter_us = 0
-response_time_us = 7500
-admitted = true
-max_refills = 2
-priority = 96
-mcp = 128
-timeout_badge = 653131796
-timeout_policy = "terminal"
-consumed_time_evidence = true
-wcet_us = 300
-wcet_provenance = "m26e-qemu-multi-worker-v1"
-fault_handler = "root-fault"
-
-[[temporal_authority.tasks]]
-id = "worker-gpu-slot-12"
-kind = "worker"
-execution = "active"
-core = 2
-scheduling_context_slot = 20
-scheduling_context_bits = 8
-sched_control_core = 2
-budget_us = 800
-period_us = 20000
-deadline_us = 20000
-blocking_us = 0
-jitter_us = 0
-response_time_us = 7500
-admitted = true
-max_refills = 2
-priority = 96
-mcp = 128
-timeout_badge = 653131797
-timeout_policy = "terminal"
-consumed_time_evidence = true
-wcet_us = 300
-wcet_provenance = "m26e-qemu-multi-worker-v1"
-fault_handler = "root-fault"
-
-[[temporal_authority.tasks]]
-id = "worker-gpu-slot-13"
-kind = "worker"
-execution = "active"
-core = 2
-scheduling_context_slot = 21
-scheduling_context_bits = 8
-sched_control_core = 2
-budget_us = 800
-period_us = 20000
-deadline_us = 20000
-blocking_us = 0
-jitter_us = 0
-response_time_us = 7500
-admitted = true
-max_refills = 2
-priority = 96
-mcp = 128
-timeout_badge = 653131798
-timeout_policy = "terminal"
-consumed_time_evidence = true
-wcet_us = 300
-wcet_provenance = "m26e-qemu-multi-worker-v1"
-fault_handler = "root-fault"
-
-[[temporal_authority.tasks]]
-id = "worker-gpu-slot-14"
-kind = "worker"
-execution = "active"
-core = 2
-scheduling_context_slot = 22
-scheduling_context_bits = 8
-sched_control_core = 2
-budget_us = 800
-period_us = 20000
-deadline_us = 20000
-blocking_us = 0
-jitter_us = 0
-response_time_us = 7500
-admitted = true
-max_refills = 2
-priority = 96
-mcp = 128
-timeout_badge = 653131799
-timeout_policy = "terminal"
-consumed_time_evidence = true
-wcet_us = 300
-wcet_provenance = "m26e-qemu-multi-worker-v1"
-fault_handler = "root-fault"
-
-[[temporal_authority.tasks]]
-id = "worker-lora-slot-0"
-kind = "worker"
-execution = "active"
+[[temporal_authority.worker_classes]]
+role = "worker-lora"
+task_prefix = "worker-lora-slot-"
+slots = 128
+execution = "passive"
 core = 3
-scheduling_context_slot = 23
-scheduling_context_bits = 8
-sched_control_core = 3
-budget_us = 800
-period_us = 20000
-deadline_us = 20000
-blocking_us = 0
-jitter_us = 0
-response_time_us = 6500
-admitted = true
-max_refills = 2
 priority = 96
 mcp = 128
-timeout_badge = 653131800
-timeout_policy = "terminal"
-consumed_time_evidence = true
-wcet_us = 300
-wcet_provenance = "m26e-qemu-candidate-v1"
+timeout_badge_base = 653131914
+timeout_policy = "return-error"
+allowed_donors = ["root-worker-executor-lora"]
+reply_objects = 1
+max_donation_depth = 1
 fault_handler = "root-fault"
-
-
-[[temporal_authority.tasks]]
-id = "worker-lora-slot-1"
-kind = "worker"
-execution = "active"
-core = 3
-scheduling_context_slot = 24
-scheduling_context_bits = 8
-sched_control_core = 3
-budget_us = 800
-period_us = 20000
-deadline_us = 20000
-blocking_us = 0
-jitter_us = 0
-response_time_us = 6500
-admitted = true
-max_refills = 2
-priority = 96
-mcp = 128
-timeout_badge = 653131801
-timeout_policy = "terminal"
-consumed_time_evidence = true
-wcet_us = 300
-wcet_provenance = "m26e-qemu-multi-worker-v1"
-fault_handler = "root-fault"
-
-[[temporal_authority.tasks]]
-id = "worker-lora-slot-2"
-kind = "worker"
-execution = "active"
-core = 3
-scheduling_context_slot = 25
-scheduling_context_bits = 8
-sched_control_core = 3
-budget_us = 800
-period_us = 20000
-deadline_us = 20000
-blocking_us = 0
-jitter_us = 0
-response_time_us = 6500
-admitted = true
-max_refills = 2
-priority = 96
-mcp = 128
-timeout_badge = 653131802
-timeout_policy = "terminal"
-consumed_time_evidence = true
-wcet_us = 300
-wcet_provenance = "m26e-qemu-multi-worker-v1"
-fault_handler = "root-fault"
-
-[[temporal_authority.tasks]]
-id = "worker-lora-slot-3"
-kind = "worker"
-execution = "active"
-core = 3
-scheduling_context_slot = 26
-scheduling_context_bits = 8
-sched_control_core = 3
-budget_us = 800
-period_us = 20000
-deadline_us = 20000
-blocking_us = 0
-jitter_us = 0
-response_time_us = 6500
-admitted = true
-max_refills = 2
-priority = 96
-mcp = 128
-timeout_badge = 653131803
-timeout_policy = "terminal"
-consumed_time_evidence = true
-wcet_us = 300
-wcet_provenance = "m26e-qemu-multi-worker-v1"
-fault_handler = "root-fault"
-
-[[temporal_authority.tasks]]
-id = "worker-lora-slot-4"
-kind = "worker"
-execution = "active"
-core = 3
-scheduling_context_slot = 27
-scheduling_context_bits = 8
-sched_control_core = 3
-budget_us = 800
-period_us = 20000
-deadline_us = 20000
-blocking_us = 0
-jitter_us = 0
-response_time_us = 6500
-admitted = true
-max_refills = 2
-priority = 96
-mcp = 128
-timeout_badge = 653131804
-timeout_policy = "terminal"
-consumed_time_evidence = true
-wcet_us = 300
-wcet_provenance = "m26e-qemu-multi-worker-v1"
-fault_handler = "root-fault"
-
-[[temporal_authority.tasks]]
-id = "worker-lora-slot-5"
-kind = "worker"
-execution = "active"
-core = 3
-scheduling_context_slot = 28
-scheduling_context_bits = 8
-sched_control_core = 3
-budget_us = 800
-period_us = 20000
-deadline_us = 20000
-blocking_us = 0
-jitter_us = 0
-response_time_us = 6500
-admitted = true
-max_refills = 2
-priority = 96
-mcp = 128
-timeout_badge = 653131805
-timeout_policy = "terminal"
-consumed_time_evidence = true
-wcet_us = 300
-wcet_provenance = "m26e-qemu-multi-worker-v1"
-fault_handler = "root-fault"
-
-[[temporal_authority.tasks]]
-id = "worker-lora-slot-6"
-kind = "worker"
-execution = "active"
-core = 3
-scheduling_context_slot = 29
-scheduling_context_bits = 8
-sched_control_core = 3
-budget_us = 800
-period_us = 20000
-deadline_us = 20000
-blocking_us = 0
-jitter_us = 0
-response_time_us = 6500
-admitted = true
-max_refills = 2
-priority = 96
-mcp = 128
-timeout_badge = 653131806
-timeout_policy = "terminal"
-consumed_time_evidence = true
-wcet_us = 300
-wcet_provenance = "m26e-qemu-multi-worker-v1"
-fault_handler = "root-fault"
-
-[[temporal_authority.tasks]]
-id = "worker-lora-slot-7"
-kind = "worker"
-execution = "active"
-core = 3
-scheduling_context_slot = 30
-scheduling_context_bits = 8
-sched_control_core = 3
-budget_us = 800
-period_us = 20000
-deadline_us = 20000
-blocking_us = 0
-jitter_us = 0
-response_time_us = 6500
-admitted = true
-max_refills = 2
-priority = 96
-mcp = 128
-timeout_badge = 653131807
-timeout_policy = "terminal"
-consumed_time_evidence = true
-wcet_us = 300
-wcet_provenance = "m26e-qemu-multi-worker-v1"
-fault_handler = "root-fault"
-
-[[temporal_authority.tasks]]
-id = "worker-lora-slot-8"
-kind = "worker"
-execution = "active"
-core = 3
-scheduling_context_slot = 31
-scheduling_context_bits = 8
-sched_control_core = 3
-budget_us = 800
-period_us = 20000
-deadline_us = 20000
-blocking_us = 0
-jitter_us = 0
-response_time_us = 6500
-admitted = true
-max_refills = 2
-priority = 96
-mcp = 128
-timeout_badge = 653131808
-timeout_policy = "terminal"
-consumed_time_evidence = true
-wcet_us = 300
-wcet_provenance = "m26e-qemu-multi-worker-v1"
-fault_handler = "root-fault"
-
-[[temporal_authority.tasks]]
-id = "worker-lora-slot-9"
-kind = "worker"
-execution = "active"
-core = 3
-scheduling_context_slot = 32
-scheduling_context_bits = 8
-sched_control_core = 3
-budget_us = 800
-period_us = 20000
-deadline_us = 20000
-blocking_us = 0
-jitter_us = 0
-response_time_us = 6500
-admitted = true
-max_refills = 2
-priority = 96
-mcp = 128
-timeout_badge = 653131809
-timeout_policy = "terminal"
-consumed_time_evidence = true
-wcet_us = 300
-wcet_provenance = "m26e-qemu-multi-worker-v1"
-fault_handler = "root-fault"
-
-[[temporal_authority.tasks]]
-id = "worker-lora-slot-10"
-kind = "worker"
-execution = "active"
-core = 3
-scheduling_context_slot = 33
-scheduling_context_bits = 8
-sched_control_core = 3
-budget_us = 800
-period_us = 20000
-deadline_us = 20000
-blocking_us = 0
-jitter_us = 0
-response_time_us = 6500
-admitted = true
-max_refills = 2
-priority = 96
-mcp = 128
-timeout_badge = 653131810
-timeout_policy = "terminal"
-consumed_time_evidence = true
-wcet_us = 300
-wcet_provenance = "m26e-qemu-multi-worker-v1"
-fault_handler = "root-fault"
-
-[[temporal_authority.tasks]]
-id = "worker-lora-slot-11"
-kind = "worker"
-execution = "active"
-core = 3
-scheduling_context_slot = 34
-scheduling_context_bits = 8
-sched_control_core = 3
-budget_us = 800
-period_us = 20000
-deadline_us = 20000
-blocking_us = 0
-jitter_us = 0
-response_time_us = 6500
-admitted = true
-max_refills = 2
-priority = 96
-mcp = 128
-timeout_badge = 653131811
-timeout_policy = "terminal"
-consumed_time_evidence = true
-wcet_us = 300
-wcet_provenance = "m26e-qemu-multi-worker-v1"
-fault_handler = "root-fault"
-
-[[temporal_authority.tasks]]
-id = "worker-lora-slot-12"
-kind = "worker"
-execution = "active"
-core = 3
-scheduling_context_slot = 35
-scheduling_context_bits = 8
-sched_control_core = 3
-budget_us = 800
-period_us = 20000
-deadline_us = 20000
-blocking_us = 0
-jitter_us = 0
-response_time_us = 6500
-admitted = true
-max_refills = 2
-priority = 96
-mcp = 128
-timeout_badge = 653131812
-timeout_policy = "terminal"
-consumed_time_evidence = true
-wcet_us = 300
-wcet_provenance = "m26e-qemu-multi-worker-v1"
-fault_handler = "root-fault"
-
-[[temporal_authority.tasks]]
-id = "worker-lora-slot-13"
-kind = "worker"
-execution = "active"
-core = 3
-scheduling_context_slot = 36
-scheduling_context_bits = 8
-sched_control_core = 3
-budget_us = 800
-period_us = 20000
-deadline_us = 20000
-blocking_us = 0
-jitter_us = 0
-response_time_us = 6500
-admitted = true
-max_refills = 2
-priority = 96
-mcp = 128
-timeout_badge = 653131813
-timeout_policy = "terminal"
-consumed_time_evidence = true
-wcet_us = 300
-wcet_provenance = "m26e-qemu-multi-worker-v1"
-fault_handler = "root-fault"
-
-[[temporal_authority.tasks]]
-id = "worker-lora-slot-14"
-kind = "worker"
-execution = "active"
-core = 3
-scheduling_context_slot = 37
-scheduling_context_bits = 8
-sched_control_core = 3
-budget_us = 800
-period_us = 20000
-deadline_us = 20000
-blocking_us = 0
-jitter_us = 0
-response_time_us = 6500
-admitted = true
-max_refills = 2
-priority = 96
-mcp = 128
-timeout_badge = 653131814
-timeout_policy = "terminal"
-consumed_time_evidence = true
-wcet_us = 300
-wcet_provenance = "m26e-qemu-multi-worker-v1"
-fault_handler = "root-fault"
-
-[[temporal_authority.tasks]]
-id = "worker-lora-slot-15"
-kind = "worker"
-execution = "active"
-core = 3
-scheduling_context_slot = 38
-scheduling_context_bits = 8
-sched_control_core = 3
-budget_us = 800
-period_us = 20000
-deadline_us = 20000
-blocking_us = 0
-jitter_us = 0
-response_time_us = 6500
-admitted = true
-max_refills = 2
-priority = 96
-mcp = 128
-timeout_badge = 653131815
-timeout_policy = "terminal"
-consumed_time_evidence = true
-wcet_us = 300
-wcet_provenance = "m26e-qemu-multi-worker-v1"
-fault_handler = "root-fault"
-
-[[temporal_authority.tasks]]
-id = "worker-lora-slot-16"
-kind = "worker"
-execution = "active"
-core = 3
-scheduling_context_slot = 39
-scheduling_context_bits = 8
-sched_control_core = 3
-budget_us = 800
-period_us = 20000
-deadline_us = 20000
-blocking_us = 0
-jitter_us = 0
-response_time_us = 6500
-admitted = true
-max_refills = 2
-priority = 96
-mcp = 128
-timeout_badge = 653131816
-timeout_policy = "terminal"
-consumed_time_evidence = true
-wcet_us = 300
-wcet_provenance = "m26e-qemu-multi-worker-v1"
-fault_handler = "root-fault"
-
-[[temporal_authority.tasks]]
-id = "worker-lora-slot-17"
-kind = "worker"
-execution = "active"
-core = 3
-scheduling_context_slot = 40
-scheduling_context_bits = 8
-sched_control_core = 3
-budget_us = 800
-period_us = 20000
-deadline_us = 20000
-blocking_us = 0
-jitter_us = 0
-response_time_us = 6500
-admitted = true
-max_refills = 2
-priority = 96
-mcp = 128
-timeout_badge = 653131817
-timeout_policy = "terminal"
-consumed_time_evidence = true
-wcet_us = 300
-wcet_provenance = "m26e-qemu-multi-worker-v1"
-fault_handler = "root-fault"
-
-[[temporal_authority.tasks]]
-id = "worker-lora-slot-18"
-kind = "worker"
-execution = "active"
-core = 3
-scheduling_context_slot = 41
-scheduling_context_bits = 8
-sched_control_core = 3
-budget_us = 800
-period_us = 20000
-deadline_us = 20000
-blocking_us = 0
-jitter_us = 0
-response_time_us = 6500
-admitted = true
-max_refills = 2
-priority = 96
-mcp = 128
-timeout_badge = 653131818
-timeout_policy = "terminal"
-consumed_time_evidence = true
-wcet_us = 300
-wcet_provenance = "m26e-qemu-multi-worker-v1"
-fault_handler = "root-fault"
-
-[[temporal_authority.tasks]]
-id = "worker-lora-slot-19"
-kind = "worker"
-execution = "active"
-core = 3
-scheduling_context_slot = 42
-scheduling_context_bits = 8
-sched_control_core = 3
-budget_us = 800
-period_us = 20000
-deadline_us = 20000
-blocking_us = 0
-jitter_us = 0
-response_time_us = 6500
-admitted = true
-max_refills = 2
-priority = 96
-mcp = 128
-timeout_badge = 653131819
-timeout_policy = "terminal"
-consumed_time_evidence = true
-wcet_us = 300
-wcet_provenance = "m26e-qemu-multi-worker-v1"
-fault_handler = "root-fault"
-
-[[temporal_authority.tasks]]
-id = "worker-lora-slot-20"
-kind = "worker"
-execution = "active"
-core = 3
-scheduling_context_slot = 43
-scheduling_context_bits = 8
-sched_control_core = 3
-budget_us = 800
-period_us = 20000
-deadline_us = 20000
-blocking_us = 0
-jitter_us = 0
-response_time_us = 6500
-admitted = true
-max_refills = 2
-priority = 96
-mcp = 128
-timeout_badge = 653131820
-timeout_policy = "terminal"
-consumed_time_evidence = true
-wcet_us = 300
-wcet_provenance = "m26e-qemu-multi-worker-v1"
-fault_handler = "root-fault"
+locality_bound = true
+wcet_provenance = "m26e-passive-worker-executor-v1"
 
 [worker_resource_admission]
 enabled = true
@@ -1571,18 +750,18 @@ page_table = 12
 vspace = 12
 
 [worker_resource_admission.capacity]
-tcbs = 64
-cnodes = 64
-vspaces = 64
-page_tables = 1024
-asids = 64
+tcbs = 512
+cnodes = 512
+vspaces = 512
+page_tables = 4096
+asids = 512
 frames = 8192
-endpoints = 128
+endpoints = 512
 notifications = 128
-fault_caps = 64
-timeout_fault_caps = 64
-reply_objects = 64
-scheduling_contexts = 64
+fault_caps = 512
+timeout_fault_caps = 512
+reply_objects = 512
+scheduling_contexts = 512
 cspace_slots = 16384
 untyped_bytes = 268435456
 
@@ -1603,28 +782,28 @@ cspace_slots = 2048
 untyped_bytes = 33554432
 
 [worker_resource_admission.fixed_objects]
-tcbs = 7
-cnodes = 7
-vspaces = 7
-page_tables = 256
-asids = 7
-frames = 2018
+tcbs = 9
+cnodes = 9
+vspaces = 9
+page_tables = 272
+asids = 9
+frames = 2024
 endpoints = 15
-notifications = 16
-fault_caps = 7
-timeout_fault_caps = 7
-reply_objects = 6
-scheduling_contexts = 7
-cspace_slots = 4058
+notifications = 18
+fault_caps = 9
+timeout_fault_caps = 9
+reply_objects = 8
+scheduling_contexts = 9
+cspace_slots = 4378
 untyped_bytes = 67108864
 
 [[worker_resource_admission.executable_roles]]
 role = "worker-heartbeat"
 task_prefix = "worker-heartbeat-slot-"
-namespace_capacity = 64
+namespace_capacity = 256
 executable_slots = 1
 core = 3
-revoke_anchor_slot = 16000
+revoke_anchor_slot = 15000
 
 [worker_resource_admission.executable_roles.per_slot]
 tcbs = 1
@@ -1632,23 +811,23 @@ cnodes = 1
 vspaces = 1
 page_tables = 8
 asids = 1
-frames = 16
-endpoints = 0
-notifications = 1
+frames = 12
+endpoints = 1
+notifications = 0
 fault_caps = 1
 timeout_fault_caps = 1
-reply_objects = 0
+reply_objects = 1
 scheduling_contexts = 1
-cspace_slots = 64
+cspace_slots = 32
 untyped_bytes = 131072
 
 [[worker_resource_admission.executable_roles]]
 role = "worker-gpu"
 task_prefix = "worker-gpu-slot-"
-namespace_capacity = 64
-executable_slots = 15
+namespace_capacity = 256
+executable_slots = 127
 core = 2
-revoke_anchor_slot = 16001
+revoke_anchor_slot = 15001
 
 [worker_resource_admission.executable_roles.per_slot]
 tcbs = 1
@@ -1656,23 +835,23 @@ cnodes = 1
 vspaces = 1
 page_tables = 8
 asids = 1
-frames = 16
-endpoints = 0
-notifications = 1
+frames = 12
+endpoints = 1
+notifications = 0
 fault_caps = 1
 timeout_fault_caps = 1
-reply_objects = 0
+reply_objects = 1
 scheduling_contexts = 1
-cspace_slots = 64
+cspace_slots = 32
 untyped_bytes = 131072
 
 [[worker_resource_admission.executable_roles]]
 role = "worker-lora"
 task_prefix = "worker-lora-slot-"
-namespace_capacity = 64
-executable_slots = 21
+namespace_capacity = 256
+executable_slots = 128
 core = 3
-revoke_anchor_slot = 16016
+revoke_anchor_slot = 15128
 
 [worker_resource_admission.executable_roles.per_slot]
 tcbs = 1
@@ -1680,14 +859,14 @@ cnodes = 1
 vspaces = 1
 page_tables = 8
 asids = 1
-frames = 16
-endpoints = 0
-notifications = 1
+frames = 12
+endpoints = 1
+notifications = 0
 fault_caps = 1
 timeout_fault_caps = 1
-reply_objects = 0
+reply_objects = 1
 scheduling_contexts = 1
-cspace_slots = 64
+cspace_slots = 32
 untyped_bytes = 131072
 
 [[worker_resource_admission.allowed_role_mixes]]
@@ -1700,11 +879,11 @@ count = 1
 
 [[worker_resource_admission.allowed_role_mixes.roles]]
 role = "worker-gpu"
-count = 15
+count = 127
 
 [[worker_resource_admission.allowed_role_mixes.roles]]
 role = "worker-lora"
-count = 21
+count = 128
 
 [[worker_resource_admission.critical_tcbs]]
 id = "root-control"
@@ -1717,8 +896,8 @@ fault_reply_lanes = 1
 
 [[worker_resource_admission.critical_tcbs]]
 id = "root-fault"
-cnode_radix_bits = 6
-cspace_cap_count = 53
+cnode_radix_bits = 10
+cspace_cap_count = 530
 revoke_anchor_slot = 16129
 ipc_buffer_pages = 1
 stack_pages = 2
@@ -1751,9 +930,27 @@ ipc_buffer_pages = 1
 stack_pages = 2
 fault_reply_lanes = 1
 
+[[worker_resource_admission.critical_tcbs]]
+id = "root-worker-executor-gpu"
+cnode_radix_bits = 8
+cspace_cap_count = 133
+revoke_anchor_slot = 16133
+ipc_buffer_pages = 1
+stack_pages = 2
+fault_reply_lanes = 1
+
+[[worker_resource_admission.critical_tcbs]]
+id = "root-worker-executor-lora"
+cnode_radix_bits = 8
+cspace_cap_count = 135
+revoke_anchor_slot = 16134
+ipc_buffer_pages = 1
+stack_pages = 2
+fault_reply_lanes = 1
+
 [worker_resource_admission.handoff]
-worker_control_queue_capacity = 64
-worker_fault_mailboxes = 37
+worker_control_queue_capacity = 256
+worker_fault_mailboxes = 256
 driver_fault_records = 0
 worker_wake_badge = 1
 driver_wake_badge = 2
@@ -1768,7 +965,7 @@ driver_drain_precedence = ["driver-fault"]
 
 [worker_resource_admission.handoff.worker_fault_badges]
 base = 652279808
-count = 37
+count = 256
 stride = 1
 
 [worker_resource_admission.handoff.driver_fault_badges]
@@ -1778,7 +975,7 @@ stride = 1
 
 [worker_resource_admission.handoff.critical_fault_badges]
 base = 652410880
-count = 5
+count = 7
 stride = 1
 
 [worker_resource_admission.handoff.service_fault_badges]
@@ -1788,7 +985,7 @@ stride = 1
 
 [worker_resource_admission.handoff.timeout_fault_badges]
 base = 653131777
-count = 44
+count = 265
 stride = 1
 
 [worker_resource_admission.handoff.supervisor_signal_rights]
@@ -1816,12 +1013,12 @@ grant = false
 grant_reply = false
 
 [worker_resource_admission.fault_registry]
-critical_tcbs = 5
+critical_tcbs = 7
 service_tcbs = 2
-worker_tcbs = 37
+worker_tcbs = 256
 driver_tcbs = 0
-capacity = 44
-root_fault_tcb_control_slot_base = 16
+capacity = 265
+root_fault_tcb_control_slot_base = 267
 receive_endpoints = 1
 receive_reply_lanes = 1
 recoverable_timeout_tasks = []
@@ -1841,7 +1038,7 @@ target = ["log"]
 
 [sharding]
 enabled = true
-shard_bits = 8
+shard_bits = 6
 legacy_worker_alias = true
 
 [telemetry]

@@ -5035,28 +5035,34 @@ the source and resolved manifests; an optional `COH_AUTH_TOKEN` must match it.
 The separately supplied REST mutation bearer must be a fresh 64-character
 lowercase hexadecimal value and must not appear anywhere in retained evidence.
 
-For the AArch64 Linux KVM comparison, transfer those immutable guest artifacts,
-the selected seL4 outputs, and the same source, then run the documented
-`--reuse-artifacts` command. Replay verifies the source-host artifact record,
-preserves it, rebuilds only native Linux host tools, and emits a Linux launch
-record for KVM, `host,cntfrq=24000000`, and the in-kernel GICv3 before booting.
-The macOS seL4 build-profile validator remains source-host/toolchain-bound, so
-replay does not relabel it as a Linux build. Instead, after both source-host
-guest-hash verification and Linux launch-record verification, the pressure
-orchestrator invokes the non-claiming QEMU target canary directly for root,
-NineDoor READY, authentication, attachment, and one real operation. It then
-executes the same service probes and medium/high workload but
-emits `cohesix-qemu-host-replay/v1` instead of claiming the macOS-only complete
-release gates. It is QEMU performance/integration evidence, not final release
+For the AArch64 Linux KVM comparison, transfer the exact source and reviewed
+patch, build the selected `qemu_smp_kvm_production` seL4 profile, and run the
+equivalent documented workload. Its launch record binds the profile-qualified
+guest to KVM, `-cpu host`, the native 31.25 MHz architectural counter, and the
+in-kernel GICv3. Mac and Linux guest hashes are recorded separately; they are
+comparable only when source/patch identity, topology, Worker population,
+root/service bounds, and workload parameters match. The non-claiming target
+canary still proves root, NineDoor READY, authentication, attachment, and one
+real operation before pressure. Linux results are QEMU
+performance/integration evidence, not macOS toolchain or final release
 acceptance.
 
-Each normal pressure boot has two evidence stages. Before load, external GDB and the existing
+The iterative performance loop is log-only. After one separate correctness
+baseline, run medium, then high, decode `/proc/schedule/qemu-flight` after each
+load, and correlate activation gap, service quantum, drainage ratio, queue
+high-water, exit reasons, host CPU/RSS, REST latency, and receipt completion.
+Do not attach GDB to these benchmark boots. A later release-acceptance lane may
+consume its independently frozen fault-containment transcript; it must not
+alter or substitute for the pressure run.
+
+Each full release-acceptance pressure boot has two evidence stages. Before
+load, its independent fault collector and the existing
 Queen/host-ticket paths must directly produce the complete Worker/service
 fault, teardown, fresh-generation, GPU/LoRA receipt, operator-liveness, and
 MCS observations. Direct `cohsh` fault injection finishes before the gateway
 first attaches; after that attach, the gateway remains the sole console owner
 for the rest of the boot. `collect-qemu-preflight` derives a same-boot component
-from that immutable UART prefix, the role-specific GDB transcripts, the exact
+from that immutable UART prefix, the role-specific fault transcripts, the exact
 target-session/artifact graph, the separate same-artifact critical-duty GDB
 transcript, and the three live integration rows. The critical-duty boot is an
 explicit auxiliary fault transcript and is never relabelled as same-boot Worker
@@ -5066,7 +5072,7 @@ remains fail-closed while that component is absent or invalid, then promotes
 the first fully validated PASS component exactly once; the accepted summary is
 immutable for that gateway process. Pressure starts only after the shared
 validator confirms the promoted current-session binding. The final
-`collect-qemu` runs only after both pressure reports and their per-boot UART/GDB
+`collect-qemu` runs only after both pressure reports and their per-boot UART/fault
 artifacts are immutable. A prior-boot component or the final component that the
 current pressure run is helping produce cannot admit load.
 
@@ -5075,7 +5081,8 @@ For each summary:
 - `report.population.mode` is `executable` and
   `report.population.maximum_live_tasks` equals the selected generated bound;
 - requested, discovered, and structured READY populations are recorded
-  separately and equal the command's three-task population; discovery uses
+  separately and equal the selected generated population (256 for current
+  QEMU); discovery uses
   only canonical `/shard/<label>/worker/<id>/telemetry` paths;
 - backend class is `console-projection` and proof class is `qemu`, sourced from
   the shared-validator-backed gateway acceptance summary rather than gateway
@@ -5083,16 +5090,16 @@ For each summary:
 - top-level `target_session_sha256` matches the exact staged session bytes, and
   `report.executable_state.target_session` retains its manifest, root, Worker
   archive, image-manifest, and ABI hashes plus the generated topology hash;
-- pre/post state contains exactly three ordered Worker rows with five-part
+- pre/post state contains every ordered generated Worker row with five-part
   identities, image hashes, READY/control/receipt/completion sequences, cores,
-  active SC budget/period, and the full generated per-slot admission object
-  bundle (not an observed retype census), plus hash-bound
+  passive executor/Reply identity, and the full generated per-slot admission
+  object bundle (not an observed retype census), plus hash-bound
   `/proc/schedule/{summary,queue}` and `/proc/lease/{summary,active,preemptions}`
   snapshots;
 - one bounded Heartbeat kill/recreate cycle proves terminal teardown and a
   larger supervisor generation; GPU and LoRA retain their identity while their
   receipt and completion sequences increase through real host-ticket-v2 work;
-- exact per-run UART/GDB bytes match `fault_artifacts`, the marker index is
+- exact per-run UART/fault bytes match `fault_artifacts`, the marker index is
   complete, and the target transcript independently contains all role faults,
   all seven actions with confirmed/rejected/stale outcomes, exact teardown
   booleans, service containment, and the GICv3 target/session markers;
@@ -5130,7 +5137,7 @@ or authenticating target TCP. The
 lane. A TCP console gateway reports `backend_class=console-projection` and must
 fail before `/worker`, `/actions/queue`, or `/queen/ctl` access when paired with
 `--population-mode host-model`; target-backed QEMU pressure instead uses
-Conditional B2's exact three generated executable roles. QEMU cannot qualify
+Conditional B2's exact generated executable population. QEMU cannot qualify
 Pi, and neither this host-model lane nor Conditional B2 substitutes for fresh
 Pi performance evidence.
 
@@ -8020,9 +8027,9 @@ _Generated by coh-rtc (sha256: `fa11c64fe53b859365c45c8e33e565d428029a87529be00c
 <!-- coh-rtc:trace-policy:end -->
 
 ## Manifest fingerprints
-- `configs/root_task.toml` — `sha256:b41ee4fbcd5921767adcba5c9e4490eac49ad33a409959f548187b22f137002f`
-- `configs/generated/root_task_resolved.json` — `sha256:10f33db7f20f039701ec8d2c5d206aba45a67f4b7e359b22dc2e24a0cc055cbd`
-- `configs/root_task_pi4_uboot_aarch64.toml` — `sha256:5e26cc4bb9cdbcd04caa6105693aa6e96c5863efa8635532d29e5f0c5abc4d41`
+- `configs/root_task.toml` — `sha256:92df0d52bc280aa56a0a254a6411bfb6c99f38d22411421e4a84b52ca00c5970`
+- `configs/generated/root_task_resolved.json` — `sha256:cdbfdfa9f4de5c1cd8f8f9ef7233aff9465e15e5469cce6604bdde50872996ba`
+- `configs/root_task_pi4_uboot_aarch64.toml` — `sha256:94569115b40e5d6e480c85e11a07b98a42424a549c94315a3f4fe438404fe05c`
 - Pi `pi4_production` transient resolved binding — `sha256:5ca99e2809e7dc0a42e0a29b4998b6d6abf87cc58ece11427aa2f1d2cf4a0d21`
 
 ## Transcript fixture hashes
@@ -8037,14 +8044,14 @@ _Generated by coh-rtc (sha256: `fa11c64fe53b859365c45c8e33e565d428029a87529be00c
 - `tests/fixtures/transcripts/converge_v0/tcp.txt` — `sha256:dafd88f7d7e984454e12815ccffd203f98c446d0eb1e8a364d79805aa69de017`
 - `tests/fixtures/transcripts/converge_v0/cohsh.txt` — `sha256:dafd88f7d7e984454e12815ccffd203f98c446d0eb1e8a364d79805aa69de017`
 - `tests/fixtures/transcripts/converge_v0/coh.txt` — `sha256:96b57611f848ef6f9691678df8b20f261dffd47db449cd63459f12f166c0f4a7`
-- `tests/fixtures/transcripts/converge_v0/swarmui.txt` — `sha256:367fe0ef871277d7e3606a6747946304f1dff2217c360190f2fc8dd115f015fa`
-- `tests/fixtures/transcripts/converge_v0/coh-status.txt` — `sha256:b9a2da7b81d0bd6b8c6934330976e3990b1eb1f7dce879cfad112126b3c95a42`
+- `tests/fixtures/transcripts/converge_v0/swarmui.txt` — `sha256:7c88f30c480d960990ccc741d775f8c13bb9fd4a29779e19a3445eb1f761cbdb`
+- `tests/fixtures/transcripts/converge_v0/coh-status.txt` — `sha256:b026211888edf50538f61b66c79dc6ae1eaf59cc33b8dd3506e57ae60b3606c4`
 - `tests/fixtures/transcripts/control_plane_v0/cohsh.txt` — `sha256:f43434e6b3071753596e919021e573cb7f6a9831123769dd7cefb5b0c115c1ef`
 - `tests/fixtures/transcripts/run_demo_v0/cohsh.txt` — `sha256:d429aa09972892adaeabed60ef2a36e4fe366eb9e730a8467a85f27870957040`
 - `tests/fixtures/transcripts/peft_roundtrip_v0/cohsh.txt` — `sha256:a761096db1c412e8b775f3bdb78a9aec79b95ef787d0e933406d23c20285f7db`
 - `tests/fixtures/transcripts/trace_v0/cohsh.txt` — `sha256:56b97a2d8486ed783d7cb93d38ea67811d93df6efcc24d7ed97265a4df1b1c4f`
 - `tests/fixtures/transcripts/trace_v0/swarmui.txt` — `sha256:56b97a2d8486ed783d7cb93d38ea67811d93df6efcc24d7ed97265a4df1b1c4f`
-- `tests/fixtures/transcripts/trace_v0/coh-status.txt` — `sha256:ea020691ff4f291782b73208db03cf1707f4a64d72b94b11ab6e995d8207dc64`
+- `tests/fixtures/transcripts/trace_v0/coh-status.txt` — `sha256:a002a369390cc197714ac291ba08531966af658ed797c569f1ece4bab9b1820b`
 
 ## Trace fixture hashes
 - `tests/fixtures/traces/trace_v0.trace` — `sha256:f5cd6eb44c1b4a51f5e1516dad9a7ec1f76fae148169744c9e8e3809f9b6c30b`

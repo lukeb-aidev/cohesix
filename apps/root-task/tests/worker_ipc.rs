@@ -17,7 +17,7 @@ use worker_task_abi::{
 fn one_inflight_control_completes_once_and_stale_completion_fails() {
     let (mut supervisor, identity) = ready(WorkerRole::Heartbeat, 1);
     let control = WorkerControlRecord::staged(
-        7,
+        1,
         identity,
         WorkerAction::HeartbeatPublish,
         WorkerOutcome::NotApplicable,
@@ -53,7 +53,7 @@ fn one_inflight_control_completes_once_and_stale_completion_fails() {
 fn forged_role_control_is_rejected_before_backend_signal() {
     let (mut supervisor, identity) = ready(WorkerRole::Heartbeat, 1);
     let control = WorkerControlRecord::staged(
-        9,
+        1,
         identity,
         WorkerAction::GpuLeaseGrant,
         WorkerOutcome::Confirmed,

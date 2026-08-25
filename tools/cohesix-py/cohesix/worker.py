@@ -68,17 +68,18 @@ _ROLE_CONTRACT = {
 _TARGET_ROLE_SLOTS = {
     "qemu": {
         "worker-heartbeat": 1,
-        "worker-gpu": 15,
+        "worker-gpu": 127,
         "worker-bus": 0,
-        "worker-lora": 21,
+        "worker-lora": 128,
     },
     "pi4": {
         "worker-heartbeat": 1,
-        "worker-gpu": 1,
+        "worker-gpu": 31,
         "worker-bus": 0,
-        "worker-lora": 1,
+        "worker-lora": 32,
     },
 }
+_TARGET_SHARD_BITS = {"qemu": 6, "pi4": 8}
 _PROHIBITED_KEYS = {
     "auth_token",
     "authorization",
@@ -284,13 +285,16 @@ def load_profile_contract(
         },
         "Worker contract",
     )
-    if worker["implementation_epoch"] != 26 or worker["scheduling_profile"] != "mcs":
+    if (
+        worker["implementation_epoch"] != 26
+        or worker["scheduling_profile"] != "mcs-passive"
+    ):
         raise CohesixError("profile contract Worker execution epoch is invalid")
     _bounded_int(
         worker["namespace_capacity_per_role"],
         "namespace_capacity_per_role",
         1,
-        64,
+        256,
     )
     roles = worker.get("roles")
     if not isinstance(roles, list) or len(roles) != len(CANONICAL_ROLES):
@@ -316,7 +320,7 @@ def load_profile_contract(
             raise CohesixError("profile contract has an unknown or duplicate Worker role")
         seen_roles.add(role)
         declaration = str(record["declaration"])
-        slots = _bounded_int(record["executable_slots"], "executable_slots", 0, 64)
+        slots = _bounded_int(record["executable_slots"], "executable_slots", 0, 256)
         expected_declaration, ticket_scope, lease_path = _ROLE_CONTRACT[role]
         expected_slots = _TARGET_ROLE_SLOTS[target][role]
         if (
@@ -332,13 +336,13 @@ def load_profile_contract(
     if seen_roles != set(CANONICAL_ROLES):
         raise CohesixError("profile contract Worker role matrix is incomplete")
     maximum_live_tasks = _bounded_int(
-        worker.get("maximum_live_tasks"), "maximum_live_tasks", 1, 64
+        worker.get("maximum_live_tasks"), "maximum_live_tasks", 1, 256
     )
     if maximum_live_tasks != executable_slots:
         raise CohesixError("profile contract maximum live task count is inconsistent")
-    if worker.get("task_abi_schema") != "worker-task-abi/v1" or worker.get(
+    if worker.get("task_abi_schema") != "worker-task-abi/v2" or worker.get(
         "task_abi_version"
-    ) != 1:
+    ) != 2:
         raise CohesixError("profile contract Worker ABI is unsupported")
 
     schemas = _mapping(data["schemas"], "schemas")
@@ -390,8 +394,11 @@ def load_profile_contract(
         raise CohesixError("production profile contract must enable canonical sharding")
     if not isinstance(namespace.get("legacy_worker_alias"), bool):
         raise CohesixError("profile contract legacy alias gate is invalid")
-    if _bounded_int(namespace.get("shard_bits"), "shard_bits", 1, 8) != 8:
-        raise CohesixError("production profile contract requires eight-bit sharding")
+    if (
+        _bounded_int(namespace.get("shard_bits"), "shard_bits", 1, 8)
+        != _TARGET_SHARD_BITS[target]
+    ):
+        raise CohesixError("profile contract must use the canonical target shard width")
     receipts = _mapping(data["receipts"], "receipts")
     _require_keys(
         receipts,
@@ -526,6 +533,10 @@ class WorkerClient:
             self.contract = profile_contract
         else:
             self.contract = load_profile_contract(profile_contract)
+        if isinstance(self.backend, MockBackend):
+            self.backend._configure_worker_shard_bits(
+                int(self.contract.namespace["shard_bits"])
+            )
 
     def spawn(self, role: str, public_instance_id: str, *, slot: int = 0) -> WorkerControlResult:
         """Submit a bounded Queen spawn request; ACK means admission only."""

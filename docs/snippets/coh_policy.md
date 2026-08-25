@@ -3,24 +3,24 @@
 <!-- Copyright 2026 Lukas Bower -->
 
 ### coh policy defaults (generated)
-- `manifest.sha256`: `10f33db7f20f039701ec8d2c5d206aba45a67f4b7e359b22dc2e24a0cc055cbd`
-- `policy.sha256`: `d1fd19a8e2d1cba3cda05f2f8f36a0a0e7eb4782c46bd10a87110b31407ddb79`
-- `coh.worker.task_abi_schema`: `worker-task-abi/v1`
-- `coh.worker.task_abi_version`: `1`
+- `manifest.sha256`: `cdbfdfa9f4de5c1cd8f8f9ef7233aff9465e15e5469cce6604bdde50872996ba`
+- `policy.sha256`: `6821ca5771217789ac12af60a45be4ba9993bcd10a241cb8240975586e175251`
+- `coh.worker.task_abi_schema`: `worker-task-abi/v2`
+- `coh.worker.task_abi_version`: `2`
 - `coh.worker.observation_schema`: `cohesix-worker-observation/v1`
 - `coh.worker.integration_evidence_schema`: `cohesix-worker-integration-evidence/v1`
-- `coh.worker.maximum_live_tasks`: `37`
+- `coh.worker.maximum_live_tasks`: `256`
 - `coh.worker.canonical_telemetry_template`: `/shard/<label>/worker/<id>/telemetry`
-- `coh.worker.shard_bits`: `8`
+- `coh.worker.shard_bits`: `6`
 - `coh.worker.legacy_worker_alias`: `true`
 - `coh.worker.lifecycle`: `absent, queued, starting, ready, closing, faulted, terminal`
 - `coh.worker.receipt`: `none, pending, confirmed, rejected, stale`
 - `coh.worker.artifact`: `missing, verified, mismatch`
 - `coh.worker.execution_proof`: `none, host-model, qemu, fresh-pi`
 - `coh.worker.role.worker-heartbeat`: declaration=`executable`, executable_slots=`1`
-- `coh.worker.role.worker-gpu`: declaration=`executable`, executable_slots=`15`
+- `coh.worker.role.worker-gpu`: declaration=`executable`, executable_slots=`127`
 - `coh.worker.role.worker-bus`: declaration=`model-only`, executable_slots=`0`
-- `coh.worker.role.worker-lora`: declaration=`executable`, executable_slots=`21`
+- `coh.worker.role.worker-lora`: declaration=`executable`, executable_slots=`128`
 - `coh.mount.root`: `/`
 - `coh.mount.allowlist`: `/proc, /queen, /shard, /worker, /log, /gpu, /host`
 - `coh.telemetry.root`: `/queen/telemetry`

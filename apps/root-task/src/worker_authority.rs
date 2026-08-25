@@ -62,12 +62,12 @@ pub struct WorkerSchedulingEvidence {
     pub priority: u8,
     /// Non-MCS domain evidence.
     pub domain: u8,
-    /// Non-MCS bounded service-turn fallback.
+    /// Bounded executor service quantum.
     pub service_turn_budget: u16,
-    /// MCS budget in microseconds, or zero for non-MCS profiles.
-    pub mcs_budget_us: u32,
-    /// MCS period in microseconds, or zero for non-MCS profiles.
-    pub mcs_period_us: u32,
+    /// One-shot passive-Worker bootstrap budget in microseconds.
+    pub bootstrap_budget_us: u32,
+    /// One-shot passive-Worker bootstrap period in microseconds.
+    pub bootstrap_period_us: u32,
     /// Timeout endpoint badge, or zero for non-MCS profiles.
     pub timeout_endpoint_badge: u64,
     /// Whether consumed-budget evidence is generated for this profile.
@@ -236,8 +236,8 @@ pub fn scheduling_evidence() -> WorkerSchedulingEvidence {
         priority: scheduling.priority,
         domain: scheduling.domain,
         service_turn_budget: scheduling.service_turn_budget,
-        mcs_budget_us: scheduling.mcs_budget_us,
-        mcs_period_us: scheduling.mcs_period_us,
+        bootstrap_budget_us: scheduling.bootstrap_budget_us,
+        bootstrap_period_us: scheduling.bootstrap_period_us,
         timeout_endpoint_badge: scheduling.timeout_endpoint_badge,
         consumed_budget_evidence: scheduling.consumed_budget_evidence,
     }
@@ -337,10 +337,10 @@ mod tests {
     #[test]
     fn mcs_scheduling_evidence_is_complete() {
         let evidence = scheduling_evidence();
-        assert_eq!(evidence.profile, WorkerSchedulingProfile::Mcs);
+        assert_eq!(evidence.profile, WorkerSchedulingProfile::McsPassive);
         assert!(evidence.service_turn_budget > 0);
-        assert!(evidence.mcs_budget_us > 0);
-        assert!(evidence.mcs_period_us >= evidence.mcs_budget_us);
+        assert!(evidence.bootstrap_budget_us > 0);
+        assert!(evidence.bootstrap_period_us >= evidence.bootstrap_budget_us);
         assert_ne!(evidence.timeout_endpoint_badge, 0);
         assert!(evidence.consumed_budget_evidence);
     }

@@ -280,7 +280,7 @@ def test_is_buffer_full_error_matches() -> None:
 
 def test_lease_tracking_helpers() -> None:
     state = rest_perf.SimState(
-        bounds={},
+        bounds={"control_plane": {"lease": {"active_max_entries": 2}}},
         rest_url="http://127.0.0.1:8080",
         rng=rest_perf.random.Random(0),
         entropy=0.0,
@@ -302,6 +302,15 @@ def test_lease_tracking_helpers() -> None:
     assert set(state.active_leases) == {"lease-1", "lease-2"}
     chosen = rest_perf.choose_lease_id(state)
     assert chosen in {"lease-1", "lease-2"}
+    try:
+        rest_perf.remember_lease_id(state, "lease-3")
+    except rest_perf.RestError as error:
+        assert str(error) == (
+            "successful lease grant exceeded the generated active lease bound"
+        )
+    else:
+        raise AssertionError("lease tracking silently exceeded the generated bound")
+    assert set(state.active_leases) == {"lease-1", "lease-2"}
     rest_perf.remove_lease_id(state, "lease-1")
     assert "lease-1" not in state.active_leases
 
@@ -1575,13 +1584,13 @@ def executable_bounds(maximum: int = 3) -> dict:
                     "executable_slots": 0,
                 },
             ],
-            "task_abi_schema": "worker-task-abi/v1",
-            "task_abi_version": 1,
+            "task_abi_schema": "worker-task-abi/v2",
+            "task_abi_version": 2,
             "maximum_live_tasks": maximum,
             "canonical_telemetry_template": (
                 "/shard/<label>/worker/<id>/telemetry"
             ),
-            "shard_bits": 8,
+            "shard_bits": 6,
             "legacy_worker_alias": True,
         },
     }
@@ -1919,7 +1928,11 @@ def test_worker_projection_orders_control_receipt_completion() -> None:
 
 def test_executable_population_discovers_only_canonical_ready_workers() -> None:
     worker_id = "opaque-instance-7"
-    label = rest_perf.expected_worker_shard_label(worker_id, 8)
+    bounds = executable_bounds()
+    label = rest_perf.expected_worker_shard_label(
+        worker_id,
+        bounds["worker_runtime"]["shard_bits"],
+    )
     telemetry_path = f"/shard/{label}/worker/{worker_id}/telemetry"
     state_line = json.dumps(
         {
@@ -1965,7 +1978,7 @@ def test_executable_population_discovers_only_canonical_ready_workers() -> None:
 
     instances, snapshot = rest_perf.executable_population_snapshot(
         DummyClient(),
-        executable_bounds(),
+        bounds,
         1,
     )
     assert [instance.worker_id for instance in instances] == [worker_id]

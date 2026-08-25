@@ -12,7 +12,7 @@
 
 use core::fmt;
 use core::str;
-use core::sync::atomic::{fence, AtomicUsize, Ordering};
+use core::sync::atomic::{fence, AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
 use heapless::Vec;
 use rust_alloc::vec::Vec as AllocVec;
@@ -20,7 +20,7 @@ use sel4_sys::{seL4_CPtr, seL4_Word};
 use spin::Mutex;
 use worker_task_abi::{
     WorkerCompletionStatus, WorkerControlRecord, WorkerIdentity, WorkerRole, WorkerRuntimeInit,
-    WorkerSharedPage,
+    WorkerSharedPage, WORKER_CALL_RECOVERED_LABEL, WORKER_CALL_SUCCESS_LABEL,
 };
 
 use super::critical_tcb::CriticalTcbRuntime;
@@ -39,35 +39,456 @@ use crate::worker_supervisor::{
     self, contained_generation_precedes_reused_admit, executable_worker_slot_count,
     flat_slot_index, next_pending_worker_index, preferred_spawn_slot, role_slot_from_flat_index,
     TargetSupervisorWork, WorkerChildContract, WorkerContainmentProof, WorkerDeadlineCursor,
-    WorkerKernelBackend, WorkerLifecycleState, WorkerResumeDisposition, WorkerSupervisor,
-    WorkerSupervisorError, WorkerTerminalReason, MAX_EXECUTABLE_WORKER_SLOTS,
+    WorkerKernelBackend, WorkerLifecycleState, WorkerPendingSet, WorkerResumeDisposition,
+    WorkerSupervisor, WorkerSupervisorError, WorkerTerminalReason, MAX_EXECUTABLE_WORKER_SLOTS,
 };
 
-const ROOT_SLOT_COUNT: usize = 64;
-const FRAME_COUNT: usize = 16;
+const ROOT_SLOT_COUNT: usize = 32;
+const FRAME_COUNT: usize = 12;
 const PAGE_BYTES: usize = sel4::IPC_PAGE_BYTES;
 const TRANSLATION_SLOT_COUNT: usize = 8;
 const IMAGE_FRAME_COUNT: usize = 5;
 const SHARED_FRAME_INDEX: usize = 5;
 const IPC_FRAME_INDEX: usize = 6;
 const STACK_FRAME_START: usize = 7;
-const STACK_FRAME_COUNT: usize = 8;
-const RESERVED_FRAME_INDEX: usize = 15;
+const STACK_FRAME_COUNT: usize = 4;
+const RESERVED_FRAME_INDEX: usize = 11;
 
 const TCB_SLOT_INDEX: usize = 0;
 const CNODE_SLOT_INDEX: usize = 1;
 const VSPACE_SLOT_INDEX: usize = 2;
 const SC_SLOT_INDEX: usize = 3;
-const LIFECYCLE_NOTIFICATION_SLOT_INDEX: usize = 4;
-const FRAME_SLOT_START: usize = 5;
+const SERVICE_ENDPOINT_SLOT_INDEX: usize = 4;
+const SERVICE_REPLY_SLOT_INDEX: usize = 5;
+const FRAME_SLOT_START: usize = 6;
 const TRANSLATION_SLOT_START: usize = FRAME_SLOT_START + FRAME_COUNT;
 const SHARED_CHILD_COPY_SLOT_INDEX: usize = TRANSLATION_SLOT_START + TRANSLATION_SLOT_COUNT;
-const LIFECYCLE_SEND_SLOT_START: usize = SHARED_CHILD_COPY_SLOT_INDEX + 1;
-const STANDARD_FAULT_SLOT_INDEX: usize = LIFECYCLE_SEND_SLOT_START + 4;
+const STANDARD_FAULT_SLOT_INDEX: usize = SHARED_CHILD_COPY_SLOT_INDEX + 1;
 const TIMEOUT_FAULT_SLOT_INDEX: usize = STANDARD_FAULT_SLOT_INDEX + 1;
 
 const _: () = assert!(TIMEOUT_FAULT_SLOT_INDEX < ROOT_SLOT_COUNT);
 const _: () = assert!(STACK_FRAME_START + STACK_FRAME_COUNT == RESERVED_FRAME_INDEX);
+
+const TARGET_WORKER_EXECUTOR_INBOX_SLOT: seL4_CPtr = 3;
+const TARGET_WORKER_EXECUTOR_SELF_SIGNAL_SLOT: seL4_CPtr = 4;
+const TARGET_WORKER_EXECUTOR_COMPLETION_SIGNAL_SLOT: seL4_CPtr = 5;
+const TARGET_WORKER_EXECUTOR_CALL_SLOT_BASE: seL4_CPtr = 6;
+const TARGET_WORKER_EXECUTOR_QUEUE_STORAGE: usize = MAX_EXECUTABLE_WORKER_SLOTS + 1;
+
+/// One of the two compiler-declared passive-Worker execution lanes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TargetWorkerExecutorLane {
+    /// GPU Worker instances pinned to core 2.
+    Gpu,
+    /// Heartbeat and LoRA Worker instances pinned to core 3.
+    Lora,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct WorkerExecutorRequest {
+    flat_index: usize,
+    sequence: u64,
+    call_label: u64,
+    identity: WorkerIdentity,
+}
+
+struct AtomicWorkerExecutorRequest {
+    flat_index: AtomicUsize,
+    sequence: AtomicU64,
+    call_label: AtomicU64,
+    role: AtomicUsize,
+    role_slot: AtomicUsize,
+    lease_epoch: AtomicU64,
+    supervisor_generation: AtomicU64,
+    cap_generation: AtomicU64,
+}
+
+impl AtomicWorkerExecutorRequest {
+    const fn new() -> Self {
+        Self {
+            flat_index: AtomicUsize::new(0),
+            sequence: AtomicU64::new(0),
+            call_label: AtomicU64::new(0),
+            role: AtomicUsize::new(0),
+            role_slot: AtomicUsize::new(0),
+            lease_epoch: AtomicU64::new(0),
+            supervisor_generation: AtomicU64::new(0),
+            cap_generation: AtomicU64::new(0),
+        }
+    }
+
+    fn store(&self, request: WorkerExecutorRequest) {
+        self.flat_index.store(request.flat_index, Ordering::Relaxed);
+        self.sequence.store(request.sequence, Ordering::Relaxed);
+        self.call_label.store(request.call_label, Ordering::Relaxed);
+        self.role
+            .store(request.identity.role as usize, Ordering::Relaxed);
+        self.role_slot
+            .store(request.identity.slot as usize, Ordering::Relaxed);
+        self.lease_epoch
+            .store(request.identity.lease_epoch, Ordering::Relaxed);
+        self.supervisor_generation
+            .store(request.identity.supervisor_generation, Ordering::Relaxed);
+        self.cap_generation
+            .store(request.identity.cap_generation, Ordering::Relaxed);
+    }
+
+    fn load(&self) -> Option<WorkerExecutorRequest> {
+        let role = WorkerRole::from_raw(self.role.load(Ordering::Relaxed) as u16).ok()?;
+        let identity = WorkerIdentity::new(
+            role,
+            self.role_slot.load(Ordering::Relaxed) as u32,
+            self.lease_epoch.load(Ordering::Relaxed),
+            self.supervisor_generation.load(Ordering::Relaxed),
+            self.cap_generation.load(Ordering::Relaxed),
+        );
+        identity.validate_for_role(role).ok()?;
+        let request = WorkerExecutorRequest {
+            flat_index: self.flat_index.load(Ordering::Relaxed),
+            sequence: self.sequence.load(Ordering::Relaxed),
+            call_label: self.call_label.load(Ordering::Relaxed),
+            identity,
+        };
+        (request.flat_index < MAX_EXECUTABLE_WORKER_SLOTS
+            && request.sequence != 0
+            && request.call_label != 0)
+            .then_some(request)
+    }
+}
+
+struct WorkerExecutorRequestQueue {
+    cells: [AtomicWorkerExecutorRequest; TARGET_WORKER_EXECUTOR_QUEUE_STORAGE],
+    head: AtomicUsize,
+    tail: AtomicUsize,
+    producer_active: AtomicBool,
+    consumer_active: AtomicBool,
+}
+
+impl WorkerExecutorRequestQueue {
+    const fn new() -> Self {
+        Self {
+            cells: [const { AtomicWorkerExecutorRequest::new() };
+                TARGET_WORKER_EXECUTOR_QUEUE_STORAGE],
+            head: AtomicUsize::new(0),
+            tail: AtomicUsize::new(0),
+            producer_active: AtomicBool::new(false),
+            consumer_active: AtomicBool::new(false),
+        }
+    }
+
+    fn publish(&self, request: WorkerExecutorRequest) -> Result<(), WorkerSupervisorError> {
+        self.producer_active
+            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .map_err(|_| WorkerSupervisorError::Backend)?;
+        let head = self.head.load(Ordering::Relaxed);
+        let next = (head + 1) % TARGET_WORKER_EXECUTOR_QUEUE_STORAGE;
+        if next == self.tail.load(Ordering::Acquire) {
+            self.producer_active.store(false, Ordering::Release);
+            return Err(WorkerSupervisorError::ControlBusy);
+        }
+        self.cells[head].store(request);
+        self.head.store(next, Ordering::Release);
+        self.producer_active.store(false, Ordering::Release);
+        Ok(())
+    }
+
+    fn take(&self) -> Result<Option<WorkerExecutorRequest>, WorkerSupervisorError> {
+        self.consumer_active
+            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .map_err(|_| WorkerSupervisorError::Backend)?;
+        let tail = self.tail.load(Ordering::Relaxed);
+        if tail == self.head.load(Ordering::Acquire) {
+            self.consumer_active.store(false, Ordering::Release);
+            return Ok(None);
+        }
+        let request = self.cells[tail]
+            .load()
+            .ok_or(WorkerSupervisorError::InvalidRecord);
+        if request.is_ok() {
+            self.tail.store(
+                (tail + 1) % TARGET_WORKER_EXECUTOR_QUEUE_STORAGE,
+                Ordering::Release,
+            );
+        }
+        self.consumer_active.store(false, Ordering::Release);
+        request.map(Some)
+    }
+
+    fn pending(&self) -> usize {
+        let head = self.head.load(Ordering::Acquire);
+        let tail = self.tail.load(Ordering::Acquire);
+        if head >= tail {
+            head - tail
+        } else {
+            TARGET_WORKER_EXECUTOR_QUEUE_STORAGE - tail + head
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct WorkerExecutorCompletion {
+    flat_index: usize,
+    sequence: u64,
+}
+
+struct AtomicWorkerExecutorCompletion {
+    flat_index: AtomicUsize,
+    sequence: AtomicU64,
+}
+
+impl AtomicWorkerExecutorCompletion {
+    const fn new() -> Self {
+        Self {
+            flat_index: AtomicUsize::new(0),
+            sequence: AtomicU64::new(0),
+        }
+    }
+
+    fn store(&self, completion: WorkerExecutorCompletion) {
+        self.flat_index
+            .store(completion.flat_index, Ordering::Relaxed);
+        self.sequence.store(completion.sequence, Ordering::Relaxed);
+    }
+
+    fn load(&self) -> Option<WorkerExecutorCompletion> {
+        let completion = WorkerExecutorCompletion {
+            flat_index: self.flat_index.load(Ordering::Relaxed),
+            sequence: self.sequence.load(Ordering::Relaxed),
+        };
+        (completion.flat_index < MAX_EXECUTABLE_WORKER_SLOTS && completion.sequence != 0)
+            .then_some(completion)
+    }
+}
+
+struct WorkerExecutorCompletionQueue {
+    cells: [AtomicWorkerExecutorCompletion; TARGET_WORKER_EXECUTOR_QUEUE_STORAGE],
+    head: AtomicUsize,
+    tail: AtomicUsize,
+}
+
+impl WorkerExecutorCompletionQueue {
+    const fn new() -> Self {
+        Self {
+            cells: [const { AtomicWorkerExecutorCompletion::new() };
+                TARGET_WORKER_EXECUTOR_QUEUE_STORAGE],
+            head: AtomicUsize::new(0),
+            tail: AtomicUsize::new(0),
+        }
+    }
+
+    fn publish(&self, completion: WorkerExecutorCompletion) -> Result<(), WorkerSupervisorError> {
+        let head = self.head.load(Ordering::Relaxed);
+        let next = (head + 1) % TARGET_WORKER_EXECUTOR_QUEUE_STORAGE;
+        if next == self.tail.load(Ordering::Acquire) {
+            return Err(WorkerSupervisorError::Backend);
+        }
+        self.cells[head].store(completion);
+        self.head.store(next, Ordering::Release);
+        Ok(())
+    }
+
+    fn take(&self) -> Result<Option<WorkerExecutorCompletion>, WorkerSupervisorError> {
+        let tail = self.tail.load(Ordering::Relaxed);
+        if tail == self.head.load(Ordering::Acquire) {
+            return Ok(None);
+        }
+        let completion = self.cells[tail]
+            .load()
+            .ok_or(WorkerSupervisorError::InvalidRecord)?;
+        self.tail.store(
+            (tail + 1) % TARGET_WORKER_EXECUTOR_QUEUE_STORAGE,
+            Ordering::Release,
+        );
+        Ok(Some(completion))
+    }
+
+    fn pending(&self) -> usize {
+        let head = self.head.load(Ordering::Acquire);
+        let tail = self.tail.load(Ordering::Acquire);
+        if head >= tail {
+            head - tail
+        } else {
+            TARGET_WORKER_EXECUTOR_QUEUE_STORAGE - tail + head
+        }
+    }
+}
+
+static TARGET_GPU_EXECUTOR_REQUESTS: WorkerExecutorRequestQueue = WorkerExecutorRequestQueue::new();
+static TARGET_LORA_EXECUTOR_REQUESTS: WorkerExecutorRequestQueue =
+    WorkerExecutorRequestQueue::new();
+static TARGET_GPU_EXECUTOR_COMPLETIONS: WorkerExecutorCompletionQueue =
+    WorkerExecutorCompletionQueue::new();
+static TARGET_LORA_EXECUTOR_COMPLETIONS: WorkerExecutorCompletionQueue =
+    WorkerExecutorCompletionQueue::new();
+
+fn executor_lane_for_role(role: WorkerRole) -> TargetWorkerExecutorLane {
+    match role {
+        WorkerRole::Gpu => TargetWorkerExecutorLane::Gpu,
+        WorkerRole::Heartbeat | WorkerRole::Lora => TargetWorkerExecutorLane::Lora,
+    }
+}
+
+fn executor_lane_slot(identity: WorkerIdentity) -> Result<usize, WorkerSupervisorError> {
+    match identity.worker_role()? {
+        WorkerRole::Gpu => {
+            usize::try_from(identity.slot).map_err(|_| WorkerSupervisorError::Backend)
+        }
+        WorkerRole::Heartbeat if identity.slot == 0 => Ok(0),
+        WorkerRole::Lora => usize::try_from(identity.slot)
+            .map_err(|_| WorkerSupervisorError::Backend)?
+            .checked_add(1)
+            .ok_or(WorkerSupervisorError::Backend),
+        WorkerRole::Heartbeat => Err(WorkerSupervisorError::InvalidRecord),
+    }
+}
+
+fn executor_requests(lane: TargetWorkerExecutorLane) -> &'static WorkerExecutorRequestQueue {
+    match lane {
+        TargetWorkerExecutorLane::Gpu => &TARGET_GPU_EXECUTOR_REQUESTS,
+        TargetWorkerExecutorLane::Lora => &TARGET_LORA_EXECUTOR_REQUESTS,
+    }
+}
+
+fn executor_completions(lane: TargetWorkerExecutorLane) -> &'static WorkerExecutorCompletionQueue {
+    match lane {
+        TargetWorkerExecutorLane::Gpu => &TARGET_GPU_EXECUTOR_COMPLETIONS,
+        TargetWorkerExecutorLane::Lora => &TARGET_LORA_EXECUTOR_COMPLETIONS,
+    }
+}
+
+fn target_worker_executor_fail(reason: &'static str) -> ! {
+    crate::debug_uart::debug_uart_line(reason);
+    // The executor CSpace never contains this deliberately invalid CPtr. The
+    // resulting standard capability fault is routed through the generated
+    // critical fault endpoint and deterministically escalated to root-emergency.
+    sel4::signal_unchecked(seL4_CPtr::MAX);
+    loop {
+        sel4::yield_now();
+    }
+}
+
+/// Run one bounded critical executor for passive Workers on its generated core.
+pub fn run_target_worker_executor(lane: TargetWorkerExecutorLane) -> ! {
+    let service_quantum = usize::from(
+        generated::worker_runtime_config()
+            .scheduling
+            .service_turn_budget,
+    );
+    if service_quantum == 0 || service_quantum > MAX_EXECUTABLE_WORKER_SLOTS {
+        target_worker_executor_fail("[critical] Worker executor quantum invalid");
+    }
+    loop {
+        let mut badge = 0;
+        let _ = sel4::wait(TARGET_WORKER_EXECUTOR_INBOX_SLOT, &mut badge);
+        if badge != 1 {
+            target_worker_executor_fail("[critical] Worker executor wake badge invalid");
+        }
+        let queue = executor_requests(lane);
+        let completions = executor_completions(lane);
+        let mut attempted = 0usize;
+        let mut completed = 0usize;
+        while attempted < service_quantum {
+            let request = match queue.take() {
+                Ok(Some(request)) => request,
+                Ok(None) => break,
+                Err(_) => target_worker_executor_fail("[critical] Worker executor queue invalid"),
+            };
+            attempted += 1;
+            if executor_lane_for_role(request.identity.worker_role().unwrap_or_else(|_| {
+                target_worker_executor_fail("[critical] Worker executor role invalid")
+            })) != lane
+            {
+                target_worker_executor_fail("[critical] Worker executor lane mismatch");
+            }
+            let lane_slot = executor_lane_slot(request.identity).unwrap_or_else(|_| {
+                target_worker_executor_fail("[critical] Worker executor slot invalid")
+            });
+            let call_cap = TARGET_WORKER_EXECUTOR_CALL_SLOT_BASE
+                .checked_add(lane_slot as seL4_CPtr)
+                .unwrap_or_else(|| {
+                    target_worker_executor_fail("[critical] Worker executor CPtr overflow")
+                });
+            if super::critical_tcb::arm_target_worker_call(
+                request.flat_index,
+                request.sequence,
+                request.identity,
+            )
+            .is_err()
+            {
+                target_worker_executor_fail("[critical] Worker executor recovery arm failed");
+            }
+            let request_tag = sel4_sys::seL4_MessageInfo::new(request.call_label, 0, 0, 4);
+            let (reply_tag, reply_mrs) = sel4::call_with_message_registers_unchecked(
+                call_cap,
+                request_tag,
+                [
+                    request.sequence as seL4_Word,
+                    request.identity.slot as seL4_Word,
+                    request.identity.supervisor_generation as seL4_Word,
+                    request.identity.cap_generation as seL4_Word,
+                ],
+            );
+            let call_completion = super::critical_tcb::finish_target_worker_call(
+                request.flat_index,
+                request.sequence,
+            )
+            .unwrap_or_else(|_| {
+                target_worker_executor_fail("[critical] Worker executor recovery finish failed")
+            });
+            match call_completion {
+                super::critical_tcb::TargetWorkerCallCompletion::Recovered {
+                    request_sequence,
+                    fault_sequence,
+                    ..
+                } => {
+                    if reply_tag.label() != WORKER_CALL_RECOVERED_LABEL
+                        || reply_tag.length() != 4
+                        || request_sequence != request.sequence
+                        || fault_sequence == 0
+                        || reply_mrs[0] != request.sequence
+                        || reply_mrs[2] != request.identity.supervisor_generation
+                        || reply_mrs[3] != request.identity.cap_generation
+                    {
+                        target_worker_executor_fail(
+                            "[critical] Worker executor recovery reply invalid",
+                        );
+                    }
+                }
+                super::critical_tcb::TargetWorkerCallCompletion::Normal => {
+                    if reply_tag.label() != WORKER_CALL_SUCCESS_LABEL
+                        || reply_tag.length() != 4
+                        || reply_tag.extra_caps() != 0
+                        || reply_tag.caps_unwrapped() != 0
+                        || reply_mrs[0] != request.sequence
+                        || WorkerCompletionStatus::from_raw(reply_mrs[1] as u16).is_err()
+                        || reply_mrs[2] != request.identity.supervisor_generation
+                        || reply_mrs[3] != request.identity.cap_generation
+                    {
+                        target_worker_executor_fail("[critical] Worker executor reply invalid");
+                    }
+                    if completions
+                        .publish(WorkerExecutorCompletion {
+                            flat_index: request.flat_index,
+                            sequence: request.sequence,
+                        })
+                        .is_err()
+                    {
+                        target_worker_executor_fail(
+                            "[critical] Worker executor completion queue full",
+                        );
+                    }
+                    completed += 1;
+                }
+            }
+        }
+        if completed != 0 {
+            sel4::signal_unchecked(TARGET_WORKER_EXECUTOR_COMPLETION_SIGNAL_SLOT);
+        }
+        if queue.pending() != 0 {
+            sel4::signal_unchecked(TARGET_WORKER_EXECUTOR_SELF_SIGNAL_SLOT);
+        }
+    }
+}
 
 const TARGET_WORKER_SERVICE_BOUND: usize = 16;
 const TARGET_WORKER_IMMEDIATE_QUANTUM: usize = TARGET_WORKER_SERVICE_BOUND - 1;
@@ -220,7 +641,7 @@ struct TargetWorkerProjection {
     control_sequence: u64,
     max_supervisor_generation: u64,
     slot_count: usize,
-    pending_control_bits: u64,
+    pending_control_bits: WorkerPendingSet,
     pending_controls: [Option<WorkerControlRecord>; MAX_EXECUTABLE_WORKER_SLOTS],
     slots: [Option<TargetWorkerProjectionSlot>; MAX_EXECUTABLE_WORKER_SLOTS],
 }
@@ -232,7 +653,7 @@ impl TargetWorkerProjection {
             control_sequence: 0,
             max_supervisor_generation: 0,
             slot_count: 0,
-            pending_control_bits: 0,
+            pending_control_bits: WorkerPendingSet::empty(),
             pending_controls: [None; MAX_EXECUTABLE_WORKER_SLOTS],
             slots: [None; MAX_EXECUTABLE_WORKER_SLOTS],
         }
@@ -244,7 +665,7 @@ impl TargetWorkerProjection {
         }
         self.control_sequence = 0;
         self.max_supervisor_generation = 0;
-        self.pending_control_bits = 0;
+        self.pending_control_bits = WorkerPendingSet::empty();
         for pending in &mut self.pending_controls {
             *pending = None;
         }
@@ -274,6 +695,32 @@ impl TargetWorkerProjection {
             .get_mut(index)
             .and_then(Option::as_mut)
             .ok_or(WorkerSupervisorError::RoleNotExecutable)
+    }
+
+    fn namespace_by_public_id(
+        &self,
+        public_id: &str,
+    ) -> Result<TargetWorkerNamespaceSnapshot, WorkerSupervisorError> {
+        self.slots[..self.slot_count]
+            .iter()
+            .flatten()
+            .find(|slot| slot.namespace.public_id() == Some(public_id))
+            .map(|slot| slot.namespace)
+            .ok_or(WorkerSupervisorError::InvalidRecord)
+    }
+
+    fn namespace_for_identity(
+        &self,
+        identity: WorkerIdentity,
+    ) -> Result<TargetWorkerNamespaceSnapshot, WorkerSupervisorError> {
+        let role = identity
+            .worker_role()
+            .map_err(|_| WorkerSupervisorError::RoleNotExecutable)?;
+        let snapshot = self.slot(flat_slot_index(role, identity.slot)?)?.namespace;
+        if snapshot.identity != Some(identity) {
+            return Err(WorkerSupervisorError::InvalidGeneration);
+        }
+        Ok(snapshot)
     }
 
     fn next_control_sequence(&mut self) -> Result<u64, WorkerSupervisorError> {
@@ -406,7 +853,7 @@ impl TargetWorkerProjection {
             (lifecycle, identity, slot.namespace.role, slot.role_slot)
         };
         self.pending_controls[index] = None;
-        self.pending_control_bits &= !(1u64 << index);
+        self.pending_control_bits.remove(index)?;
         Ok(Some(CriticalWorkerControlRecord {
             sequence: self.next_control_sequence()?,
             task_index: worker_task_index(role, role_slot)?,
@@ -431,8 +878,7 @@ impl TargetWorkerProjection {
             .worker_role()
             .map_err(|_| WorkerSupervisorError::RoleNotExecutable)?;
         let index = flat_slot_index(role, control.identity.slot)?;
-        let pending_bit = 1u64 << index;
-        if self.pending_controls[index].is_some() || self.pending_control_bits & pending_bit != 0 {
+        if self.pending_controls[index].is_some() || self.pending_control_bits.contains(index)? {
             return Err(WorkerSupervisorError::ControlBusy);
         }
         let slot = self.slot_mut(index)?;
@@ -461,7 +907,7 @@ impl TargetWorkerProjection {
             .checked_add(1)
             .ok_or(WorkerSupervisorError::InvalidGeneration)?;
         self.pending_controls[index] = Some(control);
-        self.pending_control_bits |= pending_bit;
+        self.pending_control_bits.insert(index)?;
         Ok(())
     }
 }
@@ -471,7 +917,7 @@ struct TargetWorkerProjectionCheckpoint {
     index: usize,
     slot: Option<TargetWorkerProjectionSlot>,
     pending_control: Option<WorkerControlRecord>,
-    pending_control_bits: u64,
+    pending_control_bits: WorkerPendingSet,
     control_sequence: u64,
     max_supervisor_generation: u64,
 }
@@ -550,6 +996,25 @@ pub fn target_worker_namespace_snapshots(
         .flatten()
         .map(|slot| slot.namespace)
         .collect()
+}
+
+/// Return one bounded namespace projection without materialising the complete
+/// executable-Worker population.
+pub fn target_worker_namespace_snapshot_by_public_id(
+    public_id: &str,
+) -> Result<TargetWorkerNamespaceSnapshot, WorkerSupervisorError> {
+    TARGET_WORKER_PROJECTION
+        .lock()
+        .namespace_by_public_id(public_id)
+}
+
+/// Return the exact generation-bound namespace projection in constant time.
+pub fn target_worker_namespace_snapshot_for_identity(
+    identity: WorkerIdentity,
+) -> Result<TargetWorkerNamespaceSnapshot, WorkerSupervisorError> {
+    TARGET_WORKER_PROJECTION
+        .lock()
+        .namespace_for_identity(identity)
 }
 
 /// Admit one existing Queen spawn request to the bounded critical handoff.
@@ -778,7 +1243,7 @@ fn update_target_worker_projection(
     }
     if matches!(snapshot.lifecycle, WorkerLifecycleState::Terminal) {
         projection.pending_controls[index] = None;
-        projection.pending_control_bits &= !(1u64 << index);
+        projection.pending_control_bits.remove(index)?;
         projection.slot_mut(index)?.runtime_init = None;
     }
     Ok(())
@@ -817,7 +1282,7 @@ fn take_next_target_worker_operation(
 ) -> Result<Option<(WorkerRole, u32, WorkerControlRecord)>, WorkerSupervisorError> {
     let mut projection = TARGET_WORKER_PROJECTION.lock();
     let Some((index, successor)) = next_pending_worker_index(
-        projection.pending_control_bits,
+        &projection.pending_control_bits,
         *next,
         projection.slot_count,
     )?
@@ -830,7 +1295,7 @@ fn take_next_target_worker_operation(
     let control = projection.pending_controls[index]
         .take()
         .ok_or(WorkerSupervisorError::InvalidState)?;
-    projection.pending_control_bits &= !(1u64 << index);
+    projection.pending_control_bits.remove(index)?;
     let (role, role_slot) = role_slot_from_flat_index(index)?;
     Ok(Some((role, role_slot, control)))
 }
@@ -912,6 +1377,7 @@ struct TargetWorkerSlot {
     reservation_live: bool,
     standard_fault_minted: bool,
     timeout_fault_minted: bool,
+    recovery_reply_registered: bool,
     image_sha256: [u8; 32],
     image_mapped: bool,
     standard_fault_badge: u64,
@@ -932,9 +1398,9 @@ impl TargetWorkerSlot {
             || admission.per_slot.vspaces != 1
             || admission.per_slot.page_tables as usize != TRANSLATION_SLOT_COUNT
             || admission.per_slot.frames as usize != FRAME_COUNT
-            || admission.per_slot.notifications != 1
-            || admission.per_slot.endpoints != 0
-            || admission.per_slot.reply_objects != 0
+            || admission.per_slot.notifications != 0
+            || admission.per_slot.endpoints != 1
+            || admission.per_slot.reply_objects != 1
             || admission.per_slot.scheduling_contexts != 1
             || admission.per_slot.cspace_slots as usize != ROOT_SLOT_COUNT
             || !admission.per_slot.untyped_bytes.is_power_of_two()
@@ -989,6 +1455,7 @@ impl TargetWorkerSlot {
             reservation_live: false,
             standard_fault_minted: false,
             timeout_fault_minted: false,
+            recovery_reply_registered: false,
             image_sha256: [0; 32],
             image_mapped: false,
             standard_fault_badge: 0,
@@ -1021,6 +1488,7 @@ impl TargetWorkerSlot {
         self.reservation_live = false;
         self.standard_fault_minted = false;
         self.timeout_fault_minted = false;
+        self.recovery_reply_registered = false;
         self.image_sha256 = [0; 32];
         self.image_mapped = false;
         self.standard_fault_badge = 0;
@@ -1300,17 +1768,93 @@ impl TargetWorkerRuntime {
         {
             return Err(WorkerSupervisorError::InvalidRecord);
         }
+
+        if badge & abi.gpu_wake_bit != 0 {
+            self.drain_executor_completions(TargetWorkerExecutorLane::Gpu)?;
+        }
+        if badge & (abi.heartbeat_wake_bit | abi.lora_wake_bit) != 0 {
+            self.drain_executor_completions(TargetWorkerExecutorLane::Lora)?;
+        }
+
+        // A role badge is only a coalesced scheduling hint. Exact steady-state
+        // completions were consumed from the trusted executor queues above;
+        // the role scan is needed only for bootstrap READY records written by
+        // passive children before they enter their endpoint receive boundary.
+        // Other claimed slots in the same role may legitimately still be
+        // Queued, Ready, Closing, Faulted, or Terminal.
         for (role, bit) in role_bits {
             if badge & bit != 0 {
                 for role_slot in
                     0..u32::try_from(crate::worker_supervisor::executable_slots_for_role(role)?)
                         .map_err(|_| WorkerSupervisorError::NotEnabled)?
                 {
-                    if target_worker_claimed(role, role_slot) {
+                    if target_worker_claimed(role, role_slot)
+                        && self.supervisor.snapshot(role, role_slot)?.lifecycle
+                            == WorkerLifecycleState::Starting
+                    {
                         self.handle_slot_records(role, role_slot)?;
                     }
                 }
             }
+        }
+        Ok(())
+    }
+
+    fn drain_executor_completions(
+        &mut self,
+        lane: TargetWorkerExecutorLane,
+    ) -> Result<(), WorkerSupervisorError> {
+        let queue = executor_completions(lane);
+        let quantum = usize::from(
+            generated::worker_runtime_config()
+                .scheduling
+                .service_turn_budget,
+        );
+        if quantum == 0 || quantum > MAX_EXECUTABLE_WORKER_SLOTS {
+            return Err(WorkerSupervisorError::InvalidRecord);
+        }
+        for _ in 0..quantum {
+            let Some(completion) = queue.take()? else {
+                return Ok(());
+            };
+            let (role, role_slot) = role_slot_from_flat_index(completion.flat_index)?;
+            if executor_lane_for_role(role) != lane {
+                return Err(WorkerSupervisorError::InvalidRecord);
+            }
+            self.last_service_context.role = Some(role);
+            self.last_service_context.role_slot = role_slot;
+            let pointer = self
+                .supervisor
+                .backend()
+                .shared_page_ptr(role, role_slot)
+                .ok_or(WorkerSupervisorError::InvalidState)?;
+            if read_worker_records(pointer)
+                .completion
+                .map(|record| record.sequence)
+                != Some(completion.sequence)
+            {
+                return Err(WorkerSupervisorError::InvalidRecord);
+            }
+            self.handle_slot_records(role, role_slot)?;
+        }
+        if queue.pending() != 0 {
+            let signal = match lane {
+                TargetWorkerExecutorLane::Gpu => {
+                    self.supervisor
+                        .backend()
+                        .critical
+                        .signals
+                        .worker_executor_completion_gpu
+                }
+                TargetWorkerExecutorLane::Lora => {
+                    self.supervisor
+                        .backend()
+                        .critical
+                        .signals
+                        .worker_executor_completion_lora
+                }
+            };
+            sel4::signal_unchecked(signal);
         }
         Ok(())
     }
@@ -1818,20 +2362,27 @@ impl TargetWorkerBackend {
         hal.env
             .create_revoke_anchor_vspace_root(slot.anchor, slot.slots[VSPACE_SLOT_INDEX])
             .map_err(map_vspace_error)?;
-        let temporal = temporal_for(slot.role, slot.role_slot)?;
+        let scheduling = generated::worker_runtime_config().scheduling;
         retype(
             hal,
             slot.anchor,
             slot.slots[SC_SLOT_INDEX],
             sel4_sys::seL4_SchedContextObject as seL4_Word,
-            seL4_Word::from(temporal.scheduling_context_bits),
+            seL4_Word::from(scheduling.bootstrap_scheduling_context_bits),
         )?;
         retype(
             hal,
             slot.anchor,
-            slot.slots[LIFECYCLE_NOTIFICATION_SLOT_INDEX],
-            sel4_sys::seL4_NotificationObject as seL4_Word,
-            sel4_sys::seL4_NotificationBits as seL4_Word,
+            slot.slots[SERVICE_ENDPOINT_SLOT_INDEX],
+            sel4_sys::seL4_EndpointObject as seL4_Word,
+            sel4_sys::seL4_EndpointBits as seL4_Word,
+        )?;
+        retype(
+            hal,
+            slot.anchor,
+            slot.slots[SERVICE_REPLY_SLOT_INDEX],
+            sel4_sys::seL4_ReplyObject as seL4_Word,
+            sel4_sys::SEL4_MCS_REPLY_BITS,
         )?;
         for frame_index in 0..FRAME_COUNT {
             retype(
@@ -1843,7 +2394,7 @@ impl TargetWorkerBackend {
             )?;
         }
 
-        install_notification_caps(hal, critical, slot, contract)?;
+        install_worker_caps(hal, critical, slot, contract, index)?;
         install_fault_caps(hal, critical, slot)?;
         Ok(TargetWorkerBundle {
             slot_index: u8::try_from(index).map_err(|_| WorkerSupervisorError::Backend)?,
@@ -1858,6 +2409,11 @@ impl TargetWorkerBackend {
         let hal = unsafe { &mut *(hal_ptr as *mut KernelHal<'static>) };
         if slot.tcb_created {
             let _ = sel4::suspend_tcb(slot.slots[TCB_SLOT_INDEX]);
+        }
+        if slot.recovery_reply_registered {
+            super::critical_tcb::revoke_target_worker_recovery_reply(index)
+                .map_err(|_| WorkerSupervisorError::ContainmentIncomplete)?;
+            slot.recovery_reply_registered = false;
         }
         delete_external_fault_caps(hal, slot, false)?;
         if slot.anchor_created {
@@ -2032,8 +2588,8 @@ impl WorkerKernelBackend for TargetWorkerBackend {
             endpoint_badge,
             slot.standard_fault_badge,
             admission.core,
-            temporal.budget_us,
-            temporal.period_us,
+            generated::worker_runtime_config().scheduling.bootstrap_budget_us,
+            generated::worker_runtime_config().scheduling.bootstrap_period_us,
             objects.tcbs,
             objects.cnodes,
             objects.vspaces,
@@ -2071,12 +2627,33 @@ impl WorkerKernelBackend for TargetWorkerBackend {
         Ok(WorkerResumeDisposition::Deferred)
     }
 
+    fn finish_ready(&mut self, bundle: Self::Bundle) -> Result<(), WorkerSupervisorError> {
+        let index = usize::from(bundle.slot_index);
+        let slot = self
+            .slots
+            .get_mut(index)
+            .ok_or(WorkerSupervisorError::InvalidGeneration)?;
+        slot.validate_handle(bundle)?;
+        if !slot.resumed || !slot.sc_bound {
+            return Err(WorkerSupervisorError::InvalidState);
+        }
+        sel4::unbind_sched_context_object(
+            slot.slots[SC_SLOT_INDEX],
+            slot.slots[TCB_SLOT_INDEX],
+            None,
+        )
+        .map_err(|_| WorkerSupervisorError::Backend)?;
+        slot.sc_bound = false;
+        Ok(())
+    }
+
     fn publish_control(
         &mut self,
         bundle: Self::Bundle,
         control: WorkerControlRecord,
-        control_bit: u64,
+        call_label: u64,
     ) -> Result<(), WorkerSupervisorError> {
+        let critical = self.critical;
         let index = usize::from(bundle.slot_index);
         let slot = self
             .slots
@@ -2098,21 +2675,23 @@ impl WorkerKernelBackend for TargetWorkerBackend {
                 control.sequence,
             );
         }
-        signal_lifecycle_cap(slot, control_bit)
+        enqueue_worker_call(critical, index, slot, control.sequence, call_label)
     }
 
-    fn signal_lifecycle(
+    fn request_lifecycle(
         &mut self,
         bundle: Self::Bundle,
-        badge: u64,
+        sequence: u64,
+        call_label: u64,
     ) -> Result<(), WorkerSupervisorError> {
+        let critical = self.critical;
         let index = usize::from(bundle.slot_index);
         let slot = self
             .slots
             .get_mut(index)
             .ok_or(WorkerSupervisorError::InvalidGeneration)?;
         slot.validate_handle(bundle)?;
-        signal_lifecycle_cap(slot, badge)
+        enqueue_worker_call(critical, index, slot, sequence, call_label)
     }
 
     fn contain(
@@ -2437,11 +3016,12 @@ fn mint(
     }
 }
 
-fn install_notification_caps(
+fn install_worker_caps(
     hal: &KernelHal<'_>,
     critical: &CriticalTcbRuntime,
     slot: &mut TargetWorkerSlot,
     contract: WorkerChildContract,
+    flat_index: usize,
 ) -> Result<(), WorkerSupervisorError> {
     let root_cnode = hal.env.init_cnode_cap();
     let root_depth = sel4::word_bits() as u8;
@@ -2449,17 +3029,29 @@ fn install_notification_caps(
     let child_depth = generated::worker_runtime_config()
         .task_abi
         .child_cnode_radix_bits;
-    let lifecycle = slot.slots[LIFECYCLE_NOTIFICATION_SLOT_INDEX];
+    let endpoint = slot.slots[SERVICE_ENDPOINT_SLOT_INDEX];
     mint(
         child_cnode,
-        seL4_CPtr::from(contract.lifecycle_notification_slot),
+        seL4_CPtr::from(contract.service_endpoint_slot),
         child_depth,
         root_cnode,
-        lifecycle,
+        endpoint,
         root_depth,
         sel4_sys::seL4_CapRights::new(0, 0, 1, 0),
         0,
     )?;
+    let reply_error = sel4::cnode_copy_depth(
+        child_cnode,
+        seL4_CPtr::from(contract.service_reply_slot),
+        child_depth,
+        root_cnode,
+        slot.slots[SERVICE_REPLY_SLOT_INDEX],
+        root_depth,
+        sel4_sys::seL4_CapRights_All,
+    );
+    if reply_error != sel4_sys::seL4_NoError {
+        return Err(WorkerSupervisorError::Backend);
+    }
     mint(
         child_cnode,
         seL4_CPtr::from(contract.supervisor_wake_notification_slot),
@@ -2471,24 +3063,46 @@ fn install_notification_caps(
         seL4_Word::try_from(contract.supervisor_wake_bit)
             .map_err(|_| WorkerSupervisorError::InvalidRecord)?,
     )?;
-    let badges = [
-        contract.lifecycle_bits.control,
-        contract.lifecycle_bits.timeout,
-        contract.lifecycle_bits.shutdown,
-        contract.lifecycle_bits.revoke,
-    ];
-    for (index, badge) in badges.into_iter().enumerate() {
-        mint(
-            root_cnode,
-            slot.slots[LIFECYCLE_SEND_SLOT_START + index],
-            root_depth,
-            root_cnode,
-            lifecycle,
-            root_depth,
-            sel4_sys::seL4_CapRights::new(0, 0, 0, 1),
-            seL4_Word::try_from(badge).map_err(|_| WorkerSupervisorError::InvalidRecord)?,
-        )?;
+    let executor_id = match executor_lane_for_role(slot.role) {
+        TargetWorkerExecutorLane::Gpu => "root-worker-executor-gpu",
+        TargetWorkerExecutorLane::Lora => "root-worker-executor-lora",
+    };
+    let executor = critical
+        .handles
+        .iter()
+        .find(|handle| handle.id == executor_id)
+        .ok_or(WorkerSupervisorError::NotEnabled)?;
+    let executor_resource = generated::worker_resource_admission_config()
+        .critical_tcbs
+        .iter()
+        .find(|resource| resource.id == executor_id)
+        .ok_or(WorkerSupervisorError::NotEnabled)?;
+    let executor_slot = TARGET_WORKER_EXECUTOR_CALL_SLOT_BASE
+        .checked_add(executor_lane_slot(
+            slot.identity
+                .ok_or(WorkerSupervisorError::InvalidGeneration)?,
+        )? as seL4_CPtr)
+        .ok_or(WorkerSupervisorError::NotEnabled)?;
+    if executor_slot >= seL4_CPtr::from(executor_resource.cspace_cap_count) {
+        return Err(WorkerSupervisorError::NotEnabled);
     }
+    mint(
+        executor.cnode_cap as seL4_CPtr,
+        executor_slot,
+        executor_resource.cnode_radix_bits,
+        root_cnode,
+        endpoint,
+        root_depth,
+        sel4_sys::seL4_CapRights::new(1, 0, 0, 1),
+        seL4_Word::try_from(contract.request_badge)
+            .map_err(|_| WorkerSupervisorError::InvalidRecord)?,
+    )?;
+    super::critical_tcb::register_target_worker_recovery_reply(
+        flat_index,
+        slot.slots[SERVICE_REPLY_SLOT_INDEX],
+    )
+    .map_err(|_| WorkerSupervisorError::Backend)?;
+    slot.recovery_reply_registered = true;
     Ok(())
 }
 
@@ -2819,19 +3433,32 @@ fn admit_mcs(
     slot: &mut TargetWorkerSlot,
     temporal: TemporalTaskConfig,
 ) -> Result<(), WorkerSupervisorError> {
+    let scheduling = generated::worker_runtime_config().scheduling;
+    if temporal.execution != generated::TemporalExecution::Passive
+        || temporal.scheduling_context_bits != 0
+        || temporal.admitted
+        || scheduling.bootstrap_scheduling_context_bits
+            < generated::worker_resource_admission_config()
+                .object_bits
+                .sched_context_min
+        || scheduling.bootstrap_budget_us == 0
+        || scheduling.bootstrap_period_us < scheduling.bootstrap_budget_us
+    {
+        return Err(WorkerSupervisorError::NotEnabled);
+    }
     let sched_control = hal
         .env
-        .sched_control_for_core(temporal.sched_control_core)
+        .sched_control_for_core(temporal.core)
         .map_err(|_| WorkerSupervisorError::Backend)?;
-    let extra_refills = temporal
-        .max_refills
+    let extra_refills = scheduling
+        .bootstrap_max_refills
         .checked_sub(2)
         .ok_or(WorkerSupervisorError::NotEnabled)?;
     sel4::configure_sched_context(
         sched_control,
         slot.slots[SC_SLOT_INDEX],
-        u64::from(temporal.budget_us),
-        u64::from(temporal.period_us),
+        u64::from(scheduling.bootstrap_budget_us),
+        u64::from(scheduling.bootstrap_period_us),
         seL4_Word::from(extra_refills),
         seL4_Word::try_from(temporal.timeout_badge)
             .map_err(|_| WorkerSupervisorError::NotEnabled)?,
@@ -2881,6 +3508,11 @@ fn contain_generation(
         )
         .map_err(|_| WorkerSupervisorError::ContainmentIncomplete)?;
         slot.sc_bound = false;
+    }
+    if slot.recovery_reply_registered {
+        super::critical_tcb::revoke_target_worker_recovery_reply(index)
+            .map_err(|_| WorkerSupervisorError::ContainmentIncomplete)?;
+        slot.recovery_reply_registered = false;
     }
 
     for frame_index in 0..FRAME_COUNT {
@@ -2959,21 +3591,40 @@ fn delete_external_fault_caps(
     Ok(())
 }
 
-fn signal_lifecycle_cap(slot: &TargetWorkerSlot, badge: u64) -> Result<(), WorkerSupervisorError> {
+fn enqueue_worker_call(
+    critical: &CriticalTcbRuntime,
+    flat_index: usize,
+    slot: &TargetWorkerSlot,
+    sequence: u64,
+    call_label: u64,
+) -> Result<(), WorkerSupervisorError> {
     let contract = slot.contract.ok_or(WorkerSupervisorError::InvalidState)?;
-    let index = if badge == contract.lifecycle_bits.control {
-        0
-    } else if badge == contract.lifecycle_bits.timeout {
-        1
-    } else if badge == contract.lifecycle_bits.shutdown {
-        2
-    } else if badge == contract.lifecycle_bits.revoke {
-        3
-    } else {
+    if sequence == 0
+        || !matches!(
+            call_label,
+            label if label == contract.call_labels.control
+                || label == contract.call_labels.shutdown
+                || label == contract.call_labels.revoke
+        )
+    {
         return Err(WorkerSupervisorError::InvalidRecord);
-    };
+    }
+    let identity = slot
+        .identity
+        .ok_or(WorkerSupervisorError::InvalidGeneration)?;
+    let lane = executor_lane_for_role(slot.role);
+    executor_requests(lane).publish(WorkerExecutorRequest {
+        flat_index,
+        sequence,
+        call_label,
+        identity,
+    })?;
     fence(Ordering::Release);
-    sel4::signal_unchecked(slot.slots[LIFECYCLE_SEND_SLOT_START + index]);
+    let wake_cap = match lane {
+        TargetWorkerExecutorLane::Gpu => critical.signals.worker_executor_gpu,
+        TargetWorkerExecutorLane::Lora => critical.signals.worker_executor_lora,
+    };
+    sel4::signal_unchecked(wake_cap);
     Ok(())
 }
 

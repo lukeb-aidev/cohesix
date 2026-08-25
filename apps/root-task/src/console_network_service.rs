@@ -19,7 +19,6 @@ use heapless::Vec as HeaplessVec;
 pub const SERVICE_TASK_ID: &str = "console-network-service";
 /// Runtime READY identity accepted before packet or console admission.
 pub const READY_IDENTITY: &str = "console-network-service/v4";
-
 mod generated_image_identity {
     ::core::include!(::core::concat!(
         ::core::env!("OUT_DIR"),
@@ -59,6 +58,8 @@ pub struct ConsoleNetworkContract {
     pub revoke_anchor_bits: u8,
     /// Exact object and memory inventory retyped below the retained anchor.
     pub objects: crate::generated::KernelObjectBudget,
+    /// Whether the isolated QEMU child owns the admitted VirtIO data path.
+    pub direct_virtio: bool,
     /// Child wait notification slot.
     pub child_wake_slot: u32,
     /// Child packet-TX signal slot.
@@ -117,6 +118,8 @@ impl ConsoleNetworkContract {
     /// Validate generated object and temporal records as one construction unit.
     pub fn from_generated() -> Result<Self, BoundaryError> {
         let config = generated_config();
+        let expected_object_frames = 98 + if config.direct_virtio { 36 } else { 0 };
+        let expected_object_cspace_slots = 123 + if config.direct_virtio { 39 } else { 0 };
         if !config.enabled
             || config.abi_version != ABI_VERSION
             || config.image_id != "console-network-runtime"
@@ -124,6 +127,8 @@ impl ConsoleNetworkContract {
             || config.entry_symbol != "_start"
             || config.listener_port != cohesix_net_constants::COHESIX_TCP_CONSOLE_PORT
             || !config.single_listener
+            || (cfg!(target_os = "none")
+                && config.direct_virtio != cfg!(feature = "net-backend-virtio"))
             || config.child_cspace_slots != CHILD_CSPACE_SLOTS as u16
             || COMMAND_LINE_BYTES != cohsh_core::MAX_LINE_LEN
             || config.revoke_anchor_slot != 16_136
@@ -133,14 +138,14 @@ impl ConsoleNetworkContract {
             || config.objects.vspaces != 1
             || config.objects.page_tables != 8
             || config.objects.asids != 1
-            || config.objects.frames != 98
+            || config.objects.frames != expected_object_frames
             || config.objects.endpoints != 0
             || config.objects.notifications != 2
             || config.objects.fault_caps != 1
             || config.objects.timeout_fault_caps != 1
             || config.objects.reply_objects != 0
             || config.objects.scheduling_contexts != 1
-            || config.objects.cspace_slots != 123
+            || config.objects.cspace_slots != expected_object_cspace_slots
             || config.objects.untyped_bytes != 1_048_576
             || config.packet_rx_notification_slot != CHILD_WAKE_NOTIFICATION_SLOT
             || config.packet_tx_wake_notification_slot != PACKET_TX_WAKE_NOTIFICATION_SLOT
@@ -203,6 +208,7 @@ impl ConsoleNetworkContract {
             revoke_anchor_slot: config.revoke_anchor_slot,
             revoke_anchor_bits: config.revoke_anchor_bits,
             objects: config.objects,
+            direct_virtio: config.direct_virtio,
             child_wake_slot: config.packet_rx_notification_slot,
             packet_tx_wake_slot: config.packet_tx_wake_notification_slot,
             supervisor_wake_slot: config.supervisor_wake_notification_slot,
@@ -316,7 +322,9 @@ impl ConsoleNetworkObjectPlan {
     /// Derive the exact fixed footprint from compiler truth.
     pub fn from_generated() -> Result<Self, BoundaryError> {
         let contract = ConsoleNetworkContract::from_generated()?;
-        let fixed_frames = u32::from(contract.stack_pages).saturating_add(6);
+        let fixed_frames = u32::from(contract.stack_pages)
+            .saturating_add(6)
+            .saturating_add(if contract.direct_virtio { 34 } else { 0 });
         let image_pages = contract
             .objects
             .frames
@@ -474,6 +482,18 @@ pub enum ConsoleNetworkContainmentUnit {
     ScrubCleanSharedFrame(usize),
     /// Unmap one indexed shared frame after its clean completed.
     UnmapSharedFrame(usize),
+    /// Clear the direct QEMU IRQHandler notification binding.
+    ClearDirectIrq,
+    /// Revoke the child-held direct QEMU IRQHandler copy.
+    RevokeDirectIrqHandler,
+    /// Delete the root's direct QEMU IRQ notification cap.
+    DeleteDirectIrqNotification,
+    /// Delete the root's direct QEMU IRQHandler cap.
+    DeleteDirectIrqHandler,
+    /// Reset, unmap, and delete the directly admitted QEMU device page.
+    ResetUnmapDirectDevice,
+    /// Unmap, scrub, clean, and release one direct-device DMA frame.
+    ScrubDirectFrame(usize),
     /// Delete one indexed standard/timeout fault cap.
     DeleteFaultCap(usize),
     /// Revoke the generation anchor and reset its VSpace tracker.
@@ -488,6 +508,7 @@ pub enum ConsoleNetworkContainmentUnit {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ConsoleNetworkContainmentCursor {
     unit: ConsoleNetworkContainmentUnit,
+    direct_frame_count: u8,
 }
 
 impl Default for ConsoleNetworkContainmentCursor {
@@ -507,6 +528,16 @@ impl ConsoleNetworkContainmentCursor {
     pub const fn new() -> Self {
         Self {
             unit: ConsoleNetworkContainmentUnit::SuspendTcb,
+            direct_frame_count: 0,
+        }
+    }
+
+    /// Start with an exact bounded direct-device DMA-frame inventory.
+    #[must_use]
+    pub const fn with_direct_frames(frame_count: u8) -> Self {
+        Self {
+            unit: ConsoleNetworkContainmentUnit::SuspendTcb,
+            direct_frame_count: frame_count,
         }
     }
 
@@ -534,7 +565,33 @@ impl ConsoleNetworkContainmentCursor {
             {
                 ConsoleNetworkContainmentUnit::ScrubCleanSharedFrame(frame_index + 1)
             }
+            ConsoleNetworkContainmentUnit::UnmapSharedFrame(_) if self.direct_frame_count != 0 => {
+                ConsoleNetworkContainmentUnit::ClearDirectIrq
+            }
             ConsoleNetworkContainmentUnit::UnmapSharedFrame(_) => {
+                ConsoleNetworkContainmentUnit::DeleteFaultCap(0)
+            }
+            ConsoleNetworkContainmentUnit::ClearDirectIrq => {
+                ConsoleNetworkContainmentUnit::RevokeDirectIrqHandler
+            }
+            ConsoleNetworkContainmentUnit::RevokeDirectIrqHandler => {
+                ConsoleNetworkContainmentUnit::DeleteDirectIrqNotification
+            }
+            ConsoleNetworkContainmentUnit::DeleteDirectIrqNotification => {
+                ConsoleNetworkContainmentUnit::DeleteDirectIrqHandler
+            }
+            ConsoleNetworkContainmentUnit::DeleteDirectIrqHandler => {
+                ConsoleNetworkContainmentUnit::ResetUnmapDirectDevice
+            }
+            ConsoleNetworkContainmentUnit::ResetUnmapDirectDevice => {
+                ConsoleNetworkContainmentUnit::ScrubDirectFrame(0)
+            }
+            ConsoleNetworkContainmentUnit::ScrubDirectFrame(frame_index)
+                if frame_index + 1 < self.direct_frame_count as usize =>
+            {
+                ConsoleNetworkContainmentUnit::ScrubDirectFrame(frame_index + 1)
+            }
+            ConsoleNetworkContainmentUnit::ScrubDirectFrame(_) => {
                 ConsoleNetworkContainmentUnit::DeleteFaultCap(0)
             }
             ConsoleNetworkContainmentUnit::DeleteFaultCap(cap_index)

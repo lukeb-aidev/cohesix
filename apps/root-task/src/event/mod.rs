@@ -136,6 +136,7 @@ const fn temporal_kind_label(value: crate::generated::TemporalTaskKind) -> &'sta
         crate::generated::TemporalTaskKind::RootFault => "root-fault",
         crate::generated::TemporalTaskKind::RootEmergency => "root-emergency",
         crate::generated::TemporalTaskKind::WorkerSupervisor => "worker-supervisor",
+        crate::generated::TemporalTaskKind::WorkerExecutor => "worker-executor",
         crate::generated::TemporalTaskKind::DriverSupervisor => "driver-supervisor",
         crate::generated::TemporalTaskKind::Service => "service",
         crate::generated::TemporalTaskKind::Driver => "driver",
@@ -617,19 +618,18 @@ const QEMU_ROOT_CONTROL_QUANTUM_MIN_PROBE_UNITS: u16 = 15;
 /// only advance a cursor. Conflating the two ended saturated activations while
 /// useful MCS budget remained.
 #[cfg(all(feature = "kernel", feature = "net-console", feature = "release-qemu"))]
-const QEMU_ROOT_CONTROL_QUANTUM_MAX_WORK_COMPLETIONS: u32 = 512;
+const QEMU_ROOT_CONTROL_QUANTUM_MAX_WORK_COMPLETIONS: u32 = 1_024;
 /// Mechanical activation ceiling when the architectural counter is absent or
-/// fails closed. Pressure evidence measured 512-probe saturated activations at
-/// 1.09--3.91 ms, so four bounded probe windows are required for the existing
-/// four-millisecond counter guard to govern the fastest observed rotor without
-/// admitting an unbounded loop.
+/// fails closed. Pressure evidence measured 2,048-probe saturated activations
+/// at roughly four milliseconds, so 4,096 probes cover the dedicated-core
+/// eight-millisecond guard without admitting an unbounded loop.
 #[cfg(all(feature = "kernel", feature = "net-console", feature = "release-qemu"))]
-const QEMU_ROOT_CONTROL_QUANTUM_MAX_PROBE_UNITS: u16 = 2_048;
-/// Stop admitting fresh QEMU service units after four milliseconds. The
-/// selected root-control SC is 5.5 ms, leaving 1.5 ms for the final bounded
-/// leaf, flight-record write, and caller epilogue.
+const QEMU_ROOT_CONTROL_QUANTUM_MAX_PROBE_UNITS: u16 = 4_096;
+/// Stop admitting fresh QEMU service units after eight milliseconds. The
+/// dedicated root-control SC is 9 ms, leaving 1 ms for the final bounded leaf,
+/// flight-record write, and caller epilogue.
 #[cfg(all(feature = "kernel", feature = "net-console", feature = "release-qemu"))]
-const QEMU_ROOT_CONTROL_QUANTUM_GUARD_US: u64 = 4_000;
+const QEMU_ROOT_CONTROL_QUANTUM_GUARD_US: u64 = 8_000;
 #[cfg(all(
     feature = "kernel",
     feature = "net-console",
@@ -6239,6 +6239,7 @@ where
             {
                 break (ActivationExitReason::BudgetGuard, after);
             }
+
             if qemu_root_control_can_stop_idle(
                 service_units,
                 after.work_available,
@@ -13018,7 +13019,11 @@ where
         }
         #[cfg(all(feature = "kernel", sel4_config_kernel_mcs))]
         let mut task_index = 0_u16;
-        for task in temporal.tasks {
+        for task in temporal
+            .tasks
+            .iter()
+            .filter(|task| task.kind != crate::generated::TemporalTaskKind::Worker)
+        {
             let mut line = HeaplessString::<DEFAULT_LINE_CAPACITY>::new();
             let _ = write!(line, "[smp:mcs/v1] source=generated task={} kind={} exec={} core={} sc=0x{:04x} sc_core={} budget_us={} period_us={} deadline_us={} refills={} prio={} mcp={} timeout={} admitted={}", task.id, temporal_kind_label(task.kind), temporal_execution_label(task.execution), task.core, task.scheduling_context_slot, task.sched_control_core, task.budget_us, task.period_us, task.deadline_us, task.max_refills, task.priority, task.mcp, timeout_policy_label(task.timeout_policy), yes_no(task.admitted));
             self.emit_console_line(line.as_str());
@@ -13040,6 +13045,29 @@ where
                 }
                 task_index = task_index.saturating_add(1);
             }
+        }
+        for role in crate::generated::worker_resource_admission_config().executable_roles {
+            let Some(task) = temporal
+                .tasks
+                .iter()
+                .find(|task| task.id.starts_with(role.task_prefix))
+            else {
+                continue;
+            };
+            let mut line = HeaplessString::<DEFAULT_LINE_CAPACITY>::new();
+            let _ = write!(
+                line,
+                "[smp:mcs/v1] source=generated worker_class={} count={} exec={} core={} donor={} bootstrap_budget_us={}",
+                role.role,
+                role.executable_slots,
+                temporal_execution_label(task.execution),
+                task.core,
+                task.allowed_donors.first().copied().unwrap_or("none"),
+                crate::generated::worker_runtime_config()
+                    .scheduling
+                    .bootstrap_budget_us,
+            );
+            self.emit_console_line(line.as_str());
         }
         self.emit_console_line("[smp:mcs/v1] end");
     }
@@ -38170,11 +38198,24 @@ mod tests {
             .collect();
         assert_eq!(
             task_lines.len(),
-            crate::generated::temporal_tasks().len(),
+            crate::generated::temporal_tasks()
+                .iter()
+                .filter(|task| task.kind != crate::generated::TemporalTaskKind::Worker)
+                .count(),
             "{rendered}"
         );
         assert!(
             task_lines.iter().all(|line| line.contains("admitted=")),
+            "{rendered}"
+        );
+        assert_eq!(
+            rendered
+                .lines()
+                .filter(|line| line.contains("source=generated worker_class="))
+                .count(),
+            crate::generated::worker_resource_admission_config()
+                .executable_roles
+                .len(),
             "{rendered}"
         );
         for line in rendered.lines() {

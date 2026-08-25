@@ -3,7 +3,7 @@
 // Purpose: Enforce generated critical-TCB reserves, bounded handoffs, and exact fault ownership.
 // Author: Lukas Bower
 
-//! Runtime model for the five independent Milestone 26e root duties.
+//! Runtime model for the seven independent Milestone 26e root duties.
 //!
 //! The queues below are wakeup companions, not authority.  Required fault
 //! state lives in one durable per-slot mailbox and cannot be overwritten.  A
@@ -27,9 +27,9 @@ pub const SERVICE_FAULT_RECORD_CAPACITY: usize = 2;
 pub const DRIVER_FAULT_RECORD_CAPACITY: usize = 7;
 /// Storage ceiling covering the larger Pi profile; QEMU seals its smaller
 /// generated as-built registry without fabricating Pi-only TCBs.
-pub const FAULT_REGISTRY_CAPACITY: usize = 80;
+pub const FAULT_REGISTRY_CAPACITY: usize = 384;
 /// Number of independent critical root duties.
-pub const CRITICAL_TCB_COUNT: usize = 5;
+pub const CRITICAL_TCB_COUNT: usize = 7;
 
 /// seL4 supplies two base replenishments; manifests record the total bound.
 pub const MCS_BASE_REFILLS: u8 = 2;
@@ -40,6 +40,8 @@ const REQUIRED_CRITICAL_TCBS: [&str; CRITICAL_TCB_COUNT] = [
     "root-emergency",
     "root-worker-supervisor",
     "root-driver-supervisor",
+    "root-worker-executor-gpu",
+    "root-worker-executor-lora",
 ];
 
 /// Immutable generation identity carried by a handoff record.
@@ -1013,7 +1015,8 @@ pub fn generated_standard_fault_badge(task_id: &str) -> Option<u64> {
         | TemporalTaskKind::RootFault
         | TemporalTaskKind::RootEmergency
         | TemporalTaskKind::WorkerSupervisor
-        | TemporalTaskKind::DriverSupervisor => (
+        | TemporalTaskKind::DriverSupervisor
+        | TemporalTaskKind::WorkerExecutor => (
             handoff.critical_fault_badges,
             tasks
                 .iter()
@@ -1025,6 +1028,7 @@ pub fn generated_standard_fault_badge(task_id: &str) -> Option<u64> {
                             | TemporalTaskKind::RootEmergency
                             | TemporalTaskKind::WorkerSupervisor
                             | TemporalTaskKind::DriverSupervisor
+                            | TemporalTaskKind::WorkerExecutor
                     )
                 })
                 .position(|candidate| candidate.id == task_id)?,
@@ -1232,7 +1236,7 @@ pub const fn mcs_extra_refills(max_refills: u8) -> Result<u8, CriticalTopologyEr
     }
 }
 
-/// Exact five-duty constructed inventory.
+/// Exact seven-duty constructed inventory.
 pub struct CriticalTcbInventory {
     handles: [Option<CriticalTcbHandle>; CRITICAL_TCB_COUNT],
     len: usize,
@@ -1309,7 +1313,7 @@ impl CriticalTcbInventory {
         Ok(())
     }
 
-    /// Complete only when all five named reserves exist independently.
+    /// Complete only when all seven named reserves exist independently.
     pub fn finish(self) -> Result<[CriticalTcbHandle; CRITICAL_TCB_COUNT], CriticalTopologyError> {
         if self.len != CRITICAL_TCB_COUNT {
             return Err(CriticalTopologyError::Incomplete);
@@ -1329,7 +1333,7 @@ impl CriticalTcbInventory {
     }
 }
 
-/// Validate the five-duty generated scheduling/fault graph before allocation.
+/// Validate the seven-duty generated scheduling/fault graph before allocation.
 pub fn validate_critical_temporal_graph() -> Result<(), CriticalTopologyError> {
     CriticalHandoff::validate_generated_contract()?;
     FaultRegistry::validate_generated_capacity()
@@ -1346,6 +1350,9 @@ pub fn validate_critical_temporal_graph() -> Result<(), CriticalTopologyError> {
             "root-emergency" => TemporalTaskKind::RootEmergency,
             "root-worker-supervisor" => TemporalTaskKind::WorkerSupervisor,
             "root-driver-supervisor" => TemporalTaskKind::DriverSupervisor,
+            "root-worker-executor-gpu" | "root-worker-executor-lora" => {
+                TemporalTaskKind::WorkerExecutor
+            }
             _ => return Err(CriticalTopologyError::TemporalMismatch),
         };
         if task.kind != expected_kind

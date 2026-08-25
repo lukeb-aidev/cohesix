@@ -179,6 +179,16 @@ non-loopback binds require an explicit opt-in. See
 [API_GUIDELINES.md](API_GUIDELINES.md) for endpoint, status, and compatibility
 rules.
 
+The gateway owns one authenticated target connection and one bounded broker.
+It schedules three fixed progress classes over that connection: host-ticket
+specification ingress first, receipt/control progress second, and bulk reads or
+telemetry third. Each turn remains batch- and queue-bounded; an execution burst
+is followed by a control burst and one telemetry batch, so priority cannot
+become starvation. `/v1/fs/echo-batch` accepts one through eight same-path
+records and preserves an exact outcome per input record. It amortizes the
+internal command boundary without creating a retry, alternate target session,
+or compatibility path.
+
 ### `gpu-bridge-host`
 
 Discovers host GPUs through the compiled backend, builds the `/gpu` snapshot,
@@ -242,6 +252,14 @@ defined with the manifest-gated namespaces in
 [INTERFACES.md#host-tickets-and-federation](INTERFACES.md#host-tickets-and-federation).
 Runnable local and federated examples are in
 [OPERATOR_RECIPES.md#host-tickets-and-federation](OPERATOR_RECIPES.md#host-tickets-and-federation).
+
+An agent may use up to eight deterministic execution lanes. Ticket identity
+selects exactly one lane; each lane has its own cursor and journal, while
+provider mutation locks serialize only the provider resource that actually
+conflicts. Status transitions are published with bounded ordered batches.
+Terminal journal payloads compact only after target publication and durable
+cursor advancement; the cumulative admission-sequence fence still rejects
+replay after compaction.
 
 ### `cas-tool`
 

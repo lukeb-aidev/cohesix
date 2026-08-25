@@ -466,8 +466,21 @@ fn generated_service_image_pages(service_key: &str, label: &str) -> io::Result<u
         .get("stack_pages")
         .and_then(Value::as_u64)
         .ok_or_else(|| io::Error::other(format!("resolved {label} stack inventory is missing")))?;
+    let direct_dma_pages = if service
+        .get("direct_virtio")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        34
+    } else {
+        0
+    };
     let pages = total_frames
-        .checked_sub(stack_pages.saturating_add(6))
+        .checked_sub(
+            stack_pages
+                .saturating_add(6)
+                .saturating_add(direct_dma_pages),
+        )
         .and_then(|pages| u16::try_from(pages).ok())
         .filter(|pages| *pages != 0)
         .ok_or_else(|| {
@@ -686,8 +699,8 @@ fn emit_worker_image_identity(required: bool) -> io::Result<()> {
                 "Worker image row {index} is not the required {expected_name}/{expected_role} binding"
             )));
         }
-        if manifest_u64(image, "abi_version")? != 1
-            || manifest_u64(image, "entry_version")? != 1
+        if manifest_u64(image, "abi_version")? != 2
+            || manifest_u64(image, "entry_version")? != 2
             || manifest_string(image, "entry_symbol")? != "_start"
         {
             return Err(io::Error::other(format!(

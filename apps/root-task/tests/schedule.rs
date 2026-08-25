@@ -98,10 +98,23 @@ fn selected_qemu_schedule_is_four_core_smp_mcs_and_offline_admitted() {
     }
 
     assert_eq!(
-        active_count,
-        usize::from(resources.fault_registry.capacity) - 1
+        active_count + passive_count,
+        usize::from(resources.fault_registry.capacity)
     );
-    assert_eq!(passive_count, 1);
+    assert_eq!(
+        passive_count,
+        usize::from(generated::worker_runtime_config().max_workers) + 1,
+        "the passive set is one NineDoor service plus every isolated Worker",
+    );
+    assert_eq!(
+        authority
+            .tasks
+            .iter()
+            .filter(|task| task.id.starts_with("root-worker-executor-"))
+            .count(),
+        2,
+        "the 256 passive Workers share exactly two bounded executor lanes",
+    );
     for (core, admission) in admission_by_core {
         let admitted = active_budget_by_core.get(&core).copied().unwrap_or(0);
         assert!(admitted <= admission.capacity_us - admission.reserve_us);

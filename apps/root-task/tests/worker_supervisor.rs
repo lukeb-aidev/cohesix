@@ -97,7 +97,7 @@ fn gpu_completion_requires_the_exact_durable_receipt_first() {
         result: nonzero_digest(5),
     };
     let control = WorkerControlRecord::staged(
-        7,
+        1,
         identity,
         WorkerAction::GpuLeaseGrant,
         WorkerOutcome::Confirmed,
@@ -154,7 +154,7 @@ fn stale_gpu_and_peft_receipts_complete_without_becoming_rejected() {
 
     let (mut gpu, gpu_identity) = ready(WorkerRole::Gpu, 1);
     let gpu_control = WorkerControlRecord::staged(
-        8,
+        1,
         gpu_identity,
         WorkerAction::GpuLeaseRelease,
         WorkerOutcome::Stale,
@@ -177,7 +177,7 @@ fn stale_gpu_and_peft_receipts_complete_without_becoming_rejected() {
 
     let (mut lora, lora_identity) = ready(WorkerRole::Lora, 1);
     let lora_control = WorkerControlRecord::staged(
-        9,
+        1,
         lora_identity,
         WorkerAction::PeftExport,
         WorkerOutcome::Stale,

@@ -5,7 +5,7 @@
 ### Root-task manifest schema (generated)
 - `meta.author`: `Lukas Bower`
 - `meta.purpose`: `Root-task manifest input for coh-rtc.`
-- `root_task.schema`: `1.14`
+- `root_task.schema`: `1.15`
 - `temporal_authority.root-control.virtio_operator_serial_io_bytes_per_turn`: `64`
 - `root_task.affinity.enabled`: `true`
 - `root_task.affinity.max_cores`: `4`
@@ -60,7 +60,7 @@
 - `worker_runtime.implementation_epoch`: `26`
 - `worker_runtime.cap_backed_authority`: `true`
 - `worker_runtime.notification_lifecycle`: `true`
-- `worker_runtime.scheduling.profile`: `mcs`
+- `worker_runtime.scheduling.profile`: `mcs-passive`
 - `worker_runtime.scheduling.service_turn_budget`: `64`
 - `worker_runtime.roles.worker-heartbeat`: `implemented=true ticket_scope=/worker telemetry=/shard/<label>/worker/<id>/telemetry`
 - `worker_runtime.roles.worker-gpu`: `implemented=true ticket_scope=/gpu telemetry=/shard/<label>/worker/<id>/telemetry`
@@ -229,19 +229,19 @@
 - `hw.devices[]`: `(none)`
 - `namespaces.role_isolation`: `true`
 - `sharding.enabled`: `true`
-- `sharding.shard_bits`: `8`
+- `sharding.shard_bits`: `6`
 - `sharding.legacy_worker_alias`: `true`
 - `tickets`: 5 entries
-- `manifest.sha256`: `10f33db7f20f039701ec8d2c5d206aba45a67f4b7e359b22dc2e24a0cc055cbd`
+- `manifest.sha256`: `cdbfdfa9f4de5c1cd8f8f9ef7233aff9465e15e5469cce6604bdde50872996ba`
 
 ### Namespace mounts (generated)
 - service `logs` → `/log`
 
 ### Sharded worker namespace (generated)
 - `sharding.enabled`: `true`
-- `sharding.shard_bits`: `8`
+- `sharding.shard_bits`: `6`
 - `sharding.legacy_worker_alias`: `true`
-- shard labels: `00..ff` (count: 256)
+- shard labels: `00..3f` (count: 64)
 - canonical worker path: `/shard/<label>/worker/<id>/telemetry`
 - legacy alias: `/worker/<id>/telemetry`
 
@@ -291,4 +291,4 @@
 - `ecosystem.models.enable`: `false`
 - Nodes appear only when enabled.
 
-_Generated from `configs/root_task.toml` (sha256: `10f33db7f20f039701ec8d2c5d206aba45a67f4b7e359b22dc2e24a0cc055cbd`)._
+_Generated from `configs/root_task.toml` (sha256: `cdbfdfa9f4de5c1cd8f8f9ef7233aff9465e15e5469cce6604bdde50872996ba`)._

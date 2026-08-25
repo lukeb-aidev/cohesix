@@ -680,10 +680,10 @@ pub fn render_profile_contract(
         bail!("target {target} requires seL4 profile {expected_sel4_profile}, got {sel4_profile}");
     }
     if !manifest.worker_runtime.task_abi.enabled
-        || manifest.worker_runtime.task_abi.version != 1
-        || manifest.worker_runtime.scheduling.profile.as_str() != "mcs"
+        || manifest.worker_runtime.task_abi.version != 2
+        || manifest.worker_runtime.scheduling.profile.as_str() != "mcs-passive"
     {
-        bail!("target-qualified Python contracts require the executable Worker ABI v1 MCS profile");
+        bail!("target-qualified Python contracts require the executable Worker ABI v2 MCS profile");
     }
 
     let configured_actions = manifest
@@ -746,7 +746,7 @@ pub fn render_profile_contract(
             "maximum_live_tasks": maximum_live_tasks,
             "namespace_capacity_per_role": manifest.worker_runtime.max_workers,
             "roles": role_records,
-            "task_abi_schema": "worker-task-abi/v1",
+            "task_abi_schema": "worker-task-abi/v2",
             "task_abi_version": manifest.worker_runtime.task_abi.version,
             "scheduling_profile": manifest.worker_runtime.scheduling.profile.as_str(),
         },

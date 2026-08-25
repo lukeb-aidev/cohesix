@@ -1314,7 +1314,7 @@ PY
         SEL4_BUILD_ARGS+=(-p "$pkg")
     done
     if has_root_task_feature release-qemu && has_root_task_feature bootstrap-trace; then
-        SEL4_BUILD_ARGS+=(--features "nine-door-runtime/qemu-evidence,console-network-runtime/qemu-evidence,worker-heart/qemu-evidence,worker-gpu/qemu-evidence,worker-lora/qemu-evidence")
+        SEL4_BUILD_ARGS+=(--features "nine-door-runtime/qemu-evidence,console-network-runtime/qemu-evidence,console-network-runtime/direct-virtio,worker-heart/qemu-evidence,worker-gpu/qemu-evidence,worker-lora/qemu-evidence")
         log "Enabling external QEMU/GDB service and Worker evidence symbols"
     fi
 

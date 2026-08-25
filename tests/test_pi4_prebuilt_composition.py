@@ -193,7 +193,7 @@ def test_tracked_repository_classic_reference_is_rejected_before_oracle() -> Non
         composition.CompositionError,
         match=(
             "contract_values_sha256 mismatch: expected "
-            "'aff933c55dcda9600723da4b03d30ced92dbb6003b1732199d1c3953caad17a0', "
+            "'195a0086266d46973acf4f95d9d61fe3ef01afd2326bd2bebe83c725c91e83b0', "
             "got '62b2f3f34fc1531c556d85f0bd3ae6459f2b02a3f9ac371f770d174e3d0afa92'"
         ),
     ):

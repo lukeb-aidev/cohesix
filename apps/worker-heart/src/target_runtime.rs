@@ -1,6 +1,6 @@
 // Copyright 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
-// Purpose: Run isolated Workers over the sealed notification-only Worker ABI.
+// Purpose: Run isolated Workers over the sealed passive Call/Reply Worker ABI.
 // Author: Lukas Bower
 
 //! Shared seL4 runtime for the Heartbeat, GPU, and LoRA Worker images.
@@ -12,15 +12,17 @@ use core::ptr::{addr_of, addr_of_mut, read_volatile, write_volatile};
 use core::sync::atomic::{fence, AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
 use worker_task_abi::{
-    GpuLeaseReceiptRecord, PeftReceiptRecord, WorkerAction, WorkerCompletionRecord,
-    WorkerCompletionStatus, WorkerControlRecord, WorkerLifecycleEvent, WorkerReadyRecord,
-    WorkerRole, WorkerRuntimeInit, WorkerSharedPage, WORKER_SHARED_PAGE_ALIGNMENT,
+    GpuLeaseReceiptRecord, PeftReceiptRecord, WorkerAction, WorkerCallOperation,
+    WorkerCompletionRecord, WorkerCompletionStatus, WorkerControlRecord, WorkerReadyRecord,
+    WorkerRole, WorkerRuntimeInit, WorkerSharedPage, WORKER_CALL_SUCCESS_LABEL,
+    WORKER_SHARED_PAGE_ALIGNMENT,
 };
 
 const READY_SEQUENCE: u64 = 1;
 
 static SHARED_PAGE_ADDRESS: AtomicUsize = AtomicUsize::new(0);
-static LIFECYCLE_NOTIFICATION_SLOT: AtomicUsize = AtomicUsize::new(0);
+static SERVICE_ENDPOINT_SLOT: AtomicUsize = AtomicUsize::new(0);
+static SERVICE_REPLY_SLOT: AtomicUsize = AtomicUsize::new(0);
 static SUPERVISOR_WAKE_NOTIFICATION_SLOT: AtomicUsize = AtomicUsize::new(0);
 static LAST_CONTROL_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 static CURRENT_CONTROL_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -61,9 +63,9 @@ pub extern "C" fn cohesix_worker_qemu_evidence_timeout_spin() -> ! {
 /// Enter one isolated Worker using the shared page address in the first entry register.
 ///
 /// The supervisor must map one [`WorkerSharedPage`] and the descriptor-declared
-/// IPC buffer before resuming the child. The child receives no endpoint caps:
-/// normal operation uses a receive-only lifecycle notification, a send-only
-/// supervisor wake notification, and durable shared records.
+/// IPC buffer before resuming the child. Normal work arrives only through the
+/// generated receive endpoint and single-owner Reply object; the send-only
+/// notification is a bounded READY/fault scheduling hint.
 pub fn run(expected_role: WorkerRole, shared_page_address: usize) -> ! {
     let page = match validate_shared_page_address(shared_page_address) {
         Some(page) => page,
@@ -80,10 +82,12 @@ pub fn run(expected_role: WorkerRole, shared_page_address: usize) -> ! {
     publish_ready(page, init);
 
     let mut last_sequence = 0u64;
-    let mut badge = signal_supervisor_and_wait_for_lifecycle(init);
+    let mut badge = 0;
+    let mut message_registers = [0; 4];
+    let mut tag = signal_supervisor_and_receive(init, &mut badge, &mut message_registers);
     loop {
-        let event = match init.lifecycle_bits.classify(badge) {
-            Ok(event) => event,
+        let operation = match init.call_labels.classify(tag.label()) {
+            Ok(operation) => operation,
             Err(_) => publish_fault_and_trap(
                 page,
                 init,
@@ -91,54 +95,53 @@ pub fn run(expected_role: WorkerRole, shared_page_address: usize) -> ! {
                 WorkerCompletionStatus::InvalidControl,
             ),
         };
-        match event {
-            WorkerLifecycleEvent::Control => {
+        let sequence = match validate_call(init, badge, tag, message_registers) {
+            Some(sequence) => sequence,
+            None => publish_fault_and_trap(
+                page,
+                init,
+                next_sequence(last_sequence),
+                WorkerCompletionStatus::InvalidControl,
+            ),
+        };
+        let Some(expected_sequence) = last_sequence.checked_add(1) else {
+            publish_fault_and_trap(
+                page,
+                init,
+                last_sequence,
+                WorkerCompletionStatus::InvalidControl,
+            );
+        };
+        if sequence != expected_sequence {
+            publish_fault_and_trap(
+                page,
+                init,
+                expected_sequence,
+                WorkerCompletionStatus::InvalidControl,
+            );
+        }
+        CURRENT_CONTROL_SEQUENCE.store(sequence, Ordering::Release);
+        let (status, terminal) = match operation {
+            WorkerCallOperation::Control => {
                 let Some(control) = read_stable_control(page) else {
-                    badge = wait_for_lifecycle(init);
-                    continue;
-                };
-                if control.sequence <= last_sequence {
-                    badge = wait_for_lifecycle(init);
-                    continue;
-                }
-                let Some(expected_sequence) = last_sequence.checked_add(1) else {
                     publish_fault_and_trap(
                         page,
                         init,
-                        last_sequence,
-                        WorkerCompletionStatus::InvalidControl,
-                    );
-                };
-                if control.sequence != expected_sequence || control.validate_for(init).is_err() {
-                    publish_fault_and_trap(
-                        page,
-                        init,
-                        expected_sequence,
-                        WorkerCompletionStatus::InvalidControl,
-                    );
-                }
-                CURRENT_CONTROL_SEQUENCE.store(control.sequence, Ordering::Release);
-                process_control(page, init, control);
-                last_sequence = control.sequence;
-                LAST_CONTROL_SEQUENCE.store(last_sequence, Ordering::Release);
-                CURRENT_CONTROL_SEQUENCE.store(0, Ordering::Release);
-                badge = signal_supervisor_and_wait_for_lifecycle(init);
-            }
-            WorkerLifecycleEvent::Timeout => {
-                let sequence = pending_or_next_sequence(page, last_sequence);
-                publish_completion(
-                    page,
-                    WorkerCompletionRecord::staged_terminal(
                         sequence,
-                        init.identity,
-                        WorkerCompletionStatus::Timeout,
-                    ),
-                );
-                signal_supervisor(init);
-                park_for_teardown(init);
+                        WorkerCompletionStatus::InvalidControl,
+                    );
+                };
+                if control.sequence != sequence || control.validate_for(init).is_err() {
+                    publish_fault_and_trap(
+                        page,
+                        init,
+                        sequence,
+                        WorkerCompletionStatus::InvalidControl,
+                    );
+                }
+                (process_control(page, init, control), false)
             }
-            WorkerLifecycleEvent::Shutdown => {
-                let sequence = next_sequence(last_sequence);
+            WorkerCallOperation::Shutdown => {
                 publish_completion(
                     page,
                     WorkerCompletionRecord::staged_terminal(
@@ -147,11 +150,9 @@ pub fn run(expected_role: WorkerRole, shared_page_address: usize) -> ! {
                         WorkerCompletionStatus::Shutdown,
                     ),
                 );
-                signal_supervisor(init);
-                park_for_teardown(init);
+                (WorkerCompletionStatus::Shutdown, true)
             }
-            WorkerLifecycleEvent::Revoke => {
-                let sequence = next_sequence(last_sequence);
+            WorkerCallOperation::Revoke => {
                 publish_completion(
                     page,
                     WorkerCompletionRecord::staged_terminal(
@@ -160,9 +161,26 @@ pub fn run(expected_role: WorkerRole, shared_page_address: usize) -> ! {
                         WorkerCompletionStatus::Revoked,
                     ),
                 );
-                signal_supervisor(init);
-                park_for_teardown(init);
+                (WorkerCompletionStatus::Revoked, true)
             }
+        };
+        last_sequence = sequence;
+        LAST_CONTROL_SEQUENCE.store(last_sequence, Ordering::Release);
+        CURRENT_CONTROL_SEQUENCE.store(0, Ordering::Release);
+        message_registers = [
+            sequence as sel4_sys::seL4_Word,
+            status as sel4_sys::seL4_Word,
+            init.identity.supervisor_generation as sel4_sys::seL4_Word,
+            init.identity.cap_generation as sel4_sys::seL4_Word,
+        ];
+        tag = reply_receive(init, &mut badge, &mut message_registers);
+        if terminal {
+            publish_fault_and_trap(
+                page,
+                init,
+                next_sequence(last_sequence),
+                WorkerCompletionStatus::InvalidControl,
+            );
         }
     }
 }
@@ -176,9 +194,10 @@ pub fn contain_panic() -> ! {
         enter_standard_fault();
     }
     let page_address = SHARED_PAGE_ADDRESS.load(Ordering::Acquire);
-    let lifecycle_slot = LIFECYCLE_NOTIFICATION_SLOT.load(Ordering::Acquire);
+    let endpoint_slot = SERVICE_ENDPOINT_SLOT.load(Ordering::Acquire);
+    let reply_slot = SERVICE_REPLY_SLOT.load(Ordering::Acquire);
     let wake_slot = SUPERVISOR_WAKE_NOTIFICATION_SLOT.load(Ordering::Acquire);
-    if page_address != 0 && lifecycle_slot != 0 && wake_slot != 0 {
+    if page_address != 0 && endpoint_slot != 0 && reply_slot != 0 && wake_slot != 0 {
         let page = page_address as *mut WorkerSharedPage;
         let Some(init) = read_stable_init(page) else {
             enter_standard_fault();
@@ -222,7 +241,8 @@ fn install_ipc_buffer(address: u64) {
 
 fn install_panic_context(page: *mut WorkerSharedPage, init: WorkerRuntimeInit) {
     SHARED_PAGE_ADDRESS.store(page as usize, Ordering::Release);
-    LIFECYCLE_NOTIFICATION_SLOT.store(init.lifecycle_notification_slot as usize, Ordering::Release);
+    SERVICE_ENDPOINT_SLOT.store(init.service_endpoint_slot as usize, Ordering::Release);
+    SERVICE_REPLY_SLOT.store(init.service_reply_slot as usize, Ordering::Release);
     SUPERVISOR_WAKE_NOTIFICATION_SLOT.store(
         init.supervisor_wake_notification_slot as usize,
         Ordering::Release,
@@ -350,7 +370,7 @@ fn process_control(
     page: *mut WorkerSharedPage,
     init: WorkerRuntimeInit,
     control: WorkerControlRecord,
-) {
+) -> WorkerCompletionStatus {
     #[cfg(feature = "qemu-evidence")]
     cohesix_worker_qemu_evidence_control_handler();
     let action = match control.worker_action() {
@@ -394,54 +414,95 @@ fn process_control(
             publish_peft_receipt(page, receipt);
         }
     }
-    publish_completion(page, WorkerCompletionRecord::staged_for_control(control));
-}
-
-fn pending_or_next_sequence(page: *mut WorkerSharedPage, last_sequence: u64) -> u64 {
-    if let Some(control) = read_stable_control(page) {
-        if control.sequence > last_sequence {
-            return control.sequence;
-        }
-    }
-    next_sequence(last_sequence)
+    let completion = WorkerCompletionRecord::staged_for_control(control);
+    let status = match WorkerCompletionStatus::from_raw(completion.status) {
+        Ok(status) => status,
+        Err(_) => publish_fault_and_trap(
+            page,
+            init,
+            control.sequence,
+            WorkerCompletionStatus::InvalidControl,
+        ),
+    };
+    publish_completion(page, completion);
+    status
 }
 
 fn next_sequence(sequence: u64) -> u64 {
     sequence.saturating_add(1)
 }
 
-fn wait_for_lifecycle(init: WorkerRuntimeInit) -> u64 {
-    let mut badge: sel4_sys::seL4_Word = 0;
-    // SAFETY: Strict init validation proves the nonzero receive-only lifecycle
-    // notification slot. The supervisor installs it before resume. Wait blocks
-    // the active-SC Worker when idle and carries no IPC reply/donation path.
-    let _ = unsafe {
-        sel4_sys::seL4_Wait(
-            init.lifecycle_notification_slot as sel4_sys::seL4_CPtr,
-            &mut badge,
-        )
-    };
-    badge as u64
+fn validate_call(
+    init: WorkerRuntimeInit,
+    badge: sel4_sys::seL4_Word,
+    tag: sel4_sys::seL4_MessageInfo,
+    message_registers: [sel4_sys::seL4_Word; 4],
+) -> Option<u64> {
+    if badge as u64 != init.request_badge
+        || tag.length() != 4
+        || tag.extra_caps() != 0
+        || tag.caps_unwrapped() != 0
+        || message_registers[0] == 0
+        || message_registers[1] != init.identity.slot as sel4_sys::seL4_Word
+        || message_registers[2] != init.identity.supervisor_generation as sel4_sys::seL4_Word
+        || message_registers[3] != init.identity.cap_generation as sel4_sys::seL4_Word
+    {
+        None
+    } else {
+        Some(message_registers[0] as u64)
+    }
 }
 
-fn signal_supervisor_and_wait_for_lifecycle(init: WorkerRuntimeInit) -> u64 {
-    let mut badge: sel4_sys::seL4_Word = 0;
+fn signal_supervisor_and_receive(
+    init: WorkerRuntimeInit,
+    badge: &mut sel4_sys::seL4_Word,
+    message_registers: &mut [sel4_sys::seL4_Word; 4],
+) -> sel4_sys::seL4_MessageInfo {
     fence(Ordering::Release);
-    // SAFETY: Strict init validation proves a send-only supervisor wake slot
-    // and a distinct receive-only lifecycle slot. NBSendWait performs a
-    // nonblocking notification signal and a notification Wait in one atomic
-    // MCS syscall. It cannot donate this Worker's bound SC, installs no Reply
-    // object, and closes the post-completion window in which a new control
-    // signal could otherwise bypass an actual blocking point.
-    let _ = unsafe {
-        sel4_sys::seL4_NBSendWait(
+    // SAFETY: Strict init validation proves the send-only supervisor wake cap,
+    // receive-only endpoint, and single-owner Reply object. NBSendRecv
+    // publishes READY before atomically entering the receive boundary. Once
+    // root unbinds the bootstrap SC, every normal activation is backed only by
+    // the executor's depth-one donated SC.
+    unsafe {
+        let [mr0, mr1, mr2, mr3] = message_registers;
+        sel4_sys::seL4_NBSendRecvWithMRs(
             init.supervisor_wake_notification_slot as sel4_sys::seL4_CPtr,
             sel4_sys::seL4_MessageInfo::new(0, 0, 0, 0),
-            init.lifecycle_notification_slot as sel4_sys::seL4_CPtr,
-            &mut badge,
+            init.service_endpoint_slot as sel4_sys::seL4_CPtr,
+            badge,
+            mr0,
+            mr1,
+            mr2,
+            mr3,
+            init.service_reply_slot as sel4_sys::seL4_CPtr,
         )
-    };
-    badge as u64
+    }
+}
+
+fn reply_receive(
+    init: WorkerRuntimeInit,
+    badge: &mut sel4_sys::seL4_Word,
+    message_registers: &mut [sel4_sys::seL4_Word; 4],
+) -> sel4_sys::seL4_MessageInfo {
+    fence(Ordering::Release);
+    let tag = sel4_sys::seL4_MessageInfo::new(WORKER_CALL_SUCCESS_LABEL, 0, 0, 4);
+    // SAFETY: The runtime owns this Reply cap for exactly the outstanding Call.
+    // MCS ReplyRecv releases that donor exactly once and atomically returns the
+    // passive Worker to its fixed endpoint before another request can arrive.
+    unsafe {
+        let [mr0, mr1, mr2, mr3] = message_registers;
+        sel4_sys::seL4_ReplyRecvWithMRs(
+            init.service_endpoint_slot as sel4_sys::seL4_CPtr,
+            tag,
+            badge,
+            mr0,
+            mr1,
+            mr2,
+            mr3,
+            init.service_reply_slot as sel4_sys::seL4_CPtr,
+        )
+    }
 }
 
 fn signal_supervisor(init: WorkerRuntimeInit) {
@@ -470,21 +531,6 @@ fn publish_fault_and_trap(
     );
     signal_supervisor(init);
     enter_standard_fault()
-}
-
-fn park_for_teardown(init: WorkerRuntimeInit) -> ! {
-    loop {
-        let mut ignored_badge: sel4_sys::seL4_Word = 0;
-        // SAFETY: The validated lifecycle notification remains mapped until
-        // root suspends and deletes this child. Re-waiting performs no service
-        // and prevents a coalesced extra edge from becoming a busy loop.
-        let _ = unsafe {
-            sel4_sys::seL4_Wait(
-                init.lifecycle_notification_slot as sel4_sys::seL4_CPtr,
-                &mut ignored_badge,
-            )
-        };
-    }
 }
 
 fn enter_standard_fault() -> ! {

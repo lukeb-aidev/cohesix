@@ -1024,6 +1024,20 @@ impl<'a> ConsoleNetworkService<'a> {
         tcp_tx: &'a mut [u8],
         socket_storage: &'a mut [SocketStorage<'a>],
     ) -> Result<Self, RuntimeError> {
+        Self::new_with_mac(descriptor, descriptor.mac, tcp_rx, tcp_tx, socket_storage)
+    }
+
+    /// Construct the listener with a device-proven MAC address.
+    ///
+    /// Direct QEMU VirtIO ownership reads the MAC from the admitted device and
+    /// verifies it against the sealed descriptor before entering this path.
+    pub fn new_with_mac(
+        descriptor: RuntimeInitDescriptor,
+        mac: [u8; 6],
+        tcp_rx: &'a mut [u8],
+        tcp_tx: &'a mut [u8],
+        socket_storage: &'a mut [SocketStorage<'a>],
+    ) -> Result<Self, RuntimeError> {
         descriptor
             .validate()
             .map_err(|_| RuntimeError::InvalidInit)?;
@@ -1036,7 +1050,7 @@ impl<'a> ConsoleNetworkService<'a> {
         }
         let mut device = SharedFrameDevice::new();
         let mut interface_config =
-            InterfaceConfig::new(HardwareAddress::Ethernet(EthernetAddress(descriptor.mac)));
+            InterfaceConfig::new(HardwareAddress::Ethernet(EthernetAddress(mac)));
         interface_config.random_seed = descriptor.generation;
         let mut interface = Interface::new(interface_config, &mut device, Instant::from_millis(0));
         let mut address_installed = false;
@@ -1080,6 +1094,12 @@ impl<'a> ConsoleNetworkService<'a> {
             return Err(RuntimeError::Terminal);
         }
         self.device.push_ingress(packet)
+    }
+
+    /// Whether the bounded internal device can accept one complete frame.
+    #[must_use]
+    pub const fn ingress_available(&self) -> bool {
+        self.device.ingress.is_none()
     }
 
     /// Copy one smoltcp egress frame for the admitted NIC transport.

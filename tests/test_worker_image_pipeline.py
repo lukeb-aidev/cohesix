@@ -34,11 +34,11 @@ def _source_image(name: str, role: int) -> bytes:
     metadata = struct.pack(
         "<IHHHHI32s16s",
         worker_images.WORKER_METADATA_MAGIC,
-        1,
+        worker_images.WORKER_ABI_VERSION,
         64,
         role,
-        1,
-        3,
+        worker_images.WORKER_ENTRY_VERSION,
+        worker_images.WORKER_METADATA_FLAGS,
         b"_start" + bytes(26),
         bytes(16),
     )
@@ -316,22 +316,27 @@ def test_qemu_evidence_symbols_are_gated_and_have_no_authority_path() -> None:
     assert "core::hint::spin_loop()" in runtime
 
 
-def test_worker_completion_wake_enters_lifecycle_wait_atomically() -> None:
+def test_worker_ready_and_replies_enter_passive_receive_atomically() -> None:
     runtime = (ROOT / "apps" / "worker-heart" / "src" / "target_runtime.rs").read_text(
         encoding="utf-8"
     )
     run_body = runtime.split("pub fn run(", maxsplit=1)[1].split(
         "/// Publish a bounded panic completion", maxsplit=1
     )[0]
-    helper = runtime.split(
-        "fn signal_supervisor_and_wait_for_lifecycle(", maxsplit=1
-    )[1].split("fn signal_supervisor(", maxsplit=1)[0]
+    ready_helper = runtime.split("fn signal_supervisor_and_receive(", maxsplit=1)[
+        1
+    ].split("fn reply_receive(", maxsplit=1)[0]
+    reply_helper = runtime.split("fn reply_receive(", maxsplit=1)[1].split(
+        "fn signal_supervisor(", maxsplit=1
+    )[0]
 
-    assert run_body.count("signal_supervisor_and_wait_for_lifecycle(init)") == 2
-    assert "seL4_NBSendWait(" in helper
-    assert "seL4_NBSendRecv" not in helper
-    assert "seL4_Signal" not in helper
-    assert "seL4_Wait" not in helper
+    assert run_body.count("signal_supervisor_and_receive(init") == 1
+    assert run_body.count("reply_receive(init") == 1
+    assert "seL4_NBSendRecvWithMRs(" in ready_helper
+    assert "seL4_ReplyRecvWithMRs(" in reply_helper
+    for helper in (ready_helper, reply_helper):
+        assert "seL4_Signal" not in helper
+        assert "seL4_Wait" not in helper
 
 
 def test_root_build_requires_both_target_qualified_worker_identities() -> None:

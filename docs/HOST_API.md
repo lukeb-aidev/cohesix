@@ -43,18 +43,21 @@ Both `CAT` and `TAIL` require `max_bytes`. Only `TAIL` accepts the optional
 `unknown`; clients must not reinterpret absence as `model-only`. The object is
 declaration-only and has this additive shape:
 
+The following example is the selected QEMU profile; Pi returns its separately
+generated 64-Worker and eight-bit-shard values.
+
 ```json
 {
   "roles": [
     {"role": "worker-heartbeat", "declaration": "executable", "executable_slots": 1}
   ],
-  "task_abi_schema": "worker-task-abi/v1",
-  "task_abi_version": 1,
+  "task_abi_schema": "worker-task-abi/v2",
+  "task_abi_version": 2,
   "worker_observation_schema": "cohesix-worker-observation/v1",
   "worker_integration_evidence_schema": "cohesix-worker-integration-evidence/v1",
-  "maximum_live_tasks": 3,
+  "maximum_live_tasks": 256,
   "canonical_telemetry_template": "/shard/<label>/worker/<id>/telemetry",
-  "shard_bits": 8,
+  "shard_bits": 6,
   "legacy_worker_alias": true
 }
 ```

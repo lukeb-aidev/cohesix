@@ -171,15 +171,15 @@ mod tests {
     #[test]
     fn generated_contract_exposes_exact_executable_matrix_and_bounds() {
         let contract = runtime_contract();
-        assert_eq!(contract.task_abi_schema, "worker-task-abi/v1");
-        assert_eq!(contract.task_abi_version, 1);
+        assert_eq!(contract.task_abi_schema, "worker-task-abi/v2");
+        assert_eq!(contract.task_abi_version, 2);
         assert_eq!(contract.observation_schema, "cohesix-worker-observation/v1");
         assert_eq!(
             contract.integration_evidence_schema,
             "cohesix-worker-integration-evidence/v1"
         );
-        assert_eq!(contract.maximum_live_tasks, 37);
-        assert_eq!(contract.shard_bits, 8);
+        assert_eq!(contract.maximum_live_tasks, 256);
+        assert_eq!(contract.shard_bits, 6);
         assert!(contract.legacy_worker_alias);
         assert_eq!(
             contract.canonical_telemetry_template,
@@ -193,9 +193,9 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![
                 ("worker-heartbeat", "executable", 1),
-                ("worker-gpu", "executable", 15),
+                ("worker-gpu", "executable", 127),
                 ("worker-bus", "model-only", 0),
-                ("worker-lora", "executable", 21),
+                ("worker-lora", "executable", 128),
             ]
         );
     }

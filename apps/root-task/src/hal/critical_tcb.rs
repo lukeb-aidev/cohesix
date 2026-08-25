@@ -7,10 +7,11 @@
 //!
 //! The init TCB and initial SC are the real `root-control` domain because that
 //! thread owns bootstrap and HAL admission.  This module does not create a
-//! phantom control child.  It creates four restricted CSpaces/TCBs, binds one
+//! phantom control child.  It creates six restricted CSpaces/TCBs, binds one
 //! independently configured active SC to each, and resumes only caller-supplied
 //! entrypoints for fault, emergency, Worker-supervisor, and driver-supervisor
-//! work.  All four children share the root VSpace deliberately so the small
+//! work plus the two bounded passive-Worker executors. All six children share
+//! the root VSpace deliberately so the small
 //! root-resident entrypoints and HAL-mapped private stack/IPC pages are visible;
 //! their capability views remain separate and compiler-bounded.
 
@@ -29,6 +30,7 @@ use crate::generated::{
     TimeoutPolicy,
 };
 use crate::sel4::{self, KernelEnv, RamFrame};
+use crate::worker_supervisor::MAX_EXECUTABLE_WORKER_SLOTS;
 use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use heapless::Vec;
 use sel4_sys::{seL4_CPtr, seL4_Error, seL4_Word};
@@ -47,6 +49,7 @@ const CHILD_DRIVER_RELEASE_SIGNAL_SLOT: seL4_CPtr = 7;
 const CHILD_DRIVER_SIGNAL_SLOT: seL4_CPtr = 8;
 const CHILD_EMERGENCY_SIGNAL_SLOT: seL4_CPtr = 9;
 const CHILD_SELF_CNODE_SLOT: seL4_CPtr = 10;
+const CHILD_EXECUTOR_COMPLETION_SIGNAL_SLOT: seL4_CPtr = 5;
 
 // Slots 11..14 remain reserved for future fixed critical-control lanes. Each
 // admitted linked driver then owns one exact seven-capability containment row:
@@ -67,14 +70,18 @@ const ROOT_FAULT_ID: &str = "root-fault";
 const ROOT_EMERGENCY_ID: &str = "root-emergency";
 const WORKER_SUPERVISOR_ID: &str = "root-worker-supervisor";
 const DRIVER_SUPERVISOR_ID: &str = "root-driver-supervisor";
+const WORKER_EXECUTOR_GPU_ID: &str = "root-worker-executor-gpu";
+const WORKER_EXECUTOR_LORA_ID: &str = "root-worker-executor-lora";
 
-/// Concrete root-resident entrypoints for the four restricted critical children.
+/// Concrete root-resident entrypoints for the six restricted critical children.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CriticalTcbEntrypoints {
     pub root_fault: usize,
     pub root_emergency: usize,
     pub worker_supervisor: usize,
     pub driver_supervisor: usize,
+    pub worker_executor_gpu: usize,
+    pub worker_executor_lora: usize,
 }
 
 impl CriticalTcbEntrypoints {
@@ -86,6 +93,8 @@ impl CriticalTcbEntrypoints {
             root_emergency: root_emergency_entry as *const () as usize,
             worker_supervisor: root_worker_supervisor_entry as *const () as usize,
             driver_supervisor: root_driver_supervisor_entry as *const () as usize,
+            worker_executor_gpu: root_worker_executor_gpu_entry as *const () as usize,
+            worker_executor_lora: root_worker_executor_lora_entry as *const () as usize,
         }
     }
 
@@ -95,6 +104,8 @@ impl CriticalTcbEntrypoints {
             ROOT_EMERGENCY_ID => Some(self.root_emergency),
             WORKER_SUPERVISOR_ID => Some(self.worker_supervisor),
             DRIVER_SUPERVISOR_ID => Some(self.driver_supervisor),
+            WORKER_EXECUTOR_GPU_ID => Some(self.worker_executor_gpu),
+            WORKER_EXECUTOR_LORA_ID => Some(self.worker_executor_lora),
             _ => None,
         }
     }
@@ -105,6 +116,8 @@ impl CriticalTcbEntrypoints {
             self.root_emergency,
             self.worker_supervisor,
             self.driver_supervisor,
+            self.worker_executor_gpu,
+            self.worker_executor_lora,
         ] {
             if entry == 0 || entry & 0x3 != 0 {
                 return Err(CriticalTcbConstructionError::InvalidEntrypoint);
@@ -126,6 +139,10 @@ pub struct CriticalSignalCaps {
     pub driver_supervisor: seL4_CPtr,
     pub emergency: seL4_CPtr,
     pub root_fault_release: seL4_CPtr,
+    pub worker_executor_gpu: seL4_CPtr,
+    pub worker_executor_lora: seL4_CPtr,
+    pub worker_executor_completion_gpu: seL4_CPtr,
+    pub worker_executor_completion_lora: seL4_CPtr,
 }
 
 /// Root-held endpoint/Reply objects used by the serialized fault receive lane.
@@ -267,6 +284,24 @@ static TARGET_SERVICE_RECOVERY_FAULT_SEQUENCES: [AtomicU64; SERVICE_FAULT_RECORD
     [const { AtomicU64::new(0) }; SERVICE_FAULT_RECORD_CAPACITY];
 static TARGET_SERVICE_RECOVERY_FAULT_CLASSES: [AtomicUsize; SERVICE_FAULT_RECORD_CAPACITY] =
     [const { AtomicUsize::new(0) }; SERVICE_FAULT_RECORD_CAPACITY];
+static TARGET_WORKER_RECOVERY_SLOTS: [AtomicUsize; MAX_EXECUTABLE_WORKER_SLOTS] =
+    [const { AtomicUsize::new(0) }; MAX_EXECUTABLE_WORKER_SLOTS];
+static TARGET_WORKER_RECOVERY_STATES: [AtomicUsize; MAX_EXECUTABLE_WORKER_SLOTS] =
+    [const { AtomicUsize::new(0) }; MAX_EXECUTABLE_WORKER_SLOTS];
+static TARGET_WORKER_CALL_SEQUENCES: [AtomicU64; MAX_EXECUTABLE_WORKER_SLOTS] =
+    [const { AtomicU64::new(0) }; MAX_EXECUTABLE_WORKER_SLOTS];
+static TARGET_WORKER_CALL_ROLE_SLOTS: [AtomicUsize; MAX_EXECUTABLE_WORKER_SLOTS] =
+    [const { AtomicUsize::new(0) }; MAX_EXECUTABLE_WORKER_SLOTS];
+static TARGET_WORKER_CALL_SUPERVISOR_GENERATIONS: [AtomicU64; MAX_EXECUTABLE_WORKER_SLOTS] =
+    [const { AtomicU64::new(0) }; MAX_EXECUTABLE_WORKER_SLOTS];
+static TARGET_WORKER_CALL_CAP_GENERATIONS: [AtomicU64; MAX_EXECUTABLE_WORKER_SLOTS] =
+    [const { AtomicU64::new(0) }; MAX_EXECUTABLE_WORKER_SLOTS];
+static TARGET_WORKER_RECOVERY_REQUEST_SEQUENCES: [AtomicU64; MAX_EXECUTABLE_WORKER_SLOTS] =
+    [const { AtomicU64::new(0) }; MAX_EXECUTABLE_WORKER_SLOTS];
+static TARGET_WORKER_RECOVERY_FAULT_SEQUENCES: [AtomicU64; MAX_EXECUTABLE_WORKER_SLOTS] =
+    [const { AtomicU64::new(0) }; MAX_EXECUTABLE_WORKER_SLOTS];
+static TARGET_WORKER_RECOVERY_FAULT_CLASSES: [AtomicUsize; MAX_EXECUTABLE_WORKER_SLOTS] =
+    [const { AtomicUsize::new(0) }; MAX_EXECUTABLE_WORKER_SLOTS];
 
 /// Coherent, copied live MCS state used by bounded operator diagnostics.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -488,6 +523,182 @@ fn revoke_target_service_recovery_reply_with(
     TARGET_SERVICE_RECOVERY_FAULT_SEQUENCES[mailbox].store(0, Ordering::Release);
     TARGET_SERVICE_RECOVERY_FAULT_CLASSES[mailbox].store(0, Ordering::Release);
     TARGET_SERVICE_RECOVERY_STATES[mailbox].store(SERVICE_RECOVERY_UNREGISTERED, Ordering::Release);
+    Ok(())
+}
+
+/// Exact outcome after one executor resumes from a passive Worker Call.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TargetWorkerCallCompletion {
+    /// The Worker returned the ordinary ABI reply.
+    Normal,
+    /// Root-fault contained the Worker and released this exact donor once.
+    Recovered {
+        request_sequence: u64,
+        fault_sequence: u64,
+        fault_class: FaultClass,
+    },
+}
+
+fn worker_recovery_reply_slot(
+    worker_index: usize,
+) -> Result<seL4_CPtr, CriticalTcbConstructionError> {
+    if worker_index >= MAX_EXECUTABLE_WORKER_SLOTS {
+        return Err(CriticalTcbConstructionError::MissingGeneratedRecord);
+    }
+    let base = seL4_CPtr::from(generated::ninedoor_service_config().root_fault_recovery_reply_slot)
+        .checked_add(1)
+        .ok_or(CriticalTcbConstructionError::MissingGeneratedRecord)?;
+    let slot = base
+        .checked_add(
+            seL4_CPtr::try_from(worker_index)
+                .map_err(|_| CriticalTcbConstructionError::MissingGeneratedRecord)?,
+        )
+        .ok_or(CriticalTcbConstructionError::MissingGeneratedRecord)?;
+    let tcb_base = seL4_CPtr::from(
+        generated::worker_resource_admission_config()
+            .fault_registry
+            .root_fault_tcb_control_slot_base,
+    );
+    if slot >= tcb_base {
+        return Err(CriticalTcbConstructionError::MissingGeneratedRecord);
+    }
+    Ok(slot)
+}
+
+/// Copy one Worker's single-owner Reply object into its exact root-fault slot.
+pub fn register_target_worker_recovery_reply(
+    worker_index: usize,
+    reply_cap: seL4_CPtr,
+) -> Result<(), CriticalTcbConstructionError> {
+    let state = TARGET_WORKER_RECOVERY_STATES
+        .get(worker_index)
+        .ok_or(CriticalTcbConstructionError::MissingGeneratedRecord)?;
+    let slot_state = TARGET_WORKER_RECOVERY_SLOTS
+        .get(worker_index)
+        .ok_or(CriticalTcbConstructionError::MissingGeneratedRecord)?;
+    if reply_cap == sel4_sys::seL4_CapNull
+        || state.load(Ordering::Acquire) != SERVICE_RECOVERY_UNREGISTERED
+        || slot_state.load(Ordering::Acquire) != 0
+        || TARGET_WORKER_CALL_SEQUENCES[worker_index].load(Ordering::Acquire) != 0
+    {
+        return Err(CriticalTcbConstructionError::RuntimeNotReady);
+    }
+    let root_fault_cnode = TARGET_ROOT_FAULT_CNODE.load(Ordering::Acquire) as seL4_CPtr;
+    if root_fault_cnode == sel4_sys::seL4_CapNull {
+        return Err(CriticalTcbConstructionError::RuntimeNotReady);
+    }
+    let root_fault = critical_resource(ROOT_FAULT_ID)?;
+    let destination = worker_recovery_reply_slot(worker_index)?;
+    let error = sel4::cnode_copy_depth(
+        root_fault_cnode,
+        destination,
+        root_fault.cnode_radix_bits,
+        sel4_sys::seL4_CapInitThreadCNode,
+        reply_cap,
+        sel4::word_bits() as u8,
+        sel4_sys::seL4_CapRights_All,
+    );
+    if error != sel4_sys::seL4_NoError {
+        return Err(sel4_error("critical.worker-recovery-reply-copy", error));
+    }
+    slot_state.store(destination as usize, Ordering::Release);
+    state.store(SERVICE_RECOVERY_READY, Ordering::Release);
+    Ok(())
+}
+
+/// Arm one exact executor Call immediately before its MCS donation.
+pub fn arm_target_worker_call(
+    worker_index: usize,
+    sequence: u64,
+    identity: worker_task_abi::WorkerIdentity,
+) -> Result<(), CriticalTcbConstructionError> {
+    if sequence == 0
+        || identity.validate().is_err()
+        || TARGET_WORKER_RECOVERY_STATES
+            .get(worker_index)
+            .is_none_or(|state| state.load(Ordering::Acquire) != SERVICE_RECOVERY_READY)
+    {
+        return Err(CriticalTcbConstructionError::RuntimeNotReady);
+    }
+    TARGET_WORKER_CALL_ROLE_SLOTS[worker_index].store(identity.slot as usize, Ordering::Relaxed);
+    TARGET_WORKER_CALL_SUPERVISOR_GENERATIONS[worker_index]
+        .store(identity.supervisor_generation, Ordering::Relaxed);
+    TARGET_WORKER_CALL_CAP_GENERATIONS[worker_index]
+        .store(identity.cap_generation, Ordering::Relaxed);
+    TARGET_WORKER_CALL_SEQUENCES[worker_index]
+        .compare_exchange(0, sequence, Ordering::Release, Ordering::Acquire)
+        .map_err(|_| CriticalTcbConstructionError::RuntimeNotReady)?;
+    Ok(())
+}
+
+/// Finish one executor Call, distinguishing an ordinary reply from fault recovery.
+pub fn finish_target_worker_call(
+    worker_index: usize,
+    sequence: u64,
+) -> Result<TargetWorkerCallCompletion, CriticalTcbConstructionError> {
+    let state = TARGET_WORKER_RECOVERY_STATES
+        .get(worker_index)
+        .ok_or(CriticalTcbConstructionError::MissingGeneratedRecord)?
+        .load(Ordering::Acquire);
+    match state {
+        SERVICE_RECOVERY_READY => TARGET_WORKER_CALL_SEQUENCES[worker_index]
+            .compare_exchange(sequence, 0, Ordering::AcqRel, Ordering::Acquire)
+            .map(|_| TargetWorkerCallCompletion::Normal)
+            .map_err(|_| CriticalTcbConstructionError::RuntimeNotReady),
+        SERVICE_RECOVERY_REPLIED
+            if TARGET_WORKER_CALL_SEQUENCES[worker_index].load(Ordering::Acquire) == 0 =>
+        {
+            let request_sequence =
+                TARGET_WORKER_RECOVERY_REQUEST_SEQUENCES[worker_index].load(Ordering::Acquire);
+            let fault_sequence =
+                TARGET_WORKER_RECOVERY_FAULT_SEQUENCES[worker_index].load(Ordering::Acquire);
+            let fault_class =
+                match TARGET_WORKER_RECOVERY_FAULT_CLASSES[worker_index].load(Ordering::Acquire) {
+                    1 => FaultClass::Standard,
+                    2 => FaultClass::Timeout,
+                    _ => return Err(CriticalTcbConstructionError::RuntimeNotReady),
+                };
+            if request_sequence != sequence || fault_sequence == 0 {
+                return Err(CriticalTcbConstructionError::RuntimeNotReady);
+            }
+            Ok(TargetWorkerCallCompletion::Recovered {
+                request_sequence,
+                fault_sequence,
+                fault_class,
+            })
+        }
+        _ => Err(CriticalTcbConstructionError::RuntimeNotReady),
+    }
+}
+
+/// Remove one contained Worker's root-fault Reply view before anchor reuse.
+pub fn revoke_target_worker_recovery_reply(
+    worker_index: usize,
+) -> Result<(), CriticalTcbConstructionError> {
+    if worker_index >= MAX_EXECUTABLE_WORKER_SLOTS
+        || TARGET_WORKER_CALL_SEQUENCES[worker_index].load(Ordering::Acquire) != 0
+    {
+        return Err(CriticalTcbConstructionError::RuntimeNotReady);
+    }
+    let slot = TARGET_WORKER_RECOVERY_SLOTS[worker_index].load(Ordering::Acquire) as seL4_CPtr;
+    let root_fault_cnode = TARGET_ROOT_FAULT_CNODE.load(Ordering::Acquire) as seL4_CPtr;
+    if slot == sel4_sys::seL4_CapNull || root_fault_cnode == sel4_sys::seL4_CapNull {
+        return Err(CriticalTcbConstructionError::RuntimeNotReady);
+    }
+    let root_fault = critical_resource(ROOT_FAULT_ID)?;
+    let error = sel4::cnode_delete(root_fault_cnode, slot, root_fault.cnode_radix_bits);
+    if error != sel4_sys::seL4_NoError {
+        return Err(sel4_error("critical.worker-recovery-reply-delete", error));
+    }
+    TARGET_WORKER_RECOVERY_SLOTS[worker_index].store(0, Ordering::Release);
+    TARGET_WORKER_CALL_ROLE_SLOTS[worker_index].store(0, Ordering::Relaxed);
+    TARGET_WORKER_CALL_SUPERVISOR_GENERATIONS[worker_index].store(0, Ordering::Relaxed);
+    TARGET_WORKER_CALL_CAP_GENERATIONS[worker_index].store(0, Ordering::Relaxed);
+    TARGET_WORKER_RECOVERY_REQUEST_SEQUENCES[worker_index].store(0, Ordering::Relaxed);
+    TARGET_WORKER_RECOVERY_FAULT_SEQUENCES[worker_index].store(0, Ordering::Relaxed);
+    TARGET_WORKER_RECOVERY_FAULT_CLASSES[worker_index].store(0, Ordering::Relaxed);
+    TARGET_WORKER_RECOVERY_STATES[worker_index]
+        .store(SERVICE_RECOVERY_UNREGISTERED, Ordering::Release);
     Ok(())
 }
 
@@ -1112,6 +1323,12 @@ pub fn construct_critical_tcb_runtime(
     let root_fault_wake = env
         .alloc_notification()
         .map_err(|error| sel4_error("critical.root-fault-wake", error))?;
+    let worker_executor_gpu_wake = env
+        .alloc_notification()
+        .map_err(|error| sel4_error("critical.worker-executor-gpu-wake", error))?;
+    let worker_executor_lora_wake = env
+        .alloc_notification()
+        .map_err(|error| sel4_error("critical.worker-executor-lora-wake", error))?;
 
     let signals = CriticalSignalCaps {
         worker_supervisor_origin: worker_wake,
@@ -1142,6 +1359,37 @@ pub fn construct_critical_tcb_runtime(
             write_only_rights(),
             admission.handoff.root_fault_release_badge,
             "critical.root-fault-release-signal",
+        )?,
+        worker_executor_gpu: mint_root_badged_cap(
+            env,
+            worker_executor_gpu_wake,
+            write_only_rights(),
+            1,
+            "critical.worker-executor-gpu-signal",
+        )?,
+        worker_executor_lora: mint_root_badged_cap(
+            env,
+            worker_executor_lora_wake,
+            write_only_rights(),
+            1,
+            "critical.worker-executor-lora-signal",
+        )?,
+        worker_executor_completion_gpu: mint_root_badged_cap(
+            env,
+            worker_wake,
+            write_only_rights(),
+            generated::worker_runtime_config().task_abi.gpu_wake_bit,
+            "critical.worker-executor-gpu-completion",
+        )?,
+        worker_executor_completion_lora: mint_root_badged_cap(
+            env,
+            worker_wake,
+            write_only_rights(),
+            generated::worker_runtime_config()
+                .task_abi
+                .heartbeat_wake_bit
+                | generated::worker_runtime_config().task_abi.lora_wake_bit,
+            "critical.worker-executor-lora-completion",
         )?,
     };
 
@@ -1197,6 +1445,8 @@ pub fn construct_critical_tcb_runtime(
         ROOT_EMERGENCY_ID,
         WORKER_SUPERVISOR_ID,
         DRIVER_SUPERVISOR_ID,
+        WORKER_EXECUTOR_GPU_ID,
+        WORKER_EXECUTOR_LORA_ID,
     ] {
         let resource = critical_resource(id)?;
         let task = temporal_task(id)?;
@@ -1208,6 +1458,8 @@ pub fn construct_critical_tcb_runtime(
             ROOT_EMERGENCY_ID => emergency_wake,
             WORKER_SUPERVISOR_ID => worker_wake,
             DRIVER_SUPERVISOR_ID => driver_wake,
+            WORKER_EXECUTOR_GPU_ID => worker_executor_gpu_wake,
+            WORKER_EXECUTOR_LORA_ID => worker_executor_lora_wake,
             _ => return Err(CriticalTcbConstructionError::MissingGeneratedRecord),
         };
         let child = construct_restricted_child(
@@ -1390,6 +1642,69 @@ fn recover_target_passive_service_call(
             secure9p_transport::TransportError::Closed.wire_code() as seL4_Word,
             0,
             0,
+        ],
+    );
+    Ok(())
+}
+
+#[inline(never)]
+fn recover_target_passive_worker_call(
+    record: FaultHandoffRecord,
+) -> Result<(), CriticalTcbConstructionError> {
+    let worker_index = crate::critical_tcb::worker_fault_mailbox_index(record.task_index)
+        .ok_or(CriticalTcbConstructionError::MissingGeneratedRecord)?;
+    let reply_slot =
+        TARGET_WORKER_RECOVERY_SLOTS[worker_index].load(Ordering::Acquire) as seL4_CPtr;
+    if reply_slot == sel4_sys::seL4_CapNull {
+        return Err(CriticalTcbConstructionError::RuntimeNotReady);
+    }
+    let request_sequence = TARGET_WORKER_CALL_SEQUENCES[worker_index].load(Ordering::Acquire);
+    if request_sequence != 0 {
+        TARGET_WORKER_RECOVERY_REQUEST_SEQUENCES[worker_index]
+            .store(request_sequence, Ordering::Relaxed);
+        TARGET_WORKER_RECOVERY_FAULT_SEQUENCES[worker_index]
+            .store(record.sequence, Ordering::Relaxed);
+        TARGET_WORKER_RECOVERY_FAULT_CLASSES[worker_index].store(
+            match record.fault_class {
+                FaultClass::Standard => 1,
+                FaultClass::Timeout => 2,
+            },
+            Ordering::Relaxed,
+        );
+    }
+    match TARGET_WORKER_RECOVERY_STATES[worker_index].compare_exchange(
+        SERVICE_RECOVERY_READY,
+        SERVICE_RECOVERY_REPLIED,
+        Ordering::AcqRel,
+        Ordering::Acquire,
+    ) {
+        Ok(_) => {}
+        Err(SERVICE_RECOVERY_REPLIED) => return Ok(()),
+        Err(_) => return Err(CriticalTcbConstructionError::RuntimeNotReady),
+    }
+    let sequence = TARGET_WORKER_CALL_SEQUENCES[worker_index].swap(0, Ordering::AcqRel);
+    if sequence == 0 {
+        return Ok(());
+    }
+    let status = if record.fault_class == FaultClass::Timeout {
+        worker_task_abi::WorkerCompletionStatus::Timeout
+    } else {
+        worker_task_abi::WorkerCompletionStatus::Panic
+    };
+    sel4::reply_to(
+        reply_slot,
+        sel4_sys::seL4_MessageInfo::new(
+            worker_task_abi::WORKER_CALL_RECOVERED_LABEL as seL4_Word,
+            0,
+            0,
+            4,
+        ),
+        [
+            sequence as seL4_Word,
+            status as seL4_Word,
+            TARGET_WORKER_CALL_SUPERVISOR_GENERATIONS[worker_index].load(Ordering::Acquire)
+                as seL4_Word,
+            TARGET_WORKER_CALL_CAP_GENERATIONS[worker_index].load(Ordering::Acquire) as seL4_Word,
         ],
     );
     Ok(())
@@ -1690,6 +2005,7 @@ fn handle_target_fault(
         TemporalTaskKind::Worker => {
             sel4::suspend_tcb(fault_handler_tcb_cap)
                 .map_err(|error| sel4_error("critical.root-fault-worker-suspend", error))?;
+            recover_target_passive_worker_call(record)?;
             publish_target_worker_fault(record)?;
             FaultReplyDisposition::Released
         }
@@ -1704,7 +2020,8 @@ fn handle_target_fault(
         | TemporalTaskKind::RootFault
         | TemporalTaskKind::RootEmergency
         | TemporalTaskKind::WorkerSupervisor
-        | TemporalTaskKind::DriverSupervisor => FaultReplyDisposition::CriticalTerminal {
+        | TemporalTaskKind::DriverSupervisor
+        | TemporalTaskKind::WorkerExecutor => FaultReplyDisposition::CriticalTerminal {
             task_index: registration.task_index,
         },
         // Exact generated service badges are routed through the persistent V6
@@ -2035,6 +2352,18 @@ extern "C" fn root_worker_supervisor_entry(_arg0: seL4_Word) -> ! {
     }
 }
 
+extern "C" fn root_worker_executor_gpu_entry(_arg0: seL4_Word) -> ! {
+    crate::hal::worker_task::run_target_worker_executor(
+        crate::hal::worker_task::TargetWorkerExecutorLane::Gpu,
+    )
+}
+
+extern "C" fn root_worker_executor_lora_entry(_arg0: seL4_Word) -> ! {
+    crate::hal::worker_task::run_target_worker_executor(
+        crate::hal::worker_task::TargetWorkerExecutorLane::Lora,
+    )
+}
+
 extern "C" fn root_driver_supervisor_entry(ipc_buffer_vaddr: seL4_Word) -> ! {
     let expected_badge = generated::worker_resource_admission_config()
         .handoff
@@ -2242,7 +2571,10 @@ fn construct_restricted_child(
     let inbox_source = match task.id {
         ROOT_FAULT_ID => fault_endpoint,
         ROOT_EMERGENCY_ID => emergency_endpoint,
-        WORKER_SUPERVISOR_ID | DRIVER_SUPERVISOR_ID => wake_notification,
+        WORKER_SUPERVISOR_ID
+        | DRIVER_SUPERVISOR_ID
+        | WORKER_EXECUTOR_GPU_ID
+        | WORKER_EXECUTOR_LORA_ID => wake_notification,
         _ => return Err(CriticalTcbConstructionError::MissingGeneratedRecord),
     };
     mint_child_cap(
@@ -2347,16 +2679,44 @@ fn construct_restricted_child(
                 "critical.driver-supervisor-self-cnode",
             )?;
         }
+    } else if matches!(task.id, WORKER_EXECUTOR_GPU_ID | WORKER_EXECUTOR_LORA_ID) {
+        let completion_signal = if task.id == WORKER_EXECUTOR_GPU_ID {
+            signals.worker_executor_completion_gpu
+        } else {
+            signals.worker_executor_completion_lora
+        };
+        copy_child_cap(
+            cnode,
+            child_depth,
+            CHILD_EXECUTOR_COMPLETION_SIGNAL_SLOT,
+            root_cnode,
+            completion_signal,
+            root_depth,
+            "critical.worker-executor-completion-signal",
+        )?;
+        mint_child_cap(
+            cnode,
+            child_depth,
+            4,
+            root_cnode,
+            wake_notification,
+            root_depth,
+            write_only_rights(),
+            1,
+            "critical.worker-executor-self-signal",
+        )?;
     }
-    copy_child_cap(
-        cnode,
-        child_depth,
-        CHILD_REPLY_SLOT,
-        root_cnode,
-        reply,
-        root_depth,
-        "critical.child-reply-slot",
-    )?;
+    if !matches!(task.id, WORKER_EXECUTOR_GPU_ID | WORKER_EXECUTOR_LORA_ID) {
+        copy_child_cap(
+            cnode,
+            child_depth,
+            CHILD_REPLY_SLOT,
+            root_cnode,
+            reply,
+            root_depth,
+            "critical.child-reply-slot",
+        )?;
+    }
 
     let guard_bits = sel4::word_bits().saturating_sub(seL4_Word::from(child_depth));
     let cspace_root_data = sel4::cap_data_guard(0, guard_bits);

@@ -317,7 +317,7 @@ fn render_policy_doc(manifest: &Manifest, manifest_hash: &str, policy_hash: &str
     writeln!(contents, "- `policy.sha256`: `{}`", policy_hash).ok();
     writeln!(
         contents,
-        "- `coh.worker.task_abi_schema`: `worker-task-abi/v1`"
+        "- `coh.worker.task_abi_schema`: `worker-task-abi/v2`"
     )
     .ok();
     writeln!(
@@ -625,7 +625,7 @@ fn render_policy_rust(manifest: &Manifest, manifest_hash: &str, policy_hash: &st
     writeln!(contents).ok();
     writeln!(
         contents,
-        "pub const COH_WORKER_TASK_ABI_SCHEMA: &str = \"worker-task-abi/v1\";"
+        "pub const COH_WORKER_TASK_ABI_SCHEMA: &str = \"worker-task-abi/v2\";"
     )
     .ok();
     writeln!(
@@ -962,12 +962,12 @@ mod tests {
         assert!(toml.contains("  \"/worker\","));
         for expected in [
             "role: \"worker-heartbeat\", declaration: \"executable\", executable_slots: 1",
-            "role: \"worker-gpu\", declaration: \"executable\", executable_slots: 15",
+            "role: \"worker-gpu\", declaration: \"executable\", executable_slots: 127",
             "role: \"worker-bus\", declaration: \"model-only\", executable_slots: 0",
-            "role: \"worker-lora\", declaration: \"executable\", executable_slots: 21",
-            "pub const COH_WORKER_MAXIMUM_LIVE_TASKS: u16 = 37;",
+            "role: \"worker-lora\", declaration: \"executable\", executable_slots: 128",
+            "pub const COH_WORKER_MAXIMUM_LIVE_TASKS: u16 = 256;",
             "pub const COH_WORKER_CANONICAL_TELEMETRY_TEMPLATE: &str = \"/shard/<label>/worker/<id>/telemetry\";",
-            "pub const COH_WORKER_SHARD_BITS: u8 = 8;",
+            "pub const COH_WORKER_SHARD_BITS: u8 = 6;",
             "pub const COH_WORKER_LEGACY_ALIAS: bool = true;",
             "cohesix-worker-observation/v1",
             "cohesix-worker-integration-evidence/v1",
@@ -975,7 +975,7 @@ mod tests {
             assert!(rust.contains(expected), "missing Rust contract: {expected}");
         }
         assert!(doc.contains("`coh.worker.role.worker-bus`: declaration=`model-only`"));
-        assert!(doc.contains("`coh.worker.maximum_live_tasks`: `37`"));
+        assert!(doc.contains("`coh.worker.maximum_live_tasks`: `256`"));
         assert!(doc.contains("`coh.worker.execution_proof`: `none, host-model, qemu, fresh-pi`"));
     }
 }

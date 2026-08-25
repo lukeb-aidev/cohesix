@@ -171,6 +171,35 @@ pub(crate) fn select_isolated_network_turn(
     IsolatedNetworkTurnSelection { unit, successor }
 }
 
+/// Select one root control-plane unit when the child owns QEMU RX/TX directly.
+///
+/// The ordinary shared-device rotor retains Ingress because root owns that
+/// device. Direct VirtIO makes an ingress or transmit attempt in root both
+/// useless and an ownership violation, so this selector advances across only
+/// child observation, bounded output control, disconnect, and timer service.
+pub(crate) fn select_isolated_direct_network_turn(
+    lower_cursor: IsolatedNetworkLowerCursor,
+) -> IsolatedNetworkTurnSelection {
+    let mut candidate = lower_cursor;
+    for _ in 0..5 {
+        let unit = candidate.unit();
+        let successor = candidate.advance_after(unit, false);
+        if !matches!(unit, IsolatedNetworkLowerUnit::Ingress) {
+            return IsolatedNetworkTurnSelection {
+                unit: IsolatedNetworkTurnUnit::Lower(unit),
+                successor,
+            };
+        }
+        candidate = successor;
+    }
+    IsolatedNetworkTurnSelection {
+        unit: IsolatedNetworkTurnUnit::Lower(IsolatedNetworkLowerUnit::ObserveChild),
+        successor: IsolatedNetworkLowerCursor {
+            unit: IsolatedNetworkLowerUnit::StageOutput,
+        },
+    }
+}
+
 /// Select one useful unit while an exact authenticated response is active.
 ///
 /// Routine diagnostics remain retained for the next ordinary debt turn. An
@@ -217,6 +246,49 @@ pub(crate) fn select_isolated_response_turn(
 
     // An active lane with no locally retained work can only learn whether the
     // exact child progressed by one bounded notification observation.
+    IsolatedNetworkTurnSelection {
+        unit: IsolatedNetworkTurnUnit::Lower(IsolatedNetworkLowerUnit::ObserveChild),
+        successor: IsolatedNetworkLowerCursor {
+            unit: IsolatedNetworkLowerUnit::StageOutput,
+        },
+    }
+}
+
+/// Select useful response progress for a child-owned direct QEMU NIC.
+///
+/// Root never polls RX or publishes TX frames in this mode. A retained
+/// response therefore needs only output staging, child observation, and the
+/// rate-limited timer wake that keeps protocol deadlines deterministic.
+pub(crate) fn select_isolated_direct_response_turn(
+    stage_output_ready: bool,
+    response_progress_outstanding: bool,
+    lower_cursor: IsolatedNetworkLowerCursor,
+) -> IsolatedNetworkTurnSelection {
+    if stage_output_ready {
+        return IsolatedNetworkTurnSelection {
+            unit: IsolatedNetworkTurnUnit::Lower(IsolatedNetworkLowerUnit::StageOutput),
+            successor: lower_cursor,
+        };
+    }
+
+    let mut candidate = lower_cursor;
+    for _ in 0..5 {
+        let unit = candidate.unit();
+        let successor = candidate.advance_after(unit, false);
+        if response_progress_outstanding
+            && matches!(
+                unit,
+                IsolatedNetworkLowerUnit::ObserveChild | IsolatedNetworkLowerUnit::ServiceTick
+            )
+        {
+            return IsolatedNetworkTurnSelection {
+                unit: IsolatedNetworkTurnUnit::Lower(unit),
+                successor,
+            };
+        }
+        candidate = successor;
+    }
+
     IsolatedNetworkTurnSelection {
         unit: IsolatedNetworkTurnUnit::Lower(IsolatedNetworkLowerUnit::ObserveChild),
         successor: IsolatedNetworkLowerCursor {
@@ -407,5 +479,39 @@ mod tests {
         for selected in [egress, stage, ingress] {
             assert_ne!(selected.unit(), IsolatedNetworkTurnUnit::DeferredDiagnostic);
         }
+    }
+
+    #[test]
+    fn direct_selectors_never_return_root_owned_data_plane_units() {
+        let mut cursor = IsolatedNetworkLowerCursor::new();
+        let expected = [
+            IsolatedNetworkLowerUnit::ObserveChild,
+            IsolatedNetworkLowerUnit::StageOutput,
+            IsolatedNetworkLowerUnit::Disconnect,
+            IsolatedNetworkLowerUnit::ServiceTick,
+            IsolatedNetworkLowerUnit::ObserveChild,
+        ];
+        for expected_unit in expected {
+            let selected = select_isolated_direct_network_turn(cursor);
+            assert_eq!(
+                selected.unit(),
+                IsolatedNetworkTurnUnit::Lower(expected_unit)
+            );
+            let (next, activity) = selected.finish(IsolatedNetworkTurnOutcome::complete(false));
+            assert!(!activity);
+            cursor = next;
+        }
+
+        let stage = select_isolated_direct_response_turn(true, true, cursor);
+        assert_eq!(
+            stage.unit(),
+            IsolatedNetworkTurnUnit::Lower(IsolatedNetworkLowerUnit::StageOutput)
+        );
+        let observe = select_isolated_direct_response_turn(false, true, cursor);
+        assert!(matches!(
+            observe.unit(),
+            IsolatedNetworkTurnUnit::Lower(IsolatedNetworkLowerUnit::ObserveChild)
+                | IsolatedNetworkTurnUnit::Lower(IsolatedNetworkLowerUnit::ServiceTick)
+        ));
     }
 }

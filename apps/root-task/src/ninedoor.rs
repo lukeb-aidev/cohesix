@@ -28,12 +28,14 @@ use crate::{
         ninedoor_service::NineDoorServiceRuntime,
         worker_task::{
             enqueue_target_worker_kill, enqueue_target_worker_operation,
-            enqueue_target_worker_spawn, target_worker_namespace_snapshots,
+            enqueue_target_worker_spawn, target_worker_namespace_snapshot_by_public_id,
+            target_worker_namespace_snapshot_for_identity, target_worker_namespace_snapshots,
             TargetWorkerNamespaceSnapshot,
         },
         HalError, KernelHal,
     },
     ninedoor_service::NineDoorContainmentTurn,
+    worker_supervisor::{flat_slot_index, MAX_EXECUTABLE_WORKER_SLOTS},
 };
 use alloc::{
     borrow::ToOwned,
@@ -380,6 +382,8 @@ pub struct NineDoorBridge {
     telemetry: generated::TelemetryConfig,
     telemetry_ingest: TelemetryIngestState,
     workers: Vec<WorkerTelemetry>,
+    #[cfg(all(target_arch = "aarch64", target_os = "none", sel4_config_kernel_mcs))]
+    target_worker_indexes: [Option<usize>; MAX_EXECUTABLE_WORKER_SLOTS],
     binds: HeaplessVec<BindEntry, MAX_BINDS>,
     retired_session_binds: HeaplessVec<BindEntry, MAX_BINDS>,
     authority: AuthorityQueue,
@@ -801,6 +805,8 @@ impl NineDoorBridge {
             telemetry: generated::telemetry_config(),
             telemetry_ingest: TelemetryIngestState::new(),
             workers: Vec::new(),
+            #[cfg(all(target_arch = "aarch64", target_os = "none", sel4_config_kernel_mcs))]
+            target_worker_indexes: [None; MAX_EXECUTABLE_WORKER_SLOTS],
             binds: HeaplessVec::new(),
             retired_session_binds: HeaplessVec::new(),
             authority: AuthorityQueue::new(AUTHORITY_QUEUE_MAX),
@@ -1171,9 +1177,9 @@ impl NineDoorBridge {
         if !self.is_queen() {
             return Err(NineDoorBridgeError::Permission);
         }
-        self.sync_target_worker_projections()?;
+        self.sync_target_worker_projection_for_identity(control.identity)?;
         let snapshot = enqueue_target_worker_operation(control).map_err(worker_target_error)?;
-        self.sync_target_worker_projections()?;
+        self.apply_target_worker_projection(snapshot)?;
         Ok(snapshot)
     }
 
@@ -1183,11 +1189,7 @@ impl NineDoorBridge {
         &mut self,
         public_id: &str,
     ) -> Result<TargetWorkerNamespaceSnapshot, NineDoorBridgeError> {
-        self.sync_target_worker_projections()?;
-        target_worker_namespace_snapshots()
-            .into_iter()
-            .find(|snapshot| snapshot.public_id() == Some(public_id))
-            .ok_or(NineDoorBridgeError::InvalidPath)
+        self.sync_target_worker_projection_by_public_id(public_id)
     }
 
     fn handle_host_ticket_append(
@@ -1257,7 +1259,6 @@ impl NineDoorBridge {
         path: &str,
         raw: HostTicketV2RawSpec,
     ) -> Result<(), NineDoorBridgeError> {
-        self.sync_target_worker_projections()?;
         self.gpu.withdraw_expired(crate::hal::timebase().now_ms());
         validate_host_ticket_v2_subject(&raw, &self.gpu)?;
         let canonical_raw = serialize_host_ticket(&raw)?;
@@ -1275,10 +1276,9 @@ impl NineDoorBridge {
             };
         }
         let retirement_digest = host_ticket_admission_retirement_candidate(&self.host.admissions)?;
-        let snapshot = target_worker_namespace_snapshots()
-            .into_iter()
-            .find(|snapshot| snapshot.public_id() == Some(raw.receipt_worker_id.as_str()))
-            .ok_or(NineDoorBridgeError::InvalidPayload)?;
+        let snapshot = self
+            .sync_target_worker_projection_by_public_id(raw.receipt_worker_id.as_str())
+            .map_err(|_| NineDoorBridgeError::InvalidPayload)?;
         let identity = snapshot
             .identity
             .ok_or(NineDoorBridgeError::InvalidPayload)?;
@@ -1399,10 +1399,11 @@ impl NineDoorBridge {
             return Ok(());
         };
 
-        self.sync_target_worker_projections()?;
-        let current = target_worker_namespace_snapshots()
-            .into_iter()
-            .find(|snapshot| snapshot.public_id() == Some(result.receipt_worker_id.as_str()));
+        let current_identity = admission_identity(&admission.spec)?;
+        let current = target_worker_namespace_snapshot_for_identity(current_identity).ok();
+        if let Some(snapshot) = current {
+            self.apply_target_worker_projection(snapshot)?;
+        }
         let current_binding = current.as_ref().and_then(|snapshot| {
             Some(HostTicketV2WorkerBinding {
                 public_id: snapshot.public_id()?,
@@ -1471,11 +1472,11 @@ impl NineDoorBridge {
         cursor_offset: u64,
         output: &mut HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
     ) -> Result<Option<TelemetryTailMeta>, NineDoorBridgeError> {
-        #[cfg(all(target_arch = "aarch64", target_os = "none", sel4_config_kernel_mcs))]
-        self.sync_target_worker_projections()?;
         let Some(worker_id) = parse_worker_telemetry_path(path) else {
             return Ok(None);
         };
+        #[cfg(all(target_arch = "aarch64", target_os = "none", sel4_config_kernel_mcs))]
+        self.sync_target_worker_projection_by_public_id(worker_id)?;
         let worker = self
             .workers
             .iter()
@@ -1612,8 +1613,6 @@ impl NineDoorBridge {
 
     /// Append a payload line to an append-only file.
     pub fn echo(&mut self, path: &str, payload: &str) -> Result<EchoOutcome, NineDoorBridgeError> {
-        #[cfg(all(target_arch = "aarch64", target_os = "none", sel4_config_kernel_mcs))]
-        self.sync_target_worker_projections()?;
         self.gpu.withdraw_expired(crate::hal::timebase().now_ms());
         let prepared = self.prepare_namespace(NamespaceOpcode::Echo, path, payload)?;
         let path = prepared.path();
@@ -2137,8 +2136,6 @@ impl NineDoorBridge {
         path: &str,
         output: &mut HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
     ) -> Result<(), NineDoorBridgeError> {
-        #[cfg(all(target_arch = "aarch64", target_os = "none", sel4_config_kernel_mcs))]
-        self.sync_target_worker_projections()?;
         self.gpu.withdraw_expired(crate::hal::timebase().now_ms());
         let prepared = self.prepare_namespace(NamespaceOpcode::Cat, path, "")?;
         let path = prepared.path();
@@ -2371,11 +2368,10 @@ impl NineDoorBridge {
                     .admissions
                     .get(&correlation_digest)
                     .ok_or(NineDoorBridgeError::InvalidPath)?;
-                let current = target_worker_namespace_snapshots()
-                    .into_iter()
-                    .find(|snapshot| {
-                        snapshot.public_id() == Some(admission.spec.receipt_worker_id.as_str())
-                    });
+                let current = target_worker_namespace_snapshot_for_identity(admission_identity(
+                    &admission.spec,
+                )?)
+                .ok();
                 output
                     .push(host_ticket_current_line(admission, current.as_ref())?)
                     .map_err(|_| NineDoorBridgeError::BufferFull)?;
@@ -3080,6 +3076,12 @@ impl NineDoorBridge {
                 .map_err(|_| NineDoorBridgeError::BufferFull)?;
             let snapshot = enqueue_target_worker_spawn(target.worker_role(), id.as_str())
                 .map_err(worker_target_error)?;
+            let identity = snapshot
+                .identity
+                .ok_or(NineDoorBridgeError::InvalidPayload)?;
+            let target_index =
+                flat_slot_index(snapshot.role, identity.slot).map_err(worker_target_error)?;
+            let worker_index = self.workers.len();
             let mut worker = WorkerTelemetry {
                 id,
                 ring: TelemetryRing::new(self.telemetry.ring_bytes_per_worker as usize),
@@ -3094,6 +3096,7 @@ impl NineDoorBridge {
             };
             worker.apply_target_snapshot(snapshot)?;
             self.workers.push(worker);
+            self.target_worker_indexes[target_index] = Some(worker_index);
             let _ = worker_id;
             return Ok(());
         }
@@ -3163,17 +3166,53 @@ impl NineDoorBridge {
     #[cfg(all(target_arch = "aarch64", target_os = "none", sel4_config_kernel_mcs))]
     fn sync_target_worker_projections(&mut self) -> Result<(), NineDoorBridgeError> {
         for snapshot in target_worker_namespace_snapshots() {
-            let Some(public_id) = snapshot.public_id() else {
+            if snapshot.public_id().is_none() {
                 continue;
-            };
-            let worker = self
-                .workers
-                .iter_mut()
-                .find(|worker| worker.id.as_str() == public_id)
-                .ok_or(NineDoorBridgeError::InvalidPath)?;
-            worker.apply_target_snapshot(snapshot)?;
+            }
+            self.apply_target_worker_projection(snapshot)?;
         }
         Ok(())
+    }
+
+    #[cfg(all(target_arch = "aarch64", target_os = "none", sel4_config_kernel_mcs))]
+    fn sync_target_worker_projection_by_public_id(
+        &mut self,
+        public_id: &str,
+    ) -> Result<TargetWorkerNamespaceSnapshot, NineDoorBridgeError> {
+        let snapshot = target_worker_namespace_snapshot_by_public_id(public_id)
+            .map_err(|_| NineDoorBridgeError::InvalidPath)?;
+        self.apply_target_worker_projection(snapshot)?;
+        Ok(snapshot)
+    }
+
+    #[cfg(all(target_arch = "aarch64", target_os = "none", sel4_config_kernel_mcs))]
+    fn sync_target_worker_projection_for_identity(
+        &mut self,
+        identity: WorkerIdentity,
+    ) -> Result<TargetWorkerNamespaceSnapshot, NineDoorBridgeError> {
+        let snapshot =
+            target_worker_namespace_snapshot_for_identity(identity).map_err(worker_target_error)?;
+        self.apply_target_worker_projection(snapshot)?;
+        Ok(snapshot)
+    }
+
+    #[cfg(all(target_arch = "aarch64", target_os = "none", sel4_config_kernel_mcs))]
+    fn apply_target_worker_projection(
+        &mut self,
+        snapshot: TargetWorkerNamespaceSnapshot,
+    ) -> Result<(), NineDoorBridgeError> {
+        let identity = snapshot
+            .identity
+            .ok_or(NineDoorBridgeError::InvalidPayload)?;
+        let target_index =
+            flat_slot_index(snapshot.role, identity.slot).map_err(worker_target_error)?;
+        let worker_index =
+            self.target_worker_indexes[target_index].ok_or(NineDoorBridgeError::InvalidPath)?;
+        let worker = self
+            .workers
+            .get_mut(worker_index)
+            .ok_or(NineDoorBridgeError::InvalidPath)?;
+        worker.apply_target_snapshot(snapshot)
     }
 
     fn bind_namespace(&mut self, from: &str, to: &str) -> Result<(), NineDoorBridgeError> {
@@ -3247,6 +3286,8 @@ impl NineDoorBridge {
         payload: &[u8],
     ) -> Result<(), NineDoorBridgeError> {
         self.ensure_lifecycle_gate(lifecycle::GATE_WORKER_TELEMETRY)?;
+        #[cfg(all(target_arch = "aarch64", target_os = "none", sel4_config_kernel_mcs))]
+        self.sync_target_worker_projection_by_public_id(worker_id)?;
         let worker = self
             .workers
             .iter_mut()

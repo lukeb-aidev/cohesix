@@ -16,7 +16,6 @@ use cohsh_core::wire::{render_ack, AckLine, AckStatus, END_LINE};
 use cohsh_core::ConsoleVerb;
 use nine_door::{NineDoor, ShardLayout};
 use secure9p_codec::OpenMode;
-use sha2::{Digest, Sha256};
 use swarmui::{SwarmUiBackend, SwarmUiConfig, SwarmUiTransportFactory};
 
 mod support;
@@ -47,7 +46,7 @@ impl SwarmUiTransportFactory for InProcessFactory {
 #[test]
 fn converge_transcript_matches_fixture() -> Result<()> {
     let start = Instant::now();
-    let server = NineDoor::new_with_shard_layout(ShardLayout::enabled(8, true));
+    let server = NineDoor::new_with_shard_layout(worker_shards());
     seed_worker(&server)?;
 
     let lines = run_converge_transcript(&server)?;
@@ -75,8 +74,14 @@ fn seed_worker(server: &NineDoor) -> Result<()> {
 }
 
 fn canonical_worker_telemetry_path(worker_id: &str) -> String {
-    let digest = Sha256::digest(worker_id.as_bytes());
-    format!("/shard/{:02x}/worker/{worker_id}/telemetry", digest[0])
+    format!(
+        "/{}",
+        worker_shards().worker_telemetry_path(worker_id).join("/")
+    )
+}
+
+fn worker_shards() -> ShardLayout {
+    ShardLayout::enabled(6, true)
 }
 
 fn run_converge_transcript(server: &NineDoor) -> Result<Vec<String>> {

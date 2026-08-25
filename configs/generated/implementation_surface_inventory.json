@@ -854,6 +854,20 @@
           "evidence_eligible": true
         },
         {
+          "id": "cargo-feature:console-network-runtime:direct-virtio",
+          "kind": "cargo_feature",
+          "path": "apps/console-network-runtime#feature:direct-virtio",
+          "implementation_class": "production_live",
+          "owner": "console-network-service",
+          "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
+          "production_reachable": true,
+          "selection_source": "M26e target runtime closure; Cargo feature `direct-virtio`",
+          "package_disposition": "feature_only",
+          "evidence_requirement": "authenticated TCP console isolation receipts",
+          "current_observed_mode": "mcs_isolated_console_network_runtime",
+          "evidence_eligible": true
+        },
+        {
           "id": "cargo-feature:console-network-runtime:qemu-evidence",
           "kind": "cargo_feature",
           "path": "apps/console-network-runtime#feature:qemu-evidence",

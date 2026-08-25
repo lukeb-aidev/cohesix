@@ -71,6 +71,7 @@ use std::time::{Duration, Instant};
 use anyhow::{anyhow, bail, Context, Result};
 use base64::Engine as _;
 use clap::ValueEnum;
+use cohesix_net_constants::COHESIX_TRANSPORT_COMMAND_BATCH_MAX;
 use cohesix_proto::{role_label as proto_role_label, Role as ProtoRole};
 use cohesix_ticket::Role;
 use cohsh_core::wire::{render_ack, AckLine, AckStatus};
@@ -120,7 +121,7 @@ pub struct TransportMetrics {
 /// handling. Transports without native pipelining execute the same commands
 /// sequentially through the default trait implementation. A batch containing
 /// a write is never replayed after a partial send or response failure.
-pub const TRANSPORT_COMMAND_BATCH_MAX: usize = 8;
+pub const TRANSPORT_COMMAND_BATCH_MAX: usize = COHESIX_TRANSPORT_COMMAND_BATCH_MAX;
 
 /// Maximum number of idempotent namespace reads admitted in one transport batch.
 pub const TRANSPORT_READ_BATCH_MAX: usize = TRANSPORT_COMMAND_BATCH_MAX;

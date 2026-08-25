@@ -124,14 +124,14 @@ fn schema_1_10_is_rejected_after_operator_serial_contract_change() {
     let manifest_path = temp_dir.path().join("schema-1.10.toml");
     let manifest = fs::read_to_string(repo_path("configs/root_task.toml"))
         .expect("read default manifest")
-        .replacen("schema = \"1.14\"", "schema = \"1.10\"", 1);
+        .replacen("schema = \"1.15\"", "schema = \"1.10\"", 1);
     fs::write(&manifest_path, manifest).expect("write legacy-schema manifest");
 
     let options = options_for(manifest_path, &temp_dir.path().join("legacy"));
     let error = compile(&options).expect_err("schema 1.10 must be rejected");
     let message = format!("{error:#}");
     assert!(
-        message.contains("unsupported root_task.schema 1.10 (expected 1.14)"),
+        message.contains("unsupported root_task.schema 1.10 (expected 1.15)"),
         "unexpected rejection: {message}"
     );
 }
@@ -142,14 +142,14 @@ fn schema_1_11_is_rejected_after_publication_ack_contract_change() {
     let manifest_path = temp_dir.path().join("schema-1.11.toml");
     let manifest = fs::read_to_string(repo_path("configs/root_task.toml"))
         .expect("read default manifest")
-        .replacen("schema = \"1.14\"", "schema = \"1.11\"", 1);
+        .replacen("schema = \"1.15\"", "schema = \"1.11\"", 1);
     fs::write(&manifest_path, manifest).expect("write legacy-schema manifest");
 
     let options = options_for(manifest_path, &temp_dir.path().join("legacy-ack"));
     let error = compile(&options).expect_err("schema 1.11 must be rejected");
     let message = format!("{error:#}");
     assert!(
-        message.contains("unsupported root_task.schema 1.11 (expected 1.14)"),
+        message.contains("unsupported root_task.schema 1.11 (expected 1.15)"),
         "unexpected rejection: {message}"
     );
 }
@@ -160,14 +160,14 @@ fn schema_1_12_is_rejected_after_send_batch_contract_change() {
     let manifest_path = temp_dir.path().join("schema-1.12.toml");
     let manifest = fs::read_to_string(repo_path("configs/root_task.toml"))
         .expect("read default manifest")
-        .replacen("schema = \"1.14\"", "schema = \"1.12\"", 1);
+        .replacen("schema = \"1.15\"", "schema = \"1.12\"", 1);
     fs::write(&manifest_path, manifest).expect("write legacy-schema manifest");
 
     let options = options_for(manifest_path, &temp_dir.path().join("legacy-batch"));
     let error = compile(&options).expect_err("schema 1.12 must be rejected");
     let message = format!("{error:#}");
     assert!(
-        message.contains("unsupported root_task.schema 1.12 (expected 1.14)"),
+        message.contains("unsupported root_task.schema 1.12 (expected 1.15)"),
         "unexpected rejection: {message}"
     );
 }
@@ -178,14 +178,14 @@ fn schema_1_13_is_rejected_after_natural_postpone_contract_change() {
     let manifest_path = temp_dir.path().join("schema-1.13.toml");
     let manifest = fs::read_to_string(repo_path("configs/root_task.toml"))
         .expect("read default manifest")
-        .replacen("schema = \"1.14\"", "schema = \"1.13\"", 1);
+        .replacen("schema = \"1.15\"", "schema = \"1.13\"", 1);
     fs::write(&manifest_path, manifest).expect("write legacy-schema manifest");
 
     let options = options_for(manifest_path, &temp_dir.path().join("legacy-timeout"));
     let error = compile(&options).expect_err("schema 1.13 must be rejected");
     let message = format!("{error:#}");
     assert!(
-        message.contains("unsupported root_task.schema 1.13 (expected 1.14)"),
+        message.contains("unsupported root_task.schema 1.13 (expected 1.15)"),
         "unexpected rejection: {message}"
     );
 }
@@ -212,7 +212,7 @@ fn checked_in_profiles_compile_without_radio_sidecar_output() {
 
         let resolved: Value = serde_json::from_str(&resolved)
             .unwrap_or_else(|error| panic!("parse resolved manifest for {profile}: {error}"));
-        assert_eq!(resolved["root_task"]["schema"], "1.14", "{profile}");
+        assert_eq!(resolved["root_task"]["schema"], "1.15", "{profile}");
         assert_eq!(
             resolved["console_network_service"]["abi_version"], 4,
             "{profile}"
@@ -242,8 +242,8 @@ fn checked_in_profiles_compile_without_radio_sidecar_output() {
             let (expected_root, expected_budget, expected_timer_clock_hz) =
                 if *profile == "configs/root_task.toml" {
                     (
-                        "m26e-qemu-root-adjacent-refill-natural-postpone-candidate-v35",
-                        5_500,
+                        "m26e-qemu-root-dedicated-core-bounded-quantum-v1",
+                        9_000,
                         24_000_000,
                     )
                 } else {

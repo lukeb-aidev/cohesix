@@ -19,7 +19,9 @@ use cohsh::{Session, Transport};
 use fs2::FileExt;
 use sha2::{Digest, Sha256};
 
-use super::{arg_bool, arg_str, ExecutorConfig, ReconcileOutcome, TransportAccess};
+use super::{
+    arg_bool, arg_str, provider_pending, ExecutorConfig, ReconcileOutcome, TransportAccess,
+};
 use crate::{HostTicketSpec, HOST_TICKET_V2_SCHEMA};
 
 const ADAPTER_FILE: &str = "adapter.safetensors";
@@ -123,7 +125,11 @@ fn execute_v2(
                     export.files, export.bytes, export.digest
                 ));
             }
-            let _lock = PeftRootLock::acquire(&config.export_root, "export")?;
+            let Some(_lock) = PeftRootLock::try_acquire(&config.export_root, "export")? else {
+                return Err(provider_pending(format!(
+                    "peft.export job={subject} is waiting for the elected producer"
+                )));
+            };
             if let Some(export) = completed_export(&config.export_root, &subject)? {
                 return Ok(format!(
                     "peft.export job={subject} observed=complete files={} bytes={} digest={}",
@@ -611,6 +617,15 @@ struct PeftRootLock {
 
 impl PeftRootLock {
     fn acquire(root: &Path, label: &str) -> Result<Self> {
+        Self::try_acquire(root, label)?.ok_or_else(|| {
+            anyhow!(
+                "PEFT root {} already has an active {label} transaction",
+                root.display()
+            )
+        })
+    }
+
+    fn try_acquire(root: &Path, label: &str) -> Result<Option<Self>> {
         let root = confined_root(root)?;
         let path = root.join(format!(".cohesix-{label}.lock"));
         if fs::symlink_metadata(&path).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
@@ -623,9 +638,11 @@ impl PeftRootLock {
             .truncate(false)
             .open(&path)
             .with_context(|| format!("open PEFT lock {}", path.display()))?;
-        file.try_lock_exclusive()
-            .with_context(|| format!("lock PEFT root {}", root.display()))?;
-        Ok(Self { file })
+        match file.try_lock_exclusive() {
+            Ok(()) => Ok(Some(Self { file })),
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => Ok(None),
+            Err(error) => Err(error).with_context(|| format!("lock PEFT root {}", root.display())),
+        }
     }
 }
 
@@ -682,6 +699,27 @@ mod tests {
         assert_eq!(completed.files, EXPORT_FILES.len());
         assert_eq!(completed.bytes, 20);
         assert_eq!(completed.digest.len(), 64);
+    }
+
+    #[test]
+    fn export_lock_elects_one_producer_without_blocking_contenders() {
+        let temp = tempfile::TempDir::new().expect("temp");
+        let first = PeftRootLock::try_acquire(temp.path(), "export")
+            .expect("first lock attempt")
+            .expect("first producer");
+        assert!(
+            PeftRootLock::try_acquire(temp.path(), "export")
+                .expect("contending lock attempt")
+                .is_none(),
+            "a contending export must become provider-pending",
+        );
+        drop(first);
+        assert!(
+            PeftRootLock::try_acquire(temp.path(), "export")
+                .expect("post-release lock attempt")
+                .is_some(),
+            "producer lock must be reusable after deterministic release",
+        );
     }
 
     #[cfg(unix)]

@@ -352,6 +352,45 @@ impl Transport for RestTransport {
         }
     }
 
+    fn write_batch(
+        &mut self,
+        _session: &Session,
+        path: &str,
+        payloads: &[Vec<u8>],
+    ) -> Result<usize> {
+        self.ensure_attached()?;
+        let lines = payloads
+            .iter()
+            .map(|payload| Self::build_echo_payload(payload.as_slice()))
+            .collect::<Result<Vec<_>>>()?;
+        match self.client.echo_batch(path, lines.as_slice()) {
+            Ok(written) => {
+                for line in &lines {
+                    let detail = if line.is_empty() {
+                        format!("path={path}")
+                    } else {
+                        format!("path={path} bytes={}", line.len())
+                    };
+                    self.push_ack(
+                        AckStatus::Ok,
+                        ConsoleVerb::Echo.ack_label(),
+                        Some(detail.as_str()),
+                    );
+                }
+                Ok(written)
+            }
+            Err(err) => {
+                let detail = format!("path={path} reason={err}");
+                self.push_ack(
+                    AckStatus::Err,
+                    ConsoleVerb::Echo.ack_label(),
+                    Some(detail.as_str()),
+                );
+                Err(err)
+            }
+        }
+    }
+
     fn drain_acknowledgements(&mut self) -> Vec<String> {
         self.ack_lines.drain(..).collect()
     }
@@ -597,6 +636,37 @@ mod tests {
 
         assert_eq!(primary.operation_response_timeout(), selected);
         assert_eq!(pooled.operation_response_timeout(), selected);
+    }
+
+    #[test]
+    fn write_batch_uses_one_rest_request_and_preserves_per_record_ack_order() {
+        let response = r#"{"status":"OK","verb":"ECHO_BATCH","path":"/host/tickets/status","end":true,"bytes":6}"#.to_owned();
+        let (base_url, requests_rx, server) = serve_json(vec![response]);
+        let mut transport = RestTransport::new(base_url, Some("test-token".to_owned()));
+        let session = transport
+            .attach(Role::Queen, None)
+            .expect("attach local REST session");
+        let _ = transport.drain_acknowledgements();
+
+        let payloads = vec![b"one\n".to_vec(), b"two\n".to_vec()];
+        assert_eq!(
+            transport
+                .write_batch(&session, "/host/tickets/status", payloads.as_slice())
+                .expect("write bounded REST batch"),
+            2
+        );
+        assert_eq!(
+            transport.drain_acknowledgements(),
+            [
+                "OK ECHO path=/host/tickets/status bytes=3",
+                "OK ECHO path=/host/tickets/status bytes=3",
+            ]
+        );
+
+        server.join().expect("join loopback test server");
+        let requests = requests_rx.recv().expect("receive captured requests");
+        assert_eq!(requests.len(), 1);
+        assert!(requests[0].starts_with("POST /v1/fs/echo-batch HTTP/1.1"));
     }
 
     #[test]

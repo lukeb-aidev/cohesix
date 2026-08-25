@@ -517,7 +517,7 @@ fn passive_service_recovery_replies_once_during_call_and_zero_between_calls() {
     let recovery = source_section(
         source,
         "fn recover_target_passive_service_call(",
-        "enum FaultReplyDisposition",
+        "fn recover_target_passive_worker_call(",
     );
     let reply_slot = recovery
         .find("let reply_slot = TARGET_SERVICE_RECOVERY_SLOTS")

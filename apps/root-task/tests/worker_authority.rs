@@ -55,10 +55,10 @@ fn worker_notification_badges_are_enabled_and_exact() {
 #[test]
 fn worker_scheduling_record_is_mcs_and_consumed_time_bound() {
     let evidence = scheduling_evidence();
-    assert_eq!(evidence.profile, WorkerSchedulingProfile::Mcs);
+    assert_eq!(evidence.profile, WorkerSchedulingProfile::McsPassive);
     assert!(evidence.service_turn_budget > 0);
-    assert!(evidence.mcs_budget_us > 0);
-    assert!(evidence.mcs_period_us >= evidence.mcs_budget_us);
+    assert!(evidence.bootstrap_budget_us > 0);
+    assert!(evidence.bootstrap_period_us >= evidence.bootstrap_budget_us);
     assert_ne!(evidence.timeout_endpoint_badge, 0);
     assert!(evidence.consumed_budget_evidence);
 }

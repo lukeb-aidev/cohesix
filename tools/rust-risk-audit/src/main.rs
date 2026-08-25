@@ -69,42 +69,42 @@ const OUT_DIR_INCLUDE_CONTRACTS: [(&str, &str, &str, &str, &str); 8] = [
         "apps/root-task/src/lib.rs",
         "built_info.rs",
         "apps/root-task/build.rs",
-        "a2984ca0424b7b6f44c63520afd165a7ad4beb238d24a412153d398107109282",
+        "d201d01eb239c3e393d4ce38772b440d0d35146f205ac2277adb419de0a468e9",
         "1f84446ecca892a1f879fadb5f682ac073bfb302f617380cd37b831062488521",
     ),
     (
         "apps/root-task/src/hal/pi4_wifi.rs",
         "pi4_wifi_firmware.rs",
         "apps/root-task/build.rs",
-        "a2984ca0424b7b6f44c63520afd165a7ad4beb238d24a412153d398107109282",
+        "d201d01eb239c3e393d4ce38772b440d0d35146f205ac2277adb419de0a468e9",
         "1f84446ecca892a1f879fadb5f682ac073bfb302f617380cd37b831062488521",
     ),
     (
         "apps/root-task/src/hal/driver_task.rs",
         "pi4_driver_runtime_payload.rs",
         "apps/root-task/build.rs",
-        "a2984ca0424b7b6f44c63520afd165a7ad4beb238d24a412153d398107109282",
+        "d201d01eb239c3e393d4ce38772b440d0d35146f205ac2277adb419de0a468e9",
         "1f84446ecca892a1f879fadb5f682ac073bfb302f617380cd37b831062488521",
     ),
     (
         "apps/root-task/src/console_network_service.rs",
         "console_network_image_identity.rs",
         "apps/root-task/build.rs",
-        "a2984ca0424b7b6f44c63520afd165a7ad4beb238d24a412153d398107109282",
+        "d201d01eb239c3e393d4ce38772b440d0d35146f205ac2277adb419de0a468e9",
         "1f84446ecca892a1f879fadb5f682ac073bfb302f617380cd37b831062488521",
     ),
     (
         "apps/root-task/src/ninedoor_service.rs",
         "ninedoor_image_identity.rs",
         "apps/root-task/build.rs",
-        "a2984ca0424b7b6f44c63520afd165a7ad4beb238d24a412153d398107109282",
+        "d201d01eb239c3e393d4ce38772b440d0d35146f205ac2277adb419de0a468e9",
         "1f84446ecca892a1f879fadb5f682ac073bfb302f617380cd37b831062488521",
     ),
     (
         "apps/root-task/src/hal/worker_image.rs",
         "worker_image_identity.rs",
         "apps/root-task/build.rs",
-        "a2984ca0424b7b6f44c63520afd165a7ad4beb238d24a412153d398107109282",
+        "d201d01eb239c3e393d4ce38772b440d0d35146f205ac2277adb419de0a468e9",
         "1f84446ecca892a1f879fadb5f682ac073bfb302f617380cd37b831062488521",
     ),
 ];
@@ -116,7 +116,7 @@ const BUILD_SCRIPT_CONTRACTS: [(&str, &str, &str); 4] = [
     ),
     (
         "apps/root-task/build.rs",
-        "a2984ca0424b7b6f44c63520afd165a7ad4beb238d24a412153d398107109282",
+        "d201d01eb239c3e393d4ce38772b440d0d35146f205ac2277adb419de0a468e9",
         "1f84446ecca892a1f879fadb5f682ac073bfb302f617380cd37b831062488521",
     ),
     (
@@ -177,19 +177,19 @@ struct RiskCounts {
 }
 
 const ACTIVE_GLOBAL_CEILING: RiskCounts = RiskCounts {
-    unsafe_count: 795,
+    unsafe_count: 808,
     unwrap_count: 38,
     expect_count: 243,
     panic_count: 102,
 };
 const ACTIVE_LINKED_RUNTIME_HAL_CEILING: RiskCounts = RiskCounts {
-    unsafe_count: 160,
+    unsafe_count: 161,
     unwrap_count: 0,
     expect_count: 2,
     panic_count: 0,
 };
 const ACTIVE_OUTSIDE_LINKED_RUNTIME_HAL_CEILING: RiskCounts = RiskCounts {
-    unsafe_count: 635,
+    unsafe_count: 647,
     unwrap_count: 38,
     expect_count: 241,
     panic_count: 102,
@@ -2431,13 +2431,13 @@ fn validate_baseline(baseline: &RiskBaselines) -> Result<(), String> {
             .metadata
             .outside_linked_runtime_hal_historical_panic
             != HISTORICAL_OUTSIDE_LINKED_RUNTIME_HAL_COUNTS.panic_count
-        || baseline.metadata.accepted_unsafe_delta != 104
+        || baseline.metadata.accepted_unsafe_delta != 115
         || baseline.metadata.accepted_unwrap_delta != 0
         || baseline.metadata.accepted_expect_delta != 3
         || baseline.metadata.accepted_panic_delta != 6
     {
         return Err(String::from(
-            "risk baseline historical v4 metadata must remain global=(693,38,240,96) linked=(146,0,2,0) outside=(547,38,238,96); approved 26e deltas must be unsafe=104 unwrap=0 expect=3 panic=6",
+            "risk baseline historical v4 metadata must remain global=(693,38,240,96) linked=(146,0,2,0) outside=(547,38,238,96); approved 26e deltas must be unsafe=115 unwrap=0 expect=3 panic=6",
         ));
     }
     let expected_paths: Vec<String> = LINKED_RUNTIME_HAL_PATHS
@@ -3481,7 +3481,7 @@ mod tests {
             ACTIVE_OUTSIDE_LINKED_RUNTIME_HAL_CEILING
         );
 
-        let duplicate = COMPLETE_BASELINE.replacen("unsafe = 795", "unsafe = 795\nunsafe = 795", 1);
+        let duplicate = COMPLETE_BASELINE.replacen("unsafe = 808", "unsafe = 808\nunsafe = 808", 1);
         assert!(parse_baseline(&duplicate).is_err());
     }
 

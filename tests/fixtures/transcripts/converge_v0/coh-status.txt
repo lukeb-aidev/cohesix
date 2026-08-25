@@ -1,6 +1,6 @@
 OK ATTACH role=queen
 OK TAIL path=/log/queen.log
 END
-OK TAIL path=/shard/13/worker/worker-1/telemetry
+OK TAIL path=/shard/04/worker/worker-1/telemetry
 END
 OK QUIT

@@ -224,6 +224,60 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/GatewayResponse"
+  /v1/fs/echo-batch:
+    post:
+      summary: Append 1 to 8 ordered host-ticket result lines in one transport activation.
+      description: >
+        This authenticated route is limited to `/host/tickets/status` and
+        `/host/tickets/deadletter`. It preserves per-line ECHO validation and
+        order while amortizing one bounded guest command batch. It is never
+        replayed after a partial transport failure.
+      security:
+        - bearerAuth: []
+        - requestAuthHeader: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EchoBatchRequest"
+      responses:
+        "200":
+          description: All ordered appends completed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GatewayResponse"
+        "400":
+          description: Invalid path, line, or batch bound.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GatewayResponse"
+        "401":
+          description: Missing or invalid request authentication token.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GatewayResponse"
+        "429":
+          description: Gateway broker queue backpressure.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GatewayResponse"
+        "503":
+          description: Gateway transport unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GatewayResponse"
+        "504":
+          description: Gateway broker response timed out.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GatewayResponse"
   /v1/openapi.yaml:
     get:
       summary: OpenAPI 3.1 specification.
@@ -294,6 +348,23 @@ components:
           type: string
         line:
           type: string
+    EchoBatchRequest:
+      type: object
+      required:
+        - path
+        - lines
+      properties:
+        path:
+          type: string
+          enum:
+            - /host/tickets/status
+            - /host/tickets/deadletter
+        lines:
+          type: array
+          minItems: 1
+          maxItems: 8
+          items:
+            type: string
     BoundsResponse:
       type: object
       required:

@@ -109,7 +109,7 @@ fn worker_list_path() -> String {
 }
 
 fn worker_shards() -> ShardLayout {
-    ShardLayout::enabled(8, true)
+    ShardLayout::enabled(6, true)
 }
 
 fn read_only_trace_fixture() -> Result<Vec<u8>> {

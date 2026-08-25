@@ -204,7 +204,7 @@ fn passive_fault_reply_precedes_durable_containment_publication() {
         .find("fn recover_target_passive_service_call(")
         .expect("passive donor recovery helper");
     let helper_end = source[helper_start..]
-        .find("enum FaultReplyDisposition")
+        .find("fn recover_target_passive_worker_call(")
         .map(|offset| helper_start + offset)
         .expect("bounded passive donor recovery helper");
     let helper = &source[helper_start..helper_end];

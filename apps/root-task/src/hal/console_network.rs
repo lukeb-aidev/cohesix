@@ -11,19 +11,23 @@
 //! needed for supervision. Construction leaves the TCB suspended until the
 //! complete target fault registry has been sealed.
 
+use core::ptr::{read_volatile, write_volatile};
 use core::sync::atomic::{fence, Ordering};
 
 use console_network_abi::{
-    CHILD_WAKE_MASK, RUNTIME_INIT_DESCRIPTOR_BYTES, SHARED_PAGE_BYTES, WAKE_CONTROL,
-    WAKE_EVENT_READY, WAKE_PACKET_RX, WAKE_PACKET_TX_READY, WAKE_PUBLICATION_ACK, WAKE_REVOKE,
-    WAKE_SHUTDOWN,
+    DirectVirtioLayout, CHILD_WAKE_MASK, DIRECT_VIRTIO_BUFFER_COUNT,
+    DIRECT_VIRTIO_IRQ_HANDLER_SLOT, DIRECT_VIRTIO_LAYOUT_BYTES, DIRECT_VIRTIO_LAYOUT_MAGIC,
+    DIRECT_VIRTIO_LAYOUT_OFFSET, DIRECT_VIRTIO_LAYOUT_VERSION, DIRECT_VIRTIO_PAGE_BYTES,
+    DIRECT_VIRTIO_QUEUE_COUNT, DIRECT_VIRTIO_QUEUE_SIZE, RUNTIME_INIT_DESCRIPTOR_BYTES,
+    SHARED_PAGE_BYTES, WAKE_CONTROL, WAKE_DIRECT_VIRTIO_IRQ, WAKE_EVENT_READY, WAKE_PACKET_RX,
+    WAKE_PACKET_TX_READY, WAKE_PUBLICATION_ACK, WAKE_REVOKE, WAKE_SHUTDOWN,
 };
 use heapless::Vec;
 use sel4_sys::{seL4_CPtr, seL4_Word};
 
 use super::{
     fill_runtime_elf_page, plan_runtime_elf_load, runtime_cacheable_xn_attributes,
-    runtime_elf_page_mapping, HalError, KernelHal,
+    runtime_elf_page_mapping, runtime_uncached_xn_attributes, HalError, KernelHal,
 };
 use crate::console_network_service::{
     BoundaryError, ConsoleNetworkBoundary, ConsoleNetworkContainmentCursor,
@@ -36,15 +40,58 @@ use crate::console_network_service::{
 use crate::critical_tcb::GenerationIdentity;
 use crate::sel4::{self, RamFrame, RevokeAnchorVSpaceTracker};
 
-const ROOT_SLOT_COUNT: usize = 123;
 const TRANSLATION_SLOT_COUNT: usize = 8;
-const FRAME_COUNT: usize = 98;
+#[cfg(feature = "net-backend-virtio")]
+const DIRECT_DMA_FRAME_COUNT: usize = DIRECT_VIRTIO_QUEUE_COUNT + DIRECT_VIRTIO_BUFFER_COUNT * 2;
+#[cfg(not(feature = "net-backend-virtio"))]
+const DIRECT_DMA_FRAME_COUNT: usize = 0;
+#[cfg(feature = "net-backend-virtio")]
+const DIRECT_DEVICE_SLOT_COUNT: usize = 1;
+#[cfg(not(feature = "net-backend-virtio"))]
+const DIRECT_DEVICE_SLOT_COUNT: usize = 0;
+
+#[cfg(feature = "net-backend-virtio")]
+const fn direct_virtio_dma_attributes() -> sel4_sys::seL4_ARM_VMAttributes {
+    // QEMU accesses guest RAM through a normal cacheable host mapping. The
+    // AArch64 guest must use the matching normal-memory attribute so KVM/HVF
+    // and QEMU observe one coherent cache domain; the VirtIO barriers retain
+    // descriptor/index ordering. Only the MMIO page is device memory.
+    runtime_cacheable_xn_attributes()
+}
+
+#[cfg(feature = "net-backend-virtio")]
+const fn direct_virtio_mmio_attributes() -> sel4_sys::seL4_ARM_VMAttributes {
+    runtime_uncached_xn_attributes()
+}
+#[cfg(feature = "net-backend-virtio")]
+const DIRECT_IRQ_SLOT_COUNT: usize = 2;
+#[cfg(not(feature = "net-backend-virtio"))]
+const DIRECT_IRQ_SLOT_COUNT: usize = 0;
+const IMAGE_FRAME_COUNT: usize = if cfg!(feature = "net-backend-virtio") {
+    62
+} else {
+    60
+};
+const BASE_FRAME_COUNT: usize = IMAGE_FRAME_COUNT + 38;
+const FRAME_COUNT: usize = BASE_FRAME_COUNT + DIRECT_DMA_FRAME_COUNT;
 const IMAGE_FRAME_START: usize = 0;
-const STACK_FRAME_START: usize = 60;
-const IPC_FRAME_INDEX: usize = 92;
-const INIT_FRAME_INDEX: usize = 93;
-const SHARED_FRAME_START: usize = 94;
+const STACK_FRAME_START: usize = IMAGE_FRAME_COUNT;
+const IPC_FRAME_INDEX: usize = STACK_FRAME_START + 32;
+const INIT_FRAME_INDEX: usize = IPC_FRAME_INDEX + 1;
+const SHARED_FRAME_START: usize = INIT_FRAME_INDEX + 1;
 const SHARED_FRAME_COUNT: usize = 4;
+const DIRECT_FRAME_START: usize = BASE_FRAME_COUNT;
+const DIRECT_QUEUE_FRAME_START: usize = DIRECT_FRAME_START;
+const DIRECT_RX_FRAME_START: usize = DIRECT_QUEUE_FRAME_START + DIRECT_VIRTIO_QUEUE_COUNT;
+const DIRECT_TX_FRAME_START: usize = DIRECT_RX_FRAME_START + DIRECT_VIRTIO_BUFFER_COUNT;
+
+const DIRECT_VIRTIO_MMIO_PADDR: usize = 0x0a00_0000;
+const DIRECT_VIRTIO_MMIO_VADDR: usize = 0x7205_0000;
+const DIRECT_VIRTIO_QUEUE_VADDR: usize = 0x7205_1000;
+const DIRECT_VIRTIO_RX_VADDR: usize = 0x7205_3000;
+const DIRECT_VIRTIO_TX_VADDR: usize = 0x7206_3000;
+#[cfg(feature = "net-backend-virtio")]
+const DIRECT_VIRTIO_IRQ: seL4_Word = 48;
 
 const TCB_SLOT_INDEX: usize = 0;
 const CNODE_SLOT_INDEX: usize = 1;
@@ -58,6 +105,11 @@ const SHARED_COPY_SLOT_START: usize = TRANSLATION_SLOT_START + TRANSLATION_SLOT_
 const ROOT_WAKE_SLOT_START: usize = SHARED_COPY_SLOT_START + SHARED_FRAME_COUNT;
 const STANDARD_FAULT_SLOT_INDEX: usize = ROOT_WAKE_SLOT_START + 5;
 const TIMEOUT_FAULT_SLOT_INDEX: usize = STANDARD_FAULT_SLOT_INDEX + 1;
+const DIRECT_MMIO_SLOT_INDEX: usize = TIMEOUT_FAULT_SLOT_INDEX + 1;
+const DIRECT_IRQ_NOTIFICATION_SLOT_INDEX: usize = DIRECT_MMIO_SLOT_INDEX + DIRECT_DEVICE_SLOT_COUNT;
+const DIRECT_IRQ_HANDLER_SLOT_INDEX: usize = DIRECT_IRQ_NOTIFICATION_SLOT_INDEX + 1;
+const ROOT_SLOT_COUNT: usize =
+    TIMEOUT_FAULT_SLOT_INDEX + 1 + DIRECT_DEVICE_SLOT_COUNT + DIRECT_IRQ_SLOT_COUNT;
 
 const ROOT_PACKET_RX_WAKE_INDEX: usize = 0;
 const ROOT_CONTROL_WAKE_INDEX: usize = 1;
@@ -68,8 +120,14 @@ const ROOT_PUBLICATION_ACK_WAKE_INDEX: usize = 4;
 const CHILD_CNODE_RADIX_BITS: u8 = 4;
 
 const _: () = assert!(TIMEOUT_FAULT_SLOT_INDEX < ROOT_SLOT_COUNT);
+#[cfg(feature = "net-backend-virtio")]
+const _: () = assert!(DIRECT_MMIO_SLOT_INDEX + 1 == DIRECT_IRQ_NOTIFICATION_SLOT_INDEX);
+#[cfg(feature = "net-backend-virtio")]
+const _: () = assert!(DIRECT_IRQ_HANDLER_SLOT_INDEX + 1 == ROOT_SLOT_COUNT);
 const _: () = assert!(STACK_FRAME_START + 32 == IPC_FRAME_INDEX);
-const _: () = assert!(SHARED_FRAME_START + SHARED_FRAME_COUNT == FRAME_COUNT);
+const _: () = assert!(SHARED_FRAME_START + SHARED_FRAME_COUNT == BASE_FRAME_COUNT);
+#[cfg(feature = "net-backend-virtio")]
+const _: () = assert!(DIRECT_TX_FRAME_START + DIRECT_VIRTIO_BUFFER_COUNT == FRAME_COUNT);
 const _: () = assert!(SHARED_FRAME_COUNT == ConsoleNetworkContainmentCursor::SHARED_FRAME_COUNT);
 const _: () = assert!(ConsoleNetworkContainmentCursor::FAULT_CAP_COUNT == 2);
 
@@ -179,6 +237,15 @@ pub struct ConsoleNetworkRuntime {
     standard_fault_cap: seL4_CPtr,
     timeout_fault_cap: seL4_CPtr,
     shared_frames: Vec<RamFrame, SHARED_FRAME_COUNT>,
+    direct_virtio_layout: Option<DirectVirtioLayout>,
+    direct_device_cap: seL4_CPtr,
+    direct_device_child_unmapped: bool,
+    direct_device_root_mapping: Option<RamFrame>,
+    direct_device_deleted: bool,
+    direct_irq_handler_cap: seL4_CPtr,
+    direct_irq_notification_cap: seL4_CPtr,
+    direct_dma_child_unmapped: u64,
+    direct_dma_root_mapping: Option<(usize, RamFrame)>,
     entry: usize,
     stack_top: usize,
     init_vaddr: usize,
@@ -205,7 +272,10 @@ impl ConsoleNetworkRuntime {
     /// Whether root may publish one copied ingress packet now.
     #[must_use]
     pub const fn ingress_available(&self) -> bool {
-        self.activated && !self.contained && self.boundary.ingress_available()
+        !self.direct_virtio()
+            && self.activated
+            && !self.contained
+            && self.boundary.ingress_available()
     }
 
     /// Whether root may publish one authorized control now.
@@ -218,6 +288,12 @@ impl ConsoleNetworkRuntime {
     #[must_use]
     pub const fn activated(&self) -> bool {
         self.activated && !self.contained
+    }
+
+    /// Whether the child owns the admitted QEMU VirtIO data path directly.
+    #[must_use]
+    pub const fn direct_virtio(&self) -> bool {
+        self.direct_virtio_layout.is_some()
     }
 
     /// Whether the immutable ABI-v3 descriptor and initial registers are ready.
@@ -256,7 +332,7 @@ impl ConsoleNetworkRuntime {
         }
         let contract = ConsoleNetworkContract::from_generated()
             .map_err(|_| HalError::Unsupported("console-network-generated-contract"))?;
-        let descriptor = contract
+        let mut descriptor = contract
             .runtime_init(
                 self.generation(),
                 mac,
@@ -266,13 +342,17 @@ impl ConsoleNetworkRuntime {
                 auth_token,
             )
             .map_err(|_| HalError::Unsupported("console-network-runtime-init"))?;
+        if self.direct_virtio_layout.is_some() {
+            descriptor = descriptor.with_direct_virtio();
+        }
         let mut begin_line = heapless::String::<224>::new();
         let _ = core::fmt::write(
             &mut begin_line,
             format_args!(
-                "CONSOLE_NETWORK_DESCRIPTOR phase=finalize-begin tcb=0x{:04x} init_frame=0x{:04x} state=suspended abi=v3",
+                "CONSOLE_NETWORK_DESCRIPTOR phase=finalize-begin tcb=0x{:04x} init_frame=0x{:04x} state=suspended abi=v4 direct_virtio={}",
                 self.tcb,
                 self.slots[FRAME_SLOT_START + INIT_FRAME_INDEX],
+                self.direct_virtio(),
             ),
         );
         crate::bootstrap::log::force_uart_line(begin_line.as_str());
@@ -310,6 +390,15 @@ impl ConsoleNetworkRuntime {
             .map_err(|_| HalError::Unsupported("console-network-init-encode"))
             .and_then(|_| {
                 frame.as_mut_slice()[..encoded.len()].copy_from_slice(&encoded);
+                if let Some(layout) = self.direct_virtio_layout {
+                    let mut encoded_layout = [0u8; DIRECT_VIRTIO_LAYOUT_BYTES];
+                    layout.encode(&mut encoded_layout).map_err(|_| {
+                        HalError::Unsupported("console-network-direct-layout-encode")
+                    })?;
+                    let end = DIRECT_VIRTIO_LAYOUT_OFFSET + encoded_layout.len();
+                    frame.as_mut_slice()[DIRECT_VIRTIO_LAYOUT_OFFSET..end]
+                        .copy_from_slice(&encoded_layout);
+                }
                 super::cache::cache_clean(
                     sel4_sys::seL4_CapInitThreadVSpace,
                     frame.ptr().as_ptr() as usize,
@@ -339,8 +428,8 @@ impl ConsoleNetworkRuntime {
         let _ = core::fmt::write(
             &mut ready_line,
             format_args!(
-                "CONSOLE_NETWORK_DESCRIPTOR phase=finalize-ready tcb=0x{:04x} init_frame=0x{:04x} root_alias=0x{:04x} state=suspended root_alias_state=deleted abi=v3",
-                self.tcb, init_frame, alias,
+                "CONSOLE_NETWORK_DESCRIPTOR phase=finalize-ready tcb=0x{:04x} init_frame=0x{:04x} root_alias=0x{:04x} state=suspended root_alias_state=deleted abi=v4 direct_virtio={}",
+                self.tcb, init_frame, alias, self.direct_virtio(),
             ),
         );
         crate::bootstrap::log::force_uart_line(ready_line.as_str());
@@ -390,7 +479,7 @@ impl ConsoleNetworkRuntime {
 
     /// Stage one virtual/admitted NIC packet and signal its exact one-hot wake.
     pub fn stage_ingress(&mut self, packet: &[u8]) -> Result<u64, BoundaryError> {
-        if !self.activated || self.contained {
+        if self.direct_virtio() || !self.activated || self.contained {
             return Err(BoundaryError::InvalidState);
         }
         let sequence = self
@@ -576,6 +665,107 @@ impl ConsoleNetworkRuntime {
         })
     }
 
+    fn reset_unmap_direct_device(&mut self, hal: &mut KernelHal<'_>) -> Result<(), HalError> {
+        if self.direct_device_cap == sel4_sys::seL4_CapNull || self.direct_device_deleted {
+            return Ok(());
+        }
+        if !self.direct_device_child_unmapped {
+            hal.env
+                .unmap_page_cap(self.direct_device_cap)
+                .map_err(HalError::Sel4)?;
+            self.direct_device_child_unmapped = true;
+        }
+        if self.direct_device_root_mapping.is_none() {
+            let mapping = hal
+                .env
+                .map_revoke_anchor_frame_in_root(
+                    self.direct_device_cap,
+                    runtime_uncached_xn_attributes(),
+                )
+                .map_err(HalError::Sel4)?;
+            self.direct_device_root_mapping = Some(mapping);
+        }
+        let mapping = self
+            .direct_device_root_mapping
+            .as_ref()
+            .ok_or(HalError::Unsupported(
+                "console-network-direct-device-mapping",
+            ))?;
+        let status = mapping.ptr().as_ptr().wrapping_add(0x70).cast::<u32>();
+        // SAFETY: The child is suspended and the sole admitted VirtIO MMIO cap
+        // is now mapped only in root. Offset 0x70 is the aligned device-status
+        // register within that validated page. Writing zero synchronously
+        // resets queue DMA before any DMA page is scrubbed.
+        unsafe {
+            write_volatile(status, 0);
+            fence(Ordering::SeqCst);
+            if read_volatile(status) != 0 {
+                return Err(HalError::Unsupported("console-network-direct-device-reset"));
+            }
+        }
+        hal.env
+            .unmap_page_cap(self.direct_device_cap)
+            .map_err(HalError::Sel4)?;
+        self.direct_device_root_mapping = None;
+        let error = sel4::cnode_delete_bounded(
+            hal.env.init_cnode_cap(),
+            self.direct_device_cap,
+            sel4::word_bits() as u8,
+        );
+        if error != sel4_sys::seL4_NoError {
+            return Err(HalError::Sel4(error));
+        }
+        self.direct_device_deleted = true;
+        Ok(())
+    }
+
+    fn scrub_direct_dma_frame(
+        &mut self,
+        frame_index: usize,
+        hal: &mut KernelHal<'_>,
+    ) -> Result<(), HalError> {
+        if frame_index >= DIRECT_DMA_FRAME_COUNT {
+            return Err(HalError::Unsupported("console-network-direct-frame-index"));
+        }
+        if self
+            .direct_dma_root_mapping
+            .as_ref()
+            .is_some_and(|(mapped_index, _)| *mapped_index != frame_index)
+        {
+            return Err(HalError::Unsupported("console-network-direct-frame-order"));
+        }
+        let frame_cap = self.slots[FRAME_SLOT_START + DIRECT_FRAME_START + frame_index];
+        let bit = 1u64 << frame_index;
+        if self.direct_dma_root_mapping.is_none() {
+            if self.direct_dma_child_unmapped & bit == 0 {
+                hal.env.unmap_page_cap(frame_cap).map_err(HalError::Sel4)?;
+                self.direct_dma_child_unmapped |= bit;
+            }
+            let mapping = hal
+                .env
+                .map_revoke_anchor_frame_in_root(frame_cap, direct_virtio_dma_attributes())
+                .map_err(HalError::Sel4)?;
+            self.direct_dma_root_mapping = Some((frame_index, mapping));
+        }
+        let frame = self
+            .direct_dma_root_mapping
+            .as_mut()
+            .map(|(_, frame)| frame)
+            .ok_or(HalError::Unsupported(
+                "console-network-direct-frame-mapping",
+            ))?;
+        frame.as_mut_slice().fill(0);
+        super::cache::cache_clean_bounded(
+            sel4_sys::seL4_CapInitThreadVSpace,
+            frame.ptr().as_ptr() as usize,
+            DIRECT_VIRTIO_PAGE_BYTES,
+        )
+        .map_err(|error| HalError::Sel4(error.code()))?;
+        hal.env.unmap_page_cap(frame_cap).map_err(HalError::Sel4)?;
+        self.direct_dma_root_mapping = None;
+        Ok(())
+    }
+
     /// Grant one publication credit after the adapter retained all copied output.
     pub fn acknowledge_publication(&mut self) -> Result<(), BoundaryError> {
         if !self.activated || self.contained || !self.publication_ack_owed {
@@ -647,6 +837,58 @@ impl ConsoleNetworkRuntime {
                         "console-network-containment-frame-index",
                     )),
                 }
+            }
+            ConsoleNetworkContainmentUnit::ClearDirectIrq => {
+                let error = sel4::irq_handler_clear(self.direct_irq_handler_cap);
+                if error == sel4_sys::seL4_NoError {
+                    Ok(())
+                } else {
+                    Err(HalError::Sel4(error))
+                }
+            }
+            ConsoleNetworkContainmentUnit::RevokeDirectIrqHandler => {
+                let error = sel4::cnode_revoke(
+                    hal.env.init_cnode_cap(),
+                    self.direct_irq_handler_cap,
+                    sel4::word_bits() as u8,
+                );
+                if error == sel4_sys::seL4_NoError {
+                    Ok(())
+                } else {
+                    Err(HalError::Sel4(error))
+                }
+            }
+            ConsoleNetworkContainmentUnit::DeleteDirectIrqNotification => {
+                let error = sel4::cnode_delete_bounded(
+                    hal.env.init_cnode_cap(),
+                    self.direct_irq_notification_cap,
+                    sel4::word_bits() as u8,
+                );
+                if error == sel4_sys::seL4_NoError {
+                    self.direct_irq_notification_cap = sel4_sys::seL4_CapNull;
+                    Ok(())
+                } else {
+                    Err(HalError::Sel4(error))
+                }
+            }
+            ConsoleNetworkContainmentUnit::DeleteDirectIrqHandler => {
+                let error = sel4::cnode_delete_bounded(
+                    hal.env.init_cnode_cap(),
+                    self.direct_irq_handler_cap,
+                    sel4::word_bits() as u8,
+                );
+                if error == sel4_sys::seL4_NoError {
+                    self.direct_irq_handler_cap = sel4_sys::seL4_CapNull;
+                    Ok(())
+                } else {
+                    Err(HalError::Sel4(error))
+                }
+            }
+            ConsoleNetworkContainmentUnit::ResetUnmapDirectDevice => {
+                self.reset_unmap_direct_device(hal)
+            }
+            ConsoleNetworkContainmentUnit::ScrubDirectFrame(frame_index) => {
+                self.scrub_direct_dma_frame(frame_index, hal)
             }
             ConsoleNetworkContainmentUnit::DeleteFaultCap(cap_index) => {
                 match [self.standard_fault_cap, self.timeout_fault_cap]
@@ -788,6 +1030,27 @@ impl<'a> KernelHal<'a> {
         if result.is_err() {
             let root_cnode = self.env.init_cnode_cap();
             let root_depth = sel4::word_bits() as u8;
+            #[cfg(feature = "net-backend-virtio")]
+            {
+                let _ = sel4::irq_handler_clear(slots[DIRECT_IRQ_HANDLER_SLOT_INDEX]);
+                let _ = sel4::cnode_revoke(
+                    root_cnode,
+                    slots[DIRECT_IRQ_HANDLER_SLOT_INDEX],
+                    root_depth,
+                );
+                let _ = sel4::cnode_delete(
+                    root_cnode,
+                    slots[DIRECT_IRQ_NOTIFICATION_SLOT_INDEX],
+                    root_depth,
+                );
+                let _ = sel4::cnode_delete(
+                    root_cnode,
+                    slots[DIRECT_IRQ_HANDLER_SLOT_INDEX],
+                    root_depth,
+                );
+                let _ = self.env.unmap_page_cap(slots[DIRECT_MMIO_SLOT_INDEX]);
+                let _ = sel4::cnode_delete(root_cnode, slots[DIRECT_MMIO_SLOT_INDEX], root_depth);
+            }
             let _ = sel4::cnode_delete(root_cnode, slots[STANDARD_FAULT_SLOT_INDEX], root_depth);
             let _ = sel4::cnode_delete(root_cnode, slots[TIMEOUT_FAULT_SLOT_INDEX], root_depth);
             let _ = self
@@ -941,6 +1204,8 @@ fn construct_generation(
     )?;
     map_empty_init_frame(hal, anchor, vspace, tracker, &slots, contract)?;
     let shared_frames = map_shared_frames(hal, anchor, vspace, tracker, &slots, contract)?;
+    let (direct_virtio_layout, direct_device_cap) =
+        map_direct_virtio(hal, anchor, vspace, tracker, &slots)?;
     hal.env
         .seal_revoke_anchor_translation_reserve(anchor, tracker)
         .map_err(map_vspace_error)?;
@@ -997,6 +1262,14 @@ fn construct_generation(
         .map_err(|_| HalError::Unsupported("console-network-init-vaddr"))?;
     let boundary = ConsoleNetworkBoundary::new(generation)
         .map_err(|_| HalError::Unsupported("console-network-boundary"))?;
+    #[cfg(feature = "net-backend-virtio")]
+    let (direct_irq_handler_cap, direct_irq_notification_cap) = (
+        slots[DIRECT_IRQ_HANDLER_SLOT_INDEX],
+        slots[DIRECT_IRQ_NOTIFICATION_SLOT_INDEX],
+    );
+    #[cfg(not(feature = "net-backend-virtio"))]
+    let (direct_irq_handler_cap, direct_irq_notification_cap) =
+        (sel4_sys::seL4_CapNull, sel4_sys::seL4_CapNull);
     Ok(ConsoleNetworkRuntime {
         boundary,
         anchor,
@@ -1010,6 +1283,15 @@ fn construct_generation(
         standard_fault_cap,
         timeout_fault_cap,
         shared_frames,
+        direct_virtio_layout,
+        direct_device_cap,
+        direct_device_child_unmapped: direct_device_cap == sel4_sys::seL4_CapNull,
+        direct_device_root_mapping: None,
+        direct_device_deleted: direct_device_cap == sel4_sys::seL4_CapNull,
+        direct_irq_handler_cap,
+        direct_irq_notification_cap,
+        direct_dma_child_unmapped: 0,
+        direct_dma_root_mapping: None,
         entry: image_plan.entry,
         stack_top,
         init_vaddr,
@@ -1017,7 +1299,9 @@ fn construct_generation(
         activated: false,
         containment_started: false,
         contained: false,
-        containment: ConsoleNetworkContainmentCursor::new(),
+        containment: ConsoleNetworkContainmentCursor::with_direct_frames(
+            DIRECT_DMA_FRAME_COUNT as u8,
+        ),
     })
 }
 
@@ -1230,6 +1514,201 @@ fn map_shared_frames(
     Ok(frames)
 }
 
+#[cfg(feature = "net-backend-virtio")]
+fn map_direct_virtio(
+    hal: &mut KernelHal<'_>,
+    anchor: seL4_CPtr,
+    vspace: seL4_CPtr,
+    tracker: &mut RevokeAnchorVSpaceTracker<TRANSLATION_SLOT_COUNT>,
+    slots: &[seL4_CPtr; ROOT_SLOT_COUNT],
+) -> Result<(Option<DirectVirtioLayout>, seL4_CPtr), HalError> {
+    let mut queue_paddrs = [0u64; DIRECT_VIRTIO_QUEUE_COUNT];
+    let mut rx_paddrs = [0u64; DIRECT_VIRTIO_BUFFER_COUNT];
+    let mut tx_paddrs = [0u64; DIRECT_VIRTIO_BUFFER_COUNT];
+    let rights = sel4_sys::seL4_CapRights_ReadWrite;
+    for index in 0..DIRECT_DMA_FRAME_COUNT {
+        let frame_cap = slots[FRAME_SLOT_START + DIRECT_FRAME_START + index];
+        let mut root_frame = hal
+            .env
+            .map_revoke_anchor_frame_in_root(frame_cap, runtime_cacheable_xn_attributes())
+            .map_err(HalError::Sel4)?;
+        root_frame.as_mut_slice().fill(0);
+        super::cache::cache_clean(
+            sel4_sys::seL4_CapInitThreadVSpace,
+            root_frame.ptr().as_ptr() as usize,
+            DIRECT_VIRTIO_PAGE_BYTES,
+        )
+        .map_err(|error| HalError::Sel4(error.code()))?;
+        let paddr = u64::try_from(root_frame.paddr())
+            .map_err(|_| HalError::Unsupported("console-network-direct-paddr"))?;
+        hal.env.unmap_page_cap(frame_cap).map_err(HalError::Sel4)?;
+        let (vaddr, destination) = if index < DIRECT_VIRTIO_QUEUE_COUNT {
+            (
+                DIRECT_VIRTIO_QUEUE_VADDR + index * DIRECT_VIRTIO_PAGE_BYTES,
+                &mut queue_paddrs[index],
+            )
+        } else if index < DIRECT_VIRTIO_QUEUE_COUNT + DIRECT_VIRTIO_BUFFER_COUNT {
+            let buffer = index - DIRECT_VIRTIO_QUEUE_COUNT;
+            (
+                DIRECT_VIRTIO_RX_VADDR + buffer * DIRECT_VIRTIO_PAGE_BYTES,
+                &mut rx_paddrs[buffer],
+            )
+        } else {
+            let buffer = index - DIRECT_VIRTIO_QUEUE_COUNT - DIRECT_VIRTIO_BUFFER_COUNT;
+            (
+                DIRECT_VIRTIO_TX_VADDR + buffer * DIRECT_VIRTIO_PAGE_BYTES,
+                &mut tx_paddrs[buffer],
+            )
+        };
+        *destination = paddr;
+        hal.env
+            .map_page_cap_into_revoke_anchor_vspace(
+                anchor,
+                frame_cap,
+                vspace,
+                vaddr,
+                rights,
+                direct_virtio_dma_attributes(),
+                tracker,
+            )
+            .map_err(map_vspace_error)?;
+    }
+
+    let direct_device_cap = hal
+        .env
+        .map_exclusive_device_page_into_revoke_anchor_vspace(
+            anchor,
+            DIRECT_VIRTIO_MMIO_PADDR,
+            slots[DIRECT_MMIO_SLOT_INDEX],
+            vspace,
+            DIRECT_VIRTIO_MMIO_VADDR,
+            rights,
+            direct_virtio_mmio_attributes(),
+            tracker,
+        )
+        .map_err(map_vspace_error)?;
+    let layout = DirectVirtioLayout {
+        magic: DIRECT_VIRTIO_LAYOUT_MAGIC,
+        version: DIRECT_VIRTIO_LAYOUT_VERSION,
+        layout_bytes: DIRECT_VIRTIO_LAYOUT_BYTES as u16,
+        flags: 0,
+        queue_size: DIRECT_VIRTIO_QUEUE_SIZE as u16,
+        buffer_count: DIRECT_VIRTIO_BUFFER_COUNT as u16,
+        mmio_vaddr: DIRECT_VIRTIO_MMIO_VADDR as u64,
+        mmio_paddr: DIRECT_VIRTIO_MMIO_PADDR as u64,
+        queue_vaddrs: [
+            DIRECT_VIRTIO_QUEUE_VADDR as u64,
+            (DIRECT_VIRTIO_QUEUE_VADDR + DIRECT_VIRTIO_PAGE_BYTES) as u64,
+        ],
+        queue_paddrs,
+        rx_vaddr: DIRECT_VIRTIO_RX_VADDR as u64,
+        tx_vaddr: DIRECT_VIRTIO_TX_VADDR as u64,
+        rx_paddrs,
+        tx_paddrs,
+        seal: 0,
+    }
+    .sealed();
+    layout
+        .validate()
+        .map_err(|_| HalError::Unsupported("console-network-direct-layout"))?;
+    Ok((Some(layout), direct_device_cap))
+}
+
+#[cfg(not(feature = "net-backend-virtio"))]
+fn map_direct_virtio(
+    _hal: &mut KernelHal<'_>,
+    _anchor: seL4_CPtr,
+    _vspace: seL4_CPtr,
+    _tracker: &mut RevokeAnchorVSpaceTracker<TRANSLATION_SLOT_COUNT>,
+    _slots: &[seL4_CPtr; ROOT_SLOT_COUNT],
+) -> Result<(Option<DirectVirtioLayout>, seL4_CPtr), HalError> {
+    Ok((None, sel4_sys::seL4_CapNull))
+}
+
+#[cfg(feature = "net-backend-virtio")]
+fn install_direct_virtio_irq(
+    hal: &mut KernelHal<'_>,
+    slots: &[seL4_CPtr; ROOT_SLOT_COUNT],
+    child_cnode: seL4_CPtr,
+    root_to_child_notification: seL4_CPtr,
+) -> Result<(), HalError> {
+    let root_cnode = hal.env.init_cnode_cap();
+    let root_depth = sel4::word_bits() as u8;
+    let handler = slots[DIRECT_IRQ_HANDLER_SLOT_INDEX];
+    let badged_notification = slots[DIRECT_IRQ_NOTIFICATION_SLOT_INDEX];
+
+    #[cfg(all(target_arch = "aarch64", target_os = "none"))]
+    let get_error = sel4::irq_control_get_trigger_handler(
+        DIRECT_VIRTIO_IRQ,
+        1,
+        root_cnode,
+        handler,
+        root_depth,
+    );
+    #[cfg(not(all(target_arch = "aarch64", target_os = "none")))]
+    let get_error =
+        sel4::irq_control_get_level_handler(DIRECT_VIRTIO_IRQ, root_cnode, handler, root_depth);
+    if get_error != sel4_sys::seL4_NoError {
+        return Err(HalError::Sel4(get_error));
+    }
+
+    let result = (|| {
+        mint(
+            root_cnode,
+            badged_notification,
+            root_depth,
+            root_cnode,
+            root_to_child_notification,
+            root_depth,
+            sel4_sys::seL4_CapRights::new(0, 0, 0, 1),
+            seL4_Word::from(WAKE_DIRECT_VIRTIO_IRQ),
+        )?;
+        let bind_error = sel4::irq_handler_set_notification(handler, badged_notification);
+        if bind_error != sel4_sys::seL4_NoError {
+            return Err(HalError::Sel4(bind_error));
+        }
+        let copy_error = sel4::cnode_copy_depth(
+            child_cnode,
+            seL4_CPtr::from(DIRECT_VIRTIO_IRQ_HANDLER_SLOT),
+            CHILD_CNODE_RADIX_BITS,
+            root_cnode,
+            handler,
+            root_depth,
+            sel4_sys::seL4_CapRights_All,
+        );
+        if copy_error != sel4_sys::seL4_NoError {
+            return Err(HalError::Sel4(copy_error));
+        }
+        let ack_error = sel4::irq_handler_ack(handler);
+        if ack_error != sel4_sys::seL4_NoError {
+            return Err(HalError::Sel4(ack_error));
+        }
+        Ok(())
+    })();
+    if let Err(error) = result {
+        let _ = sel4::cnode_delete_bounded(
+            child_cnode,
+            seL4_CPtr::from(DIRECT_VIRTIO_IRQ_HANDLER_SLOT),
+            CHILD_CNODE_RADIX_BITS,
+        );
+        let _ = sel4::irq_handler_clear(handler);
+        let _ = sel4::cnode_delete_bounded(root_cnode, badged_notification, root_depth);
+        let _ = sel4::cnode_delete_bounded(root_cnode, handler, root_depth);
+        return Err(error);
+    }
+    Ok(())
+}
+
+#[cfg(not(feature = "net-backend-virtio"))]
+fn install_direct_virtio_irq(
+    _hal: &mut KernelHal<'_>,
+    _slots: &[seL4_CPtr; ROOT_SLOT_COUNT],
+    _child_cnode: seL4_CPtr,
+    _root_to_child_notification: seL4_CPtr,
+) -> Result<(), HalError> {
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn install_caps_and_mcs(
     hal: &mut KernelHal<'_>,
@@ -1301,6 +1780,7 @@ fn install_caps_and_mcs(
         )?;
         root_wake_caps[index] = cap;
     }
+    install_direct_virtio_irq(hal, slots, child_cnode, root_to_child_notification)?;
 
     let fault_origin = super::critical_tcb::target_fault_endpoint_origin().ok_or(
         HalError::Unsupported("console-network-critical-fault-endpoint"),
@@ -1451,12 +1931,26 @@ mod tests {
     #[test]
     fn fixed_slot_plan_accounts_every_generated_object() {
         assert_eq!(FRAME_SLOT_START, 6);
-        assert_eq!(TRANSLATION_SLOT_START, 104);
-        assert_eq!(SHARED_COPY_SLOT_START, 112);
-        assert_eq!(ROOT_WAKE_SLOT_START, 116);
-        assert_eq!(STANDARD_FAULT_SLOT_INDEX, 121);
-        assert_eq!(TIMEOUT_FAULT_SLOT_INDEX, 122);
-        assert_eq!(TIMEOUT_FAULT_SLOT_INDEX + 1, ROOT_SLOT_COUNT);
+        assert_eq!(TRANSLATION_SLOT_START, FRAME_SLOT_START + FRAME_COUNT);
+        assert_eq!(SHARED_COPY_SLOT_START, TRANSLATION_SLOT_START + 8);
+        assert_eq!(ROOT_WAKE_SLOT_START, SHARED_COPY_SLOT_START + 4);
+        assert_eq!(STANDARD_FAULT_SLOT_INDEX, ROOT_WAKE_SLOT_START + 5);
+        assert_eq!(TIMEOUT_FAULT_SLOT_INDEX, STANDARD_FAULT_SLOT_INDEX + 1);
+        assert_eq!(DIRECT_MMIO_SLOT_INDEX, TIMEOUT_FAULT_SLOT_INDEX + 1);
+        assert_eq!(
+            DIRECT_MMIO_SLOT_INDEX + DIRECT_DEVICE_SLOT_COUNT + DIRECT_IRQ_SLOT_COUNT,
+            ROOT_SLOT_COUNT
+        );
+        if DIRECT_IRQ_SLOT_COUNT != 0 {
+            assert_eq!(
+                DIRECT_IRQ_NOTIFICATION_SLOT_INDEX,
+                DIRECT_MMIO_SLOT_INDEX + 1
+            );
+            assert_eq!(
+                DIRECT_IRQ_HANDLER_SLOT_INDEX,
+                DIRECT_IRQ_NOTIFICATION_SLOT_INDEX + 1
+            );
+        }
     }
 
     #[test]
@@ -1467,6 +1961,19 @@ mod tests {
         );
         assert_eq!(WAKE_PACKET_TX_READY | WAKE_EVENT_READY, CHILD_WAKE_MASK);
         assert_eq!(WAKE_PUBLICATION_ACK, 64);
+        assert_eq!(WAKE_DIRECT_VIRTIO_IRQ, 128);
+    }
+
+    #[cfg(feature = "net-backend-virtio")]
+    #[test]
+    fn direct_virtio_ram_is_cache_coherent_while_mmio_is_uncached() {
+        let default = sel4::vm_attributes_raw(sel4_sys::seL4_ARM_Page_Default);
+        let xn = sel4::vm_attributes_raw(sel4_sys::seL4_ARM_ExecuteNever);
+        assert_eq!(
+            sel4::vm_attributes_raw(direct_virtio_dma_attributes()),
+            default | xn
+        );
+        assert_eq!(sel4::vm_attributes_raw(direct_virtio_mmio_attributes()), xn);
     }
 
     #[test]
@@ -1501,6 +2008,15 @@ mod tests {
             standard_fault_cap: 0,
             timeout_fault_cap: 0,
             shared_frames: Vec::new(),
+            direct_virtio_layout: None,
+            direct_device_cap: 0,
+            direct_device_child_unmapped: true,
+            direct_device_root_mapping: None,
+            direct_device_deleted: true,
+            direct_irq_handler_cap: 0,
+            direct_irq_notification_cap: 0,
+            direct_dma_child_unmapped: 0,
+            direct_dma_root_mapping: None,
             entry: 0,
             stack_top: 0,
             init_vaddr: 0,

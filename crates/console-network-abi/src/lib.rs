@@ -67,6 +67,22 @@ pub const COMMAND_LINE_BYTES: usize = 2304;
 pub const AUTH_TOKEN_BYTES: usize = 64;
 /// Exact serialized runtime-init descriptor bytes.
 pub const RUNTIME_INIT_DESCRIPTOR_BYTES: usize = 224;
+/// Byte offset of the optional QEMU direct-VirtIO layout in the read-only init page.
+pub const DIRECT_VIRTIO_LAYOUT_OFFSET: usize = 512;
+/// Direct-VirtIO layout magic (`CNV1`).
+pub const DIRECT_VIRTIO_LAYOUT_MAGIC: u32 = 0x434e_5631;
+/// Direct-VirtIO layout version.
+pub const DIRECT_VIRTIO_LAYOUT_VERSION: u16 = 1;
+/// Exact encoded direct-VirtIO layout bytes.
+pub const DIRECT_VIRTIO_LAYOUT_BYTES: usize = 344;
+/// Fixed VirtIO queue count (RX and TX).
+pub const DIRECT_VIRTIO_QUEUE_COUNT: usize = 2;
+/// Fixed descriptor count in each direct VirtIO queue.
+pub const DIRECT_VIRTIO_QUEUE_SIZE: usize = 16;
+/// Fixed RX and TX DMA-buffer count.
+pub const DIRECT_VIRTIO_BUFFER_COUNT: usize = 16;
+/// Exact page bytes for every direct VirtIO MMIO, queue, and DMA mapping.
+pub const DIRECT_VIRTIO_PAGE_BYTES: usize = 4096;
 /// Fixed child CSpace cardinality.
 pub const CHILD_CSPACE_SLOTS: u32 = 16;
 /// Child wait cap for the root-to-child wake notification.
@@ -80,6 +96,8 @@ pub const SUPERVISOR_WAKE_NOTIFICATION_SLOT: u32 = 4;
 /// The child receives no endpoint capability here; seL4 installs the
 /// root-held fault and timeout-fault caps directly on its TCB.
 pub const FAULT_ENDPOINT_SLOT: u32 = 5;
+/// Direct-QEMU VirtIO IRQHandler cap slot; empty for non-direct transports.
+pub const DIRECT_VIRTIO_IRQ_HANDLER_SLOT: u32 = 7;
 
 /// Root has published one packet in the RX page.
 pub const WAKE_PACKET_RX: u64 = 1;
@@ -95,6 +113,8 @@ pub const WAKE_PACKET_TX_READY: u64 = 16;
 pub const WAKE_EVENT_READY: u64 = 32;
 /// Root has accepted the preceding child publication and grants one new slot credit.
 pub const WAKE_PUBLICATION_ACK: u64 = 64;
+/// QEMU VirtIO queue/config interrupt delivered directly to the child.
+pub const WAKE_DIRECT_VIRTIO_IRQ: u64 = 128;
 /// All allowed root-to-child notification bits.
 pub const ROOT_WAKE_MASK: u64 =
     WAKE_PACKET_RX | WAKE_CONTROL | WAKE_SHUTDOWN | WAKE_REVOKE | WAKE_PUBLICATION_ACK;
@@ -113,6 +133,8 @@ pub const INIT_FLAG_CHILD_AUTH_FRAMING: u32 = 1 << 3;
 pub const INIT_FLAG_PUBLICATION_ACK: u32 = 1 << 4;
 /// Child reports consumed root inputs through exact event-page watermarks.
 pub const INIT_FLAG_COMPLETION_WATERMARKS: u32 = 1 << 5;
+/// The QEMU child owns its admitted VirtIO MMIO and DMA data path directly.
+pub const INIT_FLAG_DIRECT_VIRTIO: u32 = 1 << 6;
 /// Exact required runtime flags.
 pub const REQUIRED_INIT_FLAGS: u32 = INIT_FLAG_POINTER_FREE
     | INIT_FLAG_SEQUENCE_LAST
@@ -120,6 +142,8 @@ pub const REQUIRED_INIT_FLAGS: u32 = INIT_FLAG_POINTER_FREE
     | INIT_FLAG_CHILD_AUTH_FRAMING
     | INIT_FLAG_PUBLICATION_ACK
     | INIT_FLAG_COMPLETION_WATERMARKS;
+/// Every recognized runtime flag.
+pub const ALLOWED_INIT_FLAGS: u32 = REQUIRED_INIT_FLAGS | INIT_FLAG_DIRECT_VIRTIO;
 
 const PACKET_RESERVED_BYTES: usize = SHARED_PAGE_BYTES - 40 - ETHERNET_FRAME_BYTES;
 const EXCHANGE_RESERVED_BYTES: usize = SHARED_PAGE_BYTES - 64 - CONSOLE_PAYLOAD_BYTES;
@@ -894,6 +918,252 @@ impl CommandBatchCursor {
     }
 }
 
+/// Pointer-free, read-only QEMU VirtIO ownership layout.
+///
+/// Root constructs and maps every page before activation, then seals this
+/// record into the child's existing init page. The child receives virtual and
+/// physical addresses only; it receives no allocator, VSpace, IRQ-control, or
+/// root capability authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(C, align(8))]
+pub struct DirectVirtioLayout {
+    /// [`DIRECT_VIRTIO_LAYOUT_MAGIC`].
+    pub magic: u32,
+    /// [`DIRECT_VIRTIO_LAYOUT_VERSION`].
+    pub version: u16,
+    /// Exact [`DIRECT_VIRTIO_LAYOUT_BYTES`].
+    pub layout_bytes: u16,
+    /// Reserved flags; zero.
+    pub flags: u32,
+    /// Exact [`DIRECT_VIRTIO_QUEUE_SIZE`].
+    pub queue_size: u16,
+    /// Exact [`DIRECT_VIRTIO_BUFFER_COUNT`].
+    pub buffer_count: u16,
+    /// Child virtual address of the sole QEMU VirtIO-MMIO page.
+    pub mmio_vaddr: u64,
+    /// Physical address of the sole QEMU VirtIO-MMIO page.
+    pub mmio_paddr: u64,
+    /// Child virtual addresses of RX and TX queue pages.
+    pub queue_vaddrs: [u64; DIRECT_VIRTIO_QUEUE_COUNT],
+    /// Physical addresses of RX and TX queue pages.
+    pub queue_paddrs: [u64; DIRECT_VIRTIO_QUEUE_COUNT],
+    /// Child virtual base of the contiguous RX DMA-page window.
+    pub rx_vaddr: u64,
+    /// Child virtual base of the contiguous TX DMA-page window.
+    pub tx_vaddr: u64,
+    /// Physical address of every RX DMA page.
+    pub rx_paddrs: [u64; DIRECT_VIRTIO_BUFFER_COUNT],
+    /// Physical address of every TX DMA page.
+    pub tx_paddrs: [u64; DIRECT_VIRTIO_BUFFER_COUNT],
+    /// FNV-1a seal over every preceding field.
+    pub seal: u64,
+}
+
+impl DirectVirtioLayout {
+    /// Seal a fully populated layout.
+    #[must_use]
+    pub const fn sealed(mut self) -> Self {
+        self.seal = self.expected_seal();
+        self
+    }
+
+    /// Validate exact bounds, disjoint page identities, and the complete seal.
+    pub const fn validate(self) -> Result<(), AbiError> {
+        if self.magic != DIRECT_VIRTIO_LAYOUT_MAGIC || self.version != DIRECT_VIRTIO_LAYOUT_VERSION
+        {
+            return Err(AbiError::InvalidIdentity);
+        }
+        if self.layout_bytes as usize != DIRECT_VIRTIO_LAYOUT_BYTES || self.flags != 0 {
+            return Err(AbiError::InvalidLayout);
+        }
+        if self.queue_size as usize != DIRECT_VIRTIO_QUEUE_SIZE
+            || self.buffer_count as usize != DIRECT_VIRTIO_BUFFER_COUNT
+        {
+            return Err(AbiError::InvalidBound);
+        }
+        if !page_aligned_nonzero(self.mmio_vaddr)
+            || !page_aligned_nonzero(self.mmio_paddr)
+            || !page_aligned_nonzero(self.rx_vaddr)
+            || !page_aligned_nonzero(self.tx_vaddr)
+        {
+            return Err(AbiError::InvalidLayout);
+        }
+        let rx_end = match self
+            .rx_vaddr
+            .checked_add((DIRECT_VIRTIO_BUFFER_COUNT * DIRECT_VIRTIO_PAGE_BYTES) as u64)
+        {
+            Some(end) => end,
+            None => return Err(AbiError::InvalidLayout),
+        };
+        let tx_end = match self
+            .tx_vaddr
+            .checked_add((DIRECT_VIRTIO_BUFFER_COUNT * DIRECT_VIRTIO_PAGE_BYTES) as u64)
+        {
+            Some(end) => end,
+            None => return Err(AbiError::InvalidLayout),
+        };
+        if ranges_overlap(self.rx_vaddr, rx_end, self.tx_vaddr, tx_end) {
+            return Err(AbiError::InvalidLayout);
+        }
+        let mut page_index = 0usize;
+        while page_index < DIRECT_VIRTIO_QUEUE_COUNT {
+            if !page_aligned_nonzero(self.queue_vaddrs[page_index])
+                || !page_aligned_nonzero(self.queue_paddrs[page_index])
+            {
+                return Err(AbiError::InvalidLayout);
+            }
+            page_index += 1;
+        }
+        page_index = 0;
+        while page_index < DIRECT_VIRTIO_BUFFER_COUNT {
+            if !page_aligned_nonzero(self.rx_paddrs[page_index])
+                || !page_aligned_nonzero(self.tx_paddrs[page_index])
+            {
+                return Err(AbiError::InvalidLayout);
+            }
+            page_index += 1;
+        }
+        let virtual_pages = self.virtual_pages();
+        let mut left = 0usize;
+        while left < virtual_pages.len() {
+            let mut right = left + 1;
+            while right < virtual_pages.len() {
+                if virtual_pages[left] == virtual_pages[right] {
+                    return Err(AbiError::InvalidLayout);
+                }
+                right += 1;
+            }
+            left += 1;
+        }
+        let physical = self.physical_pages();
+        left = 0;
+        while left < physical.len() {
+            let mut right = left + 1;
+            while right < physical.len() {
+                if physical[left] == physical[right] {
+                    return Err(AbiError::InvalidLayout);
+                }
+                right += 1;
+            }
+            left += 1;
+        }
+        if self.seal == 0 || self.seal != self.expected_seal() {
+            return Err(AbiError::InvalidSeal);
+        }
+        Ok(())
+    }
+
+    /// Encode the canonical layout without copying Rust padding.
+    pub fn encode(&self, output: &mut [u8]) -> Result<(), AbiError> {
+        if output.len() != DIRECT_VIRTIO_LAYOUT_BYTES {
+            return Err(AbiError::InvalidLayout);
+        }
+        self.validate()?;
+        output.fill(0);
+        output[0..4].copy_from_slice(&self.magic.to_le_bytes());
+        output[4..6].copy_from_slice(&self.version.to_le_bytes());
+        output[6..8].copy_from_slice(&self.layout_bytes.to_le_bytes());
+        output[8..12].copy_from_slice(&self.flags.to_le_bytes());
+        output[12..14].copy_from_slice(&self.queue_size.to_le_bytes());
+        output[14..16].copy_from_slice(&self.buffer_count.to_le_bytes());
+        output[16..24].copy_from_slice(&self.mmio_vaddr.to_le_bytes());
+        output[24..32].copy_from_slice(&self.mmio_paddr.to_le_bytes());
+        encode_u64_array(output, 32, &self.queue_vaddrs);
+        encode_u64_array(output, 48, &self.queue_paddrs);
+        output[64..72].copy_from_slice(&self.rx_vaddr.to_le_bytes());
+        output[72..80].copy_from_slice(&self.tx_vaddr.to_le_bytes());
+        encode_u64_array(output, 80, &self.rx_paddrs);
+        encode_u64_array(output, 208, &self.tx_paddrs);
+        output[336..344].copy_from_slice(&self.seal.to_le_bytes());
+        Ok(())
+    }
+
+    /// Decode one canonical direct-VirtIO layout.
+    pub fn decode(input: &[u8]) -> Result<Self, AbiError> {
+        if input.len() != DIRECT_VIRTIO_LAYOUT_BYTES {
+            return Err(AbiError::InvalidLayout);
+        }
+        let layout = Self {
+            magic: read_u32(input, 0),
+            version: read_u16(input, 4),
+            layout_bytes: read_u16(input, 6),
+            flags: read_u32(input, 8),
+            queue_size: read_u16(input, 12),
+            buffer_count: read_u16(input, 14),
+            mmio_vaddr: read_u64(input, 16),
+            mmio_paddr: read_u64(input, 24),
+            queue_vaddrs: decode_u64_array(input, 32),
+            queue_paddrs: decode_u64_array(input, 48),
+            rx_vaddr: read_u64(input, 64),
+            tx_vaddr: read_u64(input, 72),
+            rx_paddrs: decode_u64_array(input, 80),
+            tx_paddrs: decode_u64_array(input, 208),
+            seal: read_u64(input, 336),
+        };
+        layout.validate()?;
+        Ok(layout)
+    }
+
+    const fn physical_pages(
+        self,
+    ) -> [u64; 1 + DIRECT_VIRTIO_QUEUE_COUNT + DIRECT_VIRTIO_BUFFER_COUNT * 2] {
+        let mut pages = [0u64; 1 + DIRECT_VIRTIO_QUEUE_COUNT + DIRECT_VIRTIO_BUFFER_COUNT * 2];
+        pages[0] = self.mmio_paddr;
+        let mut index = 0usize;
+        while index < DIRECT_VIRTIO_QUEUE_COUNT {
+            pages[1 + index] = self.queue_paddrs[index];
+            index += 1;
+        }
+        let mut buffer = 0usize;
+        while buffer < DIRECT_VIRTIO_BUFFER_COUNT {
+            pages[1 + DIRECT_VIRTIO_QUEUE_COUNT + buffer] = self.rx_paddrs[buffer];
+            pages[1 + DIRECT_VIRTIO_QUEUE_COUNT + DIRECT_VIRTIO_BUFFER_COUNT + buffer] =
+                self.tx_paddrs[buffer];
+            buffer += 1;
+        }
+        pages
+    }
+
+    const fn virtual_pages(
+        self,
+    ) -> [u64; 1 + DIRECT_VIRTIO_QUEUE_COUNT + DIRECT_VIRTIO_BUFFER_COUNT * 2] {
+        let mut pages = [0u64; 1 + DIRECT_VIRTIO_QUEUE_COUNT + DIRECT_VIRTIO_BUFFER_COUNT * 2];
+        pages[0] = self.mmio_vaddr;
+        let mut index = 0usize;
+        while index < DIRECT_VIRTIO_QUEUE_COUNT {
+            pages[1 + index] = self.queue_vaddrs[index];
+            index += 1;
+        }
+        let mut buffer = 0usize;
+        while buffer < DIRECT_VIRTIO_BUFFER_COUNT {
+            pages[1 + DIRECT_VIRTIO_QUEUE_COUNT + buffer] =
+                self.rx_vaddr + (buffer * DIRECT_VIRTIO_PAGE_BYTES) as u64;
+            pages[1 + DIRECT_VIRTIO_QUEUE_COUNT + DIRECT_VIRTIO_BUFFER_COUNT + buffer] =
+                self.tx_vaddr + (buffer * DIRECT_VIRTIO_PAGE_BYTES) as u64;
+            buffer += 1;
+        }
+        pages
+    }
+
+    const fn expected_seal(self) -> u64 {
+        let mut hash = FNV64_OFFSET;
+        hash = hash_u32(hash, self.magic);
+        hash = hash_u16(hash, self.version);
+        hash = hash_u16(hash, self.layout_bytes);
+        hash = hash_u32(hash, self.flags);
+        hash = hash_u16(hash, self.queue_size);
+        hash = hash_u16(hash, self.buffer_count);
+        hash = hash_u64(hash, self.mmio_vaddr);
+        hash = hash_u64(hash, self.mmio_paddr);
+        hash = hash_u64_slice(hash, &self.queue_vaddrs);
+        hash = hash_u64_slice(hash, &self.queue_paddrs);
+        hash = hash_u64(hash, self.rx_vaddr);
+        hash = hash_u64(hash, self.tx_vaddr);
+        hash = hash_u64_slice(hash, &self.rx_paddrs);
+        hash_u64_slice(hash, &self.tx_paddrs)
+    }
+}
+
 /// Pointer-free runtime descriptor mapped read-only into the child.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(C, align(8))]
@@ -992,13 +1262,20 @@ impl RuntimeInitDescriptor {
         {
             return Err(AbiError::InvalidLayout);
         }
-        if self.flags != REQUIRED_INIT_FLAGS
+        if self.flags & REQUIRED_INIT_FLAGS != REQUIRED_INIT_FLAGS
+            || self.flags & !ALLOWED_INIT_FLAGS != 0
             || self.child_cspace_slots != CHILD_CSPACE_SLOTS
             || self.child_wake_notification_slot != CHILD_WAKE_NOTIFICATION_SLOT
             || self.packet_tx_wake_notification_slot != PACKET_TX_WAKE_NOTIFICATION_SLOT
             || self.supervisor_wake_notification_slot != SUPERVISOR_WAKE_NOTIFICATION_SLOT
             || self.fault_endpoint_slot != FAULT_ENDPOINT_SLOT
-            || self.root_wake_mask != ROOT_WAKE_MASK
+            || self.root_wake_mask
+                != (ROOT_WAKE_MASK
+                    | if self.direct_virtio() {
+                        WAKE_DIRECT_VIRTIO_IRQ
+                    } else {
+                        0
+                    })
             || self.child_wake_mask != CHILD_WAKE_MASK
         {
             return Err(AbiError::InvalidAuthority);
@@ -1064,6 +1341,20 @@ impl RuntimeInitDescriptor {
     #[must_use]
     pub fn auth_token(&self) -> &[u8] {
         &self.auth_token[..self.auth_token_len as usize]
+    }
+
+    /// Whether this QEMU service owns the admitted VirtIO device directly.
+    #[must_use]
+    pub const fn direct_virtio(self) -> bool {
+        self.flags & INIT_FLAG_DIRECT_VIRTIO != 0
+    }
+
+    /// Enable the direct-VirtIO extension and reseal the descriptor.
+    #[must_use]
+    pub const fn with_direct_virtio(mut self) -> Self {
+        self.flags |= INIT_FLAG_DIRECT_VIRTIO;
+        self.root_wake_mask |= WAKE_DIRECT_VIRTIO_IRQ;
+        self.sealed()
     }
 
     /// Encode the descriptor into its canonical little-endian wire form.
@@ -1912,6 +2203,33 @@ fn read_u64(bytes: &[u8], offset: usize) -> u64 {
     ])
 }
 
+fn encode_u64_array<const N: usize>(output: &mut [u8], offset: usize, values: &[u64; N]) {
+    let mut index = 0usize;
+    while index < N {
+        let start = offset + index * size_of::<u64>();
+        output[start..start + size_of::<u64>()].copy_from_slice(&values[index].to_le_bytes());
+        index += 1;
+    }
+}
+
+fn decode_u64_array<const N: usize>(input: &[u8], offset: usize) -> [u64; N] {
+    let mut values = [0u64; N];
+    let mut index = 0usize;
+    while index < N {
+        values[index] = read_u64(input, offset + index * size_of::<u64>());
+        index += 1;
+    }
+    values
+}
+
+const fn page_aligned_nonzero(address: u64) -> bool {
+    address != 0 && address & (DIRECT_VIRTIO_PAGE_BYTES as u64 - 1) == 0
+}
+
+const fn ranges_overlap(left_start: u64, left_end: u64, right_start: u64, right_end: u64) -> bool {
+    left_start < right_end && right_start < left_end
+}
+
 fn validate_exchange_metadata(
     kind: ExchangeKind,
     generation: u64,
@@ -2009,6 +2327,15 @@ const fn hash_u64(mut hash: u64, value: u64) -> u64 {
     hash
 }
 
+const fn hash_u64_slice(mut hash: u64, values: &[u64]) -> u64 {
+    let mut index = 0usize;
+    while index < values.len() {
+        hash = hash_u64(hash, values[index]);
+        index += 1;
+    }
+    hash
+}
+
 const fn bytes_zero(bytes: &[u8]) -> bool {
     let mut index = 0usize;
     while index < bytes.len() {
@@ -2024,6 +2351,10 @@ const _: () = assert!(size_of::<PacketPage>() == SHARED_PAGE_BYTES);
 const _: () = assert!(align_of::<PacketPage>() == SHARED_PAGE_BYTES);
 const _: () = assert!(size_of::<ExchangePage>() == SHARED_PAGE_BYTES);
 const _: () = assert!(size_of::<RuntimeInitDescriptor>() == RUNTIME_INIT_DESCRIPTOR_BYTES);
+const _: () = assert!(size_of::<DirectVirtioLayout>() == DIRECT_VIRTIO_LAYOUT_BYTES);
+const _: () = assert!(align_of::<DirectVirtioLayout>() == align_of::<u64>());
+const _: () =
+    assert!(DIRECT_VIRTIO_LAYOUT_OFFSET + DIRECT_VIRTIO_LAYOUT_BYTES <= SHARED_PAGE_BYTES);
 const _: () = assert!(align_of::<ExchangePage>() == SHARED_PAGE_BYTES);
 const _: () = assert!(size_of::<PacketPageHeader>() == PACKET_HEADER_BYTES);
 const _: () = assert!(size_of::<ExchangePageHeader>() == EXCHANGE_HEADER_BYTES);
@@ -2092,6 +2423,35 @@ mod tests {
                 token[5] = b't';
                 token
             },
+            seal: 0,
+        }
+        .sealed()
+    }
+
+    fn direct_virtio_layout() -> DirectVirtioLayout {
+        let mut rx_paddrs = [0u64; DIRECT_VIRTIO_BUFFER_COUNT];
+        let mut tx_paddrs = [0u64; DIRECT_VIRTIO_BUFFER_COUNT];
+        let mut index = 0usize;
+        while index < DIRECT_VIRTIO_BUFFER_COUNT {
+            rx_paddrs[index] = 0x4000_2000 + (index * DIRECT_VIRTIO_PAGE_BYTES) as u64;
+            tx_paddrs[index] = 0x4001_2000 + (index * DIRECT_VIRTIO_PAGE_BYTES) as u64;
+            index += 1;
+        }
+        DirectVirtioLayout {
+            magic: DIRECT_VIRTIO_LAYOUT_MAGIC,
+            version: DIRECT_VIRTIO_LAYOUT_VERSION,
+            layout_bytes: DIRECT_VIRTIO_LAYOUT_BYTES as u16,
+            flags: 0,
+            queue_size: DIRECT_VIRTIO_QUEUE_SIZE as u16,
+            buffer_count: DIRECT_VIRTIO_BUFFER_COUNT as u16,
+            mmio_vaddr: 0x7204_0000,
+            mmio_paddr: 0x0a00_0000,
+            queue_vaddrs: [0x7205_0000, 0x7205_1000],
+            queue_paddrs: [0x4000_0000, 0x4000_1000],
+            rx_vaddr: 0x7206_0000,
+            tx_vaddr: 0x7207_0000,
+            rx_paddrs,
+            tx_paddrs,
             seal: 0,
         }
         .sealed()
@@ -2552,6 +2912,7 @@ mod tests {
         assert_eq!(ExchangeKind::SendBatch as u16, 3);
         assert_eq!(ExchangeKind::CommandBatch as u16, 27);
         assert_eq!(WAKE_PUBLICATION_ACK, 64);
+        assert_eq!(WAKE_DIRECT_VIRTIO_IRQ, 128);
         assert_eq!(ROOT_WAKE_MASK, 79);
         assert_eq!(REQUIRED_INIT_FLAGS & INIT_FLAG_PUBLICATION_ACK, 16);
         assert_eq!(REQUIRED_INIT_FLAGS & INIT_FLAG_COMPLETION_WATERMARKS, 32);
@@ -2565,6 +2926,31 @@ mod tests {
         trailing.auth_token[63] = 1;
         trailing = trailing.sealed();
         assert_eq!(trailing.validate(), Err(AbiError::InvalidBound));
+    }
+
+    #[test]
+    fn direct_virtio_extension_is_exact_sealed_and_disjoint() {
+        let layout = direct_virtio_layout();
+        assert_eq!(layout.validate(), Ok(()));
+        assert_eq!(size_of::<DirectVirtioLayout>(), DIRECT_VIRTIO_LAYOUT_BYTES);
+        let mut encoded = [0u8; DIRECT_VIRTIO_LAYOUT_BYTES];
+        layout.encode(&mut encoded).unwrap();
+        assert_eq!(DirectVirtioLayout::decode(&encoded), Ok(layout));
+
+        let descriptor = descriptor().with_direct_virtio();
+        assert!(descriptor.direct_virtio());
+        assert_eq!(descriptor.root_wake_mask, 207);
+        assert_eq!(descriptor.validate(), Ok(()));
+
+        let mut overlapping = layout;
+        overlapping.tx_paddrs[0] = overlapping.rx_paddrs[0];
+        overlapping = overlapping.sealed();
+        assert_eq!(overlapping.validate(), Err(AbiError::InvalidLayout));
+
+        let mut unknown_flag = descriptor;
+        unknown_flag.flags |= 1 << 31;
+        unknown_flag = unknown_flag.sealed();
+        assert_eq!(unknown_flag.validate(), Err(AbiError::InvalidAuthority));
     }
 
     #[test]

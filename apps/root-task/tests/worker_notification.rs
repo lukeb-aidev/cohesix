@@ -1,6 +1,6 @@
 // Copyright 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
-// Purpose: Verify generated one-hot Worker notification and shutdown behavior.
+// Purpose: Verify generated Worker wake bits, Call labels, and shutdown behavior.
 // Author: Lukas Bower
 
 mod support {
@@ -13,13 +13,9 @@ use support::worker_supervisor_fixture::{ready, Event};
 use worker_task_abi::{WorkerCompletionRecord, WorkerCompletionStatus, WorkerRole};
 
 #[test]
-fn lifecycle_bits_are_disjoint_and_shutdown_is_idempotent() {
+fn worker_wake_bits_and_call_labels_are_disjoint_and_shutdown_is_idempotent() {
     let config = generated::worker_runtime_config().task_abi;
     let bits = [
-        config.lifecycle_control_bit,
-        config.lifecycle_timeout_bit,
-        config.lifecycle_shutdown_bit,
-        config.lifecycle_revoke_bit,
         config.heartbeat_wake_bit,
         config.gpu_wake_bit,
         config.lora_wake_bit,
@@ -30,6 +26,15 @@ fn lifecycle_bits_are_disjoint_and_shutdown_is_idempotent() {
         assert_eq!(combined & bit, 0);
         combined |= bit;
     }
+    let labels = [
+        config.control_call_label,
+        config.shutdown_call_label,
+        config.revoke_call_label,
+    ];
+    assert!(labels.iter().all(|label| *label != 0));
+    assert_ne!(labels[0], labels[1]);
+    assert_ne!(labels[0], labels[2]);
+    assert_ne!(labels[1], labels[2]);
 
     let (mut supervisor, identity) = ready(WorkerRole::Heartbeat, 1);
     let first = supervisor
@@ -43,7 +48,7 @@ fn lifecycle_bits_are_disjoint_and_shutdown_is_idempotent() {
     assert!(supervisor
         .backend()
         .events
-        .contains(&Event::Signal(config.lifecycle_shutdown_bit)));
+        .contains(&Event::Signal(config.shutdown_call_label)));
     let init = supervisor.backend().init.expect("init");
     let completion =
         WorkerCompletionRecord::staged_terminal(2, identity, WorkerCompletionStatus::Shutdown)

@@ -10,5 +10,8 @@
 #[cfg(target_os = "none")]
 mod kernel;
 
+#[cfg(all(target_os = "none", feature = "direct-virtio"))]
+mod direct_virtio;
+
 #[cfg(not(target_os = "none"))]
 fn main() {}

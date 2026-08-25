@@ -1172,7 +1172,7 @@ def _qemu_target_session_inputs(root_dir: Path) -> SimpleNamespace:
     abi_source.parent.mkdir(parents=True)
     abi_manifest.write_text("[package]\nname = \"worker-task-abi\"\n", encoding="utf-8")
     abi_source.write_text(
-        "#![no_std]\npub const WORKER_TASK_ABI_VERSION: u16 = 1;\n",
+        "#![no_std]\npub const WORKER_TASK_ABI_VERSION: u16 = 2;\n",
         encoding="utf-8",
     )
 
@@ -1180,14 +1180,14 @@ def _qemu_target_session_inputs(root_dir: Path) -> SimpleNamespace:
     topology_path = repo / "configs/generated/root_task_topology.json"
     manifest = {
         "profile": {"name": "virt-aarch64"},
-        "worker_runtime": {"task_abi": {"enabled": True, "version": 1}},
+        "worker_runtime": {"task_abi": {"enabled": True, "version": 2}},
     }
     manifest_raw = _write(manifest_path, manifest)
     topology = _generated_record("qemu")
     topology["manifest_sha256"] = hashlib.sha256(manifest_raw).hexdigest()
     topology["topology"]["worker_runtime"]["task_abi"] = {
         "enabled": True,
-        "version": 1,
+        "version": 2,
     }
     topology["topology_sha256"] = evidence._canonical_json_sha256(  # noqa: SLF001
         topology["topology"]
@@ -1251,8 +1251,8 @@ def _qemu_target_session_inputs(root_dir: Path) -> SimpleNamespace:
             {
                 "name": name,
                 "role": role,
-                "abi_version": 1,
-                "entry_version": 1,
+                "abi_version": 2,
+                "entry_version": 2,
                 "entry_symbol": "_start",
                 "entry_vaddr": 0x210000,
                 "flags": ["pointer-free", "init-page-in-x0"],
@@ -1911,8 +1911,8 @@ def test_root_and_console_natural_postpone_are_source_and_generated_contracts() 
     for relative, root_budget, root_provenance in (
         (
             "configs/root_task.toml",
-            5_500,
-            "m26e-qemu-root-adjacent-refill-natural-postpone-candidate-v35",
+            9_000,
+            "m26e-qemu-root-dedicated-core-bounded-quantum-v1",
         ),
         (
             "configs/root_task_pi4_uboot_aarch64.toml",

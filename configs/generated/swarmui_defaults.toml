@@ -2,7 +2,7 @@
 # Purpose: Generated SwarmUI defaults derived from configs/root_task.toml.
 # Copyright 2026 Lukas Bower
 [meta]
-manifest_sha256 = "10f33db7f20f039701ec8d2c5d206aba45a67f4b7e359b22dc2e24a0cc055cbd"
+manifest_sha256 = "cdbfdfa9f4de5c1cd8f8f9ef7233aff9465e15e5469cce6604bdde50872996ba"
 
 [swarmui]
 ticket_scope = "per-ticket"
@@ -36,15 +36,15 @@ worker_root = "/shard"
 namespace_roots = ["/proc", "/queen", "/shard", "/worker", "/log", "/gpu"]
 
 [swarmui.worker_runtime]
-maximum_live_tasks = 37
+maximum_live_tasks = 256
 canonical_telemetry_template = "/shard/<label>/worker/<id>/telemetry"
-shard_bits = 8
+shard_bits = 6
 legacy_worker_alias = true
 roles = [
   { role = "worker-heartbeat", declaration = "executable", executable_slots = 1 },
-  { role = "worker-gpu", declaration = "executable", executable_slots = 15 },
+  { role = "worker-gpu", declaration = "executable", executable_slots = 127 },
   { role = "worker-bus", declaration = "model-only", executable_slots = 0 },
-  { role = "worker-lora", declaration = "executable", executable_slots = 21 },
+  { role = "worker-lora", declaration = "executable", executable_slots = 128 },
 ]
 
 [trace]

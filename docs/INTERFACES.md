@@ -209,6 +209,17 @@ mappings, capabilities, notifications, scheduling authority, and fault routes.
 Root policy, role attachment, namespace mutation, and command execution remain
 outside the child. The public `AUTH`/`ATTACH` and `OK`/`ERR`/`END`
 contract is unchanged.
+
+When the selected descriptor sets `direct_virtio`, its sealed extension names
+one QEMU VirtIO-net MMIO page, the exact IRQHandler slot, two fixed queue
+pages, and 16 RX plus 16 TX coherent DMA pages. Only the child maps those
+resources during steady state. It negotiates the required modern/MAC/mergeable
+RX feature set, rejects multi-buffer or out-of-range completion metadata, and
+moves at most one bounded frame per public data-path call. Queue saturation is
+typed backpressure; it cannot allocate, extend a descriptor chain, or fall
+back to a root-owned adapter. Containment suspends the child, resets the exact
+device status register, acknowledges no future IRQ, scrubs the admitted DMA
+pages, and then revokes the child bundle.
 ## Target TCP console sequence
 
 ```mermaid
@@ -425,6 +436,24 @@ notification. Kill is generation-fenced, contains and revokes the complete
 instance bundle, and prevents stale records or caps from affecting a later
 fresh-generation reconstruction. Configuration, an ACK, or a host/model
 projection is not target execution evidence.
+
+The selected executable contract is `worker-task-abi/v2`. Its fixed,
+pointer-free init, control, READY, completion, GPU-receipt, and PEFT-receipt
+records retain sequence-last publication and the complete role/slot/lease/
+supervisor/capability identity. Normal execution is passive: the GPU executor
+may call only a GPU instance, while the LoRA executor may call LoRA or
+Heartbeat. One call carries one validated action label and one instance-owned
+Reply object; nested donation, a foreign donor, a stale generation, an unknown
+label, or a second in-flight call fails closed. Success uses atomic Reply/Recv
+so completion returns the donated SC exactly once before the instance waits
+again. Standard or timeout containment may publish one typed failure reply to
+release the caller, then revokes the exact generation.
+
+The QEMU profile exposes 256 such records (one Heartbeat, 127 GPU, 128 LoRA),
+and the Pi profile exposes 64 (one, 31, 32). Identical sealed role-image code
+and read-only data may share physical frames. Writable image pages, stacks,
+IPC buffers, shared ABI pages, CSpaces, VSpaces, endpoints, Reply objects, and
+fault identities never share between instances.
 
 ### Lifecycle control
 

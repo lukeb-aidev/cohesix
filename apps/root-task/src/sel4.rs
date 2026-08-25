@@ -5749,6 +5749,44 @@ impl<'a> KernelEnv<'a> {
         Ok(frame_slot)
     }
 
+    /// Retype one unclaimed device page into an exact caller-owned slot and
+    /// map it through a revoke-anchor-owned child VSpace hierarchy.
+    ///
+    /// The device frame itself is not an anchor descendant, so the caller must
+    /// suspend the child, reset/unmap the device, and delete `destination_slot`
+    /// before revoking the generation anchor. Translation objects and every
+    /// RAM DMA page remain anchor descendants.
+    #[allow(clippy::too_many_arguments)]
+    pub fn map_exclusive_device_page_into_revoke_anchor_vspace<const N: usize>(
+        &mut self,
+        anchor: seL4_CPtr,
+        paddr: usize,
+        destination_slot: seL4_CPtr,
+        vspace: seL4_CPtr,
+        vaddr: usize,
+        rights: sel4_sys::seL4_CapRights,
+        attr: sel4_sys::seL4_ARM_VMAttributes,
+        tracker: &mut RevokeAnchorVSpaceTracker<N>,
+    ) -> Result<seL4_CPtr, RevokeAnchorVSpaceError> {
+        if destination_slot == seL4_CapNull || self.cached_device_frame_for_paddr(paddr).is_some() {
+            return Err(RevokeAnchorVSpaceError::InvalidDestinationSlots);
+        }
+        let frame_slot = self
+            .retype_device_page_for_paddr_into(
+                paddr,
+                "revoke-anchor-vspace-exclusive-device",
+                Some(destination_slot),
+            )
+            .map_err(RevokeAnchorVSpaceError::Sel4)?;
+        if let Err(error) = self.map_page_cap_into_revoke_anchor_vspace(
+            anchor, frame_slot, vspace, vaddr, rights, attr, tracker,
+        ) {
+            let _ = cnode_delete(self.init_cnode_cap(), frame_slot, word_bits() as u8);
+            return Err(error);
+        }
+        Ok(frame_slot)
+    }
+
     /// Ensures that all intermediate page-table objects exist in a target VSpace.
     pub fn ensure_page_table_in_vspace(
         &mut self,
@@ -6019,6 +6057,15 @@ impl<'a> KernelEnv<'a> {
         paddr: usize,
         label: &'static str,
     ) -> Result<seL4_CPtr, seL4_Error> {
+        self.retype_device_page_for_paddr_into(paddr, label, None)
+    }
+
+    fn retype_device_page_for_paddr_into(
+        &mut self,
+        paddr: usize,
+        label: &'static str,
+        destination_slot: Option<seL4_CPtr>,
+    ) -> Result<seL4_CPtr, seL4_Error> {
         let coverage = self
             .untyped
             .device_coverage(paddr, PAGE_BITS)
@@ -6088,12 +6135,19 @@ impl<'a> KernelEnv<'a> {
             self.untyped.release(&reserved);
             return Err(seL4_NotEnoughMemory);
         }
-        let frame_slot = match self.try_allocate_slot() {
-            Ok(slot) => slot,
-            Err(error) => {
+        let frame_slot = match destination_slot {
+            Some(slot) if slot != seL4_CapNull => slot,
+            Some(_) => {
                 self.untyped.release(&reserved);
-                return Err(error);
+                return Err(sel4_sys::seL4_InvalidCapability);
             }
+            None => match self.try_allocate_slot() {
+                Ok(slot) => slot,
+                Err(error) => {
+                    self.untyped.release(&reserved);
+                    return Err(error);
+                }
+            },
         };
         #[cfg(target_arch = "aarch64")]
         let page_obj: seL4_Word = SEL4_ARM_PAGE_OBJECT_WORD;

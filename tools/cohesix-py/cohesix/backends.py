@@ -551,7 +551,17 @@ class MockBackend(FilesystemBackend):
         self._worker_for_gpu: dict[str, str] = {}
         self._worker_roles: dict[str, str] = {}
         self._worker_generations: dict[str, int] = {}
+        self._worker_shard_bits = 8
         self._seed()
+
+    def _configure_worker_shard_bits(self, shard_bits: int) -> None:
+        """Bind future mock Worker records to one validated target profile."""
+
+        if not 1 <= shard_bits <= 8:
+            raise CohesixError("mock Worker shard width must be in 1..=8")
+        if self._worker_roles and shard_bits != self._worker_shard_bits:
+            raise CohesixError("cannot change mock Worker shards after admission")
+        self._worker_shard_bits = shard_bits
 
     def get_backend_class(self) -> str:
         """Mock state is explicitly host-model and never target proof."""
@@ -714,6 +724,8 @@ class MockBackend(FilesystemBackend):
             return
         generation = self._worker_generations.get(worker_id, 1)
         shard = hashlib.sha256(worker_id.encode("ascii")).digest()[0]
+        if self._worker_shard_bits < 8:
+            shard >>= 8 - self._worker_shard_bits
         telemetry = (
             Path(self.root)
             / "shard"

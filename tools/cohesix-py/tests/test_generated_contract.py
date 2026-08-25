@@ -72,8 +72,8 @@ def test_qemu_and_pi_contracts_are_independent_exact_targets() -> None:
     assert pi4.target_profile == "pi4_production"
     assert qemu.manifest_sha256 != pi4.manifest_sha256
     assert qemu.contract_sha256 != pi4.contract_sha256
-    assert qemu.maximum_live_tasks == 37
-    assert pi4.maximum_live_tasks == 3
+    assert qemu.maximum_live_tasks == 256
+    assert pi4.maximum_live_tasks == 64
     assert qemu.role_declaration("heartbeat") == "executable"
     assert qemu.role_declaration("gpu") == "executable"
     assert qemu.role_declaration("lora") == "executable"
@@ -89,7 +89,7 @@ def test_mapping_is_validation_input_not_target_identity() -> None:
 def test_canonical_shard_vector_and_legacy_gate() -> None:
     contract = load_profile_contract(QEMU_CONTRACT)
     assert contract.telemetry_path("worker-7") == (
-        "/shard/8a/worker/worker-7/telemetry"
+        "/shard/22/worker/worker-7/telemetry"
     )
     assert contract.legacy_telemetry_path("worker-7") == (
         "/worker/worker-7/telemetry"
@@ -144,7 +144,7 @@ def test_canonical_shard_vector_and_legacy_gate() -> None:
         ),
         (
             lambda value: value["namespace"].update({"shard_bits": 4}),
-            "eight-bit sharding",
+            "canonical target shard width",
         ),
     ],
 )

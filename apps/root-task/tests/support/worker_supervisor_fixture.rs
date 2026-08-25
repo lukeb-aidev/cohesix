@@ -128,23 +128,28 @@ impl WorkerKernelBackend for FakeBackend {
         }
     }
 
+    fn finish_ready(&mut self, _bundle: Self::Bundle) -> Result<(), WorkerSupervisorError> {
+        Ok(())
+    }
+
     fn publish_control(
         &mut self,
         _bundle: Self::Bundle,
         control: WorkerControlRecord,
-        control_bit: u64,
+        call_label: u64,
     ) -> Result<(), WorkerSupervisorError> {
         self.events.push(Event::Control(control.sequence));
-        self.events.push(Event::Signal(control_bit));
+        self.events.push(Event::Signal(call_label));
         Ok(())
     }
 
-    fn signal_lifecycle(
+    fn request_lifecycle(
         &mut self,
         _bundle: Self::Bundle,
-        badge: u64,
+        _sequence: u64,
+        call_label: u64,
     ) -> Result<(), WorkerSupervisorError> {
-        self.events.push(Event::Signal(badge));
+        self.events.push(Event::Signal(call_label));
         Ok(())
     }
 
@@ -211,11 +216,11 @@ pub fn image_fixture(role: WorkerRole) -> (Vec<u8>, WorkerImagePlan) {
     put_u64(&mut image, second + 32, 4);
     put_u64(&mut image, second + 40, 4);
     put_u64(&mut image, second + 48, 0x1000);
-    put_u32(&mut image, METADATA_OFFSET, 0x574b_4d31);
-    put_u16(&mut image, METADATA_OFFSET + 4, 1);
+    put_u32(&mut image, METADATA_OFFSET, 0x574b_4d32);
+    put_u16(&mut image, METADATA_OFFSET + 4, 2);
     put_u16(&mut image, METADATA_OFFSET + 6, 64);
     put_u16(&mut image, METADATA_OFFSET + 8, role as u16);
-    put_u16(&mut image, METADATA_OFFSET + 10, 1);
+    put_u16(&mut image, METADATA_OFFSET + 10, 2);
     put_u32(&mut image, METADATA_OFFSET + 12, 3);
     image[METADATA_OFFSET + 16..METADATA_OFFSET + 22].copy_from_slice(b"_start");
     image[TEXT_OFFSET..].copy_from_slice(&[0xc0, 0x03, 0x5f, 0xd6]);

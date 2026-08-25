@@ -18,21 +18,24 @@ use console_network_abi::{
     SEND_BATCH_MAX_RECORDS,
 };
 use heapless::{Deque, String as HeaplessString, Vec as HeaplessVec};
+use smoltcp::phy::{Device, DeviceCapabilities, Medium, RxToken, TxToken};
 use smoltcp::time::Instant;
 use smoltcp::wire::{EthernetAddress, Ipv4Address};
 
+#[cfg(feature = "net-backend-virtio")]
+use super::ConsoleNetConfig;
 use super::{
+    select_isolated_direct_network_turn, select_isolated_direct_response_turn,
     select_isolated_network_turn, select_isolated_response_turn, ConsoleLine,
     IsolatedNetworkLowerCursor, IsolatedNetworkLowerUnit, IsolatedNetworkTurnOutcome,
     IsolatedNetworkTurnSelection, IsolatedNetworkTurnUnit, NetConsoleDisconnectReason,
-    NetConsoleEvent, NetCounters, NetDevice, NetPoller, NetStatusReport, NetTelemetry,
+    NetConsoleEvent, NetCounters, NetDevice, NetDeviceCounters, NetPoller, NetStatusReport,
+    NetTelemetry,
 };
-#[cfg(feature = "net-backend-virtio")]
-use super::{ConsoleNetConfig, NET_STAGE};
 use crate::console_network_service::{BoundaryError, ConsoleNetworkContainmentTurn, ServiceState};
 use crate::drivers::driver_task_net::Cyw43DriverTaskDevice;
 #[cfg(feature = "net-backend-virtio")]
-use crate::drivers::virtio::net::{DriverError as VirtioDriverError, VirtioNetStatic};
+use crate::drivers::virtio::net::DriverError as VirtioDriverError;
 use crate::hal::console_network::ConsoleNetworkRuntime;
 use crate::hal::driver_task::{DriverServiceBudget, DriverServiceBudgetError, DriverTaskContract};
 use crate::hal::{HalError, KernelHal};
@@ -46,6 +49,8 @@ const EVENT_QUEUE_DEPTH: usize = 8;
 const ISOLATED_NETWORK_TURN_FRAMES: u16 = 2;
 const ISOLATED_NETWORK_TURN_BYTES: u32 =
     (console_network_abi::CONSOLE_PAYLOAD_BYTES + console_network_abi::ETHERNET_FRAME_BYTES) as u32;
+#[cfg(feature = "net-backend-virtio")]
+const QEMU_VIRTIO_MAC: [u8; 6] = [0x52, 0x55, 0x00, 0xd1, 0x55, 0x01];
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct QueuedConsoleOutput {
@@ -104,6 +109,10 @@ enum ConsoleNetworkContainmentDiagnostic {
         observed_generation: u32,
         fault_class: crate::critical_tcb::FaultClass,
         sequence: u64,
+        fault_label: u64,
+        fault_length: u16,
+        fault_mr0: u64,
+        fault_mr1: u64,
     },
     LocalFault {
         generation: u64,
@@ -132,9 +141,13 @@ impl ConsoleNetworkContainmentDiagnostic {
                 observed_generation,
                 fault_class,
                 sequence,
+                fault_label,
+                fault_length,
+                fault_mr0,
+                fault_mr1,
             } if expected_generation == u64::from(observed_generation) => write!(
                 line,
-                "[console-network] generation={expected_generation} terminal-fault class={fault_class:?} sequence={sequence}"
+                "[console-network] generation={expected_generation} terminal-fault class={fault_class:?} sequence={sequence} label={fault_label} length={fault_length} mr0=0x{fault_mr0:016x} mr1=0x{fault_mr1:016x}"
             )?,
             Self::Fault {
                 expected_generation,
@@ -220,6 +233,7 @@ pub struct IsolatedNetworkConsole<D: NetDevice> {
     pending_containment_failure_diagnostic: Option<ConsoleNetworkContainmentDiagnostic>,
     pending_containment_teardown_diagnostic: Option<ConsoleNetworkContainmentDiagnostic>,
     last_now_ms: u64,
+    direct_service_tick_ms: Option<u64>,
     telemetry: NetTelemetry,
     counters: NetCounters,
     connection_bytes_read: u64,
@@ -236,16 +250,109 @@ pub struct IsolatedNetworkConsole<D: NetDevice> {
     dhcp_phase: &'static str,
 }
 
-/// QEMU VirtIO specialization retaining its exact bounded driver seams.
+/// Root-side policy marker for a NIC owned directly by the QEMU child.
 #[cfg(feature = "net-backend-virtio")]
-pub type IsolatedVirtioConsole = IsolatedNetworkConsole<VirtioNetStatic>;
+pub struct DirectVirtioChildDevice {
+    mac: EthernetAddress,
+}
+
+#[cfg(feature = "net-backend-virtio")]
+pub struct DirectVirtioRxToken;
+
+#[cfg(feature = "net-backend-virtio")]
+impl RxToken for DirectVirtioRxToken {
+    fn consume<R, F>(self, operation: F) -> R
+    where
+        F: FnOnce(&[u8]) -> R,
+    {
+        operation(&[])
+    }
+}
+
+#[cfg(feature = "net-backend-virtio")]
+pub struct DirectVirtioTxToken;
+
+#[cfg(feature = "net-backend-virtio")]
+impl TxToken for DirectVirtioTxToken {
+    fn consume<R, F>(self, _len: usize, operation: F) -> R
+    where
+        F: FnOnce(&mut [u8]) -> R,
+    {
+        operation(&mut [])
+    }
+}
+
+#[cfg(feature = "net-backend-virtio")]
+impl Device for DirectVirtioChildDevice {
+    type RxToken<'a>
+        = DirectVirtioRxToken
+    where
+        Self: 'a;
+    type TxToken<'a>
+        = DirectVirtioTxToken
+    where
+        Self: 'a;
+
+    fn receive(&mut self, _timestamp: Instant) -> Option<(Self::RxToken<'_>, Self::TxToken<'_>)> {
+        None
+    }
+
+    fn transmit(&mut self, _timestamp: Instant) -> Option<Self::TxToken<'_>> {
+        None
+    }
+
+    fn capabilities(&self) -> DeviceCapabilities {
+        let mut capabilities = DeviceCapabilities::default();
+        capabilities.medium = Medium::Ethernet;
+        capabilities.max_transmission_unit = 1500;
+        capabilities
+    }
+}
+
+#[cfg(feature = "net-backend-virtio")]
+impl NetDevice for DirectVirtioChildDevice {
+    type Error = VirtioDriverError;
+
+    fn create<H>(_hal: &mut H) -> Result<Self, Self::Error>
+    where
+        H: crate::hal::Hardware<Error = crate::hal::HalError>,
+    {
+        Err(VirtioDriverError::NoDevice)
+    }
+
+    fn mac(&self) -> EthernetAddress {
+        self.mac
+    }
+
+    fn tx_drop_count(&self) -> u32 {
+        0
+    }
+
+    fn name() -> &'static str {
+        "virtio-net-direct-child"
+    }
+
+    fn driver_task_contract() -> DriverTaskContract {
+        crate::hal::driver_task::VIRTIO_NET_DRIVER_TASK_CONTRACT
+    }
+
+    fn debug_snapshot(&mut self) {}
+
+    fn counters(&self) -> NetDeviceCounters {
+        NetDeviceCounters::default()
+    }
+}
+
+/// QEMU specialization: root owns policy; the child owns the NIC data path.
+#[cfg(feature = "net-backend-virtio")]
+pub type IsolatedVirtioConsole = IsolatedNetworkConsole<DirectVirtioChildDevice>;
 
 /// Physical Pi CYW43 specialization used after root-only DHCP bootstrap.
 pub type IsolatedCyw43Console = IsolatedNetworkConsole<Cyw43DriverTaskDevice>;
 
 #[cfg(feature = "net-backend-virtio")]
-impl IsolatedNetworkConsole<VirtioNetStatic> {
-    /// Construct the NIC plus suspended compiler-declared child generation.
+impl IsolatedNetworkConsole<DirectVirtioChildDevice> {
+    /// Admit the NIC directly to the suspended compiler-declared child.
     pub fn new(
         hal: &mut KernelHal<'_>,
         config: ConsoleNetConfig,
@@ -263,11 +370,11 @@ impl IsolatedNetworkConsole<VirtioNetStatic> {
                 "isolated QEMU console requires a static IPv4 address",
             ));
         }
-        let mut device = VirtioNetStatic::create_with_stage(hal, &config, NET_STAGE)
-            .map_err(IsolatedConsoleInitError::Driver)?;
-        let mac = device.mac();
+        let device = DirectVirtioChildDevice {
+            mac: EthernetAddress(QEMU_VIRTIO_MAC),
+        };
+        let mac = device.mac;
         let ip = Ipv4Address::from(config.address.ip);
-        device.set_assigned_ipv4(ip);
         let runtime = hal
             .construct_console_network_runtime(
                 1,
@@ -288,8 +395,8 @@ impl IsolatedNetworkConsole<VirtioNetStatic> {
             gateway,
             config.listen_port,
             "virtio-net",
-            "virtio-net",
-            "virtio-net",
+            "virtio-net-direct-child",
+            "virtio-net-direct-child",
             "static",
             "wired",
             "wired",
@@ -346,6 +453,7 @@ impl<D: NetDevice> IsolatedNetworkConsole<D> {
             pending_containment_failure_diagnostic: None,
             pending_containment_teardown_diagnostic: None,
             last_now_ms: 0,
+            direct_service_tick_ms: None,
             telemetry: NetTelemetry {
                 link_up: true,
                 tx_drops: 0,
@@ -456,6 +564,10 @@ impl<D: NetDevice> IsolatedNetworkConsole<D> {
                         observed_generation: record.identity.supervisor_generation,
                         fault_class: record.fault_class,
                         sequence: record.sequence,
+                        fault_label: record.fault_label,
+                        fault_length: record.fault_length,
+                        fault_mr0: record.fault_mr0,
+                        fault_mr1: record.fault_mr1,
                     });
                     faulted = true;
                 }
@@ -1138,6 +1250,12 @@ impl<D: NetDevice> IsolatedNetworkConsole<D> {
 
     #[inline(never)]
     fn poll_service_tick_unit(&mut self) -> IsolatedNetworkTurnOutcome {
+        if self.runtime.direct_virtio() {
+            if self.direct_service_tick_ms == Some(self.last_now_ms) {
+                return IsolatedNetworkTurnOutcome::complete(false);
+            }
+            self.direct_service_tick_ms = Some(self.last_now_ms);
+        }
         match self.runtime.service_tick() {
             Ok(()) => IsolatedNetworkTurnOutcome::child_signaled(false),
             Err(_) => {
@@ -1167,12 +1285,24 @@ impl<D: NetDevice> IsolatedNetworkConsole<D> {
                 || lane.producer_open
                 || !self.output.is_empty()
         });
-        let selection = select_isolated_response_turn(
-            self.pending_egress.is_some(),
-            stage_output_ready,
-            response_progress_outstanding,
-            self.lower_cursor,
-        );
+        let selection = if self.runtime.direct_virtio() {
+            if self.pending_egress.is_some() {
+                self.fail_closed("direct-egress-publication");
+                return false;
+            }
+            select_isolated_direct_response_turn(
+                stage_output_ready,
+                response_progress_outstanding,
+                self.lower_cursor,
+            )
+        } else {
+            select_isolated_response_turn(
+                self.pending_egress.is_some(),
+                stage_output_ready,
+                response_progress_outstanding,
+                self.lower_cursor,
+            )
+        };
         self.lower_cursor = selection.successor();
         let outcome = match selection.unit() {
             IsolatedNetworkTurnUnit::TransmitEgress => self.poll_transmit_egress_unit(now_ms),
@@ -1221,11 +1351,21 @@ impl<D: NetDevice> NetPoller for IsolatedNetworkConsole<D> {
         }
         self.counters.smoltcp_polls = self.counters.smoltcp_polls.saturating_add(1);
 
-        let selection: IsolatedNetworkTurnSelection = select_isolated_network_turn(
-            self.device.isolated_deferred_tx_diagnostic_pending(),
-            self.pending_egress.is_some(),
-            self.lower_cursor,
-        );
+        let selection: IsolatedNetworkTurnSelection = if self.runtime.direct_virtio() {
+            if self.pending_egress.is_some()
+                || self.device.isolated_deferred_tx_diagnostic_pending()
+            {
+                self.fail_closed("direct-root-data-plane-state");
+                return false;
+            }
+            select_isolated_direct_network_turn(self.lower_cursor)
+        } else {
+            select_isolated_network_turn(
+                self.device.isolated_deferred_tx_diagnostic_pending(),
+                self.pending_egress.is_some(),
+                self.lower_cursor,
+            )
+        };
         // Commit the ordinary successor before any selected unit can block or
         // fault. Only a successful child notification may force ObserveChild.
         self.lower_cursor = selection.successor();

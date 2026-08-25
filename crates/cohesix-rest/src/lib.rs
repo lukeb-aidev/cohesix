@@ -9,8 +9,9 @@
 
 use anyhow::{anyhow, Context, Result};
 use cohesix_net_constants::{
-    HIVE_GATEWAY_BROKER_QUEUE_WAIT_LIMIT_MS, HIVE_GATEWAY_REST_IO_TIMEOUT_MS,
-    HIVE_GATEWAY_REST_OPERATION_RESPONSE_TIMEOUT_MS, HIVE_GATEWAY_REST_RESPONSE_GRACE_MS,
+    COHESIX_TRANSPORT_COMMAND_BATCH_MAX, HIVE_GATEWAY_BROKER_QUEUE_WAIT_LIMIT_MS,
+    HIVE_GATEWAY_REST_IO_TIMEOUT_MS, HIVE_GATEWAY_REST_OPERATION_RESPONSE_TIMEOUT_MS,
+    HIVE_GATEWAY_REST_RESPONSE_GRACE_MS,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -208,6 +209,27 @@ impl GatewayClient {
         let response = self.post_json(&url, &payload);
         let parsed = handle_response("ECHO", response)?;
         Ok(parsed.bytes.unwrap_or(0))
+    }
+
+    /// Append an ordered, bounded set of lines in one target transport activation.
+    pub fn echo_batch(&self, path: &str, lines: &[String]) -> Result<usize> {
+        if lines.is_empty() {
+            return Err(anyhow!("ECHO_BATCH requires at least one line"));
+        }
+        if lines.len() > COHESIX_TRANSPORT_COMMAND_BATCH_MAX {
+            return Err(anyhow!(
+                "ECHO_BATCH exceeds {} lines",
+                COHESIX_TRANSPORT_COMMAND_BATCH_MAX
+            ));
+        }
+        let url = format!("{}/v1/fs/echo-batch", self.base_url);
+        let payload = EchoBatchRequest {
+            path: path.to_owned(),
+            lines: lines.to_vec(),
+        };
+        let response = self.post_json(&url, &payload);
+        let _ = handle_response("ECHO_BATCH", response)?;
+        Ok(lines.len())
     }
 
     fn get(&self, url: &str) -> Result<HttpResponse, ureq::Error> {
@@ -767,6 +789,12 @@ struct EchoRequest {
     line: Option<String>,
 }
 
+#[derive(Debug, serde::Serialize)]
+struct EchoBatchRequest {
+    path: String,
+    lines: Vec<String>,
+}
+
 fn handle_response(
     verb: &str,
     response: Result<HttpResponse, ureq::Error>,
@@ -849,7 +877,8 @@ fn ensure_ok(verb: &str, response: GatewayResponse) -> Result<GatewayResponse> {
 mod tests {
     use super::{
         compose_operation_response_timeout, BoundsResponse, GatewayClient, GatewayStatusResponse,
-        DEFAULT_IO_TIMEOUT, DEFAULT_OPERATION_GLOBAL_TIMEOUT, DEFAULT_OPERATION_RESPONSE_TIMEOUT,
+        COHESIX_TRANSPORT_COMMAND_BATCH_MAX, DEFAULT_IO_TIMEOUT, DEFAULT_OPERATION_GLOBAL_TIMEOUT,
+        DEFAULT_OPERATION_RESPONSE_TIMEOUT,
     };
     use std::io::{Read, Write};
     use std::net::TcpListener;
@@ -1111,7 +1140,7 @@ mod tests {
             "control_plane":{"schedule":{"enable":true,"queue_max_entries":64,"ctl_max_bytes":8192},"lease":{"enable":true,"active_max_entries":64,"preemptions_max_entries":64,"ctl_max_bytes":8192},"export":{"enable":true,"ctl_max_bytes":2048}},
             "policy":{"enable":true,"queue_max_entries":32,"queue_max_bytes":4096,"ctl_max_bytes":2048},
             "observability":{"proc_schedule":{"summary":true,"queue":true,"summary_bytes":128,"queue_bytes":256},"proc_lease":{"summary":true,"active":true,"preemptions":true,"summary_bytes":160,"active_bytes":256,"preemptions_bytes":256}},
-            "worker_runtime":{"roles":[{"role":"worker-heartbeat","declaration":"executable","executable_slots":1},{"role":"worker-bus","declaration":"model-only","executable_slots":0}],"task_abi_schema":"worker-task-abi/v1","task_abi_version":1,"worker_observation_schema":"cohesix-worker-observation/v1","worker_integration_evidence_schema":"cohesix-worker-integration-evidence/v1","maximum_live_tasks":1,"canonical_telemetry_template":"/shard/<label>/worker/<id>/telemetry","shard_bits":8,"legacy_worker_alias":true}
+            "worker_runtime":{"roles":[{"role":"worker-heartbeat","declaration":"executable","executable_slots":1},{"role":"worker-bus","declaration":"model-only","executable_slots":0}],"task_abi_schema":"worker-task-abi/v2","task_abi_version":2,"worker_observation_schema":"cohesix-worker-observation/v1","worker_integration_evidence_schema":"cohesix-worker-integration-evidence/v1","maximum_live_tasks":1,"canonical_telemetry_template":"/shard/<label>/worker/<id>/telemetry","shard_bits":8,"legacy_worker_alias":true}
         }"#;
         let parsed: BoundsResponse = serde_json::from_str(bounds).expect("extended bounds JSON");
         let runtime = parsed.worker_runtime.expect("Worker runtime extension");
@@ -1199,6 +1228,44 @@ mod tests {
         let body: serde_json::Value = serde_json::from_str(body).expect("valid request JSON");
         assert_eq!(body["path"], "/queen/ctl");
         assert_eq!(body["line"], "go");
+    }
+
+    #[test]
+    fn echo_batch_sends_one_authenticated_bounded_ordered_request() {
+        let (base_url, request_rx, server) = serve_once(
+            "200 OK",
+            r#"{"status":"OK","verb":"ECHO_BATCH","path":"/host/tickets/status","end":true,"bytes":6}"#,
+        );
+        let lines = vec!["one".to_owned(), "two".to_owned()];
+        let written = GatewayClient::new(base_url)
+            .with_request_auth_token("test-token")
+            .echo_batch("/host/tickets/status", lines.as_slice())
+            .expect("authenticated echo batch succeeds");
+        assert_eq!(written, 2);
+
+        let request = request_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("capture authenticated batch request");
+        server.join().expect("loopback server exits");
+        let lowercase = request.to_ascii_lowercase();
+        assert!(lowercase.starts_with("post /v1/fs/echo-batch http/1.1\r\n"));
+        assert!(lowercase.contains("\r\nauthorization: bearer test-token\r\n"));
+        let (_, body) = request
+            .split_once("\r\n\r\n")
+            .expect("captured request contains a body");
+        let body: serde_json::Value = serde_json::from_str(body).expect("valid request JSON");
+        assert_eq!(body["path"], "/host/tickets/status");
+        assert_eq!(body["lines"], serde_json::json!(["one", "two"]));
+    }
+
+    #[test]
+    fn echo_batch_rejects_empty_and_oversized_inputs_before_network_io() {
+        let client = GatewayClient::new("http://127.0.0.1:1");
+        assert!(client.echo_batch("/host/tickets/status", &[]).is_err());
+        let oversized = vec![String::new(); COHESIX_TRANSPORT_COMMAND_BATCH_MAX + 1];
+        assert!(client
+            .echo_batch("/host/tickets/status", oversized.as_slice())
+            .is_err());
     }
 
     #[test]

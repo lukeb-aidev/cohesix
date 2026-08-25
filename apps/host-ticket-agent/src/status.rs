@@ -107,6 +107,34 @@ pub fn append_result_line(
     Ok(())
 }
 
+/// Append bounded result records in order through one transport activation.
+pub fn append_result_lines(
+    transport: &mut dyn Transport,
+    session: &Session,
+    path: &str,
+    lines: &[String],
+) -> Result<()> {
+    if lines.is_empty() {
+        return Err(anyhow!("result batch requires at least one line"));
+    }
+    let payloads = lines
+        .iter()
+        .map(|line| {
+            let mut payload = line.as_bytes().to_vec();
+            payload.push(b'\n');
+            payload
+        })
+        .collect::<Vec<_>>();
+    let written = transport.write_batch(session, path, payloads.as_slice())?;
+    if written != payloads.len() {
+        return Err(anyhow!(
+            "result batch wrote {written} of {} records",
+            payloads.len()
+        ));
+    }
+    Ok(())
+}
+
 /// Return the canonical compact JSON bytes hashed by a version-2 result.
 pub fn canonical_result_bytes(result: &HostTicketResult) -> Result<Vec<u8>> {
     let mut canonical = result.clone();

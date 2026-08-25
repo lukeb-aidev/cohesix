@@ -16,6 +16,13 @@ pub const COHSH_TCP_PORT: u16 = COHESIX_TCP_CONSOLE_PORT;
 /// Alias for the TCP console port constant.
 pub const TCP_CONSOLE_PORT: u16 = COHESIX_TCP_CONSOLE_PORT;
 
+/// Maximum ordered namespace commands carried by one bounded transport activation.
+///
+/// This is shared by the target console ABI, direct TCP clients, and REST
+/// projection so host layers cannot silently fragment one guest service
+/// quantum into smaller transport turns.
+pub const COHESIX_TRANSPORT_COMMAND_BATCH_MAX: usize = 8;
+
 /// Maximum time the Hive Gateway broker may spend admitting one queued request.
 pub const HIVE_GATEWAY_BROKER_QUEUE_WAIT_LIMIT_MS: u64 = 5_000;
 /// Default time the Hive Gateway broker may wait for one target response.

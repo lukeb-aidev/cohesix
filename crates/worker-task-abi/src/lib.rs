@@ -7,7 +7,7 @@
 #![deny(unsafe_code)]
 #![warn(missing_docs)]
 
-//! `worker-task-abi/v1` records shared by an isolated Worker and its supervisor.
+//! `worker-task-abi/v2` records shared by an isolated Worker and its supervisor.
 //!
 //! Records are pointer-free, fixed-layout values. Producers stage the complete
 //! body with a zero commit word, execute a release fence, write the final
@@ -18,24 +18,24 @@
 
 use core::mem::{align_of, offset_of, size_of};
 
-/// Runtime-init magic (`WKI1`).
-pub const WORKER_RUNTIME_INIT_MAGIC: u32 = 0x574b_4931;
-/// Control-record magic (`WKC1`).
-pub const WORKER_CONTROL_MAGIC: u32 = 0x574b_4331;
-/// Completion-record magic (`WKO1`).
-pub const WORKER_COMPLETION_MAGIC: u32 = 0x574b_4f31;
-/// READY-record magic (`WKR1`).
-pub const WORKER_READY_MAGIC: u32 = 0x574b_5231;
-/// GPU receipt magic (`WKG1`).
-pub const WORKER_GPU_RECEIPT_MAGIC: u32 = 0x574b_4731;
-/// PEFT receipt magic (`WKP1`).
-pub const WORKER_PEFT_RECEIPT_MAGIC: u32 = 0x574b_5031;
-/// Worker image metadata magic (`WKM1`).
-pub const WORKER_IMAGE_METADATA_MAGIC: u32 = 0x574b_4d31;
+/// Runtime-init magic (`WKI2`).
+pub const WORKER_RUNTIME_INIT_MAGIC: u32 = 0x574b_4932;
+/// Control-record magic (`WKC2`).
+pub const WORKER_CONTROL_MAGIC: u32 = 0x574b_4332;
+/// Completion-record magic (`WKO2`).
+pub const WORKER_COMPLETION_MAGIC: u32 = 0x574b_4f32;
+/// READY-record magic (`WKR2`).
+pub const WORKER_READY_MAGIC: u32 = 0x574b_5232;
+/// GPU receipt magic (`WKG2`).
+pub const WORKER_GPU_RECEIPT_MAGIC: u32 = 0x574b_4732;
+/// PEFT receipt magic (`WKP2`).
+pub const WORKER_PEFT_RECEIPT_MAGIC: u32 = 0x574b_5032;
+/// Worker image metadata magic (`WKM2`).
+pub const WORKER_IMAGE_METADATA_MAGIC: u32 = 0x574b_4d32;
 /// ABI version shared by all Worker records.
-pub const WORKER_TASK_ABI_VERSION: u16 = 1;
+pub const WORKER_TASK_ABI_VERSION: u16 = 2;
 /// Version of the declared Worker executable entry contract.
-pub const WORKER_IMAGE_ENTRY_VERSION: u16 = 1;
+pub const WORKER_IMAGE_ENTRY_VERSION: u16 = 2;
 /// Retained ELF section containing one [`WorkerImageMetadata`] record.
 pub const WORKER_IMAGE_METADATA_SECTION: &str = ".cohesix.worker";
 /// Fixed bytes reserved for the declared executable entry symbol.
@@ -69,13 +69,21 @@ pub const WORKER_RUNTIME_FLAG_POINTER_FREE: u32 = 1 << 0;
 pub const WORKER_RUNTIME_FLAG_DURABLE_RECORDS: u32 = 1 << 1;
 /// Every producer commits records by writing the sequence last.
 pub const WORKER_RUNTIME_FLAG_SEQUENCE_LAST: u32 = 1 << 2;
-/// Normal Worker blocking and wakes use notifications, not IPC donation.
-pub const WORKER_RUNTIME_FLAG_NOTIFICATION_ONLY: u32 = 1 << 3;
+/// Normal Worker execution uses bounded passive endpoint Call/Reply.
+pub const WORKER_RUNTIME_FLAG_PASSIVE_CALL_REPLY: u32 = 1 << 3;
+/// Every passive request has exactly one donor and one Reply object.
+pub const WORKER_RUNTIME_FLAG_DEPTH_ONE_DONATION: u32 = 1 << 4;
 /// Exact required runtime-init flags.
 pub const WORKER_RUNTIME_REQUIRED_FLAGS: u32 = WORKER_RUNTIME_FLAG_POINTER_FREE
     | WORKER_RUNTIME_FLAG_DURABLE_RECORDS
     | WORKER_RUNTIME_FLAG_SEQUENCE_LAST
-    | WORKER_RUNTIME_FLAG_NOTIFICATION_ONLY;
+    | WORKER_RUNTIME_FLAG_PASSIVE_CALL_REPLY
+    | WORKER_RUNTIME_FLAG_DEPTH_ONE_DONATION;
+
+/// Ordinary successful executor/Worker reply label.
+pub const WORKER_CALL_SUCCESS_LABEL: u64 = 0;
+/// Typed recovery reply emitted by root-fault after a Worker failure.
+pub const WORKER_CALL_RECOVERED_LABEL: u64 = 0x26ef_0001;
 
 /// Worker image metadata contains no addresses or architecture-sized fields.
 pub const WORKER_IMAGE_FLAG_POINTER_FREE: u32 = 1 << 0;
@@ -175,7 +183,7 @@ const fn hash_digest(mut hash: u64, digest: Digest32) -> u64 {
 pub enum WorkerAbiError {
     /// A record magic value is not the expected record type.
     InvalidMagic,
-    /// The ABI version is not exactly version 1.
+    /// The ABI version is not exactly version 2.
     InvalidVersion,
     /// The declared record length differs from its fixed layout.
     InvalidLength,
@@ -193,8 +201,8 @@ pub enum WorkerAbiError {
     InvalidMapping,
     /// A declared capability slot is zero, aliased, or out of range.
     InvalidCapabilitySlot,
-    /// A notification bit is zero, not one-hot, overlapping, or unknown.
-    InvalidNotificationBits,
+    /// A call label is zero, aliased, or unknown.
+    InvalidCallLabel,
     /// A control or receipt action is unknown or incompatible with its role.
     InvalidAction,
     /// A terminal result outcome is missing or invalid.
@@ -209,7 +217,7 @@ pub enum WorkerAbiError {
     InvalidDeadline,
 }
 
-/// Exact executable Worker roles in ABI version 1.
+/// Exact executable Worker roles in ABI version 2.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u16)]
 pub enum WorkerRole {
@@ -557,67 +565,61 @@ impl WorkerOutcome {
     }
 }
 
-/// Four one-hot lifecycle causes minted on one child notification object.
+/// Exact synchronous operation labels accepted by one passive Worker.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(C)]
-pub struct WorkerLifecycleBits {
+pub struct WorkerCallLabels {
     /// Durable control record is available.
     pub control: u64,
-    /// Current control operation exceeded its admitted deadline.
-    pub timeout: u64,
     /// Graceful shutdown was requested.
     pub shutdown: u64,
     /// Current authority was revoked.
     pub revoke: u64,
 }
 
-impl WorkerLifecycleBits {
-    /// Validate one-hot, pairwise-disjoint notification causes.
+impl WorkerCallLabels {
+    /// Validate nonzero, pairwise-disjoint call labels.
     pub const fn validate(self) -> Result<(), WorkerAbiError> {
-        let bits = [self.control, self.timeout, self.shutdown, self.revoke];
+        let labels = [self.control, self.shutdown, self.revoke];
         let mut index = 0usize;
-        let mut combined = 0u64;
-        while index < bits.len() {
-            let bit = bits[index];
-            if bit == 0 || !bit.is_power_of_two() || combined & bit != 0 {
-                return Err(WorkerAbiError::InvalidNotificationBits);
+        while index < labels.len() {
+            if labels[index] == 0 {
+                return Err(WorkerAbiError::InvalidCallLabel);
             }
-            combined |= bit;
+            let mut prior = 0usize;
+            while prior < index {
+                if labels[prior] == labels[index] {
+                    return Err(WorkerAbiError::InvalidCallLabel);
+                }
+                prior += 1;
+            }
             index += 1;
         }
         Ok(())
     }
 
-    /// Return the complete known lifecycle mask.
-    #[must_use]
-    pub const fn mask(self) -> u64 {
-        self.control | self.timeout | self.shutdown | self.revoke
-    }
-
-    /// Decode a possibly coalesced badge using terminal-first precedence.
-    pub const fn classify(self, badge: u64) -> Result<WorkerLifecycleEvent, WorkerAbiError> {
-        if self.validate().is_err() || badge == 0 || badge & !self.mask() != 0 {
-            return Err(WorkerAbiError::InvalidNotificationBits);
+    /// Decode one exact request label; labels never coalesce.
+    pub const fn classify(self, label: u64) -> Result<WorkerCallOperation, WorkerAbiError> {
+        if self.validate().is_err() {
+            return Err(WorkerAbiError::InvalidCallLabel);
         }
-        if badge & self.revoke != 0 {
-            Ok(WorkerLifecycleEvent::Revoke)
-        } else if badge & self.shutdown != 0 {
-            Ok(WorkerLifecycleEvent::Shutdown)
-        } else if badge & self.timeout != 0 {
-            Ok(WorkerLifecycleEvent::Timeout)
+        if label == self.control {
+            Ok(WorkerCallOperation::Control)
+        } else if label == self.shutdown {
+            Ok(WorkerCallOperation::Shutdown)
+        } else if label == self.revoke {
+            Ok(WorkerCallOperation::Revoke)
         } else {
-            Ok(WorkerLifecycleEvent::Control)
+            Err(WorkerAbiError::InvalidCallLabel)
         }
     }
 }
 
-/// Lifecycle event selected from a notification badge.
+/// Exact operation selected from a synchronous call label.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum WorkerLifecycleEvent {
+pub enum WorkerCallOperation {
     /// Process the durable control record.
     Control,
-    /// Publish a timeout completion and await teardown.
-    Timeout,
     /// Publish graceful shutdown completion and await teardown.
     Shutdown,
     /// Publish revocation completion and await teardown.
@@ -648,12 +650,16 @@ pub struct WorkerRuntimeInit {
     pub reserved1: u32,
     /// Mapped seL4 IPC-buffer virtual address.
     pub ipc_buffer_vaddr: u64,
-    /// Receive-only lifecycle notification slot.
-    pub lifecycle_notification_slot: u64,
+    /// Receive-only service endpoint slot.
+    pub service_endpoint_slot: u64,
+    /// Single-owner service Reply-object slot.
+    pub service_reply_slot: u64,
     /// Send-only supervisor wake notification slot.
     pub supervisor_wake_notification_slot: u64,
-    /// Generated lifecycle notification causes.
-    pub lifecycle_bits: WorkerLifecycleBits,
+    /// Generated synchronous operation labels.
+    pub call_labels: WorkerCallLabels,
+    /// Exact badge minted on the executor's Call cap.
+    pub request_badge: u64,
     /// One-hot badge minted on the supervisor wake cap.
     pub supervisor_wake_bit: u64,
     /// SHA-256 digest of the exact Worker image.
@@ -677,9 +683,11 @@ impl WorkerRuntimeInit {
         descriptor_sequence: u64,
         identity: WorkerIdentity,
         ipc_buffer_vaddr: u64,
-        lifecycle_notification_slot: u64,
+        service_endpoint_slot: u64,
+        service_reply_slot: u64,
         supervisor_wake_notification_slot: u64,
-        lifecycle_bits: WorkerLifecycleBits,
+        call_labels: WorkerCallLabels,
+        request_badge: u64,
         supervisor_wake_bit: u64,
         image_digest: Digest32,
         contract_digest: Digest32,
@@ -695,9 +703,11 @@ impl WorkerRuntimeInit {
             shared_page_bytes: WORKER_SHARED_PAGE_BYTES as u32,
             reserved1: 0,
             ipc_buffer_vaddr,
-            lifecycle_notification_slot,
+            service_endpoint_slot,
+            service_reply_slot,
             supervisor_wake_notification_slot,
-            lifecycle_bits,
+            call_labels,
+            request_badge,
             supervisor_wake_bit,
             image_digest,
             contract_digest,
@@ -733,12 +743,13 @@ impl WorkerRuntimeInit {
         hash = hash_u32(hash, self.shared_page_bytes);
         hash = hash_u32(hash, self.reserved1);
         hash = hash_u64(hash, self.ipc_buffer_vaddr);
-        hash = hash_u64(hash, self.lifecycle_notification_slot);
+        hash = hash_u64(hash, self.service_endpoint_slot);
+        hash = hash_u64(hash, self.service_reply_slot);
         hash = hash_u64(hash, self.supervisor_wake_notification_slot);
-        hash = hash_u64(hash, self.lifecycle_bits.control);
-        hash = hash_u64(hash, self.lifecycle_bits.timeout);
-        hash = hash_u64(hash, self.lifecycle_bits.shutdown);
-        hash = hash_u64(hash, self.lifecycle_bits.revoke);
+        hash = hash_u64(hash, self.call_labels.control);
+        hash = hash_u64(hash, self.call_labels.shutdown);
+        hash = hash_u64(hash, self.call_labels.revoke);
+        hash = hash_u64(hash, self.request_badge);
         hash = hash_u64(hash, self.supervisor_wake_bit);
         hash = hash_digest(hash, self.image_digest);
         hash = hash_digest(hash, self.contract_digest);
@@ -778,20 +789,24 @@ impl WorkerRuntimeInit {
         {
             return Err(WorkerAbiError::InvalidMapping);
         }
-        if self.lifecycle_notification_slot == 0
+        if self.service_endpoint_slot == 0
+            || self.service_reply_slot == 0
             || self.supervisor_wake_notification_slot == 0
-            || self.lifecycle_notification_slot == self.supervisor_wake_notification_slot
-            || self.lifecycle_notification_slot > u32::MAX as u64
+            || self.service_endpoint_slot == self.service_reply_slot
+            || self.service_endpoint_slot == self.supervisor_wake_notification_slot
+            || self.service_reply_slot == self.supervisor_wake_notification_slot
+            || self.service_endpoint_slot > u32::MAX as u64
+            || self.service_reply_slot > u32::MAX as u64
             || self.supervisor_wake_notification_slot > u32::MAX as u64
         {
             return Err(WorkerAbiError::InvalidCapabilitySlot);
         }
-        if self.lifecycle_bits.validate().is_err()
+        if self.call_labels.validate().is_err()
+            || self.request_badge == 0
             || self.supervisor_wake_bit == 0
             || !self.supervisor_wake_bit.is_power_of_two()
-            || self.lifecycle_bits.mask() & self.supervisor_wake_bit != 0
         {
-            return Err(WorkerAbiError::InvalidNotificationBits);
+            return Err(WorkerAbiError::InvalidCallLabel);
         }
         if self.image_digest.is_zero() || self.contract_digest.is_zero() {
             return Err(WorkerAbiError::InvalidDigest);
@@ -1568,12 +1583,11 @@ mod tests {
         Digest32::new([seed; 32])
     }
 
-    const fn bits() -> WorkerLifecycleBits {
-        WorkerLifecycleBits {
-            control: 1 << 8,
-            timeout: 1 << 9,
-            shutdown: 1 << 10,
-            revoke: 1 << 11,
+    const fn labels() -> WorkerCallLabels {
+        WorkerCallLabels {
+            control: 11,
+            shutdown: 12,
+            revoke: 13,
         }
     }
 
@@ -1586,9 +1600,11 @@ mod tests {
             1,
             identity(role),
             0x7000_0000,
+            1,
             2,
             3,
-            bits(),
+            labels(),
+            0x2601,
             1 << 12,
             digest(0x11),
             digest(0x22),
@@ -1700,7 +1716,9 @@ mod tests {
             0x7000_0000,
             2,
             2,
-            bits(),
+            3,
+            labels(),
+            0x2601,
             1 << 12,
             digest(0x11),
             digest(0x22),
@@ -1710,43 +1728,33 @@ mod tests {
             aliased.validate_for_role(WorkerRole::Heartbeat),
             Err(WorkerAbiError::InvalidCapabilitySlot)
         );
-        aliased.lifecycle_notification_slot = 3;
+        aliased.service_endpoint_slot = 1;
         aliased.seal = aliased.expected_seal();
         assert_eq!(aliased.validate_for_role(WorkerRole::Heartbeat), Ok(()));
     }
 
     #[test]
-    fn lifecycle_badges_are_one_hot_declared_and_terminal_first() {
-        let causes = bits();
+    fn call_labels_are_exact_distinct_and_non_coalescing() {
+        let causes = labels();
         assert_eq!(causes.validate(), Ok(()));
         assert_eq!(
             causes.classify(causes.control),
-            Ok(WorkerLifecycleEvent::Control)
+            Ok(WorkerCallOperation::Control)
         );
         assert_eq!(
-            causes.classify(causes.control | causes.timeout),
-            Ok(WorkerLifecycleEvent::Timeout)
+            causes.classify(causes.shutdown),
+            Ok(WorkerCallOperation::Shutdown)
         );
         assert_eq!(
-            causes.classify(causes.control | causes.shutdown | causes.timeout),
-            Ok(WorkerLifecycleEvent::Shutdown)
+            causes.classify(causes.revoke),
+            Ok(WorkerCallOperation::Revoke)
         );
-        assert_eq!(
-            causes.classify(causes.mask()),
-            Ok(WorkerLifecycleEvent::Revoke)
-        );
-        assert_eq!(
-            causes.classify(1),
-            Err(WorkerAbiError::InvalidNotificationBits)
-        );
-        let overlap = WorkerLifecycleBits {
-            timeout: causes.control,
+        assert_eq!(causes.classify(1), Err(WorkerAbiError::InvalidCallLabel));
+        let overlap = WorkerCallLabels {
+            shutdown: causes.control,
             ..causes
         };
-        assert_eq!(
-            overlap.validate(),
-            Err(WorkerAbiError::InvalidNotificationBits)
-        );
+        assert_eq!(overlap.validate(), Err(WorkerAbiError::InvalidCallLabel));
     }
 
     #[test]
