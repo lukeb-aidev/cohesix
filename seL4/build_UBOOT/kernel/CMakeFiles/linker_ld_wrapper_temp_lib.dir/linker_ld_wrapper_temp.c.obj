@@ -82,7 +82,6 @@
 /* disabled: CONFIG_ARCH_ARM_V7A */
 /* disabled: CONFIG_ARCH_ARM_V7VE */
 /* disabled: CONFIG_AARCH64_SERROR_IGNORE */
-/* disabled: CONFIG_KERNEL_MCS */
 /* disabled: CONFIG_ARM_PA_SIZE_BITS_40 */
 /* disabled: CONFIG_DEBUG_DISABLE_L2_CACHE */
 /* disabled: CONFIG_DEBUG_DISABLE_L1_ICACHE */

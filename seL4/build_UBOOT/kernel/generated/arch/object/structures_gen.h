@@ -1,4 +1,4 @@
-/* generated from /Users/lukasbower/GitHub/cohesix/out/sel4/v16-pi4-project/kernel/include/arch/arm/arch/object/structures.bf */
+/* generated from /Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/object/structures.bf */
 
 #pragma once
 
@@ -6,6 +6,48 @@
 #include <assert.h>
 #include <stdint.h>
 #include <util.h>
+struct call_stack {
+    uint64_t words[1];
+};
+typedef struct call_stack call_stack_t;
+
+static inline call_stack_t CONST
+call_stack_new(uint64_t callStackPtr, uint64_t isHead) {
+    call_stack_t call_stack;
+
+    /* fail if user has passed bits that we will override */  
+    assert((isHead & ~0x1ull) == ((1 && (isHead & (1ull << 47))) ? 0x0 : 0));  
+    assert((callStackPtr & ~0xffffffffffffull) == ((1 && (callStackPtr & (1ull << 47))) ? 0xffff000000000000 : 0));
+
+    call_stack.words[0] = 0
+        | (isHead & 0x1ull) << 48
+        | (callStackPtr & 0xffffffffffffull) >> 0;
+
+    return call_stack;
+}
+
+static inline uint64_t CONST
+call_stack_get_isHead(call_stack_t call_stack) {
+    uint64_t ret;
+    ret = (call_stack.words[0] & 0x1000000000000ull) >> 48;
+    /* Possibly sign extend */
+    if (__builtin_expect(!!(0 && (ret & (1ull << (47)))), 0)) {
+        ret |= 0x0;
+    }
+    return ret;
+}
+
+static inline uint64_t CONST
+call_stack_get_callStackPtr(call_stack_t call_stack) {
+    uint64_t ret;
+    ret = (call_stack.words[0] & 0xffffffffffffull) << 0;
+    /* Possibly sign extend */
+    if (__builtin_expect(!!(1 && (ret & (1ull << (47)))), 1)) {
+        ret |= 0xffff000000000000;
+    }
+    return ret;
+}
+
 struct endpoint {
     uint64_t words[2];
 };
@@ -196,9 +238,28 @@ mdb_node_ptr_set_mdbPrev(mdb_node_t *mdb_node_ptr, uint64_t v64) {
 }
 
 struct notification {
-    uint64_t words[4];
+    uint64_t words[8];
 };
 typedef struct notification notification_t;
+
+static inline uint64_t PURE
+notification_ptr_get_ntfnSchedContext(notification_t *notification_ptr) {
+    uint64_t ret;
+    ret = (notification_ptr->words[4] & 0xffffffffffffull) << 0;
+    /* Possibly sign extend */
+    if (__builtin_expect(!!(1 && (ret & (1ull << (47)))), 1)) {
+        ret |= 0xffff000000000000;
+    }
+    return ret;
+}
+
+static inline void
+notification_ptr_set_ntfnSchedContext(notification_t *notification_ptr, uint64_t v64) {
+    /* fail if user has passed bits that we will override */
+    assert((((~0xffffffffffffull << 0) | 0xffff000000000000) & v64) == ((1 && (v64 & (1ull << (47)))) ? 0xffff000000000000 : 0));
+    notification_ptr->words[4] &= ~0xffffffffffffull;
+    notification_ptr->words[4] |= (v64 >> 0) & 0xffffffffffff;
+}
 
 static inline uint64_t PURE
 notification_ptr_get_ntfnBoundTCB(notification_t *notification_ptr) {
@@ -319,10 +380,40 @@ thread_state_ptr_set_blockingIPCBadge(thread_state_t *thread_state_ptr, uint64_t
     thread_state_ptr->words[2] |= (v64 << 0) & 0xffffffffffffffff;
 }
 
+static inline uint64_t CONST
+thread_state_get_replyObject(thread_state_t thread_state) {
+    uint64_t ret;
+    ret = (thread_state.words[1] & 0x1ffffffffffe0ull) >> 1;
+    /* Possibly sign extend */
+    if (__builtin_expect(!!(1 && (ret & (1ull << (47)))), 1)) {
+        ret |= 0xffff000000000000;
+    }
+    return ret;
+}
+
+static inline uint64_t PURE
+thread_state_ptr_get_replyObject(thread_state_t *thread_state_ptr) {
+    uint64_t ret;
+    ret = (thread_state_ptr->words[1] & 0x1ffffffffffe0ull) >> 1;
+    /* Possibly sign extend */
+    if (__builtin_expect(!!(1 && (ret & (1ull << (47)))), 1)) {
+        ret |= 0xffff000000000000;
+    }
+    return ret;
+}
+
+static inline void
+thread_state_ptr_set_replyObject(thread_state_t *thread_state_ptr, uint64_t v64) {
+    /* fail if user has passed bits that we will override */
+    assert((((~0x1ffffffffffe0ull >> 1) | 0xffff000000000000) & v64) == ((1 && (v64 & (1ull << (47)))) ? 0xffff000000000000 : 0));
+    thread_state_ptr->words[1] &= ~0x1ffffffffffe0ull;
+    thread_state_ptr->words[1] |= (v64 << 1) & 0x1ffffffffffe0;
+}
+
 static inline uint64_t PURE
 thread_state_ptr_get_blockingIPCCanGrant(thread_state_t *thread_state_ptr) {
     uint64_t ret;
-    ret = (thread_state_ptr->words[1] & 0x8ull) >> 3;
+    ret = (thread_state_ptr->words[1] & 0x10ull) >> 4;
     /* Possibly sign extend */
     if (__builtin_expect(!!(0 && (ret & (1ull << (47)))), 0)) {
         ret |= 0x0;
@@ -333,15 +424,15 @@ thread_state_ptr_get_blockingIPCCanGrant(thread_state_t *thread_state_ptr) {
 static inline void
 thread_state_ptr_set_blockingIPCCanGrant(thread_state_t *thread_state_ptr, uint64_t v64) {
     /* fail if user has passed bits that we will override */
-    assert((((~0x8ull >> 3) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0));
-    thread_state_ptr->words[1] &= ~0x8ull;
-    thread_state_ptr->words[1] |= (v64 << 3) & 0x8;
+    assert((((~0x10ull >> 4) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0));
+    thread_state_ptr->words[1] &= ~0x10ull;
+    thread_state_ptr->words[1] |= (v64 << 4) & 0x10;
 }
 
 static inline uint64_t PURE
 thread_state_ptr_get_blockingIPCCanGrantReply(thread_state_t *thread_state_ptr) {
     uint64_t ret;
-    ret = (thread_state_ptr->words[1] & 0x4ull) >> 2;
+    ret = (thread_state_ptr->words[1] & 0x8ull) >> 3;
     /* Possibly sign extend */
     if (__builtin_expect(!!(0 && (ret & (1ull << (47)))), 0)) {
         ret |= 0x0;
@@ -352,15 +443,15 @@ thread_state_ptr_get_blockingIPCCanGrantReply(thread_state_t *thread_state_ptr) 
 static inline void
 thread_state_ptr_set_blockingIPCCanGrantReply(thread_state_t *thread_state_ptr, uint64_t v64) {
     /* fail if user has passed bits that we will override */
-    assert((((~0x4ull >> 2) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0));
-    thread_state_ptr->words[1] &= ~0x4ull;
-    thread_state_ptr->words[1] |= (v64 << 2) & 0x4;
+    assert((((~0x8ull >> 3) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0));
+    thread_state_ptr->words[1] &= ~0x8ull;
+    thread_state_ptr->words[1] |= (v64 << 3) & 0x8;
 }
 
 static inline uint64_t PURE
 thread_state_ptr_get_blockingIPCIsCall(thread_state_t *thread_state_ptr) {
     uint64_t ret;
-    ret = (thread_state_ptr->words[1] & 0x2ull) >> 1;
+    ret = (thread_state_ptr->words[1] & 0x4ull) >> 2;
     /* Possibly sign extend */
     if (__builtin_expect(!!(0 && (ret & (1ull << (47)))), 0)) {
         ret |= 0x0;
@@ -371,15 +462,26 @@ thread_state_ptr_get_blockingIPCIsCall(thread_state_t *thread_state_ptr) {
 static inline void
 thread_state_ptr_set_blockingIPCIsCall(thread_state_t *thread_state_ptr, uint64_t v64) {
     /* fail if user has passed bits that we will override */
-    assert((((~0x2ull >> 1) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0));
-    thread_state_ptr->words[1] &= ~0x2ull;
-    thread_state_ptr->words[1] |= (v64 << 1) & 0x2;
+    assert((((~0x4ull >> 2) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0));
+    thread_state_ptr->words[1] &= ~0x4ull;
+    thread_state_ptr->words[1] |= (v64 << 2) & 0x4;
 }
 
 static inline uint64_t CONST
 thread_state_get_tcbQueued(thread_state_t thread_state) {
     uint64_t ret;
-    ret = (thread_state.words[1] & 0x1ull) >> 0;
+    ret = (thread_state.words[1] & 0x2ull) >> 1;
+    /* Possibly sign extend */
+    if (__builtin_expect(!!(0 && (ret & (1ull << (47)))), 0)) {
+        ret |= 0x0;
+    }
+    return ret;
+}
+
+static inline uint64_t PURE
+thread_state_ptr_get_tcbQueued(thread_state_t *thread_state_ptr) {
+    uint64_t ret;
+    ret = (thread_state_ptr->words[1] & 0x2ull) >> 1;
     /* Possibly sign extend */
     if (__builtin_expect(!!(0 && (ret & (1ull << (47)))), 0)) {
         ret |= 0x0;
@@ -390,9 +492,50 @@ thread_state_get_tcbQueued(thread_state_t thread_state) {
 static inline void
 thread_state_ptr_set_tcbQueued(thread_state_t *thread_state_ptr, uint64_t v64) {
     /* fail if user has passed bits that we will override */
+    assert((((~0x2ull >> 1) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0));
+    thread_state_ptr->words[1] &= ~0x2ull;
+    thread_state_ptr->words[1] |= (v64 << 1) & 0x2;
+}
+
+static inline uint64_t CONST
+thread_state_get_tcbInReleaseQueue(thread_state_t thread_state) {
+    uint64_t ret;
+    ret = (thread_state.words[1] & 0x1ull) >> 0;
+    /* Possibly sign extend */
+    if (__builtin_expect(!!(0 && (ret & (1ull << (47)))), 0)) {
+        ret |= 0x0;
+    }
+    return ret;
+}
+
+static inline uint64_t PURE
+thread_state_ptr_get_tcbInReleaseQueue(thread_state_t *thread_state_ptr) {
+    uint64_t ret;
+    ret = (thread_state_ptr->words[1] & 0x1ull) >> 0;
+    /* Possibly sign extend */
+    if (__builtin_expect(!!(0 && (ret & (1ull << (47)))), 0)) {
+        ret |= 0x0;
+    }
+    return ret;
+}
+
+static inline void
+thread_state_ptr_set_tcbInReleaseQueue(thread_state_t *thread_state_ptr, uint64_t v64) {
+    /* fail if user has passed bits that we will override */
     assert((((~0x1ull >> 0) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0));
     thread_state_ptr->words[1] &= ~0x1ull;
     thread_state_ptr->words[1] |= (v64 << 0) & 0x1;
+}
+
+static inline uint64_t CONST
+thread_state_get_blockingObject(thread_state_t thread_state) {
+    uint64_t ret;
+    ret = (thread_state.words[0] & 0xfffffffffff0ull) << 0;
+    /* Possibly sign extend */
+    if (__builtin_expect(!!(1 && (ret & (1ull << (47)))), 1)) {
+        ret |= 0xffff000000000000;
+    }
+    return ret;
 }
 
 static inline uint64_t PURE
@@ -583,6 +726,8 @@ enum cap_tag {
     cap_irq_handler_cap = 16,
     cap_zombie_cap = 18,
     cap_domain_cap = 20,
+    cap_sched_context_cap = 22,
+    cap_sched_control_cap = 24,
     cap_frame_cap = 1,
     cap_page_table_cap = 3,
     cap_vspace_cap = 9,
@@ -1000,26 +1145,24 @@ cap_notification_cap_get_capNtfnPtr(cap_t cap) {
 }
 
 static inline cap_t CONST
-cap_reply_cap_new(uint64_t capReplyCanGrant, uint64_t capReplyMaster, uint64_t capTCBPtr) {
+cap_reply_cap_new(uint64_t capReplyPtr, uint64_t capReplyCanGrant) {
     cap_t cap;
 
     /* fail if user has passed bits that we will override */  
-    assert((capReplyCanGrant & ~0x1ull) == ((1 && (capReplyCanGrant & (1ull << 47))) ? 0x0 : 0));  
-    assert((capReplyMaster & ~0x1ull) == ((1 && (capReplyMaster & (1ull << 47))) ? 0x0 : 0));  
-    assert(((uint64_t)cap_reply_cap & ~0x1full) == ((1 && ((uint64_t)cap_reply_cap & (1ull << 47))) ? 0x0 : 0));
+    assert(((uint64_t)cap_reply_cap & ~0x1full) == ((1 && ((uint64_t)cap_reply_cap & (1ull << 47))) ? 0x0 : 0));  
+    assert((capReplyCanGrant & ~0x1ull) == ((1 && (capReplyCanGrant & (1ull << 47))) ? 0x0 : 0));
 
     cap.words[0] = 0
-        | (capReplyCanGrant & 0x1ull) << 1
-        | (capReplyMaster & 0x1ull) << 0
-        | ((uint64_t)cap_reply_cap & 0x1full) << 59;
+        | ((uint64_t)cap_reply_cap & 0x1full) << 59
+        | (capReplyCanGrant & 0x1ull) << 58;
     cap.words[1] = 0
-        | capTCBPtr << 0;
+        | capReplyPtr << 0;
 
     return cap;
 }
 
 static inline uint64_t CONST
-cap_reply_cap_get_capTCBPtr(cap_t cap) {
+cap_reply_cap_get_capReplyPtr(cap_t cap) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
     assert(((cap.words[0] >> 59) & 0x1f) == cap_reply_cap);
@@ -1038,7 +1181,7 @@ cap_reply_cap_get_capReplyCanGrant(cap_t cap) {
     /* fail if union does not have the expected tag */
     assert(((cap.words[0] >> 59) & 0x1f) == cap_reply_cap);
 
-    ret = (cap.words[0] & 0x2ull) >> 1;
+    ret = (cap.words[0] & 0x400000000000000ull) >> 58;
     /* Possibly sign extend */
     if (__builtin_expect(!!(0 && (ret & (1ull << (47)))), 0)) {
         ret |= 0x0;
@@ -1051,25 +1194,11 @@ cap_reply_cap_set_capReplyCanGrant(cap_t cap, uint64_t v64) {
     /* fail if union does not have the expected tag */
     assert(((cap.words[0] >> 59) & 0x1f) == cap_reply_cap);
     /* fail if user has passed bits that we will override */
-    assert((((~0x2ull >> 1 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0));
+    assert((((~0x400000000000000ull >> 58 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0));
 
-    cap.words[0] &= ~0x2ull;
-    cap.words[0] |= (v64 << 1) & 0x2ull;
+    cap.words[0] &= ~0x400000000000000ull;
+    cap.words[0] |= (v64 << 58) & 0x400000000000000ull;
     return cap;
-}
-
-static inline uint64_t CONST
-cap_reply_cap_get_capReplyMaster(cap_t cap) {
-    uint64_t ret;
-    /* fail if union does not have the expected tag */
-    assert(((cap.words[0] >> 59) & 0x1f) == cap_reply_cap);
-
-    ret = (cap.words[0] & 0x1ull) >> 0;
-    /* Possibly sign extend */
-    if (__builtin_expect(!!(0 && (ret & (1ull << (47)))), 0)) {
-        ret |= 0x0;
-    }
-    return ret;
 }
 
 static inline cap_t CONST
@@ -1315,6 +1444,81 @@ cap_domain_cap_new(void) {
     cap.words[1] = 0;
 
     return cap;
+}
+
+static inline cap_t CONST
+cap_sched_context_cap_new(uint64_t capSCPtr, uint64_t capSCSizeBits) {
+    cap_t cap;
+
+    /* fail if user has passed bits that we will override */  
+    assert((capSCPtr & ~0xffffffffffffull) == ((1 && (capSCPtr & (1ull << 47))) ? 0xffff000000000000 : 0));  
+    assert((capSCSizeBits & ~0x3full) == ((1 && (capSCSizeBits & (1ull << 47))) ? 0x0 : 0));  
+    assert(((uint64_t)cap_sched_context_cap & ~0x1full) == ((1 && ((uint64_t)cap_sched_context_cap & (1ull << 47))) ? 0x0 : 0));
+
+    cap.words[0] = 0
+        | ((uint64_t)cap_sched_context_cap & 0x1full) << 59;
+    cap.words[1] = 0
+        | (capSCPtr & 0xffffffffffffull) << 16
+        | (capSCSizeBits & 0x3full) << 10;
+
+    return cap;
+}
+
+static inline uint64_t CONST
+cap_sched_context_cap_get_capSCPtr(cap_t cap) {
+    uint64_t ret;
+    /* fail if union does not have the expected tag */
+    assert(((cap.words[0] >> 59) & 0x1f) == cap_sched_context_cap);
+
+    ret = (cap.words[1] & 0xffffffffffff0000ull) >> 16;
+    /* Possibly sign extend */
+    if (__builtin_expect(!!(1 && (ret & (1ull << (47)))), 1)) {
+        ret |= 0xffff000000000000;
+    }
+    return ret;
+}
+
+static inline uint64_t CONST
+cap_sched_context_cap_get_capSCSizeBits(cap_t cap) {
+    uint64_t ret;
+    /* fail if union does not have the expected tag */
+    assert(((cap.words[0] >> 59) & 0x1f) == cap_sched_context_cap);
+
+    ret = (cap.words[1] & 0xfc00ull) >> 10;
+    /* Possibly sign extend */
+    if (__builtin_expect(!!(0 && (ret & (1ull << (47)))), 0)) {
+        ret |= 0x0;
+    }
+    return ret;
+}
+
+static inline cap_t CONST
+cap_sched_control_cap_new(uint64_t core) {
+    cap_t cap;
+
+    /* fail if user has passed bits that we will override */  
+    assert(((uint64_t)cap_sched_control_cap & ~0x1full) == ((1 && ((uint64_t)cap_sched_control_cap & (1ull << 47))) ? 0x0 : 0));
+
+    cap.words[0] = 0
+        | ((uint64_t)cap_sched_control_cap & 0x1full) << 59;
+    cap.words[1] = 0
+        | core << 0;
+
+    return cap;
+}
+
+static inline uint64_t CONST
+cap_sched_control_cap_get_core(cap_t cap) {
+    uint64_t ret;
+    /* fail if union does not have the expected tag */
+    assert(((cap.words[0] >> 59) & 0x1f) == cap_sched_control_cap);
+
+    ret = (cap.words[1] & 0xffffffffffffffffull) >> 0;
+    /* Possibly sign extend */
+    if (__builtin_expect(!!(0 && (ret & (1ull << (47)))), 0)) {
+        ret |= 0x0;
+    }
+    return ret;
 }
 
 static inline cap_t CONST
@@ -2101,13 +2305,19 @@ enum seL4_Fault_tag {
     seL4_Fault_CapFault = 1,
     seL4_Fault_UnknownSyscall = 2,
     seL4_Fault_UserException = 3,
-    seL4_Fault_VMFault = 5
+    seL4_Fault_Timeout = 5,
+    seL4_Fault_VMFault = 6
 };
 typedef enum seL4_Fault_tag seL4_Fault_tag_t;
 
 static inline uint64_t CONST
 seL4_Fault_get_seL4_FaultType(seL4_Fault_t seL4_Fault) {
     return (seL4_Fault.words[0] >> 0) & 0xfull;
+}
+
+static inline uint64_t PURE
+seL4_Fault_ptr_get_seL4_FaultType(seL4_Fault_t *seL4_Fault_ptr) {
+    return (seL4_Fault_ptr->words[0] >> 0) & 0xfull;
 }
 
 static inline seL4_Fault_t CONST
@@ -2237,6 +2447,35 @@ seL4_Fault_UserException_get_code(seL4_Fault_t seL4_Fault) {
     assert(((seL4_Fault.words[0] >> 0) & 0xf) == seL4_Fault_UserException);
 
     ret = (seL4_Fault.words[0] & 0xfffffff0ull) >> 4;
+    /* Possibly sign extend */
+    if (__builtin_expect(!!(0 && (ret & (1ull << (47)))), 0)) {
+        ret |= 0x0;
+    }
+    return ret;
+}
+
+static inline seL4_Fault_t CONST
+seL4_Fault_Timeout_new(uint64_t badge) {
+    seL4_Fault_t seL4_Fault;
+
+    /* fail if user has passed bits that we will override */  
+    assert(((uint64_t)seL4_Fault_Timeout & ~0xfull) == ((0 && ((uint64_t)seL4_Fault_Timeout & (1ull << 47))) ? 0x0 : 0));
+
+    seL4_Fault.words[0] = 0
+        | ((uint64_t)seL4_Fault_Timeout & 0xfull) << 0;
+    seL4_Fault.words[1] = 0
+        | badge << 0;
+
+    return seL4_Fault;
+}
+
+static inline uint64_t CONST
+seL4_Fault_Timeout_get_badge(seL4_Fault_t seL4_Fault) {
+    uint64_t ret;
+    /* fail if union does not have the expected tag */
+    assert(((seL4_Fault.words[0] >> 0) & 0xf) == seL4_Fault_Timeout);
+
+    ret = (seL4_Fault.words[1] & 0xffffffffffffffffull) >> 0;
     /* Possibly sign extend */
     if (__builtin_expect(!!(0 && (ret & (1ull << (47)))), 0)) {
         ret |= 0x0;

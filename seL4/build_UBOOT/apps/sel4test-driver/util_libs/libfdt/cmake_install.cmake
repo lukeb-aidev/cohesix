@@ -1,4 +1,4 @@
-# Install script for directory: /Users/lukasbower/GitHub/cohesix/out/sel4/v16-pi4-project/projects/util_libs/libfdt
+# Install script for directory: /Users/lukasbower/seL4_16/projects/util_libs/libfdt
 
 # Set the install prefix
 if(NOT DEFINED CMAKE_INSTALL_PREFIX)
@@ -40,6 +40,6 @@ endif()
 string(REPLACE ";" "\n" CMAKE_INSTALL_MANIFEST_CONTENT
        "${CMAKE_INSTALL_MANIFEST_FILES}")
 if(CMAKE_INSTALL_LOCAL_ONLY)
-  file(WRITE "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic/apps/sel4test-driver/util_libs/libfdt/install_local_manifest.txt"
+  file(WRITE "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-m26e-e66143d8/apps/sel4test-driver/util_libs/libfdt/install_local_manifest.txt"
      "${CMAKE_INSTALL_MANIFEST_CONTENT}")
 endif()

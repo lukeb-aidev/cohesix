@@ -62,6 +62,13 @@ block UserException {
     padding 60
     field seL4_FaultType 4
 }
+block Timeout {
+    padding 704
+    field data 64
+    field consumed 64
+    padding 60
+    field seL4_FaultType 4
+}
 --
 -- Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
 --
@@ -74,6 +81,7 @@ tagged_union seL4_Fault seL4_FaultType {
     tag CapFault 1
     tag UnknownSyscall 2
     tag UserException 3
+    tag Timeout 5
     -- arch specific faults
-    tag VMFault 5
+    tag VMFault 6
 }

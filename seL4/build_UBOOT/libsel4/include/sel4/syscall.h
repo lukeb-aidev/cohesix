@@ -17,53 +17,56 @@
 typedef enum {
        seL4_SysCall = -1,
        seL4_SysReplyRecv = -2,
-       seL4_SysSend = -3,
-       seL4_SysNBSend = -4,
-       seL4_SysRecv = -5,
-       seL4_SysReply = -6,
-       seL4_SysYield = -7,
+       seL4_SysNBSendRecv = -3,
+       seL4_SysNBSendWait = -4,
+       seL4_SysSend = -5,
+       seL4_SysNBSend = -6,
+       seL4_SysRecv = -7,
        seL4_SysNBRecv = -8,
+       seL4_SysWait = -9,
+       seL4_SysNBWait = -10,
+       seL4_SysYield = -11,
 #if defined(CONFIG_PRINTING)
-       seL4_SysDebugPutChar = -9,
-       seL4_SysDebugDumpScheduler = -10,
+       seL4_SysDebugPutChar = -12,
+       seL4_SysDebugDumpScheduler = -13,
 #endif /* defined(CONFIG_PRINTING) */
 #if defined(CONFIG_DEBUG_BUILD)
-       seL4_SysDebugHalt = -11,
-       seL4_SysDebugCapIdentify = -12,
-       seL4_SysDebugSnapshot = -13,
-       seL4_SysDebugNameThread = -14,
+       seL4_SysDebugHalt = -14,
+       seL4_SysDebugCapIdentify = -15,
+       seL4_SysDebugSnapshot = -16,
+       seL4_SysDebugNameThread = -17,
 #endif /* defined(CONFIG_DEBUG_BUILD) */
 #if (defined(CONFIG_DEBUG_BUILD) && defined(CONFIG_ENABLE_SMP_SUPPORT))
-       seL4_SysDebugSendIPI = -15,
-       seL4_SysDebugGetThreadAffinity = -16,
+       seL4_SysDebugSendIPI = -18,
+       seL4_SysDebugGetThreadAffinity = -19,
 #endif /* (defined(CONFIG_DEBUG_BUILD) && defined(CONFIG_ENABLE_SMP_SUPPORT)) */
 #if defined(CONFIG_DANGEROUS_CODE_INJECTION)
-       seL4_SysDebugRun = -17,
+       seL4_SysDebugRun = -20,
 #endif /* defined(CONFIG_DANGEROUS_CODE_INJECTION) */
 #if defined(CONFIG_ENABLE_BENCHMARKS)
-       seL4_SysBenchmarkFlushCaches = -18,
-       seL4_SysBenchmarkResetLog = -19,
-       seL4_SysBenchmarkFinalizeLog = -20,
-       seL4_SysBenchmarkSetLogBuffer = -21,
-       seL4_SysBenchmarkNullSyscall = -22,
+       seL4_SysBenchmarkFlushCaches = -21,
+       seL4_SysBenchmarkResetLog = -22,
+       seL4_SysBenchmarkFinalizeLog = -23,
+       seL4_SysBenchmarkSetLogBuffer = -24,
+       seL4_SysBenchmarkNullSyscall = -25,
 #endif /* defined(CONFIG_ENABLE_BENCHMARKS) */
 #if defined(CONFIG_BENCHMARK_TRACK_UTILISATION)
-       seL4_SysBenchmarkGetThreadUtilisation = -23,
-       seL4_SysBenchmarkResetThreadUtilisation = -24,
+       seL4_SysBenchmarkGetThreadUtilisation = -26,
+       seL4_SysBenchmarkResetThreadUtilisation = -27,
 #endif /* defined(CONFIG_BENCHMARK_TRACK_UTILISATION) */
 #if (defined(CONFIG_DEBUG_BUILD) && defined(CONFIG_BENCHMARK_TRACK_UTILISATION))
-       seL4_SysBenchmarkDumpAllThreadsUtilisation = -25,
-       seL4_SysBenchmarkResetAllThreadsUtilisation = -26,
+       seL4_SysBenchmarkDumpAllThreadsUtilisation = -28,
+       seL4_SysBenchmarkResetAllThreadsUtilisation = -29,
 #endif /* (defined(CONFIG_DEBUG_BUILD) && defined(CONFIG_BENCHMARK_TRACK_UTILISATION)) */
 #if defined(CONFIG_KERNEL_X86_DANGEROUS_MSR)
-       seL4_SysX86DangerousWRMSR = -27,
-       seL4_SysX86DangerousRDMSR = -28,
+       seL4_SysX86DangerousWRMSR = -30,
+       seL4_SysX86DangerousRDMSR = -31,
 #endif /* defined(CONFIG_KERNEL_X86_DANGEROUS_MSR) */
 #if defined(CONFIG_VTX)
-       seL4_SysVMEnter = -29,
+       seL4_SysVMEnter = -32,
 #endif /* defined(CONFIG_VTX) */
 #if defined(CONFIG_SET_TLS_BASE_SELF)
-       seL4_SysSetTLSBase = -30,
+       seL4_SysSetTLSBase = -33,
 #endif /* defined(CONFIG_SET_TLS_BASE_SELF) */
     SEL4_FORCE_LONG_ENUM(seL4_Syscall_ID)
 } seL4_Syscall_ID;

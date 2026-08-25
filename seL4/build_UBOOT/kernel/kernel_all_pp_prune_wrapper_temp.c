@@ -1,4 +1,4 @@
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-pi4-project/kernel/src/api/faults.c"
+#line 1 "/Users/lukasbower/seL4_16/kernel/src/api/faults.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -260,7 +260,7 @@ word_t setMRs_fault(tcb_t *sender, tcb_t *receiver, word_t *receiveIPCBuffer)
                                  seL4_Fault_get_seL4_FaultType(sender->tcbFault));
     }
 }
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-pi4-project/kernel/src/api/syscall.c"
+#line 1 "/Users/lukasbower/seL4_16/kernel/src/api/syscall.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -928,7 +928,7 @@ exception_t handleSyscall(syscall_t syscall)
 
     return EXCEPTION_NONE;
 }
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-pi4-project/kernel/src/arch/arm/64/c_traps.c"
+#line 1 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/64/c_traps.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -1047,7 +1047,7 @@ void VISIBLE c_handle_invalid_vector_entry(word_t vect_offset, word_t pc)
     printf("ESR: 0x%"SEL4_PRIx_word" FAR: 0x%"SEL4_PRIx_word"\n", getESR(), getFAR());
 }
 #endif
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-pi4-project/kernel/src/arch/arm/64/idle.c"
+#line 1 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/64/idle.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -1073,7 +1073,7 @@ void NORETURN NO_INLINE VISIBLE halt(void)
     idle_thread();
     UNREACHABLE();
 }
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-pi4-project/kernel/src/arch/arm/64/kernel/thread.c"
+#line 1 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/64/kernel/thread.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -1113,7 +1113,7 @@ void Arch_activateIdleThread(tcb_t *tcb)
 {
     /* Don't need to do anything */
 }
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-pi4-project/kernel/src/arch/arm/64/kernel/vspace.c"
+#line 1 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/64/kernel/vspace.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -3119,7 +3119,7 @@ exception_t benchmark_arch_map_logBuffer(word_t frame_cptr)
     return EXCEPTION_NONE;
 }
 #endif /* CONFIG_KERNEL_LOG_BUFFER */
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-pi4-project/kernel/src/arch/arm/64/machine/capdl.c"
+#line 1 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/64/machine/capdl.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -3630,7 +3630,7 @@ void debug_capDL(void)
 }
 
 #endif /* CONFIG_DEBUG_BUILD */
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-pi4-project/kernel/src/arch/arm/64/machine/debug.c"
+#line 1 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/64/machine/debug.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -3885,7 +3885,7 @@ void aarch64_restore_user_debug_context(tcb_t *target_thread)
 }
 
 #endif /* ARM_BASE_CP14_SAVE_AND_RESTORE */
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-pi4-project/kernel/src/arch/arm/64/machine/fpu.c"
+#line 1 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/64/machine/fpu.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -3924,7 +3924,7 @@ BOOT_CODE bool_t fpsimd_HWCapTest(void)
 
     return true;
 }
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-pi4-project/kernel/src/arch/arm/64/machine/registerset.c"
+#line 1 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/64/machine/registerset.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -3967,7 +3967,7 @@ word_t getNBSendRecvDest(void)
     return getRegister(NODE_STATE(ksCurThread), nbsendRecvDest);
 }
 #endif
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-pi4-project/kernel/src/arch/arm/64/model/statedata.c"
+#line 1 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/64/model/statedata.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -4099,7 +4099,7 @@ asid_t smmuStateCBAsidTable[SMMU_MAX_CB];
 /* Null state for the Debug coprocessor's break/watchpoint registers */
 user_breakpoint_state_t armKSNullBreakpointState;
 #endif /* ARM_BASE_CP14_SAVE_AND_RESTORE */
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-pi4-project/kernel/src/arch/arm/64/object/objecttype.c"
+#line 1 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/64/object/objecttype.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -4647,7 +4647,7 @@ Arch_prepareThreadDelete(tcb_t * thread) {
     fpuRelease(thread);
 #endif
 }
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-pi4-project/kernel/src/arch/arm/api/faults.c"
+#line 1 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/api/faults.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -4711,7 +4711,7 @@ word_t Arch_setMRs_fault(tcb_t *sender, tcb_t *receiver, word_t *receiveIPCBuffe
         fail("Invalid fault");
     }
 }
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-pi4-project/kernel/src/arch/arm/armv/armv8-a/64/cache.c"
+#line 1 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/armv/armv8-a/64/cache.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -4820,7 +4820,7 @@ void cleanInvalidate_L1D(void)
 {
     cleanInvalidate_D_by_level(0);
 }
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-pi4-project/kernel/src/arch/arm/armv/armv8-a/64/user_access.c"
+#line 1 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/armv/armv8-a/64/user_access.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -4885,7 +4885,7 @@ void armv_init_user_access(void)
     check_export_pmu();
     check_export_arch_timer();
 }
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-pi4-project/kernel/src/arch/arm/benchmark/benchmark.c"
+#line 1 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/benchmark/benchmark.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -4924,7 +4924,7 @@ void arm_init_ccnt(void)
 #endif /* CONFIG_ARM_ENABLE_PMU_OVERFLOW_INTERRUPT */
 }
 #endif
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-pi4-project/kernel/src/arch/arm/c_traps.c"
+#line 1 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/c_traps.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -5137,7 +5137,7 @@ VISIBLE NORETURN void c_handle_vcpu_fault(word_t hsr)
     UNREACHABLE();
 }
 #endif /* CONFIG_ARM_HYPERVISOR_SUPPORT */
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-pi4-project/kernel/src/arch/arm/kernel/boot.c"
+#line 1 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/kernel/boot.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  * Copyright 2021, HENSOLDT Cyber
@@ -5810,7 +5810,7 @@ BOOT_CODE VISIBLE void init_kernel(
     schedule();
     activateThread();
 }
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-pi4-project/kernel/src/arch/arm/kernel/thread.c"
+#line 1 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/kernel/thread.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -5837,7 +5837,7 @@ void Arch_prepareSetDomain(tcb_t *tptr, dom_t dom)
         vcpu_flush_if_current(tptr);
     }
 }
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-pi4-project/kernel/src/arch/arm/machine/cache.c"
+#line 1 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/machine/cache.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -6046,7 +6046,7 @@ void arch_clean_invalidate_L1_caches(word_t type)
         isb();
     }
 }
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-pi4-project/kernel/src/arch/arm/machine/debug.c"
+#line 1 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/machine/debug.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -6662,7 +6662,7 @@ void restore_user_debug_context(tcb_t *target_thread)
 }
 
 #endif /* ARM_BASE_CP14_SAVE_AND_RESTORE */
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-pi4-project/kernel/src/arch/arm/machine/errata.c"
+#line 1 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/machine/errata.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -6708,7 +6708,7 @@ BOOT_CODE void VISIBLE arm_errata(void)
 #endif
 }
 
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-pi4-project/kernel/src/arch/arm/machine/gic_v2.c"
+#line 1 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/machine/gic_v2.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -6954,7 +6954,7 @@ volatile struct gich_vcpu_ctrl_map *gic_vcpu_ctrl =
 word_t gic_vcpu_num_list_regs;
 
 #endif /* End of CONFIG_ARM_HYPERVISOR_SUPPORT */
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-pi4-project/kernel/src/arch/arm/machine/hardware.c"
+#line 1 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/machine/hardware.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -7000,7 +7000,7 @@ BOOT_CODE void map_kernel_devices(void)
     }
 }
 
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-pi4-project/kernel/src/arch/arm/machine/io.c"
+#line 1 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/machine/io.c"
 /*
  * Copyright 2021, Axel Heider <axelheider@gmx.de>
  *
@@ -7024,7 +7024,7 @@ unsigned char kernel_getDebugChar(void)
     return uart_drv_getchar();
 }
 #endif /* CONFIG_DEBUG_BUILD */
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-pi4-project/kernel/src/arch/arm/machine/l2c_nop.c"
+#line 1 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/machine/l2c_nop.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -7041,7 +7041,7 @@ void plat_cleanL2Range(paddr_t start, paddr_t end) {}
 void plat_invalidateL2Range(paddr_t start, paddr_t end) {}
 void plat_cleanInvalidateL2Range(paddr_t start, paddr_t end) {}
 void plat_cleanInvalidateL2Cache(void) {}
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-pi4-project/kernel/src/arch/arm/object/interrupt.c"
+#line 1 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/object/interrupt.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -7269,7 +7269,7 @@ exception_t decodeSGISignalInvocation(word_t invLabel, word_t length,
     return invokeSGISignalGenerate(irq, target);
 }
 #endif /* !CONFIG_ENABLE_SMP_SUPPORT */
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-pi4-project/kernel/src/arch/arm/object/iospace.c"
+#line 1 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/object/iospace.c"
 /*
  * Copyright 2016, General Dynamics C4 Systems
  *
@@ -7746,7 +7746,7 @@ exception_t decodeARMIOSpaceInvocation(word_t invLabel, cap_t cap)
     return EXCEPTION_SYSCALL_ERROR;
 }
 #endif /* end of CONFIG_TK1_SMMU */
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-pi4-project/kernel/src/arch/arm/object/smc.c"
+#line 1 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/object/smc.c"
 /*
  * Copyright 2021, DornerWorks Ltd.
  *
@@ -7846,7 +7846,7 @@ exception_t decodeARMSMCInvocation(word_t label, word_t length, cap_t cap, bool_
 }
 
 #endif
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-pi4-project/kernel/src/arch/arm/object/smmu.c"
+#line 1 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/object/smmu.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -8259,7 +8259,7 @@ void invalidateSMMUTLBByASIDVA(asid_t asid, vptr_t vaddr, word_t bind_cb)
 
 #endif
 
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-pi4-project/kernel/src/arch/arm/object/tcb.c"
+#line 1 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/object/tcb.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -8283,7 +8283,7 @@ exception_t CONST Arch_performTransfer(word_t arch, tcb_t *tcb_src, tcb_t *tcb_d
 {
     return EXCEPTION_NONE;
 }
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-pi4-project/kernel/src/arch/arm/object/vcpu.c"
+#line 1 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/object/vcpu.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -8894,7 +8894,7 @@ void handleVCPUInjectInterruptIPI(vcpu_t *vcpu, unsigned long index, virq_t virq
 #endif /* ENABLE_SMP_SUPPORT */
 
 #endif
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-pi4-project/kernel/src/arch/arm/smp/ipi.c"
+#line 1 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/smp/ipi.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -8970,7 +8970,7 @@ void ipi_send_mask(irq_t ipi, word_t mask, bool_t isBlocking)
     generic_ipi_send_mask(ipi, mask, isBlocking);
 }
 #endif /* ENABLE_SMP_SUPPORT */
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-pi4-project/kernel/src/assert.c"
+#line 1 "/Users/lukasbower/seL4_16/kernel/src/assert.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -9014,7 +9014,7 @@ void _assert_fail(
 }
 
 #endif
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-pi4-project/kernel/src/benchmark/benchmark.c"
+#line 1 "/Users/lukasbower/seL4_16/kernel/src/benchmark/benchmark.c"
 /*
  * Copyright 2016, General Dynamics C4 Systems
  *
@@ -9171,7 +9171,7 @@ exception_t handle_SysBenchmarkResetAllThreadsUtilisation(void)
 #endif /* CONFIG_DEBUG_BUILD */
 #endif /* CONFIG_BENCHMARK_TRACK_UTILISATION */
 #endif /* CONFIG_ENABLE_BENCHMARKS */
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-pi4-project/kernel/src/benchmark/benchmark_track.c"
+#line 1 "/Users/lukasbower/seL4_16/kernel/src/benchmark/benchmark_track.c"
 /*
  * Copyright 2016, General Dynamics C4 Systems
  *
@@ -9206,7 +9206,7 @@ void benchmark_track_exit(void)
     }
 }
 #endif /* CONFIG_BENCHMARK_TRACK_KERNEL_ENTRIES */
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-pi4-project/kernel/src/benchmark/benchmark_utilisation.c"
+#line 1 "/Users/lukasbower/seL4_16/kernel/src/benchmark/benchmark_utilisation.c"
 /*
  * Copyright 2016, General Dynamics C4 Systems
  *
@@ -9285,7 +9285,7 @@ void benchmark_track_reset_utilisation(tcb_t *tcb)
     tcb->benchmark.schedule_start_time = 0;
 }
 #endif /* CONFIG_BENCHMARK_TRACK_UTILISATION */
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-pi4-project/kernel/src/drivers/serial/bcm2835-aux-uart.c"
+#line 1 "/Users/lukasbower/seL4_16/kernel/src/drivers/serial/bcm2835-aux-uart.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -9339,7 +9339,7 @@ unsigned char uart_drv_getchar(void)
     return *UART_REG(MU_IO);
 }
 #endif /* CONFIG_DEBUG_BUILD */
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-pi4-project/kernel/src/drivers/timer/generic_timer.c"
+#line 1 "/Users/lukasbower/seL4_16/kernel/src/drivers/timer/generic_timer.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -9480,7 +9480,7 @@ static void restore_virt_timer(vcpu_t *vcpu)
 }
 
 #endif /* CONFIG_ARM_HYPERVISOR_SUPPORT */
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-pi4-project/kernel/src/fastpath/fastpath.c"
+#line 1 "/Users/lukasbower/seL4_16/kernel/src/fastpath/fastpath.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -10380,7 +10380,7 @@ void NORETURN fastpath_vm_fault(vm_fault_type_t type)
     fastpath_restore(badge, msgInfo, NODE_STATE(ksCurThread));
 }
 #endif
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-pi4-project/kernel/src/inlines.c"
+#line 1 "/Users/lukasbower/seL4_16/kernel/src/inlines.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -10397,7 +10397,7 @@ syscall_error_t current_syscall_error;
 debug_syscall_error_t current_debug_error;
 #endif
 
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-pi4-project/kernel/src/kernel/boot.c"
+#line 1 "/Users/lukasbower/seL4_16/kernel/src/kernel/boot.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -11531,7 +11531,7 @@ BOOT_CODE bool_t init_freemem(word_t n_available, const p_region_t *available,
            "objects, need size/alignment of 2^%"SEL4_PRIu_word"\n", max);
     return false;
 }
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-pi4-project/kernel/src/kernel/cspace.c"
+#line 1 "/Users/lukasbower/seL4_16/kernel/src/kernel/cspace.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -11725,7 +11725,7 @@ resolveAddressBits_ret_t resolveAddressBits(cap_t nodeCap, cptr_t capptr, word_t
         }
     }
 }
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-pi4-project/kernel/src/kernel/faulthandler.c"
+#line 1 "/Users/lukasbower/seL4_16/kernel/src/kernel/faulthandler.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -11899,7 +11899,387 @@ void handleDoubleFault(tcb_t *tptr, seL4_Fault_t ex1)
 
     setThreadState(tptr, ThreadState_Inactive);
 }
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-pi4-project/kernel/src/kernel/stack.c"
+#line 1 "/Users/lukasbower/seL4_16/kernel/src/kernel/sporadic.c"
+/*
+ * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
+ *
+ * SPDX-License-Identifier: GPL-2.0-only
+ */
+
+#include <types.h>
+#include <api/failures.h>
+#include <object/structures.h>
+
+/* functions to manage the circular buffer of
+ * sporadic budget replenishments (refills for short).
+ *
+ * The circular buffer always has at least one item in it.
+ *
+ * Items are appended at the tail (the back) and
+ * removed from the head (the front). Below is
+ * an example of a queue with 4 items (h = head, t = tail, x = item, [] = slot)
+ * and max size 8.
+ *
+ * [][h][x][x][t][][][]
+ *
+ * and another example of a queue with 5 items
+ *
+ * [x][t][][][][h][x][x]
+ *
+ * The queue has a minimum size of 1, so it is possible that h == t.
+ *
+ * The queue is implemented as head + tail rather than head + size as
+ * we cannot use the mod operator on all architectures without accessing
+ * the fpu or implementing divide.
+ */
+
+/* return the index of the next item in the refill queue */
+static inline word_t refill_next(sched_context_t *sc, word_t index)
+{
+    return (index == sc->scRefillMax - 1u) ? (0) : index + 1u;
+}
+
+#ifdef CONFIG_PRINTING
+/* for debugging */
+UNUSED static inline void print_index(sched_context_t *sc, word_t index)
+{
+
+    printf("index %lu, Amount: %llx, time %llx\n", index, refill_index(sc, index)->rAmount,
+           refill_index(sc, index)->rTime);
+}
+
+UNUSED static inline void refill_print(sched_context_t *sc)
+{
+    printf("Head %lu tail %lu\n", sc->scRefillHead, sc->scRefillTail);
+    word_t current = sc->scRefillHead;
+    /* always print the head */
+    print_index(sc, current);
+
+    while (current != sc->scRefillTail) {
+        current = refill_next(sc, current);
+        print_index(sc, current);
+    }
+
+}
+#endif /* CONFIG_PRINTING */
+#ifdef CONFIG_DEBUG_BUILD
+/* check a refill queue is ordered correctly */
+static UNUSED bool_t refill_ordered(sched_context_t *sc)
+{
+    if (isRoundRobin(sc)) {
+        return true;
+    }
+
+    word_t current = sc->scRefillHead;
+    word_t next = refill_next(sc, sc->scRefillHead);
+
+    while (current != sc->scRefillTail) {
+        if (!(refill_index(sc, current)->rTime + refill_index(sc, current)->rAmount <= refill_index(sc, next)->rTime)) {
+#ifdef CONFIG_PRINTING
+            refill_print(sc);
+#endif
+            return false;
+        }
+        current = next;
+        next = refill_next(sc, current);
+    }
+
+    return true;
+}
+
+#define REFILL_SANITY_START(sc) ticks_t _sum = refill_sum(sc); assert(isRoundRobin(sc) || refill_ordered(sc));
+#define REFILL_SANITY_CHECK(sc, budget) \
+    do { \
+        assert(refill_sum(sc) == budget); assert(isRoundRobin(sc) || refill_ordered(sc)); \
+    } while (0)
+
+#define REFILL_SANITY_END(sc) \
+    do {\
+        REFILL_SANITY_CHECK(sc, _sum);\
+    } while (0)
+#else
+#define REFILL_SANITY_START(sc)
+#define REFILL_SANITY_CHECK(sc, budget)
+#define REFILL_SANITY_END(sc)
+#endif /* CONFIG_DEBUG_BUILD */
+
+/* compute the sum of a refill queue */
+static UNUSED ticks_t refill_sum(sched_context_t *sc)
+{
+    ticks_t sum = refill_head(sc)->rAmount;
+    word_t current = sc->scRefillHead;
+
+    while (current != sc->scRefillTail) {
+        current = refill_next(sc, current);
+        sum += refill_index(sc, current)->rAmount;
+    }
+
+    return sum;
+}
+
+/* pop head of refill queue */
+static inline refill_t refill_pop_head(sched_context_t *sc)
+{
+    /* queues cannot be smaller than 1 */
+    assert(!refill_single(sc));
+
+    UNUSED word_t prev_size = refill_size(sc);
+    refill_t refill = *refill_head(sc);
+    sc->scRefillHead = refill_next(sc, sc->scRefillHead);
+
+    /* sanity */
+    assert(prev_size == (refill_size(sc) + 1));
+    assert(sc->scRefillHead < sc->scRefillMax);
+    return refill;
+}
+
+/* add item to tail of refill queue */
+static inline void refill_add_tail(sched_context_t *sc, refill_t refill)
+{
+    /* cannot add beyond queue size */
+    assert(refill_size(sc) < sc->scRefillMax);
+
+    word_t new_tail = refill_next(sc, sc->scRefillTail);
+    sc->scRefillTail = new_tail;
+    *refill_tail(sc) = refill;
+
+    /* sanity */
+    assert(new_tail < sc->scRefillMax);
+}
+
+static inline void maybe_add_empty_tail(sched_context_t *sc)
+{
+    if (isRoundRobin(sc)) {
+        /* add an empty refill - we track the used up time here */
+        refill_t empty_tail = { .rTime = refill_head(sc)->rTime };
+        refill_add_tail(sc, empty_tail);
+        assert(refill_size(sc) == MIN_REFILLS);
+    }
+}
+
+void refill_new(sched_context_t *sc, word_t max_refills, ticks_t budget, ticks_t period)
+{
+    sc->scPeriod = period;
+    sc->scRefillHead = 0;
+    sc->scRefillTail = 0;
+    sc->scRefillMax = max_refills;
+    assert(budget >= MIN_BUDGET);
+    /* full budget available */
+    refill_head(sc)->rAmount = budget;
+    /* budget can be used from now */
+    refill_head(sc)->rTime = NODE_STATE(ksCurTime);
+    maybe_add_empty_tail(sc);
+    REFILL_SANITY_CHECK(sc, budget);
+}
+
+void refill_update(sched_context_t *sc, ticks_t new_period, ticks_t new_budget, word_t new_max_refills)
+{
+
+    /* refill must be initialised in order to be updated - otherwise refill_new should be used */
+    assert(sc->scRefillMax > 0);
+
+    /* this is called on an active thread. We want to preserve the sliding window constraint -
+     * so over new_period, new_budget should not be exceeded even temporarily */
+
+    /* move the head refill to the start of the list - it's ok as we're going to truncate the
+     * list to size 1 - and this way we can't be in an invalid list position once new_max_refills
+     * is updated */
+    *refill_index(sc, 0) = *refill_head(sc);
+    sc->scRefillHead = 0;
+    /* truncate refill list to size 1 */
+    sc->scRefillTail = sc->scRefillHead;
+    /* update max refills */
+    sc->scRefillMax = new_max_refills;
+    /* update period */
+    sc->scPeriod = new_period;
+
+    if (refill_ready(sc)) {
+        refill_head(sc)->rTime = NODE_STATE(ksCurTime);
+    }
+
+    if (refill_head(sc)->rAmount >= new_budget) {
+        /* if the heads budget exceeds the new budget just trim it */
+        refill_head(sc)->rAmount = new_budget;
+        maybe_add_empty_tail(sc);
+    } else {
+        /* otherwise schedule the rest for the next period */
+        refill_t new = { .rAmount = (new_budget - refill_head(sc)->rAmount),
+                         .rTime = refill_head(sc)->rTime + new_period
+                       };
+        refill_add_tail(sc, new);
+    }
+
+    REFILL_SANITY_CHECK(sc, new_budget);
+}
+
+static inline void schedule_used(sched_context_t *sc, refill_t new)
+{
+    refill_t tail = *refill_tail(sc);
+    if (unlikely(tail.rTime + tail.rAmount >= new.rTime)) {
+        /* Merge overlapping or adjacent refill.
+         *
+         * refill_update can produce a tail refill that will overlap
+         * with new refills when time is charged to the head refill.
+         *
+         * Preemption will cause the head refill to be partially
+         * charged. When the head refill is again later charged the
+         * additionally charged amount will be added where the new
+         * refill ended such that they are merged here. This ensures
+         * that (beyond a refill being split as it is charged
+         * incrementally) a refill split is only caused by a thread
+         * blocking. */
+        refill_tail(sc)->rAmount = tail.rAmount + new.rAmount;
+    } else if (likely(!refill_full(sc))) {
+        /* Add tail normally */
+        refill_add_tail(sc, new);
+    } else {
+        /* Delay existing tail to merge */
+        refill_tail(sc)->rTime = new.rTime - tail.rAmount;
+        refill_tail(sc)->rAmount = tail.rAmount + new.rAmount;
+    }
+}
+
+static bool_t refill_head_overlapping(sched_context_t *sc)
+{
+    if (!refill_single(sc)) {
+        refill_t head = *refill_head(sc);
+        ticks_t tail = head.rTime + head.rAmount;
+        return refill_index(sc, refill_next(sc, sc->scRefillHead))->rTime <= tail;
+    } else {
+        return false;
+    }
+}
+
+static inline bool_t head_refill_overrun(sched_context_t *sc, ticks_t usage)
+{
+    refill_t head = *refill_head(sc);
+    return head.rAmount <= usage && head.rTime < MAX_RELEASE_TIME;
+}
+
+static inline ticks_t charge_entire_head_refill(sched_context_t *sc, ticks_t usage)
+{
+    refill_t head = *refill_head(sc);
+
+    if (refill_single(sc)) {
+        refill_head(sc)->rTime = head.rTime + sc->scPeriod;
+    } else {
+        refill_t old_head = refill_pop_head(sc);
+        old_head.rTime += sc->scPeriod;
+        schedule_used(sc, old_head);
+    }
+
+    return usage - head.rAmount;
+}
+
+static inline ticks_t handle_overrun(sched_context_t *sc, ticks_t usage)
+{
+    ticks_t current_usage = usage;
+
+    /*
+     * We repeatedly charge the head refill in its entirety until we end up
+     * with a partial refill, or at a point where we can't place refills
+     * into the future without integer overflow.
+     *
+     * Verification actually requires that the current time is at least
+     * 3 * MAX_PERIOD from the INT64_MAX value, so to ease relation to
+     * that assertion we ensure that we never delay a refill past this
+     * point in the future.
+     */
+    while (head_refill_overrun(sc, current_usage)) {
+        current_usage = charge_entire_head_refill(sc, current_usage);
+    }
+
+    return current_usage;
+}
+
+static inline bool_t head_refill_insufficient(sched_context_t *sc)
+{
+    return refill_head(sc)->rAmount < MIN_BUDGET;
+}
+
+static inline void merge_nonoverlapping_head_refill(sched_context_t *sc)
+{
+    refill_t head = refill_pop_head(sc);
+    refill_head(sc)->rAmount += head.rAmount;
+    /* Delay head to ensure the subsequent refill doesn't end any
+     * later (rather than simply combining refills). */
+    refill_head(sc)->rTime -= head.rAmount;
+}
+
+void refill_budget_check(ticks_t usage)
+{
+    sched_context_t *sc = NODE_STATE(ksCurSC);
+    assert(!isRoundRobin(sc));
+    REFILL_SANITY_START(sc);
+
+    usage = handle_overrun(sc, usage);
+
+    /*
+     * If the head time is still sufficiently far from the point of
+     * integer overflow then the usage must be smaller than the head.
+     */
+    refill_t head = *refill_head(sc);
+    if (usage > 0 && head.rTime < MAX_RELEASE_TIME) {
+        assert(head.rAmount > usage);
+        refill_t used = (refill_t) {
+            .rAmount = usage,
+            .rTime = head.rTime + sc->scPeriod,
+        };
+
+        refill_head(sc)->rAmount = head.rAmount - usage;
+        /* We need to keep the head refill no more than a period before
+         * the start of the tail refill. This ensures that new refills
+         * are never added before the tail refill (breaking the ordered
+         * invariant). This code actually keeps the head refill no more
+         * than a period before the end of the tail refill (which is
+         * stronger than necessary) but is what is used in the current
+         * proofs. In combination with the merging behaviour of
+         * schedule_used, the following will still ensure that
+         * incremental charging of a refill across preemptions only
+         * produces a single new refill one period in the future. */
+        refill_head(sc)->rTime = head.rTime + usage;
+        schedule_used(sc, used);
+    }
+
+    /* Ensure the head refill has the minimum budget */
+    while (head_refill_insufficient(sc)) {
+        merge_nonoverlapping_head_refill(sc);
+    }
+
+    REFILL_SANITY_END(sc);
+}
+
+static inline void merge_overlapping_head_refill(sched_context_t *sc)
+{
+    refill_t old_head = refill_pop_head(sc);
+    refill_head(sc)->rTime = old_head.rTime;
+    refill_head(sc)->rAmount += old_head.rAmount;
+}
+
+void refill_unblock_check(sched_context_t *sc)
+{
+
+    if (isRoundRobin(sc)) {
+        /* nothing to do */
+        return;
+    }
+
+    /* advance earliest activation time to now */
+    REFILL_SANITY_START(sc);
+    if (refill_ready(sc)) {
+        refill_head(sc)->rTime = NODE_STATE(ksCurTime);
+        NODE_STATE(ksReprogram) = true;
+
+        /* merge available replenishments */
+        while (refill_head_overlapping(sc)) {
+            merge_overlapping_head_refill(sc);
+        }
+
+        assert(refill_sufficient(sc, 0));
+    }
+    REFILL_SANITY_END(sc);
+}
+#line 1 "/Users/lukasbower/seL4_16/kernel/src/kernel/stack.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -11910,7 +12290,7 @@ void handleDoubleFault(tcb_t *tptr, seL4_Fault_t ex1)
 
 VISIBLE ALIGN(KERNEL_STACK_ALIGNMENT)
 char kernel_stack_alloc[CONFIG_MAX_NUM_NODES][BIT(CONFIG_KERNEL_STACK_BITS)];
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-pi4-project/kernel/src/kernel/thread.c"
+#line 1 "/Users/lukasbower/seL4_16/kernel/src/kernel/thread.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -12663,7 +13043,7 @@ void awaken(void)
     }
 }
 #endif
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-pi4-project/kernel/src/machine/capdl.c"
+#line 1 "/Users/lukasbower/seL4_16/kernel/src/machine/capdl.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -13182,7 +13562,7 @@ void print_object(cap_t cap)
 #endif /* CONFIG_PRINTING */
 
 #endif /* CONFIG_DEBUG_BUILD */
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-pi4-project/kernel/src/machine/fpu.c"
+#line 1 "/Users/lukasbower/seL4_16/kernel/src/machine/fpu.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -13233,7 +13613,7 @@ void fpuRelease(tcb_t *thread)
     }
 }
 #endif /* CONFIG_HAVE_FPU */
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-pi4-project/kernel/src/machine/io.c"
+#line 1 "/Users/lukasbower/seL4_16/kernel/src/machine/io.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -13890,7 +14270,7 @@ int impl_ksnvprintf(char *str, word_t size, const char *format, va_list ap)
 }
 
 #endif /* CONFIG_PRINTING */
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-pi4-project/kernel/src/machine/registerset.c"
+#line 1 "/Users/lukasbower/seL4_16/kernel/src/machine/registerset.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -13906,7 +14286,7 @@ const register_t fault_messages[][MAX_MSG_SIZE] = {
     [MessageID_TimeoutReply] = TIMEOUT_REPLY_MESSAGE,
 #endif
 };
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-pi4-project/kernel/src/model/preemption.c"
+#line 1 "/Users/lukasbower/seL4_16/kernel/src/model/preemption.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -13951,7 +14331,7 @@ exception_t preemptionPoint(void)
     return EXCEPTION_NONE;
 }
 
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-pi4-project/kernel/src/model/smp.c"
+#line 1 "/Users/lukasbower/seL4_16/kernel/src/model/smp.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -13986,7 +14366,7 @@ void migrateTCB(tcb_t *tcb, word_t new_core)
 }
 
 #endif /* ENABLE_SMP_SUPPORT */
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-pi4-project/kernel/src/model/statedata.c"
+#line 1 "/Users/lukasbower/seL4_16/kernel/src/model/statedata.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -14097,7 +14477,7 @@ kernel_entry_t ksKernelEntry;
 #ifdef CONFIG_KERNEL_LOG_BUFFER
 paddr_t ksUserLogBuffer;
 #endif /* CONFIG_KERNEL_LOG_BUFFER */
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-pi4-project/kernel/src/object/cnode.c"
+#line 1 "/Users/lukasbower/seL4_16/kernel/src/object/cnode.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -15032,7 +15412,7 @@ cap_transfer_t PURE loadCapTransfer(word_t *buffer)
     const int offset = seL4_MsgMaxLength + seL4_MsgMaxExtraCaps + 2;
     return capTransferFromWords(buffer + offset);
 }
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-pi4-project/kernel/src/object/domain.c"
+#line 1 "/Users/lukasbower/seL4_16/kernel/src/object/domain.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  * Copyright 2025, Indan Zupancic
@@ -15205,7 +15585,7 @@ exception_t decodeDomainInvocation(word_t invLabel, word_t length, word_t *buffe
         return EXCEPTION_SYSCALL_ERROR;
     }
 }
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-pi4-project/kernel/src/object/endpoint.c"
+#line 1 "/Users/lukasbower/seL4_16/kernel/src/object/endpoint.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -15783,7 +16163,7 @@ void reorderEP(endpoint_t *epptr, tcb_t *thread)
     ep_ptr_set_queue(epptr, queue);
 }
 #endif
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-pi4-project/kernel/src/object/interrupt.c"
+#line 1 "/Users/lukasbower/seL4_16/kernel/src/object/interrupt.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -16081,7 +16461,7 @@ void setIRQState(irq_state_t irqState, irq_t irq)
 #endif
     maskInterrupt(irqState == IRQInactive, irq);
 }
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-pi4-project/kernel/src/object/notification.c"
+#line 1 "/Users/lukasbower/seL4_16/kernel/src/object/notification.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -16501,7 +16881,7 @@ void reorderNTFN(notification_t *ntfnPtr, tcb_t *thread)
     ntfn_ptr_set_queue(ntfnPtr, queue);
 }
 #endif
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-pi4-project/kernel/src/object/objecttype.c"
+#line 1 "/Users/lukasbower/seL4_16/kernel/src/object/objecttype.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -17526,7 +17906,776 @@ bool_t CONST isCapRevocable(cap_t derivedCap, cap_t srcCap)
         return false;
     }
 }
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-pi4-project/kernel/src/object/tcb.c"
+#line 1 "/Users/lukasbower/seL4_16/kernel/src/object/reply.c"
+/*
+ * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
+ *
+ * SPDX-License-Identifier: GPL-2.0-only
+ */
+
+#include <object/reply.h>
+
+void reply_push(tcb_t *tcb_caller, tcb_t *tcb_callee, reply_t *reply, bool_t canDonate)
+{
+    sched_context_t *sc_donated = tcb_caller->tcbSchedContext;
+
+    assert(tcb_caller != NULL);
+    assert(reply != NULL);
+    assert(reply->replyTCB == NULL);
+
+    assert(call_stack_get_callStackPtr(reply->replyPrev) == 0);
+    assert(call_stack_get_callStackPtr(reply->replyNext) == 0);
+
+    /* caller state must be blocked on send or active, so cannot be in a existing call stack */
+    assert(thread_state_get_tsType(tcb_caller->tcbState) == ThreadState_BlockedOnSend ||
+           thread_state_get_tsType(tcb_caller->tcbState) == ThreadState_Running ||
+           thread_state_get_tsType(tcb_caller->tcbState) == ThreadState_Restart);
+
+    /* callee state must be simple at this point (inactive, restart, or running),
+       so it also cannot have a reply reference associated with it. */
+    assert(thread_state_get_tsType(tcb_callee->tcbState) == ThreadState_Inactive ||
+           thread_state_get_tsType(tcb_callee->tcbState) == ThreadState_Running ||
+           thread_state_get_tsType(tcb_callee->tcbState) == ThreadState_Restart);
+
+    /* link caller and reply */
+    reply->replyTCB = tcb_caller;
+    setThreadStateBlockedOnReply(tcb_caller, reply);
+
+    if (sc_donated != NULL && tcb_callee->tcbSchedContext == NULL && canDonate) {
+        reply_t *old_caller = sc_donated->scReply;
+
+        /* check stack integrity */
+        assert(old_caller == NULL ||
+               SC_PTR(call_stack_get_callStackPtr(old_caller->replyNext)) == sc_donated);
+
+        /* push on to stack */
+        if (old_caller) {
+            old_caller->replyNext = call_stack_new(REPLY_REF(reply), false);
+        }
+        reply->replyPrev = call_stack_new(REPLY_REF(old_caller), false);
+        sc_donated->scReply = reply;
+        reply->replyNext = call_stack_new(SC_REF(sc_donated), true);
+
+        /* now do the actual donation */
+        schedContext_donate(sc_donated, tcb_callee);
+    }
+}
+
+/* Pop the head reply from the call stack */
+void reply_pop(reply_t *reply, tcb_t *tcb)
+{
+    assert(reply != NULL);
+    assert(reply->replyTCB == tcb);
+    assert(thread_state_get_tsType(tcb->tcbState) == ThreadState_BlockedOnReply);
+    assert(thread_state_get_replyObject(tcb->tcbState) == REPLY_REF(reply));
+
+    word_t next_ptr = call_stack_get_callStackPtr(reply->replyNext);
+    word_t prev_ptr = call_stack_get_callStackPtr(reply->replyPrev);
+
+    SC_PTR(next_ptr)->scReply = REPLY_PTR(prev_ptr);
+    if (prev_ptr != 0) {
+        REPLY_PTR(prev_ptr)->replyNext = reply->replyNext;
+        assert(call_stack_get_isHead(REPLY_PTR(prev_ptr)->replyNext));
+    }
+
+    reply->replyNext = call_stack_new(0, false);
+
+    /* give it back */
+    if (tcb->tcbSchedContext == NULL) {
+        /* only give the SC back if our SC is NULL. This prevents
+         * strange behaviour when a thread is bound to an sc while it is
+         * in the BlockedOnReply state. The semantics in this case are that the
+         * SC cannot go back to the caller if the caller has received another one */
+        schedContext_donate(SC_PTR(next_ptr), tcb);
+    }
+
+    reply->replyPrev = call_stack_new(0, false);
+    reply_unlink(reply, tcb);
+}
+
+/* Remove a reply from the middle of the call stack */
+void reply_remove(reply_t *reply, tcb_t *tcb)
+{
+    assert(reply->replyTCB == tcb);
+    assert(thread_state_get_tsType(tcb->tcbState) == ThreadState_BlockedOnReply);
+    assert(thread_state_get_replyObject(tcb->tcbState) == REPLY_REF(reply));
+
+    word_t next_ptr = call_stack_get_callStackPtr(reply->replyNext);
+    word_t prev_ptr = call_stack_get_callStackPtr(reply->replyPrev);
+
+    if (likely(next_ptr && call_stack_get_isHead(reply->replyNext))) {
+        /* head of the call stack -> just pop */
+        reply_pop(reply, tcb);
+    } else {
+        if (next_ptr) {
+            /* not the head, remove from middle - break the chain */
+            REPLY_PTR(next_ptr)->replyPrev = call_stack_new(0, false);
+        }
+        if (prev_ptr) {
+            REPLY_PTR(prev_ptr)->replyNext = call_stack_new(0, false);
+        }
+        reply->replyPrev = call_stack_new(0, false);
+        reply->replyNext = call_stack_new(0, false);
+        reply_unlink(reply, tcb);
+    }
+}
+
+void reply_remove_tcb(tcb_t *tcb)
+{
+    assert(thread_state_get_tsType(tcb->tcbState) == ThreadState_BlockedOnReply);
+    reply_t *reply = REPLY_PTR(thread_state_get_replyObject(tcb->tcbState));
+    word_t next_ptr = call_stack_get_callStackPtr(reply->replyNext);
+    word_t prev_ptr = call_stack_get_callStackPtr(reply->replyPrev);
+
+    if (next_ptr) {
+        if (call_stack_get_isHead(reply->replyNext)) {
+            SC_PTR(next_ptr)->scReply = NULL;
+        } else {
+            REPLY_PTR(next_ptr)->replyPrev = call_stack_new(0, false);
+        }
+    }
+
+    if (prev_ptr) {
+        REPLY_PTR(prev_ptr)->replyNext = call_stack_new(0, false);
+    }
+
+    reply->replyPrev = call_stack_new(0, false);
+    reply->replyNext = call_stack_new(0, false);
+    reply_unlink(reply, tcb);
+}
+#line 1 "/Users/lukasbower/seL4_16/kernel/src/object/schedcontext.c"
+/*
+ * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
+ *
+ * SPDX-License-Identifier: GPL-2.0-only
+ */
+
+#include <machine/timer.h>
+#include <kernel/sporadic.h>
+#include <kernel/thread.h>
+#include <object/structures.h>
+#include <object/schedcontext.h>
+
+static exception_t invokeSchedContext_UnbindObject(sched_context_t *sc, cap_t cap)
+{
+    switch (cap_get_capType(cap)) {
+    case cap_thread_cap:
+        schedContext_unbindTCB(sc);
+        break;
+    case cap_notification_cap:
+        schedContext_unbindNtfn(sc);
+        break;
+    default:
+        fail("invalid cap type");
+    }
+
+    return EXCEPTION_NONE;
+}
+
+static exception_t decodeSchedContext_UnbindObject(sched_context_t *sc)
+{
+    if (current_extra_caps.excaprefs[0] == NULL) {
+        userError("SchedContext_Unbind: Truncated message.");
+        current_syscall_error.type = seL4_TruncatedMessage;
+        return EXCEPTION_SYSCALL_ERROR;
+    }
+
+    cap_t cap = current_extra_caps.excaprefs[0]->cap;
+    switch (cap_get_capType(cap)) {
+    case cap_thread_cap:
+        if (sc->scTcb != TCB_PTR(cap_thread_cap_get_capTCBPtr(cap))) {
+            userError("SchedContext UnbindObject: object not bound");
+            current_syscall_error.type = seL4_IllegalOperation;
+            return EXCEPTION_SYSCALL_ERROR;
+        }
+        if (sc->scTcb == NODE_STATE(ksCurThread)) {
+            userError("SchedContext UnbindObject: cannot unbind sc of current thread");
+            current_syscall_error.type = seL4_IllegalOperation;
+            return EXCEPTION_SYSCALL_ERROR;
+        }
+        break;
+    case cap_notification_cap:
+        if (sc->scNotification != NTFN_PTR(cap_notification_cap_get_capNtfnPtr(cap))) {
+            userError("SchedContext UnbindObject: object not bound");
+            current_syscall_error.type = seL4_IllegalOperation;
+            return EXCEPTION_SYSCALL_ERROR;
+        }
+        break;
+
+    default:
+        userError("SchedContext_Unbind: invalid cap");
+        current_syscall_error.type = seL4_InvalidCapability;
+        current_syscall_error.invalidCapNumber = 1;
+        return EXCEPTION_SYSCALL_ERROR;
+
+    }
+
+    setThreadState(NODE_STATE(ksCurThread), ThreadState_Restart);
+    return invokeSchedContext_UnbindObject(sc, cap);
+}
+
+static exception_t invokeSchedContext_Bind(sched_context_t *sc, cap_t cap)
+{
+    switch (cap_get_capType(cap)) {
+    case cap_thread_cap:
+        schedContext_bindTCB(sc, TCB_PTR(cap_thread_cap_get_capTCBPtr(cap)));
+        break;
+    case cap_notification_cap:
+        schedContext_bindNtfn(sc, NTFN_PTR(cap_notification_cap_get_capNtfnPtr(cap)));
+        break;
+    default:
+        fail("invalid cap type");
+    }
+
+    return EXCEPTION_NONE;
+}
+
+static exception_t decodeSchedContext_Bind(sched_context_t *sc)
+{
+    if (current_extra_caps.excaprefs[0] == NULL) {
+        userError("SchedContext_Bind: Truncated Message.");
+        current_syscall_error.type = seL4_TruncatedMessage;
+        return EXCEPTION_SYSCALL_ERROR;
+    }
+
+    cap_t cap = current_extra_caps.excaprefs[0]->cap;
+
+    switch (cap_get_capType(cap)) {
+    case cap_thread_cap:
+        if (sc->scTcb != NULL) {
+            userError("SchedContext_Bind: sched context already bound.");
+            current_syscall_error.type = seL4_IllegalOperation;
+            return EXCEPTION_SYSCALL_ERROR;
+        }
+
+        if (TCB_PTR(cap_thread_cap_get_capTCBPtr(cap))->tcbSchedContext != NULL) {
+            userError("SchedContext_Bind: tcb already bound.");
+            current_syscall_error.type = seL4_IllegalOperation;
+            return EXCEPTION_SYSCALL_ERROR;
+        }
+
+        if (isBlocked(TCB_PTR(cap_thread_cap_get_capTCBPtr(cap))) && !sc_released(sc)) {
+            userError("SchedContext_Bind: tcb blocked and scheduling context not schedulable.");
+            current_syscall_error.type = seL4_IllegalOperation;
+            return EXCEPTION_SYSCALL_ERROR;
+        }
+
+        break;
+    case cap_notification_cap:
+        if (sc->scNotification != NULL) {
+            userError("SchedContext_Bind: sched context already bound.");
+            current_syscall_error.type = seL4_IllegalOperation;
+            return EXCEPTION_SYSCALL_ERROR;
+        }
+
+        if (notification_ptr_get_ntfnSchedContext(NTFN_PTR(cap_notification_cap_get_capNtfnPtr(cap)))) {
+            userError("SchedContext_Bind: notification already bound");
+            current_syscall_error.type = seL4_IllegalOperation;
+            return EXCEPTION_SYSCALL_ERROR;
+        }
+        break;
+    default:
+        userError("SchedContext_Bind: invalid cap.");
+        current_syscall_error.type = seL4_InvalidCapability;
+        current_syscall_error.invalidCapNumber = 1;
+        return EXCEPTION_SYSCALL_ERROR;
+    }
+
+    setThreadState(NODE_STATE(ksCurThread), ThreadState_Restart);
+    return invokeSchedContext_Bind(sc, cap);
+}
+
+static exception_t invokeSchedContext_Unbind(sched_context_t *sc)
+{
+    schedContext_unbindAllTCBs(sc);
+    schedContext_unbindNtfn(sc);
+    schedContext_unbindReply(sc);
+    return EXCEPTION_NONE;
+}
+
+#ifdef ENABLE_SMP_SUPPORT
+static inline void maybeStallSC(sched_context_t *sc)
+{
+    if (sc->scTcb) {
+        remoteTCBStall(sc->scTcb);
+    }
+}
+#endif
+
+static inline void replyFromKernel_consumed(tcb_t *thread, time_t consumed)
+{
+    word_t *buffer = lookupIPCBuffer(true, thread);
+    setRegister(thread, badgeRegister, 0);
+    word_t length = mode_setTimeArg(0, consumed, buffer, thread);
+    setRegister(thread, msgInfoRegister, wordFromMessageInfo(seL4_MessageInfo_new(0, 0, 0, length)));
+}
+
+static inline void setConsumed(sched_context_t *sc, tcb_t *thread, bool_t write_msg)
+{
+    time_t consumed = schedContext_updateConsumed(sc);
+
+    if (write_msg) {
+        replyFromKernel_consumed(thread, consumed);
+    }
+}
+
+static exception_t invokeSchedContext_Consumed(sched_context_t *sc, bool_t call)
+{
+    setConsumed(sc, NODE_STATE(ksCurThread), call);
+
+    setThreadState(NODE_STATE(ksCurThread), ThreadState_Running);
+    return EXCEPTION_NONE;
+}
+
+static exception_t invokeSchedContext_YieldTo(sched_context_t *sc, bool_t call)
+{
+    if (sc->scYieldFrom) {
+        schedContext_completeYieldTo(sc->scYieldFrom);
+        assert(sc->scYieldFrom == NULL);
+    }
+
+    /* if the tcb is in the scheduler, it's ready and sufficient.
+     * Otherwise, check that it is ready and sufficient and if not,
+     * place the thread in the release queue. This way, from this point,
+     * if the thread isSchedulable, it is ready and sufficient.*/
+    schedContext_resume(sc);
+
+    tcb_t *tcb = sc->scTcb;
+
+    bool_t return_now;
+    if (isSchedulable(tcb)) {
+        if (SMP_COND_STATEMENT(sc->scCore != getCurrentCPUIndex() ||)
+            tcb->tcbPriority < NODE_STATE(ksCurThread)->tcbPriority) {
+            tcbSchedDequeue(tcb);
+            SCHED_ENQUEUE(tcb);
+            return_now = true;
+        } else {
+            NODE_STATE(ksCurThread)->tcbYieldTo = sc;
+            sc->scYieldFrom = NODE_STATE(ksCurThread);
+            tcbSchedDequeue(tcb);
+            tcbSchedEnqueue(NODE_STATE(ksCurThread));
+            tcbSchedEnqueue(tcb);
+            rescheduleRequired();
+
+            /* we are scheduling the thread associated with sc,
+             * so we don't need to write to the ipc buffer
+             * until the caller is scheduled again */
+            return_now = false;
+        }
+    } else {
+        return_now = true;
+    }
+
+    if (return_now) {
+        setConsumed(sc, NODE_STATE(ksCurThread), call);
+        /* Only set to Running if there is a kernel reply message for the user.
+           Restart will create a default empty success message. */
+        setThreadState(NODE_STATE(ksCurThread), ThreadState_Running);
+    }
+
+    return EXCEPTION_NONE;
+}
+
+static exception_t decodeSchedContext_YieldTo(sched_context_t *sc, bool_t call)
+{
+    if (sc->scTcb == NULL) {
+        userError("SchedContext_YieldTo: cannot yield to an inactive sched context");
+        current_syscall_error.type = seL4_IllegalOperation;
+        return EXCEPTION_SYSCALL_ERROR;
+    }
+
+    tcb_t *tcb = sc->scTcb;
+
+    if (tcb == NODE_STATE(ksCurThread)) {
+        userError("SchedContext_YieldTo: cannot seL4_SchedContext_YieldTo on self");
+        current_syscall_error.type = seL4_IllegalOperation;
+        return EXCEPTION_SYSCALL_ERROR;
+    }
+
+    if (tcb->tcbPriority > NODE_STATE(ksCurThread)->tcbMCP) {
+        userError("SchedContext_YieldTo: insufficient mcp (%lu) to yield to a thread with prio (%lu)",
+                  NODE_STATE(ksCurThread)->tcbMCP, tcb->tcbPriority);
+        current_syscall_error.type = seL4_IllegalOperation;
+        return EXCEPTION_SYSCALL_ERROR;
+    }
+
+    // This should not be possible as the currently running thread
+    // should never have a non-null yieldTo, however verifying this
+    // invariant is being left to future work.
+    assert(NODE_STATE(ksCurThread)->tcbYieldTo == NULL);
+    if (NODE_STATE(ksCurThread)->tcbYieldTo != NULL) {
+        userError("SchedContext_YieldTo: cannot seL4_SchedContext_YieldTo to more than on SC at a time");
+        current_syscall_error.type = seL4_IllegalOperation;
+        return EXCEPTION_SYSCALL_ERROR;
+    }
+
+    setThreadState(NODE_STATE(ksCurThread), ThreadState_Restart);
+    return invokeSchedContext_YieldTo(sc, call);
+}
+
+exception_t decodeSchedContextInvocation(word_t label, sched_context_t *sc, bool_t call)
+{
+    SMP_COND_STATEMENT((maybeStallSC(sc));)
+
+    switch (label) {
+    case SchedContextConsumed:
+        /* no decode */
+        setThreadState(NODE_STATE(ksCurThread), ThreadState_Restart);
+        return invokeSchedContext_Consumed(sc, call);
+    case SchedContextBind:
+        return decodeSchedContext_Bind(sc);
+    case SchedContextUnbindObject:
+        return decodeSchedContext_UnbindObject(sc);
+    case SchedContextUnbind:
+        /* no decode */
+        if (sc->scTcb == NODE_STATE(ksCurThread)) {
+            userError("SchedContext UnbindObject: cannot unbind sc of current thread");
+            current_syscall_error.type = seL4_IllegalOperation;
+            return EXCEPTION_SYSCALL_ERROR;
+        }
+        setThreadState(NODE_STATE(ksCurThread), ThreadState_Restart);
+        return invokeSchedContext_Unbind(sc);
+    case SchedContextYieldTo:
+        return decodeSchedContext_YieldTo(sc, call);
+    default:
+        userError("SchedContext invocation: Illegal operation attempted.");
+        current_syscall_error.type = seL4_IllegalOperation;
+        return EXCEPTION_SYSCALL_ERROR;
+    }
+}
+
+void schedContext_resume(sched_context_t *sc)
+{
+    assert(!sc || sc->scTcb != NULL);
+    if (likely(sc) && isSchedulable(sc->scTcb)) {
+        if (!(refill_ready(sc) && refill_sufficient(sc, 0))) {
+            assert(!thread_state_get_tcbQueued(sc->scTcb->tcbState));
+            postpone(sc);
+        }
+    }
+}
+
+void schedContext_bindTCB(sched_context_t *sc, tcb_t *tcb)
+{
+    assert(sc->scTcb == NULL);
+    assert(tcb->tcbSchedContext == NULL);
+
+    tcb->tcbSchedContext = sc;
+    sc->scTcb = tcb;
+
+    SMP_COND_STATEMENT(migrateTCB(tcb, sc->scCore));
+
+    if (sc_sporadic(sc) && sc_active(sc) && sc != NODE_STATE(ksCurSC)) {
+        refill_unblock_check(sc);
+    }
+    schedContext_resume(sc);
+    if (isSchedulable(tcb)) {
+        SCHED_ENQUEUE(tcb);
+        rescheduleRequired();
+        // TODO -- at some stage we should take this call out of any TCB invocations that
+        // alter capabilities, so that we can do a direct switch. The preference here is to
+        // remove seL4_SetSchedParams from using ThreadControl. It's currently out of scope for
+        // verification work, so the work around is to use rescheduleRequired()
+        //possibleSwitchTo(tcb);
+    }
+}
+
+void schedContext_unbindTCB(sched_context_t *sc)
+{
+    tcb_t *tcb = sc->scTcb;
+    assert(tcb != NULL);
+
+    /* tcb must already be stalled at this point */
+    if (tcb == NODE_STATE(ksCurThread)) {
+        rescheduleRequired();
+    }
+
+    tcbSchedDequeue(tcb);
+    tcbReleaseRemove(tcb);
+
+    tcb->tcbSchedContext = NULL;
+    sc->scTcb = NULL;
+}
+
+void schedContext_unbindAllTCBs(sched_context_t *sc)
+{
+    if (sc->scTcb) {
+        SMP_COND_STATEMENT(remoteTCBStall(sc->scTcb));
+        schedContext_unbindTCB(sc);
+    }
+}
+
+void schedContext_donate(sched_context_t *sc, tcb_t *to)
+{
+    assert(sc != NULL);
+    assert(to != NULL);
+    assert(to->tcbSchedContext == NULL);
+
+    tcb_t *from = sc->scTcb;
+    if (from) {
+        SMP_COND_STATEMENT(remoteTCBStall(from));
+        tcbSchedDequeue(from);
+        tcbReleaseRemove(from);
+        from->tcbSchedContext = NULL;
+        if (from == NODE_STATE(ksCurThread) || from == NODE_STATE(ksSchedulerAction)) {
+            rescheduleRequired();
+        }
+    }
+    sc->scTcb = to;
+    to->tcbSchedContext = sc;
+
+    SMP_COND_STATEMENT(migrateTCB(to, sc->scCore));
+}
+
+void schedContext_bindNtfn(sched_context_t *sc, notification_t *ntfn)
+{
+    notification_ptr_set_ntfnSchedContext(ntfn, SC_REF(sc));
+    sc->scNotification = ntfn;
+}
+
+void schedContext_unbindNtfn(sched_context_t *sc)
+{
+    if (sc && sc->scNotification) {
+        notification_ptr_set_ntfnSchedContext(sc->scNotification, SC_REF(0));
+        sc->scNotification = NULL;
+    }
+}
+
+void schedContextMaybeUnbindNtfn(notification_t *ntfnPtr)
+{
+    sched_context_t *sc = SC_PTR(notification_ptr_get_ntfnSchedContext(ntfnPtr));
+
+    if (sc) {
+        schedContext_unbindNtfn(sc);
+    }
+}
+
+void schedContext_unbindReply(sched_context_t *sc)
+{
+    if (sc && sc->scReply) {
+        assert(call_stack_get_isHead(sc->scReply->replyNext));
+        sc->scReply->replyNext = call_stack_new(0, false);
+        sc->scReply = NULL;
+    }
+}
+
+time_t schedContext_updateConsumed(sched_context_t *sc)
+{
+    ticks_t consumed = sc->scConsumed;
+    if (consumed >= getMaxTicksToUs()) {
+        sc->scConsumed -= getMaxTicksToUs();
+        return ticksToUs(getMaxTicksToUs());
+    } else {
+        sc->scConsumed = 0;
+        return ticksToUs(consumed);
+    }
+}
+
+void schedContext_cancelYieldTo(tcb_t *tcb)
+{
+    if (tcb && tcb->tcbYieldTo) {
+        tcb->tcbYieldTo->scYieldFrom = NULL;
+        tcb->tcbYieldTo = NULL;
+    }
+}
+
+void schedContext_completeYieldTo(tcb_t *yielder)
+{
+    if (yielder && yielder->tcbYieldTo) {
+        /* FIXME: this should only be true here if the original
+                  invocation we are completing was Call. */
+        setConsumed(yielder->tcbYieldTo, yielder, true);
+        schedContext_cancelYieldTo(yielder);
+    }
+}
+#line 1 "/Users/lukasbower/seL4_16/kernel/src/object/schedcontrol.c"
+/*
+ * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
+ *
+ * SPDX-License-Identifier: GPL-2.0-only
+ */
+
+#include <machine/timer.h>
+#include <mode/api/ipc_buffer.h>
+#include <object/schedcontext.h>
+#include <object/schedcontrol.h>
+#include <kernel/sporadic.h>
+
+static exception_t invokeSchedControl_ConfigureFlags(sched_context_t *target, word_t core, ticks_t budget,
+                                                     ticks_t period, word_t max_refills, word_t badge, word_t flags)
+{
+    tcb_t *thread = target->scTcb;
+
+    /* don't modify parameters of thread while it is in a sorted queue */
+    if (thread) {
+        /* possibly stall a remote core */
+        SMP_COND_STATEMENT(remoteTCBStall(thread));
+        /* remove from scheduler */
+        tcbReleaseRemove(thread);
+        tcbSchedDequeue(thread);
+        /* bill the current consumed amount before adjusting the params */
+        if (NODE_STATE(ksCurSC) == target) {
+            /* This could potentially mutate state but if it returns
+             * true no state was modified, thus removing it should
+             * be the same. */
+            assert(checkBudget());
+            commitTime();
+        }
+    }
+
+    if (budget == period) {
+        /* this is a cool hack: for round robin, we set the
+         * period to 0, which means that the budget will always be ready to be refilled
+         * and avoids some special casing.
+         */
+        refill_new(target, MIN_REFILLS, budget, 0);
+    } else if (SMP_COND_STATEMENT(core == target->scCore &&) sc_active(target) && thread
+               && isRunnable(thread)) {
+        /* the scheduling context is active - it can be used, so
+         * we need to preserve the bandwidth */
+        refill_update(target, period, budget, max_refills);
+    } else {
+        /* the scheduling context isn't active - it's budget is not being used, so
+         * we can just populate the parameters from now */
+        refill_new(target, max_refills, budget, period);
+    }
+
+#ifdef ENABLE_SMP_SUPPORT
+    target->scCore = core;
+    if (thread) {
+        migrateTCB(thread, target->scCore);
+    }
+#endif /* ENABLE_SMP_SUPPORT */
+
+    assert(sc_active(target));
+    if (thread) {
+        schedContext_resume(target);
+        if (SMP_TERNARY(core == CURRENT_CPU_INDEX(), true)) {
+            if (isRunnable(thread) && thread != NODE_STATE(ksCurThread)) {
+                possibleSwitchTo(thread);
+            }
+        } else if (isRunnable(thread)) {
+            SCHED_ENQUEUE(thread);
+        }
+        if (thread == NODE_STATE(ksCurThread)) {
+            rescheduleRequired();
+        }
+    }
+
+    target->scBadge = badge;
+    target->scSporadic = (flags & seL4_SchedContext_Sporadic) != 0;
+
+    return EXCEPTION_NONE;
+}
+
+static exception_t decodeSchedControl_ConfigureFlags(word_t length, cap_t cap, word_t *buffer)
+{
+    if (current_extra_caps.excaprefs[0] == NULL) {
+        userError("SchedControl_ConfigureFlags: Truncated message.");
+        current_syscall_error.type = seL4_TruncatedMessage;
+        return EXCEPTION_SYSCALL_ERROR;
+    }
+
+    if (length < (TIME_ARG_SIZE * 2) + 3) {
+        userError("SchedControl_configureFlags: truncated message.");
+        current_syscall_error.type = seL4_TruncatedMessage;
+        return EXCEPTION_SYSCALL_ERROR;
+    }
+
+    time_t budget_us = mode_parseTimeArg(0, buffer);
+
+    if (budget_us > MAX_PERIOD_US) {
+        userError("SchedControl_ConfigureFlags: budget out of range.");
+        current_syscall_error.type = seL4_RangeError;
+        current_syscall_error.rangeErrorMin = MIN_BUDGET_US;
+        current_syscall_error.rangeErrorMax = MAX_PERIOD_US;
+        return EXCEPTION_SYSCALL_ERROR;
+    }
+
+    ticks_t budget_ticks = usToTicks(budget_us);
+
+    time_t period_us = mode_parseTimeArg(TIME_ARG_SIZE, buffer);
+
+    if (period_us > MAX_PERIOD_US) {
+        userError("SchedControl_ConfigureFlags: period out of range.");
+        current_syscall_error.type = seL4_RangeError;
+        current_syscall_error.rangeErrorMin = MIN_BUDGET_US;
+        current_syscall_error.rangeErrorMax = MAX_PERIOD_US;
+        return EXCEPTION_SYSCALL_ERROR;
+    }
+
+    ticks_t period_ticks = usToTicks(period_us);
+
+    if (budget_ticks < MIN_BUDGET) {
+        userError("SchedControl_ConfigureFlags: budget out of range.");
+        current_syscall_error.type = seL4_RangeError;
+        current_syscall_error.rangeErrorMin = MIN_BUDGET_US;
+        current_syscall_error.rangeErrorMax = MAX_PERIOD_US;
+        return EXCEPTION_SYSCALL_ERROR;
+    }
+
+    if (period_ticks < MIN_BUDGET) {
+        userError("SchedControl_ConfigureFlags: period out of range.");
+        current_syscall_error.type = seL4_RangeError;
+        current_syscall_error.rangeErrorMin = MIN_BUDGET_US;
+        current_syscall_error.rangeErrorMax = MAX_PERIOD_US;
+        return EXCEPTION_SYSCALL_ERROR;
+    }
+
+    if (budget_ticks > period_ticks) {
+        userError("SchedControl_ConfigureFlags: budget must be <= period");
+        current_syscall_error.type = seL4_RangeError;
+        current_syscall_error.rangeErrorMin = MIN_BUDGET_US;
+        current_syscall_error.rangeErrorMax = period_us;
+        return EXCEPTION_SYSCALL_ERROR;
+    }
+
+    cap_t targetCap = current_extra_caps.excaprefs[0]->cap;
+    if (unlikely(cap_get_capType(targetCap) != cap_sched_context_cap)) {
+        userError("SchedControl_ConfigureFlags: target cap not a scheduling context cap");
+        current_syscall_error.type = seL4_InvalidCapability;
+        current_syscall_error.invalidCapNumber = 1;
+        return EXCEPTION_SYSCALL_ERROR;
+    }
+
+    word_t extra_refills = getSyscallArg(TIME_ARG_SIZE * 2, buffer);
+    word_t max_refills = refill_absolute_max(targetCap);
+
+    if (extra_refills > max_refills - MIN_REFILLS) {
+        current_syscall_error.type = seL4_RangeError;
+        current_syscall_error.rangeErrorMin = 0;
+        current_syscall_error.rangeErrorMax = max_refills - MIN_REFILLS;
+        userError("Max refills invalid, got %lu, max %lu",
+                  extra_refills,
+                  current_syscall_error.rangeErrorMax);
+        return EXCEPTION_SYSCALL_ERROR;
+    }
+
+    word_t badge = getSyscallArg(TIME_ARG_SIZE * 2 + 1, buffer);
+    word_t flags = getSyscallArg(TIME_ARG_SIZE * 2 + 2, buffer);
+
+    setThreadState(NODE_STATE(ksCurThread), ThreadState_Restart);
+    return invokeSchedControl_ConfigureFlags(SC_PTR(cap_sched_context_cap_get_capSCPtr(targetCap)),
+                                             cap_sched_control_cap_get_core(cap),
+                                             budget_ticks,
+                                             period_ticks,
+                                             extra_refills + MIN_REFILLS,
+                                             badge,
+                                             flags);
+}
+
+exception_t decodeSchedControlInvocation(word_t label, cap_t cap, word_t length, word_t *buffer)
+{
+    switch (label) {
+    case SchedControlConfigureFlags:
+        return  decodeSchedControl_ConfigureFlags(length, cap, buffer);
+    default:
+        userError("SchedControl invocation: Illegal operation attempted.");
+        current_syscall_error.type = seL4_IllegalOperation;
+        return EXCEPTION_SYSCALL_ERROR;
+    }
+}
+#line 1 "/Users/lukasbower/seL4_16/kernel/src/object/tcb.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -19645,7 +20794,7 @@ word_t setMRs_syscall_error(tcb_t *thread, word_t *receiveIPCBuffer)
         fail("Invalid syscall error");
     }
 }
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-pi4-project/kernel/src/object/untyped.c"
+#line 1 "/Users/lukasbower/seL4_16/kernel/src/object/untyped.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -19951,7 +21100,7 @@ exception_t invokeUntyped_Retype(cte_t *srcSlot,
 
     return EXCEPTION_NONE;
 }
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-pi4-project/kernel/src/smp/ipi.c"
+#line 1 "/Users/lukasbower/seL4_16/kernel/src/smp/ipi.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -20170,7 +21319,7 @@ exception_t handle_SysDebugSendIPI(void)
 #endif /* CONFIG_DEBUG_BUILD */
 
 #endif /* ENABLE_SMP_SUPPORT */
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-pi4-project/kernel/src/smp/lock.c"
+#line 1 "/Users/lukasbower/seL4_16/kernel/src/smp/lock.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -20200,7 +21349,7 @@ BOOT_CODE void clh_lock_init(void)
 }
 
 #endif /* ENABLE_SMP_SUPPORT */
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-pi4-project/kernel/src/string.c"
+#line 1 "/Users/lukasbower/seL4_16/kernel/src/string.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -20243,7 +21392,7 @@ word_t strlcat(char *dest, const char *src, word_t size)
     }
     return len;
 }
-#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-pi4-project/kernel/src/util.c"
+#line 1 "/Users/lukasbower/seL4_16/kernel/src/util.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *

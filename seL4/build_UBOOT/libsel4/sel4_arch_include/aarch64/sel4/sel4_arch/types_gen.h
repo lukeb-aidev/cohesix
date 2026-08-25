@@ -1,4 +1,4 @@
-/* generated from /Users/lukasbower/GitHub/cohesix/out/sel4/v16-pi4-project/kernel/libsel4/sel4_arch_include/aarch64/sel4/sel4_arch/types.bf */
+/* generated from /Users/lukasbower/seL4_16/kernel/libsel4/sel4_arch_include/aarch64/sel4/sel4_arch/types.bf */
 
 #pragma once
 
@@ -15,7 +15,8 @@ enum seL4_Fault_tag {
     seL4_Fault_CapFault = 1,
     seL4_Fault_UnknownSyscall = 2,
     seL4_Fault_UserException = 3,
-    seL4_Fault_VMFault = 5
+    seL4_Fault_Timeout = 5,
+    seL4_Fault_VMFault = 6
 };
 typedef enum seL4_Fault_tag seL4_Fault_tag_t;
 
@@ -1568,6 +1569,162 @@ LIBSEL4_INLINE_FUNC void
 seL4_Fault_UserException_ptr_set_Code(seL4_Fault_t *seL4_Fault_ptr, seL4_Uint64 v64) {
     /* fail if union does not have the expected tag */
     seL4_DebugAssert(((seL4_Fault_ptr->words[0] >> 0) & 0xf) == seL4_Fault_UserException);
+
+    /* fail if user has passed bits that we will override */
+    seL4_DebugAssert((((~0xffffffffffffffffull >> 0) | 0x0) & v64) == ((0 && (v64 & (1ull << (63)))) ? 0x0 : 0));
+
+    seL4_Fault_ptr->words[1] &= ~0xffffffffffffffffull;
+    seL4_Fault_ptr->words[1] |= (v64 << 0) & 0xffffffffffffffffull;
+}
+
+LIBSEL4_INLINE_FUNC seL4_Fault_t CONST
+seL4_Fault_Timeout_new(seL4_Uint64 data, seL4_Uint64 consumed) {
+    seL4_Fault_t seL4_Fault;
+
+    /* fail if user has passed bits that we will override */  
+    seL4_DebugAssert(((seL4_Uint64)seL4_Fault_Timeout & ~0xfull) == ((0 && ((seL4_Uint64)seL4_Fault_Timeout & (1ull << 63))) ? 0x0 : 0));
+
+    seL4_Fault.words[0] = 0
+        | ((seL4_Uint64)seL4_Fault_Timeout & 0xfull) << 0;
+    seL4_Fault.words[1] = 0
+        | consumed << 0;
+    seL4_Fault.words[2] = 0
+        | data << 0;
+    seL4_Fault.words[3] = 0;
+    seL4_Fault.words[4] = 0;
+    seL4_Fault.words[5] = 0;
+    seL4_Fault.words[6] = 0;
+    seL4_Fault.words[7] = 0;
+    seL4_Fault.words[8] = 0;
+    seL4_Fault.words[9] = 0;
+    seL4_Fault.words[10] = 0;
+    seL4_Fault.words[11] = 0;
+    seL4_Fault.words[12] = 0;
+    seL4_Fault.words[13] = 0;
+
+    return seL4_Fault;
+}
+
+LIBSEL4_INLINE_FUNC void
+seL4_Fault_Timeout_ptr_new(seL4_Fault_t *seL4_Fault_ptr, seL4_Uint64 data, seL4_Uint64 consumed) {
+    /* fail if user has passed bits that we will override */  
+    seL4_DebugAssert(((seL4_Uint64)seL4_Fault_Timeout & ~0xfull) == ((0 && ((seL4_Uint64)seL4_Fault_Timeout & (1ull << 63))) ? 0x0 : 0));
+
+    seL4_Fault_ptr->words[0] = 0
+        | ((seL4_Uint64)seL4_Fault_Timeout & 0xfull) << 0;
+    seL4_Fault_ptr->words[1] = 0
+        | consumed << 0;
+    seL4_Fault_ptr->words[2] = 0
+        | data << 0;
+    seL4_Fault_ptr->words[3] = 0;
+    seL4_Fault_ptr->words[4] = 0;
+    seL4_Fault_ptr->words[5] = 0;
+    seL4_Fault_ptr->words[6] = 0;
+    seL4_Fault_ptr->words[7] = 0;
+    seL4_Fault_ptr->words[8] = 0;
+    seL4_Fault_ptr->words[9] = 0;
+    seL4_Fault_ptr->words[10] = 0;
+    seL4_Fault_ptr->words[11] = 0;
+    seL4_Fault_ptr->words[12] = 0;
+    seL4_Fault_ptr->words[13] = 0;
+}
+
+LIBSEL4_INLINE_FUNC seL4_Uint64 CONST
+seL4_Fault_Timeout_get_data(seL4_Fault_t seL4_Fault) {
+    seL4_Uint64 ret;
+    /* fail if union does not have the expected tag */
+    seL4_DebugAssert(((seL4_Fault.words[0] >> 0) & 0xf) == seL4_Fault_Timeout);
+
+    ret = (seL4_Fault.words[2] & 0xffffffffffffffffull) >> 0;
+    /* Possibly sign extend */
+    if (__builtin_expect(!!(0 && (ret & (1ull << (63)))), 0)) {
+        ret |= 0x0;
+    }
+    return ret;
+}
+
+LIBSEL4_INLINE_FUNC seL4_Fault_t CONST
+seL4_Fault_Timeout_set_data(seL4_Fault_t seL4_Fault, seL4_Uint64 v64) {
+    /* fail if union does not have the expected tag */
+    seL4_DebugAssert(((seL4_Fault.words[0] >> 0) & 0xf) == seL4_Fault_Timeout);
+    /* fail if user has passed bits that we will override */
+    seL4_DebugAssert((((~0xffffffffffffffffull >> 0 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (63)))) ? 0x0 : 0));
+
+    seL4_Fault.words[2] &= ~0xffffffffffffffffull;
+    seL4_Fault.words[2] |= (v64 << 0) & 0xffffffffffffffffull;
+    return seL4_Fault;
+}
+
+LIBSEL4_INLINE_FUNC seL4_Uint64 PURE
+seL4_Fault_Timeout_ptr_get_data(seL4_Fault_t *seL4_Fault_ptr) {
+    seL4_Uint64 ret;
+    /* fail if union does not have the expected tag */
+    seL4_DebugAssert(((seL4_Fault_ptr->words[0] >> 0) & 0xf) == seL4_Fault_Timeout);
+
+    ret = (seL4_Fault_ptr->words[2] & 0xffffffffffffffffull) >> 0;
+    /* Possibly sign extend */
+    if (__builtin_expect(!!(0 && (ret & (1ull << (63)))), 0)) {
+        ret |= 0x0;
+    }
+    return ret;
+}
+
+LIBSEL4_INLINE_FUNC void
+seL4_Fault_Timeout_ptr_set_data(seL4_Fault_t *seL4_Fault_ptr, seL4_Uint64 v64) {
+    /* fail if union does not have the expected tag */
+    seL4_DebugAssert(((seL4_Fault_ptr->words[0] >> 0) & 0xf) == seL4_Fault_Timeout);
+
+    /* fail if user has passed bits that we will override */
+    seL4_DebugAssert((((~0xffffffffffffffffull >> 0) | 0x0) & v64) == ((0 && (v64 & (1ull << (63)))) ? 0x0 : 0));
+
+    seL4_Fault_ptr->words[2] &= ~0xffffffffffffffffull;
+    seL4_Fault_ptr->words[2] |= (v64 << 0) & 0xffffffffffffffffull;
+}
+
+LIBSEL4_INLINE_FUNC seL4_Uint64 CONST
+seL4_Fault_Timeout_get_consumed(seL4_Fault_t seL4_Fault) {
+    seL4_Uint64 ret;
+    /* fail if union does not have the expected tag */
+    seL4_DebugAssert(((seL4_Fault.words[0] >> 0) & 0xf) == seL4_Fault_Timeout);
+
+    ret = (seL4_Fault.words[1] & 0xffffffffffffffffull) >> 0;
+    /* Possibly sign extend */
+    if (__builtin_expect(!!(0 && (ret & (1ull << (63)))), 0)) {
+        ret |= 0x0;
+    }
+    return ret;
+}
+
+LIBSEL4_INLINE_FUNC seL4_Fault_t CONST
+seL4_Fault_Timeout_set_consumed(seL4_Fault_t seL4_Fault, seL4_Uint64 v64) {
+    /* fail if union does not have the expected tag */
+    seL4_DebugAssert(((seL4_Fault.words[0] >> 0) & 0xf) == seL4_Fault_Timeout);
+    /* fail if user has passed bits that we will override */
+    seL4_DebugAssert((((~0xffffffffffffffffull >> 0 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (63)))) ? 0x0 : 0));
+
+    seL4_Fault.words[1] &= ~0xffffffffffffffffull;
+    seL4_Fault.words[1] |= (v64 << 0) & 0xffffffffffffffffull;
+    return seL4_Fault;
+}
+
+LIBSEL4_INLINE_FUNC seL4_Uint64 PURE
+seL4_Fault_Timeout_ptr_get_consumed(seL4_Fault_t *seL4_Fault_ptr) {
+    seL4_Uint64 ret;
+    /* fail if union does not have the expected tag */
+    seL4_DebugAssert(((seL4_Fault_ptr->words[0] >> 0) & 0xf) == seL4_Fault_Timeout);
+
+    ret = (seL4_Fault_ptr->words[1] & 0xffffffffffffffffull) >> 0;
+    /* Possibly sign extend */
+    if (__builtin_expect(!!(0 && (ret & (1ull << (63)))), 0)) {
+        ret |= 0x0;
+    }
+    return ret;
+}
+
+LIBSEL4_INLINE_FUNC void
+seL4_Fault_Timeout_ptr_set_consumed(seL4_Fault_t *seL4_Fault_ptr, seL4_Uint64 v64) {
+    /* fail if union does not have the expected tag */
+    seL4_DebugAssert(((seL4_Fault_ptr->words[0] >> 0) & 0xf) == seL4_Fault_Timeout);
 
     /* fail if user has passed bits that we will override */
     seL4_DebugAssert((((~0xffffffffffffffffull >> 0) | 0x0) & v64) == ((0 && (v64 & (1ull << (63)))) ? 0x0 : 0));

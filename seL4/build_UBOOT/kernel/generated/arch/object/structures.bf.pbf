@@ -52,12 +52,16 @@ block notification_cap {
     field capNtfnCanSend 1
     field_ptr capNtfnPtr word_size - 5 - 2
 }
-block reply_cap(capReplyCanGrant, capReplyMaster, capTCBPtr, capType) {
-    field capTCBPtr 64
+block reply_cap {
+    field capReplyPtr 64
     field capType 5
-    padding word_size - 5 - 2
     field capReplyCanGrant 1
-    field capReplyMaster 1
+    padding word_size - 5 - 1
+}
+block call_stack(callStackPtr, isHead) {
+    padding word_size - 1 - 48
+    field isHead 1
+    field_ptr callStackPtr 48
 }
 -- The user-visible format of the data word is defined by cnode_capdata, below.
 block cnode_cap(capCNodeRadix, capCNodeGuardSize, capCNodeGuard,
@@ -94,6 +98,18 @@ block domain_cap {
     field capType 5
     padding word_size - 5
 }
+block sched_context_cap {
+    field_ptr capSCPtr 48
+    field capSCSizeBits 6
+    padding 10
+    field capType 5
+    padding 59
+}
+block sched_control_cap {
+    field core 64
+    field capType 5
+    padding 59
+}
 ---- Arch-independent object types
 -- Endpoint: size = 16 bytes
 block endpoint {
@@ -103,6 +119,8 @@ block endpoint {
 }
 -- Async endpoint: size = 32 bytes (64 bytes on mcs)
 block notification {
+    padding 3 * word_size
+    field_ptr ntfnSchedContext word_size
     field_ptr ntfnBoundTCB word_size
     field ntfnMsgIdentifier word_size
     field_ptr ntfnQueue_head word_size
@@ -219,17 +237,23 @@ block UserException {
     field code 28
     field seL4_FaultType 4
 }
+block Timeout {
+    field badge 64
+    padding 60
+    field seL4_FaultType 4
+}
 -- Thread state: size = 24 bytes
 block thread_state(blockingIPCBadge, blockingIPCCanGrant,
                    blockingIPCCanGrantReply, blockingIPCIsCall,
-                   tcbQueued, blockingObject,
-                   tsType) {
+                   tcbQueued, tsType,
+                   tcbInReleaseQueue, blockingObject, replyObject) {
     field blockingIPCBadge 64
-    padding 60
+    field_ptr(4) replyObject 59
     field blockingIPCCanGrant 1
     field blockingIPCCanGrantReply 1
     field blockingIPCIsCall 1
     field tcbQueued 1
+    field tcbInReleaseQueue 1
     field_ptr(4) blockingObject word_size - 4
     field tsType 4
 }
@@ -290,6 +314,8 @@ tagged_union cap capType {
     tag irq_handler_cap 16
     tag zombie_cap 18
     tag domain_cap 20
+    tag sched_context_cap 22
+    tag sched_control_cap 24
     -- 5-bit tag arch caps
     tag frame_cap 1
     tag page_table_cap 3
@@ -404,6 +430,7 @@ tagged_union seL4_Fault seL4_FaultType {
     tag CapFault 1
     tag UnknownSyscall 2
     tag UserException 3
+    tag Timeout 5
     -- arch specific faults
-    tag VMFault 5
+    tag VMFault 6
 }
