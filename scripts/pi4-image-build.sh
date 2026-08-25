@@ -692,12 +692,15 @@ write_sel4_image_provenance() {
     local image="$EXACT_PI4_IMAGE"
     local root_elf="$EXACT_ROOT_ELF"
     local root_cpio="$EXACT_ROOT_CPIO"
+    local driver_runtime_cpio="${DRIVER_RUNTIME_EMBED_DIR}/${DRIVER_RUNTIME_EMBED_CPIO_NAME}"
     local cache="$EXACT_COMPOSITION_CACHE"
     local timer_header="$EXACT_COMPOSITION_TIMER_HEADER"
     local provenance="${image}${SEL4_IMAGE_PROVENANCE_SUFFIX}"
 
+    require_file "$driver_runtime_cpio"
     python3 - \
-      "$provenance" "$image" "$root_elf" "$root_cpio" "$MANIFEST_PATH" \
+      "$provenance" "$image" "$root_elf" "$root_cpio" \
+      "$driver_runtime_cpio" "$MANIFEST_PATH" \
       "$cache" "$timer_header" "$EXACT_GIT_COMMIT" "$EXACT_BUILD_TIMESTAMP" \
       "$ROOT_TASK_FEATURES" "$EXACT_CANONICAL_PROFILE_STAMP" \
       "$EXACT_COMPOSITION_RECORD" "$CANONICAL_SEL4_STATE_DIGEST" <<'PY'
@@ -713,6 +716,7 @@ from pathlib import Path
     image_path,
     root_path,
     cpio_path,
+    driver_runtime_cpio_path,
     manifest_path,
     cache_path,
     timer_header_path,
@@ -734,7 +738,7 @@ def digest(path: str) -> str:
 
 
 record = {
-    "schema": "cohesix-pi4-sel4-image-provenance/v3",
+    "schema": "cohesix-pi4-sel4-image-provenance/v4",
     "git_commit": commit,
     "source_tree_clean": True,
     "build_timestamp": timestamp,
@@ -748,6 +752,7 @@ record = {
     "wrapper_sha256": digest(image_path),
     "rootserver_sha256": digest(root_path),
     "rootserver_cpio_sha256": digest(cpio_path),
+    "driver_runtime_cpio_sha256": digest(driver_runtime_cpio_path),
 }
 rendered = (json.dumps(record, indent=2, sort_keys=True) + "\n").encode()
 target = Path(destination)
@@ -776,12 +781,14 @@ PY
 
 verify_skip_build_provenance() {
     local image="$EXACT_PI4_IMAGE"
+    local driver_runtime_cpio="${DRIVER_RUNTIME_EMBED_DIR}/${DRIVER_RUNTIME_EMBED_CPIO_NAME}"
     local provenance="${image}${SEL4_IMAGE_PROVENANCE_SUFFIX}"
 
     require_file "$provenance"
+    require_file "$driver_runtime_cpio"
     python3 - \
       "$provenance" "$image" "$EXACT_ROOT_ELF" "$EXACT_ROOT_CPIO" \
-      "$MANIFEST_PATH" "$EXACT_COMPOSITION_CACHE" \
+      "$driver_runtime_cpio" "$MANIFEST_PATH" "$EXACT_COMPOSITION_CACHE" \
       "$EXACT_COMPOSITION_TIMER_HEADER" "$EXACT_GIT_COMMIT" \
       "$EXACT_BUILD_TIMESTAMP" "$ROOT_TASK_FEATURES" \
       "$EXACT_CANONICAL_PROFILE_STAMP" "$EXACT_COMPOSITION_RECORD" \
@@ -795,6 +802,7 @@ import sys
     image_path,
     root_path,
     cpio_path,
+    driver_runtime_cpio_path,
     manifest_path,
     cache_path,
     timer_header_path,
@@ -818,7 +826,7 @@ def digest(path: str) -> str:
 with open(provenance_path, "r", encoding="utf-8") as handle:
     record = json.load(handle)
 expected = {
-    "schema": "cohesix-pi4-sel4-image-provenance/v3",
+    "schema": "cohesix-pi4-sel4-image-provenance/v4",
     "git_commit": commit,
     "source_tree_clean": True,
     "build_timestamp": timestamp,
@@ -832,6 +840,7 @@ expected = {
     "wrapper_sha256": digest(image_path),
     "rootserver_sha256": digest(root_path),
     "rootserver_cpio_sha256": digest(cpio_path),
+    "driver_runtime_cpio_sha256": digest(driver_runtime_cpio_path),
 }
 if record != expected:
     missing = sorted(set(expected) - set(record)) if isinstance(record, dict) else []
@@ -2127,12 +2136,16 @@ stage_driver_runtime_payload() {
     local mkimage_bin="$1"
     mkdir -p "$STAGE_DIR"
     local stage_dir_abs
-    local runtime_artifact_dir
+    local exact_runtime_cpio="${DRIVER_RUNTIME_EMBED_DIR}/${DRIVER_RUNTIME_EMBED_CPIO_NAME}"
     stage_dir_abs="$(cd "$STAGE_DIR" && pwd)"
     local raw_cpio="${stage_dir_abs}/cohesix-driver-runtimes.cpio"
-    runtime_artifact_dir="$(root_task_target_dir)/aarch64-unknown-none/release"
 
-    package_driver_runtime_raw_cpio "$raw_cpio" "$runtime_artifact_dir"
+    require_file "$exact_runtime_cpio"
+    verify_driver_runtime_cpio_entries "$exact_runtime_cpio"
+    cp -f "$exact_runtime_cpio" "$raw_cpio"
+    cmp -s "$exact_runtime_cpio" "$raw_cpio" || \
+      fail "staged Pi4 driver runtime CPIO differs from the provenance-bound build archive"
+    log "Staged provenance-bound Pi4 driver runtime archive at ${raw_cpio}"
     "$mkimage_bin" \
       -A arm64 \
       -T ramdisk \

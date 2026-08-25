@@ -42,21 +42,22 @@ def test_pi4_image_build_uses_square_logo_source() -> None:
     assert 'COHESIX_LOGO_SOURCE="${ROOT_DIR}/docs/COHESIX_LOGO_SQ.png"' in source
 
 
-def test_pi4_image_build_respects_cargo_target_dir_for_all_runtimes() -> None:
-    """Every staged runtime must come from the target dir Cargo built."""
+def test_pi4_image_build_binds_cargo_outputs_before_staging_runtimes() -> None:
+    """Pi children use Cargo's target dir, then stage the exact bound archive."""
 
     source = SCRIPT_PATH.read_text(encoding="utf-8")
 
     assert 'local target_dir="${CARGO_TARGET_DIR:-${ROOT_DIR}/target}"' in source
     assert 'root_task_elf="$(root_task_release_elf_path)"' in source
     assert (
-        'runtime_artifact_dir="$(root_task_target_dir)/aarch64-unknown-none/release"'
+        'package_driver_runtime_raw_cpio "$embedded_runtime_cpio" "$sel4_artifact_dir"'
         in source
     )
     assert (
-        'package_driver_runtime_raw_cpio "$raw_cpio" "$runtime_artifact_dir"'
+        'local exact_runtime_cpio="${DRIVER_RUNTIME_EMBED_DIR}/${DRIVER_RUNTIME_EMBED_CPIO_NAME}"'
         in source
     )
+    assert 'cp -f "$exact_runtime_cpio" "$raw_cpio"' in source
     assert (
         'local root_task_elf="${ROOT_DIR}/target/aarch64-unknown-none/release/root-task"'
         not in source
@@ -788,6 +789,70 @@ def test_pi4_image_build_keeps_per_role_driver_runtime_artifacts() -> None:
     assert "cohesix/bin/pi4-driver-cyw43" in source
     assert "Deduplicated identical Pi4 driver runtimes" not in source
     assert 'local generic_runtime="${runtime_bin}/pi4-driver-runtime"' not in source
+
+
+def test_pi4_image_build_skip_stage_ignores_later_target_children(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A later QEMU build cannot replace the provenance-bound Pi runtime CPIO."""
+
+    script = _copy_sourceable_build_script(tmp_path)
+    embedded = (
+        tmp_path
+        / "out"
+        / "pi4-driver-runtime-embed"
+        / "cohesix-driver-runtimes.cpio"
+    )
+    embedded.parent.mkdir(parents=True)
+    embedded.write_bytes(b"exact-pi-runtime-archive\n")
+    target_runtime = (
+        tmp_path
+        / "target"
+        / "aarch64-unknown-none"
+        / "release"
+        / "pi4-driver-runtime"
+    )
+    target_runtime.parent.mkdir(parents=True)
+    target_runtime.write_bytes(b"later-qemu-runtime\n")
+    fake_mkimage = tmp_path / "fake-mkimage"
+    fake_mkimage.write_text(
+        """#!/usr/bin/env bash
+set -eu
+source_path=''
+destination=''
+while [[ $# -gt 0 ]]; do
+    if [[ "$1" == "-d" ]]; then
+        source_path="$2"
+        shift 2
+        continue
+    fi
+    destination="$1"
+    shift
+done
+cp "$source_path" "$destination"
+""",
+        encoding="utf-8",
+    )
+    fake_mkimage.chmod(0o755)
+
+    result = _source_function(
+        script,
+        'STAGE_DIR="$ROOT_DIR/out/pi4-sd"; '
+        'verify_driver_runtime_cpio_entries() { :; }; '
+        'stage_driver_runtime_payload "$ROOT_DIR/fake-mkimage"',
+    )
+    assert result.returncode == 0, result.stderr
+
+    staged_raw = tmp_path / "out" / "pi4-sd" / "cohesix-driver-runtimes.cpio"
+    staged_uimage = (
+        tmp_path
+        / "out"
+        / "pi4-sd"
+        / "cohesix-driver-runtimes.cpio.uimg"
+    )
+    assert staged_raw.read_bytes() == embedded.read_bytes()
+    assert staged_uimage.read_bytes() == embedded.read_bytes()
+    assert staged_raw.read_bytes() != target_runtime.read_bytes()
 
 
 def test_pi4_image_build_reports_reset_markers_without_autoboot() -> None:
@@ -1831,8 +1896,10 @@ def test_skip_build_requires_exact_manifest_feature_and_profile_provenance() -> 
         "wrapper_sha256",
         "rootserver_sha256",
         "rootserver_cpio_sha256",
+        "driver_runtime_cpio_sha256",
     ):
         assert field in source
+    assert "cohesix-pi4-sel4-image-provenance/v4" in source
 
 
 @pytest.mark.parametrize(
@@ -1841,6 +1908,7 @@ def test_skip_build_requires_exact_manifest_feature_and_profile_provenance() -> 
         "assembly/sel4test-driver-image-arm-bcm2711",
         "assembly/rootserver",
         "assembly/archive.archive.o.cpio",
+        "driver-runtime/cohesix-driver-runtimes.cpio",
         "manifest.toml",
         "sel4-build/cohesix-profile-build-inputs.json",
         "assembly/composition-profile-build-inputs.json",
@@ -1859,6 +1927,7 @@ def test_skip_build_provenance_rejects_each_bound_artifact_tamper(
         "assembly/sel4test-driver-image-arm-bcm2711": b"wrapper\n",
         "assembly/rootserver": b"rootserver\n",
         "assembly/archive.archive.o.cpio": b"cpio\n",
+        "driver-runtime/cohesix-driver-runtimes.cpio": b"driver cpio\n",
         "manifest.toml": b"manifest\n",
         "sel4-build/cohesix-profile-build-inputs.json": b"canonical stamp\n",
         "assembly/composition-profile-build-inputs.json": b"composition stamp\n",
@@ -1875,6 +1944,8 @@ def test_skip_build_provenance_rejects_each_bound_artifact_tamper(
         'EXACT_PI4_IMAGE="$ROOT_DIR/assembly/sel4test-driver-image-arm-bcm2711"; '
         'EXACT_ROOT_ELF="$ROOT_DIR/assembly/rootserver"; '
         'EXACT_ROOT_CPIO="$ROOT_DIR/assembly/archive.archive.o.cpio"; '
+        'DRIVER_RUNTIME_EMBED_DIR="$ROOT_DIR/driver-runtime"; '
+        'DRIVER_RUNTIME_EMBED_CPIO_NAME="cohesix-driver-runtimes.cpio"; '
         'EXACT_CANONICAL_PROFILE_STAMP="$ROOT_DIR/sel4-build/cohesix-profile-build-inputs.json"; '
         'EXACT_COMPOSITION_RECORD="$ROOT_DIR/assembly/composition-profile-build-inputs.json"; '
         'EXACT_COMPOSITION_CACHE="$ROOT_DIR/assembly/composition-CMakeCache.txt"; '
