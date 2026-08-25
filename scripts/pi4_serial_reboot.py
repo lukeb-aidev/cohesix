@@ -1031,6 +1031,7 @@ def reboot_from_root(
         10,
         label="Queen attach OK",
     )
+    controller.synchronize_root_diagnostic_command(label="authenticated reboot")
     controller.send_line("reboot", guard_root_terminator=True)
     reboot_ack = controller.read_until(
         (b"OK REBOOT detail=scheduled",),

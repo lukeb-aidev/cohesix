@@ -389,6 +389,20 @@ pub enum WorkerSupervisorItem {
     Control(WorkerControlRecord),
 }
 
+/// Return whether one successful target fault registration merits a detailed
+/// UART record before the exact registry seal.
+///
+/// Worker identity remains compiler-owned and is proven by the exact
+/// registered/expected seal count. Emitting one long success line for every
+/// admitted Worker scales boot UART work with population while adding no
+/// independent proof. Services, drivers, and critical root domains retain
+/// their individually useful construction records; all missing records remain
+/// reported individually by the seal failure path.
+#[must_use]
+pub const fn detailed_fault_registration_log_required(kind: TemporalTaskKind) -> bool {
+    !matches!(kind, TemporalTaskKind::Worker)
+}
+
 /// Map a generated temporal task index to its distinct Worker mailbox.
 ///
 /// Worker ABI slots are role-local, so Heartbeat, GPU, and LoRA may all carry
@@ -1529,6 +1543,26 @@ mod tests {
             }),
             Err(FaultRegistryError::Overflow)
         );
+    }
+
+    #[test]
+    fn worker_registration_success_uses_the_exact_seal_instead_of_uart_fanout() {
+        assert!(!super::detailed_fault_registration_log_required(
+            TemporalTaskKind::Worker
+        ));
+        for kind in [
+            TemporalTaskKind::RootControl,
+            TemporalTaskKind::RootFault,
+            TemporalTaskKind::RootEmergency,
+            TemporalTaskKind::Service,
+            TemporalTaskKind::Drain,
+            TemporalTaskKind::Driver,
+            TemporalTaskKind::DriverSupervisor,
+            TemporalTaskKind::WorkerSupervisor,
+            TemporalTaskKind::WorkerExecutor,
+        ] {
+            assert!(super::detailed_fault_registration_log_required(kind));
+        }
     }
 
     #[test]

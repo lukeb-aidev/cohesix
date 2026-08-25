@@ -16,14 +16,15 @@
 //! their capability views remain separate and compiler-bounded.
 
 use crate::critical_tcb::{
-    generated_standard_fault_badge, mcs_extra_refills, passive_service_recovery_contract,
-    service_fault_mailbox_index, validate_critical_temporal_graph, validate_worker_supervisor_wake,
-    CriticalHandoff, CriticalTcbHandle, CriticalTcbInventory, CriticalTcbOrigin,
-    CriticalTopologyError, FaultClass, FaultHandoffError, FaultHandoffRecord, FaultRegistration,
-    FaultRegistry, FaultRegistryError, FaultRegistrySnapshot, GenerationIdentity, PublishResult,
-    WorkerControlQueue, WorkerControlQueueError, WorkerControlRecord, WorkerSupervisorItem,
-    CRITICAL_TCB_COUNT, DRIVER_FAULT_RECORD_CAPACITY, FAULT_REGISTRY_CAPACITY,
-    SERVICE_FAULT_RECORD_CAPACITY, WORKER_CONTROL_QUEUE_CAPACITY, WORKER_FAULT_MAILBOX_CAPACITY,
+    detailed_fault_registration_log_required, generated_standard_fault_badge, mcs_extra_refills,
+    passive_service_recovery_contract, service_fault_mailbox_index,
+    validate_critical_temporal_graph, validate_worker_supervisor_wake, CriticalHandoff,
+    CriticalTcbHandle, CriticalTcbInventory, CriticalTcbOrigin, CriticalTopologyError, FaultClass,
+    FaultHandoffError, FaultHandoffRecord, FaultRegistration, FaultRegistry, FaultRegistryError,
+    FaultRegistrySnapshot, GenerationIdentity, PublishResult, WorkerControlQueue,
+    WorkerControlQueueError, WorkerControlRecord, WorkerSupervisorItem, CRITICAL_TCB_COUNT,
+    DRIVER_FAULT_RECORD_CAPACITY, FAULT_REGISTRY_CAPACITY, SERVICE_FAULT_RECORD_CAPACITY,
+    WORKER_CONTROL_QUEUE_CAPACITY, WORKER_FAULT_MAILBOX_CAPACITY,
 };
 use crate::generated::{
     self, CriticalTcbResource, TemporalExecution, TemporalTaskConfig, TemporalTaskKind,
@@ -1038,20 +1039,22 @@ pub fn register_target_fault_source(
         terminal: task.timeout_policy != TimeoutPolicy::ReplenishOnce,
     })?;
     install_root_fault_tcb_control_cap(task_index, tcb_cap)?;
-    let mut line = heapless::String::<256>::new();
-    let _ = core::fmt::write(
-        &mut line,
-        format_args!(
-            "[diag fault-registry/v1] register index={} id={} kind={:?} tcb=0x{:04x} standard_badge=0x{:08x} timeout_badge=0x{:08x}",
-            task_index,
-            task_id,
-            task.kind,
-            tcb_cap,
-            standard_badge,
-            timeout_badge,
-        ),
-    );
-    crate::bootstrap::log::force_uart_line(line.as_str());
+    if detailed_fault_registration_log_required(task.kind) {
+        let mut line = heapless::String::<256>::new();
+        let _ = core::fmt::write(
+            &mut line,
+            format_args!(
+                "[diag fault-registry/v1] register index={} id={} kind={:?} tcb=0x{:04x} standard_badge=0x{:08x} timeout_badge=0x{:08x}",
+                task_index,
+                task_id,
+                task.kind,
+                tcb_cap,
+                standard_badge,
+                timeout_badge,
+            ),
+        );
+        crate::bootstrap::log::force_uart_line(line.as_str());
+    }
     Ok(())
 }
 

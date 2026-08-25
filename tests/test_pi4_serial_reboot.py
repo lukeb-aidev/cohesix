@@ -1893,6 +1893,7 @@ def test_reboot_from_root_clears_line_and_pings_before_auth(monkeypatch: pytest.
     assert controller.public_sent == ["<clear-line>", "ping", "attach queen <ticket>", "reboot"]
     assert controller.root_terminator_guards == [False, True, True, True]
     assert controller.redactions == [("secret-ticket", "<queen-ticket>")]
+    assert controller.diagnostic_barriers == ["authenticated reboot"]
     assert ROOT_MENU_SAVED in snapshot
 
 
@@ -1921,6 +1922,7 @@ def test_reboot_from_root_accepts_interleaved_attach_role_proof(
     )
 
     assert controller.sent == ["", "ping", "attach queen secret-ticket", "reboot"]
+    assert controller.diagnostic_barriers == ["authenticated reboot"]
     assert ROOT_MENU_SAVED in snapshot
 
 

@@ -8017,6 +8017,50 @@ ack/mask rules, and typed errors. This does not promote historical or current
 Pi evidence. Until a live QEMU image passes, the MCS execution gate remains
 open; until later fresh Pi tests pass, the Milestone task is not a Pi PASS.
 
+The 256-executable-Worker Pi convergence candidate adds two deterministic
+contracts without changing generated allocation or temporal values. First,
+the deferred CYW43 supervisor may grant four consecutive Driver turns only
+inside the exact finite `cyw43-cold-physical-lifetime` or
+`cyw43-pair-restart` cursor. A pure regression must prove the preceding
+Operator reconciliation, the four-turn hard cap, a return to Operator when a
+Driver turn is not due, and immediate reversion to one-for-one cadence when
+the cursor completes, is superseded, fails, or reaches ready state. Second,
+routine successful Worker fault registrations may omit their individual UART
+rows only after registration succeeds. Tests must retain detailed success
+rows for every service, driver, and critical root domain, retain individual
+missing/failure rows, and require the exact expected/registered seal before
+activation. The serial reboot regression must additionally prove an
+authenticated root prompt barrier between Queen attachment and `reboot`.
+
+Exact source `f4fa54161bc959427eaeb805841fc8962c5c186a` and image
+`2e74eff228fea5fb2125856774d8e9d922ac81070d44221dc398526fe959bdb9`
+are failure evidence, not acceptance: their 272/272 registry seal and clean
+USB/HDMI driver terminals coexist with Wi-Fi ending at supervisor turn 103,
+`replay-sdio-engine`, `aggregate-deadline-expired`. The replacement must be
+built and flashed from one exact clean source identity. On a fresh Wi-Fi boot,
+boot-paired UART and Wi-Fi/USB captures must prove that the finite SDIO replay
+cursor retires, association and Gate 8 complete, DHCP supplies the expected
+address, authenticated `cohsh` TCP plus focused `.coh` scripts succeed, and no
+unexpected fault, drop, no-reply, recovery, deadline, or quarantine counter
+grows. The same boot must retain USB Gate 10 and keyboard input, bounded serial
+command response, and terminal HDMI receipts; physical scroll/redraw quality
+and bounded HDMI deferral debt must be observed separately because host tests
+and a completed HDMI request do not prove a polished display. A distinct
+GENET-selected boot must prove link, DHCP, authenticated `cohsh`, and the same
+focused scripts without mixing child binaries or evidence between network
+backends.
+
+Pi- and QEMU-feature host tests, target compilation, static profile checks,
+image construction, flash/readback, and the prior diagnostic cadence can each
+reject the candidate but cannot establish physical Wi-Fi, GENET, USB, HDMI,
+serial, network, performance, or Milestone acceptance. Compatibility review
+must cover `coh`, `cohsh`, `.coh` workloads, Hive Gateway,
+`tools/cohesix-py`, generated profile contracts, and the REST/QEMU pressure
+harnesses. None consumes routine per-Worker success rows or the private
+bootstrap cadence, so no grammar, schema, workload, or report change is
+expected; `scripts/pi4_serial_reboot.py` and its focused tests are directly
+affected by the prompt barrier.
+
 ## Trace replay limits
 <!-- coh-rtc:trace-policy:start -->
 ### Trace replay limits (generated)
