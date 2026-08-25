@@ -26,8 +26,8 @@ executable roles with bounded target-task authority; WorkerBus remains a
 model/session-only role. That declaration is not evidence that a particular
 QEMU or Pi run created or accepted those tasks.
 
-The selected QEMU topology admits 256 passive Worker instances across those
-three executable roles; the Pi topology admits 64. Two bounded executor lanes
+The selected QEMU and Pi topologies each admit 256 passive Worker instances
+across those three executable roles. Two bounded executor lanes
 provide useful concurrency without multiplying active scheduling-context
 demand per Worker.
 
@@ -290,7 +290,7 @@ the selected resolved manifest.
 - Contributions must follow [`AGENTS.md`](AGENTS.md),
   [Contributing](CONTRIBUTING.md), and align to the active task in the
   [build plan](docs/BUILD_PLAN.md).
-  
+
 ## Help
 
 - New to Cohesix? Read [current status](docs/STATUS.md), use the

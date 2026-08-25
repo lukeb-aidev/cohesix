@@ -892,24 +892,25 @@ not QEMU or Pi target-performance evidence.
 ## GitHub Actions gate mapping
 
 `.github/workflows/ci.yml` is the sole repository-authored workflow and keeps
-the stable aggregate check `ci`.
+the stable required check `ci` directly; there is no aggregate fan-in job.
 
-- Source/integrity, consolidated hermetic Rust/Python production-feature
-  coverage, replay-mode UI coverage, and dependency advisories run as
-  independently cacheable jobs. The aggregate waits for every required job.
-- The workspace test lane uses the bounded host-wide concurrency policy rather
-  than consuming every CPU. Root-task feature suites and
-  `pi4-driver-runtime` remain serialized at their known stateful boundaries.
-- Cargo registries, build outputs, Playwright browsers, and exact-version audit
-  tools use content-keyed caches. Cached tools are version-checked; mandatory
-  `cargo audit` and `cargo deny check advisories` are never skipped.
-- Hosted CI compiles `pi4-driver-runtime` for `aarch64-unknown-none` and runs
-  the complete host-safe QEMU/Pi production-feature suites. Exact root-task
-  release builds and QEMU packaging remain on the provisioned macOS ARM64 lane
-  because the canonical external seL4 trees are not vendored.
-- The weekly workflow repeats the hermetic matrix and fresh advisory checks.
-  Provisioned QEMU Stage 03/04 cadence is recorded separately and must not be
-  represented as hosted-runner boot evidence.
+- Per-commit CI is deliberately a small health signal. On a clean macOS 26
+  runner it checks locked Cargo resolution and generated contracts, checks the
+  shipped host workspace, runs the default workspace tests once, compiles the
+  QEMU and Pi root-task feature test binaries without executing their complete
+  behavior matrices, and checks `pi4-driver-runtime` for
+  `aarch64-unknown-none`.
+- Formatting, strict lint/risk ratchets, complete production-feature behavior
+  matrices, repository-wide Python tests, Playwright, examples, and target
+  execution remain change-focused developer or canonical Test Plan work. They
+  are not repeated on every push. A green `ci` job is not `common-hermetic`,
+  QEMU, Pi, UI, performance, federation, or release evidence.
+- `dependency-audit` runs only on the weekly schedule and explicit manual
+  dispatch, using pinned `cargo-audit` and `cargo-deny` versions. Network-fetched
+  advisory data therefore remains visible without making ordinary source
+  changes depend on it.
+- CI retains native GitHub job logs and no custom evidence uploads. Reusable
+  provenance-bound evidence still comes only from the staged Test Plan.
 
 ## Purpose
 Validate the full Cohesix stack end-to-end: generated artifacts, QEMU boot, TCP console reliability and performance, deterministic replay, and every shipped host tool.

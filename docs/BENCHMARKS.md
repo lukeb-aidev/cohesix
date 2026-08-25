@@ -9,10 +9,11 @@ throughput service. A valid result preserves the same tickets, namespace
 semantics, audit behavior, backpressure, console grammar, and target ownership
 model used in normal operation.
 
-This document owns benchmark methodology and qualified findings. Target boot
-and device proof belongs in [HARDWARE_BRINGUP.md](HARDWARE_BRINGUP.md), staged
-acceptance in [TEST_PLAN.md](TEST_PLAN.md), and milestone authorization in
-[BUILD_PLAN.md](BUILD_PLAN.md).
+This document owns benchmark methodology and evidence qualification. Target
+boot and device proof belongs in [HARDWARE_BRINGUP.md](HARDWARE_BRINGUP.md),
+staged acceptance in [TEST_PLAN.md](TEST_PLAN.md), and scope and result history
+in [BUILD_PLAN.md](BUILD_PLAN.md). Exact measurements remain with their owning
+task and immutable evidence rather than being copied into this reference.
 
 See the [Glossary](GLOSSARY.md) for Cohesix-specific backend, role, and evidence
 terms.
@@ -405,59 +406,6 @@ must have distinct intensities, a clean error budget, increasing GPU/LoRA
 receipt sequences, and a fresh Heartbeat supervisor generation. Missing target
 fault markers, service teardown, fixture status/job files, or immutable
 artifact equality fails closed rather than producing executable evidence.
-
-### Accepted 2026-08-25 cross-host QEMU performance candidate
-
-The v152 candidate is accepted `qemu-live-log` performance evidence after a
-separate clean correctness baseline on each host. It is not the independent
-fault-injection collector or final milestone-acceptance proof. Both hosts used
-the same source base `f356c73a944b0e5ba1d9cf1bc30d511efa7038d9` plus the
-same retained candidate changes, QEMU 10.1.0, four vCPUs, 256 requested,
-discovered, and structured READY Workers, and the fixed two-minute workloads:
-MEDIUM `intensity=4 base_rps=4 max_inflight=16 seed=2604`; HIGH
-`intensity=8 base_rps=4 max_inflight=32 seed=2608`. Transient retries were off
-and strict control errors were on.
-
-| Host/profile | Successful/total | Successful throughput | Overall p50/p95/p99 | GPU receipt p95/p99 | LoRA receipt p95/p99 |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| macOS HVF MEDIUM | 75,420/75,536 | 628.500/s | 0.330/71.660/363.500 ms | 0.383/0.969 s | 0.386/0.998 s |
-| macOS HVF HIGH | 80,859/80,884 | 673.825/s | 0.793/348.250/471.680 ms | 0.695/1.086 s | 0.681/0.722 s |
-| Jetson KVM MEDIUM | 11,177/11,177 | 93.142/s | 24.765/644.500/1,083.400 ms | 1.928/2.385 s | 1.821/2.269 s |
-| Jetson KVM HIGH | 12,078/12,078 | 100.650/s | 55.967/1,136.000/3,450.000 ms | 2.441/3.261 s | 2.565/3.436 s |
-
-Mac's 116 MEDIUM and 25 HIGH unsuccessful operations were exact immediate
-`/queen/lease/ctl` `quota/buffer-full` refusals at the generated 256-entry
-retained-state bound; every other operation and every Worker receipt
-completed. They remain measured overload outcomes, not silently retried or
-reclassified. Jetson recorded no operation error. Both hosts retained root
-operator reachability under HIGH pressure: p99 was 63.4 ms on Mac and 701 ms
-on Jetson.
-
-The HIGH flight record rules out microscopic MCS turns as the active ceiling:
-
-| Host | Activation gap p50/p95/p99 | Service quantum p50/p95/p99 | Drainage aggregate/p50 | Queue HWM | Exit regression |
-| --- | ---: | ---: | ---: | ---: | --- |
-| macOS HVF | 3.949/11.360/11.445 ms | 4,096/4,096/4,096 units | 0.994/0.998 | 65 | `YIELD=0 TIMEOUT=0 FAULT=0` |
-| Jetson KVM | 3.953/10.015/10.018 ms | 4,096/4,096/4,096 units | 0.844/0.667 | 64 | `YIELD=0 TIMEOUT=0 FAULT=0` |
-
-Mac QEMU averaged 100.864% host CPU and Jetson 84.709%, where 100% is one host
-CPU. The slower Jetson wall-clock distribution therefore reflects its 1.728
-GHz host core and KVM/QEMU execution envelope rather than a guest queue or
-memory-pressure regression. Compared with the initial same-harness Mac
-37-Worker baseline, MEDIUM/HIGH successful throughput improved approximately
-14.3x/14.2x while the isolated Worker population increased 6.9x. This is the
-accepted performance envelope of the current single authenticated target
-connection. The next material architectural step, if higher aggregate
-throughput is required, is compiler-declared target-control sharding across
-cores and authenticated sessions; increasing quanta, queues, timeouts, or
-retries is not supported by this evidence.
-
-Immutable evidence:
-
-- Mac: `~/cohesix/qemu/perf/macos-windowed-execution-v152/{medium,high}`.
-- Jetson: `/mnt/nvme/cohesix-dev/perf/26e-v138-f356c73a/perf/jetson-windowed-execution-v152/{medium,high}`.
-- Setup and artifact identities: `~/cohesix/26e.md`; concise experiment ledger:
-  `~/cohesix/26e-qemu-perf.md`.
 
 For a focused read-path run:
 

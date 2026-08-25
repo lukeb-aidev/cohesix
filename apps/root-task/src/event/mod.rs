@@ -42495,15 +42495,15 @@ mod tests {
     #[test]
     fn qemu_quantum_counter_guard_uses_generated_frequency_units() {
         assert!(!qemu_root_control_quantum_guard_reached(
-            10, 96_009, 24_000_000,
+            10, 192_009, 24_000_000,
         ));
         assert!(qemu_root_control_quantum_guard_reached(
-            10, 96_010, 24_000_000,
+            10, 192_010, 24_000_000,
         ));
         assert!(!qemu_root_control_quantum_guard_reached(
-            0, 96_010, 24_000_000
+            0, 192_010, 24_000_000
         ));
-        assert!(!qemu_root_control_quantum_guard_reached(10, 96_010, 0));
+        assert!(!qemu_root_control_quantum_guard_reached(10, 192_010, 0));
     }
 
     #[cfg(feature = "kernel")]

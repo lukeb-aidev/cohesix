@@ -44,7 +44,7 @@ Both `CAT` and `TAIL` require `max_bytes`. Only `TAIL` accepts the optional
 declaration-only and has this additive shape:
 
 The following example is the selected QEMU profile; Pi returns its separately
-generated 64-Worker and eight-bit-shard values.
+generated 256-Worker and eight-bit-shard values.
 
 ```json
 {

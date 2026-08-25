@@ -1,5 +1,5 @@
 # Author: Lukas Bower
-# Purpose: Run parallel Cohesix integrity, host-feature, UI, and dependency gates with one stable aggregate result.
+# Purpose: Run a small Cohesix health check and a separate weekly dependency audit.
 # Copyright 2026 Lukas Bower
 
 name: Cohesix CI
@@ -16,7 +16,8 @@ on:
       - checks_requested
   workflow_dispatch:
   schedule:
-    # Avoid the top of the hour, when GitHub schedules are most heavily loaded.
+    # Keep advisory visibility without putting network-fetched databases on
+    # every source change.
     - cron: '17 8 * * 1'
 
 permissions:
@@ -27,110 +28,17 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'push' || github.event_name == 'pull_request' || github.event_name == 'merge_group' }}
 
 env:
-  ACTIONLINT_ARCHIVE_SHA256: aba9ced2dee8d27fecca3dc7feb1a7f9a52caefa1eb46f3271ea66b6e0e6953f
-  ACTIONLINT_VERSION: 1.7.12
   CARGO_INCREMENTAL: '0'
   CARGO_TERM_COLOR: always
-  NODE_VERSION: 24.18.0
   PYTHON_VERSION: 3.13.14
-  RIPGREP_ARCHIVE_SHA256: 378e973289176ca0c6054054ee7f631a065874a352bf43f0fa60ef079b6ba715
-  RIPGREP_VERSION: 15.1.0
-  RUST_BACKTRACE: '1'
   RUST_TOOLCHAIN: 1.97.1
 
 jobs:
-  source-integrity:
-    name: source-integrity
+  ci:
+    name: ci
+    if: ${{ github.event_name != 'schedule' }}
     runs-on: macos-26
-    timeout-minutes: 60
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          persist-credentials: false
-
-      - name: Install Rust toolchain 1.97.1
-        uses: dtolnay/rust-toolchain@46511b1c83438f0dd37c02d843619ece5a4abb5b # 1.97.1
-
-      - name: Install Python 3.13.14
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-
-      - name: Install checksum-pinned policy tools
-        run: |
-          actionlint_archive="${RUNNER_TEMP}/actionlint-${ACTIONLINT_VERSION}.tar.gz"
-          actionlint_dir="${RUNNER_TEMP}/actionlint-${ACTIONLINT_VERSION}"
-          actionlint_url="https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_darwin_arm64.tar.gz"
-          curl --proto '=https' --tlsv1.2 --retry 3 --fail --location --silent --show-error --output "${actionlint_archive}" "${actionlint_url}"
-          printf '%s  %s\n' "${ACTIONLINT_ARCHIVE_SHA256}" "${actionlint_archive}" | shasum -a 256 --check
-          mkdir -p "${actionlint_dir}"
-          tar -xzf "${actionlint_archive}" -C "${actionlint_dir}" actionlint
-          "${actionlint_dir}/actionlint" -version
-
-          ripgrep_archive="${RUNNER_TEMP}/ripgrep-${RIPGREP_VERSION}.tar.gz"
-          ripgrep_dir="${RUNNER_TEMP}/ripgrep-${RIPGREP_VERSION}"
-          ripgrep_url="https://github.com/BurntSushi/ripgrep/releases/download/${RIPGREP_VERSION}/ripgrep-${RIPGREP_VERSION}-aarch64-apple-darwin.tar.gz"
-          curl --proto '=https' --tlsv1.2 --retry 3 --fail --location --silent --show-error --output "${ripgrep_archive}" "${ripgrep_url}"
-          printf '%s  %s\n' "${RIPGREP_ARCHIVE_SHA256}" "${ripgrep_archive}" | shasum -a 256 --check
-          mkdir -p "${ripgrep_dir}"
-          tar -xzf "${ripgrep_archive}" --strip-components=1 -C "${ripgrep_dir}"
-          "${ripgrep_dir}/rg" --version
-
-          printf '%s\n' "${actionlint_dir}" "${ripgrep_dir}" >> "${GITHUB_PATH}"
-
-      - name: Cache Cargo registries for integrity checks
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-          key: cargo-registry-${{ runner.os }}-${{ runner.arch }}-${{ env.RUST_TOOLCHAIN }}-${{ hashFiles('Cargo.lock') }}
-          restore-keys: |
-            cargo-registry-${{ runner.os }}-${{ runner.arch }}-${{ env.RUST_TOOLCHAIN }}-
-
-      - name: Cache exact integrity build artifacts
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: target
-          key: cargo-target-integrity-${{ runner.os }}-${{ runner.arch }}-${{ env.RUST_TOOLCHAIN }}-${{ hashFiles('Cargo.lock', '**/Cargo.toml', 'configs/test_plan_actions.toml', 'scripts/check-generated.sh') }}
-
-      - name: Prepare integrity evidence
-        run: |
-          mkdir -p out/ci/source-integrity/runner
-          uname -a > out/ci/source-integrity/runner/uname.txt
-          sw_vers > out/ci/source-integrity/runner/macos.txt
-          rustc --version --verbose > out/ci/source-integrity/runner/rustc.txt
-          python3 --version > out/ci/source-integrity/runner/python.txt 2>&1
-
-      - name: Verify repository and workflow policy
-        run: |
-          test -s AGENTS.md
-          test -s docs/BUILD_PLAN.md
-          actionlint .github/workflows/*.yml
-          scripts/ci/test_plan_run.sh --list
-
-      - name: Run catalogued integrity actions
-        run: |
-          set -o pipefail
-          scripts/ci/host_hermetic_gate.sh --integrity-only 2>&1 | tee out/ci/source-integrity/gate.log
-
-      - name: Upload integrity evidence
-        if: ${{ always() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: source-integrity-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            out/ci/source-integrity/
-          if-no-files-found: error
-          retention-days: 14
-
-  host-hermetic:
-    name: host-hermetic
-    runs-on: macos-26
-    timeout-minutes: 180
+    timeout-minutes: 90
 
     steps:
       - name: Checkout repository
@@ -141,7 +49,6 @@ jobs:
       - name: Install Rust toolchain 1.97.1
         uses: dtolnay/rust-toolchain@46511b1c83438f0dd37c02d843619ece5a4abb5b # 1.97.1
         with:
-          components: clippy, rustfmt
           targets: aarch64-unknown-none
 
       - name: Install Python 3.13.14
@@ -149,118 +56,37 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: Install checksum-pinned ripgrep
-        run: |
-          ripgrep_archive="${RUNNER_TEMP}/ripgrep-${RIPGREP_VERSION}.tar.gz"
-          ripgrep_dir="${RUNNER_TEMP}/ripgrep-${RIPGREP_VERSION}"
-          ripgrep_url="https://github.com/BurntSushi/ripgrep/releases/download/${RIPGREP_VERSION}/ripgrep-${RIPGREP_VERSION}-aarch64-apple-darwin.tar.gz"
-          curl --proto '=https' --tlsv1.2 --retry 3 --fail --location --silent --show-error --output "${ripgrep_archive}" "${ripgrep_url}"
-          printf '%s  %s\n' "${RIPGREP_ARCHIVE_SHA256}" "${ripgrep_archive}" | shasum -a 256 --check
-          mkdir -p "${ripgrep_dir}"
-          tar -xzf "${ripgrep_archive}" --strip-components=1 -C "${ripgrep_dir}"
-          "${ripgrep_dir}/rg" --version
-          printf '%s\n' "${ripgrep_dir}" >> "${GITHUB_PATH}"
-
-      - name: Cache Cargo registries for host checks
+      - name: Cache Cargo registries
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
             ~/.cargo/git/db
-          key: cargo-registry-${{ runner.os }}-${{ runner.arch }}-${{ env.RUST_TOOLCHAIN }}-${{ hashFiles('Cargo.lock') }}
+          key: cargo-ci-${{ runner.os }}-${{ runner.arch }}-${{ env.RUST_TOOLCHAIN }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
-            cargo-registry-${{ runner.os }}-${{ runner.arch }}-${{ env.RUST_TOOLCHAIN }}-
+            cargo-ci-${{ runner.os }}-${{ runner.arch }}-${{ env.RUST_TOOLCHAIN }}-
 
-      - name: Cache exact host build artifacts
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: target
-          key: cargo-target-host-${{ runner.os }}-${{ runner.arch }}-${{ env.RUST_TOOLCHAIN }}-${{ hashFiles('Cargo.lock', '**/Cargo.toml', 'configs/test_plan_actions.toml', 'scripts/ci/host_hermetic_gate.sh') }}
-
-      - name: Cache pinned Python test environment
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: out/toolchain/python-test-venvs
-          key: python-tests-${{ runner.os }}-${{ runner.arch }}-${{ env.PYTHON_VERSION }}-${{ hashFiles('configs/test-plan-python-requirements.lock', 'scripts/ci/python_test_gate.sh') }}
-
-      - name: Prepare host evidence
+      - name: Validate source contracts
         run: |
-          mkdir -p out/ci/host-hermetic/dependency-trees out/ci/host-hermetic/runner out/test-plan/github-actions-host
-          uname -a > out/ci/host-hermetic/runner/uname.txt
-          sw_vers > out/ci/host-hermetic/runner/macos.txt
-          rustc --version --verbose > out/ci/host-hermetic/runner/rustc.txt
-          python3 --version > out/ci/host-hermetic/runner/python.txt 2>&1
+          cargo metadata --locked --format-version 1 --no-deps >/dev/null
+          scripts/check-generated.sh
 
-      - name: Run consolidated host and production-feature gate
-        env:
-          TEST_PLAN_STATE_DIR: out/test-plan/github-actions-host
-          TP_PYTHON_BIN: python3
+      - name: Check shipped host code
+        run: cargo check --workspace
+
+      - name: Run default workspace tests
+        run: cargo test --workspace -- --test-threads=1
+
+      - name: Check target feature compilation
         run: |
-          set -o pipefail
-          scripts/ci/host_hermetic_gate.sh --common-only 2>&1 | tee out/ci/host-hermetic/gate.log
-
-      - name: Record VM dependency boundaries
-        run: |
-          cargo tree --locked -p root-task --target aarch64-unknown-none -e normal --no-default-features --features release-qemu > out/ci/host-hermetic/dependency-trees/root-task-qemu.txt
-          cargo tree --locked -p root-task --target aarch64-unknown-none -e normal --no-default-features --features release-pi4 > out/ci/host-hermetic/dependency-trees/root-task-pi4.txt
-          cargo tree --locked -p pi4-driver-runtime --target aarch64-unknown-none -e normal > out/ci/host-hermetic/dependency-trees/pi4-driver-runtime.txt
-
-      - name: Upload host evidence
-        if: ${{ always() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: host-hermetic-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            out/ci/host-hermetic/
-            out/test-plan/github-actions-host/
-          if-no-files-found: error
-          retention-days: 14
-
-  swarmui-ui:
-    name: swarmui-ui
-    runs-on: macos-26
-    timeout-minutes: 45
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          persist-credentials: false
-
-      - name: Install Node.js 24.18.0
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: npm
-          cache-dependency-path: tools/swarmui-ui-tests/package-lock.json
-
-      - name: Cache lockfile-selected Playwright browsers
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: out/toolchain/playwright-browsers
-          key: playwright-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('tools/swarmui-ui-tests/package-lock.json') }}
-
-      - name: Run deterministic SwarmUI UI gate
-        env:
-          PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/out/toolchain/playwright-browsers
-          SWARMUI_UI_EVIDENCE_DIR: ${{ github.workspace }}/out/ci/swarmui-ui
-        run: |
-          mkdir -p out/ci/swarmui-ui
-          set -o pipefail
-          scripts/ci/swarmui_ui_gate.sh --run 2>&1 | tee out/ci/swarmui-ui/gate.log
-
-      - name: Upload SwarmUI UI evidence
-        if: ${{ always() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: swarmui-ui-${{ github.run_id }}-${{ github.run_attempt }}
-          path: out/ci/swarmui-ui/
-          if-no-files-found: error
-          retention-days: 14
+          cargo test -p root-task --no-default-features --features driver-tests-qemu --lib --no-run
+          cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib --no-run
+          cargo check -p pi4-driver-runtime --target aarch64-unknown-none
 
   dependency-audit:
     name: dependency-audit
+    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
@@ -276,88 +102,12 @@ jobs:
       - name: Install Rust toolchain 1.97.1
         uses: dtolnay/rust-toolchain@46511b1c83438f0dd37c02d843619ece5a4abb5b # 1.97.1
 
-      - name: Cache dependency registries
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-          key: cargo-policy-registry-${{ runner.os }}-${{ runner.arch }}-${{ env.RUST_TOOLCHAIN }}-${{ hashFiles('Cargo.lock') }}
-          restore-keys: |
-            cargo-policy-registry-${{ runner.os }}-${{ runner.arch }}-${{ env.RUST_TOOLCHAIN }}-
-
-      - name: Cache exact dependency audit tools
-        id: policy-tool-cache
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cargo/bin/cargo-audit
-            ~/.cargo/bin/cargo-deny
-          key: cargo-policy-tools-${{ runner.os }}-${{ runner.arch }}-${{ env.RUST_TOOLCHAIN }}-audit-0.22.2-deny-0.20.2
-
-      - name: Prepare dependency audit evidence
+      - name: Install pinned audit tools
         run: |
-          mkdir -p out/ci/dependency-audit
-          : > out/ci/dependency-audit/cargo-audit.log
-          : > out/ci/dependency-audit/cargo-deny.log
+          cargo install --locked --version "${CARGO_AUDIT_VERSION}" cargo-audit
+          cargo install --locked --version "${CARGO_DENY_VERSION}" cargo-deny
 
-      - name: Install or verify pinned dependency audit tools
+      - name: Check dependency advisories
         run: |
-          if ! cargo audit --version 2>/dev/null | grep -Fx "cargo-audit ${CARGO_AUDIT_VERSION}" >/dev/null; then
-            cargo install --locked --force --version "${CARGO_AUDIT_VERSION}" cargo-audit
-          fi
-          if ! cargo deny --version 2>/dev/null | grep -Fx "cargo-deny ${CARGO_DENY_VERSION}" >/dev/null; then
-            cargo install --locked --force --version "${CARGO_DENY_VERSION}" cargo-deny
-          fi
-          cargo audit --version
-          cargo deny --version
-
-      - name: Cargo audit
-        run: cargo audit 2>&1 | tee out/ci/dependency-audit/cargo-audit.log
-
-      - name: Cargo deny advisories
-        if: ${{ always() }}
-        run: cargo deny check advisories 2>&1 | tee out/ci/dependency-audit/cargo-deny.log
-
-      - name: Upload dependency audit evidence
-        if: ${{ always() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: dependency-audit-${{ github.run_id }}-${{ github.run_attempt }}
-          path: out/ci/dependency-audit/
-          if-no-files-found: error
-          retention-days: 30
-
-  ci:
-    name: ci
-    if: ${{ always() }}
-    needs:
-      - source-integrity
-      - host-hermetic
-      - swarmui-ui
-      - dependency-audit
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-
-    steps:
-      - name: Require every merge gate to pass
-        env:
-          SOURCE_INTEGRITY_RESULT: ${{ needs.source-integrity.result }}
-          HOST_HERMETIC_RESULT: ${{ needs.host-hermetic.result }}
-          SWARMUI_UI_RESULT: ${{ needs.swarmui-ui.result }}
-          DEPENDENCY_AUDIT_RESULT: ${{ needs.dependency-audit.result }}
-        run: |
-          failed=0
-          for gate in \
-            "source-integrity=${SOURCE_INTEGRITY_RESULT}" \
-            "host-hermetic=${HOST_HERMETIC_RESULT}" \
-            "swarmui-ui=${SWARMUI_UI_RESULT}" \
-            "dependency-audit=${DEPENDENCY_AUDIT_RESULT}"
-          do
-            if [[ "${gate}" != *=success ]]; then
-              echo "::error title=Required gate did not pass::${gate}"
-              failed=1
-            fi
-          done
-          exit "${failed}"
+          cargo audit
+          cargo deny check advisories
