@@ -160,6 +160,13 @@ query `netstats`. The authoritative line is
 `nettest: generation=<connection> run_generation=<run> enabled=<bool> running=<bool> verdict=<none|running|pass|peer-assisted-pass|fail> tx_ok=<bool|na> udp_echo_ok=<bool|na> tcp_ok=<bool|na> console_ok=<bool|na> peer_assisted_ok=<bool|na>`.
 The positive run generation must match the admission ACK; another run on the
 same connection cannot satisfy the command.
+When the compiler-declared console-network child owns TCP/IP, the same command
+runs a bounded peer-assisted test instead of returning `detail=unsupported`.
+A physical result requires an exact post-admission child response drain, a
+later NIC TX completion, later RX/TCP counter progress, matching authenticated connection,
+and listener readiness; direct VirtIO uses the child drain as its TX boundary.
+The child's native ICMPv4 echo response is separate reachability behavior, so a
+peer-assisted terminal may truthfully report `udp_echo_ok=false`.
 Targets and backend identity are emitted separately as `nettargets:` so the
 terminal verdict cannot be truncated by long target strings.
 `profile_backend` is the backend selected by the resolved manifest,
@@ -167,6 +174,12 @@ terminal verdict cannot be truncated by long target strings.
 the compatibility `backend` field is an alias of `active_driver`. In Pi Wi-Fi
 mode, for example, `profile_backend=bcmgenet-v5` and
 `active_driver=backend=cyw43` is the truthful combination.
+For isolated profiles, `netstats` also emits `isolated_progress`,
+`isolated_units`, and `isolated_state` rows. They report the selected child
+turn, last material progress, per-unit counts, bounded command/output queues,
+pending egress and response-drain state, and ingress backpressure/drop. These
+are diagnostic counters, not a substitute for the terminal `nettest`, ICMP,
+authenticated TCP, or target-performance evidence.
 
 On the physical Pi local seat, serial may show `cohesix>` while USB is still
 starting, but HDMI does not show the interactive prompt until USB command input

@@ -487,8 +487,12 @@ paired-pcap, verbose state, and terminal-verdict handling,
 `--normalize-only` remains safe for historical logs.
 
 `OK NETTEST detail=started run_generation=<n>` proves only admission. Wait at
-least 15 seconds, then issue the final `netstats` before continuing. It must
-contain a complete, untruncated
+least 15 seconds, then issue the final `netstats` before continuing. For a
+post-DHCP isolated-console profile, drive one authenticated `cohsh` command
+during that observation window; the serial-only helper deliberately does not
+manufacture peer traffic. The run requires later RX/TCP progress and an exact
+response drain, so historical traffic or an idle previously authenticated
+connection cannot pass. The final command must contain a complete, untruncated
 `nettest: generation=<connection> run_generation=<run> ... running=false verdict=<pass|peer-assisted-pass|fail> ...`
 line whose run generation matches the admitted ACK. The standard serial reboot
 helper performs a 17-second observation window, treats an asynchronous internal

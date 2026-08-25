@@ -17,6 +17,7 @@ direct-virtio = []
 console-network-abi = { workspace = true }
 heapless = "0.9.3"
 smoltcp = { version = "0.13.1", default-features = false, features = [
+    "auto-icmp-echo-reply",
     "medium-ethernet",
     "proto-ipv4",
     "socket-tcp",

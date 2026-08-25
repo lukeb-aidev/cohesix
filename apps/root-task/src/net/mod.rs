@@ -1549,6 +1549,12 @@ pub trait NetPoller {
         NetSelfTestReport::default()
     }
 
+    /// Return isolated child progress and queue state when that boundary owns
+    /// the active TCP/IP service.
+    fn isolated_console_diagnostics(&self) -> Option<IsolatedConsoleDiagnostics> {
+        None
+    }
+
     /// Return the active network policy and address state for diagnostics.
     fn status_report(&self) -> NetStatusReport {
         NetStatusReport::default()
@@ -1631,6 +1637,53 @@ pub struct ConsoleResponseLane {
     pub completed_responses: usize,
 }
 
+/// Bounded progress and queue snapshot for the isolated console-network child.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct IsolatedConsoleDiagnostics {
+    /// Compiler-owned child generation represented by this snapshot.
+    pub generation: u64,
+    /// Most recent root-side isolated-network poll timestamp.
+    pub last_poll_ms: u64,
+    /// Most recent poll timestamp that observed material progress.
+    pub last_progress_ms: u64,
+    /// Unit selected by the most recent isolated-network poll.
+    pub last_unit: &'static str,
+    /// Total isolated-network unit selections.
+    pub turns: u64,
+    /// Selections that observed material progress.
+    pub progress_turns: u64,
+    /// Child-notification observation selections.
+    pub observe_child_turns: u64,
+    /// Root-output staging selections.
+    pub stage_output_turns: u64,
+    /// Disconnect-control selections.
+    pub disconnect_turns: u64,
+    /// Physical-NIC ingress selections.
+    pub ingress_turns: u64,
+    /// Child timer-service selections.
+    pub service_tick_turns: u64,
+    /// Physical-NIC egress selections.
+    pub transmit_egress_turns: u64,
+    /// Deferred driver-diagnostic selections.
+    pub deferred_diagnostic_turns: u64,
+    /// Complete authenticated commands retained for root dispatch.
+    pub command_queue: usize,
+    /// Root response lines retained for the child.
+    pub output_queue: usize,
+    /// Whether one child-produced Ethernet frame awaits physical TX.
+    pub pending_egress: bool,
+    /// Whether an exact response batch awaits child drain proof.
+    pub awaiting_batch_drain: bool,
+    /// Whether root is still composing the current response.
+    pub producer_open: bool,
+    /// Exact child response-drain events observed.
+    pub response_drains: u64,
+    /// Child-ingress publications deferred by bounded backpressure.
+    pub ingress_backpressure: u64,
+    /// Child-ingress publications rejected after ownership was established.
+    pub ingress_dropped: u64,
+}
+
 #[cfg(any(
     test,
     all(
@@ -1641,6 +1694,17 @@ pub struct ConsoleResponseLane {
     )
 ))]
 mod isolated_network_turn;
+
+#[cfg(any(
+    test,
+    all(
+        feature = "kernel",
+        feature = "net-console",
+        target_os = "none",
+        sel4_config_kernel_mcs
+    )
+))]
+mod isolated_self_test;
 
 #[cfg(all(
     feature = "kernel",

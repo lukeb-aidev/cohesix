@@ -1371,6 +1371,11 @@ mod tests {
         PACKET_TX_WAKE_NOTIFICATION_SLOT, REQUIRED_INIT_FLAGS, ROOT_WAKE_MASK, RUNTIME_INIT_MAGIC,
         SHARED_PAGE_BYTES, SUPERVISOR_WAKE_NOTIFICATION_SLOT,
     };
+    use smoltcp::phy::ChecksumCapabilities;
+    use smoltcp::wire::{
+        ArpOperation, ArpPacket, ArpRepr, EthernetFrame, EthernetProtocol, EthernetRepr,
+        Icmpv4Packet, Icmpv4Repr, IpProtocol, Ipv4Packet, Ipv4Repr,
+    };
 
     fn descriptor() -> RuntimeInitDescriptor {
         let mut token = [0; AUTH_TOKEN_BYTES];
@@ -2519,6 +2524,101 @@ mod tests {
         let mut storage = [SocketStorage::EMPTY];
         let service =
             ConsoleNetworkService::new(descriptor(), &mut rx, &mut tx, &mut storage).unwrap();
+        assert!(service.listener_ready());
+    }
+
+    #[test]
+    fn operational_smoltcp_service_replies_to_icmp_echo_without_an_extra_socket() {
+        let mut rx = [0u8; 4096];
+        let mut tx = [0u8; 4096];
+        let mut storage = [SocketStorage::EMPTY];
+        let mut service =
+            ConsoleNetworkService::new(descriptor(), &mut rx, &mut tx, &mut storage).unwrap();
+        let remote_mac = EthernetAddress([2, 0, 0, 0, 0, 2]);
+        let remote_ip = Ipv4Address::new(10, 0, 2, 16);
+        let local_mac = EthernetAddress(descriptor().mac);
+        let local_ip = Ipv4Address::from(descriptor().ipv4);
+        let arp = ArpRepr::EthernetIpv4 {
+            operation: ArpOperation::Request,
+            source_hardware_addr: remote_mac,
+            source_protocol_addr: remote_ip,
+            target_hardware_addr: EthernetAddress::BROADCAST,
+            target_protocol_addr: local_ip,
+        };
+        let arp_ethernet = EthernetRepr {
+            src_addr: remote_mac,
+            dst_addr: EthernetAddress::BROADCAST,
+            ethertype: EthernetProtocol::Arp,
+        };
+        let arp_len = arp_ethernet.buffer_len().saturating_add(arp.buffer_len());
+        let mut arp_request = [0u8; ETHERNET_FRAME_BYTES];
+        arp_ethernet.emit(&mut EthernetFrame::new_unchecked(
+            &mut arp_request[..arp_len],
+        ));
+        arp.emit(&mut ArpPacket::new_unchecked(
+            &mut arp_request[arp_ethernet.buffer_len()..arp_len],
+        ));
+        service.ingest_packet(&arp_request[..arp_len]).unwrap();
+        assert_eq!(poll_complete_service_cycle(&mut service, 1).unwrap(), 0);
+        let mut reply = [0u8; ETHERNET_FRAME_BYTES];
+        assert!(service.take_packet(&mut reply).unwrap().is_some());
+
+        let payload = [0xaa, 0x55, 0x00, 0xff];
+        let ethernet = EthernetRepr {
+            src_addr: remote_mac,
+            dst_addr: local_mac,
+            ethertype: EthernetProtocol::Ipv4,
+        };
+        let icmp = Icmpv4Repr::EchoRequest {
+            ident: 0x1234,
+            seq_no: 0xabcd,
+            data: &payload,
+        };
+        let ipv4 = Ipv4Repr {
+            src_addr: remote_ip,
+            dst_addr: local_ip,
+            next_header: IpProtocol::Icmp,
+            payload_len: icmp.buffer_len(),
+            hop_limit: 64,
+        };
+        let frame_len = ethernet
+            .buffer_len()
+            .saturating_add(ipv4.buffer_len())
+            .saturating_add(icmp.buffer_len());
+        let mut request = [0u8; ETHERNET_FRAME_BYTES];
+        ethernet.emit(&mut EthernetFrame::new_unchecked(&mut request[..frame_len]));
+        ipv4.emit(
+            &mut Ipv4Packet::new_unchecked(&mut request[ethernet.buffer_len()..frame_len]),
+            &ChecksumCapabilities::default(),
+        );
+        icmp.emit(
+            &mut Icmpv4Packet::new_unchecked(
+                &mut request[ethernet.buffer_len() + ipv4.buffer_len()..frame_len],
+            ),
+            &ChecksumCapabilities::default(),
+        );
+
+        service.ingest_packet(&request[..frame_len]).unwrap();
+        assert_eq!(poll_complete_service_cycle(&mut service, 2).unwrap(), 0);
+
+        let reply_len = service.take_packet(&mut reply).unwrap().unwrap();
+        let ethernet_reply = EthernetFrame::new_checked(&reply[..reply_len]).unwrap();
+        assert_eq!(ethernet_reply.src_addr(), local_mac);
+        assert_eq!(ethernet_reply.dst_addr(), remote_mac);
+        assert_eq!(ethernet_reply.ethertype(), EthernetProtocol::Ipv4);
+        let ipv4_reply = Ipv4Packet::new_checked(ethernet_reply.payload()).unwrap();
+        assert_eq!(ipv4_reply.src_addr(), local_ip);
+        assert_eq!(ipv4_reply.dst_addr(), remote_ip);
+        assert_eq!(ipv4_reply.next_header(), IpProtocol::Icmp);
+        let icmp_reply = Icmpv4Packet::new_checked(ipv4_reply.payload()).unwrap();
+        assert_eq!(
+            Icmpv4Repr::parse(&icmp_reply, &ChecksumCapabilities::default()).unwrap(),
+            Icmpv4Repr::EchoReply {
+                ident: 0x1234,
+                seq_no: 0xabcd,
+                data: &payload,
+            }
+        );
         assert!(service.listener_ready());
     }
 

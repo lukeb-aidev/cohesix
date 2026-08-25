@@ -873,6 +873,23 @@ normalizer continues to accept that old grammar, but new compact `wifi diag`
 output cannot manufacture or replace the independently required verbose
 acceptance evidence.
 
+When pair recovery is entered after an SDIO owner fault, the first-recovery
+snapshot may additionally expose `scheduler_sdio_fault`,
+`scheduler_sdio_status`, `scheduler_sdio_dma`, and `scheduler_sdio_regs` rows.
+Root accepts this payload only when two passive reads agree and the completion
+is Fault with the exact version-3 116-byte length, an aligned in-ring cursor, a
+contained or owner-poisoned disposition, matching magic/version, and a failure
+word equal to the terminal result. The retained 29 words preserve the owner's
+pre-scrub SDHCI and DMA4 register cut; `captured=no` means unavailable evidence,
+not zero hardware state. These rows never acknowledge, consume, retry, reset,
+wake, or recover either owner and cannot satisfy a Wi-Fi gate by themselves.
+
+Routine WiFi, GENET, and HDMI ring-call begin/return chatter is not a required
+steady-state record. The target may suppress it for steady, nonblocking,
+prompt-slice, and retained turns; initialization, descriptor non-acceptance,
+fault, budget-exhaustion, and non-quiet timeout evidence remains mandatory.
+Absence of a routine call row is therefore neither progress nor failure proof.
+
 On a physical-console `smp` or `smp activity` request with Wi-Fi selected, a
 complete current old-good receipt is emitted before the ordinary activity
 report as one all-or-nothing 37-line batch. Its first six rows are compact

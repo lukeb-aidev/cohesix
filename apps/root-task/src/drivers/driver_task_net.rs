@@ -462,36 +462,65 @@ const SDHCI_INT_INDEX: u32 = 1 << 19;
 const SDHCI_INT_DATA_TIMEOUT: u32 = 1 << 20;
 const SDHCI_INT_DATA_CRC: u32 = 1 << 21;
 const SDHCI_INT_DATA_END_BIT: u32 = 1 << 22;
-const SDIO_FAULT_TELEMETRY_MAGIC: u32 = 0x5344_494f;
-const SDIO_FAULT_TELEMETRY_VERSION: u32 = 3;
-const SDIO_FAULT_TELEMETRY_BYTES: usize = 116;
-const SDIO_FAULT_TELEMETRY_ARG_OFFSET: usize = 8;
-const SDIO_FAULT_TELEMETRY_CMD_FLAGS_OFFSET: usize = 12;
-const SDIO_FAULT_TELEMETRY_LEN_BLOCK_OFFSET: usize = 16;
-const SDIO_FAULT_TELEMETRY_COUNT_MODE_OFFSET: usize = 20;
-const SDIO_FAULT_TELEMETRY_PRESENT_OFFSET: usize = 24;
-const SDIO_FAULT_TELEMETRY_INT_STATUS_OFFSET: usize = 28;
-const SDIO_FAULT_TELEMETRY_RESPONSE0_OFFSET: usize = 32;
-const SDIO_FAULT_TELEMETRY_HOST_CLOCK_OFFSET: usize = 36;
-const SDIO_FAULT_TELEMETRY_FAILURE_OFFSET: usize = 40;
-const SDIO_FAULT_TELEMETRY_BLOCK_REG_OFFSET: usize = 44;
-const SDIO_FAULT_TELEMETRY_PAYLOAD_EDGE_OFFSET: usize = 48;
-const SDIO_FAULT_TELEMETRY_PAYLOAD_SUM_OFFSET: usize = 52;
-const SDIO_FAULT_TELEMETRY_DMA_CS_OFFSET: usize = 56;
-const SDIO_FAULT_TELEMETRY_DMA_CONBLK_OFFSET: usize = 60;
-const SDIO_FAULT_TELEMETRY_DMA_NEXTCB_OFFSET: usize = 64;
-const SDIO_FAULT_TELEMETRY_ARGUMENT_REG_OFFSET: usize = 68;
-const SDIO_FAULT_TELEMETRY_TRANSFER_COMMAND_REG_OFFSET: usize = 72;
-const SDIO_FAULT_TELEMETRY_TIMEOUT_GAP_REG_OFFSET: usize = 76;
-const SDIO_FAULT_TELEMETRY_INT_ENABLE_REG_OFFSET: usize = 80;
-const SDIO_FAULT_TELEMETRY_SIGNAL_ENABLE_REG_OFFSET: usize = 84;
-const SDIO_FAULT_TELEMETRY_HOST_CONTROL2_REG_OFFSET: usize = 88;
-const SDIO_FAULT_TELEMETRY_DMA_TI_OFFSET: usize = 92;
-const SDIO_FAULT_TELEMETRY_DMA_SOURCE_OFFSET: usize = 96;
-const SDIO_FAULT_TELEMETRY_DMA_DEST_OFFSET: usize = 100;
-const SDIO_FAULT_TELEMETRY_DMA_LEN_OFFSET: usize = 104;
-const SDIO_FAULT_TELEMETRY_DMA_STRIDE_OFFSET: usize = 108;
-const SDIO_FAULT_TELEMETRY_DMA_DEBUG_OFFSET: usize = 112;
+const SDIO_FAULT_TELEMETRY_MAGIC: u32 = pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_MAGIC;
+const SDIO_FAULT_TELEMETRY_VERSION: u32 =
+    pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_VERSION;
+const SDIO_FAULT_TELEMETRY_BYTES: usize =
+    pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_BYTES as usize;
+const SDIO_FAULT_TELEMETRY_ARG_OFFSET: usize =
+    pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_ARG_OFFSET;
+const SDIO_FAULT_TELEMETRY_CMD_FLAGS_OFFSET: usize =
+    pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_CMD_FLAGS_OFFSET;
+const SDIO_FAULT_TELEMETRY_LEN_BLOCK_OFFSET: usize =
+    pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_LEN_BLOCK_OFFSET;
+const SDIO_FAULT_TELEMETRY_COUNT_MODE_OFFSET: usize =
+    pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_COUNT_MODE_OFFSET;
+const SDIO_FAULT_TELEMETRY_PRESENT_OFFSET: usize =
+    pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_PRESENT_OFFSET;
+const SDIO_FAULT_TELEMETRY_INT_STATUS_OFFSET: usize =
+    pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_INT_STATUS_OFFSET;
+const SDIO_FAULT_TELEMETRY_RESPONSE0_OFFSET: usize =
+    pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_RESPONSE0_OFFSET;
+const SDIO_FAULT_TELEMETRY_HOST_CLOCK_OFFSET: usize =
+    pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_HOST_CLOCK_OFFSET;
+const SDIO_FAULT_TELEMETRY_FAILURE_OFFSET: usize =
+    pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_FAILURE_OFFSET;
+const SDIO_FAULT_TELEMETRY_BLOCK_REG_OFFSET: usize =
+    pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_BLOCK_REG_OFFSET;
+const SDIO_FAULT_TELEMETRY_PAYLOAD_EDGE_OFFSET: usize =
+    pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_PAYLOAD_EDGE_OFFSET;
+const SDIO_FAULT_TELEMETRY_PAYLOAD_SUM_OFFSET: usize =
+    pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_PAYLOAD_SUM_OFFSET;
+const SDIO_FAULT_TELEMETRY_DMA_CS_OFFSET: usize =
+    pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_DMA_CS_OFFSET;
+const SDIO_FAULT_TELEMETRY_DMA_CONBLK_OFFSET: usize =
+    pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_DMA_CONBLK_OFFSET;
+const SDIO_FAULT_TELEMETRY_DMA_NEXTCB_OFFSET: usize =
+    pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_DMA_NEXTCB_OFFSET;
+const SDIO_FAULT_TELEMETRY_ARGUMENT_REG_OFFSET: usize =
+    pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_ARGUMENT_REG_OFFSET;
+const SDIO_FAULT_TELEMETRY_TRANSFER_COMMAND_REG_OFFSET: usize =
+    pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_TRANSFER_COMMAND_REG_OFFSET;
+const SDIO_FAULT_TELEMETRY_TIMEOUT_GAP_REG_OFFSET: usize =
+    pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_TIMEOUT_GAP_REG_OFFSET;
+const SDIO_FAULT_TELEMETRY_INT_ENABLE_REG_OFFSET: usize =
+    pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_INT_ENABLE_REG_OFFSET;
+const SDIO_FAULT_TELEMETRY_SIGNAL_ENABLE_REG_OFFSET: usize =
+    pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_SIGNAL_ENABLE_REG_OFFSET;
+const SDIO_FAULT_TELEMETRY_HOST_CONTROL2_REG_OFFSET: usize =
+    pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_HOST_CONTROL2_REG_OFFSET;
+const SDIO_FAULT_TELEMETRY_DMA_TI_OFFSET: usize =
+    pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_DMA_TI_OFFSET;
+const SDIO_FAULT_TELEMETRY_DMA_SOURCE_OFFSET: usize =
+    pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_DMA_SOURCE_OFFSET;
+const SDIO_FAULT_TELEMETRY_DMA_DEST_OFFSET: usize =
+    pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_DMA_DEST_OFFSET;
+const SDIO_FAULT_TELEMETRY_DMA_LEN_OFFSET: usize =
+    pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_DMA_LEN_OFFSET;
+const SDIO_FAULT_TELEMETRY_DMA_STRIDE_OFFSET: usize =
+    pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_DMA_STRIDE_OFFSET;
+const SDIO_FAULT_TELEMETRY_DMA_DEBUG_OFFSET: usize =
+    pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_DMA_DEBUG_OFFSET;
 static GENET_TX_SUBMITTED: AtomicU32 = AtomicU32::new(0);
 static GENET_TX_DROPPED: AtomicU32 = AtomicU32::new(0);
 static GENET_RX_FRAMES: AtomicU32 = AtomicU32::new(0);
@@ -1423,6 +1452,11 @@ pub(crate) struct Cyw43DeferredRecoverySchedulerDiagnostic {
     pub sdio_completion_code: u16,
     pub sdio_completion_detail: u16,
     pub sdio_completion_result: u32,
+    pub sdio_completion_frame_offset: u32,
+    pub sdio_completion_frame_len: u16,
+    pub sdio_completion_frame_flags: u16,
+    pub sdio_fault_frame_observed: bool,
+    pub sdio_fault_words: [u32; pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_WORDS],
     pub runtime_recovery_source_line: u32,
 }
 
@@ -1463,6 +1497,11 @@ impl Cyw43DeferredRecoverySchedulerDiagnostic {
                 sdio_completion_code: snapshot.sdio_completion_code,
                 sdio_completion_detail: snapshot.sdio_completion_detail,
                 sdio_completion_result: snapshot.sdio_completion_result,
+                sdio_completion_frame_offset: snapshot.sdio_completion_frame_offset,
+                sdio_completion_frame_len: snapshot.sdio_completion_frame_len,
+                sdio_completion_frame_flags: snapshot.sdio_completion_frame_flags,
+                sdio_fault_frame_observed: snapshot.sdio_fault_frame_observed,
+                sdio_fault_words: snapshot.sdio_fault_words,
                 runtime_recovery_source_line: snapshot.runtime_recovery_source_line,
             };
         }
@@ -1498,6 +1537,11 @@ impl Cyw43DeferredRecoverySchedulerDiagnostic {
             sdio_completion_code: 0,
             sdio_completion_detail: 0,
             sdio_completion_result: 0,
+            sdio_completion_frame_offset: 0,
+            sdio_completion_frame_len: 0,
+            sdio_completion_frame_flags: 0,
+            sdio_fault_frame_observed: false,
+            sdio_fault_words: [0u32; pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_WORDS],
             runtime_recovery_source_line: 0,
         }
     }
@@ -1536,6 +1580,11 @@ impl Cyw43DeferredRecoverySchedulerDiagnostic {
             sdio_completion_code: 0,
             sdio_completion_detail: 0,
             sdio_completion_result: 0,
+            sdio_completion_frame_offset: 0,
+            sdio_completion_frame_len: 0,
+            sdio_completion_frame_flags: 0,
+            sdio_fault_frame_observed: false,
+            sdio_fault_words: [0u32; pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_WORDS],
             runtime_recovery_source_line: 0,
         }
     }
@@ -2613,6 +2662,14 @@ impl Cyw43BootstrapSupervisor {
                 // root poll counter or turn durable identity into work.
                 pending.deadline = deadline_before_turn;
                 return self.keep_pending_action(pending, Cyw43RetainedActionOutcome::Waiting);
+            }
+            Err(DriverTaskNetError::RuntimePending("cyw43-canonical-parent-retirement-fenced")) => {
+                // The linked runtime can discover a CYW43/SDIO pair fault
+                // while servicing this exact retained parent. Preserve its
+                // immutable issued identity and route the terminal through the
+                // canonical drain before pair restart; treating this recovery
+                // fence as a bootstrap failure would strand both runtimes.
+                return self.poison_pending_action(pending, "cyw43-pair-recovery-signalled");
             }
             Err(DriverTaskNetError::RuntimeInit("cyw43-persistent-transaction-deadline")) => {
                 return self
@@ -33917,6 +33974,115 @@ mod tests {
             1,
             "the possibly-issued controller action must never run twice",
         );
+        CYW43_TEST_ENFORCE_OUTER_EVENT_TURN.store(0, Ordering::Release);
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_supervisor_routes_pair_restart_discovered_with_issued_parent_to_terminal_drain() {
+        let _guard = CYW43_STATUS_TEST_LOCK.lock().expect("status test lock");
+        reset_cyw43_status_flags();
+        let mut ring_page = [0u8; crate::hal::driver_task::DRIVER_TASK_RING_PAGE_BYTES];
+        let _ring_guard = test_publish_cyw43_ring(&mut ring_page);
+        assert!(
+            crate::hal::driver_task::test_publish_driver_task_ring_endpoint(
+                CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            )
+        );
+        assert!(
+            crate::hal::driver_task::register_driver_task_pointer_free_ring_service(
+                CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                DriverTaskHotPath::Cyw43Wifi.as_u32() as usize,
+                cyw43_supervisor_ring_test_service,
+            )
+        );
+        CYW43_TEST_ENFORCE_OUTER_EVENT_TURN.store(1, Ordering::Release);
+
+        let mut supervisor = Cyw43BootstrapSupervisor::new(ConsoleNetConfig::default());
+        supervisor.phase = Cyw43BootstrapPhase::Recovery(Cyw43RecoveryPhase::Firmware);
+        supervisor
+            .install_empty_action(
+                DriverRuntimeCyw43CommandDescriptor {
+                    op: DRIVER_RUNTIME_CYW43_OP_TRANSPORT_INIT,
+                    ..DriverRuntimeCyw43CommandDescriptor::empty()
+                },
+                "cyw43-in-turn-pair-restart-test",
+            )
+            .expect("transport action installs");
+
+        let mut issued_request = None;
+        for _ in 0..CYW43_RUNTIME_MIN_RETAINED_TURNS {
+            if let Some(request) =
+                supervisor
+                    .pending
+                    .as_ref()
+                    .and_then(|pending| match pending.issuance {
+                        Cyw43ActionIssuance::AwaitingCompletion { request }
+                            if supervisor.active_ticket_issuance(pending, request)
+                                == Some(true) =>
+                        {
+                            Some(request)
+                        }
+                        Cyw43ActionIssuance::Prepared
+                        | Cyw43ActionIssuance::AwaitingCompletion { .. } => None,
+                    })
+            {
+                issued_request = Some(request);
+                break;
+            }
+            begin_cyw43_outer_event_turn();
+            assert_eq!(
+                supervisor.service_pending_action(),
+                Cyw43RetainedActionOutcome::Pending,
+            );
+            assert!(cyw43_outer_event_turn_operation_count() <= 1);
+        }
+        let issued_request = issued_request.expect("one exact parent reaches issued state");
+        assert_eq!(CYW43_SUPERVISOR_RING_TURNS.load(Ordering::Acquire), 0);
+
+        crate::hal::driver_task::request_cyw43_sdio_pair_restart();
+        begin_cyw43_outer_event_turn();
+        assert_eq!(
+            supervisor.service_pending_action(),
+            Cyw43RetainedActionOutcome::Poisoned("cyw43-pair-recovery-signalled"),
+            "a pair restart discovered during retained service is recovery, not fatal bootstrap",
+        );
+        assert!(supervisor.pending.as_ref().is_some_and(|pending| {
+            matches!(
+                pending.issuance,
+                Cyw43ActionIssuance::AwaitingCompletion { request }
+                    if request == issued_request
+            )
+        }));
+        assert!(CYW43_TERMINAL_DRAIN_CURSOR.lock().is_some_and(|cursor| {
+            cursor.request == issued_request
+                && matches!(cursor.owner, Cyw43TerminalDrainOwner::Bootstrap(_))
+        }));
+        let ring_turns_after_fence = CYW43_SUPERVISOR_RING_TURNS.load(Ordering::Acquire);
+        assert_eq!(
+            ring_turns_after_fence, 1,
+            "the reciprocal runtime may publish the exact terminal before the recovery fence",
+        );
+
+        supervisor.route_generation_recovery("cyw43-pair-recovery-signalled");
+        assert_eq!(
+            supervisor.phase,
+            Cyw43BootstrapPhase::Recovery(Cyw43RecoveryPhase::DrainTerminalOwner),
+        );
+        assert!(
+            crate::hal::driver_task::active_driver_task_retained_request(
+                CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            )
+            .is_some_and(|active| active.issued() && active.request() == issued_request),
+            "recovery retains the exact HAL owner until its terminal drain",
+        );
+        assert_eq!(
+            CYW43_SUPERVISOR_RING_TURNS.load(Ordering::Acquire),
+            ring_turns_after_fence,
+            "routing the fence must not replay the issued runtime action",
+        );
+
         CYW43_TEST_ENFORCE_OUTER_EVENT_TURN.store(0, Ordering::Release);
         reset_cyw43_status_flags();
     }

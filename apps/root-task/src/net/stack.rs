@@ -56,11 +56,11 @@ use super::{
     dhcp::{DhcpClient, DhcpEvent, DhcpLease, DhcpPhase, DHCP_CLIENT_PORT, DHCP_SERVER_PORT},
     outbound::{OutboundCoalescer, OutboundLane, SendError},
     parse_icmp_echo_request, ConsoleLine, ConsoleNetConfig, ConsoleResponseIdentity,
-    ConsoleResponseLane, NetBackend, NetConsoleDisconnectReason, NetConsoleEvent, NetCounters,
-    NetDevice, NetDriverError, NetInterfacePolicy, NetMode, NetPoller, NetSelfTestReport,
-    NetSelfTestResult, NetSelfTestStartResult, NetStage, NetStatusReport, NetTelemetry,
-    WifiCredentials, DEV_VIRT_GATEWAY, DEV_VIRT_IP, DEV_VIRT_PREFIX, MAX_FRAME_LEN, NET_DIAG,
-    NET_STAGE,
+    ConsoleResponseLane, IsolatedConsoleDiagnostics, NetBackend, NetConsoleDisconnectReason,
+    NetConsoleEvent, NetCounters, NetDevice, NetDriverError, NetInterfacePolicy, NetMode,
+    NetPoller, NetSelfTestReport, NetSelfTestResult, NetSelfTestStartResult, NetStage,
+    NetStatusReport, NetTelemetry, WifiCredentials, DEV_VIRT_GATEWAY, DEV_VIRT_IP, DEV_VIRT_PREFIX,
+    MAX_FRAME_LEN, NET_DIAG, NET_STAGE,
 };
 #[cfg(all(
     feature = "net-backend-virtio",
@@ -8777,6 +8777,7 @@ impl GenetNetStack {
         let prefix_len = stack.prefix_len();
         let gateway = stack.gateway();
         let status = stack.status_report();
+        let self_test_enabled = stack.self_test.enabled && stack.stage_policy.allow_selftest;
         let console_tcb = runtime.tcb_cptr();
 
         let transition_result = (|| {
@@ -8810,6 +8811,7 @@ impl GenetNetStack {
                         "wired",
                         "dhcp-lease",
                         "bound",
+                        self_test_enabled,
                     )),
                     _policy: stack,
                 };
@@ -9156,6 +9158,7 @@ impl Cyw43NetStack {
         let prefix_len = stack.prefix_len();
         let gateway = stack.gateway();
         let status = stack.status_report();
+        let self_test_enabled = stack.self_test.enabled && stack.stage_policy.allow_selftest;
         let device = stack.take_device_for_isolated_console();
         let console_tcb = runtime.tcb_cptr();
 
@@ -9189,6 +9192,7 @@ impl Cyw43NetStack {
                         "wifi",
                         "dhcp-lease",
                         "bound",
+                        self_test_enabled,
                     )),
                     policy: stack,
                 };
@@ -9475,6 +9479,11 @@ impl NetPoller for GenetNetStack {
     fn self_test_report(&self) -> NetSelfTestReport {
         self.inner()
             .map_or(NetSelfTestReport::default(), NetPoller::self_test_report)
+    }
+
+    fn isolated_console_diagnostics(&self) -> Option<IsolatedConsoleDiagnostics> {
+        self.inner()
+            .and_then(NetPoller::isolated_console_diagnostics)
     }
 
     fn status_report(&self) -> NetStatusReport {
@@ -9772,6 +9781,11 @@ impl NetPoller for Cyw43NetStack {
     fn self_test_report(&self) -> NetSelfTestReport {
         self.inner()
             .map_or(NetSelfTestReport::default(), NetPoller::self_test_report)
+    }
+
+    fn isolated_console_diagnostics(&self) -> Option<IsolatedConsoleDiagnostics> {
+        self.inner()
+            .and_then(NetPoller::isolated_console_diagnostics)
     }
 
     fn status_report(&self) -> NetStatusReport {
@@ -11210,6 +11224,16 @@ impl NetPoller for DefaultNetStack {
             Self::Cyw43DriverTask(stack) => stack.self_test_report(),
             #[cfg(feature = "net-backend-virtio")]
             Self::Virtio(stack) => stack.self_test_report(),
+        }
+    }
+
+    fn isolated_console_diagnostics(&self) -> Option<IsolatedConsoleDiagnostics> {
+        match self {
+            Self::Rtl8139(stack) => stack.isolated_console_diagnostics(),
+            Self::GenetDriverTask(stack) => stack.isolated_console_diagnostics(),
+            Self::Cyw43DriverTask(stack) => stack.isolated_console_diagnostics(),
+            #[cfg(feature = "net-backend-virtio")]
+            Self::Virtio(stack) => stack.isolated_console_diagnostics(),
         }
     }
 

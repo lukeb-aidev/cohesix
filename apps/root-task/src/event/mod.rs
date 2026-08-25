@@ -9014,7 +9014,7 @@ where
             self.cyw43_bootstrap_hdmi_progress
                 .observe(1, frontier, self.now_ms);
         }
-        let mut lines = HeaplessVec::<HeaplessString<DEFAULT_LINE_CAPACITY>, 8>::new();
+        let mut lines = HeaplessVec::<HeaplessString<DEFAULT_LINE_CAPACITY>, 12>::new();
         if let Some(recovery) = recovery {
             for line in [
                 Self::wifi_diag_deferred_recovery_line(recovery, live_generation),
@@ -9024,6 +9024,10 @@ where
                 Self::wifi_diag_deferred_recovery_scheduler_line(recovery),
                 Self::wifi_diag_deferred_recovery_scheduler_edge_line(recovery),
                 Self::wifi_diag_deferred_recovery_scheduler_sdio_line(recovery),
+                Self::wifi_diag_deferred_recovery_scheduler_sdio_fault_line(recovery),
+                Self::wifi_diag_deferred_recovery_scheduler_sdio_status_line(recovery),
+                Self::wifi_diag_deferred_recovery_scheduler_sdio_dma_line(recovery),
+                Self::wifi_diag_deferred_recovery_scheduler_sdio_regs_line(recovery),
             ] {
                 if lines.push(line).is_err() {
                     return false;
@@ -19556,6 +19560,83 @@ where
     }
 
     #[cfg(feature = "kernel")]
+    fn wifi_diag_deferred_recovery_scheduler_sdio_fault_line(
+        recovery: crate::drivers::driver_task_net::Cyw43DeferredRecoveryDiagnostic,
+    ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
+        let scheduler = recovery.scheduler;
+        let word = |offset: usize| scheduler.sdio_fault_words[offset / 4];
+        format_message(format_args!(
+            "wifi: deferred_recovery scheduler_sdio_fault scope={} captured={} frame={:08x}/{:04x}/{:04x} command={:08x}/{:08x}/{:08x}/{:08x} evidence=stable-pre-scrub",
+            scheduler.scope,
+            Self::yes_no(scheduler.sdio_fault_frame_observed),
+            scheduler.sdio_completion_frame_offset,
+            scheduler.sdio_completion_frame_len,
+            scheduler.sdio_completion_frame_flags,
+            word(pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_ARG_OFFSET),
+            word(pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_CMD_FLAGS_OFFSET),
+            word(pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_LEN_BLOCK_OFFSET),
+            word(pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_COUNT_MODE_OFFSET),
+        ))
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_diag_deferred_recovery_scheduler_sdio_status_line(
+        recovery: crate::drivers::driver_task_net::Cyw43DeferredRecoveryDiagnostic,
+    ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
+        let scheduler = recovery.scheduler;
+        let word = |offset: usize| scheduler.sdio_fault_words[offset / 4];
+        format_message(format_args!(
+            "wifi: deferred_recovery scheduler_sdio_status captured={} present={:08x} int={:08x} response={:08x} host_clock={:08x} failure={:08x} block={:08x} evidence=owner-register-cut",
+            Self::yes_no(scheduler.sdio_fault_frame_observed),
+            word(pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_PRESENT_OFFSET),
+            word(pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_INT_STATUS_OFFSET),
+            word(pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_RESPONSE0_OFFSET),
+            word(pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_HOST_CLOCK_OFFSET),
+            word(pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_FAILURE_OFFSET),
+            word(pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_BLOCK_REG_OFFSET),
+        ))
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_diag_deferred_recovery_scheduler_sdio_dma_line(
+        recovery: crate::drivers::driver_task_net::Cyw43DeferredRecoveryDiagnostic,
+    ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
+        let scheduler = recovery.scheduler;
+        let word = |offset: usize| scheduler.sdio_fault_words[offset / 4];
+        format_message(format_args!(
+            "wifi: deferred_recovery scheduler_sdio_dma captured={} dma={:08x}/{:08x}/{:08x} cb={:08x}/{:08x}/{:08x} evidence=owner-register-cut",
+            Self::yes_no(scheduler.sdio_fault_frame_observed),
+            word(pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_DMA_CS_OFFSET),
+            word(pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_DMA_CONBLK_OFFSET),
+            word(pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_DMA_NEXTCB_OFFSET),
+            word(pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_DMA_TI_OFFSET),
+            word(pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_DMA_SOURCE_OFFSET),
+            word(pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_DMA_DEST_OFFSET),
+        ))
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_diag_deferred_recovery_scheduler_sdio_regs_line(
+        recovery: crate::drivers::driver_task_net::Cyw43DeferredRecoveryDiagnostic,
+    ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
+        let scheduler = recovery.scheduler;
+        let word = |offset: usize| scheduler.sdio_fault_words[offset / 4];
+        format_message(format_args!(
+            "wifi: deferred_recovery scheduler_sdio_regs captured={} host={:08x}/{:08x}/{:08x}/{:08x}/{:08x}/{:08x} dma_tail={:08x}/{:08x}/{:08x} evidence=owner-register-cut",
+            Self::yes_no(scheduler.sdio_fault_frame_observed),
+            word(pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_ARGUMENT_REG_OFFSET),
+            word(pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_TRANSFER_COMMAND_REG_OFFSET),
+            word(pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_TIMEOUT_GAP_REG_OFFSET),
+            word(pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_INT_ENABLE_REG_OFFSET),
+            word(pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_SIGNAL_ENABLE_REG_OFFSET),
+            word(pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_HOST_CONTROL2_REG_OFFSET),
+            word(pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_DMA_LEN_OFFSET),
+            word(pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_DMA_STRIDE_OFFSET),
+            word(pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_DMA_DEBUG_OFFSET),
+        ))
+    }
+
+    #[cfg(feature = "kernel")]
     const fn wifi_linked_runtime_rejection_reason(result: u32) -> Option<&'static str> {
         match result {
             pi4_driver_abi::DRIVER_RUNTIME_REJECT_SDIO_INTAKE_SEAL_BUSY => {
@@ -20716,6 +20797,10 @@ where
                 Self::wifi_diag_deferred_recovery_scheduler_line(recovery),
                 Self::wifi_diag_deferred_recovery_scheduler_edge_line(recovery),
                 Self::wifi_diag_deferred_recovery_scheduler_sdio_line(recovery),
+                Self::wifi_diag_deferred_recovery_scheduler_sdio_fault_line(recovery),
+                Self::wifi_diag_deferred_recovery_scheduler_sdio_status_line(recovery),
+                Self::wifi_diag_deferred_recovery_scheduler_sdio_dma_line(recovery),
+                Self::wifi_diag_deferred_recovery_scheduler_sdio_regs_line(recovery),
             ] {
                 self.emit_console_line(detail.as_str());
             }
@@ -22062,6 +22147,10 @@ where
                 Self::wifi_diag_deferred_recovery_scheduler_line(recovery),
                 Self::wifi_diag_deferred_recovery_scheduler_edge_line(recovery),
                 Self::wifi_diag_deferred_recovery_scheduler_sdio_line(recovery),
+                Self::wifi_diag_deferred_recovery_scheduler_sdio_fault_line(recovery),
+                Self::wifi_diag_deferred_recovery_scheduler_sdio_status_line(recovery),
+                Self::wifi_diag_deferred_recovery_scheduler_sdio_dma_line(recovery),
+                Self::wifi_diag_deferred_recovery_scheduler_sdio_regs_line(recovery),
             ] {
                 self.emit_console_line(detail.as_str());
             }
@@ -26654,6 +26743,39 @@ where
                         let stats = net.stats();
                         let report = net.self_test_report();
                         let status = net.status_report();
+                        let isolated_lines = net.isolated_console_diagnostics().map(|diagnostic| {
+                            let progress = format_message(format_args!(
+                                "netstats: isolated_progress generation={} poll_ms={} progress_ms={} unit={} turns={} progress={}",
+                                diagnostic.generation,
+                                diagnostic.last_poll_ms,
+                                diagnostic.last_progress_ms,
+                                diagnostic.last_unit,
+                                diagnostic.turns,
+                                diagnostic.progress_turns,
+                            ));
+                            let units = format_message(format_args!(
+                                "netstats: isolated_units observe={} output={} disconnect={} ingress={} tick={} egress={} diagnostic={}",
+                                diagnostic.observe_child_turns,
+                                diagnostic.stage_output_turns,
+                                diagnostic.disconnect_turns,
+                                diagnostic.ingress_turns,
+                                diagnostic.service_tick_turns,
+                                diagnostic.transmit_egress_turns,
+                                diagnostic.deferred_diagnostic_turns,
+                            ));
+                            let state = format_message(format_args!(
+                                "netstats: isolated_state cmd_q={} output_q={} pending_egress={} awaiting_batch={} producer_open={} drains={} ingress_bp={} ingress_drop={}",
+                                diagnostic.command_queue,
+                                diagnostic.output_queue,
+                                Self::yes_no(diagnostic.pending_egress),
+                                Self::yes_no(diagnostic.awaiting_batch_drain),
+                                Self::yes_no(diagnostic.producer_open),
+                                diagnostic.response_drains,
+                                diagnostic.ingress_backpressure,
+                                diagnostic.ingress_dropped,
+                            ));
+                            (progress, units, state)
+                        });
                         let line_one = format_message(format_args!(
                             "netstats: rx_pkts={} tx_pkts={} rx_used={} tx_used={} polls={}",
                             stats.rx_packets,
@@ -26925,6 +27047,11 @@ where
                         self.emit_console_line(line_local_seat.as_str());
                         self.emit_console_line(line_four.as_str());
                         self.emit_console_line(line_five.as_str());
+                        if let Some((progress, units, state)) = isolated_lines {
+                            self.emit_console_line(progress.as_str());
+                            self.emit_console_line(units.as_str());
+                            self.emit_console_line(state.as_str());
+                        }
                         if net_status_active_interface_is_wifi(&status) {
                             #[cfg(feature = "kernel")]
                             {
@@ -28867,8 +28994,8 @@ mod tests {
     };
     #[cfg(feature = "net-console")]
     use crate::net::{
-        NetCounters, NetSelfTestReport, NetSelfTestResult, NetSelfTestStartResult, NetStatusReport,
-        NetTelemetry,
+        IsolatedConsoleDiagnostics, NetCounters, NetSelfTestReport, NetSelfTestResult,
+        NetSelfTestStartResult, NetStatusReport, NetTelemetry,
     };
     #[cfg(feature = "kernel")]
     use crate::ninedoor::NineDoorBridge;
@@ -33334,6 +33461,14 @@ mod tests {
                 sdio_completion_code: 1,
                 sdio_completion_detail: 1,
                 sdio_completion_result: 0,
+                sdio_completion_frame_offset: 0x0000_0704,
+                sdio_completion_frame_len:
+                    pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_BYTES,
+                sdio_completion_frame_flags:
+                    pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_FRAME_FLAG_CONTAINED,
+                sdio_fault_frame_observed: true,
+                sdio_fault_words: [u32::MAX;
+                    pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_WORDS],
                 runtime_recovery_source_line: 39_579,
             },
         };
@@ -33470,6 +33605,10 @@ mod tests {
             KernelConsoleTestPump::wifi_diag_deferred_recovery_scheduler_line(recovery),
             KernelConsoleTestPump::wifi_diag_deferred_recovery_scheduler_edge_line(recovery),
             KernelConsoleTestPump::wifi_diag_deferred_recovery_scheduler_sdio_line(recovery),
+            KernelConsoleTestPump::wifi_diag_deferred_recovery_scheduler_sdio_fault_line(recovery),
+            KernelConsoleTestPump::wifi_diag_deferred_recovery_scheduler_sdio_status_line(recovery),
+            KernelConsoleTestPump::wifi_diag_deferred_recovery_scheduler_sdio_dma_line(recovery),
+            KernelConsoleTestPump::wifi_diag_deferred_recovery_scheduler_sdio_regs_line(recovery),
             KernelConsoleTestPump::wifi_diag_logical_control_owner_line(Some(owner)),
             KernelConsoleTestPump::wifi_diag_terminal_drain_physical_line(terminal),
             KernelConsoleTestPump::wifi_diag_terminal_drain_completion_line(terminal),
@@ -33500,10 +33639,10 @@ mod tests {
         assert!(lines[5].contains(
             "request=4294967295 issued=yes accepted=yes finite_tx=yes join_tx_committed=yes"
         ));
-        assert!(lines[19].contains(
+        assert!(lines[23].contains(
             "scope=boot-first present=yes generation=4294967295 pair_epoch=18446744073709551615 source_stage=cyw43-runtime-event-frame"
         ));
-        assert!(lines[20].contains(
+        assert!(lines[24].contains(
             "type=0xff status=0xffffffff reason=0xffffffff auth_type=0xffffffff join_request=4294967295 join_issued=yes join_accepted=yes join_tx_committed=yes"
         ));
         assert!(lines[6].contains(
@@ -33607,10 +33746,21 @@ mod tests {
             "scope=first-pre-fence observed=yes command=eff090d9/0003/0001/43595734/ffffffff"
         ));
         assert!(lines[12].contains("completion=00000002/0001/0001/00000000"));
-        assert!(lines[13].contains("active=yes generation=1"));
-        assert!(lines[13].contains("cmd=0x0000001a id=37"));
-        assert!(lines[15].contains("code=5 code_name=fault"));
-        assert!(lines[15].contains("detail=0x0001 detail_name=rejected-command"));
+        assert!(lines[13].contains(
+            "captured=yes frame=00000704/0074/0001 command=ffffffff/ffffffff/ffffffff/ffffffff"
+        ));
+        assert!(lines[14].contains(
+            "captured=yes present=ffffffff int=ffffffff response=ffffffff host_clock=ffffffff failure=ffffffff block=ffffffff"
+        ));
+        assert!(lines[15]
+            .contains("captured=yes dma=ffffffff/ffffffff/ffffffff cb=ffffffff/ffffffff/ffffffff"));
+        assert!(lines[16].contains(
+            "captured=yes host=ffffffff/ffffffff/ffffffff/ffffffff/ffffffff/ffffffff dma_tail=ffffffff/ffffffff/ffffffff"
+        ));
+        assert!(lines[17].contains("active=yes generation=1"));
+        assert!(lines[17].contains("cmd=0x0000001a id=37"));
+        assert!(lines[19].contains("code=5 code_name=fault"));
+        assert!(lines[19].contains("detail=0x0001 detail_name=rejected-command"));
         for (result, expected) in [
             (0x5344_0001, "sdio-intake-seal-busy"),
             (0x5344_0002, "sdio-intake-seal-missing"),
@@ -33659,14 +33809,14 @@ mod tests {
             control_fault_line.contains("detail=0x530b detail_name=cyw43-control-exchange"),
             "{control_fault_line}",
         );
-        assert!(lines[16].contains("offset=0 len=0"));
-        assert!(lines[17].contains("terminal=no owner_conflict=yes"));
-        assert!(lines[17].contains("owner_scope=root-logical-capture"));
-        assert!(lines[17].contains("owner_cmd=0x0000001a owner_id=37"));
-        assert!(lines[18].contains(
+        assert!(lines[20].contains("offset=0 len=0"));
+        assert!(lines[21].contains("terminal=no owner_conflict=yes"));
+        assert!(lines[21].contains("owner_scope=root-logical-capture"));
+        assert!(lines[21].contains("owner_cmd=0x0000001a owner_id=37"));
+        assert!(lines[22].contains(
             "service_turns=4294967295 join_starts=4294967295 control_progress=ordinary-network-turn"
         ));
-        assert!(lines[14].contains("completion_sequence=3907 exact_request_match=yes"));
+        assert!(lines[18].contains("completion_sequence=3907 exact_request_match=yes"));
         assert_eq!(
             KernelConsoleTestPump::wifi_diag_logical_control_owner_line(None).as_str(),
             "wifi: logical_control_owner active=no",
@@ -34844,6 +34994,7 @@ mod tests {
         poll_observer: Option<std::rc::Rc<core::cell::Cell<usize>>>,
         send_observer: Option<std::rc::Rc<core::cell::Cell<usize>>>,
         response_batch_capacity: Option<usize>,
+        isolated_diagnostics: Option<IsolatedConsoleDiagnostics>,
     }
 
     #[cfg(feature = "net-console")]
@@ -34891,6 +35042,7 @@ mod tests {
                 poll_observer: None,
                 send_observer: None,
                 response_batch_capacity: None,
+                isolated_diagnostics: None,
             }
         }
 
@@ -35182,6 +35334,10 @@ mod tests {
 
         fn self_test_report(&self) -> NetSelfTestReport {
             self.self_test_report.clone()
+        }
+
+        fn isolated_console_diagnostics(&self) -> Option<IsolatedConsoleDiagnostics> {
+            self.isolated_diagnostics
         }
 
         fn status_report(&self) -> NetStatusReport {
@@ -40163,6 +40319,29 @@ mod tests {
         net.status.dhcp_phase = "bound";
         net.status.ip.push_str("192.168.10.50").unwrap();
         net.status.gateway.push_str("192.168.10.1").unwrap();
+        net.isolated_diagnostics = Some(IsolatedConsoleDiagnostics {
+            generation: 4,
+            last_poll_ms: 900,
+            last_progress_ms: 850,
+            last_unit: "ingress",
+            turns: 70,
+            progress_turns: 12,
+            observe_child_turns: 14,
+            stage_output_turns: 13,
+            disconnect_turns: 11,
+            ingress_turns: 12,
+            service_tick_turns: 10,
+            transmit_egress_turns: 8,
+            deferred_diagnostic_turns: 2,
+            command_queue: 1,
+            output_queue: 3,
+            pending_egress: true,
+            awaiting_batch_drain: true,
+            producer_open: false,
+            response_drains: 9,
+            ingress_backpressure: 5,
+            ingress_dropped: 0,
+        });
         let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
         pump.session = Some(SessionRole::Queen);
         pump.serial_mut().driver_mut().push_rx(b"netstats\n");
@@ -40200,6 +40379,24 @@ mod tests {
         assert!(
             rendered
                 .contains("netstats: proof_policy m26d_net_first=no physical_input_yield=enabled"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains(
+                "netstats: isolated_progress generation=4 poll_ms=900 progress_ms=850 unit=ingress turns=70 progress=12"
+            ),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains(
+                "netstats: isolated_units observe=14 output=13 disconnect=11 ingress=12 tick=10 egress=8 diagnostic=2"
+            ),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains(
+                "netstats: isolated_state cmd_q=1 output_q=3 pending_egress=yes awaiting_batch=yes producer_open=no drains=9 ingress_bp=5 ingress_drop=0"
+            ),
             "{rendered}"
         );
         assert!(
@@ -44028,17 +44225,21 @@ mod tests {
             KernelConsoleTestPump::wifi_diag_deferred_recovery_scheduler_line(recovery),
             KernelConsoleTestPump::wifi_diag_deferred_recovery_scheduler_edge_line(recovery),
             KernelConsoleTestPump::wifi_diag_deferred_recovery_scheduler_sdio_line(recovery),
+            KernelConsoleTestPump::wifi_diag_deferred_recovery_scheduler_sdio_fault_line(recovery),
+            KernelConsoleTestPump::wifi_diag_deferred_recovery_scheduler_sdio_status_line(recovery),
+            KernelConsoleTestPump::wifi_diag_deferred_recovery_scheduler_sdio_dma_line(recovery),
+            KernelConsoleTestPump::wifi_diag_deferred_recovery_scheduler_sdio_regs_line(recovery),
         ];
         let retained: Vec<&str> = pump
             .pending_cyw43_bootstrap_serial_milestones
             .iter()
             .map(|line| line.as_str())
             .collect();
-        assert_eq!(retained.len(), 8);
-        for (actual, expected) in retained.iter().take(7).zip(expected.iter()) {
+        assert_eq!(retained.len(), 12);
+        for (actual, expected) in retained.iter().take(11).zip(expected.iter()) {
             assert_eq!(*actual, expected.as_str());
         }
-        assert_eq!(retained[7], pair_recovery);
+        assert_eq!(retained[11], pair_recovery);
 
         // Model the next PoisonGeneration teardown after the output
         // transaction is already retained. The causal snapshot and its queued

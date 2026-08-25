@@ -1993,14 +1993,24 @@ where
                 }
                 accepted = accepted.saturating_add(1);
             }
-            self.linked_rx_due = false;
-            return accepted != 0;
+            let activity = accepted != 0;
+            // A frame that consumed its RX grant can leave the runtime's
+            // combined mini-UART IRQ handler active. Preserve one explicit
+            // owner turn to re-sample and ACK that level before TX is allowed
+            // to occupy the reciprocal command ring.
+            self.linked_rx_due = activity;
+            return activity;
         }
         let contract = <D as SerialDriver>::driver_task_contract();
         match self.poll_driver_task_rx_turn(contract) {
             LinkedSerialTurnOutcome::Pending => false,
             LinkedSerialTurnOutcome::Complete { activity } => {
-                self.linked_rx_due = false;
+                // An active RX completion proves bytes were copied, not that
+                // the runtime had grant left to rearm the shared UART IRQ.
+                // Keep RX authoritative until one subsequent empty completion
+                // closes that handshake; otherwise TX can strand after the
+                // first hardware FIFO quantum behind the unacknowledged IRQ.
+                self.linked_rx_due = activity;
                 activity
             }
             LinkedSerialTurnOutcome::Failed => {
@@ -2406,7 +2416,7 @@ where
     fn poll_driver_task_rx_into_queue(&mut self, contract: DriverTaskContract) -> bool {
         match self.poll_driver_task_rx_turn(contract) {
             LinkedSerialTurnOutcome::Complete { activity } => {
-                self.linked_rx_due = false;
+                self.linked_rx_due = activity;
                 activity
             }
             LinkedSerialTurnOutcome::Pending => false,
@@ -4666,7 +4676,7 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn linked_runtime_tx_chunk_forces_rx_before_the_next_chunk() {
+    fn linked_runtime_rx_activity_forces_rearm_before_the_next_tx_chunk() {
         struct LinkedRuntimeTestReset;
 
         impl Drop for LinkedRuntimeTestReset {
@@ -4689,6 +4699,12 @@ mod tests {
         assert!(port.service_linked_runtime_only_turn());
         assert!(test_take_linked_runtime_only_tx().is_empty());
         assert_eq!(port.next_line().unwrap().as_str(), "wifi diag");
+
+        assert!(!port.service_linked_runtime_only_turn());
+        assert!(
+            test_take_linked_runtime_only_tx().is_empty(),
+            "RX activity must retain one empty owner turn to rearm the shared UART IRQ",
+        );
 
         assert!(!port.service_linked_runtime_only_turn());
         assert_eq!(test_take_linked_runtime_only_tx().len(), 128);

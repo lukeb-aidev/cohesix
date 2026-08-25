@@ -22,15 +22,16 @@ use smoltcp::phy::{Device, DeviceCapabilities, Medium, RxToken, TxToken};
 use smoltcp::time::Instant;
 use smoltcp::wire::{EthernetAddress, Ipv4Address};
 
+use super::isolated_self_test::{IsolatedSelfTestObservation, IsolatedSelfTestState};
 #[cfg(feature = "net-backend-virtio")]
 use super::ConsoleNetConfig;
 use super::{
     select_isolated_direct_network_turn, select_isolated_direct_response_turn,
     select_isolated_network_turn, select_isolated_response_turn, ConsoleLine,
-    IsolatedNetworkLowerCursor, IsolatedNetworkLowerUnit, IsolatedNetworkTurnOutcome,
-    IsolatedNetworkTurnSelection, IsolatedNetworkTurnUnit, NetConsoleDisconnectReason,
-    NetConsoleEvent, NetCounters, NetDevice, NetDeviceCounters, NetPoller, NetStatusReport,
-    NetTelemetry,
+    IsolatedConsoleDiagnostics, IsolatedNetworkLowerCursor, IsolatedNetworkLowerUnit,
+    IsolatedNetworkTurnOutcome, IsolatedNetworkTurnSelection, IsolatedNetworkTurnUnit,
+    NetConsoleDisconnectReason, NetConsoleEvent, NetCounters, NetDevice, NetDeviceCounters,
+    NetPoller, NetSelfTestReport, NetSelfTestStartResult, NetStatusReport, NetTelemetry,
 };
 use crate::console_network_service::{BoundaryError, ConsoleNetworkContainmentTurn, ServiceState};
 use crate::drivers::driver_task_net::Cyw43DriverTaskDevice;
@@ -88,6 +89,77 @@ struct ResponseLane {
     awaiting_batch: Option<PendingResponseBatch>,
     producer_open: bool,
     completed_responses: u16,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct IsolatedTurnTelemetry {
+    last_progress_ms: u64,
+    last_unit: &'static str,
+    turns: u64,
+    progress_turns: u64,
+    observe_child_turns: u64,
+    stage_output_turns: u64,
+    disconnect_turns: u64,
+    ingress_turns: u64,
+    service_tick_turns: u64,
+    transmit_egress_turns: u64,
+    deferred_diagnostic_turns: u64,
+}
+
+impl IsolatedTurnTelemetry {
+    const fn new() -> Self {
+        Self {
+            last_progress_ms: 0,
+            last_unit: "none",
+            turns: 0,
+            progress_turns: 0,
+            observe_child_turns: 0,
+            stage_output_turns: 0,
+            disconnect_turns: 0,
+            ingress_turns: 0,
+            service_tick_turns: 0,
+            transmit_egress_turns: 0,
+            deferred_diagnostic_turns: 0,
+        }
+    }
+
+    fn record(&mut self, now_ms: u64, unit: IsolatedNetworkTurnUnit, progress: bool) {
+        self.turns = self.turns.saturating_add(1);
+        self.last_unit = match unit {
+            IsolatedNetworkTurnUnit::DeferredDiagnostic => {
+                self.deferred_diagnostic_turns = self.deferred_diagnostic_turns.saturating_add(1);
+                "diagnostic"
+            }
+            IsolatedNetworkTurnUnit::TransmitEgress => {
+                self.transmit_egress_turns = self.transmit_egress_turns.saturating_add(1);
+                "egress"
+            }
+            IsolatedNetworkTurnUnit::Lower(IsolatedNetworkLowerUnit::ObserveChild) => {
+                self.observe_child_turns = self.observe_child_turns.saturating_add(1);
+                "observe"
+            }
+            IsolatedNetworkTurnUnit::Lower(IsolatedNetworkLowerUnit::StageOutput) => {
+                self.stage_output_turns = self.stage_output_turns.saturating_add(1);
+                "output"
+            }
+            IsolatedNetworkTurnUnit::Lower(IsolatedNetworkLowerUnit::Disconnect) => {
+                self.disconnect_turns = self.disconnect_turns.saturating_add(1);
+                "disconnect"
+            }
+            IsolatedNetworkTurnUnit::Lower(IsolatedNetworkLowerUnit::Ingress) => {
+                self.ingress_turns = self.ingress_turns.saturating_add(1);
+                "ingress"
+            }
+            IsolatedNetworkTurnUnit::Lower(IsolatedNetworkLowerUnit::ServiceTick) => {
+                self.service_tick_turns = self.service_tick_turns.saturating_add(1);
+                "tick"
+            }
+        };
+        if progress {
+            self.progress_turns = self.progress_turns.saturating_add(1);
+            self.last_progress_ms = now_ms;
+        }
+    }
 }
 
 impl ResponseLane {
@@ -240,6 +312,9 @@ pub struct IsolatedNetworkConsole<D: NetDevice> {
     connection_bytes_written: u64,
     ingest_backpressure: u64,
     ingest_dropped: u64,
+    response_drains: u64,
+    self_test: IsolatedSelfTestState,
+    turn_telemetry: IsolatedTurnTelemetry,
     profile_backend: &'static str,
     backend: &'static str,
     active_driver: &'static str,
@@ -402,6 +477,7 @@ impl IsolatedNetworkConsole<DirectVirtioChildDevice> {
             "wired",
             "dev-virt-isolated-child",
             "disabled",
+            true,
         )))
     }
 }
@@ -425,6 +501,7 @@ impl<D: NetDevice> IsolatedNetworkConsole<D> {
         active_interface: &'static str,
         address_source: &'static str,
         dhcp_phase: &'static str,
+        self_test_enabled: bool,
     ) -> Self {
         Self {
             device,
@@ -464,6 +541,9 @@ impl<D: NetDevice> IsolatedNetworkConsole<D> {
             connection_bytes_written: 0,
             ingest_backpressure: 0,
             ingest_dropped: 0,
+            response_drains: 0,
+            self_test: IsolatedSelfTestState::new(self_test_enabled),
+            turn_telemetry: IsolatedTurnTelemetry::new(),
             profile_backend,
             backend,
             active_driver,
@@ -973,6 +1053,7 @@ impl<D: NetDevice> IsolatedNetworkConsole<D> {
                     }
                     batch.output_drained = true;
                 }
+                self.response_drains = self.response_drains.saturating_add(1);
                 self.settle_completed_response_batch();
             }
             ExchangeKind::Rejected | ExchangeKind::PacketConsumed => {}
@@ -1211,6 +1292,76 @@ impl<D: NetDevice> IsolatedNetworkConsole<D> {
         self.counters.tx_zero_len_attempt = device.tx_zero_len_attempt;
     }
 
+    fn service_self_test(&mut self) -> bool {
+        if !self.self_test.running() {
+            return false;
+        }
+        let authenticated_connection = self.authenticated_connection;
+        let output_drained = authenticated_connection.is_some_and(|connection_id| {
+            self.output.is_empty()
+                && self.pending_egress.is_none()
+                && self.response_lane.is_none()
+                && self.runtime.console_output_drained(connection_id)
+        });
+        let observation = IsolatedSelfTestObservation {
+            now_ms: self.last_now_ms,
+            direct_virtio: self.runtime.direct_virtio(),
+            tx_complete: self.counters.tx_complete,
+            rx_packets: self.counters.rx_packets,
+            tcp_rx_bytes: self.counters.tcp_rx_bytes,
+            connection_bytes_written: self.connection_bytes_written,
+            response_drains: self.response_drains,
+            authenticated_connection,
+            listener_ready: self.listener_ready,
+            output_drained,
+        };
+        let Some(result) = self.self_test.observe(observation) else {
+            return false;
+        };
+        log::info!(
+            "[net-selftest] result generation={} run_generation={} tx_ok={} udp_echo_ok={} tcp_ok={} console_ok={} peer_assisted_ok={} result={}",
+            self.runtime.generation(),
+            self.self_test.run_generation(),
+            result.tx_ok,
+            result.udp_echo_ok,
+            result.tcp_ok,
+            result.console_ok,
+            result.peer_assisted_ok,
+            result.verdict(),
+        );
+        true
+    }
+
+    fn isolated_console_diagnostics(&self) -> IsolatedConsoleDiagnostics {
+        let (awaiting_batch_drain, producer_open) =
+            self.response_lane.map_or((false, false), |lane| {
+                (lane.awaiting_batch.is_some(), lane.producer_open)
+            });
+        IsolatedConsoleDiagnostics {
+            generation: self.runtime.generation(),
+            last_poll_ms: self.last_now_ms,
+            last_progress_ms: self.turn_telemetry.last_progress_ms,
+            last_unit: self.turn_telemetry.last_unit,
+            turns: self.turn_telemetry.turns,
+            progress_turns: self.turn_telemetry.progress_turns,
+            observe_child_turns: self.turn_telemetry.observe_child_turns,
+            stage_output_turns: self.turn_telemetry.stage_output_turns,
+            disconnect_turns: self.turn_telemetry.disconnect_turns,
+            ingress_turns: self.turn_telemetry.ingress_turns,
+            service_tick_turns: self.turn_telemetry.service_tick_turns,
+            transmit_egress_turns: self.turn_telemetry.transmit_egress_turns,
+            deferred_diagnostic_turns: self.turn_telemetry.deferred_diagnostic_turns,
+            command_queue: self.lines.len(),
+            output_queue: self.output.len(),
+            pending_egress: self.pending_egress.is_some(),
+            awaiting_batch_drain,
+            producer_open,
+            response_drains: self.response_drains,
+            ingress_backpressure: self.ingest_backpressure,
+            ingress_dropped: self.ingest_dropped,
+        }
+    }
+
     #[inline(never)]
     fn poll_deferred_diagnostic_unit(&mut self) -> IsolatedNetworkTurnOutcome {
         // A successful TX owned the prior Network visit. Drain its one compact
@@ -1325,6 +1476,8 @@ impl<D: NetDevice> IsolatedNetworkConsole<D> {
             }
         };
         let (lower_cursor, activity) = selection.finish(outcome);
+        self.turn_telemetry
+            .record(now_ms, selection.unit(), activity);
         self.lower_cursor =
             if selection.unit() == IsolatedNetworkTurnUnit::TransmitEgress && activity {
                 // A retained child TCP egress publication has now crossed the NIC
@@ -1336,7 +1489,8 @@ impl<D: NetDevice> IsolatedNetworkConsole<D> {
             };
         self.complete_response_lane_if_drained();
         self.refresh_device_counters();
-        activity && !self.faulted
+        let self_test_progress = self.service_self_test();
+        (activity || self_test_progress) && !self.faulted
     }
 }
 
@@ -1389,6 +1543,8 @@ impl<D: NetDevice> NetPoller for IsolatedNetworkConsole<D> {
             }
         };
         let (lower_cursor, activity) = selection.finish(outcome);
+        self.turn_telemetry
+            .record(now_ms, selection.unit(), activity);
         self.lower_cursor = lower_cursor;
         self.complete_response_lane_if_drained();
         if self.faulted {
@@ -1396,7 +1552,7 @@ impl<D: NetDevice> NetPoller for IsolatedNetworkConsole<D> {
             return false;
         }
         self.refresh_device_counters();
-        activity
+        activity || self.service_self_test()
     }
 
     fn poll_with_budget(
@@ -1557,6 +1713,55 @@ impl<D: NetDevice> NetPoller for IsolatedNetworkConsole<D> {
 
     fn console_listener_ready(&self) -> bool {
         self.listener_ready && !self.faulted && !self.terminal
+    }
+
+    fn start_self_test(&mut self, now_ms: u64) -> NetSelfTestStartResult {
+        if !self.self_test.enabled() {
+            return NetSelfTestStartResult::SelfTestDisabled;
+        }
+        if self.faulted || self.terminal {
+            return NetSelfTestStartResult::PolicyDisabled;
+        }
+        if self.ip.is_unspecified() || (self.mode == "dhcp" && self.dhcp_phase != "bound") {
+            return NetSelfTestStartResult::DhcpPending;
+        }
+        if !self.runtime.activated() || !self.listener_ready {
+            return NetSelfTestStartResult::NotReadyBootstrapCommit;
+        }
+        self.refresh_device_counters();
+        if self.self_test.start(
+            now_ms,
+            self.counters.tx_complete,
+            self.counters.rx_packets,
+            self.counters.tcp_rx_bytes,
+            self.connection_bytes_written,
+            self.response_drains,
+            self.authenticated_connection,
+        ) {
+            NetSelfTestStartResult::Started
+        } else {
+            NetSelfTestStartResult::SelfTestDisabled
+        }
+    }
+
+    fn self_test_report(&self) -> NetSelfTestReport {
+        let mut udp_target = HeaplessString::new();
+        let _ = udp_target.push_str("peer-assisted");
+        let mut tcp_target = HeaplessString::new();
+        let _ = write!(tcp_target, "{}:{}", self.ip, self.listen_port);
+        NetSelfTestReport {
+            enabled: self.self_test.enabled(),
+            running: self.self_test.running(),
+            run_generation: self.self_test.run_generation(),
+            last_result: self.self_test.last_result(),
+            backend: self.active_driver,
+            udp_target,
+            tcp_target,
+        }
+    }
+
+    fn isolated_console_diagnostics(&self) -> Option<IsolatedConsoleDiagnostics> {
+        Some(IsolatedNetworkConsole::isolated_console_diagnostics(self))
     }
 
     fn status_report(&self) -> NetStatusReport {

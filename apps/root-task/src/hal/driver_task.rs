@@ -4832,6 +4832,11 @@ pub(crate) struct Cyw43FirstRecoverySchedulerSnapshot {
     pub(crate) sdio_completion_code: u16,
     pub(crate) sdio_completion_detail: u16,
     pub(crate) sdio_completion_result: u32,
+    pub(crate) sdio_completion_frame_offset: u32,
+    pub(crate) sdio_completion_frame_len: u16,
+    pub(crate) sdio_completion_frame_flags: u16,
+    pub(crate) sdio_fault_frame_observed: bool,
+    pub(crate) sdio_fault_words: [u32; pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_WORDS],
     pub(crate) runtime_recovery_source_line: u32,
 }
 
@@ -4869,6 +4874,11 @@ struct Cyw43FirstRecoverySchedulerState {
     sdio_completion_code: AtomicU32,
     sdio_completion_detail: AtomicU32,
     sdio_completion_result: AtomicU32,
+    sdio_completion_frame_offset: AtomicU32,
+    sdio_completion_frame_len: AtomicU32,
+    sdio_completion_frame_flags: AtomicU32,
+    sdio_fault_frame_observed: AtomicU32,
+    sdio_fault_words: [AtomicU32; pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_WORDS],
     runtime_recovery_source_line: AtomicU32,
 }
 
@@ -4906,6 +4916,12 @@ impl Cyw43FirstRecoverySchedulerState {
             sdio_completion_code: AtomicU32::new(0),
             sdio_completion_detail: AtomicU32::new(0),
             sdio_completion_result: AtomicU32::new(0),
+            sdio_completion_frame_offset: AtomicU32::new(0),
+            sdio_completion_frame_len: AtomicU32::new(0),
+            sdio_completion_frame_flags: AtomicU32::new(0),
+            sdio_fault_frame_observed: AtomicU32::new(0),
+            sdio_fault_words: [const { AtomicU32::new(0) };
+                pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_WORDS],
             runtime_recovery_source_line: AtomicU32::new(0),
         }
     }
@@ -10734,14 +10750,82 @@ pub(crate) struct DriverTaskSdioCommandRingSnapshot {
     pub completion_detail: u16,
     /// Completion result currently published by SDIO.
     pub completion_result: u32,
+    /// Frame descriptor currently published by SDIO.
+    pub completion_frame: DriverFrameDescriptor,
+    /// Exact stable SDIO fault payload, when the completion names one.
+    pub fault_frame: Option<DriverTaskSdioFaultFrameSnapshot>,
+}
+
+/// Stable, passive copy of one exact SDIO owner fault payload.
+///
+/// The fixed words remain in their ABI order so the diagnostic path preserves
+/// every register captured by the owner without gaining authority over it.
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct DriverTaskSdioFaultFrameSnapshot {
+    /// Ring-page offset named by the terminal completion.
+    pub offset: u32,
+    /// Owner containment disposition named by the terminal completion.
+    pub flags: u16,
+    /// Exact aligned payload words from magic through DMA debug.
+    pub words: [u32; pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_WORDS],
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_sdio_fault_frame_descriptor_valid(completion: DriverTaskCompletionRecord) -> bool {
+    let frame = completion.frame;
+    let offset = frame.offset as usize;
+    let Some(end) = offset.checked_add(usize::from(frame.len)) else {
+        return false;
+    };
+    completion.code == DriverTaskCompletionCode::Fault.as_u16()
+        && frame.len == pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_BYTES
+        && offset.is_multiple_of(core::mem::align_of::<u32>())
+        && matches!(
+            frame.flags,
+            pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_FRAME_FLAG_CONTAINED
+                | pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_FRAME_FLAG_OWNER_PATH_POISONED
+        )
+        && offset >= DRIVER_TASK_RING_FRAME_OFFSET
+        && end <= DRIVER_TASK_RING_PAGE_BYTES
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_read_sdio_fault_frame(
+    ring: &DriverTaskRingView,
+    completion: DriverTaskCompletionRecord,
+) -> Option<DriverTaskSdioFaultFrameSnapshot> {
+    if !driver_task_sdio_fault_frame_descriptor_valid(completion) {
+        return None;
+    }
+    let offset = completion.frame.offset as usize;
+    let mut words = [0u32; pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_WORDS];
+    for (index, word) in words.iter_mut().enumerate() {
+        *word = ring.read_u32(offset.checked_add(index * core::mem::size_of::<u32>())?)?;
+    }
+    if words[0] != pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_MAGIC
+        || words[1] != pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_VERSION
+        || words[pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_FAILURE_OFFSET
+            / core::mem::size_of::<u32>()]
+            != completion.result
+    {
+        return None;
+    }
+    Some(DriverTaskSdioFaultFrameSnapshot {
+        offset: completion.frame.offset,
+        flags: completion.frame.flags,
+        words,
+    })
 }
 
 #[cfg(feature = "kernel")]
 fn stable_sdio_command_ring_snapshot(
     first_command: DriverTaskCommandRecord,
     first_completion: DriverTaskCompletionRecord,
+    first_fault_frame: Option<DriverTaskSdioFaultFrameSnapshot>,
     second_command: DriverTaskCommandRecord,
     second_completion: DriverTaskCompletionRecord,
+    second_fault_frame: Option<DriverTaskSdioFaultFrameSnapshot>,
 ) -> Option<DriverTaskSdioCommandRingSnapshot> {
     if first_command != second_command || first_completion != second_completion {
         return None;
@@ -10756,6 +10840,8 @@ fn stable_sdio_command_ring_snapshot(
         completion_code: second_completion.code,
         completion_detail: second_completion.detail,
         completion_result: second_completion.result,
+        completion_frame: second_completion.frame,
+        fault_frame: (first_fault_frame == second_fault_frame).then_some(second_fault_frame)?,
     })
 }
 
@@ -10842,17 +10928,28 @@ pub(crate) fn driver_task_sdio_command_ring_snapshot() -> Option<DriverTaskSdioC
         let command = ring.read_command()?;
         driver_task_ring_invalidate_completion_record(ring_root_ptr);
         let completion = ring.read_completion_snapshot()?;
-        Some((command, completion))
+        let fault_frame = if driver_task_sdio_fault_frame_descriptor_valid(completion) {
+            driver_task_ring_invalidate_root_range(
+                ring_root_ptr.checked_add(completion.frame.offset as usize)?,
+                usize::from(completion.frame.len),
+            );
+            driver_task_read_sdio_fault_frame(&ring, completion)
+        } else {
+            None
+        };
+        Some((command, completion, fault_frame))
     };
-    let (first_command, first_completion) = read_records()?;
+    let (first_command, first_completion, first_fault_frame) = read_records()?;
     driver_task_shared_load_barrier();
-    let (second_command, second_completion) = read_records()?;
+    let (second_command, second_completion, second_fault_frame) = read_records()?;
     driver_task_shared_load_barrier();
     stable_sdio_command_ring_snapshot(
         first_command,
         first_completion,
+        first_fault_frame,
         second_command,
         second_completion,
+        second_fault_frame,
     )
 }
 
@@ -12590,6 +12687,39 @@ fn capture_first_cyw43_recovery_scheduler_snapshot_with_runtime_source(
         Ordering::Relaxed,
     );
     CYW43_FIRST_RECOVERY_SCHEDULER
+        .sdio_completion_frame_offset
+        .store(
+            sdio_ring.map_or(0, |ring| ring.completion_frame.offset),
+            Ordering::Relaxed,
+        );
+    CYW43_FIRST_RECOVERY_SCHEDULER
+        .sdio_completion_frame_len
+        .store(
+            u32::from(sdio_ring.map_or(0, |ring| ring.completion_frame.len)),
+            Ordering::Relaxed,
+        );
+    CYW43_FIRST_RECOVERY_SCHEDULER
+        .sdio_completion_frame_flags
+        .store(
+            u32::from(sdio_ring.map_or(0, |ring| ring.completion_frame.flags)),
+            Ordering::Relaxed,
+        );
+    let sdio_fault_frame = sdio_ring.and_then(|ring| ring.fault_frame);
+    CYW43_FIRST_RECOVERY_SCHEDULER
+        .sdio_fault_frame_observed
+        .store(u32::from(sdio_fault_frame.is_some()), Ordering::Relaxed);
+    for (target, value) in
+        CYW43_FIRST_RECOVERY_SCHEDULER
+            .sdio_fault_words
+            .iter()
+            .zip(sdio_fault_frame.map_or(
+                [0u32; pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_WORDS],
+                |frame| frame.words,
+            ))
+    {
+        target.store(value, Ordering::Relaxed);
+    }
+    CYW43_FIRST_RECOVERY_SCHEDULER
         .runtime_recovery_source_line
         .store(runtime_recovery_source_line, Ordering::Relaxed);
     // Sequence-last publication: readers cannot observe a partial tuple.
@@ -12712,6 +12842,22 @@ pub(crate) fn first_cyw43_recovery_scheduler_snapshot(
         sdio_completion_result: CYW43_FIRST_RECOVERY_SCHEDULER
             .sdio_completion_result
             .load(Ordering::Relaxed),
+        sdio_completion_frame_offset: CYW43_FIRST_RECOVERY_SCHEDULER
+            .sdio_completion_frame_offset
+            .load(Ordering::Relaxed),
+        sdio_completion_frame_len: CYW43_FIRST_RECOVERY_SCHEDULER
+            .sdio_completion_frame_len
+            .load(Ordering::Relaxed) as u16,
+        sdio_completion_frame_flags: CYW43_FIRST_RECOVERY_SCHEDULER
+            .sdio_completion_frame_flags
+            .load(Ordering::Relaxed) as u16,
+        sdio_fault_frame_observed: CYW43_FIRST_RECOVERY_SCHEDULER
+            .sdio_fault_frame_observed
+            .load(Ordering::Relaxed)
+            != 0,
+        sdio_fault_words: core::array::from_fn(|index| {
+            CYW43_FIRST_RECOVERY_SCHEDULER.sdio_fault_words[index].load(Ordering::Relaxed)
+        }),
         runtime_recovery_source_line: CYW43_FIRST_RECOVERY_SCHEDULER
             .runtime_recovery_source_line
             .load(Ordering::Relaxed),
@@ -19432,6 +19578,7 @@ fn driver_task_ring_call_trace_enabled(
             DriverTaskRingCommandMode::Steady
                 | DriverTaskRingCommandMode::NonBlocking
                 | DriverTaskRingCommandMode::PromptSlice
+                | DriverTaskRingCommandMode::RetainedTurn
         )
     {
         return false;
@@ -19441,7 +19588,10 @@ fn driver_task_ring_call_trace_enabled(
         && command.aux0 == 0
         && matches!(
             mode,
-            DriverTaskRingCommandMode::Steady | DriverTaskRingCommandMode::NonBlocking
+            DriverTaskRingCommandMode::Steady
+                | DriverTaskRingCommandMode::NonBlocking
+                | DriverTaskRingCommandMode::PromptSlice
+                | DriverTaskRingCommandMode::RetainedTurn
         )
     {
         return false;
@@ -19452,7 +19602,10 @@ fn driver_task_ring_call_trace_enabled(
         && command.frame.flags & DRIVER_TASK_RING_FLAG_INIT_DESCRIPTOR_NON_ACCEPTANCE == 0
         && matches!(
             mode,
-            DriverTaskRingCommandMode::Steady | DriverTaskRingCommandMode::NonBlocking
+            DriverTaskRingCommandMode::Steady
+                | DriverTaskRingCommandMode::NonBlocking
+                | DriverTaskRingCommandMode::PromptSlice
+                | DriverTaskRingCommandMode::RetainedTurn
         )
     {
         return false;
@@ -28064,8 +28217,9 @@ mod tests {
         command.aux0 = DRIVER_RUNTIME_CYW43_COMMAND_AUX;
         command.aux1 = 7;
         let completion = DriverTaskCompletionRecord::progress(2, 1);
-        let snapshot = stable_sdio_command_ring_snapshot(command, completion, command, completion)
-            .expect("two exact record pairs must expose passive ring evidence");
+        let snapshot =
+            stable_sdio_command_ring_snapshot(command, completion, None, command, completion, None)
+                .expect("two exact record pairs must expose passive ring evidence");
         assert_eq!(snapshot.command_sequence, 0xeff0_90d9);
         assert_eq!(snapshot.command_flags, DRIVER_TASK_RING_FLAG_ONE_WAY);
         assert_eq!(snapshot.command_aux0, DRIVER_RUNTIME_CYW43_COMMAND_AUX);
@@ -28075,16 +28229,135 @@ mod tests {
         let mut changed_command = command;
         changed_command.sequence = command.sequence.wrapping_add(1);
         assert_eq!(
-            stable_sdio_command_ring_snapshot(command, completion, changed_command, completion,),
+            stable_sdio_command_ring_snapshot(
+                command,
+                completion,
+                None,
+                changed_command,
+                completion,
+                None,
+            ),
             None,
             "a changing sequence-last command must fail closed",
         );
 
         let changed_completion = DriverTaskCompletionRecord::progress(command.sequence, 9);
         assert_eq!(
-            stable_sdio_command_ring_snapshot(command, completion, command, changed_completion,),
+            stable_sdio_command_ring_snapshot(
+                command,
+                completion,
+                None,
+                command,
+                changed_completion,
+                None,
+            ),
             None,
             "a changing completion must fail closed",
+        );
+
+        let first_fault_frame = DriverTaskSdioFaultFrameSnapshot {
+            offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
+            flags: pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_FRAME_FLAG_CONTAINED,
+            words: [0u32; pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_WORDS],
+        };
+        let mut second_fault_frame = first_fault_frame;
+        second_fault_frame.words
+            [pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_DMA_CS_OFFSET / 4] = 1;
+        assert_eq!(
+            stable_sdio_command_ring_snapshot(
+                command,
+                completion,
+                Some(first_fault_frame),
+                command,
+                completion,
+                Some(second_fault_frame),
+            ),
+            None,
+            "a changing fault payload must fail closed even when both records are stable",
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn sdio_fault_snapshot_preserves_exact_dma_state_and_rejects_invalid_frames() {
+        let mut ring = AlignedDriverTaskRing([0; DRIVER_TASK_RING_PAGE_BYTES / 4]);
+        let ring_root_ptr = ring.0.as_mut_ptr() as usize;
+        let frame_offset = DRIVER_TASK_RING_FRAME_OFFSET + 64;
+        let failure_result = 0x0600_0000;
+        let fault_words = &mut ring.0[frame_offset / core::mem::size_of::<u32>()
+            ..frame_offset / core::mem::size_of::<u32>()
+                + pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_WORDS];
+        fault_words[0] = pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_MAGIC;
+        fault_words[1] = pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_VERSION;
+        fault_words[pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_PRESENT_OFFSET / 4] = 0;
+        fault_words[pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_INT_STATUS_OFFSET / 4] =
+            0x0000_8000;
+        fault_words[pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_FAILURE_OFFSET / 4] =
+            failure_result;
+        fault_words[pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_DMA_CS_OFFSET / 4] =
+            0x0000_0100;
+        fault_words[pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_DMA_CONBLK_OFFSET / 4] =
+            0xc100_0080;
+        fault_words[pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_DMA_DEBUG_OFFSET / 4] =
+            0x0000_0007;
+        let completion = DriverTaskCompletionRecord {
+            sequence: 5,
+            code: DriverTaskCompletionCode::Fault.as_u16(),
+            detail: 0x5104,
+            result: failure_result,
+            frame: DriverFrameDescriptor {
+                offset: frame_offset as u32,
+                len: pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_BYTES,
+                flags: pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_FRAME_FLAG_CONTAINED,
+            },
+        };
+        let view = DriverTaskRingView::new(ring_root_ptr).expect("aligned test ring view");
+        let snapshot = driver_task_read_sdio_fault_frame(&view, completion)
+            .expect("an exact contained telemetry frame must remain observable");
+        assert_eq!(snapshot.offset, frame_offset as u32);
+        assert_eq!(
+            snapshot.words
+                [pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_DMA_CONBLK_OFFSET / 4],
+            0xc100_0080,
+        );
+        assert_eq!(
+            snapshot.words
+                [pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_DMA_DEBUG_OFFSET / 4],
+            7,
+        );
+
+        let mut invalid_cursor = completion;
+        invalid_cursor.frame.offset = (DRIVER_TASK_RING_PAGE_BYTES - 4) as u32;
+        assert_eq!(
+            driver_task_read_sdio_fault_frame(&view, invalid_cursor),
+            None,
+            "a frame cursor outside the ring must fail closed",
+        );
+
+        let mut unaligned_cursor = completion;
+        unaligned_cursor.frame.offset = completion.frame.offset.wrapping_add(1);
+        assert_eq!(
+            driver_task_read_sdio_fault_frame(&view, unaligned_cursor),
+            None,
+            "an unaligned word-frame cursor must fail closed",
+        );
+
+        let failure_index = (frame_offset
+            + pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_FAILURE_OFFSET)
+            / core::mem::size_of::<u32>();
+        // SAFETY: `failure_index` names the validated failure word inside this
+        // test-owned ring page. Volatile mutation models a child publication
+        // after the root-side view was admitted.
+        unsafe {
+            core::ptr::write_volatile(
+                ring.0.as_mut_ptr().add(failure_index),
+                failure_result.wrapping_add(1),
+            );
+        }
+        assert_eq!(
+            driver_task_read_sdio_fault_frame(&view, completion),
+            None,
+            "a payload from another terminal cannot be attributed to this completion",
         );
     }
 
@@ -30906,7 +31179,29 @@ mod tests {
         command.flags = DRIVER_TASK_RING_FLAG_ONE_WAY;
         command.aux0 = DRIVER_RUNTIME_CYW43_COMMAND_AUX;
         command.aux1 = 0x4359_0001;
-        let completion = DriverTaskCompletionRecord::progress(2, 1);
+        let fault_frame_offset = DRIVER_TASK_RING_FRAME_OFFSET + 64;
+        let fault_result = 0x0600_0000;
+        let completion = DriverTaskCompletionRecord {
+            sequence: 5,
+            code: DriverTaskCompletionCode::Fault.as_u16(),
+            detail: 0x5104,
+            result: fault_result,
+            frame: DriverFrameDescriptor {
+                offset: fault_frame_offset as u32,
+                len: pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_BYTES,
+                flags: pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_FRAME_FLAG_CONTAINED,
+            },
+        };
+        let fault_words = &mut sdio_ring.0[fault_frame_offset / 4
+            ..fault_frame_offset / 4 + pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_WORDS];
+        fault_words[0] = pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_MAGIC;
+        fault_words[1] = pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_VERSION;
+        fault_words[pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_FAILURE_OFFSET / 4] =
+            fault_result;
+        fault_words[pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_DMA_CS_OFFSET / 4] = 0x100;
+        fault_words[pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_DMA_CONBLK_OFFSET / 4] =
+            0xc100_0080;
+        fault_words[pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_DMA_DEBUG_OFFSET / 4] = 7;
         // SAFETY: Both records are written to their fixed ABI offsets in the
         // aligned test-owned page before the recovery snapshot reads it.
         unsafe {
@@ -30931,6 +31226,28 @@ mod tests {
         assert_eq!(retained.sdio_completion_code, completion.code);
         assert_eq!(retained.sdio_completion_detail, completion.detail);
         assert_eq!(retained.sdio_completion_result, completion.result);
+        assert_eq!(
+            retained.sdio_completion_frame_offset,
+            completion.frame.offset
+        );
+        assert_eq!(retained.sdio_completion_frame_len, completion.frame.len);
+        assert_eq!(retained.sdio_completion_frame_flags, completion.frame.flags);
+        assert!(retained.sdio_fault_frame_observed);
+        assert_eq!(
+            retained.sdio_fault_words
+                [pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_DMA_CS_OFFSET / 4],
+            0x100,
+        );
+        assert_eq!(
+            retained.sdio_fault_words
+                [pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_DMA_CONBLK_OFFSET / 4],
+            0xc100_0080,
+        );
+        assert_eq!(
+            retained.sdio_fault_words
+                [pi4_driver_abi::DRIVER_RUNTIME_SDIO_FAULT_TELEMETRY_DMA_DEBUG_OFFSET / 4],
+            7,
+        );
 
         clear_driver_task_transport(CYW43_WIFI_DRIVER_TASK_CONTRACT);
         clear_driver_task_transport(SDIO_HOST_DRIVER_TASK_CONTRACT);
@@ -34750,6 +35067,16 @@ mod tests {
             hdmi,
             DriverTaskRingCommandMode::NonBlocking
         ));
+        assert!(!driver_task_ring_call_trace_enabled(
+            HDMI_TEXT_DRIVER_TASK_CONTRACT,
+            hdmi,
+            DriverTaskRingCommandMode::PromptSlice
+        ));
+        assert!(!driver_task_ring_call_trace_enabled(
+            HDMI_TEXT_DRIVER_TASK_CONTRACT,
+            hdmi,
+            DriverTaskRingCommandMode::RetainedTurn
+        ));
     }
 
     #[cfg(feature = "kernel")]
@@ -34832,6 +35159,11 @@ mod tests {
             CYW43_WIFI_DRIVER_TASK_CONTRACT,
             rx_command,
             DriverTaskRingCommandMode::PromptSlice
+        ));
+        assert!(!driver_task_ring_call_trace_enabled(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            rx_command,
+            DriverTaskRingCommandMode::RetainedTurn
         ));
         assert!(!driver_task_ring_completion_trace_enabled(
             false,
@@ -39558,6 +39890,16 @@ mod tests {
             rx_command,
             DriverTaskRingCommandMode::NonBlocking
         ));
+        assert!(!driver_task_ring_call_trace_enabled(
+            GENET_DRIVER_TASK_CONTRACT,
+            rx_command,
+            DriverTaskRingCommandMode::PromptSlice
+        ));
+        assert!(!driver_task_ring_call_trace_enabled(
+            GENET_DRIVER_TASK_CONTRACT,
+            rx_command,
+            DriverTaskRingCommandMode::RetainedTurn
+        ));
 
         let tx_command = DriverTaskCommandRecord::pi4_hot_path(
             91,
@@ -39573,6 +39915,16 @@ mod tests {
             GENET_DRIVER_TASK_CONTRACT,
             tx_command,
             DriverTaskRingCommandMode::NonBlocking
+        ));
+        assert!(!driver_task_ring_call_trace_enabled(
+            GENET_DRIVER_TASK_CONTRACT,
+            tx_command,
+            DriverTaskRingCommandMode::PromptSlice
+        ));
+        assert!(!driver_task_ring_call_trace_enabled(
+            GENET_DRIVER_TASK_CONTRACT,
+            tx_command,
+            DriverTaskRingCommandMode::RetainedTurn
         ));
         assert!(!driver_task_ring_completion_trace_enabled(
             false,
