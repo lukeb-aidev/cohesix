@@ -1537,7 +1537,13 @@ prove all of the following:
   episode must bind physical epoch, logical generation, immutable parent, SDIO
   child, terminal/exit, and pending mask; the latest child-timing row must keep
   publication, intake, issue, terminal, and final-consumer acceptance distinct;
-  grant and wake fields remain evidence rather than authority. A multi-record
+  grant and wake fields remain evidence rather than authority. The current
+  causal-progress row must render the passive SDIO command/completion tuple or
+  explicit unavailability. First-recovery coverage must retain the exact
+  delegated tuple before pair scrub only after two identical record-pair reads,
+  survive later transport cleanup, and prove that an unstable pair fails
+  closed. Snapshot collection must perform no wake, retry, consume, or owner
+  transition. A multi-record
   snapshot must say so and cannot replace Gate 7/8, DPC, DHCP, nettest, TCP, or
   authenticated-`cohsh` acceptance. Historical verbose `wifi diag` fixtures
   remain parseable, while new verbose proof belongs to `wifi dump-state`.

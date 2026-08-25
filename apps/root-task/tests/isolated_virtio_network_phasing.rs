@@ -1431,6 +1431,61 @@ fn isolated_ingress_uses_the_single_silent_rx_seam() {
 }
 
 #[test]
+fn genet_isolated_handoff_keeps_the_physical_pre_poll_lane_live() {
+    let source = include_str!("../src/net/stack.rs");
+    let genet = section(
+        source,
+        "impl GenetNetStack {",
+        "impl NetPoller for GenetNetStack",
+    );
+    let pre_poll = section(
+        genet,
+        "fn service_isolated_driver_pre_poll(&self)",
+        "fn service_isolated_driver_pre_poll_budgeted(",
+    );
+    assert!(pre_poll.contains("matches!(self.state, GenetNetState::Isolated { .. })"));
+    assert!(pre_poll.contains("register_driver_task_pointer_free_ring_service("));
+    assert!(pre_poll.contains("service_driver_task_pre_poll_burst("));
+    assert!(pre_poll.contains("DriverTaskHotPath::GenetNic"));
+
+    let budgeted_pre_poll = section(
+        genet,
+        "fn service_isolated_driver_pre_poll_budgeted(",
+        "fn inner(&self)",
+    );
+    assert!(budgeted_pre_poll.contains("service_driver_task_pre_poll_burst_budgeted("));
+    assert!(budgeted_pre_poll.contains("NET_RING_FLAG_BUDGETED"));
+
+    let poller = section(
+        source,
+        "impl NetPoller for GenetNetStack",
+        "impl NetPoller for Cyw43NetStack",
+    );
+    for entry in [
+        "fn poll(&mut self, now_ms: u64)",
+        "fn poll_with_budget(",
+        "fn flush_tcp_with_budget(",
+        "fn poll_console_response_with_budget(",
+    ] {
+        let entry_start = marker(poller, entry);
+        let body = &poller[entry_start..];
+        let next_method = body[entry.len()..]
+            .find("\n    fn ")
+            .map_or(body.len(), |offset| entry.len() + offset);
+        let body = &body[..next_method];
+        assert!(
+            body.contains("service_isolated_driver_pre_poll"),
+            "{entry} must preserve the physical GENET service lane after DHCP handoff",
+        );
+        assert!(
+            body.contains("activity || ring_progress")
+                || body.contains("inner.poll(now_ms)) || ring_progress"),
+            "{entry} must retain both driver and adapter progress",
+        );
+    }
+}
+
+#[test]
 fn isolated_tx_reclaim_path_suppresses_all_routine_info_formatting() {
     let source = include_str!("../src/drivers/virtio/net.rs");
     let transmit = section(

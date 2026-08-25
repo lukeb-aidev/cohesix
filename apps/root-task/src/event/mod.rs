@@ -9000,7 +9000,7 @@ where
             self.cyw43_bootstrap_hdmi_progress
                 .observe(1, frontier, self.now_ms);
         }
-        let mut lines = HeaplessVec::<HeaplessString<DEFAULT_LINE_CAPACITY>, 7>::new();
+        let mut lines = HeaplessVec::<HeaplessString<DEFAULT_LINE_CAPACITY>, 8>::new();
         if let Some(recovery) = recovery {
             for line in [
                 Self::wifi_diag_deferred_recovery_line(recovery, live_generation),
@@ -9009,6 +9009,7 @@ where
                 Self::wifi_diag_deferred_recovery_descriptor_line(recovery),
                 Self::wifi_diag_deferred_recovery_scheduler_line(recovery),
                 Self::wifi_diag_deferred_recovery_scheduler_edge_line(recovery),
+                Self::wifi_diag_deferred_recovery_scheduler_sdio_line(recovery),
             ] {
                 if lines.push(line).is_err() {
                     return false;
@@ -19520,6 +19521,27 @@ where
     }
 
     #[cfg(feature = "kernel")]
+    fn wifi_diag_deferred_recovery_scheduler_sdio_line(
+        recovery: crate::drivers::driver_task_net::Cyw43DeferredRecoveryDiagnostic,
+    ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
+        let scheduler = recovery.scheduler;
+        format_message(format_args!(
+            "wifi: deferred_recovery scheduler_sdio scope={} observed={} command={:08x}/{:04x}/{:04x}/{:08x}/{:08x} completion={:08x}/{:04x}/{:04x}/{:08x} evidence=stable-double-read",
+            scheduler.scope,
+            Self::yes_no(scheduler.sdio_ring_observed),
+            scheduler.sdio_command_sequence,
+            scheduler.sdio_command_opcode,
+            scheduler.sdio_command_flags,
+            scheduler.sdio_command_aux0,
+            scheduler.sdio_command_aux1,
+            scheduler.sdio_completion_sequence,
+            scheduler.sdio_completion_code,
+            scheduler.sdio_completion_detail,
+            scheduler.sdio_completion_result,
+        ))
+    }
+
+    #[cfg(feature = "kernel")]
     const fn wifi_linked_runtime_rejection_reason(result: u32) -> Option<&'static str> {
         match result {
             pi4_driver_abi::DRIVER_RUNTIME_REJECT_SDIO_INTAKE_SEAL_BUSY => {
@@ -20111,6 +20133,22 @@ where
             crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT,
         );
         let wake = crate::hal::driver_task::cyw43_root_wake_snapshot();
+        let sdio_ring = crate::hal::driver_task::driver_task_sdio_command_ring_snapshot()
+            .map_or_else(
+                || format_message(format_args!("u")),
+                |ring| {
+                    format_message(format_args!(
+                        "{:08x}:{:04x}:{:04x}:{:08x}>{:08x}:{:04x}:{:04x}",
+                        ring.command_sequence,
+                        ring.command_opcode,
+                        ring.command_flags,
+                        ring.command_aux1,
+                        ring.completion_sequence,
+                        ring.completion_code,
+                        ring.completion_detail,
+                    ))
+                },
+            );
         let mut lines = HeaplessVec::<
             HeaplessString<DEFAULT_LINE_CAPACITY>,
             WIFI_CAUSAL_DIAG_BODY_MAX_LINES,
@@ -20129,7 +20167,7 @@ where
             .ok()?;
         lines
             .push(format_message(format_args!(
-                "wifi: causal_progress id={} cyw43={}/{}/{} sdio={}/{}/{} replay={}/{}",
+                "wifi: causal_progress id={} cyw43={}/{}/{} sdio={}/{}/{} replay={}/{} ring={}",
                 snapshot_sequence,
                 cyw43_progress.map_or(0, |progress| progress.sequence),
                 cyw43_progress.map_or(0, |progress| progress.phase),
@@ -20139,6 +20177,7 @@ where
                 sdio_progress.map_or("unavailable", |progress| progress.phase_name),
                 sdio_status.map_or("unavailable", |status| status.stage),
                 sdio_status.map_or("unavailable", |status| status.status),
+                sdio_ring,
             )))
             .ok()?;
         lines
@@ -20662,6 +20701,7 @@ where
                 Self::wifi_diag_deferred_recovery_descriptor_line(recovery),
                 Self::wifi_diag_deferred_recovery_scheduler_line(recovery),
                 Self::wifi_diag_deferred_recovery_scheduler_edge_line(recovery),
+                Self::wifi_diag_deferred_recovery_scheduler_sdio_line(recovery),
             ] {
                 self.emit_console_line(detail.as_str());
             }
@@ -22007,6 +22047,7 @@ where
                 Self::wifi_diag_deferred_recovery_descriptor_line(recovery),
                 Self::wifi_diag_deferred_recovery_scheduler_line(recovery),
                 Self::wifi_diag_deferred_recovery_scheduler_edge_line(recovery),
+                Self::wifi_diag_deferred_recovery_scheduler_sdio_line(recovery),
             ] {
                 self.emit_console_line(detail.as_str());
             }
@@ -33269,6 +33310,16 @@ mod tests {
                 child_bus_episode_observed: true,
                 child_bus_parent_sequence: u32::MAX,
                 child_bus_parent_op: 11,
+                sdio_ring_observed: true,
+                sdio_command_sequence: 0xeff0_90d9,
+                sdio_command_opcode: 3,
+                sdio_command_flags: 1,
+                sdio_command_aux0: 0x4359_5734,
+                sdio_command_aux1: u32::MAX,
+                sdio_completion_sequence: 2,
+                sdio_completion_code: 1,
+                sdio_completion_detail: 1,
+                sdio_completion_result: 0,
                 runtime_recovery_source_line: 39_579,
             },
         };
@@ -33404,6 +33455,7 @@ mod tests {
             KernelConsoleTestPump::wifi_diag_deferred_recovery_descriptor_line(recovery),
             KernelConsoleTestPump::wifi_diag_deferred_recovery_scheduler_line(recovery),
             KernelConsoleTestPump::wifi_diag_deferred_recovery_scheduler_edge_line(recovery),
+            KernelConsoleTestPump::wifi_diag_deferred_recovery_scheduler_sdio_line(recovery),
             KernelConsoleTestPump::wifi_diag_logical_control_owner_line(Some(owner)),
             KernelConsoleTestPump::wifi_diag_terminal_drain_physical_line(terminal),
             KernelConsoleTestPump::wifi_diag_terminal_drain_completion_line(terminal),
@@ -33434,10 +33486,10 @@ mod tests {
         assert!(lines[5].contains(
             "request=4294967295 issued=yes accepted=yes finite_tx=yes join_tx_committed=yes"
         ));
-        assert!(lines[18].contains(
+        assert!(lines[19].contains(
             "scope=boot-first present=yes generation=4294967295 pair_epoch=18446744073709551615 source_stage=cyw43-runtime-event-frame"
         ));
-        assert!(lines[19].contains(
+        assert!(lines[20].contains(
             "type=0xff status=0xffffffff reason=0xffffffff auth_type=0xffffffff join_request=4294967295 join_issued=yes join_accepted=yes join_tx_committed=yes"
         ));
         assert!(lines[6].contains(
@@ -33537,10 +33589,14 @@ mod tests {
             "publication_latched=yes signal_returned=yes parent_deadline_expired=yes child_terminal=yes child_wait_receipt=yes child_bus_episode=yes"
         ));
         assert!(lines[11].ends_with("bus_parent=4294967295/0x000b rsl=39579 evidence=exact-only"));
-        assert!(lines[12].contains("active=yes generation=1"));
-        assert!(lines[12].contains("cmd=0x0000001a id=37"));
-        assert!(lines[14].contains("code=5 code_name=fault"));
-        assert!(lines[14].contains("detail=0x0001 detail_name=rejected-command"));
+        assert!(lines[12].contains(
+            "scope=first-pre-fence observed=yes command=eff090d9/0003/0001/43595734/ffffffff"
+        ));
+        assert!(lines[12].contains("completion=00000002/0001/0001/00000000"));
+        assert!(lines[13].contains("active=yes generation=1"));
+        assert!(lines[13].contains("cmd=0x0000001a id=37"));
+        assert!(lines[15].contains("code=5 code_name=fault"));
+        assert!(lines[15].contains("detail=0x0001 detail_name=rejected-command"));
         for (result, expected) in [
             (0x5344_0001, "sdio-intake-seal-busy"),
             (0x5344_0002, "sdio-intake-seal-missing"),
@@ -33589,14 +33645,14 @@ mod tests {
             control_fault_line.contains("detail=0x530b detail_name=cyw43-control-exchange"),
             "{control_fault_line}",
         );
-        assert!(lines[15].contains("offset=0 len=0"));
-        assert!(lines[16].contains("terminal=no owner_conflict=yes"));
-        assert!(lines[16].contains("owner_scope=root-logical-capture"));
-        assert!(lines[16].contains("owner_cmd=0x0000001a owner_id=37"));
-        assert!(lines[17].contains(
+        assert!(lines[16].contains("offset=0 len=0"));
+        assert!(lines[17].contains("terminal=no owner_conflict=yes"));
+        assert!(lines[17].contains("owner_scope=root-logical-capture"));
+        assert!(lines[17].contains("owner_cmd=0x0000001a owner_id=37"));
+        assert!(lines[18].contains(
             "service_turns=4294967295 join_starts=4294967295 control_progress=ordinary-network-turn"
         ));
-        assert!(lines[13].contains("completion_sequence=3907 exact_request_match=yes"));
+        assert!(lines[14].contains("completion_sequence=3907 exact_request_match=yes"));
         assert_eq!(
             KernelConsoleTestPump::wifi_diag_logical_control_owner_line(None).as_str(),
             "wifi: logical_control_owner active=no",
@@ -43932,17 +43988,18 @@ mod tests {
             KernelConsoleTestPump::wifi_diag_deferred_recovery_descriptor_line(recovery),
             KernelConsoleTestPump::wifi_diag_deferred_recovery_scheduler_line(recovery),
             KernelConsoleTestPump::wifi_diag_deferred_recovery_scheduler_edge_line(recovery),
+            KernelConsoleTestPump::wifi_diag_deferred_recovery_scheduler_sdio_line(recovery),
         ];
         let retained: Vec<&str> = pump
             .pending_cyw43_bootstrap_serial_milestones
             .iter()
             .map(|line| line.as_str())
             .collect();
-        assert_eq!(retained.len(), 7);
-        for (actual, expected) in retained.iter().take(6).zip(expected.iter()) {
+        assert_eq!(retained.len(), 8);
+        for (actual, expected) in retained.iter().take(7).zip(expected.iter()) {
             assert_eq!(*actual, expected.as_str());
         }
-        assert_eq!(retained[6], pair_recovery);
+        assert_eq!(retained[7], pair_recovery);
 
         // Model the next PoisonGeneration teardown after the output
         // transaction is already retained. The causal snapshot and its queued
@@ -51971,6 +52028,10 @@ mod tests {
         assert!(
             rendered.contains("wifi: causal_progress id=1 "),
             "{rendered}"
+        );
+        assert!(
+            rendered.contains("replay=unavailable/unavailable ring=u"),
+            "an unavailable passive SDIO ring sample must remain explicit: {rendered}",
         );
         assert!(
             rendered.contains("wifi: causal_episode id=1 "),

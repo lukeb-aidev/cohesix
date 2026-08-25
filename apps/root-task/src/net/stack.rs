@@ -8852,6 +8852,50 @@ impl GenetNetStack {
         }
     }
 
+    /// Preserve the physical GENET service lane after the DHCP shell moves
+    /// its device client into the isolated console adapter.
+    ///
+    /// Before handoff, `NetStack<GenetDriverTaskDevice>` runs this retained
+    /// pre-poll before consuming its copied RX queue. After handoff the child
+    /// adapter owns that same device client, but it only copies queued frames;
+    /// this wrapper remains the sole root-side scheduler for the isolated
+    /// driver runtime and must continue filling the queue.
+    #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
+    fn service_isolated_driver_pre_poll(&self) -> bool {
+        if !matches!(self.state, GenetNetState::Isolated { .. }) {
+            return false;
+        }
+        crate::hal::driver_task::register_driver_task_pointer_free_ring_service(
+            crate::hal::driver_task::GENET_DRIVER_TASK_CONTRACT,
+            crate::hal::driver_task::DriverTaskHotPath::GenetNic.as_u32() as usize,
+            crate::drivers::driver_task_net::runtime_ring_service,
+        );
+        service_driver_task_pre_poll_burst(
+            crate::hal::driver_task::GENET_DRIVER_TASK_CONTRACT,
+            crate::hal::driver_task::DriverTaskHotPath::GenetNic,
+            0,
+        )
+    }
+
+    /// Budgeted counterpart to [`Self::service_isolated_driver_pre_poll`].
+    #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
+    fn service_isolated_driver_pre_poll_budgeted(&self, budget: &mut DriverServiceBudget) -> bool {
+        if !matches!(self.state, GenetNetState::Isolated { .. }) {
+            return false;
+        }
+        crate::hal::driver_task::register_driver_task_pointer_free_ring_service(
+            crate::hal::driver_task::GENET_DRIVER_TASK_CONTRACT,
+            crate::hal::driver_task::DriverTaskHotPath::GenetNic.as_u32() as usize,
+            crate::drivers::driver_task_net::runtime_ring_service,
+        );
+        service_driver_task_pre_poll_burst_budgeted(
+            crate::hal::driver_task::GENET_DRIVER_TASK_CONTRACT,
+            crate::hal::driver_task::DriverTaskHotPath::GenetNic,
+            NET_RING_FLAG_BUDGETED,
+            budget,
+        )
+    }
+
     fn inner(&self) -> Option<&dyn NetPoller> {
         match &self.state {
             GenetNetState::Root(stack) => Some(stack.as_ref()),
@@ -9242,7 +9286,11 @@ impl Cyw43NetStack {
 
 impl NetPoller for GenetNetStack {
     fn poll(&mut self, now_ms: u64) -> bool {
-        self.inner_mut().is_some_and(|inner| inner.poll(now_ms))
+        #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
+        let ring_progress = self.service_isolated_driver_pre_poll();
+        #[cfg(not(all(target_os = "none", sel4_config_kernel_mcs)))]
+        let ring_progress = false;
+        self.inner_mut().is_some_and(|inner| inner.poll(now_ms)) || ring_progress
     }
 
     fn poll_with_budget(
@@ -9250,8 +9298,15 @@ impl NetPoller for GenetNetStack {
         now_ms: u64,
         budget: &mut DriverServiceBudget,
     ) -> Result<bool, DriverServiceBudgetError> {
-        self.inner_mut()
-            .map_or(Ok(false), |inner| inner.poll_with_budget(now_ms, budget))
+        #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
+        let ring_progress = self.service_isolated_driver_pre_poll_budgeted(budget);
+        #[cfg(not(all(target_os = "none", sel4_config_kernel_mcs)))]
+        let ring_progress = false;
+        self.inner_mut().map_or(Ok(ring_progress), |inner| {
+            inner
+                .poll_with_budget(now_ms, budget)
+                .map(|activity| activity || ring_progress)
+        })
     }
 
     fn flush_tcp_with_budget(
@@ -9259,8 +9314,14 @@ impl NetPoller for GenetNetStack {
         now_ms: u64,
         budget: &mut DriverServiceBudget,
     ) -> Result<bool, DriverServiceBudgetError> {
-        self.inner_mut().map_or(Ok(false), |inner| {
-            inner.flush_tcp_with_budget(now_ms, budget)
+        #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
+        let ring_progress = self.service_isolated_driver_pre_poll_budgeted(budget);
+        #[cfg(not(all(target_os = "none", sel4_config_kernel_mcs)))]
+        let ring_progress = false;
+        self.inner_mut().map_or(Ok(ring_progress), |inner| {
+            inner
+                .flush_tcp_with_budget(now_ms, budget)
+                .map(|activity| activity || ring_progress)
         })
     }
 
@@ -9319,8 +9380,14 @@ impl NetPoller for GenetNetStack {
         now_ms: u64,
         budget: &mut DriverServiceBudget,
     ) -> Result<bool, DriverServiceBudgetError> {
-        self.inner_mut().map_or(Ok(false), |inner| {
-            inner.poll_console_response_with_budget(now_ms, budget)
+        #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
+        let ring_progress = self.service_isolated_driver_pre_poll_budgeted(budget);
+        #[cfg(not(all(target_os = "none", sel4_config_kernel_mcs)))]
+        let ring_progress = false;
+        self.inner_mut().map_or(Ok(ring_progress), |inner| {
+            inner
+                .poll_console_response_with_budget(now_ms, budget)
+                .map(|activity| activity || ring_progress)
         })
     }
 

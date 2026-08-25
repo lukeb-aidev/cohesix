@@ -824,10 +824,12 @@ const CHAR_WIDTH: usize = 8;
 const CHAR_HEIGHT: usize = 16;
 const HDMI_SAFE_AREA_MARGIN_DIVISOR: usize = 50;
 const HDMI_SCROLL_LINES: usize = 10;
-// The Pi HDMI runtime has a 400-us / 10-ms generated MCS reservation. Clear
-// only this many scanlines in one retained first-frame turn so framebuffer
-// takeover cannot consume an entire synchronous service call.
-const HDMI_FIRST_FRAME_CLEAR_ROWS_PER_TURN: usize = 8;
+// The Pi HDMI runtime has a 400-us / 10-ms generated MCS reservation. RGB888
+// retains the validated eight-row bound. An aligned XRGB8888 row uses paired
+// u64 stores, so sixteen rows preserve the old worst-case store-instruction
+// count while halving retained first-frame scheduling turns.
+const HDMI_FIRST_FRAME_CLEAR_ROWS_PER_TURN_RGB888: usize = 8;
+const HDMI_FIRST_FRAME_CLEAR_ROWS_PER_TURN_PAIRED_XRGB8888: usize = 16;
 const FB_BYTES_PER_PIXEL_32: usize = 4;
 const HDMI_FG_COLOR: u32 = 0xffff_ffff;
 const HDMI_BG_COLOR: u32 = 0xff00_0000;
@@ -45026,6 +45028,25 @@ fn hdmi_first_frame_command_ready(command: DriverTaskCommandRecord) -> bool {
         && RUNTIME_DESCRIPTOR.with_ref(|descriptor| descriptor.hdmi_ready())
 }
 
+const fn hdmi_first_frame_clear_rows_per_turn(
+    framebuffer_vaddr: u64,
+    framebuffer_width: u32,
+    framebuffer_pitch: u32,
+    framebuffer_format: u32,
+) -> usize {
+    if matches!(
+        framebuffer_format,
+        DRIVER_RUNTIME_FRAMEBUFFER_FORMAT_XRGB8888 | 0
+    ) && framebuffer_vaddr & 7 == 0
+        && framebuffer_pitch & 7 == 0
+        && framebuffer_width >= 2
+    {
+        HDMI_FIRST_FRAME_CLEAR_ROWS_PER_TURN_PAIRED_XRGB8888
+    } else {
+        HDMI_FIRST_FRAME_CLEAR_ROWS_PER_TURN_RGB888
+    }
+}
+
 fn service_hdmi_first_frame_command_turn(
     command: DriverTaskCommandRecord,
 ) -> Option<RuntimeCommandTurn> {
@@ -45061,11 +45082,18 @@ fn service_hdmi_first_frame_command_turn(
         )),
         HdmiFirstFramePhase::Clear => {
             let start_row = HDMI_FIRST_FRAME_CURSOR.with_ref(|cursor| cursor.next_row as usize);
-            let height =
-                RUNTIME_DESCRIPTOR.with_ref(|descriptor| descriptor.framebuffer.height as usize);
-            let end_row = start_row
-                .saturating_add(HDMI_FIRST_FRAME_CLEAR_ROWS_PER_TURN)
-                .min(height);
+            let (height, rows_per_turn) = RUNTIME_DESCRIPTOR.with_ref(|descriptor| {
+                (
+                    descriptor.framebuffer.height as usize,
+                    hdmi_first_frame_clear_rows_per_turn(
+                        descriptor.framebuffer.vaddr,
+                        descriptor.framebuffer.width,
+                        descriptor.framebuffer.pitch,
+                        descriptor.framebuffer.format,
+                    ),
+                )
+            });
+            let end_row = start_row.saturating_add(rows_per_turn).min(height);
             RUNTIME_DESCRIPTOR.with_ref(|descriptor| {
                 let mut state = HdmiRenderState::from_descriptor(descriptor);
                 state.clear_full_framebuffer_rows(start_row, end_row.saturating_sub(start_row));
@@ -47075,10 +47103,21 @@ fn copy_framebuffer_bytes(dst: usize, src: usize, len: usize) {
     }
 }
 
-#[cfg(target_os = "none")]
+#[cfg(any(target_os = "none", test))]
 fn copy_framebuffer_u64(dst: usize, src: usize, words: usize) {
     if dst > src && dst < src.saturating_add(words.saturating_mul(8)) {
         let mut index = words;
+        while index >= 4 {
+            index -= 4;
+            let value0 = read_framebuffer_u64(src + index * 8);
+            let value1 = read_framebuffer_u64(src + (index + 1) * 8);
+            let value2 = read_framebuffer_u64(src + (index + 2) * 8);
+            let value3 = read_framebuffer_u64(src + (index + 3) * 8);
+            write_framebuffer_u64(dst + index * 8, value0);
+            write_framebuffer_u64(dst + (index + 1) * 8, value1);
+            write_framebuffer_u64(dst + (index + 2) * 8, value2);
+            write_framebuffer_u64(dst + (index + 3) * 8, value3);
+        }
         while index != 0 {
             index -= 1;
             let byte_offset = index * 8;
@@ -47086,15 +47125,31 @@ fn copy_framebuffer_u64(dst: usize, src: usize, words: usize) {
             write_framebuffer_u64(dst + byte_offset, value);
         }
     } else {
-        for index in 0..words {
+        let mut index = 0usize;
+        while index.saturating_add(4) <= words {
+            // Read the complete group before writing it. Besides exposing
+            // memory-level parallelism on the uncached Pi framebuffer, this
+            // preserves memmove semantics if ranges meet at a group edge.
+            let value0 = read_framebuffer_u64(src + index * 8);
+            let value1 = read_framebuffer_u64(src + (index + 1) * 8);
+            let value2 = read_framebuffer_u64(src + (index + 2) * 8);
+            let value3 = read_framebuffer_u64(src + (index + 3) * 8);
+            write_framebuffer_u64(dst + index * 8, value0);
+            write_framebuffer_u64(dst + (index + 1) * 8, value1);
+            write_framebuffer_u64(dst + (index + 2) * 8, value2);
+            write_framebuffer_u64(dst + (index + 3) * 8, value3);
+            index = index.saturating_add(4);
+        }
+        while index < words {
             let byte_offset = index * 8;
             let value = read_framebuffer_u64(src + byte_offset);
             write_framebuffer_u64(dst + byte_offset, value);
+            index = index.saturating_add(1);
         }
     }
 }
 
-#[cfg(target_os = "none")]
+#[cfg(any(target_os = "none", test))]
 fn copy_framebuffer_u32(dst: usize, src: usize, words: usize) {
     if dst > src && dst < src.saturating_add(words.saturating_mul(4)) {
         let mut index = words;
@@ -47133,9 +47188,17 @@ fn copy_framebuffer_bytes(dst: usize, src: usize, len: usize) {
     if dst_end > TEST_FRAMEBUFFER_BYTES || src_end > TEST_FRAMEBUFFER_BYTES {
         return;
     }
+    if (dst | src | len) & 0x7 == 0 {
+        copy_framebuffer_u64(dst, src, len / 8);
+        return;
+    }
+    if (dst | src | len) & 0x3 == 0 {
+        copy_framebuffer_u32(dst, src, len / 4);
+        return;
+    }
     // SAFETY: Runtime tests hold `test_guard`; the checked ranges stay inside
     // the process-local framebuffer and `copy_within` preserves memmove
-    // semantics for overlapping scroll regions.
+    // semantics for byte-granular overlapping scroll regions.
     unsafe {
         (*TEST_FRAMEBUFFER.0.get()).copy_within(src_offset..src_end, dst_offset);
     }
@@ -47242,8 +47305,20 @@ fn write_framebuffer_u32(addr: usize, value: u32) {
 fn write_framebuffer_u32(_addr: usize, _value: u32) {}
 
 fn fill_framebuffer_u32(addr: usize, value: u32, words: usize) {
-    for index in 0..words {
-        write_framebuffer_u32(addr.saturating_add(index.saturating_mul(4)), value);
+    let mut current = addr;
+    let mut remaining = words;
+    if current & 7 != 0 && remaining != 0 {
+        write_framebuffer_u32(current, value);
+        current = current.saturating_add(core::mem::size_of::<u32>());
+        remaining = remaining.saturating_sub(1);
+    }
+    let paired = u64::from(value) | (u64::from(value) << 32);
+    for _ in 0..remaining / 2 {
+        write_framebuffer_u64(current, paired);
+        current = current.saturating_add(core::mem::size_of::<u64>());
+    }
+    if remaining & 1 != 0 {
+        write_framebuffer_u32(current, value);
     }
 }
 
@@ -47262,6 +47337,9 @@ fn write_framebuffer_u64(addr: usize, value: u64) {
         write_framebuffer_byte(addr.saturating_add(index), *byte);
     }
 }
+
+#[cfg(all(not(target_os = "none"), not(test)))]
+fn write_framebuffer_u64(_addr: usize, _value: u64) {}
 
 #[cfg(target_os = "none")]
 fn write_framebuffer_pixel(addr: usize, color: u32, bytes_per_pixel: usize) {
@@ -114662,6 +114740,87 @@ mod tests {
     }
 
     #[test]
+    fn hdmi_first_frame_clear_expands_only_for_pairable_xrgb8888_rows() {
+        assert_eq!(
+            hdmi_first_frame_clear_rows_per_turn(
+                DRIVER_RUNTIME_FRAMEBUFFER_VADDR,
+                1_920,
+                1_920 * 4,
+                DRIVER_RUNTIME_FRAMEBUFFER_FORMAT_XRGB8888,
+            ),
+            HDMI_FIRST_FRAME_CLEAR_ROWS_PER_TURN_PAIRED_XRGB8888,
+        );
+        assert_eq!(
+            hdmi_first_frame_clear_rows_per_turn(
+                DRIVER_RUNTIME_FRAMEBUFFER_VADDR,
+                1_920,
+                1_920 * 4,
+                0,
+            ),
+            HDMI_FIRST_FRAME_CLEAR_ROWS_PER_TURN_PAIRED_XRGB8888,
+            "legacy format zero is the same admitted 32-bit layout",
+        );
+        for (reason, vaddr, width, pitch, format) in [
+            (
+                "rgb888",
+                DRIVER_RUNTIME_FRAMEBUFFER_VADDR,
+                1_920,
+                1_920 * 3,
+                DRIVER_RUNTIME_FRAMEBUFFER_FORMAT_RGB888,
+            ),
+            (
+                "unaligned-vaddr",
+                DRIVER_RUNTIME_FRAMEBUFFER_VADDR + 4,
+                1_920,
+                1_920 * 4,
+                DRIVER_RUNTIME_FRAMEBUFFER_FORMAT_XRGB8888,
+            ),
+            (
+                "unaligned-pitch",
+                DRIVER_RUNTIME_FRAMEBUFFER_VADDR,
+                1_920,
+                1_920 * 4 + 4,
+                DRIVER_RUNTIME_FRAMEBUFFER_FORMAT_XRGB8888,
+            ),
+            (
+                "single-pixel-row",
+                DRIVER_RUNTIME_FRAMEBUFFER_VADDR,
+                1,
+                8,
+                DRIVER_RUNTIME_FRAMEBUFFER_FORMAT_XRGB8888,
+            ),
+            (
+                "unknown-format",
+                DRIVER_RUNTIME_FRAMEBUFFER_VADDR,
+                1_920,
+                1_920 * 4,
+                u32::MAX,
+            ),
+        ] {
+            assert_eq!(
+                hdmi_first_frame_clear_rows_per_turn(vaddr, width, pitch, format),
+                HDMI_FIRST_FRAME_CLEAR_ROWS_PER_TURN_RGB888,
+                "{reason} must retain the conservative clear bound",
+            );
+        }
+    }
+
+    #[test]
+    fn hdmi_xrgb_fill_preserves_pixels_across_aligned_pair_stores() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let base = DRIVER_RUNTIME_FRAMEBUFFER_VADDR as usize + 4;
+        let value = 0x89ab_cdef;
+        fill_framebuffer_u32(base, value, 5);
+        for index in 0..5 {
+            assert_eq!(
+                read_framebuffer_u32(base + index * core::mem::size_of::<u32>()),
+                value,
+            );
+        }
+    }
+
+    #[test]
     fn hdmi_linked_runtime_renders_after_framebuffer_descriptor() {
         let _guard = test_guard();
         reset_runtime_for_test();
@@ -114759,7 +114918,13 @@ mod tests {
             },
         };
         stage_bytes(DRIVER_TASK_RING_FRAME_OFFSET, b"hello");
-        let first_uncleared_row = HDMI_FIRST_FRAME_CLEAR_ROWS_PER_TURN;
+        let rows_per_clear_turn = hdmi_first_frame_clear_rows_per_turn(
+            descriptor.framebuffer.vaddr,
+            descriptor.framebuffer.width,
+            descriptor.framebuffer.pitch,
+            descriptor.framebuffer.format,
+        );
+        let first_uncleared_row = rows_per_clear_turn;
         let uncleared_addr = DRIVER_RUNTIME_FRAMEBUFFER_VADDR as usize
             + first_uncleared_row * descriptor.framebuffer.pitch as usize;
         let takeover_sentinel = 0x2468_ace0;
@@ -114783,7 +114948,7 @@ mod tests {
             "one MCS turn must not clear beyond its admitted scanline batch",
         );
         let expected_clear_turns =
-            (descriptor.framebuffer.height as usize).div_ceil(HDMI_FIRST_FRAME_CLEAR_ROWS_PER_TURN);
+            (descriptor.framebuffer.height as usize).div_ceil(rows_per_clear_turn);
         let mut pending_turns = 1usize;
         let completion = loop {
             match service_command_turn(0, frame) {

@@ -4822,6 +4822,16 @@ pub(crate) struct Cyw43FirstRecoverySchedulerSnapshot {
     pub(crate) child_bus_episode_observed: bool,
     pub(crate) child_bus_parent_sequence: u32,
     pub(crate) child_bus_parent_op: u16,
+    pub(crate) sdio_ring_observed: bool,
+    pub(crate) sdio_command_sequence: u32,
+    pub(crate) sdio_command_opcode: u16,
+    pub(crate) sdio_command_flags: u16,
+    pub(crate) sdio_command_aux0: u32,
+    pub(crate) sdio_command_aux1: u32,
+    pub(crate) sdio_completion_sequence: u32,
+    pub(crate) sdio_completion_code: u16,
+    pub(crate) sdio_completion_detail: u16,
+    pub(crate) sdio_completion_result: u32,
     pub(crate) runtime_recovery_source_line: u32,
 }
 
@@ -4849,6 +4859,16 @@ struct Cyw43FirstRecoverySchedulerState {
     child_bus_episode_observed: AtomicU32,
     child_bus_parent_sequence: AtomicU32,
     child_bus_parent_op: AtomicU32,
+    sdio_ring_observed: AtomicU32,
+    sdio_command_sequence: AtomicU32,
+    sdio_command_opcode: AtomicU32,
+    sdio_command_flags: AtomicU32,
+    sdio_command_aux0: AtomicU32,
+    sdio_command_aux1: AtomicU32,
+    sdio_completion_sequence: AtomicU32,
+    sdio_completion_code: AtomicU32,
+    sdio_completion_detail: AtomicU32,
+    sdio_completion_result: AtomicU32,
     runtime_recovery_source_line: AtomicU32,
 }
 
@@ -4876,6 +4896,16 @@ impl Cyw43FirstRecoverySchedulerState {
             child_bus_episode_observed: AtomicU32::new(0),
             child_bus_parent_sequence: AtomicU32::new(0),
             child_bus_parent_op: AtomicU32::new(0),
+            sdio_ring_observed: AtomicU32::new(0),
+            sdio_command_sequence: AtomicU32::new(0),
+            sdio_command_opcode: AtomicU32::new(0),
+            sdio_command_flags: AtomicU32::new(0),
+            sdio_command_aux0: AtomicU32::new(0),
+            sdio_command_aux1: AtomicU32::new(0),
+            sdio_completion_sequence: AtomicU32::new(0),
+            sdio_completion_code: AtomicU32::new(0),
+            sdio_completion_detail: AtomicU32::new(0),
+            sdio_completion_result: AtomicU32::new(0),
             runtime_recovery_source_line: AtomicU32::new(0),
         }
     }
@@ -6074,8 +6104,10 @@ impl Drop for TestCyw43SdioDpcOwnerGuard {
 /// snapshot while retaining the prior global test state for scoped cleanup.
 #[cfg(all(feature = "kernel", test))]
 pub(crate) fn test_delegate_cyw43_sdio_dpc_owner() -> TestCyw43SdioDpcOwnerGuard {
-    let previous_descriptor_seals =
-        DRIVER_TASK_RUNTIME_DESCRIPTOR_SEAL_HOT_PATH_MASK.load(Ordering::Acquire);
+    let delegated_pair_seals = DriverTaskHotPath::SdioHost.owner_state_bit()
+        | DriverTaskHotPath::Cyw43Wifi.owner_state_bit();
+    let previous_descriptor_seals = DRIVER_TASK_RUNTIME_DESCRIPTOR_SEAL_HOT_PATH_MASK
+        .fetch_or(delegated_pair_seals, Ordering::AcqRel);
     let previous_ring_producer = DRIVER_TASK_SLOT_SDIO_HOST
         .ring_producer
         .swap(SDIO_RING_PRODUCER_CYW43_RUNTIME, Ordering::AcqRel);
@@ -10676,6 +10708,57 @@ pub(crate) struct DriverTaskSdioDpcRingSnapshot {
     pub ack_failures: u32,
 }
 
+/// Read-only root view of the delegated SDIO command and completion records.
+///
+/// The two records are sampled together and accepted only after two identical
+/// reads. This is diagnostic evidence only: root neither consumes the
+/// completion nor acquires producer authority over the CYW43-owned ring.
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct DriverTaskSdioCommandRingSnapshot {
+    /// Sequence-last identity currently published by CYW43.
+    pub command_sequence: u32,
+    /// Command opcode currently published by CYW43.
+    pub command_opcode: u16,
+    /// Command flags currently published by CYW43.
+    pub command_flags: u16,
+    /// Command route marker currently published by CYW43.
+    pub command_aux0: u32,
+    /// Command generation currently published by CYW43.
+    pub command_aux1: u32,
+    /// Sequence-last identity currently published by SDIO.
+    pub completion_sequence: u32,
+    /// Completion code currently published by SDIO.
+    pub completion_code: u16,
+    /// Completion detail currently published by SDIO.
+    pub completion_detail: u16,
+    /// Completion result currently published by SDIO.
+    pub completion_result: u32,
+}
+
+#[cfg(feature = "kernel")]
+fn stable_sdio_command_ring_snapshot(
+    first_command: DriverTaskCommandRecord,
+    first_completion: DriverTaskCompletionRecord,
+    second_command: DriverTaskCommandRecord,
+    second_completion: DriverTaskCompletionRecord,
+) -> Option<DriverTaskSdioCommandRingSnapshot> {
+    if first_command != second_command || first_completion != second_completion {
+        return None;
+    }
+    Some(DriverTaskSdioCommandRingSnapshot {
+        command_sequence: second_command.sequence,
+        command_opcode: second_command.opcode,
+        command_flags: second_command.flags,
+        command_aux0: second_command.aux0,
+        command_aux1: second_command.aux1,
+        completion_sequence: second_completion.sequence,
+        completion_code: second_completion.code,
+        completion_detail: second_completion.detail,
+        completion_result: second_completion.result,
+    })
+}
+
 #[cfg(feature = "kernel")]
 fn stable_sdio_dpc_ring_snapshot(
     first: DriverRuntimeDpcEventRing,
@@ -10729,6 +10812,48 @@ pub(crate) fn driver_task_sdio_dpc_ring_snapshot() -> Option<DriverTaskSdioDpcRi
     let second = ring.read_dpc_ring()?;
     driver_task_shared_load_barrier();
     stable_sdio_dpc_ring_snapshot(first, second)
+}
+
+/// Snapshot the delegated SDIO command ring without changing protocol state.
+///
+/// This discriminator answers whether a CYW43 child command reached the
+/// shared ring and whether SDIO published a terminal for that exact sequence.
+/// It deliberately performs no wake, retry, completion consume, or recovery
+/// action, so observing a stalled physical boot cannot perturb its cause.
+#[cfg(feature = "kernel")]
+#[must_use]
+pub(crate) fn driver_task_sdio_command_ring_snapshot() -> Option<DriverTaskSdioCommandRingSnapshot>
+{
+    let slot = slot_for_task_key(DRIVER_TASK_KEY_SDIO_HOST)?;
+    if slot.ring_producer.load(Ordering::Acquire) != SDIO_RING_PRODUCER_CYW43_RUNTIME
+        || !driver_runtime_descriptor_seal_registered(DriverTaskHotPath::SdioHost)
+        || !driver_runtime_descriptor_seal_registered(DriverTaskHotPath::Cyw43Wifi)
+    {
+        return None;
+    }
+    let ring_root_ptr = slot.ring_root_ptr.load(Ordering::Acquire);
+    if ring_root_ptr == 0 {
+        return None;
+    }
+    let ring = DriverTaskRingView::new(ring_root_ptr)?;
+    let command_bytes = core::mem::size_of::<DriverTaskCommandRecord>();
+    let read_records = || {
+        driver_task_ring_invalidate_root_range(ring_root_ptr, command_bytes);
+        let command = ring.read_command()?;
+        driver_task_ring_invalidate_completion_record(ring_root_ptr);
+        let completion = ring.read_completion_snapshot()?;
+        Some((command, completion))
+    };
+    let (first_command, first_completion) = read_records()?;
+    driver_task_shared_load_barrier();
+    let (second_command, second_completion) = read_records()?;
+    driver_task_shared_load_barrier();
+    stable_sdio_command_ring_snapshot(
+        first_command,
+        first_completion,
+        second_command,
+        second_completion,
+    )
 }
 
 #[cfg(feature = "kernel")]
@@ -12360,6 +12485,11 @@ fn capture_first_cyw43_recovery_scheduler_snapshot_with_runtime_source(
     let child_bus_episode_observed = root_command_sequence != 0 && child_bus_episode.is_some();
     let child_bus_parent_sequence = child_bus_episode.map_or(0, |episode| episode.parent_sequence);
     let child_bus_parent_op = child_bus_episode.map_or(0, |episode| episode.parent_op);
+    // Take the delegated SDIO ring cut while the first-recovery writer owns
+    // the immutable tuple and before any pair fence can scrub either child.
+    // The snapshot is passive and fail-closed: an unstable pair is retained
+    // as unavailable instead of being interpreted as a missing publication.
+    let sdio_ring = driver_task_sdio_command_ring_snapshot();
     CYW43_FIRST_RECOVERY_SCHEDULER
         .outer_phase
         .store(outer.phase.as_u32(), Ordering::Relaxed);
@@ -12418,6 +12548,47 @@ fn capture_first_cyw43_recovery_scheduler_snapshot_with_runtime_source(
     CYW43_FIRST_RECOVERY_SCHEDULER
         .child_bus_parent_op
         .store(u32::from(child_bus_parent_op), Ordering::Relaxed);
+    CYW43_FIRST_RECOVERY_SCHEDULER
+        .sdio_ring_observed
+        .store(u32::from(sdio_ring.is_some()), Ordering::Relaxed);
+    CYW43_FIRST_RECOVERY_SCHEDULER.sdio_command_sequence.store(
+        sdio_ring.map_or(0, |ring| ring.command_sequence),
+        Ordering::Relaxed,
+    );
+    CYW43_FIRST_RECOVERY_SCHEDULER.sdio_command_opcode.store(
+        u32::from(sdio_ring.map_or(0, |ring| ring.command_opcode)),
+        Ordering::Relaxed,
+    );
+    CYW43_FIRST_RECOVERY_SCHEDULER.sdio_command_flags.store(
+        u32::from(sdio_ring.map_or(0, |ring| ring.command_flags)),
+        Ordering::Relaxed,
+    );
+    CYW43_FIRST_RECOVERY_SCHEDULER.sdio_command_aux0.store(
+        sdio_ring.map_or(0, |ring| ring.command_aux0),
+        Ordering::Relaxed,
+    );
+    CYW43_FIRST_RECOVERY_SCHEDULER.sdio_command_aux1.store(
+        sdio_ring.map_or(0, |ring| ring.command_aux1),
+        Ordering::Relaxed,
+    );
+    CYW43_FIRST_RECOVERY_SCHEDULER
+        .sdio_completion_sequence
+        .store(
+            sdio_ring.map_or(0, |ring| ring.completion_sequence),
+            Ordering::Relaxed,
+        );
+    CYW43_FIRST_RECOVERY_SCHEDULER.sdio_completion_code.store(
+        u32::from(sdio_ring.map_or(0, |ring| ring.completion_code)),
+        Ordering::Relaxed,
+    );
+    CYW43_FIRST_RECOVERY_SCHEDULER.sdio_completion_detail.store(
+        u32::from(sdio_ring.map_or(0, |ring| ring.completion_detail)),
+        Ordering::Relaxed,
+    );
+    CYW43_FIRST_RECOVERY_SCHEDULER.sdio_completion_result.store(
+        sdio_ring.map_or(0, |ring| ring.completion_result),
+        Ordering::Relaxed,
+    );
     CYW43_FIRST_RECOVERY_SCHEDULER
         .runtime_recovery_source_line
         .store(runtime_recovery_source_line, Ordering::Relaxed);
@@ -12510,6 +12681,37 @@ pub(crate) fn first_cyw43_recovery_scheduler_snapshot(
         child_bus_parent_op: CYW43_FIRST_RECOVERY_SCHEDULER
             .child_bus_parent_op
             .load(Ordering::Relaxed) as u16,
+        sdio_ring_observed: CYW43_FIRST_RECOVERY_SCHEDULER
+            .sdio_ring_observed
+            .load(Ordering::Relaxed)
+            != 0,
+        sdio_command_sequence: CYW43_FIRST_RECOVERY_SCHEDULER
+            .sdio_command_sequence
+            .load(Ordering::Relaxed),
+        sdio_command_opcode: CYW43_FIRST_RECOVERY_SCHEDULER
+            .sdio_command_opcode
+            .load(Ordering::Relaxed) as u16,
+        sdio_command_flags: CYW43_FIRST_RECOVERY_SCHEDULER
+            .sdio_command_flags
+            .load(Ordering::Relaxed) as u16,
+        sdio_command_aux0: CYW43_FIRST_RECOVERY_SCHEDULER
+            .sdio_command_aux0
+            .load(Ordering::Relaxed),
+        sdio_command_aux1: CYW43_FIRST_RECOVERY_SCHEDULER
+            .sdio_command_aux1
+            .load(Ordering::Relaxed),
+        sdio_completion_sequence: CYW43_FIRST_RECOVERY_SCHEDULER
+            .sdio_completion_sequence
+            .load(Ordering::Relaxed),
+        sdio_completion_code: CYW43_FIRST_RECOVERY_SCHEDULER
+            .sdio_completion_code
+            .load(Ordering::Relaxed) as u16,
+        sdio_completion_detail: CYW43_FIRST_RECOVERY_SCHEDULER
+            .sdio_completion_detail
+            .load(Ordering::Relaxed) as u16,
+        sdio_completion_result: CYW43_FIRST_RECOVERY_SCHEDULER
+            .sdio_completion_result
+            .load(Ordering::Relaxed),
         runtime_recovery_source_line: CYW43_FIRST_RECOVERY_SCHEDULER
             .runtime_recovery_source_line
             .load(Ordering::Relaxed),
@@ -27853,6 +28055,41 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
+    fn sdio_command_ring_snapshot_requires_two_stable_record_pairs() {
+        let mut command = DriverTaskCommandRecord::service(
+            0xeff0_90d9,
+            DriverTaskBudgetGrant::from_contract(SDIO_HOST_DRIVER_TASK_CONTRACT),
+        );
+        command.flags = DRIVER_TASK_RING_FLAG_ONE_WAY;
+        command.aux0 = DRIVER_RUNTIME_CYW43_COMMAND_AUX;
+        command.aux1 = 7;
+        let completion = DriverTaskCompletionRecord::progress(2, 1);
+        let snapshot = stable_sdio_command_ring_snapshot(command, completion, command, completion)
+            .expect("two exact record pairs must expose passive ring evidence");
+        assert_eq!(snapshot.command_sequence, 0xeff0_90d9);
+        assert_eq!(snapshot.command_flags, DRIVER_TASK_RING_FLAG_ONE_WAY);
+        assert_eq!(snapshot.command_aux0, DRIVER_RUNTIME_CYW43_COMMAND_AUX);
+        assert_eq!(snapshot.command_aux1, 7);
+        assert_eq!(snapshot.completion_sequence, 2);
+
+        let mut changed_command = command;
+        changed_command.sequence = command.sequence.wrapping_add(1);
+        assert_eq!(
+            stable_sdio_command_ring_snapshot(command, completion, changed_command, completion,),
+            None,
+            "a changing sequence-last command must fail closed",
+        );
+
+        let changed_completion = DriverTaskCompletionRecord::progress(command.sequence, 9);
+        assert_eq!(
+            stable_sdio_command_ring_snapshot(command, completion, command, changed_completion,),
+            None,
+            "a changing completion must fail closed",
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
     fn sdio_dpc_snapshot_exposes_front_only_after_sequence_last_producer_commit() {
         let ring = DriverRuntimeDpcEventRing::empty(42);
         let mut body_visible = ring;
@@ -30632,6 +30869,78 @@ mod tests {
 
         clear_driver_task_transport(CYW43_WIFI_DRIVER_TASK_CONTRACT);
         clear_driver_task_transport(SDIO_HOST_DRIVER_TASK_CONTRACT);
+        reset_cyw43_sdio_pair_recovery_for_test();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn first_recovery_snapshot_retains_delegated_sdio_ring_before_scrub() {
+        let _guard = PERSISTENT_OP11_DEADLINE_TEST_LOCK
+            .lock()
+            .expect("delegated SDIO recovery snapshot test lock");
+        clear_driver_task_transport(CYW43_WIFI_DRIVER_TASK_CONTRACT);
+        clear_driver_task_transport(SDIO_HOST_DRIVER_TASK_CONTRACT);
+        reset_cyw43_sdio_pair_recovery_for_test();
+
+        let mut cyw43_ring = Box::new(AlignedDriverTaskRing(
+            [0u32; DRIVER_TASK_RING_PAGE_BYTES / core::mem::size_of::<u32>()],
+        ));
+        let mut sdio_ring = Box::new(AlignedDriverTaskRing(
+            [0u32; DRIVER_TASK_RING_PAGE_BYTES / core::mem::size_of::<u32>()],
+        ));
+        let cyw43_request = 0x4359_6601;
+        seed_first_recovery_scheduler_root(
+            cyw43_ring.0.as_mut_ptr() as usize,
+            cyw43_request,
+            0x4359_0066,
+            DRIVER_TASK_RETAINED_LEASE_PRIMARY | DRIVER_TASK_RETAINED_LEASE_BUS,
+        );
+
+        let sdio_ring_root_ptr = sdio_ring.0.as_mut_ptr() as usize;
+        publish_driver_task_ring(SDIO_HOST_DRIVER_TASK_CONTRACT, sdio_ring_root_ptr);
+        let owner_guard = test_delegate_cyw43_sdio_dpc_owner();
+        let mut command = DriverTaskCommandRecord::service(
+            0xeff0_90d9,
+            DriverTaskBudgetGrant::from_contract(SDIO_HOST_DRIVER_TASK_CONTRACT),
+        );
+        command.flags = DRIVER_TASK_RING_FLAG_ONE_WAY;
+        command.aux0 = DRIVER_RUNTIME_CYW43_COMMAND_AUX;
+        command.aux1 = 0x4359_0001;
+        let completion = DriverTaskCompletionRecord::progress(2, 1);
+        // SAFETY: Both records are written to their fixed ABI offsets in the
+        // aligned test-owned page before the recovery snapshot reads it.
+        unsafe {
+            core::ptr::write_volatile(sdio_ring_root_ptr as *mut DriverTaskCommandRecord, command);
+            core::ptr::write_volatile(
+                (sdio_ring_root_ptr + DRIVER_TASK_RING_COMPLETION_OFFSET)
+                    as *mut DriverTaskCompletionRecord,
+                completion,
+            );
+        }
+
+        request_cyw43_sdio_pair_restart();
+        let retained = first_cyw43_recovery_scheduler_snapshot()
+            .expect("the first recovery cut must retain the delegated SDIO records");
+        assert!(retained.sdio_ring_observed);
+        assert_eq!(retained.sdio_command_sequence, command.sequence);
+        assert_eq!(retained.sdio_command_opcode, command.opcode);
+        assert_eq!(retained.sdio_command_flags, command.flags);
+        assert_eq!(retained.sdio_command_aux0, command.aux0);
+        assert_eq!(retained.sdio_command_aux1, command.aux1);
+        assert_eq!(retained.sdio_completion_sequence, completion.sequence);
+        assert_eq!(retained.sdio_completion_code, completion.code);
+        assert_eq!(retained.sdio_completion_detail, completion.detail);
+        assert_eq!(retained.sdio_completion_result, completion.result);
+
+        clear_driver_task_transport(CYW43_WIFI_DRIVER_TASK_CONTRACT);
+        clear_driver_task_transport(SDIO_HOST_DRIVER_TASK_CONTRACT);
+        assert_eq!(
+            first_cyw43_recovery_scheduler_snapshot(),
+            Some(retained),
+            "pair scrub cannot erase the retained command/completion discriminator",
+        );
+
+        drop(owner_guard);
         reset_cyw43_sdio_pair_recovery_for_test();
     }
 

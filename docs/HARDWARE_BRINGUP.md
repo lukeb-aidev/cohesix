@@ -661,11 +661,18 @@ snapshot also emits:
 wifi: deferred_recovery retained=yes refinement=<pair-placeholder|owner-context|exact-owner> logical_terminal_observed=<yes|no> cause=<cause> subphase=<subphase> gate=<n> current=<yes|no> live_generation=<n>
 wifi: deferred_recovery scheduler scope=<first-pre-fence|unavailable> cause=<unavailable|root-request|persistent-parent-stable-invalid|runtime-progress|rx-queue-poison|recovery-continuation> outer=<phase>/<pair_epoch>/0x<mask> root=<active>/<phase>/0x<mask>/<request>/<generation> command_sequence=<n>
 wifi: deferred_recovery scheduler_edge publication_latched=<yes|no> signal_returned=<yes|no> parent_deadline_expired=<yes|no> child_terminal=<yes|no> child_wait_receipt=<yes|no> child_bus_episode=<yes|no> bus_parent=<seq>/0x<op> rsl=<n> evidence=exact-only
+wifi: deferred_recovery scheduler_sdio scope=<first-pre-fence|unavailable> observed=<yes|no> command=<sequence>/<opcode>/<flags>/<aux0>/<aux1> completion=<sequence>/<code>/<detail>/<result> evidence=stable-double-read
 ```
 
 HAL captures that scheduler record sequence-last immediately before the first
 outer-lease poison or sticky pair-restart mutation, and driver-layer evidence
-preserves it through later refinement. The first-writer-wins `cause` separates
+preserves it through later refinement. Before that recovery mutation, HAL also
+invalidates and samples the delegated SDIO command/completion records twice.
+Only an identical pair is retained as `observed=yes`; an unstable or
+unavailable pair is explicit and cannot be interpreted as proof that CYW43 did
+not publish. This snapshot is passive: it does not wake SDIO, consume a
+completion, retry a command, or acquire producer authority. The
+first-writer-wins `cause` separates
 canonical persistent-parent identity failure, runtime progress, RX-queue
 poison, generic root request, and recovery continuation; it is provenance, not
 another recovery authority. `refinement=pair-placeholder` has no
