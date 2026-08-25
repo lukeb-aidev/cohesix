@@ -28,6 +28,7 @@ BRCMFMAC_CMDLINE_STAGE_NAME="brcmfmac-dyndbg.cmdline"
 BRCMFMAC_DYNAMIC_DEBUG_STAGE_NAME="brcmfmac-dyndbg.sh"
 DRIVER_RUNTIME_CPIO_STAGE_NAME="cohesix-driver-runtimes.cpio.uimg"
 PI4_IMAGE_IDENTITY_STAGE_NAME="pi4-image-identity.json"
+PI4_RESOLVED_MANIFEST_STAGE_NAME="cohesix-root-task-resolved.json"
 SEL4_IMAGE_PROVENANCE_SUFFIX=".cohesix-provenance.json"
 DRIVER_RUNTIME_EMBED_DIR="${ROOT_DIR}/out/pi4-driver-runtime-embed"
 DRIVER_RUNTIME_EMBED_CPIO_NAME="cohesix-driver-runtimes.cpio"
@@ -1371,6 +1372,7 @@ validate_output_paths() {
         "$BRCMFMAC_CMDLINE_STAGE_NAME" \
         "$BRCMFMAC_DYNAMIC_DEBUG_STAGE_NAME" \
         "$DRIVER_RUNTIME_CPIO_STAGE_NAME" \
+        "$PI4_RESOLVED_MANIFEST_STAGE_NAME" \
         "cohesix-driver-runtimes.cpio" \
         "start4.elf" "fixup4.dat" "bcm2711-rpi-4-b.dtb" "u-boot.bin" \
         "config.txt" "boot.cmd" "boot.scr.uimg" "cohesix_boot_state.txt" \
@@ -2143,9 +2145,24 @@ stage_driver_runtime_payload() {
     log "Staged Pi4 driver runtime payload at ${stage_dir_abs}/${DRIVER_RUNTIME_CPIO_STAGE_NAME}"
 }
 
+stage_pi4_resolved_manifest() {
+    local manifest_json="${GENERATED_CONFIG_DIR}/root_task_resolved.json"
+    local retained_manifest="${STAGE_DIR}/${PI4_RESOLVED_MANIFEST_STAGE_NAME}"
+    local manifest_sha256
+
+    require_file "$manifest_json"
+    cp -f "$manifest_json" "$retained_manifest"
+    manifest_sha256="$(shasum -a 256 "$manifest_json" | awk '{print $1}')"
+    [[ "$(shasum -a 256 "$retained_manifest" | awk '{print $1}')" == "$manifest_sha256" ]] || \
+      fail "retained Pi4 resolved manifest differs from selected generated truth"
+    chmod a-w "$retained_manifest"
+    require_file "$retained_manifest"
+    log "Retained selected Pi4 resolved manifest at ${retained_manifest}"
+}
+
 write_pi4_runtime_dma_build_proof() {
     local proof_path="${STAGE_DIR}/pi4-runtime-dma-proof.env"
-    local manifest_json="${GENERATED_CONFIG_DIR}/root_task_resolved.json"
+    local manifest_json="${STAGE_DIR}/${PI4_RESOLVED_MANIFEST_STAGE_NAME}"
     local runtime_raw="${STAGE_DIR}/cohesix-driver-runtimes.cpio"
     local runtime_uimg="${STAGE_DIR}/${DRIVER_RUNTIME_CPIO_STAGE_NAME}"
     local staged_image="${STAGE_DIR}/${COHESIX_IMAGE_NAME}"
@@ -2204,6 +2221,7 @@ stage_sd_payload() {
     rm -rf "$STAGE_DIR"
     mkdir -p "$stage_overlays"
 
+    stage_pi4_resolved_manifest
     cp -f "${FIRMWARE_DIR}/start4.elf" "${STAGE_DIR}/start4.elf"
     cp -f "${FIRMWARE_DIR}/fixup4.dat" "${STAGE_DIR}/fixup4.dat"
     stage_pi4_dtb "${FIRMWARE_DIR}/bcm2711-rpi-4-b.dtb" "${STAGE_DIR}/bcm2711-rpi-4-b.dtb"

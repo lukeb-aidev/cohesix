@@ -1274,7 +1274,7 @@ def test_configure_refuses_tracked_generated_tree() -> None:
         )
 
 
-def test_repo_managed_pi_profile_rejects_pre_m26e_tracked_tree() -> None:
+def test_repo_managed_pi_profile_accepts_current_tracked_mcs_tree() -> None:
     canonical_contract = sel4_profile.load_contract(
         sel4_profile.DEFAULT_CONTRACT
     )
@@ -1287,13 +1287,36 @@ def test_repo_managed_pi_profile_rejects_pre_m26e_tracked_tree() -> None:
         for_runtime=True,
     )
 
-    assert evidence["valid"] is False
-    assert "contract_values_sha256 mismatch" in _errors(evidence)
+    assert evidence["valid"] is True
+    assert evidence["errors"] == []
     assert evidence["build_mode"] == "repository-managed-artifacts"
     assert evidence["claim_eligibility"]["runtime"] is True
     assert evidence["claim_eligibility"]["artifact_set_shipping"] is False
     assert evidence["repo_managed"]["tracked"] is True
     assert evidence["repo_managed"]["clean"] is True
+
+    stamp = json.loads(
+        (build_dir / "cohesix-profile-build-inputs.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert stamp["profile"] == "pi4_diagnostic"
+    assert stamp["contract_values_sha256"] == (
+        "195a0086266d46973acf4f95d9d61fe3ef01afd2326bd2bebe83c725c91e83b0"
+    )
+    configure = set(stamp["commands"]["configure"])
+    assert {
+        "-DKernelIsMCS=ON",
+        "-DMCS=ON",
+        "-DSMP=ON",
+        "-DKernelMaxNumNodes=4",
+        "-DKernelRootCNodeSizeBits=14",
+        "-DKernelArmExportVCNTUser=ON",
+        "-DKernelArmExportPCNTUser=OFF",
+        "-DKernelArmExportPTMRUser=OFF",
+        "-DKernelArmExportVTMRUser=OFF",
+        "-DKernelArmVtimerUpdateVOffset=OFF",
+    } <= configure
 
 
 def test_repo_managed_pi_profile_rejects_noncanonical_path(

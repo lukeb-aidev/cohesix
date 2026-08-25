@@ -1,6 +1,6 @@
 // Copyright 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
-// Purpose: Guard bounded QEMU VirtIO Runtime/Network-unit ordering and device ownership.
+// Purpose: Guard bounded VirtIO ordering, ownership, and platform-specific DMA containment.
 // Author: Lukas Bower
 
 #[path = "../src/net/isolated_network_turn.rs"]
@@ -1441,4 +1441,26 @@ fn isolated_tx_reclaim_path_suppresses_all_routine_info_formatting() {
     );
     assert!(invalidate.contains("log::debug!("));
     assert!(!invalidate.contains("info!("));
+}
+
+#[test]
+fn direct_dma_containment_is_compiled_only_for_the_virtio_backend() {
+    let source = include_str!("../src/hal/console_network.rs");
+
+    assert!(source.contains(
+        "#[cfg(feature = \"net-backend-virtio\")]\nconst DIRECT_DMA_FRAME_COUNT: usize ="
+    ));
+    assert!(source.contains(
+        "#[cfg(not(feature = \"net-backend-virtio\"))]\nconst DIRECT_DMA_FRAME_COUNT: usize = 0;"
+    ));
+    assert_eq!(
+        source
+            .matches("fn scrub_direct_dma_frame(\n        &mut self,")
+            .count(),
+        2,
+    );
+    assert!(source.contains("console-network-direct-virtio-disabled"));
+    assert!(source.contains(
+        "ConsoleNetworkContainmentCursor::with_direct_frames(\n            DIRECT_DMA_FRAME_COUNT as u8,"
+    ));
 }

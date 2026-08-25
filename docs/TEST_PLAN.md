@@ -698,13 +698,12 @@ files cannot be relabelled. Runtime release promotion still requires all six
 validated QEMU/Pi component, root, and full-system records, so QEMU-first work
 cannot produce Pi or Worker-runtime release acceptance.
 
-The tracked `seL4/build_UBOOT` reference remains a pre-26e classic-scheduler
-artifact while this QEMU-first phase is active. Current `pi4_diagnostic`
-validation must reject its stale contract hash; neither changing only the stamp
-nor reusing its bytes can produce MCS or Pi evidence. The later Pi phase must
-perform a fresh profile build, controlled tracked-artifact refresh, and all
-independent image/hardware gates before any Pi acceptance command above may
-pass.
+The tracked `seL4/build_UBOOT` reference is a controlled, source-bound MCS
+diagnostic artifact set and current `pi4_diagnostic` validation requires its
+exact contract hash and complete tracked tree. That static validation and host
+composition prove only build-input consistency: they do not produce Pi runtime
+or release acceptance. Independent exact-image, fresh-target, pressure, and
+hardware gates must still pass before any Pi acceptance command above may pass.
 
 ### Milestone 26e Python package and target projection
 

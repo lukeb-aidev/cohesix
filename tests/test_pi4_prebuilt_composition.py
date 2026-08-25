@@ -205,27 +205,28 @@ def _tracked_build_contract_values_sha256(build_dir: Path) -> str:
     return identity
 
 
-def test_tracked_repository_classic_reference_is_rejected_before_oracle() -> None:
-    """The pre-26e tracked Pi tree must not pass the current MCS contract."""
+def test_tracked_repository_matches_current_mcs_contract() -> None:
+    """The controlled tracked refresh must match the current MCS contract."""
 
     build_dir = REPO_ROOT / "seL4" / "build_UBOOT"
-    with pytest.raises(composition.CompositionError) as raised:
-        composition.validate_repo_build(build_dir)
-    mismatch = re.search(
-        r"contract_values_sha256 mismatch: expected '([0-9a-f]{64})', "
-        r"got '([0-9a-f]{64})'",
-        str(raised.value),
+    evidence = composition.validate_repo_build(build_dir)
+
+    assert evidence["profile"] == composition.PROFILE_NAME
+    assert (
+        _tracked_build_contract_values_sha256(build_dir)
+        == CURRENT_MCS_CONTRACT_VALUES_SHA256
     )
-
-    assert mismatch is not None
-    assert mismatch.group(1) == CURRENT_MCS_CONTRACT_VALUES_SHA256
-    assert mismatch.group(2) != mismatch.group(1)
+    assert re.fullmatch(r"[0-9a-f]{40}", evidence["git_tree"])
 
 
-def test_tracked_repository_cannot_publish_before_controlled_mcs_refresh(
+@pytest.mark.skipif(
+    not DEFAULT_TOOLS_PRESENT,
+    reason="canonical macOS AArch64 GNU binutils family is unavailable",
+)
+def test_tracked_repository_publishes_after_controlled_mcs_refresh(
     tmp_path: Path,
 ) -> None:
-    """Composition must fail closed while the tracked Pi tree is stale."""
+    """Composition must consume the validated current tracked artifact set."""
 
     build_dir = REPO_ROOT / "seL4" / "build_UBOOT"
     rootserver = (
@@ -233,18 +234,17 @@ def test_tracked_repository_cannot_publish_before_controlled_mcs_refresh(
     )
     output_dir = tmp_path / "assembly"
 
-    with pytest.raises(
-        composition.CompositionError,
-        match="contract_values_sha256 mismatch",
-    ):
-        composition.compose(
-            build_dir=build_dir,
-            rootserver=rootserver,
-            output_dir=output_dir,
-            timestamp=1_784_801_980,
-        )
+    provenance = composition.compose(
+        build_dir=build_dir,
+        rootserver=rootserver,
+        output_dir=output_dir,
+        timestamp=1_784_801_980,
+    )
 
-    assert not output_dir.exists()
+    assert provenance["status"] == "complete"
+    assert provenance["repository_build"]["profile"] == composition.PROFILE_NAME
+    assert provenance["baseline_oracle"]["passed"] is True
+    assert (output_dir / composition.OUTPUT_PROVENANCE).is_file()
 
 
 @pytest.mark.skipif(
@@ -286,47 +286,3 @@ def test_tracked_classic_reference_remains_byte_exact_toolchain_oracle(
         oracle["elf_layout"]["file_size"]
         == oracle["image_metadata"]["data_size"]
     )
-
-
-@pytest.mark.skipif(
-    not DEFAULT_TOOLS_PRESENT,
-    reason="canonical macOS AArch64 GNU binutils family is unavailable",
-)
-def test_classic_reference_compose_mechanics_remain_complete(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    """Exercise classic host composition mechanics, not current MCS/Pi proof."""
-
-    build_dir = (REPO_ROOT / "seL4" / "build_UBOOT").resolve()
-    rootserver = (
-        build_dir / "apps" / "sel4test-driver" / "sel4test-driver"
-    )
-    validation = {
-        "profile": composition.PROFILE_NAME,
-        "test_scope": "classic-mechanics-only",
-    }
-
-    def validate_for_mechanics(candidate: Path) -> dict[str, str]:
-        """Bypass only current-profile validation in this host mechanics test."""
-
-        assert Path(candidate).resolve() == build_dir
-        return validation
-
-    monkeypatch.setattr(
-        composition,
-        "validate_repo_build",
-        validate_for_mechanics,
-    )
-    output_dir = tmp_path / "assembly"
-    provenance = composition.compose(
-        build_dir=build_dir,
-        rootserver=rootserver,
-        output_dir=output_dir,
-        timestamp=1_784_801_980,
-    )
-
-    assert provenance["status"] == "complete"
-    assert provenance["repository_build"] == validation
-    assert provenance["baseline_oracle"]["passed"] is True
-    assert (output_dir / composition.OUTPUT_PROVENANCE).is_file()

@@ -1292,6 +1292,85 @@ def test_pi4_image_build_proves_root_archive_and_v2_identity() -> None:
     assert "PI4_IMAGE_IDENTITY_SCHEME=cohesix-pi4-image-identity/v2" in source
 
 
+def test_pi4_image_build_stages_the_exact_resolved_manifest() -> None:
+    """Stage proof must survive restoration of canonical QEMU codegen."""
+
+    source = SCRIPT_PATH.read_text(encoding="utf-8")
+
+    assert (
+        'PI4_RESOLVED_MANIFEST_STAGE_NAME="cohesix-root-task-resolved.json"'
+        in source
+    )
+    assert ('"$PI4_RESOLVED_MANIFEST_STAGE_NAME" ' + "\\") in source
+    assert "stage_pi4_resolved_manifest()" in source
+    stage_body = source[source.index("stage_sd_payload() {") :]
+    assert "stage_pi4_resolved_manifest" in stage_body
+    assert 'chmod a-w "$retained_manifest"' in source
+    assert (
+        'local manifest_json="${STAGE_DIR}/${PI4_RESOLVED_MANIFEST_STAGE_NAME}"'
+        in source
+    )
+
+
+def test_pi4_runtime_dma_manifest_hash_survives_codegen_cleanup(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Cleanup may restore QEMU codegen without invalidating Pi stage proof."""
+
+    script = _copy_sourceable_build_script(tmp_path)
+    generated = tmp_path / "configs" / "generated"
+    stage = tmp_path / "out" / "pi4-sd"
+    generated.mkdir(parents=True)
+    stage.mkdir(parents=True)
+    selected_manifest = b'{"profile":"pi4","workers":64}\n'
+    (generated / "root_task_resolved.json").write_bytes(selected_manifest)
+    for path in (
+        stage / "cohesix-driver-runtimes.cpio",
+        stage / "cohesix-driver-runtimes.cpio.uimg",
+        stage / "cohesix-image-arm-bcm2711",
+        stage / "pi4-image-identity.json",
+        tmp_path / "root-task",
+        tmp_path / "root-task.cpio",
+    ):
+        path.write_bytes(f"fixture:{path.name}\n".encode())
+
+    result = _source_function(
+        script,
+        'GENERATED_CONFIG_DIR="$ROOT_DIR/configs/generated"; '
+        'STAGE_DIR="$ROOT_DIR/out/pi4-sd"; '
+        'EXACT_ROOT_ELF="$ROOT_DIR/root-task"; '
+        'EXACT_ROOT_CPIO="$ROOT_DIR/root-task.cpio"; '
+        'EXACT_GIT_COMMIT=""; '
+        'EXACT_BUILD_TIMESTAMP="2026-08-25T00:00:00Z"; '
+        'EXACT_BUILD_ID="pi4-manifest-cleanup-test"; '
+        'stage_pi4_resolved_manifest; '
+        'write_pi4_runtime_dma_build_proof; '
+        'restore_canonical_codegen() { '
+        'printf "%s\\n" qemu-canonical > '
+        '"$GENERATED_CONFIG_DIR/root_task_resolved.json"; '
+        '}; '
+        'RESTORE_CANONICAL_CODEGEN=1; cleanup',
+    )
+    assert result.returncode == 0, result.stderr
+
+    proof = dict(
+        line.split("=", 1)
+        for line in (stage / "pi4-runtime-dma-proof.env")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    )
+    retained = pathlib.Path(proof["PI4_RUNTIME_DMA_MANIFEST"])
+    retained_sha256 = hashlib.sha256(retained.read_bytes()).hexdigest()
+
+    assert retained == stage / "cohesix-root-task-resolved.json"
+    assert retained.read_bytes() == selected_manifest
+    assert retained.stat().st_mode & 0o222 == 0
+    assert proof["PI4_RUNTIME_DMA_MANIFEST_SHA256"] == retained_sha256
+    assert hashlib.sha256(
+        (generated / "root_task_resolved.json").read_bytes()
+    ).hexdigest() != retained_sha256
+
+
 def test_pi4_image_composition_never_writes_canonical_profile_tree() -> None:
     """Rootserver composition must publish only into the output assembly."""
 
@@ -1684,6 +1763,7 @@ def test_sel4_tree_state_digest_binds_bytes_modes_and_symlinks(
         "..",
         "sel4test-driver-image-arm-bcm2711",
         "pi4-image-identity.json",
+        "cohesix-root-task-resolved.json",
         "config.txt",
         "Config.txt",
         "u-boot.bin",
