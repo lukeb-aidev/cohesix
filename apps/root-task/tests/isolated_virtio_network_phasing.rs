@@ -24,6 +24,43 @@ fn marker(source: &str, value: &str) -> usize {
 }
 
 #[test]
+fn non_virtio_containment_skips_direct_dma_and_rejects_invalid_cursor() {
+    let hal = include_str!("../src/hal/console_network.rs");
+    let non_virtio_inventory = section(
+        hal,
+        "#[cfg(not(feature = \"net-backend-virtio\"))]\nconst DIRECT_DMA_FRAME_COUNT",
+        "#[cfg(feature = \"net-backend-virtio\")]\nconst DIRECT_DEVICE_SLOT_COUNT",
+    );
+    assert!(non_virtio_inventory.contains("DIRECT_DMA_FRAME_COUNT: usize = 0;"));
+
+    let construction = section(
+        hal,
+        "containment: ConsoleNetworkContainmentCursor::with_direct_frames(",
+        "\n    })\n}",
+    );
+    assert!(construction.contains("DIRECT_DMA_FRAME_COUNT as u8"));
+
+    let cursor = include_str!("../src/console_network_service.rs");
+    let transition = section(
+        cursor,
+        "ConsoleNetworkContainmentUnit::UnmapSharedFrame(_) if self.direct_frame_count != 0",
+        "ConsoleNetworkContainmentUnit::ClearDirectIrq =>",
+    );
+    assert!(transition.contains("ConsoleNetworkContainmentUnit::ClearDirectIrq"));
+    assert!(transition.contains("ConsoleNetworkContainmentUnit::DeleteFaultCap(0)"));
+
+    let invalid_cursor = section(
+        hal,
+        "#[cfg(not(feature = \"net-backend-virtio\"))]\n    fn scrub_direct_dma_frame(",
+        "\n    /// Grant one publication credit",
+    );
+    assert!(invalid_cursor.contains("console-network-direct-virtio-disabled"));
+    assert!(invalid_cursor.contains("Err(HalError::Unsupported("));
+    assert!(!invalid_cursor.contains("map_revoke_anchor_frame_in_root"));
+    assert!(!invalid_cursor.contains("cache_clean_bounded"));
+}
+
+#[test]
 fn routine_audit_handoff_cannot_delay_terminal_response_admission() {
     let debug_uart = include_str!("../src/debug_uart.rs");
     assert!(!debug_uart.contains("routine_audit_line"));

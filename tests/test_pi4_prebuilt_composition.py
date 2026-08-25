@@ -223,28 +223,65 @@ def test_tracked_repository_matches_current_mcs_contract() -> None:
     not DEFAULT_TOOLS_PRESENT,
     reason="canonical macOS AArch64 GNU binutils family is unavailable",
 )
-def test_tracked_repository_publishes_after_controlled_mcs_refresh(
+def test_tracked_repository_publishes_deterministically_after_mcs_refresh(
     tmp_path: Path,
 ) -> None:
-    """Composition must consume the validated current tracked artifact set."""
+    """Fixed current inputs must publish one deterministic artifact identity."""
 
     build_dir = REPO_ROOT / "seL4" / "build_UBOOT"
     rootserver = (
         build_dir / "apps" / "sel4test-driver" / "sel4test-driver"
     )
-    output_dir = tmp_path / "assembly"
+    output_dirs = (tmp_path / "assembly-a", tmp_path / "assembly-b")
+    provenances = [
+        composition.compose(
+            build_dir=build_dir,
+            rootserver=rootserver,
+            output_dir=output_dir,
+            timestamp=1_784_801_980,
+        )
+        for output_dir in output_dirs
+    ]
 
-    provenance = composition.compose(
-        build_dir=build_dir,
-        rootserver=rootserver,
-        output_dir=output_dir,
-        timestamp=1_784_801_980,
-    )
-
-    assert provenance["status"] == "complete"
-    assert provenance["repository_build"]["profile"] == composition.PROFILE_NAME
-    assert provenance["baseline_oracle"]["passed"] is True
-    assert (output_dir / composition.OUTPUT_PROVENANCE).is_file()
+    for output_dir, provenance in zip(output_dirs, provenances, strict=True):
+        assert provenance["status"] == "complete"
+        assert (
+            provenance["repository_build"]["profile"]
+            == composition.PROFILE_NAME
+        )
+        assert provenance["baseline_oracle"]["passed"] is True
+        assert (output_dir / composition.OUTPUT_PROVENANCE).is_file()
+    artifact_identities = [
+        {
+            name: (record["size"], record["sha256"])
+            for name, record in provenance["artifacts"].items()
+        }
+        for provenance in provenances
+    ]
+    assert artifact_identities[0] == artifact_identities[1]
+    oracle_a = provenances[0]["baseline_oracle"]
+    oracle_b = provenances[1]["baseline_oracle"]
+    for field in (
+        "tracked_image",
+        "tracked_elfloader",
+        "tracked_archive",
+        "relinked_elfloader",
+        "relinked_payload",
+    ):
+        assert (
+            oracle_a[field]["size"],
+            oracle_a[field]["sha256"],
+        ) == (
+            oracle_b[field]["size"],
+            oracle_b[field]["sha256"],
+        )
+    for field in (
+        "passed",
+        "payload_sha256",
+        "image_metadata",
+        "elf_layout",
+    ):
+        assert oracle_a[field] == oracle_b[field]
 
 
 @pytest.mark.skipif(
