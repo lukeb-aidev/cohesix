@@ -7,12 +7,15 @@
 
 //! CLI entry point for the Cohesix shell prototype.
 
+#[cfg(feature = "in-process")]
 use std::cell::RefCell;
 use std::env;
+#[cfg(feature = "in-process")]
 use std::fs;
 use std::fs::File;
 use std::io::{self, BufReader};
 use std::path::PathBuf;
+#[cfg(feature = "in-process")]
 use std::rc::Rc;
 use std::sync::Arc;
 #[cfg(feature = "tcp")]
@@ -24,29 +27,33 @@ use anyhow::{anyhow, Context, Result};
 use clap::{Parser, ValueEnum};
 use cohesix_ticket::Role;
 use env_logger::Env;
+#[cfg(all(feature = "gpu-bridge", feature = "in-process"))]
 use gpu_bridge_host::auto_bridge;
 use log::LevelFilter;
+#[cfg(feature = "in-process")]
 use nine_door::{NineDoor, ShardLayout};
 
+#[cfg(feature = "in-process")]
 use cohsh::client::InProcessTransport;
+#[cfg(feature = "in-process")]
 use cohsh::trace::{TraceAckMode, TraceShellTransport};
+#[cfg(feature = "in-process")]
+use cohsh::NineDoorTransport;
 #[cfg(feature = "rest")]
 use cohsh::RestTransport;
+#[cfg(feature = "in-process")]
 use cohsh::SECURE9P_MSIZE;
-#[cfg(feature = "tcp")]
 use cohsh::{
-    default_policy_path, load_policy, tcp_debug_enabled, validate_script, AutoAttach,
-    NineDoorTransport, PolicyOverrides, QemuTransport, RoleArg, SessionPool, Shell, Transport,
-    TransportFactory,
-};
-#[cfg(not(feature = "tcp"))]
-use cohsh::{
-    default_policy_path, load_policy, validate_script, AutoAttach, NineDoorTransport,
-    PolicyOverrides, QemuTransport, RoleArg, SessionPool, Shell, Transport, TransportFactory,
+    default_policy_path, load_policy, validate_script, AutoAttach, PolicyOverrides, QemuTransport,
+    RoleArg, SessionPool, Shell, Transport, TransportFactory,
 };
 #[cfg(feature = "tcp")]
-use cohsh::{PooledTcpTransport, SharedTcpTransport, TcpTransport, COHSH_TCP_PORT};
+use cohsh::{
+    tcp_debug_enabled, PooledTcpTransport, SharedTcpTransport, TcpTransport, COHSH_TCP_PORT,
+};
+#[cfg(feature = "in-process")]
 use cohsh_core::command::MAX_LINE_LEN;
+#[cfg(feature = "in-process")]
 use cohsh_core::trace::{
     TraceLog, TraceLogBuilder, TraceLogBuilderRef, TracePolicy, TraceReplayTransport,
     TraceTransportRecorder,
@@ -54,6 +61,7 @@ use cohsh_core::trace::{
 
 #[derive(Copy, Clone, Debug, ValueEnum)]
 enum TransportKind {
+    #[cfg(feature = "in-process")]
     Mock,
     Qemu,
     #[cfg(feature = "tcp")]
@@ -79,7 +87,11 @@ struct Cli {
         long,
         requires = "role",
         conflicts_with = "ticket",
-        conflicts_with_all = ["script", "check", "record_trace", "replay_trace"]
+        conflicts_with_all = ["script", "check"]
+    )]
+    #[cfg_attr(
+        feature = "in-process",
+        arg(conflicts_with_all = ["record_trace", "replay_trace"])
     )]
     mint_ticket: bool,
 
@@ -104,10 +116,12 @@ struct Cli {
     check: Option<PathBuf>,
 
     /// Record a Secure9P trace to the supplied path.
+    #[cfg(feature = "in-process")]
     #[arg(long, value_name = "FILE", conflicts_with = "replay_trace")]
     record_trace: Option<PathBuf>,
 
     /// Replay a Secure9P trace from the supplied path.
+    #[cfg(feature = "in-process")]
     #[arg(long, value_name = "FILE", conflicts_with = "record_trace")]
     replay_trace: Option<PathBuf>,
 
@@ -146,12 +160,29 @@ struct Cli {
     /// Select the transport backing the shell session.
     #[cfg_attr(feature = "tcp", arg(long, value_enum, default_value_t = TransportKind::Tcp))]
     #[cfg_attr(
-        not(feature = "tcp"),
+        all(not(feature = "tcp"), feature = "in-process"),
         arg(long, value_enum, default_value_t = TransportKind::Mock)
+    )]
+    #[cfg_attr(
+        all(
+            not(feature = "tcp"),
+            not(feature = "in-process"),
+            feature = "rest"
+        ),
+        arg(long, value_enum, default_value_t = TransportKind::Rest)
+    )]
+    #[cfg_attr(
+        all(
+            not(feature = "tcp"),
+            not(feature = "in-process"),
+            not(feature = "rest")
+        ),
+        arg(long, value_enum, default_value_t = TransportKind::Qemu)
     )]
     transport: TransportKind,
 
     /// Seed the mock transport with GPU namespaces.
+    #[cfg(feature = "in-process")]
     #[arg(long, default_value_t = false)]
     mock_seed_gpu: bool,
 
@@ -408,14 +439,22 @@ fn resolve_tcp_auth_token(cli_value: Option<&str>) -> Result<String> {
     ))
 }
 
+#[cfg(feature = "in-process")]
 fn build_mock_server(seed_gpu: bool) -> Result<NineDoor> {
     let server = NineDoor::new_with_shard_layout(ShardLayout::enabled(8, true));
+    #[cfg(feature = "gpu-bridge")]
     if seed_gpu {
         let bridge = auto_bridge(true)?;
         let snapshot = bridge.serialise_namespace()?;
         server
             .install_gpu_nodes(&snapshot)
             .context("install mock gpu namespaces")?;
+    }
+    #[cfg(not(feature = "gpu-bridge"))]
+    if seed_gpu {
+        return Err(anyhow!(
+            "--mock-seed-gpu requires the cohsh gpu-bridge feature"
+        ));
     }
     Ok(server)
 }
@@ -510,126 +549,146 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    let trace_enabled = cli.record_trace.is_some() || cli.replay_trace.is_some();
-    if trace_enabled && !matches!(cli.transport, TransportKind::Mock) {
-        return Err(anyhow!("trace record/replay requires --transport mock"));
-    }
-    let trace_policy =
-        TracePolicy::new(policy.trace.max_bytes, SECURE9P_MSIZE, MAX_LINE_LEN as u32);
-    let mut trace_builder: Option<TraceLogBuilderRef> = None;
-
-    let (transport, pool_factory): (Box<dyn Transport>, Option<Arc<dyn TransportFactory>>) =
-        if trace_enabled {
-            let server = build_mock_server(cli.mock_seed_gpu)?;
-            if cli.record_trace.is_some() {
-                let builder = TraceLogBuilder::shared(trace_policy);
-                trace_builder = Some(Rc::clone(&builder));
-                let server_clone = server.clone();
-                let builder_clone = Rc::clone(&builder);
-                let factory = Box::new(move || {
-                    let connection = server_clone.connect().context("open NineDoor session")?;
-                    let transport = InProcessTransport::new(connection);
-                    Ok(TraceTransportRecorder::new(
-                        transport,
-                        Rc::clone(&builder_clone),
-                    ))
+    type TransportSelection = (Box<dyn Transport>, Option<Arc<dyn TransportFactory>>);
+    let build_regular_transport = || -> Result<TransportSelection> {
+        Ok(match cli.transport {
+            #[cfg(feature = "in-process")]
+            TransportKind::Mock => {
+                let server = build_mock_server(cli.mock_seed_gpu)?;
+                let pool_server = server.clone();
+                let factory = Arc::new(move || {
+                    Ok(Box::new(NineDoorTransport::new(pool_server.clone()))
+                        as Box<dyn Transport + Send>)
                 });
-                let transport = TraceShellTransport::new(
-                    factory,
-                    TraceAckMode::Record(builder),
-                    "trace-record",
-                );
-                (Box::new(transport), None)
-            } else {
-                let trace_path = cli.replay_trace.as_ref().expect("trace replay path");
-                let payload = fs::read(trace_path)
-                    .with_context(|| format!("failed to read trace {}", trace_path.display()))?;
-                let trace = TraceLog::decode(&payload, trace_policy)?;
-                let expected = trace.ack_lines;
-                let frames = Rc::new(RefCell::new(Some(trace.frames)));
-                let factory = Box::new(move || {
-                    let frames = frames
-                        .borrow_mut()
-                        .take()
-                        .ok_or_else(|| anyhow!("trace replay already consumed"))?;
-                    Ok(TraceReplayTransport::new(frames))
-                });
-                let transport = TraceShellTransport::new(
-                    factory,
-                    TraceAckMode::Verify { expected, index: 0 },
-                    "trace-replay",
-                );
-                (Box::new(transport), None)
+                (
+                    Box::new(NineDoorTransport::new(server)) as Box<dyn Transport>,
+                    Some(factory),
+                )
             }
-        } else {
-            match cli.transport {
-                TransportKind::Mock => {
-                    let server = build_mock_server(cli.mock_seed_gpu)?;
-                    let pool_server = server.clone();
-                    let factory = Arc::new(move || {
-                        Ok(Box::new(NineDoorTransport::new(pool_server.clone()))
-                            as Box<dyn Transport + Send>)
-                    });
-                    (Box::new(NineDoorTransport::new(server)), Some(factory))
-                }
-                TransportKind::Qemu => (
-                    Box::new(QemuTransport::new(
-                        cli.qemu_bin.clone(),
-                        cli.qemu_out_dir.clone(),
-                        cli.qemu_gic_version.clone(),
-                        qemu_args,
-                    )),
-                    None,
-                ),
-                #[cfg(feature = "tcp")]
-                TransportKind::Tcp => {
-                    let auth_token = resolve_tcp_auth_token(cli.auth_token.as_deref())?;
-                    let retry = policy.retry;
-                    let heartbeat = policy.heartbeat;
-                    let shared = Arc::new(Mutex::new(
-                        TcpTransport::new(tcp_host.clone(), tcp_port)
-                            .with_retry_policy(retry)
-                            .with_heartbeat_interval(Duration::from_millis(heartbeat.interval_ms))
-                            .with_auth_token(auth_token.clone())
-                            .with_tcp_debug(tcp_debug),
-                    ));
-                    let transport = Box::new(SharedTcpTransport::new(Arc::clone(&shared)));
-                    let pool_shared = Arc::clone(&shared);
-                    let factory = Arc::new(move || {
-                        Ok(Box::new(PooledTcpTransport::new(Arc::clone(&pool_shared)))
-                            as Box<dyn Transport + Send>)
-                    });
-                    (transport, Some(factory))
-                }
-                #[cfg(feature = "rest")]
-                TransportKind::Rest => {
-                    let rest_url = resolve_rest_url(cli.rest_url.as_deref()).ok_or_else(|| {
+            TransportKind::Qemu => (
+                Box::new(QemuTransport::new(
+                    cli.qemu_bin.clone(),
+                    cli.qemu_out_dir.clone(),
+                    cli.qemu_gic_version.clone(),
+                    qemu_args,
+                )) as Box<dyn Transport>,
+                None,
+            ),
+            #[cfg(feature = "tcp")]
+            TransportKind::Tcp => {
+                let auth_token = resolve_tcp_auth_token(cli.auth_token.as_deref())?;
+                let retry = policy.retry;
+                let heartbeat = policy.heartbeat;
+                let shared = Arc::new(Mutex::new(
+                    TcpTransport::new(tcp_host.clone(), tcp_port)
+                        .with_retry_policy(retry)
+                        .with_heartbeat_interval(Duration::from_millis(heartbeat.interval_ms))
+                        .with_auth_token(auth_token.clone())
+                        .with_tcp_debug(tcp_debug),
+                ));
+                let transport =
+                    Box::new(SharedTcpTransport::new(Arc::clone(&shared))) as Box<dyn Transport>;
+                let pool_shared = Arc::clone(&shared);
+                let factory = Arc::new(move || {
+                    Ok(Box::new(PooledTcpTransport::new(Arc::clone(&pool_shared)))
+                        as Box<dyn Transport + Send>)
+                });
+                (transport, Some(factory))
+            }
+            #[cfg(feature = "rest")]
+            TransportKind::Rest => {
+                let rest_url = resolve_rest_url(cli.rest_url.as_deref()).ok_or_else(|| {
                         anyhow!(
                             "--transport rest requires --rest-url (or COHSH_REST_URL/COH_REST_URL/HIVE_GATEWAY_URL)"
                         )
                     })?;
-                    let rest_auth_token = resolve_rest_auth_token(cli.rest_auth_token.as_deref());
-                    let pool_url = rest_url.clone();
-                    let pool_token = rest_auth_token.clone();
-                    let pool_response_timeout = rest_response_timeout;
-                    let factory = Arc::new(move || {
-                        Ok(Box::new(build_rest_transport(
-                            pool_url.clone(),
-                            pool_token.clone(),
-                            pool_response_timeout,
-                        )?) as Box<dyn Transport + Send>)
-                    });
-                    (
-                        Box::new(build_rest_transport(
-                            rest_url,
-                            rest_auth_token,
-                            rest_response_timeout,
-                        )?),
-                        Some(factory),
-                    )
-                }
+                let rest_auth_token = resolve_rest_auth_token(cli.rest_auth_token.as_deref());
+                let pool_url = rest_url.clone();
+                let pool_token = rest_auth_token.clone();
+                let pool_response_timeout = rest_response_timeout;
+                let factory = Arc::new(move || {
+                    Ok(Box::new(build_rest_transport(
+                        pool_url.clone(),
+                        pool_token.clone(),
+                        pool_response_timeout,
+                    )?) as Box<dyn Transport + Send>)
+                });
+                (
+                    Box::new(build_rest_transport(
+                        rest_url,
+                        rest_auth_token,
+                        rest_response_timeout,
+                    )?) as Box<dyn Transport>,
+                    Some(factory),
+                )
             }
-        };
+        })
+    };
+
+    #[cfg(feature = "in-process")]
+    let trace_enabled = cli.record_trace.is_some() || cli.replay_trace.is_some();
+    #[cfg(feature = "in-process")]
+    if trace_enabled && !matches!(cli.transport, TransportKind::Mock) {
+        return Err(anyhow!("trace record/replay requires --transport mock"));
+    }
+    #[cfg(feature = "in-process")]
+    let trace_policy =
+        TracePolicy::new(policy.trace.max_bytes, SECURE9P_MSIZE, MAX_LINE_LEN as u32);
+    #[cfg(feature = "in-process")]
+    let mut trace_builder: Option<TraceLogBuilderRef> = None;
+    #[cfg(feature = "in-process")]
+    let trace_transport: Option<TransportSelection> = if trace_enabled {
+        let server = build_mock_server(cli.mock_seed_gpu)?;
+        if cli.record_trace.is_some() {
+            let builder = TraceLogBuilder::shared(trace_policy);
+            trace_builder = Some(Rc::clone(&builder));
+            let server_clone = server.clone();
+            let builder_clone = Rc::clone(&builder);
+            let factory = Box::new(move || {
+                let connection = server_clone.connect().context("open NineDoor session")?;
+                let transport = InProcessTransport::new(connection);
+                Ok(TraceTransportRecorder::new(
+                    transport,
+                    Rc::clone(&builder_clone),
+                ))
+            });
+            let transport =
+                TraceShellTransport::new(factory, TraceAckMode::Record(builder), "trace-record");
+            Some((Box::new(transport) as Box<dyn Transport>, None))
+        } else {
+            let trace_path = cli
+                .replay_trace
+                .as_ref()
+                .context("trace replay path missing after trace selection")?;
+            let payload = fs::read(trace_path)
+                .with_context(|| format!("failed to read trace {}", trace_path.display()))?;
+            let trace = TraceLog::decode(&payload, trace_policy)?;
+            let expected = trace.ack_lines;
+            let frames = Rc::new(RefCell::new(Some(trace.frames)));
+            let factory = Box::new(move || {
+                let frames = frames
+                    .borrow_mut()
+                    .take()
+                    .ok_or_else(|| anyhow!("trace replay already consumed"))?;
+                Ok(TraceReplayTransport::new(frames))
+            });
+            let transport = TraceShellTransport::new(
+                factory,
+                TraceAckMode::Verify { expected, index: 0 },
+                "trace-replay",
+            );
+            Some((Box::new(transport) as Box<dyn Transport>, None))
+        }
+    } else {
+        None
+    };
+    #[cfg(feature = "in-process")]
+    let (transport, pool_factory) = match trace_transport {
+        Some(selection) => selection,
+        None => build_regular_transport()?,
+    };
+    #[cfg(not(feature = "in-process"))]
+    let (transport, pool_factory) = build_regular_transport()?;
     let mut shell = Shell::new(transport, writer);
     if let Some(factory) = pool_factory {
         let pool = SessionPool::new(
@@ -653,12 +712,16 @@ fn main() -> Result<()> {
         shell.run_script(BufReader::new(file))
     } else {
         let auto_role = cli.role.map(Role::from);
+        #[cfg(feature = "in-process")]
+        let auto_log = !matches!(cli.transport, TransportKind::Mock);
+        #[cfg(not(feature = "in-process"))]
+        let auto_log = true;
         let auto_attach = auto_role.map(|role| AutoAttach {
             role,
             ticket: cli.ticket.clone(),
             attempts: 0,
             max_attempts: 1,
-            auto_log: !matches!(cli.transport, TransportKind::Mock),
+            auto_log,
         });
         if auto_attach.is_none() {
             shell.write_line("detached shell: run 'attach <role>' to connect")?;
@@ -666,6 +729,7 @@ fn main() -> Result<()> {
         shell.repl_with_autologin(auto_attach)
     };
 
+    #[cfg(feature = "in-process")]
     if run_result.is_ok() {
         if let Some(trace_path) = cli.record_trace {
             let builder = trace_builder.as_ref().context("trace builder missing")?;

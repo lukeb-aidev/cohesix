@@ -13,6 +13,51 @@ name = "cohsh"
 path = "src/main.rs"
 test = false
 
+[[test]]
+name = "client_lib"
+path = "tests/client_lib.rs"
+required-features = ["in-process"]
+
+[[test]]
+name = "control_plane"
+path = "tests/control_plane.rs"
+required-features = ["in-process"]
+
+[[test]]
+name = "interactive_attach"
+path = "tests/interactive_attach.rs"
+required-features = ["in-process"]
+
+[[test]]
+name = "observe_watch_output"
+path = "tests/observe_watch_output.rs"
+required-features = ["in-process"]
+
+[[test]]
+name = "quit_exit"
+path = "tests/quit_exit.rs"
+required-features = ["in-process"]
+
+[[test]]
+name = "script_interpreter"
+path = "tests/script_interpreter.rs"
+required-features = ["in-process"]
+
+[[test]]
+name = "shell_behaviour"
+path = "tests/shell_behaviour.rs"
+required-features = ["in-process"]
+
+[[test]]
+name = "trace"
+path = "tests/trace.rs"
+required-features = ["in-process"]
+
+[[test]]
+name = "transcripts"
+path = "tests/transcripts.rs"
+required-features = ["in-process"]
+
 [features]
 default = ["tcp", "rest", "in-process", "gpu-bridge"]
 # TCP transport pulls in `std` networking and is opt-in so offline workflows

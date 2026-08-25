@@ -5184,6 +5184,7 @@ fn parse_telemetry_push_args<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "in-process")]
     use std::io::Cursor;
     #[cfg(feature = "tcp")]
     use std::io::{BufReader, Read, Write};
@@ -5282,6 +5283,7 @@ mod tests {
         assert!(error.to_string().contains("requires GICv3"));
     }
 
+    #[cfg(feature = "in-process")]
     #[test]
     fn attach_and_tail_logs() {
         let transport = NineDoorTransport::new(NineDoor::new());
@@ -5296,6 +5298,7 @@ mod tests {
         assert!(rendered.contains("tick 1"));
     }
 
+    #[cfg(feature = "in-process")]
     #[test]
     fn in_process_capacity_errors_keep_typed_source_and_canonical_ack() {
         for (path, message) in [
@@ -5328,6 +5331,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "in-process")]
     #[test]
     fn in_process_capacity_mapping_requires_exact_path_and_source_message() {
         for (path, message) in [
@@ -5354,6 +5358,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "in-process")]
     #[test]
     fn in_process_non_capacity_error_keeps_generic_failure() {
         let err = NineDoorTransport::write_error(
@@ -5375,6 +5380,7 @@ mod tests {
         ));
     }
 
+    #[cfg(feature = "in-process")]
     #[test]
     fn log_dump_writes_queen_log_payload_file() {
         let transport = NineDoorTransport::new(NineDoor::new());
@@ -5397,6 +5403,7 @@ mod tests {
         assert!(rendered.contains("log dump: wrote lines="));
     }
 
+    #[cfg(feature = "in-process")]
     #[test]
     fn log_dump_refuses_existing_file_without_force() {
         let transport = NineDoorTransport::new(NineDoor::new());
@@ -5415,6 +5422,7 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&dump_path).unwrap(), "existing\n");
     }
 
+    #[cfg(feature = "in-process")]
     #[test]
     fn cat_queen_log_ack_includes_recent_echo_batch() {
         let transport = NineDoorTransport::new(NineDoor::new());
@@ -5439,6 +5447,7 @@ mod tests {
         assert!(parse_role("other").is_err());
     }
 
+    #[cfg(feature = "in-process")]
     #[test]
     fn execute_quit_command() {
         let transport = NineDoorTransport::new(NineDoor::new());
@@ -5452,6 +5461,7 @@ mod tests {
         assert!(rendered.contains("closing session"));
     }
 
+    #[cfg(feature = "in-process")]
     #[test]
     fn execute_detach_command() {
         let transport = NineDoorTransport::new(NineDoor::new());
@@ -5486,6 +5496,7 @@ mod tests {
         assert!(!rendered.contains("OK DETACH"));
     }
 
+    #[cfg(feature = "in-process")]
     #[test]
     fn worker_attach_requires_identity() {
         let mut transport = NineDoorTransport::new(NineDoor::new());
@@ -5525,6 +5536,7 @@ mod tests {
         assert!(budget > MAX_ECHO_LEN);
     }
 
+    #[cfg(feature = "in-process")]
     #[test]
     fn help_command_lists_surface() {
         let transport = NineDoorTransport::new(NineDoor::new());
@@ -5848,6 +5860,7 @@ mod tests {
         assert!(build_spawn_payload("lora", ["ticks=1"].into_iter()).is_err());
     }
 
+    #[cfg(feature = "in-process")]
     #[test]
     fn list_reads_directory_entries() {
         let mut transport = NineDoorTransport::new(NineDoor::new());
