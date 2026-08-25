@@ -10933,6 +10933,86 @@ fn read_runtime_command_record() -> DriverTaskCommandRecord {
         .unwrap_or(DriverTaskCommandRecord::empty())
 }
 
+#[cfg(any(target_os = "none", test))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RuntimeNonblockingCommandReceiveContract {
+    ClassicPoll,
+    McsNbRecv { reply_slot: u32 },
+    LocalNotificationNbWait { notification_slot: u32 },
+}
+
+#[cfg(any(target_os = "none", test))]
+const fn runtime_nonblocking_command_receive_contract(
+    kernel_mcs: bool,
+    reply_association_active: bool,
+) -> RuntimeNonblockingCommandReceiveContract {
+    if reply_association_active {
+        RuntimeNonblockingCommandReceiveContract::LocalNotificationNbWait {
+            notification_slot: DRIVER_TASK_CHILD_LOCAL_NOTIFICATION_SLOT as u32,
+        }
+    } else if kernel_mcs {
+        RuntimeNonblockingCommandReceiveContract::McsNbRecv {
+            reply_slot: pi4_driver_abi::DRIVER_RUNTIME_COMMAND_REPLY_SLOT,
+        }
+    } else {
+        RuntimeNonblockingCommandReceiveContract::ClassicPoll
+    }
+}
+
+#[cfg(target_os = "none")]
+fn runtime_nonblocking_command_receive(
+    badge: &mut sel4_sys::seL4_Word,
+    reply_association_active: bool,
+) -> sel4_sys::seL4_MessageInfo {
+    if reply_association_active {
+        debug_assert_eq!(
+            runtime_nonblocking_command_receive_contract(
+                cfg!(sel4_config_kernel_mcs),
+                reply_association_active,
+            ),
+            RuntimeNonblockingCommandReceiveContract::LocalNotificationNbWait {
+                notification_slot: DRIVER_TASK_CHILD_LOCAL_NOTIFICATION_SLOT as u32,
+            },
+        );
+        // SAFETY: A retained Call already owns the runtime's sole Reply object.
+        // The generated local notification in slot 3 is Read-only and bound to
+        // this TCB. NBWait samples only that coalescing source and therefore
+        // cannot cancel or replace the caller associated with Reply slot 6.
+        return unsafe { sel4_sys::seL4_NBWait(DRIVER_TASK_CHILD_LOCAL_NOTIFICATION_SLOT, badge) };
+    }
+    #[cfg(not(sel4_config_kernel_mcs))]
+    {
+        debug_assert_eq!(
+            runtime_nonblocking_command_receive_contract(false, false),
+            RuntimeNonblockingCommandReceiveContract::ClassicPoll,
+        );
+        // SAFETY: Root installs the read-only command endpoint in fixed child
+        // slot 2. Classic seL4 stores the implicit reply capability in the
+        // receiver TCB, so Poll is the correct nonblocking receive primitive.
+        unsafe { sel4_sys::seL4_Poll(DRIVER_TASK_CHILD_COMMAND_SLOT, badge) }
+    }
+    #[cfg(sel4_config_kernel_mcs)]
+    {
+        let reply_slot = pi4_driver_abi::DRIVER_RUNTIME_COMMAND_REPLY_SLOT;
+        debug_assert_eq!(
+            runtime_nonblocking_command_receive_contract(true, false),
+            RuntimeNonblockingCommandReceiveContract::McsNbRecv { reply_slot },
+        );
+        // SAFETY: The compiler-generated child CSpace contains a read-only
+        // command endpoint in slot 2 and the runtime's sole explicit Reply
+        // object in slot 6. MCS NBRecv either leaves that Reply object
+        // unassociated or installs exactly one caller association; NBWait
+        // cannot receive a Call safely because it supplies no Reply object.
+        unsafe {
+            sel4_sys::seL4_NBRecv(
+                DRIVER_TASK_CHILD_COMMAND_SLOT,
+                badge,
+                reply_slot as sel4_sys::seL4_CPtr,
+            )
+        }
+    }
+}
+
 #[cfg(target_os = "none")]
 fn poll_runtime_command(
     last_sequence: u32,
@@ -10962,12 +11042,11 @@ fn poll_runtime_command(
     );
 
     let mut badge: sel4_sys::seL4_Word = 0;
-    // SAFETY: The root task minted `DRIVER_TASK_CHILD_COMMAND_SLOT` into the
-    // child CSpace before resuming this TCB. The runtime reads the shared ring
-    // before this endpoint poll so one-way bounded turns can make progress even
-    // if endpoint wakeup telemetry is inconclusive. Endpoint polling is still
-    // required for commands that need a reply cap.
-    let tag = unsafe { sel4_sys::seL4_Poll(DRIVER_TASK_CHILD_COMMAND_SLOT, &mut badge) };
+    // The runtime reads the shared ring before this endpoint poll so one-way
+    // bounded turns can make progress even if endpoint wakeup telemetry is
+    // inconclusive. Reply-bearing commands use the selected-kernel receive
+    // contract above, including the explicit MCS Reply object.
+    let tag = runtime_nonblocking_command_receive(&mut badge, false);
     let ipc_delivered = tag.length() != 0;
     let ipc_sequence = if ipc_delivered {
         // SAFETY: Root uses MR0 to carry the primitive request sequence when it
@@ -11048,27 +11127,18 @@ fn runtime_wake_from_received_tag(
 }
 
 #[cfg(target_os = "none")]
-fn poll_runtime_command_or_notification(last_sequence: u32, task_key: u32) -> RuntimeCommandWait {
+fn poll_runtime_command_or_notification(
+    last_sequence: u32,
+    task_key: u32,
+    reply_association_active: bool,
+) -> RuntimeCommandWait {
     let mut badge: sel4_sys::seL4_Word = 0;
-    // SAFETY: Root installs the command endpoint in slot 2 and binds the
-    // generated local notification to this TCB. This single nonblocking poll
-    // is the retained-owner arbitration linearization point: a CARD_INT that
-    // is pending here wins before any exact-granted foreground owner action in
-    // this child slice.
-    #[cfg(not(sel4_config_kernel_mcs))]
-    let tag = unsafe { sel4_sys::seL4_Poll(DRIVER_TASK_CHILD_COMMAND_SLOT, &mut badge) };
-    #[cfg(sel4_config_kernel_mcs)]
-    // SAFETY: The compiler-generated child CSpace contains a read-only command
-    // endpoint in slot 2 and the runtime's sole explicit Reply object in slot
-    // 6. NBRecv either leaves that object unassociated or installs exactly one
-    // caller association; the one-in-flight contract prevents replacement.
-    let tag = unsafe {
-        sel4_sys::seL4_NBRecv(
-            DRIVER_TASK_CHILD_COMMAND_SLOT,
-            &mut badge,
-            pi4_driver_abi::DRIVER_RUNTIME_COMMAND_REPLY_SLOT as sel4_sys::seL4_CPtr,
-        )
-    };
+    // This single nonblocking receive is the retained-owner arbitration
+    // linearization point: a CARD_INT pending on the TCB-bound notification
+    // wins before any exact-granted foreground owner action in this slice. A
+    // retained Call samples only the local notification so its Reply
+    // association cannot be replaced or cancelled by another endpoint receive.
+    let tag = runtime_nonblocking_command_receive(&mut badge, reply_association_active);
     RuntimeCommandWait::Wake(runtime_wake_from_received_tag(
         tag,
         badge,
@@ -58294,7 +58364,11 @@ pub fn runtime_main(task_key: usize) -> ! {
             // masks/publishes/ACKs while preserving the exact transfer cursor;
             // dongle-side DPC I/O remains serialized until this child ends.
             match runtime_command_wait_wake_or_quarantine(
-                poll_runtime_command_or_notification(last_sequence, task_key_marker),
+                poll_runtime_command_or_notification(
+                    last_sequence,
+                    task_key_marker,
+                    retained.reply_cap_available,
+                ),
                 notification_route,
                 pending_intake.map(|intake| intake.command),
             ) {
@@ -58346,6 +58420,7 @@ pub fn runtime_main(task_key: usize) -> ! {
                                 poll_runtime_command_or_notification(
                                     last_sequence,
                                     task_key_marker,
+                                    pending_intake.is_some_and(|intake| intake.reply_cap_available),
                                 ),
                                 notification_route,
                                 pending_intake.map(|intake| intake.command),
@@ -70210,6 +70285,38 @@ mod tests {
         assert!(runtime_idle_poll_progress_due(
             RUNTIME_IDLE_POLL_PROGRESS_INTERVAL * 2
         ));
+    }
+
+    #[test]
+    fn mcs_nonblocking_command_receive_preserves_the_generated_reply_object() {
+        assert_eq!(
+            runtime_nonblocking_command_receive_contract(false, false),
+            RuntimeNonblockingCommandReceiveContract::ClassicPoll,
+        );
+        assert_eq!(
+            runtime_nonblocking_command_receive_contract(true, false),
+            RuntimeNonblockingCommandReceiveContract::McsNbRecv {
+                reply_slot: pi4_driver_abi::DRIVER_RUNTIME_COMMAND_REPLY_SLOT,
+            },
+        );
+        assert_eq!(
+            pi4_driver_abi::DRIVER_RUNTIME_COMMAND_REPLY_SLOT,
+            6,
+            "the generated MCS receive contract must retain the sole child Reply slot",
+        );
+        for kernel_mcs in [false, true] {
+            assert_eq!(
+                runtime_nonblocking_command_receive_contract(kernel_mcs, true),
+                RuntimeNonblockingCommandReceiveContract::LocalNotificationNbWait {
+                    notification_slot: DRIVER_TASK_CHILD_LOCAL_NOTIFICATION_SLOT as u32,
+                },
+                "a retained Call must never poll the endpoint through its associated Reply object",
+            );
+        }
+        assert_eq!(
+            DRIVER_TASK_CHILD_LOCAL_NOTIFICATION_SLOT, 3,
+            "the retained-Call poll must use the generated local notification slot",
+        );
     }
 
     #[test]

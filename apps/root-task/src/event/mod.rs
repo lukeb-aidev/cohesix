@@ -3131,14 +3131,15 @@ enum LinkedRuntimeServicePhase {
 /// Maximum number of independently bounded Pi linked-runtime polls admitted
 /// before root-control performs its explicit cooperative yield.
 ///
-/// Serial, USB/local-seat, command dispatch, and HDMI each use a distinct
-/// bounded phase. A quarantined Network cursor is a fifth, hardware-free
-/// transition that releases the rotor to Display. The physical runtimes use
-/// independent scheduling contexts, so serializing this rotor across whole
-/// root-control periods multiplied every retained driver interval by its
-/// width. The existing per-driver generated-period gate remains authoritative
-/// for child wake admission, so composing one complete local rotation cannot
-/// issue a second wake to the same runtime inside its period.
+/// A normal physical rotation admits at most five useful phases: Network,
+/// HDMI, serial, USB/local-seat, and command dispatch. Containment replaces
+/// dispatch when pending rather than adding another hardware action. The
+/// physical runtimes use independent scheduling contexts, so serializing this
+/// rotor across whole root-control periods multiplied every retained driver
+/// interval by its width. The existing per-driver generated-period gate remains
+/// authoritative for child wake admission. The quantum also stops whenever one
+/// phase retains itself, so an exact CYW43/GENET Network continuation still
+/// receives at most one root-side service action before the explicit yield.
 #[cfg(feature = "kernel")]
 const PI4_LOCAL_OPERATOR_POLLS_PER_EXPLICIT_YIELD: usize = 5;
 
@@ -3151,9 +3152,22 @@ const PI4_LOCAL_SEAT_PREFLIGHT_POLLS_PER_EXPLICIT_YIELD: usize = 4;
 const fn pi4_local_operator_quantum_enabled(
     physical_driver_owner: bool,
     linked_serial_owner: bool,
-    network_quarantined: bool,
 ) -> bool {
-    physical_driver_owner && linked_serial_owner && network_quarantined
+    physical_driver_owner && linked_serial_owner
+}
+
+#[cfg(feature = "kernel")]
+fn pi4_local_operator_quantum_should_stop(
+    starting_phase: LinkedRuntimeServicePhase,
+    admitted_phase: LinkedRuntimeServicePhase,
+    next_phase: LinkedRuntimeServicePhase,
+    reboot_pending: bool,
+    containment_pending: bool,
+) -> bool {
+    reboot_pending
+        || containment_pending
+        || next_phase == starting_phase
+        || next_phase == admitted_phase
 }
 
 /// Select the only physical-driver phase eligible while required Pi local-seat
@@ -6017,13 +6031,15 @@ where
     }
 
     /// Service one complete Pi local-operator rotation before the caller's
-    /// explicit root-control yield when no network owner is runnable.
+    /// explicit root-control yield.
     ///
     /// Each `poll` retains its existing one-phase and one-device-operation
     /// bound. This wrapper only stops distinct driver scheduling contexts from
-    /// being serialized across whole root-control periods after Wi-Fi has been
-    /// quarantined. The isolated QEMU path uses its own unit/time-guarded
-    /// branch below; all other states retain their established boundary.
+    /// being serialized across whole root-control periods. A phase that
+    /// retains itself closes the quantum immediately, preserving the existing
+    /// explicit yield between exact Network continuations. The isolated QEMU
+    /// path uses its own unit/time-guarded branch below; all other states retain
+    /// their established boundary.
     #[inline(never)]
     #[must_use = "the caller must honor the root-control yield decision"]
     pub fn poll_root_control_quantum(&mut self) -> bool {
@@ -6031,7 +6047,6 @@ where
         return self.poll_root_control_quantum_for_state(
             crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active(),
             crate::serial::serial_linked_runtime_transport_active(),
-            self.network_service_quarantined,
         );
         #[cfg(not(feature = "kernel"))]
         {
@@ -6045,24 +6060,23 @@ where
         &mut self,
         physical_driver_owner: bool,
         linked_serial_owner: bool,
-        network_quarantined: bool,
     ) -> bool {
         #[cfg(all(feature = "net-console", feature = "release-qemu"))]
         if self.isolated_virtio_compact_path_attached() {
             return self.poll_isolated_virtio_root_control_quantum();
         }
-        if pi4_local_operator_quantum_enabled(
-            physical_driver_owner,
-            linked_serial_owner,
-            network_quarantined,
-        ) {
+        if pi4_local_operator_quantum_enabled(physical_driver_owner, linked_serial_owner) {
             let starting_phase = self.linked_runtime_service_phase;
             for _ in 0..PI4_LOCAL_OPERATOR_POLLS_PER_EXPLICIT_YIELD {
+                let admitted_phase = self.linked_runtime_service_phase;
                 self.poll();
-                if self.reboot_pending || self.deferred_containment_work_pending() {
-                    break;
-                }
-                if self.linked_runtime_service_phase == starting_phase {
+                if pi4_local_operator_quantum_should_stop(
+                    starting_phase,
+                    admitted_phase,
+                    self.linked_runtime_service_phase,
+                    self.reboot_pending,
+                    self.deferred_containment_work_pending(),
+                ) {
                     break;
                 }
             }
@@ -42397,31 +42411,58 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn pi_local_operator_quantum_requires_the_exact_physical_quarantine_cut() {
-        assert!(pi4_local_operator_quantum_enabled(true, true, true));
-        for state in [
-            (false, true, true),
-            (true, false, true),
-            (true, true, false),
-            (false, false, true),
-            (false, true, false),
-            (true, false, false),
-            (false, false, false),
-        ] {
+    fn pi_local_operator_quantum_requires_physical_and_linked_serial_ownership() {
+        assert!(pi4_local_operator_quantum_enabled(true, true));
+        for state in [(false, true), (true, false), (false, false)] {
             assert!(
-                !pi4_local_operator_quantum_enabled(state.0, state.1, state.2),
-                "QEMU, pre-cutover serial, and active Network must not enter the Pi-specific quantum: {state:?}"
+                !pi4_local_operator_quantum_enabled(state.0, state.1),
+                "QEMU and pre-cutover serial must not enter the Pi-specific quantum: {state:?}"
             );
         }
         assert_eq!(
-            PI4_LOCAL_OPERATOR_POLLS_PER_EXPLICIT_YIELD,
-            5,
-            "four useful local phases plus the quarantined Network transition form the hard rotor cap"
+            PI4_LOCAL_OPERATOR_POLLS_PER_EXPLICIT_YIELD, 5,
+            "the complete useful physical rotation forms the hard cap"
         );
         assert_eq!(
             PI4_LOCAL_SEAT_PREFLIGHT_POLLS_PER_EXPLICIT_YIELD, 4,
             "preflight excludes Network and retains only the useful local phases"
         );
+
+        assert!(pi4_local_operator_quantum_should_stop(
+            LinkedRuntimeServicePhase::Serial,
+            LinkedRuntimeServicePhase::Network,
+            LinkedRuntimeServicePhase::Network,
+            false,
+            false,
+        ));
+        assert!(pi4_local_operator_quantum_should_stop(
+            LinkedRuntimeServicePhase::Serial,
+            LinkedRuntimeServicePhase::Display,
+            LinkedRuntimeServicePhase::Serial,
+            false,
+            false,
+        ));
+        assert!(!pi4_local_operator_quantum_should_stop(
+            LinkedRuntimeServicePhase::Serial,
+            LinkedRuntimeServicePhase::Network,
+            LinkedRuntimeServicePhase::Display,
+            false,
+            false,
+        ));
+        assert!(pi4_local_operator_quantum_should_stop(
+            LinkedRuntimeServicePhase::Serial,
+            LinkedRuntimeServicePhase::LocalSeat,
+            LinkedRuntimeServicePhase::Dispatch,
+            true,
+            false,
+        ));
+        assert!(pi4_local_operator_quantum_should_stop(
+            LinkedRuntimeServicePhase::Serial,
+            LinkedRuntimeServicePhase::LocalSeat,
+            LinkedRuntimeServicePhase::Dispatch,
+            false,
+            true,
+        ));
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console", feature = "release-qemu"))]
@@ -42485,8 +42526,7 @@ mod tests {
         {
             let mut pump =
                 EventPump::new(serial, timer, NullIpc, store, &mut audit).with_network(&mut net);
-            let explicit_yield_required =
-                pump.poll_root_control_quantum_for_state(false, false, false);
+            let explicit_yield_required = pump.poll_root_control_quantum_for_state(false, false);
 
             assert_eq!(pump.qemu_root_control_quantum_sequence, 1);
             assert_eq!(
@@ -42522,8 +42562,7 @@ mod tests {
         {
             let mut pump =
                 EventPump::new(serial, timer, NullIpc, store, &mut audit).with_network(&mut net);
-            let explicit_yield_required =
-                pump.poll_root_control_quantum_for_state(false, false, false);
+            let explicit_yield_required = pump.poll_root_control_quantum_for_state(false, false);
 
             assert_eq!(pump.qemu_root_control_quantum_sequence, 1);
             assert_eq!(
@@ -47821,7 +47860,7 @@ mod tests {
             pump.linked_runtime_service_phase = LinkedRuntimeServicePhase::Network;
 
             assert!(
-                pump.poll_root_control_quantum_for_state(true, true, true),
+                pump.poll_root_control_quantum_for_state(true, true),
                 "the physical Pi rotation retains its explicit-yield boundary"
             );
 
@@ -47838,7 +47877,7 @@ mod tests {
             );
 
             assert!(
-                pump.poll_root_control_quantum_for_state(true, true, true),
+                pump.poll_root_control_quantum_for_state(true, true),
                 "each physical Pi rotation returns to the scheduler"
             );
 
@@ -47858,6 +47897,49 @@ mod tests {
         }
 
         assert_eq!(wifi.polls, 0, "quarantine must never poll CYW43");
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn active_genet_pi_quantum_composes_operator_work_without_repeating_network() {
+        struct LinkedRuntimeTestReset;
+
+        impl Drop for LinkedRuntimeTestReset {
+            fn drop(&mut self) {
+                crate::serial::test_end_linked_runtime_only_transport();
+            }
+        }
+
+        let _progress_guard = wifi_driver_task_progress_test_guard();
+        crate::serial::test_begin_linked_runtime_only_transport();
+        let _reset = LinkedRuntimeTestReset;
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<
+            32768,
+        >::new());
+        let timer = TestTimer::repeated(8, 1);
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut genet = FakeNet::new();
+        genet.driver_contract = crate::hal::driver_task::GENET_DRIVER_TASK_CONTRACT;
+
+        {
+            let mut pump =
+                EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut genet);
+            pump.linked_runtime_service_phase = LinkedRuntimeServicePhase::Network;
+
+            assert!(pump.poll_root_control_quantum_for_state(true, true));
+            assert_eq!(
+                pump.linked_runtime_service_phase,
+                LinkedRuntimeServicePhase::Network,
+                "one complete wired rotation must stop before repeating its starting NIC phase",
+            );
+        }
+
+        assert_eq!(
+            genet.polls, 1,
+            "the composed physical rotation must retain exactly one GENET poll before Yield",
+        );
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]

@@ -585,6 +585,22 @@ impl<'a, P: Platform> Write for DebugConsole<'a, P> {
     }
 }
 
+const fn boot_line_needs_debug_console_copy(physical_pi_driver_owner: bool) -> bool {
+    !physical_pi_driver_owner
+}
+
+fn emit_boot_line_with_physical_pi_single_sink<P: Platform>(
+    console: &mut DebugConsole<'_, P>,
+    line: &str,
+) {
+    if boot_line_needs_debug_console_copy(
+        crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active(),
+    ) {
+        console.writeln_prefixed(line);
+    }
+    boot_log::force_uart_line(line);
+}
+
 struct BootWatchdog {
     last_sequence: u64,
     stagnant_ticks: u32,
@@ -2580,6 +2596,10 @@ fn init_local_seat_runtime<P: Platform>(
     } else {
         None
     };
+    // Emit each local-seat decision through the ownership-aware bootstrap sink
+    // exactly once. Before linked-runtime handoff it reaches physical UART;
+    // afterward it is retained in queen.log. Mirroring the same line through
+    // DebugConsole doubled Pi serial bytes and HDMI scroll work.
     if local_seat_enabled {
         if let Some(hint) = xhci_mmio_hint_info {
             if hint.raw_mmio != hint.mmio {
@@ -2591,8 +2611,7 @@ fn init_local_seat_runtime<P: Platform>(
                     hint.raw_mmio,
                     hint.mmio
                 );
-                console.writeln_prefixed(line.as_str());
-                boot_log::force_uart_line(line.as_str());
+                emit_boot_line_with_physical_pi_single_sink(console, line.as_str());
             }
             let mut line = heapless::String::<144>::new();
             let _ = write!(
@@ -2601,11 +2620,12 @@ fn init_local_seat_runtime<P: Platform>(
                 hint.mmio,
                 hint.source.label()
             );
-            console.writeln_prefixed(line.as_str());
-            boot_log::force_uart_line(line.as_str());
+            emit_boot_line_with_physical_pi_single_sink(console, line.as_str());
         } else {
-            console.writeln_prefixed("[local-seat] xhci-mmio-hint=none source=absent");
-            boot_log::force_uart_line("[local-seat] xhci-mmio-hint=none source=absent");
+            emit_boot_line_with_physical_pi_single_sink(
+                console,
+                "[local-seat] xhci-mmio-hint=none source=absent",
+            );
         }
         if let Some(cmd) = xhci_pci_cmd {
             let mut line = heapless::String::<144>::new();
@@ -2614,11 +2634,12 @@ fn init_local_seat_runtime<P: Platform>(
                 "[local-seat] xhci-pci-cmd=0x{cmd:04x} safe={}",
                 (((cmd & 0x0406) == 0x0406) as u8)
             );
-            console.writeln_prefixed(line.as_str());
-            boot_log::force_uart_line(line.as_str());
+            emit_boot_line_with_physical_pi_single_sink(console, line.as_str());
         } else {
-            console.writeln_prefixed("[local-seat] xhci-pci-cmd=absent safe=0");
-            boot_log::force_uart_line("[local-seat] xhci-pci-cmd=absent safe=0");
+            emit_boot_line_with_physical_pi_single_sink(
+                console,
+                "[local-seat] xhci-pci-cmd=absent safe=0",
+            );
         }
         {
             let mut line = heapless::String::<144>::new();
@@ -2628,8 +2649,7 @@ fn init_local_seat_runtime<P: Platform>(
                 xhci_handoff_ready as u8,
                 xhci_handoff_ready_info.source.label()
             );
-            console.writeln_prefixed(line.as_str());
-            boot_log::force_uart_line(line.as_str());
+            emit_boot_line_with_physical_pi_single_sink(console, line.as_str());
         }
         {
             let mut line = heapless::String::<144>::new();
@@ -2639,8 +2659,7 @@ fn init_local_seat_runtime<P: Platform>(
                 xhci_irq_quiesced as u8,
                 xhci_irq_quiesced_info.source.label()
             );
-            console.writeln_prefixed(line.as_str());
-            boot_log::force_uart_line(line.as_str());
+            emit_boot_line_with_physical_pi_single_sink(console, line.as_str());
         }
         {
             let mut line = heapless::String::<144>::new();
@@ -2650,8 +2669,7 @@ fn init_local_seat_runtime<P: Platform>(
                 xhci_handoff_halted as u8,
                 xhci_handoff_halted_info.source.label()
             );
-            console.writeln_prefixed(line.as_str());
-            boot_log::force_uart_line(line.as_str());
+            emit_boot_line_with_physical_pi_single_sink(console, line.as_str());
         }
         {
             let mut line = heapless::String::<144>::new();
@@ -2661,8 +2679,7 @@ fn init_local_seat_runtime<P: Platform>(
                 xhci_handoff_safe as u8,
                 xhci_handoff_safe_info.source.label()
             );
-            console.writeln_prefixed(line.as_str());
-            boot_log::force_uart_line(line.as_str());
+            emit_boot_line_with_physical_pi_single_sink(console, line.as_str());
         }
         {
             let state = match (xhci_handoff_ready, xhci_irq_quiesced) {
@@ -2682,8 +2699,7 @@ fn init_local_seat_runtime<P: Platform>(
                 "[local-seat] xhci-handoff-contract state={} ready={} irq={} action={}",
                 state, xhci_handoff_ready as u8, xhci_irq_quiesced as u8, action
             );
-            console.writeln_prefixed(line.as_str());
-            boot_log::force_uart_line(line.as_str());
+            emit_boot_line_with_physical_pi_single_sink(console, line.as_str());
         }
         if xhci_usbcmd.is_some() || xhci_usbsts.is_some() || xhci_iman0.is_some() {
             let mut line = heapless::String::<224>::new();
@@ -2715,8 +2731,7 @@ fn init_local_seat_runtime<P: Platform>(
                     let _ = write!(line, "absent");
                 }
             }
-            console.writeln_prefixed(line.as_str());
-            boot_log::force_uart_line(line.as_str());
+            emit_boot_line_with_physical_pi_single_sink(console, line.as_str());
         }
         if let Some(snapshot) = xhci_capability_snapshot {
             let mut line = heapless::String::<320>::new();
@@ -2731,11 +2746,12 @@ fn init_local_seat_runtime<P: Platform>(
                 snapshot.db_offset,
                 snapshot.rts_offset,
             );
-            console.writeln_prefixed(line.as_str());
-            boot_log::force_uart_line(line.as_str());
+            emit_boot_line_with_physical_pi_single_sink(console, line.as_str());
         } else {
-            console.writeln_prefixed("[local-seat] xhci-cap-snapshot=0 source=absent");
-            boot_log::force_uart_line("[local-seat] xhci-cap-snapshot=0 source=absent");
+            emit_boot_line_with_physical_pi_single_sink(
+                console,
+                "[local-seat] xhci-cap-snapshot=0 source=absent",
+            );
         }
         if xhci_handoff_source.is_some()
             || xhci_prestop_ready_info.source != Pi4UefiXhciChosenFlagSource::Absent
@@ -2753,8 +2769,7 @@ fn init_local_seat_runtime<P: Platform>(
                 xhci_poststop_ready_info.value as u8,
                 xhci_poststop_irq_info.value as u8,
             );
-            console.writeln_prefixed(line.as_str());
-            boot_log::force_uart_line(line.as_str());
+            emit_boot_line_with_physical_pi_single_sink(console, line.as_str());
             let mut ext = heapless::String::<240>::new();
             let _ = write!(
                 ext,
@@ -2769,8 +2784,7 @@ fn init_local_seat_runtime<P: Platform>(
                 xhci_poststop_halted_info.value as u8,
                 xhci_poststop_safe_info.value as u8,
             );
-            console.writeln_prefixed(ext.as_str());
-            boot_log::force_uart_line(ext.as_str());
+            emit_boot_line_with_physical_pi_single_sink(console, ext.as_str());
             if !xhci_handoff_ready || !xhci_irq_quiesced {
                 let mut reject = heapless::String::<256>::new();
                 let _ = write!(
@@ -2789,8 +2803,7 @@ fn init_local_seat_runtime<P: Platform>(
                     xhci_poststop_halted_info.value as u8,
                     xhci_poststop_safe_info.value as u8,
                 );
-                console.writeln_prefixed(reject.as_str());
-                boot_log::force_uart_line(reject.as_str());
+                emit_boot_line_with_physical_pi_single_sink(console, reject.as_str());
             }
         }
         if let Some(hint) = display_hint {
@@ -2803,11 +2816,12 @@ fn init_local_seat_runtime<P: Platform>(
                 hint.pitch,
                 paddr = hint.paddr
             );
-            console.writeln_prefixed(line.as_str());
-            boot_log::force_uart_line(line.as_str());
+            emit_boot_line_with_physical_pi_single_sink(console, line.as_str());
         } else {
-            console.writeln_prefixed("[local-seat] fb-hint unavailable (falling back to mailbox)");
-            boot_log::force_uart_line("[local-seat] fb-hint unavailable (falling back to mailbox)");
+            emit_boot_line_with_physical_pi_single_sink(
+                console,
+                "[local-seat] fb-hint unavailable (falling back to mailbox)",
+            );
         }
     }
     let xhci_stop_state_snapshot =
@@ -2838,8 +2852,7 @@ fn init_local_seat_runtime<P: Platform>(
     };
     match local_seat::evaluate(hardware, local_seat::runtime_backend_available()) {
         Ok(LocalSeatInit::Disabled) => {
-            console.writeln_prefixed("[local-seat] disabled");
-            boot_log::force_uart_line("[local-seat] disabled");
+            emit_boot_line_with_physical_pi_single_sink(console, "[local-seat] disabled");
         }
         Ok(LocalSeatInit::Active(status)) => {
             let mut runtime = local_seat::LocalSeatRuntime::new(status);
@@ -2857,8 +2870,7 @@ fn init_local_seat_runtime<P: Platform>(
                         status.line_bytes,
                         status.buffer_lines
                     );
-                    console.writeln_prefixed(line.as_str());
-                    boot_log::force_uart_line(line.as_str());
+                    emit_boot_line_with_physical_pi_single_sink(console, line.as_str());
                 }
                 Err(backend_err) => {
                     let mut line = heapless::String::<192>::new();
@@ -2868,16 +2880,14 @@ fn init_local_seat_runtime<P: Platform>(
                         backend_err.as_str(),
                         if local_seat_required { "yes" } else { "no" }
                     );
-                    console.writeln_prefixed(line.as_str());
-                    boot_log::force_uart_line(line.as_str());
+                    emit_boot_line_with_physical_pi_single_sink(console, line.as_str());
                 }
             }
         }
         Ok(LocalSeatInit::Degraded(reason)) => {
             let mut line = heapless::String::<128>::new();
             let _ = write!(line, "[local-seat] degraded reason={}", reason.as_str());
-            console.writeln_prefixed(line.as_str());
-            boot_log::force_uart_line(line.as_str());
+            emit_boot_line_with_physical_pi_single_sink(console, line.as_str());
         }
         Err(err) => {
             let mut line = heapless::String::<128>::new();
@@ -2886,8 +2896,7 @@ fn init_local_seat_runtime<P: Platform>(
                 "[local-seat] abort required=true reason={}",
                 err.as_str()
             );
-            console.writeln_prefixed(line.as_str());
-            boot_log::force_uart_line(line.as_str());
+            emit_boot_line_with_physical_pi_single_sink(console, line.as_str());
             return Err(BootError::Fatal(format!(
                 "local-seat required policy failed: {}",
                 err.as_str()
@@ -4431,8 +4440,7 @@ fn bootstrap<P: Platform>(
                     fault_handler_err as sel4_sys::seL4_Word,
                     error_name(fault_handler_err)
                 );
-                console.writeln_prefixed(line.as_str());
-                boot_log::force_uart_line(line.as_str());
+                emit_boot_line_with_physical_pi_single_sink(&mut console, line.as_str());
                 post_commit.flag_failure("fault.handler.install", error_name(fault_handler_err));
             }
         }
@@ -4981,8 +4989,7 @@ fn bootstrap<P: Platform>(
                 "[local-seat] abort required=true reason=keyboard-probe-failed detail={} action=halt-before-shell telemetry=driver-task-boot-contract",
                 probe_result.as_str()
             );
-            console.writeln_prefixed(line.as_str());
-            boot_log::force_uart_line(line.as_str());
+            emit_boot_line_with_physical_pi_single_sink(&mut console, line.as_str());
             crate::hal::driver_task::emit_boot_contract_proof();
             return Err(BootError::Fatal(format!(
                 "local-seat required keyboard probe failed: {}",
@@ -5001,8 +5008,7 @@ fn bootstrap<P: Platform>(
                 probe_result.as_str(),
                 local_seat::linked_local_seat_usb_frontier_label()
             );
-            console.writeln_prefixed(line.as_str());
-            boot_log::force_uart_line(line.as_str());
+            emit_boot_line_with_physical_pi_single_sink(&mut console, line.as_str());
         }
     }
 
@@ -5235,8 +5241,7 @@ fn bootstrap<P: Platform>(
                         }
                     }
                 }
-                console.writeln_prefixed(policy_line.as_str());
-                boot_log::force_uart_line(policy_line.as_str());
+                emit_boot_line_with_physical_pi_single_sink(&mut console, policy_line.as_str());
             }
 
             if hardware.no_nic {
@@ -5284,8 +5289,7 @@ fn bootstrap<P: Platform>(
                     line,
                     "[net-console] deferred reason={reason} action=post-prompt-persistent-wifi-supervisor"
                 );
-                boot_log::force_uart_line(line.as_str());
-                console.writeln_prefixed(line.as_str());
+                emit_boot_line_with_physical_pi_single_sink(&mut console, line.as_str());
                 boot_log::force_uart_line(
                     "[boot] wifi net-console deferred; operator prompt starts before persistent Wi-Fi supervision",
                 );
@@ -5715,18 +5719,15 @@ fn bootstrap<P: Platform>(
                     evidence.manifest_sha256,
                     evidence.evidence_sha256
                 );
-                console.writeln_prefixed(line.as_str());
-                boot_log::force_uart_line(line.as_str());
+                emit_boot_line_with_physical_pi_single_sink(&mut console, line.as_str());
             }
             Ok(None) => {
-                console.writeln_prefixed("[attestation] disabled");
-                boot_log::force_uart_line("[attestation] disabled");
+                emit_boot_line_with_physical_pi_single_sink(&mut console, "[attestation] disabled");
             }
             Err(err) => {
                 let mut line = heapless::String::<128>::new();
                 let _ = write!(line, "[attestation] abort reason={}", err.as_str());
-                console.writeln_prefixed(line.as_str());
-                boot_log::force_uart_line(line.as_str());
+                emit_boot_line_with_physical_pi_single_sink(&mut console, line.as_str());
                 return Err(BootError::Fatal(format!(
                     "attestation failed: {}",
                     err.as_str()
@@ -5751,8 +5752,7 @@ fn bootstrap<P: Platform>(
                     "[manifest] ticket register failed role={role_label} reason={}",
                     ticket_registry_error_label(err)
                 );
-                console.writeln_prefixed(fail_line.as_str());
-                boot_log::force_uart_line(fail_line.as_str());
+                emit_boot_line_with_physical_pi_single_sink(&mut console, fail_line.as_str());
                 return Err(BootError::Fatal(format!(
                     "manifest ticket registration failed for {role_label}: {}",
                     ticket_registry_error_label(err)
@@ -5760,8 +5760,7 @@ fn bootstrap<P: Platform>(
             }
             let mut line = heapless::String::<96>::new();
             let _ = write!(line, "[manifest] ticket role={role_label} source=generated");
-            console.writeln_prefixed(line.as_str());
-            boot_log::force_uart_line(line.as_str());
+            emit_boot_line_with_physical_pi_single_sink(&mut console, line.as_str());
         }
         boot_log::force_uart_line("[manifest] ticket register end source=generated");
 
@@ -5893,8 +5892,7 @@ fn bootstrap<P: Platform>(
                     "DRIVER_TASK_BOOT_SMOKE phase=post-net-qemu status=attempt backend={}",
                     net_backend_label,
                 );
-                boot_log::force_uart_line(line.as_str());
-                console.writeln_prefixed(line.as_str());
+                emit_boot_line_with_physical_pi_single_sink(&mut console, line.as_str());
                 let report = hal.bootstrap_qemu_post_net_driver_task_smoke(fault_ep_slot);
                 let mut line = heapless::String::<512>::new();
                 let _ = write!(
@@ -8048,18 +8046,25 @@ impl BootstrapMessageHandler for BootstrapIpcAudit {
 #[cfg(test)]
 mod tests {
     use super::{
-        bounded_message_words, copy_message_words, dtb_rejected_net_policy_reason,
-        fault_ep_poll_budget_exhausted, fault_length_range_for_mode, fault_tag_name_for_mode,
-        format_net_console_init_detail, is_fault_label_for_mode, preview_payload, ControlEndpoint,
-        FaultEndpoint, KernelIpc, PayloadPreview, Pi4BootNetPolicySource, StagedMessage,
-        StrayTracker, CLASSIC_FAULT_TAG_VMFAULT, FAULT_EP_POLL_BUDGET_PER_DISPATCH,
-        HEX_CHUNK_BYTES, MAX_HEX_LINES, MAX_MESSAGE_WORDS, MAX_PAYLOAD_LOG_BYTES,
-        MCS_FAULT_TAG_TIMEOUT, MCS_FAULT_TAG_VMFAULT,
+        boot_line_needs_debug_console_copy, bounded_message_words, copy_message_words,
+        dtb_rejected_net_policy_reason, fault_ep_poll_budget_exhausted,
+        fault_length_range_for_mode, fault_tag_name_for_mode, format_net_console_init_detail,
+        is_fault_label_for_mode, preview_payload, ControlEndpoint, FaultEndpoint, KernelIpc,
+        PayloadPreview, Pi4BootNetPolicySource, StagedMessage, StrayTracker,
+        CLASSIC_FAULT_TAG_VMFAULT, FAULT_EP_POLL_BUDGET_PER_DISPATCH, HEX_CHUNK_BYTES,
+        MAX_HEX_LINES, MAX_MESSAGE_WORDS, MAX_PAYLOAD_LOG_BYTES, MCS_FAULT_TAG_TIMEOUT,
+        MCS_FAULT_TAG_VMFAULT,
     };
     use crate::event::IpcDispatcher;
     use crate::rust_alloc::vec::Vec;
     use core::fmt::Write as _;
     use heapless::{String as HeaplessString, Vec as HeaplessVec};
+
+    #[test]
+    fn physical_pi_boot_lines_use_only_the_ownership_aware_sink() {
+        assert!(!boot_line_needs_debug_console_copy(true));
+        assert!(boot_line_needs_debug_console_copy(false));
+    }
 
     #[test]
     fn mcs_timeout_and_vm_fault_layouts_are_cfg_specific() {

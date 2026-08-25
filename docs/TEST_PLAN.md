@@ -4101,9 +4101,14 @@ source evidence; only fresh target behavior can qualify scheduling.
 
 Physical Pi cadence convergence must separately prove the root-control
 composition policy. Deterministic state-machine tests must require the exact
-physical-owner, linked-serial, network-quarantined cut, preserve a single poll
-for QEMU and active Network, cap preflight at four polls, cap quarantined local
-service at five polls, and prove persistent display debt cannot create an
+physical-owner plus linked-serial cut, preserve a single poll for QEMU and
+every nonphysical path, cap preflight at four polls, and cap every ordinary
+physical rotation at five polls. The composed path must stop on reboot,
+containment, a phase retaining itself, or return to its starting phase. Active
+GENET coverage must perform exactly one NIC poll while admitting the other
+useful physical phases before Yield; a retained CYW43 Network action must stop
+the composition immediately rather than receiving a second driver turn.
+Quarantine coverage must prove persistent display debt cannot create an
 unbounded redraw loop or poll quarantined CYW43. The next fresh exact-image Pi
 boot must pair serial and captures and compare same-driver cadence against the
 generated 10 ms periods: USB must retain Gate 10, one-deep HID/parser proof,
@@ -4115,6 +4120,16 @@ phase 157 `sdio-hw-entry` to first MMIO or a typed terminal. Offline tests,
 QEMU, a changed counter gap, or USB readiness alone cannot qualify the Pi
 repair, and no SDIO/CYW43 device-semantic change is authorized until that
 fresh cadence boot is harvested.
+
+Physical Pi bootstrap-output coverage must select exactly one
+ownership-aware sink for a row that would otherwise be emitted through both
+`DebugConsole` and forced UART. Nonphysical profiles retain their established
+debug-console copy. Tests must prove the selector, and source review must leave
+each affected row's complete content on the forced-log path so linked-runtime
+handoff still routes it to `queen.log`. Fewer source emissions are not serial
+or HDMI performance evidence: the next boot must show one physical copy per
+affected row and separately measure prompt latency, response latency, display
+first draw, and scroll cadence.
 
 Exact physical image
 `1199991dc6bc4da9f2f349251169f6326035b6f709c22ff2bda530a77d055ae6`
@@ -8008,6 +8023,17 @@ Write-only signal caps, one synchronous command association, and fault-before,
 during, after, cancellation, reconstruction-generation, and normal-versus-
 failure Reply exclusion. One-way bootstrap/background completions signal only
 after their sequence-last ring commit and never consume the command Reply.
+The runtime's nonblocking command seam is kernel-contract-specific: classic
+seL4 uses `seL4_Poll`, while MCS must use `seL4_NBRecv` with the exact
+compiler-generated child Reply slot 6. Once that receive retains a Call, both
+kernels must poll only the generated bound local notification in slot 3 until
+the command replies; a second endpoint receive may cancel or replace the live
+Reply association. A focused regression must reject an initial MCS
+NBWait/Poll spelling and reject endpoint polling while Reply is live, and the
+exact MCS target compile must exercise the real `NBRecv` plus local `NBWait`
+bindings. This source and target check proves Reply-association selection and
+preservation only; it cannot prove a child ran or that the pending CYW43
+one-way command crossed its notification/wait boundary on Pi.
 
 `scripts/driver_runtime_manifest.py` must reproduce byte-identical newc and
 JSON outputs from identical component bytes, validate the immutable
