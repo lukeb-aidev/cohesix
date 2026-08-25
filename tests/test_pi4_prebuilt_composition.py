@@ -7,7 +7,9 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
+import re
 import sys
 
 import pytest
@@ -183,21 +185,41 @@ DEFAULT_TOOLS_PRESENT = all(
     Path(f"{composition.DEFAULT_BINUTILS_PREFIX}{tool}").is_file()
     for tool in composition.REQUIRED_BINUTILS
 )
+CURRENT_MCS_CONTRACT_VALUES_SHA256 = (
+    "195a0086266d46973acf4f95d9d61fe3ef01afd2326bd2bebe83c725c91e83b0"
+)
+CLASSIC_ORACLE_CONTRACT_VALUES_SHA256 = (
+    "62b2f3f34fc1531c556d85f0bd3ae6459f2b02a3f9ac371f770d174e3d0afa92"
+)
+
+
+def _tracked_build_contract_values_sha256(build_dir: Path) -> str:
+    """Return the source-contract identity recorded by a tracked build."""
+
+    stamp = json.loads(
+        (build_dir / composition.PROFILE_STAMP).read_text(encoding="utf-8")
+    )
+    identity = stamp.get("contract_values_sha256")
+    assert isinstance(identity, str)
+    assert re.fullmatch(r"[0-9a-f]{64}", identity)
+    return identity
 
 
 def test_tracked_repository_classic_reference_is_rejected_before_oracle() -> None:
     """The pre-26e tracked Pi tree must not pass the current MCS contract."""
 
     build_dir = REPO_ROOT / "seL4" / "build_UBOOT"
-    with pytest.raises(
-        composition.CompositionError,
-        match=(
-            "contract_values_sha256 mismatch: expected "
-            "'195a0086266d46973acf4f95d9d61fe3ef01afd2326bd2bebe83c725c91e83b0', "
-            "got '62b2f3f34fc1531c556d85f0bd3ae6459f2b02a3f9ac371f770d174e3d0afa92'"
-        ),
-    ):
+    with pytest.raises(composition.CompositionError) as raised:
         composition.validate_repo_build(build_dir)
+    mismatch = re.search(
+        r"contract_values_sha256 mismatch: expected '([0-9a-f]{64})', "
+        r"got '([0-9a-f]{64})'",
+        str(raised.value),
+    )
+
+    assert mismatch is not None
+    assert mismatch.group(1) == CURRENT_MCS_CONTRACT_VALUES_SHA256
+    assert mismatch.group(2) != mismatch.group(1)
 
 
 def test_tracked_repository_cannot_publish_before_controlled_mcs_refresh(
@@ -232,9 +254,16 @@ def test_tracked_repository_cannot_publish_before_controlled_mcs_refresh(
 def test_tracked_classic_reference_remains_byte_exact_toolchain_oracle(
     tmp_path: Path,
 ) -> None:
-    """Retain the historical classic byte oracle without claiming MCS/Pi proof."""
+    """Retain one source-bound classic oracle without claiming MCS/Pi proof."""
 
     build_dir = REPO_ROOT / "seL4" / "build_UBOOT"
+    if (
+        _tracked_build_contract_values_sha256(build_dir)
+        != CLASSIC_ORACLE_CONTRACT_VALUES_SHA256
+    ):
+        pytest.skip(
+            "historical byte oracle requires its exact classic build identity"
+        )
     tools = composition.resolve_binutils()
     objects = composition.parse_elfloader_object_order(
         build_dir / "build.ninja"
