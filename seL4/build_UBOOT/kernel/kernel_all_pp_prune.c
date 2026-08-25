@@ -1,8 +1,8 @@
-# 0 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-m26e-e66143d8/kernel/kernel_all_pp_prune_wrapper_temp.c"
-# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-m26e-e66143d8//"
+# 0 "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/kernel_all_pp_prune_wrapper_temp.c"
+# 1 "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate//"
 # 0 "<built-in>"
 # 0 "<command-line>"
-# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-m26e-e66143d8/kernel/kernel_all_pp_prune_wrapper_temp.c"
+# 1 "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/kernel_all_pp_prune_wrapper_temp.c"
 # 1 "/Users/lukasbower/seL4_16/kernel/src/api/faults.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
@@ -30,11 +30,11 @@
 
 /* Compile-time configuration parameters. Might be set by the build system. */
 
-# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-m26e-e66143d8/kernel/autoconf/autoconf.h" 1
+# 1 "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/autoconf/autoconf.h" 1
 
        
 
-# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-m26e-e66143d8/kernel/gen_config/kernel/gen_config.h" 1
+# 1 "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/gen_config/kernel/gen_config.h" 1
        
 
 /* disabled: CONFIG_ARCH_AARCH32 */
@@ -144,7 +144,7 @@
 
 
 /* disabled: CONFIG_ARM_HAS_TLB_LOCK */
-# 119 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-m26e-e66143d8/kernel/gen_config/kernel/gen_config.h"
+# 119 "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/gen_config/kernel/gen_config.h"
 /* disabled: CONFIG_EXCEPTION_FASTPATH */
 
 
@@ -195,7 +195,7 @@
 /* disabled: CONFIG_EXPORT_PTMR_USER */
 /* disabled: CONFIG_EXPORT_VTMR_USER */
 /* disabled: CONFIG_VTIMER_UPDATE_VOFFSET */
-# 5 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-m26e-e66143d8/kernel/autoconf/autoconf.h" 2
+# 5 "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/autoconf/autoconf.h" 2
 # 12 "/Users/lukasbower/seL4_16/kernel/libsel4/include/sel4/config.h" 2
 # 10 "/Users/lukasbower/seL4_16/kernel/include/config.h" 2
 
@@ -684,7 +684,7 @@ typedef dom_t seL4_Domain;
 
 
 
-# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-m26e-e66143d8/kernel/generated_prune/sel4/shared_types_gen.h" 1
+# 1 "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated_prune/sel4/shared_types_gen.h" 1
 # 13 "/Users/lukasbower/seL4_16/kernel/include/api/types.h" 2
 # 1 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/api/types.h" 1
 /*
@@ -1137,7 +1137,7 @@ static inline word_t __attribute__((__const__)) wordFromMessageInfo(seL4_Message
 
 
 
-# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-m26e-e66143d8/kernel/generated_prune/arch/object/structures_gen.h" 1
+# 1 "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated_prune/arch/object/structures_gen.h" 1
 # 13 "/Users/lukasbower/seL4_16/kernel/include/object/structures.h" 2
 
 
@@ -1524,7 +1524,7 @@ typedef word_t tcb_cnode_index_t;
 
 
 
-# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-m26e-e66143d8/kernel/generated_prune/arch/object/structures_gen.h" 1
+# 1 "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated_prune/arch/object/structures_gen.h" 1
 # 16 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/64/mode/object/structures.h" 2
 # 1 "/Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/machine/hardware.h" 1
 /*
@@ -2307,7 +2307,7 @@ bool_t Arch_handleFaultReply(tcb_t *receiver, tcb_t *sender, word_t faultType);
  * SPDX-License-Identifier: GPL-2.0-only
  */
 
-# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-m26e-e66143d8/kernel/gen_headers/plat/machine/devices_gen.h" 1
+# 1 "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/gen_headers/plat/machine/devices_gen.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -2617,7 +2617,7 @@ bool_t Arch_handleFaultReply(tcb_t *receiver, tcb_t *sender, word_t faultType);
    asserts check that the kernel config won't lead to UTs being created that aren't
    representable. */
 _Static_assert(17592186044416 <= (1ul << (47)), "ut_max_less_than_canonical");;
-# 19 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-m26e-e66143d8/kernel/gen_headers/plat/machine/devices_gen.h" 2
+# 19 "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/gen_headers/plat/machine/devices_gen.h" 2
 # 1 "/Users/lukasbower/seL4_16/kernel/include/linker.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
@@ -2659,7 +2659,7 @@ _Static_assert(17592186044416 <= (1ul << (47)), "ut_max_less_than_canonical");;
 
 
 /* bss data that is permitted to be used in the restricted SKIM address space */
-# 20 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-m26e-e66143d8/kernel/gen_headers/plat/machine/devices_gen.h" 2
+# 20 "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/gen_headers/plat/machine/devices_gen.h" 2
 
 
 /* Wrap raw physBase location constant to give it a symbolic name in C that's
@@ -2714,7 +2714,7 @@ static const kernel_frame_t __attribute__((__section__(".boot.rodata"))) kernel_
         .armExecuteNever = true,
         .userAvailable = false
     },
-# 83 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-m26e-e66143d8/kernel/gen_headers/plat/machine/devices_gen.h"
+# 83 "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/gen_headers/plat/machine/devices_gen.h"
     /* /soc/local_intc@40000000 */
     {
         .paddr = 0xff800000,
@@ -2747,7 +2747,7 @@ static const p_region_t __attribute__((__section__(".boot.rodata"))) avail_p_reg
     },
 };
 # 8 "/Users/lukasbower/seL4_16/kernel/include/plat/default/plat/machine.h" 2
-# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-m26e-e66143d8/kernel/gen_headers/plat/platform_gen.h" 1
+# 1 "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/gen_headers/plat/platform_gen.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -2755,7 +2755,7 @@ static const p_region_t __attribute__((__section__(".boot.rodata"))) avail_p_reg
  */
 
        
-# 17 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-m26e-e66143d8/kernel/gen_headers/plat/platform_gen.h"
+# 17 "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/gen_headers/plat/platform_gen.h"
 enum IRQConstants {
     maxIRQ = 216
 };
@@ -3652,7 +3652,7 @@ static inline void ackInterrupt(irq_t irq)
     active_irq[getCurrentCPUIndex()] = 1023u;
 
 }
-# 24 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-m26e-e66143d8/kernel/gen_headers/plat/platform_gen.h" 2
+# 24 "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/gen_headers/plat/platform_gen.h" 2
 # 1 "/Users/lukasbower/seL4_16/kernel/include/drivers/timer/arm_generic.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
@@ -4180,7 +4180,7 @@ static inline void ackDeadlineIRQ(void)
 }
 # 53 "/Users/lukasbower/seL4_16/kernel/include/drivers/timer/arm_generic.h"
 __attribute__((__section__(".boot.text"))) void initGenericTimer(void);
-# 25 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-m26e-e66143d8/kernel/gen_headers/plat/platform_gen.h" 2
+# 25 "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/gen_headers/plat/platform_gen.h" 2
 
 /* #undef CONFIGURE_SMMU */
 
@@ -4188,7 +4188,7 @@ __attribute__((__section__(".boot.text"))) void initGenericTimer(void);
 
 
 /* #undef CONFIGURE_SMMU */
-# 41 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-m26e-e66143d8/kernel/gen_headers/plat/platform_gen.h"
+# 41 "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/gen_headers/plat/platform_gen.h"
 static inline __attribute__((__const__)) time_t getKernelWcetUs(void)
 {
     return 10u;
@@ -4411,7 +4411,7 @@ exception_t decodeARMMMUInvocation(word_t invLabel, word_t length, cptr_t cptr,
 void Arch_userStackTrace(tcb_t *tptr);
 # 10 "/Users/lukasbower/seL4_16/kernel/include/kernel/vspace.h" 2
 # 14 "/Users/lukasbower/seL4_16/kernel/include/api/syscall.h" 2
-# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-m26e-e66143d8/kernel/gen_headers/arch/api/syscall.h" 1
+# 1 "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/gen_headers/arch/api/syscall.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -4425,7 +4425,7 @@ void Arch_userStackTrace(tcb_t *tptr);
  *
  */
        
-# 37 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-m26e-e66143d8/kernel/gen_headers/arch/api/syscall.h"
+# 37 "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/gen_headers/arch/api/syscall.h"
 enum syscall {
     SysCall = -1,
     SysReplyRecv = -2,
@@ -4451,7 +4451,7 @@ enum syscall {
 
     SysDebugSendIPI = -18,
     SysDebugGetThreadAffinity = -19,
-# 91 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-m26e-e66143d8/kernel/gen_headers/arch/api/syscall.h"
+# 91 "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/gen_headers/arch/api/syscall.h"
 };
 typedef word_t syscall_t;
 
@@ -8170,7 +8170,7 @@ __attribute__((__section__(".boot.text"))) void clock_sync_test(void);
    can take considerable time */
 # 13 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/64/kernel/vspace.c" 2
 # 21 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/64/kernel/vspace.c"
-# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-m26e-e66143d8/kernel/gen_headers/arch/api/invocation.h" 1
+# 1 "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/gen_headers/arch/api/invocation.h" 1
 
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
@@ -8183,7 +8183,7 @@ __attribute__((__section__(".boot.text"))) void clock_sync_test(void);
  *
  */
        
-# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-m26e-e66143d8/kernel/gen_headers/arch/api/sel4_invocation.h" 1
+# 1 "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/gen_headers/arch/api/sel4_invocation.h" 1
 
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
@@ -8196,7 +8196,7 @@ __attribute__((__section__(".boot.text"))) void clock_sync_test(void);
  *
  */
        
-# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-m26e-e66143d8/kernel/gen_headers/api/invocation.h" 1
+# 1 "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/gen_headers/api/invocation.h" 1
 
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
@@ -8244,7 +8244,7 @@ enum invocation_label {
     TCBResume,
     TCBBindNotification,
     TCBUnbindNotification,
-# 63 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-m26e-e66143d8/kernel/gen_headers/api/invocation.h"
+# 63 "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/gen_headers/api/invocation.h"
     TCBSetTLSBase,
     TCBSetFlags,
     CNodeRevoke,
@@ -8285,7 +8285,7 @@ enum invocation_label {
 
     nInvocationLabels
 };
-# 14 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-m26e-e66143d8/kernel/gen_headers/arch/api/sel4_invocation.h" 2
+# 14 "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/gen_headers/arch/api/sel4_invocation.h" 2
 
 enum sel4_arch_invocation_label {
     ARMVSpaceClean_Data = nInvocationLabels,
@@ -8295,7 +8295,7 @@ enum sel4_arch_invocation_label {
     ARMSMCCall,
     nSeL4ArchInvocationLabels
 };
-# 14 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-m26e-e66143d8/kernel/gen_headers/arch/api/invocation.h" 2
+# 14 "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/gen_headers/arch/api/invocation.h" 2
 
 enum arch_invocation_label {
     ARMPageTableMap = nSeL4ArchInvocationLabels,
@@ -8318,11 +8318,11 @@ enum arch_invocation_label {
     ARMPageGetAddress,
     ARMASIDControlMakePool,
     ARMASIDPoolAssign,
-# 51 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-m26e-e66143d8/kernel/gen_headers/arch/api/invocation.h"
+# 51 "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/gen_headers/arch/api/invocation.h"
     ARMIRQIssueIRQHandlerTrigger,
 
     ARMIRQIssueIRQHandlerTriggerCore,
-# 94 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-m26e-e66143d8/kernel/gen_headers/arch/api/invocation.h"
+# 94 "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/gen_headers/arch/api/invocation.h"
     nArchInvocationLabels
 };
 # 22 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/64/kernel/vspace.c" 2
@@ -14011,7 +14011,7 @@ __attribute__((__section__(".boot.text"))) static pptr_t alloc_rootserver_obj(wo
 
 __attribute__((__section__(".boot.text"))) static word_t rootserver_max_size_bits(word_t extra_bi_size_bits)
 {
-    word_t cnode_size_bits = 14 + 5;
+    word_t cnode_size_bits = 16 + 5;
     word_t max = (((cnode_size_bits)>(12))?(cnode_size_bits):(12));
     return (((max)>(extra_bi_size_bits))?(max):(extra_bi_size_bits));
 }
@@ -14019,7 +14019,7 @@ __attribute__((__section__(".boot.text"))) static word_t rootserver_max_size_bit
 __attribute__((__section__(".boot.text"))) static word_t calculate_rootserver_size(v_region_t it_v_reg, word_t extra_bi_size_bits)
 {
     /* work out how much memory we need for root server objects */
-    word_t size = (1ul << (14 + 5));
+    word_t size = (1ul << (16 + 5));
     size += (1ul << (11)); // root thread tcb
     size += (1ul << (12)); // ipc buf
     size += (1ul << (12)); // boot info
@@ -14047,7 +14047,7 @@ __attribute__((__section__(".boot.text"))) static void create_rootserver_objects
                                                 word_t extra_bi_size_bits)
 {
     /* the largest object the PD, the root cnode, or the extra boot info */
-    word_t cnode_size_bits = 14 + 5;
+    word_t cnode_size_bits = 16 + 5;
     word_t max = rootserver_max_size_bits(extra_bi_size_bits);
 
     word_t size = calculate_rootserver_size(it_v_reg, extra_bi_size_bits);
@@ -14114,7 +14114,7 @@ __attribute__((__section__(".boot.text"))) void write_slot(slot_ptr_t slot_ptr, 
 /* Our root CNode needs to be able to fit all the initial caps and not
  * cover all of memory.
  */
-_Static_assert(14 < 32 - 5 && (1ul << (14)) >= seL4_NumInitialCaps && 14 >= (12 - 5), "root_cnode_size_valid");
+_Static_assert(16 < 32 - 5 && (1ul << (16)) >= seL4_NumInitialCaps && 16 >= (12 - 5), "root_cnode_size_valid");
 
 
 
@@ -14123,8 +14123,8 @@ __attribute__((__section__(".boot.text"))) cap_t
 create_root_cnode(void)
 {
     cap_t cap = cap_cnode_cap_new(
-                    14, /* radix */
-                    (1 << 6) - 14, /* guard size */
+                    16, /* radix */
+                    (1 << 6) - 16, /* guard size */
                     0, /* guard */
                     rootserver.cnode); /* pptr */
 
@@ -14207,7 +14207,7 @@ __attribute__((__section__(".boot.text"))) void populate_bi_frame(node_id_t node
     bi->numNodes = num_nodes;
     bi->numIOPTLevels = 0;
     bi->ipcBuffer = (seL4_IPCBuffer *)ipcbuf_vptr;
-    bi->initThreadCNodeSizeBits = 14;
+    bi->initThreadCNodeSizeBits = 16;
     bi->initThreadDomain = 0;
     bi->extraLen = extra_bi_size;
 
@@ -14217,10 +14217,10 @@ __attribute__((__section__(".boot.text"))) void populate_bi_frame(node_id_t node
 
 __attribute__((__section__(".boot.text"))) bool_t provide_cap(cap_t root_cnode_cap, cap_t cap)
 {
-    if (ndks_boot.slot_pos_cur >= (1ul << (14))) {
+    if (ndks_boot.slot_pos_cur >= (1ul << (16))) {
         printf("ERROR: can't add another cap, all %""lu"
                " (=2^CONFIG_ROOT_CNODE_SIZE_BITS) slots used\n",
-               (1ul << (14)));
+               (1ul << (16)));
         return false;
     }
     write_slot((((slot_ptr_t)(((pptr_t)cap_get_capPtr(root_cnode_cap)))) + (ndks_boot.slot_pos_cur)), cap);
@@ -14700,7 +14700,7 @@ __attribute__((__section__(".boot.text"))) void bi_finalise(void)
 
     ndks_boot.bi_frame->empty = (seL4_SlotRegion) {
         .start = ndks_boot.slot_pos_cur,
-        .end = (1ul << (14))
+        .end = (1ul << (16))
     };
 }
 
