@@ -7,18 +7,13 @@ set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 
-if ! command -v rg >/dev/null 2>&1; then
-  echo "rg is required for this check" >&2
-  exit 1
-fi
-
 fail=0
 
 check() {
   local label="$1"
   local pattern="$2"
   local file="$3"
-  if ! rg -q "$pattern" "$file"; then
+  if ! grep -Eq -- "$pattern" "$file"; then
     echo "missing ${label} in ${file} (pattern: ${pattern})" >&2
     fail=1
   fi
@@ -28,7 +23,7 @@ check_ci() {
   local label="$1"
   local pattern="$2"
   local file="$3"
-  if ! rg -qi "$pattern" "$file"; then
+  if ! grep -Eiq -- "$pattern" "$file"; then
     echo "missing ${label} in ${file} (pattern: ${pattern})" >&2
     fail=1
   fi
