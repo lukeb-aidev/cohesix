@@ -25,7 +25,9 @@ fn pack_rejects_chunk_size_override_before_creating_bundle() {
     )
     .expect("write template");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_cas-tool"))
+    let binary = std::env::var_os("CARGO_BIN_EXE_cas-tool")
+        .expect("Cargo must provide the cas-tool integration-test binary");
+    let output = Command::new(binary)
         .args([
             "pack",
             "--epoch",

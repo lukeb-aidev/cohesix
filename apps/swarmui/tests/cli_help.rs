@@ -24,7 +24,9 @@ Options:
 #[test]
 fn help_flags_exit_before_desktop_initialization() {
     for flag in ["-h", "--help"] {
-        let output = Command::new(env!("CARGO_BIN_EXE_swarmui"))
+        let binary = std::env::var_os("CARGO_BIN_EXE_swarmui")
+            .expect("Cargo must provide the SwarmUI integration-test binary");
+        let output = Command::new(binary)
             .arg(flag)
             .env("SWARMUI_TRANSPORT", "invalid-test-transport")
             .output()
