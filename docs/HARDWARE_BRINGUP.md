@@ -200,9 +200,12 @@ image, and finally seals the staged image. Sealing hashes the complete image
 with only the marker's 64-byte self-reference plus the U-Boot header/data CRC
 fields normalized, writes the digest into `image-id=`, repairs both CRCs, and
 writes `out/pi4-sd/pi4-image-identity.json`. A successful stage is build proof
-only. The repository-managed diagnostic tree is not release proof, and neither
-it nor the staged image substitutes for read-back media, boot, Wi-Fi, TCP, or
-benchmark evidence.
+only. It also retains the selected Pi resolved manifest as
+`out/pi4-sd/cohesix-root-task-resolved.json`; the runtime/DMA build proof names
+and hashes that immutable copy so later restoration of canonical QEMU generated
+outputs cannot relabel the Pi build. The repository-managed diagnostic tree is
+not release proof, and neither it nor the staged image substitutes for
+read-back media, boot, Wi-Fi, TCP, or benchmark evidence.
 
 Record hashes for the image, U-Boot, DTB, boot script, firmware, and
 driver-runtime archive that will be flashed. Record the exact sealed build

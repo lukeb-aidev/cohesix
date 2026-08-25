@@ -31,6 +31,12 @@ executable record proves configured admission; a QEMU or Pi claim still
 requires target evidence for the exact kernel, resolved manifest, root image,
 Worker archive, and ABI version.
 
+The Pi manifest's `max_workers=256` and per-role `namespace_capacity=256`
+preserve identifier and policy capacity; they do not declare 256 executable Pi
+children. Raising the Pi executable population from 64 to 256 requires a
+separately scoped 15-bit root-CNode and resource-admission redesign and cannot
+be inferred from the QEMU population.
+
 ## Role support matrix
 
 The checked-in default and Pi 4 profiles currently declare the following:
