@@ -719,6 +719,7 @@ impl ConsoleNetworkRuntime {
         Ok(())
     }
 
+    #[cfg(feature = "net-backend-virtio")]
     fn scrub_direct_dma_frame(
         &mut self,
         frame_index: usize,
@@ -764,6 +765,20 @@ impl ConsoleNetworkRuntime {
         hal.env.unmap_page_cap(frame_cap).map_err(HalError::Sel4)?;
         self.direct_dma_root_mapping = None;
         Ok(())
+    }
+
+    #[cfg(not(feature = "net-backend-virtio"))]
+    fn scrub_direct_dma_frame(
+        &mut self,
+        _frame_index: usize,
+        _hal: &mut KernelHal<'_>,
+    ) -> Result<(), HalError> {
+        // The non-VirtIO containment cursor has zero direct frames and cannot
+        // select this unit. Reject a corrupted cursor instead of compiling a
+        // QEMU DMA mapping path into a physical-network profile.
+        Err(HalError::Unsupported(
+            "console-network-direct-virtio-disabled",
+        ))
     }
 
     /// Grant one publication credit after the adapter retained all copied output.
