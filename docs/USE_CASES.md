@@ -45,7 +45,7 @@ adapter succeeds; every required row needs independently correlated evidence.
 | --- | --- |
 | Operator control | Authenticated console grammar projected by `cohsh`, `coh`, the REST gateway, and other host tools. There is no independent in-VM 9P/TCP listener. |
 | Authority | Role-scoped tickets, manifest-defined namespaces, bounded file operations, and explicit policy gates. |
-| Orchestration | Queen control files plus profile-declared Worker roles and telemetry paths. QEMU declares 256 passive Workers and Pi declares 64, served by two bounded executor lanes; WorkerBus remains model/session-only. Configured execution is separate from target and use-case acceptance. |
+| Orchestration | Queen control files plus profile-declared Worker roles and telemetry paths. QEMU and Pi each declare 256 passive Workers served by two bounded executor lanes; WorkerBus remains model/session-only. Configured execution is separate from target and use-case acceptance. |
 | Observability | Bounded `/proc`, `/log`, worker telemetry, driver counters, and host-projected status. Retention and durability depend on the selected profile and host integration. |
 | Host integration | REST, Python, GPU inventory, model-registry descriptors, and host-side adapters project existing Cohesix semantics; they do not create new VM authority. |
 | Heavy runtimes | CUDA, NVML, Kubernetes, systemd, Docker, model training, field protocols, and application data planes remain outside the VM trusted computing base. |
@@ -192,8 +192,8 @@ helpers; target and provider acceptance remain profile-dependent.**
 A private training pool can export a bounded job package, train an adapter on
 the host, import size-checked and hashed adapter metadata into a host registry,
 and request activation through the Queen. WorkerLora records bounded terminal
-receipts but never performs training. The selected profiles declare 128 QEMU
-and 32 Pi LoRA instances; a target run must still prove its image, capability
+receipts but never performs training. The selected profiles each declare 128
+LoRA instances; a target run must still prove its image, capability
 bundle, READY state, receipt path, teardown, and fresh-generation behavior
 before that execution can be used as acceptance evidence. Lowercase `lora` in
 paths, files, and source identifiers is the ASCII form of this same

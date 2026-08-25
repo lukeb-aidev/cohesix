@@ -24,7 +24,7 @@
     "schema": "host-integration-dependency/v1"
   },
   "manifest_profile": "pi4-uboot-aarch64",
-  "manifest_sha256": "3c7b11caa42951c921ccb7f976fe90ec81fb704394105c73eff734768d98085e",
+  "manifest_sha256": "3a3c44932f336d917b10f84b77919682590678f250692a8dba9f028385bd4384",
   "meta": {
     "author": "Lukas Bower",
     "purpose": "Bind the target-neutral Cohesix Python SDK to one selected 26e target manifest."
@@ -120,7 +120,7 @@
   },
   "worker": {
     "implementation_epoch": 26,
-    "maximum_live_tasks": 64,
+    "maximum_live_tasks": 256,
     "namespace_capacity_per_role": 256,
     "roles": [
       {
@@ -133,7 +133,7 @@
       },
       {
         "declaration": "executable",
-        "executable_slots": 31,
+        "executable_slots": 127,
         "lease_path_template": "/gpu/<id>/lease",
         "role": "worker-gpu",
         "telemetry_path_template": "/shard/<label>/worker/<id>/telemetry",
@@ -149,7 +149,7 @@
       },
       {
         "declaration": "executable",
-        "executable_slots": 32,
+        "executable_slots": 128,
         "lease_path_template": "",
         "role": "worker-lora",
         "telemetry_path_template": "/shard/<label>/worker/<id>/telemetry",

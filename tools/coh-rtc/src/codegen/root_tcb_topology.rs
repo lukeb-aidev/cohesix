@@ -149,7 +149,7 @@ mod tests {
 
     #[test]
     fn ninedoor_bootstrap_candidate_is_exactly_accounted() {
-        for (manifest, fixed, maximum) in [(qemu_manifest(), 9, 265), (pi4_manifest(), 16, 80)] {
+        for (manifest, fixed, maximum) in [(qemu_manifest(), 9, 265), (pi4_manifest(), 16, 272)] {
             assert_eq!(manifest.ninedoor_service.objects.scheduling_contexts, 1);
             assert_eq!(
                 manifest.ninedoor_service.bootstrap_scheduling_context_bits,
@@ -188,7 +188,7 @@ mod tests {
             admitted_slots,
         ) in [
             (qemu_manifest(), 2_024, 4_378, 5_096, 12_570, 5_608, 14_618),
-            (pi4_manifest(), 4_072, 9_230, 4_840, 11_278, 5_352, 13_326),
+            (pi4_manifest(), 4_072, 9_230, 7_144, 17_422, 7_656, 19_470),
         ] {
             let qemu = manifest.profile.name == "virt-aarch64";
             assert_eq!(manifest.console_network_service.stack_pages, 32);
@@ -227,14 +227,14 @@ mod tests {
                     .timeout_fault_caps,
                 if qemu { 9 } else { 16 }
             );
-            assert_eq!(maximum.timeout_fault_caps, if qemu { 265 } else { 80 });
+            assert_eq!(maximum.timeout_fault_caps, if qemu { 265 } else { 272 });
             assert_eq!(
                 maximum.timeout_fault_caps
                     + manifest
                         .worker_resource_admission
                         .post_construction_reserve
                         .timeout_fault_caps,
-                if qemu { 273 } else { 88 }
+                if qemu { 273 } else { 280 }
             );
             assert_eq!(maximum.frames, maximum_frames);
             assert_eq!(maximum.cspace_slots, maximum_slots);

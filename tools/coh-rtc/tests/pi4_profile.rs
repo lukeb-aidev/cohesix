@@ -86,6 +86,87 @@ fn pi4_uboot_profile_emits_network_policy() {
     let temporal_tasks = manifest["temporal_authority"]["tasks"]
         .as_array()
         .expect("temporal tasks");
+    let worker_classes = manifest["temporal_authority"]["worker_classes"]
+        .as_array()
+        .expect("worker classes");
+    for (role, slots) in [
+        ("worker-heartbeat", 1),
+        ("worker-gpu", 127),
+        ("worker-lora", 128),
+    ] {
+        let class = worker_classes
+            .iter()
+            .find(|class| class["role"] == role)
+            .unwrap_or_else(|| panic!("worker class {role}"));
+        assert_eq!(class["slots"], slots);
+    }
+
+    let admission = &manifest["worker_resource_admission"];
+    assert_eq!(admission["capacity"]["cspace_slots"], 65_536);
+    assert_eq!(admission["handoff"]["worker_control_queue_capacity"], 256);
+    assert_eq!(admission["handoff"]["worker_fault_mailboxes"], 256);
+    assert_eq!(admission["fault_registry"]["worker_tcbs"], 256);
+    assert_eq!(admission["fault_registry"]["driver_tcbs"], 7);
+    assert_eq!(admission["fault_registry"]["capacity"], 272);
+    let executable_roles = admission["executable_roles"]
+        .as_array()
+        .expect("executable roles");
+    for (role, slots) in [
+        ("worker-heartbeat", 1),
+        ("worker-gpu", 127),
+        ("worker-lora", 128),
+    ] {
+        let executable = executable_roles
+            .iter()
+            .find(|entry| entry["role"] == role)
+            .unwrap_or_else(|| panic!("executable role {role}"));
+        assert_eq!(executable["namespace_capacity"], 256);
+        assert_eq!(executable["executable_slots"], slots);
+    }
+    let admitted = |resource: &str| {
+        admission["fixed_objects"][resource]
+            .as_u64()
+            .unwrap_or_else(|| panic!("fixed {resource}"))
+            + executable_roles
+                .iter()
+                .map(|role| {
+                    role["executable_slots"].as_u64().expect("executable slots")
+                        * role["per_slot"][resource]
+                            .as_u64()
+                            .unwrap_or_else(|| panic!("per-slot {resource}"))
+                })
+                .sum::<u64>()
+            + admission["post_construction_reserve"][resource]
+                .as_u64()
+                .unwrap_or_else(|| panic!("reserved {resource}"))
+    };
+    for (resource, used, capacity, headroom) in [
+        ("tcbs", 280, 512, 232),
+        ("cnodes", 280, 512, 232),
+        ("vspaces", 280, 512, 232),
+        ("page_tables", 2_640, 4_096, 1_456),
+        ("asids", 280, 512, 232),
+        ("frames", 7_656, 8_192, 536),
+        ("endpoints", 303, 512, 209),
+        ("notifications", 50, 128, 78),
+        ("fault_caps", 280, 512, 232),
+        ("timeout_fault_caps", 280, 512, 232),
+        ("reply_objects", 279, 512, 233),
+        ("scheduling_contexts", 280, 512, 232),
+        ("cspace_slots", 19_470, 65_536, 46_066),
+        ("untyped_bytes", 167_772_160, 268_435_456, 100_663_296),
+    ] {
+        assert_eq!(admitted(resource), used, "admitted {resource}");
+        assert_eq!(
+            admission["capacity"][resource]
+                .as_u64()
+                .unwrap_or_else(|| panic!("capacity {resource}")),
+            capacity,
+            "capacity {resource}"
+        );
+        assert_eq!(capacity - used, headroom, "headroom {resource}");
+    }
+
     for task_id in [
         "driver-serial",
         "driver-usb",

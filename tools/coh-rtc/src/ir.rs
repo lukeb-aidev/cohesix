@@ -4562,7 +4562,7 @@ mod tests {
         );
         assert_eq!(
             manifest.worker_resource_admission.fault_registry.capacity,
-            80
+            272
         );
     }
 

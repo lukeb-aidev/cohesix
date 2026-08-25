@@ -263,8 +263,8 @@ client.worker_teardown("heartbeat", "heartbeat-1")
 The mock in this example reports `execution_proof="host-model"`. It exercises
 the API but is never QEMU or Pi proof. The three executable roles are
 `worker-heartbeat`, `worker-gpu`, and `worker-lora`; their combined generated
-maximum is 256 simultaneous tasks for QEMU (1 Heartbeat, 127 GPU, and 128 LoRA)
-and 64 for Pi 4 (1 Heartbeat, 31 GPU, and 32 LoRA). `worker-bus` remains
+maximum is 256 simultaneous tasks for both QEMU and Pi 4 (1 Heartbeat, 127 GPU,
+and 128 LoRA). `worker-bus` remains
 model-only, and spawn or teardown returns a deterministic `CohesixError` before
 any backend write.
 

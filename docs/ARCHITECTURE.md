@@ -53,7 +53,7 @@ build outputs, and generated tables rather than this overview.
 | Root authority | The init TCB remains `root-control`; restricted root-fault, emergency, Worker-supervisor, and driver-supervisor duties have independent active scheduling contexts. | The exact image must prove progress, fault handling, and containment. |
 | Namespace service | `nine-door-runtime` is a restricted passive child reached through a bounded donated Call/Reply chain after one compiler-budgeted bootstrap exchange. | Host NineDoor is a separate implementation and is not a transport to this child. |
 | Console network | `console-network-runtime` owns target TCP, smoltcp, framing, and transport authentication. On QEMU the same child directly owns the HAL-admitted VirtIO MMIO, IRQ, and fixed coherent DMA queues; root receives only copied authenticated commands and returns bounded responses. | The public console grammar is unchanged and remains the only in-target TCP service. QEMU device evidence does not qualify a Pi network driver. |
-| Workers | Heartbeat, GPU, and LoRA are separately packaged passive executable roles served by two compiler-bounded active executor lanes. The QEMU profile admits 256 instances and the Pi profile 64; WorkerBus remains model/session-only. | A declared slot or packaged image is not READY, runtime, teardown, or acceptance evidence. |
+| Workers | Heartbeat, GPU, and LoRA are separately packaged passive executable roles served by two compiler-bounded active executor lanes. The QEMU and Pi profiles each admit 256 instances; WorkerBus remains model/session-only. | A declared slot or packaged image is not READY, runtime, teardown, or acceptance evidence. |
 | Drivers | Selected physical devices use HAL-admitted isolated runtimes with fixed pointer-free ABIs and explicit temporal authority. | QEMU does not qualify Pi MMIO, DMA, IRQ, USB, display, GENET, SDIO, or CYW43 behavior. |
 | Attestation | Current target metadata is deterministic `measurement_only` hashing with generated static authority material. | It is not TPM Quote, DICE, measured boot, device identity, or secret-unsealing evidence. |
 
@@ -224,8 +224,8 @@ Manifest-declared physical-driver runtimes execute as separate seL4 tasks with
 task-local address and capability spaces. Root delegates only generated
 endpoint, notification, frame, shared-ring, IRQ, fault, and mapped-resource
 authority. Pi profiles preflight root-CNode, slot, untyped, and mapping capacity
-before partial child construction; the current Pi contract uses a 14-bit root
-CNode.
+before partial child construction; the current Pi contract uses a 16-bit root
+CNode for the complete 256-Worker population and deterministic reserve.
 
 Isolated child image plans reject effective W+X mappings. Code pages are
 read-only and executable, non-code mappings are ExecuteNever, and writable root

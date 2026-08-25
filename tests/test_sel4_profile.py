@@ -1302,7 +1302,7 @@ def test_repo_managed_pi_profile_accepts_current_tracked_mcs_tree() -> None:
     )
     assert stamp["profile"] == "pi4_diagnostic"
     assert stamp["contract_values_sha256"] == (
-        "195a0086266d46973acf4f95d9d61fe3ef01afd2326bd2bebe83c725c91e83b0"
+        "4837d24874596a0639e8aebabf9ec88945aba482baed53e8eed8a10c2b42af4d"
     )
     configure = set(stamp["commands"]["configure"])
     assert {
@@ -1310,7 +1310,7 @@ def test_repo_managed_pi_profile_accepts_current_tracked_mcs_tree() -> None:
         "-DMCS=ON",
         "-DSMP=ON",
         "-DKernelMaxNumNodes=4",
-        "-DKernelRootCNodeSizeBits=14",
+        "-DKernelRootCNodeSizeBits=16",
         "-DKernelArmExportVCNTUser=ON",
         "-DKernelArmExportPCNTUser=OFF",
         "-DKernelArmExportPTMRUser=OFF",
@@ -1429,21 +1429,22 @@ def test_operational_profiles_reserve_root_cspace_for_generated_anchors(
     tmp_path: Path,
     contract: dict[str, Any],
 ) -> None:
-    for profile_name in (
-        "qemu_smp_production",
-        "qemu_smp_diagnostic",
-        "pi4_production",
-        "pi4_diagnostic",
-    ):
+    expected_bits = {
+        "qemu_smp_production": "14",
+        "qemu_smp_diagnostic": "14",
+        "pi4_production": "16",
+        "pi4_diagnostic": "16",
+    }
+    for profile_name, root_cnode_bits in expected_bits.items():
         profile = contract["profiles"][profile_name]
 
-        assert profile["cmake"]["KernelRootCNodeSizeBits"] == "14"
+        assert profile["cmake"]["KernelRootCNodeSizeBits"] == root_cnode_bits
         command = sel4_profile.wrapper_configure_command(
             profile,
             tmp_path / "source",
             tmp_path / profile_name,
         )
-        assert "-DKernelRootCNodeSizeBits=14" in command
+        assert f"-DKernelRootCNodeSizeBits={root_cnode_bits}" in command
 
 
 def test_sel4_16_profiles_pin_virtual_timer_offset_updates_off(

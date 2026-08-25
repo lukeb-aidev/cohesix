@@ -8046,7 +8046,7 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn physical_pi_cspace_preflight_rejects_13_bits_and_admits_14_bits() {
+    fn pi_linked_runtime_only_cspace_bound_rejects_13_bits() {
         const CURRENT_LINKED_RUNTIME_PAGES: usize = 257;
         const DECLARED_LINKED_RUNTIME_PAGE_BOUND: usize = 320;
         const OBSERVED_EMPTY_START: usize = 0x0a6a;
@@ -8090,11 +8090,11 @@ mod tests {
                 let required = required_slots(contracts, code_pages);
                 assert!(
                     required > capacity_13,
-                    "13-bit Pi CSpace must reject the linked-runtime upper bound"
+                    "13-bit Pi CSpace must reject the linked-runtime-only upper bound"
                 );
                 assert!(
                     required <= capacity_14,
-                    "14-bit Pi CSpace must retain the declared post-bootstrap reserve"
+                    "the linked-runtime-only bound must fit a 14-bit aperture even though the full 256-Worker Pi profile selects 16 bits"
                 );
             }
         }

@@ -177,13 +177,14 @@ for the first command:
 The default stage directory is `out/pi4-sd`. The script validates the Pi U-Boot
 shape, the canonical tracked `pi4_diagnostic` seL4 artifacts and relocated
 build-input stamp, the virtual-counter contract, generated artifacts, runtime
-payloads, and rootfs bounds before staging. Both Pi
-production and diagnostic profiles require
-`KernelRootCNodeSizeBits=14`; this reserves deterministic root CSpace for the
-manifest-declared linked-runtime images and the isolated HDMI framebuffer
-mapping. The profile wrapper preserves that declared value and uses 13 bits
-only for profiles that omit the setting. An older Pi build cache reporting 13
-bits is stale and must be rebuilt before image staging or hardware proof.
+payloads, and rootfs bounds before staging. Both Pi production and diagnostic
+profiles require `KernelRootCNodeSizeBits=16`. The resulting 65,536-slot root
+CSpace admits the manifest's complete 256-Worker population, linked-runtime
+images, isolated HDMI framebuffer mapping, and post-construction reserve while
+leaving 46,066 compiler-accounted slots free. The profile wrapper preserves
+that declared value and uses 13 bits only for profiles that omit the setting.
+An older Pi build cache reporting 13 or 14 bits is stale and must be rebuilt
+before image staging or hardware proof.
 The selected seL4 build directory is immutable profile evidence: the wrapper
 fingerprints `seL4/build_UBOOT`, reconstructs the exact tracked baseline
 elfloader from its archived objects as a toolchain oracle, and injects and

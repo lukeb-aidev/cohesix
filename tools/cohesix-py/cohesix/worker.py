@@ -74,9 +74,9 @@ _TARGET_ROLE_SLOTS = {
     },
     "pi4": {
         "worker-heartbeat": 1,
-        "worker-gpu": 31,
+        "worker-gpu": 127,
         "worker-bus": 0,
-        "worker-lora": 32,
+        "worker-lora": 128,
     },
 }
 _TARGET_SHARD_BITS = {"qemu": 6, "pi4": 8}

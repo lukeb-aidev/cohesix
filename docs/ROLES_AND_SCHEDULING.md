@@ -22,20 +22,21 @@ default-profile values are summarized in
 [the generated manifest snippet](snippets/root_task_manifest.md). Do not copy
 generated badge bases or quotas into client code or hand-maintained prose.
 
-The default QEMU profile admits 256 executable instances: one
-WorkerHeartbeat, 127 WorkerGpu, and 128 WorkerLora. The Pi 4 profile admits 64:
-one, 31, and 32 respectively. All are passive children served by two active,
+The default QEMU and Pi 4 profiles each admit 256 executable instances: one
+WorkerHeartbeat, 127 WorkerGpu, and 128 WorkerLora. All are passive children served by two active,
 role-bounded executor lanes. Cap-backed authority and lifecycle records remain
 per instance. WorkerBus remains a model/session-only role. A generated
 executable record proves configured admission; a QEMU or Pi claim still
 requires target evidence for the exact kernel, resolved manifest, root image,
 Worker archive, and ABI version.
 
-The Pi manifest's `max_workers=256` and per-role `namespace_capacity=256`
-preserve identifier and policy capacity; they do not declare 256 executable Pi
-children. Raising the Pi executable population from 64 to 256 requires a
-separately scoped 15-bit root-CNode and resource-admission redesign and cannot
-be inferred from the QEMU population.
+The Pi manifest retains `max_workers=256` and per-role
+`namespace_capacity=256`, and its complete maximum mix declares all 256 as
+executable children. Its 16-bit root CNode exposes 65,536 slots; the generated
+fixed, per-Worker, and post-construction-reserve inventory consumes 19,470 and
+leaves 46,066 slots of deterministic headroom. This static admission does not
+prove construction, READY, driver coexistence, scheduling behavior, or
+performance on Pi hardware.
 
 ## Role support matrix
 
@@ -45,9 +46,9 @@ The checked-in default and Pi 4 profiles currently declare the following:
 | --- | --- | --- | --- |
 | Queen | Implemented | Root-task authority, not a separate worker image | Hive-wide access to enabled control and observability providers. |
 | WorkerHeartbeat | Implemented | One admitted passive executable slot | Own telemetry and the minimal worker observability view. |
-| WorkerGpu | Implemented | 127 QEMU / 31 Pi passive executable slots | Worker view plus its generated GPU lease scope. GPU hardware remains host-side. |
+| WorkerGpu | Implemented | 127 passive executable slots per selected profile | Worker view plus its generated GPU lease scope. GPU hardware remains host-side. |
 | WorkerBus | Recognized | **Not executable; session/model only** | Host/sidecar policy can describe a bus scope, but the selected target profiles must reject it as target-task authority. |
-| WorkerLora | Implemented | 128 QEMU / 32 Pi passive executable slots | Own Worker view plus bounded AI LoRA model receipts. It receives no local GPU authority; PEFT execution remains host-side. |
+| WorkerLora | Implemented | 128 passive executable slots per selected profile | Own Worker view plus bounded AI LoRA model receipts. It receives no local GPU authority; PEFT execution remains host-side. |
 
 `implemented = true` means that the role has a compiler-owned task ABI,
 executable slot, object budget, temporal record, selected child image, and

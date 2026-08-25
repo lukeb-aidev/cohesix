@@ -702,7 +702,7 @@ wcet_provenance = "m26e-passive-worker-executor-v1"
 [[temporal_authority.worker_classes]]
 role = "worker-gpu"
 task_prefix = "worker-gpu-slot-"
-slots = 31
+slots = 127
 execution = "passive"
 core = 2
 priority = 96
@@ -719,12 +719,12 @@ wcet_provenance = "m26e-passive-worker-executor-v1"
 [[temporal_authority.worker_classes]]
 role = "worker-lora"
 task_prefix = "worker-lora-slot-"
-slots = 32
+slots = 128
 execution = "passive"
 core = 3
 priority = 96
 mcp = 128
-timeout_badge_base = 653131825
+timeout_badge_base = 653131921
 timeout_policy = "return-error"
 allowed_donors = ["root-worker-executor-lora"]
 reply_objects = 1
@@ -943,7 +943,7 @@ fault_caps = 512
 timeout_fault_caps = 512
 reply_objects = 512
 scheduling_contexts = 512
-cspace_slots = 16384
+cspace_slots = 65536
 untyped_bytes = 268435456
 
 [worker_resource_admission.post_construction_reserve]
@@ -1006,7 +1006,7 @@ untyped_bytes = 131072
 role = "worker-gpu"
 task_prefix = "worker-gpu-slot-"
 namespace_capacity = 256
-executable_slots = 31
+executable_slots = 127
 core = 2
 revoke_anchor_slot = 15001
 
@@ -1030,9 +1030,9 @@ untyped_bytes = 131072
 role = "worker-lora"
 task_prefix = "worker-lora-slot-"
 namespace_capacity = 256
-executable_slots = 32
+executable_slots = 128
 core = 3
-revoke_anchor_slot = 15032
+revoke_anchor_slot = 15128
 
 [worker_resource_admission.executable_roles.per_slot]
 tcbs = 1
@@ -1051,7 +1051,7 @@ cspace_slots = 32
 untyped_bytes = 131072
 
 [[worker_resource_admission.allowed_role_mixes]]
-id = "maximum-three-role-mix"
+id = "maximum-multi-worker-mix"
 maximum = true
 
 [[worker_resource_admission.allowed_role_mixes.roles]]
@@ -1060,11 +1060,11 @@ count = 1
 
 [[worker_resource_admission.allowed_role_mixes.roles]]
 role = "worker-gpu"
-count = 31
+count = 127
 
 [[worker_resource_admission.allowed_role_mixes.roles]]
 role = "worker-lora"
-count = 32
+count = 128
 
 [[worker_resource_admission.critical_tcbs]]
 id = "root-control"
@@ -1077,8 +1077,8 @@ fault_reply_lanes = 1
 
 [[worker_resource_admission.critical_tcbs]]
 id = "root-fault"
-cnode_radix_bits = 8
-cspace_cap_count = 153
+cnode_radix_bits = 10
+cspace_cap_count = 537
 revoke_anchor_slot = 16129
 ipc_buffer_pages = 1
 stack_pages = 2
@@ -1114,7 +1114,7 @@ fault_reply_lanes = 1
 [[worker_resource_admission.critical_tcbs]]
 id = "root-worker-executor-gpu"
 cnode_radix_bits = 8
-cspace_cap_count = 37
+cspace_cap_count = 133
 revoke_anchor_slot = 16133
 ipc_buffer_pages = 1
 stack_pages = 2
@@ -1123,15 +1123,15 @@ fault_reply_lanes = 1
 [[worker_resource_admission.critical_tcbs]]
 id = "root-worker-executor-lora"
 cnode_radix_bits = 8
-cspace_cap_count = 39
+cspace_cap_count = 135
 revoke_anchor_slot = 16134
 ipc_buffer_pages = 1
 stack_pages = 2
 fault_reply_lanes = 1
 
 [worker_resource_admission.handoff]
-worker_control_queue_capacity = 64
-worker_fault_mailboxes = 64
+worker_control_queue_capacity = 256
+worker_fault_mailboxes = 256
 driver_fault_records = 7
 worker_wake_badge = 1
 driver_wake_badge = 2
@@ -1146,7 +1146,7 @@ driver_drain_precedence = ["driver-fault"]
 
 [worker_resource_admission.handoff.worker_fault_badges]
 base = 652279808
-count = 64
+count = 256
 stride = 1
 
 [worker_resource_admission.handoff.driver_fault_badges]
@@ -1166,7 +1166,7 @@ stride = 1
 
 [worker_resource_admission.handoff.timeout_fault_badges]
 base = 653131777
-count = 80
+count = 272
 stride = 1
 
 [worker_resource_admission.handoff.supervisor_signal_rights]
@@ -1196,10 +1196,10 @@ grant_reply = false
 [worker_resource_admission.fault_registry]
 critical_tcbs = 7
 service_tcbs = 2
-worker_tcbs = 64
+worker_tcbs = 256
 driver_tcbs = 7
-capacity = 80
-root_fault_tcb_control_slot_base = 75
+capacity = 272
+root_fault_tcb_control_slot_base = 267
 receive_endpoints = 1
 receive_reply_lanes = 1
 recoverable_timeout_tasks = []

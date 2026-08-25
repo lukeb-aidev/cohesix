@@ -449,8 +449,8 @@ so completion returns the donated SC exactly once before the instance waits
 again. Standard or timeout containment may publish one typed failure reply to
 release the caller, then revokes the exact generation.
 
-The QEMU profile exposes 256 such records (one Heartbeat, 127 GPU, 128 LoRA),
-and the Pi profile exposes 64 (one, 31, 32). Identical sealed role-image code
+The QEMU and Pi profiles each expose 256 such records (one Heartbeat, 127 GPU,
+128 LoRA). Identical sealed role-image code
 and read-only data may share physical frames. Writable image pages, stacks,
 IPC buffers, shared ABI pages, CSpaces, VSpaces, endpoints, Reply objects, and
 fault identities never share between instances.

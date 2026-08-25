@@ -637,8 +637,8 @@ and model-pointer records; it does not own the GPU device.
 ### GPU Worker / `worker-gpu`
 
 The executable Worker role scoped to its telemetry, lifecycle, receipts, and
-generated GPU lease view. The checked-in QEMU and Pi profiles declare 127 and
-31 passive GPU instances respectively. The task has no GPU MMIO, device node,
+generated GPU lease view. The checked-in QEMU and Pi profiles each declare 127
+passive GPU instances. The task has no GPU MMIO, device node,
 CUDA, or NVML access and does not automatically reload a host model runtime;
 those effects remain host-side.
 
@@ -1464,8 +1464,8 @@ operator path. It does not run target-side leader election.
 ### Worker
 
 A narrowly authorized role in the ticket, namespace, lifecycle, and telemetry
-model. The checked-in QEMU profile declares 256 passive instances and the Pi
-profile declares 64, across Heartbeat, GPU, and LoRA; WorkerBus remains
+model. The checked-in QEMU and Pi profiles each declare 256 passive instances
+across Heartbeat, GPU, and LoRA; WorkerBus remains
 model/session-only. A declaration is not target acceptance: a run must
 separately prove the image,
 task objects, capabilities, notifications, scheduling, faults, and revocation.
@@ -1489,8 +1489,8 @@ host-side.
 ### WorkerLora / `worker-lora`
 
 See [LoRA](#lora). This executable role receives bounded lifecycle, receipt,
-and telemetry records through its Worker view. The QEMU and Pi profiles declare
-128 and 32 passive LoRA instances respectively. It does not train or execute
+and telemetry records through its Worker view. The QEMU and Pi profiles each
+declare 128 passive LoRA instances. It does not train or execute
 models, access GPU hardware, import artifacts, or reload a host model; those
 effects remain host-side.
 
