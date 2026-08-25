@@ -7971,10 +7971,10 @@ fn runtime_root_generation_admission(
         return RuntimeDelegatedGenerationAdmission::NotDelegated;
     }
     match runtime_root_continuation_expected_generation(command) {
-        Some(command_generation) => {
+        Some(command_generation) if command.flags & DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY != 0 => {
             RuntimeDelegatedGenerationAdmission::Admitted(command_generation)
         }
-        None => RuntimeDelegatedGenerationAdmission::Rejected,
+        Some(_) | None => RuntimeDelegatedGenerationAdmission::Rejected,
     }
 }
 
@@ -7997,7 +7997,9 @@ fn runtime_delegated_generation_admission(
     let Some(command_generation) = runtime_continuation_expected_generation(command) else {
         return RuntimeDelegatedGenerationAdmission::Rejected;
     };
-    if owner_generation == Some(command_generation) {
+    if command.flags & DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY != 0
+        && owner_generation == Some(command_generation)
+    {
         RuntimeDelegatedGenerationAdmission::Admitted(command_generation)
     } else {
         RuntimeDelegatedGenerationAdmission::Rejected
@@ -11147,11 +11149,20 @@ fn poll_runtime_command_or_notification(
     ))
 }
 
-#[cfg(target_os = "none")]
+#[cfg(any(target_os = "none", test))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RuntimeBlockingWaitTarget {
     CommandOrNotification,
     LocalNotification,
+}
+
+#[cfg(any(target_os = "none", test))]
+const fn runtime_blocking_wait_target(reply_association_active: bool) -> RuntimeBlockingWaitTarget {
+    if reply_association_active {
+        RuntimeBlockingWaitTarget::LocalNotification
+    } else {
+        RuntimeBlockingWaitTarget::CommandOrNotification
+    }
 }
 
 #[cfg(target_os = "none")]
@@ -11189,15 +11200,44 @@ fn runtime_blocking_wait(
 }
 
 #[cfg(target_os = "none")]
-fn wait_runtime_command_or_notification(last_sequence: u32, task_key: u32) -> RuntimeCommandWait {
+fn wait_runtime_command_or_notification(
+    last_sequence: u32,
+    task_key: u32,
+    reply_association_active: bool,
+) -> RuntimeCommandWait {
     let mut badge: sel4_sys::seL4_Word = 0;
-    let tag = runtime_blocking_wait(RuntimeBlockingWaitTarget::CommandOrNotification, &mut badge);
+    // An associated Reply object belongs to the blocked caller until the
+    // terminal reply. Re-entering Recv with that same object would make the
+    // selected MCS kernel cancel the prior caller before it checks the bound
+    // notification. Wait on the local notification alone in that state.
+    let tag = runtime_blocking_wait(
+        runtime_blocking_wait_target(reply_association_active),
+        &mut badge,
+    );
     RuntimeCommandWait::Wake(runtime_wake_from_received_tag(
         tag,
         badge,
         last_sequence,
         task_key,
     ))
+}
+
+#[cfg(any(target_os = "none", test))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RuntimeOrdinaryPendingRoute {
+    EndpointRendezvous,
+    PreserveReplyAndYield,
+}
+
+#[cfg(any(target_os = "none", test))]
+const fn runtime_ordinary_pending_route(
+    reply_association_active: bool,
+) -> RuntimeOrdinaryPendingRoute {
+    if reply_association_active {
+        RuntimeOrdinaryPendingRoute::PreserveReplyAndYield
+    } else {
+        RuntimeOrdinaryPendingRoute::EndpointRendezvous
+    }
 }
 
 const fn runtime_exact_command_wait_supported() -> bool {
@@ -58540,6 +58580,7 @@ pub fn runtime_main(task_key: usize) -> ! {
                                 wait_runtime_command_or_notification(
                                     last_sequence,
                                     task_key_marker,
+                                    pending_intake.is_some_and(|intake| intake.reply_cap_available),
                                 ),
                                 notification_route,
                                 pending_intake.map(|intake| intake.command),
@@ -58654,13 +58695,20 @@ pub fn runtime_main(task_key: usize) -> ! {
                     }
                 }
             } else {
-                // Non-CYW43 retained commands use the endpoint rendezvous.
-                // Every CYW43 descriptor generation, including zero, uses the
-                // exact shared-grant lane above with no endpoint fallback.
+                // One-way non-CYW43 retained commands use the endpoint
+                // rendezvous. A defensive Reply-bearing retained state waits
+                // only on the local notification: receiving on the endpoint
+                // again would cancel the blocked caller under MCS. Every CYW43
+                // descriptor generation, including zero, uses the exact
+                // shared-grant lane above with no endpoint fallback.
                 let wake = runtime_pending_wake_for_route(
                     notification_route,
                     runtime_command_wait_wake_or_quarantine(
-                        wait_runtime_command_or_notification(last_sequence, task_key_marker),
+                        wait_runtime_command_or_notification(
+                            last_sequence,
+                            task_key_marker,
+                            pending_intake.is_some_and(|intake| intake.reply_cap_available),
+                        ),
                         notification_route,
                         pending_intake.map(|intake| intake.command),
                     ),
@@ -58709,7 +58757,7 @@ pub fn runtime_main(task_key: usize) -> ! {
                 );
             } else {
                 let _ = runtime_command_wait_wake_or_quarantine(
-                    wait_runtime_command_or_notification(last_sequence, task_key_marker),
+                    wait_runtime_command_or_notification(last_sequence, task_key_marker, false),
                     notification_route,
                     None,
                 );
@@ -58746,7 +58794,7 @@ pub fn runtime_main(task_key: usize) -> ! {
                 pending_command_gate.retain_after_pending();
             } else {
                 let _ = runtime_command_wait_wake_or_quarantine(
-                    wait_runtime_command_or_notification(last_sequence, task_key_marker),
+                    wait_runtime_command_or_notification(last_sequence, task_key_marker, false),
                     notification_route,
                     None,
                 );
@@ -59062,7 +59110,7 @@ pub fn runtime_main(task_key: usize) -> ! {
             // unbounded syscall storm while idle. CYW43/SDIO additionally wake
             // through their bound local notification and route that work below.
             match runtime_command_wait_wake_or_quarantine(
-                wait_runtime_command_or_notification(last_sequence, task_key_marker),
+                wait_runtime_command_or_notification(last_sequence, task_key_marker, false),
                 notification_route,
                 None,
             ) {
@@ -59447,9 +59495,10 @@ pub fn runtime_main(task_key: usize) -> ! {
                 continue;
             }
             // One bounded physical action or one deadline sample was completed.
-            // The next phase is forbidden until a later root continuation;
-            // blocking here releases both the CPU and seL4 kernel path instead
-            // of turning `Yield` into a maximum-priority private poll loop.
+            // One-way work requires its declared later producer continuation.
+            // A synchronous Call cannot receive such a continuation while its
+            // caller is blocked, so it preserves the Reply association and
+            // yields between bounded phases instead.
             match delegated_generation {
                 RuntimeDelegatedGenerationAdmission::Admitted(generation) => {
                     pending_command_gate.retain_after_pending_generation(generation);
@@ -59470,7 +59519,20 @@ pub fn runtime_main(task_key: usize) -> ! {
                             runtime_yield_current_tcb();
                         }
                         RuntimeDelegatedGenerationAdmission::NotDelegated => {
-                            pending_command_gate.retain_after_pending();
+                            match runtime_ordinary_pending_route(intake.reply_cap_available) {
+                                RuntimeOrdinaryPendingRoute::EndpointRendezvous => {
+                                    pending_command_gate.retain_after_pending();
+                                }
+                                RuntimeOrdinaryPendingRoute::PreserveReplyAndYield => {
+                                    // The synchronous caller cannot publish a
+                                    // continuation while blocked. Preserve its
+                                    // sole Reply association and hand off the
+                                    // scheduler before the next bounded service
+                                    // phase; never receive on the endpoint again.
+                                    pending_command_gate.complete();
+                                    runtime_yield_current_tcb();
+                                }
+                            }
                         }
                         RuntimeDelegatedGenerationAdmission::Rejected => {
                             // Rejected commands complete above before any
@@ -59557,8 +59619,8 @@ pub fn runtime_main(task_key: usize) -> ! {
         if intake.reply_cap_available {
             // SAFETY: Recv/NBRecv installed this Call's association into the
             // compiler-declared Reply object in slot 6. The retained intake is
-            // removed exactly once above, and the one-in-flight ABI forbids a
-            // second Call from replacing the association before this send.
+            // removed exactly once above, and every intervening poll/wait path
+            // avoids the command endpoint while this association remains live.
             unsafe {
                 let reply0 = completion.result as sel4_sys::seL4_Word;
                 sel4_sys::seL4_MCS_ReplyWithMRs(
@@ -70317,6 +70379,26 @@ mod tests {
             DRIVER_TASK_CHILD_LOCAL_NOTIFICATION_SLOT, 3,
             "the retained-Call poll must use the generated local notification slot",
         );
+        assert_eq!(
+            runtime_blocking_wait_target(false),
+            RuntimeBlockingWaitTarget::CommandOrNotification,
+            "an idle or one-way runtime may receive the next endpoint rendezvous",
+        );
+        assert_eq!(
+            runtime_blocking_wait_target(true),
+            RuntimeBlockingWaitTarget::LocalNotification,
+            "a blocking wait must not cancel the caller associated with Reply slot 6",
+        );
+        assert_eq!(
+            runtime_ordinary_pending_route(false),
+            RuntimeOrdinaryPendingRoute::EndpointRendezvous,
+            "one-way multi-turn work retains its bounded producer rendezvous",
+        );
+        assert_eq!(
+            runtime_ordinary_pending_route(true),
+            RuntimeOrdinaryPendingRoute::PreserveReplyAndYield,
+            "a synchronous multi-turn command must preserve its caller and yield locally",
+        );
     }
 
     #[test]
@@ -75173,6 +75255,13 @@ mod tests {
             runtime_delegated_generation_admission(command, None),
             RuntimeDelegatedGenerationAdmission::Rejected,
         );
+        let mut reply_bearing_command = command;
+        reply_bearing_command.flags &= !DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY;
+        assert_eq!(
+            runtime_delegated_generation_admission(reply_bearing_command, Some(generation),),
+            RuntimeDelegatedGenerationAdmission::Rejected,
+            "a blocked caller cannot produce a later delegated continuation grant",
+        );
         let mut zero_generation_command = command;
         zero_generation_command.aux1 = 0;
         assert!(runtime_command_requires_continuation_grant(
@@ -75774,6 +75863,13 @@ mod tests {
             ),
             RuntimeDelegatedGenerationAdmission::Admitted(generation),
             "the local CYW43 request namespace cannot alias delegated SDIO bit 31",
+        );
+        let mut reply_bearing = intake.command;
+        reply_bearing.flags &= !DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY;
+        assert_eq!(
+            runtime_root_generation_admission(reply_bearing, RuntimeNotificationRoute::Cyw43Client,),
+            RuntimeDelegatedGenerationAdmission::Rejected,
+            "a blocked root caller cannot publish its own later continuation grant",
         );
         assert_eq!(
             runtime_root_generation_admission(intake.command, RuntimeNotificationRoute::SdioOwner,),

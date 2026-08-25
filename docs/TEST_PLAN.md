@@ -8026,14 +8026,19 @@ after their sequence-last ring commit and never consume the command Reply.
 The runtime's nonblocking command seam is kernel-contract-specific: classic
 seL4 uses `seL4_Poll`, while MCS must use `seL4_NBRecv` with the exact
 compiler-generated child Reply slot 6. Once that receive retains a Call, both
-kernels must poll only the generated bound local notification in slot 3 until
-the command replies; a second endpoint receive may cancel or replace the live
-Reply association. A focused regression must reject an initial MCS
-NBWait/Poll spelling and reject endpoint polling while Reply is live, and the
-exact MCS target compile must exercise the real `NBRecv` plus local `NBWait`
-bindings. This source and target check proves Reply-association selection and
-preservation only; it cannot prove a child ran or that the pending CYW43
-one-way command crossed its notification/wait boundary on Pi.
+kernels must sample or block only on the generated bound local notification in
+slot 3; a second endpoint receive may cancel or replace the live Reply
+association. An ordinary synchronous command that needs another bounded
+service phase must preserve that association and yield locally because its
+blocked caller cannot publish an endpoint continuation. Generation-bound
+continuation commands must remain one-way and reject a Reply-bearing form. A
+focused regression must reject an initial MCS NBWait/Poll spelling, reject
+endpoint polling or blocking while Reply is live, and select local yield for a
+synchronous multi-turn command. The exact MCS target compile must exercise the
+real `NBRecv`, local `NBWait`, and local `Wait` bindings. This source and target
+check proves Reply-association selection and preservation only; it cannot prove
+a child ran or that the pending CYW43 one-way command crossed its
+notification/wait boundary on Pi.
 
 `scripts/driver_runtime_manifest.py` must reproduce byte-identical newc and
 JSON outputs from identical component bytes, validate the immutable
