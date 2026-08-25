@@ -2125,10 +2125,12 @@ stage_driver_runtime_payload() {
     local mkimage_bin="$1"
     mkdir -p "$STAGE_DIR"
     local stage_dir_abs
+    local runtime_artifact_dir
     stage_dir_abs="$(cd "$STAGE_DIR" && pwd)"
     local raw_cpio="${stage_dir_abs}/cohesix-driver-runtimes.cpio"
+    runtime_artifact_dir="$(root_task_target_dir)/aarch64-unknown-none/release"
 
-    package_driver_runtime_raw_cpio "$raw_cpio"
+    package_driver_runtime_raw_cpio "$raw_cpio" "$runtime_artifact_dir"
     "$mkimage_bin" \
       -A arm64 \
       -T ramdisk \

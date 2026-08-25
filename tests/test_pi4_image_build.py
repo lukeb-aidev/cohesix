@@ -42,13 +42,21 @@ def test_pi4_image_build_uses_square_logo_source() -> None:
     assert 'COHESIX_LOGO_SOURCE="${ROOT_DIR}/docs/COHESIX_LOGO_SQ.png"' in source
 
 
-def test_pi4_image_build_respects_cargo_target_dir_for_root_task() -> None:
-    """The flashed root-task must come from the same target dir Cargo built."""
+def test_pi4_image_build_respects_cargo_target_dir_for_all_runtimes() -> None:
+    """Every staged runtime must come from the target dir Cargo built."""
 
     source = SCRIPT_PATH.read_text(encoding="utf-8")
 
     assert 'local target_dir="${CARGO_TARGET_DIR:-${ROOT_DIR}/target}"' in source
     assert 'root_task_elf="$(root_task_release_elf_path)"' in source
+    assert (
+        'runtime_artifact_dir="$(root_task_target_dir)/aarch64-unknown-none/release"'
+        in source
+    )
+    assert (
+        'package_driver_runtime_raw_cpio "$raw_cpio" "$runtime_artifact_dir"'
+        in source
+    )
     assert (
         'local root_task_elf="${ROOT_DIR}/target/aarch64-unknown-none/release/root-task"'
         not in source
