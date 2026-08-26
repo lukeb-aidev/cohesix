@@ -7620,6 +7620,7 @@ const MINI_UART_IER_TX_INTERRUPT: u32 = 1 << 1;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SerialMiniUartReadRegister {
     Io,
+    InterruptEnable,
     LineStatus,
     Status,
 }
@@ -7629,6 +7630,7 @@ impl SerialMiniUartReadRegister {
     const fn offset(self) -> usize {
         match self {
             Self::Io => MINI_UART_IO_OFFSET,
+            Self::InterruptEnable => MINI_UART_IER_OFFSET,
             Self::LineStatus => MINI_UART_LSR_OFFSET,
             Self::Status => MINI_UART_STAT_OFFSET,
         }
@@ -7662,8 +7664,8 @@ enum SerialMiniUartAccess {
 fn serial_mini_uart_access(access: SerialMiniUartAccess) -> u32 {
     // SAFETY: Descriptor admission maps the serial runtime's exclusive
     // mini-UART page at this fixed address. The closed access enums expose only
-    // aligned MU_IO, MU_IER, and read-only MU_LSR/MU_STAT offsets inside that
-    // page.
+    // aligned MU_IO, read/write MU_IER, and read-only MU_LSR/MU_STAT offsets
+    // inside that page.
     unsafe {
         match access {
             SerialMiniUartAccess::Read(register) => core::ptr::read_volatile(
@@ -15371,15 +15373,17 @@ fn service_serial(command: DriverTaskCommandRecord) -> DriverTaskCompletionRecor
     if command.aux0 == DRIVER_RUNTIME_SERIAL_TX_IDLE_AUX && command.frame.len == 0 {
         let _ = serial_runtime_service_notification(0);
         let generation = SERIAL_RUNTIME_SPSC_GENERATION.load(Ordering::Acquire);
-        let transport_empty = serial_spsc_committed_occupancy_at(
+        let committed_occupancy = serial_spsc_committed_occupancy_at(
             serial_runtime_spsc_shared_base(),
             DRIVER_RUNTIME_SERIAL_TX_SPSC_FIRST_PAGE,
             generation,
             DRIVER_RUNTIME_SERIAL_SPSC_FLAG_ROOT_TO_RUNTIME,
-        ) == Some(0);
-        return serial_tx_idle_completion(
+        );
+        let transmitter_idle = matches!(committed_occupancy, Some(0)) && serial_mini_uart_tx_idle();
+        return serial_tx_idle_transport_completion(
             command.sequence,
-            transport_empty && serial_mini_uart_tx_idle(),
+            committed_occupancy,
+            transmitter_idle,
         );
     }
     #[cfg(target_os = "none")]
@@ -15414,6 +15418,18 @@ const fn serial_tx_idle_completion(
         DriverTaskCompletionRecord::progress(sequence, 1)
     } else {
         DriverTaskCompletionRecord::idle(sequence)
+    }
+}
+
+const fn serial_tx_idle_transport_completion(
+    sequence: u32,
+    committed_occupancy: Option<u32>,
+    transmitter_idle: bool,
+) -> DriverTaskCompletionRecord {
+    match committed_occupancy {
+        Some(0) => serial_tx_idle_completion(sequence, transmitter_idle),
+        Some(_) => DriverTaskCompletionRecord::idle(sequence),
+        None => DriverTaskCompletionRecord::fault(sequence, FAULT_DEVICE_UNAVAILABLE),
     }
 }
 
@@ -60294,7 +60310,12 @@ fn serial_runtime_initialize(descriptor: &DriverRuntimeInitDescriptor) -> bool {
                 }
             },
             serial_set_mini_uart_rx_irq,
-            || runtime_irq_handler_ack(irq.handler_slot),
+            || {
+                serial_runtime_irq_handler_ack_after_rearm(
+                    irq.handler_slot,
+                    MINI_UART_IER_RX_INTERRUPT,
+                )
+            },
         );
         let staged = if initialized {
             serial_flush_runtime_rx_queue_to_spsc(queue)
@@ -60491,6 +60512,60 @@ struct SerialTxPostFillState {
     bytes_pending: bool,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SerialSpscIdleWaitRoute {
+    CombinedCommandOrNotification,
+    LocalNotification,
+    InvalidTransport,
+}
+
+/// Select the only blocking object that can preserve a live serial TX ring.
+///
+/// A committed nonempty SPSC ring is durable work. Its empty-to-nonempty root
+/// doorbell may already have been consumed by the first bounded FIFO fill, so
+/// later TX-empty quanta must wait directly on the runtime's bound local
+/// notification. Once the ring is empty, the ordinary command endpoint plus
+/// bound notification wait closes the next producer race. An invalid live
+/// generation cannot authorize either another FIFO read or a free-running
+/// retry.
+const fn serial_spsc_idle_wait_route(
+    generation: u32,
+    committed_occupancy: Option<u32>,
+) -> SerialSpscIdleWaitRoute {
+    if generation == 0 {
+        SerialSpscIdleWaitRoute::CombinedCommandOrNotification
+    } else {
+        match committed_occupancy {
+            Some(0) => SerialSpscIdleWaitRoute::CombinedCommandOrNotification,
+            Some(occupancy) if occupancy <= DRIVER_RUNTIME_SERIAL_SPSC_CAPACITY as u32 => {
+                SerialSpscIdleWaitRoute::LocalNotification
+            }
+            Some(_) | None => SerialSpscIdleWaitRoute::InvalidTransport,
+        }
+    }
+}
+
+fn serial_runtime_spsc_idle_wait_route() -> SerialSpscIdleWaitRoute {
+    let generation = SERIAL_RUNTIME_SPSC_GENERATION.load(Ordering::Acquire);
+    let occupancy = (generation != 0)
+        .then(|| {
+            serial_spsc_committed_occupancy_at(
+                serial_runtime_spsc_shared_base(),
+                DRIVER_RUNTIME_SERIAL_TX_SPSC_FIRST_PAGE,
+                generation,
+                DRIVER_RUNTIME_SERIAL_SPSC_FLAG_ROOT_TO_RUNTIME,
+            )
+        })
+        .flatten();
+    serial_spsc_idle_wait_route(generation, occupancy)
+}
+
+#[cfg(any(target_os = "none", test))]
+const fn serial_runtime_local_wait_service_badge(raw_badge: u32) -> Option<u32> {
+    let admitted = runtime_notification_wake_badge(RuntimeNotificationRoute::Serial, raw_badge);
+    runtime_notification_service_badge(RuntimeNotificationRoute::Serial, admitted)
+}
+
 const fn serial_tx_post_fill_state(
     transfer_valid: bool,
     committed_occupancy: Option<u32>,
@@ -60500,6 +60575,83 @@ const fn serial_tx_post_fill_state(
         transport_valid,
         bytes_pending: transport_valid && matches!(committed_occupancy, Some(1..)),
     }
+}
+
+const fn serial_irq_rearm_readback_matches(
+    expected_mask: u32,
+    ier_readback: u32,
+    status_readback: u32,
+) -> bool {
+    let supported_mask = MINI_UART_IER_RX_INTERRUPT | MINI_UART_IER_TX_INTERRUPT;
+    expected_mask & !supported_mask == 0
+        && ier_readback & supported_mask == expected_mask
+        && serial_mini_uart_tx_fifo_free_slots(status_readback).is_some()
+}
+
+fn serial_irq_ack_after_rearm_with<CompleteStores, ReadIer, ReadStatus, Ack>(
+    expected_mask: u32,
+    mut complete_stores: CompleteStores,
+    mut read_ier: ReadIer,
+    mut read_status: ReadStatus,
+    mut ack: Ack,
+) -> bool
+where
+    CompleteStores: FnMut(),
+    ReadIer: FnMut() -> u32,
+    ReadStatus: FnMut() -> u32,
+    Ack: FnMut() -> bool,
+{
+    complete_stores();
+    let ier_readback = read_ier();
+    let status_readback = read_status();
+    if !serial_irq_rearm_readback_matches(expected_mask, ier_readback, status_readback) {
+        return false;
+    }
+    // Complete the same-aperture readback before the kernel unmasks the
+    // level-triggered source. The first barrier orders device writes before
+    // observation; this second barrier orders that observation before ACK.
+    complete_stores();
+    ack()
+}
+
+const fn serial_irq_rearm_attempt_failed(
+    completion_deferred: bool,
+    completion_result: bool,
+) -> bool {
+    !completion_deferred && !completion_result
+}
+
+#[cfg(target_os = "none")]
+fn serial_runtime_irq_handler_ack_after_rearm(handler_slot: u32, expected_mask: u32) -> bool {
+    serial_irq_ack_after_rearm_with(
+        expected_mask,
+        device_store_completion_barrier,
+        || serial_mini_uart_read(SerialMiniUartReadRegister::InterruptEnable),
+        || serial_mini_uart_read(SerialMiniUartReadRegister::Status),
+        || runtime_irq_handler_ack(handler_slot),
+    )
+}
+
+#[cfg(not(target_os = "none"))]
+fn serial_runtime_irq_handler_ack_after_rearm(handler_slot: u32, _expected_mask: u32) -> bool {
+    runtime_irq_handler_ack(handler_slot)
+}
+
+#[cfg(target_os = "none")]
+fn serial_runtime_fail_closed_invalid_tx_transport() {
+    let generation = SERIAL_RUNTIME_SPSC_GENERATION.load(Ordering::Acquire);
+    if generation != 0 {
+        if let Some(header) = serial_spsc_header_at(
+            serial_runtime_spsc_shared_base(),
+            DRIVER_RUNTIME_SERIAL_TX_SPSC_FIRST_PAGE,
+        ) {
+            serial_spsc_poison(header);
+        }
+    }
+    // Preserve operator RX and the sole UART owner, but remove TX-empty
+    // authority. The ordinary blocking command boundary below can then expose
+    // the poisoned transport without a retry loop or duplicate output path.
+    serial_set_mini_uart_irqs(true, false);
 }
 
 #[cfg(target_os = "none")]
@@ -60574,6 +60726,7 @@ fn serial_runtime_service_notification(badge: u32) -> bool {
                 DRIVER_RUNTIME_SERIAL_SPSC_FLAG_ROOT_TO_RUNTIME,
             ),
         );
+        let irq_mask = serial_mini_uart_irq_mask(true, tx_state.bytes_pending);
         serial_set_mini_uart_irqs(true, tx_state.bytes_pending);
 
         // A full RX ring deliberately retains the masked level handler. The
@@ -60582,14 +60735,27 @@ fn serial_runtime_service_notification(badge: u32) -> bool {
         // service turn retries the one durable pending ACK after one final LSR
         // source check. Never ACK while retained or physical RX remains.
         let final_rx_source_pending = serial_mini_uart_rx_source_pending();
-        let _ = serial_finish_pending_irq_after_service_with(
-            queue,
-            retained_pending
-                || rx_outcome.source_pending
-                || final_rx_source_pending
-                || !tx_state.transport_valid,
-            || runtime_irq_handler_ack(DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT),
-        );
+        let completion_deferred = retained_pending
+            || rx_outcome.source_pending
+            || final_rx_source_pending
+            || !tx_state.transport_valid;
+        let completion_result =
+            serial_finish_pending_irq_after_service_with(queue, completion_deferred, || {
+                serial_runtime_irq_handler_ack_after_rearm(
+                    DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT,
+                    irq_mask,
+                )
+            });
+        #[cfg(target_os = "none")]
+        if serial_irq_rearm_attempt_failed(completion_deferred, completion_result) {
+            // A readback or kernel ACK failure leaves the handler masked. Do
+            // not wait for a TX-empty edge that can no longer arrive: poison
+            // the durable TX cursor, retain the failed handler evidence, and
+            // return to the ordinary command boundary with TX disabled.
+            serial_runtime_fail_closed_invalid_tx_transport();
+        }
+        #[cfg(not(target_os = "none"))]
+        let _ = completion_result;
         if rx_doorbell || tx_transfer.producer_rearm {
             runtime_signal_notification(
                 pi4_driver_abi::DRIVER_RUNTIME_COMPLETION_NOTIFICATION_SLOT,
@@ -61754,6 +61920,41 @@ pub fn runtime_main(task_key: usize) -> ! {
                 // Poll the persistent ring/source once before sleeping so a
                 // coalesced or already-consumed doorbell cannot strand work.
                 let _ = service_runtime_persistent_source_once(notification_route, 0);
+                if notification_route == RuntimeNotificationRoute::Serial {
+                    match serial_runtime_spsc_idle_wait_route() {
+                        SerialSpscIdleWaitRoute::LocalNotification => {
+                            // A nonempty TX ring is the complete work
+                            // authority. The root doorbell admitted its first
+                            // FIFO fill; each later quantum must consume the
+                            // exact TX-empty/local doorbell edge from slot 3.
+                            // No Reply association is retained. After this one
+                            // bounded wake, the outer NBRecv gives endpoint
+                            // calls their ordinary admission opportunity before
+                            // the durable occupancy is classified again.
+                            let Some(raw_badge) = wait_runtime_local_notification() else {
+                                serial_runtime_fail_closed_invalid_tx_transport();
+                                continue;
+                            };
+                            if let Some(service_badge) =
+                                serial_runtime_local_wait_service_badge(raw_badge)
+                            {
+                                let _ = service_runtime_persistent_source_once(
+                                    notification_route,
+                                    service_badge,
+                                );
+                            }
+                            continue;
+                        }
+                        SerialSpscIdleWaitRoute::InvalidTransport => {
+                            // Poison once and fall through to the ordinary
+                            // blocking command boundary. Do not spin, consume
+                            // bytes, ACK a retained handler, or mint a fallback
+                            // owner from an invalid cursor.
+                            serial_runtime_fail_closed_invalid_tx_transport();
+                        }
+                        SerialSpscIdleWaitRoute::CombinedCommandOrNotification => {}
+                    }
+                }
                 if notification_route == RuntimeNotificationRoute::Genet
                     && GENET_RUNTIME_STATE.with_ref(genet_runtime_dpc_local_continuation_ready)
                 {
@@ -74343,6 +74544,23 @@ mod tests {
             DriverTaskCompletionRecord::progress(sequence, 1),
             "the barrier completes only after SPSC and physical TX are empty",
         );
+
+        let header = serial_spsc_header_at(
+            serial_runtime_spsc_shared_base(),
+            DRIVER_RUNTIME_SERIAL_TX_SPSC_FIRST_PAGE,
+        )
+        .expect("test TX header");
+        serial_spsc_poison(header);
+        assert_eq!(
+            service_serial(command),
+            DriverTaskCompletionRecord::fault(sequence, FAULT_DEVICE_UNAVAILABLE),
+            "the TX-idle barrier must expose a fenced transport instead of polling forever",
+        );
+        assert_eq!(
+            serial_tx_idle_transport_completion(sequence, None, true),
+            DriverTaskCompletionRecord::fault(sequence, FAULT_DEVICE_UNAVAILABLE),
+            "physical idle cannot override invalid durable transport state",
+        );
     }
 
     fn arm_genet_test_irq_state(state: &mut GenetRuntimeState) {
@@ -78130,6 +78348,207 @@ mod tests {
         assert_eq!(serial_mini_uart_irq_mask(false, true), 0x2);
         assert_eq!(serial_mini_uart_irq_mask(true, false), 0x1);
         assert_eq!(serial_mini_uart_irq_mask(true, true), 0x3);
+    }
+
+    #[test]
+    fn serial_spsc_idle_wait_uses_slot_three_only_for_valid_durable_tx() {
+        assert_eq!(
+            serial_spsc_idle_wait_route(0, None),
+            SerialSpscIdleWaitRoute::CombinedCommandOrNotification,
+        );
+        assert_eq!(
+            serial_spsc_idle_wait_route(0, Some(17)),
+            SerialSpscIdleWaitRoute::CombinedCommandOrNotification,
+            "a retired generation cannot mint a local-notification lifetime",
+        );
+        assert_eq!(
+            serial_spsc_idle_wait_route(9, Some(0)),
+            SerialSpscIdleWaitRoute::CombinedCommandOrNotification,
+        );
+        for occupancy in [1, 8, DRIVER_RUNTIME_SERIAL_SPSC_CAPACITY as u32] {
+            assert_eq!(
+                serial_spsc_idle_wait_route(9, Some(occupancy)),
+                SerialSpscIdleWaitRoute::LocalNotification,
+                "every valid nonempty cursor must preserve the TX-empty wait",
+            );
+        }
+        assert_eq!(
+            serial_spsc_idle_wait_route(9, None),
+            SerialSpscIdleWaitRoute::InvalidTransport,
+            "an invalid live cursor must not select either active wait path",
+        );
+        assert_eq!(
+            serial_spsc_idle_wait_route(9, Some(DRIVER_RUNTIME_SERIAL_SPSC_CAPACITY as u32 + 1),),
+            SerialSpscIdleWaitRoute::InvalidTransport,
+            "occupancy beyond the exact ring capacity must fail closed",
+        );
+    }
+
+    #[test]
+    fn serial_local_wait_admits_only_exact_serial_notification_badges() {
+        for badge in [
+            DRIVER_RUNTIME_RESERVED_ROOT_BADGE,
+            DRIVER_RUNTIME_SERIAL_IRQ_BADGE,
+            DRIVER_RUNTIME_RESERVED_ROOT_BADGE | DRIVER_RUNTIME_SERIAL_IRQ_BADGE,
+        ] {
+            assert_eq!(serial_runtime_local_wait_service_badge(badge), Some(badge));
+        }
+        assert_eq!(serial_runtime_local_wait_service_badge(0), None);
+        assert_eq!(
+            serial_runtime_local_wait_service_badge(
+                DRIVER_RUNTIME_SERIAL_IRQ_BADGE.saturating_add(1),
+            ),
+            None,
+        );
+    }
+
+    #[test]
+    fn serial_spsc_doorbell_and_prewait_retain_three_tx_empty_waits() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        initialize_serial_spsc_for_test(31);
+        let base = serial_runtime_spsc_shared_base();
+        let payload = core::array::from_fn::<_, 40, _>(|index| index as u8);
+        assert_eq!(
+            serial_spsc_produce_at(
+                base,
+                DRIVER_RUNTIME_SERIAL_TX_SPSC_FIRST_PAGE,
+                31,
+                DRIVER_RUNTIME_SERIAL_SPSC_FLAG_ROOT_TO_RUNTIME,
+                &payload,
+            )
+            .expect("root TX producer")
+            .bytes,
+            payload.len(),
+        );
+
+        let mut staged = [0u8; MINI_UART_TX_IMMEDIATE_TURN_BYTES];
+        let mut observed = Vec::new();
+        let mut occupancies = Vec::new();
+        for turn in 0..5 {
+            let occupancy_before = serial_spsc_committed_occupancy_at(
+                base,
+                DRIVER_RUNTIME_SERIAL_TX_SPSC_FIRST_PAGE,
+                31,
+                DRIVER_RUNTIME_SERIAL_SPSC_FLAG_ROOT_TO_RUNTIME,
+            )
+            .expect("stable TX cursor before fill");
+            if turn >= 2 {
+                assert_eq!(
+                    serial_spsc_idle_wait_route(31, Some(occupancy_before)),
+                    SerialSpscIdleWaitRoute::LocalNotification,
+                    "the three post-doorbell fills require slot-3 TX-empty wakes",
+                );
+                assert_eq!(
+                    serial_runtime_local_wait_service_badge(DRIVER_RUNTIME_SERIAL_IRQ_BADGE),
+                    Some(DRIVER_RUNTIME_SERIAL_IRQ_BADGE),
+                );
+            }
+            let transfer = serial_spsc_consume_at(
+                base,
+                DRIVER_RUNTIME_SERIAL_TX_SPSC_FIRST_PAGE,
+                31,
+                DRIVER_RUNTIME_SERIAL_SPSC_FLAG_ROOT_TO_RUNTIME,
+                &mut staged,
+            )
+            .expect("bounded FIFO fill");
+            assert_eq!(transfer.bytes, MINI_UART_TX_IMMEDIATE_TURN_BYTES);
+            observed.extend_from_slice(&staged[..transfer.bytes]);
+            occupancies.push(
+                serial_spsc_committed_occupancy_at(
+                    base,
+                    DRIVER_RUNTIME_SERIAL_TX_SPSC_FIRST_PAGE,
+                    31,
+                    DRIVER_RUNTIME_SERIAL_SPSC_FLAG_ROOT_TO_RUNTIME,
+                )
+                .expect("stable TX cursor after fill"),
+            );
+        }
+        assert_eq!(occupancies, [32, 24, 16, 8, 0]);
+        assert_eq!(observed, payload);
+        assert_eq!(
+            serial_spsc_idle_wait_route(31, Some(0)),
+            SerialSpscIdleWaitRoute::CombinedCommandOrNotification,
+            "the endpoint wait resumes only after the complete ring drains",
+        );
+
+        let header = serial_spsc_header_at(base, DRIVER_RUNTIME_SERIAL_TX_SPSC_FIRST_PAGE)
+            .expect("test TX header");
+        serial_spsc_poison(header);
+        assert_eq!(
+            serial_spsc_idle_wait_route(
+                31,
+                serial_spsc_committed_occupancy_at(
+                    base,
+                    DRIVER_RUNTIME_SERIAL_TX_SPSC_FIRST_PAGE,
+                    31,
+                    DRIVER_RUNTIME_SERIAL_SPSC_FLAG_ROOT_TO_RUNTIME,
+                ),
+            ),
+            SerialSpscIdleWaitRoute::InvalidTransport,
+        );
+    }
+
+    #[test]
+    fn serial_irq_ack_requires_ordered_ier_and_status_readback() {
+        use std::cell::{Cell, RefCell};
+
+        let order = RefCell::new(Vec::new());
+        assert!(serial_irq_ack_after_rearm_with(
+            0x3,
+            || order.borrow_mut().push("complete-stores"),
+            || {
+                order.borrow_mut().push("read-ier");
+                0x3
+            },
+            || {
+                order.borrow_mut().push("read-stat");
+                8 << MINI_UART_STAT_TX_FIFO_FILL_SHIFT
+            },
+            || {
+                order.borrow_mut().push("ack-handler");
+                true
+            },
+        ));
+        assert_eq!(
+            order.into_inner(),
+            [
+                "complete-stores",
+                "read-ier",
+                "read-stat",
+                "complete-stores",
+                "ack-handler",
+            ],
+        );
+
+        for (ier, status) in [
+            (0x1, 8 << MINI_UART_STAT_TX_FIFO_FILL_SHIFT),
+            (0x3, 9 << MINI_UART_STAT_TX_FIFO_FILL_SHIFT),
+        ] {
+            let ack_calls = Cell::new(0u32);
+            assert!(!serial_irq_ack_after_rearm_with(
+                0x3,
+                || {},
+                || ier,
+                || status,
+                || {
+                    ack_calls.set(ack_calls.get().saturating_add(1));
+                    true
+                },
+            ));
+            assert_eq!(
+                ack_calls.get(),
+                0,
+                "invalid readback must retain the handler"
+            );
+        }
+
+        assert!(!serial_irq_rearm_attempt_failed(true, false));
+        assert!(!serial_irq_rearm_attempt_failed(false, true));
+        assert!(
+            serial_irq_rearm_attempt_failed(false, false),
+            "an attempted readback/ACK failure must fence TX before another local wait",
+        );
     }
 
     #[test]

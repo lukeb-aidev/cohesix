@@ -8124,9 +8124,19 @@ labels in the older BCM2835 peripheral PDF and in agreement with its published
 errata; validate every `MU_STAT[27:24]`
 fill level from zero through eight; reject an impossible level before the
 generation-bound TX-SPSC consumer cursor advances; and preserve exact byte
-order across partial, third, and later FIFO-empty wakes. Host tests establish
-only register arithmetic, cursor, and route invariants. Fresh boot-bound Pi
-serial evidence is still required for IRQ liveness, losslessness, and cadence.
+order across partial, third, and later FIFO-empty wakes. Valid nonzero
+occupancy must select the exact slot-3 local-notification wait; zero must
+return to the combined endpoint-and-bound-notification receive; a missing,
+poisoned, discontinuous, or over-capacity cursor must select neither and fail
+closed. The regression must admit root, serial-IRQ, and coalesced badges while
+rejecting zero and foreign badges, prove that every bounded FIFO wake returns
+to the outer command poll, and prove the ordering device writes, completion
+barrier, same-aperture IER/`MU_STAT` readback, completion barrier, then handler
+ACK. Readback or ACK failure must fence TX, and the TX-idle probe must expose
+that fence as `FAULT_DEVICE_UNAVAILABLE`. Host tests establish only register
+arithmetic, cursor, route, and ordering invariants. Fresh boot-bound Pi serial
+evidence is still required for physical IRQ delivery, losslessness, and
+cadence.
 
 `scripts/driver_runtime_manifest.py` must reproduce byte-identical newc and
 JSON outputs from identical component bytes, validate the immutable

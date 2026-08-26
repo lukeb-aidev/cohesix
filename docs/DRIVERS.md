@@ -652,6 +652,14 @@ reusable ownership pattern.
   empty-to-nonempty and full-to-not-full races. Root drains the rings through
   its existing cooperative EventPump polling; the transport does not claim a
   direct interrupt wake into root.
+- While the validated root-to-runtime ring has committed nonzero occupancy,
+  the idle serial child blocks only on its generated local notification in
+  slot 3. Admit only the exact serial IRQ badge, root doorbell badge, or their
+  coalesced value; service one bounded FIFO quantum, then re-enter the outer
+  command poll before classifying occupancy again. Return to the combined
+  endpoint-and-bound-notification wait at zero. An invalid live cursor poisons
+  the TX ring, disables TX-empty, and makes the TX-idle probe fault instead of
+  selecting either active wait or a fallback owner.
 - Keep RX and TX loops bounded by the service contract.
 - Interpret the BCM2711 mini-UART IER by the hardware-validated Linux/QEMU
   mapping: bit 0 enables RX and bit 1 enables TX-empty. The older BCM2835
@@ -669,6 +677,12 @@ reusable ownership pattern.
   the combined mini-UART handler unacknowledged, a later software continuation
   after root drain must retry the same pending IRQ acknowledgement; whether
   that continuation itself carried an IRQ badge is irrelevant.
+- Before takeover or steady-state acknowledgement, complete the IER/device
+  writes, read back IER and non-destructive `MU_STAT` from the same mini-UART
+  aperture, complete that observation, and only then invoke
+  `seL4_IRQHandler_Ack`. A mask/readback mismatch or failed kernel ACK retains
+  the handler evidence and poisons TX so the child cannot sleep waiting for an
+  interrupt that remains masked.
 - Transfer ownership without dropping bytes that arrive at the boundary.
 - This transport changes no mini-UART baud, FIFO, IRQ identity, owner, MCS
   budget/period, response bound, timeout policy, or emergency-fatal exception.
