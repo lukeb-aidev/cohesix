@@ -2359,7 +2359,7 @@ struct GenetRuntimeState {
     rx_queue_frames: [[u8; GENET_MAX_FRAME_LEN]; GENET_RX_QUEUE_CAP],
     tx_packets: u32,
     tx_completions: u32,
-    tx_last_reclaim: u16,
+    tx_unreported_reclaim: u16,
     tx_last_free: u16,
     tx_last_in_flight: u16,
     rx_packets: u32,
@@ -2403,7 +2403,7 @@ impl GenetRuntimeState {
             rx_queue_frames: [[0; GENET_MAX_FRAME_LEN]; GENET_RX_QUEUE_CAP],
             tx_packets: 0,
             tx_completions: 0,
-            tx_last_reclaim: 0,
+            tx_unreported_reclaim: 0,
             tx_last_free: GENET_ACTIVE_RING_DESCS as u16,
             tx_last_in_flight: 0,
             rx_packets: 0,
@@ -2448,7 +2448,7 @@ impl GenetRuntimeState {
         }
         self.tx_packets = 0;
         self.tx_completions = 0;
-        self.tx_last_reclaim = 0;
+        self.tx_unreported_reclaim = 0;
         self.tx_last_free = GENET_ACTIVE_RING_DESCS as u16;
         self.tx_last_in_flight = 0;
         self.rx_packets = 0;
@@ -3301,6 +3301,7 @@ struct SdioExternalDmaRequestCursor {
     containment_clock: u16,
     containment_failure_phase: u8,
     settle_deadline: RuntimeDeadline,
+    settle_deadline_armed: bool,
     config_control: u8,
     config_clock: u16,
     config_divider: u16,
@@ -3349,6 +3350,7 @@ impl SdioExternalDmaRequestCursor {
             containment_clock: 0,
             containment_failure_phase: 0,
             settle_deadline: RuntimeDeadline::Iterations { remaining: 0 },
+            settle_deadline_armed: false,
             config_control: 0,
             config_clock: 0,
             config_divider: 0,
@@ -16101,9 +16103,16 @@ fn service_genet_runtime(command: DriverTaskCommandRecord) -> DriverTaskCompleti
             let poll = genet_runtime_poll_rx(state, command.budget);
             let result =
                 genet_completion_result(state, state.tx_last_free, state.tx_last_in_flight);
+            // A budget-exhausted completion has no reclaim field. Preserve the
+            // accumulated delta until a completion that can publish it.
+            let completed = if matches!(poll, GenetRxPoll::BudgetExhausted(_)) {
+                0
+            } else {
+                genet_take_tx_reclaim(state)
+            };
             (
                 poll,
-                state.tx_last_reclaim,
+                completed,
                 state.tx_last_free,
                 state.tx_last_in_flight,
                 result,
@@ -16140,7 +16149,7 @@ fn service_genet_runtime(command: DriverTaskCommandRecord) -> DriverTaskCompleti
         let result = genet_completion_result(state, state.tx_last_free, state.tx_last_in_flight);
         (
             written,
-            state.tx_last_reclaim,
+            genet_take_tx_reclaim(state),
             state.tx_last_free,
             state.tx_last_in_flight,
             result,
@@ -21779,6 +21788,93 @@ fn sdio_retained_containment_finish<I: SdioTransferIo>(
 const SDIO_RETAINED_CONTAINMENT_STEP_BOUND: usize = 24;
 
 #[cfg(any(target_os = "none", test))]
+fn sdio_retained_settle_within_owner_deadline(
+    settle: RuntimeDeadline,
+    owner: RuntimeDeadline,
+) -> bool {
+    match (settle, owner) {
+        (
+            RuntimeDeadline::Counter {
+                start: settle_start,
+                cycles: settle_cycles,
+            },
+            RuntimeDeadline::Counter {
+                start: owner_start,
+                cycles: owner_cycles,
+            },
+        ) => {
+            let expected_settle_cycles =
+                runtime_micros_to_cycles(u64::from(SDHCI_CLOCK_RECOVERY_SETTLE_US));
+            if settle_start == 0
+                || owner_start == 0
+                || settle_cycles != expected_settle_cycles
+                || settle_cycles >= (1u64 << 63)
+                || owner_cycles == 0
+                || owner_cycles >= (1u64 << 63)
+            {
+                return false;
+            }
+            let settle_offset = settle_start.wrapping_sub(owner_start);
+            settle_offset < (1u64 << 63)
+                && settle_offset
+                    .checked_add(settle_cycles)
+                    .is_some_and(|settle_end| settle_end <= owner_cycles)
+        }
+        (
+            RuntimeDeadline::Iterations {
+                remaining: settle_remaining,
+            },
+            RuntimeDeadline::Iterations {
+                remaining: owner_remaining,
+            },
+        ) => {
+            settle_remaining == SDHCI_CLOCK_RECOVERY_SETTLE_SPINS
+                && settle_remaining <= owner_remaining
+        }
+        _ => false,
+    }
+}
+
+/// Consume one exact clock-recovery settle interval inside the admitted owner SC.
+///
+/// This is a timer-only delay: it does not poll SDHCI state, issue another
+/// command, create another owner, or extend either deadline. Checking the
+/// 100-us settle condition before the outer containment deadline prevents a
+/// delayed re-entry from retroactively faulting an interval that has already
+/// completed. The selected Pi profile supplies CNTVCT; the finite iteration
+/// form remains the deterministic host fallback. Missing deadline provenance
+/// fails through the existing typed containment path.
+#[cfg(any(target_os = "none", test))]
+fn sdio_retained_containment_clock_settle_with<I: SdioTransferIo>(
+    cursor: &mut SdioExternalDmaRequestCursor,
+    io: &mut I,
+    failure_phase: u8,
+) -> bool {
+    if !cursor.settle_deadline_armed
+        || !sdio_retained_settle_within_owner_deadline(cursor.settle_deadline, cursor.deadline)
+    {
+        cursor.settle_deadline_armed = false;
+        cursor.containment_host_ok = false;
+        sdio_record_first_containment_failure_with(cursor, io, failure_phase);
+        return false;
+    }
+
+    loop {
+        if io.deadline_expired(&mut cursor.settle_deadline) {
+            cursor.settle_deadline_armed = false;
+            return true;
+        }
+        if io.deadline_expired(&mut cursor.deadline) {
+            cursor.settle_deadline_armed = false;
+            cursor.containment_host_ok = false;
+            sdio_record_first_containment_failure_with(cursor, io, failure_phase);
+            return false;
+        }
+        io.poll_pause();
+    }
+}
+
+#[cfg(any(target_os = "none", test))]
 fn sdio_retained_containment_turn_with<I: SdioTransferIo>(
     cursor: SdioExternalDmaRequestCursor,
     io: &mut I,
@@ -21934,20 +22030,16 @@ fn sdio_retained_containment_turn_bounded_with<I: SdioTransferIo>(
                     SDHCI_CLOCK_RECOVERY_SETTLE_US,
                     SDHCI_CLOCK_RECOVERY_SETTLE_SPINS,
                 );
+                cursor.settle_deadline_armed = true;
                 cursor.phase = SdioExternalDmaRequestPhase::ContainClockSettle1;
             }
             SdioExternalDmaRequestPhase::ContainClockSettle1 => {
-                if io.deadline_expired(&mut cursor.deadline) {
-                    cursor.containment_host_ok = false;
-                    sdio_record_first_containment_failure_with(
-                        &mut cursor,
-                        io,
-                        SDIO_CONTAINMENT_FAILURE_CLOCK_SETTLE1_TIMEOUT,
-                    );
-                    cursor.phase = SdioExternalDmaRequestPhase::ContainClockRestore1;
-                } else if io.deadline_expired(&mut cursor.settle_deadline) {
-                    cursor.phase = SdioExternalDmaRequestPhase::ContainClockRestore1;
-                }
+                let _ = sdio_retained_containment_clock_settle_with(
+                    &mut cursor,
+                    io,
+                    SDIO_CONTAINMENT_FAILURE_CLOCK_SETTLE1_TIMEOUT,
+                );
+                cursor.phase = SdioExternalDmaRequestPhase::ContainClockRestore1;
             }
             SdioExternalDmaRequestPhase::ContainClockRestore1 => {
                 io.write16(SDHCI_CLOCK_CONTROL, cursor.containment_clock);
@@ -21999,20 +22091,16 @@ fn sdio_retained_containment_turn_bounded_with<I: SdioTransferIo>(
                     SDHCI_CLOCK_RECOVERY_SETTLE_US,
                     SDHCI_CLOCK_RECOVERY_SETTLE_SPINS,
                 );
+                cursor.settle_deadline_armed = true;
                 cursor.phase = SdioExternalDmaRequestPhase::ContainClockSettle2;
             }
             SdioExternalDmaRequestPhase::ContainClockSettle2 => {
-                if io.deadline_expired(&mut cursor.deadline) {
-                    cursor.containment_host_ok = false;
-                    sdio_record_first_containment_failure_with(
-                        &mut cursor,
-                        io,
-                        SDIO_CONTAINMENT_FAILURE_CLOCK_SETTLE2_TIMEOUT,
-                    );
-                    cursor.phase = SdioExternalDmaRequestPhase::ContainClockRestore2;
-                } else if io.deadline_expired(&mut cursor.settle_deadline) {
-                    cursor.phase = SdioExternalDmaRequestPhase::ContainClockRestore2;
-                }
+                let _ = sdio_retained_containment_clock_settle_with(
+                    &mut cursor,
+                    io,
+                    SDIO_CONTAINMENT_FAILURE_CLOCK_SETTLE2_TIMEOUT,
+                );
+                cursor.phase = SdioExternalDmaRequestPhase::ContainClockRestore2;
             }
             SdioExternalDmaRequestPhase::ContainClockRestore2 => {
                 io.write16(SDHCI_CLOCK_CONTROL, cursor.containment_clock);
@@ -44676,11 +44764,18 @@ fn genet_runtime_poll_tx_completions(state: &mut GenetRuntimeState) {
         let reclaim = completed.min(GENET_TX_COMPLETION_RECLAIM_BUDGET);
         state.tx_cons_index = state.tx_cons_index.wrapping_add(reclaim as u16);
         state.tx_completions = state.tx_completions.saturating_add(reclaim as u32);
-        state.tx_last_reclaim = reclaim as u16;
-    } else {
-        state.tx_last_reclaim = 0;
+        // IRQ/DPC service has no command completion on which to publish this
+        // delta. Retain every newly reclaimed descriptor until exactly one
+        // later command completion consumes the aggregate.
+        state.tx_unreported_reclaim = state.tx_unreported_reclaim.saturating_add(reclaim as u16);
     }
     genet_record_tx_window(state);
+}
+
+fn genet_take_tx_reclaim(state: &mut GenetRuntimeState) -> u16 {
+    let completed = state.tx_unreported_reclaim;
+    state.tx_unreported_reclaim = 0;
+    completed
 }
 
 fn genet_record_tx_window(state: &mut GenetRuntimeState) {
@@ -59301,7 +59396,7 @@ const fn runtime_earlier_counter_deadline_expiry(
 /// Clock containment has both an overall bound and a shorter settle interval,
 /// so its first expiring condition is authoritative for the next wake.
 #[cfg(any(target_os = "none", test))]
-const fn sdio_deadline_arm_plan(cursor: SdioExternalDmaRequestCursor) -> SdioDeadlineArmPlan {
+fn sdio_deadline_arm_plan(cursor: SdioExternalDmaRequestCursor) -> SdioDeadlineArmPlan {
     if !cursor.active() {
         return SdioDeadlineArmPlan::Clear;
     }
@@ -59319,7 +59414,16 @@ const fn sdio_deadline_arm_plan(cursor: SdioExternalDmaRequestCursor) -> SdioDea
         }
         SdioExternalDmaRequestPhase::ContainClockSettle1
         | SdioExternalDmaRequestPhase::ContainClockSettle2 => {
-            runtime_earlier_counter_deadline_expiry(cursor.deadline, cursor.settle_deadline)
+            if !cursor.settle_deadline_armed
+                || !sdio_retained_settle_within_owner_deadline(
+                    cursor.settle_deadline,
+                    cursor.deadline,
+                )
+            {
+                None
+            } else {
+                runtime_earlier_counter_deadline_expiry(cursor.deadline, cursor.settle_deadline)
+            }
         }
         _ => return SdioDeadlineArmPlan::Clear,
     };
@@ -63000,6 +63104,7 @@ mod tests {
         reset_stuck: bool,
         reset_failures_remaining: usize,
         scrub_diagnostic_registers_on_reset: bool,
+        present_after_reset: u32,
         clock_stable_on_enable: bool,
         card_int_after_int_enable: bool,
         card_int_after_signal_enable: bool,
@@ -63008,6 +63113,7 @@ mod tests {
         signal_enable_read_count: usize,
         corrupt_signal_enable_read_at: usize,
         polls: usize,
+        counter_ticks_per_poll: u64,
         events: [TestSdioModelEvent; TEST_SDIO_MODEL_EVENTS],
         event_count: usize,
         writes: [TestSdioModelWrite; TEST_SDIO_MODEL_WRITES],
@@ -63075,6 +63181,7 @@ mod tests {
                 reset_stuck: false,
                 reset_failures_remaining: 0,
                 scrub_diagnostic_registers_on_reset: false,
+                present_after_reset: 0,
                 clock_stable_on_enable: false,
                 card_int_after_int_enable: false,
                 card_int_after_signal_enable: false,
@@ -63083,6 +63190,7 @@ mod tests {
                 signal_enable_read_count: 0,
                 corrupt_signal_enable_read_at: 0,
                 polls: 0,
+                counter_ticks_per_poll: 0,
                 events: [TestSdioModelEvent::default(); TEST_SDIO_MODEL_EVENTS],
                 event_count: 0,
                 writes: [TestSdioModelWrite::default(); TEST_SDIO_MODEL_WRITES],
@@ -63469,8 +63577,9 @@ mod tests {
                 }
                 let cleared = sdio_merge_u8_word(self.register(aligned), offset, 0);
                 self.set_register(aligned, cleared);
-                let present = self.register(SDHCI_PRESENT_STATE)
-                    & !(SDHCI_CMD_INHIBIT | SDHCI_DATA_INHIBIT | SDHCI_DAT_ACTIVE);
+                let present = (self.register(SDHCI_PRESENT_STATE)
+                    & !(SDHCI_CMD_INHIBIT | SDHCI_DATA_INHIBIT | SDHCI_DAT_ACTIVE))
+                    | self.present_after_reset;
                 self.set_register(SDHCI_PRESENT_STATE, present);
             }
         }
@@ -63742,6 +63851,10 @@ mod tests {
 
         fn poll_pause(&mut self) {
             self.polls = self.polls.saturating_add(1);
+            if self.counter_ticks_per_poll != 0 {
+                TEST_RUNTIME_TIMER_COUNTER_TICKS
+                    .fetch_add(self.counter_ticks_per_poll, Ordering::AcqRel);
+            }
             self.apply_poll_events();
             if self.dma_transfer_pending
                 && self.dma_complete_after_polls != 0
@@ -75260,6 +75373,22 @@ mod tests {
     }
 
     #[test]
+    fn genet_zero_reclaim_poll_preserves_unreported_completion_delta() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let mut state = GenetRuntimeState::new();
+        state.tx_prod_index = 1;
+        genet_write32(GENET_TDMA_CONS_INDEX, 1);
+
+        genet_runtime_poll_tx_completions(&mut state);
+        genet_runtime_poll_tx_completions(&mut state);
+
+        assert_eq!(state.tx_completions, 1);
+        assert_eq!(genet_take_tx_reclaim(&mut state), 1);
+        assert_eq!(genet_take_tx_reclaim(&mut state), 0);
+    }
+
+    #[test]
     fn genet_rx_poll_reclaims_tx_before_preserved_rx_frame() {
         let _guard = test_guard();
         reset_runtime_for_test();
@@ -75289,7 +75418,7 @@ mod tests {
         );
 
         assert_eq!(state.tx_completions, 1);
-        assert_eq!(state.tx_last_reclaim, 1);
+        assert_eq!(state.tx_unreported_reclaim, 1);
         assert_eq!(state.tx_last_in_flight, 0);
         assert_eq!(state.tx_last_free, GENET_ACTIVE_RING_DESCS as u16);
         assert_eq!(usize::from(state.rx_queue_count), 0);
@@ -75399,7 +75528,7 @@ mod tests {
         genet_runtime_poll_tx_completions(&mut state);
 
         assert_eq!(state.tx_completions, 1);
-        assert_eq!(state.tx_last_reclaim, 1);
+        assert_eq!(state.tx_unreported_reclaim, 1);
         assert_eq!(state.tx_last_in_flight, 0);
         assert_eq!(state.tx_last_free, GENET_ACTIVE_RING_DESCS as u16);
         assert_eq!(
@@ -75474,6 +75603,27 @@ mod tests {
             ..tx
         };
 
+        let rejected = DriverTaskCommandRecord {
+            budget: DriverTaskBudgetGrant {
+                max_ops: 0,
+                ..poll.budget
+            },
+            ..poll
+        };
+        assert_eq!(
+            service_command(0, rejected),
+            DriverTaskCompletionRecord::budget_exhausted(32, BUDGET_EXHAUSTED_OPS),
+        );
+        assert_eq!(
+            GENET_RUNTIME_STATE.with_ref(|state| state.tx_unreported_reclaim),
+            1,
+            "a completion with no reclaim field must retain the pending delta",
+        );
+        let poll = DriverTaskCommandRecord {
+            sequence: 33,
+            ..poll
+        };
+
         let idle_result =
             driver_runtime_genet_completion_result(DriverRuntimeGenetCompletionResultParts {
                 tx_free: GENET_ACTIVE_RING_DESCS as u16,
@@ -75488,8 +75638,29 @@ mod tests {
             });
         assert_eq!(
             service_command(0, poll),
-            genet_tx_idle_completion(32, 1, GENET_ACTIVE_RING_DESCS as u16, 0, idle_result)
+            genet_tx_idle_completion(33, 1, GENET_ACTIVE_RING_DESCS as u16, 0, idle_result)
         );
+        assert_eq!(
+            service_command(
+                0,
+                DriverTaskCommandRecord {
+                    sequence: 34,
+                    ..poll
+                }
+            ),
+            genet_tx_idle_completion(34, 0, GENET_ACTIVE_RING_DESCS as u16, 0, idle_result),
+            "a reclaimed descriptor must be reported on exactly one completion"
+        );
+        GENET_RUNTIME_STATE.with_ref(|state| {
+            assert_eq!(state.tx_packets, 1);
+            assert_eq!(state.tx_completions, 1);
+            assert_eq!(state.tx_unreported_reclaim, 0);
+            assert!(state.tx_completions <= state.tx_packets);
+            assert_eq!(
+                usize::from(state.tx_last_free) + usize::from(state.tx_last_in_flight),
+                GENET_ACTIVE_RING_DESCS
+            );
+        });
     }
 
     #[test]
@@ -77114,6 +77285,8 @@ mod tests {
     #[test]
     fn sdio_deadline_arm_plan_covers_every_timed_owner_wait() {
         let mut cursor = SdioExternalDmaRequestCursor::idle();
+        let settle_cycles = runtime_micros_to_cycles(u64::from(SDHCI_CLOCK_RECOVERY_SETTLE_US));
+        let owner_cycles = settle_cycles.saturating_mul(4);
         cursor.deadline = RuntimeDeadline::Counter {
             start: 1_000,
             cycles: 500,
@@ -77141,12 +77314,13 @@ mod tests {
 
         cursor.deadline = RuntimeDeadline::Counter {
             start: 1_000,
-            cycles: 1_000,
+            cycles: owner_cycles,
         };
         cursor.settle_deadline = RuntimeDeadline::Counter {
             start: 1_100,
-            cycles: 100,
+            cycles: settle_cycles,
         };
+        cursor.settle_deadline_armed = true;
         for phase in [
             SdioExternalDmaRequestPhase::ContainClockSettle1,
             SdioExternalDmaRequestPhase::ContainClockSettle2,
@@ -77155,22 +77329,49 @@ mod tests {
             assert_eq!(
                 sdio_deadline_arm_plan(cursor),
                 SdioDeadlineArmPlan::Publish {
-                    expiry_ticks: 1_200,
+                    expiry_ticks: 1_100 + settle_cycles,
                 },
                 "phase {phase:?} must wake on the earlier settle condition",
             );
         }
         cursor.settle_deadline = RuntimeDeadline::Counter {
-            start: 1_900,
-            cycles: 500,
+            start: 1_000 + owner_cycles - settle_cycles + 1,
+            cycles: settle_cycles,
         };
         assert_eq!(
             sdio_deadline_arm_plan(cursor),
-            SdioDeadlineArmPlan::Publish {
-                expiry_ticks: 2_000,
-            },
-            "the overall containment bound wins when it expires first",
+            SdioDeadlineArmPlan::Fault,
+            "a restored settle interval outside its owner fence fails closed",
         );
+
+        cursor.deadline = RuntimeDeadline::Counter {
+            start: 0,
+            cycles: owner_cycles,
+        };
+        cursor.settle_deadline = RuntimeDeadline::Counter {
+            start: 0,
+            cycles: 0,
+        };
+        assert_eq!(
+            sdio_deadline_arm_plan(cursor),
+            SdioDeadlineArmPlan::Fault,
+            "a zero-cycle settle deadline fails closed",
+        );
+        cursor.settle_deadline = RuntimeDeadline::Counter {
+            start: 0,
+            cycles: settle_cycles,
+        };
+        assert_eq!(
+            sdio_deadline_arm_plan(cursor),
+            SdioDeadlineArmPlan::Fault,
+            "a zero-start counter form lacks constructor provenance",
+        );
+        cursor.settle_deadline = RuntimeDeadline::Counter {
+            start: 0,
+            cycles: settle_cycles,
+        };
+        cursor.settle_deadline_armed = false;
+        assert_eq!(sdio_deadline_arm_plan(cursor), SdioDeadlineArmPlan::Fault);
 
         cursor.phase = SdioExternalDmaRequestPhase::WaitInhibit;
         cursor.deadline = RuntimeDeadline::Iterations { remaining: 8 };
@@ -77218,23 +77419,25 @@ mod tests {
             2_750,
         );
 
+        let settle_cycles = runtime_micros_to_cycles(u64::from(SDHCI_CLOCK_RECOVERY_SETTLE_US));
         SDIO_RUNTIME_STATE.with_mut(|state| {
             state.external_dma_request.phase = SdioExternalDmaRequestPhase::ContainClockSettle1;
             state.external_dma_request.deadline = RuntimeDeadline::Counter {
                 start: 2_500,
-                cycles: 1_000,
+                cycles: settle_cycles.saturating_mul(2),
             };
             state.external_dma_request.settle_deadline = RuntimeDeadline::Counter {
                 start: 2_600,
-                cycles: 100,
+                cycles: settle_cycles,
             };
+            state.external_dma_request.settle_deadline_armed = true;
         });
         assert!(sdio_deadline_arm_publish_current());
         assert_eq!(
             sdio_deadline_arm_snapshot()
                 .expect("settle deadline arm commits")
                 .expiry_ticks(),
-            2_700,
+            2_600 + settle_cycles,
         );
         assert!(sdio_deadline_arm_clear());
     }
@@ -102317,9 +102520,9 @@ mod tests {
         assert!(!gate.has_deferred_delegated_wake());
 
         // The stable grant, validation, and ACK share one consumer admission.
-        // The released HOST_CONFIG continuation may batch the deterministic
-        // containment prefix, but must stop at its first real hardware/time
-        // wait without polling privately.
+        // The released HOST_CONFIG continuation batches the deterministic
+        // containment prefix and consumes the exact 100-us timer-only settle
+        // interval before releasing the same owner SC.
         let probe = probe_runtime_retained_continuation_grant(
             &gate,
             Some(intake),
@@ -102350,14 +102553,17 @@ mod tests {
         );
         assert_eq!(
             io.write_count,
-            writes_before + 5,
-            "the admitted HOST_CONFIG continuation performs the exact DMA-reset/status-ack/host-reset/ack/clock-disable prefix",
+            writes_before + 8,
+            "the admitted HOST_CONFIG continuation performs one complete bounded containment pass",
         );
         assert_eq!(
             SDIO_RUNTIME_STATE.with_ref(|state| state.external_dma_request.phase),
-            SdioExternalDmaRequestPhase::ContainClockSettle1,
+            SdioExternalDmaRequestPhase::HostConfigClock1Disable,
         );
-        assert_eq!(io.polls, 0, "the owner may not create a private poll loop");
+        assert_eq!(
+            io.polls, SDHCI_CLOCK_RECOVERY_SETTLE_SPINS,
+            "the owner consumes exactly one bounded clock-settle interval without polling SDHCI",
+        );
         gate.retain_after_pending_generation(generation);
         let consumed = read_runtime_continuation_grant_at(DRIVER_TASK_SDIO_BUS_RING_VADDR)
             .expect("acknowledged HOST_CONFIG grant remains stable");
@@ -107918,7 +108124,10 @@ mod tests {
         assert_eq!(fault.detail, FAULT_SDIO_DESCRIPTOR_TRANSFER_FAILED);
         assert_eq!(io.command_issue_count(), 1);
         assert!(SDIO_RUNTIME_STATE.with_ref(|state| state.dpc_poisoned));
-        assert_eq!(io.polls, 0, "containment may not enter a private poll loop");
+        assert_eq!(
+            io.polls, SDHCI_CLOCK_RECOVERY_SETTLE_SPINS,
+            "containment consumes exactly one bounded timer delay without polling SDHCI",
+        );
         // Immediate deterministic phases now share one bounded owner turn, so
         // only externally visible wait/terminal phases appear between calls.
         // The focused containment-prefix regression checks the exact internal
@@ -107929,11 +108138,10 @@ mod tests {
             vec![
                 SdioExternalDmaRequestPhase::CaptureFailureTelemetry,
                 SdioExternalDmaRequestPhase::ContainDmaInspect,
-                SdioExternalDmaRequestPhase::ContainClockSettle1,
                 SdioExternalDmaRequestPhase::PoisonPolicyEnable,
                 SdioExternalDmaRequestPhase::PoisonPolicySignal,
             ],
-            "retained containment exposes only real waits and terminal policy turns",
+            "the timer-only settle remains inside the admitted owner turn",
         );
 
         let replay =
@@ -108098,12 +108306,15 @@ mod tests {
             completion,
             DriverTaskCompletionRecord::progress(sequence, 1)
         );
-        assert!(
-            outer_turns > 16,
-            "recovery/set_ios must yield between phases"
+        assert_eq!(
+            outer_turns, 3,
+            "intake, contained recovery, and set_ios each retain one explicit owner boundary",
         );
         assert_eq!(io.command_issue_count(), 0);
-        assert_eq!(io.polls, 0, "host config may not enter a private wait loop");
+        assert_eq!(
+            io.polls, SDHCI_CLOCK_RECOVERY_SETTLE_SPINS,
+            "HOST_CONFIG consumes the exact timer-only recovery settle without polling SDHCI",
+        );
         assert_eq!(
             io.read8(SDHCI_HOST_CONTROL)
                 & (SDHCI_HOST_CONTROL_4BIT | SDHCI_HOST_CONTROL_HIGH_SPEED),
@@ -108237,22 +108448,37 @@ mod tests {
     }
 
     #[test]
-    fn sdio_containment_batches_immediate_phases_and_stops_at_real_wait() {
+    fn sdio_containment_completes_both_clock_settles_in_one_owner_turn() {
         let _guard = test_guard();
         reset_sdio_descriptor_seam_for_test();
+        TEST_RUNTIME_TIMER_COUNTER_TICKS.store(1, Ordering::Release);
         let mut io = TestSdioHostIo::new();
         io.dma_authority_available = false;
+        io.counter_ticks_per_poll = runtime_micros_to_cycles(10);
+        io.present_after_reset = SDHCI_CMD_INHIBIT | SDHCI_DATA_INHIBIT;
+        io.push_event(TestSdioModelEvent {
+            poll: 20,
+            present_clear: SDHCI_CMD_INHIBIT | SDHCI_DATA_INHIBIT,
+            ..TestSdioModelEvent::default()
+        });
         let cursor = SdioExternalDmaRequestCursor {
             phase: SdioExternalDmaRequestPhase::ContainDmaInspect,
             identity: SdioExternalDmaRequestIdentity {
                 sequence: 0x434f_4e54,
                 descriptor: DriverRuntimeSdioCommandDescriptor {
                     op: DRIVER_RUNTIME_SDIO_OP_HOST_CONFIG,
+                    addr: SDHCI_STARTUP_CLOCK_HZ,
                     ..DriverRuntimeSdioCommandDescriptor::empty()
                 },
+                arg: SDHCI_STARTUP_CLOCK_HZ,
                 ..SdioExternalDmaRequestIdentity::empty()
             },
-            deadline: RuntimeDeadline::Iterations { remaining: 64 },
+            deadline: RuntimeDeadline::Counter {
+                start: 1,
+                cycles: runtime_micros_to_cycles(u64::from(
+                    DRIVER_RUNTIME_SDIO_CONTAINMENT_TIMEOUT_US,
+                )),
+            },
             containment_resume: SdioRetainedContainmentResume::HostConfig,
             ..SdioExternalDmaRequestCursor::idle()
         };
@@ -108264,13 +108490,275 @@ mod tests {
         let retained = SDIO_RUNTIME_STATE.with_ref(|state| state.external_dma_request);
         assert_eq!(
             retained.phase,
-            SdioExternalDmaRequestPhase::ContainClockSettle1,
-            "DMA inspection, host ACK/reset, and clock disable are deterministic one-owner work",
+            SdioExternalDmaRequestPhase::HostConfigClock1Disable,
+            "both 100-us containment settles complete before the owner releases its admitted SC",
         );
         assert!(retained.containment_dma_ok);
         assert!(retained.containment_host_ok);
         assert_eq!(retained.containment_failure_phase, 0);
-        assert_eq!(io.polls, 0, "the owner may not create a private poll loop");
+        assert!(!retained.settle_deadline_armed);
+        assert_eq!(io.polls, 20);
+        assert_eq!(
+            TEST_RUNTIME_TIMER_COUNTER_TICKS.load(Ordering::Acquire),
+            1 + runtime_micros_to_cycles(200),
+        );
+        assert_eq!(io.command_issue_count(), 0);
+        assert_eq!(io.dma_started, 0);
+    }
+
+    #[test]
+    fn sdio_containment_settle_checks_condition_before_owner_deadline() {
+        let _guard = test_guard();
+        reset_sdio_descriptor_seam_for_test();
+        let settle_cycles = runtime_micros_to_cycles(u64::from(SDHCI_CLOCK_RECOVERY_SETTLE_US));
+        let owner_cycles = settle_cycles.saturating_mul(2);
+        TEST_RUNTIME_TIMER_COUNTER_TICKS.store(1 + owner_cycles, Ordering::Release);
+        let sequence = 0x434f_4e30;
+        let descriptor = DriverRuntimeSdioCommandDescriptor {
+            op: DRIVER_RUNTIME_SDIO_OP_HOST_CONFIG,
+            addr: SDHCI_STARTUP_CLOCK_HZ,
+            ..DriverRuntimeSdioCommandDescriptor::empty()
+        };
+        let cursor = SdioExternalDmaRequestCursor {
+            phase: SdioExternalDmaRequestPhase::ContainClockSettle1,
+            identity: SdioExternalDmaRequestIdentity {
+                sequence,
+                descriptor,
+                arg: descriptor.addr,
+                owner_timeout_us: DRIVER_RUNTIME_SDIO_CONTAINMENT_TIMEOUT_US,
+                ..SdioExternalDmaRequestIdentity::empty()
+            },
+            deadline: RuntimeDeadline::Counter {
+                start: 1,
+                cycles: owner_cycles,
+            },
+            settle_deadline: RuntimeDeadline::Counter {
+                start: 1,
+                cycles: settle_cycles,
+            },
+            settle_deadline_armed: true,
+            containment_resume: SdioRetainedContainmentResume::HostConfig,
+            ..SdioExternalDmaRequestCursor::idle()
+        };
+        let mut io = TestSdioHostIo::new();
+        io.dma_authority_available = false;
+
+        assert_eq!(
+            sdio_retained_containment_turn_with(cursor, &mut io),
+            RuntimeCommandTurn::Pending,
+        );
+        let retained = SDIO_RUNTIME_STATE.with_ref(|state| state.external_dma_request);
+        assert_eq!(
+            retained.phase,
+            SdioExternalDmaRequestPhase::HostConfigClock1Disable,
+        );
+        assert!(retained.containment_host_ok);
+        assert_eq!(retained.containment_failure_phase, 0);
+        assert_eq!(retained.failure_result, 0);
+        assert!(!retained.settle_deadline_armed);
+        assert_eq!(io.polls, 0);
+        assert_eq!(io.command_issue_count(), 0);
+        assert_eq!(io.dma_started, 0);
+    }
+
+    #[test]
+    fn sdio_containment_settle_invalid_or_outside_owner_fails_closed() {
+        let _guard = test_guard();
+        let settle_cycles = runtime_micros_to_cycles(u64::from(SDHCI_CLOCK_RECOVERY_SETTLE_US));
+        let owner_cycles = settle_cycles.saturating_mul(4);
+        let wrapping_owner_start = u64::MAX - settle_cycles / 2;
+        let wrapping_settle_start = wrapping_owner_start.wrapping_add(settle_cycles);
+        assert!(sdio_retained_settle_within_owner_deadline(
+            RuntimeDeadline::Counter {
+                start: wrapping_settle_start,
+                cycles: settle_cycles,
+            },
+            RuntimeDeadline::Counter {
+                start: wrapping_owner_start,
+                cycles: owner_cycles,
+            },
+        ));
+        for (case, settle_deadline_armed, settle_deadline, owner_deadline, current_ticks) in [
+            (
+                0u32,
+                false,
+                RuntimeDeadline::Counter {
+                    start: 1,
+                    cycles: settle_cycles,
+                },
+                RuntimeDeadline::Counter {
+                    start: 1,
+                    cycles: owner_cycles,
+                },
+                1u64,
+            ),
+            (
+                1,
+                true,
+                RuntimeDeadline::Counter {
+                    start: 1,
+                    cycles: 0,
+                },
+                RuntimeDeadline::Counter {
+                    start: 1,
+                    cycles: owner_cycles,
+                },
+                1,
+            ),
+            (
+                2,
+                true,
+                RuntimeDeadline::Counter {
+                    start: 0,
+                    cycles: settle_cycles,
+                },
+                RuntimeDeadline::Counter {
+                    start: 1,
+                    cycles: owner_cycles,
+                },
+                1,
+            ),
+            (
+                3,
+                true,
+                RuntimeDeadline::Counter {
+                    start: 1 + owner_cycles - settle_cycles + 1,
+                    cycles: settle_cycles,
+                },
+                RuntimeDeadline::Counter {
+                    start: 1,
+                    cycles: owner_cycles,
+                },
+                1,
+            ),
+            (
+                4,
+                true,
+                RuntimeDeadline::Counter {
+                    start: 1,
+                    cycles: settle_cycles,
+                },
+                RuntimeDeadline::Iterations { remaining: 1_000 },
+                1,
+            ),
+            (
+                5,
+                true,
+                RuntimeDeadline::Counter {
+                    start: 500,
+                    cycles: settle_cycles,
+                },
+                RuntimeDeadline::Counter {
+                    start: 1_000,
+                    cycles: owner_cycles,
+                },
+                1_000,
+            ),
+            (
+                6,
+                true,
+                RuntimeDeadline::Counter {
+                    start: 1,
+                    cycles: settle_cycles + 1,
+                },
+                RuntimeDeadline::Counter {
+                    start: 1,
+                    cycles: owner_cycles,
+                },
+                1,
+            ),
+            (
+                7,
+                true,
+                RuntimeDeadline::Counter {
+                    start: 1,
+                    cycles: settle_cycles,
+                },
+                RuntimeDeadline::Counter {
+                    start: 1,
+                    cycles: 1u64 << 63,
+                },
+                1,
+            ),
+            (
+                8,
+                true,
+                RuntimeDeadline::Counter {
+                    start: 1,
+                    cycles: 1u64 << 63,
+                },
+                RuntimeDeadline::Counter {
+                    start: 1,
+                    cycles: owner_cycles,
+                },
+                1,
+            ),
+            (
+                9,
+                true,
+                RuntimeDeadline::Iterations {
+                    remaining: SDHCI_CLOCK_RECOVERY_SETTLE_SPINS - 1,
+                },
+                RuntimeDeadline::Iterations {
+                    remaining: SDHCI_CLOCK_RECOVERY_SETTLE_SPINS * 2,
+                },
+                1,
+            ),
+        ] {
+            reset_sdio_descriptor_seam_for_test();
+            TEST_RUNTIME_TIMER_COUNTER_TICKS.store(current_ticks, Ordering::Release);
+            let sequence = 0x434f_4e40 + case;
+            let descriptor = DriverRuntimeSdioCommandDescriptor {
+                op: DRIVER_RUNTIME_SDIO_OP_HOST_CONFIG,
+                ..DriverRuntimeSdioCommandDescriptor::empty()
+            };
+            let cursor = SdioExternalDmaRequestCursor {
+                phase: SdioExternalDmaRequestPhase::ContainClockSettle1,
+                identity: SdioExternalDmaRequestIdentity {
+                    sequence,
+                    descriptor,
+                    owner_timeout_us: DRIVER_RUNTIME_SDIO_CONTAINMENT_TIMEOUT_US,
+                    ..SdioExternalDmaRequestIdentity::empty()
+                },
+                deadline: owner_deadline,
+                settle_deadline,
+                settle_deadline_armed,
+                containment_resume: SdioRetainedContainmentResume::HostConfig,
+                ..SdioExternalDmaRequestCursor::idle()
+            };
+            let mut io = TestSdioHostIo::new();
+            io.dma_authority_available = false;
+
+            assert_eq!(
+                sdio_retained_containment_turn_with(cursor, &mut io),
+                RuntimeCommandTurn::Pending,
+                "case {case} reaches the existing poison policy turn",
+            );
+            let retained = SDIO_RUNTIME_STATE.with_ref(|state| state.external_dma_request);
+            assert_eq!(
+                retained.phase,
+                SdioExternalDmaRequestPhase::PoisonPolicyEnable,
+                "case {case}",
+            );
+            assert!(!retained.containment_host_ok, "case {case}");
+            assert_eq!(
+                retained.containment_failure_phase, SDIO_CONTAINMENT_FAILURE_CLOCK_SETTLE1_TIMEOUT,
+                "case {case}",
+            );
+            assert_eq!(
+                retained.failure_result,
+                sdio_transfer_failure_result(
+                    SDIO_TRANSFER_FAILURE_STAGE_CONTAINMENT,
+                    u32::from(SDIO_CONTAINMENT_FAILURE_CLOCK_SETTLE1_TIMEOUT),
+                ),
+                "case {case}",
+            );
+            assert!(!retained.settle_deadline_armed, "case {case}");
+            assert_eq!(io.polls, 0, "case {case}");
+            assert_eq!(io.command_issue_count(), 0, "case {case}");
+            assert_eq!(io.dma_started, 0, "case {case}");
+            assert!(SDIO_RUNTIME_STATE.with_ref(|state| state.dpc_poisoned));
+        }
     }
 
     #[test]

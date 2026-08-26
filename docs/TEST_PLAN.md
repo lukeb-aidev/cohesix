@@ -1602,12 +1602,18 @@ but a second issue is legal only after an entry-inhibit failure proves the first
 command was never written; command, response, data, busy, or later failures are
 issued-unknown and perform no same-generation replay. Each failed attempt gets
 its own 220-millisecond containment deadline. Containment may advance at most
-24 immediate deterministic owner-local phases in one admitted turn and must
-stop when a hardware/time wait remains false. `HOST_CONFIG` may similarly
+24 immediate deterministic owner-local phases in one admitted turn. False
+controller, DMA, reset, inhibit, and internal-clock conditions remain
+one-sample persistent waits. The exact 100-microsecond card-clock-disable
+settle must instead complete inside the already-admitted owner SC using the
+exported counter, with the settle condition tested before the unchanged outer
+deadline. It performs no SDHCI condition read, command, DMA action, retry,
+new-owner admission, or deadline extension. `HOST_CONFIG` may similarly
 advance at most 18 phases, stopping only at either clock-stability poll. Tests
-must prove one sample per real wait, unchanged condition-before-deadline order,
-no private poll loop, no second issue, and fail-closed invalid cursor/bound
-behavior. If containment itself fails before another issued-request failure is
+must prove both timer-only containment settles, exact finite bounds, no private
+hardware poll loop, no second issue, condition-before-deadline behavior, and
+fail-closed unarmed, invalid-deadline, invalid-phase, and transition-bound
+cursors. If containment itself fails before another issued-request failure is
 recorded, stage 9 must retain the immutable first subphase plus pre-recovery
 controller/DMA snapshot; later reset writes cannot overwrite it. Shared-ABI
 tests must derive the
@@ -5636,6 +5642,19 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
       and projects as `runtime_cmd_drain_seen=0|1` on the existing bounded
       `netstats: genet_rxq` row. This passive route discriminator is diagnostic,
       not GENET traffic, performance, or acceptance evidence.
+      TX completion coverage must prove an IRQ/DPC reclaim survives a later
+      zero-reclaim poll or a budget-exhausted completion with no reclaim field,
+      is consumed by exactly one eligible command completion, and is zero on
+      the next eligible completion. Cumulative completions cannot exceed
+      submissions and the 32-descriptor free/in-flight partition must remain
+      exact. An impossible counter tuple is a telemetry defect, not permission
+      to infer traffic or change the ring.
+      Isolated-console coverage must separately prove that an exact retained
+      authenticated response flush selects `poll_response_turn` under the same
+      one-op/two-frame/fixed-byte charge as ordinary polling, while ordinary
+      service retains the strict rotor. It must reject a loop, multi-unit burst,
+      budget increase, physical-input bypass, or QEMU/direct-VirtIO ownership
+      change. Host timing or selector tests cannot establish Pi performance.
       Generated-profile tests must also
       prove that no direct
       GENET-console link/caps or nine-page export-helper bypass is emitted.

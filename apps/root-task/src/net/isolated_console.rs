@@ -1570,6 +1570,20 @@ impl<D: NetDevice> NetPoller for IsolatedNetworkConsole<D> {
         Ok(self.poll(now_ms))
     }
 
+    fn flush_tcp_with_budget(
+        &mut self,
+        now_ms: u64,
+        budget: &mut DriverServiceBudget,
+    ) -> Result<bool, DriverServiceBudgetError> {
+        // A retained authenticated response uses the same one-turn resource
+        // contract as ordinary service, but selects only useful response work.
+        // The ordinary strict rotor remains authoritative outside this lane.
+        budget.charge_ops(1)?;
+        budget.charge_frames(ISOLATED_NETWORK_TURN_FRAMES)?;
+        budget.charge_bytes(ISOLATED_NETWORK_TURN_BYTES)?;
+        Ok(self.poll_response_turn(now_ms))
+    }
+
     fn poll_console_response_with_budget(
         &mut self,
         now_ms: u64,

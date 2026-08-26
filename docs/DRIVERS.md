@@ -885,6 +885,19 @@ reusable ownership pattern.
   `runtime_cmd_drain_seen=0|1` on the existing `netstats: genet_rxq` row. It is
   set only after an admitted command successfully queues at least one durable
   frame; it grants no polling, IRQ, acknowledgement, DMA, or retry authority.
+- GENET TX reclaim detail is a completion delta, not a sampled level. An IRQ or
+  DPC may accumulate newly reclaimed descriptors until the next root command
+  completion with a reclaim field consumes that aggregate exactly once. A
+  budget-exhausted completion cannot discard it, a later zero-reclaim poll
+  cannot erase it, and a later eligible command cannot report it again. The
+  cumulative completion count cannot exceed submissions, while
+  `tx_free + tx_in_flight` remains the fixed 32-descriptor active ring.
+- While an exact authenticated console response cursor is active, one retained
+  flush turn may select the next useful response unit under the same one-op,
+  two-frame, fixed-byte charge as an ordinary isolated-network turn. Ordinary
+  service retains its strict rotor. Response selection cannot compose a burst,
+  increase a manifest or MCS budget, skip physical-input priority, create a
+  poller, or grant NIC/child authority.
 - Prioritize ARP and TCP/ICMP control traffic, but after four consecutive
   control frames service the oldest data frame so control load cannot starve
   data. Batch drain and root consumption remain independently bounded.
@@ -925,11 +938,19 @@ transport:
   the transport clock.
 - SDIO containment and `HOST_CONFIG` may batch finite deterministic
   sole-owner register/state transitions inside one admitted turn. Containment
-  is capped at 24 transitions; host configuration is capped at 18. Both stop
-  as soon as a hardware or elapsed-time condition remains false and sample
-  that wait only once per turn. Preserve the existing deadline ordering,
-  command identity, no-replay rule, and first causal failure snapshot; a bound
-  or cursor violation fails closed.
+  is capped at 24 transitions; host configuration is capped at 18. Controller,
+  command, DMA, reset, inhibit, and internal-clock-stability conditions still
+  receive one sample per admitted turn and persist when false. The exact
+  100-microsecond card-clock-disable settle is different: containment consumes
+  that timer-only interval inside the already-admitted owner SC, testing the
+  settle condition before the unchanged outer containment deadline. The Pi
+  implementation uses exported `CNTVCT_EL0`; deterministic host tests use the
+  finite fallback. At most the two existing settle intervals run, with no
+  SDHCI condition poll, command, DMA action, new owner, retry, or deadline
+  extension. An unarmed or invalid retained settle cursor fails through the
+  existing typed containment path. Preserve command identity, no replay, and
+  the immutable first causal failure snapshot; a transition bound or cursor
+  violation fails closed.
 - At the shared-payload/private-DMA boundary, copy only between the existing
   shared command payload and the SDIO child's existing private uncached DMA4
   bounce region. Use an alignment-safe bounded prefix, `u64` word body, and

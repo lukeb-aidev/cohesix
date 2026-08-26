@@ -655,6 +655,48 @@ fn isolated_network_poll_maps_one_selected_unit_in_strict_source_order() {
 }
 
 #[test]
+fn isolated_tcp_flush_uses_the_response_selector_under_the_existing_turn_budget() {
+    let source = include_str!("../src/net/isolated_console.rs");
+    let implementation = section(
+        source,
+        "impl<D: NetDevice> NetPoller for IsolatedNetworkConsole<D>",
+        "fn driver_task_contract",
+    );
+    let ordinary = section(
+        implementation,
+        "fn poll_with_budget(",
+        "fn flush_tcp_with_budget(",
+    );
+    let flush = section(
+        implementation,
+        "fn flush_tcp_with_budget(",
+        "fn poll_console_response_with_budget(",
+    );
+
+    for charged_turn in [ordinary, flush] {
+        assert_eq!(charged_turn.matches("budget.charge_ops(1)?;").count(), 1);
+        assert_eq!(
+            charged_turn
+                .matches("budget.charge_frames(ISOLATED_NETWORK_TURN_FRAMES)?;")
+                .count(),
+            1,
+        );
+        assert_eq!(
+            charged_turn
+                .matches("budget.charge_bytes(ISOLATED_NETWORK_TURN_BYTES)?;")
+                .count(),
+            1,
+        );
+    }
+    assert!(ordinary.contains("Ok(self.poll(now_ms))"));
+    assert!(!ordinary.contains("poll_response_turn"));
+    assert!(flush.contains("Ok(self.poll_response_turn(now_ms))"));
+    assert!(!flush.contains("Ok(self.poll(now_ms))"));
+    assert!(!flush.contains("for "));
+    assert!(!flush.contains("while "));
+}
+
+#[test]
 fn split_network_commits_refill_cursor_before_timer_or_nic_work() {
     let source = include_str!("../src/event/mod.rs");
     let runtime_prelude = section(

@@ -470,6 +470,12 @@ mod tests {
         let stage_cursor = IsolatedNetworkLowerCursor {
             unit: IsolatedNetworkLowerUnit::StageOutput,
         };
+        let ordinary = select_isolated_network_turn(false, false, stage_cursor);
+        assert_eq!(
+            ordinary.unit(),
+            IsolatedNetworkTurnUnit::Lower(IsolatedNetworkLowerUnit::StageOutput),
+            "ordinary service must retain the strict lower rotor"
+        );
         let ingress = select_isolated_response_turn(false, false, true, stage_cursor);
         assert_eq!(
             ingress.unit(),
