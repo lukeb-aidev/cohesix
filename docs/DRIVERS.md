@@ -653,13 +653,15 @@ reusable ownership pattern.
   its existing cooperative EventPump polling; the transport does not claim a
   direct interrupt wake into root.
 - While the validated root-to-runtime ring has committed nonzero occupancy,
-  the idle serial child blocks only on its generated local notification in
-  slot 3. Admit only the exact serial IRQ badge, root doorbell badge, or their
-  coalesced value; service one bounded FIFO quantum, then re-enter the outer
-  command poll before classifying occupancy again. Return to the combined
-  endpoint-and-bound-notification wait at zero. An invalid live cursor poisons
-  the TX ring, disables TX-empty, and makes the TX-idle probe fault instead of
-  selecting either active wait or a fallback owner.
+  sample `MU_STAT` before sleeping. If the FIFO has no free slot, block only on
+  the generated local notification in slot 3; if it exposes one through eight
+  free slots, re-enter one bounded owner turn immediately. Admit only the exact
+  serial IRQ badge, root doorbell badge, or their coalesced value; service at
+  most one FIFO quantum, then re-enter the outer command poll before
+  classifying occupancy again. Return to the combined endpoint-and-bound-
+  notification wait at zero. An invalid live cursor or impossible FIFO level
+  poisons the TX ring, disables TX-empty, and makes the TX-idle probe fault
+  instead of selecting either active wait or a fallback owner.
 - Keep RX and TX loops bounded by the service contract.
 - Interpret the BCM2711 mini-UART IER by the hardware-validated Linux/QEMU
   mapping: bit 0 enables RX and bit 1 enables TX-empty. The older BCM2835
@@ -677,6 +679,18 @@ reusable ownership pattern.
   the combined mini-UART handler unacknowledged, a later software continuation
   after root drain must retry the same pending IRQ acknowledgement; whether
   that continuation itself carried an IRQ badge is irrelevant.
+- Any source-polled or root-doorbell turn that consumes RX bytes, fills a TX
+  FIFO prefix, or leaves durable RX/TX work must establish the handler-rearm
+  obligation before it can wait. An IRQ badge is evidence of one wake, not the
+  sole authority to restore the level handler after a coalesced edge.
+- A terminal linked-serial generation poison aborts only output owned by that
+  failed transport, records one exact `SERIAL_TRANSPORT status=failed ...
+  owner-fallback=none` diagnostic in the Queen log, and retires the physical
+  response barrier. Later serial RX and local-seat USB parsing remain
+  serviceable, while serial-only output is explicitly retired instead of
+  consuming its bounded queue. Root never resumes MMIO ownership as a fallback;
+  local-seat response text and prompts continue through the existing HDMI
+  mirror.
 - Before takeover or steady-state acknowledgement, complete the IER/device
   writes, read back IER and non-destructive `MU_STAT` from the same mini-UART
   aperture, complete that observation, and only then invoke
@@ -860,6 +874,17 @@ reusable ownership pattern.
   recheck. A remaining exact IRQ lifetime stays masked and unacknowledged;
   badge zero cannot create work, and handler-ack or unmask-readback failure
   disables the runtime without retry.
+- Before an admitted GENET RX command reports idle, the same sole owner also
+  compares the durable RDMA producer with its consumer and may drain only the
+  command's existing operation, frame, and byte grant. This condition check
+  cannot create or acknowledge an unseen IRQ lifetime, add a timer poller, or
+  introduce a second DMA consumer; it prevents a coalesced notification from
+  hiding already-produced frames while the IRQ DPC remains the eager path.
+  Packed completion bit 30 is the cumulative, passive
+  `command_rx_drain_seen` proof for that route and is exposed as
+  `runtime_cmd_drain_seen=0|1` on the existing `netstats: genet_rxq` row. It is
+  set only after an admitted command successfully queues at least one durable
+  frame; it grants no polling, IRQ, acknowledgement, DMA, or retry authority.
 - Prioritize ARP and TCP/ICMP control traffic, but after four consecutive
   control frames service the oldest data frame so control load cannot starve
   data. Batch drain and root consumption remain independently bounded.
@@ -898,6 +923,13 @@ transport:
   and consumer receipt are distinct states.
 - IRQ/DPC work is condition-driven and bounded. Empty polling must not become
   the transport clock.
+- SDIO containment and `HOST_CONFIG` may batch finite deterministic
+  sole-owner register/state transitions inside one admitted turn. Containment
+  is capped at 24 transitions; host configuration is capped at 18. Both stop
+  as soon as a hardware or elapsed-time condition remains false and sample
+  that wait only once per turn. Preserve the existing deadline ordering,
+  command identity, no-replay rule, and first causal failure snapshot; a bound
+  or cursor violation fails closed.
 - At the shared-payload/private-DMA boundary, copy only between the existing
   shared command payload and the SDIO child's existing private uncached DMA4
   bounce region. Use an alignment-safe bounded prefix, `u64` word body, and
@@ -990,6 +1022,18 @@ row expose publication/consumption and root-wake badge/counters without making
 either notification an authority source. This multi-record snapshot is causal
 triage, not Gate 7/8 acceptance; an earlier failure renders downstream work
 `not-reached`.
+
+The current causal-progress producer carries either `ring=u` or the exact
+fixed-width lowercase result-bearing tuple
+`command-sequence:opcode:flags:aux1>completion-sequence:code:detail:result`.
+The normalizer separately retains the early schema-v2 row with no ring suffix
+and the exact historical seven-field tuple for existing evidence; neither old
+form can refine a blocker. Only the current result-bearing form can refine a
+containment stage after its nonzero publication and episode sequences,
+immutable parent sequence, nonzero physical epoch, matching child sequence,
+concrete transport-parent fault, child Fault terminal, and stable bus episode
+all correlate inside the unsigned 32-bit identity domain. A present short,
+uppercase, extended, zero-identity, or overflowing tuple/episode fails closed.
 
 `wifi dump-state` retains the verbose DPC, association, maintenance, data-path,
 Gate 7, and Gate 8 inspection rows. Historical logs can contain the former

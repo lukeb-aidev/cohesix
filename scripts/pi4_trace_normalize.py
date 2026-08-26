@@ -224,7 +224,21 @@ WIFI_CAUSAL_DIAG_PROGRESS_RE = re.compile(
     r"id=(?P<snapshot_sequence>[1-9][0-9]*) "
     r"cyw43=[0-9]+/[0-9]+/[a-z0-9-]+ "
     r"sdio=[0-9]+/[0-9]+/[a-z0-9-]+ "
-    r"replay=[a-z0-9-]+/[a-z0-9-]+$"
+    r"replay=[a-z0-9-]+/[a-z0-9-]+"
+    r"(?: ring=(?:u|"
+    r"[0-9a-f]{8}:[0-9a-f]{4}:[0-9a-f]{4}:[0-9a-f]{8}>"
+    r"[0-9a-f]{8}:[0-9a-f]{4}:[0-9a-f]{4}"
+    r"(?::[0-9a-f]{8})?))?$"
+)
+WIFI_CAUSAL_DIAG_CURRENT_RING_SUFFIX_RE = re.compile(
+    r" ring=(?P<command_sequence>[0-9a-f]{8}):"
+    r"(?P<command_opcode>[0-9a-f]{4}):"
+    r"(?P<command_flags>[0-9a-f]{4}):"
+    r"(?P<command_aux1>[0-9a-f]{8})>"
+    r"(?P<completion_sequence>[0-9a-f]{8}):"
+    r"(?P<completion_code>[0-9a-f]{4}):"
+    r"(?P<completion_detail>[0-9a-f]{4}):"
+    r"(?P<completion_result>[0-9a-f]{8})$"
 )
 WIFI_CAUSAL_DIAG_EPISODE_RE = re.compile(
     r"^wifi: causal_episode "
@@ -235,6 +249,19 @@ WIFI_CAUSAL_DIAG_EPISODE_RE = re.compile(
     r"child=[0-9]+/[0-9a-f]{4}/[0-9a-f]{4}/[0-9a-f]{8} "
     r"exit=[0-9]+/[0-9a-f]{4}/[0-9a-f]{8} "
     r"pending=[0-9a-f]{8})$"
+)
+WIFI_CAUSAL_DIAG_CORRELATED_EPISODE_RE = re.compile(
+    r"^wifi: causal_episode "
+    r"id=(?P<snapshot_sequence>[1-9][0-9]*) "
+    r"pub=(?P<publication_sequence>[0-9]+) "
+    r"episode=(?P<episode_sequence>[0-9]+) "
+    r"phys=(?P<physical_epoch>[0-9]+) "
+    r"logical=(?P<logical_generation>[0-9]+) "
+    r"parent=(?P<parent_sequence>[0-9]+)/(?P<parent_op>[0-9a-f]{4}) "
+    r"child=(?P<child_sequence>[0-9]+)/(?P<child_code>[0-9a-f]{4})/"
+    r"(?P<child_detail>[0-9a-f]{4})/(?P<child_result>[0-9a-f]{8}) "
+    r"exit=(?P<exit_reason>[0-9]+)/(?P<exit_detail>[0-9a-f]{4})/"
+    r"(?P<exit_result>[0-9a-f]{8}) pending=[0-9a-f]{8}$"
 )
 WIFI_CAUSAL_DIAG_GRANT_RE = re.compile(
     r"^wifi: causal_grant "
@@ -251,6 +278,16 @@ WIFI_CAUSAL_DIAG_FAULT_RE = re.compile(
     r"stage=[a-z0-9-]+ op=[0-9a-f]{4} flags=[0-9a-f]{4} "
     r"target=[0-9a-f]{8} payload=[0-9]+/[0-9]+ total=[0-9]+ "
     r"detail=[0-9a-f]{4} reason=[a-z0-9-]+ result=[0-9a-f]{8})$"
+)
+WIFI_CAUSAL_DIAG_CORRELATED_FAULT_RE = re.compile(
+    r"^wifi: causal_fault "
+    r"id=(?P<snapshot_sequence>[1-9][0-9]*) "
+    r"stage=(?P<stage>[a-z0-9-]+) op=(?P<op>[0-9a-f]{4}) "
+    r"flags=[0-9a-f]{4} target=[0-9a-f]{8} "
+    r"payload=[0-9]+/[0-9]+ total=[0-9]+ "
+    r"detail=(?P<detail>[0-9a-f]{4}) "
+    r"reason=(?P<reason>[a-z0-9-]+) "
+    r"result=(?P<result>[0-9a-f]{8})$"
 )
 WIFI_CAUSAL_DIAG_TRANSPORT_RE = re.compile(
     r"^wifi: diag_transport "
@@ -5209,6 +5246,86 @@ def summarize_wifi_diag_complete(
     )
 
 
+WIFI_SDIO_CONTAINMENT_BLOCKERS = {
+    1: "sdio-host-config-containment-dma-abort-timeout",
+    2: "sdio-host-config-containment-dma-verify",
+    3: "sdio-host-config-containment-host-reset1-injected",
+    4: "sdio-host-config-containment-host-reset1-timeout",
+    5: "sdio-host-config-containment-clock-settle1-timeout",
+    6: "sdio-host-config-containment-host-reset2-injected",
+    7: "sdio-host-config-containment-host-reset2-timeout",
+    8: "sdio-host-config-containment-clock-settle2-timeout",
+    9: "sdio-host-config-containment-final-inhibit-timeout",
+    10: "sdio-host-config-containment-final-host-not-quiescent",
+    11: "sdio-host-config-containment-final-dma-not-quiescent",
+    12: "sdio-host-config-containment-unclassified",
+}
+
+
+def wifi_causal_containment_claim_is_correlated(
+    blocker: str,
+    progress_line: str,
+    episode_line: str,
+    fault_line: str,
+) -> bool:
+    """Require the current result-bearing ring and one exact physical episode."""
+
+    if not blocker.startswith("sdio-host-config-containment-"):
+        return True
+    ring = WIFI_CAUSAL_DIAG_CURRENT_RING_SUFFIX_RE.search(progress_line)
+    episode = WIFI_CAUSAL_DIAG_CORRELATED_EPISODE_RE.fullmatch(episode_line)
+    fault = WIFI_CAUSAL_DIAG_CORRELATED_FAULT_RE.fullmatch(fault_line)
+    if ring is None or episode is None or fault is None:
+        return False
+
+    command_sequence = int(ring.group("command_sequence"), 16)
+    command_aux1 = int(ring.group("command_aux1"), 16)
+    completion_sequence = int(ring.group("completion_sequence"), 16)
+    completion_result = int(ring.group("completion_result"), 16)
+    publication_sequence = int(episode.group("publication_sequence"), 10)
+    episode_sequence = int(episode.group("episode_sequence"), 10)
+    child_sequence = int(episode.group("child_sequence"), 10)
+    physical_epoch = int(episode.group("physical_epoch"), 10)
+    logical_generation = int(episode.group("logical_generation"), 10)
+    parent_sequence = int(episode.group("parent_sequence"), 10)
+    containment_phase = completion_result & 0x00FF_FFFF
+    expected_blocker = WIFI_SDIO_CONTAINMENT_BLOCKERS.get(
+        containment_phase,
+        "sdio-host-config-containment-unknown",
+    )
+
+    return (
+        command_sequence != 0
+        and 0 < publication_sequence <= U32_MAX
+        and 0 < episode_sequence <= U32_MAX
+        and 0 < physical_epoch <= U32_MAX
+        and 0 <= logical_generation <= U32_MAX
+        and 0 < parent_sequence <= U32_MAX
+        and 0 < child_sequence <= U32_MAX
+        and command_sequence == completion_sequence
+        and command_sequence == child_sequence
+        and command_aux1 != 0
+        and command_aux1 == physical_epoch
+        and int(ring.group("command_opcode"), 16) == 0x0006
+        and int(ring.group("completion_code"), 16) == 0x0005
+        and int(ring.group("completion_detail"), 16) == 0x5104
+        and completion_result >> 24 == 9
+        and int(episode.group("parent_op"), 16) == 0x0001
+        and int(episode.group("child_code"), 16) == 0x0005
+        and int(episode.group("child_detail"), 16) == 0x5104
+        and int(episode.group("child_result"), 16) == completion_result
+        and int(episode.group("exit_reason"), 10) == 4
+        and int(episode.group("exit_detail"), 16) == 0x5310
+        and int(episode.group("exit_result"), 16) == 0x0600_0000
+        and fault.group("stage") == "cyw43-transport-init"
+        and int(fault.group("op"), 16) == 0x0001
+        and int(fault.group("detail"), 16) == 0x5310
+        and fault.group("reason") == "cyw43-transport-bus-link-missing"
+        and int(fault.group("result"), 16) == 0x0600_0000
+        and blocker == expected_blocker
+    )
+
+
 def summarize_wifi_causal_diag(
     events: Iterable[TraceEvent],
 ) -> tuple[int, str, str, int, int, int]:
@@ -5354,6 +5471,14 @@ def summarize_wifi_causal_diag(
             if not valid:
                 body_grammar_valid = False
                 break
+    containment_claim_valid = len(body_events) >= 7 and (
+        wifi_causal_containment_claim_is_correlated(
+            frontier.group("blocker"),
+            body_events[2].raw,
+            body_events[3].raw,
+            body_events[6].raw,
+        )
+    )
     body_lines = int(complete.group("body_lines"), 10)
     body_bytes = int(complete.group("body_bytes"), 10)
     max_lines = int(transport.group("max_lines"), 10)
@@ -5371,6 +5496,7 @@ def summarize_wifi_causal_diag(
         or WIFI_DIAG_COMMAND_COMPLETE_RE.fullmatch(command_complete_event.raw) is None
         or complete_event.line + 1 != command_complete_event.line
         or not body_grammar_valid
+        or not containment_claim_valid
         or transport_event.line + 1 != complete_event.line
         or body_lines != transport_prefix_lines + 1
         or body_lines != len(body_events)

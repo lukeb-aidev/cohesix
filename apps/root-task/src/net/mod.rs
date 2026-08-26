@@ -604,6 +604,8 @@ pub struct NetDeviceCounters {
     pub genet_rx_runtime_byte_budget_hit: u64,
     /// GENET linked-runtime max frames drained during one service turn.
     pub genet_rx_runtime_max_drained_per_turn: u64,
+    /// Sticky GENET same-owner command RX drain proof, encoded as 0 or 1.
+    pub genet_rx_runtime_command_drain_seen: u64,
     /// Root preserved Genet RX queue depth.
     pub genet_rx_pending_queue_count: u64,
     /// Root preserved Genet RX queue high-water mark.
@@ -769,6 +771,8 @@ pub struct NetCounters {
     pub genet_rx_runtime_byte_budget_hit: u64,
     /// GENET linked-runtime max frames drained during one service turn.
     pub genet_rx_runtime_max_drained_per_turn: u64,
+    /// Sticky GENET same-owner command RX drain proof, encoded as 0 or 1.
+    pub genet_rx_runtime_command_drain_seen: u64,
     /// Root preserved Genet RX queue depth.
     pub genet_rx_pending_queue_count: u64,
     /// Root preserved Genet RX queue high-water mark.

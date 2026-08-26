@@ -16665,7 +16665,17 @@ def test_current_wifi_diag_complete_cannot_stitch_to_prior_command() -> None:
 
 
 @pytest.mark.parametrize("gate", [0, 2])
-def test_schema_v2_wifi_diag_reports_bounded_causal_frontier(gate: int) -> None:
+@pytest.mark.parametrize(
+    "ring",
+    [
+        "eff090d9:0001:2000:00000000>eff090d9:0005:5104",
+        "eff090d9:0001:2000:00000000>eff090d9:0005:5104:09000004",
+    ],
+)
+def test_schema_v2_wifi_diag_reports_bounded_causal_frontier(
+    gate: int,
+    ring: str,
+) -> None:
     """Compact causal triage is validated without inventing Gate 7/8 proof."""
 
     body = [
@@ -16680,7 +16690,8 @@ def test_schema_v2_wifi_diag_reports_bounded_causal_frontier(gate: int) -> None:
         ),
         (
             "wifi: causal_progress id=7 cyw43=0/0/unavailable "
-            "sdio=0/0/unavailable replay=engine-init/no-reply"
+            "sdio=0/0/unavailable replay=engine-init/no-reply "
+            f"ring={ring}"
         ),
         "wifi: causal_episode id=7 state=unavailable",
         "CYW43_DPC_CHILD_TIMING_ENTRY state=unavailable",
@@ -16727,6 +16738,382 @@ def test_schema_v2_wifi_diag_reports_bounded_causal_frontier(gate: int) -> None:
     )
     assert record["WIFI_GATE7_COMPLETE"] == "no"
     assert record["WIFI_GATE8_COMPLETE"] == "no"
+
+
+@pytest.mark.parametrize(
+    "ring",
+    [
+        "u",
+        "eff090d9:0001:2000:00000000>eff090d9:0005:5104",
+        "eff090d9:0001:2000:00000000>eff090d9:0005:5104:09000004",
+    ],
+)
+def test_schema_v2_wifi_diag_accepts_exact_historical_and_current_rings(
+    ring: str,
+) -> None:
+    """Schema v2 retains its exact legacy tuple alongside current evidence."""
+
+    line = (
+        "wifi: causal_progress id=7 cyw43=0/0/unavailable "
+        "sdio=0/0/unavailable replay=engine-init/no-reply "
+        f"ring={ring}"
+    )
+
+    assert normalizer.WIFI_CAUSAL_DIAG_PROGRESS_RE.fullmatch(line) is not None
+
+
+def test_schema_v2_wifi_diag_accepts_exact_historical_progress_without_ring() -> None:
+    """Early schema-v2 logs remain parseable before the ring field existed."""
+
+    line = (
+        "wifi: causal_progress id=7 cyw43=0/0/unavailable "
+        "sdio=0/0/unavailable replay=engine-init/no-reply"
+    )
+
+    assert normalizer.WIFI_CAUSAL_DIAG_PROGRESS_RE.fullmatch(line) is not None
+
+
+@pytest.mark.parametrize(
+    "ring",
+    [
+        "eff090d9:0001:2000:00000000>eff090d9:0005:5104:9000004",
+        "eff090d9:0001:2000:00000000>eff090d9:0005:5104:09000004:0000",
+        "EFF090D9:0001:2000:00000000>eff090d9:0005:5104:09000004",
+    ],
+)
+def test_schema_v2_wifi_diag_rejects_inexact_sdio_ring_result(ring: str) -> None:
+    """Neither historical nor current schema-v2 tuples admit malformed data."""
+
+    line = (
+        "wifi: causal_progress id=7 cyw43=0/0/unavailable "
+        "sdio=0/0/unavailable replay=engine-init/no-reply "
+        f"ring={ring}"
+    )
+
+    assert normalizer.WIFI_CAUSAL_DIAG_PROGRESS_RE.fullmatch(line) is None
+
+
+def schema_v2_containment_diag_lines(
+    ring: str | None,
+    episode: str,
+    blocker: str = "sdio-host-config-containment-host-reset1-timeout",
+    fault: str = (
+        "wifi: causal_fault id=7 stage=cyw43-transport-init op=0001 "
+        "flags=0000 target=00000000 payload=0/0 total=0 detail=5310 "
+        "reason=cyw43-transport-bus-link-missing result=06000000"
+    ),
+) -> list[str]:
+    """Build one byte-exact bounded causal transaction for host validation."""
+
+    progress = (
+        "wifi: causal_progress id=7 cyw43=3/446/"
+        "cyw43-sdio-pair-restart-required "
+        "sdio=3/1/command-observed replay=unavailable/unavailable"
+    )
+    if ring is not None:
+        progress = f"{progress} ring={ring}"
+    body = [
+        (
+            "wifi: diag_begin id=7 schema=v2 "
+            "snapshot=best-effort-multi-record pair=1 gen=0 "
+            "source=causal-triage"
+        ),
+        (
+            f"wifi: causal_frontier id=7 gate=2 status=fail "
+            f"blocker={blocker} downstream=not-reached"
+        ),
+        progress,
+        episode,
+        "CYW43_DPC_CHILD_TIMING_ENTRY state=unavailable",
+        "wifi: causal_grant id=7 state=unavailable",
+        fault,
+    ]
+    prefix_bytes = sum(len(line.encode("utf-8")) + 2 for line in body)
+    body.append(
+        "wifi: diag_transport id=7 "
+        f"body_lines=7 body_bytes={prefix_bytes} "
+        "max_lines=8 max_bytes=2048 backlog_before=0 "
+        "wake=bound/badge/polls/hits:yes/8/4/1"
+    )
+    body_bytes = sum(len(line.encode("utf-8")) + 2 for line in body)
+    return [
+        (
+            "wifi: debug subcommand=diag action=begin "
+            "profile=bounded-causal mode=one-shot"
+        ),
+        *body,
+        (
+            "wifi: diag_complete id=7 causal=yes detail=yes schema=v2 "
+            f"gate=2 status=fail blocker={blocker} "
+            f"body_lines=8 body_bytes={body_bytes}"
+        ),
+        (
+            "wifi: debug subcommand=diag action=complete "
+            "profile=bounded-causal mode=one-shot result=ok "
+            "source=causal-triage"
+        ),
+    ]
+
+
+CURRENT_CONTAINMENT_RING = (
+    "eff090d9:0006:2000:43595301>eff090d9:0005:5104:09000004"
+)
+CURRENT_CONTAINMENT_EPISODE = (
+    "wifi: causal_episode id=7 pub=1 episode=1 phys=1129927425 "
+    "logical=0 parent=1414664193/0001 "
+    "child=4025520345/0005/5104/09000004 "
+    "exit=4/5310/06000000 pending=00030324"
+)
+
+
+def test_schema_v2_containment_refinement_requires_correlated_current_evidence() -> None:
+    """A current result, physical epoch, and episode admit exact refinement."""
+
+    lines = schema_v2_containment_diag_lines(
+        CURRENT_CONTAINMENT_RING,
+        CURRENT_CONTAINMENT_EPISODE,
+    )
+    record = normalizer.summarize_gates(
+        normalizer.parse_events(lines)
+    ).to_record()
+
+    assert record["WIFI_CAUSAL_FRONTIER"] == (
+        "gate-2/fail/sdio-host-config-containment-host-reset1-timeout"
+    )
+
+
+@pytest.mark.parametrize(
+    ("phase", "blocker"),
+    [
+        (1, "sdio-host-config-containment-dma-abort-timeout"),
+        (2, "sdio-host-config-containment-dma-verify"),
+        (3, "sdio-host-config-containment-host-reset1-injected"),
+        (4, "sdio-host-config-containment-host-reset1-timeout"),
+        (5, "sdio-host-config-containment-clock-settle1-timeout"),
+        (6, "sdio-host-config-containment-host-reset2-injected"),
+        (7, "sdio-host-config-containment-host-reset2-timeout"),
+        (8, "sdio-host-config-containment-clock-settle2-timeout"),
+        (9, "sdio-host-config-containment-final-inhibit-timeout"),
+        (10, "sdio-host-config-containment-final-host-not-quiescent"),
+        (11, "sdio-host-config-containment-final-dma-not-quiescent"),
+        (12, "sdio-host-config-containment-unclassified"),
+        (13, "sdio-host-config-containment-unknown"),
+    ],
+)
+def test_schema_v2_containment_phase_mapping_is_exact(
+    phase: int,
+    blocker: str,
+) -> None:
+    """Every typed stage-9 containment result maps to one literal blocker."""
+
+    result = 0x0900_0000 | phase
+    ring = (
+        "eff090d9:0006:2000:43595301>"
+        f"eff090d9:0005:5104:{result:08x}"
+    )
+    progress = (
+        "wifi: causal_progress id=7 cyw43=3/446/"
+        "cyw43-sdio-pair-restart-required "
+        "sdio=3/1/command-observed replay=unavailable/unavailable "
+        f"ring={ring}"
+    )
+    episode = CURRENT_CONTAINMENT_EPISODE.replace(
+        "child=4025520345/0005/5104/09000004",
+        f"child=4025520345/0005/5104/{result:08x}",
+    )
+    fault = (
+        "wifi: causal_fault id=7 stage=cyw43-transport-init op=0001 "
+        "flags=0000 target=00000000 payload=0/0 total=0 detail=5310 "
+        "reason=cyw43-transport-bus-link-missing result=06000000"
+    )
+
+    assert normalizer.wifi_causal_containment_claim_is_correlated(
+        blocker,
+        progress,
+        episode,
+        fault,
+    )
+
+
+@pytest.mark.parametrize(
+    "ring",
+    [
+        None,
+        "eff090d9:0006:2000:43595301>eff090d9:0005:5104",
+    ],
+)
+def test_schema_v2_containment_refinement_rejects_historical_ring_forms(
+    ring: str | None,
+) -> None:
+    """Historical compatibility cannot be promoted into containment proof."""
+
+    lines = schema_v2_containment_diag_lines(
+        ring,
+        CURRENT_CONTAINMENT_EPISODE,
+    )
+    record = normalizer.summarize_gates(
+        normalizer.parse_events(lines)
+    ).to_record()
+
+    assert record["WIFI_CAUSAL_FRONTIER"] == "gate-0/fail/transaction-invalid"
+
+
+@pytest.mark.parametrize(
+    "ring,episode",
+    [
+        (
+            "eff090d9:0006:2000:43595302>eff090d9:0005:5104:09000004",
+            CURRENT_CONTAINMENT_EPISODE,
+        ),
+        (
+            CURRENT_CONTAINMENT_RING,
+            CURRENT_CONTAINMENT_EPISODE.replace(
+                "child=4025520345/",
+                "child=4025520346/",
+            ),
+        ),
+        (
+            CURRENT_CONTAINMENT_RING,
+            CURRENT_CONTAINMENT_EPISODE.replace(
+                "exit=4/5310/06000000",
+                "exit=4/5310/06000001",
+            ),
+        ),
+    ],
+)
+def test_schema_v2_containment_refinement_rejects_cross_record_drift(
+    ring: str,
+    episode: str,
+) -> None:
+    """Epoch, child, and parent-exit drift invalidate the whole transaction."""
+
+    lines = schema_v2_containment_diag_lines(ring, episode)
+    record = normalizer.summarize_gates(
+        normalizer.parse_events(lines)
+    ).to_record()
+
+    assert record["WIFI_CAUSAL_FRONTIER"] == "gate-0/fail/transaction-invalid"
+
+
+@pytest.mark.parametrize(
+    "ring,episode",
+    [
+        (
+            "00000000:0006:2000:43595301>00000000:0005:5104:09000004",
+            CURRENT_CONTAINMENT_EPISODE,
+        ),
+        (
+            "eff090d9:0006:2000:00000000>eff090d9:0005:5104:09000004",
+            CURRENT_CONTAINMENT_EPISODE,
+        ),
+        (
+            CURRENT_CONTAINMENT_RING,
+            CURRENT_CONTAINMENT_EPISODE.replace("pub=1 ", "pub=0 "),
+        ),
+        (
+            CURRENT_CONTAINMENT_RING,
+            CURRENT_CONTAINMENT_EPISODE.replace("episode=1 ", "episode=0 "),
+        ),
+        (
+            CURRENT_CONTAINMENT_RING,
+            CURRENT_CONTAINMENT_EPISODE.replace("phys=1129927425 ", "phys=0 "),
+        ),
+        (
+            CURRENT_CONTAINMENT_RING,
+            CURRENT_CONTAINMENT_EPISODE.replace(
+                "parent=1414664193/",
+                "parent=0/",
+            ),
+        ),
+        (
+            CURRENT_CONTAINMENT_RING,
+            CURRENT_CONTAINMENT_EPISODE.replace(
+                "pub=1 ",
+                "pub=4294967296 ",
+            ),
+        ),
+        (
+            CURRENT_CONTAINMENT_RING,
+            CURRENT_CONTAINMENT_EPISODE.replace(
+                "episode=1 ",
+                "episode=4294967296 ",
+            ),
+        ),
+        (
+            CURRENT_CONTAINMENT_RING,
+            CURRENT_CONTAINMENT_EPISODE.replace(
+                "phys=1129927425 ",
+                "phys=4294967296 ",
+            ),
+        ),
+        (
+            CURRENT_CONTAINMENT_RING,
+            CURRENT_CONTAINMENT_EPISODE.replace(
+                "logical=0 ",
+                "logical=4294967296 ",
+            ),
+        ),
+        (
+            CURRENT_CONTAINMENT_RING,
+            CURRENT_CONTAINMENT_EPISODE.replace(
+                "parent=1414664193/",
+                "parent=4294967296/",
+            ),
+        ),
+        (
+            CURRENT_CONTAINMENT_RING,
+            CURRENT_CONTAINMENT_EPISODE.replace(
+                "child=4025520345/",
+                "child=4294967296/",
+            ),
+        ),
+    ],
+)
+def test_schema_v2_containment_refinement_rejects_zero_or_overflow_identity(
+    ring: str,
+    episode: str,
+) -> None:
+    """Every correlated publication and transaction identity is a nonzero u32."""
+
+    lines = schema_v2_containment_diag_lines(ring, episode)
+    record = normalizer.summarize_gates(
+        normalizer.parse_events(lines)
+    ).to_record()
+
+    assert record["WIFI_CAUSAL_FRONTIER"] == "gate-0/fail/transaction-invalid"
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "wifi: causal_fault id=7 state=none",
+        (
+            "wifi: causal_fault id=7 stage=cyw43-transport-init op=0001 "
+            "flags=0000 target=00000000 payload=0/0 total=0 detail=5310 "
+            "reason=cyw43-transport-bus-link-missing result=06000001"
+        ),
+        (
+            "wifi: causal_fault id=7 stage=cyw43-firmware-prep op=0002 "
+            "flags=0000 target=00000000 payload=0/0 total=0 detail=5310 "
+            "reason=cyw43-transport-bus-link-missing result=06000000"
+        ),
+    ],
+)
+def test_schema_v2_containment_refinement_requires_exact_parent_fault(
+    fault: str,
+) -> None:
+    """Absent or contradictory causal-parent rows invalidate refinement."""
+
+    lines = schema_v2_containment_diag_lines(
+        CURRENT_CONTAINMENT_RING,
+        CURRENT_CONTAINMENT_EPISODE,
+        fault=fault,
+    )
+    record = normalizer.summarize_gates(
+        normalizer.parse_events(lines)
+    ).to_record()
+
+    assert record["WIFI_CAUSAL_FRONTIER"] == "gate-0/fail/transaction-invalid"
 
 
 def test_schema_v2_wifi_diag_rejects_clipped_causal_body() -> None:

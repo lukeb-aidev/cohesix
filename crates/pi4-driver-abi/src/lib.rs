@@ -5372,6 +5372,8 @@ pub const DRIVER_RUNTIME_GENET_RESULT_RX_DRAIN_HIT_SHIFT: u32 = 27;
 pub const DRIVER_RUNTIME_GENET_RESULT_RX_BYTE_HIT_SHIFT: u32 = 28;
 /// GENET completion-result RX runtime overflow-seen flag bit shift.
 pub const DRIVER_RUNTIME_GENET_RESULT_RX_OVERFLOW_SHIFT: u32 = 29;
+/// GENET completion-result same-owner command RX drain-seen flag bit shift.
+pub const DRIVER_RUNTIME_GENET_RESULT_COMMAND_RX_DRAIN_SEEN_SHIFT: u32 = 30;
 /// GENET completion-result six-bit field mask.
 pub const DRIVER_RUNTIME_GENET_RESULT_SIX_BIT_MASK: u32 = 0x3f;
 /// GENET completion-result five-bit field mask.
@@ -5404,6 +5406,8 @@ pub struct DriverRuntimeGenetCompletionResultParts {
     pub rx_byte_budget_hit: bool,
     /// Whether the runtime RX queue overflowed.
     pub rx_overflow_seen: bool,
+    /// Whether an admitted RX command drained at least one durable frame.
+    pub command_rx_drain_seen: bool,
 }
 
 /// Pack role-specific GENET completion diagnostics into a primitive result.
@@ -5435,6 +5439,8 @@ pub const fn driver_runtime_genet_completion_result(
         | ((parts.rx_drain_budget_hit as u32) << DRIVER_RUNTIME_GENET_RESULT_RX_DRAIN_HIT_SHIFT)
         | ((parts.rx_byte_budget_hit as u32) << DRIVER_RUNTIME_GENET_RESULT_RX_BYTE_HIT_SHIFT)
         | ((parts.rx_overflow_seen as u32) << DRIVER_RUNTIME_GENET_RESULT_RX_OVERFLOW_SHIFT)
+        | ((parts.command_rx_drain_seen as u32)
+            << DRIVER_RUNTIME_GENET_RESULT_COMMAND_RX_DRAIN_SEEN_SHIFT)
 }
 
 /// Returns true when a GENET completion result uses the packed diagnostic form.
@@ -5494,6 +5500,12 @@ pub const fn driver_runtime_genet_result_rx_byte_budget_hit(result: u32) -> bool
 #[must_use]
 pub const fn driver_runtime_genet_result_rx_overflow_seen(result: u32) -> bool {
     result & (1 << DRIVER_RUNTIME_GENET_RESULT_RX_OVERFLOW_SHIFT) != 0
+}
+
+/// Decode whether an admitted GENET RX command drained durable hardware work.
+#[must_use]
+pub const fn driver_runtime_genet_result_command_rx_drain_seen(result: u32) -> bool {
+    result & (1 << DRIVER_RUNTIME_GENET_RESULT_COMMAND_RX_DRAIN_SEEN_SHIFT) != 0
 }
 
 /// Primitive-only linked-runtime counter snapshot.
@@ -8959,8 +8971,14 @@ mod tests {
                 rx_drain_budget_hit: true,
                 rx_byte_budget_hit: true,
                 rx_overflow_seen: true,
+                command_rx_drain_seen: true,
             });
 
+        assert_eq!(
+            result,
+            u32::MAX,
+            "the independent contract assigns every packed bit exactly once",
+        );
         assert!(driver_runtime_genet_result_is_packed(result));
         assert_eq!(
             driver_runtime_genet_result_tx_free(result),
@@ -8985,6 +9003,7 @@ mod tests {
         assert!(driver_runtime_genet_result_rx_drain_budget_hit(result));
         assert!(driver_runtime_genet_result_rx_byte_budget_hit(result));
         assert!(driver_runtime_genet_result_rx_overflow_seen(result));
+        assert!(driver_runtime_genet_result_command_rx_drain_seen(result));
 
         let result =
             driver_runtime_genet_completion_result(DriverRuntimeGenetCompletionResultParts {
@@ -8996,6 +9015,7 @@ mod tests {
                 rx_drain_budget_hit: false,
                 rx_byte_budget_hit: true,
                 rx_overflow_seen: false,
+                command_rx_drain_seen: false,
             });
         assert_eq!(driver_runtime_genet_result_tx_free(result), 32);
         assert_eq!(driver_runtime_genet_result_tx_in_flight(result), 1);
@@ -9008,6 +9028,37 @@ mod tests {
         assert!(!driver_runtime_genet_result_rx_drain_budget_hit(result));
         assert!(driver_runtime_genet_result_rx_byte_budget_hit(result));
         assert!(!driver_runtime_genet_result_rx_overflow_seen(result));
+        assert!(!driver_runtime_genet_result_command_rx_drain_seen(result));
+        assert_eq!(
+            result & (1 << DRIVER_RUNTIME_GENET_RESULT_COMMAND_RX_DRAIN_SEEN_SHIFT),
+            0,
+            "legacy packed results leave the additive command-route bit clear"
+        );
+    }
+
+    #[test]
+    fn genet_completion_route_bit_is_independent_of_legacy_overflow() {
+        // These literal protocol words are independent of the packing shifts:
+        // bit 31 is the existing packed marker, bit 29 is legacy overflow, and
+        // bit 30 is the additive same-owner command-route discriminator.
+        const LEGACY_OVERFLOW_ONLY: u32 = 0xa000_0000;
+        const COMMAND_ROUTE_ONLY: u32 = 0xc000_0000;
+
+        assert!(driver_runtime_genet_result_is_packed(LEGACY_OVERFLOW_ONLY));
+        assert!(driver_runtime_genet_result_rx_overflow_seen(
+            LEGACY_OVERFLOW_ONLY
+        ));
+        assert!(!driver_runtime_genet_result_command_rx_drain_seen(
+            LEGACY_OVERFLOW_ONLY
+        ));
+
+        assert!(driver_runtime_genet_result_is_packed(COMMAND_ROUTE_ONLY));
+        assert!(!driver_runtime_genet_result_rx_overflow_seen(
+            COMMAND_ROUTE_ONLY
+        ));
+        assert!(driver_runtime_genet_result_command_rx_drain_seen(
+            COMMAND_ROUTE_ONLY
+        ));
     }
 
     #[test]

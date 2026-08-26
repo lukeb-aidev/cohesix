@@ -2350,6 +2350,7 @@ struct GenetRuntimeState {
     rx_queue_overflows: u32,
     rx_drain_budget_hits: u32,
     rx_byte_budget_hits: u32,
+    command_rx_drain_seen: bool,
     rx_max_drained_per_turn: u8,
     rx_queue_lens: [u16; GENET_RX_QUEUE_CAP],
     rx_queue_flags: [u16; GENET_RX_QUEUE_CAP],
@@ -2393,6 +2394,7 @@ impl GenetRuntimeState {
             rx_queue_overflows: 0,
             rx_drain_budget_hits: 0,
             rx_byte_budget_hits: 0,
+            command_rx_drain_seen: false,
             rx_max_drained_per_turn: 0,
             rx_queue_lens: [0; GENET_RX_QUEUE_CAP],
             rx_queue_flags: [0; GENET_RX_QUEUE_CAP],
@@ -2435,6 +2437,7 @@ impl GenetRuntimeState {
         self.rx_queue_overflows = 0;
         self.rx_drain_budget_hits = 0;
         self.rx_byte_budget_hits = 0;
+        self.command_rx_drain_seen = false;
         self.rx_max_drained_per_turn = 0;
         self.rx_queue_lens.fill(0);
         self.rx_queue_flags.fill(0);
@@ -3296,6 +3299,7 @@ struct SdioExternalDmaRequestCursor {
     containment_host_ok: bool,
     containment_dma_cs: u32,
     containment_clock: u16,
+    containment_failure_phase: u8,
     settle_deadline: RuntimeDeadline,
     config_control: u8,
     config_clock: u16,
@@ -3343,6 +3347,7 @@ impl SdioExternalDmaRequestCursor {
             containment_host_ok: true,
             containment_dma_cs: 0,
             containment_clock: 0,
+            containment_failure_phase: 0,
             settle_deadline: RuntimeDeadline::Iterations { remaining: 0 },
             config_control: 0,
             config_clock: 0,
@@ -8233,6 +8238,7 @@ struct SerialRuntimeRxQueue {
     queue_full_events: u32,
     received_bytes: u32,
     irq_ack_pending: bool,
+    rx_source_pending: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -8335,6 +8341,7 @@ impl SerialRuntimeRxQueue {
             queue_full_events: 0,
             received_bytes: 0,
             irq_ack_pending: false,
+            rx_source_pending: false,
         }
     }
 
@@ -16078,6 +16085,7 @@ fn genet_completion_result(state: &GenetRuntimeState, tx_free: u16, tx_in_flight
         rx_drain_budget_hit: state.rx_drain_budget_hits != 0,
         rx_byte_budget_hit: state.rx_byte_budget_hits != 0,
         rx_overflow_seen: state.rx_queue_overflows != 0,
+        command_rx_drain_seen: state.command_rx_drain_seen,
     })
 }
 
@@ -21587,6 +21595,7 @@ fn sdio_external_dma_fail_with<I: SdioTransferIo>(
     cursor.deadline = sdio_fresh_containment_deadline(cursor.identity.owner_timeout_us);
     cursor.containment_dma_ok = true;
     cursor.containment_host_ok = true;
+    cursor.containment_failure_phase = 0;
     sdio_external_dma_store_cursor(cursor);
     RuntimeCommandTurn::Pending
 }
@@ -21640,10 +21649,61 @@ fn sdio_retained_poison_begin(mut cursor: SdioExternalDmaRequestCursor) -> Runti
 }
 
 #[cfg(any(target_os = "none", test))]
-fn sdio_retained_containment_finish(
+fn sdio_record_first_containment_failure_with<I: SdioTransferIo>(
+    cursor: &mut SdioExternalDmaRequestCursor,
+    io: &mut I,
+    phase: u8,
+) {
+    if cursor.containment_failure_phase != 0 {
+        return;
+    }
+    cursor.containment_failure_phase = phase;
+    // Capture the first causal controller/DMA state before later reset and
+    // clock-restoration writes erase it. Issued-request failure telemetry is
+    // already immutable and remains authoritative over a later containment
+    // failure, so only an empty snapshot is populated here.
+    if !cursor.failure_snapshot_valid {
+        cursor.failure_snapshot =
+            sdio_external_dma_request_status_snapshot_with(io, cursor.authority);
+        cursor.failure_snapshot.response0 = io.read32(SDHCI_RESPONSE);
+        cursor.failure_snapshot_valid = true;
+    }
+}
+
+#[cfg(any(target_os = "none", test))]
+fn sdio_retained_containment_finish<I: SdioTransferIo>(
     mut cursor: SdioExternalDmaRequestCursor,
+    io: &mut I,
 ) -> RuntimeCommandTurn {
     let contained = cursor.containment_dma_ok && cursor.containment_host_ok;
+    if !contained && cursor.failure_result == 0 {
+        if cursor.containment_failure_phase == 0 {
+            sdio_record_first_containment_failure_with(
+                &mut cursor,
+                io,
+                SDIO_CONTAINMENT_FAILURE_UNCLASSIFIED,
+            );
+        }
+        cursor.failure_result = sdio_transfer_failure_result(
+            SDIO_TRANSFER_FAILURE_STAGE_CONTAINMENT,
+            u32::from(cursor.containment_failure_phase),
+        );
+        sdio_record_transfer_failure_result(cursor.failure_result);
+        let identity = cursor.identity;
+        cursor.failure_frame = sdio_write_fault_telemetry_frame_from_snapshot_with(
+            io,
+            identity.cmd,
+            identity.arg,
+            identity.flags,
+            identity.frame.len,
+            identity.block_size,
+            identity.block_count,
+            identity.transfer_mode,
+            cursor.failure_result,
+            identity.frame,
+            cursor.failure_snapshot,
+        );
+    }
     let generation_fence = sdio_transfer_failure_stage(cursor.failure_result)
         == SDIO_TRANSFER_FAILURE_STAGE_PREISSUE_STATUS_CLEAR;
     if contained && !generation_fence {
@@ -21677,6 +21737,12 @@ fn sdio_retained_containment_finish(
             }
             SdioRetainedContainmentResume::HostConfig => {
                 cursor.issued = true;
+                // A successful pre-HOST_CONFIG containment pass discards its
+                // passive pre-write snapshot. Any later clock/control fault
+                // must capture the then-current host state rather than reuse
+                // evidence from before a successful recovery boundary.
+                cursor.failure_snapshot_valid = false;
+                cursor.failure_snapshot = SdioExternalDmaRequestSnapshot::empty();
                 cursor.phase =
                     if cursor.identity.arg != SDIO_REQUESTED_CLOCK_HZ.load(Ordering::Acquire) {
                         SdioExternalDmaRequestPhase::HostConfigClock1Disable
@@ -21710,207 +21776,319 @@ fn sdio_retained_containment_finish(
 }
 
 #[cfg(any(target_os = "none", test))]
+const SDIO_RETAINED_CONTAINMENT_STEP_BOUND: usize = 24;
+
+#[cfg(any(target_os = "none", test))]
 fn sdio_retained_containment_turn_with<I: SdioTransferIo>(
-    mut cursor: SdioExternalDmaRequestCursor,
+    cursor: SdioExternalDmaRequestCursor,
     io: &mut I,
 ) -> RuntimeCommandTurn {
-    match cursor.phase {
-        SdioExternalDmaRequestPhase::ContainDmaInspect => {
-            if cursor.authority.channel_vaddr == 0 {
-                cursor.authority = io
-                    .external_dma_authority()
-                    .unwrap_or_else(SdioExternalDmaAuthority::empty);
-            }
-            if cursor.authority.channel_vaddr == 0 {
-                cursor.phase = SdioExternalDmaRequestPhase::ContainHostAckBeforeReset;
-            } else {
-                let channel = cursor.authority.channel_vaddr;
-                let conblk = io.external_dma_read32(channel + BCM2835_DMA_CONBLK_AD);
-                let cs = io.external_dma_read32(channel + BCM2835_DMA_CS);
-                cursor.containment_dma_cs = cs;
-                if conblk == 0 {
-                    cursor.phase = SdioExternalDmaRequestPhase::ContainDmaReset;
+    sdio_retained_containment_turn_bounded_with(cursor, io, SDIO_RETAINED_CONTAINMENT_STEP_BOUND)
+}
+
+#[cfg(any(target_os = "none", test))]
+fn sdio_retained_containment_turn_bounded_with<I: SdioTransferIo>(
+    mut cursor: SdioExternalDmaRequestCursor,
+    io: &mut I,
+    step_bound: usize,
+) -> RuntimeCommandTurn {
+    // The longest legal recovery path is external-DMA abort/reset plus two
+    // SDHCI reset/clock-settle passes and the final inhibit snapshot. Immediate
+    // register transitions remain one bounded owner quantum; an unchanged
+    // phase is a real hardware/time wait and is persisted below. Splitting all
+    // deterministic transitions across 10 ms MCS replenishments adds hundreds
+    // of milliseconds without creating a stronger ownership boundary.
+    for _ in 0..step_bound {
+        let phase_before = cursor.phase;
+        match cursor.phase {
+            SdioExternalDmaRequestPhase::ContainDmaInspect => {
+                if cursor.authority.channel_vaddr == 0 {
+                    cursor.authority = io
+                        .external_dma_authority()
+                        .unwrap_or_else(SdioExternalDmaAuthority::empty);
+                }
+                if cursor.failure_result == 0 && !cursor.failure_snapshot_valid {
+                    // HOST_CONFIG enters containment without an earlier
+                    // request fault. Capture the controller and external-DMA
+                    // state exactly once before abort, W1C, reset, or clock
+                    // writes can erase the first causal evidence. Issued
+                    // request failures already own their immutable snapshot.
+                    cursor.failure_snapshot =
+                        sdio_external_dma_request_status_snapshot_with(io, cursor.authority);
+                    cursor.failure_snapshot.response0 = io.read32(SDHCI_RESPONSE);
+                    cursor.failure_snapshot_valid = true;
+                }
+                if cursor.authority.channel_vaddr == 0 {
+                    cursor.phase = SdioExternalDmaRequestPhase::ContainHostAckBeforeReset;
                 } else {
-                    cursor.phase = SdioExternalDmaRequestPhase::ContainDmaAbortIssue;
+                    let channel = cursor.authority.channel_vaddr;
+                    let conblk = io.external_dma_read32(channel + BCM2835_DMA_CONBLK_AD);
+                    let cs = io.external_dma_read32(channel + BCM2835_DMA_CS);
+                    cursor.containment_dma_cs = cs;
+                    if conblk == 0 {
+                        cursor.phase = SdioExternalDmaRequestPhase::ContainDmaReset;
+                    } else {
+                        cursor.phase = SdioExternalDmaRequestPhase::ContainDmaAbortIssue;
+                    }
                 }
             }
-        }
-        SdioExternalDmaRequestPhase::ContainDmaAbortIssue => {
-            let channel = cursor.authority.channel_vaddr;
-            io.external_dma_write32(channel + BCM2835_DMA_NEXTCONBK, 0);
-            io.external_dma_write32(
-                channel + BCM2835_DMA_CS,
-                cursor.containment_dma_cs | BCM2835_DMA_CS_ABORT | BCM2835_DMA_CS_ACTIVE,
-            );
-            cursor.phase = SdioExternalDmaRequestPhase::ContainDmaPollAbort;
-        }
-        SdioExternalDmaRequestPhase::ContainDmaPollAbort => {
-            let channel = cursor.authority.channel_vaddr;
-            let cs = io.external_dma_read32(channel + BCM2835_DMA_CS);
-            cursor.containment_dma_cs = cs;
-            if cs & BCM2835_DMA_CS_ABORT == 0 {
-                cursor.phase = SdioExternalDmaRequestPhase::ContainDmaStop;
-            } else if io.deadline_expired(&mut cursor.deadline) {
-                cursor.containment_dma_ok = false;
-                cursor.phase = SdioExternalDmaRequestPhase::ContainDmaStop;
+            SdioExternalDmaRequestPhase::ContainDmaAbortIssue => {
+                let channel = cursor.authority.channel_vaddr;
+                io.external_dma_write32(channel + BCM2835_DMA_NEXTCONBK, 0);
+                io.external_dma_write32(
+                    channel + BCM2835_DMA_CS,
+                    cursor.containment_dma_cs | BCM2835_DMA_CS_ABORT | BCM2835_DMA_CS_ACTIVE,
+                );
+                cursor.phase = SdioExternalDmaRequestPhase::ContainDmaPollAbort;
             }
-        }
-        SdioExternalDmaRequestPhase::ContainDmaStop => {
-            io.external_dma_write32(
-                cursor.authority.channel_vaddr + BCM2835_DMA_CS,
-                cursor.containment_dma_cs & !BCM2835_DMA_CS_ACTIVE,
-            );
-            cursor.phase = SdioExternalDmaRequestPhase::ContainDmaReset;
-        }
-        SdioExternalDmaRequestPhase::ContainDmaReset => {
-            if cursor.authority.channel_vaddr != 0 {
+            SdioExternalDmaRequestPhase::ContainDmaPollAbort => {
+                let channel = cursor.authority.channel_vaddr;
+                let cs = io.external_dma_read32(channel + BCM2835_DMA_CS);
+                cursor.containment_dma_cs = cs;
+                if cs & BCM2835_DMA_CS_ABORT == 0 {
+                    cursor.phase = SdioExternalDmaRequestPhase::ContainDmaStop;
+                } else if io.deadline_expired(&mut cursor.deadline) {
+                    cursor.containment_dma_ok = false;
+                    sdio_record_first_containment_failure_with(
+                        &mut cursor,
+                        io,
+                        SDIO_CONTAINMENT_FAILURE_DMA_ABORT_TIMEOUT,
+                    );
+                    cursor.phase = SdioExternalDmaRequestPhase::ContainDmaStop;
+                }
+            }
+            SdioExternalDmaRequestPhase::ContainDmaStop => {
                 io.external_dma_write32(
                     cursor.authority.channel_vaddr + BCM2835_DMA_CS,
-                    BCM2835_DMA_CS_RESET,
+                    cursor.containment_dma_cs & !BCM2835_DMA_CS_ACTIVE,
                 );
-                io.external_dma_store_barrier();
+                cursor.phase = SdioExternalDmaRequestPhase::ContainDmaReset;
             }
-            cursor.phase = SdioExternalDmaRequestPhase::ContainDmaVerify;
-        }
-        SdioExternalDmaRequestPhase::ContainDmaVerify => {
-            if cursor.authority.channel_vaddr != 0 {
-                let channel = cursor.authority.channel_vaddr;
-                let conblk = io.external_dma_read32(channel + BCM2835_DMA_CONBLK_AD);
-                let cs = io.external_dma_read32(channel + BCM2835_DMA_CS);
-                cursor.containment_dma_ok &= conblk == 0 && cs & BCM2835_DMA_CS_ERR == 0;
+            SdioExternalDmaRequestPhase::ContainDmaReset => {
+                if cursor.authority.channel_vaddr != 0 {
+                    io.external_dma_write32(
+                        cursor.authority.channel_vaddr + BCM2835_DMA_CS,
+                        BCM2835_DMA_CS_RESET,
+                    );
+                    io.external_dma_store_barrier();
+                }
+                cursor.phase = SdioExternalDmaRequestPhase::ContainDmaVerify;
             }
-            cursor.phase = SdioExternalDmaRequestPhase::ContainHostAckBeforeReset;
-        }
-        SdioExternalDmaRequestPhase::ContainHostAckBeforeReset => {
-            io.write32(SDHCI_INT_STATUS, SDHCI_INT_COMMAND_DATA_CLEAR_MASK);
-            cursor.phase = SdioExternalDmaRequestPhase::ContainHostResetIssue1;
-        }
-        SdioExternalDmaRequestPhase::ContainHostResetIssue1 => {
-            io.write8(SDHCI_SOFTWARE_RESET, SDHCI_RESET_CMD | SDHCI_RESET_DATA);
-            if io.injected_reset_failure(SDHCI_RESET_CMD | SDHCI_RESET_DATA) {
-                cursor.containment_host_ok = false;
+            SdioExternalDmaRequestPhase::ContainDmaVerify => {
+                if cursor.authority.channel_vaddr != 0 {
+                    let channel = cursor.authority.channel_vaddr;
+                    let conblk = io.external_dma_read32(channel + BCM2835_DMA_CONBLK_AD);
+                    let cs = io.external_dma_read32(channel + BCM2835_DMA_CS);
+                    let dma_ok = conblk == 0 && cs & BCM2835_DMA_CS_ERR == 0;
+                    cursor.containment_dma_ok &= dma_ok;
+                    if !dma_ok {
+                        sdio_record_first_containment_failure_with(
+                            &mut cursor,
+                            io,
+                            SDIO_CONTAINMENT_FAILURE_DMA_VERIFY,
+                        );
+                    }
+                }
+                cursor.phase = SdioExternalDmaRequestPhase::ContainHostAckBeforeReset;
             }
-            cursor.phase = SdioExternalDmaRequestPhase::ContainHostResetPoll1;
-        }
-        SdioExternalDmaRequestPhase::ContainHostResetPoll1 => {
-            if io.read8(SDHCI_SOFTWARE_RESET) & (SDHCI_RESET_CMD | SDHCI_RESET_DATA) == 0 {
-                cursor.phase = SdioExternalDmaRequestPhase::ContainHostAckAfterReset1;
-            } else if io.deadline_expired(&mut cursor.deadline) {
-                cursor.containment_host_ok = false;
-                cursor.phase = SdioExternalDmaRequestPhase::ContainHostAckAfterReset1;
+            SdioExternalDmaRequestPhase::ContainHostAckBeforeReset => {
+                io.write32(SDHCI_INT_STATUS, SDHCI_INT_COMMAND_DATA_CLEAR_MASK);
+                cursor.phase = SdioExternalDmaRequestPhase::ContainHostResetIssue1;
+            }
+            SdioExternalDmaRequestPhase::ContainHostResetIssue1 => {
+                io.write8(SDHCI_SOFTWARE_RESET, SDHCI_RESET_CMD | SDHCI_RESET_DATA);
+                if io.injected_reset_failure(SDHCI_RESET_CMD | SDHCI_RESET_DATA) {
+                    cursor.containment_host_ok = false;
+                    sdio_record_first_containment_failure_with(
+                        &mut cursor,
+                        io,
+                        SDIO_CONTAINMENT_FAILURE_HOST_RESET1_INJECTED,
+                    );
+                }
+                cursor.phase = SdioExternalDmaRequestPhase::ContainHostResetPoll1;
+            }
+            SdioExternalDmaRequestPhase::ContainHostResetPoll1 => {
+                if io.read8(SDHCI_SOFTWARE_RESET) & (SDHCI_RESET_CMD | SDHCI_RESET_DATA) == 0 {
+                    cursor.phase = SdioExternalDmaRequestPhase::ContainHostAckAfterReset1;
+                } else if io.deadline_expired(&mut cursor.deadline) {
+                    cursor.containment_host_ok = false;
+                    sdio_record_first_containment_failure_with(
+                        &mut cursor,
+                        io,
+                        SDIO_CONTAINMENT_FAILURE_HOST_RESET1_TIMEOUT,
+                    );
+                    cursor.phase = SdioExternalDmaRequestPhase::ContainHostAckAfterReset1;
+                }
+            }
+            SdioExternalDmaRequestPhase::ContainHostAckAfterReset1 => {
+                io.write32(SDHCI_INT_STATUS, SDHCI_INT_COMMAND_DATA_CLEAR_MASK);
+                cursor.phase = SdioExternalDmaRequestPhase::ContainClockDisable1;
+            }
+            SdioExternalDmaRequestPhase::ContainClockDisable1 => {
+                cursor.containment_clock = io.read16(SDHCI_CLOCK_CONTROL);
+                io.write16(
+                    SDHCI_CLOCK_CONTROL,
+                    cursor.containment_clock & !SDHCI_CLOCK_CARD_EN,
+                );
+                cursor.settle_deadline = runtime_deadline_from_micros_or_legacy_spins(
+                    SDHCI_CLOCK_RECOVERY_SETTLE_US,
+                    SDHCI_CLOCK_RECOVERY_SETTLE_SPINS,
+                );
+                cursor.phase = SdioExternalDmaRequestPhase::ContainClockSettle1;
+            }
+            SdioExternalDmaRequestPhase::ContainClockSettle1 => {
+                if io.deadline_expired(&mut cursor.deadline) {
+                    cursor.containment_host_ok = false;
+                    sdio_record_first_containment_failure_with(
+                        &mut cursor,
+                        io,
+                        SDIO_CONTAINMENT_FAILURE_CLOCK_SETTLE1_TIMEOUT,
+                    );
+                    cursor.phase = SdioExternalDmaRequestPhase::ContainClockRestore1;
+                } else if io.deadline_expired(&mut cursor.settle_deadline) {
+                    cursor.phase = SdioExternalDmaRequestPhase::ContainClockRestore1;
+                }
+            }
+            SdioExternalDmaRequestPhase::ContainClockRestore1 => {
+                io.write16(SDHCI_CLOCK_CONTROL, cursor.containment_clock);
+                cursor.phase = SdioExternalDmaRequestPhase::ContainHostResetIssue2;
+            }
+            SdioExternalDmaRequestPhase::ContainHostResetIssue2 => {
+                io.write8(SDHCI_SOFTWARE_RESET, SDHCI_RESET_CMD | SDHCI_RESET_DATA);
+                if io.injected_reset_failure(SDHCI_RESET_CMD | SDHCI_RESET_DATA) {
+                    cursor.containment_host_ok = false;
+                    sdio_record_first_containment_failure_with(
+                        &mut cursor,
+                        io,
+                        SDIO_CONTAINMENT_FAILURE_HOST_RESET2_INJECTED,
+                    );
+                }
+                cursor.phase = SdioExternalDmaRequestPhase::ContainHostResetPoll2;
+            }
+            SdioExternalDmaRequestPhase::ContainHostResetPoll2 => {
+                if io.read8(SDHCI_SOFTWARE_RESET) & (SDHCI_RESET_CMD | SDHCI_RESET_DATA) == 0 {
+                    cursor.phase = SdioExternalDmaRequestPhase::ContainHostAckAfterReset2;
+                } else if io.deadline_expired(&mut cursor.deadline) {
+                    cursor.containment_host_ok = false;
+                    sdio_record_first_containment_failure_with(
+                        &mut cursor,
+                        io,
+                        SDIO_CONTAINMENT_FAILURE_HOST_RESET2_TIMEOUT,
+                    );
+                    cursor.phase = SdioExternalDmaRequestPhase::ContainHostAckAfterReset2;
+                }
+            }
+            SdioExternalDmaRequestPhase::ContainHostAckAfterReset2 => {
+                io.write32(SDHCI_INT_STATUS, SDHCI_INT_COMMAND_DATA_CLEAR_MASK);
+                cursor.phase = SdioExternalDmaRequestPhase::ContainPresentCheck;
+            }
+            SdioExternalDmaRequestPhase::ContainPresentCheck => {
+                let present = io.read32(SDHCI_PRESENT_STATE);
+                if present & (SDHCI_CMD_INHIBIT | SDHCI_DATA_INHIBIT) == 0 {
+                    cursor.phase = SdioExternalDmaRequestPhase::ContainFinalSnapshot;
+                } else {
+                    cursor.phase = SdioExternalDmaRequestPhase::ContainClockDisable2;
+                }
+            }
+            SdioExternalDmaRequestPhase::ContainClockDisable2 => {
+                io.write16(
+                    SDHCI_CLOCK_CONTROL,
+                    cursor.containment_clock & !SDHCI_CLOCK_CARD_EN,
+                );
+                cursor.settle_deadline = runtime_deadline_from_micros_or_legacy_spins(
+                    SDHCI_CLOCK_RECOVERY_SETTLE_US,
+                    SDHCI_CLOCK_RECOVERY_SETTLE_SPINS,
+                );
+                cursor.phase = SdioExternalDmaRequestPhase::ContainClockSettle2;
+            }
+            SdioExternalDmaRequestPhase::ContainClockSettle2 => {
+                if io.deadline_expired(&mut cursor.deadline) {
+                    cursor.containment_host_ok = false;
+                    sdio_record_first_containment_failure_with(
+                        &mut cursor,
+                        io,
+                        SDIO_CONTAINMENT_FAILURE_CLOCK_SETTLE2_TIMEOUT,
+                    );
+                    cursor.phase = SdioExternalDmaRequestPhase::ContainClockRestore2;
+                } else if io.deadline_expired(&mut cursor.settle_deadline) {
+                    cursor.phase = SdioExternalDmaRequestPhase::ContainClockRestore2;
+                }
+            }
+            SdioExternalDmaRequestPhase::ContainClockRestore2 => {
+                io.write16(SDHCI_CLOCK_CONTROL, cursor.containment_clock);
+                cursor.phase = SdioExternalDmaRequestPhase::ContainFinalInhibitPoll;
+            }
+            SdioExternalDmaRequestPhase::ContainFinalInhibitPoll => {
+                let present = io.read32(SDHCI_PRESENT_STATE);
+                if present & (SDHCI_CMD_INHIBIT | SDHCI_DATA_INHIBIT) == 0 {
+                    cursor.phase = SdioExternalDmaRequestPhase::ContainFinalSnapshot;
+                } else if io.deadline_expired(&mut cursor.deadline) {
+                    cursor.containment_host_ok = false;
+                    sdio_record_first_containment_failure_with(
+                        &mut cursor,
+                        io,
+                        SDIO_CONTAINMENT_FAILURE_FINAL_INHIBIT_TIMEOUT,
+                    );
+                    cursor.phase = SdioExternalDmaRequestPhase::ContainFinalSnapshot;
+                }
+            }
+            SdioExternalDmaRequestPhase::ContainFinalSnapshot => {
+                let present = io.read32(SDHCI_PRESENT_STATE);
+                let host_ok = present & (SDHCI_CMD_INHIBIT | SDHCI_DATA_INHIBIT) == 0;
+                cursor.containment_host_ok &= host_ok;
+                if !host_ok {
+                    sdio_record_first_containment_failure_with(
+                        &mut cursor,
+                        io,
+                        SDIO_CONTAINMENT_FAILURE_FINAL_HOST_NOT_QUIESCENT,
+                    );
+                }
+                if cursor.authority.channel_vaddr != 0 {
+                    let channel = cursor.authority.channel_vaddr;
+                    let conblk = io.external_dma_read32(channel + BCM2835_DMA_CONBLK_AD);
+                    let cs = io.external_dma_read32(channel + BCM2835_DMA_CS);
+                    let dma_ok = conblk == 0 && cs & BCM2835_DMA_CS_ERR == 0;
+                    cursor.containment_dma_ok &= dma_ok;
+                    if !dma_ok {
+                        sdio_record_first_containment_failure_with(
+                            &mut cursor,
+                            io,
+                            SDIO_CONTAINMENT_FAILURE_FINAL_DMA_NOT_QUIESCENT,
+                        );
+                    }
+                }
+                cursor.phase = SdioExternalDmaRequestPhase::ContainFinish;
+            }
+            SdioExternalDmaRequestPhase::ContainFinish => {
+                return sdio_retained_containment_finish(cursor, io);
+            }
+            _ => {
+                return RuntimeCommandTurn::Complete(
+                    DriverTaskCompletionRecord::fault_with_result(
+                        cursor.identity.sequence,
+                        FAULT_REJECTED_COMMAND,
+                        DRIVER_RUNTIME_REJECT_SDIO_INVALID_RETAINED_PHASE,
+                    ),
+                );
             }
         }
-        SdioExternalDmaRequestPhase::ContainHostAckAfterReset1 => {
-            io.write32(SDHCI_INT_STATUS, SDHCI_INT_COMMAND_DATA_CLEAR_MASK);
-            cursor.phase = SdioExternalDmaRequestPhase::ContainClockDisable1;
-        }
-        SdioExternalDmaRequestPhase::ContainClockDisable1 => {
-            cursor.containment_clock = io.read16(SDHCI_CLOCK_CONTROL);
-            io.write16(
-                SDHCI_CLOCK_CONTROL,
-                cursor.containment_clock & !SDHCI_CLOCK_CARD_EN,
-            );
-            cursor.settle_deadline = runtime_deadline_from_micros_or_legacy_spins(
-                SDHCI_CLOCK_RECOVERY_SETTLE_US,
-                SDHCI_CLOCK_RECOVERY_SETTLE_SPINS,
-            );
-            cursor.phase = SdioExternalDmaRequestPhase::ContainClockSettle1;
-        }
-        SdioExternalDmaRequestPhase::ContainClockSettle1 => {
-            if io.deadline_expired(&mut cursor.deadline) {
-                cursor.containment_host_ok = false;
-                cursor.phase = SdioExternalDmaRequestPhase::ContainClockRestore1;
-            } else if io.deadline_expired(&mut cursor.settle_deadline) {
-                cursor.phase = SdioExternalDmaRequestPhase::ContainClockRestore1;
-            }
-        }
-        SdioExternalDmaRequestPhase::ContainClockRestore1 => {
-            io.write16(SDHCI_CLOCK_CONTROL, cursor.containment_clock);
-            cursor.phase = SdioExternalDmaRequestPhase::ContainHostResetIssue2;
-        }
-        SdioExternalDmaRequestPhase::ContainHostResetIssue2 => {
-            io.write8(SDHCI_SOFTWARE_RESET, SDHCI_RESET_CMD | SDHCI_RESET_DATA);
-            if io.injected_reset_failure(SDHCI_RESET_CMD | SDHCI_RESET_DATA) {
-                cursor.containment_host_ok = false;
-            }
-            cursor.phase = SdioExternalDmaRequestPhase::ContainHostResetPoll2;
-        }
-        SdioExternalDmaRequestPhase::ContainHostResetPoll2 => {
-            if io.read8(SDHCI_SOFTWARE_RESET) & (SDHCI_RESET_CMD | SDHCI_RESET_DATA) == 0 {
-                cursor.phase = SdioExternalDmaRequestPhase::ContainHostAckAfterReset2;
-            } else if io.deadline_expired(&mut cursor.deadline) {
-                cursor.containment_host_ok = false;
-                cursor.phase = SdioExternalDmaRequestPhase::ContainHostAckAfterReset2;
-            }
-        }
-        SdioExternalDmaRequestPhase::ContainHostAckAfterReset2 => {
-            io.write32(SDHCI_INT_STATUS, SDHCI_INT_COMMAND_DATA_CLEAR_MASK);
-            cursor.phase = SdioExternalDmaRequestPhase::ContainPresentCheck;
-        }
-        SdioExternalDmaRequestPhase::ContainPresentCheck => {
-            let present = io.read32(SDHCI_PRESENT_STATE);
-            if present & (SDHCI_CMD_INHIBIT | SDHCI_DATA_INHIBIT) == 0 {
-                cursor.phase = SdioExternalDmaRequestPhase::ContainFinalSnapshot;
-            } else {
-                cursor.phase = SdioExternalDmaRequestPhase::ContainClockDisable2;
-            }
-        }
-        SdioExternalDmaRequestPhase::ContainClockDisable2 => {
-            io.write16(
-                SDHCI_CLOCK_CONTROL,
-                cursor.containment_clock & !SDHCI_CLOCK_CARD_EN,
-            );
-            cursor.settle_deadline = runtime_deadline_from_micros_or_legacy_spins(
-                SDHCI_CLOCK_RECOVERY_SETTLE_US,
-                SDHCI_CLOCK_RECOVERY_SETTLE_SPINS,
-            );
-            cursor.phase = SdioExternalDmaRequestPhase::ContainClockSettle2;
-        }
-        SdioExternalDmaRequestPhase::ContainClockSettle2 => {
-            if io.deadline_expired(&mut cursor.deadline) {
-                cursor.containment_host_ok = false;
-                cursor.phase = SdioExternalDmaRequestPhase::ContainClockRestore2;
-            } else if io.deadline_expired(&mut cursor.settle_deadline) {
-                cursor.phase = SdioExternalDmaRequestPhase::ContainClockRestore2;
-            }
-        }
-        SdioExternalDmaRequestPhase::ContainClockRestore2 => {
-            io.write16(SDHCI_CLOCK_CONTROL, cursor.containment_clock);
-            cursor.phase = SdioExternalDmaRequestPhase::ContainFinalInhibitPoll;
-        }
-        SdioExternalDmaRequestPhase::ContainFinalInhibitPoll => {
-            let present = io.read32(SDHCI_PRESENT_STATE);
-            if present & (SDHCI_CMD_INHIBIT | SDHCI_DATA_INHIBIT) == 0 {
-                cursor.phase = SdioExternalDmaRequestPhase::ContainFinalSnapshot;
-            } else if io.deadline_expired(&mut cursor.deadline) {
-                cursor.containment_host_ok = false;
-                cursor.phase = SdioExternalDmaRequestPhase::ContainFinalSnapshot;
-            }
-        }
-        SdioExternalDmaRequestPhase::ContainFinalSnapshot => {
-            let present = io.read32(SDHCI_PRESENT_STATE);
-            cursor.containment_host_ok &= present & (SDHCI_CMD_INHIBIT | SDHCI_DATA_INHIBIT) == 0;
-            if cursor.authority.channel_vaddr != 0 {
-                let channel = cursor.authority.channel_vaddr;
-                let conblk = io.external_dma_read32(channel + BCM2835_DMA_CONBLK_AD);
-                let cs = io.external_dma_read32(channel + BCM2835_DMA_CS);
-                cursor.containment_dma_ok &= conblk == 0 && cs & BCM2835_DMA_CS_ERR == 0;
-            }
-            cursor.phase = SdioExternalDmaRequestPhase::ContainFinish;
-        }
-        SdioExternalDmaRequestPhase::ContainFinish => {
-            return sdio_retained_containment_finish(cursor);
-        }
-        _ => {
-            return RuntimeCommandTurn::Complete(DriverTaskCompletionRecord::fault_with_result(
-                cursor.identity.sequence,
-                FAULT_REJECTED_COMMAND,
-                DRIVER_RUNTIME_REJECT_SDIO_INVALID_RETAINED_PHASE,
-            ));
+        if cursor.phase == phase_before {
+            // A wait phase gets one condition/deadline sample per admitted
+            // quantum. The immutable cursor, not a private poll loop, remains
+            // the sole continuation authority.
+            sdio_external_dma_store_cursor(cursor);
+            return RuntimeCommandTurn::Pending;
         }
     }
-    sdio_external_dma_store_cursor(cursor);
-    RuntimeCommandTurn::Pending
+    // Every legal acyclic containment path returns or reaches a genuine wait
+    // before the production bound. Spending the complete bound while changing
+    // phase is therefore corrupted/cyclic state, not authority for another
+    // private batch on a later MCS grant.
+    RuntimeCommandTurn::Complete(DriverTaskCompletionRecord::fault_with_result(
+        cursor.identity.sequence,
+        FAULT_REJECTED_COMMAND,
+        DRIVER_RUNTIME_REJECT_SDIO_INVALID_RETAINED_PHASE,
+    ))
 }
 
 #[cfg(any(target_os = "none", test))]
@@ -21918,7 +22096,7 @@ fn sdio_retained_host_clock_program_with<I: SdioTransferIo>(
     mut cursor: SdioExternalDmaRequestCursor,
     io: &mut I,
     poll_phase: SdioExternalDmaRequestPhase,
-) -> RuntimeCommandTurn {
+) -> SdioExternalDmaRequestCursor {
     let target_hz = cursor.identity.arg;
     if target_hz == 0 {
         cursor.config_clock = 0;
@@ -21939,8 +22117,7 @@ fn sdio_retained_host_clock_program_with<I: SdioTransferIo>(
         BCM2835_SDIO_CLOCK_STABLE_FALLBACK_POLLS,
     );
     cursor.phase = poll_phase;
-    sdio_external_dma_store_cursor(cursor);
-    RuntimeCommandTurn::Pending
+    cursor
 }
 
 #[cfg(any(target_os = "none", test))]
@@ -21948,183 +22125,208 @@ fn sdio_retained_host_config_turn_with<I: SdioTransferIo>(
     mut cursor: SdioExternalDmaRequestCursor,
     io: &mut I,
 ) -> RuntimeCommandTurn {
-    match cursor.phase {
-        SdioExternalDmaRequestPhase::HostConfigStart => {
-            cursor.containment_resume = SdioRetainedContainmentResume::HostConfig;
-            cursor.containment_dma_ok = true;
-            cursor.containment_host_ok = true;
-            cursor.deadline = sdio_fresh_containment_deadline(cursor.identity.owner_timeout_us);
-            cursor.phase = SdioExternalDmaRequestPhase::ContainDmaInspect;
-        }
-        SdioExternalDmaRequestPhase::HostConfigClock1Disable => {
-            io.write16(SDHCI_CLOCK_CONTROL, 0);
-            cursor.phase = SdioExternalDmaRequestPhase::HostConfigClock1Program;
-        }
-        SdioExternalDmaRequestPhase::HostConfigClock1Program => {
-            return sdio_retained_host_clock_program_with(
-                cursor,
-                io,
-                SdioExternalDmaRequestPhase::HostConfigClock1Poll,
-            );
-        }
-        SdioExternalDmaRequestPhase::HostConfigClock1Poll => {
-            if cursor.identity.arg == 0
-                || io.read16(SDHCI_CLOCK_CONTROL) & SDHCI_CLOCK_INT_STABLE != 0
-            {
-                cursor.phase = SdioExternalDmaRequestPhase::HostConfigClock1Enable;
-            } else if io.deadline_expired(&mut cursor.deadline) {
-                SDIO_ACTIVE_CLOCK_HZ.store(0, Ordering::Release);
-                SDIO_REQUESTED_CLOCK_HZ.store(0, Ordering::Release);
-                let failure = sdio_transfer_failure_result(
-                    SDIO_TRANSFER_FAILURE_STAGE_POST_ISSUE_QUIESCE,
-                    u32::from(cursor.config_clock),
+    // HOST_CONFIG has two genuine external waits: each internal-clock stable
+    // poll. All other register/state transitions are deterministic sole-owner
+    // work and fit in this exact finite path. Batch them under one admitted
+    // quantum, but persist immediately when a clock condition remains false.
+    const HOST_CONFIG_STEP_BOUND: usize = 18;
+    for _ in 0..HOST_CONFIG_STEP_BOUND {
+        let phase_before = cursor.phase;
+        match cursor.phase {
+            SdioExternalDmaRequestPhase::HostConfigStart => {
+                cursor.containment_resume = SdioRetainedContainmentResume::HostConfig;
+                cursor.containment_dma_ok = true;
+                cursor.containment_host_ok = true;
+                cursor.containment_failure_phase = 0;
+                cursor.deadline = sdio_fresh_containment_deadline(cursor.identity.owner_timeout_us);
+                cursor.phase = SdioExternalDmaRequestPhase::ContainDmaInspect;
+                sdio_external_dma_store_cursor(cursor);
+                return RuntimeCommandTurn::Pending;
+            }
+            SdioExternalDmaRequestPhase::HostConfigClock1Disable => {
+                io.write16(SDHCI_CLOCK_CONTROL, 0);
+                cursor.phase = SdioExternalDmaRequestPhase::HostConfigClock1Program;
+            }
+            SdioExternalDmaRequestPhase::HostConfigClock1Program => {
+                cursor = sdio_retained_host_clock_program_with(
+                    cursor,
+                    io,
+                    SdioExternalDmaRequestPhase::HostConfigClock1Poll,
                 );
-                return sdio_external_dma_fail_with(cursor, io, failure);
+            }
+            SdioExternalDmaRequestPhase::HostConfigClock1Poll => {
+                if cursor.identity.arg == 0
+                    || io.read16(SDHCI_CLOCK_CONTROL) & SDHCI_CLOCK_INT_STABLE != 0
+                {
+                    cursor.phase = SdioExternalDmaRequestPhase::HostConfigClock1Enable;
+                } else if io.deadline_expired(&mut cursor.deadline) {
+                    SDIO_ACTIVE_CLOCK_HZ.store(0, Ordering::Release);
+                    SDIO_REQUESTED_CLOCK_HZ.store(0, Ordering::Release);
+                    let failure = sdio_transfer_failure_result(
+                        SDIO_TRANSFER_FAILURE_STAGE_POST_ISSUE_QUIESCE,
+                        u32::from(cursor.config_clock),
+                    );
+                    return sdio_external_dma_fail_with(cursor, io, failure);
+                }
+            }
+            SdioExternalDmaRequestPhase::HostConfigClock1Enable => {
+                io.write16(
+                    SDHCI_CLOCK_CONTROL,
+                    cursor.config_clock | SDHCI_CLOCK_CARD_EN,
+                );
+                if cursor.identity.arg == 0 {
+                    SDIO_ACTIVE_CLOCK_HZ.store(0, Ordering::Release);
+                    SDIO_REQUESTED_CLOCK_HZ.store(0, Ordering::Release);
+                } else {
+                    SDIO_ACTIVE_CLOCK_HZ.store(
+                        BCM2711_SDIO_EFFECTIVE_BASE_CLOCK_HZ
+                            / u32::from(cursor.config_divider.max(1)),
+                        Ordering::Release,
+                    );
+                    SDIO_REQUESTED_CLOCK_HZ.store(cursor.identity.arg, Ordering::Release);
+                }
+                cursor.phase = SdioExternalDmaRequestPhase::HostConfigControl;
+            }
+            SdioExternalDmaRequestPhase::HostConfigControl => {
+                cursor.config_control = sdio_bcm2835_host_control_for_flags(
+                    io.read8(SDHCI_HOST_CONTROL),
+                    cursor.identity.descriptor.flags,
+                );
+                io.write8(SDHCI_HOST_CONTROL, cursor.config_control);
+                cursor.phase = SdioExternalDmaRequestPhase::HostConfigControl2;
+            }
+            SdioExternalDmaRequestPhase::HostConfigControl2 => {
+                let control2 = io.read16(SDHCI_HOST_CONTROL2) & !SDHCI_CTRL_DRV_TYPE_MASK;
+                io.write16(SDHCI_HOST_CONTROL2, control2);
+                cursor.phase = SdioExternalDmaRequestPhase::HostConfigDropCardClock;
+            }
+            SdioExternalDmaRequestPhase::HostConfigDropCardClock => {
+                let clock = io.read16(SDHCI_CLOCK_CONTROL);
+                io.write16(SDHCI_CLOCK_CONTROL, clock & !SDHCI_CLOCK_CARD_EN);
+                cursor.phase = SdioExternalDmaRequestPhase::HostConfigClock2Disable;
+            }
+            SdioExternalDmaRequestPhase::HostConfigClock2Disable => {
+                io.write16(SDHCI_CLOCK_CONTROL, 0);
+                cursor.phase = SdioExternalDmaRequestPhase::HostConfigClock2Program;
+            }
+            SdioExternalDmaRequestPhase::HostConfigClock2Program => {
+                cursor = sdio_retained_host_clock_program_with(
+                    cursor,
+                    io,
+                    SdioExternalDmaRequestPhase::HostConfigClock2Poll,
+                );
+            }
+            SdioExternalDmaRequestPhase::HostConfigClock2Poll => {
+                if cursor.identity.arg == 0
+                    || io.read16(SDHCI_CLOCK_CONTROL) & SDHCI_CLOCK_INT_STABLE != 0
+                {
+                    cursor.phase = SdioExternalDmaRequestPhase::HostConfigClock2Enable;
+                } else if io.deadline_expired(&mut cursor.deadline) {
+                    SDIO_ACTIVE_CLOCK_HZ.store(0, Ordering::Release);
+                    SDIO_REQUESTED_CLOCK_HZ.store(0, Ordering::Release);
+                    let failure = sdio_transfer_failure_result(
+                        SDIO_TRANSFER_FAILURE_STAGE_POST_ISSUE_QUIESCE,
+                        u32::from(cursor.config_clock),
+                    );
+                    return sdio_external_dma_fail_with(cursor, io, failure);
+                }
+            }
+            SdioExternalDmaRequestPhase::HostConfigClock2Enable => {
+                io.write16(
+                    SDHCI_CLOCK_CONTROL,
+                    cursor.config_clock | SDHCI_CLOCK_CARD_EN,
+                );
+                if cursor.identity.arg == 0 {
+                    SDIO_ACTIVE_CLOCK_HZ.store(0, Ordering::Release);
+                    SDIO_REQUESTED_CLOCK_HZ.store(0, Ordering::Release);
+                } else {
+                    SDIO_ACTIVE_CLOCK_HZ.store(
+                        BCM2711_SDIO_EFFECTIVE_BASE_CLOCK_HZ
+                            / u32::from(cursor.config_divider.max(1)),
+                        Ordering::Release,
+                    );
+                    SDIO_REQUESTED_CLOCK_HZ.store(cursor.identity.arg, Ordering::Release);
+                }
+                cursor.phase = SdioExternalDmaRequestPhase::HostConfigControlRewrite;
+            }
+            SdioExternalDmaRequestPhase::HostConfigControlRewrite => {
+                io.write8(SDHCI_HOST_CONTROL, cursor.config_control);
+                cursor.phase = SdioExternalDmaRequestPhase::HostConfigControlVerify;
+            }
+            SdioExternalDmaRequestPhase::HostConfigControlVerify => {
+                if !sdio_host_control_readback_matches(
+                    io.read8(SDHCI_HOST_CONTROL),
+                    cursor.config_control,
+                ) {
+                    let failure = sdio_transfer_failure_result(
+                        SDIO_TRANSFER_FAILURE_STAGE_POST_ISSUE_QUIESCE,
+                        u32::from(cursor.config_control),
+                    );
+                    return sdio_external_dma_fail_with(cursor, io, failure);
+                }
+                cursor.phase = SdioExternalDmaRequestPhase::HostConfigAck;
+            }
+            SdioExternalDmaRequestPhase::HostConfigAck => {
+                io.write32(SDHCI_INT_STATUS, SDHCI_INT_COMMAND_DATA_CLEAR_MASK);
+                cursor.phase = SdioExternalDmaRequestPhase::HostConfigPolicyEnable;
+            }
+            SdioExternalDmaRequestPhase::HostConfigPolicyEnable => {
+                let (enable, _) = sdio_interrupt_policy_registers(
+                    sdio_notification_dpc_ready(),
+                    SDIO_RUNTIME_STATE.with_ref(|state| state.card_irq_masked),
+                );
+                io.write32(SDHCI_INT_ENABLE, enable);
+                cursor.phase = SdioExternalDmaRequestPhase::HostConfigPolicySignal;
+            }
+            SdioExternalDmaRequestPhase::HostConfigPolicySignal => {
+                let (_, signal) = sdio_interrupt_policy_registers(
+                    sdio_notification_dpc_ready(),
+                    SDIO_RUNTIME_STATE.with_ref(|state| state.card_irq_masked),
+                );
+                io.write32(SDHCI_SIGNAL_ENABLE, signal);
+                cursor.phase = SdioExternalDmaRequestPhase::HostConfigFinalSnapshot;
+            }
+            SdioExternalDmaRequestPhase::HostConfigFinalSnapshot => {
+                let present = io.read32(SDHCI_PRESENT_STATE);
+                let dma_quiescent = if cursor.authority.channel_vaddr == 0 {
+                    true
+                } else {
+                    let channel = cursor.authority.channel_vaddr;
+                    io.external_dma_read32(channel + BCM2835_DMA_CONBLK_AD) == 0
+                        && io.external_dma_read32(channel + BCM2835_DMA_CS) & BCM2835_DMA_CS_ERR
+                            == 0
+                };
+                if present & (SDHCI_CMD_INHIBIT | SDHCI_DATA_INHIBIT) != 0 || !dma_quiescent {
+                    let failure = sdio_transfer_failure_result(
+                        SDIO_TRANSFER_FAILURE_STAGE_POST_ISSUE_QUIESCE,
+                        present,
+                    );
+                    return sdio_external_dma_fail_with(cursor, io, failure);
+                }
+                return sdio_external_dma_success(cursor, io);
+            }
+            _ => {
+                return RuntimeCommandTurn::Complete(
+                    DriverTaskCompletionRecord::fault_with_result(
+                        cursor.identity.sequence,
+                        FAULT_REJECTED_COMMAND,
+                        DRIVER_RUNTIME_REJECT_SDIO_INVALID_RETAINED_PHASE,
+                    ),
+                );
             }
         }
-        SdioExternalDmaRequestPhase::HostConfigClock1Enable => {
-            io.write16(
-                SDHCI_CLOCK_CONTROL,
-                cursor.config_clock | SDHCI_CLOCK_CARD_EN,
-            );
-            if cursor.identity.arg == 0 {
-                SDIO_ACTIVE_CLOCK_HZ.store(0, Ordering::Release);
-                SDIO_REQUESTED_CLOCK_HZ.store(0, Ordering::Release);
-            } else {
-                SDIO_ACTIVE_CLOCK_HZ.store(
-                    BCM2711_SDIO_EFFECTIVE_BASE_CLOCK_HZ / u32::from(cursor.config_divider.max(1)),
-                    Ordering::Release,
-                );
-                SDIO_REQUESTED_CLOCK_HZ.store(cursor.identity.arg, Ordering::Release);
-            }
-            cursor.phase = SdioExternalDmaRequestPhase::HostConfigControl;
-        }
-        SdioExternalDmaRequestPhase::HostConfigControl => {
-            cursor.config_control = sdio_bcm2835_host_control_for_flags(
-                io.read8(SDHCI_HOST_CONTROL),
-                cursor.identity.descriptor.flags,
-            );
-            io.write8(SDHCI_HOST_CONTROL, cursor.config_control);
-            cursor.phase = SdioExternalDmaRequestPhase::HostConfigControl2;
-        }
-        SdioExternalDmaRequestPhase::HostConfigControl2 => {
-            let control2 = io.read16(SDHCI_HOST_CONTROL2) & !SDHCI_CTRL_DRV_TYPE_MASK;
-            io.write16(SDHCI_HOST_CONTROL2, control2);
-            cursor.phase = SdioExternalDmaRequestPhase::HostConfigDropCardClock;
-        }
-        SdioExternalDmaRequestPhase::HostConfigDropCardClock => {
-            let clock = io.read16(SDHCI_CLOCK_CONTROL);
-            io.write16(SDHCI_CLOCK_CONTROL, clock & !SDHCI_CLOCK_CARD_EN);
-            cursor.phase = SdioExternalDmaRequestPhase::HostConfigClock2Disable;
-        }
-        SdioExternalDmaRequestPhase::HostConfigClock2Disable => {
-            io.write16(SDHCI_CLOCK_CONTROL, 0);
-            cursor.phase = SdioExternalDmaRequestPhase::HostConfigClock2Program;
-        }
-        SdioExternalDmaRequestPhase::HostConfigClock2Program => {
-            return sdio_retained_host_clock_program_with(
-                cursor,
-                io,
-                SdioExternalDmaRequestPhase::HostConfigClock2Poll,
-            );
-        }
-        SdioExternalDmaRequestPhase::HostConfigClock2Poll => {
-            if cursor.identity.arg == 0
-                || io.read16(SDHCI_CLOCK_CONTROL) & SDHCI_CLOCK_INT_STABLE != 0
-            {
-                cursor.phase = SdioExternalDmaRequestPhase::HostConfigClock2Enable;
-            } else if io.deadline_expired(&mut cursor.deadline) {
-                SDIO_ACTIVE_CLOCK_HZ.store(0, Ordering::Release);
-                SDIO_REQUESTED_CLOCK_HZ.store(0, Ordering::Release);
-                let failure = sdio_transfer_failure_result(
-                    SDIO_TRANSFER_FAILURE_STAGE_POST_ISSUE_QUIESCE,
-                    u32::from(cursor.config_clock),
-                );
-                return sdio_external_dma_fail_with(cursor, io, failure);
-            }
-        }
-        SdioExternalDmaRequestPhase::HostConfigClock2Enable => {
-            io.write16(
-                SDHCI_CLOCK_CONTROL,
-                cursor.config_clock | SDHCI_CLOCK_CARD_EN,
-            );
-            if cursor.identity.arg == 0 {
-                SDIO_ACTIVE_CLOCK_HZ.store(0, Ordering::Release);
-                SDIO_REQUESTED_CLOCK_HZ.store(0, Ordering::Release);
-            } else {
-                SDIO_ACTIVE_CLOCK_HZ.store(
-                    BCM2711_SDIO_EFFECTIVE_BASE_CLOCK_HZ / u32::from(cursor.config_divider.max(1)),
-                    Ordering::Release,
-                );
-                SDIO_REQUESTED_CLOCK_HZ.store(cursor.identity.arg, Ordering::Release);
-            }
-            cursor.phase = SdioExternalDmaRequestPhase::HostConfigControlRewrite;
-        }
-        SdioExternalDmaRequestPhase::HostConfigControlRewrite => {
-            io.write8(SDHCI_HOST_CONTROL, cursor.config_control);
-            cursor.phase = SdioExternalDmaRequestPhase::HostConfigControlVerify;
-        }
-        SdioExternalDmaRequestPhase::HostConfigControlVerify => {
-            if !sdio_host_control_readback_matches(
-                io.read8(SDHCI_HOST_CONTROL),
-                cursor.config_control,
-            ) {
-                let failure = sdio_transfer_failure_result(
-                    SDIO_TRANSFER_FAILURE_STAGE_POST_ISSUE_QUIESCE,
-                    u32::from(cursor.config_control),
-                );
-                return sdio_external_dma_fail_with(cursor, io, failure);
-            }
-            cursor.phase = SdioExternalDmaRequestPhase::HostConfigAck;
-        }
-        SdioExternalDmaRequestPhase::HostConfigAck => {
-            io.write32(SDHCI_INT_STATUS, SDHCI_INT_COMMAND_DATA_CLEAR_MASK);
-            cursor.phase = SdioExternalDmaRequestPhase::HostConfigPolicyEnable;
-        }
-        SdioExternalDmaRequestPhase::HostConfigPolicyEnable => {
-            let (enable, _) = sdio_interrupt_policy_registers(
-                sdio_notification_dpc_ready(),
-                SDIO_RUNTIME_STATE.with_ref(|state| state.card_irq_masked),
-            );
-            io.write32(SDHCI_INT_ENABLE, enable);
-            cursor.phase = SdioExternalDmaRequestPhase::HostConfigPolicySignal;
-        }
-        SdioExternalDmaRequestPhase::HostConfigPolicySignal => {
-            let (_, signal) = sdio_interrupt_policy_registers(
-                sdio_notification_dpc_ready(),
-                SDIO_RUNTIME_STATE.with_ref(|state| state.card_irq_masked),
-            );
-            io.write32(SDHCI_SIGNAL_ENABLE, signal);
-            cursor.phase = SdioExternalDmaRequestPhase::HostConfigFinalSnapshot;
-        }
-        SdioExternalDmaRequestPhase::HostConfigFinalSnapshot => {
-            let present = io.read32(SDHCI_PRESENT_STATE);
-            let dma_quiescent = if cursor.authority.channel_vaddr == 0 {
-                true
-            } else {
-                let channel = cursor.authority.channel_vaddr;
-                io.external_dma_read32(channel + BCM2835_DMA_CONBLK_AD) == 0
-                    && io.external_dma_read32(channel + BCM2835_DMA_CS) & BCM2835_DMA_CS_ERR == 0
-            };
-            if present & (SDHCI_CMD_INHIBIT | SDHCI_DATA_INHIBIT) != 0 || !dma_quiescent {
-                let failure = sdio_transfer_failure_result(
-                    SDIO_TRANSFER_FAILURE_STAGE_POST_ISSUE_QUIESCE,
-                    present,
-                );
-                return sdio_external_dma_fail_with(cursor, io, failure);
-            }
-            return sdio_external_dma_success(cursor, io);
-        }
-        _ => {
-            return RuntimeCommandTurn::Complete(DriverTaskCompletionRecord::fault_with_result(
-                cursor.identity.sequence,
-                FAULT_REJECTED_COMMAND,
-                DRIVER_RUNTIME_REJECT_SDIO_INVALID_RETAINED_PHASE,
-            ));
+        if cursor.phase == phase_before {
+            // One false external condition gets one sample per admitted
+            // quantum; the immutable cursor is the only continuation owner.
+            sdio_external_dma_store_cursor(cursor);
+            return RuntimeCommandTurn::Pending;
         }
     }
-    sdio_external_dma_store_cursor(cursor);
-    RuntimeCommandTurn::Pending
+    RuntimeCommandTurn::Complete(DriverTaskCompletionRecord::fault_with_result(
+        cursor.identity.sequence,
+        FAULT_REJECTED_COMMAND,
+        DRIVER_RUNTIME_REJECT_SDIO_INVALID_RETAINED_PHASE,
+    ))
 }
 
 #[cfg(any(target_os = "none", test))]
@@ -27113,6 +27315,20 @@ const SDIO_TRANSFER_FAILURE_STAGE_RESPONSE: u32 = 5;
 const SDIO_TRANSFER_FAILURE_STAGE_POST_ISSUE_QUIESCE: u32 = 6;
 const SDIO_TRANSFER_FAILURE_STAGE_PREISSUE_DPC_FENCE: u32 = 7;
 const SDIO_TRANSFER_FAILURE_STAGE_PREISSUE_STATUS_CLEAR: u32 = 8;
+const SDIO_TRANSFER_FAILURE_STAGE_CONTAINMENT: u32 = 9;
+
+const SDIO_CONTAINMENT_FAILURE_DMA_ABORT_TIMEOUT: u8 = 1;
+const SDIO_CONTAINMENT_FAILURE_DMA_VERIFY: u8 = 2;
+const SDIO_CONTAINMENT_FAILURE_HOST_RESET1_INJECTED: u8 = 3;
+const SDIO_CONTAINMENT_FAILURE_HOST_RESET1_TIMEOUT: u8 = 4;
+const SDIO_CONTAINMENT_FAILURE_CLOCK_SETTLE1_TIMEOUT: u8 = 5;
+const SDIO_CONTAINMENT_FAILURE_HOST_RESET2_INJECTED: u8 = 6;
+const SDIO_CONTAINMENT_FAILURE_HOST_RESET2_TIMEOUT: u8 = 7;
+const SDIO_CONTAINMENT_FAILURE_CLOCK_SETTLE2_TIMEOUT: u8 = 8;
+const SDIO_CONTAINMENT_FAILURE_FINAL_INHIBIT_TIMEOUT: u8 = 9;
+const SDIO_CONTAINMENT_FAILURE_FINAL_HOST_NOT_QUIESCENT: u8 = 10;
+const SDIO_CONTAINMENT_FAILURE_FINAL_DMA_NOT_QUIESCENT: u8 = 11;
+const SDIO_CONTAINMENT_FAILURE_UNCLASSIFIED: u8 = 12;
 
 const fn sdio_transfer_failure_result(stage: u32, status: u32) -> u32 {
     ((stage & 0xff) << 24) | (status & 0x00ff_ffff)
@@ -44084,6 +44300,26 @@ fn genet_runtime_poll_rx(
     if drain_budget == 0 {
         return GenetRxPoll::BudgetExhausted(BUDGET_EXHAUSTED_FRAMES);
     }
+    if state.rx_queue_count == 0 && genet_rx_hardware_pending(state) {
+        // The root packet-poll command is an independently bounded service
+        // lane of this same sole GENET owner. Inspecting the durable producer
+        // index here closes an IRQ-notification loss without minting a timer,
+        // retry, second DMA consumer, or free-running continuation. The IRQ
+        // DPC remains the eager path; this command grant admits at most its
+        // existing frame/operation/byte budget.
+        let byte_budget_hits_before = state.rx_byte_budget_hits;
+        let queued = genet_runtime_drain_rx_hardware_to_queue(
+            state,
+            budget.max_bytes as usize,
+            drain_budget,
+        );
+        if queued != 0 {
+            state.command_rx_drain_seen = true;
+        }
+        if queued == 0 && state.rx_byte_budget_hits != byte_budget_hits_before {
+            return GenetRxPoll::BudgetExhausted(BUDGET_EXHAUSTED_BYTES);
+        }
+    }
     if let Some(payload_len) = genet_rx_queue_peek_len(state) {
         if payload_len > budget.max_bytes as usize {
             return GenetRxPoll::BudgetExhausted(BUDGET_EXHAUSTED_BYTES);
@@ -60515,6 +60751,7 @@ struct SerialTxPostFillState {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SerialSpscIdleWaitRoute {
     CombinedCommandOrNotification,
+    ReenterService,
     LocalNotification,
     InvalidTransport,
 }
@@ -60522,32 +60759,54 @@ enum SerialSpscIdleWaitRoute {
 /// Select the only blocking object that can preserve a live serial TX ring.
 ///
 /// A committed nonempty SPSC ring is durable work. Its empty-to-nonempty root
-/// doorbell may already have been consumed by the first bounded FIFO fill, so
-/// later TX-empty quanta must wait directly on the runtime's bound local
+/// doorbell may already have been consumed by the first bounded FIFO fill. If
+/// MU_STAT already exposes physical capacity, re-enter one bounded owner turn;
+/// otherwise later TX-empty quanta wait directly on the runtime's bound local
 /// notification. Once the ring is empty, the ordinary command endpoint plus
 /// bound notification wait closes the next producer race. An invalid live
-/// generation cannot authorize either another FIFO read or a free-running
+/// generation or FIFO level cannot authorize another read or a free-running
 /// retry.
 const fn serial_spsc_idle_wait_route(
     generation: u32,
-    committed_occupancy: Option<u32>,
+    tx_committed_occupancy: Option<u32>,
+    tx_fifo_free_slots: Option<usize>,
+    rx_source_pending: bool,
+    rx_committed_occupancy: Option<u32>,
 ) -> SerialSpscIdleWaitRoute {
     if generation == 0 {
         SerialSpscIdleWaitRoute::CombinedCommandOrNotification
     } else {
-        match committed_occupancy {
-            Some(0) => SerialSpscIdleWaitRoute::CombinedCommandOrNotification,
-            Some(occupancy) if occupancy <= DRIVER_RUNTIME_SERIAL_SPSC_CAPACITY as u32 => {
-                SerialSpscIdleWaitRoute::LocalNotification
+        let Some(tx_occupancy) = tx_committed_occupancy else {
+            return SerialSpscIdleWaitRoute::InvalidTransport;
+        };
+        let Some(rx_occupancy) = rx_committed_occupancy else {
+            return SerialSpscIdleWaitRoute::InvalidTransport;
+        };
+        if tx_occupancy > DRIVER_RUNTIME_SERIAL_SPSC_CAPACITY as u32
+            || rx_occupancy > DRIVER_RUNTIME_SERIAL_SPSC_CAPACITY as u32
+        {
+            return SerialSpscIdleWaitRoute::InvalidTransport;
+        }
+        if rx_source_pending && rx_occupancy < DRIVER_RUNTIME_SERIAL_SPSC_CAPACITY as u32 {
+            return SerialSpscIdleWaitRoute::ReenterService;
+        }
+        if tx_occupancy == 0 {
+            SerialSpscIdleWaitRoute::CombinedCommandOrNotification
+        } else {
+            match tx_fifo_free_slots {
+                Some(0) => SerialSpscIdleWaitRoute::LocalNotification,
+                Some(free) if free <= MINI_UART_TX_IMMEDIATE_TURN_BYTES => {
+                    SerialSpscIdleWaitRoute::ReenterService
+                }
+                Some(_) | None => SerialSpscIdleWaitRoute::InvalidTransport,
             }
-            Some(_) | None => SerialSpscIdleWaitRoute::InvalidTransport,
         }
     }
 }
 
 fn serial_runtime_spsc_idle_wait_route() -> SerialSpscIdleWaitRoute {
     let generation = SERIAL_RUNTIME_SPSC_GENERATION.load(Ordering::Acquire);
-    let occupancy = (generation != 0)
+    let tx_occupancy = (generation != 0)
         .then(|| {
             serial_spsc_committed_occupancy_at(
                 serial_runtime_spsc_shared_base(),
@@ -60557,7 +60816,41 @@ fn serial_runtime_spsc_idle_wait_route() -> SerialSpscIdleWaitRoute {
             )
         })
         .flatten();
-    serial_spsc_idle_wait_route(generation, occupancy)
+    let rx_occupancy = (generation != 0)
+        .then(|| {
+            serial_spsc_committed_occupancy_at(
+                serial_runtime_spsc_shared_base(),
+                DRIVER_RUNTIME_SERIAL_RX_SPSC_FIRST_PAGE,
+                generation,
+                DRIVER_RUNTIME_SERIAL_SPSC_FLAG_RUNTIME_TO_ROOT,
+            )
+        })
+        .flatten();
+    let tx_fifo_free_slots = match tx_occupancy {
+        Some(1..) => {
+            #[cfg(target_os = "none")]
+            {
+                serial_mini_uart_tx_fifo_free_slots(serial_mini_uart_read(
+                    SerialMiniUartReadRegister::Status,
+                ))
+            }
+            #[cfg(not(target_os = "none"))]
+            {
+                // Production invokes this classifier only in the target
+                // runtime. Host tests exercise the pure route directly.
+                Some(0)
+            }
+        }
+        Some(0) | None => Some(0),
+    };
+    let rx_source_pending = SERIAL_RUNTIME_RX_QUEUE.with_ref(|queue| queue.rx_source_pending);
+    serial_spsc_idle_wait_route(
+        generation,
+        tx_occupancy,
+        tx_fifo_free_slots,
+        rx_source_pending,
+        rx_occupancy,
+    )
 }
 
 #[cfg(any(target_os = "none", test))]
@@ -60619,6 +60912,24 @@ const fn serial_irq_rearm_attempt_failed(
     completion_result: bool,
 ) -> bool {
     !completion_deferred && !completion_result
+}
+
+const fn serial_runtime_rearm_required(
+    irq_wake: bool,
+    root_wake: bool,
+    retained_rx_pending: bool,
+    rx_source_pending: bool,
+    rx_bytes: usize,
+    tx_bytes: usize,
+    tx_bytes_pending: bool,
+) -> bool {
+    irq_wake
+        || root_wake
+        || retained_rx_pending
+        || rx_source_pending
+        || rx_bytes != 0
+        || tx_bytes != 0
+        || tx_bytes_pending
 }
 
 #[cfg(target_os = "none")]
@@ -60735,10 +61046,26 @@ fn serial_runtime_service_notification(badge: u32) -> bool {
         // service turn retries the one durable pending ACK after one final LSR
         // source check. Never ACK while retained or physical RX remains.
         let final_rx_source_pending = serial_mini_uart_rx_source_pending();
-        let completion_deferred = retained_pending
-            || rx_outcome.source_pending
-            || final_rx_source_pending
-            || !tx_state.transport_valid;
+        queue.rx_source_pending =
+            retained_pending || rx_outcome.source_pending || final_rx_source_pending;
+        if serial_runtime_rearm_required(
+            irq_wake,
+            badge & DRIVER_RUNTIME_RESERVED_ROOT_BADGE != 0,
+            retained_pending,
+            rx_outcome.source_pending || final_rx_source_pending,
+            rx_outcome.bytes,
+            tx_transfer.bytes,
+            tx_state.bytes_pending,
+        ) {
+            // IRQ badges are coalescing evidence, not the handler's durable
+            // mask state. A root/source-polled turn may consume RX or fill one
+            // TX FIFO prefix after an earlier edge was absorbed elsewhere.
+            // Make the unmask obligation explicit before the ordered
+            // IER/STAT readback so no live ring can sleep behind a masked
+            // handler merely because this turn did not carry the IRQ badge.
+            queue.irq_ack_pending = true;
+        }
+        let completion_deferred = queue.rx_source_pending || !tx_state.transport_valid;
         let completion_result =
             serial_finish_pending_irq_after_service_with(queue, completion_deferred, || {
                 serial_runtime_irq_handler_ack_after_rearm(
@@ -61922,6 +62249,15 @@ pub fn runtime_main(task_key: usize) -> ! {
                 let _ = service_runtime_persistent_source_once(notification_route, 0);
                 if notification_route == RuntimeNotificationRoute::Serial {
                     match serial_runtime_spsc_idle_wait_route() {
+                        SerialSpscIdleWaitRoute::ReenterService => {
+                            // Durable bytes and an exact current MU_STAT free
+                            // slot are work authority, not a polling cadence.
+                            // Re-enter the outer owner turn so endpoint
+                            // admission remains fair, then consume at most one
+                            // FIFO prefix. A full FIFO still blocks solely on
+                            // the generated local notification below.
+                            continue;
+                        }
                         SerialSpscIdleWaitRoute::LocalNotification => {
                             // A nonempty TX ring is the complete work
                             // authority. The root doorbell admitted its first
@@ -62660,6 +62996,7 @@ mod tests {
         dma_error_on_start: bool,
         dma_transfer_pending: bool,
         dma_reset_stuck: bool,
+        dma_reset_destructive_failure: bool,
         reset_stuck: bool,
         reset_failures_remaining: usize,
         scrub_diagnostic_registers_on_reset: bool,
@@ -62734,6 +63071,7 @@ mod tests {
                 dma_error_on_start: false,
                 dma_transfer_pending: false,
                 dma_reset_stuck: false,
+                dma_reset_destructive_failure: false,
                 reset_stuck: false,
                 reset_failures_remaining: 0,
                 scrub_diagnostic_registers_on_reset: false,
@@ -63305,7 +63643,26 @@ mod tests {
             self.record_write(addr, value);
             match addr.saturating_sub(TEST_SDIO_DMA_CHANNEL_VADDR) {
                 BCM2835_DMA_CS if value == BCM2835_DMA_CS_RESET => {
-                    if !self.dma_reset_stuck {
+                    if self.dma_reset_destructive_failure {
+                        // Model a reset that destroys the pre-reset register
+                        // image but still leaves the channel nonquiescent and
+                        // erroneous. This is deliberately distinct from a
+                        // stuck reset so provenance tests cannot pass merely
+                        // because the live DMA evidence never changed.
+                        self.dma_cs = BCM2835_DMA_CS_ERR;
+                        self.dma_conblk = 0xd1a6_0011;
+                        self.dma_next = 0xd1a6_0012;
+                        self.dma_ti = 0xd1a6_0013;
+                        self.dma_source = 0xd1a6_0014;
+                        self.dma_dest = 0xd1a6_0015;
+                        self.dma_len = 0xd1a6_0016;
+                        self.dma_stride = 0xd1a6_0017;
+                        self.dma_debug = 0xd1a6_0018;
+                        self.dma_posted_conblk = 0;
+                        self.dma_posted_active = false;
+                        self.dma_transfer_pending = false;
+                        self.dma_dreq_bytes_in_control_block = 0;
+                    } else if !self.dma_reset_stuck {
                         self.dma_cs = 0;
                         self.dma_conblk = 0;
                         self.dma_next = 0;
@@ -74863,6 +75220,7 @@ mod tests {
         state.rx_drain_budget_hits = 1;
         state.rx_byte_budget_hits = 2;
         state.rx_queue_overflows = 1;
+        state.command_rx_drain_seen = true;
 
         let result = genet_completion_result(&state, 32, 4);
 
@@ -74892,6 +75250,7 @@ mod tests {
         assert!(pi4_driver_abi::driver_runtime_genet_result_rx_drain_budget_hit(result));
         assert!(pi4_driver_abi::driver_runtime_genet_result_rx_byte_budget_hit(result));
         assert!(pi4_driver_abi::driver_runtime_genet_result_rx_overflow_seen(result));
+        assert!(pi4_driver_abi::driver_runtime_genet_result_command_rx_drain_seen(result));
     }
 
     #[test]
@@ -75125,6 +75484,7 @@ mod tests {
                 rx_drain_budget_hit: false,
                 rx_byte_budget_hit: false,
                 rx_overflow_seen: false,
+                command_rx_drain_seen: false,
             });
         assert_eq!(
             service_command(0, poll),
@@ -75242,6 +75602,179 @@ mod tests {
         );
         assert_eq!(genet_read32(GENET_RDMA_CONS_INDEX), 1);
         assert_eq!(genet_read_rx_desc(0).0, genet_rx_owned_len_status());
+        assert!(
+            !state.command_rx_drain_seen,
+            "the eager IRQ/DPC route cannot claim a command-lane drain"
+        );
+    }
+
+    #[test]
+    fn genet_bounded_owner_poll_drains_durable_rx_without_irq_badge() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let descriptor = descriptor_for(HOT_PATH_GENET_NIC, ROLE_NET);
+        let dma_range = runtime_resource_range(
+            &descriptor,
+            DRIVER_RUNTIME_RESOURCE_KIND_DMA,
+            DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA,
+        )
+        .expect("Genet test descriptor must include a DMA arena");
+        RUNTIME_DESCRIPTOR.store(descriptor);
+        let payload = *b"offered-without-irq";
+        let dma_vaddr = dma_range.vaddr as usize;
+        write_dma_u32(
+            dma_vaddr,
+            (((payload.len() + GENET_RX_BUF_OFFSET) as u32) << GENET_DMA_BUFLENGTH_SHIFT)
+                | GENET_DMA_SOP
+                | GENET_DMA_EOP,
+        );
+        for (index, byte) in payload.iter().copied().enumerate() {
+            write_dma_byte(dma_vaddr + GENET_RX_BUF_OFFSET + index, byte);
+        }
+        let mut state = GenetRuntimeState::new();
+        arm_genet_test_irq_state(&mut state);
+        genet_write_rx_desc(
+            0,
+            runtime_resource_bus_addr_at(&descriptor, dma_range, 0)
+                .expect("Genet test descriptor must resolve the first DMA buffer"),
+            (((payload.len() + GENET_RX_BUF_OFFSET) as u32) << GENET_DMA_BUFLENGTH_SHIFT)
+                | GENET_DMA_SOP
+                | GENET_DMA_EOP,
+        );
+        genet_write32(GENET_RDMA_PROD_INDEX, 1);
+
+        assert_eq!(
+            genet_runtime_poll_rx(
+                &mut state,
+                DriverTaskBudgetGrant {
+                    max_ops: 1,
+                    max_frames: 1,
+                    max_bytes: payload.len() as u32,
+                },
+            ),
+            GenetRxPoll::Frame {
+                len: payload.len(),
+                flags: u16::from_be_bytes([payload[12], payload[13]]),
+            },
+        );
+        assert_eq!(state.irq_wakes, 0, "no synthetic IRQ lifetime is created");
+        assert_eq!(
+            state.irq_acks, 0,
+            "the command lane cannot ACK an unseen IRQ"
+        );
+        assert!(!state.irq_ack_pending);
+        assert!(state.command_rx_drain_seen);
+        assert_eq!(genet_read32(GENET_RDMA_CONS_INDEX), 1);
+        assert_eq!(genet_read_rx_desc(0).0, genet_rx_owned_len_status());
+        assert_eq!(
+            read_frame_prefix::<19>(DriverFrameDescriptor {
+                offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
+                len: payload.len() as u16,
+                flags: 0,
+            }),
+            payload,
+        );
+    }
+
+    #[test]
+    fn genet_owner_poll_preserves_unseen_rx_across_every_command_budget_cut() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let descriptor = descriptor_for(HOT_PATH_GENET_NIC, ROLE_NET);
+        let dma_range = runtime_resource_range(
+            &descriptor,
+            DRIVER_RUNTIME_RESOURCE_KIND_DMA,
+            DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA,
+        )
+        .expect("Genet test descriptor must include a DMA arena");
+        RUNTIME_DESCRIPTOR.store(descriptor);
+        let payload = *b"bounded-dhcp-offer";
+        let dma_vaddr = dma_range.vaddr as usize;
+        write_dma_u32(
+            dma_vaddr,
+            (((payload.len() + GENET_RX_BUF_OFFSET) as u32) << GENET_DMA_BUFLENGTH_SHIFT)
+                | GENET_DMA_SOP
+                | GENET_DMA_EOP,
+        );
+        for (index, byte) in payload.iter().copied().enumerate() {
+            write_dma_byte(dma_vaddr + GENET_RX_BUF_OFFSET + index, byte);
+        }
+        let mut state = GenetRuntimeState::new();
+        arm_genet_test_irq_state(&mut state);
+        let original_len_status = (((payload.len() + GENET_RX_BUF_OFFSET) as u32)
+            << GENET_DMA_BUFLENGTH_SHIFT)
+            | GENET_DMA_SOP
+            | GENET_DMA_EOP;
+        genet_write_rx_desc(
+            0,
+            runtime_resource_bus_addr_at(&descriptor, dma_range, 0)
+                .expect("Genet test descriptor must resolve the first DMA buffer"),
+            original_len_status,
+        );
+        genet_write32(GENET_RDMA_PROD_INDEX, 1);
+
+        for (budget, expected) in [
+            (
+                DriverTaskBudgetGrant {
+                    max_ops: 0,
+                    max_frames: 1,
+                    max_bytes: payload.len() as u32,
+                },
+                BUDGET_EXHAUSTED_OPS,
+            ),
+            (
+                DriverTaskBudgetGrant {
+                    max_ops: 1,
+                    max_frames: 0,
+                    max_bytes: payload.len() as u32,
+                },
+                BUDGET_EXHAUSTED_FRAMES,
+            ),
+            (
+                DriverTaskBudgetGrant {
+                    max_ops: 1,
+                    max_frames: 1,
+                    max_bytes: payload.len() as u32 - 1,
+                },
+                BUDGET_EXHAUSTED_BYTES,
+            ),
+        ] {
+            assert_eq!(
+                genet_runtime_poll_rx(&mut state, budget),
+                GenetRxPoll::BudgetExhausted(expected),
+            );
+            assert_eq!(
+                genet_read32(GENET_RDMA_CONS_INDEX),
+                0,
+                "a rejected command grant cannot consume the durable producer",
+            );
+            assert_eq!(genet_read_rx_desc(0).0, original_len_status);
+            assert_eq!(state.rx_queue_count, 0);
+            assert_eq!(state.irq_wakes, 0);
+            assert_eq!(state.irq_acks, 0);
+            assert!(!state.irq_ack_pending);
+            assert!(!state.command_rx_drain_seen);
+        }
+
+        assert_eq!(
+            genet_runtime_poll_rx(
+                &mut state,
+                DriverTaskBudgetGrant {
+                    max_ops: 1,
+                    max_frames: 1,
+                    max_bytes: payload.len() as u32,
+                },
+            ),
+            GenetRxPoll::Frame {
+                len: payload.len(),
+                flags: u16::from_be_bytes([payload[12], payload[13]]),
+            },
+        );
+        assert_eq!(genet_read32(GENET_RDMA_CONS_INDEX), 1);
+        assert_eq!(genet_read_rx_desc(0).0, genet_rx_owned_len_status());
+        assert_eq!(state.irq_wakes, 0);
+        assert_eq!(state.irq_acks, 0);
+        assert!(state.command_rx_drain_seen);
     }
 
     #[test]
@@ -78353,34 +78886,75 @@ mod tests {
     #[test]
     fn serial_spsc_idle_wait_uses_slot_three_only_for_valid_durable_tx() {
         assert_eq!(
-            serial_spsc_idle_wait_route(0, None),
+            serial_spsc_idle_wait_route(0, None, None, false, None),
             SerialSpscIdleWaitRoute::CombinedCommandOrNotification,
         );
         assert_eq!(
-            serial_spsc_idle_wait_route(0, Some(17)),
+            serial_spsc_idle_wait_route(0, Some(17), None, true, Some(17)),
             SerialSpscIdleWaitRoute::CombinedCommandOrNotification,
             "a retired generation cannot mint a local-notification lifetime",
         );
         assert_eq!(
-            serial_spsc_idle_wait_route(9, Some(0)),
+            serial_spsc_idle_wait_route(9, Some(0), None, false, Some(0)),
             SerialSpscIdleWaitRoute::CombinedCommandOrNotification,
         );
         for occupancy in [1, 8, DRIVER_RUNTIME_SERIAL_SPSC_CAPACITY as u32] {
             assert_eq!(
-                serial_spsc_idle_wait_route(9, Some(occupancy)),
+                serial_spsc_idle_wait_route(9, Some(occupancy), Some(0), false, Some(0)),
                 SerialSpscIdleWaitRoute::LocalNotification,
                 "every valid nonempty cursor must preserve the TX-empty wait",
             );
+            for free in 1..=MINI_UART_TX_IMMEDIATE_TURN_BYTES {
+                assert_eq!(
+                    serial_spsc_idle_wait_route(9, Some(occupancy), Some(free), false, Some(0),),
+                    SerialSpscIdleWaitRoute::ReenterService,
+                    "durable bytes plus physical capacity forbid sleep",
+                );
+            }
         }
         assert_eq!(
-            serial_spsc_idle_wait_route(9, None),
+            serial_spsc_idle_wait_route(9, None, Some(0), false, Some(0)),
             SerialSpscIdleWaitRoute::InvalidTransport,
             "an invalid live cursor must not select either active wait path",
         );
         assert_eq!(
-            serial_spsc_idle_wait_route(9, Some(DRIVER_RUNTIME_SERIAL_SPSC_CAPACITY as u32 + 1),),
+            serial_spsc_idle_wait_route(
+                9,
+                Some(DRIVER_RUNTIME_SERIAL_SPSC_CAPACITY as u32 + 1),
+                Some(0),
+                false,
+                Some(0),
+            ),
             SerialSpscIdleWaitRoute::InvalidTransport,
             "occupancy beyond the exact ring capacity must fail closed",
+        );
+        for invalid_free in [None, Some(MINI_UART_TX_IMMEDIATE_TURN_BYTES + 1)] {
+            assert_eq!(
+                serial_spsc_idle_wait_route(9, Some(1), invalid_free, false, Some(0)),
+                SerialSpscIdleWaitRoute::InvalidTransport,
+                "an impossible live MU_STAT sample must fail closed",
+            );
+        }
+        assert_eq!(
+            serial_spsc_idle_wait_route(9, Some(0), None, true, Some(127)),
+            SerialSpscIdleWaitRoute::ReenterService,
+            "asserted RX with ring capacity is durable work authority",
+        );
+        assert_eq!(
+            serial_spsc_idle_wait_route(
+                9,
+                Some(0),
+                None,
+                true,
+                Some(DRIVER_RUNTIME_SERIAL_SPSC_CAPACITY as u32),
+            ),
+            SerialSpscIdleWaitRoute::CombinedCommandOrNotification,
+            "a full RX ring waits for root's full-to-not-full doorbell",
+        );
+        assert_eq!(
+            serial_spsc_idle_wait_route(9, Some(0), None, true, None),
+            SerialSpscIdleWaitRoute::InvalidTransport,
+            "an asserted RX source cannot proceed from an invalid shared cursor",
         );
     }
 
@@ -78435,7 +79009,13 @@ mod tests {
             .expect("stable TX cursor before fill");
             if turn >= 2 {
                 assert_eq!(
-                    serial_spsc_idle_wait_route(31, Some(occupancy_before)),
+                    serial_spsc_idle_wait_route(
+                        31,
+                        Some(occupancy_before),
+                        Some(0),
+                        false,
+                        Some(0),
+                    ),
                     SerialSpscIdleWaitRoute::LocalNotification,
                     "the three post-doorbell fills require slot-3 TX-empty wakes",
                 );
@@ -78467,7 +79047,7 @@ mod tests {
         assert_eq!(occupancies, [32, 24, 16, 8, 0]);
         assert_eq!(observed, payload);
         assert_eq!(
-            serial_spsc_idle_wait_route(31, Some(0)),
+            serial_spsc_idle_wait_route(31, Some(0), None, false, Some(0)),
             SerialSpscIdleWaitRoute::CombinedCommandOrNotification,
             "the endpoint wait resumes only after the complete ring drains",
         );
@@ -78484,6 +79064,9 @@ mod tests {
                     31,
                     DRIVER_RUNTIME_SERIAL_SPSC_FLAG_ROOT_TO_RUNTIME,
                 ),
+                Some(0),
+                false,
+                Some(0),
             ),
             SerialSpscIdleWaitRoute::InvalidTransport,
         );
@@ -78549,6 +79132,27 @@ mod tests {
             serial_irq_rearm_attempt_failed(false, false),
             "an attempted readback/ACK failure must fence TX before another local wait",
         );
+    }
+
+    #[test]
+    fn serial_source_polled_work_requires_explicit_handler_rearm() {
+        assert!(!serial_runtime_rearm_required(
+            false, false, false, false, 0, 0, false,
+        ));
+        for required in [
+            serial_runtime_rearm_required(true, false, false, false, 0, 0, false),
+            serial_runtime_rearm_required(false, true, false, false, 0, 0, false),
+            serial_runtime_rearm_required(false, false, true, false, 0, 0, false),
+            serial_runtime_rearm_required(false, false, false, true, 0, 0, false),
+            serial_runtime_rearm_required(false, false, false, false, 1, 0, false),
+            serial_runtime_rearm_required(false, false, false, false, 0, 8, false),
+            serial_runtime_rearm_required(false, false, false, false, 0, 0, true),
+        ] {
+            assert!(
+                required,
+                "every durable RX/TX or coalesced wake condition must rearm IRQ125",
+            );
+        }
     }
 
     #[test]
@@ -78724,6 +79328,166 @@ mod tests {
             ),
             Some(0),
         );
+    }
+
+    #[test]
+    fn serial_source_polled_partial_echo_rearms_before_long_response_wait() {
+        use std::cell::RefCell;
+
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        initialize_serial_spsc_for_test(37);
+        let base = serial_runtime_spsc_shared_base();
+        let response = b"Commands:\n  help - Show this help\n";
+        assert!(response.len() > MINI_UART_TX_IMMEDIATE_TURN_BYTES);
+        assert_eq!(
+            serial_spsc_produce_at(
+                base,
+                DRIVER_RUNTIME_SERIAL_TX_SPSC_FIRST_PAGE,
+                37,
+                DRIVER_RUNTIME_SERIAL_SPSC_FLAG_ROOT_TO_RUNTIME,
+                response,
+            )
+            .expect("root response producer")
+            .bytes,
+            response.len(),
+        );
+
+        // Model the observed badge-zero/root turn: RX already delivered the
+        // complete line even though only its first echoed byte was visible,
+        // and the same bounded owner turn filled one eight-byte TX quantum.
+        let mut fifo = [0u8; MINI_UART_TX_IMMEDIATE_TURN_BYTES];
+        let first = serial_spsc_consume_at(
+            base,
+            DRIVER_RUNTIME_SERIAL_TX_SPSC_FIRST_PAGE,
+            37,
+            DRIVER_RUNTIME_SERIAL_SPSC_FLAG_ROOT_TO_RUNTIME,
+            &mut fifo,
+        )
+        .expect("first source-polled FIFO fill");
+        assert_eq!(first.bytes, MINI_UART_TX_IMMEDIATE_TURN_BYTES);
+        assert_eq!(&fifo, b"Commands");
+        let remaining = serial_spsc_committed_occupancy_at(
+            base,
+            DRIVER_RUNTIME_SERIAL_TX_SPSC_FIRST_PAGE,
+            37,
+            DRIVER_RUNTIME_SERIAL_SPSC_FLAG_ROOT_TO_RUNTIME,
+        )
+        .expect("stable response remainder");
+        assert!(serial_runtime_rearm_required(
+            false,
+            true,
+            false,
+            false,
+            b"help\r".len(),
+            first.bytes,
+            remaining != 0,
+        ));
+
+        let mut queue = SerialRuntimeRxQueue::new();
+        queue.irq_ack_pending = true;
+        let order = RefCell::new(Vec::new());
+        assert!(serial_finish_pending_irq_after_service_with(
+            &mut queue,
+            false,
+            || serial_irq_ack_after_rearm_with(
+                serial_mini_uart_irq_mask(true, true),
+                || order.borrow_mut().push("barrier"),
+                || {
+                    order.borrow_mut().push("ier");
+                    serial_mini_uart_irq_mask(true, true)
+                },
+                || {
+                    order.borrow_mut().push("stat");
+                    (MINI_UART_TX_IMMEDIATE_TURN_BYTES as u32) << MINI_UART_STAT_TX_FIFO_FILL_SHIFT
+                },
+                || {
+                    order.borrow_mut().push("ack");
+                    true
+                },
+            ),
+        ));
+        assert_eq!(
+            order.into_inner(),
+            ["barrier", "ier", "stat", "barrier", "ack"],
+            "IER/STAT and the second device barrier must precede handler ACK",
+        );
+        assert_eq!(queue.irq_acks, 1);
+        assert!(!queue.irq_ack_pending);
+        assert_eq!(
+            serial_spsc_idle_wait_route(37, Some(remaining), Some(0), false, Some(0)),
+            SerialSpscIdleWaitRoute::LocalNotification,
+            "a full FIFO waits only after the source-polled turn unmasked IRQ125",
+        );
+        assert_eq!(
+            serial_spsc_idle_wait_route(
+                37,
+                Some(remaining),
+                Some(MINI_UART_TX_IMMEDIATE_TURN_BYTES),
+                false,
+                Some(0),
+            ),
+            SerialSpscIdleWaitRoute::ReenterService,
+            "a later TX-empty sample is bounded durable work, not a private poll",
+        );
+    }
+
+    #[test]
+    fn serial_production_badge_zero_help_turn_rearms_after_first_fifo_fill() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        initialize_serial_spsc_for_test(41);
+        SERIAL_RUNTIME_SPSC_GENERATION.store(41, Ordering::Release);
+        let response = b"Commands:\n  help - Show this help\n";
+        assert_eq!(
+            serial_spsc_produce_at(
+                serial_runtime_spsc_shared_base(),
+                DRIVER_RUNTIME_SERIAL_TX_SPSC_FIRST_PAGE,
+                41,
+                DRIVER_RUNTIME_SERIAL_SPSC_FLAG_ROOT_TO_RUNTIME,
+                response,
+            )
+            .expect("root help response producer")
+            .bytes,
+            response.len(),
+        );
+        let command = DriverTaskCommandRecord {
+            sequence: 0x5345_5248,
+            opcode: OPCODE_SERVICE,
+            flags: 0,
+            arg0: HOT_PATH_SERIAL_CONSOLE,
+            arg1: ROLE_SERIAL,
+            aux0: DRIVER_RUNTIME_SERIAL_TX_IDLE_AUX,
+            aux1: 0,
+            budget: budget(),
+            frame: DriverFrameDescriptor::empty(),
+        };
+
+        assert_eq!(TEST_RUNTIME_IRQ_ACK_CALLS.load(Ordering::Acquire), 0);
+        assert_eq!(
+            service_serial(command),
+            DriverTaskCompletionRecord::idle(command.sequence),
+            "the response remains in flight after its first FIFO quantum",
+        );
+        assert_eq!(
+            serial_spsc_committed_occupancy_at(
+                serial_runtime_spsc_shared_base(),
+                DRIVER_RUNTIME_SERIAL_TX_SPSC_FIRST_PAGE,
+                41,
+                DRIVER_RUNTIME_SERIAL_SPSC_FLAG_ROOT_TO_RUNTIME,
+            ),
+            Some((response.len() - MINI_UART_TX_IMMEDIATE_TURN_BYTES) as u32),
+        );
+        assert_eq!(
+            TEST_RUNTIME_IRQ_ACK_CALLS.load(Ordering::Acquire),
+            1,
+            "the production badge-zero path must rearm IRQ125 after filling TX",
+        );
+        SERIAL_RUNTIME_RX_QUEUE.with_ref(|queue| {
+            assert_eq!(queue.irq_acks, 1);
+            assert!(!queue.irq_ack_pending);
+            assert!(!queue.rx_source_pending);
+        });
     }
 
     #[test]
@@ -101552,8 +102316,10 @@ mod tests {
         assert_eq!(grant.generation, generation);
         assert!(!gate.has_deferred_delegated_wake());
 
-        // The stable grant, validation, and ACK share one consumer admission;
-        // the released HOST_CONFIG continuation remains one physical quantum.
+        // The stable grant, validation, and ACK share one consumer admission.
+        // The released HOST_CONFIG continuation may batch the deterministic
+        // containment prefix, but must stop at its first real hardware/time
+        // wait without polling privately.
         let probe = probe_runtime_retained_continuation_grant(
             &gate,
             Some(intake),
@@ -101582,10 +102348,16 @@ mod tests {
             service_sdio_external_dma_command_turn_with_io(child, descriptor, &mut io),
             RuntimeCommandTurn::Pending,
         );
-        assert!(
-            io.write_count <= writes_before + 1,
-            "the admitted HOST_CONFIG continuation performs one register write at most",
+        assert_eq!(
+            io.write_count,
+            writes_before + 5,
+            "the admitted HOST_CONFIG continuation performs the exact DMA-reset/status-ack/host-reset/ack/clock-disable prefix",
         );
+        assert_eq!(
+            SDIO_RUNTIME_STATE.with_ref(|state| state.external_dma_request.phase),
+            SdioExternalDmaRequestPhase::ContainClockSettle1,
+        );
+        assert_eq!(io.polls, 0, "the owner may not create a private poll loop");
         gate.retain_after_pending_generation(generation);
         let consumed = read_runtime_continuation_grant_at(DRIVER_TASK_SDIO_BUS_RING_VADDR)
             .expect("acknowledged HOST_CONFIG grant remains stable");
@@ -107133,7 +107905,10 @@ mod tests {
                 containment_turns < 100_000,
                 "retained containment must be bounded"
             );
-            phases.push(SDIO_RUNTIME_STATE.with_ref(|state| state.external_dma_request.phase));
+            let phase = SDIO_RUNTIME_STATE.with_ref(|state| state.external_dma_request.phase);
+            if phases.last().copied() != Some(phase) {
+                phases.push(phase);
+            }
             match service_sdio_external_dma_command_turn_with_io(command, descriptor, &mut io) {
                 RuntimeCommandTurn::Complete(completion) => break completion,
                 RuntimeCommandTurn::Pending => {}
@@ -107144,38 +107919,22 @@ mod tests {
         assert_eq!(io.command_issue_count(), 1);
         assert!(SDIO_RUNTIME_STATE.with_ref(|state| state.dpc_poisoned));
         assert_eq!(io.polls, 0, "containment may not enter a private poll loop");
-        let required_order = [
-            SdioExternalDmaRequestPhase::CaptureFailureTelemetry,
-            SdioExternalDmaRequestPhase::ContainDmaInspect,
-            SdioExternalDmaRequestPhase::ContainDmaAbortIssue,
-            SdioExternalDmaRequestPhase::ContainDmaPollAbort,
-            SdioExternalDmaRequestPhase::ContainDmaStop,
-            SdioExternalDmaRequestPhase::ContainDmaReset,
-            SdioExternalDmaRequestPhase::ContainDmaVerify,
-            SdioExternalDmaRequestPhase::ContainHostAckBeforeReset,
-            SdioExternalDmaRequestPhase::ContainHostResetIssue1,
-            SdioExternalDmaRequestPhase::ContainHostResetPoll1,
-            SdioExternalDmaRequestPhase::ContainHostAckAfterReset1,
-            SdioExternalDmaRequestPhase::ContainClockDisable1,
-            SdioExternalDmaRequestPhase::ContainClockSettle1,
-            SdioExternalDmaRequestPhase::ContainClockRestore1,
-            SdioExternalDmaRequestPhase::ContainHostResetIssue2,
-            SdioExternalDmaRequestPhase::ContainHostResetPoll2,
-            SdioExternalDmaRequestPhase::ContainHostAckAfterReset2,
-            SdioExternalDmaRequestPhase::ContainPresentCheck,
-            SdioExternalDmaRequestPhase::ContainFinalSnapshot,
-            SdioExternalDmaRequestPhase::ContainFinish,
-            SdioExternalDmaRequestPhase::PoisonPolicyEnable,
-            SdioExternalDmaRequestPhase::PoisonPolicySignal,
-        ];
-        let mut required = required_order.into_iter();
-        let mut next = required.next();
-        for phase in phases {
-            if next == Some(phase) {
-                next = required.next();
-            }
-        }
-        assert_eq!(next, None, "retained containment phase order");
+        // Immediate deterministic phases now share one bounded owner turn, so
+        // only externally visible wait/terminal phases appear between calls.
+        // The focused containment-prefix regression checks the exact internal
+        // phase endpoint and register prefix; this test preserves the terminal
+        // no-reissue and outer-wait contract.
+        assert_eq!(
+            phases,
+            vec![
+                SdioExternalDmaRequestPhase::CaptureFailureTelemetry,
+                SdioExternalDmaRequestPhase::ContainDmaInspect,
+                SdioExternalDmaRequestPhase::ContainClockSettle1,
+                SdioExternalDmaRequestPhase::PoisonPolicyEnable,
+                SdioExternalDmaRequestPhase::PoisonPolicySignal,
+            ],
+            "retained containment exposes only real waits and terminal policy turns",
+        );
 
         let replay =
             match service_sdio_external_dma_command_turn_with_io(command, descriptor, &mut io) {
@@ -107187,6 +107946,36 @@ mod tests {
         assert_eq!(replay.code, COMPLETION_FAULT);
         assert_eq!(io.command_issue_count(), 1);
         assert_eq!(io.dma_started, 1);
+    }
+
+    #[test]
+    fn sdio_containment_step_bound_exhaustion_fails_closed_without_persisting() {
+        let _guard = test_guard();
+        reset_sdio_descriptor_seam_for_test();
+        let sequence = 0x5344_424e;
+        let mut identity = SdioExternalDmaRequestIdentity::empty();
+        identity.sequence = sequence;
+        let cursor = SdioExternalDmaRequestCursor {
+            phase: SdioExternalDmaRequestPhase::ContainDmaInspect,
+            identity,
+            ..SdioExternalDmaRequestCursor::idle()
+        };
+        let mut io = TestSdioHostIo::new();
+
+        assert_eq!(
+            sdio_retained_containment_turn_bounded_with(cursor, &mut io, 1),
+            RuntimeCommandTurn::Complete(DriverTaskCompletionRecord::fault_with_result(
+                sequence,
+                FAULT_REJECTED_COMMAND,
+                DRIVER_RUNTIME_REJECT_SDIO_INVALID_RETAINED_PHASE,
+            )),
+            "a changing phase at the exact step bound cannot mint a later batch",
+        );
+        assert_eq!(
+            SDIO_RUNTIME_STATE.with_ref(|state| state.external_dma_request.phase),
+            SdioExternalDmaRequestPhase::Idle,
+            "bound exhaustion must not persist the partial cursor",
+        );
     }
 
     #[test]
@@ -107349,6 +108138,349 @@ mod tests {
         assert_eq!(snapshot.cccr_interface, 0xa2);
         assert!(snapshot.gate4_ready());
         assert_eq!(SDIO_CMD_COUNT.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn sdio_host_config_batches_deterministic_steps_between_two_clock_waits() {
+        let _guard = test_guard();
+        reset_sdio_descriptor_seam_for_test();
+        let descriptor = DriverRuntimeSdioCommandDescriptor {
+            op: DRIVER_RUNTIME_SDIO_OP_HOST_CONFIG,
+            response_kind: DRIVER_RUNTIME_SDIO_RESP_NONE,
+            addr: CYW43_SDIO_FAST_CLOCK_HZ,
+            flags: DriverRuntimeSdioCommandDescriptor::FLAG_HOST_BUS_WIDTH_4BIT,
+            timeout_us: BCM2835_SDIO_REQUEST_TIMEOUT_US,
+            ..DriverRuntimeSdioCommandDescriptor::empty()
+        };
+        let sequence = 0x4843_4241;
+        let mut io = TestSdioHostIo::new();
+        io.set_register(
+            SDHCI_HOST_VERSION,
+            sdio_merge_u16_word(0, SDHCI_HOST_VERSION, SDHCI_SPEC_300),
+        );
+        let cursor = SdioExternalDmaRequestCursor {
+            phase: SdioExternalDmaRequestPhase::HostConfigClock1Disable,
+            identity: SdioExternalDmaRequestIdentity {
+                sequence,
+                descriptor,
+                arg: descriptor.addr,
+                owner_timeout_us: descriptor.timeout_us,
+                ..SdioExternalDmaRequestIdentity::empty()
+            },
+            ..SdioExternalDmaRequestCursor::idle()
+        };
+
+        assert_eq!(
+            sdio_retained_host_config_turn_with(cursor, &mut io),
+            RuntimeCommandTurn::Pending,
+        );
+        let mut retained = SDIO_RUNTIME_STATE.with_ref(|state| state.external_dma_request);
+        assert_eq!(
+            retained.phase,
+            SdioExternalDmaRequestPhase::HostConfigClock1Poll,
+            "clock disable and program are deterministic one-owner work",
+        );
+        let writes_at_first_wait = io.write_count;
+        assert_eq!(
+            sdio_retained_host_config_turn_with(retained, &mut io),
+            RuntimeCommandTurn::Pending,
+        );
+        retained = SDIO_RUNTIME_STATE.with_ref(|state| state.external_dma_request);
+        assert_eq!(
+            retained.phase,
+            SdioExternalDmaRequestPhase::HostConfigClock1Poll,
+        );
+        assert_eq!(
+            io.write_count, writes_at_first_wait,
+            "a false clock condition is sampled once without replaying writes",
+        );
+
+        let clock1 = sdio_extract_u16_word(io.register(SDHCI_CLOCK_CONTROL), SDHCI_CLOCK_CONTROL)
+            | SDHCI_CLOCK_INT_STABLE;
+        io.set_register(
+            SDHCI_CLOCK_CONTROL,
+            sdio_merge_u16_word(
+                io.register(SDHCI_CLOCK_CONTROL),
+                SDHCI_CLOCK_CONTROL,
+                clock1,
+            ),
+        );
+        assert_eq!(
+            sdio_retained_host_config_turn_with(retained, &mut io),
+            RuntimeCommandTurn::Pending,
+        );
+        retained = SDIO_RUNTIME_STATE.with_ref(|state| state.external_dma_request);
+        assert_eq!(
+            retained.phase,
+            SdioExternalDmaRequestPhase::HostConfigClock2Poll,
+            "all deterministic work between the two clock polls shares one bounded turn",
+        );
+
+        let clock2 = sdio_extract_u16_word(io.register(SDHCI_CLOCK_CONTROL), SDHCI_CLOCK_CONTROL)
+            | SDHCI_CLOCK_INT_STABLE;
+        io.set_register(
+            SDHCI_CLOCK_CONTROL,
+            sdio_merge_u16_word(
+                io.register(SDHCI_CLOCK_CONTROL),
+                SDHCI_CLOCK_CONTROL,
+                clock2,
+            ),
+        );
+        assert_eq!(
+            sdio_retained_host_config_turn_with(retained, &mut io),
+            RuntimeCommandTurn::Complete(DriverTaskCompletionRecord::progress(sequence, 1)),
+        );
+        assert_eq!(
+            io.polls, 0,
+            "HOST_CONFIG may not create a private poll loop"
+        );
+    }
+
+    #[test]
+    fn sdio_containment_batches_immediate_phases_and_stops_at_real_wait() {
+        let _guard = test_guard();
+        reset_sdio_descriptor_seam_for_test();
+        let mut io = TestSdioHostIo::new();
+        io.dma_authority_available = false;
+        let cursor = SdioExternalDmaRequestCursor {
+            phase: SdioExternalDmaRequestPhase::ContainDmaInspect,
+            identity: SdioExternalDmaRequestIdentity {
+                sequence: 0x434f_4e54,
+                descriptor: DriverRuntimeSdioCommandDescriptor {
+                    op: DRIVER_RUNTIME_SDIO_OP_HOST_CONFIG,
+                    ..DriverRuntimeSdioCommandDescriptor::empty()
+                },
+                ..SdioExternalDmaRequestIdentity::empty()
+            },
+            deadline: RuntimeDeadline::Iterations { remaining: 64 },
+            containment_resume: SdioRetainedContainmentResume::HostConfig,
+            ..SdioExternalDmaRequestCursor::idle()
+        };
+
+        assert_eq!(
+            sdio_retained_containment_turn_with(cursor, &mut io),
+            RuntimeCommandTurn::Pending,
+        );
+        let retained = SDIO_RUNTIME_STATE.with_ref(|state| state.external_dma_request);
+        assert_eq!(
+            retained.phase,
+            SdioExternalDmaRequestPhase::ContainClockSettle1,
+            "DMA inspection, host ACK/reset, and clock disable are deterministic one-owner work",
+        );
+        assert!(retained.containment_dma_ok);
+        assert!(retained.containment_host_ok);
+        assert_eq!(retained.containment_failure_phase, 0);
+        assert_eq!(io.polls, 0, "the owner may not create a private poll loop");
+    }
+
+    #[test]
+    fn sdio_host_config_containment_failure_retains_typed_first_snapshot() {
+        let _guard = test_guard();
+        reset_sdio_descriptor_seam_for_test();
+        let descriptor = DriverRuntimeSdioCommandDescriptor {
+            op: DRIVER_RUNTIME_SDIO_OP_HOST_CONFIG,
+            response_kind: DRIVER_RUNTIME_SDIO_RESP_NONE,
+            addr: CYW43_SDIO_FAST_CLOCK_HZ,
+            timeout_us: BCM2835_SDIO_REQUEST_TIMEOUT_US,
+            ..DriverRuntimeSdioCommandDescriptor::empty()
+        };
+        let mut io = TestSdioHostIo::new();
+        let pre_status = SDHCI_INT_RESPONSE | SDHCI_INT_DATA_END;
+        let pre_present = SDHCI_CMD_INHIBIT | SDHCI_DATA_INHIBIT | SDHCI_DAT_ACTIVE;
+        let pre_response = 0x1357_9bdf;
+        let pre_host_control: u8 = 0x5a;
+        let pre_power_control: u8 = 0x0f;
+        let pre_clock_control: u16 = 0x1357;
+        let pre_host_clock = u32::from(pre_host_control)
+            | (u32::from(pre_power_control) << 8)
+            | (u32::from(pre_clock_control) << 16);
+        let pre_block = 0x2468_ace0;
+        let pre_dma_cs = BCM2835_DMA_CS_ACTIVE | BCM2835_DMA_CS_ERR;
+        let pre_dma_conblk = 0x4444_0004;
+        let pre_dma_next = 0x5555_0005;
+        let pre_dma_ti = 0x1111_0001;
+        let pre_dma_source = 0x2222_0002;
+        let pre_dma_dest = 0x3333_0003;
+        let pre_dma_len = 0x6666_0006;
+        let pre_dma_stride = 0x7777_0007;
+        let pre_dma_debug = 0x8888_0008;
+        io.set_register(SDHCI_INT_STATUS, pre_status);
+        io.set_register(SDHCI_PRESENT_STATE, pre_present);
+        io.set_register(SDHCI_RESPONSE, pre_response);
+        let host_word = sdio_merge_u8_word(0, SDHCI_HOST_CONTROL, pre_host_control);
+        let host_word = sdio_merge_u8_word(host_word, SDHCI_POWER_CONTROL, pre_power_control);
+        io.set_register(SDHCI_HOST_CONTROL, host_word);
+        io.set_register(
+            SDHCI_CLOCK_CONTROL,
+            sdio_merge_u16_word(0, SDHCI_CLOCK_CONTROL, pre_clock_control),
+        );
+        io.set_register(SDHCI_BLOCK_SIZE, pre_block);
+        io.dma_cs = pre_dma_cs;
+        io.dma_conblk = pre_dma_conblk;
+        io.dma_next = pre_dma_next;
+        io.dma_ti = pre_dma_ti;
+        io.dma_source = pre_dma_source;
+        io.dma_dest = pre_dma_dest;
+        io.dma_len = pre_dma_len;
+        io.dma_stride = pre_dma_stride;
+        io.dma_debug = pre_dma_debug;
+        io.dma_reset_destructive_failure = true;
+        io.scrub_diagnostic_registers_on_reset = true;
+        let cursor = SdioExternalDmaRequestCursor {
+            phase: SdioExternalDmaRequestPhase::ContainDmaInspect,
+            identity: SdioExternalDmaRequestIdentity {
+                sequence: 0x434f_4e46,
+                descriptor,
+                arg: descriptor.addr,
+                owner_timeout_us: descriptor.timeout_us,
+                ..SdioExternalDmaRequestIdentity::empty()
+            },
+            deadline: RuntimeDeadline::Iterations { remaining: 0 },
+            containment_resume: SdioRetainedContainmentResume::HostConfig,
+            ..SdioExternalDmaRequestCursor::idle()
+        };
+
+        assert_eq!(
+            sdio_retained_containment_turn_with(cursor, &mut io),
+            RuntimeCommandTurn::Pending,
+        );
+        let retained = SDIO_RUNTIME_STATE.with_ref(|state| state.external_dma_request);
+        assert_eq!(
+            retained.failure_result,
+            sdio_transfer_failure_result(
+                SDIO_TRANSFER_FAILURE_STAGE_CONTAINMENT,
+                u32::from(SDIO_CONTAINMENT_FAILURE_DMA_VERIFY),
+            ),
+            "retained={retained:?}",
+        );
+        assert_eq!(
+            retained.containment_failure_phase, SDIO_CONTAINMENT_FAILURE_DMA_VERIFY,
+            "later recovery writes cannot replace the first causal phase",
+        );
+        assert!(retained.failure_snapshot_valid);
+        assert_eq!(retained.failure_snapshot.status, pre_status);
+        assert_eq!(retained.failure_snapshot.present, pre_present);
+        assert_eq!(retained.failure_snapshot.response0, pre_response);
+        assert_eq!(retained.failure_snapshot.host_clock, pre_host_clock);
+        assert_eq!(retained.failure_snapshot.block_reg, pre_block);
+        assert_eq!(retained.failure_snapshot.dma_cs, pre_dma_cs);
+        assert_eq!(retained.failure_snapshot.dma_conblk, pre_dma_conblk);
+        assert_eq!(retained.failure_snapshot.dma_next, pre_dma_next);
+        assert_eq!(retained.failure_snapshot.dma_ti, pre_dma_ti);
+        assert_eq!(retained.failure_snapshot.dma_source, pre_dma_source);
+        assert_eq!(retained.failure_snapshot.dma_dest, pre_dma_dest);
+        assert_eq!(retained.failure_snapshot.dma_len, pre_dma_len);
+        assert_eq!(retained.failure_snapshot.dma_stride, pre_dma_stride);
+        assert_eq!(retained.failure_snapshot.dma_debug, pre_dma_debug);
+        assert_ne!(
+            io.register(SDHCI_RESPONSE),
+            pre_response,
+            "the test must prove reset writes actually destroy live controller evidence",
+        );
+        assert_ne!(
+            io.register(SDHCI_BLOCK_SIZE),
+            pre_block,
+            "the test must prove the retained block sample predates reset mutation",
+        );
+        for (live, before, register) in [
+            (io.dma_cs, pre_dma_cs, "CS"),
+            (io.dma_conblk, pre_dma_conblk, "CONBLK"),
+            (io.dma_next, pre_dma_next, "NEXTCONBK"),
+            (io.dma_ti, pre_dma_ti, "TI"),
+            (io.dma_source, pre_dma_source, "SOURCE_AD"),
+            (io.dma_dest, pre_dma_dest, "DEST_AD"),
+            (io.dma_len, pre_dma_len, "TXFR_LEN"),
+            (io.dma_stride, pre_dma_stride, "STRIDE"),
+            (io.dma_debug, pre_dma_debug, "DEBUG"),
+        ] {
+            assert_ne!(
+                live, before,
+                "the destructive failing reset must change live DMA {register}",
+            );
+        }
+        assert_eq!(
+            retained.failure_frame.offset,
+            SDIO_FAULT_TELEMETRY_FRAME_OFFSET as u32,
+        );
+        assert_eq!(retained.failure_frame.len, SDIO_FAULT_TELEMETRY_BYTES);
+        assert_eq!(
+            retained.failure_frame.flags,
+            DRIVER_RUNTIME_SDIO_FAULT_FRAME_FLAG_OWNER_PATH_POISONED,
+        );
+        assert_eq!(
+            u32::from_le_bytes(core::array::from_fn(|index| {
+                io.payload[SDIO_FAULT_TELEMETRY_FRAME_OFFSET
+                    + SDIO_FAULT_TELEMETRY_FAILURE_OFFSET
+                    + index]
+            })),
+            retained.failure_result,
+        );
+        for (offset, expected) in [
+            (SDIO_FAULT_TELEMETRY_PRESENT_OFFSET, pre_present),
+            (SDIO_FAULT_TELEMETRY_INT_STATUS_OFFSET, pre_status),
+            (SDIO_FAULT_TELEMETRY_RESPONSE0_OFFSET, pre_response),
+            (SDIO_FAULT_TELEMETRY_HOST_CLOCK_OFFSET, pre_host_clock),
+            (SDIO_FAULT_TELEMETRY_BLOCK_REG_OFFSET, pre_block),
+            (SDIO_FAULT_TELEMETRY_DMA_CS_OFFSET, pre_dma_cs),
+            (SDIO_FAULT_TELEMETRY_DMA_CONBLK_AD_OFFSET, pre_dma_conblk),
+            (SDIO_FAULT_TELEMETRY_DMA_NEXTCB_OFFSET, pre_dma_next),
+            (SDIO_FAULT_TELEMETRY_DMA_TI_OFFSET, pre_dma_ti),
+            (SDIO_FAULT_TELEMETRY_DMA_SOURCE_OFFSET, pre_dma_source),
+            (SDIO_FAULT_TELEMETRY_DMA_DEST_OFFSET, pre_dma_dest),
+            (SDIO_FAULT_TELEMETRY_DMA_LEN_OFFSET, pre_dma_len),
+            (SDIO_FAULT_TELEMETRY_DMA_STRIDE_OFFSET, pre_dma_stride),
+            (SDIO_FAULT_TELEMETRY_DMA_DEBUG_OFFSET, pre_dma_debug),
+        ] {
+            assert_eq!(
+                u32::from_le_bytes(core::array::from_fn(|index| {
+                    io.payload[SDIO_FAULT_TELEMETRY_FRAME_OFFSET + offset + index]
+                })),
+                expected,
+                "fault-frame offset {offset} must retain the pre-recovery sample",
+            );
+        }
+    }
+
+    #[test]
+    fn successful_host_config_containment_discards_pre_recovery_snapshot() {
+        let _guard = test_guard();
+        reset_sdio_descriptor_seam_for_test();
+        let descriptor = DriverRuntimeSdioCommandDescriptor {
+            op: DRIVER_RUNTIME_SDIO_OP_HOST_CONFIG,
+            addr: CYW43_SDIO_FAST_CLOCK_HZ,
+            ..DriverRuntimeSdioCommandDescriptor::empty()
+        };
+        let cursor = SdioExternalDmaRequestCursor {
+            phase: SdioExternalDmaRequestPhase::ContainFinish,
+            identity: SdioExternalDmaRequestIdentity {
+                sequence: 0x434f_4e53,
+                descriptor,
+                arg: descriptor.addr,
+                ..SdioExternalDmaRequestIdentity::empty()
+            },
+            containment_resume: SdioRetainedContainmentResume::HostConfig,
+            containment_dma_ok: true,
+            containment_host_ok: true,
+            failure_snapshot_valid: true,
+            failure_snapshot: SdioExternalDmaRequestSnapshot {
+                status: 0xfeed_0001,
+                ..SdioExternalDmaRequestSnapshot::empty()
+            },
+            ..SdioExternalDmaRequestCursor::idle()
+        };
+        let mut io = TestSdioHostIo::new();
+
+        assert_eq!(
+            sdio_retained_containment_finish(cursor, &mut io),
+            RuntimeCommandTurn::Pending,
+        );
+        let retained = SDIO_RUNTIME_STATE.with_ref(|state| state.external_dma_request);
+        assert!(!retained.failure_snapshot_valid);
+        assert_eq!(
+            retained.failure_snapshot,
+            SdioExternalDmaRequestSnapshot::empty(),
+            "a later HOST_CONFIG fault must capture state after successful containment",
+        );
     }
 
     #[test]

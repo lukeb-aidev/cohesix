@@ -49,7 +49,8 @@ use crate::net::{
 #[cfg(feature = "kernel")]
 use pi4_driver_abi::DRIVER_RUNTIME_COMMAND_FLAG_PERSISTENT_TRANSACTION;
 use pi4_driver_abi::{
-    driver_runtime_cyw43_armcr4_reset_result_edge, driver_runtime_genet_result_is_packed,
+    driver_runtime_cyw43_armcr4_reset_result_edge,
+    driver_runtime_genet_result_command_rx_drain_seen, driver_runtime_genet_result_is_packed,
     driver_runtime_genet_result_rx_byte_budget_hit,
     driver_runtime_genet_result_rx_drain_budget_hit,
     driver_runtime_genet_result_rx_max_drained_per_turn,
@@ -536,6 +537,7 @@ static GENET_RX_RUNTIME_QUEUE_OVERFLOW_SEEN: AtomicU32 = AtomicU32::new(0);
 static GENET_RX_RUNTIME_DRAIN_BUDGET_HIT: AtomicU32 = AtomicU32::new(0);
 static GENET_RX_RUNTIME_BYTE_BUDGET_HIT: AtomicU32 = AtomicU32::new(0);
 static GENET_RX_RUNTIME_MAX_DRAINED_PER_TURN: AtomicU32 = AtomicU32::new(0);
+static GENET_RX_RUNTIME_COMMAND_DRAIN_SEEN: AtomicU32 = AtomicU32::new(0);
 static GENET_PENDING_RX_HIGH_WATER: AtomicU32 = AtomicU32::new(0);
 static GENET_PENDING_RX_DROPS: AtomicU32 = AtomicU32::new(0);
 static GENET_ARP_RX: AtomicU32 = AtomicU32::new(0);
@@ -5188,8 +5190,9 @@ static CYW43_LAST_SDIO_OWNER_FAULT: Mutex<Option<Cyw43SdioOwnerFaultStatus>> = M
 #[cfg(feature = "kernel")]
 static CYW43_BOOTSTRAP_CAUSAL_CAPTURE_ACTIVE: AtomicU32 = AtomicU32::new(0);
 #[cfg(feature = "kernel")]
-static CYW43_BOOTSTRAP_CAUSAL_RUNTIME_COMMAND_FAULT: Mutex<Option<Cyw43RuntimeCommandFaultStatus>> =
-    Mutex::new(None);
+static CYW43_BOOTSTRAP_CAUSAL_RUNTIME_COMMAND_FAULT: Mutex<
+    Option<Cyw43RuntimeCommandFaultCapture>,
+> = Mutex::new(None);
 #[cfg(feature = "kernel")]
 static CYW43_BOOTSTRAP_CAUSAL_SDIO_OWNER_FAULT: Mutex<Option<Cyw43SdioOwnerFaultStatus>> =
     Mutex::new(None);
@@ -5213,6 +5216,18 @@ pub(crate) struct Cyw43RuntimeCommandFaultStatus {
     pub detail: u16,
     pub reason: &'static str,
     pub result: u32,
+}
+
+/// Immutable identity paired with the first retained bootstrap command fault.
+///
+/// The command sequence is kept beside the fault under one lock so compact
+/// diagnostics cannot correlate a first-fault status with a later same-shaped
+/// CYW43/SDIO bus episode.
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Cyw43RuntimeCommandFaultCapture {
+    sequence: u32,
+    status: Cyw43RuntimeCommandFaultStatus,
 }
 
 #[cfg(feature = "kernel")]
@@ -12715,7 +12730,16 @@ pub(crate) fn latest_cyw43_sdio_owner_fault_status() -> Option<Cyw43SdioOwnerFau
 #[cfg(feature = "kernel")]
 pub(crate) fn bootstrap_causal_cyw43_runtime_command_fault_status(
 ) -> Option<Cyw43RuntimeCommandFaultStatus> {
-    *CYW43_BOOTSTRAP_CAUSAL_RUNTIME_COMMAND_FAULT.lock()
+    CYW43_BOOTSTRAP_CAUSAL_RUNTIME_COMMAND_FAULT
+        .lock()
+        .map(|capture| capture.status)
+}
+
+#[cfg(feature = "kernel")]
+pub(crate) fn bootstrap_causal_cyw43_runtime_command_fault_sequence() -> u32 {
+    CYW43_BOOTSTRAP_CAUSAL_RUNTIME_COMMAND_FAULT
+        .lock()
+        .map_or(0, |capture| capture.sequence)
 }
 
 #[cfg(feature = "kernel")]
@@ -12751,19 +12775,29 @@ fn finish_cyw43_bootstrap_causal_fault_capture() {
 
 #[cfg(feature = "kernel")]
 fn record_cyw43_runtime_command_fault_status(status: Cyw43RuntimeCommandFaultStatus) {
+    record_cyw43_runtime_command_fault_status_with_sequence(status, 0);
+}
+
+#[cfg(feature = "kernel")]
+fn record_cyw43_runtime_command_fault_status_with_sequence(
+    status: Cyw43RuntimeCommandFaultStatus,
+    sequence: u32,
+) {
     *CYW43_LAST_RUNTIME_COMMAND_FAULT.lock() = Some(status);
     if CYW43_BOOTSTRAP_CAUSAL_CAPTURE_ACTIVE.load(Ordering::Acquire) != 0 {
         let mut causal = CYW43_BOOTSTRAP_CAUSAL_RUNTIME_COMMAND_FAULT.lock();
         if causal.is_none() {
-            *causal = Some(status);
+            *causal = Some(Cyw43RuntimeCommandFaultCapture { sequence, status });
         }
     }
 }
 
 #[cfg(feature = "kernel")]
-fn record_cyw43_sdio_owner_fault_status(status: Cyw43SdioOwnerFaultStatus) {
+fn record_cyw43_sdio_owner_fault_status(status: Cyw43SdioOwnerFaultStatus, parent_sequence: u32) {
     *CYW43_LAST_SDIO_OWNER_FAULT.lock() = Some(status);
     if CYW43_BOOTSTRAP_CAUSAL_CAPTURE_ACTIVE.load(Ordering::Acquire) == 0
+        || parent_sequence == 0
+        || bootstrap_causal_cyw43_runtime_command_fault_sequence() != parent_sequence
         || bootstrap_causal_cyw43_runtime_command_fault_status()
             != latest_cyw43_runtime_command_fault_status()
     {
@@ -22015,22 +22049,25 @@ fn record_cyw43_control_split_failure(
 ) {
     let (detail, result) =
         completion.map_or((0, 0), |completion| (completion.detail, completion.result));
-    record_cyw43_runtime_command_fault_status(Cyw43RuntimeCommandFaultStatus {
-        stage,
-        op: descriptor.op,
-        flags: descriptor.flags,
-        target_addr: descriptor.target_addr,
-        payload_offset: descriptor.payload_offset,
-        payload_len: descriptor.payload_len,
-        total_len: descriptor.total_len,
-        control_cmd: expected_cmd,
-        control_id: expected_id,
-        control_header_mode: header_mode.as_str(),
-        control_response_len: expected_response_len,
-        detail,
-        reason,
-        result,
-    });
+    record_cyw43_runtime_command_fault_status_with_sequence(
+        Cyw43RuntimeCommandFaultStatus {
+            stage,
+            op: descriptor.op,
+            flags: descriptor.flags,
+            target_addr: descriptor.target_addr,
+            payload_offset: descriptor.payload_offset,
+            payload_len: descriptor.payload_len,
+            total_len: descriptor.total_len,
+            control_cmd: expected_cmd,
+            control_id: expected_id,
+            control_header_mode: header_mode.as_str(),
+            control_response_len: expected_response_len,
+            detail,
+            reason,
+            result,
+        },
+        completion.map_or(0, |completion| completion.sequence),
+    );
     *CYW43_LAST_SDIO_OWNER_FAULT.lock() = None;
     if let Some(completion) = completion {
         emit_cyw43_control_split_completion(
@@ -23867,25 +23904,28 @@ fn emit_cyw43_runtime_command_fault_with_retention(
     CYW43_RUNTIME_COMMAND_FAULT_EMISSIONS.fetch_add(1, Ordering::AcqRel);
     let reason = cyw43_runtime_fault_reason_for_descriptor(descriptor, completion);
     if retain_fault {
-        record_cyw43_runtime_command_fault_status(Cyw43RuntimeCommandFaultStatus {
-            stage,
-            op: descriptor.op,
-            flags: descriptor.flags,
-            target_addr: descriptor.target_addr,
-            payload_offset: descriptor.payload_offset,
-            payload_len: descriptor.payload_len,
-            total_len: descriptor.total_len,
-            control_cmd: cyw43_descriptor_control_cmd(descriptor),
-            control_id: cyw43_descriptor_control_id(descriptor),
-            control_header_mode: cyw43_descriptor_control_header_mode(descriptor),
-            control_response_len: cyw43_control_request_expected_response_len(
-                cyw43_descriptor_control_cmd(descriptor),
-                None,
-            ) as u16,
-            detail: completion.detail,
-            reason,
-            result: completion.result,
-        });
+        record_cyw43_runtime_command_fault_status_with_sequence(
+            Cyw43RuntimeCommandFaultStatus {
+                stage,
+                op: descriptor.op,
+                flags: descriptor.flags,
+                target_addr: descriptor.target_addr,
+                payload_offset: descriptor.payload_offset,
+                payload_len: descriptor.payload_len,
+                total_len: descriptor.total_len,
+                control_cmd: cyw43_descriptor_control_cmd(descriptor),
+                control_id: cyw43_descriptor_control_id(descriptor),
+                control_header_mode: cyw43_descriptor_control_header_mode(descriptor),
+                control_response_len: cyw43_control_request_expected_response_len(
+                    cyw43_descriptor_control_cmd(descriptor),
+                    None,
+                ) as u16,
+                detail: completion.detail,
+                reason,
+                result: completion.result,
+            },
+            completion.sequence,
+        );
         *CYW43_LAST_SDIO_OWNER_FAULT.lock() = None;
     }
     if !cyw43_runtime_command_fault_uart_trace_enabled(stage, completion) {
@@ -24227,7 +24267,7 @@ fn emit_cyw43_sdio_owner_fault_snapshot(
     let ai_control_primary = emission.ai_control_primary;
     let owner_window = emission.status.owner_window;
     let retry = emission.status.retry;
-    record_cyw43_sdio_owner_fault_status(emission.status);
+    record_cyw43_sdio_owner_fault_status(emission.status, completion.sequence);
     let mut line = heapless::String::<1024>::new();
     let _ = write!(
         line,
@@ -24559,6 +24599,9 @@ const fn sdio_transfer_failure_stage_label(result: u32) -> &'static str {
         4 => "data-end",
         5 => "response",
         6 => "post-issue-quiesce",
+        7 => "preissue-dpc-fence",
+        8 => "preissue-status-clear",
+        9 => "containment",
         _ => "unknown",
     }
 }
@@ -24632,6 +24675,25 @@ const fn sdio_transfer_finish_error_label(status: u32) -> &'static str {
 }
 
 #[cfg(feature = "kernel")]
+const fn sdio_containment_failure_reason_label(status: u32) -> &'static str {
+    match status {
+        1 => "sdio-containment-dma-abort-timeout",
+        2 => "sdio-containment-dma-verify",
+        3 => "sdio-containment-host-reset1-injected",
+        4 => "sdio-containment-host-reset1-timeout",
+        5 => "sdio-containment-clock-settle1-timeout",
+        6 => "sdio-containment-host-reset2-injected",
+        7 => "sdio-containment-host-reset2-timeout",
+        8 => "sdio-containment-clock-settle2-timeout",
+        9 => "sdio-containment-final-inhibit-timeout",
+        10 => "sdio-containment-final-host-not-quiescent",
+        11 => "sdio-containment-final-dma-not-quiescent",
+        12 => "sdio-containment-unclassified",
+        _ => "sdio-containment-unknown",
+    }
+}
+
+#[cfg(feature = "kernel")]
 const fn sdio_transfer_failure_reason_label(result: u32) -> &'static str {
     let status = sdio_transfer_failure_status(result);
     match (result >> 24) & 0xff {
@@ -24649,6 +24711,9 @@ const fn sdio_transfer_failure_reason_label(result: u32) -> &'static str {
         4 => sdio_transfer_finish_error_label(status),
         5 => "sdio-r5-response",
         6 => "sdhci-post-issue-quiesce",
+        7 => "sdio-preissue-dpc-fence-deferred",
+        8 => "sdhci-preissue-status-clear-timeout",
+        9 => sdio_containment_failure_reason_label(status),
         2 => "sdhci-command",
         1 => "sdhci-inhibit",
         _ => "unknown",
@@ -27033,6 +27098,9 @@ fn record_genet_rx_runtime_backlog(result: u32) {
     }
     if driver_runtime_genet_result_rx_overflow_seen(result) {
         GENET_RX_RUNTIME_QUEUE_OVERFLOW_SEEN.store(1, Ordering::Release);
+    }
+    if driver_runtime_genet_result_command_rx_drain_seen(result) {
+        GENET_RX_RUNTIME_COMMAND_DRAIN_SEEN.store(1, Ordering::Release);
     }
 }
 
@@ -30718,6 +30786,14 @@ macro_rules! driver_task_nic {
                         DriverTaskHotPath::GenetNic
                     ) {
                         GENET_RX_RUNTIME_MAX_DRAINED_PER_TURN.load(Ordering::Acquire) as u64
+                    } else {
+                        0
+                    },
+                    genet_rx_runtime_command_drain_seen: if matches!(
+                        DriverTaskHotPath::$hot_path,
+                        DriverTaskHotPath::GenetNic
+                    ) {
+                        GENET_RX_RUNTIME_COMMAND_DRAIN_SEEN.load(Ordering::Acquire) as u64
                     } else {
                         0
                     },
@@ -53583,6 +53659,50 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
+    fn sdio_transfer_failure_reason_decodes_preissue_and_containment() {
+        assert_eq!(
+            sdio_transfer_failure_stage_label(7 << 24),
+            "preissue-dpc-fence"
+        );
+        assert_eq!(
+            sdio_transfer_failure_reason_label(7 << 24),
+            "sdio-preissue-dpc-fence-deferred"
+        );
+        assert_eq!(
+            sdio_transfer_failure_stage_label((8 << 24) | 1),
+            "preissue-status-clear"
+        );
+        assert_eq!(
+            sdio_transfer_failure_reason_label((8 << 24) | 1),
+            "sdhci-preissue-status-clear-timeout"
+        );
+        for (phase, reason) in [
+            (1, "sdio-containment-dma-abort-timeout"),
+            (2, "sdio-containment-dma-verify"),
+            (3, "sdio-containment-host-reset1-injected"),
+            (4, "sdio-containment-host-reset1-timeout"),
+            (5, "sdio-containment-clock-settle1-timeout"),
+            (6, "sdio-containment-host-reset2-injected"),
+            (7, "sdio-containment-host-reset2-timeout"),
+            (8, "sdio-containment-clock-settle2-timeout"),
+            (9, "sdio-containment-final-inhibit-timeout"),
+            (10, "sdio-containment-final-host-not-quiescent"),
+            (11, "sdio-containment-final-dma-not-quiescent"),
+            (12, "sdio-containment-unclassified"),
+            (13, "sdio-containment-unknown"),
+        ] {
+            let result = (9 << 24) | phase;
+            assert_eq!(sdio_transfer_failure_stage_label(result), "containment");
+            assert_eq!(
+                sdio_transfer_failure_reason_label(result),
+                reason,
+                "containment phase {phase}",
+            );
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
     fn sdio_owner_fault_decodes_function2_byte_count_separately_from_host_block_count() {
         let txglomalign = SdioFaultTelemetry {
             arg: 0xa500_0030,
@@ -55399,16 +55519,32 @@ mod tests {
         };
 
         begin_cyw43_bootstrap_causal_fault_capture();
-        record_cyw43_runtime_command_fault_status(first);
-        record_cyw43_sdio_owner_fault_status(first_owner);
-        record_cyw43_runtime_command_fault_status(later);
-        record_cyw43_sdio_owner_fault_status(later_owner);
+        record_cyw43_runtime_command_fault_status_with_sequence(first, 41);
+        record_cyw43_runtime_command_fault_status_with_sequence(first, 42);
+        record_cyw43_sdio_owner_fault_status(first_owner, 42);
+        assert_eq!(
+            bootstrap_causal_cyw43_sdio_owner_fault_status(),
+            None,
+            "a later same-shaped fault cannot donate owner evidence to the first sequence",
+        );
+
+        test_clear_cyw43_runtime_replay_status();
+        begin_cyw43_bootstrap_causal_fault_capture();
+        record_cyw43_runtime_command_fault_status_with_sequence(first, 41);
+        record_cyw43_sdio_owner_fault_status(first_owner, 41);
+        record_cyw43_runtime_command_fault_status_with_sequence(later, 42);
+        record_cyw43_sdio_owner_fault_status(later_owner, 42);
 
         assert_eq!(latest_cyw43_runtime_command_fault_status(), Some(later));
         assert_eq!(latest_cyw43_sdio_owner_fault_status(), Some(later_owner));
         assert_eq!(
             bootstrap_causal_cyw43_runtime_command_fault_status(),
             Some(first)
+        );
+        assert_eq!(
+            bootstrap_causal_cyw43_runtime_command_fault_sequence(),
+            41,
+            "the immutable first fault must retain its exact parent sequence",
         );
         assert_eq!(
             bootstrap_causal_cyw43_sdio_owner_fault_status(),
@@ -55420,12 +55556,17 @@ mod tests {
             bootstrap_causal_cyw43_runtime_command_fault_status(),
             Some(first)
         );
-        record_cyw43_runtime_command_fault_status(later);
-        record_cyw43_sdio_owner_fault_status(later_owner);
+        record_cyw43_runtime_command_fault_status_with_sequence(later, 43);
+        record_cyw43_sdio_owner_fault_status(later_owner, 43);
         assert_eq!(
             bootstrap_causal_cyw43_runtime_command_fault_status(),
             Some(first),
             "retained retries must not erase the first causal fault",
+        );
+        assert_eq!(
+            bootstrap_causal_cyw43_runtime_command_fault_sequence(),
+            41,
+            "retained retries must not rewrite the first parent sequence",
         );
         assert_eq!(
             bootstrap_causal_cyw43_sdio_owner_fault_status(),
@@ -56475,6 +56616,7 @@ mod tests {
         GENET_RX_RUNTIME_DRAIN_BUDGET_HIT.store(0, Ordering::Release);
         GENET_RX_RUNTIME_BYTE_BUDGET_HIT.store(0, Ordering::Release);
         GENET_RX_RUNTIME_MAX_DRAINED_PER_TURN.store(0, Ordering::Release);
+        GENET_RX_RUNTIME_COMMAND_DRAIN_SEEN.store(0, Ordering::Release);
 
         record_genet_runtime_completion(DriverTaskCompletionRecord {
             sequence: 1,
@@ -56501,6 +56643,7 @@ mod tests {
                     rx_drain_budget_hit: true,
                     rx_byte_budget_hit: false,
                     rx_overflow_seen: true,
+                    command_rx_drain_seen: true,
                 },
             ),
             frame: DriverFrameDescriptor {
@@ -56546,6 +56689,7 @@ mod tests {
         assert_eq!(counters.genet_rx_runtime_drain_budget_hit, 1);
         assert_eq!(counters.genet_rx_runtime_byte_budget_hit, 0);
         assert_eq!(counters.genet_rx_runtime_max_drained_per_turn, 9);
+        assert_eq!(counters.genet_rx_runtime_command_drain_seen, 1);
 
         GENET_TX_HW_COMPLETED.store(0, Ordering::Release);
         GENET_TX_HW_FREE.store(0, Ordering::Release);
@@ -56559,6 +56703,7 @@ mod tests {
         GENET_RX_RUNTIME_DRAIN_BUDGET_HIT.store(0, Ordering::Release);
         GENET_RX_RUNTIME_BYTE_BUDGET_HIT.store(0, Ordering::Release);
         GENET_RX_RUNTIME_MAX_DRAINED_PER_TURN.store(0, Ordering::Release);
+        GENET_RX_RUNTIME_COMMAND_DRAIN_SEEN.store(0, Ordering::Release);
     }
 
     #[cfg(feature = "kernel")]

@@ -3088,6 +3088,10 @@ enum PhysicalResponseBarrier {
     TailInFlight,
 }
 
+#[cfg(feature = "kernel")]
+const LINKED_SERIAL_TRANSPORT_FAILURE_RECORD: &str =
+    "SERIAL_TRANSPORT status=failed reason=linked-runtime-generation-poisoned response=aborted local-seat=unblocked owner-fallback=none";
+
 #[cfg(feature = "net-console")]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct PendingNetFlush {
@@ -4778,6 +4782,8 @@ where
     #[cfg(feature = "kernel")]
     containment_diagnostic_output_phase: ContainmentDiagnosticOutputPhase,
     physical_response_barrier: PhysicalResponseBarrier,
+    physical_serial_transport_failed: bool,
+    physical_serial_output_aborted: u64,
     #[cfg(feature = "kernel")]
     serial_input_idle_trace_next_ms: u64,
     #[cfg(feature = "kernel")]
@@ -5459,6 +5465,8 @@ where
             #[cfg(feature = "kernel")]
             containment_diagnostic_output_phase: ContainmentDiagnosticOutputPhase::Admit,
             physical_response_barrier: PhysicalResponseBarrier::Idle,
+            physical_serial_transport_failed: false,
+            physical_serial_output_aborted: 0,
             #[cfg(feature = "kernel")]
             serial_input_idle_trace_next_ms: 0,
             #[cfg(feature = "kernel")]
@@ -10866,6 +10874,18 @@ where
         kind: PendingConsoleOutputKind,
         text: &str,
     ) -> bool {
+        if self.physical_serial_transport_failed {
+            // The linked generation is terminally poisoned. Treat this exact
+            // serial-only record as retired so its producer cannot fill the
+            // bounded queue or re-fence independent local-seat input. Callers
+            // still mirror response content to the existing HDMI path.
+            self.physical_serial_output_aborted =
+                self.physical_serial_output_aborted.saturating_add(1);
+            if kind.is_response_tail() {
+                self.physical_response_barrier = PhysicalResponseBarrier::Idle;
+            }
+            return true;
+        }
         let high_impact = kind.is_high_impact();
         let response_ordered = !kind.is_background()
             && !high_impact
@@ -10968,6 +10988,12 @@ where
 
     #[cfg(feature = "kernel")]
     fn queue_containment_diagnostic(&mut self, text: &str) -> bool {
+        if self.physical_serial_transport_failed {
+            let _ = text;
+            self.physical_serial_output_aborted =
+                self.physical_serial_output_aborted.saturating_add(1);
+            return true;
+        }
         if !self.containment_diagnostic_queue_has_capacity() {
             self.metrics.physical_console_output_backpressure = self
                 .metrics
@@ -11356,11 +11382,39 @@ where
     }
 
     fn reconcile_physical_response_barrier(&mut self) {
-        if self.physical_response_barrier != PhysicalResponseBarrier::TailInFlight {
-            return;
-        }
-        if self.serial.tx_drain_outcome() == crate::serial::SerialTxDrainOutcome::Complete {
-            self.physical_response_barrier = PhysicalResponseBarrier::Idle;
+        match self.serial.tx_drain_outcome() {
+            crate::serial::SerialTxDrainOutcome::Failed => {
+                let newly_failed = !self.physical_serial_transport_failed;
+                self.physical_serial_transport_failed = true;
+                let queued = self.pending_console_output.len() as u64;
+                let in_flight =
+                    u64::from(self.physical_response_barrier != PhysicalResponseBarrier::Idle);
+                self.physical_serial_output_aborted = self
+                    .physical_serial_output_aborted
+                    .saturating_add(queued)
+                    .saturating_add(in_flight);
+                // Every entry targets the same terminally poisoned serial
+                // owner. They were already mirrored or retained at their
+                // authoritative source, so keeping them could only consume
+                // bounded queue capacity and re-fence USB input.
+                self.pending_console_output.clear();
+                self.physical_response_barrier = PhysicalResponseBarrier::Idle;
+                #[cfg(feature = "kernel")]
+                if newly_failed {
+                    boot_log::force_log_buffer_line_or_uart_without_prompt_refresh(
+                        LINKED_SERIAL_TRANSPORT_FAILURE_RECORD,
+                    );
+                }
+                #[cfg(not(feature = "kernel"))]
+                let _ = newly_failed;
+            }
+            crate::serial::SerialTxDrainOutcome::Complete
+                if self.physical_response_barrier == PhysicalResponseBarrier::TailInFlight =>
+            {
+                self.physical_response_barrier = PhysicalResponseBarrier::Idle;
+            }
+            crate::serial::SerialTxDrainOutcome::Pending
+            | crate::serial::SerialTxDrainOutcome::Complete => {}
         }
     }
 
@@ -20186,9 +20240,28 @@ where
         let sdio_progress = crate::hal::driver_task::latest_driver_task_ring_progress(
             crate::hal::driver_task::SDIO_HOST_DRIVER_TASK_CONTRACT,
         );
+        let sdio_ring_snapshot = crate::hal::driver_task::driver_task_sdio_command_ring_snapshot();
+        let episode = crate::drivers::driver_task_net::cyw43_bus_episode_diagnostic();
+        let fault_parent_sequence =
+            crate::drivers::driver_task_net::bootstrap_causal_cyw43_runtime_command_fault_sequence(
+            );
+        let host_config_containment = fault.and_then(|fault| {
+            sdio_ring_snapshot.and_then(|ring| {
+                Self::wifi_sdio_host_config_containment_blocker(
+                    fault_parent_sequence,
+                    fault.op,
+                    fault.detail,
+                    fault.result,
+                    ring,
+                    episode,
+                )
+            })
+        });
         let (frontier_gate, frontier_status, frontier_blocker) =
             if let Some(failure) = bootstrap_failure {
                 (0, "fail", failure.reason.as_str())
+            } else if let Some(blocker) = host_config_containment {
+                (2, "fail", blocker)
             } else if let Some(fault) = fault {
                 (
                     cyw43_progress
@@ -20223,27 +20296,26 @@ where
         } else {
             "complete"
         };
-        let episode = crate::drivers::driver_task_net::cyw43_bus_episode_diagnostic();
         let grant = crate::hal::driver_task::driver_task_retained_grant_snapshot(
             crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT,
         );
         let wake = crate::hal::driver_task::cyw43_root_wake_snapshot();
-        let sdio_ring = crate::hal::driver_task::driver_task_sdio_command_ring_snapshot()
-            .map_or_else(
-                || format_message(format_args!("u")),
-                |ring| {
-                    format_message(format_args!(
-                        "{:08x}:{:04x}:{:04x}:{:08x}>{:08x}:{:04x}:{:04x}",
-                        ring.command_sequence,
-                        ring.command_opcode,
-                        ring.command_flags,
-                        ring.command_aux1,
-                        ring.completion_sequence,
-                        ring.completion_code,
-                        ring.completion_detail,
-                    ))
-                },
-            );
+        let sdio_ring = sdio_ring_snapshot.map_or_else(
+            || format_message(format_args!("u")),
+            |ring| {
+                format_message(format_args!(
+                    "{:08x}:{:04x}:{:04x}:{:08x}>{:08x}:{:04x}:{:04x}:{:08x}",
+                    ring.command_sequence,
+                    ring.command_opcode,
+                    ring.command_flags,
+                    ring.command_aux1,
+                    ring.completion_sequence,
+                    ring.completion_code,
+                    ring.completion_detail,
+                    ring.completion_result,
+                ))
+            },
+        );
         let mut lines = HeaplessVec::<
             HeaplessString<DEFAULT_LINE_CAPACITY>,
             WIFI_CAUSAL_DIAG_BODY_MAX_LINES,
@@ -24654,8 +24726,83 @@ where
             4 => "data-end",
             5 => "response",
             6 => "post-issue-quiesce",
+            7 => "preissue-dpc-fence",
+            8 => "preissue-status-clear",
+            9 => "containment",
             _ => "unknown",
         }
+    }
+
+    #[cfg(feature = "kernel")]
+    const fn wifi_sdio_containment_failure_phase(result: u32) -> &'static str {
+        if ((result >> 24) & 0xff) != 9 {
+            return "sdio-host-config-containment-unknown";
+        }
+        match result & 0x00ff_ffff {
+            1 => "sdio-host-config-containment-dma-abort-timeout",
+            2 => "sdio-host-config-containment-dma-verify",
+            3 => "sdio-host-config-containment-host-reset1-injected",
+            4 => "sdio-host-config-containment-host-reset1-timeout",
+            5 => "sdio-host-config-containment-clock-settle1-timeout",
+            6 => "sdio-host-config-containment-host-reset2-injected",
+            7 => "sdio-host-config-containment-host-reset2-timeout",
+            8 => "sdio-host-config-containment-clock-settle2-timeout",
+            9 => "sdio-host-config-containment-final-inhibit-timeout",
+            10 => "sdio-host-config-containment-final-host-not-quiescent",
+            11 => "sdio-host-config-containment-final-dma-not-quiescent",
+            12 => "sdio-host-config-containment-unclassified",
+            _ => "sdio-host-config-containment-unknown",
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_sdio_host_config_containment_blocker(
+        parent_sequence: u32,
+        parent_op: u16,
+        parent_detail: u16,
+        parent_result: u32,
+        ring: crate::hal::driver_task::DriverTaskSdioCommandRingSnapshot,
+        episode: Option<pi4_driver_abi::DriverRuntimeCyw43BusEpisodeRecord>,
+    ) -> Option<&'static str> {
+        let episode = episode?;
+        let expected_parent_result =
+            u32::from(pi4_driver_abi::DRIVER_RUNTIME_SDIO_OP_HOST_CONFIG) << 24;
+        let fault_code = crate::hal::driver_task::DriverTaskCompletionCode::Fault.as_u16();
+        if parent_sequence == 0
+            || parent_op != pi4_driver_abi::DRIVER_RUNTIME_CYW43_OP_TRANSPORT_INIT
+            || parent_detail != 0x5310
+            || parent_result != expected_parent_result
+            || ring.command_opcode != pi4_driver_abi::DRIVER_RUNTIME_SDIO_OP_HOST_CONFIG
+            || ring.command_sequence == 0
+            || ring.command_aux1 == 0
+            || ring.completion_sequence != ring.command_sequence
+            || ring.completion_code != fault_code
+            || ring.completion_detail != 0x5104
+            || ((ring.completion_result >> 24) & 0xff) != 9
+            || !episode.valid()
+            || episode.parent_sequence != parent_sequence
+            || episode.physical_epoch != ring.command_aux1
+            || episode.parent_op != parent_op
+            || episode.child_sequence != ring.command_sequence
+            || episode.child_code != ring.completion_code
+            || episode.child_detail != ring.completion_detail
+            || episode.child_result != ring.completion_result
+            || episode.child_engine
+                != pi4_driver_abi::DRIVER_RUNTIME_CYW43_BUS_EPISODE_CHILD_ENGINE_COMMAND
+            || episode.exit_reason != pi4_driver_abi::DRIVER_RUNTIME_CYW43_BUS_EPISODE_EXIT_FAULT
+            || episode.exit_detail != parent_detail
+            || episode.exit_result != parent_result
+            || episode.flags
+                & (pi4_driver_abi::DRIVER_RUNTIME_CYW43_BUS_EPISODE_FLAG_CHILD_TERMINAL
+                    | pi4_driver_abi::DRIVER_RUNTIME_CYW43_BUS_EPISODE_FLAG_FAULT)
+                != (pi4_driver_abi::DRIVER_RUNTIME_CYW43_BUS_EPISODE_FLAG_CHILD_TERMINAL
+                    | pi4_driver_abi::DRIVER_RUNTIME_CYW43_BUS_EPISODE_FLAG_FAULT)
+        {
+            return None;
+        }
+        Some(Self::wifi_sdio_containment_failure_phase(
+            ring.completion_result,
+        ))
     }
 
     #[cfg(feature = "kernel")]
@@ -26218,7 +26365,9 @@ where
                     output.kind = PendingConsoleOutputKind::BackgroundLine;
                 }
             }
-            self.physical_response_barrier = PhysicalResponseBarrier::AwaitingTail;
+            if !self.physical_serial_transport_failed {
+                self.physical_response_barrier = PhysicalResponseBarrier::AwaitingTail;
+            }
         }
         self.metrics.console_lines = self.metrics.console_lines.saturating_add(1);
         let prior_input_turn_active = self.console_input_turn_active;
@@ -26976,7 +27125,7 @@ where
                             stats.driver_rx_last_ethertype,
                         ));
                         let line_wired_rxq = format_message(format_args!(
-                            "netstats: genet_rxq runtime_cur={} runtime_hwm={} runtime_ovf={} runtime_max_drain={} runtime_drain_hit={} runtime_byte_hit={} root_cur={} root_hwm={} root_drops={}",
+                            "netstats: genet_rxq runtime_cur={} runtime_hwm={} runtime_ovf={} runtime_max_drain={} runtime_drain_hit={} runtime_byte_hit={} root_cur={} root_hwm={} root_drops={} runtime_cmd_drain_seen={}",
                             stats.genet_rx_runtime_queue_count,
                             stats.genet_rx_runtime_queue_high_water,
                             stats.genet_rx_runtime_queue_overflow_seen,
@@ -26986,6 +27135,7 @@ where
                             stats.genet_rx_pending_queue_count,
                             stats.genet_rx_pending_queue_high_water,
                             stats.genet_rx_pending_drops,
+                            stats.genet_rx_runtime_command_drain_seen,
                         ));
                         let line_six = format_message(format_args!(
                             "netstatus: generation={} ip={} gateway={} src={} dhcp={} tcp_ready={}",
@@ -29864,6 +30014,297 @@ mod tests {
         assert_eq!(
             TestPump::wifi_sdio_transfer_failure_stage((6 << 24) | 0x2),
             "post-issue-quiesce"
+        );
+        assert_eq!(
+            TestPump::wifi_sdio_transfer_failure_stage(7 << 24),
+            "preissue-dpc-fence"
+        );
+        assert_eq!(
+            TestPump::wifi_sdio_transfer_failure_stage(8 << 24),
+            "preissue-status-clear"
+        );
+        let containment = (9 << 24) | 4;
+        assert_eq!(
+            TestPump::wifi_sdio_transfer_failure_stage(containment),
+            "containment"
+        );
+        for (phase, blocker) in [
+            (1, "sdio-host-config-containment-dma-abort-timeout"),
+            (2, "sdio-host-config-containment-dma-verify"),
+            (3, "sdio-host-config-containment-host-reset1-injected"),
+            (4, "sdio-host-config-containment-host-reset1-timeout"),
+            (5, "sdio-host-config-containment-clock-settle1-timeout"),
+            (6, "sdio-host-config-containment-host-reset2-injected"),
+            (7, "sdio-host-config-containment-host-reset2-timeout"),
+            (8, "sdio-host-config-containment-clock-settle2-timeout"),
+            (9, "sdio-host-config-containment-final-inhibit-timeout"),
+            (10, "sdio-host-config-containment-final-host-not-quiescent"),
+            (11, "sdio-host-config-containment-final-dma-not-quiescent"),
+            (12, "sdio-host-config-containment-unclassified"),
+            (13, "sdio-host-config-containment-unknown"),
+        ] {
+            assert_eq!(
+                TestPump::wifi_sdio_containment_failure_phase((9 << 24) | phase),
+                blocker,
+                "containment phase {phase}",
+            );
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn wifi_diag_refines_only_exact_host_config_containment_tuple() {
+        type TestPump<'a> = EventPump<
+            'a,
+            LoopbackSerial<16>,
+            TestTimer,
+            NullIpc,
+            TicketTable<4>,
+            4,
+            4,
+            DEFAULT_LINE_CAPACITY,
+        >;
+
+        let containment = (9 << 24) | 4;
+        let parent_result = u32::from(pi4_driver_abi::DRIVER_RUNTIME_SDIO_OP_HOST_CONFIG) << 24;
+        let physical_epoch = 0x4359_5301;
+        let ring = crate::hal::driver_task::DriverTaskSdioCommandRingSnapshot {
+            command_sequence: 0xeff0_90d9,
+            command_opcode: pi4_driver_abi::DRIVER_RUNTIME_SDIO_OP_HOST_CONFIG,
+            command_flags: 0x2000,
+            command_aux0: 0,
+            command_aux1: physical_epoch,
+            completion_sequence: 0xeff0_90d9,
+            completion_code: crate::hal::driver_task::DriverTaskCompletionCode::Fault.as_u16(),
+            completion_detail: 0x5104,
+            completion_result: containment,
+            completion_frame: crate::hal::driver_task::DriverFrameDescriptor {
+                offset: 0,
+                len: 0,
+                flags: 0,
+            },
+            fault_frame: None,
+        };
+        let mut episode = pi4_driver_abi::DriverRuntimeCyw43BusEpisodeRecord::staged(
+            pi4_driver_abi::DriverRuntimeCyw43BusEpisodeStart {
+                publication_sequence: 1,
+                episode_sequence: 1,
+                logical_generation: 1,
+                physical_epoch,
+                parent_sequence: 0x5452_0001,
+                parent_op: pi4_driver_abi::DRIVER_RUNTIME_CYW43_OP_TRANSPORT_INIT,
+                cause: pi4_driver_abi::DRIVER_RUNTIME_CYW43_BUS_EPISODE_CAUSE_FOREGROUND,
+                first_cntvct: 1,
+            },
+        );
+        episode.child_sequence = ring.command_sequence;
+        episode.child_code = ring.completion_code;
+        episode.child_detail = ring.completion_detail;
+        episode.child_result = ring.completion_result;
+        episode.child_engine =
+            pi4_driver_abi::DRIVER_RUNTIME_CYW43_BUS_EPISODE_CHILD_ENGINE_COMMAND;
+        episode.child_irq_contract = pi4_driver_abi::DRIVER_RUNTIME_CYW43_BUS_EPISODE_CHILD_IRQ158;
+        episode.exit_reason = pi4_driver_abi::DRIVER_RUNTIME_CYW43_BUS_EPISODE_EXIT_FAULT;
+        episode.exit_detail = 0x5310;
+        episode.exit_result = parent_result;
+        episode.flags = pi4_driver_abi::DRIVER_RUNTIME_CYW43_BUS_EPISODE_FLAG_CHILD_TERMINAL
+            | pi4_driver_abi::DRIVER_RUNTIME_CYW43_BUS_EPISODE_FLAG_FAULT;
+        let episode = episode.commit();
+        assert!(episode.valid());
+        let parent_sequence = episode.parent_sequence;
+        assert_eq!(
+            TestPump::wifi_sdio_host_config_containment_blocker(
+                parent_sequence,
+                pi4_driver_abi::DRIVER_RUNTIME_CYW43_OP_TRANSPORT_INIT,
+                0x5310,
+                parent_result,
+                ring,
+                Some(episode),
+            ),
+            Some("sdio-host-config-containment-host-reset1-timeout")
+        );
+        let assert_rejected =
+            |label, parent_sequence, parent_op, parent_detail, parent_result, ring, episode| {
+                assert_eq!(
+                TestPump::wifi_sdio_host_config_containment_blocker(
+                    parent_sequence,
+                    parent_op,
+                    parent_detail,
+                    parent_result,
+                    ring,
+                    episode,
+                ),
+                None,
+                "{label}: only one correlated transport/child/episode terminal may refine gate 2",
+            );
+            };
+
+        assert_rejected(
+            "zero parent sequence",
+            0,
+            pi4_driver_abi::DRIVER_RUNTIME_CYW43_OP_TRANSPORT_INIT,
+            0x5310,
+            parent_result,
+            ring,
+            Some(episode),
+        );
+        assert_rejected(
+            "cross-sequence parent",
+            parent_sequence.wrapping_add(1),
+            pi4_driver_abi::DRIVER_RUNTIME_CYW43_OP_TRANSPORT_INIT,
+            0x5310,
+            parent_result,
+            ring,
+            Some(episode),
+        );
+        let mut cross_epoch_episode = episode;
+        cross_epoch_episode.physical_epoch = physical_epoch.wrapping_add(1);
+        assert_rejected(
+            "cross-epoch episode",
+            parent_sequence,
+            pi4_driver_abi::DRIVER_RUNTIME_CYW43_OP_TRANSPORT_INIT,
+            0x5310,
+            parent_result,
+            ring,
+            Some(cross_epoch_episode),
+        );
+        assert_rejected(
+            "cross-op parent",
+            parent_sequence,
+            pi4_driver_abi::DRIVER_RUNTIME_CYW43_OP_FIRMWARE_PREP,
+            0x5310,
+            parent_result,
+            ring,
+            Some(episode),
+        );
+        assert_rejected(
+            "wrong parent detail",
+            parent_sequence,
+            pi4_driver_abi::DRIVER_RUNTIME_CYW43_OP_TRANSPORT_INIT,
+            0x5104,
+            parent_result,
+            ring,
+            Some(episode),
+        );
+        assert_rejected(
+            "wrong parent result",
+            parent_sequence,
+            pi4_driver_abi::DRIVER_RUNTIME_CYW43_OP_TRANSPORT_INIT,
+            0x5310,
+            parent_result | 1,
+            ring,
+            Some(episode),
+        );
+
+        let mut mismatched = ring;
+        mismatched.command_opcode = pi4_driver_abi::DRIVER_RUNTIME_SDIO_OP_CMD52_READ;
+        assert_rejected(
+            "cross-op child",
+            parent_sequence,
+            pi4_driver_abi::DRIVER_RUNTIME_CYW43_OP_TRANSPORT_INIT,
+            0x5310,
+            parent_result,
+            mismatched,
+            Some(episode),
+        );
+        mismatched = ring;
+        mismatched.command_aux1 = 0;
+        assert_rejected(
+            "zero physical epoch",
+            parent_sequence,
+            pi4_driver_abi::DRIVER_RUNTIME_CYW43_OP_TRANSPORT_INIT,
+            0x5310,
+            parent_result,
+            mismatched,
+            Some(episode),
+        );
+        mismatched = ring;
+        mismatched.command_sequence = 0;
+        mismatched.completion_sequence = 0;
+        assert_rejected(
+            "zero child sequence",
+            parent_sequence,
+            pi4_driver_abi::DRIVER_RUNTIME_CYW43_OP_TRANSPORT_INIT,
+            0x5310,
+            parent_result,
+            mismatched,
+            Some(episode),
+        );
+        mismatched = ring;
+        mismatched.completion_sequence = ring.command_sequence.wrapping_add(1);
+        assert_rejected(
+            "cross-sequence ring",
+            parent_sequence,
+            pi4_driver_abi::DRIVER_RUNTIME_CYW43_OP_TRANSPORT_INIT,
+            0x5310,
+            parent_result,
+            mismatched,
+            Some(episode),
+        );
+        mismatched = ring;
+        mismatched.completion_code =
+            crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16();
+        assert_rejected(
+            "non-fault completion",
+            parent_sequence,
+            pi4_driver_abi::DRIVER_RUNTIME_CYW43_OP_TRANSPORT_INIT,
+            0x5310,
+            parent_result,
+            mismatched,
+            Some(episode),
+        );
+        mismatched = ring;
+        mismatched.completion_detail = 0x5103;
+        assert_rejected(
+            "wrong child detail",
+            parent_sequence,
+            pi4_driver_abi::DRIVER_RUNTIME_CYW43_OP_TRANSPORT_INIT,
+            0x5310,
+            parent_result,
+            mismatched,
+            Some(episode),
+        );
+        mismatched = ring;
+        mismatched.completion_result = 8 << 24;
+        assert_rejected(
+            "wrong child stage",
+            parent_sequence,
+            pi4_driver_abi::DRIVER_RUNTIME_CYW43_OP_TRANSPORT_INIT,
+            0x5310,
+            parent_result,
+            mismatched,
+            Some(episode),
+        );
+        assert_rejected(
+            "missing episode",
+            parent_sequence,
+            pi4_driver_abi::DRIVER_RUNTIME_CYW43_OP_TRANSPORT_INIT,
+            0x5310,
+            parent_result,
+            ring,
+            None,
+        );
+        let mut stale_episode = episode;
+        stale_episode.child_sequence = ring.command_sequence.wrapping_add(1);
+        assert_rejected(
+            "stale episode child",
+            parent_sequence,
+            pi4_driver_abi::DRIVER_RUNTIME_CYW43_OP_TRANSPORT_INIT,
+            0x5310,
+            parent_result,
+            ring,
+            Some(stale_episode),
+        );
+        let mut cross_op_episode = episode;
+        cross_op_episode.parent_op = pi4_driver_abi::DRIVER_RUNTIME_CYW43_OP_FIRMWARE_PREP;
+        assert_rejected(
+            "cross-op episode",
+            parent_sequence,
+            pi4_driver_abi::DRIVER_RUNTIME_CYW43_OP_TRANSPORT_INIT,
+            0x5310,
+            parent_result,
+            ring,
+            Some(cross_op_episode),
         );
     }
 
@@ -40276,7 +40717,8 @@ mod tests {
         assert!(
             mirrored
                 .iter()
-                .any(|line| line.starts_with("netstats: genet_rxq runtime_cur=0")),
+                .any(|line| line.starts_with("netstats: genet_rxq runtime_cur=0")
+                    && line.ends_with("runtime_cmd_drain_seen=0")),
             "{mirrored:?}"
         );
         assert!(
@@ -54127,6 +54569,250 @@ mod tests {
             PhysicalResponseBarrier::Idle
         );
         assert!(pump.pending_console_output.is_empty());
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn linked_serial_help_tail_preserves_usb_input_until_uart_idle_proof() {
+        struct LinkedRuntimeTestReset;
+
+        impl Drop for LinkedRuntimeTestReset {
+            fn drop(&mut self) {
+                crate::serial::test_end_linked_runtime_only_transport();
+            }
+        }
+
+        crate::serial::test_begin_linked_runtime_only_transport();
+        crate::serial::test_set_linked_runtime_only_tx_idle_misses(4);
+        let _reset = LinkedRuntimeTestReset;
+        let driver = LoopbackSerial::<32768>::new();
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::repeated(4096, 1);
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "ticket").unwrap();
+        let mut audit = AuditLog::new();
+        let mut local_seat = LocalSeatRuntime::new(crate::local_seat::LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 64,
+            buffer_lines: 8,
+        });
+        local_seat.mark_root_console_ready();
+        local_seat.enable_backend_keyboard_polling();
+        assert_eq!(
+            crate::serial::test_inject_linked_runtime_only_rx(b"help\n"),
+            5,
+        );
+
+        let mut pump =
+            EventPump::new(serial, timer, ipc, store, &mut audit).with_local_seat(&mut local_seat);
+        let mut transcript = Vec::new();
+        for _ in 0..4096 {
+            pump.poll();
+            transcript.extend(crate::serial::test_take_linked_runtime_only_tx());
+            if pump.physical_response_barrier == PhysicalResponseBarrier::TailInFlight
+                && pump.pending_console_output.is_empty()
+                && pump.serial.tx_drain_outcome() == crate::serial::SerialTxDrainOutcome::Pending
+            {
+                break;
+            }
+        }
+        assert!(
+            transcript
+                .windows(b"Commands:".len())
+                .any(|window| window == b"Commands:"),
+            "the shared parser must admit the complete serial help line",
+        );
+        assert_eq!(
+            pump.physical_response_barrier,
+            PhysicalResponseBarrier::TailInFlight,
+            "the response remains fenced until exact UART-idle proof",
+        );
+
+        let usb_start = transcript.len();
+        assert_eq!(
+            pump.local_seat
+                .as_mut()
+                .expect("local seat remains attached")
+                .enqueue_keyboard_bytes(b"ping\n"),
+            5,
+        );
+        let queued_before = pump
+            .local_seat
+            .as_ref()
+            .expect("local seat remains attached")
+            .keyboard_trace()
+            .queued_bytes;
+        pump.poll();
+        transcript.extend(crate::serial::test_take_linked_runtime_only_tx());
+        let trace_while_fenced = pump
+            .local_seat
+            .as_ref()
+            .expect("local seat remains attached")
+            .keyboard_trace();
+        assert_eq!(trace_while_fenced.queued_bytes, queued_before);
+        assert_eq!(trace_while_fenced.dropped_bytes, 0);
+        assert!(
+            !transcript[usb_start..]
+                .windows(b"PONG".len())
+                .any(|window| window == b"PONG"),
+            "USB input is retained, not dispatched out of response order",
+        );
+
+        for _ in 0..512 {
+            pump.poll();
+            transcript.extend(crate::serial::test_take_linked_runtime_only_tx());
+            if pump.physical_response_barrier == PhysicalResponseBarrier::Idle
+                && transcript[usb_start..]
+                    .windows(b"OK PING reply=pong".len())
+                    .any(|window| window == b"OK PING reply=pong")
+            {
+                break;
+            }
+        }
+        assert!(
+            transcript[usb_start..]
+                .windows(b"PONG".len())
+                .any(|window| window == b"PONG"),
+            "queued USB input must dispatch immediately after serial drain proof",
+        );
+        assert!(
+            transcript[usb_start..]
+                .windows(b"OK PING reply=pong".len())
+                .any(|window| window == b"OK PING reply=pong"),
+            "the USB response tail remains ordered through the same serial owner",
+        );
+        assert_eq!(
+            pump.physical_response_barrier,
+            PhysicalResponseBarrier::Idle,
+        );
+        assert_eq!(
+            pump.local_seat
+                .as_ref()
+                .expect("local seat remains attached")
+                .keyboard_trace()
+                .dropped_bytes,
+            0,
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn poisoned_linked_serial_retires_tails_and_keeps_usb_parser_live() {
+        struct LinkedRuntimeTestReset;
+
+        impl Drop for LinkedRuntimeTestReset {
+            fn drop(&mut self) {
+                crate::serial::test_end_linked_runtime_only_transport();
+            }
+        }
+
+        crate::log_buffer::clear_for_test();
+        crate::serial::test_begin_linked_runtime_only_transport();
+        let _reset = LinkedRuntimeTestReset;
+        let driver = LoopbackSerial::<32768>::new();
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::repeated(512, 1);
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "ticket").unwrap();
+        let mut audit = AuditLog::new();
+        let mut local_seat = LocalSeatRuntime::new(crate::local_seat::LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 64,
+            buffer_lines: 8,
+        });
+        local_seat.mark_root_console_ready();
+        local_seat.enable_backend_keyboard_polling();
+        let mut pump =
+            EventPump::new(serial, timer, ipc, store, &mut audit).with_local_seat(&mut local_seat);
+        pump.serial_mut().test_poison_linked_tx();
+
+        for expected_lines in 1..=2 {
+            assert_eq!(
+                pump.local_seat
+                    .as_mut()
+                    .expect("local seat remains attached")
+                    .enqueue_keyboard_bytes(b"ping\n"),
+                5,
+            );
+            for _ in 0..128 {
+                pump.poll();
+                if pump.metrics.console_lines >= expected_lines
+                    && pump.physical_response_barrier == PhysicalResponseBarrier::Idle
+                    && pump.pending_console_output.is_empty()
+                {
+                    break;
+                }
+            }
+            assert_eq!(pump.metrics.console_lines, expected_lines);
+            assert_eq!(
+                pump.physical_response_barrier,
+                PhysicalResponseBarrier::Idle,
+                "a poisoned serial generation cannot re-fence later USB input",
+            );
+            assert!(
+                pump.pending_console_output.is_empty(),
+                "undeliverable serial records must not consume bounded queue capacity",
+            );
+        }
+
+        let keyboard = pump
+            .local_seat
+            .as_ref()
+            .expect("local seat remains attached")
+            .keyboard_trace();
+        assert_eq!(keyboard.queued_bytes, 0);
+        assert_eq!(keyboard.dropped_bytes, 0);
+        assert!(pump.physical_serial_transport_failed);
+        assert!(pump.physical_serial_output_aborted >= 2);
+        let mirrored = pump
+            .local_seat
+            .as_ref()
+            .expect("local seat remains attached")
+            .mirrored_lines_snapshot();
+        assert!(
+            mirrored.iter().any(|line| line.contains("PONG")),
+            "the USB operator must retain visible command output after serial failure",
+        );
+        assert!(
+            mirrored.iter().any(|line| line.contains("cohesix>")),
+            "the USB operator must retain a visible prompt after serial failure",
+        );
+        assert!(crate::serial::test_take_linked_runtime_only_tx().is_empty());
+        assert_eq!(
+            pump.serial_mut().driver_mut().io_call_counts(),
+            (0, 0),
+            "terminal linked-serial failure must not restore a root UART owner",
+        );
+        let records = crate::log_buffer::snapshot_lines::<DEFAULT_LINE_CAPACITY, 32>();
+        let failure_records: Vec<&str> = records
+            .iter()
+            .map(|line| line.as_str())
+            .filter(|line| line.starts_with(LINKED_SERIAL_TRANSPORT_FAILURE_RECORD))
+            .collect();
+        assert_eq!(
+            failure_records.len(),
+            1,
+            "the terminal transport failure record is exact and one-shot",
+        );
+        let suffix = failure_records[0]
+            .strip_prefix(LINKED_SERIAL_TRANSPORT_FAILURE_RECORD)
+            .expect("the selected record has the exact typed prefix");
+        let (sequence, ordered_suffix) = suffix
+            .strip_prefix(" console_seq=")
+            .and_then(|suffix| suffix.split_once(' '))
+            .expect("the typed record has one ordered Queen-log suffix");
+        assert!(
+            !sequence.is_empty() && sequence.bytes().all(|byte| byte.is_ascii_digit()),
+            "console sequence must be canonical decimal",
+        );
+        assert_eq!(
+            ordered_suffix, "telemetry_sinks=queen-log prompt_refresh=no",
+            "no malformed or appended field may satisfy the typed record oracle",
+        );
     }
 
     #[cfg(feature = "kernel")]

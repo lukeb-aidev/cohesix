@@ -28,7 +28,7 @@ const NETSTATS_BODY: [&str; 13] = [
     "netstats: tx_submit=9 tx_complete=9 tx_free=9 tx_in_flight=0 tx_double_submit=0 tx_zero_len_attempt=0 arp_rx=3 arp_tx=2",
     "netstats: generation=7 mode=dhcp policy=wired active=wired standby=none addr_src=dhcp-lease ip=192.168.86.154 gateway=192.168.86.1 dhcp=bound",
     "netstats: genet_rx_hw=12 genet_rx_last_len=74 genet_rx_last_ethertype=0x0800",
-    "netstats: genet_rxq runtime_cur=0 runtime_hwm=4 runtime_ovf=0 runtime_max_drain=3 runtime_drain_hit=1 runtime_byte_hit=0 root_cur=0 root_hwm=3 root_drops=0",
+    "netstats: genet_rxq runtime_cur=0 runtime_hwm=4 runtime_ovf=0 runtime_max_drain=3 runtime_drain_hit=1 runtime_byte_hit=0 root_cur=0 root_hwm=3 root_drops=0 runtime_cmd_drain_seen=1",
     "netstatus: generation=7 ip=192.168.86.154 gateway=192.168.86.1 src=dhcp-lease dhcp=bound tcp_ready=yes",
 ];
 

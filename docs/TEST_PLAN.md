@@ -1543,8 +1543,17 @@ prove all of the following:
   delegated tuple before pair scrub only after two identical record-pair reads,
   survive later transport cleanup, and prove that an unstable pair fails
   closed. Snapshot collection must perform no wake, retry, consume, or owner
-  transition. A multi-record
-  snapshot must say so and cannot replace Gate 7/8, DPC, DHCP, nettest, TCP, or
+  transition. The current producer's SDIO ring field must be either `ring=u`
+  or the exact fixed-width lowercase result-bearing command/completion tuple.
+  Schema-v2 must keep both the early row with no ring suffix and the exact
+  historical seven-field tuple parseable as old evidence, while neither may
+  refine containment. Only the current result-bearing form may refine after
+  nonzero publication and episode sequences, the immutable parent sequence,
+  nonzero matching physical epoch, matching child sequence, concrete
+  transport-parent fault, Fault completion, and stable episode all correlate
+  inside the unsigned 32-bit identity domain. A present short, uppercase,
+  extended, zero-identity, or overflowing tuple/episode fails normalization.
+  A multi-record snapshot must say so and cannot replace Gate 7/8, DPC, DHCP, nettest, TCP, or
   authenticated-`cohsh` acceptance. Historical verbose `wifi diag` fixtures
   remain parseable, while new verbose proof belongs to `wifi dump-state`.
 - A current-generation association creates the post-association BSSID
@@ -1592,7 +1601,16 @@ reserve two transfer attempts,
 but a second issue is legal only after an entry-inhibit failure proves the first
 command was never written; command, response, data, busy, or later failures are
 issued-unknown and perform no same-generation replay. Each failed attempt gets
-its own 220-millisecond containment deadline. Shared-ABI tests must derive the
+its own 220-millisecond containment deadline. Containment may advance at most
+24 immediate deterministic owner-local phases in one admitted turn and must
+stop when a hardware/time wait remains false. `HOST_CONFIG` may similarly
+advance at most 18 phases, stopping only at either clock-stability poll. Tests
+must prove one sample per real wait, unchanged condition-before-deadline order,
+no private poll loop, no second issue, and fail-closed invalid cursor/bound
+behavior. If containment itself fails before another issued-request failure is
+recorded, stage 9 must retain the immutable first subphase plus pre-recovery
+controller/DMA snapshot; later reset writes cannot overwrite it. Shared-ABI
+tests must derive the
 exact 20.56-second CYW43 child bound from those maxima plus the 100-millisecond
 handoff margin and prove root's initial 30.56-second child lease cannot expire at
 the child boundary. Multi-child parent coverage must prove that only a fresh
@@ -5607,7 +5625,19 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
       preservation and wrap, bounded control/data fairness, exact-badge
       admission, durable masked continuation, device-store/unmask readback,
       final source/ring recheck, and no handler acknowledgement while accepted
-      work remains. Generated-profile tests must also prove that no direct
+      work remains. A separate regression must place a complete bounded frame
+      behind an advanced durable RDMA producer without delivering an IRQ badge,
+      then prove the admitted same-owner RX command queues and returns it within
+      its existing operation/frame/byte budget without creating or
+      acknowledging an unseen IRQ lifetime. The regression must also prove the
+      additive packed-completion bit 30 decodes as zero for legacy results,
+      remains zero for every rejected command budget and for an eager IRQ/DPC
+      drain, becomes sticky only after a successful same-owner command drain,
+      and projects as `runtime_cmd_drain_seen=0|1` on the existing bounded
+      `netstats: genet_rxq` row. This passive route discriminator is diagnostic,
+      not GENET traffic, performance, or acceptance evidence.
+      Generated-profile tests must also
+      prove that no direct
       GENET-console link/caps or nine-page export-helper bypass is emitted.
       Fresh same-boot wired evidence must prove DHCP/static policy, ARP, ICMP,
       raw TCP, authenticated `cohsh`, focused `.coh` scripts, queue/IRQ health,
@@ -8125,12 +8155,23 @@ errata; validate every `MU_STAT[27:24]`
 fill level from zero through eight; reject an impossible level before the
 generation-bound TX-SPSC consumer cursor advances; and preserve exact byte
 order across partial, third, and later FIFO-empty wakes. Valid nonzero
-occupancy must select the exact slot-3 local-notification wait; zero must
-return to the combined endpoint-and-bound-notification receive; a missing,
-poisoned, discontinuous, or over-capacity cursor must select neither and fail
-closed. The regression must admit root, serial-IRQ, and coalesced badges while
-rejecting zero and foreign badges, prove that every bounded FIFO wake returns
-to the outer command poll, and prove the ordering device writes, completion
+occupancy with a full FIFO must select the exact slot-3 local-notification
+wait; one through eight current free slots must re-enter one bounded owner
+turn; zero occupancy must return to the combined endpoint-and-bound-
+notification receive. A missing, poisoned, discontinuous, or over-capacity
+cursor or impossible FIFO sample must select neither and fail closed. The
+regression must admit root, serial-IRQ, and coalesced badges while rejecting
+zero and foreign badges, prove that every bounded FIFO wake returns to the
+outer command poll, and reproduce a source-polled `help` response whose first
+eight bytes fill the FIFO. That turn must establish and retire the explicit
+handler-rearm obligation before waiting on the long response tail; queued USB
+input must remain ordered and undropped behind the shared physical-response
+barrier. A separate terminal-poison regression must begin with failed linked
+TX, then prove two successive queued USB commands reach the parser, the
+physical-response barrier and serial-output queue return to idle after each,
+one exact typed failure record is retained, response text remains HDMI-
+mirrorable, and no root-UART MMIO fallback is invoked. The regression must
+also prove the ordering device writes, completion
 barrier, same-aperture IER/`MU_STAT` readback, completion barrier, then handler
 ACK. Readback or ACK failure must fence TX, and the TX-idle probe must expose
 that fence as `FAULT_DEVICE_UNAVAILABLE`. Host tests establish only register

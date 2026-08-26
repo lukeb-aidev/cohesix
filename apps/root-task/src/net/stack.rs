@@ -6258,6 +6258,8 @@ impl<D: NetDevice> NetStack<D> {
             device_counters.genet_rx_runtime_byte_budget_hit;
         self.counters.genet_rx_runtime_max_drained_per_turn =
             device_counters.genet_rx_runtime_max_drained_per_turn;
+        self.counters.genet_rx_runtime_command_drain_seen =
+            device_counters.genet_rx_runtime_command_drain_seen;
         self.counters.genet_rx_pending_queue_count = device_counters.genet_rx_pending_queue_count;
         self.counters.genet_rx_pending_queue_high_water =
             device_counters.genet_rx_pending_queue_high_water;
@@ -6355,6 +6357,8 @@ impl<D: NetDevice> NetStack<D> {
             genet_rx_runtime_byte_budget_hit: device_counters.genet_rx_runtime_byte_budget_hit,
             genet_rx_runtime_max_drained_per_turn: device_counters
                 .genet_rx_runtime_max_drained_per_turn,
+            genet_rx_runtime_command_drain_seen: device_counters
+                .genet_rx_runtime_command_drain_seen,
             genet_rx_pending_queue_count: device_counters.genet_rx_pending_queue_count,
             genet_rx_pending_queue_high_water: device_counters.genet_rx_pending_queue_high_water,
             genet_rx_pending_drops: device_counters.genet_rx_pending_drops,
