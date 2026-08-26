@@ -627,13 +627,38 @@ reusable ownership pattern.
 
 ### 7.1 Serial pattern
 
+- The selected Pi serial transport uses the runtime's existing four shared
+  pages as two independent generation-bound SPSC rings. Pages zero and one are
+  the root-to-runtime TX ring, pages two and three are the runtime-to-root RX
+  ring, and each two-page ring has a 64-byte header plus exactly 8,128 payload
+  bytes. Do not reinterpret the pages as a common MPMC queue or add a second
+  UART owner.
+- Map these CPU-only ring pages with identical cacheable, execute-never Normal
+  memory attributes in root and child. The selected AArch64 seL4 kernel maps
+  `Page_Uncached` as Device-nGnRnE, which is retained for DMA/MMIO but is not a
+  valid home for the ring's Rust atomic acquire/release cursors. Do not extend
+  the serial exception to a device-facing or DMA-addressable page.
+- Publish payload before the producer cursor and consume payload before the
+  consumer cursor. Validate magic, version, direction, generation, capacity,
+  cursor distance, and commit-paired cursors before access; poison and fail
+  closed on an invalid or discontinuous cursor instead of truncating it.
+- Treat wakeups as hints around durable ring state. After producing or
+  consuming, perform the final state/epoch recheck required to close the
+  empty-to-nonempty and full-to-not-full races. Root drains the rings through
+  its existing cooperative EventPump polling; the transport does not claim a
+  direct interrupt wake into root.
 - Keep RX and TX loops bounded by the service contract.
 - For a level-triggered RX source, sample live level even when a notification
   coalesces, but never exceed the granted byte budget.
 - Check queue capacity before reading a data register.
 - Preserve an asserted source when the queue or budget is exhausted; drain it
-  through the same child before IRQ acknowledgement.
+  through the same child before IRQ acknowledgement. If a full RX ring leaves
+  the combined mini-UART handler unacknowledged, a later software continuation
+  after root drain must retry the same pending IRQ acknowledgement; whether
+  that continuation itself carried an IRQ badge is irrelevant.
 - Transfer ownership without dropping bytes that arrive at the boundary.
+- This transport changes no mini-UART baud, FIFO, IRQ identity, owner, MCS
+  budget/period, response bound, timeout policy, or emergency-fatal exception.
 - Treat emergency root serial as degraded diagnostics, not migrated service.
 
 ### 7.2 USB and local-seat pattern
@@ -733,7 +758,38 @@ reusable ownership pattern.
 
 - Map framebuffer pages into the display child without a steady root VSpace
   alias.
-- Bound text, line, frame, and refresh work.
+- Keep terminal state in a fixed child-private cell plane. The current Pi
+  renderer admits at most 256 columns by 128 rows, uses a logical row ring for
+  scrolling, and records visible damage in a fixed bitmap. Retain a
+  generation-bound parser cursor so each immutable input byte is consumed at
+  most once across as many bounded turns as required, coalesce the final cell
+  values, and rasterize only dirty glyph bands. A tab advances to the next
+  eight-column stop by exactly 1 through 8 cells, including eight cells when
+  the cursor is already aligned. Never read live scanout to implement terminal
+  scroll or redraw.
+- Admit the framebuffer before rendering: the format must be RGB888 or
+  XRGB8888, the visible area must contain a complete 8-by-16 cell, row bytes
+  must fit the pitch, the declared framebuffer range must cover
+  `pitch * height`, and XRGB8888 virtual address and pitch must be 32-bit
+  aligned. Reject unsupported, partial-cell, oversized, truncated, or
+  misaligned geometry rather than constructing an alternate renderer.
+- Bound parsing, every wide logical-plane operation, first-takeover or
+  form-feed clear, dirty raster, frame, and refresh work as resumable retained
+  phases of the exact command generation. Do not advance to a later input byte
+  until the current byte's clear, scroll, tab, or other multi-cell effect is
+  completely staged. Completion is published only after the final
+  device-store barrier. The selected Pi profile reserves 2,000 us per unchanged
+  10,000 us period; its 1,800 us candidate WCET is a static-admission input,
+  not measured Pi timing evidence. Store and cell ceilings scale from the
+  generated reservation and are not an unbounded refresh loop.
+- Bind every submitted frame to the shared HDMI HAL grant of exactly 1,280
+  dirty-cell operations, a 4,096-byte parser envelope, and 80 physical clear
+  rows per retained turn. The unchanged pointer-free frame transport admits at
+  most 1,536 payload bytes; 4,096 is a pure parser/grant ceiling, not a widened
+  single-frame ABI. Reject zero, narrower, broader, or byte-insufficient frame
+  grants before mutating the cell plane or scanout, and still cap the
+  clear/raster implementation to the admitted fields so contract drift cannot
+  silently widen a later turn.
 - Distinguish queue acceptance from completed rendering. A ready receipt needs
   a completed display-runtime turn with no outstanding submission or exhausted
   retry; mirroring or queueing a line is insufficient.
@@ -750,6 +806,11 @@ reusable ownership pattern.
   recovery; do not restart it for every repeat or grow an unbounded queue.
 - Allow display mirroring and redraw to degrade before serial or keyboard
   command liveness.
+- The write-only compositor does not authorize BCM DMA, mailbox/HVS ownership,
+  a cacheable or second scanout alias, or a second framebuffer owner. Host
+  compositor tests and target compilation can reject a candidate, but only a
+  fresh exact-image Pi run can establish visible correctness, latency, and
+  operator polish.
 - These local-seat rules change no console grammar, physical owner, poller,
   retry path, or scheduling authority. The reserved fixed USB old-good slot and
   root projection are passive compatibility diagnostics; runtime publication
@@ -760,6 +821,31 @@ reusable ownership pattern.
 
 - Expose the common network trait; keep controller and firmware details inside
   the driver boundary.
+- The selected Pi profile binds GENET default queue 16 to the exact resolved
+  seL4 IRQ 189 from the first `ethernet@7d580000` DTS interrupt. The second
+  line belongs to priority queues 0 through 15 and is not admitted. Runtime
+  code must consume the generated identity and badge 1024 and must not infer a
+  GIC offset. Non-Pi/QEMU profiles retain their existing three-IRQ declaration;
+  the Pi-only interrupt must not leak into them.
+- GENET packet completion is child-owned and IRQ-driven. One DPC turn drains at
+  most 16 frames and 24,576 bytes into a fixed 16-frame private queue, then
+  completes the device-store/unmask readback before its final source and ring
+  recheck. A remaining exact IRQ lifetime stays masked and unacknowledged;
+  badge zero cannot create work, and handler-ack or unmask-readback failure
+  disables the runtime without retry.
+- Prioritize ARP and TCP/ICMP control traffic, but after four consecutive
+  control frames service the oldest data frame so control load cannot starve
+  data. Batch drain and root consumption remain independently bounded.
+- Physical GENET descriptor buffers remain private, uncached, and solely owned
+  by the GENET child. The current root-mediated command transport does not
+  authorize an undeclared cacheable GENET-to-console ring, a shared DMA alias,
+  or a second physical owner. A direct link is deliberately not generated:
+  GENET exists before the post-DHCP console child, no reciprocal link caps or
+  cacheable shared-frame authority bind them, their fault/revoke generations
+  are independent, and the proposed nine-page export exceeds the current
+  eight-page generated export helper. Resolve all of those authority,
+  bootstrap, cacheability, and containment constraints together before adding
+  such a path.
 - Bound RX admission, TX submission, completion reclaim, and queue depth per
   turn.
 - Preserve packet order unless a documented priority policy explicitly
@@ -785,6 +871,13 @@ transport:
   and consumer receipt are distinct states.
 - IRQ/DPC work is condition-driven and bounded. Empty polling must not become
   the transport clock.
+- At the shared-payload/private-DMA boundary, copy only between the existing
+  shared command payload and the SDIO child's existing private uncached DMA4
+  bounce region. Use an alignment-safe bounded prefix, `u64` word body, and
+  tail; validate both complete ranges, integer overflow, and discontinuity
+  before touching either side. This is a CPU copy optimization, not permission
+  for DMA4 to address cacheable shared pages or for CYW43 to gain controller
+  authority.
 - Current DPC-client accounting lives in one cache-isolated, exact 128-byte
   `DriverRuntimeCyw43DpcClientRecord` at shared offset 49,984
   (`[49,984, 50,112)`). CYW43 is its sole writer and publishes at the existing
@@ -800,6 +893,11 @@ transport:
   authorize relabelling or replay under the new generation.
 - Recovery reuses the same ownership path after containment. It does not
   create another bootstrap, controller, or data path.
+- Preserve the exact first-recovery pre-scrub discriminator and snapshot before
+  clearing the delegated generation. The bulk-copy change does not alter
+  controller ordering, physical/logical owners, retry ceilings, device or
+  aggregate deadlines, pair-restart cuts, completion layout, or IRQ
+  mask/acknowledgement semantics.
 
 When debugging the linked pair, trace this chain with exact identities:
 

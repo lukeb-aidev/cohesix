@@ -301,7 +301,7 @@ mod tests {
                     0,
                     8_100,
                     9_000,
-                    5_800,
+                    7_400,
                     54_000_000,
                 )
             };
@@ -360,7 +360,7 @@ mod tests {
                 ]
             } else {
                 [
-                    ("root-worker-executor-gpu", 2, 5_600),
+                    ("root-worker-executor-gpu", 2, 7_100),
                     ("root-worker-executor-lora", 3, 8_200),
                 ]
             };

@@ -96,6 +96,11 @@ const DRIVER_RUNTIME_IRQ_HANDLER_SLOT: u8 = 4;
 const DRIVER_RUNTIME_SDIO_DMA_IRQ_HANDLER_SLOT: u8 = DRIVER_RUNTIME_IRQ_HANDLER_SLOT + 1;
 const DRIVER_RUNTIME_SERIAL_IRQ: u32 = 125;
 const DRIVER_RUNTIME_SERIAL_BADGE: u32 = 126;
+const DRIVER_RUNTIME_SERIAL_SPSC_SHARED_PAGES: u16 = 4;
+// Exact IDs resolved from the selected Pi kernel DTS/profile. Runtime code
+// consumes these already-translated values and never infers a GIC offset.
+const DRIVER_RUNTIME_GENET_IRQ: u32 = 189;
+const DRIVER_RUNTIME_GENET_BADGE: u32 = 1 << 10;
 const DRIVER_RUNTIME_CYW43_SDIO_IRQ: u32 = 158;
 const DRIVER_RUNTIME_CYW43_SDIO_BADGE: u32 = 159;
 // BCM2711 device-tree SPI values become seL4 IRQ IDs after the GIC SPI offset.
@@ -283,7 +288,9 @@ impl Manifest {
         self.validate_swarmui()?;
         self.validate_cas(base_dir)?;
         self.validate_affinity()?;
-        self.root_task.driver_images.validate()?;
+        self.root_task
+            .driver_images
+            .validate_for_profile(self.profile_is_pi4_family())?;
         Ok(())
     }
 
@@ -3027,7 +3034,12 @@ pub struct DriverRuntimeBusLinkSpec {
 }
 
 impl DriverRuntimeImagePolicy {
+    #[cfg(test)]
     fn validate(&self) -> Result<()> {
+        self.validate_for_profile(false)
+    }
+
+    fn validate_for_profile(&self, pi4_family: bool) -> Result<()> {
         if self.images.len() > MAX_DRIVER_RUNTIME_IMAGES {
             bail!(
                 "root_task.driver_images.images contains {} entries, max {}",
@@ -3048,6 +3060,20 @@ impl DriverRuntimeImagePolicy {
             }
             if !hot_paths.insert(image.hot_path.as_str()) {
                 bail!("duplicate driver runtime image hot path {}", image.hot_path);
+            }
+        }
+        if pi4_family {
+            if let Some(serial) = self
+                .images
+                .iter()
+                .find(|image| image.hot_path == "serial-console")
+            {
+                if serial.shared_buffer_pages != DRIVER_RUNTIME_SERIAL_SPSC_SHARED_PAGES {
+                    bail!(
+                        "Pi 4 driver runtime image {} for serial-console must declare exactly 4 shared-buffer pages for the two bounded full-duplex SPSC rings",
+                        serial.id
+                    );
+                }
             }
         }
         if self.required {
@@ -3152,7 +3178,22 @@ impl DriverRuntimeImagePolicy {
             if !has_sdio_dma_irq {
                 bail!("root_task.driver_images.required missing SDIO DMA IRQ 116 topology");
             }
-            if self.irqs.len() != 3
+            if pi4_family {
+                let has_genet_irq = self.irqs.iter().any(DriverRuntimeIrqSpec::is_genet_irq);
+                if !has_genet_irq {
+                    bail!("Pi 4 root_task.driver_images.required missing GENET IRQ 189 topology");
+                }
+                if self.irqs.len() != 4
+                    || !self.irqs[0].is_serial_console_irq()
+                    || !self.irqs[1].is_genet_irq()
+                    || !self.irqs[2].is_cyw43_sdio_host_irq()
+                    || !self.irqs[3].is_cyw43_sdio_dma_irq()
+                {
+                    bail!(
+                        "Pi 4 root_task.driver_images.required IRQ topology must contain serial-console IRQ 125, GENET IRQ 189, SDIO IRQ 158, and SDIO DMA IRQ 116 in canonical order"
+                    );
+                }
+            } else if self.irqs.len() != 3
                 || !self.irqs[0].is_serial_console_irq()
                 || !self.irqs[1].is_cyw43_sdio_host_irq()
                 || !self.irqs[2].is_cyw43_sdio_dma_irq()
@@ -3238,6 +3279,15 @@ impl DriverRuntimeIrqSpec {
         self.hot_path == "serial-console"
             && self.irq == DRIVER_RUNTIME_SERIAL_IRQ
             && self.badge == DRIVER_RUNTIME_SERIAL_BADGE
+            && self.handler_slot == DRIVER_RUNTIME_IRQ_HANDLER_SLOT
+            && self.notification_slot == DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT
+            && self.trigger == DriverRuntimeIrqTrigger::Level
+    }
+
+    fn is_genet_irq(&self) -> bool {
+        self.hot_path == "genet-nic"
+            && self.irq == DRIVER_RUNTIME_GENET_IRQ
+            && self.badge == DRIVER_RUNTIME_GENET_BADGE
             && self.handler_slot == DRIVER_RUNTIME_IRQ_HANDLER_SLOT
             && self.notification_slot == DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT
             && self.trigger == DriverRuntimeIrqTrigger::Level
@@ -3600,7 +3650,11 @@ mod tests {
             } else {
                 1
             },
-            shared_buffer_pages: 1,
+            shared_buffer_pages: if hot_path == "serial-console" {
+                super::DRIVER_RUNTIME_SERIAL_SPSC_SHARED_PAGES
+            } else {
+                1
+            },
             root_wake_notification_slot: if hot_path == "cyw43-wifi" {
                 super::DRIVER_RUNTIME_CYW43_ROOT_WAKE_SLOT
             } else {
@@ -3633,6 +3687,17 @@ mod tests {
             irq: super::DRIVER_RUNTIME_CYW43_SDIO_DMA_IRQ,
             badge: super::DRIVER_RUNTIME_CYW43_SDIO_DMA_BADGE,
             handler_slot: super::DRIVER_RUNTIME_SDIO_DMA_IRQ_HANDLER_SLOT,
+            notification_slot: super::DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT,
+            trigger: DriverRuntimeIrqTrigger::Level,
+        }
+    }
+
+    fn genet_irq() -> DriverRuntimeIrqSpec {
+        DriverRuntimeIrqSpec {
+            hot_path: "genet-nic".to_owned(),
+            irq: super::DRIVER_RUNTIME_GENET_IRQ,
+            badge: super::DRIVER_RUNTIME_GENET_BADGE,
+            handler_slot: super::DRIVER_RUNTIME_IRQ_HANDLER_SLOT,
             notification_slot: super::DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT,
             trigger: DriverRuntimeIrqTrigger::Level,
         }
@@ -3684,6 +3749,49 @@ mod tests {
             bus_links: vec![cyw43_sdio_link()],
         };
         policy.validate().expect("complete driver runtime table");
+    }
+
+    #[test]
+    fn serial_spsc_shared_pages_are_exact_for_pi4_without_changing_qemu() {
+        let images_with_serial_pages = |pages: u16| {
+            let mut images: Vec<_> = super::REQUIRED_PI4_DRIVER_RUNTIME_HOT_PATHS
+                .iter()
+                .copied()
+                .map(driver_runtime_image)
+                .collect();
+            images
+                .iter_mut()
+                .find(|image| image.hot_path == "serial-console")
+                .expect("required image table contains serial-console")
+                .shared_buffer_pages = pages;
+            images
+        };
+        let policy = |images, irqs| DriverRuntimeImagePolicy {
+            required: true,
+            images,
+            irqs,
+            bus_links: vec![cyw43_sdio_link()],
+        };
+
+        policy(images_with_serial_pages(1), required_irqs())
+            .validate_for_profile(false)
+            .expect("the canonical QEMU profile retains its existing shared-page contract");
+
+        let pi_irqs = || vec![serial_irq(), genet_irq(), sdio_irq(), sdio_dma_irq()];
+        let err = policy(images_with_serial_pages(3), pi_irqs())
+            .validate_for_profile(true)
+            .expect_err("an incomplete Pi serial SPSC aperture must fail closed");
+        assert!(err.to_string().contains("exactly 4 shared-buffer pages"));
+        let err = policy(images_with_serial_pages(5), pi_irqs())
+            .validate_for_profile(true)
+            .expect_err("excess Pi serial shared authority must fail closed");
+        assert!(err.to_string().contains("exactly 4 shared-buffer pages"));
+        policy(
+            images_with_serial_pages(super::DRIVER_RUNTIME_SERIAL_SPSC_SHARED_PAGES),
+            pi_irqs(),
+        )
+        .validate_for_profile(true)
+        .expect("the exact four-page Pi serial transport is admitted");
     }
 
     #[test]
@@ -3880,6 +3988,64 @@ mod tests {
             assert!(
                 err.to_string()
                     .contains("missing serial-console IRQ 125 topology"),
+                "{case}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn driver_runtime_policy_requires_exact_genet_irq_topology() {
+        let required_policy = |irq: DriverRuntimeIrqSpec| DriverRuntimeImagePolicy {
+            required: true,
+            images: super::REQUIRED_PI4_DRIVER_RUNTIME_HOT_PATHS
+                .iter()
+                .copied()
+                .map(driver_runtime_image)
+                .collect(),
+            irqs: vec![serial_irq(), irq, sdio_irq(), sdio_dma_irq()],
+            bus_links: vec![cyw43_sdio_link()],
+        };
+
+        required_policy(genet_irq())
+            .validate_for_profile(true)
+            .expect("selected GENET IRQ topology accepted");
+        let mut wrong_irq = genet_irq();
+        wrong_irq.irq = wrong_irq.irq.saturating_add(1);
+        let err = required_policy(wrong_irq)
+            .validate_for_profile(true)
+            .expect_err("malformed GENET IRQ rejected");
+        assert!(
+            err.to_string().contains("missing GENET IRQ 189 topology"),
+            "irq: {err}"
+        );
+
+        for (case, malformed) in [
+            ("badge", {
+                let mut irq = genet_irq();
+                irq.badge ^= 1;
+                irq
+            }),
+            ("handler", {
+                let mut irq = genet_irq();
+                irq.handler_slot += 1;
+                irq
+            }),
+            ("notification", {
+                let mut irq = genet_irq();
+                irq.notification_slot += 2;
+                irq
+            }),
+            ("trigger", {
+                let mut irq = genet_irq();
+                irq.trigger = DriverRuntimeIrqTrigger::Edge;
+                irq
+            }),
+        ] {
+            let err = required_policy(malformed)
+                .validate_for_profile(true)
+                .expect_err("malformed GENET IRQ rejected");
+            assert!(
+                err.to_string().contains("missing GENET IRQ 189 topology"),
                 "{case}: {err}"
             );
         }
@@ -4377,6 +4543,7 @@ mod tests {
     fn base_pi4_manifest(profile_name: &str) -> super::Manifest {
         let mut manifest = fixture_manifest();
         manifest.profile.name = profile_name.to_owned();
+        manifest.root_task.driver_images.irqs.insert(1, genet_irq());
         manifest.features.net_console = false;
         manifest.hw.no_nic = true;
         manifest.hw.network.enabled = false;
@@ -4520,6 +4687,13 @@ mod tests {
         manifest
             .validate_with_base(path.parent())
             .expect("QEMU executable Worker topology is compiler-admitted");
+        assert_eq!(manifest.root_task.driver_images.irqs.len(), 3);
+        assert!(manifest
+            .root_task
+            .driver_images
+            .irqs
+            .iter()
+            .all(|irq| irq.hot_path != "genet-nic"));
         assert!(manifest
             .worker_runtime
             .roles

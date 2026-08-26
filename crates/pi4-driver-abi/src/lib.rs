@@ -40,6 +40,8 @@ pub const DRIVER_RUNTIME_ENGINE_INIT_AUX: u32 = 0x454e_474e;
 pub const DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX: u32 = 0x4c53_494e;
 /// Serial-console service command that samples the mini-UART transmitter-idle bit.
 pub const DRIVER_RUNTIME_SERIAL_TX_IDLE_AUX: u32 = 0x5345_5244;
+/// Serial control command that validates the current four-page SPSC generation.
+pub const DRIVER_RUNTIME_SERIAL_SPSC_PROBE_AUX: u32 = 0x5353_5052;
 
 const fn driver_runtime_nonzero_hash(hash: u32) -> u32 {
     if hash == 0 {
@@ -591,6 +593,14 @@ pub const DRIVER_RUNTIME_FRAMEBUFFER_FORMAT_XRGB8888: u32 = 1;
 pub const DRIVER_RUNTIME_FRAMEBUFFER_FORMAT_RGB888: u32 = 2;
 /// Fixed driver-local virtual base used when root maps the HDMI framebuffer.
 pub const DRIVER_RUNTIME_FRAMEBUFFER_VADDR: u64 = 0x7100_0000;
+/// Maximum dirty cells admitted in one HDMI compositor turn.
+pub const DRIVER_RUNTIME_HDMI_SERVICE_MAX_OPS: u16 = 1_280;
+/// Maximum immutable text bytes covered by the HDMI parser/grant envelope.
+/// The production command-frame transport remains independently capped at
+/// `MAX_DRIVER_TASK_FRAME_BYTES` (1,536 bytes).
+pub const DRIVER_RUNTIME_HDMI_SERVICE_MAX_BYTES: u32 = 4_096;
+/// Maximum physical framebuffer rows admitted in one HDMI clear turn.
+pub const DRIVER_RUNTIME_HDMI_SERVICE_MAX_FRAMES: u16 = 80;
 /// Maximum MMIO page descriptors carried in one init descriptor.
 pub const DRIVER_RUNTIME_INIT_MAX_MMIO_PAGES: usize = 16;
 /// Maximum DMA page descriptors carried in one init descriptor.
@@ -695,6 +705,208 @@ pub const DRIVER_RUNTIME_SERIAL_RX_STATE_MAGIC: u32 = 0x5352_5853;
 pub const DRIVER_RUNTIME_SERIAL_RX_STATE_VERSION: u16 = 1;
 /// Serial receive-state flag: the owner still owes an IRQ-handler ACK.
 pub const DRIVER_RUNTIME_SERIAL_RX_STATE_FLAG_ACK_PENDING: u16 = 1 << 0;
+/// Magic value for one bounded serial SPSC transport header (`SSPQ`).
+pub const DRIVER_RUNTIME_SERIAL_SPSC_MAGIC: u32 = 0x5353_5051;
+/// Layout version for [`DriverRuntimeSerialSpscHeader`].
+pub const DRIVER_RUNTIME_SERIAL_SPSC_VERSION: u16 = 1;
+/// Shared pages assigned to one serial SPSC direction.
+pub const DRIVER_RUNTIME_SERIAL_SPSC_PAGES_PER_RING: usize = 2;
+/// Exact serial shared-page population: two TX pages followed by two RX pages.
+pub const DRIVER_RUNTIME_SERIAL_SPSC_SHARED_PAGES: usize = 4;
+/// First shared page in the root-to-runtime serial TX ring.
+pub const DRIVER_RUNTIME_SERIAL_TX_SPSC_FIRST_PAGE: usize = 0;
+/// First shared page in the runtime-to-root serial RX ring.
+pub const DRIVER_RUNTIME_SERIAL_RX_SPSC_FIRST_PAGE: usize = 2;
+/// Fixed metadata bytes at the front of each two-page serial SPSC ring.
+pub const DRIVER_RUNTIME_SERIAL_SPSC_HEADER_BYTES: usize = 64;
+/// Exact byte capacity of either serial SPSC ring.
+pub const DRIVER_RUNTIME_SERIAL_SPSC_CAPACITY: usize = DRIVER_RUNTIME_SERIAL_SPSC_PAGES_PER_RING
+    * DRIVER_RUNTIME_RESOURCE_PAGE_BYTES as usize
+    - DRIVER_RUNTIME_SERIAL_SPSC_HEADER_BYTES;
+/// SPSC direction flag: root is the sole producer and serial is the consumer.
+pub const DRIVER_RUNTIME_SERIAL_SPSC_FLAG_ROOT_TO_RUNTIME: u32 = 1 << 0;
+/// SPSC direction flag: serial is the sole producer and root is the consumer.
+pub const DRIVER_RUNTIME_SERIAL_SPSC_FLAG_RUNTIME_TO_ROOT: u32 = 1 << 1;
+/// SPSC state flag: the generation is fenced and cannot carry more bytes.
+pub const DRIVER_RUNTIME_SERIAL_SPSC_FLAG_POISONED: u32 = 1 << 2;
+/// Complete admitted serial SPSC flag set.
+pub const DRIVER_RUNTIME_SERIAL_SPSC_KNOWN_FLAGS: u32 =
+    DRIVER_RUNTIME_SERIAL_SPSC_FLAG_ROOT_TO_RUNTIME
+        | DRIVER_RUNTIME_SERIAL_SPSC_FLAG_RUNTIME_TO_ROOT
+        | DRIVER_RUNTIME_SERIAL_SPSC_FLAG_POISONED;
+
+/// Pointer-free metadata shared by one serial SPSC producer and consumer.
+///
+/// Indices are monotonically wrapping byte cursors. Each owner writes its
+/// cursor and then repeats it in the corresponding commit word after a release
+/// fence. The peer accepts only an equal cursor/commit pair and performs an
+/// acquire fence before touching payload bytes. `doorbell_epoch` advances only
+/// when a committed producer transition changes the ring from empty to
+/// non-empty; notification history remains a scheduling hint, never byte
+/// authority. `consumer_wake_epoch` is the bounded full-to-not-full rearm hint.
+#[repr(C, align(64))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DriverRuntimeSerialSpscHeader {
+    /// [`DRIVER_RUNTIME_SERIAL_SPSC_MAGIC`].
+    pub magic: u32,
+    /// [`DRIVER_RUNTIME_SERIAL_SPSC_VERSION`].
+    pub version: u16,
+    /// Exact metadata bytes.
+    pub header_len: u16,
+    /// Nonzero root-selected runtime generation.
+    pub generation: u32,
+    /// [`DRIVER_RUNTIME_SERIAL_SPSC_CAPACITY`].
+    pub capacity: u32,
+    /// Producer-owned monotonic byte cursor.
+    pub producer_index: u32,
+    /// Commit-last repetition of `producer_index`.
+    pub producer_commit: u32,
+    /// Consumer-owned monotonic byte cursor.
+    pub consumer_index: u32,
+    /// Commit-last repetition of `consumer_index`.
+    pub consumer_commit: u32,
+    /// Producer-owned empty-to-nonempty scheduling-hint epoch.
+    pub doorbell_epoch: u32,
+    /// Reserved for a future protocol revision; must remain zero.
+    pub reserved0: u32,
+    /// Consumer-owned full-to-not-full producer-rearm epoch.
+    pub consumer_wake_epoch: u32,
+    /// One direction bit plus optional poison state.
+    pub flags: u32,
+    /// Saturating producer byte telemetry.
+    pub produced_bytes: u32,
+    /// Saturating consumer byte telemetry.
+    pub consumed_bytes: u32,
+    /// Maximum committed occupancy observed by the producer.
+    pub high_water: u32,
+    /// Reserved for a future protocol revision; must remain zero.
+    pub reserved1: u32,
+}
+
+impl DriverRuntimeSerialSpscHeader {
+    /// Construct an empty ring for one exact generation and direction.
+    #[must_use]
+    pub const fn empty(generation: u32, direction: u32) -> Self {
+        Self {
+            magic: DRIVER_RUNTIME_SERIAL_SPSC_MAGIC,
+            version: DRIVER_RUNTIME_SERIAL_SPSC_VERSION,
+            header_len: DRIVER_RUNTIME_SERIAL_SPSC_HEADER_BYTES as u16,
+            generation,
+            capacity: DRIVER_RUNTIME_SERIAL_SPSC_CAPACITY as u32,
+            producer_index: 0,
+            producer_commit: 0,
+            consumer_index: 0,
+            consumer_commit: 0,
+            doorbell_epoch: 0,
+            reserved0: 0,
+            consumer_wake_epoch: 0,
+            flags: direction,
+            produced_bytes: 0,
+            consumed_bytes: 0,
+            high_water: 0,
+            reserved1: 0,
+        }
+    }
+
+    /// Return whether the header describes one exact live SPSC generation.
+    #[must_use]
+    pub const fn valid_for(self, generation: u32, direction: u32) -> bool {
+        let direction_bits = self.flags
+            & (DRIVER_RUNTIME_SERIAL_SPSC_FLAG_ROOT_TO_RUNTIME
+                | DRIVER_RUNTIME_SERIAL_SPSC_FLAG_RUNTIME_TO_ROOT);
+        self.magic == DRIVER_RUNTIME_SERIAL_SPSC_MAGIC
+            && self.version == DRIVER_RUNTIME_SERIAL_SPSC_VERSION
+            && self.header_len as usize == DRIVER_RUNTIME_SERIAL_SPSC_HEADER_BYTES
+            && generation != 0
+            && self.generation == generation
+            && self.capacity as usize == DRIVER_RUNTIME_SERIAL_SPSC_CAPACITY
+            && self.producer_index == self.producer_commit
+            && self.consumer_index == self.consumer_commit
+            && self.producer_index.wrapping_sub(self.consumer_index) <= self.capacity
+            && direction_bits == direction
+            && matches!(
+                direction,
+                DRIVER_RUNTIME_SERIAL_SPSC_FLAG_ROOT_TO_RUNTIME
+                    | DRIVER_RUNTIME_SERIAL_SPSC_FLAG_RUNTIME_TO_ROOT
+            )
+            && self.flags & !DRIVER_RUNTIME_SERIAL_SPSC_KNOWN_FLAGS == 0
+            && self.flags & DRIVER_RUNTIME_SERIAL_SPSC_FLAG_POISONED == 0
+            && self.high_water <= self.capacity
+            && self.reserved0 == 0
+            && self.reserved1 == 0
+    }
+
+    /// Return the committed byte occupancy, or `None` for corrupt cursors.
+    #[must_use]
+    pub const fn occupancy(self) -> Option<u32> {
+        let occupancy = self.producer_index.wrapping_sub(self.consumer_index);
+        if self.producer_index != self.producer_commit
+            || self.consumer_index != self.consumer_commit
+            || occupancy > self.capacity
+        {
+            None
+        } else {
+            Some(occupancy)
+        }
+    }
+}
+
+/// Decide whether a committed producer turn must publish a data doorbell.
+///
+/// The second predicate closes the enqueue/drain interleaving where the
+/// producer originally observed a non-empty ring, the consumer committed a
+/// drain through the producer's old cursor, and the producer then exposed new
+/// bytes. If the consumer instead observes the new producer commit, its final
+/// recheck keeps service active and this extra hint is unnecessary.
+#[must_use]
+pub const fn driver_runtime_serial_spsc_data_doorbell_due(
+    initial_occupancy: u32,
+    initial_producer: u32,
+    post_commit_consumer: u32,
+) -> bool {
+    initial_occupancy == 0 || post_commit_consumer == initial_producer
+}
+
+/// Validate a consumer's post-commit peer recheck and derive wake state.
+///
+/// `producer_rearm` covers both a ring that was already full and a producer
+/// that committed the final free bytes against the consumer's old cursor
+/// while this consumer turn was publishing new space. `work_remaining` is
+/// derived from the producer commit sampled after the consumer commit, so a
+/// concurrent enqueue cannot be lost before the consumer sleeps.
+#[must_use]
+pub const fn driver_runtime_serial_spsc_consumer_post_commit(
+    initial_available: u32,
+    initial_consumer: u32,
+    next_consumer: u32,
+    post_commit_producer: u32,
+) -> Option<(bool, bool)> {
+    let capacity = DRIVER_RUNTIME_SERIAL_SPSC_CAPACITY as u32;
+    let consumed = next_consumer.wrapping_sub(initial_consumer);
+    let remaining = post_commit_producer.wrapping_sub(next_consumer);
+    if initial_available > capacity
+        || consumed == 0
+        || consumed > initial_available
+        || remaining > capacity
+    {
+        return None;
+    }
+    let producer_rearm = initial_available == capacity
+        || post_commit_producer.wrapping_sub(initial_consumer) == capacity;
+    Some((producer_rearm, remaining != 0))
+}
+
+const _: () = {
+    assert!(core::mem::size_of::<DriverRuntimeSerialSpscHeader>() == 64);
+    assert!(core::mem::align_of::<DriverRuntimeSerialSpscHeader>() == 64);
+    assert!(DRIVER_RUNTIME_SERIAL_TX_SPSC_FIRST_PAGE == 0);
+    assert!(DRIVER_RUNTIME_SERIAL_RX_SPSC_FIRST_PAGE == DRIVER_RUNTIME_SERIAL_SPSC_PAGES_PER_RING);
+    assert!(
+        DRIVER_RUNTIME_SERIAL_RX_SPSC_FIRST_PAGE + DRIVER_RUNTIME_SERIAL_SPSC_PAGES_PER_RING
+            == DRIVER_RUNTIME_SERIAL_SPSC_SHARED_PAGES
+    );
+    assert!(DRIVER_RUNTIME_SERIAL_SPSC_CAPACITY == 8128);
+};
 /// USB old-good step: xHCI reached its runtime-owned ready terminal.
 pub const DRIVER_RUNTIME_USB_OLDGOOD_STEP_XHCI_READY: u32 = 1 << 0;
 /// USB old-good step: the linked runtime consumed a successful command event.
@@ -2376,6 +2588,14 @@ pub const fn driver_runtime_standard_fault_badge(task_key: u32) -> u64 {
 pub const DRIVER_RUNTIME_SERIAL_IRQ: u32 = 125;
 /// Nonzero notification badge bound to [`DRIVER_RUNTIME_SERIAL_IRQ`].
 pub const DRIVER_RUNTIME_SERIAL_IRQ_BADGE: u32 = DRIVER_RUNTIME_SERIAL_IRQ + 1;
+/// Exact seL4 IRQ identity for the BCM2711 GENET general/descriptor-ring line.
+///
+/// The selected Pi profile's repository-managed `kernel.dts` records this as
+/// GIC SPI 157. The resolved manifest carries the already-translated seL4 IRQ
+/// number so neither root nor the isolated runtime infers a platform offset.
+pub const DRIVER_RUNTIME_GENET_IRQ: u32 = 189;
+/// One-hot notification badge bound to [`DRIVER_RUNTIME_GENET_IRQ`].
+pub const DRIVER_RUNTIME_GENET_IRQ_BADGE: u32 = 1 << 10;
 /// CYW43 child CSpace slot containing its send-only root Network-wake notification cap.
 pub const DRIVER_RUNTIME_CYW43_ROOT_WAKE_NOTIFICATION_SLOT: u32 = 11;
 /// Exact badge delivered to root after CYW43 commits Network service progress.
@@ -2413,6 +2633,7 @@ pub const DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_BADGE: u32 = 2;
 pub const DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE: u32 = 1 << 8;
 
 const _: () = {
+    assert!(DRIVER_RUNTIME_GENET_IRQ_BADGE & DRIVER_RUNTIME_RESERVED_ROOT_BADGE == 0);
     assert!(DRIVER_TASK_CHILD_SDIO_DMA_IRQ_HANDLER_SLOT != DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT);
     assert!(DRIVER_RUNTIME_SDIO_DMA_IRQ == 116);
     assert!(DRIVER_RUNTIME_SDIO_DMA_IRQ != DRIVER_RUNTIME_SDIO_IRQ);
@@ -8423,6 +8644,93 @@ mod tests {
         invalid = committed;
         invalid.flags = 1 << 15;
         assert!(!invalid.valid());
+    }
+
+    #[test]
+    fn serial_spsc_header_is_exact_generation_bound_and_commit_paired() {
+        assert_eq!(core::mem::size_of::<DriverRuntimeSerialSpscHeader>(), 64);
+        assert_eq!(core::mem::align_of::<DriverRuntimeSerialSpscHeader>(), 64);
+        assert_eq!(DRIVER_RUNTIME_SERIAL_SPSC_SHARED_PAGES, 4);
+        assert_eq!(DRIVER_RUNTIME_SERIAL_SPSC_CAPACITY, 8128);
+
+        let tx = DriverRuntimeSerialSpscHeader::empty(
+            7,
+            DRIVER_RUNTIME_SERIAL_SPSC_FLAG_ROOT_TO_RUNTIME,
+        );
+        assert!(tx.valid_for(7, DRIVER_RUNTIME_SERIAL_SPSC_FLAG_ROOT_TO_RUNTIME));
+        assert_eq!(tx.occupancy(), Some(0));
+        assert!(!tx.valid_for(8, DRIVER_RUNTIME_SERIAL_SPSC_FLAG_ROOT_TO_RUNTIME));
+        assert!(!tx.valid_for(7, DRIVER_RUNTIME_SERIAL_SPSC_FLAG_RUNTIME_TO_ROOT));
+
+        let mut wrapped = tx;
+        wrapped.consumer_index = u32::MAX - 3;
+        wrapped.consumer_commit = wrapped.consumer_index;
+        wrapped.producer_index = 4;
+        wrapped.producer_commit = wrapped.producer_index;
+        assert_eq!(wrapped.occupancy(), Some(8));
+        assert!(wrapped.valid_for(7, DRIVER_RUNTIME_SERIAL_SPSC_FLAG_ROOT_TO_RUNTIME));
+
+        let mut torn = wrapped;
+        torn.producer_commit = torn.producer_commit.wrapping_sub(1);
+        assert_eq!(torn.occupancy(), None);
+        assert!(!torn.valid_for(7, DRIVER_RUNTIME_SERIAL_SPSC_FLAG_ROOT_TO_RUNTIME));
+
+        let mut overfull = tx;
+        overfull.producer_index = DRIVER_RUNTIME_SERIAL_SPSC_CAPACITY as u32 + 1;
+        overfull.producer_commit = overfull.producer_index;
+        assert_eq!(overfull.occupancy(), None);
+        assert!(!overfull.valid_for(7, DRIVER_RUNTIME_SERIAL_SPSC_FLAG_ROOT_TO_RUNTIME));
+
+        let poisoned = DriverRuntimeSerialSpscHeader {
+            flags: DRIVER_RUNTIME_SERIAL_SPSC_FLAG_ROOT_TO_RUNTIME
+                | DRIVER_RUNTIME_SERIAL_SPSC_FLAG_POISONED,
+            ..tx
+        };
+        assert!(!poisoned.valid_for(7, DRIVER_RUNTIME_SERIAL_SPSC_FLAG_ROOT_TO_RUNTIME));
+    }
+
+    #[test]
+    fn serial_spsc_post_commit_rechecks_close_both_wake_races() {
+        let capacity = DRIVER_RUNTIME_SERIAL_SPSC_CAPACITY as u32;
+
+        assert!(driver_runtime_serial_spsc_data_doorbell_due(0, 19, 19));
+        assert!(driver_runtime_serial_spsc_data_doorbell_due(8, 19, 19));
+        assert!(!driver_runtime_serial_spsc_data_doorbell_due(8, 19, 11));
+
+        assert_eq!(
+            driver_runtime_serial_spsc_consumer_post_commit(8, 11, 19, 23),
+            Some((false, true))
+        );
+        assert_eq!(
+            driver_runtime_serial_spsc_consumer_post_commit(capacity, 11, 19, 19),
+            Some((true, false))
+        );
+        assert_eq!(
+            driver_runtime_serial_spsc_consumer_post_commit(
+                capacity - 4,
+                11,
+                19,
+                11u32.wrapping_add(capacity),
+            ),
+            Some((true, true))
+        );
+        assert_eq!(
+            driver_runtime_serial_spsc_consumer_post_commit(8, u32::MAX - 3, 4, 7,),
+            Some((false, true))
+        );
+        assert_eq!(
+            driver_runtime_serial_spsc_consumer_post_commit(8, 11, 20, 20),
+            None
+        );
+        assert_eq!(
+            driver_runtime_serial_spsc_consumer_post_commit(
+                8,
+                11,
+                19,
+                19u32.wrapping_add(capacity).wrapping_add(1),
+            ),
+            None
+        );
     }
 
     #[test]

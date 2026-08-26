@@ -361,6 +361,10 @@ static SERIAL_DRIVER_TASK_CLIENT_SERVICE_PROVEN: AtomicU32 = AtomicU32::new(0);
 #[cfg(feature = "kernel")]
 static SERIAL_DRIVER_TASK_CLIENT_RX_PROVEN: AtomicU32 = AtomicU32::new(0);
 #[cfg(feature = "kernel")]
+static SERIAL_SPSC_GENERATION: AtomicU32 = AtomicU32::new(0);
+#[cfg(feature = "kernel")]
+static SERIAL_RUNTIME_FAULT_FENCED: AtomicU32 = AtomicU32::new(0);
+#[cfg(feature = "kernel")]
 static SERIAL_RUNTIME_ATTACH_PHASE: AtomicU32 = AtomicU32::new(0);
 #[cfg(feature = "kernel")]
 static SERIAL_ROOT_UART_RELEASED_FOR_LINKED_RUNTIME: AtomicU32 = AtomicU32::new(0);
@@ -386,6 +390,126 @@ const SERIAL_RUNTIME_ATTACH_PROBE: u32 = 2;
 const SERIAL_RUNTIME_ATTACH_READY: u32 = 3;
 #[cfg(feature = "kernel")]
 const SERIAL_RUNTIME_ATTACH_FAILED: u32 = 4;
+
+#[cfg(feature = "kernel")]
+fn next_serial_spsc_generation() -> Option<u32> {
+    let mut current = SERIAL_SPSC_GENERATION.load(AtomicOrdering::Acquire);
+    loop {
+        let next = current.wrapping_add(1).max(1);
+        match SERIAL_SPSC_GENERATION.compare_exchange_weak(
+            current,
+            next,
+            AtomicOrdering::AcqRel,
+            AtomicOrdering::Acquire,
+        ) {
+            Ok(_) => return Some(next),
+            Err(observed) => current = observed,
+        }
+    }
+}
+
+#[cfg(feature = "kernel")]
+const fn serial_spsc_initialization_allowed(fault_fenced: u32) -> bool {
+    fault_fenced == 0
+}
+
+#[cfg(feature = "kernel")]
+fn initialize_serial_spsc_generation() -> bool {
+    if !serial_spsc_initialization_allowed(
+        SERIAL_RUNTIME_FAULT_FENCED.load(AtomicOrdering::Acquire),
+    ) {
+        return false;
+    }
+    let Some(generation) = next_serial_spsc_generation() else {
+        return false;
+    };
+    if serial_spsc_initialization_allowed(SERIAL_RUNTIME_FAULT_FENCED.load(AtomicOrdering::Acquire))
+        && crate::hal::driver_task::initialize_driver_task_serial_spsc(generation)
+        && serial_spsc_initialization_allowed(
+            SERIAL_RUNTIME_FAULT_FENCED.load(AtomicOrdering::Acquire),
+        )
+    {
+        true
+    } else {
+        SERIAL_SPSC_GENERATION.store(0, AtomicOrdering::Release);
+        false
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn publish_serial_generation_owned_state_for(
+    generation: &AtomicU32,
+    expected_generation: u32,
+    state: &AtomicU32,
+    live_value: u32,
+    fenced_value: u32,
+) -> bool {
+    if expected_generation == 0 || generation.load(AtomicOrdering::Acquire) != expected_generation {
+        return false;
+    }
+    state.store(live_value, AtomicOrdering::Release);
+    if generation.load(AtomicOrdering::Acquire) != expected_generation {
+        state.store(fenced_value, AtomicOrdering::Release);
+        return false;
+    }
+    true
+}
+
+#[cfg(feature = "kernel")]
+fn publish_serial_generation_owned_state(
+    expected_generation: u32,
+    state: &AtomicU32,
+    live_value: u32,
+    fenced_value: u32,
+) -> bool {
+    publish_serial_generation_owned_state_for(
+        &SERIAL_SPSC_GENERATION,
+        expected_generation,
+        state,
+        live_value,
+        fenced_value,
+    )
+}
+
+#[cfg(feature = "kernel")]
+fn fence_serial_driver_task_runtime_state_for(
+    fault_fenced: &AtomicU32,
+    generation: &AtomicU32,
+    inactive_states: &[&AtomicU32],
+    attach_phase: &AtomicU32,
+    failed_phase: u32,
+) {
+    // The irreversible latch prevents generation-zero from becoming an ABA
+    // restart boundary. Generation is then the publication fence for every
+    // later positive state transition: a racing publisher either observes the
+    // fence before its store or rolls its store back on the final recheck.
+    fault_fenced.store(1, AtomicOrdering::Release);
+    generation.store(0, AtomicOrdering::Release);
+    for state in inactive_states {
+        state.store(0, AtomicOrdering::Release);
+    }
+    attach_phase.store(failed_phase, AtomicOrdering::Release);
+}
+
+/// Irreversibly fence root's serial client after the isolated runtime faults.
+///
+/// The root UART ownership latch deliberately remains set: containment cannot
+/// reclaim physical MMIO from a generation that may have touched the device.
+#[cfg(feature = "kernel")]
+pub(crate) fn fence_serial_driver_task_runtime_after_fault() {
+    fence_serial_driver_task_runtime_state_for(
+        &SERIAL_RUNTIME_FAULT_FENCED,
+        &SERIAL_SPSC_GENERATION,
+        &[
+            &SERIAL_LINKED_RUNTIME_ATTACHED,
+            &SERIAL_DRIVER_TASK_CLIENT_ACTIVE,
+            &SERIAL_DRIVER_TASK_CLIENT_SERVICE_PROVEN,
+            &SERIAL_DRIVER_TASK_CLIENT_RX_PROVEN,
+        ],
+        &SERIAL_RUNTIME_ATTACH_PHASE,
+        SERIAL_RUNTIME_ATTACH_FAILED,
+    );
+}
 
 #[cfg(all(feature = "kernel", test))]
 static SERIAL_LINKED_RUNTIME_ONLY_TEST_ACTIVE: AtomicU32 = AtomicU32::new(0);
@@ -672,6 +796,27 @@ const fn serial_rx_queue_available<const RX: usize>(queued: usize) -> usize {
 }
 
 #[cfg(feature = "kernel")]
+fn drain_serial_rx_queue_exact<const SOURCE: usize, const DESTINATION: usize>(
+    source: &mut Queue<u8, SOURCE>,
+    destination: &mut Queue<u8, DESTINATION>,
+) -> Option<usize> {
+    let mut accepted = 0usize;
+    while serial_rx_queue_available::<DESTINATION>(destination.len()) != 0 {
+        let Some(byte) = source.dequeue() else {
+            break;
+        };
+        if destination.enqueue(byte).is_err() {
+            // The sentinel-aware precondition makes this unreachable unless
+            // the queue contract drifts. Report failure rather than treating
+            // an already-dequeued byte as accepted.
+            return None;
+        }
+        accepted = accepted.saturating_add(1);
+    }
+    Some(accepted)
+}
+
+#[cfg(feature = "kernel")]
 fn serial_runtime_rx_turn_limit(budget: crate::hal::driver_task::DriverTaskBudgetGrant) -> usize {
     usize::from(budget.max_ops)
         .min(usize::from(budget.max_frames))
@@ -709,6 +854,12 @@ pub fn init_serial_driver_task_runtime() -> bool {
     }
     SERIAL_DRIVER_TASK_CLIENT_SERVICE_PROVEN.store(0, AtomicOrdering::Release);
     let contract = driver_task_contract();
+    let physical_owner_state =
+        crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active();
+    if physical_owner_state && !initialize_serial_spsc_generation() {
+        emit_serial_runtime_state("driver", "spsc-init-failed", "red");
+        return false;
+    }
     crate::hal::driver_task::register_driver_task_pointer_free_ring_service(
         contract,
         crate::hal::driver_task::DriverTaskHotPath::SerialConsole.as_u32() as usize,
@@ -765,6 +916,24 @@ pub fn init_serial_driver_task_runtime() -> bool {
             emit_serial_runtime_state("driver", "owner-state-rejected", "red");
             return false;
         }
+        if physical_owner_state {
+            let generation = SERIAL_SPSC_GENERATION.load(AtomicOrdering::Acquire);
+            if !publish_serial_generation_owned_state(
+                generation,
+                &SERIAL_LINKED_RUNTIME_ATTACHED,
+                1,
+                0,
+            ) {
+                SERIAL_DRIVER_TASK_CLIENT_SERVICE_PROVEN.store(0, AtomicOrdering::Release);
+                SERIAL_RUNTIME_ATTACH_PHASE
+                    .store(SERIAL_RUNTIME_ATTACH_FAILED, AtomicOrdering::Release);
+                let _ = SERIAL_RUNTIME_INIT_LEASE.lock().take();
+                emit_serial_runtime_state("driver", "generation-fenced", "red");
+                return false;
+            }
+        } else {
+            SERIAL_LINKED_RUNTIME_ATTACHED.store(1, AtomicOrdering::Release);
+        }
         crate::hal::driver_task::emit_driver_task_resource_init_status(
             contract,
             crate::hal::driver_task::DriverTaskHotPath::SerialConsole,
@@ -772,7 +941,6 @@ pub fn init_serial_driver_task_runtime() -> bool {
             "ready",
             completion,
         );
-        SERIAL_LINKED_RUNTIME_ATTACHED.store(1, AtomicOrdering::Release);
         emit_serial_runtime_state("driver", "ready", "green");
         crate::hal::driver_task::emit_owner_state_transition_boot_contract_proof(
             crate::hal::driver_task::DriverTaskHotPath::SerialConsole,
@@ -859,8 +1027,16 @@ pub(crate) fn service_serial_driver_task_runtime_after_prompt_turn() -> SerialRu
     let contract = driver_task_contract();
     let mut phase = SERIAL_RUNTIME_ATTACH_PHASE.load(AtomicOrdering::Acquire);
     if serial_driver_task_runtime_attached() && phase < SERIAL_RUNTIME_ATTACH_PROBE {
+        let generation = SERIAL_SPSC_GENERATION.load(AtomicOrdering::Acquire);
+        if !publish_serial_generation_owned_state(
+            generation,
+            &SERIAL_RUNTIME_ATTACH_PHASE,
+            SERIAL_RUNTIME_ATTACH_PROBE,
+            SERIAL_RUNTIME_ATTACH_FAILED,
+        ) {
+            return SerialRuntimeAttachTurn::Failed;
+        }
         phase = SERIAL_RUNTIME_ATTACH_PROBE;
-        SERIAL_RUNTIME_ATTACH_PHASE.store(phase, AtomicOrdering::Release);
     }
     match phase {
         SERIAL_RUNTIME_ATTACH_DESCRIPTOR => {
@@ -872,8 +1048,20 @@ pub(crate) fn service_serial_driver_task_runtime_after_prompt_turn() -> SerialRu
                     SerialRuntimeAttachTurn::Pending
                 }
                 crate::hal::driver_task::DriverTaskDescriptorReplayTurn::Complete => {
-                    SERIAL_RUNTIME_ATTACH_PHASE
-                        .store(SERIAL_RUNTIME_ATTACH_INIT, AtomicOrdering::Release);
+                    if !initialize_serial_spsc_generation() {
+                        SERIAL_RUNTIME_ATTACH_PHASE
+                            .store(SERIAL_RUNTIME_ATTACH_FAILED, AtomicOrdering::Release);
+                        return SerialRuntimeAttachTurn::Failed;
+                    }
+                    let generation = SERIAL_SPSC_GENERATION.load(AtomicOrdering::Acquire);
+                    if !publish_serial_generation_owned_state(
+                        generation,
+                        &SERIAL_RUNTIME_ATTACH_PHASE,
+                        SERIAL_RUNTIME_ATTACH_INIT,
+                        SERIAL_RUNTIME_ATTACH_FAILED,
+                    ) {
+                        return SerialRuntimeAttachTurn::Failed;
+                    }
                     SerialRuntimeAttachTurn::Pending
                 }
                 crate::hal::driver_task::DriverTaskDescriptorReplayTurn::Failed(_) => {
@@ -932,9 +1120,27 @@ pub(crate) fn service_serial_driver_task_runtime_after_prompt_turn() -> SerialRu
                 SERIAL_LINKED_RUNTIME_ATTACHED.store(0, AtomicOrdering::Release);
                 return SerialRuntimeAttachTurn::Failed;
             }
-            SERIAL_LINKED_RUNTIME_ATTACHED.store(1, AtomicOrdering::Release);
+            let generation = SERIAL_SPSC_GENERATION.load(AtomicOrdering::Acquire);
+            if !publish_serial_generation_owned_state(
+                generation,
+                &SERIAL_LINKED_RUNTIME_ATTACHED,
+                1,
+                0,
+            ) {
+                SERIAL_RUNTIME_ATTACH_PHASE
+                    .store(SERIAL_RUNTIME_ATTACH_FAILED, AtomicOrdering::Release);
+                return SerialRuntimeAttachTurn::Failed;
+            }
             let _ = SERIAL_RUNTIME_INIT_LEASE.lock().take();
-            SERIAL_RUNTIME_ATTACH_PHASE.store(SERIAL_RUNTIME_ATTACH_PROBE, AtomicOrdering::Release);
+            if !publish_serial_generation_owned_state(
+                generation,
+                &SERIAL_RUNTIME_ATTACH_PHASE,
+                SERIAL_RUNTIME_ATTACH_PROBE,
+                SERIAL_RUNTIME_ATTACH_FAILED,
+            ) {
+                SERIAL_LINKED_RUNTIME_ATTACHED.store(0, AtomicOrdering::Release);
+                return SerialRuntimeAttachTurn::Failed;
+            }
             SerialRuntimeAttachTurn::Pending
         }
         SERIAL_RUNTIME_ATTACH_PROBE => {
@@ -943,21 +1149,17 @@ pub(crate) fn service_serial_driver_task_runtime_after_prompt_turn() -> SerialRu
                 crate::hal::driver_task::DriverTaskHotPath::SerialConsole.as_u32() as usize,
                 serial_runtime_ring_service_driver_task,
             );
-            let Some(budget) = serial_driver_task_rx_budget(contract, DEFAULT_RX_CAPACITY) else {
-                SERIAL_RUNTIME_ATTACH_PHASE
-                    .store(SERIAL_RUNTIME_ATTACH_FAILED, AtomicOrdering::Release);
-                return SerialRuntimeAttachTurn::Failed;
-            };
-            let command = crate::hal::driver_task::DriverTaskCommandRecord::pi4_hot_path(
+            let mut command = crate::hal::driver_task::DriverTaskCommandRecord::pi4_hot_path(
                 0,
                 crate::hal::driver_task::DriverTaskHotPath::SerialConsole,
-                budget,
+                crate::hal::driver_task::DriverTaskBudgetGrant::from_contract(contract),
                 crate::hal::driver_task::DriverFrameDescriptor {
                     offset: 0,
                     len: 0,
                     flags: 0,
                 },
             );
+            command.aux0 = pi4_driver_abi::DRIVER_RUNTIME_SERIAL_SPSC_PROBE_AUX;
             let Some(completion) =
                 crate::hal::driver_task::run_driver_task_ring_service_retained_turn(
                     contract, command,
@@ -965,48 +1167,35 @@ pub(crate) fn service_serial_driver_task_runtime_after_prompt_turn() -> SerialRu
             else {
                 return SerialRuntimeAttachTurn::Pending;
             };
-            let no_fault =
-                completion.detail == crate::hal::driver_task::DriverTaskFaultCode::None.as_u16();
-            let empty = completion.frame.offset == 0
+            let generation = SERIAL_SPSC_GENERATION.load(AtomicOrdering::Acquire);
+            let valid_probe = completion.code
+                == crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16()
+                && completion.detail == crate::hal::driver_task::DriverTaskFaultCode::None.as_u16()
+                && completion.result == generation
+                && generation != 0
+                && completion.frame.offset == 0
                 && completion.frame.len == 0
                 && completion.frame.flags == 0;
-            let valid_idle = completion.code
-                == crate::hal::driver_task::DriverTaskCompletionCode::Idle.as_u16()
-                && no_fault
-                && completion.result == 0
-                && empty;
-            let mut valid_frame = false;
-            if completion.code
-                == crate::hal::driver_task::DriverTaskCompletionCode::FrameReady.as_u16()
-                && no_fault
-                && completion.frame.len != 0
-                && completion.result == u32::from(completion.frame.len)
-            {
-                if let Some(bytes) = crate::hal::driver_task::driver_task_ring_frame_bytes(
-                    contract,
-                    completion.frame,
-                ) {
-                    let mut rx = SERIAL_CLIENT_RX.lock();
-                    let mut accepted = 0usize;
-                    for &byte in bytes {
-                        if rx.enqueue(byte).is_err() {
-                            break;
-                        }
-                        accepted = accepted.saturating_add(1);
-                    }
-                    valid_frame = accepted == bytes.len();
-                    if valid_frame {
-                        SERIAL_DRIVER_TASK_CLIENT_RX_PROVEN.store(1, AtomicOrdering::Release);
-                    }
-                }
-            }
-            if !valid_idle && !valid_frame {
+            if !valid_probe {
                 SERIAL_RUNTIME_ATTACH_PHASE
                     .store(SERIAL_RUNTIME_ATTACH_FAILED, AtomicOrdering::Release);
                 return SerialRuntimeAttachTurn::Failed;
             }
-            SERIAL_DRIVER_TASK_CLIENT_SERVICE_PROVEN.store(1, AtomicOrdering::Release);
-            SERIAL_RUNTIME_ATTACH_PHASE.store(SERIAL_RUNTIME_ATTACH_READY, AtomicOrdering::Release);
+            if !publish_serial_generation_owned_state(
+                generation,
+                &SERIAL_DRIVER_TASK_CLIENT_SERVICE_PROVEN,
+                1,
+                0,
+            ) || !publish_serial_generation_owned_state(
+                generation,
+                &SERIAL_RUNTIME_ATTACH_PHASE,
+                SERIAL_RUNTIME_ATTACH_READY,
+                SERIAL_RUNTIME_ATTACH_FAILED,
+            ) {
+                SERIAL_LINKED_RUNTIME_ATTACHED.store(0, AtomicOrdering::Release);
+                SERIAL_DRIVER_TASK_CLIENT_SERVICE_PROVEN.store(0, AtomicOrdering::Release);
+                return SerialRuntimeAttachTurn::Failed;
+            }
             SerialRuntimeAttachTurn::Complete
         }
         SERIAL_RUNTIME_ATTACH_READY => SerialRuntimeAttachTurn::Complete,
@@ -1297,58 +1486,51 @@ pub(crate) fn preserve_driver_task_rx_after_raw_uart() {
 
 #[cfg(feature = "kernel")]
 fn driver_task_client_poll_rx_into_client_queue() -> usize {
-    let contract = driver_task_contract();
-    let available_capacity = {
-        let rx = SERIAL_CLIENT_RX.lock();
-        DEFAULT_RX_CAPACITY.saturating_sub(rx.len())
-    };
-    let Some(budget) = serial_driver_task_rx_budget(contract, available_capacity) else {
-        return 0;
-    };
-    crate::hal::driver_task::register_driver_task_pointer_free_ring_service(
-        contract,
-        crate::hal::driver_task::DriverTaskHotPath::SerialConsole.as_u32() as usize,
-        serial_runtime_ring_service_driver_task,
-    );
-    let command = crate::hal::driver_task::DriverTaskCommandRecord::pi4_hot_path(
-        0,
-        crate::hal::driver_task::DriverTaskHotPath::SerialConsole,
-        budget,
-        crate::hal::driver_task::DriverFrameDescriptor {
-            offset: 0,
-            len: 0,
-            flags: 0,
-        },
-    );
-    let Some(completion) =
-        crate::hal::driver_task::run_driver_task_ring_service_nonblocking(contract, command)
-    else {
-        return 0;
-    };
-    if serial_driver_task_service_completion_proves_transport(completion.code) {
-        SERIAL_DRIVER_TASK_CLIENT_SERVICE_PROVEN.store(1, AtomicOrdering::Release);
-    }
-    if completion.code == crate::hal::driver_task::DriverTaskCompletionCode::Idle.as_u16() {
-        return 0;
-    }
-    if completion.code != crate::hal::driver_task::DriverTaskCompletionCode::FrameReady.as_u16() {
-        return 0;
-    }
-    let Some(bytes) =
-        crate::hal::driver_task::driver_task_ring_frame_bytes(contract, completion.frame)
-    else {
-        return 0;
-    };
+    // Keep the queue locked across SPSC consumption and local enqueue. A
+    // `heapless::spsc::Queue<N>` deliberately reserves one sentinel slot, so
+    // using `N - len` here would commit-consume one byte that cannot be queued
+    // at the exact full boundary.
     let mut rx = SERIAL_CLIENT_RX.lock();
+    let available_capacity = serial_rx_queue_available::<DEFAULT_RX_CAPACITY>(rx.len());
+    if available_capacity == 0 {
+        return 0;
+    }
+    let generation = SERIAL_SPSC_GENERATION.load(AtomicOrdering::Acquire);
+    if generation == 0 {
+        return 0;
+    }
+    let mut staged = [0u8; DEFAULT_RX_CAPACITY];
+    let Some(transfer) = crate::hal::driver_task::driver_task_serial_spsc_dequeue_rx(
+        generation,
+        &mut staged[..available_capacity],
+    ) else {
+        return 0;
+    };
     let mut accepted = 0usize;
-    for &byte in bytes {
+    for &byte in &staged[..transfer.bytes] {
         if rx.enqueue(byte).is_err() {
             break;
         }
         accepted = accepted.saturating_add(1);
     }
-    if serial_driver_task_rx_completion_proves_input(completion.code, accepted) {
-        SERIAL_DRIVER_TASK_CLIENT_RX_PROVEN.store(1, AtomicOrdering::Release);
+    drop(rx);
+    if accepted != transfer.bytes {
+        // The locked sentinel-bounded capacity makes this unreachable unless
+        // the local queue contract itself drifts. Fail the linked transport
+        // closed rather than silently dropping an already-consumed byte.
+        SERIAL_DRIVER_TASK_CLIENT_ACTIVE.store(0, AtomicOrdering::Release);
+        SERIAL_DRIVER_TASK_CLIENT_SERVICE_PROVEN.store(0, AtomicOrdering::Release);
+        SERIAL_DRIVER_TASK_CLIENT_RX_PROVEN.store(0, AtomicOrdering::Release);
+        SERIAL_RUNTIME_ATTACH_PHASE.store(SERIAL_RUNTIME_ATTACH_FAILED, AtomicOrdering::Release);
+        return 0;
+    }
+    if accepted != 0 {
+        let _ = publish_serial_generation_owned_state(
+            generation,
+            &SERIAL_DRIVER_TASK_CLIENT_RX_PROVEN,
+            1,
+            0,
+        );
     }
     accepted
 }
@@ -1362,44 +1544,19 @@ const fn serial_driver_task_service_completion_proves_transport(code: u16) -> bo
 
 #[cfg(feature = "kernel")]
 pub(crate) fn driver_task_client_write_byte(byte: u8) -> nb::Result<(), SerialError> {
-    let contract = driver_task_contract();
-    crate::hal::driver_task::register_driver_task_pointer_free_ring_service(
-        contract,
-        crate::hal::driver_task::DriverTaskHotPath::SerialConsole.as_u32() as usize,
-        serial_runtime_ring_service_driver_task,
-    );
-    let payload = [byte];
-    let Some(frame) = crate::hal::driver_task::describe_driver_task_ring_frame(&payload, 0) else {
-        return Err(NbError::WouldBlock);
-    };
-    let command = crate::hal::driver_task::DriverTaskCommandRecord::pi4_hot_path(
-        0,
-        crate::hal::driver_task::DriverTaskHotPath::SerialConsole,
-        crate::hal::driver_task::DriverTaskBudgetGrant::from_contract(contract),
-        frame,
-    );
-    let staging_segments =
-        [crate::hal::driver_task::DriverTaskStagingSegment::ring_frame(&payload, 0)];
-    match crate::hal::driver_task::run_driver_task_ring_service_nonblocking_staged(
-        contract,
-        command,
-        &staging_segments,
-    ) {
-        Some(completion)
-            if completion.code
-                == crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16()
-                && completion.result == 1 =>
-        {
-            Ok(())
-        }
-        Some(completion)
-            if completion.code
-                == crate::hal::driver_task::DriverTaskCompletionCode::Fault.as_u16() =>
-        {
-            Err(NbError::Other(SerialError::DeviceFault))
-        }
-        _ => Err(NbError::WouldBlock),
+    let generation = SERIAL_SPSC_GENERATION.load(AtomicOrdering::Acquire);
+    if generation == 0 {
+        return Err(NbError::Other(SerialError::DeviceFault));
     }
+    let Some(transfer) =
+        crate::hal::driver_task::driver_task_serial_spsc_enqueue_tx(generation, &[byte])
+    else {
+        return Err(NbError::Other(SerialError::DeviceFault));
+    };
+    if transfer.bytes != 1 {
+        return Err(NbError::WouldBlock);
+    }
+    Ok(())
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -2430,51 +2587,43 @@ where
     #[cfg(feature = "kernel")]
     fn poll_driver_task_rx_turn(
         &mut self,
-        contract: DriverTaskContract,
+        _contract: DriverTaskContract,
     ) -> LinkedSerialTurnOutcome {
-        // TX and RX share one serial command/completion ring. A retained TX
-        // action is immutable until its exact completion, so beginning an RX
-        // cursor here would submit a different fingerprint into the occupied
-        // slot. Ordinary EventPump turns must let the TX-first arbiter resume
-        // that action before an RX ticket can be created.
-        if self.linked_tx.command.is_some() || self.linked_tx_idle.command.is_some() {
-            return LinkedSerialTurnOutcome::Pending;
-        }
         if self.drain_driver_task_client_rx_queue() != 0 {
             return LinkedSerialTurnOutcome::Complete { activity: true };
         }
-        let command = if let Some(command) = self.linked_rx_command {
-            command
-        } else {
-            let Some(budget) = serial_driver_task_rx_budget(
-                contract,
-                serial_rx_queue_available::<RX>(self.rx.len()),
-            ) else {
-                return LinkedSerialTurnOutcome::Complete { activity: false };
-            };
-            let command = crate::hal::driver_task::DriverTaskCommandRecord::pi4_hot_path(
-                0,
-                crate::hal::driver_task::DriverTaskHotPath::SerialConsole,
-                budget,
-                crate::hal::driver_task::DriverFrameDescriptor {
-                    offset: 0,
-                    len: 0,
-                    flags: 0,
-                },
-            );
-            self.linked_rx_ticket = self.next_linked_turn_id();
-            self.linked_rx_command = Some(command);
-            command
+        let generation = SERIAL_SPSC_GENERATION.load(AtomicOrdering::Acquire);
+        let available = serial_rx_queue_available::<RX>(self.rx.len())
+            .min(crate::hal::driver_task::MAX_DRIVER_TASK_FRAME_BYTES);
+        if generation == 0 || available == 0 {
+            return LinkedSerialTurnOutcome::Complete { activity: false };
+        }
+        let mut staged = [0u8; crate::hal::driver_task::MAX_DRIVER_TASK_FRAME_BYTES];
+        let Some(transfer) = crate::hal::driver_task::driver_task_serial_spsc_dequeue_rx(
+            generation,
+            &mut staged[..available],
+        ) else {
+            return LinkedSerialTurnOutcome::Failed;
         };
-        crate::hal::driver_task::register_driver_task_pointer_free_ring_service(
-            contract,
-            crate::hal::driver_task::DriverTaskHotPath::SerialConsole.as_u32() as usize,
-            serial_runtime_ring_service_driver_task,
-        );
-        let turn = crate::hal::driver_task::run_driver_task_ring_service_retained_service_turn(
-            contract, command,
-        );
-        self.finish_driver_task_rx_turn(contract, turn)
+        let mut accepted = 0usize;
+        for &byte in &staged[..transfer.bytes] {
+            if self.rx.enqueue(byte).is_err() {
+                self.telemetry.rx_overflow();
+                return LinkedSerialTurnOutcome::Failed;
+            }
+            accepted = accepted.saturating_add(1);
+        }
+        if accepted != 0 {
+            let _ = publish_serial_generation_owned_state(
+                generation,
+                &SERIAL_DRIVER_TASK_CLIENT_RX_PROVEN,
+                1,
+                0,
+            );
+        }
+        LinkedSerialTurnOutcome::Complete {
+            activity: accepted != 0,
+        }
     }
 
     #[cfg(feature = "kernel")]
@@ -2539,17 +2688,15 @@ where
     #[cfg(feature = "kernel")]
     fn drain_driver_task_client_rx_queue(&mut self) -> usize {
         let mut rx = SERIAL_CLIENT_RX.lock();
-        let mut accepted = 0usize;
-        while self.rx.len() < RX {
-            let Some(byte) = rx.dequeue() else {
-                break;
-            };
-            if self.rx.enqueue(byte).is_err() {
-                self.telemetry.rx_overflow();
-                break;
-            }
-            accepted = accepted.saturating_add(1);
-        }
+        let Some(accepted) = drain_serial_rx_queue_exact(&mut rx, &mut self.rx) else {
+            self.telemetry.rx_overflow();
+            SERIAL_DRIVER_TASK_CLIENT_ACTIVE.store(0, AtomicOrdering::Release);
+            SERIAL_DRIVER_TASK_CLIENT_SERVICE_PROVEN.store(0, AtomicOrdering::Release);
+            SERIAL_DRIVER_TASK_CLIENT_RX_PROVEN.store(0, AtomicOrdering::Release);
+            SERIAL_RUNTIME_ATTACH_PHASE
+                .store(SERIAL_RUNTIME_ATTACH_FAILED, AtomicOrdering::Release);
+            return 0;
+        };
         accepted
     }
 
@@ -2571,11 +2718,14 @@ where
                 return false;
             }
         }
-        let attached = self.driver.try_use_driver_task_client_after_attach();
-        if attached {
-            SERIAL_DRIVER_TASK_CLIENT_ACTIVE.store(1, AtomicOrdering::Release);
-        }
-        attached
+        let generation = SERIAL_SPSC_GENERATION.load(AtomicOrdering::Acquire);
+        self.driver.try_use_driver_task_client_after_attach()
+            && publish_serial_generation_owned_state(
+                generation,
+                &SERIAL_DRIVER_TASK_CLIENT_ACTIVE,
+                1,
+                0,
+            )
     }
 
     #[cfg(feature = "kernel")]
@@ -2591,15 +2741,57 @@ where
         &mut self,
         contract: DriverTaskContract,
     ) -> LinkedSerialTurnOutcome {
-        self.flush_tx_driver_task_ring_typed_turn_with(contract, |command, staged| {
-            let staging_segments =
-                [crate::hal::driver_task::DriverTaskStagingSegment::ring_frame(staged, 0)];
-            crate::hal::driver_task::run_driver_task_ring_service_retained_service_turn_staged(
-                contract,
-                command,
-                &staging_segments,
-            )
-        })
+        if self.linked_tx_idle.command.is_some() || self.linked_tx.poisoned {
+            return if self.linked_tx.poisoned {
+                LinkedSerialTurnOutcome::Failed
+            } else {
+                LinkedSerialTurnOutcome::Pending
+            };
+        }
+        let turn_limit = usize::from(contract.budget.max_ops_per_turn)
+            .min(contract.budget.max_bytes_per_turn as usize)
+            .min(crate::hal::driver_task::MAX_DRIVER_TASK_FRAME_BYTES)
+            .min(SERIAL_LINKED_TX_TURN_BYTES);
+        if self.linked_tx.bytes.is_empty() {
+            if let Some(byte) = self.driver_local.take_pending_tx() {
+                let _ = self.linked_tx.bytes.push(byte);
+            }
+            while self.linked_tx.bytes.len() < turn_limit {
+                let Some(byte) = self.tx.dequeue() else {
+                    break;
+                };
+                let _ = self.linked_tx.bytes.push(byte);
+            }
+        }
+        if self.linked_tx.bytes.is_empty() {
+            return LinkedSerialTurnOutcome::Complete { activity: false };
+        }
+        let generation = SERIAL_SPSC_GENERATION.load(AtomicOrdering::Acquire);
+        let Some(transfer) = crate::hal::driver_task::driver_task_serial_spsc_enqueue_tx(
+            generation,
+            self.linked_tx.bytes.as_slice(),
+        ) else {
+            self.poison_linked_tx();
+            return LinkedSerialTurnOutcome::Failed;
+        };
+        if transfer.bytes == 0 {
+            return LinkedSerialTurnOutcome::Pending;
+        }
+        if !self.linked_tx.consume_prefix(transfer.bytes) {
+            self.poison_linked_tx();
+            return LinkedSerialTurnOutcome::Failed;
+        }
+        self.linked_tx_idle.required = true;
+        if !publish_serial_generation_owned_state(
+            generation,
+            &SERIAL_DRIVER_TASK_CLIENT_SERVICE_PROVEN,
+            1,
+            0,
+        ) {
+            self.poison_linked_tx();
+            return LinkedSerialTurnOutcome::Failed;
+        }
+        LinkedSerialTurnOutcome::Complete { activity: true }
     }
 
     #[cfg(feature = "kernel")]
@@ -3078,6 +3270,24 @@ unsafe fn serial_runtime_ring_service_driver_task(
         SERIAL_LINKED_RUNTIME_ATTACHED.store(1, AtomicOrdering::Release);
         *SERIAL_DRIVER_RUNTIME.lock() = Some(SerialPort::new(driver));
         return crate::hal::driver_task::DriverTaskCompletionRecord::progress(command.sequence, 1);
+    }
+    if command.aux0 == pi4_driver_abi::DRIVER_RUNTIME_SERIAL_SPSC_PROBE_AUX
+        && command.frame.offset == 0
+        && command.frame.len == 0
+        && command.frame.flags == 0
+    {
+        let generation = SERIAL_SPSC_GENERATION.load(AtomicOrdering::Acquire);
+        return if generation == 0 {
+            crate::hal::driver_task::DriverTaskCompletionRecord::fault(
+                command.sequence,
+                crate::hal::driver_task::DriverTaskFaultCode::DeviceUnavailable,
+            )
+        } else {
+            crate::hal::driver_task::DriverTaskCompletionRecord::progress(
+                command.sequence,
+                generation,
+            )
+        };
     }
     if command.aux0 == SERIAL_RUNTIME_AUX_TX_IDLE
         && command.frame.offset == 0
@@ -3660,6 +3870,39 @@ mod tests {
         assert_eq!(serial_rx_queue_available::<16>(14), 1);
         assert_eq!(serial_rx_queue_available::<16>(15), 0);
         assert_eq!(serial_rx_queue_available::<16>(16), 0);
+
+        let mut client_rx = Queue::<u8, DEFAULT_RX_CAPACITY>::new();
+        for value in 0..DEFAULT_RX_CAPACITY.saturating_sub(1) {
+            assert!(client_rx.enqueue(value as u8).is_ok());
+        }
+        assert_eq!(client_rx.len(), DEFAULT_RX_CAPACITY - 1);
+        assert!(client_rx.enqueue(0).is_err());
+        assert_eq!(
+            serial_rx_queue_available::<DEFAULT_RX_CAPACITY>(client_rx.len()),
+            0,
+            "the client path must not consume a 256th byte into a 255-byte queue"
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn linked_runtime_client_drain_never_dequeues_past_destination_sentinel() {
+        let mut source = Queue::<u8, 4>::new();
+        assert!(source.enqueue(0xa5).is_ok());
+        let mut destination = Queue::<u8, 4>::new();
+        for byte in [1, 2, 3] {
+            assert!(destination.enqueue(byte).is_ok());
+        }
+
+        assert_eq!(
+            drain_serial_rx_queue_exact(&mut source, &mut destination),
+            Some(0)
+        );
+        assert_eq!(source.dequeue(), Some(0xa5));
+        assert_eq!(destination.dequeue(), Some(1));
+        assert_eq!(destination.dequeue(), Some(2));
+        assert_eq!(destination.dequeue(), Some(3));
+        assert_eq!(destination.dequeue(), None);
     }
 
     #[cfg(feature = "kernel")]
@@ -3709,6 +3952,47 @@ mod tests {
         assert!(serial_driver_task_interactive_cutover_policy(
             false, true, false
         ));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn serial_runtime_fault_fence_invalidates_generation_and_all_client_state() {
+        let fault_fenced = AtomicU32::new(0);
+        let generation = AtomicU32::new(7);
+        let attached = AtomicU32::new(1);
+        let client_active = AtomicU32::new(1);
+        let service_proven = AtomicU32::new(1);
+        let rx_proven = AtomicU32::new(1);
+        let attach_phase = AtomicU32::new(SERIAL_RUNTIME_ATTACH_READY);
+
+        fence_serial_driver_task_runtime_state_for(
+            &fault_fenced,
+            &generation,
+            &[&attached, &client_active, &service_proven, &rx_proven],
+            &attach_phase,
+            SERIAL_RUNTIME_ATTACH_FAILED,
+        );
+
+        assert_eq!(fault_fenced.load(AtomicOrdering::Acquire), 1);
+        assert!(!serial_spsc_initialization_allowed(
+            fault_fenced.load(AtomicOrdering::Acquire)
+        ));
+        assert_eq!(generation.load(AtomicOrdering::Acquire), 0);
+        for state in [&attached, &client_active, &service_proven, &rx_proven] {
+            assert_eq!(state.load(AtomicOrdering::Acquire), 0);
+        }
+        assert_eq!(
+            attach_phase.load(AtomicOrdering::Acquire),
+            SERIAL_RUNTIME_ATTACH_FAILED
+        );
+        assert!(!publish_serial_generation_owned_state_for(
+            &generation,
+            7,
+            &client_active,
+            1,
+            0,
+        ));
+        assert_eq!(client_active.load(AtomicOrdering::Acquire), 0);
     }
 
     #[cfg(feature = "kernel")]
@@ -4246,7 +4530,12 @@ mod tests {
         // Preparing the immutable payload and sequence-zero command is one root
         // turn. The autonomously polling reciprocal owner cannot observe it yet.
         assert_eq!(
-            port.flush_tx_driver_task_ring_turn(driver_task_contract()),
+            port.flush_tx_driver_task_ring_typed_turn_with(driver_task_contract(), |command, _| {
+                crate::hal::driver_task::run_driver_task_ring_service_retained_service_turn(
+                    driver_task_contract(),
+                    command,
+                )
+            },),
             LinkedSerialTurnOutcome::Pending
         );
         let ticket = port.linked_tx.ticket;
@@ -4277,7 +4566,12 @@ mod tests {
         // root turn is the dedicated sequence-commit turn. It makes the exact
         // request visible but does not also notify or poll the child.
         assert_eq!(
-            port.flush_tx_driver_task_ring_turn(driver_task_contract()),
+            port.flush_tx_driver_task_ring_typed_turn_with(driver_task_contract(), |command, _| {
+                crate::hal::driver_task::run_driver_task_ring_service_retained_service_turn(
+                    driver_task_contract(),
+                    command,
+                )
+            },),
             LinkedSerialTurnOutcome::Pending
         );
         let committed =
@@ -4292,14 +4586,15 @@ mod tests {
         assert_eq!(ring_counters().1, counters_before.1);
         assert_eq!(ring_counters().2, counters_before.2);
 
-        // Ordinary EventPump polling used to install a distinct RX fingerprint
-        // here. The occupied TX slot then rejected RX while the TX path refused
-        // to advance behind that RX cursor, deterministically freezing the
-        // prompt after GENET had already reached DHCP. RX must remain entirely
-        // unallocated until this exact TX action reaches terminal completion.
+        // Ordinary EventPump polling used to install a distinct shared-command
+        // RX fingerprint here. The occupied TX slot then rejected RX while the
+        // TX path refused to advance behind that RX cursor, deterministically
+        // freezing the prompt after GENET had already reached DHCP. The direct
+        // RX SPSC consumer is independent of that command slot: an empty ring
+        // completes without activity and must not disturb the retained TX.
         assert_eq!(
             port.poll_driver_task_rx_turn(driver_task_contract()),
-            LinkedSerialTurnOutcome::Pending
+            LinkedSerialTurnOutcome::Complete { activity: false }
         );
         assert!(port.linked_rx_command.is_none());
         assert_eq!(port.linked_rx_ticket, 0);
@@ -4313,7 +4608,12 @@ mod tests {
         // reciprocal controller between root turns, exactly as the child TCB
         // runs independently in production.
         assert_eq!(
-            port.flush_tx_driver_task_ring_turn(driver_task_contract()),
+            port.flush_tx_driver_task_ring_typed_turn_with(driver_task_contract(), |command, _| {
+                crate::hal::driver_task::run_driver_task_ring_service_retained_service_turn(
+                    driver_task_contract(),
+                    command,
+                )
+            },),
             LinkedSerialTurnOutcome::Pending
         );
         let notified =
@@ -4334,21 +4634,28 @@ mod tests {
             )
         );
         assert_eq!(TEST_SERIAL_RING_CALLS.load(AtomicOrdering::Acquire), 1);
-        assert_eq!(TEST_SERIAL_RING_BYTES.lock().as_slice(), b"abcdef");
+        // Payload integrity now belongs to the independent, generation-bound
+        // SPSC producer/consumer regressions. This retained-command test proves
+        // only that a delayed reciprocal completion is consumed exactly once;
+        // the legacy command-frame storage is no longer the serial data path.
         assert_eq!(port.linked_tx.command, Some(command));
 
         // The following root turn performs only the retained completion poll
         // and local lease finalisation. It must not notify or execute the child
         // a second time.
         assert_eq!(
-            port.flush_tx_driver_task_ring_turn(driver_task_contract()),
+            port.flush_tx_driver_task_ring_typed_turn_with(driver_task_contract(), |command, _| {
+                crate::hal::driver_task::run_driver_task_ring_service_retained_service_turn(
+                    driver_task_contract(),
+                    command,
+                )
+            },),
             LinkedSerialTurnOutcome::Complete { activity: true }
         );
         assert_eq!(port.linked_tx.ticket, ticket);
         assert!(port.linked_tx.command.is_none());
         assert!(!port.tx_pending());
         assert_eq!(TEST_SERIAL_RING_CALLS.load(AtomicOrdering::Acquire), 1);
-        assert_eq!(TEST_SERIAL_RING_BYTES.lock().as_slice(), b"abcdef");
         assert_eq!(ring_counters().0, counters_before.0 + 1);
         assert_eq!(ring_counters().1, counters_before.1 + 1);
         assert_eq!(ring_counters().2, counters_before.2 + 1);
@@ -4410,7 +4717,12 @@ mod tests {
         assert!(port.tx_pending());
 
         assert_eq!(
-            port.flush_tx_driver_task_ring_turn(driver_task_contract()),
+            port.flush_tx_driver_task_ring_typed_turn_with(driver_task_contract(), |command, _| {
+                crate::hal::driver_task::run_driver_task_ring_service_retained_service_turn(
+                    driver_task_contract(),
+                    command,
+                )
+            },),
             LinkedSerialTurnOutcome::Pending
         );
         assert!(

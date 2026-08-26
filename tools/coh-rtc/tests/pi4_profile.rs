@@ -188,6 +188,46 @@ fn pi4_uboot_profile_emits_network_policy() {
         );
     }
 
+    let temporal_task = |task_id: &str| {
+        temporal_tasks
+            .iter()
+            .find(|task| task["id"] == task_id)
+            .unwrap_or_else(|| panic!("temporal task {task_id}"))
+    };
+    let hdmi = temporal_task("driver-hdmi");
+    let gpu_executor = temporal_task("root-worker-executor-gpu");
+    assert_eq!(hdmi["budget_us"], 2_000);
+    assert_eq!(hdmi["period_us"], 10_000);
+    assert_eq!(hdmi["wcet_us"], 1_800);
+    assert_eq!(hdmi["response_time_us"], 2_100);
+    assert_eq!(
+        hdmi["wcet_provenance"],
+        "m26e-pi4-hdmi-write-only-candidate-v1"
+    );
+    assert_eq!(gpu_executor["budget_us"], 5_000);
+    assert_eq!(gpu_executor["response_time_us"], 7_100);
+    let core_two_demand: u64 = temporal_tasks
+        .iter()
+        .filter(|task| task["core"] == 2)
+        .map(|task| task["budget_us"].as_u64().expect("core-2 budget"))
+        .sum();
+    let core_two_admission = manifest["temporal_authority"]["core_admission"]
+        .as_array()
+        .expect("core admission")
+        .iter()
+        .find(|entry| entry["core"] == 2)
+        .expect("core-2 admission");
+    assert_eq!(core_two_demand, 7_400);
+    assert_eq!(
+        core_two_admission["capacity_us"]
+            .as_u64()
+            .expect("core-2 capacity")
+            - core_two_admission["reserve_us"]
+                .as_u64()
+                .expect("core-2 reserve"),
+        9_000
+    );
+
     let devices = manifest["hw"]["devices"].as_array().expect("devices array");
     assert!(devices
         .iter()
@@ -210,7 +250,7 @@ fn pi4_uboot_profile_emits_network_policy() {
     let irqs = manifest["root_task"]["driver_images"]["irqs"]
         .as_array()
         .expect("driver runtime IRQ topology");
-    assert_eq!(irqs.len(), 3);
+    assert_eq!(irqs.len(), 4);
     let serial_irq = irqs
         .iter()
         .find(|irq| irq["hot-path"] == "serial-console")
@@ -220,6 +260,15 @@ fn pi4_uboot_profile_emits_network_policy() {
     assert_eq!(serial_irq["handler-slot"], 4);
     assert_eq!(serial_irq["notification-slot"], 3);
     assert_eq!(serial_irq["trigger"], "level");
+    let genet_irq = irqs
+        .iter()
+        .find(|irq| irq["hot-path"] == "genet-nic")
+        .expect("GENET default-queue IRQ topology");
+    assert_eq!(genet_irq["irq"], 189);
+    assert_eq!(genet_irq["badge"], 1024);
+    assert_eq!(genet_irq["handler-slot"], 4);
+    assert_eq!(genet_irq["notification-slot"], 3);
+    assert_eq!(genet_irq["trigger"], "level");
     let sdio_irq = irqs
         .iter()
         .find(|irq| irq["hot-path"] == "sdio-host" && irq["irq"] == 158)
@@ -239,8 +288,27 @@ fn pi4_uboot_profile_emits_network_policy() {
     assert_eq!(sdio_dma_irq["notification-slot"], 3);
     assert_eq!(sdio_dma_irq["trigger"], "level");
     assert_eq!(irqs[0]["irq"], 125);
-    assert_eq!(irqs[1]["irq"], 158);
-    assert_eq!(irqs[2]["irq"], 116);
+    assert_eq!(irqs[1]["irq"], 189);
+    assert_eq!(irqs[2]["irq"], 158);
+    assert_eq!(irqs[3]["irq"], 116);
+
+    // Bind the already-translated manifest IRQ identity to the exact selected
+    // Pi kernel profile. The first DTS cell is the default-queue/misc line;
+    // the second is the unused priority-queue line. Runtime code must not
+    // reconstruct either seL4 IRQ by applying a hard-coded GIC offset.
+    let selected_dts = fs::read_to_string(repo_path("seL4/build_UBOOT/kernel/kernel.dts"))
+        .expect("selected Pi kernel DTS");
+    let normalized_dts = selected_dts
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let genet_node = normalized_dts
+        .split_once("ethernet@7d580000 {")
+        .map(|(_, suffix)| suffix)
+        .expect("selected GENET DTS node");
+    assert!(genet_node.starts_with(" compatible = \"brcm,bcm2711-genet-v5\";"));
+    assert!(genet_node.contains("interrupts = <0x00 0x9d 0x04 0x00 0x9e 0x04>;"));
+    assert!(!irqs.iter().any(|irq| irq["irq"] == 190));
 
     let bus_links = manifest["root_task"]["driver_images"]["bus_links"]
         .as_array()

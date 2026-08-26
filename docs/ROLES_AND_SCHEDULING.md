@@ -265,12 +265,52 @@ grammar, or fault authority.
 
 The selected Pi profile applies the same kernel mechanism to the resumable
 serial, USB, HDMI, CYW43, and SDIO physical runtimes. Their active SCs remain
-independent and numerically unchanged, but ordinary current-refill exhaustion
-postpones execution instead of converting a retained multi-turn device lifetime
-into a terminal driver fault. Standard faults and explicit device deadlines
-remain terminal, and PCIe plus dormant GENET retain their selected terminal
-timeout policies. This Pi-only selection changes neither QEMU scheduling nor
-driver protocol/ownership semantics.
+independent. Serial, USB, CYW43, and SDIO retain their existing values; the
+write-only HDMI damage compositor alone receives 2,000 us per unchanged
+10,000 us period. Its 1,800 us candidate WCET and derived 2,100 us response are
+static-admission values, not measurements of Pi execution time. The adjacent
+GPU executor remains a passive-Worker donor at 5,000 us and its recomputed
+static response is 7,100 us. Together with the unchanged 400 us PCIe owner,
+core 2 admits 7,400 us against the generated 9,000 us usable bound and retains
+the mandatory 1,000 us reserve. The HDMI command envelope is independently
+fixed at 1,280 operations, 4,096 bytes, and 80 physical clear rows; a resumable
+parser/plane/raster cursor bounds every retained slice by both that immutable
+grant and the selected MCS reservation. The 4,096-byte field is an envelope
+ceiling for parser-bound proof; the unchanged pointer-free frame transport
+still limits a submitted payload to 1,536 bytes.
+Ordinary current-refill exhaustion postpones execution instead of converting a
+retained multi-turn device lifetime into a terminal driver fault. Standard
+faults and explicit device deadlines remain terminal,
+and PCIe plus GENET retain their selected terminal timeout policies.
+The temporal adjustment changes neither QEMU scheduling nor driver ownership;
+the shared HDMI grant values change without changing the pointer-free record
+layout.
+
+The serial throughput correction changes transport storage, not scheduling.
+The existing four shared pages form two generation-bound two-page SPSC rings
+with 8,128 payload bytes per direction. Only these CPU-to-CPU pages use
+identically cacheable, execute-never, coherent Normal-memory mappings so their
+AArch64 atomic cursors are valid; DMA, MMIO, and other driver payloads retain
+their existing uncached mappings. The child retains the combined UART IRQ
+lifetime and any pending handler acknowledgement; root consumes and produces
+through its already-scheduled cooperative EventPump turns. No direct IRQ wake
+into root is claimed, and the selected baud, FIFO, IRQ, core, priority, budget,
+period, response, refill, deadline, and timeout policy remain unchanged.
+
+The aligned SDIO/CYW43 bulk copy likewise changes no scheduling contract. It
+moves bytes only between the existing shared payload and the SDIO child's
+private uncached DMA4 bounce region under the existing bounded command turn.
+The owners, retry ceilings, pair-restart sequencing, and device/aggregate
+deadlines remain unchanged.
+
+GENET remains on core 3 with its selected `1,000 us / 10,000 us` active SC and
+terminal timeout policy. The Pi-only IRQ 189/badge 1024 default-queue DPC may
+drain at most 16 frames and 24,576 bytes into its private queue per quantum;
+remaining exact IRQ work retains a masked, unacknowledged continuation. QEMU
+keeps its existing three-entry driver-runtime IRQ topology with no GENET IRQ
+and identical scheduling. No direct GENET-console shared ring or coupled
+scheduling/fault domain is introduced.
+
 The driver TCB constructor applies that selection at the actual timeout-handler
 installation boundary and reports `timeout_policy` plus `timeout_endpoint` in
 its existing bounded MCS construction record. A reserved timeout identity is

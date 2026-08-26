@@ -28,6 +28,7 @@ use core::arch::asm;
 use core::mem::MaybeUninit;
 use core::{
     cell::UnsafeCell,
+    ptr::NonNull,
     sync::atomic::{fence, AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering},
 };
 
@@ -46,17 +47,19 @@ use pi4_driver_abi::{
     driver_runtime_continuation_action_fingerprint, driver_runtime_cyw43_armcr4_reset_result,
     driver_runtime_cyw43_rx_batch_payload_offset, driver_runtime_cyw43_rx_stage_delta_q11,
     driver_runtime_cyw43_rx_stage_deltas_q11_pack, driver_runtime_genet_completion_result,
+    driver_runtime_serial_spsc_consumer_post_commit, driver_runtime_serial_spsc_data_doorbell_due,
     DriverRuntimeBusLinkDescriptor, DriverRuntimeCyw43CommandDescriptor,
     DriverRuntimeCyw43RxBatchAck, DriverRuntimeCyw43RxBatchEntry, DriverRuntimeCyw43RxBatchRecord,
     DriverRuntimeCyw43RxQueueState, DriverRuntimeDpcEventEntry, DriverRuntimeDpcEventRing,
     DriverRuntimeGenetCompletionResultParts, DriverRuntimeInitDescriptor,
     DriverRuntimeIrqDescriptor, DriverRuntimeResourceRangeDescriptor,
     DriverRuntimeSdioCommandDescriptor, DriverRuntimeSdioPhysicalLifetimeRecord,
-    DRIVER_RUNTIME_BUS_LINK_CHANNEL_USB_PCIE, DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT,
-    DRIVER_RUNTIME_BUS_LINK_FLAG_CLIENT, DRIVER_RUNTIME_BUS_LINK_FLAG_OWNER,
-    DRIVER_RUNTIME_BUS_LINK_PCIE_ENDPOINT_SLOT, DRIVER_RUNTIME_BUS_LINK_PCIE_RING_VADDR,
-    DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_SLOT, DRIVER_RUNTIME_BUS_LINK_SDIO_RING_VADDR,
-    DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY, DRIVER_RUNTIME_COMMAND_FLAG_PERSISTENT_TRANSACTION,
+    DriverRuntimeSerialSpscHeader, DRIVER_RUNTIME_BUS_LINK_CHANNEL_USB_PCIE,
+    DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT, DRIVER_RUNTIME_BUS_LINK_FLAG_CLIENT,
+    DRIVER_RUNTIME_BUS_LINK_FLAG_OWNER, DRIVER_RUNTIME_BUS_LINK_PCIE_ENDPOINT_SLOT,
+    DRIVER_RUNTIME_BUS_LINK_PCIE_RING_VADDR, DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_SLOT,
+    DRIVER_RUNTIME_BUS_LINK_SDIO_RING_VADDR, DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY,
+    DRIVER_RUNTIME_COMMAND_FLAG_PERSISTENT_TRANSACTION,
     DRIVER_RUNTIME_COMMAND_FLAG_STEADY_SERVICE_LEASE,
     DRIVER_RUNTIME_CYW43_ARMCR4_RESET_EDGE_ASSERT_WRITE,
     DRIVER_RUNTIME_CYW43_ARMCR4_RESET_EDGE_CLEAR_WRITE,
@@ -103,24 +106,27 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_OWNER_ACTIVE, DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_POISONED,
     DRIVER_RUNTIME_ENGINE_INIT_AUX, DRIVER_RUNTIME_FRAMEBUFFER_FORMAT_RGB888,
     DRIVER_RUNTIME_FRAMEBUFFER_FORMAT_XRGB8888, DRIVER_RUNTIME_FRAMEBUFFER_VADDR,
-    DRIVER_RUNTIME_INIT_AUX, DRIVER_RUNTIME_INIT_DESCRIPTOR_APERTURE_BYTES,
-    DRIVER_RUNTIME_INIT_FLAG_BUS_LINKS, DRIVER_RUNTIME_INIT_FLAG_FRAMEBUFFER,
-    DRIVER_RUNTIME_INIT_FLAG_IRQS_BOUND, DRIVER_RUNTIME_INIT_FLAG_POLL_ONLY,
-    DRIVER_RUNTIME_INIT_MAGIC, DRIVER_RUNTIME_INIT_MAX_BUS_LINKS,
-    DRIVER_RUNTIME_INIT_MAX_DMA_PAGES, DRIVER_RUNTIME_INIT_MAX_IRQS,
-    DRIVER_RUNTIME_INIT_MAX_MMIO_PAGES, DRIVER_RUNTIME_INIT_MAX_RESOURCE_RANGES,
-    DRIVER_RUNTIME_INIT_MAX_SHARED_PAGES, DRIVER_RUNTIME_INIT_REQUIRED_FLAGS,
-    DRIVER_RUNTIME_INIT_VERSION, DRIVER_RUNTIME_IRQ_TRIGGER_LEVEL,
-    DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT, DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX,
-    DRIVER_RUNTIME_NET_INIT_AUX, DRIVER_RUNTIME_PCIE_OP_PORT_READ,
-    DRIVER_RUNTIME_PCIE_OP_PORT_WRITE, DRIVER_RUNTIME_PCIE_OP_POSTED_WRITE_FLUSH,
-    DRIVER_RUNTIME_REJECT_CYW43_CONTROL_OWNER_MISMATCH,
+    DRIVER_RUNTIME_GENET_IRQ, DRIVER_RUNTIME_GENET_IRQ_BADGE,
+    DRIVER_RUNTIME_HDMI_SERVICE_MAX_BYTES, DRIVER_RUNTIME_HDMI_SERVICE_MAX_FRAMES,
+    DRIVER_RUNTIME_HDMI_SERVICE_MAX_OPS, DRIVER_RUNTIME_INIT_AUX,
+    DRIVER_RUNTIME_INIT_DESCRIPTOR_APERTURE_BYTES, DRIVER_RUNTIME_INIT_FLAG_BUS_LINKS,
+    DRIVER_RUNTIME_INIT_FLAG_FRAMEBUFFER, DRIVER_RUNTIME_INIT_FLAG_IRQS_BOUND,
+    DRIVER_RUNTIME_INIT_FLAG_POLL_ONLY, DRIVER_RUNTIME_INIT_MAGIC,
+    DRIVER_RUNTIME_INIT_MAX_BUS_LINKS, DRIVER_RUNTIME_INIT_MAX_DMA_PAGES,
+    DRIVER_RUNTIME_INIT_MAX_IRQS, DRIVER_RUNTIME_INIT_MAX_MMIO_PAGES,
+    DRIVER_RUNTIME_INIT_MAX_RESOURCE_RANGES, DRIVER_RUNTIME_INIT_MAX_SHARED_PAGES,
+    DRIVER_RUNTIME_INIT_REQUIRED_FLAGS, DRIVER_RUNTIME_INIT_VERSION,
+    DRIVER_RUNTIME_IRQ_TRIGGER_LEVEL, DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT,
+    DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX, DRIVER_RUNTIME_NET_INIT_AUX,
+    DRIVER_RUNTIME_PCIE_OP_PORT_READ, DRIVER_RUNTIME_PCIE_OP_PORT_WRITE,
+    DRIVER_RUNTIME_PCIE_OP_POSTED_WRITE_FLUSH, DRIVER_RUNTIME_REJECT_CYW43_CONTROL_OWNER_MISMATCH,
     DRIVER_RUNTIME_REJECT_SDIO_GENERATION_COMMIT_ADMISSION,
     DRIVER_RUNTIME_REJECT_SDIO_GENERATION_RESET_ROUTE_MISSING,
     DRIVER_RUNTIME_REJECT_SDIO_INTAKE_SEAL_BUSY, DRIVER_RUNTIME_REJECT_SDIO_INTAKE_SEAL_MISSING,
-    DRIVER_RUNTIME_RESOURCE_FLAG_PADDR_CONTIGUOUS, DRIVER_RUNTIME_RESOURCE_KIND_DMA,
-    DRIVER_RUNTIME_RESOURCE_KIND_FRAMEBUFFER, DRIVER_RUNTIME_RESOURCE_KIND_MMIO,
-    DRIVER_RUNTIME_RESOURCE_KIND_SHARED, DRIVER_RUNTIME_RESOURCE_TAG_BCM2835_DMA,
+    DRIVER_RUNTIME_RESERVED_ROOT_BADGE, DRIVER_RUNTIME_RESOURCE_FLAG_PADDR_CONTIGUOUS,
+    DRIVER_RUNTIME_RESOURCE_KIND_DMA, DRIVER_RUNTIME_RESOURCE_KIND_FRAMEBUFFER,
+    DRIVER_RUNTIME_RESOURCE_KIND_MMIO, DRIVER_RUNTIME_RESOURCE_KIND_SHARED,
+    DRIVER_RUNTIME_RESOURCE_PAGE_BYTES, DRIVER_RUNTIME_RESOURCE_TAG_BCM2835_DMA,
     DRIVER_RUNTIME_RESOURCE_TAG_CYW43_CONTROL, DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA,
     DRIVER_RUNTIME_RESOURCE_TAG_GENET_REGS, DRIVER_RUNTIME_RESOURCE_TAG_HDMI_FRAMEBUFFER,
     DRIVER_RUNTIME_RESOURCE_TAG_PCIE_HOST, DRIVER_RUNTIME_RESOURCE_TAG_SDIO_HOST,
@@ -428,8 +434,7 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_STATUS_EVENT_SLOT_EMPTY,
     DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_STATUS_TIMEOUT,
     DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_WAIT_BEGIN,
-    DRIVER_RUNTIME_RING_PROGRESS_USB_HW_ENTRY, DRIVER_RUNTIME_RING_PROGRESS_USB_IMAN_BEGIN,
-    DRIVER_RUNTIME_RING_PROGRESS_USB_IMOD_BEGIN, DRIVER_RUNTIME_RING_PROGRESS_USB_INIT_ENTRY,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_IMAN_BEGIN, DRIVER_RUNTIME_RING_PROGRESS_USB_IMOD_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_USB_RESET_BEGIN, DRIVER_RUNTIME_RING_PROGRESS_USB_RESET_DONE,
     DRIVER_RUNTIME_RING_PROGRESS_USB_RESET_WAIT_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_USB_RINGS_READY,
@@ -455,9 +460,6 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_RING_PROGRESS_USB_SCRATCHPAD_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_USB_SCRATCHPAD_SLOT0_CLEANED,
     DRIVER_RUNTIME_RING_PROGRESS_USB_SCRATCHPAD_SLOT0_WRITTEN,
-    DRIVER_RUNTIME_RING_PROGRESS_USB_STATE_ACCESS_BEGIN,
-    DRIVER_RUNTIME_RING_PROGRESS_USB_STATE_RESET_BEGIN,
-    DRIVER_RUNTIME_RING_PROGRESS_USB_STATE_RESET_DONE,
     DRIVER_RUNTIME_SDIO_CONTAINMENT_ATTEMPT_LIMIT, DRIVER_RUNTIME_SDIO_CONTAINMENT_TIMEOUT_US,
     DRIVER_RUNTIME_SDIO_DMA_IRQ, DRIVER_RUNTIME_SDIO_DMA_IRQ_BADGE,
     DRIVER_RUNTIME_SDIO_FAULT_FRAME_FLAG_CONTAINED,
@@ -490,7 +492,12 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_SDIO_RESP_SHORT, DRIVER_RUNTIME_SDIO_RESP_SHORT_BUSY,
     DRIVER_RUNTIME_SDIO_SERVICE_MAX_BYTES, DRIVER_RUNTIME_SDIO_SERVICE_MAX_OPS,
     DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_BYTES, DRIVER_RUNTIME_SDIO_TRANSFER_ATTEMPT_LIMIT,
-    DRIVER_RUNTIME_SERIAL_IRQ, DRIVER_RUNTIME_SERIAL_IRQ_BADGE, DRIVER_RUNTIME_SERIAL_TX_IDLE_AUX,
+    DRIVER_RUNTIME_SERIAL_IRQ, DRIVER_RUNTIME_SERIAL_IRQ_BADGE,
+    DRIVER_RUNTIME_SERIAL_RX_SPSC_FIRST_PAGE, DRIVER_RUNTIME_SERIAL_SPSC_CAPACITY,
+    DRIVER_RUNTIME_SERIAL_SPSC_FLAG_POISONED, DRIVER_RUNTIME_SERIAL_SPSC_FLAG_ROOT_TO_RUNTIME,
+    DRIVER_RUNTIME_SERIAL_SPSC_FLAG_RUNTIME_TO_ROOT, DRIVER_RUNTIME_SERIAL_SPSC_HEADER_BYTES,
+    DRIVER_RUNTIME_SERIAL_SPSC_PROBE_AUX, DRIVER_RUNTIME_SERIAL_SPSC_SHARED_PAGES,
+    DRIVER_RUNTIME_SERIAL_TX_IDLE_AUX, DRIVER_RUNTIME_SERIAL_TX_SPSC_FIRST_PAGE,
     DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE, DRIVER_RUNTIME_USB_ENUMERATE_AUX,
     DRIVER_RUNTIME_USB_HUB_PORT_STATUS_FLAG_CLEAR_CONNECTION,
     DRIVER_RUNTIME_USB_HUB_PORT_STATUS_FLAG_CLEAR_ENABLE,
@@ -594,7 +601,7 @@ use pi4_driver_abi::{
 #[cfg(any(target_os = "none", test))]
 use pi4_driver_abi::{
     DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_BADGE,
-    DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE, DRIVER_RUNTIME_RESERVED_ROOT_BADGE,
+    DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE,
 };
 #[cfg(any(target_os = "none", test))]
 use pi4_driver_abi::{
@@ -653,6 +660,13 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_RING_PROGRESS_ROOT_GRANT_READY,
     DRIVER_RUNTIME_RING_PROGRESS_ROOT_GRANT_REJECTED,
     DRIVER_RUNTIME_RING_PROGRESS_ROOT_GRANT_WAIT_BEGIN,
+};
+#[cfg(not(target_os = "none"))]
+use pi4_driver_abi::{
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HW_ENTRY, DRIVER_RUNTIME_RING_PROGRESS_USB_INIT_ENTRY,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_STATE_ACCESS_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_STATE_RESET_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_STATE_RESET_DONE,
 };
 #[cfg(any(target_os = "none", test))]
 use pi4_driver_abi::{
@@ -824,10 +838,16 @@ const CHAR_WIDTH: usize = 8;
 const CHAR_HEIGHT: usize = 16;
 const HDMI_SAFE_AREA_MARGIN_DIVISOR: usize = 50;
 const HDMI_SCROLL_LINES: usize = 10;
-// The Pi HDMI runtime has a 400-us / 10-ms generated MCS reservation. RGB888
-// retains the validated eight-row bound. An aligned XRGB8888 row uses paired
-// u64 stores, so sixteen rows preserve the old worst-case store-instruction
-// count while halving retained first-frame scheduling turns.
+const HDMI_MAX_COLS: usize = 256;
+const HDMI_MAX_ROWS: usize = 128;
+const HDMI_CELL_CAPACITY: usize = 32_768;
+const HDMI_DIRTY_WORDS: usize = HDMI_CELL_CAPACITY.div_ceil(u64::BITS as usize);
+const HDMI_BASE_BUDGET_US: usize = 400;
+const HDMI_MAX_RASTER_BUDGET_US: usize = 2_000;
+// One 400-us unit admits the previously validated scanline-store count. The
+// Pi-only 2-ms candidate scales that exact operation bound by five; it does
+// not convert the live firmware framebuffer into cacheable memory or grant a
+// second owner.
 const HDMI_FIRST_FRAME_CLEAR_ROWS_PER_TURN_RGB888: usize = 8;
 const HDMI_FIRST_FRAME_CLEAR_ROWS_PER_TURN_PAIRED_XRGB8888: usize = 16;
 const FB_BYTES_PER_PIXEL_32: usize = 4;
@@ -962,6 +982,7 @@ const PCIE_MMIO_ACCESS_BYTES: usize = core::mem::size_of::<u32>();
 
 const GENET_SYS_OFF: usize = 0x0000;
 const GENET_EXT_OFF: usize = 0x0080;
+const GENET_INTRL2_0_OFF: usize = 0x0200;
 const GENET_RBUF_OFF: usize = 0x0300;
 const GENET_TBUF_OFF: usize = 0x0600;
 const GENET_UMAC_OFF: usize = 0x0800;
@@ -969,6 +990,11 @@ const GENET_RX_OFF: usize = 0x2000;
 const GENET_TX_OFF: usize = 0x4000;
 const GENET_SYS_PORT_CTRL: usize = GENET_SYS_OFF + 0x04;
 const GENET_SYS_RBUF_FLUSH_CTRL: usize = GENET_SYS_OFF + 0x08;
+const GENET_INTRL2_0_CPU_STAT: usize = GENET_INTRL2_0_OFF;
+const GENET_INTRL2_0_CPU_CLEAR: usize = GENET_INTRL2_0_OFF + 0x08;
+const GENET_INTRL2_0_CPU_MASK_STATUS: usize = GENET_INTRL2_0_OFF + 0x0c;
+const GENET_INTRL2_0_CPU_MASK_SET: usize = GENET_INTRL2_0_OFF + 0x10;
+const GENET_INTRL2_0_CPU_MASK_CLEAR: usize = GENET_INTRL2_0_OFF + 0x14;
 const GENET_EXT_RGMII_OOB_CTRL: usize = GENET_EXT_OFF + 0x0c;
 const GENET_RBUF_CTRL: usize = GENET_RBUF_OFF;
 const GENET_RBUF_TBUF_SIZE_CTRL: usize = GENET_RBUF_OFF + 0xb4;
@@ -997,6 +1023,14 @@ const GENET_TBUF_64B_EN: u32 = 1 << 0;
 const GENET_MIB_RESET_RX: u32 = 1 << 0;
 const GENET_MIB_RESET_RUNT: u32 = 1 << 1;
 const GENET_MIB_RESET_TX: u32 = 1 << 2;
+// Cohesix uses the BCM GENET default descriptor ring (queue 16), matching the
+// Linux v6.6 queue model used for the Pi 4 bring-up. Its multi-buffer
+// completions are INTRL2_0 sources on the first DTS interrupt; INTRL2_1 and
+// the second interrupt are reserved for priority queues 0..15.
+const GENET_IRQ_RXDMA_MBDONE: u32 = 1 << 13;
+const GENET_IRQ_TXDMA_MBDONE: u32 = 1 << 16;
+const GENET_NAPI_IRQ_MASK: u32 = GENET_IRQ_RXDMA_MBDONE | GENET_IRQ_TXDMA_MBDONE;
+const GENET_IRQ_ALL_SOURCES: u32 = u32::MAX;
 const GENET_MDIO_START_BUSY: u32 = 1 << 29;
 const GENET_MDIO_READ_FAIL: u32 = 1 << 28;
 const GENET_MDIO_RD: u32 = 2 << 26;
@@ -1081,8 +1115,22 @@ const GENET_TX_BUF_OFFSET: usize = GENET_STATUS_BLOCK_BYTES;
 const GENET_MAX_FRAME_LEN: usize = 1536;
 const GENET_RX_DRAIN_BUDGET: usize = 16;
 const GENET_RX_QUEUE_CAP: usize = GENET_RX_DRAIN_BUDGET;
+const GENET_RX_CONTROL_BURST_LIMIT: u8 = 4;
+const GENET_RX_PRIORITY_DATA: u8 = 0;
+const GENET_RX_PRIORITY_CONTROL: u8 = 1;
+const GENET_NAPI_BYTE_BUDGET: usize = GENET_RX_DRAIN_BUDGET * GENET_MAX_FRAME_LEN;
 const GENET_TX_COMPLETION_RECLAIM_BUDGET: usize = GENET_ACTIVE_RING_DESCS;
 const GENET_DRIVER_TASK_MAC: [u8; 6] = [0x02, 0x43, 0x4f, 0x48, 0x58, 0x31];
+
+const fn genet_rx_queue_initial_slots() -> [u8; GENET_RX_QUEUE_CAP] {
+    let mut slots = [0u8; GENET_RX_QUEUE_CAP];
+    let mut index = 0usize;
+    while index < GENET_RX_QUEUE_CAP {
+        slots[index] = index as u8;
+        index += 1;
+    }
+    slots
+}
 
 const PCIE_MISC_PCIE_STATUS: usize = 0x4068;
 const PCIE_EXT_CFG_DATA: usize = 0x8000;
@@ -1836,6 +1884,7 @@ const SDIO_DMA_BOUNCE_PAGE_COUNT: usize = 8;
 const SDIO_DMA_CONTROL_BLOCK_BYTES: usize = 32;
 const SDIO_DMA_MAX_CONTROL_BLOCKS: usize = SDIO_DMA_BOUNCE_PAGE_COUNT;
 const SDIO_DMA_MAX_TRANSFER_BYTES: usize = SDIO_DMA_BOUNCE_PAGE_COUNT * DRIVER_TASK_RING_PAGE_BYTES;
+const SDIO_DMA_COPY_WORD_BYTES: usize = core::mem::size_of::<u64>();
 const BCM2835_DMA_CHANNEL: usize = 4;
 const BCM2835_DMA_CHANNEL_STRIDE: usize = 0x100;
 const BCM2835_DMA_CHANNEL_OFFSET: usize = BCM2835_DMA_CHANNEL * BCM2835_DMA_CHANNEL_STRIDE;
@@ -2277,6 +2326,17 @@ impl<T> RuntimeStateSlot<T> {
 #[derive(Debug, Eq, PartialEq)]
 struct GenetRuntimeState {
     initialized: bool,
+    irq_badge: u32,
+    irq_handler_slot: u32,
+    irq_ack_pending: bool,
+    irq_wakes: u32,
+    irq_acks: u32,
+    irq_ack_failures: u32,
+    irq_unmask_failures: u32,
+    dpc_turns: u32,
+    dpc_budget_hits: u32,
+    dpc_final_rechecks: u32,
+    dpc_last_status: u32,
     tx_prod_index: u16,
     tx_cons_index: u16,
     rx_cons_index: u16,
@@ -2286,12 +2346,15 @@ struct GenetRuntimeState {
     rx_queue_head: u8,
     rx_queue_count: u8,
     rx_queue_high_water: u8,
+    rx_control_burst: u8,
     rx_queue_overflows: u32,
     rx_drain_budget_hits: u32,
     rx_byte_budget_hits: u32,
     rx_max_drained_per_turn: u8,
     rx_queue_lens: [u16; GENET_RX_QUEUE_CAP],
     rx_queue_flags: [u16; GENET_RX_QUEUE_CAP],
+    rx_queue_priorities: [u8; GENET_RX_QUEUE_CAP],
+    rx_queue_slots: [u8; GENET_RX_QUEUE_CAP],
     rx_queue_frames: [[u8; GENET_MAX_FRAME_LEN]; GENET_RX_QUEUE_CAP],
     tx_packets: u32,
     tx_completions: u32,
@@ -2306,6 +2369,17 @@ impl GenetRuntimeState {
     const fn new() -> Self {
         Self {
             initialized: false,
+            irq_badge: 0,
+            irq_handler_slot: 0,
+            irq_ack_pending: false,
+            irq_wakes: 0,
+            irq_acks: 0,
+            irq_ack_failures: 0,
+            irq_unmask_failures: 0,
+            dpc_turns: 0,
+            dpc_budget_hits: 0,
+            dpc_final_rechecks: 0,
+            dpc_last_status: 0,
             tx_prod_index: 0,
             tx_cons_index: 0,
             rx_cons_index: 0,
@@ -2315,12 +2389,15 @@ impl GenetRuntimeState {
             rx_queue_head: 0,
             rx_queue_count: 0,
             rx_queue_high_water: 0,
+            rx_control_burst: 0,
             rx_queue_overflows: 0,
             rx_drain_budget_hits: 0,
             rx_byte_budget_hits: 0,
             rx_max_drained_per_turn: 0,
             rx_queue_lens: [0; GENET_RX_QUEUE_CAP],
             rx_queue_flags: [0; GENET_RX_QUEUE_CAP],
+            rx_queue_priorities: [GENET_RX_PRIORITY_DATA; GENET_RX_QUEUE_CAP],
+            rx_queue_slots: genet_rx_queue_initial_slots(),
             rx_queue_frames: [[0; GENET_MAX_FRAME_LEN]; GENET_RX_QUEUE_CAP],
             tx_packets: 0,
             tx_completions: 0,
@@ -2334,6 +2411,17 @@ impl GenetRuntimeState {
 
     fn reset(&mut self) {
         self.initialized = false;
+        self.irq_badge = 0;
+        self.irq_handler_slot = 0;
+        self.irq_ack_pending = false;
+        self.irq_wakes = 0;
+        self.irq_acks = 0;
+        self.irq_ack_failures = 0;
+        self.irq_unmask_failures = 0;
+        self.dpc_turns = 0;
+        self.dpc_budget_hits = 0;
+        self.dpc_final_rechecks = 0;
+        self.dpc_last_status = 0;
         self.tx_prod_index = 0;
         self.tx_cons_index = 0;
         self.rx_cons_index = 0;
@@ -2343,12 +2431,15 @@ impl GenetRuntimeState {
         self.rx_queue_head = 0;
         self.rx_queue_count = 0;
         self.rx_queue_high_water = 0;
+        self.rx_control_burst = 0;
         self.rx_queue_overflows = 0;
         self.rx_drain_budget_hits = 0;
         self.rx_byte_budget_hits = 0;
         self.rx_max_drained_per_turn = 0;
         self.rx_queue_lens.fill(0);
         self.rx_queue_flags.fill(0);
+        self.rx_queue_priorities.fill(GENET_RX_PRIORITY_DATA);
+        self.rx_queue_slots = genet_rx_queue_initial_slots();
         for frame in self.rx_queue_frames.iter_mut() {
             frame.fill(0);
         }
@@ -7415,8 +7506,10 @@ static HDMI_CSI_DIGITS_SEEN: AtomicU32 = AtomicU32::new(0);
 static HDMI_SAVED_CURSOR_ROW: AtomicU32 = AtomicU32::new(0);
 static HDMI_SAVED_CURSOR_COL: AtomicU32 = AtomicU32::new(0);
 static HDMI_FIRST_FRAME_CLEARED: AtomicBool = AtomicBool::new(false);
-static HDMI_FIRST_FRAME_CURSOR: RuntimeStateSlot<HdmiFirstFrameCursor> =
-    RuntimeStateSlot::new(HdmiFirstFrameCursor::idle());
+static HDMI_FRAME_CURSOR: RuntimeStateSlot<HdmiFrameCursor> =
+    RuntimeStateSlot::new(HdmiFrameCursor::idle());
+static HDMI_CELL_PLANE: RuntimeStateSlot<HdmiCellPlane> =
+    RuntimeStateSlot::new(HdmiCellPlane::empty());
 static GENET_RUNTIME_FLAGS: AtomicU32 = AtomicU32::new(0);
 static GENET_TX_COUNT: AtomicU32 = AtomicU32::new(0);
 static GENET_RX_COUNT: AtomicU32 = AtomicU32::new(0);
@@ -7487,6 +7580,7 @@ static SERIAL_RUNTIME_RX_QUEUE: RuntimeStateSlot<SerialRuntimeRxQueue> =
 static SERIAL_RUNTIME_TX_CURSOR: RuntimeStateSlot<SerialRuntimeTxCursor> =
     RuntimeStateSlot::new(SerialRuntimeTxCursor::new());
 static SERIAL_RUNTIME_RX_STATE_PUBLICATION: AtomicU32 = AtomicU32::new(0);
+static SERIAL_RUNTIME_SPSC_GENERATION: AtomicU32 = AtomicU32::new(0);
 
 #[cfg(target_os = "none")]
 const MINI_UART_IO_OFFSET: usize = 0x40;
@@ -7512,6 +7606,594 @@ const MINI_UART_RX_DRAIN_LIMIT: usize = 128;
 const MINI_UART_RX_QUEUE_CAPACITY: usize = 512;
 const MINI_UART_IER_RX_INTERRUPT: u32 = 1;
 const MINI_UART_IER_TX_INTERRUPT: u32 = 1 << 1;
+
+#[cfg(target_os = "none")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SerialMiniUartReadRegister {
+    Io,
+    LineStatus,
+}
+
+#[cfg(target_os = "none")]
+impl SerialMiniUartReadRegister {
+    const fn offset(self) -> usize {
+        match self {
+            Self::Io => MINI_UART_IO_OFFSET,
+            Self::LineStatus => MINI_UART_LSR_OFFSET,
+        }
+    }
+}
+
+#[cfg(target_os = "none")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SerialMiniUartWriteRegister {
+    Io,
+    InterruptEnable,
+}
+
+#[cfg(target_os = "none")]
+impl SerialMiniUartWriteRegister {
+    const fn offset(self) -> usize {
+        match self {
+            Self::Io => MINI_UART_IO_OFFSET,
+            Self::InterruptEnable => MINI_UART_IER_OFFSET,
+        }
+    }
+}
+
+#[cfg(target_os = "none")]
+enum SerialMiniUartAccess {
+    Read(SerialMiniUartReadRegister),
+    Write(SerialMiniUartWriteRegister, u32),
+}
+
+#[cfg(target_os = "none")]
+fn serial_mini_uart_access(access: SerialMiniUartAccess) -> u32 {
+    // SAFETY: Descriptor admission maps the serial runtime's exclusive
+    // mini-UART page at this fixed address. The closed access enums expose only
+    // aligned MU_IO, MU_IER, and read-only MU_LSR offsets inside that page.
+    unsafe {
+        match access {
+            SerialMiniUartAccess::Read(register) => core::ptr::read_volatile(
+                (DRIVER_TASK_DEVICE_MMIO_VADDR + register.offset()) as *const u32,
+            ),
+            SerialMiniUartAccess::Write(register, value) => {
+                core::ptr::write_volatile(
+                    (DRIVER_TASK_DEVICE_MMIO_VADDR + register.offset()) as *mut u32,
+                    value,
+                );
+                0
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "none")]
+fn serial_mini_uart_read(register: SerialMiniUartReadRegister) -> u32 {
+    serial_mini_uart_access(SerialMiniUartAccess::Read(register))
+}
+
+#[cfg(target_os = "none")]
+fn serial_mini_uart_write(register: SerialMiniUartWriteRegister, value: u32) {
+    let _ = serial_mini_uart_access(SerialMiniUartAccess::Write(register, value));
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct SerialSpscTransfer {
+    bytes: usize,
+    data_doorbell: bool,
+    producer_rearm: bool,
+    work_remaining: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SerialSpscAtomicField {
+    Magic,
+    Generation,
+    Capacity,
+    ProducerIndex,
+    ProducerCommit,
+    ConsumerIndex,
+    ConsumerCommit,
+    DoorbellEpoch,
+    Reserved0,
+    ConsumerWakeEpoch,
+    Flags,
+    ProducedBytes,
+    ConsumedBytes,
+    HighWater,
+    Reserved1,
+}
+
+impl SerialSpscAtomicField {
+    const fn offset(self) -> usize {
+        match self {
+            Self::Magic => core::mem::offset_of!(DriverRuntimeSerialSpscHeader, magic),
+            Self::Generation => core::mem::offset_of!(DriverRuntimeSerialSpscHeader, generation),
+            Self::Capacity => core::mem::offset_of!(DriverRuntimeSerialSpscHeader, capacity),
+            Self::ProducerIndex => {
+                core::mem::offset_of!(DriverRuntimeSerialSpscHeader, producer_index)
+            }
+            Self::ProducerCommit => {
+                core::mem::offset_of!(DriverRuntimeSerialSpscHeader, producer_commit)
+            }
+            Self::ConsumerIndex => {
+                core::mem::offset_of!(DriverRuntimeSerialSpscHeader, consumer_index)
+            }
+            Self::ConsumerCommit => {
+                core::mem::offset_of!(DriverRuntimeSerialSpscHeader, consumer_commit)
+            }
+            Self::DoorbellEpoch => {
+                core::mem::offset_of!(DriverRuntimeSerialSpscHeader, doorbell_epoch)
+            }
+            Self::Reserved0 => core::mem::offset_of!(DriverRuntimeSerialSpscHeader, reserved0),
+            Self::ConsumerWakeEpoch => {
+                core::mem::offset_of!(DriverRuntimeSerialSpscHeader, consumer_wake_epoch)
+            }
+            Self::Flags => core::mem::offset_of!(DriverRuntimeSerialSpscHeader, flags),
+            Self::ProducedBytes => {
+                core::mem::offset_of!(DriverRuntimeSerialSpscHeader, produced_bytes)
+            }
+            Self::ConsumedBytes => {
+                core::mem::offset_of!(DriverRuntimeSerialSpscHeader, consumed_bytes)
+            }
+            Self::HighWater => core::mem::offset_of!(DriverRuntimeSerialSpscHeader, high_water),
+            Self::Reserved1 => core::mem::offset_of!(DriverRuntimeSerialSpscHeader, reserved1),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SerialSpscImmutableField {
+    Version,
+    HeaderLen,
+}
+
+impl SerialSpscImmutableField {
+    const fn offset(self) -> usize {
+        match self {
+            Self::Version => core::mem::offset_of!(DriverRuntimeSerialSpscHeader, version),
+            Self::HeaderLen => core::mem::offset_of!(DriverRuntimeSerialSpscHeader, header_len),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct SerialSpscHeaderAccess {
+    ptr: NonNull<DriverRuntimeSerialSpscHeader>,
+}
+
+impl SerialSpscHeaderAccess {
+    fn at(shared_base: usize, first_page: usize) -> Option<Self> {
+        if shared_base == 0
+            || (first_page != DRIVER_RUNTIME_SERIAL_TX_SPSC_FIRST_PAGE
+                && first_page != DRIVER_RUNTIME_SERIAL_RX_SPSC_FIRST_PAGE)
+        {
+            return None;
+        }
+        let address =
+            shared_base.checked_add(first_page.checked_mul(DRIVER_TASK_RING_PAGE_BYTES)?)?;
+        if !address.is_multiple_of(core::mem::align_of::<DriverRuntimeSerialSpscHeader>()) {
+            return None;
+        }
+        Some(Self {
+            ptr: NonNull::new(address as *mut DriverRuntimeSerialSpscHeader)?,
+        })
+    }
+
+    fn atomic_ptr(self, field: SerialSpscAtomicField) -> *mut u32 {
+        self.ptr
+            .as_ptr()
+            .cast::<u8>()
+            .wrapping_add(field.offset())
+            .cast::<u32>()
+    }
+
+    fn with_atomic<R>(
+        self,
+        field: SerialSpscAtomicField,
+        access: impl FnOnce(&AtomicU32) -> R,
+    ) -> R {
+        // SAFETY: `at` admits one nonnull, 64-byte-aligned header and the
+        // closed field enum selects only naturally aligned u32 members. Every
+        // live access to those members uses the atomic reference created here;
+        // callers preserve each compiler-declared SPSC field owner.
+        unsafe { access(AtomicU32::from_ptr(self.atomic_ptr(field))) }
+    }
+
+    fn load(self, field: SerialSpscAtomicField, ordering: Ordering) -> u32 {
+        self.with_atomic(field, |atomic| atomic.load(ordering))
+    }
+
+    fn store(self, field: SerialSpscAtomicField, value: u32, ordering: Ordering) {
+        self.with_atomic(field, |atomic| atomic.store(value, ordering));
+    }
+
+    fn load_immutable(self, field: SerialSpscImmutableField) -> u16 {
+        let ptr = self
+            .ptr
+            .as_ptr()
+            .cast::<u8>()
+            .wrapping_add(field.offset())
+            .cast::<u16>();
+        // SAFETY: `at` proves the header base and the closed enum selects one
+        // naturally aligned u16 field. These fields are immutable after the
+        // generation's release publication, so a volatile sample is stable.
+        unsafe { core::ptr::read_volatile(ptr) }
+    }
+
+    #[cfg(test)]
+    const fn as_ptr(self) -> *mut DriverRuntimeSerialSpscHeader {
+        self.ptr.as_ptr()
+    }
+}
+
+fn serial_spsc_header_at(shared_base: usize, first_page: usize) -> Option<SerialSpscHeaderAccess> {
+    SerialSpscHeaderAccess::at(shared_base, first_page)
+}
+
+fn serial_spsc_poison(header: SerialSpscHeaderAccess) {
+    let flags = header.load(SerialSpscAtomicField::Flags, Ordering::Acquire);
+    header.store(
+        SerialSpscAtomicField::Flags,
+        flags | DRIVER_RUNTIME_SERIAL_SPSC_FLAG_POISONED,
+        Ordering::Release,
+    );
+}
+
+fn serial_spsc_header_snapshot_at(
+    shared_base: usize,
+    first_page: usize,
+    generation: u32,
+    direction: u32,
+) -> Option<DriverRuntimeSerialSpscHeader> {
+    let header = serial_spsc_header_at(shared_base, first_page)?;
+    let mut attempt = 0usize;
+    while attempt < 3 {
+        let producer_commit_first =
+            header.load(SerialSpscAtomicField::ProducerCommit, Ordering::Acquire);
+        let producer_index = header.load(SerialSpscAtomicField::ProducerIndex, Ordering::Relaxed);
+        let producer_commit_second =
+            header.load(SerialSpscAtomicField::ProducerCommit, Ordering::Acquire);
+        let consumer_commit_first =
+            header.load(SerialSpscAtomicField::ConsumerCommit, Ordering::Acquire);
+        let consumer_index = header.load(SerialSpscAtomicField::ConsumerIndex, Ordering::Relaxed);
+        let consumer_commit_second =
+            header.load(SerialSpscAtomicField::ConsumerCommit, Ordering::Acquire);
+        if producer_commit_first == producer_commit_second
+            && producer_index == producer_commit_second
+            && consumer_commit_first == consumer_commit_second
+            && consumer_index == consumer_commit_second
+        {
+            let snapshot = DriverRuntimeSerialSpscHeader {
+                magic: header.load(SerialSpscAtomicField::Magic, Ordering::Relaxed),
+                version: header.load_immutable(SerialSpscImmutableField::Version),
+                header_len: header.load_immutable(SerialSpscImmutableField::HeaderLen),
+                generation: header.load(SerialSpscAtomicField::Generation, Ordering::Acquire),
+                capacity: header.load(SerialSpscAtomicField::Capacity, Ordering::Relaxed),
+                producer_index,
+                producer_commit: producer_commit_second,
+                consumer_index,
+                consumer_commit: consumer_commit_second,
+                doorbell_epoch: header
+                    .load(SerialSpscAtomicField::DoorbellEpoch, Ordering::Relaxed),
+                reserved0: header.load(SerialSpscAtomicField::Reserved0, Ordering::Relaxed),
+                consumer_wake_epoch: header
+                    .load(SerialSpscAtomicField::ConsumerWakeEpoch, Ordering::Relaxed),
+                flags: header.load(SerialSpscAtomicField::Flags, Ordering::Acquire),
+                produced_bytes: header
+                    .load(SerialSpscAtomicField::ProducedBytes, Ordering::Relaxed),
+                consumed_bytes: header
+                    .load(SerialSpscAtomicField::ConsumedBytes, Ordering::Relaxed),
+                high_water: header.load(SerialSpscAtomicField::HighWater, Ordering::Relaxed),
+                reserved1: header.load(SerialSpscAtomicField::Reserved1, Ordering::Relaxed),
+            };
+            if snapshot.valid_for(generation, direction) {
+                return Some(snapshot);
+            }
+        }
+        attempt = attempt.saturating_add(1);
+    }
+    None
+}
+
+fn serial_spsc_committed_occupancy_at(
+    shared_base: usize,
+    first_page: usize,
+    generation: u32,
+    direction: u32,
+) -> Option<u32> {
+    let header = serial_spsc_header_at(shared_base, first_page)?;
+    let observed_generation = header.load(SerialSpscAtomicField::Generation, Ordering::Acquire);
+    let flags = header.load(SerialSpscAtomicField::Flags, Ordering::Acquire);
+    let direction_bits = flags
+        & (DRIVER_RUNTIME_SERIAL_SPSC_FLAG_ROOT_TO_RUNTIME
+            | DRIVER_RUNTIME_SERIAL_SPSC_FLAG_RUNTIME_TO_ROOT);
+    if generation == 0
+        || observed_generation != generation
+        || direction_bits != direction
+        || flags & DRIVER_RUNTIME_SERIAL_SPSC_FLAG_POISONED != 0
+    {
+        return None;
+    }
+    let producer = header.load(SerialSpscAtomicField::ProducerCommit, Ordering::Acquire);
+    let consumer = header.load(SerialSpscAtomicField::ConsumerCommit, Ordering::Acquire);
+    let occupancy = producer.wrapping_sub(consumer);
+    (occupancy <= DRIVER_RUNTIME_SERIAL_SPSC_CAPACITY as u32).then_some(occupancy)
+}
+
+fn serial_spsc_payload_ptr_at(
+    shared_base: usize,
+    first_page: usize,
+    cursor: u32,
+) -> Option<(usize, usize)> {
+    let ring_base =
+        shared_base.checked_add(first_page.checked_mul(DRIVER_TASK_RING_PAGE_BYTES)?)?;
+    let payload_offset = DRIVER_RUNTIME_SERIAL_SPSC_HEADER_BYTES
+        .checked_add(cursor as usize % DRIVER_RUNTIME_SERIAL_SPSC_CAPACITY)?;
+    let ptr = ring_base.checked_add(payload_offset)?;
+    let ring_left =
+        DRIVER_RUNTIME_SERIAL_SPSC_CAPACITY - cursor as usize % DRIVER_RUNTIME_SERIAL_SPSC_CAPACITY;
+    Some((ptr, ring_left))
+}
+
+fn serial_spsc_produce_at(
+    shared_base: usize,
+    first_page: usize,
+    generation: u32,
+    direction: u32,
+    bytes: &[u8],
+) -> Option<SerialSpscTransfer> {
+    let header = serial_spsc_header_snapshot_at(shared_base, first_page, generation, direction)?;
+    let used = header.occupancy()? as usize;
+    let written = bytes
+        .len()
+        .min(DRIVER_RUNTIME_SERIAL_SPSC_CAPACITY.saturating_sub(used));
+    if written == 0 {
+        return Some(SerialSpscTransfer {
+            work_remaining: used != 0,
+            ..SerialSpscTransfer::default()
+        });
+    }
+    let mut copied = 0usize;
+    while copied < written {
+        let cursor = header.producer_index.wrapping_add(copied as u32);
+        let (destination, ring_left) = serial_spsc_payload_ptr_at(shared_base, first_page, cursor)?;
+        let chunk = ring_left.min(written - copied);
+        // SAFETY: `destination` is within the exact contiguous two-page ring,
+        // `chunk` cannot cross its wrap, and `bytes` is a disjoint source.
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                bytes.as_ptr().add(copied),
+                destination as *mut u8,
+                chunk,
+            );
+        }
+        copied = copied.saturating_add(chunk);
+    }
+    let next = header.producer_index.wrapping_add(written as u32);
+    let next_used = used.saturating_add(written);
+    let header_access = serial_spsc_header_at(shared_base, first_page)?;
+    header_access.store(
+        SerialSpscAtomicField::ProducedBytes,
+        header.produced_bytes.saturating_add(written as u32),
+        Ordering::Relaxed,
+    );
+    header_access.store(
+        SerialSpscAtomicField::HighWater,
+        header.high_water.max(next_used as u32),
+        Ordering::Relaxed,
+    );
+    header_access.store(
+        SerialSpscAtomicField::ProducerIndex,
+        next,
+        Ordering::Relaxed,
+    );
+    header_access.store(
+        SerialSpscAtomicField::ProducerCommit,
+        next,
+        Ordering::Release,
+    );
+    let post_consumer =
+        header_access.load(SerialSpscAtomicField::ConsumerCommit, Ordering::Acquire);
+    let post_used = next.wrapping_sub(post_consumer);
+    if post_used > DRIVER_RUNTIME_SERIAL_SPSC_CAPACITY as u32 {
+        serial_spsc_poison(header_access);
+        return None;
+    }
+    let data_doorbell = driver_runtime_serial_spsc_data_doorbell_due(
+        used as u32,
+        header.producer_index,
+        post_consumer,
+    );
+    if data_doorbell {
+        header_access.store(
+            SerialSpscAtomicField::DoorbellEpoch,
+            header.doorbell_epoch.wrapping_add(1).max(1),
+            Ordering::Release,
+        );
+    }
+    Some(SerialSpscTransfer {
+        bytes: written,
+        data_doorbell,
+        producer_rearm: false,
+        work_remaining: post_used != 0,
+    })
+}
+
+fn serial_spsc_consume_at(
+    shared_base: usize,
+    first_page: usize,
+    generation: u32,
+    direction: u32,
+    bytes: &mut [u8],
+) -> Option<SerialSpscTransfer> {
+    let header = serial_spsc_header_snapshot_at(shared_base, first_page, generation, direction)?;
+    let available = header.occupancy()? as usize;
+    let read = bytes.len().min(available);
+    if read == 0 {
+        return Some(SerialSpscTransfer {
+            work_remaining: available != 0,
+            ..SerialSpscTransfer::default()
+        });
+    }
+    fence(Ordering::Acquire);
+    let mut copied = 0usize;
+    while copied < read {
+        let cursor = header.consumer_index.wrapping_add(copied as u32);
+        let (source, ring_left) = serial_spsc_payload_ptr_at(shared_base, first_page, cursor)?;
+        let chunk = ring_left.min(read - copied);
+        // SAFETY: `source` is within the exact contiguous two-page ring,
+        // `chunk` cannot cross its wrap, and `bytes` is a disjoint destination.
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                source as *const u8,
+                bytes.as_mut_ptr().add(copied),
+                chunk,
+            );
+        }
+        copied = copied.saturating_add(chunk);
+    }
+    let next = header.consumer_index.wrapping_add(read as u32);
+    let header_access = serial_spsc_header_at(shared_base, first_page)?;
+    header_access.store(
+        SerialSpscAtomicField::ConsumedBytes,
+        header.consumed_bytes.saturating_add(read as u32),
+        Ordering::Relaxed,
+    );
+    header_access.store(
+        SerialSpscAtomicField::ConsumerIndex,
+        next,
+        Ordering::Relaxed,
+    );
+    header_access.store(
+        SerialSpscAtomicField::ConsumerCommit,
+        next,
+        Ordering::Release,
+    );
+    let post_producer =
+        header_access.load(SerialSpscAtomicField::ProducerCommit, Ordering::Acquire);
+    let Some((producer_rearm, work_remaining)) = driver_runtime_serial_spsc_consumer_post_commit(
+        available as u32,
+        header.consumer_index,
+        next,
+        post_producer,
+    ) else {
+        serial_spsc_poison(header_access);
+        return None;
+    };
+    if producer_rearm {
+        header_access.store(
+            SerialSpscAtomicField::ConsumerWakeEpoch,
+            header.consumer_wake_epoch.wrapping_add(1).max(1),
+            Ordering::Release,
+        );
+    }
+    Some(SerialSpscTransfer {
+        bytes: read,
+        data_doorbell: false,
+        producer_rearm,
+        work_remaining,
+    })
+}
+
+#[cfg(target_os = "none")]
+const fn serial_runtime_spsc_shared_base() -> usize {
+    DRIVER_TASK_SHARED_BUFFER_VADDR
+}
+
+#[cfg(all(not(target_os = "none"), test))]
+fn serial_runtime_spsc_shared_base() -> usize {
+    assert_test_state_guard_held();
+    // SAFETY: Runtime tests hold the process-wide guard and the fixed test
+    // shared arena outlives each test operation.
+    unsafe { (*TEST_SHARED_BUFFER.0.get()).as_mut_ptr() as usize }
+}
+
+#[cfg(all(not(target_os = "none"), not(test)))]
+const fn serial_runtime_spsc_shared_base() -> usize {
+    0
+}
+
+fn serial_runtime_spsc_generation(descriptor: &DriverRuntimeInitDescriptor) -> Option<u32> {
+    if usize::from(descriptor.shared_page_count) != DRIVER_RUNTIME_SERIAL_SPSC_SHARED_PAGES {
+        return None;
+    }
+    let mut page = 0usize;
+    while page < DRIVER_RUNTIME_SERIAL_SPSC_SHARED_PAGES {
+        if descriptor.shared_pages[page].paddr == 0
+            || descriptor.shared_pages[page].paddr & (DRIVER_RUNTIME_RESOURCE_PAGE_BYTES - 1) != 0
+        {
+            return None;
+        }
+        page = page.saturating_add(1);
+    }
+    let base = serial_runtime_spsc_shared_base();
+    let header = serial_spsc_header_at(base, DRIVER_RUNTIME_SERIAL_TX_SPSC_FIRST_PAGE)?;
+    let generation = header.load(SerialSpscAtomicField::Generation, Ordering::Acquire);
+    if generation == 0
+        || serial_spsc_header_snapshot_at(
+            base,
+            DRIVER_RUNTIME_SERIAL_TX_SPSC_FIRST_PAGE,
+            generation,
+            DRIVER_RUNTIME_SERIAL_SPSC_FLAG_ROOT_TO_RUNTIME,
+        )
+        .is_none()
+        || serial_spsc_header_snapshot_at(
+            base,
+            DRIVER_RUNTIME_SERIAL_RX_SPSC_FIRST_PAGE,
+            generation,
+            DRIVER_RUNTIME_SERIAL_SPSC_FLAG_RUNTIME_TO_ROOT,
+        )
+        .is_none()
+    {
+        return None;
+    }
+    Some(generation)
+}
+
+#[cfg(test)]
+fn initialize_serial_spsc_for_test(generation: u32) {
+    let base = serial_runtime_spsc_shared_base();
+    let bytes = DRIVER_RUNTIME_SERIAL_SPSC_SHARED_PAGES * DRIVER_TASK_RING_PAGE_BYTES;
+    // SAFETY: Tests hold the global state guard; the complete test shared arena
+    // is writable and larger than the exact four-page serial slice.
+    unsafe {
+        core::ptr::write_bytes(base as *mut u8, 0, bytes);
+        core::ptr::write_volatile(
+            serial_spsc_header_at(base, DRIVER_RUNTIME_SERIAL_TX_SPSC_FIRST_PAGE)
+                .expect("test TX header")
+                .as_ptr(),
+            DriverRuntimeSerialSpscHeader::empty(
+                0,
+                DRIVER_RUNTIME_SERIAL_SPSC_FLAG_ROOT_TO_RUNTIME,
+            ),
+        );
+        core::ptr::write_volatile(
+            serial_spsc_header_at(base, DRIVER_RUNTIME_SERIAL_RX_SPSC_FIRST_PAGE)
+                .expect("test RX header")
+                .as_ptr(),
+            DriverRuntimeSerialSpscHeader::empty(
+                0,
+                DRIVER_RUNTIME_SERIAL_SPSC_FLAG_RUNTIME_TO_ROOT,
+            ),
+        );
+    }
+    let tx = serial_spsc_header_at(base, DRIVER_RUNTIME_SERIAL_TX_SPSC_FIRST_PAGE)
+        .expect("test TX header");
+    let rx = serial_spsc_header_at(base, DRIVER_RUNTIME_SERIAL_RX_SPSC_FIRST_PAGE)
+        .expect("test RX header");
+    tx.store(
+        SerialSpscAtomicField::Generation,
+        generation,
+        Ordering::Release,
+    );
+    rx.store(
+        SerialSpscAtomicField::Generation,
+        generation,
+        Ordering::Release,
+    );
+}
 
 const fn serial_mini_uart_irq_mask(rx_enabled: bool, tx_enabled: bool) -> u32 {
     (if rx_enabled {
@@ -7657,6 +8339,16 @@ impl SerialRuntimeRxQueue {
         true
     }
 
+    fn push_retained(&mut self, byte: u8) -> bool {
+        if self.len == MINI_UART_RX_QUEUE_CAPACITY {
+            return false;
+        }
+        let tail = (self.head + self.len) % MINI_UART_RX_QUEUE_CAPACITY;
+        self.bytes[tail] = byte;
+        self.len += 1;
+        true
+    }
+
     const fn full(&self) -> bool {
         self.len == MINI_UART_RX_QUEUE_CAPACITY
     }
@@ -7737,6 +8429,7 @@ fn serial_record_irq_ack(queue: &mut SerialRuntimeRxQueue, acked: bool) {
     }
 }
 
+#[cfg(test)]
 fn serial_service_irq_with<Drain, Ack>(
     queue: &mut SerialRuntimeRxQueue,
     badge: u32,
@@ -9244,7 +9937,7 @@ fn service_command_turn(task_key: usize, command: DriverTaskCommandRecord) -> Ru
         return turn;
     }
 
-    let turn = if let Some(turn) = service_hdmi_first_frame_command_turn(command) {
+    let turn = if let Some(turn) = service_hdmi_frame_command_turn(command) {
         turn
     } else if let Some(turn) = service_usb_controller_init_command_turn(command) {
         turn
@@ -9287,6 +9980,13 @@ fn service_serial_tx_command_turn(command: DriverTaskCommandRecord) -> Option<Ru
         || command.frame.len == 0
     {
         return None;
+    }
+    #[cfg(target_os = "none")]
+    if SERIAL_RUNTIME_SPSC_GENERATION.load(Ordering::Acquire) != 0 {
+        SERIAL_RUNTIME_TX_CURSOR.with_mut(SerialRuntimeTxCursor::reset);
+        return Some(RuntimeCommandTurn::Complete(
+            DriverTaskCompletionRecord::fault(command.sequence, FAULT_REJECTED_COMMAND),
+        ));
     }
     if RUNTIME_INIT_HOT_PATH.load(Ordering::Acquire) != HOT_PATH_SERIAL_CONSOLE {
         SERIAL_RUNTIME_TX_CURSOR.with_mut(SerialRuntimeTxCursor::reset);
@@ -11124,6 +11824,8 @@ fn runtime_wake_from_received_tag(
     last_sequence: u32,
     task_key: u32,
 ) -> RuntimeWake {
+    #[cfg(not(sel4_config_kernel_mcs))]
+    let _ = task_key;
     if tag.length() == 0 {
         return if badge == 0 {
             RuntimeWake::None
@@ -11678,12 +12380,21 @@ fn runtime_engine_init_usb(
 }
 
 #[inline(never)]
-fn runtime_engine_init_hdmi(_descriptor: &DriverRuntimeInitDescriptor) -> Result<u16, u16> {
+fn runtime_engine_init_hdmi(descriptor: &DriverRuntimeInitDescriptor) -> Result<u16, u16> {
     // Descriptor validation already proves the framebuffer mapping. Engine
     // admission must not perform an unbounded physical clear. Reset the
     // retained takeover cursor so the first explicit HDMI frame clears the
     // complete admitted surface across bounded MCS turns before it renders.
-    HDMI_FIRST_FRAME_CURSOR.with_mut(HdmiFirstFrameCursor::reset);
+    if !hdmi_cell_plane_geometry_admitted(descriptor) {
+        return Err(FAULT_REJECTED_COMMAND);
+    }
+    if !HDMI_CELL_PLANE.with_ref(HdmiCellPlane::cold_engine_init_ready) {
+        // A live plane belongs to the already-admitted runtime generation.
+        // Reinitialization must come from a fresh isolated image rather than
+        // clearing private state synchronously under an INIT service budget.
+        return Err(FAULT_REJECTED_COMMAND);
+    }
+    HDMI_FRAME_CURSOR.with_mut(HdmiFrameCursor::reset);
     HDMI_FIRST_FRAME_CLEARED.store(false, Ordering::Release);
     Ok(FAULT_NONE)
 }
@@ -11845,6 +12556,7 @@ fn descriptor_valid_ref(descriptor: &DriverRuntimeInitDescriptor) -> bool {
 enum RuntimeNotificationRoute {
     Unavailable,
     Serial,
+    Genet,
     SdioOwner,
     Cyw43Client,
 }
@@ -13479,12 +14191,36 @@ fn descriptor_serial_irq(
         .then_some(irq)
 }
 
+fn descriptor_genet_irq(
+    descriptor: &DriverRuntimeInitDescriptor,
+) -> Option<DriverRuntimeIrqDescriptor> {
+    if descriptor.hot_path != HOT_PATH_GENET_NIC
+        || descriptor.irq_count != 1
+        || descriptor.bus_link_count != 0
+        || descriptor.flags & DRIVER_RUNTIME_INIT_FLAG_IRQS_BOUND == 0
+        || descriptor.flags & DRIVER_RUNTIME_INIT_FLAG_POLL_ONLY != 0
+    {
+        return None;
+    }
+    let irq = descriptor.irqs[0];
+    (irq.valid()
+        && irq.irq == DRIVER_RUNTIME_GENET_IRQ
+        && irq.badge == DRIVER_RUNTIME_GENET_IRQ_BADGE
+        && irq.handler_slot == DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT
+        && irq.notification_slot == DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT
+        && irq.trigger == DRIVER_RUNTIME_IRQ_TRIGGER_LEVEL)
+        .then_some(irq)
+}
+
 fn runtime_notification_route(
     descriptor: &DriverRuntimeInitDescriptor,
 ) -> RuntimeNotificationRoute {
     match descriptor.hot_path {
         HOT_PATH_SERIAL_CONSOLE if descriptor_serial_irq(descriptor).is_some() => {
             RuntimeNotificationRoute::Serial
+        }
+        HOT_PATH_GENET_NIC if descriptor_genet_irq(descriptor).is_some() => {
+            RuntimeNotificationRoute::Genet
         }
         HOT_PATH_SDIO_HOST
             if descriptor_notification_dpc_link(descriptor).is_some()
@@ -13766,6 +14502,7 @@ fn descriptor_resources_ready_checked(
                     DRIVER_RUNTIME_FRAMEBUFFER_VADDR,
                     1,
                 )
+                || !hdmi_cell_plane_geometry_admitted(descriptor)
             {
                 publish_resource_check_progress(
                     progress,
@@ -14583,8 +15320,34 @@ fn service_serial(command: DriverTaskCommandRecord) -> DriverTaskCompletionRecor
             DriverTaskCompletionRecord::fault(command.sequence, FAULT_DEVICE_UNAVAILABLE)
         };
     }
+    if command.aux0 == DRIVER_RUNTIME_SERIAL_SPSC_PROBE_AUX && command.frame.len == 0 {
+        let descriptor = RUNTIME_DESCRIPTOR.load();
+        return match serial_runtime_spsc_generation(&descriptor) {
+            Some(generation)
+                if generation == SERIAL_RUNTIME_SPSC_GENERATION.load(Ordering::Acquire) =>
+            {
+                DriverTaskCompletionRecord::progress(command.sequence, generation)
+            }
+            _ => DriverTaskCompletionRecord::fault(command.sequence, FAULT_DEVICE_UNAVAILABLE),
+        };
+    }
     if command.aux0 == DRIVER_RUNTIME_SERIAL_TX_IDLE_AUX && command.frame.len == 0 {
-        return serial_tx_idle_completion(command.sequence, serial_mini_uart_tx_idle());
+        let _ = serial_runtime_service_notification(0);
+        let generation = SERIAL_RUNTIME_SPSC_GENERATION.load(Ordering::Acquire);
+        let transport_empty = serial_spsc_committed_occupancy_at(
+            serial_runtime_spsc_shared_base(),
+            DRIVER_RUNTIME_SERIAL_TX_SPSC_FIRST_PAGE,
+            generation,
+            DRIVER_RUNTIME_SERIAL_SPSC_FLAG_ROOT_TO_RUNTIME,
+        ) == Some(0);
+        return serial_tx_idle_completion(
+            command.sequence,
+            transport_empty && serial_mini_uart_tx_idle(),
+        );
+    }
+    #[cfg(target_os = "none")]
+    if SERIAL_RUNTIME_SPSC_GENERATION.load(Ordering::Acquire) != 0 {
+        return DriverTaskCompletionRecord::fault(command.sequence, FAULT_REJECTED_COMMAND);
     }
     if command.frame.len == 0 {
         let read = serial_read_frame(command.budget);
@@ -14619,19 +15382,23 @@ const fn serial_tx_idle_completion(
 
 #[cfg(target_os = "none")]
 fn serial_mini_uart_tx_idle() -> bool {
-    // SAFETY: The linked serial runtime owns the admitted mini-UART MMIO page;
-    // MU_LSR is read-only and bit 6 proves both FIFO and shifter are empty.
-    let lsr = unsafe {
-        core::ptr::read_volatile(
-            (DRIVER_TASK_DEVICE_MMIO_VADDR + MINI_UART_LSR_OFFSET) as *const u32,
-        )
-    };
+    let lsr = serial_mini_uart_read(SerialMiniUartReadRegister::LineStatus);
     lsr & MINI_UART_LSR_TX_IDLE != 0
 }
 
 #[cfg(not(target_os = "none"))]
 fn serial_mini_uart_tx_idle() -> bool {
     true
+}
+
+#[cfg(target_os = "none")]
+fn serial_mini_uart_rx_source_pending() -> bool {
+    serial_mini_uart_read(SerialMiniUartReadRegister::LineStatus) & MINI_UART_LSR_RX_READY != 0
+}
+
+#[cfg(not(target_os = "none"))]
+const fn serial_mini_uart_rx_source_pending() -> bool {
+    false
 }
 
 fn serial_frame_budget_limit(budget: DriverTaskBudgetGrant, frame_len: u16) -> usize {
@@ -15077,6 +15844,9 @@ fn usb_runtime_init(
 fn genet_runtime_init(state: &mut GenetRuntimeState) -> bool {
     state.reset();
     RUNTIME_DESCRIPTOR.with_ref(|descriptor| {
+        let Some(irq) = descriptor_genet_irq(descriptor) else {
+            return false;
+        };
         let Some(dma_range) = runtime_resource_range(
             descriptor,
             DRIVER_RUNTIME_RESOURCE_KIND_DMA,
@@ -15087,10 +15857,162 @@ fn genet_runtime_init(state: &mut GenetRuntimeState) -> bool {
         if dma_range.page_count < GENET_REQUIRED_DMA_PAGES {
             return false;
         }
+        state.irq_badge = irq.badge;
+        state.irq_handler_slot = irq.handler_slot;
         let initialized = genet_runtime_init_hw(descriptor, state);
-        state.initialized = initialized;
-        initialized
+        if !initialized {
+            return false;
+        }
+        // This runtime owns only the default queue's packet-completion
+        // sources. Mask every misc/link/MDIO source sharing IRQ 189 before
+        // enabling the bounded packet DPC so an unowned source cannot hold the
+        // level-triggered line asserted.
+        genet_irq_mask_all_sources();
+        genet_irq_clear_all_sources();
+        if !genet_irq_unmask_sources() {
+            genet_irq_mask_sources();
+            state.irq_unmask_failures = state.irq_unmask_failures.saturating_add(1);
+            return false;
+        }
+        let acked = runtime_irq_handler_ack(irq.handler_slot);
+        if acked {
+            state.irq_acks = state.irq_acks.saturating_add(1);
+            state.irq_ack_pending = false;
+            state.initialized = true;
+            true
+        } else {
+            genet_irq_mask_sources();
+            state.irq_ack_failures = state.irq_ack_failures.saturating_add(1);
+            state.irq_ack_pending = true;
+            false
+        }
     })
+}
+
+fn genet_irq_mask_all_sources() {
+    genet_write32(GENET_INTRL2_0_CPU_MASK_SET, GENET_IRQ_ALL_SOURCES);
+}
+
+fn genet_irq_clear_all_sources() {
+    genet_write32(GENET_INTRL2_0_CPU_CLEAR, GENET_IRQ_ALL_SOURCES);
+}
+
+fn genet_irq_mask_sources() {
+    genet_write32(GENET_INTRL2_0_CPU_MASK_SET, GENET_NAPI_IRQ_MASK);
+}
+
+fn genet_irq_clear_sources(status: u32) {
+    let owned = status & GENET_NAPI_IRQ_MASK;
+    if owned != 0 {
+        genet_write32(GENET_INTRL2_0_CPU_CLEAR, owned);
+    }
+}
+
+fn genet_irq_unmask_sources() -> bool {
+    genet_write32(GENET_INTRL2_0_CPU_MASK_CLEAR, GENET_NAPI_IRQ_MASK);
+    // `Page_Uncached` alone is not an ordering proof. Complete the posted
+    // device store, then use a same-aperture readback before any source/index
+    // load may decide that the lost-wake window is closed.
+    device_store_completion_barrier();
+    genet_read32(GENET_INTRL2_0_CPU_MASK_STATUS) & GENET_NAPI_IRQ_MASK == 0
+}
+
+fn genet_irq_active_sources() -> u32 {
+    genet_read32(GENET_INTRL2_0_CPU_STAT)
+        & !genet_read32(GENET_INTRL2_0_CPU_MASK_STATUS)
+        & GENET_NAPI_IRQ_MASK
+}
+
+fn genet_irq_raw_sources() -> u32 {
+    genet_read32(GENET_INTRL2_0_CPU_STAT) & GENET_NAPI_IRQ_MASK
+}
+
+fn genet_rx_hardware_pending(state: &GenetRuntimeState) -> bool {
+    genet_read32(GENET_RDMA_PROD_INDEX) as u16 != state.rx_cons_index
+}
+
+const fn genet_runtime_dpc_local_continuation_ready(state: &GenetRuntimeState) -> bool {
+    state.initialized
+        && state.irq_ack_pending
+        && (state.rx_queue_count as usize) < GENET_RX_QUEUE_CAP
+}
+
+/// Service one child-owned, bounded GENET packet DPC quantum.
+///
+/// An exact IRQ badge creates the only new DPC lifetime. Badge zero may only
+/// continue a lifetime whose seL4 IRQ handler is still deliberately unacked;
+/// it is not a polling fallback. The physical source remains masked until the
+/// bounded RX ring is drained, then a final unmask/recheck closes the classic
+/// lost-wake window before the handler cap is acknowledged.
+fn genet_runtime_service_notification(badge: u32) -> bool {
+    GENET_RUNTIME_STATE.with_mut(|state| genet_runtime_service_dpc_state(state, badge))
+}
+
+fn genet_runtime_service_dpc_state(state: &mut GenetRuntimeState, badge: u32) -> bool {
+    if !state.initialized {
+        return false;
+    }
+    if badge == state.irq_badge {
+        state.irq_wakes = state.irq_wakes.saturating_add(1);
+        let status = genet_irq_active_sources();
+        state.dpc_last_status = status;
+        genet_irq_mask_sources();
+        genet_irq_clear_sources(status);
+        state.irq_ack_pending = true;
+    } else if badge != 0 || !state.irq_ack_pending {
+        return false;
+    }
+
+    state.dpc_turns = state.dpc_turns.saturating_add(1);
+    genet_runtime_poll_tx_completions(state);
+    let free_slots = GENET_RX_QUEUE_CAP.saturating_sub(usize::from(state.rx_queue_count));
+    let drain_cap = GENET_RX_DRAIN_BUDGET.min(free_slots);
+    let drained =
+        genet_runtime_drain_rx_hardware_to_queue(state, GENET_NAPI_BYTE_BUDGET, drain_cap);
+    let rx_pending = genet_rx_hardware_pending(state);
+    if rx_pending {
+        if drain_cap == 0 || drained >= drain_cap {
+            state.dpc_budget_hits = state.dpc_budget_hits.saturating_add(1);
+        }
+        // Retain the exact unacked IRQ lifetime. The runtime's mandatory idle
+        // durable-source recheck or a packet-consume command may continue it;
+        // badge zero cannot create this state and no timer or synthetic wake
+        // is introduced.
+        return true;
+    }
+
+    // Remove any completion level represented by the indices just consumed,
+    // then expose the source and immediately recheck both raw interrupt and
+    // durable ring state before ACKing the seL4 handler.
+    genet_irq_clear_sources(genet_irq_raw_sources());
+    if !genet_irq_unmask_sources() {
+        genet_irq_mask_sources();
+        state.irq_unmask_failures = state.irq_unmask_failures.saturating_add(1);
+        state.initialized = false;
+        return false;
+    }
+    state.dpc_final_rechecks = state.dpc_final_rechecks.saturating_add(1);
+    let recheck_status = genet_irq_active_sources();
+    let recheck_rx = genet_rx_hardware_pending(state);
+    let recheck_tx = genet_read32(GENET_TDMA_CONS_INDEX) as u16 != state.tx_cons_index;
+    if recheck_status != 0 || recheck_rx || recheck_tx {
+        genet_irq_mask_sources();
+        genet_irq_clear_sources(recheck_status);
+        state.dpc_last_status |= recheck_status;
+        return true;
+    }
+
+    if !runtime_irq_handler_ack(state.irq_handler_slot) {
+        // A failed handler ACK makes later delivery unknowable. Leave all
+        // owned sources masked and fail closed instead of retrying.
+        genet_irq_mask_sources();
+        state.irq_ack_failures = state.irq_ack_failures.saturating_add(1);
+        state.initialized = false;
+        return false;
+    }
+    state.irq_acks = state.irq_acks.saturating_add(1);
+    state.irq_ack_pending = false;
+    true
 }
 
 fn genet_completion_result(state: &GenetRuntimeState, tx_free: u16, tx_in_flight: u16) -> u32 {
@@ -17103,7 +18025,13 @@ const fn runtime_notification_service_badge(
     let service_badge = badge
         & !(DRIVER_RUNTIME_RESERVED_ROOT_BADGE | DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE);
     match route {
-        RuntimeNotificationRoute::Serial if service_badge == DRIVER_RUNTIME_SERIAL_IRQ_BADGE => {
+        RuntimeNotificationRoute::Serial
+            if badge != 0
+                && (service_badge == 0 || service_badge == DRIVER_RUNTIME_SERIAL_IRQ_BADGE) =>
+        {
+            Some(badge & (DRIVER_RUNTIME_RESERVED_ROOT_BADGE | DRIVER_RUNTIME_SERIAL_IRQ_BADGE))
+        }
+        RuntimeNotificationRoute::Genet if service_badge == DRIVER_RUNTIME_GENET_IRQ_BADGE => {
             Some(service_badge)
         }
         RuntimeNotificationRoute::SdioOwner
@@ -17120,6 +18048,7 @@ const fn runtime_notification_service_badge(
             Some(service_badge)
         }
         RuntimeNotificationRoute::Serial
+        | RuntimeNotificationRoute::Genet
         | RuntimeNotificationRoute::SdioOwner
         | RuntimeNotificationRoute::Cyw43Client
         | RuntimeNotificationRoute::Unavailable => None,
@@ -17132,7 +18061,14 @@ const fn runtime_notification_wake_badge(route: RuntimeNotificationRoute, badge:
     let badge = badge & !DRIVER_RUNTIME_RESERVED_ROOT_BADGE;
     match route {
         RuntimeNotificationRoute::Serial => {
-            if root_badge == 0 && (badge == 0 || badge == DRIVER_RUNTIME_SERIAL_IRQ_BADGE) {
+            if badge == 0 || badge == DRIVER_RUNTIME_SERIAL_IRQ_BADGE {
+                badge | root_badge
+            } else {
+                0
+            }
+        }
+        RuntimeNotificationRoute::Genet => {
+            if root_badge == 0 && (badge == 0 || badge == DRIVER_RUNTIME_GENET_IRQ_BADGE) {
                 badge
             } else {
                 0
@@ -17276,6 +18212,7 @@ fn recheck_runtime_steady_cyw43_child_before_wait(
         (
             RuntimeNotificationRoute::SdioOwner
             | RuntimeNotificationRoute::Serial
+            | RuntimeNotificationRoute::Genet
             | RuntimeNotificationRoute::Unavailable,
             _,
         ) => None,
@@ -17375,6 +18312,7 @@ const fn runtime_steady_local_notification_wake_route(
         // physical operation or grants another turn by itself.
         RuntimeNotificationRoute::Cyw43Client
         | RuntimeNotificationRoute::Serial
+        | RuntimeNotificationRoute::Genet
         | RuntimeNotificationRoute::Unavailable => RuntimeSteadyWaitWake::Resume,
     }
 }
@@ -17428,7 +18366,9 @@ fn runtime_fail_closed_steady_wait_unavailable(
             CYW43_SDIO_PAIR_RESTART_REQUIRED.store(true, Ordering::Release);
             CYW43_DPC_DEFERRED.store(true, Ordering::Release);
         }
-        RuntimeNotificationRoute::Serial | RuntimeNotificationRoute::Unavailable => {}
+        RuntimeNotificationRoute::Serial
+        | RuntimeNotificationRoute::Genet
+        | RuntimeNotificationRoute::Unavailable => {}
     }
 }
 
@@ -17533,6 +18473,7 @@ fn runtime_current_semantic_snapshot_for(
         (
             RuntimeNotificationRoute::SdioOwner
             | RuntimeNotificationRoute::Serial
+            | RuntimeNotificationRoute::Genet
             | RuntimeNotificationRoute::Unavailable,
             RuntimeSteadySemanticSnapshot::Cyw43Foreground(_)
             | RuntimeSteadySemanticSnapshot::PersistentCyw43Foreground(_)
@@ -17541,6 +18482,7 @@ fn runtime_current_semantic_snapshot_for(
         | (
             RuntimeNotificationRoute::Cyw43Client
             | RuntimeNotificationRoute::Serial
+            | RuntimeNotificationRoute::Genet
             | RuntimeNotificationRoute::Unavailable,
             RuntimeSteadySemanticSnapshot::Sdio(_),
         ) => None,
@@ -17814,6 +18756,7 @@ fn service_cyw43_persistent_source_once() -> bool {
 fn service_runtime_persistent_source_once(route: RuntimeNotificationRoute, badge: u32) -> bool {
     match route {
         RuntimeNotificationRoute::Serial => serial_runtime_service_notification(badge),
+        RuntimeNotificationRoute::Genet => genet_runtime_service_notification(badge),
         RuntimeNotificationRoute::SdioOwner => sdio_runtime_service_notification(badge),
         RuntimeNotificationRoute::Cyw43Client => service_cyw43_persistent_source_once(),
         RuntimeNotificationRoute::Unavailable => false,
@@ -18075,23 +19018,15 @@ fn service_hdmi_text(command: DriverTaskCommandRecord) -> DriverTaskCompletionRe
         );
         return DriverTaskCompletionRecord::fault(command.sequence, FAULT_DEVICE_UNAVAILABLE);
     }
-    let rendered = hdmi_render_frame(command.frame);
-    if rendered == 0 {
-        publish_runtime_progress(
-            command.sequence,
-            DRIVER_RUNTIME_RING_PROGRESS_HDMI_FRAME_FAILED,
-            command.aux0,
-        );
-        DriverTaskCompletionRecord::idle(command.sequence)
-    } else {
-        publish_runtime_progress(
-            command.sequence,
-            DRIVER_RUNTIME_RING_PROGRESS_HDMI_FRAME_DONE,
-            command.aux0,
-        );
-        HDMI_RUNTIME_FLAGS.fetch_or(ENGINE_STATE_TX_PROGRESS, Ordering::AcqRel);
-        DriverTaskCompletionRecord::progress(command.sequence, rendered as u32)
-    }
+    // Every nonempty display frame is admitted by the retained compositor
+    // before immediate dispatch. Reaching this branch would be an unbounded
+    // synchronous rendering fallback, so fail closed instead.
+    publish_runtime_progress(
+        command.sequence,
+        DRIVER_RUNTIME_RING_PROGRESS_HDMI_FRAME_FAILED,
+        command.aux0,
+    );
+    DriverTaskCompletionRecord::fault(command.sequence, FAULT_REJECTED_COMMAND)
 }
 
 #[cfg(target_os = "none")]
@@ -27902,6 +28837,30 @@ impl Cyw43ForegroundTransaction {
         }
     }
 
+    fn parent_payload_u64_index(&self, offset: usize) -> Option<usize> {
+        if offset & (core::mem::align_of::<u64>() - 1) != 0 {
+            return None;
+        }
+        let index = self.parent_payload_index(offset)?;
+        let end = index.checked_add(core::mem::size_of::<u64>())?;
+        (end <= usize::from(self.parent_payload_len)).then_some(index)
+    }
+
+    fn read_parent_payload_u64(&self, offset: usize) -> Option<u64> {
+        let index = self.parent_payload_u64_index(offset)?;
+        #[cfg(test)]
+        TEST_CYW43_FOREGROUND_PARENT_U64_READS.fetch_add(1, Ordering::AcqRel);
+        Some(u64::from_le_bytes(core::array::from_fn(|word_index| {
+            let payload_index = index + word_index;
+            let mask = 1u8 << (payload_index & 7);
+            if self.parent_overlay_valid[payload_index >> 3] & mask != 0 {
+                self.parent_overlay[payload_index]
+            } else {
+                self.parent_payload[payload_index]
+            }
+        })))
+    }
+
     fn steady_tx_service_lease_parent_tagged(&self) -> bool {
         self.parent.flags & DRIVER_RUNTIME_COMMAND_FLAG_STEADY_SERVICE_LEASE != 0
             || (self.parent_descriptor_valid
@@ -28058,6 +29017,20 @@ impl Cyw43ForegroundTransaction {
         self.parent_overlay_valid[index >> 3] |= 1u8 << (index & 7);
     }
 
+    fn record_parent_overlay_u64(&mut self, offset: usize, value: u64) -> bool {
+        let Some(index) = self.parent_payload_u64_index(offset) else {
+            return false;
+        };
+        #[cfg(test)]
+        TEST_CYW43_FOREGROUND_PARENT_U64_WRITES.fetch_add(1, Ordering::AcqRel);
+        for (word_index, byte) in value.to_le_bytes().iter().copied().enumerate() {
+            let payload_index = index + word_index;
+            self.parent_overlay[payload_index] = byte;
+            self.parent_overlay_valid[payload_index >> 3] |= 1u8 << (payload_index & 7);
+        }
+        true
+    }
+
     fn payload_reserve(&mut self, len: usize) -> Option<usize> {
         let offset = self.payload_used as usize;
         let end = offset.checked_add(len)?;
@@ -28160,6 +29133,10 @@ static TEST_RUNTIME_TIMER_COUNTER_TICKS: AtomicU64 = AtomicU64::new(0);
 static TEST_CYW43_FOREGROUND_STATE_SNAPSHOTS: AtomicU32 = AtomicU32::new(0);
 #[cfg(test)]
 static TEST_CYW43_CONTROL_TX_DONE_PUBLISHES: AtomicU32 = AtomicU32::new(0);
+#[cfg(test)]
+static TEST_CYW43_FOREGROUND_PARENT_U64_READS: AtomicUsize = AtomicUsize::new(0);
+#[cfg(test)]
+static TEST_CYW43_FOREGROUND_PARENT_U64_WRITES: AtomicUsize = AtomicUsize::new(0);
 
 #[cfg(any(target_os = "none", test))]
 #[inline(never)]
@@ -31337,7 +32314,9 @@ fn runtime_steady_command_semantic_snapshot(
         RuntimeNotificationRoute::Cyw43Client => {
             Some(runtime_steady_cyw43_foreground_semantic_snapshot())
         }
-        RuntimeNotificationRoute::Serial | RuntimeNotificationRoute::Unavailable => None,
+        RuntimeNotificationRoute::Serial
+        | RuntimeNotificationRoute::Genet
+        | RuntimeNotificationRoute::Unavailable => None,
     }
 }
 
@@ -31350,7 +32329,9 @@ fn runtime_persistent_command_semantic_snapshot(
         RuntimeNotificationRoute::Cyw43Client => {
             Some(runtime_persistent_cyw43_foreground_semantic_snapshot())
         }
-        RuntimeNotificationRoute::Serial | RuntimeNotificationRoute::Unavailable => None,
+        RuntimeNotificationRoute::Serial
+        | RuntimeNotificationRoute::Genet
+        | RuntimeNotificationRoute::Unavailable => None,
     }
 }
 
@@ -32345,11 +33326,15 @@ trait SdioTransferIo {
     fn write_buffer32(&mut self, value: u32);
     fn read_payload_byte(&mut self, offset: usize) -> u8;
     fn write_payload_byte(&mut self, offset: usize, value: u8);
+    fn read_payload_u64(&mut self, offset: usize) -> u64;
+    fn write_payload_u64(&mut self, offset: usize, value: u64);
     fn external_dma_authority(&mut self) -> Option<SdioExternalDmaAuthority>;
     fn external_dma_read32(&mut self, addr: usize) -> u32;
     fn external_dma_write32(&mut self, addr: usize, value: u32);
     fn external_dma_read_byte(&mut self, addr: usize) -> u8;
     fn external_dma_write_byte(&mut self, addr: usize, value: u8);
+    fn external_dma_read_u64(&mut self, addr: usize) -> u64;
+    fn external_dma_write_u64(&mut self, addr: usize, value: u64);
     fn external_dma_store_barrier(&mut self);
     fn external_dma_store_completion_barrier(&mut self);
     fn external_dma_load_barrier(&mut self);
@@ -32397,6 +33382,38 @@ impl SdioTransferIo for SdioMmioTransferIo {
 
     fn write_payload_byte(&mut self, offset: usize, value: u8) {
         write_runtime_payload_byte(offset, value);
+    }
+
+    fn read_payload_u64(&mut self, offset: usize) -> u64 {
+        #[cfg(any(target_os = "none", test))]
+        if cyw43_foreground_transaction_executing() {
+            if let Some(value) = CYW43_FOREGROUND_TRANSACTION
+                .with_ref(|transaction| transaction.read_parent_payload_u64(offset))
+            {
+                return value;
+            }
+            return u64::from_le_bytes(core::array::from_fn(|index| {
+                self.read_payload_byte(offset + index)
+            }));
+        }
+        read_runtime_payload_u64_physical(offset)
+    }
+
+    fn write_payload_u64(&mut self, offset: usize, value: u64) {
+        #[cfg(any(target_os = "none", test))]
+        if cyw43_foreground_transaction_executing() {
+            if CYW43_FOREGROUND_TRANSACTION
+                .with_mut(|transaction| transaction.record_parent_overlay_u64(offset, value))
+            {
+                write_runtime_payload_u64_physical(offset, value);
+                return;
+            }
+            for (index, byte) in value.to_le_bytes().iter().copied().enumerate() {
+                self.write_payload_byte(offset + index, byte);
+            }
+            return;
+        }
+        write_runtime_payload_u64_physical(offset, value);
     }
 
     fn external_dma_authority(&mut self) -> Option<SdioExternalDmaAuthority> {
@@ -32502,6 +33519,14 @@ impl SdioTransferIo for SdioMmioTransferIo {
 
     fn external_dma_write_byte(&mut self, addr: usize, value: u8) {
         write_dma_byte(addr, value);
+    }
+
+    fn external_dma_read_u64(&mut self, addr: usize) -> u64 {
+        read_sdio_dma_u64(addr)
+    }
+
+    fn external_dma_write_u64(&mut self, addr: usize, value: u64) {
+        write_sdio_dma_u64(addr, value);
     }
 
     fn external_dma_store_barrier(&mut self) {
@@ -32619,6 +33644,139 @@ fn sdio_external_dma_write_control_block<I: SdioTransferIo>(
     sdio_external_dma_write_memory_u32(io, addr + 28, 0);
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct SdioExternalDmaCopyShape {
+    prefix_bytes: usize,
+    word_count: usize,
+    tail_bytes: usize,
+}
+
+const fn sdio_external_dma_copy_shape(
+    source_addr: usize,
+    destination_addr: usize,
+    len: usize,
+) -> SdioExternalDmaCopyShape {
+    let same_alignment = (source_addr ^ destination_addr) & (SDIO_DMA_COPY_WORD_BYTES - 1) == 0;
+    let prefix_bytes = if same_alignment {
+        let alignment_prefix = (SDIO_DMA_COPY_WORD_BYTES
+            - (source_addr & (SDIO_DMA_COPY_WORD_BYTES - 1)))
+            & (SDIO_DMA_COPY_WORD_BYTES - 1);
+        if alignment_prefix < len {
+            alignment_prefix
+        } else {
+            len
+        }
+    } else {
+        len
+    };
+    let word_count = (len - prefix_bytes) / SDIO_DMA_COPY_WORD_BYTES;
+    let tail_bytes = len - prefix_bytes - word_count * SDIO_DMA_COPY_WORD_BYTES;
+    SdioExternalDmaCopyShape {
+        prefix_bytes,
+        word_count,
+        tail_bytes,
+    }
+}
+
+const fn sdio_external_dma_copy_range_valid(start: usize, len: usize, end: usize) -> bool {
+    start <= end
+        && match start.checked_add(len) {
+            Some(copy_end) => copy_end <= end,
+            None => false,
+        }
+}
+
+const fn sdio_external_dma_payload_range_contiguous(offset: usize, len: usize) -> bool {
+    match offset.checked_add(len) {
+        Some(end) => offset >= DRIVER_TASK_RING_PAGE_BYTES || end <= DRIVER_TASK_RING_PAGE_BYTES,
+        None => false,
+    }
+}
+
+const fn sdio_external_dma_payload_vaddr(offset: usize) -> Option<usize> {
+    if offset < DRIVER_TASK_RING_PAGE_BYTES {
+        DRIVER_TASK_RING_VADDR.checked_add(offset)
+    } else {
+        DRIVER_TASK_SHARED_BUFFER_VADDR.checked_add(offset - DRIVER_TASK_RING_PAGE_BYTES)
+    }
+}
+
+fn sdio_external_dma_copy_payload_to_bounce_with<I: SdioTransferIo>(
+    io: &mut I,
+    payload_offset: usize,
+    payload_end: usize,
+    bounce_addr: usize,
+    bounce_end: usize,
+    len: usize,
+) -> bool {
+    if !sdio_external_dma_copy_range_valid(payload_offset, len, payload_end)
+        || !sdio_external_dma_copy_range_valid(bounce_addr, len, bounce_end)
+        || !sdio_external_dma_payload_range_contiguous(payload_offset, len)
+    {
+        return false;
+    }
+    let Some(payload_vaddr) = sdio_external_dma_payload_vaddr(payload_offset) else {
+        return false;
+    };
+    let shape = sdio_external_dma_copy_shape(payload_vaddr, bounce_addr, len);
+    let mut copied = 0usize;
+    while copied < shape.prefix_bytes {
+        let value = io.read_payload_byte(payload_offset + copied);
+        io.external_dma_write_byte(bounce_addr + copied, value);
+        copied += 1;
+    }
+    for _ in 0..shape.word_count {
+        let value = io.read_payload_u64(payload_offset + copied);
+        io.external_dma_write_u64(bounce_addr + copied, value);
+        copied += SDIO_DMA_COPY_WORD_BYTES;
+    }
+    let tail_end = copied + shape.tail_bytes;
+    while copied < tail_end {
+        let value = io.read_payload_byte(payload_offset + copied);
+        io.external_dma_write_byte(bounce_addr + copied, value);
+        copied += 1;
+    }
+    copied == len
+}
+
+fn sdio_external_dma_copy_bounce_to_payload_with<I: SdioTransferIo>(
+    io: &mut I,
+    bounce_addr: usize,
+    bounce_end: usize,
+    payload_offset: usize,
+    payload_end: usize,
+    len: usize,
+) -> bool {
+    if !sdio_external_dma_copy_range_valid(bounce_addr, len, bounce_end)
+        || !sdio_external_dma_copy_range_valid(payload_offset, len, payload_end)
+        || !sdio_external_dma_payload_range_contiguous(payload_offset, len)
+    {
+        return false;
+    }
+    let Some(payload_vaddr) = sdio_external_dma_payload_vaddr(payload_offset) else {
+        return false;
+    };
+    let shape = sdio_external_dma_copy_shape(bounce_addr, payload_vaddr, len);
+    let mut copied = 0usize;
+    while copied < shape.prefix_bytes {
+        let value = io.external_dma_read_byte(bounce_addr + copied);
+        io.write_payload_byte(payload_offset + copied, value);
+        copied += 1;
+    }
+    for _ in 0..shape.word_count {
+        let value = io.external_dma_read_u64(bounce_addr + copied);
+        io.write_payload_u64(payload_offset + copied, value);
+        copied += SDIO_DMA_COPY_WORD_BYTES;
+    }
+    let tail_end = copied + shape.tail_bytes;
+    while copied < tail_end {
+        let value = io.external_dma_read_byte(bounce_addr + copied);
+        io.write_payload_byte(payload_offset + copied, value);
+        copied += 1;
+    }
+    copied == len
+}
+
 #[cfg(test)]
 fn sdio_external_dma_prepare_with<I: SdioTransferIo>(
     io: &mut I,
@@ -32648,6 +33806,11 @@ fn sdio_external_dma_prepare_for_authority_with<I: SdioTransferIo>(
     block_count: u16,
 ) -> bool {
     let transfer_len = usize::from(frame.len);
+    let Some(payload_end) = DRIVER_TASK_RING_PAGE_BYTES
+        .checked_add(RUNTIME_DESCRIPTOR.with_ref(runtime_shared_buffer_bytes))
+    else {
+        return false;
+    };
     let Some(expected_len) = usize::from(block_size).checked_mul(usize::from(block_count)) else {
         return false;
     };
@@ -32664,13 +33827,30 @@ fn sdio_external_dma_prepare_for_authority_with<I: SdioTransferIo>(
         let Some(payload_offset) = index.checked_mul(DRIVER_TASK_RING_PAGE_BYTES) else {
             return false;
         };
-        for byte_index in 0..segment_len {
-            let value = if write {
-                io.read_payload_byte(frame.offset as usize + payload_offset + byte_index)
-            } else {
-                0
-            };
-            io.external_dma_write_byte(authority.bounce_vaddrs[index] + byte_index, value);
+        let Some(segment_payload_offset) = (frame.offset as usize).checked_add(payload_offset)
+        else {
+            return false;
+        };
+        let Some(bounce_end) =
+            authority.bounce_vaddrs[index].checked_add(DRIVER_TASK_RING_PAGE_BYTES)
+        else {
+            return false;
+        };
+        if write {
+            if !sdio_external_dma_copy_payload_to_bounce_with(
+                io,
+                segment_payload_offset,
+                payload_end,
+                authority.bounce_vaddrs[index],
+                bounce_end,
+                segment_len,
+            ) {
+                return false;
+            }
+        } else {
+            for byte_index in 0..segment_len {
+                io.external_dma_write_byte(authority.bounce_vaddrs[index] + byte_index, 0);
+            }
         }
         let Some(block) = sdio_external_dma_control_block(authority, write, transfer_len, index)
         else {
@@ -32728,15 +33908,35 @@ fn sdio_external_dma_copy_read_payload_with<I: SdioTransferIo>(
     let Some(control_block_count) = sdio_external_dma_control_block_count(transfer_len) else {
         return false;
     };
+    let Some(payload_end) = DRIVER_TASK_RING_PAGE_BYTES
+        .checked_add(RUNTIME_DESCRIPTOR.with_ref(runtime_shared_buffer_bytes))
+    else {
+        return false;
+    };
     io.external_dma_load_barrier();
     for index in 0..control_block_count {
         let Some(segment_len) = sdio_external_dma_segment_len(transfer_len, index) else {
             return false;
         };
         let payload_offset = index * DRIVER_TASK_RING_PAGE_BYTES;
-        for byte_index in 0..segment_len {
-            let value = io.external_dma_read_byte(authority.bounce_vaddrs[index] + byte_index);
-            io.write_payload_byte(frame.offset as usize + payload_offset + byte_index, value);
+        let Some(segment_payload_offset) = (frame.offset as usize).checked_add(payload_offset)
+        else {
+            return false;
+        };
+        let Some(bounce_end) =
+            authority.bounce_vaddrs[index].checked_add(DRIVER_TASK_RING_PAGE_BYTES)
+        else {
+            return false;
+        };
+        if !sdio_external_dma_copy_bounce_to_payload_with(
+            io,
+            authority.bounce_vaddrs[index],
+            bounce_end,
+            segment_payload_offset,
+            payload_end,
+            segment_len,
+        ) {
+            return false;
         }
     }
     true
@@ -42818,7 +44018,12 @@ fn genet_runtime_poll_rx(
     if !state.initialized {
         return GenetRxPoll::Idle;
     }
-    genet_runtime_poll_tx_completions(state);
+    if genet_runtime_dpc_local_continuation_ready(state) {
+        let _ = genet_runtime_service_dpc_state(state, 0);
+        if !state.initialized {
+            return GenetRxPoll::Idle;
+        }
+    }
     let drain_budget = match genet_rx_budget_limit(budget) {
         Ok(limit) => limit,
         Err(detail) => return GenetRxPoll::BudgetExhausted(detail),
@@ -42833,33 +44038,19 @@ fn genet_runtime_poll_rx(
         let Some((payload_len, flags)) = genet_rx_queue_pop_to_ring(state) else {
             return GenetRxPoll::Idle;
         };
-        let bytes_left = (budget.max_bytes as usize).saturating_sub(payload_len);
-        let _ = genet_runtime_drain_rx_hardware_to_queue(
-            state,
-            bytes_left,
-            drain_budget.saturating_sub(1),
-        );
+        if state.irq_ack_pending {
+            let _ = genet_runtime_service_dpc_state(state, 0);
+        }
         state.rx_packets = state.rx_packets.saturating_add(1);
         return GenetRxPoll::Frame {
             len: payload_len,
             flags,
         };
     }
-    let descriptor = RUNTIME_DESCRIPTOR.load();
-    let Some(dma_range) = runtime_resource_range(
-        &descriptor,
-        DRIVER_RUNTIME_RESOURCE_KIND_DMA,
-        DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA,
-    ) else {
-        return GenetRxPoll::Idle;
-    };
-    match genet_runtime_drain_rx_hardware(state, &descriptor, dma_range, budget, drain_budget) {
-        Ok(Some((len, flags))) => GenetRxPoll::Frame { len, flags },
-        Ok(None) => GenetRxPoll::Idle,
-        Err(detail) => GenetRxPoll::BudgetExhausted(detail),
-    }
+    GenetRxPoll::Idle
 }
 
+#[cfg(test)]
 fn genet_runtime_drain_rx_hardware(
     state: &mut GenetRuntimeState,
     descriptor: &DriverRuntimeInitDescriptor,
@@ -42999,6 +44190,7 @@ fn genet_rx_len_status_from_dma(dma_vaddr: usize, descriptor_len_status: u32) ->
     }
 }
 
+#[cfg(test)]
 fn genet_copy_dma_frame_to_ring(dma_vaddr: usize, payload_len: usize) {
     for index in 0..payload_len {
         let byte = read_dma_byte(dma_vaddr + GENET_RX_BUF_OFFSET + index);
@@ -43021,14 +44213,16 @@ fn genet_rx_queue_push_from_dma(
         }
         return false;
     }
-    let slot =
-        (usize::from(state.rx_queue_head) + usize::from(state.rx_queue_count)) % GENET_RX_QUEUE_CAP;
+    let logical_tail = usize::from(state.rx_queue_count);
+    let slot = usize::from(state.rx_queue_slots[logical_tail]);
     for index in 0..payload_len {
         state.rx_queue_frames[slot][index] = read_dma_byte(dma_vaddr + GENET_RX_BUF_OFFSET + index);
     }
     state.rx_queue_lens[slot] = payload_len as u16;
     state.rx_queue_flags[slot] = flags;
+    state.rx_queue_priorities[slot] = genet_dma_frame_priority(dma_vaddr, payload_len);
     state.rx_queue_count = state.rx_queue_count.saturating_add(1);
+    state.rx_queue_head = state.rx_queue_slots[0];
     state.rx_queue_high_water = state.rx_queue_high_water.max(state.rx_queue_count);
     true
 }
@@ -43042,6 +44236,39 @@ fn genet_dma_frame_ethertype(dma_vaddr: usize, payload_len: usize) -> u16 {
     (high << 8) | low
 }
 
+fn genet_frame_priority(payload_len: usize, mut read_payload_byte: impl FnMut(usize) -> u8) -> u8 {
+    if payload_len < 14 {
+        return GENET_RX_PRIORITY_DATA;
+    }
+    let mut ethertype = u16::from_be_bytes([read_payload_byte(12), read_payload_byte(13)]);
+    let mut network_offset = 14usize;
+    if (ethertype == 0x8100 || ethertype == 0x88a8) && payload_len >= 18 {
+        ethertype = u16::from_be_bytes([read_payload_byte(16), read_payload_byte(17)]);
+        network_offset = 18;
+    }
+    if ethertype == 0x0806 {
+        return GENET_RX_PRIORITY_CONTROL;
+    }
+    let protocol = if ethertype == 0x0800 && payload_len > network_offset.saturating_add(9) {
+        read_payload_byte(network_offset + 9)
+    } else if ethertype == 0x86dd && payload_len > network_offset.saturating_add(6) {
+        read_payload_byte(network_offset + 6)
+    } else {
+        return GENET_RX_PRIORITY_DATA;
+    };
+    if protocol == 6 || protocol == 1 || protocol == 58 {
+        GENET_RX_PRIORITY_CONTROL
+    } else {
+        GENET_RX_PRIORITY_DATA
+    }
+}
+
+fn genet_dma_frame_priority(dma_vaddr: usize, payload_len: usize) -> u8 {
+    genet_frame_priority(payload_len, |index| {
+        read_dma_byte(dma_vaddr + GENET_RX_BUF_OFFSET + index)
+    })
+}
+
 #[cfg(test)]
 fn genet_rx_queue_push_for_test(state: &mut GenetRuntimeState, payload: &[u8]) -> bool {
     if payload.is_empty()
@@ -43053,8 +44280,8 @@ fn genet_rx_queue_push_for_test(state: &mut GenetRuntimeState, payload: &[u8]) -
         }
         return false;
     }
-    let slot =
-        (usize::from(state.rx_queue_head) + usize::from(state.rx_queue_count)) % GENET_RX_QUEUE_CAP;
+    let logical_tail = usize::from(state.rx_queue_count);
+    let slot = usize::from(state.rx_queue_slots[logical_tail]);
     state.rx_queue_frames[slot][..payload.len()].copy_from_slice(payload);
     state.rx_queue_lens[slot] = payload.len() as u16;
     state.rx_queue_flags[slot] = if payload.len() >= 14 {
@@ -43062,7 +44289,9 @@ fn genet_rx_queue_push_for_test(state: &mut GenetRuntimeState, payload: &[u8]) -
     } else {
         0
     };
+    state.rx_queue_priorities[slot] = genet_frame_priority(payload.len(), |index| payload[index]);
     state.rx_queue_count = state.rx_queue_count.saturating_add(1);
+    state.rx_queue_head = state.rx_queue_slots[0];
     state.rx_queue_high_water = state.rx_queue_high_water.max(state.rx_queue_count);
     true
 }
@@ -43071,10 +44300,11 @@ fn genet_rx_queue_pop_to_ring(state: &mut GenetRuntimeState) -> Option<(usize, u
     if state.rx_queue_count == 0 {
         return None;
     }
-    let slot = usize::from(state.rx_queue_head);
+    let selected = genet_rx_queue_selected_index(state);
+    let slot = usize::from(state.rx_queue_slots[selected]);
     let payload_len = usize::from(state.rx_queue_lens[slot]);
     if payload_len == 0 || payload_len > GENET_MAX_FRAME_LEN {
-        genet_rx_queue_drop_head(state);
+        genet_rx_queue_drop_at(state, selected);
         return None;
     }
     for index in 0..payload_len {
@@ -43084,7 +44314,13 @@ fn genet_rx_queue_pop_to_ring(state: &mut GenetRuntimeState) -> Option<(usize, u
         );
     }
     let flags = state.rx_queue_flags[slot];
-    genet_rx_queue_drop_head(state);
+    let priority = state.rx_queue_priorities[slot];
+    genet_rx_queue_drop_at(state, selected);
+    if priority == GENET_RX_PRIORITY_CONTROL {
+        state.rx_control_burst = state.rx_control_burst.saturating_add(1);
+    } else {
+        state.rx_control_burst = 0;
+    }
     Some((payload_len, flags))
 }
 
@@ -43092,7 +44328,7 @@ fn genet_rx_queue_peek_len(state: &GenetRuntimeState) -> Option<usize> {
     if state.rx_queue_count == 0 {
         return None;
     }
-    let slot = usize::from(state.rx_queue_head);
+    let slot = usize::from(state.rx_queue_slots[genet_rx_queue_selected_index(state)]);
     let payload_len = usize::from(state.rx_queue_lens[slot]);
     if payload_len == 0 || payload_len > GENET_MAX_FRAME_LEN {
         return None;
@@ -43100,17 +44336,47 @@ fn genet_rx_queue_peek_len(state: &GenetRuntimeState) -> Option<usize> {
     Some(payload_len)
 }
 
-fn genet_rx_queue_drop_head(state: &mut GenetRuntimeState) {
+fn genet_rx_queue_selected_index(state: &GenetRuntimeState) -> usize {
+    let count = usize::from(state.rx_queue_count);
+    if count == 0 || state.rx_control_burst >= GENET_RX_CONTROL_BURST_LIMIT {
+        return 0;
+    }
+    let mut logical = 0usize;
+    while logical < count {
+        let slot = usize::from(state.rx_queue_slots[logical]);
+        if state.rx_queue_priorities[slot] == GENET_RX_PRIORITY_CONTROL {
+            return logical;
+        }
+        logical += 1;
+    }
+    0
+}
+
+fn genet_rx_queue_drop_at(state: &mut GenetRuntimeState, logical_index: usize) {
     if state.rx_queue_count == 0 {
         return;
     }
-    let slot = usize::from(state.rx_queue_head);
+    let count = usize::from(state.rx_queue_count);
+    if logical_index >= count {
+        return;
+    }
+    let slot = usize::from(state.rx_queue_slots[logical_index]);
     state.rx_queue_lens[slot] = 0;
     state.rx_queue_flags[slot] = 0;
-    state.rx_queue_head = ((slot + 1) % GENET_RX_QUEUE_CAP) as u8;
+    state.rx_queue_priorities[slot] = GENET_RX_PRIORITY_DATA;
+    let mut logical = logical_index;
+    while logical + 1 < count {
+        state.rx_queue_slots[logical] = state.rx_queue_slots[logical + 1];
+        logical += 1;
+    }
+    state.rx_queue_slots[count - 1] = slot as u8;
     state.rx_queue_count = state.rx_queue_count.saturating_sub(1);
     if state.rx_queue_count == 0 {
         state.rx_queue_head = 0;
+        state.rx_queue_slots = genet_rx_queue_initial_slots();
+        state.rx_control_burst = 0;
+    } else {
+        state.rx_queue_head = state.rx_queue_slots[0];
     }
 }
 
@@ -43417,6 +44683,7 @@ fn genet_init_rx_ring() {
         GENET_RDMA_RING_REG_BASE + GENET_DMA_RING_BUF_SIZE,
         genet_ring_buffer_size(GENET_ACTIVE_RING_DESCS),
     );
+    genet_write32(GENET_RDMA_RING_REG_BASE + GENET_DMA_MBUF_DONE_THRESH, 1);
     genet_write32(
         GENET_RDMA_XON_XOFF_THRESH,
         genet_dma_fc_thresh_value(GENET_ACTIVE_RING_DESCS),
@@ -45108,38 +46375,414 @@ fn usb_hid_usage_to_ascii(code: u8, shifted: bool) -> Option<u8> {
     }
 }
 
+struct HdmiCellPlane {
+    cells: [u8; HDMI_CELL_CAPACITY],
+    dirty: [u64; HDMI_DIRTY_WORDS],
+    row_non_blank: [u16; HDMI_MAX_ROWS],
+    cols: usize,
+    rows: usize,
+    row_origin: usize,
+    non_blank_cells: usize,
+    all_dirty: bool,
+    full_frame_clear_requested: bool,
+}
+
+impl HdmiCellPlane {
+    const fn empty() -> Self {
+        Self {
+            cells: [0; HDMI_CELL_CAPACITY],
+            dirty: [0; HDMI_DIRTY_WORDS],
+            row_non_blank: [0; HDMI_MAX_ROWS],
+            cols: 0,
+            rows: 0,
+            row_origin: 0,
+            non_blank_cells: 0,
+            all_dirty: false,
+            full_frame_clear_requested: false,
+        }
+    }
+
+    #[cfg(test)]
+    fn reset(&mut self) {
+        self.cells.fill(0);
+        self.dirty.fill(0);
+        self.row_non_blank.fill(0);
+        self.cols = 0;
+        self.rows = 0;
+        self.row_origin = 0;
+        self.non_blank_cells = 0;
+        self.all_dirty = false;
+        self.full_frame_clear_requested = false;
+    }
+
+    fn cold_engine_init_ready(&self) -> bool {
+        self.cols == 0
+            && self.rows == 0
+            && self.row_origin == 0
+            && self.non_blank_cells == 0
+            && !self.all_dirty
+            && !self.full_frame_clear_requested
+    }
+
+    fn configure(&mut self, cols: usize, rows: usize) -> bool {
+        let Some(cell_count) = cols.checked_mul(rows) else {
+            return false;
+        };
+        if cols == 0
+            || rows == 0
+            || cols > HDMI_MAX_COLS
+            || rows > HDMI_MAX_ROWS
+            || cell_count > HDMI_CELL_CAPACITY
+        {
+            return false;
+        }
+        if self.cols == 0 && self.rows == 0 {
+            // A driver runtime image starts with a statically zeroed plane.
+            // Engine admission leaves that storage pristine and only binds its
+            // immutable geometry here; it must not clear the 32-KiB plane in a
+            // nominal service turn. A live runtime cannot change geometry.
+            self.cols = cols;
+            self.rows = rows;
+        } else if self.cols != cols || self.rows != rows {
+            return false;
+        }
+        true
+    }
+
+    fn cell_count(&self) -> usize {
+        self.cols.saturating_mul(self.rows)
+    }
+
+    fn storage_row(&self, row: usize) -> Option<usize> {
+        if row >= self.rows || self.rows == 0 {
+            return None;
+        }
+        Some(self.row_origin.saturating_add(row) % self.rows)
+    }
+
+    fn storage_index(&self, row: usize, col: usize) -> Option<usize> {
+        if row >= self.rows || col >= self.cols || self.rows == 0 {
+            return None;
+        }
+        let storage_row = self.storage_row(row)?;
+        storage_row
+            .checked_mul(self.cols)
+            .and_then(|base| base.checked_add(col))
+            .filter(|index| *index < HDMI_CELL_CAPACITY)
+    }
+
+    fn visible_index(&self, row: usize, col: usize) -> Option<usize> {
+        if row >= self.rows || col >= self.cols {
+            return None;
+        }
+        row.checked_mul(self.cols)
+            .and_then(|base| base.checked_add(col))
+            .filter(|index| *index < self.cell_count())
+    }
+
+    fn cell(&self, row: usize, col: usize) -> u8 {
+        self.storage_index(row, col)
+            .map_or(0, |index| self.cells[index])
+    }
+
+    #[cfg(test)]
+    fn dirty(&self, visible_index: usize) -> bool {
+        if visible_index >= self.cell_count() {
+            return false;
+        }
+        if self.all_dirty {
+            return true;
+        }
+        let word = visible_index / u64::BITS as usize;
+        let bit = visible_index % u64::BITS as usize;
+        self.dirty[word] & (1u64 << bit) != 0
+    }
+
+    fn next_dirty_from(&self, start: usize) -> Option<usize> {
+        let cell_count = self.cell_count();
+        if start >= cell_count {
+            return None;
+        }
+        if self.all_dirty {
+            return Some(start);
+        }
+        let mut word = start / u64::BITS as usize;
+        let start_bit = start % u64::BITS as usize;
+        let mut candidates = self.dirty[word] & (u64::MAX << start_bit);
+        loop {
+            if candidates != 0 {
+                let index = word
+                    .saturating_mul(u64::BITS as usize)
+                    .saturating_add(candidates.trailing_zeros() as usize);
+                return (index < cell_count).then_some(index);
+            }
+            word = word.saturating_add(1);
+            if word >= HDMI_DIRTY_WORDS {
+                return None;
+            }
+            candidates = self.dirty[word];
+        }
+    }
+
+    fn mark_dirty(&mut self, row: usize, col: usize) {
+        let Some(index) = self.visible_index(row, col) else {
+            return;
+        };
+        let word = index / u64::BITS as usize;
+        let bit = index % u64::BITS as usize;
+        self.dirty[word] |= 1u64 << bit;
+    }
+
+    fn clear_dirty(&mut self, visible_index: usize) {
+        if visible_index >= self.cell_count() {
+            return;
+        }
+        let word = visible_index / u64::BITS as usize;
+        let bit = visible_index % u64::BITS as usize;
+        self.dirty[word] &= !(1u64 << bit);
+    }
+
+    fn mark_all_dirty(&mut self) {
+        self.all_dirty = true;
+    }
+
+    fn finish_full_raster(&mut self) {
+        self.all_dirty = false;
+    }
+
+    fn request_full_frame_clear_after_damage_reset(&mut self) {
+        // The retained damage-reset operation has already discarded the
+        // pre-clear bitmap one bounded word at a time. Later input bytes add
+        // only final nonblank cells that must be rasterized after the physical
+        // clear.
+        self.all_dirty = false;
+        self.full_frame_clear_requested = true;
+    }
+
+    fn dirty_word_count(&self) -> usize {
+        self.cell_count().div_ceil(u64::BITS as usize)
+    }
+
+    fn clear_dirty_word(&mut self, word: usize) -> bool {
+        if word >= self.dirty_word_count() {
+            return false;
+        }
+        self.dirty[word] = 0;
+        true
+    }
+
+    fn visible_row_is_blank(&self, row: usize) -> bool {
+        self.storage_row(row)
+            .is_some_and(|storage_row| self.row_non_blank[storage_row] == 0)
+    }
+
+    fn clear_visible_cell(&mut self, visible_index: usize) -> bool {
+        if visible_index >= self.cell_count() || self.cols == 0 {
+            return false;
+        }
+        self.set_cell(visible_index / self.cols, visible_index % self.cols, 0);
+        true
+    }
+
+    fn full_frame_clear_requested(&self) -> bool {
+        self.full_frame_clear_requested
+    }
+
+    fn finish_full_frame_clear(&mut self) {
+        self.full_frame_clear_requested = false;
+    }
+
+    fn set_cell(&mut self, row: usize, col: usize, byte: u8) {
+        let byte = if byte == b' ' { 0 } else { byte };
+        let Some(storage_index) = self.storage_index(row, col) else {
+            return;
+        };
+        let old = self.cells[storage_index];
+        if old == byte {
+            return;
+        }
+        let Some(storage_row) = self.storage_row(row) else {
+            return;
+        };
+        self.cells[storage_index] = byte;
+        if old == 0 && byte != 0 {
+            self.row_non_blank[storage_row] = self.row_non_blank[storage_row].saturating_add(1);
+            self.non_blank_cells = self.non_blank_cells.saturating_add(1);
+        } else if old != 0 && byte == 0 {
+            self.row_non_blank[storage_row] = self.row_non_blank[storage_row].saturating_sub(1);
+            self.non_blank_cells = self.non_blank_cells.saturating_sub(1);
+        }
+        self.mark_dirty(row, col);
+    }
+
+    #[cfg(test)]
+    fn clear_row_range(&mut self, row: usize, start_col: usize, end_col: usize) {
+        let end_col = end_col.min(self.cols);
+        let Some(storage_row) = self.storage_row(row) else {
+            return;
+        };
+        if self.row_non_blank[storage_row] == 0 {
+            return;
+        }
+        for col in start_col.min(end_col)..end_col {
+            self.set_cell(row, col, 0);
+        }
+    }
+
+    #[cfg(test)]
+    fn clear_rows(&mut self, start_row: usize, end_row: usize) {
+        let end_row = end_row.min(self.rows);
+        for row in start_row.min(end_row)..end_row {
+            self.clear_row_range(row, 0, self.cols);
+        }
+    }
+
+    #[cfg(test)]
+    fn clear_all(&mut self) {
+        if self.non_blank_cells == 0 {
+            return;
+        }
+        self.clear_rows(0, self.rows);
+    }
+
+    #[cfg(test)]
+    fn scroll_up(&mut self, rows: usize) {
+        if self.rows == 0 {
+            return;
+        }
+        if rows >= self.rows {
+            self.clear_all();
+            self.mark_all_dirty();
+            return;
+        }
+        let rows = rows.max(1);
+        self.row_origin = self.row_origin.saturating_add(rows) % self.rows;
+        self.clear_rows(self.rows - rows, self.rows);
+        self.mark_all_dirty();
+    }
+
+    #[cfg(test)]
+    fn scroll_down(&mut self, rows: usize) {
+        if self.rows == 0 {
+            return;
+        }
+        if rows >= self.rows {
+            self.clear_all();
+            self.mark_all_dirty();
+            return;
+        }
+        let rows = rows.max(1);
+        self.row_origin = self.row_origin.saturating_add(self.rows - rows) % self.rows;
+        self.clear_rows(0, rows);
+        self.mark_all_dirty();
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum HdmiFirstFramePhase {
+enum HdmiFramePhase {
     Idle,
     Clear,
-    Render,
+    Parse,
+    FrameClear,
+    Raster,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct HdmiFirstFrameCursor {
-    phase: HdmiFirstFramePhase,
-    command: DriverTaskCommandRecord,
-    next_row: u32,
+enum HdmiPendingPlaneOpKind {
+    None,
+    ClearCells,
+    ResetDamage,
 }
 
-impl HdmiFirstFrameCursor {
+const HDMI_PENDING_PLANE_OP_MARK_ALL_DIRTY: u8 = 1 << 0;
+const HDMI_PENDING_PLANE_OP_REQUEST_FRAME_CLEAR: u8 = 1 << 1;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct HdmiPendingPlaneOp {
+    kind: HdmiPendingPlaneOpKind,
+    next: u32,
+    end: u32,
+    finish_flags: u8,
+}
+
+impl HdmiPendingPlaneOp {
+    const fn none() -> Self {
+        Self {
+            kind: HdmiPendingPlaneOpKind::None,
+            next: 0,
+            end: 0,
+            finish_flags: 0,
+        }
+    }
+
+    const fn active(self) -> bool {
+        !matches!(self.kind, HdmiPendingPlaneOpKind::None)
+    }
+
+    const fn canonical(self) -> bool {
+        self.active() || (self.next == 0 && self.end == 0 && self.finish_flags == 0)
+    }
+
+    fn schedule_clear(&mut self, start: usize, end: usize, finish_flags: u8) -> bool {
+        if self.active() || start > end || u32::try_from(end).is_err() {
+            return false;
+        }
+        self.kind = HdmiPendingPlaneOpKind::ClearCells;
+        self.next = start as u32;
+        self.end = end as u32;
+        self.finish_flags = finish_flags;
+        true
+    }
+
+    fn reset(&mut self) {
+        *self = Self::none();
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct HdmiFrameCursor {
+    phase: HdmiFramePhase,
+    command: DriverTaskCommandRecord,
+    next_row: u32,
+    next_cell: u32,
+    next_byte: u16,
+    tab_spaces_remaining: u8,
+    pending_plane_op: HdmiPendingPlaneOp,
+    rendered_bytes: u16,
+}
+
+impl HdmiFrameCursor {
     const fn idle() -> Self {
         Self {
-            phase: HdmiFirstFramePhase::Idle,
+            phase: HdmiFramePhase::Idle,
             command: DriverTaskCommandRecord::empty(),
             next_row: 0,
+            next_cell: 0,
+            next_byte: 0,
+            tab_spaces_remaining: 0,
+            pending_plane_op: HdmiPendingPlaneOp::none(),
+            rendered_bytes: 0,
         }
     }
 
     fn active_for(self, command: DriverTaskCommandRecord) -> bool {
-        !matches!(self.phase, HdmiFirstFramePhase::Idle) && self.command == command
+        !matches!(self.phase, HdmiFramePhase::Idle) && self.command == command
     }
 
-    fn begin(&mut self, command: DriverTaskCommandRecord) {
+    fn begin(&mut self, command: DriverTaskCommandRecord, takeover_clear: bool) {
         *self = Self {
-            phase: HdmiFirstFramePhase::Clear,
+            phase: if takeover_clear {
+                HdmiFramePhase::Clear
+            } else {
+                HdmiFramePhase::Parse
+            },
             command,
             next_row: 0,
+            next_cell: 0,
+            next_byte: 0,
+            tab_spaces_remaining: 0,
+            pending_plane_op: HdmiPendingPlaneOp::none(),
+            rendered_bytes: 0,
         };
     }
 
@@ -45148,7 +46791,13 @@ impl HdmiFirstFrameCursor {
     }
 }
 
-const fn hdmi_first_frame_command_candidate(command: DriverTaskCommandRecord) -> bool {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct HdmiRasterProgress {
+    next_cell: usize,
+    complete: bool,
+}
+
+const fn hdmi_frame_command_candidate(command: DriverTaskCommandRecord) -> bool {
     command.sequence != 0
         && command.opcode == OPCODE_SUBMIT_FRAME
         && command.arg0 == HOT_PATH_HDMI_TEXT
@@ -45157,21 +46806,109 @@ const fn hdmi_first_frame_command_candidate(command: DriverTaskCommandRecord) ->
         && command.frame.len != 0
 }
 
-fn hdmi_first_frame_command_ready(command: DriverTaskCommandRecord) -> bool {
-    hdmi_first_frame_command_candidate(command)
+const fn hdmi_frame_command_envelope_valid(command: DriverTaskCommandRecord) -> bool {
+    command.flags & !DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY == 0
+        && command.aux1 == 0
+        && command.frame.flags == 0
+        && command.budget.max_ops == DRIVER_RUNTIME_HDMI_SERVICE_MAX_OPS
+        && command.budget.max_frames == DRIVER_RUNTIME_HDMI_SERVICE_MAX_FRAMES
+        && command.budget.max_bytes == DRIVER_RUNTIME_HDMI_SERVICE_MAX_BYTES
+        && command.budget.max_bytes >= command.frame.len as u32
+}
+
+fn hdmi_cell_plane_geometry_admitted(descriptor: &DriverRuntimeInitDescriptor) -> bool {
+    let bytes_per_pixel = match descriptor.framebuffer.format {
+        DRIVER_RUNTIME_FRAMEBUFFER_FORMAT_XRGB8888 | 0 => FB_BYTES_PER_PIXEL_32,
+        DRIVER_RUNTIME_FRAMEBUFFER_FORMAT_RGB888 => 3,
+        _ => return false,
+    };
+    let Some(row_bytes) = (descriptor.framebuffer.width as usize).checked_mul(bytes_per_pixel)
+    else {
+        return false;
+    };
+    let Some(framebuffer_bytes) =
+        (descriptor.framebuffer.pitch as usize).checked_mul(descriptor.framebuffer.height as usize)
+    else {
+        return false;
+    };
+    if row_bytes > descriptor.framebuffer.pitch as usize
+        || (bytes_per_pixel == FB_BYTES_PER_PIXEL_32
+            && (descriptor.framebuffer.vaddr & 3 != 0 || descriptor.framebuffer.pitch & 3 != 0))
+        || !hdmi_framebuffer_range_covers(descriptor, framebuffer_bytes)
+    {
+        return false;
+    }
+    let safe = hdmi_safe_area_for_framebuffer(
+        descriptor.framebuffer.width as usize,
+        descriptor.framebuffer.height as usize,
+    );
+    let cols = (safe.width / CHAR_WIDTH).max(1);
+    let rows = (safe.height / CHAR_HEIGHT).max(1);
+    safe.width >= CHAR_WIDTH
+        && safe.height >= CHAR_HEIGHT
+        && cols <= HDMI_MAX_COLS
+        && rows <= HDMI_MAX_ROWS
+        && cols
+            .checked_mul(rows)
+            .is_some_and(|cells| cells != 0 && cells <= HDMI_CELL_CAPACITY)
+}
+
+fn hdmi_framebuffer_range_covers(
+    descriptor: &DriverRuntimeInitDescriptor,
+    framebuffer_bytes: usize,
+) -> bool {
+    let mut index = 0usize;
+    while index < descriptor_resource_range_count(descriptor) {
+        let range = descriptor.resource_ranges[index];
+        if range.kind == DRIVER_RUNTIME_RESOURCE_KIND_FRAMEBUFFER
+            && range.tag == DRIVER_RUNTIME_RESOURCE_TAG_HDMI_FRAMEBUFFER
+            && range.vaddr == descriptor.framebuffer.vaddr
+            && range.paddr == descriptor.framebuffer.paddr
+            && usize::try_from(range.bytes).is_ok_and(|bytes| bytes >= framebuffer_bytes)
+        {
+            return true;
+        }
+        index = index.saturating_add(1);
+    }
+    false
+}
+
+fn hdmi_frame_command_ready(command: DriverTaskCommandRecord) -> bool {
+    hdmi_frame_command_candidate(command)
+        && hdmi_frame_command_envelope_valid(command)
         && command.frame.in_ring_payload()
         && engine_initialized(&HDMI_RUNTIME_FLAGS)
         && RUNTIME_INIT_HOT_PATH.load(Ordering::Acquire) == HOT_PATH_HDMI_TEXT
-        && RUNTIME_DESCRIPTOR.with_ref(|descriptor| descriptor.hdmi_ready())
+        && RUNTIME_DESCRIPTOR.with_ref(|descriptor| {
+            descriptor.hdmi_ready()
+                && descriptor.budget_us as usize >= HDMI_BASE_BUDGET_US
+                && hdmi_cell_plane_geometry_admitted(descriptor)
+        })
 }
 
-const fn hdmi_first_frame_clear_rows_per_turn(
+const fn hdmi_budget_scale(budget_us: u32) -> usize {
+    let budget_us = budget_us as usize;
+    let capped = if budget_us > HDMI_MAX_RASTER_BUDGET_US {
+        HDMI_MAX_RASTER_BUDGET_US
+    } else {
+        budget_us
+    };
+    let scale = capped / HDMI_BASE_BUDGET_US;
+    if scale == 0 {
+        1
+    } else {
+        scale
+    }
+}
+
+const fn hdmi_first_frame_clear_rows_per_turn_budgeted(
     framebuffer_vaddr: u64,
     framebuffer_width: u32,
     framebuffer_pitch: u32,
     framebuffer_format: u32,
+    budget_us: u32,
 ) -> usize {
-    if matches!(
+    let base = if matches!(
         framebuffer_format,
         DRIVER_RUNTIME_FRAMEBUFFER_FORMAT_XRGB8888 | 0
     ) && framebuffer_vaddr & 7 == 0
@@ -45181,96 +46918,509 @@ const fn hdmi_first_frame_clear_rows_per_turn(
         HDMI_FIRST_FRAME_CLEAR_ROWS_PER_TURN_PAIRED_XRGB8888
     } else {
         HDMI_FIRST_FRAME_CLEAR_ROWS_PER_TURN_RGB888
-    }
+    };
+    base.saturating_mul(hdmi_budget_scale(budget_us))
 }
 
-fn service_hdmi_first_frame_command_turn(
-    command: DriverTaskCommandRecord,
-) -> Option<RuntimeCommandTurn> {
-    if HDMI_FIRST_FRAME_CLEARED.load(Ordering::Acquire)
-        || !hdmi_first_frame_command_candidate(command)
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct HdmiParseTurnProgress {
+    next_byte: u16,
+    tab_spaces_remaining: u8,
+    pending_plane_op: HdmiPendingPlaneOp,
+    operations: u16,
+    complete: bool,
+}
+
+fn hdmi_publish_render_state(state: &HdmiRenderState) {
+    HDMI_CURSOR_ROW.store(state.row as u32, Ordering::Release);
+    HDMI_CURSOR_COL.store(state.col as u32, Ordering::Release);
+    HDMI_ESCAPE_STATE.store(u32::from(state.escape_state), Ordering::Release);
+    HDMI_CSI_VALUE.store(state.csi_values[0] as u32, Ordering::Release);
+    HDMI_CSI_VALUE_2.store(state.csi_values[1] as u32, Ordering::Release);
+    HDMI_CSI_PARAM_INDEX.store(state.csi_param_index as u32, Ordering::Release);
+    HDMI_CSI_DIGITS_SEEN.store(u32::from(state.csi_digits_seen), Ordering::Release);
+    HDMI_SAVED_CURSOR_ROW.store(state.saved_row as u32, Ordering::Release);
+    HDMI_SAVED_CURSOR_COL.store(state.saved_col as u32, Ordering::Release);
+}
+
+fn hdmi_service_pending_plane_op(
+    plane: &mut HdmiCellPlane,
+    pending: &mut HdmiPendingPlaneOp,
+    max_ops: usize,
+) -> Option<usize> {
+    let mut operations = 0usize;
+    while pending.active() {
+        if pending.finish_flags
+            & !(HDMI_PENDING_PLANE_OP_MARK_ALL_DIRTY | HDMI_PENDING_PLANE_OP_REQUEST_FRAME_CLEAR)
+            != 0
+            || pending.finish_flags
+                == HDMI_PENDING_PLANE_OP_MARK_ALL_DIRTY | HDMI_PENDING_PLANE_OP_REQUEST_FRAME_CLEAR
+            || pending.next > pending.end
+        {
+            return None;
+        }
+        match pending.kind {
+            HdmiPendingPlaneOpKind::None => break,
+            HdmiPendingPlaneOpKind::ClearCells => {
+                let cell_count = plane.cell_count();
+                if pending.end as usize > cell_count || plane.cols == 0 {
+                    return None;
+                }
+                if pending.next == pending.end {
+                    let finish_flags = pending.finish_flags;
+                    if finish_flags & HDMI_PENDING_PLANE_OP_MARK_ALL_DIRTY != 0 {
+                        plane.mark_all_dirty();
+                    }
+                    if finish_flags & HDMI_PENDING_PLANE_OP_REQUEST_FRAME_CLEAR != 0 {
+                        plane.all_dirty = false;
+                        pending.kind = HdmiPendingPlaneOpKind::ResetDamage;
+                        pending.next = 0;
+                        pending.end = plane.dirty_word_count() as u32;
+                        pending.finish_flags = HDMI_PENDING_PLANE_OP_REQUEST_FRAME_CLEAR;
+                    } else {
+                        pending.reset();
+                    }
+                    continue;
+                }
+                if operations == max_ops {
+                    break;
+                }
+                let visible_index = pending.next as usize;
+                let row = visible_index / plane.cols;
+                if visible_index.is_multiple_of(plane.cols) && plane.visible_row_is_blank(row) {
+                    let next_row = row
+                        .saturating_add(1)
+                        .saturating_mul(plane.cols)
+                        .min(pending.end as usize);
+                    if next_row <= visible_index {
+                        return None;
+                    }
+                    pending.next = next_row as u32;
+                } else {
+                    if !plane.clear_visible_cell(visible_index) {
+                        return None;
+                    }
+                    pending.next = pending.next.saturating_add(1);
+                }
+                operations = operations.saturating_add(1);
+            }
+            HdmiPendingPlaneOpKind::ResetDamage => {
+                if pending.finish_flags != HDMI_PENDING_PLANE_OP_REQUEST_FRAME_CLEAR
+                    || pending.end as usize != plane.dirty_word_count()
+                {
+                    return None;
+                }
+                if pending.next == pending.end {
+                    plane.request_full_frame_clear_after_damage_reset();
+                    pending.reset();
+                    continue;
+                }
+                if operations == max_ops {
+                    break;
+                }
+                if !plane.clear_dirty_word(pending.next as usize) {
+                    return None;
+                }
+                pending.next = pending.next.saturating_add(1);
+                operations = operations.saturating_add(1);
+            }
+        }
+    }
+    Some(operations)
+}
+
+fn hdmi_parse_frame_to_cell_plane_turn(
+    frame: DriverFrameDescriptor,
+    next_byte: u16,
+    tab_spaces_remaining: u8,
+    pending_plane_op: HdmiPendingPlaneOp,
+    max_ops: u16,
+) -> Option<HdmiParseTurnProgress> {
+    if max_ops == 0
+        || next_byte > frame.len
+        || frame.len as u32 > DRIVER_RUNTIME_HDMI_SERVICE_MAX_BYTES
+        || tab_spaces_remaining > 8
+        || !pending_plane_op.canonical()
     {
         return None;
     }
-    if !hdmi_first_frame_command_ready(command) {
-        HDMI_FIRST_FRAME_CURSOR.with_mut(HdmiFirstFrameCursor::reset);
-        return None;
-    }
-
-    let phase = HDMI_FIRST_FRAME_CURSOR.with_mut(|cursor| {
-        if matches!(cursor.phase, HdmiFirstFramePhase::Idle) {
-            cursor.begin(command);
-        }
-        if !cursor.active_for(command) {
-            cursor.reset();
+    RUNTIME_DESCRIPTOR.with_ref(|descriptor| {
+        let mut state = HdmiRenderState::from_descriptor(descriptor);
+        if !state.cell_plane_ready {
             return None;
         }
-        Some(cursor.phase)
+        let mut next_byte = next_byte;
+        let mut tab_spaces_remaining = tab_spaces_remaining;
+        let mut pending_plane_op = pending_plane_op;
+        let mut operations = 0usize;
+        let admitted_ops = max_ops as usize;
+        let parsed = HDMI_CELL_PLANE.with_mut(|plane| {
+            while operations < admitted_ops {
+                if pending_plane_op.active() {
+                    let used = hdmi_service_pending_plane_op(
+                        plane,
+                        &mut pending_plane_op,
+                        admitted_ops.saturating_sub(operations),
+                    )?;
+                    operations = operations.saturating_add(used);
+                    if pending_plane_op.active() {
+                        break;
+                    }
+                    continue;
+                }
+                if tab_spaces_remaining != 0 {
+                    state.put_tab_space_bounded(
+                        plane,
+                        &mut pending_plane_op,
+                        &mut tab_spaces_remaining,
+                    )?;
+                    operations = operations.saturating_add(1);
+                    continue;
+                }
+                if next_byte == frame.len {
+                    break;
+                }
+                let byte = read_ring_byte(frame.offset as usize + next_byte as usize);
+                let disposition = state.put_byte_bounded(
+                    plane,
+                    &mut pending_plane_op,
+                    &mut tab_spaces_remaining,
+                    byte,
+                )?;
+                operations = operations.saturating_add(1);
+                if disposition == HdmiByteDisposition::Consumed {
+                    next_byte = next_byte.saturating_add(1);
+                }
+            }
+            Some(())
+        });
+        parsed?;
+        hdmi_publish_render_state(&state);
+        Some(HdmiParseTurnProgress {
+            next_byte,
+            tab_spaces_remaining,
+            pending_plane_op,
+            operations: operations as u16,
+            complete: next_byte == frame.len
+                && tab_spaces_remaining == 0
+                && !pending_plane_op.active(),
+        })
+    })
+}
+
+#[cfg(test)]
+fn hdmi_render_frame(frame: DriverFrameDescriptor) -> usize {
+    let mut next_byte = 0;
+    let mut tab_spaces_remaining = 0;
+    let mut pending_plane_op = HdmiPendingPlaneOp::none();
+    loop {
+        let Some(progress) = hdmi_parse_frame_to_cell_plane_turn(
+            frame,
+            next_byte,
+            tab_spaces_remaining,
+            pending_plane_op,
+            DRIVER_RUNTIME_HDMI_SERVICE_MAX_OPS,
+        ) else {
+            return 0;
+        };
+        next_byte = progress.next_byte;
+        tab_spaces_remaining = progress.tab_spaces_remaining;
+        pending_plane_op = progress.pending_plane_op;
+        if progress.complete {
+            break;
+        }
+    }
+    let _ = hdmi_raster_dirty_turn(0, HDMI_CELL_CAPACITY);
+    next_byte as usize
+}
+
+fn hdmi_raster_dirty_turn(start_cell: usize, max_cells: usize) -> Option<HdmiRasterProgress> {
+    RUNTIME_DESCRIPTOR.with_ref(|descriptor| {
+        let state = HdmiRenderState::from_descriptor(descriptor);
+        if !state.cell_plane_ready || max_cells == 0 {
+            return None;
+        }
+        HDMI_CELL_PLANE.with_mut(|plane| {
+            let cell_count = plane.cell_count();
+            if start_cell > cell_count {
+                return None;
+            }
+            let mut next_cell = start_cell;
+            let mut rendered = 0usize;
+            while rendered < max_cells {
+                let Some(index) = plane.next_dirty_from(next_cell) else {
+                    break;
+                };
+                let row = index / plane.cols;
+                let col = index % plane.cols;
+                if !state.raster_cell(row, col, plane.cell(row, col)) {
+                    return None;
+                }
+                plane.clear_dirty(index);
+                rendered = rendered.saturating_add(1);
+                next_cell = index.saturating_add(1);
+            }
+            let complete = plane.next_dirty_from(next_cell).is_none();
+            if complete && plane.all_dirty {
+                plane.finish_full_raster();
+            }
+            Some(HdmiRasterProgress {
+                next_cell,
+                complete,
+            })
+        })
+    })
+}
+
+fn hdmi_raster_cells_per_turn(max_ops: u16) -> Option<usize> {
+    RUNTIME_DESCRIPTOR.with_ref(|descriptor| {
+        let safe = hdmi_safe_area_for_framebuffer(
+            descriptor.framebuffer.width as usize,
+            descriptor.framebuffer.height as usize,
+        );
+        let cols = (safe.width / CHAR_WIDTH).max(1);
+        let base_cells = if matches!(
+            descriptor.framebuffer.format,
+            DRIVER_RUNTIME_FRAMEBUFFER_FORMAT_XRGB8888 | 0
+        ) {
+            cols
+        } else if descriptor.framebuffer.format == DRIVER_RUNTIME_FRAMEBUFFER_FORMAT_RGB888 {
+            cols.div_ceil(2)
+        } else {
+            return None;
+        };
+        Some(
+            base_cells
+                .saturating_mul(hdmi_budget_scale(descriptor.budget_us))
+                .max(1)
+                .min(max_ops as usize)
+                .min(HDMI_CELL_CAPACITY),
+        )
+    })
+}
+
+fn hdmi_frame_fault(command: DriverTaskCommandRecord, detail: u16) -> RuntimeCommandTurn {
+    HDMI_FRAME_CURSOR.with_mut(HdmiFrameCursor::reset);
+    publish_runtime_progress(
+        command.sequence,
+        DRIVER_RUNTIME_RING_PROGRESS_HDMI_FRAME_FAILED,
+        command.aux0,
+    );
+    RuntimeCommandTurn::Complete(DriverTaskCompletionRecord::fault(command.sequence, detail))
+}
+
+fn hdmi_frame_mismatch(command: DriverTaskCommandRecord) -> RuntimeCommandTurn {
+    publish_runtime_progress(
+        command.sequence,
+        DRIVER_RUNTIME_RING_PROGRESS_HDMI_FRAME_FAILED,
+        command.aux0,
+    );
+    RuntimeCommandTurn::Complete(DriverTaskCompletionRecord::fault(
+        command.sequence,
+        FAULT_REJECTED_COMMAND,
+    ))
+}
+
+fn hdmi_frame_complete(
+    command: DriverTaskCommandRecord,
+    rendered_bytes: usize,
+) -> RuntimeCommandTurn {
+    HDMI_FRAME_CURSOR.with_mut(HdmiFrameCursor::reset);
+    device_store_completion_barrier();
+    publish_runtime_progress(
+        command.sequence,
+        DRIVER_RUNTIME_RING_PROGRESS_HDMI_FRAME_DONE,
+        command.aux0,
+    );
+    HDMI_RUNTIME_FLAGS.fetch_or(ENGINE_STATE_TX_PROGRESS, Ordering::AcqRel);
+    RuntimeCommandTurn::Complete(DriverTaskCompletionRecord::progress(
+        command.sequence,
+        rendered_bytes as u32,
+    ))
+}
+
+fn service_hdmi_frame_command_turn(command: DriverTaskCommandRecord) -> Option<RuntimeCommandTurn> {
+    if !hdmi_frame_command_candidate(command) {
+        return None;
+    }
+    if HDMI_FRAME_CURSOR.with_ref(|cursor| {
+        !matches!(cursor.phase, HdmiFramePhase::Idle) && !cursor.active_for(command)
+    }) {
+        return Some(hdmi_frame_mismatch(command));
+    }
+    if !hdmi_frame_command_ready(command) {
+        let detail =
+            if !hdmi_frame_command_envelope_valid(command) || !command.frame.in_ring_payload() {
+                FAULT_REJECTED_COMMAND
+            } else {
+                FAULT_DEVICE_UNAVAILABLE
+            };
+        return Some(hdmi_frame_fault(command, detail));
+    }
+
+    let phase = HDMI_FRAME_CURSOR.with_mut(|cursor| {
+        let began = matches!(cursor.phase, HdmiFramePhase::Idle);
+        if began {
+            cursor.begin(command, !HDMI_FIRST_FRAME_CLEARED.load(Ordering::Acquire));
+        }
+        if !cursor.active_for(command) {
+            return None;
+        }
+        Some((cursor.phase, began))
     });
-    let Some(phase) = phase else {
-        return Some(RuntimeCommandTurn::Complete(
-            DriverTaskCompletionRecord::fault(command.sequence, FAULT_REJECTED_COMMAND),
-        ));
+    let Some((phase, began)) = phase else {
+        return Some(hdmi_frame_fault(command, FAULT_REJECTED_COMMAND));
     };
+    if began {
+        publish_runtime_progress(
+            command.sequence,
+            DRIVER_RUNTIME_RING_PROGRESS_HDMI_FRAME_BEGIN,
+            command.aux0,
+        );
+    }
 
     match phase {
-        HdmiFirstFramePhase::Idle => Some(RuntimeCommandTurn::Complete(
-            DriverTaskCompletionRecord::fault(command.sequence, FAULT_REJECTED_COMMAND),
-        )),
-        HdmiFirstFramePhase::Clear => {
-            let start_row = HDMI_FIRST_FRAME_CURSOR.with_ref(|cursor| cursor.next_row as usize);
+        HdmiFramePhase::Idle => Some(hdmi_frame_fault(command, FAULT_REJECTED_COMMAND)),
+        HdmiFramePhase::Clear => {
+            let start_row = HDMI_FRAME_CURSOR.with_ref(|cursor| cursor.next_row as usize);
             let (height, rows_per_turn) = RUNTIME_DESCRIPTOR.with_ref(|descriptor| {
                 (
                     descriptor.framebuffer.height as usize,
-                    hdmi_first_frame_clear_rows_per_turn(
+                    hdmi_first_frame_clear_rows_per_turn_budgeted(
                         descriptor.framebuffer.vaddr,
                         descriptor.framebuffer.width,
                         descriptor.framebuffer.pitch,
                         descriptor.framebuffer.format,
+                        descriptor.budget_us,
                     ),
                 )
             });
+            let rows_per_turn = rows_per_turn.min(command.budget.max_frames as usize);
             let end_row = start_row.saturating_add(rows_per_turn).min(height);
-            RUNTIME_DESCRIPTOR.with_ref(|descriptor| {
-                let mut state = HdmiRenderState::from_descriptor(descriptor);
-                state.clear_full_framebuffer_rows(start_row, end_row.saturating_sub(start_row));
+            let cleared = RUNTIME_DESCRIPTOR.with_ref(|descriptor| {
+                let state = HdmiRenderState::from_descriptor(descriptor);
+                state.clear_full_framebuffer_rows(start_row, end_row.saturating_sub(start_row))
             });
-            HDMI_FIRST_FRAME_CURSOR.with_mut(|cursor| {
+            if !cleared {
+                return Some(hdmi_frame_fault(command, FAULT_DEVICE_UNAVAILABLE));
+            }
+            HDMI_FRAME_CURSOR.with_mut(|cursor| {
                 cursor.next_row = end_row as u32;
                 if end_row == height {
-                    cursor.phase = HdmiFirstFramePhase::Render;
+                    cursor.phase = HdmiFramePhase::Parse;
                 }
+            });
+            if end_row == height {
+                HDMI_FIRST_FRAME_CLEARED.store(true, Ordering::Release);
+            }
+            Some(RuntimeCommandTurn::Pending)
+        }
+        HdmiFramePhase::Parse => {
+            let (next_byte, tab_spaces_remaining, pending_plane_op) =
+                HDMI_FRAME_CURSOR.with_ref(|cursor| {
+                    (
+                        cursor.next_byte,
+                        cursor.tab_spaces_remaining,
+                        cursor.pending_plane_op,
+                    )
+                });
+            let Some(progress) = hdmi_parse_frame_to_cell_plane_turn(
+                command.frame,
+                next_byte,
+                tab_spaces_remaining,
+                pending_plane_op,
+                command.budget.max_ops,
+            ) else {
+                return Some(hdmi_frame_fault(command, FAULT_REJECTED_COMMAND));
+            };
+            if progress.operations > command.budget.max_ops {
+                return Some(hdmi_frame_fault(command, FAULT_REJECTED_COMMAND));
+            }
+            HDMI_FRAME_CURSOR.with_mut(|cursor| {
+                cursor.next_byte = progress.next_byte;
+                cursor.tab_spaces_remaining = progress.tab_spaces_remaining;
+                cursor.pending_plane_op = progress.pending_plane_op;
+                cursor.rendered_bytes = progress.next_byte;
+            });
+            if !progress.complete {
+                return Some(RuntimeCommandTurn::Pending);
+            }
+            let rendered_bytes = progress.next_byte as usize;
+            if HDMI_CELL_PLANE.with_ref(HdmiCellPlane::full_frame_clear_requested) {
+                HDMI_FRAME_CURSOR.with_mut(|cursor| {
+                    cursor.phase = HdmiFramePhase::FrameClear;
+                    cursor.next_row = 0;
+                    cursor.rendered_bytes = rendered_bytes as u16;
+                });
+                return Some(RuntimeCommandTurn::Pending);
+            }
+            HDMI_FRAME_CURSOR.with_mut(|cursor| {
+                cursor.phase = HdmiFramePhase::Raster;
+                cursor.next_cell = 0;
+                cursor.rendered_bytes = rendered_bytes as u16;
             });
             Some(RuntimeCommandTurn::Pending)
         }
-        HdmiFirstFramePhase::Render => {
-            HDMI_FIRST_FRAME_CURSOR.with_mut(HdmiFirstFrameCursor::reset);
-            HDMI_FIRST_FRAME_CLEARED.store(true, Ordering::Release);
-            Some(RuntimeCommandTurn::Complete(service_hdmi_text(command)))
+        HdmiFramePhase::FrameClear => {
+            let start_row = HDMI_FRAME_CURSOR.with_ref(|cursor| cursor.next_row as usize);
+            let (height, rows_per_turn) = RUNTIME_DESCRIPTOR.with_ref(|descriptor| {
+                (
+                    descriptor.framebuffer.height as usize,
+                    hdmi_first_frame_clear_rows_per_turn_budgeted(
+                        descriptor.framebuffer.vaddr,
+                        descriptor.framebuffer.width,
+                        descriptor.framebuffer.pitch,
+                        descriptor.framebuffer.format,
+                        descriptor.budget_us,
+                    ),
+                )
+            });
+            let rows_per_turn = rows_per_turn.min(command.budget.max_frames as usize);
+            let end_row = start_row.saturating_add(rows_per_turn).min(height);
+            let cleared = RUNTIME_DESCRIPTOR.with_ref(|descriptor| {
+                let state = HdmiRenderState::from_descriptor(descriptor);
+                state.clear_full_framebuffer_rows(start_row, end_row.saturating_sub(start_row))
+            });
+            if !cleared {
+                return Some(hdmi_frame_fault(command, FAULT_DEVICE_UNAVAILABLE));
+            }
+            HDMI_FRAME_CURSOR.with_mut(|cursor| {
+                cursor.next_row = end_row as u32;
+                if end_row == height {
+                    cursor.phase = HdmiFramePhase::Raster;
+                    cursor.next_cell = 0;
+                }
+            });
+            if end_row == height {
+                HDMI_CELL_PLANE.with_mut(HdmiCellPlane::finish_full_frame_clear);
+            }
+            Some(RuntimeCommandTurn::Pending)
+        }
+        HdmiFramePhase::Raster => {
+            let (start_cell, rendered_bytes) = HDMI_FRAME_CURSOR
+                .with_ref(|cursor| (cursor.next_cell as usize, cursor.rendered_bytes as usize));
+            let Some(max_cells) = hdmi_raster_cells_per_turn(command.budget.max_ops) else {
+                return Some(hdmi_frame_fault(command, FAULT_REJECTED_COMMAND));
+            };
+            let Some(progress) = hdmi_raster_dirty_turn(start_cell, max_cells) else {
+                return Some(hdmi_frame_fault(command, FAULT_DEVICE_UNAVAILABLE));
+            };
+            if progress.complete {
+                Some(hdmi_frame_complete(command, rendered_bytes))
+            } else {
+                HDMI_FRAME_CURSOR.with_mut(|cursor| {
+                    cursor.next_cell = progress.next_cell as u32;
+                });
+                Some(RuntimeCommandTurn::Pending)
+            }
         }
     }
 }
 
-fn hdmi_render_frame(frame: DriverFrameDescriptor) -> usize {
-    RUNTIME_DESCRIPTOR.with_ref(|descriptor| {
-        let mut state = HdmiRenderState::from_descriptor(descriptor);
-        let mut rendered = 0usize;
-        for index in 0..frame.len as usize {
-            let byte = read_ring_byte(frame.offset as usize + index);
-            state.put_byte(byte);
-            rendered = rendered.saturating_add(1);
-        }
-        HDMI_CURSOR_ROW.store(state.row as u32, Ordering::Release);
-        HDMI_CURSOR_COL.store(state.col as u32, Ordering::Release);
-        HDMI_ESCAPE_STATE.store(u32::from(state.escape_state), Ordering::Release);
-        HDMI_CSI_VALUE.store(state.csi_values[0] as u32, Ordering::Release);
-        HDMI_CSI_VALUE_2.store(state.csi_values[1] as u32, Ordering::Release);
-        HDMI_CSI_PARAM_INDEX.store(state.csi_param_index as u32, Ordering::Release);
-        HDMI_CSI_DIGITS_SEEN.store(u32::from(state.csi_digits_seen), Ordering::Release);
-        HDMI_SAVED_CURSOR_ROW.store(state.saved_row as u32, Ordering::Release);
-        HDMI_SAVED_CURSOR_COL.store(state.saved_col as u32, Ordering::Release);
-        rendered
-    })
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum HdmiByteDisposition {
+    Consumed,
+    RetryAfterPending,
 }
 
 struct HdmiRenderState {
@@ -45280,12 +47430,15 @@ struct HdmiRenderState {
     framebuffer_height: usize,
     safe_x: usize,
     safe_y: usize,
+    #[cfg(test)]
     width: usize,
+    #[cfg(test)]
     height: usize,
     pitch: usize,
     format: u32,
     cols: usize,
     rows: usize,
+    cell_plane_ready: bool,
     row: usize,
     col: usize,
     escape_state: u8,
@@ -45304,6 +47457,7 @@ impl HdmiRenderState {
         let safe_area = hdmi_safe_area_for_framebuffer(framebuffer_width, framebuffer_height);
         let cols = (safe_area.width / CHAR_WIDTH).max(1);
         let rows = (safe_area.height / CHAR_HEIGHT).max(1);
+        let cell_plane_ready = HDMI_CELL_PLANE.with_mut(|plane| plane.configure(cols, rows));
         let row = (HDMI_CURSOR_ROW.load(Ordering::Acquire) as usize).min(rows.saturating_sub(1));
         let col = (HDMI_CURSOR_COL.load(Ordering::Acquire) as usize).min(cols);
         let framebuffer_len = pitch.saturating_mul(framebuffer_height);
@@ -45314,12 +47468,15 @@ impl HdmiRenderState {
             framebuffer_height,
             safe_x: safe_area.x,
             safe_y: safe_area.y,
+            #[cfg(test)]
             width: safe_area.width,
+            #[cfg(test)]
             height: safe_area.height,
             pitch,
             format: descriptor.framebuffer.format,
             cols,
             rows,
+            cell_plane_ready,
             row,
             col,
             escape_state: HDMI_ESCAPE_STATE.load(Ordering::Acquire) as u8,
@@ -45335,9 +47492,297 @@ impl HdmiRenderState {
         }
     }
 
-    fn put_byte(&mut self, byte: u8) {
+    fn schedule_clear_range_bounded(
+        &self,
+        plane: &HdmiCellPlane,
+        pending: &mut HdmiPendingPlaneOp,
+        start: usize,
+        end: usize,
+        finish_flags: u8,
+    ) -> Option<()> {
+        if plane.cols != self.cols || plane.rows != self.rows {
+            return None;
+        }
+        let cell_count = plane.cell_count();
+        let start = start.min(cell_count);
+        let end = end.min(cell_count);
+        pending
+            .schedule_clear(start.min(end), end, finish_flags)
+            .then_some(())
+    }
+
+    fn schedule_clear_all_bounded(
+        &self,
+        plane: &HdmiCellPlane,
+        pending: &mut HdmiPendingPlaneOp,
+        finish_flags: u8,
+    ) -> Option<()> {
+        self.schedule_clear_range_bounded(plane, pending, 0, plane.cell_count(), finish_flags)
+    }
+
+    fn schedule_scroll_up_bounded(
+        &self,
+        plane: &mut HdmiCellPlane,
+        pending: &mut HdmiPendingPlaneOp,
+        rows: usize,
+        mark_all_when_fully_cleared: bool,
+    ) -> Option<()> {
+        if plane.rows == 0 || plane.rows != self.rows || plane.cols != self.cols {
+            return None;
+        }
+        let finish_flags = HDMI_PENDING_PLANE_OP_MARK_ALL_DIRTY;
+        if rows >= plane.rows {
+            return self.schedule_clear_all_bounded(
+                plane,
+                pending,
+                if mark_all_when_fully_cleared {
+                    finish_flags
+                } else {
+                    0
+                },
+            );
+        }
+        let rows = rows.max(1);
+        let start = plane.rows.saturating_sub(rows).saturating_mul(plane.cols);
+        self.schedule_clear_range_bounded(plane, pending, start, plane.cell_count(), finish_flags)?;
+        plane.row_origin = plane.row_origin.saturating_add(rows) % plane.rows;
+        Some(())
+    }
+
+    fn schedule_scroll_down_bounded(
+        &self,
+        plane: &mut HdmiCellPlane,
+        pending: &mut HdmiPendingPlaneOp,
+        rows: usize,
+    ) -> Option<()> {
+        if plane.rows == 0 || plane.rows != self.rows || plane.cols != self.cols {
+            return None;
+        }
+        if rows >= plane.rows {
+            return self.schedule_clear_all_bounded(plane, pending, 0);
+        }
+        let rows = rows.max(1);
+        self.schedule_clear_range_bounded(
+            plane,
+            pending,
+            0,
+            rows.saturating_mul(plane.cols),
+            HDMI_PENDING_PLANE_OP_MARK_ALL_DIRTY,
+        )?;
+        plane.row_origin = plane.row_origin.saturating_add(plane.rows - rows) % plane.rows;
+        Some(())
+    }
+
+    fn newline_bounded(
+        &mut self,
+        plane: &mut HdmiCellPlane,
+        pending: &mut HdmiPendingPlaneOp,
+    ) -> Option<bool> {
+        self.col = 0;
+        self.row = self.row.saturating_add(1);
+        if self.row < self.rows {
+            return Some(false);
+        }
+        let scroll_rows = HDMI_SCROLL_LINES.min(self.rows.saturating_sub(1)).max(1);
+        self.schedule_scroll_up_bounded(plane, pending, scroll_rows, true)?;
+        self.row = self.rows.saturating_sub(scroll_rows);
+        self.col = 0;
+        Some(true)
+    }
+
+    fn put_tab_space_bounded(
+        &mut self,
+        plane: &mut HdmiCellPlane,
+        pending: &mut HdmiPendingPlaneOp,
+        tab_spaces_remaining: &mut u8,
+    ) -> Option<()> {
+        if *tab_spaces_remaining == 0 {
+            return None;
+        }
+        if self.col >= self.cols && self.newline_bounded(plane, pending)? {
+            return Some(());
+        }
+        self.draw_char_in(plane, b' ');
+        self.col = self.col.saturating_add(1);
+        *tab_spaces_remaining = tab_spaces_remaining.saturating_sub(1);
+        Some(())
+    }
+
+    fn put_byte_bounded(
+        &mut self,
+        plane: &mut HdmiCellPlane,
+        pending: &mut HdmiPendingPlaneOp,
+        tab_spaces_remaining: &mut u8,
+        byte: u8,
+    ) -> Option<HdmiByteDisposition> {
+        if pending.active() || *tab_spaces_remaining != 0 {
+            return None;
+        }
         if self.escape_state != 0 {
-            self.put_escape_byte(byte);
+            self.put_escape_byte_bounded(plane, pending, byte)?;
+            return Some(HdmiByteDisposition::Consumed);
+        }
+        match byte {
+            0x1b => {
+                self.escape_state = 1;
+                self.reset_csi();
+            }
+            b'\n' => {
+                let _ = self.newline_bounded(plane, pending)?;
+            }
+            b'\r' => self.col = 0,
+            0x0c => {
+                self.schedule_clear_all_bounded(
+                    plane,
+                    pending,
+                    HDMI_PENDING_PLANE_OP_REQUEST_FRAME_CLEAR,
+                )?;
+                self.row = 0;
+                self.col = 0;
+            }
+            0x08 | 0x7f => self.backspace_in(plane),
+            b'\t' => {
+                // Persist an exact 1..=8 expansion count rather than an
+                // absolute target column. At the right edge an absolute target
+                // can never be reached after wrapping and would scroll forever.
+                *tab_spaces_remaining = 8 - (self.col & 7) as u8;
+            }
+            byte => {
+                if self.col >= self.cols && self.newline_bounded(plane, pending)? {
+                    return Some(HdmiByteDisposition::RetryAfterPending);
+                }
+                self.draw_char_in(plane, byte);
+                self.col = self.col.saturating_add(1);
+            }
+        }
+        Some(HdmiByteDisposition::Consumed)
+    }
+
+    fn put_escape_byte_bounded(
+        &mut self,
+        plane: &mut HdmiCellPlane,
+        pending: &mut HdmiPendingPlaneOp,
+        byte: u8,
+    ) -> Option<()> {
+        match self.escape_state {
+            1 if byte == b'[' => {
+                self.escape_state = 2;
+                self.reset_csi();
+                return Some(());
+            }
+            1 if byte == b'7' => {
+                self.saved_row = self.row.min(self.rows.saturating_sub(1));
+                self.saved_col = self.col.min(self.cols);
+            }
+            1 if byte == b'8' => {
+                self.row = self.saved_row.min(self.rows.saturating_sub(1));
+                self.col = self.saved_col.min(self.cols);
+            }
+            2 if byte.is_ascii_digit() => {
+                self.push_csi_digit(byte);
+                return Some(());
+            }
+            2 if byte == b';' => {
+                self.csi_param_index = self.csi_param_index.saturating_add(1).min(1);
+                return Some(());
+            }
+            2 if (0x40..=0x7e).contains(&byte) => {
+                self.handle_csi_bounded(plane, pending, byte)?;
+            }
+            _ => {}
+        }
+        self.escape_state = 0;
+        self.reset_csi();
+        Some(())
+    }
+
+    fn handle_csi_bounded(
+        &mut self,
+        plane: &mut HdmiCellPlane,
+        pending: &mut HdmiPendingPlaneOp,
+        byte: u8,
+    ) -> Option<()> {
+        match byte {
+            b'A' => self.move_cursor_up(self.csi_count_or_one()),
+            b'B' => self.move_cursor_down(self.csi_count_or_one()),
+            b'C' => self.move_cursor_right(self.csi_count_or_one()),
+            b'D' => self.move_cursor_left(self.csi_count_or_one()),
+            b'E' => {
+                self.move_cursor_down(self.csi_count_or_one());
+                self.col = 0;
+            }
+            b'F' => {
+                self.move_cursor_up(self.csi_count_or_one());
+                self.col = 0;
+            }
+            b'H' | b'f' => {
+                let row = self.csi_param(0).unwrap_or(0);
+                let col = self.csi_param(1).unwrap_or(0);
+                self.row = row.saturating_sub(1).min(self.rows.saturating_sub(1));
+                self.col = col.saturating_sub(1).min(self.cols.saturating_sub(1));
+            }
+            b'J' if self.csi_param(0).unwrap_or(0) == 1 => {
+                let end = self
+                    .row
+                    .saturating_mul(self.cols)
+                    .saturating_add(self.col.saturating_add(1).min(self.cols));
+                self.schedule_clear_range_bounded(plane, pending, 0, end, 0)?;
+            }
+            b'J' if self.csi_param(0).unwrap_or(0) == 2 => {
+                self.schedule_clear_all_bounded(plane, pending, 0)?;
+                self.row = 0;
+                self.col = 0;
+            }
+            b'J' => {
+                let start = self
+                    .row
+                    .saturating_mul(self.cols)
+                    .saturating_add(self.col.min(self.cols));
+                self.schedule_clear_range_bounded(plane, pending, start, plane.cell_count(), 0)?;
+            }
+            b'K' if self.csi_param(0).unwrap_or(0) == 1 => {
+                let start = self.row.saturating_mul(self.cols);
+                let end = start.saturating_add(self.col.saturating_add(1).min(self.cols));
+                self.schedule_clear_range_bounded(plane, pending, start, end, 0)?;
+            }
+            b'K' if self.csi_param(0).unwrap_or(0) == 2 => {
+                let start = self.row.saturating_mul(self.cols);
+                self.schedule_clear_range_bounded(
+                    plane,
+                    pending,
+                    start,
+                    start.saturating_add(self.cols),
+                    0,
+                )?;
+            }
+            b'K' => {
+                let row_start = self.row.saturating_mul(self.cols);
+                self.schedule_clear_range_bounded(
+                    plane,
+                    pending,
+                    row_start.saturating_add(self.col.min(self.cols)),
+                    row_start.saturating_add(self.cols),
+                    0,
+                )?;
+            }
+            b'S' => {
+                let rows = self.csi_count_or_one();
+                self.schedule_scroll_up_bounded(plane, pending, rows, false)?;
+            }
+            b'T' => {
+                let rows = self.csi_count_or_one();
+                self.schedule_scroll_down_bounded(plane, pending, rows)?;
+            }
+            b'm' => {}
+            _ => {}
+        }
+        Some(())
+    }
+
+    #[cfg(test)]
+    fn put_byte_in(&mut self, plane: &mut HdmiCellPlane, byte: u8) {
+        if self.escape_state != 0 {
+            self.put_escape_byte_in(plane, byte);
             return;
         }
         match byte {
@@ -45345,31 +47790,34 @@ impl HdmiRenderState {
                 self.escape_state = 1;
                 self.reset_csi();
             }
-            b'\n' => self.newline(),
+            b'\n' => self.newline_in(plane),
             b'\r' => self.col = 0,
             0x0c => {
-                self.clear_full_framebuffer();
+                plane.clear_all();
+                plane.dirty.fill(0);
+                plane.request_full_frame_clear_after_damage_reset();
                 self.row = 0;
                 self.col = 0;
             }
-            0x08 | 0x7f => self.backspace(),
+            0x08 | 0x7f => self.backspace_in(plane),
             b'\t' => {
-                let next_tab = ((self.col / 8).saturating_add(1)).saturating_mul(8);
-                while self.col < next_tab {
-                    self.put_byte(b' ');
+                let spaces = 8usize.saturating_sub(self.col & 7);
+                for _ in 0..spaces {
+                    self.put_byte_in(plane, b' ');
                 }
             }
             byte => {
                 if self.col >= self.cols {
-                    self.newline();
+                    self.newline_in(plane);
                 }
-                self.draw_char(byte);
+                self.draw_char_in(plane, byte);
                 self.col = self.col.saturating_add(1);
             }
         }
     }
 
-    fn put_escape_byte(&mut self, byte: u8) {
+    #[cfg(test)]
+    fn put_escape_byte_in(&mut self, plane: &mut HdmiCellPlane, byte: u8) {
         match self.escape_state {
             1 if byte == b'[' => {
                 self.escape_state = 2;
@@ -45392,7 +47840,7 @@ impl HdmiRenderState {
                 self.csi_param_index = self.csi_param_index.saturating_add(1).min(1);
             }
             2 if (0x40..=0x7e).contains(&byte) => {
-                self.handle_csi(byte);
+                self.handle_csi_in(plane, byte);
                 self.escape_state = 0;
                 self.reset_csi();
             }
@@ -45403,7 +47851,8 @@ impl HdmiRenderState {
         }
     }
 
-    fn handle_csi(&mut self, byte: u8) {
+    #[cfg(test)]
+    fn handle_csi_in(&mut self, plane: &mut HdmiCellPlane, byte: u8) {
         match byte {
             b'A' => self.move_cursor_up(self.csi_count_or_one()),
             b'B' => self.move_cursor_down(self.csi_count_or_one()),
@@ -45423,21 +47872,218 @@ impl HdmiRenderState {
                 self.row = row.saturating_sub(1).min(self.rows.saturating_sub(1));
                 self.col = col.saturating_sub(1).min(self.cols.saturating_sub(1));
             }
-            b'J' if self.csi_param(0).unwrap_or(0) == 1 => self.clear_from_start_to_cursor(),
+            b'J' if self.csi_param(0).unwrap_or(0) == 1 => {
+                self.clear_from_start_to_cursor_in(plane)
+            }
             b'J' if self.csi_param(0).unwrap_or(0) == 2 => {
-                self.clear_text_area();
+                plane.clear_all();
                 self.row = 0;
                 self.col = 0;
             }
-            b'J' => self.clear_from_cursor_to_end(),
-            b'K' if self.csi_param(0).unwrap_or(0) == 1 => self.clear_current_row_to_cursor(),
-            b'K' if self.csi_param(0).unwrap_or(0) == 2 => self.clear_current_row(),
-            b'K' => self.clear_current_row_from_cursor(),
-            b'S' => self.scroll_viewport_up(self.csi_count_or_one()),
-            b'T' => self.scroll_viewport_down(self.csi_count_or_one()),
+            b'J' => self.clear_from_cursor_to_end_in(plane),
+            b'K' if self.csi_param(0).unwrap_or(0) == 1 => {
+                self.clear_current_row_to_cursor_in(plane)
+            }
+            b'K' if self.csi_param(0).unwrap_or(0) == 2 => {
+                plane.clear_row_range(self.row, 0, self.cols)
+            }
+            b'K' => plane.clear_row_range(self.row, self.col.min(self.cols), self.cols),
+            b'S' => self.scroll_viewport_up_in(plane, self.csi_count_or_one()),
+            b'T' => self.scroll_viewport_down_in(plane, self.csi_count_or_one()),
             b'm' => {}
             _ => {}
         }
+    }
+
+    #[cfg(test)]
+    fn newline_in(&mut self, plane: &mut HdmiCellPlane) {
+        self.col = 0;
+        self.row = self.row.saturating_add(1);
+        if self.row >= self.rows {
+            self.scroll_up_text_rows_in(plane, HDMI_SCROLL_LINES);
+        }
+    }
+
+    fn backspace_in(&mut self, plane: &mut HdmiCellPlane) {
+        if self.col == 0 {
+            if self.row != 0 {
+                self.row = self.row.saturating_sub(1);
+                self.col = self.cols.saturating_sub(1);
+            }
+        } else {
+            self.col = self.col.saturating_sub(1);
+        }
+        self.draw_char_in(plane, 0);
+    }
+
+    #[cfg(test)]
+    fn scroll_up_text_rows_in(&mut self, plane: &mut HdmiCellPlane, rows: usize) {
+        let scroll_rows = rows.min(self.rows.saturating_sub(1)).max(1);
+        plane.scroll_up(scroll_rows);
+        self.row = self.rows.saturating_sub(scroll_rows);
+        self.col = 0;
+    }
+
+    #[cfg(test)]
+    fn scroll_viewport_up_in(&mut self, plane: &mut HdmiCellPlane, rows: usize) {
+        let saved_row = self.row;
+        let saved_col = self.col;
+        if rows >= self.rows {
+            plane.clear_all();
+        } else {
+            plane.scroll_up(rows.max(1));
+        }
+        self.row = saved_row.min(self.rows.saturating_sub(1));
+        self.col = saved_col.min(self.cols);
+    }
+
+    #[cfg(test)]
+    fn scroll_viewport_down_in(&mut self, plane: &mut HdmiCellPlane, rows: usize) {
+        if rows >= self.rows {
+            plane.clear_all();
+        } else {
+            plane.scroll_down(rows.max(1));
+        }
+    }
+
+    #[cfg(test)]
+    fn clear_current_row_to_cursor_in(&mut self, plane: &mut HdmiCellPlane) {
+        plane.clear_row_range(self.row, 0, self.col.saturating_add(1).min(self.cols));
+    }
+
+    #[cfg(test)]
+    fn clear_from_start_to_cursor_in(&mut self, plane: &mut HdmiCellPlane) {
+        plane.clear_rows(0, self.row.min(self.rows));
+        self.clear_current_row_to_cursor_in(plane);
+    }
+
+    #[cfg(test)]
+    fn clear_from_cursor_to_end_in(&mut self, plane: &mut HdmiCellPlane) {
+        plane.clear_row_range(self.row, self.col.min(self.cols), self.cols);
+        plane.clear_rows(self.row.saturating_add(1), self.rows);
+    }
+
+    fn draw_char_in(&mut self, plane: &mut HdmiCellPlane, byte: u8) {
+        plane.set_cell(self.row, self.col, byte.min(0x7f));
+    }
+
+    fn raster_cell(&self, row: usize, col: usize, byte: u8) -> bool {
+        if row >= self.rows || col >= self.cols {
+            return false;
+        }
+        let glyph = if byte == 0 {
+            [0u8; 8]
+        } else {
+            BASIC_LEGACY[usize::from(byte.min(0x7f))]
+        };
+        let Some(x0) = self.safe_x.checked_add(col.saturating_mul(CHAR_WIDTH)) else {
+            return false;
+        };
+        let Some(y0) = self.safe_y.checked_add(row.saturating_mul(CHAR_HEIGHT)) else {
+            return false;
+        };
+        let Some(bytes_per_pixel) = self.bytes_per_pixel() else {
+            return false;
+        };
+        for (glyph_row, bits) in glyph.iter().copied().enumerate() {
+            for duplicate in 0..2usize {
+                let y = y0
+                    .saturating_add(glyph_row.saturating_mul(2))
+                    .saturating_add(duplicate);
+                match bytes_per_pixel {
+                    FB_BYTES_PER_PIXEL_32 => {
+                        for pair in 0..CHAR_WIDTH / 2 {
+                            let x = x0.saturating_add(pair.saturating_mul(2));
+                            let Some(byte_off) = self.framebuffer_offset(x, y, bytes_per_pixel)
+                            else {
+                                return false;
+                            };
+                            let Some(pair_end) = byte_off.checked_add(core::mem::size_of::<u64>())
+                            else {
+                                return false;
+                            };
+                            if pair_end > self.framebuffer_len
+                                || x.saturating_add(1) >= self.framebuffer_width
+                            {
+                                return false;
+                            }
+                            let first = if bits & (1 << (pair * 2)) != 0 {
+                                HDMI_FG_COLOR
+                            } else {
+                                HDMI_BG_COLOR
+                            };
+                            let second = if bits & (1 << (pair * 2 + 1)) != 0 {
+                                HDMI_FG_COLOR
+                            } else {
+                                HDMI_BG_COLOR
+                            };
+                            let addr = self.framebuffer.saturating_add(byte_off);
+                            if addr & 7 == 0 {
+                                write_framebuffer_u64(
+                                    addr,
+                                    u64::from(first) | (u64::from(second) << 32),
+                                );
+                            } else if addr & 3 == 0 {
+                                write_framebuffer_u32(addr, first);
+                                write_framebuffer_u32(
+                                    addr.saturating_add(core::mem::size_of::<u32>()),
+                                    second,
+                                );
+                            } else {
+                                return false;
+                            }
+                        }
+                    }
+                    3 => {
+                        for glyph_col in 0..CHAR_WIDTH {
+                            let x = x0.saturating_add(glyph_col);
+                            let Some(byte_off) = self.framebuffer_offset(x, y, bytes_per_pixel)
+                            else {
+                                return false;
+                            };
+                            let color = if bits & (1 << glyph_col) != 0 {
+                                HDMI_FG_COLOR
+                            } else {
+                                HDMI_BG_COLOR
+                            };
+                            write_framebuffer_pixel(
+                                self.framebuffer.saturating_add(byte_off),
+                                color,
+                                bytes_per_pixel,
+                            );
+                        }
+                    }
+                    _ => return false,
+                }
+            }
+        }
+        true
+    }
+
+    #[cfg(test)]
+    fn raster_all_dirty_for_test(&self, plane: &mut HdmiCellPlane) {
+        let cell_count = plane.cell_count();
+        for index in 0..cell_count {
+            if !plane.dirty(index) {
+                continue;
+            }
+            let row = index / plane.cols;
+            let col = index % plane.cols;
+            assert!(self.raster_cell(row, col, plane.cell(row, col)));
+            plane.clear_dirty(index);
+        }
+        if plane.all_dirty {
+            plane.finish_full_raster();
+        }
+    }
+
+    #[cfg(test)]
+    fn put_byte(&mut self, byte: u8) {
+        HDMI_CELL_PLANE.with_mut(|plane| {
+            self.put_byte_in(plane, byte);
+            #[cfg(test)]
+            self.raster_all_dirty_for_test(plane);
+        });
     }
 
     fn reset_csi(&mut self) {
@@ -45495,230 +48141,43 @@ impl HdmiRenderState {
         }
     }
 
+    #[cfg(test)]
     fn newline(&mut self) {
-        self.col = 0;
-        self.row = self.row.saturating_add(1);
-        if self.row >= self.rows {
-            self.scroll_up_text_rows(HDMI_SCROLL_LINES);
-        }
+        HDMI_CELL_PLANE.with_mut(|plane| {
+            self.newline_in(plane);
+            #[cfg(test)]
+            self.raster_all_dirty_for_test(plane);
+        });
     }
 
-    fn backspace(&mut self) {
-        if self.col == 0 {
-            if self.row != 0 {
-                self.row = self.row.saturating_sub(1);
-                self.col = self.cols.saturating_sub(1);
-            }
-        } else {
-            self.col = self.col.saturating_sub(1);
-        }
-        self.draw_char(b' ');
-    }
-
-    fn scroll_up_text_rows(&mut self, rows: usize) {
-        let scroll_rows = rows.min(self.rows.saturating_sub(1)).max(1);
-        let scroll_pixels = scroll_rows.saturating_mul(CHAR_HEIGHT);
-        let Some(bytes_per_pixel) = self.bytes_per_pixel() else {
-            self.clear_text_area();
-            self.row = 0;
-            self.col = 0;
-            return;
-        };
-        let text_height = self.rows.saturating_mul(CHAR_HEIGHT).min(self.height);
-        if text_height <= scroll_pixels || self.pitch == 0 || self.width == 0 {
-            self.clear_text_area();
-            self.row = 0;
-            self.col = 0;
-            return;
-        }
-        let Some(row_bytes) = self.width.checked_mul(bytes_per_pixel) else {
-            self.clear_text_area();
-            self.row = 0;
-            self.col = 0;
-            return;
-        };
-        if row_bytes == 0 || row_bytes > self.pitch {
-            self.clear_text_area();
-            self.row = 0;
-            self.col = 0;
-            return;
-        }
-        let copy_rows = text_height.saturating_sub(scroll_pixels);
-        for y in 0..copy_rows {
-            let Some(dst_off) =
-                self.framebuffer_offset(self.safe_x, self.safe_y + y, bytes_per_pixel)
-            else {
-                continue;
-            };
-            let Some(src_off) = self.framebuffer_offset(
-                self.safe_x,
-                self.safe_y + y + scroll_pixels,
-                bytes_per_pixel,
-            ) else {
-                continue;
-            };
-            let Some(dst_end) = dst_off.checked_add(row_bytes) else {
-                continue;
-            };
-            let Some(src_end) = src_off.checked_add(row_bytes) else {
-                continue;
-            };
-            if dst_end > self.framebuffer_len || src_end > self.framebuffer_len {
-                continue;
-            }
-            copy_framebuffer_bytes(
-                self.framebuffer + dst_off,
-                self.framebuffer + src_off,
-                row_bytes,
-            );
-        }
-        self.fill_rect(
-            0,
-            text_height.saturating_sub(scroll_pixels),
-            self.width,
-            scroll_pixels,
-            HDMI_BG_COLOR,
-        );
-        self.row = self.rows.saturating_sub(scroll_rows);
-        self.col = 0;
-    }
-
-    fn scroll_viewport_up(&mut self, rows: usize) {
-        let saved_row = self.row;
-        let saved_col = self.col;
-        if rows >= self.rows {
-            self.clear_text_area();
-        } else {
-            self.scroll_up_text_rows(rows);
-        }
-        self.row = saved_row.min(self.rows.saturating_sub(1));
-        self.col = saved_col.min(self.cols);
-    }
-
-    fn scroll_viewport_down(&mut self, rows: usize) {
-        if rows >= self.rows {
-            self.clear_text_area();
-            return;
-        }
-        let scroll_rows = rows.min(self.rows.saturating_sub(1)).max(1);
-        let scroll_pixels = scroll_rows.saturating_mul(CHAR_HEIGHT);
-        let Some(bytes_per_pixel) = self.bytes_per_pixel() else {
-            self.clear_text_area();
-            return;
-        };
-        let text_height = self.rows.saturating_mul(CHAR_HEIGHT).min(self.height);
-        if text_height <= scroll_pixels || self.pitch == 0 || self.width == 0 {
-            self.clear_text_area();
-            return;
-        }
-        let Some(row_bytes) = self.width.checked_mul(bytes_per_pixel) else {
-            self.clear_text_area();
-            return;
-        };
-        if row_bytes == 0 || row_bytes > self.pitch {
-            self.clear_text_area();
-            return;
-        }
-        let copy_rows = text_height.saturating_sub(scroll_pixels);
-        let mut y = copy_rows;
-        while y != 0 {
-            y = y.saturating_sub(1);
-            let Some(dst_off) = self.framebuffer_offset(
-                self.safe_x,
-                self.safe_y + y + scroll_pixels,
-                bytes_per_pixel,
-            ) else {
-                continue;
-            };
-            let Some(src_off) =
-                self.framebuffer_offset(self.safe_x, self.safe_y + y, bytes_per_pixel)
-            else {
-                continue;
-            };
-            let Some(dst_end) = dst_off.checked_add(row_bytes) else {
-                continue;
-            };
-            let Some(src_end) = src_off.checked_add(row_bytes) else {
-                continue;
-            };
-            if dst_end > self.framebuffer_len || src_end > self.framebuffer_len {
-                continue;
-            }
-            copy_framebuffer_bytes(
-                self.framebuffer + dst_off,
-                self.framebuffer + src_off,
-                row_bytes,
-            );
-        }
-        self.fill_rect(0, 0, self.width, scroll_pixels, HDMI_BG_COLOR);
-    }
-
+    #[cfg(test)]
     fn clear_text_area(&mut self) {
-        self.fill_rect(0, 0, self.width, self.height, HDMI_BG_COLOR);
+        HDMI_CELL_PLANE.with_mut(|plane| {
+            plane.clear_all();
+            #[cfg(test)]
+            self.raster_all_dirty_for_test(plane);
+        });
     }
 
+    #[cfg(test)]
     fn clear_current_row(&mut self) {
-        let y = self.row.saturating_mul(CHAR_HEIGHT);
-        self.fill_rect(0, y, self.width, CHAR_HEIGHT, HDMI_BG_COLOR);
+        HDMI_CELL_PLANE.with_mut(|plane| {
+            plane.clear_row_range(self.row, 0, self.cols);
+            #[cfg(test)]
+            self.raster_all_dirty_for_test(plane);
+        });
     }
 
-    fn clear_current_row_from_cursor(&mut self) {
-        let y = self.row.saturating_mul(CHAR_HEIGHT);
-        let x = self.col.min(self.cols).saturating_mul(CHAR_WIDTH);
-        self.fill_rect(
-            x,
-            y,
-            self.width.saturating_sub(x),
-            CHAR_HEIGHT,
-            HDMI_BG_COLOR,
-        );
-    }
-
-    fn clear_current_row_to_cursor(&mut self) {
-        let y = self.row.saturating_mul(CHAR_HEIGHT);
-        let width = self
-            .col
-            .saturating_add(1)
-            .min(self.cols)
-            .saturating_mul(CHAR_WIDTH);
-        self.fill_rect(0, y, width, CHAR_HEIGHT, HDMI_BG_COLOR);
-    }
-
-    fn clear_from_start_to_cursor(&mut self) {
-        let y = self.row.saturating_mul(CHAR_HEIGHT);
-        if y != 0 {
-            self.fill_rect(0, 0, self.width, y, HDMI_BG_COLOR);
-        }
-        self.clear_current_row_to_cursor();
-    }
-
-    fn clear_from_cursor_to_end(&mut self) {
-        self.clear_current_row_from_cursor();
-        let next_y = self.row.saturating_add(1).saturating_mul(CHAR_HEIGHT);
-        if next_y < self.height {
-            self.fill_rect(
-                0,
-                next_y,
-                self.width,
-                self.height.saturating_sub(next_y),
-                HDMI_BG_COLOR,
-            );
-        }
-    }
-
-    fn clear_full_framebuffer(&mut self) {
-        self.clear_full_framebuffer_rows(0, self.framebuffer_height);
-    }
-
-    fn clear_full_framebuffer_rows(&mut self, start_row: usize, row_count: usize) {
+    fn clear_full_framebuffer_rows(&self, start_row: usize, row_count: usize) -> bool {
         if self.framebuffer_width == 0
             || self.framebuffer_height == 0
             || self.pitch == 0
             || self.framebuffer_len == 0
             || start_row >= self.framebuffer_height
             || row_count == 0
+            || self.bytes_per_pixel().is_none()
         {
-            return;
+            return false;
         }
         self.fill_physical_rect(
             0,
@@ -45727,42 +48186,19 @@ impl HdmiRenderState {
             row_count.min(self.framebuffer_height.saturating_sub(start_row)),
             HDMI_BG_COLOR,
         );
+        true
     }
 
+    #[cfg(test)]
     fn draw_char(&mut self, byte: u8) {
-        let glyph = BASIC_LEGACY[usize::from(byte.min(0x7f))];
-        let x0 = self.col.saturating_mul(CHAR_WIDTH);
-        let y0 = self.row.saturating_mul(CHAR_HEIGHT);
-        self.fill_rect(x0, y0, CHAR_WIDTH, CHAR_HEIGHT, HDMI_BG_COLOR);
-        for (gy, bits) in glyph.iter().enumerate() {
-            for gx in 0..CHAR_WIDTH {
-                if ((bits >> gx) & 1) == 0 {
-                    continue;
-                }
-                let x = x0.saturating_add(gx);
-                let y = y0.saturating_add(gy.saturating_mul(2));
-                self.put_pixel(x, y, HDMI_FG_COLOR);
-                self.put_pixel(x, y.saturating_add(1), HDMI_FG_COLOR);
-            }
-        }
+        HDMI_CELL_PLANE.with_mut(|plane| {
+            self.draw_char_in(plane, byte);
+            #[cfg(test)]
+            self.raster_all_dirty_for_test(plane);
+        });
     }
 
-    fn fill_rect(&mut self, x: usize, y: usize, w: usize, h: usize, color: u32) {
-        let x_end = self.width.min(x.saturating_add(w));
-        let y_end = self.height.min(y.saturating_add(h));
-        if x >= x_end || y >= y_end {
-            return;
-        }
-        let Some(abs_x) = self.safe_x.checked_add(x) else {
-            return;
-        };
-        let Some(abs_y) = self.safe_y.checked_add(y) else {
-            return;
-        };
-        self.fill_physical_rect(abs_x, abs_y, x_end - x, y_end - y, color);
-    }
-
-    fn fill_physical_rect(&mut self, x: usize, y: usize, w: usize, h: usize, color: u32) {
+    fn fill_physical_rect(&self, x: usize, y: usize, w: usize, h: usize, color: u32) {
         let Some(bytes_per_pixel) = self.bytes_per_pixel() else {
             return;
         };
@@ -45800,28 +48236,6 @@ impl HdmiRenderState {
                 _ => {}
             }
         }
-    }
-
-    fn put_pixel(&mut self, x: usize, y: usize, color: u32) {
-        if x >= self.width || y >= self.height {
-            return;
-        }
-        let Some(abs_x) = self.safe_x.checked_add(x) else {
-            return;
-        };
-        let Some(abs_y) = self.safe_y.checked_add(y) else {
-            return;
-        };
-        if abs_x >= self.framebuffer_width || abs_y >= self.framebuffer_height {
-            return;
-        }
-        let Some(bytes_per_pixel) = self.bytes_per_pixel() else {
-            return;
-        };
-        let Some(byte_off) = self.framebuffer_offset(abs_x, abs_y, bytes_per_pixel) else {
-            return;
-        };
-        write_framebuffer_pixel(self.framebuffer + byte_off, color, bytes_per_pixel);
     }
 
     fn bytes_per_pixel(&self) -> Option<usize> {
@@ -46059,10 +48473,25 @@ static TEST_FRAMEBUFFER: TestFramebuffer =
     TestFramebuffer(UnsafeCell::new([0; TEST_FRAMEBUFFER_BYTES]));
 
 #[cfg(all(not(target_os = "none"), test))]
+static TEST_FRAMEBUFFER_READS: AtomicUsize = AtomicUsize::new(0);
+
+#[cfg(all(not(target_os = "none"), test))]
+static TEST_DEVICE_COMPLETION_BARRIERS: AtomicUsize = AtomicUsize::new(0);
+
+#[cfg(all(not(target_os = "none"), test))]
+static TEST_HDMI_DONE_BARRIER_SNAPSHOT: AtomicUsize = AtomicUsize::new(0);
+
+#[cfg(all(not(target_os = "none"), test))]
 static TEST_DMA_BUFFER: TestDmaBuffer = TestDmaBuffer(UnsafeCell::new([0; XHCI_DMA_ZERO_BYTES]));
 
 #[cfg(all(not(target_os = "none"), test))]
 static TEST_GENET_MMIO: TestGenetMmio = TestGenetMmio(UnsafeCell::new([0; TEST_GENET_MMIO_WORDS]));
+
+#[cfg(all(not(target_os = "none"), test))]
+static TEST_GENET_IRQ_INJECT_ON_UNMASK: AtomicU32 = AtomicU32::new(0);
+
+#[cfg(all(not(target_os = "none"), test))]
+static TEST_GENET_IRQ_UNMASK_STUCK: AtomicBool = AtomicBool::new(false);
 
 #[cfg(all(not(target_os = "none"), test))]
 static TEST_SDIO_TRANSFER_LOG: TestSdioTransferLog =
@@ -46278,6 +48707,11 @@ fn reset_test_pair_rings() {
 #[cfg(all(not(target_os = "none"), test))]
 fn reset_test_ring() {
     reset_test_ring_storage(true);
+    TEST_GENET_IRQ_INJECT_ON_UNMASK.store(0, Ordering::Release);
+    TEST_GENET_IRQ_UNMASK_STUCK.store(false, Ordering::Release);
+    TEST_FRAMEBUFFER_READS.store(0, Ordering::Release);
+    TEST_DEVICE_COMPLETION_BARRIERS.store(0, Ordering::Release);
+    TEST_HDMI_DONE_BARRIER_SNAPSHOT.store(0, Ordering::Release);
     reset_test_sdio_transfer_log();
     reset_test_sdio_transfer_failure();
     reset_test_sdio_cmd52_read_responses();
@@ -47000,6 +49434,45 @@ const fn runtime_payload_vaddr_physical(offset: usize) -> usize {
     }
 }
 
+fn read_runtime_payload_u64_physical(offset: usize) -> u64 {
+    let address = runtime_payload_vaddr_physical(offset);
+    debug_assert_eq!(address & (core::mem::align_of::<u64>() - 1), 0);
+    #[cfg(target_os = "none")]
+    {
+        // SAFETY: The SDIO bulk-copy admission proves this naturally aligned
+        // word lies wholly inside one compiler-declared uncached shared-payload
+        // range. The volatile load preserves the existing uncached boundary.
+        return u64::from_le(unsafe { core::ptr::read_volatile(address as *const u64) });
+    }
+    #[cfg(not(target_os = "none"))]
+    {
+        let bytes = core::array::from_fn(|index| {
+            read_runtime_payload_byte_physical(offset.saturating_add(index))
+        });
+        u64::from_le_bytes(bytes)
+    }
+}
+
+fn write_runtime_payload_u64_physical(offset: usize, value: u64) {
+    let address = runtime_payload_vaddr_physical(offset);
+    debug_assert_eq!(address & (core::mem::align_of::<u64>() - 1), 0);
+    #[cfg(target_os = "none")]
+    {
+        // SAFETY: The SDIO bulk-copy admission proves this naturally aligned
+        // word lies wholly inside one compiler-declared uncached shared-payload
+        // range. The volatile store preserves the existing uncached boundary.
+        unsafe {
+            core::ptr::write_volatile(address as *mut u64, value.to_le());
+        }
+    }
+    #[cfg(not(target_os = "none"))]
+    {
+        for (index, byte) in value.to_le_bytes().iter().copied().enumerate() {
+            write_runtime_payload_byte_physical(offset.saturating_add(index), byte);
+        }
+    }
+}
+
 fn read_runtime_payload_byte(offset: usize) -> u8 {
     #[cfg(any(target_os = "none", test))]
     if cyw43_foreground_transaction_executing() {
@@ -47049,6 +49522,13 @@ fn publish_runtime_progress(sequence: u32, phase: u32, aux0: u32) {
         DRIVER_TASK_RING_VADDR + offset,
         DRIVER_RUNTIME_RING_PROGRESS_BYTES as usize,
     );
+    #[cfg(all(not(target_os = "none"), test))]
+    if phase == DRIVER_RUNTIME_RING_PROGRESS_HDMI_FRAME_DONE {
+        TEST_HDMI_DONE_BARRIER_SNAPSHOT.store(
+            TEST_DEVICE_COMPLETION_BARRIERS.load(Ordering::Acquire),
+            Ordering::Release,
+        );
+    }
 }
 
 const fn runtime_cadence_supported_hot_path(hot_path: u32) -> bool {
@@ -47147,6 +49627,15 @@ fn publish_serial_runtime_rx_state(queue: &SerialRuntimeRxQueue) {
     } else {
         0
     };
+    let generation = SERIAL_RUNTIME_SPSC_GENERATION.load(Ordering::Acquire);
+    let shared_queued = serial_spsc_header_snapshot_at(
+        serial_runtime_spsc_shared_base(),
+        DRIVER_RUNTIME_SERIAL_RX_SPSC_FIRST_PAGE,
+        generation,
+        DRIVER_RUNTIME_SERIAL_SPSC_FLAG_RUNTIME_TO_ROOT,
+    )
+    .and_then(DriverRuntimeSerialSpscHeader::occupancy)
+    .unwrap_or(0) as usize;
     let record = pi4_driver_abi::DriverRuntimeSerialRxState {
         magic: pi4_driver_abi::DRIVER_RUNTIME_SERIAL_RX_STATE_MAGIC,
         version: pi4_driver_abi::DRIVER_RUNTIME_SERIAL_RX_STATE_VERSION,
@@ -47158,7 +49647,7 @@ fn publish_serial_runtime_rx_state(queue: &SerialRuntimeRxQueue) {
         hardware_overrun_events: queue.hardware_overrun_events,
         queue_full_events: queue.queue_full_events,
         received_bytes: queue.received_bytes,
-        queued_bytes: match u16::try_from(queue.len) {
+        queued_bytes: match u16::try_from(queue.len.saturating_add(shared_queued)) {
             Ok(len) => len,
             Err(_) => u16::MAX,
         },
@@ -47212,160 +49701,15 @@ fn read_ring_u16(offset: usize) -> u16 {
     u16::from(read_ring_byte(offset)) | (u16::from(read_ring_byte(offset + 1)) << 8)
 }
 
-#[cfg(target_os = "none")]
-fn copy_framebuffer_bytes(dst: usize, src: usize, len: usize) {
-    if len == 0 || dst == src {
-        return;
-    }
-    if (dst | src | len) & 0x7 == 0 {
-        copy_framebuffer_u64(dst, src, len / 8);
-        return;
-    }
-    if (dst | src | len) & 0x3 == 0 {
-        copy_framebuffer_u32(dst, src, len / 4);
-        return;
-    }
-    if dst > src && dst < src.saturating_add(len) {
-        let mut index = len;
-        while index != 0 {
-            index -= 1;
-            let byte = read_framebuffer_byte(src + index);
-            write_framebuffer_byte(dst + index, byte);
-        }
-    } else {
-        for index in 0..len {
-            let byte = read_framebuffer_byte(src + index);
-            write_framebuffer_byte(dst + index, byte);
-        }
-    }
-}
-
-#[cfg(any(target_os = "none", test))]
-fn copy_framebuffer_u64(dst: usize, src: usize, words: usize) {
-    if dst > src && dst < src.saturating_add(words.saturating_mul(8)) {
-        let mut index = words;
-        while index >= 4 {
-            index -= 4;
-            let value0 = read_framebuffer_u64(src + index * 8);
-            let value1 = read_framebuffer_u64(src + (index + 1) * 8);
-            let value2 = read_framebuffer_u64(src + (index + 2) * 8);
-            let value3 = read_framebuffer_u64(src + (index + 3) * 8);
-            write_framebuffer_u64(dst + index * 8, value0);
-            write_framebuffer_u64(dst + (index + 1) * 8, value1);
-            write_framebuffer_u64(dst + (index + 2) * 8, value2);
-            write_framebuffer_u64(dst + (index + 3) * 8, value3);
-        }
-        while index != 0 {
-            index -= 1;
-            let byte_offset = index * 8;
-            let value = read_framebuffer_u64(src + byte_offset);
-            write_framebuffer_u64(dst + byte_offset, value);
-        }
-    } else {
-        let mut index = 0usize;
-        while index.saturating_add(4) <= words {
-            // Read the complete group before writing it. Besides exposing
-            // memory-level parallelism on the uncached Pi framebuffer, this
-            // preserves memmove semantics if ranges meet at a group edge.
-            let value0 = read_framebuffer_u64(src + index * 8);
-            let value1 = read_framebuffer_u64(src + (index + 1) * 8);
-            let value2 = read_framebuffer_u64(src + (index + 2) * 8);
-            let value3 = read_framebuffer_u64(src + (index + 3) * 8);
-            write_framebuffer_u64(dst + index * 8, value0);
-            write_framebuffer_u64(dst + (index + 1) * 8, value1);
-            write_framebuffer_u64(dst + (index + 2) * 8, value2);
-            write_framebuffer_u64(dst + (index + 3) * 8, value3);
-            index = index.saturating_add(4);
-        }
-        while index < words {
-            let byte_offset = index * 8;
-            let value = read_framebuffer_u64(src + byte_offset);
-            write_framebuffer_u64(dst + byte_offset, value);
-            index = index.saturating_add(1);
-        }
-    }
-}
-
-#[cfg(any(target_os = "none", test))]
-fn copy_framebuffer_u32(dst: usize, src: usize, words: usize) {
-    if dst > src && dst < src.saturating_add(words.saturating_mul(4)) {
-        let mut index = words;
-        while index != 0 {
-            index -= 1;
-            let byte_offset = index * 4;
-            let value = read_framebuffer_u32(src + byte_offset);
-            write_framebuffer_u32(dst + byte_offset, value);
-        }
-    } else {
-        for index in 0..words {
-            let byte_offset = index * 4;
-            let value = read_framebuffer_u32(src + byte_offset);
-            write_framebuffer_u32(dst + byte_offset, value);
-        }
-    }
-}
-
-#[cfg(all(not(target_os = "none"), test))]
-fn copy_framebuffer_bytes(dst: usize, src: usize, len: usize) {
-    if len == 0 || dst == src {
-        return;
-    }
-    let Some(dst_offset) = test_framebuffer_offset(dst) else {
-        return;
-    };
-    let Some(src_offset) = test_framebuffer_offset(src) else {
-        return;
-    };
-    let Some(dst_end) = dst_offset.checked_add(len) else {
-        return;
-    };
-    let Some(src_end) = src_offset.checked_add(len) else {
-        return;
-    };
-    if dst_end > TEST_FRAMEBUFFER_BYTES || src_end > TEST_FRAMEBUFFER_BYTES {
-        return;
-    }
-    if (dst | src | len) & 0x7 == 0 {
-        copy_framebuffer_u64(dst, src, len / 8);
-        return;
-    }
-    if (dst | src | len) & 0x3 == 0 {
-        copy_framebuffer_u32(dst, src, len / 4);
-        return;
-    }
-    // SAFETY: Runtime tests hold `test_guard`; the checked ranges stay inside
-    // the process-local framebuffer and `copy_within` preserves memmove
-    // semantics for byte-granular overlapping scroll regions.
-    unsafe {
-        (*TEST_FRAMEBUFFER.0.get()).copy_within(src_offset..src_end, dst_offset);
-    }
-}
-
-#[cfg(all(not(target_os = "none"), not(test)))]
-fn copy_framebuffer_bytes(_dst: usize, _src: usize, _len: usize) {}
-
-#[cfg(target_os = "none")]
-fn read_framebuffer_byte(addr: usize) -> u8 {
-    // SAFETY: The caller bounds-checks the framebuffer byte range before
-    // copying from mapped framebuffer memory.
-    unsafe { core::ptr::read_volatile(addr as *const u8) }
-}
-
 #[cfg(all(not(target_os = "none"), test))]
 fn read_framebuffer_byte(addr: usize) -> u8 {
+    TEST_FRAMEBUFFER_READS.fetch_add(1, Ordering::AcqRel);
     let Some(offset) = test_framebuffer_offset(addr) else {
         return 0;
     };
     // SAFETY: Runtime tests hold `test_guard`; the offset is bounded by
     // `test_framebuffer_offset`.
     unsafe { (*TEST_FRAMEBUFFER.0.get())[offset] }
-}
-
-#[cfg(target_os = "none")]
-fn read_framebuffer_u32(addr: usize) -> u32 {
-    // SAFETY: The caller selects this path only for 32-bit aligned ranges that
-    // were already bounds-checked against the mapped framebuffer.
-    unsafe { core::ptr::read_volatile(addr as *const u32) }
 }
 
 #[cfg(all(not(target_os = "none"), test))]
@@ -47377,37 +49721,6 @@ fn read_framebuffer_u32(addr: usize) -> u32 {
         read_framebuffer_byte(addr.saturating_add(3)),
     ];
     u32::from_le_bytes(bytes)
-}
-
-#[cfg(target_os = "none")]
-fn read_framebuffer_u64(addr: usize) -> u64 {
-    // SAFETY: The caller selects this path only for 64-bit aligned ranges that
-    // were already bounds-checked against the mapped framebuffer.
-    unsafe { core::ptr::read_volatile(addr as *const u64) }
-}
-
-#[cfg(all(not(target_os = "none"), test))]
-fn read_framebuffer_u64(addr: usize) -> u64 {
-    let bytes = [
-        read_framebuffer_byte(addr),
-        read_framebuffer_byte(addr.saturating_add(1)),
-        read_framebuffer_byte(addr.saturating_add(2)),
-        read_framebuffer_byte(addr.saturating_add(3)),
-        read_framebuffer_byte(addr.saturating_add(4)),
-        read_framebuffer_byte(addr.saturating_add(5)),
-        read_framebuffer_byte(addr.saturating_add(6)),
-        read_framebuffer_byte(addr.saturating_add(7)),
-    ];
-    u64::from_le_bytes(bytes)
-}
-
-#[cfg(target_os = "none")]
-fn write_framebuffer_byte(addr: usize, value: u8) {
-    // SAFETY: The caller bounds-checks the framebuffer byte range before
-    // copying to mapped framebuffer memory.
-    unsafe {
-        core::ptr::write_volatile(addr as *mut u8, value);
-    }
 }
 
 #[cfg(all(not(target_os = "none"), test))]
@@ -47804,6 +50117,8 @@ fn device_store_completion_barrier() {
     unsafe {
         core::arch::asm!("dsb sy", options(nostack, preserves_flags));
     }
+    #[cfg(all(not(target_os = "none"), test))]
+    TEST_DEVICE_COMPLETION_BARRIERS.fetch_add(1, Ordering::AcqRel);
 }
 
 fn xhci_dma_publish_barrier() {
@@ -47973,6 +50288,48 @@ fn write_dma_byte(addr: usize, value: u8) {
 fn write_dma_byte(_addr: usize, _value: u8) {}
 
 #[cfg(target_os = "none")]
+fn read_sdio_dma_u64(addr: usize) -> u64 {
+    debug_assert_eq!(addr & (core::mem::align_of::<u64>() - 1), 0);
+    // SAFETY: The SDIO bulk-copy admission proves this naturally aligned word
+    // lies wholly inside one runtime-private uncached DMA4 bounce page.
+    u64::from_le(unsafe { core::ptr::read_volatile(addr as *const u64) })
+}
+
+#[cfg(all(not(target_os = "none"), test))]
+fn read_sdio_dma_u64(addr: usize) -> u64 {
+    debug_assert_eq!(addr & (core::mem::align_of::<u64>() - 1), 0);
+    u64::from_le_bytes(core::array::from_fn(|index| {
+        read_dma_byte(addr.saturating_add(index))
+    }))
+}
+
+#[cfg(all(not(target_os = "none"), not(test)))]
+fn read_sdio_dma_u64(_addr: usize) -> u64 {
+    0
+}
+
+#[cfg(target_os = "none")]
+fn write_sdio_dma_u64(addr: usize, value: u64) {
+    debug_assert_eq!(addr & (core::mem::align_of::<u64>() - 1), 0);
+    // SAFETY: The SDIO bulk-copy admission proves this naturally aligned word
+    // lies wholly inside one runtime-private uncached DMA4 bounce page.
+    unsafe {
+        core::ptr::write_volatile(addr as *mut u64, value.to_le());
+    }
+}
+
+#[cfg(all(not(target_os = "none"), test))]
+fn write_sdio_dma_u64(addr: usize, value: u64) {
+    debug_assert_eq!(addr & (core::mem::align_of::<u64>() - 1), 0);
+    for (index, byte) in value.to_le_bytes().iter().copied().enumerate() {
+        write_dma_byte(addr.saturating_add(index), byte);
+    }
+}
+
+#[cfg(all(not(target_os = "none"), not(test)))]
+fn write_sdio_dma_u64(_addr: usize, _value: u64) {}
+
+#[cfg(target_os = "none")]
 fn write_dma_zero_word(addr: usize) {
     debug_assert_eq!(addr & (DMA_ZERO_WORD_BYTES - 1), 0);
     // SAFETY: `zero_dma_range` admits this primitive only for a naturally
@@ -48044,7 +50401,34 @@ fn genet_write32(offset: usize, value: u32) {
     // SAFETY: Runtime tests hold `test_guard`; `test_genet_mmio_word` bounds
     // the offset inside the process-local GENET MMIO shadow.
     unsafe {
-        (*TEST_GENET_MMIO.0.get())[word] = value;
+        let registers = &mut *TEST_GENET_MMIO.0.get();
+        registers[word] = value;
+        match offset {
+            GENET_INTRL2_0_CPU_CLEAR => {
+                let status = test_genet_mmio_word(GENET_INTRL2_0_CPU_STAT)
+                    .expect("GENET status register must fit the test MMIO window");
+                registers[status] &= !value;
+            }
+            GENET_INTRL2_0_CPU_MASK_SET => {
+                let mask = test_genet_mmio_word(GENET_INTRL2_0_CPU_MASK_STATUS)
+                    .expect("GENET mask-status register must fit the test MMIO window");
+                registers[mask] |= value;
+            }
+            GENET_INTRL2_0_CPU_MASK_CLEAR => {
+                let mask = test_genet_mmio_word(GENET_INTRL2_0_CPU_MASK_STATUS)
+                    .expect("GENET mask-status register must fit the test MMIO window");
+                if !TEST_GENET_IRQ_UNMASK_STUCK.load(Ordering::Acquire) {
+                    registers[mask] &= !value;
+                }
+                let injected = TEST_GENET_IRQ_INJECT_ON_UNMASK.swap(0, Ordering::AcqRel);
+                if injected != 0 {
+                    let status = test_genet_mmio_word(GENET_INTRL2_0_CPU_STAT)
+                        .expect("GENET status register must fit the test MMIO window");
+                    registers[status] |= injected;
+                }
+            }
+            _ => {}
+        }
     }
 }
 
@@ -57806,16 +60190,10 @@ const fn sdio_host_control_readback_matches(readback: u8, requested: u8) -> bool
 
 #[cfg(target_os = "none")]
 fn serial_set_mini_uart_irqs(rx_enabled: bool, tx_enabled: bool) {
-    // SAFETY: Descriptor admission gives the serial runtime exclusive access
-    // to the mapped mini-UART page. MU_IER is inside that page. RX remains the
-    // persistent input source; TX is enabled only while the same owner retains
-    // one admitted immutable frame across bounded FIFO fills.
-    unsafe {
-        core::ptr::write_volatile(
-            (DRIVER_TASK_DEVICE_MMIO_VADDR + MINI_UART_IER_OFFSET) as *mut u32,
-            serial_mini_uart_irq_mask(rx_enabled, tx_enabled),
-        );
-    }
+    serial_mini_uart_write(
+        SerialMiniUartWriteRegister::InterruptEnable,
+        serial_mini_uart_irq_mask(rx_enabled, tx_enabled),
+    );
 }
 
 #[cfg(not(target_os = "none"))]
@@ -57854,10 +60232,15 @@ where
 }
 
 fn serial_runtime_initialize(descriptor: &DriverRuntimeInitDescriptor) -> bool {
+    SERIAL_RUNTIME_SPSC_GENERATION.store(0, Ordering::Release);
     let Some(irq) = descriptor_serial_irq(descriptor) else {
         return false;
     };
+    let Some(generation) = serial_runtime_spsc_generation(descriptor) else {
+        return false;
+    };
     SERIAL_RUNTIME_RX_STATE_PUBLICATION.store(0, Ordering::Release);
+    SERIAL_RUNTIME_SPSC_GENERATION.store(generation, Ordering::Release);
     SERIAL_RUNTIME_TX_CURSOR.with_mut(SerialRuntimeTxCursor::reset);
     SERIAL_RUNTIME_RX_QUEUE.with_mut(|queue| {
         let initialized = serial_runtime_takeover_with(
@@ -57876,9 +60259,183 @@ fn serial_runtime_initialize(descriptor: &DriverRuntimeInitDescriptor) -> bool {
             serial_set_mini_uart_rx_irq,
             || runtime_irq_handler_ack(irq.handler_slot),
         );
+        let staged = if initialized {
+            serial_flush_runtime_rx_queue_to_spsc(queue)
+        } else {
+            None
+        };
         publish_serial_runtime_rx_state(queue);
-        initialized
+        initialized && staged.is_some() && queue.len == 0
     })
+}
+
+fn serial_flush_runtime_rx_queue_to_spsc(
+    queue: &mut SerialRuntimeRxQueue,
+) -> Option<SerialSpscTransfer> {
+    let generation = SERIAL_RUNTIME_SPSC_GENERATION.load(Ordering::Acquire);
+    if generation == 0 {
+        return None;
+    }
+    let base = serial_runtime_spsc_shared_base();
+    let header = serial_spsc_header_snapshot_at(
+        base,
+        DRIVER_RUNTIME_SERIAL_RX_SPSC_FIRST_PAGE,
+        generation,
+        DRIVER_RUNTIME_SERIAL_SPSC_FLAG_RUNTIME_TO_ROOT,
+    )?;
+    let free = DRIVER_RUNTIME_SERIAL_SPSC_CAPACITY.saturating_sub(header.occupancy()? as usize);
+    if free < queue.len {
+        return Some(SerialSpscTransfer::default());
+    }
+    let admitted = queue.len;
+    let mut staged = [0u8; MINI_UART_RX_QUEUE_CAPACITY];
+    let mut count = 0usize;
+    while count < admitted {
+        let Some(byte) = queue.pop() else {
+            return None;
+        };
+        staged[count] = byte;
+        count = count.saturating_add(1);
+    }
+    if count == 0 {
+        return Some(SerialSpscTransfer::default());
+    }
+    let Some(transfer) = serial_spsc_produce_at(
+        base,
+        DRIVER_RUNTIME_SERIAL_RX_SPSC_FIRST_PAGE,
+        generation,
+        DRIVER_RUNTIME_SERIAL_SPSC_FLAG_RUNTIME_TO_ROOT,
+        &staged[..count],
+    ) else {
+        for &byte in &staged[..count] {
+            let _ = queue.push_retained(byte);
+        }
+        return None;
+    };
+    if transfer.bytes != count {
+        for &byte in &staged[transfer.bytes..count] {
+            let _ = queue.push_retained(byte);
+        }
+        return None;
+    }
+    Some(transfer)
+}
+
+#[cfg(target_os = "none")]
+fn serial_drain_hardware_to_spsc(
+    queue: &mut SerialRuntimeRxQueue,
+    limit: usize,
+) -> (SerialRxDrainOutcome, SerialSpscTransfer) {
+    let generation = SERIAL_RUNTIME_SPSC_GENERATION.load(Ordering::Acquire);
+    let base = serial_runtime_spsc_shared_base();
+    let free = serial_spsc_header_snapshot_at(
+        base,
+        DRIVER_RUNTIME_SERIAL_RX_SPSC_FIRST_PAGE,
+        generation,
+        DRIVER_RUNTIME_SERIAL_SPSC_FLAG_RUNTIME_TO_ROOT,
+    )
+    .and_then(DriverRuntimeSerialSpscHeader::occupancy)
+    .map_or(0, |used| {
+        DRIVER_RUNTIME_SERIAL_SPSC_CAPACITY.saturating_sub(used as usize)
+    });
+    let mut staged = [0u8; MINI_UART_RX_DRAIN_LIMIT];
+    let mut outcome = SerialRxDrainOutcome::default();
+    let admitted = limit.min(MINI_UART_RX_DRAIN_LIMIT).min(free);
+    while outcome.bytes < admitted {
+        let status = serial_mini_uart_read(SerialMiniUartReadRegister::LineStatus);
+        outcome.hardware_overrun |= status & MINI_UART_LSR_RX_OVERRUN != 0;
+        if status & MINI_UART_LSR_RX_READY == 0 {
+            break;
+        }
+        staged[outcome.bytes] = serial_mini_uart_read(SerialMiniUartReadRegister::Io) as u8;
+        outcome.bytes = outcome.bytes.saturating_add(1);
+    }
+    // The final level sample closes the ready-to-sleep race. It reads no byte
+    // beyond the fixed bound and leaves an unserved source unacknowledged.
+    let final_status = serial_mini_uart_read(SerialMiniUartReadRegister::LineStatus);
+    outcome.hardware_overrun |= final_status & MINI_UART_LSR_RX_OVERRUN != 0;
+    outcome.source_pending = final_status & MINI_UART_LSR_RX_READY != 0;
+    let sampled = outcome.bytes;
+    let transfer = if sampled == 0 {
+        SerialSpscTransfer::default()
+    } else {
+        serial_spsc_produce_at(
+            base,
+            DRIVER_RUNTIME_SERIAL_RX_SPSC_FIRST_PAGE,
+            generation,
+            DRIVER_RUNTIME_SERIAL_SPSC_FLAG_RUNTIME_TO_ROOT,
+            &staged[..sampled],
+        )
+        .unwrap_or_default()
+    };
+    if transfer.bytes != sampled {
+        queue.received_bytes = queue.received_bytes.saturating_add(transfer.bytes as u32);
+        let mut retained = transfer.bytes;
+        while retained < sampled {
+            if !queue.push(staged[retained]) {
+                queue.queue_full_events = queue.queue_full_events.saturating_add(1);
+                break;
+            }
+            retained = retained.saturating_add(1);
+        }
+        outcome.source_pending = true;
+        outcome.bytes = retained;
+    } else {
+        queue.received_bytes = queue.received_bytes.saturating_add(transfer.bytes as u32);
+    }
+    if free == 0 && outcome.source_pending {
+        queue.queue_full_events = queue.queue_full_events.saturating_add(1);
+    }
+    if outcome.hardware_overrun {
+        queue.hardware_overrun_events = queue.hardware_overrun_events.saturating_add(1);
+    }
+    (outcome, transfer)
+}
+
+#[cfg(not(target_os = "none"))]
+fn serial_drain_hardware_to_spsc(
+    _queue: &mut SerialRuntimeRxQueue,
+    _limit: usize,
+) -> (SerialRxDrainOutcome, SerialSpscTransfer) {
+    (
+        SerialRxDrainOutcome::default(),
+        SerialSpscTransfer::default(),
+    )
+}
+
+#[cfg(target_os = "none")]
+fn serial_fill_uart_from_spsc_once() -> Option<SerialSpscTransfer> {
+    let ready =
+        serial_mini_uart_read(SerialMiniUartReadRegister::LineStatus) & MINI_UART_LSR_TX_EMPTY != 0;
+    if !ready {
+        return Some(SerialSpscTransfer::default());
+    }
+    let generation = SERIAL_RUNTIME_SPSC_GENERATION.load(Ordering::Acquire);
+    let mut staged = [0u8; MINI_UART_TX_IMMEDIATE_TURN_BYTES];
+    let transfer = serial_spsc_consume_at(
+        serial_runtime_spsc_shared_base(),
+        DRIVER_RUNTIME_SERIAL_TX_SPSC_FIRST_PAGE,
+        generation,
+        DRIVER_RUNTIME_SERIAL_SPSC_FLAG_ROOT_TO_RUNTIME,
+        &mut staged,
+    )?;
+    for &byte in &staged[..transfer.bytes] {
+        serial_mini_uart_write(SerialMiniUartWriteRegister::Io, u32::from(byte));
+    }
+    Some(transfer)
+}
+
+#[cfg(not(target_os = "none"))]
+fn serial_fill_uart_from_spsc_once() -> Option<SerialSpscTransfer> {
+    let generation = SERIAL_RUNTIME_SPSC_GENERATION.load(Ordering::Acquire);
+    let mut staged = [0u8; MINI_UART_TX_IMMEDIATE_TURN_BYTES];
+    serial_spsc_consume_at(
+        serial_runtime_spsc_shared_base(),
+        DRIVER_RUNTIME_SERIAL_TX_SPSC_FIRST_PAGE,
+        generation,
+        DRIVER_RUNTIME_SERIAL_SPSC_FLAG_ROOT_TO_RUNTIME,
+        &mut staged,
+    )
 }
 
 #[cfg(target_os = "none")]
@@ -57899,60 +60456,113 @@ fn serial_drain_hardware_to_queue(
     serial_drain_source_to_queue(
         queue,
         limit,
-        || {
-            // SAFETY: The serial runtime image maps exactly the declared UART MMIO
-            // page at `DRIVER_TASK_DEVICE_MMIO_VADDR`; the MU_LSR offset is within
-            // that page and is read-only for this owner-local IRQ drain.
-            unsafe {
-                core::ptr::read_volatile(
-                    (DRIVER_TASK_DEVICE_MMIO_VADDR + MINI_UART_LSR_OFFSET) as *const u32,
-                )
-            }
-        },
-        || {
-            // SAFETY: MU_IO returns one received byte when MU_LSR reports data
-            // ready. The capacity check runs before this closure, so consuming
-            // a byte cannot overflow or silently discard software state.
-            unsafe {
-                core::ptr::read_volatile(
-                    (DRIVER_TASK_DEVICE_MMIO_VADDR + MINI_UART_IO_OFFSET) as *const u32,
-                ) as u8
-            }
-        },
+        || serial_mini_uart_read(SerialMiniUartReadRegister::LineStatus),
+        || serial_mini_uart_read(SerialMiniUartReadRegister::Io) as u8,
     )
 }
 
 fn serial_runtime_service_notification(badge: u32) -> bool {
     SERIAL_RUNTIME_RX_QUEUE.with_mut(|queue| {
         let exceptional_before = queue.exceptional_state();
-        let handled = serial_service_irq_with(
+        let source_badge = badge & !DRIVER_RUNTIME_RESERVED_ROOT_BADGE;
+        let irq_wake = source_badge == DRIVER_RUNTIME_SERIAL_IRQ_BADGE;
+        if source_badge != 0 && !irq_wake {
+            return false;
+        }
+        if irq_wake {
+            queue.irq_wakes = queue.irq_wakes.saturating_add(1);
+            queue.irq_ack_pending = true;
+        }
+
+        // RX always wins this bounded owner quantum. First publish any bytes
+        // retained after an earlier full/torn boundary, then sample hardware
+        // into the runtime-to-root ring. No TX cursor can consume CPU or MMIO
+        // before this input preservation completes.
+        let retained = serial_flush_runtime_rx_queue_to_spsc(queue);
+        let retained_pending = retained.is_none() || queue.len != 0;
+        let (rx_outcome, rx_transfer) = if retained_pending {
+            (
+                SerialRxDrainOutcome {
+                    source_pending: true,
+                    ..SerialRxDrainOutcome::default()
+                },
+                SerialSpscTransfer::default(),
+            )
+        } else {
+            serial_drain_hardware_to_spsc(queue, MINI_UART_RX_DRAIN_LIMIT)
+        };
+        let rx_doorbell =
+            retained.is_some_and(|transfer| transfer.data_doorbell) || rx_transfer.data_doorbell;
+
+        // After RX preservation, fill at most one exact eight-byte FIFO
+        // prefix. The durable TX cursor, not a notification count, determines
+        // whether TX-empty remains enabled for the next hardware wake.
+        let tx_transfer = serial_fill_uart_from_spsc_once();
+        let tx_valid = tx_transfer.is_some();
+        let tx_transfer = tx_transfer.unwrap_or_default();
+        let generation = SERIAL_RUNTIME_SPSC_GENERATION.load(Ordering::Acquire);
+        let tx_pending = serial_spsc_committed_occupancy_at(
+            serial_runtime_spsc_shared_base(),
+            DRIVER_RUNTIME_SERIAL_TX_SPSC_FIRST_PAGE,
+            generation,
+            DRIVER_RUNTIME_SERIAL_SPSC_FLAG_ROOT_TO_RUNTIME,
+        )
+        .is_some_and(|occupancy| occupancy != 0);
+        serial_set_mini_uart_irqs(true, tx_pending);
+
+        // A full RX ring deliberately retains the masked level handler. The
+        // root's later full-to-not-full producer-rearm badge is sufficient to
+        // drain the source, but it is not a second IRQ badge; therefore every
+        // service turn retries the one durable pending ACK after one final LSR
+        // source check. Never ACK while retained or physical RX remains.
+        let final_rx_source_pending = serial_mini_uart_rx_source_pending();
+        let _ = serial_finish_pending_irq_after_service_with(
             queue,
-            badge,
-            |queue| {
-                #[cfg(target_os = "none")]
-                {
-                    serial_drain_hardware_to_queue(queue, MINI_UART_RX_DRAIN_LIMIT)
-                }
-                #[cfg(not(target_os = "none"))]
-                {
-                    let _ = queue;
-                    SerialRxDrainOutcome::default()
-                }
-            },
+            retained_pending || rx_outcome.source_pending || final_rx_source_pending || !tx_valid,
             || runtime_irq_handler_ack(DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT),
         );
-        if queue.exceptional_state() != exceptional_before {
+        if rx_doorbell || tx_transfer.producer_rearm {
+            runtime_signal_notification(
+                pi4_driver_abi::DRIVER_RUNTIME_COMPLETION_NOTIFICATION_SLOT,
+            );
+        }
+        if queue.exceptional_state() != exceptional_before
+            || rx_outcome.bytes != 0
+            || tx_transfer.bytes != 0
+        {
             publish_serial_runtime_rx_state(queue);
         }
-        handled
+        irq_wake
+            || badge & DRIVER_RUNTIME_RESERVED_ROOT_BADGE != 0
+            || rx_outcome.bytes != 0
+            || tx_transfer.bytes != 0
     })
+}
+
+fn serial_finish_pending_irq_after_service_with<Ack>(
+    queue: &mut SerialRuntimeRxQueue,
+    rx_or_transport_pending: bool,
+    mut ack: Ack,
+) -> bool
+where
+    Ack: FnMut() -> bool,
+{
+    if !queue.irq_ack_pending {
+        return true;
+    }
+    if rx_or_transport_pending {
+        return false;
+    }
+    let acked = ack();
+    serial_record_irq_ack(queue, acked);
+    acked
 }
 
 #[cfg(test)]
 fn serial_retry_pending_irq_with<Drain, Ack>(
     queue: &mut SerialRuntimeRxQueue,
     mut drain: Drain,
-    mut ack: Ack,
+    ack: Ack,
 ) -> bool
 where
     Drain: FnMut(&mut SerialRuntimeRxQueue) -> SerialRxDrainOutcome,
@@ -57962,12 +60572,7 @@ where
         return true;
     }
     let drained = drain(queue);
-    if drained.source_pending {
-        return false;
-    }
-    let acked = ack();
-    serial_record_irq_ack(queue, acked);
-    acked
+    serial_finish_pending_irq_after_service_with(queue, drained.source_pending, ack)
 }
 
 fn serial_owner_rx_turn_with<Sample, Copy, Ack>(
@@ -58064,13 +60669,8 @@ fn serial_drain_queue_to_frame(queue: &mut SerialRuntimeRxQueue, limit: usize) -
         let Some(byte) = queue.pop() else {
             break;
         };
-        // SAFETY: `read < limit <= MAX_DRIVER_TASK_FRAME_BYTES`, so this write
-        // stays within the fixed ring payload region.
-        unsafe {
-            core::ptr::write_volatile(
-                (DRIVER_TASK_RING_VADDR + DRIVER_TASK_RING_FRAME_OFFSET + read) as *mut u8,
-                byte,
-            );
+        if !RuntimeRingWindow::local().write_u8(DRIVER_TASK_RING_FRAME_OFFSET + read, byte) {
+            break;
         }
         read = read.saturating_add(1);
     }
@@ -58102,35 +60702,18 @@ fn serial_write_frame_prefix_from_offset(
     if offset >= frame.len as usize {
         return 0;
     }
-    let src = (DRIVER_TASK_RING_VADDR + frame.offset as usize) as *const u8;
     let turn_limit = (frame.len as usize - offset)
         .min(limit)
         .min(MINI_UART_TX_IMMEDIATE_TURN_BYTES);
     serial_write_empty_fifo_prefix_with(
         turn_limit,
         || {
-            // SAFETY: The serial runtime image maps the UART MMIO page at
-            // `DRIVER_TASK_DEVICE_MMIO_VADDR`; MU_LSR is read-only and belongs
-            // solely to this runtime.
-            let lsr = unsafe {
-                core::ptr::read_volatile(
-                    (DRIVER_TASK_DEVICE_MMIO_VADDR + MINI_UART_LSR_OFFSET) as *const u32,
-                )
-            };
+            let lsr = serial_mini_uart_read(SerialMiniUartReadRegister::LineStatus);
             lsr & MINI_UART_LSR_TX_EMPTY != 0
         },
         |index| {
-            // SAFETY: `offset + index < frame.len`, and the serial command
-            // admission validated the page-local frame before this helper.
-            let byte = unsafe { core::ptr::read_volatile(src.add(offset + index)) };
-            // SAFETY: The runtime owns this admitted mini-UART MMIO page;
-            // MU_IO accepts a 32-bit write containing one transmit byte.
-            unsafe {
-                core::ptr::write_volatile(
-                    (DRIVER_TASK_DEVICE_MMIO_VADDR + MINI_UART_IO_OFFSET) as *mut u32,
-                    u32::from(byte),
-                );
-            }
+            let byte = read_ring_byte(frame.offset as usize + offset + index);
+            serial_mini_uart_write(SerialMiniUartWriteRegister::Io, u32::from(byte));
         },
     )
 }
@@ -58291,6 +60874,7 @@ where
     target
 }
 
+#[cfg(any(test, all(target_os = "none", sel4_config_kernel_mcs)))]
 const fn runtime_one_way_completion_wake_due(
     command: DriverTaskCommandRecord,
     completion_committed: bool,
@@ -59084,6 +61668,15 @@ pub fn runtime_main(task_key: usize) -> ! {
                 // Poll the persistent ring/source once before sleeping so a
                 // coalesced or already-consumed doorbell cannot strand work.
                 let _ = service_runtime_persistent_source_once(notification_route, 0);
+                if notification_route == RuntimeNotificationRoute::Genet
+                    && GENET_RUNTIME_STATE.with_ref(genet_runtime_dpc_local_continuation_ready)
+                {
+                    // Only the exact retained, unacked IRQ lifetime may
+                    // schedule another bounded quantum. A full private queue
+                    // instead blocks for the root consumer command that can
+                    // free capacity; no timer or free-running poll is added.
+                    continue;
+                }
                 if notification_route == RuntimeNotificationRoute::Cyw43Client {
                     match cyw43_dpc_idle_prewait_route(cyw43_dpc_durable_work_route()) {
                         Cyw43DpcIdlePrewaitRoute::ReenterService => {
@@ -59316,7 +61909,9 @@ pub fn runtime_main(task_key: usize) -> ! {
                         })
                 }
                 RuntimeNotificationRoute::Cyw43Client => cyw43_steady_parent_marker,
-                RuntimeNotificationRoute::Serial | RuntimeNotificationRoute::Unavailable => false,
+                RuntimeNotificationRoute::Serial
+                | RuntimeNotificationRoute::Genet
+                | RuntimeNotificationRoute::Unavailable => false,
             };
             let persistent_marker =
                 command.flags & DRIVER_RUNTIME_COMMAND_FLAG_PERSISTENT_TRANSACTION != 0;
@@ -59735,6 +62330,10 @@ mod tests {
         fifo_read_offset: usize,
         sdhci_buffer_accesses: usize,
         payload_writes_while_dma_active: usize,
+        payload_u64_reads: usize,
+        payload_u64_writes: usize,
+        dma_u64_reads: usize,
+        dma_u64_writes: usize,
         transfer_mode_shadow: u32,
         transfer_mode_shadow_valid: bool,
         int_status_w1c_failures_remaining: usize,
@@ -59805,6 +62404,10 @@ mod tests {
                 fifo_read_offset: 0,
                 sdhci_buffer_accesses: 0,
                 payload_writes_while_dma_active: 0,
+                payload_u64_reads: 0,
+                payload_u64_writes: 0,
+                dma_u64_reads: 0,
+                dma_u64_writes: 0,
                 transfer_mode_shadow: 0,
                 transfer_mode_shadow_valid: false,
                 int_status_w1c_failures_remaining: 0,
@@ -60369,6 +62972,20 @@ mod tests {
             }
         }
 
+        fn read_payload_u64(&mut self, offset: usize) -> u64 {
+            self.payload_u64_reads = self.payload_u64_reads.saturating_add(1);
+            u64::from_le_bytes(core::array::from_fn(|index| {
+                self.read_payload_byte(offset + index)
+            }))
+        }
+
+        fn write_payload_u64(&mut self, offset: usize, value: u64) {
+            self.payload_u64_writes = self.payload_u64_writes.saturating_add(1);
+            for (index, byte) in value.to_le_bytes().iter().copied().enumerate() {
+                self.write_payload_byte(offset + index, byte);
+            }
+        }
+
         fn external_dma_authority(&mut self) -> Option<SdioExternalDmaAuthority> {
             self.dma_authority_available
                 .then(|| self.external_dma_authority_value())
@@ -60454,6 +63071,16 @@ mod tests {
 
         fn external_dma_write_byte(&mut self, addr: usize, value: u8) {
             write_dma_byte(addr, value);
+        }
+
+        fn external_dma_read_u64(&mut self, addr: usize) -> u64 {
+            self.dma_u64_reads = self.dma_u64_reads.saturating_add(1);
+            read_sdio_dma_u64(addr)
+        }
+
+        fn external_dma_write_u64(&mut self, addr: usize, value: u64) {
+            self.dma_u64_writes = self.dma_u64_writes.saturating_add(1);
+            write_sdio_dma_u64(addr, value);
         }
 
         fn external_dma_store_barrier(&mut self) {}
@@ -61660,7 +64287,8 @@ mod tests {
         HDMI_SAVED_CURSOR_ROW.store(0, Ordering::Release);
         HDMI_SAVED_CURSOR_COL.store(0, Ordering::Release);
         HDMI_FIRST_FRAME_CLEARED.store(false, Ordering::Release);
-        HDMI_FIRST_FRAME_CURSOR.with_mut(HdmiFirstFrameCursor::reset);
+        HDMI_FRAME_CURSOR.with_mut(HdmiFrameCursor::reset);
+        HDMI_CELL_PLANE.with_mut(HdmiCellPlane::reset);
         GENET_RUNTIME_FLAGS.store(0, Ordering::Release);
         GENET_TX_COUNT.store(0, Ordering::Release);
         GENET_RX_COUNT.store(0, Ordering::Release);
@@ -61685,6 +64313,8 @@ mod tests {
         TEST_RUNTIME_TIMER_COUNTER_TICKS.store(0, Ordering::Release);
         TEST_CYW43_FOREGROUND_STATE_SNAPSHOTS.store(0, Ordering::Release);
         TEST_CYW43_CONTROL_TX_DONE_PUBLISHES.store(0, Ordering::Release);
+        TEST_CYW43_FOREGROUND_PARENT_U64_READS.store(0, Ordering::Release);
+        TEST_CYW43_FOREGROUND_PARENT_U64_WRITES.store(0, Ordering::Release);
         TEST_CYW43_ROOT_WAKE_SIGNALS.store(0, Ordering::Release);
         TEST_CYW43_DPC_TIMING_WRITE_ROOT_WAKE_SIGNALS.store(usize::MAX, Ordering::Release);
         TEST_CYW43_PEER_WAKE_SIGNALS.store(0, Ordering::Release);
@@ -61734,6 +64364,7 @@ mod tests {
             state.recovery_required = false;
         });
         SERIAL_RUNTIME_RX_STATE_PUBLICATION.store(0, Ordering::Release);
+        SERIAL_RUNTIME_SPSC_GENERATION.store(0, Ordering::Release);
         SERIAL_RUNTIME_RX_QUEUE.with_mut(SerialRuntimeRxQueue::reset);
         SERIAL_RUNTIME_TX_CURSOR.with_mut(SerialRuntimeTxCursor::reset);
     }
@@ -61787,12 +64418,17 @@ mod tests {
     #[test]
     fn generated_notification_dpc_topology_routes_both_peers() {
         let serial = descriptor_for(HOT_PATH_SERIAL_CONSOLE, ROLE_SERIAL);
+        let genet = descriptor_for(HOT_PATH_GENET_NIC, ROLE_NET);
         let client = descriptor_for(HOT_PATH_CYW43_WIFI, ROLE_NET);
         let owner = descriptor_for(HOT_PATH_SDIO_HOST, ROLE_SDIO);
 
         assert_eq!(
             runtime_notification_route(&serial),
             RuntimeNotificationRoute::Serial
+        );
+        assert_eq!(
+            runtime_notification_route(&genet),
+            RuntimeNotificationRoute::Genet
         );
         assert_eq!(
             runtime_notification_route(&client),
@@ -61819,6 +64455,13 @@ mod tests {
         malformed_dma.irqs[1].badge = DRIVER_RUNTIME_SDIO_IRQ_BADGE;
         assert_eq!(
             runtime_notification_route(&malformed_dma),
+            RuntimeNotificationRoute::Unavailable,
+        );
+
+        let mut inferred_genet = genet;
+        inferred_genet.irqs[0].irq = DRIVER_RUNTIME_GENET_IRQ + 1;
+        assert_eq!(
+            runtime_notification_route(&inferred_genet),
             RuntimeNotificationRoute::Unavailable,
         );
 
@@ -70548,6 +73191,14 @@ mod tests {
         }
     }
 
+    fn hdmi_budget() -> DriverTaskBudgetGrant {
+        DriverTaskBudgetGrant {
+            max_ops: DRIVER_RUNTIME_HDMI_SERVICE_MAX_OPS,
+            max_frames: DRIVER_RUNTIME_HDMI_SERVICE_MAX_FRAMES,
+            max_bytes: DRIVER_RUNTIME_HDMI_SERVICE_MAX_BYTES,
+        }
+    }
+
     #[test]
     fn engine_init_publishes_progress_marker() {
         let _guard = test_guard();
@@ -71201,7 +73852,292 @@ mod tests {
     }
 
     #[test]
+    fn serial_spsc_wrap_full_empty_and_wake_edges_are_exact() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        initialize_serial_spsc_for_test(7);
+        let base = serial_runtime_spsc_shared_base();
+        let initial: Vec<u8> = (0..DRIVER_RUNTIME_SERIAL_SPSC_CAPACITY)
+            .map(|index| index as u8)
+            .collect();
+        let full = serial_spsc_produce_at(
+            base,
+            DRIVER_RUNTIME_SERIAL_RX_SPSC_FIRST_PAGE,
+            7,
+            DRIVER_RUNTIME_SERIAL_SPSC_FLAG_RUNTIME_TO_ROOT,
+            &initial,
+        )
+        .expect("valid RX producer");
+        assert_eq!(full.bytes, DRIVER_RUNTIME_SERIAL_SPSC_CAPACITY);
+        assert!(full.data_doorbell);
+        assert!(full.work_remaining);
+
+        let saturated = serial_spsc_produce_at(
+            base,
+            DRIVER_RUNTIME_SERIAL_RX_SPSC_FIRST_PAGE,
+            7,
+            DRIVER_RUNTIME_SERIAL_SPSC_FLAG_RUNTIME_TO_ROOT,
+            b"blocked",
+        )
+        .expect("valid full ring");
+        assert_eq!(saturated.bytes, 0);
+        assert!(!saturated.data_doorbell);
+
+        let split = DRIVER_RUNTIME_SERIAL_SPSC_CAPACITY - 3;
+        let mut first = vec![0u8; split];
+        let drained = serial_spsc_consume_at(
+            base,
+            DRIVER_RUNTIME_SERIAL_RX_SPSC_FIRST_PAGE,
+            7,
+            DRIVER_RUNTIME_SERIAL_SPSC_FLAG_RUNTIME_TO_ROOT,
+            &mut first,
+        )
+        .expect("valid RX consumer");
+        assert_eq!(drained.bytes, split);
+        assert!(drained.producer_rearm);
+        assert!(drained.work_remaining);
+        assert_eq!(first, initial[..split]);
+
+        let wrapped = b"abcdef";
+        let produced = serial_spsc_produce_at(
+            base,
+            DRIVER_RUNTIME_SERIAL_RX_SPSC_FIRST_PAGE,
+            7,
+            DRIVER_RUNTIME_SERIAL_SPSC_FLAG_RUNTIME_TO_ROOT,
+            wrapped,
+        )
+        .expect("wrapped RX producer");
+        assert_eq!(produced.bytes, wrapped.len());
+        assert!(
+            !produced.data_doorbell,
+            "three old bytes kept the ring nonempty"
+        );
+
+        let mut tail = [0u8; 9];
+        let final_drain = serial_spsc_consume_at(
+            base,
+            DRIVER_RUNTIME_SERIAL_RX_SPSC_FIRST_PAGE,
+            7,
+            DRIVER_RUNTIME_SERIAL_SPSC_FLAG_RUNTIME_TO_ROOT,
+            &mut tail,
+        )
+        .expect("wrapped RX consumer");
+        assert_eq!(final_drain.bytes, tail.len());
+        assert!(!final_drain.work_remaining);
+        assert_eq!(&tail[..3], &initial[split..]);
+        assert_eq!(&tail[3..], wrapped);
+
+        let next = serial_spsc_produce_at(
+            base,
+            DRIVER_RUNTIME_SERIAL_RX_SPSC_FIRST_PAGE,
+            7,
+            DRIVER_RUNTIME_SERIAL_SPSC_FLAG_RUNTIME_TO_ROOT,
+            b"z",
+        )
+        .expect("post-empty producer");
+        assert!(next.data_doorbell);
+        let header = serial_spsc_header_snapshot_at(
+            base,
+            DRIVER_RUNTIME_SERIAL_RX_SPSC_FIRST_PAGE,
+            7,
+            DRIVER_RUNTIME_SERIAL_SPSC_FLAG_RUNTIME_TO_ROOT,
+        )
+        .expect("stable RX header");
+        assert_eq!(header.doorbell_epoch, 2);
+        assert_eq!(header.consumer_wake_epoch, 1);
+    }
+
+    #[test]
+    fn serial_spsc_full_rx_root_rearm_retries_the_pending_irq_ack() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        initialize_serial_spsc_for_test(9);
+        let base = serial_runtime_spsc_shared_base();
+        let full = vec![0x5au8; DRIVER_RUNTIME_SERIAL_SPSC_CAPACITY];
+        assert_eq!(
+            serial_spsc_produce_at(
+                base,
+                DRIVER_RUNTIME_SERIAL_RX_SPSC_FIRST_PAGE,
+                9,
+                DRIVER_RUNTIME_SERIAL_SPSC_FLAG_RUNTIME_TO_ROOT,
+                &full,
+            )
+            .expect("runtime RX producer")
+            .bytes,
+            full.len(),
+        );
+
+        let mut queue = SerialRuntimeRxQueue::new();
+        queue.irq_ack_pending = true;
+        let mut ack_calls = 0u32;
+        assert!(!serial_finish_pending_irq_after_service_with(
+            &mut queue,
+            true,
+            || {
+                ack_calls = ack_calls.saturating_add(1);
+                true
+            },
+        ));
+        assert_eq!(ack_calls, 0, "pending physical RX must retain the handler");
+        assert!(queue.irq_ack_pending);
+
+        let mut root_byte = [0u8; 1];
+        let root_turn = serial_spsc_consume_at(
+            base,
+            DRIVER_RUNTIME_SERIAL_RX_SPSC_FIRST_PAGE,
+            9,
+            DRIVER_RUNTIME_SERIAL_SPSC_FLAG_RUNTIME_TO_ROOT,
+            &mut root_byte,
+        )
+        .expect("root RX consumer frees one byte");
+        assert!(root_turn.producer_rearm);
+        assert!(root_turn.work_remaining);
+
+        assert!(serial_finish_pending_irq_after_service_with(
+            &mut queue,
+            false,
+            || {
+                ack_calls = ack_calls.saturating_add(1);
+                true
+            },
+        ));
+        assert_eq!(ack_calls, 1);
+        assert_eq!(queue.irq_acks, 1);
+        assert!(!queue.irq_ack_pending);
+    }
+
+    #[test]
+    fn serial_spsc_restart_generation_and_invalid_cursors_fail_closed() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        initialize_serial_spsc_for_test(11);
+        let base = serial_runtime_spsc_shared_base();
+        assert_eq!(
+            serial_spsc_produce_at(
+                base,
+                DRIVER_RUNTIME_SERIAL_TX_SPSC_FIRST_PAGE,
+                11,
+                DRIVER_RUNTIME_SERIAL_SPSC_FLAG_ROOT_TO_RUNTIME,
+                b"old-generation",
+            )
+            .expect("old TX producer")
+            .bytes,
+            14,
+        );
+
+        initialize_serial_spsc_for_test(12);
+        let mut byte = [0u8; 1];
+        assert!(serial_spsc_consume_at(
+            base,
+            DRIVER_RUNTIME_SERIAL_TX_SPSC_FIRST_PAGE,
+            11,
+            DRIVER_RUNTIME_SERIAL_SPSC_FLAG_ROOT_TO_RUNTIME,
+            &mut byte,
+        )
+        .is_none());
+        assert_eq!(
+            serial_spsc_consume_at(
+                base,
+                DRIVER_RUNTIME_SERIAL_TX_SPSC_FIRST_PAGE,
+                12,
+                DRIVER_RUNTIME_SERIAL_SPSC_FLAG_ROOT_TO_RUNTIME,
+                &mut byte,
+            )
+            .expect("new empty generation")
+            .bytes,
+            0,
+        );
+
+        let header = serial_spsc_header_at(base, DRIVER_RUNTIME_SERIAL_TX_SPSC_FIRST_PAGE)
+            .expect("TX header");
+        // SAFETY: This test holds the global state guard and deliberately tears
+        // the producer commit in its private shared arena.
+        unsafe {
+            core::ptr::write_volatile(
+                core::ptr::addr_of_mut!((*header.as_ptr()).producer_index),
+                1,
+            );
+        }
+        assert!(serial_spsc_consume_at(
+            base,
+            DRIVER_RUNTIME_SERIAL_TX_SPSC_FIRST_PAGE,
+            12,
+            DRIVER_RUNTIME_SERIAL_SPSC_FLAG_ROOT_TO_RUNTIME,
+            &mut byte,
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn serial_spsc_bidirectional_pressure_preserves_order_without_cross_talk() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        initialize_serial_spsc_for_test(19);
+        let base = serial_runtime_spsc_shared_base();
+        for round in 0..512u16 {
+            let tx = [round as u8, (round >> 8) as u8, 0x54];
+            let rx = [0x52, (round >> 8) as u8, round as u8];
+            assert_eq!(
+                serial_spsc_produce_at(
+                    base,
+                    DRIVER_RUNTIME_SERIAL_TX_SPSC_FIRST_PAGE,
+                    19,
+                    DRIVER_RUNTIME_SERIAL_SPSC_FLAG_ROOT_TO_RUNTIME,
+                    &tx,
+                )
+                .expect("TX pressure producer")
+                .bytes,
+                tx.len(),
+            );
+            assert_eq!(
+                serial_spsc_produce_at(
+                    base,
+                    DRIVER_RUNTIME_SERIAL_RX_SPSC_FIRST_PAGE,
+                    19,
+                    DRIVER_RUNTIME_SERIAL_SPSC_FLAG_RUNTIME_TO_ROOT,
+                    &rx,
+                )
+                .expect("RX pressure producer")
+                .bytes,
+                rx.len(),
+            );
+            let mut tx_out = [0u8; 3];
+            let mut rx_out = [0u8; 3];
+            assert_eq!(
+                serial_spsc_consume_at(
+                    base,
+                    DRIVER_RUNTIME_SERIAL_TX_SPSC_FIRST_PAGE,
+                    19,
+                    DRIVER_RUNTIME_SERIAL_SPSC_FLAG_ROOT_TO_RUNTIME,
+                    &mut tx_out,
+                )
+                .expect("TX pressure consumer")
+                .bytes,
+                tx.len(),
+            );
+            assert_eq!(
+                serial_spsc_consume_at(
+                    base,
+                    DRIVER_RUNTIME_SERIAL_RX_SPSC_FIRST_PAGE,
+                    19,
+                    DRIVER_RUNTIME_SERIAL_SPSC_FLAG_RUNTIME_TO_ROOT,
+                    &mut rx_out,
+                )
+                .expect("RX pressure consumer")
+                .bytes,
+                rx.len(),
+            );
+            assert_eq!(tx_out, tx);
+            assert_eq!(rx_out, rx);
+        }
+    }
+
+    #[test]
     fn serial_tx_idle_probe_distinguishes_fifo_acceptance_from_wire_drain() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        initialize_serial_spsc_for_test(23);
+        SERIAL_RUNTIME_SPSC_GENERATION.store(23, Ordering::Release);
         let sequence = 0x5345_5244;
         assert_eq!(
             serial_tx_idle_completion(sequence, false),
@@ -71226,6 +74162,60 @@ mod tests {
             service_serial(command),
             DriverTaskCompletionRecord::progress(sequence, 1),
         );
+
+        assert_eq!(
+            serial_spsc_produce_at(
+                serial_runtime_spsc_shared_base(),
+                DRIVER_RUNTIME_SERIAL_TX_SPSC_FIRST_PAGE,
+                23,
+                DRIVER_RUNTIME_SERIAL_SPSC_FLAG_ROOT_TO_RUNTIME,
+                b"nine-byte",
+            )
+            .expect("root TX producer")
+            .bytes,
+            9,
+        );
+        assert_eq!(
+            service_serial(command),
+            DriverTaskCompletionRecord::idle(sequence),
+            "one eight-byte FIFO fill is not a durable transport-empty barrier",
+        );
+        assert_eq!(
+            service_serial(command),
+            DriverTaskCompletionRecord::progress(sequence, 1),
+            "the barrier completes only after SPSC and physical TX are empty",
+        );
+    }
+
+    fn arm_genet_test_irq_state(state: &mut GenetRuntimeState) {
+        state.initialized = true;
+        state.irq_badge = DRIVER_RUNTIME_GENET_IRQ_BADGE;
+        state.irq_handler_slot = DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT;
+    }
+
+    fn service_genet_test_irq(state: &mut GenetRuntimeState, status: u32) -> bool {
+        genet_write32(GENET_INTRL2_0_CPU_STAT, status);
+        genet_runtime_service_dpc_state(state, DRIVER_RUNTIME_GENET_IRQ_BADGE)
+    }
+
+    fn genet_test_ipv4_frame(protocol: u8, marker: u8) -> [u8; 64] {
+        let mut frame = [0u8; 64];
+        frame[0..6].copy_from_slice(&GENET_DRIVER_TASK_MAC);
+        frame[6..12].copy_from_slice(&[0x9c, 0x69, 0xd3, 0x40, 0xa8, 0x57]);
+        frame[12..14].copy_from_slice(&0x0800u16.to_be_bytes());
+        frame[14] = 0x45;
+        frame[23] = protocol;
+        frame[30] = marker;
+        frame
+    }
+
+    fn genet_test_arp_frame(marker: u8) -> [u8; 64] {
+        let mut frame = [0u8; 64];
+        frame[0..6].copy_from_slice(&[0xff; 6]);
+        frame[6..12].copy_from_slice(&GENET_DRIVER_TASK_MAC);
+        frame[12..14].copy_from_slice(&0x0806u16.to_be_bytes());
+        frame[30] = marker;
+        frame
     }
 
     #[test]
@@ -71301,11 +74291,191 @@ mod tests {
     }
 
     #[test]
+    fn genet_rx_queue_recycles_slots_across_wrap_and_reset() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let mut state = GenetRuntimeState::new();
+
+        for marker in 0..GENET_RX_QUEUE_CAP {
+            assert!(genet_rx_queue_push_for_test(&mut state, &[marker as u8]));
+        }
+        for marker in 0..GENET_RX_QUEUE_CAP / 2 {
+            assert_eq!(genet_rx_queue_pop_to_ring(&mut state), Some((1, 0)));
+            assert_eq!(read_ring_byte(DRIVER_TASK_RING_FRAME_OFFSET), marker as u8);
+        }
+        for marker in 0..GENET_RX_QUEUE_CAP / 2 {
+            assert!(genet_rx_queue_push_for_test(
+                &mut state,
+                &[(0x80 + marker) as u8]
+            ));
+        }
+        for marker in GENET_RX_QUEUE_CAP / 2..GENET_RX_QUEUE_CAP {
+            assert_eq!(genet_rx_queue_pop_to_ring(&mut state), Some((1, 0)));
+            assert_eq!(read_ring_byte(DRIVER_TASK_RING_FRAME_OFFSET), marker as u8);
+        }
+        for marker in 0..GENET_RX_QUEUE_CAP / 2 {
+            assert_eq!(genet_rx_queue_pop_to_ring(&mut state), Some((1, 0)));
+            assert_eq!(
+                read_ring_byte(DRIVER_TASK_RING_FRAME_OFFSET),
+                (0x80 + marker) as u8
+            );
+        }
+        assert_eq!(state.rx_queue_slots, genet_rx_queue_initial_slots());
+
+        assert!(genet_rx_queue_push_for_test(&mut state, &[0xee]));
+        state.reset();
+        assert_eq!(state.rx_queue_count, 0);
+        assert_eq!(state.rx_queue_slots, genet_rx_queue_initial_slots());
+        assert_eq!(genet_rx_queue_pop_to_ring(&mut state), None);
+    }
+
+    #[test]
+    fn genet_rx_queue_prioritizes_control_with_bounded_data_fairness() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let mut state = GenetRuntimeState::new();
+        let data = genet_test_ipv4_frame(17, 0xd0);
+        let tcp = genet_test_ipv4_frame(6, 0xc0);
+
+        assert!(genet_rx_queue_push_for_test(&mut state, &data));
+        assert!(genet_rx_queue_push_for_test(&mut state, &tcp));
+        assert_eq!(genet_rx_queue_pop_to_ring(&mut state), Some((64, 0x0800)));
+        assert_eq!(read_ring_byte(DRIVER_TASK_RING_FRAME_OFFSET + 30), 0xc0);
+        assert_eq!(genet_rx_queue_pop_to_ring(&mut state), Some((64, 0x0800)));
+        assert_eq!(read_ring_byte(DRIVER_TASK_RING_FRAME_OFFSET + 30), 0xd0);
+
+        assert!(genet_rx_queue_push_for_test(&mut state, &data));
+        for marker in 0..5u8 {
+            assert!(genet_rx_queue_push_for_test(
+                &mut state,
+                &genet_test_arp_frame(marker)
+            ));
+        }
+        for marker in 0..GENET_RX_CONTROL_BURST_LIMIT {
+            assert_eq!(genet_rx_queue_pop_to_ring(&mut state), Some((64, 0x0806)));
+            assert_eq!(read_ring_byte(DRIVER_TASK_RING_FRAME_OFFSET + 30), marker);
+        }
+        assert_eq!(genet_rx_queue_pop_to_ring(&mut state), Some((64, 0x0800)));
+        assert_eq!(read_ring_byte(DRIVER_TASK_RING_FRAME_OFFSET + 30), 0xd0);
+        assert_eq!(genet_rx_queue_pop_to_ring(&mut state), Some((64, 0x0806)));
+        assert_eq!(
+            read_ring_byte(DRIVER_TASK_RING_FRAME_OFFSET + 30),
+            GENET_RX_CONTROL_BURST_LIMIT
+        );
+    }
+
+    #[test]
     fn genet_rx_drain_budget_caps_one_service_turn() {
         assert_eq!(GENET_RX_DRAIN_BUDGET, 16);
         assert_eq!(GENET_RX_QUEUE_CAP, GENET_RX_DRAIN_BUDGET);
         assert!(GENET_RX_QUEUE_CAP <= GENET_ACTIVE_RING_DESCS);
         assert!(GENET_MAX_FRAME_LEN <= MAX_DRIVER_TASK_FRAME_BYTES);
+    }
+
+    #[test]
+    fn genet_dpc_accepts_only_exact_generated_irq_badge() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let mut state = GenetRuntimeState::new();
+        arm_genet_test_irq_state(&mut state);
+
+        assert!(!genet_runtime_service_dpc_state(&mut state, 0));
+        assert!(!genet_runtime_service_dpc_state(
+            &mut state,
+            DRIVER_RUNTIME_GENET_IRQ_BADGE << 1
+        ));
+        assert!(!state.irq_ack_pending);
+        assert_eq!(state.irq_wakes, 0);
+        assert_eq!(TEST_RUNTIME_IRQ_ACK_CALLS.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn genet_dpc_quiescent_irq_uses_store_completion_readback_then_acks() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let mut state = GenetRuntimeState::new();
+        arm_genet_test_irq_state(&mut state);
+
+        assert!(service_genet_test_irq(&mut state, GENET_IRQ_TXDMA_MBDONE));
+        assert_eq!(state.irq_wakes, 1);
+        assert_eq!(state.dpc_turns, 1);
+        assert_eq!(state.dpc_final_rechecks, 1);
+        assert_eq!(state.irq_acks, 1);
+        assert!(!state.irq_ack_pending);
+        assert_eq!(state.irq_unmask_failures, 0);
+        assert_eq!(TEST_RUNTIME_IRQ_ACK_CALLS.load(Ordering::Acquire), 1);
+        assert_eq!(TEST_DEVICE_COMPLETION_BARRIERS.load(Ordering::Acquire), 1);
+        assert_eq!(
+            genet_read32(GENET_INTRL2_0_CPU_MASK_STATUS) & GENET_NAPI_IRQ_MASK,
+            0
+        );
+    }
+
+    #[test]
+    fn genet_dpc_final_recheck_retains_injected_source_without_lost_wake() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let mut state = GenetRuntimeState::new();
+        arm_genet_test_irq_state(&mut state);
+        TEST_GENET_IRQ_INJECT_ON_UNMASK.store(GENET_IRQ_TXDMA_MBDONE, Ordering::Release);
+
+        assert!(service_genet_test_irq(&mut state, GENET_IRQ_RXDMA_MBDONE));
+        assert!(state.irq_ack_pending);
+        assert!(genet_runtime_dpc_local_continuation_ready(&state));
+        assert_eq!(state.dpc_final_rechecks, 1);
+        assert_eq!(state.irq_acks, 0);
+        assert_eq!(TEST_RUNTIME_IRQ_ACK_CALLS.load(Ordering::Acquire), 0);
+
+        assert!(genet_runtime_service_dpc_state(&mut state, 0));
+        assert!(!state.irq_ack_pending);
+        assert_eq!(state.dpc_turns, 2);
+        assert_eq!(state.dpc_final_rechecks, 2);
+        assert_eq!(state.irq_acks, 1);
+        assert_eq!(TEST_RUNTIME_IRQ_ACK_CALLS.load(Ordering::Acquire), 1);
+        assert_eq!(TEST_DEVICE_COMPLETION_BARRIERS.load(Ordering::Acquire), 2);
+    }
+
+    #[test]
+    fn genet_dpc_unmask_readback_mismatch_fails_closed_without_ack() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let mut state = GenetRuntimeState::new();
+        arm_genet_test_irq_state(&mut state);
+        TEST_GENET_IRQ_UNMASK_STUCK.store(true, Ordering::Release);
+
+        assert!(!service_genet_test_irq(&mut state, GENET_IRQ_TXDMA_MBDONE));
+        assert!(!state.initialized);
+        assert!(state.irq_ack_pending);
+        assert!(!genet_runtime_dpc_local_continuation_ready(&state));
+        assert_eq!(state.irq_unmask_failures, 1);
+        assert_eq!(state.irq_acks, 0);
+        assert_eq!(TEST_RUNTIME_IRQ_ACK_CALLS.load(Ordering::Acquire), 0);
+        assert_ne!(
+            genet_read32(GENET_INTRL2_0_CPU_MASK_STATUS) & GENET_NAPI_IRQ_MASK,
+            0
+        );
+    }
+
+    #[test]
+    fn genet_dpc_handler_ack_failure_masks_and_disables_without_retry() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let mut state = GenetRuntimeState::new();
+        arm_genet_test_irq_state(&mut state);
+        TEST_RUNTIME_IRQ_ACK_FAILURES_REMAINING.store(1, Ordering::Release);
+
+        assert!(!service_genet_test_irq(&mut state, GENET_IRQ_TXDMA_MBDONE));
+        assert!(!state.initialized);
+        assert!(state.irq_ack_pending);
+        assert!(!genet_runtime_dpc_local_continuation_ready(&state));
+        assert_eq!(state.irq_ack_failures, 1);
+        assert_eq!(TEST_RUNTIME_IRQ_ACK_CALLS.load(Ordering::Acquire), 1);
+        assert_ne!(
+            genet_read32(GENET_INTRL2_0_CPU_MASK_STATUS) & GENET_NAPI_IRQ_MASK,
+            0
+        );
+        assert!(!genet_runtime_service_dpc_state(&mut state, 0));
+        assert_eq!(TEST_RUNTIME_IRQ_ACK_CALLS.load(Ordering::Acquire), 1);
     }
 
     #[test]
@@ -71360,9 +74530,11 @@ mod tests {
         reset_runtime_for_test();
         let payload = *b"queued-frame";
         let mut state = GenetRuntimeState::new();
-        state.initialized = true;
+        arm_genet_test_irq_state(&mut state);
+        state.irq_ack_pending = true;
         state.tx_prod_index = 1;
         state.tx_cons_index = 0;
+        genet_irq_mask_sources();
         genet_write32(GENET_TDMA_CONS_INDEX, 1);
         assert!(genet_rx_queue_push_for_test(&mut state, &payload));
 
@@ -71448,7 +74620,7 @@ mod tests {
             write_ring_byte(DRIVER_TASK_RING_FRAME_OFFSET + index, byte);
         }
         let mut state = GenetRuntimeState::new();
-        state.initialized = true;
+        arm_genet_test_irq_state(&mut state);
 
         assert_eq!(
             genet_runtime_submit_tx(
@@ -71557,6 +74729,10 @@ mod tests {
         );
 
         genet_write32(GENET_TDMA_CONS_INDEX, 1);
+        genet_write32(GENET_INTRL2_0_CPU_STAT, GENET_IRQ_TXDMA_MBDONE);
+        assert!(GENET_RUNTIME_STATE.with_mut(|state| {
+            genet_runtime_service_dpc_state(state, DRIVER_RUNTIME_GENET_IRQ_BADGE)
+        }));
         let poll = DriverTaskCommandRecord {
             sequence: 32,
             frame: DriverFrameDescriptor::empty(),
@@ -71653,7 +74829,7 @@ mod tests {
             write_dma_byte(dma_vaddr + GENET_RX_BUF_OFFSET + index, byte);
         }
         let mut state = GenetRuntimeState::new();
-        state.initialized = true;
+        arm_genet_test_irq_state(&mut state);
         genet_write_rx_desc(
             0,
             runtime_resource_bus_addr_at(&descriptor, dma_range, 0)
@@ -71664,6 +74840,7 @@ mod tests {
                 | GENET_DMA_EOP,
         );
         genet_write32(GENET_RDMA_PROD_INDEX, 1);
+        assert!(service_genet_test_irq(&mut state, GENET_IRQ_RXDMA_MBDONE));
 
         assert_eq!(
             genet_runtime_poll_rx(
@@ -71741,8 +74918,9 @@ mod tests {
             );
         }
         let mut state = GenetRuntimeState::new();
-        state.initialized = true;
+        arm_genet_test_irq_state(&mut state);
         genet_write32(GENET_RDMA_PROD_INDEX, 2);
+        assert!(service_genet_test_irq(&mut state, GENET_IRQ_RXDMA_MBDONE));
 
         let budget = DriverTaskBudgetGrant {
             max_ops: GENET_RX_DRAIN_BUDGET as u16,
@@ -71752,38 +74930,16 @@ mod tests {
         assert_eq!(
             genet_runtime_poll_rx(&mut state, budget),
             GenetRxPoll::Frame {
-                len: payload_a.len(),
-                flags: 0x0800,
-            }
-        );
-        assert_eq!(genet_read32(GENET_RDMA_CONS_INDEX), 2);
-        assert_eq!(usize::from(state.rx_queue_count), 1);
-        assert_eq!(usize::from(state.rx_queue_high_water), 1);
-        assert_eq!(state.rx_drain_budget_hits, 0);
-        assert_eq!(state.rx_max_drained_per_turn, 2);
-        assert_eq!(state.rx_packets, 1);
-        assert_eq!(
-            read_frame_prefix::<18>(DriverFrameDescriptor {
-                offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
-                len: payload_a.len() as u16,
-                flags: 0x0800,
-            }),
-            payload_a
-        );
-
-        assert_eq!(
-            genet_runtime_poll_rx(&mut state, budget),
-            GenetRxPoll::Frame {
                 len: payload_b.len(),
                 flags: 0x0806,
             }
         );
         assert_eq!(genet_read32(GENET_RDMA_CONS_INDEX), 2);
-        assert_eq!(usize::from(state.rx_queue_count), 0);
-        assert_eq!(usize::from(state.rx_queue_high_water), 1);
+        assert_eq!(usize::from(state.rx_queue_count), 1);
+        assert_eq!(usize::from(state.rx_queue_high_water), 2);
         assert_eq!(state.rx_drain_budget_hits, 0);
         assert_eq!(state.rx_max_drained_per_turn, 2);
-        assert_eq!(state.rx_packets, 2);
+        assert_eq!(state.rx_packets, 1);
         assert_eq!(
             read_frame_prefix::<18>(DriverFrameDescriptor {
                 offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
@@ -71792,10 +74948,32 @@ mod tests {
             }),
             payload_b
         );
+
+        assert_eq!(
+            genet_runtime_poll_rx(&mut state, budget),
+            GenetRxPoll::Frame {
+                len: payload_a.len(),
+                flags: 0x0800,
+            }
+        );
+        assert_eq!(genet_read32(GENET_RDMA_CONS_INDEX), 2);
+        assert_eq!(usize::from(state.rx_queue_count), 0);
+        assert_eq!(usize::from(state.rx_queue_high_water), 2);
+        assert_eq!(state.rx_drain_budget_hits, 0);
+        assert_eq!(state.rx_max_drained_per_turn, 2);
+        assert_eq!(state.rx_packets, 2);
+        assert_eq!(
+            read_frame_prefix::<18>(DriverFrameDescriptor {
+                offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
+                len: payload_a.len() as u16,
+                flags: 0x0800,
+            }),
+            payload_a
+        );
     }
 
     #[test]
-    fn genet_rx_drain_budget_reports_deferred_hardware_backlog() {
+    fn genet_rx_drain_budget_continues_after_consumer_frees_capacity() {
         let _guard = test_guard();
         reset_runtime_for_test();
         let descriptor = descriptor_for(HOT_PATH_GENET_NIC, ROLE_NET);
@@ -71843,8 +75021,13 @@ mod tests {
             );
         }
         let mut state = GenetRuntimeState::new();
-        state.initialized = true;
+        arm_genet_test_irq_state(&mut state);
         genet_write32(GENET_RDMA_PROD_INDEX, frame_count as u32);
+        assert!(service_genet_test_irq(&mut state, GENET_IRQ_RXDMA_MBDONE));
+        assert!(state.irq_ack_pending);
+        assert_eq!(usize::from(state.rx_queue_count), GENET_RX_QUEUE_CAP);
+        assert!(!genet_runtime_dpc_local_continuation_ready(&state));
+        assert_eq!(TEST_RUNTIME_IRQ_ACK_CALLS.load(Ordering::Acquire), 0);
 
         let budget = DriverTaskBudgetGrant {
             max_ops: GENET_RX_DRAIN_BUDGET as u16,
@@ -71869,25 +75052,24 @@ mod tests {
                 0x00, 0x01, 0x02, 0x03,
             ]
         );
-        assert_eq!(
-            genet_read32(GENET_RDMA_CONS_INDEX),
-            GENET_RX_DRAIN_BUDGET as u32
-        );
-        assert_eq!(usize::from(state.rx_queue_count), GENET_RX_DRAIN_BUDGET - 1);
-        assert_eq!(
-            usize::from(state.rx_queue_high_water),
-            GENET_RX_DRAIN_BUDGET - 1
-        );
+        assert_eq!(genet_read32(GENET_RDMA_CONS_INDEX), frame_count as u32);
+        assert_eq!(usize::from(state.rx_queue_count), GENET_RX_QUEUE_CAP);
+        assert_eq!(usize::from(state.rx_queue_high_water), GENET_RX_QUEUE_CAP);
         assert_eq!(state.rx_drain_budget_hits, 1);
         assert_eq!(state.rx_byte_budget_hits, 0);
         assert_eq!(
             usize::from(state.rx_max_drained_per_turn),
             GENET_RX_DRAIN_BUDGET
         );
+        assert_eq!(state.dpc_budget_hits, 1);
+        assert_eq!(state.dpc_turns, 2);
+        assert!(!state.irq_ack_pending);
+        assert_eq!(state.irq_acks, 1);
+        assert_eq!(TEST_RUNTIME_IRQ_ACK_CALLS.load(Ordering::Acquire), 1);
     }
 
     #[test]
-    fn genet_rx_burst_drain_respects_cumulative_byte_budget() {
+    fn genet_rx_irq_batch_is_independent_of_one_frame_root_consume_grant() {
         let _guard = test_guard();
         reset_runtime_for_test();
         let descriptor = descriptor_for(HOT_PATH_GENET_NIC, ROLE_NET);
@@ -71936,8 +75118,9 @@ mod tests {
             );
         }
         let mut state = GenetRuntimeState::new();
-        state.initialized = true;
+        arm_genet_test_irq_state(&mut state);
         genet_write32(GENET_RDMA_PROD_INDEX, 2);
+        assert!(service_genet_test_irq(&mut state, GENET_IRQ_RXDMA_MBDONE));
 
         let one_frame_budget = DriverTaskBudgetGrant {
             max_ops: GENET_RX_DRAIN_BUDGET as u16,
@@ -71951,11 +75134,11 @@ mod tests {
                 flags: 0x0800,
             }
         );
-        assert_eq!(genet_read32(GENET_RDMA_CONS_INDEX), 1);
-        assert_eq!(usize::from(state.rx_queue_count), 0);
-        assert_eq!(state.rx_byte_budget_hits, 1);
+        assert_eq!(genet_read32(GENET_RDMA_CONS_INDEX), 2);
+        assert_eq!(usize::from(state.rx_queue_count), 1);
+        assert_eq!(state.rx_byte_budget_hits, 0);
         assert_eq!(state.rx_drain_budget_hits, 0);
-        assert_eq!(state.rx_max_drained_per_turn, 1);
+        assert_eq!(state.rx_max_drained_per_turn, 2);
         assert_eq!(state.rx_packets, 1);
 
         let full_budget = DriverTaskBudgetGrant {
@@ -71972,9 +75155,9 @@ mod tests {
         );
         assert_eq!(genet_read32(GENET_RDMA_CONS_INDEX), 2);
         assert_eq!(usize::from(state.rx_queue_count), 0);
-        assert_eq!(state.rx_byte_budget_hits, 1);
+        assert_eq!(state.rx_byte_budget_hits, 0);
         assert_eq!(state.rx_drain_budget_hits, 0);
-        assert_eq!(state.rx_max_drained_per_turn, 1);
+        assert_eq!(state.rx_max_drained_per_turn, 2);
         assert_eq!(state.rx_packets, 2);
     }
 
@@ -72002,7 +75185,7 @@ mod tests {
             write_dma_byte(dma_vaddr + GENET_RX_BUF_OFFSET + index, byte);
         }
         let mut state = GenetRuntimeState::new();
-        state.initialized = true;
+        arm_genet_test_irq_state(&mut state);
         genet_write_rx_desc(
             0,
             runtime_resource_bus_addr_at(&descriptor, dma_range, 0)
@@ -72010,6 +75193,7 @@ mod tests {
             0,
         );
         genet_write32(GENET_RDMA_PROD_INDEX, 1);
+        assert!(service_genet_test_irq(&mut state, GENET_IRQ_RXDMA_MBDONE));
 
         assert_eq!(
             genet_runtime_poll_rx(
@@ -72064,7 +75248,7 @@ mod tests {
             write_dma_byte(dma_vaddr + GENET_RX_BUF_OFFSET + index, byte);
         }
         let mut state = GenetRuntimeState::new();
-        state.initialized = true;
+        arm_genet_test_irq_state(&mut state);
         genet_write_rx_desc(
             0,
             runtime_resource_bus_addr_at(&descriptor, dma_range, 0)
@@ -72072,6 +75256,7 @@ mod tests {
             0,
         );
         genet_write32(GENET_RDMA_PROD_INDEX, 1);
+        assert!(service_genet_test_irq(&mut state, GENET_IRQ_RXDMA_MBDONE));
 
         assert_eq!(
             genet_runtime_poll_rx(
@@ -72110,7 +75295,7 @@ mod tests {
         .expect("Genet test descriptor must include a DMA arena");
         RUNTIME_DESCRIPTOR.store(descriptor);
         let mut state = GenetRuntimeState::new();
-        state.initialized = true;
+        arm_genet_test_irq_state(&mut state);
         genet_write_rx_desc(
             0,
             runtime_resource_bus_addr_at(&descriptor, dma_range, 0)
@@ -72118,6 +75303,7 @@ mod tests {
             genet_rx_owned_len_status(),
         );
         genet_write32(GENET_RDMA_PROD_INDEX, 1);
+        assert!(service_genet_test_irq(&mut state, GENET_IRQ_RXDMA_MBDONE));
 
         assert_eq!(
             genet_runtime_poll_rx(
@@ -72542,7 +75728,7 @@ mod tests {
         let (slot, core, budget, standard_badge, timeout_badge) = match hot_path {
             HOT_PATH_SERIAL_CONSOLE => (10, 1, 500, 0x26e2_0000, 0x26ed_000b),
             HOT_PATH_USB_KEYBOARD => (11, 1, 1_000, 0x26e2_0001, 0x26ed_000c),
-            HOT_PATH_HDMI_TEXT => (12, 2, 400, 0x26e2_0002, 0x26ed_000d),
+            HOT_PATH_HDMI_TEXT => (12, 2, 2_000, 0x26e2_0002, 0x26ed_000d),
             HOT_PATH_GENET_NIC => (13, 3, 1_000, 0x26e2_0003, 0x26ed_000e),
             HOT_PATH_CYW43_WIFI => (14, 3, 1_500, 0x26e2_0004, 0x26ed_000f),
             HOT_PATH_SDIO_HOST => (15, 3, 1_500, 0x26e2_0005, 0x26ed_0010),
@@ -72573,6 +75759,7 @@ mod tests {
         descriptor.flags = pi4_driver_abi::DRIVER_RUNTIME_INIT_REQUIRED_FLAGS
             | pi4_driver_abi::DRIVER_RUNTIME_INIT_FLAG_POLL_ONLY;
         let (mmio_pages, dma_pages, shared_pages) = match hot_path {
+            HOT_PATH_SERIAL_CONSOLE => (1, 0, DRIVER_RUNTIME_SERIAL_SPSC_SHARED_PAGES as u16),
             HOT_PATH_USB_KEYBOARD => (
                 USB_REQUIRED_MMIO_PAGES,
                 USB_REQUIRED_DMA_PAGES,
@@ -72763,6 +75950,20 @@ mod tests {
                     reserved: 0,
                 };
             }
+            HOT_PATH_GENET_NIC => {
+                descriptor.flags &= !DRIVER_RUNTIME_INIT_FLAG_POLL_ONLY;
+                descriptor.flags |= DRIVER_RUNTIME_INIT_FLAG_IRQS_BOUND;
+                descriptor.irq_count = 1;
+                descriptor.irqs[0] = DriverRuntimeIrqDescriptor {
+                    irq: DRIVER_RUNTIME_GENET_IRQ,
+                    badge: DRIVER_RUNTIME_GENET_IRQ_BADGE,
+                    handler_slot: DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT,
+                    notification_slot: DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT,
+                    trigger: DRIVER_RUNTIME_IRQ_TRIGGER_LEVEL,
+                    flags: 0,
+                    reserved: 0,
+                };
+            }
             HOT_PATH_USB_KEYBOARD => {
                 descriptor.flags |= DRIVER_RUNTIME_INIT_FLAG_BUS_LINKS;
                 descriptor.bus_link_count = 1;
@@ -72835,6 +76036,9 @@ mod tests {
     }
 
     fn init_runtime_for_test(hot_path: u32, role: u32) {
+        if hot_path == HOT_PATH_SERIAL_CONSOLE {
+            initialize_serial_spsc_for_test(1);
+        }
         let command = DriverTaskCommandRecord {
             sequence: 1,
             opcode: OPCODE_SERVICE,
@@ -78586,7 +81790,7 @@ mod tests {
             arg1: ROLE_DISPLAY,
             aux0: 0,
             aux1: 0,
-            budget: budget(),
+            budget: hdmi_budget(),
             frame: DriverFrameDescriptor {
                 offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
                 len: 16,
@@ -95351,6 +98555,16 @@ mod tests {
         assert_eq!(io.command_issue_count(), 1);
         assert_eq!(io.dma_started, 1);
         assert_eq!(
+            io.payload_u64_reads,
+            FIRMWARE_BYTES / SDIO_DMA_COPY_WORD_BYTES,
+            "the aligned shared-payload boundary must use bounded u64 loads"
+        );
+        assert_eq!(
+            io.dma_u64_writes,
+            FIRMWARE_BYTES / SDIO_DMA_COPY_WORD_BYTES,
+            "the private uncached bounce boundary must use bounded u64 stores"
+        );
+        assert_eq!(
             io.sdhci_buffer_accesses, 0,
             "the production CMD53 data lane must never access SDHCI BUFFER"
         );
@@ -95409,6 +98623,343 @@ mod tests {
                 "control block {index} successor"
             );
         }
+    }
+
+    #[test]
+    fn sdio_mmio_foreground_bulk_words_preserve_sealed_parent_and_overlay_bytes() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        const PARENT_BYTES: usize = 24;
+        let parent_offset = DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE as usize + 3;
+        let word_offset = DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE as usize + 8;
+        let parent_word_index = word_offset - parent_offset;
+        let sealed_parent: [u8; PARENT_BYTES] =
+            core::array::from_fn(|index| 0x21u8.wrapping_add((index as u8).wrapping_mul(29)));
+        for index in 0..PARENT_BYTES {
+            write_runtime_payload_byte_physical(parent_offset + index, 0xd0 ^ index as u8);
+        }
+        CYW43_FOREGROUND_TRANSACTION.with_mut(|transaction| {
+            transaction.clear();
+            transaction.active = true;
+            transaction.executing = true;
+            transaction.parent_input_sealed = true;
+            transaction.parent_payload_offset = parent_offset as u16;
+            transaction.parent_payload_len = PARENT_BYTES as u16;
+            transaction.parent_payload[..PARENT_BYTES].copy_from_slice(&sealed_parent);
+            transaction.parent_payload_digest = transaction.sealed_parent_payload_digest();
+            transaction.record_parent_overlay(word_offset + 1, 0x6c);
+            transaction.record_parent_overlay(word_offset + 6, 0xb7);
+            assert_eq!(transaction.read_parent_payload_u64(parent_offset), None);
+            assert_eq!(
+                transaction.read_parent_payload_u64(
+                    DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE as usize + 24,
+                ),
+                None,
+            );
+            assert!(!transaction.record_parent_overlay_u64(parent_offset, u64::MAX));
+            assert!(!transaction.record_parent_overlay_u64(
+                DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE as usize + 24,
+                u64::MAX,
+            ));
+        });
+
+        let mut expected_read: [u8; core::mem::size_of::<u64>()] =
+            core::array::from_fn(|index| sealed_parent[parent_word_index + index]);
+        expected_read[1] = 0x6c;
+        expected_read[6] = 0xb7;
+        let mut io = SdioMmioTransferIo;
+        assert_eq!(
+            io.read_payload_u64(word_offset),
+            u64::from_le_bytes(expected_read),
+        );
+        assert_eq!(
+            TEST_CYW43_FOREGROUND_PARENT_U64_READS.load(Ordering::Acquire),
+            1,
+        );
+
+        let before = read_runtime_payload_byte_physical(word_offset - 1);
+        let after = read_runtime_payload_byte_physical(word_offset + core::mem::size_of::<u64>());
+        let replacement = 0xf1d2_b394_7556_3718u64;
+        io.write_payload_u64(word_offset, replacement);
+        assert_eq!(
+            TEST_CYW43_FOREGROUND_PARENT_U64_WRITES.load(Ordering::Acquire),
+            1,
+        );
+        assert_eq!(
+            TEST_CYW43_FOREGROUND_PARENT_U64_READS.load(Ordering::Acquire),
+            1,
+        );
+        assert_eq!(read_runtime_payload_u64_physical(word_offset), replacement,);
+        assert_eq!(read_runtime_payload_byte_physical(word_offset - 1), before);
+        assert_eq!(
+            read_runtime_payload_byte_physical(word_offset + core::mem::size_of::<u64>()),
+            after,
+        );
+
+        CYW43_FOREGROUND_TRANSACTION.with_ref(|transaction| {
+            assert_eq!(transaction.parent_payload[..PARENT_BYTES], sealed_parent);
+            assert!(transaction.parent_payload_seal_valid());
+            assert_eq!(
+                transaction.parent_payload_digest,
+                transaction.sealed_parent_payload_digest(),
+            );
+            for (index, expected) in replacement.to_le_bytes().iter().copied().enumerate() {
+                assert_eq!(
+                    transaction.read_parent_payload(word_offset + index),
+                    Some(expected)
+                );
+            }
+            for (index, expected) in sealed_parent.iter().copied().enumerate() {
+                if !(parent_word_index..parent_word_index + core::mem::size_of::<u64>())
+                    .contains(&index)
+                {
+                    assert_eq!(
+                        transaction.read_parent_payload(parent_offset + index),
+                        Some(expected)
+                    );
+                }
+            }
+        });
+    }
+
+    #[test]
+    fn sdio_external_dma_bulk_copy_is_exact_for_every_alignment_in_both_directions() {
+        let _guard = test_guard();
+        reset_test_ring();
+        const COPY_BYTES: usize = 79;
+        const PAYLOAD_BASE: usize = DRIVER_TASK_RING_PAGE_BYTES + 64;
+        let payload_end = DRIVER_TASK_RING_PAGE_BYTES + TEST_SDIO_MODEL_BYTES;
+        let digest = |bytes: &[u8]| {
+            bytes.iter().copied().fold(0x811c_9dc5u32, |hash, byte| {
+                (hash ^ u32::from(byte)).wrapping_mul(0x0100_0193)
+            })
+        };
+
+        for payload_alignment in 0..SDIO_DMA_COPY_WORD_BYTES {
+            for bounce_alignment in 0..SDIO_DMA_COPY_WORD_BYTES {
+                let mut io = TestSdioHostIo::new();
+                let authority = io.external_dma_authority_value();
+                let payload_offset = PAYLOAD_BASE + payload_alignment;
+                let bounce_page = authority.bounce_vaddrs[0];
+                let bounce_addr = bounce_page + 64 + bounce_alignment;
+                let bounce_end = bounce_page + DRIVER_TASK_RING_PAGE_BYTES;
+                let expected_forward: Vec<u8> = (0..COPY_BYTES)
+                    .map(|index| {
+                        0x31u8
+                            .wrapping_add((index as u8).wrapping_mul(37))
+                            .wrapping_add((payload_alignment * 3 + bounce_alignment) as u8)
+                    })
+                    .collect();
+                io.payload[payload_offset..payload_offset + COPY_BYTES]
+                    .copy_from_slice(&expected_forward);
+                write_dma_byte(bounce_addr - 1, 0x5a);
+                write_dma_byte(bounce_addr + COPY_BYTES, 0xa5);
+
+                assert!(sdio_external_dma_copy_payload_to_bounce_with(
+                    &mut io,
+                    payload_offset,
+                    payload_end,
+                    bounce_addr,
+                    bounce_end,
+                    COPY_BYTES,
+                ));
+                let actual_forward: Vec<u8> = (0..COPY_BYTES)
+                    .map(|index| read_dma_byte(bounce_addr + index))
+                    .collect();
+                assert_eq!(actual_forward, expected_forward);
+                assert_eq!(digest(&actual_forward), digest(&expected_forward));
+                assert_eq!(read_dma_byte(bounce_addr - 1), 0x5a);
+                assert_eq!(read_dma_byte(bounce_addr + COPY_BYTES), 0xa5);
+
+                let forward_shape = sdio_external_dma_copy_shape(
+                    runtime_payload_vaddr_physical(payload_offset),
+                    bounce_addr,
+                    COPY_BYTES,
+                );
+                assert_eq!(io.payload_u64_reads, forward_shape.word_count);
+                assert_eq!(io.dma_u64_writes, forward_shape.word_count);
+
+                let expected_reverse: Vec<u8> = (0..COPY_BYTES)
+                    .map(|index| {
+                        0xe7u8
+                            .wrapping_sub((index as u8).wrapping_mul(19))
+                            .wrapping_add((payload_alignment + bounce_alignment * 5) as u8)
+                    })
+                    .collect();
+                for (index, byte) in expected_reverse.iter().copied().enumerate() {
+                    write_dma_byte(bounce_addr + index, byte);
+                }
+                io.payload[payload_offset - 1] = 0xc3;
+                io.payload[payload_offset + COPY_BYTES] = 0x3c;
+
+                assert!(sdio_external_dma_copy_bounce_to_payload_with(
+                    &mut io,
+                    bounce_addr,
+                    bounce_end,
+                    payload_offset,
+                    payload_end,
+                    COPY_BYTES,
+                ));
+                let actual_reverse = &io.payload[payload_offset..payload_offset + COPY_BYTES];
+                assert_eq!(actual_reverse, expected_reverse.as_slice());
+                assert_eq!(digest(actual_reverse), digest(&expected_reverse));
+                assert_eq!(io.payload[payload_offset - 1], 0xc3);
+                assert_eq!(io.payload[payload_offset + COPY_BYTES], 0x3c);
+
+                let reverse_shape = sdio_external_dma_copy_shape(
+                    bounce_addr,
+                    runtime_payload_vaddr_physical(payload_offset),
+                    COPY_BYTES,
+                );
+                assert_eq!(io.dma_u64_reads, reverse_shape.word_count);
+                assert_eq!(io.payload_u64_writes, reverse_shape.word_count);
+            }
+        }
+    }
+
+    #[test]
+    fn sdio_external_dma_bulk_copy_enforces_zero_page_and_overflow_bounds() {
+        let _guard = test_guard();
+        reset_test_ring();
+        let payload_offset = DRIVER_TASK_RING_PAGE_BYTES;
+        let payload_end = DRIVER_TASK_RING_PAGE_BYTES + TEST_SDIO_MODEL_BYTES;
+        let mut io = TestSdioHostIo::new();
+        let authority = io.external_dma_authority_value();
+        let bounce_addr = authority.bounce_vaddrs[0];
+        let bounce_end = bounce_addr + DRIVER_TASK_RING_PAGE_BYTES;
+
+        assert!(sdio_external_dma_copy_payload_to_bounce_with(
+            &mut io,
+            payload_end,
+            payload_end,
+            bounce_end,
+            bounce_end,
+            0,
+        ));
+        assert!(sdio_external_dma_copy_bounce_to_payload_with(
+            &mut io,
+            bounce_end,
+            bounce_end,
+            payload_end,
+            payload_end,
+            0,
+        ));
+
+        for len in [
+            1usize,
+            7,
+            8,
+            9,
+            DRIVER_TASK_RING_PAGE_BYTES - 1,
+            DRIVER_TASK_RING_PAGE_BYTES,
+        ] {
+            let expected: Vec<u8> = (0..len)
+                .map(|index| (index as u8).wrapping_mul(23) ^ ((index >> 4) as u8) ^ 0x96)
+                .collect();
+            io.payload[payload_offset..payload_offset + len].copy_from_slice(&expected);
+            assert!(sdio_external_dma_copy_payload_to_bounce_with(
+                &mut io,
+                payload_offset,
+                payload_end,
+                bounce_addr,
+                bounce_end,
+                len,
+            ));
+            for (index, expected) in expected.iter().copied().enumerate() {
+                assert_eq!(
+                    read_dma_byte(bounce_addr + index),
+                    expected,
+                    "forward byte {index}"
+                );
+            }
+            for (index, byte) in expected.iter().copied().rev().enumerate() {
+                write_dma_byte(bounce_addr + index, byte ^ 0x6d);
+            }
+            assert!(sdio_external_dma_copy_bounce_to_payload_with(
+                &mut io,
+                bounce_addr,
+                bounce_end,
+                payload_offset,
+                payload_end,
+                len,
+            ));
+            for index in 0..len {
+                assert_eq!(
+                    io.payload[payload_offset + index],
+                    expected[len - 1 - index] ^ 0x6d,
+                    "reverse byte {index}"
+                );
+            }
+        }
+
+        let before_payload = io.payload[payload_offset];
+        let before_bounce = read_dma_byte(bounce_addr);
+        assert!(!sdio_external_dma_copy_payload_to_bounce_with(
+            &mut io,
+            payload_offset,
+            payload_end,
+            bounce_addr,
+            bounce_end,
+            DRIVER_TASK_RING_PAGE_BYTES + 1,
+        ));
+        assert!(!sdio_external_dma_copy_bounce_to_payload_with(
+            &mut io,
+            bounce_addr,
+            bounce_end,
+            payload_offset,
+            payload_end,
+            DRIVER_TASK_RING_PAGE_BYTES + 1,
+        ));
+        assert!(!sdio_external_dma_copy_payload_to_bounce_with(
+            &mut io,
+            usize::MAX - 3,
+            usize::MAX,
+            bounce_addr,
+            bounce_end,
+            8,
+        ));
+        assert!(!sdio_external_dma_copy_bounce_to_payload_with(
+            &mut io,
+            usize::MAX - 3,
+            usize::MAX,
+            payload_offset,
+            payload_end,
+            8,
+        ));
+        assert!(!sdio_external_dma_copy_payload_to_bounce_with(
+            &mut io,
+            usize::MAX - 7,
+            usize::MAX,
+            bounce_addr,
+            bounce_end,
+            7,
+        ));
+        assert!(!sdio_external_dma_copy_bounce_to_payload_with(
+            &mut io,
+            bounce_addr,
+            bounce_end,
+            usize::MAX - 7,
+            usize::MAX,
+            7,
+        ));
+        assert!(!sdio_external_dma_copy_payload_to_bounce_with(
+            &mut io,
+            DRIVER_TASK_RING_PAGE_BYTES - 4,
+            payload_end,
+            bounce_addr,
+            bounce_end,
+            8,
+        ));
+        assert!(!sdio_external_dma_copy_bounce_to_payload_with(
+            &mut io,
+            bounce_addr,
+            bounce_end,
+            DRIVER_TASK_RING_PAGE_BYTES - 4,
+            payload_end,
+            8,
+        ));
+        assert_eq!(io.payload[payload_offset], before_payload);
+        assert_eq!(read_dma_byte(bounce_addr), before_bounce);
     }
 
     #[test]
@@ -102473,6 +106024,8 @@ mod tests {
         );
         assert_eq!(io.dma_started, 1);
         assert_eq!(io.payload_writes_while_dma_active, 0);
+        assert_eq!(io.dma_u64_reads, LEN / SDIO_DMA_COPY_WORD_BYTES);
+        assert_eq!(io.payload_u64_writes, LEN / SDIO_DMA_COPY_WORD_BYTES);
         assert_eq!(io.sdhci_buffer_accesses, 0);
         for index in 0..LEN {
             assert_eq!(io.payload[index], 0xa5 ^ (index as u8).wrapping_mul(7));
@@ -114970,24 +118523,110 @@ mod tests {
     }
 
     #[test]
-    fn hdmi_first_frame_clear_expands_only_for_pairable_xrgb8888_rows() {
+    fn hdmi_compositor_admission_rejects_partial_unaligned_and_unmapped_geometry() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+
+        fn descriptor_with_framebuffer(
+            width: u32,
+            height: u32,
+            pitch: u32,
+            vaddr: u64,
+        ) -> DriverRuntimeInitDescriptor {
+            let mut descriptor = descriptor_for(HOT_PATH_HDMI_TEXT, ROLE_DISPLAY);
+            descriptor.flags |= DRIVER_RUNTIME_INIT_FLAG_FRAMEBUFFER;
+            descriptor.framebuffer = DriverRuntimeFramebufferDescriptor {
+                vaddr,
+                paddr: 0x3000_0000,
+                width,
+                height,
+                pitch,
+                format: DRIVER_RUNTIME_FRAMEBUFFER_FORMAT_XRGB8888,
+            };
+            let bytes = u64::from(pitch).saturating_mul(u64::from(height));
+            let page_count = bytes.div_ceil(DRIVER_RUNTIME_RESOURCE_PAGE_BYTES) as u16;
+            let range_index = descriptor.resource_range_count as usize;
+            descriptor.resource_ranges[range_index] = DriverRuntimeResourceRangeDescriptor::new(
+                DRIVER_RUNTIME_RESOURCE_KIND_FRAMEBUFFER,
+                DRIVER_RUNTIME_RESOURCE_FLAG_VADDR_CONTIGUOUS
+                    | DRIVER_RUNTIME_RESOURCE_FLAG_PADDR_CONTIGUOUS
+                    | DRIVER_RUNTIME_RESOURCE_FLAG_DEVICE_VISIBLE
+                    | DRIVER_RUNTIME_RESOURCE_FLAG_ROOT_SHARED,
+                DRIVER_RUNTIME_RESOURCE_TAG_HDMI_FRAMEBUFFER,
+                vaddr,
+                0x3000_0000,
+                bytes,
+                page_count,
+                0,
+            );
+            descriptor.resource_range_count += 1;
+            descriptor
+        }
+
+        let admitted =
+            descriptor_with_framebuffer(1_920, 1_080, 1_920 * 4, DRIVER_RUNTIME_FRAMEBUFFER_VADDR);
+        assert!(hdmi_cell_plane_geometry_admitted(&admitted));
+
+        let partial_width = descriptor_with_framebuffer(
+            (CHAR_WIDTH - 1) as u32,
+            CHAR_HEIGHT as u32,
+            (CHAR_WIDTH as u32 - 1) * 4,
+            DRIVER_RUNTIME_FRAMEBUFFER_VADDR,
+        );
+        assert!(!hdmi_cell_plane_geometry_admitted(&partial_width));
+
+        let partial_height = descriptor_with_framebuffer(
+            CHAR_WIDTH as u32,
+            (CHAR_HEIGHT - 1) as u32,
+            CHAR_WIDTH as u32 * 4,
+            DRIVER_RUNTIME_FRAMEBUFFER_VADDR,
+        );
+        assert!(!hdmi_cell_plane_geometry_admitted(&partial_height));
+
+        let unaligned_vaddr =
+            descriptor_with_framebuffer(640, 480, 640 * 4, DRIVER_RUNTIME_FRAMEBUFFER_VADDR + 2);
+        assert!(!hdmi_cell_plane_geometry_admitted(&unaligned_vaddr));
+
+        let unaligned_pitch =
+            descriptor_with_framebuffer(640, 480, 640 * 4 + 2, DRIVER_RUNTIME_FRAMEBUFFER_VADDR);
+        assert!(!hdmi_cell_plane_geometry_admitted(&unaligned_pitch));
+
+        let mut truncated_range = admitted;
+        let range =
+            &mut truncated_range.resource_ranges[truncated_range.resource_range_count as usize - 1];
+        range.bytes = range.bytes.saturating_sub(1);
+        assert!(!hdmi_cell_plane_geometry_admitted(&truncated_range));
+
+        let too_many_columns = descriptor_with_framebuffer(
+            4_096,
+            CHAR_HEIGHT as u32,
+            16_384,
+            DRIVER_RUNTIME_FRAMEBUFFER_VADDR,
+        );
+        assert!(!hdmi_cell_plane_geometry_admitted(&too_many_columns));
+    }
+
+    #[test]
+    fn hdmi_first_frame_clear_scales_exact_store_bound_with_admitted_budget() {
         assert_eq!(
-            hdmi_first_frame_clear_rows_per_turn(
+            hdmi_first_frame_clear_rows_per_turn_budgeted(
                 DRIVER_RUNTIME_FRAMEBUFFER_VADDR,
                 1_920,
                 1_920 * 4,
                 DRIVER_RUNTIME_FRAMEBUFFER_FORMAT_XRGB8888,
+                HDMI_BASE_BUDGET_US as u32,
             ),
             HDMI_FIRST_FRAME_CLEAR_ROWS_PER_TURN_PAIRED_XRGB8888,
         );
         assert_eq!(
-            hdmi_first_frame_clear_rows_per_turn(
+            hdmi_first_frame_clear_rows_per_turn_budgeted(
                 DRIVER_RUNTIME_FRAMEBUFFER_VADDR,
                 1_920,
                 1_920 * 4,
                 0,
+                HDMI_MAX_RASTER_BUDGET_US as u32,
             ),
-            HDMI_FIRST_FRAME_CLEAR_ROWS_PER_TURN_PAIRED_XRGB8888,
+            HDMI_FIRST_FRAME_CLEAR_ROWS_PER_TURN_PAIRED_XRGB8888 * 5,
             "legacy format zero is the same admitted 32-bit layout",
         );
         for (reason, vaddr, width, pitch, format) in [
@@ -115028,11 +118667,56 @@ mod tests {
             ),
         ] {
             assert_eq!(
-                hdmi_first_frame_clear_rows_per_turn(vaddr, width, pitch, format),
+                hdmi_first_frame_clear_rows_per_turn_budgeted(
+                    vaddr,
+                    width,
+                    pitch,
+                    format,
+                    HDMI_BASE_BUDGET_US as u32,
+                ),
                 HDMI_FIRST_FRAME_CLEAR_ROWS_PER_TURN_RGB888,
                 "{reason} must retain the conservative clear bound",
             );
         }
+    }
+
+    #[test]
+    fn hdmi_raster_slice_matches_and_obeys_the_exact_shared_grant() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let mut descriptor = descriptor_for(HOT_PATH_HDMI_TEXT, ROLE_DISPLAY);
+        descriptor.budget_us = HDMI_MAX_RASTER_BUDGET_US as u32;
+        descriptor.framebuffer = DriverRuntimeFramebufferDescriptor {
+            vaddr: DRIVER_RUNTIME_FRAMEBUFFER_VADDR,
+            paddr: 0x3000_0000,
+            width: 2_132,
+            height: 1_080,
+            pitch: 2_132 * 4,
+            format: DRIVER_RUNTIME_FRAMEBUFFER_FORMAT_XRGB8888,
+        };
+        let safe = hdmi_safe_area_for_framebuffer(
+            descriptor.framebuffer.width as usize,
+            descriptor.framebuffer.height as usize,
+        );
+        assert_eq!(safe.width / CHAR_WIDTH, HDMI_MAX_COLS);
+        RUNTIME_DESCRIPTOR.store(descriptor);
+
+        assert_eq!(
+            hdmi_raster_cells_per_turn(DRIVER_RUNTIME_HDMI_SERVICE_MAX_OPS),
+            Some(1_280),
+        );
+        assert_eq!(
+            hdmi_raster_cells_per_turn(DRIVER_RUNTIME_HDMI_SERVICE_MAX_OPS - 1),
+            Some(1_279),
+            "the implementation must still cap work to the immutable grant",
+        );
+        let state = HdmiRenderState::from_descriptor(&descriptor);
+        assert!(state.cell_plane_ready);
+        assert_eq!(
+            hdmi_raster_dirty_turn(HDMI_CELL_CAPACITY + 1, 1),
+            None,
+            "an out-of-range retained raster cursor must fail closed",
+        );
     }
 
     #[test]
@@ -115048,6 +118732,281 @@ mod tests {
                 value,
             );
         }
+    }
+
+    #[test]
+    fn hdmi_rgb888_raster_matches_glyph_and_stays_inside_exact_range() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let mut descriptor = descriptor_for(HOT_PATH_HDMI_TEXT, ROLE_DISPLAY);
+        descriptor.flags |= DRIVER_RUNTIME_INIT_FLAG_FRAMEBUFFER;
+        descriptor.framebuffer = DriverRuntimeFramebufferDescriptor {
+            vaddr: DRIVER_RUNTIME_FRAMEBUFFER_VADDR,
+            paddr: 0x3000_0000,
+            width: 64,
+            height: 48,
+            pitch: 64 * 3,
+            format: DRIVER_RUNTIME_FRAMEBUFFER_FORMAT_RGB888,
+        };
+        let framebuffer_bytes = u64::from(descriptor.framebuffer.pitch)
+            .saturating_mul(u64::from(descriptor.framebuffer.height));
+        let range_index = descriptor.resource_range_count as usize;
+        descriptor.resource_ranges[range_index] = DriverRuntimeResourceRangeDescriptor::new(
+            DRIVER_RUNTIME_RESOURCE_KIND_FRAMEBUFFER,
+            DRIVER_RUNTIME_RESOURCE_FLAG_VADDR_CONTIGUOUS
+                | DRIVER_RUNTIME_RESOURCE_FLAG_PADDR_CONTIGUOUS
+                | DRIVER_RUNTIME_RESOURCE_FLAG_DEVICE_VISIBLE
+                | DRIVER_RUNTIME_RESOURCE_FLAG_ROOT_SHARED,
+            DRIVER_RUNTIME_RESOURCE_TAG_HDMI_FRAMEBUFFER,
+            descriptor.framebuffer.vaddr,
+            descriptor.framebuffer.paddr,
+            framebuffer_bytes,
+            3,
+            0,
+        );
+        descriptor.resource_range_count += 1;
+        assert!(hdmi_cell_plane_geometry_admitted(&descriptor));
+
+        let sentinel_addr = descriptor.framebuffer.vaddr as usize + framebuffer_bytes as usize;
+        write_framebuffer_byte(sentinel_addr, 0xa5);
+        let mut state = HdmiRenderState::from_descriptor(&descriptor);
+        state.put_byte(b'A');
+        let glyph = BASIC_LEGACY[usize::from(b'A')];
+        for (glyph_row, bits) in glyph.iter().copied().enumerate() {
+            for duplicate in 0..2usize {
+                let y = state.safe_y + glyph_row * 2 + duplicate;
+                for glyph_col in 0..CHAR_WIDTH {
+                    let x = state.safe_x + glyph_col;
+                    let addr = descriptor.framebuffer.vaddr as usize
+                        + y * descriptor.framebuffer.pitch as usize
+                        + x * 3;
+                    let expected = if bits & (1 << glyph_col) != 0 {
+                        0xff
+                    } else {
+                        0
+                    };
+                    assert_eq!(read_framebuffer_byte(addr), expected);
+                    assert_eq!(read_framebuffer_byte(addr + 1), expected);
+                    assert_eq!(read_framebuffer_byte(addr + 2), expected);
+                }
+            }
+        }
+        assert_eq!(read_framebuffer_byte(sentinel_addr), 0xa5);
+    }
+
+    #[test]
+    fn hdmi_full_capacity_row_ring_survives_multiple_origin_wraps() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let mut plane = HdmiCellPlane::empty();
+        assert!(plane.configure(HDMI_MAX_COLS, HDMI_MAX_ROWS));
+        assert_eq!(plane.cell_count(), HDMI_CELL_CAPACITY);
+        let mut expected = [0u8; HDMI_MAX_ROWS];
+        for (row, slot) in expected.iter_mut().enumerate() {
+            let value = b'A'.saturating_add((row % 26) as u8);
+            plane.set_cell(row, 0, value);
+            *slot = value;
+        }
+
+        let scrolls = HDMI_MAX_ROWS * 3 + 17;
+        for step in 0..scrolls {
+            plane.scroll_up(1);
+            expected.rotate_left(1);
+            let value = b'A'.saturating_add(((step + HDMI_MAX_ROWS) % 26) as u8);
+            plane.set_cell(HDMI_MAX_ROWS - 1, 0, value);
+            expected[HDMI_MAX_ROWS - 1] = value;
+        }
+
+        assert_eq!(plane.row_origin, scrolls % HDMI_MAX_ROWS);
+        for (row, expected) in expected.iter().copied().enumerate() {
+            assert_eq!(plane.cell(row, 0), expected, "logical row {row}");
+        }
+    }
+
+    #[test]
+    fn hdmi_parse_cursor_slices_the_full_grant_ceiling_without_replay() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let mut descriptor = descriptor_for(HOT_PATH_HDMI_TEXT, ROLE_DISPLAY);
+        descriptor.framebuffer = DriverRuntimeFramebufferDescriptor {
+            vaddr: DRIVER_RUNTIME_FRAMEBUFFER_VADDR,
+            paddr: 0x3000_0000,
+            width: 2_132,
+            height: 2_134,
+            pitch: 2_132 * 4,
+            format: DRIVER_RUNTIME_FRAMEBUFFER_FORMAT_XRGB8888,
+        };
+        RUNTIME_DESCRIPTOR.store(descriptor);
+        let safe = hdmi_safe_area_for_framebuffer(
+            descriptor.framebuffer.width as usize,
+            descriptor.framebuffer.height as usize,
+        );
+        assert_eq!(safe.width / CHAR_WIDTH, HDMI_MAX_COLS);
+        assert_eq!(safe.height / CHAR_HEIGHT, HDMI_MAX_ROWS);
+
+        for index in 0..DRIVER_RUNTIME_HDMI_SERVICE_MAX_BYTES as usize {
+            write_ring_byte(index, b'x');
+        }
+        let frame = DriverFrameDescriptor {
+            offset: 0,
+            len: DRIVER_RUNTIME_HDMI_SERVICE_MAX_BYTES as u16,
+            flags: 0,
+        };
+        let mut next_byte = 0;
+        let mut tab_spaces_remaining = 0;
+        let mut pending_plane_op = HdmiPendingPlaneOp::none();
+        let mut turns = 0usize;
+        loop {
+            let progress = hdmi_parse_frame_to_cell_plane_turn(
+                frame,
+                next_byte,
+                tab_spaces_remaining,
+                pending_plane_op,
+                DRIVER_RUNTIME_HDMI_SERVICE_MAX_OPS,
+            )
+            .expect("the exact parser ceiling remains in bounds");
+            turns = turns.saturating_add(1);
+            assert!(progress.operations <= DRIVER_RUNTIME_HDMI_SERVICE_MAX_OPS);
+            assert!(progress.next_byte >= next_byte);
+            next_byte = progress.next_byte;
+            tab_spaces_remaining = progress.tab_spaces_remaining;
+            pending_plane_op = progress.pending_plane_op;
+            if progress.complete {
+                break;
+            }
+        }
+        assert_eq!(turns, 4);
+        assert_eq!(next_byte, frame.len);
+        assert_eq!(HDMI_CURSOR_ROW.load(Ordering::Acquire), 15);
+        assert_eq!(
+            HDMI_CURSOR_COL.load(Ordering::Acquire),
+            HDMI_MAX_COLS as u32
+        );
+
+        let admitted_transport = DriverFrameDescriptor {
+            offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
+            len: MAX_DRIVER_TASK_FRAME_BYTES as u16,
+            flags: 0,
+        };
+        assert!(admitted_transport.in_ring_payload());
+        assert!(!DriverFrameDescriptor {
+            len: MAX_DRIVER_TASK_FRAME_BYTES as u16 + 1,
+            ..admitted_transport
+        }
+        .in_ring_payload());
+    }
+
+    #[test]
+    fn hdmi_full_plane_clear_and_invalid_cursor_are_strictly_bounded() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let mut plane = HdmiCellPlane::empty();
+        assert!(plane.configure(HDMI_MAX_COLS, HDMI_MAX_ROWS));
+        for visible_index in 0..plane.cell_count() {
+            plane.set_cell(
+                visible_index / HDMI_MAX_COLS,
+                visible_index % HDMI_MAX_COLS,
+                b'x',
+            );
+        }
+        assert_eq!(plane.non_blank_cells, HDMI_CELL_CAPACITY);
+        let mut pending = HdmiPendingPlaneOp::none();
+        assert!(pending.schedule_clear(0, plane.cell_count(), 0));
+        let mut turns = 0usize;
+        while pending.active() {
+            let operations = hdmi_service_pending_plane_op(
+                &mut plane,
+                &mut pending,
+                DRIVER_RUNTIME_HDMI_SERVICE_MAX_OPS as usize,
+            )
+            .expect("a valid retained plane cursor advances");
+            assert!(operations <= DRIVER_RUNTIME_HDMI_SERVICE_MAX_OPS as usize);
+            assert!(operations != 0 || !pending.active());
+            turns = turns.saturating_add(1);
+        }
+        assert_eq!(
+            turns,
+            HDMI_CELL_CAPACITY.div_ceil(DRIVER_RUNTIME_HDMI_SERVICE_MAX_OPS as usize)
+        );
+        assert_eq!(plane.non_blank_cells, 0);
+
+        let mut invalid = HdmiPendingPlaneOp {
+            kind: HdmiPendingPlaneOpKind::ClearCells,
+            next: 2,
+            end: 1,
+            finish_flags: 0,
+        };
+        assert_eq!(
+            hdmi_service_pending_plane_op(&mut plane, &mut invalid, 1),
+            None
+        );
+        let mut out_of_range = HdmiPendingPlaneOp {
+            kind: HdmiPendingPlaneOpKind::ClearCells,
+            next: 0,
+            end: plane.cell_count() as u32 + 1,
+            finish_flags: 0,
+        };
+        assert_eq!(
+            hdmi_service_pending_plane_op(&mut plane, &mut out_of_range, 1),
+            None
+        );
+    }
+
+    #[test]
+    fn hdmi_right_edge_tab_persists_eight_spaces_and_terminates() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let mut descriptor = descriptor_for(HOT_PATH_HDMI_TEXT, ROLE_DISPLAY);
+        descriptor.framebuffer = DriverRuntimeFramebufferDescriptor {
+            vaddr: DRIVER_RUNTIME_FRAMEBUFFER_VADDR,
+            paddr: 0x3000_0000,
+            width: 72,
+            height: 48,
+            pitch: 72 * 4,
+            format: DRIVER_RUNTIME_FRAMEBUFFER_FORMAT_XRGB8888,
+        };
+        RUNTIME_DESCRIPTOR.store(descriptor);
+        let state = HdmiRenderState::from_descriptor(&descriptor);
+        assert_eq!(state.cols, 8);
+        assert_eq!(state.rows, 2);
+        HDMI_CURSOR_ROW.store(1, Ordering::Release);
+        HDMI_CURSOR_COL.store(8, Ordering::Release);
+        write_ring_byte(0, b'\t');
+        let frame = DriverFrameDescriptor {
+            offset: 0,
+            len: 1,
+            flags: 0,
+        };
+        let mut next_byte = 0;
+        let mut tab_spaces_remaining = 0;
+        let mut pending_plane_op = HdmiPendingPlaneOp::none();
+        let mut turns = 0usize;
+        loop {
+            let progress = hdmi_parse_frame_to_cell_plane_turn(
+                frame,
+                next_byte,
+                tab_spaces_remaining,
+                pending_plane_op,
+                1,
+            )
+            .expect("right-edge tab cursor remains valid");
+            assert_eq!(progress.operations, 1);
+            turns = turns.saturating_add(1);
+            assert!(
+                turns <= 11,
+                "right-edge tab must not become an absolute-column loop"
+            );
+            next_byte = progress.next_byte;
+            tab_spaces_remaining = progress.tab_spaces_remaining;
+            pending_plane_op = progress.pending_plane_op;
+            if progress.complete {
+                break;
+            }
+        }
+        assert_eq!(turns, 11);
+        assert_eq!(next_byte, 1);
+        assert_eq!(HDMI_CURSOR_ROW.load(Ordering::Acquire), 1);
+        assert_eq!(HDMI_CURSOR_COL.load(Ordering::Acquire), 8);
     }
 
     #[test]
@@ -115074,8 +119033,9 @@ mod tests {
             DRIVER_RUNTIME_RESOURCE_TAG_HDMI_FRAMEBUFFER,
             DRIVER_RUNTIME_FRAMEBUFFER_VADDR,
             0x3000_0000,
-            DRIVER_RUNTIME_RESOURCE_PAGE_BYTES,
-            1,
+            u64::from(descriptor.framebuffer.pitch)
+                .saturating_mul(u64::from(descriptor.framebuffer.height)),
+            300,
             0,
         );
         descriptor.resource_range_count += 1;
@@ -115087,7 +119047,7 @@ mod tests {
             arg1: ROLE_DISPLAY,
             aux0: DRIVER_RUNTIME_INIT_AUX,
             aux1: 0,
-            budget: budget(),
+            budget: hdmi_budget(),
             frame: DriverFrameDescriptor {
                 offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
                 len: core::mem::size_of::<DriverRuntimeInitDescriptor>() as u16,
@@ -115120,7 +119080,7 @@ mod tests {
             arg1: ROLE_DISPLAY,
             aux0: DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX,
             aux1: 0,
-            budget: budget(),
+            budget: hdmi_budget(),
             frame: DriverFrameDescriptor::empty(),
         };
         assert_eq!(
@@ -115140,7 +119100,7 @@ mod tests {
             arg1: ROLE_DISPLAY,
             aux0: 0,
             aux1: 0,
-            budget: budget(),
+            budget: hdmi_budget(),
             frame: DriverFrameDescriptor {
                 offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
                 len: 5,
@@ -115148,11 +119108,12 @@ mod tests {
             },
         };
         stage_bytes(DRIVER_TASK_RING_FRAME_OFFSET, b"hello");
-        let rows_per_clear_turn = hdmi_first_frame_clear_rows_per_turn(
+        let rows_per_clear_turn = hdmi_first_frame_clear_rows_per_turn_budgeted(
             descriptor.framebuffer.vaddr,
             descriptor.framebuffer.width,
             descriptor.framebuffer.pitch,
             descriptor.framebuffer.format,
+            descriptor.budget_us,
         );
         let first_uncleared_row = rows_per_clear_turn;
         let uncleared_addr = DRIVER_RUNTIME_FRAMEBUFFER_VADDR as usize
@@ -115163,10 +119124,153 @@ mod tests {
             takeover_sentinel,
             descriptor.framebuffer.pitch as usize * descriptor.framebuffer.height as usize / 4,
         );
+        let pristine_plane = HDMI_CELL_PLANE.with_ref(|plane| {
+            (
+                plane.cols,
+                plane.rows,
+                plane.row_origin,
+                plane.non_blank_cells,
+                plane.all_dirty,
+                plane.full_frame_clear_requested,
+                plane.cells[0],
+                plane.dirty[0],
+            )
+        });
+        assert!(hdmi_frame_command_envelope_valid(DriverTaskCommandRecord {
+            flags: DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY,
+            ..frame
+        }));
+        for malformed in [
+            DriverTaskCommandRecord {
+                flags: DRIVER_RUNTIME_COMMAND_FLAG_PERSISTENT_TRANSACTION,
+                ..frame
+            },
+            DriverTaskCommandRecord {
+                flags: DRIVER_RUNTIME_COMMAND_FLAG_STEADY_SERVICE_LEASE,
+                ..frame
+            },
+            DriverTaskCommandRecord { flags: 1, ..frame },
+            DriverTaskCommandRecord { aux1: 1, ..frame },
+            DriverTaskCommandRecord {
+                frame: DriverFrameDescriptor {
+                    flags: 1,
+                    ..frame.frame
+                },
+                ..frame
+            },
+            DriverTaskCommandRecord {
+                budget: DriverTaskBudgetGrant {
+                    max_ops: 0,
+                    ..frame.budget
+                },
+                ..frame
+            },
+            DriverTaskCommandRecord {
+                budget: DriverTaskBudgetGrant {
+                    max_frames: 0,
+                    ..frame.budget
+                },
+                ..frame
+            },
+            DriverTaskCommandRecord {
+                budget: DriverTaskBudgetGrant {
+                    max_bytes: u32::from(frame.frame.len).saturating_sub(1),
+                    ..frame.budget
+                },
+                ..frame
+            },
+            DriverTaskCommandRecord {
+                budget: DriverTaskBudgetGrant {
+                    max_ops: DRIVER_RUNTIME_HDMI_SERVICE_MAX_OPS - 1,
+                    ..frame.budget
+                },
+                ..frame
+            },
+            DriverTaskCommandRecord {
+                budget: DriverTaskBudgetGrant {
+                    max_ops: DRIVER_RUNTIME_HDMI_SERVICE_MAX_OPS + 1,
+                    ..frame.budget
+                },
+                ..frame
+            },
+            DriverTaskCommandRecord {
+                budget: DriverTaskBudgetGrant {
+                    max_frames: DRIVER_RUNTIME_HDMI_SERVICE_MAX_FRAMES - 1,
+                    ..frame.budget
+                },
+                ..frame
+            },
+            DriverTaskCommandRecord {
+                budget: DriverTaskBudgetGrant {
+                    max_frames: DRIVER_RUNTIME_HDMI_SERVICE_MAX_FRAMES + 1,
+                    ..frame.budget
+                },
+                ..frame
+            },
+            DriverTaskCommandRecord {
+                budget: DriverTaskBudgetGrant {
+                    max_bytes: DRIVER_RUNTIME_HDMI_SERVICE_MAX_BYTES - 1,
+                    ..frame.budget
+                },
+                ..frame
+            },
+            DriverTaskCommandRecord {
+                budget: DriverTaskBudgetGrant {
+                    max_bytes: DRIVER_RUNTIME_HDMI_SERVICE_MAX_BYTES + 1,
+                    ..frame.budget
+                },
+                ..frame
+            },
+            DriverTaskCommandRecord {
+                frame: DriverFrameDescriptor {
+                    offset: 0,
+                    ..frame.frame
+                },
+                ..frame
+            },
+        ] {
+            assert_eq!(
+                service_command_turn(0, malformed),
+                RuntimeCommandTurn::Complete(DriverTaskCompletionRecord::fault(
+                    malformed.sequence,
+                    FAULT_REJECTED_COMMAND,
+                )),
+                "a malformed HDMI envelope must fail before compositor or scanout mutation",
+            );
+            assert_eq!(
+                HDMI_FRAME_CURSOR.with_ref(|cursor| cursor.phase),
+                HdmiFramePhase::Idle,
+            );
+            assert_eq!(
+                HDMI_CELL_PLANE.with_ref(|plane| {
+                    (
+                        plane.cols,
+                        plane.rows,
+                        plane.row_origin,
+                        plane.non_blank_cells,
+                        plane.all_dirty,
+                        plane.full_frame_clear_requested,
+                        plane.cells[0],
+                        plane.dirty[0],
+                    )
+                }),
+                pristine_plane,
+            );
+            assert_eq!(
+                read_framebuffer_u32(DRIVER_RUNTIME_FRAMEBUFFER_VADDR as usize),
+                takeover_sentinel,
+            );
+        }
+        TEST_FRAMEBUFFER_READS.store(0, Ordering::Release);
         assert_eq!(
             service_command_turn(0, frame),
             RuntimeCommandTurn::Pending,
             "the first display mutation must retain the command while clearing one bounded row batch",
+        );
+        assert_eq!(
+            TEST_FRAMEBUFFER_READS.load(Ordering::Acquire),
+            0,
+            "the retained production path must not read live scanout",
         );
         assert_eq!(
             read_framebuffer_u32(DRIVER_RUNTIME_FRAMEBUFFER_VADDR as usize),
@@ -115177,9 +119281,50 @@ mod tests {
             takeover_sentinel,
             "one MCS turn must not clear beyond its admitted scanline batch",
         );
+        assert_eq!(
+            runtime_engine_init_hdmi(&descriptor),
+            Err(FAULT_REJECTED_COMMAND),
+            "a live compositor generation must reject replayed engine admission",
+        );
+        assert!(
+            HDMI_FRAME_CURSOR.with_ref(|cursor| cursor.active_for(frame)),
+            "rejected engine admission must not displace the retained frame identity",
+        );
+        for mutated in [
+            DriverTaskCommandRecord {
+                sequence: 320,
+                ..frame
+            },
+            DriverTaskCommandRecord {
+                frame: DriverFrameDescriptor {
+                    offset: frame.frame.offset + 1,
+                    len: frame.frame.len - 1,
+                    flags: 0,
+                },
+                ..frame
+            },
+            DriverTaskCommandRecord {
+                budget: DriverTaskBudgetGrant {
+                    max_ops: frame.budget.max_ops.saturating_add(1),
+                    ..frame.budget
+                },
+                ..frame
+            },
+        ] {
+            assert_eq!(
+                service_command_turn(0, mutated),
+                RuntimeCommandTurn::Complete(DriverTaskCompletionRecord::fault(
+                    mutated.sequence,
+                    FAULT_REJECTED_COMMAND,
+                )),
+                "a mutated retained command must fail without displacing the active frame",
+            );
+            assert!(HDMI_FRAME_CURSOR.with_ref(|cursor| cursor.active_for(frame)));
+        }
         let expected_clear_turns =
             (descriptor.framebuffer.height as usize).div_ceil(rows_per_clear_turn);
         let mut pending_turns = 1usize;
+        TEST_FRAMEBUFFER_READS.store(0, Ordering::Release);
         let completion = loop {
             match service_command_turn(0, frame) {
                 RuntimeCommandTurn::Pending => {
@@ -115188,8 +119333,24 @@ mod tests {
                 RuntimeCommandTurn::Complete(completion) => break completion,
             }
         };
-        assert_eq!(pending_turns, expected_clear_turns);
+        assert_eq!(
+            pending_turns,
+            expected_clear_turns + 1,
+            "payload parsing and scanout rasterization occupy distinct bounded turns",
+        );
         assert_eq!(completion, DriverTaskCompletionRecord::progress(32, 5));
+        assert_eq!(
+            TEST_FRAMEBUFFER_READS.load(Ordering::Acquire),
+            0,
+            "all later retained clear/parse/raster turns must remain write-only",
+        );
+        let completion_barriers = TEST_DEVICE_COMPLETION_BARRIERS.load(Ordering::Acquire);
+        assert_ne!(completion_barriers, 0);
+        assert_eq!(
+            TEST_HDMI_DONE_BARRIER_SNAPSHOT.load(Ordering::Acquire),
+            completion_barriers,
+            "HDMI DONE publication must observe the final device-store completion barrier",
+        );
         let final_pixel_addr = DRIVER_RUNTIME_FRAMEBUFFER_VADDR as usize
             + descriptor.framebuffer.pitch as usize * (descriptor.framebuffer.height as usize - 1);
         assert_eq!(read_framebuffer_u32(final_pixel_addr), HDMI_BG_COLOR);
@@ -115205,7 +119366,7 @@ mod tests {
             arg1: ROLE_DISPLAY,
             aux0: 0,
             aux1: 0,
-            budget: budget(),
+            budget: hdmi_budget(),
             frame: DriverFrameDescriptor {
                 offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
                 len: 3,
@@ -115227,7 +119388,7 @@ mod tests {
             arg1: ROLE_DISPLAY,
             aux0: 0,
             aux1: 0,
-            budget: budget(),
+            budget: hdmi_budget(),
             frame: DriverFrameDescriptor {
                 offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
                 len: 2,
@@ -115251,7 +119412,7 @@ mod tests {
             arg1: ROLE_DISPLAY,
             aux0: 0,
             aux1: 0,
-            budget: budget(),
+            budget: hdmi_budget(),
             frame: DriverFrameDescriptor {
                 offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
                 len: 2,
@@ -115276,7 +119437,7 @@ mod tests {
             arg1: ROLE_DISPLAY,
             aux0: 0,
             aux1: 0,
-            budget: budget(),
+            budget: hdmi_budget(),
             frame: DriverFrameDescriptor {
                 offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
                 len: 1,
@@ -115298,7 +119459,7 @@ mod tests {
             arg1: ROLE_DISPLAY,
             aux0: 0,
             aux1: 0,
-            budget: budget(),
+            budget: hdmi_budget(),
             frame: DriverFrameDescriptor {
                 offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
                 len: 2,
@@ -115322,6 +119483,53 @@ mod tests {
         assert_ne!(stale_row_digest, blank_digest);
         assert_eq!(cleared_row_digest, blank_digest);
         assert_ne!(preserved_prompt_digest, blank_digest);
+
+        let form_feed_sentinel = 0x55aa_55aa;
+        write_framebuffer_u32(
+            DRIVER_RUNTIME_FRAMEBUFFER_VADDR as usize,
+            form_feed_sentinel,
+        );
+        stage_bytes(DRIVER_TASK_RING_FRAME_OFFSET, &[0x0c]);
+        let form_feed = DriverTaskCommandRecord {
+            sequence: 38,
+            opcode: OPCODE_SUBMIT_FRAME,
+            flags: 0,
+            arg0: HOT_PATH_HDMI_TEXT,
+            arg1: ROLE_DISPLAY,
+            aux0: 0,
+            aux1: 0,
+            budget: hdmi_budget(),
+            frame: DriverFrameDescriptor {
+                offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
+                len: 1,
+                flags: 0,
+            },
+        };
+        assert_eq!(
+            service_command_turn(0, form_feed),
+            RuntimeCommandTurn::Pending,
+            "form-feed parsing must not spend the physical-clear budget in the same turn",
+        );
+        assert_eq!(
+            HDMI_FRAME_CURSOR.with_ref(|cursor| cursor.phase),
+            HdmiFramePhase::FrameClear,
+        );
+        assert_eq!(
+            read_framebuffer_u32(DRIVER_RUNTIME_FRAMEBUFFER_VADDR as usize),
+            form_feed_sentinel,
+        );
+        let completion = loop {
+            match service_command_turn(0, form_feed) {
+                RuntimeCommandTurn::Pending => {}
+                RuntimeCommandTurn::Complete(completion) => break completion,
+            }
+        };
+        assert_eq!(completion, DriverTaskCompletionRecord::progress(38, 1));
+        assert_eq!(
+            read_framebuffer_u32(DRIVER_RUNTIME_FRAMEBUFFER_VADDR as usize),
+            HDMI_BG_COLOR,
+        );
+        assert!(!HDMI_CELL_PLANE.with_ref(HdmiCellPlane::full_frame_clear_requested));
     }
 
     fn test_hdmi_cell_digest(
@@ -115372,7 +119580,13 @@ mod tests {
         let bottom_before = test_hdmi_cell_digest(&descriptor.framebuffer, 1, 0);
         assert_ne!(top_before, bottom_before);
 
+        TEST_FRAMEBUFFER_READS.store(0, Ordering::Release);
         state.put_byte(b'\n');
+        assert_eq!(
+            TEST_FRAMEBUFFER_READS.load(Ordering::Acquire),
+            0,
+            "scroll redraw must be write-only and never read live scanout",
+        );
 
         let top_after = test_hdmi_cell_digest(&descriptor.framebuffer, 0, 0);
         let bottom_after = test_hdmi_cell_digest(&descriptor.framebuffer, 1, 0);
@@ -115602,8 +119816,9 @@ mod tests {
             DRIVER_RUNTIME_RESOURCE_TAG_HDMI_FRAMEBUFFER,
             DRIVER_RUNTIME_FRAMEBUFFER_VADDR,
             0x3000_0000,
-            DRIVER_RUNTIME_RESOURCE_PAGE_BYTES,
-            1,
+            u64::from(descriptor.framebuffer.pitch)
+                .saturating_mul(u64::from(descriptor.framebuffer.height)),
+            3,
             0,
         );
         descriptor.resource_range_count += 1;
@@ -115615,7 +119830,7 @@ mod tests {
             arg1: ROLE_DISPLAY,
             aux0: DRIVER_RUNTIME_INIT_AUX,
             aux1: 0,
-            budget: budget(),
+            budget: hdmi_budget(),
             frame: DriverFrameDescriptor {
                 offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
                 len: core::mem::size_of::<DriverRuntimeInitDescriptor>() as u16,
@@ -115639,7 +119854,7 @@ mod tests {
             arg1: ROLE_DISPLAY,
             aux0: 0,
             aux1: 0,
-            budget: budget(),
+            budget: hdmi_budget(),
             frame: DriverFrameDescriptor {
                 offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
                 len: 5,

@@ -90,28 +90,28 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE,
     DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_SLOT, DRIVER_RUNTIME_DPC_EVENT_RING_BYTES,
     DRIVER_RUNTIME_DPC_EVENT_RING_DEPTH, DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET,
-    DRIVER_RUNTIME_FRAMEBUFFER_VADDR, DRIVER_RUNTIME_INIT_FLAG_BUS_ADDRESSING,
-    DRIVER_RUNTIME_INIT_FLAG_BUS_LINKS, DRIVER_RUNTIME_INIT_FLAG_DMA_PADDRS,
-    DRIVER_RUNTIME_INIT_FLAG_FRAMEBUFFER, DRIVER_RUNTIME_INIT_FLAG_IRQS_BOUND,
-    DRIVER_RUNTIME_INIT_FLAG_MMIO_MAPPED, DRIVER_RUNTIME_INIT_FLAG_POINTER_FREE,
-    DRIVER_RUNTIME_INIT_FLAG_POLL_ONLY, DRIVER_RUNTIME_INIT_FLAG_ROOT_CONTEXT_FORBIDDEN,
-    DRIVER_RUNTIME_INIT_FLAG_SHARED_PADDRS, DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT,
-    DRIVER_RUNTIME_RESERVED_ROOT_BADGE, DRIVER_RUNTIME_RESOURCE_FLAG_DEVICE_VISIBLE,
-    DRIVER_RUNTIME_RESOURCE_FLAG_PADDR_CONTIGUOUS, DRIVER_RUNTIME_RESOURCE_FLAG_ROOT_SHARED,
-    DRIVER_RUNTIME_RESOURCE_FLAG_VADDR_CONTIGUOUS, DRIVER_RUNTIME_RESOURCE_KIND_DMA,
-    DRIVER_RUNTIME_RESOURCE_KIND_FRAMEBUFFER, DRIVER_RUNTIME_RESOURCE_KIND_MMIO,
-    DRIVER_RUNTIME_RESOURCE_KIND_SHARED, DRIVER_RUNTIME_RESOURCE_PAGE_BYTES,
-    DRIVER_RUNTIME_RESOURCE_TAG_BCM2835_DMA, DRIVER_RUNTIME_RESOURCE_TAG_CYW43_CONTROL,
-    DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA, DRIVER_RUNTIME_RESOURCE_TAG_GENET_REGS,
-    DRIVER_RUNTIME_RESOURCE_TAG_HDMI_FRAMEBUFFER, DRIVER_RUNTIME_RESOURCE_TAG_HDMI_REGS,
-    DRIVER_RUNTIME_RESOURCE_TAG_PCIE_HOST, DRIVER_RUNTIME_RESOURCE_TAG_SDIO_HOST,
-    DRIVER_RUNTIME_RESOURCE_TAG_SERIAL_MINI_UART, DRIVER_RUNTIME_RESOURCE_TAG_SHARED_CONTROL,
-    DRIVER_RUNTIME_RESOURCE_TAG_USB_XHCI, DRIVER_RUNTIME_RESOURCE_TAG_WIFI_PWRSEQ,
-    DRIVER_RUNTIME_RESOURCE_TAG_WIFI_PWRSEQ_REQUEST, DRIVER_RUNTIME_SDIO_DMA_IRQ,
-    DRIVER_RUNTIME_SDIO_DMA_IRQ_BADGE, DRIVER_RUNTIME_SDIO_IRQ, DRIVER_RUNTIME_SDIO_IRQ_BADGE,
-    DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_PAGES, DRIVER_RUNTIME_SERIAL_IRQ,
-    DRIVER_RUNTIME_SERIAL_IRQ_BADGE, DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE,
-    DRIVER_TASK_CHILD_SDIO_DMA_IRQ_HANDLER_SLOT,
+    DRIVER_RUNTIME_FRAMEBUFFER_VADDR, DRIVER_RUNTIME_GENET_IRQ, DRIVER_RUNTIME_GENET_IRQ_BADGE,
+    DRIVER_RUNTIME_INIT_FLAG_BUS_ADDRESSING, DRIVER_RUNTIME_INIT_FLAG_BUS_LINKS,
+    DRIVER_RUNTIME_INIT_FLAG_DMA_PADDRS, DRIVER_RUNTIME_INIT_FLAG_FRAMEBUFFER,
+    DRIVER_RUNTIME_INIT_FLAG_IRQS_BOUND, DRIVER_RUNTIME_INIT_FLAG_MMIO_MAPPED,
+    DRIVER_RUNTIME_INIT_FLAG_POINTER_FREE, DRIVER_RUNTIME_INIT_FLAG_POLL_ONLY,
+    DRIVER_RUNTIME_INIT_FLAG_ROOT_CONTEXT_FORBIDDEN, DRIVER_RUNTIME_INIT_FLAG_SHARED_PADDRS,
+    DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT, DRIVER_RUNTIME_RESERVED_ROOT_BADGE,
+    DRIVER_RUNTIME_RESOURCE_FLAG_DEVICE_VISIBLE, DRIVER_RUNTIME_RESOURCE_FLAG_PADDR_CONTIGUOUS,
+    DRIVER_RUNTIME_RESOURCE_FLAG_ROOT_SHARED, DRIVER_RUNTIME_RESOURCE_FLAG_VADDR_CONTIGUOUS,
+    DRIVER_RUNTIME_RESOURCE_KIND_DMA, DRIVER_RUNTIME_RESOURCE_KIND_FRAMEBUFFER,
+    DRIVER_RUNTIME_RESOURCE_KIND_MMIO, DRIVER_RUNTIME_RESOURCE_KIND_SHARED,
+    DRIVER_RUNTIME_RESOURCE_PAGE_BYTES, DRIVER_RUNTIME_RESOURCE_TAG_BCM2835_DMA,
+    DRIVER_RUNTIME_RESOURCE_TAG_CYW43_CONTROL, DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA,
+    DRIVER_RUNTIME_RESOURCE_TAG_GENET_REGS, DRIVER_RUNTIME_RESOURCE_TAG_HDMI_FRAMEBUFFER,
+    DRIVER_RUNTIME_RESOURCE_TAG_HDMI_REGS, DRIVER_RUNTIME_RESOURCE_TAG_PCIE_HOST,
+    DRIVER_RUNTIME_RESOURCE_TAG_SDIO_HOST, DRIVER_RUNTIME_RESOURCE_TAG_SERIAL_MINI_UART,
+    DRIVER_RUNTIME_RESOURCE_TAG_SHARED_CONTROL, DRIVER_RUNTIME_RESOURCE_TAG_USB_XHCI,
+    DRIVER_RUNTIME_RESOURCE_TAG_WIFI_PWRSEQ, DRIVER_RUNTIME_RESOURCE_TAG_WIFI_PWRSEQ_REQUEST,
+    DRIVER_RUNTIME_SDIO_DMA_IRQ, DRIVER_RUNTIME_SDIO_DMA_IRQ_BADGE, DRIVER_RUNTIME_SDIO_IRQ,
+    DRIVER_RUNTIME_SDIO_IRQ_BADGE, DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_PAGES,
+    DRIVER_RUNTIME_SERIAL_IRQ, DRIVER_RUNTIME_SERIAL_IRQ_BADGE,
+    DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE, DRIVER_TASK_CHILD_SDIO_DMA_IRQ_HANDLER_SLOT,
 };
 #[cfg(feature = "kernel")]
 use sel4_sys::{seL4_ARM_VMAttributes, seL4_CPtr, seL4_Error, seL4_NoError, seL4_Word};
@@ -1910,6 +1910,10 @@ const BCM2711_MINI_UART_IRQ: u32 = DRIVER_RUNTIME_SERIAL_IRQ;
 #[cfg(feature = "kernel")]
 const BCM2711_MINI_UART_IRQ_BADGE: u32 = DRIVER_RUNTIME_SERIAL_IRQ_BADGE;
 #[cfg(feature = "kernel")]
+const BCM2711_GENET_IRQ: u32 = DRIVER_RUNTIME_GENET_IRQ;
+#[cfg(feature = "kernel")]
+const BCM2711_GENET_IRQ_BADGE: u32 = DRIVER_RUNTIME_GENET_IRQ_BADGE;
+#[cfg(feature = "kernel")]
 const DRIVER_RUNTIME_IRQ_TRIGGER_LEVEL: u16 = 0;
 #[cfg(feature = "kernel")]
 const DRIVER_RUNTIME_IRQ_TRIGGER_EDGE: u16 = 1;
@@ -1924,7 +1928,7 @@ struct GeneratedCyw43SdioTopology {
 #[cfg(feature = "kernel")]
 fn generated_cyw43_sdio_topology() -> Result<GeneratedCyw43SdioTopology, HalError> {
     let policy = crate::generated::driver_runtime_image_policy();
-    if !policy.required || policy.irqs.len() != 3 || policy.bus_links.len() != 1 {
+    if !policy.required || policy.bus_links.len() != 1 {
         return Err(HalError::Unsupported(
             "driver-runtime-cyw43-sdio-topology-count",
         ));
@@ -1996,7 +2000,7 @@ fn generated_cyw43_sdio_topology() -> Result<GeneratedCyw43SdioTopology, HalErro
 #[cfg(feature = "kernel")]
 fn generated_serial_runtime_irq() -> Result<crate::generated::DriverRuntimeIrqSpec, HalError> {
     let policy = crate::generated::driver_runtime_image_policy();
-    if !policy.required || policy.irqs.len() != 3 {
+    if !policy.required {
         return Err(HalError::Unsupported(
             "driver-runtime-generated-irq-topology-count",
         ));
@@ -2025,6 +2029,43 @@ fn generated_serial_runtime_irq() -> Result<crate::generated::DriverRuntimeIrqSp
     if !valid {
         return Err(HalError::Unsupported(
             "driver-runtime-generated-irq-invalid",
+        ));
+    }
+    Ok(irq)
+}
+
+#[cfg(feature = "kernel")]
+fn generated_genet_runtime_irq() -> Result<crate::generated::DriverRuntimeIrqSpec, HalError> {
+    let policy = crate::generated::driver_runtime_image_policy();
+    if !policy.required {
+        return Err(HalError::Unsupported(
+            "driver-runtime-generated-genet-irq-topology-count",
+        ));
+    }
+    let mut matches = policy
+        .irqs
+        .iter()
+        .copied()
+        .filter(|irq| irq.hot_path == driver_task::DriverTaskHotPath::GenetNic.as_str());
+    let irq = matches.next().ok_or(HalError::Unsupported(
+        "driver-runtime-generated-genet-irq-missing",
+    ))?;
+    if matches.next().is_some() {
+        return Err(HalError::Unsupported(
+            "driver-runtime-generated-genet-irq-duplicate",
+        ));
+    }
+    let valid = irq.irq == BCM2711_GENET_IRQ
+        && irq.badge == BCM2711_GENET_IRQ_BADGE
+        && u32::from(irq.handler_slot) == pi4_driver_abi::DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT
+        && u32::from(irq.notification_slot) == DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT
+        && matches!(
+            irq.trigger,
+            crate::generated::DriverRuntimeIrqTrigger::Level
+        );
+    if !valid {
+        return Err(HalError::Unsupported(
+            "driver-runtime-generated-genet-irq-invalid",
         ));
     }
     Ok(irq)
@@ -2761,6 +2802,8 @@ fn driver_runtime_root_wake_route(
 #[cfg(feature = "kernel")]
 fn driver_runtime_needs_root_notification(contract: DriverTaskContract) -> bool {
     contract == CYW43_WIFI_DRIVER_TASK_CONTRACT
+        || (driver_task::physical_pi_driver_task_only_owner_state_active()
+            && contract == driver_task::SERIAL_DRIVER_TASK_CONTRACT)
 }
 
 #[cfg(feature = "kernel")]
@@ -3524,6 +3567,10 @@ fn generated_driver_tcb_notification_binding_source(
     if contract == SERIAL_DRIVER_TASK_CONTRACT {
         let _ = generated_serial_runtime_irq()?;
         return Ok(Some("generated-serial-irq-topology"));
+    }
+    if contract == GENET_DRIVER_TASK_CONTRACT {
+        let _ = generated_genet_runtime_irq()?;
+        return Ok(Some("generated-genet-irq-topology"));
     }
 
     let topology = generated_cyw43_sdio_topology()?;
@@ -4958,8 +5005,23 @@ impl<'a> KernelHal<'a> {
         Err(HalError::Unsupported("driver-runtime-mmio-not-covered"))
     }
 
-    fn runtime_ram_region_attr(_dma_owned: bool) -> sel4_sys::seL4_ARM_VMAttributes {
-        runtime_uncached_xn_attributes()
+    fn runtime_ram_region_attr(
+        hot_path: driver_task::DriverTaskHotPath,
+        dma_owned: bool,
+    ) -> sel4_sys::seL4_ARM_VMAttributes {
+        // The serial transport is CPU-to-CPU shared memory and its SPSC
+        // cursors use AArch64 atomic acquire/release operations. The selected
+        // seL4 AArch64 kernel maps Page_Uncached as Device-nGnRnE, where Rust
+        // atomics/exclusive accesses are not an admissible synchronization
+        // primitive. Give only the serial shared pages coherent Normal-memory
+        // aliases with identical cacheability in root and child. Physical DMA
+        // and every other shared driver payload retain the existing uncached
+        // mapping and explicit device/cache boundary.
+        if !dma_owned && hot_path == driver_task::DriverTaskHotPath::SerialConsole {
+            runtime_cacheable_xn_attributes()
+        } else {
+            runtime_uncached_xn_attributes()
+        }
     }
 
     fn map_isolated_runtime_ram_region(
@@ -4980,9 +5042,10 @@ impl<'a> KernelHal<'a> {
             return Err(HalError::Unsupported("driver-runtime-sdio-dma-page-budget"));
         }
         let rights = sel4_sys::seL4_CapRights_ReadWrite;
-        // Runtime DMA buffers and root-shared payload/control pages cross TCBs
-        // without runtime-side EL0 cache maintenance.
-        let attr = Self::runtime_ram_region_attr(dma_owned);
+        // DMA and device-facing payloads cross boundaries without runtime-side
+        // EL0 cache maintenance. The one CPU-only serial SPSC exception uses
+        // coherent Normal memory so its atomic cursor protocol is valid.
+        let attr = Self::runtime_ram_region_attr(hot_path, dma_owned);
         let page_bytes = 1usize << sel4::PAGE_BITS;
         let first_page_index = init_descriptor
             .as_deref()
@@ -6048,6 +6111,17 @@ impl<'a> KernelHal<'a> {
     ) -> Result<RuntimeIrqInstallGuard, HalError> {
         let irqs = if contract == SERIAL_DRIVER_TASK_CONTRACT {
             [Some(generated_serial_runtime_irq()?), None]
+        } else if contract == GENET_DRIVER_TASK_CONTRACT {
+            let policy = crate::generated::driver_runtime_image_policy();
+            if policy
+                .irqs
+                .iter()
+                .any(|irq| irq.hot_path == driver_task::DriverTaskHotPath::GenetNic.as_str())
+            {
+                [Some(generated_genet_runtime_irq()?), None]
+            } else {
+                [None, None]
+            }
         } else if contract == SDIO_HOST_DRIVER_TASK_CONTRACT {
             generated_cyw43_sdio_topology()?.irqs.map(Some)
         } else {
@@ -6122,6 +6196,8 @@ impl<'a> KernelHal<'a> {
             let mut line = heapless::String::<224>::new();
             let proof_effect = if contract == SERIAL_DRIVER_TASK_CONTRACT {
                 "irq-rx-ready"
+            } else if contract == GENET_DRIVER_TASK_CONTRACT {
+                "bounded-napi-ready"
             } else if irq.irq == BCM2711_SDIO_DMA_IRQ {
                 "dma-completion-ready"
             } else {
@@ -6644,13 +6720,33 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn runtime_ram_region_attr_keeps_shared_payload_pages_uncached_and_xn() {
+    fn runtime_ram_region_attr_uses_normal_memory_only_for_cpu_serial_spsc() {
         assert_eq!(
-            super::KernelHal::runtime_ram_region_attr(true),
+            super::KernelHal::runtime_ram_region_attr(
+                super::driver_task::DriverTaskHotPath::SerialConsole,
+                false,
+            ),
+            super::runtime_cacheable_xn_attributes()
+        );
+        assert_eq!(
+            super::KernelHal::runtime_ram_region_attr(
+                super::driver_task::DriverTaskHotPath::SerialConsole,
+                true,
+            ),
             super::runtime_uncached_xn_attributes()
         );
         assert_eq!(
-            super::KernelHal::runtime_ram_region_attr(false),
+            super::KernelHal::runtime_ram_region_attr(
+                super::driver_task::DriverTaskHotPath::SdioHost,
+                false,
+            ),
+            super::runtime_uncached_xn_attributes()
+        );
+        assert_eq!(
+            super::KernelHal::runtime_ram_region_attr(
+                super::driver_task::DriverTaskHotPath::GenetNic,
+                true,
+            ),
             super::runtime_uncached_xn_attributes()
         );
     }
@@ -7524,13 +7620,18 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn only_cyw43_receives_root_continuation_notification_authority() {
+    fn root_continuation_notification_authority_is_profile_and_owner_scoped() {
         assert!(super::driver_runtime_needs_root_notification(
             super::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT,
         ));
+        assert_eq!(
+            super::driver_runtime_needs_root_notification(
+                super::driver_task::SERIAL_DRIVER_TASK_CONTRACT,
+            ),
+            super::driver_task::physical_pi_driver_task_only_owner_state_active(),
+        );
         for contract in [
             super::driver_task::SDIO_HOST_DRIVER_TASK_CONTRACT,
-            super::driver_task::SERIAL_DRIVER_TASK_CONTRACT,
             super::driver_task::USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
             super::driver_task::GENET_DRIVER_TASK_CONTRACT,
         ] {

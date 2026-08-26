@@ -22,6 +22,7 @@ use heapless::Deque;
 #[cfg(feature = "kernel")]
 use pi4_driver_abi::{
     driver_runtime_continuation_action_fingerprint, driver_runtime_is_cyw43_root_continuation,
+    driver_runtime_serial_spsc_consumer_post_commit, driver_runtime_serial_spsc_data_doorbell_due,
     DriverRuntimeCadenceRecord, DriverRuntimeContinuationGrant, DriverRuntimeCounterSnapshot,
     DriverRuntimeCyw43BusEpisodeRecord, DriverRuntimeCyw43CommandDescriptor,
     DriverRuntimeCyw43DpcChildTimingEntry, DriverRuntimeCyw43DpcChildTimingRecord,
@@ -29,14 +30,14 @@ use pi4_driver_abi::{
     DriverRuntimeFramebufferDescriptor, DriverRuntimeInitDescriptor,
     DriverRuntimePersistentWaitReceipt, DriverRuntimeSdioClockSnapshot,
     DriverRuntimeSdioDeadlineArm, DriverRuntimeSdioPhysicalLifetimeRecord,
-    DriverRuntimeSerialRxState, DriverRuntimeSteadyServiceProgress, DriverRuntimeUsbOldgoodReceipt,
-    DRIVER_RUNTIME_BUS_LINK_CHANNEL_CYW43_SDIO, DRIVER_RUNTIME_BUS_LINK_CHANNEL_USB_PCIE,
-    DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT, DRIVER_RUNTIME_BUS_LINK_FLAG_CLIENT,
-    DRIVER_RUNTIME_BUS_LINK_FLAG_DPC_EVENT_RING, DRIVER_RUNTIME_BUS_LINK_FLAG_NOTIFICATIONS,
-    DRIVER_RUNTIME_BUS_LINK_FLAG_OWNER, DRIVER_RUNTIME_BUS_LINK_FLAG_POINTER_FREE,
-    DRIVER_RUNTIME_BUS_LINK_PCIE_ENDPOINT_SLOT, DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_SLOT,
-    DRIVER_RUNTIME_CADENCE_BYTES, DRIVER_RUNTIME_CADENCE_OFFSET,
-    DRIVER_RUNTIME_COMMAND_FLAG_PERSISTENT_TRANSACTION,
+    DriverRuntimeSerialRxState, DriverRuntimeSerialSpscHeader, DriverRuntimeSteadyServiceProgress,
+    DriverRuntimeUsbOldgoodReceipt, DRIVER_RUNTIME_BUS_LINK_CHANNEL_CYW43_SDIO,
+    DRIVER_RUNTIME_BUS_LINK_CHANNEL_USB_PCIE, DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT,
+    DRIVER_RUNTIME_BUS_LINK_FLAG_CLIENT, DRIVER_RUNTIME_BUS_LINK_FLAG_DPC_EVENT_RING,
+    DRIVER_RUNTIME_BUS_LINK_FLAG_NOTIFICATIONS, DRIVER_RUNTIME_BUS_LINK_FLAG_OWNER,
+    DRIVER_RUNTIME_BUS_LINK_FLAG_POINTER_FREE, DRIVER_RUNTIME_BUS_LINK_PCIE_ENDPOINT_SLOT,
+    DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_SLOT, DRIVER_RUNTIME_CADENCE_BYTES,
+    DRIVER_RUNTIME_CADENCE_OFFSET, DRIVER_RUNTIME_COMMAND_FLAG_PERSISTENT_TRANSACTION,
     DRIVER_RUNTIME_COMMAND_FLAG_STEADY_SERVICE_LEASE, DRIVER_RUNTIME_CONTINUATION_GRANT_BYTES,
     DRIVER_RUNTIME_CONTINUATION_GRANT_MAGIC, DRIVER_RUNTIME_CONTINUATION_GRANT_OFFSET,
     DRIVER_RUNTIME_COUNTER_FLAG_ROOT_SNAPSHOT, DRIVER_RUNTIME_CYW43_BUS_EPISODE_BYTES,
@@ -49,13 +50,14 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_CYW43_SDIO_CHILD_WORST_CASE_US, DRIVER_RUNTIME_DPC_EVENT_RING_BYTES,
     DRIVER_RUNTIME_DPC_EVENT_RING_DEPTH, DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET,
     DRIVER_RUNTIME_ENGINE_INIT_AUX, DRIVER_RUNTIME_FRAMEBUFFER_FORMAT_XRGB8888,
-    DRIVER_RUNTIME_FRAMEBUFFER_VADDR, DRIVER_RUNTIME_INIT_AUX,
-    DRIVER_RUNTIME_INIT_DESCRIPTOR_APERTURE_BYTES, DRIVER_RUNTIME_INIT_FLAG_IRQS_BOUND,
-    DRIVER_RUNTIME_INIT_FLAG_POLL_ONLY, DRIVER_RUNTIME_INIT_VERSION,
-    DRIVER_RUNTIME_IRQ_TRIGGER_LEVEL, DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT,
-    DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX, DRIVER_RUNTIME_NET_INIT_AUX,
-    DRIVER_RUNTIME_PERSISTENT_WAIT_RECEIPT_BYTES, DRIVER_RUNTIME_PERSISTENT_WAIT_RECEIPT_OFFSET,
-    DRIVER_RUNTIME_RING_PROGRESS_COMMAND_OBSERVED, DRIVER_RUNTIME_RING_PROGRESS_COMMAND_VALIDATED,
+    DRIVER_RUNTIME_FRAMEBUFFER_VADDR, DRIVER_RUNTIME_GENET_IRQ, DRIVER_RUNTIME_GENET_IRQ_BADGE,
+    DRIVER_RUNTIME_INIT_AUX, DRIVER_RUNTIME_INIT_DESCRIPTOR_APERTURE_BYTES,
+    DRIVER_RUNTIME_INIT_FLAG_IRQS_BOUND, DRIVER_RUNTIME_INIT_FLAG_POLL_ONLY,
+    DRIVER_RUNTIME_INIT_VERSION, DRIVER_RUNTIME_IRQ_TRIGGER_LEVEL,
+    DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT, DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX,
+    DRIVER_RUNTIME_NET_INIT_AUX, DRIVER_RUNTIME_PERSISTENT_WAIT_RECEIPT_BYTES,
+    DRIVER_RUNTIME_PERSISTENT_WAIT_RECEIPT_OFFSET, DRIVER_RUNTIME_RING_PROGRESS_COMMAND_OBSERVED,
+    DRIVER_RUNTIME_RING_PROGRESS_COMMAND_VALIDATED,
     DRIVER_RUNTIME_RING_PROGRESS_COMPLETION_PUBLISH,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_ALP_POLL,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_ALP_REQUEST,
@@ -440,8 +442,13 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_SDIO_IRQ, DRIVER_RUNTIME_SDIO_IRQ_BADGE,
     DRIVER_RUNTIME_SDIO_PHYSICAL_LIFETIME_BYTES, DRIVER_RUNTIME_SDIO_PHYSICAL_LIFETIME_OFFSET,
     DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_BYTES, DRIVER_RUNTIME_SERIAL_IRQ,
-    DRIVER_RUNTIME_SERIAL_IRQ_BADGE, DRIVER_RUNTIME_SERIAL_RX_STATE_BYTES,
-    DRIVER_RUNTIME_SERIAL_RX_STATE_OFFSET, DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE,
+    DRIVER_RUNTIME_SERIAL_IRQ_BADGE, DRIVER_RUNTIME_SERIAL_RX_SPSC_FIRST_PAGE,
+    DRIVER_RUNTIME_SERIAL_RX_STATE_BYTES, DRIVER_RUNTIME_SERIAL_RX_STATE_OFFSET,
+    DRIVER_RUNTIME_SERIAL_SPSC_CAPACITY, DRIVER_RUNTIME_SERIAL_SPSC_FLAG_POISONED,
+    DRIVER_RUNTIME_SERIAL_SPSC_FLAG_ROOT_TO_RUNTIME,
+    DRIVER_RUNTIME_SERIAL_SPSC_FLAG_RUNTIME_TO_ROOT, DRIVER_RUNTIME_SERIAL_SPSC_HEADER_BYTES,
+    DRIVER_RUNTIME_SERIAL_SPSC_PAGES_PER_RING, DRIVER_RUNTIME_SERIAL_SPSC_SHARED_PAGES,
+    DRIVER_RUNTIME_SERIAL_TX_SPSC_FIRST_PAGE, DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE,
     DRIVER_RUNTIME_STEADY_SERVICE_PROGRESS_BYTES, DRIVER_RUNTIME_STEADY_SERVICE_PROGRESS_MAGIC,
     DRIVER_RUNTIME_STEADY_SERVICE_PROGRESS_OFFSET, DRIVER_RUNTIME_TASK_KEY_RESTART_FLAG,
     DRIVER_RUNTIME_USB_ENUMERATE_AUX, DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_AUX,
@@ -5527,8 +5534,18 @@ fn acquire_mcs_nonblocking_root_producer<'a>(
     slot: &'a DriverTaskCommandSlot,
     mode: DriverTaskRingCommandMode,
 ) -> Option<McsNonblockingRootProducerGuard<'a>> {
+    acquire_mcs_nonblocking_root_producer_for(contract, slot, mode, cfg!(sel4_config_kernel_mcs))
+}
+
+#[cfg(feature = "kernel")]
+fn acquire_mcs_nonblocking_root_producer_for<'a>(
+    contract: DriverTaskContract,
+    slot: &'a DriverTaskCommandSlot,
+    mode: DriverTaskRingCommandMode,
+    kernel_mcs: bool,
+) -> Option<McsNonblockingRootProducerGuard<'a>> {
     let tracked = driver_task_mcs_nonblocking_root_producer_requires_tracking(
-        cfg!(sel4_config_kernel_mcs),
+        kernel_mcs,
         slot.mcs_cap_generation.load(Ordering::Acquire),
         driver_task_ring_mode_uses_bounded_send(mode),
     );
@@ -5554,6 +5571,86 @@ fn acquire_mcs_nonblocking_root_producer<'a>(
         contract,
         tracked: true,
     })
+}
+
+/// Keep the complete root serial-SPSC turn inside the MCS capability lifetime.
+///
+/// The captured endpoint, notification, and capability generation are sampled
+/// only after admission is counted. Fault containment closes every publication
+/// before waiting for this guard, so a successful final check linearizes the
+/// shared-memory commit and optional notification before capability revocation.
+#[cfg(feature = "kernel")]
+struct DriverTaskSerialSpscRootGuard<'a> {
+    slot: &'a DriverTaskCommandSlot,
+    _producer: McsNonblockingRootProducerGuard<'a>,
+    endpoint: usize,
+    notification: usize,
+    cap_generation: u32,
+}
+
+#[cfg(feature = "kernel")]
+impl DriverTaskSerialSpscRootGuard<'_> {
+    fn publication_still_live(&self) -> bool {
+        self.slot.mcs_command_admission_open.load(Ordering::Acquire) != 0
+            && self.slot.endpoint.load(Ordering::Acquire) == self.endpoint
+            && self.slot.root_notification.load(Ordering::Acquire) == self.notification
+            && self.slot.mcs_cap_generation.load(Ordering::Acquire) == self.cap_generation
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn acquire_driver_task_serial_spsc_root_guard(
+    slot: &DriverTaskCommandSlot,
+) -> Option<DriverTaskSerialSpscRootGuard<'_>> {
+    acquire_driver_task_serial_spsc_root_guard_for(slot, cfg!(sel4_config_kernel_mcs))
+}
+
+#[cfg(feature = "kernel")]
+fn acquire_driver_task_serial_spsc_root_guard_for(
+    slot: &DriverTaskCommandSlot,
+    kernel_mcs: bool,
+) -> Option<DriverTaskSerialSpscRootGuard<'_>> {
+    let producer = acquire_mcs_nonblocking_root_producer_for(
+        SERIAL_DRIVER_TASK_CONTRACT,
+        slot,
+        DriverTaskRingCommandMode::NonBlocking,
+        kernel_mcs,
+    )?;
+    let endpoint = slot.endpoint.load(Ordering::Acquire);
+    let notification = slot.root_notification.load(Ordering::Acquire);
+    let cap_generation = slot.mcs_cap_generation.load(Ordering::Acquire);
+    if endpoint == 0
+        || notification == 0
+        || cap_generation == 0
+        || slot.mcs_command_admission_open.load(Ordering::Acquire) == 0
+    {
+        return None;
+    }
+    Some(DriverTaskSerialSpscRootGuard {
+        slot,
+        _producer: producer,
+        endpoint,
+        notification,
+        cap_generation,
+    })
+}
+
+#[cfg(feature = "kernel")]
+fn finish_driver_task_serial_spsc_root_turn_with_signal<Signal>(
+    guard: &DriverTaskSerialSpscRootGuard<'_>,
+    transfer: DriverTaskSerialSpscTransfer,
+    signal: Signal,
+) -> Option<DriverTaskSerialSpscTransfer>
+where
+    Signal: FnOnce(usize),
+{
+    if !guard.publication_still_live() {
+        return None;
+    }
+    if transfer.data_doorbell || transfer.producer_rearm {
+        signal(guard.notification);
+    }
+    Some(transfer)
 }
 
 #[cfg(feature = "kernel")]
@@ -9102,9 +9199,24 @@ pub fn root_driver_supervisor_contain_fault(
     // containment sequence lets any later-stage failure turn every display or
     // service retry into an unbounded null-cap syscall loop.
     slot.endpoint.store(0, Ordering::Release);
+    if contract == SERIAL_DRIVER_TASK_CONTRACT {
+        // Serial SPSC turns use the runtime notification without an endpoint
+        // syscall. Remove that publication at the same admission boundary so
+        // no new turn can acquire a stale send cap while containment drains an
+        // already-counted producer.
+        slot.root_notification.store(0, Ordering::Release);
+    }
     if slot.mcs_nonblocking_root_producers.load(Ordering::Acquire) != 0 {
         defer_driver_supervisor_fault_diagnostic();
         return Err(DriverSupervisorContainmentError::RootProducerActive);
+    }
+    if contract == SERIAL_DRIVER_TASK_CONTRACT {
+        // The faulted child cannot safely consume either shared direction.
+        // Poison both headers only after all admitted root turns have drained,
+        // then fence every root-side client/generation publication. Serial has
+        // no in-place reconstruction path, so this is irreversible for the boot.
+        fence_driver_task_serial_spsc_headers_after_fault(slot);
+        crate::serial::fence_serial_driver_task_runtime_after_fault();
     }
     if resumed_after_producer_drain {
         slot.mcs_producer_drain_reported
@@ -9741,6 +9853,791 @@ pub fn publish_driver_task_shared_frame(
         slot.shared_frame_count
             .store(required_count, Ordering::Release);
     }
+}
+
+/// Result of one nonblocking serial SPSC producer or consumer turn.
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct DriverTaskSerialSpscTransfer {
+    /// Bytes committed by this turn.
+    pub bytes: usize,
+    /// The producer committed an empty-to-nonempty transition.
+    pub data_doorbell: bool,
+    /// The consumer committed a full-to-not-full producer rearm.
+    pub producer_rearm: bool,
+    /// Committed bytes remain after this turn.
+    pub work_remaining: bool,
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_serial_shared_page_ptr(
+    slot: &DriverTaskCommandSlot,
+    page_index: usize,
+) -> Option<usize> {
+    if page_index >= DRIVER_RUNTIME_SERIAL_SPSC_SHARED_PAGES
+        || slot.shared_frame_count.load(Ordering::Acquire)
+            != DRIVER_RUNTIME_SERIAL_SPSC_SHARED_PAGES
+    {
+        return None;
+    }
+    let ptr = slot.shared_frame_root_ptrs[page_index].load(Ordering::Acquire);
+    (ptr != 0).then_some(ptr)
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_serial_spsc_header_ptr(
+    slot: &DriverTaskCommandSlot,
+    first_page: usize,
+) -> Option<*mut DriverRuntimeSerialSpscHeader> {
+    if first_page != DRIVER_RUNTIME_SERIAL_TX_SPSC_FIRST_PAGE
+        && first_page != DRIVER_RUNTIME_SERIAL_RX_SPSC_FIRST_PAGE
+    {
+        return None;
+    }
+    let ptr = driver_task_serial_shared_page_ptr(slot, first_page)?;
+    if !ptr.is_multiple_of(core::mem::align_of::<DriverRuntimeSerialSpscHeader>()) {
+        return None;
+    }
+    Some(ptr as *mut DriverRuntimeSerialSpscHeader)
+}
+
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy)]
+enum DriverTaskSerialSpscAtomicField {
+    Magic,
+    Generation,
+    Capacity,
+    ProducerIndex,
+    ProducerCommit,
+    ConsumerIndex,
+    ConsumerCommit,
+    DoorbellEpoch,
+    Reserved0,
+    ConsumerWakeEpoch,
+    Flags,
+    ProducedBytes,
+    ConsumedBytes,
+    HighWater,
+    Reserved1,
+}
+
+#[cfg(feature = "kernel")]
+impl DriverTaskSerialSpscAtomicField {
+    const fn offset(self) -> usize {
+        match self {
+            Self::Magic => core::mem::offset_of!(DriverRuntimeSerialSpscHeader, magic),
+            Self::Generation => core::mem::offset_of!(DriverRuntimeSerialSpscHeader, generation),
+            Self::Capacity => core::mem::offset_of!(DriverRuntimeSerialSpscHeader, capacity),
+            Self::ProducerIndex => {
+                core::mem::offset_of!(DriverRuntimeSerialSpscHeader, producer_index)
+            }
+            Self::ProducerCommit => {
+                core::mem::offset_of!(DriverRuntimeSerialSpscHeader, producer_commit)
+            }
+            Self::ConsumerIndex => {
+                core::mem::offset_of!(DriverRuntimeSerialSpscHeader, consumer_index)
+            }
+            Self::ConsumerCommit => {
+                core::mem::offset_of!(DriverRuntimeSerialSpscHeader, consumer_commit)
+            }
+            Self::DoorbellEpoch => {
+                core::mem::offset_of!(DriverRuntimeSerialSpscHeader, doorbell_epoch)
+            }
+            Self::Reserved0 => core::mem::offset_of!(DriverRuntimeSerialSpscHeader, reserved0),
+            Self::ConsumerWakeEpoch => {
+                core::mem::offset_of!(DriverRuntimeSerialSpscHeader, consumer_wake_epoch)
+            }
+            Self::Flags => core::mem::offset_of!(DriverRuntimeSerialSpscHeader, flags),
+            Self::ProducedBytes => {
+                core::mem::offset_of!(DriverRuntimeSerialSpscHeader, produced_bytes)
+            }
+            Self::ConsumedBytes => {
+                core::mem::offset_of!(DriverRuntimeSerialSpscHeader, consumed_bytes)
+            }
+            Self::HighWater => core::mem::offset_of!(DriverRuntimeSerialSpscHeader, high_water),
+            Self::Reserved1 => core::mem::offset_of!(DriverRuntimeSerialSpscHeader, reserved1),
+        }
+    }
+}
+
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy)]
+enum DriverTaskSerialSpscImmutableU16Field {
+    Version,
+    HeaderLen,
+}
+
+#[cfg(feature = "kernel")]
+impl DriverTaskSerialSpscImmutableU16Field {
+    const fn offset(self) -> usize {
+        match self {
+            Self::Version => core::mem::offset_of!(DriverRuntimeSerialSpscHeader, version),
+            Self::HeaderLen => core::mem::offset_of!(DriverRuntimeSerialSpscHeader, header_len),
+        }
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_serial_spsc_atomic_field_ptr(
+    header: *mut DriverRuntimeSerialSpscHeader,
+    field: DriverTaskSerialSpscAtomicField,
+) -> *mut u32 {
+    header
+        .cast::<u8>()
+        .wrapping_add(field.offset())
+        .cast::<u32>()
+}
+
+#[cfg(feature = "kernel")]
+enum DriverTaskSerialSpscHeaderAccess {
+    AtomicLoad {
+        field: DriverTaskSerialSpscAtomicField,
+        ordering: Ordering,
+    },
+    AtomicStore {
+        field: DriverTaskSerialSpscAtomicField,
+        value: u32,
+        ordering: Ordering,
+    },
+    ImmutableU16Load(DriverTaskSerialSpscImmutableU16Field),
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_serial_spsc_header_access(
+    header: *mut DriverRuntimeSerialSpscHeader,
+    access: DriverTaskSerialSpscHeaderAccess,
+) -> u32 {
+    // SAFETY: Header admission proves a nonnull, 64-byte-aligned complete
+    // record. The closed access variants select only naturally aligned fields
+    // within that record. Every live u32 access uses AtomicU32; the two u16
+    // layout fields are written only while quiescent and remain immutable
+    // after the generation's release publication.
+    unsafe {
+        match access {
+            DriverTaskSerialSpscHeaderAccess::AtomicLoad { field, ordering } => {
+                AtomicU32::from_ptr(driver_task_serial_spsc_atomic_field_ptr(header, field))
+                    .load(ordering)
+            }
+            DriverTaskSerialSpscHeaderAccess::AtomicStore {
+                field,
+                value,
+                ordering,
+            } => {
+                AtomicU32::from_ptr(driver_task_serial_spsc_atomic_field_ptr(header, field))
+                    .store(value, ordering);
+                0
+            }
+            DriverTaskSerialSpscHeaderAccess::ImmutableU16Load(field) => {
+                let field = header
+                    .cast::<u8>()
+                    .wrapping_add(field.offset())
+                    .cast::<u16>();
+                u32::from(core::ptr::read_volatile(field))
+            }
+        }
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_serial_spsc_atomic_load(
+    header: *mut DriverRuntimeSerialSpscHeader,
+    field: DriverTaskSerialSpscAtomicField,
+    ordering: Ordering,
+) -> u32 {
+    driver_task_serial_spsc_header_access(
+        header,
+        DriverTaskSerialSpscHeaderAccess::AtomicLoad { field, ordering },
+    )
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_serial_spsc_atomic_store(
+    header: *mut DriverRuntimeSerialSpscHeader,
+    field: DriverTaskSerialSpscAtomicField,
+    value: u32,
+    ordering: Ordering,
+) {
+    let _ = driver_task_serial_spsc_header_access(
+        header,
+        DriverTaskSerialSpscHeaderAccess::AtomicStore {
+            field,
+            value,
+            ordering,
+        },
+    );
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_serial_spsc_immutable_u16_load(
+    header: *mut DriverRuntimeSerialSpscHeader,
+    field: DriverTaskSerialSpscImmutableU16Field,
+) -> u16 {
+    driver_task_serial_spsc_header_access(
+        header,
+        DriverTaskSerialSpscHeaderAccess::ImmutableU16Load(field),
+    ) as u16
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_serial_spsc_poison(ptr: *mut DriverRuntimeSerialSpscHeader) {
+    // A corrupt committed cursor is not recoverable inside a generation. The
+    // direction bits are immutable, so a release store of their prior value
+    // plus POISONED safely fences both peers until root performs cold restart.
+    let flags = driver_task_serial_spsc_atomic_load(
+        ptr,
+        DriverTaskSerialSpscAtomicField::Flags,
+        Ordering::Acquire,
+    );
+    driver_task_serial_spsc_atomic_store(
+        ptr,
+        DriverTaskSerialSpscAtomicField::Flags,
+        flags | DRIVER_RUNTIME_SERIAL_SPSC_FLAG_POISONED,
+        Ordering::Release,
+    );
+}
+
+#[cfg(feature = "kernel")]
+fn fence_driver_task_serial_spsc_headers_after_fault(slot: &DriverTaskCommandSlot) {
+    for first_page in [
+        DRIVER_RUNTIME_SERIAL_TX_SPSC_FIRST_PAGE,
+        DRIVER_RUNTIME_SERIAL_RX_SPSC_FIRST_PAGE,
+    ] {
+        if let Some(ptr) = driver_task_serial_spsc_header_ptr(slot, first_page) {
+            driver_task_serial_spsc_poison(ptr);
+        }
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_serial_spsc_header_snapshot(
+    slot: &DriverTaskCommandSlot,
+    first_page: usize,
+    generation: u32,
+    direction: u32,
+) -> Option<DriverRuntimeSerialSpscHeader> {
+    let ptr = driver_task_serial_spsc_header_ptr(slot, first_page)?;
+    let mut attempt = 0usize;
+    while attempt < 3 {
+        // Atomic scalar sampling avoids a Rust whole-record race while the two
+        // owners independently publish their cursor pairs. A commit acquire
+        // also makes the corresponding payload prefix visible.
+        let producer_commit_first = driver_task_serial_spsc_atomic_load(
+            ptr,
+            DriverTaskSerialSpscAtomicField::ProducerCommit,
+            Ordering::Acquire,
+        );
+        let producer_index = driver_task_serial_spsc_atomic_load(
+            ptr,
+            DriverTaskSerialSpscAtomicField::ProducerIndex,
+            Ordering::Relaxed,
+        );
+        let producer_commit_second = driver_task_serial_spsc_atomic_load(
+            ptr,
+            DriverTaskSerialSpscAtomicField::ProducerCommit,
+            Ordering::Acquire,
+        );
+        let consumer_commit_first = driver_task_serial_spsc_atomic_load(
+            ptr,
+            DriverTaskSerialSpscAtomicField::ConsumerCommit,
+            Ordering::Acquire,
+        );
+        let consumer_index = driver_task_serial_spsc_atomic_load(
+            ptr,
+            DriverTaskSerialSpscAtomicField::ConsumerIndex,
+            Ordering::Relaxed,
+        );
+        let consumer_commit_second = driver_task_serial_spsc_atomic_load(
+            ptr,
+            DriverTaskSerialSpscAtomicField::ConsumerCommit,
+            Ordering::Acquire,
+        );
+        if producer_commit_first == producer_commit_second
+            && producer_index == producer_commit_second
+            && consumer_commit_first == consumer_commit_second
+            && consumer_index == consumer_commit_second
+        {
+            let snapshot = DriverRuntimeSerialSpscHeader {
+                magic: driver_task_serial_spsc_atomic_load(
+                    ptr,
+                    DriverTaskSerialSpscAtomicField::Magic,
+                    Ordering::Relaxed,
+                ),
+                version: driver_task_serial_spsc_immutable_u16_load(
+                    ptr,
+                    DriverTaskSerialSpscImmutableU16Field::Version,
+                ),
+                header_len: driver_task_serial_spsc_immutable_u16_load(
+                    ptr,
+                    DriverTaskSerialSpscImmutableU16Field::HeaderLen,
+                ),
+                generation: driver_task_serial_spsc_atomic_load(
+                    ptr,
+                    DriverTaskSerialSpscAtomicField::Generation,
+                    Ordering::Acquire,
+                ),
+                capacity: driver_task_serial_spsc_atomic_load(
+                    ptr,
+                    DriverTaskSerialSpscAtomicField::Capacity,
+                    Ordering::Relaxed,
+                ),
+                producer_index,
+                producer_commit: producer_commit_second,
+                consumer_index,
+                consumer_commit: consumer_commit_second,
+                doorbell_epoch: driver_task_serial_spsc_atomic_load(
+                    ptr,
+                    DriverTaskSerialSpscAtomicField::DoorbellEpoch,
+                    Ordering::Relaxed,
+                ),
+                reserved0: driver_task_serial_spsc_atomic_load(
+                    ptr,
+                    DriverTaskSerialSpscAtomicField::Reserved0,
+                    Ordering::Relaxed,
+                ),
+                consumer_wake_epoch: driver_task_serial_spsc_atomic_load(
+                    ptr,
+                    DriverTaskSerialSpscAtomicField::ConsumerWakeEpoch,
+                    Ordering::Relaxed,
+                ),
+                flags: driver_task_serial_spsc_atomic_load(
+                    ptr,
+                    DriverTaskSerialSpscAtomicField::Flags,
+                    Ordering::Acquire,
+                ),
+                produced_bytes: driver_task_serial_spsc_atomic_load(
+                    ptr,
+                    DriverTaskSerialSpscAtomicField::ProducedBytes,
+                    Ordering::Relaxed,
+                ),
+                consumed_bytes: driver_task_serial_spsc_atomic_load(
+                    ptr,
+                    DriverTaskSerialSpscAtomicField::ConsumedBytes,
+                    Ordering::Relaxed,
+                ),
+                high_water: driver_task_serial_spsc_atomic_load(
+                    ptr,
+                    DriverTaskSerialSpscAtomicField::HighWater,
+                    Ordering::Relaxed,
+                ),
+                reserved1: driver_task_serial_spsc_atomic_load(
+                    ptr,
+                    DriverTaskSerialSpscAtomicField::Reserved1,
+                    Ordering::Relaxed,
+                ),
+            };
+            if snapshot.valid_for(generation, direction) {
+                return Some(snapshot);
+            }
+        }
+        attempt = attempt.saturating_add(1);
+    }
+    None
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_serial_spsc_payload_ptr(
+    slot: &DriverTaskCommandSlot,
+    first_page: usize,
+    cursor: u32,
+) -> Option<(usize, usize)> {
+    let offset = DRIVER_RUNTIME_SERIAL_SPSC_HEADER_BYTES
+        .checked_add(cursor as usize % DRIVER_RUNTIME_SERIAL_SPSC_CAPACITY)?;
+    let relative_page = offset / DRIVER_TASK_RING_PAGE_BYTES;
+    if relative_page >= DRIVER_RUNTIME_SERIAL_SPSC_PAGES_PER_RING {
+        return None;
+    }
+    let page_offset = offset % DRIVER_TASK_RING_PAGE_BYTES;
+    let ptr = driver_task_serial_shared_page_ptr(slot, first_page + relative_page)?;
+    Some((
+        ptr.checked_add(page_offset)?,
+        DRIVER_TASK_RING_PAGE_BYTES - page_offset,
+    ))
+}
+
+#[cfg(feature = "kernel")]
+enum DriverTaskSerialSpscSharedCopy<'a> {
+    IntoShared { destination: usize, bytes: &'a [u8] },
+    FromShared { source: usize, bytes: &'a mut [u8] },
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_serial_spsc_copy_shared(copy: DriverTaskSerialSpscSharedCopy<'_>) {
+    // SAFETY: Both closed variants are constructed only from an address
+    // admitted by `driver_task_serial_spsc_payload_ptr` and an exact chunk
+    // slice bounded by the current shared page and ring wrap. The root-local
+    // slice and compiler-declared shared pages are disjoint.
+    unsafe {
+        match copy {
+            DriverTaskSerialSpscSharedCopy::IntoShared { destination, bytes } => {
+                core::ptr::copy_nonoverlapping(bytes.as_ptr(), destination as *mut u8, bytes.len());
+            }
+            DriverTaskSerialSpscSharedCopy::FromShared { source, bytes } => {
+                core::ptr::copy_nonoverlapping(
+                    source as *const u8,
+                    bytes.as_mut_ptr(),
+                    bytes.len(),
+                );
+            }
+        }
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_serial_spsc_copy_into_shared(
+    slot: &DriverTaskCommandSlot,
+    first_page: usize,
+    cursor: u32,
+    bytes: &[u8],
+) -> Option<()> {
+    let mut copied = 0usize;
+    while copied < bytes.len() {
+        let logical = cursor.wrapping_add(copied as u32);
+        let (destination, page_left) =
+            driver_task_serial_spsc_payload_ptr(slot, first_page, logical)?;
+        let ring_left = DRIVER_RUNTIME_SERIAL_SPSC_CAPACITY
+            - logical as usize % DRIVER_RUNTIME_SERIAL_SPSC_CAPACITY;
+        let chunk = page_left.min(ring_left).min(bytes.len() - copied);
+        driver_task_serial_spsc_copy_shared(DriverTaskSerialSpscSharedCopy::IntoShared {
+            destination,
+            bytes: &bytes[copied..copied + chunk],
+        });
+        copied = copied.saturating_add(chunk);
+    }
+    Some(())
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_serial_spsc_copy_from_shared(
+    slot: &DriverTaskCommandSlot,
+    first_page: usize,
+    cursor: u32,
+    bytes: &mut [u8],
+) -> Option<()> {
+    let mut copied = 0usize;
+    while copied < bytes.len() {
+        let logical = cursor.wrapping_add(copied as u32);
+        let (source, page_left) = driver_task_serial_spsc_payload_ptr(slot, first_page, logical)?;
+        let ring_left = DRIVER_RUNTIME_SERIAL_SPSC_CAPACITY
+            - logical as usize % DRIVER_RUNTIME_SERIAL_SPSC_CAPACITY;
+        let chunk = page_left.min(ring_left).min(bytes.len() - copied);
+        driver_task_serial_spsc_copy_shared(DriverTaskSerialSpscSharedCopy::FromShared {
+            source,
+            bytes: &mut bytes[copied..copied + chunk],
+        });
+        copied = copied.saturating_add(chunk);
+    }
+    Some(())
+}
+
+/// Cold-initialize both serial SPSC directions after every linked generation.
+///
+/// Root calls this only after the previous runtime is quiescent and before the
+/// new serial INIT command. All four existing shared pages are scrubbed so no
+/// byte or cursor from an earlier generation can be replayed.
+#[cfg(feature = "kernel")]
+#[must_use]
+pub fn initialize_driver_task_serial_spsc(generation: u32) -> bool {
+    if generation == 0 {
+        return false;
+    }
+    let Some(slot) = driver_task_slot_for_contract(SERIAL_DRIVER_TASK_CONTRACT) else {
+        return false;
+    };
+    let Some(guard) = acquire_driver_task_serial_spsc_root_guard(slot) else {
+        return false;
+    };
+    initialize_driver_task_serial_spsc_for_slot(slot, generation) && guard.publication_still_live()
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_serial_spsc_cold_initialize_shared(
+    slot: &DriverTaskCommandSlot,
+) -> Option<(
+    *mut DriverRuntimeSerialSpscHeader,
+    *mut DriverRuntimeSerialSpscHeader,
+)> {
+    let mut page = 0usize;
+    // SAFETY: The caller holds the serial root guard after the prior runtime
+    // generation is quiescent and before child INIT admission. Each page is
+    // validated through the compiler-declared slot before its complete
+    // writable mapping is scrubbed; both headers are then independently
+    // checked for alignment and remain unpublished until the later release
+    // stores of the nonzero generation.
+    unsafe {
+        while page < DRIVER_RUNTIME_SERIAL_SPSC_SHARED_PAGES {
+            let ptr = driver_task_serial_shared_page_ptr(slot, page)?;
+            core::ptr::write_bytes(ptr as *mut u8, 0, DRIVER_TASK_RING_PAGE_BYTES);
+            page = page.saturating_add(1);
+        }
+        let tx_header =
+            driver_task_serial_spsc_header_ptr(slot, DRIVER_RUNTIME_SERIAL_TX_SPSC_FIRST_PAGE)?;
+        let rx_header =
+            driver_task_serial_spsc_header_ptr(slot, DRIVER_RUNTIME_SERIAL_RX_SPSC_FIRST_PAGE)?;
+        core::ptr::write_volatile(
+            tx_header,
+            DriverRuntimeSerialSpscHeader::empty(
+                0,
+                DRIVER_RUNTIME_SERIAL_SPSC_FLAG_ROOT_TO_RUNTIME,
+            ),
+        );
+        core::ptr::write_volatile(
+            rx_header,
+            DriverRuntimeSerialSpscHeader::empty(
+                0,
+                DRIVER_RUNTIME_SERIAL_SPSC_FLAG_RUNTIME_TO_ROOT,
+            ),
+        );
+        Some((tx_header, rx_header))
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn initialize_driver_task_serial_spsc_for_slot(
+    slot: &DriverTaskCommandSlot,
+    generation: u32,
+) -> bool {
+    if generation == 0 {
+        return false;
+    }
+    let Some((tx_header, rx_header)) = driver_task_serial_spsc_cold_initialize_shared(slot) else {
+        return false;
+    };
+    driver_task_serial_spsc_atomic_store(
+        tx_header,
+        DriverTaskSerialSpscAtomicField::Generation,
+        generation,
+        Ordering::Release,
+    );
+    driver_task_serial_spsc_atomic_store(
+        rx_header,
+        DriverTaskSerialSpscAtomicField::Generation,
+        generation,
+        Ordering::Release,
+    );
+    driver_task_serial_spsc_header_snapshot(
+        slot,
+        DRIVER_RUNTIME_SERIAL_TX_SPSC_FIRST_PAGE,
+        generation,
+        DRIVER_RUNTIME_SERIAL_SPSC_FLAG_ROOT_TO_RUNTIME,
+    )
+    .is_some()
+        && driver_task_serial_spsc_header_snapshot(
+            slot,
+            DRIVER_RUNTIME_SERIAL_RX_SPSC_FIRST_PAGE,
+            generation,
+            DRIVER_RUNTIME_SERIAL_SPSC_FLAG_RUNTIME_TO_ROOT,
+        )
+        .is_some()
+}
+
+/// Enqueue one bounded root-to-runtime serial byte prefix.
+#[cfg(feature = "kernel")]
+#[must_use]
+pub fn driver_task_serial_spsc_enqueue_tx(
+    generation: u32,
+    bytes: &[u8],
+) -> Option<DriverTaskSerialSpscTransfer> {
+    let slot = driver_task_slot_for_contract(SERIAL_DRIVER_TASK_CONTRACT)?;
+    let guard = acquire_driver_task_serial_spsc_root_guard(slot)?;
+    let transfer = driver_task_serial_spsc_enqueue_tx_for_slot(slot, generation, bytes)?;
+    finish_driver_task_serial_spsc_root_turn_with_signal(&guard, transfer, |notification| {
+        crate::sel4::signal_unchecked(notification as sel4_sys::seL4_CPtr);
+    })
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_serial_spsc_enqueue_tx_for_slot(
+    slot: &DriverTaskCommandSlot,
+    generation: u32,
+    bytes: &[u8],
+) -> Option<DriverTaskSerialSpscTransfer> {
+    let header = driver_task_serial_spsc_header_snapshot(
+        slot,
+        DRIVER_RUNTIME_SERIAL_TX_SPSC_FIRST_PAGE,
+        generation,
+        DRIVER_RUNTIME_SERIAL_SPSC_FLAG_ROOT_TO_RUNTIME,
+    )?;
+    let used = header.occupancy()? as usize;
+    let written = bytes
+        .len()
+        .min(DRIVER_RUNTIME_SERIAL_SPSC_CAPACITY.saturating_sub(used));
+    if written == 0 {
+        return Some(DriverTaskSerialSpscTransfer {
+            work_remaining: used != 0,
+            ..DriverTaskSerialSpscTransfer::default()
+        });
+    }
+    driver_task_serial_spsc_copy_into_shared(
+        slot,
+        DRIVER_RUNTIME_SERIAL_TX_SPSC_FIRST_PAGE,
+        header.producer_index,
+        &bytes[..written],
+    )?;
+    let next = header.producer_index.wrapping_add(written as u32);
+    let next_used = used.saturating_add(written);
+    let ptr = driver_task_serial_spsc_header_ptr(slot, DRIVER_RUNTIME_SERIAL_TX_SPSC_FIRST_PAGE)?;
+    // Root is the sole producer for this generation. Payload and producer
+    // telemetry precede the release commit; notifications are considered only
+    // after that durable cursor is visible.
+    driver_task_serial_spsc_atomic_store(
+        ptr,
+        DriverTaskSerialSpscAtomicField::ProducedBytes,
+        header.produced_bytes.saturating_add(written as u32),
+        Ordering::Relaxed,
+    );
+    driver_task_serial_spsc_atomic_store(
+        ptr,
+        DriverTaskSerialSpscAtomicField::HighWater,
+        header.high_water.max(next_used as u32),
+        Ordering::Relaxed,
+    );
+    driver_task_serial_spsc_atomic_store(
+        ptr,
+        DriverTaskSerialSpscAtomicField::ProducerIndex,
+        next,
+        Ordering::Relaxed,
+    );
+    driver_task_serial_spsc_atomic_store(
+        ptr,
+        DriverTaskSerialSpscAtomicField::ProducerCommit,
+        next,
+        Ordering::Release,
+    );
+    let post_consumer = driver_task_serial_spsc_atomic_load(
+        ptr,
+        DriverTaskSerialSpscAtomicField::ConsumerCommit,
+        Ordering::Acquire,
+    );
+    let post_used = next.wrapping_sub(post_consumer);
+    if post_used > DRIVER_RUNTIME_SERIAL_SPSC_CAPACITY as u32 {
+        driver_task_serial_spsc_poison(ptr);
+        return None;
+    }
+    let data_doorbell = driver_runtime_serial_spsc_data_doorbell_due(
+        used as u32,
+        header.producer_index,
+        post_consumer,
+    );
+    if data_doorbell {
+        driver_task_serial_spsc_atomic_store(
+            ptr,
+            DriverTaskSerialSpscAtomicField::DoorbellEpoch,
+            header.doorbell_epoch.wrapping_add(1).max(1),
+            Ordering::Release,
+        );
+    }
+    Some(DriverTaskSerialSpscTransfer {
+        bytes: written,
+        data_doorbell,
+        producer_rearm: false,
+        work_remaining: post_used != 0,
+    })
+}
+
+/// Drain one bounded runtime-to-root serial byte prefix.
+#[cfg(feature = "kernel")]
+#[must_use]
+pub fn driver_task_serial_spsc_dequeue_rx(
+    generation: u32,
+    bytes: &mut [u8],
+) -> Option<DriverTaskSerialSpscTransfer> {
+    let slot = driver_task_slot_for_contract(SERIAL_DRIVER_TASK_CONTRACT)?;
+    let guard = acquire_driver_task_serial_spsc_root_guard(slot)?;
+    let transfer = driver_task_serial_spsc_dequeue_rx_for_slot(slot, generation, bytes)?;
+    finish_driver_task_serial_spsc_root_turn_with_signal(&guard, transfer, |notification| {
+        crate::sel4::signal_unchecked(notification as sel4_sys::seL4_CPtr);
+    })
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_serial_spsc_dequeue_rx_for_slot(
+    slot: &DriverTaskCommandSlot,
+    generation: u32,
+    bytes: &mut [u8],
+) -> Option<DriverTaskSerialSpscTransfer> {
+    driver_task_serial_spsc_dequeue_rx_for_slot_with_post_commit(slot, generation, bytes, || {})
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_serial_spsc_dequeue_rx_for_slot_with_post_commit<PostCommit>(
+    slot: &DriverTaskCommandSlot,
+    generation: u32,
+    bytes: &mut [u8],
+    post_commit: PostCommit,
+) -> Option<DriverTaskSerialSpscTransfer>
+where
+    PostCommit: FnOnce(),
+{
+    let header = driver_task_serial_spsc_header_snapshot(
+        slot,
+        DRIVER_RUNTIME_SERIAL_RX_SPSC_FIRST_PAGE,
+        generation,
+        DRIVER_RUNTIME_SERIAL_SPSC_FLAG_RUNTIME_TO_ROOT,
+    )?;
+    let available = header.occupancy()? as usize;
+    let read = bytes.len().min(available);
+    if read == 0 {
+        return Some(DriverTaskSerialSpscTransfer {
+            work_remaining: available != 0,
+            ..DriverTaskSerialSpscTransfer::default()
+        });
+    }
+    fence(Ordering::Acquire);
+    driver_task_serial_spsc_copy_from_shared(
+        slot,
+        DRIVER_RUNTIME_SERIAL_RX_SPSC_FIRST_PAGE,
+        header.consumer_index,
+        &mut bytes[..read],
+    )?;
+    let next = header.consumer_index.wrapping_add(read as u32);
+    let ptr = driver_task_serial_spsc_header_ptr(slot, DRIVER_RUNTIME_SERIAL_RX_SPSC_FIRST_PAGE)?;
+    driver_task_serial_spsc_atomic_store(
+        ptr,
+        DriverTaskSerialSpscAtomicField::ConsumedBytes,
+        header.consumed_bytes.saturating_add(read as u32),
+        Ordering::Relaxed,
+    );
+    driver_task_serial_spsc_atomic_store(
+        ptr,
+        DriverTaskSerialSpscAtomicField::ConsumerIndex,
+        next,
+        Ordering::Relaxed,
+    );
+    driver_task_serial_spsc_atomic_store(
+        ptr,
+        DriverTaskSerialSpscAtomicField::ConsumerCommit,
+        next,
+        Ordering::Release,
+    );
+    post_commit();
+    let post_producer = driver_task_serial_spsc_atomic_load(
+        ptr,
+        DriverTaskSerialSpscAtomicField::ProducerCommit,
+        Ordering::Acquire,
+    );
+    let Some((producer_rearm, work_remaining)) = driver_runtime_serial_spsc_consumer_post_commit(
+        available as u32,
+        header.consumer_index,
+        next,
+        post_producer,
+    ) else {
+        driver_task_serial_spsc_poison(ptr);
+        return None;
+    };
+    if producer_rearm {
+        driver_task_serial_spsc_atomic_store(
+            ptr,
+            DriverTaskSerialSpscAtomicField::ConsumerWakeEpoch,
+            header.consumer_wake_epoch.wrapping_add(1).max(1),
+            Ordering::Release,
+        );
+    }
+    Some(DriverTaskSerialSpscTransfer {
+        bytes: read,
+        data_doorbell: false,
+        producer_rearm,
+        work_remaining,
+    })
 }
 
 /// Return the endpoint and ring-frame caps for a linked bus-owner runtime.
@@ -14864,19 +15761,21 @@ fn generated_cyw43_sdio_runtime_topology_sealed(
     descriptor: &DriverRuntimeInitDescriptor,
 ) -> bool {
     let policy = crate::generated::driver_runtime_image_policy();
-    if !policy.required
-        || policy.irqs.len() != 3
-        || policy.bus_links.len() != 1
-        || descriptor.bus_link_count != 1
-    {
+    if !policy.required || policy.bus_links.len() != 1 || descriptor.bus_link_count != 1 {
         return false;
     }
-    let generated_irq = policy.irqs[1];
-    let generated_dma_irq = policy.irqs[2];
-    if policy.irqs[0].hot_path != DriverTaskHotPath::SerialConsole.as_str()
-        || generated_irq.hot_path != DriverTaskHotPath::SdioHost.as_str()
-        || generated_dma_irq.hot_path != DriverTaskHotPath::SdioHost.as_str()
-    {
+    let mut generated_sdio_irqs = policy
+        .irqs
+        .iter()
+        .copied()
+        .filter(|irq| irq.hot_path == DriverTaskHotPath::SdioHost.as_str());
+    let Some(generated_irq) = generated_sdio_irqs.next() else {
+        return false;
+    };
+    let Some(generated_dma_irq) = generated_sdio_irqs.next() else {
+        return false;
+    };
+    if generated_sdio_irqs.next().is_some() {
         return false;
     }
     let generated_link = policy.bus_links[0];
@@ -14993,7 +15892,7 @@ fn generated_cyw43_sdio_runtime_topology_sealed(
 #[cfg(feature = "kernel")]
 fn generated_serial_runtime_irq_sealed(descriptor: &DriverRuntimeInitDescriptor) -> bool {
     let policy = crate::generated::driver_runtime_image_policy();
-    if !policy.required || policy.irqs.len() != 3 || descriptor.bus_link_count != 0 {
+    if !policy.required || descriptor.bus_link_count != 0 {
         return false;
     }
     let mut matches = policy
@@ -15025,6 +15924,40 @@ fn generated_serial_runtime_irq_sealed(descriptor: &DriverRuntimeInitDescriptor)
 }
 
 #[cfg(feature = "kernel")]
+fn generated_genet_runtime_irq_sealed(descriptor: &DriverRuntimeInitDescriptor) -> bool {
+    let policy = crate::generated::driver_runtime_image_policy();
+    if !policy.required || descriptor.bus_link_count != 0 {
+        return false;
+    }
+    let mut matches = policy
+        .irqs
+        .iter()
+        .copied()
+        .filter(|irq| irq.hot_path == DriverTaskHotPath::GenetNic.as_str());
+    let Some(generated_irq) = matches.next() else {
+        return false;
+    };
+    if matches.next().is_some()
+        || generated_irq.irq != DRIVER_RUNTIME_GENET_IRQ
+        || generated_irq.badge != DRIVER_RUNTIME_GENET_IRQ_BADGE
+        || u32::from(generated_irq.handler_slot) != DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT
+        || u32::from(generated_irq.notification_slot) != DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT
+        || generated_irq.trigger != crate::generated::DriverRuntimeIrqTrigger::Level
+    {
+        return false;
+    }
+    let irq = descriptor.irqs[0];
+    descriptor.irq_count == 1
+        && descriptor.flags & DRIVER_RUNTIME_INIT_FLAG_IRQS_BOUND != 0
+        && descriptor.flags & DRIVER_RUNTIME_INIT_FLAG_POLL_ONLY == 0
+        && irq.irq == generated_irq.irq
+        && irq.badge == generated_irq.badge
+        && irq.handler_slot == u32::from(generated_irq.handler_slot)
+        && irq.notification_slot == u32::from(generated_irq.notification_slot)
+        && irq.trigger == DRIVER_RUNTIME_IRQ_TRIGGER_LEVEL
+}
+
+#[cfg(feature = "kernel")]
 fn driver_runtime_descriptor_expected_bus_link_sealed(
     hot_path: DriverTaskHotPath,
     task_key: u32,
@@ -15032,6 +15965,18 @@ fn driver_runtime_descriptor_expected_bus_link_sealed(
 ) -> bool {
     match hot_path {
         DriverTaskHotPath::SerialConsole => generated_serial_runtime_irq_sealed(descriptor),
+        DriverTaskHotPath::GenetNic => {
+            let policy = crate::generated::driver_runtime_image_policy();
+            if policy
+                .irqs
+                .iter()
+                .any(|irq| irq.hot_path == DriverTaskHotPath::GenetNic.as_str())
+            {
+                generated_genet_runtime_irq_sealed(descriptor)
+            } else {
+                descriptor.bus_link_count == 0
+            }
+        }
         DriverTaskHotPath::UsbKeyboard => descriptor.has_sealed_pointer_free_bus_link(
             task_key,
             DriverTaskHotPath::PcieRoot.as_u32(),
@@ -24922,7 +25867,11 @@ pub const HDMI_TEXT_DRIVER_TASK_CONTRACT: DriverTaskContract = DriverTaskContrac
     class: DriverTaskClass::DisplayRefresh,
     authority: DriverTaskAuthority::DisplaySink,
     isolation: DriverTaskIsolation::DedicatedSeL4Task,
-    budget: DriverTaskBudget::preemptible(64, 4096, 64),
+    budget: DriverTaskBudget::preemptible(
+        pi4_driver_abi::DRIVER_RUNTIME_HDMI_SERVICE_MAX_OPS,
+        pi4_driver_abi::DRIVER_RUNTIME_HDMI_SERVICE_MAX_BYTES,
+        pi4_driver_abi::DRIVER_RUNTIME_HDMI_SERVICE_MAX_FRAMES,
+    ),
     queue_depth: 64,
 };
 
@@ -26124,6 +27073,206 @@ mod tests {
     #[cfg(feature = "kernel")]
     #[repr(align(4096))]
     struct AlignedDriverTaskRing([u32; DRIVER_TASK_RING_PAGE_BYTES / 4]);
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn serial_spsc_root_rx_final_recheck_observes_a_racing_commit() {
+        let slot = DriverTaskCommandSlot::new();
+        let mut pages: [Box<AlignedDriverTaskRing>; DRIVER_RUNTIME_SERIAL_SPSC_SHARED_PAGES] =
+            std::array::from_fn(|_| {
+                Box::new(AlignedDriverTaskRing(
+                    [0; DRIVER_TASK_RING_PAGE_BYTES / core::mem::size_of::<u32>()],
+                ))
+            });
+        for (index, page) in pages.iter_mut().enumerate() {
+            slot.shared_frame_caps[index].store(index.saturating_add(1), Ordering::Release);
+            slot.shared_frame_root_ptrs[index]
+                .store(page.0.as_mut_ptr() as usize, Ordering::Release);
+        }
+        slot.shared_frame_count
+            .store(DRIVER_RUNTIME_SERIAL_SPSC_SHARED_PAGES, Ordering::Release);
+
+        let generation = 7;
+        let rx_header = pages[DRIVER_RUNTIME_SERIAL_RX_SPSC_FIRST_PAGE]
+            .0
+            .as_mut_ptr() as *mut DriverRuntimeSerialSpscHeader;
+        let rx_bytes = rx_header.cast::<u8>();
+        // SAFETY: The test owns the aligned two-page RX arena. It initializes
+        // the quiescent header, then models the sole runtime producer using the
+        // same atomic cursor publication order as production.
+        unsafe {
+            core::ptr::write(
+                rx_header,
+                DriverRuntimeSerialSpscHeader::empty(
+                    generation,
+                    DRIVER_RUNTIME_SERIAL_SPSC_FLAG_RUNTIME_TO_ROOT,
+                ),
+            );
+            core::ptr::write(rx_bytes.add(DRIVER_RUNTIME_SERIAL_SPSC_HEADER_BYTES), b'a');
+        }
+        driver_task_serial_spsc_atomic_store(
+            rx_header,
+            DriverTaskSerialSpscAtomicField::ProducerIndex,
+            1,
+            Ordering::Relaxed,
+        );
+        driver_task_serial_spsc_atomic_store(
+            rx_header,
+            DriverTaskSerialSpscAtomicField::ProducerCommit,
+            1,
+            Ordering::Release,
+        );
+
+        let mut first = [0u8; 1];
+        let transfer = driver_task_serial_spsc_dequeue_rx_for_slot_with_post_commit(
+            &slot,
+            generation,
+            &mut first,
+            || {
+                // SAFETY: This hook deterministically models the child commit
+                // after root publishes consumer=1 but before root's final
+                // producer recheck. Byte 1 is inside the admitted RX payload.
+                unsafe {
+                    core::ptr::write(
+                        rx_bytes.add(DRIVER_RUNTIME_SERIAL_SPSC_HEADER_BYTES + 1),
+                        b'b',
+                    );
+                }
+                driver_task_serial_spsc_atomic_store(
+                    rx_header,
+                    DriverTaskSerialSpscAtomicField::ProducerIndex,
+                    2,
+                    Ordering::Relaxed,
+                );
+                driver_task_serial_spsc_atomic_store(
+                    rx_header,
+                    DriverTaskSerialSpscAtomicField::ProducerCommit,
+                    2,
+                    Ordering::Release,
+                );
+            },
+        )
+        .expect("the root RX consumer must accept the committed first byte");
+        assert_eq!(first, [b'a']);
+        assert_eq!(transfer.bytes, 1);
+        assert!(
+            transfer.work_remaining,
+            "the post-commit producer recheck must prevent a lost wake"
+        );
+
+        let mut second = [0u8; 1];
+        let final_transfer =
+            driver_task_serial_spsc_dequeue_rx_for_slot(&slot, generation, &mut second)
+                .expect("the racing byte remains durably consumable");
+        assert_eq!(second, [b'b']);
+        assert_eq!(final_transfer.bytes, 1);
+        assert!(!final_transfer.work_remaining);
+        assert!(
+            driver_task_serial_spsc_dequeue_rx_for_slot(&slot, generation + 1, &mut second)
+                .is_none()
+        );
+
+        driver_task_serial_spsc_atomic_store(
+            rx_header,
+            DriverTaskSerialSpscAtomicField::ProducerIndex,
+            DRIVER_RUNTIME_SERIAL_SPSC_CAPACITY as u32 + 3,
+            Ordering::Relaxed,
+        );
+        driver_task_serial_spsc_atomic_store(
+            rx_header,
+            DriverTaskSerialSpscAtomicField::ProducerCommit,
+            DRIVER_RUNTIME_SERIAL_SPSC_CAPACITY as u32 + 3,
+            Ordering::Release,
+        );
+        assert!(
+            driver_task_serial_spsc_dequeue_rx_for_slot(&slot, generation, &mut second).is_none()
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn serial_spsc_root_turn_drains_and_fences_notification_before_revoke() {
+        let slot = DriverTaskCommandSlot::new();
+        let mut pages: [Box<AlignedDriverTaskRing>; DRIVER_RUNTIME_SERIAL_SPSC_SHARED_PAGES] =
+            std::array::from_fn(|_| {
+                Box::new(AlignedDriverTaskRing(
+                    [0; DRIVER_TASK_RING_PAGE_BYTES / core::mem::size_of::<u32>()],
+                ))
+            });
+        for (index, page) in pages.iter_mut().enumerate() {
+            slot.shared_frame_caps[index].store(index.saturating_add(1), Ordering::Release);
+            slot.shared_frame_root_ptrs[index]
+                .store(page.0.as_mut_ptr() as usize, Ordering::Release);
+        }
+        slot.shared_frame_count
+            .store(DRIVER_RUNTIME_SERIAL_SPSC_SHARED_PAGES, Ordering::Release);
+        let generation = 9;
+        assert!(initialize_driver_task_serial_spsc_for_slot(
+            &slot, generation
+        ));
+        slot.endpoint.store(0x0fd7, Ordering::Release);
+        slot.root_notification.store(0x77, Ordering::Release);
+        slot.mcs_cap_generation.store(3, Ordering::Release);
+        slot.mcs_command_admission_open.store(1, Ordering::Release);
+
+        let live_guard = acquire_driver_task_serial_spsc_root_guard_for(&slot, true)
+            .expect("live serial publication must admit one counted root turn");
+        assert_eq!(
+            slot.mcs_nonblocking_root_producers.load(Ordering::Acquire),
+            1
+        );
+        let mut signaled = 0usize;
+        assert!(finish_driver_task_serial_spsc_root_turn_with_signal(
+            &live_guard,
+            DriverTaskSerialSpscTransfer {
+                data_doorbell: true,
+                ..DriverTaskSerialSpscTransfer::default()
+            },
+            |notification| signaled = notification,
+        )
+        .is_some());
+        assert_eq!(signaled, 0x77);
+        drop(live_guard);
+        assert_eq!(
+            slot.mcs_nonblocking_root_producers.load(Ordering::Acquire),
+            0
+        );
+
+        let draining_guard = acquire_driver_task_serial_spsc_root_guard_for(&slot, true)
+            .expect("the second pre-fault turn must also be counted");
+        let transfer = driver_task_serial_spsc_enqueue_tx_for_slot(&slot, generation, b"x")
+            .expect("the pre-fault byte must commit inside the counted turn");
+        assert!(transfer.data_doorbell);
+        slot.mcs_command_admission_open.store(0, Ordering::Release);
+        slot.endpoint.store(0, Ordering::Release);
+        slot.root_notification.store(0, Ordering::Release);
+        let mut stale_signal = false;
+        assert!(finish_driver_task_serial_spsc_root_turn_with_signal(
+            &draining_guard,
+            transfer,
+            |_| stale_signal = true,
+        )
+        .is_none());
+        assert!(!stale_signal);
+        slot.mcs_producer_drain_reported
+            .store(MCS_PRODUCER_DRAIN_ROOT_OBSERVED, Ordering::Release);
+        drop(draining_guard);
+        assert_eq!(
+            slot.mcs_nonblocking_root_producers.load(Ordering::Acquire),
+            0
+        );
+        assert!(acquire_driver_task_serial_spsc_root_guard_for(&slot, true).is_none());
+
+        fence_driver_task_serial_spsc_headers_after_fault(&slot);
+        assert!(driver_task_serial_spsc_header_snapshot(
+            &slot,
+            DRIVER_RUNTIME_SERIAL_TX_SPSC_FIRST_PAGE,
+            generation,
+            DRIVER_RUNTIME_SERIAL_SPSC_FLAG_ROOT_TO_RUNTIME,
+        )
+        .is_none());
+        assert!(driver_task_serial_spsc_enqueue_tx_for_slot(&slot, generation, b"y").is_none());
+    }
 
     #[cfg(feature = "kernel")]
     #[test]
@@ -28703,6 +29852,30 @@ mod tests {
         assert_eq!(PCIE_ROOT_DRIVER_TASK_CONTRACT.max_service_us(), 750);
         assert_eq!(RTL8139_DRIVER_TASK_CONTRACT.max_service_us(), 1_000);
         assert_eq!(VIRTIO_NET_DRIVER_TASK_CONTRACT.max_service_us(), 1_000);
+    }
+
+    #[test]
+    fn hdmi_service_grant_matches_the_bounded_compositor_slice() {
+        assert_eq!(
+            HDMI_TEXT_DRIVER_TASK_CONTRACT.budget.max_ops_per_turn,
+            pi4_driver_abi::DRIVER_RUNTIME_HDMI_SERVICE_MAX_OPS,
+        );
+        assert_eq!(
+            HDMI_TEXT_DRIVER_TASK_CONTRACT.budget.max_bytes_per_turn,
+            pi4_driver_abi::DRIVER_RUNTIME_HDMI_SERVICE_MAX_BYTES,
+        );
+        assert_eq!(
+            HDMI_TEXT_DRIVER_TASK_CONTRACT.budget.max_frames_per_turn,
+            pi4_driver_abi::DRIVER_RUNTIME_HDMI_SERVICE_MAX_FRAMES,
+        );
+        assert_eq!(
+            (
+                HDMI_TEXT_DRIVER_TASK_CONTRACT.budget.max_ops_per_turn,
+                HDMI_TEXT_DRIVER_TASK_CONTRACT.budget.max_bytes_per_turn,
+                HDMI_TEXT_DRIVER_TASK_CONTRACT.budget.max_frames_per_turn,
+            ),
+            (1_280, 4_096, 80),
+        );
     }
 
     #[test]
@@ -32141,6 +33314,7 @@ mod tests {
         }
 
         for contract in [
+            SERIAL_DRIVER_TASK_CONTRACT,
             USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
             SERIAL_DRIVER_TASK_CONTRACT,
             HDMI_TEXT_DRIVER_TASK_CONTRACT,
@@ -40074,6 +41248,7 @@ mod tests {
         assert!(!driver_task_mcs_nonblocking_root_producer_requires_tracking(true, 1, false,));
 
         for contract in [
+            SERIAL_DRIVER_TASK_CONTRACT,
             USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
             HDMI_TEXT_DRIVER_TASK_CONTRACT,
             GENET_DRIVER_TASK_CONTRACT,

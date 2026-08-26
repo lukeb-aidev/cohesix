@@ -890,12 +890,45 @@ Pi image, or prove firmware, SD, USB, GENET, CYW43, or seL4 behavior.
 
 ## Network and Local-Seat Claims
 
+### Serial transport
+
+The four-page serial SPSC candidate is not qualified by ABI tests, a target
+build, or a staged image. On the fresh read-back-proven Pi image, retain one
+UART owner and exercise simultaneous sustained RX and TX through the ordinary
+serial console while HDMI, USB, and the selected network path are active.
+Record complete byte counts and ordering across ring wrap, full-ring
+backpressure followed by root drain, a software continuation that retires a
+previously pending UART handler acknowledgement, and prompt/diagnostic latency.
+Confirm construction reports the CPU-only serial pages through the coherent
+Normal-memory path while DMA/MMIO pages remain uncached; any mapping-attribute,
+atomic, poison, or alignment fault fails the candidate.
+Require zero poison, invalid-generation/cursor, drop, duplicate, no-reply,
+stalled-ACK, or cross-direction corruption records. Root's cooperative
+EventPump observation is the admitted wake path; a host model or child IRQ
+counter must not be reported as proof that an interrupt woke root directly.
+The unchanged 115200 baud still bounds wire throughput, so report measured
+command/response latency and loss separately from CPU-side ring service.
+
 ### Wired GENET
 
 A GENET claim needs a read-back image marker, wired DHCP or accepted static
 configuration, bidirectional packet evidence, driver-task proof, raw TCP, and
 authenticated `cohsh` from the same boot. Evidence from another image remains
 a comparator, not proof for the image under test.
+
+For the Pi IRQ/DPC candidate, the same boot must show that construction sealed
+exact seL4 IRQ 189 with badge 1024 for GENET default queue 16 and no second-line
+priority-queue IRQ. Capture the child DPC's per-quantum frame/byte count,
+private-queue depth/high-water state, source mask/unmask/readback, final
+source/ring recheck, and handler-ack result. Each quantum must remain at or
+below 16 frames and 24,576 bytes; queue pressure must preserve accepted frame
+order and bounded control/data fairness without overwrite, duplicate, or
+silent drop. Then prove ARP, ICMP, raw TCP, authenticated `cohsh`, and the
+focused `.coh` scripts from the boot-paired wired capture before throughput or
+latency measurement. QEMU's retained three-IRQ profile is regression evidence,
+not Pi IRQ or GENET performance proof. The absence of direct GENET-console
+rings is intentional; all traffic still crosses the admitted root-mediated
+transport.
 
 A dispatched GENET console command performs no TCP flush in its `Dispatch`
 turn. It installs a cursor owned by the active TCP connection; each later
@@ -949,6 +982,15 @@ Root admits the generated pair, then the SDIO runtime owns power sequencing,
 command issue, completion, IRQ/DPC progress, retry, and recovery for that
 physical lifetime. No root fallback, compatibility engine, watchdog poller, or
 second replay lane may operate the same device.
+
+For the aligned bulk-copy candidate, retain the exact first-recovery pre-scrub
+DMA4 discriminator and compare it with the newest same-boot serial/pcap pair.
+The boot must advance the real command engine through firmware/control,
+association, EAPOL, address binding, and data service with no new owner,
+retry, pair-restart, device-deadline, aggregate-deadline, or completion-order
+delta. Host alignment/range tests prove only the CPU-copy contract; they do not
+prove DMA coherency, SDIO command completion, CYW43 radio service, throughput,
+or reliability on the Pi.
 
 The owner publishes complete sequence-last records before signalling.
 Notifications are coalescing wakeups, not transaction history. Root may mask
@@ -1063,6 +1105,27 @@ next physical-operator cut. Persistent redraw/no-reply work therefore cannot
 starve Wi-Fi discovery or GENET, while ordinary ready/terminal Wi-Fi work keeps
 Network priority at the bus boundary. Under load, preserve serial and
 local-seat command liveness before nonessential mirroring or redraws.
+
+For a Pi image carrying the write-only HDMI damage compositor, record the exact
+source/image identity and measure first takeover, a short printable echo, one
+new-line scroll, and ten consecutive scrolls from the same boot. Include split
+escape sequences, an aligned and unaligned tab (which must advance by 8 and
+1-through-7 cells respectively), and a wide clear that requires more than one
+retained parser/plane turn. Confirm that no processed prefix, row-origin
+advance, or glyph is duplicated; verify the final visible rows and cursor, zero
+outstanding HDMI work, bounded deferral debt, and concurrent serial response
+plus USB keystroke delivery. The selected 2,000 us HDMI reservation, 1,800 us
+candidate WCET used for static admission, and successful host/target builds are
+construction evidence only; without these same-boot observations they do not
+establish visible correctness, measured execution time, display latency,
+refresh rate, or polished performance.
+
+This integration does not change xHCI, HID, the one-deep interrupt-IN lifetime,
+or USB scheduling. Re-run the existing Gate 10, real-key, dropped-keystroke,
+serial/HDMI concurrency, and GENET-versus-Wi-Fi comparisons; any observed USB
+improvement is same-boot performance evidence, not an implemented USB-driver
+repair by implication.
+
 After attach or endpoint recovery, decoded held-key/modifier traffic is health
 telemetry only until a decoded all-zero release establishes a fresh baseline.
 The one-second HID idle interval supplies that baseline during ordinary idle;

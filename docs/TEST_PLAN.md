@@ -5542,7 +5542,77 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
       Wi-Fi progress suppression during USB boot activity and after USB
       first-byte proof. These checks introduce no console command or USB/HDMI
       authority change. The reserved 48-byte USB old-good slot is the only ABI
-      evidence extension described above; runtime publication is dormant. Pi 4
+      evidence extension described above; runtime publication is dormant.
+      The Pi write-only damage-compositor regression must independently prove
+      fixed row-ring scroll semantics, zero scanout reads during scroll,
+      genuinely resumable parse/plane/raster progress, exact command-identity
+      retention, and no replay of an already-consumed prefix or completed
+      multi-cell effect. A pure 4,096-byte parser-envelope case must require the
+      expected bounded sequence of turns at no more than 1,280 operations each,
+      while the production service path must enforce the unchanged 1,536-byte
+      pointer-free frame maximum and must not advertise a 4,096-byte command;
+      wide clears up to the 32,768-cell plane, repeated bottom-row scroll, and
+      split escape sequences must preserve a retained cursor without duplicate
+      row origin changes. Tabs must advance to the next eight-column stop by
+      exactly 1 through 8 cells, including 8 when already aligned. Reject
+      persistent/steady/unknown flags, auxiliary or frame metadata, and any
+      zero, narrower, broader, or byte-insufficient grant before mutation;
+      preserve exact 1,280-operation/4,096-byte/80-row bounds, form-feed clear
+      completion, final XRGB8888 and RGB888 pixels, full-capacity row-ring wrap,
+      and fail-closed rejection of incomplete, truncated, oversized, or
+      misaligned framebuffer geometry. The compiled Pi profile must retain the
+      exact 2,000 us HDMI budget, 1,800 us candidate WCET, 2,100 us derived
+      response, 7,100 us derived GPU-executor response, and 7,400/9,000 us
+      core-2 admitted/usable bound. The WCET and responses are static-admission
+      inputs/results, not measured target timing. Those deterministic host
+      checks, target compilation, staged image construction, or a completed
+      HDMI command are not Pi boot, visible correctness, latency, refresh-rate,
+      or acceptance evidence. A fresh exact-image Pi run must measure first
+      takeover, printable echo, one-row and ten-row scroll, visible final state,
+      outstanding/deferral debt, and serial plus USB liveness under display
+      pressure before polished or world-class performance is claimed.
+      The serial transport regression must prove that exactly four existing
+      pages form two independent two-page/8,128-byte generation-bound SPSC
+      rings. Prove only those CPU rings use identically cacheable,
+      execute-never Normal-memory aliases in root and child, while DMA, MMIO,
+      and every other driver payload retain their selected uncached mappings.
+      Then prove payload-before-producer and consume-before-consumer
+      publication, commit-paired cursor validation, wrap/full/empty ordering,
+      cross-direction isolation, restart-generation fencing, poison/fail-closed
+      invalid cursors, and both producer/consumer final rechecks. Fill the RX
+      ring, retain the combined UART IRQ acknowledgement, drain it from root,
+      and prove a badge-zero software continuation retires that same pending
+      acknowledgement without a second UART owner or synthetic timer. Root
+      tests must prove the cooperative EventPump observation path and must not
+      model a direct IRQ wake into root. A fresh exact-image Pi run must then
+      prove simultaneous RX
+      and TX without loss, duplication, corruption, poison, stalled ACK, or
+      command-latency regression; the unchanged baud/owner/budgets remain
+      separate from CPU-side ring throughput.
+      The SDIO/CYW43 regression must compare aligned prefix/`u64`-body/tail
+      copies with bytewise truth for every source/destination alignment and
+      direction, and reject zero-page, overflow, out-of-range, and
+      discontinuous spans before mutation. It must prove the only endpoints
+      are the existing shared command payload and private uncached DMA4 bounce,
+      and that the exact pre-scrub discriminator plus owners, retries,
+      deadlines, ordering, and pair-restart policy are unchanged. These tests
+      are not SDIO, CYW43, association, or performance evidence; a fresh
+      same-boot Pi serial/pcap pair must still prove the complete command engine
+      and Wi-Fi acceptance ladder.
+      The Pi GENET profile regression must require exact IRQ 189, badge 1024,
+      and default queue 16 while the QEMU profile retains exactly three
+      driver-runtime IRQ entries, no GENET IRQ, and unchanged scheduling.
+      Runtime tests must prove
+      a maximum 16-frame/24,576-byte child DPC quantum, private-queue overflow
+      preservation and wrap, bounded control/data fairness, exact-badge
+      admission, durable masked continuation, device-store/unmask readback,
+      final source/ring recheck, and no handler acknowledgement while accepted
+      work remains. Generated-profile tests must also prove that no direct
+      GENET-console link/caps or nine-page export-helper bypass is emitted.
+      Fresh same-boot wired evidence must prove DHCP/static policy, ARP, ICMP,
+      raw TCP, authenticated `cohsh`, focused `.coh` scripts, queue/IRQ health,
+      loss, latency, and throughput before any Pi GENET or overall performance
+      claim. Pi 4
       manifest-default boots must
       use
       `hw.local_seat.enabled=true`, `hw.local_seat.required=true`, and matching
@@ -8117,8 +8187,8 @@ _Generated by coh-rtc (sha256: `fa11c64fe53b859365c45c8e33e565d428029a87529be00c
 ## Manifest fingerprints
 - `configs/root_task.toml` — `sha256:92df0d52bc280aa56a0a254a6411bfb6c99f38d22411421e4a84b52ca00c5970`
 - `configs/generated/root_task_resolved.json` — `sha256:cdbfdfa9f4de5c1cd8f8f9ef7233aff9465e15e5469cce6604bdde50872996ba`
-- `configs/root_task_pi4_uboot_aarch64.toml` — `sha256:2d136a17fb4c730465dd221ee17016bc2473a6ec21e696342d35112e7c7794ba`
-- Pi `pi4_production` transient resolved binding — `sha256:5ca99e2809e7dc0a42e0a29b4998b6d6abf87cc58ece11427aa2f1d2cf4a0d21`
+- `configs/root_task_pi4_uboot_aarch64.toml` — `sha256:77c46ba8b66b805911c5eef1218ddb7348046ba58e3acb8bbde3b4eb54f67881`
+- Pi `pi4_production` transient resolved binding — `sha256:a9916efc2ae0a11257a7b023ee559ede994fc943872454ad5d50d6cdde6c0c48`
 
 ## Transcript fixture hashes
 - `tests/fixtures/transcripts/boot_v0/serial.txt` — `sha256:2ea58218a937f0c702fd67dac83aa838a8c49b9d1fba1e0165dfa93a44ab3c6d`

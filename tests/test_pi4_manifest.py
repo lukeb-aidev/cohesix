@@ -83,3 +83,36 @@ def test_pi4_serial_tracks_one_frame_of_fifo_empty_refills() -> None:
     assert serial["budget_us"] == 500
     assert serial["period_us"] == 10_000
     assert serial["wcet_us"] == 400
+
+
+def test_pi4_hdmi_damage_compositor_uses_admitted_core_two_burst() -> None:
+    """Pi HDMI gets a bounded burst while core two retains its reserve."""
+
+    manifest = load_pi4_manifest()
+    temporal = manifest["temporal_authority"]
+    tasks = temporal["tasks"]
+    hdmi = next(task for task in tasks if task["id"] == "driver-hdmi")
+    gpu = next(
+        task for task in tasks if task["id"] == "root-worker-executor-gpu"
+    )
+    core_two = next(
+        admission
+        for admission in temporal["core_admission"]
+        if admission["core"] == 2
+    )
+    core_two_demand = sum(
+        task["budget_us"] for task in tasks if task["core"] == 2
+    )
+
+    assert hdmi["budget_us"] == 2_000
+    assert hdmi["period_us"] == 10_000
+    assert hdmi["wcet_us"] == 1_800
+    assert hdmi["response_time_us"] == 2_100
+    assert (
+        hdmi["wcet_provenance"]
+        == "m26e-pi4-hdmi-write-only-candidate-v1"
+    )
+    assert gpu["budget_us"] == 5_000
+    assert gpu["response_time_us"] == 7_100
+    assert core_two_demand == 7_400
+    assert core_two["capacity_us"] - core_two["reserve_us"] == 9_000

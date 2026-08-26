@@ -153,6 +153,14 @@ notification-slot = 3
 trigger = "level"
 
 [[root_task.driver_images.irqs]]
+hot-path = "genet-nic"
+irq = 189
+badge = 1024
+handler-slot = 4
+notification-slot = 3
+trigger = "level"
+
+[[root_task.driver_images.irqs]]
 hot-path = "sdio-host"
 irq = 158
 badge = 159
@@ -483,7 +491,7 @@ period_us = 10000
 deadline_us = 10000
 blocking_us = 0
 jitter_us = 0
-response_time_us = 5600
+response_time_us = 7100
 admitted = true
 max_refills = 8
 priority = 80
@@ -793,12 +801,12 @@ core = 2
 scheduling_context_slot = 12
 scheduling_context_bits = 8
 sched_control_core = 2
-budget_us = 400
+budget_us = 2000
 period_us = 10000
 deadline_us = 10000
 blocking_us = 0
 jitter_us = 0
-response_time_us = 600
+response_time_us = 2100
 admitted = true
 max_refills = 2
 priority = 96
@@ -806,8 +814,8 @@ mcp = 220
 timeout_badge = 653131788
 timeout_policy = "natural-postpone"
 consumed_time_evidence = true
-wcet_us = 300
-wcet_provenance = "m26e-qemu-candidate-v1"
+wcet_us = 1800
+wcet_provenance = "m26e-pi4-hdmi-write-only-candidate-v1"
 fault_handler = "root-fault"
 locality_bound = true
 
