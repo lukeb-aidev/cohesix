@@ -8118,8 +8118,10 @@ bindings. This source and target check proves Reply-association selection and
 notification routing only; it cannot prove a child ran or that a pending
 physical IRQ crossed its wait boundary on Pi.
 
-The Pi serial regression must lock the BCM2711 mini-UART IER values at RX
-`0x2`, TX-empty `0x1`, and combined `0x3`; validate every `MU_STAT[27:24]`
+The Pi serial regression must lock the hardware-validated BCM2711 mini-UART IER
+values at RX `0x1`, TX-empty `0x2`, and combined `0x3`, despite the reversed
+labels in the older BCM2835 peripheral PDF and in agreement with its published
+errata; validate every `MU_STAT[27:24]`
 fill level from zero through eight; reject an impossible level before the
 generation-bound TX-SPSC consumer cursor advances; and preserve exact byte
 order across partial, third, and later FIFO-empty wakes. Host tests establish

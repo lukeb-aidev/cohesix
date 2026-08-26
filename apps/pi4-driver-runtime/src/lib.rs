@@ -7606,10 +7606,15 @@ const MINI_UART_STAT_TX_FIFO_FILL_MASK: u32 = 0x0f;
 const MINI_UART_TX_BACKPRESSURE_TURN_LIMIT: u16 = 64;
 const MINI_UART_RX_DRAIN_LIMIT: usize = 128;
 const MINI_UART_RX_QUEUE_CAPACITY: usize = 512;
-// BCM2711 mini-UART IER is not the conventional 16550 bit assignment: bit 1
-// enables receive interrupts and bit 0 enables transmit-empty interrupts.
-const MINI_UART_IER_RX_INTERRUPT: u32 = 1 << 1;
-const MINI_UART_IER_TX_INTERRUPT: u32 = 1;
+// BCM2711 mini-UART IER bit 0 enables receive interrupts and bit 1 enables
+// transmit-empty interrupts. The older BCM2835 peripheral PDF labels these two
+// sources in the opposite order; its published errata swaps bits 1:0, matching
+// BCM2711 hardware, Linux's 16550 mapping, and QEMU's bcm2835_aux model. Keep
+// the numeric mapping explicit: reversing the sources disables operator RX
+// during takeover and arms a level TX-empty source while the FIFO is idle,
+// creating notification churn before durable TX requires that source.
+const MINI_UART_IER_RX_INTERRUPT: u32 = 1;
+const MINI_UART_IER_TX_INTERRUPT: u32 = 1 << 1;
 
 #[cfg(target_os = "none")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -78111,8 +78116,8 @@ mod tests {
 
     #[test]
     fn serial_uart_irq_mask_adds_tx_only_for_retained_frame() {
-        assert_eq!(MINI_UART_IER_RX_INTERRUPT, 0x2);
-        assert_eq!(MINI_UART_IER_TX_INTERRUPT, 0x1);
+        assert_eq!(MINI_UART_IER_RX_INTERRUPT, 0x1);
+        assert_eq!(MINI_UART_IER_TX_INTERRUPT, 0x2);
         assert_eq!(serial_mini_uart_irq_mask(false, false), 0);
         assert_eq!(
             serial_mini_uart_irq_mask(true, false),
@@ -78122,8 +78127,8 @@ mod tests {
             serial_mini_uart_irq_mask(true, true),
             MINI_UART_IER_RX_INTERRUPT | MINI_UART_IER_TX_INTERRUPT
         );
-        assert_eq!(serial_mini_uart_irq_mask(false, true), 0x1);
-        assert_eq!(serial_mini_uart_irq_mask(true, false), 0x2);
+        assert_eq!(serial_mini_uart_irq_mask(false, true), 0x2);
+        assert_eq!(serial_mini_uart_irq_mask(true, false), 0x1);
         assert_eq!(serial_mini_uart_irq_mask(true, true), 0x3);
     }
 
@@ -78273,7 +78278,7 @@ mod tests {
             let tx_state = serial_tx_post_fill_state(true, Some(occupancy));
             assert_eq!(
                 serial_mini_uart_irq_mask(true, tx_state.bytes_pending),
-                if occupancy == 0 { 0x2 } else { 0x3 },
+                if occupancy == 0 { 0x1 } else { 0x3 },
                 "TX-empty stays armed exactly while durable bytes remain",
             );
             queue.irq_ack_pending = true;

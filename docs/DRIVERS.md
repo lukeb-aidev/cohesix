@@ -653,8 +653,11 @@ reusable ownership pattern.
   its existing cooperative EventPump polling; the transport does not claim a
   direct interrupt wake into root.
 - Keep RX and TX loops bounded by the service contract.
-- Interpret the BCM2711 mini-UART registers by their native contract: IER bit 1
-  enables RX and bit 0 enables TX-empty. `MU_LSR` bit 5 proves only that at
+- Interpret the BCM2711 mini-UART IER by the hardware-validated Linux/QEMU
+  mapping: bit 0 enables RX and bit 1 enables TX-empty. The older BCM2835
+  peripheral PDF labels those two sources in the opposite order, but its
+  published errata swaps bits 1:0; do not copy the original reversal into the
+  BCM2711 runtime. `MU_LSR` bit 5 proves only that at
   least one TX byte is admissible; derive the exact zero-through-eight-byte
   write prefix from `MU_STAT[27:24]`, consume no SPSC byte on an impossible
   level, and keep TX-empty enabled exactly while committed TX bytes remain.
