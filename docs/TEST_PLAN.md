@@ -8108,11 +8108,23 @@ blocked caller cannot publish an endpoint continuation. Generation-bound
 continuation commands must remain one-way and reject a Reply-bearing form. A
 focused regression must reject an initial MCS NBWait/Poll spelling, reject
 endpoint polling or blocking while Reply is live, and select local yield for a
-synchronous multi-turn command. The exact MCS target compile must exercise the
-real `NBRecv`, local `NBWait`, and local `Wait` bindings. This source and target
-check proves Reply-association selection and preservation only; it cannot prove
-a child ran or that the pending CYW43 one-way command crossed its
-notification/wait boundary on Pi.
+synchronous multi-turn command. It must also prove that a zero-length,
+nonzero-badge result from the initial MCS `NBRecv` preserves every exact
+generated serial, GENET, SDIO, SDIO-DMA, and CYW43 notification, services at
+most one routed owner quantum, rejects malformed or unowned badges, and leaves
+the durable command for a later Reply-slot-6 receive. The exact MCS target
+compile must exercise the real `NBRecv`, local `NBWait`, and local `Wait`
+bindings. This source and target check proves Reply-association selection and
+notification routing only; it cannot prove a child ran or that a pending
+physical IRQ crossed its wait boundary on Pi.
+
+The Pi serial regression must lock the BCM2711 mini-UART IER values at RX
+`0x2`, TX-empty `0x1`, and combined `0x3`; validate every `MU_STAT[27:24]`
+fill level from zero through eight; reject an impossible level before the
+generation-bound TX-SPSC consumer cursor advances; and preserve exact byte
+order across partial, third, and later FIFO-empty wakes. Host tests establish
+only register arithmetic, cursor, and route invariants. Fresh boot-bound Pi
+serial evidence is still required for IRQ liveness, losslessness, and cadence.
 
 `scripts/driver_runtime_manifest.py` must reproduce byte-identical newc and
 JSON outputs from identical component bytes, validate the immutable

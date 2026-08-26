@@ -7588,30 +7588,35 @@ const MINI_UART_IO_OFFSET: usize = 0x40;
 const MINI_UART_IER_OFFSET: usize = 0x44;
 #[cfg(target_os = "none")]
 const MINI_UART_LSR_OFFSET: usize = 0x54;
+#[cfg(target_os = "none")]
+const MINI_UART_STAT_OFFSET: usize = 0x64;
 const MINI_UART_LSR_RX_READY: u32 = 1;
 const MINI_UART_LSR_RX_OVERRUN: u32 = 1 << 1;
 #[cfg(target_os = "none")]
-const MINI_UART_LSR_TX_EMPTY: u32 = 1 << 5;
-#[cfg(target_os = "none")]
 const MINI_UART_LSR_TX_IDLE: u32 = 1 << 6;
-// The BCM2711 mini-UART FIFO accepts eight bytes. A 26e serial runtime owns a
-// 500-us MCS budget, so one activation may fill only one FIFO prefix after an
-// empty sample. Re-sampling TX_EMPTY after every byte collapses this safe prefix
-// to one byte because the flag describes an empty FIFO, not remaining FIFO
-// capacity. The owner blocks on its local TX-empty IRQ between fills, consuming
-// no SC while the wire drains, and publishes only the aggregate completion.
+// The BCM2711 mini-UART FIFO accepts eight bytes. MU_LSR bit 5 proves only that
+// at least one byte can be accepted; MU_STAT bits 27:24 are the exact fill
+// level. A 26e serial runtime therefore consumes at most the reported free
+// capacity during one bounded activation. The owner blocks on its local
+// TX-empty IRQ between fills, consuming no SC while the wire drains, and
+// publishes only the aggregate completion.
 const MINI_UART_TX_IMMEDIATE_TURN_BYTES: usize = 8;
+const MINI_UART_STAT_TX_FIFO_FILL_SHIFT: u32 = 24;
+const MINI_UART_STAT_TX_FIFO_FILL_MASK: u32 = 0x0f;
 const MINI_UART_TX_BACKPRESSURE_TURN_LIMIT: u16 = 64;
 const MINI_UART_RX_DRAIN_LIMIT: usize = 128;
 const MINI_UART_RX_QUEUE_CAPACITY: usize = 512;
-const MINI_UART_IER_RX_INTERRUPT: u32 = 1;
-const MINI_UART_IER_TX_INTERRUPT: u32 = 1 << 1;
+// BCM2711 mini-UART IER is not the conventional 16550 bit assignment: bit 1
+// enables receive interrupts and bit 0 enables transmit-empty interrupts.
+const MINI_UART_IER_RX_INTERRUPT: u32 = 1 << 1;
+const MINI_UART_IER_TX_INTERRUPT: u32 = 1;
 
 #[cfg(target_os = "none")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SerialMiniUartReadRegister {
     Io,
     LineStatus,
+    Status,
 }
 
 #[cfg(target_os = "none")]
@@ -7620,6 +7625,7 @@ impl SerialMiniUartReadRegister {
         match self {
             Self::Io => MINI_UART_IO_OFFSET,
             Self::LineStatus => MINI_UART_LSR_OFFSET,
+            Self::Status => MINI_UART_STAT_OFFSET,
         }
     }
 }
@@ -7651,7 +7657,8 @@ enum SerialMiniUartAccess {
 fn serial_mini_uart_access(access: SerialMiniUartAccess) -> u32 {
     // SAFETY: Descriptor admission maps the serial runtime's exclusive
     // mini-UART page at this fixed address. The closed access enums expose only
-    // aligned MU_IO, MU_IER, and read-only MU_LSR offsets inside that page.
+    // aligned MU_IO, MU_IER, and read-only MU_LSR/MU_STAT offsets inside that
+    // page.
     unsafe {
         match access {
             SerialMiniUartAccess::Read(register) => core::ptr::read_volatile(
@@ -11670,6 +11677,32 @@ enum RuntimeNonblockingCommandReceiveContract {
     LocalNotificationNbWait { notification_slot: u32 },
 }
 
+/// Classify the result of the nonblocking receive used to admit a Reply-bearing
+/// command. A notification bound to the runtime TCB may win that receive; its
+/// nonzero badge must survive as device work instead of being mistaken for a
+/// missing endpoint message.
+#[cfg(any(target_os = "none", test))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RuntimeNonblockingReplyObservation {
+    Ipc,
+    Notification(u32),
+    Empty,
+}
+
+#[cfg(any(target_os = "none", test))]
+const fn runtime_nonblocking_reply_observation(
+    message_length: u64,
+    badge: u32,
+) -> RuntimeNonblockingReplyObservation {
+    if message_length != 0 {
+        RuntimeNonblockingReplyObservation::Ipc
+    } else if badge != 0 {
+        RuntimeNonblockingReplyObservation::Notification(badge)
+    } else {
+        RuntimeNonblockingReplyObservation::Empty
+    }
+}
+
 #[cfg(any(target_os = "none", test))]
 const fn runtime_nonblocking_command_receive_contract(
     kernel_mcs: bool,
@@ -11747,7 +11780,7 @@ fn poll_runtime_command(
     last_sequence: u32,
     task_key_marker: u32,
     publish_ring_read_begin: bool,
-) -> Option<RuntimeCommandIntake> {
+) -> RuntimeWake {
     if publish_ring_read_begin {
         publish_runtime_progress(
             0,
@@ -11757,9 +11790,9 @@ fn poll_runtime_command(
     }
     let mut command = read_runtime_command_record();
     match runtime_command_admission(command, last_sequence) {
-        RuntimeCommandAdmission::None => return None,
+        RuntimeCommandAdmission::None => return RuntimeWake::None,
         RuntimeCommandAdmission::OneWay => {
-            return Some(runtime_command_intake_after_pre_admit(command, false));
+            return RuntimeWake::Command(runtime_command_intake_after_pre_admit(command, false));
         }
         RuntimeCommandAdmission::NeedsReplyCap => {}
     }
@@ -11776,42 +11809,41 @@ fn poll_runtime_command(
     // inconclusive. Reply-bearing commands use the selected-kernel receive
     // contract above, including the explicit MCS Reply object.
     let tag = runtime_nonblocking_command_receive(&mut badge, false);
-    let ipc_delivered = tag.length() != 0;
-    let ipc_sequence = if ipc_delivered {
-        // SAFETY: Root uses MR0 to carry the primitive request sequence when it
-        // sends or calls the command endpoint.
-        unsafe { sel4_sys::seL4_GetMR(0) as u32 }
-    } else {
-        0
-    };
-    if ipc_delivered {
-        // The producer publishes the durable record sequence-last before the
-        // endpoint hint. Re-read it exactly once after consuming the hint; a
-        // mismatch is deferred to a later outer turn and producer re-signal,
-        // never converted into a private polling loop.
-        command = read_runtime_command_record();
+    match runtime_nonblocking_reply_observation(tag.length(), badge as u32) {
+        RuntimeNonblockingReplyObservation::Notification(badge) => {
+            return RuntimeWake::Notification(badge);
+        }
+        RuntimeNonblockingReplyObservation::Empty => {
+            publish_runtime_progress(
+                command.sequence,
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_REPLY_PENDING,
+                command.aux0,
+            );
+            return RuntimeWake::None;
+        }
+        RuntimeNonblockingReplyObservation::Ipc => {}
     }
+    // SAFETY: Root uses MR0 to carry the primitive request sequence when it
+    // sends or calls the command endpoint.
+    let ipc_sequence = unsafe { sel4_sys::seL4_GetMR(0) as u32 };
+    // The producer publishes the durable record sequence-last before the
+    // endpoint hint. Re-read it exactly once after consuming the hint; a
+    // mismatch is deferred to a later outer turn and producer re-signal,
+    // never converted into a private polling loop.
+    command = read_runtime_command_record();
     if command.sequence == 0 || command.sequence == last_sequence {
-        return None;
+        return RuntimeWake::None;
     }
     let expects_reply = command_expects_reply(command);
-    if expects_reply && !ipc_delivered {
-        publish_runtime_progress(
-            command.sequence,
-            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_REPLY_PENDING,
-            command.aux0,
-        );
-        return None;
-    }
     if expects_reply && ipc_sequence != 0 && command.sequence != ipc_sequence {
         publish_runtime_progress(
             command.sequence,
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_REPLY_PENDING,
             ipc_sequence,
         );
-        return None;
+        return RuntimeWake::None;
     }
-    Some(runtime_command_intake_after_pre_admit(
+    RuntimeWake::Command(runtime_command_intake_after_pre_admit(
         command,
         expects_reply,
     ))
@@ -60405,9 +60437,10 @@ fn serial_drain_hardware_to_spsc(
 
 #[cfg(target_os = "none")]
 fn serial_fill_uart_from_spsc_once() -> Option<SerialSpscTransfer> {
-    let ready =
-        serial_mini_uart_read(SerialMiniUartReadRegister::LineStatus) & MINI_UART_LSR_TX_EMPTY != 0;
-    if !ready {
+    let free_slots = serial_mini_uart_tx_fifo_free_slots(serial_mini_uart_read(
+        SerialMiniUartReadRegister::Status,
+    ))?;
+    if free_slots == 0 {
         return Some(SerialSpscTransfer::default());
     }
     let generation = SERIAL_RUNTIME_SPSC_GENERATION.load(Ordering::Acquire);
@@ -60417,7 +60450,7 @@ fn serial_fill_uart_from_spsc_once() -> Option<SerialSpscTransfer> {
         DRIVER_RUNTIME_SERIAL_TX_SPSC_FIRST_PAGE,
         generation,
         DRIVER_RUNTIME_SERIAL_SPSC_FLAG_ROOT_TO_RUNTIME,
-        &mut staged,
+        &mut staged[..free_slots],
     )?;
     for &byte in &staged[..transfer.bytes] {
         serial_mini_uart_write(SerialMiniUartWriteRegister::Io, u32::from(byte));
@@ -60436,6 +60469,32 @@ fn serial_fill_uart_from_spsc_once() -> Option<SerialSpscTransfer> {
         DRIVER_RUNTIME_SERIAL_SPSC_FLAG_ROOT_TO_RUNTIME,
         &mut staged,
     )
+}
+
+const fn serial_mini_uart_tx_fifo_free_slots(status: u32) -> Option<usize> {
+    let fill = (status >> MINI_UART_STAT_TX_FIFO_FILL_SHIFT) & MINI_UART_STAT_TX_FIFO_FILL_MASK;
+    if fill <= MINI_UART_TX_IMMEDIATE_TURN_BYTES as u32 {
+        Some(MINI_UART_TX_IMMEDIATE_TURN_BYTES - fill as usize)
+    } else {
+        None
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct SerialTxPostFillState {
+    transport_valid: bool,
+    bytes_pending: bool,
+}
+
+const fn serial_tx_post_fill_state(
+    transfer_valid: bool,
+    committed_occupancy: Option<u32>,
+) -> SerialTxPostFillState {
+    let transport_valid = transfer_valid && committed_occupancy.is_some();
+    SerialTxPostFillState {
+        transport_valid,
+        bytes_pending: transport_valid && matches!(committed_occupancy, Some(1..)),
+    }
 }
 
 #[cfg(target_os = "none")]
@@ -60501,14 +60560,16 @@ fn serial_runtime_service_notification(badge: u32) -> bool {
         let tx_valid = tx_transfer.is_some();
         let tx_transfer = tx_transfer.unwrap_or_default();
         let generation = SERIAL_RUNTIME_SPSC_GENERATION.load(Ordering::Acquire);
-        let tx_pending = serial_spsc_committed_occupancy_at(
-            serial_runtime_spsc_shared_base(),
-            DRIVER_RUNTIME_SERIAL_TX_SPSC_FIRST_PAGE,
-            generation,
-            DRIVER_RUNTIME_SERIAL_SPSC_FLAG_ROOT_TO_RUNTIME,
-        )
-        .is_some_and(|occupancy| occupancy != 0);
-        serial_set_mini_uart_irqs(true, tx_pending);
+        let tx_state = serial_tx_post_fill_state(
+            tx_valid,
+            serial_spsc_committed_occupancy_at(
+                serial_runtime_spsc_shared_base(),
+                DRIVER_RUNTIME_SERIAL_TX_SPSC_FIRST_PAGE,
+                generation,
+                DRIVER_RUNTIME_SERIAL_SPSC_FLAG_ROOT_TO_RUNTIME,
+            ),
+        );
+        serial_set_mini_uart_irqs(true, tx_state.bytes_pending);
 
         // A full RX ring deliberately retains the masked level handler. The
         // root's later full-to-not-full producer-rearm badge is sufficient to
@@ -60518,7 +60579,10 @@ fn serial_runtime_service_notification(badge: u32) -> bool {
         let final_rx_source_pending = serial_mini_uart_rx_source_pending();
         let _ = serial_finish_pending_irq_after_service_with(
             queue,
-            retained_pending || rx_outcome.source_pending || final_rx_source_pending || !tx_valid,
+            retained_pending
+                || rx_outcome.source_pending
+                || final_rx_source_pending
+                || !tx_state.transport_valid,
             || runtime_irq_handler_ack(DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT),
         );
         if rx_doorbell || tx_transfer.producer_rearm {
@@ -60705,31 +60769,22 @@ fn serial_write_frame_prefix_from_offset(
     let turn_limit = (frame.len as usize - offset)
         .min(limit)
         .min(MINI_UART_TX_IMMEDIATE_TURN_BYTES);
-    serial_write_empty_fifo_prefix_with(
-        turn_limit,
-        || {
-            let lsr = serial_mini_uart_read(SerialMiniUartReadRegister::LineStatus);
-            lsr & MINI_UART_LSR_TX_EMPTY != 0
-        },
-        |index| {
-            let byte = read_ring_byte(frame.offset as usize + offset + index);
-            serial_mini_uart_write(SerialMiniUartWriteRegister::Io, u32::from(byte));
-        },
-    )
+    let Some(free_slots) = serial_mini_uart_tx_fifo_free_slots(serial_mini_uart_read(
+        SerialMiniUartReadRegister::Status,
+    )) else {
+        return 0;
+    };
+    serial_write_fifo_prefix_with(turn_limit, free_slots, |index| {
+        let byte = read_ring_byte(frame.offset as usize + offset + index);
+        serial_mini_uart_write(SerialMiniUartWriteRegister::Io, u32::from(byte));
+    })
 }
 
-fn serial_write_empty_fifo_prefix_with<Ready, Write>(
-    limit: usize,
-    mut ready: Ready,
-    mut write: Write,
-) -> usize
+fn serial_write_fifo_prefix_with<Write>(limit: usize, free_slots: usize, mut write: Write) -> usize
 where
-    Ready: FnMut() -> bool,
     Write: FnMut(usize),
 {
-    if limit == 0 || !ready() {
-        return 0;
-    }
+    let limit = limit.min(free_slots).min(MINI_UART_TX_IMMEDIATE_TURN_BYTES);
     let mut written = 0usize;
     while written < limit {
         write(written);
@@ -60943,15 +60998,41 @@ pub fn runtime_main(task_key: usize) -> ! {
         task_key_marker,
     );
     loop {
+        let notification_route = runtime_notification_route(&RUNTIME_DESCRIPTOR.load());
         if runtime_command_poll_due(pending_intake.is_some()) {
             let publish_ring_read_begin = !ring_read_progress_published;
-            pending_intake =
+            let wake =
                 poll_runtime_command(last_sequence, task_key_marker, publish_ring_read_begin);
             if publish_ring_read_begin {
                 ring_read_progress_published = true;
             }
+            match wake {
+                RuntimeWake::Command(intake) => pending_intake = Some(intake),
+                RuntimeWake::Notification(badge) => {
+                    // A TCB-bound device notification may win the NBRecv used
+                    // to admit a Reply-bearing command. Routing exactly that
+                    // badge is this outer turn: retain a peer scheduling hint
+                    // or service one physical-source quantum. The still-durable
+                    // command is re-read on the next turn with its Reply
+                    // association untouched.
+                    let _ = retain_runtime_idle_delegated_wake(
+                        notification_route,
+                        badge,
+                        &mut pending_command_gate,
+                    );
+                    if let Some(service_badge) =
+                        runtime_notification_service_badge(notification_route, badge)
+                    {
+                        let _ = service_runtime_persistent_source_once(
+                            notification_route,
+                            service_badge,
+                        );
+                    }
+                    continue;
+                }
+                RuntimeWake::None => {}
+            }
         }
-        let notification_route = runtime_notification_route(&RUNTIME_DESCRIPTOR.load());
         if sdio_final_dpc_rearm_turn_due(notification_route) {
             // The CYW43 client has consumed the final event and published the
             // durable empty-ring/masked state. Finish Linux-equivalent
@@ -73072,6 +73153,78 @@ mod tests {
     }
 
     #[test]
+    fn reply_command_poll_preserves_a_bound_device_notification_before_ipc() {
+        for badge in [
+            DRIVER_RUNTIME_SERIAL_IRQ_BADGE,
+            DRIVER_RUNTIME_GENET_IRQ_BADGE,
+            DRIVER_RUNTIME_SDIO_IRQ_BADGE,
+            DRIVER_RUNTIME_SDIO_DMA_IRQ_BADGE,
+            DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE,
+            DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_BADGE,
+        ] {
+            assert_eq!(
+                runtime_nonblocking_reply_observation(0, badge),
+                RuntimeNonblockingReplyObservation::Notification(badge),
+                "a bound notification must survive the command NBRecv boundary",
+            );
+        }
+        assert_eq!(
+            runtime_nonblocking_reply_observation(1, DRIVER_RUNTIME_GENET_IRQ_BADGE),
+            RuntimeNonblockingReplyObservation::Ipc,
+            "a delivered endpoint message retains its exact Reply-object intake",
+        );
+        assert_eq!(
+            runtime_nonblocking_reply_observation(0, 0),
+            RuntimeNonblockingReplyObservation::Empty,
+        );
+        assert_eq!(
+            runtime_nonblocking_command_receive_contract(true, false),
+            RuntimeNonblockingCommandReceiveContract::McsNbRecv {
+                reply_slot: pi4_driver_abi::DRIVER_RUNTIME_COMMAND_REPLY_SLOT,
+            },
+            "the next command intake still uses the generated Reply object after notification service",
+        );
+    }
+
+    #[test]
+    fn top_level_notification_routing_rejects_unowned_badges_without_aliasing() {
+        for (route, badge, expected) in [
+            (
+                RuntimeNotificationRoute::Serial,
+                DRIVER_RUNTIME_RESERVED_ROOT_BADGE | DRIVER_RUNTIME_SERIAL_IRQ_BADGE,
+                Some(DRIVER_RUNTIME_RESERVED_ROOT_BADGE | DRIVER_RUNTIME_SERIAL_IRQ_BADGE),
+            ),
+            (
+                RuntimeNotificationRoute::Genet,
+                DRIVER_RUNTIME_GENET_IRQ_BADGE,
+                Some(DRIVER_RUNTIME_GENET_IRQ_BADGE),
+            ),
+            (
+                RuntimeNotificationRoute::SdioOwner,
+                DRIVER_RUNTIME_SDIO_IRQ_BADGE | DRIVER_RUNTIME_SDIO_DMA_IRQ_BADGE,
+                Some(DRIVER_RUNTIME_SDIO_IRQ_BADGE | DRIVER_RUNTIME_SDIO_DMA_IRQ_BADGE),
+            ),
+            (
+                RuntimeNotificationRoute::Cyw43Client,
+                DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_BADGE,
+                Some(DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_BADGE),
+            ),
+            (
+                RuntimeNotificationRoute::Genet,
+                DRIVER_RUNTIME_RESERVED_ROOT_BADGE,
+                None,
+            ),
+            (
+                RuntimeNotificationRoute::Unavailable,
+                DRIVER_RUNTIME_GENET_IRQ_BADGE,
+                None,
+            ),
+        ] {
+            assert_eq!(runtime_notification_service_badge(route, badge), expected,);
+        }
+    }
+
+    #[test]
     fn runtime_command_admission_accepts_fresh_one_way_ring_turns() {
         let command = DriverTaskCommandRecord {
             sequence: 42,
@@ -77915,28 +78068,22 @@ mod tests {
     }
 
     #[test]
-    fn serial_tx_turn_fills_one_fifo_prefix_after_one_empty_sample() {
-        let mut readiness = [true, false].into_iter();
+    fn serial_tx_turn_consumes_only_the_exact_reported_fifo_capacity() {
         let mut writes = Vec::new();
 
-        let written = serial_write_empty_fifo_prefix_with(
-            8,
-            || readiness.next().unwrap_or(false),
-            |index| writes.push(index),
-        );
+        let written = serial_write_fifo_prefix_with(8, 3, |index| writes.push(index));
 
-        assert_eq!(written, 8);
-        assert_eq!(writes, (0..8).collect::<Vec<_>>());
-        assert_eq!(readiness.next(), Some(false));
+        assert_eq!(written, 3);
+        assert_eq!(writes, (0..3).collect::<Vec<_>>());
     }
 
     #[test]
     fn serial_tx_turn_never_exceeds_one_fifo_prefix() {
         let mut writes = Vec::new();
 
-        let written = serial_write_empty_fifo_prefix_with(
+        let written = serial_write_fifo_prefix_with(
             MINI_UART_TX_IMMEDIATE_TURN_BYTES,
-            || true,
+            MINI_UART_TX_IMMEDIATE_TURN_BYTES,
             |index| writes.push(index),
         );
 
@@ -77950,14 +78097,13 @@ mod tests {
     }
 
     #[test]
-    fn serial_tx_turn_does_not_write_when_fifo_is_not_empty() {
+    fn serial_tx_turn_does_not_write_when_fifo_is_full() {
         let mut writes = Vec::new();
 
-        let written = serial_write_empty_fifo_prefix_with(
-            MINI_UART_TX_IMMEDIATE_TURN_BYTES,
-            || false,
-            |index| writes.push(index),
-        );
+        let written =
+            serial_write_fifo_prefix_with(MINI_UART_TX_IMMEDIATE_TURN_BYTES, 0, |index| {
+                writes.push(index)
+            });
 
         assert_eq!(written, 0);
         assert!(writes.is_empty());
@@ -77965,6 +78111,8 @@ mod tests {
 
     #[test]
     fn serial_uart_irq_mask_adds_tx_only_for_retained_frame() {
+        assert_eq!(MINI_UART_IER_RX_INTERRUPT, 0x2);
+        assert_eq!(MINI_UART_IER_TX_INTERRUPT, 0x1);
         assert_eq!(serial_mini_uart_irq_mask(false, false), 0);
         assert_eq!(
             serial_mini_uart_irq_mask(true, false),
@@ -77973,6 +78121,184 @@ mod tests {
         assert_eq!(
             serial_mini_uart_irq_mask(true, true),
             MINI_UART_IER_RX_INTERRUPT | MINI_UART_IER_TX_INTERRUPT
+        );
+        assert_eq!(serial_mini_uart_irq_mask(false, true), 0x1);
+        assert_eq!(serial_mini_uart_irq_mask(true, false), 0x2);
+        assert_eq!(serial_mini_uart_irq_mask(true, true), 0x3);
+    }
+
+    #[test]
+    fn serial_uart_status_bounds_every_fifo_fill_and_rejects_invalid_levels() {
+        for fill in 0..=MINI_UART_TX_IMMEDIATE_TURN_BYTES as u32 {
+            let status = fill << MINI_UART_STAT_TX_FIFO_FILL_SHIFT;
+            assert_eq!(
+                serial_mini_uart_tx_fifo_free_slots(status),
+                Some(MINI_UART_TX_IMMEDIATE_TURN_BYTES - fill as usize),
+            );
+        }
+        assert_eq!(
+            serial_mini_uart_tx_fifo_free_slots(9 << MINI_UART_STAT_TX_FIFO_FILL_SHIFT),
+            None,
+            "an impossible hardware fill level must fail before the SPSC cursor advances",
+        );
+        assert_eq!(
+            serial_tx_post_fill_state(true, Some(8)),
+            SerialTxPostFillState {
+                transport_valid: true,
+                bytes_pending: true,
+            },
+        );
+        assert_eq!(
+            serial_tx_post_fill_state(true, Some(0)),
+            SerialTxPostFillState {
+                transport_valid: true,
+                bytes_pending: false,
+            },
+        );
+        for invalid in [
+            serial_tx_post_fill_state(false, Some(8)),
+            serial_tx_post_fill_state(true, None),
+        ] {
+            assert_eq!(
+                invalid,
+                SerialTxPostFillState {
+                    transport_valid: false,
+                    bytes_pending: false,
+                },
+                "either an invalid capacity sample or final header recheck must retain the handler",
+            );
+        }
+    }
+
+    #[test]
+    fn serial_notification_seam_preserves_five_ordered_fifo_wakes_and_acks() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        initialize_serial_spsc_for_test(29);
+        let base = serial_runtime_spsc_shared_base();
+        let payload = core::array::from_fn::<_, 40, _>(|index| index as u8);
+        assert_eq!(
+            serial_spsc_produce_at(
+                base,
+                DRIVER_RUNTIME_SERIAL_TX_SPSC_FIRST_PAGE,
+                29,
+                DRIVER_RUNTIME_SERIAL_SPSC_FLAG_ROOT_TO_RUNTIME,
+                &payload,
+            )
+            .expect("root TX producer")
+            .bytes,
+            payload.len(),
+        );
+
+        let mut staged = [0u8; MINI_UART_TX_IMMEDIATE_TURN_BYTES];
+        let mut observed = Vec::new();
+        let mut invalid_queue = SerialRuntimeRxQueue::new();
+        invalid_queue.irq_ack_pending = true;
+        let mut invalid_ack_calls = 0u32;
+        assert_eq!(
+            serial_mini_uart_tx_fifo_free_slots(9 << MINI_UART_STAT_TX_FIFO_FILL_SHIFT),
+            None,
+        );
+        assert_eq!(
+            serial_spsc_committed_occupancy_at(
+                base,
+                DRIVER_RUNTIME_SERIAL_TX_SPSC_FIRST_PAGE,
+                29,
+                DRIVER_RUNTIME_SERIAL_SPSC_FLAG_ROOT_TO_RUNTIME,
+            ),
+            Some(40),
+            "an invalid fill sample cannot advance the durable consumer cursor",
+        );
+        assert!(!serial_finish_pending_irq_after_service_with(
+            &mut invalid_queue,
+            !serial_tx_post_fill_state(false, Some(40)).transport_valid,
+            || {
+                invalid_ack_calls = invalid_ack_calls.saturating_add(1);
+                true
+            },
+        ));
+        assert_eq!(invalid_ack_calls, 0);
+        assert!(invalid_queue.irq_ack_pending);
+
+        let mut wake_occupancies = Vec::new();
+        let mut queue = SerialRuntimeRxQueue::new();
+        let mut ack_calls = 0u32;
+        while serial_spsc_committed_occupancy_at(
+            base,
+            DRIVER_RUNTIME_SERIAL_TX_SPSC_FIRST_PAGE,
+            29,
+            DRIVER_RUNTIME_SERIAL_SPSC_FLAG_ROOT_TO_RUNTIME,
+        ) != Some(0)
+        {
+            let wake =
+                match runtime_nonblocking_reply_observation(0, DRIVER_RUNTIME_SERIAL_IRQ_BADGE) {
+                    RuntimeNonblockingReplyObservation::Notification(badge) => {
+                        RuntimeWake::Notification(badge)
+                    }
+                    RuntimeNonblockingReplyObservation::Ipc
+                    | RuntimeNonblockingReplyObservation::Empty => RuntimeWake::None,
+                };
+            assert_eq!(
+                wake,
+                RuntimeWake::Notification(DRIVER_RUNTIME_SERIAL_IRQ_BADGE),
+                "the bound IRQ must survive the Reply-bearing NBRecv seam",
+            );
+            assert_eq!(
+                runtime_notification_service_badge(
+                    RuntimeNotificationRoute::Serial,
+                    DRIVER_RUNTIME_SERIAL_IRQ_BADGE,
+                ),
+                Some(DRIVER_RUNTIME_SERIAL_IRQ_BADGE),
+            );
+            let free_slots = serial_mini_uart_tx_fifo_free_slots(0)
+                .expect("an empty hardware FIFO has exact capacity");
+            let transfer = serial_spsc_consume_at(
+                base,
+                DRIVER_RUNTIME_SERIAL_TX_SPSC_FIRST_PAGE,
+                29,
+                DRIVER_RUNTIME_SERIAL_SPSC_FLAG_ROOT_TO_RUNTIME,
+                &mut staged[..free_slots],
+            )
+            .expect("later TX-empty wake");
+            assert_eq!(transfer.bytes, MINI_UART_TX_IMMEDIATE_TURN_BYTES);
+            observed.extend_from_slice(&staged[..transfer.bytes]);
+            let occupancy = serial_spsc_committed_occupancy_at(
+                base,
+                DRIVER_RUNTIME_SERIAL_TX_SPSC_FIRST_PAGE,
+                29,
+                DRIVER_RUNTIME_SERIAL_SPSC_FLAG_ROOT_TO_RUNTIME,
+            )
+            .expect("stable post-wake occupancy");
+            wake_occupancies.push(occupancy);
+            let tx_state = serial_tx_post_fill_state(true, Some(occupancy));
+            assert_eq!(
+                serial_mini_uart_irq_mask(true, tx_state.bytes_pending),
+                if occupancy == 0 { 0x2 } else { 0x3 },
+                "TX-empty stays armed exactly while durable bytes remain",
+            );
+            queue.irq_ack_pending = true;
+            assert!(serial_finish_pending_irq_after_service_with(
+                &mut queue,
+                !tx_state.transport_valid,
+                || {
+                    ack_calls = ack_calls.saturating_add(1);
+                    true
+                },
+            ));
+        }
+        assert_eq!(wake_occupancies, [32, 24, 16, 8, 0]);
+        assert_eq!(observed, payload);
+        assert_eq!(ack_calls, 5);
+        assert_eq!(queue.irq_acks, 5);
+        assert!(!queue.irq_ack_pending);
+        assert_eq!(
+            serial_spsc_committed_occupancy_at(
+                base,
+                DRIVER_RUNTIME_SERIAL_TX_SPSC_FIRST_PAGE,
+                29,
+                DRIVER_RUNTIME_SERIAL_SPSC_FLAG_ROOT_TO_RUNTIME,
+            ),
+            Some(0),
         );
     }
 
