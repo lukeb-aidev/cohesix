@@ -135,7 +135,7 @@ contained a Worker TCB. See
 ### 2.2 Current system boundary
 
 ```mermaid
-flowchart LR
+flowchart TB
   subgraph BuildHost[Build host]
     Manifest[Selected profile manifest]
     Compiler[coh-rtc]
@@ -144,8 +144,10 @@ flowchart LR
   end
 
   subgraph OperatorHost[Operator and integration host]
-    HostClients[cohsh coh SwarmUI gateway FUSE and host bridges]
+    HostClients[cohsh coh SwarmUI FUSE REST clients and host bridges]
+    ConsoleOwner[one direct owner or hive-gateway]
     HostNineDoor[Host NineDoor library and fixture adapter]
+    HostClients -->|live target composition| ConsoleOwner
     HostClients -->|explicit host-model or in-process test Secure9P| HostNineDoor
   end
 
@@ -157,28 +159,45 @@ flowchart LR
       Emergency[Root-emergency fatal output]
       WorkerSupervisor[Worker supervisor]
       DriverSupervisor[Driver supervisor]
+      GpuExecutor[GPU Worker executor]
+      LoraExecutor[LoRA plus Heartbeat executor]
     end
-    ConsoleChild[Console-network child with TCP and smoltcp]
-    NineDoorChild[NineDoor child - one-shot bootstrap SC then passive]
-    Workers[Heartbeat GPU and LoRA children]
+    ConsoleChild["Active console-network child\nTCP, authentication, smoltcp, and QEMU VirtIO"]
+    NineDoorChild["NineDoor child\none-shot bootstrap SC then passive"]
+    subgraph WorkerPopulation["256 passive Worker children"]
+      HeartbeatWorker[1 Heartbeat]
+      GpuWorkers[127 GPU]
+      LoraWorkers[128 LoRA]
+    end
     Hal[HAL admission and driver clients]
     Drivers[Profile-selected isolated driver runtimes]
 
     Serial -->|console lines| EventPump
     ConsoleChild <-->|bounded shared frames and notifications| EventPump
-    EventPump -->|bootstrap probe then bounded donated Call and atomic ReplyRecv| NineDoorChild
+    EventPump <-->|after bootstrap, depth-one donated Call and Reply| NineDoorChild
     EventPump -->|control records and wake| WorkerSupervisor
-    RootFault -->|fault handoff and revoke| WorkerSupervisor
-    WorkerSupervisor -->|least-authority lifecycle| Workers
+    RootFault -->|fault handoff, Reply release, and revoke| WorkerSupervisor
+    WorkerSupervisor -->|construct, READY, and teardown| HeartbeatWorker
+    WorkerSupervisor -->|construct, READY, and teardown| GpuWorkers
+    WorkerSupervisor -->|construct, READY, and teardown| LoraWorkers
+    EventPump -->|bounded fair work| GpuExecutor
+    EventPump -->|bounded fair work| LoraExecutor
+    GpuExecutor <-->|donated SC and instance Reply| GpuWorkers
+    LoraExecutor <-->|donated SC and instance Reply| HeartbeatWorker
+    LoraExecutor <-->|donated SC and instance Reply| LoraWorkers
     RootFault -->|fault handoff and recovery| DriverSupervisor
     EventPump --> Hal
     Hal -->|bounded ABI service turns| Drivers
   end
 
   Generated -->|profile truth| EventPump
+  Generated -->|Worker mix and lifecycle records| WorkerSupervisor
+  Generated -->|executor budgets and donor allowlists| GpuExecutor
+  Generated -->|executor budgets and donor allowlists| LoraExecutor
   Generated -->|resource descriptors| Hal
-  HostClients -->|target console grammar| ConsoleChild
-  HostNineDoor -.->|shared contracts separate state| NineDoorChild
+  Generated -->|console descriptor| ConsoleChild
+  ConsoleOwner -->|sole target console session| ConsoleChild
+  HostNineDoor -.->|shared contracts; separate state| NineDoorChild
 ```
 
 The dotted relationship is semantic parity, not a transport connection. Host
@@ -253,12 +272,11 @@ and control/receipt completion is accepted only for the pinned role, slot,
 logical lease epoch, supervisor generation, and capability generation.
 
 This topology makes Worker cardinality an object/isolation question rather
-than one active-SC reservation per instance. The QEMU manifest expands to one
-Heartbeat, 127 GPU, and 128 LoRA instances; the Pi manifest expands to one,
-31, and 32 respectively. Code and read-only role-image frames may be shared
-only under an exact sealed image identity. Writable image pages, stacks, IPC
-buffers, ABI pages, CSpaces, VSpaces, Reply objects, and fault identity remain
-per-instance.
+than one active-SC reservation per instance. The QEMU and Pi manifests each
+expand to one Heartbeat, 127 GPU, and 128 LoRA instances. Code and read-only
+role-image frames may be shared only under an exact sealed image identity.
+Writable image pages, stacks, IPC buffers, ABI pages, CSpaces, VSpaces, Reply
+objects, and fault identity remain per-instance.
 
 A Worker ticket still does not prove execution by itself. `ATTACH` remains
 session binding, not task creation. Direct target evidence must observe the

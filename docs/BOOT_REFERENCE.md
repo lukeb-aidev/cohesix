@@ -29,9 +29,15 @@ flowchart TB
     PKernel --> PRoot["root-task"]
   end
 
-  QRoot --> Common["allocator, manifest identity, runtime admission"]
+  QRoot --> Common["allocator, manifest identity, and SMP plus MCS admission"]
   PRoot --> Common
-  Common --> Console["serial prompt and optional authenticated TCP console"]
+  Common --> Critical["active root duties, console service,\nand two Worker executor lanes"]
+  Common --> Passive["passive NineDoor and selected\n256-Worker population"]
+  Common --> Drivers["profile-selected isolated\ndriver runtimes"]
+  Critical --> Seals["bounded construction, fault-registry,\nand aggregate readiness evidence"]
+  Passive --> Seals
+  Drivers --> Seals
+  Seals --> Console["serial prompt and optional authenticated TCP console"]
 ```
 
 QEMU uses the selected `aarch64/virt` seL4 artifacts and PL011 serial. The Pi 4

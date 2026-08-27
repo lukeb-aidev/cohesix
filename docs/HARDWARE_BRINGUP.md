@@ -49,16 +49,30 @@ Never collapse these layers into a single “works” claim:
    error and latency contract.
 
 ```mermaid
-flowchart LR
+flowchart TB
   Source["source and selected manifests"] --> Build["build and stage"]
-  Build --> Flash["verify target and flash"]
+  Build --> QLaunch["immutable QEMU launch record"]
+  QLaunch --> QBoot["fresh QEMU boot"]
+  QBoot --> QLive["service, Worker, console,\nand operator-liveness evidence"]
+  QLive --> QPlan["QEMU-qualified Test Plan"]
+  QPlan --> QBenchmark["QEMU-qualified benchmark"]
+
+  Build --> Flash["verify Pi target and flash"]
   Flash --> Readback["read back media\nand match image marker"]
-  Readback --> Boot["fresh serial boot\nwith that image marker"]
-  Boot --> Policy["saved policy\npreserved or intentionally replaced"]
-  Policy --> Device["device and network proof\nserial plus paired packet capture"]
+  Readback --> PiBoot["fresh Pi serial boot\nwith that image marker"]
+  PiBoot --> Policy["saved policy\npreserved or intentionally replaced"]
+  PiBoot --> Operator["independent serial, local-seat,\nand HDMI evidence"]
+  PiBoot --> Runtime["service, 256-Worker, SMP plus MCS,\nand containment evidence"]
+  PiBoot --> Device["independent USB, GENET, and Wi-Fi evidence\nwith boot-paired captures where relevant"]
   Device --> Console["raw TCP and authenticated cohsh"]
-  Console --> TestPlan["target-qualified Test Plan"]
-  TestPlan --> Benchmark["qualified benchmark"]
+  Policy --> PiPlan["fresh-Pi-qualified Test Plan"]
+  Operator --> PiPlan
+  Runtime --> PiPlan
+  Console --> PiPlan
+  PiPlan --> PiBenchmark["fresh-Pi-qualified benchmark"]
+
+  QBenchmark -.-> Boundary["QEMU evidence never qualifies Pi"]
+  PiBenchmark -.-> Boundary
 ```
 
 ## Profiles and Toolchain

@@ -95,7 +95,7 @@ evidence stay visible instead of being scattered across opaque services.
 ## Architecture at a glance
 
 ```mermaid
-flowchart LR
+flowchart TB
   subgraph Host[Operator host]
     Operator[Operator or automation]
     Direct["One direct owner\ncohsh, coh, SwarmUI, or bridge"]
@@ -107,22 +107,31 @@ flowchart LR
   end
 
   subgraph Target[Cohesix target]
-    Console[Authenticated TCP console]
-    Root[root-task authority]
-    Namespace[NineDoorBridge namespace]
-    Queen["Queen role\nin root-task"]
-    Workers["Bounded Worker roles\nthree executable, one model-only"]
+    Console["console-network-runtime\nsingle authenticated TCP owner"]
+    Root["root-control and Queen authority"]
+    Namespace["Passive NineDoor child\nbounded namespace ABI"]
+    GpuLane["Active GPU executor lane\ngenerated bounded queue"]
+    LoraLane["Active LoRA plus Heartbeat lane\ngenerated bounded queue"]
+    GpuWorkers["127 passive GPU Workers"]
+    OtherWorkers["1 passive Heartbeat Worker\n128 passive LoRA Workers"]
+    WorkerBus["WorkerBus\nmodel and session only"]
     Drivers[Isolated driver runtimes]
     Kernel[seL4 capabilities and scheduling]
-    Console --> Root
-    Root --> Namespace
-    Root --> Queen
-    Root --> Workers
-    Queen -->|bounded file operations| Namespace
-    Workers -->|bounded file operations| Namespace
+
+    Console <-->|bounded commands and responses| Root
+    Root <-->|depth-one donated Call and Reply| Namespace
+    Root <-->|bounded work and completion records| GpuLane
+    Root <-->|bounded work and completion records| LoraLane
+    GpuLane <-->|donated SC and instance Reply| GpuWorkers
+    LoraLane <-->|donated SC and instance Reply| OtherWorkers
+    Root -->|model and session state only| WorkerBus
     Root -->|HAL admission and fixed ABI| Drivers
-    Root --> Kernel
-    Drivers --> Kernel
+    Kernel --- Root
+    Kernel --- GpuLane
+    Kernel --- LoraLane
+    Kernel --- GpuWorkers
+    Kernel --- OtherWorkers
+    Kernel --- Drivers
   end
 
   Hardware[Profile-admitted hardware]

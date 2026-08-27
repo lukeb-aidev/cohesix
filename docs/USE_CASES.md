@@ -51,14 +51,15 @@ adapter succeeds; every required row needs independently correlated evidence.
 | Heavy runtimes | CUDA, NVML, Kubernetes, systemd, Docker, model training, field protocols, and application data planes remain outside the VM trusted computing base. |
 
 ```mermaid
-flowchart LR
+flowchart TB
   Operator["Operator or automation"] --> Tools["Host tools and approved adapters"]
-  Tools -->|"authenticated console semantics"| Root["root-task\npolicy and HAL admission"]
-  Root --> Namespace["manifest-defined namespace\n/queen /proc /log /shard /gpu /host"]
-  Namespace --> Workers["profile-declared Worker roles\ncontrol, telemetry, and receipts"]
   External["External systems\nGPU stacks, registries, OT, cloud"] --> Adapters["Host-side adapters"]
   Adapters -->|"bounded publish or ticket"| Tools
-  Namespace -->|"bounded evidence"| Tools
+  Tools -->|"direct or gateway console projection"| Console["console-network-runtime\nsingle authenticated target session"]
+  Console <-->|"bounded commands and responses"| Root["root-control\nQueen policy and admission"]
+  Root <-->|"bounded namespace operations"| Namespace["passive NineDoor child\n/queen /proc /log /shard /gpu /host"]
+  Root <-->|"bounded fair queues and completion"| Executors["two active Worker executor lanes"]
+  Executors <-->|"donated SC and per-instance Reply"| Workers["256 passive Workers\n1 Heartbeat, 127 GPU, 128 LoRA"]
 ```
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for component ownership,
@@ -95,45 +96,85 @@ operator must later explain which request was accepted and why.
 ```mermaid
 sequenceDiagram
   autonumber
-  participant W as Scoped Worker
-  participant N as Target namespace
-  participant Q as Queen-scoped host client
   participant A as Host AI agent
+  participant Q as Queen-scoped host client
   participant G as hive-gateway
   participant E as host-ticket-agent
+  participant C as console-network-runtime
+  participant R as root-task
+  participant N as Target namespace
+  participant X as Generated Worker executor lane
+  participant W as Scoped passive Worker
 
-  W->>N: Append bounded telemetry or receipt
+  R->>X: Queue bounded Worker turn
+  X->>W: Depth-one Call with donated SC
+  W-->>X: Completion through instance Reply
+  X-->>R: Identity-bound completion
+  R->>N: Project bounded telemetry or receipt
   Q->>G: Read worker and hive state
-  G->>N: Authenticated console read
-  N-->>G: Bounded state and END
+  G->>C: Authenticated framed console read
+  C->>R: Bounded console command
+  R->>N: Authorize and read bounded state
+  N-->>R: Bounded state
+  R-->>C: Bounded OK, state, and END response
+  C-->>G: Framed OK, state, and END
   G-->>Q: REST projection
   Q-->>A: Summarized observations
   A->>Q: Propose allowlisted intent
   Q->>G: Write bounded host ticket as Queen
-  G->>N: Authenticated console write
-  N->>N: Check role, path, policy, and bounds
+  G->>C: Authenticated framed console write
+  C->>R: Bounded console command
+  R->>N: Check role, path, policy, and bounds
   alt Target refuses request
-    N-->>G: ERR with stable reason
+    N-->>R: Refusal with stable reason
+    R-->>C: Bounded ERR response
+    C-->>G: Framed ERR
     G-->>Q: Refusal
   else Target admits request
-    N-->>G: OK with accepted byte count
+    N-->>R: Admitted byte count
+    R-->>C: Bounded OK response
+    C-->>G: Framed OK
     G-->>Q: Admission acknowledgement
     E->>G: Claim admitted ticket
-    G->>N: Read ticket through the same authority path
-    N-->>G: Ticket record and END
+    G->>C: Framed ticket read through the same session
+    C->>R: Bounded console command
+    R->>N: Read ticket through the same authority path
+    N-->>R: Ticket record
+    R-->>C: Bounded ticket and END response
+    C-->>G: Framed ticket record and END
     G-->>E: Bounded ticket
     E->>E: Validate allowlist and execute host action
     E->>G: Append result or dead-letter receipt
-    G->>N: Authenticated receipt write
-    N-->>G: OK
+    G->>C: Authenticated framed receipt write
+    C->>R: Bounded console command
+    R->>N: Validate result and optional Worker binding
+    N-->>R: Receipt write admitted
+    R-->>C: Bounded OK response
+    C-->>G: Framed OK
+    opt Receipt-bearing GPU or PEFT action
+      R->>X: Queue exact pinned receipt
+      X->>W: Depth-one Call with donated SC
+      W-->>X: Receipt completion through instance Reply
+      X-->>R: Identity-bound completion
+      R->>N: Project Worker receipt state
+    end
     Q->>G: Read final receipt and evidence
-    G-->>Q: Result state
+    G->>C: Authenticated framed console read
+    C->>R: Bounded console command
+    R->>N: Read final receipt and evidence
+    N-->>R: Result state
+    R-->>C: Bounded result response
+    C-->>G: Framed result state
+    G-->>Q: Bounded result state
   end
 ```
 
 The diagram shows multiplexed gateway mode. In direct mode, one approved host
 tool owns the single console session instead; direct and gateway owners must
-not compete. See [HOST_TOOLS.md](HOST_TOOLS.md).
+not compete. The executor interactions are internal and add no new target
+interface. `OK` for a host result means the write was admitted; the final read
+observes any separately completed Worker receipt. See
+[HOST_TOOLS.md](HOST_TOOLS.md).
 
 ### 2. The Self-Healing Edge Swarm
 

@@ -225,7 +225,7 @@ pages, and then revokes the child bundle.
 ```mermaid
 sequenceDiagram
   participant Client as cohsh
-  participant Tcp as target TCP console
+  participant Tcp as console-network-runtime
   participant Pump as root-task event pump
   participant Namespace as NineDoorBridge
 
@@ -242,21 +242,26 @@ sequenceDiagram
   Pump->>Namespace: validate role and attach context
   alt application authority valid
     Namespace-->>Pump: attached
-    Pump-->>Client: framed OK ATTACH
+    Pump-->>Tcp: bounded OK ATTACH response
+    Tcp-->>Client: framed OK ATTACH
   else denied or rate limited
     Namespace-->>Pump: refusal
-    Pump-->>Client: framed ERR ATTACH
+    Pump-->>Tcp: bounded ERR ATTACH response
+    Tcp-->>Client: framed ERR ATTACH
   end
 
   Client->>Tcp: framed TAIL path
   Tcp->>Pump: bounded console command
   Pump->>Namespace: authorize and read retained window
   Namespace-->>Pump: bounded records
-  Pump-->>Client: framed OK TAIL
+  Pump-->>Tcp: bounded OK TAIL response
+  Tcp-->>Client: framed OK TAIL
   loop retained records
-    Pump-->>Client: framed record
+    Pump-->>Tcp: bounded response record
+    Tcp-->>Client: framed record
   end
-  Pump-->>Client: framed END
+  Pump-->>Tcp: bounded END response
+  Tcp-->>Client: framed END
 ```
 
 The diagram shows protocol order, not a claim that `NineDoorBridge` is a host

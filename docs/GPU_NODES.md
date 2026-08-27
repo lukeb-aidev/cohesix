@@ -24,26 +24,28 @@ execution; the reverse is also true. See the generated
 ## 1. Trust boundary
 
 ```mermaid
-flowchart LR
+flowchart TB
   subgraph Host["Host operating system"]
     Hardware["GPU hardware and drivers"]
     Runtime["CUDA or application runtime"]
     Registry["Model registry and artifacts"]
     Bridge["gpu-bridge-host\ninventory and bounded publish"]
     Executor["Deployment-specific executor\nnot provided by gpu-bridge-host"]
+    HostPath["approved direct owner or hive-gateway"]
     Hardware --> Runtime
     Hardware --> Bridge
     Registry --> Bridge
     Registry --> Executor
     Runtime --> Executor
+    Bridge -->|"authenticated snapshot publish"| HostPath
+    Executor <-->|"bounded ticket and result records"| HostPath
   end
 
-  Bridge -->|"authenticated snapshot publish"| Console["Cohesix console path"]
-  Console --> Root["root-task and NineDoor"]
-  Root --> GpuView["/gpu host-projected view"]
-  Root --> WorkerModel["root-owned worker-gpu session/model\ntickets, lease and status only"]
-  WorkerModel --> GpuView
-  GpuView -->|"bounded records"| Executor
+  HostPath -->|"sole target TCP session"| Console["console-network-runtime"]
+  Console <-->|"bounded target commands and responses"| Root["root-task policy and namespace projection"]
+  Root <-->|"bounded work and completion records"| GpuLane["active GPU Worker executor lane"]
+  GpuLane <-->|"donated SC and instance Reply"| WorkerTasks["passive worker-gpu instances\ncontrol-plane receipts only"]
+  Root -->|"host snapshot and identity-bound receipt state"| GpuView["/gpu host-projected view"]
 ```
 
 The boundary is strict:

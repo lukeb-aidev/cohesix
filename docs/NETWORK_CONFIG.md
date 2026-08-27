@@ -1,22 +1,27 @@
-<!-- Copyright © 2025 Lukas Bower -->
+<!-- Copyright © 2026 Lukas Bower -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 <!-- Author: Lukas Bower -->
-<!-- Purpose: Example secure network topology for Cohesix. -->
-# Example Secure Network Topology for Cohesix  
-**AWS Queen + Individually Roaming Jetson Edge Workers**
+<!-- Purpose: Describe a host-encrypted roaming-edge integration pattern and its current authority limits. -->
+# Example Secure Network Topology for Cohesix
+**Roaming Jetson hosts + host gateway + private Cohesix target**
 
 ---
 
 ## Purpose
 
-This document defines the **reference secure network topology** for operating Cohesix with:
+This document describes a deployment integration pattern with:
 
-- A **single Cohesix Queen** running in AWS
-- **Multiple independently roaming Jetson edge devices**
-- Strong confidentiality, authentication, and revocation guarantees
-- **No TLS, HTTPS, or crypto inside the Cohesix VM**
+- a private Cohesix target behind one host gateway;
+- multiple independently roaming Jetson hosts, which are not Cohesix target
+  Workers;
+- an external encrypted overlay network; and
+- no TLS, HTTPS, or general cryptographic stack inside the target.
 
-Security is achieved by **architectural placement and capability control**, not by embedding complex crypto stacks inside the seL4 VM.
+This is not an accepted Milestone 26e AWS target profile. The selected 26e
+targets remain QEMU `aarch64/virt` and Raspberry Pi 4; AWS and UEFI execution
+are inactive unless [BUILD_PLAN.md](BUILD_PLAN.md) explicitly authorizes them.
+The pattern shows how a future deployment must preserve the current
+single-console-owner and host-encryption boundaries.
 
 ---
 
@@ -26,10 +31,10 @@ Security is achieved by **architectural placement and capability control**, not 
    - Jetsons never accept inbound connections.
    - This survives NAT, CGNAT, LTE, hotel Wi-Fi, etc.
 
-2. **Queen is never publicly reachable**
+2. **The Cohesix target is never publicly reachable**
    - No public IP
    - No internet-facing ports
-   - Only reachable via an encrypted overlay network
+   - Reachable only from the private host gateway
 
 3. **Encryption lives outside the VM**
    - VPN / tunnel terminates on the host
@@ -37,8 +42,11 @@ Security is achieved by **architectural placement and capability control**, not 
 
 4. **Identity and authority are explicit**
    - Each Jetson has a unique network identity
-   - Each Jetson has a unique Cohesix auth token / role
-   - Compromise of one edge node does not compromise the fleet
+   - Gateway request authentication protects the host HTTP edge
+   - All clients behind one gateway inherit that gateway's upstream target
+     role and optional ticket
+   - Gateway request authentication is not delegated target identity; per-edge
+     target roles require a separately designed and accepted host broker
 
 ---
 
@@ -48,7 +56,7 @@ Security is achieved by **architectural placement and capability control**, not 
 Runs:
 - Application workloads (CV, inference, sensors, CUDA, etc.)
 - A **VPN client** (WireGuard or equivalent)
-- **Cohesix host tools / edge agent** (e.g. `cohsh`, telemetry uploader)
+- A deployment-approved REST client or edge agent
 
 Does **not** run:
 - seL4
@@ -77,15 +85,32 @@ Security note:
 
 ---
 
-### Cohesix Queen (AWS, seL4 VM)
+### Host Gateway (Private Subnet)
+Runs:
+- `hive-gateway` as the sole target TCP-console owner
+- Deployment-specific edge authorization and audit controls when individual
+  Jetsons need distinct policy
+
+Responsibilities:
+- Multiplex concurrent host clients through bounded REST operations
+- Hold one upstream target role and optional ticket
+- Preserve request authentication, queue bounds, and target refusal semantics
+
+Security note:
+- The gateway is a privileged host boundary. Its request token does not become
+  a per-client target capability or namespace identity.
+
+---
+
+### Private Cohesix Target (Deployment Pattern)
 Runs:
 - seL4 kernel + elfloader
 - Cohesix root-task
-- NineDoor / Secure9P namespaces
+- `console-network-runtime` and the target namespace adapter
 
 Network exposure:
 - **Private subnet only**
-- TCP console / control ports reachable **only from VPN CIDR**
+- One authenticated TCP console reachable **only from the host gateway**
 
 Responsibilities:
 - Global orchestration
@@ -100,14 +125,15 @@ The following diagram expresses:
 - Trust boundaries
 - Encrypted vs plaintext links
 - Outbound-only edge connectivity
-- Queen isolation
+- The gateway's sole ownership of the target console
+- The fact that AWS placement is a pattern, not 26e target acceptance
 
 ```mermaid
 flowchart LR
   %% ========================
   %% Edge Devices
   %% ========================
-  subgraph EDGE["Edge (Roaming Jetsons)"]
+  subgraph EDGE["Roaming edge hosts - not target Workers"]
     J1["Jetson A (host tools + workloads)"]
     J2["Jetson B (host tools + workloads)"]
     JN["Jetson N (host tools + workloads)"]
@@ -129,9 +155,12 @@ flowchart LR
     end
 
     subgraph PRIV["Private Subnet"]
-      Q["Cohesix Queen (seL4 VM, no public IP)"]
+      Gateway["hive-gateway\nconcurrent host-client broker"]
+      Target["Cohesix target\nsingle authenticated TCP console"]
     end
   end
+
+  Scope["Deployment pattern only\nAWS is not an active 26e target"]
 
   %% ========================
   %% Connectivity
@@ -141,9 +170,11 @@ flowchart LR
   JN -->|Encrypted VPN outbound only| I
 
   I --> WG
-
-  WG -->|Plain TCP over VPN-only CIDR| Q
+  WG -->|Private host traffic and request authentication| Gateway
+  Gateway -->|Sole plain TCP console session inside private boundary| Target
+  Scope -.-> Gateway
 ```
+
 ## Connection Flow (Step-by-Step)
 
 1. **Jetson boots**
@@ -151,15 +182,22 @@ flowchart LR
    - Receives a stable VPN IP (e.g. `10.200.0.x`)
 
 2. **Jetson starts Cohesix host agent**
-   - Connects to Queen over VPN IP
-   - Uses authenticated Cohesix console / Secure9P transport
+   - Connects to the private host gateway over the VPN
+   - Uses the deployment's host-edge authentication and policy
 
-3. **Queen validates identity**
-   - Network identity (VPN peer)
-   - Cohesix auth token / ticket
-   - Capability and namespace restrictions
+3. **Gateway admits or refuses the host request**
+   - The VPN authenticates the network peer
+   - Gateway request authentication protects the REST edge
+   - Deployment-specific policy must distinguish clients when one shared
+     gateway credential is insufficient
 
-4. **Operational traffic begins**
+4. **Gateway projects the operation to the target**
+   - `hive-gateway` remains the sole target console client
+   - The target validates the gateway's upstream role, optional ticket,
+     namespace, policy, and bounds
+   - The target does not receive a delegated Jetson identity
+
+5. **Operational traffic begins**
    - Telemetry upload
    - Job fetch
    - Result submission
@@ -174,14 +212,23 @@ All traffic is encrypted **on the wire**, but remains simple and deterministic *
 - One VPN keypair per Jetson
 - Revocation = remove peer → instant disconnect
 
-### Cohesix Layer
-- One auth token / ticket root per Jetson
-- Mapped to:
-  - A specific worker namespace
-  - A limited verb set
-- Revocation = token invalidation
+### Host Gateway Layer
+- Authenticate and authorize the private host edge
+- Rotate or revoke the affected gateway credential and ingress policy
+- Treat a shared request token as shared host-edge authority, not as an
+  individual target identity
 
-**Both layers are required**. Either one alone is insufficient.
+### Cohesix Target Layer
+- One upstream role and optional ticket are bound to the gateway's target
+  session
+- Target role, namespace, lifecycle, policy, and bounds checks remain
+  authoritative
+- Milestone 26e does not delegate a distinct target role or ticket from each
+  REST client through one gateway
+
+Every selected layer is required. VPN identity cannot replace target
+authorization, and target authorization cannot provide internet transport
+confidentiality.
 
 ---
 
@@ -190,32 +237,40 @@ All traffic is encrypted **on the wire**, but remains simple and deterministic *
 | Event | Outcome |
 |-----|--------|
 | Packet sniffing on internet | Encrypted, unreadable |
-| Compromised Jetson | Limited to its own role |
-| Token leak | No network reach without VPN |
-| VPN key leak | No authority without token |
-| Queen compromise | Out of scope (TCB breach) |
+| Compromised Jetson | Bounded by its VPN peer and deployment-specific host ingress policy; a shared gateway does not automatically give it a distinct target role. |
+| Gateway request-token leak | Exposes the corresponding host edge when network reach exists; rotate the token and audit the gateway. |
+| VPN key leak | Does not satisfy independent gateway request authentication. |
+| Gateway compromise | Exposes the gateway's complete upstream target authority and requires fencing, credential rotation, and audit. |
+| Cohesix target compromise | Out of scope (TCB breach). |
 
 ---
 
 ## Non-Goals (Explicitly Out of Scope)
 
 - HTTPS or TLS inside the Cohesix VM
-- Mutual TLS between Jetsons and Queen
+- Mutual TLS between Jetsons and the Cohesix target
 - Direct inbound connections to edge devices
-- One Queen directly orchestrating remote in-VM workers on Jetsons
+- Multiple direct clients competing for the single target TCP console
+- Delegated per-Jetson target identity through one 26e gateway session
+- AWS or UEFI target acceptance under Milestone 26e
 
 ---
 
 ## Summary
 
-This topology provides:
+This pattern preserves:
 
 - Strong confidentiality on untrusted networks
-- Explicit, revocable identity at both network and application layers
+- One explicit host owner for the target TCP console
+- Separation between VPN, gateway, and target authorization
 - Minimal TCB inside the seL4 VM
 - Operational simplicity for roaming edge devices
 
-If you are deviating from this design, you should document:
+It does not by itself provide per-Jetson target authority. A deployment that
+requires that property must add and accept a host-side identity broker without
+creating another in-target listener or authority path.
+
+If you are extending this pattern, document:
 - What new attack surface is introduced
 - Why it cannot be handled at the host/network layer
 - How revocation and least privilege are preserved
