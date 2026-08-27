@@ -4,14 +4,102 @@
 
 """Tests for scripts/pi4_gate_proof.sh."""
 
+import http.server
+import json
 import pathlib
 import subprocess
+import threading
 
 import pytest
 
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 SCRIPT_PATH = REPO_ROOT / "scripts" / "pi4_gate_proof.sh"
+
+
+def _run_output_guard_probe(
+    tmp_path: pathlib.Path,
+    body: str,
+    *extra_args: str,
+) -> subprocess.CompletedProcess[str]:
+    """Run only the shell wrapper's output-guard helpers in a probe process."""
+
+    prefix = SCRIPT_PATH.read_text(encoding="utf-8").split(
+        "\nwhile [[ $# -gt 0 ]]; do",
+        1,
+    )[0]
+    prefix_path = tmp_path / "pi4-gate-helper-prefix.sh"
+    prefix_path.write_text(prefix + "\n", encoding="utf-8")
+    command = (
+        'source "$1"\nPYTHON="$2"\nTMPDIR="$3"\n'
+        'GATEWAY_TARGET_HOST="192.168.50.23"\nexport TMPDIR\n'
+        + body
+    )
+    return subprocess.run(
+        [
+            "bash",
+            "-c",
+            command,
+            "guard-probe",
+            str(prefix_path),
+            str(REPO_ROOT / ".venv" / "bin" / "python"),
+            str(tmp_path),
+            *extra_args,
+        ],
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+
+def _start_gateway_status_server(
+    statuses: list[dict[str, object]],
+) -> tuple[
+    http.server.ThreadingHTTPServer,
+    threading.Thread,
+    str,
+    list[tuple[str, str | None, str | None]],
+]:
+    """Serve bounded sequential gateway status responses on loopback."""
+
+    pending = [
+        {
+            "target_host": "192.168.50.23",
+            "target_port": 31337,
+            **status,
+        }
+        for status in statuses
+    ]
+    requests: list[tuple[str, str | None, str | None]] = []
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self) -> None:  # noqa: N802 - stdlib handler contract
+            requests.append(
+                (
+                    self.path,
+                    self.headers.get("Authorization"),
+                    self.headers.get("x-cohesix-auth"),
+                )
+            )
+            if not pending:
+                self.send_error(500, "no status fixture remains")
+                return
+            body = json.dumps(pending.pop(0), separators=(",", ":")).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, _format: str, *args: object) -> None:
+            del args
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    host, port = server.server_address
+    return server, thread, f"http://{host}:{port}", requests
 
 
 def _is_wifi_dpc_proof_line(line: str) -> bool:
@@ -538,6 +626,630 @@ def test_gate_proof_defaults_to_passive_usb_diagnostics() -> None:
     assert defaults.count('"usb status"') == 1
     assert '"usb probe-kbd"' not in defaults
     assert "--probe-usb-keyboard" in source
+
+
+def test_gate_proof_seals_controlled_serial_network_capture_pair() -> None:
+    """Fresh Pi proof can bind packets captured during the exact serial run."""
+
+    source = SCRIPT_PATH.read_text(encoding="utf-8")
+
+    assert 'tcpdump_bin="$(command -v tcpdump || true)"' in source
+    assert "PI4_RUNTIME_DMA_CAPTURE_PAIRING=controlled-concurrent" in source
+    for field in (
+        "PI4_RUNTIME_DMA_SERIAL_LOG_SHA256",
+        "PI4_RUNTIME_DMA_SERIAL_LOG_BYTES",
+        "PI4_RUNTIME_DMA_NETWORK_INTERFACE",
+        "PI4_RUNTIME_DMA_NETWORK_CAPTURE",
+        "PI4_RUNTIME_DMA_NETWORK_CAPTURE_SHA256",
+        "PI4_RUNTIME_DMA_NETWORK_CAPTURE_BYTES",
+        "PI4_RUNTIME_DMA_CAPTURE_STARTED_AT_UTC",
+        "PI4_RUNTIME_DMA_CAPTURE_FINISHED_AT_UTC",
+    ):
+        assert field in source
+
+
+def test_gate_proof_binds_gateway_continuity_into_runtime_proof() -> None:
+    """Qualified proof captures boot before sealing pre-load gateway continuity."""
+
+    source = SCRIPT_PATH.read_text(encoding="utf-8")
+    capture_body = source.split("run_capture() {", 1)[1].split(
+        "\n}\n\nrun_normalizer()",
+        1,
+    )[0]
+
+    assert "--gateway-status-url" in source
+    assert capture_body.index("start_network_capture") < capture_body.index(
+        "start_serial_capture"
+    )
+    assert capture_body.index("start_serial_capture") < capture_body.index(
+        'sleep "${BOOT_WAIT_SECONDS}"'
+    )
+    assert capture_body.index('sleep "${BOOT_WAIT_SECONDS}"') < (
+        capture_body.index("wait_for_console_ready")
+    )
+    assert capture_body.index("wait_for_console_ready") < capture_body.index(
+        "wait_for_wifi_supervisor_terminal"
+    )
+    assert capture_body.index("wait_for_wifi_supervisor_terminal") < (
+        capture_body.index("capture_gateway_continuity_start")
+    )
+    assert capture_body.index("capture_gateway_continuity_start") < (
+        capture_body.index('log "console command: ${command}"')
+    )
+    assert capture_body.index("capture_gateway_continuity_end") < (
+        capture_body.index('if [[ -n "${CAPTURE_PID}" ]]')
+    )
+    assert capture_body.index("capture_gateway_continuity_end") < (
+        capture_body.index("finish_network_capture")
+    )
+    assert capture_body.index("finish_network_capture") < capture_body.index(
+        "validate_gateway_capture_timeline"
+    )
+    assert 'serial_proof_source="${SERIAL_SNAPSHOT_PATH}"' in source
+    for field in (
+        "PI4_RUNTIME_DMA_GATEWAY_CONTINUITY=connected-single-session",
+        "PI4_RUNTIME_DMA_GATEWAY_STATUS_ENDPOINT",
+        "PI4_RUNTIME_DMA_GATEWAY_TARGET_HOST",
+        "PI4_RUNTIME_DMA_GATEWAY_TARGET_PORT",
+        "PI4_RUNTIME_DMA_GATEWAY_START_CAPTURED_UNIX_NS",
+        "PI4_RUNTIME_DMA_GATEWAY_START_CONNECTED",
+        "PI4_RUNTIME_DMA_GATEWAY_START_CONNECTS",
+        "PI4_RUNTIME_DMA_GATEWAY_START_RECONNECTS",
+        "PI4_RUNTIME_DMA_GATEWAY_START_LAST_CHANGE_UNIX_MS",
+        "PI4_RUNTIME_DMA_GATEWAY_START_TARGET_HOST",
+        "PI4_RUNTIME_DMA_GATEWAY_START_TARGET_PORT",
+        "PI4_RUNTIME_DMA_GATEWAY_END_CAPTURED_UNIX_NS",
+        "PI4_RUNTIME_DMA_GATEWAY_END_CONNECTED",
+        "PI4_RUNTIME_DMA_GATEWAY_END_CONNECTS",
+        "PI4_RUNTIME_DMA_GATEWAY_END_RECONNECTS",
+        "PI4_RUNTIME_DMA_GATEWAY_END_LAST_CHANGE_UNIX_MS",
+        "PI4_RUNTIME_DMA_GATEWAY_END_TARGET_HOST",
+        "PI4_RUNTIME_DMA_GATEWAY_END_TARGET_PORT",
+    ):
+        assert field in source
+
+
+def test_gate_proof_orders_wired_and_wifi_nettest_without_cross_gating() -> None:
+    """GENET runs nettest directly; only WiFi waits for CYW43 and DHCP."""
+
+    source = SCRIPT_PATH.read_text(encoding="utf-8")
+    capture_body = source.split("run_capture() {", 1)[1].split(
+        "\n}\n\nrun_normalizer()",
+        1,
+    )[0]
+    gateway_start = capture_body.index("capture_gateway_continuity_start")
+    command_loop = capture_body.index('for command in "${commands[@]}"')
+    wifi_wait = capture_body.index('if [[ "${REQUIRE_WIFI_READY}" -eq 1 ]]')
+    nettest_wifi_gate = capture_body.index(
+        'if [[ "${command}" == "nettest" && "${REQUIRE_WIFI_READY}" -eq 1 ]]'
+    )
+    command_send = capture_body.index('log "console command: ${command}"')
+
+    assert wifi_wait < gateway_start < command_loop
+    assert command_loop < nettest_wifi_gate < command_send
+    assert 'if [[ "${wifi_commands}" -eq 1 ]]' not in capture_body
+    assert '"${command}" == "nettest" ]]; then' not in capture_body
+    assert "wait_for_wifi_supervisor_terminal" in capture_body[wifi_wait:gateway_start]
+    assert "wait_for_wifi_dhcp_bound" in capture_body[nettest_wifi_gate:command_send]
+
+
+def test_gateway_continuity_accepts_one_unchanged_authenticated_connection(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Both status samples must describe the same first gateway connection."""
+
+    status = {
+        "connected": True,
+        "connects": 1,
+        "reconnects": 0,
+        "last_change_unix_ms": 1000,
+        "broker": {},
+    }
+    server, thread, base_url, requests = _start_gateway_status_server(
+        [status, status]
+    )
+    try:
+        result = _run_output_guard_probe(
+            tmp_path,
+            '''
+GATEWAY_STATUS_ENDPOINT="$(normalize_gateway_status_url "$4")"
+GATEWAY_REQUEST_AUTH_TOKEN="test-token"
+capture_gateway_continuity_start
+capture_gateway_continuity_end
+NETWORK_CAPTURE_STARTED_UNIX_NS=0
+NETWORK_CAPTURE_FINISHED_UNIX_NS=9000000000000000000
+validate_gateway_capture_timeline
+printf '%s\n' \
+  "${GATEWAY_START_CONNECTED}:${GATEWAY_START_CONNECTS}:${GATEWAY_START_RECONNECTS}:${GATEWAY_START_LAST_CHANGE_UNIX_MS}" \
+  "${GATEWAY_END_CONNECTED}:${GATEWAY_END_CONNECTS}:${GATEWAY_END_RECONNECTS}:${GATEWAY_END_LAST_CHANGE_UNIX_MS}"
+''',
+            base_url,
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert result.returncode == 0, result.stderr
+    expected = "true:1:0:1000"
+    assert result.stdout.splitlines() == [expected, expected]
+    assert requests == [
+        ("/v1/meta/status", "Bearer test-token", "test-token"),
+        ("/v1/meta/status", "Bearer test-token", "test-token"),
+    ]
+
+
+def test_gateway_continuity_rejects_connection_before_capture(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A pre-capture connection cannot be relabelled as the boot session."""
+
+    status = {
+        "connected": True,
+        "connects": 1,
+        "reconnects": 0,
+        "last_change_unix_ms": 1000,
+        "broker": {},
+    }
+    server, thread, base_url, _requests = _start_gateway_status_server(
+        [status, status]
+    )
+    try:
+        result = _run_output_guard_probe(
+            tmp_path,
+            '''
+GATEWAY_STATUS_ENDPOINT="$(normalize_gateway_status_url "$4")"
+capture_gateway_continuity_start
+capture_gateway_continuity_end
+NETWORK_CAPTURE_STARTED_UNIX_NS=1001000000
+NETWORK_CAPTURE_FINISHED_UNIX_NS=9000000000000000000
+validate_gateway_capture_timeline
+''',
+            base_url,
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert result.returncode == 1
+    assert "outside the controlled capture" in result.stderr
+
+
+def test_gateway_continuity_rejects_connection_change(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A changed connection timestamp fails even when counters look healthy."""
+
+    start = {
+        "connected": True,
+        "connects": 1,
+        "reconnects": 0,
+        "last_change_unix_ms": 1_788_000_000_123,
+        "broker": {},
+    }
+    end = dict(start, last_change_unix_ms=1_788_000_000_124)
+    server, thread, base_url, _requests = _start_gateway_status_server([start, end])
+    try:
+        result = _run_output_guard_probe(
+            tmp_path,
+            '''
+GATEWAY_STATUS_ENDPOINT="$(normalize_gateway_status_url "$4")"
+capture_gateway_continuity_start
+capture_gateway_continuity_end
+''',
+            base_url,
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert result.returncode == 1
+    assert "gateway connection changed during the controlled capture" in result.stderr
+
+
+def test_gateway_continuity_rejects_nonfinite_json(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Python's non-standard NaN extension cannot enter a strict status proof."""
+
+    status = {
+        "connected": True,
+        "connects": 1,
+        "reconnects": 0,
+        "last_change_unix_ms": 1_788_000_000_123,
+        "broker": {"invalid": float("nan")},
+    }
+    server, thread, base_url, _requests = _start_gateway_status_server([status])
+    try:
+        result = _run_output_guard_probe(
+            tmp_path,
+            '''
+GATEWAY_STATUS_ENDPOINT="$(normalize_gateway_status_url "$4")"
+GATEWAY_READY_TIMEOUT_SECONDS=0
+capture_gateway_continuity_start
+''',
+            base_url,
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert result.returncode == 1
+    assert "non-finite JSON constant: NaN" in result.stderr
+    assert "gateway continuity did not become ready within 0s" in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    (
+        ("target_host", "192.168.50.24", "differs from the selected Pi"),
+        ("target_port", 31338, "not the Cohesix console port"),
+    ),
+)
+def test_gateway_continuity_rejects_wrong_backend_target(
+    tmp_path: pathlib.Path,
+    field: str,
+    value: object,
+    message: str,
+) -> None:
+    """The gate cannot seal a gateway connected to another backend target."""
+
+    status = {
+        "connected": True,
+        "connects": 1,
+        "reconnects": 0,
+        "last_change_unix_ms": 1000,
+        field: value,
+        "broker": {},
+    }
+    server, thread, base_url, _requests = _start_gateway_status_server([status])
+    try:
+        result = _run_output_guard_probe(
+            tmp_path,
+            '''
+GATEWAY_STATUS_ENDPOINT="$(normalize_gateway_status_url "$4")"
+GATEWAY_READY_TIMEOUT_SECONDS=0
+capture_gateway_continuity_start
+''',
+            base_url,
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert result.returncode == 1
+    assert message in result.stderr
+
+
+def test_gateway_status_url_requires_qualified_active_capture(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Offline and diagnostic-only runs cannot claim gateway continuity."""
+
+    result = subprocess.run(
+        [
+            str(SCRIPT_PATH),
+            "--normalize-only",
+            "--gateway-status-url",
+            "http://127.0.0.1:8080",
+            "--gateway-target-host",
+            "192.168.10.60",
+            "--venv",
+            str(REPO_ROOT / ".venv"),
+            "--log",
+            str(tmp_path / "unused.log"),
+        ],
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 2
+    assert (
+        "--gateway-status-url requires active serial/network capture "
+        "and --require-driver-task-proof"
+    ) in result.stderr
+
+
+def test_gateway_status_url_requires_canonical_target_host(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The retained target host is an exact IP, not an ambiguous host label."""
+
+    result = subprocess.run(
+        [
+            str(SCRIPT_PATH),
+            "--gateway-status-url",
+            "http://127.0.0.1:8080",
+            "--gateway-target-host",
+            "192.168.010.060",
+            "--network-interface",
+            "en0",
+            "--network-capture-out",
+            str(tmp_path / "capture.pcap"),
+            "--require-driver-task-proof",
+            "--venv",
+            str(REPO_ROOT / ".venv"),
+            "--log",
+            str(tmp_path / "serial.log"),
+        ],
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 2
+    assert "gateway target host must be an IP address" in result.stderr
+    assert "--gateway-target-host is invalid" in result.stderr
+
+
+@pytest.mark.parametrize("replacement", ("directory", "symlink"))
+def test_output_guard_rejects_renamed_or_symlinked_ancestor_before_publication(
+    tmp_path: pathlib.Path,
+    replacement: str,
+) -> None:
+    """A prepared parent identity cannot be replaced before final publication."""
+
+    result = _run_output_guard_probe(
+        tmp_path,
+        f'''
+root="$3/probe"
+mkdir -p "${{root}}"
+target="${{root}}/output/proof.env"
+IFS=$'\t' read -r source_path source_seal \
+  <<<"$(create_sealed_temp_file "cohesix-guard-source-")"
+printf 'exact-proof\n' >"${{source_path}}"
+seal="$(prepare_fresh_output_path "proof" "${{target}}")"
+mv "${{root}}/output" "${{root}}/retained-output"
+if [[ "{replacement}" == "symlink" ]]; then
+    mkdir "${{root}}/attacker-output"
+    ln -s "${{root}}/attacker-output" "${{root}}/output"
+else
+    mkdir "${{root}}/output"
+fi
+if publish_file_exclusively \
+  "proof" "${{source_path}}" "${{target}}" "${{seal}}" \
+  "${{source_seal}}" >/dev/null; then
+    exit 20
+fi
+[[ ! -e "${{root}}/retained-output/proof.env" ]]
+[[ ! -e "${{root}}/output/proof.env" ]]
+''',
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "output ancestor identity changed" in result.stderr or "unsafe" in result.stderr
+
+
+def test_output_guard_preserves_existing_destination_on_publish_race(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A leaf created after preparation must remain byte-exact and unmodified."""
+
+    result = _run_output_guard_probe(
+        tmp_path,
+        '''
+root="$3/probe"
+mkdir -p "${root}"
+target="${root}/output/proof.env"
+IFS=$'\t' read -r source_path source_seal \
+  <<<"$(create_sealed_temp_file "cohesix-guard-source-")"
+printf 'exact-proof\n' >"${source_path}"
+seal="$(prepare_fresh_output_path "proof" "${target}")"
+printf 'attacker-owned\n' >"${target}"
+if publish_file_exclusively \
+  "proof" "${source_path}" "${target}" "${seal}" \
+  "${source_seal}" >/dev/null; then
+    exit 20
+fi
+[[ "$(cat "${target}")" == "attacker-owned" ]]
+''',
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "destination already exists" in result.stderr
+
+
+def test_serial_output_reservation_is_idempotent_before_capture(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Pre-build reservation remains valid when capture starts later."""
+
+    result = _run_output_guard_probe(
+        tmp_path,
+        '''
+LOG_PATH="$3/probe/pi4-serial.log"
+ensure_capture_log_is_fresh
+first_seal="${LOG_OUTPUT_SEAL}"
+ensure_capture_log_is_fresh
+[[ "${LOG_OUTPUT_SEAL}" == "${first_seal}" ]]
+[[ -f "${LOG_PATH}" ]]
+[[ ! -s "${LOG_PATH}" ]]
+''',
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_output_guard_rejects_replaced_temporary_source_inode(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A completed network/proof temporary cannot be swapped before publish."""
+
+    result = _run_output_guard_probe(
+        tmp_path,
+        '''
+root="$3/probe"
+mkdir -p "${root}"
+target="${root}/output/proof.env"
+seal="$(prepare_fresh_output_path "proof" "${target}")"
+IFS=$'\t' read -r source_path source_seal \
+  <<<"$(create_sealed_temp_file "cohesix-guard-source-")"
+printf 'exact-proof\n' >"${source_path}"
+mv "${source_path}" "${source_path}.retained"
+printf 'replacement\n' >"${source_path}"
+if publish_file_exclusively \
+  "proof" "${source_path}" "${target}" "${seal}" \
+  "${source_seal}" >/dev/null; then
+    exit 20
+fi
+[[ ! -e "${target}" ]]
+[[ "$(cat "${source_path}")" == "replacement" ]]
+''',
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "temporary source" in result.stderr
+
+
+def test_output_guard_never_writes_through_replaced_temporary_symlink(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Sealed proof writes cannot truncate a file reached through a swapped leaf."""
+
+    result = _run_output_guard_probe(
+        tmp_path,
+        '''
+IFS=$'\t' read -r source_path source_seal \
+  <<<"$(create_sealed_temp_file "cohesix-guard-source-")"
+victim="$3/victim.txt"
+printf 'keep-me\n' >"${victim}"
+rm "${source_path}"
+ln -s "${victim}" "${source_path}"
+if printf 'replacement\n' \
+    | write_sealed_temp_file "proof" "${source_path}" "${source_seal}"; then
+    exit 20
+fi
+[[ "$(cat "${victim}")" == "keep-me" ]]
+''',
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "temporary output" in result.stderr
+
+
+def test_output_guard_rejects_replaced_reserved_serial_leaf(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Serial snapshots stay bound to the exclusively reserved capture inode."""
+
+    result = _run_output_guard_probe(
+        tmp_path,
+        '''
+root="$3/probe"
+mkdir -p "${root}"
+target="${root}/output/pi4-serial.log"
+seal="$(prepare_fresh_output_path "serial" "${target}" yes)"
+rm "${target}"
+printf 'replacement\n' >"${target}"
+if snapshot_sealed_output "serial" "${seal}" >/dev/null; then
+    exit 20
+fi
+[[ "$(cat "${target}")" == "replacement" ]]
+''',
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "output leaf identity changed" in result.stderr
+
+
+def test_gate_proof_publishes_only_an_exact_positive_cyw43_record() -> None:
+    """The WiFi producer must bind one exact image and live serial/pcap pair."""
+
+    source = SCRIPT_PATH.read_text(encoding="utf-8")
+
+    assert '"schema": "cohesix-cyw43-coexistence-binding/v2"' in source
+    assert '"producer": "pi4_gate_proof/v1"' in source
+    assert '"classification": "positive-exact-image-live-closure"' in source
+    assert '"session_projection": session_projection' in source
+    assert '"runtime_evidence_sha256": sha256(runtime_raw)' in source
+    assert '"serial_sha256": sha256(serial_raw)' in source
+    assert '"sha256": sha256(capture_raw)' in source
+    assert "validate_serial_image_identity(serial_raw, metadata)" in source
+    assert (
+        "validate_pi_network_log(serial_raw, harness.BENCHMARK_TRANSPORT_WIFI)"
+        in source
+    )
+    assert "validate_pi_correlated_network_capture(" in source
+    assert "pi_cyw43_outcomes_from_normalized_gate(summary_raw)" in source
+    assert '"outcomes": derived_outcomes' in source
+    assert "os.O_EXCL" in source
+    assert "summary_raw = Path(summary_value).read_bytes()" in source
+
+
+def test_gate_proof_rejects_offline_cyw43_record_publication(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A retained log cannot be upgraded into a positive coexistence record."""
+
+    result = subprocess.run(
+        [
+            str(SCRIPT_PATH),
+            "--normalize-only",
+            "--venv",
+            str(REPO_ROOT / ".venv"),
+            "--log",
+            str(tmp_path / "serial.log"),
+            "--cyw43-coexistence-record-out",
+            str(tmp_path / "cyw43.json"),
+        ],
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 2
+    assert "positive CYW43 output requires WiFi ready" in result.stderr
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ["--network-interface", "en0"],
+        ["--network-capture-out", "capture.pcap"],
+        [
+            "--network-interface",
+            "en0",
+            "--network-capture-out",
+            "capture.pcap",
+        ],
+    ],
+)
+def test_gate_proof_rejects_unpaired_or_offline_network_capture(
+    tmp_path: pathlib.Path,
+    arguments: list[str],
+) -> None:
+    """Only the active capture path can claim concurrent packet pairing."""
+
+    venv_dir = REPO_ROOT / ".venv"
+    result = subprocess.run(
+        [
+            str(SCRIPT_PATH),
+            "--normalize-only",
+            "--venv",
+            str(venv_dir),
+            "--log",
+            str(tmp_path / "serial.log"),
+            *arguments,
+        ],
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 2
+    if len(arguments) == 2:
+        assert "must be supplied together" in result.stderr
+    else:
+        assert "requires the active serial capture path" in result.stderr
 
 
 def test_gate_proof_refuses_existing_capture_log(tmp_path: pathlib.Path) -> None:

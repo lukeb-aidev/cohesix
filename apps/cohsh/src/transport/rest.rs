@@ -455,6 +455,8 @@ mod tests {
     fn sample_status(connected: bool) -> GatewayStatusResponse {
         GatewayStatusResponse {
             connected,
+            target_host: "127.0.0.1".to_string(),
+            target_port: 31337,
             backend_class: None,
             worker_acceptance: None,
             worker_acceptance_diagnostic: None,

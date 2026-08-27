@@ -1,6 +1,6 @@
 // Copyright 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
-// Purpose: Verify the five critical root duties own distinct generated temporal reserves.
+// Purpose: Verify the seven critical root duties own distinct generated temporal reserves.
 // Author: Lukas Bower
 
 use root_task::critical_tcb::{
@@ -65,7 +65,7 @@ fn child_set_space_resolves_fault_endpoint_in_root_cspace() {
 }
 
 #[test]
-fn all_five_named_duties_finish_with_distinct_kernel_objects() {
+fn all_seven_named_duties_finish_with_distinct_kernel_objects() {
     validate_critical_temporal_graph().expect("critical temporal graph");
     let resources = generated::worker_resource_admission_config().critical_tcbs;
     assert_eq!(resources.len(), CRITICAL_TCB_COUNT);
@@ -97,7 +97,7 @@ fn all_five_named_duties_finish_with_distinct_kernel_objects() {
             })
             .expect("complete distinct reserve");
     }
-    let handles = inventory.finish().expect("five-duty inventory");
+    let handles = inventory.finish().expect("seven-duty inventory");
     assert_eq!(handles.len(), CRITICAL_TCB_COUNT);
     assert!(handles
         .iter()

@@ -4,9 +4,13 @@
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
+import os
+import struct
 import subprocess
+import time
 import tomllib
 from pathlib import Path
 from types import SimpleNamespace
@@ -17,6 +21,241 @@ from scripts import worker_task_evidence as evidence
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def _pi_live_record_fixture() -> tuple[
+    dict[str, object],
+    dict[str, object],
+]:
+    """Build an independent packet-bearing v2 record for pure validation."""
+
+    now = int(time.time())
+    start_ns = (now - 2) * 1_000_000_000
+    finish_ns = (now - 1) * 1_000_000_000
+    packet = b"test"
+    capture_raw = (
+        b"\xd4\xc3\xb2\xa1"
+        + struct.pack("<HHiIII", 2, 4, 0, 0, 65_535, 1)
+        + struct.pack("<IIII", now - 1, 0, len(packet), len(packet))
+        + packet
+    )
+    runtime_raw = b"runtime-proof\n"
+    serial_raw = b"serial-proof\n"
+    normalized_raw = (
+        "\n".join(
+            (
+                "DRIVER_TASK_ACTIVE_NET=cyw43",
+                "PI4_RUNTIME_DMA_PROOF=fresh-pi",
+                "PI4_RUNTIME_DMA_COUNTER_PROOF=counter-qualified",
+                "DRIVER_TASK_DMA_BLOCKER=none",
+                "DRIVER_TASK_RING_CALL_OUTSTANDING=0",
+                "DRIVER_TASK_RING_CALL_UNRESOLVED_TIMEOUT=0",
+                "DRIVER_TASK_BOOTSTRAP_DEFERRED=0",
+                "TIMER_BACKEND=arch-counter",
+                "TIMER_CLOCK_HZ=54000000",
+                "TIMER_EL0_COUNTER=vct",
+                "DUMMY_TIMER_SEEN=no",
+                "NET_ACTIVE=wifi",
+                "NET_ADDR_SRC=dhcp-lease",
+                "NET_DHCP=bound",
+                "NET_TCP_READY=yes",
+                "NETTEST_PROOF=yes",
+                "COHSH_TCP_AUTH_PROOF=yes",
+                "WIFI_GATE=10",
+                "WIFI_BLOCKER=none",
+                "WIFI_DPC_PROOF=yes",
+                "DRIVER_TASK_SDIO_DEDICATED=yes",
+                "DRIVER_TASK_NET_DEDICATED=yes",
+                "DRIVER_TASK_OWNER_STATE_PROOF=yes",
+                "CYW43_BOOTSTRAP_SUPERVISOR_READY=yes",
+                "WIFI_FIRMWARE_IDENTITY_PROOF=yes",
+                "WIFI_CLM_READY_PROOF=yes",
+                "WIFI_FIRMWARE_VERSION_PROOF=yes",
+                "WIFI_CLM_VERSION_PROOF=yes",
+                "WIFI_GATE7_COMPLETE=yes",
+                "SDIO_IRQ158_INBAND_PROOF=yes",
+                "TCP_ACCEPTS=1",
+                "TCP_AUTH_SESSIONS=1",
+                "TCP_RX_BYTES=64",
+            )
+        )
+        + "\n"
+    ).encode("ascii")
+    capture_id = "a" * 32
+    runtime = {
+        "PI4_RUNTIME_DMA_CAPTURE_ID": capture_id,
+        "PI4_RUNTIME_DMA_NETWORK_INTERFACE": "en0",
+        "PI4_RUNTIME_DMA_NETWORK_CAPTURE_SHA256": hashlib.sha256(
+            capture_raw
+        ).hexdigest(),
+        "PI4_RUNTIME_DMA_NETWORK_CAPTURE_BYTES": str(len(capture_raw)),
+        "PI4_RUNTIME_DMA_CAPTURE_STARTED_UNIX_NS": str(start_ns),
+        "PI4_RUNTIME_DMA_CAPTURE_FINISHED_UNIX_NS": str(finish_ns),
+    }
+    metadata = {
+        "image_id": "b" * 64,
+        "git_commit": "c" * 40,
+        "build_timestamp": "2026-08-27T00:00:00Z",
+        "build_marker": "[BUILD] fixture",
+        "build_marker_sha256": hashlib.sha256(b"[BUILD] fixture").hexdigest(),
+    }
+    session_projection = {
+        "target": "pi4",
+        **{
+            field: hashlib.sha256(field.encode("ascii")).hexdigest()
+            for field in evidence.TARGET_SESSION_KEYS
+            - {"target", "cyw43_coexistence_record_sha256"}
+        },
+    }
+    outcomes = {
+        **evidence.PI_CYW43_FIXED_OUTCOMES,
+        "tcp_accepts": 1,
+        "tcp_auth_sessions": 1,
+        "tcp_rx_bytes": 64,
+    }
+    record = {
+        "schema": evidence.CYW43_PI_BINDING_SCHEMA,
+        "producer": "pi4_gate_proof/v1",
+        "target": "pi4",
+        "transport": "wifi",
+        "capture_id": capture_id,
+        "captured_unix_s": now - 1,
+        "selected": True,
+        "classification": "positive-exact-image-live-closure",
+        "session_projection": session_projection,
+        "topology_sha256": "d" * 64,
+        "image_identity": {
+            "image_sha256": "e" * 64,
+            **metadata,
+        },
+        "runtime": {
+            "runtime_evidence_sha256": hashlib.sha256(runtime_raw).hexdigest(),
+            "serial_sha256": hashlib.sha256(serial_raw).hexdigest(),
+            "serial_bytes": len(serial_raw),
+            "latest_boot_offset": 0,
+            "normalized_gate_sha256": hashlib.sha256(normalized_raw).hexdigest(),
+        },
+        "network_capture": {
+            "sha256": hashlib.sha256(capture_raw).hexdigest(),
+            "bytes": len(capture_raw),
+            "format": "pcap-us",
+            "link_type": 1,
+            "interface": "en0",
+            "capture_started_unix_ns": start_ns,
+            "capture_finished_unix_ns": finish_ns,
+        },
+        "outcomes": outcomes,
+    }
+    inputs = {
+        "session_projection": session_projection,
+        "topology_sha256": "d" * 64,
+        "image_sha256": "e" * 64,
+        "metadata": metadata,
+        "runtime_raw": runtime_raw,
+        "runtime": runtime,
+        "serial_raw": serial_raw,
+        "boot_offset": 0,
+        "normalized_gate_raw": normalized_raw,
+        "capture_raw": capture_raw,
+        "max_age_secs": 60,
+    }
+    return record, inputs
+
+
+def test_pi_live_record_requires_exact_fresh_controlled_bytes() -> None:
+    """Pi session finalization rejects stale or byte-mismatched live assertions."""
+
+    record, inputs = _pi_live_record_fixture()
+    evidence._validate_pi_live_record(record, **inputs)  # noqa: SLF001
+
+    tampered = copy.deepcopy(record)
+    tampered["runtime"]["serial_sha256"] = "f" * 64
+    with pytest.raises(evidence.EvidenceError, match="exact serial proof"):
+        evidence._validate_pi_live_record(tampered, **inputs)  # noqa: SLF001
+
+    stale = copy.deepcopy(record)
+    stale["captured_unix_s"] = int(time.time()) - 61
+    with pytest.raises(evidence.EvidenceError, match="invalid or stale"):
+        evidence._validate_pi_live_record(stale, **inputs)  # noqa: SLF001
+
+    invalid_gate = dict(inputs)
+    invalid_gate["normalized_gate_raw"] = inputs["normalized_gate_raw"].replace(
+        b"WIFI_GATE=10", b"WIFI_GATE=9"
+    )
+    invalid_gate_record = copy.deepcopy(record)
+    invalid_gate_record["runtime"]["normalized_gate_sha256"] = hashlib.sha256(
+        invalid_gate["normalized_gate_raw"]
+    ).hexdigest()
+    with pytest.raises(evidence.EvidenceError, match="normalized WiFi gate"):
+        evidence._validate_pi_live_record(  # noqa: SLF001
+            invalid_gate_record,
+            **invalid_gate,
+        )
+
+
+@pytest.mark.parametrize(
+    ("raw", "message"),
+    [
+        (b'{"target":"qemu","target":"pi4"}\n', "duplicate object key"),
+        (b'{"value":NaN}\n', "non-finite number"),
+        (b'{"value":Infinity}\n', "non-finite number"),
+    ],
+)
+def test_all_evidence_json_loaders_reject_ambiguous_values(
+    tmp_path: Path,
+    raw: bytes,
+    message: str,
+) -> None:
+    """Evidence, generated topology, and frozen inputs share strict JSON rules."""
+
+    path = tmp_path / "ambiguous.json"
+    path.write_bytes(raw)
+    for loader in (
+        evidence._load,  # noqa: SLF001 - exact loader contract
+        evidence._load_generated_topology,  # noqa: SLF001 - exact loader contract
+        lambda candidate: evidence._load_frozen_json(  # noqa: SLF001
+            candidate,
+            "frozen evidence",
+        ),
+    ):
+        with pytest.raises(evidence.EvidenceError, match=message):
+            loader(path)
+
+
+def test_frozen_evidence_rejects_symlink_ancestors(tmp_path: Path) -> None:
+    """A regular final file cannot enter evidence through an aliased directory."""
+
+    real = tmp_path / "real"
+    real.mkdir()
+    (real / "record.json").write_text("{}\n", encoding="utf-8")
+    alias = tmp_path / "alias"
+    alias.symlink_to(real, target_is_directory=True)
+
+    with pytest.raises(evidence.EvidenceError, match="cannot open evidence safely"):
+        evidence._load(alias / "record.json")  # noqa: SLF001
+
+
+def test_frozen_evidence_rejects_in_read_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A path identity change after the exact read invalidates the artifact."""
+
+    path = tmp_path / "record.json"
+    path.write_text("{}\n", encoding="utf-8")
+    original_fstat = os.fstat
+    target_calls = 0
+
+    def mutating_fstat(descriptor: int):
+        nonlocal target_calls
+        target_calls += 1
+        if target_calls == 2:
+            path.write_text('{"changed":true}\n', encoding="utf-8")
+        return original_fstat(descriptor)
+
+    monkeypatch.setattr(os, "fstat", mutating_fstat)
+    with pytest.raises(evidence.EvidenceError, match="changed while it was being frozen"):
+        evidence._load(path)  # noqa: SLF001
 
 
 def test_uart_allows_public_cptr_diagnostics_but_typed_evidence_rejects_them() -> None:
@@ -148,9 +387,9 @@ def _component(
             for dependency_id in evidence.REQUIRED_INTEGRATIONS
         ]
     roles = {
-        "worker-heartbeat": {"role_index": 1, "core": 3, "budget_us": 300},
-        "worker-gpu": {"role_index": 2, "core": 2, "budget_us": 400},
-        "worker-lora": {"role_index": 4, "core": 2, "budget_us": 400},
+        "worker-heartbeat": {"role_index": 1, "core": 3},
+        "worker-gpu": {"role_index": 2, "core": 2},
+        "worker-lora": {"role_index": 4, "core": 3},
     }
     workers = []
     for index, role in enumerate(evidence.REQUIRED_ROLES):
@@ -179,12 +418,21 @@ def _component(
                 "fault_badge": 652_279_808 + index,
                 "core": role_config["core"],
                 "scheduling_context": {
-                    "budget_us": role_config["budget_us"],
-                    "period_us": 10_000,
+                    "budget_us": 0,
+                    "period_us": 0,
                 },
                 "object_inventory": _per_slot_inventory(),
             }
         )
+    raw_evidence = (
+        [
+            _artifact("pi4-network-capture"),
+            _artifact("pi4-runtime-dma-proof"),
+            _artifact("pi4-serial-boot"),
+        ]
+        if target == "pi4"
+        else [_artifact(f"{target}-worker-transcript")]
+    )
     return {
         "schema": evidence.COMPONENT_SCHEMA,
         "record_kind": "target-component",
@@ -194,7 +442,7 @@ def _component(
         "workers": workers,
         "integration_evidence": references,
         "outcomes": _outcomes(evidence.COMPONENT_REQUIRED_OUTCOMES),
-        "raw_evidence": [_artifact(f"{target}-worker-transcript")],
+        "raw_evidence": raw_evidence,
         "verdict": "PASS",
         "blockers": [],
     }
@@ -246,14 +494,29 @@ def _fixed_inventory() -> dict[str, int]:
 
 def _generated_record(target: str) -> dict[str, object]:
     role_config = (
-        ("worker-heartbeat", 3, 300),
-        ("worker-gpu", 2, 400),
-        ("worker-lora", 2, 400),
+        ("worker-heartbeat", 3),
+        ("worker-gpu", 2),
+        ("worker-lora", 3),
+    )
+    role_donors = {
+        "worker-heartbeat": "root-worker-executor-lora",
+        "worker-gpu": "root-worker-executor-gpu",
+        "worker-lora": "root-worker-executor-lora",
+    }
+    critical_tasks = (
+        ("root-control", "root-control"),
+        ("root-fault", "root-fault"),
+        ("root-emergency", "root-emergency"),
+        ("root-worker-supervisor", "worker-supervisor"),
+        ("root-driver-supervisor", "driver-supervisor"),
+        ("root-worker-executor-gpu", "worker-executor"),
+        ("root-worker-executor-lora", "worker-executor"),
     )
     topology = {
         "profile": {"name": evidence.TARGET_PROFILE[target], "kernel": True},
         "root_task": {},
         "worker_runtime": {
+            "max_workers": 3,
             "endpoint_caps": {
                 "required": True,
                 "attach_badge_base": 638_324_736,
@@ -279,6 +542,14 @@ def _generated_record(target: str) -> dict[str, object]:
                     "max_refills": 2,
                     "timeout_policy": "natural-postpone",
                 },
+                *(
+                    {"id": identifier, "kind": kind}
+                    for identifier, kind in critical_tasks[1:]
+                ),
+                {
+                    "id": "ninedoor-service",
+                    "kind": "service",
+                },
                 {
                     "id": "console-network-service",
                     "kind": "service",
@@ -294,12 +565,30 @@ def _generated_record(target: str) -> dict[str, object]:
                         "id": f"{role}-slot-0",
                         "kind": "worker",
                         "core": core,
-                        "budget_us": budget,
-                        "period_us": 10_000,
+                        "budget_us": 0,
+                        "period_us": 0,
+                        "execution": "passive",
+                        "admitted": False,
+                        "allowed_donors": [role_donors[role]],
+                        "reply_objects": 1,
+                        "max_donation_depth": 1,
                     }
-                    for role, core, budget in role_config
+                    for role, core in role_config
                 ),
-            ]
+            ],
+            "worker_classes": [
+                {
+                    "role": role,
+                    "task_prefix": f"{role}-slot-",
+                    "slots": 1,
+                    "core": core,
+                    "execution": "passive",
+                    "allowed_donors": [role_donors[role]],
+                    "reply_objects": 1,
+                    "max_donation_depth": 1,
+                }
+                for role, core in role_config
+            ],
         },
         "worker_resource_admission": {
             "enabled": True,
@@ -309,19 +598,23 @@ def _generated_record(target: str) -> dict[str, object]:
                     "role": role,
                     "task_prefix": f"{role}-slot-",
                     "executable_slots": 1,
+                    "namespace_capacity": 3,
                     "core": core,
                     "per_slot": _per_slot_inventory(),
                 }
-                for role, core, _ in role_config
+                for role, core in role_config
             ],
             "allowed_role_mixes": [
                 {
                     "id": "maximum-three-role-mix",
                     "maximum": True,
                     "roles": [
-                        {"role": role, "count": 1} for role, _, _ in role_config
+                        {"role": role, "count": 1} for role, _ in role_config
                     ],
                 }
+            ],
+            "critical_tcbs": [
+                {"id": identifier} for identifier, _kind in critical_tasks
             ],
             "handoff": {
                 "worker_fault_badges": {
@@ -329,6 +622,13 @@ def _generated_record(target: str) -> dict[str, object]:
                     "count": 3,
                     "stride": 1,
                 }
+            },
+            "fault_registry": {
+                "critical_tcbs": len(critical_tasks),
+                "service_tcbs": 2,
+                "worker_tcbs": len(role_config),
+                "driver_tcbs": 0,
+                "capacity": len(critical_tasks) + 2 + len(role_config),
             },
         },
         "ninedoor_service": {},
@@ -664,7 +964,6 @@ def _live_qemu_inputs(root_dir: Path) -> SimpleNamespace:
         task for task in temporal["tasks"] if task.get("kind") == "worker"
     ]
     for index, task in enumerate(worker_temporal_tasks):
-        task["admitted"] = True
         task["timeout_badge"] = 653_131_784 + index
     generated["topology_sha256"] = evidence._canonical_json_sha256(  # noqa: SLF001
         generated["topology"]
@@ -695,7 +994,7 @@ def _live_qemu_inputs(root_dir: Path) -> SimpleNamespace:
     role_bits = {"worker-heartbeat": 1, "worker-gpu": 2, "worker-lora": 4}
 
     lines = [
-        "[critical] exact generated fault registry sealed sources=10",
+        "[critical] exact generated fault registry sealed sources=12",
         "[critical] independent fault/emergency/Worker/driver duties active",
         "[worker] target supervisor armed after exact registry and critical activation",
         "GPU_BRIDGE_FIXTURE_ADMISSION source=gpu-bridge-host/mock mode=fixture profile=qemu gate=bootstrap-trace state=admitted",
@@ -710,9 +1009,9 @@ def _live_qemu_inputs(root_dir: Path) -> SimpleNamespace:
         "scope=admitted-maximum "
         + " ".join(f"{key}={_inventory()[key]}" for key in evidence.INVENTORY_KEYS)
         + " state=sealed",
-        "ROOT_CRITICAL_OBJECTS scope=constructed-actual duties=5 restricted_children=4 "
-        "tcbs=5 scheduling_contexts=5 reply_objects=6 standard_fault_caps=4 "
-        "timeout_fault_caps=4 fault_registrations=10 state=sealed",
+        "ROOT_CRITICAL_OBJECTS scope=constructed-actual duties=7 restricted_children=6 "
+        "tcbs=7 scheduling_contexts=7 reply_objects=8 standard_fault_caps=6 "
+        "timeout_fault_caps=6 fault_registrations=12 state=sealed",
     ]
 
     def identity(role: str, generation: int) -> str:
@@ -1007,6 +1306,12 @@ def _live_qemu_inputs(root_dir: Path) -> SimpleNamespace:
             "bytes": len(proc_raw),
         }
     workers = [worker_row(role) for role in evidence.REQUIRED_ROLES]
+    generated_worker_count = sum(
+        row["executable_slots"]
+        for row in generated["topology"]["worker_resource_admission"][
+            "executable_roles"
+        ]
+    )
     session_projection = {
         key: session[key]
         for key in (
@@ -1051,7 +1356,16 @@ def _live_qemu_inputs(root_dir: Path) -> SimpleNamespace:
             "supervisor_generation": 5,
             "cap_generation": 5,
         }
-        phase = {"workers": workers, "proc": proc}
+        phase = {
+            "workers": workers,
+            "ready_census": {
+                "maximum_live_tasks": generated_worker_count,
+                "discovered": generated_worker_count,
+                "ready": generated_worker_count,
+                "topology_sha256": generated["topology_sha256"],
+            },
+            "proc": proc,
+        }
         executable = {
             "topology_sha256": generated["topology_sha256"],
             "target_session": session_projection,
@@ -1100,10 +1414,10 @@ def _live_qemu_inputs(root_dir: Path) -> SimpleNamespace:
             "reliability": {"error_budget_pass": True},
             "population": {
                 "mode": "executable",
-                "maximum_live_tasks": 3,
-                "requested": 3,
-                "discovered": 3,
-                "ready": 3,
+                "maximum_live_tasks": generated_worker_count,
+                "requested": generated_worker_count,
+                "discovered": generated_worker_count,
+                "ready": generated_worker_count,
                 "backend_class": "console-projection",
                 "proof_class": "qemu",
             },
@@ -1388,6 +1702,90 @@ def _stub_session_manifest_validators(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(evidence.driver_runtimes, "verify_manifest", verify_driver)
 
 
+def _build_identity_inputs(root_dir: Path) -> SimpleNamespace:
+    repo = root_dir / "repo"
+    repo.mkdir()
+    (repo / ".gitignore").write_text("/out/\n", encoding="utf-8")
+    abi_manifest = repo / "crates/worker-task-abi/Cargo.toml"
+    abi_source = repo / "crates/worker-task-abi/src/lib.rs"
+    abi_manifest.parent.mkdir(parents=True)
+    abi_source.parent.mkdir(parents=True)
+    abi_manifest.write_text("[package]\nname = \"worker-task-abi\"\n", encoding="utf-8")
+    abi_source.write_text(
+        "#![no_std]\npub const WORKER_TASK_ABI_VERSION: u16 = 2;\n",
+        encoding="utf-8",
+    )
+    topology_path = repo / "configs/generated/root_task_topology.json"
+    topology = _generated_record("qemu")
+    topology["topology"]["worker_runtime"]["task_abi"] = {
+        "enabled": True,
+        "version": 2,
+    }
+    topology["topology_sha256"] = evidence._canonical_json_sha256(  # noqa: SLF001
+        topology["topology"]
+    )
+    _write(topology_path, topology)
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=Lukas Bower",
+            "-c",
+            "user.email=lukas@example.invalid",
+            "commit",
+            "-q",
+            "-m",
+            "fixture",
+        ],
+        cwd=repo,
+        check=True,
+    )
+    (repo / "out").mkdir()
+    output = repo / "out/pi4-build-identities"
+    return SimpleNamespace(
+        repo_root=repo,
+        topology=topology_path,
+        out_dir=output,
+        source_inventory=output / "source-inventory.json",
+        worker_abi=output / "worker-abi-identity.json",
+    )
+
+
+def test_build_identity_emitter_and_validator_bind_exact_clean_source(
+    tmp_path: Path,
+) -> None:
+    inputs = _build_identity_inputs(tmp_path)
+    evidence._emit_build_identities(inputs)  # noqa: SLF001
+
+    assert {path.name for path in inputs.out_dir.iterdir()} == {
+        "source-inventory.json",
+        "worker-abi-identity.json",
+    }
+    evidence._validate_build_identities(inputs)  # noqa: SLF001
+    with pytest.raises(evidence.EvidenceError, match="must not already exist"):
+        evidence._emit_build_identities(inputs)  # noqa: SLF001
+
+
+def test_build_identity_emitter_rejects_dirty_source(tmp_path: Path) -> None:
+    inputs = _build_identity_inputs(tmp_path)
+    (inputs.repo_root / "README.md").write_text("dirty\n", encoding="utf-8")
+
+    with pytest.raises(evidence.EvidenceError, match="exact clean source"):
+        evidence._emit_build_identities(inputs)  # noqa: SLF001
+    assert not inputs.out_dir.exists()
+
+
+def test_build_identity_validator_rejects_retained_tamper(tmp_path: Path) -> None:
+    inputs = _build_identity_inputs(tmp_path)
+    evidence._emit_build_identities(inputs)  # noqa: SLF001
+    inputs.worker_abi.write_bytes(inputs.worker_abi.read_bytes() + b"tamper\n")
+
+    with pytest.raises(evidence.EvidenceError, match="differ from exact clean source"):
+        evidence._validate_build_identities(inputs)  # noqa: SLF001
+
+
 def test_qemu_target_session_emitter_derives_exact_frozen_graph(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1463,11 +1861,183 @@ def test_qemu_target_session_emitter_rejects_worker_archive_tamper(
     assert not inputs.out_dir.exists()
 
 
-def test_component_validator_accepts_exact_three_role_graph() -> None:
-    evidence.validate_component(_component("qemu"), "qemu")
+def _expanded_temporal_topology_from_manifest(relative: str) -> dict[str, object]:
+    manifest = tomllib.loads((ROOT / relative).read_text(encoding="utf-8"))
+    topology = {
+        "root_task": copy.deepcopy(manifest["root_task"]),
+        "worker_runtime": copy.deepcopy(manifest["worker_runtime"]),
+        "temporal_authority": copy.deepcopy(manifest["temporal_authority"]),
+        "worker_resource_admission": copy.deepcopy(
+            manifest["worker_resource_admission"]
+        ),
+    }
+    temporal = topology["temporal_authority"]
+    for worker_class in temporal["worker_classes"]:
+        temporal["tasks"].extend(
+            {
+                "id": f"{worker_class['task_prefix']}{slot}",
+                "kind": "worker",
+                "core": worker_class["core"],
+                "budget_us": 0,
+                "period_us": 0,
+                "execution": "passive",
+                "admitted": False,
+                "allowed_donors": worker_class["allowed_donors"],
+                "reply_objects": worker_class["reply_objects"],
+                "max_donation_depth": worker_class["max_donation_depth"],
+            }
+            for slot in range(worker_class["slots"])
+        )
+    return topology
 
 
-def test_live_qemu_preflight_and_final_collection_are_semantically_derived(
+def test_current_generated_temporal_task_seals_allow_256_worker_population() -> None:
+    qemu_record = json.loads(
+        (ROOT / "configs/generated/root_task_topology.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    qemu_session = _session("qemu")
+    qemu_session["manifest_sha256"] = qemu_record["manifest_sha256"]
+    qemu_topology, qemu_inventory = evidence._generated_inventory(  # noqa: SLF001
+        qemu_record,
+        "qemu",
+        qemu_session,
+    )
+    qemu_tasks = evidence._generated_temporal_tasks(  # noqa: SLF001
+        qemu_topology
+    )
+    pi_tasks = evidence._generated_temporal_tasks(  # noqa: SLF001
+        _expanded_temporal_topology_from_manifest(
+            "configs/root_task_pi4_uboot_aarch64.toml"
+        )
+    )
+
+    assert len(qemu_tasks) == 265
+    assert len(pi_tasks) == 272
+    assert qemu_inventory["tcbs"] == 265
+    assert sum(task["kind"] == "worker" for task in qemu_tasks) == 256
+    assert sum(task["kind"] == "worker" for task in pi_tasks) == 256
+
+
+def test_current_generated_topology_uses_distinct_bounded_loader() -> None:
+    path = ROOT / "configs/generated/root_task_topology.json"
+    assert path.stat().st_size > evidence.MAX_RECORD_BYTES
+    with pytest.raises(evidence.EvidenceError, match="evidence size"):
+        evidence._load(path)  # noqa: SLF001
+    record, raw = evidence._load_generated_topology(path)  # noqa: SLF001
+    assert record["schema"] == evidence.GENERATED_INVENTORY_SCHEMA
+    assert len(raw) <= evidence.MAX_GENERATED_TOPOLOGY_BYTES
+
+
+def test_generated_temporal_task_seal_rejects_tamper_overbound_and_drift() -> None:
+    qemu_record = json.loads(
+        (ROOT / "configs/generated/root_task_topology.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    tampered = copy.deepcopy(qemu_record["topology"])
+    tampered["temporal_authority"]["tasks"].pop()
+    with pytest.raises(evidence.EvidenceError, match="exact registry capacity"):
+        evidence._generated_temporal_tasks(tampered)  # noqa: SLF001
+
+    drifted = copy.deepcopy(qemu_record["topology"])
+    drifted["temporal_authority"]["worker_classes"][1]["slots"] -= 1
+    with pytest.raises(evidence.EvidenceError, match="passive executable role"):
+        evidence._generated_temporal_tasks(drifted)  # noqa: SLF001
+
+    donor_drift = copy.deepcopy(qemu_record["topology"])
+    donor_drift["temporal_authority"]["worker_classes"][1]["allowed_donors"] = [
+        "root-worker-executor-lora"
+    ]
+    with pytest.raises(evidence.EvidenceError, match="passive executable role"):
+        evidence._generated_temporal_tasks(donor_drift)  # noqa: SLF001
+
+    namespace_drift = copy.deepcopy(qemu_record["topology"])
+    namespace_drift["worker_resource_admission"]["executable_roles"][0][
+        "namespace_capacity"
+    ] -= 1
+    with pytest.raises(evidence.EvidenceError, match="passive executable role"):
+        evidence._generated_temporal_tasks(namespace_drift)  # noqa: SLF001
+
+    missing_donor = copy.deepcopy(qemu_record["topology"])
+    missing_donor["worker_resource_admission"]["critical_tcbs"].pop()
+    with pytest.raises(evidence.EvidenceError, match="critical TCB"):
+        evidence._generated_temporal_tasks(missing_donor)  # noqa: SLF001
+
+    coordinated_overbound = copy.deepcopy(qemu_record["topology"])
+    coordinated_overbound["worker_runtime"]["max_workers"] = 257
+    for role in coordinated_overbound["worker_resource_admission"][
+        "executable_roles"
+    ]:
+        role["namespace_capacity"] = 257
+    with pytest.raises(evidence.EvidenceError, match="runtime maximum"):
+        evidence._generated_temporal_tasks(coordinated_overbound)  # noqa: SLF001
+
+    worker_contract_tampers = (
+        ("execution", "active"),
+        ("admitted", True),
+        ("budget_us", 1),
+        ("period_us", 1),
+        ("allowed_donors", ["root-worker-executor-gpu"]),
+        ("reply_objects", 0),
+        ("max_donation_depth", 2),
+    )
+    for field, value in worker_contract_tampers:
+        task_drift = copy.deepcopy(qemu_record["topology"])
+        worker_task = next(
+            task
+            for task in task_drift["temporal_authority"]["tasks"]
+            if task["id"] == "worker-heartbeat-slot-0"
+        )
+        worker_task[field] = value
+        with pytest.raises(evidence.EvidenceError, match="passive Worker temporal"):
+            evidence._generated_temporal_tasks(task_drift)  # noqa: SLF001
+
+    badge_drift = copy.deepcopy(qemu_record["topology"])
+    badge_drift["worker_resource_admission"]["handoff"]["worker_fault_badges"][
+        "count"
+    ] += 1
+    with pytest.raises(evidence.EvidenceError, match="fault-badge range"):
+        evidence._generated_temporal_tasks(badge_drift)  # noqa: SLF001
+
+    overbound = _generated_record("qemu")["topology"]
+    driver_count = evidence.MAX_LIST_ITEMS - 6
+    driver_tasks = [
+        {"id": f"driver-extra-{index}", "kind": "driver"}
+        for index in range(driver_count)
+    ]
+    overbound["root_task"] = {
+        "driver_images": {
+            "images": [
+                {"id": f"pi4-extra-{index}-runtime"}
+                for index in range(driver_count)
+            ]
+        }
+    }
+    overbound["temporal_authority"]["tasks"][7:7] = driver_tasks
+    fault_registry = overbound["worker_resource_admission"]["fault_registry"]
+    fault_registry["driver_tcbs"] = driver_count
+    fault_registry["capacity"] += driver_count
+    with pytest.raises(evidence.EvidenceError, match="non-Worker temporal tasks"):
+        evidence._generated_temporal_tasks(overbound)  # noqa: SLF001
+
+
+def test_component_validator_accepts_bounded_role_exemplars() -> None:
+    component = _component("qemu")
+    evidence.validate_component(component, "qemu")
+    component["workers"].append(copy.deepcopy(component["workers"][-1]))
+    with pytest.raises(evidence.EvidenceError, match="bounded exemplar"):
+        evidence.validate_component(component, "qemu")
+
+    pi_component = _component("pi4")
+    evidence.validate_component(pi_component, "pi4")
+    pi_component["raw_evidence"] = [_artifact("pi4-serial-boot")]
+    with pytest.raises(evidence.EvidenceError, match="serial/network/runtime"):
+        evidence.validate_component(pi_component, "pi4")
+
+
+def test_live_qemu_benchmark_schema_collection_is_semantically_derived(
     tmp_path: Path,
 ) -> None:
     inputs = _live_qemu_inputs(tmp_path)
@@ -1517,6 +2087,24 @@ def test_live_qemu_preflight_and_final_collection_are_semantically_derived(
     )
     assert all(row["state"]["execution_proof"] == "qemu" for row in worker["workers"])
 
+    pressure = json.loads(inputs.pressure[-1].read_text(encoding="utf-8"))
+    generated = json.loads(inputs.generated_inventory.read_text(encoding="utf-8"))
+    generated_worker_count = sum(
+        row["executable_slots"]
+        for row in generated["topology"]["worker_resource_admission"][
+            "executable_roles"
+        ]
+    )
+    phase = pressure["report"]["executable_state"]["post"]
+    assert set(phase) == {"workers", "ready_census", "proc"}
+    assert len(phase["workers"]) == len(evidence.REQUIRED_ROLES)
+    assert phase["ready_census"] == {
+        "maximum_live_tasks": generated_worker_count,
+        "discovered": generated_worker_count,
+        "ready": generated_worker_count,
+        "topology_sha256": generated["topology_sha256"],
+    }
+
 
 def test_live_qemu_collection_rejects_tamper_missing_marker_and_target_mismatch(
     tmp_path: Path,
@@ -1555,6 +2143,36 @@ def test_live_qemu_collection_rejects_tamper_missing_marker_and_target_mismatch(
     with pytest.raises(evidence.EvidenceError, match="wrong target"):
         evidence._collect_qemu(mismatch)  # noqa: SLF001
     assert not mismatch.out_dir.exists()
+
+
+@pytest.mark.parametrize("field", ["maximum_live_tasks", "discovered", "ready"])
+def test_live_qemu_collection_rejects_ready_census_count_drift(
+    tmp_path: Path,
+    field: str,
+) -> None:
+    inputs = _live_qemu_inputs(tmp_path)
+    summary = json.loads(inputs.pressure[0].read_text(encoding="utf-8"))
+    summary["report"]["executable_state"]["pre"]["ready_census"][field] -= 1
+    _write(inputs.pressure[0], summary)
+
+    with pytest.raises(evidence.EvidenceError, match=f"READY census {field}"):
+        evidence._collect_qemu(inputs)  # noqa: SLF001
+    assert not inputs.out_dir.exists()
+
+
+def test_live_qemu_collection_rejects_ready_census_topology_drift(
+    tmp_path: Path,
+) -> None:
+    inputs = _live_qemu_inputs(tmp_path)
+    summary = json.loads(inputs.pressure[0].read_text(encoding="utf-8"))
+    summary["report"]["executable_state"]["post"]["ready_census"][
+        "topology_sha256"
+    ] = _hash("different-topology")
+    _write(inputs.pressure[0], summary)
+
+    with pytest.raises(evidence.EvidenceError, match="READY census targets different"):
+        evidence._collect_qemu(inputs)  # noqa: SLF001
+    assert not inputs.out_dir.exists()
 
 
 def test_qemu_gdb_runner_binds_symbols_images_and_three_injections(
@@ -1814,6 +2432,207 @@ def test_component_emitter_binds_explicit_session_integrations_and_observations(
     for reference in record["integration_evidence"]:
         copied = output.parent / "integration" / f"{reference['id']}.json"
         assert hashlib.sha256(copied.read_bytes()).hexdigest() == reference["sha256"]
+
+
+def test_pi_component_emitter_rejects_caller_authored_observations(
+    tmp_path: Path,
+) -> None:
+    """Only the live Pi collector may mint a fresh-Pi component."""
+
+    session, generated, observations, integration_dir = _component_emitter_inputs(
+        tmp_path, "pi4"
+    )
+    output = tmp_path / "worker-task-evidence.json"
+    with pytest.raises(evidence.EvidenceError, match="collect-pi4-component"):
+        evidence._emit_component(  # noqa: SLF001 - focused refusal test
+            SimpleNamespace(
+                target="pi4",
+                target_session=session,
+                generated_inventory=generated,
+                observations=observations,
+                integration_dir=integration_dir,
+                out=output,
+            )
+        )
+    assert not output.exists()
+
+
+def _pi_component_collection_inputs(
+    tmp_path: Path,
+) -> SimpleNamespace:
+    """Build a live-marker Pi projection for focused collector tests."""
+
+    inputs = _live_qemu_inputs(tmp_path)
+    session = json.loads(inputs.target_session.read_text(encoding="utf-8"))
+    session["target"] = "pi4"
+    _write(inputs.target_session, session)
+
+    generated = json.loads(
+        inputs.generated_inventory.read_text(encoding="utf-8")
+    )
+    generated["profile"] = evidence.TARGET_PROFILE["pi4"]
+    generated["topology"]["profile"]["name"] = evidence.TARGET_PROFILE["pi4"]
+    generated["topology_sha256"] = evidence._canonical_json_sha256(  # noqa: SLF001
+        generated["topology"]
+    )
+    _write(inputs.generated_inventory, generated)
+    for dependency_id in evidence.REQUIRED_INTEGRATIONS:
+        record = _integration("pi4", dependency_id)
+        record["target_session"] = session
+        record["manifest_sha256"] = session["manifest_sha256"]
+        _write(inputs.integration_dir / f"{dependency_id}.json", record)
+
+    serial = tmp_path / "pi4-serial.log"
+    serial.write_bytes(
+        inputs.preflight_uart.read_bytes() + b"\n" + inputs.cohsh.read_bytes()
+    )
+    capture = tmp_path / "pi4-network.pcap"
+    capture.write_bytes(b"pcap-fixture")
+    cyw43 = tmp_path / "pi4-cyw43-coexistence.json"
+    cyw43.write_text('{"fixture":true}\n', encoding="utf-8")
+    worker_manifest_raw = inputs.worker_image_manifest.read_bytes()
+    stage = tmp_path / "pi4-stage-proof.env"
+    stage.write_text(
+        "PI4_IMAGE_IDENTITY_WORKER_MANIFEST="
+        f"{inputs.worker_image_manifest.resolve()}\n"
+        "PI4_IMAGE_IDENTITY_WORKER_MANIFEST_SHA256="
+        f"{hashlib.sha256(worker_manifest_raw).hexdigest()}\n"
+        "PI4_IMAGE_IDENTITY_WORKER_MANIFEST_BYTES="
+        f"{len(worker_manifest_raw)}\n",
+        encoding="utf-8",
+    )
+    stage_raw = stage.read_bytes()
+    runtime = tmp_path / "pi4-runtime-proof.env"
+    runtime.write_text(
+        f"PI4_RUNTIME_DMA_SERIAL_LOG={serial.resolve()}\n"
+        f"PI4_RUNTIME_DMA_STAGE_BUILD_PROOF={stage.resolve()}\n"
+        "PI4_RUNTIME_DMA_STAGE_BUILD_PROOF_SHA256="
+        f"{hashlib.sha256(stage_raw).hexdigest()}\n",
+        encoding="utf-8",
+    )
+    return SimpleNamespace(
+        target_session=inputs.target_session,
+        generated_inventory=inputs.generated_inventory,
+        runtime_proof=runtime,
+        network_capture=capture,
+        cyw43=cyw43,
+        serial=serial,
+        integration_dir=inputs.integration_dir,
+        out_dir=tmp_path / "pi4-component",
+    )
+
+
+def test_pi_component_collector_derives_exact_live_rows_and_bundle(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    inputs = _pi_component_collection_inputs(tmp_path)
+    validated: list[tuple[str, str]] = []
+
+    def validate_graph(*args: object, **_kwargs: object) -> object:
+        validated.append((str(args[0]), str(args[1])))
+        return object()
+
+    monkeypatch.setattr(
+        evidence._pi_harness(),  # noqa: SLF001
+        "load_pi_benchmark_target_evidence",
+        validate_graph,
+    )
+    evidence._collect_pi4_component(  # noqa: SLF001
+        SimpleNamespace(
+            target_session=inputs.target_session,
+            generated_inventory=inputs.generated_inventory,
+            runtime_proof=inputs.runtime_proof,
+            network_capture=inputs.network_capture,
+            transport="genet",
+            integration_dir=inputs.integration_dir,
+            max_age_secs=21_600,
+            out_dir=inputs.out_dir,
+        )
+    )
+
+    component_path = inputs.out_dir / "worker-task-evidence.json"
+    component = json.loads(component_path.read_text(encoding="utf-8"))
+    evidence.validate_component(component, "pi4")
+    assert validated == [
+        (str(inputs.runtime_proof), str(inputs.network_capture))
+    ]
+    assert [row["state"]["execution_proof"] for row in component["workers"]] == [
+        "fresh-pi",
+        "fresh-pi",
+        "fresh-pi",
+    ]
+    assert [row["id"] for row in component["raw_evidence"]] == [
+        "pi4-network-capture",
+        "pi4-runtime-dma-proof",
+        "pi4-serial-boot",
+    ]
+    assert sorted(path.name for path in (inputs.out_dir / "integration").iterdir()) == [
+        "gpu-receipt-path.json",
+        "peft-receipt-path.json",
+        "worker-control.json",
+    ]
+
+
+def test_pi_component_collector_rejects_incomplete_live_matrix(
+    tmp_path: Path,
+) -> None:
+    inputs = _pi_component_collection_inputs(tmp_path)
+    serial = inputs.serial.read_text(encoding="utf-8")
+    inputs.serial.write_text(
+        "\n".join(
+            line
+            for line in serial.splitlines()
+            if not (
+                line.startswith("WORKER_TASK_FAULT role=worker-lora")
+                and "class=Timeout" in line
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(evidence.EvidenceError, match="component matrix"):
+        evidence._collect_pi4_component(  # noqa: SLF001
+            SimpleNamespace(
+                target_session=inputs.target_session,
+                generated_inventory=inputs.generated_inventory,
+                runtime_proof=inputs.runtime_proof,
+                network_capture=inputs.network_capture,
+                transport="genet",
+                integration_dir=inputs.integration_dir,
+                max_age_secs=21_600,
+                out_dir=inputs.out_dir,
+            )
+        )
+
+
+def test_pi_component_collector_ignores_complete_prior_boot(
+    tmp_path: Path,
+) -> None:
+    inputs = _pi_component_collection_inputs(tmp_path)
+    prior_boot = inputs.serial.read_bytes()
+    inputs.serial.write_bytes(
+        prior_boot
+        + b"\nu-boot 2026.08\n"
+        + b"[cohesix:root-task] cohesix boot: root-task online\n"
+    )
+    with pytest.raises(
+        evidence.EvidenceError,
+        match="missing required live marker: WORKER_TASK_ADMISSION",
+    ):
+        evidence._collect_pi4_component(  # noqa: SLF001
+            SimpleNamespace(
+                target_session=inputs.target_session,
+                generated_inventory=inputs.generated_inventory,
+                runtime_proof=inputs.runtime_proof,
+                network_capture=inputs.network_capture,
+                transport="genet",
+                integration_dir=inputs.integration_dir,
+                max_age_secs=21_600,
+                out_dir=inputs.out_dir,
+            )
+        )
+    assert not inputs.out_dir.exists()
 
 
 def test_component_emitter_rejects_tampered_session_or_nonlive_row(
@@ -2319,6 +3138,46 @@ def test_staged_runner_refuses_m26e_pass_without_explicit_observations(
     )
     assert stale.returncode == 2
     assert "existing M26e acceptance output requires explicit" in stale.stderr
+
+
+def test_staged_runner_refuses_caller_authored_pi_component(
+    tmp_path: Path,
+) -> None:
+    state_dir = tmp_path / "state"
+    session = tmp_path / "target-session.json"
+    generated = tmp_path / "topology.json"
+    observations = tmp_path / "observations.json"
+    integration_dir = tmp_path / "integration"
+    for path in (session, generated, observations):
+        path.write_text("{}\n", encoding="utf-8")
+    integration_dir.mkdir()
+    completed = subprocess.run(
+        [
+            str(ROOT / "scripts/ci/test_plan_run.sh"),
+            "--target",
+            "pi4",
+            "--state-dir",
+            str(state_dir),
+            "--m26e-evidence-kind",
+            "component",
+            "--m26e-target-session",
+            str(session),
+            "--m26e-generated-inventory",
+            str(generated),
+            "--m26e-integration-dir",
+            str(integration_dir),
+            "--m26e-observations",
+            str(observations),
+        ],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 2
+    assert "forbids caller-authored --m26e-observations" in completed.stderr
+    assert not (state_dir / "worker-task-evidence.json").exists()
+    assert not (state_dir / "pi4-component").exists()
 
 
 def test_release_promotion_requires_and_binds_both_target_graphs(tmp_path: Path) -> None:

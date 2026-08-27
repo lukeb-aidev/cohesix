@@ -615,16 +615,23 @@ scripts/ci/test_plan_run.sh \
 `target-session.json` uses the exact hash object documented above. The
 observations file uses `cohesix-worker-component-observations/v1` and contains
 exactly `schema`, `target`, `target_session_sha256`, `workers`, `outcomes`,
-`raw_evidence`, `verdict`, and `blockers`. Each of the three Worker rows records
-its five-part identity, state axes, image hash, READY/completion sequences,
-distinct endpoint/fault badges, core, active scheduling-context budget/period,
-and full per-slot compiler-admission object inventory: TCB, CNode, VSpace, page table, ASID,
+`raw_evidence`, `verdict`, and `blockers`. Each of the three Worker rows is one
+bounded live Heartbeat/GPU/LoRA exemplar and records its five-part identity,
+state axes, image hash, READY/completion sequences, distinct endpoint/fault
+badges, core, exact passive scheduling-context values `0/0`, and full per-slot
+compiler-admission object inventory: TCB, CNode, VSpace, page table, ASID,
 frame, endpoint, notification, standard/timeout fault cap, Reply, scheduling
 context, CSpace slot, and untyped-byte totals. The emitter recomputes the
 compiler topology digest and derives the maximum-role inventory from the
 topology payload. It then requires each observed role's attach badge, fault
-badge, core, scheduling context, and per-slot object inventory to equal that
-generated truth. A component PASS also requires the complete, sorted 26e event
+badge, core, passive scheduling context, per-slot object inventory, allowlisted
+active executor donor, and generation-scoped Reply path to equal that generated
+truth. Separately, the topology digest seals all 256 Worker task rows and every
+generated non-Worker row. `temporal_authority.tasks` may exceed the generic
+128-item evidence-list bound only when its exact length, order, identifiers,
+kinds, role classes, driver images, and fault-registry counts are derived from
+that compiler topology; every other arbitrary list retains the generic bound.
+A component PASS also requires the complete, sorted 26e event
 matrix and the exact live `gpu-receipt-path`, `peft-receipt-path`, and
 `worker-control` integration records. The emitter binds the observation,
 generated-topology, and target-session input bytes into the resulting
@@ -668,10 +675,12 @@ The strict release inventory packages this topology beside the resolved
 manifest; `scripts/release_bundle.sh --check-manifest` rejects either an
 omission or an unexpected compiler-owned generated file rather than silently
 shipping a partial as-built contract.
-`ROOT_CRITICAL_OBJECTS scope=constructed-actual` separately records the five
-constructed duties, four restricted child TCBs, active SC/Reply counts, and
-installed standard/timeout fault-cap plus registry counts; it is the bounded
-actual critical-domain census and is never inferred from the admitted maximum.
+`ROOT_CRITICAL_OBJECTS scope=constructed-actual` separately records seven
+constructed critical TCBs: the five root duties plus the two active Worker
+executor lanes. Six are restricted children. Its active SC/Reply counts and
+installed standard/timeout fault-cap counts form the bounded actual critical-
+domain census and remain distinct from the complete generated fault-registry
+capacity; neither is inferred from the admitted maximum.
 
 Full-system evidence remains a verification-only layer over immutable accepted
 component/root records. Its explicit `cohesix-mcs-smp-run-input/v1` observation
@@ -3564,7 +3573,77 @@ bytes, and 4 MiB rootfs guard must all pass together; reducing trace capacity,
 aliasing runtime artifacts, or post-link stripping is not an acceptable size
 fix.
 
-Milestone 26c Pi runtime/DMA proof states are machine-checkable and must not be inferred from adjacent evidence. `scripts/pi4-image-build.sh --manifest configs/root_task_pi4_uboot_aarch64.toml --venv .venv` consumes the immutable `seL4/build_UBOOT` artifacts, retains the exact selected Pi resolved manifest as `out/pi4-sd/cohesix-root-task-resolved.json` before cleanup restores canonical QEMU generated outputs, and writes `out/pi4-sd/pi4-runtime-dma-proof.env` with `PI4_RUNTIME_DMA_PROOF=target-build`, `PI4_RUNTIME_DMA_PROFILE=bounded-no-iommu`, the retained manifest path and hash, runtime CPIO hash, runtime uImage hash, staged image hash, and the hash of `pi4-image-identity.json`; the retained manifest hash must still match after canonical cleanup. The exact pre-root-task Pi driver-runtime CPIO is bound by `cohesix-pi4-sel4-image-provenance/v4` and copied byte-for-byte into the SD stage. A `--skip-build` pass must validate that archive and must not repackage whichever Pi- or QEMU-feature child most recently occupied the shared Cargo target directory. This proves repository artifact identity, packaging, and exact legacy-image identity only. Under Milestone 26e, the controlled Pi refresh validates independently as a repo-managed `pi4_diagnostic` seL4 16.0.0 `bcm2711` SMP+MCS artifact set with its completed build-input stamp, `KernelRootCNodeSizeBits=16`, `KernelArmExportVCNTUser=ON`, physical counter/timer-control exports off, `TIMER_CLOCK_HZ=54000000`, and no retained one-domain `KernelDomainSchedule` cache entry. The 16-bit root CNode admits the complete compiler-bounded 256-Worker population, linked-runtime images, isolated framebuffer mapping, and post-construction reserve; a 13- or 14-bit external Pi tree is stale and cannot satisfy image or hardware proof. The static `seL4/build_UBOOT` PASS proves only the canonical diagnostic artifact contract and cannot substitute for release proof, staged/read-back image identity, boot, Wi-Fi, TCP/`cohsh`, or benchmark lanes. The image wrapper must validate one complete relink tool family against the tracked baseline oracle and must never invoke CMake or Ninja in the immutable tree. `scripts/pi4_trace_normalize.py --gate-summary` emits `DRIVER_TASK_DMA_PROOFS`, `DRIVER_TASK_DMA_BLOCKER`, `DRIVER_TASK_RUNTIME_DESCRIPTOR_SEAL_PROOF`, `DRIVER_TASK_RUNTIME_DESCRIPTOR_SEAL_BLOCKER`, and `PI4_RUNTIME_DMA_PROOF=absent`, `diagnostic`, `qemu-or-stale-log`, or `fresh-pi` from serial evidence. `scripts/pi4_gate_proof.sh --require-driver-task-proof --runtime-dma-proof-out out/test-plan/<run-id>/pi4-runtime-dma-proof.env` writes the live proof bundle only after normalization passes. Only `fresh-pi` counts as live hardware runtime/DMA proof, and it requires driver-task dedicated readiness, cap/fault/revoke/scheduling/affinity proof, isolated VSpace, pointer-free IPC, per-hot-path `DRIVER_TASK_OWNER_STATE ... descriptor=present root_pointer=no`, sealed descriptor version/hash/identity proof for every active hot path, sealed bus-link proof for USB and CYW43 split clients, per-hot-path `DRIVER_TASK_DMA_PROOF` with bounded no-IOMMU profile and cache/bus-address policy, aggregate `DRIVER_TASK_DMA_BLOCKER=none`, no compatibility service roles, no unresolved ring timeouts/deferred bootstrap, no resource blockers, a fresh Pi cold-boot marker, and a live prompt. Raw `DRIVER_TASK_RING_CALL_TIMEOUT` events remain diagnostic, but `DRIVER_TASK_RING_CALL_UNRESOLVED_TIMEOUT` must be `0` after later return proof closes any bounded keep-active turn. It also emits `PI4_RUNTIME_DMA_COUNTER_PROOF=counter-qualified` only when `TIMER_BACKEND=arch-counter`, `TIMER_CLOCK_HZ=54000000`, `TIMER_EL0_COUNTER=vct`, `DUMMY_TIMER_SEEN=no`, every observed `DRIVER_TASK_COUNTER` line is valid, and the latest activity-bearing snapshot exists for every selected network owner. A selected CYW43 path therefore requires both `contract=cyw43455 hot_path=cyw43-wifi` and `contract=sdio-host hot_path=sdio-host`; repeated cumulative snapshots cannot substitute another driver's activity or be added together.
+Milestone 26c Pi runtime/DMA proof states are machine-checkable and must not be
+inferred from adjacent evidence. The controlled Milestone 26e repository-managed
+MCS refresh is complete. `scripts/pi4-image-build.sh --manifest
+configs/root_task_pi4_uboot_aarch64.toml --venv .venv` consumes the immutable
+`seL4/build_UBOOT` artifacts and retains the exact selected Pi resolved manifest
+and generated topology as `out/pi4-sd/cohesix-root-task-resolved.json` and
+`out/pi4-sd/cohesix-root-task-topology.json` before cleanup restores canonical
+QEMU generated outputs.
+
+The stage proof `out/pi4-sd/pi4-runtime-dma-proof.env` records exact absolute
+path, SHA-256, and byte-size triples for both retained generated contracts, the
+launch kernel, composed root ELF and two-member root CPIO, deterministic
+seven-driver CPIO and its manifest, Worker archive and manifest, clean-source
+inventory, Worker ABI identity, runtime uImage, staged image, image-identity
+metadata, and wrapper provenance. The wrapper's
+`cohesix-pi4-sel4-image-provenance/v5` record independently binds that complete
+graph plus the source manifest, canonical profile stamp/state, and immutable
+composition inputs. The build verifies that the root CPIO contains exactly the
+launch `kernel.elf` and composed `rootserver`, and that the rootserver embeds
+exactly one copy of the bound driver archive, Worker archive, and Worker
+manifest. The deterministic driver manifest must validate all seven canonical
+runtime members. A `--skip-build` pass revalidates every retained byte and must
+not repackage whichever Pi- or QEMU-feature child most recently occupied a
+shared Cargo target directory. Post-cleanup verification must still reproduce
+the retained manifest, topology, source, ABI, and complete artifact hashes.
+These checks prove repository artifact identity, deterministic packaging, and
+stage construction only; they are not Pi boot, hardware, network, performance,
+or acceptance evidence.
+
+The repo-managed `pi4_diagnostic` input validates independently as a seL4
+16.0.0 `bcm2711` SMP+MCS artifact set with its completed build-input stamp,
+`KernelRootCNodeSizeBits=16`, `KernelArmExportVCNTUser=ON`, physical
+counter/timer-control exports off, `TIMER_CLOCK_HZ=54000000`, and no retained
+one-domain `KernelDomainSchedule` cache entry. The 16-bit root CNode admits the
+complete compiler-bounded 256-Worker population, linked-runtime images,
+isolated framebuffer mapping, and post-construction reserve; a 13- or 14-bit
+external Pi tree is stale and cannot satisfy image or hardware proof. Static
+`seL4/build_UBOOT` PASS proves only this diagnostic artifact contract and cannot
+substitute for release proof, staged/read-back image identity, boot, Wi-Fi,
+TCP/`cohsh`, or benchmark lanes. The image wrapper validates one complete
+relink tool family against the tracked baseline oracle and never invokes CMake
+or Ninja in the immutable tree.
+
+`scripts/pi4_trace_normalize.py --gate-summary` emits
+`DRIVER_TASK_DMA_PROOFS`, `DRIVER_TASK_DMA_BLOCKER`,
+`DRIVER_TASK_RUNTIME_DESCRIPTOR_SEAL_PROOF`,
+`DRIVER_TASK_RUNTIME_DESCRIPTOR_SEAL_BLOCKER`, and
+`PI4_RUNTIME_DMA_PROOF=absent`, `diagnostic`, `qemu-or-stale-log`, or `fresh-pi`
+from serial evidence. `scripts/pi4_gate_proof.sh
+--require-driver-task-proof --runtime-dma-proof-out
+out/test-plan/<run-id>/pi4-runtime-dma-proof.env` writes the live proof bundle
+only after normalization passes. Only `fresh-pi` counts as live hardware
+runtime/DMA proof, and it requires driver-task dedicated readiness,
+cap/fault/revoke/scheduling/affinity proof, isolated VSpace, pointer-free IPC,
+per-hot-path `DRIVER_TASK_OWNER_STATE ... descriptor=present root_pointer=no`,
+sealed descriptor version/hash/identity proof for every active hot path, sealed
+bus-link proof for USB and the CYW43 split clients, per-hot-path
+`DRIVER_TASK_DMA_PROOF` with bounded no-IOMMU profile and cache/bus-address
+policy, aggregate `DRIVER_TASK_DMA_BLOCKER=none`, no compatibility service
+roles, no unresolved ring timeouts/deferred bootstrap, no resource blockers, a
+fresh Pi cold-boot marker, and a live prompt. Raw
+`DRIVER_TASK_RING_CALL_TIMEOUT` events remain diagnostic, but
+`DRIVER_TASK_RING_CALL_UNRESOLVED_TIMEOUT` must be `0` after later return proof
+closes any bounded keep-active turn. Counter qualification additionally
+requires `TIMER_BACKEND=arch-counter`, `TIMER_CLOCK_HZ=54000000`,
+`TIMER_EL0_COUNTER=vct`, `DUMMY_TIMER_SEEN=no`, valid observed
+`DRIVER_TASK_COUNTER` lines, and the latest activity-bearing snapshot for every
+selected network owner. A selected CYW43 path therefore requires both
+`contract=cyw43455 hot_path=cyw43-wifi` and
+`contract=sdio-host hot_path=sdio-host`; repeated cumulative snapshots cannot
+substitute another driver's activity or be added together.
 
 The isolated runtime engines contain production service turns for serial
 mini-UART init/RX/TX, HDMI framebuffer rendering, PCIe MMIO turns,
@@ -5138,10 +5217,12 @@ For each summary:
 - top-level `target_session_sha256` matches the exact staged session bytes, and
   `report.executable_state.target_session` retains its manifest, root, Worker
   archive, image-manifest, and ABI hashes plus the generated topology hash;
-- pre/post state contains every ordered generated Worker row with five-part
-  identities, image hashes, READY/control/receipt/completion sequences, cores,
-  passive executor/Reply identity, and the full generated per-slot admission
-  object bundle (not an observed retype census), plus hash-bound
+- pre/post state binds the exact topology digest and aggregate 256 requested,
+  discovered, and structured-READY population, while retaining one detailed
+  live Heartbeat/GPU/LoRA exemplar with five-part identity, image hash,
+  READY/control/receipt/completion sequences, core, passive executor/Reply
+  identity, and the full generated per-slot admission object bundle (not an
+  observed retype census), plus hash-bound
   `/proc/schedule/{summary,queue}` and `/proc/lease/{summary,active,preemptions}`
   snapshots;
 - one bounded Heartbeat kill/recreate cycle proves terminal teardown and a
@@ -5167,6 +5248,170 @@ invalid, the gateway/session/component hashes differ, the backend is not
 `console-projection`, or any live fault/fixture artifact is absent or malformed.
 A performance error-budget failure remains a faithfully retained QEMU pressure
 result but cannot be used as a passing capacity or M26e acceptance claim.
+
+### Fresh Pi target-performance and QEMU-parity lane
+
+Pi performance is independent of Conditional B2 and requires a fresh physical
+boot of the exact image under test. Before the harness starts, the selected
+GENET or Wi-Fi lifetime must pass its normal physical-device, timer, runtime/DMA,
+DHCP, raw-TCP, authenticated-`cohsh`, operator-liveness, and boot-paired packet
+evidence gates. The gateway must continuously project the same boot's exact
+generated Worker population; the harness receives the canonical target-session
+file, same-boot controlled packet capture, and live
+`pi4-runtime-dma-proof.env` emitted by `scripts/pi4_gate_proof.sh
+--require-driver-task-proof`. Stage-only
+`out/pi4-sd/pi4-runtime-dma-proof.env` is an input to that live chain and is not
+itself fresh-Pi proof.
+
+On the fresh controlled Wi-Fi boot, `pi4_gate_proof.sh` must capture serial and
+network bytes concurrently and emit its positive v2 CYW43 coexistence record.
+Before a later Wi-Fi or GENET performance boot, finalize those bytes into a new
+canonical immutable session bundle:
+
+```bash
+PI_CAPTURE_INTERFACE="${PI_CAPTURE_INTERFACE:?set the verified Pi-facing interface}"
+PI_SERIAL_DEVICE="${PI_SERIAL_DEVICE:?set the sole Pi serial device}"
+PI_WIFI_TARGET_IP="${PI_WIFI_TARGET_IP:?set the serial-reported Wi-Fi IPv4 address}"
+COH_REST_URL="${COH_REST_URL:?set the exact already-running gateway base URL}"
+PI_WIFI_EVIDENCE_DIR="${PI_WIFI_EVIDENCE_DIR:?set a private existing directory}"
+PI_SESSION_DIR="${PI_SESSION_DIR:?set a new output directory below out/}"
+PI_WIFI_SERIAL_LOG="$PI_WIFI_EVIDENCE_DIR/pi4-cyw43-serial.log"
+PI_WIFI_NETWORK_CAPTURE="$PI_WIFI_EVIDENCE_DIR/pi4-cyw43-network.pcap"
+PI_WIFI_RUNTIME_DMA_PROOF="$PI_WIFI_EVIDENCE_DIR/pi4-cyw43-runtime-proof.env"
+PI_WIFI_CYW43_RECORD="$PI_WIFI_EVIDENCE_DIR/pi4-cyw43-coexistence.json"
+
+test -d "$PI_WIFI_EVIDENCE_DIR"
+test ! -e "$PI_WIFI_SERIAL_LOG"
+test ! -e "$PI_WIFI_NETWORK_CAPTURE"
+test ! -e "$PI_WIFI_RUNTIME_DMA_PROOF"
+test ! -e "$PI_WIFI_CYW43_RECORD"
+
+scripts/pi4_gate_proof.sh \
+  --skip-build \
+  --serial-device "$PI_SERIAL_DEVICE" \
+  --log "$PI_WIFI_SERIAL_LOG" \
+  --require-wifi-ready \
+  --require-driver-task-proof \
+  --network-interface "$PI_CAPTURE_INTERFACE" \
+  --network-capture-out "$PI_WIFI_NETWORK_CAPTURE" \
+  --gateway-status-url "$COH_REST_URL" \
+  --gateway-target-host "$PI_WIFI_TARGET_IP" \
+  --runtime-dma-proof-out "$PI_WIFI_RUNTIME_DMA_PROOF" \
+  --cyw43-coexistence-record-out "$PI_WIFI_CYW43_RECORD"
+
+.venv/bin/python scripts/worker_task_evidence.py emit-pi4-target-session \
+  --repo-root "$PWD" \
+  --runtime-proof "$PI_WIFI_RUNTIME_DMA_PROOF" \
+  --cyw43-coexistence-record "$PI_WIFI_CYW43_RECORD" \
+  --max-age-secs 21600 \
+  --out-dir "$PI_SESSION_DIR"
+
+PI_TARGET_SESSION="$PI_SESSION_DIR/target-session.json"
+PI_CYW43_RECORD="$PI_SESSION_DIR/pi4-cyw43-coexistence.json"
+```
+
+Start the active gate before the freshly flashed exact image boots. Its output
+files must be absent; offline pairing and normalize-only reuse are invalid.
+`--skip-build` is permitted only because the retained clean stage proof must be
+the exact flashed image. The finalizer must fail unless source is clean and
+every staged image/topology, kernel/root/archive/manifest/ABI identity,
+latest-boot serial marker, positive Wi-Fi outcome, and controlled
+packet-capture binding agrees. It publishes
+`target-session.json` and canonical sibling source, ABI, CYW43, runtime, serial,
+and pcap bytes. GENET may use a later boot only when that boot has the same
+staged image; its live runtime proof and controlled pcap remain separate
+current-boot inputs. A build or stage proof cannot manufacture the positive
+CYW43 record.
+The gateway's `/v1/meta/status` must project normalized configured backend
+`target_host="$PI_TARGET_IP"` and `target_port=31337` throughout the controlled
+capture and benchmark; those fields bind endpoint identity but do not alone
+prove target execution.
+
+Run the exact HIGH workload documented under
+[Qualified Pi executable pressure and QEMU parity](BENCHMARKS.md#qualified-pi-executable-pressure-and-qemu-parity):
+
+```bash
+test -f "$PI_TARGET_SESSION"
+test -f "$PI_RUNTIME_DMA_PROOF"
+test -f "$PI_NETWORK_CAPTURE"
+test -f "$PI_CYW43_RECORD"
+
+.venv/bin/python scripts/rest_perf_harness.py \
+  --mode simulate --population-mode executable \
+  --benchmark-target pi4 --benchmark-transport genet \
+  --pi-runtime-dma-proof "$PI_RUNTIME_DMA_PROOF" \
+  --pi-network-capture "$PI_NETWORK_CAPTURE" \
+  --pi-cyw43-coexistence-record "$PI_CYW43_RECORD" \
+  --benchmark-evidence-max-age-secs 21600 \
+  --target-session "$PI_TARGET_SESSION" \
+  --no-qemu --no-gateway --rest-url "$COH_REST_URL" \
+  --tcp-host "$PI_TARGET_IP" --tcp-port 31337 \
+  --workers-min 256 --workers-max 256 \
+  --intensity-min 8 --intensity-max 8 \
+  --duration-mins 2 --base-rps 4 --max-inflight 32 --seed 2608 \
+  --no-transient-retries --strict-control-errors \
+  --error-budget-rate 0.01 \
+  --log-dir out/bench/pi4-genet --log-prefix m26e-pi4-genet-high
+```
+
+The pre/post report must bind the complete generated 256-Worker READY census,
+exact topology digest, and one detailed Heartbeat/GPU/LoRA exemplar. Qualified
+Pi provenance must bind the source inventory, retained Pi manifest, staged
+image, root image, target session, live runtime/DMA proof, latest
+same-boot serial/network bytes, retained exact-image CYW43 closure, workload,
+and capture time. Re-read those inputs after load; reject any changed bytes,
+new boot slice, session/build-graph drift, staleness, incomplete driver/network
+gate, offline/operator-asserted capture pairing, or internally inconsistent
+metric. Repeat with `--benchmark-transport wifi` only on a separately qualified
+Wi-Fi boot of the same image and workload; for Wi-Fi, current runtime/capture
+bytes must equal the canonical retained Wi-Fi siblings.
+
+Compare the qualified QEMU HIGH and Pi GENET summaries with
+`scripts/pi4_compare_driver_models.py --qemu-report ... --pi-report ...`, the
+explicit `1.0` successful-throughput ratio, `21600`-second evidence-age bound,
+and a predeclared same-harness physical GENET p95 ceiling. The parity verdict is
+exactly successful-throughput ratio plus both identical explicit error budgets.
+QEMU latency, comparative error counts, backpressure, and physical-latency
+flags are reported but excluded from that verdict. Optional Wi-Fi thresholds
+must describe the same REST workload; raw-TCP request-to-first-payload norms
+cannot be relabelled as REST-summary norms. Retain the comparator JSON, its
+QEMU/Pi/optional-Wi-Fi input SHA-256 values, thresholds, and command with the
+benchmark evidence. A missing, stale, differently sourced, differently shaped,
+tampered, or pre-existing output blocks this lane.
+
+#### Separate conditional Pi Worker-component acceptance
+
+The full Pi Worker-component collector below is not a prerequisite for the
+performance lane above, and performance evidence cannot claim or replace its
+acceptance result. Run it only after the authorized physical fault/integration
+procedure has produced the complete same-boot three-role receipt, fault,
+teardown, recreation, and integration matrix. The collector derives its
+observations from gate-owned serial bytes, requires exactly the
+`pi4-network-capture`, `pi4-runtime-dma-proof`, and `pi4-serial-boot` raw
+evidence IDs, and fails closed instead of synthesizing a missing outcome.
+
+```bash
+PI_GENERATED_INVENTORY=out/pi4-sd/cohesix-root-task-topology.json
+PI_INTEGRATION_DIR="${PI_INTEGRATION_DIR:?set the accepted Pi integration-record directory}"
+PI_COMPONENT_DIR="${PI_COMPONENT_DIR:?set a new Pi Worker component output directory}"
+
+test -f "$PI_TARGET_SESSION"
+test -f "$PI_GENERATED_INVENTORY"
+test -f "$PI_RUNTIME_DMA_PROOF"
+test -f "$PI_NETWORK_CAPTURE"
+test -d "$PI_INTEGRATION_DIR"
+test ! -e "$PI_COMPONENT_DIR"
+
+.venv/bin/python scripts/worker_task_evidence.py collect-pi4-component \
+  --target-session "$PI_TARGET_SESSION" \
+  --generated-inventory "$PI_GENERATED_INVENTORY" \
+  --runtime-proof "$PI_RUNTIME_DMA_PROOF" \
+  --network-capture "$PI_NETWORK_CAPTURE" \
+  --transport genet \
+  --integration-dir "$PI_INTEGRATION_DIR" \
+  --max-age-secs 21600 \
+  --out-dir "$PI_COMPONENT_DIR"
+```
 
 ### Conditional C — SMP parity (Milestone 25+)
 - Boot QEMU with a single core: `COHESIX_QEMU_SMP=1 scripts/cohesix-build-run.sh --transport tcp`
@@ -6707,9 +6952,10 @@ benchmark implementation, evidence record, or report schema.
 Stop at its first failed target layer; run
 the focused deterministic regressions below only after the target canary
 reaches the changed live path. For the shortest target-first integration path,
-then run the focused direct base `.coh` batch, Hive Gateway REST core/parity
-batches plus the Python smoke, and Conditional B2's exact-three executable QEMU
-pressure. Run Conditional D's no-retry `telemetry-1mb`, `telemetry-10mb`,
+  then run the focused direct base `.coh` batch, Hive Gateway REST core/parity
+  batches plus the Python smoke, and Conditional B2's full generated-population
+  executable QEMU pressure through the three bounded role exemplars. Run
+  Conditional D's no-retry `telemetry-1mb`, `telemetry-10mb`,
 `telemetry-100mb`, and `telemetry-1gb` matrix separately against the exact
 packaged gateway's explicit host-model backend. Broad host closure and complete
 staged acceptance follow only after convergence passes.
@@ -6792,7 +7038,8 @@ the common child provenance remains selected on both targets. Fresh exact V35
 QEMU must pass the complete staged path, fixed matrix, full `.coh` regression
 harness, standard-fault terminal and root budget-exhaustion postponement
 injections, REST core/parity and Python smoke, every host tool, the Python
-library, Conditional B2 exact-three executable target pressure, and the
+library, Conditional B2 full-population executable target pressure through the
+three bounded role exemplars, and the
 companion Conditional D host-model gateway matrix. QEMU cannot qualify Pi;
 fresh V24 Pi acceptance separately requires a generated 54 MHz build, exact
 flash/readback and cold boot, applicable staged/hardware proof, both fault
@@ -7245,9 +7492,10 @@ bounded and nonblocking. Root-fault suspends an isolated service before
 publishing its durable record; only that service's root-control owner may take
 the record and perform its typed caller-failure and revoke sequence.
 
-The registry is exact and profile-qualified: QEMU seals 10 live sources (5
-critical + NineDoor + console-network + 3 Workers), while Pi seals 17 by adding
-its 7 live drivers. Reject duplicate task indices or TCBs, aliased
+The registry is exact and profile-qualified and is derived from the complete
+generated temporal seal. The current QEMU profile seals 265 live sources
+(9 non-Workers plus 256 Workers); Pi seals 272 by adding its seven live drivers.
+These totals are generated truth, not permanent constants. Reject duplicate task indices or TCBs, aliased
 standard/timeout badges, zero generation components, overflow, underfill, and
 registration after seal. A contained Worker generation may replace its sealed
 entry in place only for the same task/badge pair, exact prior identity, nonzero
@@ -7340,7 +7588,8 @@ paths suspend, fence, scrub all four shared frames, delete recovery/fault caps,
 and revoke anchor 16137 before old authority can be reused.
 
 After the host gate is green, the QEMU target check must use the selected
-four-core MCS kernel, construct all 10 QEMU sources suspended, seal the exact
+four-core MCS kernel, retain the kernel-provided init/root-control TCB, construct
+every compiler-declared QEMU child suspended, seal the exact 265-source
 registry, and finish the bounded synchronous bootstrap IPC trace before
 resuming any restricted critical child onto its generated SC. Root-fault is
 the sole receiver on the shared standard/timeout fault endpoint; its
@@ -7379,8 +7628,10 @@ cargo check -p root-task --target aarch64-unknown-none \
   --no-default-features --features release-qemu
 ```
 
-The selected four-core GICv3 QEMU run must then show all ten sources constructed
-suspended, NineDoor registered last before seal, root-fault activated first,
+The selected four-core GICv3 QEMU run must then account the kernel-provided
+init/root-control TCB separately, construct every other generated child
+suspended, and seal the complete registry (currently 265 sources). NineDoor is
+registered last before seal, root-fault is activated first,
 and NineDoor resumed only after that receiver is live. It must observe the exact
 post-validation marker
 `[ninedoor-service] passive child active bootstrap-sc=unbound recovery-reply=installed`,
@@ -8073,9 +8324,9 @@ fault/failure/teardown records must precede cleanup diagnostics, console must
 precede NineDoor, queue admission must precede diagnostic commit, backpressure
 must retain the record without eviction, and admission plus flush must occur on
 distinct ordinary turns.
-The QEMU run must additionally show that all generated sources are constructed
-suspended and the exact fault registry is sealed before the console child
-resumes. The retained V26/V13 lifecycle canary uses one exact boot and no concurrent gateway
+The QEMU run must additionally show that init/root-control is accounted, every
+compiler-declared child is constructed suspended, and the exact fault registry
+is sealed before the console child resumes. The retained V26/V13 lifecycle canary uses one exact boot and no concurrent gateway
 owner. A raw session 1 must authenticate, the host must close that socket, and
 a same-boot raw session 2 must authenticate, proving peer-close relisten before
 two sequential direct `cohsh` sessions run. The first direct session

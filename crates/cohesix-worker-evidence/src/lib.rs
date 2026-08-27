@@ -663,25 +663,30 @@ pub struct WorkerRoleObservation {
     pub fault_badge: u64,
     /// Generated zero-based CPU core assignment.
     pub core: u8,
-    /// Exact active scheduling-context budget and period.
+    /// Exact generated active or passive scheduling contract.
     pub scheduling_context: WorkerSchedulingContext,
     /// Exact generated per-instance kernel-object inventory.
     pub object_inventory: KernelObjectInventory,
 }
 
-/// Exact active MCS scheduling-context parameters for one Worker instance.
+/// Exact MCS scheduling parameters for one Worker instance.
+///
+/// Passive Workers use `0/0` and execute only through their generated donor
+/// lane. Active Workers use a nonzero budget no greater than their period.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WorkerSchedulingContext {
-    /// Configured execution budget in microseconds.
+    /// Configured execution budget in microseconds, or zero when passive.
     pub budget_us: u32,
-    /// Configured replenishment period in microseconds.
+    /// Configured replenishment period in microseconds, or zero when passive.
     pub period_us: u32,
 }
 
 impl WorkerSchedulingContext {
     fn validate(&self) -> Result<(), EvidenceError> {
-        if self.budget_us == 0 || self.period_us == 0 || self.budget_us > self.period_us {
+        let passive = self.budget_us == 0 && self.period_us == 0;
+        let active = self.budget_us > 0 && self.period_us > 0 && self.budget_us <= self.period_us;
+        if !passive && !active {
             return Err(EvidenceError::InvalidFieldMatrix(
                 "Worker scheduling context",
             ));
@@ -730,6 +735,9 @@ impl WorkerComponentEvidence {
         }
         self.target_session.validate()?;
         self.topology_sha256.validate("topology")?;
+        if self.workers.len() != 3 {
+            return Err(EvidenceError::InvalidFieldMatrix("mandatory role matrix"));
+        }
         validate_sorted_unique(&self.workers, 64, "workers")?;
         let mut mandatory = BTreeSet::new();
         let mut endpoint_badges = BTreeSet::new();
@@ -1515,8 +1523,8 @@ mod tests {
                 fault_badge: 1_u64 << (8 + role as u8),
                 core: role as u8,
                 scheduling_context: WorkerSchedulingContext {
-                    budget_us: 100,
-                    period_us: 1_000,
+                    budget_us: 0,
+                    period_us: 0,
                 },
                 object_inventory: KernelObjectInventory {
                     tcbs: 1,
@@ -1569,6 +1577,18 @@ mod tests {
             Err(EvidenceError::InvalidFieldMatrix("mandatory role matrix"))
         );
 
+        let mut extra = record.clone();
+        let mut extra_worker = extra.workers[0].clone();
+        extra_worker.identity.slot = 1;
+        extra_worker.endpoint_badge += 100;
+        extra_worker.fault_badge += 100;
+        extra.workers.push(extra_worker);
+        extra.workers.sort();
+        assert_eq!(
+            extra.validate(),
+            Err(EvidenceError::InvalidFieldMatrix("mandatory role matrix"))
+        );
+
         let mut overlapping_badges = record.clone();
         overlapping_badges.workers[1].endpoint_badge = overlapping_badges.workers[0].fault_badge;
         assert_eq!(
@@ -1583,6 +1603,29 @@ mod tests {
         invalid_sc.workers[0].scheduling_context.period_us = 1_000;
         assert_eq!(
             invalid_sc.validate(),
+            Err(EvidenceError::InvalidFieldMatrix(
+                "Worker scheduling context"
+            ))
+        );
+
+        let mut active_sc = record.clone();
+        active_sc.workers[0].scheduling_context.budget_us = 100;
+        active_sc.workers[0].scheduling_context.period_us = 1_000;
+        assert!(active_sc.validate().is_ok());
+
+        let mut mixed_sc = record.clone();
+        mixed_sc.workers[0].scheduling_context.budget_us = 100;
+        assert_eq!(
+            mixed_sc.validate(),
+            Err(EvidenceError::InvalidFieldMatrix(
+                "Worker scheduling context"
+            ))
+        );
+
+        let mut reverse_mixed_sc = record.clone();
+        reverse_mixed_sc.workers[0].scheduling_context.period_us = 1_000;
+        assert_eq!(
+            reverse_mixed_sc.validate(),
             Err(EvidenceError::InvalidFieldMatrix(
                 "Worker scheduling context"
             ))

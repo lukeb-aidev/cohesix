@@ -6,6 +6,7 @@
 
 import argparse
 import ast
+import copy
 import hashlib
 import importlib.util
 import json
@@ -14,10 +15,15 @@ import pathlib
 import socket
 import subprocess
 import sys
+import time
 import tomllib
 import urllib.error
+import zlib
 from dataclasses import replace
+from types import SimpleNamespace
 from typing import Optional
+
+import pytest
 
 MODULE_PATH = (
     pathlib.Path(__file__).resolve().parents[1]
@@ -131,6 +137,38 @@ def test_rest_client_retains_target_refusal_from_http_200(monkeypatch) -> None:
     assert response.status == "ERR"
     assert response.error == detail
     assert rest_perf.is_buffer_full_response(response)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    (
+        b'{"connected":true,"connected":false}',
+        b'{"connected":true,"unused":NaN}',
+    ),
+)
+def test_live_gateway_json_rejects_ambiguous_values(
+    monkeypatch,
+    payload: bytes,
+) -> None:
+    """Acceptance-critical live responses use the strict evidence decoder."""
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, _exc_type, _exc, _traceback) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return payload
+
+    monkeypatch.setattr(
+        rest_perf.urllib.request,
+        "urlopen",
+        lambda _request, timeout: Response(),
+    )
+    with pytest.raises(rest_perf.RestError):
+        rest_perf.fetch_json("http://127.0.0.1:8080/v1/meta/status", 1.0)
 
 
 def test_gateway_readiness_rejects_disconnected_status_before_bounds() -> None:
@@ -1341,6 +1379,240 @@ def test_gateway_status_delta_saturates_missing_fields() -> None:
     assert rest_perf.gateway_status_delta(None, after) is None
 
 
+def test_gateway_status_delta_records_connection_continuity() -> None:
+    before = {
+        "connected": True,
+        "connects": 1,
+        "reconnects": 0,
+        "last_change_unix_ms": 1000,
+        "target_host": "192.168.50.23",
+        "target_port": 31337,
+        "broker": {"control_requests": 2},
+    }
+    after = {
+        "connected": True,
+        "connects": 1,
+        "reconnects": 0,
+        "last_change_unix_ms": 1000,
+        "target_host": "192.168.50.23",
+        "target_port": 31337,
+        "broker": {"control_requests": 7},
+    }
+    assert rest_perf.gateway_status_delta(before, after) == {
+        "connection": {
+            "connected_before": True,
+            "connected_after": True,
+            "connects": 0,
+            "reconnects": 0,
+        },
+        "broker": {"control_requests": 5},
+    }
+    rest_perf.validate_pi_gateway_continuity(
+        before,
+        after,
+        SimpleNamespace(
+            gateway_connects=1,
+            gateway_reconnects=0,
+            gateway_last_change_unix_ms=1000,
+            gateway_status_endpoint="http://127.0.0.1:8080/v1/meta/status",
+            gateway_target_host="192.168.50.23",
+            gateway_target_port=31337,
+        ),
+        "http://127.0.0.1:8080",
+        "192.168.50.23",
+        31337,
+    )
+
+
+@pytest.mark.parametrize(
+    ("start_connects", "start_reconnects", "end_connects", "end_reconnects"),
+    ((2, 0, 2, 0), (1, 1, 1, 1), (1, 0, 2, 0), (1, 0, 1, 1)),
+)
+def test_pi_gateway_continuity_rejects_prior_or_during_run_reconnect(
+    start_connects: int,
+    start_reconnects: int,
+    end_connects: int,
+    end_reconnects: int,
+) -> None:
+    before = {
+        "connected": True,
+        "connects": start_connects,
+        "reconnects": start_reconnects,
+        "target_host": "192.168.50.23",
+        "target_port": 31337,
+        "broker": {},
+    }
+    after = {
+        "connected": True,
+        "connects": end_connects,
+        "reconnects": end_reconnects,
+        "target_host": "192.168.50.23",
+        "target_port": 31337,
+        "broker": {},
+    }
+    with pytest.raises(rest_perf.RestError, match="zero reconnects"):
+        rest_perf.validate_pi_gateway_continuity(before, after)
+
+
+def test_pi_gateway_continuity_rejects_different_gate_connection() -> None:
+    snapshot = {
+        "connected": True,
+        "connects": 1,
+        "reconnects": 0,
+        "last_change_unix_ms": 2000,
+        "target_host": "192.168.50.23",
+        "target_port": 31337,
+        "broker": {},
+    }
+    with pytest.raises(rest_perf.RestError, match="gate-captured"):
+        rest_perf.validate_pi_gateway_continuity(
+            snapshot,
+            snapshot,
+            SimpleNamespace(
+                gateway_connects=1,
+                gateway_reconnects=0,
+                gateway_last_change_unix_ms=1000,
+                gateway_target_host="192.168.50.23",
+                gateway_target_port=31337,
+            ),
+        )
+
+
+def test_pi_gateway_continuity_rejects_different_rest_endpoint() -> None:
+    snapshot = {
+        "connected": True,
+        "connects": 1,
+        "reconnects": 0,
+        "last_change_unix_ms": 1000,
+        "target_host": "192.168.50.23",
+        "target_port": 31337,
+        "broker": {},
+    }
+    evidence = SimpleNamespace(
+        gateway_connects=1,
+        gateway_reconnects=0,
+        gateway_last_change_unix_ms=1000,
+        gateway_status_endpoint="http://127.0.0.1:8080/v1/meta/status",
+        gateway_target_host="192.168.50.23",
+        gateway_target_port=31337,
+    )
+    with pytest.raises(rest_perf.RestError, match="REST endpoint differs"):
+        rest_perf.validate_pi_gateway_continuity(
+            snapshot,
+            snapshot,
+            evidence,
+            "http://127.0.0.1:8081",
+        )
+
+
+def test_pi_gateway_continuity_rejects_different_tcp_target() -> None:
+    snapshot = {
+        "connected": True,
+        "connects": 1,
+        "reconnects": 0,
+        "last_change_unix_ms": 1000,
+        "target_host": "192.168.50.23",
+        "target_port": 31337,
+        "broker": {},
+    }
+    evidence = SimpleNamespace(
+        gateway_connects=1,
+        gateway_reconnects=0,
+        gateway_last_change_unix_ms=1000,
+        gateway_status_endpoint="http://127.0.0.1:8080/v1/meta/status",
+        gateway_target_host="192.168.50.23",
+        gateway_target_port=31337,
+    )
+    with pytest.raises(rest_perf.RestError, match="TCP host differs"):
+        rest_perf.validate_pi_gateway_continuity(
+            snapshot,
+            snapshot,
+            evidence,
+            "http://127.0.0.1:8080",
+            "192.168.50.24",
+            31337,
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    (
+        ("target_host", "192.168.50.24", "gate-captured"),
+        ("target_port", 31338, "invalid gateway start continuity"),
+    ),
+)
+def test_pi_gateway_continuity_rejects_live_target_drift(
+    field: str,
+    value: object,
+    message: str,
+) -> None:
+    """The live gateway endpoint must equal the gate-sealed Pi endpoint."""
+
+    snapshot = {
+        "connected": True,
+        "connects": 1,
+        "reconnects": 0,
+        "last_change_unix_ms": 1000,
+        "target_host": "192.168.50.23",
+        "target_port": 31337,
+        "broker": {},
+    }
+    snapshot[field] = value
+    evidence = SimpleNamespace(
+        gateway_connects=1,
+        gateway_reconnects=0,
+        gateway_last_change_unix_ms=1000,
+        gateway_target_host="192.168.50.23",
+        gateway_target_port=31337,
+    )
+    with pytest.raises(rest_perf.RestError, match=message):
+        rest_perf.validate_pi_gateway_continuity(snapshot, snapshot, evidence)
+
+
+def test_pi_runtime_gateway_continuity_requires_one_in_window_session() -> None:
+    runtime = {
+        "PI4_RUNTIME_DMA_CAPTURE_STARTED_UNIX_NS": "1000000000",
+        "PI4_RUNTIME_DMA_CAPTURE_FINISHED_UNIX_NS": "3000000000",
+        "PI4_RUNTIME_DMA_GATEWAY_CONTINUITY": "connected-single-session",
+        "PI4_RUNTIME_DMA_GATEWAY_STATUS_ENDPOINT": (
+            "http://127.0.0.1:8080/v1/meta/status"
+        ),
+        "PI4_RUNTIME_DMA_GATEWAY_TARGET_HOST": "192.168.50.23",
+        "PI4_RUNTIME_DMA_GATEWAY_TARGET_PORT": "31337",
+        "PI4_RUNTIME_DMA_GATEWAY_START_CAPTURED_UNIX_NS": "1500000000",
+        "PI4_RUNTIME_DMA_GATEWAY_START_CONNECTED": "true",
+        "PI4_RUNTIME_DMA_GATEWAY_START_CONNECTS": "1",
+        "PI4_RUNTIME_DMA_GATEWAY_START_RECONNECTS": "0",
+        "PI4_RUNTIME_DMA_GATEWAY_START_LAST_CHANGE_UNIX_MS": "1000",
+        "PI4_RUNTIME_DMA_GATEWAY_START_TARGET_HOST": "192.168.50.23",
+        "PI4_RUNTIME_DMA_GATEWAY_START_TARGET_PORT": "31337",
+        "PI4_RUNTIME_DMA_GATEWAY_END_CAPTURED_UNIX_NS": "2500000000",
+        "PI4_RUNTIME_DMA_GATEWAY_END_CONNECTED": "true",
+        "PI4_RUNTIME_DMA_GATEWAY_END_CONNECTS": "1",
+        "PI4_RUNTIME_DMA_GATEWAY_END_RECONNECTS": "0",
+        "PI4_RUNTIME_DMA_GATEWAY_END_LAST_CHANGE_UNIX_MS": "1000",
+        "PI4_RUNTIME_DMA_GATEWAY_END_TARGET_HOST": "192.168.50.23",
+        "PI4_RUNTIME_DMA_GATEWAY_END_TARGET_PORT": "31337",
+    }
+    assert rest_perf.pi_gateway_continuity_from_runtime(runtime) == {
+        "connects": 1,
+        "reconnects": 0,
+        "last_change_unix_ms": 1000,
+        "status_endpoint": "http://127.0.0.1:8080/v1/meta/status",
+        "target_host": "192.168.50.23",
+        "target_port": 31337,
+    }
+    runtime["PI4_RUNTIME_DMA_GATEWAY_END_RECONNECTS"] = "1"
+    with pytest.raises(rest_perf.RestError, match="continuity window"):
+        rest_perf.pi_gateway_continuity_from_runtime(runtime)
+
+    runtime["PI4_RUNTIME_DMA_GATEWAY_END_RECONNECTS"] = "0"
+    runtime["PI4_RUNTIME_DMA_GATEWAY_START_LAST_CHANGE_UNIX_MS"] = "999"
+    runtime["PI4_RUNTIME_DMA_GATEWAY_END_LAST_CHANGE_UNIX_MS"] = "999"
+    with pytest.raises(rest_perf.RestError, match="continuity window"):
+        rest_perf.pi_gateway_continuity_from_runtime(runtime)
+
+
 def test_write_simulation_artifacts_includes_gateway_status(tmp_path: pathlib.Path) -> None:
     log_path = tmp_path / "bench.log"
     args = argparse.Namespace(
@@ -1491,6 +1763,29 @@ def test_write_simulation_artifacts_includes_gateway_status(tmp_path: pathlib.Pa
     ).read_text()
 
 
+def test_qualified_artifact_output_rejects_collision_and_symlink(
+    tmp_path: pathlib.Path,
+) -> None:
+    collision = tmp_path / "qualified.summary.json"
+    collision.write_text("preserve\n", encoding="utf-8")
+    with pytest.raises(FileExistsError):
+        rest_perf.open_artifact_text(str(collision), exclusive=True)
+    assert collision.read_text(encoding="utf-8") == "preserve\n"
+
+    target = tmp_path / "target.json"
+    target.write_text("target\n", encoding="utf-8")
+    link = tmp_path / "qualified-link.summary.json"
+    link.symlink_to(target)
+    with pytest.raises(OSError):
+        rest_perf.open_artifact_text(str(link), exclusive=True)
+    assert target.read_text(encoding="utf-8") == "target\n"
+
+    created = tmp_path / "qualified-new.summary.json"
+    with rest_perf.open_artifact_text(str(created), exclusive=True) as handle:
+        handle.write("sealed\n")
+    assert created.read_text(encoding="utf-8") == "sealed\n"
+
+
 def test_parse_args_no_retries_alias_disables_transient_retries() -> None:
     original_argv = list(sys.argv)
     try:
@@ -1607,7 +1902,7 @@ def acceptance_summary() -> dict:
         "asids": 1,
         "frames": 16,
         "endpoints": 0,
-        "notifications": 1,
+        "notifications": 0,
         "fault_caps": 1,
         "timeout_fault_caps": 1,
         "cspace_slots": 64,
@@ -1717,6 +2012,50 @@ def test_worker_runtime_bounds_rejects_absence_and_inconsistent_slots() -> None:
         assert "maximum" in str(exc)
     else:
         raise AssertionError("inconsistent generated maximum must fail")
+
+
+def test_executable_population_binds_manifest_to_live_bounds() -> None:
+    bounds = executable_bounds(3)
+    manifest = {
+        "worker_runtime": {"max_workers": 3},
+        "worker_resource_admission": {
+            "enabled": True,
+            "executable_roles": [
+                {"role": role, "executable_slots": 1}
+                for role in rest_perf.EXECUTABLE_WORKER_ROLES
+            ],
+        },
+    }
+    assert (
+        rest_perf.executable_population_from_manifest_and_bounds(
+            manifest,
+            bounds,
+            "f" * 64,
+        )
+        == 3
+    )
+
+    wrong_hash = copy.deepcopy(bounds)
+    wrong_hash["manifest_sha256"] = "e" * 64
+    wrong_slots = copy.deepcopy(bounds)
+    wrong_slots["worker_runtime"]["roles"][1]["executable_slots"] = 2
+    wrong_slots["worker_runtime"]["maximum_live_tasks"] = 4
+    for candidate in (wrong_hash, wrong_slots):
+        with pytest.raises(rest_perf.RestError):
+            rest_perf.executable_population_from_manifest_and_bounds(
+                manifest,
+                candidate,
+                "f" * 64,
+            )
+
+    wrong_manifest = copy.deepcopy(manifest)
+    wrong_manifest["worker_runtime"]["max_workers"] = 4
+    with pytest.raises(rest_perf.RestError):
+        rest_perf.executable_population_from_manifest_and_bounds(
+            wrong_manifest,
+            bounds,
+            "f" * 64,
+        )
 
 
 def test_parse_worker_runtime_state_requires_structured_exact_role() -> None:
@@ -2798,6 +3137,35 @@ def test_fault_artifacts_bind_exact_status_identities(tmp_path: pathlib.Path) ->
         raise AssertionError("fault transcript target drift must fail")
 
 
+def test_qemu_target_evidence_rejects_fault_artifact_reread_drift(
+    tmp_path: pathlib.Path,
+) -> None:
+    uart, gdb = write_fault_logs(tmp_path)
+    acceptance = acceptance_summary()
+    args = argparse.Namespace(qemu_uart_log=str(uart), qemu_gdb_log=str(gdb))
+    artifacts, _markers = rest_perf.capture_fault_artifacts(args, acceptance)
+    with uart.open("a", encoding="utf-8") as handle:
+        handle.write("post-capture mutation\n")
+    target_session = acceptance["target_session"]
+    binding = {
+        "target": "qemu",
+        "source_sha256": "8" * 64,
+        "manifest_sha256": target_session["manifest_sha256"],
+        "root_image_sha256": target_session["root_image_sha256"],
+    }
+
+    with pytest.raises(rest_perf.RestError, match="changed before target-evidence seal"):
+        rest_perf.build_qemu_benchmark_target_evidence(
+            acceptance,
+            binding,
+            artifacts,
+            str(uart),
+            str(gdb),
+            60,
+            now_unix_s=time.time(),
+        )
+
+
 def test_qemu_fixture_receipt_paths_require_explicit_fixture_mode() -> None:
     class DummyClient:
         def __init__(self, mode: str):
@@ -2880,13 +3248,13 @@ def test_executable_report_retains_exact_pre_post_and_identity_graph() -> None:
             "lease_epoch": worker["lease_epoch"],
             "supervisor_generation": worker["supervisor_generation"],
             "cap_generation": worker["cap_generation"],
-            "worker_id": f"before-{worker['role']}",
+            "worker": f"before-{worker['role']}",
             "receipt_sequence": 10,
             "completion_sequence": 10,
         }
         after = dict(base)
         if worker["role"] == "worker-heartbeat":
-            after["worker_id"] = "after-worker-heartbeat"
+            after["worker"] = "after-worker-heartbeat"
             after["supervisor_generation"] += 1
         else:
             after["receipt_sequence"] += 1
@@ -2968,6 +3336,133 @@ def test_parse_args_executable_rejects_multi_hive_expansion() -> None:
         sys.argv = original_argv
 
 
+def test_parse_args_rejects_mixed_or_missing_target_evidence() -> None:
+    cases = (
+        (
+            ["--benchmark-transport", "genet"],
+            "benchmark target and transport are incompatible",
+        ),
+        (
+            ["--benchmark-target", "pi4"],
+            "benchmark target and transport are incompatible",
+        ),
+        (
+            ["--pi-runtime-dma-proof", "pi.env"],
+            "QEMU benchmark target cannot consume Pi proof inputs",
+        ),
+        (
+            ["--pi-network-capture", "pi.pcap"],
+            "QEMU benchmark target cannot consume Pi proof inputs",
+        ),
+        (
+            ["--pi-cyw43-coexistence-record", "pi-cyw43.json"],
+            "QEMU benchmark target cannot consume Pi proof inputs",
+        ),
+        (
+            [
+                "--benchmark-target",
+                "pi4",
+                "--benchmark-transport",
+                "genet",
+                "--qemu-uart-log",
+                "qemu.log",
+            ],
+            "Pi benchmark target cannot consume QEMU run/log inputs",
+        ),
+        (
+            [
+                "--mode",
+                "simulate",
+                "--population-mode",
+                "executable",
+                "--no-qemu",
+                "--no-gateway",
+                "--qemu-uart-log",
+                "qemu.log",
+                "--qemu-gdb-log",
+                "qemu.gdb",
+            ],
+            "qualified executable population requires --target-session",
+        ),
+        (
+            [
+                "--mode",
+                "simulate",
+                "--population-mode",
+                "executable",
+                "--no-qemu",
+                "--no-gateway",
+                "--qemu-uart-log",
+                "qemu.log",
+                "--qemu-gdb-log",
+                "qemu.gdb",
+                "--target-session",
+                "target-session.json",
+            ],
+            "qualified executable population requires --error-budget-rate",
+        ),
+        (
+            [
+                "--mode",
+                "simulate",
+                "--population-mode",
+                "executable",
+                "--benchmark-target",
+                "pi4",
+                "--benchmark-transport",
+                "genet",
+                "--no-qemu",
+                "--no-gateway",
+                "--target-session",
+                "target-session.json",
+                "--error-budget-rate",
+                "0.01",
+                "--pi-runtime-dma-proof",
+                "pi.env",
+                "--pi-network-capture",
+                "pi.pcap",
+            ],
+            "requires --pi-runtime-dma-proof, --pi-network-capture, "
+            "and --pi-cyw43-coexistence-record",
+        ),
+        (
+            [
+                "--mode",
+                "simulate",
+                "--population-mode",
+                "executable",
+                "--benchmark-target",
+                "pi4",
+                "--benchmark-transport",
+                "genet",
+                "--no-qemu",
+                "--no-gateway",
+                "--target-session",
+                "target-session.json",
+                "--error-budget-rate",
+                "0.01",
+                "--pi-runtime-dma-proof",
+                "pi.env",
+                "--pi-network-capture",
+                "pi.pcap",
+                "--pi-cyw43-coexistence-record",
+                "pi-cyw43.json",
+                "--tcp-port",
+                "31338",
+            ],
+            "qualified Pi executable population requires --tcp-port 31337",
+        ),
+    )
+    original_argv = list(sys.argv)
+    try:
+        for arguments, expected in cases:
+            sys.argv = ["rest_perf_harness.py", *arguments]
+            with pytest.raises(SystemExit, match=expected):
+                rest_perf.parse_args()
+    finally:
+        sys.argv = original_argv
+
+
 def test_parse_args_external_gateway_does_not_require_console_secret(
     monkeypatch,
 ) -> None:
@@ -2989,6 +3484,23 @@ def test_parse_args_external_gateway_does_not_require_console_secret(
         assert args.request_auth_token == "gateway-secret"
     finally:
         sys.argv = original_argv
+
+
+def test_parse_args_has_no_pi_component_performance_input(capsys) -> None:
+    """Qualified Pi performance cannot be relabelled as component acceptance."""
+
+    original_argv = list(sys.argv)
+    try:
+        sys.argv = [
+            "rest_perf_harness.py",
+            "--pi-worker-component",
+            "pi-worker-component.json",
+        ]
+        with pytest.raises(SystemExit):
+            rest_perf.parse_args()
+    finally:
+        sys.argv = original_argv
+    assert "unrecognized arguments: --pi-worker-component" in capsys.readouterr().err
 
 
 def test_parse_args_managed_gateway_mock_needs_no_console_secret(
@@ -3121,6 +3633,11 @@ def test_m26e_qemu_pressure_runner_has_exact_orchestration_contract() -> None:
         'GATEWAY_OPERATOR OK KILL role=worker-heartbeat',
         'cp "$boot_dir/qemu-command.txt" "$boot_dir/preflight.qemu-command.txt"',
         'wait_for_gateway_acceptance',
+        'executable_population="$(resolved_executable_population)"',
+        '--workers-min "$executable_population"',
+        '--workers-max "$executable_population"',
+        '--target-session "$TARGET_SESSION"',
+        "rest.executable_population_from_manifest_and_bounds(",
         'diagnostic.get("code") != "read-failed"',
         (
             'drive_worker_fault_plan "$boot_dir" worker-lora 300\n\n'
@@ -3251,6 +3768,8 @@ def test_m26e_qemu_pressure_runner_has_exact_orchestration_contract() -> None:
     assert ': "${COH_AUTH_TOKEN:?' not in source
     assert "M26E_CONSOLE_AUTH_TOKEN=$COH_AUTH_TOKEN" not in source
     assert 'source_inventory = {' not in source
+    assert "--workers-min 3" not in source
+    assert "--workers-max 3" not in source
     assert 'find "$REPO_ROOT"' not in source
     preserve = source.index('PRESERVE_ROOT="$(mktemp -d ')
     canonical_run_dir = source.index(
@@ -3598,3 +4117,1899 @@ def test_m26e_qemu_pressure_has_explicit_implementation_surface() -> None:
     assert rows[0]["id"] == "tool:m26e-qemu-pressure"
     assert rows[0]["class"] == "diagnostic"
     assert rows[0]["production_reachable"] is False
+
+
+def pi_acceptance_summary(manifest_sha256: str, root_sha256: str) -> dict:
+    """Return a target-qualified Pi variant of the component fixture."""
+
+    acceptance = acceptance_summary()
+    acceptance["target"] = "pi4"
+    acceptance["execution_proof"] = "fresh-pi"
+    acceptance["target_session"]["manifest_sha256"] = manifest_sha256
+    acceptance["target_session"]["root_image_sha256"] = root_sha256
+    for worker in acceptance["workers"]:
+        worker["execution_proof"] = "fresh-pi"
+    return acceptance
+
+
+PI_NORMALIZED_GATE_RAW = (
+    "\n".join(
+        (
+            "DRIVER_TASK_ACTIVE_NET=cyw43",
+            "PI4_RUNTIME_DMA_PROOF=fresh-pi",
+            "PI4_RUNTIME_DMA_COUNTER_PROOF=counter-qualified",
+            "DRIVER_TASK_DMA_BLOCKER=none",
+            "DRIVER_TASK_RING_CALL_OUTSTANDING=0",
+            "DRIVER_TASK_RING_CALL_UNRESOLVED_TIMEOUT=0",
+            "DRIVER_TASK_BOOTSTRAP_DEFERRED=0",
+            "TIMER_BACKEND=arch-counter",
+            "TIMER_CLOCK_HZ=54000000",
+            "TIMER_EL0_COUNTER=vct",
+            "DUMMY_TIMER_SEEN=no",
+            "NET_ACTIVE=wifi",
+            "NET_ADDR_SRC=dhcp-lease",
+            "NET_DHCP=bound",
+            "NET_TCP_READY=yes",
+            "NETTEST_PROOF=yes",
+            "COHSH_TCP_AUTH_PROOF=yes",
+            "WIFI_GATE=10",
+            "WIFI_BLOCKER=none",
+            "WIFI_DPC_PROOF=yes",
+            "DRIVER_TASK_SDIO_DEDICATED=yes",
+            "DRIVER_TASK_NET_DEDICATED=yes",
+            "DRIVER_TASK_OWNER_STATE_PROOF=yes",
+            "CYW43_BOOTSTRAP_SUPERVISOR_READY=yes",
+            "WIFI_FIRMWARE_IDENTITY_PROOF=yes",
+            "WIFI_CLM_READY_PROOF=yes",
+            "WIFI_FIRMWARE_VERSION_PROOF=yes",
+            "WIFI_CLM_VERSION_PROOF=yes",
+            "WIFI_GATE7_COMPLETE=yes",
+            "SDIO_IRQ158_INBAND_PROOF=yes",
+            "TCP_ACCEPTS=1",
+            "TCP_AUTH_SESSIONS=1",
+            "TCP_RX_BYTES=1",
+        )
+    )
+    + "\n"
+).encode("ascii")
+
+
+def newc_archive_fixture(members: dict[str, bytes]) -> bytes:
+    """Build the small deterministic newc subset used by Pi evidence fixtures."""
+
+    output = bytearray()
+    for name, payload in (*sorted(members.items()), ("TRAILER!!!", b"")):
+        name_raw = name.encode("ascii") + b"\0"
+        mode = 0 if name == "TRAILER!!!" else 0o100555
+        fields = (0, mode, 0, 0, 1, 0, len(payload), 0, 0, 0, 0, len(name_raw), 0)
+        output.extend(b"070701")
+        output.extend(b"".join(f"{field:08x}".encode("ascii") for field in fields))
+        output.extend(name_raw)
+        output.extend(bytes((-len(output)) & 3))
+        output.extend(payload)
+        output.extend(bytes((-len(output)) & 3))
+    output.extend(bytes((-len(output)) & 511))
+    return bytes(output)
+
+
+def uimage_fixture(payload: bytes) -> bytes:
+    """Build the exact U-Boot ramdisk wrapper used by the Pi fixture."""
+
+    header = bytearray(64)
+    header[0:4] = (0x27051956).to_bytes(4, "big")
+    header[8:12] = (1).to_bytes(4, "big")
+    header[12:16] = len(payload).to_bytes(4, "big")
+    header[24:28] = (zlib.crc32(payload) & 0xFFFFFFFF).to_bytes(4, "big")
+    header[28:32] = bytes((5, 22, 3, 0))
+    name = b"Cohesix Pi4 driver runtimes"
+    header[32 : 32 + len(name)] = name
+    header[4:8] = (zlib.crc32(header) & 0xFFFFFFFF).to_bytes(4, "big")
+    return bytes(header) + payload
+
+
+def ethernet_ipv4_frame_fixture(
+    destination_mac: bytes,
+    source_mac: bytes,
+    source_ip: bytes,
+    destination_ip: bytes,
+    protocol: int,
+    transport_payload: bytes,
+) -> bytes:
+    """Build one bounded Ethernet/IPv4 frame for capture-correlation tests."""
+
+    total_length = 20 + len(transport_payload)
+    ipv4 = bytearray(20)
+    ipv4[0] = 0x45
+    ipv4[2:4] = total_length.to_bytes(2, "big")
+    ipv4[8] = 64
+    ipv4[9] = protocol
+    ipv4[12:16] = source_ip
+    ipv4[16:20] = destination_ip
+    return (
+        destination_mac
+        + source_mac
+        + b"\x08\x00"
+        + bytes(ipv4)
+        + transport_payload
+    )
+
+
+def correlated_pcap_fixture(
+    packet_unix_ns: int,
+    station_mac: bytes,
+    station_ip: bytes,
+) -> bytes:
+    """Build DHCP and TCP-console frames for one serial-selected Pi lane."""
+
+    host_mac = bytes.fromhex("020000000001")
+    host_ip = bytes((192, 168, station_ip[2], 1))
+    dhcp_payload = (
+        (68).to_bytes(2, "big")
+        + (67).to_bytes(2, "big")
+        + (9).to_bytes(2, "big")
+        + b"\0\0"
+        + b"D"
+    )
+    dhcp_frame = ethernet_ipv4_frame_fixture(
+        b"\xff" * 6,
+        station_mac,
+        b"\0" * 4,
+        b"\xff" * 4,
+        17,
+        dhcp_payload,
+    )
+    tcp_header = bytearray(20)
+    tcp_header[0:2] = (50_000).to_bytes(2, "big")
+    tcp_header[2:4] = rest_perf.PI_CONSOLE_TCP_PORT.to_bytes(2, "big")
+    tcp_header[12] = 5 << 4
+    tcp_header[13] = 0x18
+    tcp_frame = ethernet_ipv4_frame_fixture(
+        station_mac,
+        host_mac,
+        host_ip,
+        station_ip,
+        6,
+        bytes(tcp_header) + b"AUTH",
+    )
+    header = bytes.fromhex("d4c3b2a1020004000000000000000000ffff000001000000")
+    records = bytearray(header)
+    for index, frame in enumerate((dhcp_frame, tcp_frame)):
+        seconds, nanoseconds = divmod(
+            packet_unix_ns + index * 1_000_000,
+            1_000_000_000,
+        )
+        records.extend(seconds.to_bytes(4, "little"))
+        records.extend((nanoseconds // 1_000).to_bytes(4, "little"))
+        records.extend(len(frame).to_bytes(4, "little") * 2)
+        records.extend(frame)
+    return bytes(records)
+
+
+def rewrite_env_fixture(path: pathlib.Path, updates: dict[str, str]) -> None:
+    """Rewrite selected fields in a deterministic test-only env fixture."""
+
+    observed = set()
+    lines = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        key, separator, _value = line.partition("=")
+        assert separator == "="
+        if key in updates:
+            line = f"{key}={updates[key]}"
+            observed.add(key)
+        lines.append(line)
+    assert observed == set(updates)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def write_pi_benchmark_proof_chain(
+    tmp_path: pathlib.Path,
+) -> tuple[pathlib.Path, pathlib.Path, dict, dict]:
+    """Write retained build/runtime/log bytes for Pi evidence tests."""
+
+    manifest = tmp_path / "cohesix-root-task-resolved.json"
+    manifest.write_text('{"schema":"test"}\n', encoding="utf-8")
+    manifest_sha256 = hashlib.sha256(manifest.read_bytes()).hexdigest()
+    role_inventory = {
+        "tcbs": 1,
+        "scheduling_contexts": 1,
+        "reply_objects": 1,
+        "vspaces": 1,
+        "cnodes": 1,
+        "page_tables": 8,
+        "asids": 1,
+        "frames": 16,
+        "endpoints": 1,
+        "notifications": 0,
+        "fault_caps": 1,
+        "timeout_fault_caps": 1,
+        "cspace_slots": 64,
+        "untyped_bytes": 1_048_576,
+    }
+    role_cores = (
+        ("worker-heartbeat", 3),
+        ("worker-gpu", 2),
+        ("worker-lora", 3),
+    )
+    topology_payload = {
+        "profile": {"name": "pi4-uboot-aarch64"},
+        "worker_resource_admission": {
+            "executable_roles": [
+                {
+                    "role": role,
+                    "task_prefix": f"{role}-slot-",
+                    "executable_slots": 1,
+                    "core": core,
+                    "per_slot": role_inventory,
+                }
+                for role, core in role_cores
+            ]
+        },
+        "temporal_authority": {
+            "tasks": [
+                {
+                    "id": f"{role}-slot-0",
+                    "kind": "worker",
+                    "execution": "passive",
+                    "core": core,
+                    "budget_us": 0,
+                    "period_us": 0,
+                }
+                for role, core in role_cores
+            ]
+        },
+    }
+    topology_sha256 = rest_perf.canonical_json_sha256(topology_payload)
+    topology = tmp_path / "cohesix-root-task-topology.json"
+    topology.write_text(
+        json.dumps(
+            {
+                "schema": rest_perf.GENERATED_TOPOLOGY_SCHEMA,
+                "profile": "pi4-uboot-aarch64",
+                "manifest_sha256": manifest_sha256,
+                "topology_sha256": topology_sha256,
+                "topology": topology_payload,
+                "inventory": {},
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    driver_archive = tmp_path / "cohesix-driver-runtimes.cpio"
+    driver_archive.write_bytes(b"exact-driver-runtime-cpio")
+    driver_manifest = tmp_path / "cohesix-driver-runtime-manifest.json"
+    driver_manifest.write_text(
+        json.dumps(
+            {
+                "schema": "cohesix-driver-runtime-manifest/v1",
+                "archive": {
+                    "bytes": len(driver_archive.read_bytes()),
+                    "sha256": hashlib.sha256(
+                        driver_archive.read_bytes()
+                    ).hexdigest(),
+                },
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    runtime_uimage = tmp_path / "cohesix-driver-runtimes.cpio.uimg"
+    runtime_uimage.write_bytes(uimage_fixture(driver_archive.read_bytes()))
+    worker_archive = tmp_path / "cohesix-worker-images.cpio"
+    worker_archive.write_bytes(b"exact-worker-archive")
+    worker_manifest = tmp_path / "cohesix-worker-image-manifest.json"
+    worker_manifest.write_text(
+        json.dumps(
+            {
+                "schema": "cohesix-worker-image-manifest/v1",
+                "target": "aarch64-unknown-none",
+                "archive": {
+                    "bytes": len(worker_archive.read_bytes()),
+                    "sha256": hashlib.sha256(
+                        worker_archive.read_bytes()
+                    ).hexdigest(),
+                },
+                "images": [
+                    {
+                        "role": role,
+                        "image_sha256": hashlib.sha256(
+                            f"{role}-image".encode("ascii")
+                        ).hexdigest(),
+                    }
+                    for role, _core in role_cores
+                ],
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    source_manifest_raw = b"exact-pi-source-manifest"
+    source_inventory = tmp_path / "source-inventory.json"
+    source_inventory.write_text(
+        json.dumps(
+            {
+                "schema": "cohesix-source-inventory/v1",
+                "algorithm": "git-visible-paths-sha256",
+                "entries": [
+                    {
+                        "path": "configs/root_task_pi4_uboot_aarch64.toml",
+                        "kind": "file",
+                        "mode": 0o644,
+                        "sha256": hashlib.sha256(
+                            source_manifest_raw
+                        ).hexdigest(),
+                        "bytes": len(source_manifest_raw),
+                    }
+                ],
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    worker_abi = tmp_path / "worker-abi-identity.json"
+    worker_abi.write_text('{"abi":"exact"}\n', encoding="utf-8")
+    kernel = tmp_path / "kernel.elf"
+    kernel.write_bytes(b"exact-kernel-elf")
+    root = tmp_path / "rootserver"
+    root.write_bytes(b"exact-root-elf")
+    root_cpio = tmp_path / "archive.archive.o.cpio"
+    root_cpio.write_bytes(
+        newc_archive_fixture(
+            {
+                "kernel.elf": kernel.read_bytes(),
+                "rootserver": root.read_bytes(),
+            }
+        )
+    )
+    image = tmp_path / "cohesix-image-arm-bcm2711"
+    image.write_bytes(b"sealed-pi-image")
+    capture_started_ns = time.time_ns() - 1_000_000_000
+    packet_ns = time.time_ns()
+    capture = tmp_path / "pi4-cyw43-network.pcap"
+    wifi_mac = bytes.fromhex("02434f485832")
+    wifi_ip = bytes((192, 168, 50, 23))
+    capture.write_bytes(
+        correlated_pcap_fixture(packet_ns, wifi_mac, wifi_ip)
+    )
+    serial = tmp_path / "pi4-cyw43-serial.log"
+    image_sha256 = hashlib.sha256(image.read_bytes()).hexdigest()
+    root_sha256 = hashlib.sha256(root.read_bytes()).hexdigest()
+    root_cpio_sha256 = hashlib.sha256(root_cpio.read_bytes()).hexdigest()
+    git_commit = "6" * 40
+    build_timestamp = "2026-08-27T00:00:00Z"
+    build_id = "9" * 64
+    image_id = "5" * 64
+    build_marker = (
+        f"[BUILD] {git_commit[:12]} {build_timestamp} image-id={image_id} "
+        "features=[kernel:1 bootstrap-trace:1 serial-console:1 net:1 "
+        "net-console:1 qemu-driver-task-smoke:0]"
+    )
+    serial.write_text(
+        "U-Boot 2026.01\n"
+        "[cohesix:root-task] Cohesix boot: root-task online\n"
+        f"{build_marker}\n"
+        "[net-console] ready ip=192.168.50.23 port=31337 "
+        "mac=02:43:4f:48:58:32\n"
+        "netstats: generation=1 mode=dhcp policy=wifi active=wifi "
+        "standby=wired addr_src=dhcp-lease ip=192.168.50.23 "
+        "gateway=192.168.50.1 dhcp=bound\n",
+        encoding="utf-8",
+    )
+    capture_finished_ns = time.time_ns()
+    metadata = tmp_path / "pi4-image-identity.json"
+    metadata.write_text(
+        json.dumps(
+            {
+                "schema": "cohesix-pi4-image-identity/v2",
+                "git_commit": git_commit,
+                "embedded_git_commit": git_commit[:12],
+                "source_tree_clean": True,
+                "build_timestamp": build_timestamp,
+                "build_id": build_id,
+                "image_id": image_id,
+                "build_marker": build_marker,
+                "build_marker_sha256": hashlib.sha256(
+                    build_marker.encode("ascii")
+                ).hexdigest(),
+                "image_sha256": image_sha256,
+                "size_bytes": len(image.read_bytes()),
+                "rootserver_sha256": root_sha256,
+                "rootserver_cpio_sha256": root_cpio_sha256,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    profile_stamp = tmp_path / "cohesix-sel4-profile-build-inputs.json"
+    profile_stamp.write_text(
+        '{"profile":"pi4_diagnostic","schema":"fixture/v1"}\n',
+        encoding="utf-8",
+    )
+    profile_state = tmp_path / "cohesix-sel4-profile-tree-state.sha256"
+    profile_state.write_text("2" * 64 + "\n", encoding="ascii")
+    composition_record = tmp_path / "cohesix-composition-profile-build-inputs.json"
+    composition_record.write_text(
+        '{"profile":"pi4_diagnostic","schema":"fixture/v1"}\n',
+        encoding="utf-8",
+    )
+    composition_cache = tmp_path / "cohesix-composition-CMakeCache.txt"
+    composition_cache.write_text("KernelIsMCS:BOOL=ON\n", encoding="utf-8")
+    composition_timer = tmp_path / "cohesix-composition-platform_gen.h"
+    composition_timer.write_text(
+        "#define TIMER_CLOCK_HZ 54000000ULL\n",
+        encoding="utf-8",
+    )
+    provenance = tmp_path / "cohesix-image-arm-bcm2711.provenance.json"
+    provenance.write_text(
+        json.dumps(
+            {
+                "schema": rest_perf.PI_WRAPPER_PROVENANCE_SCHEMA,
+                "git_commit": git_commit,
+                "source_tree_clean": True,
+                "build_timestamp": build_timestamp,
+                "root_task_features": "kernel,bootstrap-trace,serial-console,net",
+                "source_manifest_sha256": hashlib.sha256(
+                    source_manifest_raw
+                ).hexdigest(),
+                "resolved_manifest_sha256": manifest_sha256,
+                "topology_sha256": hashlib.sha256(topology.read_bytes()).hexdigest(),
+                "source_inventory_sha256": hashlib.sha256(
+                    source_inventory.read_bytes()
+                ).hexdigest(),
+                "worker_abi_identity_sha256": hashlib.sha256(
+                    worker_abi.read_bytes()
+                ).hexdigest(),
+                "canonical_profile_stamp_sha256": hashlib.sha256(
+                    profile_stamp.read_bytes()
+                ).hexdigest(),
+                "canonical_profile_state_sha256": profile_state.read_text(
+                    encoding="ascii"
+                ).strip(),
+                "composition_record_sha256": hashlib.sha256(
+                    composition_record.read_bytes()
+                ).hexdigest(),
+                "composition_cmake_cache_sha256": hashlib.sha256(
+                    composition_cache.read_bytes()
+                ).hexdigest(),
+                "composition_timer_header_sha256": hashlib.sha256(
+                    composition_timer.read_bytes()
+                ).hexdigest(),
+                "wrapper_sha256": image_sha256,
+                "kernel_elf_sha256": hashlib.sha256(kernel.read_bytes()).hexdigest(),
+                "rootserver_sha256": root_sha256,
+                "rootserver_cpio_sha256": root_cpio_sha256,
+                "driver_runtime_cpio_sha256": hashlib.sha256(
+                    driver_archive.read_bytes()
+                ).hexdigest(),
+                "driver_runtime_manifest_sha256": hashlib.sha256(
+                    driver_manifest.read_bytes()
+                ).hexdigest(),
+                "worker_image_archive_sha256": hashlib.sha256(
+                    worker_archive.read_bytes()
+                ).hexdigest(),
+                "worker_image_manifest_sha256": hashlib.sha256(
+                    worker_manifest.read_bytes()
+                ).hexdigest(),
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    staged_artifacts = (
+        ("PI4_RUNTIME_DMA_MANIFEST", manifest),
+        ("PI4_RUNTIME_DMA_TOPOLOGY", topology),
+        ("PI4_RUNTIME_DMA_RUNTIME_CPIO", driver_archive),
+        ("PI4_RUNTIME_DMA_RUNTIME_UIMAGE", runtime_uimage),
+        ("PI4_RUNTIME_DMA_STAGED_IMAGE", image),
+        ("PI4_IMAGE_IDENTITY_METADATA", metadata),
+        ("PI4_IMAGE_IDENTITY_WRAPPER_PROVENANCE", provenance),
+        ("PI4_RUNTIME_DMA_CANONICAL_PROFILE_STAMP", profile_stamp),
+        ("PI4_RUNTIME_DMA_CANONICAL_PROFILE_STATE", profile_state),
+        ("PI4_RUNTIME_DMA_COMPOSITION_RECORD", composition_record),
+        ("PI4_RUNTIME_DMA_COMPOSITION_CMAKE_CACHE", composition_cache),
+        ("PI4_RUNTIME_DMA_COMPOSITION_TIMER_HEADER", composition_timer),
+        ("PI4_IMAGE_IDENTITY_KERNEL_ELF", kernel),
+        ("PI4_IMAGE_IDENTITY_ROOT_ELF", root),
+        ("PI4_IMAGE_IDENTITY_ROOT_CPIO", root_cpio),
+        ("PI4_IMAGE_IDENTITY_DRIVER_MANIFEST", driver_manifest),
+        ("PI4_IMAGE_IDENTITY_WORKER_ARCHIVE", worker_archive),
+        ("PI4_IMAGE_IDENTITY_WORKER_MANIFEST", worker_manifest),
+        ("PI4_IMAGE_IDENTITY_SOURCE_INVENTORY", source_inventory),
+        ("PI4_IMAGE_IDENTITY_WORKER_ABI", worker_abi),
+    )
+    stage_fields = [
+        "PI4_RUNTIME_DMA_PROOF_ARTIFACT_VERSION=2",
+        "PI4_RUNTIME_DMA_PROOF=target-build",
+        "PI4_RUNTIME_DMA_PROFILE=bounded-no-iommu",
+        "PI4_IMAGE_IDENTITY_SCHEME=cohesix-pi4-image-identity/v2",
+        f"PI4_IMAGE_IDENTITY_GIT_COMMIT={git_commit}",
+        f"PI4_IMAGE_IDENTITY_BUILD_TIMESTAMP={build_timestamp}",
+        f"PI4_IMAGE_IDENTITY_BUILD_ID={build_id}",
+        "PI4_IMAGE_IDENTITY_SOURCE_TREE_CLEAN=yes",
+    ]
+    for field, path in staged_artifacts:
+        raw = path.read_bytes()
+        stage_fields.extend(
+            (
+                f"{field}={path}",
+                f"{field}_SHA256={hashlib.sha256(raw).hexdigest()}",
+                f"{field}_BYTES={len(raw)}",
+            )
+        )
+    stage = tmp_path / "stage.env"
+    stage.write_text("\n".join(stage_fields) + "\n", encoding="utf-8")
+    capture_id = "a" * 32
+    capture_interface = "en0"
+    capture_started_utc = time.strftime(
+        "%Y-%m-%dT%H:%M:%SZ",
+        time.gmtime(capture_started_ns // 1_000_000_000),
+    )
+    capture_finished_utc = time.strftime(
+        "%Y-%m-%dT%H:%M:%SZ",
+        time.gmtime(capture_finished_ns // 1_000_000_000),
+    )
+    gateway_change_ms = capture_started_ns // 1_000_000
+    runtime = tmp_path / "pi4-cyw43-runtime-proof.env"
+    runtime.write_text(
+        "\n".join(
+            (
+                "PI4_RUNTIME_DMA_PROOF_ARTIFACT_VERSION=1",
+                f"PI4_RUNTIME_DMA_SERIAL_LOG={serial}",
+                f"PI4_RUNTIME_DMA_STAGE_BUILD_PROOF={stage}",
+                "PI4_RUNTIME_DMA_STAGE_BUILD_PROOF_SHA256="
+                + hashlib.sha256(stage.read_bytes()).hexdigest(),
+                "PI4_RUNTIME_DMA_PROOF=fresh-pi",
+                "PI4_RUNTIME_DMA_COUNTER_PROOF=counter-qualified",
+                "DRIVER_TASK_ACTIVE_NET=cyw43",
+                "DRIVER_TASK_DMA_BLOCKER=none",
+                "DRIVER_TASK_RING_CALL_OUTSTANDING=0",
+                "DRIVER_TASK_RING_CALL_UNRESOLVED_TIMEOUT=0",
+                "DRIVER_TASK_BOOTSTRAP_DEFERRED=0",
+                "TIMER_BACKEND=arch-counter",
+                "TIMER_CLOCK_HZ=54000000",
+                "TIMER_EL0_COUNTER=vct",
+                "DUMMY_TIMER_SEEN=no",
+                "PI4_RUNTIME_DMA_CAPTURE_PAIRING=controlled-concurrent",
+                f"PI4_RUNTIME_DMA_CAPTURE_ID={capture_id}",
+                f"PI4_RUNTIME_DMA_NETWORK_INTERFACE={capture_interface}",
+                f"PI4_RUNTIME_DMA_NETWORK_CAPTURE={capture}",
+                "PI4_RUNTIME_DMA_SERIAL_LOG_SHA256="
+                + hashlib.sha256(serial.read_bytes()).hexdigest(),
+                f"PI4_RUNTIME_DMA_SERIAL_LOG_BYTES={len(serial.read_bytes())}",
+                "PI4_RUNTIME_DMA_NETWORK_CAPTURE_SHA256="
+                + hashlib.sha256(capture.read_bytes()).hexdigest(),
+                f"PI4_RUNTIME_DMA_NETWORK_CAPTURE_BYTES={len(capture.read_bytes())}",
+                f"PI4_RUNTIME_DMA_CAPTURE_STARTED_AT_UTC={capture_started_utc}",
+                f"PI4_RUNTIME_DMA_CAPTURE_FINISHED_AT_UTC={capture_finished_utc}",
+                f"PI4_RUNTIME_DMA_CAPTURE_STARTED_UNIX_NS={capture_started_ns}",
+                f"PI4_RUNTIME_DMA_CAPTURE_FINISHED_UNIX_NS={capture_finished_ns}",
+                "PI4_RUNTIME_DMA_GATEWAY_CONTINUITY=connected-single-session",
+                "PI4_RUNTIME_DMA_GATEWAY_STATUS_ENDPOINT="
+                "http://127.0.0.1:8080/v1/meta/status",
+                "PI4_RUNTIME_DMA_GATEWAY_TARGET_HOST=192.168.50.23",
+                "PI4_RUNTIME_DMA_GATEWAY_TARGET_PORT=31337",
+                "PI4_RUNTIME_DMA_GATEWAY_START_CAPTURED_UNIX_NS="
+                f"{capture_started_ns + 1}",
+                "PI4_RUNTIME_DMA_GATEWAY_START_CONNECTED=true",
+                "PI4_RUNTIME_DMA_GATEWAY_START_CONNECTS=1",
+                "PI4_RUNTIME_DMA_GATEWAY_START_RECONNECTS=0",
+                "PI4_RUNTIME_DMA_GATEWAY_START_LAST_CHANGE_UNIX_MS="
+                f"{gateway_change_ms}",
+                "PI4_RUNTIME_DMA_GATEWAY_START_TARGET_HOST=192.168.50.23",
+                "PI4_RUNTIME_DMA_GATEWAY_START_TARGET_PORT=31337",
+                "PI4_RUNTIME_DMA_GATEWAY_END_CAPTURED_UNIX_NS="
+                f"{capture_finished_ns - 1}",
+                "PI4_RUNTIME_DMA_GATEWAY_END_CONNECTED=true",
+                "PI4_RUNTIME_DMA_GATEWAY_END_CONNECTS=1",
+                "PI4_RUNTIME_DMA_GATEWAY_END_RECONNECTS=0",
+                "PI4_RUNTIME_DMA_GATEWAY_END_LAST_CHANGE_UNIX_MS="
+                f"{gateway_change_ms}",
+                "PI4_RUNTIME_DMA_GATEWAY_END_TARGET_HOST=192.168.50.23",
+                "PI4_RUNTIME_DMA_GATEWAY_END_TARGET_PORT=31337",
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    bounds = executable_bounds()
+    bounds["manifest_sha256"] = manifest_sha256
+    acceptance = pi_acceptance_summary(manifest_sha256, root_sha256)
+    acceptance["topology_sha256"] = topology_sha256
+    acceptance["target_session"]["worker_archive_sha256"] = hashlib.sha256(
+        worker_archive.read_bytes()
+    ).hexdigest()
+    acceptance["target_session"]["worker_image_manifest_sha256"] = hashlib.sha256(
+        worker_manifest.read_bytes()
+    ).hexdigest()
+    acceptance["target_session"]["worker_abi_sha256"] = hashlib.sha256(
+        worker_abi.read_bytes()
+    ).hexdigest()
+    session_projection = {
+        "target": "pi4",
+        "source_sha256": hashlib.sha256(source_inventory.read_bytes()).hexdigest(),
+        "manifest_sha256": manifest_sha256,
+        "kernel_sha256": hashlib.sha256(kernel.read_bytes()).hexdigest(),
+        "root_image_sha256": root_sha256,
+        "driver_archive_sha256": hashlib.sha256(
+            driver_archive.read_bytes()
+        ).hexdigest(),
+        "driver_manifest_sha256": hashlib.sha256(
+            driver_manifest.read_bytes()
+        ).hexdigest(),
+        "worker_archive_sha256": hashlib.sha256(
+            worker_archive.read_bytes()
+        ).hexdigest(),
+        "worker_image_manifest_sha256": hashlib.sha256(
+            worker_manifest.read_bytes()
+        ).hexdigest(),
+        "worker_abi_sha256": hashlib.sha256(worker_abi.read_bytes()).hexdigest(),
+    }
+    cyw43_coexistence = tmp_path / "pi4-cyw43-coexistence.json"
+    cyw43_coexistence.write_text(
+        json.dumps(
+            {
+                "schema": rest_perf.PI_CYW43_COEXISTENCE_SCHEMA,
+                "producer": "pi4_gate_proof/v1",
+                "target": "pi4",
+                "transport": "wifi",
+                "capture_id": capture_id,
+                "captured_unix_s": capture_finished_ns // 1_000_000_000,
+                "selected": True,
+                "classification": "positive-exact-image-live-closure",
+                "session_projection": session_projection,
+                "topology_sha256": topology_sha256,
+                "image_identity": {
+                    "image_sha256": image_sha256,
+                    "image_id": image_id,
+                    "git_commit": git_commit,
+                    "build_timestamp": build_timestamp,
+                    "build_marker": build_marker,
+                    "build_marker_sha256": hashlib.sha256(
+                        build_marker.encode("ascii")
+                    ).hexdigest(),
+                },
+                "runtime": {
+                    "runtime_evidence_sha256": hashlib.sha256(
+                        runtime.read_bytes()
+                    ).hexdigest(),
+                    "serial_sha256": hashlib.sha256(
+                        serial.read_bytes()
+                    ).hexdigest(),
+                    "serial_bytes": len(serial.read_bytes()),
+                    "latest_boot_offset": 0,
+                    "normalized_gate_sha256": hashlib.sha256(
+                        PI_NORMALIZED_GATE_RAW
+                    ).hexdigest(),
+                },
+                "network_capture": {
+                    "sha256": hashlib.sha256(capture.read_bytes()).hexdigest(),
+                    "bytes": len(capture.read_bytes()),
+                    "format": "pcap-us",
+                    "link_type": 1,
+                    "interface": capture_interface,
+                    "capture_started_unix_ns": capture_started_ns,
+                    "capture_finished_unix_ns": capture_finished_ns,
+                },
+                "outcomes": {
+                    **rest_perf.PI_CYW43_REQUIRED_OUTCOMES,
+                    "tcp_accepts": 1,
+                    "tcp_auth_sessions": 1,
+                    "tcp_rx_bytes": 1,
+                },
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    target_session = {
+        **session_projection,
+        "cyw43_coexistence_record_sha256": hashlib.sha256(
+            cyw43_coexistence.read_bytes()
+        ).hexdigest(),
+    }
+    target_session_path = tmp_path / "target-session.json"
+    target_session_path.write_text(
+        json.dumps(target_session, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    acceptance["target_session"]["target_session_sha256"] = hashlib.sha256(
+        target_session_path.read_bytes()
+    ).hexdigest()
+    worker_component = tmp_path / "pi4-worker-component.json"
+    worker_component.write_text(
+        json.dumps(
+            {
+                "schema": "cohesix-worker-task-evidence/v1",
+                "record_kind": "target-component",
+                "target": "pi4",
+                "verdict": "PASS",
+                "target_session": target_session,
+                "topology_sha256": topology_sha256,
+                "raw_evidence": [
+                    {
+                        "id": identifier,
+                        "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                        "bytes": len(path.read_bytes()),
+                    }
+                    for identifier, path in (
+                        ("pi4-network-capture", capture),
+                        ("pi4-runtime-dma-proof", runtime),
+                        ("pi4-serial-boot", serial),
+                    )
+                ],
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    acceptance["evidence_sha256"] = hashlib.sha256(
+        worker_component.read_bytes()
+    ).hexdigest()
+    return runtime, target_session_path, bounds, acceptance
+
+
+def write_pi_genet_current_proof(
+    tmp_path: pathlib.Path,
+    acceptance: dict,
+) -> tuple[pathlib.Path, pathlib.Path, pathlib.Path, dict]:
+    """Write a separate current GENET boot beside retained WiFi siblings."""
+
+    started_ns = time.time_ns() - 1_000_000_000
+    serial = tmp_path / "pi4-genet-serial.log"
+    serial.write_text(
+        (tmp_path / "pi4-cyw43-serial.log")
+        .read_text(encoding="utf-8")
+        .replace("192.168.50.23", "192.168.10.50")
+        .replace("192.168.50.1", "192.168.10.1")
+        .replace("02:43:4f:48:58:32", "02:43:4f:48:58:31")
+        .replace("policy=wifi active=wifi", "policy=wired active=wired")
+        .replace("standby=wired", "standby=wifi"),
+        encoding="utf-8",
+    )
+    capture = tmp_path / "pi4-genet-network.pcap"
+    capture.write_bytes(
+        correlated_pcap_fixture(
+            time.time_ns(),
+            bytes.fromhex("02434f485831"),
+            bytes((192, 168, 10, 50)),
+        )
+    )
+    finished_ns = time.time_ns()
+    runtime = tmp_path / "pi4-genet-runtime-proof.env"
+    runtime.write_bytes((tmp_path / "pi4-cyw43-runtime-proof.env").read_bytes())
+    rewrite_env_fixture(
+        runtime,
+        {
+            "PI4_RUNTIME_DMA_SERIAL_LOG": str(serial),
+            "DRIVER_TASK_ACTIVE_NET": "genet",
+            "PI4_RUNTIME_DMA_CAPTURE_ID": "b" * 32,
+            "PI4_RUNTIME_DMA_NETWORK_INTERFACE": "en8",
+            "PI4_RUNTIME_DMA_NETWORK_CAPTURE": str(capture),
+            "PI4_RUNTIME_DMA_SERIAL_LOG_SHA256": hashlib.sha256(
+                serial.read_bytes()
+            ).hexdigest(),
+            "PI4_RUNTIME_DMA_SERIAL_LOG_BYTES": str(len(serial.read_bytes())),
+            "PI4_RUNTIME_DMA_NETWORK_CAPTURE_SHA256": hashlib.sha256(
+                capture.read_bytes()
+            ).hexdigest(),
+            "PI4_RUNTIME_DMA_NETWORK_CAPTURE_BYTES": str(len(capture.read_bytes())),
+            "PI4_RUNTIME_DMA_GATEWAY_TARGET_HOST": "192.168.10.50",
+            "PI4_RUNTIME_DMA_GATEWAY_START_TARGET_HOST": "192.168.10.50",
+            "PI4_RUNTIME_DMA_GATEWAY_END_TARGET_HOST": "192.168.10.50",
+            "PI4_RUNTIME_DMA_CAPTURE_STARTED_AT_UTC": time.strftime(
+                "%Y-%m-%dT%H:%M:%SZ",
+                time.gmtime(started_ns // 1_000_000_000),
+            ),
+            "PI4_RUNTIME_DMA_CAPTURE_FINISHED_AT_UTC": time.strftime(
+                "%Y-%m-%dT%H:%M:%SZ",
+                time.gmtime(finished_ns // 1_000_000_000),
+            ),
+            "PI4_RUNTIME_DMA_CAPTURE_STARTED_UNIX_NS": str(started_ns),
+            "PI4_RUNTIME_DMA_CAPTURE_FINISHED_UNIX_NS": str(finished_ns),
+            "PI4_RUNTIME_DMA_GATEWAY_START_CAPTURED_UNIX_NS": str(
+                started_ns + 1
+            ),
+            "PI4_RUNTIME_DMA_GATEWAY_START_LAST_CHANGE_UNIX_MS": str(
+                started_ns // 1_000_000
+            ),
+            "PI4_RUNTIME_DMA_GATEWAY_END_CAPTURED_UNIX_NS": str(
+                finished_ns - 1
+            ),
+            "PI4_RUNTIME_DMA_GATEWAY_END_LAST_CHANGE_UNIX_MS": str(
+                started_ns // 1_000_000
+            ),
+        },
+    )
+    session = json.loads(
+        (tmp_path / "target-session.json").read_text(encoding="utf-8")
+    )
+    component = json.loads(
+        (tmp_path / "pi4-worker-component.json").read_text(encoding="utf-8")
+    )
+    component["target_session"] = session
+    component["raw_evidence"] = [
+        {
+            "id": identifier,
+            "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            "bytes": len(path.read_bytes()),
+        }
+        for identifier, path in (
+            ("pi4-network-capture", capture),
+            ("pi4-runtime-dma-proof", runtime),
+            ("pi4-serial-boot", serial),
+        )
+    ]
+    component_path = tmp_path / "pi4-genet-worker-component.json"
+    component_path.write_text(
+        json.dumps(component, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    updated_acceptance = copy.deepcopy(acceptance)
+    updated_acceptance["evidence_sha256"] = hashlib.sha256(
+        component_path.read_bytes()
+    ).hexdigest()
+    return runtime, capture, component_path, updated_acceptance
+
+
+def stub_pi_canonical_validators(monkeypatch) -> None:
+    """Keep focused evidence tests independent of separately tested CLIs."""
+
+    monkeypatch.setattr(
+        rest_perf,
+        "validate_pi_archive_manifests",
+        lambda *_args: None,
+    )
+    monkeypatch.setattr(
+        rest_perf,
+        "validate_pi_image_identity",
+        lambda *_args: None,
+    )
+
+
+def test_pi_live_log_is_explicitly_nonclaiming() -> None:
+    class PiClient:
+        def status(self) -> dict:
+            return {"connected": True, "backend_class": "console-projection"}
+
+    assert rest_perf.gateway_population_axes(
+        PiClient(),
+        rest_perf.POPULATION_EXECUTABLE_LOG,
+        executable_bounds(),
+        rest_perf.BENCHMARK_TARGET_PI4,
+    ) == ("console-projection", "none")
+    assert rest_perf.gateway_population_axes(
+        PiClient(),
+        rest_perf.POPULATION_EXECUTABLE_LOG,
+        executable_bounds(),
+        rest_perf.BENCHMARK_TARGET_QEMU,
+    ) == ("console-projection", "qemu-live-log")
+
+
+def test_pi_target_evidence_is_derived_from_exact_artifacts(
+    tmp_path: pathlib.Path,
+    monkeypatch,
+) -> None:
+    runtime, session_path, bounds, acceptance = write_pi_benchmark_proof_chain(
+        tmp_path
+    )
+    stub_pi_canonical_validators(monkeypatch)
+    session, session_raw = rest_perf.load_target_session_binding_snapshot(
+        str(session_path), "pi4", bounds, None
+    )
+    observed: list[tuple[bytes, str]] = []
+    monkeypatch.setattr(
+        rest_perf,
+        "validate_pi_network_log",
+        lambda path, transport: (
+            observed.append((path, transport)) or PI_NORMALIZED_GATE_RAW
+        ),
+    )
+
+    proof = rest_perf.load_pi_benchmark_target_evidence(
+        str(runtime),
+        str(tmp_path / "pi4-cyw43-network.pcap"),
+        str(tmp_path / "pi4-cyw43-coexistence.json"),
+        str(session_path),
+        rest_perf.BENCHMARK_TRANSPORT_WIFI,
+        bounds,
+        session,
+        60,
+        now_unix_s=time.time(),
+    )
+
+    assert proof.proof_class == "fresh-pi"
+    assert proof.component_acceptance_sha256 is None
+    assert proof.manifest_sha256 == bounds["manifest_sha256"]
+    assert proof.image_sha256 == hashlib.sha256(b"sealed-pi-image").hexdigest()
+    assert proof.network_capture_sha256 == hashlib.sha256(
+        (tmp_path / "pi4-cyw43-network.pcap").read_bytes()
+    ).hexdigest()
+    assert proof.network_evidence_sha256 == rest_perf.pi_network_evidence_sha256(
+        (tmp_path / "pi4-cyw43-serial.log").read_bytes(),
+        (tmp_path / "pi4-cyw43-network.pcap").read_bytes(),
+        (tmp_path / "pi4-cyw43-coexistence.json").read_bytes(),
+    )
+    assert "source_sha256" not in acceptance["target_session"]
+    execution_binding = rest_perf.pi_performance_execution_binding(
+        session,
+        session_raw,
+        proof,
+    )
+    assert execution_binding["record_kind"] == "performance-execution-binding"
+    assert execution_binding["performance_qualification_sha256"] == (
+        proof.evidence_sha256
+    )
+    assert len(execution_binding["workers"]) == 3
+
+    class PiClient:
+        def status(self) -> dict:
+            return {"connected": True, "backend_class": "console-projection"}
+
+    assert rest_perf.gateway_population_axes(
+        PiClient(),
+        rest_perf.POPULATION_EXECUTABLE,
+        bounds,
+        rest_perf.BENCHMARK_TARGET_PI4,
+        proof,
+    ) == ("console-projection", "fresh-pi")
+    assert len(observed) == 1
+    assert observed[0][0] == (tmp_path / "pi4-cyw43-serial.log").read_bytes()
+    assert observed[0][1] == rest_perf.BENCHMARK_TRANSPORT_WIFI
+
+
+def test_genet_target_uses_separate_current_boot_and_retained_wifi_closure(
+    tmp_path: pathlib.Path,
+    monkeypatch,
+) -> None:
+    _wifi_runtime, session_path, bounds, acceptance = (
+        write_pi_benchmark_proof_chain(tmp_path)
+    )
+    runtime, capture, component, acceptance = write_pi_genet_current_proof(
+        tmp_path,
+        acceptance,
+    )
+    stub_pi_canonical_validators(monkeypatch)
+    monkeypatch.setattr(
+        rest_perf,
+        "validate_pi_network_log",
+        lambda *_args: PI_NORMALIZED_GATE_RAW,
+    )
+    session = rest_perf.load_target_session_binding(
+        str(session_path),
+        "pi4",
+        bounds,
+        acceptance,
+    )
+
+    proof = rest_perf.load_pi_benchmark_target_evidence(
+        str(runtime),
+        str(capture),
+        str(tmp_path / "pi4-cyw43-coexistence.json"),
+        str(session_path),
+        rest_perf.BENCHMARK_TRANSPORT_GENET,
+        bounds,
+        session,
+        60,
+        now_unix_s=time.time(),
+    )
+
+    assert proof.transport == rest_perf.BENCHMARK_TRANSPORT_GENET
+    assert proof.runtime_evidence_sha256 == hashlib.sha256(
+        runtime.read_bytes()
+    ).hexdigest()
+    assert proof.cyw43_coexistence_sha256 == session[
+        "cyw43_coexistence_record_sha256"
+    ]
+
+
+def test_retained_wifi_capture_uses_hashes_not_original_paths_or_copy_mtimes(
+    tmp_path: pathlib.Path,
+) -> None:
+    runtime_path, _session_path, _bounds, _acceptance = (
+        write_pi_benchmark_proof_chain(tmp_path)
+    )
+    runtime = rest_perf.parse_exact_env(
+        runtime_path.read_bytes(),
+        "retained runtime",
+    )
+    runtime["PI4_RUNTIME_DMA_SERIAL_LOG"] = "/removed/live/pi4-serial.log"
+    runtime["PI4_RUNTIME_DMA_NETWORK_CAPTURE"] = "/removed/live/pi4.pcap"
+    old_timestamp = time.time() - 10_000
+    os.utime(tmp_path / "pi4-cyw43-serial.log", (old_timestamp, old_timestamp))
+    os.utime(tmp_path / "pi4-cyw43-network.pcap", (old_timestamp, old_timestamp))
+
+    capture_id, interface, started_ns, finished_ns = (
+        rest_perf.validate_retained_pi_capture(
+            runtime,
+            (tmp_path / "pi4-cyw43-serial.log").read_bytes(),
+            (tmp_path / "pi4-cyw43-network.pcap").read_bytes(),
+            60,
+            time.time(),
+        )
+    )
+
+    assert capture_id == "a" * 32
+    assert interface == "en0"
+    assert started_ns < finished_ns
+
+
+def test_pi_capture_requires_serial_selected_lane_dhcp_and_console_flow(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A fresh but unrelated pcap cannot qualify the serial-selected Pi lane."""
+
+    write_pi_benchmark_proof_chain(tmp_path)
+    serial_raw = (tmp_path / "pi4-cyw43-serial.log").read_bytes()
+    capture_raw = (tmp_path / "pi4-cyw43-network.pcap").read_bytes()
+    identity = rest_perf.validate_pi_correlated_network_capture(
+        capture_raw,
+        serial_raw,
+        rest_perf.BENCHMARK_TRANSPORT_WIFI,
+    )
+    assert identity == {
+        "transport": "wifi",
+        "station_mac": "02:43:4f:48:58:32",
+        "ipv4": "192.168.50.23",
+        "dhcp_client_frames": 1,
+        "console_payload_frames": 1,
+    }
+
+    unrelated = correlated_pcap_fixture(
+        time.time_ns(),
+        bytes.fromhex("02434f485899"),
+        bytes((192, 168, 50, 99)),
+    )
+    with pytest.raises(rest_perf.RestError, match="selected-lane DHCP"):
+        rest_perf.validate_pi_correlated_network_capture(
+            unrelated,
+            serial_raw,
+            rest_perf.BENCHMARK_TRANSPORT_WIFI,
+        )
+    with pytest.raises(rest_perf.RestError, match="selected lane"):
+        rest_perf.validate_pi_correlated_network_capture(
+            capture_raw,
+            serial_raw,
+            rest_perf.BENCHMARK_TRANSPORT_GENET,
+        )
+
+
+def test_cyw43_v2_rejects_semantic_outcome_drift(
+    tmp_path: pathlib.Path,
+) -> None:
+    runtime_path, session_path, bounds, acceptance = write_pi_benchmark_proof_chain(
+        tmp_path
+    )
+    session = rest_perf.load_target_session_binding(
+        str(session_path),
+        "pi4",
+        bounds,
+        acceptance,
+    )
+    record_path = tmp_path / "pi4-cyw43-coexistence.json"
+    record = json.loads(record_path.read_text(encoding="utf-8"))
+    record["outcomes"]["nettest"] = False
+    runtime_raw = runtime_path.read_bytes()
+    serial_raw = (tmp_path / "pi4-cyw43-serial.log").read_bytes()
+    capture_raw = (tmp_path / "pi4-cyw43-network.pcap").read_bytes()
+    capture_format, link_type, first_ns, last_ns = (
+        rest_perf.validate_pi_network_capture(capture_raw)
+    )
+    capture_id, interface, started_ns, finished_ns = (
+        rest_perf.validate_retained_pi_capture(
+            rest_perf.parse_exact_env(runtime_raw, "retained runtime"),
+            serial_raw,
+            capture_raw,
+            60,
+            time.time(),
+        )
+    )
+    metadata = json.loads(
+        (tmp_path / "pi4-image-identity.json").read_text(encoding="utf-8")
+    )
+
+    with pytest.raises(rest_perf.RestError, match="not live exact-image boot proof"):
+        rest_perf.validate_pi_cyw43_coexistence_record(
+            (json.dumps(record, sort_keys=True) + "\n").encode("utf-8"),
+            session,
+            acceptance["topology_sha256"],
+            metadata,
+            hashlib.sha256(
+                (tmp_path / "cohesix-image-arm-bcm2711").read_bytes()
+            ).hexdigest(),
+            runtime_raw,
+            serial_raw,
+            0,
+            PI_NORMALIZED_GATE_RAW,
+            capture_raw,
+            capture_format,
+            link_type,
+            first_ns,
+            last_ns,
+            capture_id,
+            interface,
+            started_ns,
+            finished_ns,
+        )
+
+
+def test_cyw43_normalized_gate_rejects_deferred_driver_bootstrap() -> None:
+    """Qualified WiFi cannot retain deferred linked-driver bootstrap work."""
+
+    deferred = PI_NORMALIZED_GATE_RAW.replace(
+        b"DRIVER_TASK_BOOTSTRAP_DEFERRED=0",
+        b"DRIVER_TASK_BOOTSTRAP_DEFERRED=1",
+    )
+
+    with pytest.raises(rest_perf.RestError, match="exact positive outcomes"):
+        rest_perf.pi_cyw43_outcomes_from_normalized_gate(deferred)
+
+
+def test_separate_pi_component_acceptance_rejects_wrong_same_boot_raw_row(
+    tmp_path: pathlib.Path,
+    monkeypatch,
+) -> None:
+    runtime, session_path, bounds, acceptance = write_pi_benchmark_proof_chain(
+        tmp_path
+    )
+    component_path = tmp_path / "pi4-worker-component.json"
+    component = json.loads(component_path.read_text(encoding="utf-8"))
+    component["raw_evidence"][0]["sha256"] = "0" * 64
+    component_path.write_text(
+        json.dumps(component, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    acceptance["evidence_sha256"] = hashlib.sha256(
+        component_path.read_bytes()
+    ).hexdigest()
+    with pytest.raises(rest_perf.RestError, match="exact same-boot"):
+        rest_perf.validate_pi_worker_component(
+            component_path.read_bytes(),
+            acceptance["evidence_sha256"],
+            component["target_session"],
+            acceptance["topology_sha256"],
+            (tmp_path / "pi4-cyw43-serial.log").read_bytes(),
+            (tmp_path / "pi4-cyw43-network.pcap").read_bytes(),
+            runtime.read_bytes(),
+        )
+
+
+def test_target_session_binding_rejects_bytes_not_accepted_by_gateway(
+    tmp_path: pathlib.Path,
+) -> None:
+    _runtime, session_path, bounds, acceptance = write_pi_benchmark_proof_chain(
+        tmp_path
+    )
+    session = json.loads(session_path.read_text(encoding="utf-8"))
+    session["source_sha256"] = "0" * 64
+    session_path.write_text(
+        json.dumps(session, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(rest_perf.RestError, match="accepted component evidence"):
+        rest_perf.load_target_session_binding(
+            str(session_path),
+            "pi4",
+            bounds,
+            acceptance,
+        )
+
+
+def test_target_session_revalidation_rejects_changed_exact_bytes_and_binding(
+    tmp_path: pathlib.Path,
+) -> None:
+    _runtime, session_path, bounds, acceptance = write_pi_benchmark_proof_chain(
+        tmp_path
+    )
+    session, raw = rest_perf.load_target_session_binding_snapshot(
+        str(session_path), "pi4", bounds, acceptance
+    )
+    changed_session = dict(session)
+    changed_session["source_sha256"] = "0" * 64
+    session_path.write_text(
+        json.dumps(changed_session, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+    refreshed_acceptance = copy.deepcopy(acceptance)
+    refreshed_acceptance["target_session"]["target_session_sha256"] = (
+        hashlib.sha256(session_path.read_bytes()).hexdigest()
+    )
+
+    with pytest.raises(rest_perf.RestError, match="changed during benchmark"):
+        rest_perf.revalidate_target_session_binding(
+            str(session_path),
+            "pi4",
+            bounds,
+            refreshed_acceptance,
+            session,
+            raw,
+        )
+
+
+def test_frozen_artifact_rejects_same_size_in_place_mutation(
+    tmp_path: pathlib.Path,
+    monkeypatch,
+) -> None:
+    artifact = tmp_path / "evidence.bin"
+    artifact.write_bytes(b"before")
+    initial = artifact.stat()
+    real_fstat = os.fstat
+    changed = False
+
+    def changing_fstat(descriptor: int):
+        nonlocal changed
+        metadata = real_fstat(descriptor)
+        if metadata.st_ino == initial.st_ino and not changed:
+            changed = True
+            with artifact.open("r+b") as handle:
+                handle.write(b"after!")
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.utime(
+                artifact,
+                ns=(initial.st_atime_ns, initial.st_mtime_ns + 1_000_000_000),
+            )
+        return metadata
+
+    monkeypatch.setattr(rest_perf.os, "fstat", changing_fstat)
+    with pytest.raises(rest_perf.RestError, match="changed during bounded read"):
+        rest_perf.read_frozen_artifact(str(artifact), "evidence", 1024)
+
+
+def test_frozen_artifact_rejects_symlinked_ancestor(
+    tmp_path: pathlib.Path,
+) -> None:
+    real_directory = tmp_path / "real"
+    real_directory.mkdir()
+    (real_directory / "evidence.bin").write_bytes(b"evidence")
+    linked_directory = tmp_path / "linked"
+    linked_directory.symlink_to(real_directory, target_is_directory=True)
+
+    with pytest.raises(rest_perf.RestError, match="cannot open evidence safely"):
+        rest_perf.read_frozen_artifact(
+            str(linked_directory / "evidence.bin"),
+            "evidence",
+            1024,
+        )
+
+
+def test_pi_runtime_uimage_requires_exact_payload_and_crcs() -> None:
+    payload = b"exact-runtime-cpio"
+    wrapped = uimage_fixture(payload)
+    rest_perf.validate_pi_runtime_uimage(wrapped, payload)
+
+    damaged_header = bytearray(wrapped)
+    damaged_header[8] ^= 1
+    with pytest.raises(rest_perf.RestError, match="header CRC"):
+        rest_perf.validate_pi_runtime_uimage(bytes(damaged_header), payload)
+
+    damaged_payload = bytearray(wrapped)
+    damaged_payload[-1] ^= 1
+    with pytest.raises(rest_perf.RestError, match="exact raw CPIO"):
+        rest_perf.validate_pi_runtime_uimage(bytes(damaged_payload), payload)
+
+
+def test_pi_root_cpio_requires_only_exact_kernel_and_root_members() -> None:
+    kernel = b"kernel"
+    root = b"root"
+    exact = newc_archive_fixture({"kernel.elf": kernel, "rootserver": root})
+    rest_perf.validate_pi_root_cpio(exact, kernel, root)
+
+    with pytest.raises(rest_perf.RestError, match="exact kernel/root members"):
+        rest_perf.validate_pi_root_cpio(
+            newc_archive_fixture(
+                {
+                    "extra": b"unexpected",
+                    "kernel.elf": kernel,
+                    "rootserver": root,
+                }
+            ),
+            kernel,
+            root,
+        )
+    with pytest.raises(rest_perf.RestError, match="exact kernel/root members"):
+        rest_perf.validate_pi_root_cpio(exact, b"other-kernel", root)
+
+
+def test_pi_source_inventory_binds_one_canonical_manifest_row() -> None:
+    manifest_sha256 = "1" * 64
+    inventory = {
+        "schema": "cohesix-source-inventory/v1",
+        "algorithm": "git-visible-paths-sha256",
+        "entries": [
+            {
+                "path": "configs/root_task_pi4_uboot_aarch64.toml",
+                "kind": "file",
+                "mode": 0o644,
+                "sha256": manifest_sha256,
+                "bytes": 10,
+            }
+        ],
+    }
+    raw = json.dumps(inventory, separators=(",", ":")).encode("utf-8")
+    assert rest_perf.pi_source_manifest_sha256(raw) == manifest_sha256
+
+    inventory["entries"].append(copy.deepcopy(inventory["entries"][0]))
+    duplicate = json.dumps(inventory, separators=(",", ":")).encode("utf-8")
+    with pytest.raises(rest_perf.RestError, match="invalid entry"):
+        rest_perf.pi_source_manifest_sha256(duplicate)
+
+
+def test_pi_archive_validator_rejects_validation_time_mutation(
+    tmp_path: pathlib.Path,
+    monkeypatch,
+) -> None:
+    paths = [tmp_path / name for name in ("driver.cpio", "driver.json", "worker.cpio", "worker.json")]
+    for index, path in enumerate(paths):
+        path.write_bytes(f"artifact-{index}".encode("ascii"))
+    calls = []
+
+    def validate(command, **_kwargs):
+        calls.append(command)
+        if len(calls) == 2:
+            paths[0].write_bytes(b"mutated-driver")
+        return subprocess.CompletedProcess(command, 0, b"", b"")
+
+    monkeypatch.setattr(rest_perf.subprocess, "run", validate)
+    with pytest.raises(rest_perf.RestError, match="changed during canonical validation"):
+        rest_perf.validate_pi_archive_manifests(
+            str(paths[0]),
+            b"artifact-0",
+            str(paths[1]),
+            b"artifact-1",
+            str(paths[2]),
+            b"artifact-2",
+            str(paths[3]),
+            b"artifact-3",
+        )
+    assert len(calls) == 2
+
+
+def test_pi_image_validator_rejects_validation_time_mutation(
+    tmp_path: pathlib.Path,
+    monkeypatch,
+) -> None:
+    paths = [
+        tmp_path / name
+        for name in ("image", "metadata.json", "rootserver", "root.cpio")
+    ]
+    for index, path in enumerate(paths):
+        path.write_bytes(f"artifact-{index}".encode("ascii"))
+
+    def validate(command, **_kwargs):
+        paths[0].write_bytes(b"mutated-image")
+        return subprocess.CompletedProcess(command, 0, b"", b"")
+
+    monkeypatch.setattr(rest_perf.subprocess, "run", validate)
+    with pytest.raises(rest_perf.RestError, match="changed during canonical validation"):
+        rest_perf.validate_pi_image_identity(
+            str(paths[0]),
+            b"artifact-0",
+            str(paths[1]),
+            b"artifact-1",
+            str(paths[2]),
+            b"artifact-2",
+            str(paths[3]),
+            b"artifact-3",
+            "1" * 40,
+            "2" * 64,
+        )
+
+
+def test_pi_target_evidence_revalidation_rejects_changed_serial_bytes(
+    tmp_path: pathlib.Path,
+    monkeypatch,
+) -> None:
+    runtime, session_path, bounds, acceptance = write_pi_benchmark_proof_chain(
+        tmp_path
+    )
+    stub_pi_canonical_validators(monkeypatch)
+    session = rest_perf.load_target_session_binding(
+        str(session_path), "pi4", bounds, acceptance
+    )
+    monkeypatch.setattr(
+        rest_perf,
+        "validate_pi_network_log",
+        lambda *_args: PI_NORMALIZED_GATE_RAW,
+    )
+    initial = rest_perf.load_pi_benchmark_target_evidence(
+        str(runtime),
+        str(tmp_path / "pi4-cyw43-network.pcap"),
+        str(tmp_path / "pi4-cyw43-coexistence.json"),
+        str(session_path),
+        rest_perf.BENCHMARK_TRANSPORT_WIFI,
+        bounds,
+        session,
+        60,
+        now_unix_s=time.time(),
+    )
+    serial_path = tmp_path / "pi4-cyw43-serial.log"
+    with serial_path.open("a", encoding="utf-8") as handle:
+        handle.write("benchmark progress on the same boot\n")
+    with pytest.raises(rest_perf.RestError, match="capture binding differs from bytes"):
+        rest_perf.load_pi_benchmark_target_evidence(
+            str(runtime),
+            str(tmp_path / "pi4-cyw43-network.pcap"),
+            str(tmp_path / "pi4-cyw43-coexistence.json"),
+            str(session_path),
+            rest_perf.BENCHMARK_TRANSPORT_WIFI,
+            bounds,
+            session,
+            60,
+            now_unix_s=time.time(),
+            previous_evidence=initial,
+        )
+
+
+def test_pi_target_evidence_rejects_changed_packet_capture(
+    tmp_path: pathlib.Path,
+    monkeypatch,
+) -> None:
+    runtime, session_path, bounds, acceptance = write_pi_benchmark_proof_chain(
+        tmp_path
+    )
+    stub_pi_canonical_validators(monkeypatch)
+    session = rest_perf.load_target_session_binding(
+        str(session_path), "pi4", bounds, acceptance
+    )
+    monkeypatch.setattr(
+        rest_perf,
+        "validate_pi_network_log",
+        lambda *_args: PI_NORMALIZED_GATE_RAW,
+    )
+    capture_path = tmp_path / "pi4-cyw43-network.pcap"
+    initial = rest_perf.load_pi_benchmark_target_evidence(
+        str(runtime),
+        str(capture_path),
+        str(tmp_path / "pi4-cyw43-coexistence.json"),
+        str(session_path),
+        rest_perf.BENCHMARK_TRANSPORT_WIFI,
+        bounds,
+        session,
+        60,
+        now_unix_s=time.time(),
+    )
+    changed = bytearray(capture_path.read_bytes())
+    changed[-1] ^= 1
+    capture_path.write_bytes(changed)
+
+    with pytest.raises(rest_perf.RestError, match="capture binding differs from bytes"):
+        rest_perf.load_pi_benchmark_target_evidence(
+            str(runtime),
+            str(capture_path),
+            str(tmp_path / "pi4-cyw43-coexistence.json"),
+            str(session_path),
+            rest_perf.BENCHMARK_TRANSPORT_WIFI,
+            bounds,
+            session,
+            60,
+            now_unix_s=time.time(),
+            previous_evidence=initial,
+        )
+
+
+def test_pi_target_evidence_binds_driver_archive_to_full_target_session(
+    tmp_path: pathlib.Path,
+    monkeypatch,
+) -> None:
+    runtime, session_path, bounds, acceptance = write_pi_benchmark_proof_chain(
+        tmp_path
+    )
+    stub_pi_canonical_validators(monkeypatch)
+    session = rest_perf.load_target_session_binding(
+        str(session_path), "pi4", bounds, acceptance
+    )
+    session["driver_archive_sha256"] = "0" * 64
+    monkeypatch.setattr(
+        rest_perf,
+        "validate_pi_network_log",
+        lambda *_args: PI_NORMALIZED_GATE_RAW,
+    )
+
+    with pytest.raises(rest_perf.RestError, match="target-session bytes"):
+        rest_perf.load_pi_benchmark_target_evidence(
+            str(runtime),
+            str(tmp_path / "pi4-cyw43-network.pcap"),
+            str(tmp_path / "pi4-cyw43-coexistence.json"),
+            str(session_path),
+            rest_perf.BENCHMARK_TRANSPORT_WIFI,
+            bounds,
+            session,
+            60,
+            now_unix_s=time.time(),
+        )
+
+    runtime, session_path, bounds, acceptance = write_pi_benchmark_proof_chain(
+        tmp_path
+    )
+    stub_pi_canonical_validators(monkeypatch)
+    session = rest_perf.load_target_session_binding(
+        str(session_path), "pi4", bounds, acceptance
+    )
+    (tmp_path / "cohesix-driver-runtimes.cpio").write_bytes(b"tampered-driver")
+    with pytest.raises(rest_perf.RestError, match="runtime CPIO hash"):
+        rest_perf.load_pi_benchmark_target_evidence(
+            str(runtime),
+            str(tmp_path / "pi4-cyw43-network.pcap"),
+            str(tmp_path / "pi4-cyw43-coexistence.json"),
+            str(session_path),
+            rest_perf.BENCHMARK_TRANSPORT_WIFI,
+            bounds,
+            session,
+            60,
+            now_unix_s=time.time(),
+        )
+
+
+@pytest.mark.parametrize(
+    "field",
+    sorted(rest_perf.TARGET_SESSION_KEYS - {"target"}),
+)
+def test_pi_target_evidence_binds_every_full_session_artifact_hash(
+    tmp_path: pathlib.Path,
+    monkeypatch,
+    field: str,
+) -> None:
+    runtime, session_path, bounds, acceptance = write_pi_benchmark_proof_chain(
+        tmp_path
+    )
+    stub_pi_canonical_validators(monkeypatch)
+    session = rest_perf.load_target_session_binding(
+        str(session_path), "pi4", bounds, acceptance
+    )
+    session[field] = "0" * 64
+    monkeypatch.setattr(
+        rest_perf,
+        "validate_pi_network_log",
+        lambda *_args: PI_NORMALIZED_GATE_RAW,
+    )
+
+    with pytest.raises(rest_perf.RestError, match="target-session bytes"):
+        rest_perf.load_pi_benchmark_target_evidence(
+            str(runtime),
+            str(tmp_path / "pi4-cyw43-network.pcap"),
+            str(tmp_path / "pi4-cyw43-coexistence.json"),
+            str(session_path),
+            rest_perf.BENCHMARK_TRANSPORT_WIFI,
+            bounds,
+            session,
+            60,
+            now_unix_s=time.time(),
+        )
+
+
+@pytest.mark.parametrize(
+    "field",
+    (
+        "source_manifest_sha256",
+        "canonical_profile_stamp_sha256",
+        "canonical_profile_state_sha256",
+        "composition_record_sha256",
+        "composition_cmake_cache_sha256",
+        "composition_timer_header_sha256",
+        "wrapper_sha256",
+    ),
+)
+def test_pi_target_evidence_rejects_v5_provenance_graph_drift(
+    tmp_path: pathlib.Path,
+    monkeypatch,
+    field: str,
+) -> None:
+    runtime, session_path, bounds, acceptance = write_pi_benchmark_proof_chain(
+        tmp_path
+    )
+    provenance_path = tmp_path / "cohesix-image-arm-bcm2711.provenance.json"
+    provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
+    provenance[field] = "0" * 64
+    provenance_path.write_text(
+        json.dumps(provenance, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    stage_path = tmp_path / "stage.env"
+    provenance_raw = provenance_path.read_bytes()
+    rewrite_env_fixture(
+        stage_path,
+        {
+            "PI4_IMAGE_IDENTITY_WRAPPER_PROVENANCE_SHA256": hashlib.sha256(
+                provenance_raw
+            ).hexdigest(),
+            "PI4_IMAGE_IDENTITY_WRAPPER_PROVENANCE_BYTES": str(
+                len(provenance_raw)
+            ),
+        },
+    )
+    rewrite_env_fixture(
+        runtime,
+        {
+            "PI4_RUNTIME_DMA_STAGE_BUILD_PROOF_SHA256": hashlib.sha256(
+                stage_path.read_bytes()
+            ).hexdigest()
+        },
+    )
+    stub_pi_canonical_validators(monkeypatch)
+    monkeypatch.setattr(
+        rest_perf,
+        "validate_pi_network_log",
+        lambda *_args: PI_NORMALIZED_GATE_RAW,
+    )
+    session = rest_perf.load_target_session_binding(
+        str(session_path), "pi4", bounds, acceptance
+    )
+
+    with pytest.raises(rest_perf.RestError, match="metadata differs"):
+        rest_perf.load_pi_benchmark_target_evidence(
+            str(runtime),
+            str(tmp_path / "pi4-cyw43-network.pcap"),
+            str(tmp_path / "pi4-cyw43-coexistence.json"),
+            str(session_path),
+            rest_perf.BENCHMARK_TRANSPORT_WIFI,
+            bounds,
+            session,
+            60,
+            now_unix_s=time.time(),
+        )
+
+def test_pi_target_evidence_rejects_image_tampering_and_stale_runtime(
+    tmp_path: pathlib.Path,
+    monkeypatch,
+) -> None:
+    runtime, session_path, bounds, acceptance = write_pi_benchmark_proof_chain(
+        tmp_path
+    )
+    stub_pi_canonical_validators(monkeypatch)
+    session = rest_perf.load_target_session_binding(
+        str(session_path), "pi4", bounds, acceptance
+    )
+    monkeypatch.setattr(
+        rest_perf,
+        "validate_pi_network_log",
+        lambda *_args: PI_NORMALIZED_GATE_RAW,
+    )
+    (tmp_path / "cohesix-image-arm-bcm2711").write_bytes(b"tampered")
+    try:
+        rest_perf.load_pi_benchmark_target_evidence(
+            str(runtime),
+            str(tmp_path / "pi4-cyw43-network.pcap"),
+            str(tmp_path / "pi4-cyw43-coexistence.json"),
+            str(session_path),
+            rest_perf.BENCHMARK_TRANSPORT_WIFI,
+            bounds,
+            session,
+            60,
+            now_unix_s=time.time(),
+        )
+    except rest_perf.RestError as exc:
+        assert "staged image hash" in str(exc)
+    else:
+        raise AssertionError("tampered Pi image must fail closed")
+
+    runtime, session_path, bounds, acceptance = write_pi_benchmark_proof_chain(
+        tmp_path
+    )
+    session = rest_perf.load_target_session_binding(
+        str(session_path), "pi4", bounds, acceptance
+    )
+    stale = time.time() - 120
+    os.utime(runtime, (stale, stale))
+    try:
+        rest_perf.load_pi_benchmark_target_evidence(
+            str(runtime),
+            str(tmp_path / "pi4-cyw43-network.pcap"),
+            str(tmp_path / "pi4-cyw43-coexistence.json"),
+            str(session_path),
+            rest_perf.BENCHMARK_TRANSPORT_WIFI,
+            bounds,
+            session,
+            60,
+            now_unix_s=time.time(),
+        )
+    except rest_perf.RestError as exc:
+        assert "stale" in str(exc)
+    else:
+        raise AssertionError("stale Pi runtime proof must fail closed")
+
+
+def test_pi_target_evidence_rejects_metadata_and_latest_boot_marker_tampering(
+    tmp_path: pathlib.Path,
+    monkeypatch,
+) -> None:
+    runtime, session_path, bounds, acceptance = write_pi_benchmark_proof_chain(
+        tmp_path
+    )
+    stub_pi_canonical_validators(monkeypatch)
+    session = rest_perf.load_target_session_binding(
+        str(session_path), "pi4", bounds, acceptance
+    )
+    monkeypatch.setattr(
+        rest_perf,
+        "validate_pi_network_log",
+        lambda *_args: PI_NORMALIZED_GATE_RAW,
+    )
+    metadata_path = tmp_path / "pi4-image-identity.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata["image_sha256"] = "f" * 64
+    metadata_path.write_text(json.dumps(metadata) + "\n", encoding="utf-8")
+    try:
+        rest_perf.load_pi_benchmark_target_evidence(
+            str(runtime),
+            str(tmp_path / "pi4-cyw43-network.pcap"),
+            str(tmp_path / "pi4-cyw43-coexistence.json"),
+            str(session_path),
+            rest_perf.BENCHMARK_TRANSPORT_WIFI,
+            bounds,
+            session,
+            60,
+            now_unix_s=time.time(),
+        )
+    except rest_perf.RestError as exc:
+        assert "metadata hash" in str(exc)
+    else:
+        raise AssertionError("tampered image metadata must fail closed")
+
+    runtime, session_path, bounds, acceptance = write_pi_benchmark_proof_chain(
+        tmp_path
+    )
+    session = rest_perf.load_target_session_binding(
+        str(session_path), "pi4", bounds, acceptance
+    )
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    correct_marker = metadata["build_marker"]
+    wrong_marker = correct_marker.replace(
+        f"image-id={metadata['image_id']}", f"image-id={'4' * 64}"
+    )
+    tampered_serial = (
+        "U-Boot 2026.01\n"
+        "[cohesix:root-task] Cohesix boot: root-task online\n"
+        f"{correct_marker}\n"
+        "U-Boot 2026.01\n"
+        "[cohesix:root-task] Cohesix boot: root-task online\n"
+        f"{wrong_marker}\n"
+    ).encode("utf-8")
+    with pytest.raises(rest_perf.RestError, match="latest Pi serial boot"):
+        rest_perf.validate_serial_image_identity(
+            tampered_serial,
+            metadata,
+        )
+
+
+def test_acceptance_allows_passive_zero_sc_but_rejects_mixed_zero() -> None:
+    class Accepted:
+        def __init__(self, period_us: int) -> None:
+            self.period_us = period_us
+
+        def status(self) -> dict:
+            acceptance = acceptance_summary()
+            for worker in acceptance["workers"]:
+                worker["scheduling_context"] = {
+                    "budget_us": 0,
+                    "period_us": self.period_us,
+                }
+                worker["object_inventory"]["scheduling_contexts"] = 0
+            return {
+                "connected": True,
+                "backend_class": "console-projection",
+                "worker_acceptance": acceptance,
+            }
+
+    assert rest_perf.executable_qemu_acceptance_binding(
+        Accepted(0), executable_bounds()
+    )["workers"]
+    try:
+        rest_perf.executable_qemu_acceptance_binding(
+            Accepted(1000), executable_bounds()
+        )
+    except rest_perf.RestError as exc:
+        assert "SC is invalid" in str(exc)
+    else:
+        raise AssertionError("mixed-zero scheduling context must fail closed")
+
+
+def test_executable_state_serializes_three_exemplars_after_full_census(
+    monkeypatch,
+) -> None:
+    bounds = executable_bounds(maximum=5)
+    bounds["worker_runtime"]["roles"][1]["executable_slots"] = 2
+    bounds["worker_runtime"]["roles"][2]["executable_slots"] = 2
+    acceptance = acceptance_summary()
+    instances = []
+    sequence = 1
+    for role, count in (
+        ("worker-heartbeat", 1),
+        ("worker-gpu", 2),
+        ("worker-lora", 2),
+    ):
+        for slot in range(count):
+            accepted = next(
+                row for row in acceptance["workers"] if row["role"] == role
+            )
+            instances.append(
+                rest_perf.WorkerInstance(
+                    worker_id=f"{role}-{slot}",
+                    role=role,
+                    lifecycle="ready",
+                    telemetry_path=f"/shard/00/worker/{role}-{slot}/telemetry",
+                    slot=slot,
+                    lease_epoch=accepted["lease_epoch"] if slot == 0 else 100 + slot,
+                    supervisor_generation=(
+                        accepted["supervisor_generation"]
+                        if slot == 0
+                        else 200 + slot
+                    ),
+                    cap_generation=(
+                        accepted["cap_generation"] if slot == 0 else 300 + slot
+                    ),
+                    ready_sequence=(
+                        accepted["ready_sequence"] if slot == 0 else sequence
+                    ),
+                    control_sequence=0,
+                    receipt_sequence=0,
+                    completion_sequence=0,
+                )
+            )
+            sequence += 1
+    monkeypatch.setattr(
+        rest_perf,
+        "discover_executable_workers",
+        lambda *_args: (instances, len(instances)),
+    )
+    monkeypatch.setattr(
+        rest_perf,
+        "capture_proc_pressure_state",
+        lambda *_args: {path: {} for path in rest_perf.EXECUTABLE_PROC_PATHS},
+    )
+    state = rest_perf.SimState(
+        bounds=bounds,
+        rest_url="http://127.0.0.1:8080",
+        rng=rest_perf.random.Random(0),
+        entropy=0.0,
+        tail_bytes=256,
+        policy_enabled=False,
+        actions_enabled=False,
+        telemetry_enabled=False,
+        include_lifecycle=False,
+        auto_approve=False,
+        transient_retries=False,
+        strict_control_errors=True,
+        population_mode=rest_perf.POPULATION_EXECUTABLE,
+        maximum_live_tasks=5,
+        acceptance_binding=acceptance,
+    )
+
+    snapshot = rest_perf.capture_executable_state(
+        object(), state, require_accepted_identity=True
+    )
+
+    assert len(snapshot["workers"]) == 3
+    assert [row["role"] for row in snapshot["workers"]] == list(
+        rest_perf.EXECUTABLE_WORKER_ROLES
+    )
+    assert all("worker" in row and "telemetry_path" not in row for row in snapshot["workers"])
+    assert all(row["artifact"] == "verified" for row in snapshot["workers"])
+    assert all(row["execution_proof"] == "qemu" for row in snapshot["workers"])
+    assert snapshot["ready_census"]["ready"] == 5
+    assert snapshot["ready_census"]["maximum_live_tasks"] == 5
+
+    state.current_workers_by_id = {
+        instance.worker_id: instance for instance in instances
+    }
+    monkeypatch.setattr(
+        rest_perf,
+        "discover_executable_workers",
+        lambda *_args: (instances[:-1], len(instances) - 1),
+    )
+    with pytest.raises(
+        rest_perf.RestError,
+        match="exact generated READY Worker population",
+    ):
+        rest_perf.capture_executable_state(
+            object(), state, require_accepted_identity=True
+        )

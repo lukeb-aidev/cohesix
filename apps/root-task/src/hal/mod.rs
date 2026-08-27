@@ -30,7 +30,7 @@ pub mod cache;
 /// Generation-revocable construction and transport for the isolated TCP console service.
 pub mod console_network;
 #[cfg(all(feature = "kernel", sel4_config_kernel_mcs))]
-/// Construction of the four restricted critical children plus init root-control accounting.
+/// Construction of the six restricted critical children plus init root-control accounting.
 pub mod critical_tcb;
 pub mod driver_task;
 #[cfg(all(feature = "kernel", sel4_config_kernel_mcs))]

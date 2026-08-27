@@ -50,7 +50,7 @@ build outputs, and generated tables rather than this overview.
 | Concern | Checked-in architecture | Evidence boundary |
 | --- | --- | --- |
 | Kernel | seL4 16.0.0 on AArch64 with SMP+MCS, per-core scheduling control, Reply objects, timeout-fault resources, and generated virtual-counter truth. | Configuration and compilation do not prove target execution or timing. |
-| Root authority | The init TCB remains `root-control`; restricted root-fault, emergency, Worker-supervisor, and driver-supervisor duties have independent active scheduling contexts. | The exact image must prove progress, fault handling, and containment. |
+| Root authority | The init TCB remains `root-control`; restricted root-fault, emergency, Worker-supervisor, driver-supervisor, GPU-executor, and LoRA/Heartbeat-executor duties have independent active scheduling contexts. | The exact image must prove progress, fault handling, and containment. |
 | Namespace service | `nine-door-runtime` is a restricted passive child reached through a bounded donated Call/Reply chain after one compiler-budgeted bootstrap exchange. | Host NineDoor is a separate implementation and is not a transport to this child. |
 | Console network | `console-network-runtime` owns target TCP, smoltcp, framing, and transport authentication. On QEMU the same child directly owns the HAL-admitted VirtIO MMIO, IRQ, and fixed coherent DMA queues; root receives only copied authenticated commands and returns bounded responses. | The public console grammar is unchanged and remains the only in-target TCP service. QEMU device evidence does not qualify a Pi network driver. |
 | Workers | Heartbeat, GPU, and LoRA are separately packaged passive executable roles served by two compiler-bounded active executor lanes. The QEMU and Pi profiles each admit 256 instances; WorkerBus remains model/session-only. | A declared slot or packaged image is not READY, runtime, teardown, or acceptance evidence. |
@@ -223,8 +223,9 @@ bounded retype, the BootInfo CSpace window, and exact publication state.
 capability.
 
 The init TCB is the generated `root-control` owner and runs the authoritative
-event loop. Root constructs four restricted active-SC children for root-fault,
-root-emergency, Worker supervision, and driver supervision. The generated
+event loop. Root constructs six restricted active-SC children for root-fault,
+root-emergency, Worker supervision, driver supervision, and the two bounded
+passive-Worker executor lanes. The generated
 fault registry is sealed before any service or Worker child resumes; root-fault
 then becomes the sole receiver on one shared standard/timeout fault endpoint.
 It blocks in `Recv` with one Reply object and resolves the exact badge and class

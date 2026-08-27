@@ -46,6 +46,12 @@ Options:
                       output or stage markers (component/root/system).
   --m26e-integration-dir <dir>
                       Exact live role-required integration records (component).
+  --m26e-runtime-proof <file>
+                      Exact fresh-Pi runtime/DMA proof (Pi component only).
+  --m26e-network-capture <file>
+                      Exact same-boot controlled pcap (Pi component only).
+  --m26e-transport <genet|wifi>
+                      Physical Pi transport bound by the component proof.
   --m26e-worker <file>
                       Exact accepted Worker component (root/system).
   --m26e-generated-inventory <file>
@@ -64,7 +70,8 @@ Environment pass-through:
   TEST_PLAN_ITERATION
   TEST_PLAN_FORCE
   M26E_EVIDENCE_KIND / M26E_TARGET_SESSION / M26E_OBSERVATIONS
-  M26E_INTEGRATION_DIR / M26E_WORKER / M26E_GENERATED_INVENTORY / M26E_ROOT
+  M26E_INTEGRATION_DIR / M26E_RUNTIME_PROOF / M26E_NETWORK_CAPTURE
+  M26E_TRANSPORT / M26E_WORKER / M26E_GENERATED_INVENTORY / M26E_ROOT
   TP_SKIP_GENERATED_CHECK, TP_SKIP_PYTHON, TP_SKIP_FUSE, TP_WRITE_TRACE_FIXTURES
 
 Target contract:
@@ -123,6 +130,9 @@ m26e_evidence_kind="${M26E_EVIDENCE_KIND:-}"
 m26e_target_session="${M26E_TARGET_SESSION:-}"
 m26e_observations="${M26E_OBSERVATIONS:-}"
 m26e_integration_dir="${M26E_INTEGRATION_DIR:-}"
+m26e_runtime_proof="${M26E_RUNTIME_PROOF:-}"
+m26e_network_capture="${M26E_NETWORK_CAPTURE:-}"
+m26e_transport="${M26E_TRANSPORT:-}"
 m26e_worker="${M26E_WORKER:-}"
 m26e_generated_inventory="${M26E_GENERATED_INVENTORY:-}"
 m26e_root="${M26E_ROOT:-}"
@@ -201,6 +211,30 @@ while [[ $# -gt 0 ]]; do
         exit 2
       }
       m26e_integration_dir="$1"
+      ;;
+    --m26e-runtime-proof)
+      shift
+      [[ $# -gt 0 ]] || {
+        echo "--m26e-runtime-proof requires a value" >&2
+        exit 2
+      }
+      m26e_runtime_proof="$1"
+      ;;
+    --m26e-network-capture)
+      shift
+      [[ $# -gt 0 ]] || {
+        echo "--m26e-network-capture requires a value" >&2
+        exit 2
+      }
+      m26e_network_capture="$1"
+      ;;
+    --m26e-transport)
+      shift
+      [[ $# -gt 0 ]] || {
+        echo "--m26e-transport requires a value" >&2
+        exit 2
+      }
+      m26e_transport="$1"
       ;;
     --m26e-worker)
       shift
@@ -297,6 +331,9 @@ validate_m26e_evidence_request() {
     "${m26e_target_session}" \
     "${m26e_observations}" \
     "${m26e_integration_dir}" \
+    "${m26e_runtime_proof}" \
+    "${m26e_network_capture}" \
+    "${m26e_transport}" \
     "${m26e_worker}" \
     "${m26e_generated_inventory}" \
     "${m26e_root}"
@@ -312,6 +349,7 @@ validate_m26e_evidence_request() {
     local stale_output
     for stale_output in \
       "${state_dir}/worker-task-evidence.json" \
+      "${state_dir}/pi4-component/worker-task-evidence.json" \
       "${state_dir}/root-tcb-acceptance.json" \
       "${state_dir}/system-acceptance.json"
     do
@@ -326,13 +364,12 @@ validate_m26e_evidence_request() {
     echo "M26e acceptance evidence requires one complete non-iteration five-stage run" >&2
     return 1
   fi
-  [[ -s "${m26e_observations}" ]] || {
-    echo "M26e evidence requires a non-empty explicit --m26e-observations file" >&2
-    return 1
-  }
-
   case "${m26e_evidence_kind}" in
     component)
+      if [[ "${target}" == "qemu" && ! -s "${m26e_observations}" ]]; then
+        echo "QEMU component evidence requires a non-empty explicit --m26e-observations file" >&2
+        return 1
+      fi
       [[ -s "${m26e_target_session}" ]] || {
         echo "component evidence requires --m26e-target-session" >&2
         return 1
@@ -349,8 +386,38 @@ validate_m26e_evidence_request() {
         echo "component evidence received root/system-only inputs" >&2
         return 1
       fi
+      if [[ "${target}" == "qemu" ]]; then
+        if [[ -n "${m26e_runtime_proof}${m26e_network_capture}${m26e_transport}" ]]; then
+          echo "QEMU component evidence received Pi-only inputs" >&2
+          return 1
+        fi
+      else
+        [[ -z "${m26e_observations}" ]] || {
+          echo "Pi component evidence forbids caller-authored --m26e-observations" >&2
+          return 1
+        }
+        [[ -s "${m26e_runtime_proof}" ]] || {
+          echo "Pi component evidence requires --m26e-runtime-proof" >&2
+          return 1
+        }
+        [[ -s "${m26e_network_capture}" ]] || {
+          echo "Pi component evidence requires --m26e-network-capture" >&2
+          return 1
+        }
+        case "${m26e_transport}" in
+          genet|wifi) ;;
+          *)
+            echo "Pi component evidence requires --m26e-transport genet|wifi" >&2
+            return 1
+            ;;
+        esac
+      fi
       ;;
     root)
+      [[ -s "${m26e_observations}" ]] || {
+        echo "root evidence requires a non-empty explicit --m26e-observations file" >&2
+        return 1
+      }
       [[ -s "${m26e_target_session}" ]] || {
         echo "root evidence requires --m26e-target-session" >&2
         return 1
@@ -363,12 +430,16 @@ validate_m26e_evidence_request() {
         echo "root evidence requires --m26e-generated-inventory" >&2
         return 1
       }
-      if [[ -n "${m26e_integration_dir}${m26e_root}" ]]; then
+      if [[ -n "${m26e_integration_dir}${m26e_runtime_proof}${m26e_network_capture}${m26e_transport}${m26e_root}" ]]; then
         echo "root evidence received component/system-only inputs" >&2
         return 1
       fi
       ;;
     system)
+      [[ -s "${m26e_observations}" ]] || {
+        echo "system evidence requires a non-empty explicit --m26e-observations file" >&2
+        return 1
+      }
       [[ -s "${m26e_worker}" ]] || {
         echo "system evidence requires --m26e-worker" >&2
         return 1
@@ -377,7 +448,7 @@ validate_m26e_evidence_request() {
         echo "system evidence requires --m26e-root" >&2
         return 1
       }
-      if [[ -n "${m26e_target_session}${m26e_integration_dir}${m26e_generated_inventory}" ]]; then
+      if [[ -n "${m26e_target_session}${m26e_integration_dir}${m26e_runtime_proof}${m26e_network_capture}${m26e_transport}${m26e_generated_inventory}" ]]; then
         echo "system evidence received component/root-only inputs" >&2
         return 1
       fi
@@ -753,16 +824,35 @@ emit_m26e_evidence() {
   local output
   case "${m26e_evidence_kind}" in
     component)
-      output="${state_dir}/worker-task-evidence.json"
-      rm -f "${output}"
-      "${evidence_python}" "${repo_root}/scripts/worker_task_evidence.py" \
-        emit-component \
-        --target "${target}" \
-        --target-session "${m26e_target_session}" \
-        --generated-inventory "${m26e_generated_inventory}" \
-        --observations "${m26e_observations}" \
-        --integration-dir "${m26e_integration_dir}" \
-        --out "${output}"
+      if [[ "${target}" == "pi4" ]]; then
+        local component_dir="${state_dir}/pi4-component"
+        [[ ! -e "${component_dir}" ]] || {
+          echo "refusing to overwrite Pi component bundle: ${component_dir}" >&2
+          return 1
+        }
+        "${evidence_python}" "${repo_root}/scripts/worker_task_evidence.py" \
+          collect-pi4-component \
+          --target-session "${m26e_target_session}" \
+          --generated-inventory "${m26e_generated_inventory}" \
+          --runtime-proof "${m26e_runtime_proof}" \
+          --network-capture "${m26e_network_capture}" \
+          --transport "${m26e_transport}" \
+          --integration-dir "${m26e_integration_dir}" \
+          --max-age-secs 21600 \
+          --out-dir "${component_dir}"
+        output="${component_dir}/worker-task-evidence.json"
+      else
+        output="${state_dir}/worker-task-evidence.json"
+        rm -f "${output}"
+        "${evidence_python}" "${repo_root}/scripts/worker_task_evidence.py" \
+          emit-component \
+          --target "${target}" \
+          --target-session "${m26e_target_session}" \
+          --generated-inventory "${m26e_generated_inventory}" \
+          --observations "${m26e_observations}" \
+          --integration-dir "${m26e_integration_dir}" \
+          --out "${output}"
+      fi
       ;;
     root)
       output="${state_dir}/root-tcb-acceptance.json"

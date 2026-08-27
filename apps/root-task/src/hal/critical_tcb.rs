@@ -1186,7 +1186,7 @@ pub fn take_target_service_fault(
         .map_err(CriticalTcbConstructionError::FaultHandoff)
 }
 
-/// Resume all four restricted duties only after exact registry construction.
+/// Resume all six restricted duties only after exact registry construction.
 ///
 /// The init/root-control TCB retains its bootstrap scheduling context until
 /// userland has finished construction and is about to enter the steady event

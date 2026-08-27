@@ -115,7 +115,7 @@ alone. Run the functional, policy, and generated-contract gates first.
 | --- | --- |
 | `scripts/rest_perf_harness.py --mode simulate` | Mixed REST load, worker cardinality, mutation/read pressure, and QEMU/Pi same-harness runs. |
 | `scripts/rest_perf_harness.py --mode perf` | Sequential-versus-parallel status and telemetry read microbenchmarks. |
-| `scripts/pi4_compare_driver_models.py` | Reject mismatched QEMU/Pi comparison metadata and compare accepted model lanes. |
+| `scripts/pi4_compare_driver_models.py` | Compare historical Pi serial-driver logs or reject stale/mismatched target reports before a QEMU/Pi throughput verdict. |
 | `scripts/pi4_trace_normalize.py` | Extract current-boot Pi device, network, timer, and driver proof. |
 | `scripts/pi4_gate_proof.sh` | Produce fail-closed Pi target proof from a fresh serial capture. |
 | `scripts/ci/test_plan_run.sh` | Qualify the source and target environment around a benchmark. |
@@ -139,8 +139,9 @@ projections; automation and review decisions must use the versioned object.
 | Report field | Contents and interpretation |
 | --- | --- |
 | `schema` | Exact report contract identifier; reject unknown major versions. |
+| `provenance` | For a qualified target run, the exact target/transport/proof class, source inventory, resolved manifest, staged image, root image, target session, nullable component-acceptance hash (required for QEMU and exactly `null` for Pi performance), runtime, network, performance-qualification, capture-time, and workload hashes. Diagnostic runs keep the same shape with unavailable fields set to `null`; they cannot be upgraded by reachability. |
 | `workload` | Mode, scenario, seed, entropy, worker/multi-hive bounds, intensity, base and target RPS, duration/ramp interval, read-size controls, lifecycle/approval state, configured in-flight limit, timeout, role, auth-presence boolean, retry state, and strict-error state. These fields define comparability; secret values are never serialized. |
-| `population` | Explicit `host-model` or `executable` mode, generated maximum live tasks when applicable, requested/discovered/structured-READY counts, bounded discovery observations, gateway backend class, and evidence-derived proof class. Executable discovery never expands ids or turns connectivity into proof. |
+| `population` | Explicit `host-model` or `executable` mode, generated maximum live tasks when applicable, requested/discovered/structured-READY counts, bounded discovery observations, gateway backend class, and evidence-derived proof class. Executable discovery never expands ids or turns connectivity into proof. Qualified executable pre/post state additionally retains an aggregate `ready_census` binding the full count and generated topology while detailed evidence remains one Heartbeat/GPU/LoRA exemplar. |
 | `throughput` | Attempted, successful, and failed operations per second over the configured duration. Throughput without reliability is not a capacity result. |
 | `latency` | Overall average, minimum, maximum, p50, p90, p95, and p99 seconds. Use `operations` in the parent summary for per-operation latency. |
 | `reliability` | Counts, error rate, declared error budget, pass/fail result, and lossless classification of `buffer-full`, other, and unclassified errors. `all_errors_buffer_full` is `null` when no errors occurred; classification never removes an error from the total. Exact error strings remain in the parent `overall` and `operations` objects. |
@@ -244,9 +245,10 @@ budget; the harness must not use relaxed buffer-full handling for this lane.
 First establish an accepted QEMU or physical-target boot and a gateway already
 backed by that target. A target gateway reports
 `backend_class=console-projection`; never pair it with high-count
-`--population-mode host-model`. QEMU executable pressure uses the exact-three
-accepted Worker/session flow below. Pi requires a target-neutral fresh-Pi
-acceptance path and cannot reuse the QEMU validator or metadata.
+`--population-mode host-model`. QEMU and Pi both require the complete generated
+256-Worker population plus exactly one accepted Heartbeat/GPU/LoRA exemplar.
+Pi additionally requires a target-neutral fresh-Pi runtime, network, and image
+proof chain and cannot reuse QEMU fault/GDB evidence.
 
 ```bash
 HIVE_GATEWAY_REQUEST_AUTH_TOKEN="$(openssl rand -hex 32)"
@@ -395,8 +397,9 @@ flight recorder is diagnostic evidence only and cannot promote an otherwise
 unqualified image.
 
 Each summary also retains top-level `target_session_sha256` and
-`report.executable_state`: exact topology/session hashes; pre/post three-role
-identities, READY/control/receipt/completion sequences, executor-lane SCs,
+`report.executable_state`: exact topology/session hashes; pre/post aggregate
+256-Worker READY censuses plus three-role exemplar identities,
+READY/control/receipt/completion sequences, executor-lane SCs,
 per-instance Reply identities, and per-slot compiler-admission object bundles
 (not a claimed live retype census);
 five canonical `/proc` snapshots; bounded lifecycle cycles; live receipt
@@ -419,6 +422,204 @@ For a focused read-path run:
   --rest-url "$COH_REST_URL" \
   --log-dir out/bench \
   --log-prefix qemu-read-path
+```
+
+### Qualified Pi executable pressure and QEMU parity
+
+Run Pi pressure only after the current boot has passed the physical-target
+preconditions below and the already-running gateway continuously projects that
+same boot's exact generated Worker population. This performance lane does not
+consume or claim Pi Worker component acceptance. First, on a fresh controlled
+Wi-Fi boot, run
+`pi4_gate_proof.sh` with concurrent serial and packet capture and its positive
+CYW43 output enabled. Finalize those immutable bytes with the command below.
+The finalizer independently revalidates the clean stage graph, exact image,
+generated topology, source inventory, Worker ABI, runtime and root archives,
+current boot marker, positive Wi-Fi outcomes, and controlled capture before it
+publishes the canonical bundle. A build or stage proof cannot create this
+positive record.
+
+```bash
+PI_CAPTURE_INTERFACE="${PI_CAPTURE_INTERFACE:?set the verified Pi-facing interface}"
+PI_SERIAL_DEVICE="${PI_SERIAL_DEVICE:?set the sole Pi serial device}"
+PI_WIFI_TARGET_IP="${PI_WIFI_TARGET_IP:?set the serial-reported Wi-Fi IPv4 address}"
+COH_REST_URL="${COH_REST_URL:?set the exact already-running gateway base URL}"
+PI_WIFI_EVIDENCE_DIR="${PI_WIFI_EVIDENCE_DIR:?set a private existing directory}"
+PI_WIFI_SERIAL_LOG="$PI_WIFI_EVIDENCE_DIR/pi4-cyw43-serial.log"
+PI_WIFI_NETWORK_CAPTURE="$PI_WIFI_EVIDENCE_DIR/pi4-cyw43-network.pcap"
+PI_WIFI_RUNTIME_DMA_PROOF="$PI_WIFI_EVIDENCE_DIR/pi4-cyw43-runtime-proof.env"
+PI_WIFI_CYW43_RECORD="$PI_WIFI_EVIDENCE_DIR/pi4-cyw43-coexistence.json"
+
+test -d "$PI_WIFI_EVIDENCE_DIR"
+test ! -e "$PI_WIFI_SERIAL_LOG"
+test ! -e "$PI_WIFI_NETWORK_CAPTURE"
+test ! -e "$PI_WIFI_RUNTIME_DMA_PROOF"
+test ! -e "$PI_WIFI_CYW43_RECORD"
+
+scripts/pi4_gate_proof.sh \
+  --skip-build \
+  --serial-device "$PI_SERIAL_DEVICE" \
+  --log "$PI_WIFI_SERIAL_LOG" \
+  --require-wifi-ready \
+  --require-driver-task-proof \
+  --network-interface "$PI_CAPTURE_INTERFACE" \
+  --network-capture-out "$PI_WIFI_NETWORK_CAPTURE" \
+  --gateway-status-url "$COH_REST_URL" \
+  --gateway-target-host "$PI_WIFI_TARGET_IP" \
+  --runtime-dma-proof-out "$PI_WIFI_RUNTIME_DMA_PROOF" \
+  --cyw43-coexistence-record-out "$PI_WIFI_CYW43_RECORD"
+```
+
+Start this active capture before booting the freshly flashed image. It refuses
+pre-existing output files, offline/normalize-only pairing, a non-current boot,
+or an uncontrolled packet capture. `--skip-build` is valid here only when the
+retained clean stage proof is the exact image already flashed and now booting;
+otherwise rebuild and reflash before capture.
+
+```bash
+test -f "${PI_WIFI_RUNTIME_DMA_PROOF:?set the fresh controlled Wi-Fi runtime proof}"
+test -f "${PI_WIFI_CYW43_RECORD:?set the matching gate-produced CYW43 record}"
+test -n "${PI_SESSION_DIR:?set a new output directory below out/}"
+
+.venv/bin/python scripts/worker_task_evidence.py emit-pi4-target-session \
+  --repo-root "$PWD" \
+  --runtime-proof "$PI_WIFI_RUNTIME_DMA_PROOF" \
+  --cyw43-coexistence-record "$PI_WIFI_CYW43_RECORD" \
+  --max-age-secs 21600 \
+  --out-dir "$PI_SESSION_DIR"
+
+PI_TARGET_SESSION="$PI_SESSION_DIR/target-session.json"
+PI_CYW43_RECORD="$PI_SESSION_DIR/pi4-cyw43-coexistence.json"
+```
+
+The retained bundle also contains the exact Wi-Fi runtime proof, serial log,
+network capture, source inventory, and Worker ABI identity under their
+canonical sibling names. A later GENET run may use a different physical boot,
+but it must use the same staged image and canonical target session. Its live
+runtime proof and packet capture must both come from that current GENET boot.
+The harness binds the canonical target session and generated topology/Worker
+manifest to the live 256-Worker census and three role exemplars instead of
+trusting reachability or a caller-authored PASS.
+The gateway's `/v1/meta/status` must continuously report normalized configured
+backend `target_host="$PI_TARGET_IP"` and `target_port=31337`; the gate seals
+that first connection and the harness rejects endpoint or connection drift.
+
+The current high-profile GENET command is:
+
+```bash
+test -n "${HIVE_GATEWAY_REQUEST_AUTH_TOKEN:?set a fresh gateway request token}"
+test -f "${PI_TARGET_SESSION:?set the exact Pi target-session.json}"
+test -f "${PI_RUNTIME_DMA_PROOF:?set the same-boot live runtime/DMA proof}"
+test -f "${PI_NETWORK_CAPTURE:?set the same-boot controlled packet capture}"
+test -f "${PI_CYW43_RECORD:?set the retained positive CYW43 record}"
+
+.venv/bin/python scripts/rest_perf_harness.py \
+  --mode simulate \
+  --population-mode executable \
+  --benchmark-target pi4 \
+  --benchmark-transport genet \
+  --pi-runtime-dma-proof "$PI_RUNTIME_DMA_PROOF" \
+  --pi-network-capture "$PI_NETWORK_CAPTURE" \
+  --pi-cyw43-coexistence-record "$PI_CYW43_RECORD" \
+  --benchmark-evidence-max-age-secs 21600 \
+  --target-session "$PI_TARGET_SESSION" \
+  --no-qemu \
+  --no-gateway \
+  --rest-url "$COH_REST_URL" \
+  --tcp-host "$PI_TARGET_IP" \
+  --tcp-port 31337 \
+  --workers-min 256 \
+  --workers-max 256 \
+  --intensity-min 8 \
+  --intensity-max 8 \
+  --duration-mins 2 \
+  --base-rps 4 \
+  --max-inflight 32 \
+  --seed 2608 \
+  --no-transient-retries \
+  --strict-control-errors \
+  --error-budget-rate 0.01 \
+  --log-dir out/bench/pi4-genet \
+  --log-prefix m26e-pi4-genet-high
+```
+
+The harness rejects a count other than the generated maximum, an incomplete
+READY census, missing role exemplar, diagnostic/log-only proof, stale or
+mutated input, a reboot during the run, a changed session/build graph, or a Pi
+stage/image/serial/network mismatch. It re-reads every frozen target input
+after load; mutation, replacement, growth, or a changed boot slice fails. A
+Wi-Fi run changes only `--benchmark-transport wifi`, the current
+runtime/capture paths, and its output directory/prefix. For that transport the
+current runtime and capture bytes must equal the retained canonical Wi-Fi
+siblings, and the boot must still satisfy fresh CYW43/SDIO, DHCP, raw-TCP,
+authenticated-`cohsh`, timer, runtime, and image proof.
+
+Compare the retained canonical HIGH QEMU report with the GENET report only
+after declaring the same-harness physical GENET p95 ceiling for this workload:
+
+```bash
+test -f "${QEMU_HIGH_REPORT:?set the qualified QEMU HIGH summary}"
+test -f "${PI_GENET_REPORT:?set the qualified Pi GENET HIGH summary}"
+test -n "${GENET_SAME_HARNESS_P95_MAX_MS:?declare the physical GENET p95 ceiling}"
+
+python3 scripts/pi4_compare_driver_models.py \
+  --qemu-report "$QEMU_HIGH_REPORT" \
+  --pi-report "$PI_GENET_REPORT" \
+  --reference-unix-s "$(date +%s)" \
+  --max-age-secs 21600 \
+  --min-throughput-ratio 1.0 \
+  --genet-max-p95-ms "$GENET_SAME_HARNESS_P95_MAX_MS" \
+  --output out/bench/pi4-genet/qemu-pi-parity.json
+```
+
+The output path must not already exist. The comparator rejects duplicate-key,
+non-finite, stale, internally inconsistent, differently sourced, differently
+shaped, or differently populated reports. `PASS` requires Pi GENET successful
+operations per second to be at least the QEMU value and both reports to pass
+their identical explicit error budget. Comparative error counts,
+backpressure, QEMU latency, and the separately declared physical GENET p95
+status remain visible but do not change that parity verdict.
+
+An optional qualified Wi-Fi report may be added with `--wifi-report`,
+`--wifi-min-ok-ops-per-s`, and `--wifi-max-p95-ms`. Those thresholds must have
+been declared for the same mixed workload and metric; do not apply the raw-TCP
+request-to-first-payload targets to REST summary latency. Wi-Fi status is
+reported separately and never changes the wired QEMU/GENET verdict.
+
+#### Separate conditional Pi Worker-component acceptance
+
+This full-component procedure is not a prerequisite for the performance run or
+comparator above, and a performance report cannot claim or replace it. Run it
+only after an authorized physical Pi fault/integration procedure has produced
+the complete same-boot three-role receipt, fault, teardown, recreation, and
+integration matrix. The collector derives its detailed role rows from the
+gate-owned serial bytes, compares every live image with the staged Worker
+manifest, revalidates the current image/runtime/network graph, and retains
+exactly `pi4-network-capture`, `pi4-runtime-dma-proof`, and
+`pi4-serial-boot` as raw evidence. It cannot manufacture missing physical
+outcomes and therefore remains fail-closed until that prerequisite exists.
+
+```bash
+PI_GENERATED_INVENTORY=out/pi4-sd/cohesix-root-task-topology.json
+PI_INTEGRATION_DIR="${PI_INTEGRATION_DIR:?set the accepted Pi integration-record directory}"
+PI_COMPONENT_DIR="${PI_COMPONENT_DIR:?set a new Pi Worker component output directory}"
+
+test -f "$PI_TARGET_SESSION"
+test -f "$PI_GENERATED_INVENTORY"
+test -f "$PI_RUNTIME_DMA_PROOF"
+test -f "$PI_NETWORK_CAPTURE"
+test -d "$PI_INTEGRATION_DIR"
+test ! -e "$PI_COMPONENT_DIR"
+
+.venv/bin/python scripts/worker_task_evidence.py collect-pi4-component \
+  --target-session "$PI_TARGET_SESSION" \
+  --generated-inventory "$PI_GENERATED_INVENTORY" \
+  --runtime-proof "$PI_RUNTIME_DMA_PROOF" \
+  --network-capture "$PI_NETWORK_CAPTURE" \
+  --transport genet \
+  --integration-dir "$PI_INTEGRATION_DIR" \
+  --max-age-secs 21600 \
+  --out-dir "$PI_COMPONENT_DIR"
 ```
 
 ### Split Cardinality from Steady-State Performance

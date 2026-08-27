@@ -1488,6 +1488,45 @@ else:
 PY
 }
 
+resolved_executable_population() {
+    HIVE_GATEWAY_REQUEST_AUTH_TOKEN="$M26E_REST_AUTH_TOKEN" \
+    "$HARNESS_PYTHON" - \
+        "$REPO_ROOT/scripts/rest_perf_harness.py" \
+        "$RESOLVED_MANIFEST" <<'PY'
+import hashlib
+import importlib.util
+import os
+import sys
+
+module_path, manifest_path = sys.argv[1:]
+spec = importlib.util.spec_from_file_location("m26e_worker_population", module_path)
+if spec is None or spec.loader is None:
+    raise SystemExit("cannot load REST harness for Worker population binding")
+rest = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = rest
+spec.loader.exec_module(rest)
+raw, _ = rest.read_frozen_artifact(
+    manifest_path,
+    "resolved manifest",
+    8 * 1024 * 1024,
+)
+manifest = rest.parse_strict_json_object(raw, "resolved manifest")
+client = rest.RestClient(
+    "http://127.0.0.1:8080",
+    10.0,
+    os.environ["HIVE_GATEWAY_REQUEST_AUTH_TOKEN"],
+)
+bounds = client.get_json("/v1/meta/bounds")
+print(
+    rest.executable_population_from_manifest_and_bounds(
+        manifest,
+        bounds,
+        hashlib.sha256(raw).hexdigest(),
+    )
+)
+PY
+}
+
 publish_gpu_fixture() {
     local boot_dir=$1
     HIVE_GATEWAY_REQUEST_AUTH_TOKEN="$M26E_REST_AUTH_TOKEN" \
@@ -2402,6 +2441,11 @@ run_pressure_boot() {
     publish_gpu_fixture "$boot_dir"
     start_pressure_helpers "$boot_dir"
 
+    local executable_population
+    executable_population="$(resolved_executable_population)"
+    [[ "$executable_population" =~ ^[1-9][0-9]*$ ]] || \
+        die "resolved executable Worker population is invalid"
+
     HIVE_GATEWAY_REQUEST_AUTH_TOKEN="$M26E_REST_AUTH_TOKEN" \
     HIVE_GATEWAY_URL=http://127.0.0.1:8080 \
     "$HARNESS_PYTHON" scripts/rest_perf_harness.py \
@@ -2412,8 +2456,9 @@ run_pressure_boot() {
         --rest-url http://127.0.0.1:8080 \
         --qemu-uart-log "$boot_dir/uart.live.log" \
         --qemu-gdb-log "$boot_dir/worker-heartbeat.gdb.log" \
-        --workers-min 3 \
-        --workers-max 3 \
+        --target-session "$TARGET_SESSION" \
+        --workers-min "$executable_population" \
+        --workers-max "$executable_population" \
         --intensity-min "$intensity" \
         --intensity-max "$intensity" \
         --duration-mins 2 \

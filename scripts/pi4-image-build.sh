@@ -29,9 +29,22 @@ BRCMFMAC_DYNAMIC_DEBUG_STAGE_NAME="brcmfmac-dyndbg.sh"
 DRIVER_RUNTIME_CPIO_STAGE_NAME="cohesix-driver-runtimes.cpio.uimg"
 PI4_IMAGE_IDENTITY_STAGE_NAME="pi4-image-identity.json"
 PI4_RESOLVED_MANIFEST_STAGE_NAME="cohesix-root-task-resolved.json"
+PI4_TOPOLOGY_STAGE_NAME="cohesix-root-task-topology.json"
+PI4_CANONICAL_PROFILE_STAMP_STAGE_NAME="cohesix-sel4-profile-build-inputs.json"
+PI4_CANONICAL_PROFILE_STATE_STAGE_NAME="cohesix-sel4-profile-tree-state.sha256"
+PI4_COMPOSITION_RECORD_STAGE_NAME="cohesix-composition-profile-build-inputs.json"
+PI4_COMPOSITION_CACHE_STAGE_NAME="cohesix-composition-CMakeCache.txt"
+PI4_COMPOSITION_TIMER_HEADER_STAGE_NAME="cohesix-composition-platform_gen.h"
 SEL4_IMAGE_PROVENANCE_SUFFIX=".cohesix-provenance.json"
 DRIVER_RUNTIME_EMBED_DIR="${ROOT_DIR}/out/pi4-driver-runtime-embed"
 DRIVER_RUNTIME_EMBED_CPIO_NAME="cohesix-driver-runtimes.cpio"
+DRIVER_RUNTIME_EMBED_MANIFEST_NAME="cohesix-driver-runtime-manifest.json"
+PI4_WORKER_IMAGE_DIR="${ROOT_DIR}/out/pi4-worker-images"
+PI4_WORKER_IMAGE_ARCHIVE_NAME="cohesix-worker-images.cpio"
+PI4_WORKER_IMAGE_MANIFEST_NAME="cohesix-worker-image-manifest.json"
+PI4_BUILD_IDENTITY_DIR="${ROOT_DIR}/out/pi4-build-identities"
+PI4_SOURCE_INVENTORY_NAME="source-inventory.json"
+PI4_WORKER_ABI_IDENTITY_NAME="worker-abi-identity.json"
 ROOT_TASK_STRIP_DIR="${ROOT_DIR}/out/pi4-root-task-stripped"
 PI4_ASSEMBLY_DIR="${ROOT_DIR}/out/pi4-image-assembly"
 FLASH_DISK=""
@@ -59,8 +72,17 @@ BUILD_REPOSITORY_STATE_DIGEST=""
 EXACT_BUILD_ID=""
 CANONICAL_SEL4_STATE_DIGEST=""
 EXACT_PI4_IMAGE=""
+EXACT_KERNEL_ELF=""
 EXACT_ROOT_ELF=""
 EXACT_ROOT_CPIO=""
+EXACT_RESOLVED_MANIFEST=""
+EXACT_TOPOLOGY=""
+EXACT_DRIVER_RUNTIME_MANIFEST=""
+EXACT_WORKER_IMAGE_ARCHIVE=""
+EXACT_WORKER_IMAGE_MANIFEST=""
+EXACT_SOURCE_INVENTORY=""
+EXACT_WORKER_ABI_IDENTITY=""
+EXACT_WRAPPER_PROVENANCE=""
 EXACT_CANONICAL_PROFILE_STAMP=""
 EXACT_COMPOSITION_RECORD=""
 EXACT_COMPOSITION_CACHE=""
@@ -656,12 +678,56 @@ verify_skip_build_image_fresh() {
 
 select_exact_assembly_inputs() {
     EXACT_PI4_IMAGE="${PI4_ASSEMBLY_DIR}/${SEL4_UPSTREAM_IMAGE_NAME}"
+    EXACT_KERNEL_ELF="${SEL4_BUILD_DIR}/elfloader/kernel.elf"
     EXACT_ROOT_ELF="${PI4_ASSEMBLY_DIR}/rootserver"
     EXACT_ROOT_CPIO="${PI4_ASSEMBLY_DIR}/archive.archive.o.cpio"
+    EXACT_RESOLVED_MANIFEST="${PI4_ASSEMBLY_DIR}/${PI4_RESOLVED_MANIFEST_STAGE_NAME}"
+    EXACT_TOPOLOGY="${PI4_ASSEMBLY_DIR}/${PI4_TOPOLOGY_STAGE_NAME}"
+    EXACT_DRIVER_RUNTIME_MANIFEST="${DRIVER_RUNTIME_EMBED_DIR}/${DRIVER_RUNTIME_EMBED_MANIFEST_NAME}"
+    EXACT_WORKER_IMAGE_ARCHIVE="${PI4_WORKER_IMAGE_DIR}/${PI4_WORKER_IMAGE_ARCHIVE_NAME}"
+    EXACT_WORKER_IMAGE_MANIFEST="${PI4_WORKER_IMAGE_DIR}/${PI4_WORKER_IMAGE_MANIFEST_NAME}"
+    EXACT_SOURCE_INVENTORY="${PI4_BUILD_IDENTITY_DIR}/${PI4_SOURCE_INVENTORY_NAME}"
+    EXACT_WORKER_ABI_IDENTITY="${PI4_BUILD_IDENTITY_DIR}/${PI4_WORKER_ABI_IDENTITY_NAME}"
+    EXACT_WRAPPER_PROVENANCE="${EXACT_PI4_IMAGE}${SEL4_IMAGE_PROVENANCE_SUFFIX}"
     EXACT_CANONICAL_PROFILE_STAMP="${SEL4_BUILD_DIR}/cohesix-profile-build-inputs.json"
     EXACT_COMPOSITION_RECORD="${PI4_ASSEMBLY_DIR}/composition-profile-build-inputs.json"
     EXACT_COMPOSITION_CACHE="${PI4_ASSEMBLY_DIR}/composition-CMakeCache.txt"
     EXACT_COMPOSITION_TIMER_HEADER="${PI4_ASSEMBLY_DIR}/composition-platform_gen.h"
+}
+
+prepare_pi4_build_identities() {
+    local evidence_tool="${SCRIPT_DIR}/worker_task_evidence.py"
+    local topology="${GENERATED_CONFIG_DIR}/root_task_topology.json"
+
+    require_file "$evidence_tool"
+    require_file "$topology"
+    mkdir -p "${ROOT_DIR}/out"
+    rm -rf "$PI4_BUILD_IDENTITY_DIR"
+    "${SEL4_VENV_DIR}/bin/python" "$evidence_tool" emit-build-identities \
+      --repo-root "$ROOT_DIR" \
+      --topology "$topology" \
+      --out-dir "$PI4_BUILD_IDENTITY_DIR" || \
+      fail "could not derive exact clean-source Pi4 build identities"
+    require_file "${PI4_BUILD_IDENTITY_DIR}/${PI4_SOURCE_INVENTORY_NAME}"
+    require_file "${PI4_BUILD_IDENTITY_DIR}/${PI4_WORKER_ABI_IDENTITY_NAME}"
+}
+
+validate_pi4_build_identities() {
+    local evidence_tool="${SCRIPT_DIR}/worker_task_evidence.py"
+    local topology="${GENERATED_CONFIG_DIR}/root_task_topology.json"
+    local source_inventory="${PI4_BUILD_IDENTITY_DIR}/${PI4_SOURCE_INVENTORY_NAME}"
+    local worker_abi="${PI4_BUILD_IDENTITY_DIR}/${PI4_WORKER_ABI_IDENTITY_NAME}"
+
+    require_file "$evidence_tool"
+    require_file "$topology"
+    require_file "$source_inventory"
+    require_file "$worker_abi"
+    "${SEL4_VENV_DIR}/bin/python" "$evidence_tool" validate-build-identities \
+      --repo-root "$ROOT_DIR" \
+      --topology "$topology" \
+      --source-inventory "$source_inventory" \
+      --worker-abi "$worker_abi" || \
+      fail "retained Pi4 build identities differ from exact clean source"
 }
 
 adopt_skip_build_source_timestamp() {
@@ -690,17 +756,36 @@ adopt_skip_build_source_timestamp() {
 
 write_sel4_image_provenance() {
     local image="$EXACT_PI4_IMAGE"
+    local kernel_elf="$EXACT_KERNEL_ELF"
     local root_elf="$EXACT_ROOT_ELF"
     local root_cpio="$EXACT_ROOT_CPIO"
     local driver_runtime_cpio="${DRIVER_RUNTIME_EMBED_DIR}/${DRIVER_RUNTIME_EMBED_CPIO_NAME}"
+    local driver_runtime_manifest="$EXACT_DRIVER_RUNTIME_MANIFEST"
+    local worker_image_archive="$EXACT_WORKER_IMAGE_ARCHIVE"
+    local worker_image_manifest="$EXACT_WORKER_IMAGE_MANIFEST"
+    local source_inventory="$EXACT_SOURCE_INVENTORY"
+    local worker_abi_identity="$EXACT_WORKER_ABI_IDENTITY"
+    local resolved_manifest="$EXACT_RESOLVED_MANIFEST"
+    local topology="$EXACT_TOPOLOGY"
     local cache="$EXACT_COMPOSITION_CACHE"
     local timer_header="$EXACT_COMPOSITION_TIMER_HEADER"
-    local provenance="${image}${SEL4_IMAGE_PROVENANCE_SUFFIX}"
+    local provenance="$EXACT_WRAPPER_PROVENANCE"
 
+    require_file "$kernel_elf"
     require_file "$driver_runtime_cpio"
+    require_file "$driver_runtime_manifest"
+    require_file "$worker_image_archive"
+    require_file "$worker_image_manifest"
+    require_file "$source_inventory"
+    require_file "$worker_abi_identity"
+    require_file "$resolved_manifest"
+    require_file "$topology"
     python3 - \
-      "$provenance" "$image" "$root_elf" "$root_cpio" \
-      "$driver_runtime_cpio" "$MANIFEST_PATH" \
+      "$provenance" "$image" "$kernel_elf" "$root_elf" "$root_cpio" \
+      "$driver_runtime_cpio" "$driver_runtime_manifest" \
+      "$worker_image_archive" "$worker_image_manifest" \
+      "$source_inventory" "$worker_abi_identity" \
+      "$MANIFEST_PATH" "$resolved_manifest" "$topology" \
       "$cache" "$timer_header" "$EXACT_GIT_COMMIT" "$EXACT_BUILD_TIMESTAMP" \
       "$ROOT_TASK_FEATURES" "$EXACT_CANONICAL_PROFILE_STAMP" \
       "$EXACT_COMPOSITION_RECORD" "$CANONICAL_SEL4_STATE_DIGEST" <<'PY'
@@ -714,10 +799,18 @@ from pathlib import Path
 (
     destination,
     image_path,
+    kernel_elf_path,
     root_path,
     cpio_path,
     driver_runtime_cpio_path,
+    driver_runtime_manifest_path,
+    worker_image_archive_path,
+    worker_image_manifest_path,
+    source_inventory_path,
+    worker_abi_identity_path,
     manifest_path,
+    resolved_manifest_path,
+    topology_path,
     cache_path,
     timer_header_path,
     commit,
@@ -738,21 +831,29 @@ def digest(path: str) -> str:
 
 
 record = {
-    "schema": "cohesix-pi4-sel4-image-provenance/v4",
+    "schema": "cohesix-pi4-sel4-image-provenance/v5",
     "git_commit": commit,
     "source_tree_clean": True,
     "build_timestamp": timestamp,
     "root_task_features": features,
     "source_manifest_sha256": digest(manifest_path),
+    "resolved_manifest_sha256": digest(resolved_manifest_path),
+    "topology_sha256": digest(topology_path),
+    "source_inventory_sha256": digest(source_inventory_path),
+    "worker_abi_identity_sha256": digest(worker_abi_identity_path),
     "canonical_profile_stamp_sha256": digest(canonical_profile_stamp),
     "canonical_profile_state_sha256": canonical_profile_state,
     "composition_record_sha256": digest(composition_record),
     "composition_cmake_cache_sha256": digest(cache_path),
     "composition_timer_header_sha256": digest(timer_header_path),
     "wrapper_sha256": digest(image_path),
+    "kernel_elf_sha256": digest(kernel_elf_path),
     "rootserver_sha256": digest(root_path),
     "rootserver_cpio_sha256": digest(cpio_path),
     "driver_runtime_cpio_sha256": digest(driver_runtime_cpio_path),
+    "driver_runtime_manifest_sha256": digest(driver_runtime_manifest_path),
+    "worker_image_archive_sha256": digest(worker_image_archive_path),
+    "worker_image_manifest_sha256": digest(worker_image_manifest_path),
 }
 rendered = (json.dumps(record, indent=2, sort_keys=True) + "\n").encode()
 target = Path(destination)
@@ -781,14 +882,34 @@ PY
 
 verify_skip_build_provenance() {
     local image="$EXACT_PI4_IMAGE"
+    local kernel_elf="$EXACT_KERNEL_ELF"
     local driver_runtime_cpio="${DRIVER_RUNTIME_EMBED_DIR}/${DRIVER_RUNTIME_EMBED_CPIO_NAME}"
-    local provenance="${image}${SEL4_IMAGE_PROVENANCE_SUFFIX}"
+    local driver_runtime_manifest="$EXACT_DRIVER_RUNTIME_MANIFEST"
+    local worker_image_archive="$EXACT_WORKER_IMAGE_ARCHIVE"
+    local worker_image_manifest="$EXACT_WORKER_IMAGE_MANIFEST"
+    local source_inventory="$EXACT_SOURCE_INVENTORY"
+    local worker_abi_identity="$EXACT_WORKER_ABI_IDENTITY"
+    local resolved_manifest="$EXACT_RESOLVED_MANIFEST"
+    local topology="$EXACT_TOPOLOGY"
+    local provenance="$EXACT_WRAPPER_PROVENANCE"
 
     require_file "$provenance"
+    require_file "$kernel_elf"
     require_file "$driver_runtime_cpio"
+    require_file "$driver_runtime_manifest"
+    require_file "$worker_image_archive"
+    require_file "$worker_image_manifest"
+    require_file "$source_inventory"
+    require_file "$worker_abi_identity"
+    require_file "$resolved_manifest"
+    require_file "$topology"
     python3 - \
-      "$provenance" "$image" "$EXACT_ROOT_ELF" "$EXACT_ROOT_CPIO" \
-      "$driver_runtime_cpio" "$MANIFEST_PATH" "$EXACT_COMPOSITION_CACHE" \
+      "$provenance" "$image" "$kernel_elf" "$EXACT_ROOT_ELF" "$EXACT_ROOT_CPIO" \
+      "$driver_runtime_cpio" "$driver_runtime_manifest" \
+      "$worker_image_archive" "$worker_image_manifest" \
+      "$source_inventory" "$worker_abi_identity" \
+      "$MANIFEST_PATH" "$resolved_manifest" "$topology" \
+      "$EXACT_COMPOSITION_CACHE" \
       "$EXACT_COMPOSITION_TIMER_HEADER" "$EXACT_GIT_COMMIT" \
       "$EXACT_BUILD_TIMESTAMP" "$ROOT_TASK_FEATURES" \
       "$EXACT_CANONICAL_PROFILE_STAMP" "$EXACT_COMPOSITION_RECORD" \
@@ -800,10 +921,18 @@ import sys
 (
     provenance_path,
     image_path,
+    kernel_elf_path,
     root_path,
     cpio_path,
     driver_runtime_cpio_path,
+    driver_runtime_manifest_path,
+    worker_image_archive_path,
+    worker_image_manifest_path,
+    source_inventory_path,
+    worker_abi_identity_path,
     manifest_path,
+    resolved_manifest_path,
+    topology_path,
     cache_path,
     timer_header_path,
     commit,
@@ -823,24 +952,49 @@ def digest(path: str) -> str:
     return value.hexdigest()
 
 
+def reject_duplicate_keys(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate provenance key: {key}")
+        result[key] = value
+    return result
+
+
+def reject_non_finite(value):
+    raise ValueError(f"non-finite provenance value: {value}")
+
+
 with open(provenance_path, "r", encoding="utf-8") as handle:
-    record = json.load(handle)
+    record = json.load(
+        handle,
+        object_pairs_hook=reject_duplicate_keys,
+        parse_constant=reject_non_finite,
+    )
 expected = {
-    "schema": "cohesix-pi4-sel4-image-provenance/v4",
+    "schema": "cohesix-pi4-sel4-image-provenance/v5",
     "git_commit": commit,
     "source_tree_clean": True,
     "build_timestamp": timestamp,
     "root_task_features": features,
     "source_manifest_sha256": digest(manifest_path),
+    "resolved_manifest_sha256": digest(resolved_manifest_path),
+    "topology_sha256": digest(topology_path),
+    "source_inventory_sha256": digest(source_inventory_path),
+    "worker_abi_identity_sha256": digest(worker_abi_identity_path),
     "canonical_profile_stamp_sha256": digest(canonical_profile_stamp),
     "canonical_profile_state_sha256": canonical_profile_state,
     "composition_record_sha256": digest(composition_record),
     "composition_cmake_cache_sha256": digest(cache_path),
     "composition_timer_header_sha256": digest(timer_header_path),
     "wrapper_sha256": digest(image_path),
+    "kernel_elf_sha256": digest(kernel_elf_path),
     "rootserver_sha256": digest(root_path),
     "rootserver_cpio_sha256": digest(cpio_path),
     "driver_runtime_cpio_sha256": digest(driver_runtime_cpio_path),
+    "driver_runtime_manifest_sha256": digest(driver_runtime_manifest_path),
+    "worker_image_archive_sha256": digest(worker_image_archive_path),
+    "worker_image_manifest_sha256": digest(worker_image_manifest_path),
 }
 if record != expected:
     missing = sorted(set(expected) - set(record)) if isinstance(record, dict) else []
@@ -1382,6 +1536,12 @@ validate_output_paths() {
         "$BRCMFMAC_DYNAMIC_DEBUG_STAGE_NAME" \
         "$DRIVER_RUNTIME_CPIO_STAGE_NAME" \
         "$PI4_RESOLVED_MANIFEST_STAGE_NAME" \
+        "$PI4_TOPOLOGY_STAGE_NAME" \
+        "$PI4_CANONICAL_PROFILE_STAMP_STAGE_NAME" \
+        "$PI4_CANONICAL_PROFILE_STATE_STAGE_NAME" \
+        "$PI4_COMPOSITION_RECORD_STAGE_NAME" \
+        "$PI4_COMPOSITION_CACHE_STAGE_NAME" \
+        "$PI4_COMPOSITION_TIMER_HEADER_STAGE_NAME" \
         "cohesix-driver-runtimes.cpio" \
         "start4.elf" "fixup4.dat" "bcm2711-rpi-4-b.dtb" "u-boot.bin" \
         "config.txt" "boot.cmd" "boot.scr.uimg" "cohesix_boot_state.txt" \
@@ -1418,6 +1578,9 @@ validate_output_paths() {
         "$SEL4_VENV_DIR" \
         "$FIRMWARE_DIR" \
         "$PI4_ASSEMBLY_DIR" \
+        "$PI4_BUILD_IDENTITY_DIR" \
+        "$PI4_WORKER_IMAGE_DIR" \
+        "$DRIVER_RUNTIME_EMBED_DIR" \
         "$(dirname "$MANIFEST_PATH")" \
         "$(dirname "$U_BOOT_BIN")"; do
         case "${protected}/" in
@@ -1636,6 +1799,76 @@ PY
     log "Published immutable-input Pi assembly at ${PI4_ASSEMBLY_DIR}"
 }
 
+retain_pi4_generated_contracts() {
+    local resolved_manifest="${GENERATED_CONFIG_DIR}/root_task_resolved.json"
+    local topology="${GENERATED_CONFIG_DIR}/root_task_topology.json"
+
+    require_file "$resolved_manifest"
+    require_file "$topology"
+    require_file "$EXACT_ROOT_CPIO"
+    cp -f "$resolved_manifest" "$EXACT_RESOLVED_MANIFEST"
+    cp -f "$topology" "$EXACT_TOPOLOGY"
+    chmod a-w "$EXACT_RESOLVED_MANIFEST" "$EXACT_TOPOLOGY"
+    require_file "$EXACT_RESOLVED_MANIFEST"
+    require_file "$EXACT_TOPOLOGY"
+    log "Retained exact Pi4 resolved manifest and topology with the assembly"
+}
+
+verify_pi4_embedded_artifact_graph() {
+    local archive_parser="${SCRIPT_DIR}/driver_runtime_manifest.py"
+    local driver_archive="${DRIVER_RUNTIME_EMBED_DIR}/${DRIVER_RUNTIME_EMBED_CPIO_NAME}"
+
+    require_file "$archive_parser"
+    require_file "$EXACT_KERNEL_ELF"
+    require_file "$EXACT_ROOT_ELF"
+    require_file "$EXACT_ROOT_CPIO"
+    require_file "$driver_archive"
+    require_file "$EXACT_WORKER_IMAGE_ARCHIVE"
+    require_file "$EXACT_WORKER_IMAGE_MANIFEST"
+    python3 - \
+      "$archive_parser" "$EXACT_KERNEL_ELF" "$EXACT_ROOT_ELF" \
+      "$EXACT_ROOT_CPIO" "$driver_archive" \
+      "$EXACT_WORKER_IMAGE_ARCHIVE" "$EXACT_WORKER_IMAGE_MANIFEST" <<'PY'
+import importlib.util
+import sys
+from pathlib import Path
+
+(
+    parser_path,
+    kernel_path,
+    root_path,
+    root_cpio_path,
+    driver_archive_path,
+    worker_archive_path,
+    worker_manifest_path,
+) = map(Path, sys.argv[1:])
+spec = importlib.util.spec_from_file_location("cohesix_driver_archive", parser_path)
+if spec is None or spec.loader is None:
+    raise SystemExit("could not load the strict newc parser")
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+
+kernel = kernel_path.read_bytes()
+root = root_path.read_bytes()
+members = module.parse_newc(root_cpio_path.read_bytes())
+if set(members) != {"kernel.elf", "rootserver"}:
+    raise SystemExit("Pi4 root CPIO does not contain the exact kernel/root pair")
+if members["kernel.elf"] != kernel:
+    raise SystemExit("Pi4 root CPIO kernel differs from elfloader launch bytes")
+if members["rootserver"] != root:
+    raise SystemExit("Pi4 root CPIO rootserver differs from the composed root ELF")
+for label, path in (
+    ("driver archive", driver_archive_path),
+    ("Worker archive", worker_archive_path),
+    ("Worker manifest", worker_manifest_path),
+):
+    payload = path.read_bytes()
+    if not payload or root.count(payload) != 1:
+        raise SystemExit(f"Pi4 rootserver does not embed exactly one {label}")
+PY
+    log "Verified exact kernel/root/driver/Worker embedding graph"
+}
+
 build_pi4_image() {
     local root_task_elf
 
@@ -1690,10 +1923,10 @@ build_pi4_image() {
     )
     console_network_runtime_path="${sel4_artifact_dir}/console-network-runtime"
     nine_door_runtime_path="${sel4_artifact_dir}/nine-door-runtime"
-    worker_output_dir="${ROOT_DIR}/out/pi4-worker-images"
+    worker_output_dir="$PI4_WORKER_IMAGE_DIR"
     worker_output_canonical_dir="${worker_output_dir}/canonical"
-    worker_image_archive="${worker_output_dir}/cohesix-worker-images.cpio"
-    worker_image_manifest="${worker_output_dir}/cohesix-worker-image-manifest.json"
+    worker_image_archive="${worker_output_dir}/${PI4_WORKER_IMAGE_ARCHIVE_NAME}"
+    worker_image_manifest="${worker_output_dir}/${PI4_WORKER_IMAGE_MANIFEST_NAME}"
     worker_manifest_tool="${SCRIPT_DIR}/worker_image_manifest.py"
 
     log "Building 26e child/runtime images for Pi4 root-task"
@@ -1764,6 +1997,8 @@ build_pi4_image() {
     strip_root_task_for_pi_image "$root_task_elf"
     verify_unsealed_pi4_build_marker "$STRIPPED_ROOT_TASK_ELF" 1
     compose_pi4_assembly
+    verify_pi4_embedded_artifact_graph
+    retain_pi4_generated_contracts
     verify_canonical_sel4_state "after rootserver composition"
     validate_pi4_sel4_build
     verify_canonical_sel4_state "after post-composition validation"
@@ -2065,18 +2300,19 @@ PY
 package_driver_runtime_raw_cpio() {
     local raw_cpio="$1"
     local artifact_dir="${2:-${ROOT_DIR}/target/aarch64-unknown-none/release}"
-    local cpio_bin
     local raw_dir
     raw_dir="$(dirname "$raw_cpio")"
     local runtime_root="${raw_dir}/driver-runtime-root"
     local runtime_bin="${runtime_root}/cohesix/bin"
+    local runtime_manifest="${raw_dir}/${DRIVER_RUNTIME_EMBED_MANIFEST_NAME}"
+    local manifest_tool="${SCRIPT_DIR}/driver_runtime_manifest.py"
+    local comparator_record="${ROOT_DIR}/configs/driver_runtime_classic_comparator.toml"
     local strip_tool
     local bin
 
-    cpio_bin="$(resolve_cpio)"
-    configure_cpio_path "$cpio_bin"
-
     assert_driver_runtime_elf_budgets "$artifact_dir"
+    require_file "$manifest_tool"
+    require_file "$comparator_record"
     strip_tool="$(find_aarch64_strip)"
     mkdir -p "$raw_dir"
     rm -rf "$runtime_root"
@@ -2102,13 +2338,22 @@ package_driver_runtime_raw_cpio() {
     done
     log "Keeping per-role Pi4 driver runtime images for manifest artifact identity"
 
-    (
-        cd "$runtime_root"
-        find cohesix -print | LC_ALL=C sort | cpio --reproducible -o -H newc > "$raw_cpio"
-    )
+    python3 "$manifest_tool" build \
+      --image-dir "$runtime_bin" \
+      --archive "$raw_cpio" \
+      --manifest "$runtime_manifest" \
+      --target aarch64-unknown-none \
+      --profile release \
+      --classic-comparator-record "$comparator_record" || \
+      fail "could not build deterministic Pi4 driver runtime manifest"
+    python3 "$manifest_tool" verify \
+      --archive "$raw_cpio" \
+      --manifest "$runtime_manifest" || \
+      fail "Pi4 driver runtime manifest differs from the exact archive"
     require_file "$raw_cpio"
+    require_file "$runtime_manifest"
     verify_driver_runtime_cpio_entries "$raw_cpio"
-    log "Packaged Pi4 driver runtime raw CPIO at ${raw_cpio}"
+    log "Packaged manifest-bound Pi4 driver runtime raw CPIO at ${raw_cpio}"
 }
 
 verify_driver_runtime_cpio_entries() {
@@ -2159,39 +2404,178 @@ stage_driver_runtime_payload() {
 }
 
 stage_pi4_resolved_manifest() {
-    local manifest_json="${GENERATED_CONFIG_DIR}/root_task_resolved.json"
+    local manifest_json="$EXACT_RESOLVED_MANIFEST"
+    local topology_json="$EXACT_TOPOLOGY"
     local retained_manifest="${STAGE_DIR}/${PI4_RESOLVED_MANIFEST_STAGE_NAME}"
+    local retained_topology="${STAGE_DIR}/${PI4_TOPOLOGY_STAGE_NAME}"
     local manifest_sha256
+    local topology_sha256
 
     require_file "$manifest_json"
+    require_file "$topology_json"
     cp -f "$manifest_json" "$retained_manifest"
+    cp -f "$topology_json" "$retained_topology"
     manifest_sha256="$(shasum -a 256 "$manifest_json" | awk '{print $1}')"
+    topology_sha256="$(shasum -a 256 "$topology_json" | awk '{print $1}')"
     [[ "$(shasum -a 256 "$retained_manifest" | awk '{print $1}')" == "$manifest_sha256" ]] || \
       fail "retained Pi4 resolved manifest differs from selected generated truth"
-    chmod a-w "$retained_manifest"
+    [[ "$(shasum -a 256 "$retained_topology" | awk '{print $1}')" == "$topology_sha256" ]] || \
+      fail "retained Pi4 topology differs from selected generated truth"
+    chmod a-w "$retained_manifest" "$retained_topology"
     require_file "$retained_manifest"
-    log "Retained selected Pi4 resolved manifest at ${retained_manifest}"
+    require_file "$retained_topology"
+    log "Retained selected Pi4 resolved manifest and topology in the SD stage"
+}
+
+stage_pi4_build_provenance_inputs() {
+    local retained_profile_stamp="${STAGE_DIR}/${PI4_CANONICAL_PROFILE_STAMP_STAGE_NAME}"
+    local retained_profile_state="${STAGE_DIR}/${PI4_CANONICAL_PROFILE_STATE_STAGE_NAME}"
+    local retained_composition_record="${STAGE_DIR}/${PI4_COMPOSITION_RECORD_STAGE_NAME}"
+    local retained_composition_cache="${STAGE_DIR}/${PI4_COMPOSITION_CACHE_STAGE_NAME}"
+    local retained_composition_timer_header="${STAGE_DIR}/${PI4_COMPOSITION_TIMER_HEADER_STAGE_NAME}"
+
+    require_file "$EXACT_WRAPPER_PROVENANCE"
+    require_file "$EXACT_CANONICAL_PROFILE_STAMP"
+    require_file "$EXACT_COMPOSITION_RECORD"
+    require_file "$EXACT_COMPOSITION_CACHE"
+    require_file "$EXACT_COMPOSITION_TIMER_HEADER"
+    [[ "$CANONICAL_SEL4_STATE_DIGEST" =~ ^[0-9a-f]{64}$ ]] || \
+      fail "canonical seL4 profile-state digest is unavailable for staging"
+
+    cp -f "$EXACT_CANONICAL_PROFILE_STAMP" "$retained_profile_stamp"
+    cp -f "$EXACT_COMPOSITION_RECORD" "$retained_composition_record"
+    cp -f "$EXACT_COMPOSITION_CACHE" "$retained_composition_cache"
+    cp -f "$EXACT_COMPOSITION_TIMER_HEADER" "$retained_composition_timer_header"
+    printf '%s\n' "$CANONICAL_SEL4_STATE_DIGEST" >"$retained_profile_state"
+
+    python3 - \
+      "$EXACT_WRAPPER_PROVENANCE" "$retained_profile_stamp" \
+      "$retained_composition_record" "$retained_composition_cache" \
+      "$retained_composition_timer_header" "$CANONICAL_SEL4_STATE_DIGEST" <<'PY'
+import hashlib
+import json
+import sys
+from pathlib import Path
+
+
+def reject_duplicate_keys(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate provenance key: {key}")
+        result[key] = value
+    return result
+
+
+def reject_non_finite(value):
+    raise ValueError(f"non-finite provenance value: {value}")
+
+
+def digest(path: str) -> str:
+    value = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        while chunk := handle.read(1024 * 1024):
+            value.update(chunk)
+    return value.hexdigest()
+
+
+(
+    provenance_path,
+    canonical_profile_stamp,
+    composition_record,
+    composition_cache,
+    composition_timer_header,
+    canonical_profile_state,
+) = sys.argv[1:]
+with Path(provenance_path).open("r", encoding="utf-8") as handle:
+    provenance = json.load(
+        handle,
+        object_pairs_hook=reject_duplicate_keys,
+        parse_constant=reject_non_finite,
+    )
+expected = {
+    "canonical_profile_stamp_sha256": digest(canonical_profile_stamp),
+    "canonical_profile_state_sha256": canonical_profile_state,
+    "composition_record_sha256": digest(composition_record),
+    "composition_cmake_cache_sha256": digest(composition_cache),
+    "composition_timer_header_sha256": digest(composition_timer_header),
+}
+if not isinstance(provenance, dict) or any(
+    provenance.get(field) != value for field, value in expected.items()
+):
+    raise SystemExit(
+        "wrapper provenance differs from exact profile/composition inputs"
+    )
+PY
+
+    cmp -s "$EXACT_CANONICAL_PROFILE_STAMP" "$retained_profile_stamp" || \
+      fail "retained canonical profile stamp differs from exact build input"
+    cmp -s "$EXACT_COMPOSITION_RECORD" "$retained_composition_record" || \
+      fail "retained composition record differs from exact build input"
+    cmp -s "$EXACT_COMPOSITION_CACHE" "$retained_composition_cache" || \
+      fail "retained composition CMake cache differs from exact build input"
+    cmp -s "$EXACT_COMPOSITION_TIMER_HEADER" "$retained_composition_timer_header" || \
+      fail "retained composition timer header differs from exact build input"
+    [[ "$(tr -d '\n' <"$retained_profile_state")" == "$CANONICAL_SEL4_STATE_DIGEST" ]] || \
+      fail "retained canonical profile state differs from exact tree digest"
+
+    chmod a-w \
+      "$retained_profile_stamp" \
+      "$retained_profile_state" \
+      "$retained_composition_record" \
+      "$retained_composition_cache" \
+      "$retained_composition_timer_header"
+    log "Retained exact Pi4 profile and composition proof inputs in the SD stage"
 }
 
 write_pi4_runtime_dma_build_proof() {
     local proof_path="${STAGE_DIR}/pi4-runtime-dma-proof.env"
     local manifest_json="${STAGE_DIR}/${PI4_RESOLVED_MANIFEST_STAGE_NAME}"
+    local topology_json="${STAGE_DIR}/${PI4_TOPOLOGY_STAGE_NAME}"
     local runtime_raw="${STAGE_DIR}/cohesix-driver-runtimes.cpio"
     local runtime_uimg="${STAGE_DIR}/${DRIVER_RUNTIME_CPIO_STAGE_NAME}"
     local staged_image="${STAGE_DIR}/${COHESIX_IMAGE_NAME}"
     local image_identity="${STAGE_DIR}/${PI4_IMAGE_IDENTITY_STAGE_NAME}"
+    local wrapper_provenance="$EXACT_WRAPPER_PROVENANCE"
+    local kernel_elf="$EXACT_KERNEL_ELF"
     local expected_root_elf="$EXACT_ROOT_ELF"
+    local expected_root_cpio="$EXACT_ROOT_CPIO"
+    local driver_manifest="$EXACT_DRIVER_RUNTIME_MANIFEST"
+    local worker_archive="$EXACT_WORKER_IMAGE_ARCHIVE"
+    local worker_manifest="$EXACT_WORKER_IMAGE_MANIFEST"
+    local source_inventory="$EXACT_SOURCE_INVENTORY"
+    local worker_abi_identity="$EXACT_WORKER_ABI_IDENTITY"
+    local canonical_profile_stamp="${STAGE_DIR}/${PI4_CANONICAL_PROFILE_STAMP_STAGE_NAME}"
+    local canonical_profile_state="${STAGE_DIR}/${PI4_CANONICAL_PROFILE_STATE_STAGE_NAME}"
+    local composition_record="${STAGE_DIR}/${PI4_COMPOSITION_RECORD_STAGE_NAME}"
+    local composition_cache="${STAGE_DIR}/${PI4_COMPOSITION_CACHE_STAGE_NAME}"
+    local composition_timer_header="${STAGE_DIR}/${PI4_COMPOSITION_TIMER_HEADER_STAGE_NAME}"
     local timestamp
 
     require_file "$manifest_json"
+    require_file "$topology_json"
     require_file "$runtime_raw"
     require_file "$runtime_uimg"
     require_file "$staged_image"
     require_file "$image_identity"
+    require_file "$wrapper_provenance"
+    require_file "$kernel_elf"
     require_file "$expected_root_elf"
+    require_file "$expected_root_cpio"
+    require_file "$driver_manifest"
+    require_file "$worker_archive"
+    require_file "$worker_manifest"
+    require_file "$source_inventory"
+    require_file "$worker_abi_identity"
+    require_file "$canonical_profile_stamp"
+    require_file "$canonical_profile_state"
+    require_file "$composition_record"
+    require_file "$composition_cache"
+    require_file "$composition_timer_header"
 
     timestamp="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
     {
+        printf "PI4_RUNTIME_DMA_PROOF_ARTIFACT_VERSION=2\n"
         printf "PI4_RUNTIME_DMA_PROOF=target-build\n"
         printf "PI4_RUNTIME_DMA_PROOF_REASON=stage-only-no-live-serial\n"
         printf "PI4_RUNTIME_DMA_PROFILE=bounded-no-iommu\n"
@@ -2199,12 +2583,34 @@ write_pi4_runtime_dma_build_proof() {
         printf "PI4_RUNTIME_DMA_PROOF_CREATED_AT_UTC=%s\n" "$timestamp"
         printf "PI4_RUNTIME_DMA_MANIFEST=%s\n" "$manifest_json"
         printf "PI4_RUNTIME_DMA_MANIFEST_SHA256=%s\n" "$(shasum -a 256 "$manifest_json" | awk '{print $1}')"
+        printf "PI4_RUNTIME_DMA_MANIFEST_BYTES=%s\n" "$(stat -f '%z' "$manifest_json")"
+        printf "PI4_RUNTIME_DMA_TOPOLOGY=%s\n" "$topology_json"
+        printf "PI4_RUNTIME_DMA_TOPOLOGY_SHA256=%s\n" "$(shasum -a 256 "$topology_json" | awk '{print $1}')"
+        printf "PI4_RUNTIME_DMA_TOPOLOGY_BYTES=%s\n" "$(stat -f '%z' "$topology_json")"
+        printf "PI4_RUNTIME_DMA_CANONICAL_PROFILE_STAMP=%s\n" "$canonical_profile_stamp"
+        printf "PI4_RUNTIME_DMA_CANONICAL_PROFILE_STAMP_SHA256=%s\n" "$(shasum -a 256 "$canonical_profile_stamp" | awk '{print $1}')"
+        printf "PI4_RUNTIME_DMA_CANONICAL_PROFILE_STAMP_BYTES=%s\n" "$(stat -f '%z' "$canonical_profile_stamp")"
+        printf "PI4_RUNTIME_DMA_CANONICAL_PROFILE_STATE=%s\n" "$canonical_profile_state"
+        printf "PI4_RUNTIME_DMA_CANONICAL_PROFILE_STATE_SHA256=%s\n" "$(shasum -a 256 "$canonical_profile_state" | awk '{print $1}')"
+        printf "PI4_RUNTIME_DMA_CANONICAL_PROFILE_STATE_BYTES=%s\n" "$(stat -f '%z' "$canonical_profile_state")"
+        printf "PI4_RUNTIME_DMA_COMPOSITION_RECORD=%s\n" "$composition_record"
+        printf "PI4_RUNTIME_DMA_COMPOSITION_RECORD_SHA256=%s\n" "$(shasum -a 256 "$composition_record" | awk '{print $1}')"
+        printf "PI4_RUNTIME_DMA_COMPOSITION_RECORD_BYTES=%s\n" "$(stat -f '%z' "$composition_record")"
+        printf "PI4_RUNTIME_DMA_COMPOSITION_CMAKE_CACHE=%s\n" "$composition_cache"
+        printf "PI4_RUNTIME_DMA_COMPOSITION_CMAKE_CACHE_SHA256=%s\n" "$(shasum -a 256 "$composition_cache" | awk '{print $1}')"
+        printf "PI4_RUNTIME_DMA_COMPOSITION_CMAKE_CACHE_BYTES=%s\n" "$(stat -f '%z' "$composition_cache")"
+        printf "PI4_RUNTIME_DMA_COMPOSITION_TIMER_HEADER=%s\n" "$composition_timer_header"
+        printf "PI4_RUNTIME_DMA_COMPOSITION_TIMER_HEADER_SHA256=%s\n" "$(shasum -a 256 "$composition_timer_header" | awk '{print $1}')"
+        printf "PI4_RUNTIME_DMA_COMPOSITION_TIMER_HEADER_BYTES=%s\n" "$(stat -f '%z' "$composition_timer_header")"
         printf "PI4_RUNTIME_DMA_RUNTIME_CPIO=%s\n" "$runtime_raw"
         printf "PI4_RUNTIME_DMA_RUNTIME_CPIO_SHA256=%s\n" "$(shasum -a 256 "$runtime_raw" | awk '{print $1}')"
+        printf "PI4_RUNTIME_DMA_RUNTIME_CPIO_BYTES=%s\n" "$(stat -f '%z' "$runtime_raw")"
         printf "PI4_RUNTIME_DMA_RUNTIME_UIMAGE=%s\n" "$runtime_uimg"
         printf "PI4_RUNTIME_DMA_RUNTIME_UIMAGE_SHA256=%s\n" "$(shasum -a 256 "$runtime_uimg" | awk '{print $1}')"
+        printf "PI4_RUNTIME_DMA_RUNTIME_UIMAGE_BYTES=%s\n" "$(stat -f '%z' "$runtime_uimg")"
         printf "PI4_RUNTIME_DMA_STAGED_IMAGE=%s\n" "$staged_image"
         printf "PI4_RUNTIME_DMA_STAGED_IMAGE_SHA256=%s\n" "$(shasum -a 256 "$staged_image" | awk '{print $1}')"
+        printf "PI4_RUNTIME_DMA_STAGED_IMAGE_BYTES=%s\n" "$(stat -f '%z' "$staged_image")"
         printf "PI4_IMAGE_IDENTITY_SCHEME=cohesix-pi4-image-identity/v2\n"
         printf "PI4_IMAGE_IDENTITY_GIT_COMMIT=%s\n" "$EXACT_GIT_COMMIT"
         printf "PI4_IMAGE_IDENTITY_BUILD_TIMESTAMP=%s\n" "$EXACT_BUILD_TIMESTAMP"
@@ -2212,8 +2618,34 @@ write_pi4_runtime_dma_build_proof() {
         printf "PI4_IMAGE_IDENTITY_SOURCE_TREE_CLEAN=yes\n"
         printf "PI4_IMAGE_IDENTITY_METADATA=%s\n" "$image_identity"
         printf "PI4_IMAGE_IDENTITY_METADATA_SHA256=%s\n" "$(shasum -a 256 "$image_identity" | awk '{print $1}')"
+        printf "PI4_IMAGE_IDENTITY_METADATA_BYTES=%s\n" "$(stat -f '%z' "$image_identity")"
+        printf "PI4_IMAGE_IDENTITY_WRAPPER_PROVENANCE=%s\n" "$wrapper_provenance"
+        printf "PI4_IMAGE_IDENTITY_WRAPPER_PROVENANCE_SHA256=%s\n" "$(shasum -a 256 "$wrapper_provenance" | awk '{print $1}')"
+        printf "PI4_IMAGE_IDENTITY_WRAPPER_PROVENANCE_BYTES=%s\n" "$(stat -f '%z' "$wrapper_provenance")"
+        printf "PI4_IMAGE_IDENTITY_KERNEL_ELF=%s\n" "$kernel_elf"
+        printf "PI4_IMAGE_IDENTITY_KERNEL_ELF_SHA256=%s\n" "$(shasum -a 256 "$kernel_elf" | awk '{print $1}')"
+        printf "PI4_IMAGE_IDENTITY_KERNEL_ELF_BYTES=%s\n" "$(stat -f '%z' "$kernel_elf")"
+        printf "PI4_IMAGE_IDENTITY_ROOT_ELF=%s\n" "$expected_root_elf"
         printf "PI4_IMAGE_IDENTITY_ROOT_ELF_SHA256=%s\n" "$(shasum -a 256 "$expected_root_elf" | awk '{print $1}')"
-        printf "PI4_IMAGE_IDENTITY_ROOT_CPIO_SHA256=%s\n" "$(shasum -a 256 "$EXACT_ROOT_CPIO" | awk '{print $1}')"
+        printf "PI4_IMAGE_IDENTITY_ROOT_ELF_BYTES=%s\n" "$(stat -f '%z' "$expected_root_elf")"
+        printf "PI4_IMAGE_IDENTITY_ROOT_CPIO=%s\n" "$expected_root_cpio"
+        printf "PI4_IMAGE_IDENTITY_ROOT_CPIO_SHA256=%s\n" "$(shasum -a 256 "$expected_root_cpio" | awk '{print $1}')"
+        printf "PI4_IMAGE_IDENTITY_ROOT_CPIO_BYTES=%s\n" "$(stat -f '%z' "$expected_root_cpio")"
+        printf "PI4_IMAGE_IDENTITY_DRIVER_MANIFEST=%s\n" "$driver_manifest"
+        printf "PI4_IMAGE_IDENTITY_DRIVER_MANIFEST_SHA256=%s\n" "$(shasum -a 256 "$driver_manifest" | awk '{print $1}')"
+        printf "PI4_IMAGE_IDENTITY_DRIVER_MANIFEST_BYTES=%s\n" "$(stat -f '%z' "$driver_manifest")"
+        printf "PI4_IMAGE_IDENTITY_WORKER_ARCHIVE=%s\n" "$worker_archive"
+        printf "PI4_IMAGE_IDENTITY_WORKER_ARCHIVE_SHA256=%s\n" "$(shasum -a 256 "$worker_archive" | awk '{print $1}')"
+        printf "PI4_IMAGE_IDENTITY_WORKER_ARCHIVE_BYTES=%s\n" "$(stat -f '%z' "$worker_archive")"
+        printf "PI4_IMAGE_IDENTITY_WORKER_MANIFEST=%s\n" "$worker_manifest"
+        printf "PI4_IMAGE_IDENTITY_WORKER_MANIFEST_SHA256=%s\n" "$(shasum -a 256 "$worker_manifest" | awk '{print $1}')"
+        printf "PI4_IMAGE_IDENTITY_WORKER_MANIFEST_BYTES=%s\n" "$(stat -f '%z' "$worker_manifest")"
+        printf "PI4_IMAGE_IDENTITY_SOURCE_INVENTORY=%s\n" "$source_inventory"
+        printf "PI4_IMAGE_IDENTITY_SOURCE_INVENTORY_SHA256=%s\n" "$(shasum -a 256 "$source_inventory" | awk '{print $1}')"
+        printf "PI4_IMAGE_IDENTITY_SOURCE_INVENTORY_BYTES=%s\n" "$(stat -f '%z' "$source_inventory")"
+        printf "PI4_IMAGE_IDENTITY_WORKER_ABI=%s\n" "$worker_abi_identity"
+        printf "PI4_IMAGE_IDENTITY_WORKER_ABI_SHA256=%s\n" "$(shasum -a 256 "$worker_abi_identity" | awk '{print $1}')"
+        printf "PI4_IMAGE_IDENTITY_WORKER_ABI_BYTES=%s\n" "$(stat -f '%z' "$worker_abi_identity")"
     } >"$proof_path"
     require_file "$proof_path"
     log "Wrote Pi4 runtime/DMA stage-only proof at ${proof_path}"
@@ -2235,6 +2667,7 @@ stage_sd_payload() {
     mkdir -p "$stage_overlays"
 
     stage_pi4_resolved_manifest
+    stage_pi4_build_provenance_inputs
     cp -f "${FIRMWARE_DIR}/start4.elf" "${STAGE_DIR}/start4.elf"
     cp -f "${FIRMWARE_DIR}/fixup4.dat" "${STAGE_DIR}/fixup4.dat"
     stage_pi4_dtb "${FIRMWARE_DIR}/bcm2711-rpi-4-b.dtb" "${STAGE_DIR}/bcm2711-rpi-4-b.dtb"
@@ -2788,6 +3221,12 @@ main() {
 
     if [[ "${CLEAN_BUILD}" -eq 1 ]]; then
         clean_pi4_build
+    fi
+
+    if [[ "$SKIP_BUILD" -eq 0 ]]; then
+        prepare_pi4_build_identities
+    else
+        validate_pi4_build_identities
     fi
 
     require_file "$U_BOOT_BIN"

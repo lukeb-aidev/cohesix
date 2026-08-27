@@ -5,6 +5,8 @@
 """Tests for scripts/pi4-image-build.sh."""
 
 import hashlib
+import importlib.util
+import json
 import os
 import pathlib
 import plistlib
@@ -32,6 +34,15 @@ PI4_WIFI_BUNDLE_PATH = (
     / "firmware"
     / "cyw43455-linux-capture"
 )
+
+
+def _load_driver_manifest_module():
+    path = REPO_ROOT / "scripts" / "driver_runtime_manifest.py"
+    spec = importlib.util.spec_from_file_location("pi4_driver_manifest_test", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def test_pi4_image_build_uses_square_logo_source() -> None:
@@ -791,6 +802,81 @@ def test_pi4_image_build_keeps_per_role_driver_runtime_artifacts() -> None:
     assert 'local generic_runtime="${runtime_bin}/pi4-driver-runtime"' not in source
 
 
+def test_pi4_driver_archive_is_built_and_verified_with_its_manifest() -> None:
+    """The staged seven-driver CPIO and its target-session manifest are one graph."""
+
+    source = SCRIPT_PATH.read_text(encoding="utf-8")
+    package = source[
+        source.index("package_driver_runtime_raw_cpio() {") : source.index(
+            "\nverify_driver_runtime_cpio_entries()",
+        )
+    ]
+
+    assert 'local manifest_tool="${SCRIPT_DIR}/driver_runtime_manifest.py"' in package
+    assert 'local runtime_manifest="${raw_dir}/${DRIVER_RUNTIME_EMBED_MANIFEST_NAME}"' in package
+    assert '"$manifest_tool" build' in package
+    assert '"$manifest_tool" verify' in package
+    assert 'require_file "$runtime_manifest"' in package
+    assert "cpio --reproducible" not in package
+
+
+def test_pi4_embedded_artifact_graph_binds_exact_kernel_root_and_payloads(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The root CPIO and root ELF must contain the exact sealed artifact graph."""
+
+    script = _copy_sourceable_build_script(tmp_path)
+    shutil.copy2(
+        REPO_ROOT / "scripts" / "driver_runtime_manifest.py",
+        tmp_path / "scripts" / "driver_runtime_manifest.py",
+    )
+    archive_module = _load_driver_manifest_module()
+    kernel = tmp_path / "kernel.elf"
+    root = tmp_path / "rootserver"
+    root_cpio = tmp_path / "archive.archive.o.cpio"
+    driver_archive = tmp_path / "driver-runtime" / "cohesix-driver-runtimes.cpio"
+    worker_archive = tmp_path / "worker-images" / "cohesix-worker-images.cpio"
+    worker_manifest = (
+        tmp_path / "worker-images" / "cohesix-worker-image-manifest.json"
+    )
+    kernel.write_bytes(b"exact Pi launch kernel\n")
+    driver_archive.parent.mkdir()
+    driver_archive.write_bytes(b"exact seven-driver archive\n")
+    worker_archive.parent.mkdir()
+    worker_archive.write_bytes(b"exact Worker archive\n")
+    worker_manifest.write_bytes(b"exact Worker manifest\n")
+    root.write_bytes(
+        b"root-prefix\n"
+        + driver_archive.read_bytes()
+        + b"root-middle\n"
+        + worker_archive.read_bytes()
+        + b"root-middle-2\n"
+        + worker_manifest.read_bytes()
+        + b"root-suffix\n"
+    )
+    root_cpio.write_bytes(
+        archive_module.build_newc(
+            (("kernel.elf", kernel.read_bytes()), ("rootserver", root.read_bytes()))
+        )
+    )
+    state = (
+        f'EXACT_KERNEL_ELF={str(kernel)!r}; '
+        f'EXACT_ROOT_ELF={str(root)!r}; '
+        f'EXACT_ROOT_CPIO={str(root_cpio)!r}; '
+        f'DRIVER_RUNTIME_EMBED_DIR={str(driver_archive.parent)!r}; '
+        'DRIVER_RUNTIME_EMBED_CPIO_NAME="cohesix-driver-runtimes.cpio"; '
+        f'EXACT_WORKER_IMAGE_ARCHIVE={str(worker_archive)!r}; '
+        f'EXACT_WORKER_IMAGE_MANIFEST={str(worker_manifest)!r}; '
+    )
+    verified = _source_function(script, f"{state} verify_pi4_embedded_artifact_graph")
+    assert verified.returncode == 0, verified.stderr
+
+    worker_manifest.write_bytes(b"tampered Worker manifest\n")
+    rejected = _source_function(script, f"{state} verify_pi4_embedded_artifact_graph")
+    assert rejected.returncode != 0
+    assert "does not embed exactly one Worker manifest" in rejected.stderr
+
+
 def test_pi4_image_build_skip_stage_ignores_later_target_children(
     tmp_path: pathlib.Path,
 ) -> None:
@@ -1388,27 +1474,88 @@ def test_pi4_runtime_dma_manifest_hash_survives_codegen_cleanup(
     generated.mkdir(parents=True)
     stage.mkdir(parents=True)
     selected_manifest = b'{"profile":"pi4","workers":64}\n'
+    selected_topology = b'{"schema":"cohesix-root-task-topology/v1"}\n'
+    canonical_profile_state = "d" * 64
     (generated / "root_task_resolved.json").write_bytes(selected_manifest)
+    (generated / "root_task_topology.json").write_bytes(selected_topology)
     for path in (
+        tmp_path / "assembly" / "cohesix-root-task-resolved.json",
+        tmp_path / "assembly" / "cohesix-root-task-topology.json",
+        tmp_path / "assembly" / "wrapper-provenance.json",
+        tmp_path / "sel4-build" / "elfloader" / "kernel.elf",
+        tmp_path / "driver-runtime" / "cohesix-driver-runtime-manifest.json",
+        tmp_path / "worker-images" / "cohesix-worker-images.cpio",
+        tmp_path / "worker-images" / "cohesix-worker-image-manifest.json",
+        tmp_path / "build-identities" / "source-inventory.json",
+        tmp_path / "build-identities" / "worker-abi-identity.json",
         stage / "cohesix-driver-runtimes.cpio",
         stage / "cohesix-driver-runtimes.cpio.uimg",
         stage / "cohesix-image-arm-bcm2711",
         stage / "pi4-image-identity.json",
         tmp_path / "root-task",
         tmp_path / "root-task.cpio",
+        tmp_path / "sel4-build" / "cohesix-profile-build-inputs.json",
+        tmp_path / "assembly" / "composition-profile-build-inputs.json",
+        tmp_path / "assembly" / "composition-CMakeCache.txt",
+        tmp_path / "assembly" / "composition-platform_gen.h",
     ):
+        path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(f"fixture:{path.name}\n".encode())
+    (tmp_path / "assembly" / "cohesix-root-task-resolved.json").write_bytes(
+        selected_manifest
+    )
+    (tmp_path / "assembly" / "cohesix-root-task-topology.json").write_bytes(
+        selected_topology
+    )
+    profile_inputs = {
+        "canonical_profile_stamp_sha256": (
+            tmp_path / "sel4-build" / "cohesix-profile-build-inputs.json"
+        ),
+        "composition_record_sha256": (
+            tmp_path / "assembly" / "composition-profile-build-inputs.json"
+        ),
+        "composition_cmake_cache_sha256": (
+            tmp_path / "assembly" / "composition-CMakeCache.txt"
+        ),
+        "composition_timer_header_sha256": (
+            tmp_path / "assembly" / "composition-platform_gen.h"
+        ),
+    }
+    wrapper_provenance = {
+        field: hashlib.sha256(path.read_bytes()).hexdigest()
+        for field, path in profile_inputs.items()
+    }
+    wrapper_provenance["canonical_profile_state_sha256"] = canonical_profile_state
+    (tmp_path / "assembly" / "wrapper-provenance.json").write_text(
+        json.dumps(wrapper_provenance, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
 
     result = _source_function(
         script,
         'GENERATED_CONFIG_DIR="$ROOT_DIR/configs/generated"; '
         'STAGE_DIR="$ROOT_DIR/out/pi4-sd"; '
+        'EXACT_RESOLVED_MANIFEST="$ROOT_DIR/assembly/cohesix-root-task-resolved.json"; '
+        'EXACT_TOPOLOGY="$ROOT_DIR/assembly/cohesix-root-task-topology.json"; '
+        'EXACT_WRAPPER_PROVENANCE="$ROOT_DIR/assembly/wrapper-provenance.json"; '
+        'EXACT_KERNEL_ELF="$ROOT_DIR/sel4-build/elfloader/kernel.elf"; '
         'EXACT_ROOT_ELF="$ROOT_DIR/root-task"; '
         'EXACT_ROOT_CPIO="$ROOT_DIR/root-task.cpio"; '
+        'EXACT_DRIVER_RUNTIME_MANIFEST="$ROOT_DIR/driver-runtime/cohesix-driver-runtime-manifest.json"; '
+        'EXACT_WORKER_IMAGE_ARCHIVE="$ROOT_DIR/worker-images/cohesix-worker-images.cpio"; '
+        'EXACT_WORKER_IMAGE_MANIFEST="$ROOT_DIR/worker-images/cohesix-worker-image-manifest.json"; '
+        'EXACT_SOURCE_INVENTORY="$ROOT_DIR/build-identities/source-inventory.json"; '
+        'EXACT_WORKER_ABI_IDENTITY="$ROOT_DIR/build-identities/worker-abi-identity.json"; '
+        'EXACT_CANONICAL_PROFILE_STAMP="$ROOT_DIR/sel4-build/cohesix-profile-build-inputs.json"; '
+        'EXACT_COMPOSITION_RECORD="$ROOT_DIR/assembly/composition-profile-build-inputs.json"; '
+        'EXACT_COMPOSITION_CACHE="$ROOT_DIR/assembly/composition-CMakeCache.txt"; '
+        'EXACT_COMPOSITION_TIMER_HEADER="$ROOT_DIR/assembly/composition-platform_gen.h"; '
+        f'CANONICAL_SEL4_STATE_DIGEST={canonical_profile_state!r}; '
         'EXACT_GIT_COMMIT=""; '
         'EXACT_BUILD_TIMESTAMP="2026-08-25T00:00:00Z"; '
         'EXACT_BUILD_ID="pi4-manifest-cleanup-test"; '
         'stage_pi4_resolved_manifest; '
+        'stage_pi4_build_provenance_inputs; '
         'write_pi4_runtime_dma_build_proof; '
         'restore_canonical_codegen() { '
         'printf "%s\\n" qemu-canonical > '
@@ -1425,15 +1572,158 @@ def test_pi4_runtime_dma_manifest_hash_survives_codegen_cleanup(
         .splitlines()
     )
     retained = pathlib.Path(proof["PI4_RUNTIME_DMA_MANIFEST"])
+    retained_topology = pathlib.Path(proof["PI4_RUNTIME_DMA_TOPOLOGY"])
     retained_sha256 = hashlib.sha256(retained.read_bytes()).hexdigest()
+    retained_topology_sha256 = hashlib.sha256(retained_topology.read_bytes()).hexdigest()
 
+    assert proof["PI4_RUNTIME_DMA_PROOF_ARTIFACT_VERSION"] == "2"
     assert retained == stage / "cohesix-root-task-resolved.json"
     assert retained.read_bytes() == selected_manifest
     assert retained.stat().st_mode & 0o222 == 0
     assert proof["PI4_RUNTIME_DMA_MANIFEST_SHA256"] == retained_sha256
+    assert retained_topology == stage / "cohesix-root-task-topology.json"
+    assert retained_topology.read_bytes() == selected_topology
+    assert retained_topology.stat().st_mode & 0o222 == 0
+    assert proof["PI4_RUNTIME_DMA_TOPOLOGY_SHA256"] == retained_topology_sha256
+    staged_profile_inputs = {
+        "PI4_RUNTIME_DMA_CANONICAL_PROFILE_STAMP": (
+            stage / "cohesix-sel4-profile-build-inputs.json",
+            profile_inputs["canonical_profile_stamp_sha256"],
+        ),
+        "PI4_RUNTIME_DMA_COMPOSITION_RECORD": (
+            stage / "cohesix-composition-profile-build-inputs.json",
+            profile_inputs["composition_record_sha256"],
+        ),
+        "PI4_RUNTIME_DMA_COMPOSITION_CMAKE_CACHE": (
+            stage / "cohesix-composition-CMakeCache.txt",
+            profile_inputs["composition_cmake_cache_sha256"],
+        ),
+        "PI4_RUNTIME_DMA_COMPOSITION_TIMER_HEADER": (
+            stage / "cohesix-composition-platform_gen.h",
+            profile_inputs["composition_timer_header_sha256"],
+        ),
+    }
+    for field, (retained_path, source_path) in staged_profile_inputs.items():
+        assert pathlib.Path(proof[field]) == retained_path
+        assert retained_path.read_bytes() == source_path.read_bytes()
+        assert retained_path.stat().st_mode & 0o222 == 0
+        assert proof[f"{field}_SHA256"] == hashlib.sha256(
+            retained_path.read_bytes()
+        ).hexdigest()
+        assert int(proof[f"{field}_BYTES"]) == retained_path.stat().st_size
+    retained_profile_state = pathlib.Path(
+        proof["PI4_RUNTIME_DMA_CANONICAL_PROFILE_STATE"]
+    )
+    assert retained_profile_state == stage / "cohesix-sel4-profile-tree-state.sha256"
+    assert retained_profile_state.read_text(encoding="ascii") == (
+        canonical_profile_state + "\n"
+    )
+    assert retained_profile_state.stat().st_mode & 0o222 == 0
+    assert proof["PI4_RUNTIME_DMA_CANONICAL_PROFILE_STATE_SHA256"] == (
+        hashlib.sha256(retained_profile_state.read_bytes()).hexdigest()
+    )
+    assert int(proof["PI4_RUNTIME_DMA_CANONICAL_PROFILE_STATE_BYTES"]) == 65
+    bound_artifacts = {
+        "PI4_RUNTIME_DMA_RUNTIME_CPIO": stage / "cohesix-driver-runtimes.cpio",
+        "PI4_IMAGE_IDENTITY_WRAPPER_PROVENANCE": (
+            tmp_path / "assembly" / "wrapper-provenance.json"
+        ),
+        "PI4_IMAGE_IDENTITY_KERNEL_ELF": (
+            tmp_path / "sel4-build" / "elfloader" / "kernel.elf"
+        ),
+        "PI4_IMAGE_IDENTITY_ROOT_ELF": tmp_path / "root-task",
+        "PI4_IMAGE_IDENTITY_ROOT_CPIO": tmp_path / "root-task.cpio",
+        "PI4_IMAGE_IDENTITY_DRIVER_MANIFEST": (
+            tmp_path / "driver-runtime" / "cohesix-driver-runtime-manifest.json"
+        ),
+        "PI4_IMAGE_IDENTITY_WORKER_ARCHIVE": (
+            tmp_path / "worker-images" / "cohesix-worker-images.cpio"
+        ),
+        "PI4_IMAGE_IDENTITY_WORKER_MANIFEST": (
+            tmp_path / "worker-images" / "cohesix-worker-image-manifest.json"
+        ),
+        "PI4_IMAGE_IDENTITY_SOURCE_INVENTORY": (
+            tmp_path / "build-identities" / "source-inventory.json"
+        ),
+        "PI4_IMAGE_IDENTITY_WORKER_ABI": (
+            tmp_path / "build-identities" / "worker-abi-identity.json"
+        ),
+    }
+    for field, expected_path in bound_artifacts.items():
+        assert pathlib.Path(proof[field]) == expected_path
+        raw = expected_path.read_bytes()
+        assert proof[f"{field}_SHA256"] == hashlib.sha256(raw).hexdigest()
+        assert int(proof[f"{field}_BYTES"]) == len(raw)
     assert hashlib.sha256(
         (generated / "root_task_resolved.json").read_bytes()
     ).hexdigest() != retained_sha256
+
+
+def test_pi4_stage_rejects_profile_or_composition_bytes_outside_provenance(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Retained proof inputs cannot drift from the exact wrapper provenance."""
+
+    script = _copy_sourceable_build_script(tmp_path)
+    stage = tmp_path / "out" / "pi4-sd"
+    stage.mkdir(parents=True)
+    profile_stamp = tmp_path / "sel4-build" / "cohesix-profile-build-inputs.json"
+    composition_record = (
+        tmp_path / "assembly" / "composition-profile-build-inputs.json"
+    )
+    composition_cache = tmp_path / "assembly" / "composition-CMakeCache.txt"
+    composition_timer = tmp_path / "assembly" / "composition-platform_gen.h"
+    provenance = tmp_path / "assembly" / "wrapper-provenance.json"
+    for path, raw in (
+        (profile_stamp, b"profile stamp\n"),
+        (composition_record, b"composition record\n"),
+        (composition_cache, b"composition cache\n"),
+        (composition_timer, b"timer header\n"),
+    ):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(raw)
+    profile_state = "e" * 64
+    provenance.write_text(
+        json.dumps(
+            {
+                "canonical_profile_stamp_sha256": hashlib.sha256(
+                    profile_stamp.read_bytes()
+                ).hexdigest(),
+                "canonical_profile_state_sha256": profile_state,
+                "composition_record_sha256": hashlib.sha256(
+                    composition_record.read_bytes()
+                ).hexdigest(),
+                "composition_cmake_cache_sha256": hashlib.sha256(
+                    composition_cache.read_bytes()
+                ).hexdigest(),
+                "composition_timer_header_sha256": hashlib.sha256(
+                    composition_timer.read_bytes()
+                ).hexdigest(),
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    composition_timer.write_bytes(composition_timer.read_bytes() + b"tamper\n")
+
+    result = _source_function(
+        script,
+        f'STAGE_DIR={str(stage)!r}; '
+        f'EXACT_WRAPPER_PROVENANCE={str(provenance)!r}; '
+        f'EXACT_CANONICAL_PROFILE_STAMP={str(profile_stamp)!r}; '
+        f'EXACT_COMPOSITION_RECORD={str(composition_record)!r}; '
+        f'EXACT_COMPOSITION_CACHE={str(composition_cache)!r}; '
+        f'EXACT_COMPOSITION_TIMER_HEADER={str(composition_timer)!r}; '
+        f'CANONICAL_SEL4_STATE_DIGEST={profile_state!r}; '
+        "stage_pi4_build_provenance_inputs",
+    )
+
+    assert result.returncode != 0
+    assert "wrapper provenance differs from exact profile/composition inputs" in (
+        result.stderr
+    )
+    assert not (stage / "pi4-runtime-dma-proof.env").exists()
 
 
 def test_pi4_image_composition_never_writes_canonical_profile_tree() -> None:
@@ -1525,6 +1815,9 @@ def test_pi4_image_build_rechecks_identity_after_proof_publication() -> None:
     stage_end = source.index("\nflash_sd_card() {", stage_start)
     stage_body = source[stage_start:stage_end]
 
+    assert stage_body.index("stage_pi4_build_provenance_inputs") < stage_body.index(
+        "write_pi4_runtime_dma_build_proof"
+    )
     assert stage_body.index("write_pi4_runtime_dma_build_proof") < stage_body.index(
         'verify_final_staged_pi4_image "$mkimage_bin"'
     )
@@ -1829,6 +2122,11 @@ def test_sel4_tree_state_digest_binds_bytes_modes_and_symlinks(
         "sel4test-driver-image-arm-bcm2711",
         "pi4-image-identity.json",
         "cohesix-root-task-resolved.json",
+        "cohesix-sel4-profile-build-inputs.json",
+        "cohesix-sel4-profile-tree-state.sha256",
+        "cohesix-composition-profile-build-inputs.json",
+        "cohesix-composition-CMakeCache.txt",
+        "cohesix-composition-platform_gen.h",
         "config.txt",
         "Config.txt",
         "u-boot.bin",
@@ -1894,21 +2192,38 @@ def test_skip_build_requires_exact_manifest_feature_and_profile_provenance() -> 
         "composition_cmake_cache_sha256",
         "composition_timer_header_sha256",
         "wrapper_sha256",
+        "kernel_elf_sha256",
         "rootserver_sha256",
         "rootserver_cpio_sha256",
         "driver_runtime_cpio_sha256",
+        "driver_runtime_manifest_sha256",
+        "worker_image_archive_sha256",
+        "worker_image_manifest_sha256",
+        "resolved_manifest_sha256",
+        "topology_sha256",
+        "source_inventory_sha256",
+        "worker_abi_identity_sha256",
     ):
         assert field in source
-    assert "cohesix-pi4-sel4-image-provenance/v4" in source
+    assert "cohesix-pi4-sel4-image-provenance/v5" in source
 
 
 @pytest.mark.parametrize(
     "tampered_relative_path",
     [
         "assembly/sel4test-driver-image-arm-bcm2711",
+        "assembly/sel4test-driver-image-arm-bcm2711.cohesix-provenance.json",
         "assembly/rootserver",
         "assembly/archive.archive.o.cpio",
+        "assembly/cohesix-root-task-resolved.json",
+        "assembly/cohesix-root-task-topology.json",
+        "sel4-build/elfloader/kernel.elf",
         "driver-runtime/cohesix-driver-runtimes.cpio",
+        "driver-runtime/cohesix-driver-runtime-manifest.json",
+        "worker-images/cohesix-worker-images.cpio",
+        "worker-images/cohesix-worker-image-manifest.json",
+        "build-identities/source-inventory.json",
+        "build-identities/worker-abi-identity.json",
         "manifest.toml",
         "sel4-build/cohesix-profile-build-inputs.json",
         "assembly/composition-profile-build-inputs.json",
@@ -1927,7 +2242,15 @@ def test_skip_build_provenance_rejects_each_bound_artifact_tamper(
         "assembly/sel4test-driver-image-arm-bcm2711": b"wrapper\n",
         "assembly/rootserver": b"rootserver\n",
         "assembly/archive.archive.o.cpio": b"cpio\n",
+        "assembly/cohesix-root-task-resolved.json": b"resolved manifest\n",
+        "assembly/cohesix-root-task-topology.json": b"topology\n",
+        "sel4-build/elfloader/kernel.elf": b"kernel\n",
         "driver-runtime/cohesix-driver-runtimes.cpio": b"driver cpio\n",
+        "driver-runtime/cohesix-driver-runtime-manifest.json": b"driver manifest\n",
+        "worker-images/cohesix-worker-images.cpio": b"worker cpio\n",
+        "worker-images/cohesix-worker-image-manifest.json": b"worker manifest\n",
+        "build-identities/source-inventory.json": b"source inventory\n",
+        "build-identities/worker-abi-identity.json": b"worker abi\n",
         "manifest.toml": b"manifest\n",
         "sel4-build/cohesix-profile-build-inputs.json": b"canonical stamp\n",
         "assembly/composition-profile-build-inputs.json": b"composition stamp\n",
@@ -1941,11 +2264,20 @@ def test_skip_build_provenance_rejects_each_bound_artifact_tamper(
 
     shell_state = (
         'SEL4_BUILD_DIR="$ROOT_DIR/sel4-build"; '
-        'EXACT_PI4_IMAGE="$ROOT_DIR/assembly/sel4test-driver-image-arm-bcm2711"; '
-        'EXACT_ROOT_ELF="$ROOT_DIR/assembly/rootserver"; '
-        'EXACT_ROOT_CPIO="$ROOT_DIR/assembly/archive.archive.o.cpio"; '
-        'DRIVER_RUNTIME_EMBED_DIR="$ROOT_DIR/driver-runtime"; '
-        'DRIVER_RUNTIME_EMBED_CPIO_NAME="cohesix-driver-runtimes.cpio"; '
+            'EXACT_PI4_IMAGE="$ROOT_DIR/assembly/sel4test-driver-image-arm-bcm2711"; '
+            'EXACT_WRAPPER_PROVENANCE="$ROOT_DIR/assembly/sel4test-driver-image-arm-bcm2711.cohesix-provenance.json"; '
+            'EXACT_KERNEL_ELF="$ROOT_DIR/sel4-build/elfloader/kernel.elf"; '
+            'EXACT_ROOT_ELF="$ROOT_DIR/assembly/rootserver"; '
+            'EXACT_ROOT_CPIO="$ROOT_DIR/assembly/archive.archive.o.cpio"; '
+            'EXACT_RESOLVED_MANIFEST="$ROOT_DIR/assembly/cohesix-root-task-resolved.json"; '
+            'EXACT_TOPOLOGY="$ROOT_DIR/assembly/cohesix-root-task-topology.json"; '
+            'DRIVER_RUNTIME_EMBED_DIR="$ROOT_DIR/driver-runtime"; '
+            'DRIVER_RUNTIME_EMBED_CPIO_NAME="cohesix-driver-runtimes.cpio"; '
+            'EXACT_DRIVER_RUNTIME_MANIFEST="$ROOT_DIR/driver-runtime/cohesix-driver-runtime-manifest.json"; '
+            'EXACT_WORKER_IMAGE_ARCHIVE="$ROOT_DIR/worker-images/cohesix-worker-images.cpio"; '
+            'EXACT_WORKER_IMAGE_MANIFEST="$ROOT_DIR/worker-images/cohesix-worker-image-manifest.json"; '
+            'EXACT_SOURCE_INVENTORY="$ROOT_DIR/build-identities/source-inventory.json"; '
+            'EXACT_WORKER_ABI_IDENTITY="$ROOT_DIR/build-identities/worker-abi-identity.json"; '
         'EXACT_CANONICAL_PROFILE_STAMP="$ROOT_DIR/sel4-build/cohesix-profile-build-inputs.json"; '
         'EXACT_COMPOSITION_RECORD="$ROOT_DIR/assembly/composition-profile-build-inputs.json"; '
         'EXACT_COMPOSITION_CACHE="$ROOT_DIR/assembly/composition-CMakeCache.txt"; '
@@ -1963,11 +2295,25 @@ def test_skip_build_provenance_rejects_each_bound_artifact_tamper(
     assert published.returncode == 0, published.stderr
 
     tampered = tmp_path / tampered_relative_path
-    tampered.write_bytes(tampered.read_bytes() + b"tamper\n")
+    if tampered.name.endswith(".cohesix-provenance.json"):
+        record = tampered.read_text(encoding="utf-8")
+        tampered.write_text(
+            record.replace(
+                "{",
+                '{"schema":"cohesix-pi4-sel4-image-provenance/v5",',
+                1,
+            ),
+            encoding="utf-8",
+        )
+    else:
+        tampered.write_bytes(tampered.read_bytes() + b"tamper\n")
     verified = _source_function(
         script,
         f"{shell_state} verify_skip_build_provenance",
     )
 
     assert verified.returncode != 0
-    assert "provenance does not match" in verified.stderr
+    if tampered.name.endswith(".cohesix-provenance.json"):
+        assert "duplicate provenance key" in verified.stderr
+    else:
+        assert "provenance does not match" in verified.stderr

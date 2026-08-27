@@ -19,20 +19,24 @@ import concurrent.futures
 import csv
 import errno
 import hashlib
+import ipaddress
 import json
 import math
 import os
 import pathlib
 import queue
 import random
+import re
 import signal
 import socket
 import stat
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import traceback
+import zlib
 from datetime import datetime, timezone
 import urllib.error
 import urllib.parse
@@ -141,10 +145,104 @@ EXECUTABLE_WORKER_ROLES = (
     "worker-gpu",
     "worker-lora",
 )
-
-
+BENCHMARK_TARGET_QEMU = "qemu"
+BENCHMARK_TARGET_PI4 = "pi4"
+BENCHMARK_TRANSPORT_QEMU = "qemu"
+BENCHMARK_TRANSPORT_GENET = "genet"
+BENCHMARK_TRANSPORT_WIFI = "wifi"
+BENCHMARK_TARGET_EVIDENCE_SCHEMA = "cohesix-benchmark-target-evidence/v2"
+BENCHMARK_PROVENANCE_SCHEMA = "cohesix-benchmark-provenance/v2"
+PI_NETWORK_EVIDENCE_SCHEMA = "cohesix-pi-network-evidence/v1"
+PI_WRAPPER_PROVENANCE_SCHEMA = "cohesix-pi4-sel4-image-provenance/v5"
+PI_CYW43_COEXISTENCE_SCHEMA = "cohesix-cyw43-coexistence-binding/v2"
+PI_CONSOLE_TCP_PORT = 31337
+GENERATED_TOPOLOGY_SCHEMA = "cohesix-root-tcb-generated-inventory/v1"
+PI_WRAPPER_PROVENANCE_KEYS = {
+    "schema",
+    "git_commit",
+    "source_tree_clean",
+    "build_timestamp",
+    "root_task_features",
+    "source_manifest_sha256",
+    "resolved_manifest_sha256",
+    "topology_sha256",
+    "source_inventory_sha256",
+    "worker_abi_identity_sha256",
+    "canonical_profile_stamp_sha256",
+    "canonical_profile_state_sha256",
+    "composition_record_sha256",
+    "composition_cmake_cache_sha256",
+    "composition_timer_header_sha256",
+    "wrapper_sha256",
+    "kernel_elf_sha256",
+    "rootserver_sha256",
+    "rootserver_cpio_sha256",
+    "driver_runtime_cpio_sha256",
+    "driver_runtime_manifest_sha256",
+    "worker_image_archive_sha256",
+    "worker_image_manifest_sha256",
+}
+PI_CYW43_REQUIRED_OUTCOMES = {
+    "active_net": "cyw43",
+    "runtime_dma": "fresh-pi",
+    "counter": "counter-qualified",
+    "dma_blocker": "none",
+    "ring_call_outstanding": 0,
+    "ring_call_unresolved_timeout": 0,
+    "timer_backend": "arch-counter",
+    "timer_clock_hz": 54_000_000,
+    "timer_el0_counter": "vct",
+    "dummy_timer_seen": False,
+    "net_active": "wifi",
+    "dhcp": "bound",
+    "tcp_ready": True,
+    "nettest": True,
+    "cohsh_auth": True,
+    "wifi_gate": 10,
+    "wifi_blocker": "none",
+    "wifi_dpc": True,
+    "sdio_dedicated": True,
+    "cyw43_dedicated": True,
+    "owner_state": True,
+    "bootstrap_supervisor": True,
+    "firmware_identity": True,
+    "clm_ready": True,
+    "firmware_version": True,
+    "clm_version": True,
+    "gate7_complete": True,
+    "sdio_irq158_inband": True,
+}
+DEFAULT_BENCHMARK_EVIDENCE_MAX_AGE_SECS = 6 * 60 * 60
+BENCHMARK_EVIDENCE_MAX_BYTES = 64 * 1024 * 1024
+BENCHMARK_IMAGE_MAX_BYTES = 256 * 1024 * 1024
+BENCHMARK_TARGET_PROOF = {
+    BENCHMARK_TARGET_QEMU: "qemu",
+    BENCHMARK_TARGET_PI4: "fresh-pi",
+}
+TARGET_SESSION_KEYS = {
+    "target",
+    "source_sha256",
+    "manifest_sha256",
+    "kernel_sha256",
+    "root_image_sha256",
+    "driver_archive_sha256",
+    "driver_manifest_sha256",
+    "cyw43_coexistence_record_sha256",
+    "worker_archive_sha256",
+    "worker_image_manifest_sha256",
+    "worker_abi_sha256",
+}
+SERIAL_ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+SERIAL_BOOT_CHAIN_ROOT_MARKERS = ("u-boot ",)
+SERIAL_BOOT_CHAIN_CONTINUATION_MARKERS = ("starting kernel ...", "elf-loader started")
+SERIAL_BOOT_START_MARKERS = (
+    "bootstrapping kernel",
+    "booting all finished, dropped to user space",
+    "[kernel:entry] root-task entry reached",
+    "[cohesix:root-task] cohesix boot: root-task online",
+)
 def is_live_executable_population(population_mode: str) -> bool:
-    """Return whether traffic targets real compiler-admitted QEMU Workers."""
+    """Return whether traffic targets real compiler-admitted Workers."""
     return population_mode in (POPULATION_EXECUTABLE, POPULATION_EXECUTABLE_LOG)
 WORKER_LIFECYCLE_STATES = frozenset(
     ("absent", "queued", "starting", "ready", "closing", "faulted", "terminal")
@@ -283,6 +381,59 @@ class PopulationSnapshot:
             "ready": self.ready,
             "backend_class": self.backend_class,
             "proof_class": self.proof_class,
+        }
+
+
+@dataclass(frozen=True)
+class BenchmarkTargetEvidence:
+    """Validated immutable target proof used to qualify one benchmark run."""
+
+    target: str
+    transport: str
+    proof_class: str
+    source_sha256: str
+    manifest_sha256: str
+    image_sha256: str
+    root_image_sha256: str
+    target_session_sha256: str
+    component_acceptance_sha256: Optional[str]
+    runtime_evidence_sha256: str
+    network_evidence_sha256: str
+    evidence_sha256: str
+    captured_unix_s: int
+    network_evidence_bytes: int = 0
+    boot_start_offset: int = -1
+    serial_evidence_sha256: str = ""
+    network_capture_sha256: str = ""
+    network_capture_bytes: int = 0
+    cyw43_coexistence_sha256: str = ""
+    cyw43_coexistence_bytes: int = 0
+    gateway_connects: int = -1
+    gateway_reconnects: int = -1
+    gateway_last_change_unix_ms: int = -1
+    gateway_status_endpoint: str = ""
+    gateway_target_host: str = ""
+    gateway_target_port: int = -1
+    topology_sha256: str = ""
+    worker_templates: Tuple[Dict[str, object], ...] = ()
+
+    def provenance_fields(self) -> Dict[str, object]:
+        """Return exact immutable fields copied into the benchmark report."""
+
+        return {
+            "target": self.target,
+            "transport": self.transport,
+            "proof_class": self.proof_class,
+            "source_sha256": self.source_sha256,
+            "manifest_sha256": self.manifest_sha256,
+            "image_sha256": self.image_sha256,
+            "root_image_sha256": self.root_image_sha256,
+            "target_session_sha256": self.target_session_sha256,
+            "component_acceptance_sha256": self.component_acceptance_sha256,
+            "runtime_evidence_sha256": self.runtime_evidence_sha256,
+            "network_evidence_sha256": self.network_evidence_sha256,
+            "performance_qualification_sha256": self.evidence_sha256,
+            "captured_unix_s": self.captured_unix_s,
         }
 
 
@@ -548,10 +699,15 @@ class SimState:
     telemetry_reference_chunk_bytes: int = DEFAULT_TELEMETRY_REFERENCE_CHUNK_BYTES
     telemetry_reference_records: Optional[List[str]] = None
     population_mode: str = POPULATION_HOST_MODEL
+    benchmark_target: str = BENCHMARK_TARGET_QEMU
+    benchmark_transport: str = BENCHMARK_TRANSPORT_QEMU
+    target_evidence: Optional[BenchmarkTargetEvidence] = None
     maximum_live_tasks: Optional[int] = None
     worker_telemetry_paths: Dict[str, str] = field(default_factory=dict)
     population_observations: List[PopulationSnapshot] = field(default_factory=list)
     acceptance_binding: Optional[Dict[str, object]] = None
+    target_session_binding: Optional[Dict[str, object]] = None
+    target_session_raw: Optional[bytes] = None
     executable_pre_state: Optional[Dict[str, object]] = None
     executable_post_state: Optional[Dict[str, object]] = None
     lifecycle_cycles: List[Dict[str, object]] = field(default_factory=list)
@@ -623,7 +779,7 @@ class RestClient:
             raise RestError(f"HTTP {exc.code} {exc.reason} for {url}") from exc
         except urllib.error.URLError as exc:
             raise RestError(f"URL error for {url}: {exc}") from exc
-        return json.loads(payload)
+        return parse_strict_json_object(payload, "gateway POST response")
 
     def ls(self, path: str) -> GatewayResponse:
         return parse_gateway_response(
@@ -703,13 +859,13 @@ def read_worker_failure_context(
 
 
 def fetch_json(url: str, timeout: float, headers: Optional[Dict[str, str]] = None) -> dict:
-    """Fetch JSON from a URL and decode the response."""
+    """Fetch one strict JSON object from a gateway URL."""
     request = urllib.request.Request(url, method="GET")
     for key, value in (headers or {}).items():
         request.add_header(key, value)
     with urllib.request.urlopen(request, timeout=timeout) as response:
         payload = response.read()
-    return json.loads(payload)
+    return parse_strict_json_object(payload, "gateway GET response")
 
 
 def fetch_gateway_status_snapshot(
@@ -730,7 +886,20 @@ def fetch_gateway_status_snapshot(
             for key in GATEWAY_STATUS_BROKER_COUNTERS
             if key in broker
         ]
-        emit(logger, f"[gateway] status_{label} {' '.join(counters)}")
+        continuity = [
+            f"{key}={status[key]}"
+            for key in (
+                "connected",
+                "connects",
+                "reconnects",
+                "last_change_unix_ms",
+            )
+            if key in status
+        ]
+        emit(
+            logger,
+            f"[gateway] status_{label} {' '.join(continuity + counters)}",
+        )
     else:
         emit(logger, f"[gateway] status_{label}=available")
     return status
@@ -758,9 +927,238 @@ def gateway_status_delta(
         if is_json_number(before_value) and is_json_number(after_value):
             diff = after_value - before_value
             broker_delta[key] = diff if diff >= 0 else 0
-    if not broker_delta:
+    connection: Dict[str, object] = {}
+    if "connected" in before and "connected" in after:
+        connection.update(
+            {
+                "connected_before": before["connected"],
+                "connected_after": after["connected"],
+            }
+        )
+    for key in ("connects", "reconnects"):
+        before_value = before.get(key)
+        after_value = after.get(key)
+        if is_json_number(before_value) and is_json_number(after_value):
+            diff = after_value - before_value
+            connection[key] = diff if diff >= 0 else 0
+    if not broker_delta and not connection:
         return None
-    return {"broker": broker_delta}
+    result = {"broker": broker_delta}
+    if connection:
+        result["connection"] = connection
+    return result
+
+
+def validate_pi_gateway_continuity(
+    before: Optional[Dict[str, object]],
+    after: Optional[Dict[str, object]],
+    evidence: Optional[BenchmarkTargetEvidence] = None,
+    rest_url: Optional[str] = None,
+    tcp_host: Optional[str] = None,
+    tcp_port: Optional[int] = None,
+) -> None:
+    """Require one unchanged gateway connection across qualified Pi pressure."""
+
+    if before is None or after is None:
+        raise RestError("qualified Pi pressure requires gateway continuity snapshots")
+    for label, value in (("start", before), ("end", after)):
+        connects = value.get("connects")
+        reconnects = value.get("reconnects")
+        target_host = value.get("target_host")
+        target_port = value.get("target_port")
+        try:
+            canonical_target_host = str(ipaddress.ip_address(target_host))
+        except (TypeError, ValueError) as exc:
+            raise RestError(
+                f"qualified Pi pressure has invalid gateway {label} target host"
+            ) from exc
+        if (
+            value.get("connected") is not True
+            or not isinstance(connects, int)
+            or isinstance(connects, bool)
+            or not isinstance(reconnects, int)
+            or isinstance(reconnects, bool)
+            or connects < 0
+            or reconnects < 0
+            or target_host != canonical_target_host
+            or not isinstance(target_port, int)
+            or isinstance(target_port, bool)
+            or target_port != PI_CONSOLE_TCP_PORT
+        ):
+            raise RestError(
+                f"qualified Pi pressure has invalid gateway {label} continuity"
+            )
+    if (
+        before["connects"] != 1
+        or before["reconnects"] != 0
+        or after["connects"] != before["connects"]
+        or after["reconnects"] != before["reconnects"]
+        or after["target_host"] != before["target_host"]
+        or after["target_port"] != before["target_port"]
+    ):
+        raise RestError(
+            "qualified Pi pressure requires one connection and zero reconnects"
+        )
+    if evidence is not None and (
+        before["connects"] != evidence.gateway_connects
+        or before["reconnects"] != evidence.gateway_reconnects
+        or before.get("last_change_unix_ms")
+        != evidence.gateway_last_change_unix_ms
+        or before.get("target_host") != evidence.gateway_target_host
+        or before.get("target_port") != evidence.gateway_target_port
+    ):
+        raise RestError(
+            "qualified Pi gateway is not the gate-captured connection session"
+        )
+    if evidence is not None and rest_url is not None:
+        status_endpoint = normalize_rest_url(rest_url) + "/v1/meta/status"
+        if evidence.gateway_status_endpoint != status_endpoint:
+            raise RestError(
+                "qualified Pi REST endpoint differs from gate-captured gateway"
+            )
+    if evidence is not None and tcp_host is not None:
+        try:
+            canonical_host = str(ipaddress.ip_address(tcp_host))
+        except ValueError as exc:
+            raise RestError("qualified Pi --tcp-host must be a canonical IP") from exc
+        if tcp_host != canonical_host or evidence.gateway_target_host != canonical_host:
+            raise RestError(
+                "qualified Pi TCP host differs from gate-captured target host"
+            )
+    if evidence is not None and tcp_port is not None:
+        if (
+            tcp_port != PI_CONSOLE_TCP_PORT
+            or evidence.gateway_target_port != PI_CONSOLE_TCP_PORT
+        ):
+            raise RestError(
+                "qualified Pi TCP port differs from gate-captured console port"
+            )
+
+
+def pi_gateway_continuity_from_runtime(
+    runtime: Dict[str, str],
+) -> Dict[str, object]:
+    """Validate and project the gate-captured gateway session identity."""
+
+    required = {
+        "PI4_RUNTIME_DMA_GATEWAY_CONTINUITY",
+        "PI4_RUNTIME_DMA_GATEWAY_STATUS_ENDPOINT",
+        "PI4_RUNTIME_DMA_GATEWAY_TARGET_HOST",
+        "PI4_RUNTIME_DMA_GATEWAY_TARGET_PORT",
+        "PI4_RUNTIME_DMA_GATEWAY_START_CAPTURED_UNIX_NS",
+        "PI4_RUNTIME_DMA_GATEWAY_START_CONNECTED",
+        "PI4_RUNTIME_DMA_GATEWAY_START_CONNECTS",
+        "PI4_RUNTIME_DMA_GATEWAY_START_RECONNECTS",
+        "PI4_RUNTIME_DMA_GATEWAY_START_LAST_CHANGE_UNIX_MS",
+        "PI4_RUNTIME_DMA_GATEWAY_START_TARGET_HOST",
+        "PI4_RUNTIME_DMA_GATEWAY_START_TARGET_PORT",
+        "PI4_RUNTIME_DMA_GATEWAY_END_CAPTURED_UNIX_NS",
+        "PI4_RUNTIME_DMA_GATEWAY_END_CONNECTED",
+        "PI4_RUNTIME_DMA_GATEWAY_END_CONNECTS",
+        "PI4_RUNTIME_DMA_GATEWAY_END_RECONNECTS",
+        "PI4_RUNTIME_DMA_GATEWAY_END_LAST_CHANGE_UNIX_MS",
+        "PI4_RUNTIME_DMA_GATEWAY_END_TARGET_HOST",
+        "PI4_RUNTIME_DMA_GATEWAY_END_TARGET_PORT",
+    }
+    if any(key not in runtime for key in required):
+        raise RestError("Pi runtime proof lacks gateway continuity evidence")
+    endpoint = runtime["PI4_RUNTIME_DMA_GATEWAY_STATUS_ENDPOINT"]
+    target_host = runtime["PI4_RUNTIME_DMA_GATEWAY_TARGET_HOST"]
+    target_port = runtime["PI4_RUNTIME_DMA_GATEWAY_TARGET_PORT"]
+    try:
+        parsed_endpoint = urllib.parse.urlsplit(endpoint)
+        parsed_endpoint.port
+    except ValueError as exc:
+        raise RestError("Pi runtime proof has invalid gateway status endpoint") from exc
+    try:
+        canonical_target_host = str(ipaddress.ip_address(target_host))
+    except ValueError as exc:
+        raise RestError("Pi runtime proof has invalid gateway target host") from exc
+    if (
+        runtime["PI4_RUNTIME_DMA_GATEWAY_CONTINUITY"]
+        != "connected-single-session"
+        or parsed_endpoint.scheme not in {"http", "https"}
+        or not parsed_endpoint.hostname
+        or parsed_endpoint.username is not None
+        or parsed_endpoint.password is not None
+        or parsed_endpoint.path != "/v1/meta/status"
+        or parsed_endpoint.query
+        or parsed_endpoint.fragment
+        or target_host != canonical_target_host
+        or target_port != str(PI_CONSOLE_TCP_PORT)
+        or runtime["PI4_RUNTIME_DMA_GATEWAY_START_TARGET_HOST"]
+        != canonical_target_host
+        or runtime["PI4_RUNTIME_DMA_GATEWAY_END_TARGET_HOST"]
+        != canonical_target_host
+        or runtime["PI4_RUNTIME_DMA_GATEWAY_START_TARGET_PORT"]
+        != str(PI_CONSOLE_TCP_PORT)
+        or runtime["PI4_RUNTIME_DMA_GATEWAY_END_TARGET_PORT"]
+        != str(PI_CONSOLE_TCP_PORT)
+        or len(endpoint) > 2048
+        or any(ord(character) < 0x20 for character in endpoint)
+        or runtime["PI4_RUNTIME_DMA_GATEWAY_START_CONNECTED"] != "true"
+        or runtime["PI4_RUNTIME_DMA_GATEWAY_END_CONNECTED"] != "true"
+    ):
+        raise RestError("Pi runtime proof has invalid gateway continuity state")
+
+    values: Dict[str, int] = {}
+    for name in (
+        "capture_started",
+        "capture_finished",
+        "start_captured",
+        "end_captured",
+        "start_connects",
+        "start_reconnects",
+        "start_last_change",
+        "end_connects",
+        "end_reconnects",
+        "end_last_change",
+    ):
+        field = {
+            "capture_started": "PI4_RUNTIME_DMA_CAPTURE_STARTED_UNIX_NS",
+            "capture_finished": "PI4_RUNTIME_DMA_CAPTURE_FINISHED_UNIX_NS",
+            "start_captured": "PI4_RUNTIME_DMA_GATEWAY_START_CAPTURED_UNIX_NS",
+            "end_captured": "PI4_RUNTIME_DMA_GATEWAY_END_CAPTURED_UNIX_NS",
+            "start_connects": "PI4_RUNTIME_DMA_GATEWAY_START_CONNECTS",
+            "start_reconnects": "PI4_RUNTIME_DMA_GATEWAY_START_RECONNECTS",
+            "start_last_change": "PI4_RUNTIME_DMA_GATEWAY_START_LAST_CHANGE_UNIX_MS",
+            "end_connects": "PI4_RUNTIME_DMA_GATEWAY_END_CONNECTS",
+            "end_reconnects": "PI4_RUNTIME_DMA_GATEWAY_END_RECONNECTS",
+            "end_last_change": "PI4_RUNTIME_DMA_GATEWAY_END_LAST_CHANGE_UNIX_MS",
+        }[name]
+        raw = runtime.get(field, "")
+        if re.fullmatch(r"[0-9]+", raw) is None:
+            raise RestError("Pi runtime proof has invalid gateway continuity counters")
+        value = int(raw)
+        if value > (1 << 63) - 1:
+            raise RestError("Pi runtime proof gateway continuity counter is unbounded")
+        values[name] = value
+    if (
+        values["capture_started"] <= 0
+        or values["capture_finished"] < values["capture_started"]
+        or not values["capture_started"]
+        <= values["start_captured"]
+        <= values["end_captured"]
+        <= values["capture_finished"]
+        or values["start_connects"] != 1
+        or values["end_connects"] != 1
+        or values["start_reconnects"] != 0
+        or values["end_reconnects"] != 0
+        or values["start_last_change"] <= 0
+        or values["end_last_change"] != values["start_last_change"]
+        or values["start_last_change"] < values["capture_started"] // 1_000_000
+        or values["start_last_change"] > values["start_captured"] // 1_000_000
+        or values["end_last_change"] > values["end_captured"] // 1_000_000
+    ):
+        raise RestError("Pi runtime proof gateway continuity window is invalid")
+    return {
+        "connects": values["end_connects"],
+        "reconnects": values["end_reconnects"],
+        "last_change_unix_ms": values["end_last_change"],
+        "status_endpoint": endpoint,
+        "target_host": canonical_target_host,
+        "target_port": PI_CONSOLE_TCP_PORT,
+    }
 
 
 def normalize_rest_url(rest_url: str) -> str:
@@ -883,6 +1281,58 @@ def executable_role_slots(bounds: dict) -> Dict[str, int]:
     ):
         raise RestError("gateway executable Worker role topology is incomplete")
     return slots
+
+
+def executable_population_from_manifest_and_bounds(
+    manifest: Dict[str, object],
+    bounds: dict,
+    manifest_sha256: str,
+) -> int:
+    """Bind the pressure population to one resolved manifest and live bounds."""
+
+    if not re.fullmatch(r"[0-9a-f]{64}", manifest_sha256):
+        raise RestError("resolved manifest SHA-256 is malformed")
+    if bounds.get("manifest_sha256") != manifest_sha256:
+        raise RestError("gateway bounds do not bind the resolved manifest bytes")
+    runtime = manifest.get("worker_runtime")
+    admission = manifest.get("worker_resource_admission")
+    if not isinstance(runtime, dict) or not isinstance(admission, dict):
+        raise RestError("resolved manifest lacks executable Worker population truth")
+    maximum = runtime.get("max_workers")
+    roles = admission.get("executable_roles")
+    if (
+        not isinstance(maximum, int)
+        or isinstance(maximum, bool)
+        or maximum <= 0
+        or admission.get("enabled") is not True
+        or not isinstance(roles, list)
+        or not roles
+    ):
+        raise RestError("resolved manifest Worker population is malformed")
+    manifest_slots: Dict[str, int] = {}
+    for row in roles:
+        if not isinstance(row, dict):
+            raise RestError("resolved manifest executable role row is malformed")
+        role = row.get("role")
+        slots = row.get("executable_slots")
+        if (
+            not isinstance(role, str)
+            or role in manifest_slots
+            or not isinstance(slots, int)
+            or isinstance(slots, bool)
+            or slots <= 0
+        ):
+            raise RestError("resolved manifest executable role matrix is inconsistent")
+        manifest_slots[role] = slots
+    if set(manifest_slots) != set(EXECUTABLE_WORKER_ROLES):
+        raise RestError("resolved manifest executable role set is incomplete")
+    if sum(manifest_slots.values()) != maximum:
+        raise RestError("resolved manifest maximum differs from executable slots")
+    bound_slots = executable_role_slots(bounds)
+    bound_maximum = int(worker_runtime_bounds(bounds)["maximum_live_tasks"])
+    if manifest_slots != bound_slots or maximum != bound_maximum:
+        raise RestError("resolved manifest and live Worker bounds disagree")
+    return maximum
 
 
 def expected_worker_shard_label(worker_id: str, shard_bits: int) -> str:
@@ -1071,53 +1521,1520 @@ def valid_sha256(value: object) -> bool:
     )
 
 
-def executable_qemu_acceptance_binding(
-    client: RestClient,
-    bounds: dict,
-) -> Dict[str, object]:
-    """Validate current-session-bound QEMU component evidence before load."""
-    status = client.status()
-    if status.get("connected") is not True:
-        raise RestError("executable population requires a connected target")
-    if status.get("backend_class") != "console-projection":
-        raise RestError(
-            "executable population requires backend_class=console-projection"
-        )
-    acceptance = status.get("worker_acceptance")
-    if not isinstance(acceptance, dict):
-        raise RestError("executable population requires validated Worker acceptance")
+def canonical_json_sha256(value: object) -> str:
+    """Hash one JSON value with the repository's deterministic encoding."""
+
+    encoded = json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def read_frozen_artifact(
+    path_value: str,
+    label: str,
+    max_bytes: int,
+) -> Tuple[bytes, os.stat_result]:
+    """Read one bounded file through a pinned, no-symlink path walk."""
+
     if (
-        acceptance.get("schema") != "cohesix-worker-task-evidence/v1"
-        or acceptance.get("record_kind") != "target-component"
-        or acceptance.get("verdict") != "PASS"
-        or acceptance.get("target") != "qemu"
-        or acceptance.get("execution_proof") != "qemu"
-        or not valid_sha256(acceptance.get("evidence_sha256"))
-        or not valid_sha256(acceptance.get("topology_sha256"))
+        not path_value
+        or path_value.endswith(os.sep)
+        or any(ord(character) < 0x20 for character in path_value)
     ):
-        raise RestError("executable population requires exact PASS QEMU component evidence")
-
-    target_session = acceptance.get("target_session")
-    session_fields = (
-        "target_session_sha256",
-        "manifest_sha256",
-        "root_image_sha256",
-        "worker_archive_sha256",
-        "worker_image_manifest_sha256",
-        "worker_abi_sha256",
+        raise RestError(f"{label} path is invalid")
+    components = [
+        component
+        for component in path_value.split(os.sep)
+        if component not in ("", ".")
+    ]
+    if not components or ".." in components or not hasattr(os, "O_NOFOLLOW"):
+        raise RestError(f"{label} path is invalid")
+    close_on_exec = getattr(os, "O_CLOEXEC", 0)
+    directory_flags = (
+        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | close_on_exec
     )
-    if not isinstance(target_session, dict) or any(
-        not valid_sha256(target_session.get(field)) for field in session_fields
-    ):
-        raise RestError("QEMU acceptance lacks a bounded current target-session binding")
-    if target_session["manifest_sha256"] != bounds.get("manifest_sha256"):
-        raise RestError("QEMU acceptance manifest does not match gateway bounds")
+    file_flags = os.O_RDONLY | os.O_NOFOLLOW | close_on_exec
+    directory_descriptor = -1
+    descriptor = -1
+    try:
+        directory_descriptor = os.open(
+            os.sep if os.path.isabs(path_value) else ".",
+            directory_flags,
+        )
+        for component in components[:-1]:
+            next_descriptor = os.open(
+                component,
+                directory_flags,
+                dir_fd=directory_descriptor,
+            )
+            metadata = os.fstat(next_descriptor)
+            if not stat.S_ISDIR(metadata.st_mode):
+                os.close(next_descriptor)
+                raise RestError(f"{label} path has a non-directory ancestor")
+            os.close(directory_descriptor)
+            directory_descriptor = next_descriptor
+        descriptor = os.open(
+            components[-1],
+            file_flags,
+            dir_fd=directory_descriptor,
+        )
+    except OSError as exc:
+        raise RestError(f"cannot open {label} safely: {exc}") from exc
+    finally:
+        if directory_descriptor >= 0:
+            os.close(directory_descriptor)
+    try:
+        metadata = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_size <= 0
+            or metadata.st_size > max_bytes
+        ):
+            raise RestError(f"{label} has an invalid bounded size")
+        chunks: List[bytes] = []
+        remaining = metadata.st_size
+        while remaining:
+            chunk = os.read(descriptor, min(remaining, 1024 * 1024))
+            if not chunk:
+                raise RestError(f"{label} changed during bounded read")
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        final_metadata = os.fstat(descriptor)
+        if (
+            os.read(descriptor, 1)
+            or final_metadata.st_dev != metadata.st_dev
+            or final_metadata.st_ino != metadata.st_ino
+            or final_metadata.st_size != metadata.st_size
+            or final_metadata.st_mtime_ns != metadata.st_mtime_ns
+        ):
+            raise RestError(f"{label} changed during bounded read")
+        return b"".join(chunks), metadata
+    finally:
+        os.close(descriptor)
 
-    expected_role_slots = executable_role_slots(bounds)
-    expected_worker_count = sum(expected_role_slots.values())
-    workers = acceptance.get("workers")
-    if not isinstance(workers, list) or len(workers) != expected_worker_count:
-        raise RestError("QEMU acceptance requires every executable Worker slot")
+
+def parse_exact_env(raw: bytes, label: str) -> Dict[str, str]:
+    """Parse a strict nonempty KEY=VALUE proof artifact."""
+
+    try:
+        text_value = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise RestError(f"{label} is not UTF-8") from exc
+    fields: Dict[str, str] = {}
+    for line in text_value.splitlines():
+        key, separator, value = line.partition("=")
+        if (
+            not separator
+            or not key
+            or not value
+            or key in fields
+            or not all(character.isupper() or character.isdigit() or character == "_" for character in key)
+        ):
+            raise RestError(f"{label} contains a malformed or duplicate field")
+        fields[key] = value
+    if not fields:
+        raise RestError(f"{label} is empty")
+    return fields
+
+
+def parse_strict_json_object(raw: bytes, label: str) -> Dict[str, object]:
+    """Parse one JSON object while rejecting duplicates and non-finite values."""
+
+    def object_pairs(pairs: List[Tuple[str, object]]) -> Dict[str, object]:
+        result: Dict[str, object] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError(f"duplicate JSON key: {key}")
+            result[key] = value
+        return result
+
+    try:
+        value = json.loads(
+            raw,
+            object_pairs_hook=object_pairs,
+            parse_constant=lambda token: (_ for _ in ()).throw(
+                ValueError(f"non-finite JSON value: {token}")
+            ),
+        )
+    except (UnicodeDecodeError, ValueError, json.JSONDecodeError) as exc:
+        raise RestError(f"{label} is not strict JSON") from exc
+    if not isinstance(value, dict):
+        raise RestError(f"{label} must be a JSON object")
+    return value
+
+
+def read_stage_artifact(
+    stage: Dict[str, str],
+    field: str,
+    label: str,
+    max_bytes: int = BENCHMARK_EVIDENCE_MAX_BYTES,
+) -> Tuple[str, bytes, os.stat_result]:
+    """Read and verify one exact PATH/SHA256/BYTES stage-proof triple."""
+
+    path_value = stage.get(field, "")
+    raw, metadata = read_frozen_artifact(path_value, label, max_bytes)
+    expected_bytes = stage.get(f"{field}_BYTES")
+    expected_sha256 = stage.get(f"{field}_SHA256")
+    if (
+        expected_bytes != str(len(raw))
+        or expected_sha256 != hashlib.sha256(raw).hexdigest()
+    ):
+        raise RestError(f"{label} hash/size differs from retained bytes")
+    return path_value, raw, metadata
+
+
+def require_exact_artifact_bytes(
+    artifacts: Sequence[Tuple[str, bytes, str, int]],
+) -> None:
+    """Re-read a frozen artifact set and require byte-exact identity."""
+
+    for path_value, expected_raw, label, maximum in artifacts:
+        observed_raw, _metadata = read_frozen_artifact(path_value, label, maximum)
+        if observed_raw != expected_raw:
+            raise RestError(f"{label} changed during evidence validation")
+
+
+def parse_exact_newc_members(raw: bytes, label: str) -> Dict[str, bytes]:
+    """Parse the deterministic newc subset used by seL4 root archives."""
+
+    offset = 0
+    members: Dict[str, bytes] = {}
+    previous_name = ""
+    while True:
+        if len(raw) - offset < 110 or raw[offset : offset + 6] != b"070701":
+            raise RestError(f"{label} is not canonical newc")
+        header = raw[offset : offset + 110]
+        try:
+            fields = tuple(
+                int(header[6 + index * 8 : 14 + index * 8], 16)
+                for index in range(13)
+            )
+        except ValueError as exc:
+            raise RestError(f"{label} has a malformed newc field") from exc
+        mode = fields[1]
+        file_size = fields[6]
+        name_size = fields[11]
+        checksum = fields[12]
+        if name_size < 2 or checksum != 0:
+            raise RestError(f"{label} has a noncanonical newc header")
+        offset += 110
+        if name_size > len(raw) - offset:
+            raise RestError(f"{label} has a truncated newc name")
+        name_raw = raw[offset : offset + name_size]
+        if name_raw[-1:] != b"\0" or b"\0" in name_raw[:-1]:
+            raise RestError(f"{label} has an invalid newc name")
+        try:
+            name = name_raw[:-1].decode("ascii")
+        except UnicodeDecodeError as exc:
+            raise RestError(f"{label} has a non-ASCII newc name") from exc
+        offset += name_size
+        name_padding = (-offset) & 3
+        if any(raw[offset : offset + name_padding]):
+            raise RestError(f"{label} has nonzero newc name padding")
+        offset += name_padding
+        if file_size > len(raw) - offset:
+            raise RestError(f"{label} has a truncated newc member")
+        payload = raw[offset : offset + file_size]
+        offset += file_size
+        data_padding = (-offset) & 3
+        if any(raw[offset : offset + data_padding]):
+            raise RestError(f"{label} has nonzero newc data padding")
+        offset += data_padding
+        if name == "TRAILER!!!":
+            if payload or any(raw[offset:]):
+                raise RestError(f"{label} has a noncanonical newc trailer")
+            return members
+        if name <= previous_name or name in members:
+            raise RestError(f"{label} has duplicate or unsorted newc members")
+        previous_name = name
+        if mode & 0o170000 != 0o100000:
+            raise RestError(f"{label} contains a non-regular newc member")
+        members[name] = payload
+
+
+def validate_pi_root_cpio(
+    root_cpio_raw: bytes,
+    kernel_raw: bytes,
+    root_raw: bytes,
+) -> None:
+    """Require the exact two-member Pi root archive and staged payload bytes."""
+
+    members = parse_exact_newc_members(root_cpio_raw, "Pi root CPIO")
+    if (
+        set(members) != {"kernel.elf", "rootserver"}
+        or members["kernel.elf"] != kernel_raw
+        or members["rootserver"] != root_raw
+    ):
+        raise RestError("Pi root CPIO does not contain the exact kernel/root members")
+
+
+def validate_pi_runtime_uimage(uimage_raw: bytes, runtime_cpio_raw: bytes) -> None:
+    """Validate the exact uncompressed AArch64 U-Boot ramdisk wrapper."""
+
+    header_bytes = 64
+    if len(uimage_raw) < header_bytes:
+        raise RestError("Pi driver runtime uImage has a truncated header")
+    header = bytearray(uimage_raw[:header_bytes])
+    if int.from_bytes(header[0:4], "big") != 0x27051956:
+        raise RestError("Pi driver runtime uImage has an invalid magic")
+    recorded_header_crc = int.from_bytes(header[4:8], "big")
+    header[4:8] = b"\0\0\0\0"
+    if zlib.crc32(header) & 0xFFFFFFFF != recorded_header_crc:
+        raise RestError("Pi driver runtime uImage has an invalid header CRC")
+    payload = uimage_raw[header_bytes:]
+    if (
+        int.from_bytes(header[12:16], "big") != len(payload)
+        or int.from_bytes(header[16:20], "big") != 0
+        or int.from_bytes(header[20:24], "big") != 0
+        or int.from_bytes(header[24:28], "big")
+        != zlib.crc32(payload) & 0xFFFFFFFF
+        or tuple(header[28:32]) != (5, 22, 3, 0)
+        or bytes(header[32:64]).rstrip(b"\0")
+        != b"Cohesix Pi4 driver runtimes"
+        or payload != runtime_cpio_raw
+    ):
+        raise RestError("Pi driver runtime uImage differs from the exact raw CPIO")
+
+
+def pi_cyw43_outcomes_from_normalized_gate(raw: bytes) -> Dict[str, object]:
+    """Derive the positive CYW43 outcome object from exact normalized serial."""
+
+    gate = parse_exact_env(raw, "Pi normalized WiFi gate")
+    required = {
+        "DRIVER_TASK_ACTIVE_NET": "cyw43",
+        "PI4_RUNTIME_DMA_PROOF": "fresh-pi",
+        "PI4_RUNTIME_DMA_COUNTER_PROOF": "counter-qualified",
+        "DRIVER_TASK_DMA_BLOCKER": "none",
+        "DRIVER_TASK_RING_CALL_OUTSTANDING": "0",
+        "DRIVER_TASK_RING_CALL_UNRESOLVED_TIMEOUT": "0",
+        "DRIVER_TASK_BOOTSTRAP_DEFERRED": "0",
+        "TIMER_BACKEND": "arch-counter",
+        "TIMER_CLOCK_HZ": "54000000",
+        "TIMER_EL0_COUNTER": "vct",
+        "DUMMY_TIMER_SEEN": "no",
+        "NET_ACTIVE": "wifi",
+        "NET_ADDR_SRC": "dhcp-lease",
+        "NET_DHCP": "bound",
+        "NET_TCP_READY": "yes",
+        "NETTEST_PROOF": "yes",
+        "COHSH_TCP_AUTH_PROOF": "yes",
+        "WIFI_GATE": "10",
+        "WIFI_BLOCKER": "none",
+        "WIFI_DPC_PROOF": "yes",
+        "DRIVER_TASK_SDIO_DEDICATED": "yes",
+        "DRIVER_TASK_NET_DEDICATED": "yes",
+        "DRIVER_TASK_OWNER_STATE_PROOF": "yes",
+        "CYW43_BOOTSTRAP_SUPERVISOR_READY": "yes",
+        "WIFI_FIRMWARE_IDENTITY_PROOF": "yes",
+        "WIFI_CLM_READY_PROOF": "yes",
+        "WIFI_FIRMWARE_VERSION_PROOF": "yes",
+        "WIFI_CLM_VERSION_PROOF": "yes",
+        "WIFI_GATE7_COMPLETE": "yes",
+        "SDIO_IRQ158_INBAND_PROOF": "yes",
+    }
+    if any(gate.get(key) != value for key, value in required.items()):
+        raise RestError("Pi normalized WiFi gate lacks exact positive outcomes")
+
+    counters: Dict[str, int] = {}
+    for field in ("TCP_ACCEPTS", "TCP_AUTH_SESSIONS", "TCP_RX_BYTES"):
+        value = gate.get(field, "")
+        if re.fullmatch(r"[0-9]+", value) is None or int(value) < 1:
+            raise RestError("Pi normalized WiFi gate lacks positive TCP counters")
+        counters[field] = int(value)
+    return {
+        **PI_CYW43_REQUIRED_OUTCOMES,
+        "tcp_accepts": counters["TCP_ACCEPTS"],
+        "tcp_auth_sessions": counters["TCP_AUTH_SESSIONS"],
+        "tcp_rx_bytes": counters["TCP_RX_BYTES"],
+    }
+
+
+def validate_pi_cyw43_coexistence_record(
+    raw: bytes,
+    target_session_binding: Dict[str, object],
+    topology_sha256: str,
+    metadata: Dict[str, object],
+    image_sha256: str,
+    runtime_raw: bytes,
+    serial_raw: bytes,
+    boot_start_offset: int,
+    normalized_gate_raw: bytes,
+    capture_raw: bytes,
+    capture_format: str,
+    capture_link_type: int,
+    first_packet_unix_ns: int,
+    last_packet_unix_ns: int,
+    capture_id: str,
+    capture_interface: str,
+    capture_started_unix_ns: int,
+    capture_finished_unix_ns: int,
+) -> None:
+    """Require live exact-image CYW43 closure for this controlled boot."""
+
+    record = parse_strict_json_object(raw, "Pi CYW43 coexistence record")
+    session_projection = {
+        field: value
+        for field, value in target_session_binding.items()
+        if field != "cyw43_coexistence_record_sha256"
+    }
+    image_identity = record.get("image_identity")
+    runtime = record.get("runtime")
+    network_capture = record.get("network_capture")
+    outcomes = record.get("outcomes")
+    derived_outcomes = pi_cyw43_outcomes_from_normalized_gate(normalized_gate_raw)
+    captured_unix_s = record.get("captured_unix_s")
+    if (
+        set(record)
+        != {
+            "schema",
+            "producer",
+            "target",
+            "transport",
+            "capture_id",
+            "captured_unix_s",
+            "selected",
+            "classification",
+            "session_projection",
+            "topology_sha256",
+            "image_identity",
+            "runtime",
+            "network_capture",
+            "outcomes",
+        }
+        or record.get("schema") != PI_CYW43_COEXISTENCE_SCHEMA
+        or record.get("producer") != "pi4_gate_proof/v1"
+        or record.get("target") != BENCHMARK_TARGET_PI4
+        or record.get("transport") != BENCHMARK_TRANSPORT_WIFI
+        or record.get("capture_id") != capture_id
+        or isinstance(captured_unix_s, bool)
+        or not isinstance(captured_unix_s, int)
+        or int(captured_unix_s) != capture_finished_unix_ns // 1_000_000_000
+        or record.get("selected") is not True
+        or record.get("classification") != "positive-exact-image-live-closure"
+        or record.get("session_projection") != session_projection
+        or record.get("topology_sha256") != topology_sha256
+        or not isinstance(image_identity, dict)
+        or set(image_identity)
+        != {
+            "image_sha256",
+            "image_id",
+            "git_commit",
+            "build_timestamp",
+            "build_marker",
+            "build_marker_sha256",
+        }
+        or image_identity.get("image_sha256") != image_sha256
+        or image_identity.get("image_id") != metadata.get("image_id")
+        or image_identity.get("git_commit") != metadata.get("git_commit")
+        or image_identity.get("build_timestamp")
+        != metadata.get("build_timestamp")
+        or image_identity.get("build_marker") != metadata.get("build_marker")
+        or image_identity.get("build_marker_sha256")
+        != metadata.get("build_marker_sha256")
+        or not isinstance(runtime, dict)
+        or set(runtime)
+        != {
+            "runtime_evidence_sha256",
+            "serial_sha256",
+            "serial_bytes",
+            "latest_boot_offset",
+            "normalized_gate_sha256",
+        }
+        or runtime.get("runtime_evidence_sha256")
+        != hashlib.sha256(runtime_raw).hexdigest()
+        or runtime.get("serial_sha256") != hashlib.sha256(serial_raw).hexdigest()
+        or runtime.get("serial_bytes") != len(serial_raw)
+        or runtime.get("latest_boot_offset") != boot_start_offset
+        or runtime.get("normalized_gate_sha256")
+        != hashlib.sha256(normalized_gate_raw).hexdigest()
+        or not isinstance(network_capture, dict)
+        or set(network_capture)
+        != {
+            "sha256",
+            "bytes",
+            "format",
+            "link_type",
+            "interface",
+            "capture_started_unix_ns",
+            "capture_finished_unix_ns",
+        }
+        or network_capture.get("sha256")
+        != hashlib.sha256(capture_raw).hexdigest()
+        or network_capture.get("bytes") != len(capture_raw)
+        or network_capture.get("format") != capture_format
+        or network_capture.get("link_type") != capture_link_type
+        or network_capture.get("interface") != capture_interface
+        or network_capture.get("capture_started_unix_ns")
+        != capture_started_unix_ns
+        or network_capture.get("capture_finished_unix_ns")
+        != capture_finished_unix_ns
+        or first_packet_unix_ns < capture_started_unix_ns - 2_000_000_000
+        or last_packet_unix_ns > capture_finished_unix_ns + 2_000_000_000
+        or outcomes != derived_outcomes
+    ):
+        raise RestError(
+            "Pi CYW43 coexistence record is not live exact-image boot proof"
+        )
+
+
+def strict_utc_timestamp(value: object, label: str) -> float:
+    """Parse one canonical whole-second UTC evidence timestamp."""
+
+    if not isinstance(value, str):
+        raise RestError(f"{label} is not a strict UTC timestamp")
+    try:
+        parsed = datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(
+            tzinfo=timezone.utc
+        )
+    except ValueError as exc:
+        raise RestError(f"{label} is not a strict UTC timestamp") from exc
+    if parsed.strftime("%Y-%m-%dT%H:%M:%SZ") != value:
+        raise RestError(f"{label} is not a strict UTC timestamp")
+    return parsed.timestamp()
+
+
+def validate_controlled_pi_capture(
+    runtime: Dict[str, str],
+    runtime_metadata: os.stat_result,
+    serial_raw: bytes,
+    serial_metadata: os.stat_result,
+    capture_path: str,
+    capture_raw: bytes,
+    capture_metadata: os.stat_result,
+    max_age_secs: int,
+    now_unix_s: float,
+) -> Tuple[str, str, int, int]:
+    """Validate the gate-owned concurrent serial/packet capture binding."""
+
+    interface = runtime.get("PI4_RUNTIME_DMA_NETWORK_INTERFACE")
+    runtime_capture_path = runtime.get("PI4_RUNTIME_DMA_NETWORK_CAPTURE")
+    capture_id = runtime.get("PI4_RUNTIME_DMA_CAPTURE_ID")
+    if (
+        runtime.get("PI4_RUNTIME_DMA_CAPTURE_PAIRING")
+        != "controlled-concurrent"
+        or not isinstance(interface, str)
+        or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", interface) is None
+        or not isinstance(capture_id, str)
+        or re.fullmatch(r"[0-9a-f]{32}", capture_id) is None
+        or not isinstance(runtime_capture_path, str)
+        or not runtime_capture_path
+        or any(ord(character) < 0x20 for character in runtime_capture_path)
+        or os.path.abspath(os.path.normpath(runtime_capture_path))
+        != os.path.abspath(os.path.normpath(capture_path))
+        or runtime.get("PI4_RUNTIME_DMA_SERIAL_LOG_SHA256")
+        != hashlib.sha256(serial_raw).hexdigest()
+        or runtime.get("PI4_RUNTIME_DMA_SERIAL_LOG_BYTES") != str(len(serial_raw))
+        or runtime.get("PI4_RUNTIME_DMA_NETWORK_CAPTURE_SHA256")
+        != hashlib.sha256(capture_raw).hexdigest()
+        or runtime.get("PI4_RUNTIME_DMA_NETWORK_CAPTURE_BYTES")
+        != str(len(capture_raw))
+    ):
+        raise RestError("Pi controlled serial/network capture binding differs from bytes")
+    started_utc = strict_utc_timestamp(
+        runtime.get("PI4_RUNTIME_DMA_CAPTURE_STARTED_AT_UTC"),
+        "Pi capture start",
+    )
+    finished_utc = strict_utc_timestamp(
+        runtime.get("PI4_RUNTIME_DMA_CAPTURE_FINISHED_AT_UTC"),
+        "Pi capture finish",
+    )
+    started_raw = runtime.get("PI4_RUNTIME_DMA_CAPTURE_STARTED_UNIX_NS", "")
+    finished_raw = runtime.get("PI4_RUNTIME_DMA_CAPTURE_FINISHED_UNIX_NS", "")
+    if (
+        re.fullmatch(r"[1-9][0-9]*", started_raw) is None
+        or re.fullmatch(r"[1-9][0-9]*", finished_raw) is None
+    ):
+        raise RestError("Pi controlled capture nanosecond timestamps are invalid")
+    started_ns = int(started_raw)
+    finished_ns = int(finished_raw)
+    now_ns = int(now_unix_s * 1_000_000_000)
+    if (
+        started_ns > finished_ns
+        or abs(int(started_utc) - started_ns // 1_000_000_000) > 1
+        or abs(int(finished_utc) - finished_ns // 1_000_000_000) > 1
+        or now_ns - started_ns > max_age_secs * 1_000_000_000
+        or started_ns - now_ns > 300 * 1_000_000_000
+        or finished_ns > runtime_metadata.st_mtime_ns + 1_000_000_000
+        or capture_metadata.st_mtime_ns < started_ns
+        or capture_metadata.st_mtime_ns > runtime_metadata.st_mtime_ns
+        or serial_metadata.st_mtime_ns < started_ns
+        or serial_metadata.st_mtime_ns > finished_ns + 1_000_000_000
+    ):
+        raise RestError("Pi controlled capture timestamps do not cover the proof run")
+    return capture_id, interface, started_ns, finished_ns
+
+
+def validate_retained_pi_capture(
+    runtime: Dict[str, str],
+    serial_raw: bytes,
+    capture_raw: bytes,
+    max_age_secs: int,
+    now_unix_s: float,
+) -> Tuple[str, str, int, int]:
+    """Validate copied CYW43 capture bytes without trusting copied mtimes/paths."""
+
+    interface = runtime.get("PI4_RUNTIME_DMA_NETWORK_INTERFACE")
+    capture_id = runtime.get("PI4_RUNTIME_DMA_CAPTURE_ID")
+    if (
+        runtime.get("PI4_RUNTIME_DMA_CAPTURE_PAIRING")
+        != "controlled-concurrent"
+        or not isinstance(interface, str)
+        or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", interface) is None
+        or not isinstance(capture_id, str)
+        or re.fullmatch(r"[0-9a-f]{32}", capture_id) is None
+        or runtime.get("PI4_RUNTIME_DMA_SERIAL_LOG_SHA256")
+        != hashlib.sha256(serial_raw).hexdigest()
+        or runtime.get("PI4_RUNTIME_DMA_SERIAL_LOG_BYTES") != str(len(serial_raw))
+        or runtime.get("PI4_RUNTIME_DMA_NETWORK_CAPTURE_SHA256")
+        != hashlib.sha256(capture_raw).hexdigest()
+        or runtime.get("PI4_RUNTIME_DMA_NETWORK_CAPTURE_BYTES")
+        != str(len(capture_raw))
+    ):
+        raise RestError("retained Pi CYW43 capture binding differs from bytes")
+    started_utc = strict_utc_timestamp(
+        runtime.get("PI4_RUNTIME_DMA_CAPTURE_STARTED_AT_UTC"),
+        "retained Pi capture start",
+    )
+    finished_utc = strict_utc_timestamp(
+        runtime.get("PI4_RUNTIME_DMA_CAPTURE_FINISHED_AT_UTC"),
+        "retained Pi capture finish",
+    )
+    started_raw = runtime.get("PI4_RUNTIME_DMA_CAPTURE_STARTED_UNIX_NS", "")
+    finished_raw = runtime.get("PI4_RUNTIME_DMA_CAPTURE_FINISHED_UNIX_NS", "")
+    if (
+        re.fullmatch(r"[1-9][0-9]*", started_raw) is None
+        or re.fullmatch(r"[1-9][0-9]*", finished_raw) is None
+    ):
+        raise RestError("retained Pi CYW43 capture timestamps are invalid")
+    started_ns = int(started_raw)
+    finished_ns = int(finished_raw)
+    now_ns = int(now_unix_s * 1_000_000_000)
+    if (
+        started_ns > finished_ns
+        or abs(int(started_utc) - started_ns // 1_000_000_000) > 1
+        or abs(int(finished_utc) - finished_ns // 1_000_000_000) > 1
+        or now_ns - started_ns > max_age_secs * 1_000_000_000
+        or started_ns - now_ns > 300 * 1_000_000_000
+        or finished_ns - now_ns > 300 * 1_000_000_000
+    ):
+        raise RestError("retained Pi CYW43 capture window is not fresh and bounded")
+    return capture_id, interface, started_ns, finished_ns
+
+
+def validate_pi_worker_component(
+    raw: bytes,
+    acceptance_evidence_sha256: str,
+    target_session_binding: Dict[str, object],
+    topology_sha256: str,
+    serial_raw: bytes,
+    capture_raw: bytes,
+    runtime_raw: bytes,
+) -> None:
+    """Bind the accepted Pi component record to this exact controlled boot."""
+
+    if hashlib.sha256(raw).hexdigest() != acceptance_evidence_sha256:
+        raise RestError("Pi Worker component bytes differ from gateway acceptance")
+    component = parse_strict_json_object(raw, "Pi Worker component")
+    raw_evidence = component.get("raw_evidence")
+    if (
+        component.get("schema") != "cohesix-worker-task-evidence/v1"
+        or component.get("record_kind") != "target-component"
+        or component.get("target") != BENCHMARK_TARGET_PI4
+        or component.get("verdict") != "PASS"
+        or component.get("target_session") != target_session_binding
+        or component.get("topology_sha256") != topology_sha256
+        or not isinstance(raw_evidence, list)
+    ):
+        raise RestError("Pi Worker component does not match the accepted target graph")
+    expected = {
+        "pi4-serial-boot": serial_raw,
+        "pi4-network-capture": capture_raw,
+        "pi4-runtime-dma-proof": runtime_raw,
+    }
+    observed: Dict[str, Dict[str, object]] = {}
+    for row in raw_evidence:
+        if not isinstance(row, dict) or set(row) != {"id", "sha256", "bytes"}:
+            raise RestError("Pi Worker component contains malformed raw evidence")
+        identifier = row.get("id")
+        if not isinstance(identifier, str) or not identifier or identifier in observed:
+            raise RestError("Pi Worker component raw evidence IDs are not unique")
+        if (
+            not valid_sha256(row.get("sha256"))
+            or isinstance(row.get("bytes"), bool)
+            or not isinstance(row.get("bytes"), int)
+            or int(row["bytes"]) <= 0
+        ):
+            raise RestError("Pi Worker component contains invalid raw evidence")
+        observed[identifier] = row
+    if tuple(observed) != (
+        "pi4-network-capture",
+        "pi4-runtime-dma-proof",
+        "pi4-serial-boot",
+    ):
+        raise RestError("Pi Worker component raw evidence graph is not canonical")
+    for identifier, evidence_raw in expected.items():
+        row = observed.get(identifier)
+        if row != {
+            "id": identifier,
+            "sha256": hashlib.sha256(evidence_raw).hexdigest(),
+            "bytes": len(evidence_raw),
+        }:
+            raise RestError(
+                f"Pi Worker component lacks exact same-boot {identifier} evidence"
+            )
+
+
+def canonical_pi_session_siblings(
+    target_session_path: str,
+    cyw43_coexistence_path: str,
+) -> Dict[str, str]:
+    """Resolve the fixed immutable Pi session bundle without path guessing."""
+
+    normalized_session = os.path.abspath(os.path.normpath(target_session_path))
+    if os.path.basename(normalized_session) != "target-session.json":
+        raise RestError("Pi target session must use canonical target-session.json")
+    parent = os.path.dirname(normalized_session)
+    siblings = {
+        "source": os.path.join(parent, "source-inventory.json"),
+        "worker_abi": os.path.join(parent, "worker-abi-identity.json"),
+        "cyw43_record": os.path.join(parent, "pi4-cyw43-coexistence.json"),
+        "cyw43_runtime": os.path.join(parent, "pi4-cyw43-runtime-proof.env"),
+        "cyw43_serial": os.path.join(parent, "pi4-cyw43-serial.log"),
+        "cyw43_capture": os.path.join(parent, "pi4-cyw43-network.pcap"),
+    }
+    if os.path.abspath(os.path.normpath(cyw43_coexistence_path)) != siblings[
+        "cyw43_record"
+    ]:
+        raise RestError("Pi CYW43 record is not the canonical session sibling")
+    return siblings
+
+
+def pi_source_manifest_sha256(source_inventory_raw: bytes) -> str:
+    """Return the unique canonical Pi manifest hash from a strict inventory."""
+
+    inventory = parse_strict_json_object(
+        source_inventory_raw,
+        "Pi source inventory",
+    )
+    entries = inventory.get("entries")
+    if (
+        set(inventory) != {"schema", "algorithm", "entries"}
+        or inventory.get("schema") != "cohesix-source-inventory/v1"
+        or inventory.get("algorithm") != "git-visible-paths-sha256"
+        or not isinstance(entries, list)
+        or not entries
+    ):
+        raise RestError("Pi source inventory has an invalid exact contract")
+    previous_path = ""
+    manifest_hashes: List[str] = []
+    for entry in entries:
+        if not isinstance(entry, dict) or set(entry) != {
+            "path",
+            "kind",
+            "mode",
+            "sha256",
+            "bytes",
+        }:
+            raise RestError("Pi source inventory contains a malformed entry")
+        path = entry.get("path")
+        mode = entry.get("mode")
+        byte_count = entry.get("bytes")
+        if (
+            not isinstance(path, str)
+            or not path
+            or path <= previous_path
+            or path.startswith("/")
+            or any(
+                component in ("", ".", "..")
+                for component in path.split("/")
+            )
+            or any(ord(character) < 0x20 for character in path)
+            or entry.get("kind") not in {"file", "symlink", "deleted"}
+            or isinstance(mode, bool)
+            or not isinstance(mode, int)
+            or mode < 0
+            or mode > 0o7777
+            or not valid_sha256(entry.get("sha256"))
+            or isinstance(byte_count, bool)
+            or not isinstance(byte_count, int)
+            or byte_count < 0
+            or byte_count > 0xFFFF_FFFF_FFFF_FFFF
+        ):
+            raise RestError("Pi source inventory contains an invalid entry")
+        previous_path = path
+        if path == "configs/root_task_pi4_uboot_aarch64.toml":
+            if entry.get("kind") != "file" or byte_count <= 0:
+                raise RestError("Pi source manifest inventory row is not a file")
+            manifest_hashes.append(str(entry["sha256"]))
+    if len(manifest_hashes) != 1:
+        raise RestError("Pi source inventory lacks one exact Pi manifest row")
+    return manifest_hashes[0]
+
+
+def validate_pi_archive_manifests(
+    driver_archive_path: str,
+    driver_archive_raw: bytes,
+    driver_manifest_path: str,
+    driver_manifest_raw: bytes,
+    worker_archive_path: str,
+    worker_archive_raw: bytes,
+    worker_manifest_path: str,
+    worker_manifest_raw: bytes,
+) -> None:
+    """Run canonical archive validators and reject any validation-time drift."""
+
+    with tempfile.TemporaryDirectory(prefix="cohesix-pi-archives-") as temporary:
+        frozen_root = pathlib.Path(os.path.realpath(temporary))
+        frozen_inputs = (
+            ("driver.cpio", driver_archive_raw),
+            ("driver-manifest.json", driver_manifest_raw),
+            ("worker.cpio", worker_archive_raw),
+            ("worker-manifest.json", worker_manifest_raw),
+        )
+        for name, raw in frozen_inputs:
+            (frozen_root / name).write_bytes(raw)
+        validations = (
+            (
+                "driver runtime",
+                "driver_runtime_manifest.py",
+                frozen_root / "driver.cpio",
+                frozen_root / "driver-manifest.json",
+            ),
+            (
+                "Worker image",
+                "worker_image_manifest.py",
+                frozen_root / "worker.cpio",
+                frozen_root / "worker-manifest.json",
+            ),
+        )
+        for label, tool, archive_path, manifest_path in validations:
+            try:
+                result = subprocess.run(
+                    (
+                        sys.executable,
+                        str(pathlib.Path(__file__).with_name(tool)),
+                        "verify",
+                        "--archive",
+                        str(archive_path),
+                        "--manifest",
+                        str(manifest_path),
+                    ),
+                    check=False,
+                    capture_output=True,
+                    timeout=120,
+                )
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                raise RestError(f"cannot validate canonical {label} archive") from exc
+            if result.returncode != 0:
+                detail = result.stderr.decode("utf-8", errors="replace").strip()
+                raise RestError(
+                    f"canonical {label} archive/manifest validation failed: {detail}"
+                )
+        require_exact_artifact_bytes(
+            tuple(
+                (
+                    str(frozen_root / name),
+                    raw,
+                    f"frozen Pi validator input {name}",
+                    BENCHMARK_EVIDENCE_MAX_BYTES,
+                )
+                for name, raw in frozen_inputs
+            )
+        )
+    for path_value, expected_raw, label in (
+        (driver_archive_path, driver_archive_raw, "Pi driver runtime CPIO"),
+        (driver_manifest_path, driver_manifest_raw, "Pi driver runtime manifest"),
+        (worker_archive_path, worker_archive_raw, "Pi Worker archive"),
+        (worker_manifest_path, worker_manifest_raw, "Pi Worker manifest"),
+    ):
+        observed_raw, _metadata = read_frozen_artifact(
+            path_value,
+            label,
+            BENCHMARK_EVIDENCE_MAX_BYTES,
+        )
+        if observed_raw != expected_raw:
+            raise RestError(f"{label} changed during canonical validation")
+
+
+def validate_pi_image_identity(
+    image_path: str,
+    image_raw: bytes,
+    metadata_path: str,
+    metadata_raw: bytes,
+    root_path: str,
+    root_raw: bytes,
+    root_cpio_path: str,
+    root_cpio_raw: bytes,
+    git_commit: str,
+    build_id: str,
+) -> None:
+    """Run the canonical sealed-wrapper verifier and reject input drift."""
+
+    with tempfile.TemporaryDirectory(prefix="cohesix-pi-image-") as temporary:
+        frozen_root = pathlib.Path(os.path.realpath(temporary))
+        frozen_inputs = (
+            ("image", image_raw, BENCHMARK_IMAGE_MAX_BYTES),
+            ("metadata.json", metadata_raw, BENCHMARK_EVIDENCE_MAX_BYTES),
+            ("rootserver", root_raw, BENCHMARK_EVIDENCE_MAX_BYTES),
+            ("root.cpio", root_cpio_raw, BENCHMARK_EVIDENCE_MAX_BYTES),
+        )
+        for name, raw, _maximum in frozen_inputs:
+            (frozen_root / name).write_bytes(raw)
+        command = (
+            sys.executable,
+            str(pathlib.Path(__file__).with_name("pi4_image_identity.py")),
+            "verify-metadata",
+            "--image",
+            str(frozen_root / "image"),
+            "--metadata",
+            str(frozen_root / "metadata.json"),
+            "--expected-git-commit",
+            git_commit,
+            "--expected-build-id",
+            build_id,
+            "--expected-root-elf",
+            str(frozen_root / "rootserver"),
+            "--expected-root-cpio",
+            str(frozen_root / "root.cpio"),
+        )
+        try:
+            result = subprocess.run(
+                command,
+                check=False,
+                capture_output=True,
+                timeout=120,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise RestError("cannot validate canonical Pi image identity") from exc
+        if result.returncode != 0:
+            detail = result.stderr.decode("utf-8", errors="replace").strip()
+            raise RestError(f"canonical Pi image identity validation failed: {detail}")
+        require_exact_artifact_bytes(
+            tuple(
+                (
+                    str(frozen_root / name),
+                    raw,
+                    f"frozen Pi image validator input {name}",
+                    maximum,
+                )
+                for name, raw, maximum in frozen_inputs
+            )
+        )
+    for path_value, expected_raw, label, maximum in (
+        (image_path, image_raw, "Pi staged image", BENCHMARK_IMAGE_MAX_BYTES),
+        (
+            metadata_path,
+            metadata_raw,
+            "Pi image identity metadata",
+            BENCHMARK_EVIDENCE_MAX_BYTES,
+        ),
+        (root_path, root_raw, "Pi root ELF", BENCHMARK_EVIDENCE_MAX_BYTES),
+        (
+            root_cpio_path,
+            root_cpio_raw,
+            "Pi root CPIO",
+            BENCHMARK_EVIDENCE_MAX_BYTES,
+        ),
+    ):
+        observed_raw, _metadata = read_frozen_artifact(path_value, label, maximum)
+        if observed_raw != expected_raw:
+            raise RestError(f"{label} changed during canonical validation")
+
+
+def require_current_artifact(
+    metadata: os.stat_result,
+    label: str,
+    max_age_secs: int,
+    now_unix_s: float,
+) -> None:
+    """Reject stale or implausibly future-dated target evidence."""
+
+    age = now_unix_s - metadata.st_mtime
+    if age < -300 or age > max_age_secs:
+        raise RestError(f"{label} is stale or future-dated")
+
+
+def latest_serial_boot_slice(serial_raw: bytes) -> Tuple[int, List[str]]:
+    """Return the exact byte offset and normalized lines of the latest boot."""
+
+    raw_lines = serial_raw.splitlines(keepends=True)
+    lines = [line.decode("utf-8", errors="replace") for line in raw_lines]
+    offsets: List[int] = []
+    cursor = 0
+    for raw_line in raw_lines:
+        offsets.append(cursor)
+        cursor += len(raw_line)
+    latest_start = 0
+    latest_start_is_chain = False
+    for index, raw_line in enumerate(lines):
+        clean = SERIAL_ANSI_RE.sub("", raw_line.replace("\r", "")).strip().lower()
+        if any(clean.startswith(marker) for marker in SERIAL_BOOT_CHAIN_ROOT_MARKERS):
+            latest_start = index
+            latest_start_is_chain = True
+        elif any(
+            clean.startswith(marker)
+            for marker in SERIAL_BOOT_CHAIN_CONTINUATION_MARKERS
+        ):
+            if not latest_start_is_chain:
+                latest_start = index
+                latest_start_is_chain = True
+        elif any(marker in clean for marker in SERIAL_BOOT_START_MARKERS):
+            if not latest_start_is_chain:
+                latest_start = index
+    latest_lines = [
+        SERIAL_ANSI_RE.sub("", line.replace("\r", "")).strip()
+        for line in lines[latest_start:]
+    ]
+    offset = offsets[latest_start] if offsets else 0
+    return offset, latest_lines
+
+
+def validate_serial_image_identity(
+    serial_raw: bytes,
+    metadata: Dict[str, object],
+) -> int:
+    """Bind the latest serial boot slice to the sealed staged image marker."""
+
+    boot_start_offset, latest_lines = latest_serial_boot_slice(serial_raw)
+    git_commit = metadata.get("git_commit")
+    build_timestamp = metadata.get("build_timestamp")
+    image_id = metadata.get("image_id")
+    build_marker = metadata.get("build_marker")
+    expected_prefix = f"[BUILD] {str(git_commit)[:12]} {build_timestamp} image-id={image_id} "
+    marker_lines = [line for line in latest_lines if line.startswith("[BUILD] ")]
+    if (
+        not isinstance(build_marker, str)
+        or not build_marker.startswith(expected_prefix)
+        or marker_lines != [build_marker]
+        or metadata.get("build_marker_sha256")
+        != hashlib.sha256(build_marker.encode("ascii")).hexdigest()
+    ):
+        raise RestError("latest Pi serial boot does not match staged image identity")
+    return boot_start_offset
+
+
+def validate_pi_network_log(
+    serial_raw: bytes,
+    transport: str,
+) -> bytes:
+    """Derive selected-network readiness from the exact runtime-bound log."""
+
+    active_net = "genet" if transport == BENCHMARK_TRANSPORT_GENET else "cyw43"
+    expectations = [
+        f"DRIVER_TASK_ACTIVE_NET={active_net}",
+        "PI4_RUNTIME_DMA_PROOF=fresh-pi",
+        "PI4_RUNTIME_DMA_COUNTER_PROOF=counter-qualified",
+        "DRIVER_TASK_DMA_BLOCKER=none",
+        "DRIVER_TASK_RING_CALL_OUTSTANDING=0",
+        "DRIVER_TASK_RING_CALL_UNRESOLVED_TIMEOUT=0",
+        "DRIVER_TASK_BOOTSTRAP_DEFERRED=0",
+        "TIMER_BACKEND=arch-counter",
+        "TIMER_CLOCK_HZ=54000000",
+        "TIMER_EL0_COUNTER=vct",
+        "DUMMY_TIMER_SEEN=no",
+        "NET_DHCP=bound",
+        "NET_TCP_READY=yes",
+        "NETTEST_PROOF=yes",
+        "COHSH_TCP_AUTH_PROOF=yes",
+    ]
+    minimums = ["TCP_ACCEPTS=1", "TCP_AUTH_SESSIONS=1", "TCP_RX_BYTES=1"]
+    if transport == BENCHMARK_TRANSPORT_GENET:
+        expectations.append("NET_ACTIVE=wired")
+    else:
+        expectations.extend(
+            (
+                "NET_ACTIVE=wifi",
+                "NET_ADDR_SRC=dhcp-lease",
+                "WIFI_GATE=10",
+                "WIFI_BLOCKER=none",
+                "WIFI_DPC_PROOF=yes",
+                "DRIVER_TASK_SDIO_DEDICATED=yes",
+                "DRIVER_TASK_NET_DEDICATED=yes",
+                "DRIVER_TASK_OWNER_STATE_PROOF=yes",
+                "CYW43_BOOTSTRAP_SUPERVISOR_READY=yes",
+                "WIFI_FIRMWARE_IDENTITY_PROOF=yes",
+                "WIFI_CLM_READY_PROOF=yes",
+                "WIFI_FIRMWARE_VERSION_PROOF=yes",
+                "WIFI_CLM_VERSION_PROOF=yes",
+                "WIFI_GATE7_COMPLETE=yes",
+                "SDIO_IRQ158_INBAND_PROOF=yes",
+            )
+        )
+    command = [
+        sys.executable,
+        str(pathlib.Path(__file__).with_name("pi4_trace_normalize.py")),
+        "-",
+        "--gate-summary",
+    ]
+    for expectation in expectations:
+        command.extend(("--expect", expectation))
+    for minimum in minimums:
+        command.extend(("--expect-min", minimum))
+    try:
+        result = subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            input=serial_raw,
+            timeout=120,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise RestError("cannot derive Pi network proof from the bound serial log") from exc
+    if result.returncode != 0:
+        stderr = result.stderr.decode("utf-8", errors="replace")
+        detail = stderr.strip().splitlines()[-1:] or ["unknown gate failure"]
+        raise RestError(f"Pi network evidence is not qualified: {detail[0]}")
+    if not result.stdout or len(result.stdout) > BENCHMARK_EVIDENCE_MAX_BYTES:
+        raise RestError("Pi normalized network gate output has an invalid size")
+    return result.stdout
+
+
+def validate_pi_network_capture(capture_raw: bytes) -> Tuple[str, int, int, int]:
+    """Require one structurally bounded packet-bearing pcap or pcapng stream."""
+
+    classic_endian = {
+        b"\xd4\xc3\xb2\xa1": ("little", 1_000_000, "pcap-us"),
+        b"\xa1\xb2\xc3\xd4": ("big", 1_000_000, "pcap-us"),
+        b"\x4d\x3c\xb2\xa1": ("little", 1_000_000_000, "pcap-ns"),
+        b"\xa1\xb2\x3c\x4d": ("big", 1_000_000_000, "pcap-ns"),
+    }.get(capture_raw[:4])
+    if classic_endian is not None:
+        endian, timestamp_scale, format_name = classic_endian
+        if len(capture_raw) < 24:
+            raise RestError("Pi network capture has a truncated pcap header")
+        major = int.from_bytes(capture_raw[4:6], endian)
+        minor = int.from_bytes(capture_raw[6:8], endian)
+        snaplen = int.from_bytes(capture_raw[16:20], endian)
+        if (major, minor) != (2, 4) or snaplen <= 0:
+            raise RestError("Pi network capture has an unsupported pcap header")
+        offset = 24
+        packets = 0
+        first_packet_unix_ns: Optional[int] = None
+        last_packet_unix_ns: Optional[int] = None
+        while offset < len(capture_raw):
+            if len(capture_raw) - offset < 16:
+                raise RestError("Pi network capture has a truncated packet header")
+            seconds = int.from_bytes(capture_raw[offset : offset + 4], endian)
+            fraction = int.from_bytes(capture_raw[offset + 4 : offset + 8], endian)
+            captured_length = int.from_bytes(
+                capture_raw[offset + 8 : offset + 12], endian
+            )
+            packet_length = int.from_bytes(
+                capture_raw[offset + 12 : offset + 16], endian
+            )
+            offset += 16
+            if (
+                seconds <= 0
+                or fraction >= timestamp_scale
+                or captured_length <= 0
+                or captured_length > snaplen
+                or captured_length > packet_length
+                or captured_length > len(capture_raw) - offset
+            ):
+                raise RestError("Pi network capture has an invalid packet length")
+            packet_unix_ns = seconds * 1_000_000_000 + (
+                fraction * (1_000 if timestamp_scale == 1_000_000 else 1)
+            )
+            first_packet_unix_ns = (
+                packet_unix_ns
+                if first_packet_unix_ns is None
+                else min(first_packet_unix_ns, packet_unix_ns)
+            )
+            last_packet_unix_ns = (
+                packet_unix_ns
+                if last_packet_unix_ns is None
+                else max(last_packet_unix_ns, packet_unix_ns)
+            )
+            offset += captured_length
+            packets += 1
+        if (
+            packets == 0
+            or first_packet_unix_ns is None
+            or last_packet_unix_ns is None
+        ):
+            raise RestError("Pi network capture contains no packet evidence")
+        link_type = int.from_bytes(capture_raw[20:24], endian)
+        if link_type <= 0:
+            raise RestError("Pi network capture has an invalid link type")
+        return (
+            format_name,
+            link_type,
+            first_packet_unix_ns,
+            last_packet_unix_ns,
+        )
+
+    if capture_raw[:4] != b"\x0a\x0d\x0d\x0a" or len(capture_raw) < 28:
+        raise RestError("Pi network capture is not pcap or pcapng")
+    byte_order_magic = capture_raw[8:12]
+    if byte_order_magic == b"\x4d\x3c\x2b\x1a":
+        pcapng_endian = "little"
+    elif byte_order_magic == b"\x1a\x2b\x3c\x4d":
+        pcapng_endian = "big"
+    else:
+        raise RestError("Pi network capture has an invalid pcapng byte order")
+    offset = 0
+    packet_blocks = 0
+    link_types: List[int] = []
+    while offset < len(capture_raw):
+        if len(capture_raw) - offset < 12:
+            raise RestError("Pi network capture has a truncated pcapng block")
+        block_type = int.from_bytes(capture_raw[offset : offset + 4], pcapng_endian)
+        block_length = int.from_bytes(
+            capture_raw[offset + 4 : offset + 8], pcapng_endian
+        )
+        if (
+            block_length < 12
+            or block_length % 4 != 0
+            or block_length > len(capture_raw) - offset
+            or int.from_bytes(
+                capture_raw[offset + block_length - 4 : offset + block_length],
+                pcapng_endian,
+            )
+            != block_length
+        ):
+            raise RestError("Pi network capture has an invalid pcapng block length")
+        if block_type == 6:
+            if block_length < 32:
+                raise RestError("Pi network capture has a truncated enhanced packet")
+            captured_length = int.from_bytes(
+                capture_raw[offset + 20 : offset + 24], pcapng_endian
+            )
+            packet_length = int.from_bytes(
+                capture_raw[offset + 24 : offset + 28], pcapng_endian
+            )
+            padded_length = (captured_length + 3) & ~3
+            if (
+                captured_length <= 0
+                or captured_length > packet_length
+                or 28 + padded_length + 4 > block_length
+                or int.from_bytes(
+                    capture_raw[offset + 8 : offset + 12], pcapng_endian
+                )
+                != 0
+            ):
+                raise RestError("Pi network capture has an invalid enhanced packet")
+            packet_blocks += 1
+        elif block_type == 3:
+            if block_length < 20:
+                raise RestError("Pi network capture has a truncated simple packet")
+            packet_length = int.from_bytes(
+                capture_raw[offset + 8 : offset + 12], pcapng_endian
+            )
+            if packet_length <= 0 or block_length <= 16:
+                raise RestError("Pi network capture has an invalid simple packet")
+            packet_blocks += 1
+        elif block_type == 1:
+            if block_length < 20:
+                raise RestError("Pi network capture has a truncated interface block")
+            link_type = int.from_bytes(
+                capture_raw[offset + 8 : offset + 10], pcapng_endian
+            )
+            reserved = int.from_bytes(
+                capture_raw[offset + 10 : offset + 12], pcapng_endian
+            )
+            snaplen = int.from_bytes(
+                capture_raw[offset + 12 : offset + 16], pcapng_endian
+            )
+            if link_type <= 0 or reserved != 0 or snaplen <= 0:
+                raise RestError("Pi network capture has an invalid interface block")
+            link_types.append(link_type)
+        offset += block_length
+    if packet_blocks == 0 or len(link_types) != 1:
+        raise RestError("Pi network capture contains no packet evidence")
+    return "pcapng", link_types[0], 0, 0
+
+
+def _network_fields(line: str, prefix: str) -> Dict[str, str]:
+    """Parse the exact whitespace-delimited fields after one serial marker."""
+
+    if not line.startswith(prefix):
+        return {}
+    fields: Dict[str, str] = {}
+    for token in line[len(prefix) :].strip().split():
+        key, separator, value = token.partition("=")
+        if (
+            separator != "="
+            or not re.fullmatch(r"[a-z][a-z0-9_]*", key)
+            or not value
+            or key in fields
+        ):
+            raise RestError(f"malformed Pi serial network identity: {line}")
+        fields[key] = value
+    return fields
+
+
+def derive_pi_serial_network_identity(
+    serial_raw: bytes,
+    transport: str,
+) -> Tuple[bytes, bytes, str, str]:
+    """Derive selected-lane MAC and IPv4 identity from the latest Pi boot."""
+
+    _offset, latest_lines = latest_serial_boot_slice(serial_raw)
+    expected_active = (
+        "wired" if transport == BENCHMARK_TRANSPORT_GENET else "wifi"
+    )
+    identities: set[Tuple[str, str]] = set()
+    for line in latest_lines:
+        fields = _network_fields(line, "[net-console] ready ")
+        if fields:
+            if fields.get("port") != str(PI_CONSOLE_TCP_PORT):
+                continue
+            ip_value = fields.get("ip", "")
+            mac_value = fields.get("mac", "").lower()
+            if ip_value and mac_value:
+                identities.add((ip_value, mac_value))
+    if len(identities) != 1:
+        raise RestError(
+            "latest Pi serial boot lacks one exact TCP console network identity"
+        )
+    ip_value, mac_value = next(iter(identities))
+    try:
+        address = ipaddress.IPv4Address(ip_value)
+    except ipaddress.AddressValueError as exc:
+        raise RestError("latest Pi serial boot has an invalid IPv4 identity") from exc
+    if (
+        address.is_unspecified
+        or address.is_loopback
+        or address.is_multicast
+        or address.is_link_local
+    ):
+        raise RestError("latest Pi serial boot has a non-routable IPv4 identity")
+    if re.fullmatch(r"(?:[0-9a-f]{2}:){5}[0-9a-f]{2}", mac_value) is None:
+        raise RestError("latest Pi serial boot has an invalid MAC identity")
+    mac_raw = bytes.fromhex(mac_value.replace(":", ""))
+    if mac_raw == b"\0" * 6 or mac_raw == b"\xff" * 6 or mac_raw[0] & 1:
+        raise RestError("latest Pi serial boot has a non-unicast MAC identity")
+
+    matching_netstats = False
+    for line in latest_lines:
+        if not line.startswith("netstats: ") or any(
+            "=" not in token for token in line[len("netstats: ") :].split()
+        ):
+            continue
+        fields = _network_fields(line, "netstats: ")
+        if (
+            fields.get("active") == expected_active
+            and fields.get("addr_src") == "dhcp-lease"
+            and fields.get("dhcp") == "bound"
+            and fields.get("ip") == ip_value
+        ):
+            matching_netstats = True
+    if not matching_netstats:
+        raise RestError(
+            "latest Pi serial boot does not bind its selected lane to the TCP identity"
+        )
+    return mac_raw, address.packed, mac_value, ip_value
+
+
+def _classic_pcap_frames(capture_raw: bytes) -> List[bytes]:
+    """Return exact Ethernet frames from an already validated classic pcap."""
+
+    classic = {
+        b"\xd4\xc3\xb2\xa1": "little",
+        b"\xa1\xb2\xc3\xd4": "big",
+        b"\x4d\x3c\xb2\xa1": "little",
+        b"\xa1\xb2\x3c\x4d": "big",
+    }.get(capture_raw[:4])
+    if classic is None or int.from_bytes(capture_raw[20:24], classic) != 1:
+        raise RestError(
+            "qualified Pi network capture must be classic Ethernet pcap"
+        )
+    frames: List[bytes] = []
+    offset = 24
+    while offset < len(capture_raw):
+        captured_length = int.from_bytes(
+            capture_raw[offset + 8 : offset + 12], classic
+        )
+        offset += 16
+        frames.append(capture_raw[offset : offset + captured_length])
+        offset += captured_length
+    return frames
+
+
+def _ethernet_ipv4_payload(
+    frame: bytes,
+) -> Optional[Tuple[bytes, bytes, bytes, bytes, int, bytes]]:
+    """Return bounded Ethernet/IPv4 transport fields needed for correlation."""
+
+    if len(frame) < 14:
+        return None
+    destination = frame[0:6]
+    source = frame[6:12]
+    ethertype = int.from_bytes(frame[12:14], "big")
+    offset = 14
+    for _ in range(2):
+        if ethertype not in (0x8100, 0x88A8):
+            break
+        if len(frame) < offset + 4:
+            return None
+        ethertype = int.from_bytes(frame[offset + 2 : offset + 4], "big")
+        offset += 4
+    if ethertype != 0x0800 or len(frame) < offset + 20:
+        return None
+    version_ihl = frame[offset]
+    if version_ihl >> 4 != 4:
+        return None
+    header_length = (version_ihl & 0x0F) * 4
+    total_length = int.from_bytes(frame[offset + 2 : offset + 4], "big")
+    fragment = int.from_bytes(frame[offset + 6 : offset + 8], "big")
+    if (
+        header_length < 20
+        or total_length < header_length
+        or offset + total_length > len(frame)
+        or fragment & 0x1FFF
+    ):
+        return None
+    protocol = frame[offset + 9]
+    source_ip = frame[offset + 12 : offset + 16]
+    destination_ip = frame[offset + 16 : offset + 20]
+    return (
+        destination,
+        source,
+        source_ip,
+        destination_ip,
+        protocol,
+        frame[offset + header_length : offset + total_length],
+    )
+
+
+def validate_pi_correlated_network_capture(
+    capture_raw: bytes,
+    serial_raw: bytes,
+    transport: str,
+) -> Dict[str, object]:
+    """Require DHCP and console payload frames for the serial-selected Pi lane."""
+
+    capture_format, link_type, _first, _last = validate_pi_network_capture(
+        capture_raw
+    )
+    if not capture_format.startswith("pcap-") or link_type != 1:
+        raise RestError("qualified Pi network capture lacks Ethernet frame identity")
+    station_mac, station_ip, mac_value, ip_value = derive_pi_serial_network_identity(
+        serial_raw,
+        transport,
+    )
+    dhcp_client_frames = 0
+    console_payload_frames = 0
+    for frame in _classic_pcap_frames(capture_raw):
+        parsed = _ethernet_ipv4_payload(frame)
+        if parsed is None:
+            continue
+        destination, source, source_ip, destination_ip, protocol, payload = parsed
+        if station_mac not in (destination, source):
+            continue
+        if protocol == 17 and len(payload) >= 8:
+            source_port = int.from_bytes(payload[0:2], "big")
+            destination_port = int.from_bytes(payload[2:4], "big")
+            if (
+                source == station_mac
+                and source_port == 68
+                and destination_port == 67
+            ):
+                dhcp_client_frames += 1
+        elif protocol == 6 and len(payload) >= 20:
+            source_port = int.from_bytes(payload[0:2], "big")
+            destination_port = int.from_bytes(payload[2:4], "big")
+            tcp_header_length = (payload[12] >> 4) * 4
+            if tcp_header_length < 20 or tcp_header_length >= len(payload):
+                continue
+            if (
+                (
+                    destination_ip == station_ip
+                    and destination_port == PI_CONSOLE_TCP_PORT
+                )
+                or (source_ip == station_ip and source_port == PI_CONSOLE_TCP_PORT)
+            ):
+                console_payload_frames += 1
+    if dhcp_client_frames < 1 or console_payload_frames < 1:
+        raise RestError(
+            "Pi network capture lacks selected-lane DHCP and TCP-console payload"
+        )
+    return {
+        "transport": transport,
+        "station_mac": mac_value,
+        "ipv4": ip_value,
+        "dhcp_client_frames": dhcp_client_frames,
+        "console_payload_frames": console_payload_frames,
+    }
+
+
+def pi_network_evidence_sha256(
+    serial_raw: bytes,
+    capture_raw: bytes,
+    cyw43_coexistence_raw: bytes,
+) -> str:
+    """Seal the exact controlled serial/capture/CYW43 evidence bytes."""
+
+    return canonical_json_sha256(
+        {
+            "schema": PI_NETWORK_EVIDENCE_SCHEMA,
+            "serial_sha256": hashlib.sha256(serial_raw).hexdigest(),
+            "serial_bytes": len(serial_raw),
+            "capture_sha256": hashlib.sha256(capture_raw).hexdigest(),
+            "capture_bytes": len(capture_raw),
+            "cyw43_coexistence_sha256": hashlib.sha256(
+                cyw43_coexistence_raw
+            ).hexdigest(),
+            "cyw43_coexistence_bytes": len(cyw43_coexistence_raw),
+        }
+    )
+
+
+def pi_performance_worker_templates(
+    topology_record: Dict[str, object],
+    worker_manifest_raw: bytes,
+    bounds: dict,
+) -> Tuple[Dict[str, object], ...]:
+    """Derive three static role templates from exact generated Pi artifacts."""
+
+    topology = topology_record.get("topology")
+    if not isinstance(topology, dict):
+        raise RestError("Pi generated topology lacks a topology object")
+    admission = topology.get("worker_resource_admission")
+    temporal = topology.get("temporal_authority")
+    if not isinstance(admission, dict) or not isinstance(temporal, dict):
+        raise RestError("Pi topology lacks Worker admission/temporal authority")
+    role_rows = admission.get("executable_roles")
+    task_rows = temporal.get("tasks")
+    if not isinstance(role_rows, list) or not isinstance(task_rows, list):
+        raise RestError("Pi topology Worker role/task matrices are malformed")
+    role_map = {
+        row.get("role"): row
+        for row in role_rows
+        if isinstance(row, dict) and isinstance(row.get("role"), str)
+    }
+    if len(role_map) != len(role_rows) or set(role_map) != set(EXECUTABLE_WORKER_ROLES):
+        raise RestError("Pi topology lacks the exact executable role matrix")
+
+    manifest = parse_strict_json_object(
+        worker_manifest_raw,
+        "Pi Worker image manifest",
+    )
+    images = manifest.get("images")
+    if (
+        manifest.get("schema") != "cohesix-worker-image-manifest/v1"
+        or manifest.get("target") != "aarch64-unknown-none"
+        or not isinstance(images, list)
+        or len(images) != len(EXECUTABLE_WORKER_ROLES)
+    ):
+        raise RestError("Pi Worker manifest lacks the exact executable role matrix")
+    image_map: Dict[str, str] = {}
+    for image in images:
+        if (
+            not isinstance(image, dict)
+            or image.get("role") not in EXECUTABLE_WORKER_ROLES
+            or image.get("role") in image_map
+            or not valid_sha256(image.get("image_sha256"))
+        ):
+            raise RestError("Pi Worker manifest contains an invalid role image")
+        image_map[str(image["role"])] = str(image["image_sha256"])
+    if set(image_map) != set(EXECUTABLE_WORKER_ROLES):
+        raise RestError("Pi Worker manifest omits an executable role image")
+
     required_inventory = {
         "tcbs",
         "scheduling_contexts",
@@ -1134,11 +3051,1101 @@ def executable_qemu_acceptance_binding(
         "cspace_slots",
         "untyped_bytes",
     }
-    seen_workers = set()
-    seen_role_slots = {role: set() for role in EXECUTABLE_WORKER_ROLES}
+    expected_slots = executable_role_slots(bounds)
+    templates: List[Dict[str, object]] = []
+    for role in EXECUTABLE_WORKER_ROLES:
+        row = role_map[role]
+        slots = row.get("executable_slots")
+        core = row.get("core")
+        task_prefix = row.get("task_prefix")
+        inventory = row.get("per_slot")
+        if (
+            slots != expected_slots[role]
+            or not isinstance(core, int)
+            or isinstance(core, bool)
+            or core < 0
+            or core > 3
+            or not isinstance(task_prefix, str)
+            or not task_prefix
+            or not isinstance(inventory, dict)
+            or set(inventory) != required_inventory
+            or any(
+                not isinstance(value, int)
+                or isinstance(value, bool)
+                or value < 0
+                or (field != "notifications" and value == 0)
+                for field, value in inventory.items()
+            )
+        ):
+            raise RestError("Pi generated Worker role template is malformed")
+        task_id = f"{task_prefix}0"
+        matches = [
+            task
+            for task in task_rows
+            if isinstance(task, dict) and task.get("id") == task_id
+        ]
+        if (
+            len(matches) != 1
+            or matches[0].get("kind") != "worker"
+            or matches[0].get("execution") != "passive"
+            or matches[0].get("core") != core
+            or matches[0].get("budget_us") != 0
+            or matches[0].get("period_us") != 0
+        ):
+            raise RestError("Pi generated passive Worker template is inconsistent")
+        templates.append(
+            {
+                "role": role,
+                "slot": 0,
+                "image_sha256": image_map[role],
+                "core": core,
+                "scheduling_context": {"budget_us": 0, "period_us": 0},
+                "object_inventory": dict(inventory),
+            }
+        )
+    return tuple(templates)
+
+
+def pi_performance_execution_binding(
+    target_session: Dict[str, object],
+    target_session_raw: bytes,
+    evidence: BenchmarkTargetEvidence,
+) -> Dict[str, object]:
+    """Build a performance-only Pi binding without claiming component acceptance."""
+
+    if evidence.target != BENCHMARK_TARGET_PI4 or not evidence.worker_templates:
+        raise RestError("Pi performance evidence lacks generated Worker templates")
+    return {
+        "record_kind": "performance-execution-binding",
+        "target": BENCHMARK_TARGET_PI4,
+        "execution_proof": "fresh-pi",
+        "performance_qualification_sha256": evidence.evidence_sha256,
+        "target_session": {
+            "target_session_sha256": hashlib.sha256(target_session_raw).hexdigest(),
+            **{
+                field: target_session[field]
+                for field in (
+                    "manifest_sha256",
+                    "root_image_sha256",
+                    "worker_archive_sha256",
+                    "worker_image_manifest_sha256",
+                    "worker_abi_sha256",
+                )
+            },
+        },
+        "topology_sha256": evidence.topology_sha256,
+        "workers": [dict(template) for template in evidence.worker_templates],
+    }
+
+
+def load_pi_benchmark_target_evidence(
+    runtime_path: str,
+    capture_path: str,
+    cyw43_coexistence_path: str,
+    target_session_path: str,
+    transport: str,
+    bounds: dict,
+    target_session_binding: Dict[str, object],
+    max_age_secs: int,
+    now_unix_s: Optional[float] = None,
+    previous_evidence: Optional[BenchmarkTargetEvidence] = None,
+) -> BenchmarkTargetEvidence:
+    """Derive performance-only fresh-Pi proof from exact build and boot bytes."""
+
+    if transport not in {BENCHMARK_TRANSPORT_GENET, BENCHMARK_TRANSPORT_WIFI}:
+        raise RestError("Pi benchmark transport must be genet or wifi")
+    now = time.time() if now_unix_s is None else now_unix_s
+    session_siblings = canonical_pi_session_siblings(
+        target_session_path,
+        cyw43_coexistence_path,
+    )
+    target_session_raw, _target_session_metadata = read_frozen_artifact(
+        target_session_path,
+        "Pi target session",
+        BENCHMARK_EVIDENCE_MAX_BYTES,
+    )
+    if parse_strict_json_object(
+        target_session_raw,
+        "Pi target session",
+    ) != target_session_binding:
+        raise RestError("Pi target-session bytes differ from validated binding")
+    target_session_sha256 = hashlib.sha256(target_session_raw).hexdigest()
+    runtime_raw, runtime_metadata = read_frozen_artifact(
+        runtime_path,
+        "Pi runtime/DMA evidence",
+        BENCHMARK_EVIDENCE_MAX_BYTES,
+    )
+    require_current_artifact(
+        runtime_metadata,
+        "Pi runtime/DMA evidence",
+        max_age_secs,
+        now,
+    )
+    runtime = parse_exact_env(runtime_raw, "Pi runtime/DMA evidence")
+    selected_net = "genet" if transport == BENCHMARK_TRANSPORT_GENET else "cyw43"
+    required_runtime = {
+        "PI4_RUNTIME_DMA_PROOF_ARTIFACT_VERSION": "1",
+        "PI4_RUNTIME_DMA_PROOF": "fresh-pi",
+        "PI4_RUNTIME_DMA_COUNTER_PROOF": "counter-qualified",
+        "DRIVER_TASK_ACTIVE_NET": selected_net,
+        "DRIVER_TASK_DMA_BLOCKER": "none",
+        "DRIVER_TASK_RING_CALL_OUTSTANDING": "0",
+        "DRIVER_TASK_RING_CALL_UNRESOLVED_TIMEOUT": "0",
+        "DRIVER_TASK_BOOTSTRAP_DEFERRED": "0",
+        "TIMER_BACKEND": "arch-counter",
+        "TIMER_CLOCK_HZ": "54000000",
+        "TIMER_EL0_COUNTER": "vct",
+        "DUMMY_TIMER_SEEN": "no",
+    }
+    if any(runtime.get(key) != value for key, value in required_runtime.items()):
+        raise RestError("Pi runtime/DMA evidence does not satisfy the exact live contract")
+    gateway_continuity = pi_gateway_continuity_from_runtime(runtime)
+
+    stage_path = runtime.get("PI4_RUNTIME_DMA_STAGE_BUILD_PROOF", "")
+    stage_raw, _stage_metadata = read_frozen_artifact(
+        stage_path,
+        "Pi stage build proof",
+        BENCHMARK_EVIDENCE_MAX_BYTES,
+    )
+    if hashlib.sha256(stage_raw).hexdigest() != runtime.get(
+        "PI4_RUNTIME_DMA_STAGE_BUILD_PROOF_SHA256"
+    ):
+        raise RestError("Pi runtime/DMA evidence stage-proof hash differs from bytes")
+    stage = parse_exact_env(stage_raw, "Pi stage build proof")
+    if (
+        stage.get("PI4_RUNTIME_DMA_PROOF_ARTIFACT_VERSION") != "2"
+        or stage.get("PI4_RUNTIME_DMA_PROOF") != "target-build"
+        or stage.get("PI4_RUNTIME_DMA_PROFILE") != "bounded-no-iommu"
+        or stage.get("PI4_IMAGE_IDENTITY_SOURCE_TREE_CLEAN") != "yes"
+    ):
+        raise RestError("Pi stage build proof is not an exact clean target build")
+
+    manifest_path, manifest_raw, _manifest_metadata = read_stage_artifact(
+        stage,
+        "PI4_RUNTIME_DMA_MANIFEST",
+        "Pi resolved manifest",
+    )
+    topology_path, topology_raw, _topology_metadata = read_stage_artifact(
+        stage,
+        "PI4_RUNTIME_DMA_TOPOLOGY",
+        "Pi generated topology",
+    )
+    driver_archive_path, driver_archive_raw, _driver_archive_metadata = (
+        read_stage_artifact(
+            stage,
+            "PI4_RUNTIME_DMA_RUNTIME_CPIO",
+            "Pi driver runtime CPIO",
+        )
+    )
+    runtime_uimage_path, runtime_uimage_raw, _runtime_uimage_metadata = (
+        read_stage_artifact(
+            stage,
+            "PI4_RUNTIME_DMA_RUNTIME_UIMAGE",
+            "Pi driver runtime uImage",
+        )
+    )
+    image_path, image_raw, _image_metadata = read_stage_artifact(
+        stage,
+        "PI4_RUNTIME_DMA_STAGED_IMAGE",
+        "Pi staged image",
+        BENCHMARK_IMAGE_MAX_BYTES,
+    )
+    metadata_path, metadata_raw, _metadata_metadata = read_stage_artifact(
+        stage,
+        "PI4_IMAGE_IDENTITY_METADATA",
+        "Pi image identity metadata",
+    )
+    provenance_path, provenance_raw, _provenance_metadata = read_stage_artifact(
+        stage,
+        "PI4_IMAGE_IDENTITY_WRAPPER_PROVENANCE",
+        "Pi wrapper provenance",
+    )
+    profile_stamp_path, profile_stamp_raw, _profile_stamp_metadata = (
+        read_stage_artifact(
+            stage,
+            "PI4_RUNTIME_DMA_CANONICAL_PROFILE_STAMP",
+            "Pi canonical profile build inputs",
+        )
+    )
+    profile_state_path, profile_state_raw, _profile_state_metadata = (
+        read_stage_artifact(
+            stage,
+            "PI4_RUNTIME_DMA_CANONICAL_PROFILE_STATE",
+            "Pi canonical profile tree state",
+        )
+    )
+    composition_record_path, composition_record_raw, _composition_record_metadata = (
+        read_stage_artifact(
+            stage,
+            "PI4_RUNTIME_DMA_COMPOSITION_RECORD",
+            "Pi composition profile build inputs",
+        )
+    )
+    composition_cache_path, composition_cache_raw, _composition_cache_metadata = (
+        read_stage_artifact(
+            stage,
+            "PI4_RUNTIME_DMA_COMPOSITION_CMAKE_CACHE",
+            "Pi composition CMake cache",
+        )
+    )
+    composition_timer_path, composition_timer_raw, _composition_timer_metadata = (
+        read_stage_artifact(
+            stage,
+            "PI4_RUNTIME_DMA_COMPOSITION_TIMER_HEADER",
+            "Pi composition timer header",
+        )
+    )
+    kernel_path, kernel_raw, _kernel_metadata = read_stage_artifact(
+        stage,
+        "PI4_IMAGE_IDENTITY_KERNEL_ELF",
+        "Pi kernel ELF",
+    )
+    root_path, root_raw, _root_metadata = read_stage_artifact(
+        stage,
+        "PI4_IMAGE_IDENTITY_ROOT_ELF",
+        "Pi root ELF",
+    )
+    root_cpio_path, root_cpio_raw, _root_cpio_metadata = read_stage_artifact(
+        stage,
+        "PI4_IMAGE_IDENTITY_ROOT_CPIO",
+        "Pi root CPIO",
+    )
+    driver_manifest_path, driver_manifest_raw, _driver_manifest_metadata = (
+        read_stage_artifact(
+            stage,
+            "PI4_IMAGE_IDENTITY_DRIVER_MANIFEST",
+            "Pi driver runtime manifest",
+        )
+    )
+    worker_archive_path, worker_archive_raw, _worker_archive_metadata = (
+        read_stage_artifact(
+            stage,
+            "PI4_IMAGE_IDENTITY_WORKER_ARCHIVE",
+            "Pi Worker archive",
+        )
+    )
+    worker_manifest_path, worker_manifest_raw, _worker_manifest_metadata = (
+        read_stage_artifact(
+            stage,
+            "PI4_IMAGE_IDENTITY_WORKER_MANIFEST",
+            "Pi Worker manifest",
+        )
+    )
+    source_path, source_raw, _source_metadata = read_stage_artifact(
+        stage,
+        "PI4_IMAGE_IDENTITY_SOURCE_INVENTORY",
+        "Pi source inventory",
+    )
+    worker_abi_path, worker_abi_raw, _worker_abi_metadata = read_stage_artifact(
+        stage,
+        "PI4_IMAGE_IDENTITY_WORKER_ABI",
+        "Pi Worker ABI identity",
+    )
+    bundle_source_raw, _bundle_source_metadata = read_frozen_artifact(
+        session_siblings["source"],
+        "Pi bundled source inventory",
+        BENCHMARK_EVIDENCE_MAX_BYTES,
+    )
+    bundle_worker_abi_raw, _bundle_worker_abi_metadata = read_frozen_artifact(
+        session_siblings["worker_abi"],
+        "Pi bundled Worker ABI identity",
+        BENCHMARK_EVIDENCE_MAX_BYTES,
+    )
+    if bundle_source_raw != source_raw or bundle_worker_abi_raw != worker_abi_raw:
+        raise RestError("Pi session bundle source/ABI differs from staged bytes")
+    manifest_sha256 = hashlib.sha256(manifest_raw).hexdigest()
+    topology_file_sha256 = hashlib.sha256(topology_raw).hexdigest()
+    driver_archive_sha256 = hashlib.sha256(driver_archive_raw).hexdigest()
+    image_sha256 = hashlib.sha256(image_raw).hexdigest()
+    metadata = parse_strict_json_object(metadata_raw, "Pi image identity metadata")
+    provenance = parse_strict_json_object(provenance_raw, "Pi wrapper provenance")
+    parse_strict_json_object(profile_stamp_raw, "Pi canonical profile build inputs")
+    parse_strict_json_object(
+        composition_record_raw,
+        "Pi composition profile build inputs",
+    )
+    try:
+        profile_state = profile_state_raw.decode("ascii")
+    except UnicodeDecodeError as exc:
+        raise RestError("Pi canonical profile tree state is not ASCII") from exc
+    if re.fullmatch(r"[0-9a-f]{64}\n", profile_state) is None:
+        raise RestError("Pi canonical profile tree state is not one exact digest")
+    topology_record = parse_strict_json_object(topology_raw, "Pi generated topology")
+    source_manifest_sha256 = pi_source_manifest_sha256(source_raw)
+
+    validate_pi_runtime_uimage(runtime_uimage_raw, driver_archive_raw)
+    validate_pi_root_cpio(root_cpio_raw, kernel_raw, root_raw)
+    validate_pi_archive_manifests(
+        driver_archive_path,
+        driver_archive_raw,
+        driver_manifest_path,
+        driver_manifest_raw,
+        worker_archive_path,
+        worker_archive_raw,
+        worker_manifest_path,
+        worker_manifest_raw,
+    )
+
+    target_session = target_session_binding
+    cyw43_coexistence_raw, cyw43_coexistence_metadata = read_frozen_artifact(
+        cyw43_coexistence_path,
+        "Pi CYW43 coexistence record",
+        BENCHMARK_EVIDENCE_MAX_BYTES,
+    )
+    require_current_artifact(
+        cyw43_coexistence_metadata,
+        "Pi CYW43 coexistence record",
+        max_age_secs,
+        now,
+    )
+    cyw43_coexistence_sha256 = hashlib.sha256(
+        cyw43_coexistence_raw
+    ).hexdigest()
+    session_artifact_hashes = {
+        "source_sha256": hashlib.sha256(source_raw).hexdigest(),
+        "manifest_sha256": manifest_sha256,
+        "kernel_sha256": hashlib.sha256(kernel_raw).hexdigest(),
+        "root_image_sha256": hashlib.sha256(root_raw).hexdigest(),
+        "driver_archive_sha256": driver_archive_sha256,
+        "driver_manifest_sha256": hashlib.sha256(driver_manifest_raw).hexdigest(),
+        "cyw43_coexistence_record_sha256": cyw43_coexistence_sha256,
+        "worker_archive_sha256": hashlib.sha256(worker_archive_raw).hexdigest(),
+        "worker_image_manifest_sha256": hashlib.sha256(
+            worker_manifest_raw
+        ).hexdigest(),
+        "worker_abi_sha256": hashlib.sha256(worker_abi_raw).hexdigest(),
+    }
+    topology = topology_record.get("topology")
+    if (
+        set(topology_record)
+        != {
+            "schema",
+            "profile",
+            "manifest_sha256",
+            "topology_sha256",
+            "topology",
+            "inventory",
+        }
+        or topology_record.get("schema") != GENERATED_TOPOLOGY_SCHEMA
+        or topology_record.get("profile") != "pi4-uboot-aarch64"
+        or topology_record.get("manifest_sha256") != manifest_sha256
+        or not isinstance(topology, dict)
+        or topology_record.get("topology_sha256")
+        != canonical_json_sha256(topology)
+    ):
+        raise RestError("Pi generated topology differs from sealed build evidence")
+    if (
+        manifest_sha256 != bounds.get("manifest_sha256")
+        or manifest_sha256 != target_session.get("manifest_sha256")
+        or target_session_binding.get("target") != BENCHMARK_TARGET_PI4
+        or any(
+            target_session_binding.get(field) != value
+            for field, value in session_artifact_hashes.items()
+        )
+        or not valid_sha256(target_session_binding.get("source_sha256"))
+    ):
+        raise RestError("Pi build proof differs from exact source/session/image")
+    git_commit = stage.get("PI4_IMAGE_IDENTITY_GIT_COMMIT")
+    build_timestamp = stage.get("PI4_IMAGE_IDENTITY_BUILD_TIMESTAMP")
+    build_id = stage.get("PI4_IMAGE_IDENTITY_BUILD_ID")
+    provenance_hash_fields = PI_WRAPPER_PROVENANCE_KEYS - {
+        "schema",
+        "git_commit",
+        "source_tree_clean",
+        "build_timestamp",
+        "root_task_features",
+    }
+    if (
+        stage.get("PI4_IMAGE_IDENTITY_SCHEME")
+        != "cohesix-pi4-image-identity/v2"
+        or not isinstance(git_commit, str)
+        or re.fullmatch(r"[0-9a-f]{40}", git_commit) is None
+        or metadata.get("schema") != "cohesix-pi4-image-identity/v2"
+        or metadata.get("git_commit") != git_commit
+        or metadata.get("embedded_git_commit") != git_commit[:12]
+        or metadata.get("source_tree_clean") is not True
+        or not isinstance(build_timestamp, str)
+        or metadata.get("build_timestamp") != build_timestamp
+        or not valid_sha256(build_id)
+        or metadata.get("build_id") != build_id
+        or not valid_sha256(metadata.get("image_id"))
+        or not isinstance(metadata.get("build_marker"), str)
+        or not valid_sha256(metadata.get("build_marker_sha256"))
+        or metadata.get("image_sha256") != image_sha256
+        or metadata.get("size_bytes") != len(image_raw)
+        or metadata.get("rootserver_sha256")
+        != target_session.get("root_image_sha256")
+        or metadata.get("rootserver_cpio_sha256")
+        != hashlib.sha256(root_cpio_raw).hexdigest()
+        or set(provenance) != PI_WRAPPER_PROVENANCE_KEYS
+        or provenance.get("schema") != PI_WRAPPER_PROVENANCE_SCHEMA
+        or provenance.get("git_commit") != git_commit
+        or provenance.get("source_tree_clean") is not True
+        or provenance.get("build_timestamp") != build_timestamp
+        or not isinstance(provenance.get("root_task_features"), str)
+        or not provenance.get("root_task_features")
+        or any(not valid_sha256(provenance.get(field)) for field in provenance_hash_fields)
+        or provenance.get("resolved_manifest_sha256") != manifest_sha256
+        or provenance.get("source_manifest_sha256") != source_manifest_sha256
+        or provenance.get("topology_sha256") != topology_file_sha256
+        or provenance.get("canonical_profile_stamp_sha256")
+        != hashlib.sha256(profile_stamp_raw).hexdigest()
+        or provenance.get("canonical_profile_state_sha256")
+        != profile_state.removesuffix("\n")
+        or provenance.get("composition_record_sha256")
+        != hashlib.sha256(composition_record_raw).hexdigest()
+        or provenance.get("composition_cmake_cache_sha256")
+        != hashlib.sha256(composition_cache_raw).hexdigest()
+        or provenance.get("composition_timer_header_sha256")
+        != hashlib.sha256(composition_timer_raw).hexdigest()
+        or provenance.get("wrapper_sha256") != image_sha256
+        or provenance.get("source_inventory_sha256")
+        != session_artifact_hashes["source_sha256"]
+        or provenance.get("worker_abi_identity_sha256")
+        != session_artifact_hashes["worker_abi_sha256"]
+        or provenance.get("kernel_elf_sha256")
+        != session_artifact_hashes["kernel_sha256"]
+        or provenance.get("rootserver_sha256")
+        != session_artifact_hashes["root_image_sha256"]
+        or provenance.get("rootserver_cpio_sha256")
+        != hashlib.sha256(root_cpio_raw).hexdigest()
+        or provenance.get("driver_runtime_cpio_sha256")
+        != session_artifact_hashes["driver_archive_sha256"]
+        or provenance.get("driver_runtime_manifest_sha256")
+        != session_artifact_hashes["driver_manifest_sha256"]
+        or provenance.get("worker_image_archive_sha256")
+        != session_artifact_hashes["worker_archive_sha256"]
+        or provenance.get("worker_image_manifest_sha256")
+        != session_artifact_hashes["worker_image_manifest_sha256"]
+    ):
+        raise RestError("Pi image identity metadata differs from stage/session bytes")
+    validate_pi_image_identity(
+        image_path,
+        image_raw,
+        metadata_path,
+        metadata_raw,
+        root_path,
+        root_raw,
+        root_cpio_path,
+        root_cpio_raw,
+        git_commit,
+        build_id,
+    )
+
+    serial_path = runtime.get("PI4_RUNTIME_DMA_SERIAL_LOG", "")
+    serial_raw, serial_metadata = read_frozen_artifact(
+        serial_path,
+        "Pi same-boot serial evidence",
+        BENCHMARK_EVIDENCE_MAX_BYTES,
+    )
+    require_current_artifact(
+        serial_metadata,
+        "Pi same-boot serial evidence",
+        max_age_secs,
+        now,
+    )
+    capture_raw, capture_metadata = read_frozen_artifact(
+        capture_path,
+        "Pi same-boot network capture",
+        BENCHMARK_EVIDENCE_MAX_BYTES,
+    )
+    require_current_artifact(
+        capture_metadata,
+        "Pi same-boot network capture",
+        max_age_secs,
+        now,
+    )
+    validate_pi_network_capture(capture_raw)
+    validate_controlled_pi_capture(
+        runtime,
+        runtime_metadata,
+        serial_raw,
+        serial_metadata,
+        capture_path,
+        capture_raw,
+        capture_metadata,
+        max_age_secs,
+        now,
+    )
+    boot_start_offset = validate_serial_image_identity(serial_raw, metadata)
+    normalized_gate_raw = validate_pi_network_log(serial_raw, transport)
+    network_identity = validate_pi_correlated_network_capture(
+        capture_raw,
+        serial_raw,
+        transport,
+    )
+    if gateway_continuity["target_host"] != network_identity["ipv4"]:
+        raise RestError(
+            "Pi gate-captured gateway target differs from serial-selected lane"
+        )
+
+    wifi_runtime_path = session_siblings["cyw43_runtime"]
+    wifi_serial_path = session_siblings["cyw43_serial"]
+    wifi_capture_path = session_siblings["cyw43_capture"]
+    wifi_runtime_raw, _wifi_runtime_metadata = read_frozen_artifact(
+        wifi_runtime_path,
+        "Pi bundled CYW43 runtime proof",
+        BENCHMARK_EVIDENCE_MAX_BYTES,
+    )
+    wifi_serial_raw, _wifi_serial_metadata = read_frozen_artifact(
+        wifi_serial_path,
+        "Pi bundled CYW43 serial evidence",
+        BENCHMARK_EVIDENCE_MAX_BYTES,
+    )
+    wifi_capture_raw, _wifi_capture_metadata = read_frozen_artifact(
+        wifi_capture_path,
+        "Pi bundled CYW43 network capture",
+        BENCHMARK_EVIDENCE_MAX_BYTES,
+    )
+    wifi_runtime = parse_exact_env(
+        wifi_runtime_raw,
+        "Pi bundled CYW43 runtime proof",
+    )
+    wifi_gateway_continuity = pi_gateway_continuity_from_runtime(wifi_runtime)
+    required_wifi_runtime = dict(required_runtime)
+    required_wifi_runtime["DRIVER_TASK_ACTIVE_NET"] = "cyw43"
+    if any(
+        wifi_runtime.get(key) != value
+        for key, value in required_wifi_runtime.items()
+    ):
+        raise RestError("Pi bundled CYW43 runtime proof is not exact live WiFi proof")
+    if (
+        hashlib.sha256(stage_raw).hexdigest()
+        != wifi_runtime.get("PI4_RUNTIME_DMA_STAGE_BUILD_PROOF_SHA256")
+    ):
+        raise RestError("Pi bundled CYW43 proof differs from the current image graph")
+    (
+        wifi_capture_format,
+        wifi_capture_link_type,
+        wifi_first_packet_unix_ns,
+        wifi_last_packet_unix_ns,
+    ) = validate_pi_network_capture(wifi_capture_raw)
+    (
+        wifi_capture_id,
+        wifi_capture_interface,
+        wifi_capture_started_unix_ns,
+        wifi_capture_finished_unix_ns,
+    ) = validate_retained_pi_capture(
+        wifi_runtime,
+        wifi_serial_raw,
+        wifi_capture_raw,
+        max_age_secs,
+        now,
+    )
+    wifi_boot_start_offset = validate_serial_image_identity(
+        wifi_serial_raw,
+        metadata,
+    )
+    if transport == BENCHMARK_TRANSPORT_WIFI:
+        if (
+            wifi_runtime_raw != runtime_raw
+            or wifi_serial_raw != serial_raw
+            or wifi_capture_raw != capture_raw
+        ):
+            raise RestError(
+                "qualified WiFi evidence differs from canonical CYW43 siblings"
+            )
+        wifi_normalized_gate_raw = normalized_gate_raw
+    else:
+        wifi_normalized_gate_raw = validate_pi_network_log(
+            wifi_serial_raw,
+            BENCHMARK_TRANSPORT_WIFI,
+        )
+    wifi_network_identity = validate_pi_correlated_network_capture(
+        wifi_capture_raw,
+        wifi_serial_raw,
+        BENCHMARK_TRANSPORT_WIFI,
+    )
+    if wifi_gateway_continuity["target_host"] != wifi_network_identity["ipv4"]:
+        raise RestError(
+            "Pi bundled WiFi gateway target differs from serial-selected lane"
+        )
+    validate_pi_cyw43_coexistence_record(
+        cyw43_coexistence_raw,
+        target_session_binding,
+        str(topology_record["topology_sha256"]),
+        metadata,
+        image_sha256,
+        wifi_runtime_raw,
+        wifi_serial_raw,
+        wifi_boot_start_offset,
+        wifi_normalized_gate_raw,
+        wifi_capture_raw,
+        wifi_capture_format,
+        wifi_capture_link_type,
+        wifi_first_packet_unix_ns,
+        wifi_last_packet_unix_ns,
+        wifi_capture_id,
+        wifi_capture_interface,
+        wifi_capture_started_unix_ns,
+        wifi_capture_finished_unix_ns,
+    )
+    worker_templates = pi_performance_worker_templates(
+        topology_record,
+        worker_manifest_raw,
+        bounds,
+    )
+    require_exact_artifact_bytes(
+        (
+            (
+                runtime_path,
+                runtime_raw,
+                "Pi runtime/DMA evidence",
+                BENCHMARK_EVIDENCE_MAX_BYTES,
+            ),
+            (
+                stage_path,
+                stage_raw,
+                "Pi stage build proof",
+                BENCHMARK_EVIDENCE_MAX_BYTES,
+            ),
+            (
+                manifest_path,
+                manifest_raw,
+                "Pi resolved manifest",
+                BENCHMARK_EVIDENCE_MAX_BYTES,
+            ),
+            (
+                topology_path,
+                topology_raw,
+                "Pi generated topology",
+                BENCHMARK_EVIDENCE_MAX_BYTES,
+            ),
+            (
+                driver_archive_path,
+                driver_archive_raw,
+                "Pi driver runtime CPIO",
+                BENCHMARK_EVIDENCE_MAX_BYTES,
+            ),
+            (
+                runtime_uimage_path,
+                runtime_uimage_raw,
+                "Pi driver runtime uImage",
+                BENCHMARK_EVIDENCE_MAX_BYTES,
+            ),
+            (image_path, image_raw, "Pi staged image", BENCHMARK_IMAGE_MAX_BYTES),
+            (
+                metadata_path,
+                metadata_raw,
+                "Pi image identity metadata",
+                BENCHMARK_EVIDENCE_MAX_BYTES,
+            ),
+            (
+                provenance_path,
+                provenance_raw,
+                "Pi wrapper provenance",
+                BENCHMARK_EVIDENCE_MAX_BYTES,
+            ),
+            (
+                profile_stamp_path,
+                profile_stamp_raw,
+                "Pi canonical profile build inputs",
+                BENCHMARK_EVIDENCE_MAX_BYTES,
+            ),
+            (
+                profile_state_path,
+                profile_state_raw,
+                "Pi canonical profile tree state",
+                BENCHMARK_EVIDENCE_MAX_BYTES,
+            ),
+            (
+                composition_record_path,
+                composition_record_raw,
+                "Pi composition profile build inputs",
+                BENCHMARK_EVIDENCE_MAX_BYTES,
+            ),
+            (
+                composition_cache_path,
+                composition_cache_raw,
+                "Pi composition CMake cache",
+                BENCHMARK_EVIDENCE_MAX_BYTES,
+            ),
+            (
+                composition_timer_path,
+                composition_timer_raw,
+                "Pi composition timer header",
+                BENCHMARK_EVIDENCE_MAX_BYTES,
+            ),
+            (
+                kernel_path,
+                kernel_raw,
+                "Pi kernel ELF",
+                BENCHMARK_EVIDENCE_MAX_BYTES,
+            ),
+            (
+                root_path,
+                root_raw,
+                "Pi root ELF",
+                BENCHMARK_EVIDENCE_MAX_BYTES,
+            ),
+            (
+                root_cpio_path,
+                root_cpio_raw,
+                "Pi root CPIO",
+                BENCHMARK_EVIDENCE_MAX_BYTES,
+            ),
+            (
+                driver_manifest_path,
+                driver_manifest_raw,
+                "Pi driver runtime manifest",
+                BENCHMARK_EVIDENCE_MAX_BYTES,
+            ),
+            (
+                worker_archive_path,
+                worker_archive_raw,
+                "Pi Worker archive",
+                BENCHMARK_EVIDENCE_MAX_BYTES,
+            ),
+            (
+                worker_manifest_path,
+                worker_manifest_raw,
+                "Pi Worker manifest",
+                BENCHMARK_EVIDENCE_MAX_BYTES,
+            ),
+            (
+                source_path,
+                source_raw,
+                "Pi source inventory",
+                BENCHMARK_EVIDENCE_MAX_BYTES,
+            ),
+            (
+                worker_abi_path,
+                worker_abi_raw,
+                "Pi Worker ABI identity",
+                BENCHMARK_EVIDENCE_MAX_BYTES,
+            ),
+            (
+                session_siblings["source"],
+                bundle_source_raw,
+                "Pi bundled source inventory",
+                BENCHMARK_EVIDENCE_MAX_BYTES,
+            ),
+            (
+                session_siblings["worker_abi"],
+                bundle_worker_abi_raw,
+                "Pi bundled Worker ABI identity",
+                BENCHMARK_EVIDENCE_MAX_BYTES,
+            ),
+            (
+                target_session_path,
+                target_session_raw,
+                "Pi target session",
+                BENCHMARK_EVIDENCE_MAX_BYTES,
+            ),
+            (
+                serial_path,
+                serial_raw,
+                "Pi same-boot serial evidence",
+                BENCHMARK_EVIDENCE_MAX_BYTES,
+            ),
+            (
+                capture_path,
+                capture_raw,
+                "Pi same-boot network capture",
+                BENCHMARK_EVIDENCE_MAX_BYTES,
+            ),
+            (
+                cyw43_coexistence_path,
+                cyw43_coexistence_raw,
+                "Pi CYW43 coexistence record",
+                BENCHMARK_EVIDENCE_MAX_BYTES,
+            ),
+            (
+                wifi_runtime_path,
+                wifi_runtime_raw,
+                "Pi bundled CYW43 runtime proof",
+                BENCHMARK_EVIDENCE_MAX_BYTES,
+            ),
+            (
+                wifi_serial_path,
+                wifi_serial_raw,
+                "Pi bundled CYW43 serial evidence",
+                BENCHMARK_EVIDENCE_MAX_BYTES,
+            ),
+            (
+                wifi_capture_path,
+                wifi_capture_raw,
+                "Pi bundled CYW43 network capture",
+                BENCHMARK_EVIDENCE_MAX_BYTES,
+            ),
+        )
+    )
+    serial_sha256 = hashlib.sha256(serial_raw).hexdigest()
+    capture_sha256 = hashlib.sha256(capture_raw).hexdigest()
+    values = {
+        "target": BENCHMARK_TARGET_PI4,
+        "transport": transport,
+        "proof_class": "fresh-pi",
+        "source_sha256": target_session_binding["source_sha256"],
+        "manifest_sha256": manifest_sha256,
+        "image_sha256": image_sha256,
+        "root_image_sha256": target_session["root_image_sha256"],
+        "target_session_sha256": target_session_sha256,
+        "component_acceptance_sha256": None,
+        "runtime_evidence_sha256": hashlib.sha256(runtime_raw).hexdigest(),
+        "network_evidence_sha256": pi_network_evidence_sha256(
+            serial_raw,
+            capture_raw,
+            cyw43_coexistence_raw,
+        ),
+        "captured_unix_s": int(
+            max(
+                runtime_metadata.st_mtime,
+                serial_metadata.st_mtime,
+                capture_metadata.st_mtime,
+                cyw43_coexistence_metadata.st_mtime,
+            )
+        ),
+    }
+    if previous_evidence is not None:
+        immutable = (
+            "target",
+            "transport",
+            "proof_class",
+            "source_sha256",
+            "manifest_sha256",
+            "image_sha256",
+            "root_image_sha256",
+            "target_session_sha256",
+            "component_acceptance_sha256",
+            "runtime_evidence_sha256",
+        )
+        if any(values[field] != getattr(previous_evidence, field) for field in immutable):
+            raise RestError("Pi target evidence identity changed during benchmark")
+        if (
+            previous_evidence.network_evidence_bytes <= 0
+            or len(serial_raw) != previous_evidence.network_evidence_bytes
+            or serial_sha256 != previous_evidence.serial_evidence_sha256
+            or boot_start_offset != previous_evidence.boot_start_offset
+        ):
+            raise RestError("Pi same-boot serial evidence changed during benchmark")
+        if (
+            previous_evidence.network_capture_bytes <= 0
+            or len(capture_raw) != previous_evidence.network_capture_bytes
+            or capture_sha256 != previous_evidence.network_capture_sha256
+        ):
+            raise RestError("Pi same-boot network capture changed during benchmark")
+        if (
+            previous_evidence.cyw43_coexistence_bytes <= 0
+            or len(cyw43_coexistence_raw)
+            != previous_evidence.cyw43_coexistence_bytes
+            or cyw43_coexistence_sha256
+            != previous_evidence.cyw43_coexistence_sha256
+        ):
+            raise RestError("Pi CYW43 coexistence record changed during benchmark")
+        if (
+            previous_evidence.topology_sha256
+            != str(topology_record["topology_sha256"])
+            or previous_evidence.worker_templates != worker_templates
+        ):
+            raise RestError("Pi performance execution binding changed during benchmark")
+        if (
+            previous_evidence.gateway_connects != gateway_continuity["connects"]
+            or previous_evidence.gateway_reconnects
+            != gateway_continuity["reconnects"]
+            or previous_evidence.gateway_last_change_unix_ms
+            != gateway_continuity["last_change_unix_ms"]
+            or previous_evidence.gateway_status_endpoint
+            != gateway_continuity["status_endpoint"]
+            or previous_evidence.gateway_target_host
+            != gateway_continuity["target_host"]
+            or previous_evidence.gateway_target_port
+            != gateway_continuity["target_port"]
+        ):
+            raise RestError("Pi gateway continuity evidence changed during benchmark")
+    return BenchmarkTargetEvidence(
+        **values,
+        evidence_sha256=canonical_json_sha256(values),
+        network_evidence_bytes=len(serial_raw),
+        boot_start_offset=boot_start_offset,
+        serial_evidence_sha256=serial_sha256,
+        network_capture_sha256=capture_sha256,
+        network_capture_bytes=len(capture_raw),
+        cyw43_coexistence_sha256=cyw43_coexistence_sha256,
+        cyw43_coexistence_bytes=len(cyw43_coexistence_raw),
+        gateway_connects=int(gateway_continuity["connects"]),
+        gateway_reconnects=int(gateway_continuity["reconnects"]),
+        gateway_last_change_unix_ms=int(
+            gateway_continuity["last_change_unix_ms"]
+        ),
+        gateway_status_endpoint=str(gateway_continuity["status_endpoint"]),
+        gateway_target_host=str(gateway_continuity["target_host"]),
+        gateway_target_port=int(gateway_continuity["target_port"]),
+        topology_sha256=str(topology_record["topology_sha256"]),
+        worker_templates=worker_templates,
+    )
+
+
+def build_qemu_benchmark_target_evidence(
+    acceptance: Dict[str, object],
+    target_session_binding: Dict[str, object],
+    fault_artifacts: Dict[str, Dict[str, object]],
+    uart_path: str,
+    gdb_path: str,
+    max_age_secs: int,
+    now_unix_s: Optional[float] = None,
+) -> BenchmarkTargetEvidence:
+    """Bind a qualified QEMU report to its accepted session and transcripts."""
+
+    now = time.time() if now_unix_s is None else now_unix_s
+    uart_raw, uart_metadata = read_frozen_artifact(
+        uart_path,
+        "QEMU UART evidence",
+        BENCHMARK_EVIDENCE_MAX_BYTES,
+    )
+    gdb_raw, gdb_metadata = read_frozen_artifact(
+        gdb_path,
+        "QEMU GDB evidence",
+        BENCHMARK_EVIDENCE_MAX_BYTES,
+    )
+    observed_fault_artifacts = {
+        "uart": {
+            "sha256": hashlib.sha256(uart_raw).hexdigest(),
+            "bytes": len(uart_raw),
+        },
+        "gdb": {
+            "sha256": hashlib.sha256(gdb_raw).hexdigest(),
+            "bytes": len(gdb_raw),
+        },
+    }
+    if fault_artifacts != observed_fault_artifacts:
+        raise RestError("QEMU fault artifact bytes changed before target-evidence seal")
+    require_current_artifact(
+        uart_metadata,
+        "QEMU UART evidence",
+        max_age_secs,
+        now,
+    )
+    require_current_artifact(
+        gdb_metadata,
+        "QEMU GDB evidence",
+        max_age_secs,
+        now,
+    )
+    target_session = acceptance.get("target_session")
+    if not isinstance(target_session, dict):
+        raise RestError("QEMU component evidence lacks a target session")
+    values = {
+        "target": BENCHMARK_TARGET_QEMU,
+        "transport": BENCHMARK_TRANSPORT_QEMU,
+        "proof_class": "qemu",
+        "source_sha256": target_session_binding["source_sha256"],
+        "manifest_sha256": target_session["manifest_sha256"],
+        "image_sha256": target_session["root_image_sha256"],
+        "root_image_sha256": target_session["root_image_sha256"],
+        "target_session_sha256": target_session["target_session_sha256"],
+        "component_acceptance_sha256": acceptance["evidence_sha256"],
+        "runtime_evidence_sha256": fault_artifacts["uart"]["sha256"],
+        "network_evidence_sha256": fault_artifacts["gdb"]["sha256"],
+        "captured_unix_s": int(max(uart_metadata.st_mtime, gdb_metadata.st_mtime)),
+    }
+    if any(
+        not valid_sha256(values[field])
+        for field in (
+            "source_sha256",
+            "manifest_sha256",
+            "image_sha256",
+            "root_image_sha256",
+            "target_session_sha256",
+            "component_acceptance_sha256",
+            "runtime_evidence_sha256",
+            "network_evidence_sha256",
+        )
+    ):
+        raise RestError("QEMU target evidence contains an invalid immutable hash")
+    if (
+        target_session_binding.get("target") != BENCHMARK_TARGET_QEMU
+        or target_session_binding.get("manifest_sha256")
+        != target_session.get("manifest_sha256")
+        or target_session_binding.get("root_image_sha256")
+        != target_session.get("root_image_sha256")
+    ):
+        raise RestError("QEMU target-session file differs from component evidence")
+    return BenchmarkTargetEvidence(
+        **values,
+        evidence_sha256=canonical_json_sha256(values),
+    )
+
+
+def executable_target_acceptance_binding(
+    client: RestClient,
+    bounds: dict,
+    target: str,
+) -> Dict[str, object]:
+    """Validate current-session component exemplars and aggregate topology."""
+    if target not in BENCHMARK_TARGET_PROOF:
+        raise RestError(f"unsupported executable benchmark target: {target}")
+    target_name = "QEMU" if target == BENCHMARK_TARGET_QEMU else "Pi 4"
+    execution_proof = BENCHMARK_TARGET_PROOF[target]
+    status = client.status()
+    if status.get("connected") is not True:
+        raise RestError("executable population requires a connected target")
+    if status.get("backend_class") != "console-projection":
+        raise RestError(
+            "executable population requires backend_class=console-projection"
+        )
+    acceptance = status.get("worker_acceptance")
+    if not isinstance(acceptance, dict):
+        raise RestError("executable population requires validated Worker acceptance")
+    if (
+        acceptance.get("schema") != "cohesix-worker-task-evidence/v1"
+        or acceptance.get("record_kind") != "target-component"
+        or acceptance.get("verdict") != "PASS"
+        or acceptance.get("target") != target
+        or acceptance.get("execution_proof") != execution_proof
+        or not valid_sha256(acceptance.get("evidence_sha256"))
+        or not valid_sha256(acceptance.get("topology_sha256"))
+    ):
+        raise RestError(
+            f"executable population requires exact PASS {target_name} component evidence"
+        )
+
+    target_session = acceptance.get("target_session")
+    session_fields = (
+        "target_session_sha256",
+        "manifest_sha256",
+        "root_image_sha256",
+        "worker_archive_sha256",
+        "worker_image_manifest_sha256",
+        "worker_abi_sha256",
+    )
+    if not isinstance(target_session, dict) or any(
+        not valid_sha256(target_session.get(field)) for field in session_fields
+    ):
+        raise RestError(
+            f"{target_name} acceptance lacks a bounded current target-session binding"
+        )
+    if target_session["manifest_sha256"] != bounds.get("manifest_sha256"):
+        raise RestError(
+            f"{target_name} acceptance manifest does not match gateway bounds"
+        )
+
+    expected_role_slots = executable_role_slots(bounds)
+    workers = acceptance.get("workers")
+    if not isinstance(workers, list) or len(workers) != len(EXECUTABLE_WORKER_ROLES):
+        raise RestError(
+            f"{target_name} acceptance requires one exemplar for every executable role"
+        )
+    required_inventory = {
+        "tcbs",
+        "scheduling_contexts",
+        "reply_objects",
+        "vspaces",
+        "cnodes",
+        "page_tables",
+        "asids",
+        "frames",
+        "endpoints",
+        "notifications",
+        "fault_caps",
+        "timeout_fault_caps",
+        "cspace_slots",
+        "untyped_bytes",
+    }
+    seen_roles = set()
     for worker in workers:
         if not isinstance(worker, dict):
-            raise RestError("QEMU acceptance contains a malformed Worker row")
+            raise RestError(f"{target_name} acceptance contains a malformed Worker row")
         role = worker.get("role")
         expected_receipt = "none" if role == "worker-heartbeat" else "confirmed"
         if (
@@ -1146,10 +4153,10 @@ def executable_qemu_acceptance_binding(
             or worker.get("lifecycle") != "ready"
             or worker.get("artifact") != "verified"
             or worker.get("receipt") != expected_receipt
-            or worker.get("execution_proof") != "qemu"
+            or worker.get("execution_proof") != execution_proof
             or not valid_sha256(worker.get("image_sha256"))
         ):
-            raise RestError("QEMU acceptance Worker state is incomplete")
+            raise RestError(f"{target_name} acceptance Worker state is incomplete")
         for field in (
             "lease_epoch",
             "supervisor_generation",
@@ -1158,7 +4165,7 @@ def executable_qemu_acceptance_binding(
             "completion_sequence",
         ):
             if positive_json_int(worker.get(field)) is None:
-                raise RestError(f"QEMU acceptance Worker {field} is invalid")
+                raise RestError(f"{target_name} acceptance Worker {field} is invalid")
         slot = worker.get("slot")
         core = worker.get("core")
         if (
@@ -1170,43 +4177,165 @@ def executable_qemu_acceptance_binding(
             or core < 0
             or core > 3
         ):
-            raise RestError("QEMU acceptance Worker slot/core is invalid")
-        worker_key = (role, slot)
-        if (
-            worker_key in seen_workers
-            or slot >= expected_role_slots[role]
-        ):
-            raise RestError("QEMU acceptance Worker role/slot identity is invalid")
-        seen_workers.add(worker_key)
-        seen_role_slots[role].add(slot)
+            raise RestError(f"{target_name} acceptance Worker slot/core is invalid")
+        if role in seen_roles or slot >= expected_role_slots[role]:
+            raise RestError(
+                f"{target_name} acceptance Worker role/slot identity is invalid"
+            )
+        seen_roles.add(role)
         scheduling_context = worker.get("scheduling_context")
         if not isinstance(scheduling_context, dict):
-            raise RestError("QEMU acceptance Worker SC is absent")
-        budget = positive_json_int(scheduling_context.get("budget_us"))
-        period = positive_json_int(scheduling_context.get("period_us"))
-        if budget is None or period is None or budget > period:
-            raise RestError("QEMU acceptance Worker SC is invalid")
+            raise RestError(f"{target_name} acceptance Worker SC is absent")
+        raw_budget = scheduling_context.get("budget_us")
+        raw_period = scheduling_context.get("period_us")
+        passive_sc = raw_budget == 0 and raw_period == 0
+        active_sc = (
+            positive_json_int(raw_budget) is not None
+            and positive_json_int(raw_period) is not None
+            and int(raw_budget) <= int(raw_period)
+        )
+        if not (passive_sc or active_sc):
+            raise RestError(f"{target_name} acceptance Worker SC is invalid")
         inventory = worker.get("object_inventory")
         if not isinstance(inventory, dict) or set(inventory) != required_inventory:
-            raise RestError("QEMU acceptance Worker object inventory is invalid")
+            raise RestError(
+                f"{target_name} acceptance Worker object inventory is invalid"
+            )
         for field, value in inventory.items():
             if (
                 not isinstance(value, int)
                 or isinstance(value, bool)
                 or value < 0
-                or (field not in ("endpoints", "reply_objects") and value == 0)
+                or (
+                    field
+                    not in (
+                        "endpoints",
+                        "notifications",
+                        "reply_objects",
+                        "scheduling_contexts",
+                    )
+                    and value == 0
+                )
             ):
-                raise RestError("QEMU acceptance Worker object inventory is invalid")
-    for role, count in expected_role_slots.items():
-        if seen_role_slots[role] != set(range(count)):
-            raise RestError(f"QEMU acceptance omits an executable {role} slot")
+                raise RestError(
+                    f"{target_name} acceptance Worker object inventory is invalid"
+                )
+    if seen_roles != set(EXECUTABLE_WORKER_ROLES):
+        raise RestError(
+            f"{target_name} acceptance omits an executable role exemplar"
+        )
     return json.loads(json.dumps(acceptance))
+
+
+def load_target_session_binding_snapshot(
+    path_value: str,
+    target: str,
+    bounds: dict,
+    acceptance: Optional[Dict[str, object]],
+) -> Tuple[Dict[str, object], bytes]:
+    """Bind qualified evidence to the separately frozen canonical session."""
+
+    raw, _metadata = read_frozen_artifact(
+        path_value,
+        "target session",
+        BENCHMARK_EVIDENCE_MAX_BYTES,
+    )
+    session = parse_strict_json_object(raw, "target session")
+    if set(session) != TARGET_SESSION_KEYS or session.get("target") != target:
+        raise RestError("target-session file has an unexpected schema or target")
+    if any(
+        not valid_sha256(session.get(field))
+        for field in TARGET_SESSION_KEYS - {"target"}
+    ):
+        raise RestError("target-session file contains an invalid immutable hash")
+    if acceptance is not None:
+        summary = acceptance.get("target_session")
+        if not isinstance(summary, dict):
+            raise RestError("target acceptance lacks a target-session summary")
+        expected_summary = {
+            "target_session_sha256": hashlib.sha256(raw).hexdigest(),
+            **{
+                field: session[field]
+                for field in (
+                    "manifest_sha256",
+                    "root_image_sha256",
+                    "worker_archive_sha256",
+                    "worker_image_manifest_sha256",
+                    "worker_abi_sha256",
+                )
+            },
+        }
+        if summary != expected_summary:
+            raise RestError(
+                "target-session file differs from accepted component evidence"
+            )
+    if session["manifest_sha256"] != bounds.get("manifest_sha256"):
+        raise RestError("target-session manifest differs from live gateway bounds")
+    return session, raw
+
+
+def load_target_session_binding(
+    path_value: str,
+    target: str,
+    bounds: dict,
+    acceptance: Dict[str, object],
+) -> Dict[str, object]:
+    """Return the validated full target-session binding for compatibility."""
+
+    session, _raw = load_target_session_binding_snapshot(
+        path_value,
+        target,
+        bounds,
+        acceptance,
+    )
+    return session
+
+
+def revalidate_target_session_binding(
+    path_value: str,
+    target: str,
+    bounds: dict,
+    acceptance: Optional[Dict[str, object]],
+    expected_session: Dict[str, object],
+    expected_raw: bytes,
+) -> Dict[str, object]:
+    """Re-read and require exact target-session bytes, hash, and fields."""
+
+    session, raw = load_target_session_binding_snapshot(
+        path_value,
+        target,
+        bounds,
+        acceptance,
+    )
+    if (
+        raw != expected_raw
+        or hashlib.sha256(raw).hexdigest()
+        != hashlib.sha256(expected_raw).hexdigest()
+        or session != expected_session
+    ):
+        raise RestError("target-session bytes or full binding changed during benchmark")
+    return session
+
+
+def executable_qemu_acceptance_binding(
+    client: RestClient,
+    bounds: dict,
+) -> Dict[str, object]:
+    """Preserve the QEMU-specific API used by existing callers and tests."""
+
+    return executable_target_acceptance_binding(
+        client,
+        bounds,
+        BENCHMARK_TARGET_QEMU,
+    )
 
 
 def gateway_population_axes(
     client: RestClient,
     population_mode: str,
     bounds: Optional[dict] = None,
+    target: str = BENCHMARK_TARGET_QEMU,
+    target_evidence: Optional[BenchmarkTargetEvidence] = None,
 ) -> Tuple[str, str]:
     """Return backend and proof axes without deriving proof from connectivity."""
     if population_mode == POPULATION_HOST_MODEL:
@@ -1235,9 +4364,24 @@ def gateway_population_axes(
             raise RestError(
                 "live-log executable population requires backend_class=console-projection"
             )
-        return "console-projection", "qemu-live-log"
-    executable_qemu_acceptance_binding(client, bounds)
-    return "console-projection", "qemu"
+        proof_class = "qemu-live-log" if target == BENCHMARK_TARGET_QEMU else "none"
+        return "console-projection", proof_class
+    if target == BENCHMARK_TARGET_PI4 and target_evidence is None:
+        raise RestError(
+            "qualified Pi executable population requires exact fresh-pi target evidence"
+        )
+    if target == BENCHMARK_TARGET_PI4:
+        status = client.status()
+        if (
+            status.get("connected") is not True
+            or status.get("backend_class") != "console-projection"
+        ):
+            raise RestError(
+                "qualified Pi population requires a connected console projection"
+            )
+    else:
+        executable_target_acceptance_binding(client, bounds, target)
+    return "console-projection", BENCHMARK_TARGET_PROOF[target]
 
 
 def gateway_observation_axes(client: RestClient) -> Tuple[str, str]:
@@ -1262,6 +4406,8 @@ def executable_population_snapshot(
     bounds: dict,
     requested: int,
     population_mode: str = POPULATION_EXECUTABLE,
+    target: str = BENCHMARK_TARGET_QEMU,
+    target_evidence: Optional[BenchmarkTargetEvidence] = None,
 ) -> Tuple[List[WorkerInstance], PopulationSnapshot]:
     """Select an exact READY population without spawning or synthetic expansion."""
     runtime = worker_runtime_bounds(bounds)
@@ -1277,6 +4423,8 @@ def executable_population_snapshot(
         client,
         population_mode,
         bounds,
+        target,
+        target_evidence,
     )
     snapshot = PopulationSnapshot(
         requested=requested,
@@ -1296,10 +4444,10 @@ def executable_population_snapshot(
 def acceptance_workers_by_identity(
     binding: Dict[str, object],
 ) -> Dict[Tuple[str, int], dict]:
-    """Index the validated acceptance projection by exact role-local slot."""
+    """Index validated static role templates by exact role-local slot."""
     workers = binding.get("workers")
     if not isinstance(workers, list):
-        raise RestError("QEMU acceptance Worker rows are absent")
+        raise RestError("target execution Worker exemplar rows are absent")
     indexed: Dict[Tuple[str, int], dict] = {}
     for worker in workers:
         if (
@@ -1308,13 +4456,13 @@ def acceptance_workers_by_identity(
             or not isinstance(worker.get("slot"), int)
             or isinstance(worker.get("slot"), bool)
         ):
-            raise RestError("QEMU acceptance Worker identity is malformed")
+            raise RestError("target execution Worker exemplar identity is malformed")
         key = (str(worker["role"]), int(worker["slot"]))
         if key in indexed:
-            raise RestError("QEMU acceptance contains a duplicate Worker identity")
+            raise RestError("target execution binding contains a duplicate Worker exemplar")
         indexed[key] = worker
     if not indexed:
-        raise RestError("QEMU acceptance Worker identity index is empty")
+        raise RestError("target execution Worker exemplar index is empty")
     return indexed
 
 
@@ -1393,26 +4541,42 @@ def capture_executable_state(
     *,
     require_accepted_identity: bool,
 ) -> Dict[str, object]:
-    """Capture exact READY identities plus accepted SC/object topology."""
+    """Verify the full READY census and retain only three role exemplars."""
     if state.acceptance_binding is None:
-        raise RestError("executable state capture requires acceptance binding")
+        raise RestError("executable state capture requires an execution binding")
     accepted = acceptance_workers_by_identity(state.acceptance_binding)
-    observations, _ = discover_executable_workers(client, state.bounds)
-    instances = merge_current_worker_instances(state, observations)
-    ready = [instance for instance in instances if instance.lifecycle == "ready"]
+    accepted_by_role = {
+        str(worker["role"]): worker for worker in accepted.values()
+    }
+    if set(accepted_by_role) != set(EXECUTABLE_WORKER_ROLES):
+        raise RestError("target execution binding lacks one exemplar per role")
+    observations, discovered = discover_executable_workers(client, state.bounds)
+    ready = [instance for instance in observations if instance.lifecycle == "ready"]
     ready_by_identity: Dict[Tuple[str, int], WorkerInstance] = {}
     for instance in ready:
         key = (instance.role, instance.slot)
         if key in ready_by_identity:
             raise RestError("multiple READY Workers occupy one executable role slot")
         ready_by_identity[key] = instance
-    if set(ready_by_identity) != set(accepted):
-        raise RestError("executable pressure lacks the exact accepted READY Worker pool")
+    expected_role_slots = executable_role_slots(state.bounds)
+    expected_identities = {
+        (role, slot)
+        for role, count in expected_role_slots.items()
+        for slot in range(count)
+    }
+    if (
+        discovered != len(expected_identities)
+        or set(ready_by_identity) != expected_identities
+    ):
+        raise RestError(
+            "executable pressure lacks the exact generated READY Worker population"
+        )
 
     workers: List[Dict[str, object]] = []
-    for role, slot in sorted(accepted):
+    for role in EXECUTABLE_WORKER_ROLES:
+        accepted_worker = accepted_by_role[role]
+        slot = int(accepted_worker["slot"])
         instance = ready_by_identity[(role, slot)]
-        accepted_worker = accepted[(role, slot)]
         if require_accepted_identity:
             for field in (
                 "lease_epoch",
@@ -1427,9 +4591,11 @@ def capture_executable_state(
         workers.append(
             {
                 **instance.identity_dict(),
-                "worker_id": instance.worker_id,
+                "worker": instance.worker_id,
                 "lifecycle": instance.lifecycle,
-                "telemetry_path": instance.telemetry_path,
+                "artifact": "verified",
+                "receipt": "none" if role == "worker-heartbeat" else "confirmed",
+                "execution_proof": BENCHMARK_TARGET_PROOF[state.benchmark_target],
                 "ready_sequence": instance.ready_sequence,
                 "control_sequence": instance.control_sequence,
                 "receipt_sequence": instance.receipt_sequence,
@@ -1445,6 +4611,12 @@ def capture_executable_state(
     }
     return {
         "workers": workers,
+        "ready_census": {
+            "maximum_live_tasks": sum(expected_role_slots.values()),
+            "discovered": discovered,
+            "ready": len(ready_by_identity),
+            "topology_sha256": state.acceptance_binding["topology_sha256"],
+        },
         "proc": capture_proc_pressure_state(client, state.bounds),
     }
 
@@ -1457,31 +4629,11 @@ def hash_required_fault_artifact(
     """Hash one bounded regular artifact and require its frozen marker index."""
     if not path_value:
         raise RestError(f"executable pressure requires --qemu-{label}-log")
-    path = pathlib.Path(path_value)
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
-    try:
-        descriptor = os.open(path, flags)
-    except OSError as exc:
-        raise RestError(f"cannot open {label} artifact safely: {exc}") from exc
-    try:
-        metadata = os.fstat(descriptor)
-        if not stat.S_ISREG(metadata.st_mode) or metadata.st_size <= 0:
-            raise RestError(f"{label} artifact must be a non-empty regular file")
-        if metadata.st_size > 64 * 1024 * 1024:
-            raise RestError(f"{label} artifact exceeds the 64 MiB pressure bound")
-        chunks: List[bytes] = []
-        remaining = metadata.st_size
-        while remaining:
-            chunk = os.read(descriptor, min(remaining, 1024 * 1024))
-            if not chunk:
-                raise RestError(f"{label} artifact changed during bounded read")
-            chunks.append(chunk)
-            remaining -= len(chunk)
-        if os.read(descriptor, 1):
-            raise RestError(f"{label} artifact grew during bounded read")
-        data = b"".join(chunks)
-    finally:
-        os.close(descriptor)
+    data, _metadata = read_frozen_artifact(
+        path_value,
+        f"{label} artifact",
+        BENCHMARK_EVIDENCE_MAX_BYTES,
+    )
     text_value = data.decode("utf-8", errors="replace")
     missing = [marker for marker in markers if marker not in text_value]
     if missing:
@@ -1644,6 +4796,51 @@ def require_qemu_fixture_receipt_paths(client: RestClient) -> Tuple[str, str]:
     return gpu_ids[0], job_id
 
 
+def require_pi_receipt_paths(client: RestClient) -> Tuple[str, str]:
+    """Return bounded live Pi receipt subjects without QEMU fixture semantics."""
+
+    for path in (
+        "/host/tickets/spec",
+        "/host/tickets/spec.snapshot",
+        "/host/tickets/status",
+    ):
+        response = client.tail(path, HOST_TICKET_LOG_TAIL_BYTES)
+        if response.status != "OK":
+            raise RestError(
+                f"Pi receipt pressure requires {path}: {response.error}",
+                response,
+            )
+
+    gpu_root = client.ls("/gpu")
+    if gpu_root.status != "OK":
+        raise RestError("Pi receipt pressure cannot list /gpu", gpu_root)
+    gpu_ids = sorted(
+        {
+            entry.strip()
+            for entry in gpu_root.lines
+            if entry.strip() not in {"bridge", "models", "telemetry"}
+        }
+    )
+    if not gpu_ids or len(gpu_ids) > 64 or any(
+        not valid_worker_id(gpu_id, 64) for gpu_id in gpu_ids
+    ):
+        raise RestError("Pi target exposes no bounded GPU receipt subject")
+
+    jobs = client.ls("/queen/export/lora_jobs")
+    if jobs.status != "OK":
+        raise RestError("Pi receipt pressure cannot list LoRA jobs", jobs)
+    job_ids = sorted({entry.strip() for entry in jobs.lines if entry.strip()})
+    if len(job_ids) != 1 or not valid_worker_id(job_ids[0], 64):
+        raise RestError("Pi target must expose exactly one bounded LoRA export job")
+    job_id = job_ids[0]
+    for name in ("telemetry.cbor", "base_model.ref", "policy.toml"):
+        path = f"/queen/export/lora_jobs/{job_id}/{name}"
+        response = client.cat(path, 8192)
+        if response.status != "OK" or not response.lines:
+            raise RestError(f"Pi LoRA receipt job lacks {name}", response)
+    return gpu_ids[0], job_id
+
+
 def bounded_heartbeat_lifecycle_cycle(
     client: RestClient,
     state: SimState,
@@ -1720,7 +4917,7 @@ def bounded_heartbeat_lifecycle_cycle(
         state,
         require_accepted_identity=False,
     )
-    return [str(worker["worker_id"]) for worker in post["workers"]]
+    return [str(worker["worker"]) for worker in post["workers"]]
 
 
 def build_executable_report_state(
@@ -1773,6 +4970,68 @@ def build_executable_report_state(
     return target_session_sha256, executable_state
 
 
+def build_pi_executable_report_state(
+    state: SimState,
+) -> Tuple[str, Dict[str, object]]:
+    """Build fresh-Pi executable state without QEMU UART/GDB requirements."""
+
+    if (
+        state.acceptance_binding is None
+        or state.target_evidence is None
+        or state.executable_pre_state is None
+        or state.executable_post_state is None
+        or not state.lifecycle_cycles
+        or not state.receipt_operations
+    ):
+        raise RestError("Pi executable pressure state is incomplete")
+    target_session = state.acceptance_binding.get("target_session")
+    if (
+        state.acceptance_binding.get("record_kind")
+        != "performance-execution-binding"
+        or not isinstance(target_session, dict)
+    ):
+        raise RestError("Pi executable pressure lacks a target-session summary")
+    driven = {
+        (operation.get("action"), operation.get("role"))
+        for operation in state.receipt_operations
+    }
+    if not {
+        ("gpu.lease.grant", "worker-gpu"),
+        ("peft.export", "worker-lora"),
+    }.issubset(driven):
+        raise RestError("Pi executable pressure did not drive GPU and LoRA receipts")
+    evidence = state.target_evidence
+    if (
+        evidence.target_session_sha256
+        != target_session.get("target_session_sha256")
+        or evidence.manifest_sha256 != target_session.get("manifest_sha256")
+        or evidence.root_image_sha256 != target_session.get("root_image_sha256")
+    ):
+        raise RestError("Pi executable pressure target evidence drifted")
+    executable_state = {
+        "topology_sha256": state.acceptance_binding["topology_sha256"],
+        "target_session": {
+            field: target_session[field]
+            for field in (
+                "manifest_sha256",
+                "root_image_sha256",
+                "worker_archive_sha256",
+                "worker_image_manifest_sha256",
+                "worker_abi_sha256",
+            )
+        },
+        "pre": state.executable_pre_state,
+        "post": state.executable_post_state,
+        "lifecycle_cycles": list(state.lifecycle_cycles),
+        "receipt_operations": list(state.receipt_operations),
+        "target_evidence": {
+            "schema": BENCHMARK_TARGET_EVIDENCE_SCHEMA,
+            **evidence.provenance_fields(),
+        },
+    }
+    return evidence.target_session_sha256, executable_state
+
+
 def validate_executable_post_state(state: SimState) -> None:
     """Require bounded recreation and monotonic exact-pool state after pressure."""
     if state.executable_pre_state is None or state.executable_post_state is None:
@@ -1809,7 +5068,7 @@ def validate_executable_post_state(state: SimState) -> None:
     if (
         heartbeat_post["supervisor_generation"]
         <= heartbeat_pre["supervisor_generation"]
-        or heartbeat_post["worker_id"] == heartbeat_pre["worker_id"]
+        or heartbeat_post["worker"] == heartbeat_pre["worker"]
     ):
         raise RestError("Heartbeat pressure did not retain a fresh generation")
     for role in ("worker-gpu", "worker-lora"):
@@ -2209,6 +5468,52 @@ def parse_args() -> argparse.Namespace:
             "runs the same live Worker workload without claiming GDB qualification."
         ),
     )
+    parser.add_argument(
+        "--benchmark-target",
+        choices=(BENCHMARK_TARGET_QEMU, BENCHMARK_TARGET_PI4),
+        default=BENCHMARK_TARGET_QEMU,
+        help="Target whose evidence qualifies the benchmark (default: %(default)s).",
+    )
+    parser.add_argument(
+        "--benchmark-transport",
+        choices=(
+            BENCHMARK_TRANSPORT_QEMU,
+            BENCHMARK_TRANSPORT_GENET,
+            BENCHMARK_TRANSPORT_WIFI,
+        ),
+        default=BENCHMARK_TRANSPORT_QEMU,
+        help="Selected target transport (default: %(default)s).",
+    )
+    parser.add_argument(
+        "--pi-runtime-dma-proof",
+        default=None,
+        help=(
+            "Fresh pi4_gate_proof runtime/DMA artifact sealing the selected "
+            "boot's serial and controlled packet-capture identities."
+        ),
+    )
+    parser.add_argument(
+        "--pi-network-capture",
+        default=None,
+        help=(
+            "Immutable packet-bearing classic Ethernet pcap captured during "
+            "the selected Pi boot; sealed with the runtime-bound serial evidence."
+        ),
+    )
+    parser.add_argument(
+        "--pi-cyw43-coexistence-record",
+        default=None,
+        help=(
+            "Positive exact-image Pi CYW43 coexistence record whose raw hash "
+            "is bound by the full target session."
+        ),
+    )
+    parser.add_argument(
+        "--benchmark-evidence-max-age-secs",
+        type=int,
+        default=DEFAULT_BENCHMARK_EVIDENCE_MAX_AGE_SECS,
+        help="Maximum target-evidence age in seconds (default: %(default)s).",
+    )
 
     perf = parser.add_argument_group("perf")
     perf.add_argument(
@@ -2321,7 +5626,7 @@ def parse_args() -> argparse.Namespace:
     launch.add_argument(
         "--worker-acceptance-evidence",
         default=os.environ.get("HIVE_GATEWAY_WORKER_ACCEPTANCE_EVIDENCE"),
-        help="Validated QEMU target-component record supplied to the gateway.",
+        help="Validated target-component record supplied to the gateway.",
     )
     launch.add_argument(
         "--target-session",
@@ -2582,6 +5887,46 @@ def parse_args() -> argparse.Namespace:
     ):
         args.request_auth_token = env_request_token
 
+    args.benchmark_evidence_max_age_secs = clamp_int(
+        args.benchmark_evidence_max_age_secs,
+        1,
+        7 * 24 * 60 * 60,
+        "benchmark-evidence-max-age-secs",
+    )
+    valid_target_transports = {
+        BENCHMARK_TARGET_QEMU: {BENCHMARK_TRANSPORT_QEMU},
+        BENCHMARK_TARGET_PI4: {
+            BENCHMARK_TRANSPORT_GENET,
+            BENCHMARK_TRANSPORT_WIFI,
+        },
+    }
+    if args.benchmark_transport not in valid_target_transports[args.benchmark_target]:
+        raise SystemExit("benchmark target and transport are incompatible")
+    if (
+        args.benchmark_target == BENCHMARK_TARGET_QEMU
+        and (
+            args.pi_runtime_dma_proof is not None
+            or args.pi_network_capture is not None
+            or args.pi_cyw43_coexistence_record is not None
+        )
+    ):
+        raise SystemExit("QEMU benchmark target cannot consume Pi proof inputs")
+    if args.benchmark_target == BENCHMARK_TARGET_PI4 and any(
+        value is not None
+        for value in (
+            args.qemu_run,
+            args.qemu_log,
+            args.qemu_uart_log,
+            args.qemu_gdb_log,
+        )
+    ):
+        raise SystemExit("Pi benchmark target cannot consume QEMU run/log inputs")
+    if args.mode == "perf" and args.population_mode == POPULATION_EXECUTABLE:
+        raise SystemExit(
+            "qualified executable evidence requires --mode simulate; "
+            "perf is a read microbenchmark"
+        )
+
     if args.mode == "simulate":
         if not timeout_explicit and args.timeout == DEFAULT_TIMEOUT_SECS:
             args.timeout = DEFAULT_SIMULATE_TIMEOUT_SECS
@@ -2608,6 +5953,8 @@ def parse_args() -> argparse.Namespace:
             128 * 1024 * 1024,
             "telemetry-reference-chunk-bytes",
         )
+        if args.benchmark_target == BENCHMARK_TARGET_PI4 and not args.no_qemu:
+            raise SystemExit("Pi benchmark target requires --no-qemu")
         apply_fast_ramp_defaults(args)
         apply_multi_hive_defaults(args, argv_tokens)
         if is_live_executable_population(args.population_mode) and args.multi_hive:
@@ -2615,26 +5962,69 @@ def parse_args() -> argparse.Namespace:
                 "executable population mode does not permit synthetic multi-hive expansion"
             )
         if is_live_executable_population(args.population_mode):
-            args.qemu_uart_log = args.qemu_uart_log or args.qemu_log
-            if not args.qemu_uart_log:
+            if (
+                args.population_mode == POPULATION_EXECUTABLE
+                and not args.target_session
+            ):
                 raise SystemExit(
-                    "live executable population requires --qemu-uart-log"
+                    "qualified executable population requires --target-session"
                 )
             if (
                 args.population_mode == POPULATION_EXECUTABLE
-                and not args.qemu_gdb_log
+                and args.error_budget_rate is None
             ):
-                raise SystemExit("qualified executable population requires --qemu-gdb-log")
-            if args.population_mode == POPULATION_EXECUTABLE and not args.no_gateway and not all(
+                raise SystemExit(
+                    "qualified executable population requires --error-budget-rate"
+                )
+            if args.benchmark_target == BENCHMARK_TARGET_QEMU:
+                args.qemu_uart_log = args.qemu_uart_log or args.qemu_log
+                if not args.qemu_uart_log:
+                    raise SystemExit(
+                        "live QEMU executable population requires --qemu-uart-log"
+                    )
+                if (
+                    args.population_mode == POPULATION_EXECUTABLE
+                    and not args.qemu_gdb_log
+                ):
+                    raise SystemExit(
+                        "qualified QEMU executable population requires --qemu-gdb-log"
+                    )
+            elif args.population_mode == POPULATION_EXECUTABLE and not all(
                 (
-                    args.worker_acceptance_root,
-                    args.worker_acceptance_evidence,
-                    args.target_session,
+                    args.pi_runtime_dma_proof,
+                    args.pi_network_capture,
+                    args.pi_cyw43_coexistence_record,
                 )
             ):
                 raise SystemExit(
-                    "executable gateway launch requires --worker-acceptance-root, "
-                    "--worker-acceptance-evidence, and --target-session"
+                    "qualified Pi executable population requires "
+                    "--pi-runtime-dma-proof, --pi-network-capture, "
+                    "and --pi-cyw43-coexistence-record"
+                )
+            if (
+                args.population_mode == POPULATION_EXECUTABLE
+                and args.benchmark_target == BENCHMARK_TARGET_PI4
+                and args.tcp_port != PI_CONSOLE_TCP_PORT
+            ):
+                raise SystemExit(
+                    "qualified Pi executable population requires --tcp-port 31337"
+                )
+            if (
+                args.population_mode == POPULATION_EXECUTABLE
+                and args.benchmark_target == BENCHMARK_TARGET_QEMU
+                and not args.no_gateway
+                and not all(
+                    (
+                        args.worker_acceptance_root,
+                        args.worker_acceptance_evidence,
+                        args.target_session,
+                    )
+                )
+            ):
+                raise SystemExit(
+                    "qualified QEMU gateway launch requires "
+                    "--worker-acceptance-root, --worker-acceptance-evidence, "
+                    "and --target-session"
                 )
         args.duration_mins = clamp_int(args.duration_mins, 1, 60, "duration-mins")
         workers_upper_bound = 1500 if not args.multi_hive else 15000
@@ -2830,13 +6220,42 @@ def wait_for_gateway(client: RestClient, timeout_s: float) -> dict:
     raise TimeoutError(f"Gateway did not become ready: {last_error}")
 
 
+def open_artifact_text(
+    path: str,
+    *,
+    exclusive: bool,
+    newline: Optional[str] = None,
+) -> TextIO:
+    """Open one artifact without following a link in the qualified lane."""
+
+    if not exclusive:
+        return open(path, "w", encoding="utf-8", newline=newline)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    descriptor = os.open(path, flags, 0o600)
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise RestError(f"qualified artifact is not a regular file: {path}")
+        return os.fdopen(descriptor, "w", encoding="utf-8", newline=newline)
+    except Exception:
+        os.close(descriptor)
+        raise
+
+
 def init_logger(args: argparse.Namespace) -> RunLogger:
     log_dir = args.log_dir
     os.makedirs(log_dir, exist_ok=True)
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    qualified = getattr(args, "population_mode", None) == POPULATION_EXECUTABLE
+    if qualified:
+        directory_metadata = os.lstat(log_dir)
+        if not stat.S_ISDIR(directory_metadata.st_mode):
+            raise RestError("qualified log directory must be a real directory")
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
     filename = f"{args.log_prefix}_{timestamp}.log"
     path = os.path.join(log_dir, filename)
-    handle = open(path, "w", encoding="utf-8")
+    handle = open_artifact_text(path, exclusive=qualified)
     logger = RunLogger(path=path, handle=handle, echo_stdout=not args.no_log_stdout)
     logger.log(f"[log] started path={path}")
     return logger
@@ -4445,6 +7864,8 @@ def ensure_workers(
             state.bounds,
             target,
             state.population_mode,
+            state.benchmark_target,
+            state.target_evidence,
         )
         state.record_population(snapshot)
         state.worker_cap = state.maximum_live_tasks
@@ -4516,6 +7937,8 @@ def adjust_workers(
             state.bounds,
             target,
             state.population_mode,
+            state.benchmark_target,
+            state.target_evidence,
         )
         state.record_population(snapshot)
         state.worker_telemetry_paths = {
@@ -4722,6 +8145,9 @@ def run_simulation(args: argparse.Namespace) -> int:
             gateway_population_axes(client, POPULATION_HOST_MODEL)
         maximum_live_tasks: Optional[int] = None
         acceptance_binding: Optional[Dict[str, object]] = None
+        target_session_binding: Optional[Dict[str, object]] = None
+        target_session_raw: Optional[bytes] = None
+        target_evidence: Optional[BenchmarkTargetEvidence] = None
         fixture_gpu_id: Optional[str] = None
         fixture_lora_job: Optional[str] = None
         if is_live_executable_population(args.population_mode):
@@ -4733,14 +8159,59 @@ def run_simulation(args: argparse.Namespace) -> int:
                     f"{args.workers_max} > {maximum_live_tasks}"
                 )
             if args.population_mode == POPULATION_EXECUTABLE:
-                acceptance_binding = executable_qemu_acceptance_binding(client, bounds)
-            fixture_gpu_id, fixture_lora_job = require_qemu_fixture_receipt_paths(
-                client
+                if args.benchmark_target == BENCHMARK_TARGET_PI4:
+                    (
+                        target_session_binding,
+                        target_session_raw,
+                    ) = load_target_session_binding_snapshot(
+                        args.target_session,
+                        args.benchmark_target,
+                        bounds,
+                        None,
+                    )
+                    target_evidence = load_pi_benchmark_target_evidence(
+                        args.pi_runtime_dma_proof,
+                        args.pi_network_capture,
+                        args.pi_cyw43_coexistence_record,
+                        args.target_session,
+                        args.benchmark_transport,
+                        bounds,
+                        target_session_binding,
+                        args.benchmark_evidence_max_age_secs,
+                    )
+                    acceptance_binding = pi_performance_execution_binding(
+                        target_session_binding,
+                        target_session_raw,
+                        target_evidence,
+                    )
+                else:
+                    acceptance_binding = executable_target_acceptance_binding(
+                        client,
+                        bounds,
+                        args.benchmark_target,
+                    )
+                    (
+                        target_session_binding,
+                        target_session_raw,
+                    ) = load_target_session_binding_snapshot(
+                        args.target_session,
+                        args.benchmark_target,
+                        bounds,
+                        acceptance_binding,
+                    )
+            receipt_preflight = (
+                require_qemu_fixture_receipt_paths
+                if args.benchmark_target == BENCHMARK_TARGET_QEMU
+                else require_pi_receipt_paths
             )
+            fixture_gpu_id, fixture_lora_job = receipt_preflight(client)
             # Validate the complete marker and identity binding before issuing
             # any benchmark traffic. The exact hashes are captured again after
             # the workload for the retained report.
-            if acceptance_binding is not None:
+            if (
+                acceptance_binding is not None
+                and args.benchmark_target == BENCHMARK_TARGET_QEMU
+            ):
                 capture_fault_artifacts(args, acceptance_binding)
 
         root_entries = discover_root_entries(client)
@@ -4774,8 +8245,13 @@ def run_simulation(args: argparse.Namespace) -> int:
             telemetry_scenario=scenario,
             telemetry_reference_chunk_bytes=args.telemetry_reference_chunk_bytes,
             population_mode=args.population_mode,
+            benchmark_target=args.benchmark_target,
+            benchmark_transport=args.benchmark_transport,
+            target_evidence=target_evidence,
             maximum_live_tasks=maximum_live_tasks,
             acceptance_binding=acceptance_binding,
+            target_session_binding=target_session_binding,
+            target_session_raw=target_session_raw,
             receipt_gpu_subject=fixture_gpu_id,
             receipt_lora_subject=fixture_lora_job,
         )
@@ -4793,7 +8269,9 @@ def run_simulation(args: argparse.Namespace) -> int:
             state.executable_pre_state = capture_executable_state(
                 client,
                 state,
-                require_accepted_identity=True,
+                require_accepted_identity=(
+                    args.benchmark_target == BENCHMARK_TARGET_QEMU
+                ),
             )
             worker_ids = bounded_heartbeat_lifecycle_cycle(
                 client,
@@ -4838,6 +8316,18 @@ def run_simulation(args: argparse.Namespace) -> int:
             args.logger,
             "start",
         )
+        if (
+            args.population_mode == POPULATION_EXECUTABLE
+            and args.benchmark_target == BENCHMARK_TARGET_PI4
+        ):
+            validate_pi_gateway_continuity(
+                gateway_status_start,
+                gateway_status_start,
+                state.target_evidence,
+                client.rest_url,
+                args.tcp_host,
+                args.tcp_port,
+            )
 
         stats: Dict[str, OpStats] = {}
         stats_lock = threading.Lock()
@@ -5052,25 +8542,121 @@ def run_simulation(args: argparse.Namespace) -> int:
             status=final_status,
         )
 
-        if args.population_mode == POPULATION_EXECUTABLE and run_error is None:
-            try:
-                assert state.acceptance_binding is not None
-                state.fault_artifacts, required_fault_markers = capture_fault_artifacts(
-                    args,
-                    state.acceptance_binding,
-                )
-                target_session_sha256, executable_state = build_executable_report_state(
-                    state,
-                    required_fault_markers,
-                )
-            except Exception as exc:
-                run_error = exc
-
-        gateway_status_end = fetch_gateway_status_snapshot(client, args.logger, "end")
+        gateway_status_end = fetch_gateway_status_snapshot(
+            client,
+            args.logger,
+            "end",
+        )
         gateway_status_diff = gateway_status_delta(
             gateway_status_start,
             gateway_status_end,
         )
+        if (
+            args.population_mode == POPULATION_EXECUTABLE
+            and args.benchmark_target == BENCHMARK_TARGET_PI4
+        ):
+            try:
+                validate_pi_gateway_continuity(
+                    gateway_status_start,
+                    gateway_status_end,
+                    state.target_evidence,
+                    client.rest_url,
+                    args.tcp_host,
+                    args.tcp_port,
+                )
+            except Exception as exc:
+                if run_error is None:
+                    run_error = exc
+
+        if args.population_mode == POPULATION_EXECUTABLE and run_error is None:
+            try:
+                assert state.acceptance_binding is not None
+                assert state.target_session_binding is not None
+                assert state.target_session_raw is not None
+                if args.benchmark_target == BENCHMARK_TARGET_QEMU:
+                    refreshed_acceptance = executable_target_acceptance_binding(
+                        client,
+                        bounds,
+                        BENCHMARK_TARGET_QEMU,
+                    )
+                    if canonical_json_sha256(
+                        refreshed_acceptance
+                    ) != canonical_json_sha256(state.acceptance_binding):
+                        raise RestError(
+                            "target acceptance/session changed during benchmark"
+                        )
+                    refreshed_target_session = revalidate_target_session_binding(
+                        args.target_session,
+                        BENCHMARK_TARGET_QEMU,
+                        bounds,
+                        refreshed_acceptance,
+                        state.target_session_binding,
+                        state.target_session_raw,
+                    )
+                    (
+                        state.fault_artifacts,
+                        required_fault_markers,
+                    ) = capture_fault_artifacts(args, state.acceptance_binding)
+                    state.target_evidence = build_qemu_benchmark_target_evidence(
+                        state.acceptance_binding,
+                        refreshed_target_session,
+                        state.fault_artifacts,
+                        args.qemu_uart_log,
+                        args.qemu_gdb_log,
+                        args.benchmark_evidence_max_age_secs,
+                    )
+                    (
+                        target_session_sha256,
+                        executable_state,
+                    ) = build_executable_report_state(
+                        state,
+                        required_fault_markers,
+                    )
+                else:
+                    refreshed_target_session = revalidate_target_session_binding(
+                        args.target_session,
+                        BENCHMARK_TARGET_PI4,
+                        bounds,
+                        None,
+                        state.target_session_binding,
+                        state.target_session_raw,
+                    )
+                    assert state.target_evidence is not None
+                    refreshed_evidence = load_pi_benchmark_target_evidence(
+                        args.pi_runtime_dma_proof,
+                        args.pi_network_capture,
+                        args.pi_cyw43_coexistence_record,
+                        args.target_session,
+                        args.benchmark_transport,
+                        bounds,
+                        refreshed_target_session,
+                        args.benchmark_evidence_max_age_secs,
+                        previous_evidence=state.target_evidence,
+                    )
+                    refreshed_binding = pi_performance_execution_binding(
+                        refreshed_target_session,
+                        state.target_session_raw,
+                        refreshed_evidence,
+                    )
+                    if canonical_json_sha256(
+                        refreshed_binding
+                    ) != canonical_json_sha256(state.acceptance_binding):
+                        raise RestError(
+                            "Pi performance execution binding changed during benchmark"
+                        )
+                    state.target_evidence = refreshed_evidence
+                    state.acceptance_binding = refreshed_binding
+                    (
+                        target_session_sha256,
+                        executable_state,
+                    ) = build_pi_executable_report_state(state)
+            except Exception as exc:
+                run_error = exc
+
+        if run_error is not None and args.population_mode == POPULATION_EXECUTABLE:
+            # A retained failure report may aid diagnosis, but it must never
+            # carry target-qualified provenance into the comparator.
+            state.target_evidence = None
         if gateway_status_diff is not None:
             broker_delta = gateway_status_diff.get("broker", {})
             if broker_delta:
@@ -5108,6 +8694,13 @@ def run_simulation(args: argparse.Namespace) -> int:
                 for snapshot in state.population_observations
             ],
         }
+        target_provenance = benchmark_target_provenance(
+            args,
+            benchmark_workload_payload(args, state.worker_cap),
+            latest_population.proof_class,
+            state.target_evidence,
+            state.acceptance_binding,
+        )
         args.logger.log(
             "[population] "
             f"mode={args.population_mode} "
@@ -5133,6 +8726,7 @@ def run_simulation(args: argparse.Namespace) -> int:
             population_report,
             target_session_sha256,
             executable_state,
+            target_provenance,
         )
         for label, path in artifacts.items():
             args.logger.log(f"[artifact] {label}={path}")
@@ -5506,6 +9100,104 @@ def target_rps_bounds(args: argparse.Namespace) -> Tuple[float, float]:
     return min_rps, max_rps
 
 
+def benchmark_workload_payload(
+    args: argparse.Namespace,
+    worker_cap: Optional[int],
+) -> Dict[str, object]:
+    """Return the exact target-neutral workload identity used for comparison."""
+
+    target_rps_min, target_rps_max = target_rps_bounds(args)
+    return {
+        "mode": "simulate",
+        "population_mode": getattr(
+            args,
+            "population_mode",
+            POPULATION_HOST_MODEL,
+        ),
+        "control_write_outcome": "admitted",
+        "scenario": args.scenario or "mixed",
+        "seed": args.seed,
+        "entropy": args.entropy,
+        "workers_min": args.workers_min,
+        "workers_max": args.workers_max,
+        "worker_cap": worker_cap,
+        "multi_hive": args.multi_hive,
+        "hives": args.hives if args.multi_hive else 1,
+        "workers_per_hive": (
+            args.workers_per_hive if args.multi_hive else args.workers_max
+        ),
+        "intensity_min": args.intensity_min,
+        "intensity_max": args.intensity_max,
+        "base_rps": args.base_rps,
+        "target_rps_min": target_rps_min,
+        "target_rps_max": target_rps_max,
+        "duration_s": max(float(args.duration_mins) * 60.0, 1e-9),
+        "ramp_step_secs": args.ramp_step_secs,
+        "max_inflight_configured": args.max_inflight,
+        "tail_bytes": args.tail_bytes,
+        "telemetry_reference_chunk_bytes": args.telemetry_reference_chunk_bytes,
+        "include_lifecycle": args.include_lifecycle,
+        "auto_approve": args.auto_approve,
+        "transient_retries": args.transient_retries,
+        "strict_control_errors": args.strict_control_errors,
+        "error_budget_rate": args.error_budget_rate,
+        "request_timeout_s": args.timeout,
+        "request_auth_enabled": bool(args.request_auth_token.strip()),
+        "role": args.role,
+    }
+
+
+def benchmark_target_provenance(
+    args: argparse.Namespace,
+    workload: Dict[str, object],
+    proof_class: str,
+    evidence: Optional[BenchmarkTargetEvidence],
+    acceptance: Optional[Dict[str, object]],
+) -> Dict[str, object]:
+    """Bind one report to exact target evidence without upgrading diagnostics."""
+
+    target = getattr(args, "benchmark_target", BENCHMARK_TARGET_QEMU)
+    transport = getattr(args, "benchmark_transport", BENCHMARK_TRANSPORT_QEMU)
+    workload_sha256 = canonical_json_sha256(workload)
+    if evidence is not None:
+        if proof_class != evidence.proof_class:
+            raise RestError("benchmark population proof differs from target evidence")
+        return {
+            "schema": BENCHMARK_PROVENANCE_SCHEMA,
+            "qualification": "target-qualified",
+            **evidence.provenance_fields(),
+            "workload_sha256": workload_sha256,
+        }
+
+    target_session: Dict[str, object] = {}
+    component_acceptance_sha256: Optional[str] = None
+    if acceptance is not None:
+        value = acceptance.get("target_session")
+        if isinstance(value, dict):
+            target_session = value
+        candidate = acceptance.get("evidence_sha256")
+        if valid_sha256(candidate):
+            component_acceptance_sha256 = str(candidate)
+    return {
+        "schema": BENCHMARK_PROVENANCE_SCHEMA,
+        "qualification": "diagnostic",
+        "target": target,
+        "transport": transport,
+        "proof_class": proof_class,
+        "source_sha256": None,
+        "manifest_sha256": target_session.get("manifest_sha256"),
+        "image_sha256": None,
+        "root_image_sha256": target_session.get("root_image_sha256"),
+        "target_session_sha256": target_session.get("target_session_sha256"),
+        "component_acceptance_sha256": component_acceptance_sha256,
+        "runtime_evidence_sha256": None,
+        "network_evidence_sha256": None,
+        "performance_qualification_sha256": None,
+        "captured_unix_s": None,
+        "workload_sha256": workload_sha256,
+    }
+
+
 def benchmark_report_payload(
     args: argparse.Namespace,
     overall: OpStats,
@@ -5518,48 +9210,15 @@ def benchmark_report_payload(
     concurrency: Dict[str, object],
     population: Optional[Dict[str, object]] = None,
     executable_state: Optional[Dict[str, object]] = None,
+    target_provenance: Optional[Dict[str, object]] = None,
 ) -> Dict[str, object]:
-    duration_s = max(float(args.duration_mins) * 60.0, 1e-9)
     population_mode = getattr(args, "population_mode", POPULATION_HOST_MODEL)
-    target_rps_min, target_rps_max = target_rps_bounds(args)
     latency = latency_summary(overall)
+    workload = benchmark_workload_payload(args, worker_cap)
+    duration_s = float(workload["duration_s"])
     payload: Dict[str, object] = {
         "schema": "cohesix-benchmark-report/v1",
-        "workload": {
-            "mode": "simulate",
-            "population_mode": population_mode,
-            "control_write_outcome": "admitted",
-            "scenario": args.scenario or "mixed",
-            "seed": args.seed,
-            "entropy": args.entropy,
-            "workers_min": args.workers_min,
-            "workers_max": args.workers_max,
-            "worker_cap": worker_cap,
-            "multi_hive": args.multi_hive,
-            "hives": args.hives if args.multi_hive else 1,
-            "workers_per_hive": (
-                args.workers_per_hive if args.multi_hive else args.workers_max
-            ),
-            "intensity_min": args.intensity_min,
-            "intensity_max": args.intensity_max,
-            "base_rps": args.base_rps,
-            "target_rps_min": target_rps_min,
-            "target_rps_max": target_rps_max,
-            "duration_s": duration_s,
-            "ramp_step_secs": args.ramp_step_secs,
-            "max_inflight_configured": args.max_inflight,
-            "tail_bytes": args.tail_bytes,
-            "telemetry_reference_chunk_bytes": (
-                args.telemetry_reference_chunk_bytes
-            ),
-            "include_lifecycle": args.include_lifecycle,
-            "auto_approve": args.auto_approve,
-            "transient_retries": args.transient_retries,
-            "strict_control_errors": args.strict_control_errors,
-            "request_timeout_s": args.timeout,
-            "request_auth_enabled": bool(args.request_auth_token.strip()),
-            "role": args.role,
-        },
+        "workload": workload,
         "throughput": {
             "ops_per_s": overall.count / duration_s,
             "ok_ops_per_s": overall.ok / duration_s,
@@ -5611,12 +9270,19 @@ def benchmark_report_payload(
             ],
         },
     }
+    if target_provenance is not None:
+        payload["provenance"] = target_provenance
     if executable_state is not None:
         payload["executable_state"] = executable_state
     return payload
 
 
-def write_ramp_svg(ramp_rows: List[Dict[str, object]], svg_path: str) -> None:
+def write_ramp_svg(
+    ramp_rows: List[Dict[str, object]],
+    svg_path: str,
+    *,
+    exclusive: bool = False,
+) -> None:
     if not ramp_rows:
         return
     width = 900
@@ -5650,7 +9316,7 @@ def write_ramp_svg(ramp_rows: List[Dict[str, object]], svg_path: str) -> None:
   <text x="{padding}" y="20" font-size="14" fill="#111">Ramp workers (blue) vs error rate (red)</text>
 </svg>
 """
-    with open(svg_path, "w", encoding="utf-8") as handle:
+    with open_artifact_text(svg_path, exclusive=exclusive) as handle:
         handle.write(svg)
 
 
@@ -5670,12 +9336,14 @@ def write_simulation_artifacts(
     population: Optional[Dict[str, object]] = None,
     target_session_sha256: Optional[str] = None,
     executable_state: Optional[Dict[str, object]] = None,
+    target_provenance: Optional[Dict[str, object]] = None,
 ) -> Dict[str, str]:
     base_path = logger.path.rsplit(".", 1)[0]
     summary_json = f"{base_path}.summary.json"
     ops_csv = f"{base_path}.ops.csv"
     ramp_csv = f"{base_path}.ramp.csv"
     ramp_svg = f"{base_path}.ramp.svg"
+    exclusive = getattr(args, "population_mode", None) == POPULATION_EXECUTABLE
     concurrency_summary = concurrency or {
         "configured_max_inflight": args.max_inflight,
         "observed_high_water": 0,
@@ -5740,6 +9408,7 @@ def write_simulation_artifacts(
             concurrency_summary,
             population,
             executable_state,
+            target_provenance,
         ),
         "overall": operation_summary(overall, args.summary_max_error_lines),
         "operations": {
@@ -5750,10 +9419,14 @@ def write_simulation_artifacts(
     }
     if target_session_sha256 is not None:
         summary_payload["target_session_sha256"] = target_session_sha256
-    with open(summary_json, "w", encoding="utf-8") as handle:
+    with open_artifact_text(summary_json, exclusive=exclusive) as handle:
         json.dump(summary_payload, handle, indent=2, sort_keys=True)
 
-    with open(ops_csv, "w", encoding="utf-8", newline="") as handle:
+    with open_artifact_text(
+        ops_csv,
+        exclusive=exclusive,
+        newline="",
+    ) as handle:
         writer = csv.writer(handle)
         writer.writerow(
             [
@@ -5789,7 +9462,11 @@ def write_simulation_artifacts(
                 ]
             )
 
-    with open(ramp_csv, "w", encoding="utf-8", newline="") as handle:
+    with open_artifact_text(
+        ramp_csv,
+        exclusive=exclusive,
+        newline="",
+    ) as handle:
         writer = csv.DictWriter(
             handle,
             fieldnames=[
@@ -5814,7 +9491,7 @@ def write_simulation_artifacts(
         for row in ramp_rows:
             writer.writerow(row)
 
-    write_ramp_svg(ramp_rows, ramp_svg)
+    write_ramp_svg(ramp_rows, ramp_svg, exclusive=exclusive)
 
     return {
         "summary_json": summary_json,
@@ -5825,6 +9502,10 @@ def write_simulation_artifacts(
 
 
 def run_perf(args: argparse.Namespace) -> int:
+    if args.population_mode == POPULATION_EXECUTABLE:
+        raise RestError(
+            "qualified executable evidence requires simulate report provenance"
+        )
     client = RestClient(args.rest_url, args.timeout, args.request_auth_token)
     bounds_url = f"{normalize_rest_url(args.rest_url)}/v1/meta/bounds"
     perf_summary: Dict[str, Dict[str, object]] = {}
@@ -5842,11 +9523,14 @@ def run_perf(args: argparse.Namespace) -> int:
         try:
             runtime = worker_runtime_bounds(bounds)
             requested = min(args.max_workers, int(runtime["maximum_live_tasks"]))
+            target_evidence: Optional[BenchmarkTargetEvidence] = None
             executable_workers, population = executable_population_snapshot(
                 client,
                 bounds,
                 requested,
                 args.population_mode,
+                args.benchmark_target,
+                target_evidence,
             )
         except Exception as exc:
             args.logger.log(f"Executable Worker discovery failed: {exc}")

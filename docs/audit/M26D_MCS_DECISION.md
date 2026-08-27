@@ -156,7 +156,8 @@ runtime rollback after acceptance.
      recovery, complete Worker
      task-instance teardown, fresh supervisor-generation recreation, SC/Reply/
      cap/mapping/record leaks, CYW43 coexistence under the new MCS driver hash,
-     all five critical root reserves, exact WorkerGpu/WorkerLora host-tool
+     all seven critical root reserves including both Worker executor lanes,
+     exact WorkerGpu/WorkerLora host-tool
      receipt correlation, and performance before 26e closes. Final release
      promotion consumes matching QEMU/Pi Worker-component, root-TCB, and
      full-system records and their complete kernel/root/driver/CYW43/Worker hash

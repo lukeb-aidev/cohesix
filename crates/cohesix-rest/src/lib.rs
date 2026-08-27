@@ -543,6 +543,10 @@ pub struct ProcLeaseBounds {
 pub struct GatewayStatusResponse {
     /// True when the gateway currently has a console connection.
     pub connected: bool,
+    /// Normalized configured backend TCP target host, never the REST bind host.
+    pub target_host: String,
+    /// Configured backend TCP target port, never the REST bind port.
+    pub target_port: u16,
     /// Optional transport implementation class; connectivity is a separate axis.
     #[serde(default)]
     pub backend_class: Option<BackendClass>,
@@ -607,18 +611,18 @@ pub struct WorkerAcceptanceRoleSummary {
     pub completion_sequence: u64,
     /// Generated zero-based CPU core.
     pub core: u8,
-    /// Exact active scheduling-context parameters.
+    /// Exact generated active or passive scheduling-context parameters.
     pub scheduling_context: WorkerSchedulingContextSummary,
     /// Exact generated per-instance object counts; no capability addresses.
     pub object_inventory: KernelObjectInventorySummary,
 }
 
-/// Redacted active scheduling-context parameters for one accepted Worker.
+/// Redacted active or passive scheduling-context parameters for one accepted Worker.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct WorkerSchedulingContextSummary {
-    /// Execution budget in microseconds.
+    /// Execution budget in microseconds, or zero when passive.
     pub budget_us: u32,
-    /// Replenishment period in microseconds.
+    /// Replenishment period in microseconds, or zero when passive.
     pub period_us: u32,
 }
 
@@ -1093,6 +1097,8 @@ mod tests {
     fn gateway_status_response_parses_broker_counters() {
         let json = r#"{
             "connected": true,
+            "target_host": "192.168.10.2",
+            "target_port": 31337,
             "last_change_unix_ms": 1782846123456,
             "reconnects": 2,
             "connects": 3,
@@ -1122,6 +1128,8 @@ mod tests {
         }"#;
         let parsed: GatewayStatusResponse = serde_json::from_str(json).expect("status json");
         assert!(parsed.connected);
+        assert_eq!(parsed.target_host, "192.168.10.2");
+        assert_eq!(parsed.target_port, 31337);
         assert!(parsed.backend_class.is_none());
         assert!(parsed.worker_acceptance.is_none());
         assert_eq!(parsed.reconnects, 2);
@@ -1152,6 +1160,8 @@ mod tests {
 
         let status = r#"{
             "connected":true,
+            "target_host":"pi4.local",
+            "target_port":31337,
             "backend_class":"console-projection",
             "worker_acceptance":{
                 "schema":"cohesix-worker-task-evidence/v1",
@@ -1183,7 +1193,7 @@ mod tests {
                     "ready_sequence":5,
                     "completion_sequence":6,
                     "core":1,
-                    "scheduling_context":{"budget_us":100,"period_us":1000},
+                    "scheduling_context":{"budget_us":0,"period_us":0},
                     "object_inventory":{"tcbs":1,"scheduling_contexts":1,"reply_objects":0,"vspaces":1,"cnodes":1,"page_tables":8,"asids":1,"frames":16,"endpoints":0,"notifications":1,"fault_caps":1,"timeout_fault_caps":1,"cspace_slots":64,"untyped_bytes":1048576}
                 }]
             },
@@ -1191,6 +1201,9 @@ mod tests {
             "broker":{"control_waiters":0,"telemetry_waiters":0,"control_waiters_high_water":0,"telemetry_waiters_high_water":0,"control_checkouts":0,"telemetry_checkouts":0,"pool_exhausted":0,"checkout_retries":0,"timeout_rejections":0,"telemetry_yields":0,"proc_cache_hits":0,"proc_cache_misses":0,"proc_cache_evictions":0,"control_write_retryable_errors":0,"control_write_retries":0,"control_write_retry_sleep_ms":0,"control_write_retry_exhaustions":0,"control_write_success_after_retry":0,"relay_queue_depth":0,"relay_deduped":0,"relay_remote_write_failures":0}
         }"#;
         let parsed: GatewayStatusResponse = serde_json::from_str(status).expect("extended status");
+        let serialized = serde_json::to_vec(&parsed).expect("serialize extended status");
+        let parsed: GatewayStatusResponse =
+            serde_json::from_slice(&serialized).expect("round-trip extended status");
         assert_eq!(
             parsed.backend_class,
             Some(super::BackendClass::ConsoleProjection)
@@ -1200,6 +1213,13 @@ mod tests {
         assert_eq!(acceptance.workers[0].slot, 1);
         assert_eq!(acceptance.target_session.manifest_sha256, "c".repeat(64));
         assert_eq!(acceptance.execution_proof, "qemu");
+        assert_eq!(
+            acceptance.workers[0].scheduling_context,
+            super::WorkerSchedulingContextSummary {
+                budget_us: 0,
+                period_us: 0,
+            }
+        );
     }
 
     #[test]

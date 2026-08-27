@@ -13,9 +13,11 @@ import json
 import os
 import re
 import stat
+import struct
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
@@ -27,6 +29,7 @@ except ImportError:  # pragma: no cover - direct script execution uses this path
     import worker_image_manifest as worker_images
 
 MAX_RECORD_BYTES = 256 * 1024
+MAX_GENERATED_TOPOLOGY_BYTES = 512 * 1024
 MAX_ARTIFACT_BYTES = 64 * 1024 * 1024
 MAX_IDENTIFIER_BYTES = 128
 MAX_LABEL_BYTES = 256
@@ -49,6 +52,19 @@ REQUIRED_INTEGRATIONS = (
     "worker-control",
 )
 REQUIRED_ROLES = ("worker-heartbeat", "worker-gpu", "worker-lora")
+SERVICE_TEMPORAL_TASKS = (
+    ("ninedoor-service", "service"),
+    ("console-network-service", "service"),
+)
+CRITICAL_TEMPORAL_TASK_KINDS = {
+    "root-control": "root-control",
+    "root-fault": "root-fault",
+    "root-emergency": "root-emergency",
+    "root-worker-supervisor": "worker-supervisor",
+    "root-driver-supervisor": "driver-supervisor",
+    "root-worker-executor-gpu": "worker-executor",
+    "root-worker-executor-lora": "worker-executor",
+}
 TARGET_PROOF = {"qemu": "qemu", "pi4": "fresh-pi"}
 TARGET_PROFILE = {"qemu": "virt-aarch64", "pi4": "pi4-uboot-aarch64"}
 INVENTORY_KEYS = (
@@ -125,6 +141,38 @@ WORKER_ABI_FILES = (
 SOURCE_INVENTORY_SCHEMA = "cohesix-source-inventory/v1"
 WORKER_ABI_IDENTITY_SCHEMA = "cohesix-worker-abi-identity/v1"
 CYW43_QEMU_BINDING_SCHEMA = "cohesix-cyw43-coexistence-binding/v1"
+CYW43_PI_BINDING_SCHEMA = "cohesix-cyw43-coexistence-binding/v2"
+PI_TARGET_SESSION_MAX_AGE_SECS = 7 * 24 * 60 * 60
+PI_CYW43_FIXED_OUTCOMES = {
+    "active_net": "cyw43",
+    "runtime_dma": "fresh-pi",
+    "counter": "counter-qualified",
+    "dma_blocker": "none",
+    "ring_call_outstanding": 0,
+    "ring_call_unresolved_timeout": 0,
+    "timer_backend": "arch-counter",
+    "timer_clock_hz": 54_000_000,
+    "timer_el0_counter": "vct",
+    "dummy_timer_seen": False,
+    "net_active": "wifi",
+    "dhcp": "bound",
+    "tcp_ready": True,
+    "nettest": True,
+    "cohsh_auth": True,
+    "wifi_gate": 10,
+    "wifi_blocker": "none",
+    "wifi_dpc": True,
+    "sdio_dedicated": True,
+    "cyw43_dedicated": True,
+    "owner_state": True,
+    "bootstrap_supervisor": True,
+    "firmware_identity": True,
+    "clm_ready": True,
+    "firmware_version": True,
+    "clm_version": True,
+    "gate7_complete": True,
+    "sdio_irq158_inband": True,
+}
 COMPONENT_REQUIRED_OUTCOMES = (
     "bounded-control-path",
     "bounded-receipt-path",
@@ -267,6 +315,30 @@ class EvidenceError(ValueError):
     """A bounded evidence record violated its exact schema or hash graph."""
 
 
+def _strict_json_loads(raw: bytes, label: str) -> Any:
+    """Decode JSON while rejecting ambiguous keys and non-finite numbers."""
+
+    def reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError(f"duplicate object key {key!r}")
+            result[key] = value
+        return result
+
+    def reject_non_finite(value: str) -> None:
+        raise ValueError(f"non-finite number {value!r}")
+
+    try:
+        return json.loads(
+            raw,
+            object_pairs_hook=reject_duplicate_keys,
+            parse_constant=reject_non_finite,
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+        raise EvidenceError(f"invalid JSON in {label}: {exc}") from exc
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Validate and promote Cohesix Milestone 26e Worker evidence",
@@ -287,6 +359,41 @@ def _parser() -> argparse.ArgumentParser:
     emit_session.add_argument("--topology", type=Path, required=True)
     emit_session.add_argument("--out-dir", type=Path, required=True)
 
+    emit_pi_session = commands.add_parser(
+        "emit-pi4-target-session",
+        help="emit one exact Pi target session from a fresh controlled WiFi proof",
+    )
+    emit_pi_session.add_argument("--repo-root", type=Path, required=True)
+    emit_pi_session.add_argument("--runtime-proof", type=Path, required=True)
+    emit_pi_session.add_argument(
+        "--cyw43-coexistence-record",
+        type=Path,
+        required=True,
+    )
+    emit_pi_session.add_argument(
+        "--max-age-secs",
+        type=int,
+        default=21_600,
+    )
+    emit_pi_session.add_argument("--out-dir", type=Path, required=True)
+
+    emit_build_identities = commands.add_parser(
+        "emit-build-identities",
+        help="emit exact clean-source and Worker-ABI build identities",
+    )
+    emit_build_identities.add_argument("--repo-root", type=Path, required=True)
+    emit_build_identities.add_argument("--topology", type=Path, required=True)
+    emit_build_identities.add_argument("--out-dir", type=Path, required=True)
+
+    validate_build_identities = commands.add_parser(
+        "validate-build-identities",
+        help="validate retained clean-source and Worker-ABI build identities",
+    )
+    validate_build_identities.add_argument("--repo-root", type=Path, required=True)
+    validate_build_identities.add_argument("--topology", type=Path, required=True)
+    validate_build_identities.add_argument("--source-inventory", type=Path, required=True)
+    validate_build_identities.add_argument("--worker-abi", type=Path, required=True)
+
     validate_root = commands.add_parser(
         "validate-root", help="validate root-TCB containment evidence"
     )
@@ -304,6 +411,28 @@ def _parser() -> argparse.ArgumentParser:
     emit_component.add_argument("--observations", type=Path, required=True)
     emit_component.add_argument("--integration-dir", type=Path, required=True)
     emit_component.add_argument("--out", type=Path, required=True)
+
+    collect_pi_component = commands.add_parser(
+        "collect-pi4-component",
+        help=(
+            "derive one Pi Worker component from exact live serial, runtime, "
+            "network, build, and integration evidence"
+        ),
+    )
+    collect_pi_component.add_argument("--target-session", type=Path, required=True)
+    collect_pi_component.add_argument(
+        "--generated-inventory", type=Path, required=True
+    )
+    collect_pi_component.add_argument("--runtime-proof", type=Path, required=True)
+    collect_pi_component.add_argument("--network-capture", type=Path, required=True)
+    collect_pi_component.add_argument(
+        "--transport", choices=("genet", "wifi"), required=True
+    )
+    collect_pi_component.add_argument("--integration-dir", type=Path, required=True)
+    collect_pi_component.add_argument(
+        "--max-age-secs", type=int, default=21_600
+    )
+    collect_pi_component.add_argument("--out-dir", type=Path, required=True)
 
     emit_root = commands.add_parser(
         "emit-root",
@@ -512,18 +641,28 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def _load(path: Path) -> tuple[dict[str, Any], bytes]:
-    try:
-        raw = path.read_bytes()
-    except OSError as exc:
-        raise EvidenceError(f"cannot read evidence {path}: {exc}") from exc
+    raw = _read_frozen_artifact(path, "evidence")
     if not raw or len(raw) > MAX_RECORD_BYTES:
         raise EvidenceError(f"evidence size is outside 1..{MAX_RECORD_BYTES}: {path}")
-    try:
-        value = json.loads(raw)
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise EvidenceError(f"invalid JSON in {path}: {exc}") from exc
+    value = _strict_json_loads(raw, str(path))
     if not isinstance(value, dict):
         raise EvidenceError(f"evidence root must be an object: {path}")
+    _scan_sensitive(value)
+    return value, raw
+
+
+def _load_generated_topology(path: Path) -> tuple[dict[str, Any], bytes]:
+    """Load a compiler-generated topology under its distinct bounded envelope."""
+
+    raw = _read_frozen_artifact(path, "generated topology")
+    if not raw or len(raw) > MAX_GENERATED_TOPOLOGY_BYTES:
+        raise EvidenceError(
+            "generated topology size is outside "
+            f"1..{MAX_GENERATED_TOPOLOGY_BYTES}: {path}"
+        )
+    value = _strict_json_loads(raw, f"generated topology {path}")
+    if not isinstance(value, dict):
+        raise EvidenceError(f"generated topology root must be an object: {path}")
     _scan_sensitive(value)
     return value, raw
 
@@ -610,6 +749,234 @@ def _bounded_list(value: Any, context: str) -> list[Any]:
     if not isinstance(value, list) or len(value) > MAX_LIST_ITEMS:
         raise EvidenceError(f"invalid bounded list for {context}")
     return value
+
+
+def _generated_temporal_tasks(topology: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Validate the compiler-declared task seal without widening generic lists."""
+
+    temporal = topology.get("temporal_authority")
+    admission = topology.get("worker_resource_admission")
+    if not isinstance(temporal, dict) or not isinstance(admission, dict):
+        raise EvidenceError("generated topology lacks temporal Worker authority")
+    tasks = temporal.get("tasks")
+    if not isinstance(tasks, list):
+        raise EvidenceError("generated temporal tasks must be a list")
+
+    worker_classes = _bounded_list(
+        temporal.get("worker_classes"), "generated Worker classes"
+    )
+    executable_roles = _bounded_list(
+        admission.get("executable_roles"), "generated executable roles"
+    )
+    if len(worker_classes) != len(REQUIRED_ROLES) or len(executable_roles) != len(
+        REQUIRED_ROLES
+    ):
+        raise EvidenceError(
+            "generated topology lacks the exact executable Worker roles"
+        )
+
+    worker_runtime = topology.get("worker_runtime")
+    max_workers = (
+        worker_runtime.get("max_workers") if isinstance(worker_runtime, dict) else None
+    )
+    if (
+        not isinstance(max_workers, int)
+        or isinstance(max_workers, bool)
+        or not 1 <= max_workers <= 256
+    ):
+        raise EvidenceError("generated Worker runtime maximum is invalid")
+
+    expected_worker_ids: list[str] = []
+    expected_worker_contracts: list[tuple[int, str]] = []
+    role_donors = {
+        "worker-heartbeat": "root-worker-executor-lora",
+        "worker-gpu": "root-worker-executor-gpu",
+        "worker-lora": "root-worker-executor-lora",
+    }
+    for expected_role, worker_class, executable_role in zip(
+        REQUIRED_ROLES, worker_classes, executable_roles, strict=True
+    ):
+        if not isinstance(worker_class, dict) or not isinstance(executable_role, dict):
+            raise EvidenceError("generated Worker class/role row must be an object")
+        class_role = _identifier(worker_class.get("role"), "generated Worker class")
+        role = _identifier(executable_role.get("role"), "generated executable role")
+        class_prefix = _identifier(
+            worker_class.get("task_prefix"), "generated Worker class task prefix"
+        )
+        role_prefix = _identifier(
+            executable_role.get("task_prefix"), "generated executable role task prefix"
+        )
+        class_slots = worker_class.get("slots")
+        executable_slots = executable_role.get("executable_slots")
+        if (
+            class_role != expected_role
+            or role != expected_role
+            or class_prefix != role_prefix
+            or not isinstance(class_slots, int)
+            or isinstance(class_slots, bool)
+            or not isinstance(executable_slots, int)
+            or isinstance(executable_slots, bool)
+            or not 1 <= class_slots <= 0xFFFF
+            or executable_slots != class_slots
+            or executable_role.get("namespace_capacity") != max_workers
+            or worker_class.get("core") != executable_role.get("core")
+            or worker_class.get("execution") != "passive"
+            or worker_class.get("allowed_donors") != [role_donors[expected_role]]
+            or worker_class.get("reply_objects") != 1
+            or worker_class.get("max_donation_depth") != 1
+        ):
+            raise EvidenceError(
+                "generated Worker classes differ from passive executable role admission"
+            )
+        expected_worker_ids.extend(
+            f"{class_prefix}{slot}" for slot in range(class_slots)
+        )
+        expected_worker_contracts.extend(
+            (worker_class["core"], role_donors[expected_role])
+            for _slot in range(class_slots)
+        )
+    if len(expected_worker_ids) != max_workers:
+        raise EvidenceError(
+            "generated executable Worker population differs from runtime maximum"
+        )
+
+    fault_registry = admission.get("fault_registry")
+    if not isinstance(fault_registry, dict):
+        raise EvidenceError("generated topology lacks the exact fault registry")
+    registry_fields = (
+        "critical_tcbs",
+        "service_tcbs",
+        "worker_tcbs",
+        "driver_tcbs",
+        "capacity",
+    )
+    for field in registry_fields:
+        count = fault_registry.get(field)
+        if (
+            not isinstance(count, int)
+            or isinstance(count, bool)
+            or count < 0
+            or count > 0xFFFF_FFFF
+        ):
+            raise EvidenceError(f"generated fault registry {field} is invalid")
+    if fault_registry["worker_tcbs"] != len(expected_worker_ids):
+        raise EvidenceError(
+            "generated fault registry differs from executable Worker population"
+        )
+    fault_badges = admission.get("handoff", {}).get("worker_fault_badges")
+    if not isinstance(fault_badges, dict) or fault_badges.get("count") != len(
+        expected_worker_ids
+    ):
+        raise EvidenceError(
+            "generated Worker fault-badge range differs from executable population"
+        )
+
+    critical_rows = _bounded_list(
+        admission.get("critical_tcbs"), "generated critical TCBs"
+    )
+    critical_ids: list[str] = []
+    for row in critical_rows:
+        if not isinstance(row, dict):
+            raise EvidenceError("generated critical TCB row must be an object")
+        identifier = _identifier(row.get("id"), "generated critical TCB")
+        if identifier not in CRITICAL_TEMPORAL_TASK_KINDS:
+            raise EvidenceError("generated critical TCB has an unknown temporal role")
+        critical_ids.append(identifier)
+    if (
+        critical_ids != list(CRITICAL_TEMPORAL_TASK_KINDS)
+        or len(critical_ids) != fault_registry["critical_tcbs"]
+    ):
+        raise EvidenceError("generated critical TCB seal is duplicated or incomplete")
+
+    if fault_registry["service_tcbs"] != len(SERVICE_TEMPORAL_TASKS):
+        raise EvidenceError("generated service TCB seal is not exact")
+
+    driver_count = fault_registry["driver_tcbs"]
+    driver_ids: list[str] = []
+    if driver_count:
+        root_task = topology.get("root_task")
+        driver_images = (
+            root_task.get("driver_images") if isinstance(root_task, dict) else None
+        )
+        images = (
+            driver_images.get("images") if isinstance(driver_images, dict) else None
+        )
+        images = _bounded_list(images, "generated driver images")
+        for image in images:
+            image_id = image.get("id") if isinstance(image, dict) else None
+            match = (
+                re.fullmatch(r"pi4-([a-z0-9-]+)-runtime", image_id)
+                if isinstance(image_id, str)
+                else None
+            )
+            if match is None:
+                raise EvidenceError(
+                    "generated driver image has no canonical task identity"
+                )
+            driver_ids.append(f"driver-{match.group(1)}")
+        if len(driver_ids) != driver_count or len(driver_ids) != len(set(driver_ids)):
+            raise EvidenceError("generated driver TCB seal differs from driver images")
+
+    expected_non_worker = [
+        *critical_ids,
+        *(identifier for identifier, _kind in SERVICE_TEMPORAL_TASKS),
+        *driver_ids,
+    ]
+    if len(expected_non_worker) > MAX_LIST_ITEMS:
+        raise EvidenceError(
+            "invalid bounded list for generated non-Worker temporal tasks"
+        )
+    expected_capacity = len(expected_non_worker) + len(expected_worker_ids)
+    if (
+        fault_registry["capacity"] != expected_capacity
+        or len(tasks) != expected_capacity
+    ):
+        raise EvidenceError(
+            "generated temporal tasks differ from exact registry capacity"
+        )
+
+    normalized: list[dict[str, Any]] = []
+    task_ids: list[str] = []
+    for task in tasks:
+        if not isinstance(task, dict):
+            raise EvidenceError("generated temporal task must be an object")
+        task_ids.append(_identifier(task.get("id"), "generated temporal task"))
+        normalized.append(task)
+    if len(task_ids) != len(set(task_ids)):
+        raise EvidenceError("generated temporal task identities are duplicated")
+
+    non_worker_tasks = normalized[: len(expected_non_worker)]
+    worker_tasks = normalized[len(expected_non_worker) :]
+    if [task["id"] for task in non_worker_tasks] != expected_non_worker:
+        raise EvidenceError("generated non-Worker temporal topology is not exact")
+    expected_non_worker_kinds = [
+        *(CRITICAL_TEMPORAL_TASK_KINDS[identifier] for identifier in critical_ids),
+        *(kind for _identifier_value, kind in SERVICE_TEMPORAL_TASKS),
+        *("driver" for _identifier_value in driver_ids),
+    ]
+    if [task.get("kind") for task in non_worker_tasks] != expected_non_worker_kinds:
+        raise EvidenceError("generated non-Worker temporal kinds are not exact")
+    if [task["id"] for task in worker_tasks] != expected_worker_ids or any(
+        task.get("kind") != "worker" for task in worker_tasks
+    ):
+        raise EvidenceError("generated Worker temporal population is not exact")
+    for task, (core, donor) in zip(
+        worker_tasks, expected_worker_contracts, strict=True
+    ):
+        if (
+            task.get("execution") != "passive"
+            or task.get("admitted") is not False
+            or task.get("core") != core
+            or task.get("budget_us") != 0
+            or task.get("period_us") != 0
+            or task.get("allowed_donors") != [donor]
+            or task.get("reply_objects") != 1
+            or task.get("max_donation_depth") != 1
+        ):
+            raise EvidenceError(
+                "generated passive Worker temporal contract is not exact"
+            )
+    return normalized
 
 
 def _sorted_unique(values: Sequence[Any], key: Any, context: str) -> None:
@@ -756,8 +1123,9 @@ def _worker_scheduling_context(value: Any) -> dict[str, int]:
         or isinstance(budget, bool)
         or not isinstance(period, int)
         or isinstance(period, bool)
-        or budget <= 0
-        or period <= 0
+        or budget < 0
+        or period < 0
+        or (budget == 0) != (period == 0)
         or budget > period
         or period > 0xFFFF_FFFF
     ):
@@ -890,8 +1258,10 @@ def validate_component(record: Mapping[str, Any], target: str) -> None:
     _target_session(record["target_session"], target)
     _hash(record["topology_sha256"], "topology")
     workers = _bounded_list(record["workers"], "workers")
-    if len(workers) != 3:
-        raise EvidenceError("target component requires exactly three Workers")
+    if len(workers) != len(REQUIRED_ROLES):
+        raise EvidenceError(
+            "target component requires one bounded exemplar per executable Worker role"
+        )
     roles: list[str] = []
     for worker in workers:
         if not isinstance(worker, dict):
@@ -1008,11 +1378,24 @@ def validate_component(record: Mapping[str, Any], target: str) -> None:
             COMPONENT_REQUIRED_OUTCOMES,
             "component outcomes",
         )
-    _artifacts(
+    raw_artifacts = _artifacts(
         record["raw_evidence"],
         "component raw evidence",
         required=record["verdict"] == "PASS",
     )
+    if (
+        target == "pi4"
+        and record["verdict"] == "PASS"
+        and tuple(item["id"] for item in raw_artifacts)
+        != (
+            "pi4-network-capture",
+            "pi4-runtime-dma-proof",
+            "pi4-serial-boot",
+        )
+    ):
+        raise EvidenceError(
+            "accepted Pi component requires exact serial/network/runtime raw evidence"
+        )
     _verdict(record)
 
 
@@ -1164,9 +1547,7 @@ def _generated_inventory(
     topology_sha256 = _hash(value["topology_sha256"], "generated topology")
     if topology_sha256 != _canonical_json_sha256(topology):
         raise EvidenceError("generated topology digest mismatch")
-    temporal = topology.get("temporal_authority")
-    tasks = temporal.get("tasks") if isinstance(temporal, dict) else None
-    tasks = _bounded_list(tasks, "generated temporal tasks")
+    tasks = _generated_temporal_tasks(topology)
     root_tasks = [
         task
         for task in tasks
@@ -1225,9 +1606,7 @@ def _validate_worker_topology(
 ) -> None:
     admission = topology["worker_resource_admission"]
     roles = {row["role"]: row for row in admission["executable_roles"]}
-    temporal = topology["temporal_authority"]
-    tasks = temporal.get("tasks") if isinstance(temporal, dict) else None
-    tasks = _bounded_list(tasks, "generated temporal tasks")
+    tasks = _generated_temporal_tasks(topology)
     worker_tasks = [
         task for task in tasks if isinstance(task, dict) and task.get("kind") == "worker"
     ]
@@ -1353,41 +1732,76 @@ def _target_session_file(path: Path, target: str) -> tuple[dict[str, Any], bytes
 
 
 def _read_frozen_artifact(path: Path, label: str) -> bytes:
-    """Read one unchanged, non-symlink, bounded regular file exactly once."""
-    try:
-        before = path.lstat()
-    except OSError as exc:
-        raise EvidenceError(f"cannot inspect {label}: {path}: {exc}") from exc
-    if stat.S_ISLNK(before.st_mode) or not stat.S_ISREG(before.st_mode):
-        raise EvidenceError(f"{label} must be a regular non-symlink file: {path}")
-    if before.st_size <= 0 or before.st_size > MAX_ARTIFACT_BYTES:
-        raise EvidenceError(
-            f"{label} size is outside 1..{MAX_ARTIFACT_BYTES}: {path}"
-        )
-    try:
-        with path.open("rb") as handle:
-            opened = os.fstat(handle.fileno())
-            raw = handle.read(MAX_ARTIFACT_BYTES + 1)
-            closed = os.fstat(handle.fileno())
-        after = path.lstat()
-    except OSError as exc:
-        raise EvidenceError(f"cannot read {label}: {path}: {exc}") from exc
-    identity = lambda value: (  # noqa: E731 - compact stable-file identity
-        value.st_dev,
-        value.st_ino,
-        value.st_mode,
-        value.st_size,
-        value.st_mtime_ns,
-    )
+    """Read one bounded regular file through pinned, no-symlink descriptors."""
+
+    absolute = Path(os.path.abspath(path))
     if (
-        len(raw) != before.st_size
-        or len(raw) > MAX_ARTIFACT_BYTES
-        or identity(before) != identity(opened)
-        or identity(opened) != identity(closed)
-        or identity(closed) != identity(after)
+        not absolute.name
+        or absolute.name in (".", "..")
+        or ".." in path.parts
+        or not hasattr(os, "O_NOFOLLOW")
     ):
-        raise EvidenceError(f"{label} changed while it was being frozen: {path}")
-    return raw
+        raise EvidenceError(f"{label} path is invalid: {path}")
+    directory_flags = (
+        os.O_RDONLY
+        | os.O_DIRECTORY
+        | os.O_NOFOLLOW
+        | getattr(os, "O_CLOEXEC", 0)
+    )
+    file_flags = os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+    directory_descriptor = -1
+    descriptor = -1
+    try:
+        directory_descriptor = os.open(os.sep, directory_flags)
+        for component in absolute.parts[1:-1]:
+            next_descriptor = os.open(
+                component,
+                directory_flags,
+                dir_fd=directory_descriptor,
+            )
+            os.close(directory_descriptor)
+            directory_descriptor = next_descriptor
+        descriptor = os.open(
+            absolute.name,
+            file_flags,
+            dir_fd=directory_descriptor,
+        )
+    except OSError as exc:
+        raise EvidenceError(f"cannot open {label} safely: {path}: {exc}") from exc
+    finally:
+        if directory_descriptor >= 0:
+            os.close(directory_descriptor)
+    try:
+        before = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_size <= 0
+            or before.st_size > MAX_ARTIFACT_BYTES
+        ):
+            raise EvidenceError(
+                f"{label} size is outside 1..{MAX_ARTIFACT_BYTES}: {path}"
+            )
+        chunks: list[bytes] = []
+        remaining = before.st_size
+        while remaining:
+            chunk = os.read(descriptor, min(remaining, 1024 * 1024))
+            if not chunk:
+                raise EvidenceError(f"{label} changed while it was being frozen: {path}")
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        after = os.fstat(descriptor)
+        if (
+            os.read(descriptor, 1)
+            or after.st_dev != before.st_dev
+            or after.st_ino != before.st_ino
+            or after.st_mode != before.st_mode
+            or after.st_size != before.st_size
+            or after.st_mtime_ns != before.st_mtime_ns
+        ):
+            raise EvidenceError(f"{label} changed while it was being frozen: {path}")
+        return b"".join(chunks)
+    finally:
+        os.close(descriptor)
 
 
 def _artifact_text(raw: bytes, label: str) -> str:
@@ -1520,10 +1934,7 @@ def _worker_manifest_image_hashes(
 ) -> dict[str, str]:
     if _sha256(manifest_raw) != session["worker_image_manifest_sha256"]:
         raise EvidenceError("Worker manifest bytes differ from target session")
-    try:
-        manifest = json.loads(manifest_raw)
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise EvidenceError("Worker image manifest is invalid JSON") from exc
+    manifest = _strict_json_loads(manifest_raw, "Worker image manifest")
     if (
         not isinstance(manifest, dict)
         or manifest.get("schema") != "cohesix-worker-image-manifest/v1"
@@ -1556,10 +1967,7 @@ def _validate_worker_build_artifacts(
 ) -> dict[str, str]:
     if _sha256(archive_raw) != session["worker_archive_sha256"]:
         raise EvidenceError("Worker archive bytes differ from target session")
-    try:
-        manifest = json.loads(manifest_raw)
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise EvidenceError("Worker image manifest is invalid JSON") from exc
+    manifest = _strict_json_loads(manifest_raw, "Worker image manifest")
     if manifest.get("archive") != {
         "bytes": len(archive_raw),
         "sha256": _sha256(archive_raw),
@@ -1586,10 +1994,7 @@ def _artifact_row(identifier: str, raw: bytes) -> dict[str, Any]:
 
 def _load_frozen_json(path: Path, label: str) -> tuple[dict[str, Any], bytes]:
     raw = _read_frozen_artifact(path, label)
-    try:
-        value = json.loads(raw)
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise EvidenceError(f"invalid JSON in {label}: {path}: {exc}") from exc
+    value = _strict_json_loads(raw, f"{label}: {path}")
     if not isinstance(value, dict):
         raise EvidenceError(f"{label} root must be an object")
     _scan_sensitive(value)
@@ -1786,6 +2191,93 @@ def _validate_session_output_location(
             "target-session output inside the repository must be git-ignored"
         )
     return output
+
+
+def _validate_pi_session_output_location(repo_root: Path, requested: Path) -> Path:
+    """Resolve one absent Pi session bundle below an ignored or external parent."""
+
+    if not requested.name or requested.name in (".", ".."):
+        raise EvidenceError("Pi target-session output directory is invalid")
+    parent = _resolved_directory(requested.parent, "Pi target-session output parent")
+    output = parent / requested.name
+    if output.exists() or output.is_symlink():
+        raise EvidenceError("Pi target-session output directory must not already exist")
+    try:
+        relative = output.relative_to(repo_root)
+    except ValueError:
+        return output
+    try:
+        completed = subprocess.run(
+            ["git", "check-ignore", "-q", "--", relative.as_posix()],
+            cwd=repo_root,
+            check=False,
+            capture_output=True,
+        )
+    except OSError as exc:
+        raise EvidenceError(f"cannot validate Pi target-session output: {exc}") from exc
+    if completed.returncode != 0:
+        raise EvidenceError(
+            "Pi target-session output inside the repository must be git-ignored"
+        )
+    return output
+
+
+def _pi_harness() -> Any:
+    """Load the shared strict Pi artifact validators for the finalizer."""
+
+    try:
+        from scripts import rest_perf_harness
+    except ImportError:  # pragma: no cover - direct script execution uses this path
+        import rest_perf_harness
+    return rest_perf_harness
+
+
+def _classic_pcap_identity(raw: bytes) -> tuple[str, int, int, int]:
+    """Return exact format, link type, and first/last timestamps for classic pcap."""
+
+    formats = {
+        b"\xd4\xc3\xb2\xa1": ("<", 1_000_000, "pcap-us"),
+        b"\xa1\xb2\xc3\xd4": (">", 1_000_000, "pcap-us"),
+        b"\x4d\x3c\xb2\xa1": ("<", 1_000_000_000, "pcap-ns"),
+        b"\xa1\xb2\x3c\x4d": (">", 1_000_000_000, "pcap-ns"),
+    }
+    selected = formats.get(raw[:4])
+    if selected is None or len(raw) < 24:
+        raise EvidenceError("Pi controlled capture is not classic pcap")
+    endian, scale, format_name = selected
+    major, minor, _zone, _sigfigs, snaplen, link_type = struct.unpack_from(
+        f"{endian}HHiIII", raw, 4
+    )
+    if (major, minor) != (2, 4) or snaplen <= 0:
+        raise EvidenceError("Pi controlled capture has an invalid pcap header")
+    offset = 24
+    first_ns: int | None = None
+    last_ns: int | None = None
+    while offset < len(raw):
+        if len(raw) - offset < 16:
+            raise EvidenceError("Pi controlled capture has a truncated packet header")
+        seconds, fraction, captured, original = struct.unpack_from(
+            f"{endian}IIII", raw, offset
+        )
+        offset += 16
+        if (
+            seconds <= 0
+            or fraction >= scale
+            or captured <= 0
+            or captured > original
+            or captured > snaplen
+            or captured > len(raw) - offset
+        ):
+            raise EvidenceError("Pi controlled capture has an invalid packet record")
+        timestamp_ns = seconds * 1_000_000_000 + (
+            fraction * (1_000 if scale == 1_000_000 else 1)
+        )
+        first_ns = timestamp_ns if first_ns is None else min(first_ns, timestamp_ns)
+        last_ns = timestamp_ns if last_ns is None else max(last_ns, timestamp_ns)
+        offset += captured
+    if first_ns is None or last_ns is None:
+        raise EvidenceError("Pi controlled capture contains no packet evidence")
+    return format_name, link_type, first_ns, last_ns
 
 
 def _validate_qemu_launch_artifacts(
@@ -2038,59 +2530,159 @@ def _worker_abi_identity(
     return raw
 
 
-def _write_exclusive_artifact(path: Path, raw: bytes) -> None:
+def _write_exclusive_artifact(
+    directory_descriptor: int,
+    name: str,
+    raw: bytes,
+) -> None:
+    """Write and fsync one new regular file below a pinned directory."""
+
     if not raw or len(raw) > MAX_ARTIFACT_BYTES:
-        raise EvidenceError("target-session artifact exceeds its bounded size")
-    temporary: Path | None = None
+        raise EvidenceError("evidence artifact exceeds its bounded size")
+    if not name or name in (".", "..") or os.sep in name:
+        raise EvidenceError("evidence artifact name is invalid")
+    descriptor = -1
     try:
-        descriptor, name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
-        temporary = Path(name)
-        with os.fdopen(descriptor, "wb") as handle:
-            handle.write(raw)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.link(temporary, path)
+        descriptor = os.open(
+            name,
+            os.O_WRONLY
+            | os.O_CREAT
+            | os.O_EXCL
+            | os.O_NOFOLLOW
+            | getattr(os, "O_CLOEXEC", 0),
+            0o600,
+            dir_fd=directory_descriptor,
+        )
+        view = memoryview(raw)
+        while view:
+            written = os.write(descriptor, view)
+            if written <= 0:
+                raise EvidenceError("cannot make progress writing evidence artifact")
+            view = view[written:]
+        os.fsync(descriptor)
     except FileExistsError as exc:
-        raise EvidenceError(f"refusing to overwrite target-session artifact: {path}") from exc
+        raise EvidenceError(f"refusing to overwrite evidence artifact: {name}") from exc
     except OSError as exc:
-        raise EvidenceError(f"cannot publish target-session artifact {path}: {exc}") from exc
+        raise EvidenceError(f"cannot publish evidence artifact {name}: {exc}") from exc
     finally:
-        if temporary is not None:
-            temporary.unlink(missing_ok=True)
+        if descriptor >= 0:
+            os.close(descriptor)
+
+
+def _publish_exact_bundle(
+    output: Path,
+    artifacts: Mapping[str, bytes],
+    label: str,
+) -> None:
+    absolute = Path(os.path.abspath(output))
+    if (
+        not absolute.name
+        or absolute.name in (".", "..")
+        or ".." in output.parts
+        or not hasattr(os, "O_NOFOLLOW")
+    ):
+        raise EvidenceError(f"{label} output directory is invalid")
+    directory_flags = (
+        os.O_RDONLY
+        | os.O_DIRECTORY
+        | os.O_NOFOLLOW
+        | getattr(os, "O_CLOEXEC", 0)
+    )
+    parent_descriptor = -1
+    output_descriptor = -1
+    child_descriptors: dict[str, int] = {}
+    written: list[tuple[int, str]] = []
+    created = False
+    failure: BaseException | None = None
+    try:
+        parent_descriptor = os.open(os.sep, directory_flags)
+        for component in absolute.parts[1:-1]:
+            next_descriptor = os.open(
+                component,
+                directory_flags,
+                dir_fd=parent_descriptor,
+            )
+            os.close(parent_descriptor)
+            parent_descriptor = next_descriptor
+        os.mkdir(absolute.name, 0o700, dir_fd=parent_descriptor)
+        created = True
+        output_descriptor = os.open(
+            absolute.name,
+            directory_flags,
+            dir_fd=parent_descriptor,
+        )
+        for relative, raw in artifacts.items():
+            parts = relative.split("/")
+            if (
+                len(parts) not in (1, 2)
+                or any(
+                    not part
+                    or part in (".", "..")
+                    or os.sep in part
+                    for part in parts
+                )
+            ):
+                raise EvidenceError(f"{label} artifact path is invalid: {relative}")
+            destination_descriptor = output_descriptor
+            if len(parts) == 2:
+                directory_name = parts[0]
+                if directory_name not in child_descriptors:
+                    os.mkdir(directory_name, 0o700, dir_fd=output_descriptor)
+                    child_descriptors[directory_name] = os.open(
+                        directory_name,
+                        directory_flags,
+                        dir_fd=output_descriptor,
+                    )
+                destination_descriptor = child_descriptors[directory_name]
+            _write_exclusive_artifact(destination_descriptor, parts[-1], raw)
+            written.append((destination_descriptor, parts[-1]))
+        for descriptor in child_descriptors.values():
+            os.fsync(descriptor)
+        os.fsync(output_descriptor)
+        os.fsync(parent_descriptor)
+    except FileExistsError as exc:
+        failure = EvidenceError(f"{label} output directory already exists")
+        failure.__cause__ = exc
+    except (EvidenceError, OSError) as exc:
+        if isinstance(exc, EvidenceError):
+            failure = exc
+        else:
+            failure = EvidenceError(f"cannot finalize {label} output: {exc}")
+            failure.__cause__ = exc
+    finally:
+        if failure is not None:
+            for descriptor, name in reversed(written):
+                try:
+                    os.unlink(name, dir_fd=descriptor)
+                except OSError:
+                    pass
+        for descriptor in child_descriptors.values():
+            os.close(descriptor)
+        if output_descriptor >= 0:
+            if created and failure is not None:
+                for directory_name in reversed(tuple(child_descriptors)):
+                    try:
+                        os.rmdir(directory_name, dir_fd=output_descriptor)
+                    except OSError:
+                        pass
+            os.close(output_descriptor)
+        if parent_descriptor >= 0:
+            if created and failure is not None:
+                try:
+                    os.rmdir(absolute.name, dir_fd=parent_descriptor)
+                except OSError:
+                    pass
+            os.close(parent_descriptor)
+    if failure is not None:
+        raise failure
 
 
 def _publish_target_session(output: Path, artifacts: Mapping[str, bytes]) -> None:
-    try:
-        output.mkdir(mode=0o700)
-    except FileExistsError as exc:
-        raise EvidenceError("target-session output directory already exists") from exc
-    except OSError as exc:
-        raise EvidenceError(f"cannot create target-session output directory: {exc}") from exc
-    published: list[Path] = []
-    try:
-        for name, raw in artifacts.items():
-            path = output / name
-            _write_exclusive_artifact(path, raw)
-            published.append(path)
-        descriptor = os.open(output, os.O_RDONLY)
-        try:
-            os.fsync(descriptor)
-        finally:
-            os.close(descriptor)
-    except (EvidenceError, OSError) as exc:
-        for path in published:
-            path.unlink(missing_ok=True)
-        try:
-            output.rmdir()
-        except OSError:
-            pass
-        if isinstance(exc, EvidenceError):
-            raise
-        raise EvidenceError(f"cannot finalize target-session output: {exc}") from exc
+    _publish_exact_bundle(output, artifacts, "target-session")
 
 
-def _emit_qemu_target_session(args: argparse.Namespace) -> None:
-    repo_root = _resolved_directory(args.repo_root, "repository root")
+def _exact_repo_root(path: Path) -> Path:
+    repo_root = _resolved_directory(path, "repository root")
     try:
         top_level = _git_output(
             repo_root,
@@ -2102,6 +2694,90 @@ def _emit_qemu_target_session(args: argparse.Namespace) -> None:
         raise EvidenceError(f"cannot resolve exact Git worktree root: {exc}") from exc
     if exact_top_level != repo_root:
         raise EvidenceError("--repo-root is not the exact Git worktree root")
+    return repo_root
+
+
+def _validate_build_identity_output_location(
+    repo_root: Path,
+    requested: Path,
+) -> Path:
+    if not requested.name or requested.name in (".", ".."):
+        raise EvidenceError("build-identity output directory is invalid")
+    parent = _resolved_directory(requested.parent, "build-identity output parent")
+    output = parent / requested.name
+    if output.exists() or output.is_symlink():
+        raise EvidenceError("build-identity output directory must not already exist")
+    out_root = _resolved_directory(repo_root / "out", "repository output root")
+    try:
+        output.relative_to(out_root)
+    except ValueError as exc:
+        raise EvidenceError(
+            "build-identity output directory must be below the repository out directory"
+        ) from exc
+    relative = output.relative_to(repo_root)
+    try:
+        completed = subprocess.run(
+            ["git", "check-ignore", "-q", "--", relative.as_posix()],
+            cwd=repo_root,
+            check=False,
+            capture_output=True,
+        )
+    except OSError as exc:
+        raise EvidenceError(f"cannot validate build-identity output: {exc}") from exc
+    if completed.returncode != 0:
+        raise EvidenceError("build-identity output must be git-ignored")
+    return output
+
+
+def _expected_build_identities(
+    repo_root: Path,
+    topology_path: Path,
+) -> dict[str, bytes]:
+    status = _git_output(
+        repo_root,
+        ("status", "--porcelain=v1", "--untracked-files=all"),
+        "clean source identity",
+    )
+    if status:
+        raise EvidenceError("build identities require an exact clean source checkout")
+    topology_record, _topology_raw = _load_generated_topology(topology_path)
+    topology = topology_record.get("topology")
+    if not isinstance(topology, dict):
+        raise EvidenceError("generated topology lacks its exact topology object")
+    return {
+        "source-inventory.json": _source_inventory_bytes(repo_root),
+        "worker-abi-identity.json": _worker_abi_identity(repo_root, topology),
+    }
+
+
+def _emit_build_identities(args: argparse.Namespace) -> None:
+    repo_root = _exact_repo_root(args.repo_root)
+    output = _validate_build_identity_output_location(repo_root, args.out_dir)
+    artifacts = _expected_build_identities(repo_root, args.topology)
+    _publish_exact_bundle(output, artifacts, "build-identity")
+    print(f"worker evidence: build identities PASS ({output})")
+
+
+def _validate_build_identities(args: argparse.Namespace) -> None:
+    repo_root = _exact_repo_root(args.repo_root)
+    expected = _expected_build_identities(repo_root, args.topology)
+    observed = {
+        "source-inventory.json": _read_frozen_artifact(
+            args.source_inventory,
+            "retained source inventory",
+        ),
+        "worker-abi-identity.json": _read_frozen_artifact(
+            args.worker_abi,
+            "retained Worker ABI identity",
+        ),
+    }
+    if observed != expected:
+        raise EvidenceError("retained build identities differ from exact clean source")
+    print("worker evidence: retained build identities PASS")
+
+
+def _emit_qemu_target_session(args: argparse.Namespace) -> None:
+    repo_root = _exact_repo_root(args.repo_root)
     qemu_out = _resolved_directory(args.qemu_out, "verified QEMU output")
     output = _validate_session_output_location(repo_root, qemu_out, args.out_dir)
 
@@ -2112,9 +2788,7 @@ def _emit_qemu_target_session(args: argparse.Namespace) -> None:
     profile = manifest.get("profile")
     if not isinstance(profile, dict) or profile.get("name") != TARGET_PROFILE["qemu"]:
         raise EvidenceError("resolved manifest is not the QEMU target profile")
-    topology_record, _topology_raw = _load_frozen_json(
-        args.topology, "generated root-task topology"
-    )
+    topology_record, _topology_raw = _load_generated_topology(args.topology)
     manifest_sha256 = _sha256(manifest_raw)
     topology, _inventory_value = _generated_inventory(
         topology_record,
@@ -2130,10 +2804,7 @@ def _emit_qemu_target_session(args: argparse.Namespace) -> None:
         raw = _read_frozen_artifact(path, identifier.replace("_", " "))
         frozen[identifier] = raw
         if identifier.endswith("manifest"):
-            try:
-                value = json.loads(raw)
-            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-                raise EvidenceError(f"{identifier} is invalid JSON") from exc
+            value = _strict_json_loads(raw, identifier)
             if not isinstance(value, dict):
                 raise EvidenceError(f"{identifier} must be a JSON object")
             _scan_sensitive(value)
@@ -2180,6 +2851,520 @@ def _emit_qemu_target_session(args: argparse.Namespace) -> None:
     print(f"worker evidence: qemu target session PASS ({output})")
 
 
+def _validate_pi_live_record(
+    record: Mapping[str, Any],
+    *,
+    session_projection: Mapping[str, str],
+    topology_sha256: str,
+    image_sha256: str,
+    metadata: Mapping[str, Any],
+    runtime_raw: bytes,
+    runtime: Mapping[str, str],
+    serial_raw: bytes,
+    boot_offset: int,
+    normalized_gate_raw: bytes,
+    capture_raw: bytes,
+    max_age_secs: int,
+) -> None:
+    """Validate the gate-produced v2 record against its exact frozen graph."""
+
+    _exact_keys(
+        record,
+        {
+            "schema",
+            "producer",
+            "target",
+            "transport",
+            "capture_id",
+            "captured_unix_s",
+            "selected",
+            "classification",
+            "session_projection",
+            "topology_sha256",
+            "image_identity",
+            "runtime",
+            "network_capture",
+            "outcomes",
+        },
+        context="Pi CYW43 coexistence record",
+    )
+    captured_unix_s = record["captured_unix_s"]
+    now = int(time.time())
+    if (
+        record["schema"] != CYW43_PI_BINDING_SCHEMA
+        or record["producer"] != "pi4_gate_proof/v1"
+        or record["target"] != "pi4"
+        or record["transport"] != "wifi"
+        or not isinstance(record["capture_id"], str)
+        or re.fullmatch(r"[0-9a-f]{32}", record["capture_id"]) is None
+        or not isinstance(captured_unix_s, int)
+        or isinstance(captured_unix_s, bool)
+        or captured_unix_s > now + 300
+        or now - captured_unix_s > max_age_secs
+        or record["selected"] is not True
+        or record["classification"] != "positive-exact-image-live-closure"
+        or record["session_projection"] != dict(session_projection)
+        or record["topology_sha256"] != topology_sha256
+    ):
+        raise EvidenceError("Pi CYW43 coexistence record envelope is invalid or stale")
+
+    image_identity = record["image_identity"]
+    if not isinstance(image_identity, dict):
+        raise EvidenceError("Pi CYW43 image identity must be an object")
+    _exact_keys(
+        image_identity,
+        {
+            "image_sha256",
+            "image_id",
+            "git_commit",
+            "build_timestamp",
+            "build_marker",
+            "build_marker_sha256",
+        },
+        context="Pi CYW43 image identity",
+    )
+    if image_identity != {
+        "image_sha256": image_sha256,
+        "image_id": metadata.get("image_id"),
+        "git_commit": metadata.get("git_commit"),
+        "build_timestamp": metadata.get("build_timestamp"),
+        "build_marker": metadata.get("build_marker"),
+        "build_marker_sha256": metadata.get("build_marker_sha256"),
+    }:
+        raise EvidenceError("Pi CYW43 record names a different staged image")
+
+    runtime_record = record["runtime"]
+    if not isinstance(runtime_record, dict):
+        raise EvidenceError("Pi CYW43 runtime identity must be an object")
+    _exact_keys(
+        runtime_record,
+        {
+            "runtime_evidence_sha256",
+            "serial_sha256",
+            "serial_bytes",
+            "latest_boot_offset",
+            "normalized_gate_sha256",
+        },
+        context="Pi CYW43 runtime identity",
+    )
+    if runtime_record != {
+        "runtime_evidence_sha256": _sha256(runtime_raw),
+        "serial_sha256": _sha256(serial_raw),
+        "serial_bytes": len(serial_raw),
+        "latest_boot_offset": boot_offset,
+        "normalized_gate_sha256": _sha256(normalized_gate_raw),
+    }:
+        raise EvidenceError("Pi CYW43 record differs from the exact serial proof")
+
+    network = record["network_capture"]
+    if not isinstance(network, dict):
+        raise EvidenceError("Pi CYW43 network identity must be an object")
+    _exact_keys(
+        network,
+        {
+            "sha256",
+            "bytes",
+            "format",
+            "link_type",
+            "interface",
+            "capture_started_unix_ns",
+            "capture_finished_unix_ns",
+        },
+        context="Pi CYW43 network identity",
+    )
+    format_name, link_type, first_packet_ns, last_packet_ns = _classic_pcap_identity(
+        capture_raw
+    )
+    start_ns = network["capture_started_unix_ns"]
+    finish_ns = network["capture_finished_unix_ns"]
+    if (
+        network.get("sha256") != _sha256(capture_raw)
+        or network.get("bytes") != len(capture_raw)
+        or network.get("format") != format_name
+        or network.get("link_type") != link_type
+        or not isinstance(network.get("interface"), str)
+        or re.fullmatch(
+            r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}",
+            network["interface"],
+        )
+        is None
+        or not isinstance(start_ns, int)
+        or isinstance(start_ns, bool)
+        or not isinstance(finish_ns, int)
+        or isinstance(finish_ns, bool)
+        or start_ns <= 0
+        or finish_ns < start_ns
+        or captured_unix_s != finish_ns // 1_000_000_000
+        or first_packet_ns < start_ns - 2_000_000_000
+        or last_packet_ns > finish_ns + 2_000_000_000
+        or runtime.get("PI4_RUNTIME_DMA_CAPTURE_ID") != record["capture_id"]
+        or runtime.get("PI4_RUNTIME_DMA_NETWORK_INTERFACE") != network["interface"]
+        or runtime.get("PI4_RUNTIME_DMA_NETWORK_CAPTURE_SHA256")
+        != network["sha256"]
+        or runtime.get("PI4_RUNTIME_DMA_NETWORK_CAPTURE_BYTES")
+        != str(network["bytes"])
+        or runtime.get("PI4_RUNTIME_DMA_CAPTURE_STARTED_UNIX_NS") != str(start_ns)
+        or runtime.get("PI4_RUNTIME_DMA_CAPTURE_FINISHED_UNIX_NS") != str(finish_ns)
+    ):
+        raise EvidenceError("Pi CYW43 record differs from controlled capture bytes")
+
+    outcomes = record["outcomes"]
+    if not isinstance(outcomes, dict):
+        raise EvidenceError("Pi CYW43 outcomes must be an object")
+    harness = _pi_harness()
+    try:
+        derived_outcomes = harness.pi_cyw43_outcomes_from_normalized_gate(
+            normalized_gate_raw
+        )
+    except harness.RestError as exc:
+        raise EvidenceError(str(exc)) from exc
+    if outcomes != derived_outcomes:
+        raise EvidenceError(
+            "Pi CYW43 record outcomes differ from exact normalized serial"
+        )
+
+
+def _emit_pi4_target_session(args: argparse.Namespace) -> None:
+    """Finalize the exact clean Pi build and fresh WiFi proof into one session."""
+
+    if not 1 <= args.max_age_secs <= PI_TARGET_SESSION_MAX_AGE_SECS:
+        raise EvidenceError("--max-age-secs must be in 1..604800")
+    repo_root = _exact_repo_root(args.repo_root)
+    output = _validate_pi_session_output_location(repo_root, args.out_dir)
+    harness = _pi_harness()
+    try:
+        runtime_raw, _runtime_metadata = harness.read_frozen_artifact(
+            str(args.runtime_proof),
+            "Pi runtime/DMA evidence",
+            harness.BENCHMARK_EVIDENCE_MAX_BYTES,
+        )
+        runtime = harness.parse_exact_env(runtime_raw, "Pi runtime/DMA evidence")
+        required_runtime = {
+            "PI4_RUNTIME_DMA_PROOF_ARTIFACT_VERSION": "1",
+            "PI4_RUNTIME_DMA_PROOF": "fresh-pi",
+            "PI4_RUNTIME_DMA_COUNTER_PROOF": "counter-qualified",
+            "PI4_RUNTIME_DMA_CAPTURE_PAIRING": "controlled-concurrent",
+            "DRIVER_TASK_ACTIVE_NET": "cyw43",
+            "DRIVER_TASK_DMA_BLOCKER": "none",
+            "DRIVER_TASK_RING_CALL_OUTSTANDING": "0",
+            "DRIVER_TASK_RING_CALL_UNRESOLVED_TIMEOUT": "0",
+            "DRIVER_TASK_BOOTSTRAP_DEFERRED": "0",
+            "TIMER_BACKEND": "arch-counter",
+            "TIMER_CLOCK_HZ": "54000000",
+            "TIMER_EL0_COUNTER": "vct",
+            "DUMMY_TIMER_SEEN": "no",
+        }
+        if any(runtime.get(key) != value for key, value in required_runtime.items()):
+            raise EvidenceError("Pi finalizer requires exact live WiFi runtime proof")
+        harness.pi_gateway_continuity_from_runtime(runtime)
+        stage_path = runtime.get("PI4_RUNTIME_DMA_STAGE_BUILD_PROOF", "")
+        stage_raw, _stage_metadata = harness.read_frozen_artifact(
+            stage_path,
+            "Pi stage build proof",
+            harness.BENCHMARK_EVIDENCE_MAX_BYTES,
+        )
+        if _sha256(stage_raw) != runtime.get(
+            "PI4_RUNTIME_DMA_STAGE_BUILD_PROOF_SHA256"
+        ):
+            raise EvidenceError("Pi runtime proof differs from stage proof bytes")
+        stage = harness.parse_exact_env(stage_raw, "Pi stage build proof")
+        if (
+            stage.get("PI4_RUNTIME_DMA_PROOF_ARTIFACT_VERSION") != "2"
+            or stage.get("PI4_RUNTIME_DMA_PROOF") != "target-build"
+            or stage.get("PI4_RUNTIME_DMA_PROFILE") != "bounded-no-iommu"
+            or stage.get("PI4_IMAGE_IDENTITY_SOURCE_TREE_CLEAN") != "yes"
+        ):
+            raise EvidenceError("Pi stage proof is not one clean target build")
+
+        artifact_fields = {
+            "manifest": "PI4_RUNTIME_DMA_MANIFEST",
+            "topology": "PI4_RUNTIME_DMA_TOPOLOGY",
+            "runtime_cpio": "PI4_RUNTIME_DMA_RUNTIME_CPIO",
+            "runtime_uimage": "PI4_RUNTIME_DMA_RUNTIME_UIMAGE",
+            "image": "PI4_RUNTIME_DMA_STAGED_IMAGE",
+            "metadata": "PI4_IMAGE_IDENTITY_METADATA",
+            "provenance": "PI4_IMAGE_IDENTITY_WRAPPER_PROVENANCE",
+            "profile_stamp": "PI4_RUNTIME_DMA_CANONICAL_PROFILE_STAMP",
+            "profile_state": "PI4_RUNTIME_DMA_CANONICAL_PROFILE_STATE",
+            "composition_record": "PI4_RUNTIME_DMA_COMPOSITION_RECORD",
+            "composition_cache": "PI4_RUNTIME_DMA_COMPOSITION_CMAKE_CACHE",
+            "composition_timer": "PI4_RUNTIME_DMA_COMPOSITION_TIMER_HEADER",
+            "kernel": "PI4_IMAGE_IDENTITY_KERNEL_ELF",
+            "root": "PI4_IMAGE_IDENTITY_ROOT_ELF",
+            "root_cpio": "PI4_IMAGE_IDENTITY_ROOT_CPIO",
+            "driver_manifest": "PI4_IMAGE_IDENTITY_DRIVER_MANIFEST",
+            "worker_archive": "PI4_IMAGE_IDENTITY_WORKER_ARCHIVE",
+            "worker_manifest": "PI4_IMAGE_IDENTITY_WORKER_MANIFEST",
+            "source": "PI4_IMAGE_IDENTITY_SOURCE_INVENTORY",
+            "worker_abi": "PI4_IMAGE_IDENTITY_WORKER_ABI",
+        }
+        artifacts: dict[str, tuple[str, bytes]] = {}
+        for identifier, field in artifact_fields.items():
+            maximum = (
+                harness.BENCHMARK_IMAGE_MAX_BYTES
+                if identifier == "image"
+                else harness.BENCHMARK_EVIDENCE_MAX_BYTES
+            )
+            path_value, raw, _metadata = harness.read_stage_artifact(
+                stage,
+                field,
+                f"Pi {identifier.replace('_', ' ')}",
+                maximum,
+            )
+            artifacts[identifier] = (path_value, raw)
+
+        manifest, manifest_raw = _load_frozen_json(
+            Path(artifacts["manifest"][0]),
+            "Pi resolved manifest",
+        )
+        profile = manifest.get("profile")
+        if not isinstance(profile, dict) or profile.get("name") != TARGET_PROFILE["pi4"]:
+            raise EvidenceError("resolved manifest is not the Pi target profile")
+        if manifest_raw != artifacts["manifest"][1]:
+            raise EvidenceError("Pi resolved manifest changed during finalization")
+        topology_record = _strict_json_loads(
+            artifacts["topology"][1],
+            "Pi generated topology",
+        )
+        if not isinstance(topology_record, dict):
+            raise EvidenceError("Pi generated topology must be an object")
+        topology, _inventory_value = _generated_inventory(
+            topology_record,
+            "pi4",
+            {"manifest_sha256": _sha256(manifest_raw)},
+        )
+        source_raw = artifacts["source"][1]
+        if source_raw != _source_inventory_bytes(repo_root):
+            raise EvidenceError("Pi source inventory differs from exact clean source")
+        abi_raw = artifacts["worker_abi"][1]
+        if abi_raw != _worker_abi_identity(repo_root, topology):
+            raise EvidenceError("Pi Worker ABI differs from exact generated topology")
+
+        harness.validate_pi_runtime_uimage(
+            artifacts["runtime_uimage"][1],
+            artifacts["runtime_cpio"][1],
+        )
+        harness.validate_pi_root_cpio(
+            artifacts["root_cpio"][1],
+            artifacts["kernel"][1],
+            artifacts["root"][1],
+        )
+        harness.validate_pi_archive_manifests(
+            artifacts["runtime_cpio"][0],
+            artifacts["runtime_cpio"][1],
+            artifacts["driver_manifest"][0],
+            artifacts["driver_manifest"][1],
+            artifacts["worker_archive"][0],
+            artifacts["worker_archive"][1],
+            artifacts["worker_manifest"][0],
+            artifacts["worker_manifest"][1],
+        )
+        metadata = harness.parse_strict_json_object(
+            artifacts["metadata"][1],
+            "Pi image identity metadata",
+        )
+        provenance = harness.parse_strict_json_object(
+            artifacts["provenance"][1],
+            "Pi wrapper provenance",
+        )
+        harness.parse_strict_json_object(
+            artifacts["profile_stamp"][1],
+            "Pi canonical profile build inputs",
+        )
+        harness.parse_strict_json_object(
+            artifacts["composition_record"][1],
+            "Pi composition profile build inputs",
+        )
+        try:
+            profile_state = artifacts["profile_state"][1].decode("ascii")
+        except UnicodeDecodeError as exc:
+            raise EvidenceError("Pi canonical profile tree state is not ASCII") from exc
+        if re.fullmatch(r"[0-9a-f]{64}\n", profile_state) is None:
+            raise EvidenceError(
+                "Pi canonical profile tree state is not one exact digest"
+            )
+        git_commit = stage.get("PI4_IMAGE_IDENTITY_GIT_COMMIT", "")
+        build_id = stage.get("PI4_IMAGE_IDENTITY_BUILD_ID", "")
+        provenance_hash_fields = harness.PI_WRAPPER_PROVENANCE_KEYS - {
+            "schema",
+            "git_commit",
+            "source_tree_clean",
+            "build_timestamp",
+            "root_task_features",
+        }
+        if (
+            set(provenance) != harness.PI_WRAPPER_PROVENANCE_KEYS
+            or provenance.get("schema") != harness.PI_WRAPPER_PROVENANCE_SCHEMA
+            or provenance.get("git_commit") != git_commit
+            or provenance.get("source_tree_clean") is not True
+            or provenance.get("build_timestamp")
+            != stage.get("PI4_IMAGE_IDENTITY_BUILD_TIMESTAMP")
+            or not isinstance(provenance.get("root_task_features"), str)
+            or not provenance.get("root_task_features")
+            or any(
+                not harness.valid_sha256(provenance.get(field))
+                for field in provenance_hash_fields
+            )
+            or provenance.get("source_manifest_sha256")
+            != harness.pi_source_manifest_sha256(source_raw)
+            or provenance.get("resolved_manifest_sha256") != _sha256(manifest_raw)
+            or provenance.get("topology_sha256")
+            != _sha256(artifacts["topology"][1])
+            or provenance.get("canonical_profile_stamp_sha256")
+            != _sha256(artifacts["profile_stamp"][1])
+            or provenance.get("canonical_profile_state_sha256")
+            != profile_state.removesuffix("\n")
+            or provenance.get("composition_record_sha256")
+            != _sha256(artifacts["composition_record"][1])
+            or provenance.get("composition_cmake_cache_sha256")
+            != _sha256(artifacts["composition_cache"][1])
+            or provenance.get("composition_timer_header_sha256")
+            != _sha256(artifacts["composition_timer"][1])
+            or provenance.get("source_inventory_sha256") != _sha256(source_raw)
+            or provenance.get("worker_abi_identity_sha256") != _sha256(abi_raw)
+            or provenance.get("wrapper_sha256") != _sha256(artifacts["image"][1])
+            or provenance.get("kernel_elf_sha256")
+            != _sha256(artifacts["kernel"][1])
+            or provenance.get("rootserver_sha256")
+            != _sha256(artifacts["root"][1])
+            or provenance.get("rootserver_cpio_sha256")
+            != _sha256(artifacts["root_cpio"][1])
+            or provenance.get("driver_runtime_cpio_sha256")
+            != _sha256(artifacts["runtime_cpio"][1])
+            or provenance.get("driver_runtime_manifest_sha256")
+            != _sha256(artifacts["driver_manifest"][1])
+            or provenance.get("worker_image_archive_sha256")
+            != _sha256(artifacts["worker_archive"][1])
+            or provenance.get("worker_image_manifest_sha256")
+            != _sha256(artifacts["worker_manifest"][1])
+        ):
+            raise EvidenceError("Pi wrapper provenance differs from exact session graph")
+        harness.validate_pi_image_identity(
+            artifacts["image"][0],
+            artifacts["image"][1],
+            artifacts["metadata"][0],
+            artifacts["metadata"][1],
+            artifacts["root"][0],
+            artifacts["root"][1],
+            artifacts["root_cpio"][0],
+            artifacts["root_cpio"][1],
+            git_commit,
+            build_id,
+        )
+
+        session_projection = {
+            "target": "pi4",
+            "source_sha256": _sha256(source_raw),
+            "manifest_sha256": _sha256(manifest_raw),
+            "kernel_sha256": _sha256(artifacts["kernel"][1]),
+            "root_image_sha256": _sha256(artifacts["root"][1]),
+            "driver_archive_sha256": _sha256(artifacts["runtime_cpio"][1]),
+            "driver_manifest_sha256": _sha256(artifacts["driver_manifest"][1]),
+            "worker_archive_sha256": _sha256(artifacts["worker_archive"][1]),
+            "worker_image_manifest_sha256": _sha256(
+                artifacts["worker_manifest"][1]
+            ),
+            "worker_abi_sha256": _sha256(abi_raw),
+        }
+        serial_path = runtime.get("PI4_RUNTIME_DMA_SERIAL_LOG", "")
+        serial_raw, _serial_metadata = harness.read_frozen_artifact(
+            serial_path,
+            "Pi serial evidence",
+            harness.BENCHMARK_EVIDENCE_MAX_BYTES,
+        )
+        capture_path = runtime.get("PI4_RUNTIME_DMA_NETWORK_CAPTURE", "")
+        capture_raw, _capture_metadata = harness.read_frozen_artifact(
+            capture_path,
+            "Pi network capture",
+            harness.BENCHMARK_EVIDENCE_MAX_BYTES,
+        )
+        if (
+            runtime.get("PI4_RUNTIME_DMA_SERIAL_LOG_SHA256") != _sha256(serial_raw)
+            or runtime.get("PI4_RUNTIME_DMA_SERIAL_LOG_BYTES") != str(len(serial_raw))
+            or runtime.get("PI4_RUNTIME_DMA_NETWORK_CAPTURE_SHA256")
+            != _sha256(capture_raw)
+            or runtime.get("PI4_RUNTIME_DMA_NETWORK_CAPTURE_BYTES")
+            != str(len(capture_raw))
+        ):
+            raise EvidenceError("Pi runtime proof does not seal serial/capture bytes")
+        boot_offset = harness.validate_serial_image_identity(serial_raw, metadata)
+        normalized_gate_raw = harness.validate_pi_network_log(
+            serial_raw,
+            harness.BENCHMARK_TRANSPORT_WIFI,
+        )
+        harness.validate_pi_correlated_network_capture(
+            capture_raw,
+            serial_raw,
+            harness.BENCHMARK_TRANSPORT_WIFI,
+        )
+        cyw43_raw = _read_frozen_artifact(
+            args.cyw43_coexistence_record,
+            "Pi CYW43 coexistence record",
+        )
+        cyw43_record = _strict_json_loads(
+            cyw43_raw,
+            "Pi CYW43 coexistence record",
+        )
+        if not isinstance(cyw43_record, dict):
+            raise EvidenceError("Pi CYW43 coexistence record must be an object")
+        _validate_pi_live_record(
+            cyw43_record,
+            session_projection=session_projection,
+            topology_sha256=topology_record["topology_sha256"],
+            image_sha256=_sha256(artifacts["image"][1]),
+            metadata=metadata,
+            runtime_raw=runtime_raw,
+            runtime=runtime,
+            serial_raw=serial_raw,
+            boot_offset=boot_offset,
+            normalized_gate_raw=normalized_gate_raw,
+            capture_raw=capture_raw,
+            max_age_secs=args.max_age_secs,
+        )
+        session = {
+            **session_projection,
+            "cyw43_coexistence_record_sha256": _sha256(cyw43_raw),
+        }
+        _target_session(session, "pi4")
+        session_raw = (
+            json.dumps(session, indent=2, sort_keys=True) + "\n"
+        ).encode("utf-8")
+        for path_value, expected_raw, label in (
+            (str(args.runtime_proof), runtime_raw, "Pi runtime/DMA evidence"),
+            (stage_path, stage_raw, "Pi stage build proof"),
+            (serial_path, serial_raw, "Pi serial evidence"),
+            (capture_path, capture_raw, "Pi network capture"),
+            (
+                str(args.cyw43_coexistence_record),
+                cyw43_raw,
+                "Pi CYW43 coexistence record",
+            ),
+            *(
+                (path_value, raw, f"Pi {identifier.replace('_', ' ')}")
+                for identifier, (path_value, raw) in artifacts.items()
+            ),
+        ):
+            observed = _read_frozen_artifact(Path(path_value), label)
+            if observed != expected_raw:
+                raise EvidenceError(f"{label} changed during Pi finalization")
+    except harness.RestError as exc:
+        raise EvidenceError(str(exc)) from exc
+
+    _publish_target_session(
+        output,
+        {
+            "source-inventory.json": source_raw,
+            "worker-abi-identity.json": abi_raw,
+            "pi4-cyw43-coexistence.json": cyw43_raw,
+            "pi4-cyw43-runtime-proof.env": runtime_raw,
+            "pi4-cyw43-serial.log": serial_raw,
+            "pi4-cyw43-network.pcap": capture_raw,
+            "target-session.json": session_raw,
+        },
+    )
+    print(f"worker evidence: pi4 target session PASS ({output})")
+
+
 def _pressure_proc(value: Any, label: str) -> None:
     if not isinstance(value, dict) or set(value) != set(QEMU_PROC_KEYS):
         raise EvidenceError(f"{label} lacks the exact five canonical /proc projections")
@@ -2216,8 +3401,10 @@ def _validate_pressure_worker_rows(
     topology: Mapping[str, Any],
     label: str,
 ) -> list[dict[str, Any]]:
-    if not isinstance(value, list) or len(value) != 3:
-        raise EvidenceError(f"{label} requires exactly three live Worker rows")
+    if not isinstance(value, list) or len(value) != len(REQUIRED_ROLES):
+        raise EvidenceError(
+            f"{label} requires one bounded live exemplar per executable Worker role"
+        )
     required = {
         "role",
         "slot",
@@ -2352,6 +3539,10 @@ def _pressure_reports(
             "worker_abi_sha256",
         )
     }
+    generated_worker_count = sum(
+        row["executable_slots"]
+        for row in topology["worker_resource_admission"]["executable_roles"]
+    )
     for index, path in enumerate(paths):
         summary, raw = _load_frozen_json(path, f"pressure report {index + 1}")
         report = summary.get("report")
@@ -2364,10 +3555,10 @@ def _pressure_reports(
             raise EvidenceError("pressure report lacks executable population axes")
         for key, expected in {
             "mode": "executable",
-            "maximum_live_tasks": 3,
-            "requested": 3,
-            "discovered": 3,
-            "ready": 3,
+            "maximum_live_tasks": generated_worker_count,
+            "requested": generated_worker_count,
+            "discovered": generated_worker_count,
+            "ready": generated_worker_count,
             "backend_class": "console-projection",
             "proof_class": "qemu",
         }.items():
@@ -2435,11 +3626,49 @@ def _pressure_reports(
             raise EvidenceError("pressure report lacks the exact required fault marker index")
         for phase in ("pre", "post"):
             phase_state = executable.get(phase)
-            if not isinstance(phase_state, dict) or set(phase_state) != {"workers", "proc"}:
+            if not isinstance(phase_state, dict) or set(phase_state) != {
+                "workers",
+                "ready_census",
+                "proc",
+            }:
                 raise EvidenceError(f"pressure {phase} state has an unexpected schema")
             _validate_pressure_worker_rows(
                 phase_state["workers"], topology, f"pressure {phase}"
             )
+            census = phase_state["ready_census"]
+            if not isinstance(census, dict):
+                raise EvidenceError(f"pressure {phase} READY census is malformed")
+            _exact_keys(
+                census,
+                {
+                    "maximum_live_tasks",
+                    "discovered",
+                    "ready",
+                    "topology_sha256",
+                },
+                context=f"pressure {phase} READY census",
+            )
+            for key in ("maximum_live_tasks", "discovered", "ready"):
+                count = census[key]
+                if (
+                    not isinstance(count, int)
+                    or isinstance(count, bool)
+                    or count != generated_worker_count
+                ):
+                    raise EvidenceError(
+                        f"pressure {phase} READY census {key} is not "
+                        f"{generated_worker_count}"
+                    )
+            if (
+                _hash(
+                    census["topology_sha256"],
+                    f"pressure {phase} READY census topology",
+                )
+                != generated["topology_sha256"]
+            ):
+                raise EvidenceError(
+                    f"pressure {phase} READY census targets different topology"
+                )
             _pressure_proc(phase_state["proc"], f"pressure {phase}")
         reports.append(executable)
         artifacts.append((f"pressure-{index + 1}", raw))
@@ -2515,7 +3744,9 @@ def _parse_live_worker_markers(text: str) -> dict[str, list[dict[str, Any]]]:
     }
 
 
-def _admission_observation(row: Mapping[str, Any]) -> dict[str, Any]:
+def _admission_observation(
+    row: Mapping[str, Any], target: str = "qemu"
+) -> dict[str, Any]:
     identity = _marker_identity(row)
     if row["state"] != "admitted" or not SHA256_RE.fullmatch(row["image_sha256"]):
         raise EvidenceError("Worker admission is incomplete or has an invalid image hash")
@@ -2533,7 +3764,7 @@ def _admission_observation(row: Mapping[str, Any]) -> dict[str, Any]:
             "lifecycle": "ready",
             "artifact": "verified",
             "receipt": "none" if identity[0] == "worker-heartbeat" else "confirmed",
-            "execution_proof": "qemu",
+            "execution_proof": TARGET_PROOF[target],
         },
         "image_sha256": row["image_sha256"],
         "ready_sequence": 0,
@@ -2552,6 +3783,7 @@ def _admission_observation(row: Mapping[str, Any]) -> dict[str, Any]:
 def _validate_marker_lifecycle(
     markers: Mapping[str, list[dict[str, Any]]],
     topology: Mapping[str, Any],
+    target: str = "qemu",
 ) -> tuple[
     dict[tuple[str, int, int, int, int], dict[str, Any]],
     set[tuple[int, int]],
@@ -2564,7 +3796,7 @@ def _validate_marker_lifecycle(
         identity = _marker_identity(row)
         if identity in admissions:
             raise EvidenceError("duplicate Worker admission identity")
-        observation = _admission_observation(row)
+        observation = _admission_observation(row, target)
         _validate_worker_topology([observation], topology)
         admissions[identity] = observation
     if set(identity[0] for identity in admissions) != set(REQUIRED_ROLES):
@@ -2977,7 +4209,17 @@ def _validate_critical_gdb_markers(
         raise EvidenceError("critical GDB transcript omits a live root duty lane")
 
 
-def _validate_root_markers(text: str, generated_inventory: Mapping[str, int]) -> None:
+def _validate_root_markers(
+    text: str,
+    generated_inventory: Mapping[str, int],
+    topology: Mapping[str, Any],
+) -> None:
+    _generated_temporal_tasks(topology)
+    admission = topology["worker_resource_admission"]
+    fault_registry = admission["fault_registry"]
+    critical_count = fault_registry["critical_tcbs"]
+    restricted_count = critical_count - 1
+    registry_capacity = fault_registry["capacity"]
     inventory_rows = _marker_rows(
         text,
         "ROOT_TCB_INVENTORY",
@@ -3010,14 +4252,14 @@ def _validate_root_markers(text: str, generated_inventory: Mapping[str, int]) ->
     )
     expected_actual = {
         "scope": "constructed-actual",
-        "duties": "5",
-        "restricted_children": "4",
-        "tcbs": "5",
-        "scheduling_contexts": "5",
-        "reply_objects": "6",
-        "standard_fault_caps": "4",
-        "timeout_fault_caps": "4",
-        "fault_registrations": "10",
+        "duties": str(critical_count),
+        "restricted_children": str(restricted_count),
+        "tcbs": str(critical_count),
+        "scheduling_contexts": str(critical_count),
+        "reply_objects": str(critical_count + 1),
+        "standard_fault_caps": str(restricted_count),
+        "timeout_fault_caps": str(restricted_count),
+        "fault_registrations": str(registry_capacity),
         "state": "sealed",
     }
     if len(actual_rows) != 1 or any(
@@ -3025,7 +4267,8 @@ def _validate_root_markers(text: str, generated_inventory: Mapping[str, int]) ->
     ):
         raise EvidenceError("root actual critical object/registration counts are incomplete")
     required_literals = (
-        "[critical] exact generated fault registry sealed sources=10",
+        "[critical] exact generated fault registry sealed "
+        f"sources={registry_capacity}",
         "[critical] independent fault/emergency/Worker/driver duties active",
         "[worker] target supervisor armed after exact registry and critical activation",
         "GPU_BRIDGE_FIXTURE_ADMISSION",
@@ -3550,15 +4793,11 @@ def _qemu_gdb(args: argparse.Namespace) -> None:
     )
 
     session_raw = _read_frozen_artifact(args.target_session, "target session")
-    generated_raw = _read_frozen_artifact(args.generated_inventory, "generated topology")
+    generated, generated_raw = _load_generated_topology(args.generated_inventory)
     manifest_raw = _read_frozen_artifact(
         args.worker_image_manifest, "Worker image manifest"
     )
-    try:
-        session = json.loads(session_raw)
-        generated = json.loads(generated_raw)
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise EvidenceError("GDB target session/topology is invalid JSON") from exc
+    session = _strict_json_loads(session_raw, "GDB target session")
     _target_session(session, "qemu")
     _generated_inventory(generated, "qemu", session)
     elf_paths = _parse_worker_elfs(args.worker_elf)
@@ -3937,13 +5176,9 @@ def _qemu_service_gdb(args: argparse.Namespace) -> None:
         args.remote, args.timeout_secs, args.gdb, args.nm
     )
     session_raw = _read_frozen_artifact(args.target_session, "target session")
-    generated_raw = _read_frozen_artifact(args.generated_inventory, "generated topology")
+    generated, generated_raw = _load_generated_topology(args.generated_inventory)
     service_raw = _read_frozen_artifact(args.service_elf, f"{args.service} ELF")
-    try:
-        session = json.loads(session_raw)
-        generated = json.loads(generated_raw)
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise EvidenceError("service GDB target session/topology is invalid JSON") from exc
+    session = _strict_json_loads(session_raw, "service GDB target session")
     _target_session(session, "qemu")
     _generated_inventory(generated, "qemu", session)
     auth, _auth_artifacts = _validate_authenticated_qemu_observation(
@@ -4100,13 +5335,9 @@ def _qemu_critical_gdb(args: argparse.Namespace) -> None:
         args.remote, args.timeout_secs, args.gdb, args.nm
     )
     session_raw = _read_frozen_artifact(args.target_session, "target session")
-    generated_raw = _read_frozen_artifact(args.generated_inventory, "generated topology")
+    generated, generated_raw = _load_generated_topology(args.generated_inventory)
     root_raw = _read_frozen_artifact(args.root_elf, "unstripped root-task ELF")
-    try:
-        session = json.loads(session_raw)
-        generated = json.loads(generated_raw)
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise EvidenceError("critical GDB target session/topology is invalid JSON") from exc
+    session = _strict_json_loads(session_raw, "critical GDB target session")
     _target_session(session, "qemu")
     _generated_inventory(generated, "qemu", session)
     critical_symbols = (QEMU_CRITICAL_ARM_SYMBOL, *QEMU_CRITICAL_SYMBOLS)
@@ -4195,12 +5426,8 @@ def _collect_qemu_preflight(args: argparse.Namespace) -> None:
     if args.out_dir.exists() and any(args.out_dir.iterdir()):
         raise EvidenceError("QEMU preflight output directory must be absent or empty")
     session_raw = _read_frozen_artifact(args.target_session, "target session")
-    generated_raw = _read_frozen_artifact(args.generated_inventory, "generated topology")
-    try:
-        session = json.loads(session_raw)
-        generated = json.loads(generated_raw)
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise EvidenceError("preflight session/topology is invalid JSON") from exc
+    generated, generated_raw = _load_generated_topology(args.generated_inventory)
+    session = _strict_json_loads(session_raw, "preflight target session")
     _target_session(session, "qemu")
     topology, generated_inventory = _generated_inventory(generated, "qemu", session)
     _auth, auth_artifacts = _validate_authenticated_qemu_observation(
@@ -4317,7 +5544,7 @@ def _collect_qemu_preflight(args: argparse.Namespace) -> None:
     _validate_critical_gdb_markers(
         critical_gdb_text, session, generated, root_raw
     )
-    _validate_root_markers(uart, generated_inventory)
+    _validate_root_markers(uart, generated_inventory, topology)
     _validate_cohsh_transcript(cohsh)
     workers = _live_workers_from_uart(markers, admissions, topology)
     raw_evidence = [
@@ -4385,16 +5612,9 @@ def _collect_qemu(args: argparse.Namespace) -> None:
     if args.out_dir.exists() and any(args.out_dir.iterdir()):
         raise EvidenceError("QEMU collection output directory must be absent or empty")
     session_raw = _read_frozen_artifact(args.target_session, "target session")
-    try:
-        session = json.loads(session_raw)
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise EvidenceError("target session is invalid JSON") from exc
+    session = _strict_json_loads(session_raw, "target session")
     _target_session(session, "qemu")
-    generated_raw = _read_frozen_artifact(args.generated_inventory, "generated topology")
-    try:
-        generated = json.loads(generated_raw)
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise EvidenceError("generated topology is invalid JSON") from exc
+    generated, generated_raw = _load_generated_topology(args.generated_inventory)
     topology, generated_inventory = _generated_inventory(generated, "qemu", session)
     _auth, auth_artifacts = _validate_authenticated_qemu_observation(
         args.auth_observation,
@@ -4531,7 +5751,7 @@ def _collect_qemu(args: argparse.Namespace) -> None:
     _validate_critical_gdb_markers(
         preflight_critical_gdb_text, session, generated, root_raw
     )
-    _validate_root_markers(preflight_uart, generated_inventory)
+    _validate_root_markers(preflight_uart, generated_inventory, topology)
     observed_matrix.update(preflight_matrix)
     fault_roles.update(preflight_fault_roles)
     sequential_roles.update(preflight_sequential_roles)
@@ -4745,8 +5965,12 @@ def _merge_input_artifacts(
 
 
 def _emit_component(args: argparse.Namespace) -> None:
+    if args.target == "pi4":
+        raise EvidenceError(
+            "Pi component emission requires collect-pi4-component live evidence"
+        )
     session, session_raw = _target_session_file(args.target_session, args.target)
-    generated, generated_raw = _load(args.generated_inventory)
+    generated, generated_raw = _load_generated_topology(args.generated_inventory)
     topology, _ = _generated_inventory(generated, args.target, session)
     observations, observations_raw = _load(args.observations)
     _exact_keys(
@@ -4797,6 +6021,22 @@ def _emit_component(args: argparse.Namespace) -> None:
         )
         integration_inputs.append((dependency_id, raw))
 
+    raw_evidence = observations["raw_evidence"]
+    if args.target != "pi4":
+        raw_evidence = _merge_input_artifacts(
+            raw_evidence,
+            "component raw evidence",
+            ("component-observations-input", observations_raw),
+            ("generated-inventory-input", generated_raw),
+            ("target-session-input", session_raw),
+        )
+    else:
+        # Pi acceptance has a deliberately exact three-artifact live-boot
+        # contract. The session, topology, and observations are validated
+        # inputs to emission, but adding their bookkeeping hashes here would
+        # make the canonical emitter violate that public component schema.
+        _artifacts(raw_evidence, "component raw evidence", required=True)
+
     record = {
         "schema": COMPONENT_SCHEMA,
         "record_kind": "target-component",
@@ -4806,13 +6046,7 @@ def _emit_component(args: argparse.Namespace) -> None:
         "workers": observations["workers"],
         "integration_evidence": references,
         "outcomes": observations["outcomes"],
-        "raw_evidence": _merge_input_artifacts(
-            observations["raw_evidence"],
-            "component raw evidence",
-            ("component-observations-input", observations_raw),
-            ("generated-inventory-input", generated_raw),
-            ("target-session-input", session_raw),
-        ),
+        "raw_evidence": raw_evidence,
         "verdict": "PASS",
         "blockers": [],
     }
@@ -4823,6 +6057,259 @@ def _emit_component(args: argparse.Namespace) -> None:
     print(f"worker evidence: {args.target} target-component PASS ({args.out})")
 
 
+def _pi_worker_image_hashes(
+    session: Mapping[str, Any], manifest_raw: bytes
+) -> dict[str, str]:
+    """Return the exact role/image map from a session-bound Pi manifest."""
+
+    if _sha256(manifest_raw) != session["worker_image_manifest_sha256"]:
+        raise EvidenceError("Pi Worker manifest differs from the target session")
+    manifest = _strict_json_loads(manifest_raw, "Pi Worker image manifest")
+    images = manifest.get("images") if isinstance(manifest, dict) else None
+    if (
+        not isinstance(manifest, dict)
+        or manifest.get("schema") != "cohesix-worker-image-manifest/v1"
+        or manifest.get("target") != "aarch64-unknown-none"
+        or not isinstance(images, list)
+        or len(images) != len(REQUIRED_ROLES)
+    ):
+        raise EvidenceError("Pi Worker image manifest lacks the exact role matrix")
+    result: dict[str, str] = {}
+    for role, row in zip(REQUIRED_ROLES, images, strict=True):
+        if (
+            not isinstance(row, dict)
+            or row.get("role") != role
+            or row.get("entry_symbol") != "_start"
+            or not SHA256_RE.fullmatch(str(row.get("image_sha256", "")))
+        ):
+            raise EvidenceError("Pi Worker image manifest role binding is invalid")
+        result[role] = row["image_sha256"]
+    return result
+
+
+def _collect_pi4_component(args: argparse.Namespace) -> None:
+    """Derive Pi component acceptance only from one exact live evidence graph."""
+
+    if not 1 <= args.max_age_secs <= PI_TARGET_SESSION_MAX_AGE_SECS:
+        raise EvidenceError("--max-age-secs must be in 1..604800")
+    session, session_raw = _target_session_file(args.target_session, "pi4")
+    generated, generated_raw = _load_generated_topology(args.generated_inventory)
+    topology, _generated_inventory_value = _generated_inventory(
+        generated,
+        "pi4",
+        session,
+    )
+    harness = _pi_harness()
+    try:
+        runtime_raw, _runtime_metadata = harness.read_frozen_artifact(
+            str(args.runtime_proof),
+            "Pi runtime/DMA evidence",
+            harness.BENCHMARK_EVIDENCE_MAX_BYTES,
+        )
+        runtime = harness.parse_exact_env(runtime_raw, "Pi runtime/DMA evidence")
+        serial_path = runtime.get("PI4_RUNTIME_DMA_SERIAL_LOG", "")
+        serial_raw, _serial_metadata = harness.read_frozen_artifact(
+            serial_path,
+            "Pi same-boot serial evidence",
+            harness.BENCHMARK_EVIDENCE_MAX_BYTES,
+        )
+        capture_raw, _capture_metadata = harness.read_frozen_artifact(
+            str(args.network_capture),
+            "Pi same-boot network capture",
+            harness.BENCHMARK_EVIDENCE_MAX_BYTES,
+        )
+        cyw43_path = args.target_session.parent / "pi4-cyw43-coexistence.json"
+        cyw43_raw, _cyw43_metadata = harness.read_frozen_artifact(
+            str(cyw43_path),
+            "Pi CYW43 coexistence record",
+            harness.BENCHMARK_EVIDENCE_MAX_BYTES,
+        )
+        stage_path = runtime.get("PI4_RUNTIME_DMA_STAGE_BUILD_PROOF", "")
+        stage_raw, _stage_metadata = harness.read_frozen_artifact(
+            stage_path,
+            "Pi stage build proof",
+            harness.BENCHMARK_EVIDENCE_MAX_BYTES,
+        )
+        if _sha256(stage_raw) != runtime.get(
+            "PI4_RUNTIME_DMA_STAGE_BUILD_PROOF_SHA256"
+        ):
+            raise EvidenceError("Pi runtime proof differs from stage proof bytes")
+        stage = harness.parse_exact_env(stage_raw, "Pi stage build proof")
+        _manifest_path, worker_manifest_raw, _manifest_metadata = (
+            harness.read_stage_artifact(
+                stage,
+                "PI4_IMAGE_IDENTITY_WORKER_MANIFEST",
+                "Pi Worker image manifest",
+            )
+        )
+    except harness.RestError as exc:
+        raise EvidenceError(str(exc)) from exc
+
+    try:
+        boot_start_offset, _latest_lines = harness.latest_serial_boot_slice(serial_raw)
+    except harness.RestError as exc:
+        raise EvidenceError(str(exc)) from exc
+    serial = _artifact_text(
+        serial_raw[boot_start_offset:],
+        "Pi latest-boot serial evidence",
+    )
+    markers = _parse_live_worker_markers(serial)
+    admissions, matrix, fault_roles, sequential_roles, fault_phase_roles = (
+        _validate_marker_lifecycle(markers, topology, "pi4")
+    )
+    expected_matrix = {
+        (action, outcome)
+        for action in QEMU_RECEIPT_ACTIONS
+        for outcome in QEMU_TERMINAL_OUTCOMES
+    }
+    expected_fault_phases = {
+        (role, phase)
+        for role in REQUIRED_ROLES
+        for phase in ("pre-ready", "during-ipc", "budget-exhaustion")
+    }
+    if (
+        matrix != expected_matrix
+        or fault_roles != set(REQUIRED_ROLES)
+        or sequential_roles != set(REQUIRED_ROLES)
+        or fault_phase_roles != expected_fault_phases
+    ):
+        raise EvidenceError(
+            "Pi serial lacks the exact receipt/fault/recreation component matrix"
+        )
+    _validate_cohsh_transcript(serial)
+    workers = _live_workers_from_uart(markers, admissions, topology)
+    image_hashes = _pi_worker_image_hashes(session, worker_manifest_raw)
+    if any(
+        worker["image_sha256"] != image_hashes[worker["identity"]["role"]]
+        for worker in workers
+    ):
+        raise EvidenceError("Pi serial Worker images differ from the staged manifest")
+
+    references: list[dict[str, str]] = []
+    integration_raw: dict[str, bytes] = {}
+    for dependency_id in REQUIRED_INTEGRATIONS:
+        path = args.integration_dir / f"{dependency_id}.json"
+        integration, raw = _load(path)
+        validate_integration(integration, "pi4")
+        if (
+            integration["dependency_id"] != dependency_id
+            or integration["verdict"] != "PASS"
+            or integration["target_session"] != session
+            or integration["manifest_sha256"] != session["manifest_sha256"]
+        ):
+            raise EvidenceError(
+                f"Pi integration does not bind the accepted target session: {path}"
+            )
+        integration_raw[dependency_id] = raw
+        references.append(
+            {
+                "id": dependency_id,
+                "record_kind": "worker-integration",
+                "sha256": _sha256(raw),
+            }
+        )
+
+    raw_evidence = [
+        _artifact_row("pi4-network-capture", capture_raw),
+        _artifact_row("pi4-runtime-dma-proof", runtime_raw),
+        _artifact_row("pi4-serial-boot", serial_raw),
+    ]
+    observations = {
+        "schema": COMPONENT_OBSERVATIONS_SCHEMA,
+        "target": "pi4",
+        "target_session_sha256": _sha256(session_raw),
+        "workers": workers,
+        "outcomes": _pass_outcomes(COMPONENT_REQUIRED_OUTCOMES),
+        "raw_evidence": raw_evidence,
+        "verdict": "PASS",
+        "blockers": [],
+    }
+    component = {
+        "schema": COMPONENT_SCHEMA,
+        "record_kind": "target-component",
+        "target": "pi4",
+        "target_session": session,
+        "topology_sha256": generated["topology_sha256"],
+        "workers": workers,
+        "integration_evidence": references,
+        "outcomes": observations["outcomes"],
+        "raw_evidence": raw_evidence,
+        "verdict": "PASS",
+        "blockers": [],
+    }
+    validate_component(component, "pi4")
+    observations_raw = (
+        json.dumps(observations, indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8")
+    component_raw = (
+        json.dumps(component, indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8")
+
+    executable_roles = generated["topology"]["worker_resource_admission"][
+        "executable_roles"
+    ]
+    maximum_live_tasks = sum(row["executable_slots"] for row in executable_roles)
+    performance_bounds = {
+        "manifest_sha256": session["manifest_sha256"],
+        "worker_runtime": {
+            "maximum_live_tasks": maximum_live_tasks,
+            "shard_bits": max(1, (maximum_live_tasks - 1).bit_length()),
+            "canonical_telemetry_template": "/shard/<label>/worker/<id>/telemetry",
+            "roles": [
+                {
+                    "role": row["role"],
+                    "declaration": "executable",
+                    "executable_slots": row["executable_slots"],
+                }
+                for row in executable_roles
+            ],
+        },
+    }
+    try:
+        harness.load_pi_benchmark_target_evidence(
+            str(args.runtime_proof),
+            str(args.network_capture),
+            str(cyw43_path),
+            str(args.target_session),
+            args.transport,
+            performance_bounds,
+            dict(session),
+            args.max_age_secs,
+        )
+    except harness.RestError as exc:
+        raise EvidenceError(str(exc)) from exc
+
+    for path, expected, label in (
+        (args.target_session, session_raw, "Pi target session"),
+        (args.generated_inventory, generated_raw, "Pi generated inventory"),
+        (args.runtime_proof, runtime_raw, "Pi runtime/DMA evidence"),
+        (Path(serial_path), serial_raw, "Pi same-boot serial evidence"),
+        (args.network_capture, capture_raw, "Pi same-boot network capture"),
+        (cyw43_path, cyw43_raw, "Pi CYW43 coexistence record"),
+        *(
+            (
+                args.integration_dir / f"{dependency_id}.json",
+                raw,
+                f"Pi {dependency_id} integration",
+            )
+            for dependency_id, raw in integration_raw.items()
+        ),
+    ):
+        if _read_frozen_artifact(path, label) != expected:
+            raise EvidenceError(f"{label} changed during Pi component collection")
+
+    artifacts = {
+        "component-observations.json": observations_raw,
+        "worker-task-evidence.json": component_raw,
+        **{
+            f"integration/{dependency_id}.json": raw
+            for dependency_id, raw in integration_raw.items()
+        },
+    }
+    _publish_exact_bundle(args.out_dir, artifacts, "Pi component")
+    print(f"worker evidence: pi4 live component PASS ({args.out_dir})")
+
+
 def _emit_root(args: argparse.Namespace) -> None:
     session, session_raw = _target_session_file(args.target_session, args.target)
     worker, worker_raw = _load(args.worker)
@@ -4830,7 +6317,7 @@ def _emit_root(args: argparse.Namespace) -> None:
     if worker["verdict"] != "PASS" or worker["target_session"] != session:
         raise EvidenceError("root-TCB emission requires matching accepted Worker evidence")
 
-    generated, generated_raw = _load(args.generated_inventory)
+    generated, generated_raw = _load_generated_topology(args.generated_inventory)
     _, generated_inventory = _generated_inventory(generated, args.target, session)
     observations, observations_raw = _load(args.observations)
     _exact_keys(
@@ -5146,8 +6633,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"worker evidence: {args.target} target-component {record['verdict']}")
         elif args.command == "emit-qemu-target-session":
             _emit_qemu_target_session(args)
+        elif args.command == "emit-pi4-target-session":
+            _emit_pi4_target_session(args)
+        elif args.command == "emit-build-identities":
+            _emit_build_identities(args)
+        elif args.command == "validate-build-identities":
+            _validate_build_identities(args)
         elif args.command == "emit-component":
             _emit_component(args)
+        elif args.command == "collect-pi4-component":
+            _collect_pi4_component(args)
         elif args.command == "collect-qemu-preflight":
             _collect_qemu_preflight(args)
         elif args.command == "collect-qemu":

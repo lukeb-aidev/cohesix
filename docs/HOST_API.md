@@ -67,12 +67,16 @@ instances or READY state. Live lifecycle and receipts remain on canonical
 `LS`, `CAT`, and `TAIL` projections below `/shard`; the legacy `/worker` alias
 is usable only when the returned gate is true.
 
-`GET /v1/meta/status` may add `backend_class` as `host-model`,
-`console-projection`, or `unknown`. Connectivity and backend class never prove
-target execution. The optional `worker_acceptance` summary is the only REST
-projection of QEMU or fresh-Pi proof, and it exists only after the gateway has
-validated a bounded local record with the shared `cohesix-worker-evidence`
-parser.
+`GET /v1/meta/status` requires `target_host` and `target_port`, the normalized
+configured TCP backend endpoint. They do not identify the REST bind address and
+do not by themselves prove target execution. Qualified Pi evidence uses them
+only as one exact cross-check with its same-boot serial, packet, runtime, and
+live gateway-continuity proof. The response may add `backend_class` as
+`host-model`, `console-projection`, or `unknown`; connectivity and backend
+class likewise never prove target execution. The optional `worker_acceptance`
+summary remains the only REST projection of QEMU or fresh-Pi component proof,
+and it exists only after the gateway has validated a bounded local record with
+the shared `cohesix-worker-evidence` parser.
 
 Configure that import with an explicit trust root, the component record, and
 the exact current target-session file:

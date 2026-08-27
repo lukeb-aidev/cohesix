@@ -4675,7 +4675,7 @@ fn bootstrap<P: Platform>(
             root_fault_release = runtime.signals.root_fault_release,
         ));
         boot_log::force_uart_line(
-            "[critical] root-control accounted; four restricted TCBs constructed suspended",
+            "[critical] root-control accounted; six restricted TCBs constructed suspended",
         );
         Box::leak(Box::new(runtime))
     };

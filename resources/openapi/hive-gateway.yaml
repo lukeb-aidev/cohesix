@@ -571,6 +571,8 @@ components:
       type: object
       required:
         - connected
+        - target_host
+        - target_port
         - reconnects
         - connects
         - broker
@@ -578,6 +580,16 @@ components:
         connected:
           type: boolean
           description: Console connection only; never target execution proof.
+        target_host:
+          type: string
+          minLength: 1
+          maxLength: 253
+          description: Normalized configured backend TCP target, not the REST bind host.
+        target_port:
+          type: integer
+          minimum: 1
+          maximum: 65535
+          description: Configured backend TCP target port, not the REST bind port.
         backend_class:
           type: string
           enum: [host-model, console-projection, unknown]
@@ -733,14 +745,25 @@ components:
           pattern: "^[0-9a-f]{64}$"
     WorkerSchedulingContextSummary:
       type: object
+      description: |-
+        A passive Worker owns no scheduling context and reports exact 0/0.
+        An active Worker reports positive values; the runtime additionally
+        enforces budget_us <= period_us.
       required: [budget_us, period_us]
       properties:
         budget_us:
           type: integer
-          minimum: 1
+          minimum: 0
         period_us:
           type: integer
-          minimum: 1
+          minimum: 0
+      oneOf:
+        - properties:
+            budget_us: {const: 0}
+            period_us: {const: 0}
+        - properties:
+            budget_us: {minimum: 1}
+            period_us: {minimum: 1}
     KernelObjectInventorySummary:
       type: object
       additionalProperties: false

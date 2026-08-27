@@ -10,7 +10,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::env;
 use std::fs;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TryRecvError, TrySendError};
@@ -254,6 +254,8 @@ struct GatewayInner {
     control_write_retry_window_ms: u64,
     bounds: BoundsResponse,
     backend_class: BackendClass,
+    target_host: String,
+    target_port: u16,
     worker_acceptance: Mutex<WorkerAcceptanceState>,
     policy: CohshPolicy,
     broker: Arc<BrokerMetrics>,
@@ -857,6 +859,8 @@ fn read_cache_valid_entry(cache: &mut ProcReadCache, path: &str) -> Option<Share
 #[derive(Debug, Clone, Serialize)]
 struct GatewayStatusResponse {
     connected: bool,
+    target_host: String,
+    target_port: u16,
     #[serde(skip_serializing_if = "Option::is_none")]
     backend_class: Option<BackendClass>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1306,6 +1310,8 @@ async fn main() -> Result<()> {
             } else {
                 BackendClass::ConsoleProjection
             },
+            target_host: config.tcp_host.clone(),
+            target_port: config.tcp_port,
             worker_acceptance: Mutex::new(worker_acceptance),
             policy,
             broker: broker_metrics,
@@ -1373,6 +1379,46 @@ struct GatewayConfig {
     target_session: Option<PathBuf>,
 }
 
+fn normalize_tcp_target_host(value: &str) -> Result<String> {
+    let host = value.trim();
+    if host.is_empty() {
+        return Err(anyhow::anyhow!("TCP console target host must not be empty"));
+    }
+    if host.len() > 253
+        || !host.is_ascii()
+        || host
+            .bytes()
+            .any(|byte| byte.is_ascii_control() || byte.is_ascii_whitespace())
+    {
+        return Err(anyhow::anyhow!("TCP console target host is invalid"));
+    }
+    if let Ok(address) = host.parse::<IpAddr>() {
+        return Ok(address.to_string());
+    }
+    let dns_host = host.strip_suffix('.').unwrap_or(host);
+    if dns_host.is_empty()
+        || dns_host.split('.').any(|label| {
+            label.is_empty()
+                || label.len() > 63
+                || label.starts_with('-')
+                || label.ends_with('-')
+                || !label
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        })
+    {
+        return Err(anyhow::anyhow!("TCP console target host is invalid"));
+    }
+    Ok(dns_host.to_ascii_lowercase())
+}
+
+fn validate_tcp_target_port(port: u16) -> Result<u16> {
+    if port == 0 {
+        return Err(anyhow::anyhow!("TCP console target port must be non-zero"));
+    }
+    Ok(port)
+}
+
 impl GatewayConfig {
     fn from_cli(cli: Cli) -> Result<Self> {
         let mut mock = cli.mock;
@@ -1385,8 +1431,13 @@ impl GatewayConfig {
             }
         }
         let bind = env_override(cli.bind, "127.0.0.1:8080", "HIVE_GATEWAY_BIND");
-        let tcp_host = env_override(cli.tcp_host, "127.0.0.1", "COH_TCP_HOST");
-        let tcp_port = env_override_u16(cli.tcp_port, COHESIX_TCP_CONSOLE_PORT, "COH_TCP_PORT");
+        let tcp_host =
+            normalize_tcp_target_host(&env_override(cli.tcp_host, "127.0.0.1", "COH_TCP_HOST"))?;
+        let tcp_port = validate_tcp_target_port(env_override_u16(
+            cli.tcp_port,
+            COHESIX_TCP_CONSOLE_PORT,
+            "COH_TCP_PORT",
+        ))?;
         let auth_token = resolve_secret(
             cli.auth_token.as_deref(),
             &["COH_AUTH_TOKEN", "COHSH_AUTH_TOKEN"],
@@ -3168,6 +3219,8 @@ impl AppState {
         };
         GatewayStatusResponse {
             connected: status.connected,
+            target_host: self.inner.target_host.clone(),
+            target_port: self.inner.target_port,
             backend_class: Some(self.inner.backend_class),
             worker_acceptance: worker_acceptance.summary,
             worker_acceptance_diagnostic: worker_acceptance.diagnostic,
@@ -4199,6 +4252,39 @@ mod tests {
         "teardown-zero-leak",
         "timeout-attributed",
     ];
+
+    #[test]
+    fn openapi_worker_scheduling_context_distinguishes_passive_and_active() {
+        let (_, remainder) = OPENAPI_YAML
+            .split_once("    WorkerSchedulingContextSummary:\n")
+            .expect("OpenAPI must declare the Worker scheduling-context schema");
+        let (schema, _) = remainder
+            .split_once("    KernelObjectInventorySummary:\n")
+            .expect("Worker scheduling-context schema must retain its boundary");
+
+        assert_eq!(schema.matches("          minimum: 0\n").count(), 2);
+        assert_eq!(schema.matches("{const: 0}").count(), 2);
+        assert_eq!(schema.matches("{minimum: 1}").count(), 2);
+        assert!(schema.contains("      oneOf:\n"));
+    }
+
+    #[test]
+    fn openapi_gateway_status_requires_configured_target_endpoint() {
+        let (_, remainder) = OPENAPI_YAML
+            .split_once("    GatewayStatusResponse:\n")
+            .expect("OpenAPI must declare the gateway status schema");
+        let (schema, _) = remainder
+            .split_once("    WorkerAcceptanceSummary:\n")
+            .expect("gateway status schema must retain its boundary");
+
+        assert!(schema.contains("        - target_host\n"));
+        assert!(schema.contains("        - target_port\n"));
+        assert!(schema.contains("        target_host:\n"));
+        assert!(schema.contains("          maxLength: 253\n"));
+        assert!(schema.contains("        target_port:\n"));
+        assert!(schema.contains("          minimum: 1\n"));
+        assert!(schema.contains("          maximum: 65535\n"));
+    }
 
     fn valid_target_component(manifest_sha256: &str) -> (Vec<u8>, Vec<u8>) {
         let hash = "0".repeat(64);
@@ -5630,6 +5716,26 @@ mod tests {
         );
     }
 
+    #[test]
+    fn tcp_target_host_is_validated_and_normalized() {
+        assert_eq!(
+            normalize_tcp_target_host("  PI4.Example. ").expect("valid DNS target"),
+            "pi4.example"
+        );
+        assert_eq!(
+            normalize_tcp_target_host("2001:0db8::1").expect("valid IPv6 target"),
+            "2001:db8::1"
+        );
+        for invalid in ["", "bad host", "-pi4.local", "pi4..local", "pi4_1.local"] {
+            assert!(
+                normalize_tcp_target_host(invalid).is_err(),
+                "invalid target host accepted: {invalid}"
+            );
+        }
+        assert_eq!(validate_tcp_target_port(31337).expect("valid port"), 31337);
+        assert!(validate_tcp_target_port(0).is_err());
+    }
+
     fn disconnected_cached_state() -> AppState {
         let (execution_tx, _execution_rx) = mpsc::sync_channel(0);
         let (control_tx, _control_rx) = mpsc::sync_channel(0);
@@ -5665,6 +5771,8 @@ mod tests {
                 control_write_retry_window_ms: DEFAULT_CONTROL_WRITE_RETRY_WINDOW_MS,
                 bounds: build_bounds().expect("compiled generated Worker bounds must parse"),
                 backend_class: BackendClass::Unknown,
+                target_host: "127.0.0.1".to_owned(),
+                target_port: 31337,
                 worker_acceptance: Mutex::new(WorkerAcceptanceState {
                     imported: acceptance_diagnostic(WorkerAcceptanceDiagnosticCode::NotConfigured),
                     pending_source: None,
