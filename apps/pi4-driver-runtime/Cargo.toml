@@ -10,6 +10,7 @@ publish = false
 build = "build.rs"
 
 [dependencies]
+console-network-abi = { workspace = true }
 font8x8 = { version = "0.3.1", default-features = false }
 pi4-driver-abi = { workspace = true }
 sel4-sys = { path = "../../crates/sel4-sys" }

@@ -272,6 +272,7 @@ pub struct ConsoleNetworkServiceConfig {
     pub listener_port: u16,
     pub single_listener: bool,
     pub direct_virtio: bool,
+    pub direct_genet: bool,
     pub child_cspace_slots: u16,
     pub revoke_anchor_slot: u32,
     pub revoke_anchor_bits: u8,
@@ -1052,7 +1053,7 @@ pub struct AuditConfig {
 
 pub const MANIFEST_SCHEMA: &str = "1.15";
 pub const MANIFEST_SHA256: &str =
-    "cdbfdfa9f4de5c1cd8f8f9ef7233aff9465e15e5469cce6604bdde50872996ba";
+    "a9a50408519f33cf2e05932cffffa5dbb521958870b16edf2f36311ff60385a1";
 pub const TICKET_TABLE_SHA256: &str = bootstrap::TICKET_TABLE_SHA256;
 pub const NAMESPACE_TABLE_SHA256: &str = bootstrap::NAMESPACE_TABLE_SHA256;
 pub const AUDIT_TABLE_SHA256: &str = bootstrap::AUDIT_TABLE_SHA256;

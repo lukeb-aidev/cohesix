@@ -195,8 +195,9 @@ payloads, and rootfs bounds before staging. Both Pi production and diagnostic
 profiles require `KernelRootCNodeSizeBits=16`. The resulting 65,536-slot root
 CSpace admits the manifest's complete 256-Worker population, linked-runtime
 images, isolated HDMI framebuffer mapping, and post-construction reserve while
-leaving 46,066 compiler-accounted slots free. The profile wrapper preserves
-that declared value and uses 13 bits only for profiles that omit the setting.
+consuming 19,507 slots and leaving 46,029 compiler-accounted slots free. The
+profile wrapper preserves that declared value and uses 13 bits only for profiles
+that omit the setting.
 An older Pi build cache reporting 13 or 14 bits is stale and must be rebuilt
 before image staging or hardware proof.
 The selected seL4 build directory is immutable profile evidence: the wrapper
@@ -940,20 +941,63 @@ order and bounded control/data fairness without overwrite, duplicate, or
 silent drop. Then prove ARP, ICMP, raw TCP, authenticated `cohsh`, and the
 focused `.coh` scripts from the boot-paired wired capture before throughput or
 latency measurement. QEMU's retained three-IRQ profile is regression evidence,
-not Pi IRQ or GENET performance proof. The absence of direct GENET-console
-rings is intentional; all traffic still crosses the admitted root-mediated
-transport.
+not Pi IRQ or GENET performance proof.
 
-A dispatched GENET console command performs no TCP flush in its `Dispatch`
-turn. It installs a cursor owned by the active TCP connection; each later
-`Network` phase performs exactly one budgeted response flush and returns. The
-normal cursor limit is eight phases and rises to sixteen only while the local
-display reports pending/redraw/no-reply backlog pressure. A second buffered
-command must wait behind the first cursor. If the active connection changes or
-disappears, root rejects the stale cursor rather than flushing a replacement
-session. A trace or test that shows command dispatch plus a flush in one turn,
-multiple flushes in one `Network` phase, an unbounded cursor, or cursor transfer
-between connections is failed TCP liveness evidence.
+The exact Pi `bcmgenet-v5` profile uses console-network ABI v5 and derives one
+post-DHCP direct data-plane handoff. Root first proves every legacy GENET
+command, RX, and TX cursor quiescent, publishes an atomic handoff-pending
+generation, and issues one generation-bound, zero-payload `DGHO`. An exact
+`PROGRESS/READY` terminal is the only route to READY. During an exact unfaulted
+`IDLE/QUIESCING` phase only the bounded legacy drain may run, and a retry waits
+for its coordinator plus root RX/TX queues to become empty.
+
+After READY, the GENET and console children reuse the admitted 32 pages as
+cacheable Normal/XN CPU-only memory: page 0 is the sequence-last control page,
+pages 1 through 15 carry GENET-to-console RX, and pages 16 through 31 carry
+console-to-GENET TX. The pages grant no physical-address, MMIO, DMA, or
+device-visible authority. GENET remains the sole MMIO/DMA/IRQ and private-ring
+owner and copies between its private DMA rings and this link;
+console-network remains the sole smoltcp/TCP/authentication owner. Root retains
+lifecycle, control-event, and fault supervision, but performs no steady packet
+copy, poll, or GENET packet command after READY.
+
+Each direction is a generation-bound single-producer/single-consumer ring with
+monotonic cursors and sequence-last publication. The reciprocal send-only
+notifications are coalescing wake hints, not packet truth; each consumer checks
+durable state again immediately before waiting. A failed handoff, invalid
+cursor or sequence, stale generation, descriptor drift, peer fault, or
+containment error poisons the link and pair-contains both child generations.
+Containment suspends GENET, removes both reciprocal notification caps, and
+removes all 32 external console mapping caps before anchor revoke.
+Root-mediated packet service never reopens as a fallback.
+
+The selected direct-GENET console image has a 65-page PT_LOAD footprint and a
+service inventory of 103 frames and 160 retained root CSpace slots. The 32
+direct pages are reused GENET-owned external frames, so they add mapping-cap
+slots rather than data-plane frame objects and do not enlarge the one-MiB child
+untyped. Construction and stage checks must reject an image exceeding the
+65-page admission or a resource projection that drifts from the generated
+103-frame/160-slot contract, but they are not proof that a Pi reached READY or
+moved a packet.
+
+A dispatched authenticated command still performs no TCP flush in root's
+`Dispatch` turn. Root installs the bounded response-control cursor for the exact
+connection, and each later `Network` phase may publish exactly one response
+unit to the console child. The child owns the actual TCP send and flush over the
+direct link. The normal cursor limit is eight phases and rises to sixteen only
+while the local display reports pending/redraw/no-reply backlog pressure. A
+second buffered command waits behind the first cursor; identity loss rejects
+the cursor rather than transferring it to a replacement session. Any trace
+showing root-owned TCP flush, dispatch plus publication in one turn, multiple
+publications in one `Network` phase, an unbounded cursor, or cross-connection
+transfer is failed liveness evidence.
+
+Fresh same-boot evidence must bind the read-back image to exact handoff
+generation and READY state, IRQ/DPC and queue health, boot-paired packet
+capture, DHCP or accepted static policy, ARP, ICMP, raw TCP, authenticated
+`cohsh`, focused `.coh` scripts, loss, latency, and throughput. Static ABI,
+resource, build, and stage checks do not prove Pi boot, hardware, packet
+correctness, performance, QEMU parity, or acceptance.
 
 ### CYW43 Wi-Fi
 

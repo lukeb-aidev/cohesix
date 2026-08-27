@@ -5666,6 +5666,30 @@ where
         }
     }
 
+    /// Convert a completed direct-GENET driver fault into coupled console
+    /// containment before any ordinary operator or network work can run.
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    pub fn contain_faulted_direct_genet_pair(
+        &mut self,
+        hal: &mut crate::hal::KernelHal<'_>,
+    ) -> bool {
+        if !crate::drivers::driver_task_net::genet_direct_pair_fault_pending() {
+            return false;
+        }
+        let begun = match self.net.as_deref_mut() {
+            Some(net) => net.begin_direct_genet_peer_fault_containment(),
+            None => return true,
+        };
+        match begun {
+            Ok(true) => {
+                crate::drivers::driver_task_net::acknowledge_genet_direct_pair_fault();
+                let _ = self.contain_faulted_console_network(hal);
+                true
+            }
+            Ok(false) | Err(_) => true,
+        }
+    }
+
     /// Consume and contain one terminal isolated console-network fault.
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     pub fn contain_faulted_console_network(&mut self, hal: &mut crate::hal::KernelHal<'_>) -> bool {

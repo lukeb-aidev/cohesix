@@ -456,6 +456,43 @@ fn containment_completion_carries_only_the_exact_full_proof() {
 }
 
 #[test]
+fn direct_genet_containment_fences_peer_before_external_caps_and_anchor() {
+    let mut cursor = ConsoleNetworkContainmentCursor::with_direct_frame_inventories(0, 32);
+    let mut units = Vec::new();
+    while cursor.unit() != ConsoleNetworkContainmentUnit::Complete {
+        units.push(cursor.select_next());
+    }
+
+    let fence = units
+        .iter()
+        .position(|unit| *unit == ConsoleNetworkContainmentUnit::FenceDirectGenetPeer)
+        .expect("paired GENET fence");
+    let first_unmap = units
+        .iter()
+        .position(|unit| *unit == ConsoleNetworkContainmentUnit::UnmapDirectGenetFrame(0))
+        .expect("first external-frame unmap");
+    let anchor = units
+        .iter()
+        .position(|unit| *unit == ConsoleNetworkContainmentUnit::RevokeAnchor)
+        .expect("anchor revoke");
+    assert!(fence < first_unmap);
+    assert!(first_unmap < anchor);
+    for index in 0..32 {
+        let unmap = units
+            .iter()
+            .position(|unit| *unit == ConsoleNetworkContainmentUnit::UnmapDirectGenetFrame(index))
+            .expect("indexed direct-frame unmap");
+        let delete = units
+            .iter()
+            .position(|unit| {
+                *unit == ConsoleNetworkContainmentUnit::DeleteDirectGenetFrameCap(index)
+            })
+            .expect("indexed direct-frame cap delete");
+        assert!(fence < unmap && unmap < delete && delete < anchor);
+    }
+}
+
+#[test]
 fn mismatched_commits_do_not_advance_root_boundary_state() {
     let mut boundary = ConsoleNetworkBoundary::new(13).expect("generated contract");
     let generation = boundary.generation();

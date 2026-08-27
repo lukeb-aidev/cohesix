@@ -17,10 +17,11 @@ use core::ptr::{self, NonNull};
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use crate::affinity;
+#[cfg(all(feature = "kernel", feature = "release-qemu", target_arch = "aarch64"))]
+use crate::arch::aarch64::timer::timer_counter_register_hz;
 #[cfg(all(feature = "kernel", target_arch = "aarch64"))]
 use crate::arch::aarch64::timer::{
-    timer_counter_kind, timer_counter_register_hz, timer_counter_ticks, timer_freq_hz,
-    timer_period_cycles,
+    timer_counter_kind, timer_counter_ticks, timer_freq_hz, timer_period_cycles,
 };
 use crate::attest;
 #[cfg(feature = "kernel")]
@@ -5486,7 +5487,7 @@ fn bootstrap<P: Platform>(
             crate::net::DefaultNetStack::requires_preseal_console_network_runtime(stack.as_ref())
         }) {
             let runtime = hal
-                .construct_console_network_runtime_shell(1)
+                .construct_direct_genet_console_network_runtime_shell(1)
                 .map_err(|error| {
                     BootError::Fatal(format!(
                         "wired isolated console-network shell construction failed before registry seal: {error}"

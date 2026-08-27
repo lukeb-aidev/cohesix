@@ -3,19 +3,19 @@
 # Copyright 2026 Lukas Bower
 
 [non_test]
-unsafe = 808
+unsafe = 827
 unwrap = 38
 expect = 243
 panic = 102
 
 [linked_runtime_hal]
-unsafe = 161
+unsafe = 172
 unwrap = 0
 expect = 2
 panic = 0
 
 [outside_linked_runtime_hal]
-unsafe = 647
+unsafe = 655
 unwrap = 38
 expect = 241
 panic = 102
@@ -28,7 +28,7 @@ historical_unsafe = 693
 historical_unwrap = 38
 historical_expect = 240
 historical_panic = 96
-accepted_unsafe_delta = 115
+accepted_unsafe_delta = 134
 accepted_unwrap_delta = 0
 accepted_expect_delta = 3
 accepted_panic_delta = 6

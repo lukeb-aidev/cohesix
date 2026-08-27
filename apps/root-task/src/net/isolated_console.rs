@@ -18,6 +18,7 @@ use console_network_abi::{
     SEND_BATCH_MAX_RECORDS,
 };
 use heapless::{Deque, String as HeaplessString, Vec as HeaplessVec};
+#[cfg(feature = "net-backend-virtio")]
 use smoltcp::phy::{Device, DeviceCapabilities, Medium, RxToken, TxToken};
 use smoltcp::time::Instant;
 use smoltcp::wire::{EthernetAddress, Ipv4Address};
@@ -25,13 +26,15 @@ use smoltcp::wire::{EthernetAddress, Ipv4Address};
 use super::isolated_self_test::{IsolatedSelfTestObservation, IsolatedSelfTestState};
 #[cfg(feature = "net-backend-virtio")]
 use super::ConsoleNetConfig;
+#[cfg(feature = "net-backend-virtio")]
+use super::NetDeviceCounters;
 use super::{
     select_isolated_direct_network_turn, select_isolated_direct_response_turn,
     select_isolated_network_turn, select_isolated_response_turn, ConsoleLine,
     IsolatedConsoleDiagnostics, IsolatedNetworkLowerCursor, IsolatedNetworkLowerUnit,
     IsolatedNetworkTurnOutcome, IsolatedNetworkTurnSelection, IsolatedNetworkTurnUnit,
-    NetConsoleDisconnectReason, NetConsoleEvent, NetCounters, NetDevice, NetDeviceCounters,
-    NetPoller, NetSelfTestReport, NetSelfTestStartResult, NetStatusReport, NetTelemetry,
+    NetConsoleDisconnectReason, NetConsoleEvent, NetCounters, NetDevice, NetPoller,
+    NetSelfTestReport, NetSelfTestStartResult, NetStatusReport, NetTelemetry,
 };
 use crate::console_network_service::{BoundaryError, ConsoleNetworkContainmentTurn, ServiceState};
 use crate::drivers::driver_task_net::Cyw43DriverTaskDevice;
@@ -562,6 +565,12 @@ impl<D: NetDevice> IsolatedNetworkConsole<D> {
         Ok(())
     }
 
+    /// Whether the child and its NIC peer own the complete packet data plane.
+    #[must_use]
+    pub(crate) const fn direct_data_plane(&self) -> bool {
+        self.runtime.direct_data_plane()
+    }
+
     /// Whether a protocol, ABI, timeout, or critical-lane fault needs teardown.
     #[must_use]
     pub const fn faulted(&self) -> bool {
@@ -575,6 +584,28 @@ impl<D: NetDevice> IsolatedNetworkConsole<D> {
             && (self.faulted()
                 || self.graceful_teardown_pending
                 || self.runtime.containment_active())
+    }
+
+    /// Fence the console half of a direct NIC pair after the physical owner has
+    /// completed its independent supervisor containment. This path does not
+    /// wait for a second console fault: it records the coupled fault locally and
+    /// starts the existing exact console teardown cursor immediately.
+    pub(crate) fn begin_paired_driver_fault_containment(&mut self) -> Result<bool, HalError> {
+        if self.terminal {
+            return Ok(false);
+        }
+        let generation = self.runtime.generation();
+        self.faulted = true;
+        self.listener_ready = false;
+        self.pending_containment_fault_diagnostic =
+            Some(ConsoleNetworkContainmentDiagnostic::LocalFault {
+                generation,
+                reason: "direct-nic-peer-fault",
+            });
+        if !self.runtime.containment_active() {
+            self.runtime.begin_containment()?;
+        }
+        Ok(true)
     }
 
     /// Advance the exact child generation by one containment unit.
@@ -1119,6 +1150,10 @@ impl<D: NetDevice> IsolatedNetworkConsole<D> {
         }
         if let Some(egress) = turn.egress {
             activity = true;
+            if self.runtime.direct_data_plane() {
+                self.fail_closed("direct-root-egress-publication");
+                return IsolatedNetworkTurnOutcome::complete(activity);
+            }
             if self.pending_egress.is_some() {
                 self.fail_closed("egress-overwrite");
                 return IsolatedNetworkTurnOutcome::complete(activity);
@@ -1305,7 +1340,7 @@ impl<D: NetDevice> IsolatedNetworkConsole<D> {
         });
         let observation = IsolatedSelfTestObservation {
             now_ms: self.last_now_ms,
-            direct_virtio: self.runtime.direct_virtio(),
+            direct_data_plane: self.runtime.direct_data_plane(),
             tx_complete: self.counters.tx_complete,
             rx_packets: self.counters.rx_packets,
             tcp_rx_bytes: self.counters.tcp_rx_bytes,
@@ -1401,7 +1436,7 @@ impl<D: NetDevice> IsolatedNetworkConsole<D> {
 
     #[inline(never)]
     fn poll_service_tick_unit(&mut self) -> IsolatedNetworkTurnOutcome {
-        if self.runtime.direct_virtio() {
+        if self.runtime.direct_data_plane() {
             if self.direct_service_tick_ms == Some(self.last_now_ms) {
                 return IsolatedNetworkTurnOutcome::complete(false);
             }
@@ -1436,7 +1471,7 @@ impl<D: NetDevice> IsolatedNetworkConsole<D> {
                 || lane.producer_open
                 || !self.output.is_empty()
         });
-        let selection = if self.runtime.direct_virtio() {
+        let selection = if self.runtime.direct_data_plane() {
             if self.pending_egress.is_some() {
                 self.fail_closed("direct-egress-publication");
                 return false;
@@ -1505,7 +1540,7 @@ impl<D: NetDevice> NetPoller for IsolatedNetworkConsole<D> {
         }
         self.counters.smoltcp_polls = self.counters.smoltcp_polls.saturating_add(1);
 
-        let selection: IsolatedNetworkTurnSelection = if self.runtime.direct_virtio() {
+        let selection: IsolatedNetworkTurnSelection = if self.runtime.direct_data_plane() {
             if self.pending_egress.is_some()
                 || self.device.isolated_deferred_tx_diagnostic_pending()
             {

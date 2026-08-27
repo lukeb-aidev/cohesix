@@ -201,12 +201,15 @@ fn checked_in_profiles_compile_without_radio_sidecar_output() {
 
         let generated = fs::read_to_string(options.out_dir.join("mod.rs"))
             .unwrap_or_else(|error| panic!("read generated module for {profile}: {error}"));
+        let bootstrap = fs::read_to_string(options.out_dir.join("bootstrap.rs"))
+            .unwrap_or_else(|error| panic!("read generated bootstrap for {profile}: {error}"));
         let resolved = fs::read_to_string(&options.manifest_out)
             .unwrap_or_else(|error| panic!("read resolved manifest for {profile}: {error}"));
         let snippet = fs::read_to_string(&options.doc_snippet_out)
             .unwrap_or_else(|error| panic!("read manifest snippet for {profile}: {error}"));
 
         assert!(!generated.contains("SidecarLora"), "{profile}");
+        assert!(generated.contains("pub direct_genet: bool"), "{profile}");
         assert!(!resolved.contains("\"lora\": {"), "{profile}");
         assert!(!snippet.contains("sidecars.lora"), "{profile}");
 
@@ -214,7 +217,7 @@ fn checked_in_profiles_compile_without_radio_sidecar_output() {
             .unwrap_or_else(|error| panic!("parse resolved manifest for {profile}: {error}"));
         assert_eq!(resolved["root_task"]["schema"], "1.15", "{profile}");
         assert_eq!(
-            resolved["console_network_service"]["abi_version"], 4,
+            resolved["console_network_service"]["abi_version"], 5,
             "{profile}"
         );
         let worker_lora = resolved["worker_runtime"]["roles"]
@@ -239,25 +242,53 @@ fn checked_in_profiles_compile_without_radio_sidecar_output() {
                 .iter()
                 .find(|task| task["id"] == "console-network-service")
                 .unwrap_or_else(|| panic!("console-network-service missing from {profile}"));
-            let (expected_root, expected_budget, expected_timer_clock_hz) =
-                if *profile == "configs/root_task.toml" {
-                    (
-                        "m26e-qemu-root-dedicated-core-bounded-quantum-v1",
-                        9_000,
-                        24_000_000,
-                    )
-                } else {
-                    (
-                        "m26e-pi4-root-adjacent-refill-natural-postpone-candidate-v24",
-                        2_750,
-                        54_000_000,
-                    )
-                };
+            let (
+                expected_root,
+                expected_budget,
+                expected_root_response,
+                expected_child_priority,
+                expected_child_mcp,
+                expected_child_response,
+                expected_timer_clock_hz,
+                expected_direct_virtio,
+                expected_direct_genet,
+                expected_console_cspace_slots,
+            ) = if *profile == "configs/root_task.toml" {
+                (
+                    "m26e-qemu-root-dedicated-core-bounded-quantum-v1",
+                    9_000,
+                    8_500,
+                    180,
+                    200,
+                    3_000,
+                    24_000_000,
+                    true,
+                    false,
+                    162,
+                )
+            } else {
+                (
+                    "m26e-pi4-root-adjacent-refill-natural-postpone-candidate-v24",
+                    2_750,
+                    5_100,
+                    180,
+                    200,
+                    8_100,
+                    54_000_000,
+                    false,
+                    true,
+                    160,
+                )
+            };
             assert_eq!(root["wcet_provenance"], expected_root, "{profile}");
             assert_eq!(root["timeout_policy"], "natural-postpone", "{profile}");
             assert_eq!(root["budget_us"], expected_budget, "{profile}");
             assert_eq!(root["period_us"], 10_000, "{profile}");
             assert_eq!(root["max_refills"], 2, "{profile}");
+            assert_eq!(
+                root["response_time_us"], expected_root_response,
+                "{profile}"
+            );
             assert_eq!(
                 resolved["console_network_service"]["timer_clock_hz"], expected_timer_clock_hz,
                 "{profile}"
@@ -269,6 +300,29 @@ fn checked_in_profiles_compile_without_radio_sidecar_output() {
             );
             assert_eq!(child["timeout_policy"], "natural-postpone", "{profile}");
             assert_eq!(child["wcet_us"], 3_000, "{profile}");
+            assert_eq!(child["priority"], expected_child_priority, "{profile}");
+            assert_eq!(child["mcp"], expected_child_mcp, "{profile}");
+            assert_eq!(
+                child["response_time_us"], expected_child_response,
+                "{profile}"
+            );
+            assert_eq!(
+                resolved["console_network_service"]["direct_virtio"], expected_direct_virtio,
+                "{profile}"
+            );
+            assert_eq!(
+                resolved["console_network_service"]["objects"]["cspace_slots"],
+                expected_console_cspace_slots,
+                "{profile}"
+            );
+            assert!(
+                bootstrap.contains(&format!("direct_virtio: {expected_direct_virtio},")),
+                "{profile}"
+            );
+            assert!(
+                bootstrap.contains(&format!("direct_genet: {expected_direct_genet},")),
+                "{profile}"
+            );
         }
     }
 }

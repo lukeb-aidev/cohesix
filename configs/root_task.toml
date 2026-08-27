@@ -619,7 +619,7 @@ fault_handler = "root-fault"
 
 [console_network_service]
 enabled = true
-abi_version = 4
+abi_version = 5
 image_id = "console-network-runtime"
 image_path = "cohesix/artifacts/console-network-runtime"
 entry_symbol = "_start"

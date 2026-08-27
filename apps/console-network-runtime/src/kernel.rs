@@ -7,31 +7,42 @@ use core::panic::PanicInfo;
 use core::ptr::{addr_of, addr_of_mut, copy_nonoverlapping, read_volatile, write_volatile};
 use core::sync::atomic::{fence, Ordering};
 
+#[cfg(feature = "direct-genet")]
+use console_network_runtime::abi::WAKE_DIRECT_GENET_LINK;
+#[cfg(feature = "direct-genet")]
+use console_network_runtime::abi::{
+    DirectGenetLayout, DIRECT_GENET_LAYOUT_BYTES, DIRECT_GENET_LAYOUT_OFFSET,
+};
 #[cfg(feature = "direct-virtio")]
 use console_network_runtime::abi::{
     DirectVirtioLayout, DIRECT_VIRTIO_LAYOUT_BYTES, DIRECT_VIRTIO_LAYOUT_OFFSET,
 };
 use console_network_runtime::abi::{
     ExchangeKind, ExchangePage, ExchangePageHeader, PacketDirection, PacketPage, PacketPageHeader,
-    RuntimeInitDescriptor, CONSOLE_PAYLOAD_BYTES, CONTROL_CONSUMED_SEQUENCE_OFFSET,
-    ETHERNET_FRAME_BYTES, INGRESS_CONSUMED_SEQUENCE_OFFSET, RUNTIME_INIT_DESCRIPTOR_BYTES,
-    WAKE_CONTROL, WAKE_PACKET_RX, WAKE_PUBLICATION_ACK, WAKE_REVOKE, WAKE_SHUTDOWN,
+    RuntimeInitDescriptor, CONSOLE_NETWORK_SERVICE_IDENTITY, CONSOLE_PAYLOAD_BYTES,
+    CONTROL_CONSUMED_SEQUENCE_OFFSET, ETHERNET_FRAME_BYTES, INGRESS_CONSUMED_SEQUENCE_OFFSET,
+    RUNTIME_INIT_DESCRIPTOR_BYTES, WAKE_CONTROL, WAKE_PACKET_RX, WAKE_PUBLICATION_ACK, WAKE_REVOKE,
+    WAKE_SHUTDOWN,
 };
 #[cfg(feature = "direct-virtio")]
 use console_network_runtime::abi::{DIRECT_VIRTIO_IRQ_HANDLER_SLOT, WAKE_DIRECT_VIRTIO_IRQ};
 use console_network_runtime::{
-    ChildTurnReadiness, ChildTurnScheduler, ChildTurnUnit, ConsoleNetworkService,
-    ControlApplyOutcome, RuntimeError, ServicePollOutcome,
+    direct_service_repoll_required, ChildTurnReadiness, ChildTurnScheduler, ChildTurnUnit,
+    ConsoleNetworkService, ControlApplyOutcome, RuntimeError, ServicePollOutcome,
 };
 use heapless::Deque;
 use smoltcp::iface::SocketStorage;
 
+#[cfg(feature = "direct-genet")]
+use crate::direct_genet::DirectGenetLink;
 #[cfg(feature = "direct-virtio")]
 use crate::direct_virtio::{DirectVirtioError, DirectVirtioNet};
+#[cfg(feature = "direct-genet")]
+use console_network_runtime::abi::DirectGenetError;
 
 const TCP_BUFFER_BYTES: usize = 32 * 1024;
 const COMPLETION_DEPTH: usize = 3;
-#[cfg(feature = "direct-virtio")]
+#[cfg(any(feature = "direct-virtio", feature = "direct-genet"))]
 const DIRECT_SERVICE_QUANTUM_UNITS: usize = 64;
 
 static mut TCP_RX: [u8; TCP_BUFFER_BYTES] = [0; TCP_BUFFER_BYTES];
@@ -78,6 +89,7 @@ pub unsafe extern "C" fn _start(descriptor: *const u8) -> ! {
     {
         enter_standard_fault();
     }
+    #[cfg(any(feature = "direct-virtio", feature = "direct-genet"))]
     let init_page = descriptor;
     let mut descriptor_bytes = [0u8; RUNTIME_INIT_DESCRIPTOR_BYTES];
     let mut index = 0usize;
@@ -120,6 +132,36 @@ pub unsafe extern "C" fn _start(descriptor: *const u8) -> ! {
     };
     #[cfg(not(feature = "direct-virtio"))]
     if descriptor.direct_virtio() {
+        enter_standard_fault();
+    }
+    #[cfg(feature = "direct-genet")]
+    let mut direct_genet_link = if descriptor.direct_genet() {
+        let mut layout_bytes = [0u8; DIRECT_GENET_LAYOUT_BYTES];
+        let mut layout_index = 0usize;
+        while layout_index < layout_bytes.len() {
+            // SAFETY: Descriptor validation proves the base init page. The
+            // direct-GENET layout offset and exact size are compile-time
+            // bounded to that same read-only page.
+            layout_bytes[layout_index] =
+                unsafe { read_volatile(init_page.add(DIRECT_GENET_LAYOUT_OFFSET + layout_index)) };
+            layout_index += 1;
+        }
+        let layout = match DirectGenetLayout::decode(&layout_bytes) {
+            Ok(layout) => layout,
+            Err(_) => enter_standard_fault(),
+        };
+        if descriptor.validate_direct_genet_layout(layout).is_err() {
+            enter_standard_fault();
+        }
+        match DirectGenetLink::new(layout) {
+            Ok(link) => Some(link),
+            Err(error) => enter_direct_genet_fault(error),
+        }
+    } else {
+        None
+    };
+    #[cfg(not(feature = "direct-genet"))]
+    if descriptor.direct_genet() {
         enter_standard_fault();
     }
     install_ipc_buffer(descriptor);
@@ -173,7 +215,7 @@ pub unsafe extern "C" fn _start(descriptor: *const u8) -> ! {
         0,
         now_ms(descriptor.timer_clock_hz),
         0,
-        b"console-network-service/v4",
+        CONSOLE_NETWORK_SERVICE_IDENTITY,
     );
     signal_slot(descriptor.supervisor_wake_notification_slot);
     // Ready occupies the one-slot event page. Only root's explicit ACK after it
@@ -181,13 +223,37 @@ pub unsafe extern "C" fn _start(descriptor: *const u8) -> ! {
     // preserve the credit, and exactly one later publication consumes it.
     let mut publication_credit_available = false;
     let mut shutdown_pending = false;
-    #[cfg(feature = "direct-virtio")]
-    let mut direct_service_pending = direct_device.is_some();
+    #[cfg(any(feature = "direct-virtio", feature = "direct-genet"))]
+    let mut direct_service_pending = {
+        let mut selected = false;
+        #[cfg(feature = "direct-virtio")]
+        {
+            selected |= direct_device.is_some();
+        }
+        #[cfg(feature = "direct-genet")]
+        {
+            selected |= direct_genet_link.is_some();
+        }
+        selected
+    };
+    #[cfg(any(feature = "direct-virtio", feature = "direct-genet"))]
+    let mut direct_tx_waiting_for_peer = false;
 
     loop {
-        #[cfg(feature = "direct-virtio")]
-        let direct_transport = direct_device.is_some();
-        #[cfg(not(feature = "direct-virtio"))]
+        #[cfg(any(feature = "direct-virtio", feature = "direct-genet"))]
+        let direct_transport = {
+            let mut selected = false;
+            #[cfg(feature = "direct-virtio")]
+            {
+                selected |= direct_device.is_some();
+            }
+            #[cfg(feature = "direct-genet")]
+            {
+                selected |= direct_genet_link.is_some();
+            }
+            selected
+        };
+        #[cfg(not(any(feature = "direct-virtio", feature = "direct-genet")))]
         let direct_transport = false;
         let egress_publication_pending = !direct_transport && service.egress_pending();
         let readiness = ChildTurnReadiness::new(
@@ -206,9 +272,9 @@ pub unsafe extern "C" fn _start(descriptor: *const u8) -> ! {
                 ChildTurnUnit::PollService
                 | ChildTurnUnit::IngestPacket
                 | ChildTurnUnit::ApplyControl => true,
-                #[cfg(feature = "direct-virtio")]
+                #[cfg(any(feature = "direct-virtio", feature = "direct-genet"))]
                 ChildTurnUnit::Idle => direct_service_pending,
-                #[cfg(not(feature = "direct-virtio"))]
+                #[cfg(not(any(feature = "direct-virtio", feature = "direct-genet")))]
                 ChildTurnUnit::Idle => false,
             }
         } else {
@@ -237,6 +303,15 @@ pub unsafe extern "C" fn _start(descriptor: *const u8) -> ! {
                 enter_standard_fault();
             }
             direct_service_pending = true;
+            direct_tx_waiting_for_peer = false;
+        }
+        #[cfg(feature = "direct-genet")]
+        if badge & WAKE_DIRECT_GENET_LINK != 0 {
+            if direct_genet_link.is_none() {
+                enter_standard_fault();
+            }
+            direct_service_pending = true;
+            direct_tx_waiting_for_peer = false;
         }
 
         if badge & WAKE_PUBLICATION_ACK != 0 {
@@ -275,21 +350,25 @@ pub unsafe extern "C" fn _start(descriptor: *const u8) -> ! {
 
         let packet_wake = !direct_transport && badge & WAKE_PACKET_RX != 0;
         let control_wake = badge & WAKE_CONTROL != 0;
-        #[cfg(feature = "direct-virtio")]
+        #[cfg(any(feature = "direct-virtio", feature = "direct-genet"))]
         if direct_transport && control_wake {
             direct_service_pending = true;
         }
         turn_scheduler.retain_notification(packet_wake, control_wake);
+        #[cfg(any(feature = "direct-virtio", feature = "direct-genet"))]
         let mut unit = turn_scheduler.take_next(ChildTurnReadiness::new(
             !completions.is_empty(),
             service.service_event_pending(),
             !direct_transport && service.egress_pending(),
         ));
-        #[cfg(feature = "direct-virtio")]
+        #[cfg(not(any(feature = "direct-virtio", feature = "direct-genet")))]
+        let unit = turn_scheduler.take_next(ChildTurnReadiness::new(
+            !completions.is_empty(),
+            service.service_event_pending(),
+            !direct_transport && service.egress_pending(),
+        ));
+        #[cfg(any(feature = "direct-virtio", feature = "direct-genet"))]
         if direct_transport && direct_service_pending && unit == ChildTurnUnit::Idle {
-            let Some(device) = direct_device.as_mut() else {
-                enter_standard_fault();
-            };
             direct_service_pending = false;
             let mut quantum_units = 0usize;
             let mut cycle_progress = false;
@@ -297,20 +376,43 @@ pub unsafe extern "C" fn _start(descriptor: *const u8) -> ! {
                 && completions.is_empty()
                 && !service.service_event_pending()
             {
-                if let Err(error) = device.poll() {
-                    enter_direct_virtio_fault(error);
+                let mut tx_blocked_this_unit = false;
+                #[cfg(feature = "direct-virtio")]
+                if let Some(device) = direct_device.as_mut() {
+                    if let Err(error) = device.poll() {
+                        enter_direct_virtio_fault(error);
+                    }
+                }
+                #[cfg(feature = "direct-genet")]
+                if let Some(link) = direct_genet_link.as_mut() {
+                    if let Err(error) = link.poll() {
+                        enter_active_direct_genet_fault(link, error);
+                    }
+                    signal_direct_genet_peer_if_due(link);
                 }
                 if service.ingress_available() {
                     let mut ingress = [0u8; ETHERNET_FRAME_BYTES];
-                    match device.receive(&mut ingress) {
-                        Ok(Some(length)) => {
-                            if service.ingest_packet(&ingress[..length]).is_err() {
-                                enter_standard_fault();
-                            }
-                            cycle_progress = true;
+                    let mut ingress_length = None;
+                    #[cfg(feature = "direct-virtio")]
+                    if let Some(device) = direct_device.as_mut() {
+                        match device.receive(&mut ingress) {
+                            Ok(length) => ingress_length = length,
+                            Err(error) => enter_direct_virtio_fault(error),
                         }
-                        Ok(None) => {}
-                        Err(error) => enter_direct_virtio_fault(error),
+                    }
+                    #[cfg(feature = "direct-genet")]
+                    if let Some(link) = direct_genet_link.as_mut() {
+                        match link.receive(&mut ingress) {
+                            Ok(length) => ingress_length = length,
+                            Err(error) => enter_active_direct_genet_fault(link, error),
+                        }
+                        signal_direct_genet_peer_if_due(link);
+                    }
+                    if let Some(length) = ingress_length {
+                        if service.ingest_packet(&ingress[..length]).is_err() {
+                            enter_standard_fault();
+                        }
+                        cycle_progress = true;
                     }
                 }
 
@@ -319,20 +421,45 @@ pub unsafe extern "C" fn _start(descriptor: *const u8) -> ! {
                     Err(_) => enter_standard_fault(),
                 };
                 if service.egress_pending() {
-                    match device.can_transmit() {
-                        Ok(true) => {
-                            let mut egress = [0u8; ETHERNET_FRAME_BYTES];
-                            let length = match service.take_packet(&mut egress) {
-                                Ok(Some(length)) => length,
-                                Ok(None) | Err(_) => enter_standard_fault(),
-                            };
+                    let mut can_transmit = false;
+                    #[cfg(feature = "direct-virtio")]
+                    if let Some(device) = direct_device.as_mut() {
+                        match device.can_transmit() {
+                            Ok(ready) => can_transmit = ready,
+                            Err(error) => enter_direct_virtio_fault(error),
+                        }
+                    }
+                    #[cfg(feature = "direct-genet")]
+                    if let Some(link) = direct_genet_link.as_mut() {
+                        match link.can_transmit() {
+                            Ok(ready) => can_transmit = ready,
+                            Err(error) => enter_active_direct_genet_fault(link, error),
+                        }
+                    }
+                    if can_transmit {
+                        direct_tx_waiting_for_peer = false;
+                        let mut egress = [0u8; ETHERNET_FRAME_BYTES];
+                        let length = match service.take_packet(&mut egress) {
+                            Ok(Some(length)) => length,
+                            Ok(None) | Err(_) => enter_standard_fault(),
+                        };
+                        #[cfg(feature = "direct-virtio")]
+                        if let Some(device) = direct_device.as_mut() {
                             if let Err(error) = device.transmit(&egress[..length]) {
                                 enter_direct_virtio_fault(error);
                             }
-                            cycle_progress = true;
                         }
-                        Ok(false) => {}
-                        Err(error) => enter_direct_virtio_fault(error),
+                        #[cfg(feature = "direct-genet")]
+                        if let Some(link) = direct_genet_link.as_mut() {
+                            if let Err(error) = link.transmit(&egress[..length]) {
+                                enter_active_direct_genet_fault(link, error);
+                            }
+                            signal_direct_genet_peer_if_due(link);
+                        }
+                        cycle_progress = true;
+                    } else {
+                        direct_tx_waiting_for_peer = true;
+                        tx_blocked_this_unit = true;
                     }
                 }
                 quantum_units += 1;
@@ -362,15 +489,31 @@ pub unsafe extern "C" fn _start(descriptor: *const u8) -> ! {
                     }
                     cycle_progress = false;
                 }
+                if tx_blocked_this_unit {
+                    break;
+                }
             }
-            device.flush_notifications();
-            if quantum_units == DIRECT_SERVICE_QUANTUM_UNITS
-                || !completions.is_empty()
-                || service.service_event_pending()
-                || service.egress_pending()
-            {
-                direct_service_pending = true;
+            #[cfg(feature = "direct-virtio")]
+            if let Some(device) = direct_device.as_mut() {
+                device.flush_notifications();
             }
+            #[cfg(feature = "direct-genet")]
+            let direct_link_work_pending = if let Some(link) = direct_genet_link.as_mut() {
+                signal_direct_genet_peer_if_due(link);
+                link.actionable_work_pending(service.ingress_available())
+            } else {
+                false
+            };
+            #[cfg(not(feature = "direct-genet"))]
+            let direct_link_work_pending = false;
+            direct_service_pending |= direct_service_repoll_required(
+                quantum_units == DIRECT_SERVICE_QUANTUM_UNITS,
+                !completions.is_empty(),
+                service.service_event_pending(),
+                service.egress_pending(),
+                direct_tx_waiting_for_peer,
+                direct_link_work_pending,
+            );
             unit = turn_scheduler.take_next(ChildTurnReadiness::new(
                 !completions.is_empty(),
                 service.service_event_pending(),
@@ -525,7 +668,7 @@ pub unsafe extern "C" fn _start(descriptor: *const u8) -> ! {
                         if !direct_transport {
                             turn_scheduler.request_service();
                         } else {
-                            #[cfg(feature = "direct-virtio")]
+                            #[cfg(any(feature = "direct-virtio", feature = "direct-genet"))]
                             {
                                 direct_service_pending = true;
                             }
@@ -541,7 +684,7 @@ pub unsafe extern "C" fn _start(descriptor: *const u8) -> ! {
                         if !direct_transport {
                             turn_scheduler.request_service();
                         } else {
-                            #[cfg(feature = "direct-virtio")]
+                            #[cfg(any(feature = "direct-virtio", feature = "direct-genet"))]
                             {
                                 direct_service_pending = true;
                             }
@@ -553,6 +696,20 @@ pub unsafe extern "C" fn _start(descriptor: *const u8) -> ! {
             ChildTurnUnit::Idle => {}
         }
     }
+}
+
+#[cfg(feature = "direct-genet")]
+fn signal_direct_genet_peer_if_due(link: &mut DirectGenetLink) {
+    if let Some(slot) = link.take_peer_wake() {
+        signal_slot(slot);
+    }
+}
+
+#[cfg(feature = "direct-genet")]
+fn enter_active_direct_genet_fault(link: &mut DirectGenetLink, error: DirectGenetError) -> ! {
+    link.fail_closed(error);
+    signal_direct_genet_peer_if_due(link);
+    enter_direct_genet_fault(error)
 }
 
 #[cfg(feature = "direct-virtio")]
@@ -932,11 +1089,27 @@ fn enter_direct_virtio_fault(error: DirectVirtioError) -> ! {
     }
 }
 
-#[cfg(feature = "direct-virtio")]
+#[cfg(feature = "direct-genet")]
+fn enter_direct_genet_fault(error: DirectGenetError) -> ! {
+    match error {
+        DirectGenetError::InvalidIdentity => enter_direct_fault_code::<32>(),
+        DirectGenetError::InvalidLayout => enter_direct_fault_code::<33>(),
+        DirectGenetError::StaleGeneration => enter_direct_fault_code::<34>(),
+        DirectGenetError::InvalidCursor => enter_direct_fault_code::<35>(),
+        DirectGenetError::InvalidSequence => enter_direct_fault_code::<36>(),
+        DirectGenetError::InvalidBound => enter_direct_fault_code::<37>(),
+        DirectGenetError::Empty => enter_direct_fault_code::<38>(),
+        DirectGenetError::Backpressure => enter_direct_fault_code::<39>(),
+        DirectGenetError::StateChanged => enter_direct_fault_code::<40>(),
+        DirectGenetError::Poisoned(_) => enter_direct_fault_code::<41>(),
+    }
+}
+
+#[cfg(any(feature = "direct-virtio", feature = "direct-genet"))]
 #[cold]
 #[inline(never)]
 fn enter_direct_fault_code<const CODE: u16>() -> ! {
-    // SAFETY: The immediate is a typed, bounded VirtIO terminal-fault reason.
+    // SAFETY: The immediate is a typed, bounded direct-transport fault reason.
     // `brk` transfers control to the supervisor-installed standard fault
     // endpoint and performs no memory access.
     unsafe {

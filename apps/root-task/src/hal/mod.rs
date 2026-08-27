@@ -92,26 +92,28 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_DPC_EVENT_RING_DEPTH, DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET,
     DRIVER_RUNTIME_FRAMEBUFFER_VADDR, DRIVER_RUNTIME_GENET_IRQ, DRIVER_RUNTIME_GENET_IRQ_BADGE,
     DRIVER_RUNTIME_INIT_FLAG_BUS_ADDRESSING, DRIVER_RUNTIME_INIT_FLAG_BUS_LINKS,
-    DRIVER_RUNTIME_INIT_FLAG_DMA_PADDRS, DRIVER_RUNTIME_INIT_FLAG_FRAMEBUFFER,
-    DRIVER_RUNTIME_INIT_FLAG_IRQS_BOUND, DRIVER_RUNTIME_INIT_FLAG_MMIO_MAPPED,
-    DRIVER_RUNTIME_INIT_FLAG_POINTER_FREE, DRIVER_RUNTIME_INIT_FLAG_POLL_ONLY,
-    DRIVER_RUNTIME_INIT_FLAG_ROOT_CONTEXT_FORBIDDEN, DRIVER_RUNTIME_INIT_FLAG_SHARED_PADDRS,
-    DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT, DRIVER_RUNTIME_RESERVED_ROOT_BADGE,
+    DRIVER_RUNTIME_INIT_FLAG_DIRECT_GENET, DRIVER_RUNTIME_INIT_FLAG_DMA_PADDRS,
+    DRIVER_RUNTIME_INIT_FLAG_FRAMEBUFFER, DRIVER_RUNTIME_INIT_FLAG_IRQS_BOUND,
+    DRIVER_RUNTIME_INIT_FLAG_MMIO_MAPPED, DRIVER_RUNTIME_INIT_FLAG_POINTER_FREE,
+    DRIVER_RUNTIME_INIT_FLAG_POLL_ONLY, DRIVER_RUNTIME_INIT_FLAG_ROOT_CONTEXT_FORBIDDEN,
+    DRIVER_RUNTIME_INIT_FLAG_SHARED_PADDRS, DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT,
+    DRIVER_RUNTIME_RESERVED_ROOT_BADGE, DRIVER_RUNTIME_RESOURCE_FLAG_CPU_ONLY,
     DRIVER_RUNTIME_RESOURCE_FLAG_DEVICE_VISIBLE, DRIVER_RUNTIME_RESOURCE_FLAG_PADDR_CONTIGUOUS,
     DRIVER_RUNTIME_RESOURCE_FLAG_ROOT_SHARED, DRIVER_RUNTIME_RESOURCE_FLAG_VADDR_CONTIGUOUS,
     DRIVER_RUNTIME_RESOURCE_KIND_DMA, DRIVER_RUNTIME_RESOURCE_KIND_FRAMEBUFFER,
     DRIVER_RUNTIME_RESOURCE_KIND_MMIO, DRIVER_RUNTIME_RESOURCE_KIND_SHARED,
     DRIVER_RUNTIME_RESOURCE_PAGE_BYTES, DRIVER_RUNTIME_RESOURCE_TAG_BCM2835_DMA,
     DRIVER_RUNTIME_RESOURCE_TAG_CYW43_CONTROL, DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA,
-    DRIVER_RUNTIME_RESOURCE_TAG_GENET_REGS, DRIVER_RUNTIME_RESOURCE_TAG_HDMI_FRAMEBUFFER,
-    DRIVER_RUNTIME_RESOURCE_TAG_HDMI_REGS, DRIVER_RUNTIME_RESOURCE_TAG_PCIE_HOST,
-    DRIVER_RUNTIME_RESOURCE_TAG_SDIO_HOST, DRIVER_RUNTIME_RESOURCE_TAG_SERIAL_MINI_UART,
-    DRIVER_RUNTIME_RESOURCE_TAG_SHARED_CONTROL, DRIVER_RUNTIME_RESOURCE_TAG_USB_XHCI,
-    DRIVER_RUNTIME_RESOURCE_TAG_WIFI_PWRSEQ, DRIVER_RUNTIME_RESOURCE_TAG_WIFI_PWRSEQ_REQUEST,
-    DRIVER_RUNTIME_SDIO_DMA_IRQ, DRIVER_RUNTIME_SDIO_DMA_IRQ_BADGE, DRIVER_RUNTIME_SDIO_IRQ,
-    DRIVER_RUNTIME_SDIO_IRQ_BADGE, DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_PAGES,
-    DRIVER_RUNTIME_SERIAL_IRQ, DRIVER_RUNTIME_SERIAL_IRQ_BADGE,
-    DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE, DRIVER_TASK_CHILD_SDIO_DMA_IRQ_HANDLER_SLOT,
+    DRIVER_RUNTIME_RESOURCE_TAG_GENET_DIRECT_LINK, DRIVER_RUNTIME_RESOURCE_TAG_GENET_REGS,
+    DRIVER_RUNTIME_RESOURCE_TAG_HDMI_FRAMEBUFFER, DRIVER_RUNTIME_RESOURCE_TAG_HDMI_REGS,
+    DRIVER_RUNTIME_RESOURCE_TAG_PCIE_HOST, DRIVER_RUNTIME_RESOURCE_TAG_SDIO_HOST,
+    DRIVER_RUNTIME_RESOURCE_TAG_SERIAL_MINI_UART, DRIVER_RUNTIME_RESOURCE_TAG_SHARED_CONTROL,
+    DRIVER_RUNTIME_RESOURCE_TAG_USB_XHCI, DRIVER_RUNTIME_RESOURCE_TAG_WIFI_PWRSEQ,
+    DRIVER_RUNTIME_RESOURCE_TAG_WIFI_PWRSEQ_REQUEST, DRIVER_RUNTIME_SDIO_DMA_IRQ,
+    DRIVER_RUNTIME_SDIO_DMA_IRQ_BADGE, DRIVER_RUNTIME_SDIO_IRQ, DRIVER_RUNTIME_SDIO_IRQ_BADGE,
+    DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_PAGES, DRIVER_RUNTIME_SERIAL_IRQ,
+    DRIVER_RUNTIME_SERIAL_IRQ_BADGE, DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE,
+    DRIVER_TASK_CHILD_SDIO_DMA_IRQ_HANDLER_SLOT,
 };
 #[cfg(feature = "kernel")]
 use sel4_sys::{seL4_ARM_VMAttributes, seL4_CPtr, seL4_Error, seL4_NoError, seL4_Word};
@@ -1622,7 +1624,7 @@ struct InstalledChildCap {
 }
 
 #[cfg(feature = "kernel")]
-struct ReciprocalLinkCapGuard {
+pub(crate) struct ReciprocalLinkCapGuard {
     caps: [Option<InstalledChildCap>; 2],
 }
 
@@ -2324,6 +2326,9 @@ impl RuntimeInitDescriptorBuilder {
                     generated_cyw43_sdio_bus_link_descriptor(spec.hot_path, topology)?;
                 descriptor.flags |= DRIVER_RUNTIME_INIT_FLAG_BUS_LINKS;
             }
+            driver_task::DriverTaskHotPath::GenetNic => {
+                descriptor = descriptor.with_direct_genet();
+            }
             _ => {}
         }
         Ok(Self {
@@ -2380,7 +2385,13 @@ impl RuntimeInitDescriptorBuilder {
     fn add_shared_page(&mut self, paddr: usize) -> Result<(), HalError> {
         let index = usize::from(self.descriptor.shared_page_count);
         if let Some(slot) = self.descriptor.shared_pages.get_mut(index) {
-            *slot = DriverRuntimePageDescriptor::new(paddr);
+            let descriptor_paddr =
+                if self.descriptor.flags & DRIVER_RUNTIME_INIT_FLAG_DIRECT_GENET != 0 {
+                    0
+                } else {
+                    paddr
+                };
+            *slot = DriverRuntimePageDescriptor::new(descriptor_paddr);
             self.descriptor.shared_page_count = self.descriptor.shared_page_count.saturating_add(1);
         }
         self.descriptor.flags |= DRIVER_RUNTIME_INIT_FLAG_SHARED_PADDRS;
@@ -2485,6 +2496,25 @@ impl RuntimeInitDescriptorBuilder {
         let page_count = u16::try_from(pages)
             .map_err(|_| HalError::Unsupported("driver-runtime-init-buffer-range-pages"))?;
         let (tag, flags) = match kind {
+            DRIVER_RUNTIME_RESOURCE_KIND_SHARED
+                if hot_path == driver_task::DriverTaskHotPath::GenetNic =>
+            {
+                if pages
+                    != usize::from(pi4_driver_abi::DRIVER_RUNTIME_DIRECT_GENET_SHARED_PAGE_COUNT)
+                    || first_page_index != 0
+                    || vaddr != driver_task::DRIVER_TASK_SHARED_BUFFER_VADDR
+                {
+                    return Err(HalError::Unsupported(
+                        "driver-runtime-init-direct-genet-range",
+                    ));
+                }
+                (
+                    DRIVER_RUNTIME_RESOURCE_TAG_GENET_DIRECT_LINK,
+                    DRIVER_RUNTIME_RESOURCE_FLAG_VADDR_CONTIGUOUS
+                        | DRIVER_RUNTIME_RESOURCE_FLAG_ROOT_SHARED
+                        | DRIVER_RUNTIME_RESOURCE_FLAG_CPU_ONLY,
+                )
+            }
             DRIVER_RUNTIME_RESOURCE_KIND_SHARED => (
                 if hot_path == driver_task::DriverTaskHotPath::Cyw43Wifi {
                     DRIVER_RUNTIME_RESOURCE_TAG_CYW43_CONTROL
@@ -2497,12 +2527,17 @@ impl RuntimeInitDescriptorBuilder {
             ),
             _ => return Err(HalError::Unsupported("driver-runtime-init-buffer-kind")),
         };
+        let range_paddr = if hot_path == driver_task::DriverTaskHotPath::GenetNic {
+            0
+        } else {
+            first_paddr as u64
+        };
         self.add_resource_range(DriverRuntimeResourceRangeDescriptor::new(
             kind,
             flags,
             tag,
             vaddr as u64,
-            first_paddr as u64,
+            range_paddr,
             (pages as u64).saturating_mul(DRIVER_RUNTIME_RESOURCE_PAGE_BYTES),
             page_count,
             first_page_index,
@@ -4411,6 +4446,183 @@ impl<'a> KernelHal<'a> {
         driver_task::driver_task_runtime_proof()
     }
 
+    /// Install the two send-only capabilities for the exact Pi GENET direct link.
+    ///
+    /// The existing GENET notification remains the sole child-bound IRQ/work
+    /// receive object; the console child gets only a badged signal cap. The
+    /// GENET child receives the reciprocal badged signal cap to the console
+    /// child's existing wake notification. No root packet authority is added.
+    #[cfg(feature = "net-backend-genet-direct")]
+    pub(crate) fn install_direct_genet_peer_notifications(
+        &mut self,
+        console_child_cnode: seL4_CPtr,
+        console_root_to_child_notification: seL4_CPtr,
+        enabled: bool,
+    ) -> Result<ReciprocalLinkCapGuard, HalError> {
+        if !enabled {
+            return Ok(ReciprocalLinkCapGuard::empty());
+        }
+        let owner = self
+            .driver_tasks
+            .iter()
+            .find(|handle| handle.contract == GENET_DRIVER_TASK_CONTRACT)
+            .copied()
+            .ok_or(HalError::Unsupported(
+                "console-network-direct-genet-owner-missing",
+            ))?;
+        if !owner.started
+            || !owner.vspace_isolated
+            || owner.notification == sel4_sys::seL4_CapNull
+            || owner.cnode == sel4_sys::seL4_CapNull
+            || console_child_cnode == sel4_sys::seL4_CapNull
+            || console_root_to_child_notification == sel4_sys::seL4_CapNull
+            || owner.reciprocal_link_caps.iter().any(Option::is_some)
+        {
+            return Err(HalError::Unsupported(
+                "console-network-direct-genet-owner-state",
+            ));
+        }
+        let root_cnode = self.env.init_cnode_cap();
+        let root_depth = sel4::word_bits() as u8;
+        let child_depth = driver_task::DRIVER_TASK_CHILD_CNODE_RADIX_BITS;
+        let send_only = sel4_sys::seL4_CapRights::new(0, 0, 0, 1);
+        let mut installed = ReciprocalLinkCapGuard::empty();
+
+        let console_peer_slot =
+            seL4_CPtr::from(console_network_abi::DIRECT_GENET_PEER_WAKE_NOTIFICATION_SLOT);
+        let console_to_genet = sel4::cnode_mint_depth(
+            console_child_cnode,
+            console_peer_slot,
+            child_depth,
+            root_cnode,
+            owner.notification,
+            root_depth,
+            send_only,
+            seL4_Word::from(pi4_driver_abi::DRIVER_RUNTIME_DIRECT_GENET_NOTIFICATION_BADGE),
+        );
+        if console_to_genet != seL4_NoError {
+            return Err(HalError::Sel4(console_to_genet));
+        }
+        installed.push(InstalledChildCap {
+            cnode: console_child_cnode,
+            slot: console_peer_slot,
+            depth: child_depth,
+        })?;
+
+        let genet_peer_slot =
+            seL4_CPtr::from(pi4_driver_abi::DRIVER_RUNTIME_DIRECT_GENET_PEER_NOTIFICATION_SLOT);
+        let genet_to_console = sel4::cnode_mint_depth(
+            owner.cnode,
+            genet_peer_slot,
+            child_depth,
+            root_cnode,
+            console_root_to_child_notification,
+            root_depth,
+            send_only,
+            seL4_Word::from(console_network_abi::WAKE_DIRECT_GENET_LINK),
+        );
+        if genet_to_console != seL4_NoError {
+            return Err(HalError::Sel4(genet_to_console));
+        }
+        installed.push(InstalledChildCap {
+            cnode: owner.cnode,
+            slot: genet_peer_slot,
+            depth: child_depth,
+        })?;
+
+        Ok(installed)
+    }
+
+    /// Commit reciprocal peer-cap metadata only after the complete console
+    /// generation has crossed every later fallible construction boundary.
+    #[cfg(feature = "net-backend-genet-direct")]
+    pub(crate) fn commit_direct_genet_peer_notifications(
+        &mut self,
+        installed: ReciprocalLinkCapGuard,
+    ) -> Result<(), HalError> {
+        let owner = self
+            .driver_tasks
+            .iter_mut()
+            .find(|handle| handle.contract == GENET_DRIVER_TASK_CONTRACT)
+            .ok_or(HalError::Unsupported(
+                "console-network-direct-genet-owner-missing",
+            ))?;
+        if owner.reciprocal_link_caps.iter().any(Option::is_some) {
+            return Err(HalError::Unsupported(
+                "console-network-direct-genet-owner-state",
+            ));
+        }
+        owner.reciprocal_link_caps = installed.commit();
+        Ok(())
+    }
+
+    /// Fence the coupled direct-GENET generation before console teardown.
+    ///
+    /// Suspending the sole MMIO/DMA/IRQ owner precedes deletion of either
+    /// cross-child signal cap. Only after both caps are gone is the root-side
+    /// handoff token permanently fenced. The GENET child is not resumed and
+    /// root packet mediation is never reinstated as a recovery fallback.
+    #[cfg(feature = "net-backend-genet-direct")]
+    pub(crate) fn fence_direct_genet_peer(&mut self) -> Result<(), HalError> {
+        let owner = self
+            .driver_tasks
+            .iter_mut()
+            .find(|handle| handle.contract == GENET_DRIVER_TASK_CONTRACT)
+            .ok_or(HalError::Unsupported(
+                "console-network-direct-genet-owner-missing",
+            ))?;
+        if !owner.started || owner.tcb == sel4_sys::seL4_CapNull {
+            return Err(HalError::Unsupported(
+                "console-network-direct-genet-owner-state",
+            ));
+        }
+        sel4::suspend_tcb(owner.tcb).map_err(HalError::Sel4)?;
+        for installed in &mut owner.reciprocal_link_caps {
+            let Some(cap) = *installed else {
+                continue;
+            };
+            let error = sel4::cnode_delete(cap.cnode, cap.slot, cap.depth);
+            if error != sel4_sys::seL4_NoError {
+                return Err(HalError::Sel4(error));
+            }
+            *installed = None;
+        }
+        if owner.reciprocal_link_caps.iter().any(Option::is_some) {
+            return Err(HalError::Unsupported(
+                "console-network-direct-genet-peer-cap-retained",
+            ));
+        }
+        crate::drivers::driver_task_net::fence_genet_direct_link();
+        Ok(())
+    }
+
+    /// Non-direct profiles install no cross-child GENET capabilities.
+    #[cfg(not(feature = "net-backend-genet-direct"))]
+    pub(crate) fn install_direct_genet_peer_notifications(
+        &mut self,
+        _console_child_cnode: seL4_CPtr,
+        _console_root_to_child_notification: seL4_CPtr,
+        _enabled: bool,
+    ) -> Result<ReciprocalLinkCapGuard, HalError> {
+        Ok(ReciprocalLinkCapGuard::empty())
+    }
+
+    #[cfg(not(feature = "net-backend-genet-direct"))]
+    pub(crate) fn commit_direct_genet_peer_notifications(
+        &mut self,
+        _installed: ReciprocalLinkCapGuard,
+    ) -> Result<(), HalError> {
+        Ok(())
+    }
+
+    /// Non-direct profiles have no paired GENET generation to fence.
+    #[cfg(not(feature = "net-backend-genet-direct"))]
+    pub(crate) fn fence_direct_genet_peer(&mut self) -> Result<(), HalError> {
+        Err(HalError::Unsupported(
+            "console-network-direct-genet-disabled",
+        ))
+    }
+
     fn create_driver_task(
         &mut self,
         contract: DriverTaskContract,
@@ -5009,15 +5221,20 @@ impl<'a> KernelHal<'a> {
         hot_path: driver_task::DriverTaskHotPath,
         dma_owned: bool,
     ) -> sel4_sys::seL4_ARM_VMAttributes {
-        // The serial transport is CPU-to-CPU shared memory and its SPSC
+        // Serial and GENET shared pages are CPU-to-CPU SPSC memory whose
         // cursors use AArch64 atomic acquire/release operations. The selected
         // seL4 AArch64 kernel maps Page_Uncached as Device-nGnRnE, where Rust
         // atomics/exclusive accesses are not an admissible synchronization
-        // primitive. Give only the serial shared pages coherent Normal-memory
-        // aliases with identical cacheability in root and child. Physical DMA
-        // and every other shared driver payload retain the existing uncached
-        // mapping and explicit device/cache boundary.
-        if !dma_owned && hot_path == driver_task::DriverTaskHotPath::SerialConsole {
+        // primitive. Give exactly these CPU-only pages coherent Normal-memory
+        // aliases in every participant. GENET MMIO/DMA pages and every other
+        // shared driver payload retain the uncached device boundary.
+        if !dma_owned
+            && matches!(
+                hot_path,
+                driver_task::DriverTaskHotPath::SerialConsole
+                    | driver_task::DriverTaskHotPath::GenetNic
+            )
+        {
             runtime_cacheable_xn_attributes()
         } else {
             runtime_uncached_xn_attributes()
@@ -5043,8 +5260,9 @@ impl<'a> KernelHal<'a> {
         }
         let rights = sel4_sys::seL4_CapRights_ReadWrite;
         // DMA and device-facing payloads cross boundaries without runtime-side
-        // EL0 cache maintenance. The one CPU-only serial SPSC exception uses
-        // coherent Normal memory so its atomic cursor protocol is valid.
+        // EL0 cache maintenance. The CPU-only serial SPSC and direct GENET
+        // regions use coherent Normal memory so their atomic cursor protocols
+        // are valid; neither exception grants device DMA authority.
         let attr = Self::runtime_ram_region_attr(hot_path, dma_owned);
         let page_bytes = 1usize << sel4::PAGE_BITS;
         let first_page_index = init_descriptor
@@ -6720,7 +6938,7 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn runtime_ram_region_attr_uses_normal_memory_only_for_cpu_serial_spsc() {
+    fn runtime_ram_region_attr_uses_normal_memory_only_for_cpu_spsc_links() {
         assert_eq!(
             super::KernelHal::runtime_ram_region_attr(
                 super::driver_task::DriverTaskHotPath::SerialConsole,
@@ -6741,6 +6959,13 @@ mod tests {
                 false,
             ),
             super::runtime_uncached_xn_attributes()
+        );
+        assert_eq!(
+            super::KernelHal::runtime_ram_region_attr(
+                super::driver_task::DriverTaskHotPath::GenetNic,
+                false,
+            ),
+            super::runtime_cacheable_xn_attributes()
         );
         assert_eq!(
             super::KernelHal::runtime_ram_region_attr(
@@ -6855,24 +7080,22 @@ mod tests {
     #[cfg(feature = "kernel")]
     #[test]
     fn runtime_init_descriptor_builder_records_primitive_page_metadata() {
-        let hot_path = super::driver_task::DriverTaskHotPath::GenetNic;
+        let hot_path = super::driver_task::DriverTaskHotPath::SerialConsole;
         let spec = super::driver_task::DriverTaskRuntimeImageSpec::new(
             hot_path, 1, 1, 1, 1, 1, true, false,
         );
         let mut builder =
-            runtime_init_test_builder(spec, super::driver_task::DRIVER_TASK_ROLE_NET_BIT).unwrap();
+            runtime_init_test_builder(spec, super::driver_task::DRIVER_TASK_ROLE_SERIAL_BIT)
+                .unwrap();
         builder.add_mmio_page(0xFD58_0000).unwrap();
         builder.add_dma_page(0x4000_0000).unwrap();
         builder.add_shared_page(0x5000_0000).unwrap();
 
         let descriptor = builder.finish().unwrap();
-        assert_eq!(
-            descriptor.hot_path,
-            super::driver_task::DriverTaskHotPath::GenetNic.as_u32()
-        );
+        assert_eq!(descriptor.hot_path, hot_path.as_u32());
         assert_eq!(
             descriptor.role_bit as usize,
-            super::driver_task::DRIVER_TASK_ROLE_NET_BIT
+            super::driver_task::DRIVER_TASK_ROLE_SERIAL_BIT
         );
         assert_eq!(descriptor.mmio_page_count, 1);
         assert_eq!(descriptor.dma_page_count, 1);
@@ -7300,6 +7523,29 @@ mod tests {
             descriptor.resource_pages_by_kind(pi4_driver_abi::DRIVER_RUNTIME_RESOURCE_KIND_SHARED),
             32
         );
+        assert_ne!(
+            descriptor.flags & pi4_driver_abi::DRIVER_RUNTIME_INIT_FLAG_DIRECT_GENET,
+            0
+        );
+        assert!(descriptor.direct_genet.valid());
+        assert!(
+            descriptor.shared_pages[..usize::from(descriptor.shared_page_count)]
+                .iter()
+                .all(|page| page.paddr == 0)
+        );
+        let direct = descriptor.resource_ranges[..usize::from(descriptor.resource_range_count)]
+            .iter()
+            .find(|range| {
+                range.tag == pi4_driver_abi::DRIVER_RUNTIME_RESOURCE_TAG_GENET_DIRECT_LINK
+            })
+            .expect("direct GENET CPU-only range");
+        assert_eq!(direct.paddr, 0);
+        assert_eq!(
+            direct.flags,
+            pi4_driver_abi::DRIVER_RUNTIME_RESOURCE_FLAG_VADDR_CONTIGUOUS
+                | pi4_driver_abi::DRIVER_RUNTIME_RESOURCE_FLAG_ROOT_SHARED
+                | pi4_driver_abi::DRIVER_RUNTIME_RESOURCE_FLAG_CPU_ONLY
+        );
         assert!(descriptor.valid_for_resources(
             super::driver_task::DriverTaskHotPath::GenetNic.as_u32(),
             super::driver_task::DRIVER_TASK_ROLE_NET_BIT as u32,
@@ -7307,6 +7553,46 @@ mod tests {
             512,
             32,
         ));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn runtime_init_descriptor_builder_rejects_non_exact_direct_genet_range() {
+        let hot_path = super::driver_task::DriverTaskHotPath::GenetNic;
+        let spec = super::driver_task::DriverTaskRuntimeImageSpec::new(
+            hot_path, 64, 16, 6, 512, 32, true, false,
+        );
+        let mut builder =
+            runtime_init_test_builder(spec, super::driver_task::DRIVER_TASK_ROLE_NET_BIT).unwrap();
+
+        assert_eq!(
+            builder
+                .add_buffer_resource_range(
+                    hot_path,
+                    pi4_driver_abi::DRIVER_RUNTIME_RESOURCE_KIND_SHARED,
+                    super::driver_task::DRIVER_TASK_SHARED_BUFFER_VADDR,
+                    0x5000_0000,
+                    31,
+                    0,
+                    true,
+                )
+                .unwrap_err(),
+            super::HalError::Unsupported("driver-runtime-init-direct-genet-range")
+        );
+        assert_eq!(
+            builder
+                .add_buffer_resource_range(
+                    hot_path,
+                    pi4_driver_abi::DRIVER_RUNTIME_RESOURCE_KIND_SHARED,
+                    super::driver_task::DRIVER_TASK_SHARED_BUFFER_VADDR + 0x1000,
+                    0x5000_0000,
+                    32,
+                    0,
+                    true,
+                )
+                .unwrap_err(),
+            super::HalError::Unsupported("driver-runtime-init-direct-genet-range")
+        );
     }
 
     #[cfg(feature = "kernel")]

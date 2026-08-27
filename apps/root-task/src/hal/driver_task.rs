@@ -4643,6 +4643,12 @@ struct DriverTaskCommandSlot {
     shared_frame_count: AtomicUsize,
     shared_frame_caps: [AtomicUsize; DRIVER_TASK_SHARED_FRAME_TRACKING_CAPACITY],
     shared_frame_root_ptrs: [AtomicUsize; DRIVER_TASK_SHARED_FRAME_TRACKING_CAPACITY],
+    direct_genet_shared_frame_count: AtomicUsize,
+    direct_genet_shared_frame_invalid: AtomicU32,
+    direct_genet_shared_frame_caps:
+        [AtomicUsize; console_network_abi::DIRECT_GENET_SHARED_PAGE_COUNT],
+    direct_genet_shared_frame_root_ptrs:
+        [AtomicUsize; console_network_abi::DIRECT_GENET_SHARED_PAGE_COUNT],
     request_seq: AtomicUsize,
     active: AtomicUsize,
     ring_producer: AtomicUsize,
@@ -5368,6 +5374,12 @@ impl DriverTaskCommandSlot {
                 DRIVER_TASK_SHARED_FRAME_TRACKING_CAPACITY],
             shared_frame_root_ptrs: [const { AtomicUsize::new(0) };
                 DRIVER_TASK_SHARED_FRAME_TRACKING_CAPACITY],
+            direct_genet_shared_frame_count: AtomicUsize::new(0),
+            direct_genet_shared_frame_invalid: AtomicU32::new(0),
+            direct_genet_shared_frame_caps: [const { AtomicUsize::new(0) };
+                console_network_abi::DIRECT_GENET_SHARED_PAGE_COUNT],
+            direct_genet_shared_frame_root_ptrs: [const { AtomicUsize::new(0) };
+                console_network_abi::DIRECT_GENET_SHARED_PAGE_COUNT],
             request_seq: AtomicUsize::new(0),
             active: AtomicUsize::new(0),
             ring_producer: AtomicUsize::new(SDIO_RING_PRODUCER_ROOT_BOOTSTRAP),
@@ -9352,6 +9364,9 @@ pub fn root_driver_supervisor_contain_fault(
     }
     slot.mcs_call_phase
         .store(DRIVER_TASK_MCS_CALL_REVOKED, Ordering::Release);
+    if contract == GENET_DRIVER_TASK_CONTRACT {
+        let _ = crate::drivers::driver_task_net::publish_genet_direct_pair_fault();
+    }
     complete_driver_supervisor_fault_diagnostic();
     Ok(())
 }
@@ -9836,15 +9851,32 @@ pub fn publish_driver_task_shared_frame(
     shared_frame_cap: usize,
     shared_frame_root_ptr: usize,
 ) {
-    if page_index >= DRIVER_TASK_SHARED_FRAME_TRACKING_CAPACITY {
-        return;
-    }
     let Some(task_key) = driver_task_contract_key(contract) else {
         return;
     };
     let Some(slot) = slot_for_task_key(task_key) else {
         return;
     };
+    if contract == GENET_DRIVER_TASK_CONTRACT {
+        if page_index >= console_network_abi::DIRECT_GENET_SHARED_PAGE_COUNT {
+            slot.direct_genet_shared_frame_invalid
+                .store(1, Ordering::Release);
+        } else {
+            slot.direct_genet_shared_frame_caps[page_index]
+                .store(shared_frame_cap, Ordering::Release);
+            slot.direct_genet_shared_frame_root_ptrs[page_index]
+                .store(shared_frame_root_ptr, Ordering::Release);
+            let required_count = page_index.saturating_add(1);
+            let current = slot.direct_genet_shared_frame_count.load(Ordering::Acquire);
+            if required_count > current {
+                slot.direct_genet_shared_frame_count
+                    .store(required_count, Ordering::Release);
+            }
+        }
+    }
+    if page_index >= DRIVER_TASK_SHARED_FRAME_TRACKING_CAPACITY {
+        return;
+    }
     slot.shared_frame_caps[page_index].store(shared_frame_cap, Ordering::Release);
     slot.shared_frame_root_ptrs[page_index].store(shared_frame_root_ptr, Ordering::Release);
     let required_count = page_index.saturating_add(1);
@@ -9853,6 +9885,55 @@ pub fn publish_driver_task_shared_frame(
         slot.shared_frame_count
             .store(required_count, Ordering::Release);
     }
+}
+
+/// Exact CPU-only GENET shared-page population eligible for post-DHCP reuse.
+///
+/// These caps and root aliases remain owned by the isolated GENET runtime.
+/// Callers may create bounded mapping-cap descendants for the paired
+/// console-network child, but may not expose the pages to DMA or another
+/// physical issuer.
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DriverTaskDirectGenetSharedPages {
+    /// Root CSpace frame caps in exact shared-page order.
+    pub caps: [usize; console_network_abi::DIRECT_GENET_SHARED_PAGE_COUNT],
+    /// Stable root aliases in exact shared-page order.
+    pub root_ptrs: [usize; console_network_abi::DIRECT_GENET_SHARED_PAGE_COUNT],
+}
+
+/// Snapshot the complete, exact GENET shared-page population.
+///
+/// Partial publication, extra pages, null caps, null aliases, or unaligned
+/// aliases fail closed. The caller must not infer a smaller compatible ring.
+#[cfg(feature = "kernel")]
+#[must_use]
+pub fn driver_task_direct_genet_shared_pages() -> Option<DriverTaskDirectGenetSharedPages> {
+    let task_key = driver_task_contract_key(GENET_DRIVER_TASK_CONTRACT)?;
+    let slot = slot_for_task_key(task_key)?;
+    if slot
+        .direct_genet_shared_frame_invalid
+        .load(Ordering::Acquire)
+        != 0
+        || slot.direct_genet_shared_frame_count.load(Ordering::Acquire)
+            != console_network_abi::DIRECT_GENET_SHARED_PAGE_COUNT
+    {
+        return None;
+    }
+    let mut caps = [0usize; console_network_abi::DIRECT_GENET_SHARED_PAGE_COUNT];
+    let mut root_ptrs = [0usize; console_network_abi::DIRECT_GENET_SHARED_PAGE_COUNT];
+    let mut index = 0usize;
+    while index < console_network_abi::DIRECT_GENET_SHARED_PAGE_COUNT {
+        let cap = slot.direct_genet_shared_frame_caps[index].load(Ordering::Acquire);
+        let root_ptr = slot.direct_genet_shared_frame_root_ptrs[index].load(Ordering::Acquire);
+        if cap == 0 || root_ptr == 0 || !root_ptr.is_multiple_of(1usize << crate::sel4::PAGE_BITS) {
+            return None;
+        }
+        caps[index] = cap;
+        root_ptrs[index] = root_ptr;
+        index += 1;
+    }
+    Some(DriverTaskDirectGenetSharedPages { caps, root_ptrs })
 }
 
 /// Result of one nonblocking serial SPSC producer or consumer turn.
@@ -12087,6 +12168,16 @@ pub fn clear_driver_task_transport(contract: DriverTaskContract) {
     while index < DRIVER_TASK_SHARED_FRAME_TRACKING_CAPACITY {
         slot.shared_frame_caps[index].store(0, Ordering::Release);
         slot.shared_frame_root_ptrs[index].store(0, Ordering::Release);
+        index = index.saturating_add(1);
+    }
+    slot.direct_genet_shared_frame_count
+        .store(0, Ordering::Release);
+    slot.direct_genet_shared_frame_invalid
+        .store(0, Ordering::Release);
+    index = 0;
+    while index < console_network_abi::DIRECT_GENET_SHARED_PAGE_COUNT {
+        slot.direct_genet_shared_frame_caps[index].store(0, Ordering::Release);
+        slot.direct_genet_shared_frame_root_ptrs[index].store(0, Ordering::Release);
         index = index.saturating_add(1);
     }
     slot.tcb.store(0, Ordering::Release);
@@ -35198,6 +35289,80 @@ mod tests {
         let last = DRIVER_TASK_SHARED_FRAME_TRACKING_CAPACITY - 1;
         assert_eq!(slot.shared_frame_caps[last].load(Ordering::Acquire), 0);
         assert_eq!(slot.shared_frame_root_ptrs[last].load(Ordering::Acquire), 0);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn direct_genet_shared_registry_requires_exact_thirty_two_cpu_pages() {
+        let contract = GENET_DRIVER_TASK_CONTRACT;
+        let page_bytes = DRIVER_TASK_RING_PAGE_BYTES;
+        clear_driver_task_transport(contract);
+
+        for index in 0..console_network_abi::DIRECT_GENET_SHARED_PAGE_COUNT - 1 {
+            publish_driver_task_shared_frame(
+                contract,
+                index,
+                0x3000 + index * page_bytes,
+                0x5000_0000 + index * page_bytes,
+            );
+        }
+        assert!(driver_task_direct_genet_shared_pages().is_none());
+        let last = console_network_abi::DIRECT_GENET_SHARED_PAGE_COUNT - 1;
+        publish_driver_task_shared_frame(
+            contract,
+            last,
+            0x3000 + last * page_bytes,
+            0x5000_0000 + last * page_bytes,
+        );
+        let exact = driver_task_direct_genet_shared_pages().expect("exact direct GENET pages");
+        assert_eq!(exact.caps[0], 0x3000);
+        assert_eq!(exact.caps[last], 0x3000 + last * page_bytes);
+        assert_eq!(exact.root_ptrs[0], 0x5000_0000);
+        assert_eq!(exact.root_ptrs[last], 0x5000_0000 + last * page_bytes);
+
+        let task_key = driver_task_contract_key(contract).expect("GENET task key");
+        let slot = slot_for_task_key(task_key).expect("GENET slot");
+        assert_eq!(
+            slot.shared_frame_count.load(Ordering::Acquire),
+            DRIVER_TASK_SHARED_FRAME_TRACKING_CAPACITY,
+            "the generic descriptor inventory remains capped independently"
+        );
+
+        publish_driver_task_shared_frame(
+            contract,
+            console_network_abi::DIRECT_GENET_SHARED_PAGE_COUNT,
+            0xdead,
+            0x6000_0000,
+        );
+        assert!(driver_task_direct_genet_shared_pages().is_none());
+
+        clear_driver_task_transport(contract);
+        for index in 0..console_network_abi::DIRECT_GENET_SHARED_PAGE_COUNT {
+            publish_driver_task_shared_frame(
+                contract,
+                index,
+                if index == 7 {
+                    0
+                } else {
+                    0x7000 + index * page_bytes
+                },
+                0x6000_0000 + index * page_bytes,
+            );
+        }
+        assert!(driver_task_direct_genet_shared_pages().is_none());
+
+        clear_driver_task_transport(contract);
+        for index in 0..console_network_abi::DIRECT_GENET_SHARED_PAGE_COUNT {
+            publish_driver_task_shared_frame(
+                contract,
+                index,
+                0x9000 + index * page_bytes,
+                0x7000_0000 + index * page_bytes + usize::from(index == 11),
+            );
+        }
+        assert!(driver_task_direct_genet_shared_pages().is_none());
+        clear_driver_task_transport(contract);
+        assert!(driver_task_direct_genet_shared_pages().is_none());
     }
 
     #[cfg(feature = "kernel")]

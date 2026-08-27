@@ -3,7 +3,7 @@
 // Purpose: Construct and contain the generated isolated console-network child.
 // Author: Lukas Bower
 
-//! HAL-owned construction for `console-network-service/v4`.
+//! HAL-owned construction for `console-network-service/v5`.
 //!
 //! Every child object and translation table is retyped below one retained
 //! compiler-selected revoke anchor. The root keeps only copied packet/control
@@ -14,13 +14,26 @@
 use core::ptr::{read_volatile, write_volatile};
 use core::sync::atomic::{fence, Ordering};
 
+#[cfg(any(feature = "net-backend-virtio", test))]
+use console_network_abi::WAKE_DIRECT_VIRTIO_IRQ;
 use console_network_abi::{
-    DirectVirtioLayout, CHILD_WAKE_MASK, DIRECT_VIRTIO_BUFFER_COUNT,
-    DIRECT_VIRTIO_IRQ_HANDLER_SLOT, DIRECT_VIRTIO_LAYOUT_BYTES, DIRECT_VIRTIO_LAYOUT_MAGIC,
-    DIRECT_VIRTIO_LAYOUT_OFFSET, DIRECT_VIRTIO_LAYOUT_VERSION, DIRECT_VIRTIO_PAGE_BYTES,
-    DIRECT_VIRTIO_QUEUE_COUNT, DIRECT_VIRTIO_QUEUE_SIZE, RUNTIME_INIT_DESCRIPTOR_BYTES,
-    SHARED_PAGE_BYTES, WAKE_CONTROL, WAKE_DIRECT_VIRTIO_IRQ, WAKE_EVENT_READY, WAKE_PACKET_RX,
-    WAKE_PACKET_TX_READY, WAKE_PUBLICATION_ACK, WAKE_REVOKE, WAKE_SHUTDOWN,
+    DirectGenetControlPage, DirectGenetLayout, DirectGenetSlotPage, DirectVirtioLayout,
+    CHILD_WAKE_MASK, DIRECT_GENET_LAYOUT_BYTES, DIRECT_GENET_LAYOUT_OFFSET,
+    DIRECT_GENET_RX_SLOT_COUNT, DIRECT_GENET_SHARED_PAGE_COUNT, DIRECT_GENET_TX_SLOT_COUNT,
+    DIRECT_VIRTIO_BUFFER_COUNT, DIRECT_VIRTIO_LAYOUT_BYTES, DIRECT_VIRTIO_LAYOUT_OFFSET,
+    DIRECT_VIRTIO_QUEUE_COUNT, RUNTIME_INIT_DESCRIPTOR_BYTES, SHARED_PAGE_BYTES, WAKE_CONTROL,
+    WAKE_EVENT_READY, WAKE_PACKET_RX, WAKE_PACKET_TX_READY, WAKE_PUBLICATION_ACK, WAKE_REVOKE,
+    WAKE_SHUTDOWN,
+};
+#[cfg(feature = "net-backend-genet-direct")]
+use console_network_abi::{
+    DIRECT_GENET_LAYOUT_FLAGS, DIRECT_GENET_LAYOUT_MAGIC, DIRECT_GENET_LAYOUT_VERSION,
+    DIRECT_GENET_PEER_WAKE_NOTIFICATION_SLOT,
+};
+#[cfg(feature = "net-backend-virtio")]
+use console_network_abi::{
+    DIRECT_VIRTIO_IRQ_HANDLER_SLOT, DIRECT_VIRTIO_LAYOUT_MAGIC, DIRECT_VIRTIO_LAYOUT_VERSION,
+    DIRECT_VIRTIO_PAGE_BYTES, DIRECT_VIRTIO_QUEUE_SIZE,
 };
 use heapless::Vec;
 use sel4_sys::{seL4_CPtr, seL4_Word};
@@ -69,6 +82,8 @@ const DIRECT_IRQ_SLOT_COUNT: usize = 2;
 const DIRECT_IRQ_SLOT_COUNT: usize = 0;
 const IMAGE_FRAME_COUNT: usize = if cfg!(feature = "net-backend-virtio") {
     62
+} else if cfg!(feature = "net-backend-genet-direct") {
+    65
 } else {
     60
 };
@@ -84,6 +99,15 @@ const DIRECT_FRAME_START: usize = BASE_FRAME_COUNT;
 const DIRECT_QUEUE_FRAME_START: usize = DIRECT_FRAME_START;
 const DIRECT_RX_FRAME_START: usize = DIRECT_QUEUE_FRAME_START + DIRECT_VIRTIO_QUEUE_COUNT;
 const DIRECT_TX_FRAME_START: usize = DIRECT_RX_FRAME_START + DIRECT_VIRTIO_BUFFER_COUNT;
+
+#[cfg(feature = "net-backend-genet-direct")]
+const DIRECT_GENET_FRAME_COPY_SLOT_COUNT: usize = DIRECT_GENET_SHARED_PAGE_COUNT;
+#[cfg(not(feature = "net-backend-genet-direct"))]
+const DIRECT_GENET_FRAME_COPY_SLOT_COUNT: usize = 0;
+const DIRECT_GENET_CONTROL_VADDR: usize = 0x7208_0000;
+const DIRECT_GENET_RX_VADDR: usize = DIRECT_GENET_CONTROL_VADDR + SHARED_PAGE_BYTES;
+const DIRECT_GENET_TX_VADDR: usize =
+    DIRECT_GENET_RX_VADDR + DIRECT_GENET_RX_SLOT_COUNT * SHARED_PAGE_BYTES;
 
 const DIRECT_VIRTIO_MMIO_PADDR: usize = 0x0a00_0000;
 const DIRECT_VIRTIO_MMIO_VADDR: usize = 0x7205_0000;
@@ -105,11 +129,16 @@ const SHARED_COPY_SLOT_START: usize = TRANSLATION_SLOT_START + TRANSLATION_SLOT_
 const ROOT_WAKE_SLOT_START: usize = SHARED_COPY_SLOT_START + SHARED_FRAME_COUNT;
 const STANDARD_FAULT_SLOT_INDEX: usize = ROOT_WAKE_SLOT_START + 5;
 const TIMEOUT_FAULT_SLOT_INDEX: usize = STANDARD_FAULT_SLOT_INDEX + 1;
-const DIRECT_MMIO_SLOT_INDEX: usize = TIMEOUT_FAULT_SLOT_INDEX + 1;
+const DIRECT_GENET_FRAME_COPY_SLOT_START: usize = TIMEOUT_FAULT_SLOT_INDEX + 1;
+const DIRECT_MMIO_SLOT_INDEX: usize =
+    DIRECT_GENET_FRAME_COPY_SLOT_START + DIRECT_GENET_FRAME_COPY_SLOT_COUNT;
 const DIRECT_IRQ_NOTIFICATION_SLOT_INDEX: usize = DIRECT_MMIO_SLOT_INDEX + DIRECT_DEVICE_SLOT_COUNT;
 const DIRECT_IRQ_HANDLER_SLOT_INDEX: usize = DIRECT_IRQ_NOTIFICATION_SLOT_INDEX + 1;
-const ROOT_SLOT_COUNT: usize =
-    TIMEOUT_FAULT_SLOT_INDEX + 1 + DIRECT_DEVICE_SLOT_COUNT + DIRECT_IRQ_SLOT_COUNT;
+const ROOT_SLOT_COUNT: usize = TIMEOUT_FAULT_SLOT_INDEX
+    + 1
+    + DIRECT_GENET_FRAME_COPY_SLOT_COUNT
+    + DIRECT_DEVICE_SLOT_COUNT
+    + DIRECT_IRQ_SLOT_COUNT;
 
 const ROOT_PACKET_RX_WAKE_INDEX: usize = 0;
 const ROOT_CONTROL_WAKE_INDEX: usize = 1;
@@ -124,12 +153,18 @@ const _: () = assert!(TIMEOUT_FAULT_SLOT_INDEX < ROOT_SLOT_COUNT);
 const _: () = assert!(DIRECT_MMIO_SLOT_INDEX + 1 == DIRECT_IRQ_NOTIFICATION_SLOT_INDEX);
 #[cfg(feature = "net-backend-virtio")]
 const _: () = assert!(DIRECT_IRQ_HANDLER_SLOT_INDEX + 1 == ROOT_SLOT_COUNT);
+#[cfg(feature = "net-backend-genet-direct")]
+const _: () = assert!(DIRECT_GENET_FRAME_COPY_SLOT_START + 32 == ROOT_SLOT_COUNT);
 const _: () = assert!(STACK_FRAME_START + 32 == IPC_FRAME_INDEX);
 const _: () = assert!(SHARED_FRAME_START + SHARED_FRAME_COUNT == BASE_FRAME_COUNT);
 #[cfg(feature = "net-backend-virtio")]
 const _: () = assert!(DIRECT_TX_FRAME_START + DIRECT_VIRTIO_BUFFER_COUNT == FRAME_COUNT);
 const _: () = assert!(SHARED_FRAME_COUNT == ConsoleNetworkContainmentCursor::SHARED_FRAME_COUNT);
 const _: () = assert!(ConsoleNetworkContainmentCursor::FAULT_CAP_COUNT == 2);
+const _: () = assert!(
+    DIRECT_GENET_TX_VADDR + DIRECT_GENET_TX_SLOT_COUNT * SHARED_PAGE_BYTES
+        == DIRECT_GENET_CONTROL_VADDR + DIRECT_GENET_SHARED_PAGE_COUNT * SHARED_PAGE_BYTES
+);
 
 /// Whether this generated policy installs a TCB timeout endpoint.
 ///
@@ -238,6 +273,11 @@ pub struct ConsoleNetworkRuntime {
     timeout_fault_cap: seL4_CPtr,
     shared_frames: Vec<RamFrame, SHARED_FRAME_COUNT>,
     direct_virtio_layout: Option<DirectVirtioLayout>,
+    direct_genet_layout: Option<DirectGenetLayout>,
+    direct_genet_root_ptrs: [usize; DIRECT_GENET_SHARED_PAGE_COUNT],
+    direct_genet_armed: bool,
+    direct_genet_child_unmapped: u64,
+    direct_genet_caps_deleted: u64,
     direct_device_cap: seL4_CPtr,
     direct_device_child_unmapped: bool,
     direct_device_root_mapping: Option<RamFrame>,
@@ -272,7 +312,7 @@ impl ConsoleNetworkRuntime {
     /// Whether root may publish one copied ingress packet now.
     #[must_use]
     pub const fn ingress_available(&self) -> bool {
-        !self.direct_virtio()
+        !self.direct_data_plane()
             && self.activated
             && !self.contained
             && self.boundary.ingress_available()
@@ -296,7 +336,19 @@ impl ConsoleNetworkRuntime {
         self.direct_virtio_layout.is_some()
     }
 
-    /// Whether the immutable ABI-v3 descriptor and initial registers are ready.
+    /// Whether the child owns one endpoint of the admitted Pi GENET data link.
+    #[must_use]
+    pub const fn direct_genet(&self) -> bool {
+        self.direct_genet_layout.is_some()
+    }
+
+    /// Whether packet traffic bypasses the root-owned copied-page adapter.
+    #[must_use]
+    pub const fn direct_data_plane(&self) -> bool {
+        self.direct_virtio() || self.direct_genet()
+    }
+
+    /// Whether the immutable ABI-v5 descriptor and initial registers are ready.
     #[must_use]
     pub const fn descriptor_finalized(&self) -> bool {
         self.descriptor_finalized
@@ -308,7 +360,58 @@ impl ConsoleNetworkRuntime {
         self.tcb
     }
 
-    /// Install the immutable ABI-v3 descriptor after physical address acquisition.
+    /// Initialize the post-DHCP CPU-only GENET link exactly once.
+    ///
+    /// The console child remains suspended. Callers must first prove that the
+    /// bootstrap GENET command transport has no active payload command; this
+    /// operation intentionally scrubs the pages formerly used for bootstrap.
+    pub fn arm_direct_genet(&mut self) -> Result<(), HalError> {
+        if !self.direct_genet()
+            || self.direct_genet_armed
+            || self.descriptor_finalized
+            || self.activated
+            || self.contained
+        {
+            return Err(HalError::Unsupported(
+                "console-network-direct-genet-arm-state",
+            ));
+        }
+        for index in 1..DIRECT_GENET_SHARED_PAGE_COUNT {
+            let root_ptr = self.direct_genet_root_ptrs[index];
+            if root_ptr == 0 || !root_ptr.is_multiple_of(SHARED_PAGE_BYTES) {
+                return Err(HalError::Unsupported(
+                    "console-network-direct-genet-root-alias",
+                ));
+            }
+            // SAFETY: Construction retained one page-aligned root alias for
+            // each exact CPU-only GENET shared frame. The caller has fenced the
+            // bootstrap command transport, the console child is suspended, and
+            // the GENET child has not accepted the direct-link handoff. Thus
+            // root is the sole writer for this complete 4 KiB page here.
+            let page =
+                unsafe { core::slice::from_raw_parts_mut(root_ptr as *mut u8, SHARED_PAGE_BYTES) };
+            DirectGenetSlotPage::initialize_into(page)
+                .map_err(|_| HalError::Unsupported("console-network-direct-genet-slot-init"))?;
+        }
+        let control_ptr = self.direct_genet_root_ptrs[0];
+        if control_ptr == 0 || !control_ptr.is_multiple_of(SHARED_PAGE_BYTES) {
+            return Err(HalError::Unsupported(
+                "console-network-direct-genet-root-alias",
+            ));
+        }
+        // SAFETY: This is the control-page member of the same exact, quiescent
+        // CPU-only frame population justified above. Initializing it last is
+        // the generation publication boundary for both child endpoints.
+        let control =
+            unsafe { core::slice::from_raw_parts_mut(control_ptr as *mut u8, SHARED_PAGE_BYTES) };
+        DirectGenetControlPage::initialize_into(control, self.generation())
+            .map_err(|_| HalError::Unsupported("console-network-direct-genet-control-init"))?;
+        fence(Ordering::Release);
+        self.direct_genet_armed = true;
+        Ok(())
+    }
+
+    /// Install the immutable ABI-v5 descriptor after physical address acquisition.
     ///
     /// The child remains suspended throughout this operation. The root creates
     /// one temporary writable alias of the already read-only child init frame,
@@ -342,17 +445,26 @@ impl ConsoleNetworkRuntime {
                 auth_token,
             )
             .map_err(|_| HalError::Unsupported("console-network-runtime-init"))?;
+        if self.direct_genet() && !self.direct_genet_armed {
+            return Err(HalError::Unsupported(
+                "console-network-direct-genet-not-armed",
+            ));
+        }
         if self.direct_virtio_layout.is_some() {
             descriptor = descriptor.with_direct_virtio();
+        }
+        if self.direct_genet_layout.is_some() {
+            descriptor = descriptor.with_direct_genet();
         }
         let mut begin_line = heapless::String::<224>::new();
         let _ = core::fmt::write(
             &mut begin_line,
             format_args!(
-                "CONSOLE_NETWORK_DESCRIPTOR phase=finalize-begin tcb=0x{:04x} init_frame=0x{:04x} state=suspended abi=v4 direct_virtio={}",
+                "CONSOLE_NETWORK_DESCRIPTOR phase=finalize-begin tcb=0x{:04x} init_frame=0x{:04x} state=suspended abi=v5 direct_virtio={} direct_genet={}",
                 self.tcb,
                 self.slots[FRAME_SLOT_START + INIT_FRAME_INDEX],
                 self.direct_virtio(),
+                self.direct_genet(),
             ),
         );
         crate::bootstrap::log::force_uart_line(begin_line.as_str());
@@ -399,6 +511,20 @@ impl ConsoleNetworkRuntime {
                     frame.as_mut_slice()[DIRECT_VIRTIO_LAYOUT_OFFSET..end]
                         .copy_from_slice(&encoded_layout);
                 }
+                if let Some(layout) = self.direct_genet_layout {
+                    descriptor
+                        .validate_direct_genet_layout(layout)
+                        .map_err(|_| {
+                            HalError::Unsupported("console-network-direct-genet-layout")
+                        })?;
+                    let mut encoded_layout = [0u8; DIRECT_GENET_LAYOUT_BYTES];
+                    layout.encode(&mut encoded_layout).map_err(|_| {
+                        HalError::Unsupported("console-network-direct-genet-layout-encode")
+                    })?;
+                    let end = DIRECT_GENET_LAYOUT_OFFSET + encoded_layout.len();
+                    frame.as_mut_slice()[DIRECT_GENET_LAYOUT_OFFSET..end]
+                        .copy_from_slice(&encoded_layout);
+                }
                 super::cache::cache_clean(
                     sel4_sys::seL4_CapInitThreadVSpace,
                     frame.ptr().as_ptr() as usize,
@@ -428,8 +554,8 @@ impl ConsoleNetworkRuntime {
         let _ = core::fmt::write(
             &mut ready_line,
             format_args!(
-                "CONSOLE_NETWORK_DESCRIPTOR phase=finalize-ready tcb=0x{:04x} init_frame=0x{:04x} root_alias=0x{:04x} state=suspended root_alias_state=deleted abi=v4 direct_virtio={}",
-                self.tcb, init_frame, alias, self.direct_virtio(),
+                "CONSOLE_NETWORK_DESCRIPTOR phase=finalize-ready tcb=0x{:04x} init_frame=0x{:04x} root_alias=0x{:04x} state=suspended root_alias_state=deleted abi=v5 direct_virtio={} direct_genet={}",
+                self.tcb, init_frame, alias, self.direct_virtio(), self.direct_genet(),
             ),
         );
         crate::bootstrap::log::force_uart_line(ready_line.as_str());
@@ -479,7 +605,7 @@ impl ConsoleNetworkRuntime {
 
     /// Stage one virtual/admitted NIC packet and signal its exact one-hot wake.
     pub fn stage_ingress(&mut self, packet: &[u8]) -> Result<u64, BoundaryError> {
-        if self.direct_virtio() || !self.activated || self.contained {
+        if self.direct_data_plane() || !self.activated || self.contained {
             return Err(BoundaryError::InvalidState);
         }
         let sequence = self
@@ -853,6 +979,56 @@ impl ConsoleNetworkRuntime {
                     )),
                 }
             }
+            ConsoleNetworkContainmentUnit::FenceDirectGenetPeer => hal.fence_direct_genet_peer(),
+            ConsoleNetworkContainmentUnit::UnmapDirectGenetFrame(frame_index) => {
+                if frame_index >= DIRECT_GENET_FRAME_COPY_SLOT_COUNT {
+                    Err(HalError::Unsupported(
+                        "console-network-direct-genet-frame-index",
+                    ))
+                } else {
+                    let bit = 1u64 << frame_index;
+                    if self.direct_genet_child_unmapped & bit != 0 {
+                        Err(HalError::Unsupported(
+                            "console-network-direct-genet-unmap-order",
+                        ))
+                    } else {
+                        hal.env
+                            .unmap_page_cap(
+                                self.slots[DIRECT_GENET_FRAME_COPY_SLOT_START + frame_index],
+                            )
+                            .map_err(HalError::Sel4)
+                            .map(|()| self.direct_genet_child_unmapped |= bit)
+                    }
+                }
+            }
+            ConsoleNetworkContainmentUnit::DeleteDirectGenetFrameCap(frame_index) => {
+                if frame_index >= DIRECT_GENET_FRAME_COPY_SLOT_COUNT {
+                    Err(HalError::Unsupported(
+                        "console-network-direct-genet-frame-index",
+                    ))
+                } else {
+                    let bit = 1u64 << frame_index;
+                    if self.direct_genet_child_unmapped & bit == 0
+                        || self.direct_genet_caps_deleted & bit != 0
+                    {
+                        Err(HalError::Unsupported(
+                            "console-network-direct-genet-delete-order",
+                        ))
+                    } else {
+                        let error = sel4::cnode_delete_bounded(
+                            hal.env.init_cnode_cap(),
+                            self.slots[DIRECT_GENET_FRAME_COPY_SLOT_START + frame_index],
+                            sel4::word_bits() as u8,
+                        );
+                        if error == sel4_sys::seL4_NoError {
+                            self.direct_genet_caps_deleted |= bit;
+                            Ok(())
+                        } else {
+                            Err(HalError::Sel4(error))
+                        }
+                    }
+                }
+            }
             ConsoleNetworkContainmentUnit::ClearDirectIrq => {
                 let error = sel4::irq_handler_clear(self.direct_irq_handler_cap);
                 if error == sel4_sys::seL4_NoError {
@@ -977,6 +1153,24 @@ impl<'a> KernelHal<'a> {
         &mut self,
         generation: u64,
     ) -> Result<ConsoleNetworkRuntime, HalError> {
+        self.construct_console_network_runtime_shell_selected(generation, false)
+    }
+
+    /// Construct the wired-Pi shell with the compiler-declared direct GENET
+    /// CPU-page link. Wi-Fi callers must use the ordinary shell above and never
+    /// consume or map GENET resources.
+    pub fn construct_direct_genet_console_network_runtime_shell(
+        &mut self,
+        generation: u64,
+    ) -> Result<ConsoleNetworkRuntime, HalError> {
+        self.construct_console_network_runtime_shell_selected(generation, true)
+    }
+
+    fn construct_console_network_runtime_shell_selected(
+        &mut self,
+        generation: u64,
+        direct_genet: bool,
+    ) -> Result<ConsoleNetworkRuntime, HalError> {
         let mut begin_line = heapless::String::<128>::new();
         let _ = core::fmt::write(
             &mut begin_line,
@@ -1041,10 +1235,18 @@ impl<'a> KernelHal<'a> {
             anchor,
             slots,
             &mut tracker,
+            direct_genet,
         );
         if result.is_err() {
             let root_cnode = self.env.init_cnode_cap();
             let root_depth = sel4::word_bits() as u8;
+            #[cfg(feature = "net-backend-genet-direct")]
+            for slot in &slots[DIRECT_GENET_FRAME_COPY_SLOT_START
+                ..DIRECT_GENET_FRAME_COPY_SLOT_START + DIRECT_GENET_FRAME_COPY_SLOT_COUNT]
+            {
+                let _ = self.env.unmap_page_cap(*slot);
+                let _ = sel4::cnode_delete(root_cnode, *slot, root_depth);
+            }
             #[cfg(feature = "net-backend-virtio")]
             {
                 let _ = sel4::irq_handler_clear(slots[DIRECT_IRQ_HANDLER_SLOT_INDEX]);
@@ -1121,7 +1323,17 @@ fn construct_generation(
     anchor: seL4_CPtr,
     slots: [seL4_CPtr; ROOT_SLOT_COUNT],
     tracker: &mut RevokeAnchorVSpaceTracker<TRANSLATION_SLOT_COUNT>,
+    direct_genet: bool,
 ) -> Result<ConsoleNetworkRuntime, HalError> {
+    let boundary = ConsoleNetworkBoundary::new(generation)
+        .map_err(|_| HalError::Unsupported("console-network-boundary"))?;
+    let stack_top = usize::try_from(contract.stack_vaddr)
+        .ok()
+        .and_then(|base| base.checked_add(usize::from(contract.stack_pages) << sel4::PAGE_BITS))
+        .ok_or(HalError::Unsupported("console-network-stack-top"))?
+        & !0xf;
+    let init_vaddr = usize::try_from(contract.init_vaddr)
+        .map_err(|_| HalError::Unsupported("console-network-init-vaddr"))?;
     if !CONSOLE_NETWORK_IMAGE_IDENTITY_BOUND {
         return Err(HalError::Unsupported("console-network-image-unbound"));
     }
@@ -1221,6 +1433,15 @@ fn construct_generation(
     let shared_frames = map_shared_frames(hal, anchor, vspace, tracker, &slots, contract)?;
     let (direct_virtio_layout, direct_device_cap) =
         map_direct_virtio(hal, anchor, vspace, tracker, &slots)?;
+    let (direct_genet_layout, direct_genet_root_ptrs) = map_direct_genet(
+        hal,
+        anchor,
+        vspace,
+        tracker,
+        &slots,
+        generation,
+        direct_genet,
+    )?;
     hal.env
         .seal_revoke_anchor_translation_reserve(anchor, tracker)
         .map_err(map_vspace_error)?;
@@ -1253,6 +1474,7 @@ fn construct_generation(
         contract,
         ipc_vaddr,
         generation,
+        direct_genet_layout.is_some(),
     )?;
     let mut mcs_line = heapless::String::<256>::new();
     let _ = core::fmt::write(
@@ -1268,15 +1490,6 @@ fn construct_generation(
     );
     crate::bootstrap::log::force_uart_line(mcs_line.as_str());
 
-    let stack_top = usize::try_from(contract.stack_vaddr)
-        .ok()
-        .and_then(|base| base.checked_add(usize::from(contract.stack_pages) << sel4::PAGE_BITS))
-        .ok_or(HalError::Unsupported("console-network-stack-top"))?
-        & !0xf;
-    let init_vaddr = usize::try_from(contract.init_vaddr)
-        .map_err(|_| HalError::Unsupported("console-network-init-vaddr"))?;
-    let boundary = ConsoleNetworkBoundary::new(generation)
-        .map_err(|_| HalError::Unsupported("console-network-boundary"))?;
     #[cfg(feature = "net-backend-virtio")]
     let (direct_irq_handler_cap, direct_irq_notification_cap) = (
         slots[DIRECT_IRQ_HANDLER_SLOT_INDEX],
@@ -1285,6 +1498,11 @@ fn construct_generation(
     #[cfg(not(feature = "net-backend-virtio"))]
     let (direct_irq_handler_cap, direct_irq_notification_cap) =
         (sel4_sys::seL4_CapNull, sel4_sys::seL4_CapNull);
+    let direct_genet_frame_count = if direct_genet_layout.is_some() {
+        DIRECT_GENET_FRAME_COPY_SLOT_COUNT as u8
+    } else {
+        0
+    };
     Ok(ConsoleNetworkRuntime {
         boundary,
         anchor,
@@ -1299,6 +1517,11 @@ fn construct_generation(
         timeout_fault_cap,
         shared_frames,
         direct_virtio_layout,
+        direct_genet_layout,
+        direct_genet_root_ptrs,
+        direct_genet_armed: false,
+        direct_genet_child_unmapped: 0,
+        direct_genet_caps_deleted: 0,
         direct_device_cap,
         direct_device_child_unmapped: direct_device_cap == sel4_sys::seL4_CapNull,
         direct_device_root_mapping: None,
@@ -1314,8 +1537,9 @@ fn construct_generation(
         activated: false,
         containment_started: false,
         contained: false,
-        containment: ConsoleNetworkContainmentCursor::with_direct_frames(
+        containment: ConsoleNetworkContainmentCursor::with_direct_frame_inventories(
             DIRECT_DMA_FRAME_COUNT as u8,
+            direct_genet_frame_count,
         ),
     })
 }
@@ -1529,6 +1753,111 @@ fn map_shared_frames(
     Ok(frames)
 }
 
+#[cfg(feature = "net-backend-genet-direct")]
+fn map_direct_genet(
+    hal: &mut KernelHal<'_>,
+    anchor: seL4_CPtr,
+    vspace: seL4_CPtr,
+    tracker: &mut RevokeAnchorVSpaceTracker<TRANSLATION_SLOT_COUNT>,
+    slots: &[seL4_CPtr; ROOT_SLOT_COUNT],
+    generation: u64,
+    admitted: bool,
+) -> Result<
+    (
+        Option<DirectGenetLayout>,
+        [usize; DIRECT_GENET_SHARED_PAGE_COUNT],
+    ),
+    HalError,
+> {
+    if !admitted {
+        return Ok((None, [0; DIRECT_GENET_SHARED_PAGE_COUNT]));
+    }
+    let resources = super::driver_task::driver_task_direct_genet_shared_pages().ok_or(
+        HalError::Unsupported("console-network-direct-genet-shared-pages"),
+    )?;
+    let root_cnode = hal.env.init_cnode_cap();
+    let root_depth = sel4::word_bits() as u8;
+    let rights = sel4_sys::seL4_CapRights_ReadWrite;
+    let mut rx_vaddrs = [0u64; DIRECT_GENET_RX_SLOT_COUNT];
+    let mut tx_vaddrs = [0u64; DIRECT_GENET_TX_SLOT_COUNT];
+    for index in 0..DIRECT_GENET_SHARED_PAGE_COUNT {
+        let destination = slots[DIRECT_GENET_FRAME_COPY_SLOT_START + index];
+        let source = seL4_CPtr::try_from(resources.caps[index])
+            .map_err(|_| HalError::Unsupported("console-network-direct-genet-frame-cap"))?;
+        let copy_error = sel4::cnode_copy_depth(
+            root_cnode,
+            destination,
+            root_depth,
+            root_cnode,
+            source,
+            root_depth,
+            rights,
+        );
+        if copy_error != sel4_sys::seL4_NoError {
+            return Err(HalError::Sel4(copy_error));
+        }
+        let vaddr = DIRECT_GENET_CONTROL_VADDR
+            .checked_add(index * SHARED_PAGE_BYTES)
+            .ok_or(HalError::Unsupported("console-network-direct-genet-vaddr"))?;
+        hal.env
+            .map_external_page_cap_into_revoke_anchor_vspace(
+                anchor,
+                destination,
+                vspace,
+                vaddr,
+                rights,
+                runtime_cacheable_xn_attributes(),
+                tracker,
+            )
+            .map_err(map_vspace_error)?;
+        if index > 0 && index <= DIRECT_GENET_RX_SLOT_COUNT {
+            rx_vaddrs[index - 1] = vaddr as u64;
+        } else if index > DIRECT_GENET_RX_SLOT_COUNT {
+            tx_vaddrs[index - 1 - DIRECT_GENET_RX_SLOT_COUNT] = vaddr as u64;
+        }
+    }
+    let layout = DirectGenetLayout {
+        magic: DIRECT_GENET_LAYOUT_MAGIC,
+        version: DIRECT_GENET_LAYOUT_VERSION,
+        layout_bytes: DIRECT_GENET_LAYOUT_BYTES as u16,
+        flags: DIRECT_GENET_LAYOUT_FLAGS,
+        shared_page_bytes: SHARED_PAGE_BYTES as u16,
+        rx_slot_count: DIRECT_GENET_RX_SLOT_COUNT as u8,
+        tx_slot_count: DIRECT_GENET_TX_SLOT_COUNT as u8,
+        generation,
+        peer_wake_notification_slot: DIRECT_GENET_PEER_WAKE_NOTIFICATION_SLOT,
+        reserved0: 0,
+        control_vaddr: DIRECT_GENET_CONTROL_VADDR as u64,
+        rx_vaddrs,
+        tx_vaddrs,
+        seal: 0,
+    }
+    .sealed();
+    layout
+        .validate_for(generation)
+        .map_err(|_| HalError::Unsupported("console-network-direct-genet-layout"))?;
+    Ok((Some(layout), resources.root_ptrs))
+}
+
+#[cfg(not(feature = "net-backend-genet-direct"))]
+fn map_direct_genet(
+    _hal: &mut KernelHal<'_>,
+    _anchor: seL4_CPtr,
+    _vspace: seL4_CPtr,
+    _tracker: &mut RevokeAnchorVSpaceTracker<TRANSLATION_SLOT_COUNT>,
+    _slots: &[seL4_CPtr; ROOT_SLOT_COUNT],
+    _generation: u64,
+    _admitted: bool,
+) -> Result<
+    (
+        Option<DirectGenetLayout>,
+        [usize; DIRECT_GENET_SHARED_PAGE_COUNT],
+    ),
+    HalError,
+> {
+    Ok((None, [0; DIRECT_GENET_SHARED_PAGE_COUNT]))
+}
+
 #[cfg(feature = "net-backend-virtio")]
 fn map_direct_virtio(
     hal: &mut KernelHal<'_>,
@@ -1738,6 +2067,7 @@ fn install_caps_and_mcs(
     contract: ConsoleNetworkContract,
     ipc_vaddr: usize,
     generation: u64,
+    direct_genet: bool,
 ) -> Result<([seL4_CPtr; 5], seL4_CPtr, seL4_CPtr), HalError> {
     let root_cnode = hal.env.init_cnode_cap();
     let root_depth = sel4::word_bits() as u8;
@@ -1796,6 +2126,11 @@ fn install_caps_and_mcs(
         root_wake_caps[index] = cap;
     }
     install_direct_virtio_irq(hal, slots, child_cnode, root_to_child_notification)?;
+    let direct_genet_peer_caps = hal.install_direct_genet_peer_notifications(
+        child_cnode,
+        root_to_child_notification,
+        direct_genet,
+    )?;
 
     let fault_origin = super::critical_tcb::target_fault_endpoint_origin().ok_or(
         HalError::Unsupported("console-network-critical-fault-endpoint"),
@@ -1896,6 +2231,9 @@ fn install_caps_and_mcs(
         },
     )
     .map_err(|_| HalError::Unsupported("console-network-fault-register"))?;
+    if direct_genet {
+        hal.commit_direct_genet_peer_notifications(direct_genet_peer_caps)?;
+    }
     Ok((root_wake_caps, standard_fault_cap, timeout_fault_cap))
 }
 
@@ -1951,7 +2289,14 @@ mod tests {
         assert_eq!(ROOT_WAKE_SLOT_START, SHARED_COPY_SLOT_START + 4);
         assert_eq!(STANDARD_FAULT_SLOT_INDEX, ROOT_WAKE_SLOT_START + 5);
         assert_eq!(TIMEOUT_FAULT_SLOT_INDEX, STANDARD_FAULT_SLOT_INDEX + 1);
-        assert_eq!(DIRECT_MMIO_SLOT_INDEX, TIMEOUT_FAULT_SLOT_INDEX + 1);
+        assert_eq!(
+            DIRECT_GENET_FRAME_COPY_SLOT_START,
+            TIMEOUT_FAULT_SLOT_INDEX + 1
+        );
+        assert_eq!(
+            DIRECT_MMIO_SLOT_INDEX,
+            DIRECT_GENET_FRAME_COPY_SLOT_START + DIRECT_GENET_FRAME_COPY_SLOT_COUNT
+        );
         assert_eq!(
             DIRECT_MMIO_SLOT_INDEX + DIRECT_DEVICE_SLOT_COUNT + DIRECT_IRQ_SLOT_COUNT,
             ROOT_SLOT_COUNT
@@ -2024,6 +2369,11 @@ mod tests {
             timeout_fault_cap: 0,
             shared_frames: Vec::new(),
             direct_virtio_layout: None,
+            direct_genet_layout: None,
+            direct_genet_root_ptrs: [0; DIRECT_GENET_SHARED_PAGE_COUNT],
+            direct_genet_armed: false,
+            direct_genet_child_unmapped: 0,
+            direct_genet_caps_deleted: 0,
             direct_device_cap: 0,
             direct_device_child_unmapped: true,
             direct_device_root_mapping: None,

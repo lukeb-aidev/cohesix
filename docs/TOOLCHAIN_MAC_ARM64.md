@@ -303,7 +303,7 @@ Operational QEMU profiles select a 14-bit initial root CNode, while Pi profiles
 select 16 bits. QEMU requires its size for compiler-owned retention-anchor
 slots at `0x3f00` and above. Pi additionally admits the complete 256-Worker
 population: its fixed, per-Worker, and post-construction-reserve inventory is
-19,470 slots, which cannot fit a 14-bit CNode and leaves 46,066 slots in the
+19,507 slots, which cannot fit a 14-bit CNode and leaves 46,029 slots in the
 selected 65,536-slot CNode. A Pi cache reporting 13 or 14 bits, or a QEMU cache
 falling back to the upstream 13-bit default, is not a valid Cohesix runtime
 profile.

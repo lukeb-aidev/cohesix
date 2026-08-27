@@ -48,6 +48,7 @@ release-pi4 = [
     "kernel",
     "serial-console",
     "net-console",
+    "net-backend-genet-direct",
     "timers-arch-counter",
     "cache-maintenance",
     "usb",
@@ -104,6 +105,7 @@ debug-input = []
 tcp-echo-31337 = ["net-console"]
 net-outbound-probe = ["net-console"]
 net-backend-virtio = []
+net-backend-genet-direct = []
 qemu-driver-task-smoke = ["net-backend-virtio"]
 net-selftest = ["net-console"]
 virtio-mmio-legacy = []
@@ -405,6 +407,10 @@ path = "tests/console_network_service.rs"
 [[test]]
 name = "isolated_virtio_network_phasing"
 path = "tests/isolated_virtio_network_phasing.rs"
+
+[[test]]
+name = "direct_genet_network_phasing"
+path = "tests/direct_genet_network_phasing.rs"
 
 [[test]]
 name = "isolated_virtio_rx_seam"

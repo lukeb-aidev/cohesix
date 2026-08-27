@@ -901,16 +901,42 @@ reusable ownership pattern.
 - Prioritize ARP and TCP/ICMP control traffic, but after four consecutive
   control frames service the oldest data frame so control load cannot starve
   data. Batch drain and root consumption remain independently bounded.
-- Physical GENET descriptor buffers remain private, uncached, and solely owned
-  by the GENET child. The current root-mediated command transport does not
-  authorize an undeclared cacheable GENET-to-console ring, a shared DMA alias,
-  or a second physical owner. A direct link is deliberately not generated:
-  GENET exists before the post-DHCP console child, no reciprocal link caps or
-  cacheable shared-frame authority bind them, their fault/revoke generations
-  are independent, and the proposed nine-page export exceeds the current
-  eight-page generated export helper. Resolve all of those authority,
-  bootstrap, cacheability, and containment constraints together before adding
-  such a path.
+- Physical GENET descriptors and DMA buffers remain private, uncached, and
+  solely owned by the GENET child. After DHCP and an exact proof that every
+  root-mediated GENET command, RX, and TX cursor is quiescent, root may perform
+  the one-way generation-bound direct-data-plane handoff. It then reuses the
+  existing 32 shared pages as CPU-only cacheable Normal/XN memory: page 0 is
+  the control page, pages 1 through 15 are GENET-to-console RX slots, and pages
+  16 through 31 are console-to-GENET TX slots. Those pages have no
+  device-visible, DMA, or physical-address authority and map only into the two
+  child generations. GENET remains the sole MMIO/DMA/IRQ owner and
+  console-network remains the sole smoltcp/TCP/auth owner.
+- Each direction is a single-producer/single-consumer sequence-last ring with
+  bounded frames, monotonic cursors, exact generation/length validation, and a
+  final durable-state recheck before waiting. Fixed-badge peer notifications
+  are coalescing hints only. The root publishes the exact generation as
+  handoff-pending before issuing DGHO. While that phase is unfaulted, only the
+  bounded legacy drain may run; a DGHO retry waits for its coordinator and
+  root RX/TX queues to become empty. READY atomically removes the pending phase,
+  while a fault at any earlier or later interleaving latches coupled
+  containment. An invalid sequence, stale generation, corruption, descriptor
+  drift, failed handoff terminal, IRQ unmask/acknowledgement failure, or peer
+  fault poisons the link, signals the peer, and fails through the standard
+  supervisor endpoint; root packet polling, copying, and packet-command service
+  never resume as a fallback. Before its standard fault, console-network
+  independently poisons its RX-consumer and TX-producer lines and signals the
+  GENET peer; a reciprocal-line race cannot suppress either valid owned poison.
+  Console containment unmaps and deletes every
+  copied external frame cap before revoking the console anchor, while driver
+  containment owns the original page generation.
+- Direct GENET service handles at most 16 material frame units per wake, with at
+  most eight TX units before RX receives the remaining share. Finalizing a
+  retained ambiguous TX or RX cursor commit consumes one unit in the current
+  quantum; it cannot be reconciled outside the 8/16-frame accounting. A full TX ring waits for a
+  peer rearm notification unless an independent retained cursor transition is
+  actionable; queued RX cannot create a self-poll while smoltcp ingress is
+  occupied. These bounds preserve the existing MCS budgets and require fresh
+  Pi WCET and throughput evidence.
 - Bound RX admission, TX submission, completion reclaim, and queue depth per
   turn.
 - Preserve packet order unless a documented priority policy explicitly
@@ -947,10 +973,17 @@ transport:
   implementation uses exported `CNTVCT_EL0`; deterministic host tests use the
   finite fallback. At most the two existing settle intervals run, with no
   SDHCI condition poll, command, DMA action, new owner, retry, or deadline
-  extension. An unarmed or invalid retained settle cursor fails through the
-  existing typed containment path. Preserve command identity, no replay, and
-  the immutable first causal failure snapshot; a transition bound or cursor
-  violation fails closed.
+  extension. The `HostConfigStart` intake must enter that bounded containment
+  before its first persisted outer-owner boundary; arming the immutable owner
+  deadline and releasing before containment lets unrelated MCS admission age
+  the request without doing device work. The first permitted post-containment
+  boundary for the initial differing-clock request is
+  `HostConfigClock1Disable`; an equal-clock request resumes at
+  `HostConfigControl`, while a genuine DMA/reset/inhibit wait may persist
+  inside containment. An unarmed or invalid retained settle cursor fails
+  through the existing typed containment path. Preserve command identity, no
+  replay, and the immutable first causal failure snapshot; a transition bound
+  or cursor violation fails closed.
 - At the shared-payload/private-DMA boundary, copy only between the existing
   shared command payload and the SDIO child's existing private uncached DMA4
   bounce region. Use an alignment-safe bounded prefix, `u64` word body, and

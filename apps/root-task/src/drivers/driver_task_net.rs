@@ -26230,6 +26230,119 @@ impl GenetSteadyCoordinator {
 #[cfg(feature = "kernel")]
 static GENET_STEADY_COORDINATOR: Mutex<GenetSteadyCoordinator> =
     Mutex::new(GenetSteadyCoordinator::new());
+#[cfg(feature = "kernel")]
+static GENET_DIRECT_LINK_STATE: AtomicU64 = AtomicU64::new(0);
+#[cfg(feature = "kernel")]
+const GENET_DIRECT_LINK_FENCED: u64 = u64::MAX;
+#[cfg(feature = "kernel")]
+const GENET_DIRECT_PAIR_FAULT_PENDING: u64 = 1_u64 << 32;
+#[cfg(feature = "kernel")]
+const GENET_DIRECT_HANDOFF_PENDING: u64 = 1_u64 << 33;
+#[cfg(feature = "kernel")]
+const GENET_DIRECT_HANDOFF_QUIESCING: u64 = 1_u64 << 34;
+
+#[cfg(feature = "kernel")]
+const fn genet_legacy_steady_service_allowed(link_state: u64) -> bool {
+    if link_state == 0 {
+        return true;
+    }
+    let token = link_state & u32::MAX as u64;
+    token != 0 && link_state == token | GENET_DIRECT_HANDOFF_QUIESCING
+}
+
+#[cfg(feature = "kernel")]
+const fn genet_direct_handoff_transport_pending(link_state: u64, token: u32) -> bool {
+    token != 0 && link_state == (token as u64) | GENET_DIRECT_HANDOFF_PENDING
+}
+
+/// Whether the exact DGHO command still owns the retained GENET transport.
+///
+/// Root must reserve the outer event turn while this is true. Only an exact
+/// QUIESCING terminal moves the link into the separate legacy-drain phase,
+/// where bounded root-mediated packet service may resume until all frontiers
+/// are empty for the READY retry.
+#[cfg(feature = "kernel")]
+pub(crate) fn genet_direct_handoff_requires_reserved_turn(generation: u64) -> bool {
+    let token = pi4_driver_abi::driver_runtime_direct_genet_handoff_token(generation);
+    genet_direct_handoff_transport_pending(GENET_DIRECT_LINK_STATE.load(Ordering::Acquire), token)
+}
+
+/// Publish one supervisor-visible coupled-fault request after the GENET child
+/// has completed its own generic containment. The root event loop must then
+/// contain the console peer and delete both reciprocal signal capabilities.
+#[cfg(feature = "kernel")]
+pub(crate) fn publish_genet_direct_pair_fault() -> bool {
+    publish_genet_direct_pair_fault_on(&GENET_DIRECT_LINK_STATE)
+}
+
+#[cfg(feature = "kernel")]
+fn publish_genet_direct_pair_fault_on(link_state: &AtomicU64) -> bool {
+    let mut state = link_state.load(Ordering::Acquire);
+    loop {
+        if state == 0 || state == GENET_DIRECT_LINK_FENCED {
+            return false;
+        }
+        if state & GENET_DIRECT_PAIR_FAULT_PENDING != 0 {
+            return true;
+        }
+        match link_state.compare_exchange_weak(
+            state,
+            state | GENET_DIRECT_PAIR_FAULT_PENDING,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        ) {
+            Ok(_) => return true,
+            Err(observed) => state = observed,
+        }
+    }
+}
+
+/// Whether a contained GENET owner still requires coupled console teardown.
+#[cfg(feature = "kernel")]
+pub(crate) fn genet_direct_pair_fault_pending() -> bool {
+    let state = GENET_DIRECT_LINK_STATE.load(Ordering::Acquire);
+    state != GENET_DIRECT_LINK_FENCED && state & GENET_DIRECT_PAIR_FAULT_PENDING != 0
+}
+
+/// Acknowledge only after console containment has durably started.
+#[cfg(feature = "kernel")]
+pub(crate) fn acknowledge_genet_direct_pair_fault() {
+    let _ = GENET_DIRECT_LINK_STATE.fetch_update(Ordering::AcqRel, Ordering::Acquire, |state| {
+        (state != 0 && state != GENET_DIRECT_LINK_FENCED)
+            .then_some(state & !GENET_DIRECT_PAIR_FAULT_PENDING)
+    });
+}
+
+/// Permanently fence the current direct-GENET generation after paired fault.
+///
+/// The HAL suspends the physical owner and deletes both reciprocal caps before
+/// publishing this state. No later handoff may reuse the old generation.
+#[cfg(feature = "kernel")]
+pub(crate) fn fence_genet_direct_link() {
+    GENET_DIRECT_LINK_STATE.store(GENET_DIRECT_LINK_FENCED, Ordering::Release);
+}
+
+/// Whether every root-mediated GENET packet frontier is empty and inactive.
+///
+/// This exact predicate gates the destructive post-DHCP reuse of GENET's
+/// thirty-two bootstrap pages. It is an admission condition only; callers
+/// must still complete the typed direct-link handoff before declaring root
+/// packet mediation disabled.
+#[cfg(feature = "kernel")]
+pub(crate) fn genet_root_mediation_quiescent() -> bool {
+    if GENET_DIRECT_LINK_STATE.load(Ordering::Acquire) != 0 {
+        return false;
+    }
+    genet_root_mediation_frontiers_quiescent()
+}
+
+#[cfg(feature = "kernel")]
+fn genet_root_mediation_frontiers_quiescent() -> bool {
+    let coordinator_idle = GENET_STEADY_COORDINATOR.lock().active.is_none();
+    coordinator_idle
+        && GENET_PENDING_RX_QUEUE.lock().is_empty()
+        && GENET_PENDING_TX_QUEUE.lock().is_empty()
+}
 
 fn driver_task_ethertype(frame: &[u8]) -> Option<u16> {
     let ethertype = frame.get(12..14)?;
@@ -27546,7 +27659,9 @@ pub(crate) fn service_genet_driver_task_steady_turn(
     contract: DriverTaskContract,
     poll_flags: u16,
 ) -> DriverTaskRetainedServiceTurn {
-    if contract != GENET_DRIVER_TASK_CONTRACT {
+    if contract != GENET_DRIVER_TASK_CONTRACT
+        || !genet_legacy_steady_service_allowed(GENET_DIRECT_LINK_STATE.load(Ordering::Acquire))
+    {
         return DriverTaskRetainedServiceTurn::Failed;
     }
     let operation = GENET_STEADY_COORDINATOR.lock().select(poll_flags);
@@ -27615,6 +27730,133 @@ pub(crate) fn service_genet_driver_task_steady_turn(
         }
     }
     turn
+}
+
+/// Advance the sole zero-payload GENET direct-link handoff command.
+///
+/// Root calls this only after [`genet_root_mediation_quiescent`] and never
+/// stages packet bytes. The retained transport already proves that a terminal
+/// belongs to the immutable command sequence; the ABI helper additionally
+/// binds its detail/result/empty-frame identity to the exact link generation.
+/// A malformed terminal fails closed and never re-enables root packet service.
+#[cfg(feature = "kernel")]
+pub(crate) fn service_genet_direct_link_handoff(generation: u64) -> DriverTaskRetainedServiceTurn {
+    if generation == 0 {
+        return DriverTaskRetainedServiceTurn::Failed;
+    }
+    let token = pi4_driver_abi::driver_runtime_direct_genet_handoff_token(generation);
+    if token == 0 {
+        return DriverTaskRetainedServiceTurn::Failed;
+    }
+    let pending_state = u64::from(token) | GENET_DIRECT_HANDOFF_PENDING;
+    let quiescing_state = u64::from(token) | GENET_DIRECT_HANDOFF_QUIESCING;
+    match GENET_DIRECT_LINK_STATE.load(Ordering::Acquire) {
+        0 => {
+            if !genet_root_mediation_quiescent() {
+                return DriverTaskRetainedServiceTurn::Pending;
+            }
+            if GENET_DIRECT_LINK_STATE
+                .compare_exchange(0, pending_state, Ordering::AcqRel, Ordering::Acquire)
+                .is_err()
+            {
+                return DriverTaskRetainedServiceTurn::Failed;
+            }
+        }
+        state if state == pending_state => {}
+        state if state == quiescing_state => {
+            if !genet_root_mediation_frontiers_quiescent() {
+                return DriverTaskRetainedServiceTurn::Pending;
+            }
+            if GENET_DIRECT_LINK_STATE
+                .compare_exchange(
+                    quiescing_state,
+                    pending_state,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                )
+                .is_err()
+            {
+                return DriverTaskRetainedServiceTurn::Failed;
+            }
+        }
+        _ => return DriverTaskRetainedServiceTurn::Failed,
+    }
+    let mut command = DriverTaskCommandRecord::pi4_hot_path(
+        0,
+        DriverTaskHotPath::GenetNic,
+        DriverTaskBudgetGrant::from_contract(GENET_DRIVER_TASK_CONTRACT),
+        DriverFrameDescriptor {
+            offset: 0,
+            len: 0,
+            flags: 0,
+        },
+    );
+    command.aux0 = pi4_driver_abi::DRIVER_RUNTIME_DIRECT_GENET_HANDOFF_AUX;
+    command.aux1 = token;
+    let turn = crate::hal::driver_task::run_driver_task_ring_service_retained_service_turn(
+        GENET_DRIVER_TASK_CONTRACT,
+        command,
+    );
+    match turn {
+        DriverTaskRetainedServiceTurn::Complete(completion) => {
+            // The retained transport has already compared the dynamically
+            // assigned command sequence with this terminal before returning
+            // `Complete`; pass that proved identity to the primitive ABI check.
+            let ready = pi4_driver_abi::driver_runtime_direct_genet_handoff_completion_exact(
+                completion.sequence,
+                completion.sequence,
+                completion.code,
+                completion.detail,
+                completion.result,
+                completion.frame.offset,
+                completion.frame.len,
+                completion.frame.flags,
+                generation,
+            );
+            if !ready
+                && pi4_driver_abi::driver_runtime_direct_genet_handoff_quiescing_completion_exact(
+                    completion.sequence,
+                    completion.sequence,
+                    completion.code,
+                    completion.detail,
+                    completion.result,
+                    completion.frame.offset,
+                    completion.frame.len,
+                    completion.frame.flags,
+                    generation,
+                )
+            {
+                if GENET_DIRECT_LINK_STATE
+                    .compare_exchange(
+                        pending_state,
+                        quiescing_state,
+                        Ordering::AcqRel,
+                        Ordering::Acquire,
+                    )
+                    .is_err()
+                {
+                    return DriverTaskRetainedServiceTurn::Failed;
+                }
+                return DriverTaskRetainedServiceTurn::Pending;
+            }
+            if !ready
+                || GENET_DIRECT_LINK_STATE
+                    .compare_exchange(
+                        pending_state,
+                        u64::from(token),
+                        Ordering::AcqRel,
+                        Ordering::Acquire,
+                    )
+                    .is_err()
+            {
+                DriverTaskRetainedServiceTurn::Failed
+            } else {
+                DriverTaskRetainedServiceTurn::Complete(completion)
+            }
+        }
+        DriverTaskRetainedServiceTurn::Pending => DriverTaskRetainedServiceTurn::Pending,
+        DriverTaskRetainedServiceTurn::Failed => DriverTaskRetainedServiceTurn::Failed,
+    }
 }
 
 #[cfg(feature = "kernel")]
@@ -31210,6 +31452,75 @@ mod tests {
     ];
     const CYW43_MAINTENANCE_INTERLEAVED_EVENT_OFFSET: usize =
         crate::hal::driver_task::DRIVER_TASK_RING_FRAME_OFFSET + MAX_DRIVER_TASK_FRAME_BYTES;
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn direct_pair_fault_publish_cannot_resurrect_a_fenced_generation() {
+        let state = AtomicU64::new(0x1020_3040);
+        let stale_active = state.load(Ordering::Acquire);
+
+        state.store(GENET_DIRECT_LINK_FENCED, Ordering::Release);
+        assert!(state
+            .compare_exchange(
+                stale_active,
+                stale_active | GENET_DIRECT_PAIR_FAULT_PENDING,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_err());
+        assert!(!publish_genet_direct_pair_fault_on(&state));
+        assert_eq!(state.load(Ordering::Acquire), GENET_DIRECT_LINK_FENCED);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn fault_between_direct_ready_and_root_acceptance_blocks_activation() {
+        let token = 0x1020_3040_u32;
+        let pending = u64::from(token) | GENET_DIRECT_HANDOFF_PENDING;
+        let state = AtomicU64::new(pending);
+
+        assert!(publish_genet_direct_pair_fault_on(&state));
+        assert_ne!(
+            state.load(Ordering::Acquire) & GENET_DIRECT_PAIR_FAULT_PENDING,
+            0
+        );
+        assert!(state
+            .compare_exchange(
+                pending,
+                u64::from(token),
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_err());
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn handoff_transport_and_quiescing_have_disjoint_service_authority() {
+        let token = 0x1020_3040_u32;
+        let pending = u64::from(token) | GENET_DIRECT_HANDOFF_PENDING;
+        let quiescing = u64::from(token) | GENET_DIRECT_HANDOFF_QUIESCING;
+
+        assert!(genet_legacy_steady_service_allowed(0));
+        assert!(!genet_legacy_steady_service_allowed(pending));
+        assert!(genet_legacy_steady_service_allowed(quiescing));
+        assert!(!genet_legacy_steady_service_allowed(u64::from(token)));
+        assert!(genet_direct_handoff_transport_pending(pending, token));
+        assert!(!genet_direct_handoff_transport_pending(quiescing, token));
+        assert!(!genet_legacy_steady_service_allowed(
+            pending | GENET_DIRECT_PAIR_FAULT_PENDING
+        ));
+        assert!(!genet_legacy_steady_service_allowed(
+            quiescing | GENET_DIRECT_PAIR_FAULT_PENDING
+        ));
+        assert!(!genet_direct_handoff_transport_pending(
+            pending | GENET_DIRECT_PAIR_FAULT_PENDING,
+            token
+        ));
+        assert!(!genet_legacy_steady_service_allowed(
+            GENET_DIRECT_LINK_FENCED
+        ));
+    }
 
     #[cfg(feature = "kernel")]
     #[test]

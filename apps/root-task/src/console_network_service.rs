@@ -9,16 +9,16 @@ use console_network_abi::{
     AbiError, CommandBatchCursor, ExchangeKind, ExchangePage, PacketDirection, PacketPage,
     RuntimeInitDescriptor, ABI_VERSION, AUTH_TOKEN_BYTES, CHILD_CSPACE_SLOTS, CHILD_WAKE_MASK,
     CHILD_WAKE_NOTIFICATION_SLOT, COMMAND_BATCH_MAX_RECORDS, COMMAND_LINE_BYTES,
-    ETHERNET_FRAME_BYTES, FAULT_ENDPOINT_SLOT, PACKET_TX_WAKE_NOTIFICATION_SLOT,
-    REQUIRED_INIT_FLAGS, ROOT_WAKE_MASK, RUNTIME_INIT_MAGIC, SHARED_PAGE_BYTES,
-    SUPERVISOR_WAKE_NOTIFICATION_SLOT,
+    DIRECT_GENET_SHARED_PAGE_COUNT, ETHERNET_FRAME_BYTES, FAULT_ENDPOINT_SLOT,
+    PACKET_TX_WAKE_NOTIFICATION_SLOT, REQUIRED_INIT_FLAGS, ROOT_WAKE_MASK, RUNTIME_INIT_MAGIC,
+    SHARED_PAGE_BYTES, SUPERVISOR_WAKE_NOTIFICATION_SLOT,
 };
 use heapless::Vec as HeaplessVec;
 
 /// Compiler-selected service task ID.
 pub const SERVICE_TASK_ID: &str = "console-network-service";
 /// Runtime READY identity accepted before packet or console admission.
-pub const READY_IDENTITY: &str = "console-network-service/v4";
+pub const READY_IDENTITY: &str = "console-network-service/v5";
 mod generated_image_identity {
     ::core::include!(::core::concat!(
         ::core::env!("OUT_DIR"),
@@ -60,6 +60,8 @@ pub struct ConsoleNetworkContract {
     pub objects: crate::generated::KernelObjectBudget,
     /// Whether the isolated QEMU child owns the admitted VirtIO data path.
     pub direct_virtio: bool,
+    /// Whether the Pi child exchanges packets directly with the isolated GENET owner.
+    pub direct_genet: bool,
     /// Child wait notification slot.
     pub child_wake_slot: u32,
     /// Child packet-TX signal slot.
@@ -118,8 +120,16 @@ impl ConsoleNetworkContract {
     /// Validate generated object and temporal records as one construction unit.
     pub fn from_generated() -> Result<Self, BoundaryError> {
         let config = generated_config();
-        let expected_object_frames = 98 + if config.direct_virtio { 36 } else { 0 };
-        let expected_object_cspace_slots = 123 + if config.direct_virtio { 39 } else { 0 };
+        let expected_object_frames = 98
+            + if config.direct_virtio { 36 } else { 0 }
+            + if config.direct_genet { 5 } else { 0 };
+        let expected_object_cspace_slots = 123
+            + if config.direct_virtio { 39 } else { 0 }
+            + if config.direct_genet {
+                DIRECT_GENET_SHARED_PAGE_COUNT as u32 + 5
+            } else {
+                0
+            };
         if !config.enabled
             || config.abi_version != ABI_VERSION
             || config.image_id != "console-network-runtime"
@@ -129,6 +139,9 @@ impl ConsoleNetworkContract {
             || !config.single_listener
             || (cfg!(target_os = "none")
                 && config.direct_virtio != cfg!(feature = "net-backend-virtio"))
+            || (cfg!(target_os = "none")
+                && config.direct_genet != cfg!(feature = "net-backend-genet-direct"))
+            || (config.direct_virtio && config.direct_genet)
             || config.child_cspace_slots != CHILD_CSPACE_SLOTS as u16
             || COMMAND_LINE_BYTES != cohsh_core::MAX_LINE_LEN
             || config.revoke_anchor_slot != 16_136
@@ -209,6 +222,7 @@ impl ConsoleNetworkContract {
             revoke_anchor_bits: config.revoke_anchor_bits,
             objects: config.objects,
             direct_virtio: config.direct_virtio,
+            direct_genet: config.direct_genet,
             child_wake_slot: config.packet_rx_notification_slot,
             packet_tx_wake_slot: config.packet_tx_wake_notification_slot,
             supervisor_wake_slot: config.supervisor_wake_notification_slot,
@@ -482,6 +496,12 @@ pub enum ConsoleNetworkContainmentUnit {
     ScrubCleanSharedFrame(usize),
     /// Unmap one indexed shared frame after its clean completed.
     UnmapSharedFrame(usize),
+    /// Suspend the paired GENET owner and delete both reciprocal signal caps.
+    FenceDirectGenetPeer,
+    /// Unmap one CPU-only direct-GENET frame copy from the console child.
+    UnmapDirectGenetFrame(usize),
+    /// Delete one root-held mapping cap after its direct-GENET unmap completed.
+    DeleteDirectGenetFrameCap(usize),
     /// Clear the direct QEMU IRQHandler notification binding.
     ClearDirectIrq,
     /// Revoke the child-held direct QEMU IRQHandler copy.
@@ -509,6 +529,7 @@ pub enum ConsoleNetworkContainmentUnit {
 pub struct ConsoleNetworkContainmentCursor {
     unit: ConsoleNetworkContainmentUnit,
     direct_frame_count: u8,
+    direct_genet_frame_count: u8,
 }
 
 impl Default for ConsoleNetworkContainmentCursor {
@@ -529,6 +550,7 @@ impl ConsoleNetworkContainmentCursor {
         Self {
             unit: ConsoleNetworkContainmentUnit::SuspendTcb,
             direct_frame_count: 0,
+            direct_genet_frame_count: 0,
         }
     }
 
@@ -538,6 +560,20 @@ impl ConsoleNetworkContainmentCursor {
         Self {
             unit: ConsoleNetworkContainmentUnit::SuspendTcb,
             direct_frame_count: frame_count,
+            direct_genet_frame_count: 0,
+        }
+    }
+
+    /// Start with exact, mutually exclusive direct-device frame inventories.
+    #[must_use]
+    pub const fn with_direct_frame_inventories(
+        direct_virtio_frame_count: u8,
+        direct_genet_frame_count: u8,
+    ) -> Self {
+        Self {
+            unit: ConsoleNetworkContainmentUnit::SuspendTcb,
+            direct_frame_count: direct_virtio_frame_count,
+            direct_genet_frame_count,
         }
     }
 
@@ -568,7 +604,26 @@ impl ConsoleNetworkContainmentCursor {
             ConsoleNetworkContainmentUnit::UnmapSharedFrame(_) if self.direct_frame_count != 0 => {
                 ConsoleNetworkContainmentUnit::ClearDirectIrq
             }
+            ConsoleNetworkContainmentUnit::UnmapSharedFrame(_)
+                if self.direct_genet_frame_count != 0 =>
+            {
+                ConsoleNetworkContainmentUnit::FenceDirectGenetPeer
+            }
             ConsoleNetworkContainmentUnit::UnmapSharedFrame(_) => {
+                ConsoleNetworkContainmentUnit::DeleteFaultCap(0)
+            }
+            ConsoleNetworkContainmentUnit::FenceDirectGenetPeer => {
+                ConsoleNetworkContainmentUnit::UnmapDirectGenetFrame(0)
+            }
+            ConsoleNetworkContainmentUnit::UnmapDirectGenetFrame(frame_index) => {
+                ConsoleNetworkContainmentUnit::DeleteDirectGenetFrameCap(frame_index)
+            }
+            ConsoleNetworkContainmentUnit::DeleteDirectGenetFrameCap(frame_index)
+                if frame_index + 1 < self.direct_genet_frame_count as usize =>
+            {
+                ConsoleNetworkContainmentUnit::UnmapDirectGenetFrame(frame_index + 1)
+            }
+            ConsoleNetworkContainmentUnit::DeleteDirectGenetFrameCap(_) => {
                 ConsoleNetworkContainmentUnit::DeleteFaultCap(0)
             }
             ConsoleNetworkContainmentUnit::ClearDirectIrq => {

@@ -52,7 +52,7 @@ build outputs, and generated tables rather than this overview.
 | Kernel | seL4 16.0.0 on AArch64 with SMP+MCS, per-core scheduling control, Reply objects, timeout-fault resources, and generated virtual-counter truth. | Configuration and compilation do not prove target execution or timing. |
 | Root authority | The init TCB remains `root-control`; restricted root-fault, emergency, Worker-supervisor, driver-supervisor, GPU-executor, and LoRA/Heartbeat-executor duties have independent active scheduling contexts. | The exact image must prove progress, fault handling, and containment. |
 | Namespace service | `nine-door-runtime` is a restricted passive child reached through a bounded donated Call/Reply chain after one compiler-budgeted bootstrap exchange. | Host NineDoor is a separate implementation and is not a transport to this child. |
-| Console network | `console-network-runtime` owns target TCP, smoltcp, framing, and transport authentication. On QEMU the same child directly owns the HAL-admitted VirtIO MMIO, IRQ, and fixed coherent DMA queues; root receives only copied authenticated commands and returns bounded responses. | The public console grammar is unchanged and remains the only in-target TCP service. QEMU device evidence does not qualify a Pi network driver. |
+| Console network | `console-network-runtime` owns target TCP, smoltcp, framing, and transport authentication. On QEMU the child directly owns the HAL-admitted VirtIO MMIO, IRQ, and fixed coherent DMA queues. On the Pi `bcmgenet-v5` profile, DHCP and old-path quiescence precede a fail-closed handoff to a 32-page CPU-only link with the isolated GENET owner. Root receives only copied authenticated commands and returns bounded responses; it owns no steady packet path after either direct backend is active. | The public console grammar is unchanged and remains the only in-target TCP service. QEMU device evidence does not qualify a Pi network driver, and static construction does not qualify Pi GENET. |
 | Workers | Heartbeat, GPU, and LoRA are separately packaged passive executable roles served by two compiler-bounded active executor lanes. The QEMU and Pi profiles each admit 256 instances; WorkerBus remains model/session-only. | A declared slot or packaged image is not READY, runtime, teardown, or acceptance evidence. |
 | Drivers | Selected physical devices use HAL-admitted isolated runtimes with fixed pointer-free ABIs and explicit temporal authority. | QEMU does not qualify Pi MMIO, DMA, IRQ, USB, display, GENET, SDIO, or CYW43 behavior. |
 | Attestation | Current target metadata is deterministic `measurement_only` hashing with generated static authority material. | It is not TPM Quote, DICE, measured boot, device identity, or secret-unsealing evidence. |
@@ -116,8 +116,8 @@ is the authenticated console.
 | Component | Runtime | Current responsibility |
 | --- | --- | --- |
 | Upstream seL4 | Target kernel | Enforces objects, capabilities, address spaces, SMP+MCS scheduling contexts and budgets, Reply objects, timeout faults, notifications, IPC, interrupts, and kernel-generated platform truth. |
-| `root-task` | Target, `no_std` | Owns BootInfo/untyped allocation, CSpace/VSpace bootstrap, HAL admission, event pumping, serial/local-seat/HDMI handling, Queen policy, Worker model state, audit/evidence, and fault supervision. On QEMU it admits and maps VirtIO resources into `console-network-runtime`, but owns no steady-state MMIO, IRQ, DMA, smoltcp, TCP, or authentication path. Pi physical networking follows its manifest-declared isolated-driver boundary and requires independent hardware evidence. |
-| `pi4-driver-*` | Pi 4 target, `no_std` child images | Own steady physical-device service behind HAL-admitted resources and the pointer-free driver-task ABI. |
+| `root-task` | Target, `no_std` | Owns BootInfo/untyped allocation, CSpace/VSpace bootstrap, HAL admission, event pumping, serial/local-seat/HDMI handling, Queen policy, Worker model state, audit/evidence, and fault supervision. On QEMU it admits and maps VirtIO resources into `console-network-runtime`. On Pi it supervises GENET bootstrap, publishes the handoff generation, and pair-contains either peer on failure. It owns no steady-state MMIO, IRQ, DMA, smoltcp, TCP, authentication, packet copy, or packet-poll path after a direct backend becomes active. |
+| `pi4-driver-*` | Pi 4 target, `no_std` child images | Own steady physical-device service behind HAL-admitted resources and the pointer-free driver-task ABI. The GENET child remains the sole GENET MMIO/DMA/IRQ and private-ring owner before and after its post-DHCP direct handoff. |
 | `nine-door-runtime` | Target, `no_std` child | Implements the bounded pointer-free namespace request/response ABI, shared-frame validation, typed operation preparation, cancellation/revoke handling, and a real seL4 MCS receive/atomic-`ReplyRecv` loop. The selected schema-1.15 QEMU root constructor binds the selected ELF digest and W^X load plan, creates the child from its compiler-owned revoke anchor, retains a one-shot bootstrap SC and the dedicated fault-recovery Reply authority, and exposes only the bounded `Call` adapter. After one validated bootstrap exchange, the SC is unbound and the child is steady-state passive. Root remains the only Queen policy and namespace-mutation authority. A successful target check proves construction code and image identity, while a live selected-image QEMU boot remains the activation/containment evidence gate. |
 | Executable Worker runtime and role/session model | Target children plus root/host projections | Root constructs suspended Heartbeat, GPU, and LoRA children from the compiler-owned image and authority inventory. Instances are passive and accept a donated SC only from their generated role executor. READY gates publication; control, receipts, faults, teardown, and recreation retain exact five-part identity. WorkerBus remains model-only. |
 | Host NineDoor library/fixture adapter | Host, `std` | Implements the Secure9P model used by host builds and in-process compatibility tests. It is not a packaged target transport or proof of a live host service. |
@@ -162,7 +162,7 @@ flowchart TB
       GpuExecutor[GPU Worker executor]
       LoraExecutor[LoRA plus Heartbeat executor]
     end
-    ConsoleChild["Active console-network child\nTCP, authentication, smoltcp, and QEMU VirtIO"]
+    ConsoleChild["Active console-network child\nTCP, authentication, and smoltcp\nQEMU VirtIO or Pi direct GENET peer"]
     NineDoorChild["NineDoor child\none-shot bootstrap SC then passive"]
     subgraph WorkerPopulation["256 passive Worker children"]
       HeartbeatWorker[1 Heartbeat]
@@ -173,7 +173,7 @@ flowchart TB
     Drivers[Profile-selected isolated driver runtimes]
 
     Serial -->|console lines| EventPump
-    ConsoleChild <-->|bounded shared frames and notifications| EventPump
+    ConsoleChild <-->|control, events, and bootstrap packet copies| EventPump
     EventPump <-->|after bootstrap, depth-one donated Call and Reply| NineDoorChild
     EventPump -->|control records and wake| WorkerSupervisor
     RootFault -->|fault handoff, Reply release, and revoke| WorkerSupervisor
@@ -188,6 +188,7 @@ flowchart TB
     RootFault -->|fault handoff and recovery| DriverSupervisor
     EventPump --> Hal
     Hal -->|bounded ABI service turns| Drivers
+    Drivers <-->|Pi GENET post-DHCP DGHO\n32 CPU-only pages and reciprocal wake hints| ConsoleChild
   end
 
   Generated -->|profile truth| EventPump
@@ -357,6 +358,14 @@ The target boot sequence is profile-qualified:
    operator surfaces, then enters the bounded event pump. Executable Worker
    namespace state becomes live only after the exact child publishes READY.
 
+On the Pi `bcmgenet-v5` profile, the event pump first obtains DHCP through the
+bounded bootstrap path. It then proves every root-mediated GENET command, RX,
+and TX cursor quiescent, publishes the handoff-pending generation, and issues
+one generation-bound zero-payload `DGHO`. Only an exact `PROGRESS/READY`
+terminal makes the 32-page CPU-only child link READY; exact `IDLE/QUIESCING`
+retains the old path for bounded drain and retry. No failure reopens root packet
+mediation. Other network profiles omit this transition.
+
 Pi saved boot policy is loaded by the staged U-Boot script and passed through
 bounded `/chosen/cohesix,*` properties. Saved policy may select or configure an
 allowed network path, but it does not rewrite the compiled manifest. See
@@ -402,7 +411,37 @@ No host provider state independently proves Worker READY, and no Worker receipt
 independently proves a real external side effect. See
 [GPU Nodes](GPU_NODES.md) for this boundary.
 
-### 6.3 Observability
+### 6.3 Pi direct GENET data path
+
+Console-network ABI v5 derives its direct-GENET extension only for the exact Pi
+`bcmgenet-v5` profile. It reuses 32 admitted GENET pages after the handoff cut:
+page 0 is the aligned sequence-last control page, pages 1 through 15 carry
+GENET-to-console RX frames, and pages 16 through 31 carry console-to-GENET TX
+frames. Both children map those pages as cacheable Normal/XN CPU-only memory;
+the range grants no physical-address, MMIO, DMA, or device-visible authority.
+
+GENET remains the sole MMIO/DMA/IRQ and private-DMA-ring owner and copies between
+those rings and the CPU link. Console-network remains the sole smoltcp, TCP, and
+transport-authentication owner. Each direction has one producer and one consumer
+with generation-bound monotonic cursors and sequence-last commits. Reciprocal
+send-only notifications are coalescing wake hints; durable cursor state and the
+mandatory final recheck before waiting carry truth.
+
+A failed handoff, stale generation, invalid cursor or sequence, descriptor
+drift, peer fault, or containment error poisons the link and couples containment
+of the two child generations. Root suspends the GENET owner, removes both
+reciprocal notification caps, and removes all console copies of the 32 pages
+before anchor revoke. It does not restore a root packet-copy, poll, or GENET
+packet-command path.
+
+The Pi direct-GENET console image has a 65-page PT_LOAD footprint. Its selected
+service inventory is 103 frames and 160 retained root CSpace slots; the 32
+direct pages are reused external GENET pages and therefore add console mapping
+caps, not new data-plane frames or a larger child untyped. These are generated
+construction bounds. They do not prove a Pi boot, handoff, packet correctness,
+latency, throughput, QEMU parity, or acceptance.
+
+### 6.4 Observability
 
 Logs, pressure, session, scheduling, lease, ingest, task, fault, and evidence
 state are exposed through bounded namespace nodes. The selected manifest gates
@@ -415,6 +454,10 @@ those schemas or raise the evidence level of their source.
 - All target physical-device authority passes through HAL.
 - Selected steady-state physical drivers are manifest-declared isolated
   runtimes; the Pi DMA claim remains `bounded-no-iommu`.
+- The Pi direct-GENET range is CPU-only and grants neither child new DMA, MMIO,
+  physical-address, or root-policy authority. Its reciprocal notifications are
+  wake hints, and either peer's failure triggers coupled fail-closed containment
+  without a root packet fallback.
 - Target code remains `no_std`; host capabilities and heavy ecosystems do not
   enter the target closure.
 - Isolated child mappings are W^X, and executable frames retain no writable

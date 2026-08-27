@@ -12,6 +12,7 @@ publish = false
 default = []
 qemu-evidence = []
 direct-virtio = []
+direct-genet = []
 
 [dependencies]
 console-network-abi = { workspace = true }

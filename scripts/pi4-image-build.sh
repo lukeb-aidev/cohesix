@@ -1930,7 +1930,10 @@ build_pi4_image() {
     worker_manifest_tool="${SCRIPT_DIR}/worker_image_manifest.py"
 
     log "Building 26e child/runtime images for Pi4 root-task"
-    local -a sel4_runtime_build_args=(build --locked --target "$sel4_target" --release)
+    local -a sel4_runtime_build_args=(
+        build --locked --target "$sel4_target" --release
+        --features "console-network-runtime/direct-genet"
+    )
     for sel4_target_package in "${sel4_runtime_packages[@]}"; do
         sel4_runtime_build_args+=( -p "$sel4_target_package" )
     done

@@ -37,6 +37,19 @@ tools consume the stable console, namespace, REST, and generated target-profile
 contracts. Use [Roles and Scheduling](ROLES_AND_SCHEDULING.md) for target
 temporal policy, [API Guidelines](API_GUIDELINES.md) for REST deadline and
 refusal semantics, and [Benchmarking](BENCHMARKS.md) for backend proof classes.
+
+The Pi-only GENET-to-console direct data plane is a private target transport
+change. The complete `coh`, `cohsh`, Hive Gateway/REST, SwarmUI, bridge,
+`tools/cohesix-py`, generated-profile-consumer, `.coh` script, and benchmark
+surface was reviewed: it changes no command grammar, listener, authentication,
+namespace, REST request/response, library API, workload, or report schema.
+The benchmark harness now validates the same-boot private direct-GENET handoff
+terminal and rejects later fault, poison, or containment evidence; its workload
+and report schema do not change. The other consumers require no hand-authored
+compatibility change. Pi build selection and generated private ABI/resource
+records do change, while a fresh physical benchmark remains the only
+performance authority.
+
 ## Choose one live topology
 
 The target TCP console is single-client. Use direct mode for one foreground tool or

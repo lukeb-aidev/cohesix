@@ -882,8 +882,8 @@ from that catalog.
 | `diagnostic.guard-root-mcs` | NON-CLAIMING diagnostic | `non-claiming` | conditional / qemu | `cargo test -p root-task --no-default-features --test mcs_activation_order -- --test-threads=1` |
 | `diagnostic.guard-worker` | NON-CLAIMING diagnostic | `non-claiming` | conditional / qemu | `cargo test -p root-task --no-default-features --features driver-tests-qemu --test worker_fault_lifecycle -- --test-threads=1` |
 | `diagnostic.guard-ninedoor` | NON-CLAIMING diagnostic | `non-claiming` | conditional / qemu | `cargo test -p root-task --no-default-features --test ninedoor_service_isolation -- --test-threads=1` |
-| `diagnostic.guard-console-network` | NON-CLAIMING diagnostic | `non-claiming` | conditional / qemu | `cargo test -p console-network-abi && cargo test -p console-network-runtime && cargo test -p root-task --test console_network_service && cargo test -p root-task --no-default-features --features driver-tests-qemu isolated_response_lane_pays_exactly_one_ordinary_debt_after_eight_units -- --test-threads=1 && cargo test -p root-task --no-default-features --features driver-tests-qemu isolated_help_capture_publishes_complete_body_then_one_terminal -- --test-threads=1 && cargo test -p root-task --no-default-features --features driver-tests-qemu isolated_fixed_synchronous_producers_cross_batch_depth_without_end -- --test-threads=1 && cargo test -p root-task --no-default-features --features driver-tests-qemu bounded_sync_capture_overflow_emits_only_typed_terminal_and_reconciles_metrics -- --test-threads=1 && cargo test -p root-task --no-default-features --features driver-tests-qemu bounded_sync_cache_snapshot_crosses_batch_depth_and_tombstones_on_quiet_cut -- --test-threads=1 && cargo test -p root-task --no-default-features --features driver-tests-qemu bounded_sync_response_is_retired_on_exact_identity_loss -- --test-threads=1 && cargo test -p root-task --no-default-features --features driver-tests-qemu pinned_network_line_cannot_dispatch_to_a_replacement_connection -- --test-threads=1 && cargo test -p root-task --no-default-features --features driver-tests-qemu physical_progress_is_bounded_while_heavy_producers_preserve_network_owner -- --test-threads=1 && cargo test -p root-task --no-default-features --features driver-tests-qemu blocked_physical_producer_retains_an_ordered_busy_terminal_and_prompt -- --test-threads=1 && cargo test -p root-task --no-default-features --features driver-tests-qemu hal::cache::tests -- --test-threads=1 && cargo test -p root-task --no-default-features --test isolated_virtio_network_phasing -- --test-threads=1 && .venv/bin/python -m pytest -q tests/test_console_network_runtime_packaging.py tests/test_qemu_tcp_response_matrix.py scripts/ci/test_run_regression_batch.py` |
-| `diagnostic.guard-pi4-driver` | NON-CLAIMING diagnostic | `non-claiming` | conditional / pi4 | `cargo test -p root-task --no-default-features --features driver-tests-pi4 --test driver_task_mcs -- --test-threads=1` |
+| `diagnostic.guard-console-network` | NON-CLAIMING diagnostic | `non-claiming` | conditional / qemu | `cargo test -p console-network-abi && cargo test -p console-network-runtime && cargo test -p console-network-runtime --features direct-genet && cargo test -p root-task --test console_network_service && cargo test -p root-task --test direct_genet_network_phasing && cargo test -p root-task --no-default-features --features driver-tests-qemu isolated_response_lane_pays_exactly_one_ordinary_debt_after_eight_units -- --test-threads=1 && cargo test -p root-task --no-default-features --features driver-tests-qemu isolated_help_capture_publishes_complete_body_then_one_terminal -- --test-threads=1 && cargo test -p root-task --no-default-features --features driver-tests-qemu isolated_fixed_synchronous_producers_cross_batch_depth_without_end -- --test-threads=1 && cargo test -p root-task --no-default-features --features driver-tests-qemu bounded_sync_capture_overflow_emits_only_typed_terminal_and_reconciles_metrics -- --test-threads=1 && cargo test -p root-task --no-default-features --features driver-tests-qemu bounded_sync_cache_snapshot_crosses_batch_depth_and_tombstones_on_quiet_cut -- --test-threads=1 && cargo test -p root-task --no-default-features --features driver-tests-qemu bounded_sync_response_is_retired_on_exact_identity_loss -- --test-threads=1 && cargo test -p root-task --no-default-features --features driver-tests-qemu pinned_network_line_cannot_dispatch_to_a_replacement_connection -- --test-threads=1 && cargo test -p root-task --no-default-features --features driver-tests-qemu physical_progress_is_bounded_while_heavy_producers_preserve_network_owner -- --test-threads=1 && cargo test -p root-task --no-default-features --features driver-tests-qemu blocked_physical_producer_retains_an_ordered_busy_terminal_and_prompt -- --test-threads=1 && cargo test -p root-task --no-default-features --features driver-tests-qemu hal::cache::tests -- --test-threads=1 && cargo test -p root-task --no-default-features --test isolated_virtio_network_phasing -- --test-threads=1 && .venv/bin/python -m pytest -q tests/test_console_network_runtime_packaging.py tests/test_qemu_tcp_response_matrix.py scripts/ci/test_run_regression_batch.py` |
+| `diagnostic.guard-pi4-driver` | NON-CLAIMING diagnostic | `non-claiming` | conditional / pi4 | `cargo test -p root-task --no-default-features --test driver_task_mcs -- --test-threads=1 && cargo test -p coh-rtc --test pi4_profile && cargo test -p console-network-runtime --features direct-genet && cargo test -p root-task --test direct_genet_network_phasing` |
 | `diagnostic.guard-live-transport` | NON-CLAIMING diagnostic | `non-claiming` | conditional / qemu, pi4 | `cargo test -p cohsh --no-default-features --features tcp` |
 | `diagnostic.python-sdk` | NON-CLAIMING diagnostic | `non-claiming` | conditional / qemu, pi4 | `scripts/ci/python_test_gate.sh --sdk-tests` |
 | `diagnostic.test-plan-tooling` | NON-CLAIMING diagnostic | `non-claiming` | conditional / qemu, pi4 | `python3 scripts/ci/test_test_plan_catalog.py && python3 scripts/ci/test_test_plan_converge.py` |
@@ -4041,11 +4041,18 @@ ordering. Telemetry must distinguish the post-generation-admission
 one-shot `sdio-owner-command-admitted` marker from generic root engine-init
 `command-observed` history, and retained grant acceptance must not be
 overwritten by another intake marker. The production `HOST_CONFIG` test must
-drive the exact-grant owner to terminal, publish and consume its sequence-last
-completion, and advance the CYW43 card-init parent to CMD0. Malformed idle
-badges must not be retained. Empty, stale, consumed, mutated, or
-wrong-generation grants and acknowledgement failure must execute zero owner
-operations and must not produce a private retry loop.
+prove its first owner call has completed deterministic containment and retained
+`HostConfigClock1Disable` before returning. It must then advance the injected
+counter by more than the unchanged owner deadline, complete host configuration
+without a card command or DMA transfer, drive that same exact-grant owner to
+terminal, publish and consume its sequence-last completion, and advance the
+CYW43 card-init parent to CMD0. The production reciprocal-ring regression must
+prove this complete chain in one test. This delayed-resume case protects the
+exact MCS seam; it does not extend any deadline. Malformed idle badges must not
+be retained.
+Empty, stale, consumed, mutated, or wrong-generation grants and acknowledgement
+failure must execute zero owner operations and must not produce a private retry
+loop.
 
 Physical-deadline coverage must use the 20-byte
 `DriverRuntimeSdioDeadlineArm` at owner-ring offset 2,028. Tests must prove the
@@ -5900,9 +5907,31 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
       service retains the strict rotor. It must reject a loop, multi-unit burst,
       budget increase, physical-input bypass, or QEMU/direct-VirtIO ownership
       change. Host timing or selector tests cannot establish Pi performance.
-      Generated-profile tests must also
-      prove that no direct
-      GENET-console link/caps or nine-page export-helper bypass is emitted.
+      Generated-profile and ABI tests must prove that only the exact Pi
+      `bcmgenet-v5` profile derives the direct GENET link: one CPU-only 32-page
+      semantic range, zero physical/DMA/device-visible authority, page 0
+      control, 15 RX slots, 16 TX slots, fixed reciprocal send-only caps, and
+      no manifest-authored toggle. Root construction tests must prove the
+      console TCB remains suspended while the old root path and GENET private
+      state quiesce, exact `IDLE/QUIESCING` terminals retry without switching,
+      only exact `PROGRESS/READY` activates the link and console TCB, malformed
+      terminals pair-contain with no fallback, and QEMU emits no GENET link.
+      Root must publish an atomic handoff-pending generation before DGHO,
+      preserve only the unfaulted legacy drain in that phase, and defer every
+      retry until the legacy coordinator plus root RX/TX frontiers are empty.
+      Tests must cover a fault between child READY publication and root READY
+      acceptance, a fence between pair-fault observation and publication, a
+      retained legacy call across QUIESCING, full-ring peer rearm, blocked
+      smoltcp ingress without self-poll, and direct-active IRQ unmask/handler-ACK
+      failures reaching poison, peer signal, and the standard fault endpoint.
+      Console-side validation failure must independently poison both of its
+      owned cursor lines after raced peer progress, signal the peer exactly
+      once, and then standard-fault. Retained ambiguous TX/RX commit
+      reconciliation must consume the exact current 8-frame TX fair share and
+      16-frame total service quantum rather than precede those bounds.
+      Containment must suspend GENET and delete both cross-child signal caps
+      before unmapping/deleting all 32 external console mapping caps and before
+      anchor revoke.
       Fresh same-boot wired evidence must prove DHCP/static policy, ARP, ICMP,
       raw TCP, authenticated `cohsh`, focused `.coh` scripts, queue/IRQ health,
       loss, latency, and throughput before any Pi GENET or overall performance
@@ -7689,8 +7718,11 @@ cargo test -p coh-rtc root_control_turn_candidate_is_exactly_accounted
 cargo test -p coh-rtc supervisor_cold_activation_candidates_are_profile_scoped
 cargo test -p coh-rtc --test ai_lora_contract
 cargo test -p console-network-abi -p console-network-runtime
+cargo test -p console-network-runtime --features direct-genet
+cargo test -p pi4-driver-abi -p pi4-driver-runtime
 cargo test -p nine-door --test policyfs --test host_sidecar_policy
 cargo test -p root-task --test console_network_service
+cargo test -p root-task --test direct_genet_network_phasing
 cargo test -p root-task --no-default-features --features driver-tests-qemu \
   isolated_response_lane_pays_exactly_one_ordinary_debt_after_eight_units \
   -- --test-threads=1
@@ -7744,15 +7776,25 @@ scripts/ci/test_plan_run.sh --target qemu \
 ```
 
 The compiler and root-boundary tests must agree on the exact image path and
-entrypoint, retained anchor, one-MiB child untyped, 60 image pages, 32 stack
-pages, one IPC page, one init page, and four shared pages: 98 frames total.
-They must also agree on eight translation objects, 123 retained root slots, 16
-child CSpace slots, the 32-page stack at `0x72030000..0x72050000`, notification
-slots/badges including the distinct publication ACK badge 64, sole port 31337 listener, active SC `3000 us / 10000 us` budget,
-`3000 us` WCET, QEMU core-2 placement with `3000 us` response candidate, Pi
-core-0 placement with `8100 us` response candidate, refills, and
-standard/timeout fault identities. The timeout cap/badge/resource/registry row
-must remain reserved, but the console TCB timeout-handler slot must be empty.
+entrypoint, retained anchor, one-MiB child untyped, 32 stack pages, one IPC
+page, one init page, and four ordinary shared pages. The base child retains 60
+image pages. The QEMU direct-VirtIO child uses 62 image pages and additionally
+owns 34 direct DMA frames, for 134 frames and 162 retained root slots. The Pi
+direct-GENET child uses 65 image pages and allocates no new direct data-plane
+frames: it maps 32 exact external copies of GENET-owned CPU pages, for 103
+frames and 160 retained root slots. Both retain eight anchor-derived
+translation objects and 16 child CSpace slots, the 32-page stack at
+`0x72030000..0x72050000`, notification slots/badges including publication ACK
+badge 64, and the sole port-31337 listener. The active SC remains
+`3000 us / 10000 us`, with `3000 us` WCET. QEMU stays on core 2 at
+priority/MCP 180/200 with a `3000 us` response candidate. Pi stays on core 0
+at priority/MCP 180/200 with an `8100 us` response candidate; Pi root-control
+remains 200/200 with its `5100 us` response. The Pi profile regression must
+prove the pre-authentication console priority remains strictly below root.
+Refills and
+standard/timeout fault identities remain generated. The timeout
+cap/badge/resource/registry row must remain reserved, but the console TCB
+timeout-handler slot must be empty.
 Any drift, cap-slot alias, anchor collision, second listener,
 W+X page, unbound or tampered image, broad fault/signal rights, root SC
 borrowing, or non-pointer-free record fails before launch. These stack and
@@ -7761,14 +7803,13 @@ four-core GICv3 QEMU must still complete authentication, the canonical `.coh`
 regression, standard-fault containment, and budget-exhaustion natural
 postponement without stack failure or loss of liveness/isolation.
 
-The compiler resource tests must additionally derive QEMU fixed/maximum
-frame-slot totals of `2018/4058` and `2066/4250`, and Pi fixed/maximum totals of
-`4066/8962` and `4114/9154`, respectively. The post-construction reserve,
-per-Worker costs, eight translation objects, untyped bytes, and fifth root
-Write-only publication-ACK mint remain unchanged; V15 adds exactly one image
-frame and its retained root slot. Adding the unchanged reserve must therefore
-yield admitted capacity-check totals of `2578/6298` for QEMU and `4626/11202`
-for Pi.
+The compiler resource tests must additionally derive current QEMU
+fixed/maximum frame-slot totals of `2024/4378` and `5096/12570`, and Pi
+fixed/maximum totals of `4077/9267` and `7149/17459`, respectively. The
+post-construction reserve, per-Worker costs, eight translation objects,
+untyped bytes, and fifth root Write-only publication-ACK mint remain
+unchanged. Adding the reserve yields exact admitted capacity-check totals of
+`5608/14618` for QEMU and `7661/19507` for Pi.
 
 The exact V14 build failure is the oracle for this reconciliation, not target
 evidence: child ELF SHA-256
@@ -7778,8 +7819,8 @@ LOAD end `0x23b540`, while generated truth admitted only 59 pages. V15 must
 bind that 60-page shape exactly; any further ELF growth, shrinkage, span drift,
 or source/generated disagreement fails before root linking and QEMU launch.
 
-The fixed-layout tests must also prove that console-network ABI v4 still uses
-the same four 4096-byte pages, offsets, lengths, and record schemas while the
+The fixed-layout tests must also prove that console-network ABI v5 retains the
+same four ordinary 4096-byte pages, offsets, lengths, and record schemas while the
 live helpers touch only a 40-byte packet or 64-byte control/event scalar header
 plus the validated active payload. A publisher must clear commit, perform a
 release fence, write the header and active bytes, perform a second release
@@ -7790,10 +7831,14 @@ must validate as zero. Reserved page-tail bytes and inactive payload suffixes
 are non-authoritative and must not be scanned or copied during a normal turn;
 construction zeroing and containment scrub remain required. Capability
 inspection must show that the child's packet-ingress and control mappings are
-read-only and its packet-egress and event mappings are read-write.
+read-only and its packet-egress and event mappings are read-write. On Pi, the
+additional layout at offset 1,024 seals one control page, 15 RX pages, 16 TX
+pages, the full generation, and the fixed peer wake slot. Every direct page is
+cacheable Normal/XN and CPU-only in both children, with no DMA or physical
+address in either the semantic range or legacy page inventory.
 
-Schema 1.14 must reject the immediate 1.13 predecessor and any ACK badge other
-than the ABI v4 value 64. The root must retain the fifth Write-only cap on the
+Schema 1.15 must reject the immediate 1.14 predecessor and any ACK badge other
+than the ABI v5 value 64. The root must retain the fifth Write-only cap on the
 existing root-to-child Notification without adding a child slot or Notification
 object. Source and deterministic state-machine tests must prove
 `NaturalPostpone` is selected for the active console child and for both selected
@@ -7810,7 +7855,7 @@ Graceful ShutdownComplete consumes one credit, retires root debt without ACK,
 starts bounded containment, and becomes teardown-terminal only after the exact
 proof completes; terminal plus egress coalescing fails closed.
 
-ABI v4 tests must prove `SendBatch = 3` binary encoding version 1 with exact
+ABI v5 tests must prove `SendBatch = 3` binary encoding version 1 with exact
 eight-byte header, one through eight records, exact `used_bytes`, reserved zero,
 and each `1..=256`-byte UTF-8 record free of CR/LF. Empty, ninth, oversized,
 malformed UTF-8, truncated, trailing, overlapping, stale-identity, and
@@ -7826,8 +7871,9 @@ must complete and quiesce. A pending batch without a commit and a
 capacity/sendability failure must retain zero new cycles; neither a root
 ServiceTick-per-record dependency nor a local self-Poll loop is accepted.
 
-ABI v4 tests must additionally prove `CommandBatch = 27` with encoding version
-1, an exact eight-byte batch header, one through eight records, and per-record
+ABI v5 compatibility tests must additionally retain the ABI-v4-introduced
+`CommandBatch = 27` contract with encoding version 1, an exact eight-byte batch
+header, one through eight records, and per-record
 `now_ms`, command length, and exact UTF-8 command bytes. The child may coalesce
 only consecutive authenticated `Command` events for one connection, up to the
 generated `max_commands_per_wake <= 8` and fixed 2368-byte payload bounds.
@@ -8520,10 +8566,10 @@ _Generated by coh-rtc (sha256: `fa11c64fe53b859365c45c8e33e565d428029a87529be00c
 <!-- coh-rtc:trace-policy:end -->
 
 ## Manifest fingerprints
-- `configs/root_task.toml` — `sha256:92df0d52bc280aa56a0a254a6411bfb6c99f38d22411421e4a84b52ca00c5970`
-- `configs/generated/root_task_resolved.json` — `sha256:cdbfdfa9f4de5c1cd8f8f9ef7233aff9465e15e5469cce6604bdde50872996ba`
-- `configs/root_task_pi4_uboot_aarch64.toml` — `sha256:77c46ba8b66b805911c5eef1218ddb7348046ba58e3acb8bbde3b4eb54f67881`
-- Pi `pi4_production` transient resolved binding — `sha256:a9916efc2ae0a11257a7b023ee559ede994fc943872454ad5d50d6cdde6c0c48`
+- `configs/root_task.toml` — `sha256:f8ac815eecf31f83739d3569a748ceace199f1e29a6eda3f4fd3d191e202784d`
+- `configs/generated/root_task_resolved.json` — `sha256:a9a50408519f33cf2e05932cffffa5dbb521958870b16edf2f36311ff60385a1`
+- `configs/root_task_pi4_uboot_aarch64.toml` — `sha256:1482ad2ad91ca9092930a5ff1b95465914633fb7e83dbad58244649bdd6b1311`
+- Pi `pi4_production` transient resolved binding — `sha256:286602fbe0045f5df241d05e61674379a6cce7d428bd2b0ce9a1111f4d048e5e`
 
 ## Transcript fixture hashes
 - `tests/fixtures/transcripts/boot_v0/serial.txt` — `sha256:2ea58218a937f0c702fd67dac83aa838a8c49b9d1fba1e0165dfa93a44ab3c6d`

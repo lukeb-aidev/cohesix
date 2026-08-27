@@ -177,7 +177,7 @@ mod tests {
     }
 
     #[test]
-    fn console_network_image_shrink_is_exactly_accounted() {
+    fn console_network_image_footprints_are_exactly_accounted() {
         for (
             manifest,
             fixed_frames,
@@ -188,17 +188,17 @@ mod tests {
             admitted_slots,
         ) in [
             (qemu_manifest(), 2_024, 4_378, 5_096, 12_570, 5_608, 14_618),
-            (pi4_manifest(), 4_072, 9_230, 7_144, 17_422, 7_656, 19_470),
+            (pi4_manifest(), 4_077, 9_267, 7_149, 17_459, 7_661, 19_507),
         ] {
             let qemu = manifest.profile.name == "virt-aarch64";
             assert_eq!(manifest.console_network_service.stack_pages, 32);
             assert_eq!(
                 manifest.console_network_service.objects.frames,
-                if qemu { 134 } else { 98 }
+                if qemu { 134 } else { 103 }
             );
             assert_eq!(
                 manifest.console_network_service.objects.cspace_slots,
-                if qemu { 162 } else { 123 }
+                if qemu { 162 } else { 160 }
             );
             assert_eq!(manifest.console_network_service.objects.fault_caps, 1);
             assert_eq!(
@@ -274,6 +274,8 @@ mod tests {
                 expected_serial_io_bound,
                 expected_wcet_provenance,
                 expected_console_core,
+                expected_console_priority,
+                expected_console_mcp,
                 expected_console_response,
                 expected_core_zero_demand,
                 expected_core_two_demand,
@@ -286,6 +288,8 @@ mod tests {
                     64,
                     "m26e-qemu-root-dedicated-core-bounded-quantum-v1",
                     2,
+                    180,
+                    200,
                     3_000,
                     9_000,
                     8_000,
@@ -299,6 +303,8 @@ mod tests {
                     0,
                     "m26e-pi4-root-adjacent-refill-natural-postpone-candidate-v24",
                     0,
+                    180,
+                    200,
                     8_100,
                     9_000,
                     7_400,
@@ -338,8 +344,15 @@ mod tests {
                 .expect("console-network-service temporal task");
             assert_eq!(console_network.core, expected_console_core);
             assert_eq!(console_network.sched_control_core, expected_console_core);
+            assert_eq!(console_network.priority, expected_console_priority);
+            assert_eq!(console_network.mcp, expected_console_mcp);
             assert_eq!(manifest.console_network_service.core, expected_console_core);
-            assert_eq!(manifest.console_network_service.abi_version, 4);
+            assert_eq!(
+                manifest.console_network_service.priority,
+                expected_console_priority
+            );
+            assert_eq!(manifest.console_network_service.mcp, expected_console_mcp);
+            assert_eq!(manifest.console_network_service.abi_version, 5);
             assert_eq!(console_network.budget_us, 3_000);
             assert_eq!(console_network.period_us, 10_000);
             assert_eq!(console_network.wcet_us, 3_000);
@@ -433,6 +446,59 @@ mod tests {
             );
             assert!(
                 core_two_demand <= core_two_admission.capacity_us - core_two_admission.reserve_us
+            );
+        }
+    }
+
+    #[test]
+    fn pi4_console_priority_and_response_contract_fails_closed_on_temporal_drift() {
+        let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+
+        let mut invalid_mcp = pi4_manifest();
+        invalid_mcp
+            .temporal_authority
+            .tasks
+            .iter_mut()
+            .find(|task| task.id == "console-network-service")
+            .expect("console-network temporal task")
+            .mcp = 179;
+        let error = invalid_mcp
+            .validate_with_base(Some(repo_root.as_path()))
+            .expect_err("priority 180 above MCP 179 must fail closed");
+        assert!(
+            error.to_string().contains("priority 180 exceeds MCP 179"),
+            "unexpected error: {error}"
+        );
+
+        let mut service_drift = pi4_manifest();
+        service_drift.console_network_service.priority = 200;
+        let error = service_drift
+            .validate_with_base(Some(repo_root.as_path()))
+            .expect_err("duplicate service priority drift must fail closed");
+        assert!(
+            error
+                .to_string()
+                .contains("object/SC inventory disagrees with temporal task"),
+            "unexpected error: {error}"
+        );
+
+        for (task_id, stale_response) in
+            [("root-control", 8_100), ("console-network-service", 5_600)]
+        {
+            let mut response_drift = pi4_manifest();
+            response_drift
+                .temporal_authority
+                .tasks
+                .iter_mut()
+                .find(|task| task.id == task_id)
+                .unwrap_or_else(|| panic!("temporal task {task_id}"))
+                .response_time_us = stale_response;
+            let error = response_drift
+                .validate_with_base(Some(repo_root.as_path()))
+                .expect_err("stale response bound must fail closed");
+            assert!(
+                error.to_string().contains("response-time result mismatch"),
+                "unexpected error for {task_id}: {error}"
             );
         }
     }

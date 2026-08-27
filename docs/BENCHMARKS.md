@@ -504,6 +504,20 @@ The gateway's `/v1/meta/status` must continuously report normalized configured
 backend `target_host="$PI_TARGET_IP"` and `target_port=31337`; the gate seals
 that first connection and the harness rejects endpoint or connection drift.
 
+The Pi GENET run must additionally bind the same-boot
+`CONSOLE_NETWORK_HANDOFF phase=direct-link-complete` record for the current
+nonzero generation, `owner=driver-console-direct`, and
+`root_packet_mediation=disabled`. An `IDLE/QUIESCING` retry is permitted before
+that terminal but is not performance readiness. Missing selected-lane or
+shell/armed/terminal identity, malformed handoff, pair containment, cursor
+poison, retained root packet work, or a later driver/console fault rejects the
+run. The roughly 200-millisecond
+SYN response and 50-millisecond class staircase from the predecessor image are
+diagnostic baseline evidence only. The direct path is intended to remove that
+structural mediation cost; only fresh same-harness percentiles and throughput
+may establish the magnitude, including any claimed 100-times improvement or
+QEMU parity.
+
 The current high-profile GENET command is:
 
 ```bash

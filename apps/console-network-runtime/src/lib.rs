@@ -37,6 +37,26 @@ const SESSION_INGRESS_BYTES: usize = CONSOLE_PAYLOAD_BYTES + FRAME_PREFIX_BYTES;
 const INVALID_LENGTH_OUTPUT_RESERVE: usize = 3;
 const INVALID_LENGTH_FRAME: &[u8] = b"ERR FRAME reason=invalid-length";
 
+/// Decide whether a direct NIC service loop may poll locally without a new
+/// notification. A retained egress frame alone cannot justify polling after
+/// the NIC reported ring backpressure; only peer rearm or independently
+/// durable local work may resume it.
+#[must_use]
+pub const fn direct_service_repoll_required(
+    quantum_exhausted: bool,
+    completion_pending: bool,
+    event_pending: bool,
+    egress_pending: bool,
+    tx_waiting_for_peer: bool,
+    link_work_pending: bool,
+) -> bool {
+    quantum_exhausted
+        || completion_pending
+        || event_pending
+        || link_work_pending
+        || (egress_pending && !tx_waiting_for_peer)
+}
+
 /// Runtime construction or bounded service error.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RuntimeError {
@@ -1376,6 +1396,22 @@ mod tests {
         ArpOperation, ArpPacket, ArpRepr, EthernetFrame, EthernetProtocol, EthernetRepr,
         Icmpv4Packet, Icmpv4Repr, IpProtocol, Ipv4Packet, Ipv4Repr,
     };
+
+    #[test]
+    fn direct_tx_backpressure_blocks_until_peer_or_independent_work() {
+        assert!(!direct_service_repoll_required(
+            false, false, false, true, true, false,
+        ));
+        assert!(direct_service_repoll_required(
+            false, false, false, true, false, false,
+        ));
+        assert!(direct_service_repoll_required(
+            false, false, false, true, true, true,
+        ));
+        assert!(direct_service_repoll_required(
+            false, true, false, true, true, false,
+        ));
+    }
 
     fn descriptor() -> RuntimeInitDescriptor {
         let mut token = [0; AUTH_TOKEN_BYTES];

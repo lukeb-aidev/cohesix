@@ -499,6 +499,12 @@ where
         #[cfg(feature = "net-console")]
         if hal_ptr != 0 {
             recovery_turn =
+                with_deferred_root_hal(hal_ptr, |hal| pump.contain_faulted_direct_genet_pair(hal))
+                    .unwrap_or(false);
+        }
+        #[cfg(feature = "net-console")]
+        if !recovery_turn && hal_ptr != 0 {
+            recovery_turn =
                 with_deferred_root_hal(hal_ptr, |hal| pump.contain_faulted_console_network(hal))
                     .unwrap_or(false);
         }

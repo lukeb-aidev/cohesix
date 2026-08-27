@@ -76,6 +76,226 @@ def test_normalize_rest_url_trims_slashes() -> None:
     )
 
 
+def pi_genet_direct_handoff_serial(*later_lines: str) -> bytes:
+    """Build one minimal latest-boot direct-GENET handoff fixture."""
+
+    lines = [
+        "U-Boot 2025.10",
+        (
+            "[console-network] shell constructed generation=7 tcb=0x2421 "
+            "state=suspended descriptor=pending-dhcp fault_registry=registered "
+            "backend=bcmgenet-v5"
+        ),
+        (
+            "CONSOLE_NETWORK_HANDOFF phase=direct-link-armed tcb=0x2421 "
+            "ip=192.168.10.2/24 gateway=192.168.10.1 "
+            "mac=02-00-00-00-00-02 descriptor=finalized state=suspended "
+            "owner=pending-genet-command root_tcp=disabled backend=bcmgenet-v5"
+        ),
+        (
+            "CONSOLE_NETWORK_HANDOFF phase=direct-link-complete "
+            "tcb=0x2421 generation=7 ip=192.168.10.2/24 "
+            "gateway=192.168.10.1 mac=02-00-00-00-00-02 state=active "
+            "owner=driver-console-direct root_packet_mediation=disabled "
+            "backend=bcmgenet-v5"
+        ),
+        (
+            "netstats: generation=7 mode=dhcp policy=wired active=wired "
+            "standby=wifi addr_src=dhcp-lease ip=192.168.10.2 "
+            "gateway=192.168.10.1 dhcp=bound"
+        ),
+        *later_lines,
+    ]
+    return ("\n".join(lines) + "\n").encode("ascii")
+
+
+def test_pi_genet_direct_handoff_accepts_one_current_terminal() -> None:
+    rest_perf.validate_pi_genet_direct_handoff(pi_genet_direct_handoff_serial())
+
+
+@pytest.mark.parametrize(
+    "serial_raw, message",
+    (
+        (b"U-Boot 2025.10\n", "lacks one exact"),
+        (
+            pi_genet_direct_handoff_serial(
+                "CONSOLE_NETWORK_HANDOFF phase=direct-link-complete "
+                "tcb=0x2421 generation=8 ip=192.168.10.2/24 "
+                "gateway=192.168.10.1 mac=02:00:00:00:00:02 state=active "
+                "owner=driver-console-direct root_packet_mediation=disabled "
+                "backend=bcmgenet-v5"
+            ),
+            "lacks one exact",
+        ),
+        (
+            pi_genet_direct_handoff_serial(
+                "CONSOLE_NETWORK_HANDOFF phase=direct-link-command "
+                "generation=7 status=failed containment_started=true "
+                "action=contain-no-fallback backend=bcmgenet-v5"
+            ),
+            "failed direct handoff",
+        ),
+        (
+            pi_genet_direct_handoff_serial(
+                "DRIVER_FAULT_CONTAINMENT v1 q=1 task=bcmgenet-v5 "
+                "c=standard"
+            ),
+            "later driver fault",
+        ),
+        (
+            pi_genet_direct_handoff_serial(
+                "[console-network] generation=7 terminal-fault "
+                "source=local reason=direct-genet-invalid-cursor"
+            ),
+            "later console fault",
+        ),
+        (
+            pi_genet_direct_handoff_serial(
+                "CONSOLE_NETWORK_TEARDOWN generation=7 state=terminal"
+            ),
+            "pair containment",
+        ),
+        (
+            pi_genet_direct_handoff_serial(
+                "DIRECT_GENET_CURSOR_POISON generation=7 reason=2"
+            ),
+            "poisoned cursor",
+        ),
+        (
+            pi_genet_direct_handoff_serial(
+                "[console-network] generation=7 fail-closed "
+                "reason=direct-genet-invalid-cursor"
+            ),
+            "later console fault",
+        ),
+        (
+            (
+                "U-Boot 2025.10\n"
+                "CONSOLE_NETWORK_HANDOFF phase=console-activate generation=7 "
+                "status=failed containment_started=true "
+                "action=contain-no-fallback backend=bcmgenet-v5\n"
+            ).encode("ascii")
+            + pi_genet_direct_handoff_serial().split(b"\n", 1)[1],
+            "failed direct handoff",
+        ),
+        (
+            (
+                "U-Boot 2025.10\n"
+                "DRIVER_FAULT_CONTAINMENT v1 q=1 task=bcmgenet-v5 "
+                "c=standard\n"
+            ).encode("ascii")
+            + pi_genet_direct_handoff_serial().split(b"\n", 1)[1],
+            "later driver fault",
+        ),
+        (
+            (
+                "U-Boot 2025.10\n"
+                "[console-network] fault generation mismatch "
+                "expected=7 observed=6\n"
+            ).encode("ascii")
+            + pi_genet_direct_handoff_serial().split(b"\n", 1)[1],
+            "later console fault",
+        ),
+        (
+            (
+                "U-Boot 2025.10\n"
+                "CONSOLE_NETWORK_TEARDOWN generation=7 state=terminal\n"
+            ).encode("ascii")
+            + pi_genet_direct_handoff_serial().split(b"\n", 1)[1],
+            "pair containment",
+        ),
+    ),
+)
+def test_pi_genet_direct_handoff_rejects_nonterminal_evidence(
+    serial_raw: bytes,
+    message: str,
+) -> None:
+    with pytest.raises(rest_perf.RestError, match=message):
+        rest_perf.validate_pi_genet_direct_handoff(serial_raw)
+
+
+@pytest.mark.parametrize(
+    "old, new",
+    (
+        ("generation=7", "generation=0"),
+        ("generation=7", "generation=18446744073709551616"),
+        ("tcb=0x2421", "tcb=2421"),
+        ("root_packet_mediation=disabled", "root_packet_mediation=enabled"),
+        ("backend=bcmgenet-v5", "backend=bcmgenet-v4"),
+        ("backend=bcmgenet-v5", "backend=bcmgenet-v5 unexpected=yes"),
+    ),
+)
+def test_pi_genet_direct_handoff_rejects_contract_drift(old: str, new: str) -> None:
+    serial_raw = pi_genet_direct_handoff_serial().replace(
+        old.encode("ascii"), new.encode("ascii")
+    )
+    with pytest.raises(rest_perf.RestError):
+        rest_perf.validate_pi_genet_direct_handoff(serial_raw)
+
+
+@pytest.mark.parametrize(
+    "old, new",
+    (
+        ("phase=direct-link-armed", "phase=unknown"),
+        ("descriptor=finalized", "descriptor=wrong"),
+        ("owner=pending-genet-command", "owner=root"),
+        ("root_tcp=disabled", "root_tcp=enabled"),
+    ),
+)
+def test_pi_genet_direct_handoff_rejects_armed_contract_drift(
+    old: str,
+    new: str,
+) -> None:
+    serial_raw = pi_genet_direct_handoff_serial().replace(
+        old.encode("ascii"), new.encode("ascii"), 1
+    )
+    with pytest.raises(rest_perf.RestError):
+        rest_perf.validate_pi_genet_direct_handoff(serial_raw)
+
+
+def test_pi_genet_direct_handoff_rejects_identity_disagreement() -> None:
+    serial_raw = pi_genet_direct_handoff_serial().replace(
+        b"phase=direct-link-armed tcb=0x2421 ip=192.168.10.2/24",
+        b"phase=direct-link-armed tcb=0x2421 ip=192.168.10.9/24",
+    )
+    with pytest.raises(rest_perf.RestError, match="armed and complete identities differ"):
+        rest_perf.validate_pi_genet_direct_handoff(serial_raw)
+
+
+def test_pi_genet_direct_handoff_rejects_shell_after_handoff() -> None:
+    lines = pi_genet_direct_handoff_serial().decode("ascii").splitlines()
+    shell = lines.pop(1)
+    lines.insert(3, shell)
+    with pytest.raises(rest_perf.RestError, match="phases are out of order"):
+        rest_perf.validate_pi_genet_direct_handoff(
+            ("\n".join(lines) + "\n").encode("ascii")
+        )
+
+
+def test_pi_genet_network_identity_uses_direct_terminal_and_hyphen_mac() -> None:
+    mac_raw, ip_raw, mac_value, ip_value = (
+        rest_perf.derive_pi_serial_network_identity(
+            pi_genet_direct_handoff_serial(),
+            rest_perf.BENCHMARK_TRANSPORT_GENET,
+        )
+    )
+
+    assert mac_raw == bytes.fromhex("020000000002")
+    assert ip_raw == bytes((192, 168, 10, 2))
+    assert mac_value == "02-00-00-00-00-02"
+    assert ip_value == "192.168.10.2"
+
+
+def test_pi_genet_direct_handoff_ignores_adverse_prior_boot() -> None:
+    prior = pi_genet_direct_handoff_serial(
+        "[console-network] generation=7 terminal-fault source=local reason=cursor"
+    )
+    latest = pi_genet_direct_handoff_serial().replace(
+        b"U-Boot 2025.10", b"U-Boot 2025.11"
+    )
+    rest_perf.validate_pi_genet_direct_handoff(prior + latest)
+
+
 def test_worker_failure_context_is_relevant_recent_and_bounded() -> None:
     lines = ["unrelated audit line"]
     lines.extend(
@@ -4866,16 +5086,34 @@ def write_pi_genet_current_proof(
 
     started_ns = time.time_ns() - 1_000_000_000
     serial = tmp_path / "pi4-genet-serial.log"
-    serial.write_text(
+    serial_text = (
         (tmp_path / "pi4-cyw43-serial.log")
         .read_text(encoding="utf-8")
         .replace("192.168.50.23", "192.168.10.50")
         .replace("192.168.50.1", "192.168.10.1")
         .replace("02:43:4f:48:58:32", "02:43:4f:48:58:31")
         .replace("policy=wifi active=wifi", "policy=wired active=wired")
-        .replace("standby=wired", "standby=wifi"),
-        encoding="utf-8",
+        .replace("standby=wired", "standby=wifi")
     )
+    serial_text = serial_text.replace(
+        "[net-console] ready ip=192.168.10.50 port=31337 "
+        "mac=02:43:4f:48:58:31\n",
+        (
+            "[console-network] shell constructed generation=7 tcb=0x2421 "
+            "state=suspended descriptor=pending-dhcp fault_registry=registered "
+            "backend=bcmgenet-v5\n"
+            "CONSOLE_NETWORK_HANDOFF phase=direct-link-armed tcb=0x2421 "
+            "ip=192.168.10.50/24 gateway=192.168.10.1 "
+            "mac=02-43-4f-48-58-31 descriptor=finalized state=suspended "
+            "owner=pending-genet-command root_tcp=disabled backend=bcmgenet-v5\n"
+            "CONSOLE_NETWORK_HANDOFF phase=direct-link-complete tcb=0x2421 "
+            "generation=7 ip=192.168.10.50/24 gateway=192.168.10.1 "
+            "mac=02-43-4f-48-58-31 state=active "
+            "owner=driver-console-direct root_packet_mediation=disabled "
+            "backend=bcmgenet-v5\n"
+        ),
+    )
+    serial.write_text(serial_text, encoding="utf-8")
     capture = tmp_path / "pi4-genet-network.pcap"
     capture.write_bytes(
         correlated_pcap_fixture(
@@ -5148,7 +5386,9 @@ def test_pi_capture_requires_serial_selected_lane_dhcp_and_console_flow(
 ) -> None:
     """A fresh but unrelated pcap cannot qualify the serial-selected Pi lane."""
 
-    write_pi_benchmark_proof_chain(tmp_path)
+    _runtime, _session, _bounds, acceptance = write_pi_benchmark_proof_chain(
+        tmp_path
+    )
     serial_raw = (tmp_path / "pi4-cyw43-serial.log").read_bytes()
     capture_raw = (tmp_path / "pi4-cyw43-network.pcap").read_bytes()
     identity = rest_perf.validate_pi_correlated_network_capture(
@@ -5175,10 +5415,15 @@ def test_pi_capture_requires_serial_selected_lane_dhcp_and_console_flow(
             serial_raw,
             rest_perf.BENCHMARK_TRANSPORT_WIFI,
         )
-    with pytest.raises(rest_perf.RestError, match="selected lane"):
+    _runtime, _capture, _component, _acceptance = write_pi_genet_current_proof(
+        tmp_path,
+        acceptance,
+    )
+    genet_serial_raw = (tmp_path / "pi4-genet-serial.log").read_bytes()
+    with pytest.raises(rest_perf.RestError, match="selected-lane DHCP"):
         rest_perf.validate_pi_correlated_network_capture(
             capture_raw,
-            serial_raw,
+            genet_serial_raw,
             rest_perf.BENCHMARK_TRANSPORT_GENET,
         )
 

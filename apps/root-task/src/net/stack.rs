@@ -1989,15 +1989,21 @@ enum GenetNetState {
         runtime: crate::hal::console_network::ConsoleNetworkRuntime,
     },
     #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
+    DirectArmed {
+        stack: Box<NetStack<GenetDriverTaskDevice>>,
+        runtime: crate::hal::console_network::ConsoleNetworkRuntime,
+    },
+    #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
     Isolated {
         console: Box<IsolatedNetworkConsole<GenetDriverTaskDevice>>,
         _policy: Box<NetStack<GenetDriverTaskDevice>>,
     },
     #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
     Failed {
-        _runtime: crate::hal::console_network::ConsoleNetworkRuntime,
+        runtime: crate::hal::console_network::ConsoleNetworkRuntime,
         _policy: Box<NetStack<GenetDriverTaskDevice>>,
         status: NetStatusReport,
+        contained: bool,
     },
     #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
     Transitioning,
@@ -8703,7 +8709,10 @@ impl GenetNetStack {
 
     #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
     const fn console_child_deferred(&self) -> bool {
-        matches!(self.state, GenetNetState::Deferred { .. })
+        matches!(
+            self.state,
+            GenetNetState::Deferred { .. } | GenetNetState::DirectArmed { .. }
+        )
     }
 
     #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
@@ -8711,6 +8720,7 @@ impl GenetNetStack {
         matches!(
             self.state,
             GenetNetState::Deferred { .. }
+                | GenetNetState::DirectArmed { .. }
                 | GenetNetState::Isolated { .. }
                 | GenetNetState::Failed { .. }
         )
@@ -8732,7 +8742,12 @@ impl GenetNetStack {
 
     #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
     fn transition_after_dhcp(&mut self, hal: &mut KernelHal<'_>) -> bool {
+        if matches!(self.state, GenetNetState::DirectArmed { .. }) {
+            return self.service_direct_genet_handoff();
+        }
         let ready = self.transition_ready();
+        let root_quiescent =
+            ready && crate::drivers::driver_task_net::genet_root_mediation_quiescent();
         if !self.handoff_decision_logged {
             let decision = match &self.state {
                 GenetNetState::Deferred { stack, .. } => {
@@ -8758,21 +8773,23 @@ impl GenetNetStack {
                         ip,
                         prefix_len,
                         if ready { "yes" } else { "no" },
-                        if ready { "finalize-resume" } else { "retain-suspended" },
+                        if root_quiescent {
+                            "arm-direct-link"
+                        } else if ready {
+                            "drain-root-mediation"
+                        } else {
+                            "retain-suspended"
+                        },
                     ),
                 );
                 crate::bootstrap::log::force_uart_line(line.as_str());
             }
         }
-        if !ready {
+        if !ready || !root_quiescent {
             return false;
         }
         let state = core::mem::replace(&mut self.state, GenetNetState::Transitioning);
-        let GenetNetState::Deferred {
-            mut stack,
-            mut runtime,
-        } = state
-        else {
+        let GenetNetState::Deferred { stack, mut runtime } = state else {
             self.state = state;
             return false;
         };
@@ -8781,10 +8798,15 @@ impl GenetNetStack {
         let prefix_len = stack.prefix_len();
         let gateway = stack.gateway();
         let status = stack.status_report();
-        let self_test_enabled = stack.self_test.enabled && stack.stage_policy.allow_selftest;
         let console_tcb = runtime.tcb_cptr();
 
         let transition_result = (|| {
+            if !runtime.direct_genet() {
+                return Err(HalError::Unsupported(
+                    "console-network-direct-genet-required",
+                ));
+            }
+            runtime.arm_direct_genet()?;
             runtime.finalize_descriptor(
                 hal,
                 mac.0,
@@ -8792,11 +8814,102 @@ impl GenetNetStack {
                 prefix_len,
                 gateway.map_or([0; 4], |address| address.octets()),
                 self.config.auth_token,
-            )?;
-            runtime.activate()
+            )
         })();
         match transition_result {
             Ok(()) => {
+                self.state = GenetNetState::DirectArmed { stack, runtime };
+                let mut line = heapless::String::<224>::new();
+                let _ = fmt::write(
+                    &mut line,
+                    format_args!(
+                        "CONSOLE_NETWORK_HANDOFF phase=direct-link-armed tcb=0x{:04x} ip={}/{} gateway={} mac={} descriptor=finalized state=suspended owner=pending-genet-command root_tcp=disabled backend=bcmgenet-v5",
+                        console_tcb,
+                        ip,
+                        prefix_len,
+                        gateway.unwrap_or(Ipv4Address::UNSPECIFIED),
+                        mac,
+                    ),
+                );
+                crate::bootstrap::log::force_uart_line(line.as_str());
+                false
+            }
+            Err(error) => {
+                let mut failed = status;
+                failed.address_source = "isolated-child-transition-failed";
+                failed.dhcp_phase = "bound";
+                failed.tcp_ready = false;
+                let containment_started = runtime.begin_containment().is_ok();
+                self.state = GenetNetState::Failed {
+                    runtime,
+                    _policy: stack,
+                    status: failed,
+                    contained: false,
+                };
+                let mut line = heapless::String::<224>::new();
+                let _ = fmt::write(
+                    &mut line,
+                    format_args!(
+                        "CONSOLE_NETWORK_HANDOFF phase=dhcp-bound tcb=0x{:04x} status=failed state=suspended root_tcp=disabled containment_started={} backend=bcmgenet-v5 err={error}",
+                        console_tcb, containment_started,
+                    ),
+                );
+                crate::bootstrap::log::force_uart_line(line.as_str());
+                false
+            }
+        }
+    }
+
+    #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
+    fn service_direct_genet_handoff(&mut self) -> bool {
+        let state = core::mem::replace(&mut self.state, GenetNetState::Transitioning);
+        let GenetNetState::DirectArmed {
+            mut stack,
+            mut runtime,
+        } = state
+        else {
+            self.state = state;
+            return false;
+        };
+        let generation = runtime.generation();
+        match crate::drivers::driver_task_net::service_genet_direct_link_handoff(generation) {
+            crate::hal::driver_task::DriverTaskRetainedServiceTurn::Pending => {
+                self.state = GenetNetState::DirectArmed { stack, runtime };
+                crate::drivers::driver_task_net::genet_direct_handoff_requires_reserved_turn(
+                    generation,
+                )
+            }
+            crate::hal::driver_task::DriverTaskRetainedServiceTurn::Complete(_) => {
+                let mac = stack.hardware_address();
+                let ip = stack.ipv4_address();
+                let prefix_len = stack.prefix_len();
+                let gateway = stack.gateway();
+                let self_test_enabled =
+                    stack.self_test.enabled && stack.stage_policy.allow_selftest;
+                let console_tcb = runtime.tcb_cptr();
+                if let Err(error) = runtime.activate() {
+                    let mut failed = stack.status_report();
+                    failed.address_source = "isolated-console-activation-failed";
+                    failed.dhcp_phase = "bound";
+                    failed.tcp_ready = false;
+                    let containment_started = runtime.begin_containment().is_ok();
+                    self.state = GenetNetState::Failed {
+                        runtime,
+                        _policy: stack,
+                        status: failed,
+                        contained: false,
+                    };
+                    let mut line = heapless::String::<256>::new();
+                    let _ = fmt::write(
+                        &mut line,
+                        format_args!(
+                            "CONSOLE_NETWORK_HANDOFF phase=console-activate generation={} status=failed containment_started={} action=contain-no-fallback backend=bcmgenet-v5 err={error}",
+                            generation, containment_started,
+                        ),
+                    );
+                    crate::bootstrap::log::force_uart_line(line.as_str());
+                    return false;
+                }
                 let device = stack.take_device_for_isolated_console();
                 self.state = GenetNetState::Isolated {
                     console: Box::new(IsolatedNetworkConsole::from_existing(
@@ -8809,7 +8922,7 @@ impl GenetNetStack {
                         self.config.listen_port,
                         self.config.backend.label(),
                         "bcmgenet-v5",
-                        "bcmgenet-v5",
+                        "bcmgenet-v5-direct",
                         self.config.policy.mode.as_str(),
                         self.config.policy.interface.as_str(),
                         "wired",
@@ -8819,12 +8932,13 @@ impl GenetNetStack {
                     )),
                     _policy: stack,
                 };
-                let mut line = heapless::String::<224>::new();
+                let mut line = heapless::String::<256>::new();
                 let _ = fmt::write(
                     &mut line,
                     format_args!(
-                        "CONSOLE_NETWORK_HANDOFF phase=dhcp-bound tcb=0x{:04x} ip={}/{} gateway={} mac={} descriptor=finalized state=active owner=isolated-child root_tcp=disabled backend=bcmgenet-v5",
+                        "CONSOLE_NETWORK_HANDOFF phase=direct-link-complete tcb=0x{:04x} generation={} ip={}/{} gateway={} mac={} state=active owner=driver-console-direct root_packet_mediation=disabled backend=bcmgenet-v5",
                         console_tcb,
+                        generation,
                         ip,
                         prefix_len,
                         gateway.unwrap_or(Ipv4Address::UNSPECIFIED),
@@ -8834,27 +8948,113 @@ impl GenetNetStack {
                 crate::bootstrap::log::force_uart_line(line.as_str());
                 true
             }
-            Err(error) => {
-                let mut failed = status;
-                failed.address_source = "isolated-child-transition-failed";
+            crate::hal::driver_task::DriverTaskRetainedServiceTurn::Failed => {
+                let mut failed = stack.status_report();
+                failed.address_source = "isolated-direct-genet-handoff-failed";
                 failed.dhcp_phase = "bound";
                 failed.tcp_ready = false;
+                let containment_started = runtime.begin_containment().is_ok();
                 self.state = GenetNetState::Failed {
-                    _runtime: runtime,
+                    runtime,
                     _policy: stack,
                     status: failed,
+                    contained: false,
                 };
                 let mut line = heapless::String::<224>::new();
                 let _ = fmt::write(
                     &mut line,
                     format_args!(
-                        "CONSOLE_NETWORK_HANDOFF phase=dhcp-bound tcb=0x{:04x} status=failed state=suspended root_tcp=disabled backend=bcmgenet-v5 err={error}",
-                        console_tcb,
+                        "CONSOLE_NETWORK_HANDOFF phase=direct-link-command generation={} status=failed containment_started={} action=contain-no-fallback backend=bcmgenet-v5",
+                        generation, containment_started,
                     ),
                 );
                 crate::bootstrap::log::force_uart_line(line.as_str());
                 false
             }
+        }
+    }
+
+    #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
+    fn begin_direct_pair_fault_containment(&mut self) -> Result<bool, HalError> {
+        if let GenetNetState::DirectArmed { runtime, .. } = &mut self.state {
+            runtime.begin_containment()?;
+            let state = core::mem::replace(&mut self.state, GenetNetState::Transitioning);
+            let GenetNetState::DirectArmed { stack, runtime } = state else {
+                self.state = state;
+                return Err(HalError::Unsupported(
+                    "genet-direct-pair-fault-state-transition",
+                ));
+            };
+            let mut status = stack.status_report();
+            status.address_source = "isolated-direct-genet-driver-fault";
+            status.dhcp_phase = "bound";
+            status.tcp_ready = false;
+            self.state = GenetNetState::Failed {
+                runtime,
+                _policy: stack,
+                status,
+                contained: false,
+            };
+            return Ok(true);
+        }
+        match &mut self.state {
+            GenetNetState::Isolated { console, .. } => {
+                console.begin_paired_driver_fault_containment()
+            }
+            GenetNetState::Failed {
+                runtime, contained, ..
+            } => {
+                if *contained {
+                    return Ok(false);
+                }
+                if !runtime.containment_active() {
+                    runtime.begin_containment()?;
+                }
+                Ok(true)
+            }
+            _ => Ok(false),
+        }
+    }
+
+    #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
+    fn containment_required(&self) -> bool {
+        match &self.state {
+            GenetNetState::Isolated { console, .. } => console.containment_required(),
+            GenetNetState::Failed { contained, .. } => !contained,
+            _ => false,
+        }
+    }
+
+    #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
+    fn contain_one_turn(
+        &mut self,
+        hal: &mut KernelHal<'_>,
+    ) -> Result<crate::console_network_service::ConsoleNetworkContainmentTurn, HalError> {
+        match &mut self.state {
+            GenetNetState::Isolated { console, .. } => console.contain_if_faulted(hal),
+            GenetNetState::Failed {
+                runtime, contained, ..
+            } => {
+                if *contained {
+                    return Ok(crate::console_network_service::ConsoleNetworkContainmentTurn::Idle);
+                }
+                if !runtime.containment_active() {
+                    runtime.begin_containment()?;
+                    return Ok(
+                        crate::console_network_service::ConsoleNetworkContainmentTurn::InProgress,
+                    );
+                }
+                let turn = runtime.contain_one_turn(hal)?;
+                if matches!(
+                    turn,
+                    crate::console_network_service::ConsoleNetworkContainmentTurn::Complete(proof)
+                        if proof.complete()
+                ) {
+                    *contained = true;
+                }
+                Ok(turn)
+            }
+            _ => Ok(crate::console_network_service::ConsoleNetworkContainmentTurn::Idle),
         }
     }
 
@@ -8868,7 +9068,10 @@ impl GenetNetStack {
     /// driver runtime and must continue filling the queue.
     #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
     fn service_isolated_driver_pre_poll(&self) -> bool {
-        if !matches!(self.state, GenetNetState::Isolated { .. }) {
+        let GenetNetState::Isolated { console, .. } = &self.state else {
+            return false;
+        };
+        if console.direct_data_plane() {
             return false;
         }
         crate::hal::driver_task::register_driver_task_pointer_free_ring_service(
@@ -8886,7 +9089,10 @@ impl GenetNetStack {
     /// Budgeted counterpart to [`Self::service_isolated_driver_pre_poll`].
     #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
     fn service_isolated_driver_pre_poll_budgeted(&self, budget: &mut DriverServiceBudget) -> bool {
-        if !matches!(self.state, GenetNetState::Isolated { .. }) {
+        let GenetNetState::Isolated { console, .. } = &self.state else {
+            return false;
+        };
+        if console.direct_data_plane() {
             return false;
         }
         crate::hal::driver_task::register_driver_task_pointer_free_ring_service(
@@ -8908,6 +9114,8 @@ impl GenetNetStack {
             #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
             GenetNetState::Deferred { stack, .. } => Some(stack.as_ref()),
             #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
+            GenetNetState::DirectArmed { stack, .. } => Some(stack.as_ref()),
+            #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
             GenetNetState::Isolated { console, .. } => Some(console.as_ref()),
             #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
             GenetNetState::Failed { .. } | GenetNetState::Transitioning => None,
@@ -8919,6 +9127,8 @@ impl GenetNetStack {
             GenetNetState::Root(stack) => Some(stack.as_mut()),
             #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
             GenetNetState::Deferred { stack, .. } => Some(stack.as_mut()),
+            #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
+            GenetNetState::DirectArmed { stack, .. } => Some(stack.as_mut()),
             #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
             GenetNetState::Isolated { console, .. } => Some(console.as_mut()),
             #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
@@ -8933,6 +9143,8 @@ impl GenetNetStack {
             #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
             GenetNetState::Deferred { stack, .. } => stack.hardware_address(),
             #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
+            GenetNetState::DirectArmed { stack, .. } => stack.hardware_address(),
+            #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
             GenetNetState::Isolated { console, .. } => console.hardware_address(),
             #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
             GenetNetState::Failed { .. } | GenetNetState::Transitioning => EthernetAddress([0; 6]),
@@ -8945,6 +9157,8 @@ impl GenetNetStack {
             GenetNetState::Root(stack) => stack.ipv4_address(),
             #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
             GenetNetState::Deferred { stack, .. } => stack.ipv4_address(),
+            #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
+            GenetNetState::DirectArmed { stack, .. } => stack.ipv4_address(),
             #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
             GenetNetState::Isolated { console, .. } => console.ipv4_address(),
             #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
@@ -8959,6 +9173,8 @@ impl GenetNetStack {
             #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
             GenetNetState::Deferred { stack, .. } => stack.prefix_len(),
             #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
+            GenetNetState::DirectArmed { stack, .. } => stack.prefix_len(),
+            #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
             GenetNetState::Isolated { console, .. } => console.prefix_len(),
             #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
             GenetNetState::Failed { .. } | GenetNetState::Transitioning => 0,
@@ -8971,6 +9187,8 @@ impl GenetNetStack {
             GenetNetState::Root(stack) => stack.gateway(),
             #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
             GenetNetState::Deferred { stack, .. } => stack.gateway(),
+            #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
+            GenetNetState::DirectArmed { stack, .. } => stack.gateway(),
             #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
             GenetNetState::Isolated { console, .. } => console.gateway(),
             #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
@@ -9516,6 +9734,18 @@ impl NetPoller for GenetNetStack {
     }
 
     #[cfg(feature = "kernel")]
+    fn begin_direct_genet_peer_fault_containment(&mut self) -> Result<bool, HalError> {
+        #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
+        {
+            return self.begin_direct_pair_fault_containment();
+        }
+        #[cfg(not(all(target_os = "none", sel4_config_kernel_mcs)))]
+        {
+            Ok(false)
+        }
+    }
+
+    #[cfg(feature = "kernel")]
     fn contain_faulted_console_service(
         &mut self,
         hal: &mut KernelHal<'_>,
@@ -9922,7 +10152,11 @@ impl DefaultNetStack {
             Self::Virtio(stack) => stack.containment_required(),
             #[cfg(all(feature = "net-backend-virtio", not(target_os = "none")))]
             Self::Virtio(_) => false,
-            Self::Rtl8139(_) | Self::GenetDriverTask(_) | Self::Cyw43DriverTask(_) => false,
+            #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
+            Self::GenetDriverTask(stack) => stack.containment_required(),
+            #[cfg(not(all(target_os = "none", sel4_config_kernel_mcs)))]
+            Self::GenetDriverTask(_) => false,
+            Self::Rtl8139(_) | Self::Cyw43DriverTask(_) => false,
         }
     }
 
@@ -9950,7 +10184,20 @@ impl DefaultNetStack {
             },
             #[cfg(all(feature = "net-backend-virtio", not(target_os = "none")))]
             Self::Virtio(_) => Ok(None),
-            Self::Rtl8139(_) | Self::GenetDriverTask(_) | Self::Cyw43DriverTask(_) => Ok(None),
+            #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
+            Self::GenetDriverTask(stack) => match stack.contain_one_turn(_hal)? {
+                crate::console_network_service::ConsoleNetworkContainmentTurn::Complete(proof) => {
+                    Ok(Some(proof))
+                }
+                crate::console_network_service::ConsoleNetworkContainmentTurn::Idle
+                | crate::console_network_service::ConsoleNetworkContainmentTurn::Retry
+                | crate::console_network_service::ConsoleNetworkContainmentTurn::InProgress => {
+                    Ok(None)
+                }
+            },
+            #[cfg(not(all(target_os = "none", sel4_config_kernel_mcs)))]
+            Self::GenetDriverTask(_) => Ok(None),
+            Self::Rtl8139(_) | Self::Cyw43DriverTask(_) => Ok(None),
         }
     }
 
@@ -11262,6 +11509,16 @@ impl NetPoller for DefaultNetStack {
             Self::Cyw43DriverTask(stack) => stack.service_deferred_console_network_handoff(hal),
             #[cfg(feature = "net-backend-virtio")]
             Self::Virtio(stack) => stack.service_deferred_console_network_handoff(hal),
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    fn begin_direct_genet_peer_fault_containment(&mut self) -> Result<bool, HalError> {
+        match self {
+            Self::GenetDriverTask(stack) => stack.begin_direct_genet_peer_fault_containment(),
+            Self::Rtl8139(_) | Self::Cyw43DriverTask(_) => Ok(false),
+            #[cfg(feature = "net-backend-virtio")]
+            Self::Virtio(_) => Ok(false),
         }
     }
 

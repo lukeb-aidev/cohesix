@@ -36,7 +36,7 @@ pub const TICKET_TABLE_SHA256: &str =
 pub const NAMESPACE_TABLE_SHA256: &str =
     "c34073b3f57eeae7ebba0eb35e56b2a1dea490aee4de2cc1f3a0b65ec2bc7b24";
 pub const AUDIT_TABLE_SHA256: &str =
-    "18777836ae2d95d651d442c89cad66fe718474506bc4e99c9c904e945bb8a675";
+    "2392c4c8868bd62ffeaa219d9688f3f94a0c23e11a530d77d7b98847087e6d2e";
 
 pub const TICKET_INVENTORY: [TicketSpec; 5] = [
     TicketSpec {
@@ -8508,13 +8508,14 @@ pub const NINEDOOR_SERVICE_CONFIG: NineDoorServiceConfig = NineDoorServiceConfig
 pub const CONSOLE_NETWORK_SERVICE_CONFIG: ConsoleNetworkServiceConfig =
     ConsoleNetworkServiceConfig {
         enabled: true,
-        abi_version: 4,
+        abi_version: 5,
         image_id: "console-network-runtime",
         image_path: "cohesix/artifacts/console-network-runtime",
         entry_symbol: "_start",
         listener_port: 31337,
         single_listener: true,
         direct_virtio: true,
+        direct_genet: false,
         child_cspace_slots: 16,
         revoke_anchor_slot: 16136,
         revoke_anchor_bits: 20,
@@ -9503,7 +9504,7 @@ pub const EVENT_PUMP_FDS: [&str; 5] = ["serial", "timer", "ipc", "net-console", 
 pub const INITIAL_AUDIT_LINES: [&str; 49] = [
     "manifest.schema=1.15",
     "manifest.profile=virt-aarch64",
-    "manifest.sha256=cdbfdfa9f4de5c1cd8f8f9ef7233aff9465e15e5469cce6604bdde50872996ba",
+    "manifest.sha256=a9a50408519f33cf2e05932cffffa5dbb521958870b16edf2f36311ff60385a1",
     "manifest.tickets=5",
     "manifest.namespaces=1 role_isolation=true",
     "manifest.secure9p.msize=8192",

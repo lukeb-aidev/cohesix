@@ -62,6 +62,14 @@ fn pi4_uboot_profile_emits_network_policy() {
     );
     compile(&options).expect("compile pi4 profile");
 
+    let generated_module = fs::read_to_string(temp_dir.path().join("generated/mod.rs"))
+        .expect("read generated module");
+    let generated_bootstrap = fs::read_to_string(temp_dir.path().join("generated/bootstrap.rs"))
+        .expect("read generated bootstrap");
+    assert!(generated_module.contains("pub direct_genet: bool"));
+    assert!(generated_bootstrap.contains("direct_virtio: false,"));
+    assert!(generated_bootstrap.contains("direct_genet: true,"));
+
     let manifest: Value = serde_json::from_slice(
         &fs::read(temp_dir.path().join("root_task_resolved.json")).expect("read manifest"),
     )
@@ -146,14 +154,14 @@ fn pi4_uboot_profile_emits_network_policy() {
         ("vspaces", 280, 512, 232),
         ("page_tables", 2_640, 4_096, 1_456),
         ("asids", 280, 512, 232),
-        ("frames", 7_656, 8_192, 536),
+        ("frames", 7_661, 8_192, 531),
         ("endpoints", 303, 512, 209),
         ("notifications", 50, 128, 78),
         ("fault_caps", 280, 512, 232),
         ("timeout_fault_caps", 280, 512, 232),
         ("reply_objects", 279, 512, 233),
         ("scheduling_contexts", 280, 512, 232),
-        ("cspace_slots", 19_470, 65_536, 46_066),
+        ("cspace_slots", 19_507, 65_536, 46_029),
         ("untyped_bytes", 167_772_160, 268_435_456, 100_663_296),
     ] {
         assert_eq!(admitted(resource), used, "admitted {resource}");
@@ -194,6 +202,55 @@ fn pi4_uboot_profile_emits_network_policy() {
             .find(|task| task["id"] == task_id)
             .unwrap_or_else(|| panic!("temporal task {task_id}"))
     };
+    let root = temporal_task("root-control");
+    let console = temporal_task("console-network-service");
+    let console_objects = &manifest["console_network_service"]["objects"];
+    assert_eq!(root["core"], 0);
+    assert_eq!(root["priority"], 200);
+    assert_eq!(root["mcp"], 200);
+    assert_eq!(root["budget_us"], 2_750);
+    assert_eq!(root["period_us"], 10_000);
+    assert_eq!(root["wcet_us"], 2_500);
+    assert_eq!(root["response_time_us"], 5_100);
+    assert_eq!(console["core"], 0);
+    assert_eq!(console["priority"], 180);
+    assert_eq!(console["mcp"], 200);
+    assert!(
+        console["priority"].as_u64().expect("console priority")
+            < root["priority"].as_u64().expect("root priority")
+    );
+    assert_eq!(console["budget_us"], 3_000);
+    assert_eq!(console["period_us"], 10_000);
+    assert_eq!(console["wcet_us"], 3_000);
+    assert_eq!(console["response_time_us"], 8_100);
+    assert_eq!(manifest["console_network_service"]["abi_version"], 5);
+    assert_eq!(manifest["console_network_service"]["priority"], 180);
+    assert_eq!(manifest["console_network_service"]["mcp"], 200);
+    assert_eq!(console_objects["frames"], 103);
+    assert_eq!(console_objects["cspace_slots"], 160);
+    assert_eq!(admission["fixed_objects"]["frames"], 4_077);
+    assert_eq!(admission["fixed_objects"]["cspace_slots"], 9_267);
+    let core_zero_demand: u64 = temporal_tasks
+        .iter()
+        .filter(|task| task["core"] == 0)
+        .map(|task| task["budget_us"].as_u64().expect("core-0 budget"))
+        .sum();
+    let core_zero_admission = manifest["temporal_authority"]["core_admission"]
+        .as_array()
+        .expect("core admission")
+        .iter()
+        .find(|entry| entry["core"] == 0)
+        .expect("core-0 admission");
+    assert_eq!(core_zero_demand, 9_000);
+    assert_eq!(
+        core_zero_admission["capacity_us"]
+            .as_u64()
+            .expect("core-0 capacity")
+            - core_zero_admission["reserve_us"]
+                .as_u64()
+                .expect("core-0 reserve"),
+        9_000
+    );
     let hdmi = temporal_task("driver-hdmi");
     let gpu_executor = temporal_task("root-worker-executor-gpu");
     assert_eq!(hdmi["budget_us"], 2_000);

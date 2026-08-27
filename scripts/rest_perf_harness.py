@@ -150,6 +150,38 @@ BENCHMARK_TARGET_PI4 = "pi4"
 BENCHMARK_TRANSPORT_QEMU = "qemu"
 BENCHMARK_TRANSPORT_GENET = "genet"
 BENCHMARK_TRANSPORT_WIFI = "wifi"
+PI_GENET_DIRECT_HANDOFF_PREFIX = "CONSOLE_NETWORK_HANDOFF "
+PI_GENET_DIRECT_HANDOFF_FIELDS = frozenset(
+    (
+        "phase",
+        "tcb",
+        "generation",
+        "ip",
+        "gateway",
+        "mac",
+        "state",
+        "owner",
+        "root_packet_mediation",
+        "backend",
+    )
+)
+PI_GENET_DIRECT_ARMED_FIELDS = frozenset(
+    (
+        "phase",
+        "tcb",
+        "ip",
+        "gateway",
+        "mac",
+        "descriptor",
+        "state",
+        "owner",
+        "root_tcp",
+        "backend",
+    )
+)
+PI_GENET_DIRECT_SHELL_FIELDS = frozenset(
+    ("generation", "tcb", "state", "descriptor", "fault_registry", "backend")
+)
 BENCHMARK_TARGET_EVIDENCE_SCHEMA = "cohesix-benchmark-target-evidence/v2"
 BENCHMARK_PROVENANCE_SCHEMA = "cohesix-benchmark-provenance/v2"
 PI_NETWORK_EVIDENCE_SCHEMA = "cohesix-pi-network-evidence/v1"
@@ -2523,6 +2555,8 @@ def validate_pi_network_log(
 ) -> bytes:
     """Derive selected-network readiness from the exact runtime-bound log."""
 
+    if transport == BENCHMARK_TRANSPORT_GENET:
+        validate_pi_genet_direct_handoff(serial_raw)
     active_net = "genet" if transport == BENCHMARK_TRANSPORT_GENET else "cyw43"
     expectations = [
         f"DRIVER_TASK_ACTIVE_NET={active_net}",
@@ -2767,6 +2801,150 @@ def _network_fields(line: str, prefix: str) -> Dict[str, str]:
     return fields
 
 
+def validate_pi_genet_direct_handoff(serial_raw: bytes) -> Dict[str, str]:
+    """Require one live direct-GENET terminal with no later containment."""
+
+    _offset, latest_lines = latest_serial_boot_slice(serial_raw)
+    completions: List[Tuple[int, Dict[str, str]]] = []
+    armed_records: List[Tuple[int, Dict[str, str]]] = []
+    for index, line in enumerate(latest_lines):
+        fields = _network_fields(line, PI_GENET_DIRECT_HANDOFF_PREFIX)
+        if fields.get("status") == "failed":
+            raise RestError("latest Pi GENET boot contains a failed direct handoff")
+        if fields.get("phase") == "direct-link-complete":
+            completions.append((index, fields))
+        elif fields.get("phase") == "direct-link-armed":
+            armed_records.append((index, fields))
+        elif fields:
+            raise RestError("latest Pi GENET boot has an unknown direct handoff record")
+    if len(completions) != 1:
+        raise RestError(
+            "latest Pi GENET boot lacks one exact direct-link-complete handoff"
+        )
+    if len(armed_records) != 1:
+        raise RestError("latest Pi GENET boot lacks one exact direct-link-armed handoff")
+
+    completion_index, fields = completions[0]
+    armed_index, armed = armed_records[0]
+    if armed_index >= completion_index:
+        raise RestError("latest Pi GENET direct handoff phases are out of order")
+    if set(armed) != PI_GENET_DIRECT_ARMED_FIELDS:
+        raise RestError("latest Pi GENET armed handoff has contract drift")
+    armed_expected = {
+        "phase": "direct-link-armed",
+        "descriptor": "finalized",
+        "state": "suspended",
+        "owner": "pending-genet-command",
+        "root_tcp": "disabled",
+        "backend": "bcmgenet-v5",
+    }
+    if any(armed.get(key) != value for key, value in armed_expected.items()):
+        raise RestError("latest Pi GENET armed handoff is not fail-closed")
+    if set(fields) != PI_GENET_DIRECT_HANDOFF_FIELDS:
+        raise RestError("latest Pi GENET direct handoff has contract drift")
+    expected = {
+        "phase": "direct-link-complete",
+        "state": "active",
+        "owner": "driver-console-direct",
+        "root_packet_mediation": "disabled",
+        "backend": "bcmgenet-v5",
+    }
+    if any(fields.get(key) != value for key, value in expected.items()):
+        raise RestError("latest Pi GENET direct handoff is not performance-ready")
+    if re.fullmatch(r"0x[0-9a-f]{4}", fields["tcb"]) is None:
+        raise RestError("latest Pi GENET direct handoff has an invalid TCB slot")
+    if re.fullmatch(r"[1-9][0-9]*", fields["generation"]) is None:
+        raise RestError("latest Pi GENET direct handoff has an invalid generation")
+    if int(fields["generation"]) > (1 << 64) - 1:
+        raise RestError("latest Pi GENET direct handoff generation exceeds u64")
+    for key in ("tcb", "ip", "gateway", "mac", "backend"):
+        if armed.get(key) != fields.get(key):
+            raise RestError("latest Pi GENET armed and complete identities differ")
+
+    shell_records = [
+        (index, _network_fields(line, "[console-network] shell constructed "))
+        for index, line in enumerate(latest_lines)
+        if line.startswith("[console-network] shell constructed ")
+    ]
+    if len(shell_records) != 1 or set(shell_records[0][1]) != PI_GENET_DIRECT_SHELL_FIELDS:
+        raise RestError("latest Pi GENET boot lacks one exact console shell identity")
+    shell_index, shell = shell_records[0]
+    if shell_index >= armed_index:
+        raise RestError("latest Pi GENET console shell and handoff phases are out of order")
+    shell_expected = {
+        "generation": fields["generation"],
+        "tcb": fields["tcb"],
+        "state": "suspended",
+        "descriptor": "pending-dhcp",
+        "fault_registry": "registered",
+        "backend": "bcmgenet-v5",
+    }
+    if shell != shell_expected:
+        raise RestError("latest Pi GENET console shell identity differs from handoff")
+
+    handoff_ip, separator, prefix = fields["ip"].partition("/")
+    try:
+        address = ipaddress.IPv4Address(handoff_ip)
+        gateway = ipaddress.IPv4Address(fields["gateway"])
+    except ipaddress.AddressValueError as exc:
+        raise RestError("latest Pi GENET direct handoff has invalid IPv4 identity") from exc
+    if (
+        separator != "/"
+        or re.fullmatch(r"[0-9]{1,2}", prefix) is None
+        or int(prefix) > 32
+        or address.is_unspecified
+        or address.is_loopback
+        or address.is_multicast
+        or address.is_link_local
+        or gateway.is_unspecified
+        or gateway.is_multicast
+    ):
+        raise RestError("latest Pi GENET direct handoff has invalid IPv4 identity")
+    _pi_network_mac_bytes(fields["mac"])
+
+    for index, line in enumerate(latest_lines):
+        if index > completion_index and line.startswith(
+            PI_GENET_DIRECT_HANDOFF_PREFIX
+        ):
+            raise RestError("latest Pi GENET direct handoff is not terminal")
+        if line.startswith("DRIVER_FAULT_CONTAINMENT ") and (
+            index > completion_index or " task=bcmgenet-v5 " in line
+        ):
+            raise RestError("latest Pi GENET direct link has a later driver fault")
+        if line.startswith("CONSOLE_NETWORK_TEARDOWN "):
+            raise RestError("latest Pi GENET direct link entered pair containment")
+        if line.startswith("[console-network] ") and any(
+            marker in line
+            for marker in (
+                "terminal-fault",
+                "fault generation mismatch",
+                "fault-mailbox-invalid",
+                "fail-closed reason=",
+                "containment failed",
+                "containment proof incomplete",
+            )
+        ):
+            raise RestError("latest Pi GENET direct link has a later console fault")
+        if line.startswith("DIRECT_GENET_") and "POISON" in line:
+            raise RestError("latest Pi GENET direct link has a poisoned cursor")
+    return fields
+
+
+def _pi_network_mac_bytes(mac_value: str) -> bytes:
+    """Parse the exact smoltcp-style Pi MAC identity without ambiguity."""
+
+    normalized = mac_value.lower()
+    if not (
+        re.fullmatch(r"(?:[0-9a-f]{2}:){5}[0-9a-f]{2}", normalized)
+        or re.fullmatch(r"(?:[0-9a-f]{2}-){5}[0-9a-f]{2}", normalized)
+    ):
+        raise RestError("latest Pi serial boot has an invalid MAC identity")
+    mac_raw = bytes.fromhex(normalized.replace(":", "").replace("-", ""))
+    if mac_raw == b"\0" * 6 or mac_raw == b"\xff" * 6 or mac_raw[0] & 1:
+        raise RestError("latest Pi serial boot has a non-unicast MAC identity")
+    return mac_raw
+
+
 def derive_pi_serial_network_identity(
     serial_raw: bytes,
     transport: str,
@@ -2778,15 +2956,21 @@ def derive_pi_serial_network_identity(
         "wired" if transport == BENCHMARK_TRANSPORT_GENET else "wifi"
     )
     identities: set[Tuple[str, str]] = set()
-    for line in latest_lines:
-        fields = _network_fields(line, "[net-console] ready ")
-        if fields:
-            if fields.get("port") != str(PI_CONSOLE_TCP_PORT):
-                continue
-            ip_value = fields.get("ip", "")
-            mac_value = fields.get("mac", "").lower()
-            if ip_value and mac_value:
-                identities.add((ip_value, mac_value))
+    if transport == BENCHMARK_TRANSPORT_GENET:
+        direct = validate_pi_genet_direct_handoff(serial_raw)
+        ip_value, separator, _prefix = direct["ip"].partition("/")
+        if separator == "/":
+            identities.add((ip_value, direct["mac"].lower()))
+    else:
+        for line in latest_lines:
+            fields = _network_fields(line, "[net-console] ready ")
+            if fields:
+                if fields.get("port") != str(PI_CONSOLE_TCP_PORT):
+                    continue
+                ip_value = fields.get("ip", "")
+                mac_value = fields.get("mac", "").lower()
+                if ip_value and mac_value:
+                    identities.add((ip_value, mac_value))
     if len(identities) != 1:
         raise RestError(
             "latest Pi serial boot lacks one exact TCP console network identity"
@@ -2803,11 +2987,7 @@ def derive_pi_serial_network_identity(
         or address.is_link_local
     ):
         raise RestError("latest Pi serial boot has a non-routable IPv4 identity")
-    if re.fullmatch(r"(?:[0-9a-f]{2}:){5}[0-9a-f]{2}", mac_value) is None:
-        raise RestError("latest Pi serial boot has an invalid MAC identity")
-    mac_raw = bytes.fromhex(mac_value.replace(":", ""))
-    if mac_raw == b"\0" * 6 or mac_raw == b"\xff" * 6 or mac_raw[0] & 1:
-        raise RestError("latest Pi serial boot has a non-unicast MAC identity")
+    mac_raw = _pi_network_mac_bytes(mac_value)
 
     matching_netstats = False
     for line in latest_lines:

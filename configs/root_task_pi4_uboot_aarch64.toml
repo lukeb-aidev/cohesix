@@ -627,7 +627,7 @@ fault_handler = "root-fault"
 
 [console_network_service]
 enabled = true
-abi_version = 4
+abi_version = 5
 image_id = "console-network-runtime"
 image_path = "cohesix/artifacts/console-network-runtime"
 entry_symbol = "_start"
@@ -680,14 +680,14 @@ cnodes = 1
 vspaces = 1
 page_tables = 8
 asids = 1
-frames = 98
+frames = 103
 endpoints = 0
 notifications = 2
 fault_caps = 1
 timeout_fault_caps = 1
 reply_objects = 0
 scheduling_contexts = 1
-cspace_slots = 123
+cspace_slots = 160
 untyped_bytes = 1048576
 
 [[temporal_authority.worker_classes]]
@@ -976,14 +976,14 @@ cnodes = 16
 vspaces = 16
 page_tables = 528
 asids = 16
-frames = 4072
+frames = 4077
 endpoints = 31
 notifications = 34
 fault_caps = 16
 timeout_fault_caps = 16
 reply_objects = 15
 scheduling_contexts = 16
-cspace_slots = 9230
+cspace_slots = 9267
 untyped_bytes = 100663296
 
 [[worker_resource_admission.executable_roles]]

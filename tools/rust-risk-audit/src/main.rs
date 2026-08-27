@@ -177,19 +177,19 @@ struct RiskCounts {
 }
 
 const ACTIVE_GLOBAL_CEILING: RiskCounts = RiskCounts {
-    unsafe_count: 808,
+    unsafe_count: 827,
     unwrap_count: 38,
     expect_count: 243,
     panic_count: 102,
 };
 const ACTIVE_LINKED_RUNTIME_HAL_CEILING: RiskCounts = RiskCounts {
-    unsafe_count: 161,
+    unsafe_count: 172,
     unwrap_count: 0,
     expect_count: 2,
     panic_count: 0,
 };
 const ACTIVE_OUTSIDE_LINKED_RUNTIME_HAL_CEILING: RiskCounts = RiskCounts {
-    unsafe_count: 647,
+    unsafe_count: 655,
     unwrap_count: 38,
     expect_count: 241,
     panic_count: 102,
@@ -2431,13 +2431,13 @@ fn validate_baseline(baseline: &RiskBaselines) -> Result<(), String> {
             .metadata
             .outside_linked_runtime_hal_historical_panic
             != HISTORICAL_OUTSIDE_LINKED_RUNTIME_HAL_COUNTS.panic_count
-        || baseline.metadata.accepted_unsafe_delta != 115
+        || baseline.metadata.accepted_unsafe_delta != 134
         || baseline.metadata.accepted_unwrap_delta != 0
         || baseline.metadata.accepted_expect_delta != 3
         || baseline.metadata.accepted_panic_delta != 6
     {
         return Err(String::from(
-            "risk baseline historical v4 metadata must remain global=(693,38,240,96) linked=(146,0,2,0) outside=(547,38,238,96); approved 26e deltas must be unsafe=115 unwrap=0 expect=3 panic=6",
+            "risk baseline historical v4 metadata must remain global=(693,38,240,96) linked=(146,0,2,0) outside=(547,38,238,96); approved 26e deltas must be unsafe=134 unwrap=0 expect=3 panic=6",
         ));
     }
     let expected_paths: Vec<String> = LINKED_RUNTIME_HAL_PATHS
@@ -3481,7 +3481,7 @@ mod tests {
             ACTIVE_OUTSIDE_LINKED_RUNTIME_HAL_CEILING
         );
 
-        let duplicate = COMPLETE_BASELINE.replacen("unsafe = 808", "unsafe = 808\nunsafe = 808", 1);
+        let duplicate = COMPLETE_BASELINE.replacen("unsafe = 827", "unsafe = 827\nunsafe = 827", 1);
         assert!(parse_baseline(&duplicate).is_err());
     }
 

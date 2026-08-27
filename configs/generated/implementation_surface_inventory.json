@@ -854,6 +854,20 @@
           "evidence_eligible": true
         },
         {
+          "id": "cargo-feature:console-network-runtime:direct-genet",
+          "kind": "cargo_feature",
+          "path": "apps/console-network-runtime#feature:direct-genet",
+          "implementation_class": "production_live",
+          "owner": "console-network-service",
+          "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
+          "production_reachable": true,
+          "selection_source": "M26e target runtime closure; Cargo feature `direct-genet`",
+          "package_disposition": "feature_only",
+          "evidence_requirement": "authenticated TCP console isolation receipts",
+          "current_observed_mode": "mcs_isolated_console_network_runtime",
+          "evidence_eligible": true
+        },
+        {
           "id": "cargo-feature:console-network-runtime:direct-virtio",
           "kind": "cargo_feature",
           "path": "apps/console-network-runtime#feature:direct-virtio",
@@ -1859,6 +1873,20 @@
           "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
           "production_reachable": true,
           "selection_source": "root_task manifest and release-qemu/release-pi4 features; Cargo feature `net`",
+          "package_disposition": "feature_only",
+          "evidence_requirement": "fresh selected-target boot and target receipts",
+          "current_observed_mode": "mcs_root_control_runtime",
+          "evidence_eligible": true
+        },
+        {
+          "id": "cargo-feature:root-task:net-backend-genet-direct",
+          "kind": "cargo_feature",
+          "path": "apps/root-task#feature:net-backend-genet-direct",
+          "implementation_class": "production_live",
+          "owner": "root-control",
+          "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
+          "production_reachable": true,
+          "selection_source": "root_task manifest and release-qemu/release-pi4 features; Cargo feature `net-backend-genet-direct`",
           "package_disposition": "feature_only",
           "evidence_requirement": "fresh selected-target boot and target receipts",
           "current_observed_mode": "mcs_root_control_runtime",

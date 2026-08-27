@@ -1578,6 +1578,13 @@ pub trait NetPoller {
         Ok(false)
     }
 
+    /// Start coupled console containment after the direct GENET owner has
+    /// completed its independent driver-supervisor containment.
+    #[cfg(feature = "kernel")]
+    fn begin_direct_genet_peer_fault_containment(&mut self) -> Result<bool, crate::hal::HalError> {
+        Ok(false)
+    }
+
     /// Consume and contain a terminal isolated-service fault, when supported.
     #[cfg(feature = "kernel")]
     fn contain_faulted_console_service(

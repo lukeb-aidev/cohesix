@@ -362,6 +362,7 @@ pub fn emit_rust(
     writeln!(mod_contents, "    pub listener_port: u16,")?;
     writeln!(mod_contents, "    pub single_listener: bool,")?;
     writeln!(mod_contents, "    pub direct_virtio: bool,")?;
+    writeln!(mod_contents, "    pub direct_genet: bool,")?;
     writeln!(mod_contents, "    pub child_cspace_slots: u16,")?;
     writeln!(mod_contents, "    pub revoke_anchor_slot: u32,")?;
     writeln!(mod_contents, "    pub revoke_anchor_bits: u8,")?;
@@ -2008,9 +2009,10 @@ pub fn emit_rust(
         ninedoor.mcp,
     )?;
     let console = &manifest.console_network_service;
+    let direct_genet = manifest.hw.network.backend == crate::ir::NetworkBackendKind::BcmGenetV5;
     writeln!(
         bootstrap_contents,
-        "pub const CONSOLE_NETWORK_SERVICE_CONFIG: ConsoleNetworkServiceConfig = ConsoleNetworkServiceConfig {{ enabled: {}, abi_version: {}, image_id: \"{}\", image_path: \"{}\", entry_symbol: \"{}\", listener_port: {}, single_listener: {}, direct_virtio: {}, child_cspace_slots: {}, revoke_anchor_slot: {}, revoke_anchor_bits: {}, objects: {}, packet_rx_notification_slot: {}, packet_tx_wake_notification_slot: {}, supervisor_wake_notification_slot: {}, fault_endpoint_slot: {}, ipc_buffer_vaddr: {}, init_vaddr: {}, stack_vaddr: {}, stack_pages: {}, packet_rx_vaddr: {}, packet_tx_vaddr: {}, command_vaddr: {}, event_vaddr: {}, shared_frame_bytes: {}, ethernet_frame_bytes: {}, max_packets_per_wake: {}, max_commands_per_wake: {}, max_control_inflight: {}, packet_rx_badge: {}, control_badge: {}, shutdown_badge: {}, revoke_badge: {}, packet_tx_ready_badge: {}, event_ready_badge: {}, publication_ack_badge: {}, fault_badge: {}, core: {}, scheduling_context_slot: {}, scheduling_context_bits: {}, priority: {}, mcp: {}, budget_us: {}, period_us: {}, max_refills: {}, timeout_badge: {}, timer_clock_hz: {}, auth_timeout_ms: {}, idle_timeout_ms: {} }};\n",
+        "pub const CONSOLE_NETWORK_SERVICE_CONFIG: ConsoleNetworkServiceConfig = ConsoleNetworkServiceConfig {{ enabled: {}, abi_version: {}, image_id: \"{}\", image_path: \"{}\", entry_symbol: \"{}\", listener_port: {}, single_listener: {}, direct_virtio: {}, direct_genet: {}, child_cspace_slots: {}, revoke_anchor_slot: {}, revoke_anchor_bits: {}, objects: {}, packet_rx_notification_slot: {}, packet_tx_wake_notification_slot: {}, supervisor_wake_notification_slot: {}, fault_endpoint_slot: {}, ipc_buffer_vaddr: {}, init_vaddr: {}, stack_vaddr: {}, stack_pages: {}, packet_rx_vaddr: {}, packet_tx_vaddr: {}, command_vaddr: {}, event_vaddr: {}, shared_frame_bytes: {}, ethernet_frame_bytes: {}, max_packets_per_wake: {}, max_commands_per_wake: {}, max_control_inflight: {}, packet_rx_badge: {}, control_badge: {}, shutdown_badge: {}, revoke_badge: {}, packet_tx_ready_badge: {}, event_ready_badge: {}, publication_ack_badge: {}, fault_badge: {}, core: {}, scheduling_context_slot: {}, scheduling_context_bits: {}, priority: {}, mcp: {}, budget_us: {}, period_us: {}, max_refills: {}, timeout_badge: {}, timer_clock_hz: {}, auth_timeout_ms: {}, idle_timeout_ms: {} }};\n",
         console.enabled,
         console.abi_version,
         escape_literal(&console.image_id),
@@ -2019,6 +2021,7 @@ pub fn emit_rust(
         console.listener_port,
         console.single_listener,
         console.direct_virtio,
+        direct_genet,
         console.child_cspace_slots,
         console.revoke_anchor_slot,
         console.revoke_anchor_bits,

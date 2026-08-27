@@ -35,10 +35,11 @@ fn non_virtio_containment_skips_direct_dma_and_rejects_invalid_cursor() {
 
     let construction = section(
         hal,
-        "containment: ConsoleNetworkContainmentCursor::with_direct_frames(",
+        "containment: ConsoleNetworkContainmentCursor::with_direct_frame_inventories(",
         "\n    })\n}",
     );
     assert!(construction.contains("DIRECT_DMA_FRAME_COUNT as u8"));
+    assert!(construction.contains("direct_genet_frame_count"));
 
     let cursor = include_str!("../src/console_network_service.rs");
     let transition = section(
@@ -1473,7 +1474,7 @@ fn isolated_ingress_uses_the_single_silent_rx_seam() {
 }
 
 #[test]
-fn genet_isolated_handoff_keeps_the_physical_pre_poll_lane_live() {
+fn genet_direct_handoff_disables_root_pre_poll_but_preserves_the_bounded_call_site() {
     let source = include_str!("../src/net/stack.rs");
     let genet = section(
         source,
@@ -1485,7 +1486,8 @@ fn genet_isolated_handoff_keeps_the_physical_pre_poll_lane_live() {
         "fn service_isolated_driver_pre_poll(&self)",
         "fn service_isolated_driver_pre_poll_budgeted(",
     );
-    assert!(pre_poll.contains("matches!(self.state, GenetNetState::Isolated { .. })"));
+    assert!(pre_poll.contains("let GenetNetState::Isolated { console, .. } = &self.state"));
+    assert!(pre_poll.contains("if console.direct_data_plane()"));
     assert!(pre_poll.contains("register_driver_task_pointer_free_ring_service("));
     assert!(pre_poll.contains("service_driver_task_pre_poll_burst("));
     assert!(pre_poll.contains("DriverTaskHotPath::GenetNic"));
@@ -1595,6 +1597,6 @@ fn direct_dma_containment_is_compiled_only_for_the_virtio_backend() {
     );
     assert!(source.contains("console-network-direct-virtio-disabled"));
     assert!(source.contains(
-        "ConsoleNetworkContainmentCursor::with_direct_frames(\n            DIRECT_DMA_FRAME_COUNT as u8,"
+        "ConsoleNetworkContainmentCursor::with_direct_frame_inventories(\n            DIRECT_DMA_FRAME_COUNT as u8,"
     ));
 }

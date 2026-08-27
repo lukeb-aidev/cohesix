@@ -5491,6 +5491,31 @@ impl<'a> KernelEnv<'a> {
         Ok(())
     }
 
+    /// Map one externally owned frame through anchor-derived translation objects.
+    ///
+    /// The VSpace root and every missing translation object are descendants of
+    /// `anchor`, but `frame` deliberately is not. The caller must therefore
+    /// unmap and delete the external mapping cap before revoking `anchor`; an
+    /// anchor revoke alone cannot contain this frame authority. Tracker
+    /// exhaustion is exact and never falls back to another allocator.
+    pub fn map_external_page_cap_into_revoke_anchor_vspace<const N: usize>(
+        &self,
+        anchor: seL4_CPtr,
+        frame: seL4_CPtr,
+        vspace: seL4_CPtr,
+        vaddr: usize,
+        rights: sel4_sys::seL4_CapRights,
+        attr: sel4_sys::seL4_ARM_VMAttributes,
+        tracker: &mut RevokeAnchorVSpaceTracker<N>,
+    ) -> Result<(), RevokeAnchorVSpaceError> {
+        if anchor == seL4_CapNull || frame == seL4_CapNull || vspace == seL4_CapNull {
+            return Err(RevokeAnchorVSpaceError::InvalidDestinationSlots);
+        }
+        self.ensure_revoke_anchor_page_table(anchor, vspace, vaddr, tracker)?;
+        map_page_into_vspace(frame, vspace, vaddr, rights, attr)?;
+        Ok(())
+    }
+
     /// Retype every unused tracker slot into an unmapped translation object.
     ///
     /// Exact resource inventories may reserve a fixed upper bound larger than

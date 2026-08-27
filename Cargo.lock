@@ -3303,6 +3303,7 @@ name = "pi4-driver-runtime"
 version = "0.1.0"
 dependencies = [
  "cargo-build-directive",
+ "console-network-abi",
  "font8x8",
  "pi4-driver-abi",
  "sel4-sys",

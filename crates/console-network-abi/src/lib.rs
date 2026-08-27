@@ -7,7 +7,7 @@
 #![deny(unsafe_code)]
 #![warn(missing_docs)]
 
-//! Fixed-layout `console-network-service/v4` records.
+//! Fixed-layout `console-network-service/v5` records.
 //!
 //! The root remains the sole owner of operator policy and command execution.
 //! The child owns Ethernet/IP/TCP processing, transport authentication, and
@@ -30,7 +30,9 @@ pub const PACKET_PAGE_MAGIC: u32 = 0x434e_5031;
 /// Console exchange page magic (`CNE1`).
 pub const EXCHANGE_PAGE_MAGIC: u32 = 0x434e_4531;
 /// ABI version.
-pub const ABI_VERSION: u16 = 4;
+pub const ABI_VERSION: u16 = 5;
+/// Exact child `Ready` payload for this ABI generation.
+pub const CONSOLE_NETWORK_SERVICE_IDENTITY: &[u8] = b"console-network-service/v5";
 /// Shared page size and alignment.
 pub const SHARED_PAGE_BYTES: usize = 4096;
 /// Maximum copied Ethernet frame, including VLAN headroom.
@@ -83,6 +85,35 @@ pub const DIRECT_VIRTIO_QUEUE_SIZE: usize = 16;
 pub const DIRECT_VIRTIO_BUFFER_COUNT: usize = 16;
 /// Exact page bytes for every direct VirtIO MMIO, queue, and DMA mapping.
 pub const DIRECT_VIRTIO_PAGE_BYTES: usize = 4096;
+/// Byte offset of the optional Pi GENET direct-link layout in the read-only init page.
+pub const DIRECT_GENET_LAYOUT_OFFSET: usize = 1024;
+/// Pi GENET direct-link layout magic (`CNG1`).
+pub const DIRECT_GENET_LAYOUT_MAGIC: u32 = 0x434e_4731;
+/// Pi GENET direct-link layout version.
+pub const DIRECT_GENET_LAYOUT_VERSION: u16 = 1;
+/// Exact encoded Pi GENET direct-link layout bytes.
+pub const DIRECT_GENET_LAYOUT_BYTES: usize = 296;
+/// Direct-link layout flag: every shared page is CPU-only and never DMA-visible.
+pub const DIRECT_GENET_LAYOUT_FLAG_CPU_ONLY: u32 = 1 << 0;
+/// Direct-link layout flag: the pages are reused only after bootstrap releases them.
+pub const DIRECT_GENET_LAYOUT_FLAG_POST_BOOTSTRAP_REUSE: u32 = 1 << 1;
+/// Exact required Pi GENET direct-link layout flags.
+pub const DIRECT_GENET_LAYOUT_FLAGS: u32 =
+    DIRECT_GENET_LAYOUT_FLAG_CPU_ONLY | DIRECT_GENET_LAYOUT_FLAG_POST_BOOTSTRAP_REUSE;
+/// Exact CPU-only page population shared by the GENET and console-network children.
+pub const DIRECT_GENET_SHARED_PAGE_COUNT: usize = 32;
+/// Shared-page index of the direct-link control page.
+pub const DIRECT_GENET_CONTROL_PAGE_INDEX: usize = 0;
+/// First shared-page index in the GENET-to-console RX ring.
+pub const DIRECT_GENET_RX_FIRST_PAGE_INDEX: usize = 1;
+/// Exact GENET-to-console RX slot count.
+pub const DIRECT_GENET_RX_SLOT_COUNT: usize = 15;
+/// First shared-page index in the console-to-GENET TX ring.
+pub const DIRECT_GENET_TX_FIRST_PAGE_INDEX: usize = 16;
+/// Exact console-to-GENET TX slot count.
+pub const DIRECT_GENET_TX_SLOT_COUNT: usize = 16;
+/// Direct-GENET peer-notification cap slot, mutually exclusive with direct VirtIO.
+pub const DIRECT_GENET_PEER_WAKE_NOTIFICATION_SLOT: u32 = 7;
 /// Fixed child CSpace cardinality.
 pub const CHILD_CSPACE_SLOTS: u32 = 16;
 /// Child wait cap for the root-to-child wake notification.
@@ -115,6 +146,8 @@ pub const WAKE_EVENT_READY: u64 = 32;
 pub const WAKE_PUBLICATION_ACK: u64 = 64;
 /// QEMU VirtIO queue/config interrupt delivered directly to the child.
 pub const WAKE_DIRECT_VIRTIO_IRQ: u64 = 128;
+/// Pi GENET direct-link state changed; durable cursors remain authoritative.
+pub const WAKE_DIRECT_GENET_LINK: u64 = 256;
 /// All allowed root-to-child notification bits.
 pub const ROOT_WAKE_MASK: u64 =
     WAKE_PACKET_RX | WAKE_CONTROL | WAKE_SHUTDOWN | WAKE_REVOKE | WAKE_PUBLICATION_ACK;
@@ -135,6 +168,8 @@ pub const INIT_FLAG_PUBLICATION_ACK: u32 = 1 << 4;
 pub const INIT_FLAG_COMPLETION_WATERMARKS: u32 = 1 << 5;
 /// The QEMU child owns its admitted VirtIO MMIO and DMA data path directly.
 pub const INIT_FLAG_DIRECT_VIRTIO: u32 = 1 << 6;
+/// The Pi child exchanges CPU-only packet slots directly with the isolated GENET owner.
+pub const INIT_FLAG_DIRECT_GENET: u32 = 1 << 7;
 /// Exact required runtime flags.
 pub const REQUIRED_INIT_FLAGS: u32 = INIT_FLAG_POINTER_FREE
     | INIT_FLAG_SEQUENCE_LAST
@@ -143,7 +178,8 @@ pub const REQUIRED_INIT_FLAGS: u32 = INIT_FLAG_POINTER_FREE
     | INIT_FLAG_PUBLICATION_ACK
     | INIT_FLAG_COMPLETION_WATERMARKS;
 /// Every recognized runtime flag.
-pub const ALLOWED_INIT_FLAGS: u32 = REQUIRED_INIT_FLAGS | INIT_FLAG_DIRECT_VIRTIO;
+pub const ALLOWED_INIT_FLAGS: u32 =
+    REQUIRED_INIT_FLAGS | INIT_FLAG_DIRECT_VIRTIO | INIT_FLAG_DIRECT_GENET;
 
 const PACKET_RESERVED_BYTES: usize = SHARED_PAGE_BYTES - 40 - ETHERNET_FRAME_BYTES;
 const EXCHANGE_RESERVED_BYTES: usize = SHARED_PAGE_BYTES - 64 - CONSOLE_PAYLOAD_BYTES;
@@ -1164,6 +1200,1354 @@ impl DirectVirtioLayout {
     }
 }
 
+/// Pointer-free, read-only layout for the optional Pi GENET direct link.
+///
+/// Root maps the same thirty-two CPU-only frames into the isolated GENET and
+/// console-network children only after their bootstrap use has ended and the
+/// complete frame population has been scrubbed. No address in this descriptor
+/// is a DMA or MMIO address. The link notification is a scheduling hint; the
+/// generation-bound control cursors are the sole packet authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(C, align(8))]
+pub struct DirectGenetLayout {
+    /// [`DIRECT_GENET_LAYOUT_MAGIC`].
+    pub magic: u32,
+    /// [`DIRECT_GENET_LAYOUT_VERSION`].
+    pub version: u16,
+    /// Exact [`DIRECT_GENET_LAYOUT_BYTES`].
+    pub layout_bytes: u16,
+    /// Exact [`DIRECT_GENET_LAYOUT_FLAGS`].
+    pub flags: u32,
+    /// Exact [`SHARED_PAGE_BYTES`].
+    pub shared_page_bytes: u16,
+    /// Exact [`DIRECT_GENET_RX_SLOT_COUNT`].
+    pub rx_slot_count: u8,
+    /// Exact [`DIRECT_GENET_TX_SLOT_COUNT`].
+    pub tx_slot_count: u8,
+    /// Nonzero generation shared by both direct-link endpoints.
+    pub generation: u64,
+    /// Child cap slot used only to signal the isolated GENET peer.
+    pub peer_wake_notification_slot: u32,
+    /// Reserved; zero.
+    pub reserved0: u32,
+    /// Child virtual address of the sole direct-link control page.
+    pub control_vaddr: u64,
+    /// Child virtual addresses of GENET-produced RX slots.
+    pub rx_vaddrs: [u64; DIRECT_GENET_RX_SLOT_COUNT],
+    /// Child virtual addresses of console-network-produced TX slots.
+    pub tx_vaddrs: [u64; DIRECT_GENET_TX_SLOT_COUNT],
+    /// FNV-1a seal over every preceding field.
+    pub seal: u64,
+}
+
+impl DirectGenetLayout {
+    /// Seal a fully populated direct-link layout.
+    #[must_use]
+    pub const fn sealed(mut self) -> Self {
+        self.seal = self.expected_seal();
+        self
+    }
+
+    /// Validate the layout against its embedded nonzero generation.
+    pub const fn validate(self) -> Result<(), AbiError> {
+        self.validate_for(self.generation)
+    }
+
+    /// Validate exact bounds, generation, unique CPU mappings, and seal.
+    pub const fn validate_for(self, generation: u64) -> Result<(), AbiError> {
+        if self.magic != DIRECT_GENET_LAYOUT_MAGIC || self.version != DIRECT_GENET_LAYOUT_VERSION {
+            return Err(AbiError::InvalidIdentity);
+        }
+        if self.layout_bytes as usize != DIRECT_GENET_LAYOUT_BYTES
+            || self.flags != DIRECT_GENET_LAYOUT_FLAGS
+            || self.shared_page_bytes as usize != SHARED_PAGE_BYTES
+            || self.rx_slot_count as usize != DIRECT_GENET_RX_SLOT_COUNT
+            || self.tx_slot_count as usize != DIRECT_GENET_TX_SLOT_COUNT
+            || self.peer_wake_notification_slot != DIRECT_GENET_PEER_WAKE_NOTIFICATION_SLOT
+            || self.reserved0 != 0
+        {
+            return Err(AbiError::InvalidLayout);
+        }
+        if generation == 0 || self.generation != generation {
+            return Err(AbiError::StaleGeneration);
+        }
+        let pages = self.virtual_pages();
+        let mut left = 0usize;
+        while left < pages.len() {
+            if !page_aligned_nonzero(pages[left]) {
+                return Err(AbiError::InvalidLayout);
+            }
+            let mut right = left + 1;
+            while right < pages.len() {
+                if pages[left] == pages[right] {
+                    return Err(AbiError::InvalidLayout);
+                }
+                right += 1;
+            }
+            left += 1;
+        }
+        if self.seal == 0 || self.seal != self.expected_seal() {
+            return Err(AbiError::InvalidSeal);
+        }
+        Ok(())
+    }
+
+    /// Encode the canonical layout without copying Rust padding.
+    pub fn encode(&self, output: &mut [u8]) -> Result<(), AbiError> {
+        if output.len() != DIRECT_GENET_LAYOUT_BYTES {
+            return Err(AbiError::InvalidLayout);
+        }
+        self.validate()?;
+        output.fill(0);
+        output[0..4].copy_from_slice(&self.magic.to_le_bytes());
+        output[4..6].copy_from_slice(&self.version.to_le_bytes());
+        output[6..8].copy_from_slice(&self.layout_bytes.to_le_bytes());
+        output[8..12].copy_from_slice(&self.flags.to_le_bytes());
+        output[12..14].copy_from_slice(&self.shared_page_bytes.to_le_bytes());
+        output[14] = self.rx_slot_count;
+        output[15] = self.tx_slot_count;
+        output[16..24].copy_from_slice(&self.generation.to_le_bytes());
+        output[24..28].copy_from_slice(&self.peer_wake_notification_slot.to_le_bytes());
+        output[28..32].copy_from_slice(&self.reserved0.to_le_bytes());
+        output[32..40].copy_from_slice(&self.control_vaddr.to_le_bytes());
+        encode_u64_array(output, 40, &self.rx_vaddrs);
+        encode_u64_array(output, 160, &self.tx_vaddrs);
+        output[288..296].copy_from_slice(&self.seal.to_le_bytes());
+        Ok(())
+    }
+
+    /// Decode one canonical Pi GENET direct-link layout.
+    pub fn decode(input: &[u8]) -> Result<Self, AbiError> {
+        if input.len() != DIRECT_GENET_LAYOUT_BYTES {
+            return Err(AbiError::InvalidLayout);
+        }
+        let layout = Self {
+            magic: read_u32(input, 0),
+            version: read_u16(input, 4),
+            layout_bytes: read_u16(input, 6),
+            flags: read_u32(input, 8),
+            shared_page_bytes: read_u16(input, 12),
+            rx_slot_count: input[14],
+            tx_slot_count: input[15],
+            generation: read_u64(input, 16),
+            peer_wake_notification_slot: read_u32(input, 24),
+            reserved0: read_u32(input, 28),
+            control_vaddr: read_u64(input, 32),
+            rx_vaddrs: decode_u64_array(input, 40),
+            tx_vaddrs: decode_u64_array(input, 160),
+            seal: read_u64(input, 288),
+        };
+        layout.validate()?;
+        Ok(layout)
+    }
+
+    const fn virtual_pages(self) -> [u64; DIRECT_GENET_SHARED_PAGE_COUNT] {
+        let mut pages = [0u64; DIRECT_GENET_SHARED_PAGE_COUNT];
+        pages[DIRECT_GENET_CONTROL_PAGE_INDEX] = self.control_vaddr;
+        let mut index = 0usize;
+        while index < DIRECT_GENET_RX_SLOT_COUNT {
+            pages[DIRECT_GENET_RX_FIRST_PAGE_INDEX + index] = self.rx_vaddrs[index];
+            index += 1;
+        }
+        index = 0;
+        while index < DIRECT_GENET_TX_SLOT_COUNT {
+            pages[DIRECT_GENET_TX_FIRST_PAGE_INDEX + index] = self.tx_vaddrs[index];
+            index += 1;
+        }
+        pages
+    }
+
+    const fn expected_seal(self) -> u64 {
+        let mut hash = FNV64_OFFSET;
+        hash = hash_u32(hash, self.magic);
+        hash = hash_u16(hash, self.version);
+        hash = hash_u16(hash, self.layout_bytes);
+        hash = hash_u32(hash, self.flags);
+        hash = hash_u16(hash, self.shared_page_bytes);
+        hash = hash_byte(hash, self.rx_slot_count);
+        hash = hash_byte(hash, self.tx_slot_count);
+        hash = hash_u64(hash, self.generation);
+        hash = hash_u32(hash, self.peer_wake_notification_slot);
+        hash = hash_u32(hash, self.reserved0);
+        hash = hash_u64(hash, self.control_vaddr);
+        hash = hash_u64_slice(hash, &self.rx_vaddrs);
+        hash_u64_slice(hash, &self.tx_vaddrs)
+    }
+}
+
+/// Direct-link control-page magic (`CNGC`).
+pub const DIRECT_GENET_CONTROL_MAGIC: u32 = 0x434e_4743;
+/// Direct-link control-page version.
+pub const DIRECT_GENET_CONTROL_VERSION: u16 = 1;
+/// Immutable bytes at the front of the direct-link control page.
+pub const DIRECT_GENET_CONTROL_HEADER_BYTES: usize = 64;
+/// Control flag: the shared packet pages are CPU-only.
+pub const DIRECT_GENET_CONTROL_FLAG_CPU_ONLY: u32 = 1 << 0;
+/// Control flag: each ring has one immutable producer and consumer.
+pub const DIRECT_GENET_CONTROL_FLAG_SPSC: u32 = 1 << 1;
+/// Control flag: a poisoned owner state permanently fences this generation.
+pub const DIRECT_GENET_CONTROL_FLAG_POISON_FAIL_CLOSED: u32 = 1 << 2;
+/// Exact direct-link control flags.
+pub const DIRECT_GENET_CONTROL_FLAGS: u32 = DIRECT_GENET_CONTROL_FLAG_CPU_ONLY
+    | DIRECT_GENET_CONTROL_FLAG_SPSC
+    | DIRECT_GENET_CONTROL_FLAG_POISON_FAIL_CLOSED;
+/// Direct-link cursor-state magic (`CNGQ`).
+pub const DIRECT_GENET_CURSOR_MAGIC: u32 = 0x434e_4751;
+/// Direct-link cursor-state version.
+pub const DIRECT_GENET_CURSOR_VERSION: u16 = 1;
+/// Exact cache-line bytes in each single-writer cursor state.
+pub const DIRECT_GENET_CURSOR_STATE_BYTES: usize = 64;
+/// Exact cursor-state population in the control page.
+pub const DIRECT_GENET_CURSOR_STATE_COUNT: usize = 4;
+/// RX-producer state offset in the control page.
+pub const DIRECT_GENET_RX_PRODUCER_STATE_OFFSET: usize = 64;
+/// RX-consumer state offset in the control page.
+pub const DIRECT_GENET_RX_CONSUMER_STATE_OFFSET: usize = 128;
+/// TX-producer state offset in the control page.
+pub const DIRECT_GENET_TX_PRODUCER_STATE_OFFSET: usize = 192;
+/// TX-consumer state offset in the control page.
+pub const DIRECT_GENET_TX_CONSUMER_STATE_OFFSET: usize = 256;
+/// Generation field offset within each direct-link cursor state.
+pub const DIRECT_GENET_CURSOR_GENERATION_OFFSET: usize = 8;
+/// Monotonic cursor field offset within each direct-link cursor state.
+pub const DIRECT_GENET_CURSOR_OFFSET: usize = 16;
+/// Owner-state sequence field offset within each direct-link cursor state.
+pub const DIRECT_GENET_CURSOR_STATE_SEQUENCE_OFFSET: usize = 24;
+/// Live/poison flags offset within each direct-link cursor state.
+pub const DIRECT_GENET_CURSOR_FLAGS_OFFSET: usize = 32;
+/// Poison-reason offset within each direct-link cursor state.
+pub const DIRECT_GENET_CURSOR_POISON_REASON_OFFSET: usize = 36;
+/// Sequence-last commit offset within each direct-link cursor state.
+pub const DIRECT_GENET_CURSOR_COMMIT_OFFSET: usize = 56;
+/// Cursor state is live and may advance exactly once per packet.
+pub const DIRECT_GENET_CURSOR_FLAG_LIVE: u32 = 1 << 0;
+/// Cursor owner has permanently poisoned this generation.
+pub const DIRECT_GENET_CURSOR_FLAG_POISONED: u32 = 1 << 1;
+/// Exact recognized cursor flags.
+pub const DIRECT_GENET_CURSOR_FLAGS: u32 =
+    DIRECT_GENET_CURSOR_FLAG_LIVE | DIRECT_GENET_CURSOR_FLAG_POISONED;
+/// Poison reason: the immutable control record was invalid.
+pub const DIRECT_GENET_POISON_INVALID_CONTROL: u32 = 1;
+/// Poison reason: a producer or consumer cursor was invalid.
+pub const DIRECT_GENET_POISON_INVALID_CURSOR: u32 = 2;
+/// Poison reason: a packet-slot header or body was invalid.
+pub const DIRECT_GENET_POISON_INVALID_SLOT: u32 = 3;
+/// Poison reason: one endpoint observed another generation.
+pub const DIRECT_GENET_POISON_STALE_GENERATION: u32 = 4;
+/// Poison reason: a monotonic sequence could not advance without wrapping.
+pub const DIRECT_GENET_POISON_SEQUENCE_EXHAUSTED: u32 = 5;
+/// Direct-link packet-slot magic (`CNGS`).
+pub const DIRECT_GENET_SLOT_MAGIC: u32 = 0x434e_4753;
+/// Direct-link packet-slot version.
+pub const DIRECT_GENET_SLOT_VERSION: u16 = 1;
+/// Exact packet-slot header bytes.
+pub const DIRECT_GENET_SLOT_HEADER_BYTES: usize = 64;
+/// Byte offset of the slot's sequence-last commit word.
+pub const DIRECT_GENET_SLOT_COMMIT_OFFSET: usize = 56;
+/// Byte offset of the copied Ethernet frame in one direct-link slot.
+pub const DIRECT_GENET_SLOT_PAYLOAD_OFFSET: usize = DIRECT_GENET_SLOT_HEADER_BYTES;
+/// Byte offset of the active frame length within one direct-link slot.
+pub const DIRECT_GENET_SLOT_LENGTH_OFFSET: usize = 10;
+/// Byte offset of the generation within one direct-link slot.
+pub const DIRECT_GENET_SLOT_GENERATION_OFFSET: usize = 16;
+/// Byte offset of the monotonic sequence within one direct-link slot.
+pub const DIRECT_GENET_SLOT_SEQUENCE_OFFSET: usize = 24;
+
+/// Direction of one Pi GENET direct-link SPSC ring.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u16)]
+pub enum DirectGenetDirection {
+    /// GENET produces received frames and console-network consumes them.
+    Rx = 1,
+    /// Console-network produces frames and GENET consumes them.
+    Tx = 2,
+}
+
+impl DirectGenetDirection {
+    /// Exact slot population for this direction.
+    #[must_use]
+    pub const fn slot_count(self) -> usize {
+        match self {
+            Self::Rx => DIRECT_GENET_RX_SLOT_COUNT,
+            Self::Tx => DIRECT_GENET_TX_SLOT_COUNT,
+        }
+    }
+}
+
+/// Single writer responsible for one direct-link cursor cache line.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u16)]
+pub enum DirectGenetCursorRole {
+    /// Isolated GENET child produces RX slots.
+    RxProducer = 1,
+    /// Console-network child consumes RX slots.
+    RxConsumer = 2,
+    /// Console-network child produces TX slots.
+    TxProducer = 3,
+    /// Isolated GENET child consumes TX slots.
+    TxConsumer = 4,
+}
+
+impl DirectGenetCursorRole {
+    /// Exact cache-line offset in the shared control page.
+    #[must_use]
+    pub const fn offset(self) -> usize {
+        match self {
+            Self::RxProducer => DIRECT_GENET_RX_PRODUCER_STATE_OFFSET,
+            Self::RxConsumer => DIRECT_GENET_RX_CONSUMER_STATE_OFFSET,
+            Self::TxProducer => DIRECT_GENET_TX_PRODUCER_STATE_OFFSET,
+            Self::TxConsumer => DIRECT_GENET_TX_CONSUMER_STATE_OFFSET,
+        }
+    }
+}
+
+/// Exact poison receipt from one direct-link cursor owner.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DirectGenetPoison {
+    /// Owner that fenced the generation.
+    pub role: DirectGenetCursorRole,
+    /// Nonzero stable poison reason.
+    pub reason: u32,
+}
+
+/// Fail-closed Pi GENET direct-link validation errors.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DirectGenetError {
+    /// A control, cursor, or slot identity is not exact.
+    InvalidIdentity,
+    /// A fixed size, reserved field, or slot mapping is invalid.
+    InvalidLayout,
+    /// The requested generation is zero or stale.
+    StaleGeneration,
+    /// Producer/consumer cursors are torn, regressed, overfull, or non-monotonic.
+    InvalidCursor,
+    /// A slot sequence is zero, stale, skipped, or not committed sequence-last.
+    InvalidSequence,
+    /// A packet or poison reason violates its deterministic bound.
+    InvalidBound,
+    /// No committed packet is available to the consumer.
+    Empty,
+    /// No slot credit is available to the producer.
+    Backpressure,
+    /// A bounded observation raced a legitimate sequence-last state transition.
+    /// Retry the same exact operation; this is not a poison receipt.
+    StateChanged,
+    /// One owner permanently fenced this exact generation.
+    Poisoned(DirectGenetPoison),
+}
+
+/// Immutable, sealed header at the front of the direct-link control page.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(C, align(8))]
+pub struct DirectGenetControlHeader {
+    /// [`DIRECT_GENET_CONTROL_MAGIC`].
+    pub magic: u32,
+    /// [`DIRECT_GENET_CONTROL_VERSION`].
+    pub version: u16,
+    /// Exact [`DIRECT_GENET_CONTROL_HEADER_BYTES`].
+    pub header_bytes: u16,
+    /// Nonzero direct-link generation.
+    pub generation: u64,
+    /// Exact [`SHARED_PAGE_BYTES`].
+    pub shared_page_bytes: u16,
+    /// Exact [`DIRECT_GENET_RX_SLOT_COUNT`].
+    pub rx_slot_count: u8,
+    /// Exact [`DIRECT_GENET_TX_SLOT_COUNT`].
+    pub tx_slot_count: u8,
+    /// Exact [`DIRECT_GENET_CURSOR_STATE_BYTES`].
+    pub cursor_state_bytes: u16,
+    /// Exact [`DIRECT_GENET_CURSOR_STATE_COUNT`].
+    pub cursor_state_count: u16,
+    /// Exact [`DIRECT_GENET_CONTROL_FLAGS`].
+    pub flags: u32,
+    /// Reserved; zero.
+    pub reserved0: u32,
+    /// Reserved; zero.
+    pub reserved: [u64; 3],
+    /// FNV-1a seal over every preceding field.
+    pub seal: u64,
+}
+
+impl DirectGenetControlHeader {
+    const fn new(generation: u64) -> Self {
+        Self {
+            magic: DIRECT_GENET_CONTROL_MAGIC,
+            version: DIRECT_GENET_CONTROL_VERSION,
+            header_bytes: DIRECT_GENET_CONTROL_HEADER_BYTES as u16,
+            generation,
+            shared_page_bytes: SHARED_PAGE_BYTES as u16,
+            rx_slot_count: DIRECT_GENET_RX_SLOT_COUNT as u8,
+            tx_slot_count: DIRECT_GENET_TX_SLOT_COUNT as u8,
+            cursor_state_bytes: DIRECT_GENET_CURSOR_STATE_BYTES as u16,
+            cursor_state_count: DIRECT_GENET_CURSOR_STATE_COUNT as u16,
+            flags: DIRECT_GENET_CONTROL_FLAGS,
+            reserved0: 0,
+            reserved: [0; 3],
+            seal: 0,
+        }
+        .sealed()
+    }
+
+    const fn sealed(mut self) -> Self {
+        self.seal = self.expected_seal();
+        self
+    }
+
+    fn validate_for(self, generation: u64) -> Result<(), DirectGenetError> {
+        if self.magic != DIRECT_GENET_CONTROL_MAGIC || self.version != DIRECT_GENET_CONTROL_VERSION
+        {
+            return Err(DirectGenetError::InvalidIdentity);
+        }
+        if self.header_bytes as usize != DIRECT_GENET_CONTROL_HEADER_BYTES
+            || self.shared_page_bytes as usize != SHARED_PAGE_BYTES
+            || self.rx_slot_count as usize != DIRECT_GENET_RX_SLOT_COUNT
+            || self.tx_slot_count as usize != DIRECT_GENET_TX_SLOT_COUNT
+            || self.cursor_state_bytes as usize != DIRECT_GENET_CURSOR_STATE_BYTES
+            || self.cursor_state_count as usize != DIRECT_GENET_CURSOR_STATE_COUNT
+            || self.flags != DIRECT_GENET_CONTROL_FLAGS
+            || self.reserved0 != 0
+            || self.reserved != [0; 3]
+        {
+            return Err(DirectGenetError::InvalidLayout);
+        }
+        if generation == 0 || self.generation != generation {
+            return Err(DirectGenetError::StaleGeneration);
+        }
+        if self.seal == 0 || self.seal != self.expected_seal() {
+            return Err(DirectGenetError::InvalidLayout);
+        }
+        Ok(())
+    }
+
+    const fn expected_seal(self) -> u64 {
+        let mut hash = FNV64_OFFSET;
+        hash = hash_u32(hash, self.magic);
+        hash = hash_u16(hash, self.version);
+        hash = hash_u16(hash, self.header_bytes);
+        hash = hash_u64(hash, self.generation);
+        hash = hash_u16(hash, self.shared_page_bytes);
+        hash = hash_byte(hash, self.rx_slot_count);
+        hash = hash_byte(hash, self.tx_slot_count);
+        hash = hash_u16(hash, self.cursor_state_bytes);
+        hash = hash_u16(hash, self.cursor_state_count);
+        hash = hash_u32(hash, self.flags);
+        hash = hash_u32(hash, self.reserved0);
+        hash_u64_slice(hash, &self.reserved)
+    }
+}
+
+/// One cache-line-isolated, single-writer cursor publication.
+///
+/// `state_sequence` starts at one and advances exactly once with each cursor
+/// increment. Poisoning advances it once without moving the cursor. The owner
+/// clears `committed_sequence`, stages the complete body, performs a release
+/// operation, and writes `committed_sequence` last. Peers acquire the commit
+/// before reading and accept only the exact live relation
+/// `state_sequence == cursor + 1`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(C, align(64))]
+pub struct DirectGenetCursorState {
+    /// [`DIRECT_GENET_CURSOR_MAGIC`].
+    pub magic: u32,
+    /// [`DIRECT_GENET_CURSOR_VERSION`].
+    pub version: u16,
+    /// Raw [`DirectGenetCursorRole`].
+    pub role: u16,
+    /// Nonzero direct-link generation.
+    pub generation: u64,
+    /// Owner-written, non-wrapping packet cursor.
+    pub cursor: u64,
+    /// Owner state publication sequence.
+    pub state_sequence: u64,
+    /// Exactly one of live or poisoned.
+    pub flags: u32,
+    /// Stable nonzero reason only when poisoned.
+    pub poison_reason: u32,
+    /// Reserved; zero.
+    pub reserved: [u8; 16],
+    /// Sequence-last repetition of `state_sequence`.
+    pub committed_sequence: u64,
+}
+
+impl DirectGenetCursorState {
+    const fn initial(generation: u64, role: DirectGenetCursorRole) -> Self {
+        Self {
+            magic: DIRECT_GENET_CURSOR_MAGIC,
+            version: DIRECT_GENET_CURSOR_VERSION,
+            role: role as u16,
+            generation,
+            cursor: 0,
+            state_sequence: 1,
+            flags: DIRECT_GENET_CURSOR_FLAG_LIVE,
+            poison_reason: 0,
+            reserved: [0; 16],
+            committed_sequence: 1,
+        }
+    }
+
+    fn validate_shape(
+        self,
+        generation: u64,
+        role: DirectGenetCursorRole,
+    ) -> Result<(), DirectGenetError> {
+        if self.magic != DIRECT_GENET_CURSOR_MAGIC
+            || self.version != DIRECT_GENET_CURSOR_VERSION
+            || self.role != role as u16
+        {
+            return Err(DirectGenetError::InvalidIdentity);
+        }
+        if generation == 0 || self.generation != generation {
+            return Err(DirectGenetError::StaleGeneration);
+        }
+        if self.state_sequence == 0
+            || self.committed_sequence != self.state_sequence
+            || self.flags & !DIRECT_GENET_CURSOR_FLAGS != 0
+            || !bytes_zero(&self.reserved)
+        {
+            return Err(DirectGenetError::InvalidCursor);
+        }
+        if self.flags == DIRECT_GENET_CURSOR_FLAG_LIVE {
+            if self.poison_reason != 0
+                || self.cursor.checked_add(1) != Some(self.state_sequence)
+                || self.state_sequence == u64::MAX
+            {
+                return Err(DirectGenetError::InvalidCursor);
+            }
+        } else if self.flags == DIRECT_GENET_CURSOR_FLAG_POISONED {
+            if self.poison_reason == 0 || self.cursor.checked_add(2) != Some(self.state_sequence) {
+                return Err(DirectGenetError::InvalidCursor);
+            }
+        } else {
+            return Err(DirectGenetError::InvalidCursor);
+        }
+        Ok(())
+    }
+
+    fn validate_live(
+        self,
+        generation: u64,
+        role: DirectGenetCursorRole,
+    ) -> Result<(), DirectGenetError> {
+        self.validate_shape(generation, role)?;
+        if self.flags == DIRECT_GENET_CURSOR_FLAG_POISONED {
+            return Err(DirectGenetError::Poisoned(DirectGenetPoison {
+                role,
+                reason: self.poison_reason,
+            }));
+        }
+        Ok(())
+    }
+
+    fn advanced(self) -> Result<Self, DirectGenetError> {
+        let Some(cursor) = self.cursor.checked_add(1) else {
+            return Err(DirectGenetError::InvalidCursor);
+        };
+        let Some(state_sequence) = self.state_sequence.checked_add(1) else {
+            return Err(DirectGenetError::InvalidCursor);
+        };
+        if state_sequence == u64::MAX {
+            return Err(DirectGenetError::InvalidCursor);
+        }
+        Ok(Self {
+            cursor,
+            state_sequence,
+            committed_sequence: state_sequence,
+            ..self
+        })
+    }
+
+    fn poisoned(self, reason: u32) -> Result<Self, DirectGenetError> {
+        if reason == 0 {
+            return Err(DirectGenetError::InvalidBound);
+        }
+        let Some(state_sequence) = self.state_sequence.checked_add(1) else {
+            return Err(DirectGenetError::InvalidCursor);
+        };
+        Ok(Self {
+            state_sequence,
+            flags: DIRECT_GENET_CURSOR_FLAG_POISONED,
+            poison_reason: reason,
+            committed_sequence: state_sequence,
+            ..self
+        })
+    }
+}
+
+/// Stable live cursor state for one direct-link direction.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DirectGenetRingSnapshot {
+    /// Ring direction.
+    pub direction: DirectGenetDirection,
+    /// Exact direct-link generation.
+    pub generation: u64,
+    /// Fixed ring capacity.
+    pub capacity: u64,
+    /// Producer's committed non-wrapping cursor.
+    pub producer_cursor: u64,
+    /// Consumer's committed non-wrapping cursor.
+    pub consumer_cursor: u64,
+    /// Producer's committed owner-state sequence.
+    pub producer_state_sequence: u64,
+    /// Consumer's committed owner-state sequence.
+    pub consumer_state_sequence: u64,
+}
+
+impl DirectGenetRingSnapshot {
+    /// Return the exact committed occupancy.
+    #[must_use]
+    pub const fn occupancy(self) -> u64 {
+        self.producer_cursor - self.consumer_cursor
+    }
+
+    /// Return the exact next producer cursor and slot index.
+    pub const fn next_producer(self) -> Result<(u64, usize), DirectGenetError> {
+        if self.occupancy() == self.capacity {
+            return Err(DirectGenetError::Backpressure);
+        }
+        let Some(sequence) = self.producer_cursor.checked_add(1) else {
+            return Err(DirectGenetError::InvalidCursor);
+        };
+        match direct_genet_slot_index(self.direction, sequence) {
+            Ok(index) => Ok((sequence, index)),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Return the exact next consumer cursor and slot index.
+    pub const fn next_consumer(self) -> Result<(u64, usize), DirectGenetError> {
+        if self.occupancy() == 0 {
+            return Err(DirectGenetError::Empty);
+        }
+        let Some(sequence) = self.consumer_cursor.checked_add(1) else {
+            return Err(DirectGenetError::InvalidCursor);
+        };
+        match direct_genet_slot_index(self.direction, sequence) {
+            Ok(index) => Ok((sequence, index)),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Reconcile a producer commit against a live snapshot acquired after the
+    /// owner published its cursor cache line.
+    ///
+    /// Runtimes stage the owned cursor through aligned atomic shared-memory
+    /// accesses, publish its commit with release ordering, acquire a fresh
+    /// complete control snapshot, then call this method. The resulting
+    /// notification decision closes the consumer-drained-through-the-old-
+    /// cursor lost-wake race.
+    pub fn reconcile_producer_commit(
+        self,
+        final_state: Self,
+        sequence: u64,
+    ) -> Result<DirectGenetProducerCommit, DirectGenetError> {
+        self.validate_producer_commit(final_state, sequence)
+    }
+
+    /// Reconcile a consumer commit against a live snapshot acquired after the
+    /// owner published its cursor cache line.
+    ///
+    /// The returned rearm and work flags are authoritative only after this
+    /// post-release peer recheck; computing them from a private pre-commit copy
+    /// could lose a concurrent producer transition.
+    pub fn reconcile_consumer_commit(
+        self,
+        final_state: Self,
+        sequence: u64,
+    ) -> Result<DirectGenetConsumerCommit, DirectGenetError> {
+        self.validate_consumer_commit(final_state, sequence)
+    }
+
+    fn validate_identity(self, other: Self) -> Result<(), DirectGenetError> {
+        if self.generation != other.generation {
+            return Err(DirectGenetError::StaleGeneration);
+        }
+        if self.direction != other.direction || self.capacity != other.capacity {
+            return Err(DirectGenetError::InvalidLayout);
+        }
+        Ok(())
+    }
+
+    fn validate_peer_progress(
+        initial_cursor: u64,
+        initial_state_sequence: u64,
+        final_cursor: u64,
+        final_state_sequence: u64,
+    ) -> Result<(), DirectGenetError> {
+        let Some(cursor_delta) = final_cursor.checked_sub(initial_cursor) else {
+            return Err(DirectGenetError::InvalidCursor);
+        };
+        let Some(state_delta) = final_state_sequence.checked_sub(initial_state_sequence) else {
+            return Err(DirectGenetError::InvalidCursor);
+        };
+        if cursor_delta != state_delta {
+            return Err(DirectGenetError::InvalidCursor);
+        }
+        Ok(())
+    }
+
+    fn validate_producer_commit(
+        self,
+        final_state: Self,
+        sequence: u64,
+    ) -> Result<DirectGenetProducerCommit, DirectGenetError> {
+        self.validate_identity(final_state)?;
+        let (expected_sequence, _) = self.next_producer()?;
+        let expected_state_sequence = self
+            .producer_state_sequence
+            .checked_add(1)
+            .ok_or(DirectGenetError::InvalidCursor)?;
+        if sequence != expected_sequence
+            || final_state.producer_cursor != sequence
+            || final_state.producer_state_sequence != expected_state_sequence
+        {
+            return Err(DirectGenetError::InvalidCursor);
+        }
+        Self::validate_peer_progress(
+            self.consumer_cursor,
+            self.consumer_state_sequence,
+            final_state.consumer_cursor,
+            final_state.consumer_state_sequence,
+        )?;
+        Ok(DirectGenetProducerCommit {
+            sequence,
+            slot_index: direct_genet_slot_index(self.direction, sequence)?,
+            data_notification_due: self.occupancy() == 0
+                || final_state.consumer_cursor == self.producer_cursor,
+        })
+    }
+
+    fn validate_consumer_commit(
+        self,
+        final_state: Self,
+        sequence: u64,
+    ) -> Result<DirectGenetConsumerCommit, DirectGenetError> {
+        self.validate_identity(final_state)?;
+        let (expected_sequence, _) = self.next_consumer()?;
+        let expected_state_sequence = self
+            .consumer_state_sequence
+            .checked_add(1)
+            .ok_or(DirectGenetError::InvalidCursor)?;
+        if sequence != expected_sequence
+            || final_state.consumer_cursor != sequence
+            || final_state.consumer_state_sequence != expected_state_sequence
+        {
+            return Err(DirectGenetError::InvalidCursor);
+        }
+        Self::validate_peer_progress(
+            self.producer_cursor,
+            self.producer_state_sequence,
+            final_state.producer_cursor,
+            final_state.producer_state_sequence,
+        )?;
+        let producer_distance = final_state
+            .producer_cursor
+            .checked_sub(self.consumer_cursor)
+            .ok_or(DirectGenetError::InvalidCursor)?;
+        Ok(DirectGenetConsumerCommit {
+            sequence,
+            slot_index: direct_genet_slot_index(self.direction, sequence)?,
+            producer_rearm_due: self.occupancy() == self.capacity
+                || producer_distance == self.capacity,
+            work_remaining: final_state.producer_cursor > sequence,
+        })
+    }
+}
+
+/// Result of one fully rechecked producer cursor commit.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DirectGenetProducerCommit {
+    /// Exact committed packet sequence.
+    pub sequence: u64,
+    /// Slot carrying this sequence.
+    pub slot_index: usize,
+    /// Whether the producer must send the coalescing data notification.
+    pub data_notification_due: bool,
+}
+
+/// Result of one fully rechecked consumer cursor commit.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DirectGenetConsumerCommit {
+    /// Exact consumed packet sequence.
+    pub sequence: u64,
+    /// Slot carrying this sequence.
+    pub slot_index: usize,
+    /// Whether the consumer must rearm a producer that may have observed full.
+    pub producer_rearm_due: bool,
+    /// Whether the final producer recheck proves more committed work exists.
+    pub work_remaining: bool,
+}
+
+/// Fixed sequence-last header at the front of each direct-link packet slot.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(C, align(8))]
+pub struct DirectGenetSlotHeader {
+    /// [`DIRECT_GENET_SLOT_MAGIC`].
+    pub magic: u32,
+    /// [`DIRECT_GENET_SLOT_VERSION`].
+    pub version: u16,
+    /// Raw [`DirectGenetDirection`].
+    pub direction: u16,
+    /// Exact [`DIRECT_GENET_SLOT_HEADER_BYTES`].
+    pub header_bytes: u16,
+    /// Initialized Ethernet frame bytes.
+    pub frame_len: u16,
+    /// Reserved; zero.
+    pub flags: u32,
+    /// Nonzero direct-link generation.
+    pub generation: u64,
+    /// Exact non-wrapping ring cursor for this packet.
+    pub sequence: u64,
+    /// Reserved; zero.
+    pub reserved: [u64; 3],
+    /// Sequence-last repetition of `sequence`.
+    pub committed_sequence: u64,
+}
+
+impl DirectGenetSlotHeader {
+    fn staged(
+        direction: DirectGenetDirection,
+        generation: u64,
+        sequence: u64,
+        frame_len: usize,
+    ) -> Result<Self, DirectGenetError> {
+        if generation == 0 {
+            return Err(DirectGenetError::StaleGeneration);
+        }
+        if sequence == 0 {
+            return Err(DirectGenetError::InvalidSequence);
+        }
+        if frame_len == 0 || frame_len > ETHERNET_FRAME_BYTES {
+            return Err(DirectGenetError::InvalidBound);
+        }
+        Ok(Self {
+            magic: DIRECT_GENET_SLOT_MAGIC,
+            version: DIRECT_GENET_SLOT_VERSION,
+            direction: direction as u16,
+            header_bytes: DIRECT_GENET_SLOT_HEADER_BYTES as u16,
+            frame_len: frame_len as u16,
+            flags: 0,
+            generation,
+            sequence,
+            reserved: [0; 3],
+            committed_sequence: 0,
+        })
+    }
+
+    fn validate(
+        self,
+        direction: DirectGenetDirection,
+        generation: u64,
+        expected_sequence: u64,
+    ) -> Result<usize, DirectGenetError> {
+        if self.magic != DIRECT_GENET_SLOT_MAGIC
+            || self.version != DIRECT_GENET_SLOT_VERSION
+            || self.direction != direction as u16
+        {
+            return Err(DirectGenetError::InvalidIdentity);
+        }
+        if self.header_bytes as usize != DIRECT_GENET_SLOT_HEADER_BYTES
+            || self.flags != 0
+            || self.reserved != [0; 3]
+        {
+            return Err(DirectGenetError::InvalidLayout);
+        }
+        if generation == 0 || self.generation != generation {
+            return Err(DirectGenetError::StaleGeneration);
+        }
+        if expected_sequence == 0
+            || self.sequence != expected_sequence
+            || self.committed_sequence != self.sequence
+        {
+            return Err(DirectGenetError::InvalidSequence);
+        }
+        let frame_len = self.frame_len as usize;
+        if frame_len == 0 || frame_len > ETHERNET_FRAME_BYTES {
+            return Err(DirectGenetError::InvalidBound);
+        }
+        Ok(frame_len)
+    }
+}
+
+/// Private stable copy of one direct-link packet publication.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DirectGenetSlotRecord {
+    direction: DirectGenetDirection,
+    sequence: u64,
+    frame_len: u16,
+    frame: [u8; ETHERNET_FRAME_BYTES],
+}
+
+impl DirectGenetSlotRecord {
+    /// Ring direction that owns this record.
+    #[must_use]
+    pub const fn direction(&self) -> DirectGenetDirection {
+        self.direction
+    }
+
+    /// Exact monotonic cursor carried by this record.
+    #[must_use]
+    pub const fn sequence(&self) -> u64 {
+        self.sequence
+    }
+
+    /// Initialized Ethernet frame bytes.
+    #[must_use]
+    pub fn frame(&self) -> &[u8] {
+        &self.frame[..self.frame_len as usize]
+    }
+}
+
+/// Byte-level helpers for the CPU-only direct-link control page.
+pub struct DirectGenetControlPage;
+
+impl DirectGenetControlPage {
+    /// Scrub and initialize the complete control page before either child runs.
+    pub fn initialize_into(output: &mut [u8], generation: u64) -> Result<(), DirectGenetError> {
+        if output.len() != SHARED_PAGE_BYTES {
+            return Err(DirectGenetError::InvalidLayout);
+        }
+        if generation == 0 {
+            return Err(DirectGenetError::StaleGeneration);
+        }
+        output.fill(0);
+        encode_direct_genet_control_header(
+            &mut output[..DIRECT_GENET_CONTROL_HEADER_BYTES],
+            DirectGenetControlHeader::new(generation),
+        );
+        for role in [
+            DirectGenetCursorRole::RxProducer,
+            DirectGenetCursorRole::RxConsumer,
+            DirectGenetCursorRole::TxProducer,
+            DirectGenetCursorRole::TxConsumer,
+        ] {
+            let offset = role.offset();
+            encode_direct_genet_cursor_state(
+                &mut output[offset..offset + DIRECT_GENET_CURSOR_STATE_BYTES],
+                DirectGenetCursorState::initial(generation, role),
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Acquire one stable live producer/consumer snapshot.
+    pub fn snapshot(
+        input: &[u8],
+        generation: u64,
+        direction: DirectGenetDirection,
+    ) -> Result<DirectGenetRingSnapshot, DirectGenetError> {
+        if input.len() != SHARED_PAGE_BYTES {
+            return Err(DirectGenetError::InvalidLayout);
+        }
+        let header = decode_direct_genet_control_header(input)?;
+        header.validate_for(generation)?;
+        let (producer_role, consumer_role) = match direction {
+            DirectGenetDirection::Rx => (
+                DirectGenetCursorRole::RxProducer,
+                DirectGenetCursorRole::RxConsumer,
+            ),
+            DirectGenetDirection::Tx => (
+                DirectGenetCursorRole::TxProducer,
+                DirectGenetCursorRole::TxConsumer,
+            ),
+        };
+        let producer = decode_direct_genet_cursor_state(input, generation, producer_role)?;
+        let consumer = decode_direct_genet_cursor_state(input, generation, consumer_role)?;
+        let Some(occupancy) = producer.cursor.checked_sub(consumer.cursor) else {
+            return Err(DirectGenetError::InvalidCursor);
+        };
+        let capacity = direction.slot_count() as u64;
+        if occupancy > capacity {
+            return Err(DirectGenetError::InvalidCursor);
+        }
+        fence(Ordering::Acquire);
+        if read_u64(input, 8) != generation
+            || read_u64(input, 56) != header.seal
+            || read_u64(input, producer_role.offset() + 56) != producer.committed_sequence
+            || read_u64(input, consumer_role.offset() + 56) != consumer.committed_sequence
+        {
+            return Err(DirectGenetError::StateChanged);
+        }
+        Ok(DirectGenetRingSnapshot {
+            direction,
+            generation,
+            capacity,
+            producer_cursor: producer.cursor,
+            consumer_cursor: consumer.cursor,
+            producer_state_sequence: producer.state_sequence,
+            consumer_state_sequence: consumer.state_sequence,
+        })
+    }
+
+    /// Acquire one exact live owner cursor state.
+    pub fn cursor_state(
+        input: &[u8],
+        generation: u64,
+        role: DirectGenetCursorRole,
+    ) -> Result<DirectGenetCursorState, DirectGenetError> {
+        let header = decode_direct_genet_control_header(input)?;
+        header.validate_for(generation)?;
+        decode_direct_genet_cursor_state(input, generation, role)
+    }
+
+    /// Commit the producer cursor after the corresponding slot is committed.
+    ///
+    /// The returned result is based on a final generation/state recheck and
+    /// closes the empty-to-nonempty lost-wake race. Callers signal only when
+    /// `data_notification_due` is true.
+    pub fn commit_producer(
+        page: &mut [u8],
+        initial: DirectGenetRingSnapshot,
+    ) -> Result<DirectGenetProducerCommit, DirectGenetError> {
+        let (sequence, _) = initial.next_producer()?;
+        let expected_state_sequence = initial
+            .producer_state_sequence
+            .checked_add(1)
+            .ok_or(DirectGenetError::InvalidCursor)?;
+        let current = Self::snapshot(page, initial.generation, initial.direction)?;
+        initial.validate_identity(current)?;
+        if current.producer_cursor == sequence
+            && current.producer_state_sequence == expected_state_sequence
+        {
+            return initial.validate_producer_commit(current, sequence);
+        }
+        if current.producer_cursor != initial.producer_cursor
+            || current.producer_state_sequence != initial.producer_state_sequence
+        {
+            return Err(DirectGenetError::StateChanged);
+        }
+        DirectGenetRingSnapshot::validate_peer_progress(
+            initial.consumer_cursor,
+            initial.consumer_state_sequence,
+            current.consumer_cursor,
+            current.consumer_state_sequence,
+        )?;
+        let role = match initial.direction {
+            DirectGenetDirection::Rx => DirectGenetCursorRole::RxProducer,
+            DirectGenetDirection::Tx => DirectGenetCursorRole::TxProducer,
+        };
+        let state = decode_direct_genet_cursor_state(page, initial.generation, role)?;
+        if state.state_sequence != initial.producer_state_sequence {
+            return Err(DirectGenetError::StateChanged);
+        }
+        write_direct_genet_cursor_state(page, state.advanced()?)?;
+        let final_state = Self::snapshot(page, initial.generation, initial.direction)?;
+        initial.validate_producer_commit(final_state, sequence)
+    }
+
+    /// Commit the consumer cursor after copying and validating one exact slot.
+    ///
+    /// The returned result is based on a final generation/state recheck and
+    /// closes both the full-to-not-full producer rearm race and the
+    /// enqueue-before-sleep consumer race.
+    pub fn commit_consumer(
+        page: &mut [u8],
+        initial: DirectGenetRingSnapshot,
+    ) -> Result<DirectGenetConsumerCommit, DirectGenetError> {
+        let (sequence, _) = initial.next_consumer()?;
+        let expected_state_sequence = initial
+            .consumer_state_sequence
+            .checked_add(1)
+            .ok_or(DirectGenetError::InvalidCursor)?;
+        let current = Self::snapshot(page, initial.generation, initial.direction)?;
+        initial.validate_identity(current)?;
+        if current.consumer_cursor == sequence
+            && current.consumer_state_sequence == expected_state_sequence
+        {
+            return initial.validate_consumer_commit(current, sequence);
+        }
+        if current.consumer_cursor != initial.consumer_cursor
+            || current.consumer_state_sequence != initial.consumer_state_sequence
+        {
+            return Err(DirectGenetError::StateChanged);
+        }
+        DirectGenetRingSnapshot::validate_peer_progress(
+            initial.producer_cursor,
+            initial.producer_state_sequence,
+            current.producer_cursor,
+            current.producer_state_sequence,
+        )?;
+        let role = match initial.direction {
+            DirectGenetDirection::Rx => DirectGenetCursorRole::RxConsumer,
+            DirectGenetDirection::Tx => DirectGenetCursorRole::TxConsumer,
+        };
+        let state = decode_direct_genet_cursor_state(page, initial.generation, role)?;
+        if state.state_sequence != initial.consumer_state_sequence {
+            return Err(DirectGenetError::StateChanged);
+        }
+        write_direct_genet_cursor_state(page, state.advanced()?)?;
+        let final_state = Self::snapshot(page, initial.generation, initial.direction)?;
+        initial.validate_consumer_commit(final_state, sequence)
+    }
+
+    /// Permanently poison one owner state in the current generation.
+    ///
+    /// A peer that observes the committed poison receipt returns
+    /// [`DirectGenetError::Poisoned`] and must contain or pair-restart the link;
+    /// it may never skip the cursor or fall back to another physical issuer.
+    pub fn poison_owner(
+        page: &mut [u8],
+        generation: u64,
+        role: DirectGenetCursorRole,
+        expected_state_sequence: u64,
+        reason: u32,
+    ) -> Result<DirectGenetPoison, DirectGenetError> {
+        let state = decode_direct_genet_cursor_state(page, generation, role)?;
+        if state.state_sequence != expected_state_sequence {
+            return Err(DirectGenetError::StateChanged);
+        }
+        let poisoned = state.poisoned(reason)?;
+        write_direct_genet_cursor_state(page, poisoned)?;
+        let stable = decode_direct_genet_cursor_state_allow_poison(page, generation, role)?;
+        if stable != poisoned {
+            return Err(DirectGenetError::StateChanged);
+        }
+        Ok(DirectGenetPoison { role, reason })
+    }
+}
+
+/// Byte-level helpers for one CPU-only direct-link packet slot.
+pub struct DirectGenetSlotPage;
+
+impl DirectGenetSlotPage {
+    /// Scrub one reused slot page before either direct-link endpoint runs.
+    pub fn initialize_into(output: &mut [u8]) -> Result<(), DirectGenetError> {
+        if output.len() != SHARED_PAGE_BYTES {
+            return Err(DirectGenetError::InvalidLayout);
+        }
+        output.fill(0);
+        Ok(())
+    }
+
+    /// Publish exactly the cursor following `after_cursor` sequence-last.
+    pub fn publish_next_into(
+        output: &mut [u8],
+        direction: DirectGenetDirection,
+        generation: u64,
+        after_cursor: u64,
+        frame: &[u8],
+    ) -> Result<u64, DirectGenetError> {
+        if output.len() != SHARED_PAGE_BYTES {
+            return Err(DirectGenetError::InvalidLayout);
+        }
+        let Some(sequence) = after_cursor.checked_add(1) else {
+            return Err(DirectGenetError::InvalidSequence);
+        };
+        let header = DirectGenetSlotHeader::staged(direction, generation, sequence, frame.len())?;
+        output[DIRECT_GENET_SLOT_COMMIT_OFFSET..DIRECT_GENET_SLOT_COMMIT_OFFSET + 8]
+            .copy_from_slice(&0u64.to_le_bytes());
+        fence(Ordering::Release);
+        output[0..4].copy_from_slice(&header.magic.to_le_bytes());
+        output[4..6].copy_from_slice(&header.version.to_le_bytes());
+        output[6..8].copy_from_slice(&header.direction.to_le_bytes());
+        output[8..10].copy_from_slice(&header.header_bytes.to_le_bytes());
+        output[10..12].copy_from_slice(&header.frame_len.to_le_bytes());
+        output[12..16].copy_from_slice(&header.flags.to_le_bytes());
+        output[16..24].copy_from_slice(&header.generation.to_le_bytes());
+        output[24..32].copy_from_slice(&header.sequence.to_le_bytes());
+        encode_u64_array(output, 32, &header.reserved);
+        output[DIRECT_GENET_SLOT_PAYLOAD_OFFSET..DIRECT_GENET_SLOT_PAYLOAD_OFFSET + frame.len()]
+            .copy_from_slice(frame);
+        fence(Ordering::Release);
+        output[DIRECT_GENET_SLOT_COMMIT_OFFSET..DIRECT_GENET_SLOT_COMMIT_OFFSET + 8]
+            .copy_from_slice(&sequence.to_le_bytes());
+        Ok(sequence)
+    }
+
+    /// Acquire and privately copy exactly the cursor following `after_cursor`.
+    pub fn decode_next(
+        input: &[u8],
+        direction: DirectGenetDirection,
+        generation: u64,
+        after_cursor: u64,
+    ) -> Result<DirectGenetSlotRecord, DirectGenetError> {
+        if input.len() != SHARED_PAGE_BYTES {
+            return Err(DirectGenetError::InvalidLayout);
+        }
+        let expected_sequence = after_cursor
+            .checked_add(1)
+            .ok_or(DirectGenetError::InvalidSequence)?;
+        let first = read_u64(input, DIRECT_GENET_SLOT_COMMIT_OFFSET);
+        fence(Ordering::Acquire);
+        let header = DirectGenetSlotHeader {
+            magic: read_u32(input, 0),
+            version: read_u16(input, 4),
+            direction: read_u16(input, 6),
+            header_bytes: read_u16(input, 8),
+            frame_len: read_u16(input, 10),
+            flags: read_u32(input, 12),
+            generation: read_u64(input, 16),
+            sequence: read_u64(input, 24),
+            reserved: decode_u64_array(input, 32),
+            committed_sequence: read_u64(input, DIRECT_GENET_SLOT_COMMIT_OFFSET),
+        };
+        let frame_len = header.validate(direction, generation, expected_sequence)?;
+        if first != expected_sequence {
+            return Err(DirectGenetError::InvalidSequence);
+        }
+        let mut frame = [0u8; ETHERNET_FRAME_BYTES];
+        frame[..frame_len].copy_from_slice(
+            &input[DIRECT_GENET_SLOT_PAYLOAD_OFFSET..DIRECT_GENET_SLOT_PAYLOAD_OFFSET + frame_len],
+        );
+        fence(Ordering::Acquire);
+        if read_u64(input, DIRECT_GENET_SLOT_COMMIT_OFFSET) != first
+            || read_u64(input, 16) != generation
+            || read_u64(input, 24) != expected_sequence
+            || read_u32(input, 12) != 0
+        {
+            return Err(DirectGenetError::InvalidSequence);
+        }
+        Ok(DirectGenetSlotRecord {
+            direction,
+            sequence: expected_sequence,
+            frame_len: frame_len as u16,
+            frame,
+        })
+    }
+}
+
+/// Return the exact page-slot index for one nonzero ring sequence.
+pub const fn direct_genet_slot_index(
+    direction: DirectGenetDirection,
+    sequence: u64,
+) -> Result<usize, DirectGenetError> {
+    if sequence == 0 {
+        return Err(DirectGenetError::InvalidSequence);
+    }
+    Ok(((sequence - 1) % direction.slot_count() as u64) as usize)
+}
+
+fn encode_direct_genet_control_header(output: &mut [u8], header: DirectGenetControlHeader) {
+    output.fill(0);
+    output[0..4].copy_from_slice(&header.magic.to_le_bytes());
+    output[4..6].copy_from_slice(&header.version.to_le_bytes());
+    output[6..8].copy_from_slice(&header.header_bytes.to_le_bytes());
+    output[8..16].copy_from_slice(&header.generation.to_le_bytes());
+    output[16..18].copy_from_slice(&header.shared_page_bytes.to_le_bytes());
+    output[18] = header.rx_slot_count;
+    output[19] = header.tx_slot_count;
+    output[20..22].copy_from_slice(&header.cursor_state_bytes.to_le_bytes());
+    output[22..24].copy_from_slice(&header.cursor_state_count.to_le_bytes());
+    output[24..28].copy_from_slice(&header.flags.to_le_bytes());
+    output[28..32].copy_from_slice(&header.reserved0.to_le_bytes());
+    encode_u64_array(output, 32, &header.reserved);
+    output[56..64].copy_from_slice(&header.seal.to_le_bytes());
+}
+
+fn decode_direct_genet_control_header(
+    input: &[u8],
+) -> Result<DirectGenetControlHeader, DirectGenetError> {
+    if input.len() != SHARED_PAGE_BYTES {
+        return Err(DirectGenetError::InvalidLayout);
+    }
+    Ok(DirectGenetControlHeader {
+        magic: read_u32(input, 0),
+        version: read_u16(input, 4),
+        header_bytes: read_u16(input, 6),
+        generation: read_u64(input, 8),
+        shared_page_bytes: read_u16(input, 16),
+        rx_slot_count: input[18],
+        tx_slot_count: input[19],
+        cursor_state_bytes: read_u16(input, 20),
+        cursor_state_count: read_u16(input, 22),
+        flags: read_u32(input, 24),
+        reserved0: read_u32(input, 28),
+        reserved: decode_u64_array(input, 32),
+        seal: read_u64(input, 56),
+    })
+}
+
+fn encode_direct_genet_cursor_state(
+    output: &mut [u8],
+    state: DirectGenetCursorState,
+) -> Result<(), DirectGenetError> {
+    let role = direct_genet_cursor_role(state.role)?;
+    state.validate_shape(state.generation, role)?;
+    output[56..64].copy_from_slice(&0u64.to_le_bytes());
+    fence(Ordering::Release);
+    output.fill(0);
+    output[0..4].copy_from_slice(&state.magic.to_le_bytes());
+    output[4..6].copy_from_slice(&state.version.to_le_bytes());
+    output[6..8].copy_from_slice(&state.role.to_le_bytes());
+    output[8..16].copy_from_slice(&state.generation.to_le_bytes());
+    output[16..24].copy_from_slice(&state.cursor.to_le_bytes());
+    output[24..32].copy_from_slice(&state.state_sequence.to_le_bytes());
+    output[32..36].copy_from_slice(&state.flags.to_le_bytes());
+    output[36..40].copy_from_slice(&state.poison_reason.to_le_bytes());
+    output[40..56].copy_from_slice(&state.reserved);
+    fence(Ordering::Release);
+    output[56..64].copy_from_slice(&state.committed_sequence.to_le_bytes());
+    Ok(())
+}
+
+fn decode_direct_genet_cursor_state(
+    input: &[u8],
+    generation: u64,
+    role: DirectGenetCursorRole,
+) -> Result<DirectGenetCursorState, DirectGenetError> {
+    let state = decode_direct_genet_cursor_state_allow_poison(input, generation, role)?;
+    state.validate_live(generation, role)?;
+    Ok(state)
+}
+
+fn decode_direct_genet_cursor_state_allow_poison(
+    input: &[u8],
+    generation: u64,
+    role: DirectGenetCursorRole,
+) -> Result<DirectGenetCursorState, DirectGenetError> {
+    if input.len() != SHARED_PAGE_BYTES {
+        return Err(DirectGenetError::InvalidLayout);
+    }
+    let offset = role.offset();
+    let first = read_u64(input, offset + 56);
+    fence(Ordering::Acquire);
+    let mut reserved = [0u8; 16];
+    reserved.copy_from_slice(&input[offset + 40..offset + 56]);
+    let state = DirectGenetCursorState {
+        magic: read_u32(input, offset),
+        version: read_u16(input, offset + 4),
+        role: read_u16(input, offset + 6),
+        generation: read_u64(input, offset + 8),
+        cursor: read_u64(input, offset + 16),
+        state_sequence: read_u64(input, offset + 24),
+        flags: read_u32(input, offset + 32),
+        poison_reason: read_u32(input, offset + 36),
+        reserved,
+        committed_sequence: read_u64(input, offset + 56),
+    };
+    fence(Ordering::Acquire);
+    let second = read_u64(input, offset + 56);
+    if first != second || first == 0 {
+        return Err(DirectGenetError::StateChanged);
+    }
+    state.validate_shape(generation, role)?;
+    Ok(state)
+}
+
+fn write_direct_genet_cursor_state(
+    page: &mut [u8],
+    state: DirectGenetCursorState,
+) -> Result<(), DirectGenetError> {
+    if page.len() != SHARED_PAGE_BYTES {
+        return Err(DirectGenetError::InvalidLayout);
+    }
+    let role = direct_genet_cursor_role(state.role)?;
+    let offset = role.offset();
+    encode_direct_genet_cursor_state(
+        &mut page[offset..offset + DIRECT_GENET_CURSOR_STATE_BYTES],
+        state,
+    )
+}
+
+const fn direct_genet_cursor_role(raw: u16) -> Result<DirectGenetCursorRole, DirectGenetError> {
+    match raw {
+        1 => Ok(DirectGenetCursorRole::RxProducer),
+        2 => Ok(DirectGenetCursorRole::RxConsumer),
+        3 => Ok(DirectGenetCursorRole::TxProducer),
+        4 => Ok(DirectGenetCursorRole::TxConsumer),
+        _ => Err(DirectGenetError::InvalidIdentity),
+    }
+}
+
 /// Pointer-free runtime descriptor mapped read-only into the child.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(C, align(8))]
@@ -1264,6 +2648,7 @@ impl RuntimeInitDescriptor {
         }
         if self.flags & REQUIRED_INIT_FLAGS != REQUIRED_INIT_FLAGS
             || self.flags & !ALLOWED_INIT_FLAGS != 0
+            || (self.direct_virtio() && self.direct_genet())
             || self.child_cspace_slots != CHILD_CSPACE_SLOTS
             || self.child_wake_notification_slot != CHILD_WAKE_NOTIFICATION_SLOT
             || self.packet_tx_wake_notification_slot != PACKET_TX_WAKE_NOTIFICATION_SLOT
@@ -1273,6 +2658,11 @@ impl RuntimeInitDescriptor {
                 != (ROOT_WAKE_MASK
                     | if self.direct_virtio() {
                         WAKE_DIRECT_VIRTIO_IRQ
+                    } else {
+                        0
+                    }
+                    | if self.direct_genet() {
+                        WAKE_DIRECT_GENET_LINK
                     } else {
                         0
                     })
@@ -1355,6 +2745,65 @@ impl RuntimeInitDescriptor {
         self.flags |= INIT_FLAG_DIRECT_VIRTIO;
         self.root_wake_mask |= WAKE_DIRECT_VIRTIO_IRQ;
         self.sealed()
+    }
+
+    /// Whether this Pi service uses the CPU-only direct link to isolated GENET.
+    #[must_use]
+    pub const fn direct_genet(self) -> bool {
+        self.flags & INIT_FLAG_DIRECT_GENET != 0
+    }
+
+    /// Enable the Pi GENET direct-link extension and reseal the descriptor.
+    #[must_use]
+    pub const fn with_direct_genet(mut self) -> Self {
+        self.flags |= INIT_FLAG_DIRECT_GENET;
+        self.root_wake_mask |= WAKE_DIRECT_GENET_LINK;
+        self.sealed()
+    }
+
+    /// Validate the Pi extension against this descriptor and legacy mappings.
+    pub fn validate_direct_genet_layout(self, layout: DirectGenetLayout) -> Result<(), AbiError> {
+        self.validate()?;
+        if !self.direct_genet() || self.direct_virtio() {
+            return Err(AbiError::InvalidAuthority);
+        }
+        layout.validate_for(self.generation)?;
+        let legacy_mappings = [
+            (self.ipc_buffer_vaddr, 1024u64),
+            (self.packet_rx_vaddr, SHARED_PAGE_BYTES as u64),
+            (self.packet_tx_vaddr, SHARED_PAGE_BYTES as u64),
+            (self.command_vaddr, SHARED_PAGE_BYTES as u64),
+            (self.event_vaddr, SHARED_PAGE_BYTES as u64),
+        ];
+        let direct_pages = layout.virtual_pages();
+        let mut page_index = 0usize;
+        while page_index < direct_pages.len() {
+            let direct_end = match direct_pages[page_index].checked_add(SHARED_PAGE_BYTES as u64) {
+                Some(end) => end,
+                None => return Err(AbiError::InvalidLayout),
+            };
+            let mut legacy_index = 0usize;
+            while legacy_index < legacy_mappings.len() {
+                let legacy_end = match legacy_mappings[legacy_index]
+                    .0
+                    .checked_add(legacy_mappings[legacy_index].1)
+                {
+                    Some(end) => end,
+                    None => return Err(AbiError::InvalidLayout),
+                };
+                if ranges_overlap(
+                    direct_pages[page_index],
+                    direct_end,
+                    legacy_mappings[legacy_index].0,
+                    legacy_end,
+                ) {
+                    return Err(AbiError::InvalidLayout);
+                }
+                legacy_index += 1;
+            }
+            page_index += 1;
+        }
+        Ok(())
     }
 
     /// Encode the descriptor into its canonical little-endian wire form.
@@ -2355,6 +3804,60 @@ const _: () = assert!(size_of::<DirectVirtioLayout>() == DIRECT_VIRTIO_LAYOUT_BY
 const _: () = assert!(align_of::<DirectVirtioLayout>() == align_of::<u64>());
 const _: () =
     assert!(DIRECT_VIRTIO_LAYOUT_OFFSET + DIRECT_VIRTIO_LAYOUT_BYTES <= SHARED_PAGE_BYTES);
+const _: () = assert!(size_of::<DirectGenetLayout>() == DIRECT_GENET_LAYOUT_BYTES);
+const _: () = assert!(align_of::<DirectGenetLayout>() == align_of::<u64>());
+const _: () = assert!(size_of::<DirectGenetControlHeader>() == DIRECT_GENET_CONTROL_HEADER_BYTES);
+const _: () = assert!(size_of::<DirectGenetCursorState>() == DIRECT_GENET_CURSOR_STATE_BYTES);
+const _: () = assert!(align_of::<DirectGenetCursorState>() == DIRECT_GENET_CURSOR_STATE_BYTES);
+const _: () = assert!(size_of::<DirectGenetSlotHeader>() == DIRECT_GENET_SLOT_HEADER_BYTES);
+const _: () = assert!(
+    DIRECT_GENET_LAYOUT_OFFSET + DIRECT_GENET_LAYOUT_BYTES <= SHARED_PAGE_BYTES
+        && DIRECT_VIRTIO_LAYOUT_OFFSET + DIRECT_VIRTIO_LAYOUT_BYTES <= DIRECT_GENET_LAYOUT_OFFSET
+);
+const _: () = assert!(
+    DIRECT_GENET_CONTROL_PAGE_INDEX + 1 == DIRECT_GENET_RX_FIRST_PAGE_INDEX
+        && DIRECT_GENET_RX_FIRST_PAGE_INDEX + DIRECT_GENET_RX_SLOT_COUNT
+            == DIRECT_GENET_TX_FIRST_PAGE_INDEX
+        && DIRECT_GENET_TX_FIRST_PAGE_INDEX + DIRECT_GENET_TX_SLOT_COUNT
+            == DIRECT_GENET_SHARED_PAGE_COUNT
+);
+const _: () = assert!(
+    DIRECT_GENET_TX_CONSUMER_STATE_OFFSET + DIRECT_GENET_CURSOR_STATE_BYTES <= SHARED_PAGE_BYTES
+);
+const _: () = assert!(
+    core::mem::offset_of!(DirectGenetSlotHeader, committed_sequence)
+        == DIRECT_GENET_SLOT_COMMIT_OFFSET
+);
+const _: () = assert!(
+    core::mem::offset_of!(DirectGenetSlotHeader, frame_len) == DIRECT_GENET_SLOT_LENGTH_OFFSET
+);
+const _: () = assert!(
+    core::mem::offset_of!(DirectGenetSlotHeader, generation) == DIRECT_GENET_SLOT_GENERATION_OFFSET
+);
+const _: () = assert!(
+    core::mem::offset_of!(DirectGenetSlotHeader, sequence) == DIRECT_GENET_SLOT_SEQUENCE_OFFSET
+);
+const _: () = assert!(
+    core::mem::offset_of!(DirectGenetCursorState, generation)
+        == DIRECT_GENET_CURSOR_GENERATION_OFFSET
+);
+const _: () =
+    assert!(core::mem::offset_of!(DirectGenetCursorState, cursor) == DIRECT_GENET_CURSOR_OFFSET);
+const _: () = assert!(
+    core::mem::offset_of!(DirectGenetCursorState, state_sequence)
+        == DIRECT_GENET_CURSOR_STATE_SEQUENCE_OFFSET
+);
+const _: () = assert!(
+    core::mem::offset_of!(DirectGenetCursorState, flags) == DIRECT_GENET_CURSOR_FLAGS_OFFSET
+);
+const _: () = assert!(
+    core::mem::offset_of!(DirectGenetCursorState, poison_reason)
+        == DIRECT_GENET_CURSOR_POISON_REASON_OFFSET
+);
+const _: () = assert!(
+    core::mem::offset_of!(DirectGenetCursorState, committed_sequence)
+        == DIRECT_GENET_CURSOR_COMMIT_OFFSET
+);
 const _: () = assert!(align_of::<ExchangePage>() == SHARED_PAGE_BYTES);
 const _: () = assert!(size_of::<PacketPageHeader>() == PACKET_HEADER_BYTES);
 const _: () = assert!(size_of::<ExchangePageHeader>() == EXCHANGE_HEADER_BYTES);
@@ -2452,6 +3955,41 @@ mod tests {
             tx_vaddr: 0x7207_0000,
             rx_paddrs,
             tx_paddrs,
+            seal: 0,
+        }
+        .sealed()
+    }
+
+    fn direct_genet_layout() -> DirectGenetLayout {
+        let base = 0x7300_0000u64;
+        let mut rx_vaddrs = [0u64; DIRECT_GENET_RX_SLOT_COUNT];
+        let mut tx_vaddrs = [0u64; DIRECT_GENET_TX_SLOT_COUNT];
+        let mut index = 0usize;
+        while index < DIRECT_GENET_RX_SLOT_COUNT {
+            rx_vaddrs[index] =
+                base + ((DIRECT_GENET_RX_FIRST_PAGE_INDEX + index) * SHARED_PAGE_BYTES) as u64;
+            index += 1;
+        }
+        index = 0;
+        while index < DIRECT_GENET_TX_SLOT_COUNT {
+            tx_vaddrs[index] =
+                base + ((DIRECT_GENET_TX_FIRST_PAGE_INDEX + index) * SHARED_PAGE_BYTES) as u64;
+            index += 1;
+        }
+        DirectGenetLayout {
+            magic: DIRECT_GENET_LAYOUT_MAGIC,
+            version: DIRECT_GENET_LAYOUT_VERSION,
+            layout_bytes: DIRECT_GENET_LAYOUT_BYTES as u16,
+            flags: DIRECT_GENET_LAYOUT_FLAGS,
+            shared_page_bytes: SHARED_PAGE_BYTES as u16,
+            rx_slot_count: DIRECT_GENET_RX_SLOT_COUNT as u8,
+            tx_slot_count: DIRECT_GENET_TX_SLOT_COUNT as u8,
+            generation: 7,
+            peer_wake_notification_slot: DIRECT_GENET_PEER_WAKE_NOTIFICATION_SLOT,
+            reserved0: 0,
+            control_vaddr: base,
+            rx_vaddrs,
+            tx_vaddrs,
             seal: 0,
         }
         .sealed()
@@ -2839,7 +4377,7 @@ mod tests {
             0,
             20,
             0,
-            b"console-network-service/v4",
+            CONSOLE_NETWORK_SERVICE_IDENTITY,
         )
         .unwrap();
 
@@ -2908,11 +4446,16 @@ mod tests {
     fn descriptor_seal_binds_authority_and_secret_tail() {
         let valid = descriptor();
         assert_eq!(valid.validate(), Ok(()));
-        assert_eq!(ABI_VERSION, 4);
+        assert_eq!(ABI_VERSION, 5);
+        assert_eq!(
+            CONSOLE_NETWORK_SERVICE_IDENTITY,
+            b"console-network-service/v5"
+        );
         assert_eq!(ExchangeKind::SendBatch as u16, 3);
         assert_eq!(ExchangeKind::CommandBatch as u16, 27);
         assert_eq!(WAKE_PUBLICATION_ACK, 64);
         assert_eq!(WAKE_DIRECT_VIRTIO_IRQ, 128);
+        assert_eq!(WAKE_DIRECT_GENET_LINK, 256);
         assert_eq!(ROOT_WAKE_MASK, 79);
         assert_eq!(REQUIRED_INIT_FLAGS & INIT_FLAG_PUBLICATION_ACK, 16);
         assert_eq!(REQUIRED_INIT_FLAGS & INIT_FLAG_COMPLETION_WATERMARKS, 32);
@@ -2951,6 +4494,247 @@ mod tests {
         unknown_flag.flags |= 1 << 31;
         unknown_flag = unknown_flag.sealed();
         assert_eq!(unknown_flag.validate(), Err(AbiError::InvalidAuthority));
+    }
+
+    #[test]
+    fn direct_genet_extension_is_v5_exact_sealed_and_disjoint() {
+        assert_eq!(DIRECT_GENET_SHARED_PAGE_COUNT, 32);
+        assert_eq!(DIRECT_GENET_RX_SLOT_COUNT, 15);
+        assert_eq!(DIRECT_GENET_TX_SLOT_COUNT, 16);
+
+        let layout = direct_genet_layout();
+        assert_eq!(layout.validate_for(7), Ok(()));
+        assert_eq!(size_of::<DirectGenetLayout>(), DIRECT_GENET_LAYOUT_BYTES);
+        let mut encoded = [0u8; DIRECT_GENET_LAYOUT_BYTES];
+        layout.encode(&mut encoded).unwrap();
+        assert_eq!(DirectGenetLayout::decode(&encoded), Ok(layout));
+
+        let descriptor = descriptor().with_direct_genet();
+        assert!(descriptor.direct_genet());
+        assert!(!descriptor.direct_virtio());
+        assert_eq!(
+            descriptor.root_wake_mask,
+            ROOT_WAKE_MASK | WAKE_DIRECT_GENET_LINK
+        );
+        assert_eq!(descriptor.validate(), Ok(()));
+        assert_eq!(descriptor.validate_direct_genet_layout(layout), Ok(()));
+
+        let both = descriptor.with_direct_virtio();
+        assert_eq!(both.validate(), Err(AbiError::InvalidAuthority));
+
+        let mut duplicate = layout;
+        duplicate.rx_vaddrs[0] = duplicate.control_vaddr;
+        duplicate = duplicate.sealed();
+        assert_eq!(duplicate.validate(), Err(AbiError::InvalidLayout));
+
+        let mut legacy_overlap = layout;
+        legacy_overlap.control_vaddr = descriptor.packet_rx_vaddr;
+        legacy_overlap = legacy_overlap.sealed();
+        assert_eq!(legacy_overlap.validate(), Ok(()));
+        assert_eq!(
+            descriptor.validate_direct_genet_layout(legacy_overlap),
+            Err(AbiError::InvalidLayout)
+        );
+        assert_eq!(layout.validate_for(8), Err(AbiError::StaleGeneration));
+    }
+
+    #[test]
+    fn direct_genet_ring_moves_one_exact_sequence_and_reconciles_commits() {
+        let mut control = [0xa5u8; SHARED_PAGE_BYTES];
+        DirectGenetControlPage::initialize_into(&mut control, 7).unwrap();
+        assert!(control[320..].iter().all(|byte| *byte == 0));
+
+        let initial =
+            DirectGenetControlPage::snapshot(&control, 7, DirectGenetDirection::Rx).unwrap();
+        assert_eq!(initial.occupancy(), 0);
+        assert_eq!(initial.next_producer(), Ok((1, 0)));
+        assert_eq!(initial.next_consumer(), Err(DirectGenetError::Empty));
+
+        let mut slot = [0xa5u8; SHARED_PAGE_BYTES];
+        DirectGenetSlotPage::initialize_into(&mut slot).unwrap();
+        let frame = [0xabu8; 64];
+        assert_eq!(
+            DirectGenetSlotPage::publish_next_into(
+                &mut slot,
+                DirectGenetDirection::Rx,
+                7,
+                initial.producer_cursor,
+                &frame,
+            ),
+            Ok(1)
+        );
+        let published = DirectGenetControlPage::commit_producer(&mut control, initial).unwrap();
+        assert_eq!(published.sequence, 1);
+        assert_eq!(published.slot_index, 0);
+        assert!(published.data_notification_due);
+        assert_eq!(
+            DirectGenetControlPage::commit_producer(&mut control, initial),
+            Ok(published),
+            "retrying one ambiguous commit must not advance twice"
+        );
+
+        let ready =
+            DirectGenetControlPage::snapshot(&control, 7, DirectGenetDirection::Rx).unwrap();
+        assert_eq!(ready.occupancy(), 1);
+        assert_eq!(ready.next_consumer(), Ok((1, 0)));
+        let record = DirectGenetSlotPage::decode_next(
+            &slot,
+            DirectGenetDirection::Rx,
+            7,
+            ready.consumer_cursor,
+        )
+        .unwrap();
+        assert_eq!(record.direction(), DirectGenetDirection::Rx);
+        assert_eq!(record.sequence(), 1);
+        assert_eq!(record.frame(), frame);
+
+        let consumed = DirectGenetControlPage::commit_consumer(&mut control, ready).unwrap();
+        assert_eq!(consumed.sequence, 1);
+        assert!(!consumed.work_remaining);
+        assert_eq!(
+            DirectGenetControlPage::commit_consumer(&mut control, ready),
+            Ok(consumed),
+            "retrying one ambiguous consume must not advance twice"
+        );
+        assert_eq!(
+            DirectGenetControlPage::snapshot(&control, 7, DirectGenetDirection::Rx)
+                .unwrap()
+                .occupancy(),
+            0
+        );
+        assert_eq!(
+            DirectGenetControlPage::snapshot(&control, 8, DirectGenetDirection::Rx),
+            Err(DirectGenetError::StaleGeneration)
+        );
+        assert_eq!(direct_genet_slot_index(DirectGenetDirection::Rx, 16), Ok(0));
+        assert_eq!(direct_genet_slot_index(DirectGenetDirection::Tx, 17), Ok(0));
+    }
+
+    #[test]
+    fn direct_genet_cursors_fail_closed_on_full_torn_invalid_and_poisoned_state() {
+        let mut control = [0u8; SHARED_PAGE_BYTES];
+        DirectGenetControlPage::initialize_into(&mut control, 7).unwrap();
+        for expected in 1..=DIRECT_GENET_RX_SLOT_COUNT as u64 {
+            let snapshot =
+                DirectGenetControlPage::snapshot(&control, 7, DirectGenetDirection::Rx).unwrap();
+            assert_eq!(snapshot.next_producer().unwrap().0, expected);
+            DirectGenetControlPage::commit_producer(&mut control, snapshot).unwrap();
+        }
+        let full = DirectGenetControlPage::snapshot(&control, 7, DirectGenetDirection::Rx).unwrap();
+        assert_eq!(full.occupancy(), DIRECT_GENET_RX_SLOT_COUNT as u64);
+        assert_eq!(full.next_producer(), Err(DirectGenetError::Backpressure));
+
+        let first_consumer = full;
+        let consumed =
+            DirectGenetControlPage::commit_consumer(&mut control, first_consumer).unwrap();
+        assert!(consumed.producer_rearm_due);
+        assert!(consumed.work_remaining);
+
+        let mut invalid = [0u8; SHARED_PAGE_BYTES];
+        DirectGenetControlPage::initialize_into(&mut invalid, 7).unwrap();
+        let producer_offset = DIRECT_GENET_RX_PRODUCER_STATE_OFFSET;
+        invalid[producer_offset + 16..producer_offset + 24].copy_from_slice(&16u64.to_le_bytes());
+        invalid[producer_offset + 24..producer_offset + 32].copy_from_slice(&17u64.to_le_bytes());
+        invalid[producer_offset + 56..producer_offset + 64].copy_from_slice(&17u64.to_le_bytes());
+        assert_eq!(
+            DirectGenetControlPage::snapshot(&invalid, 7, DirectGenetDirection::Rx),
+            Err(DirectGenetError::InvalidCursor)
+        );
+
+        let mut torn = [0u8; SHARED_PAGE_BYTES];
+        DirectGenetControlPage::initialize_into(&mut torn, 7).unwrap();
+        torn[producer_offset + 56..producer_offset + 64].copy_from_slice(&0u64.to_le_bytes());
+        assert_eq!(
+            DirectGenetControlPage::snapshot(&torn, 7, DirectGenetDirection::Rx),
+            Err(DirectGenetError::StateChanged)
+        );
+
+        let mut poisoned = [0u8; SHARED_PAGE_BYTES];
+        DirectGenetControlPage::initialize_into(&mut poisoned, 7).unwrap();
+        assert_eq!(
+            DirectGenetControlPage::poison_owner(
+                &mut poisoned,
+                7,
+                DirectGenetCursorRole::RxProducer,
+                1,
+                DIRECT_GENET_POISON_INVALID_CURSOR,
+            ),
+            Ok(DirectGenetPoison {
+                role: DirectGenetCursorRole::RxProducer,
+                reason: DIRECT_GENET_POISON_INVALID_CURSOR,
+            })
+        );
+        assert_eq!(
+            DirectGenetControlPage::snapshot(&poisoned, 7, DirectGenetDirection::Rx),
+            Err(DirectGenetError::Poisoned(DirectGenetPoison {
+                role: DirectGenetCursorRole::RxProducer,
+                reason: DIRECT_GENET_POISON_INVALID_CURSOR,
+            }))
+        );
+    }
+
+    #[test]
+    fn direct_genet_slot_tampering_and_lost_wake_edges_are_exact() {
+        let mut slot = [0u8; SHARED_PAGE_BYTES];
+        DirectGenetSlotPage::initialize_into(&mut slot).unwrap();
+        DirectGenetSlotPage::publish_next_into(
+            &mut slot,
+            DirectGenetDirection::Tx,
+            7,
+            0,
+            &[1, 2, 3],
+        )
+        .unwrap();
+        assert_eq!(
+            DirectGenetSlotPage::decode_next(&slot, DirectGenetDirection::Tx, 7, 0)
+                .unwrap()
+                .frame(),
+            &[1, 2, 3]
+        );
+        assert_eq!(
+            DirectGenetSlotPage::decode_next(&slot, DirectGenetDirection::Rx, 7, 0),
+            Err(DirectGenetError::InvalidIdentity)
+        );
+        assert_eq!(
+            DirectGenetSlotPage::decode_next(&slot, DirectGenetDirection::Tx, 8, 0),
+            Err(DirectGenetError::StaleGeneration)
+        );
+        slot[DIRECT_GENET_SLOT_COMMIT_OFFSET..DIRECT_GENET_SLOT_COMMIT_OFFSET + 8]
+            .copy_from_slice(&2u64.to_le_bytes());
+        assert_eq!(
+            DirectGenetSlotPage::decode_next(&slot, DirectGenetDirection::Tx, 7, 0),
+            Err(DirectGenetError::InvalidSequence)
+        );
+        assert_eq!(
+            DirectGenetSlotPage::publish_next_into(
+                &mut slot,
+                DirectGenetDirection::Tx,
+                7,
+                u64::MAX,
+                &[1],
+            ),
+            Err(DirectGenetError::InvalidSequence)
+        );
+
+        let mut control = [0u8; SHARED_PAGE_BYTES];
+        DirectGenetControlPage::initialize_into(&mut control, 7).unwrap();
+        let empty =
+            DirectGenetControlPage::snapshot(&control, 7, DirectGenetDirection::Tx).unwrap();
+        DirectGenetControlPage::commit_producer(&mut control, empty).unwrap();
+        let occupied =
+            DirectGenetControlPage::snapshot(&control, 7, DirectGenetDirection::Tx).unwrap();
+        DirectGenetControlPage::commit_consumer(&mut control, occupied).unwrap();
+        let raced = DirectGenetControlPage::commit_producer(&mut control, occupied).unwrap();
+        assert!(
+            raced.data_notification_due,
+            "a consumer draining through the old producer cursor requires a hint"
+        );
+        let final_state =
+            DirectGenetControlPage::snapshot(&control, 7, DirectGenetDirection::Tx).unwrap();
+        assert_eq!(
+            occupied.reconcile_producer_commit(final_state, raced.sequence),
+            Ok(raced)
+        );
     }
 
     #[test]

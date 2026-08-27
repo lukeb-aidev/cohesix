@@ -33,8 +33,8 @@ Worker archive, and ABI version.
 The Pi manifest retains `max_workers=256` and per-role
 `namespace_capacity=256`, and its complete maximum mix declares all 256 as
 executable children. Its 16-bit root CNode exposes 65,536 slots; the generated
-fixed, per-Worker, and post-construction-reserve inventory consumes 19,470 and
-leaves 46,066 slots of deterministic headroom. This static admission does not
+fixed, per-Worker, and post-construction-reserve inventory consumes 19,507 and
+leaves 46,029 slots of deterministic headroom. This static admission does not
 prove construction, READY, driver coexistence, scheduling behavior, or
 performance on Pi hardware.
 
@@ -308,8 +308,25 @@ terminal timeout policy. The Pi-only IRQ 189/badge 1024 default-queue DPC may
 drain at most 16 frames and 24,576 bytes into its private queue per quantum;
 remaining exact IRQ work retains a masked, unacknowledged continuation. QEMU
 keeps its existing three-entry driver-runtime IRQ topology with no GENET IRQ
-and identical scheduling. No direct GENET-console shared ring or coupled
-scheduling/fault domain is introduced.
+and identical scheduling. After DHCP and exact old-path quiescence, Pi GENET
+performs one fail-closed handoff to the console child over the compiler-declared
+32-page CPU-only direct link. GENET keeps its independent core-3 SC and sole
+MMIO/DMA/IRQ ownership; the console child keeps its core-0 SC and sole
+TCP/auth ownership. Their fixed notifications are wake hints, not scheduling
+donation or packet authority. A peer fault couples containment only: suspend
+the GENET owner and remove both cross-child signal caps before unmapping the
+console copies, with no root packet fallback.
+
+For this Pi-only production path, console-network retains priority/MCP 180/200
+with its unchanged `3,000 us / 10,000 us` SC. Priority-200 root-control therefore
+continues to service unauthenticated serial and local-seat input first, while the
+direct packet path and existing bounded authenticated-response selection remove
+steady root packet mediation without granting a pre-authentication network
+preemption. Compiler response analysis records `8,100 us` for console-network
+and `5,100 us` for root-control, retains the mandatory reserve, and admits the
+32 additional console mapping-cap slots. These are static bounds, not measured
+packet latency. Fresh same-image Pi load evidence must still prove authenticated
+response cadence; QEMU priorities and placement remain unchanged.
 
 The driver TCB constructor applies that selection at the actual timeout-handler
 installation boundary and reports `timeout_policy` plus `timeout_endpoint` in

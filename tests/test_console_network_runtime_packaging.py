@@ -72,12 +72,12 @@ def test_runtime_and_compiler_contract_remain_no_std_and_path_identical() -> Non
     assert 'entry_symbol = "_start"' in compiler_manifest
 
 
-def test_abi_v4_batches_keep_one_page_and_exact_eight_record_bounds() -> None:
+def test_abi_v5_batches_keep_one_page_and_exact_eight_record_bounds() -> None:
     """Response and command batches remain binary, bounded, and cap-neutral."""
 
     source = ABI_LIB.read_text(encoding="utf-8")
 
-    assert "pub const ABI_VERSION: u16 = 4;" in source
+    assert "pub const ABI_VERSION: u16 = 5;" in source
     assert "SendBatch = 3," in source
     assert "CommandBatch = 27," in source
     assert "pub const SHARED_PAGE_BYTES: usize = 4096;" in source
@@ -119,7 +119,7 @@ def test_runtime_polls_retained_work_or_blocks_directly_and_spends_ack() -> None
     source = RUNTIME_KERNEL.read_text(encoding="utf-8")
     target = source.split("pub unsafe extern \"C\" fn _start", maxsplit=1)[1]
     target = target.split(
-        '\n}\n\n#[cfg(feature = "direct-virtio")]\nfn acknowledge_direct_irq_handler',
+        '\n}\n\n#[cfg(feature = "direct-genet")]\nfn signal_direct_genet_peer_if_due',
         maxsplit=1,
     )[0]
     ready = target.index("ExchangeKind::Ready,")
@@ -350,7 +350,7 @@ def test_runtime_shared_pages_use_bounded_sequence_last_io() -> None:
     assert "fn publish_completion_watermark(" in source
     assert "INGRESS_CONSUMED_SEQUENCE_OFFSET" in source
     assert "CONTROL_CONSUMED_SEQUENCE_OFFSET" in source
-    assert source.count("unsafe {") == 16
+    assert source.count("unsafe {") == 17
 
 
 def test_control_bytes_are_kind_validated_and_drain_tracks_exact_output() -> None:

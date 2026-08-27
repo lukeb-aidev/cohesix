@@ -122,7 +122,7 @@ The source manifest is never rewritten by U-Boot.
 | --- | --- | --- | --- |
 | Host/in-process NineDoor | Bounded Secure9P 9P2000.L subset | `Tattach` selects role/identity and carries the ticket | Host `std` server and tests only; not an in-target listener |
 | Target serial console | Unframed console lines | Physical serial access, then application `ATTACH` for role/ticket authority | Root-task console |
-| Target TCP console | Four-byte little-endian length plus one console line | Transport `AUTH <token>`, then application `ATTACH <role> [ticket]` | Root-task smoltcp listener; the only permitted in-target TCP listener |
+| Target TCP console | Four-byte little-endian length plus one console line | Transport `AUTH <token>`, then application `ATTACH <role> [ticket]` | `console-network-runtime` smoltcp listener; the only permitted in-target TCP listener |
 | REST, UI, GPU, sidecar, and federation tools | Host-specific projection | Must preserve the underlying ticket and namespace authority | Host only; never a new VM authority path |
 
 Secure9P messages are not transported through the target TCP console. A
@@ -164,9 +164,10 @@ child anchor before reuse.
 
 ### Internal target console-network ABI
 
-`console-network-runtime` is an active-SC child that owns target Ethernet/IP/TCP
-state, frame parsing, transport authentication, and bounded response emission.
-It is not the passive NineDoor service and is not a second external protocol.
+`console-network-service/v5` is the private ABI of the active-SC
+`console-network-runtime` child. The child owns target Ethernet/IP/TCP state,
+frame parsing, transport authentication, and bounded response emission. It is
+not the passive NineDoor service and is not a second external protocol.
 
 The console-network ABI uses four fixed 4096-byte pointer-free, sequence-last
 pages:
@@ -220,6 +221,53 @@ typed backpressure; it cannot allocate, extend a descriptor chain, or fall
 back to a root-owned adapter. Containment suspends the child, resets the exact
 device status register, acknowledges no future IRQ, scrubs the admitted DMA
 pages, and then revokes the child bundle.
+
+The compiler derives `direct_genet` only for the exact Pi `bcmgenet-v5`
+profile; there is no manifest-authored runtime toggle. The sealed ABI v5
+extension names one 32-page CPU-only range shared only by the GENET and console
+child generations. Page 0 is the aligned sequence-last control page, pages 1
+through 15 are GENET-to-console RX slots, and pages 16 through 31 are
+console-to-GENET TX slots. Both children map the pages as cacheable Normal/XN
+memory. The descriptor conveys no physical address, MMIO, DMA, device-visible,
+or root-policy authority.
+
+Root obtains DHCP through the legacy bounded path, proves every root-mediated
+GENET command, RX, and TX cursor quiescent, publishes the exact handoff-pending
+generation, and sends one generation-bound zero-payload `DGHO`. Only the exact
+`PROGRESS/READY` terminal activates the direct link. During an exact unfaulted
+`IDLE/QUIESCING` phase only the bounded legacy drain may run; a retry cannot
+switch while the coordinator or root RX/TX queues retain work. After READY,
+GENET remains the sole MMIO/DMA/IRQ and private-DMA-ring owner and copies frames
+to and from the CPU link. Console-network remains the sole
+smoltcp/TCP/authentication owner. Root retains lifecycle, control-event, and
+fault supervision but performs no steady packet copy, poll, or GENET packet
+command.
+
+Each direction is a fixed single-producer/single-consumer ring. Producers
+publish generation-bound monotonic cursor and sequence-last state with release
+ordering; consumers validate generation, sequence, length, and stable commit
+with acquire ordering. The reciprocal send-only peer notifications are
+coalescing wake hints only. Durable cursor state carries work, and both peers
+perform a final state recheck before waiting. Direct service handles at most 16
+frames per wake and at most eight TX frames before admitting the RX share.
+
+A failed handoff, invalid cursor or sequence, stale generation, descriptor
+drift, peer fault, IRQ completion failure, or containment error poisons the
+link, signals the peer when possible, and enters coupled containment. Root
+suspends GENET, removes both reciprocal notification caps, and unmaps and
+deletes all 32 external console mapping caps before anchor revoke. No fault path
+may revive root packet mediation or transfer either peer's authority.
+
+The exact Pi direct-GENET console image spans 65 PT_LOAD pages. Its generated
+service inventory is 103 frames (65 image, 32 stack, one IPC buffer, one init
+frame, and four ordinary ABI pages) and 160 retained root CSpace slots. The 32
+direct pages are reused external GENET frames and therefore add console mapping
+caps rather than data-plane frame objects or a larger child untyped. These
+private ABI and resource facts do not change the public TCP framing, console
+grammar, authentication, attachment, or response schema. Static validation and
+image construction do not prove Pi boot, READY, packet correctness, latency,
+throughput, QEMU parity, or acceptance.
+
 ## Target TCP console sequence
 
 ```mermaid

@@ -8,7 +8,7 @@
 /// Magic value for a pointer-free driver runtime initialization descriptor.
 pub const DRIVER_RUNTIME_INIT_MAGIC: u32 = 0x4452_4934;
 /// Runtime descriptor layout and shared-protocol version.
-pub const DRIVER_RUNTIME_INIT_VERSION: u16 = 9;
+pub const DRIVER_RUNTIME_INIT_VERSION: u16 = 10;
 /// Magic identifying the only Milestone 26e runtime scheduler contract.
 pub const DRIVER_RUNTIME_MCS_MAGIC: u32 = 0x4d43_5331;
 /// Version of the scheduler/capability inventory embedded in runtime init.
@@ -36,6 +36,17 @@ const DRIVER_RUNTIME_IDENTITY_HASH_PRIME: u32 = 0x0100_0193;
 pub const DRIVER_RUNTIME_INIT_AUX: u32 = 0x4452_494e;
 /// Command `aux0` value used to ask a linked runtime to instantiate its engine state.
 pub const DRIVER_RUNTIME_ENGINE_INIT_AUX: u32 = 0x454e_474e;
+/// Command `aux0` value transferring an initialized GENET data plane to its
+/// exact direct-link generation.
+pub const DRIVER_RUNTIME_DIRECT_GENET_HANDOFF_AUX: u32 = 0x4447_484f;
+/// Completion detail proving GENET remains on the old path while it quiesces.
+pub const DRIVER_RUNTIME_DIRECT_GENET_HANDOFF_DETAIL_QUIESCING: u16 = 0x4700;
+/// Completion detail proving the isolated GENET owner accepted the handoff.
+pub const DRIVER_RUNTIME_DIRECT_GENET_HANDOFF_DETAIL_READY: u16 = 0x4701;
+/// Completion code used for successful bounded runtime progress.
+pub const DRIVER_RUNTIME_COMPLETION_PROGRESS: u16 = 1;
+/// Completion code used when a bounded runtime has no consumable work yet.
+pub const DRIVER_RUNTIME_COMPLETION_IDLE: u16 = 3;
 /// Local-seat USB/HDMI init command used by the root ring client.
 pub const DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX: u32 = 0x4c53_494e;
 /// Serial-console service command that samples the mini-UART transmitter-idle bit.
@@ -49,6 +60,72 @@ const fn driver_runtime_nonzero_hash(hash: u32) -> u32 {
     } else {
         hash
     }
+}
+
+/// Stable token binding one successful direct-GENET handoff to its generation.
+#[must_use]
+pub const fn driver_runtime_direct_genet_handoff_token(generation: u64) -> u32 {
+    let mut hash = driver_runtime_identity_hash_word(
+        DRIVER_RUNTIME_IDENTITY_HASH_SEED,
+        DRIVER_RUNTIME_DIRECT_GENET_HANDOFF_AUX,
+    );
+    hash = driver_runtime_identity_hash_word(hash, generation as u32);
+    hash = driver_runtime_identity_hash_word(hash, (generation >> 32) as u32);
+    driver_runtime_nonzero_hash(hash)
+}
+
+/// Return true only for the exact generation-bound GENET handoff completion.
+#[must_use]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the primitive-only helper mirrors the fixed completion record without importing an app type"
+)]
+pub const fn driver_runtime_direct_genet_handoff_completion_exact(
+    command_sequence: u32,
+    completion_sequence: u32,
+    completion_code: u16,
+    completion_detail: u16,
+    completion_result: u32,
+    completion_frame_offset: u32,
+    completion_frame_len: u16,
+    completion_frame_flags: u16,
+    generation: u64,
+) -> bool {
+    generation != 0
+        && command_sequence == completion_sequence
+        && completion_code == DRIVER_RUNTIME_COMPLETION_PROGRESS
+        && completion_detail == DRIVER_RUNTIME_DIRECT_GENET_HANDOFF_DETAIL_READY
+        && completion_result == driver_runtime_direct_genet_handoff_token(generation)
+        && completion_frame_offset == 0
+        && completion_frame_len == 0
+        && completion_frame_flags == 0
+}
+
+/// Return true only for an exact generation-bound, non-switching handoff retry.
+#[must_use]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the primitive-only helper mirrors the fixed completion record without importing an app type"
+)]
+pub const fn driver_runtime_direct_genet_handoff_quiescing_completion_exact(
+    command_sequence: u32,
+    completion_sequence: u32,
+    completion_code: u16,
+    completion_detail: u16,
+    completion_result: u32,
+    completion_frame_offset: u32,
+    completion_frame_len: u16,
+    completion_frame_flags: u16,
+    generation: u64,
+) -> bool {
+    generation != 0
+        && command_sequence == completion_sequence
+        && completion_code == DRIVER_RUNTIME_COMPLETION_IDLE
+        && completion_detail == DRIVER_RUNTIME_DIRECT_GENET_HANDOFF_DETAIL_QUIESCING
+        && completion_result == driver_runtime_direct_genet_handoff_token(generation)
+        && completion_frame_offset == 0
+        && completion_frame_len == 0
+        && completion_frame_flags == 0
 }
 
 /// Mix one primitive word into the descriptor identity hash.
@@ -2596,6 +2673,11 @@ pub const DRIVER_RUNTIME_SERIAL_IRQ_BADGE: u32 = DRIVER_RUNTIME_SERIAL_IRQ + 1;
 pub const DRIVER_RUNTIME_GENET_IRQ: u32 = 189;
 /// One-hot notification badge bound to [`DRIVER_RUNTIME_GENET_IRQ`].
 pub const DRIVER_RUNTIME_GENET_IRQ_BADGE: u32 = 1 << 10;
+/// Exact badge delivered when console-network signals direct GENET TX work.
+pub const DRIVER_RUNTIME_GENET_DIRECT_LINK_NOTIFICATION_BADGE: u32 = 1 << 8;
+/// Concise alias used by the fixed direct-GENET descriptor.
+pub const DRIVER_RUNTIME_DIRECT_GENET_NOTIFICATION_BADGE: u32 =
+    DRIVER_RUNTIME_GENET_DIRECT_LINK_NOTIFICATION_BADGE;
 /// CYW43 child CSpace slot containing its send-only root Network-wake notification cap.
 pub const DRIVER_RUNTIME_CYW43_ROOT_WAKE_NOTIFICATION_SLOT: u32 = 11;
 /// Exact badge delivered to root after CYW43 commits Network service progress.
@@ -2634,6 +2716,13 @@ pub const DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE: u32 = 1 << 8;
 
 const _: () = {
     assert!(DRIVER_RUNTIME_GENET_IRQ_BADGE & DRIVER_RUNTIME_RESERVED_ROOT_BADGE == 0);
+    assert!(
+        DRIVER_RUNTIME_GENET_IRQ_BADGE & DRIVER_RUNTIME_GENET_DIRECT_LINK_NOTIFICATION_BADGE == 0
+    );
+    assert!(
+        DRIVER_RUNTIME_GENET_DIRECT_LINK_NOTIFICATION_BADGE & DRIVER_RUNTIME_RESERVED_ROOT_BADGE
+            == 0
+    );
     assert!(DRIVER_TASK_CHILD_SDIO_DMA_IRQ_HANDLER_SLOT != DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT);
     assert!(DRIVER_RUNTIME_SDIO_DMA_IRQ == 116);
     assert!(DRIVER_RUNTIME_SDIO_DMA_IRQ != DRIVER_RUNTIME_SDIO_IRQ);
@@ -5171,6 +5260,14 @@ pub const DRIVER_RUNTIME_IRQ_TRIGGER_EDGE: u16 = 1;
 pub const DRIVER_RUNTIME_BUS_LINK_PCIE_ENDPOINT_SLOT: u32 = 9;
 /// CYW43 CSpace slot containing the send-only SDIO-owner notification cap.
 pub const DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_SLOT: u32 = 8;
+/// Child CSpace slot containing GENET's send-only console-network peer wake.
+///
+/// Slot 8 is role-local: GENET cannot also participate in the CYW43/SDIO bus
+/// link, so this authority never aliases a live cap in the same child.
+pub const DRIVER_RUNTIME_CHILD_DIRECT_GENET_PEER_NOTIFICATION_SLOT: u32 = 8;
+/// Concise alias carried in [`DriverRuntimeDirectGenetDescriptor`].
+pub const DRIVER_RUNTIME_DIRECT_GENET_PEER_NOTIFICATION_SLOT: u32 =
+    DRIVER_RUNTIME_CHILD_DIRECT_GENET_PEER_NOTIFICATION_SLOT;
 /// SDIO-owner CSpace slot containing the send-only CYW43 notification cap.
 pub const DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT: u32 = 10;
 /// USB-local virtual address where root maps the PCIe owner command ring.
@@ -5213,6 +5310,14 @@ pub const DRIVER_RUNTIME_RESOURCE_FLAG_PADDR_CONTIGUOUS: u16 = 1 << 1;
 pub const DRIVER_RUNTIME_RESOURCE_FLAG_DEVICE_VISIBLE: u16 = 1 << 2;
 /// Resource range flag: pages are also intentionally visible to root.
 pub const DRIVER_RUNTIME_RESOURCE_FLAG_ROOT_SHARED: u16 = 1 << 3;
+/// Resource range flag: pages are CPU-only and cannot back device DMA.
+pub const DRIVER_RUNTIME_RESOURCE_FLAG_CPU_ONLY: u16 = 1 << 4;
+/// Complete allowed resource-range flag set for ABI v10.
+pub const DRIVER_RUNTIME_RESOURCE_ALLOWED_FLAGS: u16 = DRIVER_RUNTIME_RESOURCE_FLAG_VADDR_CONTIGUOUS
+    | DRIVER_RUNTIME_RESOURCE_FLAG_PADDR_CONTIGUOUS
+    | DRIVER_RUNTIME_RESOURCE_FLAG_DEVICE_VISIBLE
+    | DRIVER_RUNTIME_RESOURCE_FLAG_ROOT_SHARED
+    | DRIVER_RUNTIME_RESOURCE_FLAG_CPU_ONLY;
 
 /// Generic runtime buffer tag.
 pub const DRIVER_RUNTIME_RESOURCE_TAG_GENERIC: u32 = 0;
@@ -5243,6 +5348,86 @@ pub const DRIVER_RUNTIME_RESOURCE_TAG_WIFI_PWRSEQ: u32 = 11;
 pub const DRIVER_RUNTIME_RESOURCE_TAG_WIFI_PWRSEQ_REQUEST: u32 = 12;
 /// BCM2711 BCM2835 DMA-controller MMIO owned by the linked SDIO runtime.
 pub const DRIVER_RUNTIME_RESOURCE_TAG_BCM2835_DMA: u32 = 13;
+/// CPU-only packet pages shared exclusively by GENET and console-network.
+pub const DRIVER_RUNTIME_RESOURCE_TAG_GENET_DIRECT_LINK: u32 = 14;
+
+/// Direct GENET link contract: pages are never device-visible DMA buffers.
+pub const DRIVER_RUNTIME_DIRECT_GENET_FLAG_CPU_ONLY: u32 = 1 << 0;
+/// Direct GENET link contract: the shared pages are reused only after bootstrap.
+pub const DRIVER_RUNTIME_DIRECT_GENET_FLAG_POST_BOOTSTRAP_REUSE: u32 = 1 << 1;
+/// Direct GENET link contract: both peers receive bounded notification hints.
+pub const DRIVER_RUNTIME_DIRECT_GENET_FLAG_PEER_NOTIFICATIONS: u32 = 1 << 2;
+/// Exact fixed flags admitted for the direct GENET link.
+pub const DRIVER_RUNTIME_DIRECT_GENET_REQUIRED_FLAGS: u32 =
+    DRIVER_RUNTIME_DIRECT_GENET_FLAG_CPU_ONLY
+        | DRIVER_RUNTIME_DIRECT_GENET_FLAG_POST_BOOTSTRAP_REUSE
+        | DRIVER_RUNTIME_DIRECT_GENET_FLAG_PEER_NOTIFICATIONS;
+/// Exact CPU-only page population: control + 15 RX + 16 TX pages.
+pub const DRIVER_RUNTIME_DIRECT_GENET_SHARED_PAGE_COUNT: u16 = 32;
+/// Exact base-page bytes used by every direct GENET page.
+pub const DRIVER_RUNTIME_DIRECT_GENET_PAGE_BYTES: u16 = 4096;
+
+/// Fixed pointer-free direct GENET capability and layout descriptor.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DriverRuntimeDirectGenetDescriptor {
+    /// Exact [`DRIVER_RUNTIME_DIRECT_GENET_REQUIRED_FLAGS`] set.
+    pub flags: u32,
+    /// Exact [`DRIVER_RUNTIME_DIRECT_GENET_SHARED_PAGE_COUNT`].
+    pub shared_page_count: u16,
+    /// Exact [`DRIVER_RUNTIME_DIRECT_GENET_PAGE_BYTES`].
+    pub page_bytes: u16,
+    /// GENET child slot containing its send-only console-network wake cap.
+    pub peer_notification_slot: u32,
+    /// Badge delivered to GENET when console-network signals durable TX work.
+    pub peer_notification_badge: u32,
+}
+
+impl DriverRuntimeDirectGenetDescriptor {
+    /// Absent direct-link authority.
+    #[must_use]
+    pub const fn empty() -> Self {
+        Self {
+            flags: 0,
+            shared_page_count: 0,
+            page_bytes: 0,
+            peer_notification_slot: 0,
+            peer_notification_badge: 0,
+        }
+    }
+
+    /// Exact direct-link authority admitted to the isolated GENET runtime.
+    #[must_use]
+    pub const fn exact() -> Self {
+        Self {
+            flags: DRIVER_RUNTIME_DIRECT_GENET_REQUIRED_FLAGS,
+            shared_page_count: DRIVER_RUNTIME_DIRECT_GENET_SHARED_PAGE_COUNT,
+            page_bytes: DRIVER_RUNTIME_DIRECT_GENET_PAGE_BYTES,
+            peer_notification_slot: DRIVER_RUNTIME_DIRECT_GENET_PEER_NOTIFICATION_SLOT,
+            peer_notification_badge: DRIVER_RUNTIME_DIRECT_GENET_NOTIFICATION_BADGE,
+        }
+    }
+
+    /// Whether every fixed authority and layout field is exact.
+    #[must_use]
+    pub const fn valid(self) -> bool {
+        self.flags == DRIVER_RUNTIME_DIRECT_GENET_REQUIRED_FLAGS
+            && self.shared_page_count == DRIVER_RUNTIME_DIRECT_GENET_SHARED_PAGE_COUNT
+            && self.page_bytes == DRIVER_RUNTIME_DIRECT_GENET_PAGE_BYTES
+            && self.peer_notification_slot == DRIVER_RUNTIME_DIRECT_GENET_PEER_NOTIFICATION_SLOT
+            && self.peer_notification_badge == DRIVER_RUNTIME_DIRECT_GENET_NOTIFICATION_BADGE
+    }
+
+    /// Whether no direct-link authority is present.
+    #[must_use]
+    pub const fn empty_valid(self) -> bool {
+        self.flags == 0
+            && self.shared_page_count == 0
+            && self.page_bytes == 0
+            && self.peer_notification_slot == 0
+            && self.peer_notification_badge == 0
+    }
+}
 
 /// Bus link flag: child runtime issues requests to the linked bus owner.
 pub const DRIVER_RUNTIME_BUS_LINK_FLAG_CLIENT: u32 = 1 << 0;
@@ -5681,12 +5866,28 @@ pub const DRIVER_RUNTIME_INIT_FLAG_POLL_ONLY: u32 = 1 << 8;
 pub const DRIVER_RUNTIME_INIT_FLAG_BUS_LINKS: u32 = 1 << 9;
 /// Descriptor flag: the runtime must reject root contexts for hardware work.
 pub const DRIVER_RUNTIME_INIT_FLAG_ROOT_CONTEXT_FORBIDDEN: u32 = 1 << 10;
+/// Descriptor flag: GENET owns one generation-bound CPU-only packet link to
+/// the isolated console-network runtime.
+pub const DRIVER_RUNTIME_INIT_FLAG_DIRECT_GENET: u32 = 1 << 11;
 
 /// Required descriptor flags for any acceptance-eligible hardware runtime.
 pub const DRIVER_RUNTIME_INIT_REQUIRED_FLAGS: u32 = DRIVER_RUNTIME_INIT_FLAG_POINTER_FREE
     | DRIVER_RUNTIME_INIT_FLAG_SHARED_PADDRS
     | DRIVER_RUNTIME_INIT_FLAG_BUS_ADDRESSING
     | DRIVER_RUNTIME_INIT_FLAG_ROOT_CONTEXT_FORBIDDEN;
+/// Complete allowed runtime-init flag set for ABI v10.
+pub const DRIVER_RUNTIME_INIT_ALLOWED_FLAGS: u32 = DRIVER_RUNTIME_INIT_FLAG_MMIO_MAPPED
+    | DRIVER_RUNTIME_INIT_FLAG_DMA_PADDRS
+    | DRIVER_RUNTIME_INIT_FLAG_SHARED_PADDRS
+    | DRIVER_RUNTIME_INIT_FLAG_POINTER_FREE
+    | DRIVER_RUNTIME_INIT_FLAG_FRAMEBUFFER
+    | DRIVER_RUNTIME_INIT_FLAG_FIRMWARE_BUFFERS
+    | DRIVER_RUNTIME_INIT_FLAG_BUS_ADDRESSING
+    | DRIVER_RUNTIME_INIT_FLAG_IRQS_BOUND
+    | DRIVER_RUNTIME_INIT_FLAG_POLL_ONLY
+    | DRIVER_RUNTIME_INIT_FLAG_BUS_LINKS
+    | DRIVER_RUNTIME_INIT_FLAG_ROOT_CONTEXT_FORBIDDEN
+    | DRIVER_RUNTIME_INIT_FLAG_DIRECT_GENET;
 
 /// One mapped runtime page physical address.
 #[repr(C)]
@@ -6632,12 +6833,24 @@ impl DriverRuntimeResourceRangeDescriptor {
             || self.kind == DRIVER_RUNTIME_RESOURCE_KIND_SHARED
             || self.kind == DRIVER_RUNTIME_RESOURCE_KIND_FRAMEBUFFER;
         let max_bytes = (self.page_count as u64).saturating_mul(DRIVER_RUNTIME_RESOURCE_PAGE_BYTES);
+        let cpu_only = self.flags & DRIVER_RUNTIME_RESOURCE_FLAG_CPU_ONLY != 0;
+        let physical_authority_valid = if cpu_only {
+            self.paddr == 0
+                && self.flags
+                    & (DRIVER_RUNTIME_RESOURCE_FLAG_PADDR_CONTIGUOUS
+                        | DRIVER_RUNTIME_RESOURCE_FLAG_DEVICE_VISIBLE)
+                    == 0
+        } else {
+            self.paddr != 0
+        };
         known_kind
+            && self.flags & !DRIVER_RUNTIME_RESOURCE_ALLOWED_FLAGS == 0
             && self.vaddr != 0
-            && self.paddr != 0
+            && physical_authority_valid
             && self.bytes != 0
             && self.page_count != 0
             && self.bytes <= max_bytes
+            && self.reserved == 0
     }
 }
 
@@ -6670,11 +6883,13 @@ pub struct DriverRuntimeInitDescriptor {
     /// Semantic resource ranges populated in `resource_ranges`.
     pub resource_range_count: u16,
     /// Reserved for alignment and future fixed-layout fields.
-    pub reserved0: u16,
+    pub reserved0: u32,
     /// Child CSpace slot containing a send-only root wake cap, or zero when absent.
     pub root_wake_notification_slot: u32,
     /// Exact badge on the root wake cap, or zero when absent.
     pub root_wake_notification_badge: u32,
+    /// Optional CPU-only direct link to the isolated console-network runtime.
+    pub direct_genet: DriverRuntimeDirectGenetDescriptor,
     /// [`DRIVER_RUNTIME_IDENTITY_MAGIC`] when root sealed this descriptor.
     pub identity_magic: u32,
     /// Stable driver-task key supplied in the runtime entry register.
@@ -6711,6 +6926,8 @@ pub struct DriverRuntimeInitDescriptor {
     pub irq_notification_slot: u32,
     /// Fixed child slot holding the send-only completion wake cap.
     pub completion_notification_slot: u32,
+    /// Explicit zero replacing the historical padding before 64-bit badges.
+    pub command_cap_reserved: u32,
     /// Exact badge on the root's Write + GrantReply command cap.
     pub command_badge: u64,
     /// Exact badge on the child's one-way completion notification cap.
@@ -6749,6 +6966,8 @@ pub struct DriverRuntimeInitDescriptor {
     pub irqs: [DriverRuntimeIrqDescriptor; DRIVER_RUNTIME_INIT_MAX_IRQS],
     /// Bus-owner links for split runtimes such as USB/PCIe and CYW43/SDIO.
     pub bus_links: [DriverRuntimeBusLinkDescriptor; DRIVER_RUNTIME_INIT_MAX_BUS_LINKS],
+    /// Explicit zero replacing the historical padding before resource ranges.
+    pub reserved_tail: u32,
     /// Semantic resource ranges for large or role-specific apertures.
     pub resource_ranges:
         [DriverRuntimeResourceRangeDescriptor; DRIVER_RUNTIME_INIT_MAX_RESOURCE_RANGES],
@@ -6774,6 +6993,7 @@ impl DriverRuntimeInitDescriptor {
             reserved0: 0,
             root_wake_notification_slot: 0,
             root_wake_notification_badge: 0,
+            direct_genet: DriverRuntimeDirectGenetDescriptor::empty(),
             identity_magic: 0,
             task_key: 0,
             artifact_hash: 0,
@@ -6792,6 +7012,7 @@ impl DriverRuntimeInitDescriptor {
             command_reply_slot: 0,
             irq_notification_slot: 0,
             completion_notification_slot: 0,
+            command_cap_reserved: 0,
             command_badge: 0,
             completion_badge: 0,
             standard_fault_badge: 0,
@@ -6812,6 +7033,7 @@ impl DriverRuntimeInitDescriptor {
                 DRIVER_RUNTIME_INIT_MAX_SHARED_PAGES],
             irqs: [DriverRuntimeIrqDescriptor::empty(); DRIVER_RUNTIME_INIT_MAX_IRQS],
             bus_links: [DriverRuntimeBusLinkDescriptor::empty(); DRIVER_RUNTIME_INIT_MAX_BUS_LINKS],
+            reserved_tail: 0,
             resource_ranges: [DriverRuntimeResourceRangeDescriptor::empty();
                 DRIVER_RUNTIME_INIT_MAX_RESOURCE_RANGES],
         }
@@ -6882,6 +7104,14 @@ impl DriverRuntimeInitDescriptor {
         self
     }
 
+    /// Admit the exact CPU-only direct GENET link.
+    #[must_use]
+    pub const fn with_direct_genet(mut self) -> Self {
+        self.flags |= DRIVER_RUNTIME_INIT_FLAG_DIRECT_GENET;
+        self.direct_genet = DriverRuntimeDirectGenetDescriptor::exact();
+        self
+    }
+
     /// Returns true when the descriptor's identity fields are self-consistent.
     #[must_use]
     pub const fn sealed_identity_self_consistent(self) -> bool {
@@ -6930,6 +7160,7 @@ impl DriverRuntimeInitDescriptor {
             && self.role_bit != 0
             && (self.flags & DRIVER_RUNTIME_INIT_REQUIRED_FLAGS)
                 == DRIVER_RUNTIME_INIT_REQUIRED_FLAGS
+            && self.flags & !DRIVER_RUNTIME_INIT_ALLOWED_FLAGS == 0
             && self.shared_page_count != 0
             && (self.mmio_page_count as usize) <= DRIVER_RUNTIME_INIT_MAX_MMIO_PAGES
             && (self.dma_page_count as usize) <= DRIVER_RUNTIME_INIT_MAX_DMA_PAGES
@@ -6938,6 +7169,10 @@ impl DriverRuntimeInitDescriptor {
             && (self.bus_link_count as usize) <= DRIVER_RUNTIME_INIT_MAX_BUS_LINKS
             && (self.resource_range_count as usize) <= DRIVER_RUNTIME_INIT_MAX_RESOURCE_RANGES
             && self.root_wake_notification_valid()
+            && self.direct_genet_link_valid()
+            && self.reserved0 == 0
+            && self.command_cap_reserved == 0
+            && self.reserved_tail == 0
             && self.mcs_scheduler_valid()
             && if self.irq_count == 0 {
                 (self.flags & DRIVER_RUNTIME_INIT_FLAG_POLL_ONLY) != 0
@@ -7002,6 +7237,66 @@ impl DriverRuntimeInitDescriptor {
                     == DRIVER_RUNTIME_CYW43_ROOT_WAKE_NOTIFICATION_SLOT
                 && self.root_wake_notification_badge
                     == DRIVER_RUNTIME_CYW43_ROOT_WAKE_NOTIFICATION_BADGE)
+    }
+
+    /// Returns true only for an absent link or the exact GENET-only CPU link.
+    #[must_use]
+    pub const fn direct_genet_link_valid(self) -> bool {
+        let enabled = self.flags & DRIVER_RUNTIME_INIT_FLAG_DIRECT_GENET != 0;
+        let mut direct_ranges = 0usize;
+        let mut ranges_valid = true;
+        let mut legacy_shared_pages_cpu_only = true;
+        let mut shared_index = 0usize;
+        while shared_index < self.shared_page_count as usize {
+            if self.shared_pages[shared_index].paddr != 0 {
+                legacy_shared_pages_cpu_only = false;
+            }
+            shared_index += 1;
+        }
+        let mut index = 0usize;
+        while index < self.resource_range_count as usize {
+            let range = self.resource_ranges[index];
+            let direct_tag = range.tag == DRIVER_RUNTIME_RESOURCE_TAG_GENET_DIRECT_LINK;
+            let cpu_only = range.flags & DRIVER_RUNTIME_RESOURCE_FLAG_CPU_ONLY != 0;
+            if enabled && range.kind == DRIVER_RUNTIME_RESOURCE_KIND_SHARED && !direct_tag {
+                ranges_valid = false;
+            }
+            if direct_tag || cpu_only {
+                if !enabled || !direct_tag || !cpu_only {
+                    ranges_valid = false;
+                } else {
+                    direct_ranges += 1;
+                    let exact_flags = DRIVER_RUNTIME_RESOURCE_FLAG_VADDR_CONTIGUOUS
+                        | DRIVER_RUNTIME_RESOURCE_FLAG_ROOT_SHARED
+                        | DRIVER_RUNTIME_RESOURCE_FLAG_CPU_ONLY;
+                    if range.kind != DRIVER_RUNTIME_RESOURCE_KIND_SHARED
+                        || range.flags != exact_flags
+                        || range.vaddr != self.shared_vaddr_base
+                        || range.paddr != 0
+                        || range.bytes
+                            != DRIVER_RUNTIME_DIRECT_GENET_SHARED_PAGE_COUNT as u64
+                                * DRIVER_RUNTIME_DIRECT_GENET_PAGE_BYTES as u64
+                        || range.page_count != DRIVER_RUNTIME_DIRECT_GENET_SHARED_PAGE_COUNT
+                        || range.first_page_index != 0
+                        || range.reserved != 0
+                    {
+                        ranges_valid = false;
+                    }
+                }
+            }
+            index += 1;
+        }
+        if enabled {
+            self.hot_path == HOT_PATH_GENET_NIC
+                && self.bus_link_count == 0
+                && self.shared_page_count == DRIVER_RUNTIME_INIT_MAX_SHARED_PAGES as u16
+                && legacy_shared_pages_cpu_only
+                && self.direct_genet.valid()
+                && direct_ranges == 1
+                && ranges_valid
+        } else {
+            self.direct_genet.empty_valid() && direct_ranges == 0 && ranges_valid
+        }
     }
 
     /// Returns true when populated resource ranges are valid.
@@ -7247,6 +7542,34 @@ mod tests {
             0x26e2_0000,
             0x26ed_000b,
         )
+    }
+
+    fn direct_genet_descriptor() -> DriverRuntimeInitDescriptor {
+        let mut descriptor = mcs_descriptor().with_direct_genet();
+        descriptor.hot_path = HOT_PATH_GENET_NIC;
+        descriptor.role_bit = 1 << 3;
+        descriptor.flags |= DRIVER_RUNTIME_INIT_REQUIRED_FLAGS | DRIVER_RUNTIME_INIT_FLAG_POLL_ONLY;
+        descriptor.shared_vaddr_base = 0x70c0_0000;
+        descriptor.shared_page_count = DRIVER_RUNTIME_INIT_MAX_SHARED_PAGES as u16;
+        // The semantic direct-link range carries the exact CPU mapping. The
+        // bounded legacy page array must not reveal physical DMA authority.
+        descriptor.shared_pages =
+            [DriverRuntimePageDescriptor::empty(); DRIVER_RUNTIME_INIT_MAX_SHARED_PAGES];
+        descriptor.resource_range_count = 1;
+        descriptor.resource_ranges[0] = DriverRuntimeResourceRangeDescriptor::new(
+            DRIVER_RUNTIME_RESOURCE_KIND_SHARED,
+            DRIVER_RUNTIME_RESOURCE_FLAG_VADDR_CONTIGUOUS
+                | DRIVER_RUNTIME_RESOURCE_FLAG_ROOT_SHARED
+                | DRIVER_RUNTIME_RESOURCE_FLAG_CPU_ONLY,
+            DRIVER_RUNTIME_RESOURCE_TAG_GENET_DIRECT_LINK,
+            descriptor.shared_vaddr_base,
+            0,
+            DRIVER_RUNTIME_DIRECT_GENET_SHARED_PAGE_COUNT as u64
+                * DRIVER_RUNTIME_DIRECT_GENET_PAGE_BYTES as u64,
+            DRIVER_RUNTIME_DIRECT_GENET_SHARED_PAGE_COUNT,
+            0,
+        );
+        descriptor
     }
 
     #[test]
@@ -8750,7 +9073,7 @@ mod tests {
         assert_eq!(core::mem::size_of::<DriverRuntimeDpcEventEntry>(), 16);
         assert_eq!(core::mem::size_of::<DriverRuntimeDpcEventRing>(), 96);
         assert_eq!(DRIVER_RUNTIME_DPC_EVENT_RING_VERSION, 3);
-        assert_eq!(DRIVER_RUNTIME_INIT_VERSION, 9);
+        assert_eq!(DRIVER_RUNTIME_INIT_VERSION, 10);
         assert_eq!(
             DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET + DRIVER_RUNTIME_DPC_EVENT_RING_BYTES,
             DRIVER_RUNTIME_RING_FRAME_OFFSET
@@ -9143,6 +9466,308 @@ mod tests {
         descriptor.root_wake_notification_badge = DRIVER_RUNTIME_CYW43_ROOT_WAKE_NOTIFICATION_BADGE;
         descriptor.hot_path = HOT_PATH_GENET_NIC;
         assert!(!descriptor.valid(), "non-CYW43 wake authority rejected");
+    }
+
+    #[test]
+    fn direct_genet_descriptor_is_exact_cpu_only_and_genet_only() {
+        assert_eq!(
+            core::mem::size_of::<DriverRuntimeDirectGenetDescriptor>(),
+            16
+        );
+        assert_eq!(core::mem::size_of::<DriverRuntimeInitDescriptor>(), 1600);
+        assert_eq!(DRIVER_RUNTIME_CHILD_DIRECT_GENET_PEER_NOTIFICATION_SLOT, 8);
+        assert_eq!(DRIVER_RUNTIME_GENET_DIRECT_LINK_NOTIFICATION_BADGE, 1 << 8);
+        assert_eq!(DRIVER_RUNTIME_DIRECT_GENET_SHARED_PAGE_COUNT, 32);
+
+        let descriptor = direct_genet_descriptor();
+        assert!(descriptor.direct_genet.valid());
+        assert!(descriptor.direct_genet_link_valid());
+        assert!(descriptor.valid());
+
+        let mut invalid = descriptor;
+        invalid.direct_genet.flags &= !DRIVER_RUNTIME_DIRECT_GENET_FLAG_CPU_ONLY;
+        assert!(!invalid.valid());
+        invalid = descriptor;
+        invalid.direct_genet.shared_page_count -= 1;
+        assert!(!invalid.valid());
+        invalid = descriptor;
+        invalid.direct_genet.page_bytes /= 2;
+        assert!(!invalid.valid());
+        invalid = descriptor;
+        invalid.direct_genet.peer_notification_slot += 1;
+        assert!(!invalid.valid());
+        invalid = descriptor;
+        invalid.direct_genet.peer_notification_badge <<= 1;
+        assert!(!invalid.valid());
+        invalid = descriptor;
+        invalid.flags |= 1 << 31;
+        assert!(!invalid.valid(), "unknown init authority must fail closed");
+        invalid = descriptor;
+        invalid.hot_path = HOT_PATH_SERIAL_CONSOLE;
+        assert!(!invalid.valid());
+        invalid = descriptor;
+        invalid.resource_ranges[0].flags |= DRIVER_RUNTIME_RESOURCE_FLAG_DEVICE_VISIBLE;
+        assert!(!invalid.valid());
+        invalid = descriptor;
+        invalid.resource_ranges[0].flags |= DRIVER_RUNTIME_RESOURCE_FLAG_PADDR_CONTIGUOUS;
+        assert!(!invalid.valid());
+        invalid = descriptor;
+        invalid.resource_ranges[0].paddr = 0x5000_0000;
+        assert!(!invalid.valid());
+        invalid = descriptor;
+        invalid.resource_ranges[0].flags |= 1 << 15;
+        assert!(!invalid.valid(), "unknown range authority must fail closed");
+        invalid = descriptor;
+        invalid.resource_ranges[0].reserved = 1;
+        assert!(!invalid.valid(), "reserved range authority must stay zero");
+        invalid = descriptor;
+        invalid.resource_ranges[0].page_count -= 1;
+        assert!(!invalid.valid());
+        invalid = descriptor;
+        invalid.resource_ranges[0].bytes -= DRIVER_RUNTIME_DIRECT_GENET_PAGE_BYTES as u64;
+        assert!(!invalid.valid());
+        invalid = descriptor;
+        invalid.resource_ranges[0].first_page_index = 1;
+        assert!(!invalid.valid());
+        invalid = descriptor;
+        invalid.shared_page_count -= 1;
+        assert!(!invalid.valid());
+        invalid = descriptor;
+        invalid.shared_pages[7] = DriverRuntimePageDescriptor::new(0x5000_7000);
+        assert!(
+            !invalid.valid(),
+            "legacy shared-page physical authority is forbidden"
+        );
+
+        let mut extra_shared = descriptor;
+        extra_shared.resource_range_count = 2;
+        extra_shared.resource_ranges[1] = DriverRuntimeResourceRangeDescriptor::new(
+            DRIVER_RUNTIME_RESOURCE_KIND_SHARED,
+            DRIVER_RUNTIME_RESOURCE_FLAG_VADDR_CONTIGUOUS
+                | DRIVER_RUNTIME_RESOURCE_FLAG_ROOT_SHARED,
+            DRIVER_RUNTIME_RESOURCE_TAG_SHARED_CONTROL,
+            0x70e0_0000,
+            0x5200_0000,
+            DRIVER_RUNTIME_RESOURCE_PAGE_BYTES,
+            1,
+            0,
+        );
+        assert!(!extra_shared.valid());
+    }
+
+    #[test]
+    fn direct_genet_authority_cannot_hide_in_an_absent_descriptor() {
+        let descriptor = direct_genet_descriptor();
+
+        let mut absent = descriptor;
+        absent.flags &= !DRIVER_RUNTIME_INIT_FLAG_DIRECT_GENET;
+        absent.direct_genet = DriverRuntimeDirectGenetDescriptor::empty();
+        assert!(
+            !absent.direct_genet_link_valid(),
+            "tag 14 remains authoritative"
+        );
+
+        absent.resource_ranges[0].tag = DRIVER_RUNTIME_RESOURCE_TAG_SHARED_CONTROL;
+        assert!(
+            !absent.direct_genet_link_valid(),
+            "CPU-only range remains direct authority"
+        );
+
+        absent.resource_ranges[0].flags &= !DRIVER_RUNTIME_RESOURCE_FLAG_CPU_ONLY;
+        assert!(absent.direct_genet_link_valid());
+
+        let mut half_present = absent;
+        half_present.flags |= DRIVER_RUNTIME_INIT_FLAG_DIRECT_GENET;
+        assert!(!half_present.direct_genet_link_valid());
+    }
+
+    #[test]
+    fn direct_genet_handoff_completion_is_generation_and_frame_exact() {
+        let generation = 0x1122_3344_5566_7788;
+        let sequence = 27;
+        let token = driver_runtime_direct_genet_handoff_token(generation);
+        assert_ne!(token, 0);
+        assert_ne!(
+            token,
+            driver_runtime_direct_genet_handoff_token(generation + 1)
+        );
+        assert!(driver_runtime_direct_genet_handoff_completion_exact(
+            sequence,
+            sequence,
+            DRIVER_RUNTIME_COMPLETION_PROGRESS,
+            DRIVER_RUNTIME_DIRECT_GENET_HANDOFF_DETAIL_READY,
+            token,
+            0,
+            0,
+            0,
+            generation,
+        ));
+
+        for exact in [
+            driver_runtime_direct_genet_handoff_completion_exact(
+                sequence,
+                sequence + 1,
+                DRIVER_RUNTIME_COMPLETION_PROGRESS,
+                DRIVER_RUNTIME_DIRECT_GENET_HANDOFF_DETAIL_READY,
+                token,
+                0,
+                0,
+                0,
+                generation,
+            ),
+            driver_runtime_direct_genet_handoff_completion_exact(
+                sequence,
+                sequence,
+                DRIVER_RUNTIME_COMPLETION_PROGRESS + 1,
+                DRIVER_RUNTIME_DIRECT_GENET_HANDOFF_DETAIL_READY,
+                token,
+                0,
+                0,
+                0,
+                generation,
+            ),
+            driver_runtime_direct_genet_handoff_completion_exact(
+                sequence,
+                sequence,
+                DRIVER_RUNTIME_COMPLETION_PROGRESS,
+                DRIVER_RUNTIME_DIRECT_GENET_HANDOFF_DETAIL_READY + 1,
+                token,
+                0,
+                0,
+                0,
+                generation,
+            ),
+            driver_runtime_direct_genet_handoff_completion_exact(
+                sequence,
+                sequence,
+                DRIVER_RUNTIME_COMPLETION_PROGRESS,
+                DRIVER_RUNTIME_DIRECT_GENET_HANDOFF_DETAIL_READY,
+                token ^ 1,
+                0,
+                0,
+                0,
+                generation,
+            ),
+            driver_runtime_direct_genet_handoff_completion_exact(
+                sequence,
+                sequence,
+                DRIVER_RUNTIME_COMPLETION_PROGRESS,
+                DRIVER_RUNTIME_DIRECT_GENET_HANDOFF_DETAIL_READY,
+                token,
+                1,
+                0,
+                0,
+                generation,
+            ),
+            driver_runtime_direct_genet_handoff_completion_exact(
+                sequence,
+                sequence,
+                DRIVER_RUNTIME_COMPLETION_PROGRESS,
+                DRIVER_RUNTIME_DIRECT_GENET_HANDOFF_DETAIL_READY,
+                token,
+                0,
+                1,
+                0,
+                generation,
+            ),
+            driver_runtime_direct_genet_handoff_completion_exact(
+                sequence,
+                sequence,
+                DRIVER_RUNTIME_COMPLETION_PROGRESS,
+                DRIVER_RUNTIME_DIRECT_GENET_HANDOFF_DETAIL_READY,
+                token,
+                0,
+                0,
+                1,
+                generation,
+            ),
+            driver_runtime_direct_genet_handoff_completion_exact(
+                sequence,
+                sequence,
+                DRIVER_RUNTIME_COMPLETION_PROGRESS,
+                DRIVER_RUNTIME_DIRECT_GENET_HANDOFF_DETAIL_READY,
+                driver_runtime_direct_genet_handoff_token(0),
+                0,
+                0,
+                0,
+                0,
+            ),
+        ] {
+            assert!(!exact);
+        }
+
+        assert!(
+            driver_runtime_direct_genet_handoff_quiescing_completion_exact(
+                sequence,
+                sequence,
+                DRIVER_RUNTIME_COMPLETION_IDLE,
+                DRIVER_RUNTIME_DIRECT_GENET_HANDOFF_DETAIL_QUIESCING,
+                token,
+                0,
+                0,
+                0,
+                generation,
+            )
+        );
+        for exact in [
+            driver_runtime_direct_genet_handoff_quiescing_completion_exact(
+                sequence,
+                sequence + 1,
+                DRIVER_RUNTIME_COMPLETION_IDLE,
+                DRIVER_RUNTIME_DIRECT_GENET_HANDOFF_DETAIL_QUIESCING,
+                token,
+                0,
+                0,
+                0,
+                generation,
+            ),
+            driver_runtime_direct_genet_handoff_quiescing_completion_exact(
+                sequence,
+                sequence,
+                DRIVER_RUNTIME_COMPLETION_PROGRESS,
+                DRIVER_RUNTIME_DIRECT_GENET_HANDOFF_DETAIL_QUIESCING,
+                token,
+                0,
+                0,
+                0,
+                generation,
+            ),
+            driver_runtime_direct_genet_handoff_quiescing_completion_exact(
+                sequence,
+                sequence,
+                DRIVER_RUNTIME_COMPLETION_IDLE,
+                DRIVER_RUNTIME_DIRECT_GENET_HANDOFF_DETAIL_READY,
+                token,
+                0,
+                0,
+                0,
+                generation,
+            ),
+            driver_runtime_direct_genet_handoff_quiescing_completion_exact(
+                sequence,
+                sequence,
+                DRIVER_RUNTIME_COMPLETION_IDLE,
+                DRIVER_RUNTIME_DIRECT_GENET_HANDOFF_DETAIL_QUIESCING,
+                token ^ 1,
+                0,
+                0,
+                0,
+                generation,
+            ),
+            driver_runtime_direct_genet_handoff_quiescing_completion_exact(
+                sequence,
+                sequence,
+                DRIVER_RUNTIME_COMPLETION_IDLE,
+                DRIVER_RUNTIME_DIRECT_GENET_HANDOFF_DETAIL_QUIESCING,
+                token,
+                0,
+                1,
+                0,
+                generation,
+            ),
+        ] {
+            assert!(!exact);
+        }
     }
 
     #[test]

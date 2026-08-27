@@ -116,17 +116,47 @@ connections.
 
 ### Console compartment boundary
 
-The active `console-network-runtime` child owns smoltcp, Ethernet/IP/TCP state,
-length framing, constant-time transport-token comparison, and
-pre-authentication timeouts. Root owns no TCP parser. It receives only a copied,
-authenticated bounded command and remains the sole authority for Queen policy,
-role tickets, namespace operations, and command execution.
+The active `console-network-runtime` child uses console-network ABI v5 and owns
+smoltcp, Ethernet/IP/TCP state, length framing, constant-time transport-token
+comparison, and pre-authentication timeouts. Root owns no TCP parser. It receives
+only a copied, authenticated bounded command and remains the sole authority for
+Queen policy, role tickets, namespace operations, and command execution.
 
-Four fixed shared pages carry pointer-free sequence-last packet, control,
-egress, and event records. Page mappings are directional, reserved fields must
-be zero, lengths are validated before copying, and an incomplete or unstable
-commit is rejected. The child cannot access root CSpace, namespace-wide
-authority, device capabilities, `SchedControl`, or undeclared memory.
+Four fixed shared pages carry the ordinary pointer-free sequence-last packet,
+control, egress, and event records between root and the child. Page mappings are
+directional, reserved fields must be zero, lengths are validated before copying,
+and an incomplete or unstable commit is rejected. The child cannot access root
+CSpace, namespace-wide authority, `SchedControl`, or undeclared memory. Its only
+device-side authority is the exact generated backend: QEMU direct-VirtIO
+resources or, on the Pi `bcmgenet-v5` profile, a CPU-only direct-GENET extension
+that grants no MMIO, DMA, device-visible, or physical-address authority.
+
+The Pi extension becomes eligible only after DHCP and exact quiescence of every
+root-mediated GENET command, RX, and TX cursor. Root publishes the pending
+generation before one generation-bound zero-payload `DGHO`; only its exact
+`PROGRESS/READY` terminal activates the link. Exact `IDLE/QUIESCING` retains the
+old path for bounded drain and retry. The 32 reused pages map as cacheable
+Normal/XN memory in the GENET and console children: page 0 carries aligned
+sequence-last control, pages 1 through 15 carry GENET-to-console RX, and pages
+16 through 31 carry console-to-GENET TX. GENET remains the sole MMIO/DMA/IRQ and
+private-DMA-ring owner. Console-network remains the sole smoltcp/TCP/auth owner.
+Root retains lifecycle, control-event, and fault supervision but no steady
+packet-copy, poll, or GENET packet-command authority after READY.
+
+Each direct direction has one producer and one consumer. Generation-bound
+monotonic cursors and sequence-last commits carry truth; reciprocal send-only
+notifications are coalescing wake hints, and each consumer rechecks durable
+state before waiting. A handoff failure, peer fault, invalid cursor or sequence,
+stale generation, descriptor drift, or containment error poisons the link and
+pair-contains both generations. Coupled containment suspends GENET, removes both
+signal caps and all 32 external console mapping caps before anchor revoke, and
+cannot return to root packet mediation as a fallback.
+
+The selected Pi direct-GENET console image spans 65 PT_LOAD pages and is admitted
+by a generated service inventory of 103 frames and 160 retained root CSpace slots.
+The 32 direct pages reuse external GENET-owned frames and add mapping caps, not
+new data-plane frame objects or a larger child untyped. Exact construction
+bounds constrain authority; they are not runtime or performance evidence.
 
 Publication requires explicit credit after root has copied, validated, and
 durably handled the indicated records. Notifications are wakeups, not data.
@@ -188,7 +218,9 @@ evidence, and retry work use fixed or manifest-bounded storage. Overload must
 surface a deterministic refusal or counter; it must not create an unbounded
 queue or silent retry loop. The event pump serializes authoritative target
 state. SMP is used for separate single-threaded tasks, not shared-memory
-multithreading of authority state.
+multithreading of authority state. The Pi direct-GENET pages carry only bounded
+SPSC data-plane state between two fixed owners; they do not make root authority
+shared or make notifications authoritative.
 
 The namespace-service contract treats path, payload, partial
 frame, sequence, and generation fields as hostile. The as-built
@@ -275,13 +307,24 @@ on HAL-owned ranges, bounded rings, cache policy, quarantine rules, and
 single-owner driver admission. Documentation must not describe that as hardware
 DMA isolation.
 
+The direct-GENET CPU link does not weaken that owner boundary or enlarge the DMA
+claim. GENET alone retains its private DMA buffers and device descriptors and
+copies validated frames to or from CPU-only shared pages. Console-network sees
+neither DMA mappings nor physical addresses. Coupled fail-closed containment is
+mandatory because the peers share data-plane state: a fault in either
+generation removes reciprocal signalling and console page copies before revoke,
+without reviving root packet mediation.
+
 The GENETv5 implementation uses Linux device-tree and driver behavior plus
 U-Boot bring-up as reference material. The CYW43455/SDIO implementation uses
 OpenBSD `bwfm`, Zephyr/Infineon WHD layering, and Linux `brcmfmac` edge cases as
 reference material. These are provenance references, not code sources; source
 lift is prohibited. CYW43455 and SDIO runtimes are implemented research
 surfaces, but current-image association, DHCP, TCP, and repeatability remain
-evidence-gated in the build plan.
+evidence-gated in the build plan. Likewise, a generated direct-GENET descriptor,
+successful target build, or staged image proves neither handoff nor traffic.
+Fresh same-image Pi evidence must separately qualify GENET correctness,
+containment, latency, throughput, and benchmark behavior.
 
 Pi firmware, U-Boot, Wi-Fi firmware/NVRAM, and the external seL4 build are
 deployment dependencies. Pin their provenance, verify staged hashes, and keep

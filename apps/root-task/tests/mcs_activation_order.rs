@@ -34,7 +34,7 @@ fn wired_console_child_registers_before_seal_and_hands_off_only_after_dhcp() {
         .find("requires_preseal_console_network_runtime")
         .expect("wired stack must declare its pre-seal console child");
     let construct = kernel[requires..]
-        .find("construct_console_network_runtime_shell(1)")
+        .find("construct_direct_genet_console_network_runtime_shell(1)")
         .map(|offset| requires + offset)
         .expect("wired console child must be constructed before seal");
     let attach = kernel[construct..]
@@ -436,14 +436,26 @@ fn root_control_containment_serializes_before_the_ordinary_pump_turn() {
         .find("activate_root_control_temporal_or_fail(ctx);")
         .expect("serial loop must cross the one-time activation seam");
 
+    let direct_pair = root_loop
+        .find("pump.contain_faulted_direct_genet_pair(hal)")
+        .expect("direct-GENET pair containment probe must remain first");
+    let direct_pair_assignment = root_loop[..direct_pair]
+        .rfind("recovery_turn =")
+        .expect("direct-GENET pair containment result must own recovery_turn");
+    let console_guard = root_loop[direct_pair..]
+        .find("if !recovery_turn && hal_ptr != 0 {")
+        .map(|offset| direct_pair + offset)
+        .expect("console containment must be guarded by the paired result");
     let console = root_loop
         .find("pump.contain_faulted_console_network(hal)")
-        .expect("console-network containment probe must remain first");
-    let console_assignment = root_loop[..console]
-        .rfind("recovery_turn =")
+        .expect("console-network containment probe must follow paired containment");
+    let console_assignment = root_loop[console_guard..console]
+        .find("recovery_turn =")
+        .map(|offset| console_guard + offset)
         .expect("console-network containment result must own recovery_turn");
-    let ninedoor_guard = root_loop
+    let ninedoor_guard = root_loop[console..]
         .find("if !recovery_turn && hal_ptr != 0 {")
+        .map(|offset| console + offset)
         .expect("NineDoor containment must be guarded by the console result");
     let ninedoor = root_loop
         .find("pump.contain_faulted_ninedoor(hal)")
@@ -474,7 +486,10 @@ fn root_control_containment_serializes_before_the_ordinary_pump_turn() {
         .expect("root-control loop must retain its sole outer yield");
 
     assert!(
-        activation < console_assignment
+        activation < direct_pair_assignment
+            && direct_pair_assignment < direct_pair
+            && direct_pair < console_guard
+            && console_guard < console_assignment
             && console_assignment < console
             && console < ninedoor_guard
             && ninedoor_guard < ninedoor_assignment
@@ -486,7 +501,9 @@ fn root_control_containment_serializes_before_the_ordinary_pump_turn() {
             && pump_guard < pump
             && pump < outer_yield,
         "containment/pump/yield source order drifted: \
-         activation={activation}, console_assignment={console_assignment}, console={console}, \
+         activation={activation}, direct_pair_assignment={direct_pair_assignment}, \
+         direct_pair={direct_pair}, console_guard={console_guard}, \
+         console_assignment={console_assignment}, console={console}, \
          ninedoor_guard={ninedoor_guard}, ninedoor_assignment={ninedoor_assignment}, \
          ninedoor={ninedoor}, handoff_guard={handoff_guard}, \
          handoff_assignment={handoff_assignment}, handoff={handoff}, \
@@ -513,6 +530,12 @@ fn root_control_containment_serializes_before_the_ordinary_pump_turn() {
     assert_eq!(root_loop.matches("sel4::yield_now();").count(), 1);
     assert_eq!(
         root_loop
+            .matches("pump.contain_faulted_direct_genet_pair(hal)")
+            .count(),
+        1,
+    );
+    assert_eq!(
+        root_loop
             .matches("pump.contain_faulted_console_network(hal)")
             .count(),
         1,
@@ -531,7 +554,7 @@ fn root_control_containment_serializes_before_the_ordinary_pump_turn() {
     );
     assert_eq!(
         root_loop.matches(".unwrap_or(false);").count(),
-        3,
+        4,
         "all optional HAL probes must preserve false-on-no-probe semantics",
     );
     assert!(
@@ -630,11 +653,15 @@ fn console_containment_advances_one_material_unit_per_recovery_turn() {
             .count(),
         1
     );
-    assert_eq!(containment.matches(".unmap_page_cap(").count(), 1);
+    assert_eq!(
+        containment.matches(".unmap_page_cap(").count(),
+        2,
+        "shared-frame and direct-GENET copied-cap unmap arms must remain distinct",
+    );
     assert_eq!(
         containment.matches("sel4::cnode_delete_bounded(").count(),
-        3,
-        "fault, direct IRQ-notification, and direct IRQHandler deletion arms must remain distinct",
+        4,
+        "fault, direct IRQ-notification, direct IRQHandler, and direct-GENET copied-cap deletion arms must remain distinct",
     );
     assert_eq!(
         containment

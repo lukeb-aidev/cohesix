@@ -1673,7 +1673,8 @@ impl Manifest {
         if !service.enabled {
             return Ok(());
         }
-        service.validate()?;
+        let direct_genet = self.hw.network.backend == NetworkBackendKind::BcmGenetV5;
+        service.validate(direct_genet)?;
         if service.direct_virtio
             && !matches!(
                 self.hw.network.backend,
@@ -4204,16 +4205,63 @@ mod tests {
     fn console_network_service_rejects_object_budget_drift() {
         let mut service = super::ConsoleNetworkServiceConfig::default();
         service
-            .validate()
+            .validate(false)
             .expect("default console-network object inventory");
         assert_eq!(service.objects.frames, 60 + 32 + 1 + 1 + 4);
         assert_eq!(service.objects.cspace_slots, service.objects.frames + 25);
         service.objects.frames = service.objects.frames.saturating_sub(1);
         let error = service
-            .validate()
+            .validate(false)
             .expect_err("undersized child frame budget must fail closed");
         assert!(
             error.to_string().contains("exact child constructor"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn pi4_console_network_service_derives_direct_genet_from_the_exact_backend() {
+        let manifest_path = repo_root().join("configs/root_task_pi4_uboot_aarch64.toml");
+        let manifest = load_manifest(&manifest_path).expect("load Pi 4 manifest");
+        assert_eq!(
+            manifest.hw.network.backend,
+            super::NetworkBackendKind::BcmGenetV5
+        );
+        assert!(!manifest.console_network_service.direct_virtio);
+        assert_eq!(manifest.console_network_service.objects.frames, 103);
+        assert_eq!(manifest.console_network_service.objects.cspace_slots, 160);
+        manifest
+            .validate_with_base(Some(repo_root().as_path()))
+            .expect("exact Pi direct-GENET object contract");
+
+        let mut object_drift = load_manifest(&manifest_path).expect("reload Pi 4 manifest");
+        object_drift.console_network_service.objects.cspace_slots = 123;
+        let error = object_drift
+            .validate_with_base(Some(repo_root().as_path()))
+            .expect_err("a Pi backend without direct-GENET cap inventory must fail closed");
+        assert!(
+            error.to_string().contains("exact child constructor"),
+            "unexpected error: {error}"
+        );
+
+        let error = manifest
+            .console_network_service
+            .validate(false)
+            .expect_err("GENET cap inventory must not validate without the derived backend");
+        assert!(
+            error.to_string().contains("exact child constructor"),
+            "unexpected error: {error}"
+        );
+
+        let mut backend_drift = load_manifest(&manifest_path).expect("reload Pi 4 manifest");
+        backend_drift.hw.network.backend = super::NetworkBackendKind::VirtioNet;
+        let error = backend_drift
+            .validate_with_base(Some(repo_root().as_path()))
+            .expect_err("direct-GENET inventory on a non-GENET backend must fail closed");
+        assert!(
+            error
+                .to_string()
+                .contains("auto mode requires hw.network.backend=bcmgenet-v5"),
             "unexpected error: {error}"
         );
     }
@@ -4248,29 +4296,29 @@ mod tests {
             ..super::ConsoleNetworkServiceConfig::default()
         };
         let error = service
-            .validate()
+            .validate(false)
             .expect_err("noncanonical publication ACK badge must fail closed");
         assert!(
             error
                 .to_string()
-                .contains("must match ABI v4 values 1,2,4,8,16,32,64"),
+                .contains("must match ABI v5 values 1,2,4,8,16,32,64"),
             "unexpected error: {error}"
         );
     }
 
     #[test]
-    fn console_network_service_rejects_the_pre_command_batch_abi() {
+    fn console_network_service_rejects_the_pre_direct_link_abi() {
         let service = super::ConsoleNetworkServiceConfig {
-            abi_version: 3,
+            abi_version: 4,
             ..super::ConsoleNetworkServiceConfig::default()
         };
         let error = service
-            .validate()
-            .expect_err("console-network ABI v3 must fail after CommandBatch selection");
+            .validate(false)
+            .expect_err("console-network ABI v4 must fail after direct-link selection");
         assert!(
             error
                 .to_string()
-                .contains("console_network_service.abi_version must be 4"),
+                .contains("console_network_service.abi_version must be 5"),
             "unexpected error: {error}"
         );
     }
@@ -4283,7 +4331,7 @@ mod tests {
             ..super::ConsoleNetworkServiceConfig::default()
         };
         let error = service
-            .validate()
+            .validate(false)
             .expect_err("the live-faulting 16-page stack must fail closed");
         assert!(
             error.to_string().contains("exact 32-page stack"),
@@ -4296,7 +4344,7 @@ mod tests {
         let mut service = super::ConsoleNetworkServiceConfig::default();
         service.init_vaddr = service.stack_vaddr;
         let error = service
-            .validate()
+            .validate(false)
             .expect_err("a fixed page inside the stack must fail closed");
         assert!(
             error.to_string().contains("stack must be disjoint"),
@@ -5900,9 +5948,9 @@ pub struct ConsoleNetworkServiceConfig {
 }
 
 impl ConsoleNetworkServiceConfig {
-    fn validate(&self) -> Result<()> {
-        if self.abi_version != 4 {
-            bail!("console_network_service.abi_version must be 4");
+    fn validate(&self, direct_genet: bool) -> Result<()> {
+        if self.abi_version != 5 {
+            bail!("console_network_service.abi_version must be 5");
         }
         if self.image_id != "console-network-runtime"
             || self.image_path != "cohesix/artifacts/console-network-runtime"
@@ -5922,14 +5970,16 @@ impl ConsoleNetworkServiceConfig {
             vspaces: 1,
             page_tables: 8,
             asids: 1,
-            frames: 98 + if self.direct_virtio { 36 } else { 0 },
+            frames: 98 + if self.direct_virtio { 36 } else { 0 } + if direct_genet { 5 } else { 0 },
             endpoints: 0,
             notifications: 2,
             fault_caps: 1,
             timeout_fault_caps: 1,
             reply_objects: 0,
             scheduling_contexts: 1,
-            cspace_slots: 123 + if self.direct_virtio { 39 } else { 0 },
+            cspace_slots: 123
+                + if self.direct_virtio { 39 } else { 0 }
+                + if direct_genet { 37 } else { 0 },
             untyped_bytes: 1_048_576,
         };
         if self.revoke_anchor_slot == 0
@@ -6006,7 +6056,7 @@ impl ConsoleNetworkServiceConfig {
             self.publication_ack_badge,
         ];
         if bits != [1, 2, 4, 8, 16, 32, 64] {
-            bail!("console_network_service badges must match ABI v4 values 1,2,4,8,16,32,64");
+            bail!("console_network_service badges must match ABI v5 values 1,2,4,8,16,32,64");
         }
         let mut combined = 0u64;
         for bit in bits {
@@ -6042,7 +6092,7 @@ impl Default for ConsoleNetworkServiceConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            abi_version: 4,
+            abi_version: 5,
             image_id: "console-network-runtime".to_owned(),
             image_path: "cohesix/artifacts/console-network-runtime".to_owned(),
             entry_symbol: "_start".to_owned(),
