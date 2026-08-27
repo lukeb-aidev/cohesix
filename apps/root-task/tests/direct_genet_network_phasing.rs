@@ -5,12 +5,91 @@
 
 const STACK_SOURCE: &str = include_str!("../src/net/stack.rs");
 const DRIVER_SOURCE: &str = include_str!("../src/drivers/driver_task_net.rs");
+const RUNTIME_SOURCE: &str = include_str!("../../pi4-driver-runtime/src/lib.rs");
 const HAL_SOURCE: &str = include_str!("../src/hal/mod.rs");
 const CONSOLE_HAL_SOURCE: &str = include_str!("../src/hal/console_network.rs");
 const DRIVER_HAL_SOURCE: &str = include_str!("../src/hal/driver_task.rs");
 const EVENT_SOURCE: &str = include_str!("../src/event/mod.rs");
 const USERLAND_SOURCE: &str = include_str!("../src/userland/mod.rs");
 const KERNEL_SOURCE: &str = include_str!("../src/kernel.rs");
+
+#[test]
+fn diagnostic_probe_is_one_replay_with_pre_and_post_sequence_last_evidence() {
+    let root_probe = STACK_SOURCE
+        .find("fn refresh_direct_genet_diagnostics")
+        .expect("wired stack exposes the bounded diagnostic probe");
+    let root_probe = &STACK_SOURCE[root_probe..];
+    let before = root_probe
+        .find("let previous = console.direct_genet_runtime_diagnostic()")
+        .expect("prior child publication is acquired before the probe");
+    let replay = root_probe
+        .find("refresh_genet_direct_diagnostic(generation)")
+        .expect("one exact DGHO replay requests a fresh snapshot");
+    let after = root_probe[replay..]
+        .find("let snapshot = console.direct_genet_runtime_diagnostic()")
+        .map(|offset| replay + offset)
+        .expect("fresh child publication is acquired after the probe");
+    assert!(before < replay && replay < after);
+
+    let transport = DRIVER_SOURCE
+        .find("fn refresh_genet_direct_diagnostic")
+        .expect("diagnostic transport exists");
+    let transport = &DRIVER_SOURCE[transport..];
+    assert!(transport.contains("run_driver_task_ring_service_prompt_slice("));
+    assert!(transport.contains("driver_runtime_direct_genet_handoff_completion_exact("));
+    assert!(
+        !transport[..transport.find("#[cfg(feature").unwrap_or(transport.len())]
+            .contains("service_genet_driver_task_pre_poll")
+    );
+
+    let handler = RUNTIME_SOURCE
+        .find("fn genet_direct_handoff_completion")
+        .expect("direct GENET handoff handler exists");
+    let handler = &RUNTIME_SOURCE[handler..];
+    let active = handler
+        .find("if state.direct_genet_active")
+        .expect("active replay branch exists");
+    let publish = handler[active..]
+        .find("genet_direct_publish_runtime_diagnostic(state)")
+        .map(|offset| active + offset)
+        .expect("active replay publishes before returning READY");
+    let ready = handler[publish..]
+        .find("DRIVER_RUNTIME_DIRECT_GENET_HANDOFF_DETAIL_READY")
+        .map(|offset| publish + offset)
+        .expect("snapshot precedes the READY terminal");
+    assert!(active < publish && publish < ready);
+    let active_branch = &handler[active..ready];
+    for forbidden in [
+        "genet_direct_drain_rx_hardware(",
+        "genet_direct_service_tx(",
+        "genet_runtime_service_dpc_state(",
+        "genet_irq_clear_sources(",
+        "runtime_irq_handler_ack(",
+    ] {
+        assert!(
+            !active_branch.contains(forbidden),
+            "DGHO handler unexpectedly services hardware via {forbidden}",
+        );
+    }
+
+    let reader = CONSOLE_HAL_SOURCE
+        .find("fn sample_direct_genet_runtime_diagnostic")
+        .expect("root stable reader exists");
+    let reader = &CONSOLE_HAL_SOURCE[reader..];
+    let first = reader
+        .find("first_commit")
+        .expect("reader acquires the first commit");
+    let prefix = reader
+        .find("while offset < DIRECT_GENET_RUNTIME_DIAGNOSTIC_COMMIT_OFFSET")
+        .expect("reader copies only the atomic prefix");
+    let second = reader
+        .find("second_commit")
+        .expect("reader rechecks the commit");
+    let decode = reader
+        .find("DirectGenetRuntimeDiagnostic::decode")
+        .expect("reader validates generation and layout");
+    assert!(first < prefix && prefix < second && second < decode);
+}
 
 #[test]
 fn console_remains_suspended_until_exact_genet_ready_terminal() {

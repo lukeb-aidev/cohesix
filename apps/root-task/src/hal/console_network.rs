@@ -12,18 +12,19 @@
 //! complete target fault registry has been sealed.
 
 use core::ptr::{read_volatile, write_volatile};
-use core::sync::atomic::{fence, Ordering};
+use core::sync::atomic::{fence, AtomicU64, Ordering};
 
 #[cfg(any(feature = "net-backend-virtio", test))]
 use console_network_abi::WAKE_DIRECT_VIRTIO_IRQ;
 use console_network_abi::{
-    DirectGenetControlPage, DirectGenetLayout, DirectGenetSlotPage, DirectVirtioLayout,
-    CHILD_WAKE_MASK, DIRECT_GENET_LAYOUT_BYTES, DIRECT_GENET_LAYOUT_OFFSET,
-    DIRECT_GENET_RX_SLOT_COUNT, DIRECT_GENET_SHARED_PAGE_COUNT, DIRECT_GENET_TX_SLOT_COUNT,
-    DIRECT_VIRTIO_BUFFER_COUNT, DIRECT_VIRTIO_LAYOUT_BYTES, DIRECT_VIRTIO_LAYOUT_OFFSET,
-    DIRECT_VIRTIO_QUEUE_COUNT, RUNTIME_INIT_DESCRIPTOR_BYTES, SHARED_PAGE_BYTES, WAKE_CONTROL,
-    WAKE_EVENT_READY, WAKE_PACKET_RX, WAKE_PACKET_TX_READY, WAKE_PUBLICATION_ACK, WAKE_REVOKE,
-    WAKE_SHUTDOWN,
+    DirectGenetControlPage, DirectGenetLayout, DirectGenetRuntimeDiagnostic, DirectGenetSlotPage,
+    DirectVirtioLayout, CHILD_WAKE_MASK, DIRECT_GENET_LAYOUT_BYTES, DIRECT_GENET_LAYOUT_OFFSET,
+    DIRECT_GENET_RUNTIME_DIAGNOSTIC_BYTES, DIRECT_GENET_RUNTIME_DIAGNOSTIC_COMMIT_OFFSET,
+    DIRECT_GENET_RUNTIME_DIAGNOSTIC_OFFSET, DIRECT_GENET_RX_SLOT_COUNT,
+    DIRECT_GENET_SHARED_PAGE_COUNT, DIRECT_GENET_TX_SLOT_COUNT, DIRECT_VIRTIO_BUFFER_COUNT,
+    DIRECT_VIRTIO_LAYOUT_BYTES, DIRECT_VIRTIO_LAYOUT_OFFSET, DIRECT_VIRTIO_QUEUE_COUNT,
+    RUNTIME_INIT_DESCRIPTOR_BYTES, SHARED_PAGE_BYTES, WAKE_CONTROL, WAKE_EVENT_READY,
+    WAKE_PACKET_RX, WAKE_PACKET_TX_READY, WAKE_PUBLICATION_ACK, WAKE_REVOKE, WAKE_SHUTDOWN,
 };
 #[cfg(feature = "net-backend-genet-direct")]
 use console_network_abi::{
@@ -108,6 +109,47 @@ const DIRECT_GENET_CONTROL_VADDR: usize = 0x7208_0000;
 const DIRECT_GENET_RX_VADDR: usize = DIRECT_GENET_CONTROL_VADDR + SHARED_PAGE_BYTES;
 const DIRECT_GENET_TX_VADDR: usize =
     DIRECT_GENET_RX_VADDR + DIRECT_GENET_RX_SLOT_COUNT * SHARED_PAGE_BYTES;
+
+fn sample_direct_genet_runtime_diagnostic(
+    control_root_ptr: usize,
+    generation: u64,
+) -> Option<DirectGenetRuntimeDiagnostic> {
+    if control_root_ptr == 0
+        || !control_root_ptr.is_multiple_of(SHARED_PAGE_BYTES)
+        || generation == 0
+    {
+        return None;
+    }
+    let diagnostic_ptr = control_root_ptr.checked_add(DIRECT_GENET_RUNTIME_DIAGNOSTIC_OFFSET)?;
+    const DIAGNOSTIC_WORD_COUNT: usize = DIRECT_GENET_RUNTIME_DIAGNOSTIC_BYTES / 8;
+    const COMMIT_WORD_INDEX: usize = DIRECT_GENET_RUNTIME_DIAGNOSTIC_COMMIT_OFFSET / 8;
+    // SAFETY: Construction retains a page-aligned root mapping for the exact
+    // CPU-only control frame. This page-local diagnostic region is 64-bit
+    // aligned, has exactly `DIAGNOSTIC_WORD_COUNT` initialized words, and both
+    // participants access every overlapping word through `AtomicU64`. The
+    // child is the sole writer and root retains only this observational view.
+    let diagnostic_words =
+        unsafe { &*(diagnostic_ptr as *const [AtomicU64; DIAGNOSTIC_WORD_COUNT]) };
+    let first_commit = diagnostic_words[COMMIT_WORD_INDEX].load(Ordering::Acquire);
+    if first_commit == 0 {
+        return None;
+    }
+    let mut encoded = [0u8; DIRECT_GENET_RUNTIME_DIAGNOSTIC_BYTES];
+    let mut offset = 0usize;
+    while offset < DIRECT_GENET_RUNTIME_DIAGNOSTIC_COMMIT_OFFSET {
+        let word = diagnostic_words[offset / 8].load(Ordering::Relaxed);
+        encoded[offset..offset + 8].copy_from_slice(&word.to_le_bytes());
+        offset += 8;
+    }
+    let second_commit = diagnostic_words[COMMIT_WORD_INDEX].load(Ordering::Acquire);
+    if second_commit != first_commit {
+        return None;
+    }
+    encoded[DIRECT_GENET_RUNTIME_DIAGNOSTIC_COMMIT_OFFSET
+        ..DIRECT_GENET_RUNTIME_DIAGNOSTIC_COMMIT_OFFSET + 8]
+        .copy_from_slice(&second_commit.to_le_bytes());
+    DirectGenetRuntimeDiagnostic::decode(&encoded, generation).ok()
+}
 
 const DIRECT_VIRTIO_MMIO_PADDR: usize = 0x0a00_0000;
 const DIRECT_VIRTIO_MMIO_VADDR: usize = 0x7205_0000;
@@ -346,6 +388,21 @@ impl ConsoleNetworkRuntime {
     #[must_use]
     pub const fn direct_data_plane(&self) -> bool {
         self.direct_virtio() || self.direct_genet()
+    }
+
+    /// Acquire one exact child-owned direct-GENET diagnostic publication.
+    ///
+    /// The CPU-only control page is normal cacheable memory shared between
+    /// coherent Pi cores. Root samples only atomic 64-bit words, verifies the
+    /// sequence-last commit on both sides of the copy, and rejects any stale,
+    /// torn, or cross-generation record. This grants no MMIO or packet-ring
+    /// authority to root.
+    #[must_use]
+    pub(crate) fn direct_genet_runtime_diagnostic(&self) -> Option<DirectGenetRuntimeDiagnostic> {
+        if !self.direct_genet() || !self.direct_genet_armed || !self.activated || self.contained {
+            return None;
+        }
+        sample_direct_genet_runtime_diagnostic(self.direct_genet_root_ptrs[0], self.generation())
     }
 
     /// Whether the immutable ABI-v5 descriptor and initial registers are ready.
@@ -2281,6 +2338,9 @@ fn map_vspace_error(error: sel4::RevokeAnchorVSpaceError) -> HalError {
 mod tests {
     use super::*;
 
+    #[repr(align(4096))]
+    struct AlignedControlPage([u8; SHARED_PAGE_BYTES]);
+
     #[test]
     fn fixed_slot_plan_accounts_every_generated_object() {
         assert_eq!(FRAME_SLOT_START, 6);
@@ -2322,6 +2382,43 @@ mod tests {
         assert_eq!(WAKE_PACKET_TX_READY | WAKE_EVENT_READY, CHILD_WAKE_MASK);
         assert_eq!(WAKE_PUBLICATION_ACK, 64);
         assert_eq!(WAKE_DIRECT_VIRTIO_IRQ, 128);
+    }
+
+    #[test]
+    fn direct_genet_runtime_diagnostic_reader_rejects_uncommitted_and_stale_records() {
+        let generation = 7;
+        let mut diagnostic = DirectGenetRuntimeDiagnostic::empty();
+        diagnostic.flags = console_network_abi::DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_ACTIVE;
+        diagnostic.generation = generation;
+        diagnostic.publication_sequence = 3;
+        diagnostic.committed_sequence = 3;
+        let mut encoded = [0u8; DIRECT_GENET_RUNTIME_DIAGNOSTIC_BYTES];
+        diagnostic
+            .encode(&mut encoded)
+            .expect("diagnostic fixture is exact");
+        let mut page = AlignedControlPage([0; SHARED_PAGE_BYTES]);
+        page.0[DIRECT_GENET_RUNTIME_DIAGNOSTIC_OFFSET
+            ..DIRECT_GENET_RUNTIME_DIAGNOSTIC_OFFSET + DIRECT_GENET_RUNTIME_DIAGNOSTIC_BYTES]
+            .copy_from_slice(&encoded);
+        let root_ptr = page.0.as_ptr() as usize;
+        assert_eq!(
+            sample_direct_genet_runtime_diagnostic(root_ptr, generation),
+            Some(diagnostic),
+        );
+        assert_eq!(
+            sample_direct_genet_runtime_diagnostic(root_ptr, generation + 1),
+            None,
+        );
+        let commit_ptr = root_ptr
+            + DIRECT_GENET_RUNTIME_DIAGNOSTIC_OFFSET
+            + DIRECT_GENET_RUNTIME_DIAGNOSTIC_COMMIT_OFFSET;
+        // SAFETY: The test page and diagnostic offset are 64-bit aligned; no
+        // other test thread accesses this local page.
+        unsafe { &*(commit_ptr as *const AtomicU64) }.store(0, Ordering::Release);
+        assert_eq!(
+            sample_direct_genet_runtime_diagnostic(root_ptr, generation),
+            None,
+        );
     }
 
     #[cfg(feature = "net-backend-virtio")]

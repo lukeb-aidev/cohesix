@@ -181,6 +181,42 @@ pending egress and response-drain state, and ingress backpressure/drop. These
 are diagnostic counters, not a substitute for the terminal `nettest`, ICMP,
 authenticated TCP, or target-performance evidence.
 
+When the exact Pi direct-GENET generation is active, one `netstats` command
+also runs one bounded causal refresh and emits a complete available snapshot in
+this order:
+
+```text
+netstats: genet_direct ...
+netstats: genet_direct_flags ...
+netstats: genet_direct_before ...
+netstats: genet_direct_before_ring ...
+netstats: genet_direct_irq ...
+netstats: genet_direct_irq_source ...
+netstats: genet_direct_dpc ...
+netstats: genet_direct_dma ...
+netstats: genet_direct_ring ...
+netstats: genet_direct_peer ...
+```
+
+The summary reports one of `refresh=fresh`, `refresh=ready-stale`,
+`refresh=ready-unverified`, `refresh=ready-missing`, `refresh=timeout`,
+`refresh=rejected`, or `refresh=inactive`; a present replacement is labelled
+`phase=pre-idle-service`. The two
+`before` rows preserve the stable pre-replay owner/ring cut, while the remaining
+rows carry the exact generation's flags, IRQ wake/ack and source state, DPC
+counts, hardware DMA indices, direct-ring cursors and packets, peer hints, and
+poison state. Missing optional records can shorten this diagnostic batch and
+remain missing evidence. `ready-unverified` means no stable pre-replay record
+was available, so a visible post-replay record cannot be proven fresh even
+though the exact DGHO command returned READY. The refresh uses one exact
+idempotent `DGHO` replay,
+which can wake the GENET owner and allow its normal post-command idle service to
+drain durable RX. These rows are therefore causal triage, not a passive
+performance sample. A component field such as `genet_direct_flags active=yes`
+does not select or override the canonical `NET_ACTIVE` backend, and no complete
+or partial batch proves DHCP, ARP, ICMP, TCP, throughput, QEMU parity, or Pi
+acceptance.
+
 On the physical Pi local seat, serial may show `cohesix>` while USB is still
 starting, but HDMI does not show the interactive prompt until USB command input
 is admitted and the display path is healthy. `USB controller starting...` is

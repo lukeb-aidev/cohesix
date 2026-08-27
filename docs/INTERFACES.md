@@ -251,6 +251,29 @@ coalescing wake hints only. Durable cursor state carries work, and both peers
 perform a final state recheck before waiting. Direct service handles at most 16
 frames per wake and at most eight TX frames before admitting the RX share.
 
+Within control page 0, bytes `[0,64)` hold the immutable control header and
+bytes `[64,320)` hold the four 64-byte RX-producer, RX-consumer, TX-producer,
+and TX-consumer records. Console-network ABI v5 additionally assigns the
+formerly reserved bytes `[320,512)` to an optional, separately versioned
+direct-GENET diagnostic-v1 record. The record is exactly 192 bytes, aligned to
+64 bytes, and publishes its nonzero sequence last at record-relative offset
+184 (control-page offset 504). The GENET child is its sole writer. Root accepts
+only two identical stable commit observations around a bounded copy and an
+exact match to the live nonzero direct generation; magic, version, length,
+flags, reserved zeros, IRQ-mask relation, cursor-validity rules, and
+sequence/commit must all validate. Older or missing publications remain
+compatible unavailable evidence rather than authorizing an alternate path.
+Bytes `[512,4096)` remain reserved and non-authoritative.
+
+The record is not inspected during ordinary direct packet service. One
+operator `netstats` request may ask the already active GENET owner for one
+idempotent generation-bound `DGHO` replay, retain the stable pre-replay record,
+and read the replacement publication before normal post-command idle service.
+The replay can wake the owner and thereby allow that existing idle service to
+drain durable RX, so this is a causal probe rather than a passive snapshot. It
+adds no packet, IRQ-acknowledgement, retry, recovery, polling, or fallback
+authority and cannot establish throughput or acceptance.
+
 A failed handoff, invalid cursor or sequence, stale generation, descriptor
 drift, peer fault, IRQ completion failure, or containment error poisons the
 link, signals the peer when possible, and enters coupled containment. Root

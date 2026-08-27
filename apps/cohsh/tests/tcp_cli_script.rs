@@ -16,7 +16,7 @@ use assert_cmd::Command;
 use predicates::prelude::*;
 
 const TEST_AUTH_TOKEN: &str = "tcp-cli-script-test-token";
-const NETSTATS_BODY: [&str; 13] = [
+const NETSTATS_BODY: [&str; 23] = [
     "netstats: rx_pkts=12 tx_pkts=9 rx_used=4 tx_used=2 polls=37",
     "netstats: generation=7 udp_rx=3 udp_tx=5 tcp_accepts=2 tcp_auth=2 tcp_rx_bytes=384 tcp_recv_ready=8 tcp_recv_budget_hits=1 tcp_tx_bytes=512",
     "netstats: tcp_smoke_out=4 tcp_smoke_out_failures=0",
@@ -29,6 +29,16 @@ const NETSTATS_BODY: [&str; 13] = [
     "netstats: generation=7 mode=dhcp policy=wired active=wired standby=none addr_src=dhcp-lease ip=192.168.86.154 gateway=192.168.86.1 dhcp=bound",
     "netstats: genet_rx_hw=12 genet_rx_last_len=74 genet_rx_last_ethertype=0x0800",
     "netstats: genet_rxq runtime_cur=0 runtime_hwm=4 runtime_ovf=0 runtime_max_drain=3 runtime_drain_hit=1 runtime_byte_hit=0 root_cur=0 root_hwm=3 root_drops=0 runtime_cmd_drain_seen=1",
+    "netstats: genet_direct refresh=fresh snapshot=present phase=pre-idle-service generation=7 sequence=42",
+    "netstats: genet_direct_flags flags=0x000001c3 initialized=yes active=yes faulted=no irq_pending=no rx_pending=no tx_pending=no",
+    "netstats: genet_direct_before sequence=41 irq_wakes=8 irq_acks=8 raw=0x00000000 mask=0xffffffff active=0x00000000 rdma=5/5 tdma=3/3",
+    "netstats: genet_direct_before_ring rx_cursor=12/12 tx_cursor=9/9 rx_packets=12 tx_packets=9 peer_wakes=4 peer_signals=6",
+    "netstats: genet_direct_irq badge=0x00000400 wakes=9 acks=9 ack_failures=0 unmask_failures=0",
+    "netstats: genet_direct_irq_source raw=0x00000000 mask=0xffffffff active=0x00000000 last=0x00000000",
+    "netstats: genet_direct_dpc turns=9 budget_hits=0 final_rechecks=9",
+    "netstats: genet_direct_dma rdma_prod=5 rdma_cons=5 tdma_prod=3 tdma_cons=3 rx_packets=12 tx_packets=9",
+    "netstats: genet_direct_ring rx_prod=12 rx_cons=12 tx_prod=9 tx_cons=9 rx_valid=yes tx_valid=yes state_changes=0",
+    "netstats: genet_direct_peer wakes=4 signals=6 poison_rx=0/0 poison_tx=0/0",
     "netstatus: generation=7 ip=192.168.86.154 gateway=192.168.86.1 src=dhcp-lease dhcp=bound tcp_ready=yes",
 ];
 

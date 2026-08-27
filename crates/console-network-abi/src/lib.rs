@@ -1407,6 +1407,49 @@ pub const DIRECT_GENET_RX_CONSUMER_STATE_OFFSET: usize = 128;
 pub const DIRECT_GENET_TX_PRODUCER_STATE_OFFSET: usize = 192;
 /// TX-consumer state offset in the control page.
 pub const DIRECT_GENET_TX_CONSUMER_STATE_OFFSET: usize = 256;
+/// Cache-line-aligned offset of the GENET-owner diagnostic record.
+///
+/// The record is observational and carries no packet, IRQ, or command
+/// authority. Root requests a refresh through exact idempotent DGHO replay;
+/// the isolated GENET owner then publishes the complete record sequence-last.
+pub const DIRECT_GENET_RUNTIME_DIAGNOSTIC_OFFSET: usize = 320;
+/// Exact bytes in one direct-GENET runtime diagnostic record.
+pub const DIRECT_GENET_RUNTIME_DIAGNOSTIC_BYTES: usize = 192;
+/// Sequence-last commit offset within the runtime diagnostic record.
+pub const DIRECT_GENET_RUNTIME_DIAGNOSTIC_COMMIT_OFFSET: usize = 184;
+/// Direct-GENET runtime diagnostic magic (`CNGD`).
+pub const DIRECT_GENET_RUNTIME_DIAGNOSTIC_MAGIC: u32 = 0x434e_4744;
+/// Direct-GENET runtime diagnostic layout version.
+pub const DIRECT_GENET_RUNTIME_DIAGNOSTIC_VERSION: u16 = 1;
+/// Diagnostic flag: the isolated GENET runtime completed initialization.
+pub const DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_INITIALIZED: u32 = 1 << 0;
+/// Diagnostic flag: the exact direct-link generation is active.
+pub const DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_ACTIVE: u32 = 1 << 1;
+/// Diagnostic flag: the direct-link generation failed closed.
+pub const DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_FAULTED: u32 = 1 << 2;
+/// Diagnostic flag: the seL4 IRQ handler remains deliberately unacknowledged.
+pub const DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_IRQ_ACK_PENDING: u32 = 1 << 3;
+/// Diagnostic flag: one RX publication awaits cursor reconciliation.
+pub const DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_RX_COMMIT_PENDING: u32 = 1 << 4;
+/// Diagnostic flag: one TX consumption awaits cursor reconciliation.
+pub const DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_TX_COMMIT_PENDING: u32 = 1 << 5;
+/// Diagnostic flag: the RX producer/consumer cursor pair sampled exactly.
+pub const DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_RX_RING_VALID: u32 = 1 << 6;
+/// Diagnostic flag: the TX producer/consumer cursor pair sampled exactly.
+pub const DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_TX_RING_VALID: u32 = 1 << 7;
+/// Diagnostic flag: the owner sampled GENET IRQ and DMA registers.
+pub const DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_MMIO_SAMPLED: u32 = 1 << 8;
+/// Complete flag set admitted by [`DirectGenetRuntimeDiagnostic`].
+pub const DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAGS: u32 =
+    DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_INITIALIZED
+        | DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_ACTIVE
+        | DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_FAULTED
+        | DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_IRQ_ACK_PENDING
+        | DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_RX_COMMIT_PENDING
+        | DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_TX_COMMIT_PENDING
+        | DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_RX_RING_VALID
+        | DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_TX_RING_VALID
+        | DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_MMIO_SAMPLED;
 /// Generation field offset within each direct-link cursor state.
 pub const DIRECT_GENET_CURSOR_GENERATION_OFFSET: usize = 8;
 /// Monotonic cursor field offset within each direct-link cursor state.
@@ -1534,6 +1577,280 @@ pub enum DirectGenetError {
     StateChanged,
     /// One owner permanently fenced this exact generation.
     Poisoned(DirectGenetPoison),
+}
+
+/// Sequence-last, child-owned direct-GENET diagnostic snapshot.
+///
+/// This record lives in a cache-line-isolated region of the CPU-only control
+/// page. It is refreshed only by the physical owner while processing exact
+/// DGHO replay, or immediately before terminal direct-link fault transfer.
+/// None of its fields authorize packet service, IRQ acknowledgement, retry, or
+/// recovery.
+#[repr(C, align(64))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DirectGenetRuntimeDiagnostic {
+    /// [`DIRECT_GENET_RUNTIME_DIAGNOSTIC_MAGIC`].
+    pub magic: u32,
+    /// [`DIRECT_GENET_RUNTIME_DIAGNOSTIC_VERSION`].
+    pub version: u16,
+    /// Exact [`DIRECT_GENET_RUNTIME_DIAGNOSTIC_BYTES`].
+    pub len: u16,
+    /// Bounded diagnostic state flags.
+    pub flags: u32,
+    /// Reserved; zero.
+    pub reserved0: u32,
+    /// Exact nonzero direct-link generation.
+    pub generation: u64,
+    /// Monotonic owner-local publication sequence.
+    pub publication_sequence: u64,
+    /// Configured GENET IRQ badge.
+    pub irq_badge: u32,
+    /// IRQ notification wakes observed by the runtime.
+    pub irq_wakes: u32,
+    /// Successful seL4 IRQ-handler acknowledgements.
+    pub irq_acks: u32,
+    /// Failed seL4 IRQ-handler acknowledgements.
+    pub irq_ack_failures: u32,
+    /// GENET source-unmask readback failures.
+    pub irq_unmask_failures: u32,
+    /// Bounded GENET DPC turns.
+    pub dpc_turns: u32,
+    /// DPC turns that retained work at the service bound.
+    pub dpc_budget_hits: u32,
+    /// Final unmask/source rechecks before IRQ acknowledgement.
+    pub dpc_final_rechecks: u32,
+    /// Last owned GENET interrupt status observed by an IRQ wake.
+    pub dpc_last_status: u32,
+    /// Current raw owned INTRL2 status bits.
+    pub irq_raw: u32,
+    /// Current owned INTRL2 mask bits.
+    pub irq_mask: u32,
+    /// Current raw-and-unmasked owned INTRL2 status bits.
+    pub irq_active: u32,
+    /// Current hardware RDMA producer index.
+    pub rdma_producer: u16,
+    /// Current hardware RDMA consumer index.
+    pub rdma_consumer: u16,
+    /// Current hardware TDMA producer index.
+    pub tdma_producer: u16,
+    /// Current hardware TDMA consumer index.
+    pub tdma_consumer: u16,
+    /// RX packets committed by the direct-link producer.
+    pub direct_rx_packets: u32,
+    /// TX packets committed by the direct-link consumer.
+    pub direct_tx_packets: u32,
+    /// Console-to-GENET direct notification wakes observed.
+    pub peer_wakes: u32,
+    /// GENET-to-console direct notifications sent.
+    pub peer_signals: u32,
+    /// Stable cursor-sample races observed by the GENET owner.
+    pub state_changes: u32,
+    /// Reserved; zero.
+    pub reserved1: u32,
+    /// RX producer cursor when the RX-ring-valid flag is set.
+    pub rx_producer_cursor: u64,
+    /// RX consumer cursor when the RX-ring-valid flag is set.
+    pub rx_consumer_cursor: u64,
+    /// TX producer cursor when the TX-ring-valid flag is set.
+    pub tx_producer_cursor: u64,
+    /// TX consumer cursor when the TX-ring-valid flag is set.
+    pub tx_consumer_cursor: u64,
+    /// RX-producer poison reason when available, otherwise zero.
+    pub rx_producer_poison: u32,
+    /// RX-consumer poison reason when available, otherwise zero.
+    pub rx_consumer_poison: u32,
+    /// TX-producer poison reason when available, otherwise zero.
+    pub tx_producer_poison: u32,
+    /// TX-consumer poison reason when available, otherwise zero.
+    pub tx_consumer_poison: u32,
+    /// Reserved; zero.
+    pub reserved: [u64; 3],
+    /// Sequence-last commit, equal to [`Self::publication_sequence`].
+    pub committed_sequence: u64,
+}
+
+impl DirectGenetRuntimeDiagnostic {
+    /// Empty, unpublished record.
+    #[must_use]
+    pub const fn empty() -> Self {
+        Self {
+            magic: DIRECT_GENET_RUNTIME_DIAGNOSTIC_MAGIC,
+            version: DIRECT_GENET_RUNTIME_DIAGNOSTIC_VERSION,
+            len: DIRECT_GENET_RUNTIME_DIAGNOSTIC_BYTES as u16,
+            flags: 0,
+            reserved0: 0,
+            generation: 0,
+            publication_sequence: 0,
+            irq_badge: 0,
+            irq_wakes: 0,
+            irq_acks: 0,
+            irq_ack_failures: 0,
+            irq_unmask_failures: 0,
+            dpc_turns: 0,
+            dpc_budget_hits: 0,
+            dpc_final_rechecks: 0,
+            dpc_last_status: 0,
+            irq_raw: 0,
+            irq_mask: 0,
+            irq_active: 0,
+            rdma_producer: 0,
+            rdma_consumer: 0,
+            tdma_producer: 0,
+            tdma_consumer: 0,
+            direct_rx_packets: 0,
+            direct_tx_packets: 0,
+            peer_wakes: 0,
+            peer_signals: 0,
+            state_changes: 0,
+            reserved1: 0,
+            rx_producer_cursor: 0,
+            rx_consumer_cursor: 0,
+            tx_producer_cursor: 0,
+            tx_consumer_cursor: 0,
+            rx_producer_poison: 0,
+            rx_consumer_poison: 0,
+            tx_producer_poison: 0,
+            tx_consumer_poison: 0,
+            reserved: [0; 3],
+            committed_sequence: 0,
+        }
+    }
+
+    /// Whether this record is exact, stable, and bound to `generation`.
+    #[must_use]
+    pub const fn valid_for(self, generation: u64) -> bool {
+        let rx_valid = self.flags & DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_RX_RING_VALID != 0;
+        let tx_valid = self.flags & DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_TX_RING_VALID != 0;
+        let active = self.flags & DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_ACTIVE != 0;
+        let faulted = self.flags & DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_FAULTED != 0;
+        self.magic == DIRECT_GENET_RUNTIME_DIAGNOSTIC_MAGIC
+            && self.version == DIRECT_GENET_RUNTIME_DIAGNOSTIC_VERSION
+            && self.len as usize == DIRECT_GENET_RUNTIME_DIAGNOSTIC_BYTES
+            && self.flags & !DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAGS == 0
+            && self.reserved0 == 0
+            && self.reserved1 == 0
+            && self.reserved[0] == 0
+            && self.reserved[1] == 0
+            && self.reserved[2] == 0
+            && generation != 0
+            && self.generation == generation
+            && self.publication_sequence != 0
+            && self.committed_sequence == self.publication_sequence
+            && !(active && faulted)
+            && self.irq_active == self.irq_raw & !self.irq_mask
+            && (rx_valid || (self.rx_producer_cursor == 0 && self.rx_consumer_cursor == 0))
+            && (tx_valid || (self.tx_producer_cursor == 0 && self.tx_consumer_cursor == 0))
+            && (!rx_valid || (self.rx_producer_poison == 0 && self.rx_consumer_poison == 0))
+            && (!tx_valid || (self.tx_producer_poison == 0 && self.tx_consumer_poison == 0))
+            && self.rx_producer_poison <= DIRECT_GENET_POISON_SEQUENCE_EXHAUSTED
+            && self.rx_consumer_poison <= DIRECT_GENET_POISON_SEQUENCE_EXHAUSTED
+            && self.tx_producer_poison <= DIRECT_GENET_POISON_SEQUENCE_EXHAUSTED
+            && self.tx_consumer_poison <= DIRECT_GENET_POISON_SEQUENCE_EXHAUSTED
+    }
+
+    /// Encode the complete record; callers still publish its commit word last.
+    pub fn encode(&self, output: &mut [u8]) -> Result<(), DirectGenetError> {
+        if output.len() != DIRECT_GENET_RUNTIME_DIAGNOSTIC_BYTES || !self.valid_for(self.generation)
+        {
+            return Err(DirectGenetError::InvalidLayout);
+        }
+        output.fill(0);
+        output[0..4].copy_from_slice(&self.magic.to_le_bytes());
+        output[4..6].copy_from_slice(&self.version.to_le_bytes());
+        output[6..8].copy_from_slice(&self.len.to_le_bytes());
+        output[8..12].copy_from_slice(&self.flags.to_le_bytes());
+        output[12..16].copy_from_slice(&self.reserved0.to_le_bytes());
+        output[16..24].copy_from_slice(&self.generation.to_le_bytes());
+        output[24..32].copy_from_slice(&self.publication_sequence.to_le_bytes());
+        output[32..36].copy_from_slice(&self.irq_badge.to_le_bytes());
+        output[36..40].copy_from_slice(&self.irq_wakes.to_le_bytes());
+        output[40..44].copy_from_slice(&self.irq_acks.to_le_bytes());
+        output[44..48].copy_from_slice(&self.irq_ack_failures.to_le_bytes());
+        output[48..52].copy_from_slice(&self.irq_unmask_failures.to_le_bytes());
+        output[52..56].copy_from_slice(&self.dpc_turns.to_le_bytes());
+        output[56..60].copy_from_slice(&self.dpc_budget_hits.to_le_bytes());
+        output[60..64].copy_from_slice(&self.dpc_final_rechecks.to_le_bytes());
+        output[64..68].copy_from_slice(&self.dpc_last_status.to_le_bytes());
+        output[68..72].copy_from_slice(&self.irq_raw.to_le_bytes());
+        output[72..76].copy_from_slice(&self.irq_mask.to_le_bytes());
+        output[76..80].copy_from_slice(&self.irq_active.to_le_bytes());
+        output[80..82].copy_from_slice(&self.rdma_producer.to_le_bytes());
+        output[82..84].copy_from_slice(&self.rdma_consumer.to_le_bytes());
+        output[84..86].copy_from_slice(&self.tdma_producer.to_le_bytes());
+        output[86..88].copy_from_slice(&self.tdma_consumer.to_le_bytes());
+        output[88..92].copy_from_slice(&self.direct_rx_packets.to_le_bytes());
+        output[92..96].copy_from_slice(&self.direct_tx_packets.to_le_bytes());
+        output[96..100].copy_from_slice(&self.peer_wakes.to_le_bytes());
+        output[100..104].copy_from_slice(&self.peer_signals.to_le_bytes());
+        output[104..108].copy_from_slice(&self.state_changes.to_le_bytes());
+        output[108..112].copy_from_slice(&self.reserved1.to_le_bytes());
+        output[112..120].copy_from_slice(&self.rx_producer_cursor.to_le_bytes());
+        output[120..128].copy_from_slice(&self.rx_consumer_cursor.to_le_bytes());
+        output[128..136].copy_from_slice(&self.tx_producer_cursor.to_le_bytes());
+        output[136..144].copy_from_slice(&self.tx_consumer_cursor.to_le_bytes());
+        output[144..148].copy_from_slice(&self.rx_producer_poison.to_le_bytes());
+        output[148..152].copy_from_slice(&self.rx_consumer_poison.to_le_bytes());
+        output[152..156].copy_from_slice(&self.tx_producer_poison.to_le_bytes());
+        output[156..160].copy_from_slice(&self.tx_consumer_poison.to_le_bytes());
+        encode_u64_array(output, 160, &self.reserved);
+        output[DIRECT_GENET_RUNTIME_DIAGNOSTIC_COMMIT_OFFSET
+            ..DIRECT_GENET_RUNTIME_DIAGNOSTIC_COMMIT_OFFSET + 8]
+            .copy_from_slice(&self.committed_sequence.to_le_bytes());
+        Ok(())
+    }
+
+    /// Decode a previously acquired stable record.
+    pub fn decode(input: &[u8], generation: u64) -> Result<Self, DirectGenetError> {
+        if input.len() != DIRECT_GENET_RUNTIME_DIAGNOSTIC_BYTES {
+            return Err(DirectGenetError::InvalidLayout);
+        }
+        let record = Self {
+            magic: read_u32(input, 0),
+            version: read_u16(input, 4),
+            len: read_u16(input, 6),
+            flags: read_u32(input, 8),
+            reserved0: read_u32(input, 12),
+            generation: read_u64(input, 16),
+            publication_sequence: read_u64(input, 24),
+            irq_badge: read_u32(input, 32),
+            irq_wakes: read_u32(input, 36),
+            irq_acks: read_u32(input, 40),
+            irq_ack_failures: read_u32(input, 44),
+            irq_unmask_failures: read_u32(input, 48),
+            dpc_turns: read_u32(input, 52),
+            dpc_budget_hits: read_u32(input, 56),
+            dpc_final_rechecks: read_u32(input, 60),
+            dpc_last_status: read_u32(input, 64),
+            irq_raw: read_u32(input, 68),
+            irq_mask: read_u32(input, 72),
+            irq_active: read_u32(input, 76),
+            rdma_producer: read_u16(input, 80),
+            rdma_consumer: read_u16(input, 82),
+            tdma_producer: read_u16(input, 84),
+            tdma_consumer: read_u16(input, 86),
+            direct_rx_packets: read_u32(input, 88),
+            direct_tx_packets: read_u32(input, 92),
+            peer_wakes: read_u32(input, 96),
+            peer_signals: read_u32(input, 100),
+            state_changes: read_u32(input, 104),
+            reserved1: read_u32(input, 108),
+            rx_producer_cursor: read_u64(input, 112),
+            rx_consumer_cursor: read_u64(input, 120),
+            tx_producer_cursor: read_u64(input, 128),
+            tx_consumer_cursor: read_u64(input, 136),
+            rx_producer_poison: read_u32(input, 144),
+            rx_consumer_poison: read_u32(input, 148),
+            tx_producer_poison: read_u32(input, 152),
+            tx_consumer_poison: read_u32(input, 156),
+            reserved: decode_u64_array(input, 160),
+            committed_sequence: read_u64(input, DIRECT_GENET_RUNTIME_DIAGNOSTIC_COMMIT_OFFSET),
+        };
+        if record.valid_for(generation) {
+            Ok(record)
+        } else {
+            Err(DirectGenetError::InvalidLayout)
+        }
+    }
 }
 
 /// Immutable, sealed header at the front of the direct-link control page.
@@ -3810,6 +4127,9 @@ const _: () = assert!(size_of::<DirectGenetControlHeader>() == DIRECT_GENET_CONT
 const _: () = assert!(size_of::<DirectGenetCursorState>() == DIRECT_GENET_CURSOR_STATE_BYTES);
 const _: () = assert!(align_of::<DirectGenetCursorState>() == DIRECT_GENET_CURSOR_STATE_BYTES);
 const _: () = assert!(size_of::<DirectGenetSlotHeader>() == DIRECT_GENET_SLOT_HEADER_BYTES);
+const _: () =
+    assert!(size_of::<DirectGenetRuntimeDiagnostic>() == DIRECT_GENET_RUNTIME_DIAGNOSTIC_BYTES);
+const _: () = assert!(align_of::<DirectGenetRuntimeDiagnostic>() == 64);
 const _: () = assert!(
     DIRECT_GENET_LAYOUT_OFFSET + DIRECT_GENET_LAYOUT_BYTES <= SHARED_PAGE_BYTES
         && DIRECT_VIRTIO_LAYOUT_OFFSET + DIRECT_VIRTIO_LAYOUT_BYTES <= DIRECT_GENET_LAYOUT_OFFSET
@@ -3822,7 +4142,14 @@ const _: () = assert!(
             == DIRECT_GENET_SHARED_PAGE_COUNT
 );
 const _: () = assert!(
-    DIRECT_GENET_TX_CONSUMER_STATE_OFFSET + DIRECT_GENET_CURSOR_STATE_BYTES <= SHARED_PAGE_BYTES
+    DIRECT_GENET_TX_CONSUMER_STATE_OFFSET + DIRECT_GENET_CURSOR_STATE_BYTES
+        == DIRECT_GENET_RUNTIME_DIAGNOSTIC_OFFSET
+        && DIRECT_GENET_RUNTIME_DIAGNOSTIC_OFFSET + DIRECT_GENET_RUNTIME_DIAGNOSTIC_BYTES
+            <= SHARED_PAGE_BYTES
+);
+const _: () = assert!(
+    core::mem::offset_of!(DirectGenetRuntimeDiagnostic, committed_sequence)
+        == DIRECT_GENET_RUNTIME_DIAGNOSTIC_COMMIT_OFFSET
 );
 const _: () = assert!(
     core::mem::offset_of!(DirectGenetSlotHeader, committed_sequence)
@@ -4536,6 +4863,63 @@ mod tests {
             Err(AbiError::InvalidLayout)
         );
         assert_eq!(layout.validate_for(8), Err(AbiError::StaleGeneration));
+    }
+
+    #[test]
+    fn direct_genet_runtime_diagnostic_is_sequence_last_and_generation_exact() {
+        let mut diagnostic = DirectGenetRuntimeDiagnostic::empty();
+        diagnostic.flags = DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_INITIALIZED
+            | DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_ACTIVE
+            | DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_RX_RING_VALID
+            | DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_TX_RING_VALID
+            | DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_MMIO_SAMPLED;
+        diagnostic.generation = 7;
+        diagnostic.publication_sequence = 3;
+        diagnostic.irq_badge = 1 << 10;
+        diagnostic.irq_wakes = 2;
+        diagnostic.irq_acks = 3;
+        diagnostic.dpc_turns = 4;
+        diagnostic.irq_raw = 0x0001_2000;
+        diagnostic.irq_mask = 0x0001_0000;
+        diagnostic.irq_active = 0x0000_2000;
+        diagnostic.rdma_producer = 11;
+        diagnostic.rdma_consumer = 9;
+        diagnostic.direct_rx_packets = 8;
+        diagnostic.direct_tx_packets = 6;
+        diagnostic.peer_wakes = 5;
+        diagnostic.peer_signals = 4;
+        diagnostic.rx_producer_cursor = 8;
+        diagnostic.rx_consumer_cursor = 7;
+        diagnostic.tx_producer_cursor = 6;
+        diagnostic.tx_consumer_cursor = 6;
+        diagnostic.committed_sequence = 3;
+        assert!(diagnostic.valid_for(7));
+
+        let mut encoded = [0u8; DIRECT_GENET_RUNTIME_DIAGNOSTIC_BYTES];
+        diagnostic.encode(&mut encoded).unwrap();
+        assert_eq!(
+            DirectGenetRuntimeDiagnostic::decode(&encoded, 7),
+            Ok(diagnostic)
+        );
+        assert_eq!(
+            DirectGenetRuntimeDiagnostic::decode(&encoded, 8),
+            Err(DirectGenetError::InvalidLayout)
+        );
+
+        let exact = encoded;
+        encoded[DIRECT_GENET_RUNTIME_DIAGNOSTIC_COMMIT_OFFSET
+            ..DIRECT_GENET_RUNTIME_DIAGNOSTIC_COMMIT_OFFSET + 8]
+            .copy_from_slice(&0u64.to_le_bytes());
+        assert_eq!(
+            DirectGenetRuntimeDiagnostic::decode(&encoded, 7),
+            Err(DirectGenetError::InvalidLayout)
+        );
+        encoded = exact;
+        encoded[8..12].copy_from_slice(&(1u32 << 31).to_le_bytes());
+        assert_eq!(
+            DirectGenetRuntimeDiagnostic::decode(&encoded, 7),
+            Err(DirectGenetError::InvalidLayout)
+        );
     }
 
     #[test]

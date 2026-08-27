@@ -971,6 +971,20 @@ Containment suspends GENET, removes both reciprocal notification caps, and
 removes all 32 external console mapping caps before anchor revoke.
 Root-mediated packet service never reopens as a fallback.
 
+When a direct boot reaches READY but packet progress stops, run one `netstats`
+before further active network commands and retain its ten ordered
+`genet_direct*` rows. That command takes a stable pre-replay sample, issues one
+exact generation-bound idempotent `DGHO`, and samples the replacement diagnostic
+before normal post-command idle service. Compare IRQ wake/ack and raw/mask/
+active source state, DPC turns, RDMA/TDMA indices, direct RX/TX cursors and
+packet counts, peer hints, and poison state. A new RX or cursor delta after the
+replay distinguishes a missed ordinary wake from a permanently idle hardware
+producer, but the command is a causal probe: waking GENET may itself let the
+existing idle path drain durable RX. Do not describe it as passive latency or
+throughput measurement, repeat it as a poller, or treat its rows as packet or
+acceptance proof. Follow it with independent host ARP, ICMP, raw TCP,
+authenticated `cohsh`, and capture evidence.
+
 The selected direct-GENET console image has a 65-page PT_LOAD footprint and a
 service inventory of 103 frames and 160 retained root CSpace slots. The 32
 direct pages are reused GENET-owned external frames, so they add mapping-cap
@@ -1010,6 +1024,19 @@ capture.
 Implementation mechanics and reusable ownership invariants belong in
 [Developing Cohesix Drivers](DRIVERS.md). This section owns only the physical
 operator and evidence workflow.
+
+The exact e046 convergence boot is a current failure oracle, not an accepted
+WiFi sample. Source `e046a7eb470ae0dee9601749508e4248cce51c80`, image ID
+`33cc8a0e21de62a7738587b83b695daea41884b169f16c12dad8f23f39b82fcc`, and
+image SHA-256
+`d650bbc29ff6bf28bea468d788c5a2cfcd3be8242173a91ac07f1f94c9ff5e4c`
+complete cold SDIO/CYW43, firmware, association, EAPOL, Gate 8, DORA, and a Pi
+ARP in the boot-paired capture, but emit no deferred console-network handoff and
+quarantine at `service-readiness-deadline`. For the next exact-image test, the
+first downstream question is therefore whether DHCP/address truth selects one
+exclusive `ConsoleHandoff` turn, the child later publishes Ready, and port 31337
+becomes reachable before assessing TCP performance. The August 10 accepted
+boots remain compatibility comparators only.
 
 #### Acceptance contract
 

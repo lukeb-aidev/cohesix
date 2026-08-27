@@ -303,6 +303,19 @@ private uncached DMA4 bounce region under the existing bounded command turn.
 The owners, retry ceilings, pair-restart sequencing, and device/aggregate
 deadlines remain unchanged.
 
+Retained exact-grant admission for the CYW43/SDIO pair may collapse at most
+three hardware-free bookkeeping states within one already admitted child turn.
+The bound covers source arbitration, one stable grant read, and only after an
+`Empty` result one condition-before-sleep recheck. A persistent-source
+`Service` decision stops before grant access; `Inactive` fails closed without a
+recheck; `Ready` revalidates and acknowledges the immutable grant before
+authorizing exactly one existing bounded physical quantum. ACK failure restores
+the pre-grant gate and performs no device I/O. This removes unnecessary
+`CheckWake`/`CheckGrant` scheduler edges; it does not compose physical actions,
+repeat a grant, consume a second owner quantum, move a postphysical boundary,
+or alter an SC budget, period, deadline, refill, priority, core, owner, retry,
+or Reply/fault contract.
+
 GENET remains on core 3 with its selected `1,000 us / 10,000 us` active SC and
 terminal timeout policy. The Pi-only IRQ 189/badge 1024 default-queue DPC may
 drain at most 16 frames and 24,576 bytes into its private queue per quantum;

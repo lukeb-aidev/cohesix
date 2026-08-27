@@ -855,6 +855,87 @@ def test_parse_events_filters_unrelated_lines() -> None:
     assert events[2].fields["tag"] == "reset-write"
 
 
+def test_direct_genet_netstats_rows_are_preserved_as_driver_diagnostics() -> None:
+    rows = [
+        "netstats: genet_direct refresh=fresh snapshot=present "
+        "phase=pre-idle-service generation=7 sequence=42",
+        "netstats: genet_direct_flags flags=0x000001c3 initialized=yes "
+        "active=yes faulted=no irq_pending=no rx_pending=no tx_pending=no",
+        "netstats: genet_direct_before sequence=41 irq_wakes=8 irq_acks=8 "
+        "raw=0x00000000 mask=0xffffffff active=0x00000000 rdma=5/5 tdma=3/3",
+        "netstats: genet_direct_before_ring rx_cursor=12/12 tx_cursor=9/9 "
+        "rx_packets=12 tx_packets=9 peer_wakes=4 peer_signals=6",
+        "netstats: genet_direct_irq badge=0x00000400 wakes=9 acks=9 "
+        "ack_failures=0 unmask_failures=0",
+        "netstats: genet_direct_irq_source raw=0x00000000 mask=0xffffffff "
+        "active=0x00000000 last=0x00000000",
+        "netstats: genet_direct_dpc turns=9 budget_hits=0 final_rechecks=9",
+        "netstats: genet_direct_dma rdma_prod=5 rdma_cons=5 tdma_prod=3 "
+        "tdma_cons=3 rx_packets=12 tx_packets=9",
+        "netstats: genet_direct_ring rx_prod=12 rx_cons=12 tx_prod=9 "
+        "tx_cons=9 rx_valid=yes tx_valid=yes state_changes=0",
+        "netstats: genet_direct_peer wakes=4 signals=6 poison_rx=0/0 "
+        "poison_tx=0/0",
+    ]
+
+    events = normalizer.parse_events(rows)
+
+    assert [event.raw for event in events] == rows
+    assert all(event.domain == "driver" for event in events)
+    assert all(event.source == "cohesix" for event in events)
+    assert events[0].fields == {
+        "refresh": "fresh",
+        "snapshot": "present",
+        "phase": "pre-idle-service",
+        "generation": "7",
+        "sequence": "42",
+    }
+    assert events[1].fields["active"] == "yes"
+    assert events[-1].fields["poison_tx"] == "0/0"
+
+
+def test_direct_genet_rows_have_no_network_or_acceptance_authority() -> None:
+    legacy_rows = [
+        "netstats: generation=7 mode=dhcp policy=wired active=wired "
+        "standby=none addr_src=dhcp-lease ip=192.168.10.50 "
+        "gateway=192.168.10.1 dhcp=bound",
+    ]
+    incomplete_rows = [
+        "netstats: genet_direct refresh=fresh snapshot=present "
+        "phase=pre-idle-service generation=7 sequence=42",
+        "netstats: genet_direct_flags flags=0x000001c3 active=yes [truncated]",
+        "netstats: genet_direct_before sequence=41 irq_wakes=8",
+    ]
+    legacy = normalizer.summarize_gates(
+        normalizer.parse_events(legacy_rows)
+    ).to_record()
+    augmented_events = normalizer.parse_events([*legacy_rows, *incomplete_rows])
+    augmented = normalizer.summarize_gates(augmented_events).to_record()
+
+    assert [event.domain for event in augmented_events[-3:]] == [
+        "driver",
+        "driver",
+        "driver",
+    ]
+    for key in (
+        "NET_ACTIVE",
+        "NET_ADDR_SRC",
+        "NET_DHCP",
+        "NET_TCP_READY",
+        "NETTEST_PROOF",
+        "COHSH_TCP_AUTH_PROOF",
+        "WIFI_GATE",
+        "WIFI_BLOCKER",
+    ):
+        assert augmented[key] == legacy[key]
+    assert augmented["NET_ACTIVE"] == "wired"
+    assert augmented["NET_TCP_READY"] == "no"
+    assert augmented["NETTEST_PROOF"] == "no"
+    assert normalizer.boot_evidence_blockers(augmented) == (
+        normalizer.boot_evidence_blockers(legacy)
+    )
+
+
 def test_compact_cyw43_bus_episode_is_anchored_and_passive() -> None:
     line = (
         "CYW43_BUS_EPISODE p=ffffffff e=ffffffff lg=ffffffff pe=ffffffff "

@@ -1559,9 +1559,30 @@ pub trait NetPoller {
         None
     }
 
+    /// Run one bounded direct-GENET causal probe and acquire its snapshots.
+    ///
+    /// Only the Pi wired stack overrides this hook. The refresh is an exact
+    /// generation-bound DGHO replay and never creates a recurring polling
+    /// path. Waking the owner may permit its ordinary post-command idle service,
+    /// so callers retain both the preceding and pre-idle-service publications.
+    fn refresh_direct_genet_diagnostics(&mut self) -> Option<DirectGenetDiagnostics> {
+        None
+    }
+
     /// Return the active network policy and address state for diagnostics.
     fn status_report(&self) -> NetStatusReport {
         NetStatusReport::default()
+    }
+
+    /// Return whether DHCP truth has made a deferred console child eligible
+    /// for its exclusive root-control handoff turn.
+    ///
+    /// This predicate is side-effect free. The caller must schedule
+    /// [`Self::service_deferred_console_network_handoff`] on a later turn so
+    /// ordinary network polling cannot share HAL authority with the fixed
+    /// descriptor/map/register/resume sequence.
+    fn deferred_console_network_handoff_pending(&self) -> bool {
+        false
     }
 
     /// Finalize and resume a pre-registered console child after address truth.
@@ -1693,6 +1714,20 @@ pub struct IsolatedConsoleDiagnostics {
     pub ingress_backpressure: u64,
     /// Child-ingress publications rejected after ownership was established.
     pub ingress_dropped: u64,
+}
+
+/// Outcome and optional stable record from one direct-GENET diagnostic replay.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DirectGenetDiagnostics {
+    /// Exact prompt-side publication outcome (`fresh`, `ready-stale`,
+    /// `ready-unverified`, `ready-missing`, `timeout`, `rejected`, or
+    /// `inactive`).
+    pub refresh: &'static str,
+    /// Stable record visible before the on-demand DGHO replay.
+    pub previous: Option<console_network_abi::DirectGenetRuntimeDiagnostic>,
+    /// Stable pre-idle-service record published by an exact successful replay,
+    /// or the most recent exact record when the replay did not complete.
+    pub snapshot: Option<console_network_abi::DirectGenetRuntimeDiagnostic>,
 }
 
 #[cfg(any(

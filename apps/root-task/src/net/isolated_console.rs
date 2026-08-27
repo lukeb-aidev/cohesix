@@ -757,6 +757,14 @@ impl<D: NetDevice> IsolatedNetworkConsole<D> {
         self.runtime.generation()
     }
 
+    /// Acquire the most recent exact child-owned direct-GENET snapshot.
+    #[must_use]
+    pub fn direct_genet_runtime_diagnostic(
+        &self,
+    ) -> Option<console_network_abi::DirectGenetRuntimeDiagnostic> {
+        self.runtime.direct_genet_runtime_diagnostic()
+    }
+
     /// Ethernet address owned by the admitted virtual NIC.
     #[must_use]
     pub const fn hardware_address(&self) -> EthernetAddress {

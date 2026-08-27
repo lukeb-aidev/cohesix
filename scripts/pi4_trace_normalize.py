@@ -2439,6 +2439,8 @@ def classify_domain(line: str) -> str | None:
         return "usb"
     if "[pi4-platform]" in lower:
         return "usb"
+    if lower.startswith("netstats: genet_direct"):
+        return "driver"
     if (
         line.startswith("wifi:")
         or line.startswith("WiFi:")

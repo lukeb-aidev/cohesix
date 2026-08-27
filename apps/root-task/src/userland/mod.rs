@@ -758,6 +758,7 @@ const fn deferred_cyw43_driver_turns_per_operator(pair_restart_active: bool) -> 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum DeferredCyw43AttachedTurn {
     NetworkControl,
+    ConsoleHandoff,
     CanonicalWait,
     RecoverySupervisor,
 }
@@ -770,8 +771,15 @@ enum DeferredCyw43AttachedTurn {
 const fn deferred_cyw43_attached_turn(
     recovery_required: bool,
     canonical_parent: crate::drivers::driver_task_net::Cyw43CanonicalParentCut,
+    console_handoff_pending: bool,
 ) -> DeferredCyw43AttachedTurn {
-    if !recovery_required || canonical_parent.runnable() {
+    if !recovery_required {
+        if console_handoff_pending {
+            return DeferredCyw43AttachedTurn::ConsoleHandoff;
+        }
+        return DeferredCyw43AttachedTurn::NetworkControl;
+    }
+    if canonical_parent.runnable() {
         return DeferredCyw43AttachedTurn::NetworkControl;
     }
     if canonical_parent.waiting() {
@@ -2284,7 +2292,11 @@ where
         if network_attached && (bootstrap.is_ready() || canonical_parent.retains_canonical_owner())
         {
             'attached_network_control: {
-                match deferred_cyw43_attached_turn(recovery_required, canonical_parent) {
+                match deferred_cyw43_attached_turn(
+                    recovery_required,
+                    canonical_parent,
+                    pump.deferred_console_network_handoff_pending(),
+                ) {
                     DeferredCyw43AttachedTurn::NetworkControl => {
                         run_deferred_cyw43_attached_network_control_turn(
                             || pump.poll(),
@@ -2297,6 +2309,22 @@ where
                         // connection generation. Commit only that post-poll
                         // generation; the bootstrap generation names the
                         // independently retained firmware/control pair.
+                    }
+                    DeferredCyw43AttachedTurn::ConsoleHandoff => {
+                        // DHCP became bound on an earlier NetworkControl turn.
+                        // Finalize and resume the pre-registered child now,
+                        // without sharing this HAL-authority turn with CYW43
+                        // polling. A transition error leaves the stack in its
+                        // existing failed state; there is no root-owned TCP
+                        // fallback. A later NetworkControl turn alone may
+                        // consume the isolated child's Ready event.
+                        let Some(_handoff_completed) = with_deferred_root_hal(hal_ptr, |hal| {
+                            pump.service_deferred_console_network_handoff(hal)
+                        }) else {
+                            run_root_console_pump(pump);
+                        };
+                        sel4::yield_now();
+                        continue 'supervisor;
                     }
                     DeferredCyw43AttachedTurn::CanonicalWait
                     | DeferredCyw43AttachedTurn::RecoverySupervisor => {
@@ -4451,6 +4479,7 @@ mod tests {
             super::deferred_cyw43_attached_turn(
                 false,
                 crate::drivers::driver_task_net::Cyw43CanonicalParentCut::Absent,
+                false,
             ),
             super::DeferredCyw43AttachedTurn::NetworkControl,
         );
@@ -4458,6 +4487,7 @@ mod tests {
             super::deferred_cyw43_attached_turn(
                 true,
                 crate::drivers::driver_task_net::Cyw43CanonicalParentCut::Absent,
+                false,
             ),
             super::DeferredCyw43AttachedTurn::RecoverySupervisor,
         );
@@ -4468,6 +4498,7 @@ mod tests {
                     generation: 7,
                     request: 64,
                 },
+                false,
             ),
             super::DeferredCyw43AttachedTurn::NetworkControl,
             "a committed exact terminal keeps its canonical policy turn",
@@ -4563,11 +4594,57 @@ mod tests {
         feature = "net-console"
     ))]
     #[test]
+    fn attached_console_handoff_gets_one_exclusive_turn_after_dhcp() {
+        use crate::drivers::driver_task_net::Cyw43CanonicalParentCut;
+
+        assert_eq!(
+            super::deferred_cyw43_attached_turn(false, Cyw43CanonicalParentCut::Absent, true,),
+            super::DeferredCyw43AttachedTurn::ConsoleHandoff,
+            "complete DHCP truth must schedule the deferred child handoff",
+        );
+        assert_eq!(
+            super::deferred_cyw43_attached_turn(true, Cyw43CanonicalParentCut::Absent, true,),
+            super::DeferredCyw43AttachedTurn::RecoverySupervisor,
+            "a transport edge must pre-empt a pending handoff",
+        );
+        assert_eq!(
+            super::deferred_cyw43_attached_turn(
+                true,
+                Cyw43CanonicalParentCut::Waiting {
+                    generation: 7,
+                    request: 64,
+                },
+                true,
+            ),
+            super::DeferredCyw43AttachedTurn::CanonicalWait,
+            "a retained canonical operation must finish before handoff",
+        );
+        assert_eq!(
+            super::deferred_cyw43_attached_turn(
+                true,
+                Cyw43CanonicalParentCut::Runnable {
+                    generation: 7,
+                    request: 64,
+                },
+                true,
+            ),
+            super::DeferredCyw43AttachedTurn::NetworkControl,
+            "a runnable canonical operation keeps its exact network turn",
+        );
+    }
+
+    #[cfg(all(
+        feature = "serial-console",
+        feature = "kernel",
+        feature = "net-console"
+    ))]
+    #[test]
     fn attached_recovery_scheduler_is_network_then_operator_then_driver() {
         assert_eq!(
             super::deferred_cyw43_attached_turn(
                 false,
                 crate::drivers::driver_task_net::Cyw43CanonicalParentCut::Absent,
+                false,
             ),
             super::DeferredCyw43AttachedTurn::NetworkControl,
         );
@@ -4575,6 +4652,7 @@ mod tests {
             super::deferred_cyw43_attached_turn(
                 true,
                 crate::drivers::driver_task_net::Cyw43CanonicalParentCut::Absent,
+                false,
             ),
             super::DeferredCyw43AttachedTurn::RecoverySupervisor,
             "typed recovery leaves both hardware lanes to the common phase alternator",
@@ -4586,6 +4664,7 @@ mod tests {
                     generation: 7,
                     request: 64,
                 },
+                false,
             ),
             super::DeferredCyw43AttachedTurn::CanonicalWait,
             "an exact waiting parent rotates through operator/recheck only",

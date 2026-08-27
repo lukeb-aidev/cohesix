@@ -75,6 +75,44 @@ fn wired_console_child_registers_before_seal_and_hands_off_only_after_dhcp() {
 }
 
 #[test]
+fn wifi_console_handoff_owns_one_exclusive_attached_supervisor_turn() {
+    let source = include_str!("../src/userland/mod.rs");
+    let supervisor_start = source
+        .find("fn enter_root_console_loop_with_deferred_net_supervisor<")
+        .expect("deferred Wi-Fi supervisor must exist");
+    let supervisor_end = source[supervisor_start..]
+        .find("/// Start the userland console")
+        .map(|offset| supervisor_start + offset)
+        .expect("deferred Wi-Fi supervisor must have a bounded source region");
+    let supervisor = &source[supervisor_start..supervisor_end];
+
+    assert!(supervisor.contains("pump.deferred_console_network_handoff_pending()"));
+    let handoff_start = supervisor
+        .find("DeferredCyw43AttachedTurn::ConsoleHandoff => {")
+        .expect("DHCP-bound Wi-Fi must select an explicit handoff action");
+    let handoff_end = supervisor[handoff_start..]
+        .find("DeferredCyw43AttachedTurn::CanonicalWait")
+        .map(|offset| handoff_start + offset)
+        .expect("handoff action must end before canonical recovery routing");
+    let handoff = &supervisor[handoff_start..handoff_end];
+    let service = handoff
+        .find("pump.service_deferred_console_network_handoff(hal)")
+        .expect("handoff action must invoke the fixed child transition");
+    let yield_now = handoff[service..]
+        .find("sel4::yield_now();")
+        .map(|offset| service + offset)
+        .expect("handoff action must yield after releasing HAL authority");
+    let next_turn = handoff[yield_now..]
+        .find("continue 'supervisor;")
+        .map(|offset| yield_now + offset)
+        .expect("child Ready must be consumed on a later supervisor turn");
+
+    assert!(service < yield_now && yield_now < next_turn);
+    assert_eq!(handoff.matches("pump.poll()").count(), 0);
+    assert_eq!(handoff.matches("bootstrap.service_turn(hal)").count(), 0);
+}
+
+#[test]
 fn boot_logs_compiler_sized_registry_without_a_literal_source_count() {
     let source = include_str!("../src/kernel.rs");
     assert!(source.contains("worker_resource_admission_config()"));

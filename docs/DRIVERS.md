@@ -937,6 +937,25 @@ reusable ownership pattern.
   actionable; queued RX cannot create a self-poll while smoltcp ingress is
   occupied. These bounds preserve the existing MCS budgets and require fresh
   Pi WCET and throughput evidence.
+- Direct-link control page 0 reserves bytes `[0,64)` for its immutable header
+  and `[64,320)` for the four 64-byte SPSC cursor records. The optional
+  direct-GENET diagnostic-v1 record occupies the formerly reserved bytes
+  `[320,512)`, is exactly 192 bytes and cache-line aligned, and commits its
+  publication sequence last at record offset 184. GENET is its sole writer;
+  root accepts it only through a stable double-read with exact nonzero direct
+  generation, magic, version, length, flags, reserved zeros, cursor validity,
+  and matching sequence/commit. Missing, torn, stale, wrong-generation, or
+  malformed data is unavailable diagnostic evidence, not a reason to change
+  packet, IRQ, retry, recovery, or containment behavior. Ordinary packet turns
+  do not scan the record, and page bytes `[512,4096)` remain reserved, zeroed at
+  construction, and scrubbed at containment.
+- One operator diagnostic may request one idempotent, exact-generation `DGHO`
+  replay so the sole GENET owner publishes that record. Retain both the stable
+  pre-replay snapshot and the replacement sampled before normal post-command
+  idle service. This is a bounded causal probe, not a passive read: waking the
+  owner can permit the existing idle path to drain durable RX. It cannot recur,
+  admit a packet, acknowledge an IRQ, retry a command, recover a peer, create a
+  poller, or satisfy traffic, latency, throughput, or acceptance evidence.
 - Bound RX admission, TX submission, completion reclaim, and queue depth per
   turn.
 - Preserve packet order unless a documented priority policy explicitly
@@ -962,6 +981,21 @@ transport:
   and consumer receipt are distinct states.
 - IRQ/DPC work is condition-driven and bounded. Empty polling must not become
   the transport clock.
+- Retained CYW43/SDIO exact-grant admission may fuse no more than three pure
+  local bookkeeping states before one existing physical-owner quantum. Source
+  arbitration runs first. `Service` is a hard stop before a grant read;
+  otherwise exactly one stable grant read is allowed. `Empty` alone permits one
+  condition-before-sleep recheck, `Inactive` fails closed with no recheck, and
+  `Ready` must revalidate and acknowledge the exact immutable grant before
+  returning authority for one bounded physical quantum. A failed ACK restores
+  the complete pre-grant gate, including coalesced wake state, and performs zero
+  device I/O. The fused helper performs no device operation itself. It removes
+  scheduler edges between `CheckWake`, `CheckGrant`, and the final local
+  admission decision only; every existing physical-operation and postphysical
+  boundary, one-grant/one-operation cardinality, owner, deadline, retry,
+  fault/Reply rule, and MCS numeric remains unchanged. Other drivers and
+  unsupported routes retain their prior path and cannot fall back into this
+  lane.
 - SDIO containment and `HOST_CONFIG` may batch finite deterministic
   sole-owner register/state transitions inside one admitted turn. Containment
   is capped at 24 transitions; host configuration is capped at 18. Controller,
@@ -1028,6 +1062,16 @@ root parent publication
 
 Stop at the first missing durable transition. Later counters or notifications
 cannot prove an earlier handoff.
+
+After the current CYW43 generation has committed Gate 8 and the legacy network
+stack has exact DHCP/address/prefix truth, that truth exposes only a
+side-effect-free deferred-console predicate. The bootstrap supervisor must then
+select one exclusive `ConsoleHandoff` root-control turn: it performs no CYW43
+poll, borrows HAL only to finalize and resume the already registered
+console-network child, and yields before a later Network turn consumes child
+Ready. Recovery or a runnable/waiting canonical parent keeps priority over this
+handoff. A handoff failure stays failed, with no root TCP fallback or deadline
+renewal. Gate 8 and DHCP alone therefore do not prove listener readiness.
 
 ## 8. Build diagnostics for developers, not incidents
 

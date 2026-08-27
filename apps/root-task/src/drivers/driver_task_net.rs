@@ -26241,6 +26241,34 @@ const GENET_DIRECT_HANDOFF_PENDING: u64 = 1_u64 << 33;
 #[cfg(feature = "kernel")]
 const GENET_DIRECT_HANDOFF_QUIESCING: u64 = 1_u64 << 34;
 
+/// Outcome of one operator-requested, exact DGHO diagnostic replay.
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GenetDirectDiagnosticRefresh {
+    /// The GENET owner returned exact READY for the active generation.
+    Ready,
+    /// The bounded prompt slice ended before an exact completion arrived.
+    Timeout,
+    /// A terminal completion failed the exact READY identity predicate.
+    Rejected,
+    /// No unfenced active direct-link generation admits the request.
+    Inactive,
+}
+
+#[cfg(feature = "kernel")]
+impl GenetDirectDiagnosticRefresh {
+    /// Stable field value for `netstats`.
+    #[must_use]
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Ready => "ready",
+            Self::Timeout => "timeout",
+            Self::Rejected => "rejected",
+            Self::Inactive => "inactive",
+        }
+    }
+}
+
 #[cfg(feature = "kernel")]
 const fn genet_legacy_steady_service_allowed(link_state: u64) -> bool {
     if link_state == 0 {
@@ -27856,6 +27884,57 @@ pub(crate) fn service_genet_direct_link_handoff(generation: u64) -> DriverTaskRe
         }
         DriverTaskRetainedServiceTurn::Pending => DriverTaskRetainedServiceTurn::Pending,
         DriverTaskRetainedServiceTurn::Failed => DriverTaskRetainedServiceTurn::Failed,
+    }
+}
+
+/// Run one on-demand direct-GENET causal probe through exact DGHO replay.
+///
+/// The DGHO handler publishes its snapshot before completing and does not poll
+/// the NIC, acknowledge an IRQ, or advance a cursor. Waking the owner may then
+/// permit its ordinary post-command pre-wait service to drain already-durable
+/// work. The caller therefore acquires a prior snapshot separately and treats
+/// this publication as `pre-idle-service`; no recurring polling path is added.
+#[cfg(feature = "kernel")]
+pub(crate) fn refresh_genet_direct_diagnostic(generation: u64) -> GenetDirectDiagnosticRefresh {
+    if generation == 0 {
+        return GenetDirectDiagnosticRefresh::Inactive;
+    }
+    let token = pi4_driver_abi::driver_runtime_direct_genet_handoff_token(generation);
+    if token == 0 || GENET_DIRECT_LINK_STATE.load(Ordering::Acquire) != u64::from(token) {
+        return GenetDirectDiagnosticRefresh::Inactive;
+    }
+    let mut command = DriverTaskCommandRecord::pi4_hot_path(
+        0,
+        DriverTaskHotPath::GenetNic,
+        DriverTaskBudgetGrant::from_contract(GENET_DRIVER_TASK_CONTRACT),
+        DriverFrameDescriptor {
+            offset: 0,
+            len: 0,
+            flags: 0,
+        },
+    );
+    command.aux0 = pi4_driver_abi::DRIVER_RUNTIME_DIRECT_GENET_HANDOFF_AUX;
+    command.aux1 = token;
+    let Some(completion) = crate::hal::driver_task::run_driver_task_ring_service_prompt_slice(
+        GENET_DRIVER_TASK_CONTRACT,
+        command,
+    ) else {
+        return GenetDirectDiagnosticRefresh::Timeout;
+    };
+    if pi4_driver_abi::driver_runtime_direct_genet_handoff_completion_exact(
+        completion.sequence,
+        completion.sequence,
+        completion.code,
+        completion.detail,
+        completion.result,
+        completion.frame.offset,
+        completion.frame.len,
+        completion.frame.flags,
+        generation,
+    ) {
+        GenetDirectDiagnosticRefresh::Ready
+    } else {
+        GenetDirectDiagnosticRefresh::Rejected
     }
 }
 

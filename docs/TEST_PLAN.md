@@ -1273,6 +1273,24 @@ preserve those upper-path invariants, but this historical pass cannot satisfy a
 current-image gate and cannot authorize timing-dependent loops,
 same-generation replay, root-owned SDIO, or a legacy fallback.
 
+The current non-claiming regression input is exact source
+`e046a7eb470ae0dee9601749508e4248cce51c80`, image ID
+`33cc8a0e21de62a7738587b83b695daea41884b169f16c12dad8f23f39b82fcc`, and
+image SHA-256
+`d650bbc29ff6bf28bea468d788c5a2cfcd3be8242173a91ac07f1f94c9ff5e4c`.
+Its WiFi boot starts at line 23805 of
+`/Users/lukasbower/pi4-serial-20260822-134045-cont.log` and is paired with
+`/Users/lukasbower/tcpdump-wifi-20260828-072409.pcap`; the later authenticated
+GENET reboot is retained separately in
+`/Users/lukasbower/pi4-serial-20260828-e046-genet-G02-pyserial.log` and
+`/Users/lukasbower/tcpdump-usb-eth-20260828-072409.pcap`. The WiFi boot reaches
+Gate 8, DORA, and the following Pi ARP, then misses the deferred console-child
+handoff and quarantines at `service-readiness-deadline`. It is regression
+evidence for the handoff and cadence tests below, not current TCP, performance,
+repeatability, or acceptance proof. The accepted August 10 evidence remains the
+upper-path compatibility and performance comparator; it cannot substitute for
+a fresh boot of the repaired exact image.
+
 The CYW43 software and cadence closure gate is authorized by Milestone 26d
 tasks `m26d-cyw43-hardware-free-closure` and
 `m26d-benchmark-revalidation-and-tuning`, with active defect authority from
@@ -1352,6 +1370,17 @@ prove all of the following:
   test commands, while supervisor Ready does both. Later restored service uses
   `CYW43_RUNTIME_RECOVERY status=ready generation=<n> ...` and can neither
   replace nor duplicate bootstrap Ready.
+- Exact DHCP/address/prefix truth must expose a side-effect-free deferred-child
+  handoff predicate. Before service-readiness evaluation can declare success or
+  timeout, the supervisor must select one exclusive `ConsoleHandoff` turn that
+  performs no CYW43 poll, borrows HAL only to finalize and resume the already
+  registered child, and yields. A later Network turn alone may consume child
+  Ready. Recovery and runnable/waiting canonical-parent work retain precedence;
+  quarantine rejects the predicate; and a handoff failure enters the existing
+  failed state with no root TCP fallback, deadline renewal, extra retry, or
+  mixed network/HAL work. Regression coverage must reproduce Gate 8 plus bound
+  DHCP while the child is deferred and prove the handoff is selected before the
+  unchanged `service-readiness-deadline` can quarantine it.
 - Transport attachment publishes `stabilizing`. Initial Gate 8 publication in
   the sole `attempt=1` outer boot episode uses one absolute
   `now + 90,000 ms` deadline. Gate 8 is passive: a logical subgate failure
@@ -2169,9 +2198,12 @@ old parent to resume.
 Backplane-attach coverage must drive the production retained cursor through
 ALP request, every ALP read, FORCE_ALP, the 65-microsecond settle, the Pi
 pull-up clear, LOW/MID/HIGH window programming, the first ChipCommon read, and
-completion. Each child submission, completion-poll turn, explicit later grant
-turn, exact-grant owner quantum, retained deadline observation, and pull-up-clear
-operation must consume its own outer EventPump turn.
+completion. Each child submission, completion-poll physical quantum,
+exact-grant owner physical quantum, retained deadline observation, and
+pull-up-clear operation must retain its existing one-physical-quantum and
+postphysical boundary. The `CheckWake`/`CheckGrant`/ACK decision leading to one
+exact-grant quantum is pure admission bookkeeping and is not a required outer
+EventPump or scheduler edge under the bounded fusion contract below.
 The terminal child poll and terminal deadline observation must return before a
 following action can issue. Tests must hold ALP unavailable for more than 1,024
 exact reads under a still-live virtual-counter deadline, then make it available,
@@ -3990,6 +4022,23 @@ inhibit/status-clear coverage must not create a traffic cadence. HAL must mint t
 owner's bound notification with send-only rights and badge 256; it must not copy
 the owner endpoint.
 
+For the retained non-op11 CYW43/SDIO exact-grant lanes, deterministic tests must
+prove the runtime fuses no more than three pure bookkeeping states in one
+admission turn. Source arbitration is first. `Service` must return immediately
+without reading a grant. Otherwise the runtime performs exactly one stable
+grant read; only `Empty` may invoke exactly one condition-before-sleep recheck,
+while `Inactive` returns unsupported without invoking that recheck. `Ready`
+must be revalidated against the current gate and acknowledged before it can
+return authority for exactly one existing bounded physical quantum. Rejected,
+stale, consumed, mutated, wrong-generation, or ACK-failed grants issue zero
+device operations. ACK failure must restore the complete pre-grant gate,
+including any coalesced wake, so a later attempt re-reads the same unconsumed
+grant. Tests must reject a fourth bookkeeping state, two grant reads, an
+`Inactive` recheck, service-plus-grant composition, ACK after I/O, a second
+physical operation, endpoint fallback, moved postphysical boundary, or any
+budget, deadline, owner, retry, Reply, fault, priority, period, refill, or core
+change.
+
 Send-only reciprocal caps deliver CYW43-to-SDIO badge 256 and SDIO-to-CYW43
 badge 2. SDHCI IRQ158 delivers its generated SDIO IRQ badge (currently 159),
 and DMA channel-4 IRQ116 has a distinct generated IRQ source bound to that same
@@ -4010,10 +4059,11 @@ clean it, execute the barrier, commit the new nonzero sequence last, and signal
 only after commit. For an op11-derived child, the delegated owner stable-reads
 the paired persistent marker, exact command identity, and durable completion
 state, then preserves that identity across bounded owner turns without a grant.
-For non-op11 delegated work, the existing exact-grant ACK-before-I/O contract
-remains covered. PIO must reach one terminal with IRQ158/host state and zero DMA
-use. For external DMA, IRQ158 and IRQ116 may arrive in either order or together,
-and the same owner joins them into exactly one terminal.
+For non-op11 delegated work, the bounded fused admission and exact-grant
+ACK-before-I/O contract remain covered. PIO must reach one terminal with
+IRQ158/host state and zero DMA use. For external DMA, IRQ158 and IRQ116 may
+arrive in either order or together, and the same owner joins them into exactly
+one terminal.
 For the generation's release-time, activation-absent or mask-skewed state, or
 exact ACK debt bound to an already-submitted immutable activation frontier,
 the `DPC_ACTIVATE` bounded ordered transaction masks, inspects, commits or
@@ -4096,13 +4146,14 @@ sideband batch and exact ACK without terminating op11. Once the exact wait
 receipt is committed, while HAL reports op11 `Waiting`, root must mask
 only that parent's descriptor/logical-owner/HAL-lease self-demand; independent
 DPC/RX/sideband/deadline/terminal work remains schedulable, and
-`TerminalVisible` restores the
-exact terminal consumer. Non-op11 delegated foreground producers retain their
-existing `Poll -> Grant -> Poll` coverage. Production DPC instead uses the
-event-sequence steady lease from its first post-release event with no mutable
-Gate-8 mode switch or recurrent grant. Non-CYW43 and GENET retain their existing
-phases; finite op7 keeps its separate identity and bounds while continuing
-its current durable runnable state locally.
+`TerminalVisible` restores the exact terminal consumer. Non-op11 delegated
+foreground producers retain their exact grant and physical-operation coverage
+while replacing the stale required `Poll -> Grant -> Poll` scheduler sequence
+with the max-three pure bookkeeping admission above. Production DPC instead
+uses the event-sequence steady lease from its first post-release event with no
+mutable Gate-8 mode switch or recurrent grant. Non-CYW43 and GENET retain their
+existing phases; finite op7 keeps its separate identity and bounds while
+continuing its current durable runnable state locally.
 Pending-command DPC arbitration, reciprocal SDIO child-ring submission,
 completion checks, and owner admission remain bounded retained work. The SDIO
 owner must stable-read the durable condition and selected persistent-marker,
@@ -5932,6 +5983,38 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
       Containment must suspend GENET and delete both cross-child signal caps
       before unmapping/deleting all 32 external console mapping caps and before
       anchor revoke.
+      Direct-GENET diagnostic coverage must prove the exact page-0 layout:
+      control header `[0,64)`, four cursor records `[64,320)`, optional aligned
+      192-byte diagnostic-v1 record `[320,512)`, record-relative sequence-last
+      commit at offset 184, and still-reserved tail `[512,4096)`. ABI tests must
+      prove every range is non-overlapping, reserved fields stay zero, maximum
+      counter values encode/decode and render without truncation, and a missing,
+      torn, stale, malformed, or wrong-generation record is unavailable rather
+      than accepted. Root must stable-read the complete record around its commit
+      and require the exact live nonzero direct generation. Ordinary packet turns
+      must neither scan nor mutate the diagnostic or reserved tail.
+      One active wired `netstats` request may issue exactly one idempotent,
+      generation-bound DGHO replay. Tests must retain the stable pre-replay
+      sample, label the replacement `phase=pre-idle-service`, and emit a complete
+      available batch in this order: `genet_direct`, `genet_direct_flags`,
+      `genet_direct_before`, `genet_direct_before_ring`, `genet_direct_irq`,
+      `genet_direct_irq_source`, `genet_direct_dpc`, `genet_direct_dma`,
+      `genet_direct_ring`, then `genet_direct_peer`. The replay is deliberately
+      causal: waking GENET may allow its normal post-command idle path to drain
+      already durable RX. Tests must reject a recurring poll, second replay,
+      packet or IRQ authority, fallback, retry, recovery, or a claim that the
+      before/after delta is a passive performance sample.
+      A post-replay record is `fresh` only when a stable pre-replay sequence was
+      available and the accepted sequence changed. READY with no stable
+      pre-replay record is `ready-unverified`, even if a record is visible
+      afterward; it cannot be promoted to fresh causal evidence.
+      The `cohsh` TCP fixture must preserve all ten ordered rows. The Pi trace
+      normalizer must classify `genet_direct*` as wired-driver evidence before
+      generic network parsing, prevent a component `active=yes` flag from
+      overwriting canonical `NET_ACTIVE`, keep legacy traces with no optional
+      rows parseable, and refuse to label a truncated or incomplete batch as
+      complete causal evidence. No row or batch supplies TCP, performance, or
+      Pi-acceptance authority.
       Fresh same-boot wired evidence must prove DHCP/static policy, ARP, ICMP,
       raw TCP, authenticated `cohsh`, focused `.coh` scripts, queue/IRQ health,
       loss, latency, and throughput before any Pi GENET or overall performance
@@ -7820,16 +7903,19 @@ bind that 60-page shape exactly; any further ELF growth, shrinkage, span drift,
 or source/generated disagreement fails before root linking and QEMU launch.
 
 The fixed-layout tests must also prove that console-network ABI v5 retains the
-same four ordinary 4096-byte pages, offsets, lengths, and record schemas while the
-live helpers touch only a 40-byte packet or 64-byte control/event scalar header
-plus the validated active payload. A publisher must clear commit, perform a
-release fence, write the header and active bytes, perform a second release
-fence, publish the final sequence commit, and signal only afterward. Readers
-must reject an oversized length or a commit that changes across the bounded
-copy without advancing the accepted sequence. Scalar reserved header fields
-must validate as zero. Reserved page-tail bytes and inactive payload suffixes
-are non-authoritative and must not be scanned or copied during a normal turn;
-construction zeroing and containment scrub remain required. Capability
+same four ordinary 4096-byte pages, offsets, lengths, and record schemas while
+the live packet helpers touch only a 40-byte packet or 64-byte control/event
+scalar header plus the validated active payload. A publisher must clear commit,
+perform a release fence, write the header and active bytes, perform a second
+release fence, publish the final sequence commit, and signal only afterward.
+Readers must reject an oversized length or a commit that changes across the
+bounded copy without advancing the accepted sequence. Scalar reserved header
+fields must validate as zero. On direct-GENET control page 0, bytes `[320,512)`
+are no longer generic reserved tail: they hold the optional diagnostic-v1
+record governed by the stable exact-generation rules above. Bytes
+`[512,4096)` and inactive payload suffixes remain non-authoritative and must not
+be scanned or copied during a normal turn; construction zeroing and containment
+scrub remain required. Capability
 inspection must show that the child's packet-ingress and control mappings are
 read-only and its packet-egress and event mappings are read-write. On Pi, the
 additional layout at offset 1,024 seals one control page, 15 RX pages, 16 TX

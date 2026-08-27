@@ -56,11 +56,11 @@ use super::{
     dhcp::{DhcpClient, DhcpEvent, DhcpLease, DhcpPhase, DHCP_CLIENT_PORT, DHCP_SERVER_PORT},
     outbound::{OutboundCoalescer, OutboundLane, SendError},
     parse_icmp_echo_request, ConsoleLine, ConsoleNetConfig, ConsoleResponseIdentity,
-    ConsoleResponseLane, IsolatedConsoleDiagnostics, NetBackend, NetConsoleDisconnectReason,
-    NetConsoleEvent, NetCounters, NetDevice, NetDriverError, NetInterfacePolicy, NetMode,
-    NetPoller, NetSelfTestReport, NetSelfTestResult, NetSelfTestStartResult, NetStage,
-    NetStatusReport, NetTelemetry, WifiCredentials, DEV_VIRT_GATEWAY, DEV_VIRT_IP, DEV_VIRT_PREFIX,
-    MAX_FRAME_LEN, NET_DIAG, NET_STAGE,
+    ConsoleResponseLane, DirectGenetDiagnostics, IsolatedConsoleDiagnostics, NetBackend,
+    NetConsoleDisconnectReason, NetConsoleEvent, NetCounters, NetDevice, NetDriverError,
+    NetInterfacePolicy, NetMode, NetPoller, NetSelfTestReport, NetSelfTestResult,
+    NetSelfTestStartResult, NetStage, NetStatusReport, NetTelemetry, WifiCredentials,
+    DEV_VIRT_GATEWAY, DEV_VIRT_IP, DEV_VIRT_PREFIX, MAX_FRAME_LEN, NET_DIAG, NET_STAGE,
 };
 #[cfg(all(
     feature = "net-backend-virtio",
@@ -9510,6 +9510,23 @@ impl Cyw43NetStack {
     }
 }
 
+#[cfg(any(test, all(target_os = "none", sel4_config_kernel_mcs)))]
+fn direct_genet_ready_diagnostic_refresh_label(
+    previous: Option<console_network_abi::DirectGenetRuntimeDiagnostic>,
+    snapshot: Option<console_network_abi::DirectGenetRuntimeDiagnostic>,
+) -> &'static str {
+    match (previous, snapshot) {
+        (_, None) => "ready-missing",
+        (None, Some(_)) => "ready-unverified",
+        (Some(before), Some(after))
+            if before.publication_sequence == after.publication_sequence =>
+        {
+            "ready-stale"
+        }
+        (Some(_), Some(_)) => "fresh",
+    }
+}
+
 impl NetPoller for GenetNetStack {
     fn poll(&mut self, now_ms: u64) -> bool {
         #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
@@ -9706,6 +9723,36 @@ impl NetPoller for GenetNetStack {
     fn isolated_console_diagnostics(&self) -> Option<IsolatedConsoleDiagnostics> {
         self.inner()
             .and_then(NetPoller::isolated_console_diagnostics)
+    }
+
+    fn refresh_direct_genet_diagnostics(&mut self) -> Option<DirectGenetDiagnostics> {
+        #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
+        {
+            let GenetNetState::Isolated { console, .. } = &mut self.state else {
+                return None;
+            };
+            let generation = console.generation();
+            let previous = console.direct_genet_runtime_diagnostic();
+            let refresh =
+                crate::drivers::driver_task_net::refresh_genet_direct_diagnostic(generation);
+            let snapshot = console.direct_genet_runtime_diagnostic();
+            let refresh = if refresh
+                == crate::drivers::driver_task_net::GenetDirectDiagnosticRefresh::Ready
+            {
+                direct_genet_ready_diagnostic_refresh_label(previous, snapshot)
+            } else {
+                refresh.as_str()
+            };
+            return Some(DirectGenetDiagnostics {
+                refresh,
+                previous,
+                snapshot,
+            });
+        }
+        #[cfg(not(all(target_os = "none", sel4_config_kernel_mcs)))]
+        {
+            None
+        }
     }
 
     fn status_report(&self) -> NetStatusReport {
@@ -10029,6 +10076,17 @@ impl NetPoller for Cyw43NetStack {
         }
         self.inner()
             .map_or(NetStatusReport::default(), NetPoller::status_report)
+    }
+
+    fn deferred_console_network_handoff_pending(&self) -> bool {
+        #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
+        {
+            return self.transition_ready();
+        }
+        #[cfg(not(all(target_os = "none", sel4_config_kernel_mcs)))]
+        {
+            false
+        }
     }
 
     #[cfg(feature = "kernel")]
@@ -11498,6 +11556,15 @@ impl NetPoller for DefaultNetStack {
         }
     }
 
+    fn deferred_console_network_handoff_pending(&self) -> bool {
+        match self {
+            Self::Cyw43DriverTask(stack) => stack.deferred_console_network_handoff_pending(),
+            Self::Rtl8139(_) | Self::GenetDriverTask(_) => false,
+            #[cfg(feature = "net-backend-virtio")]
+            Self::Virtio(_) => false,
+        }
+    }
+
     #[cfg(feature = "kernel")]
     fn service_deferred_console_network_handoff(
         &mut self,
@@ -11669,6 +11736,31 @@ mod tests {
 
     use super::*;
     use smoltcp::phy::{Loopback, Medium};
+
+    #[test]
+    fn direct_genet_ready_refresh_requires_a_pre_replay_sequence_for_freshness() {
+        let mut before = console_network_abi::DirectGenetRuntimeDiagnostic::empty();
+        before.publication_sequence = 7;
+        let mut after = before;
+        after.publication_sequence = 8;
+
+        assert_eq!(
+            direct_genet_ready_diagnostic_refresh_label(None, None),
+            "ready-missing",
+        );
+        assert_eq!(
+            direct_genet_ready_diagnostic_refresh_label(None, Some(after)),
+            "ready-unverified",
+        );
+        assert_eq!(
+            direct_genet_ready_diagnostic_refresh_label(Some(before), Some(before)),
+            "ready-stale",
+        );
+        assert_eq!(
+            direct_genet_ready_diagnostic_refresh_label(Some(before), Some(after)),
+            "fresh",
+        );
+    }
 
     #[cfg(feature = "kernel")]
     #[test]

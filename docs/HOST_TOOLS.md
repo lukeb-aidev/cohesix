@@ -39,16 +39,28 @@ temporal policy, [API Guidelines](API_GUIDELINES.md) for REST deadline and
 refusal semantics, and [Benchmarking](BENCHMARKS.md) for backend proof classes.
 
 The Pi-only GENET-to-console direct data plane is a private target transport
-change. The complete `coh`, `cohsh`, Hive Gateway/REST, SwarmUI, bridge,
-`tools/cohesix-py`, generated-profile-consumer, `.coh` script, and benchmark
-surface was reviewed: it changes no command grammar, listener, authentication,
-namespace, REST request/response, library API, workload, or report schema.
-The benchmark harness now validates the same-boot private direct-GENET handoff
-terminal and rejects later fault, poison, or containment evidence; its workload
-and report schema do not change. The other consumers require no hand-authored
-compatibility change. Pi build selection and generated private ABI/resource
-records do change, while a fresh physical benchmark remains the only
-performance authority.
+change. Its optional causal diagnostic adds ten ordered
+`netstats: genet_direct*` rows without changing a command, listener, authentication,
+namespace, REST request/response, library API, workload, or report schema. The
+captured Pi-wired `cohsh` fixture includes the ten rows. The Pi trace normalizer
+classifies them as wired-driver evidence before generic network records, keeps
+legacy captures without them parseable, prevents a component `active=yes` flag
+from replacing canonical `NET_ACTIVE`, and refuses to promote a truncated or
+incomplete row batch to complete causal evidence. The one-shot DGHO refresh may
+wake the owner and enable its normal idle RX service, so neither the normalized
+rows nor their before/after delta is passive performance or acceptance proof.
+
+The complete `coh` and `cohsh` implementations, `coh-status`, Hive Gateway/REST,
+SwarmUI, GPU bridge, host-ticket agent, sidecar, sidecar bus, CAS tool,
+`tools/cohesix-py`, generated-profile consumers, every `.coh` script,
+`pi4_serial_reboot.py`, the Pi gate wrapper, REST performance harness, driver
+model comparator, M26e pressure runner, benchmark workloads, and report schemas
+were reviewed and require no hand-authored compatibility change. The benchmark
+harness continues to validate the same-boot private direct-GENET handoff
+terminal and reject later fault, poison, or containment evidence; its workload
+and report schema do not change. Pi build selection and generated private
+ABI/resource records remain unchanged by this diagnostic. A fresh physical
+benchmark is still the only Pi performance authority.
 
 ## Choose one live topology
 

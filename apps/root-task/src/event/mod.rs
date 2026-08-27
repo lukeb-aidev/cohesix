@@ -258,6 +258,161 @@ fn format_message(args: fmt::Arguments<'_>) -> HeaplessString<DEFAULT_LINE_CAPAC
     buf
 }
 
+#[cfg(feature = "net-console")]
+struct DirectGenetNetstatsLines {
+    summary: HeaplessString<DEFAULT_LINE_CAPACITY>,
+    flags: Option<HeaplessString<DEFAULT_LINE_CAPACITY>>,
+    before_irq: Option<HeaplessString<DEFAULT_LINE_CAPACITY>>,
+    before_ring: Option<HeaplessString<DEFAULT_LINE_CAPACITY>>,
+    irq: Option<HeaplessString<DEFAULT_LINE_CAPACITY>>,
+    irq_source: Option<HeaplessString<DEFAULT_LINE_CAPACITY>>,
+    dpc: Option<HeaplessString<DEFAULT_LINE_CAPACITY>>,
+    dma: Option<HeaplessString<DEFAULT_LINE_CAPACITY>>,
+    ring: Option<HeaplessString<DEFAULT_LINE_CAPACITY>>,
+    peer: Option<HeaplessString<DEFAULT_LINE_CAPACITY>>,
+}
+
+#[cfg(feature = "net-console")]
+fn format_direct_genet_netstats(
+    diagnostic: crate::net::DirectGenetDiagnostics,
+) -> DirectGenetNetstatsLines {
+    let (summary, flags) = diagnostic.snapshot.map_or_else(
+        || {
+            (
+                format_message(format_args!(
+                    "netstats: genet_direct refresh={} snapshot=missing",
+                    diagnostic.refresh,
+                )),
+                None,
+            )
+        },
+        |snapshot| {
+            let flag = |value| {
+                if snapshot.flags & value != 0 {
+                    "yes"
+                } else {
+                    "no"
+                }
+            };
+            (
+                format_message(format_args!(
+                    "netstats: genet_direct refresh={} snapshot=present phase=pre-idle-service generation={} sequence={}",
+                    diagnostic.refresh,
+                    snapshot.generation,
+                    snapshot.publication_sequence,
+                )),
+                Some(format_message(format_args!(
+                    "netstats: genet_direct_flags flags=0x{:08x} initialized={} active={} faulted={} irq_pending={} rx_pending={} tx_pending={}",
+                    snapshot.flags,
+                    flag(console_network_abi::DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_INITIALIZED),
+                    flag(console_network_abi::DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_ACTIVE),
+                    flag(console_network_abi::DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_FAULTED),
+                    flag(console_network_abi::DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_IRQ_ACK_PENDING),
+                    flag(console_network_abi::DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_RX_COMMIT_PENDING),
+                    flag(console_network_abi::DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_TX_COMMIT_PENDING),
+                ))),
+            )
+        },
+    );
+    let (before_irq, before_ring) = diagnostic.previous.map_or((None, None), |snapshot| {
+        (
+            Some(format_message(format_args!(
+                "netstats: genet_direct_before sequence={} irq_wakes={} irq_acks={} raw=0x{:08x} mask=0x{:08x} active=0x{:08x} rdma={}/{} tdma={}/{}",
+                snapshot.publication_sequence,
+                snapshot.irq_wakes,
+                snapshot.irq_acks,
+                snapshot.irq_raw,
+                snapshot.irq_mask,
+                snapshot.irq_active,
+                snapshot.rdma_producer,
+                snapshot.rdma_consumer,
+                snapshot.tdma_producer,
+                snapshot.tdma_consumer,
+            ))),
+            Some(format_message(format_args!(
+                "netstats: genet_direct_before_ring rx_cursor={}/{} tx_cursor={}/{} rx_packets={} tx_packets={} peer_wakes={} peer_signals={}",
+                snapshot.rx_producer_cursor,
+                snapshot.rx_consumer_cursor,
+                snapshot.tx_producer_cursor,
+                snapshot.tx_consumer_cursor,
+                snapshot.direct_rx_packets,
+                snapshot.direct_tx_packets,
+                snapshot.peer_wakes,
+                snapshot.peer_signals,
+            ))),
+        )
+    });
+    let Some(snapshot) = diagnostic.snapshot else {
+        return DirectGenetNetstatsLines {
+            summary,
+            flags,
+            before_irq,
+            before_ring,
+            irq: None,
+            irq_source: None,
+            dpc: None,
+            dma: None,
+            ring: None,
+            peer: None,
+        };
+    };
+    DirectGenetNetstatsLines {
+        summary,
+        flags,
+        before_irq,
+        before_ring,
+        irq: Some(format_message(format_args!(
+            "netstats: genet_direct_irq badge=0x{:08x} wakes={} acks={} ack_failures={} unmask_failures={}",
+            snapshot.irq_badge,
+            snapshot.irq_wakes,
+            snapshot.irq_acks,
+            snapshot.irq_ack_failures,
+            snapshot.irq_unmask_failures,
+        ))),
+        irq_source: Some(format_message(format_args!(
+            "netstats: genet_direct_irq_source raw=0x{:08x} mask=0x{:08x} active=0x{:08x} last=0x{:08x}",
+            snapshot.irq_raw,
+            snapshot.irq_mask,
+            snapshot.irq_active,
+            snapshot.dpc_last_status,
+        ))),
+        dpc: Some(format_message(format_args!(
+            "netstats: genet_direct_dpc turns={} budget_hits={} final_rechecks={}",
+            snapshot.dpc_turns,
+            snapshot.dpc_budget_hits,
+            snapshot.dpc_final_rechecks,
+        ))),
+        dma: Some(format_message(format_args!(
+            "netstats: genet_direct_dma rdma_prod={} rdma_cons={} tdma_prod={} tdma_cons={} rx_packets={} tx_packets={}",
+            snapshot.rdma_producer,
+            snapshot.rdma_consumer,
+            snapshot.tdma_producer,
+            snapshot.tdma_consumer,
+            snapshot.direct_rx_packets,
+            snapshot.direct_tx_packets,
+        ))),
+        ring: Some(format_message(format_args!(
+            "netstats: genet_direct_ring rx_prod={} rx_cons={} tx_prod={} tx_cons={} rx_valid={} tx_valid={} state_changes={}",
+            snapshot.rx_producer_cursor,
+            snapshot.rx_consumer_cursor,
+            snapshot.tx_producer_cursor,
+            snapshot.tx_consumer_cursor,
+            yes_no(snapshot.flags & console_network_abi::DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_RX_RING_VALID != 0),
+            yes_no(snapshot.flags & console_network_abi::DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_TX_RING_VALID != 0),
+            snapshot.state_changes,
+        ))),
+        peer: Some(format_message(format_args!(
+            "netstats: genet_direct_peer wakes={} signals={} poison_rx={}/{} poison_tx={}/{}",
+            snapshot.peer_wakes,
+            snapshot.peer_signals,
+            snapshot.rx_producer_poison,
+            snapshot.rx_consumer_poison,
+            snapshot.tx_producer_poison,
+            snapshot.tx_consumer_poison,
+        ))),
+    }
+}
+
 #[cfg(feature = "kernel")]
 fn format_cyw43_priority_lease_netstats(
     lease: crate::hal::driver_task::Cyw43SdioNetworkPriorityLeaseSnapshot,
@@ -5646,6 +5801,21 @@ where
         self.console_network_quarantine_cleanup_unit =
             ConsoleNetworkQuarantineCleanupUnit::RootSessionTicket;
         self.console_network_quarantine_cleanup_pending = true;
+    }
+
+    /// Return whether the active network stack has retained complete DHCP
+    /// truth for a deferred console-child handoff.
+    ///
+    /// The Wi-Fi supervisor samples this only while selecting its next action;
+    /// it performs the handoff on a distinct later root-control turn.
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[must_use]
+    pub fn deferred_console_network_handoff_pending(&self) -> bool {
+        !self.network_service_quarantined
+            && self
+                .net
+                .as_deref()
+                .is_some_and(NetPoller::deferred_console_network_handoff_pending)
     }
 
     /// Finalize one pre-registered console child after DHCP truth is available.
@@ -26916,6 +27086,9 @@ where
                         let stats = net.stats();
                         let report = net.self_test_report();
                         let status = net.status_report();
+                        let direct_genet_lines = net
+                            .refresh_direct_genet_diagnostics()
+                            .map(format_direct_genet_netstats);
                         let isolated_lines = net.isolated_console_diagnostics().map(|diagnostic| {
                             let progress = format_message(format_args!(
                                 "netstats: isolated_progress generation={} poll_ms={} progress_ms={} unit={} turns={} progress={}",
@@ -27252,6 +27425,36 @@ where
                         if net_status_active_interface_is_wired(&status) {
                             self.emit_console_line(line_wired.as_str());
                             self.emit_console_line(line_wired_rxq.as_str());
+                            if let Some(lines) = direct_genet_lines {
+                                self.emit_console_line(lines.summary.as_str());
+                                if let Some(line) = lines.flags {
+                                    self.emit_console_line(line.as_str());
+                                }
+                                if let Some(line) = lines.before_irq {
+                                    self.emit_console_line(line.as_str());
+                                }
+                                if let Some(line) = lines.before_ring {
+                                    self.emit_console_line(line.as_str());
+                                }
+                                if let Some(line) = lines.irq {
+                                    self.emit_console_line(line.as_str());
+                                }
+                                if let Some(line) = lines.irq_source {
+                                    self.emit_console_line(line.as_str());
+                                }
+                                if let Some(line) = lines.dpc {
+                                    self.emit_console_line(line.as_str());
+                                }
+                                if let Some(line) = lines.dma {
+                                    self.emit_console_line(line.as_str());
+                                }
+                                if let Some(line) = lines.ring {
+                                    self.emit_console_line(line.as_str());
+                                }
+                                if let Some(line) = lines.peer {
+                                    self.emit_console_line(line.as_str());
+                                }
+                            }
                         }
                         self.emit_console_line(line_six.as_str());
                         self.emit_console_line(status_line.as_str());
@@ -29799,6 +30002,122 @@ mod tests {
         );
         assert!(rendered.len() < DEFAULT_LINE_CAPACITY);
         assert!(core::str::from_utf8(rendered.as_bytes()).is_ok());
+    }
+
+    #[cfg(feature = "net-console")]
+    #[test]
+    fn direct_genet_netstats_rows_are_exact_and_untruncated_at_legal_maxima() {
+        let mut snapshot = console_network_abi::DirectGenetRuntimeDiagnostic::empty();
+        snapshot.flags = console_network_abi::DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAGS
+            & !console_network_abi::DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_FAULTED;
+        snapshot.generation = u64::MAX;
+        snapshot.publication_sequence = u64::MAX;
+        snapshot.irq_badge = u32::MAX;
+        snapshot.irq_wakes = u32::MAX;
+        snapshot.irq_acks = u32::MAX;
+        snapshot.irq_ack_failures = u32::MAX;
+        snapshot.irq_unmask_failures = u32::MAX;
+        snapshot.dpc_turns = u32::MAX;
+        snapshot.dpc_budget_hits = u32::MAX;
+        snapshot.dpc_final_rechecks = u32::MAX;
+        snapshot.dpc_last_status = u32::MAX;
+        snapshot.irq_raw = u32::MAX;
+        snapshot.irq_mask = 0;
+        snapshot.irq_active = u32::MAX;
+        snapshot.rdma_producer = u16::MAX;
+        snapshot.rdma_consumer = u16::MAX;
+        snapshot.tdma_producer = u16::MAX;
+        snapshot.tdma_consumer = u16::MAX;
+        snapshot.direct_rx_packets = u32::MAX;
+        snapshot.direct_tx_packets = u32::MAX;
+        snapshot.peer_wakes = u32::MAX;
+        snapshot.peer_signals = u32::MAX;
+        snapshot.state_changes = u32::MAX;
+        snapshot.rx_producer_cursor = u64::MAX;
+        snapshot.rx_consumer_cursor = u64::MAX;
+        snapshot.tx_producer_cursor = u64::MAX;
+        snapshot.tx_consumer_cursor = u64::MAX;
+        snapshot.committed_sequence = u64::MAX;
+
+        assert!(snapshot.valid_for(u64::MAX));
+        let lines = format_direct_genet_netstats(crate::net::DirectGenetDiagnostics {
+            refresh: "ready-stale",
+            previous: Some(snapshot),
+            snapshot: Some(snapshot),
+        });
+        let rendered = [
+            lines.summary.as_str(),
+            lines.flags.as_ref().expect("flags row").as_str(),
+            lines.before_irq.as_ref().expect("before IRQ row").as_str(),
+            lines
+                .before_ring
+                .as_ref()
+                .expect("before ring row")
+                .as_str(),
+            lines.irq.as_ref().expect("IRQ row").as_str(),
+            lines.irq_source.as_ref().expect("IRQ source row").as_str(),
+            lines.dpc.as_ref().expect("DPC row").as_str(),
+            lines.dma.as_ref().expect("DMA row").as_str(),
+            lines.ring.as_ref().expect("ring row").as_str(),
+            lines.peer.as_ref().expect("peer row").as_str(),
+        ];
+        let expected = [
+            "netstats: genet_direct refresh=ready-stale snapshot=present phase=pre-idle-service generation=18446744073709551615 sequence=18446744073709551615",
+            "netstats: genet_direct_flags flags=0x000001fb initialized=yes active=yes faulted=no irq_pending=yes rx_pending=yes tx_pending=yes",
+            "netstats: genet_direct_before sequence=18446744073709551615 irq_wakes=4294967295 irq_acks=4294967295 raw=0xffffffff mask=0x00000000 active=0xffffffff rdma=65535/65535 tdma=65535/65535",
+            "netstats: genet_direct_before_ring rx_cursor=18446744073709551615/18446744073709551615 tx_cursor=18446744073709551615/18446744073709551615 rx_packets=4294967295 tx_packets=4294967295 peer_wakes=4294967295 peer_signals=4294967295",
+            "netstats: genet_direct_irq badge=0xffffffff wakes=4294967295 acks=4294967295 ack_failures=4294967295 unmask_failures=4294967295",
+            "netstats: genet_direct_irq_source raw=0xffffffff mask=0x00000000 active=0xffffffff last=0xffffffff",
+            "netstats: genet_direct_dpc turns=4294967295 budget_hits=4294967295 final_rechecks=4294967295",
+            "netstats: genet_direct_dma rdma_prod=65535 rdma_cons=65535 tdma_prod=65535 tdma_cons=65535 rx_packets=4294967295 tx_packets=4294967295",
+            "netstats: genet_direct_ring rx_prod=18446744073709551615 rx_cons=18446744073709551615 tx_prod=18446744073709551615 tx_cons=18446744073709551615 rx_valid=yes tx_valid=yes state_changes=4294967295",
+            "netstats: genet_direct_peer wakes=4294967295 signals=4294967295 poison_rx=0/0 poison_tx=0/0",
+        ];
+        assert_eq!(rendered, expected);
+        let payload_limit = DEFAULT_LINE_CAPACITY
+            .saturating_sub(DIAGNOSTIC_TRUNCATION_MARKER.len())
+            .saturating_sub(1);
+        for line in rendered {
+            assert!(!line.contains(DIAGNOSTIC_TRUNCATION_MARKER), "{line}");
+            assert!(line.len() <= payload_limit, "{} bytes: {line}", line.len());
+        }
+
+        let mut poisoned = snapshot;
+        poisoned.flags = console_network_abi::DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_INITIALIZED
+            | console_network_abi::DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_FAULTED
+            | console_network_abi::DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_MMIO_SAMPLED;
+        poisoned.rx_producer_cursor = 0;
+        poisoned.rx_consumer_cursor = 0;
+        poisoned.tx_producer_cursor = 0;
+        poisoned.tx_consumer_cursor = 0;
+        poisoned.rx_producer_poison = console_network_abi::DIRECT_GENET_POISON_SEQUENCE_EXHAUSTED;
+        poisoned.rx_consumer_poison = console_network_abi::DIRECT_GENET_POISON_SEQUENCE_EXHAUSTED;
+        poisoned.tx_producer_poison = console_network_abi::DIRECT_GENET_POISON_SEQUENCE_EXHAUSTED;
+        poisoned.tx_consumer_poison = console_network_abi::DIRECT_GENET_POISON_SEQUENCE_EXHAUSTED;
+        assert!(poisoned.valid_for(u64::MAX));
+        let poison_lines = format_direct_genet_netstats(crate::net::DirectGenetDiagnostics {
+            refresh: "ready-stale",
+            previous: None,
+            snapshot: Some(poisoned),
+        });
+        let poison_peer = poison_lines.peer.as_ref().expect("poison peer row");
+        assert_eq!(
+            poison_peer.as_str(),
+            "netstats: genet_direct_peer wakes=4294967295 signals=4294967295 poison_rx=5/5 poison_tx=5/5",
+        );
+        assert!(poison_peer.len() <= payload_limit);
+        assert!(!poison_peer.contains(DIAGNOSTIC_TRUNCATION_MARKER));
+
+        let missing = format_direct_genet_netstats(crate::net::DirectGenetDiagnostics {
+            refresh: "ready-missing",
+            previous: None,
+            snapshot: None,
+        });
+        assert_eq!(
+            missing.summary.as_str(),
+            "netstats: genet_direct refresh=ready-missing snapshot=missing",
+        );
+        assert!(!missing.summary.contains(DIAGNOSTIC_TRUNCATION_MARKER));
     }
 
     #[cfg(feature = "kernel")]
