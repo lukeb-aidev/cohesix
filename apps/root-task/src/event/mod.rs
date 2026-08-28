@@ -377,10 +377,11 @@ fn format_direct_genet_netstats(
             snapshot.dpc_last_status,
         ))),
         dpc: Some(format_message(format_args!(
-            "netstats: genet_direct_dpc turns={} budget_hits={} final_rechecks={}",
+            "netstats: genet_direct_dpc turns={} budget_hits={} final_rechecks={} level_adoptions={}",
             snapshot.dpc_turns,
             snapshot.dpc_budget_hits,
             snapshot.dpc_final_rechecks,
+            snapshot.dpc_level_adoptions,
         ))),
         dma: Some(format_message(format_args!(
             "netstats: genet_direct_dma rdma_prod={} rdma_cons={} tdma_prod={} tdma_cons={} rx_packets={} tx_packets={}",
@@ -3298,6 +3299,33 @@ impl PendingNetFlush {
     }
 }
 
+#[cfg(feature = "net-console")]
+fn retained_authenticated_response_flush_continuation(
+    pending: PendingNetFlush,
+    active_conn_id: Option<u64>,
+    authenticated_conn_id: Option<u64>,
+) -> bool {
+    pending.active()
+        && pending.conn_id.is_some_and(|conn_id| conn_id != 0)
+        && pending.conn_id == active_conn_id
+        && pending.conn_id == authenticated_conn_id
+}
+
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+const fn linked_cyw43_partial_local_line_display_due(
+    cyw43_lane_selected: bool,
+    reboot_pending: bool,
+    physical_console_response_pending: bool,
+    local_line_nonempty: bool,
+    operator_display_pending: bool,
+) -> bool {
+    cyw43_lane_selected
+        && !reboot_pending
+        && !physical_console_response_pending
+        && local_line_nonempty
+        && operator_display_pending
+}
+
 #[cfg(feature = "kernel")]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum LinkedRuntimeServicePhase {
@@ -3348,7 +3376,9 @@ fn deferred_cyw43_attached_network_continuation(
     network_service_quarantined: bool,
     reboot_pending: bool,
     recovery_required: bool,
+    containment_work_pending: bool,
     schedulable_network_work: bool,
+    retained_authenticated_response_flush: bool,
 ) -> bool {
     cyw43_lane_selected
         && admitted_phase == LinkedRuntimeServicePhase::Network
@@ -3359,7 +3389,8 @@ fn deferred_cyw43_attached_network_continuation(
         && !network_service_quarantined
         && !reboot_pending
         && !recovery_required
-        && schedulable_network_work
+        && !containment_work_pending
+        && (schedulable_network_work || retained_authenticated_response_flush)
 }
 
 /// Maximum number of independently bounded Pi linked-runtime polls admitted
@@ -6417,7 +6448,10 @@ where
     /// display, and Network phases, but admits Network at most once. Only an
     /// exact productive Network-to-Network edge returns true. Recovery,
     /// quarantine, reboot, containment, a repeated phase, or a completed
-    /// operator rotation stops the quantum and returns false.
+    /// operator rotation stops the quantum and returns false. A still-active,
+    /// connection-matched authenticated response cursor is also exact Network
+    /// work: it may retain the activation for its next separately charged turn
+    /// without changing that cursor's existing 8/16-turn hard bound.
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[inline(never)]
     #[must_use = "a false continuation token requires an explicit root-control yield"]
@@ -6445,6 +6479,13 @@ where
                 // authority. Only an exact productive Network -> Network edge
                 // may retain the caller's current guarded MCS activation.
                 let snapshot = crate::drivers::driver_task_net::cyw43_service_work_snapshot();
+                let retained_authenticated_response_flush = self.net.as_ref().is_some_and(|net| {
+                    retained_authenticated_response_flush_continuation(
+                        self.pending_net_flush,
+                        net.active_console_conn_id(),
+                        net.authenticated_console_conn_id(),
+                    )
+                });
                 if deferred_cyw43_attached_network_continuation(
                     cyw43_lane_selected && self.linked_runtime_cyw43_lane_selected(),
                     admitted_phase,
@@ -6455,7 +6496,9 @@ where
                     self.network_service_quarantined,
                     self.reboot_pending,
                     crate::drivers::driver_task_net::cyw43_recovery_required(),
+                    self.deferred_containment_work_pending(),
                     snapshot.schedulable_network_work(),
+                    retained_authenticated_response_flush,
                 ) {
                     return true;
                 }
@@ -7684,6 +7727,16 @@ where
                 let rotation_finished =
                     self.finish_linked_runtime_cyw43_operator_rotation_after_dispatch();
                 #[cfg(feature = "net-console")]
+                let partial_local_line_display_due = linked_cyw43_partial_local_line_display_due(
+                    self.linked_runtime_cyw43_lane_selected(),
+                    self.reboot_pending,
+                    self.physical_console_response_pending(),
+                    !self.local_line.is_empty(),
+                    self.linked_runtime_operator_display_pending(),
+                );
+                #[cfg(not(feature = "net-console"))]
+                let partial_local_line_display_due = false;
+                #[cfg(feature = "net-console")]
                 let display_due = rotation_finished
                     && !self.reboot_pending
                     && !self.physical_console_response_pending()
@@ -7704,7 +7757,15 @@ where
                 #[cfg(not(feature = "net-console"))]
                 let display_followup_network_due = false;
                 let post_rotation_display_due = cyw43_rotation_was_pending && display_due;
-                self.linked_runtime_service_phase = if display_followup_network_due {
+                self.linked_runtime_service_phase = if partial_local_line_display_due {
+                    // Root-owned parser/echo bookkeeping above has made a
+                    // partial USB command row visible. Submit exactly one
+                    // bounded HDMI update before Serial and before any Network
+                    // re-entry, while retaining the CYW43 fence and immutable
+                    // parent. A response tail or reboot acknowledgement excludes
+                    // this route and keeps immediate Serial priority.
+                    LinkedRuntimeServicePhase::Display
+                } else if display_followup_network_due {
                     // A prior bounded Display turn cannot form a closed
                     // Serial -> LocalSeat -> Dispatch -> Display loop when
                     // redraw or USB service debt remains level-triggered.
@@ -30338,6 +30399,7 @@ mod tests {
         snapshot.dpc_turns = u32::MAX;
         snapshot.dpc_budget_hits = u32::MAX;
         snapshot.dpc_final_rechecks = u32::MAX;
+        snapshot.dpc_level_adoptions = u32::MAX;
         snapshot.dpc_last_status = u32::MAX;
         snapshot.irq_raw = u32::MAX;
         snapshot.irq_mask = 0;
@@ -30386,7 +30448,7 @@ mod tests {
             "netstats: genet_direct_before_ring rx_cursor=18446744073709551615/18446744073709551615 tx_cursor=18446744073709551615/18446744073709551615 rx_packets=4294967295 tx_packets=4294967295 peer_wakes=4294967295 peer_signals=4294967295",
             "netstats: genet_direct_irq badge=0xffffffff wakes=4294967295 acks=4294967295 ack_failures=4294967295 unmask_failures=4294967295",
             "netstats: genet_direct_irq_source raw=0xffffffff mask=0x00000000 active=0xffffffff last=0xffffffff",
-            "netstats: genet_direct_dpc turns=4294967295 budget_hits=4294967295 final_rechecks=4294967295",
+            "netstats: genet_direct_dpc turns=4294967295 budget_hits=4294967295 final_rechecks=4294967295 level_adoptions=4294967295",
             "netstats: genet_direct_dma rdma_prod=65535 rdma_cons=65535 tdma_prod=65535 tdma_cons=65535 rx_packets=4294967295 tx_packets=4294967295",
             "netstats: genet_direct_ring rx_prod=18446744073709551615 rx_cons=18446744073709551615 tx_prod=18446744073709551615 tx_cons=18446744073709551615 rx_valid=yes tx_valid=yes state_changes=4294967295",
             "netstats: genet_direct_peer wakes=4294967295 signals=4294967295 poison_rx=0/0 poison_tx=0/0",
@@ -44069,21 +44131,82 @@ mod tests {
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[test]
     fn pi_attached_wifi_continuation_requires_one_productive_network_successor() {
-        let allowed =
-            |lane, admitted, next, before, after, activity, quarantined, reboot, recovery, work| {
-                deferred_cyw43_attached_network_continuation(
-                    lane,
-                    admitted,
-                    next,
-                    before,
-                    after,
-                    activity,
-                    quarantined,
-                    reboot,
-                    recovery,
-                    work,
-                )
-            };
+        assert!(linked_cyw43_partial_local_line_display_due(
+            true, false, false, true, true,
+        ));
+        for rejected in [
+            linked_cyw43_partial_local_line_display_due(false, false, false, true, true),
+            linked_cyw43_partial_local_line_display_due(true, true, false, true, true),
+            linked_cyw43_partial_local_line_display_due(true, false, true, true, true),
+            linked_cyw43_partial_local_line_display_due(true, false, false, false, true),
+            linked_cyw43_partial_local_line_display_due(true, false, false, true, false),
+        ] {
+            assert!(
+                !rejected,
+                "the partial-line Display shortcut is CYW43-only and fail-closed",
+            );
+        }
+
+        let retained_flush = PendingNetFlush {
+            conn_id: Some(41),
+            remaining_turns: 3,
+        };
+        assert!(retained_authenticated_response_flush_continuation(
+            retained_flush,
+            Some(41),
+            Some(41),
+        ));
+        let wrapped_zero_flush = PendingNetFlush {
+            conn_id: Some(0),
+            remaining_turns: 1,
+        };
+        for rejected in [
+            retained_authenticated_response_flush_continuation(
+                PendingNetFlush::default(),
+                Some(41),
+                Some(41),
+            ),
+            retained_authenticated_response_flush_continuation(
+                wrapped_zero_flush,
+                Some(0),
+                Some(0),
+            ),
+            retained_authenticated_response_flush_continuation(retained_flush, Some(42), Some(41)),
+            retained_authenticated_response_flush_continuation(retained_flush, Some(41), Some(42)),
+            retained_authenticated_response_flush_continuation(retained_flush, None, Some(41)),
+        ] {
+            assert!(
+                !rejected,
+                "only the active authenticated connection may retain its response cursor",
+            );
+        }
+
+        let allowed = |lane,
+                       admitted,
+                       next,
+                       before,
+                       after,
+                       activity,
+                       quarantined,
+                       reboot,
+                       recovery,
+                       work,
+                       response_flush| {
+            deferred_cyw43_attached_network_continuation(
+                lane,
+                admitted,
+                next,
+                before,
+                after,
+                activity,
+                quarantined,
+                reboot,
+                recovery,
+                false,
+                work,
+                response_flush,
+            )
+        };
         assert!(allowed(
             true,
             LinkedRuntimeServicePhase::Network,
@@ -44095,7 +44218,38 @@ mod tests {
             false,
             false,
             true,
+            false,
         ));
+        assert!(allowed(
+            true,
+            LinkedRuntimeServicePhase::Network,
+            LinkedRuntimeServicePhase::Network,
+            8,
+            9,
+            true,
+            false,
+            false,
+            false,
+            false,
+            true,
+        ));
+        assert!(
+            !deferred_cyw43_attached_network_continuation(
+                true,
+                LinkedRuntimeServicePhase::Network,
+                LinkedRuntimeServicePhase::Network,
+                8,
+                9,
+                true,
+                false,
+                false,
+                false,
+                true,
+                true,
+                true,
+            ),
+            "containment must preempt an otherwise productive response continuation",
+        );
         for rejected in [
             allowed(
                 false,
@@ -44108,6 +44262,7 @@ mod tests {
                 false,
                 false,
                 true,
+                false,
             ),
             allowed(
                 true,
@@ -44120,6 +44275,7 @@ mod tests {
                 false,
                 false,
                 true,
+                false,
             ),
             allowed(
                 true,
@@ -44132,6 +44288,7 @@ mod tests {
                 false,
                 false,
                 true,
+                false,
             ),
             allowed(
                 true,
@@ -44144,6 +44301,7 @@ mod tests {
                 false,
                 false,
                 true,
+                false,
             ),
             allowed(
                 true,
@@ -44156,6 +44314,7 @@ mod tests {
                 false,
                 false,
                 true,
+                false,
             ),
             allowed(
                 true,
@@ -44168,17 +44327,6 @@ mod tests {
                 false,
                 false,
                 true,
-            ),
-            allowed(
-                true,
-                LinkedRuntimeServicePhase::Network,
-                LinkedRuntimeServicePhase::Network,
-                8,
-                9,
-                true,
-                true,
-                false,
-                false,
                 true,
             ),
             allowed(
@@ -44188,17 +44336,6 @@ mod tests {
                 8,
                 9,
                 true,
-                false,
-                true,
-                false,
-                true,
-            ),
-            allowed(
-                true,
-                LinkedRuntimeServicePhase::Network,
-                LinkedRuntimeServicePhase::Network,
-                8,
-                9,
                 true,
                 false,
                 false,
@@ -44212,6 +44349,33 @@ mod tests {
                 8,
                 9,
                 true,
+                false,
+                true,
+                false,
+                true,
+                true,
+            ),
+            allowed(
+                true,
+                LinkedRuntimeServicePhase::Network,
+                LinkedRuntimeServicePhase::Network,
+                8,
+                9,
+                true,
+                false,
+                false,
+                true,
+                true,
+                true,
+            ),
+            allowed(
+                true,
+                LinkedRuntimeServicePhase::Network,
+                LinkedRuntimeServicePhase::Network,
+                8,
+                9,
+                true,
+                false,
                 false,
                 false,
                 false,
@@ -49241,8 +49405,8 @@ mod tests {
             pump.poll();
             assert_eq!(
                 pump.linked_runtime_service_phase,
-                LinkedRuntimeServicePhase::Serial,
-                "serial remains the first physical operator after local-seat dispatch"
+                LinkedRuntimeServicePhase::Display,
+                "a partial local-seat line must route Dispatch directly to one bounded Display turn"
             );
             assert!(pump
                 .linked_runtime_cyw43_operator_rotation_pending
@@ -49254,8 +49418,8 @@ mod tests {
             pump.poll();
             assert_eq!(
                 pump.linked_runtime_service_phase,
-                LinkedRuntimeServicePhase::LocalSeat,
-                "Serial must preserve the fixed local-seat turn before Display"
+                LinkedRuntimeServicePhase::Serial,
+                "the bounded partial-line Display turn must return to Serial before Network"
             );
             assert!(pump
                 .linked_runtime_cyw43_operator_rotation_pending
@@ -49263,25 +49427,6 @@ mod tests {
             assert_eq!(
                 pump.metrics.net_cyw43_service_turns, 0,
                 "HDMI echo must not compose with or admit a CYW43 Network turn"
-            );
-            pump.poll();
-            assert_eq!(
-                pump.linked_runtime_service_phase,
-                LinkedRuntimeServicePhase::Dispatch,
-                "the bounded local-seat turn must release into Dispatch before Display"
-            );
-            pump.poll();
-            assert_eq!(
-                pump.linked_runtime_service_phase,
-                LinkedRuntimeServicePhase::Serial,
-                "the partial local-seat line must retain the operator fence ahead of Display"
-            );
-            assert!(pump
-                .linked_runtime_cyw43_operator_rotation_pending
-                .is_some());
-            assert_eq!(
-                pump.metrics.net_cyw43_service_turns, 0,
-                "retained local input must fence both Display and Network until its boundary"
             );
 
             pump.linked_runtime_service_phase = LinkedRuntimeServicePhase::Dispatch;

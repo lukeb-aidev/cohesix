@@ -268,7 +268,7 @@ TCP response flushing priority while continuing to service both physical
 inputs and fatal output.
 
 The selected internal contract is manifest schema 1.15 and console ABI/READY
-v4. Root may authorize one through eight already-ordered response lines in one
+v5. Root may authorize one through eight already-ordered response lines in one
 binary `SendBatch` control, but the child still emits one ordinary
 length-prefixed line per replenishment-bounded Session unit. For one exact
 isolated authenticated connection, root captures synchronous HELP, NETSTATS,

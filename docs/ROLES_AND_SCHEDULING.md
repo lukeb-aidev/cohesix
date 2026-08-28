@@ -311,10 +311,16 @@ The bound covers source arbitration, one stable grant read, and only after an
 recheck; `Ready` revalidates and acknowledges the immutable grant before
 authorizing exactly one existing bounded physical quantum. ACK failure restores
 the pre-grant gate and performs no device I/O. This removes unnecessary
-`CheckWake`/`CheckGrant` scheduler edges; it does not compose physical actions,
-repeat a grant, consume a second owner quantum, move a postphysical boundary,
-or alter an SC budget, period, deadline, refill, priority, core, owner, retry,
-or Reply/fault contract.
+`CheckWake`/`CheckGrant` scheduler edges. It also supersedes only the former
+source-level postphysical `seL4_Yield` for these generation-bound one-way lanes:
+selected MCS charges Yield's complete remaining head refill, so the child
+immediately re-enters the same bounded admission and blocks on its existing
+local notification when no fresh exact producer/root grant exists. This does
+not compose physical actions, replay a consumed grant, consume a second owner
+quantum without a fresh grant, or alter an SC budget, period, deadline, refill,
+priority, core, owner, retry, or Reply/fault contract. Ordinary synchronous
+work and every genuine external-condition wait retain their prior scheduler
+handoff; rejected, ambiguous, and Reply-bearing generation inputs fail closed.
 
 The deferred physical WiFi supervisor may retain the current root-control
 refill across productive logical turns only inside a continuous CNTVCT window.
@@ -328,11 +334,15 @@ otherwise invalid counter/configuration permits one legacy logical turn before
 yielding, preserving liveness. After service readiness, an attached Network
 turn may retain the same window only when EventPump proves actual network
 activity, exactly one CYW43 service-unit advance, an immediate Network
-successor, durable schedulable work, and no recovery, quarantine, reboot, or
-operator rotation. Idle, wait, nonprogress, handoff, pressure, fault, terminal,
-or any failed token yields and resets. This replaces the former pair-restart
-Driver burst, changes no generated temporal value, and does not apply to QEMU
-or generic root control.
+successor, and either durable schedulable physical work or an active response
+cursor whose nonzero connection identity exactly matches both the active and
+authenticated session. The response case selects only the next separately
+charged bounded Network turn; it does not burst the isolated child's ordinary
+lower rotor. Recovery, quarantine, reboot, operator rotation, stale identity,
+idle, wait, nonprogress, handoff, pressure, fault, terminal, or any failed token
+yields and resets. This replaces the former pair-restart Driver burst, changes
+no generated temporal value, and does not apply to QEMU or generic root
+control.
 
 The handoff-to-Ready response bound is evaluated in the isolated child's
 absolute CNTVCT millisecond domain, not the pump-driven HAL policy clock. Root
@@ -410,6 +420,13 @@ authenticated session, its response lane receives bounded flush priority
 without starving serial/local-seat input, fatal output, timers, containment, or
 ordinary service. Large responses are divided into bounded units with an
 ordinary service turn between bursts.
+
+On the deferred physical WiFi path, accepting a partial USB command line routes
+one bounded `Dispatch -> Display -> Serial` presentation successor before
+Network, retaining the exact CYW43 parent and operator fence. A pending reboot
+acknowledgement or physical response tail keeps immediate Serial priority and
+leaves the HDMI echo queued. This is presentation ordering, not a new USB,
+display, child, or scheduling budget.
 
 On the physical Pi MCS path, one root-control turn may compose one complete
 local-operator rotation before its explicit cooperative yield when Network is

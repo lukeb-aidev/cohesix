@@ -78,7 +78,7 @@ id = "console-network"
 targets = ["qemu"]
 description = "Isolated console service, ABI v5 SendBatch and CommandBatch, bounded synchronous response capture, direct data-plane boundaries, and live TCP transport changes."
 profile = "qemu_smp_production / configs/root_task.toml"
-authoritative_evidence = "canonical QEMU boot, isolated console READY v3, and the fixed one-socket HELP/NETSTATS/SMP/CACHELOG matrix"
+authoritative_evidence = "canonical QEMU boot, isolated console READY v5, and the fixed one-socket HELP/NETSTATS/SMP/CACHELOG matrix"
 priority = 90
 trigger_paths = [
   "apps/console-network-runtime/**",

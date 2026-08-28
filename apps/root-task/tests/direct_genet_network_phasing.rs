@@ -15,6 +15,58 @@ const USERLAND_SOURCE: &str = include_str!("../src/userland/mod.rs");
 const KERNEL_SOURCE: &str = include_str!("../src/kernel.rs");
 
 #[test]
+fn direct_genet_final_sleep_check_adopts_only_durable_physical_work() {
+    let adopt = RUNTIME_SOURCE
+        .find("fn genet_runtime_adopt_direct_level")
+        .expect("direct GENET durable-level admission exists");
+    let adopt = &RUNTIME_SOURCE[adopt..];
+    let sample_raw = adopt
+        .find("let raw_before_mask = genet_irq_raw_sources()")
+        .expect("raw owned level is sampled first");
+    let sample_rx = adopt
+        .find("let rx_pending = genet_rx_hardware_pending(state)")
+        .expect("durable RDMA producer is sampled");
+    let sample_tx = adopt
+        .find("let tx_pending = genet_tx_hardware_completion_pending(state)")
+        .expect("durable TDMA completion is sampled");
+    let no_work = adopt
+        .find("if raw_before_mask == 0 && !rx_pending && !tx_pending")
+        .expect("software hints alone cannot adopt an IRQ episode");
+    let mask = adopt
+        .find("genet_irq_mask_sources()")
+        .expect("owned source is masked before service");
+    let barrier = adopt[mask..]
+        .find("device_store_completion_barrier()")
+        .map(|offset| mask + offset)
+        .expect("mask store completes before source clear");
+    let clear = adopt[barrier..]
+        .find("genet_irq_clear_sources(status)")
+        .map(|offset| barrier + offset)
+        .expect("only the sampled owned source is cleared");
+    let retain = adopt[clear..]
+        .find("state.irq_ack_pending = true")
+        .map(|offset| clear + offset)
+        .expect("adopted episode is retained before bounded service");
+    assert!(sample_raw < sample_rx && sample_rx < sample_tx && sample_tx < no_work);
+    assert!(no_work < mask && mask < barrier && barrier < clear && clear < retain);
+
+    let loop_body = RUNTIME_SOURCE
+        .find("if runtime_idle_prewait_route(\n                notification_route,")
+        .expect("final command-ring admission check exists");
+    let loop_body = &RUNTIME_SOURCE[loop_body..];
+    let command_check = loop_body
+        .find("RuntimeIdlePrewaitRoute::ReenterCommandPoll")
+        .expect("sequence-last command check completes first");
+    let physical_check = loop_body
+        .find("GENET_RUNTIME_STATE.with_mut(genet_runtime_condition_before_sleep)")
+        .expect("GENET physical condition is checked at the final boundary");
+    let block = loop_body
+        .find("wait_runtime_command_or_notification(")
+        .expect("runtime eventually blocks on the generated endpoint/notification");
+    assert!(command_check < physical_check && physical_check < block);
+}
+
+#[test]
 fn diagnostic_probe_is_one_replay_with_pre_and_post_sequence_last_evidence() {
     let root_probe = STACK_SOURCE
         .find("fn refresh_direct_genet_diagnostics")

@@ -191,6 +191,24 @@ fn schema_1_13_is_rejected_after_natural_postpone_contract_change() {
 }
 
 #[test]
+fn schema_1_14_is_rejected_after_worker_execution_contract_change() {
+    let temp_dir = TempDir::new().expect("create tempdir");
+    let manifest_path = temp_dir.path().join("schema-1.14.toml");
+    let manifest = fs::read_to_string(repo_path("configs/root_task.toml"))
+        .expect("read default manifest")
+        .replacen("schema = \"1.15\"", "schema = \"1.14\"", 1);
+    fs::write(&manifest_path, manifest).expect("write legacy-schema manifest");
+
+    let options = options_for(manifest_path, &temp_dir.path().join("legacy-worker"));
+    let error = compile(&options).expect_err("schema 1.14 must be rejected");
+    let message = format!("{error:#}");
+    assert!(
+        message.contains("unsupported root_task.schema 1.14 (expected 1.15)"),
+        "unexpected rejection: {message}"
+    );
+}
+
+#[test]
 fn checked_in_profiles_compile_without_radio_sidecar_output() {
     let temp_dir = TempDir::new().expect("create tempdir");
 

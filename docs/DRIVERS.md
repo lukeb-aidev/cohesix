@@ -880,6 +880,12 @@ reusable ownership pattern.
   recovery; do not restart it for every repeat or grow an unbounded queue.
 - Allow display mirroring and redraw to degrade before serial or keyboard
   command liveness.
+- On the deferred WiFi path, a newly accepted partial local-seat line schedules
+  exactly one bounded `Dispatch -> Display -> Serial` presentation successor
+  before Network while retaining the immutable CYW43 parent and operator fence.
+  A reboot acknowledgement or owned physical-response tail keeps immediate
+  Serial priority and leaves the echo queued. This ordering changes neither USB
+  byte ownership nor HDMI's one-command raster bounds.
 - The write-only compositor does not authorize BCM DMA, mailbox/HVS ownership,
   a cacheable or second scanout alias, or a second framebuffer owner. Host
   compositor tests and target compilation can reject a candidate, but only a
@@ -904,9 +910,16 @@ reusable ownership pattern.
 - GENET packet completion is child-owned and IRQ-driven. One DPC turn drains at
   most 16 frames and 24,576 bytes into a fixed 16-frame private queue, then
   completes the device-store/unmask readback before its final source and ring
-  recheck. A remaining exact IRQ lifetime stays masked and unacknowledged;
-  badge zero cannot create work, and handler-ack or unmask-readback failure
-  disables the runtime without retry.
+  recheck. A remaining exact IRQ lifetime stays masked and unacknowledged. An
+  exact IRQ badge starts the ordinary lifetime; after direct ownership, an
+  already-admitted owner/peer turn or final condition-before-sleep cut may join
+  a raw owned interrupt level or advanced DMA index to that same sole-owner
+  episode, then uses the existing mask, clear, bounded drain, unmask/readback,
+  final raw-plus-index recheck, and exact handler rearm. Software-ring state,
+  badge zero by itself, a timer, or an unadmitted poll cannot create an episode.
+  `dpc_level_adoptions` counts those physical-level joins only; it grants no
+  packet, polling, retry, acknowledgement, or recovery authority. Handler-ack
+  or unmask-readback failure disables the runtime without retry.
 - Before an admitted GENET RX command reports idle, the same sole owner also
   compares the durable RDMA producer with its consumer and may drain only the
   command's existing operation, frame, and byte grant. This condition check
@@ -928,9 +941,13 @@ reusable ownership pattern.
 - While an exact authenticated console response cursor is active, one retained
   flush turn may select the next useful response unit under the same one-op,
   two-frame, fixed-byte charge as an ordinary isolated-network turn. Ordinary
-  service retains its strict rotor. Response selection cannot compose a burst,
-  increase a manifest or MCS budget, skip physical-input priority, create a
-  poller, or grant NIC/child authority.
+  service retains its strict rotor. After actual Network activity advances the
+  exact service turn, a matching active/authenticated connection may retain the
+  root's already-guarded activation for the next separately charged response
+  turn; stale, disconnected, unauthenticated, quarantined, recovering,
+  rebooting, or no-progress state stops it. Response selection cannot compose a
+  child lower-rotor burst, increase a manifest or MCS budget, skip
+  physical-input priority, create a poller, or grant NIC/child authority.
 - Prioritize ARP and TCP/ICMP control traffic, but after four consecutive
   control frames service the oldest data frame so control load cannot starve
   data. Batch drain and root consumption remain independently bounded.
@@ -995,9 +1012,12 @@ reusable ownership pattern.
   Pi consumed-time, latency, and throughput evidence.
 - Direct-link control page 0 reserves bytes `[0,64)` for its immutable header
   and `[64,320)` for the four 64-byte SPSC cursor records. The optional
-  direct-GENET diagnostic-v1 record occupies the formerly reserved bytes
+  direct-GENET diagnostic-v2 record occupies the formerly reserved bytes
   `[320,512)`, is exactly 192 bytes and cache-line aligned, and commits its
-  publication sequence last at record offset 184. GENET is its sole writer;
+  publication sequence last at record offset 184. Version 2 assigns record
+  offset 108 to cumulative `dpc_level_adoptions`, the number of badge-zero or
+  peer-turn joins of durable physical work to a direct IRQ episode; every other
+  reserved field retains its zero-validation rule. GENET is its sole writer;
   root accepts it only through a stable double-read with exact nonzero direct
   generation, magic, version, length, flags, reserved zeros, cursor validity,
   and matching sequence/commit. Missing, torn, stale, wrong-generation, or
@@ -1047,10 +1067,16 @@ transport:
   the complete pre-grant gate, including coalesced wake state, and performs zero
   device I/O. The fused helper performs no device operation itself. It removes
   scheduler edges between `CheckWake`, `CheckGrant`, and the final local
-  admission decision only; every existing physical-operation and postphysical
-  boundary, one-grant/one-operation cardinality, owner, deadline, retry,
-  fault/Reply rule, and MCS numeric remains unchanged. Other drivers and
-  unsupported routes retain their prior path and cannot fall back into this
+  admission decision. For generation-bound CYW43/SDIO only, it also
+  intentionally supersedes the earlier source-level postphysical `seL4_Yield`:
+  selected MCS charges that call's complete remaining head refill, so the same
+  child immediately re-enters exact-grant admission and blocks on the existing
+  local notification when no fresh identity-matched grant exists. One physical
+  operation or finalizer per exact fresh grant, producer/root reconciliation,
+  every external-condition wait, owner, deadline, retry, fault/Reply rule, and
+  MCS numeric remain unchanged. A consumed old grant performs no ACK or I/O;
+  ambiguous, rejected, Reply-bearing, unsupported, and other-driver routes fail
+  closed or retain their prior scheduler handoff and cannot fall back into this
   lane.
 - The deferred physical WiFi supervisor may retain one root-control refill only
   through strict Operator/Driver alternation under the generated

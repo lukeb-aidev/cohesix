@@ -1294,6 +1294,21 @@ def test_repo_managed_pi_profile_accepts_current_tracked_mcs_tree() -> None:
     assert evidence["claim_eligibility"]["artifact_set_shipping"] is False
     assert evidence["repo_managed"]["tracked"] is True
     assert evidence["repo_managed"]["clean"] is True
+    generated_config = json.loads(
+        (
+            build_dir
+            / "kernel"
+            / "gen_config"
+            / "kernel"
+            / "gen_config.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert (
+        canonical_contract["profiles"]["pi4_diagnostic"]["generated"]
+        ["ARM_GIC_V3_SUPPORT"]
+        is False
+    )
+    assert generated_config["ARM_GIC_V3_SUPPORT"] is False
 
     stamp = json.loads(
         (build_dir / "cohesix-profile-build-inputs.json").read_text(
@@ -1316,6 +1331,7 @@ def test_repo_managed_pi_profile_accepts_current_tracked_mcs_tree() -> None:
         "-DKernelArmExportPTMRUser=OFF",
         "-DKernelArmExportVTMRUser=OFF",
         "-DKernelArmVtimerUpdateVOffset=OFF",
+        "-DKernelArmGicV3=OFF",
     } <= configure
 
 

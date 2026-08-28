@@ -88,7 +88,7 @@ target canary merely because it is part of final acceptance.
 | `pi4-driver` | pi4 | one exact-image Pi boot, touched service/device liveness, one live operation, UART liveness, and no unexpected target fault | `pi4_diagnostic / configs/root_task_pi4_uboot_aarch64.toml` |
 | `worker` | qemu | canonical QEMU boot, real Worker READY, and one bounded startup/teardown/restart recovery operation | `qemu_smp_production / configs/root_task.toml` |
 | `ninedoor` | qemu | canonical QEMU boot, isolated NineDoor READY, and one real 9P operation | `qemu_smp_production / configs/root_task.toml` |
-| `console-network` | qemu | canonical QEMU boot, isolated console READY v3, and the fixed one-socket HELP/NETSTATS/SMP/CACHELOG matrix | `qemu_smp_production / configs/root_task.toml` |
+| `console-network` | qemu | canonical QEMU boot, isolated console READY v5, and the fixed one-socket HELP/NETSTATS/SMP/CACHELOG matrix | `qemu_smp_production / configs/root_task.toml` |
 | `root-mcs` | qemu | canonical QEMU boot, root steady state, one real target operation, and no unexpected seL4 fault | `qemu_smp_production / configs/root_task.toml` |
 | `live-transport` | qemu, pi4 | one authenticated operation over the changed live target transport | `selected target production profile` |
 | `python-sdk` | qemu, pi4 | focused Python SDK tests | `host-only Python SDK` |
@@ -1356,11 +1356,17 @@ invalid counter still admits one legacy logical turn per scheduler activation
 before yielding, so telemetry failure cannot deadlock bootstrap. An attached
 continuation additionally requires a CYW43 Network phase, actual NetPoller
 activity, exactly one service counter advance, the immediate next phase still
-Network, durable schedulable work, and no quarantine, recovery, reboot, or
-operator rotation; focused pure tests reject every missing predicate without
-device effects. The prior four-Driver restart burst is not composed with this
-window. QEMU, generic root control, all SC numerics, and every
-physical-operation/postphysical boundary remain unchanged.
+Network, and either durable schedulable physical work or a nonzero retained
+response cursor whose identity exactly matches both the active and
+authenticated connection. Focused pure tests must reject an inactive cursor,
+stale active or authenticated identity, no activity, no service-counter
+advance, quarantine, recovery, reboot, or operator rotation without device
+effects. The response case admits only the next separately charged root turn;
+the isolated child's ordinary lower rotor cannot burst. The prior four-Driver
+restart burst is not composed with this window. QEMU, generic root control, all
+SC numerics, and every physical-operation/finalizer and external-wait boundary
+remain unchanged; only the generation-bound child source Yield is superseded by
+the exact-grant rule below.
 
 Child Ready timing tests use the child's absolute CNTVCT millisecond domain,
 not the pump-driven HAL clock. They must prove a valid same-frequency
@@ -4121,11 +4127,19 @@ return authority for exactly one existing bounded physical quantum. Rejected,
 stale, consumed, mutated, wrong-generation, or ACK-failed grants issue zero
 device operations. ACK failure must restore the complete pre-grant gate,
 including any coalesced wake, so a later attempt re-reads the same unconsumed
-grant. Tests must reject a fourth bookkeeping state, two grant reads, an
-`Inactive` recheck, service-plus-grant composition, ACK after I/O, a second
-physical operation, endpoint fallback, moved postphysical boundary, or any
-budget, deadline, owner, retry, Reply, fault, priority, period, refill, or core
-change.
+grant. On selected MCS, tests must additionally prove the postphysical route
+does not call `seL4_Yield` for a valid generation-bound one-way admission,
+because Yield charges the complete remaining head refill. Immediate re-entry
+with the already consumed grant must return the existing blocking wait with no
+ACK or I/O; only fresh exact grant N+1 may ACK and authorize exactly one next
+bounded physical operation/finalizer. Any rejected half, dual admission,
+Reply-bearing generation admission, stale identity, or unsupported route must
+fail closed, while an ordinary synchronous pending command retains its Reply
+association and existing Yield. Tests must reject a fourth bookkeeping state,
+two grant reads, an `Inactive` recheck, service-plus-grant composition, ACK
+after I/O, a second physical operation under one grant, endpoint fallback,
+composition across an external-condition wait, or any budget, deadline, owner,
+retry, Reply, fault, priority, period, refill, or core change.
 
 Send-only reciprocal caps deliver CYW43-to-SDIO badge 256 and SDIO-to-CYW43
 badge 2. SDHCI IRQ158 delivers its generated SDIO IRQ badge (currently 159),
@@ -4402,7 +4416,10 @@ up to the existing five distinct-phase turns, but must stop on a repeated
 phase, return to the starting phase, quarantine, recovery, containment, or
 reboot. Retaining the guarded activation requires an exact productive
 Network-to-Network successor, one service-counter advance, actual Network
-activity, and fresh durable schedulable work after the outer-event finalizer.
+activity, and either fresh durable schedulable work or the exact active and
+authenticated connection-matched response cursor after the outer-event
+finalizer. The response cursor still selects only one separately charged root
+turn and must not compose multiple units of the isolated lower rotor.
 Quarantine coverage must prove persistent display debt cannot create an
 unbounded redraw loop or poll quarantined CYW43. The next fresh exact-image Pi
 boot must pair serial and captures and compare same-driver cadence against the
@@ -6082,7 +6099,16 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
       preservation and wrap, bounded control/data fairness, exact-badge
       admission, durable masked continuation, device-store/unmask readback,
       final source/ring recheck, and no handler acknowledgement while accepted
-      work remains. A separate regression must place a complete bounded frame
+      work remains. Direct-active coverage must prove an admitted owner/peer
+      turn or the final condition-before-sleep cut may join an asserted owned raw
+      source or advanced DMA index to the same sole-owner episode, then executes
+      the existing mask/clear/bounded-drain/unmask/readback/recheck/rearm path.
+      Badge zero alone, software-ring state, idle state, invalid direct identity,
+      a timer, or an unadmitted call must not create or acknowledge work. Each
+      successful physical-level join increments `dpc_level_adoptions` exactly
+      once; a completed clean drain rearms once, while a full direct RX ring
+      blocks for peer not-full rearm without self-poll. A separate regression
+      must place a complete bounded frame
       behind an advanced durable RDMA producer without delivering an IRQ badge,
       then prove the admitted same-owner RX command queues and returns it within
       its existing operation/frame/byte budget without creating or
@@ -6103,9 +6129,15 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
       Isolated-console coverage must separately prove that an exact retained
       authenticated response flush selects `poll_response_turn` under the same
       one-op/two-frame/fixed-byte charge as ordinary polling, while ordinary
-      service retains the strict rotor. It must reject a loop, multi-unit burst,
-      budget increase, physical-input bypass, or QEMU/direct-VirtIO ownership
-      change. Host timing or selector tests cannot establish Pi performance.
+      service retains the strict rotor. Pi root continuation must additionally
+      require a nonzero pending cursor matching both the active and authenticated
+      connection, actual Network activity, exactly one service-turn advance and
+      an immediate Network successor. It must reject inactive, disconnected,
+      stale-active, stale-authenticated, quarantined, recovering, rebooting or
+      no-progress state, a child lower-rotor loop or multi-unit burst, budget
+      increase, physical-input bypass, or QEMU/direct-VirtIO ownership change.
+      The generated 250 us root reserve and 64-unit cap remain exact. Host timing
+      or selector tests cannot establish Pi performance.
       Generated-profile and ABI tests must prove that only the exact Pi
       `bcmgenet-v5` profile derives the direct GENET link: one CPU-only 32-page
       semantic range, zero physical/DMA/device-visible authority, page 0
@@ -6157,9 +6189,10 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
       anchor revoke.
       Direct-GENET diagnostic coverage must prove the exact page-0 layout:
       control header `[0,64)`, four cursor records `[64,320)`, optional aligned
-      192-byte diagnostic-v1 record `[320,512)`, record-relative sequence-last
+      192-byte diagnostic-v2 record `[320,512)`, record-relative sequence-last
       commit at offset 184, and still-reserved tail `[512,4096)`. ABI tests must
-      prove every range is non-overlapping, reserved fields stay zero, maximum
+      prove record offset 108 round-trips cumulative `dpc_level_adoptions`, every
+      range is non-overlapping, all other reserved fields stay zero, maximum
       counter values encode/decode and render without truncation, and a missing,
       torn, stale, malformed, or wrong-generation record is unavailable rather
       than accepted. Root must stable-read the complete record around its commit
@@ -6365,7 +6398,7 @@ mismatch, fewer than two total refills, missing consumed-time evidence, and an
 active SC that aliases another task. QEMU and Pi each reserve 1,000 us of every
 10,000 us core window. The Pi table includes seven linked-driver records; the
 default QEMU table deliberately does not fabricate those hardware TCBs.
-Manifest `root_task.schema = "1.14"` retains exactly one fixed, root-retained
+Manifest `root_task.schema = "1.15"` retains exactly one fixed, root-retained
 NineDoor bootstrap SC outside the steady temporal-task topology. Resource
 admission must therefore total 18 SCs for QEMU and 25 for Pi; the former 17/24
 totals, a zero-object NineDoor SC inventory, or double-counting the one-shot
@@ -6395,7 +6428,7 @@ GPU and LoRA peers must each derive `3600 us` response. It must
 assert exact core-0/core-2 demands `8750/3800 us`. Pi must retain its earlier
 console core 0, derive `8100 us` response, retain GPU/LoRA `1200 us`
 responses, and preserve exact `9000/9000 us` admission truth while selecting
-the same V18 child provenance and ABI v3. Both fixtures must select
+the same V18 child provenance and current ABI v5. Both fixtures must select
 `NaturalPostpone` for the active console child and their selected root-control
 row, retain each timeout cap/badge/resource/registry identity, and prove both
 TCB timeout-handler slots are left empty while their standard fault endpoints
@@ -7842,7 +7875,7 @@ The focused source guards are
 `terminal_critical_fault_commits_one_resumable_action_per_refill`.
 
 NineDoor, temporal-contract, console-ACK, SendBatch, and NaturalPostpone schema
-tests must require `root_task.schema = "1.14"` and reject schema 1.13 or older. They must admit
+tests must require `root_task.schema = "1.15"` and reject schema 1.14 or older. They must admit
 exactly one root-retained, one-shot scheduling context with
 object bits 8, `3000 us / 10000 us`, and `max_refills = 2`; any different value,
 missing fixed SC accounting, child-Cspace SC or SchedControl cap, or NineDoor
@@ -8085,8 +8118,9 @@ release fence, publish the final sequence commit, and signal only afterward.
 Readers must reject an oversized length or a commit that changes across the
 bounded copy without advancing the accepted sequence. Scalar reserved header
 fields must validate as zero. On direct-GENET control page 0, bytes `[320,512)`
-are no longer generic reserved tail: they hold the optional diagnostic-v1
-record governed by the stable exact-generation rules above. Bytes
+are no longer generic reserved tail: they hold the optional diagnostic-v2
+record governed by the stable exact-generation rules above, with cumulative
+`dpc_level_adoptions` at record offset 108. Bytes
 `[512,4096)` and inactive payload suffixes remain non-authoritative and must not
 be scanned or copied during a normal turn; construction zeroing and containment
 scrub remain required. Capability

@@ -1420,7 +1420,7 @@ pub const DIRECT_GENET_RUNTIME_DIAGNOSTIC_COMMIT_OFFSET: usize = 184;
 /// Direct-GENET runtime diagnostic magic (`CNGD`).
 pub const DIRECT_GENET_RUNTIME_DIAGNOSTIC_MAGIC: u32 = 0x434e_4744;
 /// Direct-GENET runtime diagnostic layout version.
-pub const DIRECT_GENET_RUNTIME_DIAGNOSTIC_VERSION: u16 = 1;
+pub const DIRECT_GENET_RUNTIME_DIAGNOSTIC_VERSION: u16 = 2;
 /// Diagnostic flag: the isolated GENET runtime completed initialization.
 pub const DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_INITIALIZED: u32 = 1 << 0;
 /// Diagnostic flag: the exact direct-link generation is active.
@@ -1619,7 +1619,7 @@ pub struct DirectGenetRuntimeDiagnostic {
     pub dpc_budget_hits: u32,
     /// Final unmask/source rechecks before IRQ acknowledgement.
     pub dpc_final_rechecks: u32,
-    /// Last owned GENET interrupt status observed by an IRQ wake.
+    /// Last owned GENET interrupt status observed by a wake or physical-level adoption.
     pub dpc_last_status: u32,
     /// Current raw owned INTRL2 status bits.
     pub irq_raw: u32,
@@ -1645,8 +1645,8 @@ pub struct DirectGenetRuntimeDiagnostic {
     pub peer_signals: u32,
     /// Stable cursor-sample races observed by the GENET owner.
     pub state_changes: u32,
-    /// Reserved; zero.
-    pub reserved1: u32,
+    /// Badge-zero or peer-turn joins of durable physical work to an IRQ episode.
+    pub dpc_level_adoptions: u32,
     /// RX producer cursor when the RX-ring-valid flag is set.
     pub rx_producer_cursor: u64,
     /// RX consumer cursor when the RX-ring-valid flag is set.
@@ -1702,7 +1702,7 @@ impl DirectGenetRuntimeDiagnostic {
             peer_wakes: 0,
             peer_signals: 0,
             state_changes: 0,
-            reserved1: 0,
+            dpc_level_adoptions: 0,
             rx_producer_cursor: 0,
             rx_consumer_cursor: 0,
             tx_producer_cursor: 0,
@@ -1728,7 +1728,6 @@ impl DirectGenetRuntimeDiagnostic {
             && self.len as usize == DIRECT_GENET_RUNTIME_DIAGNOSTIC_BYTES
             && self.flags & !DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAGS == 0
             && self.reserved0 == 0
-            && self.reserved1 == 0
             && self.reserved[0] == 0
             && self.reserved[1] == 0
             && self.reserved[2] == 0
@@ -1783,7 +1782,7 @@ impl DirectGenetRuntimeDiagnostic {
         output[96..100].copy_from_slice(&self.peer_wakes.to_le_bytes());
         output[100..104].copy_from_slice(&self.peer_signals.to_le_bytes());
         output[104..108].copy_from_slice(&self.state_changes.to_le_bytes());
-        output[108..112].copy_from_slice(&self.reserved1.to_le_bytes());
+        output[108..112].copy_from_slice(&self.dpc_level_adoptions.to_le_bytes());
         output[112..120].copy_from_slice(&self.rx_producer_cursor.to_le_bytes());
         output[120..128].copy_from_slice(&self.rx_consumer_cursor.to_le_bytes());
         output[128..136].copy_from_slice(&self.tx_producer_cursor.to_le_bytes());
@@ -1833,7 +1832,7 @@ impl DirectGenetRuntimeDiagnostic {
             peer_wakes: read_u32(input, 96),
             peer_signals: read_u32(input, 100),
             state_changes: read_u32(input, 104),
-            reserved1: read_u32(input, 108),
+            dpc_level_adoptions: read_u32(input, 108),
             rx_producer_cursor: read_u64(input, 112),
             rx_consumer_cursor: read_u64(input, 120),
             tx_producer_cursor: read_u64(input, 128),
@@ -4879,6 +4878,7 @@ mod tests {
         diagnostic.irq_wakes = 2;
         diagnostic.irq_acks = 3;
         diagnostic.dpc_turns = 4;
+        diagnostic.dpc_level_adoptions = 1;
         diagnostic.irq_raw = 0x0001_2000;
         diagnostic.irq_mask = 0x0001_0000;
         diagnostic.irq_active = 0x0000_2000;
@@ -4897,6 +4897,11 @@ mod tests {
 
         let mut encoded = [0u8; DIRECT_GENET_RUNTIME_DIAGNOSTIC_BYTES];
         diagnostic.encode(&mut encoded).unwrap();
+        assert_eq!(
+            &encoded[108..112],
+            &1u32.to_le_bytes(),
+            "diagnostic v2 assigns raw record offset 108 to level adoptions",
+        );
         assert_eq!(
             DirectGenetRuntimeDiagnostic::decode(&encoded, 7),
             Ok(diagnostic)

@@ -2436,6 +2436,7 @@ struct GenetRuntimeState {
     dpc_turns: u32,
     dpc_budget_hits: u32,
     dpc_final_rechecks: u32,
+    dpc_level_adoptions: u32,
     dpc_last_status: u32,
     direct_genet_generation: u64,
     direct_genet_active: bool,
@@ -2495,6 +2496,7 @@ impl GenetRuntimeState {
             dpc_turns: 0,
             dpc_budget_hits: 0,
             dpc_final_rechecks: 0,
+            dpc_level_adoptions: 0,
             dpc_last_status: 0,
             direct_genet_generation: 0,
             direct_genet_active: false,
@@ -2553,6 +2555,7 @@ impl GenetRuntimeState {
         self.dpc_turns = 0;
         self.dpc_budget_hits = 0;
         self.dpc_final_rechecks = 0;
+        self.dpc_level_adoptions = 0;
         self.dpc_last_status = 0;
         self.direct_genet_generation = 0;
         self.direct_genet_active = false;
@@ -11593,8 +11596,8 @@ enum RuntimeRetainedWaitRecheck {
 ///
 /// seL4 notification badges coalesce, just like Linux workqueue scheduling
 /// hints. The immutable shared grant is the durable condition. `Ready` may
-/// therefore resume without another receive after the preceding delegated
-/// turn's mandatory scheduler handoff. Requiring a second badge here would
+/// therefore resume without another receive after the preceding bounded owner
+/// action. Requiring a second badge here would
 /// strand a valid grant when the initial-command and continuation signals
 /// coalesced and were consumed before the grant became observable.
 #[cfg(any(target_os = "none", test))]
@@ -12366,6 +12369,68 @@ const fn runtime_ordinary_pending_route(
         RuntimeOrdinaryPendingRoute::PreserveReplyAndYield
     } else {
         RuntimeOrdinaryPendingRoute::EndpointRendezvous
+    }
+}
+
+/// Scheduling boundary after one bounded command action remains pending.
+///
+/// Generation-bound CYW43/SDIO work re-enters the exact-grant admission path
+/// immediately. That path may fuse only pure bookkeeping: without a fresh,
+/// identity-matched grant it blocks on the existing local notification before
+/// another physical action is reachable. This preserves one action per grant
+/// while avoiding `seL4_Yield`, which under MCS charges the complete remaining
+/// refill and inflated every sub-millisecond bus phase to a full period.
+#[cfg(any(target_os = "none", test))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RuntimePendingQuantumRoute {
+    ReenterDelegatedGrant(u32),
+    ReenterRootGrant(u32),
+    EndpointRendezvous,
+    PreserveReplyAndYield,
+    Rejected,
+}
+
+#[cfg(any(target_os = "none", test))]
+const fn runtime_pending_quantum_route(
+    delegated: RuntimeDelegatedGenerationAdmission,
+    root: RuntimeDelegatedGenerationAdmission,
+    reply_association_active: bool,
+) -> RuntimePendingQuantumRoute {
+    if reply_association_active
+        && (matches!(delegated, RuntimeDelegatedGenerationAdmission::Admitted(_))
+            || matches!(root, RuntimeDelegatedGenerationAdmission::Admitted(_)))
+    {
+        // A generation-bound producer can exist only for a one-way command.
+        // Never let an inconsistent helper input bypass the sole retained
+        // MCS Reply association or reinterpret it as producer authority.
+        return RuntimePendingQuantumRoute::Rejected;
+    }
+    match (delegated, root) {
+        (RuntimeDelegatedGenerationAdmission::Rejected, _)
+        | (_, RuntimeDelegatedGenerationAdmission::Rejected)
+        | (
+            RuntimeDelegatedGenerationAdmission::Admitted(_),
+            RuntimeDelegatedGenerationAdmission::Admitted(_),
+        ) => RuntimePendingQuantumRoute::Rejected,
+        (
+            RuntimeDelegatedGenerationAdmission::Admitted(generation),
+            RuntimeDelegatedGenerationAdmission::NotDelegated,
+        ) => RuntimePendingQuantumRoute::ReenterDelegatedGrant(generation),
+        (
+            RuntimeDelegatedGenerationAdmission::NotDelegated,
+            RuntimeDelegatedGenerationAdmission::Admitted(generation),
+        ) => RuntimePendingQuantumRoute::ReenterRootGrant(generation),
+        (
+            RuntimeDelegatedGenerationAdmission::NotDelegated,
+            RuntimeDelegatedGenerationAdmission::NotDelegated,
+        ) => match runtime_ordinary_pending_route(reply_association_active) {
+            RuntimeOrdinaryPendingRoute::EndpointRendezvous => {
+                RuntimePendingQuantumRoute::EndpointRendezvous
+            }
+            RuntimeOrdinaryPendingRoute::PreserveReplyAndYield => {
+                RuntimePendingQuantumRoute::PreserveReplyAndYield
+            }
+        },
     }
 }
 
@@ -16292,6 +16357,43 @@ fn genet_rx_hardware_pending(state: &GenetRuntimeState) -> bool {
     genet_read32(GENET_RDMA_PROD_INDEX) as u16 != state.rx_cons_index
 }
 
+fn genet_tx_hardware_completion_pending(state: &GenetRuntimeState) -> bool {
+    genet_read32(GENET_TDMA_CONS_INDEX) as u16 != state.tx_cons_index
+}
+
+/// Join an already-durable direct-GENET level to the sole owner's IRQ episode.
+///
+/// The exact Pi profile uses the selected seL4 GICv2 kernel, where
+/// `IRQHandler_Ack` is the idempotent re-enable operation. A raw owned INTRL2
+/// level or an advanced DMA index therefore proves enough physical state to
+/// repair a handler lifetime whose notification badge was coalesced or never
+/// observed. This is sampled only in an admitted owner turn or at the final
+/// condition-before-sleep boundary; it is not a timer or free-running poll.
+fn genet_runtime_adopt_direct_level(state: &mut GenetRuntimeState) -> bool {
+    if !state.direct_genet_active || state.irq_ack_pending || state.direct_genet_faulted {
+        return false;
+    }
+    let raw_before_mask = genet_irq_raw_sources();
+    let rx_pending = genet_rx_hardware_pending(state);
+    let tx_pending = genet_tx_hardware_completion_pending(state);
+    if raw_before_mask == 0 && !rx_pending && !tx_pending {
+        return false;
+    }
+
+    // Match the ordinary IRQ entry order. The completion barrier and
+    // same-aperture raw read make the source mask visible before any clear or
+    // descriptor consumption. The existing terminal unmask/readback and
+    // final raw-plus-index recheck close the other side before exact rearm.
+    genet_irq_mask_sources();
+    device_store_completion_barrier();
+    let status = raw_before_mask | genet_irq_raw_sources();
+    genet_irq_clear_sources(status);
+    state.dpc_last_status |= status;
+    state.irq_ack_pending = true;
+    state.dpc_level_adoptions = state.dpc_level_adoptions.saturating_add(1);
+    true
+}
+
 fn genet_runtime_dpc_local_continuation_ready(state: &GenetRuntimeState) -> bool {
     if !state.initialized || state.direct_genet_faulted {
         return false;
@@ -16312,7 +16414,7 @@ fn genet_runtime_dpc_local_continuation_ready(state: &GenetRuntimeState) -> bool
     if state.irq_ack_pending {
         return true;
     }
-    let hardware_reclaim = genet_read32(GENET_TDMA_CONS_INDEX) as u16 != state.tx_cons_index;
+    let hardware_reclaim = genet_tx_hardware_completion_pending(state);
     let hardware_room = hardware_reclaim
         || (ring_distance(state.tx_prod_index, state.tx_cons_index) as usize)
             < GENET_ACTIVE_RING_DESCS;
@@ -16329,11 +16431,13 @@ fn genet_runtime_dpc_local_continuation_ready(state: &GenetRuntimeState) -> bool
 
 /// Service one child-owned, bounded GENET packet DPC quantum.
 ///
-/// An exact IRQ badge creates the only new DPC lifetime. Badge zero may only
-/// continue a lifetime whose seL4 IRQ handler is still deliberately unacked;
-/// it is not a polling fallback. The physical source remains masked until the
-/// bounded RX ring is drained, then a final unmask/recheck closes the classic
-/// lost-wake window before the handler cap is acknowledged.
+/// An exact IRQ badge starts the ordinary lifetime. After direct ownership,
+/// badge zero or the reciprocal peer badge may also join a raw owned level or
+/// advanced DMA index to the same sole-owner episode. Software-ring state
+/// alone cannot create or acknowledge a physical lifetime. The physical source
+/// remains masked until the bounded RX ring is drained, then a final
+/// unmask/recheck closes the classic lost-wake window before the handler cap is
+/// rearmed.
 fn genet_runtime_service_notification(badge: u32) -> bool {
     GENET_RUNTIME_STATE.with_mut(|state| genet_runtime_service_dpc_state(state, badge))
 }
@@ -16364,10 +16468,14 @@ fn genet_runtime_service_dpc_state(state: &mut GenetRuntimeState, badge: u32) ->
         genet_irq_mask_sources();
         genet_irq_clear_sources(status);
         state.irq_ack_pending = true;
-    } else if (badge != 0 && !direct_wake)
-        || (badge == 0
-            && !state.irq_ack_pending
-            && !genet_runtime_dpc_local_continuation_ready(state))
+    }
+    let adopted_level = !irq_wake && genet_runtime_adopt_direct_level(state);
+    if !irq_wake
+        && !adopted_level
+        && ((badge != 0 && !direct_wake)
+            || (badge == 0
+                && !state.irq_ack_pending
+                && !genet_runtime_dpc_local_continuation_ready(state)))
     {
         return false;
     }
@@ -16408,10 +16516,9 @@ fn genet_runtime_service_dpc_state(state: &mut GenetRuntimeState, badge: u32) ->
         if drain_cap == 0 || rx_service_units >= drain_cap {
             state.dpc_budget_hits = state.dpc_budget_hits.saturating_add(1);
         }
-        // Retain the exact unacked IRQ lifetime. The runtime's mandatory idle
-        // durable-source recheck or a packet-consume command may continue it;
-        // badge zero cannot create this state and no timer or synthetic wake
-        // is introduced.
+        // Retain the exact unacked or physically adopted IRQ episode. The
+        // runtime's mandatory idle condition check or a direct peer rearm may
+        // continue it; neither path introduces a timer or synthetic work.
         return true;
     }
 
@@ -16456,7 +16563,7 @@ fn genet_runtime_service_dpc_state(state: &mut GenetRuntimeState, badge: u32) ->
     state.dpc_final_rechecks = state.dpc_final_rechecks.saturating_add(1);
     let recheck_status = genet_irq_active_sources();
     let recheck_rx = genet_rx_hardware_pending(state);
-    let recheck_tx = genet_read32(GENET_TDMA_CONS_INDEX) as u16 != state.tx_cons_index;
+    let recheck_tx = genet_tx_hardware_completion_pending(state);
     if recheck_status != 0 || recheck_rx || recheck_tx {
         genet_irq_mask_sources();
         genet_irq_clear_sources(recheck_status);
@@ -16479,6 +16586,32 @@ fn genet_runtime_service_dpc_state(state: &mut GenetRuntimeState, badge: u32) ->
     state.irq_acks = state.irq_acks.saturating_add(1);
     state.irq_ack_pending = false;
     true
+}
+
+/// Service and classify the final durable GENET condition before blocking.
+///
+/// Returning `false` after a successful drain is intentional: the source was
+/// cleared, the final unmask/recheck completed, and the GICv2 handler was
+/// rearmed, so a later physical level will latch the bound notification. A
+/// full direct RX ring also returns `false` while retaining the masked episode;
+/// only the consumer's full-to-not-full peer notification can make progress.
+fn genet_runtime_condition_before_sleep(state: &mut GenetRuntimeState) -> bool {
+    if state.direct_genet_active
+        && state.irq_ack_pending
+        && genet_rx_hardware_pending(state)
+        && genet_direct_control_sample(DirectGenetDirection::Rx, state.direct_genet_generation)
+            .is_ok_and(|(_, snapshot)| snapshot.occupancy() == snapshot.capacity)
+    {
+        // The earlier persistent-source pass already retained and masked this
+        // exact episode. Re-reading descriptors cannot free a CPU-only SPSC
+        // slot, so block for the consumer's reciprocal rearm instead of
+        // spending another DPC turn at the final check. An invalid or raced
+        // cursor deliberately falls through and is reconciled or poisoned by
+        // the ordinary service path.
+        return false;
+    }
+    let _ = genet_runtime_service_dpc_state(state, 0);
+    genet_runtime_dpc_local_continuation_ready(state)
 }
 
 fn genet_completion_result(state: &GenetRuntimeState, tx_free: u16, tx_in_flight: u16) -> u32 {
@@ -45171,7 +45304,7 @@ fn genet_direct_publish_runtime_diagnostic(
         peer_wakes: state.direct_genet_peer_wakes,
         peer_signals: state.direct_genet_peer_signals,
         state_changes: state.direct_genet_state_changes,
-        reserved1: 0,
+        dpc_level_adoptions: state.dpc_level_adoptions,
         rx_producer_cursor: rx.map_or(0, |snapshot| snapshot.producer_cursor),
         rx_consumer_cursor: rx.map_or(0, |snapshot| snapshot.consumer_cursor),
         tx_producer_cursor: tx.map_or(0, |snapshot| snapshot.producer_cursor),
@@ -52527,8 +52660,9 @@ fn runtime_poll_pause() {
 #[cfg(target_os = "none")]
 fn runtime_yield_current_tcb() {
     // SAFETY: Yield carries no pointer or capability payload. Every caller is
-    // already executing as the admitted linked-runtime TCB, so this operation
-    // only returns its current scheduling quantum to seL4.
+    // already executing as the admitted linked-runtime TCB. On the selected
+    // MCS kernel this charges the complete remaining head refill; classic
+    // kernels retain their ordinary cooperative-yield semantics.
     unsafe {
         sel4_sys::seL4_Yield();
     }
@@ -64446,10 +64580,11 @@ pub fn runtime_main(task_key: usize) -> ! {
                 if notification_route == RuntimeNotificationRoute::Genet
                     && GENET_RUNTIME_STATE.with_ref(genet_runtime_dpc_local_continuation_ready)
                 {
-                    // Only the exact retained, unacked IRQ lifetime may
-                    // schedule another bounded quantum. A full private queue
-                    // instead blocks for the root consumer command that can
-                    // free capacity; no timer or free-running poll is added.
+                    // Only a retained IRQ episode or exact durable direct-ring
+                    // condition may schedule another bounded quantum. A full
+                    // direct RX ring instead blocks for the peer consumer's
+                    // full-to-not-full signal; no timer or free-running poll
+                    // is added.
                     continue;
                 }
                 if notification_route == RuntimeNotificationRoute::Cyw43Client {
@@ -64497,6 +64632,15 @@ pub fn runtime_main(task_key: usize) -> ! {
                 // reader now. The sequence-last command, not notification
                 // history, is the complete work condition; a signal racing
                 // this final check remains latched for the blocking receive.
+                continue;
+            }
+            if notification_route == RuntimeNotificationRoute::Genet
+                && GENET_RUNTIME_STATE.with_mut(genet_runtime_condition_before_sleep)
+            {
+                // This is the final physical condition check after the command
+                // ring's sequence-last sample. Work crossing either earlier
+                // sample remains bounded owner work; a later level reaches the
+                // rearmed, TCB-bound notification.
                 continue;
             }
             // Every non-MCS runtime blocks on its command endpoint after the
@@ -64896,48 +65040,41 @@ pub fn runtime_main(task_key: usize) -> ! {
             // A synchronous Call cannot receive such a continuation while its
             // caller is blocked, so it preserves the Reply association and
             // yields between bounded phases instead.
-            match delegated_generation {
-                RuntimeDelegatedGenerationAdmission::Admitted(generation) => {
+            match runtime_pending_quantum_route(
+                delegated_generation,
+                root_generation,
+                intake.reply_cap_available,
+            ) {
+                RuntimePendingQuantumRoute::ReenterDelegatedGrant(generation) => {
                     pending_command_gate.retain_after_pending_generation(generation);
-                    // The durable command/grant backlog may already contain the
-                    // next authorized phase. Move this priority-255 owner behind
-                    // the root/event-pump peer before examining it so two
-                    // physical SDIO actions cannot collapse into one scheduler
-                    // slice merely because badge notifications coalesced.
+                    // Re-enter bounded grant admission now. A fresh exact grant
+                    // may already exist only because the CYW43 peer ran after
+                    // publishing this action. Otherwise the condition-before-
+                    // sleep recheck blocks on the local notification, handing
+                    // the CPU to that producer without forfeiting this SC refill.
+                }
+                RuntimePendingQuantumRoute::ReenterRootGrant(generation) => {
+                    pending_command_gate.retain_after_pending_root_generation(generation);
+                    // Root's next EventPump turn publishes the immutable grant.
+                    // Re-entering admission reaches the existing blocking local-
+                    // notification wait when it is not yet visible, rather than
+                    // burning the rest of this child's MCS refill in Yield.
+                }
+                RuntimePendingQuantumRoute::EndpointRendezvous => {
+                    pending_command_gate.retain_after_pending();
+                }
+                RuntimePendingQuantumRoute::PreserveReplyAndYield => {
+                    // The synchronous caller cannot publish a continuation while
+                    // blocked. Preserve its sole Reply association and hand off
+                    // the scheduler before the next bounded service phase; never
+                    // receive on the endpoint again.
+                    pending_command_gate.complete();
                     runtime_yield_current_tcb();
                 }
-                RuntimeDelegatedGenerationAdmission::NotDelegated => {
-                    match root_generation {
-                        RuntimeDelegatedGenerationAdmission::Admitted(generation) => {
-                            pending_command_gate.retain_after_pending_root_generation(generation);
-                            // Root publishes the exact grant on a later EventPump
-                            // turn. Yield before inspecting either the durable
-                            // grant record or its coalescing notification.
-                            runtime_yield_current_tcb();
-                        }
-                        RuntimeDelegatedGenerationAdmission::NotDelegated => {
-                            match runtime_ordinary_pending_route(intake.reply_cap_available) {
-                                RuntimeOrdinaryPendingRoute::EndpointRendezvous => {
-                                    pending_command_gate.retain_after_pending();
-                                }
-                                RuntimeOrdinaryPendingRoute::PreserveReplyAndYield => {
-                                    // The synchronous caller cannot publish a
-                                    // continuation while blocked. Preserve its
-                                    // sole Reply association and hand off the
-                                    // scheduler before the next bounded service
-                                    // phase; never receive on the endpoint again.
-                                    pending_command_gate.complete();
-                                    runtime_yield_current_tcb();
-                                }
-                            }
-                        }
-                        RuntimeDelegatedGenerationAdmission::Rejected => {
-                            // Rejected commands complete above before any
-                            // owner action and can never enter a fallback lane.
-                        }
-                    }
+                RuntimePendingQuantumRoute::Rejected => {
+                    // Rejected commands complete above before any owner action
+                    // and can never enter a fallback lane.
                 }
-                RuntimeDelegatedGenerationAdmission::Rejected => {}
             }
             continue;
         };
@@ -75882,6 +76019,178 @@ mod tests {
     }
 
     #[test]
+    fn generation_bound_pending_quantum_reenters_exact_grant_admission() {
+        const GENERATION: u32 = 17;
+        assert_eq!(
+            runtime_pending_quantum_route(
+                RuntimeDelegatedGenerationAdmission::Admitted(GENERATION),
+                RuntimeDelegatedGenerationAdmission::NotDelegated,
+                false,
+            ),
+            RuntimePendingQuantumRoute::ReenterDelegatedGrant(GENERATION),
+            "SDIO may re-enter only its peer-grant admission lane",
+        );
+        assert_eq!(
+            runtime_pending_quantum_route(
+                RuntimeDelegatedGenerationAdmission::NotDelegated,
+                RuntimeDelegatedGenerationAdmission::Admitted(GENERATION),
+                false,
+            ),
+            RuntimePendingQuantumRoute::ReenterRootGrant(GENERATION),
+            "CYW43 may re-enter only its root-grant admission lane",
+        );
+        assert_eq!(
+            runtime_pending_quantum_route(
+                RuntimeDelegatedGenerationAdmission::NotDelegated,
+                RuntimeDelegatedGenerationAdmission::NotDelegated,
+                false,
+            ),
+            RuntimePendingQuantumRoute::EndpointRendezvous,
+        );
+        assert_eq!(
+            runtime_pending_quantum_route(
+                RuntimeDelegatedGenerationAdmission::NotDelegated,
+                RuntimeDelegatedGenerationAdmission::NotDelegated,
+                true,
+            ),
+            RuntimePendingQuantumRoute::PreserveReplyAndYield,
+            "ordinary synchronous drivers retain their existing scheduler handoff",
+        );
+        assert_eq!(
+            runtime_pending_quantum_route(
+                RuntimeDelegatedGenerationAdmission::Rejected,
+                RuntimeDelegatedGenerationAdmission::Admitted(GENERATION),
+                false,
+            ),
+            RuntimePendingQuantumRoute::Rejected,
+            "a rejected outer generation cannot fall through to another lane",
+        );
+        assert_eq!(
+            runtime_pending_quantum_route(
+                RuntimeDelegatedGenerationAdmission::Admitted(GENERATION),
+                RuntimeDelegatedGenerationAdmission::Rejected,
+                false,
+            ),
+            RuntimePendingQuantumRoute::Rejected,
+            "a root rejection must dominate a delegated admission",
+        );
+        assert_eq!(
+            runtime_pending_quantum_route(
+                RuntimeDelegatedGenerationAdmission::Admitted(GENERATION),
+                RuntimeDelegatedGenerationAdmission::Admitted(GENERATION),
+                false,
+            ),
+            RuntimePendingQuantumRoute::Rejected,
+            "ambiguous dual generation authority must fail closed",
+        );
+        for reply_bearing in [
+            runtime_pending_quantum_route(
+                RuntimeDelegatedGenerationAdmission::Admitted(GENERATION),
+                RuntimeDelegatedGenerationAdmission::NotDelegated,
+                true,
+            ),
+            runtime_pending_quantum_route(
+                RuntimeDelegatedGenerationAdmission::NotDelegated,
+                RuntimeDelegatedGenerationAdmission::Admitted(GENERATION),
+                true,
+            ),
+        ] {
+            assert_eq!(
+                reply_bearing,
+                RuntimePendingQuantumRoute::Rejected,
+                "generation authority can never bypass a retained Reply association",
+            );
+        }
+    }
+
+    #[test]
+    fn immediate_generation_reentry_waits_for_a_fresh_exact_grant() {
+        use core::cell::Cell;
+
+        const GENERATION: u32 = 17;
+        let intake = root_retained_gate_test_intake(0x4359_7101, GENERATION);
+        let mut retained = intake;
+        let mut gate = RuntimePendingCommandGate::new();
+        gate.retain_after_pending_root_generation(GENERATION);
+        let mut ring = test_continuation_grant_ring();
+        let base = ring.0.as_mut_ptr() as usize;
+
+        assert!(publish_runtime_continuation_grant_at(
+            base,
+            intake.command,
+            GENERATION,
+            1,
+        ));
+        let first = read_runtime_continuation_grant_at(base).expect("first exact grant");
+        gate.consume_grant(first);
+        assert!(acknowledge_runtime_continuation_grant_at(base, 1));
+        let acknowledgements = Cell::new(0u32);
+        let physical_quanta = Cell::new(0u32);
+        let consumed_admission = runtime_retained_owner_bounded_admission(
+            &mut gate,
+            &mut retained,
+            RuntimeNotificationRoute::Cyw43Client,
+            RuntimeWake::Notification(DRIVER_RUNTIME_RESERVED_ROOT_BADGE),
+            |gate, intake| probe_runtime_retained_continuation_grant(gate, Some(intake), base),
+            |gate, intake| {
+                recheck_runtime_retained_continuation_grant_before_wait(gate, Some(intake), base)
+            },
+            |_| {
+                acknowledgements.set(acknowledgements.get().saturating_add(1));
+                false
+            },
+        );
+        if matches!(
+            consumed_admission.outcome,
+            RuntimeRetainedOwnerAdmissionOutcome::Execute(_)
+        ) {
+            physical_quanta.set(physical_quanta.get().saturating_add(1));
+        }
+        assert_eq!(
+            consumed_admission.outcome,
+            RuntimeRetainedOwnerAdmissionOutcome::Wait,
+            "the acknowledged old grant is a block condition, never replay authority",
+        );
+        assert_eq!(acknowledgements.get(), 0);
+        assert_eq!(physical_quanta.get(), 0);
+
+        assert!(publish_runtime_continuation_grant_at(
+            base,
+            intake.command,
+            GENERATION,
+            2,
+        ));
+        let fresh_admission = runtime_retained_owner_bounded_admission(
+            &mut gate,
+            &mut retained,
+            RuntimeNotificationRoute::Cyw43Client,
+            RuntimeWake::Notification(DRIVER_RUNTIME_RESERVED_ROOT_BADGE),
+            |gate, intake| probe_runtime_retained_continuation_grant(gate, Some(intake), base),
+            |_, _| panic!("a fresh exact grant must not enter the wait recheck"),
+            |grant_id| {
+                acknowledgements.set(acknowledgements.get().saturating_add(1));
+                acknowledge_runtime_continuation_grant_at(base, grant_id)
+            },
+        );
+        if matches!(
+            fresh_admission.outcome,
+            RuntimeRetainedOwnerAdmissionOutcome::Execute(_)
+        ) {
+            physical_quanta.set(physical_quanta.get().saturating_add(1));
+        }
+        assert!(matches!(
+            fresh_admission.outcome,
+            RuntimeRetainedOwnerAdmissionOutcome::Execute(grant) if grant.grant_id == 2
+        ));
+        assert_eq!(acknowledgements.get(), 1);
+        assert_eq!(
+            physical_quanta.get(),
+            1,
+            "fresh N+1 grants exactly one bounded physical quantum",
+        );
+    }
+
+    #[test]
     fn reply_command_poll_preserves_a_bound_device_notification_before_ipc() {
         for badge in [
             DRIVER_RUNTIME_SERIAL_IRQ_BADGE,
@@ -77395,6 +77704,9 @@ mod tests {
         direct_genet_peer_publish(DirectGenetDirection::Tx, generation, b"durable-zero-tx");
         assert!(genet_runtime_service_dpc_state(&mut state, 0));
         assert_eq!(state.tx_prod_index, 1);
+        assert_eq!(state.dpc_level_adoptions, 0);
+        assert_eq!(state.irq_acks, 0);
+        assert!(!state.irq_ack_pending);
 
         genet_write32(GENET_TDMA_CONS_INDEX, 1);
         stage_direct_genet_rx_hardware(&descriptor, &state, b"durable-zero-rx");
@@ -77402,12 +77714,135 @@ mod tests {
         assert_eq!(state.tx_cons_index, 1);
         assert_eq!(state.tx_unreported_reclaim, 0);
         assert_eq!(state.rx_cons_index, 1);
+        assert_eq!(state.dpc_level_adoptions, 1);
+        assert_eq!(state.irq_acks, 1);
 
         state.irq_ack_pending = true;
         assert!(genet_runtime_service_dpc_state(&mut state, 0));
         assert!(!state.irq_ack_pending);
-        assert_eq!(state.irq_acks, 1);
+        assert_eq!(state.irq_acks, 2);
         assert!(!genet_runtime_service_dpc_state(&mut state, 0));
+    }
+
+    #[test]
+    fn direct_genet_final_sleep_condition_adopts_badgeless_rx_and_rearms_once() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let generation = 0x26e0_0013;
+        let descriptor = direct_genet_descriptor_for_test();
+        let mut state = direct_genet_test_state(generation);
+        stage_direct_genet_rx_hardware(&descriptor, &state, b"badgeless-level-rx");
+        genet_write32(GENET_INTRL2_0_CPU_STAT, GENET_IRQ_RXDMA_MBDONE);
+
+        assert!(genet_rx_hardware_pending(&state));
+        assert!(genet_irq_active_sources() & GENET_IRQ_RXDMA_MBDONE != 0);
+        assert!(
+            !genet_runtime_condition_before_sleep(&mut state),
+            "a fully drained and rearmed condition is safe to block",
+        );
+        assert_eq!(state.irq_wakes, 0, "no notification badge was invented");
+        assert_eq!(state.dpc_level_adoptions, 1);
+        assert_eq!(state.dpc_last_status, GENET_IRQ_RXDMA_MBDONE);
+        assert_eq!(state.direct_genet_rx_packets, 1);
+        assert_eq!(state.rx_cons_index, 1);
+        assert_eq!(state.dpc_final_rechecks, 1);
+        assert_eq!(state.irq_acks, 1);
+        assert!(!state.irq_ack_pending);
+        assert_eq!(TEST_RUNTIME_IRQ_ACK_CALLS.load(Ordering::Acquire), 1);
+        assert_eq!(TEST_DEVICE_COMPLETION_BARRIERS.load(Ordering::Acquire), 2);
+        assert_eq!(genet_irq_raw_sources(), 0);
+        assert_eq!(
+            genet_read32(GENET_INTRL2_0_CPU_MASK_STATUS) & GENET_NAPI_IRQ_MASK,
+            0,
+        );
+
+        assert!(!genet_runtime_condition_before_sleep(&mut state));
+        assert_eq!(state.dpc_level_adoptions, 1);
+        assert_eq!(state.dpc_turns, 1);
+        assert_eq!(TEST_RUNTIME_IRQ_ACK_CALLS.load(Ordering::Acquire), 1);
+    }
+
+    #[test]
+    fn direct_genet_early_and_final_idle_checks_do_not_double_drain_or_spin() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let generation = 0x26e0_0015;
+        let descriptor = direct_genet_descriptor_for_test();
+        let mut state = direct_genet_test_state(generation);
+        stage_direct_genet_rx_hardware(&descriptor, &state, b"single-idle-rx");
+        genet_write32(GENET_INTRL2_0_CPU_STAT, GENET_IRQ_RXDMA_MBDONE);
+
+        assert!(
+            genet_runtime_service_dpc_state(&mut state, 0),
+            "the existing early persistent-source pass drains durable RX",
+        );
+        let exact_once = (
+            state.rx_cons_index,
+            state.direct_genet_rx_packets,
+            state.dpc_turns,
+            state.dpc_level_adoptions,
+            state.dpc_final_rechecks,
+            state.irq_acks,
+        );
+        assert!(!genet_runtime_condition_before_sleep(&mut state));
+        assert_eq!(
+            (
+                state.rx_cons_index,
+                state.direct_genet_rx_packets,
+                state.dpc_turns,
+                state.dpc_level_adoptions,
+                state.dpc_final_rechecks,
+                state.irq_acks,
+            ),
+            exact_once,
+            "the exact final condition check is quiescent after the early pass",
+        );
+        assert_eq!(exact_once, (1, 1, 1, 1, 1, 1));
+        assert_eq!(TEST_RUNTIME_IRQ_ACK_CALLS.load(Ordering::Acquire), 1);
+    }
+
+    #[test]
+    fn direct_genet_badgeless_rx_with_invalid_cursor_fails_closed_without_ack() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let generation = 0x26e0_0014;
+        let descriptor = direct_genet_descriptor_for_test();
+        let mut state = direct_genet_test_state(generation);
+        let mut control = direct_genet_read_page(0);
+        let cursor_offset =
+            DIRECT_GENET_RX_PRODUCER_STATE_OFFSET + console_network_abi::DIRECT_GENET_CURSOR_OFFSET;
+        control[cursor_offset..cursor_offset + 8].copy_from_slice(
+            &u64::try_from(DIRECT_GENET_RX_SLOT_COUNT + 1)
+                .expect("direct RX cursor bound fits u64")
+                .to_le_bytes(),
+        );
+        direct_genet_write_page(0, &control);
+        stage_direct_genet_rx_hardware(&descriptor, &state, b"invalid-cursor-rx");
+        genet_write32(GENET_INTRL2_0_CPU_STAT, GENET_IRQ_RXDMA_MBDONE);
+
+        assert!(!genet_runtime_condition_before_sleep(&mut state));
+        assert_eq!(state.dpc_level_adoptions, 1);
+        assert_eq!(state.irq_wakes, 0);
+        assert_eq!(state.irq_acks, 0);
+        assert_eq!(TEST_RUNTIME_IRQ_ACK_CALLS.load(Ordering::Acquire), 0);
+        assert!(state.direct_genet_faulted);
+        assert!(!state.direct_genet_active);
+        assert_eq!(state.rx_cons_index, 0);
+        assert_eq!(genet_read32(GENET_RDMA_CONS_INDEX), 0);
+        assert_eq!(TEST_GENET_DIRECT_TERMINAL_FAULTS.load(Ordering::Acquire), 1);
+        assert_eq!(
+            TEST_GENET_DIRECT_PEER_WAKE_SIGNALS.load(Ordering::Acquire),
+            1
+        );
+        assert_ne!(
+            genet_read32(GENET_INTRL2_0_CPU_MASK_STATUS) & GENET_NAPI_IRQ_MASK,
+            0,
+        );
+        assert!(!genet_runtime_condition_before_sleep(&mut state));
+        assert_eq!(
+            state.dpc_turns, 1,
+            "faulted state cannot create an MMIO loop"
+        );
     }
 
     #[test]
@@ -78303,6 +78738,7 @@ mod tests {
         state.dpc_turns = 9;
         state.dpc_budget_hits = 3;
         state.dpc_final_rechecks = 4;
+        state.dpc_level_adoptions = 5;
         state.dpc_last_status = GENET_IRQ_RXDMA_MBDONE;
         state.direct_genet_rx_packets = 5;
         state.direct_genet_tx_packets = 4;
@@ -78349,6 +78785,7 @@ mod tests {
         );
         assert_eq!((diagnostic.dpc_turns, diagnostic.dpc_budget_hits), (9, 3));
         assert_eq!(diagnostic.dpc_final_rechecks, 4);
+        assert_eq!(diagnostic.dpc_level_adoptions, 5);
         assert_eq!(diagnostic.dpc_last_status, GENET_IRQ_RXDMA_MBDONE);
         assert_eq!(
             (
@@ -78483,16 +78920,30 @@ mod tests {
             direct_genet_peer_publish(DirectGenetDirection::Rx, generation, &[marker as u8]);
         }
         stage_direct_genet_rx_hardware(&descriptor, &state, b"rearmed-direct-rx");
+        genet_write32(GENET_INTRL2_0_CPU_STAT, GENET_IRQ_RXDMA_MBDONE);
 
-        assert!(genet_runtime_service_dpc_state(
-            &mut state,
-            DRIVER_RUNTIME_DIRECT_GENET_NOTIFICATION_BADGE,
-        ));
+        assert!(genet_runtime_service_dpc_state(&mut state, 0));
+        assert!(!genet_runtime_dpc_local_continuation_ready(&state));
+        assert!(
+            !genet_runtime_condition_before_sleep(&mut state),
+            "the final check blocks for the peer instead of repeating MMIO",
+        );
         assert_eq!(
             state.rx_cons_index, 0,
             "a full shared ring retains DMA ownership"
         );
         assert_eq!(genet_read32(GENET_RDMA_CONS_INDEX), 0);
+        assert_eq!(state.dpc_turns, 1, "the final check runs one quantum");
+        assert_eq!(state.dpc_level_adoptions, 1);
+        assert!(state.irq_ack_pending);
+        assert_eq!(state.irq_acks, 0);
+        assert_eq!(TEST_RUNTIME_IRQ_ACK_CALLS.load(Ordering::Acquire), 0);
+        assert!(!genet_runtime_dpc_local_continuation_ready(&state));
+        assert_eq!(
+            genet_read32(GENET_INTRL2_0_CPU_MASK_STATUS) & GENET_NAPI_IRQ_MASK,
+            GENET_NAPI_IRQ_MASK,
+            "the retained level stays masked while the peer owns backpressure",
+        );
         let (_, full) = genet_direct_control_sample(DirectGenetDirection::Rx, generation)
             .expect("full direct RX ring remains exact");
         assert_eq!(full.occupancy(), DIRECT_GENET_RX_SLOT_COUNT as u64);
@@ -78514,6 +78965,10 @@ mod tests {
         );
         assert_eq!(state.rx_cons_index, 1);
         assert_eq!(genet_read32(GENET_RDMA_CONS_INDEX), 1);
+        assert_eq!(state.dpc_level_adoptions, 1);
+        assert!(!state.irq_ack_pending);
+        assert_eq!(state.irq_acks, 1);
+        assert_eq!(TEST_RUNTIME_IRQ_ACK_CALLS.load(Ordering::Acquire), 1);
         assert!(TEST_GENET_DIRECT_RX_REARM_AFTER_COMMIT.load(Ordering::Acquire));
         let slot = direct_genet_read_page(DIRECT_GENET_RX_FIRST_PAGE_INDEX);
         assert_eq!(
