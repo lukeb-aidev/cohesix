@@ -175,7 +175,7 @@ def strict_wired_boot_proof_lines() -> list[str]:
         "DRIVER_TASK_BOOT contract=serial role=serial started=yes affinity_core=1",
         "DRIVER_TASK_BOOT contract=usb-local-seat role=usb started=yes affinity_core=1",
         "DRIVER_TASK_BOOT contract=hdmi-text role=display started=yes affinity_core=2",
-        "DRIVER_TASK_BOOT contract=bcmgenet-v5 role=net started=yes affinity_core=3",
+        "DRIVER_TASK_BOOT contract=bcmgenet-v5 role=net started=yes affinity_core=1",
         "DRIVER_TASK_BOOT contract=pcie-root role=pcie started=yes affinity_core=2",
         "DRIVER_TASK_SUBSTRATE active=yes profile=pi4-hardware "
         "task_count=5 failed_count=0 live_tcb_count=5 "
@@ -3490,7 +3490,7 @@ def test_gate_summary_tracks_driver_task_manifest_affinity_from_boot_lines() -> 
             "DRIVER_TASK_BOOT contract=pcie-root role=pcie started=yes affinity_core=2",
             "DRIVER_TASK_BOOTSTRAP_DEFERRED contract=sdio-host tcb=0x0713 runtime_descriptor=yes",
             "DRIVER_TASK_BOOT contract=sdio-host role=sdio started=yes affinity_core=3",
-            "DRIVER_TASK_BOOT contract=bcmgenet-v5 role=net started=yes affinity_core=3",
+            "DRIVER_TASK_BOOT contract=bcmgenet-v5 role=net started=yes affinity_core=1",
             "DRIVER_TASK_BOOTSTRAP_DEFERRED contract=cyw43455 tcb=0x1915 runtime_descriptor=yes",
             "DRIVER_TASK_BOOT contract=cyw43455 role=net started=yes affinity_core=3",
         ]
@@ -3550,7 +3550,7 @@ def test_gate_summary_affinity_follows_selected_pi4_network_profile() -> None:
             "DRIVER_TASK_BOOT contract=usb-local-seat role=usb started=yes affinity_core=1",
             "DRIVER_TASK_BOOT contract=hdmi-text role=display started=yes affinity_core=2",
             "DRIVER_TASK_BOOT contract=pcie-root role=pcie started=yes affinity_core=2",
-            "DRIVER_TASK_BOOT contract=bcmgenet-v5 role=net started=yes affinity_core=3",
+            "DRIVER_TASK_BOOT contract=bcmgenet-v5 role=net started=yes affinity_core=1",
             "[smp] activity selected profile=pi4-hardware net=wired active_contracts=selected-only",
         ]
     )

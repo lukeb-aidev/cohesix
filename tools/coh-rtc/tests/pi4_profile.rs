@@ -90,6 +90,11 @@ fn pi4_uboot_profile_emits_network_policy() {
     assert_eq!(local_seat["display_device"], "hdmi0");
     assert_eq!(local_seat["line_bytes"], 160);
     assert_eq!(local_seat["buffer_lines"], 128);
+    assert_eq!(
+        manifest["root_task"]["affinity"]["drivers"]["bcmgenet-v5"],
+        1
+    );
+    assert_eq!(manifest["root_task"]["affinity"]["drivers"]["cyw43455"], 3);
 
     let temporal_tasks = manifest["temporal_authority"]["tasks"]
         .as_array()
@@ -230,6 +235,27 @@ fn pi4_uboot_profile_emits_network_policy() {
     assert_eq!(console_objects["cspace_slots"], 160);
     assert_eq!(admission["fixed_objects"]["frames"], 4_077);
     assert_eq!(admission["fixed_objects"]["cspace_slots"], 9_267);
+    let genet = temporal_task("driver-genet");
+    assert_eq!(genet["core"], 1);
+    assert_eq!(genet["sched_control_core"], 1);
+    assert_eq!(genet["budget_us"], 3_000);
+    assert_eq!(genet["period_us"], 10_000);
+    assert_eq!(genet["max_refills"], 2);
+    assert_eq!(genet["priority"], 160);
+    assert_eq!(genet["wcet_us"], 800);
+    assert_eq!(genet["response_time_us"], 3_400);
+    let core_one_demand: u64 = temporal_tasks
+        .iter()
+        .filter(|task| task["core"] == 1)
+        .map(|task| task["budget_us"].as_u64().expect("core-1 budget"))
+        .sum();
+    let core_three_demand: u64 = temporal_tasks
+        .iter()
+        .filter(|task| task["core"] == 3)
+        .map(|task| task["budget_us"].as_u64().expect("core-3 budget"))
+        .sum();
+    assert_eq!(core_one_demand, 6_250);
+    assert_eq!(core_three_demand, 8_000);
     let core_zero_demand: u64 = temporal_tasks
         .iter()
         .filter(|task| task["core"] == 0)

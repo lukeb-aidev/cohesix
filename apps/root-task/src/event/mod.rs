@@ -3287,6 +3287,31 @@ enum LinkedRuntimeServicePhase {
     Display,
 }
 
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+fn deferred_cyw43_attached_network_continuation(
+    cyw43_lane_selected: bool,
+    admitted_phase: LinkedRuntimeServicePhase,
+    next_phase: LinkedRuntimeServicePhase,
+    service_turns_before: u64,
+    service_turns_after: u64,
+    network_activity: bool,
+    network_service_quarantined: bool,
+    reboot_pending: bool,
+    recovery_required: bool,
+    schedulable_network_work: bool,
+) -> bool {
+    cyw43_lane_selected
+        && admitted_phase == LinkedRuntimeServicePhase::Network
+        && next_phase == LinkedRuntimeServicePhase::Network
+        && service_turns_before != u64::MAX
+        && service_turns_after == service_turns_before + 1
+        && network_activity
+        && !network_service_quarantined
+        && !reboot_pending
+        && !recovery_required
+        && schedulable_network_work
+}
+
 /// Maximum number of independently bounded Pi linked-runtime polls admitted
 /// before root-control performs its explicit cooperative yield.
 ///
@@ -4775,6 +4800,10 @@ where
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     pending_console_network_quarantine_diagnostic: Option<ConsoleNetworkQuarantineDiagnostic>,
     #[cfg(all(feature = "kernel", feature = "net-console"))]
+    console_network_containment_diagnostic_access_authorized: bool,
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    console_network_containment_diagnostic_terminal: bool,
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
     pending_ordinary_virtio_net_diag: Option<PendingOrdinaryVirtioNetDiag>,
     #[cfg(feature = "net-console")]
     last_net_diag_log_ms: Option<u64>,
@@ -4893,6 +4922,8 @@ where
     linked_runtime_cyw43_durable_resume: Option<LinkedRuntimeCyw43DurableResume>,
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     linked_runtime_cyw43_operator_rotation_pending: Option<LinkedRuntimeCyw43DurableResume>,
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    deferred_cyw43_attached_network_activity: bool,
     #[cfg(feature = "net-console")]
     linked_runtime_network_due_after_display: bool,
     #[cfg(feature = "kernel")]
@@ -5462,6 +5493,10 @@ where
             #[cfg(all(feature = "kernel", feature = "net-console"))]
             pending_console_network_quarantine_diagnostic: None,
             #[cfg(all(feature = "kernel", feature = "net-console"))]
+            console_network_containment_diagnostic_access_authorized: false,
+            #[cfg(all(feature = "kernel", feature = "net-console"))]
+            console_network_containment_diagnostic_terminal: false,
+            #[cfg(all(feature = "kernel", feature = "net-console"))]
             pending_ordinary_virtio_net_diag: None,
             #[cfg(feature = "net-console")]
             last_net_diag_log_ms: None,
@@ -5576,6 +5611,8 @@ where
             linked_runtime_cyw43_durable_resume: None,
             #[cfg(all(feature = "kernel", feature = "net-console"))]
             linked_runtime_cyw43_operator_rotation_pending: None,
+            #[cfg(all(feature = "kernel", feature = "net-console"))]
+            deferred_cyw43_attached_network_activity: false,
             #[cfg(feature = "net-console")]
             linked_runtime_network_due_after_display: false,
             #[cfg(feature = "kernel")]
@@ -5670,6 +5707,11 @@ where
     pub fn attach_initial_network(&mut self, net: &'a mut dyn NetPoller) {
         self.audit.info("event-pump: init network");
         self.net = Some(net);
+        #[cfg(feature = "kernel")]
+        {
+            self.console_network_containment_diagnostic_access_authorized = false;
+            self.console_network_containment_diagnostic_terminal = false;
+        }
     }
 
     /// Attach a network stack that completed bootstrap after the serial/local
@@ -5696,6 +5738,8 @@ where
                 ConsoleNetworkQuarantineCleanupUnit::RootSessionTicket;
             self.console_network_quarantine_scope = ConsoleNetworkQuarantineScope::default();
             self.pending_console_network_quarantine_diagnostic = None;
+            self.console_network_containment_diagnostic_access_authorized = false;
+            self.console_network_containment_diagnostic_terminal = false;
         }
         true
     }
@@ -5828,12 +5872,42 @@ where
         &mut self,
         hal: &mut crate::hal::KernelHal<'_>,
     ) -> bool {
+        if self.network_service_quarantined {
+            return false;
+        }
         match self.net.as_deref_mut() {
             Some(net) => net
                 .service_deferred_console_network_handoff(hal)
                 .unwrap_or(true),
             None => false,
         }
+    }
+
+    /// Observe only one durable isolated-child publication.
+    ///
+    /// This bypasses the ordinary Network selector deliberately: the Wi-Fi
+    /// Ready deadline arbiter must not advance policy, poll the NIC, or compose
+    /// a second unit with this exact shared-page observation.
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    pub fn poll_isolated_child_publication_only(&mut self) -> bool {
+        if self.network_service_quarantined {
+            return false;
+        }
+        self.net
+            .as_deref_mut()
+            .is_some_and(NetPoller::poll_isolated_child_publication_only)
+    }
+
+    /// Return the accepted exact-generation child Ready publication time.
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[must_use]
+    pub fn isolated_child_ready_published_ms(&self) -> Option<u64> {
+        if self.network_service_quarantined {
+            return None;
+        }
+        self.net
+            .as_deref()
+            .and_then(NetPoller::isolated_child_ready_published_ms)
     }
 
     /// Convert a completed direct-GENET driver fault into coupled console
@@ -5872,9 +5946,20 @@ where
         match outcome {
             Ok(ConsoleNetworkContainmentTurn::Idle) => false,
             Ok(ConsoleNetworkContainmentTurn::Retry) => true,
-            Ok(ConsoleNetworkContainmentTurn::InProgress)
-            | Ok(ConsoleNetworkContainmentTurn::Complete(_))
-            | Err(_) => {
+            Ok(ConsoleNetworkContainmentTurn::InProgress) => {
+                self.console_network_containment_diagnostic_access_authorized = true;
+                self.console_network_containment_diagnostic_terminal = false;
+                // Recovery owns only the scalar authority fence. Session
+                // cleanup and retained diagnostic output run later through
+                // one-unit ordinary Operator turns.
+                if !self.console_network_quarantine_cleanup_pending {
+                    self.fence_console_network_authority_quiet();
+                }
+                true
+            }
+            Ok(ConsoleNetworkContainmentTurn::Complete(_)) | Err(_) => {
+                self.console_network_containment_diagnostic_access_authorized = true;
+                self.console_network_containment_diagnostic_terminal = true;
                 // Recovery owns only the scalar authority fence. Session
                 // cleanup and retained diagnostic output run later through
                 // one-unit ordinary Operator turns.
@@ -5933,6 +6018,12 @@ where
         {
             self.pending_network_terminal = None;
             self.pending_ordinary_virtio_net_diag = None;
+            // A CYW43 bootstrap failure poisons the retained poller without
+            // running the isolated console containment protocol. It must not
+            // inherit that protocol's bounded post-containment diagnostic
+            // authority merely because both paths share the EventPump.
+            self.console_network_containment_diagnostic_access_authorized = false;
+            self.console_network_containment_diagnostic_terminal = false;
         }
         #[cfg(feature = "kernel")]
         {
@@ -5944,6 +6035,13 @@ where
             || self.session_net_conn_id.is_some();
         let net_stream = matches!(self.stream_output_source, Some(ConsoleInputSource::Net))
             || self.stream_net_conn_id.is_some();
+        #[cfg(feature = "kernel")]
+        let net_stream = net_stream
+            || self
+                .pending_stream
+                .as_ref()
+                .and_then(|pending| pending.response_identity)
+                .is_some();
         let net_reboot = self.reboot_ack_source == Some(ConsoleInputSource::Net)
             || self.reboot_ack_net_conn_id.is_some();
 
@@ -6232,6 +6330,39 @@ where
         self.poll_generic();
     }
 
+    /// Execute one ordinary attached-CYW43 EventPump turn and return whether
+    /// the exact Network lifetime proved a productive immediate successor.
+    ///
+    /// The caller may use this token only to retain its current guarded MCS
+    /// activation. Every poll still enters the ordinary EventPump arbitration,
+    /// opens and retires one outer CYW43 event lease, and performs at most the
+    /// existing bounded Network unit. Serial, local-seat, display, dispatch,
+    /// idle, recovery, quarantine, reboot, and operator-rotation transitions
+    /// all return false.
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[inline(never)]
+    #[must_use = "a false continuation token requires an explicit root-control yield"]
+    pub fn poll_deferred_cyw43_attached_network_control_turn(&mut self) -> bool {
+        let cyw43_lane_selected = self.linked_runtime_cyw43_lane_selected();
+        let admitted_phase = self.linked_runtime_service_phase;
+        let service_turns_before = self.metrics.net_cyw43_service_turns;
+        self.deferred_cyw43_attached_network_activity = false;
+        self.poll();
+        let snapshot = crate::drivers::driver_task_net::cyw43_service_work_snapshot();
+        deferred_cyw43_attached_network_continuation(
+            cyw43_lane_selected && self.linked_runtime_cyw43_lane_selected(),
+            admitted_phase,
+            self.linked_runtime_service_phase,
+            service_turns_before,
+            self.metrics.net_cyw43_service_turns,
+            self.deferred_cyw43_attached_network_activity,
+            self.network_service_quarantined,
+            self.reboot_pending,
+            crate::drivers::driver_task_net::cyw43_recovery_required(),
+            snapshot.schedulable_network_work(),
+        )
+    }
+
     /// Service one complete Pi local-operator rotation before the caller's
     /// explicit root-control yield.
     ///
@@ -6306,7 +6437,14 @@ where
     /// operation. The score is diagnostic rather than an admission budget;
     /// the fixed unit and time guards remain authoritative.
     #[cfg(all(feature = "kernel", feature = "net-console", feature = "release-qemu"))]
-    fn qemu_root_control_work_snapshot(&self) -> QemuRootControlWorkSnapshot {
+    fn qemu_root_control_work_snapshot(&mut self) -> QemuRootControlWorkSnapshot {
+        if self.network_service_quarantined {
+            return QemuRootControlWorkSnapshot {
+                queue_depth: 0,
+                work_available: u32::from(self.deferred_containment_work_pending()),
+                generation: 0,
+            };
+        }
         let (ingest_queued, event_pending, console_service_pending, response_lane) =
             self.net.as_ref().map_or((0, false, false, None), |net| {
                 (
@@ -8315,9 +8453,11 @@ where
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     fn linked_runtime_cyw43_lane_selected(&self) -> bool {
-        self.net.as_ref().is_some_and(|net| {
-            net.driver_task_contract() == crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT
-        })
+        !self.network_service_quarantined
+            && self.net.as_ref().is_some_and(|net| {
+                net.driver_task_contract()
+                    == crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT
+            })
     }
 
     /// Route one complete, current authenticated Wi-Fi command to the existing
@@ -8335,6 +8475,9 @@ where
         &self,
         response_flush_finished_this_turn: bool,
     ) -> bool {
+        if self.network_service_quarantined {
+            return false;
+        }
         let response_flush_active = self.pending_net_flush.active();
         let physical_response_pending = self.physical_console_response_pending();
         let physical_operator_work = self.linked_physical_operator_work();
@@ -8653,6 +8796,9 @@ where
     #[cfg(feature = "net-console")]
     #[inline(never)]
     fn dispatch_one_buffered_network_line(&mut self) -> bool {
+        if self.network_service_quarantined {
+            return false;
+        }
         let response_pipeline_blocked = self
             .net
             .as_ref()
@@ -10119,6 +10265,15 @@ where
                 #[cfg(feature = "kernel")]
                 self.clear_linked_runtime_cyw43_scheduler_state();
             } else {
+                #[cfg(feature = "kernel")]
+                if activity
+                    && self.net.as_ref().is_some_and(|net| {
+                        net.driver_task_contract()
+                            == crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT
+                    })
+                {
+                    self.deferred_cyw43_attached_network_activity = true;
+                }
                 self.net_conn_id = conn_id;
                 if NET_DIAG_FEATURED {
                     self.log_net_diag(telemetry);
@@ -11219,14 +11374,22 @@ where
     }
 
     #[cfg(feature = "kernel")]
-    fn containment_diagnostic_pending(&self) -> bool {
+    fn containment_diagnostic_pending(&mut self) -> bool {
         #[cfg(feature = "net-console")]
-        if self
-            .net
-            .as_deref()
-            .is_some_and(|net| net.console_network_containment_diagnostic_pending())
         {
-            return true;
+            let network_diagnostic_pending = self
+                .console_network_containment_diagnostic_access_authorized
+                && self
+                    .net
+                    .as_deref()
+                    .is_some_and(|net| net.console_network_containment_diagnostic_pending());
+            if network_diagnostic_pending {
+                return true;
+            }
+            if self.console_network_containment_diagnostic_terminal {
+                self.console_network_containment_diagnostic_access_authorized = false;
+                self.console_network_containment_diagnostic_terminal = false;
+            }
         }
         #[cfg(feature = "net-console")]
         if self.pending_console_network_quarantine_diagnostic.is_some() {
@@ -11239,7 +11402,7 @@ where
     }
 
     #[cfg(feature = "kernel")]
-    fn deferred_containment_work_pending(&self) -> bool {
+    fn deferred_containment_work_pending(&mut self) -> bool {
         #[cfg(feature = "net-console")]
         if self.console_network_quarantine_cleanup_pending {
             return true;
@@ -11261,9 +11424,13 @@ where
         }
         #[cfg(feature = "net-console")]
         if let Some(line) = self
-            .net
-            .as_deref()
-            .and_then(|net| net.pending_console_network_containment_diagnostic())
+            .console_network_containment_diagnostic_access_authorized
+            .then(|| {
+                self.net
+                    .as_deref()
+                    .and_then(|net| net.pending_console_network_containment_diagnostic())
+            })
+            .flatten()
         {
             if !self.queue_containment_diagnostic(line.as_str()) {
                 return false;
@@ -11273,6 +11440,14 @@ where
             });
             if !committed {
                 let _ = self.pending_console_output.pop();
+            } else if self.console_network_containment_diagnostic_terminal
+                && self
+                    .net
+                    .as_deref()
+                    .is_none_or(|net| !net.console_network_containment_diagnostic_pending())
+            {
+                self.console_network_containment_diagnostic_access_authorized = false;
+                self.console_network_containment_diagnostic_terminal = false;
             }
             return committed;
         }
@@ -12388,6 +12563,9 @@ where
 
     #[cfg(feature = "net-console")]
     fn network_response_owner_active(&self) -> bool {
+        if self.network_service_quarantined {
+            return false;
+        }
         #[cfg(feature = "kernel")]
         if self.sync_response_pending() {
             return true;
@@ -12700,8 +12878,12 @@ where
         } else {
             #[cfg(feature = "net-console")]
             {
+                if self.network_service_quarantined {
+                    return;
+                }
                 let stream_response_active = self.stream_end_pending
                     && self.stream_output_source == Some(ConsoleInputSource::Net);
+                #[cfg(feature = "kernel")]
                 let identity = (!stream_response_active)
                     .then(|| {
                         self.net
@@ -12716,6 +12898,8 @@ where
                         net.send_console_terminal_line(line)
                     }
                 });
+                #[cfg(not(feature = "kernel"))]
+                let _ = sent;
                 #[cfg(feature = "kernel")]
                 if !sent {
                     if let Some(identity) = identity {
@@ -12779,6 +12963,9 @@ where
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     fn flush_pending_sync_response(&mut self) {
+        if self.network_service_quarantined {
+            return;
+        }
         let Some(mut pending) = self.pending_stream.take() else {
             return;
         };
@@ -35774,7 +35961,12 @@ mod tests {
         late_event: Option<std::rc::Rc<core::cell::RefCell<Option<NetConsoleEvent>>>>,
         containment_diagnostic: Option<HeaplessString<DEFAULT_LINE_CAPACITY>>,
         containment_diagnostic_commits: usize,
+        containment_diagnostic_pending_reads: core::cell::Cell<usize>,
+        containment_diagnostic_line_reads: core::cell::Cell<usize>,
         driver_contract: crate::hal::driver_task::DriverTaskContract,
+        driver_contract_reads: core::cell::Cell<usize>,
+        response_identity_reads: core::cell::Cell<usize>,
+        response_lane_reads: core::cell::Cell<usize>,
         poll_observer: Option<std::rc::Rc<core::cell::Cell<usize>>>,
         send_observer: Option<std::rc::Rc<core::cell::Cell<usize>>>,
         response_batch_capacity: Option<usize>,
@@ -35822,7 +36014,12 @@ mod tests {
                 late_event: None,
                 containment_diagnostic: None,
                 containment_diagnostic_commits: 0,
+                containment_diagnostic_pending_reads: core::cell::Cell::new(0),
+                containment_diagnostic_line_reads: core::cell::Cell::new(0),
                 driver_contract: crate::hal::driver_task::VIRTIO_NET_DRIVER_TASK_CONTRACT,
+                driver_contract_reads: core::cell::Cell::new(0),
+                response_identity_reads: core::cell::Cell::new(0),
+                response_lane_reads: core::cell::Cell::new(0),
                 poll_observer: None,
                 send_observer: None,
                 response_batch_capacity: None,
@@ -35972,6 +36169,8 @@ mod tests {
         }
 
         fn driver_task_contract(&self) -> crate::hal::driver_task::DriverTaskContract {
+            self.driver_contract_reads
+                .set(self.driver_contract_reads.get().saturating_add(1));
             self.driver_contract
         }
 
@@ -36084,6 +36283,8 @@ mod tests {
         }
 
         fn bounded_console_response_identity(&self) -> Option<ConsoleResponseIdentity> {
+            self.response_identity_reads
+                .set(self.response_identity_reads.get().saturating_add(1));
             let connection_id = self.authenticated_conn_id?;
             (self.active_conn_id == Some(connection_id)).then_some(ConsoleResponseIdentity {
                 generation: 1,
@@ -36092,6 +36293,8 @@ mod tests {
         }
 
         fn console_response_lane(&self) -> Option<ConsoleResponseLane> {
+            self.response_lane_reads
+                .set(self.response_lane_reads.get().saturating_add(1));
             self.response_lane
         }
 
@@ -36132,6 +36335,11 @@ mod tests {
 
         #[cfg(feature = "kernel")]
         fn console_network_containment_diagnostic_pending(&self) -> bool {
+            self.containment_diagnostic_pending_reads.set(
+                self.containment_diagnostic_pending_reads
+                    .get()
+                    .saturating_add(1),
+            );
             self.containment_diagnostic.is_some()
         }
 
@@ -36139,6 +36347,11 @@ mod tests {
         fn pending_console_network_containment_diagnostic(
             &self,
         ) -> Option<HeaplessString<DEFAULT_LINE_CAPACITY>> {
+            self.containment_diagnostic_line_reads.set(
+                self.containment_diagnostic_line_reads
+                    .get()
+                    .saturating_add(1),
+            );
             self.containment_diagnostic.clone()
         }
 
@@ -43447,6 +43660,162 @@ mod tests {
         ));
     }
 
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn pi_attached_wifi_continuation_requires_one_productive_network_successor() {
+        let allowed =
+            |lane, admitted, next, before, after, activity, quarantined, reboot, recovery, work| {
+                deferred_cyw43_attached_network_continuation(
+                    lane,
+                    admitted,
+                    next,
+                    before,
+                    after,
+                    activity,
+                    quarantined,
+                    reboot,
+                    recovery,
+                    work,
+                )
+            };
+        assert!(allowed(
+            true,
+            LinkedRuntimeServicePhase::Network,
+            LinkedRuntimeServicePhase::Network,
+            8,
+            9,
+            true,
+            false,
+            false,
+            false,
+            true,
+        ));
+        for rejected in [
+            allowed(
+                false,
+                LinkedRuntimeServicePhase::Network,
+                LinkedRuntimeServicePhase::Network,
+                8,
+                9,
+                true,
+                false,
+                false,
+                false,
+                true,
+            ),
+            allowed(
+                true,
+                LinkedRuntimeServicePhase::Serial,
+                LinkedRuntimeServicePhase::Network,
+                8,
+                9,
+                true,
+                false,
+                false,
+                false,
+                true,
+            ),
+            allowed(
+                true,
+                LinkedRuntimeServicePhase::Network,
+                LinkedRuntimeServicePhase::Serial,
+                8,
+                9,
+                true,
+                false,
+                false,
+                false,
+                true,
+            ),
+            allowed(
+                true,
+                LinkedRuntimeServicePhase::Network,
+                LinkedRuntimeServicePhase::Network,
+                8,
+                8,
+                true,
+                false,
+                false,
+                false,
+                true,
+            ),
+            allowed(
+                true,
+                LinkedRuntimeServicePhase::Network,
+                LinkedRuntimeServicePhase::Network,
+                u64::MAX,
+                u64::MAX,
+                true,
+                false,
+                false,
+                false,
+                true,
+            ),
+            allowed(
+                true,
+                LinkedRuntimeServicePhase::Network,
+                LinkedRuntimeServicePhase::Network,
+                8,
+                9,
+                false,
+                false,
+                false,
+                false,
+                true,
+            ),
+            allowed(
+                true,
+                LinkedRuntimeServicePhase::Network,
+                LinkedRuntimeServicePhase::Network,
+                8,
+                9,
+                true,
+                true,
+                false,
+                false,
+                true,
+            ),
+            allowed(
+                true,
+                LinkedRuntimeServicePhase::Network,
+                LinkedRuntimeServicePhase::Network,
+                8,
+                9,
+                true,
+                false,
+                true,
+                false,
+                true,
+            ),
+            allowed(
+                true,
+                LinkedRuntimeServicePhase::Network,
+                LinkedRuntimeServicePhase::Network,
+                8,
+                9,
+                true,
+                false,
+                false,
+                true,
+                true,
+            ),
+            allowed(
+                true,
+                LinkedRuntimeServicePhase::Network,
+                LinkedRuntimeServicePhase::Network,
+                8,
+                9,
+                true,
+                false,
+                false,
+                false,
+                false,
+            ),
+        ] {
+            assert!(!rejected);
+        }
+    }
+
     #[cfg(all(feature = "kernel", feature = "net-console", feature = "release-qemu"))]
     #[test]
     fn qemu_quantum_stops_genuinely_idle_but_retains_a_progress_window() {
@@ -49909,6 +50278,8 @@ mod tests {
         {
             let mut pump =
                 EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
+            pump.console_network_containment_diagnostic_access_authorized = true;
+            pump.console_network_containment_diagnostic_terminal = true;
             pump.poll_split_ordinary_virtio_compact_operator_turn();
 
             assert_eq!(pump.timer.index, 0, "admission owns the Operator turn");
@@ -49940,6 +50311,8 @@ mod tests {
                 &mut audit,
             )
             .with_network(&mut net);
+            saturated.console_network_containment_diagnostic_access_authorized = true;
+            saturated.console_network_containment_diagnostic_terminal = true;
             for _ in 0..body_capacity {
                 assert!(saturated.queue_physical_console_output(
                     PendingConsoleOutputKind::Line,
@@ -49989,6 +50362,8 @@ mod tests {
         marker.push_str("[console-network] retained").unwrap();
         net.containment_diagnostic = Some(marker);
         let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
+        pump.console_network_containment_diagnostic_access_authorized = true;
+        pump.console_network_containment_diagnostic_terminal = true;
         pump.serial_mut().driver_mut().push_rx(b"h");
 
         pump.poll_ordinary_operator_turn(false, false);
@@ -51844,6 +52219,22 @@ mod tests {
         store.register(Role::Queen, "ticket").unwrap();
         let mut audit = AuditLog::new();
         let mut net = FakeNet::new();
+        net.driver_contract = crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT;
+        net.response_lane = Some(ConsoleResponseLane {
+            generation: 17,
+            connection_id: 41,
+            queued_lines: 7,
+            available_lines: 1,
+            awaiting_batch_drain: false,
+            terminal_queued: false,
+            producer_open: true,
+            completed_responses: 0,
+        });
+        let mut poisoned_diagnostic = HeaplessString::new();
+        poisoned_diagnostic
+            .push_str("[console-network] stale-cyw43-diagnostic")
+            .unwrap();
+        net.containment_diagnostic = Some(poisoned_diagnostic);
         let mut local_seat = LocalSeatRuntime::new(crate::local_seat::LocalSeatStatus {
             keyboard_device: "usb-kbd0",
             display_device: "hdmi0",
@@ -51861,7 +52252,25 @@ mod tests {
                 "[drivers] WiFi startup failed; diagnostics remain active",
                 true,
             ));
+            let mut pending = PendingStream::new();
+            pending.mode = PendingStreamMode::SyncSealed;
+            pending.response_identity = Some(ConsoleResponseIdentity {
+                generation: 17,
+                connection_id: 41,
+            });
+            pending.terminal_line = HeaplessString::try_from("OK HELP").ok();
+            pump.pending_stream = Some(pending);
+            assert_eq!(pump.stream_output_source, None);
+            assert_eq!(pump.stream_net_conn_id, None);
             pump.quarantine_network_service_after_cyw43_terminal_failure();
+            assert!(
+                pump.pending_stream.is_none(),
+                "quarantine must retire an unaffiliated sync response identity"
+            );
+            assert!(
+                !pump.network_response_owner_active(),
+                "a stale poisoned producer cannot retain response ownership"
+            );
 
             for _ in 0..64 {
                 pump.poll_cyw43_bootstrap_supervisor_event_turn();
@@ -51910,6 +52319,33 @@ mod tests {
             net.tcp_flushes, 0,
             "a quarantined CYW43 stack must never flush retained TCP work"
         );
+        assert_eq!(
+            net.driver_contract_reads.get(),
+            0,
+            "quarantine must not inspect the poisoned driver's contract"
+        );
+        assert_eq!(
+            net.response_lane_reads.get(),
+            0,
+            "quarantine must not inspect a stale poisoned response lane"
+        );
+        assert_eq!(
+            net.response_identity_reads.get(),
+            0,
+            "quarantine must not revalidate an unaffiliated poisoned response identity"
+        );
+        assert_eq!(
+            net.containment_diagnostic_pending_reads.get(),
+            0,
+            "CYW43 terminal quarantine cannot borrow isolated-containment diagnostic authority"
+        );
+        assert_eq!(
+            net.containment_diagnostic_line_reads.get(),
+            0,
+            "CYW43 terminal quarantine cannot read a retained poisoned diagnostic"
+        );
+        assert_eq!(net.containment_diagnostic_commits, 0);
+        assert!(net.containment_diagnostic.is_some());
         let rendered = String::from_utf8(transcript).expect("linked serial output must be utf8");
         assert!(rendered.contains("Commands:"), "{rendered}");
         assert!(local_seat

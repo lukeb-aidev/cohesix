@@ -2691,7 +2691,7 @@ fn bootstrap_linked_runtime_engine_for_early_console(
     let _ = fmt::Write::write_fmt(
         &mut line,
         format_args!(
-            "DRIVER_TASK_HDMI_EARLY_READY contract=hdmi-text engine_init=yes owner_state={} banner=deferred action=steady-local-seat-retained-frame",
+            "DRIVER_TASK_HDMI_EARLY_READY contract=hdmi-text engine_init=yes owner_state={} banner=child-owned-bounded action=steady-local-seat-retained-frame",
             if owner_state { "yes" } else { "no" },
         ),
     );

@@ -799,6 +799,13 @@ reusable ownership pattern.
 
 - Map framebuffer pages into the display child without a steady root VSpace
   alias.
+- After the immutable framebuffer range, format, alignment, pitch, and geometry
+  are admitted, the child may write one fixed `Cohesix starting...` glyph tile
+  in the safe area and issue one device-store barrier. This is bounded early
+  physical progress only: it grants no root alias, prompt, USB readiness,
+  mailbox/HVS authority, or full-surface clear. Invalid geometry performs zero
+  stores, and the first ordinary generation-bound frame clears and replaces the
+  tile through the existing takeover cursor.
 - Keep terminal state in a fixed child-private cell plane. The current Pi
   renderer admits at most 256 columns by 128 rows, uses a logical row ring for
   scrolling, and records visible damage in a fixed bitmap. Retain a
@@ -842,6 +849,10 @@ reusable ownership pattern.
   snapshot.
 - Once a snapshot establishes the viewport, held arrows chase the requested
   history offset by one completed CSI `S`/`T` row per bounded display turn.
+  Before rotating the logical row origin, retain bounded damage for the union
+  of each old and new visible row's nonblank columns, then clear only the newly
+  exposed row or rows without adding redundant damage. Existing dirty cells
+  remain ordered through the rotation.
   A scroll count at least as large as the viewport clears the text area while
   preserving the cursor. Reserve full redraw for initial materialization or
   recovery; do not restart it for every repeat or grow an unbounded queue.
@@ -929,14 +940,32 @@ reusable ownership pattern.
   Console containment unmaps and deletes every
   copied external frame cap before revoking the console anchor, while driver
   containment owns the original page generation.
+- DGHO may publish READY only after a finite legacy interrupt/completion epoch.
+  A quiet Ethernet wire is not a synchronization condition. The GENET child
+  masks the admitted source, stops MAC RX, waits 10 ms in the generated
+  CNTVCT domain for accepted pipeline work, clears only RDMA `DMA_EN` while
+  retaining the default-ring enable and configuration, and requires DMA status
+  bit 0 to report disabled within 5 ms. Only then does
+  it snapshot the immutable producer frontier. Root may drain that finite
+  legacy frontier, private RX, TX reclaim, pending direct cursor commits, and
+  every retained handler lifetime while the source and ingress remain stopped.
+  Producer movement, a cursor distance beyond the 32-descriptor hardware ring,
+  generation/token drift, failed stop/readback, or timeout faults the pair and
+  leaves MAC RX, RDMA, TDMA, and IRQ sources contained. The child publishes the
+  direct generation while stopped, resumes RDMA then MAC RX, and unmasks with
+  readback. A queued exact seL4 IRQ notification received after READY belongs
+  to the same sole owner and is serviced as direct-epoch work; DGHO never
+  fabricates or synthetically acknowledges a handler lifetime.
 - Direct GENET service handles at most 16 material frame units per wake, with at
   most eight TX units before RX receives the remaining share. Finalizing a
   retained ambiguous TX or RX cursor commit consumes one unit in the current
   quantum; it cannot be reconciled outside the 8/16-frame accounting. A full TX ring waits for a
   peer rearm notification unless an independent retained cursor transition is
   actionable; queued RX cannot create a self-poll while smoltcp ingress is
-  occupied. These bounds preserve the existing MCS budgets and require fresh
-  Pi WCET and throughput evidence.
+  occupied. The Pi manifest gives GENET a `3,000 us / 10,000 us` core-1 SC,
+  priority 160, two refills, and a 3,400 us computed response bound while
+  retaining this 16-frame material quantum. These static bounds require fresh
+  Pi consumed-time, latency, and throughput evidence.
 - Direct-link control page 0 reserves bytes `[0,64)` for its immutable header
   and `[64,320)` for the four 64-byte SPSC cursor records. The optional
   direct-GENET diagnostic-v1 record occupies the formerly reserved bytes
@@ -996,6 +1025,31 @@ transport:
   fault/Reply rule, and MCS numeric remains unchanged. Other drivers and
   unsupported routes retain their prior path and cannot fall back into this
   lane.
+- The deferred physical WiFi supervisor may retain one root-control refill only
+  through strict Operator/Driver alternation under the generated
+  `root-control budget_us - wcet_us` CNTVCT reserve and a 64-productive-unit
+  hard cap. The selected Pi values make that strict guard 250 us
+  (`2,750 - 2,500`), so every newly admitted logical unit retains one complete
+  declared root WCET for itself and the yield/epilogue. Check the continuous
+  window before each fresh phase and retire the exact one-operation outer lease
+  before re-entry. After child Ready, an attached EventPump turn may retain the
+  window only after actual CYW43 Network activity, exactly one service-unit
+  advance, an immediate Network successor, durable schedulable work, and no
+  recovery, quarantine, reboot, or operator rotation. Invalid timing/config,
+  wait, idle, no progress, handoff, output pressure, fault, terminal, or reboot
+  yields and resets; invalid evidence permits only one legacy logical turn.
+  The window replaces, rather than composes with, the earlier four-Driver
+  restart burst and changes no SC value, device deadline, operation
+  cardinality, owner, or QEMU/generic path.
+- The isolated console child's Ready timestamp and the root handoff bound share
+  the absolute CNTVCT millisecond domain. Root samples immediately before and
+  after resume, requires identical nonzero generated/runtime timer frequency
+  and a nondecreasing counter, uses the pre-resume sample as the inclusive
+  publication lower bound, and derives the exclusive deadline from the
+  post-resume sample plus the generated response bound. This admits a child
+  publication between resume and root return while rejecting zero, pre-resume,
+  at-boundary, late, stale-generation, identity-invalid, backwards, overflowed,
+  or frequency-drifted evidence.
 - SDIO containment and `HOST_CONFIG` may batch finite deterministic
   sole-owner register/state transitions inside one admitted turn. Containment
   is capped at 24 transitions; host configuration is capped at 18. Controller,
@@ -1079,8 +1133,13 @@ budget nor retry policy: it arms one exact-generation Ready observation window
 derived from the independently
 rounded generated response bounds for `console-network-service` and
 `root-control` (`9 ms + 6 ms = 15 ms` for the current Pi profile). Missing,
-zero, inactive, non-admitted, overflowing, late, or wrong-generation authority
-fails closed. A handoff failure stays failed, with no root TCP fallback,
+zero, inactive, non-admitted, or overflowing authority fails closed. Retain the
+ABI-validated child publication time together with exact service identity,
+generation, and sequence. At or after the boundary, one final shared-page-only
+observation may accept only a publication strictly before the deadline; it
+performs no NIC work, policy advance, retry, wake, or composed Network unit.
+An at-boundary, late, missing, replayed, or drifted publication fails closed. A
+handoff failure stays failed, with no root TCP fallback,
 deadline renewal, or extra retry. Gate 8 and DHCP alone therefore do not prove
 listener readiness.
 

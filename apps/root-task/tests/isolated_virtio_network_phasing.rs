@@ -1078,10 +1078,41 @@ fn console_publication_ack_is_exactly_once_and_post_retention() {
     assert!(!terminal.contains("signal_unchecked"));
 
     let adapter = include_str!("../src/net/isolated_console.rs");
-    let output = section(
+    let ordinary_output = section(
         adapter,
         "fn poll_child_output(&mut self)",
-        "fn transmit_pending_egress",
+        "fn poll_child_output_without_ack(&mut self)",
+    );
+    let deferred_debt = marker(ordinary_output, "if self.runtime.publication_ack_pending()");
+    let deferred_ack = marker(
+        ordinary_output,
+        "return self.acknowledge_child_publication(true);",
+    );
+    let ordinary_observation = marker(ordinary_output, "self.observe_child_output(true)");
+    assert!(deferred_debt < deferred_ack && deferred_ack < ordinary_observation);
+
+    let publication_only = section(
+        adapter,
+        "fn poll_child_output_without_ack(&mut self)",
+        "fn observe_child_output(",
+    );
+    let retained_debt = marker(
+        publication_only,
+        "if self.runtime.publication_ack_pending()",
+    );
+    let no_repeat = marker(
+        publication_only,
+        "return IsolatedNetworkTurnOutcome::complete(false);",
+    );
+    let deadline_observation = marker(publication_only, "self.observe_child_output(false)");
+    assert!(retained_debt < no_repeat && no_repeat < deadline_observation);
+    assert!(!publication_only.contains("acknowledge_child_publication"));
+    assert!(!publication_only.contains("acknowledge_publication"));
+
+    let output = section(
+        adapter,
+        "fn observe_child_output(",
+        "fn acknowledge_child_publication(",
     );
     let publication_snapshot = marker(
         output,
@@ -1094,7 +1125,8 @@ fn console_publication_ack_is_exactly_once_and_post_retention() {
     let containment_start = marker(output, "self.runtime.begin_containment()");
     let overwrite_guard = marker(output, "if self.pending_egress.is_some()");
     let retain_egress = marker(output, "self.pending_egress = Some(egress);");
-    let inline_ack = marker(output, "self.runtime.acknowledge_publication()");
+    let ack_policy = marker(output, "if acknowledge_publication {");
+    let retained_ack = marker(output, "self.acknowledge_child_publication(activity)");
     assert!(
         publication_snapshot < completion
             && completion < completion_fault_gate
@@ -1103,12 +1135,28 @@ fn console_publication_ack_is_exactly_once_and_post_retention() {
             && terminal_retire < containment_start
             && containment_start < overwrite_guard
             && overwrite_guard < retain_egress
-            && retain_egress < inline_ack
+            && retain_egress < ack_policy
+            && ack_policy < retained_ack
     );
     assert!(output.contains("self.fail_closed(\"egress-overwrite\")"));
-    assert_eq!(output.matches("acknowledge_publication").count(), 1);
-    assert!(output.contains("self.fail_closed(\"publication-ack\")"));
+    assert_eq!(output.matches("acknowledge_child_publication").count(), 1);
+    assert!(!output.contains("runtime.acknowledge_publication"));
     assert!(!output.contains("signal_unchecked"));
+
+    let adapter_ack = section(
+        adapter,
+        "fn acknowledge_child_publication(",
+        "fn transmit_pending_egress",
+    );
+    assert_eq!(
+        adapter_ack
+            .matches("runtime.acknowledge_publication")
+            .count(),
+        1
+    );
+    assert!(adapter_ack.contains("self.fail_closed(\"publication-ack\")"));
+    assert!(adapter_ack.contains("IsolatedNetworkTurnOutcome::child_signaled(activity)"));
+    assert!(!adapter_ack.contains("signal_unchecked"));
 
     let fail_closed = section(
         adapter,
@@ -1125,13 +1173,19 @@ fn console_publication_ack_is_exactly_once_and_post_retention() {
     assert!(observe.contains("self.poll_child_output()"));
     assert!(!observe.contains("acknowledge_publication"));
 
-    assert!(output.contains("IsolatedNetworkTurnOutcome::child_signaled(activity)"));
-
     let adapter_poll = section(
         adapter,
         "impl<D: NetDevice> NetPoller for IsolatedNetworkConsole<D>",
         "fn driver_task_contract",
     );
+    let deadline_hook = section(
+        adapter,
+        "fn poll_isolated_child_publication_only(&mut self)",
+        "fn isolated_child_ready_published_ms(&self)",
+    );
+    assert!(deadline_hook.contains("self.poll_child_output_without_ack().activity()"));
+    assert!(!deadline_hook.contains("self.poll_child_output().activity()"));
+    assert!(!deadline_hook.contains("acknowledge_publication"));
     assert!(!adapter_poll.contains("AcknowledgePublication"));
     assert!(!adapter_poll.contains("poll_acknowledge_publication_unit"));
 

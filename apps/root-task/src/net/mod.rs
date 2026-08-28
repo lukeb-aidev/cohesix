@@ -1638,6 +1638,24 @@ pub trait NetPoller {
         self.status_report().tcp_ready
     }
 
+    /// Observe only the isolated child's durable publication page.
+    ///
+    /// The Wi-Fi post-activation deadline arbiter uses this hook exactly once
+    /// after the Ready deadline is reached. Implementations must not poll the
+    /// NIC, advance device policy, or compose another network unit.
+    fn poll_isolated_child_publication_only(&mut self) -> bool {
+        false
+    }
+
+    /// Return the ABI-validated isolated-child Ready publication time.
+    ///
+    /// `None` means no exact-generation Ready has been accepted. The timestamp
+    /// is child-authored but is exposed only after generation, sequence, kind,
+    /// and service identity validation at the shared-page boundary.
+    fn isolated_child_ready_published_ms(&self) -> Option<u64> {
+        None
+    }
+
     /// Start a network self-test run if supported.
     fn start_self_test(&mut self, _now_ms: u64) -> NetSelfTestStartResult {
         NetSelfTestStartResult::Unsupported

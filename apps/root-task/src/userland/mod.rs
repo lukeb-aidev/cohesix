@@ -760,7 +760,7 @@ impl DeferredCyw43TurnStatus {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum DeferredCyw43SupervisorPhase {
     Operator,
-    Driver { turns_remaining: u8 },
+    Driver,
 }
 
 #[cfg(all(
@@ -768,21 +768,148 @@ enum DeferredCyw43SupervisorPhase {
     feature = "kernel",
     feature = "net-console"
 ))]
-const DEFERRED_CYW43_PAIR_RESTART_DRIVER_TURNS_PER_OPERATOR: u8 = 4;
+const fn deferred_cyw43_activation_reserve_us(
+    budget_us: u32,
+    wcet_us: u32,
+    admitted: bool,
+) -> Option<u64> {
+    if !admitted || wcet_us == 0 || budget_us <= wcet_us {
+        return None;
+    }
+    Some((budget_us - wcet_us) as u64)
+}
 
 #[cfg(all(
     feature = "serial-console",
     feature = "kernel",
     feature = "net-console"
 ))]
-fn deferred_cyw43_pair_restart_cadence_after_stage(active: bool, stage: &str) -> bool {
-    match stage {
-        "cyw43-cold-physical-lifetime-begin" | "cyw43-pair-restart-begin" => true,
-        "cyw43-cold-physical-lifetime-complete"
-        | "cyw43-pair-restart-complete"
-        | "cyw43-pair-restart-superseded"
-        | "cyw43-pair-restart-complete-superseded" => false,
-        _ => active,
+fn deferred_cyw43_activation_reserve_from_manifest_us() -> Option<u64> {
+    let root_control = crate::generated::temporal_tasks()
+        .iter()
+        .find(|task| task.id == "root-control")?;
+    deferred_cyw43_activation_reserve_us(
+        root_control.budget_us,
+        root_control.wcet_us,
+        root_control.admitted,
+    )
+}
+
+#[cfg(all(
+    feature = "serial-console",
+    feature = "kernel",
+    feature = "net-console"
+))]
+const DEFERRED_CYW43_ACTIVATION_MAX_PRODUCTIVE_UNITS: u8 = 64;
+
+#[cfg(all(
+    feature = "serial-console",
+    feature = "kernel",
+    feature = "net-console"
+))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DeferredCyw43ActivationClock {
+    Unstarted,
+    Timed { started_ticks: u64, counter_hz: u64 },
+    Invalid,
+}
+
+#[cfg(all(
+    feature = "serial-console",
+    feature = "kernel",
+    feature = "net-console"
+))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct DeferredCyw43ActivationWindow {
+    clock: DeferredCyw43ActivationClock,
+    logical_turns: u8,
+    productive_units: u8,
+}
+
+#[cfg(all(
+    feature = "serial-console",
+    feature = "kernel",
+    feature = "net-console"
+))]
+impl DeferredCyw43ActivationWindow {
+    const fn new() -> Self {
+        Self {
+            clock: DeferredCyw43ActivationClock::Unstarted,
+            logical_turns: 0,
+            productive_units: 0,
+        }
+    }
+
+    fn reset(&mut self) {
+        *self = Self::new();
+    }
+
+    fn begin(&mut self, now_ticks: u64, counter_hz: u64) {
+        if self.clock != DeferredCyw43ActivationClock::Unstarted {
+            return;
+        }
+        self.clock = if now_ticks == 0 || counter_hz == 0 {
+            DeferredCyw43ActivationClock::Invalid
+        } else {
+            DeferredCyw43ActivationClock::Timed {
+                started_ticks: now_ticks,
+                counter_hz,
+            }
+        };
+    }
+
+    fn turn_admitted(
+        &mut self,
+        now_ticks: u64,
+        counter_hz: u64,
+        activation_reserve_us: Option<u64>,
+    ) -> bool {
+        if self.productive_units >= DEFERRED_CYW43_ACTIVATION_MAX_PRODUCTIVE_UNITS {
+            return false;
+        }
+        self.begin(now_ticks, counter_hz);
+        let Some(activation_reserve_us) = activation_reserve_us else {
+            return self.logical_turns == 0;
+        };
+        match self.clock {
+            DeferredCyw43ActivationClock::Unstarted => false,
+            DeferredCyw43ActivationClock::Timed {
+                started_ticks,
+                counter_hz: started_hz,
+            } => {
+                if now_ticks == 0
+                    || counter_hz == 0
+                    || counter_hz != started_hz
+                    || now_ticks < started_ticks
+                {
+                    return false;
+                }
+                let elapsed_ticks = u128::from(now_ticks - started_ticks);
+                let elapsed_scaled = elapsed_ticks.saturating_mul(1_000_000u128);
+                let reserve_scaled =
+                    u128::from(started_hz).saturating_mul(u128::from(activation_reserve_us));
+                elapsed_scaled < reserve_scaled
+            }
+            DeferredCyw43ActivationClock::Invalid => self.logical_turns == 0,
+        }
+    }
+
+    fn record_operator_turn(&mut self) {
+        self.logical_turns = self.logical_turns.saturating_add(1);
+    }
+
+    fn record_driver_turn(&mut self, operation_executed: bool) {
+        self.logical_turns = self.logical_turns.saturating_add(1);
+        if operation_executed {
+            self.productive_units = self.productive_units.saturating_add(1);
+        }
+    }
+
+    fn record_attached_network_turn(&mut self, productive: bool) {
+        self.logical_turns = self.logical_turns.saturating_add(1);
+        if productive {
+            self.productive_units = self.productive_units.saturating_add(1);
+        }
     }
 }
 
@@ -791,12 +918,9 @@ fn deferred_cyw43_pair_restart_cadence_after_stage(active: bool, stage: &str) ->
     feature = "kernel",
     feature = "net-console"
 ))]
-const fn deferred_cyw43_driver_turns_per_operator(pair_restart_active: bool) -> u8 {
-    if pair_restart_active {
-        DEFERRED_CYW43_PAIR_RESTART_DRIVER_TURNS_PER_OPERATOR
-    } else {
-        1
-    }
+fn deferred_cyw43_yield_and_reset(window: &mut DeferredCyw43ActivationWindow) {
+    sel4::yield_now();
+    window.reset();
 }
 
 #[cfg(all(
@@ -866,44 +990,77 @@ enum DeferredCyw43SupervisorTurn {
     feature = "kernel",
     feature = "net-console"
 ))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DeferredCyw43McsContinuation {
+    Continue,
+    Yield,
+}
+
+#[cfg(all(
+    feature = "serial-console",
+    feature = "kernel",
+    feature = "net-console"
+))]
+const fn deferred_cyw43_mcs_continuation(
+    turn: DeferredCyw43SupervisorTurn,
+    next_phase: DeferredCyw43SupervisorPhase,
+    operation_executed: bool,
+    operator_admitted_before: bool,
+    network_attached: bool,
+) -> DeferredCyw43McsContinuation {
+    match (
+        turn,
+        next_phase,
+        operation_executed,
+        operator_admitted_before,
+        network_attached,
+    ) {
+        (
+            DeferredCyw43SupervisorTurn::Operator,
+            DeferredCyw43SupervisorPhase::Driver,
+            false,
+            true,
+            false,
+        )
+        | (
+            DeferredCyw43SupervisorTurn::Driver,
+            DeferredCyw43SupervisorPhase::Operator,
+            true,
+            _,
+            false,
+        ) => DeferredCyw43McsContinuation::Continue,
+        (DeferredCyw43SupervisorTurn::Operator, _, _, _, _)
+        | (DeferredCyw43SupervisorTurn::Driver, _, _, _, _)
+        | (DeferredCyw43SupervisorTurn::Blocked, _, _, _, _) => DeferredCyw43McsContinuation::Yield,
+    }
+}
+
+#[cfg(all(
+    feature = "serial-console",
+    feature = "kernel",
+    feature = "net-console"
+))]
 const fn deferred_cyw43_supervisor_phase_step(
     phase: DeferredCyw43SupervisorPhase,
     may_begin: bool,
     driver_turn_due: bool,
-    driver_turns_per_operator: u8,
 ) -> (DeferredCyw43SupervisorTurn, DeferredCyw43SupervisorPhase) {
     match (phase, may_begin, driver_turn_due) {
         (DeferredCyw43SupervisorPhase::Operator, true, true) => (
             DeferredCyw43SupervisorTurn::Operator,
-            DeferredCyw43SupervisorPhase::Driver {
-                turns_remaining: if driver_turns_per_operator == 0 {
-                    1
-                } else if driver_turns_per_operator
-                    > DEFERRED_CYW43_PAIR_RESTART_DRIVER_TURNS_PER_OPERATOR
-                {
-                    DEFERRED_CYW43_PAIR_RESTART_DRIVER_TURNS_PER_OPERATOR
-                } else {
-                    driver_turns_per_operator
-                },
-            },
+            DeferredCyw43SupervisorPhase::Driver,
         ),
         (DeferredCyw43SupervisorPhase::Operator, _, false)
         | (DeferredCyw43SupervisorPhase::Operator, false, true) => (
             DeferredCyw43SupervisorTurn::Operator,
             DeferredCyw43SupervisorPhase::Operator,
         ),
-        (DeferredCyw43SupervisorPhase::Driver { turns_remaining }, true, true) => (
+        (DeferredCyw43SupervisorPhase::Driver, true, true) => (
             DeferredCyw43SupervisorTurn::Driver,
-            if turns_remaining > 1 {
-                DeferredCyw43SupervisorPhase::Driver {
-                    turns_remaining: turns_remaining - 1,
-                }
-            } else {
-                DeferredCyw43SupervisorPhase::Operator
-            },
+            DeferredCyw43SupervisorPhase::Operator,
         ),
-        (DeferredCyw43SupervisorPhase::Driver { .. }, _, false)
-        | (DeferredCyw43SupervisorPhase::Driver { .. }, false, true) => (
+        (DeferredCyw43SupervisorPhase::Driver, _, false)
+        | (DeferredCyw43SupervisorPhase::Driver, false, true) => (
             DeferredCyw43SupervisorTurn::Blocked,
             DeferredCyw43SupervisorPhase::Operator,
         ),
@@ -936,20 +1093,22 @@ fn run_deferred_cyw43_attached_network_control_turn<Poll, Recovery, Diagnostic, 
     mut diagnostic: Diagnostic,
     mut record: Record,
     mut commit: Commit,
-) where
-    Poll: FnMut(),
+) -> bool
+where
+    Poll: FnMut() -> bool,
     Recovery: FnMut() -> bool,
     Diagnostic: FnMut() -> crate::drivers::driver_task_net::Cyw43Gate8Diagnostic,
     Record: FnMut(crate::drivers::driver_task_net::Cyw43Gate8Diagnostic),
     Commit: FnMut(u32) -> bool,
 {
     record(diagnostic());
-    poll();
+    let productive_network_successor = poll();
     if recovery_required() {
-        return;
+        return false;
     }
     let candidate = diagnostic();
     let _ = commit(candidate.generation);
+    productive_network_successor
 }
 
 #[cfg(all(
@@ -1107,8 +1266,14 @@ enum DeferredGate8Lifecycle {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum DeferredGate8ServicePhase {
     AwaitingDhcp,
-    HandoffAuthorized { response_bound_ms: u64 },
-    AwaitingReady { deadline_ms: u64 },
+    HandoffAuthorized {
+        response_bound_ms: u64,
+    },
+    AwaitingReady {
+        publication_not_before_ms: u64,
+        deadline_ms: u64,
+        deadline_observation_taken: bool,
+    },
     Ready,
 }
 
@@ -1151,6 +1316,74 @@ enum DeferredGate8HandoffRevalidation {
 struct DeferredGate8ChildReadyPlan {
     generation: u32,
     response_bound_ms: u64,
+    publication_not_before_ms: u64,
+    counter_hz: u64,
+}
+
+#[cfg(all(
+    feature = "serial-console",
+    feature = "kernel",
+    feature = "net-console"
+))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct DeferredGate8AbsoluteClockSample {
+    counter_ticks: u64,
+    counter_hz: u64,
+    generated_timer_hz: u64,
+}
+
+#[cfg(all(
+    feature = "serial-console",
+    feature = "kernel",
+    feature = "net-console"
+))]
+impl DeferredGate8AbsoluteClockSample {
+    fn absolute_ms(self) -> Option<u64> {
+        if self.counter_ticks == 0
+            || self.counter_hz == 0
+            || self.generated_timer_hz == 0
+            || self.counter_hz != self.generated_timer_hz
+        {
+            return None;
+        }
+        let seconds = self.counter_ticks / self.counter_hz;
+        let remainder = self.counter_ticks % self.counter_hz;
+        let absolute_ms = u128::from(seconds).checked_mul(1_000)?.checked_add(
+            u128::from(remainder)
+                .checked_mul(1_000)?
+                .checked_div(u128::from(self.counter_hz))?,
+        )?;
+        u64::try_from(absolute_ms).ok().filter(|value| *value != 0)
+    }
+}
+
+#[cfg(all(
+    feature = "serial-console",
+    feature = "kernel",
+    feature = "net-console"
+))]
+fn deferred_gate8_absolute_clock_sample() -> DeferredGate8AbsoluteClockSample {
+    DeferredGate8AbsoluteClockSample {
+        counter_ticks: monotonic_ticks(),
+        counter_hz: counter_frequency(),
+        generated_timer_hz: crate::generated::console_network_service_config().timer_clock_hz,
+    }
+}
+
+#[cfg(all(
+    feature = "serial-console",
+    feature = "kernel",
+    feature = "net-console"
+))]
+const fn child_ready_publication_in_window(
+    publication_not_before_ms: u64,
+    deadline_ms: u64,
+    published_ms: u64,
+) -> bool {
+    published_ms != 0
+        && publication_not_before_ms != 0
+        && publication_not_before_ms <= published_ms
+        && published_ms < deadline_ms
 }
 
 #[cfg(all(
@@ -1164,6 +1397,7 @@ enum DeferredGate8ChildReadyPreparation {
     GenerationDrift,
     InvalidPhase,
     AlreadyArmed,
+    ClockInvalid,
     ClockOverflow,
 }
 
@@ -1179,7 +1413,27 @@ enum DeferredGate8ChildReadyArm {
     GenerationDrift,
     InvalidPhase,
     AlreadyArmed,
+    ClockInvalid,
     ClockOverflow,
+}
+
+#[cfg(all(
+    feature = "serial-console",
+    feature = "kernel",
+    feature = "net-console"
+))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DeferredGate8ChildReadyPreNetworkAction {
+    Continue,
+    ObservePublicationOnly {
+        generation: u32,
+        deadline_ms: u64,
+    },
+    Fail {
+        generation: u32,
+        blocker: &'static str,
+        deadline_ms: u64,
+    },
 }
 
 #[cfg(all(
@@ -1559,7 +1813,7 @@ impl DeferredGate8Lifecycle {
 
     fn prepare_child_ready_wait(
         self,
-        now_ms: u64,
+        pre_resume_clock: DeferredGate8AbsoluteClockSample,
         generation: u32,
     ) -> DeferredGate8ChildReadyPreparation {
         let Self::Committed {
@@ -1582,19 +1836,27 @@ impl DeferredGate8Lifecycle {
                 return DeferredGate8ChildReadyPreparation::InvalidPhase;
             }
         };
-        if now_ms.checked_add(response_bound_ms).is_none() {
+        let Some(publication_not_before_ms) = pre_resume_clock.absolute_ms() else {
+            return DeferredGate8ChildReadyPreparation::ClockInvalid;
+        };
+        if publication_not_before_ms
+            .checked_add(response_bound_ms)
+            .is_none()
+        {
             return DeferredGate8ChildReadyPreparation::ClockOverflow;
         }
         DeferredGate8ChildReadyPreparation::Prepared(DeferredGate8ChildReadyPlan {
             generation,
             response_bound_ms,
+            publication_not_before_ms,
+            counter_hz: pre_resume_clock.counter_hz,
         })
     }
 
     fn arm_child_ready_wait(
         &mut self,
         plan: DeferredGate8ChildReadyPlan,
-        now_ms: u64,
+        post_resume_clock: DeferredGate8AbsoluteClockSample,
         observed_generation: u32,
         generation_operational: bool,
         recovery_required: bool,
@@ -1616,14 +1878,27 @@ impl DeferredGate8Lifecycle {
         if *generation != plan.generation {
             return DeferredGate8ChildReadyArm::GenerationDrift;
         }
-        let Some(deadline_ms) = now_ms.checked_add(plan.response_bound_ms) else {
+        if post_resume_clock.counter_hz != plan.counter_hz {
+            return DeferredGate8ChildReadyArm::ClockInvalid;
+        }
+        let Some(post_resume_ms) = post_resume_clock.absolute_ms() else {
+            return DeferredGate8ChildReadyArm::ClockInvalid;
+        };
+        if post_resume_ms < plan.publication_not_before_ms {
+            return DeferredGate8ChildReadyArm::ClockInvalid;
+        }
+        let Some(deadline_ms) = post_resume_ms.checked_add(plan.response_bound_ms) else {
             return DeferredGate8ChildReadyArm::ClockOverflow;
         };
         match *service_phase {
             DeferredGate8ServicePhase::HandoffAuthorized { response_bound_ms }
                 if response_bound_ms == plan.response_bound_ms =>
             {
-                *service_phase = DeferredGate8ServicePhase::AwaitingReady { deadline_ms };
+                *service_phase = DeferredGate8ServicePhase::AwaitingReady {
+                    publication_not_before_ms: plan.publication_not_before_ms,
+                    deadline_ms,
+                    deadline_observation_taken: false,
+                };
                 DeferredGate8ChildReadyArm::Armed { deadline_ms }
             }
             DeferredGate8ServicePhase::AwaitingReady { .. } | DeferredGate8ServicePhase::Ready => {
@@ -1636,7 +1911,7 @@ impl DeferredGate8Lifecycle {
         }
     }
 
-    fn mark_service_ready(&mut self, generation: u32) -> bool {
+    fn mark_service_ready(&mut self, generation: u32, published_ms: u64) -> bool {
         let Self::Committed {
             generation: committed_generation,
             service_phase,
@@ -1645,10 +1920,19 @@ impl DeferredGate8Lifecycle {
         else {
             return false;
         };
+        let DeferredGate8ServicePhase::AwaitingReady {
+            publication_not_before_ms,
+            deadline_ms,
+            ..
+        } = *service_phase
+        else {
+            return false;
+        };
         if *committed_generation != generation
-            || !matches!(
-                *service_phase,
-                DeferredGate8ServicePhase::AwaitingReady { .. }
+            || !child_ready_publication_in_window(
+                publication_not_before_ms,
+                deadline_ms,
+                published_ms,
             )
         {
             return false;
@@ -1657,7 +1941,36 @@ impl DeferredGate8Lifecycle {
         true
     }
 
-    fn service_readiness_deadline_expired(self, generation: u32, now_ms: u64) -> Option<u64> {
+    fn child_ready_publication_on_time(self, generation: u32, published_ms: Option<u64>) -> bool {
+        matches!(
+            (self, published_ms),
+            (
+                Self::Committed {
+                    generation: committed_generation,
+                    service_phase:
+                        DeferredGate8ServicePhase::AwaitingReady {
+                            publication_not_before_ms,
+                            deadline_ms,
+                            ..
+                        },
+                    ..
+                },
+                Some(published_ms),
+            ) if committed_generation == generation
+                && child_ready_publication_in_window(
+                    publication_not_before_ms,
+                    deadline_ms,
+                    published_ms,
+                )
+        )
+    }
+
+    fn service_readiness_deadline_expired(
+        self,
+        generation: u32,
+        policy_now_ms: u64,
+        child_ready_now_ms: Option<u64>,
+    ) -> Option<u64> {
         match self {
             Self::Committed {
                 generation: committed_generation,
@@ -1667,13 +1980,16 @@ impl DeferredGate8Lifecycle {
             } if committed_generation == generation => match service_phase {
                 DeferredGate8ServicePhase::AwaitingDhcp
                 | DeferredGate8ServicePhase::HandoffAuthorized { .. }
-                    if now_ms >= deadline_ms =>
+                    if policy_now_ms >= deadline_ms =>
                 {
                     Some(deadline_ms)
                 }
                 DeferredGate8ServicePhase::AwaitingReady {
                     deadline_ms: child_ready_deadline_ms,
-                } if now_ms >= child_ready_deadline_ms => Some(child_ready_deadline_ms),
+                    ..
+                } if child_ready_now_ms.is_none_or(|now_ms| now_ms >= child_ready_deadline_ms) => {
+                    Some(child_ready_deadline_ms)
+                }
                 DeferredGate8ServicePhase::AwaitingDhcp
                 | DeferredGate8ServicePhase::HandoffAuthorized { .. }
                 | DeferredGate8ServicePhase::AwaitingReady { .. }
@@ -1683,28 +1999,99 @@ impl DeferredGate8Lifecycle {
         }
     }
 
-    fn child_ready_pre_network_failure(
-        self,
-        now_ms: u64,
+    fn child_ready_pre_network_action(
+        &mut self,
+        now_ms: Option<u64>,
         observed_generation: u32,
         generation_operational: bool,
         recovery_required: bool,
-    ) -> Option<(u32, &'static str, u64)> {
+        ready_published_ms: Option<u64>,
+    ) -> DeferredGate8ChildReadyPreNetworkAction {
         if recovery_required {
-            return None;
+            return DeferredGate8ChildReadyPreNetworkAction::Continue;
         }
         let Self::Committed {
             generation,
-            service_phase: DeferredGate8ServicePhase::AwaitingReady { deadline_ms },
+            service_phase:
+                DeferredGate8ServicePhase::AwaitingReady {
+                    publication_not_before_ms,
+                    deadline_ms,
+                    deadline_observation_taken,
+                },
             ..
         } = self
         else {
-            return None;
+            return DeferredGate8ChildReadyPreNetworkAction::Continue;
         };
-        if !generation_operational || observed_generation != generation {
-            return Some((generation, "child-ready-generation-drift", now_ms));
+        let Some(now_ms) = now_ms else {
+            return DeferredGate8ChildReadyPreNetworkAction::Fail {
+                generation: *generation,
+                blocker: "child-ready-clock-invalid",
+                deadline_ms: *deadline_ms,
+            };
+        };
+        if !generation_operational || observed_generation != *generation {
+            return DeferredGate8ChildReadyPreNetworkAction::Fail {
+                generation: *generation,
+                blocker: "child-ready-generation-drift",
+                deadline_ms: now_ms,
+            };
         }
-        (now_ms >= deadline_ms).then_some((generation, "service-readiness-deadline", deadline_ms))
+        if now_ms < *deadline_ms {
+            return DeferredGate8ChildReadyPreNetworkAction::Continue;
+        }
+        if ready_published_ms.is_some_and(|published_ms| {
+            child_ready_publication_in_window(
+                *publication_not_before_ms,
+                *deadline_ms,
+                published_ms,
+            )
+        }) {
+            return DeferredGate8ChildReadyPreNetworkAction::Continue;
+        }
+        if !*deadline_observation_taken {
+            *deadline_observation_taken = true;
+            return DeferredGate8ChildReadyPreNetworkAction::ObservePublicationOnly {
+                generation: *generation,
+                deadline_ms: *deadline_ms,
+            };
+        }
+        DeferredGate8ChildReadyPreNetworkAction::Fail {
+            generation: *generation,
+            blocker: "service-readiness-deadline",
+            deadline_ms: *deadline_ms,
+        }
+    }
+
+    fn child_ready_post_observation_failure(
+        self,
+        generation: u32,
+        ready_published_ms: Option<u64>,
+    ) -> Option<(u32, &'static str, u64)> {
+        let Self::Committed {
+            generation: committed_generation,
+            service_phase:
+                DeferredGate8ServicePhase::AwaitingReady {
+                    publication_not_before_ms,
+                    deadline_ms,
+                    ..
+                },
+            ..
+        } = self
+        else {
+            return Some((generation, "child-ready-state-invalid", 0));
+        };
+        if committed_generation != generation {
+            return Some((
+                committed_generation,
+                "child-ready-generation-drift",
+                deadline_ms,
+            ));
+        }
+        (!ready_published_ms.is_some_and(|published_ms| {
+            child_ready_publication_in_window(publication_not_before_ms, deadline_ms, published_ms)
+        }))
+        .then_some((generation, "service-readiness-deadline", deadline_ms))
     }
 
     fn deadline_ms(self) -> Option<u64> {
@@ -1718,6 +2105,7 @@ impl DeferredGate8Lifecycle {
             } => Some(match service_phase {
                 DeferredGate8ServicePhase::AwaitingReady {
                     deadline_ms: child_ready_deadline_ms,
+                    ..
                 } => child_ready_deadline_ms,
                 DeferredGate8ServicePhase::AwaitingDhcp
                 | DeferredGate8ServicePhase::HandoffAuthorized { .. }
@@ -2469,10 +2857,22 @@ where
     let mut serial_retry = DeferredSerialRouteRetry::new(crate::hal::timebase().now_ms());
     let mut turn_status = DeferredCyw43TurnStatus::new();
     let mut supervisor_phase = DeferredCyw43SupervisorPhase::Operator;
-    let mut pair_restart_cadence_active = false;
+    let mut activation_window = DeferredCyw43ActivationWindow::new();
+    let activation_reserve_us = deferred_cyw43_activation_reserve_from_manifest_us();
     let mut driver_fault_diagnostic_sequence = 0u64;
 
     'supervisor: loop {
+        activation_window.begin(monotonic_ticks(), counter_frequency());
+        if activation_window.logical_turns != 0
+            && !activation_window.turn_admitted(
+                monotonic_ticks(),
+                counter_frequency(),
+                activation_reserve_us,
+            )
+        {
+            deferred_cyw43_yield_and_reset(&mut activation_window);
+            continue;
+        }
         if let Some((sequence, line)) =
             crate::hal::driver_task::driver_supervisor_fault_diagnostic_line(
                 driver_fault_diagnostic_sequence,
@@ -2492,7 +2892,7 @@ where
                 // not enter generation poison until the complete causal batch
                 // has a teardown-independent home.
                 pump.poll_cyw43_bootstrap_supervisor_event_turn();
-                sel4::yield_now();
+                deferred_cyw43_yield_and_reset(&mut activation_window);
                 continue;
             }
             recovery_diagnostic_pending = None;
@@ -2514,7 +2914,7 @@ where
                 // retire that exact owner; do not reset the Gate 8 deadline or
                 // admit any fresh operation.
                 gate8_terminal_pending = None;
-                sel4::yield_now();
+                deferred_cyw43_yield_and_reset(&mut activation_window);
                 continue;
             }
             if gate8_terminal_pending_cancels_for_recovery(
@@ -2522,7 +2922,7 @@ where
                 crate::drivers::driver_task_net::cyw43_recovery_required(),
             ) {
                 gate8_terminal_pending = None;
-                sel4::yield_now();
+                deferred_cyw43_yield_and_reset(&mut activation_window);
                 continue;
             }
             if !pending.failure_transaction_retained {
@@ -2556,12 +2956,12 @@ where
                             "CYW43_GATE8_FAILURE_TRANSACTION status=preflight-blocked action=wait-for-serial-capacity",
                         );
                         pump.poll_cyw43_bootstrap_supervisor_event_turn();
-                        sel4::yield_now();
+                        deferred_cyw43_yield_and_reset(&mut activation_window);
                         continue;
                     }
                     Cyw43BootstrapAtomicDecisionOutcome::DecisionDeclined => {
                         gate8_terminal_pending = None;
-                        sel4::yield_now();
+                        deferred_cyw43_yield_and_reset(&mut activation_window);
                         continue;
                     }
                     Cyw43BootstrapAtomicDecisionOutcome::Retained => {
@@ -2576,7 +2976,7 @@ where
                             "CYW43_GATE8_FAILURE_TRANSACTION status=retention-invariant-failed action=preserve-terminal-decision",
                         );
                         pump.poll_cyw43_bootstrap_supervisor_event_turn();
-                        sel4::yield_now();
+                        deferred_cyw43_yield_and_reset(&mut activation_window);
                         continue;
                     }
                 }
@@ -2592,14 +2992,14 @@ where
                 false,
             ) {
                 pump.poll_cyw43_bootstrap_supervisor_event_turn();
-                sel4::yield_now();
+                deferred_cyw43_yield_and_reset(&mut activation_window);
                 continue;
             }
             pump.quarantine_network_service_after_cyw43_terminal_failure();
             gate8_terminal_pending = None;
             terminal_mode = Some(DeferredNetSupervisorTerminal::PermanentAttachedWifiFailure);
             attempt_active = false;
-            sel4::yield_now();
+            deferred_cyw43_yield_and_reset(&mut activation_window);
             continue;
         }
 
@@ -2608,7 +3008,7 @@ where
             // guard so a future retained-output branch cannot accidentally
             // fall through to ordinary NetStack/CYW43 polling.
             pump.poll_cyw43_bootstrap_supervisor_event_turn();
-            sel4::yield_now();
+            deferred_cyw43_yield_and_reset(&mut activation_window);
             continue;
         }
 
@@ -2619,7 +3019,7 @@ where
             // terminal state prevents another child operation. An attached
             // poisoned stack was quarantined before this mode was entered.
             if pump.poll_root_control_quantum() {
-                sel4::yield_now();
+                deferred_cyw43_yield_and_reset(&mut activation_window);
             }
             continue;
         }
@@ -2669,7 +3069,7 @@ where
                     }
                 }
             }
-            sel4::yield_now();
+            deferred_cyw43_yield_and_reset(&mut activation_window);
             continue;
         }
 
@@ -2708,35 +3108,73 @@ where
         if network_attached && (bootstrap.is_ready() || canonical_parent.retains_canonical_owner())
         {
             'attached_network_control: {
-                let mut handoff_terminal_failure =
-                    if !recovery_required && gate8_lifecycle.child_ready_wait_pending() {
-                        let pre_network_now_ms = crate::hal::timebase().now_ms();
-                        let pre_network_diagnostic =
-                            crate::drivers::driver_task_net::cyw43_gate8_diagnostic();
-                        gate8_lifecycle.child_ready_pre_network_failure(
-                            pre_network_now_ms,
-                            pre_network_diagnostic.generation,
-                            bootstrap.gate8_generation_still_operational(pre_network_diagnostic),
-                            recovery_required,
-                        )
-                    } else {
-                        None
-                    };
-                if handoff_terminal_failure.is_none() {
+                let mut child_publication_only_turn = false;
+                let mut handoff_terminal_failure = None;
+                let service_ready_before_control = bootstrap_service_ready_published;
+                let mut productive_network_successor = false;
+                if !recovery_required && gate8_lifecycle.child_ready_wait_pending() {
+                    let pre_network_now_ms = deferred_gate8_absolute_clock_sample().absolute_ms();
+                    let pre_network_diagnostic =
+                        crate::drivers::driver_task_net::cyw43_gate8_diagnostic();
+                    match gate8_lifecycle.child_ready_pre_network_action(
+                        pre_network_now_ms,
+                        pre_network_diagnostic.generation,
+                        bootstrap.gate8_generation_still_operational(pre_network_diagnostic),
+                        recovery_required,
+                        pump.isolated_child_ready_published_ms(),
+                    ) {
+                        DeferredGate8ChildReadyPreNetworkAction::Continue => {}
+                        DeferredGate8ChildReadyPreNetworkAction::ObservePublicationOnly {
+                            generation,
+                            ..
+                        } => {
+                            // This exact deadline arbitration observes only the
+                            // child's durable shared-page publication. It does
+                            // not advance network policy, poll CYW43/SDIO, or
+                            // compose another Network unit in this root turn.
+                            let _ = pump.poll_isolated_child_publication_only();
+                            child_publication_only_turn = true;
+                            handoff_terminal_failure = gate8_lifecycle
+                                .child_ready_post_observation_failure(
+                                    generation,
+                                    pump.isolated_child_ready_published_ms(),
+                                );
+                        }
+                        DeferredGate8ChildReadyPreNetworkAction::Fail {
+                            generation,
+                            blocker,
+                            deadline_ms,
+                        } => {
+                            handoff_terminal_failure = Some((generation, blocker, deadline_ms));
+                        }
+                    }
+                }
+                if handoff_terminal_failure.is_none() && !child_publication_only_turn {
                     match deferred_cyw43_attached_turn(
                         recovery_required,
                         canonical_parent,
                         console_handoff_authorized,
                     ) {
                         DeferredCyw43AttachedTurn::NetworkControl => {
+                            if !activation_window.turn_admitted(
+                                monotonic_ticks(),
+                                counter_frequency(),
+                                activation_reserve_us,
+                            ) {
+                                deferred_cyw43_yield_and_reset(&mut activation_window);
+                                continue 'supervisor;
+                            }
                             let control_turn_started_ms = crate::hal::timebase().now_ms();
-                            run_deferred_cyw43_attached_network_control_turn(
-                                || pump.poll(),
+                            productive_network_successor =
+                                run_deferred_cyw43_attached_network_control_turn(
+                                || pump.poll_deferred_cyw43_attached_network_control_turn(),
                                 crate::drivers::driver_task_net::cyw43_recovery_required,
                                 crate::drivers::driver_task_net::cyw43_gate8_diagnostic,
                                 crate::drivers::driver_task_net::record_cyw43_pre_recovery_gate8,
                                 crate::drivers::driver_task_net::commit_cyw43_data_handoff_if_ready,
                             );
+                            activation_window
+                                .record_attached_network_turn(productive_network_successor);
                             // The poll above may start Join and advance the logical
                             // connection generation. Commit only that post-poll
                             // generation; the bootstrap generation names the
@@ -2764,7 +3202,7 @@ where
                                         // began inside the original Gate 8 bound.
                                         // The exact-generation authorization alone
                                         // admits one exclusive following handoff.
-                                        sel4::yield_now();
+                                        deferred_cyw43_yield_and_reset(&mut activation_window);
                                         continue 'supervisor;
                                     }
                                     DeferredGate8HandoffAdmission::InvalidAuthority {
@@ -2809,7 +3247,10 @@ where
                                 )
                             {
                                 let now_ms = crate::hal::timebase().now_ms();
-                                match gate8_lifecycle.prepare_child_ready_wait(now_ms, generation) {
+                                let pre_resume_clock = deferred_gate8_absolute_clock_sample();
+                                match gate8_lifecycle
+                                    .prepare_child_ready_wait(pre_resume_clock, generation)
+                                {
                                     DeferredGate8ChildReadyPreparation::Prepared(plan) => {
                                         let Some(handoff_completed) =
                                             with_deferred_root_hal(hal_ptr, |hal| {
@@ -2825,9 +3266,11 @@ where
                                             );
                                             let post_handoff_now_ms =
                                                 crate::hal::timebase().now_ms();
+                                            let post_resume_clock =
+                                                deferred_gate8_absolute_clock_sample();
                                             match gate8_lifecycle.arm_child_ready_wait(
                                                 plan,
-                                                post_handoff_now_ms,
+                                                post_resume_clock,
                                                 post_handoff_diagnostic.generation,
                                                 bootstrap.gate8_generation_still_operational(
                                                     post_handoff_diagnostic,
@@ -2835,7 +3278,9 @@ where
                                                 post_handoff_recovery,
                                             ) {
                                                 DeferredGate8ChildReadyArm::Armed { .. } => {
-                                                    sel4::yield_now();
+                                                    deferred_cyw43_yield_and_reset(
+                                                        &mut activation_window,
+                                                    );
                                                     continue 'supervisor;
                                                 }
                                                 DeferredGate8ChildReadyArm::RecoveryRequired => {}
@@ -2854,6 +3299,16 @@ where
                                                         crate::hal::timebase().now_ms(),
                                                     ));
                                                 }
+                                                DeferredGate8ChildReadyArm::ClockInvalid => {
+                                                    crate::log_buffer::append_log_line(
+                                                    "CYW43_CHILD_READY_CLOCK status=invalid action=fail-closed",
+                                                );
+                                                    handoff_terminal_failure = Some((
+                                                        generation,
+                                                        "child-ready-clock-invalid",
+                                                        post_handoff_now_ms,
+                                                    ));
+                                                }
                                                 DeferredGate8ChildReadyArm::ClockOverflow => {
                                                     crate::log_buffer::append_log_line(
                                                     "CYW43_CHILD_READY_BOUND status=overflow action=fail-closed",
@@ -2866,6 +3321,13 @@ where
                                                 }
                                             }
                                         }
+                                    }
+                                    DeferredGate8ChildReadyPreparation::ClockInvalid => {
+                                        crate::log_buffer::append_log_line(
+                                            "CYW43_CHILD_READY_CLOCK status=invalid action=fail-closed",
+                                        );
+                                        handoff_terminal_failure =
+                                            Some((generation, "child-ready-clock-invalid", now_ms));
                                     }
                                     DeferredGate8ChildReadyPreparation::ClockOverflow => {
                                         crate::log_buffer::append_log_line(
@@ -2905,9 +3367,10 @@ where
                 }
                 if crate::drivers::driver_task_net::cyw43_recovery_required() {
                     // The ordinary network turn discovered the transport edge.
-                    // Yield now so its following Operator and Driver phases occupy
-                    // two distinct later scheduler iterations.
-                    sel4::yield_now();
+                    // Yield now so recovery begins in a fresh guarded activation;
+                    // its Operator and Driver remain distinct logical turns and
+                    // cannot compose with this Network unit.
+                    deferred_cyw43_yield_and_reset(&mut activation_window);
                     continue 'supervisor;
                 }
                 let stability_now_ms = crate::hal::timebase().now_ms();
@@ -2948,7 +3411,7 @@ where
                             crate::log_buffer::append_log_line(
                                 "CYW43_GATE8_SNAPSHOT_COMMIT status=rejected action=retry-fresh-snapshot",
                             );
-                            sel4::yield_now();
+                            deferred_cyw43_yield_and_reset(&mut activation_window);
                             continue 'supervisor;
                         }
                         // Reserve lifecycle and consumer state before mutating
@@ -3000,15 +3463,11 @@ where
                         if !recovery_required && terminal_failure.is_none() =>
                     {
                         let generation = diagnostic.generation;
-                        if let Some(deadline_ms) = gate8_lifecycle
-                            .service_readiness_deadline_expired(generation, stability_now_ms)
+                        let ready_published_ms = pump.isolated_child_ready_published_ms();
+                        if pump.net_console_cyw43_boot_service_ready_for_root(generation)
+                            && gate8_lifecycle
+                                .child_ready_publication_on_time(generation, ready_published_ms)
                         {
-                            if !crate::drivers::driver_task_net::cyw43_finite_lifecycle_cut_blocking(
-                            ) {
-                                terminal_failure =
-                                    Some((generation, "service-readiness-deadline", deadline_ms));
-                            }
-                        } else if pump.net_console_cyw43_boot_service_ready_for_root(generation) {
                             let ready_sequence = supervisor_sequence.next_status_sequence();
                             let runtime_recovery = bootstrap_service_ready_published;
                             let ready_queued = if runtime_recovery {
@@ -3027,11 +3486,13 @@ where
                                 )
                             };
                             if !ready_queued {
-                                sel4::yield_now();
+                                deferred_cyw43_yield_and_reset(&mut activation_window);
                                 continue 'supervisor;
                             }
                             let lifecycle_committed =
-                                gate8_lifecycle.mark_service_ready(generation);
+                                ready_published_ms.is_some_and(|published_ms| {
+                                    gate8_lifecycle.mark_service_ready(generation, published_ms)
+                                });
                             debug_assert!(
                                 lifecycle_committed,
                                 "service Ready follows the retained Gate 8 generation"
@@ -3051,6 +3512,18 @@ where
                                         "CYW43_RUNTIME_RECOVERY_ADMISSION status=rejected action=retain-service-ready-without-recovery-budget",
                                     );
                                 }
+                            }
+                        } else if let Some(deadline_ms) = gate8_lifecycle
+                            .service_readiness_deadline_expired(
+                                generation,
+                                stability_now_ms,
+                                deferred_gate8_absolute_clock_sample().absolute_ms(),
+                            )
+                        {
+                            if !crate::drivers::driver_task_net::cyw43_finite_lifecycle_cut_blocking(
+                            ) {
+                                terminal_failure =
+                                    Some((generation, "service-readiness-deadline", deadline_ms));
                             }
                         }
                     }
@@ -3106,7 +3579,7 @@ where
                         // passive snapshot retains recovery authority. The next
                         // supervisor section will service it without publishing a
                         // contradictory logical terminal record.
-                        sel4::yield_now();
+                        deferred_cyw43_yield_and_reset(&mut activation_window);
                         continue 'supervisor;
                     }
                     gate8_terminal_pending = Some(DeferredGate8TerminalPending {
@@ -3119,24 +3592,45 @@ where
                         terminal_decision_committed: false,
                         failure_transaction_retained: false,
                     });
-                    sel4::yield_now();
+                    deferred_cyw43_yield_and_reset(&mut activation_window);
                     continue 'supervisor;
                 }
 
                 recovery_required |= crate::drivers::driver_task_net::cyw43_recovery_required();
                 if !recovery_required {
-                    sel4::yield_now();
+                    if service_ready_before_control
+                        && bootstrap_service_ready_published
+                        && productive_network_successor
+                    {
+                        // EventPump proved that this exact attached Network
+                        // unit made progress and retained its immediate Network
+                        // successor. Re-enter loop-top arbitration under the
+                        // same generated-reserve guard; all other attached
+                        // outcomes restore the explicit MCS yield below.
+                        continue 'supervisor;
+                    }
+                    deferred_cyw43_yield_and_reset(&mut activation_window);
                     continue 'supervisor;
                 }
             }
         }
 
         if supervisor_phase == DeferredCyw43SupervisorPhase::Operator {
-            // Operator service and CYW43/SDIO service occupy distinct outer
-            // turns. Only the exact finite pair-restart cursor receives the
-            // hardware-proven four-turn cadence; every other bootstrap,
-            // association, and steady-state phase remains one-for-one.
+            if !activation_window.turn_admitted(
+                monotonic_ticks(),
+                counter_frequency(),
+                activation_reserve_us,
+            ) {
+                deferred_cyw43_yield_and_reset(&mut activation_window);
+                continue;
+            }
+            // Operator service remains one logical condition-before-operation
+            // turn. A guarded activation may preserve the current refill for
+            // its immediately following one-operation Driver turn, but never
+            // schedules Driver twice without another Operator reconciliation.
+            let may_begin_before = pump.cyw43_bootstrap_may_begin();
             pump.poll_cyw43_bootstrap_supervisor_event_turn();
+            activation_window.record_operator_turn();
             let may_begin = pump.cyw43_bootstrap_may_begin();
             if may_begin {
                 let _ = service_deferred_cyw43_bootstrap_sideband_condition(|| {
@@ -3147,15 +3641,18 @@ where
             // persistent parent has no root continuation edge, so durable
             // terminal/fault state alone can reopen Driver after it waits.
             let driver_turn_due = bootstrap.driver_turn_due();
-            let (_, next_phase) = deferred_cyw43_supervisor_phase_step(
-                supervisor_phase,
-                may_begin,
-                driver_turn_due,
-                deferred_cyw43_driver_turns_per_operator(pair_restart_cadence_active),
+            let (operator_turn, next_phase) =
+                deferred_cyw43_supervisor_phase_step(supervisor_phase, may_begin, driver_turn_due);
+            let continuation = deferred_cyw43_mcs_continuation(
+                operator_turn,
+                next_phase,
+                false,
+                may_begin_before,
+                network_attached,
             );
             supervisor_phase = next_phase;
             if !may_begin {
-                sel4::yield_now();
+                deferred_cyw43_yield_and_reset(&mut activation_window);
                 continue;
             }
             let now_ms = crate::hal::timebase().now_ms();
@@ -3177,54 +3674,70 @@ where
                 }
                 attempt_active = true;
             }
-            sel4::yield_now();
-            continue;
+            if continuation == DeferredCyw43McsContinuation::Yield {
+                deferred_cyw43_yield_and_reset(&mut activation_window);
+                continue;
+            }
         }
 
+        if !activation_window.turn_admitted(
+            monotonic_ticks(),
+            counter_frequency(),
+            activation_reserve_us,
+        ) {
+            deferred_cyw43_yield_and_reset(&mut activation_window);
+            continue;
+        }
         let may_begin = pump.cyw43_bootstrap_may_begin();
         let driver_turn_due = bootstrap.driver_turn_due();
-        let (driver_turn, next_phase) = deferred_cyw43_supervisor_phase_step(
-            supervisor_phase,
-            may_begin,
-            driver_turn_due,
-            deferred_cyw43_driver_turns_per_operator(pair_restart_cadence_active),
-        );
+        let (driver_turn, next_phase) =
+            deferred_cyw43_supervisor_phase_step(supervisor_phase, may_begin, driver_turn_due);
         supervisor_phase = next_phase;
         if driver_turn != DeferredCyw43SupervisorTurn::Driver {
             // Recheck both admission and the durable parent condition in
             // Driver phase. A reboot, linked-serial cut, or persistent wait
             // that became visible after the preceding operator turn returns
             // to Operator without issuing a child operation.
-            sel4::yield_now();
+            deferred_cyw43_yield_and_reset(&mut activation_window);
             continue;
         }
 
         let now_ms = crate::hal::timebase().now_ms();
         let attempt = CYW43_BOOTSTRAP_ATTEMPT;
         wifi_operation_started = true;
-        crate::drivers::driver_task_net::begin_cyw43_outer_event_turn();
-        let _cyw43_outer_event_turn =
-            crate::drivers::driver_task_net::cyw43_outer_event_turn_finalizer();
-        let Some(turn) = with_deferred_root_hal(hal_ptr, |hal| bootstrap.service_turn(hal)) else {
-            // The entry check above proves this unreachable unless the
-            // retained bootstrap pointer was corrupted after validation.
-            run_root_console_pump(pump);
+        let turn = {
+            crate::drivers::driver_task_net::begin_cyw43_outer_event_turn();
+            let _cyw43_outer_event_turn =
+                crate::drivers::driver_task_net::cyw43_outer_event_turn_finalizer();
+            let Some(turn) = with_deferred_root_hal(hal_ptr, |hal| bootstrap.service_turn(hal))
+            else {
+                // The entry check above proves this unreachable unless the
+                // retained bootstrap pointer was corrupted after validation.
+                run_root_console_pump(pump);
+            };
+            turn
         };
+        let operation_executed = matches!(
+            turn,
+            Cyw43BootstrapTurnOutcome::Pending {
+                operation_executed: true,
+                ..
+            }
+        );
+        activation_window.record_driver_turn(operation_executed);
+        let continuation = deferred_cyw43_mcs_continuation(
+            driver_turn,
+            supervisor_phase,
+            operation_executed,
+            true,
+            network_attached,
+        );
         match turn {
             Cyw43BootstrapTurnOutcome::Pending {
                 turn_id,
                 stage,
                 operation_executed,
             } => {
-                let cadence_was_active = pair_restart_cadence_active;
-                pair_restart_cadence_active =
-                    deferred_cyw43_pair_restart_cadence_after_stage(cadence_was_active, stage);
-                if cadence_was_active && !pair_restart_cadence_active {
-                    // A completed or superseded pair cursor cannot spend the
-                    // unused tail of its private restart burst on successor
-                    // firmware, control, or policy work.
-                    supervisor_phase = DeferredCyw43SupervisorPhase::Operator;
-                }
                 let mut line = HeaplessString::<192>::new();
                 let _ = write!(
                     line,
@@ -3266,7 +3779,6 @@ where
                 }
             }
             Cyw43BootstrapTurnOutcome::Complete => {
-                pair_restart_cadence_active = false;
                 supervisor_phase = DeferredCyw43SupervisorPhase::Operator;
                 turn_status.reset();
                 if !bootstrap.is_ready() || bootstrap.ready_generation().is_none() {
@@ -3286,7 +3798,7 @@ where
                     if let Some(mode) = permanent_failure_terminal_mode(network_attached) {
                         pump.quarantine_network_service_after_cyw43_terminal_failure();
                         terminal_mode = Some(mode);
-                        sel4::yield_now();
+                        deferred_cyw43_yield_and_reset(&mut activation_window);
                         continue;
                     }
                     run_root_console_pump(pump);
@@ -3316,7 +3828,7 @@ where
                         false,
                     );
                     attempt_active = false;
-                    sel4::yield_now();
+                    deferred_cyw43_yield_and_reset(&mut activation_window);
                     continue;
                 }
                 #[cfg(all(target_arch = "aarch64", target_os = "none", sel4_config_kernel_mcs))]
@@ -3412,7 +3924,6 @@ where
                 attempt_active = false;
             }
             Cyw43BootstrapTurnOutcome::Failed(driver_error) => {
-                pair_restart_cadence_active = false;
                 supervisor_phase = DeferredCyw43SupervisorPhase::Operator;
                 turn_status.reset();
                 let err = crate::net::map_cyw43_bootstrap_error(driver_error);
@@ -3454,7 +3965,13 @@ where
                 }
             }
         }
-        sel4::yield_now();
+        if continuation == DeferredCyw43McsContinuation::Continue {
+            // The scoped outer-event finalizer above has retired the exact
+            // one-operation lease. Re-enter only at loop-top fault/EventPump
+            // arbitration while retaining this guarded MCS activation.
+            continue 'supervisor;
+        }
+        deferred_cyw43_yield_and_reset(&mut activation_window);
     }
 }
 
@@ -4174,6 +4691,19 @@ mod tests {
         feature = "kernel",
         feature = "net-console"
     ))]
+    const fn gate8_absolute_clock_ms(ms: u64) -> super::DeferredGate8AbsoluteClockSample {
+        super::DeferredGate8AbsoluteClockSample {
+            counter_ticks: ms,
+            counter_hz: 1_000,
+            generated_timer_hz: 1_000,
+        }
+    }
+
+    #[cfg(all(
+        feature = "serial-console",
+        feature = "kernel",
+        feature = "net-console"
+    ))]
     const fn gate8_lifecycle_publication_receipt(
         pair_scrub_epoch: u64,
         generation: u32,
@@ -4244,12 +4774,20 @@ mod tests {
             ),
             super::DeferredGate8HandoffAdmission::Authorized { generation },
         );
-        let plan = match lifecycle.prepare_child_ready_wait(activation_completed_ms, generation) {
+        let plan = match lifecycle
+            .prepare_child_ready_wait(gate8_absolute_clock_ms(activation_completed_ms), generation)
+        {
             super::DeferredGate8ChildReadyPreparation::Prepared(plan) => plan,
             outcome => panic!("expected a child Ready plan, got {outcome:?}"),
         };
         assert!(matches!(
-            lifecycle.arm_child_ready_wait(plan, activation_completed_ms, generation, true, false,),
+            lifecycle.arm_child_ready_wait(
+                plan,
+                gate8_absolute_clock_ms(activation_completed_ms),
+                generation,
+                true,
+                false,
+            ),
             super::DeferredGate8ChildReadyArm::Armed { .. }
         ));
     }
@@ -4769,8 +5307,8 @@ mod tests {
         );
         assert!(lifecycle.accept_commit(12));
         authorize_and_arm_gate8_handoff(&mut lifecycle, 12, 1_012, 1_013);
-        assert!(lifecycle.mark_service_ready(12));
-        assert!(!lifecycle.mark_service_ready(12));
+        assert!(lifecycle.mark_service_ready(12, 1_027));
+        assert!(!lifecycle.mark_service_ready(12, 1_027));
         assert_eq!(
             lifecycle.observe(1, 1_013, true, None, stable),
             super::DeferredGate8Observation::ServiceReady,
@@ -4840,7 +5378,7 @@ mod tests {
         );
         assert!(lifecycle.accept_commit(12));
         authorize_and_arm_gate8_handoff(&mut lifecycle, 12, 50_002, 50_003);
-        assert!(lifecycle.mark_service_ready(12));
+        assert!(lifecycle.mark_service_ready(12, 50_017));
         assert_eq!(
             lifecycle.enter_stabilizing(1, 60_000),
             150_000,
@@ -4877,19 +5415,19 @@ mod tests {
         );
         assert!(lifecycle.accept_commit(12));
         assert_eq!(
-            lifecycle.service_readiness_deadline_expired(12, 90_099),
+            lifecycle.service_readiness_deadline_expired(12, 90_099, None),
             None,
         );
         assert_eq!(
-            lifecycle.service_readiness_deadline_expired(12, 90_100),
+            lifecycle.service_readiness_deadline_expired(12, 90_100, None),
             Some(90_100),
             "pre-handoff DHCP/listener readiness retains the original boot deadline",
         );
         let mut ready_lifecycle = committed_gate8_lifecycle(100, 12);
         authorize_and_arm_gate8_handoff(&mut ready_lifecycle, 12, 80_000, 80_001);
-        assert!(ready_lifecycle.mark_service_ready(12));
+        assert!(ready_lifecycle.mark_service_ready(12, 80_015));
         assert_eq!(
-            ready_lifecycle.service_readiness_deadline_expired(12, u64::MAX),
+            ready_lifecycle.service_readiness_deadline_expired(12, u64::MAX, None),
             None,
             "service readiness converts later failures into runtime recovery rather than boot timeout",
         );
@@ -4918,12 +5456,12 @@ mod tests {
             lifecycle.authorize_handoff(90_099, 12, true, false, true, Some(15)),
             super::DeferredGate8HandoffAdmission::Authorized { generation: 12 },
         );
-        let plan = match lifecycle.prepare_child_ready_wait(90_100, 12) {
+        let plan = match lifecycle.prepare_child_ready_wait(gate8_absolute_clock_ms(90_100), 12) {
             super::DeferredGate8ChildReadyPreparation::Prepared(plan) => plan,
             outcome => panic!("expected a child Ready plan, got {outcome:?}"),
         };
         assert_eq!(
-            lifecycle.arm_child_ready_wait(plan, 90_103, 12, true, false),
+            lifecycle.arm_child_ready_wait(plan, gate8_absolute_clock_ms(90_103), 12, true, false,),
             super::DeferredGate8ChildReadyArm::Armed {
                 deadline_ms: 90_118,
             },
@@ -4931,15 +5469,43 @@ mod tests {
         );
         assert_eq!(lifecycle.deadline_ms(), Some(90_118));
         assert_eq!(
-            lifecycle.service_readiness_deadline_expired(12, 90_117),
+            lifecycle.service_readiness_deadline_expired(12, 0, Some(90_117)),
             None,
             "an exact-generation Ready may still be admitted before the derived boundary",
         );
-        assert!(lifecycle.mark_service_ready(12));
+        assert!(lifecycle.mark_service_ready(12, 90_117));
         assert_eq!(
-            lifecycle.service_readiness_deadline_expired(12, u64::MAX),
+            lifecycle.service_readiness_deadline_expired(12, u64::MAX, None),
             None,
             "exact-generation Ready before the derived boundary closes bootstrap",
+        );
+
+        let mut between_resume_and_return = committed_gate8_lifecycle(100, 12);
+        assert!(matches!(
+            between_resume_and_return.authorize_handoff(90_099, 12, true, false, true, Some(15),),
+            super::DeferredGate8HandoffAdmission::Authorized { .. }
+        ));
+        let between_plan = match between_resume_and_return
+            .prepare_child_ready_wait(gate8_absolute_clock_ms(90_100), 12)
+        {
+            super::DeferredGate8ChildReadyPreparation::Prepared(plan) => plan,
+            outcome => panic!("expected a child Ready plan, got {outcome:?}"),
+        };
+        assert!(matches!(
+            between_resume_and_return.arm_child_ready_wait(
+                between_plan,
+                gate8_absolute_clock_ms(90_103),
+                12,
+                true,
+                false,
+            ),
+            super::DeferredGate8ChildReadyArm::Armed {
+                deadline_ms: 90_118,
+            }
+        ));
+        assert!(
+            between_resume_and_return.mark_service_ready(12, 90_101),
+            "a Ready published after pre-resume sampling but before root returns from ResumeTCB is valid",
         );
 
         let mut missing_ready = committed_gate8_lifecycle(100, 12);
@@ -4947,17 +5513,24 @@ mod tests {
             missing_ready.authorize_handoff(90_099, 12, true, false, true, Some(15)),
             super::DeferredGate8HandoffAdmission::Authorized { generation: 12 },
         );
-        let missing_plan = match missing_ready.prepare_child_ready_wait(90_100, 12) {
-            super::DeferredGate8ChildReadyPreparation::Prepared(plan) => plan,
-            outcome => panic!("expected a child Ready plan, got {outcome:?}"),
-        };
+        let missing_plan =
+            match missing_ready.prepare_child_ready_wait(gate8_absolute_clock_ms(90_100), 12) {
+                super::DeferredGate8ChildReadyPreparation::Prepared(plan) => plan,
+                outcome => panic!("expected a child Ready plan, got {outcome:?}"),
+            };
         assert!(matches!(
-            missing_ready.arm_child_ready_wait(missing_plan, 90_103, 12, true, false),
+            missing_ready.arm_child_ready_wait(
+                missing_plan,
+                gate8_absolute_clock_ms(90_103),
+                12,
+                true,
+                false,
+            ),
             super::DeferredGate8ChildReadyArm::Armed { .. }
         ));
-        assert!(!missing_ready.mark_service_ready(13));
+        assert!(!missing_ready.mark_service_ready(13, 90_117));
         assert_eq!(
-            missing_ready.service_readiness_deadline_expired(12, 90_118),
+            missing_ready.service_readiness_deadline_expired(12, 0, Some(90_118)),
             Some(90_118),
             "missing or wrong-generation Ready fails at the exact derived boundary",
         );
@@ -4984,21 +5557,87 @@ mod tests {
         );
         assert!(!zero.handoff_authorization_pending());
 
+        for invalid_clock in [
+            super::DeferredGate8AbsoluteClockSample {
+                counter_ticks: 0,
+                counter_hz: 1_000,
+                generated_timer_hz: 1_000,
+            },
+            super::DeferredGate8AbsoluteClockSample {
+                counter_ticks: 500,
+                counter_hz: 0,
+                generated_timer_hz: 1_000,
+            },
+            super::DeferredGate8AbsoluteClockSample {
+                counter_ticks: 500,
+                counter_hz: 1_000,
+                generated_timer_hz: 999,
+            },
+        ] {
+            let mut invalid = committed_gate8_lifecycle(100, 12);
+            assert!(matches!(
+                invalid.authorize_handoff(500, 12, true, false, true, Some(15)),
+                super::DeferredGate8HandoffAdmission::Authorized { .. }
+            ));
+            assert_eq!(
+                invalid.prepare_child_ready_wait(invalid_clock, 12),
+                super::DeferredGate8ChildReadyPreparation::ClockInvalid,
+            );
+        }
+
+        let mut invalid_post = committed_gate8_lifecycle(100, 12);
+        assert!(matches!(
+            invalid_post.authorize_handoff(500, 12, true, false, true, Some(15)),
+            super::DeferredGate8HandoffAdmission::Authorized { .. }
+        ));
+        let invalid_post_plan =
+            match invalid_post.prepare_child_ready_wait(gate8_absolute_clock_ms(501), 12) {
+                super::DeferredGate8ChildReadyPreparation::Prepared(plan) => plan,
+                outcome => panic!("expected a child Ready plan, got {outcome:?}"),
+            };
+        for invalid_clock in [
+            gate8_absolute_clock_ms(500),
+            super::DeferredGate8AbsoluteClockSample {
+                counter_ticks: 502,
+                counter_hz: 2_000,
+                generated_timer_hz: 2_000,
+            },
+            super::DeferredGate8AbsoluteClockSample {
+                counter_ticks: 502,
+                counter_hz: 1_000,
+                generated_timer_hz: 999,
+            },
+        ] {
+            assert_eq!(
+                invalid_post.arm_child_ready_wait(
+                    invalid_post_plan,
+                    invalid_clock,
+                    12,
+                    true,
+                    false,
+                ),
+                super::DeferredGate8ChildReadyArm::ClockInvalid,
+                "zero, backward, drifted, or generated/runtime-mismatched absolute clocks fail closed",
+            );
+        }
+
         let mut overflow = committed_gate8_lifecycle(100, 12);
         assert!(matches!(
             overflow.authorize_handoff(500, 12, true, false, true, Some(15)),
             super::DeferredGate8HandoffAdmission::Authorized { .. }
         ));
         assert_eq!(
-            overflow.prepare_child_ready_wait(u64::MAX, 12),
+            overflow.prepare_child_ready_wait(gate8_absolute_clock_ms(u64::MAX), 12),
             super::DeferredGate8ChildReadyPreparation::ClockOverflow,
         );
-        let plan = match overflow.prepare_child_ready_wait(u64::MAX - 15, 12) {
-            super::DeferredGate8ChildReadyPreparation::Prepared(plan) => plan,
-            outcome => panic!("expected a boundary-safe Ready plan, got {outcome:?}"),
-        };
+        let plan =
+            match overflow.prepare_child_ready_wait(gate8_absolute_clock_ms(u64::MAX - 15), 12) {
+                super::DeferredGate8ChildReadyPreparation::Prepared(plan) => plan,
+                outcome => panic!("expected a boundary-safe Ready plan, got {outcome:?}"),
+            };
         assert_eq!(
-            overflow.arm_child_ready_wait(plan, u64::MAX, 12, true, false),
+            overflow
+                .arm_child_ready_wait(plan, gate8_absolute_clock_ms(u64::MAX), 12, true, false,),
             super::DeferredGate8ChildReadyArm::ClockOverflow,
             "clock advance during activation must fail before the child poll",
         );
@@ -5063,7 +5702,7 @@ mod tests {
     fn gate8_child_ready_arm_rejects_every_invalid_transition() {
         let awaiting_dhcp = committed_gate8_lifecycle(100, 12);
         assert_eq!(
-            awaiting_dhcp.prepare_child_ready_wait(500, 12),
+            awaiting_dhcp.prepare_child_ready_wait(gate8_absolute_clock_ms(500), 12),
             super::DeferredGate8ChildReadyPreparation::InvalidPhase,
         );
 
@@ -5072,29 +5711,29 @@ mod tests {
             lifecycle.authorize_handoff(500, 12, true, false, true, Some(15)),
             super::DeferredGate8HandoffAdmission::Authorized { .. }
         ));
-        let plan = match lifecycle.prepare_child_ready_wait(501, 12) {
+        let plan = match lifecycle.prepare_child_ready_wait(gate8_absolute_clock_ms(501), 12) {
             super::DeferredGate8ChildReadyPreparation::Prepared(plan) => plan,
             outcome => panic!("expected a child Ready plan, got {outcome:?}"),
         };
         assert_eq!(
-            lifecycle.arm_child_ready_wait(plan, 502, 12, true, true),
+            lifecycle.arm_child_ready_wait(plan, gate8_absolute_clock_ms(502), 12, true, true,),
             super::DeferredGate8ChildReadyArm::RecoveryRequired,
         );
         assert_eq!(
-            lifecycle.arm_child_ready_wait(plan, 502, 13, false, false),
+            lifecycle.arm_child_ready_wait(plan, gate8_absolute_clock_ms(502), 13, false, false,),
             super::DeferredGate8ChildReadyArm::GenerationDrift,
         );
         assert_eq!(
-            lifecycle.arm_child_ready_wait(plan, 502, 12, true, false),
+            lifecycle.arm_child_ready_wait(plan, gate8_absolute_clock_ms(502), 12, true, false,),
             super::DeferredGate8ChildReadyArm::Armed { deadline_ms: 517 },
         );
         assert_eq!(
-            lifecycle.arm_child_ready_wait(plan, 502, 12, true, false),
+            lifecycle.arm_child_ready_wait(plan, gate8_absolute_clock_ms(502), 12, true, false,),
             super::DeferredGate8ChildReadyArm::AlreadyArmed,
         );
         assert_eq!(
-            lifecycle.child_ready_pre_network_failure(518, 13, false, true),
-            None,
+            lifecycle.child_ready_pre_network_action(Some(518), 13, false, true, None),
+            super::DeferredGate8ChildReadyPreNetworkAction::Continue,
             "transport recovery must pre-empt an expired or drifted Ready wait",
         );
         assert_eq!(
@@ -5106,12 +5745,33 @@ mod tests {
             super::DeferredCyw43AttachedTurn::RecoverySupervisor,
         );
         assert_eq!(
-            lifecycle.child_ready_pre_network_failure(518, 12, true, false),
+            lifecycle.child_ready_pre_network_action(Some(516), 13, false, false, None),
+            super::DeferredGate8ChildReadyPreNetworkAction::Fail {
+                generation: 12,
+                blocker: "child-ready-generation-drift",
+                deadline_ms: 516,
+            },
+        );
+        assert_eq!(
+            lifecycle.child_ready_pre_network_action(Some(518), 12, true, false, None),
+            super::DeferredGate8ChildReadyPreNetworkAction::ObservePublicationOnly {
+                generation: 12,
+                deadline_ms: 517,
+            },
+            "the exact boundary admits one final durable-publication observation",
+        );
+        assert_eq!(
+            lifecycle.child_ready_post_observation_failure(12, None),
             Some((12, "service-readiness-deadline", 517)),
         );
         assert_eq!(
-            lifecycle.child_ready_pre_network_failure(516, 13, false, false),
-            Some((12, "child-ready-generation-drift", 516)),
+            lifecycle.child_ready_pre_network_action(Some(519), 12, true, false, None),
+            super::DeferredGate8ChildReadyPreNetworkAction::Fail {
+                generation: 12,
+                blocker: "service-readiness-deadline",
+                deadline_ms: 517,
+            },
+            "a missing Ready cannot obtain a second deadline observation",
         );
         let drifted = gate8_lifecycle_snapshot(
             8,
@@ -5127,6 +5787,100 @@ mod tests {
                 blocker: "child-ready-generation-drift",
             },
             "proof drift after activation must terminalize before another child poll",
+        );
+    }
+
+    #[cfg(all(
+        feature = "serial-console",
+        feature = "kernel",
+        feature = "net-console"
+    ))]
+    #[test]
+    fn gate8_child_ready_deadline_uses_one_strict_publication_arbitration() {
+        fn armed() -> super::DeferredGate8Lifecycle {
+            let mut lifecycle = committed_gate8_lifecycle(100, 12);
+            authorize_and_arm_gate8_handoff(&mut lifecycle, 12, 500, 502);
+            assert_eq!(lifecycle.deadline_ms(), Some(517));
+            lifecycle
+        }
+
+        let mut on_time_late_observed = armed();
+        assert_eq!(
+            on_time_late_observed.child_ready_pre_network_action(Some(518), 12, true, false, None,),
+            super::DeferredGate8ChildReadyPreNetworkAction::ObservePublicationOnly {
+                generation: 12,
+                deadline_ms: 517,
+            },
+        );
+        assert_eq!(
+            on_time_late_observed.child_ready_post_observation_failure(12, Some(516)),
+            None,
+            "an ABI-validated pre-deadline publication survives delayed root observation",
+        );
+        assert!(on_time_late_observed.child_ready_publication_on_time(12, Some(516)));
+        assert!(on_time_late_observed.mark_service_ready(12, 516));
+
+        let mut exact_lower_bound = armed();
+        assert!(exact_lower_bound.child_ready_publication_on_time(12, Some(502)));
+        assert!(exact_lower_bound.mark_service_ready(12, 502));
+
+        for published_ms in [0, 501] {
+            let mut pre_arm = armed();
+            assert!(matches!(
+                pre_arm.child_ready_pre_network_action(Some(518), 12, true, false, None),
+                super::DeferredGate8ChildReadyPreNetworkAction::ObservePublicationOnly { .. }
+            ));
+            assert_eq!(
+                pre_arm.child_ready_post_observation_failure(12, Some(published_ms)),
+                Some((12, "service-readiness-deadline", 517)),
+                "a zero or pre-resume Ready timestamp cannot satisfy this handoff",
+            );
+            assert!(!pre_arm.child_ready_publication_on_time(12, Some(published_ms)));
+            assert!(!pre_arm.mark_service_ready(12, published_ms));
+        }
+
+        for published_ms in [517, 518] {
+            let mut late = armed();
+            assert!(matches!(
+                late.child_ready_pre_network_action(Some(518), 12, true, false, None),
+                super::DeferredGate8ChildReadyPreNetworkAction::ObservePublicationOnly { .. }
+            ));
+            assert_eq!(
+                late.child_ready_post_observation_failure(12, Some(published_ms)),
+                Some((12, "service-readiness-deadline", 517)),
+                "Ready at or after the exact boundary remains terminal",
+            );
+            assert!(!late.child_ready_publication_on_time(12, Some(published_ms)));
+            assert!(!late.mark_service_ready(12, published_ms));
+        }
+
+        let mut missing = armed();
+        assert!(matches!(
+            missing.child_ready_pre_network_action(Some(517), 12, true, false, None),
+            super::DeferredGate8ChildReadyPreNetworkAction::ObservePublicationOnly { .. }
+        ));
+        assert_eq!(
+            missing.child_ready_post_observation_failure(12, None),
+            Some((12, "service-readiness-deadline", 517)),
+        );
+        assert_eq!(
+            missing.child_ready_pre_network_action(Some(518), 12, true, false, None),
+            super::DeferredGate8ChildReadyPreNetworkAction::Fail {
+                generation: 12,
+                blocker: "service-readiness-deadline",
+                deadline_ms: 517,
+            },
+            "the deadline arbitration is consumed exactly once",
+        );
+
+        let mut drifted = armed();
+        assert_eq!(
+            drifted.child_ready_pre_network_action(Some(516), 13, false, false, None),
+            super::DeferredGate8ChildReadyPreNetworkAction::Fail {
+                generation: 12,
+                blocker: "child-ready-generation-drift",
+                deadline_ms: 516,
+            },
         );
     }
 
@@ -5426,12 +6180,13 @@ mod tests {
         let logical_generation = Cell::new(0u32);
         let diagnostic_calls = Cell::new(0u8);
         let committed = Cell::new(false);
-        super::run_deferred_cyw43_attached_network_control_turn(
+        let productive_successor = super::run_deferred_cyw43_attached_network_control_turn(
             || {
                 assert_eq!(stage.get(), 1, "pre-poll evidence must be retained first");
                 assert!(!committed.get(), "handoff cannot commit before the poll");
                 logical_generation.set(23);
                 stage.set(2);
+                true
             },
             || {
                 assert_eq!(stage.get(), 2, "recovery is checked after the poll");
@@ -5469,14 +6224,16 @@ mod tests {
         assert_eq!(stage.get(), 4);
         assert_eq!(diagnostic_calls.get(), 2);
         assert!(committed.get());
+        assert!(productive_successor);
 
         let recovery_stage = Cell::new(0u8);
         let recovery_diagnostic_calls = Cell::new(0u8);
         let recovery_commit_called = Cell::new(false);
-        super::run_deferred_cyw43_attached_network_control_turn(
+        let recovery_successor = super::run_deferred_cyw43_attached_network_control_turn(
             || {
                 assert_eq!(recovery_stage.get(), 1);
                 recovery_stage.set(2);
+                true
             },
             || {
                 assert_eq!(recovery_stage.get(), 2);
@@ -5503,6 +6260,10 @@ mod tests {
         assert!(
             !recovery_commit_called.get(),
             "post-poll recovery forbids handoff commit"
+        );
+        assert!(
+            !recovery_successor,
+            "a recovery edge rejects a productive attached successor"
         );
     }
 
@@ -5603,28 +6364,19 @@ mod tests {
             super::DeferredCyw43SupervisorPhase::Operator,
             true,
             true,
-            super::deferred_cyw43_driver_turns_per_operator(false),
         );
         assert_eq!(operator, super::DeferredCyw43SupervisorTurn::Operator);
-        assert_eq!(
-            after_operator,
-            super::DeferredCyw43SupervisorPhase::Driver { turns_remaining: 1 }
-        );
+        assert_eq!(after_operator, super::DeferredCyw43SupervisorPhase::Driver);
 
-        let (driver, after_driver) = super::deferred_cyw43_supervisor_phase_step(
-            after_operator,
-            true,
-            true,
-            super::deferred_cyw43_driver_turns_per_operator(false),
-        );
+        let (driver, after_driver) =
+            super::deferred_cyw43_supervisor_phase_step(after_operator, true, true);
         assert_eq!(driver, super::DeferredCyw43SupervisorTurn::Driver);
         assert_eq!(after_driver, super::DeferredCyw43SupervisorPhase::Operator);
 
         let (blocked, after_blocked) = super::deferred_cyw43_supervisor_phase_step(
-            super::DeferredCyw43SupervisorPhase::Driver { turns_remaining: 4 },
+            super::DeferredCyw43SupervisorPhase::Driver,
             false,
             true,
-            super::deferred_cyw43_driver_turns_per_operator(true),
         );
         assert_eq!(blocked, super::DeferredCyw43SupervisorTurn::Blocked);
         assert_eq!(
@@ -5637,7 +6389,6 @@ mod tests {
             super::DeferredCyw43SupervisorPhase::Operator,
             true,
             false,
-            super::deferred_cyw43_driver_turns_per_operator(false),
         );
         assert_eq!(waiting, super::DeferredCyw43SupervisorTurn::Operator);
         assert_eq!(
@@ -5646,17 +6397,111 @@ mod tests {
             "a durable persistent wait must not schedule repeated Driver turns",
         );
 
-        let (resumed, after_resumed) = super::deferred_cyw43_supervisor_phase_step(
-            after_waiting,
-            true,
-            true,
-            super::deferred_cyw43_driver_turns_per_operator(false),
-        );
+        let (resumed, after_resumed) =
+            super::deferred_cyw43_supervisor_phase_step(after_waiting, true, true);
         assert_eq!(resumed, super::DeferredCyw43SupervisorTurn::Operator);
+        assert_eq!(after_resumed, super::DeferredCyw43SupervisorPhase::Driver);
+    }
+
+    #[cfg(all(
+        feature = "serial-console",
+        feature = "kernel",
+        feature = "net-console"
+    ))]
+    #[test]
+    fn pi_wifi_supervisor_never_schedules_consecutive_driver_turns() {
+        let (operator, mut phase) = super::deferred_cyw43_supervisor_phase_step(
+            super::DeferredCyw43SupervisorPhase::Operator,
+            true,
+            true,
+        );
+        assert_eq!(operator, super::DeferredCyw43SupervisorTurn::Operator);
+        assert_eq!(phase, super::DeferredCyw43SupervisorPhase::Driver);
+        for _ in 0..128 {
+            let (turn, next) = super::deferred_cyw43_supervisor_phase_step(phase, true, true);
+            match phase {
+                super::DeferredCyw43SupervisorPhase::Operator => {
+                    assert_eq!(turn, super::DeferredCyw43SupervisorTurn::Operator);
+                    assert_eq!(next, super::DeferredCyw43SupervisorPhase::Driver);
+                }
+                super::DeferredCyw43SupervisorPhase::Driver => {
+                    assert_eq!(turn, super::DeferredCyw43SupervisorTurn::Driver);
+                    assert_eq!(next, super::DeferredCyw43SupervisorPhase::Operator);
+                }
+            }
+            phase = next;
+        }
+        assert_eq!(phase, super::DeferredCyw43SupervisorPhase::Driver);
+    }
+
+    #[cfg(all(
+        feature = "serial-console",
+        feature = "kernel",
+        feature = "net-console"
+    ))]
+    #[test]
+    fn pi_wifi_activation_guard_reserves_epilogue_and_fails_closed() {
+        let pi_reserve = super::deferred_cyw43_activation_reserve_us(2_750, 2_500, true);
+        assert_eq!(pi_reserve, Some(250));
         assert_eq!(
-            after_resumed,
-            super::DeferredCyw43SupervisorPhase::Driver { turns_remaining: 1 },
-            "a terminal or fault condition must restore the consume turn",
+            super::deferred_cyw43_activation_reserve_us(2_750, 0, true),
+            None
+        );
+        assert_eq!(
+            super::deferred_cyw43_activation_reserve_us(2_500, 2_500, true),
+            None
+        );
+        assert_eq!(
+            super::deferred_cyw43_activation_reserve_us(2_750, 2_500, false),
+            None
+        );
+
+        let mut window = super::DeferredCyw43ActivationWindow::new();
+        assert!(window.turn_admitted(100, 1_000_000, pi_reserve));
+        window.record_operator_turn();
+        assert!(window.turn_admitted(349, 1_000_000, pi_reserve));
+        assert!(
+            !window.turn_admitted(350, 1_000_000, pi_reserve),
+            "the exact 250 us Pi reserve leaves the complete declared 2,500 us WCET before the 2,750 us SC boundary",
+        );
+
+        window.reset();
+        assert!(window.turn_admitted(500, 54_000_000, pi_reserve));
+        for invalid in [
+            (499, 54_000_000),
+            (501, 0),
+            (501, 24_000_000),
+            (0, 54_000_000),
+        ] {
+            assert!(
+                !window.turn_admitted(invalid.0, invalid.1, pi_reserve),
+                "backward, zero, or frequency-drifted counters fail closed: {invalid:?}",
+            );
+        }
+
+        window.reset();
+        assert!(
+            window.turn_admitted(0, 0, pi_reserve),
+            "an invalid counter retains one legacy logical turn for liveness",
+        );
+        window.record_operator_turn();
+        assert!(
+            !window.turn_admitted(1, 1, pi_reserve),
+            "an invalid activation cannot upgrade after spending its sole logical turn",
+        );
+        window.reset();
+        assert!(window.turn_admitted(0, 54_000_000, None));
+        window.record_driver_turn(false);
+        assert!(!window.turn_admitted(0, 54_000_000, None));
+
+        window.reset();
+        assert!(window.turn_admitted(1, 54_000_000, pi_reserve));
+        for _ in 0..super::DEFERRED_CYW43_ACTIVATION_MAX_PRODUCTIVE_UNITS {
+            window.record_driver_turn(true);
+        }
+        assert!(
+            !window.turn_admitted(2, 54_000_000, pi_reserve),
+            "the hard productive-turn cap ends even a sub-guard activation",
         );
     }
 
@@ -5666,68 +6511,55 @@ mod tests {
         feature = "net-console"
     ))]
     #[test]
-    fn finite_pair_restart_amortizes_driver_turns_without_leaking_into_successors() {
-        let mut cadence_active = false;
-        cadence_active = super::deferred_cyw43_pair_restart_cadence_after_stage(
-            cadence_active,
-            "cyw43-cold-physical-lifetime-begin",
-        );
-        assert!(cadence_active);
+    fn pi_wifi_mcs_continuation_accepts_only_productive_alternation() {
+        use super::{
+            DeferredCyw43McsContinuation as Continuation, DeferredCyw43SupervisorPhase as Phase,
+            DeferredCyw43SupervisorTurn as Turn,
+        };
 
-        let (operator, mut phase) = super::deferred_cyw43_supervisor_phase_step(
-            super::DeferredCyw43SupervisorPhase::Operator,
-            true,
-            true,
-            super::deferred_cyw43_driver_turns_per_operator(cadence_active),
-        );
-        assert_eq!(operator, super::DeferredCyw43SupervisorTurn::Operator);
         assert_eq!(
-            phase,
-            super::DeferredCyw43SupervisorPhase::Driver { turns_remaining: 4 }
+            super::deferred_cyw43_mcs_continuation(
+                Turn::Operator,
+                Phase::Driver,
+                false,
+                true,
+                false,
+            ),
+            Continuation::Continue,
         );
-        for expected_remaining in [3, 2, 1] {
-            let (turn, next) = super::deferred_cyw43_supervisor_phase_step(
-                phase,
+        assert_eq!(
+            super::deferred_cyw43_mcs_continuation(
+                Turn::Driver,
+                Phase::Operator,
                 true,
                 true,
-                super::deferred_cyw43_driver_turns_per_operator(cadence_active),
-            );
-            assert_eq!(turn, super::DeferredCyw43SupervisorTurn::Driver);
+                false,
+            ),
+            Continuation::Continue,
+        );
+        for (turn, next, operation_executed, operator_admitted_before, network_attached) in [
+            (Turn::Operator, Phase::Operator, false, true, false),
+            (Turn::Operator, Phase::Driver, false, false, false),
+            (Turn::Operator, Phase::Driver, true, true, false),
+            (Turn::Driver, Phase::Operator, false, true, false),
+            (Turn::Driver, Phase::Driver, true, true, false),
+            (Turn::Blocked, Phase::Operator, false, true, false),
+            (Turn::Blocked, Phase::Driver, true, true, false),
+            (Turn::Operator, Phase::Driver, false, true, true),
+            (Turn::Driver, Phase::Operator, true, true, true),
+        ] {
             assert_eq!(
-                next,
-                super::DeferredCyw43SupervisorPhase::Driver {
-                    turns_remaining: expected_remaining,
-                }
+                super::deferred_cyw43_mcs_continuation(
+                    turn,
+                    next,
+                    operation_executed,
+                    operator_admitted_before,
+                    network_attached,
+                ),
+                Continuation::Yield,
+                "blocked, nonproductive, terminal, and nonalternating cuts yield",
             );
-            phase = next;
         }
-        let (fourth_driver, after_burst) = super::deferred_cyw43_supervisor_phase_step(
-            phase,
-            true,
-            true,
-            super::deferred_cyw43_driver_turns_per_operator(cadence_active),
-        );
-        assert_eq!(fourth_driver, super::DeferredCyw43SupervisorTurn::Driver);
-        assert_eq!(after_burst, super::DeferredCyw43SupervisorPhase::Operator);
-
-        cadence_active = super::deferred_cyw43_pair_restart_cadence_after_stage(
-            cadence_active,
-            "replay-sdio-engine-turn",
-        );
-        assert!(
-            cadence_active,
-            "private restart stages retain the exact burst"
-        );
-        cadence_active = super::deferred_cyw43_pair_restart_cadence_after_stage(
-            cadence_active,
-            "cyw43-cold-physical-lifetime-complete",
-        );
-        assert!(!cadence_active);
-        assert_eq!(
-            super::deferred_cyw43_driver_turns_per_operator(cadence_active),
-            1,
-            "firmware and control successors return to operator reconciliation",
-        );
     }
 
     #[cfg(all(
@@ -5756,7 +6588,6 @@ mod tests {
             super::DeferredCyw43SupervisorPhase::Operator,
             true,
             false,
-            super::deferred_cyw43_driver_turns_per_operator(false),
         );
         assert_eq!(turn, super::DeferredCyw43SupervisorTurn::Operator);
         assert_eq!(

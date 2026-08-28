@@ -109,6 +109,15 @@ to run. Cross-layer changes require every applicable row.
 A security or authority change is never accepted from a performance result
 alone. Run the functional, policy, and generated-contract gates first.
 
+For the current Pi GENET convergence candidate, the core-1
+`3,000 us / 10,000 us` SC and 3,400 us computed response are manifest/admission
+facts only. The finite legacy-to-direct DMA/IRQ cutover and larger SC may remove
+the observed post-DHCP stall, but neither predicts August 10 latency. A
+qualified comparison must record same-boot GENET consumed-time, IRQ/DPC and
+ring counters alongside raw TCP and the canonical workload. Report scheduling
+exhaustion, packet loss, and p50/p95/p99 separately; do not attribute a result
+to the SC move without a same-image before/after lane.
+
 ## Canonical Tools
 
 | Tool | Purpose |

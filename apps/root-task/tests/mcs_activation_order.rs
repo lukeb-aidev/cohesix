@@ -99,17 +99,288 @@ fn wifi_console_handoff_owns_one_exclusive_attached_supervisor_turn() {
         .find("pump.service_deferred_console_network_handoff(hal)")
         .expect("handoff action must invoke the fixed child transition");
     let yield_now = handoff[service..]
-        .find("sel4::yield_now();")
+        .find("deferred_cyw43_yield_and_reset(")
         .map(|offset| service + offset)
-        .expect("handoff action must yield after releasing HAL authority");
-    let next_turn = handoff[yield_now..]
-        .find("continue 'supervisor;")
+        .expect("handoff action must yield and reset after releasing HAL authority");
+    let yield_arg = handoff[yield_now..]
+        .find("&mut activation_window")
         .map(|offset| yield_now + offset)
+        .expect("handoff yield must reset the continuous activation window");
+    let next_turn = handoff[yield_arg..]
+        .find("continue 'supervisor;")
+        .map(|offset| yield_arg + offset)
         .expect("child Ready must be consumed on a later supervisor turn");
 
-    assert!(service < yield_now && yield_now < next_turn);
+    assert!(service < yield_now && yield_now < yield_arg && yield_arg < next_turn);
     assert_eq!(handoff.matches("pump.poll()").count(), 0);
     assert_eq!(handoff.matches("bootstrap.service_turn(hal)").count(), 0);
+}
+
+#[test]
+fn wifi_ready_deadline_observes_only_one_child_publication_before_network_work() {
+    let isolated = include_str!("../src/net/isolated_console.rs");
+    let observe_start = isolated
+        .find("fn poll_isolated_child_publication_only(&mut self) -> bool")
+        .expect("isolated console must expose the deadline observation unit");
+    let observe_end = isolated[observe_start..]
+        .find("fn isolated_child_ready_published_ms(&self)")
+        .map(|offset| observe_start + offset)
+        .expect("publication observation must end before its timestamp accessor");
+    let observe = &isolated[observe_start..observe_end];
+    assert_eq!(
+        observe
+            .matches("self.poll_child_output_without_ack().activity()")
+            .count(),
+        1
+    );
+    for forbidden in [
+        "self.poll_child_output().activity()",
+        "acknowledge_child_publication",
+        "acknowledge_publication",
+        "self.device",
+        "transmit_pending_egress",
+        "stage_one_ingress",
+        "refresh_device_counters",
+        "service_self_test",
+    ] {
+        assert!(
+            !observe.contains(forbidden),
+            "deadline observation must not perform device work: {forbidden}",
+        );
+    }
+
+    let userland = include_str!("../src/userland/mod.rs");
+    let supervisor_start = userland
+        .find("fn enter_root_console_loop_with_deferred_net_supervisor<")
+        .expect("deferred Wi-Fi supervisor must exist");
+    let supervisor_end = userland[supervisor_start..]
+        .find("/// Start the userland console")
+        .map(|offset| supervisor_start + offset)
+        .expect("deferred Wi-Fi supervisor must have a bounded source region");
+    let supervisor = &userland[supervisor_start..supervisor_end];
+    let arbitration = supervisor
+        .find("DeferredGate8ChildReadyPreNetworkAction::ObservePublicationOnly")
+        .expect("deadline must select the child-publication-only action");
+    let observation = supervisor[arbitration..]
+        .find("pump.poll_isolated_child_publication_only()")
+        .map(|offset| arbitration + offset)
+        .expect("deadline action must perform its one child observation");
+    let network_guard = supervisor[observation..]
+        .find("if handoff_terminal_failure.is_none() && !child_publication_only_turn")
+        .map(|offset| observation + offset)
+        .expect("deadline observation must fence ordinary attached network work");
+    let attached_turn = supervisor[network_guard..]
+        .find("match deferred_cyw43_attached_turn(")
+        .map(|offset| network_guard + offset)
+        .expect("ordinary attached work must remain behind the observation guard");
+    assert!(
+        arbitration < observation && observation < network_guard && network_guard < attached_turn
+    );
+    assert_eq!(
+        supervisor[arbitration..network_guard]
+            .matches("pump.poll_isolated_child_publication_only()")
+            .count(),
+        1,
+    );
+    assert!(!supervisor[arbitration..network_guard].contains("pump.poll()"));
+    assert!(!supervisor[arbitration..network_guard].contains("bootstrap.service_turn(hal)"));
+}
+
+#[test]
+fn pi_wifi_productive_activation_is_guarded_strictly_operator_driver() {
+    let source = include_str!("../src/userland/mod.rs");
+    let supervisor_start = source
+        .find("fn enter_root_console_loop_with_deferred_net_supervisor<")
+        .expect("deferred Wi-Fi supervisor must exist");
+    let supervisor_end = source[supervisor_start..]
+        .find("/// Start the userland console")
+        .map(|offset| supervisor_start + offset)
+        .expect("deferred Wi-Fi supervisor must have a bounded source region");
+    let supervisor = &source[supervisor_start..supervisor_end];
+
+    let loop_top = supervisor
+        .find("'supervisor: loop {")
+        .expect("deferred supervisor loop must exist");
+    let start_window = supervisor[loop_top..]
+        .find("activation_window.begin(monotonic_ticks(), counter_frequency());")
+        .map(|offset| loop_top + offset)
+        .expect("each post-yield activation must retain one continuous counter start");
+    let loop_top_guard = supervisor[start_window..]
+        .find("if activation_window.logical_turns != 0")
+        .map(|offset| start_window + offset)
+        .expect("every retained activation must guard before loop-top material work");
+    let operator = supervisor[loop_top_guard..]
+        .find("if supervisor_phase == DeferredCyw43SupervisorPhase::Operator")
+        .map(|offset| loop_top_guard + offset)
+        .expect("guarded Operator phase must exist");
+    let operator_guard = supervisor[operator..]
+        .find("activation_window.turn_admitted(")
+        .map(|offset| operator + offset)
+        .expect("Operator must check the activation guard before work");
+    assert!(supervisor[operator_guard..].contains("activation_reserve_us,"));
+    let admission_before = supervisor[operator_guard..]
+        .find("let may_begin_before = pump.cyw43_bootstrap_may_begin();")
+        .map(|offset| operator_guard + offset)
+        .expect("Operator must snapshot admission before its EventPump turn");
+    let operator_poll = supervisor[admission_before..]
+        .find("pump.poll_cyw43_bootstrap_supervisor_event_turn();")
+        .map(|offset| admission_before + offset)
+        .expect("Operator must execute exactly one logical EventPump turn");
+    let admission_after = supervisor[operator_poll..]
+        .find("let may_begin = pump.cyw43_bootstrap_may_begin();")
+        .map(|offset| operator_poll + offset)
+        .expect("Operator must revalidate admission after its turn");
+    let operator_continuation = supervisor[admission_after..]
+        .find("deferred_cyw43_mcs_continuation(")
+        .map(|offset| admission_after + offset)
+        .expect("Operator must use the factored continuation policy");
+    assert!(
+        loop_top < start_window
+            && start_window < loop_top_guard
+            && loop_top_guard < operator
+            && operator < operator_guard
+            && operator_guard < admission_before
+            && admission_before < operator_poll
+            && operator_poll < admission_after
+            && admission_after < operator_continuation,
+    );
+
+    let driver_guard = supervisor[operator_continuation..]
+        .find("activation_window.turn_admitted(")
+        .map(|offset| operator_continuation + offset)
+        .expect("Driver must independently recheck the continuous activation guard");
+    assert!(supervisor[driver_guard..].contains("activation_reserve_us,"));
+    let outer_lease = supervisor[driver_guard..]
+        .find("begin_cyw43_outer_event_turn();")
+        .map(|offset| driver_guard + offset)
+        .expect("Driver must open one exact physical-operation lease");
+    let service = supervisor[outer_lease..]
+        .find("bootstrap.service_turn(hal)")
+        .map(|offset| outer_lease + offset)
+        .expect("Driver must invoke one retained service operation");
+    let lease_scope_end = supervisor[service..]
+        .find("        };")
+        .map(|offset| service + offset)
+        .expect("the exact outer-event lease must retire in a private scope");
+    let record_driver = supervisor[lease_scope_end..]
+        .find("activation_window.record_driver_turn(operation_executed);")
+        .map(|offset| lease_scope_end + offset)
+        .expect("Driver completion must charge the productive-turn cap");
+    let continue_guard = supervisor[record_driver..]
+        .find("if continuation == DeferredCyw43McsContinuation::Continue")
+        .map(|offset| record_driver + offset)
+        .expect("only the factored productive path may retain the refill");
+    let loop_continue = supervisor[continue_guard..]
+        .find("continue 'supervisor;")
+        .map(|offset| continue_guard + offset)
+        .expect("productive Driver must return through loop-top arbitration");
+    let final_yield = supervisor[loop_continue..]
+        .find("deferred_cyw43_yield_and_reset(&mut activation_window);")
+        .map(|offset| loop_continue + offset)
+        .expect("nonproductive and terminal Driver cuts must yield and reset");
+    assert!(
+        operator_continuation < driver_guard
+            && driver_guard < outer_lease
+            && outer_lease < service
+            && service < lease_scope_end
+            && lease_scope_end < record_driver
+            && record_driver < continue_guard
+            && continue_guard < loop_continue
+            && loop_continue < final_yield,
+    );
+    assert_eq!(supervisor.matches("bootstrap.service_turn(hal)").count(), 1);
+    assert_eq!(
+        supervisor.matches("begin_cyw43_outer_event_turn()").count(),
+        1
+    );
+    assert_eq!(supervisor.matches("sel4::yield_now();").count(), 0);
+
+    let phase_start = source
+        .find("enum DeferredCyw43SupervisorPhase")
+        .expect("deferred supervisor phase enum must exist");
+    let phase_end = source[phase_start..]
+        .find("enum DeferredCyw43AttachedTurn")
+        .map(|offset| phase_start + offset)
+        .expect("deferred supervisor phase section must be bounded");
+    let phase_section = &source[phase_start..phase_end];
+    assert!(!phase_section.contains("turns_remaining"));
+    assert!(!phase_section.contains("PAIR_RESTART_DRIVER_TURNS"));
+
+    let yield_helper = source
+        .find("fn deferred_cyw43_yield_and_reset(")
+        .expect("deferred supervisor must centralize Yield reset");
+    let yield_call = source[yield_helper..]
+        .find("sel4::yield_now();")
+        .map(|offset| yield_helper + offset)
+        .expect("yield helper must perform the scheduler cut");
+    let reset = source[yield_call..]
+        .find("window.reset();")
+        .map(|offset| yield_call + offset)
+        .expect("yield helper must reset only after Yield returns");
+    assert!(yield_helper < yield_call && yield_call < reset);
+}
+
+#[test]
+fn pi_wifi_attached_network_retains_only_one_proven_guarded_successor() {
+    let source = include_str!("../src/userland/mod.rs");
+    let supervisor_start = source
+        .find("fn enter_root_console_loop_with_deferred_net_supervisor<")
+        .expect("deferred Wi-Fi supervisor must exist");
+    let supervisor_end = source[supervisor_start..]
+        .find("/// Start the userland console")
+        .map(|offset| supervisor_start + offset)
+        .expect("deferred Wi-Fi supervisor must have a bounded source region");
+    let supervisor = &source[supervisor_start..supervisor_end];
+
+    let network = supervisor
+        .find("DeferredCyw43AttachedTurn::NetworkControl => {")
+        .expect("attached CYW43 must retain an explicit NetworkControl turn");
+    let guard = supervisor[network..]
+        .find("activation_window.turn_admitted(")
+        .map(|offset| network + offset)
+        .expect("attached Network work must check the continuous activation reserve");
+    let poll = supervisor[guard..]
+        .find("pump.poll_deferred_cyw43_attached_network_control_turn()")
+        .map(|offset| guard + offset)
+        .expect("attached Network work must obtain EventPump's exact productive token");
+    let record = supervisor[poll..]
+        .find("record_attached_network_turn(productive_network_successor)")
+        .map(|offset| poll + offset)
+        .expect("attached progress must charge the common productive-unit cap");
+    let ready_before = supervisor[record..]
+        .find("if service_ready_before_control")
+        .map(|offset| record + offset)
+        .expect("a newly published Ready must preserve its explicit yield boundary");
+    let ready_after = supervisor[ready_before..]
+        .find("&& bootstrap_service_ready_published")
+        .map(|offset| ready_before + offset)
+        .expect("the attached continuation must retain current Ready truth");
+    let productive = supervisor[ready_after..]
+        .find("&& productive_network_successor")
+        .map(|offset| ready_after + offset)
+        .expect("only a productive exact Network successor may retain the refill");
+    let continue_turn = supervisor[productive..]
+        .find("continue 'supervisor;")
+        .map(|offset| productive + offset)
+        .expect("the productive successor must re-enter loop-top arbitration");
+    let yield_turn = supervisor[continue_turn..]
+        .find("deferred_cyw43_yield_and_reset(&mut activation_window);")
+        .map(|offset| continue_turn + offset)
+        .expect("every rejected attached successor must yield and reset");
+
+    assert!(
+        network < guard
+            && guard < poll
+            && poll < record
+            && record < ready_before
+            && ready_before < ready_after
+            && ready_after < productive
+            && productive < continue_turn
+            && continue_turn < yield_turn,
+    );
+    assert!(source.contains("root_control.budget_us"));
+    assert!(source.contains("root_control.wcet_us"));
+    assert!(!source.contains("DEFERRED_CYW43_ACTIVATION_GUARD_US"));
 }
 
 #[test]
@@ -414,6 +685,40 @@ fn root_control_natural_postpone_keeps_exact_target_budgets_and_fault_routes() {
         .map(|offset| root_control + offset)
         .expect("service class after critical duties");
     assert!(classifier[root_control..service].contains("FaultReplyDisposition::CriticalTerminal {"));
+}
+
+#[test]
+fn pi_genet_uses_the_bounded_core_one_latency_candidate() {
+    fn task_section<'a>(manifest: &'a str, task_id: &str) -> &'a str {
+        let marker = format!("[[temporal_authority.tasks]]\nid = \"{task_id}\"");
+        let start = manifest.find(&marker).expect("temporal task record");
+        let tail = &manifest[start..];
+        let end = tail[marker.len()..]
+            .find("\n[[temporal_authority.tasks]]")
+            .map_or(tail.len(), |offset| marker.len() + offset);
+        &tail[..end]
+    }
+
+    let manifest = include_str!("../../../configs/root_task_pi4_uboot_aarch64.toml");
+    let genet = task_section(manifest, "driver-genet");
+    for exact in [
+        "core = 1",
+        "sched_control_core = 1",
+        "budget_us = 3000",
+        "period_us = 10000",
+        "response_time_us = 3400",
+        "max_refills = 2",
+        "priority = 160",
+        "wcet_us = 800",
+    ] {
+        assert_eq!(
+            genet.lines().filter(|line| *line == exact).count(),
+            1,
+            "GENET must retain exact MCS line: {exact}",
+        );
+    }
+    assert!(manifest.contains("bcmgenet-v5 = 1"));
+    assert!(manifest.contains("cyw43455 = 3"));
 }
 
 #[test]

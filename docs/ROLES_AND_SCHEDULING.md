@@ -316,14 +316,48 @@ repeat a grant, consume a second owner quantum, move a postphysical boundary,
 or alter an SC budget, period, deadline, refill, priority, core, owner, retry,
 or Reply/fault contract.
 
-GENET remains on core 3 with its selected `1,000 us / 10,000 us` active SC and
-terminal timeout policy. The Pi-only IRQ 189/badge 1024 default-queue DPC may
+The deferred physical WiFi supervisor may retain the current root-control
+refill across productive logical turns only inside a continuous CNTVCT window.
+It alternates exactly one Operator and one Driver, checks admission before both,
+retires each one-operation Driver finalizer before re-entry, and stops before
+the generated root-control `budget_us - wcet_us` reserve or after 64 productive
+units. The selected Pi values make that strict elapsed-time cut 250 us
+(`2,750 - 2,500`), leaving one complete declared 2,500 us root WCET for the
+fresh logical unit plus yield/epilogue. A missing, zero, backwards, drifted, or
+otherwise invalid counter/configuration permits one legacy logical turn before
+yielding, preserving liveness. After service readiness, an attached Network
+turn may retain the same window only when EventPump proves actual network
+activity, exactly one CYW43 service-unit advance, an immediate Network
+successor, durable schedulable work, and no recovery, quarantine, reboot, or
+operator rotation. Idle, wait, nonprogress, handoff, pressure, fault, terminal,
+or any failed token yields and resets. This replaces the former pair-restart
+Driver burst, changes no generated temporal value, and does not apply to QEMU
+or generic root control.
+
+The handoff-to-Ready response bound is evaluated in the isolated child's
+absolute CNTVCT millisecond domain, not the pump-driven HAL policy clock. Root
+samples immediately before and after resume, requires a nonzero unchanged
+frequency equal to generated child truth and a nondecreasing cursor, admits
+publication from the inclusive pre-resume sample through strictly before the
+post-resume-plus-bound deadline, and fails closed on zero, pre-resume,
+at-boundary, late, drifted, backwards, or overflowed evidence. The pre-resume
+lower bound deliberately includes a child that publishes after resume but
+before root returns.
+
+Pi GENET uses core 1 with a selected `3,000 us / 10,000 us` active SC, two
+refills, priority 160, and terminal timeout policy. This isolates the production
+wired path from the CYW43/SDIO pair on core 3 without changing either Wi-Fi SC.
+The compiler admits `6,250/9,000 us` on core 1 and `8,000/9,000 us` on core 3,
+leaving 2,750 us and 1,000 us of usable-core reserve respectively. GENET's
+existing 800 us WCET yields a 3,400 us computed response bound; that is static
+admission truth, not measured packet latency. The Pi-only IRQ 189/badge 1024
+default-queue DPC may
 drain at most 16 frames and 24,576 bytes into its private queue per quantum;
 remaining exact IRQ work retains a masked, unacknowledged continuation. QEMU
 keeps its existing three-entry driver-runtime IRQ topology with no GENET IRQ
 and identical scheduling. After DHCP and exact old-path quiescence, Pi GENET
 performs one fail-closed handoff to the console child over the compiler-declared
-32-page CPU-only direct link. GENET keeps its independent core-3 SC and sole
+32-page CPU-only direct link. GENET keeps its independent core-1 SC and sole
 MMIO/DMA/IRQ ownership; the console child keeps its core-0 SC and sole
 TCP/auth ownership. Their fixed notifications are wake hints, not scheduling
 donation or packet authority. A peer fault couples containment only: suspend
@@ -344,9 +378,11 @@ response cadence; QEMU priorities and placement remain unchanged.
 The Pi CYW43 boot supervisor consumes those two generated response bounds only
 after the DHCP-bound console child is finalized and resumed. Each bound is
 rounded independently to the millisecond clock, so the current profile admits
-one `9 ms + 6 ms = 15 ms` exact-generation Ready publication/observation
-window. Invalid generated authority or a missing, late, or wrong-generation
-Ready fails closed. This is a distinct post-activation observation bound, not a
+one `9 ms + 6 ms = 15 ms` exact-generation Ready publication window. Root may
+take one final shared-page-only observation at or after the boundary and accept
+it only when the retained ABI-validated publication time is strictly earlier.
+Invalid generated authority or a missing, at-boundary, late, replayed, or
+wrong-generation Ready fails closed. This is a distinct post-activation bound, not a
 budget increase, retry, renewal of the 90-second pre-handoff Gate 8 deadline,
 or proof of packet latency.
 
@@ -384,7 +420,10 @@ rotors have hard limits of four and five polls respectively and stop early for
 reboot, containment, or a completed cycle. This composition changes no SC
 budget or period: the generated per-driver period gate still admits at most one
 wake for each child runtime inside its period. Active physical Network service
-and non-MCS profiles retain their established single-poll outer turn.
+and non-MCS profiles retain their established single-poll outer turn; the
+separately guarded deferred WiFi bootstrap window above retains logical
+one-operation/finalizer turns without requiring a kernel Yield between each
+productive pair.
 
 The isolated QEMU path instead composes a counter-, completion-, and
 probe-bounded root-control quantum. An idle, blocked, rebooting, or faulted

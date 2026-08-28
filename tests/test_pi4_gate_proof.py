@@ -147,7 +147,7 @@ def _driver_task_boot_affinity_lines() -> list[str]:
         "DRIVER_TASK_BOOT contract=hdmi-text role=display started=yes affinity_core=2",
         "DRIVER_TASK_BOOT contract=pcie-root role=pcie started=yes affinity_core=2",
         "DRIVER_TASK_BOOT contract=sdio-host role=sdio started=yes affinity_core=3",
-        "DRIVER_TASK_BOOT contract=bcmgenet-v5 role=net started=yes affinity_core=3",
+        "DRIVER_TASK_BOOT contract=bcmgenet-v5 role=net started=yes affinity_core=1",
         "DRIVER_TASK_BOOT contract=cyw43455 role=net started=yes affinity_core=3",
     ]
 
@@ -355,7 +355,7 @@ def _strong_wired_driver_task_proof_lines() -> list[str]:
         "DRIVER_TASK_BOOT contract=usb-local-seat role=usb started=yes affinity_core=1",
         "DRIVER_TASK_BOOT contract=hdmi-text role=display started=yes affinity_core=2",
         "DRIVER_TASK_BOOT contract=pcie-root role=pcie started=yes affinity_core=2",
-        "DRIVER_TASK_BOOT contract=bcmgenet-v5 role=net started=yes affinity_core=3",
+        "DRIVER_TASK_BOOT contract=bcmgenet-v5 role=net started=yes affinity_core=1",
         "DRIVER_TASK_SUBSTRATE active=yes profile=pi4-uboot-aarch64 "
         "task_count=5 failed_count=0 live_tcb_count=5 "
         "root_authority=admission-descriptor-diagnostics-only hardware_owner=linked-runtime "

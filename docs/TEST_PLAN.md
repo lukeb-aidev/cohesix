@@ -1274,22 +1274,44 @@ current-image gate and cannot authorize timing-dependent loops,
 same-generation replay, root-owned SDIO, or a legacy fallback.
 
 The current non-claiming regression input is exact source
-`e046a7eb470ae0dee9601749508e4248cce51c80`, image ID
-`33cc8a0e21de62a7738587b83b695daea41884b169f16c12dad8f23f39b82fcc`, and
+`24e1c1c7778a3dc7ad8460c9ef644992814e41a5`, image ID
+`33298abaa8751693f6fcc5c05655d5837a32a9c2c710dc64907a4a61cab03061`, and
 image SHA-256
-`d650bbc29ff6bf28bea468d788c5a2cfcd3be8242173a91ac07f1f94c9ff5e4c`.
-Its WiFi boot starts at line 23805 of
-`/Users/lukasbower/pi4-serial-20260822-134045-cont.log` and is paired with
-`/Users/lukasbower/tcpdump-wifi-20260828-072409.pcap`; the later authenticated
-GENET reboot is retained separately in
-`/Users/lukasbower/pi4-serial-20260828-e046-genet-G02-pyserial.log` and
-`/Users/lukasbower/tcpdump-usb-eth-20260828-072409.pcap`. The WiFi boot reaches
-Gate 8, DORA, and the following Pi ARP, then misses the deferred console-child
-handoff and quarantines at `service-readiness-deadline`. It is regression
-evidence for the handoff and cadence tests below, not current TCP, performance,
-repeatability, or acceptance proof. The accepted August 10 evidence remains the
-upper-path compatibility and performance comparator; it cannot substitute for
-a fresh boot of the repaired exact image.
+`f0c2aaa840b6d88948bf938837c5ae6ed538b37862c937a59f05ab2c5e0965d7`.
+Its WiFi and GENET boots are retained in
+`/Users/lukasbower/pi4-serial-20260822-134045-cont.log`, with the guarded wired
+snapshot in `/Users/lukasbower/pi4-serial-20260828-24e-genet-live-diagnostics.log`
+and boot-paired captures
+`/Users/lukasbower/tcpdump-wifi-20260828-125527.pcap` and
+`/Users/lukasbower/tcpdump-usb-eth-20260828-125527.pcap`. WiFi reaches Gate 8
+and completes DORA, but root rejects an already durable on-time child Ready
+because it observes the page only after the generated deadline. GENET completes
+DORA and one legacy ARP, then direct handoff retains raw/active sources
+`0x00012000`, zero IRQ wakes/DPC turns, and a diverging RDMA producer before
+coupled peer containment. The same WiFi boot executes 6,324 productive
+supervisor Driver turns with an approximately 20 ms yield cadence. These are
+regression inputs for the deadline, cutover, and bounded-cadence tests below,
+not current TCP, performance, repeatability, or acceptance proof. The accepted
+August 10 source `2668c34f76ff` used the same logical
+Operator/yield/Driver/yield supervisor under a non-MCS profile and reached
+Ready/TCP; selected MCS `handleYield` instead charges away the remaining
+current refill. That is the compatibility and causal performance comparator,
+but it cannot substitute for a fresh boot of the repaired exact image.
+
+The repaired GENET cutover test oracle is finite rather than quiet-wire based:
+mask the exact source, stop MAC RX, retain the 10 ms CNTVCT settle, clear only
+RDMA `DMA_EN` while retaining the default-ring enable/configuration, require
+disabled status within 5 ms, freeze a producer no
+more than 32 descriptors ahead, drain that exact legacy frontier, publish the
+bound generation while stopped, then resume RDMA/MAC RX and unmask with
+readback. Tests must fail closed on status timeout, producer/cursor/token or
+generation drift, stop/readback failure, and ACK failure, and must prove a
+queued old notification after READY neither moves a legacy cursor nor loses the
+direct epoch. The Pi manifest moves only GENET to core 1 at
+`3,000/10,000 us`, priority 160, two refills, with 800 us WCET and 3,400 us
+computed response. CYW43 and SDIO stay on core 3 unchanged. These are source
+and static-admission gates until a fresh exact-image wired boot supplies
+consumed-time, TCP, `cohsh`, `.coh`, loss, latency, and throughput evidence.
 
 The CYW43 software and cadence closure gate is authorized by Milestone 26d
 tasks `m26d-cyw43-hardware-free-closure` and
@@ -1317,6 +1339,39 @@ including equal deterministic private state, and block at the first exact
 external wait. Every helper remains bounded and each immutable hardware request may
 issue at most once, but no scheduler turn, yield, or notification is a required
 edge between semantic phases.
+
+On the deferred physical WiFi supervisor only, productive semantic phases may
+retain the current root-control refill under a continuous CNTVCT activation
+window. Tests must prove strict `Operator -> Driver -> Operator` alternation,
+exactly one physical-operation lease and retired finalizer per Driver, a
+strict stop at the generated `root-control budget_us - wcet_us` reserve, and a
+secondary cap of 64 productive units. The selected Pi oracle is exactly
+`2,750 - 2,500 = 250 us`; equality stops, so one complete declared 2,500 us
+logical-unit-plus-epilogue WCET remains before SC exhaustion. The guard is
+checked before every fresh Operator, Driver, and attached Network unit.
+Zero/invalid generated configuration or frequency, a backwards/drifted
+counter, wait, idle/no progress, output backpressure, handoff,
+terminal/fault/reboot state, or either cap yields and resets the window. An
+invalid counter still admits one legacy logical turn per scheduler activation
+before yielding, so telemetry failure cannot deadlock bootstrap. An attached
+continuation additionally requires a CYW43 Network phase, actual NetPoller
+activity, exactly one service counter advance, the immediate next phase still
+Network, durable schedulable work, and no quarantine, recovery, reboot, or
+operator rotation; focused pure tests reject every missing predicate without
+device effects. The prior four-Driver restart burst is not composed with this
+window. QEMU, generic root control, all SC numerics, and every
+physical-operation/postphysical boundary remain unchanged.
+
+Child Ready timing tests use the child's absolute CNTVCT millisecond domain,
+not the pump-driven HAL clock. They must prove a valid same-frequency
+pre-resume sample, a nondecreasing same-frequency post-resume sample, an
+inclusive pre-resume publication lower bound, and an exclusive
+post-resume-plus-response-bound deadline. A publication between resume and
+root return succeeds; zero, pre-resume, exact-deadline, late, missing,
+wrong-generation, invalid identity/sequence, zero or mismatched frequency,
+backwards counter, and arithmetic overflow fail closed. At/after the deadline,
+exactly one child-publication-only observation is permitted and it performs no
+NIC/device or ordinary Network work.
 
 Ordered Gate 8 coverage must exercise one production diagnostic snapshot with
 these exact subgates: `8a-pair-generation`, `8b-control-program`,
@@ -1375,7 +1430,7 @@ prove all of the following:
   exclusive `ConsoleHandoff` turn before service-readiness evaluation can
   declare success or timeout. That turn performs no CYW43 poll, borrows HAL
   only to finalize and resume the already registered child, and yields. A later
-  Network turn alone may consume child Ready. Recovery and runnable/waiting
+  Network turn normally consumes child Ready. Recovery and runnable/waiting
   canonical-parent work retain precedence; quarantine rejects the predicate;
   and a handoff failure enters the existing failed state with no root TCP
   fallback, extra retry, or mixed network/HAL work. Successful activation arms
@@ -1383,12 +1438,21 @@ prove all of the following:
   separately rounded generated response bounds of `console-network-service`
   and `root-control`; the current Pi profile admits `9 ms + 6 ms = 15 ms`.
   Missing, zero, inactive, non-admitted, or overflowing generated authority
-  fails closed immediately. Regression coverage must reproduce Gate 8 plus
+  fails closed immediately. The accepted event retains its ABI-validated
+  service identity, generation, sequence, and child publication time. At or
+  after the boundary, root may take exactly one final shared-page-only child
+  observation before deciding terminal state. That observation performs no
+  NIC work, policy advance, retry, wake, or second Network unit. Ready is on
+  time only when its retained publication time is strictly less than the
+  deadline; an at-boundary or later publication, replay, identity/generation/
+  sequence drift, or absence remains terminal even if root observes it later.
+  Regression coverage must reproduce Gate 8 plus
   DHCP becoming bound in a NetworkControl turn that began at
   `original_deadline - 1 ms` and completed at or after the deadline, prove the
   exclusive handoff still occurs, reject a turn that begins exactly at the
-  deadline, admit exact-generation Ready at `+14 ms`, and reject missing or
-  wrong-generation Ready at `+15 ms`.
+  deadline, admit exact-generation Ready published at `+14 ms` even when root
+  consumes it after the boundary, and reject missing, replayed, wrong-generation,
+  or `+15 ms` Ready after the one final publication-only observation.
 - Transport attachment publishes `stabilizing`. Initial Gate 8 publication in
   the sole `attempt=1` outer boot episode uses one absolute
   `now + 90,000 ms` deadline. Gate 8 is passive: a logical subgate failure
@@ -1399,8 +1463,10 @@ prove all of the following:
   truth at expiry must terminate with
   `blocker=service-readiness-deadline`. After successful activation, only the
   generated response-bound window above governs the child's first
-  exact-generation Ready publication and root observation; reaching its exact
-  boundary without Ready terminates with the same blocker. Deadline exhaustion
+  exact-generation Ready publication. Root may observe a pre-boundary durable
+  publication after that boundary only through the single child-publication-only
+  arbitration above; reaching the exact boundary without such an on-time
+  publication terminates with the same blocker. Deadline exhaustion
   must retain the complete eight-line snapshot and adjacent
   `CYW43_GATE8_TERMINAL ... action=quarantine`, emit terminal
   `status=permanent`, and quarantine attached Wi-Fi while serial, local-seat,
@@ -4225,10 +4291,11 @@ catalogued Pi runtime suite covers the atomic DPC
 word-write and Linux-ordered post-F2 production-chain invariants; do not replay
 those tests as name filters.
 
-The Pi 4 manifest defaults place both `bcmgenet-v5` and `cyw43455` on core `3`;
-hardware captures must show `DRIVER_TASK_BOOT ... contract=<selected-network>
-... affinity_core=3` for the selected network contract before claiming
-fourth-core driver placement. Under MCS, every selected driver must instead
+The Pi 4 manifest places `bcmgenet-v5` on core `1` and retains `cyw43455` plus
+`sdio-host` on core `3`. Hardware captures must show
+`DRIVER_TASK_BOOT ... contract=bcmgenet-v5 ... affinity_core=1` for wired mode
+or the corresponding selected Wi-Fi contracts at `affinity_core=3` before
+claiming placement. Under MCS, every selected driver must instead
 emit `DRIVER_TASK_MCS_ACTIVE ... core=<manifest-core>
 timeout_policy=<generated-policy> timeout_endpoint=<installed|omitted>` followed by
 `DRIVER_TASK_AFFINITY_MCS ... source=sched-control-sc-bind
@@ -5868,7 +5935,9 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
       readiness. Held USB up/down arrows use a 300 ms initial
       and 50 ms repeat deadline from the virtual counter. Once a canonical
       viewport is materialized, each repeat advances it by one bounded CSI
-      `S`/`T` row;
+      `S`/`T` row. It must retain only the union of old/new nonblank-column
+      damage before the row-origin rotation, preserve prior dirty cells, and
+      clear only the newly exposed row or rows;
       a full redraw is reserved for initial or recovery materialization and must
       use the framebuffer-derived safe-area row count even when the payload
       spans multiple bounded HDMI service turns. Each rendered row must use
@@ -5894,6 +5963,8 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
       evidence extension described above; runtime publication is dormant.
       The Pi write-only damage-compositor regression must independently prove
       fixed row-ring scroll semantics, zero scanout reads during scroll,
+      bounded old/new nonblank-column union damage for both directions without
+      an ordinary full-surface redraw,
       genuinely resumable parse/plane/raster progress, exact command-identity
       retention, and no replay of an already-consumed prefix or completed
       multi-cell effect. A pure 4,096-byte parser-envelope case must require the
@@ -5920,6 +5991,12 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
       takeover, printable echo, one-row and ten-row scroll, visible final state,
       outstanding/deferral debt, and serial plus USB liveness under display
       pressure before polished or world-class performance is claimed.
+      Independently, early-progress tests must render the fixed child-owned
+      `Cohesix starting...` tile only after full resource/geometry admission,
+      keep its stores below the fixed glyph bound, perform zero stores for each
+      rejected geometry, and prove the first ordinary frame's retained takeover
+      clear replaces it. The tile is not prompt, USB, network, or Pi acceptance
+      evidence.
       The serial transport regression must prove that exactly four existing
       pages form two independent two-page/8,128-byte generation-bound SPSC
       rings. Prove only those CPU rings use identically cacheable,
@@ -5992,6 +6069,24 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
       Root must publish an atomic handoff-pending generation before DGHO,
       preserve only the unfaulted legacy drain in that phase, and defer every
       retry until the legacy coordinator plus root RX/TX frontiers are empty.
+      Before READY, tests must prove the finite cutover masks the exact source,
+      stops MAC RX with readback, retains QUIESCING across the generated 10 ms
+      settle, clears only RDMA `DMA_EN` while retaining the default-ring enable
+      and configuration, and requires DMA status bit 0 within the 5 ms timeout
+      before freezing the producer. Hold
+      private RX, TX reclaim, a pending direct cursor commit, and a retained
+      handler lifetime independently and prove only the immutable, at-most-32
+      descriptor frontier drains. The final fence must revalidate the stopped
+      hardware and generation, clear retained raw sources, publish direct
+      ownership while ingress remains stopped, then resume RDMA, MAC RX, and
+      the exact source in order with readback. Status timeout, frozen-producer
+      or cursor movement, generation/token drift, ACK failure, or any
+      stop/resume/unmask/readback failure must stop MAC RX/TX plus RDMA/TDMA,
+      poison the link, signal the peer, and raise the standard fault without
+      READY. No fence path may fabricate a notification badge, IRQ wake,
+      handler acknowledgement, packet, or cursor advance; a queued exact seL4
+      notification observed after READY is direct-epoch work for the same sole
+      owner.
       Tests must cover a fault between child READY publication and root READY
       acceptance, a fence between pair-fault observation and publication, a
       retained legacy call across QUIESCING, full-ring peer rearm, blocked
@@ -8678,8 +8773,8 @@ _Generated by coh-rtc (sha256: `fa11c64fe53b859365c45c8e33e565d428029a87529be00c
 ## Manifest fingerprints
 - `configs/root_task.toml` — `sha256:f8ac815eecf31f83739d3569a748ceace199f1e29a6eda3f4fd3d191e202784d`
 - `configs/generated/root_task_resolved.json` — `sha256:a9a50408519f33cf2e05932cffffa5dbb521958870b16edf2f36311ff60385a1`
-- `configs/root_task_pi4_uboot_aarch64.toml` — `sha256:1482ad2ad91ca9092930a5ff1b95465914633fb7e83dbad58244649bdd6b1311`
-- Pi `pi4_production` transient resolved binding — `sha256:286602fbe0045f5df241d05e61674379a6cce7d428bd2b0ce9a1111f4d048e5e`
+- `configs/root_task_pi4_uboot_aarch64.toml` — `sha256:ecd0aa51c68408ef0d2be089c2264a3426928c3012f1902bfce1095e3713f11c`
+- Pi `pi4_production` transient resolved binding — `sha256:4231476a82e8cef643a26ac5fa126d1c6cae06d76fba09693af8dd2964d1195b`
 
 ## Transcript fixture hashes
 - `tests/fixtures/transcripts/boot_v0/serial.txt` — `sha256:2ea58218a937f0c702fd67dac83aa838a8c49b9d1fba1e0165dfa93a44ab3c6d`

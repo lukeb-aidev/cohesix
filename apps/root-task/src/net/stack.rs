@@ -9970,6 +9970,22 @@ impl NetPoller for Cyw43NetStack {
         self.inner().is_some_and(NetPoller::console_listener_ready)
     }
 
+    fn poll_isolated_child_publication_only(&mut self) -> bool {
+        #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
+        if let Cyw43NetState::Isolated { console, .. } = &mut self.state {
+            return console.poll_isolated_child_publication_only();
+        }
+        false
+    }
+
+    fn isolated_child_ready_published_ms(&self) -> Option<u64> {
+        #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
+        if let Cyw43NetState::Isolated { console, .. } = &self.state {
+            return console.isolated_child_ready_published_ms();
+        }
+        None
+    }
+
     fn start_self_test(&mut self, now_ms: u64) -> NetSelfTestStartResult {
         self.inner_mut()
             .map_or(NetSelfTestStartResult::Unsupported, |inner| {
@@ -11431,6 +11447,24 @@ impl NetPoller for DefaultNetStack {
             Self::Cyw43DriverTask(stack) => stack.console_listener_ready(),
             #[cfg(feature = "net-backend-virtio")]
             Self::Virtio(stack) => stack.console_listener_ready(),
+        }
+    }
+
+    fn poll_isolated_child_publication_only(&mut self) -> bool {
+        match self {
+            Self::Cyw43DriverTask(stack) => stack.poll_isolated_child_publication_only(),
+            Self::Rtl8139(_) | Self::GenetDriverTask(_) => false,
+            #[cfg(feature = "net-backend-virtio")]
+            Self::Virtio(_) => false,
+        }
+    }
+
+    fn isolated_child_ready_published_ms(&self) -> Option<u64> {
+        match self {
+            Self::Cyw43DriverTask(stack) => stack.isolated_child_ready_published_ms(),
+            Self::Rtl8139(_) | Self::GenetDriverTask(_) => None,
+            #[cfg(feature = "net-backend-virtio")]
+            Self::Virtio(_) => None,
         }
     }
 

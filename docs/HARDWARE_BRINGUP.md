@@ -650,6 +650,9 @@ the existing pre-prompt deferral, which supplies no descriptor or owner proof.
 After the HDMI prompt appears, verify that every typed character reaches the
 canonical command row, backspace stops at the prompt prefix, and held up/down
 arrows advance scrollback smoothly one completed viewport row at a time.
+Ordinary one-row motion must damage only the bounded union of old/new nonblank
+columns plus the newly exposed row; a full-viewport redraw on every repeat is a
+performance failure even if HID input counters remain lossless.
 Queue/submission counters alone do not satisfy this check; preserve the matching
 completed `hdmi-text` receipt evidence. If USB command readiness is invalidated
 during the sample, the HDMI prompt and stale console-ready banner must retract
@@ -657,6 +660,13 @@ without losing the typed suffix. The prompt returns only after fresh readiness
 and display health; the banner is canonically re-admitted after fresh readiness
 and becomes visible through that healthy display service. Do not require a
 fault injection merely to exercise this branch on otherwise healthy hardware.
+
+Before those root-projected milestones, an admitted HDMI child may show only
+the fixed `Cohesix starting...` tile. Treat it as early framebuffer-owner
+progress, not root-console, USB, driver-set, or network readiness. The first
+ordinary HDMI frame must clear and replace it. A missing tile with rejected
+geometry is an admission failure; a tile followed by no first-frame completion
+is a later display-service failure.
 
 This behavior retains the existing console grammar and physical authority.
 The reserved fixed USB old-good slot and root projection are passive
@@ -978,9 +988,24 @@ The exact Pi `bcmgenet-v5` profile uses console-network ABI v5 and derives one
 post-DHCP direct data-plane handoff. Root first proves every legacy GENET
 command, RX, and TX cursor quiescent, publishes an atomic handoff-pending
 generation, and issues one generation-bound, zero-payload `DGHO`. An exact
-`PROGRESS/READY` terminal is the only route to READY. During an exact unfaulted
-`IDLE/QUIESCING` phase only the bounded legacy drain may run, and a retry waits
-for its coordinator plus root RX/TX queues to become empty.
+`PROGRESS/READY` terminal is the only route to READY. The child masks the exact
+GENET source, stops MAC RX with readback, waits 10 ms in generated CNTVCT
+time, clears only RDMA `DMA_EN` while retaining the default-ring enable and
+configuration, and requires DMA status bit 0 within 5 ms before freezing the producer. During an exact
+unfaulted `IDLE/QUIESCING` phase, only the bounded legacy path may drain that
+immutable, at-most-32-descriptor frontier plus retained TX/handler state.
+
+The same transition must close the legacy IRQ epoch. Before READY, require
+the frozen RDMA producer and every private RX, TX reclaim, pending direct cursor
+commit, and retained handler lifetime to remain exact until empty. The child
+then clears retained raw sources, revalidates the generation and stopped
+hardware, publishes direct ownership while ingress remains stopped, and resumes
+RDMA, MAC RX, and the source in that order with readback at every boundary. A
+status timeout, producer/cursor movement, generation/token drift, ACK failure,
+or stop/resume/unmask/readback failure is terminal and stops MAC RX/TX plus
+RDMA/TDMA before poisoning and faulting the pair. DGHO itself must report zero
+synthetic IRQ acknowledgements or wakes; a queued exact seL4 notification after
+READY belongs to the direct epoch and the same sole child owner.
 
 After READY, the GENET and console children reuse the admitted 32 pages as
 cacheable Normal/XN CPU-only memory: page 0 is the sequence-last control page,
@@ -1056,21 +1081,41 @@ Implementation mechanics and reusable ownership invariants belong in
 [Developing Cohesix Drivers](DRIVERS.md). This section owns only the physical
 operator and evidence workflow.
 
-The exact `5a8917b09d7f2bda2c5fbe18a08340e0fbae5d58` convergence boot is a
+The exact `24e1c1c7778a3dc7ad8460c9ef644992814e41a5` convergence boot is the
 current failure oracle, not an accepted WiFi sample. Image ID
-`ce2dbbc0ed8b4c613caec554ce729815f090e015a82b94e0b16dec8ea74d6d71` and
+`33298abaa8751693f6fcc5c05655d5837a32a9c2c710dc64907a4a61cab03061` and
 image SHA-256
-`4d64fb29a38e58103d3d1d80b8a2718ac39bf85d93384f0a12b390aa9431b230`
-complete cold SDIO/CYW43, firmware, association, EAPOL, Gate 8, DORA, and a Pi
-ARP in the boot-paired capture. The isolated console child then runs 518 turns
-at generation 1, but its device-counter projection reports WiFi generation 0;
-exact-generation service readiness therefore cannot pass and the link is
-quarantined at `service-readiness-deadline`. For the next exact-image test, the
-first downstream question is whether the child retains the live generation and
-device state, publishes exact-generation Ready inside the generated 15 ms
-post-activation observation bound, and makes port 31337 reachable before TCP
-performance is assessed. The August 10 accepted boots remain compatibility
-comparators only.
+`f0c2aaa840b6d88948bf938837c5ae6ed538b37862c937a59f05ab2c5e0965d7`
+complete cold SDIO/CYW43, firmware, association, EAPOL, Gate 8, and DORA. The
+isolated child publishes Ready from absolute CNTVCT time, but root compared it
+with the pump-driven HAL clock, did not consume the durable page until after
+the apparent boundary, and incorrectly quarantined at
+`service-readiness-deadline`. The repaired arbitration samples absolute CNTVCT
+immediately before and after child resume, requires the same nonzero generated
+and runtime counter frequency, admits only an exact-identity publication in
+the half-open pre-resume-to-post-resume-plus-15-ms window, takes at most one
+final shared-page-only observation, and rejects zero, pre-resume, at-boundary,
+late, missing, replayed, drifted, or clock-invalid Ready without NIC work or
+retry. The same boot's 6,324 productive Driver turns and approximately 20 ms
+cadence motivate a separately bounded physical-WiFi activation window. Its Pi
+admission cut is the generated `2,750 - 2,500 = 250 us` SC-minus-WCET reserve,
+with a 64-productive-unit cap; after service readiness, only an actually
+productive CYW43 Network unit whose exact successor remains Network may retain
+that window. Source or image checks cannot claim its hardware speedup. For the
+next exact-image test, require listener
+Ready, port 31337 reachability, authenticated `cohsh`, focused `.coh` scripts,
+and measured boot/network performance before promotion. The August 10 accepted
+boots remain compatibility comparators only.
+
+For the paired wired regression, the same source reaches DHCP and legacy ARP
+before the old direct handoff stalls with raw/active source `0x00012000`, zero
+IRQ wakes/DPC turns, and an advancing RDMA producer. The next GENET image must
+show the generated core-1 `3,000/10,000 us` SC and 3,400 us response contract,
+then prove the finite MAC/RDMA cutover reaches READY without containment. Only
+a same-boot packet capture plus raw TCP, authenticated `cohsh`, focused `.coh`
+scripts, consumed-time counters, and the canonical wired benchmark can qualify
+latency or throughput. Build, image, media, and QEMU checks remain non-boot
+evidence.
 
 #### Acceptance contract
 

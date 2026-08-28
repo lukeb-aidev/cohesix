@@ -30,8 +30,8 @@ def test_pi4_manifest_defaults_to_dhcp_auto_networking() -> None:
     assert network["interface"] == "auto"
 
 
-def test_pi4_manifest_enables_local_seat_and_fourth_core_net_drivers() -> None:
-    """Pi 4 boots must keep HDMI/USB enabled and put both NIC drivers on core 3."""
+def test_pi4_manifest_enables_local_seat_and_separates_net_driver_cores() -> None:
+    """Pi keeps local I/O enabled and isolates GENET from the Wi-Fi lane."""
     manifest = load_pi4_manifest()
     local_seat = manifest["hw"]["local_seat"]
     driver_affinity = manifest["root_task"]["affinity"]["drivers"]
@@ -40,8 +40,50 @@ def test_pi4_manifest_enables_local_seat_and_fourth_core_net_drivers() -> None:
     assert local_seat["required"] is True
     assert local_seat["keyboard_device"] == "usb-kbd0"
     assert local_seat["display_device"] == "hdmi0"
-    assert driver_affinity["bcmgenet-v5"] == 3
+    assert driver_affinity["bcmgenet-v5"] == 1
     assert driver_affinity["cyw43455"] == 3
+
+
+def test_pi4_genet_uses_bold_bounded_core_one_mcs_admission() -> None:
+    """GENET gets a larger core-one budget without consuming its reserve."""
+
+    manifest = load_pi4_manifest()
+    temporal = manifest["temporal_authority"]
+    tasks = temporal["tasks"]
+    genet = next(task for task in tasks if task["id"] == "driver-genet")
+    core_one = next(
+        admission
+        for admission in temporal["core_admission"]
+        if admission["core"] == 1
+    )
+    core_three = next(
+        admission
+        for admission in temporal["core_admission"]
+        if admission["core"] == 3
+    )
+    core_one_demand = sum(
+        task["budget_us"]
+        for task in tasks
+        if task["core"] == 1 and task["execution"] == "active"
+    )
+    core_three_demand = sum(
+        task["budget_us"]
+        for task in tasks
+        if task["core"] == 3 and task["execution"] == "active"
+    )
+
+    assert genet["core"] == 1
+    assert genet["sched_control_core"] == 1
+    assert genet["budget_us"] == 3_000
+    assert genet["period_us"] == 10_000
+    assert genet["max_refills"] == 2
+    assert genet["priority"] == 160
+    assert genet["wcet_us"] == 800
+    assert genet["response_time_us"] == 3_400
+    assert core_one_demand == 6_250
+    assert core_three_demand == 8_000
+    assert core_one["capacity_us"] - core_one["reserve_us"] == 9_000
+    assert core_three["capacity_us"] - core_three["reserve_us"] == 9_000
 
 
 def test_pi4_root_preempts_console_with_exact_admitted_response_bounds() -> None:

@@ -416,6 +416,40 @@ impl Manifest {
         affinity
             .drivers
             .validate(affinity.authority_core.unwrap_or(0), max_core)?;
+        if self.profile_is_pi4_family() && self.temporal_authority.enabled {
+            for (task_id, contract, affinity_core) in [
+                ("driver-serial", "serial", affinity.drivers.serial),
+                (
+                    "driver-usb",
+                    "usb-local-seat",
+                    affinity.drivers.usb_local_seat,
+                ),
+                ("driver-hdmi", "hdmi-text", affinity.drivers.hdmi_text),
+                ("driver-genet", "bcmgenet-v5", affinity.drivers.bcmgenet_v5),
+                ("driver-cyw43", "cyw43455", affinity.drivers.cyw43455),
+                ("driver-sdio", "sdio-host", affinity.drivers.sdio_host),
+                ("driver-pcie", "pcie-root", affinity.drivers.pcie_root),
+            ] {
+                let expected_core = affinity_core.ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "Pi driver {contract} requires a declared root_task affinity core"
+                    )
+                })?;
+                let task = self
+                    .temporal_authority
+                    .tasks
+                    .iter()
+                    .find(|task| task.id == task_id)
+                    .ok_or_else(|| anyhow::anyhow!("missing Pi temporal task {task_id}"))?;
+                if task.core != expected_core || task.sched_control_core != expected_core {
+                    bail!(
+                        "Pi driver {contract} affinity core {expected_core} disagrees with temporal task {task_id} core {}/sched-control core {}",
+                        task.core,
+                        task.sched_control_core
+                    );
+                }
+            }
+        }
         Ok(())
     }
 
@@ -4170,18 +4204,37 @@ mod tests {
     }
 
     #[test]
-    fn pi4_manifest_places_genet_and_wifi_on_fourth_core() {
+    fn pi4_manifest_separates_genet_from_the_wifi_pair() {
         let manifest_path = repo_root()
             .join("configs/root_task_pi4_uboot_aarch64.toml")
             .canonicalize()
             .expect("Pi 4 manifest path");
         let manifest = load_manifest(&manifest_path).expect("load Pi 4 manifest");
         assert_eq!(manifest.root_task.affinity.max_cores, 4);
-        assert_eq!(manifest.root_task.affinity.drivers.bcmgenet_v5, Some(3));
+        assert_eq!(manifest.root_task.affinity.drivers.bcmgenet_v5, Some(1));
         assert_eq!(manifest.root_task.affinity.drivers.cyw43455, Some(3));
         manifest
             .validate_with_base(Some(repo_root().as_path()))
             .expect("Pi 4 driver affinity must validate");
+    }
+
+    #[test]
+    fn pi4_manifest_rejects_driver_affinity_temporal_core_drift() {
+        let manifest_path = repo_root()
+            .join("configs/root_task_pi4_uboot_aarch64.toml")
+            .canonicalize()
+            .expect("Pi 4 manifest path");
+        let mut manifest = load_manifest(&manifest_path).expect("load Pi 4 manifest");
+        manifest.root_task.affinity.drivers.bcmgenet_v5 = Some(2);
+        let error = manifest
+            .validate_with_base(Some(repo_root().as_path()))
+            .expect_err("Pi driver affinity and temporal core drift must fail closed");
+        assert!(
+            error.to_string().contains(
+                "Pi driver bcmgenet-v5 affinity core 2 disagrees with temporal task driver-genet core 1/sched-control core 1"
+            ),
+            "unexpected error: {error}",
+        );
     }
 
     #[test]

@@ -323,6 +323,7 @@ pub struct IsolatedNetworkConsole<D: NetDevice> {
     active_connection: Option<u64>,
     authenticated_connection: Option<u64>,
     listener_ready: bool,
+    ready_published_ms: Option<u64>,
     disconnect_requested: bool,
     disconnect_issued: bool,
     output_issued: bool,
@@ -550,6 +551,7 @@ impl<D: NetDevice> IsolatedNetworkConsole<D> {
             active_connection: None,
             authenticated_connection: None,
             listener_ready: false,
+            ready_published_ms: None,
             disconnect_requested: false,
             disconnect_issued: false,
             output_issued: false,
@@ -942,6 +944,7 @@ impl<D: NetDevice> IsolatedNetworkConsole<D> {
         match event.kind() {
             ExchangeKind::Ready => {
                 self.listener_ready = true;
+                self.ready_published_ms = Some(event.now_ms());
                 self.disconnect_requested = false;
                 self.disconnect_issued = false;
             }
@@ -1144,6 +1147,28 @@ impl<D: NetDevice> IsolatedNetworkConsole<D> {
     }
 
     fn poll_child_output(&mut self) -> IsolatedNetworkTurnOutcome {
+        if self.runtime.publication_ack_pending() {
+            // A deadline-only observation retained the complete publication
+            // without waking the child. Its next ordinary child-output unit
+            // spends exactly that one deferred credit before reading again.
+            return self.acknowledge_child_publication(true);
+        }
+        self.observe_child_output(true)
+    }
+
+    fn poll_child_output_without_ack(&mut self) -> IsolatedNetworkTurnOutcome {
+        if self.runtime.publication_ack_pending() {
+            // Repeated deadline observations cannot reread or credit the same
+            // retained publication. The ordinary Network rotor owns its ACK.
+            return IsolatedNetworkTurnOutcome::complete(false);
+        }
+        self.observe_child_output(false)
+    }
+
+    fn observe_child_output(
+        &mut self,
+        acknowledge_publication: bool,
+    ) -> IsolatedNetworkTurnOutcome {
         let turn = match self.runtime.poll_turn() {
             Ok(turn) => turn,
             Err(error) => {
@@ -1196,14 +1221,20 @@ impl<D: NetDevice> IsolatedNetworkConsole<D> {
             self.pending_egress = Some(egress);
         }
         if publication_observed {
-            if self.runtime.acknowledge_publication().is_err() {
-                self.fail_closed("publication-ack");
-                return IsolatedNetworkTurnOutcome::complete(activity);
-            }
             activity = true;
-            return IsolatedNetworkTurnOutcome::child_signaled(activity);
+            if acknowledge_publication {
+                return self.acknowledge_child_publication(activity);
+            }
         }
         IsolatedNetworkTurnOutcome::complete(activity)
+    }
+
+    fn acknowledge_child_publication(&mut self, activity: bool) -> IsolatedNetworkTurnOutcome {
+        if self.runtime.acknowledge_publication().is_err() {
+            self.fail_closed("publication-ack");
+            return IsolatedNetworkTurnOutcome::complete(activity);
+        }
+        IsolatedNetworkTurnOutcome::child_signaled(activity)
     }
 
     fn transmit_pending_egress(&mut self, timestamp: Instant) -> bool {
@@ -1787,6 +1818,18 @@ impl<D: NetDevice> NetPoller for IsolatedNetworkConsole<D> {
 
     fn console_listener_ready(&self) -> bool {
         self.listener_ready && !self.faulted && !self.terminal
+    }
+
+    #[inline(never)]
+    fn poll_isolated_child_publication_only(&mut self) -> bool {
+        if self.faulted || self.terminal || !self.runtime.activated() {
+            return false;
+        }
+        self.poll_child_output_without_ack().activity()
+    }
+
+    fn isolated_child_ready_published_ms(&self) -> Option<u64> {
+        self.ready_published_ms
     }
 
     fn start_self_test(&mut self, now_ms: u64) -> NetSelfTestStartResult {

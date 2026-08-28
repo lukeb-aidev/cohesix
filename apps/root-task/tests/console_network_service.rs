@@ -116,6 +116,53 @@ fn generated_contract_is_single_listener_active_mcs_authority() {
 }
 
 #[test]
+fn ready_publication_rejects_identity_generation_and_sequence_drift() {
+    let mut boundary = ConsoleNetworkBoundary::new(17).expect("generated contract");
+    let generation = boundary.generation();
+
+    assert_eq!(
+        boundary.accept_event(&event_page(
+            generation,
+            1,
+            ExchangeKind::Ready,
+            0,
+            0,
+            b"wrong-service-identity",
+        )),
+        Err(BoundaryError::InvalidState),
+    );
+    assert_eq!(boundary.state(), ServiceState::Constructing);
+    assert_eq!(
+        boundary.accept_event(&event_page(
+            generation + 1,
+            1,
+            ExchangeKind::Ready,
+            0,
+            0,
+            READY_IDENTITY.as_bytes(),
+        )),
+        Err(BoundaryError::StaleIdentity),
+    );
+
+    let ready = event_page(
+        generation,
+        1,
+        ExchangeKind::Ready,
+        0,
+        0,
+        READY_IDENTITY.as_bytes(),
+    );
+    let accepted = boundary.accept_event(&ready).expect("exact Ready");
+    assert_eq!(accepted.now_ms(), 1);
+    assert_eq!(boundary.state(), ServiceState::Listening);
+    assert_eq!(
+        boundary.accept_event(&ready),
+        Err(BoundaryError::StaleIdentity),
+        "a retained Ready timestamp cannot be refreshed by replaying its sequence",
+    );
+}
+
+#[test]
 fn authenticated_commands_and_exact_packet_control_watermarks_are_bounded() {
     let mut boundary = ConsoleNetworkBoundary::new(9).expect("generated contract");
     let generation = boundary.generation();

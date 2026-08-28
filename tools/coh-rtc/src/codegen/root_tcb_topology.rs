@@ -374,7 +374,7 @@ mod tests {
             } else {
                 [
                     ("root-worker-executor-gpu", 2, 7_100),
-                    ("root-worker-executor-lora", 3, 8_200),
+                    ("root-worker-executor-lora", 3, 7_400),
                 ]
             };
             for (worker_id, expected_core, expected_response) in worker_expectations {
