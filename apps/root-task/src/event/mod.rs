@@ -3478,6 +3478,94 @@ fn direct_genet_causal_fifth_unit_entitled(evidence: DirectGenetCausalStageEntit
         && matches!(evidence.last_input_source, ConsoleInputSource::Net)
 }
 
+/// Exact isolated direct-GENET identity required to supersede the legacy TCP
+/// flush cursor without weakening connection or generation ownership.
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct DirectGenetResponseIdentityEvidence {
+    active_connection_id: Option<u64>,
+    authenticated_connection_id: Option<u64>,
+    exact_direct_genet_runtime: bool,
+    isolated_runtime_generation: Option<u64>,
+    response_identity: Option<ConsoleResponseIdentity>,
+}
+
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+fn direct_genet_response_identity_matches(evidence: DirectGenetResponseIdentityEvidence) -> bool {
+    let Some(connection_id) = evidence.active_connection_id else {
+        return false;
+    };
+    let Some(identity) = evidence.response_identity else {
+        return false;
+    };
+    connection_id != 0
+        && evidence.authenticated_connection_id == Some(connection_id)
+        && evidence.exact_direct_genet_runtime
+        && identity.generation != 0
+        && evidence.isolated_runtime_generation == Some(identity.generation)
+        && identity.connection_id == connection_id
+}
+
+/// Exact same-turn entitlement for one CYW43 response frame accepted by the
+/// smoltcp flush after the ordinary data-TX service opportunity has passed.
+///
+/// The existing outer-operation claim remains the sole physical-operation
+/// authority. This predicate only permits the already accepted response to use
+/// that still-unspent claim; it cannot add a second CYW43 operation, expand the
+/// driver budget, or infer authority from generic urgent traffic.
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Cyw43PostStackTxEvidence {
+    exact_cyw43_runtime: bool,
+    network_service_quarantined: bool,
+    reboot_pending: bool,
+    recovery_required: bool,
+    containment_work_pending: bool,
+    physical_operator_work_pending: bool,
+    physical_console_response_pending: bool,
+    pending_flush_active: bool,
+    pending_flush_connection_id: Option<u64>,
+    active_connection_id_before: Option<u64>,
+    authenticated_connection_id_before: Option<u64>,
+    active_connection_id_after: Option<u64>,
+    authenticated_connection_id_after: Option<u64>,
+    accepted_generation_before: u32,
+    accepted_frames_before: u32,
+    accepted_generation_after: u32,
+    accepted_frames_after: u32,
+    outer_operations_before_stack: u32,
+    outer_operations_after_stack: u32,
+}
+
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+fn cyw43_post_stack_tx_entitled(evidence: Cyw43PostStackTxEvidence) -> bool {
+    if !evidence.exact_cyw43_runtime
+        || evidence.network_service_quarantined
+        || evidence.reboot_pending
+        || evidence.recovery_required
+        || evidence.containment_work_pending
+        || evidence.physical_operator_work_pending
+        || evidence.physical_console_response_pending
+        || !evidence.pending_flush_active
+        || evidence.outer_operations_before_stack != 0
+        || evidence.outer_operations_after_stack != 0
+        || evidence.accepted_generation_before == 0
+        || evidence.accepted_generation_after != evidence.accepted_generation_before
+        || evidence.accepted_frames_before == u32::MAX
+        || evidence.accepted_frames_after != evidence.accepted_frames_before.saturating_add(1)
+    {
+        return false;
+    }
+    let Some(connection_id) = evidence.pending_flush_connection_id else {
+        return false;
+    };
+    connection_id != 0
+        && evidence.active_connection_id_before == Some(connection_id)
+        && evidence.authenticated_connection_id_before == Some(connection_id)
+        && evidence.active_connection_id_after == Some(connection_id)
+        && evidence.authenticated_connection_id_after == Some(connection_id)
+}
+
 /// Exact identity and fence snapshot required before the direct-GENET child
 /// may consume one staged response batch.
 #[cfg(all(feature = "kernel", feature = "net-console"))]
@@ -3488,12 +3576,7 @@ struct DirectGenetResponseStageEvidence {
     containment_work_pending: bool,
     physical_console_response_pending: bool,
     pending_flush_active: bool,
-    pending_flush_connection_id: Option<u64>,
-    active_connection_id: Option<u64>,
-    authenticated_connection_id: Option<u64>,
-    exact_direct_genet_runtime: bool,
-    isolated_runtime_generation: Option<u64>,
-    response_identity: Option<ConsoleResponseIdentity>,
+    identity: DirectGenetResponseIdentityEvidence,
     response_lane: Option<ConsoleResponseLane>,
 }
 
@@ -3505,27 +3588,20 @@ fn direct_genet_response_stage_evidence_matches(
         || evidence.reboot_pending
         || evidence.containment_work_pending
         || evidence.physical_console_response_pending
-        || !evidence.pending_flush_active
+        || evidence.pending_flush_active
     {
         return false;
     }
-    let Some(connection_id) = evidence.active_connection_id else {
+    if !direct_genet_response_identity_matches(evidence.identity) {
         return false;
-    };
-    let Some(identity) = evidence.response_identity else {
+    }
+    let Some(identity) = evidence.identity.response_identity else {
         return false;
     };
     let Some(lane) = evidence.response_lane else {
         return false;
     };
-    connection_id != 0
-        && evidence.authenticated_connection_id == Some(connection_id)
-        && evidence.pending_flush_connection_id == Some(connection_id)
-        && evidence.exact_direct_genet_runtime
-        && identity.generation != 0
-        && evidence.isolated_runtime_generation == Some(identity.generation)
-        && identity.connection_id == connection_id
-        && lane.generation == identity.generation
+    lane.generation == identity.generation
         && lane.connection_id == identity.connection_id
         && lane.queued_lines != 0
         && !lane.awaiting_batch_drain
@@ -8607,6 +8683,34 @@ where
         }
     }
 
+    /// Return whether the exact physical direct-GENET child owns the bounded
+    /// response lane whose completion protocol supersedes legacy TCP flushing.
+    ///
+    /// This is deliberately narrower than "isolated console": copied Wi-Fi
+    /// egress retains its established CYW43 ordering, and QEMU keeps its
+    /// separately qualified direct-VirtIO selector.
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    fn isolated_direct_genet_response_lane_attached(&self) -> bool {
+        crate::serial::serial_linked_runtime_transport_active()
+            && self.net.as_ref().is_some_and(|net| {
+                direct_genet_response_identity_matches(DirectGenetResponseIdentityEvidence {
+                    active_connection_id: net.active_console_conn_id(),
+                    authenticated_connection_id: net.authenticated_console_conn_id(),
+                    exact_direct_genet_runtime: net.driver_task_contract()
+                        == crate::hal::driver_task::GENET_DRIVER_TASK_CONTRACT,
+                    isolated_runtime_generation: net
+                        .isolated_console_diagnostics()
+                        .map(|diagnostic| diagnostic.generation),
+                    response_identity: net.bounded_console_response_identity(),
+                })
+            })
+    }
+
+    #[cfg(not(all(feature = "kernel", feature = "net-console")))]
+    const fn isolated_direct_genet_response_lane_attached(&self) -> bool {
+        false
+    }
+
     /// Return whether the isolated direct-GENET child retained one exact
     /// authenticated command and no physical operator currently owns the cut.
     ///
@@ -8654,7 +8758,7 @@ where
             || reboot_pending
             || containment_work_pending
             || physical_console_response_pending
-            || !pending_flush.active()
+            || pending_flush.active()
         {
             return false;
         }
@@ -8665,15 +8769,16 @@ where
                 containment_work_pending,
                 physical_console_response_pending,
                 pending_flush_active: pending_flush.active(),
-                pending_flush_connection_id: pending_flush.conn_id,
-                active_connection_id: net.active_console_conn_id(),
-                authenticated_connection_id: net.authenticated_console_conn_id(),
-                exact_direct_genet_runtime: net.driver_task_contract()
-                    == crate::hal::driver_task::GENET_DRIVER_TASK_CONTRACT,
-                isolated_runtime_generation: net
-                    .isolated_console_diagnostics()
-                    .map(|diagnostic| diagnostic.generation),
-                response_identity: net.bounded_console_response_identity(),
+                identity: DirectGenetResponseIdentityEvidence {
+                    active_connection_id: net.active_console_conn_id(),
+                    authenticated_connection_id: net.authenticated_console_conn_id(),
+                    exact_direct_genet_runtime: net.driver_task_contract()
+                        == crate::hal::driver_task::GENET_DRIVER_TASK_CONTRACT,
+                    isolated_runtime_generation: net
+                        .isolated_console_diagnostics()
+                        .map(|diagnostic| diagnostic.generation),
+                    response_identity: net.bounded_console_response_identity(),
+                },
                 response_lane: net.console_response_lane(),
             })
         })
@@ -10523,6 +10628,20 @@ where
             && self.net.as_ref().is_some_and(|net| {
                 !Self::network_contract_service_admissible(net.driver_task_contract())
             });
+        #[cfg(all(feature = "kernel", feature = "net-console"))]
+        let cyw43_post_stack_candidate = service_network && self.pending_net_flush.active();
+        #[cfg(all(feature = "kernel", feature = "net-console"))]
+        let cyw43_post_stack_containment_work_pending =
+            cyw43_post_stack_candidate && self.deferred_containment_work_pending();
+        #[cfg(all(feature = "kernel", feature = "net-console"))]
+        let cyw43_post_stack_physical_operator_work_pending = cyw43_post_stack_candidate
+            && (physical_input_active
+                || self
+                    .linked_physical_operator_work()
+                    .retains_network_fence_after_dispatch());
+        #[cfg(all(feature = "kernel", feature = "net-console"))]
+        let cyw43_post_stack_physical_console_response_pending =
+            cyw43_post_stack_candidate && self.physical_console_response_pending();
         #[cfg(feature = "net-console")]
         let net_poll = if !service_network
             || self.cyw43_bootstrap_operator_turn_is_active()
@@ -10543,6 +10662,8 @@ where
             let status_before = net.status_report();
             let net_contract = net.driver_task_contract();
             let conn_id = net.active_console_conn_id();
+            #[cfg(feature = "kernel")]
+            let authenticated_conn_id = net.authenticated_console_conn_id();
             if self.pending_net_flush.active() && self.pending_net_flush.conn_id != conn_id {
                 // A response cursor belongs only to the connection that
                 // created it. A replacement session must never inherit stale
@@ -10596,6 +10717,16 @@ where
                         #[cfg(not(feature = "kernel"))]
                         let cyw43_tx_activity = false;
                         activity |= cyw43_tx_activity;
+                        #[cfg(feature = "kernel")]
+                        let cyw43_post_stack_before = (flush_turn
+                            && net_contract
+                                == crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT)
+                            .then(|| {
+                                (
+                                    crate::drivers::driver_task_net::cyw43_tx_phase_diagnostic(),
+                                    crate::drivers::driver_task_net::cyw43_outer_event_turn_operation_count(),
+                                )
+                            });
                         let result = if flush_turn {
                             net.flush_tcp_with_budget(self.now_ms, budget)
                         } else {
@@ -10611,6 +10742,61 @@ where
                                     net_contract.max_service_us(),
                                 ));
                                 self.audit.denied(message.as_str());
+                            }
+                        }
+                        #[cfg(feature = "kernel")]
+                        if let Some((tx_before, outer_operations_before_stack)) =
+                            cyw43_post_stack_before
+                        {
+                            let tx_after =
+                                crate::drivers::driver_task_net::cyw43_tx_phase_diagnostic();
+                            let outer_operations_after_stack =
+                                crate::drivers::driver_task_net::cyw43_outer_event_turn_operation_count();
+                            let active_connection_id_after = net.active_console_conn_id();
+                            let authenticated_connection_id_after =
+                                net.authenticated_console_conn_id();
+                            if cyw43_post_stack_tx_entitled(Cyw43PostStackTxEvidence {
+                                exact_cyw43_runtime: true,
+                                network_service_quarantined: self.network_service_quarantined,
+                                reboot_pending: self.reboot_pending,
+                                recovery_required:
+                                    crate::drivers::driver_task_net::cyw43_recovery_required(),
+                                containment_work_pending: cyw43_post_stack_containment_work_pending,
+                                physical_operator_work_pending:
+                                    cyw43_post_stack_physical_operator_work_pending,
+                                physical_console_response_pending:
+                                    cyw43_post_stack_physical_console_response_pending,
+                                pending_flush_active: self.pending_net_flush.active(),
+                                pending_flush_connection_id: self.pending_net_flush.conn_id,
+                                active_connection_id_before: conn_id,
+                                authenticated_connection_id_before: authenticated_conn_id,
+                                active_connection_id_after,
+                                authenticated_connection_id_after,
+                                accepted_generation_before: tx_before.generation,
+                                accepted_frames_before: tx_before.accepted,
+                                accepted_generation_after: tx_after.generation,
+                                accepted_frames_after: tx_after.accepted,
+                                outer_operations_before_stack,
+                                outer_operations_after_stack,
+                            }) {
+                                match crate::drivers::driver_task_net::service_cyw43_data_tx_event_turn(
+                                    budget,
+                                ) {
+                                    Ok(serviced) => activity |= serviced,
+                                    Err(err) => {
+                                        let message = format_message(format_args!(
+                                            "BUDGET_OVERRUN contract={} budget_overrun=1 reason={} service=cyw43-post-stack-tx",
+                                            net_contract.name,
+                                            err.reason(),
+                                        ));
+                                        self.audit.denied(message.as_str());
+                                    }
+                                }
+                                debug_assert!(
+                                    crate::drivers::driver_task_net::cyw43_outer_event_turn_operation_count()
+                                        <= 1,
+                                    "one CYW43 Network turn may execute at most one physical operation",
+                                );
                             }
                         }
                         if flush_turn {
@@ -27315,14 +27501,16 @@ where
             return;
         }
         #[cfg(feature = "kernel")]
-        if self.isolated_virtio_compact_path_attached()
+        let isolated_response_lane_owns_completion = (self.isolated_virtio_compact_path_attached()
             && self
                 .net
                 .as_ref()
                 .and_then(|net| net.bounded_console_response_identity())
-                .is_some()
-        {
-            // The isolated VirtIO response lane already retains the exact
+                .is_some())
+            || self.isolated_direct_genet_response_lane_attached();
+        #[cfg(feature = "kernel")]
+        if isolated_response_lane_owns_completion {
+            // The direct isolated response lane already retains the exact
             // generation/connection until its terminal SendBatch receives
             // ControlCompleted plus OutputDrained and all published egress has
             // crossed the NIC boundary. The legacy post-response cursor would
@@ -50146,14 +50334,77 @@ mod tests {
                 LinkedRuntimeServicePhase::Display,
                 "the skipped display remains the next ordinary debt after the causal stage"
             );
+            assert!(
+                !pump.pending_net_flush.active(),
+                "the generation-bound direct response lane must not create legacy flush debt"
+            );
         }
 
-        assert_eq!(genet.polls, 1, "only the first unit may observe child work");
         assert_eq!(
-            genet.tcp_flushes, 1,
-            "the fifth unit must consume the exact response-stage cursor"
+            genet.polls, 2,
+            "the first unit observes the command and the fifth stages its response"
+        );
+        assert_eq!(
+            genet.tcp_flushes, 0,
+            "the exact response lane must supersede legacy TCP flush debt"
         );
         assert!(genet.lines.is_empty());
+        assert!(genet
+            .sent
+            .iter()
+            .any(|line| line.as_str().starts_with("OK PING")));
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn direct_genet_generation_drift_retains_the_legacy_flush_cursor() {
+        let serial =
+            SerialPort::<_, 2048, 2048, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<2048>::new());
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 5 });
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut genet = FakeNet::new();
+        genet.driver_contract = crate::hal::driver_task::GENET_DRIVER_TASK_CONTRACT;
+        genet.active_conn_id = Some(17);
+        genet.authenticated_conn_id = Some(17);
+        genet.response_batch_capacity = Some(8);
+        genet.response_identity_generation = 9;
+        genet.response_lane_generation = 9;
+        genet.isolated_diagnostics = Some(IsolatedConsoleDiagnostics {
+            generation: 8,
+            last_poll_ms: 1,
+            last_progress_ms: 1,
+            last_unit: "observe-child",
+            turns: 1,
+            progress_turns: 1,
+            observe_child_turns: 1,
+            stage_output_turns: 0,
+            disconnect_turns: 0,
+            ingress_turns: 0,
+            service_tick_turns: 0,
+            transmit_egress_turns: 0,
+            deferred_diagnostic_turns: 0,
+            command_queue: 0,
+            output_queue: 0,
+            pending_egress: false,
+            awaiting_batch_drain: false,
+            producer_open: false,
+            response_drains: 0,
+            ingress_backpressure: 0,
+            ingress_dropped: 0,
+        });
+
+        {
+            let mut pump =
+                EventPump::new(serial, timer, NullIpc, store, &mut audit).with_network(&mut genet);
+            let line = HeaplessString::try_from("ping").expect("PING fits console line");
+            pump.handle_network_line(line);
+            assert!(
+                pump.pending_net_flush.active(),
+                "generation drift must fail closed to the bounded legacy cursor"
+            );
+        }
+
         assert!(genet
             .sent
             .iter()
@@ -50242,6 +50493,148 @@ mod tests {
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[test]
+    fn cyw43_post_stack_tx_entitlement_requires_one_exact_response_acceptance() {
+        let baseline = Cyw43PostStackTxEvidence {
+            exact_cyw43_runtime: true,
+            network_service_quarantined: false,
+            reboot_pending: false,
+            recovery_required: false,
+            containment_work_pending: false,
+            physical_operator_work_pending: false,
+            physical_console_response_pending: false,
+            pending_flush_active: true,
+            pending_flush_connection_id: Some(17),
+            active_connection_id_before: Some(17),
+            authenticated_connection_id_before: Some(17),
+            active_connection_id_after: Some(17),
+            authenticated_connection_id_after: Some(17),
+            accepted_generation_before: 9,
+            accepted_frames_before: 41,
+            accepted_generation_after: 9,
+            accepted_frames_after: 42,
+            outer_operations_before_stack: 0,
+            outer_operations_after_stack: 0,
+        };
+        assert!(cyw43_post_stack_tx_entitled(baseline));
+
+        let rejected = [
+            Cyw43PostStackTxEvidence {
+                exact_cyw43_runtime: false,
+                ..baseline
+            },
+            Cyw43PostStackTxEvidence {
+                network_service_quarantined: true,
+                ..baseline
+            },
+            Cyw43PostStackTxEvidence {
+                reboot_pending: true,
+                ..baseline
+            },
+            Cyw43PostStackTxEvidence {
+                recovery_required: true,
+                ..baseline
+            },
+            Cyw43PostStackTxEvidence {
+                containment_work_pending: true,
+                ..baseline
+            },
+            Cyw43PostStackTxEvidence {
+                physical_operator_work_pending: true,
+                ..baseline
+            },
+            Cyw43PostStackTxEvidence {
+                physical_console_response_pending: true,
+                ..baseline
+            },
+            Cyw43PostStackTxEvidence {
+                pending_flush_active: false,
+                ..baseline
+            },
+            Cyw43PostStackTxEvidence {
+                pending_flush_connection_id: None,
+                ..baseline
+            },
+            Cyw43PostStackTxEvidence {
+                pending_flush_connection_id: Some(0),
+                active_connection_id_before: Some(0),
+                authenticated_connection_id_before: Some(0),
+                active_connection_id_after: Some(0),
+                authenticated_connection_id_after: Some(0),
+                ..baseline
+            },
+            Cyw43PostStackTxEvidence {
+                pending_flush_connection_id: Some(18),
+                ..baseline
+            },
+            Cyw43PostStackTxEvidence {
+                active_connection_id_before: None,
+                ..baseline
+            },
+            Cyw43PostStackTxEvidence {
+                authenticated_connection_id_before: None,
+                ..baseline
+            },
+            Cyw43PostStackTxEvidence {
+                authenticated_connection_id_before: Some(18),
+                ..baseline
+            },
+            Cyw43PostStackTxEvidence {
+                active_connection_id_after: None,
+                ..baseline
+            },
+            Cyw43PostStackTxEvidence {
+                active_connection_id_after: Some(18),
+                ..baseline
+            },
+            Cyw43PostStackTxEvidence {
+                authenticated_connection_id_after: None,
+                ..baseline
+            },
+            Cyw43PostStackTxEvidence {
+                authenticated_connection_id_after: Some(18),
+                ..baseline
+            },
+            Cyw43PostStackTxEvidence {
+                accepted_generation_before: 0,
+                accepted_generation_after: 0,
+                ..baseline
+            },
+            Cyw43PostStackTxEvidence {
+                accepted_generation_after: 10,
+                ..baseline
+            },
+            Cyw43PostStackTxEvidence {
+                accepted_frames_before: u32::MAX,
+                accepted_frames_after: u32::MAX,
+                ..baseline
+            },
+            Cyw43PostStackTxEvidence {
+                accepted_frames_after: baseline.accepted_frames_before,
+                ..baseline
+            },
+            Cyw43PostStackTxEvidence {
+                accepted_frames_after: baseline.accepted_frames_after.saturating_add(1),
+                ..baseline
+            },
+            Cyw43PostStackTxEvidence {
+                outer_operations_before_stack: 1,
+                ..baseline
+            },
+            Cyw43PostStackTxEvidence {
+                outer_operations_after_stack: 1,
+                ..baseline
+            },
+        ];
+        for evidence in rejected {
+            assert!(
+                !cyw43_post_stack_tx_entitled(evidence),
+                "unsafe or noncausal post-stack TX evidence must fail closed: {evidence:?}",
+            );
+        }
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
     fn direct_genet_causal_response_stage_rejects_fences_and_stale_identity() {
         let identity = ConsoleResponseIdentity {
             generation: 9,
@@ -50262,13 +50655,14 @@ mod tests {
             reboot_pending: false,
             containment_work_pending: false,
             physical_console_response_pending: false,
-            pending_flush_active: true,
-            pending_flush_connection_id: Some(17),
-            active_connection_id: Some(17),
-            authenticated_connection_id: Some(17),
-            exact_direct_genet_runtime: true,
-            isolated_runtime_generation: Some(9),
-            response_identity: Some(identity),
+            pending_flush_active: false,
+            identity: DirectGenetResponseIdentityEvidence {
+                active_connection_id: Some(17),
+                authenticated_connection_id: Some(17),
+                exact_direct_genet_runtime: true,
+                isolated_runtime_generation: Some(9),
+                response_identity: Some(identity),
+            },
             response_lane: Some(lane),
         };
         assert!(direct_genet_response_stage_evidence_matches(baseline));
@@ -50291,29 +50685,26 @@ mod tests {
                 ..baseline
             },
             DirectGenetResponseStageEvidence {
-                pending_flush_active: false,
+                pending_flush_active: true,
                 ..baseline
             },
             DirectGenetResponseStageEvidence {
-                pending_flush_connection_id: None,
+                identity: DirectGenetResponseIdentityEvidence {
+                    active_connection_id: None,
+                    ..baseline.identity
+                },
                 ..baseline
             },
             DirectGenetResponseStageEvidence {
-                pending_flush_connection_id: Some(18),
-                ..baseline
-            },
-            DirectGenetResponseStageEvidence {
-                active_connection_id: None,
-                ..baseline
-            },
-            DirectGenetResponseStageEvidence {
-                active_connection_id: Some(0),
-                authenticated_connection_id: Some(0),
-                pending_flush_connection_id: Some(0),
-                response_identity: Some(ConsoleResponseIdentity {
-                    generation: 9,
-                    connection_id: 0,
-                }),
+                identity: DirectGenetResponseIdentityEvidence {
+                    active_connection_id: Some(0),
+                    authenticated_connection_id: Some(0),
+                    response_identity: Some(ConsoleResponseIdentity {
+                        generation: 9,
+                        connection_id: 0,
+                    }),
+                    ..baseline.identity
+                },
                 response_lane: Some(ConsoleResponseLane {
                     connection_id: 0,
                     ..lane
@@ -50321,35 +50712,56 @@ mod tests {
                 ..baseline
             },
             DirectGenetResponseStageEvidence {
-                authenticated_connection_id: None,
+                identity: DirectGenetResponseIdentityEvidence {
+                    authenticated_connection_id: None,
+                    ..baseline.identity
+                },
                 ..baseline
             },
             DirectGenetResponseStageEvidence {
-                authenticated_connection_id: Some(18),
+                identity: DirectGenetResponseIdentityEvidence {
+                    authenticated_connection_id: Some(18),
+                    ..baseline.identity
+                },
                 ..baseline
             },
             DirectGenetResponseStageEvidence {
-                exact_direct_genet_runtime: false,
+                identity: DirectGenetResponseIdentityEvidence {
+                    exact_direct_genet_runtime: false,
+                    ..baseline.identity
+                },
                 ..baseline
             },
             DirectGenetResponseStageEvidence {
-                isolated_runtime_generation: None,
+                identity: DirectGenetResponseIdentityEvidence {
+                    isolated_runtime_generation: None,
+                    ..baseline.identity
+                },
                 ..baseline
             },
             DirectGenetResponseStageEvidence {
-                isolated_runtime_generation: Some(8),
+                identity: DirectGenetResponseIdentityEvidence {
+                    isolated_runtime_generation: Some(8),
+                    ..baseline.identity
+                },
                 ..baseline
             },
             DirectGenetResponseStageEvidence {
-                response_identity: None,
+                identity: DirectGenetResponseIdentityEvidence {
+                    response_identity: None,
+                    ..baseline.identity
+                },
                 ..baseline
             },
             DirectGenetResponseStageEvidence {
-                isolated_runtime_generation: Some(0),
-                response_identity: Some(ConsoleResponseIdentity {
-                    generation: 0,
-                    ..identity
-                }),
+                identity: DirectGenetResponseIdentityEvidence {
+                    isolated_runtime_generation: Some(0),
+                    response_identity: Some(ConsoleResponseIdentity {
+                        generation: 0,
+                        ..identity
+                    }),
+                    ..baseline.identity
+                },
                 response_lane: Some(ConsoleResponseLane {
                     generation: 0,
                     ..lane
@@ -50357,10 +50769,13 @@ mod tests {
                 ..baseline
             },
             DirectGenetResponseStageEvidence {
-                response_identity: Some(ConsoleResponseIdentity {
-                    connection_id: 18,
-                    ..identity
-                }),
+                identity: DirectGenetResponseIdentityEvidence {
+                    response_identity: Some(ConsoleResponseIdentity {
+                        connection_id: 18,
+                        ..identity
+                    }),
+                    ..baseline.identity
+                },
                 ..baseline
             },
             DirectGenetResponseStageEvidence {

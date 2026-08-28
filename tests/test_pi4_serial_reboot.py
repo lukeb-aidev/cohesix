@@ -1858,6 +1858,108 @@ def test_nettest_peer_auth_secret_is_environment_only(
     assert secret not in repr(config)
 
 
+@pytest.mark.parametrize(
+    ("snapshot", "required_lane", "expected"),
+    (
+        (NETSTATS_WIFI_BOUND, "wifi", ("wifi", "192.168.86.154", 4)),
+        (NETSTATS_GENET_BOUND, "genet", ("genet", "192.168.10.50", 4)),
+        (NETSTATS_GENET_BOUND, None, ("genet", "192.168.10.50", 4)),
+    ),
+)
+def test_nettest_peer_selects_exact_dhcp_bound_physical_lane(
+    snapshot: bytes,
+    required_lane: str | None,
+    expected: tuple[str, str, int],
+) -> None:
+    """The reusable peer selector binds one current physical lane and address."""
+
+    assert (
+        pi4_serial_reboot.select_nettest_peer_target(snapshot, required_lane)
+        == expected
+    )
+
+
+@pytest.mark.parametrize(
+    ("snapshot", "required_lane", "message"),
+    (
+        (NETSTATS_WIFI_PENDING, "wifi", "not exactly DHCP-bound"),
+        (
+            NETSTATS_WIFI_BOUND.replace(b"generation=4", b"generation=0"),
+            "wifi",
+            "not exactly DHCP-bound",
+        ),
+        (NETSTATS_WIFI_BOUND, "genet", "does not match required lane"),
+        (
+            NETSTATS_WIFI_BOUND + b"\n" + NETSTATS_WIFI_BOUND,
+            "wifi",
+            "one exact netstats network row",
+        ),
+    ),
+)
+def test_nettest_peer_selector_fails_closed_on_noncanonical_status(
+    snapshot: bytes,
+    required_lane: str,
+    message: str,
+) -> None:
+    """Pending, zero-generation, cross-lane, and ambiguous state never launch."""
+
+    with pytest.raises(RuntimeError, match=message):
+        pi4_serial_reboot.select_nettest_peer_target(snapshot, required_lane)
+
+
+def test_nettest_peer_observation_uses_canonical_window_and_always_reaps(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The gate wrapper's reusable peer lifecycle has one bound and one cleanup."""
+
+    process = FakePeerProcess()
+    events: list[tuple[str, object]] = []
+    monkeypatch.setattr(
+        pi4_serial_reboot,
+        "start_nettest_tcp_peer",
+        lambda config, target, lane: events.append(
+            ("start", (config, target, lane))
+        )
+        or process,
+    )
+    monkeypatch.setattr(
+        pi4_serial_reboot.time,
+        "sleep",
+        lambda seconds: events.append(("sleep", seconds)),
+    )
+    monkeypatch.setattr(
+        pi4_serial_reboot,
+        "finish_nettest_tcp_peer",
+        lambda child: events.append(("finish", child)) or "exit-7",
+    )
+    monkeypatch.setattr(
+        pi4_serial_reboot,
+        "stop_nettest_tcp_peer",
+        lambda child: events.append(("stop", child)),
+    )
+
+    failure = pi4_serial_reboot.observe_nettest_tcp_peer(
+        TEST_NETTEST_PEER,
+        "192.168.10.50",
+        "genet",
+    )
+
+    assert failure == "exit-7"
+    assert events == [
+        ("start", (TEST_NETTEST_PEER, "192.168.10.50", "genet")),
+        ("sleep", pi4_serial_reboot.NETTEST_OBSERVATION_S),
+        ("finish", process),
+        ("stop", process),
+    ]
+    with pytest.raises(RuntimeError, match="canonical bound"):
+        pi4_serial_reboot.observe_nettest_tcp_peer(
+            TEST_NETTEST_PEER,
+            "192.168.10.50",
+            "genet",
+            pi4_serial_reboot.NETTEST_OBSERVATION_S - 1,
+        )
+
+
 def test_nettest_peer_route_is_exactly_bound_to_requested_interface(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

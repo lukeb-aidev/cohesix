@@ -938,22 +938,34 @@ reusable ownership pattern.
   cannot erase it, and a later eligible command cannot report it again. The
   cumulative completion count cannot exceed submissions, while
   `tx_free + tx_in_flight` remains the fixed 32-descriptor active ring.
-- While an exact authenticated console response cursor is active, one retained
-  flush turn may select the next useful response unit under the same one-op,
-  two-frame, fixed-byte charge as an ordinary isolated-network turn. QEMU
-  direct-VirtIO retains its strict lower rotor: `ObserveChild`, `StageOutput`,
-  `Disconnect`, then `ServiceTick`. Direct GENET alone selects an exactly ready `StageOutput`
-  first, then an exactly ready `Disconnect`; with neither ready it alternates
-  the only blind root responsibilities, `ObserveChild` and `ServiceTick`, one
-  unit per Network visit. After the first direct-GENET Network visit observes
-  exactly one accepted authenticated command, the existing five-unit Pi quantum
-  may run `Serial -> LocalSeat -> Dispatch -> Network`, replacing only optional
-  Display with one exact response-stage unit. Display remains the next debt.
-  Stale or mismatched connection identity, saturation, physical response,
-  quarantine, containment, recovery, reboot, or no progress denies this causal
-  fifth unit. This cannot compose a child lower-unit burst, increase a manifest
-  or MCS budget, skip physical-input priority, create a poller, or grant
-  NIC/child authority.
+- QEMU direct-VirtIO retains its strict isolated lower rotor: `ObserveChild`,
+  `StageOutput`, `Disconnect`, then `ServiceTick`. Direct GENET alone selects an
+  exactly ready `StageOutput` first, then an exactly ready `Disconnect`; with
+  neither ready it alternates the only blind root responsibilities,
+  `ObserveChild` and `ServiceTick`, one unit per Network visit. After the first
+  direct-GENET Network visit observes exactly one accepted authenticated
+  command, the existing five-unit Pi quantum may run
+  `Serial -> LocalSeat -> Dispatch -> Network`, replacing only optional Display
+  with one exact response-stage unit. The direct child's generation- and
+  connection-bound response lane already retains the response through
+  `ControlCompleted` plus `OutputDrained`, so it creates no legacy TCP flush
+  cursor. Display remains the next debt. Stale or mismatched generation,
+  connection, authentication, or runtime identity fails closed to the bounded
+  legacy cursor; saturation, physical response, quarantine, containment,
+  recovery, reboot, or no progress denies the causal fifth unit. This cannot
+  compose a child lower-unit burst, increase a manifest or MCS budget, skip
+  physical-input priority, create a poller, or grant NIC/child authority.
+- CYW43 retains its connection-bound post-dispatch flush cursor because its
+  ordinary smoltcp path has no isolated `OutputDrained` proof. The normal TX
+  service opportunity precedes smoltcp. If the following cursor flush accepts
+  exactly one current-generation response frame for the same nonzero active
+  authenticated connection, and the turn has not spent its sole CYW43
+  operation, it may use the remaining ordinary `DriverServiceBudget` for one
+  immediate op7 service call. Any prior operation, zero/multiple/saturated
+  acceptance, identity drift, physical operator work, recovery, containment,
+  quarantine, or reboot denies it. The existing outer-operation claim still
+  limits the complete Network turn to one physical operation, and the 8/16
+  cursor bound remains unchanged.
 - Prioritize ARP and TCP/ICMP control traffic, but after four consecutive
   control frames service the oldest data frame so control load cannot starve
   data. Batch drain and root consumption remain independently bounded.

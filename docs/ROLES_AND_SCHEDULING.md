@@ -363,8 +363,16 @@ exactly one nonsaturated authenticated GENET command, Serial and LocalSeat run
 before Dispatch, and one exact response-stage Network unit may replace optional
 Display as the fifth unit. Display remains the next debt. Connection mismatch,
 saturation, physical response, quarantine, containment, recovery, reboot, or no
-progress denies the causal fifth unit. This changes no SC, affinity, core,
-priority, queue, child authority, or QEMU selector.
+progress denies the causal fifth unit. The exact direct-GENET response lane
+retains generation, connection, `ControlCompleted`, and `OutputDrained` proof,
+so it supersedes the weaker legacy flush cursor; any identity or runtime drift
+fails closed to that bounded cursor. CYW43 keeps its ordinary connection-bound
+cursor. If one such cursor flush accepts exactly one current-generation
+authenticated response after the turn's CYW43 operation claim remains unused,
+it may spend only the remaining ordinary driver budget on that sole operation;
+every physical-operator, recovery, containment, reboot, quarantine, identity,
+acceptance-count, or prior-operation conflict denies it. This changes no SC,
+affinity, core, priority, queue, child authority, or QEMU selector.
 
 The handoff-to-Ready response bound is evaluated in the isolated child's
 absolute CNTVCT millisecond domain, not the pump-driven HAL policy clock. Root

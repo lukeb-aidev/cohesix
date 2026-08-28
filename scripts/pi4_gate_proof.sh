@@ -10,9 +10,11 @@ ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 IMAGE_BUILD_SCRIPT="${SCRIPT_DIR}/pi4-image-build.sh"
 TRACE_NORMALIZER="${SCRIPT_DIR}/pi4_trace_normalize.py"
+SERIAL_REBOOT_HELPER="${SCRIPT_DIR}/pi4_serial_reboot.py"
 MANIFEST_PATH="${ROOT_DIR}/configs/root_task_pi4_uboot_aarch64.toml"
 VENV_DIR="${COHESIX_PI4_VENV:-${ROOT_DIR}/.venv}"
 PYTHON="${VENV_DIR}/bin/python"
+COHSH_PATH="${COHESIX_PI4_COHSH:-${ROOT_DIR}/out/cohesix/host-tools/cohsh}"
 FLASH_DISK=""
 DISK_LABEL="COHESIX"
 SERIAL_DEVICE="${COHESIX_PI4_SERIAL_DEVICE:-/dev/cu.usbserial-0001}"
@@ -95,6 +97,7 @@ CYW43_OUTPUT_SEAL=""
 SERIAL_SNAPSHOT_PATH=""
 NETWORK_CAPTURE_SNAPSHOT_PATH=""
 RUNTIME_PROOF_SNAPSHOT_PATH=""
+NETTEST_NETWORK_STATUS_OFFSET=""
 
 usage() {
     cat <<'USAGE'
@@ -108,6 +111,9 @@ Options:
                              (default: configs/root_task_pi4_uboot_aarch64.toml)
   --venv <dir>               Python virtualenv for local scripts
                              (default: <repo>/.venv)
+  --cohsh <path>             Canonical authenticated TCP client used by the
+                             generation-bound nettest peer
+                             (default: out/cohesix/host-tools/cohsh)
   --flash-disk <device|auto> Flash SD card via scripts/pi4-image-build.sh.
                              "auto" requires exactly one external disk carrying
                              the configured --disk-label.
@@ -1557,6 +1563,7 @@ wifi_dhcp_bound_seen() {
 
 wait_for_wifi_dhcp_bound() {
     local deadline
+    local command_start_bytes
     local prompt_count_before
 
     deadline=$((SECONDS + WIFI_DHCP_TIMEOUT_SECONDS))
@@ -1565,6 +1572,8 @@ wait_for_wifi_dhcp_bound() {
             return 0
         fi
         prompt_count_before="$(console_prompt_count)"
+        command_start_bytes="$(serial_snapshot_byte_count)"
+        NETTEST_NETWORK_STATUS_OFFSET="${command_start_bytes}"
         log "console command: netstats (guarded DHCP poll)"
         send_console_line "netstats"
         wait_for_prompt_after_command "${prompt_count_before}" "netstats (guarded DHCP poll)"
@@ -1593,6 +1602,113 @@ import pathlib
 import sys
 
 print(pathlib.Path(sys.argv[1]).stat().st_size)
+PY
+}
+
+required_nettest_peer_lane() {
+    if [[ "${REQUIRE_WIFI_READY}" -eq 1 && "${REQUIRE_WIRED_READY}" -eq 1 ]]; then
+        fail "nettest peer cannot require both WiFi and wired lanes"
+    fi
+    if [[ "${REQUIRE_WIFI_READY}" -eq 1 ]]; then
+        printf 'wifi'
+    elif [[ "${REQUIRE_WIRED_READY}" -eq 1 ]]; then
+        printf 'genet'
+    else
+        printf 'auto'
+    fi
+}
+
+preflight_nettest_peer() {
+    require_file "${SERIAL_REBOOT_HELPER}"
+    "${PYTHON}" - \
+      "${ROOT_DIR}" "${SERIAL_REBOOT_HELPER}" \
+      "${COHSH_PATH}" "${MANIFEST_PATH}" <<'PY'
+import importlib.util
+import pathlib
+import sys
+
+repo_raw, helper_raw, cohsh_raw, manifest_raw = sys.argv[1:]
+helper = pathlib.Path(helper_raw)
+spec = importlib.util.spec_from_file_location(
+    "cohesix_pi4_serial_reboot",
+    helper,
+)
+if spec is None or spec.loader is None:
+    raise SystemExit("nettest peer helper could not be loaded")
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+module.prepare_nettest_peer(
+    pathlib.Path(repo_raw),
+    pathlib.Path(cohsh_raw),
+    pathlib.Path(manifest_raw),
+)
+PY
+}
+
+run_nettest_peer() {
+    local snapshot_path="$1"
+    local network_status_offset="$2"
+    local required_lane="$3"
+
+    "${PYTHON}" - \
+      "${ROOT_DIR}" "${SERIAL_REBOOT_HELPER}" \
+      "${COHSH_PATH}" "${MANIFEST_PATH}" \
+      "${snapshot_path}" "${network_status_offset}" \
+      "${required_lane}" "${NETTEST_OBSERVATION_SECONDS}" <<'PY'
+import importlib.util
+import pathlib
+import sys
+import time
+
+(
+    repo_raw,
+    helper_raw,
+    cohsh_raw,
+    manifest_raw,
+    snapshot_raw,
+    offset_raw,
+    required_lane_raw,
+    observation_raw,
+) = sys.argv[1:]
+helper = pathlib.Path(helper_raw)
+spec = importlib.util.spec_from_file_location(
+    "cohesix_pi4_serial_reboot",
+    helper,
+)
+if spec is None or spec.loader is None:
+    raise SystemExit("nettest peer helper could not be loaded")
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+try:
+    observation_s = float(observation_raw)
+    if observation_s != module.NETTEST_OBSERVATION_S:
+        raise RuntimeError("nettest peer observation bound drifted")
+    snapshot = pathlib.Path(snapshot_raw).read_bytes()
+    offset = int(offset_raw, 10)
+    if offset < 0 or offset > len(snapshot):
+        raise RuntimeError("nettest peer network-status offset is invalid")
+    required_lane = None if required_lane_raw == "auto" else required_lane_raw
+    lane, target_ip, generation = module.select_nettest_peer_target(
+        snapshot[offset:],
+        required_lane,
+    )
+    config = module.prepare_nettest_peer(
+        pathlib.Path(repo_raw),
+        pathlib.Path(cohsh_raw),
+        pathlib.Path(manifest_raw),
+    )
+    failure = module.observe_nettest_tcp_peer(
+        config,
+        target_ip,
+        lane,
+        observation_s,
+    )
+except (OSError, RuntimeError, ValueError) as error:
+    time.sleep(float(observation_raw))
+    raise SystemExit(f"nettest peer failed closed: {error}") from error
+if failure is not None:
+    raise SystemExit(f"nettest peer failed closed: {failure}")
+print(f"lane={lane} target={target_ip}:31337 generation={generation} result=pass")
 PY
 }
 
@@ -1797,7 +1913,10 @@ run_capture() {
     local command
     local command_start_bytes
     local index
+    local nettest_commands=0
     local nettest_started_run_generation=""
+    local nettest_peer_lane=""
+    local nettest_peer_result=""
     local nettest_terminal=""
     local smp_activity_rate=""
     local smp_activity_samples=0
@@ -1813,6 +1932,16 @@ run_capture() {
     for ((index = 0; index < ${#EXTRA_COMMANDS[@]}; index++)); do
         commands+=("${EXTRA_COMMANDS[$index]}")
     done
+    for command in "${commands[@]}"; do
+        if [[ "${command}" == "nettest" ]]; then
+            nettest_commands=$((nettest_commands + 1))
+        fi
+    done
+    if [[ "${nettest_commands}" -gt 0 ]]; then
+        nettest_peer_lane="$(required_nettest_peer_lane)"
+        log "preflighting canonical authenticated nettest peer"
+        preflight_nettest_peer
+    fi
     [[ -e "${SERIAL_DEVICE}" ]] || fail "serial device missing: ${SERIAL_DEVICE}"
     ensure_capture_log_is_fresh
     stty -f "${SERIAL_DEVICE}" 115200 cs8 -cstopb -parenb -ixon -ixoff -crtscts raw
@@ -1851,6 +1980,9 @@ run_capture() {
         send_console_line "${command}"
         wait_for_prompt_after_command "${prompt_count_before}" "${command}"
         refresh_serial_snapshot
+        if [[ "${command}" == "netstats" ]]; then
+            NETTEST_NETWORK_STATUS_OFFSET="${command_start_bytes}"
+        fi
         if [[ "${command}" == "nettest" ]]; then
             if [[ -n "${nettest_started_run_generation}" ]]; then
                 nettest_failures+=("overlapping-admission")
@@ -1861,7 +1993,19 @@ run_capture() {
                     "${command_start_bytes}"
             )"; then
                 log "nettest admitted run_generation=${nettest_started_run_generation}; observing terminal window"
-                sleep "${NETTEST_OBSERVATION_SECONDS}"
+                if [[ -z "${NETTEST_NETWORK_STATUS_OFFSET}" ]]; then
+                    nettest_failures+=("peer-target-unavailable")
+                    log "nettest peer target unavailable: no command-bound netstats"
+                    sleep "${NETTEST_OBSERVATION_SECONDS}"
+                elif nettest_peer_result="$(run_nettest_peer \
+                  "${SERIAL_SNAPSHOT_PATH}" \
+                  "${NETTEST_NETWORK_STATUS_OFFSET}" \
+                  "${nettest_peer_lane}" 2>&1)"; then
+                    log "nettest peer ${nettest_peer_result}"
+                else
+                    nettest_failures+=("peer-failed")
+                    log "${nettest_peer_result}"
+                fi
                 continue
             else
                 nettest_started_run_generation=""
@@ -2696,6 +2840,11 @@ while [[ $# -gt 0 ]]; do
             require_arg "$1" "$#"
             VENV_DIR="$2"
             PYTHON="${VENV_DIR}/bin/python"
+            shift 2
+            ;;
+        --cohsh)
+            require_arg "$1" "$#"
+            COHSH_PATH="$2"
             shift 2
             ;;
         --flash-disk)

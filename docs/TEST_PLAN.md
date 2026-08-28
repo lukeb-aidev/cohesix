@@ -2821,19 +2821,28 @@ one retained USB keyboard turn so fresh physical input is buffered before the
 network quantum. USB service debt may request that turn but cannot itself count
 as input. `Dispatch` may consume one serial, buffered local-seat, or buffered
 network command without polling the NIC or flushing TCP. `Network` may
-admit exactly one ordinary NIC service or one retained GENET response flush and
+admit exactly one ordinary NIC service or one exact isolated response unit and
 must leave any received command buffered for a later `Dispatch` turn. One
 CYW43 admission may let the linked runtimes follow an already-authorized
 persistent op11, urgent op7, or DPC event lifetime through changed durable state
 to bounded quiescence; it cannot admit a second root parent. NIC admission, TCP
-flushing, and command dispatch must occupy distinct outer turns. A dispatched GENET command must
-schedule zero same-turn flushes and retain a cursor owned by its active
-connection. Each later
-`Network` phase consumes exactly one flush attempt, bounded to eight phases
-normally or sixteen while the display reports backlog pressure. A second
-buffered command stays behind the first cursor, and a changed or absent active
-connection rejects stale cursor work. A data-ready CYW43 connection must not
-create the GENET cursor. A response flush, exact socket/parser work,
+flushing, and command dispatch must occupy distinct ordinary outer turns. A
+dispatched exact direct-GENET command must create no legacy flush cursor: its
+generation- and connection-bound isolated response lane retains the batch
+through `ControlCompleted` and `OutputDrained`, and the fifth existing Pi unit
+may stage it directly. Generation, connection, authentication, runtime, or lane
+drift must instead retain the bounded legacy cursor. CYW43 always retains its
+connection-owned cursor; each later `Network` phase consumes exactly one flush
+attempt, bounded to eight phases normally or sixteen while the display reports
+backlog pressure. A second buffered command stays behind the first cursor, and
+a changed or absent active connection rejects stale cursor work. If one CYW43
+cursor flush accepts exactly one current-generation frame for the same nonzero
+active authenticated connection after no prior CYW43 operation, focused tests
+must prove it may use only the remaining ordinary driver budget for one op7
+service attempt. Zero, multiple, saturated, cross-generation, unauthenticated,
+stale, already-claimed, physical-operator, recovery, containment, quarantine,
+and reboot cases must fail closed, and the complete turn must still report at
+most one physical operation. A response flush, exact socket/parser work,
 runtime/root RX backlog, current valid pending or masked SDIO DPC event, or
 retained CYW43 NetData/TX continuation may retain `Network` subject to the
 compiler-declared CYW43 operation/frame/byte budgets. The 192-operation parent
@@ -6259,6 +6268,7 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
     - exactly one complete `nettest: generation=<connection> run_generation=<run> enabled=<bool> running=<bool> verdict=<none|running|pass|peer-assisted-pass|fail> tx_ok=<bool|na> udp_echo_ok=<bool|na> tcp_ok=<bool|na> console_ok=<bool|na> peer_assisted_ok=<bool|na>` status line. `OK NETTEST detail=started run_generation=<run>` admits one immutable run; only a terminal line for the same positive run generation is proof. An internal-only asynchronous log, an incomplete or truncated line, or a prior connection/run-generation verdict is not terminal proof; backend and target strings remain on the separate `nettargets:` line.
     - canonical interactive Pi diagnostics must load a strictly valid clean `pi4-image-identity.json` before opening serial and observe its exact complete build marker before the fresh root prompt. A generic marker prefix or marker from another image is not source/image provenance. This marker binds only the root image; the complete boot partition and physical media retain their separate hash/readback obligations.
     - when the compiler-declared console-network child owns TCP/IP, `nettest` must not inherit the root adapter's default `unsupported` result. Its existing 15-second generation remains peer-assisted: a physical backend requires a post-admission exact child response drain, a later NIC TX completion, later RX/TCP counter progress, matching authenticated connection identity, and listener readiness; direct VirtIO requires the same child drain but no synthetic root NIC completion. Historical traffic cannot satisfy a new run. The unchanged terminal schema reports `udp_echo_ok=false` when only peer-assisted proof is present. Native ICMP echo response is a separate reachability check and cannot be relabelled as the UDP self-test.
+    - the controlled live gate and serial helper must preflight canonical `cohsh`, manifest, credential, and workload inputs before acquiring the UART. After one positive admission they must select only the exact command-bound DHCP lease for the required physical lane, validate the corresponding host route, run one authenticated peer for the canonical observation window, always reap it, and still accept only the generation-matched target terminal. Ambiguous or stale status, wrong-lane or invalid addressing, route/input drift, peer failure, or incomplete terminal evidence fails closed; peer exit alone is never acceptance.
     - isolated child liveness triage must retain the bounded `netstats: isolated_progress`, `netstats: isolated_units`, and `netstats: isolated_state` rows. They distinguish selected child observation/output/disconnect/ingress/tick/egress/diagnostic turns, material-progress time, command/output queue depth, pending egress, response-drain state, and ingress backpressure/drop. These counters diagnose where progress stopped; they are not TCP, performance, or acceptance evidence by themselves.
     - `tx_submit=<count> tx_complete=<count> tx_free=<count> tx_in_flight=<count> tx_double_submit=<count> tx_zero_len_attempt=<count> arp_rx=<count> arp_tx=<count>`; on CYW43, `tx_complete` is the root release count from exact joined Function-2 terminals. `tx_submit > tx_complete` means an outstanding root TX owner, not a missing firmware-credit acknowledgement.
     - `wifi_assoc=<0|1> wifi_link=<0|1> eapol_rx=<count> eapol_start=<count> eapol_secure=<0|1>`
@@ -8868,9 +8878,10 @@ must cover `coh`, `cohsh`, `.coh` workloads, Hive Gateway,
 `tools/cohesix-py`, generated profile contracts, and the REST/QEMU pressure
 harnesses. None consumes routine per-Worker success rows or the private
 bootstrap cadence, so no grammar, schema, workload, or report change is
-expected. `scripts/pi4_serial_reboot.py` and its focused tests are directly
-affected by the prompt barrier and canonical peer-assisted nettest path. The
-helper tests must prove pre-UART canonical regular-file validation, exact sole
+expected. `scripts/pi4_serial_reboot.py`, `scripts/pi4_gate_proof.sh`, and their
+focused tests are directly affected by the prompt barrier and canonical
+peer-assisted nettest path. The helper and gate tests must prove pre-UART
+canonical regular-file validation, exact sole
 Queen-secret parsing, secret absence from argv/output/notes/repr, exact WiFi and
 wired DHCP-policy/address binding, exact `en0` versus canonical
 `192.168.10.1/24` `en8` host-route/subnet binding, immediate executable/script

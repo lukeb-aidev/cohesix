@@ -535,10 +535,13 @@ Gate-proof `--normalize-only` remains safe for historical logs but cannot create
 the live admission-to-terminal link.
 
 `OK NETTEST detail=started run_generation=<n>` proves only admission. The
-canonical helper validates the current exact DHCP-bound address for the
-selected WiFi or wired policy, binds the host route to `en0` or canonical
-`192.168.10.1/24` `en8` respectively, and only after that nonzero admission starts
-one asynchronous authenticated `cohsh --script scripts/cohsh/boot_v0.coh` peer.
+canonical serial helper and live gate wrapper validate the current exact
+DHCP-bound address for the selected WiFi or wired policy, bind the host route
+to `en0` or canonical `192.168.10.1/24` `en8` respectively, and only after that
+nonzero admission start one asynchronous authenticated
+`cohsh --script scripts/cohsh/boot_v0.coh` peer. The gate wrapper binds target
+selection to the latest command-scoped `netstats` row rather than accepting a
+historical address from the accumulating transcript.
 The credential exists only in the child environment, never argv or transcript.
 Wait at least 15 seconds, then issue the final `netstats` before continuing.
 The run requires later RX/TCP progress and an exact response drain, so

@@ -857,6 +857,24 @@ def stop_nettest_tcp_peer(process: subprocess.Popen[bytes]) -> None:
         pass
 
 
+def observe_nettest_tcp_peer(
+    config: NettestPeerConfig,
+    target_ip: str,
+    lane: str,
+    observation_s: float = NETTEST_OBSERVATION_S,
+) -> str | None:
+    """Run one peer across the canonical observation window and always reap it."""
+
+    if observation_s != NETTEST_OBSERVATION_S:
+        raise RuntimeError("nettest peer observation window differs from canonical bound")
+    process = start_nettest_tcp_peer(config, target_ip, lane)
+    try:
+        time.sleep(observation_s)
+        return finish_nettest_tcp_peer(process)
+    finally:
+        stop_nettest_tcp_peer(process)
+
+
 def load_expected_image_identity(
     repo: pathlib.Path,
     metadata_path: pathlib.Path,
@@ -1113,6 +1131,37 @@ def parse_netstats_network_status(
         match.group("ip").decode("ascii"),
         match.group("dhcp_phase").decode("ascii"),
     )
+
+
+def select_nettest_peer_target(
+    snapshot: bytes,
+    required_lane: str | None = None,
+) -> tuple[str, str, int]:
+    """Select one exact DHCP-bound physical lane and private peer target."""
+
+    if required_lane not in (None, "wifi", "genet"):
+        raise RuntimeError("nettest peer required lane is unsupported")
+    status = parse_netstats_network_status(snapshot)
+    if status is None:
+        raise RuntimeError("nettest peer requires one exact netstats network row")
+    generation, mode, policy, active, address_source, ip, dhcp_phase = status
+    lane = {
+        ("wifi", "wifi"): "wifi",
+        ("wired", "wired"): "genet",
+    }.get((policy, active))
+    target_ip = validate_nettest_peer_ip(ip)
+    if (
+        generation == 0
+        or mode != "dhcp"
+        or address_source != "dhcp-lease"
+        or dhcp_phase != "bound"
+        or lane is None
+        or target_ip is None
+    ):
+        raise RuntimeError("nettest peer network status is not exactly DHCP-bound")
+    if required_lane is not None and lane != required_lane:
+        raise RuntimeError("nettest peer network status does not match required lane")
+    return lane, target_ip, generation
 
 
 def parse_nettest_started_run_generation(snapshot: bytes) -> int | None:

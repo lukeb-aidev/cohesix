@@ -57,14 +57,18 @@ SwarmUI, GPU bridge, host-ticket agent, sidecar, sidecar bus, CAS tool,
 `tools/cohesix-py`, generated-profile consumers, every `.coh` script, driver
 model comparator, M26e pressure runner, benchmark workloads, and report schemas
 were reviewed and require no hand-authored compatibility change. The Pi gate
-wrapper now requires an exact same-generation `nettest` terminal after its
-bounded observation window. `pi4_serial_reboot.py` requires the clean staged
+wrapper now preflights the canonical authenticated peer, selects only its
+command-bound exact DHCP lease on the required WiFi or GENET lane, starts that
+peer after a nonzero `nettest` admission, and still requires an exact
+same-generation target terminal after the bounded observation window.
+`pi4_serial_reboot.py` requires the clean staged
 identity sidecar and exact sealed marker, validates the exact current bound
 WiFi or wired address and its host route (`en0` for WiFi, canonical
 `192.168.10.1/24` on `en8` for GENET) plus canonical `cohsh`, Queen manifest, and
-`boot_v0.coh` inputs before acquiring the UART, and launches one asynchronous
-authenticated peer only after the target admits a nonzero nettest run
-generation. The Queen secret is passed only in the child environment and is
+`boot_v0.coh` inputs before acquiring the UART. Both controlled live paths reuse
+one asynchronous authenticated peer only after the target admits a nonzero
+nettest run generation. The Queen secret is passed only in the child
+environment and is
 redacted from the serial transcript; the generation-matched target terminal
 remains authoritative and any invalid address, peer failure, or incomplete
 terminal fails closed. The helper also takes two activity samples, and the REST
