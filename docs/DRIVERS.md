@@ -940,14 +940,20 @@ reusable ownership pattern.
   `tx_free + tx_in_flight` remains the fixed 32-descriptor active ring.
 - While an exact authenticated console response cursor is active, one retained
   flush turn may select the next useful response unit under the same one-op,
-  two-frame, fixed-byte charge as an ordinary isolated-network turn. Ordinary
-  service retains its strict rotor. After actual Network activity advances the
-  exact service turn, a matching active/authenticated connection may retain the
-  root's already-guarded activation for the next separately charged response
-  turn; stale, disconnected, unauthenticated, quarantined, recovering,
-  rebooting, or no-progress state stops it. Response selection cannot compose a
-  child lower-rotor burst, increase a manifest or MCS budget, skip
-  physical-input priority, create a poller, or grant NIC/child authority.
+  two-frame, fixed-byte charge as an ordinary isolated-network turn. QEMU
+  direct-VirtIO retains its strict lower rotor: `ObserveChild`, `StageOutput`,
+  `Disconnect`, then `ServiceTick`. Direct GENET alone selects an exactly ready `StageOutput`
+  first, then an exactly ready `Disconnect`; with neither ready it alternates
+  the only blind root responsibilities, `ObserveChild` and `ServiceTick`, one
+  unit per Network visit. After the first direct-GENET Network visit observes
+  exactly one accepted authenticated command, the existing five-unit Pi quantum
+  may run `Serial -> LocalSeat -> Dispatch -> Network`, replacing only optional
+  Display with one exact response-stage unit. Display remains the next debt.
+  Stale or mismatched connection identity, saturation, physical response,
+  quarantine, containment, recovery, reboot, or no progress denies this causal
+  fifth unit. This cannot compose a child lower-unit burst, increase a manifest
+  or MCS budget, skip physical-input priority, create a poller, or grant
+  NIC/child authority.
 - Prioritize ARP and TCP/ICMP control traffic, but after four consecutive
   control frames service the oldest data frame so control load cannot starve
   data. Batch drain and root consumption remain independently bounded.
@@ -1012,15 +1018,23 @@ reusable ownership pattern.
   Pi consumed-time, latency, and throughput evidence.
 - Direct-link control page 0 reserves bytes `[0,64)` for its immutable header
   and `[64,320)` for the four 64-byte SPSC cursor records. The optional
-  direct-GENET diagnostic-v2 record occupies the formerly reserved bytes
+  direct-GENET diagnostic-v3 record occupies the formerly reserved bytes
   `[320,512)`, is exactly 192 bytes and cache-line aligned, and commits its
-  publication sequence last at record offset 184. Version 2 assigns record
-  offset 108 to cumulative `dpc_level_adoptions`, the number of badge-zero or
-  peer-turn joins of durable physical work to a direct IRQ episode; every other
-  reserved field retains its zero-validation rule. GENET is its sole writer;
+  publication sequence last at record offset 184. Version 3 retains record
+  offset 108 for cumulative `dpc_level_adoptions`, the number of badge-zero or
+  peer-turn joins of durable physical work to a direct IRQ episode. Offsets
+  160, 168, and 176 contain cumulative nonzero raw notification receipts,
+  receipts rejected by the exact GENET route filter, and their 32-bit badge
+  union. They are counted at the actual receive boundary before filtering and
+  are observational only: they cannot service or acknowledge an IRQ, admit a
+  DPC or packet, retry, or change scheduling. Count each nonzero notification
+  once at the initial ring-aware receive or a later combined poll/wait receive;
+  exclude zero/command wakes, synthetic grants, physical-level adoption, and
+  unrelated local steady waits. GENET is its sole writer;
   root accepts it only through a stable double-read with exact nonzero direct
   generation, magic, version, length, flags, reserved zeros, cursor validity,
-  and matching sequence/commit. Missing, torn, stale, wrong-generation, or
+  counter relations, badge width, and matching sequence/commit. Missing, torn,
+  stale, wrong-generation, or
   malformed data is unavailable diagnostic evidence, not a reason to change
   packet, IRQ, retry, recovery, or containment behavior. Ordinary packet turns
   do not scan the record, and page bytes `[512,4096)` remain reserved, zeroed at
@@ -1081,11 +1095,14 @@ transport:
 - The deferred physical WiFi supervisor may retain one root-control refill only
   through strict Operator/Driver alternation under the generated
   `root-control budget_us - wcet_us` CNTVCT reserve and a 64-productive-unit
-  hard cap. The selected Pi values make that strict guard 250 us
-  (`2,750 - 2,500`), so every newly admitted logical unit retains one complete
-  declared root WCET for itself and the yield/epilogue. Check the continuous
+  hard cap. The selected Pi values make that strict admission cut exactly
+  250 us (`2,750 - 2,500`); equality stops so one complete declared 2,500 us
+  leaf WCET remains inside the unchanged SC. An independent WCET audit rejected
+  using 2,500 us as the elapsed work window because a fresh leaf admitted at
+  2,499 us would have only 251 us of SC budget remaining. Check the continuous
   window before each fresh phase and retire the exact one-operation outer lease
-  before re-entry. After child Ready, an attached EventPump turn may retain the
+  before re-entry. The kernel SC remains the hard execution boundary if a
+  started unit reaches natural postponement. After child Ready, an attached EventPump turn may retain the
   window only after actual CYW43 Network activity, exactly one service-unit
   advance, an immediate Network successor, durable schedulable work, and no
   recovery, quarantine, reboot, or operator rotation. Invalid timing/config,
@@ -1094,6 +1111,13 @@ transport:
   The window replaces, rather than composes with, the earlier four-Driver
   restart burst and changes no SC value, device deadline, operation
   cardinality, owner, or QEMU/generic path.
+- The Pi direct-GENET-feature isolated authenticated console socket, used by
+  both selected Pi network modes, is an interactive control path, not a bulk
+  stream. It disables delayed ACK and Nagle so one bounded receive
+  cycle can emit its ACK immediately and a later small response cannot wait
+  behind an unacknowledged response segment. This changes no frame, queue,
+  listener, authentication, ownership, or MCS contract; QEMU retains its
+  already-qualified TCP policy.
 - After the CYW43 child is attached, one root-control invocation may traverse
   up to the existing five-turn hard cap across distinct
   `Serial`/`LocalSeat`/`Dispatch`/`Display`/`Network` phases instead of paying a

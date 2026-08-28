@@ -2391,6 +2391,9 @@ mod tests {
         diagnostic.flags = console_network_abi::DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_ACTIVE;
         diagnostic.generation = generation;
         diagnostic.publication_sequence = 3;
+        diagnostic.raw_notification_receipts = 7;
+        diagnostic.raw_notification_rejected = 1;
+        diagnostic.raw_notification_badge_or = 0x500;
         diagnostic.committed_sequence = 3;
         let mut encoded = [0u8; DIRECT_GENET_RUNTIME_DIAGNOSTIC_BYTES];
         diagnostic

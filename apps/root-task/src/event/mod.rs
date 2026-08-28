@@ -266,6 +266,7 @@ struct DirectGenetNetstatsLines {
     before_ring: Option<HeaplessString<DEFAULT_LINE_CAPACITY>>,
     irq: Option<HeaplessString<DEFAULT_LINE_CAPACITY>>,
     irq_source: Option<HeaplessString<DEFAULT_LINE_CAPACITY>>,
+    notification: Option<HeaplessString<DEFAULT_LINE_CAPACITY>>,
     dpc: Option<HeaplessString<DEFAULT_LINE_CAPACITY>>,
     dma: Option<HeaplessString<DEFAULT_LINE_CAPACITY>>,
     ring: Option<HeaplessString<DEFAULT_LINE_CAPACITY>>,
@@ -350,6 +351,7 @@ fn format_direct_genet_netstats(
             before_ring,
             irq: None,
             irq_source: None,
+            notification: None,
             dpc: None,
             dma: None,
             ring: None,
@@ -375,6 +377,12 @@ fn format_direct_genet_netstats(
             snapshot.irq_mask,
             snapshot.irq_active,
             snapshot.dpc_last_status,
+        ))),
+        notification: Some(format_message(format_args!(
+            "netstats: genet_direct_notification receipts={} rejected={} badge_or=0x{:08x}",
+            snapshot.raw_notification_receipts,
+            snapshot.raw_notification_rejected,
+            snapshot.raw_notification_badge_or,
         ))),
         dpc: Some(format_message(format_args!(
             "netstats: genet_direct_dpc turns={} budget_hits={} final_rechecks={} level_adoptions={}",
@@ -3433,6 +3441,94 @@ fn pi4_local_operator_quantum_should_stop(
         || containment_pending
         || next_phase == starting_phase
         || next_phase == admitted_phase
+}
+
+/// Side-effect-free evidence that one command admitted at Dispatch may use the
+/// fifth and final Pi rotor unit to stage its exact direct-GENET response.
+///
+/// Keeping the entire causal predicate in one value makes every fail-closed
+/// boundary independently testable. It cannot add a sixth unit, repeat the
+/// starting Network visit, or infer progress from a saturated counter.
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct DirectGenetCausalStageEntitlement {
+    starting_phase: LinkedRuntimeServicePhase,
+    admitted_phase: LinkedRuntimeServicePhase,
+    next_phase: LinkedRuntimeServicePhase,
+    network_units: usize,
+    serial_admitted: bool,
+    local_seat_admitted: bool,
+    unit_index: usize,
+    accepted_commands_before: u64,
+    accepted_commands_after: u64,
+    last_input_source: ConsoleInputSource,
+}
+
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+fn direct_genet_causal_fifth_unit_entitled(evidence: DirectGenetCausalStageEntitlement) -> bool {
+    evidence.starting_phase == LinkedRuntimeServicePhase::Network
+        && evidence.admitted_phase == LinkedRuntimeServicePhase::Dispatch
+        && evidence.next_phase == LinkedRuntimeServicePhase::Network
+        && evidence.network_units == 1
+        && evidence.serial_admitted
+        && evidence.local_seat_admitted
+        && evidence.unit_index.saturating_add(1) < PI4_LOCAL_OPERATOR_POLLS_PER_EXPLICIT_YIELD
+        && evidence.accepted_commands_before != u64::MAX
+        && evidence.accepted_commands_after == evidence.accepted_commands_before.saturating_add(1)
+        && matches!(evidence.last_input_source, ConsoleInputSource::Net)
+}
+
+/// Exact identity and fence snapshot required before the direct-GENET child
+/// may consume one staged response batch.
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct DirectGenetResponseStageEvidence {
+    network_service_quarantined: bool,
+    reboot_pending: bool,
+    containment_work_pending: bool,
+    physical_console_response_pending: bool,
+    pending_flush_active: bool,
+    pending_flush_connection_id: Option<u64>,
+    active_connection_id: Option<u64>,
+    authenticated_connection_id: Option<u64>,
+    exact_direct_genet_runtime: bool,
+    isolated_runtime_generation: Option<u64>,
+    response_identity: Option<ConsoleResponseIdentity>,
+    response_lane: Option<ConsoleResponseLane>,
+}
+
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+fn direct_genet_response_stage_evidence_matches(
+    evidence: DirectGenetResponseStageEvidence,
+) -> bool {
+    if evidence.network_service_quarantined
+        || evidence.reboot_pending
+        || evidence.containment_work_pending
+        || evidence.physical_console_response_pending
+        || !evidence.pending_flush_active
+    {
+        return false;
+    }
+    let Some(connection_id) = evidence.active_connection_id else {
+        return false;
+    };
+    let Some(identity) = evidence.response_identity else {
+        return false;
+    };
+    let Some(lane) = evidence.response_lane else {
+        return false;
+    };
+    connection_id != 0
+        && evidence.authenticated_connection_id == Some(connection_id)
+        && evidence.pending_flush_connection_id == Some(connection_id)
+        && evidence.exact_direct_genet_runtime
+        && identity.generation != 0
+        && evidence.isolated_runtime_generation == Some(identity.generation)
+        && identity.connection_id == connection_id
+        && lane.generation == identity.generation
+        && lane.connection_id == identity.connection_id
+        && lane.queued_lines != 0
+        && !lane.awaiting_batch_drain
 }
 
 #[cfg(all(feature = "kernel", feature = "net-console"))]
@@ -6557,16 +6653,40 @@ where
         }
         if pi4_local_operator_quantum_enabled(physical_driver_owner, linked_serial_owner) {
             let starting_phase = self.linked_runtime_service_phase;
-            for _ in 0..PI4_LOCAL_OPERATOR_POLLS_PER_EXPLICIT_YIELD {
+            let mut network_units = 0usize;
+            let mut serial_admitted = false;
+            let mut local_seat_admitted = self.local_seat.is_none();
+            for unit_index in 0..PI4_LOCAL_OPERATOR_POLLS_PER_EXPLICIT_YIELD {
                 let admitted_phase = self.linked_runtime_service_phase;
+                let accepted_commands_before = self.metrics.accepted_commands;
                 self.poll();
-                if pi4_local_operator_quantum_should_stop(
-                    starting_phase,
-                    admitted_phase,
-                    self.linked_runtime_service_phase,
-                    self.reboot_pending,
-                    self.deferred_containment_work_pending(),
-                ) {
+                network_units = network_units.saturating_add(usize::from(
+                    admitted_phase == LinkedRuntimeServicePhase::Network,
+                ));
+                serial_admitted |= admitted_phase == LinkedRuntimeServicePhase::Serial;
+                local_seat_admitted |= admitted_phase == LinkedRuntimeServicePhase::LocalSeat;
+                let causal_genet_stage_entitlement =
+                    direct_genet_causal_fifth_unit_entitled(DirectGenetCausalStageEntitlement {
+                        starting_phase,
+                        admitted_phase,
+                        next_phase: self.linked_runtime_service_phase,
+                        network_units,
+                        serial_admitted,
+                        local_seat_admitted,
+                        unit_index,
+                        accepted_commands_before,
+                        accepted_commands_after: self.metrics.accepted_commands,
+                        last_input_source: self.last_input_source,
+                    }) && self.linked_runtime_direct_genet_response_stage_ready();
+                if !causal_genet_stage_entitlement
+                    && pi4_local_operator_quantum_should_stop(
+                        starting_phase,
+                        admitted_phase,
+                        self.linked_runtime_service_phase,
+                        self.reboot_pending,
+                        self.deferred_containment_work_pending(),
+                    )
+                {
                     break;
                 }
             }
@@ -8108,6 +8228,8 @@ where
                 {
                     let response_flush_finished_this_turn =
                         pending_net_flush_active_before_poll && !self.pending_net_flush.active();
+                    let direct_genet_command_ready =
+                        !cyw43_lane_selected && self.linked_runtime_direct_genet_command_ready();
                     self.refresh_linked_runtime_cyw43_durable_resume();
                     let finished_response_cursor_requires_operator_rotation =
                         linked_runtime_finished_response_cursor_requires_operator_rotation(
@@ -8119,8 +8241,15 @@ where
                         self.linked_runtime_network_quantum_started_ms = None;
                         self.linked_runtime_network_quantum_started_ticks = 0;
                         self.clear_linked_runtime_network_operator_checkpoint_clock();
-                        self.linked_runtime_service_phase =
-                            self.linked_runtime_network_followup_phase();
+                        self.linked_runtime_service_phase = if direct_genet_command_ready {
+                            // Replace only the optional Display leaf. The
+                            // remaining fixed quantum is Serial -> LocalSeat ->
+                            // Dispatch, after which one exact StageOutput unit
+                            // may consume the fifth and final slot.
+                            LinkedRuntimeServicePhase::Serial
+                        } else {
+                            self.linked_runtime_network_followup_phase()
+                        };
                         return;
                     }
                     self.linked_runtime_network_consecutive_turns = self
@@ -8476,6 +8605,83 @@ where
         } else {
             LinkedRuntimeServicePhase::Serial
         }
+    }
+
+    /// Return whether the isolated direct-GENET child retained one exact
+    /// authenticated command and no physical operator currently owns the cut.
+    ///
+    /// This predicate is side-effect free. It may only skip the nonessential
+    /// Display phase inside the existing five-unit Pi quantum; Serial,
+    /// LocalSeat, and Dispatch still run before any response control can be
+    /// staged back to the child.
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    fn linked_runtime_direct_genet_command_ready(&self) -> bool {
+        if self.network_service_quarantined
+            || self.reboot_pending
+            || self.physical_console_response_pending()
+            || self.pending_net_flush.active()
+            || self.network_response_owner_active()
+            || self.stream_end_pending
+            || self.pending_stream_active()
+            || self.linked_physical_operator_work() != LinkedPhysicalOperatorWork::Idle
+        {
+            return false;
+        }
+        self.net.as_ref().is_some_and(|net| {
+            let active = net.active_console_conn_id();
+            active.is_some_and(|connection_id| connection_id != 0)
+                && active == net.authenticated_console_conn_id()
+                && net.driver_task_contract() == crate::hal::driver_task::GENET_DRIVER_TASK_CONTRACT
+                && net.isolated_console_diagnostics().is_some()
+                && net.buffered_console_lines_pending()
+        })
+    }
+
+    /// Return whether Dispatch produced one connection-matched response batch
+    /// that the isolated direct-GENET child can accept now.
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    fn linked_runtime_direct_genet_response_stage_ready(&mut self) -> bool {
+        let network_service_quarantined = self.network_service_quarantined;
+        let reboot_pending = self.reboot_pending;
+        let containment_work_pending = if network_service_quarantined || reboot_pending {
+            false
+        } else {
+            self.deferred_containment_work_pending()
+        };
+        let physical_console_response_pending = self.physical_console_response_pending();
+        let pending_flush = self.pending_net_flush;
+        if network_service_quarantined
+            || reboot_pending
+            || containment_work_pending
+            || physical_console_response_pending
+            || !pending_flush.active()
+        {
+            return false;
+        }
+        self.net.as_ref().is_some_and(|net| {
+            direct_genet_response_stage_evidence_matches(DirectGenetResponseStageEvidence {
+                network_service_quarantined,
+                reboot_pending,
+                containment_work_pending,
+                physical_console_response_pending,
+                pending_flush_active: pending_flush.active(),
+                pending_flush_connection_id: pending_flush.conn_id,
+                active_connection_id: net.active_console_conn_id(),
+                authenticated_connection_id: net.authenticated_console_conn_id(),
+                exact_direct_genet_runtime: net.driver_task_contract()
+                    == crate::hal::driver_task::GENET_DRIVER_TASK_CONTRACT,
+                isolated_runtime_generation: net
+                    .isolated_console_diagnostics()
+                    .map(|diagnostic| diagnostic.generation),
+                response_identity: net.bounded_console_response_identity(),
+                response_lane: net.console_response_lane(),
+            })
+        })
+    }
+
+    #[cfg(all(feature = "kernel", not(feature = "net-console")))]
+    const fn linked_runtime_direct_genet_response_stage_ready(&mut self) -> bool {
+        false
     }
 
     /// Admit one bounded physical-console checkpoint without closing the
@@ -27821,6 +28027,9 @@ where
                                 if let Some(line) = lines.irq_source {
                                     self.emit_console_line(line.as_str());
                                 }
+                                if let Some(line) = lines.notification {
+                                    self.emit_console_line(line.as_str());
+                                }
                                 if let Some(line) = lines.dpc {
                                     self.emit_console_line(line.as_str());
                                 }
@@ -30417,6 +30626,9 @@ mod tests {
         snapshot.rx_consumer_cursor = u64::MAX;
         snapshot.tx_producer_cursor = u64::MAX;
         snapshot.tx_consumer_cursor = u64::MAX;
+        snapshot.raw_notification_receipts = u64::MAX;
+        snapshot.raw_notification_rejected = u64::MAX;
+        snapshot.raw_notification_badge_or = u64::from(u32::MAX);
         snapshot.committed_sequence = u64::MAX;
 
         assert!(snapshot.valid_for(u64::MAX));
@@ -30436,6 +30648,11 @@ mod tests {
                 .as_str(),
             lines.irq.as_ref().expect("IRQ row").as_str(),
             lines.irq_source.as_ref().expect("IRQ source row").as_str(),
+            lines
+                .notification
+                .as_ref()
+                .expect("notification row")
+                .as_str(),
             lines.dpc.as_ref().expect("DPC row").as_str(),
             lines.dma.as_ref().expect("DMA row").as_str(),
             lines.ring.as_ref().expect("ring row").as_str(),
@@ -30448,6 +30665,7 @@ mod tests {
             "netstats: genet_direct_before_ring rx_cursor=18446744073709551615/18446744073709551615 tx_cursor=18446744073709551615/18446744073709551615 rx_packets=4294967295 tx_packets=4294967295 peer_wakes=4294967295 peer_signals=4294967295",
             "netstats: genet_direct_irq badge=0xffffffff wakes=4294967295 acks=4294967295 ack_failures=4294967295 unmask_failures=4294967295",
             "netstats: genet_direct_irq_source raw=0xffffffff mask=0x00000000 active=0xffffffff last=0xffffffff",
+            "netstats: genet_direct_notification receipts=18446744073709551615 rejected=18446744073709551615 badge_or=0xffffffff",
             "netstats: genet_direct_dpc turns=4294967295 budget_hits=4294967295 final_rechecks=4294967295 level_adoptions=4294967295",
             "netstats: genet_direct_dma rdma_prod=65535 rdma_cons=65535 tdma_prod=65535 tdma_cons=65535 rx_packets=4294967295 tx_packets=4294967295",
             "netstats: genet_direct_ring rx_prod=18446744073709551615 rx_cons=18446744073709551615 tx_prod=18446744073709551615 tx_cons=18446744073709551615 rx_valid=yes tx_valid=yes state_changes=4294967295",
@@ -36143,6 +36361,8 @@ mod tests {
         active_conn_id: Option<u64>,
         authenticated_conn_id: Option<u64>,
         response_lane: Option<ConsoleResponseLane>,
+        response_identity_generation: u64,
+        response_lane_generation: u64,
         console_service_pending: bool,
         icmp_echo_due: bool,
         cyw43_association_turn_pending: bool,
@@ -36196,6 +36416,8 @@ mod tests {
                 active_conn_id: None,
                 authenticated_conn_id: None,
                 response_lane: None,
+                response_identity_generation: 1,
+                response_lane_generation: 1,
                 console_service_pending: false,
                 icmp_echo_due: false,
                 cyw43_association_turn_pending: false,
@@ -36254,7 +36476,7 @@ mod tests {
             if let Some(capacity) = self.response_batch_capacity {
                 let connection_id = self.authenticated_conn_id.unwrap_or(0);
                 self.response_lane = Some(ConsoleResponseLane {
-                    generation: 1,
+                    generation: self.response_lane_generation,
                     connection_id,
                     queued_lines: next_queued,
                     available_lines: capacity.saturating_sub(next_queued),
@@ -36480,7 +36702,7 @@ mod tests {
                 .set(self.response_identity_reads.get().saturating_add(1));
             let connection_id = self.authenticated_conn_id?;
             (self.active_conn_id == Some(connection_id)).then_some(ConsoleResponseIdentity {
-                generation: 1,
+                generation: self.response_identity_generation,
                 connection_id,
             })
         }
@@ -49846,6 +50068,340 @@ mod tests {
             genet.polls, 1,
             "the composed physical rotation must retain exactly one GENET poll before Yield",
         );
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn direct_genet_causal_active_command_stages_response_in_the_existing_five_unit_quantum() {
+        struct LinkedRuntimeTestReset;
+
+        impl Drop for LinkedRuntimeTestReset {
+            fn drop(&mut self) {
+                crate::serial::test_end_linked_runtime_only_transport();
+            }
+        }
+
+        let _progress_guard = wifi_driver_task_progress_test_guard();
+        crate::serial::test_begin_linked_runtime_only_transport();
+        let _reset = LinkedRuntimeTestReset;
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<
+            32768,
+        >::new());
+        let timer = TestTimer::repeated(8, 1);
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut genet = FakeNet::new();
+        genet.driver_contract = crate::hal::driver_task::GENET_DRIVER_TASK_CONTRACT;
+        genet.active_conn_id = Some(17);
+        genet.authenticated_conn_id = Some(17);
+        genet.response_batch_capacity = Some(8);
+        genet.isolated_diagnostics = Some(IsolatedConsoleDiagnostics {
+            generation: 1,
+            last_poll_ms: 1,
+            last_progress_ms: 1,
+            last_unit: "observe-child",
+            turns: 1,
+            progress_turns: 1,
+            observe_child_turns: 1,
+            stage_output_turns: 0,
+            disconnect_turns: 0,
+            ingress_turns: 0,
+            service_tick_turns: 0,
+            transmit_egress_turns: 0,
+            deferred_diagnostic_turns: 0,
+            command_queue: 1,
+            output_queue: 0,
+            pending_egress: false,
+            awaiting_batch_drain: false,
+            producer_open: false,
+            response_drains: 0,
+            ingress_backpressure: 0,
+            ingress_dropped: 0,
+        });
+        let mut line = HeaplessString::new();
+        assert!(line.push_str("ping").is_ok());
+        assert!(genet
+            .lines
+            .push(ConsoleLine::for_connection(line, 1, 17))
+            .is_ok());
+        let mut local_seat = LocalSeatRuntime::new(crate::local_seat::LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 192,
+            buffer_lines: 64,
+        });
+        local_seat.mark_root_console_ready();
+
+        {
+            let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit)
+                .with_network(&mut genet)
+                .with_local_seat(&mut local_seat);
+            pump.linked_runtime_service_phase = LinkedRuntimeServicePhase::Network;
+
+            assert!(pump.poll_root_control_quantum_for_state(true, true));
+            assert_eq!(pump.metrics.accepted_commands, 1);
+            assert_eq!(
+                pump.linked_runtime_service_phase,
+                LinkedRuntimeServicePhase::Display,
+                "the skipped display remains the next ordinary debt after the causal stage"
+            );
+        }
+
+        assert_eq!(genet.polls, 1, "only the first unit may observe child work");
+        assert_eq!(
+            genet.tcp_flushes, 1,
+            "the fifth unit must consume the exact response-stage cursor"
+        );
+        assert!(genet.lines.is_empty());
+        assert!(genet
+            .sent
+            .iter()
+            .any(|line| line.as_str().starts_with("OK PING")));
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn direct_genet_causal_entitlement_rejects_noncausal_or_saturated_progress() {
+        let baseline = DirectGenetCausalStageEntitlement {
+            starting_phase: LinkedRuntimeServicePhase::Network,
+            admitted_phase: LinkedRuntimeServicePhase::Dispatch,
+            next_phase: LinkedRuntimeServicePhase::Network,
+            network_units: 1,
+            serial_admitted: true,
+            local_seat_admitted: true,
+            unit_index: 3,
+            accepted_commands_before: 41,
+            accepted_commands_after: 42,
+            last_input_source: ConsoleInputSource::Net,
+        };
+        assert!(direct_genet_causal_fifth_unit_entitled(baseline));
+
+        let rejected = [
+            DirectGenetCausalStageEntitlement {
+                starting_phase: LinkedRuntimeServicePhase::Serial,
+                ..baseline
+            },
+            DirectGenetCausalStageEntitlement {
+                admitted_phase: LinkedRuntimeServicePhase::LocalSeat,
+                ..baseline
+            },
+            DirectGenetCausalStageEntitlement {
+                next_phase: LinkedRuntimeServicePhase::Display,
+                ..baseline
+            },
+            DirectGenetCausalStageEntitlement {
+                network_units: 0,
+                ..baseline
+            },
+            DirectGenetCausalStageEntitlement {
+                network_units: 2,
+                ..baseline
+            },
+            DirectGenetCausalStageEntitlement {
+                serial_admitted: false,
+                ..baseline
+            },
+            DirectGenetCausalStageEntitlement {
+                local_seat_admitted: false,
+                ..baseline
+            },
+            DirectGenetCausalStageEntitlement {
+                unit_index: PI4_LOCAL_OPERATOR_POLLS_PER_EXPLICIT_YIELD.saturating_sub(1),
+                ..baseline
+            },
+            DirectGenetCausalStageEntitlement {
+                accepted_commands_before: u64::MAX,
+                accepted_commands_after: u64::MAX,
+                ..baseline
+            },
+            DirectGenetCausalStageEntitlement {
+                accepted_commands_after: baseline.accepted_commands_before,
+                ..baseline
+            },
+            DirectGenetCausalStageEntitlement {
+                accepted_commands_after: baseline.accepted_commands_after.saturating_add(1),
+                ..baseline
+            },
+            DirectGenetCausalStageEntitlement {
+                last_input_source: ConsoleInputSource::Serial,
+                ..baseline
+            },
+            DirectGenetCausalStageEntitlement {
+                last_input_source: ConsoleInputSource::LocalSeat,
+                ..baseline
+            },
+        ];
+        for evidence in rejected {
+            assert!(
+                !direct_genet_causal_fifth_unit_entitled(evidence),
+                "noncausal fifth-unit evidence must fail closed: {evidence:?}",
+            );
+        }
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn direct_genet_causal_response_stage_rejects_fences_and_stale_identity() {
+        let identity = ConsoleResponseIdentity {
+            generation: 9,
+            connection_id: 17,
+        };
+        let lane = ConsoleResponseLane {
+            generation: 9,
+            connection_id: 17,
+            queued_lines: 1,
+            available_lines: 7,
+            awaiting_batch_drain: false,
+            terminal_queued: true,
+            producer_open: false,
+            completed_responses: 1,
+        };
+        let baseline = DirectGenetResponseStageEvidence {
+            network_service_quarantined: false,
+            reboot_pending: false,
+            containment_work_pending: false,
+            physical_console_response_pending: false,
+            pending_flush_active: true,
+            pending_flush_connection_id: Some(17),
+            active_connection_id: Some(17),
+            authenticated_connection_id: Some(17),
+            exact_direct_genet_runtime: true,
+            isolated_runtime_generation: Some(9),
+            response_identity: Some(identity),
+            response_lane: Some(lane),
+        };
+        assert!(direct_genet_response_stage_evidence_matches(baseline));
+
+        let rejected = [
+            DirectGenetResponseStageEvidence {
+                network_service_quarantined: true,
+                ..baseline
+            },
+            DirectGenetResponseStageEvidence {
+                reboot_pending: true,
+                ..baseline
+            },
+            DirectGenetResponseStageEvidence {
+                containment_work_pending: true,
+                ..baseline
+            },
+            DirectGenetResponseStageEvidence {
+                physical_console_response_pending: true,
+                ..baseline
+            },
+            DirectGenetResponseStageEvidence {
+                pending_flush_active: false,
+                ..baseline
+            },
+            DirectGenetResponseStageEvidence {
+                pending_flush_connection_id: None,
+                ..baseline
+            },
+            DirectGenetResponseStageEvidence {
+                pending_flush_connection_id: Some(18),
+                ..baseline
+            },
+            DirectGenetResponseStageEvidence {
+                active_connection_id: None,
+                ..baseline
+            },
+            DirectGenetResponseStageEvidence {
+                active_connection_id: Some(0),
+                authenticated_connection_id: Some(0),
+                pending_flush_connection_id: Some(0),
+                response_identity: Some(ConsoleResponseIdentity {
+                    generation: 9,
+                    connection_id: 0,
+                }),
+                response_lane: Some(ConsoleResponseLane {
+                    connection_id: 0,
+                    ..lane
+                }),
+                ..baseline
+            },
+            DirectGenetResponseStageEvidence {
+                authenticated_connection_id: None,
+                ..baseline
+            },
+            DirectGenetResponseStageEvidence {
+                authenticated_connection_id: Some(18),
+                ..baseline
+            },
+            DirectGenetResponseStageEvidence {
+                exact_direct_genet_runtime: false,
+                ..baseline
+            },
+            DirectGenetResponseStageEvidence {
+                isolated_runtime_generation: None,
+                ..baseline
+            },
+            DirectGenetResponseStageEvidence {
+                isolated_runtime_generation: Some(8),
+                ..baseline
+            },
+            DirectGenetResponseStageEvidence {
+                response_identity: None,
+                ..baseline
+            },
+            DirectGenetResponseStageEvidence {
+                isolated_runtime_generation: Some(0),
+                response_identity: Some(ConsoleResponseIdentity {
+                    generation: 0,
+                    ..identity
+                }),
+                response_lane: Some(ConsoleResponseLane {
+                    generation: 0,
+                    ..lane
+                }),
+                ..baseline
+            },
+            DirectGenetResponseStageEvidence {
+                response_identity: Some(ConsoleResponseIdentity {
+                    connection_id: 18,
+                    ..identity
+                }),
+                ..baseline
+            },
+            DirectGenetResponseStageEvidence {
+                response_lane: None,
+                ..baseline
+            },
+            DirectGenetResponseStageEvidence {
+                response_lane: Some(ConsoleResponseLane {
+                    generation: identity.generation.saturating_sub(1),
+                    ..lane
+                }),
+                ..baseline
+            },
+            DirectGenetResponseStageEvidence {
+                response_lane: Some(ConsoleResponseLane {
+                    connection_id: 18,
+                    ..lane
+                }),
+                ..baseline
+            },
+            DirectGenetResponseStageEvidence {
+                response_lane: Some(ConsoleResponseLane {
+                    queued_lines: 0,
+                    ..lane
+                }),
+                ..baseline
+            },
+            DirectGenetResponseStageEvidence {
+                response_lane: Some(ConsoleResponseLane {
+                    awaiting_batch_drain: true,
+                    ..lane
+                }),
+                ..baseline
+            },
+        ];
+        for evidence in rejected {
+            assert!(
+                !direct_genet_response_stage_evidence_matches(evidence),
+                "unsafe or stale response-stage evidence must fail closed: {evidence:?}",
+            );
+        }
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]

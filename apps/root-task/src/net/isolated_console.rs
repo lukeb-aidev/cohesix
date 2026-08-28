@@ -29,7 +29,7 @@ use super::ConsoleNetConfig;
 #[cfg(feature = "net-backend-virtio")]
 use super::NetDeviceCounters;
 use super::{
-    select_isolated_direct_network_turn, select_isolated_direct_response_turn,
+    select_isolated_direct_network_turn_for_contract, select_isolated_direct_response_turn,
     select_isolated_network_turn, select_isolated_response_turn, ConsoleLine,
     IsolatedConsoleDiagnostics, IsolatedNetworkLowerCursor, IsolatedNetworkLowerUnit,
     IsolatedNetworkTurnOutcome, IsolatedNetworkTurnSelection, IsolatedNetworkTurnUnit,
@@ -1378,6 +1378,18 @@ impl<D: NetDevice> IsolatedNetworkConsole<D> {
         }
     }
 
+    fn disconnect_stage_ready(&self) -> bool {
+        let Some(connection_id) = self.active_connection else {
+            return false;
+        };
+        self.disconnect_requested
+            && !self.disconnect_issued
+            && self.response_lane.is_none()
+            && self.output.is_empty()
+            && self.runtime.control_available()
+            && (!self.output_issued || self.runtime.console_output_drained(connection_id))
+    }
+
     fn refresh_device_counters(&mut self) {
         self.telemetry.tx_drops = self.device.tx_drop_count();
         refresh_isolated_device_counters(&mut self.counters, &self.device);
@@ -1603,7 +1615,17 @@ impl<D: NetDevice> NetPoller for IsolatedNetworkConsole<D> {
                 self.fail_closed("direct-root-data-plane-state");
                 return false;
             }
-            select_isolated_direct_network_turn(self.lower_cursor)
+            let stage_output_ready = !self.output.is_empty()
+                && self.runtime.control_available()
+                && self
+                    .response_lane
+                    .is_none_or(|lane| lane.awaiting_batch.is_none());
+            select_isolated_direct_network_turn_for_contract(
+                D::driver_task_contract() == crate::hal::driver_task::GENET_DRIVER_TASK_CONTRACT,
+                stage_output_ready,
+                self.disconnect_stage_ready(),
+                self.lower_cursor,
+            )
         } else {
             select_isolated_network_turn(
                 self.device.isolated_deferred_tx_diagnostic_pending(),

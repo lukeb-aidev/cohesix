@@ -1420,7 +1420,7 @@ pub const DIRECT_GENET_RUNTIME_DIAGNOSTIC_COMMIT_OFFSET: usize = 184;
 /// Direct-GENET runtime diagnostic magic (`CNGD`).
 pub const DIRECT_GENET_RUNTIME_DIAGNOSTIC_MAGIC: u32 = 0x434e_4744;
 /// Direct-GENET runtime diagnostic layout version.
-pub const DIRECT_GENET_RUNTIME_DIAGNOSTIC_VERSION: u16 = 2;
+pub const DIRECT_GENET_RUNTIME_DIAGNOSTIC_VERSION: u16 = 3;
 /// Diagnostic flag: the isolated GENET runtime completed initialization.
 pub const DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_INITIALIZED: u32 = 1 << 0;
 /// Diagnostic flag: the exact direct-link generation is active.
@@ -1663,8 +1663,12 @@ pub struct DirectGenetRuntimeDiagnostic {
     pub tx_producer_poison: u32,
     /// TX-consumer poison reason when available, otherwise zero.
     pub tx_consumer_poison: u32,
-    /// Reserved; zero.
-    pub reserved: [u64; 3],
+    /// Nonzero notification badges returned by the runtime receive boundary.
+    pub raw_notification_receipts: u64,
+    /// Raw notification receipts rejected by the exact GENET badge filter.
+    pub raw_notification_rejected: u64,
+    /// Bitwise OR of every raw notification badge returned to the runtime.
+    pub raw_notification_badge_or: u64,
     /// Sequence-last commit, equal to [`Self::publication_sequence`].
     pub committed_sequence: u64,
 }
@@ -1711,7 +1715,9 @@ impl DirectGenetRuntimeDiagnostic {
             rx_consumer_poison: 0,
             tx_producer_poison: 0,
             tx_consumer_poison: 0,
-            reserved: [0; 3],
+            raw_notification_receipts: 0,
+            raw_notification_rejected: 0,
+            raw_notification_badge_or: 0,
             committed_sequence: 0,
         }
     }
@@ -1728,9 +1734,9 @@ impl DirectGenetRuntimeDiagnostic {
             && self.len as usize == DIRECT_GENET_RUNTIME_DIAGNOSTIC_BYTES
             && self.flags & !DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAGS == 0
             && self.reserved0 == 0
-            && self.reserved[0] == 0
-            && self.reserved[1] == 0
-            && self.reserved[2] == 0
+            && self.raw_notification_rejected <= self.raw_notification_receipts
+            && self.raw_notification_badge_or <= u32::MAX as u64
+            && ((self.raw_notification_receipts == 0) == (self.raw_notification_badge_or == 0))
             && generation != 0
             && self.generation == generation
             && self.publication_sequence != 0
@@ -1791,7 +1797,9 @@ impl DirectGenetRuntimeDiagnostic {
         output[148..152].copy_from_slice(&self.rx_consumer_poison.to_le_bytes());
         output[152..156].copy_from_slice(&self.tx_producer_poison.to_le_bytes());
         output[156..160].copy_from_slice(&self.tx_consumer_poison.to_le_bytes());
-        encode_u64_array(output, 160, &self.reserved);
+        output[160..168].copy_from_slice(&self.raw_notification_receipts.to_le_bytes());
+        output[168..176].copy_from_slice(&self.raw_notification_rejected.to_le_bytes());
+        output[176..184].copy_from_slice(&self.raw_notification_badge_or.to_le_bytes());
         output[DIRECT_GENET_RUNTIME_DIAGNOSTIC_COMMIT_OFFSET
             ..DIRECT_GENET_RUNTIME_DIAGNOSTIC_COMMIT_OFFSET + 8]
             .copy_from_slice(&self.committed_sequence.to_le_bytes());
@@ -1841,7 +1849,9 @@ impl DirectGenetRuntimeDiagnostic {
             rx_consumer_poison: read_u32(input, 148),
             tx_producer_poison: read_u32(input, 152),
             tx_consumer_poison: read_u32(input, 156),
-            reserved: decode_u64_array(input, 160),
+            raw_notification_receipts: read_u64(input, 160),
+            raw_notification_rejected: read_u64(input, 168),
+            raw_notification_badge_or: read_u64(input, 176),
             committed_sequence: read_u64(input, DIRECT_GENET_RUNTIME_DIAGNOSTIC_COMMIT_OFFSET),
         };
         if record.valid_for(generation) {
@@ -4892,6 +4902,9 @@ mod tests {
         diagnostic.rx_consumer_cursor = 7;
         diagnostic.tx_producer_cursor = 6;
         diagnostic.tx_consumer_cursor = 6;
+        diagnostic.raw_notification_receipts = 9;
+        diagnostic.raw_notification_rejected = 1;
+        diagnostic.raw_notification_badge_or = (1 << 10) | (1 << 8);
         diagnostic.committed_sequence = 3;
         assert!(diagnostic.valid_for(7));
 
@@ -4900,7 +4913,22 @@ mod tests {
         assert_eq!(
             &encoded[108..112],
             &1u32.to_le_bytes(),
-            "diagnostic v2 assigns raw record offset 108 to level adoptions",
+            "diagnostic v3 retains raw record offset 108 for level adoptions",
+        );
+        assert_eq!(
+            &encoded[160..168],
+            &9u64.to_le_bytes(),
+            "diagnostic v3 assigns offset 160 to raw notification receipts",
+        );
+        assert_eq!(
+            &encoded[168..176],
+            &1u64.to_le_bytes(),
+            "diagnostic v3 assigns offset 168 to rejected raw notifications",
+        );
+        assert_eq!(
+            &encoded[176..184],
+            &0x500u64.to_le_bytes(),
+            "diagnostic v3 assigns offset 176 to the raw badge union",
         );
         assert_eq!(
             DirectGenetRuntimeDiagnostic::decode(&encoded, 7),
@@ -4924,6 +4952,40 @@ mod tests {
         assert_eq!(
             DirectGenetRuntimeDiagnostic::decode(&encoded, 7),
             Err(DirectGenetError::InvalidLayout)
+        );
+
+        let mut rejected_exceeds_receipts = diagnostic;
+        rejected_exceeds_receipts.raw_notification_rejected =
+            rejected_exceeds_receipts.raw_notification_receipts + 1;
+        assert!(!rejected_exceeds_receipts.valid_for(7));
+        assert_eq!(
+            rejected_exceeds_receipts.encode(&mut encoded),
+            Err(DirectGenetError::InvalidLayout),
+        );
+
+        let mut badge_exceeds_sel4_word = diagnostic;
+        badge_exceeds_sel4_word.raw_notification_badge_or = u64::from(u32::MAX) + 1;
+        assert!(!badge_exceeds_sel4_word.valid_for(7));
+        assert_eq!(
+            badge_exceeds_sel4_word.encode(&mut encoded),
+            Err(DirectGenetError::InvalidLayout),
+        );
+
+        let mut badge_without_receipt = diagnostic;
+        badge_without_receipt.raw_notification_receipts = 0;
+        badge_without_receipt.raw_notification_rejected = 0;
+        assert!(!badge_without_receipt.valid_for(7));
+        assert_eq!(
+            badge_without_receipt.encode(&mut encoded),
+            Err(DirectGenetError::InvalidLayout),
+        );
+
+        let mut receipt_without_badge = diagnostic;
+        receipt_without_badge.raw_notification_badge_or = 0;
+        assert!(!receipt_without_badge.valid_for(7));
+        assert_eq!(
+            receipt_without_badge.encode(&mut encoded),
+            Err(DirectGenetError::InvalidLayout),
         );
     }
 

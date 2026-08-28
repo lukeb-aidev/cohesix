@@ -526,25 +526,31 @@ create missing acceptance evidence. `--require-wifi-ready` inserts the verbose
 command immediately before compact causal triage and then requires its
 command-bound DPC proof. `pi4_serial_reboot.py` remains the canonical interactive
 reboot helper and additionally compares any observed asynchronous result with
-the final generation-tagged status. It also refuses to begin live evidence
-unless the exact clean identity-sidecar marker is observed. The gate wrapper
-remains the canonical path for a controlled concurrent serial/pcap proof.
+the final generation-tagged status. Before acquiring the UART for diagnostics,
+it validates the exact clean identity sidecar, canonical `cohsh`, Queen
+manifest, and `boot_v0.coh` peer inputs. It refuses to begin live evidence
+unless the sidecar's exact sealed marker is observed. The gate wrapper remains
+the canonical path for a controlled concurrent serial/pcap proof.
 Gate-proof `--normalize-only` remains safe for historical logs but cannot create
 the live admission-to-terminal link.
 
-`OK NETTEST detail=started run_generation=<n>` proves only admission. Wait at
-least 15 seconds, then issue the final `netstats` before continuing. For a
-post-DHCP isolated-console profile, drive one authenticated `cohsh` command
-during that observation window; the serial-only helper deliberately does not
-manufacture peer traffic. The run requires later RX/TCP progress and an exact
-response drain, so historical traffic or an idle previously authenticated
-connection cannot pass. The final command must contain a complete, untruncated
+`OK NETTEST detail=started run_generation=<n>` proves only admission. The
+canonical helper validates the current exact DHCP-bound address for the
+selected WiFi or wired policy, binds the host route to `en0` or canonical
+`192.168.10.1/24` `en8` respectively, and only after that nonzero admission starts
+one asynchronous authenticated `cohsh --script scripts/cohsh/boot_v0.coh` peer.
+The credential exists only in the child environment, never argv or transcript.
+Wait at least 15 seconds, then issue the final `netstats` before continuing.
+The run requires later RX/TCP progress and an exact response drain, so
+historical traffic or an idle previously authenticated connection cannot pass.
+The final command must contain a complete, untruncated
 `nettest: generation=<connection> run_generation=<run> ... running=false verdict=<pass|peer-assisted-pass|fail> ...`
 line whose run generation matches the admitted ACK. The standard serial reboot
 helper performs a 17-second observation window, treats an asynchronous internal
-log as optional corroboration, and fails closed on a missing, running,
-mismatched, incomplete, truncated, or failed final `netstats` verdict while
-still collecting the remaining diagnostics.
+log and the host peer's successful exit as corroboration only, and fails closed
+on an invalid/unbound peer address, peer launch/exit failure, or a missing,
+running, mismatched, incomplete, truncated, or failed final `netstats` verdict
+while still collecting the remaining diagnostics.
 
 For the Wi-Fi lane, that helper does not treat the first root prompt as
 bootstrap completion. It also treats the atomic 8a-through-8h
@@ -1028,12 +1034,13 @@ removes all 32 external console mapping caps before anchor revoke.
 Root-mediated packet service never reopens as a fallback.
 
 When a direct boot reaches READY but packet progress stops, run one `netstats`
-before further active network commands and retain its ten ordered
+before further active network commands and retain its eleven ordered
 `genet_direct*` rows. That command takes a stable pre-replay sample, issues one
 exact generation-bound idempotent `DGHO`, and samples the replacement diagnostic
 before normal post-command idle service. Compare IRQ wake/ack and raw/mask/
-active source state, DPC turns, RDMA/TDMA indices, direct RX/TX cursors and
-packet counts, peer hints, and poison state. A new RX or cursor delta after the
+active source state, receive-boundary notification receipts/rejections/badge
+union, DPC turns, RDMA/TDMA indices, direct RX/TX cursors and packet counts,
+peer hints, and poison state. A new RX or cursor delta after the
 replay distinguishes a missed ordinary wake from a permanently idle hardware
 producer, but the command is a causal probe: waking GENET may itself let the
 existing idle path drain durable RX. Do not describe it as passive latency or
@@ -1098,11 +1105,16 @@ final shared-page-only observation, and rejects zero, pre-resume, at-boundary,
 late, missing, replayed, drifted, or clock-invalid Ready without NIC work or
 retry. The same boot's 6,324 productive Driver turns and approximately 20 ms
 cadence motivate a separately bounded physical-WiFi activation window. Its Pi
-admission cut is the generated `2,750 - 2,500 = 250 us` SC-minus-WCET reserve,
-with a 64-productive-unit cap; after service readiness, only an actually
-productive CYW43 Network unit whose exact successor remains Network may retain
-that window. Source or image checks cannot claim its hardware speedup. For the
-next exact-image test, require listener
+admission cut is the generated `budget_us - wcet_us = 250 us` inside the
+unchanged 2,750 us SC, with a 64-productive-unit cap. Equality stops new-leaf
+admission, preserving one complete declared 2,500 us WCET. An independent WCET
+audit rejected the proposed 2,500 us elapsed work window because admission at
+2,499 us could leave only 251 us for the fresh leaf. After service readiness,
+only an actually productive CYW43 Network unit whose exact successor remains
+Network may retain that window. Source or image checks cannot claim its hardware
+speedup. The isolated console socket also disables delayed
+ACK and Nagle, but only a fresh capture can show how much of the measured TCP
+cadence that removes. For the next exact-image test, require listener
 Ready, port 31337 reachability, authenticated `cohsh`, focused `.coh` scripts,
 and measured boot/network performance before promotion. The August 10 accepted
 boots remain compatibility comparators only.

@@ -711,7 +711,25 @@ tier = "non-claiming"
 evidence_class = "diagnostic"
 scope = "conditional"
 targets = ["pi4"]
-description = "Freeze the target-discovered driver-task MCS/ABI and Pi profile invariants plus the direct GENET console handoff after the Pi canary."
+description = "Run the complete Pi-feature root-task library suite as the non-claiming Pi convergence dispatch after the Pi canary, including the direct_genet_causal_* response-selector happy/negative matrix; Stage 1 retains the independently claiming common-host dispatch."
+command = "cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib -- --test-threads=1"
+timeout_seconds = 3600
+trigger_paths = ["apps/root-task/src/**", "apps/root-task/Cargo.toml", "crates/console-network-abi/**", "crates/pi4-driver-abi/**"]
+expected_evidence = ["focused-regression-result"]
+test_policy = "nonzero"
+minimum_test_count = 1
+allow_duplicate_command = true
+convergence_focuses = ["pi4-driver"]
+convergence_phase = "focused-regression"
+
+[[action]]
+id = "diagnostic.guard-pi4-driver-contracts"
+stage = 0
+tier = "non-claiming"
+evidence_class = "diagnostic"
+scope = "conditional"
+targets = ["pi4"]
+description = "Freeze the target-discovered driver-task MCS/ABI and Pi profile invariants plus the direct GENET console handoff contract after the Pi canary."
 command = "cargo test -p root-task --no-default-features --test driver_task_mcs -- --test-threads=1 && cargo test -p coh-rtc --test pi4_profile && cargo test -p console-network-runtime --features direct-genet && cargo test -p root-task --test direct_genet_network_phasing"
 timeout_seconds = 900
 trigger_paths = ["apps/pi4-driver-runtime/**", "crates/pi4-driver-abi/**", "apps/console-network-runtime/**", "crates/console-network-abi/**", "apps/root-task/src/hal/pi4_*.rs", "apps/root-task/src/hal/console_network.rs", "apps/root-task/src/hal/driver_task.rs", "apps/root-task/src/hal/mod.rs", "apps/root-task/src/drivers/driver_task_net.rs", "apps/root-task/tests/direct_genet_network_phasing.rs"]

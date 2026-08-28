@@ -327,22 +327,44 @@ refill across productive logical turns only inside a continuous CNTVCT window.
 It alternates exactly one Operator and one Driver, checks admission before both,
 retires each one-operation Driver finalizer before re-entry, and stops before
 the generated root-control `budget_us - wcet_us` reserve or after 64 productive
-units. The selected Pi values make that strict elapsed-time cut 250 us
-(`2,750 - 2,500`), leaving one complete declared 2,500 us root WCET for the
-fresh logical unit plus yield/epilogue. A missing, zero, backwards, drifted, or
-otherwise invalid counter/configuration permits one legacy logical turn before
-yielding, preserving liveness. After service readiness, an attached Network
-turn may retain the same window only when EventPump proves actual network
-activity, exactly one CYW43 service-unit advance, an immediate Network
-successor, and either durable schedulable physical work or an active response
-cursor whose nonzero connection identity exactly matches both the active and
-authenticated session. The response case selects only the next separately
-charged bounded Network turn; it does not burst the isolated child's ordinary
-lower rotor. Recovery, quarantine, reboot, operator rotation, stale identity,
-idle, wait, nonprogress, handoff, pressure, fault, terminal, or any failed token
-yields and resets. This replaces the former pair-restart Driver burst, changes
-no generated temporal value, and does not apply to QEMU or generic root
-control.
+units. The selected Pi values make that strict elapsed-time cut exactly 250 us
+(`2,750 - 2,500`); equality stops new-leaf admission so one complete declared
+2,500 us WCET remains inside the unchanged SC. An independent WCET audit
+rejected the proposed 2,500 us work-window interpretation: it could admit a
+fresh leaf at 2,499 us elapsed with only 251 us of SC budget remaining.
+A missing, zero, backwards, drifted, or otherwise invalid counter/configuration
+permits one legacy logical turn before yielding, preserving liveness. After
+service readiness, an attached Network turn may retain the same window only
+when EventPump proves actual network activity, exactly one CYW43 service-unit
+advance, an immediate Network successor, and either durable schedulable
+physical work or an active response cursor whose nonzero connection identity
+exactly matches both the active and authenticated session. The response case
+selects only the next separately charged bounded Network turn; it does not
+burst the isolated child's ordinary lower rotor. Recovery, quarantine, reboot,
+operator rotation, stale identity, idle, wait, nonprogress, handoff, pressure,
+fault, terminal, or any failed token yields and resets. The unchanged SC and
+natural-postpone policy remain the hard execution boundary. This replaces the
+former pair-restart Driver burst, changes no generated temporal value, and does
+not apply to QEMU or generic root control.
+
+The Pi direct-GENET-feature authenticated console's isolated TCP socket,
+shared by the selected WiFi and wired modes, disables delayed ACK and Nagle for
+the bounded interactive request/response protocol. This keeps its transport ACK
+in the receive-coupled cycle and prevents one small response from waiting behind
+an unacknowledged segment; it does not create another listener, queue, transport
+owner, or scheduling authority. QEMU retains its already-qualified TCP policy.
+
+QEMU direct-VirtIO retains the strict lower rotor: `ObserveChild`,
+`StageOutput`, `Disconnect`, then `ServiceTick`. Direct GENET alone selects an exact
+ready `StageOutput`, then an exact ready `Disconnect`; when neither is ready it
+alternates `ObserveChild` and `ServiceTick`, exactly one unit per Network visit.
+When the first Network visit of an existing five-unit Pi root quantum observes
+exactly one nonsaturated authenticated GENET command, Serial and LocalSeat run
+before Dispatch, and one exact response-stage Network unit may replace optional
+Display as the fifth unit. Display remains the next debt. Connection mismatch,
+saturation, physical response, quarantine, containment, recovery, reboot, or no
+progress denies the causal fifth unit. This changes no SC, affinity, core,
+priority, queue, child authority, or QEMU selector.
 
 The handoff-to-Ready response bound is evaluated in the isolated child's
 absolute CNTVCT millisecond domain, not the pump-driven HAL policy clock. Root

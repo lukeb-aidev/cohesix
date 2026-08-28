@@ -255,18 +255,23 @@ Within control page 0, bytes `[0,64)` hold the immutable control header and
 bytes `[64,320)` hold the four 64-byte RX-producer, RX-consumer, TX-producer,
 and TX-consumer records. Console-network ABI v5 additionally assigns the
 formerly reserved bytes `[320,512)` to an optional, separately versioned
-direct-GENET diagnostic-v2 record. The record is exactly 192 bytes, aligned to
-64 bytes, assigns record-relative offset 108 to cumulative
+direct-GENET diagnostic-v3 record. The record is exactly 192 bytes, aligned to
+64 bytes, retains record-relative offset 108 for cumulative
 `dpc_level_adoptions`, and publishes its nonzero sequence last at
-record-relative offset 184 (control-page offset 504). The counter records
-badge-zero or peer-turn joins of durable physical work to the same sole-owner
-direct IRQ episode and grants no work authority. The GENET child is its sole
-writer. Root accepts
-only two identical stable commit observations around a bounded copy and an
-exact match to the live nonzero direct generation; magic, version, length,
-flags, reserved zeros, IRQ-mask relation, cursor-validity rules, and
-sequence/commit must all validate. Older or missing publications remain
-compatible unavailable evidence rather than authorizing an alternate path.
+record-relative offset 184 (control-page offset 504). Offsets 160, 168, and 176
+hold cumulative nonzero receive-boundary notification receipts, receipts
+rejected by the exact GENET badge filter, and the bitwise OR of every received
+badge. The counts are sampled before filtering and grant no DPC, packet,
+IRQ-acknowledgement, retry, or scheduling authority. Each actual nonzero GENET
+notification is counted once at the initial ring-aware receive or a later
+combined poll/wait receive; zero/command wakes, synthetic grants, physical-level
+adoption, and unrelated local steady waits are excluded. The GENET child is
+the sole writer. Root accepts only two identical stable commit observations around
+a bounded copy and an exact match to the live nonzero direct generation;
+magic, version, length, flags, counter relations, 32-bit badge width,
+IRQ-mask relation, cursor-validity rules, and sequence/commit must all
+validate. Older or missing publications remain compatible unavailable
+evidence rather than authorizing an alternate path.
 Bytes `[512,4096)` remain reserved and non-authoritative.
 
 The record is not inspected during ordinary direct packet service. One

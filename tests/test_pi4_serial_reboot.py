@@ -37,6 +37,7 @@ assert SPEC is not None
 pi4_serial_reboot = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader is not None
 SPEC.loader.exec_module(pi4_serial_reboot)
+REAL_START_NETTEST_TCP_PEER = pi4_serial_reboot.start_nettest_tcp_peer
 
 
 ROOT_MENU_SAVED = b"""
@@ -142,6 +143,11 @@ NETTEST_FAILURE_RESULT = (
     b"tx_ok=true udp_echo_ok=false tcp_ok=false console_ok=true "
     b"peer_assisted_ok=false result=fail\n"
 )
+NETTEST_PEER_ASSISTED_RESULT = (
+    b"[net-selftest] result generation=14 run_generation=31 "
+    b"tx_ok=true udp_echo_ok=false tcp_ok=false console_ok=true "
+    b"peer_assisted_ok=true result=peer-assisted-pass\n"
+)
 NETSTATS_OK = b"OK NETSTATS\ncohesix>"
 NETSTATS_WIFI_PENDING = (
     b"netstats: generation=4 mode=dhcp policy=wifi active=wifi standby=none "
@@ -151,6 +157,11 @@ NETSTATS_WIFI_PENDING = (
 NETSTATS_WIFI_BOUND = (
     b"netstats: generation=4 mode=dhcp policy=wifi active=wifi standby=none "
     b"addr_src=dhcp-lease ip=192.168.86.154 gateway=192.168.86.1 dhcp=bound\n"
+    + NETSTATS_OK
+)
+NETSTATS_GENET_BOUND = (
+    b"netstats: generation=4 mode=dhcp policy=wired active=wired standby=none "
+    b"addr_src=dhcp-lease ip=192.168.10.50 gateway=192.168.10.1 dhcp=bound\n"
     + NETSTATS_OK
 )
 NETTEST_STATUS_PASS = (
@@ -163,8 +174,63 @@ NETTEST_STATUS_FAILURE = (
     b"verdict=fail tx_ok=true udp_echo_ok=false tcp_ok=false "
     b"console_ok=true peer_assisted_ok=false\n"
 )
+NETTEST_STATUS_PEER_ASSISTED = (
+    b"nettest: generation=14 run_generation=31 enabled=true running=false "
+    b"verdict=peer-assisted-pass tx_ok=true udp_echo_ok=false tcp_ok=false "
+    b"console_ok=true peer_assisted_ok=true\n"
+)
 NETSTATS_TERMINAL_PASS = NETTEST_STATUS_PASS + NETSTATS_OK
 NETSTATS_TERMINAL_FAILURE = NETTEST_STATUS_FAILURE + NETSTATS_OK
+NETSTATS_TERMINAL_PEER_ASSISTED = NETTEST_STATUS_PEER_ASSISTED + NETSTATS_OK
+TEST_NETTEST_PEER = pi4_serial_reboot.NettestPeerConfig(
+    repo=pathlib.Path("/test/repo"),
+    cohsh=pathlib.Path("/test/repo/cohsh"),
+    script=pathlib.Path("/test/repo/scripts/cohsh/boot_v0.coh"),
+    auth_token="test-console-secret",
+)
+
+
+class FakePeerProcess:
+    """Bounded successful nettest peer child used by diagnostic tests."""
+
+    def __init__(self, return_code: int = 0) -> None:
+        self.return_code = return_code
+        self.terminated = False
+        self.killed = False
+
+    def wait(self, *, timeout: float) -> int:
+        del timeout
+        return self.return_code
+
+    def poll(self) -> int | None:
+        return self.return_code
+
+    def terminate(self) -> None:
+        self.terminated = True
+
+    def kill(self) -> None:
+        self.killed = True
+
+
+@pytest.fixture(autouse=True)
+def stub_nettest_peer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> list[tuple[pi4_serial_reboot.NettestPeerConfig, str]]:
+    """Keep serial-state tests hermetic while recording each peer launch."""
+
+    launches: list[tuple[pi4_serial_reboot.NettestPeerConfig, str]] = []
+
+    def start(
+        config: pi4_serial_reboot.NettestPeerConfig,
+        target_ip: str,
+        lane: str,
+    ) -> FakePeerProcess:
+        assert lane in {"wifi", "genet"}
+        launches.append((config, target_ip))
+        return FakePeerProcess()
+
+    monkeypatch.setattr(pi4_serial_reboot, "start_nettest_tcp_peer", start)
+    return launches
 
 
 def wifi_supervisor_record(
@@ -665,7 +731,11 @@ def test_wifi_supervisor_parser_treats_runtime_recovery_as_proof_failure() -> No
     assert repeated_recovery_error == "recovery-limit-exceeded"
 
 
-def test_wifi_diagnostics_wait_for_supervisor_and_dhcp_before_nettest() -> None:
+def test_wifi_diagnostics_wait_for_supervisor_and_dhcp_before_nettest(
+    stub_nettest_peer: list[
+        tuple[pi4_serial_reboot.NettestPeerConfig, str]
+    ],
+) -> None:
     """Wi-Fi commands start after bootstrap and nettest starts after a lease."""
 
     class OrderedController(FakeController):
@@ -724,6 +794,7 @@ def test_wifi_diagnostics_wait_for_supervisor_and_dhcp_before_nettest() -> None:
     diagnostics_ok = pi4_serial_reboot.run_diagnostics(
         controller,
         "wifi",
+        nettest_peer=TEST_NETTEST_PEER,
         prompt_ready=True,
         boot_snapshot=b"[BUILD]\ncohesix> ",
     )
@@ -770,6 +841,7 @@ def test_wifi_diagnostics_wait_for_supervisor_and_dhcp_before_nettest() -> None:
         and "action=diagnostics-admitted" in note
         for note in controller.notes
     )
+    assert stub_nettest_peer == [(TEST_NETTEST_PEER, "192.168.86.154")]
 
 
 def test_wifi_failed_supervisor_fails_closed_without_nettest() -> None:
@@ -792,6 +864,7 @@ def test_wifi_failed_supervisor_fails_closed_without_nettest() -> None:
     diagnostics_ok = pi4_serial_reboot.run_diagnostics(
         controller,
         "wifi",
+        nettest_peer=TEST_NETTEST_PEER,
         prompt_ready=True,
         boot_snapshot=wifi_supervisor_record("failed") + b"cohesix> ",
     )
@@ -829,6 +902,7 @@ def test_wifi_ready_observation_rejects_later_attempt_before_any_command() -> No
         pi4_serial_reboot.run_diagnostics(
             controller,
             "wifi",
+            nettest_peer=TEST_NETTEST_PEER,
             prompt_ready=True,
             boot_snapshot=(
                 wifi_supervisor_record("ready")
@@ -872,6 +946,7 @@ def test_wifi_ready_retraction_waits_for_permanent_before_diagnostics() -> None:
     diagnostics_ok = pi4_serial_reboot.run_diagnostics(
         controller,
         "wifi",
+        nettest_peer=TEST_NETTEST_PEER,
         prompt_ready=True,
         boot_snapshot=wifi_supervisor_record("ready", console_seq=5),
     )
@@ -963,6 +1038,7 @@ def test_wifi_republished_bootstrap_ready_is_rejected() -> None:
         pi4_serial_reboot.run_diagnostics(
             controller,
             "wifi",
+            nettest_peer=TEST_NETTEST_PEER,
             prompt_ready=False,
             boot_snapshot=wifi_supervisor_record("ready", console_seq=5),
         )
@@ -1013,6 +1089,7 @@ def test_wifi_dhcp_timeout_preserves_later_diagnostics() -> None:
     diagnostics_ok = pi4_serial_reboot.run_diagnostics(
         controller,
         "wifi",
+        nettest_peer=TEST_NETTEST_PEER,
         prompt_ready=False,
         boot_snapshot=wifi_supervisor_record("ready"),
         wifi_dhcp_timeout_s=0.5,
@@ -1136,6 +1213,7 @@ def test_diagnostics_reinforce_root_command_terminators() -> None:
     diagnostics_ok = pi4_serial_reboot.run_diagnostics(
         controller,
         "wifi",
+        nettest_peer=TEST_NETTEST_PEER,
         prompt_ready=True,
         boot_snapshot=wifi_supervisor_record("ready") + b"cohesix> ",
     )
@@ -1210,9 +1288,7 @@ def test_diagnostics_accept_interleaved_result_marker() -> None:
                 b"action=enable-command-input\nTSTATS reason=policy\ncohesix>"
             ),
             b"OK SMP\ncohesix>",
-            NETTEST_STARTED,
-            NETTEST_RESULT,
-            NETSTATS_TERMINAL_PASS,
+            NETSTATS_OK,
             b"OK USB\ncohesix>",
             b"OK USB\ncohesix>",
             b"OK SMP\ncohesix>",
@@ -1222,6 +1298,7 @@ def test_diagnostics_accept_interleaved_result_marker() -> None:
     diagnostics_ok = pi4_serial_reboot.run_diagnostics(
         controller,
         "genet",
+        nettest_peer=TEST_NETTEST_PEER,
         prompt_ready=True,
     )
 
@@ -1229,14 +1306,14 @@ def test_diagnostics_accept_interleaved_result_marker() -> None:
     assert controller.sent == [
         "netstats",
         "smp activity",
-        "nettest",
         "netstats",
         "usb diag",
         "usb status",
         "smp activity",
     ]
     assert (
-        "diagnostics complete result=fail failures=netstats:err"
+        "diagnostics complete result=fail "
+        "failures=netstats:err,nettest:peer-target-unavailable"
         in controller.notes
     )
 
@@ -1247,7 +1324,7 @@ def test_diagnostics_accept_prompt_tail_after_result() -> None:
     controller = FakeController(
         [
             b"[local-seat] usb keyboard command-ready action=enable-command-input clean_polls=2 no_reply=0 recovery_pending=no\n",
-            b"OK NETSTATS\nx>",
+            NETSTATS_GENET_BOUND.replace(b"cohesix>", b"x>"),
             b"OK SMP\nx>",
             b"OK NETTEST detail=started run_generation=31\nx>",
             NETTEST_RESULT,
@@ -1261,6 +1338,7 @@ def test_diagnostics_accept_prompt_tail_after_result() -> None:
     diagnostics_ok = pi4_serial_reboot.run_diagnostics(
         controller,
         "genet",
+        nettest_peer=TEST_NETTEST_PEER,
         prompt_ready=True,
     )
 
@@ -1292,11 +1370,11 @@ def test_diagnostics_run_active_usb_probe_only_when_requested() -> None:
     controller = FakeController(
         [
             b"[local-seat] usb keyboard command-ready action=enable-command-input\n",
-            b"OK NETSTATS\ncohesix>",
+            NETSTATS_GENET_BOUND,
             b"OK SMP\ncohesix>",
             NETTEST_STARTED,
-            NETTEST_RESULT,
-            NETSTATS_TERMINAL_PASS,
+            NETTEST_PEER_ASSISTED_RESULT,
+            NETSTATS_TERMINAL_PEER_ASSISTED,
             b"OK USB\ncohesix>",
             b"OK USB\ncohesix>",
             b"OK USB\ncohesix>",
@@ -1307,6 +1385,7 @@ def test_diagnostics_run_active_usb_probe_only_when_requested() -> None:
     diagnostics_ok = pi4_serial_reboot.run_diagnostics(
         controller,
         "genet",
+        nettest_peer=TEST_NETTEST_PEER,
         prompt_ready=True,
         active_usb_probe=True,
     )
@@ -1329,7 +1408,7 @@ def test_diagnostics_accept_command_ready_seen_during_settle_drain() -> None:
 
     controller = FakeController(
         [
-            b"OK NETSTATS\ncohesix>",
+            NETSTATS_GENET_BOUND,
             b"OK SMP\ncohesix>",
             NETTEST_STARTED,
             NETTEST_RESULT,
@@ -1347,6 +1426,7 @@ def test_diagnostics_accept_command_ready_seen_during_settle_drain() -> None:
     diagnostics_ok = pi4_serial_reboot.run_diagnostics(
         controller,
         "genet",
+        nettest_peer=TEST_NETTEST_PEER,
         prompt_ready=True,
     )
 
@@ -1373,7 +1453,7 @@ def test_diagnostics_do_not_wait_for_consumed_prompt_after_ok() -> None:
     controller = FakeController(
         [
             b"[local-seat] usb keyboard command-ready action=enable-command-input clean_polls=2 no_reply=0 recovery_pending=no\n",
-            b"OK NETSTATS\ncohesix>",
+            NETSTATS_GENET_BOUND,
             b"OK SMP\ncohesix>",
             NETTEST_STARTED,
             NETTEST_RESULT,
@@ -1384,7 +1464,12 @@ def test_diagnostics_do_not_wait_for_consumed_prompt_after_ok() -> None:
         ]
     )
 
-    pi4_serial_reboot.run_diagnostics(controller, "genet", prompt_ready=True)
+    pi4_serial_reboot.run_diagnostics(
+        controller,
+        "genet",
+        nettest_peer=TEST_NETTEST_PEER,
+        prompt_ready=True,
+    )
 
     assert controller.sent == [
         "netstats",
@@ -1416,7 +1501,7 @@ def test_diagnostics_reject_gate_eight_keyboard_markers_as_command_ready() -> No
                 b"[local-seat] runtime keyboard first-byte read=1 ascii=0x68\n"
                 b"usb: runtime_gate keyboard=yes first_report=yes first_byte=yes\n"
             ),
-            b"OK NETSTATS\ncohesix>",
+            NETSTATS_GENET_BOUND,
             b"OK SMP\ncohesix>",
             NETTEST_STARTED,
             NETTEST_RESULT,
@@ -1427,7 +1512,12 @@ def test_diagnostics_reject_gate_eight_keyboard_markers_as_command_ready() -> No
         ]
     )
 
-    pi4_serial_reboot.run_diagnostics(controller, "genet", prompt_ready=True)
+    pi4_serial_reboot.run_diagnostics(
+        controller,
+        "genet",
+        nettest_peer=TEST_NETTEST_PEER,
+        prompt_ready=True,
+    )
 
     assert controller.sent == [
         "netstats",
@@ -1454,7 +1544,7 @@ def test_diagnostics_barrier_replaces_prompt_wait_after_result() -> None:
     controller = FakeController(
         [
             b"[local-seat] usb keyboard command-ready action=enable-command-input clean_polls=2 no_reply=0 recovery_pending=no\n",
-            b"OK NETSTATS\n",
+            NETSTATS_GENET_BOUND.replace(b"cohesix>", b""),
             b"OK SMP\ncohesix>",
             NETTEST_STARTED,
             NETTEST_RESULT,
@@ -1465,7 +1555,12 @@ def test_diagnostics_barrier_replaces_prompt_wait_after_result() -> None:
         ]
     )
 
-    pi4_serial_reboot.run_diagnostics(controller, "genet", prompt_ready=True)
+    pi4_serial_reboot.run_diagnostics(
+        controller,
+        "genet",
+        nettest_peer=TEST_NETTEST_PEER,
+        prompt_ready=True,
+    )
 
     assert controller.sent == [
         "netstats",
@@ -1493,7 +1588,7 @@ def test_diagnostics_continue_when_command_ready_never_arrives() -> None:
 
     controller = TimeoutOnceController(
         [
-            b"OK NETSTATS\ncohesix>",
+            NETSTATS_GENET_BOUND,
             b"OK SMP\ncohesix>",
             NETTEST_STARTED,
             NETTEST_RESULT,
@@ -1504,7 +1599,12 @@ def test_diagnostics_continue_when_command_ready_never_arrives() -> None:
         ]
     )
 
-    pi4_serial_reboot.run_diagnostics(controller, "genet", prompt_ready=True)
+    pi4_serial_reboot.run_diagnostics(
+        controller,
+        "genet",
+        nettest_peer=TEST_NETTEST_PEER,
+        prompt_ready=True,
+    )
 
     assert controller.sent == [
         "netstats",
@@ -1530,6 +1630,468 @@ def test_diagnostics_continue_when_command_ready_never_arrives() -> None:
         "diagnostics serial_only_usb_unscored command='usb status'" in note
         for note in controller.notes
     )
+
+
+def test_genet_nettest_peer_launches_after_exact_admission_before_observation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The authenticated peer runs only inside the admitted self-test window."""
+
+    class OrderedController(FakeController):
+        def __init__(self, reads: Iterable[bytes]) -> None:
+            super().__init__(reads)
+            self.events: list[str] = []
+
+        def read_until(
+            self,
+            markers: Iterable[bytes],
+            timeout_s: float,
+            *,
+            label: str,
+            stream_prefix: bytes = b"",
+        ) -> bytes:
+            self.events.append(f"read:{label}")
+            return super().read_until(
+                markers,
+                timeout_s,
+                label=label,
+                stream_prefix=stream_prefix,
+            )
+
+        def drain_for(self, duration_s: float, *, label: str) -> bytes:
+            self.events.append(f"drain:{label}")
+            return super().drain_for(duration_s, label=label)
+
+    controller = OrderedController(
+        [
+            b"[local-seat] usb keyboard command-ready action=enable-command-input\n",
+            NETSTATS_GENET_BOUND,
+            b"OK SMP\ncohesix>",
+            NETTEST_STARTED,
+            NETTEST_RESULT,
+            NETSTATS_TERMINAL_PASS,
+            b"OK USB\ncohesix>",
+            b"OK USB\ncohesix>",
+            b"OK SMP\ncohesix>",
+        ]
+    )
+
+    def start_peer(
+        config: pi4_serial_reboot.NettestPeerConfig,
+        target_ip: str,
+        lane: str,
+    ) -> FakePeerProcess:
+        assert config is TEST_NETTEST_PEER
+        assert target_ip == "192.168.10.50"
+        assert lane == "genet"
+        controller.events.append("peer:start:run-generation-31")
+        return FakePeerProcess()
+
+    monkeypatch.setattr(pi4_serial_reboot, "start_nettest_tcp_peer", start_peer)
+
+    assert pi4_serial_reboot.run_diagnostics(
+        controller,
+        "genet",
+        nettest_peer=TEST_NETTEST_PEER,
+        prompt_ready=True,
+    )
+    assert controller.events.index("read:result for nettest") < controller.events.index(
+        "peer:start:run-generation-31"
+    )
+    assert controller.events.index(
+        "peer:start:run-generation-31"
+    ) < controller.events.index("drain:nettest terminal observation window")
+
+
+def test_genet_invalid_peer_target_skips_nettest_and_fails_closed(
+    stub_nettest_peer: list[
+        tuple[pi4_serial_reboot.NettestPeerConfig, str]
+    ],
+) -> None:
+    """An unusable preflight address cannot launch cohsh or reuse old status."""
+
+    invalid = NETSTATS_GENET_BOUND.replace(
+        b"addr_src=dhcp-lease ip=192.168.10.50",
+        b"addr_src=dhcp-lease ip=0.0.0.0",
+    )
+    controller = FakeController(
+        [
+            b"[local-seat] usb keyboard command-ready action=enable-command-input\n",
+            invalid,
+            b"OK SMP\ncohesix>",
+            NETSTATS_OK,
+            b"OK USB\ncohesix>",
+            b"OK USB\ncohesix>",
+            b"OK SMP\ncohesix>",
+        ]
+    )
+
+    assert not pi4_serial_reboot.run_diagnostics(
+        controller,
+        "genet",
+        nettest_peer=TEST_NETTEST_PEER,
+        prompt_ready=True,
+    )
+    assert "nettest" not in controller.sent
+    assert stub_nettest_peer == []
+    assert (
+        "diagnostics complete result=fail failures="
+        "genet-dhcp:invalid-or-unbound,nettest:peer-target-unavailable"
+    ) in controller.notes
+
+
+def test_missing_nettest_admission_generation_never_launches_peer(
+    stub_nettest_peer: list[
+        tuple[pi4_serial_reboot.NettestPeerConfig, str]
+    ],
+) -> None:
+    """A marker without its immutable run generation cannot authorize a peer."""
+
+    controller = FakeController(
+        [
+            b"[local-seat] usb keyboard command-ready action=enable-command-input\n",
+            NETSTATS_GENET_BOUND,
+            b"OK SMP\ncohesix>",
+            b"OK NETTEST detail=started\ncohesix>",
+            NETTEST_RESULT,
+            NETSTATS_TERMINAL_PASS,
+            b"OK USB\ncohesix>",
+            b"OK USB\ncohesix>",
+            b"OK SMP\ncohesix>",
+        ]
+    )
+
+    assert not pi4_serial_reboot.run_diagnostics(
+        controller,
+        "genet",
+        nettest_peer=TEST_NETTEST_PEER,
+        prompt_ready=True,
+    )
+    assert stub_nettest_peer == []
+    assert "nettest:started-run-generation-missing" in controller.notes[-1]
+
+
+def test_nettest_peer_nonzero_exit_cannot_override_target_pass(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Both the host peer and exact target terminal must independently pass."""
+
+    monkeypatch.setattr(
+        pi4_serial_reboot,
+        "start_nettest_tcp_peer",
+        lambda *_args: FakePeerProcess(return_code=7),
+    )
+    controller = FakeController(
+        [
+            b"[local-seat] usb keyboard command-ready action=enable-command-input\n",
+            NETSTATS_GENET_BOUND,
+            b"OK SMP\ncohesix>",
+            NETTEST_STARTED,
+            NETTEST_RESULT,
+            NETSTATS_TERMINAL_PASS,
+            b"OK USB\ncohesix>",
+            b"OK USB\ncohesix>",
+            b"OK SMP\ncohesix>",
+        ]
+    )
+
+    assert not pi4_serial_reboot.run_diagnostics(
+        controller,
+        "genet",
+        nettest_peer=TEST_NETTEST_PEER,
+        prompt_ready=True,
+    )
+    assert "nettest:peer-exit-7" in controller.notes[-1]
+    assert any(
+        note == "nettest terminal generation=14 run_generation=31 "
+        "running=false result=pass source=netstats"
+        for note in controller.notes
+    )
+
+
+def test_nettest_peer_auth_secret_is_environment_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The console credential never enters argv, child output, or config repr."""
+
+    secret = "unique-peer-console-secret"
+    config = pi4_serial_reboot.NettestPeerConfig(
+        repo=REPO_ROOT,
+        cohsh=REPO_ROOT / "out/cohesix/host-tools/cohsh",
+        script=REPO_ROOT / "scripts/cohsh/boot_v0.coh",
+        auth_token=secret,
+    )
+    captured: dict[str, object] = {}
+
+    def popen(argv: list[str], **kwargs: object) -> FakePeerProcess:
+        captured["argv"] = argv
+        captured.update(kwargs)
+        return FakePeerProcess()
+
+    monkeypatch.setenv("COH_AUTH_TOKEN", "stale-lower-priority-secret")
+    monkeypatch.setattr(pi4_serial_reboot.subprocess, "Popen", popen)
+    monkeypatch.setattr(
+        pi4_serial_reboot,
+        "validate_nettest_peer_route",
+        lambda lane, target: target if lane == "genet" else None,
+    )
+
+    process = REAL_START_NETTEST_TCP_PEER(config, "192.168.10.50", "genet")
+
+    assert isinstance(process, FakePeerProcess)
+    argv = captured["argv"]
+    assert isinstance(argv, list)
+    assert secret not in " ".join(argv)
+    assert "--auth-token" not in argv
+    assert "--role" not in argv
+    environment = captured["env"]
+    assert isinstance(environment, dict)
+    assert environment["COHSH_AUTH_TOKEN"] == secret
+    assert "COH_AUTH_TOKEN" not in environment
+    assert captured["stdout"] is pi4_serial_reboot.subprocess.DEVNULL
+    assert captured["stderr"] is pi4_serial_reboot.subprocess.DEVNULL
+    assert captured["stdin"] is pi4_serial_reboot.subprocess.DEVNULL
+    assert captured["close_fds"] is True
+    assert captured["cwd"] == REPO_ROOT
+    assert argv[argv.index("--tcp-port") + 1] == "31337"
+    assert argv[argv.index("--script") + 1] == str(config.script)
+    assert secret not in repr(config)
+
+
+def test_nettest_peer_route_is_exactly_bound_to_requested_interface(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Wired proof cannot escape en8 or use a network/broadcast/self address."""
+
+    route_interface = "en8"
+
+    def run(argv: list[str], **kwargs: object) -> SimpleNamespace:
+        assert kwargs["check"] is False
+        assert kwargs["capture_output"] is True
+        assert kwargs["text"] is True
+        if argv[0] == "/sbin/route":
+            return SimpleNamespace(
+                returncode=0,
+                stdout=f"   interface: {route_interface}\n",
+            )
+        assert argv == ["/sbin/ifconfig", "en8"]
+        return SimpleNamespace(
+            returncode=0,
+            stdout=(
+                "en8: flags=8863<UP,BROADCAST,RUNNING>\n"
+                "\tinet 192.168.10.1 netmask 0xffffff00 "
+                "broadcast 192.168.10.255\n"
+            ),
+        )
+
+    monkeypatch.setattr(pi4_serial_reboot.subprocess, "run", run)
+    assert (
+        pi4_serial_reboot.validate_nettest_peer_route("genet", "192.168.10.50")
+        == "192.168.10.50"
+    )
+
+    route_interface = "en0"
+    with pytest.raises(RuntimeError, match="requested lane"):
+        pi4_serial_reboot.validate_nettest_peer_route("genet", "192.168.10.50")
+
+    route_interface = "en8"
+    for target in ("192.168.10.1", "192.168.10.255", "192.168.10.0"):
+        with pytest.raises(RuntimeError, match="exact host subnet"):
+            pi4_serial_reboot.validate_nettest_peer_route("genet", target)
+
+
+@pytest.mark.parametrize(
+    "target",
+    (
+        "8.8.8.8",
+        "169.254.1.2",
+        "127.0.0.1",
+        "224.0.0.1",
+        "0.0.0.0",
+    ),
+)
+def test_nettest_peer_rejects_nonprivate_or_nondirect_targets(target: str) -> None:
+    """The Queen credential cannot be sent to public or special-use targets."""
+
+    assert pi4_serial_reboot.validate_nettest_peer_ip(target) is None
+
+
+def test_nettest_peer_revalidates_preflight_files_before_spawn(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A replaced cohsh or script cannot inherit the already-loaded credential."""
+
+    cohsh = tmp_path / "cohsh"
+    script = tmp_path / "boot_v0.coh"
+    cohsh.write_bytes(b"cohsh-v1")
+    cohsh.chmod(0o755)
+    script.write_text("ping\n", encoding="utf-8")
+    config = pi4_serial_reboot.NettestPeerConfig(
+        repo=tmp_path,
+        cohsh=cohsh,
+        script=script,
+        auth_token="exact-secret",
+        cohsh_sha256=pi4_serial_reboot.regular_file_sha256(cohsh),
+        script_sha256=pi4_serial_reboot.regular_file_sha256(script),
+    )
+    monkeypatch.setattr(
+        pi4_serial_reboot,
+        "validate_nettest_peer_route",
+        lambda *_args: "192.168.10.50",
+    )
+    monkeypatch.setattr(
+        pi4_serial_reboot.subprocess,
+        "Popen",
+        lambda *_args, **_kwargs: pytest.fail("changed input reached Popen"),
+    )
+
+    script.write_text("help\n", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="changed after preflight"):
+        REAL_START_NETTEST_TCP_PEER(config, "192.168.10.50", "genet")
+
+
+def test_nettest_peer_timeout_cleanup_contains_nested_wait_failure() -> None:
+    """Terminate, kill, and second-wait failures never leak into UART cleanup."""
+
+    class StubbornProcess:
+        def __init__(self) -> None:
+            self.terminated = False
+            self.killed = False
+            self.waits = 0
+
+        def poll(self) -> None:
+            return None
+
+        def terminate(self) -> None:
+            self.terminated = True
+
+        def kill(self) -> None:
+            self.killed = True
+
+        def wait(self, *, timeout: float) -> int:
+            del timeout
+            self.waits += 1
+            if self.waits == 1:
+                raise pi4_serial_reboot.subprocess.TimeoutExpired("cohsh", 1.0)
+            raise OSError("already gone")
+
+    process = StubbornProcess()
+    pi4_serial_reboot.stop_nettest_tcp_peer(process)
+    assert process.terminated
+    assert process.killed
+    assert process.waits == 2
+
+
+def test_post_launch_note_failure_still_reaps_authenticated_peer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every exception after Popen preserves the original error and cleans up."""
+
+    class RunningProcess:
+        def __init__(self) -> None:
+            self.terminated = False
+
+        def poll(self) -> None:
+            return None
+
+        def terminate(self) -> None:
+            self.terminated = True
+
+        def kill(self) -> None:
+            raise AssertionError("normal terminate should reap this child")
+
+        def wait(self, *, timeout: float) -> int:
+            del timeout
+            assert self.terminated
+            return 0
+
+    class NoteFailureController(FakeController):
+        def note(self, text: str) -> None:
+            if text.startswith("nettest peer launch result=started"):
+                raise RuntimeError("host log failed")
+            super().note(text)
+
+    process = RunningProcess()
+    monkeypatch.setattr(
+        pi4_serial_reboot,
+        "start_nettest_tcp_peer",
+        lambda *_args: process,
+    )
+    controller = NoteFailureController(
+        [
+            b"[local-seat] usb keyboard command-ready action=enable-command-input\n",
+            NETSTATS_GENET_BOUND,
+            b"OK SMP\ncohesix>",
+            NETTEST_STARTED,
+        ]
+    )
+    with pytest.raises(RuntimeError, match="host log failed"):
+        pi4_serial_reboot.run_diagnostics(
+            controller,
+            "genet",
+            nettest_peer=TEST_NETTEST_PEER,
+            prompt_ready=True,
+        )
+    assert process.terminated
+
+
+def test_prepare_nettest_peer_requires_one_usable_queen_secret(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Peer preparation binds a validated executable to one exact secret."""
+
+    cohsh = tmp_path / "cohsh"
+    cohsh.write_bytes(b"test executable\n")
+    cohsh.chmod(0o700)
+    manifest = tmp_path / "pi.toml"
+    manifest.write_text(
+        '[[tickets]]\nrole = "queen"\nsecret = "private-console-token"\n',
+        encoding="utf-8",
+    )
+
+    config = pi4_serial_reboot.prepare_nettest_peer(
+        REPO_ROOT,
+        cohsh,
+        manifest,
+    )
+
+    assert config.cohsh == cohsh
+    assert config.script == REPO_ROOT / "scripts/cohsh/boot_v0.coh"
+    assert config.auth_token == "private-console-token"
+    assert "private-console-token" not in repr(config)
+
+    manifest.write_text(
+        '[[tickets]]\nrole = "queen"\nsecret = "one"\n'
+        '[[tickets]]\nrole = "queen"\nsecret = "two"\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(RuntimeError, match="exactly one Queen secret"):
+        pi4_serial_reboot.prepare_nettest_peer(
+            REPO_ROOT,
+            cohsh,
+            manifest,
+        )
+
+
+def test_prepare_nettest_peer_rejects_symlink_manifest(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Credential inputs cannot redirect preparation through a symlink."""
+
+    cohsh = tmp_path / "cohsh"
+    cohsh.write_bytes(b"test executable\n")
+    cohsh.chmod(0o700)
+    manifest = tmp_path / "pi.toml"
+    manifest.write_text(
+        '[[tickets]]\nrole = "queen"\nsecret = "private-console-token"\n',
+        encoding="utf-8",
+    )
+    link = tmp_path / "pi-link.toml"
+    link.symlink_to(manifest)
+
+    with pytest.raises(RuntimeError, match="canonical regular non-symlink"):
+        pi4_serial_reboot.prepare_nettest_peer(REPO_ROOT, cohsh, link)
 
 
 def test_nettest_result_parser_requires_complete_generation_tagged_terminal() -> None:
@@ -1569,6 +2131,9 @@ def test_nettest_result_parser_requires_complete_generation_tagged_terminal() ->
         NETTEST_RUN_GENERATION,
         "pass",
     )
+    assert pi4_serial_reboot.parse_nettest_result(
+        NETTEST_PEER_ASSISTED_RESULT
+    ) == (14, NETTEST_RUN_GENERATION, "peer-assisted-pass")
 
 
 def test_nettest_started_parser_requires_one_immutable_run_generation() -> None:
@@ -1608,6 +2173,9 @@ def test_nettest_status_parser_requires_complete_compact_terminal() -> None:
         False,
         "pass",
     )
+    assert pi4_serial_reboot.parse_nettest_status(
+        NETTEST_STATUS_PEER_ASSISTED
+    ) == (14, NETTEST_RUN_GENERATION, False, "peer-assisted-pass")
     assert (
         pi4_serial_reboot.parse_nettest_status(
             b"nettest: generation=14 run_generation=31 enabled=true "
@@ -1704,7 +2272,7 @@ def test_diagnostics_fail_when_second_smp_sample_has_no_rate_window() -> None:
         [
             b"[local-seat] usb keyboard command-ready "
             b"action=enable-command-input\n",
-            NETSTATS_OK,
+            NETSTATS_GENET_BOUND,
             b"OK SMP\ncohesix>",
             NETTEST_STARTED,
             NETTEST_RESULT,
@@ -1718,6 +2286,7 @@ def test_diagnostics_fail_when_second_smp_sample_has_no_rate_window() -> None:
     assert not pi4_serial_reboot.run_diagnostics(
         controller,
         "genet",
+        nettest_peer=TEST_NETTEST_PEER,
         prompt_ready=True,
     )
     assert "smp-activity:rate-window-invalid" in controller.notes[-1]
@@ -1729,10 +2298,10 @@ def test_diagnostics_capture_final_netstats_after_nettest_error() -> None:
     controller = FakeController(
         [
             b"[local-seat] usb keyboard command-ready action=enable-command-input\n",
-            NETSTATS_OK,
+            NETSTATS_GENET_BOUND,
             b"OK SMP\ncohesix>",
             b"ERR NETTEST reason=policy detail=dhcp-pending\ncohesix>",
-            NETSTATS_OK,
+            NETSTATS_GENET_BOUND,
             b"OK USB\ncohesix>",
             b"OK USB\ncohesix>",
             b"OK SMP\ncohesix>",
@@ -1742,6 +2311,7 @@ def test_diagnostics_capture_final_netstats_after_nettest_error() -> None:
     diagnostics_ok = pi4_serial_reboot.run_diagnostics(
         controller,
         "genet",
+        nettest_peer=TEST_NETTEST_PEER,
         prompt_ready=True,
     )
 
@@ -1773,7 +2343,7 @@ def test_diagnostics_accept_netstats_terminal_without_async_log() -> None:
     controller = FakeController(
         [
             b"[local-seat] usb keyboard command-ready action=enable-command-input\n",
-            NETSTATS_OK,
+            NETSTATS_GENET_BOUND,
             b"OK SMP\ncohesix>",
             NETTEST_STARTED,
             NETSTATS_TERMINAL_PASS,
@@ -1786,6 +2356,7 @@ def test_diagnostics_accept_netstats_terminal_without_async_log() -> None:
     diagnostics_ok = pi4_serial_reboot.run_diagnostics(
         controller,
         "genet",
+        nettest_peer=TEST_NETTEST_PEER,
         prompt_ready=True,
     )
 
@@ -1806,7 +2377,7 @@ def test_diagnostics_reject_netstats_run_generation_mismatch() -> None:
     controller = FakeController(
         [
             b"[local-seat] usb keyboard command-ready action=enable-command-input\n",
-            NETSTATS_OK,
+            NETSTATS_GENET_BOUND,
             b"OK SMP\ncohesix>",
             NETTEST_STARTED,
             NETSTATS_TERMINAL_PASS.replace(
@@ -1822,6 +2393,7 @@ def test_diagnostics_reject_netstats_run_generation_mismatch() -> None:
     diagnostics_ok = pi4_serial_reboot.run_diagnostics(
         controller,
         "genet",
+        nettest_peer=TEST_NETTEST_PEER,
         prompt_ready=True,
     )
 
@@ -1851,7 +2423,7 @@ def test_diagnostics_reject_async_and_netstats_generation_mismatch() -> None:
     controller = FakeController(
         [
             b"[local-seat] usb keyboard command-ready action=enable-command-input\n",
-            NETSTATS_OK,
+            NETSTATS_GENET_BOUND,
             b"OK SMP\ncohesix>",
             NETTEST_STARTED,
             NETTEST_RESULT,
@@ -1868,6 +2440,7 @@ def test_diagnostics_reject_async_and_netstats_generation_mismatch() -> None:
     diagnostics_ok = pi4_serial_reboot.run_diagnostics(
         controller,
         "genet",
+        nettest_peer=TEST_NETTEST_PEER,
         prompt_ready=True,
     )
 
@@ -1896,7 +2469,7 @@ def test_diagnostics_reject_async_and_netstats_result_mismatch() -> None:
     controller = FakeController(
         [
             b"[local-seat] usb keyboard command-ready action=enable-command-input\n",
-            NETSTATS_OK,
+            NETSTATS_GENET_BOUND,
             b"OK SMP\ncohesix>",
             NETTEST_STARTED,
             NETTEST_RESULT,
@@ -1910,6 +2483,7 @@ def test_diagnostics_reject_async_and_netstats_result_mismatch() -> None:
     diagnostics_ok = pi4_serial_reboot.run_diagnostics(
         controller,
         "genet",
+        nettest_peer=TEST_NETTEST_PEER,
         prompt_ready=True,
     )
 
@@ -1932,7 +2506,7 @@ def test_diagnostics_continue_after_generation_tagged_nettest_failure() -> None:
     controller = FakeController(
         [
             b"[local-seat] usb keyboard command-ready action=enable-command-input\n",
-            NETSTATS_OK,
+            NETSTATS_GENET_BOUND,
             b"OK SMP\ncohesix>",
             NETTEST_STARTED,
             NETTEST_FAILURE_RESULT,
@@ -1946,6 +2520,7 @@ def test_diagnostics_continue_after_generation_tagged_nettest_failure() -> None:
     diagnostics_ok = pi4_serial_reboot.run_diagnostics(
         controller,
         "genet",
+        nettest_peer=TEST_NETTEST_PEER,
         prompt_ready=True,
     )
 
@@ -2135,6 +2710,44 @@ def test_run_validates_identity_before_opening_serial(
     assert not serial_constructed
 
 
+def test_run_validates_nettest_peer_before_opening_serial(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: pathlib.Path,
+) -> None:
+    """Missing diagnostic peer inputs cannot acquire or disturb the UART."""
+
+    class Args:
+        repo = REPO_ROOT
+        image_identity_metadata = tmp_path / "pi4-image-identity.json"
+        diagnostics = True
+        cohsh = tmp_path / "missing-cohsh"
+        ticket_config = REPO_ROOT / "configs/root_task_pi4_uboot_aarch64.toml"
+        log = tmp_path / "serial.log"
+
+    serial_constructed = False
+
+    def construct_serial(*_args: object, **_kwargs: object) -> None:
+        nonlocal serial_constructed
+        serial_constructed = True
+        raise AssertionError("serial must not open before peer preflight")
+
+    monkeypatch.setattr(pi4_serial_reboot, "parse_args", Args)
+    monkeypatch.setattr(
+        pi4_serial_reboot,
+        "load_expected_image_identity",
+        lambda *_args: expected_image_identity(),
+    )
+    monkeypatch.setattr(
+        pi4_serial_reboot,
+        "RedactingSerialController",
+        construct_serial,
+    )
+
+    with pytest.raises(RuntimeError, match="nettest peer cohsh is unavailable"):
+        pi4_serial_reboot.run()
+    assert not serial_constructed
+
+
 def test_run_returns_nonzero_after_diagnostic_failure(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: pathlib.Path,
@@ -2146,6 +2759,8 @@ def test_run_returns_nonzero_after_diagnostic_failure(
         log = tmp_path / "serial.log"
         image_identity_metadata = tmp_path / "pi4-image-identity.json"
         repo = REPO_ROOT
+        cohsh = pathlib.Path("cohsh")
+        ticket_config = pathlib.Path("config.toml")
         port = "serial-test"
         baud = 115_200
         no_echo = True
@@ -2173,6 +2788,11 @@ def test_run_returns_nonzero_after_diagnostic_failure(
     )
     monkeypatch.setattr(
         pi4_serial_reboot,
+        "prepare_nettest_peer",
+        lambda *_args: TEST_NETTEST_PEER,
+    )
+    monkeypatch.setattr(
+        pi4_serial_reboot,
         "RedactingSerialController",
         lambda *_args, **_kwargs: controller,
     )
@@ -2196,6 +2816,12 @@ def test_run_returns_nonzero_after_diagnostic_failure(
         for note in controller.notes
     )
     assert "complete result=diagnostic-failure exit=1" in controller.notes
+    assert controller.redactions == [
+        (
+            "AUTH test-console-secret",
+            "AUTH <queen-console-token>",
+        )
+    ]
 
 
 def test_diagnostics_require_command_specific_result_marker() -> None:
@@ -2208,7 +2834,12 @@ def test_diagnostics_require_command_specific_result_marker() -> None:
     )
 
     with pytest.raises(AssertionError):
-        pi4_serial_reboot.run_diagnostics(controller, "genet", prompt_ready=True)
+        pi4_serial_reboot.run_diagnostics(
+            controller,
+            "genet",
+            nettest_peer=TEST_NETTEST_PEER,
+            prompt_ready=True,
+        )
 
 
 def test_reboot_from_root_clears_line_and_pings_before_auth(monkeypatch: pytest.MonkeyPatch) -> None:

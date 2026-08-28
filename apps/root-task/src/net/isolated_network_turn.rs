@@ -200,6 +200,68 @@ pub(crate) fn select_isolated_direct_network_turn(
     }
 }
 
+/// Select one useful direct-GENET control unit without changing QEMU's strict
+/// direct-VirtIO rotor.
+///
+/// Direct GENET has an exact root-side output/disconnect readiness oracle and
+/// child-owned RX/TX. Exact control work preempts the two blind responsibilities;
+/// otherwise observation and the timer wake alternate one unit at a time.
+pub(crate) fn select_isolated_direct_genet_network_turn(
+    stage_output_ready: bool,
+    disconnect_ready: bool,
+    lower_cursor: IsolatedNetworkLowerCursor,
+) -> IsolatedNetworkTurnSelection {
+    if stage_output_ready {
+        return IsolatedNetworkTurnSelection {
+            unit: IsolatedNetworkTurnUnit::Lower(IsolatedNetworkLowerUnit::StageOutput),
+            successor: lower_cursor,
+        };
+    }
+    if disconnect_ready {
+        return IsolatedNetworkTurnSelection {
+            unit: IsolatedNetworkTurnUnit::Lower(IsolatedNetworkLowerUnit::Disconnect),
+            successor: lower_cursor,
+        };
+    }
+
+    // Direct data-plane RX/TX wakes the child without root mediation. The only
+    // blind root responsibilities are therefore notification observation and
+    // the timer wake. Alternate those exact units while selecting locally
+    // provable control work above them. This removes empty Stage/Disconnect
+    // rotor visits without weakening either one-slot control predicate.
+    if lower_cursor.unit() == IsolatedNetworkLowerUnit::ServiceTick {
+        IsolatedNetworkTurnSelection {
+            unit: IsolatedNetworkTurnUnit::Lower(IsolatedNetworkLowerUnit::ServiceTick),
+            successor: IsolatedNetworkLowerCursor::new(),
+        }
+    } else {
+        IsolatedNetworkTurnSelection {
+            unit: IsolatedNetworkTurnUnit::Lower(IsolatedNetworkLowerUnit::ObserveChild),
+            successor: IsolatedNetworkLowerCursor::for_unit(IsolatedNetworkLowerUnit::ServiceTick),
+        }
+    }
+}
+
+/// Route exact direct-GENET profiles to their control-ready selector while
+/// preserving the already-qualified direct-VirtIO selector byte-for-byte for
+/// every non-GENET contract.
+pub(crate) fn select_isolated_direct_network_turn_for_contract(
+    exact_genet_contract: bool,
+    stage_output_ready: bool,
+    disconnect_ready: bool,
+    lower_cursor: IsolatedNetworkLowerCursor,
+) -> IsolatedNetworkTurnSelection {
+    if exact_genet_contract {
+        select_isolated_direct_genet_network_turn(
+            stage_output_ready,
+            disconnect_ready,
+            lower_cursor,
+        )
+    } else {
+        select_isolated_direct_network_turn(lower_cursor)
+    }
+}
+
 /// Select one useful unit while an exact authenticated response is active.
 ///
 /// Routine diagnostics remain retained for the next ordinary debt turn. An
@@ -511,7 +573,8 @@ mod tests {
         let stage = select_isolated_direct_response_turn(true, true, cursor);
         assert_eq!(
             stage.unit(),
-            IsolatedNetworkTurnUnit::Lower(IsolatedNetworkLowerUnit::StageOutput)
+            IsolatedNetworkTurnUnit::Lower(IsolatedNetworkLowerUnit::StageOutput),
+            "direct response output must preempt blind work"
         );
         let observe = select_isolated_direct_response_turn(false, true, cursor);
         assert!(matches!(
@@ -519,5 +582,70 @@ mod tests {
             IsolatedNetworkTurnUnit::Lower(IsolatedNetworkLowerUnit::ObserveChild)
                 | IsolatedNetworkTurnUnit::Lower(IsolatedNetworkLowerUnit::ServiceTick)
         ));
+    }
+
+    #[test]
+    fn direct_genet_selector_prioritizes_exact_control_work() {
+        let cursor = IsolatedNetworkLowerCursor::new();
+        let observe = select_isolated_direct_genet_network_turn(false, false, cursor);
+        assert_eq!(
+            observe.unit(),
+            IsolatedNetworkTurnUnit::Lower(IsolatedNetworkLowerUnit::ObserveChild)
+        );
+        let tick = select_isolated_direct_genet_network_turn(false, false, observe.successor());
+        assert_eq!(
+            tick.unit(),
+            IsolatedNetworkTurnUnit::Lower(IsolatedNetworkLowerUnit::ServiceTick)
+        );
+
+        let stage = select_isolated_direct_genet_network_turn(true, true, cursor);
+        assert_eq!(
+            stage.unit(),
+            IsolatedNetworkTurnUnit::Lower(IsolatedNetworkLowerUnit::StageOutput),
+            "retained response output must preempt disconnect and blind work"
+        );
+        assert_eq!(
+            stage.successor(),
+            cursor,
+            "exact control work cannot consume the blind lower-unit debt",
+        );
+        let disconnect = select_isolated_direct_genet_network_turn(false, true, cursor);
+        assert_eq!(
+            disconnect.unit(),
+            IsolatedNetworkTurnUnit::Lower(IsolatedNetworkLowerUnit::Disconnect),
+            "an exact drained disconnect must preempt blind work"
+        );
+        assert_eq!(
+            disconnect.successor(),
+            cursor,
+            "exact disconnect work cannot consume the blind lower-unit debt",
+        );
+    }
+
+    #[test]
+    fn non_genet_contract_routes_every_state_to_unchanged_direct_selector() {
+        for cursor in [
+            IsolatedNetworkLowerCursor::new(),
+            IsolatedNetworkLowerCursor::for_unit(IsolatedNetworkLowerUnit::ObserveChild),
+            IsolatedNetworkLowerCursor::for_unit(IsolatedNetworkLowerUnit::StageOutput),
+            IsolatedNetworkLowerCursor::for_unit(IsolatedNetworkLowerUnit::Disconnect),
+            IsolatedNetworkLowerCursor::for_unit(IsolatedNetworkLowerUnit::Ingress),
+            IsolatedNetworkLowerCursor::for_unit(IsolatedNetworkLowerUnit::ServiceTick),
+        ] {
+            for (stage_output_ready, disconnect_ready) in
+                [(false, false), (false, true), (true, false), (true, true)]
+            {
+                assert_eq!(
+                    select_isolated_direct_network_turn_for_contract(
+                        false,
+                        stage_output_ready,
+                        disconnect_ready,
+                        cursor,
+                    ),
+                    select_isolated_direct_network_turn(cursor),
+                    "a non-GENET contract must retain the direct-VirtIO selector for cursor={cursor:?} stage={stage_output_ready} disconnect={disconnect_ready}",
+                );
+            }
+        }
     }
 }

@@ -883,7 +883,8 @@ from that catalog.
 | `diagnostic.guard-worker` | NON-CLAIMING diagnostic | `non-claiming` | conditional / qemu | `cargo test -p root-task --no-default-features --features driver-tests-qemu --test worker_fault_lifecycle -- --test-threads=1` |
 | `diagnostic.guard-ninedoor` | NON-CLAIMING diagnostic | `non-claiming` | conditional / qemu | `cargo test -p root-task --no-default-features --test ninedoor_service_isolation -- --test-threads=1` |
 | `diagnostic.guard-console-network` | NON-CLAIMING diagnostic | `non-claiming` | conditional / qemu | `cargo test -p console-network-abi && cargo test -p console-network-runtime && cargo test -p console-network-runtime --features direct-genet && cargo test -p root-task --test console_network_service && cargo test -p root-task --test direct_genet_network_phasing && cargo test -p root-task --no-default-features --features driver-tests-qemu isolated_response_lane_pays_exactly_one_ordinary_debt_after_eight_units -- --test-threads=1 && cargo test -p root-task --no-default-features --features driver-tests-qemu isolated_help_capture_publishes_complete_body_then_one_terminal -- --test-threads=1 && cargo test -p root-task --no-default-features --features driver-tests-qemu isolated_fixed_synchronous_producers_cross_batch_depth_without_end -- --test-threads=1 && cargo test -p root-task --no-default-features --features driver-tests-qemu bounded_sync_capture_overflow_emits_only_typed_terminal_and_reconciles_metrics -- --test-threads=1 && cargo test -p root-task --no-default-features --features driver-tests-qemu bounded_sync_cache_snapshot_crosses_batch_depth_and_tombstones_on_quiet_cut -- --test-threads=1 && cargo test -p root-task --no-default-features --features driver-tests-qemu bounded_sync_response_is_retired_on_exact_identity_loss -- --test-threads=1 && cargo test -p root-task --no-default-features --features driver-tests-qemu pinned_network_line_cannot_dispatch_to_a_replacement_connection -- --test-threads=1 && cargo test -p root-task --no-default-features --features driver-tests-qemu physical_progress_is_bounded_while_heavy_producers_preserve_network_owner -- --test-threads=1 && cargo test -p root-task --no-default-features --features driver-tests-qemu blocked_physical_producer_retains_an_ordered_busy_terminal_and_prompt -- --test-threads=1 && cargo test -p root-task --no-default-features --features driver-tests-qemu hal::cache::tests -- --test-threads=1 && cargo test -p root-task --no-default-features --test isolated_virtio_network_phasing -- --test-threads=1 && .venv/bin/python -m pytest -q tests/test_console_network_runtime_packaging.py tests/test_qemu_tcp_response_matrix.py scripts/ci/test_run_regression_batch.py` |
-| `diagnostic.guard-pi4-driver` | NON-CLAIMING diagnostic | `non-claiming` | conditional / pi4 | `cargo test -p root-task --no-default-features --test driver_task_mcs -- --test-threads=1 && cargo test -p coh-rtc --test pi4_profile && cargo test -p console-network-runtime --features direct-genet && cargo test -p root-task --test direct_genet_network_phasing` |
+| `diagnostic.guard-pi4-driver` | NON-CLAIMING diagnostic | `non-claiming` | conditional / pi4 | `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib -- --test-threads=1` |
+| `diagnostic.guard-pi4-driver-contracts` | NON-CLAIMING diagnostic | `non-claiming` | conditional / pi4 | `cargo test -p root-task --no-default-features --test driver_task_mcs -- --test-threads=1 && cargo test -p coh-rtc --test pi4_profile && cargo test -p console-network-runtime --features direct-genet && cargo test -p root-task --test direct_genet_network_phasing` |
 | `diagnostic.guard-live-transport` | NON-CLAIMING diagnostic | `non-claiming` | conditional / qemu, pi4 | `cargo test -p cohsh --no-default-features --features tcp` |
 | `diagnostic.python-sdk` | NON-CLAIMING diagnostic | `non-claiming` | conditional / qemu, pi4 | `scripts/ci/python_test_gate.sh --sdk-tests` |
 | `diagnostic.test-plan-tooling` | NON-CLAIMING diagnostic | `non-claiming` | conditional / qemu, pi4 | `python3 scripts/ci/test_test_plan_catalog.py && python3 scripts/ci/test_test_plan_converge.py` |
@@ -1345,10 +1346,14 @@ retain the current root-control refill under a continuous CNTVCT activation
 window. Tests must prove strict `Operator -> Driver -> Operator` alternation,
 exactly one physical-operation lease and retired finalizer per Driver, a
 strict stop at the generated `root-control budget_us - wcet_us` reserve, and a
-secondary cap of 64 productive units. The selected Pi oracle is exactly
-`2,750 - 2,500 = 250 us`; equality stops, so one complete declared 2,500 us
-logical-unit-plus-epilogue WCET remains before SC exhaustion. The guard is
-checked before every fresh Operator, Driver, and attached Network unit.
+secondary cap of 64 productive units. The selected Pi oracle is exactly 250 us
+(`2,750 - 2,500`); equality stops new-leaf admission so one complete declared
+2,500 us WCET remains inside the unchanged SC. Tests must reject the proposed
+2,500 us elapsed work-window interpretation: an independent WCET audit proves
+that it could admit a fresh leaf at 2,499 us with only 251 us of SC budget
+remaining. The guard is checked before every fresh Operator, Driver, and
+attached Network unit. The kernel SC and natural postponement remain the hard
+execution boundary for a unit already started.
 Zero/invalid generated configuration or frequency, a backwards/drifted
 counter, wait, idle/no progress, output backpressure, handoff,
 terminal/fault/reboot state, or either cap yields and resets the window. An
@@ -6128,16 +6133,27 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
       to infer traffic or change the ring.
       Isolated-console coverage must separately prove that an exact retained
       authenticated response flush selects `poll_response_turn` under the same
-      one-op/two-frame/fixed-byte charge as ordinary polling, while ordinary
-      service retains the strict rotor. Pi root continuation must additionally
-      require a nonzero pending cursor matching both the active and authenticated
-      connection, actual Network activity, exactly one service-turn advance and
-      an immediate Network successor. It must reject inactive, disconnected,
-      stale-active, stale-authenticated, quarantined, recovering, rebooting or
-      no-progress state, a child lower-rotor loop or multi-unit burst, budget
-      increase, physical-input bypass, or QEMU/direct-VirtIO ownership change.
-      The generated 250 us root reserve and 64-unit cap remain exact. Host timing
-      or selector tests cannot establish Pi performance.
+      one-op/two-frame/fixed-byte charge as ordinary polling. QEMU direct-VirtIO
+      must retain its strict lower rotor: `ObserveChild`, `StageOutput`,
+      `Disconnect`, then `ServiceTick`. Direct GENET alone must select an exactly ready
+      `StageOutput`, then an exactly ready `Disconnect`, and otherwise alternate
+      exactly one `ObserveChild`/`ServiceTick` unit per Network visit. Pi root
+      continuation must additionally prove that a Network-starting quantum with
+      exactly one nonsaturated accepted GENET command services Serial and
+      LocalSeat, Dispatches the exact connection-matched response, and consumes
+      one fifth Network stage in place of optional Display. Display must remain
+      the next debt. It must reject inactive, disconnected, stale-active,
+      stale-authenticated, quarantined, recovering, rebooting, contained,
+      physical-response, saturated or no-progress state, a child lower-unit loop
+      or multi-unit burst, budget increase, physical-input bypass, or any
+      QEMU/direct-VirtIO selector or ownership change.
+      The generated `2,750 - 2,500 = 250 us` pre-admission cut and 64-unit cap
+      remain exact. Tests must reject the audited-unsafe 2,500 us elapsed window,
+      including the 2,499 us case that leaves only 251 us for a fresh 2,500 us
+      WCET leaf. Host timing or selector tests cannot establish Pi performance.
+      Isolated-console construction must also prove
+      delayed ACK and Nagle are disabled for its bounded interactive socket;
+      that host contract is not evidence of Pi latency.
       Generated-profile and ABI tests must prove that only the exact Pi
       `bcmgenet-v5` profile derives the direct GENET link: one CPU-only 32-page
       semantic range, zero physical/DMA/device-visible authority, page 0
@@ -6189,11 +6205,14 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
       anchor revoke.
       Direct-GENET diagnostic coverage must prove the exact page-0 layout:
       control header `[0,64)`, four cursor records `[64,320)`, optional aligned
-      192-byte diagnostic-v2 record `[320,512)`, record-relative sequence-last
+      192-byte diagnostic-v3 record `[320,512)`, record-relative sequence-last
       commit at offset 184, and still-reserved tail `[512,4096)`. ABI tests must
-      prove record offset 108 round-trips cumulative `dpc_level_adoptions`, every
-      range is non-overlapping, all other reserved fields stay zero, maximum
-      counter values encode/decode and render without truncation, and a missing,
+      prove record offset 108 round-trips cumulative `dpc_level_adoptions` and
+      offsets 160, 168, and 176 round-trip nonzero raw notification receipts,
+      exact-filter rejections, and the 32-bit badge union. Rejections may not
+      exceed receipts, a nonzero badge union requires a receipt, every range is
+      non-overlapping, maximum counter values encode/decode and render without
+      truncation, and a missing,
       torn, stale, malformed, or wrong-generation record is unavailable rather
       than accepted. Root must stable-read the complete record around its commit
       and require the exact live nonzero direct generation. Ordinary packet turns
@@ -6203,8 +6222,12 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
       sample, label the replacement `phase=pre-idle-service`, and emit a complete
       available batch in this order: `genet_direct`, `genet_direct_flags`,
       `genet_direct_before`, `genet_direct_before_ring`, `genet_direct_irq`,
-      `genet_direct_irq_source`, `genet_direct_dpc`, `genet_direct_dma`,
-      `genet_direct_ring`, then `genet_direct_peer`. The replay is deliberately
+      `genet_direct_irq_source`, `genet_direct_notification`,
+      `genet_direct_dpc`, `genet_direct_dma`, `genet_direct_ring`, then
+      `genet_direct_peer`. Runtime coverage must count each actual nonzero GENET
+      receive result exactly once before badge filtering across the initial poll
+      and every later combined wait, while proving the counters cannot service
+      an IRQ/DPC/packet or alter scheduling. The replay is deliberately
       causal: waking GENET may allow its normal post-command idle path to drain
       already durable RX. Tests must reject a recurring poll, second replay,
       packet or IRQ authority, fallback, retry, recovery, or a claim that the
@@ -6213,7 +6236,7 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
       available and the accepted sequence changed. READY with no stable
       pre-replay record is `ready-unverified`, even if a record is visible
       afterward; it cannot be promoted to fresh causal evidence.
-      The `cohsh` TCP fixture must preserve all ten ordered rows. The Pi trace
+      The `cohsh` TCP fixture must preserve all eleven ordered rows. The Pi trace
       normalizer must classify `genet_direct*` as wired-driver evidence before
       generic network parsing, prevent a component `active=yes` flag from
       overwriting canonical `NET_ACTIVE`, keep legacy traces with no optional
@@ -8118,9 +8141,10 @@ release fence, publish the final sequence commit, and signal only afterward.
 Readers must reject an oversized length or a commit that changes across the
 bounded copy without advancing the accepted sequence. Scalar reserved header
 fields must validate as zero. On direct-GENET control page 0, bytes `[320,512)`
-are no longer generic reserved tail: they hold the optional diagnostic-v2
+are no longer generic reserved tail: they hold the optional diagnostic-v3
 record governed by the stable exact-generation rules above, with cumulative
-`dpc_level_adoptions` at record offset 108. Bytes
+`dpc_level_adoptions` at record offset 108 and raw notification receipt,
+rejection, and badge-union evidence at offsets 160, 168, and 176. Bytes
 `[512,4096)` and inactive payload suffixes remain non-authoritative and must not
 be scanned or copied during a normal turn; construction zeroing and containment
 scrub remain required. Capability
@@ -8844,8 +8868,18 @@ must cover `coh`, `cohsh`, `.coh` workloads, Hive Gateway,
 `tools/cohesix-py`, generated profile contracts, and the REST/QEMU pressure
 harnesses. None consumes routine per-Worker success rows or the private
 bootstrap cadence, so no grammar, schema, workload, or report change is
-expected; `scripts/pi4_serial_reboot.py` and its focused tests are directly
-affected by the prompt barrier.
+expected. `scripts/pi4_serial_reboot.py` and its focused tests are directly
+affected by the prompt barrier and canonical peer-assisted nettest path. The
+helper tests must prove pre-UART canonical regular-file validation, exact sole
+Queen-secret parsing, secret absence from argv/output/notes/repr, exact WiFi and
+wired DHCP-policy/address binding, exact `en0` versus canonical
+`192.168.10.1/24` `en8` host-route/subnet binding, immediate executable/script
+digest revalidation, launch only after a nonzero admitted run generation,
+bounded exception-safe child reap/cancellation, and final generation-matched
+target terminal authority. Invalid or unbound addresses, wrong-lane/public/
+link-local/network/broadcast/self targets, replaced inputs, peer launch/exit
+failure, and incomplete, mismatched, running, or failed target terminals must
+fail closed.
 
 ## Trace replay limits
 <!-- coh-rtc:trace-policy:start -->

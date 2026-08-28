@@ -7,11 +7,16 @@ Copyright 2026 Lukas Bower
 from __future__ import annotations
 
 import argparse
+import hashlib
+import ipaddress
+import os
 import pathlib
 import re
+import stat
 import subprocess
 import sys
 import time
+import tomllib
 from collections.abc import Iterable
 
 try:
@@ -33,6 +38,7 @@ DEFAULT_BAUD = 115_200
 DEFAULT_REPO = pathlib.Path(__file__).resolve().parents[1]
 DEFAULT_COHSH = pathlib.Path("out/cohesix/host-tools/cohsh")
 DEFAULT_TICKET_CONFIG = pathlib.Path("configs/root_task_pi4_uboot_aarch64.toml")
+DEFAULT_NETTEST_PEER_SCRIPT = pathlib.Path("scripts/cohsh/boot_v0.coh")
 DEFAULT_CHAR_DELAY_S = 0.06
 DEFAULT_LINE_TERMINATOR = "\r"
 TAIL_LIMIT = 131_072
@@ -78,6 +84,13 @@ DIAGNOSTIC_SETTLE_TIMEOUT_S = 30.0
 DIAGNOSTIC_COMMAND_DRAIN_S = 0.25
 NETTEST_STARTED_MARKER = b"OK NETTEST detail=started"
 NETTEST_OBSERVATION_S = 17.0
+NETTEST_PEER_PORT = 31_337
+NETTEST_PEER_COMPLETION_GRACE_S = 2.0
+NETTEST_ROUTE_TIMEOUT_S = 2.0
+HOST_WIFI_INTERFACE = "en0"
+HOST_GENET_INTERFACE = "en8"
+HOST_GENET_ADDRESS = ipaddress.IPv4Address("192.168.10.1")
+HOST_GENET_NETWORK = ipaddress.IPv4Network("192.168.10.0/24")
 WIFI_SUPERVISOR_TERMINAL_TIMEOUT_S = 240.0
 WIFI_GATE8_LIFETIME_S = 90.0
 WIFI_TERMINAL_DRAIN_MARGIN_S = 40.0
@@ -193,6 +206,47 @@ MENU_WIFI_SETUP = "wifi-setup"
 MENU_STATIC_SETUP = "static-setup"
 MENU_RESET = "reset"
 MENU_UNKNOWN = "unknown"
+
+
+class NettestPeerConfig:
+    """Validated host inputs for one authenticated nettest TCP peer."""
+
+    __slots__ = (
+        "repo",
+        "cohsh",
+        "script",
+        "auth_token",
+        "port",
+        "cohsh_sha256",
+        "script_sha256",
+    )
+
+    def __init__(
+        self,
+        *,
+        repo: pathlib.Path,
+        cohsh: pathlib.Path,
+        script: pathlib.Path,
+        auth_token: str,
+        port: int = NETTEST_PEER_PORT,
+        cohsh_sha256: str | None = None,
+        script_sha256: str | None = None,
+    ) -> None:
+        self.repo = repo
+        self.cohsh = cohsh
+        self.script = script
+        self.auth_token = auth_token
+        self.port = port
+        self.cohsh_sha256 = cohsh_sha256
+        self.script_sha256 = script_sha256
+
+    def __repr__(self) -> str:
+        return (
+            "NettestPeerConfig("
+            f"repo={self.repo!r}, cohsh={self.cohsh!r}, "
+            f"script={self.script!r}, port={self.port!r}, "
+            "auth_token=<redacted>)"
+        )
 
 
 class SerialMarkerTimeout(RuntimeError):
@@ -487,7 +541,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--diagnostics",
         action="store_true",
-        help="Run passive boot diagnostic commands after the root prompt returns.",
+        help=(
+            "Run image-bound serial diagnostics and one generation-bound "
+            "authenticated TCP nettest peer after the root prompt returns."
+        ),
     )
     parser.add_argument(
         "--active-usb-probe",
@@ -499,6 +556,305 @@ def parse_args() -> argparse.Namespace:
 
 def resolve_under_repo(repo: pathlib.Path, path: pathlib.Path) -> pathlib.Path:
     return path if path.is_absolute() else repo / path
+
+
+def canonical_regular_file(
+    repo: pathlib.Path,
+    path: pathlib.Path,
+    *,
+    label: str,
+    executable: bool = False,
+) -> pathlib.Path:
+    """Resolve one explicit regular-file input without following symlinks."""
+
+    if not path.is_absolute() and ".." in path.parts:
+        raise RuntimeError(f"{label} path may not contain '..'")
+    lexical = pathlib.Path(os.path.abspath(resolve_under_repo(repo, path)))
+    try:
+        info = lexical.lstat()
+        resolved = lexical.resolve(strict=True)
+    except OSError as exc:
+        raise RuntimeError(f"{label} is unavailable: {lexical}") from exc
+    if (
+        stat.S_ISLNK(info.st_mode)
+        or not stat.S_ISREG(info.st_mode)
+        or resolved != lexical
+    ):
+        raise RuntimeError(f"{label} must be a canonical regular non-symlink file")
+    if executable and not os.access(resolved, os.X_OK):
+        raise RuntimeError(f"{label} is not executable: {resolved}")
+    return resolved
+
+
+def regular_file_sha256(path: pathlib.Path) -> str:
+    """Return the exact content digest for one already-canonical regular file."""
+
+    digest = hashlib.sha256()
+    try:
+        with path.open("rb") as stream:
+            while chunk := stream.read(1024 * 1024):
+                digest.update(chunk)
+    except OSError as exc:
+        raise RuntimeError(f"nettest peer input became unavailable: {path}") from exc
+    return digest.hexdigest()
+
+
+def load_queen_console_token(manifest: pathlib.Path) -> str:
+    """Load the sole usable Queen TCP secret from one exact TOML manifest."""
+
+    try:
+        with manifest.open("rb") as stream:
+            document = tomllib.load(stream)
+    except (OSError, tomllib.TOMLDecodeError) as exc:
+        raise RuntimeError("unable to parse nettest peer ticket manifest") from exc
+    tickets = document.get("tickets")
+    if not isinstance(tickets, list):
+        raise RuntimeError("nettest peer manifest tickets must be a list")
+    matches = [
+        ticket.get("secret")
+        for ticket in tickets
+        if isinstance(ticket, dict) and ticket.get("role") == "queen"
+    ]
+    if len(matches) != 1 or not isinstance(matches[0], str):
+        raise RuntimeError("nettest peer manifest must declare exactly one Queen secret")
+    secret = matches[0]
+    if (
+        not secret
+        or secret.strip() != secret
+        or any(ord(character) < 0x21 or ord(character) == 0x7F for character in secret)
+        or secret == "changeme"
+    ):
+        raise RuntimeError("nettest peer manifest Queen secret is unusable")
+    return secret
+
+
+def prepare_nettest_peer(
+    repo: pathlib.Path,
+    cohsh: pathlib.Path,
+    ticket_config: pathlib.Path,
+) -> NettestPeerConfig:
+    """Validate all host inputs before diagnostics acquire the UART."""
+
+    resolved_repo = repo.resolve(strict=True)
+    if not resolved_repo.is_dir():
+        raise RuntimeError(f"repository path is not a directory: {resolved_repo}")
+    resolved_cohsh = canonical_regular_file(
+        resolved_repo,
+        cohsh,
+        label="nettest peer cohsh",
+        executable=True,
+    )
+    resolved_manifest = canonical_regular_file(
+        resolved_repo,
+        ticket_config,
+        label="nettest peer ticket manifest",
+    )
+    resolved_script = canonical_regular_file(
+        resolved_repo,
+        DEFAULT_NETTEST_PEER_SCRIPT,
+        label="nettest peer script",
+    )
+    return NettestPeerConfig(
+        repo=resolved_repo,
+        cohsh=resolved_cohsh,
+        script=resolved_script,
+        auth_token=load_queen_console_token(resolved_manifest),
+        cohsh_sha256=regular_file_sha256(resolved_cohsh),
+        script_sha256=regular_file_sha256(resolved_script),
+    )
+
+
+def validate_nettest_peer_ip(raw: str) -> str | None:
+    """Return one canonical usable IPv4 peer target or fail closed."""
+
+    try:
+        address = ipaddress.IPv4Address(raw)
+    except ipaddress.AddressValueError:
+        return None
+    if (
+        str(address) != raw
+        or address.is_unspecified
+        or address.is_multicast
+        or address.is_loopback
+        or address.is_link_local
+        or address.is_reserved
+        or not address.is_private
+    ):
+        return None
+    return str(address)
+
+
+def revalidate_nettest_peer_inputs(config: NettestPeerConfig) -> None:
+    """Reject a host executable or script replaced after pre-UART validation."""
+
+    for path, expected, label, executable in (
+        (config.cohsh, config.cohsh_sha256, "nettest peer cohsh", True),
+        (config.script, config.script_sha256, "nettest peer script", False),
+    ):
+        if expected is None:
+            continue
+        current = canonical_regular_file(
+            config.repo,
+            path,
+            label=label,
+            executable=executable,
+        )
+        if current != path or regular_file_sha256(current) != expected:
+            raise RuntimeError(f"{label} changed after preflight")
+
+
+def host_interface_ipv4_network(interface: str) -> tuple[ipaddress.IPv4Address, ipaddress.IPv4Network]:
+    """Read one exact active macOS interface IPv4 address and subnet."""
+
+    try:
+        result = subprocess.run(
+            ["/sbin/ifconfig", interface],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=NETTEST_ROUTE_TIMEOUT_S,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise RuntimeError("unable to validate nettest peer interface") from exc
+    if result.returncode != 0:
+        raise RuntimeError("nettest peer interface is unavailable")
+    candidates: list[tuple[ipaddress.IPv4Address, ipaddress.IPv4Network]] = []
+    for match in re.finditer(
+        r"(?m)^\s*inet (?P<address>[0-9.]+) "
+        r"netmask (?P<mask>0x[0-9a-fA-F]{8}) "
+        r"broadcast (?P<broadcast>[0-9.]+)\s*$",
+        result.stdout,
+    ):
+        try:
+            address = ipaddress.IPv4Address(match.group("address"))
+            mask = ipaddress.IPv4Address(int(match.group("mask"), 16))
+            network = ipaddress.IPv4Network(f"{address}/{mask}", strict=False)
+            broadcast = ipaddress.IPv4Address(match.group("broadcast"))
+        except ipaddress.AddressValueError:
+            continue
+        if address.is_loopback or broadcast != network.broadcast_address:
+            continue
+        candidates.append((address, network))
+    if len(candidates) != 1:
+        raise RuntimeError("nettest peer interface lacks one exact IPv4 subnet")
+    return candidates[0]
+
+
+def validate_nettest_peer_route(lane: str, target_ip: str) -> str:
+    """Bind one private target to the requested physical host interface."""
+
+    validated_ip = validate_nettest_peer_ip(target_ip)
+    if validated_ip is None:
+        raise RuntimeError("nettest peer target is not a usable private IPv4 address")
+    expected_interface = {
+        "wifi": HOST_WIFI_INTERFACE,
+        "genet": HOST_GENET_INTERFACE,
+    }.get(lane)
+    if expected_interface is None:
+        raise RuntimeError("nettest peer lane is unsupported")
+    try:
+        route = subprocess.run(
+            ["/sbin/route", "-n", "get", "-inet", validated_ip],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=NETTEST_ROUTE_TIMEOUT_S,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise RuntimeError("unable to resolve nettest peer route") from exc
+    interfaces = re.findall(r"(?m)^\s*interface:\s*(\S+)\s*$", route.stdout)
+    if route.returncode != 0 or interfaces != [expected_interface]:
+        raise RuntimeError("nettest peer route does not match the requested lane")
+    host_address, network = host_interface_ipv4_network(expected_interface)
+    target = ipaddress.IPv4Address(validated_ip)
+    if target not in network or target in {
+        host_address,
+        network.network_address,
+        network.broadcast_address,
+    }:
+        raise RuntimeError("nettest peer target is outside the exact host subnet")
+    if lane == "genet" and (
+        host_address != HOST_GENET_ADDRESS
+        or network != HOST_GENET_NETWORK
+        or target not in HOST_GENET_NETWORK
+    ):
+        raise RuntimeError("GENET peer does not match the canonical en8 subnet")
+    if lane == "wifi" and target in HOST_GENET_NETWORK:
+        raise RuntimeError("WiFi peer aliases the canonical GENET subnet")
+    return validated_ip
+
+
+def start_nettest_tcp_peer(
+    config: NettestPeerConfig,
+    target_ip: str,
+    lane: str,
+) -> subprocess.Popen[bytes]:
+    """Start one cohsh peer without placing its credential in argv."""
+
+    revalidate_nettest_peer_inputs(config)
+    validated_ip = validate_nettest_peer_route(lane, target_ip)
+    environment = os.environ.copy()
+    environment.pop("COH_AUTH_TOKEN", None)
+    environment["COHSH_AUTH_TOKEN"] = config.auth_token
+    return subprocess.Popen(
+        [
+            str(config.cohsh),
+            "--transport",
+            "tcp",
+            "--tcp-host",
+            validated_ip,
+            "--tcp-port",
+            str(config.port),
+            "--script",
+            str(config.script),
+        ],
+        cwd=config.repo,
+        env=environment,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        close_fds=True,
+    )
+
+
+def finish_nettest_tcp_peer(process: subprocess.Popen[bytes]) -> str | None:
+    """Reap one bounded peer child and return a nonsecret failure label."""
+
+    try:
+        return_code = process.wait(timeout=NETTEST_PEER_COMPLETION_GRACE_S)
+    except subprocess.TimeoutExpired:
+        stop_nettest_tcp_peer(process)
+        return "timeout"
+    if return_code != 0:
+        return f"exit-{return_code}"
+    return None
+
+
+def stop_nettest_tcp_peer(process: subprocess.Popen[bytes]) -> None:
+    """Best-effort cancellation for a peer whose serial owner is unwinding."""
+
+    try:
+        if process.poll() is not None:
+            return
+    except (AttributeError, OSError):
+        pass
+    try:
+        process.terminate()
+    except OSError:
+        pass
+    try:
+        process.wait(timeout=1.0)
+    except subprocess.TimeoutExpired:
+        try:
+            process.kill()
+        except OSError:
+            pass
+        try:
+            process.wait(timeout=1.0)
+        except (OSError, subprocess.SubprocessError):
+            pass
+    except (OSError, subprocess.SubprocessError):
+        pass
 
 
 def load_expected_image_identity(
@@ -1311,7 +1667,7 @@ def wait_for_wifi_dhcp_bound(
     controller: RedactingSerialController,
     *,
     timeout_s: float,
-) -> tuple[bool, list[str]]:
+) -> tuple[str | None, list[str]]:
     """Poll guarded ``netstats`` until the selected Wi-Fi lease is current."""
 
     deadline = time.monotonic() + timeout_s
@@ -1332,14 +1688,14 @@ def wait_for_wifi_dhcp_bound(
                 f"polls={poll} phase=guarded-netstats error={exc} "
                 "action=skip-premature-nettest"
             )
-            return False, ["wifi-dhcp:terminal-timeout"]
+            return None, ["wifi-dhcp:terminal-timeout"]
         if time.monotonic() >= deadline:
             controller.note(
                 "wifi DHCP terminal result=timeout "
                 f"polls={poll} phase=guarded-netstats-complete "
                 "action=skip-premature-nettest"
             )
-            return False, ["wifi-dhcp:terminal-timeout"]
+            return None, ["wifi-dhcp:terminal-timeout"]
         if serial_marker_seen(
             snapshot,
             DIAGNOSTIC_RESULT_MARKERS["netstats"][1],
@@ -1348,7 +1704,7 @@ def wait_for_wifi_dhcp_bound(
                 "diagnostic terminal command='netstats' "
                 f"label={label!r} result=err action=skip-premature-nettest"
             )
-            return False, [f"{label}:err"]
+            return None, [f"{label}:err"]
 
         status = parse_netstats_network_status(snapshot)
         if status is None:
@@ -1367,12 +1723,13 @@ def wait_for_wifi_dhcp_bound(
                 ip,
                 dhcp_phase,
             ) = status
+            peer_ip = validate_nettest_peer_ip(ip)
             bound = (
                 mode == "dhcp"
                 and policy == "wifi"
                 and active == "wifi"
                 and address_source == "dhcp-lease"
-                and ip != "0.0.0.0"
+                and peer_ip is not None
                 and dhcp_phase == "bound"
             )
             controller.note(
@@ -1384,7 +1741,7 @@ def wait_for_wifi_dhcp_bound(
                 f"terminal={'bound' if bound else 'no'}"
             )
             if bound:
-                return True, []
+                return peer_ip, []
 
         remaining_s = deadline - time.monotonic()
         if remaining_s <= 0 or poll == max_polls:
@@ -1392,7 +1749,7 @@ def wait_for_wifi_dhcp_bound(
                 "wifi DHCP terminal result=timeout "
                 f"polls={poll} action=skip-premature-nettest"
             )
-            return False, ["wifi-dhcp:terminal-timeout"]
+            return None, ["wifi-dhcp:terminal-timeout"]
         controller.drain_for(
             min(WIFI_DHCP_POLL_INTERVAL_S, remaining_s),
             label=f"wifi DHCP progress before poll {poll + 1}",
@@ -1404,13 +1761,14 @@ def run_diagnostics(
     controller: RedactingSerialController,
     lane: str,
     *,
+    nettest_peer: NettestPeerConfig,
     prompt_ready: bool,
     boot_snapshot: bytes = b"",
     wifi_supervisor_timeout_s: float = WIFI_SUPERVISOR_TERMINAL_TIMEOUT_S,
     wifi_dhcp_timeout_s: float = WIFI_DHCP_TERMINAL_TIMEOUT_S,
     active_usb_probe: bool = False,
 ) -> bool:
-    """Run passive diagnostics and any explicitly requested active USB probe."""
+    """Run serial diagnostics plus one generation-bound authenticated TCP peer."""
 
     usb_scored = True
     failures: list[str] = []
@@ -1418,6 +1776,7 @@ def run_diagnostics(
     nettest_started_run_generation: int | None = None
     nettest_final_observed = False
     nettest_async_result: tuple[int, int, str] | None = None
+    nettest_target_ip: str | None = None
     supervisor_status: str | None = None
     readiness_snapshot = boot_snapshot
     if lane == "wifi":
@@ -1469,7 +1828,7 @@ def run_diagnostics(
             )
     if lane == "wifi":
         if supervisor_status == "ready":
-            dhcp_bound, dhcp_failures = wait_for_wifi_dhcp_bound(
+            nettest_target_ip, dhcp_failures = wait_for_wifi_dhcp_bound(
                 controller,
                 timeout_s=wifi_dhcp_timeout_s,
             )
@@ -1479,7 +1838,7 @@ def run_diagnostics(
                     ("nettest", "nettest"),
                     ("netstats", "netstats-final"),
                 ]
-                if dhcp_bound
+                if nettest_target_ip is not None
                 else [
                     ("netstats", "netstats-final"),
                 ]
@@ -1525,6 +1884,13 @@ def run_diagnostics(
         commands.append(("usb probe-kbd", "usb probe-kbd"))
     commands.append(("smp activity", "smp activity"))
     for command, label in commands:
+        if command == "nettest" and nettest_target_ip is None:
+            failures.append("nettest:peer-target-unavailable")
+            controller.note(
+                "nettest peer target result=unavailable "
+                f"lane={lane} action=skip-nettest-fail-closed"
+            )
+            continue
         if command.startswith("usb ") and not usb_scored:
             controller.note(
                 f"diagnostics serial_only_usb_unscored command={command!r}"
@@ -1542,7 +1908,44 @@ def run_diagnostics(
                 result_markers,
             )
             error_marker = DIAGNOSTIC_RESULT_MARKERS[command][1]
-            if serial_marker_seen(command_snapshot, error_marker):
+            error_seen = serial_marker_seen(command_snapshot, error_marker)
+            if label == "netstats" and lane == "genet" and not error_seen:
+                network_status = parse_netstats_network_status(command_snapshot)
+                if network_status is not None:
+                    (
+                        generation,
+                        mode,
+                        policy,
+                        active,
+                        address_source,
+                        ip,
+                        dhcp_phase,
+                    ) = network_status
+                    peer_ip = validate_nettest_peer_ip(ip)
+                    bound = (
+                        mode == "dhcp"
+                        and policy == "wired"
+                        and active == "wired"
+                        and address_source == "dhcp-lease"
+                        and peer_ip is not None
+                        and dhcp_phase == "bound"
+                    )
+                    controller.note(
+                        "genet DHCP pre-nettest "
+                        f"generation={generation} mode={mode} policy={policy} "
+                        f"active={active} address_source={address_source} "
+                        f"ip={ip} dhcp={dhcp_phase} "
+                        f"terminal={'bound' if bound else 'no'}"
+                    )
+                    if bound:
+                        nettest_target_ip = peer_ip
+                if nettest_target_ip is None:
+                    failures.append("genet-dhcp:invalid-or-unbound")
+                    controller.note(
+                        "genet DHCP pre-nettest result=invalid-or-unbound "
+                        "action=skip-nettest-fail-closed"
+                    )
+            if error_seen:
                 failures.append(f"{label}:err")
                 controller.note(
                     f"diagnostic terminal command={command!r} "
@@ -1567,16 +1970,65 @@ def run_diagnostics(
                 nettest_started_run_generation = (
                     parse_nettest_started_run_generation(command_snapshot)
                 )
+                peer_process: subprocess.Popen[bytes] | None = None
                 if nettest_started_run_generation is None:
                     failures.append("nettest:started-run-generation-missing")
                     controller.note(
                         "nettest admission run_generation=missing "
                         "action=observe-and-fail-closed"
                     )
-                observation = controller.drain_for(
-                    NETTEST_OBSERVATION_S,
-                    label="nettest terminal observation window",
-                )
+                else:
+                    try:
+                        peer_process = start_nettest_tcp_peer(
+                            nettest_peer,
+                            nettest_target_ip,
+                            lane,
+                        )
+                    except (OSError, RuntimeError) as exc:
+                        failures.append("nettest:peer-launch-failed")
+                        controller.note(
+                            "nettest peer launch result=fail "
+                            f"run_generation={nettest_started_run_generation} "
+                            f"error_type={type(exc).__name__} "
+                            "action=observe-target-and-fail-closed"
+                        )
+                try:
+                    if peer_process is not None:
+                        controller.note(
+                            "nettest peer launch result=started "
+                            f"run_generation={nettest_started_run_generation} "
+                            f"target={nettest_target_ip}:{nettest_peer.port} "
+                            f"lane={lane} script={nettest_peer.script.name}"
+                        )
+                    observation = controller.drain_for(
+                        NETTEST_OBSERVATION_S,
+                        label="nettest terminal observation window",
+                    )
+                    if peer_process is not None:
+                        try:
+                            peer_failure = finish_nettest_tcp_peer(peer_process)
+                        except (OSError, subprocess.SubprocessError) as exc:
+                            peer_failure = "reap-error"
+                            controller.note(
+                                "nettest peer terminal result=fail "
+                                f"run_generation={nettest_started_run_generation} "
+                                f"error_type={type(exc).__name__}"
+                            )
+                        if peer_failure is not None:
+                            failures.append(f"nettest:peer-{peer_failure}")
+                            controller.note(
+                                "nettest peer terminal result=fail "
+                                f"run_generation={nettest_started_run_generation} "
+                                f"reason={peer_failure}"
+                            )
+                        else:
+                            controller.note(
+                                "nettest peer terminal result=pass "
+                                f"run_generation={nettest_started_run_generation}"
+                            )
+                finally:
+                    if peer_process is not None:
+                        stop_nettest_tcp_peer(peer_process)
                 nettest_async_result = parse_nettest_result(
                     post_ack_snapshot + observation
                 )
@@ -1694,6 +2146,11 @@ def run() -> int:
         repo,
         args.image_identity_metadata,
     )
+    nettest_peer = (
+        prepare_nettest_peer(repo, args.cohsh, args.ticket_config)
+        if args.diagnostics
+        else None
+    )
     args.log.parent.mkdir(parents=True, exist_ok=True)
 
     controller = RedactingSerialController(
@@ -1703,6 +2160,11 @@ def run() -> int:
         echo=not args.no_echo,
         char_delay_s=args.char_delay_ms / 1000,
     )
+    if nettest_peer is not None:
+        controller.add_redaction(
+            f"AUTH {nettest_peer.auth_token}",
+            "AUTH <queen-console-token>",
+        )
     try:
         menu_snapshot: bytes | None = None
         if args.initial_state == "root":
@@ -1754,16 +2216,20 @@ def run() -> int:
                 label="root prompt after exact sealed build marker",
                 stream_prefix=build_snapshot[-(len(ROOT_PROMPT_FULL) - 1) :],
             )
-        if args.diagnostics and not run_diagnostics(
-            controller,
-            args.lane,
-            prompt_ready=True,
-            boot_snapshot=build_snapshot + root_snapshot,
-            wifi_supervisor_timeout_s=args.boot_timeout_s,
-            active_usb_probe=getattr(args, "active_usb_probe", False),
-        ):
-            controller.note("complete result=diagnostic-failure exit=1")
-            return 1
+        if args.diagnostics:
+            if nettest_peer is None:
+                raise AssertionError("diagnostics require a prepared nettest peer")
+            if not run_diagnostics(
+                controller,
+                args.lane,
+                nettest_peer=nettest_peer,
+                prompt_ready=True,
+                boot_snapshot=build_snapshot + root_snapshot,
+                wifi_supervisor_timeout_s=args.boot_timeout_s,
+                active_usb_probe=getattr(args, "active_usb_probe", False),
+            ):
+                controller.note("complete result=diagnostic-failure exit=1")
+                return 1
         controller.note("complete")
         return 0
     finally:

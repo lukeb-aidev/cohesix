@@ -39,10 +39,12 @@ temporal policy, [API Guidelines](API_GUIDELINES.md) for REST deadline and
 refusal semantics, and [Benchmarking](BENCHMARKS.md) for backend proof classes.
 
 The Pi-only GENET-to-console direct data plane is a private target transport
-change. Its optional causal diagnostic adds ten ordered
+change. Its optional causal diagnostic adds eleven ordered
 `netstats: genet_direct*` rows without changing a command, listener, authentication,
 namespace, REST request/response, library API, workload, or report schema. The
-captured Pi-wired `cohsh` fixture includes the ten rows. The Pi trace normalizer
+captured Pi-wired `cohsh` fixture includes the eleven rows, including the raw
+receive-boundary notification receipt/rejection/badge-union discriminator. The
+Pi trace normalizer
 classifies them as wired-driver evidence before generic network records, keeps
 legacy captures without them parseable, prevents a component `active=yes` flag
 from replacing canonical `NET_ACTIVE`, and refuses to promote a truncated or
@@ -56,12 +58,25 @@ SwarmUI, GPU bridge, host-ticket agent, sidecar, sidecar bus, CAS tool,
 model comparator, M26e pressure runner, benchmark workloads, and report schemas
 were reviewed and require no hand-authored compatibility change. The Pi gate
 wrapper now requires an exact same-generation `nettest` terminal after its
-bounded observation window; `pi4_serial_reboot.py` requires the clean staged
-identity sidecar and exact sealed marker and takes two activity samples; the
-REST performance harness accepts only terminal `OK AUTH`. These are bounded
-host evidence-truth changes, not wire, workload, or report-schema changes. Pi
-build selection and generated private ABI/resource records remain unchanged.
-A fresh physical benchmark is still the only Pi performance authority.
+bounded observation window. `pi4_serial_reboot.py` requires the clean staged
+identity sidecar and exact sealed marker, validates the exact current bound
+WiFi or wired address and its host route (`en0` for WiFi, canonical
+`192.168.10.1/24` on `en8` for GENET) plus canonical `cohsh`, Queen manifest, and
+`boot_v0.coh` inputs before acquiring the UART, and launches one asynchronous
+authenticated peer only after the target admits a nonzero nettest run
+generation. The Queen secret is passed only in the child environment and is
+redacted from the serial transcript; the generation-matched target terminal
+remains authoritative and any invalid address, peer failure, or incomplete
+terminal fails closed. The helper also takes two activity samples, and the REST
+performance harness accepts only terminal `OK AUTH`. These are bounded host
+evidence-truth changes, not wire, workload, or report-schema changes. The
+focused `cohsh` capture fixture and Pi trace-normalizer/helper tests change;
+`coh`, `coh-status`, Hive Gateway/REST, SwarmUI, the remaining host tools,
+`tools/cohesix-py`, generated-profile consumers, `.coh` workloads, benchmark
+arithmetic, and report schemas were reviewed and require no implementation
+change. Pi build selection and generated private ABI/resource records remain
+unchanged. A fresh physical benchmark is still the only Pi performance
+authority.
 
 The finite GENET ownership-boundary IRQ rearm, attached-CYW43 distinct-phase
 composition, Wi-Fi-bootstrap USB/serial/display fairness, and physical-Pi MCS

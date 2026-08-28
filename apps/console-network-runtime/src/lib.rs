@@ -1091,6 +1091,15 @@ impl<'a> ConsoleNetworkService<'a> {
         }
         let mut sockets = SocketSet::new(socket_storage);
         let mut tcp = TcpSocket::new(TcpSocketBuffer::new(tcp_rx), TcpSocketBuffer::new(tcp_tx));
+        #[cfg(feature = "direct-genet")]
+        {
+            // Pi's direct-GENET/CYW43 console is an interactive request/response
+            // path. Emit the receive ACK in the ingress-coupled stack cycle and
+            // never retain a small response behind an earlier unacknowledged
+            // segment. QEMU retains its already-qualified TCP policy.
+            tcp.set_ack_delay(None);
+            tcp.set_nagle_enabled(false);
+        }
         tcp.listen(IpListenEndpoint::from(descriptor.listener_port))
             .map_err(|_| RuntimeError::ListenerBind)?;
         let tcp_handle = sockets.add(tcp);
@@ -1455,6 +1464,27 @@ mod tests {
             seal: 0,
         }
         .sealed()
+    }
+
+    #[cfg(feature = "direct-genet")]
+    #[test]
+    fn isolated_console_socket_uses_interactive_tcp_policy() {
+        let mut rx = [0u8; 1024];
+        let mut tx = [0u8; 1024];
+        let mut storage = [SocketStorage::EMPTY];
+        let service =
+            ConsoleNetworkService::new(descriptor(), &mut rx, &mut tx, &mut storage).unwrap();
+        let socket = service.sockets.get::<TcpSocket>(service.tcp_handle);
+
+        assert_eq!(
+            socket.ack_delay(),
+            None,
+            "interactive ACKs must stay in the receive-coupled stack cycle",
+        );
+        assert!(
+            !socket.nagle_enabled(),
+            "bounded console frames must not wait behind an unacknowledged segment",
+        );
     }
 
     fn framed(payload: &[u8]) -> std::vec::Vec<u8> {

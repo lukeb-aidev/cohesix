@@ -2446,6 +2446,9 @@ struct GenetRuntimeState {
     direct_genet_tx_packets: u32,
     direct_genet_peer_wakes: u32,
     direct_genet_peer_signals: u32,
+    raw_notification_receipts: u64,
+    raw_notification_rejected: u64,
+    raw_notification_badge_or: u64,
     direct_genet_diagnostic_sequence: u64,
     direct_genet_pending_rx: Option<DirectGenetPendingRxCommit>,
     direct_genet_pending_tx: Option<DirectGenetRingSnapshot>,
@@ -2506,6 +2509,9 @@ impl GenetRuntimeState {
             direct_genet_tx_packets: 0,
             direct_genet_peer_wakes: 0,
             direct_genet_peer_signals: 0,
+            raw_notification_receipts: 0,
+            raw_notification_rejected: 0,
+            raw_notification_badge_or: 0,
             direct_genet_diagnostic_sequence: 0,
             direct_genet_pending_rx: None,
             direct_genet_pending_tx: None,
@@ -2565,6 +2571,9 @@ impl GenetRuntimeState {
         self.direct_genet_tx_packets = 0;
         self.direct_genet_peer_wakes = 0;
         self.direct_genet_peer_signals = 0;
+        self.raw_notification_receipts = 0;
+        self.raw_notification_rejected = 0;
+        self.raw_notification_badge_or = 0;
         self.direct_genet_diagnostic_sequence = 0;
         self.direct_genet_pending_rx = None;
         self.direct_genet_pending_tx = None;
@@ -18693,6 +18702,50 @@ const fn runtime_notification_service_badge(
     }
 }
 
+/// Record one raw notification receipt before the route filter can discard it.
+///
+/// These counters are observational only. They neither service the badge nor
+/// grant a DPC, IRQ acknowledgement, retry, or scheduling turn.
+#[cfg(any(target_os = "none", test))]
+fn genet_runtime_record_raw_notification(state: &mut GenetRuntimeState, badge: u32) {
+    if badge == 0 {
+        return;
+    }
+    state.raw_notification_receipts = state.raw_notification_receipts.saturating_add(1);
+    state.raw_notification_badge_or |= u64::from(badge);
+    if runtime_notification_service_badge(RuntimeNotificationRoute::Genet, badge).is_none() {
+        state.raw_notification_rejected = state.raw_notification_rejected.saturating_add(1);
+    }
+}
+
+/// Observe one wake returned by an actual receive boundary exactly once.
+#[cfg(any(target_os = "none", test))]
+fn genet_runtime_observe_received_wake(
+    state: &mut GenetRuntimeState,
+    route: RuntimeNotificationRoute,
+    wake: RuntimeWake,
+) -> RuntimeWake {
+    if route == RuntimeNotificationRoute::Genet {
+        if let RuntimeWake::Notification(badge) = wake {
+            genet_runtime_record_raw_notification(state, badge);
+        }
+    }
+    wake
+}
+
+#[cfg(target_os = "none")]
+fn runtime_observe_received_wake(
+    route: RuntimeNotificationRoute,
+    wake: RuntimeWake,
+) -> RuntimeWake {
+    if route == RuntimeNotificationRoute::Genet {
+        GENET_RUNTIME_STATE
+            .with_mut(|state| genet_runtime_observe_received_wake(state, route, wake))
+    } else {
+        wake
+    }
+}
+
 #[cfg(any(target_os = "none", test))]
 const fn runtime_notification_wake_badge(route: RuntimeNotificationRoute, badge: u32) -> u32 {
     let root_badge = badge & DRIVER_RUNTIME_RESERVED_ROOT_BADGE;
@@ -19015,12 +19068,15 @@ fn runtime_fail_closed_steady_wait_unavailable(
 #[cfg(target_os = "none")]
 fn runtime_command_wait_wake_or_quarantine(
     wait: RuntimeCommandWait,
-    _route: RuntimeNotificationRoute,
+    route: RuntimeNotificationRoute,
     _exact_steady_cyw43_parent: Option<DriverTaskCommandRecord>,
 ) -> RuntimeWake {
-    match runtime_command_wait_route(wait) {
+    let wake = match runtime_command_wait_route(wait) {
         RuntimeCommandWaitRoute::Wake(wake) => wake,
-    }
+    };
+    // Every combined blocking or nonblocking receive after the initial ring
+    // poll routes through this boundary before badge filtering or service.
+    runtime_observe_received_wake(route, wake)
 }
 
 #[cfg(target_os = "none")]
@@ -45313,7 +45369,9 @@ fn genet_direct_publish_runtime_diagnostic(
         rx_consumer_poison,
         tx_producer_poison,
         tx_consumer_poison,
-        reserved: [0; 3],
+        raw_notification_receipts: state.raw_notification_receipts,
+        raw_notification_rejected: state.raw_notification_rejected,
+        raw_notification_badge_or: state.raw_notification_badge_or,
         committed_sequence: sequence,
     };
     let mut encoded = [0u8; DIRECT_GENET_RUNTIME_DIAGNOSTIC_BYTES];
@@ -63848,8 +63906,12 @@ pub fn runtime_main(task_key: usize) -> ! {
         let notification_route = runtime_notification_route(&RUNTIME_DESCRIPTOR.load());
         if runtime_command_poll_due(pending_intake.is_some()) {
             let publish_ring_read_begin = !ring_read_progress_published;
-            let wake =
-                poll_runtime_command(last_sequence, task_key_marker, publish_ring_read_begin);
+            // This initial ring-aware poll is the only receive result that
+            // does not use `runtime_command_wait_wake_or_quarantine` below.
+            let wake = runtime_observe_received_wake(
+                notification_route,
+                poll_runtime_command(last_sequence, task_key_marker, publish_ring_read_begin),
+            );
             if publish_ring_read_begin {
                 ring_read_progress_published = true;
             }
@@ -77692,6 +77754,79 @@ mod tests {
     }
 
     #[test]
+    fn direct_genet_raw_notification_discriminator_precedes_exact_badge_filter() {
+        let mut state = GenetRuntimeState::new();
+
+        assert_eq!(
+            genet_runtime_observe_received_wake(
+                &mut state,
+                RuntimeNotificationRoute::Genet,
+                RuntimeWake::Notification(0),
+            ),
+            RuntimeWake::Notification(0),
+        );
+        genet_runtime_observe_received_wake(
+            &mut state,
+            RuntimeNotificationRoute::Genet,
+            RuntimeWake::Notification(DRIVER_RUNTIME_GENET_IRQ_BADGE),
+        );
+        genet_runtime_observe_received_wake(
+            &mut state,
+            RuntimeNotificationRoute::Genet,
+            RuntimeWake::Notification(DRIVER_RUNTIME_DIRECT_GENET_NOTIFICATION_BADGE),
+        );
+        genet_runtime_observe_received_wake(
+            &mut state,
+            RuntimeNotificationRoute::Genet,
+            RuntimeWake::Notification(
+                DRIVER_RUNTIME_GENET_IRQ_BADGE | DRIVER_RUNTIME_DIRECT_GENET_NOTIFICATION_BADGE,
+            ),
+        );
+        let rejected = DRIVER_RUNTIME_RESERVED_ROOT_BADGE | DRIVER_RUNTIME_GENET_IRQ_BADGE;
+        genet_runtime_observe_received_wake(
+            &mut state,
+            RuntimeNotificationRoute::Genet,
+            RuntimeWake::Notification(rejected),
+        );
+        genet_runtime_observe_received_wake(
+            &mut state,
+            RuntimeNotificationRoute::Serial,
+            RuntimeWake::Notification(DRIVER_RUNTIME_GENET_IRQ_BADGE),
+        );
+        genet_runtime_observe_received_wake(
+            &mut state,
+            RuntimeNotificationRoute::Genet,
+            RuntimeWake::None,
+        );
+
+        assert_eq!(state.raw_notification_receipts, 4);
+        assert_eq!(state.raw_notification_rejected, 1);
+        assert_eq!(
+            state.raw_notification_badge_or,
+            u64::from(
+                DRIVER_RUNTIME_RESERVED_ROOT_BADGE
+                    | DRIVER_RUNTIME_GENET_IRQ_BADGE
+                    | DRIVER_RUNTIME_DIRECT_GENET_NOTIFICATION_BADGE
+            ),
+        );
+        assert_eq!(state.irq_wakes, 0, "observation cannot service an IRQ");
+        assert_eq!(
+            state.direct_genet_peer_wakes, 0,
+            "observation cannot admit peer work",
+        );
+
+        state.raw_notification_receipts = u64::MAX;
+        state.raw_notification_rejected = u64::MAX;
+        genet_runtime_observe_received_wake(
+            &mut state,
+            RuntimeNotificationRoute::Genet,
+            RuntimeWake::Notification(rejected),
+        );
+        assert_eq!(state.raw_notification_receipts, u64::MAX);
+        assert_eq!(state.raw_notification_rejected, u64::MAX);
+    }
+
+    #[test]
     fn direct_genet_badge_zero_services_only_durable_tx_rx_or_irq_state() {
         let _guard = test_guard();
         reset_runtime_for_test();
@@ -78744,6 +78879,13 @@ mod tests {
         state.direct_genet_tx_packets = 4;
         state.direct_genet_peer_wakes = 8;
         state.direct_genet_peer_signals = 6;
+        state.raw_notification_receipts = 11;
+        state.raw_notification_rejected = 2;
+        state.raw_notification_badge_or = u64::from(
+            DRIVER_RUNTIME_RESERVED_ROOT_BADGE
+                | DRIVER_RUNTIME_GENET_IRQ_BADGE
+                | DRIVER_RUNTIME_DIRECT_GENET_NOTIFICATION_BADGE,
+        );
         state.direct_genet_state_changes = 2;
         GENET_RUNTIME_STATE.with_mut(|runtime| *runtime = state);
 
@@ -78813,6 +78955,22 @@ mod tests {
             (5, 4)
         );
         assert_eq!((diagnostic.peer_wakes, diagnostic.peer_signals), (8, 6));
+        assert_eq!(
+            (
+                diagnostic.raw_notification_receipts,
+                diagnostic.raw_notification_rejected,
+                diagnostic.raw_notification_badge_or,
+            ),
+            (
+                11,
+                2,
+                u64::from(
+                    DRIVER_RUNTIME_RESERVED_ROOT_BADGE
+                        | DRIVER_RUNTIME_GENET_IRQ_BADGE
+                        | DRIVER_RUNTIME_DIRECT_GENET_NOTIFICATION_BADGE,
+                ),
+            ),
+        );
         assert_eq!(diagnostic.state_changes, 2);
         assert_eq!(
             (
