@@ -26,8 +26,6 @@ use smoltcp::wire::{EthernetAddress, Ipv4Address};
 use super::isolated_self_test::{IsolatedSelfTestObservation, IsolatedSelfTestState};
 #[cfg(feature = "net-backend-virtio")]
 use super::ConsoleNetConfig;
-#[cfg(feature = "net-backend-virtio")]
-use super::NetDeviceCounters;
 use super::{
     select_isolated_direct_network_turn, select_isolated_direct_response_turn,
     select_isolated_network_turn, select_isolated_response_turn, ConsoleLine,
@@ -55,6 +53,31 @@ const ISOLATED_NETWORK_TURN_BYTES: u32 =
     (console_network_abi::CONSOLE_PAYLOAD_BYTES + console_network_abi::ETHERNET_FRAME_BYTES) as u32;
 #[cfg(feature = "net-backend-virtio")]
 const QEMU_VIRTIO_MAC: [u8; 6] = [0x52, 0x55, 0x00, 0xd1, 0x55, 0x01];
+
+fn isolated_wifi_connection_generation<D: NetDevice>() -> u64 {
+    let contract = D::driver_task_contract();
+    if contract != crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT {
+        return super::projected_wifi_connection_generation(contract, 0);
+    }
+    let live_generation = {
+        #[cfg(feature = "kernel")]
+        {
+            u64::from(crate::drivers::driver_task_net::cyw43_connection_generation())
+        }
+        #[cfg(not(feature = "kernel"))]
+        {
+            0
+        }
+    };
+    super::projected_wifi_connection_generation(contract, live_generation)
+}
+
+fn refresh_isolated_device_counters<D: NetDevice>(counters: &mut NetCounters, device: &D) {
+    counters.apply_device_snapshot(
+        device.counters(),
+        isolated_wifi_connection_generation::<D>(),
+    );
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct QueuedConsoleOutput {
@@ -506,6 +529,8 @@ impl<D: NetDevice> IsolatedNetworkConsole<D> {
         dhcp_phase: &'static str,
         self_test_enabled: bool,
     ) -> Self {
+        let mut counters = NetCounters::default();
+        refresh_isolated_device_counters(&mut counters, &device);
         Self {
             device,
             runtime,
@@ -539,7 +564,7 @@ impl<D: NetDevice> IsolatedNetworkConsole<D> {
                 tx_drops: 0,
                 last_poll_ms: 0,
             },
-            counters: NetCounters::default(),
+            counters,
             connection_bytes_read: 0,
             connection_bytes_written: 0,
             ingest_backpressure: 0,
@@ -1321,18 +1346,8 @@ impl<D: NetDevice> IsolatedNetworkConsole<D> {
     }
 
     fn refresh_device_counters(&mut self) {
-        let device = self.device.counters();
         self.telemetry.tx_drops = self.device.tx_drop_count();
-        self.counters.rx_packets = device.rx_packets;
-        self.counters.tx_packets = device.tx_packets;
-        self.counters.rx_used_advances = device.rx_used_advances;
-        self.counters.tx_used_advances = device.tx_used_advances;
-        self.counters.tx_submit = device.tx_submit;
-        self.counters.tx_complete = device.tx_complete;
-        self.counters.tx_free = device.tx_free;
-        self.counters.tx_in_flight = device.tx_in_flight;
-        self.counters.tx_double_submit = device.tx_double_submit;
-        self.counters.tx_zero_len_attempt = device.tx_zero_len_attempt;
+        refresh_isolated_device_counters(&mut self.counters, &self.device);
     }
 
     fn service_self_test(&mut self) -> bool {

@@ -1371,25 +1371,37 @@ prove all of the following:
   `CYW43_RUNTIME_RECOVERY status=ready generation=<n> ...` and can neither
   replace nor duplicate bootstrap Ready.
 - Exact DHCP/address/prefix truth must expose a side-effect-free deferred-child
-  handoff predicate. Before service-readiness evaluation can declare success or
-  timeout, the supervisor must select one exclusive `ConsoleHandoff` turn that
-  performs no CYW43 poll, borrows HAL only to finalize and resume the already
-  registered child, and yields. A later Network turn alone may consume child
-  Ready. Recovery and runnable/waiting canonical-parent work retain precedence;
-  quarantine rejects the predicate; and a handoff failure enters the existing
-  failed state with no root TCP fallback, deadline renewal, extra retry, or
-  mixed network/HAL work. Regression coverage must reproduce Gate 8 plus bound
-  DHCP while the child is deferred and prove the handoff is selected before the
-  unchanged `service-readiness-deadline` can quarantine it.
+  handoff predicate. Once DHCP becomes bound, the supervisor must select one
+  exclusive `ConsoleHandoff` turn before service-readiness evaluation can
+  declare success or timeout. That turn performs no CYW43 poll, borrows HAL
+  only to finalize and resume the already registered child, and yields. A later
+  Network turn alone may consume child Ready. Recovery and runnable/waiting
+  canonical-parent work retain precedence; quarantine rejects the predicate;
+  and a handoff failure enters the existing failed state with no root TCP
+  fallback, extra retry, or mixed network/HAL work. Successful activation arms
+  one distinct exact-generation Ready observation window derived from the
+  separately rounded generated response bounds of `console-network-service`
+  and `root-control`; the current Pi profile admits `9 ms + 6 ms = 15 ms`.
+  Missing, zero, inactive, non-admitted, or overflowing generated authority
+  fails closed immediately. Regression coverage must reproduce Gate 8 plus
+  DHCP becoming bound in a NetworkControl turn that began at
+  `original_deadline - 1 ms` and completed at or after the deadline, prove the
+  exclusive handoff still occurs, reject a turn that begins exactly at the
+  deadline, admit exact-generation Ready at `+14 ms`, and reject missing or
+  wrong-generation Ready at `+15 ms`.
 - Transport attachment publishes `stabilizing`. Initial Gate 8 publication in
   the sole `attempt=1` outer boot episode uses one absolute
   `now + 90,000 ms` deadline. Gate 8 is passive: a logical subgate failure
   remains inside its bounded gate-local policy and cannot request pair repair.
   The initial pair is the only pre-service physical lifetime; typed faults must
-  drain/fence exact ownership and cannot start pair 2. Gate 8 commit does not
-  stop or renew the deadline. Missing exact-generation DHCP/listener service at
-  expiry must terminate with `blocker=service-readiness-deadline`. Deadline
-  exhaustion must retain the complete eight-line snapshot and adjacent
+  drain/fence exact ownership and cannot start pair 2. Gate 8 commit alone does
+  not stop or renew the deadline. Before child activation, missing DHCP/address
+  truth at expiry must terminate with
+  `blocker=service-readiness-deadline`. After successful activation, only the
+  generated response-bound window above governs the child's first
+  exact-generation Ready publication and root observation; reaching its exact
+  boundary without Ready terminates with the same blocker. Deadline exhaustion
+  must retain the complete eight-line snapshot and adjacent
   `CYW43_GATE8_TERMINAL ... action=quarantine`, emit terminal
   `status=permanent`, and quarantine attached Wi-Fi while serial, local-seat,
   HDMI diagnostics, authentication, and reboot remain live. Only a separately
@@ -2537,10 +2549,16 @@ lease conflict that performed no child action and changed no scheduler state
 must clear locally. Gate-local association, DHCP, and protocol retries remain
 independently bounded and must not mutate the boot-episode identity.
 Separate lifecycle coverage must hold every logical Gate 8 failure until the
-original 90-second deadline, and must apply that same deadline after Gate 8
-commit while DHCP/listener readiness is absent. It must retain
-`CYW43_GATE8_TERMINAL`, publish one `status=permanent`, and quarantine without
-entering `status=recovery`.
+original 90-second deadline and apply that same deadline after Gate 8 commit
+while DHCP/address truth is absent. DHCP becoming bound in a control turn that
+began strictly before the boundary must select the exclusive handoff rather
+than lose to the aged post-turn clock sample; a turn beginning at the boundary
+is late and cannot authorize handoff.
+Successful child activation must then arm only the selected profile's derived
+child-plus-root response window: exact-generation Ready before its boundary
+succeeds; missing, late, wrong-generation, or invalid generated authority fails
+closed. Both deadline paths must retain `CYW43_GATE8_TERMINAL`, publish one
+`status=permanent`, and quarantine without entering `status=recovery`.
 
 Production failure-cut coverage must show one queued `status=failed` record
 after a retryable terminal failure and after the HAL guard is released, followed
@@ -3726,10 +3744,14 @@ both linked-runtime restart contexts exist, the initial physical pair remains
 the only pre-service lifetime. A typed runtime/SDIO or issued-unknown physical
 fault drains and fences its exact owner but cannot emit pair 2. Gate-local
 association, DHCP, and protocol retries remain independently bounded. Gate 8
-itself never requests pair repair; logical failure or committed service that
-still lacks DHCP/listener readiness waits to the original absolute deadline,
-then
-emits `CYW43_GATE8_TERMINAL ... action=quarantine` and terminal
+itself never requests pair repair. Logical failure or committed service that
+has not yet reached exact DHCP plus child activation waits only to the original
+absolute deadline. A DHCP-producing NetworkControl turn must begin strictly
+before that deadline; its exact-generation authorization permits the one
+exclusive following handoff even when the bounded turn finishes after the
+deadline. Only after successful activation does one separately derived child
+plus root response window govern the first exact-generation child Ready. Either
+deadline emits `CYW43_GATE8_TERMINAL ... action=quarantine` and terminal
 `status=permanent`. A terminal failure quarantines network service and returns
 to the ordinary EventPump so
 diagnostics, authentication, reboot, serial, local-seat, and HDMI remain

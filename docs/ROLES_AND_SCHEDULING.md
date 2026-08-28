@@ -341,6 +341,15 @@ and `5,100 us` for root-control, retains the mandatory reserve, and admits the
 packet latency. Fresh same-image Pi load evidence must still prove authenticated
 response cadence; QEMU priorities and placement remain unchanged.
 
+The Pi CYW43 boot supervisor consumes those two generated response bounds only
+after the DHCP-bound console child is finalized and resumed. Each bound is
+rounded independently to the millisecond clock, so the current profile admits
+one `9 ms + 6 ms = 15 ms` exact-generation Ready publication/observation
+window. Invalid generated authority or a missing, late, or wrong-generation
+Ready fails closed. This is a distinct post-activation observation bound, not a
+budget increase, retry, renewal of the 90-second pre-handoff Gate 8 deadline,
+or proof of packet latency.
+
 The driver TCB constructor applies that selection at the actual timeout-handler
 installation boundary and reports `timeout_policy` plus `timeout_endpoint` in
 its existing bounded MCS construction record. A reserved timeout identity is

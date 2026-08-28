@@ -92,6 +92,35 @@ fn diagnostic_probe_is_one_replay_with_pre_and_post_sequence_last_evidence() {
 }
 
 #[test]
+fn default_stack_delegates_the_direct_genet_probe_without_cross_backend_fallback() {
+    let implementation = STACK_SOURCE
+        .split_once("impl NetPoller for DefaultNetStack")
+        .map(|(_, tail)| tail)
+        .expect("default network wrapper implementation exists");
+    let probe = implementation
+        .split_once("fn refresh_direct_genet_diagnostics")
+        .map(|(_, tail)| tail)
+        .expect("default wrapper preserves the direct GENET probe");
+    let probe = probe
+        .split_once("fn status_report")
+        .map(|(body, _)| body)
+        .expect("direct probe ends before status delegation");
+
+    assert!(
+        probe.contains("Self::GenetDriverTask(stack) => stack.refresh_direct_genet_diagnostics()")
+    );
+    assert!(probe.contains("Self::Rtl8139(_) | Self::Cyw43DriverTask(_) => None"));
+    assert!(probe.contains("Self::Virtio(_) => None"));
+    assert_eq!(
+        probe
+            .matches("stack.refresh_direct_genet_diagnostics()")
+            .count(),
+        1,
+        "one netstats request must issue at most one concrete GENET probe",
+    );
+}
+
+#[test]
 fn console_remains_suspended_until_exact_genet_ready_terminal() {
     let arm = STACK_SOURCE
         .find("runtime.arm_direct_genet()?")

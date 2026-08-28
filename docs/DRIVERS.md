@@ -1070,8 +1070,19 @@ select one exclusive `ConsoleHandoff` root-control turn: it performs no CYW43
 poll, borrows HAL only to finalize and resume the already registered
 console-network child, and yields before a later Network turn consumes child
 Ready. Recovery or a runnable/waiting canonical parent keeps priority over this
-handoff. A handoff failure stays failed, with no root TCP fallback or deadline
-renewal. Gate 8 and DHCP alone therefore do not prove listener readiness.
+handoff. DHCP becoming bound inside a NetworkControl turn authorizes that
+handoff only when the turn began strictly before the original deadline and the
+committed generation remains operational both before and after activation. The
+authorization is retained for the exclusive following turn; raw DHCP truth
+alone cannot select the handoff. A successful activation replaces neither
+budget nor retry policy: it arms one exact-generation Ready observation window
+derived from the independently
+rounded generated response bounds for `console-network-service` and
+`root-control` (`9 ms + 6 ms = 15 ms` for the current Pi profile). Missing,
+zero, inactive, non-admitted, overflowing, late, or wrong-generation authority
+fails closed. A handoff failure stays failed, with no root TCP fallback,
+deadline renewal, or extra retry. Gate 8 and DHCP alone therefore do not prove
+listener readiness.
 
 ## 8. Build diagnostics for developers, not incidents
 

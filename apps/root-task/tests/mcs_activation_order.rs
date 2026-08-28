@@ -1502,3 +1502,39 @@ fn attach_commits_only_after_ninedoor_success() {
         "optional logger EP-only promotion cannot veto a completed namespace attach",
     );
 }
+
+#[test]
+fn isolated_console_seeds_and_refreshes_the_same_device_projection() {
+    let source = include_str!("../src/net/isolated_console.rs");
+    let constructor_start = source
+        .find("pub fn from_existing(")
+        .expect("isolated console constructor");
+    let constructor_end = source[constructor_start..]
+        .find("/// Resume the child")
+        .map(|offset| constructor_start + offset)
+        .expect("bounded isolated console constructor");
+    let constructor = &source[constructor_start..constructor_end];
+    let seed = constructor
+        .find("refresh_isolated_device_counters(&mut counters, &device);")
+        .expect("constructor device projection");
+    let construct = constructor
+        .find("Self {\n            device,")
+        .expect("constructor commit");
+    assert!(
+        seed < construct,
+        "the retained device snapshot and WiFi generation must seed before the child owns the NIC",
+    );
+
+    let refresh_start = source
+        .find("fn refresh_device_counters(&mut self)")
+        .expect("isolated device counter refresh");
+    let refresh_end = source[refresh_start..]
+        .find("fn service_self_test")
+        .map(|offset| refresh_start + offset)
+        .expect("bounded isolated device counter refresh");
+    assert!(
+        source[refresh_start..refresh_end]
+            .contains("refresh_isolated_device_counters(&mut self.counters, &self.device);"),
+        "constructor and steady refresh must retain one projection contract",
+    );
+}

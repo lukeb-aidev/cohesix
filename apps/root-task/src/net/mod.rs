@@ -853,6 +853,101 @@ pub struct NetCounters {
     pub wifi_host_eapol_gtk: u64,
 }
 
+pub(crate) fn projected_wifi_connection_generation(
+    contract: crate::hal::driver_task::DriverTaskContract,
+    live_generation: u64,
+) -> u64 {
+    if contract == crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT {
+        live_generation
+    } else {
+        0
+    }
+}
+
+impl NetCounters {
+    /// Refresh fields whose authority remains with the selected NIC runtime.
+    ///
+    /// Protocol counters owned by the active TCP/IP stack are deliberately
+    /// retained. The explicit generation argument keeps a CYW43 device
+    /// snapshot bound to the same logical lifetime across a root-to-child
+    /// console handoff; non-WiFi callers pass zero.
+    pub(crate) fn apply_device_snapshot(
+        &mut self,
+        device: NetDeviceCounters,
+        wifi_connection_generation: u64,
+    ) {
+        self.rx_packets = device.rx_packets;
+        self.tx_packets = device.tx_packets;
+        self.rx_used_advances = device.rx_used_advances;
+        self.tx_used_advances = device.tx_used_advances;
+        self.tx_submit = device.tx_submit;
+        self.tx_complete = device.tx_complete;
+        self.tx_free = device.tx_free;
+        self.tx_in_flight = device.tx_in_flight;
+        self.tx_double_submit = device.tx_double_submit;
+        self.tx_zero_len_attempt = device.tx_zero_len_attempt;
+        self.arp_rx = device.arp_rx;
+        self.arp_tx = device.arp_tx;
+        self.driver_rx_last_len = device.driver_rx_last_len;
+        self.driver_rx_last_ethertype = device.driver_rx_last_ethertype;
+        self.genet_rx_runtime_queue_count = device.genet_rx_runtime_queue_count;
+        self.genet_rx_runtime_queue_high_water = device.genet_rx_runtime_queue_high_water;
+        self.genet_rx_runtime_queue_overflow_seen = device.genet_rx_runtime_queue_overflow_seen;
+        self.genet_rx_runtime_drain_budget_hit = device.genet_rx_runtime_drain_budget_hit;
+        self.genet_rx_runtime_byte_budget_hit = device.genet_rx_runtime_byte_budget_hit;
+        self.genet_rx_runtime_max_drained_per_turn = device.genet_rx_runtime_max_drained_per_turn;
+        self.genet_rx_runtime_command_drain_seen = device.genet_rx_runtime_command_drain_seen;
+        self.genet_rx_pending_queue_count = device.genet_rx_pending_queue_count;
+        self.genet_rx_pending_queue_high_water = device.genet_rx_pending_queue_high_water;
+        self.genet_rx_pending_drops = device.genet_rx_pending_drops;
+        self.wifi_rx_pending_queue_count = device.wifi_rx_pending_queue_count;
+        self.wifi_rx_pending_queue_high_water = device.wifi_rx_pending_queue_high_water;
+        self.wifi_rx_pending_drops = device.wifi_rx_pending_drops;
+        self.wifi_rx_pending_drops_boot = device.wifi_rx_pending_drops;
+        self.wifi_rx_runtime_queue_count = device.wifi_rx_runtime_queue_count;
+        self.wifi_rx_runtime_queue_high_water = device.wifi_rx_runtime_queue_high_water;
+        self.wifi_rx_runtime_queue_overflow_seen = device.wifi_rx_runtime_queue_overflow_seen;
+        self.wifi_rx_runtime_overflow_episodes = device.wifi_rx_runtime_overflow_episodes;
+        self.wifi_rx_runtime_overflow_episodes_boot = device.wifi_rx_runtime_overflow_episodes;
+        self.wifi_rx_runtime_drain_budget_hit = device.wifi_rx_runtime_drain_budget_hit;
+        self.wifi_rx_runtime_max_drained_per_turn = device.wifi_rx_runtime_max_drained_per_turn;
+        self.wifi_service_last_op = device.wifi_service_last_op;
+        self.wifi_service_last_reason = device.wifi_service_last_reason;
+        self.wifi_service_last_progress = device.wifi_service_last_progress;
+        self.wifi_service_last_seq_window = device.wifi_service_last_seq_window;
+        self.wifi_service_last_channel = device.wifi_service_last_channel;
+        self.wifi_service_last_credit_observations = device.wifi_service_last_credit_observations;
+        self.wifi_service_last_rframe_len = device.wifi_service_last_rframe_len;
+        self.wifi_service_last_source_flags = device.wifi_service_last_source_flags;
+        self.wifi_service_last_pre_source = device.wifi_service_last_pre_source;
+        self.wifi_service_last_post_source = device.wifi_service_last_post_source;
+        self.wifi_data_trace_faults = device.wifi_data_trace_faults;
+        self.wifi_data_trace_tx_retries = device.wifi_data_trace_tx_retries;
+        self.wifi_arp_target_hw_zeroed = device.wifi_arp_target_hw_zeroed;
+        self.wifi_post_dhcp_rx_any = device.wifi_post_dhcp_rx_any;
+        self.wifi_post_dhcp_rx_unicast = device.wifi_post_dhcp_rx_unicast;
+        self.wifi_post_dhcp_rx_arp = device.wifi_post_dhcp_rx_arp;
+        self.wifi_post_dhcp_rx_ipv4 = device.wifi_post_dhcp_rx_ipv4;
+        self.wifi_post_dhcp_rx_icmp = device.wifi_post_dhcp_rx_icmp;
+        self.wifi_post_dhcp_rx_tcp = device.wifi_post_dhcp_rx_tcp;
+        self.wifi_post_dhcp_rx_last_len = device.wifi_post_dhcp_rx_last_len;
+        self.wifi_post_dhcp_rx_last_ethertype = device.wifi_post_dhcp_rx_last_ethertype;
+        self.dropped_zero_len_tx = device.dropped_zero_len_tx;
+        self.wifi_assoc = device.wifi_assoc;
+        self.wifi_connection_generation = wifi_connection_generation;
+        self.wifi_link_up = device.wifi_link_up;
+        self.wifi_host_eapol_rx = device.wifi_host_eapol_rx;
+        self.wifi_host_eapol_start = device.wifi_host_eapol_start;
+        self.wifi_host_eapol_secure = device.wifi_host_eapol_secure;
+        self.wifi_host_eapol_m1 = device.wifi_host_eapol_m1;
+        self.wifi_host_eapol_m2 = device.wifi_host_eapol_m2;
+        self.wifi_host_eapol_m3 = device.wifi_host_eapol_m3;
+        self.wifi_host_eapol_m4 = device.wifi_host_eapol_m4;
+        self.wifi_host_eapol_ptk = device.wifi_host_eapol_ptk;
+        self.wifi_host_eapol_gtk = device.wifi_host_eapol_gtk;
+    }
+}
+
 /// Outcome of the latest network self-test pass.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct NetSelfTestResult {
@@ -1868,6 +1963,64 @@ mod tests {
     use crate::hal::driver_task::{
         CYW43_WIFI_DRIVER_TASK_CONTRACT, GENET_DRIVER_TASK_CONTRACT, RTL8139_DRIVER_TASK_CONTRACT,
     };
+
+    #[test]
+    fn device_snapshot_preserves_protocol_counters_and_projects_exact_wifi_generation() {
+        let mut counters = NetCounters {
+            smoltcp_polls: 41,
+            tcp_accepts: 7,
+            tcp_auth_sessions: 5,
+            tcp_rx_bytes: 3,
+            wifi_connection_generation: 1,
+            ..NetCounters::default()
+        };
+        let device = NetDeviceCounters {
+            rx_packets: 11,
+            tx_packets: 13,
+            genet_rx_runtime_queue_count: 17,
+            wifi_rx_runtime_queue_high_water: 19,
+            wifi_service_last_progress: 23,
+            wifi_assoc: 1,
+            wifi_link_up: 1,
+            wifi_host_eapol_secure: 1,
+            ..NetDeviceCounters::default()
+        };
+
+        counters.apply_device_snapshot(device, 29);
+
+        assert_eq!(counters.smoltcp_polls, 41);
+        assert_eq!(counters.tcp_accepts, 7);
+        assert_eq!(counters.tcp_auth_sessions, 5);
+        assert_eq!(counters.tcp_rx_bytes, 3);
+        assert_eq!(counters.rx_packets, 11);
+        assert_eq!(counters.tx_packets, 13);
+        assert_eq!(counters.genet_rx_runtime_queue_count, 17);
+        assert_eq!(counters.wifi_rx_runtime_queue_high_water, 19);
+        assert_eq!(counters.wifi_service_last_progress, 23);
+        assert_eq!(counters.wifi_assoc, 1);
+        assert_eq!(counters.wifi_link_up, 1);
+        assert_eq!(counters.wifi_host_eapol_secure, 1);
+        assert_eq!(counters.wifi_connection_generation, 29);
+    }
+
+    #[test]
+    fn only_cyw43_projects_the_live_wifi_generation() {
+        let live_generation = 29;
+        assert_eq!(
+            projected_wifi_connection_generation(CYW43_WIFI_DRIVER_TASK_CONTRACT, live_generation),
+            live_generation,
+        );
+        for contract in [
+            GENET_DRIVER_TASK_CONTRACT,
+            crate::hal::driver_task::VIRTIO_NET_DRIVER_TASK_CONTRACT,
+        ] {
+            assert_eq!(
+                projected_wifi_connection_generation(contract, live_generation),
+                0,
+                "non-WiFi profiles must not inherit a CYW43 generation",
+            );
+        }
+    }
 
     #[test]
     fn auth_timeout_scales_with_timebase() {

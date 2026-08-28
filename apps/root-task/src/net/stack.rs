@@ -6239,92 +6239,10 @@ impl<D: NetDevice> NetStack<D> {
 
     fn sync_device_counters(&mut self) {
         let device_counters = self.device.counters();
-        self.counters.rx_packets = device_counters.rx_packets;
-        self.counters.tx_packets = device_counters.tx_packets;
-        self.counters.rx_used_advances = device_counters.rx_used_advances;
-        self.counters.tx_used_advances = device_counters.tx_used_advances;
-        self.counters.tx_submit = device_counters.tx_submit;
-        self.counters.tx_complete = device_counters.tx_complete;
-        self.counters.tx_free = device_counters.tx_free;
-        self.counters.tx_in_flight = device_counters.tx_in_flight;
-        self.counters.tx_double_submit = device_counters.tx_double_submit;
-        self.counters.tx_zero_len_attempt = device_counters.tx_zero_len_attempt;
-        self.counters.arp_rx = device_counters.arp_rx;
-        self.counters.arp_tx = device_counters.arp_tx;
-        self.counters.driver_rx_last_len = device_counters.driver_rx_last_len;
-        self.counters.driver_rx_last_ethertype = device_counters.driver_rx_last_ethertype;
-        self.counters.genet_rx_runtime_queue_count = device_counters.genet_rx_runtime_queue_count;
-        self.counters.genet_rx_runtime_queue_high_water =
-            device_counters.genet_rx_runtime_queue_high_water;
-        self.counters.genet_rx_runtime_queue_overflow_seen =
-            device_counters.genet_rx_runtime_queue_overflow_seen;
-        self.counters.genet_rx_runtime_drain_budget_hit =
-            device_counters.genet_rx_runtime_drain_budget_hit;
-        self.counters.genet_rx_runtime_byte_budget_hit =
-            device_counters.genet_rx_runtime_byte_budget_hit;
-        self.counters.genet_rx_runtime_max_drained_per_turn =
-            device_counters.genet_rx_runtime_max_drained_per_turn;
-        self.counters.genet_rx_runtime_command_drain_seen =
-            device_counters.genet_rx_runtime_command_drain_seen;
-        self.counters.genet_rx_pending_queue_count = device_counters.genet_rx_pending_queue_count;
-        self.counters.genet_rx_pending_queue_high_water =
-            device_counters.genet_rx_pending_queue_high_water;
-        self.counters.genet_rx_pending_drops = device_counters.genet_rx_pending_drops;
-        self.counters.wifi_rx_pending_queue_count = device_counters.wifi_rx_pending_queue_count;
-        self.counters.wifi_rx_pending_queue_high_water =
-            device_counters.wifi_rx_pending_queue_high_water;
-        self.counters.wifi_rx_pending_drops = device_counters.wifi_rx_pending_drops;
-        self.counters.wifi_rx_pending_drops_boot = device_counters.wifi_rx_pending_drops;
-        self.counters.wifi_rx_runtime_queue_count = device_counters.wifi_rx_runtime_queue_count;
-        self.counters.wifi_rx_runtime_queue_high_water =
-            device_counters.wifi_rx_runtime_queue_high_water;
-        self.counters.wifi_rx_runtime_queue_overflow_seen =
-            device_counters.wifi_rx_runtime_queue_overflow_seen;
-        self.counters.wifi_rx_runtime_overflow_episodes =
-            device_counters.wifi_rx_runtime_overflow_episodes;
-        self.counters.wifi_rx_runtime_overflow_episodes_boot =
-            device_counters.wifi_rx_runtime_overflow_episodes;
-        self.counters.wifi_rx_runtime_drain_budget_hit =
-            device_counters.wifi_rx_runtime_drain_budget_hit;
-        self.counters.wifi_rx_runtime_max_drained_per_turn =
-            device_counters.wifi_rx_runtime_max_drained_per_turn;
-        self.counters.wifi_service_last_op = device_counters.wifi_service_last_op;
-        self.counters.wifi_service_last_reason = device_counters.wifi_service_last_reason;
-        self.counters.wifi_service_last_progress = device_counters.wifi_service_last_progress;
-        self.counters.wifi_service_last_seq_window = device_counters.wifi_service_last_seq_window;
-        self.counters.wifi_service_last_channel = device_counters.wifi_service_last_channel;
-        self.counters.wifi_service_last_credit_observations =
-            device_counters.wifi_service_last_credit_observations;
-        self.counters.wifi_service_last_rframe_len = device_counters.wifi_service_last_rframe_len;
-        self.counters.wifi_service_last_source_flags =
-            device_counters.wifi_service_last_source_flags;
-        self.counters.wifi_service_last_pre_source = device_counters.wifi_service_last_pre_source;
-        self.counters.wifi_service_last_post_source = device_counters.wifi_service_last_post_source;
-        self.counters.wifi_data_trace_faults = device_counters.wifi_data_trace_faults;
-        self.counters.wifi_data_trace_tx_retries = device_counters.wifi_data_trace_tx_retries;
-        self.counters.wifi_arp_target_hw_zeroed = device_counters.wifi_arp_target_hw_zeroed;
-        self.counters.wifi_post_dhcp_rx_any = device_counters.wifi_post_dhcp_rx_any;
-        self.counters.wifi_post_dhcp_rx_unicast = device_counters.wifi_post_dhcp_rx_unicast;
-        self.counters.wifi_post_dhcp_rx_arp = device_counters.wifi_post_dhcp_rx_arp;
-        self.counters.wifi_post_dhcp_rx_ipv4 = device_counters.wifi_post_dhcp_rx_ipv4;
-        self.counters.wifi_post_dhcp_rx_icmp = device_counters.wifi_post_dhcp_rx_icmp;
-        self.counters.wifi_post_dhcp_rx_tcp = device_counters.wifi_post_dhcp_rx_tcp;
-        self.counters.wifi_post_dhcp_rx_last_len = device_counters.wifi_post_dhcp_rx_last_len;
-        self.counters.wifi_post_dhcp_rx_last_ethertype =
-            device_counters.wifi_post_dhcp_rx_last_ethertype;
-        self.counters.dropped_zero_len_tx = device_counters.dropped_zero_len_tx;
-        self.counters.wifi_assoc = device_counters.wifi_assoc;
-        self.counters.wifi_connection_generation = u64::from(wifi_connection_generation_for::<D>());
-        self.counters.wifi_link_up = device_counters.wifi_link_up;
-        self.counters.wifi_host_eapol_rx = device_counters.wifi_host_eapol_rx;
-        self.counters.wifi_host_eapol_start = device_counters.wifi_host_eapol_start;
-        self.counters.wifi_host_eapol_secure = device_counters.wifi_host_eapol_secure;
-        self.counters.wifi_host_eapol_m1 = device_counters.wifi_host_eapol_m1;
-        self.counters.wifi_host_eapol_m2 = device_counters.wifi_host_eapol_m2;
-        self.counters.wifi_host_eapol_m3 = device_counters.wifi_host_eapol_m3;
-        self.counters.wifi_host_eapol_m4 = device_counters.wifi_host_eapol_m4;
-        self.counters.wifi_host_eapol_ptk = device_counters.wifi_host_eapol_ptk;
-        self.counters.wifi_host_eapol_gtk = device_counters.wifi_host_eapol_gtk;
+        self.counters.apply_device_snapshot(
+            device_counters,
+            u64::from(wifi_connection_generation_for::<D>()),
+        );
     }
 
     fn current_counters_unprojected(&self) -> NetCounters {
@@ -11543,6 +11461,15 @@ impl NetPoller for DefaultNetStack {
             Self::Cyw43DriverTask(stack) => stack.isolated_console_diagnostics(),
             #[cfg(feature = "net-backend-virtio")]
             Self::Virtio(stack) => stack.isolated_console_diagnostics(),
+        }
+    }
+
+    fn refresh_direct_genet_diagnostics(&mut self) -> Option<DirectGenetDiagnostics> {
+        match self {
+            Self::GenetDriverTask(stack) => stack.refresh_direct_genet_diagnostics(),
+            Self::Rtl8139(_) | Self::Cyw43DriverTask(_) => None,
+            #[cfg(feature = "net-backend-virtio")]
+            Self::Virtio(_) => None,
         }
     }
 

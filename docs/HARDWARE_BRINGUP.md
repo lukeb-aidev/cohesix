@@ -1025,18 +1025,21 @@ Implementation mechanics and reusable ownership invariants belong in
 [Developing Cohesix Drivers](DRIVERS.md). This section owns only the physical
 operator and evidence workflow.
 
-The exact e046 convergence boot is a current failure oracle, not an accepted
-WiFi sample. Source `e046a7eb470ae0dee9601749508e4248cce51c80`, image ID
-`33cc8a0e21de62a7738587b83b695daea41884b169f16c12dad8f23f39b82fcc`, and
+The exact `5a8917b09d7f2bda2c5fbe18a08340e0fbae5d58` convergence boot is a
+current failure oracle, not an accepted WiFi sample. Image ID
+`ce2dbbc0ed8b4c613caec554ce729815f090e015a82b94e0b16dec8ea74d6d71` and
 image SHA-256
-`d650bbc29ff6bf28bea468d788c5a2cfcd3be8242173a91ac07f1f94c9ff5e4c`
+`4d64fb29a38e58103d3d1d80b8a2718ac39bf85d93384f0a12b390aa9431b230`
 complete cold SDIO/CYW43, firmware, association, EAPOL, Gate 8, DORA, and a Pi
-ARP in the boot-paired capture, but emit no deferred console-network handoff and
-quarantine at `service-readiness-deadline`. For the next exact-image test, the
-first downstream question is therefore whether DHCP/address truth selects one
-exclusive `ConsoleHandoff` turn, the child later publishes Ready, and port 31337
-becomes reachable before assessing TCP performance. The August 10 accepted
-boots remain compatibility comparators only.
+ARP in the boot-paired capture. The isolated console child then runs 518 turns
+at generation 1, but its device-counter projection reports WiFi generation 0;
+exact-generation service readiness therefore cannot pass and the link is
+quarantined at `service-readiness-deadline`. For the next exact-image test, the
+first downstream question is whether the child retains the live generation and
+device state, publishes exact-generation Ready inside the generated 15 ms
+post-activation observation bound, and makes port 31337 reachable before TCP
+performance is assessed. The August 10 accepted boots remain compatibility
+comparators only.
 
 #### Acceptance contract
 
