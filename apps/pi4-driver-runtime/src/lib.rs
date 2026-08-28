@@ -44,6 +44,11 @@ use console_network_abi::{
     DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_ACTIVE, DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_FAULTED,
     DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_INITIALIZED,
     DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_IRQ_ACK_PENDING,
+    DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_MCS_CAP_YIELD,
+    DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_MCS_COUNTER_FAULT,
+    DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_MCS_FRESH_YIELD,
+    DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_MCS_GUARD_YIELD,
+    DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_MCS_STALLED_YIELD,
     DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_MMIO_SAMPLED,
     DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_RX_COMMIT_PENDING,
     DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_RX_RING_VALID,
@@ -2423,6 +2428,176 @@ impl GenetDirectCutoverWait {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum GenetDirectMcsQuantumRoute {
+    Block,
+    Reenter,
+    Yield(u32),
+    Fault(u32),
+}
+
+const GENET_DIRECT_MCS_BUDGET_US: u32 = 3_000;
+const GENET_DIRECT_MCS_PERIOD_US: u32 = 10_000;
+const GENET_DIRECT_MCS_MAX_REFILLS: u8 = 2;
+const GENET_DIRECT_MCS_GUARD_US: u32 = GENET_DIRECT_MCS_BUDGET_US / 2;
+const GENET_DIRECT_MCS_QUANTUM_CAP: u8 = 16;
+
+/// Software accounting for one dense direct-GENET MCS activation window.
+///
+/// The selected kernel preserves a blocked thread's unspent head refill, so a
+/// notification wake is not itself a fresh-budget boundary. This window is
+/// retained across blocking waits and admits multiple bounded 16-frame DPC
+/// quanta while less than half the 3 ms budget has elapsed. A command endpoint
+/// turn marks the window stale because it consumes the same scheduling context.
+/// Blocking time alone cannot reset the window: the final userspace sample
+/// precedes the kernel's budget charge, so elapsed wall time cannot prove every
+/// earlier fragment has replenished.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct GenetDirectMcsWindow {
+    start_ticks: u64,
+    quantum_start_ticks: u64,
+    last_end_ticks: u64,
+    attempts: u8,
+    stalled_retry_used: bool,
+    needs_fresh_refill: bool,
+    counter_fault_pending: bool,
+    quantum_high_water_us: u32,
+    diagnostic_flags: u32,
+}
+
+impl GenetDirectMcsWindow {
+    const fn empty() -> Self {
+        Self {
+            start_ticks: 0,
+            quantum_start_ticks: 0,
+            last_end_ticks: 0,
+            attempts: 0,
+            stalled_retry_used: false,
+            needs_fresh_refill: false,
+            counter_fault_pending: false,
+            quantum_high_water_us: 0,
+            diagnostic_flags: 0,
+        }
+    }
+
+    fn clear_accounting(&mut self) {
+        self.start_ticks = 0;
+        self.quantum_start_ticks = 0;
+        self.last_end_ticks = 0;
+        self.attempts = 0;
+        self.stalled_retry_used = false;
+        self.needs_fresh_refill = false;
+    }
+
+    fn require_fresh_refill(&mut self) {
+        self.needs_fresh_refill = true;
+    }
+
+    fn record_yield(&mut self, reason: u32) {
+        self.diagnostic_flags |= reason;
+        if reason != DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_MCS_COUNTER_FAULT {
+            self.counter_fault_pending = false;
+        }
+    }
+
+    fn begin(&mut self, now: u64, guard_cycles: u64) -> Result<(), u32> {
+        if now == 0 || guard_cycles == 0 {
+            self.diagnostic_flags |= DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_MCS_COUNTER_FAULT;
+            return Err(DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_MCS_COUNTER_FAULT);
+        }
+        if self.needs_fresh_refill {
+            return Err(DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_MCS_FRESH_YIELD);
+        }
+        if (self.start_ticks != 0 && now < self.start_ticks)
+            || (self.last_end_ticks != 0 && now < self.last_end_ticks)
+        {
+            self.diagnostic_flags |= DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_MCS_COUNTER_FAULT;
+            return Err(DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_MCS_COUNTER_FAULT);
+        }
+        if self.attempts >= GENET_DIRECT_MCS_QUANTUM_CAP {
+            return Err(DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_MCS_CAP_YIELD);
+        }
+        if self.start_ticks != 0 && now.wrapping_sub(self.start_ticks) >= guard_cycles {
+            return Err(DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_MCS_GUARD_YIELD);
+        }
+        if self.start_ticks == 0 {
+            self.start_ticks = now;
+        }
+        self.quantum_start_ticks = now;
+        self.attempts = self.attempts.saturating_add(1);
+        Ok(())
+    }
+
+    fn finish(
+        &mut self,
+        now: u64,
+        guard_cycles: u64,
+        timer_hz: u64,
+        productive_quantum: bool,
+        durable_work_ready: bool,
+    ) -> GenetDirectMcsQuantumRoute {
+        if self.quantum_start_ticks == 0
+            || timer_hz == 0
+            || now < self.quantum_start_ticks
+            || now < self.start_ticks
+        {
+            self.diagnostic_flags |= DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_MCS_COUNTER_FAULT;
+            return GenetDirectMcsQuantumRoute::Fault(
+                DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_MCS_COUNTER_FAULT,
+            );
+        }
+        if now == self.quantum_start_ticks {
+            self.diagnostic_flags |= DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_MCS_COUNTER_FAULT;
+            if self.counter_fault_pending {
+                return GenetDirectMcsQuantumRoute::Fault(
+                    DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_MCS_COUNTER_FAULT,
+                );
+            }
+            self.counter_fault_pending = true;
+            return GenetDirectMcsQuantumRoute::Yield(
+                DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_MCS_COUNTER_FAULT,
+            );
+        }
+        self.counter_fault_pending = false;
+        let quantum_cycles = now.wrapping_sub(self.quantum_start_ticks);
+        self.quantum_high_water_us =
+            self.quantum_high_water_us
+                .max(runtime_cycles_to_micros_ceil_at_hz(
+                    quantum_cycles,
+                    timer_hz,
+                ));
+        self.last_end_ticks = now;
+        if now.wrapping_sub(self.start_ticks) >= guard_cycles {
+            return GenetDirectMcsQuantumRoute::Yield(
+                DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_MCS_GUARD_YIELD,
+            );
+        }
+        if self.attempts >= GENET_DIRECT_MCS_QUANTUM_CAP {
+            return GenetDirectMcsQuantumRoute::Yield(
+                DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_MCS_CAP_YIELD,
+            );
+        }
+        if productive_quantum {
+            self.stalled_retry_used = false;
+            if durable_work_ready {
+                GenetDirectMcsQuantumRoute::Reenter
+            } else {
+                GenetDirectMcsQuantumRoute::Block
+            }
+        } else if durable_work_ready && !self.stalled_retry_used {
+            self.stalled_retry_used = true;
+            GenetDirectMcsQuantumRoute::Reenter
+        } else if durable_work_ready {
+            GenetDirectMcsQuantumRoute::Yield(
+                DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_MCS_STALLED_YIELD,
+            )
+        } else {
+            self.stalled_retry_used = false;
+            GenetDirectMcsQuantumRoute::Block
+        }
+    }
+}
+
 #[derive(Debug, Eq, PartialEq)]
 struct GenetRuntimeState {
     initialized: bool,
@@ -2450,6 +2625,7 @@ struct GenetRuntimeState {
     raw_notification_rejected: u64,
     raw_notification_badge_or: u64,
     direct_genet_diagnostic_sequence: u64,
+    direct_genet_mcs_window: GenetDirectMcsWindow,
     direct_genet_pending_rx: Option<DirectGenetPendingRxCommit>,
     direct_genet_pending_tx: Option<DirectGenetRingSnapshot>,
     direct_genet_cutover_phase: GenetDirectCutoverPhase,
@@ -2513,6 +2689,7 @@ impl GenetRuntimeState {
             raw_notification_rejected: 0,
             raw_notification_badge_or: 0,
             direct_genet_diagnostic_sequence: 0,
+            direct_genet_mcs_window: GenetDirectMcsWindow::empty(),
             direct_genet_pending_rx: None,
             direct_genet_pending_tx: None,
             direct_genet_cutover_phase: GenetDirectCutoverPhase::Legacy,
@@ -2575,6 +2752,7 @@ impl GenetRuntimeState {
         self.raw_notification_rejected = 0;
         self.raw_notification_badge_or = 0;
         self.direct_genet_diagnostic_sequence = 0;
+        self.direct_genet_mcs_window = GenetDirectMcsWindow::empty();
         self.direct_genet_pending_rx = None;
         self.direct_genet_pending_tx = None;
         self.direct_genet_cutover_phase = GenetDirectCutoverPhase::Legacy;
@@ -10072,6 +10250,15 @@ const fn cyw43_foreground_admission_rejection_result(command: DriverTaskCommandR
 }
 
 fn service_command_turn(task_key: usize, command: DriverTaskCommandRecord) -> RuntimeCommandTurn {
+    GENET_RUNTIME_STATE.with_mut(|state| {
+        if state.direct_genet_active {
+            // Endpoint work spends the same child scheduling context as the
+            // direct DPC. Preserve that fact even if this command is rejected
+            // or a retained path services an interleaved notification before
+            // the terminal Reply is published.
+            state.direct_genet_mcs_window.require_fresh_refill();
+        }
+    });
     if cyw43_command_targets_foreground_lane(command)
         && !cyw43_command_uses_foreground_transaction(command)
     {
@@ -16438,6 +16625,134 @@ fn genet_runtime_dpc_local_continuation_ready(state: &GenetRuntimeState) -> bool
         }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum GenetDirectMcsPreRoute {
+    Begin,
+    Yield(u32),
+    Fault(u32),
+}
+
+fn genet_direct_mcs_descriptor_valid(descriptor: DriverRuntimeInitDescriptor) -> bool {
+    descriptor.valid()
+        && descriptor.direct_genet_link_valid()
+        && descriptor.budget_us == GENET_DIRECT_MCS_BUDGET_US
+        && descriptor.period_us == GENET_DIRECT_MCS_PERIOD_US
+        && descriptor.max_refills == GENET_DIRECT_MCS_MAX_REFILLS
+}
+
+fn genet_direct_mcs_counter_ticks() -> u64 {
+    #[cfg(all(not(target_os = "none"), test))]
+    {
+        let current = TEST_RUNTIME_TIMER_COUNTER_TICKS.load(Ordering::Acquire);
+        let next = current.max(1).saturating_add(1);
+        TEST_RUNTIME_TIMER_COUNTER_TICKS.store(next, Ordering::Release);
+        next
+    }
+    #[cfg(not(all(not(target_os = "none"), test)))]
+    {
+        runtime_timer_counter_ticks()
+    }
+}
+
+fn genet_runtime_prepare_dpc_quantum(state: &mut GenetRuntimeState) -> GenetDirectMcsPreRoute {
+    if !state.direct_genet_active {
+        return GenetDirectMcsPreRoute::Begin;
+    }
+    if !genet_direct_mcs_descriptor_valid(RUNTIME_DESCRIPTOR.load()) {
+        return GenetDirectMcsPreRoute::Fault(
+            DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_MCS_COUNTER_FAULT,
+        );
+    }
+    let now = genet_direct_mcs_counter_ticks();
+    let guard_cycles = runtime_micros_to_cycles(u64::from(GENET_DIRECT_MCS_GUARD_US));
+    match state.direct_genet_mcs_window.begin(now, guard_cycles) {
+        Ok(()) => GenetDirectMcsPreRoute::Begin,
+        Err(reason) if reason == DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_MCS_COUNTER_FAULT => {
+            GenetDirectMcsPreRoute::Fault(reason)
+        }
+        Err(reason) => GenetDirectMcsPreRoute::Yield(reason),
+    }
+}
+
+fn genet_runtime_finish_dpc_quantum(
+    state: &mut GenetRuntimeState,
+    productive_quantum: bool,
+) -> GenetDirectMcsQuantumRoute {
+    let durable_work_ready = genet_runtime_dpc_local_continuation_ready(state);
+    if !state.direct_genet_active {
+        return if durable_work_ready {
+            GenetDirectMcsQuantumRoute::Reenter
+        } else {
+            GenetDirectMcsQuantumRoute::Block
+        };
+    }
+    state.direct_genet_mcs_window.finish(
+        genet_direct_mcs_counter_ticks(),
+        runtime_micros_to_cycles(u64::from(GENET_DIRECT_MCS_GUARD_US)),
+        runtime_timer_freq_hz(),
+        productive_quantum,
+        durable_work_ready,
+    )
+}
+
+fn genet_runtime_record_mcs_yield(reason: u32) {
+    GENET_RUNTIME_STATE.with_mut(|state| state.direct_genet_mcs_window.record_yield(reason));
+}
+
+fn genet_runtime_complete_mcs_yield() {
+    GENET_RUNTIME_STATE.with_mut(|state| {
+        if state.direct_genet_active {
+            state.direct_genet_mcs_window.clear_accounting();
+        }
+    });
+}
+
+fn genet_runtime_fail_mcs_window(reason: u32) {
+    GENET_RUNTIME_STATE.with_mut(|state| {
+        state.direct_genet_mcs_window.diagnostic_flags |= reason;
+        if state.direct_genet_active {
+            genet_direct_fail_closed(state);
+        }
+    });
+}
+
+fn genet_runtime_begin_direct_quantum() -> bool {
+    loop {
+        match GENET_RUNTIME_STATE.with_mut(genet_runtime_prepare_dpc_quantum) {
+            GenetDirectMcsPreRoute::Begin => return true,
+            GenetDirectMcsPreRoute::Fault(reason) => {
+                genet_runtime_fail_mcs_window(reason);
+                return false;
+            }
+            GenetDirectMcsPreRoute::Yield(reason) => {
+                genet_runtime_record_mcs_yield(reason);
+                #[cfg(target_os = "none")]
+                runtime_yield_current_tcb();
+                #[cfg(not(target_os = "none"))]
+                genet_runtime_complete_mcs_yield();
+            }
+        }
+    }
+}
+
+fn genet_runtime_apply_post_quantum_route(route: GenetDirectMcsQuantumRoute) -> bool {
+    match route {
+        GenetDirectMcsQuantumRoute::Block | GenetDirectMcsQuantumRoute::Reenter => true,
+        GenetDirectMcsQuantumRoute::Yield(reason) => {
+            genet_runtime_record_mcs_yield(reason);
+            #[cfg(target_os = "none")]
+            runtime_yield_current_tcb();
+            #[cfg(not(target_os = "none"))]
+            genet_runtime_complete_mcs_yield();
+            true
+        }
+        GenetDirectMcsQuantumRoute::Fault(reason) => {
+            genet_runtime_fail_mcs_window(reason);
+            false
+        }
+    }
+}
+
 /// Service one child-owned, bounded GENET packet DPC quantum.
 ///
 /// An exact IRQ badge starts the ordinary lifetime. After direct ownership,
@@ -16448,7 +16763,16 @@ fn genet_runtime_dpc_local_continuation_ready(state: &GenetRuntimeState) -> bool
 /// unmask/recheck closes the classic lost-wake window before the handler cap is
 /// rearmed.
 fn genet_runtime_service_notification(badge: u32) -> bool {
-    GENET_RUNTIME_STATE.with_mut(|state| genet_runtime_service_dpc_state(state, badge))
+    if !genet_runtime_begin_direct_quantum() {
+        return false;
+    }
+    let (activity, route) = GENET_RUNTIME_STATE.with_mut(|state| {
+        let activity = genet_runtime_service_dpc_state(state, badge);
+        let route = genet_runtime_finish_dpc_quantum(state, activity);
+        (activity, route)
+    });
+    let route_ok = genet_runtime_apply_post_quantum_route(route);
+    activity && route_ok
 }
 
 fn genet_runtime_service_dpc_state(state: &mut GenetRuntimeState, badge: u32) -> bool {
@@ -16604,7 +16928,9 @@ fn genet_runtime_service_dpc_state(state: &mut GenetRuntimeState, badge: u32) ->
 /// rearmed, so a later physical level will latch the bound notification. A
 /// full direct RX ring also returns `false` while retaining the masked episode;
 /// only the consumer's full-to-not-full peer notification can make progress.
-fn genet_runtime_condition_before_sleep(state: &mut GenetRuntimeState) -> bool {
+fn genet_runtime_condition_before_sleep_route(
+    state: &mut GenetRuntimeState,
+) -> (bool, GenetDirectMcsQuantumRoute) {
     if state.direct_genet_active
         && state.irq_ack_pending
         && genet_rx_hardware_pending(state)
@@ -16617,10 +16943,55 @@ fn genet_runtime_condition_before_sleep(state: &mut GenetRuntimeState) -> bool {
         // spending another DPC turn at the final check. An invalid or raced
         // cursor deliberately falls through and is reconciled or poisoned by
         // the ordinary service path.
+        let route = genet_runtime_finish_dpc_quantum(state, false);
+        return (false, route);
+    }
+    let activity = genet_runtime_service_dpc_state(state, 0);
+    let ready = genet_runtime_dpc_local_continuation_ready(state);
+    let route = genet_runtime_finish_dpc_quantum(state, activity);
+    (ready, route)
+}
+
+#[cfg(test)]
+fn genet_runtime_condition_before_sleep(state: &mut GenetRuntimeState) -> bool {
+    loop {
+        match genet_runtime_prepare_dpc_quantum(state) {
+            GenetDirectMcsPreRoute::Begin => break,
+            GenetDirectMcsPreRoute::Yield(reason) => {
+                state.direct_genet_mcs_window.record_yield(reason);
+                state.direct_genet_mcs_window.clear_accounting();
+            }
+            GenetDirectMcsPreRoute::Fault(reason) => {
+                state.direct_genet_mcs_window.diagnostic_flags |= reason;
+                genet_direct_fail_closed(state);
+                return false;
+            }
+        }
+    }
+    let (ready, route) = genet_runtime_condition_before_sleep_route(state);
+    match route {
+        GenetDirectMcsQuantumRoute::Block | GenetDirectMcsQuantumRoute::Reenter => ready,
+        GenetDirectMcsQuantumRoute::Yield(reason) => {
+            state.direct_genet_mcs_window.record_yield(reason);
+            state.direct_genet_mcs_window.clear_accounting();
+            ready
+        }
+        GenetDirectMcsQuantumRoute::Fault(reason) => {
+            state.direct_genet_mcs_window.diagnostic_flags |= reason;
+            genet_direct_fail_closed(state);
+            false
+        }
+    }
+}
+
+#[cfg(target_os = "none")]
+fn genet_runtime_condition_before_sleep_once() -> bool {
+    if !genet_runtime_begin_direct_quantum() {
         return false;
     }
-    let _ = genet_runtime_service_dpc_state(state, 0);
-    genet_runtime_dpc_local_continuation_ready(state)
+    let (ready, route) = GENET_RUNTIME_STATE.with_mut(genet_runtime_condition_before_sleep_route);
+    let route_ok = genet_runtime_apply_post_quantum_route(route);
+    ready && route_ok
 }
 
 fn genet_completion_result(state: &GenetRuntimeState, tx_free: u16, tx_in_flight: u16) -> u32 {
@@ -45314,6 +45685,7 @@ fn genet_direct_publish_runtime_diagnostic(
     if tx.is_some() {
         flags |= DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_TX_RING_VALID;
     }
+    flags |= state.direct_genet_mcs_window.diagnostic_flags;
 
     let (irq_raw, irq_mask, irq_active, rdma_producer, rdma_consumer, tdma_producer, tdma_consumer) =
         if state.initialized {
@@ -45336,7 +45708,7 @@ fn genet_direct_publish_runtime_diagnostic(
         version: console_network_abi::DIRECT_GENET_RUNTIME_DIAGNOSTIC_VERSION,
         len: DIRECT_GENET_RUNTIME_DIAGNOSTIC_BYTES as u16,
         flags,
-        reserved0: 0,
+        mcs_quantum_high_water_us: state.direct_genet_mcs_window.quantum_high_water_us,
         generation,
         publication_sequence: sequence,
         irq_badge: state.irq_badge,
@@ -46181,6 +46553,7 @@ fn genet_direct_advance_cutover(
 
             state.direct_genet_generation = generation;
             state.direct_genet_active = true;
+            state.direct_genet_mcs_window.require_fresh_refill();
             state.direct_genet_cutover_phase = GenetDirectCutoverPhase::Direct;
             genet_write32(
                 GENET_RDMA_REG_BASE + GENET_DMA_CTRL,
@@ -46230,7 +46603,17 @@ fn genet_direct_handoff_completion(
         ));
     }
     let descriptor = RUNTIME_DESCRIPTOR.load();
-    if !descriptor.valid() || !descriptor.direct_genet_link_valid() {
+    let timer_counter_available = {
+        #[cfg(target_os = "none")]
+        {
+            runtime_timer_counter_ticks() != 0
+        }
+        #[cfg(not(target_os = "none"))]
+        {
+            true
+        }
+    };
+    if !genet_direct_mcs_descriptor_valid(descriptor) || !timer_counter_available {
         return Some(DriverTaskCompletionRecord::fault(
             command.sequence,
             FAULT_DEVICE_UNAVAILABLE,
@@ -52585,6 +52968,17 @@ fn runtime_micros_to_cycles(us: u64) -> u64 {
     runtime_micros_to_cycles_at_hz(us, runtime_timer_freq_hz())
 }
 
+fn runtime_cycles_to_micros_ceil_at_hz(cycles: u64, freq_hz: u64) -> u32 {
+    if cycles == 0 || freq_hz == 0 {
+        return 0;
+    }
+    let micros = (cycles as u128)
+        .saturating_mul(RUNTIME_MICROS_PER_SECOND as u128)
+        .saturating_add(freq_hz as u128 - 1)
+        .saturating_div(freq_hz as u128);
+    micros.clamp(1, u32::MAX as u128) as u32
+}
+
 fn runtime_deadline_from_legacy_spins(spins: usize) -> RuntimeDeadline {
     let start = runtime_timer_counter_ticks();
     let cycles = runtime_legacy_spins_to_cycles(spins);
@@ -52724,6 +53118,10 @@ fn runtime_yield_current_tcb() {
     unsafe {
         sel4_sys::seL4_Yield();
     }
+    // Yield charges the complete selected head refill. Reset GENET's software
+    // window only after the syscall returns on the replenished activation;
+    // clearing before entry could lose an unserviced IRQ badge on suspension.
+    genet_runtime_complete_mcs_yield();
 }
 
 #[cfg(all(target_os = "none", target_arch = "aarch64"))]
@@ -64697,7 +65095,7 @@ pub fn runtime_main(task_key: usize) -> ! {
                 continue;
             }
             if notification_route == RuntimeNotificationRoute::Genet
-                && GENET_RUNTIME_STATE.with_mut(genet_runtime_condition_before_sleep)
+                && genet_runtime_condition_before_sleep_once()
             {
                 // This is the final physical condition check after the command
                 // ring's sequence-last sample. Work crossing either earlier
@@ -77693,6 +78091,109 @@ mod tests {
     }
 
     #[test]
+    fn direct_genet_dense_mcs_window_reenters_and_preserves_blocked_budget() {
+        let mut window = GenetDirectMcsWindow::empty();
+        let guard = 1_500;
+        assert_eq!(window.begin(100, guard), Ok(()));
+        assert_eq!(
+            window.finish(200, guard, 1_000_000, true, true),
+            GenetDirectMcsQuantumRoute::Reenter,
+        );
+        assert_eq!(window.begin(201, guard), Ok(()));
+        assert_eq!(
+            window.finish(260, guard, 1_000_000, true, false),
+            GenetDirectMcsQuantumRoute::Block,
+        );
+        assert_eq!(window.start_ticks, 100);
+        assert_eq!(window.attempts, 2);
+        assert_eq!(window.quantum_high_water_us, 100);
+
+        window.require_fresh_refill();
+        assert_eq!(
+            window.begin(300, guard),
+            Err(DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_MCS_FRESH_YIELD),
+        );
+        window.record_yield(DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_MCS_FRESH_YIELD);
+        window.clear_accounting();
+        assert_eq!(window.begin(301, guard), Ok(()));
+        assert_eq!(window.start_ticks, 301);
+    }
+
+    #[test]
+    fn direct_genet_dense_mcs_window_yields_at_guard_and_attempt_cap() {
+        let guard = 1_500;
+        let mut guarded = GenetDirectMcsWindow::empty();
+        assert_eq!(guarded.begin(100, guard), Ok(()));
+        assert_eq!(
+            guarded.finish(1_600, guard, 1_000_000, true, true),
+            GenetDirectMcsQuantumRoute::Yield(DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_MCS_GUARD_YIELD,),
+        );
+
+        let mut capped = GenetDirectMcsWindow::empty();
+        for attempt in 0..GENET_DIRECT_MCS_QUANTUM_CAP {
+            let begin = 10_000 + u64::from(attempt) * 2;
+            assert_eq!(capped.begin(begin, guard), Ok(()));
+            let route = capped.finish(begin + 1, guard, 1_000_000, true, true);
+            if attempt + 1 == GENET_DIRECT_MCS_QUANTUM_CAP {
+                assert_eq!(
+                    route,
+                    GenetDirectMcsQuantumRoute::Yield(
+                        DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_MCS_CAP_YIELD,
+                    ),
+                );
+            } else {
+                assert_eq!(route, GenetDirectMcsQuantumRoute::Reenter);
+            }
+        }
+    }
+
+    #[test]
+    fn direct_genet_dense_mcs_window_faults_repeated_or_backward_counter() {
+        let guard = 1_500;
+        let mut stalled = GenetDirectMcsWindow::empty();
+        assert_eq!(stalled.begin(100, guard), Ok(()));
+        assert_eq!(
+            stalled.finish(100, guard, 1_000_000, true, true),
+            GenetDirectMcsQuantumRoute::Yield(
+                DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_MCS_COUNTER_FAULT,
+            ),
+        );
+        stalled.record_yield(DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_MCS_COUNTER_FAULT);
+        stalled.clear_accounting();
+        assert_eq!(stalled.begin(100, guard), Ok(()));
+        assert_eq!(
+            stalled.finish(100, guard, 1_000_000, true, true),
+            GenetDirectMcsQuantumRoute::Fault(
+                DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_MCS_COUNTER_FAULT,
+            ),
+        );
+
+        let mut backward = GenetDirectMcsWindow::empty();
+        assert_eq!(backward.begin(200, guard), Ok(()));
+        assert_eq!(
+            backward.finish(199, guard, 1_000_000, true, true),
+            GenetDirectMcsQuantumRoute::Fault(
+                DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_MCS_COUNTER_FAULT,
+            ),
+        );
+    }
+
+    #[test]
+    fn direct_genet_dense_mcs_contract_is_exact() {
+        let descriptor = direct_genet_descriptor_for_test();
+        assert!(genet_direct_mcs_descriptor_valid(descriptor));
+        let mut wrong_budget = descriptor;
+        wrong_budget.budget_us -= 1;
+        assert!(!genet_direct_mcs_descriptor_valid(wrong_budget));
+        let mut wrong_period = descriptor;
+        wrong_period.period_us += 1;
+        assert!(!genet_direct_mcs_descriptor_valid(wrong_period));
+        let mut wrong_refills = descriptor;
+        wrong_refills.max_refills = 3;
+        assert!(!genet_direct_mcs_descriptor_valid(wrong_refills));
+    }
+
+    #[test]
     fn direct_genet_notification_routes_split_irq_peer_and_combined_lifetimes() {
         let _guard = test_guard();
         reset_runtime_for_test();
@@ -81002,7 +81503,7 @@ mod tests {
             HOT_PATH_SERIAL_CONSOLE => (10, 1, 500, 0x26e2_0000, 0x26ed_000b),
             HOT_PATH_USB_KEYBOARD => (11, 1, 1_000, 0x26e2_0001, 0x26ed_000c),
             HOT_PATH_HDMI_TEXT => (12, 2, 2_000, 0x26e2_0002, 0x26ed_000d),
-            HOT_PATH_GENET_NIC => (13, 3, 1_000, 0x26e2_0003, 0x26ed_000e),
+            HOT_PATH_GENET_NIC => (13, 3, 3_000, 0x26e2_0003, 0x26ed_000e),
             HOT_PATH_CYW43_WIFI => (14, 3, 1_500, 0x26e2_0004, 0x26ed_000f),
             HOT_PATH_SDIO_HOST => (15, 3, 1_500, 0x26e2_0005, 0x26ed_0010),
             HOT_PATH_PCIE_ROOT => (16, 2, 400, 0x26e2_0006, 0x26ed_0011),

@@ -1018,7 +1018,7 @@ reusable ownership pattern.
   ring cursors remain the only post-cutover service authority. A queued exact
   seL4 IRQ notification received after READY belongs to the same sole owner and
   is serviced as direct-epoch work.
-- Direct GENET service handles at most 16 material frame units per wake, with at
+- Direct GENET service handles at most 16 material frame units per quantum, with at
   most eight TX units before RX receives the remaining share. Finalizing a
   retained ambiguous TX or RX cursor commit consumes one unit in the current
   quantum; it cannot be reconciled outside the 8/16-frame accounting. A full TX ring waits for a
@@ -1028,23 +1028,36 @@ reusable ownership pattern.
   priority 160, two refills, and a 3,400 us computed response bound while
   retaining this 16-frame material quantum. These static bounds require fresh
   Pi consumed-time, latency, and throughput evidence.
+- In direct mode the 16-frame limit is one attempted DPC quantum, not a forced
+  10 ms cadence. The owner retains one dense software window across Block and
+  may re-enter while exact durable work remains, but counts every attempted
+  quantum and yields at half of its 3,000 us budget or 16 attempts. One
+  no-progress durable recheck is permitted; a second yields. Any endpoint
+  command marks the shared SC consumption stale and forces a fresh-refill
+  boundary before more packet work. The handoff and compiler both require the
+  exact `3,000/10,000 us`, max-two-refill contract and a declared WCET no more
+  than half budget. A missing/backwards counter, repeated non-advancing quantum,
+  contract drift, or invalid cursor fails closed. Blocking alone never resets
+  the window because userspace wall time cannot prove kernel refill state.
 - Direct-link control page 0 reserves bytes `[0,64)` for its immutable header
   and `[64,320)` for the four 64-byte SPSC cursor records. The optional
-  direct-GENET diagnostic-v3 record occupies the formerly reserved bytes
+  direct-GENET diagnostic-v4 record occupies the formerly reserved bytes
   `[320,512)`, is exactly 192 bytes and cache-line aligned, and commits its
-  publication sequence last at record offset 184. Version 3 retains record
-  offset 108 for cumulative `dpc_level_adoptions`, the number of badge-zero or
+  publication sequence last at record offset 184. Version 4 assigns offset 12
+  to the maximum observed bounded MCS quantum duration and retains offset 108
+  for cumulative `dpc_level_adoptions`, the number of badge-zero or
   peer-turn joins of durable physical work to a direct IRQ episode. Offsets
   160, 168, and 176 contain cumulative nonzero raw notification receipts,
   receipts rejected by the exact GENET route filter, and their 32-bit badge
-  union. They are counted at the actual receive boundary before filtering and
+  union. MCS reason bits record command-freshness, elapsed guard, counter fault,
+  attempt cap, and stalled-retry boundaries. They are counted at the actual receive boundary before filtering and
   are observational only: they cannot service or acknowledge an IRQ, admit a
   DPC or packet, retry, or change scheduling. Count each nonzero notification
   once at the initial ring-aware receive or a later combined poll/wait receive;
   exclude zero/command wakes, synthetic grants, physical-level adoption, and
   unrelated local steady waits. GENET is its sole writer;
   root accepts it only through a stable double-read with exact nonzero direct
-  generation, magic, version, length, flags, reserved zeros, cursor validity,
+  generation, magic, version, length, flags, cursor validity,
   counter relations, badge width, and matching sequence/commit. Missing, torn,
   stale, wrong-generation, or
   malformed data is unavailable diagnostic evidence, not a reason to change

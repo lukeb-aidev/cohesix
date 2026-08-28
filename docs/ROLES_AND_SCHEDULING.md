@@ -404,6 +404,25 @@ donation or packet authority. A peer fault couples containment only: suspend
 the GENET owner and remove both cross-child signal caps before unmapping the
 console copies, with no root packet fallback.
 
+The direct GENET owner treats repeated DPC quanta as one retained MCS window,
+not as fresh activations. It may re-enter only below the half-budget elapsed
+guard and 16-attempt cap, with one bounded no-progress retry. Block preserves
+the window. Any endpoint command forces a later `seL4_Yield` freshness boundary;
+that boundary resets software accounting only after the syscall returns. The
+compiler and runtime require max-two-refill `3,000/10,000 us` truth and a WCET
+no larger than half budget. Counter failure or contract drift contains the
+direct generation. Diagnostic high-water/reason fields observe these decisions
+but do not supply scheduling authority or target acceptance.
+
+CYW43 and SDIO remain separate active core-3 runtimes at priority 184 with
+unchanged `1,500 us / 10,000 us` budgets, natural-postpone behavior, WCETs,
+Reply/fault paths, and sole physical-owner boundaries. Their 8-bit scheduling
+contexts now retain eight refill records rather than two. The selected seL4-16
+AArch64 MCS ABI holds ten records at that object size, and compiler validation
+binds the calculation to the exact selected kernel/profile/build identity and
+rejects eleven. This preserves fragmented wake eligibility; it does not enlarge
+CPU budget or authorize another operation, signal, poll, retry, or owner.
+
 For this Pi-only production path, console-network retains priority/MCP 180/200
 with its unchanged `3,000 us / 10,000 us` SC. Priority-200 root-control therefore
 continues to service unauthenticated serial and local-seat input first, while the

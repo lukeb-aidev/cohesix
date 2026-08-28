@@ -8,6 +8,7 @@ import copy
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import struct
 import subprocess
@@ -18,6 +19,31 @@ from typing import Any
 import pytest
 
 from scripts import sel4_profile
+
+
+def _selected_kernel_dwarf_info(
+    contract: dict[str, Any], kernel_elf: Path
+) -> str:
+    compiler_bin = sel4_profile.contract_repo_path(
+        contract["toolchain"]["compiler"]["bin_path"],
+        "toolchain.compiler.bin_path",
+    )
+    cross_readelf = compiler_bin / "aarch64-none-elf-readelf"
+    if cross_readelf.is_file():
+        command = (str(cross_readelf), "--debug-dump=info", str(kernel_elf))
+    elif readelf := shutil.which("readelf"):
+        command = (readelf, "--debug-dump=info", str(kernel_elf))
+    elif dwarfdump := shutil.which("dwarfdump"):
+        command = (dwarfdump, str(kernel_elf))
+    else:
+        pytest.fail("selected seL4 ABI validation requires readelf or dwarfdump")
+    return subprocess.run(
+        command,
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    ).stdout
 
 
 def _cache_type(value: Any) -> str:
@@ -1333,6 +1359,20 @@ def test_repo_managed_pi_profile_accepts_current_tracked_mcs_tree() -> None:
         "-DKernelArmVtimerUpdateVOffset=OFF",
         "-DKernelArmGicV3=OFF",
     } <= configure
+
+    dwarf_info = _selected_kernel_dwarf_info(
+        canonical_contract, build_dir / "kernel" / "kernel.elf"
+    )
+    for type_name, size_pattern in (
+        ("sched_context", r"(?:96|0x60)"),
+        ("refill", r"(?:16|0x10)"),
+    ):
+        assert re.search(
+            rf"DW_TAG_structure_type.*?DW_AT_name[^\n]*{type_name}"
+            rf".*?DW_AT_byte_size[^\n]*{size_pattern}",
+            dwarf_info,
+            re.DOTALL,
+        ), f"selected Pi kernel DWARF does not prove the {type_name} ABI size"
 
 
 def test_repo_managed_pi_profile_rejects_noncanonical_path(

@@ -54,6 +54,75 @@ fn compile_options(manifest_path: PathBuf, temp_dir: &TempDir) -> CompileOptions
 }
 
 #[test]
+fn pi4_refill_capacity_is_bound_to_the_tracked_sel4_16_build_identity() {
+    const KERNEL_ID: &str = "sel4-16.0.0-aarch64-smp-mcs";
+    const KERNEL_COMMIT: &str = "6e7c3b733d296cfd88d5fbf635c96e447a882374";
+
+    let manifest_path = repo_path("configs/root_task_pi4_uboot_aarch64.toml");
+    let mut manifest = coh_rtc::ir::load_manifest(&manifest_path).expect("load Pi manifest");
+    assert_eq!(
+        manifest.worker_resource_admission.selected_kernel,
+        KERNEL_ID
+    );
+
+    let profiles: toml::Value = toml::from_str(
+        &fs::read_to_string(repo_path("configs/sel4/profiles.toml"))
+            .expect("read seL4 profile contract"),
+    )
+    .expect("parse seL4 profile contract");
+    assert_eq!(
+        profiles["source"]["manifest_ref"].as_str(),
+        Some("refs/tags/16.0.0")
+    );
+    assert_eq!(
+        profiles["source"]["repositories"]["kernel"].as_str(),
+        Some(KERNEL_COMMIT)
+    );
+    for profile_id in ["pi4_production", "pi4_diagnostic"] {
+        let profile = &profiles["profiles"][profile_id];
+        assert_eq!(profile["target"].as_str(), Some("pi4"));
+        assert_eq!(profile["cmake"]["KernelSel4Arch"].as_str(), Some("aarch64"));
+        assert_eq!(profile["cmake"]["KernelIsMCS"].as_str(), Some("ON"));
+        assert_eq!(profile["cmake"]["MCS"].as_str(), Some("ON"));
+        assert_eq!(profile["cmake"]["SMP"].as_str(), Some("ON"));
+    }
+
+    let build_stamp: Value = serde_json::from_slice(
+        &fs::read(repo_path(
+            "seL4/build_UBOOT/cohesix-profile-build-inputs.json",
+        ))
+        .expect("read selected Pi build stamp"),
+    )
+    .expect("parse selected Pi build stamp");
+    assert_eq!(build_stamp["profile"], "pi4_diagnostic");
+    assert_eq!(
+        build_stamp["source"]["repositories"]["kernel"]["expected_commit"],
+        KERNEL_COMMIT
+    );
+    assert_eq!(
+        build_stamp["source"]["repositories"]["kernel"]["actual_commit"],
+        KERNEL_COMMIT
+    );
+
+    let cyw43 = manifest
+        .temporal_authority
+        .tasks
+        .iter_mut()
+        .find(|task| task.id == "driver-cyw43")
+        .expect("driver-cyw43 temporal task");
+    assert_eq!(cyw43.scheduling_context_bits, 8);
+    assert_eq!(cyw43.max_refills, 8);
+    cyw43.max_refills = 11;
+    let error = manifest
+        .validate_with_base(manifest_path.parent())
+        .expect_err("selected eight-bit Pi SC cannot hold eleven refills");
+    assert_eq!(
+        error.to_string(),
+        "active temporal task driver-cyw43 max_refills 11 exceeds selected kernel sel4-16.0.0-aarch64-smp-mcs SC bits 8 capacity 10"
+    );
+}
+
+#[test]
 fn pi4_uboot_profile_emits_network_policy() {
     let temp_dir = TempDir::new().expect("tempdir");
     let options = compile_options(
@@ -200,6 +269,17 @@ fn pi4_uboot_profile_emits_network_policy() {
             "unimplicated Pi driver {task_id} must retain its existing timeout policy"
         );
     }
+    for task_id in ["driver-cyw43", "driver-sdio"] {
+        let task = temporal_tasks
+            .iter()
+            .find(|task| task["id"] == task_id)
+            .unwrap_or_else(|| panic!("temporal task {task_id}"));
+        assert_eq!(task["scheduling_context_bits"], 8);
+        assert_eq!(task["max_refills"], 8);
+        assert_eq!(task["budget_us"], 1_500);
+        assert_eq!(task["period_us"], 10_000);
+        assert_eq!(task["priority"], 184);
+    }
 
     let temporal_task = |task_id: &str| {
         temporal_tasks
@@ -236,13 +316,21 @@ fn pi4_uboot_profile_emits_network_policy() {
     assert_eq!(admission["fixed_objects"]["frames"], 4_077);
     assert_eq!(admission["fixed_objects"]["cspace_slots"], 9_267);
     let genet = temporal_task("driver-genet");
+    assert_eq!(genet["kind"], "driver");
+    assert_eq!(genet["execution"], "active");
     assert_eq!(genet["core"], 1);
     assert_eq!(genet["sched_control_core"], 1);
     assert_eq!(genet["budget_us"], 3_000);
     assert_eq!(genet["period_us"], 10_000);
     assert_eq!(genet["max_refills"], 2);
+    assert_eq!(genet["consumed_time_evidence"], true);
+    assert_eq!(genet["timeout_policy"], "terminal");
     assert_eq!(genet["priority"], 160);
     assert_eq!(genet["wcet_us"], 800);
+    assert!(
+        2 * genet["wcet_us"].as_u64().expect("GENET WCET")
+            <= genet["budget_us"].as_u64().expect("GENET budget")
+    );
     assert_eq!(genet["response_time_us"], 3_400);
     let core_one_demand: u64 = temporal_tasks
         .iter()

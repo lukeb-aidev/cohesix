@@ -313,8 +313,25 @@ fn try_append_log_line_to(ring: &Mutex<LogRing>, dropped_writes: &AtomicU64, lin
     true
 }
 
+fn try_append_retained_log_line_to(ring: &Mutex<LogRing>, line: &str) -> bool {
+    let Some(mut ring) = ring.try_lock() else {
+        return false;
+    };
+    ring.push_line(line);
+    true
+}
+
 pub fn append_log_bytes(payload: &[u8]) {
     let _ = try_append_log_bytes_to(&LOG_RING, &LOG_CONTENTION_DROPPED_WRITES, payload);
+}
+
+/// Attempt one complete qlog line without waiting behind a preempted owner.
+///
+/// Mandatory callers retain their own bounded record until this returns true;
+/// ordinary best-effort logging continues to use [`append_log_line`].
+#[must_use]
+pub(crate) fn try_append_retained_log_line(line: &str) -> bool {
+    try_append_retained_log_line_to(&LOG_RING, line)
 }
 
 pub fn append_log_line(line: &str) {
@@ -408,6 +425,18 @@ mod tests {
         ));
         assert_eq!(TEST_RING.lock().lines.len(), 1);
         assert_eq!(TEST_DROPPED_WRITES.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn retained_diagnostic_retry_does_not_count_a_drop() {
+        TEST_RING.lock().clear_for_test();
+        TEST_DROPPED_WRITES.store(0, Ordering::Relaxed);
+        let held = TEST_RING.lock();
+        assert!(!try_append_retained_log_line_to(&TEST_RING, "retry"));
+        assert_eq!(TEST_DROPPED_WRITES.load(Ordering::Relaxed), 0);
+        drop(held);
+        assert!(try_append_retained_log_line_to(&TEST_RING, "retry"));
+        assert_eq!(TEST_DROPPED_WRITES.load(Ordering::Relaxed), 0);
     }
 
     #[test]

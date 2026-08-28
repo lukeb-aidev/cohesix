@@ -385,11 +385,13 @@ fn format_direct_genet_netstats(
             snapshot.raw_notification_badge_or,
         ))),
         dpc: Some(format_message(format_args!(
-            "netstats: genet_direct_dpc turns={} budget_hits={} final_rechecks={} level_adoptions={}",
+            "netstats: genet_direct_dpc turns={} budget_hits={} final_rechecks={} level_adoptions={} mcs_quantum_high_us={} mcs_reasons=0x{:08x}",
             snapshot.dpc_turns,
             snapshot.dpc_budget_hits,
             snapshot.dpc_final_rechecks,
             snapshot.dpc_level_adoptions,
+            snapshot.mcs_quantum_high_water_us,
+            snapshot.flags & console_network_abi::DIRECT_GENET_RUNTIME_DIAGNOSTIC_MCS_FLAGS,
         ))),
         dma: Some(format_message(format_args!(
             "netstats: genet_direct_dma rdma_prod={} rdma_cons={} tdma_prod={} tdma_cons={} rx_packets={} tx_packets={}",
@@ -676,6 +678,22 @@ const fn local_seat_usb_service_pending_state(
         || enumeration_pending
         || (keyboard_ready && !first_report_ready)
         || (first_byte_ready && (recovery_aux_pending || no_reply_streak != 0))
+}
+
+/// Decide whether the finite CYW43 bootstrap owes the linked HID owner a turn.
+///
+/// The ordinary steady-state predicate intentionally stops treating a healthy,
+/// command-ready keyboard as service debt. During the finite Wi-Fi bootstrap,
+/// however, root-control is executing a dedicated supervisor loop rather than
+/// the ordinary linked-runtime rotation. Keep polling that already-admitted HID
+/// source there so operator input remains live until the supervisor returns.
+#[cfg(any(test, feature = "kernel"))]
+const fn cyw43_bootstrap_local_seat_usb_service_due_state(
+    steady_service_pending: bool,
+    polling_enabled: bool,
+    command_ready: bool,
+) -> bool {
+    steady_service_pending || (polling_enabled && command_ready)
 }
 
 /// Decide whether the physical network bootstrap may follow local-seat setup.
@@ -3077,6 +3095,26 @@ enum ContainmentDiagnosticOutputPhase {
     DrainSpace,
 }
 
+/// One mandatory driver-fault record retained across its two bounded sinks.
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum PendingDriverFaultDiagnosticPhase {
+    /// Admit the record to the physical-output queue, or account its terminal
+    /// serial abort, exactly once.
+    #[default]
+    PhysicalOutput,
+    /// Retry the nonblocking qlog append without duplicating physical output.
+    Qlog,
+}
+
+#[cfg(feature = "kernel")]
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct PendingDriverFaultDiagnostic {
+    sequence: u64,
+    line: HeaplessString<DEFAULT_LINE_CAPACITY>,
+    phase: PendingDriverFaultDiagnosticPhase,
+}
+
 /// One quiet ordinary unit in the post-containment network authority cut.
 #[cfg(all(feature = "kernel", feature = "net-console"))]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -3441,6 +3479,94 @@ fn pi4_local_operator_quantum_should_stop(
         || containment_pending
         || next_phase == starting_phase
         || next_phase == admitted_phase
+}
+
+/// Exact evidence for one zero-operation CYW43 park to return after Serial and
+/// consume the same parent's newly visible terminal.
+///
+/// The return remains inside the existing five-unit root-control quantum. It is
+/// not a second Network issue opportunity: the first Network visit must have
+/// spent no CYW43 outer operation, and the stable terminal of the unchanged
+/// issued parent is already durable before the second visit. The ordinary
+/// one-operation outer-turn claim then admits only that terminal retirement;
+/// any successor remains subject to a later Network turn.
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Cyw43TerminalDrainReturnEvidence {
+    starting_phase: LinkedRuntimeServicePhase,
+    admitted_phase: LinkedRuntimeServicePhase,
+    next_phase: LinkedRuntimeServicePhase,
+    network_units: usize,
+    unit_index: usize,
+    first_network_operations: u32,
+    serial_admitted: bool,
+    cyw43_lane_selected: bool,
+    parked_parent_present: bool,
+    same_issued_parent: bool,
+    same_parent_generation: bool,
+    canonical_terminal_visible: bool,
+    parked_lease_present: bool,
+    lease_open: bool,
+    same_lease_identity: bool,
+    accepted_commands_before: u64,
+    accepted_commands_after: u64,
+    network_service_quarantined: bool,
+    reboot_pending: bool,
+    recovery_required: bool,
+    containment_work_pending: bool,
+    physical_operator_work_pending: bool,
+    physical_console_response_pending: bool,
+}
+
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+fn cyw43_terminal_drain_return_entitled(evidence: Cyw43TerminalDrainReturnEvidence) -> bool {
+    evidence.starting_phase == LinkedRuntimeServicePhase::Network
+        && evidence.admitted_phase == LinkedRuntimeServicePhase::Serial
+        && evidence.next_phase == LinkedRuntimeServicePhase::Network
+        && evidence.network_units == 1
+        && evidence.unit_index.saturating_add(1) < PI4_LOCAL_OPERATOR_POLLS_PER_EXPLICIT_YIELD
+        && evidence.first_network_operations == 0
+        && evidence.serial_admitted
+        && evidence.cyw43_lane_selected
+        && evidence.parked_parent_present
+        && evidence.same_issued_parent
+        && evidence.same_parent_generation
+        && evidence.canonical_terminal_visible
+        && evidence.parked_lease_present
+        && evidence.lease_open
+        && evidence.same_lease_identity
+        && evidence.accepted_commands_before != u64::MAX
+        && evidence.accepted_commands_before == evidence.accepted_commands_after
+        && !evidence.network_service_quarantined
+        && !evidence.reboot_pending
+        && !evidence.recovery_required
+        && !evidence.containment_work_pending
+        && !evidence.physical_operator_work_pending
+        && !evidence.physical_console_response_pending
+}
+
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Cyw43TerminalDrainParkedParent {
+    state: crate::hal::driver_task::DriverTaskRetainedRequestState,
+    generation: u32,
+    pair_epoch: u32,
+    priority_mask: usize,
+}
+
+/// Consume the terminal-return token only for the second Network visit.
+///
+/// Requiring exactly one prior Network unit makes the one-shot bound structural:
+/// even a stale true token cannot admit a third Network visit.
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+fn cyw43_terminal_drain_revisit_admitted(
+    network_units: usize,
+    admitted_phase: LinkedRuntimeServicePhase,
+    terminal_drain_return_due: bool,
+) -> bool {
+    network_units == 1
+        && admitted_phase == LinkedRuntimeServicePhase::Network
+        && terminal_drain_return_due
 }
 
 /// Side-effect-free evidence that one command admitted at Dispatch may use the
@@ -5146,6 +5272,8 @@ where
     test_pi4_debug_commands: bool,
     #[cfg(test)]
     linked_local_seat_usb_service_pending_test_override: Option<bool>,
+    #[cfg(test)]
+    cyw43_bootstrap_usb_poll_state_test_override: Option<(bool, bool)>,
     banner_emitted: bool,
     console_ready_announced: bool,
     serial_console_turn_active: bool,
@@ -5245,6 +5373,10 @@ where
     pending_console_output: HeaplessVec<PendingConsoleOutput, CONSOLE_OUTPUT_BACKLOG_LINES>,
     #[cfg(feature = "kernel")]
     containment_diagnostic_output_phase: ContainmentDiagnosticOutputPhase,
+    #[cfg(feature = "kernel")]
+    driver_fault_diagnostic_sequence: u64,
+    #[cfg(feature = "kernel")]
+    pending_driver_fault_diagnostic: Option<PendingDriverFaultDiagnostic>,
     physical_response_barrier: PhysicalResponseBarrier,
     physical_serial_transport_failed: bool,
     physical_serial_output_aborted: u64,
@@ -5837,6 +5969,8 @@ where
             test_pi4_debug_commands: false,
             #[cfg(test)]
             linked_local_seat_usb_service_pending_test_override: None,
+            #[cfg(test)]
+            cyw43_bootstrap_usb_poll_state_test_override: None,
             banner_emitted: false,
             console_ready_announced: false,
             serial_console_turn_active: false,
@@ -5936,6 +6070,10 @@ where
             pending_console_output: HeaplessVec::new(),
             #[cfg(feature = "kernel")]
             containment_diagnostic_output_phase: ContainmentDiagnosticOutputPhase::Admit,
+            #[cfg(feature = "kernel")]
+            driver_fault_diagnostic_sequence: 0,
+            #[cfg(feature = "kernel")]
+            pending_driver_fault_diagnostic: None,
             physical_response_barrier: PhysicalResponseBarrier::Idle,
             physical_serial_transport_failed: false,
             physical_serial_output_aborted: 0,
@@ -6610,6 +6748,75 @@ where
         self.poll_generic();
     }
 
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    fn cyw43_terminal_drain_return_due(
+        &mut self,
+        starting_phase: LinkedRuntimeServicePhase,
+        admitted_phase: LinkedRuntimeServicePhase,
+        network_units: usize,
+        unit_index: usize,
+        first_network_operations: u32,
+        serial_admitted: bool,
+        first_cyw43_lane_selected: bool,
+        parked_cyw43_parent: Option<Cyw43TerminalDrainParkedParent>,
+        accepted_commands_at_start: u64,
+        terminal_drain_return_admitted: bool,
+    ) -> bool {
+        let current_parent = crate::hal::driver_task::active_driver_task_retained_request(
+            crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT,
+        );
+        let canonical_terminal_visible = parked_cyw43_parent.is_some_and(|parked| {
+            matches!(
+                crate::drivers::driver_task_net::cyw43_canonical_parent_cut(),
+                crate::drivers::driver_task_net::Cyw43CanonicalParentCut::Runnable {
+                    generation,
+                    request,
+                } if generation == parked.generation && request == parked.state.request()
+            )
+        });
+        let current_lease = crate::hal::driver_task::cyw43_sdio_network_priority_lease_snapshot();
+        let entitled = !terminal_drain_return_admitted
+            && cyw43_terminal_drain_return_entitled(Cyw43TerminalDrainReturnEvidence {
+                starting_phase,
+                admitted_phase,
+                next_phase: self.linked_runtime_service_phase,
+                network_units,
+                unit_index,
+                first_network_operations,
+                serial_admitted,
+                cyw43_lane_selected: first_cyw43_lane_selected
+                    && self.linked_runtime_cyw43_lane_selected(),
+                parked_parent_present: parked_cyw43_parent.is_some(),
+                same_issued_parent: parked_cyw43_parent
+                    .is_some_and(|parked| Some(parked.state) == current_parent)
+                    && current_parent.is_some_and(|parent| parent.issued()),
+                same_parent_generation: parked_cyw43_parent.is_some_and(|parked| {
+                    current_parent
+                        .and_then(|parent| parent.command())
+                        .is_some_and(|command| command.aux1 == parked.generation)
+                }),
+                canonical_terminal_visible,
+                parked_lease_present: parked_cyw43_parent.is_some(),
+                lease_open: current_lease.phase
+                    == crate::hal::driver_task::Cyw43SdioNetworkPriorityLeasePhase::Open,
+                same_lease_identity: parked_cyw43_parent.is_some_and(|parked| {
+                    current_lease.pair_epoch == parked.pair_epoch
+                        && current_lease.mask == parked.priority_mask
+                }),
+                accepted_commands_before: accepted_commands_at_start,
+                accepted_commands_after: self.metrics.accepted_commands,
+                network_service_quarantined: self.network_service_quarantined,
+                reboot_pending: self.reboot_pending,
+                recovery_required: crate::drivers::driver_task_net::cyw43_recovery_required(),
+                containment_work_pending: self.deferred_containment_work_pending(),
+                physical_operator_work_pending: self
+                    .linked_physical_operator_work()
+                    .needs_operator_rotation(),
+                physical_console_response_pending: self.physical_console_response_pending(),
+            });
+        entitled
+    }
+
     /// Execute one bounded attached-CYW43 EventPump quantum and return whether
     /// the exact Network lifetime proved a productive immediate successor.
     ///
@@ -6617,10 +6824,14 @@ where
     /// activation. Each admitted poll still enters the ordinary EventPump
     /// arbitration and performs at most its existing one-phase hardware unit.
     /// The wrapper may fuse up to five distinct serial, local-seat, dispatch,
-    /// display, and Network phases, but admits Network at most once. Only an
-    /// exact productive Network-to-Network edge returns true. Recovery,
+    /// display, and Network phases, but ordinarily admits Network at most once.
+    /// Only an exact productive Network-to-Network edge or the terminal-only
+    /// return below can revisit it. Recovery,
     /// quarantine, reboot, containment, a repeated phase, or a completed
-    /// operator rotation stops the quantum and returns false. A still-active,
+    /// operator rotation stops the quantum and returns false. One exact
+    /// zero-operation CYW43 park may return after Serial solely to retire the
+    /// unchanged parent's newly visible terminal; it cannot issue a successor
+    /// and remains inside the same five-unit bound. A still-active,
     /// connection-matched authenticated response cursor is also exact Network
     /// work: it may retain the activation for its next separately charged turn
     /// without changing that cursor's existing 8/16-turn hard bound.
@@ -6629,13 +6840,54 @@ where
     #[must_use = "a false continuation token requires an explicit root-control yield"]
     pub fn poll_deferred_cyw43_attached_network_control_turn(&mut self) -> bool {
         let starting_phase = self.linked_runtime_service_phase;
-        let mut network_admitted = false;
-        for _ in 0..PI4_LOCAL_OPERATOR_POLLS_PER_EXPLICIT_YIELD {
+        let accepted_commands_at_start = self.metrics.accepted_commands;
+        let mut network_units = 0usize;
+        let mut serial_admitted = false;
+        let mut parked_cyw43_parent = None;
+        let mut first_network_operations = 0u32;
+        let mut first_cyw43_lane_selected = false;
+        let mut terminal_drain_return_due = false;
+        for unit_index in 0..PI4_LOCAL_OPERATOR_POLLS_PER_EXPLICIT_YIELD {
             let admitted_phase = self.linked_runtime_service_phase;
-            if network_admitted && admitted_phase == LinkedRuntimeServicePhase::Network {
+            let terminal_drain_return_admitted = cyw43_terminal_drain_revisit_admitted(
+                network_units,
+                admitted_phase,
+                terminal_drain_return_due,
+            );
+            if network_units != 0
+                && admitted_phase == LinkedRuntimeServicePhase::Network
+                && !terminal_drain_return_admitted
+            {
                 break;
             }
             let network_turn = admitted_phase == LinkedRuntimeServicePhase::Network;
+            let cyw43_lease_before_poll =
+                crate::hal::driver_task::cyw43_sdio_network_priority_lease_snapshot();
+            let cyw43_park_candidate_before_poll = (starting_phase
+                == LinkedRuntimeServicePhase::Network
+                && network_turn
+                && network_units == 0
+                && self.linked_runtime_cyw43_lane_selected()
+                && cyw43_network_open_parent_should_park(
+                    cyw43_lease_before_poll.phase,
+                    cyw43_network_resume_condition(),
+                ))
+            .then(|| {
+                let parent = crate::hal::driver_task::active_driver_task_retained_request(
+                    crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                )?;
+                let generation = parent.command()?.aux1;
+                (parent.issued()
+                    && cyw43_lease_before_poll.phase
+                        == crate::hal::driver_task::Cyw43SdioNetworkPriorityLeasePhase::Open)
+                    .then_some(Cyw43TerminalDrainParkedParent {
+                        state: parent,
+                        generation,
+                        pair_epoch: cyw43_lease_before_poll.pair_epoch,
+                        priority_mask: cyw43_lease_before_poll.mask,
+                    })
+            })
+            .flatten();
             let cyw43_lane_selected = network_turn && self.linked_runtime_cyw43_lane_selected();
             let service_turns_before = self.metrics.net_cyw43_service_turns;
             if network_turn {
@@ -6644,8 +6896,24 @@ where
 
             self.poll();
 
+            serial_admitted |= admitted_phase == LinkedRuntimeServicePhase::Serial;
             if network_turn {
-                network_admitted = true;
+                network_units = network_units.saturating_add(1);
+                if network_units == 1 {
+                    first_cyw43_lane_selected = cyw43_lane_selected;
+                    first_network_operations =
+                        crate::drivers::driver_task_net::cyw43_outer_event_turn_operation_count();
+                    parked_cyw43_parent = (first_network_operations == 0
+                        && self.linked_runtime_service_phase == LinkedRuntimeServicePhase::Serial)
+                        .then_some(cyw43_park_candidate_before_poll)
+                        .flatten();
+                }
+                if terminal_drain_return_admitted {
+                    // The one-shot revisit exists only to retire the exact
+                    // canonical terminal. It cannot carry a successor token
+                    // or admit another operator phase in this activation.
+                    break;
+                }
                 // The outer-event finalizer has retired before `poll` returns,
                 // so this is a fresh durable snapshot rather than cached turn
                 // authority. Only an exact productive Network -> Network edge
@@ -6676,16 +6944,31 @@ where
                 }
             }
 
-            if deferred_cyw43_attached_quantum_should_stop(
+            terminal_drain_return_due = self.cyw43_terminal_drain_return_due(
                 starting_phase,
                 admitted_phase,
-                self.linked_runtime_service_phase,
-                network_admitted,
-                self.reboot_pending,
-                self.deferred_containment_work_pending(),
-                self.network_service_quarantined,
-                crate::drivers::driver_task_net::cyw43_recovery_required(),
-            ) {
+                network_units,
+                unit_index,
+                first_network_operations,
+                serial_admitted,
+                first_cyw43_lane_selected,
+                parked_cyw43_parent,
+                accepted_commands_at_start,
+                terminal_drain_return_admitted,
+            );
+
+            if !terminal_drain_return_due
+                && deferred_cyw43_attached_quantum_should_stop(
+                    starting_phase,
+                    admitted_phase,
+                    self.linked_runtime_service_phase,
+                    network_units != 0,
+                    self.reboot_pending,
+                    self.deferred_containment_work_pending(),
+                    self.network_service_quarantined,
+                    crate::drivers::driver_task_net::cyw43_recovery_required(),
+                )
+            {
                 break;
             }
         }
@@ -9346,7 +9629,7 @@ where
         let operator_turn = cyw43_bootstrap_operator_turn(
             self.cyw43_bootstrap_hdmi_pending || local_seat_hdmi_pending,
             self.cyw43_bootstrap_last_operator_turn_was_display,
-            self.linked_local_seat_usb_service_pending(),
+            self.cyw43_bootstrap_local_seat_usb_service_due(),
             self.cyw43_bootstrap_last_nondisplay_turn_was_local_seat,
             self.reboot_pending
                 || self.physical_console_response_pending()
@@ -9363,10 +9646,12 @@ where
             Cyw43BootstrapOperatorTurn::LocalSeat => {
                 // Controller readiness admits Wi-Fi but is not keyboard
                 // readiness. Continue one bounded xHCI/HID owner turn after
-                // the prior CYW43 HAL borrow has been released. Bytes remain
-                // buffered for a later Serial/dispatch turn, and Network is
-                // explicitly fenced, so this neither delays Wi-Fi admission
-                // nor composes two physical operations in one outer turn.
+                // the prior CYW43 HAL borrow has been released, including
+                // steady polling after command admission while this finite
+                // bootstrap loop owns scheduling. Bytes remain buffered for a
+                // later Serial/dispatch turn, and Network is explicitly
+                // fenced, so this neither delays Wi-Fi admission nor composes
+                // two physical operations in one outer turn.
                 self.cyw43_bootstrap_last_operator_turn_was_display = false;
                 self.cyw43_bootstrap_last_nondisplay_turn_was_local_seat = true;
                 self.poll_local_seat_backend_for_ingress();
@@ -11791,6 +12076,35 @@ where
         false
     }
 
+    /// Return whether the finite CYW43 supervisor owes linked HID one turn.
+    ///
+    /// This is deliberately separate from
+    /// [`Self::linked_local_seat_usb_service_pending`]: a healthy command-ready
+    /// keyboard is not generic steady-state debt, but it must stay live while
+    /// the bootstrap supervisor temporarily replaces the ordinary scheduler.
+    #[cfg(feature = "kernel")]
+    fn cyw43_bootstrap_local_seat_usb_service_due(&self) -> bool {
+        let runtime_state = self
+            .local_seat
+            .as_ref()
+            .map(|runtime| {
+                (
+                    runtime.backend_keyboard_polling_enabled(),
+                    runtime.usb_keyboard_command_ready_latched(),
+                )
+            })
+            .unwrap_or((false, false));
+        #[cfg(test)]
+        let runtime_state = self
+            .cyw43_bootstrap_usb_poll_state_test_override
+            .unwrap_or(runtime_state);
+        cyw43_bootstrap_local_seat_usb_service_due_state(
+            self.linked_local_seat_usb_service_pending(),
+            runtime_state.0,
+            runtime_state.1,
+        )
+    }
+
     fn should_defer_physical_console_output(&mut self) -> bool {
         if self.console_output_flush_active {
             return false;
@@ -11965,7 +12279,69 @@ where
     }
 
     #[cfg(feature = "kernel")]
+    fn admit_driver_fault_diagnostic_with_retention<Retain>(
+        &mut self,
+        sequence: u64,
+        line: &str,
+        retain_qlog: Retain,
+    ) -> bool
+    where
+        Retain: FnOnce(&str) -> bool,
+    {
+        if self.pending_driver_fault_diagnostic.is_none() {
+            if sequence <= self.driver_fault_diagnostic_sequence || line.is_empty() {
+                return false;
+            }
+            let mut retained_line = HeaplessString::new();
+            if retained_line.push_str(line).is_err() {
+                return false;
+            }
+            self.pending_driver_fault_diagnostic = Some(PendingDriverFaultDiagnostic {
+                sequence,
+                line: retained_line,
+                phase: PendingDriverFaultDiagnosticPhase::PhysicalOutput,
+            });
+        }
+
+        let Some(mut pending) = self.pending_driver_fault_diagnostic.take() else {
+            return false;
+        };
+        match pending.phase {
+            PendingDriverFaultDiagnosticPhase::PhysicalOutput => {
+                if !self.queue_containment_diagnostic(pending.line.as_str()) {
+                    self.pending_driver_fault_diagnostic = Some(pending);
+                    return false;
+                }
+                pending.phase = PendingDriverFaultDiagnosticPhase::Qlog;
+                self.pending_driver_fault_diagnostic = Some(pending);
+                true
+            }
+            PendingDriverFaultDiagnosticPhase::Qlog => {
+                if !retain_qlog(pending.line.as_str()) {
+                    self.pending_driver_fault_diagnostic = Some(pending);
+                    return true;
+                }
+                // Ordinary GENET and deferred CYW43 paths share this cursor.
+                // Commit only after the owned complete line reached both
+                // bounded sinks, including the serial-terminal abort account.
+                self.driver_fault_diagnostic_sequence = pending.sequence;
+                true
+            }
+        }
+    }
+
+    #[cfg(feature = "kernel")]
     fn containment_diagnostic_pending(&mut self) -> bool {
+        if self.pending_driver_fault_diagnostic.is_some() {
+            return true;
+        }
+        if crate::hal::driver_task::driver_supervisor_fault_diagnostic_line(
+            self.driver_fault_diagnostic_sequence,
+        )
+        .is_some()
+        {
+            return true;
+        }
         #[cfg(feature = "net-console")]
         {
             let network_diagnostic_pending = self
@@ -12012,6 +12388,24 @@ where
             || self.physical_console_response_pending()
         {
             return false;
+        }
+        if self.pending_driver_fault_diagnostic.is_some() {
+            return self.admit_driver_fault_diagnostic_with_retention(
+                0,
+                "",
+                crate::log_buffer::try_append_retained_log_line,
+            );
+        }
+        if let Some((sequence, line)) =
+            crate::hal::driver_task::driver_supervisor_fault_diagnostic_line(
+                self.driver_fault_diagnostic_sequence,
+            )
+        {
+            return self.admit_driver_fault_diagnostic_with_retention(
+                sequence,
+                line.as_str(),
+                crate::log_buffer::try_append_retained_log_line,
+            );
         }
         #[cfg(feature = "net-console")]
         if let Some(line) = self
@@ -30786,6 +31180,7 @@ mod tests {
         let mut snapshot = console_network_abi::DirectGenetRuntimeDiagnostic::empty();
         snapshot.flags = console_network_abi::DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAGS
             & !console_network_abi::DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_FAULTED;
+        snapshot.mcs_quantum_high_water_us = u32::MAX;
         snapshot.generation = u64::MAX;
         snapshot.publication_sequence = u64::MAX;
         snapshot.irq_badge = u32::MAX;
@@ -30848,13 +31243,13 @@ mod tests {
         ];
         let expected = [
             "netstats: genet_direct refresh=ready-stale snapshot=present phase=pre-idle-service generation=18446744073709551615 sequence=18446744073709551615",
-            "netstats: genet_direct_flags flags=0x000001fb initialized=yes active=yes faulted=no irq_pending=yes rx_pending=yes tx_pending=yes",
+            "netstats: genet_direct_flags flags=0x00003ffb initialized=yes active=yes faulted=no irq_pending=yes rx_pending=yes tx_pending=yes",
             "netstats: genet_direct_before sequence=18446744073709551615 irq_wakes=4294967295 irq_acks=4294967295 raw=0xffffffff mask=0x00000000 active=0xffffffff rdma=65535/65535 tdma=65535/65535",
             "netstats: genet_direct_before_ring rx_cursor=18446744073709551615/18446744073709551615 tx_cursor=18446744073709551615/18446744073709551615 rx_packets=4294967295 tx_packets=4294967295 peer_wakes=4294967295 peer_signals=4294967295",
             "netstats: genet_direct_irq badge=0xffffffff wakes=4294967295 acks=4294967295 ack_failures=4294967295 unmask_failures=4294967295",
             "netstats: genet_direct_irq_source raw=0xffffffff mask=0x00000000 active=0xffffffff last=0xffffffff",
             "netstats: genet_direct_notification receipts=18446744073709551615 rejected=18446744073709551615 badge_or=0xffffffff",
-            "netstats: genet_direct_dpc turns=4294967295 budget_hits=4294967295 final_rechecks=4294967295 level_adoptions=4294967295",
+            "netstats: genet_direct_dpc turns=4294967295 budget_hits=4294967295 final_rechecks=4294967295 level_adoptions=4294967295 mcs_quantum_high_us=4294967295 mcs_reasons=0x00003e00",
             "netstats: genet_direct_dma rdma_prod=65535 rdma_cons=65535 tdma_prod=65535 tdma_cons=65535 rx_packets=4294967295 tx_packets=4294967295",
             "netstats: genet_direct_ring rx_prod=18446744073709551615 rx_cons=18446744073709551615 tx_prod=18446744073709551615 tx_cons=18446744073709551615 rx_valid=yes tx_valid=yes state_changes=4294967295",
             "netstats: genet_direct_peer wakes=4294967295 signals=4294967295 poison_rx=0/0 poison_tx=0/0",
@@ -36534,6 +36929,7 @@ mod tests {
         counters: NetCounters,
         self_test_report: NetSelfTestReport,
         polls: usize,
+        poll_activity: bool,
         response_polls: usize,
         tcp_flushes: usize,
         tcp_flush_send_counts: heapless::Vec<usize, 32>,
@@ -36556,6 +36952,10 @@ mod tests {
         cyw43_association_turn_pending: bool,
         #[cfg(feature = "kernel")]
         expect_cyw43_priority_lease_open_on_poll: bool,
+        #[cfg(feature = "kernel")]
+        expect_cyw43_terminal_parent_on_poll: Option<u32>,
+        #[cfg(feature = "kernel")]
+        cyw43_terminal_consumer_on_poll: Option<Box<dyn FnMut()>>,
         console_output_drained: bool,
         console_output_drained_after_polls: Option<usize>,
         events: heapless::Vec<NetConsoleEvent, 8>,
@@ -36589,6 +36989,7 @@ mod tests {
                 counters: NetCounters::default(),
                 self_test_report: NetSelfTestReport::default(),
                 polls: 0,
+                poll_activity: true,
                 response_polls: 0,
                 tcp_flushes: 0,
                 tcp_flush_send_counts: heapless::Vec::new(),
@@ -36611,6 +37012,10 @@ mod tests {
                 cyw43_association_turn_pending: false,
                 #[cfg(feature = "kernel")]
                 expect_cyw43_priority_lease_open_on_poll: false,
+                #[cfg(feature = "kernel")]
+                expect_cyw43_terminal_parent_on_poll: None,
+                #[cfg(feature = "kernel")]
+                cyw43_terminal_consumer_on_poll: None,
                 console_output_drained: true,
                 console_output_drained_after_polls: None,
                 events: heapless::Vec::new(),
@@ -36689,6 +37094,20 @@ mod tests {
                     "EventPump must open the physical pair episode before NetStack can claim association",
                 );
             }
+            #[cfg(feature = "kernel")]
+            if let Some(request) = self.expect_cyw43_terminal_parent_on_poll {
+                assert_eq!(
+                    crate::hal::driver_task::cyw43_persistent_transaction_parent_condition(
+                        request,
+                    ),
+                    crate::hal::driver_task::Cyw43PersistentTransactionParentCondition::TerminalVisible,
+                    "the first NIC poll must be the terminal-only revisit after the initial parent park",
+                );
+            }
+            #[cfg(feature = "kernel")]
+            if let Some(consumer) = self.cyw43_terminal_consumer_on_poll.as_mut() {
+                consumer();
+            }
             self.polls = self.polls.saturating_add(1);
             if let Some(observer) = self.poll_observer.as_ref() {
                 observer.set(observer.get().saturating_add(1));
@@ -36713,7 +37132,7 @@ mod tests {
                 assert!(self.lines.push(ConsoleLine::new(line, 9001)).is_ok());
                 self.released_line_after_flush_poll = true;
             }
-            true
+            self.poll_activity
         }
 
         fn poll_with_budget(
@@ -44381,6 +44800,60 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
+    fn cyw43_bootstrap_command_ready_hid_poll_preserves_serial_alternation() {
+        struct LinkedRuntimeTestReset;
+
+        impl Drop for LinkedRuntimeTestReset {
+            fn drop(&mut self) {
+                crate::serial::test_end_linked_runtime_only_transport();
+            }
+        }
+
+        crate::serial::test_begin_linked_runtime_only_transport();
+        let _reset = LinkedRuntimeTestReset;
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<
+            32768,
+        >::new());
+        let timer = TestTimer::repeated(4, 1);
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut local_seat = LocalSeatRuntime::new(crate::local_seat::LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 192,
+            buffer_lines: 16,
+        });
+
+        {
+            let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit)
+                .with_local_seat(&mut local_seat);
+            pump.linked_local_seat_usb_service_pending_test_override = Some(false);
+            pump.cyw43_bootstrap_usb_poll_state_test_override = Some((true, true));
+
+            pump.poll_cyw43_bootstrap_supervisor_event_turn();
+            assert!(
+                pump.cyw43_bootstrap_last_nondisplay_turn_was_local_seat,
+                "command-ready HID must retain one bounded LocalSeat poll during bootstrap"
+            );
+
+            pump.poll_cyw43_bootstrap_supervisor_event_turn();
+            assert!(
+                !pump.cyw43_bootstrap_last_nondisplay_turn_was_local_seat,
+                "the following non-display turn remains Serial despite persistent HID polling"
+            );
+
+            pump.physical_response_barrier = PhysicalResponseBarrier::AwaitingTail;
+            pump.poll_cyw43_bootstrap_supervisor_event_turn();
+            assert!(
+                !pump.cyw43_bootstrap_last_nondisplay_turn_was_local_seat,
+                "a physical response barrier must continue to override HID service"
+            );
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
     fn pi_local_operator_quantum_requires_physical_and_linked_serial_ownership() {
         assert!(pi4_local_operator_quantum_enabled(true, true));
         for state in [(false, true), (true, false), (false, false)] {
@@ -44433,6 +44906,438 @@ mod tests {
             false,
             true,
         ));
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn pi_cyw43_terminal_drain_return_is_exact_single_use_and_fail_closed() {
+        let baseline = Cyw43TerminalDrainReturnEvidence {
+            starting_phase: LinkedRuntimeServicePhase::Network,
+            admitted_phase: LinkedRuntimeServicePhase::Serial,
+            next_phase: LinkedRuntimeServicePhase::Network,
+            network_units: 1,
+            unit_index: 1,
+            first_network_operations: 0,
+            serial_admitted: true,
+            cyw43_lane_selected: true,
+            parked_parent_present: true,
+            same_issued_parent: true,
+            same_parent_generation: true,
+            canonical_terminal_visible: true,
+            parked_lease_present: true,
+            lease_open: true,
+            same_lease_identity: true,
+            accepted_commands_before: 41,
+            accepted_commands_after: 41,
+            network_service_quarantined: false,
+            reboot_pending: false,
+            recovery_required: false,
+            containment_work_pending: false,
+            physical_operator_work_pending: false,
+            physical_console_response_pending: false,
+        };
+        let terminal_return_due = cyw43_terminal_drain_return_entitled(baseline);
+        assert!(
+            terminal_return_due,
+            "one zero-operation Network park may return after Serial only for the same exact terminal"
+        );
+        assert!(
+            cyw43_terminal_drain_revisit_admitted(
+                baseline.network_units,
+                LinkedRuntimeServicePhase::Network,
+                terminal_return_due,
+            ),
+            "the exact token admits the second Network visit"
+        );
+        assert!(
+            !cyw43_terminal_drain_revisit_admitted(
+                baseline.network_units + 1,
+                LinkedRuntimeServicePhase::Network,
+                terminal_return_due,
+            ),
+            "even a stale true token cannot admit a third Network visit"
+        );
+
+        let rejected = [
+            Cyw43TerminalDrainReturnEvidence {
+                starting_phase: LinkedRuntimeServicePhase::Serial,
+                ..baseline
+            },
+            Cyw43TerminalDrainReturnEvidence {
+                admitted_phase: LinkedRuntimeServicePhase::LocalSeat,
+                ..baseline
+            },
+            Cyw43TerminalDrainReturnEvidence {
+                next_phase: LinkedRuntimeServicePhase::Display,
+                ..baseline
+            },
+            Cyw43TerminalDrainReturnEvidence {
+                network_units: 0,
+                ..baseline
+            },
+            Cyw43TerminalDrainReturnEvidence {
+                // A second Network visit has consumed the one-shot return;
+                // no third visit may be admitted in this root quantum.
+                network_units: 2,
+                admitted_phase: LinkedRuntimeServicePhase::Network,
+                ..baseline
+            },
+            Cyw43TerminalDrainReturnEvidence {
+                unit_index: PI4_LOCAL_OPERATOR_POLLS_PER_EXPLICIT_YIELD.saturating_sub(1),
+                ..baseline
+            },
+            Cyw43TerminalDrainReturnEvidence {
+                first_network_operations: 1,
+                ..baseline
+            },
+            Cyw43TerminalDrainReturnEvidence {
+                serial_admitted: false,
+                ..baseline
+            },
+            Cyw43TerminalDrainReturnEvidence {
+                cyw43_lane_selected: false,
+                ..baseline
+            },
+            Cyw43TerminalDrainReturnEvidence {
+                parked_parent_present: false,
+                ..baseline
+            },
+            Cyw43TerminalDrainReturnEvidence {
+                same_issued_parent: false,
+                ..baseline
+            },
+            Cyw43TerminalDrainReturnEvidence {
+                same_parent_generation: false,
+                ..baseline
+            },
+            Cyw43TerminalDrainReturnEvidence {
+                // Absent, Waiting, and Fault canonical cuts all map to false.
+                canonical_terminal_visible: false,
+                ..baseline
+            },
+            Cyw43TerminalDrainReturnEvidence {
+                parked_lease_present: false,
+                ..baseline
+            },
+            Cyw43TerminalDrainReturnEvidence {
+                lease_open: false,
+                ..baseline
+            },
+            Cyw43TerminalDrainReturnEvidence {
+                same_lease_identity: false,
+                ..baseline
+            },
+            Cyw43TerminalDrainReturnEvidence {
+                accepted_commands_before: u64::MAX,
+                accepted_commands_after: u64::MAX,
+                ..baseline
+            },
+            Cyw43TerminalDrainReturnEvidence {
+                accepted_commands_after: baseline.accepted_commands_after + 1,
+                ..baseline
+            },
+            Cyw43TerminalDrainReturnEvidence {
+                network_service_quarantined: true,
+                ..baseline
+            },
+            Cyw43TerminalDrainReturnEvidence {
+                reboot_pending: true,
+                ..baseline
+            },
+            Cyw43TerminalDrainReturnEvidence {
+                recovery_required: true,
+                ..baseline
+            },
+            Cyw43TerminalDrainReturnEvidence {
+                containment_work_pending: true,
+                ..baseline
+            },
+            Cyw43TerminalDrainReturnEvidence {
+                physical_operator_work_pending: true,
+                ..baseline
+            },
+            Cyw43TerminalDrainReturnEvidence {
+                physical_console_response_pending: true,
+                ..baseline
+            },
+        ];
+        for evidence in rejected {
+            assert!(
+                !cyw43_terminal_drain_return_entitled(evidence),
+                "non-exact or fenced terminal return evidence must fail closed: {evidence:?}",
+            );
+        }
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn attached_cyw43_wrapper_consumes_one_terminal_return_without_successor() {
+        #[repr(align(4096))]
+        struct AlignedDriverTaskRing(
+            [u32; crate::hal::driver_task::DRIVER_TASK_RING_PAGE_BYTES
+                / core::mem::size_of::<u32>()],
+        );
+
+        struct TerminalPublishingTimer {
+            ring_root_ptr: usize,
+            request: u32,
+            generation: u32,
+            terminal_published: bool,
+        }
+
+        impl TimerSource for TerminalPublishingTimer {
+            fn poll(&mut self, _now_ms: u64) -> Option<TickEvent> {
+                if self.terminal_published {
+                    return None;
+                }
+                assert_ne!(self.ring_root_ptr, 0, "the test ring remains live");
+                assert_eq!(
+                    crate::hal::driver_task::cyw43_persistent_transaction_parent_condition(
+                        self.request,
+                    ),
+                    crate::hal::driver_task::Cyw43PersistentTransactionParentCondition::Waiting,
+                    "Serial must observe the parked parent before publishing its terminal",
+                );
+                assert_eq!(
+                    crate::drivers::driver_task_net::cyw43_canonical_parent_cut(),
+                    crate::drivers::driver_task_net::Cyw43CanonicalParentCut::Waiting {
+                        generation: self.generation,
+                        request: self.request,
+                    },
+                    "the canonical semantic owner must still be Waiting during Serial",
+                );
+                assert!(
+                    crate::hal::driver_task::test_publish_cyw43_retained_terminal(self.request, 1,)
+                );
+                crate::drivers::driver_task_net::set_cyw43_canonical_parent_cut_test_override(
+                    Some(
+                        crate::drivers::driver_task_net::Cyw43CanonicalParentCut::Runnable {
+                            generation: self.generation,
+                            request: self.request,
+                        },
+                    ),
+                );
+                assert_eq!(
+                    crate::drivers::driver_task_net::cyw43_canonical_parent_cut(),
+                    crate::drivers::driver_task_net::Cyw43CanonicalParentCut::Runnable {
+                        generation: self.generation,
+                        request: self.request,
+                    },
+                    "Serial must publish the exact canonical Runnable identity",
+                );
+                self.terminal_published = true;
+                None
+            }
+        }
+
+        struct LinkedRuntimeTestReset;
+
+        impl Drop for LinkedRuntimeTestReset {
+            fn drop(&mut self) {
+                crate::drivers::driver_task_net::set_cyw43_canonical_parent_cut_test_override(None);
+                crate::drivers::driver_task_net::set_cyw43_service_work_snapshot_test_override(
+                    None,
+                );
+                crate::hal::driver_task::clear_driver_task_transport(
+                    crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                );
+                crate::serial::test_end_linked_runtime_only_transport();
+            }
+        }
+
+        let _counter = crate::hal::driver_task::DriverTaskTestCounterOverride::new();
+        let _progress_guard = wifi_driver_task_progress_test_guard();
+        let mut ring_page = Box::new(AlignedDriverTaskRing(
+            [0; crate::hal::driver_task::DRIVER_TASK_RING_PAGE_BYTES / core::mem::size_of::<u32>()],
+        ));
+        let mut shared_page = Box::new(AlignedDriverTaskRing(
+            [0; crate::hal::driver_task::DRIVER_TASK_RING_PAGE_BYTES / core::mem::size_of::<u32>()],
+        ));
+        crate::serial::test_begin_linked_runtime_only_transport();
+        let _reset = LinkedRuntimeTestReset;
+        crate::hal::driver_task::publish_driver_task_ring(
+            crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            ring_page.0.as_mut_ptr() as usize,
+        );
+        crate::hal::driver_task::publish_driver_task_shared_frame(
+            crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            0,
+            0x3000,
+            shared_page.0.as_mut_ptr() as usize,
+        );
+        assert!(
+            crate::hal::driver_task::test_publish_driver_task_ring_endpoint(
+                crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            )
+        );
+        assert!(
+            crate::hal::driver_task::test_publish_driver_task_root_notification(
+                crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            )
+        );
+        let _priority_model =
+            crate::hal::driver_task::TestCyw43SdioNetworkPriorityPhysicalModelGuard::open();
+
+        let payload = [1u8, 2, 3, 4];
+        let mut descriptor =
+            [0u8; core::mem::size_of::<pi4_driver_abi::DriverRuntimeCyw43CommandDescriptor>()];
+        descriptor[0..2].copy_from_slice(
+            &pi4_driver_abi::DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE.to_le_bytes(),
+        );
+        descriptor[8..10].copy_from_slice(
+            &pi4_driver_abi::DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE.to_le_bytes(),
+        );
+        descriptor[10..12].copy_from_slice(&(payload.len() as u16).to_le_bytes());
+        descriptor[12..16].copy_from_slice(&(payload.len() as u32).to_le_bytes());
+        descriptor[16..20].copy_from_slice(&2u32.to_le_bytes());
+        descriptor[20..24].copy_from_slice(&1u32.to_le_bytes());
+        let staging = [
+            crate::hal::driver_task::DriverTaskStagingSegment::shared(&payload, 0),
+            crate::hal::driver_task::DriverTaskStagingSegment::ring_payload_at(
+                usize::from(pi4_driver_abi::DRIVER_RUNTIME_CYW43_COMMAND_DESCRIPTOR_OFFSET),
+                &descriptor,
+                0,
+            ),
+        ];
+        let generation = 41;
+        let mut command = crate::hal::driver_task::DriverTaskCommandRecord::pi4_hot_path(
+            0,
+            crate::hal::driver_task::DriverTaskHotPath::Cyw43Wifi,
+            crate::hal::driver_task::DriverTaskBudgetGrant::from_contract(
+                crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            ),
+            crate::hal::driver_task::DriverFrameDescriptor {
+                offset: u32::from(pi4_driver_abi::DRIVER_RUNTIME_CYW43_COMMAND_DESCRIPTOR_OFFSET),
+                len: core::mem::size_of::<pi4_driver_abi::DriverRuntimeCyw43CommandDescriptor>()
+                    as u16,
+                flags: 0,
+            },
+        );
+        command.aux0 = pi4_driver_abi::DRIVER_RUNTIME_CYW43_COMMAND_AUX;
+        command.aux1 = generation;
+        assert_eq!(
+            crate::hal::driver_task::run_driver_task_ring_service_retained_association_join_turn_staged(
+                crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                command,
+                &staging,
+            ),
+            crate::hal::driver_task::DriverTaskRetainedServiceTurn::Pending,
+        );
+        let parent = crate::hal::driver_task::active_driver_task_retained_request(
+            crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT,
+        )
+        .expect("the production retained transport must expose the exact parent");
+        assert!(parent.issued());
+        assert!(
+            crate::hal::driver_task::test_publish_cyw43_persistent_wait_receipt(
+                parent.request(),
+                1,
+            ),
+            "the first Network visit must observe the exact external wait",
+        );
+        crate::drivers::driver_task_net::set_cyw43_service_work_snapshot_test_override(Some(
+            crate::drivers::driver_task_net::Cyw43ServiceWorkSnapshot::for_test_with_waiting_parent(
+                generation, 13, 9, 0,
+            ),
+        ));
+        crate::drivers::driver_task_net::set_cyw43_canonical_parent_cut_test_override(Some(
+            crate::drivers::driver_task_net::Cyw43CanonicalParentCut::Waiting {
+                generation,
+                request: parent.request(),
+            },
+        ));
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<
+            32768,
+        >::new());
+        let mut audit = AuditLog::new();
+        let mut wifi = FakeNet::new();
+        wifi.driver_contract = crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT;
+        wifi.poll_activity = false;
+        wifi.expect_cyw43_terminal_parent_on_poll = Some(parent.request());
+        let terminal_consumes = std::rc::Rc::new(core::cell::Cell::new(0usize));
+        let terminal_consumes_observer = std::rc::Rc::clone(&terminal_consumes);
+        let consume_payload = payload;
+        let consume_descriptor = descriptor;
+        let consume_command = command;
+        wifi.cyw43_terminal_consumer_on_poll = Some(Box::new(move || {
+            let consume_staging = [
+                crate::hal::driver_task::DriverTaskStagingSegment::shared(&consume_payload, 0),
+                crate::hal::driver_task::DriverTaskStagingSegment::ring_payload_at(
+                    usize::from(pi4_driver_abi::DRIVER_RUNTIME_CYW43_COMMAND_DESCRIPTOR_OFFSET),
+                    &consume_descriptor,
+                    0,
+                ),
+            ];
+            assert!(matches!(
+                crate::hal::driver_task::run_driver_task_ring_service_retained_association_join_turn_staged(
+                    crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                    consume_command,
+                    &consume_staging,
+                ),
+                crate::hal::driver_task::DriverTaskRetainedServiceTurn::Complete(completion)
+                    if completion.sequence == parent.request()
+            ));
+            terminal_consumes_observer.set(terminal_consumes_observer.get().saturating_add(1));
+        }));
+        let submitted_after_issue = crate::hal::driver_task::driver_task_counter_snapshot(
+            crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT,
+        )
+        .expect("the issued CYW43 parent publishes its counter snapshot")
+        .submitted_turns;
+
+        {
+            let mut pump = EventPump::new(
+                serial,
+                TerminalPublishingTimer {
+                    ring_root_ptr: ring_page.0.as_mut_ptr() as usize,
+                    request: parent.request(),
+                    generation,
+                    terminal_published: false,
+                },
+                NullIpc,
+                TicketTable::<4>::new(),
+                &mut audit,
+            )
+            .with_network(&mut wifi);
+            pump.linked_runtime_service_phase = LinkedRuntimeServicePhase::Network;
+
+            assert!(
+                !pump.poll_deferred_cyw43_attached_network_control_turn(),
+                "terminal retirement is not a productive successor token",
+            );
+            assert!(
+                pump.timer.terminal_published,
+                "Serial must expose the terminal between the park and revisit",
+            );
+        }
+        assert_eq!(
+            wifi.polls, 1,
+            "the initial park must not poll the NIC and the exact terminal gets one revisit",
+        );
+        assert_eq!(terminal_consumes.get(), 1, "the terminal is consumed once");
+        assert!(
+            crate::hal::driver_task::active_driver_task_retained_request(
+                crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            )
+            .is_none(),
+            "the exact parent must be retired before the terminal revisit stops",
+        );
+        assert_eq!(
+            crate::hal::driver_task::cyw43_persistent_transaction_parent_condition(
+                parent.request(),
+            ),
+            crate::hal::driver_task::Cyw43PersistentTransactionParentCondition::NotExact,
+            "the retired request must not remain a resumable persistent parent",
+        );
+        assert_eq!(
+            crate::hal::driver_task::driver_task_counter_snapshot(
+                crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            )
+            .expect("the retired CYW43 parent preserves its counters")
+            .submitted_turns,
+            submitted_after_issue,
+            "the terminal-only revisit cannot issue a successor",
+        );
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
@@ -45330,6 +46235,37 @@ mod tests {
             input.retains_network_fence_after_dispatch(),
             "actual serial or queued USB input keeps operator precedence"
         );
+    }
+
+    #[test]
+    fn cyw43_bootstrap_keeps_command_ready_hid_polling_due_without_steady_debt() {
+        let steady_service_pending = local_seat_usb_service_pending_state(
+            true,
+            true,
+            false,
+            false,
+            false,
+            false,
+            (false, 0),
+        );
+        assert!(
+            !steady_service_pending,
+            "healthy command-ready HID remains outside generic steady-state debt"
+        );
+        assert!(cyw43_bootstrap_local_seat_usb_service_due_state(
+            steady_service_pending,
+            true,
+            true,
+        ));
+        assert!(!cyw43_bootstrap_local_seat_usb_service_due_state(
+            false, false, true,
+        ));
+        assert!(!cyw43_bootstrap_local_seat_usb_service_due_state(
+            false, true, false,
+        ));
+        assert!(cyw43_bootstrap_local_seat_usb_service_due_state(
+            true, false, false,
+        ));
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
@@ -51780,6 +52716,146 @@ mod tests {
             output.kind == PendingConsoleOutputKind::ContainmentLine
                 && output.text.as_str() == "retry-later"
         }));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn driver_fault_diagnostic_retries_then_retains_qlog_exactly_once() {
+        let serial =
+            SerialPort::<_, 16, 16, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<16>::new());
+        let mut audit = AuditLog::new();
+        let mut pump = EventPump::new(
+            serial,
+            TestTimer::single(TickEvent { tick: 1, now_ms: 1 }),
+            NullIpc,
+            TicketTable::<4>::new(),
+            &mut audit,
+        );
+        let body_capacity =
+            CONSOLE_OUTPUT_BACKLOG_LINES - CONSOLE_OUTPUT_BACKLOG_PROTOCOL_TAIL_RESERVE;
+        for _ in 0..body_capacity {
+            assert!(pump.queue_physical_console_output(
+                PendingConsoleOutputKind::Line,
+                "non-evictable-body",
+            ));
+        }
+        let line = "DRIVER_FAULT_CONTAINMENT v1 q=7 task=driver-genet res=ok";
+        let retained = std::cell::RefCell::new(Vec::<String>::new());
+        let qlog_attempts = std::cell::Cell::new(0usize);
+
+        assert!(
+            !pump.admit_driver_fault_diagnostic_with_retention(7, line, |value| {
+                let _ = value;
+                qlog_attempts.set(qlog_attempts.get().saturating_add(1));
+                true
+            })
+        );
+        assert_eq!(pump.driver_fault_diagnostic_sequence, 0);
+        assert_eq!(qlog_attempts.get(), 0);
+        assert!(retained.borrow().is_empty());
+        assert_eq!(
+            pump.pending_driver_fault_diagnostic
+                .as_ref()
+                .expect("the complete fault line remains locally retained")
+                .phase,
+            PendingDriverFaultDiagnosticPhase::PhysicalOutput,
+        );
+
+        let _ = pump.pending_console_output.pop();
+        let queued_before = pump.pending_console_output.len();
+        assert!(
+            pump.admit_driver_fault_diagnostic_with_retention(8, "newer-overwrite", |value| {
+                let _ = value;
+                qlog_attempts.set(qlog_attempts.get().saturating_add(1));
+                true
+            })
+        );
+        assert_eq!(pump.driver_fault_diagnostic_sequence, 0);
+        assert_eq!(qlog_attempts.get(), 0);
+        assert_eq!(pump.pending_console_output.len(), queued_before + 1);
+        assert_eq!(
+            pump.pending_console_output
+                .last()
+                .expect("driver fault line owns the released bounded slot")
+                .text
+                .as_str(),
+            line,
+        );
+        assert_eq!(
+            pump.pending_driver_fault_diagnostic
+                .as_ref()
+                .expect("physical admission advances only the local phase")
+                .phase,
+            PendingDriverFaultDiagnosticPhase::Qlog,
+        );
+
+        let physical_len = pump.pending_console_output.len();
+        assert!(
+            pump.admit_driver_fault_diagnostic_with_retention(8, "newer-overwrite", |value| {
+                assert_eq!(value, line);
+                qlog_attempts.set(qlog_attempts.get().saturating_add(1));
+                false
+            },)
+        );
+        assert_eq!(pump.driver_fault_diagnostic_sequence, 0);
+        assert_eq!(qlog_attempts.get(), 1);
+        assert_eq!(pump.pending_console_output.len(), physical_len);
+
+        assert!(
+            pump.admit_driver_fault_diagnostic_with_retention(8, "newer-overwrite", |value| {
+                qlog_attempts.set(qlog_attempts.get().saturating_add(1));
+                retained.borrow_mut().push(value.to_owned());
+                true
+            })
+        );
+        assert_eq!(pump.driver_fault_diagnostic_sequence, 7);
+        assert!(pump.pending_driver_fault_diagnostic.is_none());
+        assert_eq!(qlog_attempts.get(), 2);
+        assert_eq!(retained.borrow().as_slice(), [line]);
+        assert_eq!(pump.pending_console_output.len(), physical_len);
+
+        assert!(
+            !pump.admit_driver_fault_diagnostic_with_retention(7, line, |_| {
+                panic!("a committed replay must reach neither sink")
+            })
+        );
+
+        pump.physical_serial_transport_failed = true;
+        let queued_before_terminal = pump.pending_console_output.len();
+        let aborted_before = pump.physical_serial_output_aborted;
+        let failed_serial_line = "DRIVER_FAULT_CONTAINMENT v1 q=8 task=driver-genet res=fail";
+        assert!(pump.admit_driver_fault_diagnostic_with_retention(
+            8,
+            failed_serial_line,
+            |_| panic!("physical admission owns the first phase"),
+        ));
+        assert_eq!(pump.driver_fault_diagnostic_sequence, 7);
+        assert_eq!(pump.pending_console_output.len(), queued_before_terminal);
+        assert_eq!(
+            pump.physical_serial_output_aborted,
+            aborted_before.saturating_add(1),
+        );
+        for _ in 0..2 {
+            assert!(pump.admit_driver_fault_diagnostic_with_retention(
+                9,
+                "newer-overwrite",
+                |_| false,
+            ));
+            assert_eq!(pump.driver_fault_diagnostic_sequence, 7);
+            assert_eq!(pump.pending_console_output.len(), queued_before_terminal);
+            assert_eq!(
+                pump.physical_serial_output_aborted,
+                aborted_before.saturating_add(1),
+            );
+        }
+        assert!(
+            pump.admit_driver_fault_diagnostic_with_retention(9, "newer-overwrite", |value| {
+                retained.borrow_mut().push(value.to_owned());
+                true
+            },)
+        );
+        assert_eq!(pump.driver_fault_diagnostic_sequence, 8);
+        assert_eq!(retained.borrow().as_slice(), [line, failed_serial_line]);
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]

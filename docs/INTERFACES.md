@@ -248,20 +248,27 @@ publish generation-bound monotonic cursor and sequence-last state with release
 ordering; consumers validate generation, sequence, length, and stable commit
 with acquire ordering. The reciprocal send-only peer notifications are
 coalescing wake hints only. Durable cursor state carries work, and both peers
-perform a final state recheck before waiting. Direct service handles at most 16
-frames per wake and at most eight TX frames before admitting the RX share.
+perform a final state recheck before waiting. One direct service quantum handles
+at most 16 frames and at most eight TX frames before admitting the RX share.
+The GENET owner may run several such quanta in one dense MCS window only under
+its exact elapsed-time, attempt, progress, command-freshness, and refill guards;
+a notification does not itself reset that accounting.
 
 Within control page 0, bytes `[0,64)` hold the immutable control header and
 bytes `[64,320)` hold the four 64-byte RX-producer, RX-consumer, TX-producer,
 and TX-consumer records. Console-network ABI v5 additionally assigns the
 formerly reserved bytes `[320,512)` to an optional, separately versioned
-direct-GENET diagnostic-v3 record. The record is exactly 192 bytes, aligned to
-64 bytes, retains record-relative offset 108 for cumulative
+direct-GENET diagnostic-v4 record. The record is exactly 192 bytes, aligned to
+64 bytes, assigns record-relative offset 12 to the maximum measured direct MCS
+quantum in microseconds, retains offset 108 for cumulative
 `dpc_level_adoptions`, and publishes its nonzero sequence last at
 record-relative offset 184 (control-page offset 504). Offsets 160, 168, and 176
 hold cumulative nonzero receive-boundary notification receipts, receipts
 rejected by the exact GENET badge filter, and the bitwise OR of every received
-badge. The counts are sampled before filtering and grant no DPC, packet,
+badge. Flag bits 9 through 13 retain whether a command-freshness, elapsed
+guard, counter fault, attempt cap, or bounded stalled-retry boundary occurred.
+The duration and reason fields are observational and cannot reset a scheduling
+window or prove the Pi WCET. The counts are sampled before filtering and grant no DPC, packet,
 IRQ-acknowledgement, retry, or scheduling authority. Each actual nonzero GENET
 notification is counted once at the initial ring-aware receive or a later
 combined poll/wait receive; zero/command wakes, synthetic grants, physical-level

@@ -1420,7 +1420,7 @@ pub const DIRECT_GENET_RUNTIME_DIAGNOSTIC_COMMIT_OFFSET: usize = 184;
 /// Direct-GENET runtime diagnostic magic (`CNGD`).
 pub const DIRECT_GENET_RUNTIME_DIAGNOSTIC_MAGIC: u32 = 0x434e_4744;
 /// Direct-GENET runtime diagnostic layout version.
-pub const DIRECT_GENET_RUNTIME_DIAGNOSTIC_VERSION: u16 = 3;
+pub const DIRECT_GENET_RUNTIME_DIAGNOSTIC_VERSION: u16 = 4;
 /// Diagnostic flag: the isolated GENET runtime completed initialization.
 pub const DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_INITIALIZED: u32 = 1 << 0;
 /// Diagnostic flag: the exact direct-link generation is active.
@@ -1439,6 +1439,26 @@ pub const DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_RX_RING_VALID: u32 = 1 << 6;
 pub const DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_TX_RING_VALID: u32 = 1 << 7;
 /// Diagnostic flag: the owner sampled GENET IRQ and DMA registers.
 pub const DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_MMIO_SAMPLED: u32 = 1 << 8;
+/// Diagnostic flag: direct service yielded after endpoint-command consumption.
+pub const DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_MCS_FRESH_YIELD: u32 = 1 << 9;
+/// Diagnostic flag: direct service yielded at its elapsed-time guard.
+pub const DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_MCS_GUARD_YIELD: u32 = 1 << 10;
+/// Diagnostic flag: direct service observed an unusable timer sample.
+///
+/// The first zero-delta sample forces one recovery yield; a repeated stall,
+/// backwards counter, or descriptor drift fails the direct generation closed.
+pub const DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_MCS_COUNTER_FAULT: u32 = 1 << 11;
+/// Diagnostic flag: direct service yielded at its attempted-quantum cap.
+pub const DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_MCS_CAP_YIELD: u32 = 1 << 12;
+/// Diagnostic flag: direct service yielded after a bounded no-progress retry.
+pub const DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_MCS_STALLED_YIELD: u32 = 1 << 13;
+/// Complete MCS-window reason subset carried in diagnostic flags.
+pub const DIRECT_GENET_RUNTIME_DIAGNOSTIC_MCS_FLAGS: u32 =
+    DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_MCS_FRESH_YIELD
+        | DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_MCS_GUARD_YIELD
+        | DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_MCS_COUNTER_FAULT
+        | DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_MCS_CAP_YIELD
+        | DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_MCS_STALLED_YIELD;
 /// Complete flag set admitted by [`DirectGenetRuntimeDiagnostic`].
 pub const DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAGS: u32 =
     DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_INITIALIZED
@@ -1449,7 +1469,8 @@ pub const DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAGS: u32 =
         | DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_TX_COMMIT_PENDING
         | DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_RX_RING_VALID
         | DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_TX_RING_VALID
-        | DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_MMIO_SAMPLED;
+        | DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_MMIO_SAMPLED
+        | DIRECT_GENET_RUNTIME_DIAGNOSTIC_MCS_FLAGS;
 /// Generation field offset within each direct-link cursor state.
 pub const DIRECT_GENET_CURSOR_GENERATION_OFFSET: usize = 8;
 /// Monotonic cursor field offset within each direct-link cursor state.
@@ -1597,8 +1618,8 @@ pub struct DirectGenetRuntimeDiagnostic {
     pub len: u16,
     /// Bounded diagnostic state flags.
     pub flags: u32,
-    /// Reserved; zero.
-    pub reserved0: u32,
+    /// Highest observed bounded direct-service quantum in microseconds.
+    pub mcs_quantum_high_water_us: u32,
     /// Exact nonzero direct-link generation.
     pub generation: u64,
     /// Monotonic owner-local publication sequence.
@@ -1682,7 +1703,7 @@ impl DirectGenetRuntimeDiagnostic {
             version: DIRECT_GENET_RUNTIME_DIAGNOSTIC_VERSION,
             len: DIRECT_GENET_RUNTIME_DIAGNOSTIC_BYTES as u16,
             flags: 0,
-            reserved0: 0,
+            mcs_quantum_high_water_us: 0,
             generation: 0,
             publication_sequence: 0,
             irq_badge: 0,
@@ -1733,7 +1754,6 @@ impl DirectGenetRuntimeDiagnostic {
             && self.version == DIRECT_GENET_RUNTIME_DIAGNOSTIC_VERSION
             && self.len as usize == DIRECT_GENET_RUNTIME_DIAGNOSTIC_BYTES
             && self.flags & !DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAGS == 0
-            && self.reserved0 == 0
             && self.raw_notification_rejected <= self.raw_notification_receipts
             && self.raw_notification_badge_or <= u32::MAX as u64
             && ((self.raw_notification_receipts == 0) == (self.raw_notification_badge_or == 0))
@@ -1764,7 +1784,7 @@ impl DirectGenetRuntimeDiagnostic {
         output[4..6].copy_from_slice(&self.version.to_le_bytes());
         output[6..8].copy_from_slice(&self.len.to_le_bytes());
         output[8..12].copy_from_slice(&self.flags.to_le_bytes());
-        output[12..16].copy_from_slice(&self.reserved0.to_le_bytes());
+        output[12..16].copy_from_slice(&self.mcs_quantum_high_water_us.to_le_bytes());
         output[16..24].copy_from_slice(&self.generation.to_le_bytes());
         output[24..32].copy_from_slice(&self.publication_sequence.to_le_bytes());
         output[32..36].copy_from_slice(&self.irq_badge.to_le_bytes());
@@ -1816,7 +1836,7 @@ impl DirectGenetRuntimeDiagnostic {
             version: read_u16(input, 4),
             len: read_u16(input, 6),
             flags: read_u32(input, 8),
-            reserved0: read_u32(input, 12),
+            mcs_quantum_high_water_us: read_u32(input, 12),
             generation: read_u64(input, 16),
             publication_sequence: read_u64(input, 24),
             irq_badge: read_u32(input, 32),
@@ -4881,7 +4901,9 @@ mod tests {
             | DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_ACTIVE
             | DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_RX_RING_VALID
             | DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_TX_RING_VALID
-            | DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_MMIO_SAMPLED;
+            | DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_MMIO_SAMPLED
+            | DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_MCS_GUARD_YIELD;
+        diagnostic.mcs_quantum_high_water_us = 731;
         diagnostic.generation = 7;
         diagnostic.publication_sequence = 3;
         diagnostic.irq_badge = 1 << 10;
@@ -4911,24 +4933,29 @@ mod tests {
         let mut encoded = [0u8; DIRECT_GENET_RUNTIME_DIAGNOSTIC_BYTES];
         diagnostic.encode(&mut encoded).unwrap();
         assert_eq!(
+            &encoded[12..16],
+            &731u32.to_le_bytes(),
+            "diagnostic v4 assigns offset 12 to the MCS quantum high-water",
+        );
+        assert_eq!(
             &encoded[108..112],
             &1u32.to_le_bytes(),
-            "diagnostic v3 retains raw record offset 108 for level adoptions",
+            "diagnostic v4 retains raw record offset 108 for level adoptions",
         );
         assert_eq!(
             &encoded[160..168],
             &9u64.to_le_bytes(),
-            "diagnostic v3 assigns offset 160 to raw notification receipts",
+            "diagnostic v4 assigns offset 160 to raw notification receipts",
         );
         assert_eq!(
             &encoded[168..176],
             &1u64.to_le_bytes(),
-            "diagnostic v3 assigns offset 168 to rejected raw notifications",
+            "diagnostic v4 assigns offset 168 to rejected raw notifications",
         );
         assert_eq!(
             &encoded[176..184],
             &0x500u64.to_le_bytes(),
-            "diagnostic v3 assigns offset 176 to the raw badge union",
+            "diagnostic v4 assigns offset 176 to the raw badge union",
         );
         assert_eq!(
             DirectGenetRuntimeDiagnostic::decode(&encoded, 7),

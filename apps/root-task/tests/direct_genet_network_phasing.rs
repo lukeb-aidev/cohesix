@@ -50,6 +50,33 @@ fn direct_genet_final_sleep_check_adopts_only_durable_physical_work() {
     assert!(sample_raw < sample_rx && sample_rx < sample_tx && sample_tx < no_work);
     assert!(no_work < mask && mask < barrier && barrier < clear && clear < retain);
 
+    let bounded_final = RUNTIME_SOURCE
+        .find("fn genet_runtime_condition_before_sleep_once()")
+        .expect("target final check has an MCS refill boundary");
+    let bounded_final = &RUNTIME_SOURCE[bounded_final..];
+    let begin = bounded_final
+        .find("genet_runtime_begin_direct_quantum()")
+        .expect("final physical check enters the shared dense MCS window");
+    let condition = bounded_final
+        .find("genet_runtime_condition_before_sleep_route")
+        .expect("final check classifies its exact physical quantum");
+    let finish = bounded_final
+        .find("genet_runtime_apply_post_quantum_route(route)")
+        .expect("final check applies the exact post-quantum route");
+    assert!(begin < condition && condition < finish);
+
+    let yield_route = RUNTIME_SOURCE
+        .find("fn genet_runtime_apply_post_quantum_route")
+        .expect("dense MCS post-quantum router exists");
+    let yield_route = &RUNTIME_SOURCE[yield_route..];
+    let record = yield_route
+        .find("genet_runtime_record_mcs_yield(reason)")
+        .expect("the exact yield reason is retained first");
+    let yield_call = yield_route
+        .find("runtime_yield_current_tcb()")
+        .expect("the selected MCS refill boundary yields on target");
+    assert!(record < yield_call);
+
     let loop_body = RUNTIME_SOURCE
         .find("if runtime_idle_prewait_route(\n                notification_route,")
         .expect("final command-ring admission check exists");
@@ -58,12 +85,136 @@ fn direct_genet_final_sleep_check_adopts_only_durable_physical_work() {
         .find("RuntimeIdlePrewaitRoute::ReenterCommandPoll")
         .expect("sequence-last command check completes first");
     let physical_check = loop_body
-        .find("GENET_RUNTIME_STATE.with_mut(genet_runtime_condition_before_sleep)")
-        .expect("GENET physical condition is checked at the final boundary");
+        .find("genet_runtime_condition_before_sleep_once()")
+        .expect("GENET physical condition is checked through the bounded final boundary");
     let block = loop_body
         .find("wait_runtime_command_or_notification(")
         .expect("runtime eventually blocks on the generated endpoint/notification");
     assert!(command_check < physical_check && physical_check < block);
+}
+
+#[test]
+fn direct_genet_dense_mcs_boundary_resets_after_yield_and_wraps_every_entry() {
+    let (production, _) = RUNTIME_SOURCE
+        .split_once("#[cfg(test)]\nmod tests {")
+        .expect("the runtime production prefix is distinct from its unit tests");
+
+    let yield_start = RUNTIME_SOURCE
+        .find("fn runtime_yield_current_tcb()")
+        .expect("target runtime exposes one cooperative-yield boundary");
+    let yield_body = &RUNTIME_SOURCE[yield_start..];
+    let yield_end = yield_body
+        .find("\n}\n\n")
+        .expect("target cooperative-yield function is bounded");
+    let yield_body = &yield_body[..yield_end];
+    let syscall = yield_body
+        .find("sel4_sys::seL4_Yield()")
+        .expect("selected MCS boundary invokes seL4 Yield");
+    let reset = yield_body
+        .find("genet_runtime_complete_mcs_yield()")
+        .expect("GENET software accounting resets after replenishment");
+    assert!(
+        syscall < reset,
+        "clearing before seL4 Yield returns can treat an unrefilled activation as fresh",
+    );
+    assert_eq!(
+        yield_body
+            .matches("genet_runtime_complete_mcs_yield()")
+            .count(),
+        1,
+        "the target yield boundary resets GENET accounting exactly once",
+    );
+
+    let notification_start = RUNTIME_SOURCE
+        .find("fn genet_runtime_service_notification(badge: u32) -> bool")
+        .expect("GENET notification entry exists");
+    let notification = &RUNTIME_SOURCE[notification_start..];
+    let notification_end = notification
+        .find("\n}\n\n")
+        .expect("GENET notification entry is bounded");
+    let notification = &notification[..notification_end];
+    let begin = notification
+        .find("genet_runtime_begin_direct_quantum()")
+        .expect("notification entry performs the shared pre-service guard");
+    let service = notification
+        .find("genet_runtime_service_dpc_state(state, badge)")
+        .expect("notification entry services exactly one bounded DPC quantum");
+    let finish = notification
+        .find("genet_runtime_finish_dpc_quantum(state, activity)")
+        .expect("notification entry classifies the shared post-service boundary");
+    let apply = notification
+        .find("genet_runtime_apply_post_quantum_route(route)")
+        .expect("notification entry applies the shared post-service route");
+    assert!(begin < service && service < finish && finish < apply);
+
+    let persistent_start = RUNTIME_SOURCE
+        .find("fn service_runtime_persistent_source_once(")
+        .expect("runtime persistent-source dispatcher exists");
+    let persistent = &RUNTIME_SOURCE[persistent_start..];
+    let persistent_end = persistent
+        .find("\n}\n\n")
+        .expect("runtime persistent-source dispatcher is bounded");
+    let persistent = &persistent[..persistent_end];
+    assert!(persistent
+        .contains("RuntimeNotificationRoute::Genet => genet_runtime_service_notification(badge)"));
+    assert!(
+        !persistent.contains("genet_runtime_service_dpc_state("),
+        "the production dispatcher cannot bypass dense-window accounting",
+    );
+
+    let final_start = RUNTIME_SOURCE
+        .find("fn genet_runtime_condition_before_sleep_once() -> bool")
+        .expect("target final physical check exists");
+    let final_check = &RUNTIME_SOURCE[final_start..];
+    let final_end = final_check
+        .find("\n}\n\n")
+        .expect("target final physical check is bounded");
+    let final_check = &final_check[..final_end];
+    assert!(final_check.contains("genet_runtime_begin_direct_quantum()"));
+    assert!(final_check.contains("genet_runtime_condition_before_sleep_route"));
+    assert!(final_check.contains("genet_runtime_apply_post_quantum_route(route)"));
+    assert!(
+        !final_check.contains("genet_runtime_service_dpc_state("),
+        "the final production entry cannot bypass the shared guarded route",
+    );
+
+    let legacy_start = RUNTIME_SOURCE
+        .find("fn service_genet_runtime(command: DriverTaskCommandRecord)")
+        .expect("GENET endpoint service exists");
+    let legacy = &RUNTIME_SOURCE[legacy_start..];
+    let direct_fence = legacy
+        .find("state.direct_genet_active || state.direct_genet_faulted")
+        .expect("direct ownership permanently fences the legacy endpoint path");
+    let reject = legacy[direct_fence..]
+        .find("return DriverTaskCompletionRecord::fault(command.sequence, FAULT_REJECTED_COMMAND)")
+        .map(|offset| direct_fence + offset)
+        .expect("direct ownership rejects legacy endpoint service");
+    let legacy_poll = legacy
+        .find("genet_runtime_poll_rx(state, command.budget)")
+        .expect("legacy packet polling remains available before direct handoff");
+    assert!(direct_fence < reject && reject < legacy_poll);
+
+    assert_eq!(
+        production
+            .matches("genet_runtime_service_notification(")
+            .count(),
+        2,
+        "the notification wrapper may appear only at its definition and production dispatcher",
+    );
+    assert_eq!(
+        production
+            .matches("genet_runtime_condition_before_sleep_once()")
+            .count(),
+        2,
+        "the final-check wrapper may appear only at its definition and production wait loop",
+    );
+    assert_eq!(
+        production
+            .matches("genet_runtime_service_dpc_state(")
+            .count(),
+        5,
+        "raw service is limited to its definition, the two guarded direct paths, and two legacy polls fenced before direct ownership",
+    );
 }
 
 #[test]

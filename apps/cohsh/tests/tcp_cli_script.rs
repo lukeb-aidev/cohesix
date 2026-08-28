@@ -36,7 +36,7 @@ const NETSTATS_BODY: [&str; 24] = [
     "netstats: genet_direct_irq badge=0x00000400 wakes=9 acks=9 ack_failures=0 unmask_failures=0",
     "netstats: genet_direct_irq_source raw=0x00000000 mask=0xffffffff active=0x00000000 last=0x00000000",
     "netstats: genet_direct_notification receipts=13 rejected=1 badge_or=0x00000500",
-    "netstats: genet_direct_dpc turns=9 budget_hits=0 final_rechecks=9 level_adoptions=0",
+    "netstats: genet_direct_dpc turns=9 budget_hits=0 final_rechecks=9 level_adoptions=0 mcs_quantum_high_us=731 mcs_reasons=0x00000000",
     "netstats: genet_direct_dma rdma_prod=5 rdma_cons=5 tdma_prod=3 tdma_cons=3 rx_packets=12 tx_packets=9",
     "netstats: genet_direct_ring rx_prod=12 rx_cons=12 tx_prod=9 tx_cons=9 rx_valid=yes tx_valid=yes state_changes=0",
     "netstats: genet_direct_peer wakes=4 signals=6 poison_rx=0/0 poison_tx=0/0",

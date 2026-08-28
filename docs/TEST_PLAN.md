@@ -1310,9 +1310,29 @@ generation drift, stop/readback failure, and ACK failure, and must prove a
 queued old notification after READY neither moves a legacy cursor nor loses the
 direct epoch. The Pi manifest moves only GENET to core 1 at
 `3,000/10,000 us`, priority 160, two refills, with 800 us WCET and 3,400 us
-computed response. CYW43 and SDIO stay on core 3 unchanged. These are source
+computed response. That exact candidate kept CYW43 and SDIO on core 3 with
+their then-selected values. These are source
 and static-admission gates until a fresh exact-image wired boot supplies
 consumed-time, TCP, `cohsh`, `.coh`, loss, latency, and throughput evidence.
+
+The later exact-de930 non-claiming input binds source
+`de930ab607f7d2fccb4bdf20455c7f1f39e1e91a`, image ID
+`9ed16bbe2e256b5f1277981c436ffbd35d1b27910893d2cf931bac5a241f1a64`,
+image SHA-256
+`d4e834ee403070c05066b9ee96d979f42ccdd8a429b2da598ac0cc5c130478d9`,
+and boot-paired `20260829-063651` captures. WiFi proves DHCP, authenticated
+TCP, and three focused scripts while rejecting latency parity; its exact child
+trace places 98.2% of the slow seam between SDIO terminal and CYW43 acceptance.
+GENET proves DHCP, direct rings, `nettest`, and two focused scripts before a
+spurious interrupt and peer containment during `smp_parity.coh`. For the next
+candidate, CYW43/SDIO retain core 3, priority, `1,500/10,000 us` budget/period,
+WCET, timeout, Reply, and fault truth, while each 8-bit SC selects eight refill
+records. The selected seL4-16 AArch64 MCS ABI/profile/build gate must prove
+capacity ten and reject eleven. Direct GENET must preserve max two refills and
+its exact timing tuple while the dense-window compiler/runtime guards, v4
+high-water/reason telemetry, and fail-closed counter paths pass. None of these
+source, profile, construction, or image checks supplies a physical performance
+result; a fresh exact-image WiFi and GENET run remains mandatory.
 
 The CYW43 software and cadence closure gate is authorized by Milestone 26d
 tasks `m26d-cyw43-hardware-free-closure` and
@@ -6214,9 +6234,10 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
       anchor revoke.
       Direct-GENET diagnostic coverage must prove the exact page-0 layout:
       control header `[0,64)`, four cursor records `[64,320)`, optional aligned
-      192-byte diagnostic-v3 record `[320,512)`, record-relative sequence-last
+      192-byte diagnostic-v4 record `[320,512)`, record-relative sequence-last
       commit at offset 184, and still-reserved tail `[512,4096)`. ABI tests must
-      prove record offset 108 round-trips cumulative `dpc_level_adoptions` and
+      prove record offset 12 round-trips the direct MCS quantum high-water,
+      record offset 108 round-trips cumulative `dpc_level_adoptions`, and
       offsets 160, 168, and 176 round-trip nonzero raw notification receipts,
       exact-filter rejections, and the 32-bit badge union. Rejections may not
       exceed receipts, a nonzero badge union requires a receipt, every range is
@@ -6233,7 +6254,9 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
       `genet_direct_before`, `genet_direct_before_ring`, `genet_direct_irq`,
       `genet_direct_irq_source`, `genet_direct_notification`,
       `genet_direct_dpc`, `genet_direct_dma`, `genet_direct_ring`, then
-      `genet_direct_peer`. Runtime coverage must count each actual nonzero GENET
+      `genet_direct_peer`. The DPC row must retain the cumulative dense-window
+      yield/fault reason mask and maximum measured quantum duration without
+      granting scheduling authority. Runtime coverage must count each actual nonzero GENET
       receive result exactly once before badge filtering across the initial poll
       and every later combined wait, while proving the counters cannot service
       an IRQ/DPC/packet or alter scheduling. The replay is deliberately
@@ -8151,10 +8174,13 @@ release fence, publish the final sequence commit, and signal only afterward.
 Readers must reject an oversized length or a commit that changes across the
 bounded copy without advancing the accepted sequence. Scalar reserved header
 fields must validate as zero. On direct-GENET control page 0, bytes `[320,512)`
-are no longer generic reserved tail: they hold the optional diagnostic-v3
-record governed by the stable exact-generation rules above, with cumulative
-`dpc_level_adoptions` at record offset 108 and raw notification receipt,
-rejection, and badge-union evidence at offsets 160, 168, and 176. Bytes
+are no longer generic reserved tail: they hold the optional, separately
+versioned diagnostic-v4 record governed by the stable exact-generation rules
+above. Record offset 12 carries the direct-MCS quantum high-water; cumulative
+reason flags distinguish fresh-boundary, half-budget guard, timer-sample,
+attempt-cap, and stalled-retry yields. Cumulative `dpc_level_adoptions` remains
+at record offset 108, with raw notification receipt, rejection, and badge-union
+evidence at offsets 160, 168, and 176. Bytes
 `[512,4096)` and inactive payload suffixes remain non-authoritative and must not
 be scanned or copied during a normal turn; construction zeroing and containment
 scrub remain required. Capability
@@ -8907,8 +8933,8 @@ _Generated by coh-rtc (sha256: `fa11c64fe53b859365c45c8e33e565d428029a87529be00c
 ## Manifest fingerprints
 - `configs/root_task.toml` — `sha256:f8ac815eecf31f83739d3569a748ceace199f1e29a6eda3f4fd3d191e202784d`
 - `configs/generated/root_task_resolved.json` — `sha256:a9a50408519f33cf2e05932cffffa5dbb521958870b16edf2f36311ff60385a1`
-- `configs/root_task_pi4_uboot_aarch64.toml` — `sha256:ecd0aa51c68408ef0d2be089c2264a3426928c3012f1902bfce1095e3713f11c`
-- Pi `pi4_production` transient resolved binding — `sha256:4231476a82e8cef643a26ac5fa126d1c6cae06d76fba09693af8dd2964d1195b`
+- `configs/root_task_pi4_uboot_aarch64.toml` — `sha256:17a0fa8b8c732e88427a7d6895a4364745969d4d5fec8b65d6051613caeeb6df`
+- Pi `pi4_production` transient resolved binding — `sha256:28f99df3f09adc490c25c82625e7ef89d4335cba0563efd3a07b6a806e1e0650`
 
 ## Transcript fixture hashes
 - `tests/fixtures/transcripts/boot_v0/serial.txt` — `sha256:2ea58218a937f0c702fd67dac83aa838a8c49b9d1fba1e0165dfa93a44ab3c6d`

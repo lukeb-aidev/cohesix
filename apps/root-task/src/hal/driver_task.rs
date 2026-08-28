@@ -6735,11 +6735,11 @@ std::thread_local! {
 }
 
 #[cfg(test)]
-struct DriverTaskTestCounterOverride;
+pub(crate) struct DriverTaskTestCounterOverride;
 
 #[cfg(test)]
 impl DriverTaskTestCounterOverride {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         DRIVER_TASK_TEST_COUNTER_OVERRIDE_TICKS.with(|ticks| ticks.set(Some(0)));
         Self
     }
@@ -24508,6 +24508,95 @@ pub(crate) fn test_clear_cyw43_retained_completion() -> Option<u32> {
         core::ptr::write_volatile(completion_ptr, DriverTaskCompletionRecord::idle(0));
     }
     Some(active.request())
+}
+
+/// Publish the exact external-wait receipt for one issued CYW43 test parent.
+#[cfg(all(test, feature = "kernel"))]
+pub(crate) fn test_publish_cyw43_persistent_wait_receipt(
+    expected_request: u32,
+    wait_epoch: u32,
+) -> bool {
+    if wait_epoch == 0 {
+        return false;
+    }
+    let Some(slot) = driver_task_slot_for_contract(CYW43_WIFI_DRIVER_TASK_CONTRACT) else {
+        return false;
+    };
+    let Some(active) = active_driver_task_retained_request(CYW43_WIFI_DRIVER_TASK_CONTRACT) else {
+        return false;
+    };
+    let Some(command) = active.command() else {
+        return false;
+    };
+    if !active.issued()
+        || active.request() != expected_request
+        || command.flags & DRIVER_RUNTIME_COMMAND_FLAG_PERSISTENT_TRANSACTION == 0
+    {
+        return false;
+    }
+    let ring_root_ptr = slot.ring_root_ptr.load(Ordering::Acquire);
+    if ring_root_ptr == 0 {
+        return false;
+    }
+    let receipt = DriverRuntimePersistentWaitReceipt::new(
+        expected_request,
+        driver_task_runtime_continuation_fingerprint(command),
+        command.aux1,
+        wait_epoch,
+    );
+    let receipt_ptr = (ring_root_ptr
+        + usize::from(pi4_driver_abi::DRIVER_RUNTIME_PERSISTENT_WAIT_RECEIPT_OFFSET))
+        as *mut DriverRuntimePersistentWaitReceipt;
+    let mut staged = receipt;
+    staged.committed_wait_epoch = 0;
+    // SAFETY: This test seam operates only on the aligned, page-sized ring
+    // owned by the current test. It publishes the immutable wait body before
+    // the sequence-last commit, matching the production child runtime.
+    unsafe {
+        core::ptr::write_volatile(receipt_ptr, staged);
+        core::ptr::write_volatile(
+            core::ptr::addr_of_mut!((*receipt_ptr).committed_wait_epoch),
+            receipt.committed_wait_epoch,
+        );
+    }
+    cyw43_persistent_transaction_parent_condition(expected_request)
+        == Cyw43PersistentTransactionParentCondition::Waiting
+}
+
+/// Publish one exact sequence-last terminal for an issued CYW43 test parent.
+#[cfg(all(test, feature = "kernel"))]
+pub(crate) fn test_publish_cyw43_retained_terminal(expected_request: u32, result: u32) -> bool {
+    let Some(slot) = driver_task_slot_for_contract(CYW43_WIFI_DRIVER_TASK_CONTRACT) else {
+        return false;
+    };
+    let Some(active) = active_driver_task_retained_request(CYW43_WIFI_DRIVER_TASK_CONTRACT) else {
+        return false;
+    };
+    if !active.issued() || active.request() != expected_request {
+        return false;
+    }
+    let ring_root_ptr = slot.ring_root_ptr.load(Ordering::Acquire);
+    if ring_root_ptr == 0 {
+        return false;
+    }
+    let wait_commit_ptr = (ring_root_ptr
+        + usize::from(pi4_driver_abi::DRIVER_RUNTIME_PERSISTENT_WAIT_RECEIPT_OFFSET)
+        + core::mem::offset_of!(DriverRuntimePersistentWaitReceipt, committed_wait_epoch))
+        as *mut u32;
+    let completion_ptr =
+        (ring_root_ptr + DRIVER_TASK_RING_COMPLETION_OFFSET) as *mut DriverTaskCompletionRecord;
+    let mut terminal = DriverTaskCompletionRecord::progress(expected_request, result);
+    terminal.sequence = 0;
+    // SAFETY: This test seam operates only on the aligned, page-sized ring
+    // owned by the current test. It retracts the wait receipt before writing
+    // the terminal body and commits the exact request sequence last.
+    unsafe {
+        core::ptr::write_volatile(wait_commit_ptr, 0);
+        core::ptr::write_volatile(completion_ptr, terminal);
+        core::ptr::write_volatile(completion_ptr.cast::<u32>(), expected_request);
+    }
+    cyw43_persistent_transaction_parent_condition(expected_request)
+        == Cyw43PersistentTransactionParentCondition::TerminalVisible
 }
 
 /// Force the exact active CYW43 parent to the durable GrantRequired level.

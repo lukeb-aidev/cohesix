@@ -2859,7 +2859,6 @@ where
     let mut supervisor_phase = DeferredCyw43SupervisorPhase::Operator;
     let mut activation_window = DeferredCyw43ActivationWindow::new();
     let activation_reserve_us = deferred_cyw43_activation_reserve_from_manifest_us();
-    let mut driver_fault_diagnostic_sequence = 0u64;
 
     'supervisor: loop {
         activation_window.begin(monotonic_ticks(), counter_frequency());
@@ -2872,15 +2871,6 @@ where
         {
             deferred_cyw43_yield_and_reset(&mut activation_window);
             continue;
-        }
-        if let Some((sequence, line)) =
-            crate::hal::driver_task::driver_supervisor_fault_diagnostic_line(
-                driver_fault_diagnostic_sequence,
-            )
-        {
-            let raw_fallback_allowed = pump.serial_root_uart_cutover_owner_active();
-            emit_deferred_net_operator_line(pump, line.as_str(), raw_fallback_allowed);
-            driver_fault_diagnostic_sequence = sequence;
         }
         if let Some(pending) = recovery_diagnostic_pending.as_ref() {
             if !pump.queue_cyw43_pair_recovery_diagnostic_transaction(

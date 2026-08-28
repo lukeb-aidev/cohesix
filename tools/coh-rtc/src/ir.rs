@@ -258,6 +258,7 @@ impl Manifest {
         self.validate_telemetry()?;
         self.validate_lifecycle()?;
         self.validate_worker_runtime()?;
+        self.validate_pi4_direct_genet_temporal_contract()?;
         self.temporal_authority.validate()?;
         self.validate_virtio_operator_serial_io_bound()?;
         let ninedoor_bootstrap_scheduling_contexts = if self.ninedoor_service.enabled {
@@ -692,6 +693,46 @@ impl Manifest {
             self.profile.name.as_str(),
             PI4_PROFILE_NAME | PI4_PROFILE_LEGACY_ALIAS
         )
+    }
+
+    fn validate_pi4_direct_genet_temporal_contract(&self) -> Result<()> {
+        let direct_genet_selected = self.profile_is_pi4_family()
+            && self.hw.network.enabled
+            && self.hw.network.backend == NetworkBackendKind::BcmGenetV5
+            && self.console_network_service.enabled;
+        if !direct_genet_selected {
+            return Ok(());
+        }
+
+        let task = self
+            .temporal_authority
+            .tasks
+            .iter()
+            .find(|task| task.id == "driver-genet")
+            .ok_or_else(|| {
+                anyhow::anyhow!("Pi direct GENET requires temporal task driver-genet")
+            })?;
+        if task.kind != TemporalTaskKind::Driver || task.execution != TemporalExecution::Active {
+            bail!("Pi direct GENET requires driver-genet to be an active driver temporal task");
+        }
+        if task.budget_us != 3_000 || task.period_us != 10_000 || task.max_refills != 2 {
+            bail!(
+                "Pi direct GENET requires driver-genet budget_us=3000 period_us=10000 max_refills=2"
+            );
+        }
+        if !task.consumed_time_evidence || task.timeout_policy != TimeoutPolicy::Terminal {
+            bail!(
+                "Pi direct GENET requires driver-genet consumed-time evidence and terminal timeout policy"
+            );
+        }
+        if task.wcet_us > task.budget_us / 2 {
+            bail!(
+                "Pi direct GENET requires 2*driver-genet.wcet_us <= budget_us, got wcet_us={} budget_us={}",
+                task.wcet_us,
+                task.budget_us
+            );
+        }
+        Ok(())
     }
 
     fn parse_ipv4_literal(label: &str, value: &str) -> Result<Ipv4Addr> {
@@ -3643,9 +3684,10 @@ mod tests {
         load_manifest, AffinityPolicy, AttestationPolicy, DmaProtectionProfile,
         DriverAffinityPolicy, DriverRuntimeBusLinkSpec, DriverRuntimeImagePolicy,
         DriverRuntimeImageSpec, DriverRuntimeIrqSpec, DriverRuntimeIrqTrigger, HardwareDevice,
-        HardwareDeviceKind, NetworkBackendKind, NetworkInterfacePolicy, NetworkMode, TimeoutPolicy,
-        WorkerSchedulingProfile,
+        HardwareDeviceKind, Manifest, NetworkBackendKind, NetworkInterfacePolicy, NetworkMode,
+        TemporalExecution, TemporalTaskKind, TimeoutPolicy, WorkerSchedulingProfile,
     };
+    use crate::temporal::TemporalTaskConfig;
     use std::path::PathBuf;
 
     #[test]
@@ -4234,6 +4276,135 @@ mod tests {
                 "Pi driver bcmgenet-v5 affinity core 2 disagrees with temporal task driver-genet core 1/sched-control core 1"
             ),
             "unexpected error: {error}",
+        );
+    }
+
+    fn pi4_driver_genet_task(manifest: &mut Manifest) -> &mut TemporalTaskConfig {
+        manifest
+            .temporal_authority
+            .tasks
+            .iter_mut()
+            .find(|task| task.id == "driver-genet")
+            .expect("driver-genet temporal task")
+    }
+
+    #[test]
+    fn pi4_direct_genet_temporal_contract_fails_closed_on_each_distinct_drift() {
+        let manifest_path = repo_root().join("configs/root_task_pi4_uboot_aarch64.toml");
+        let manifest = load_manifest(&manifest_path).expect("load Pi direct-GENET manifest");
+        manifest
+            .validate_pi4_direct_genet_temporal_contract()
+            .expect("selected Pi direct-GENET temporal contract");
+
+        let mut missing = manifest.clone();
+        missing
+            .temporal_authority
+            .tasks
+            .retain(|task| task.id != "driver-genet");
+        assert_eq!(
+            missing
+                .validate_pi4_direct_genet_temporal_contract()
+                .expect_err("missing direct-GENET temporal task")
+                .to_string(),
+            "Pi direct GENET requires temporal task driver-genet"
+        );
+
+        let mut wrong_kind = manifest.clone();
+        pi4_driver_genet_task(&mut wrong_kind).kind = TemporalTaskKind::Service;
+        assert_eq!(
+            wrong_kind
+                .validate_pi4_direct_genet_temporal_contract()
+                .expect_err("direct GENET cannot use a service task")
+                .to_string(),
+            "Pi direct GENET requires driver-genet to be an active driver temporal task"
+        );
+
+        let mut passive = manifest.clone();
+        pi4_driver_genet_task(&mut passive).execution = TemporalExecution::Passive;
+        assert_eq!(
+            passive
+                .validate_pi4_direct_genet_temporal_contract()
+                .expect_err("direct GENET requires an active scheduling context")
+                .to_string(),
+            "Pi direct GENET requires driver-genet to be an active driver temporal task"
+        );
+
+        let timing_drifts = [
+            ("budget", 3_001, 10_000, 2),
+            ("period", 3_000, 9_999, 2),
+            ("refills", 3_000, 10_000, 3),
+        ];
+        for (label, budget_us, period_us, max_refills) in timing_drifts {
+            let mut drift = manifest.clone();
+            let task = pi4_driver_genet_task(&mut drift);
+            task.budget_us = budget_us;
+            task.period_us = period_us;
+            task.max_refills = max_refills;
+            assert_eq!(
+                drift
+                    .validate_pi4_direct_genet_temporal_contract()
+                    .expect_err(label)
+                    .to_string(),
+                "Pi direct GENET requires driver-genet budget_us=3000 period_us=10000 max_refills=2"
+            );
+        }
+
+        let mut missing_consumed = manifest.clone();
+        pi4_driver_genet_task(&mut missing_consumed).consumed_time_evidence = false;
+        assert_eq!(
+            missing_consumed
+                .validate_pi4_direct_genet_temporal_contract()
+                .expect_err("direct GENET requires kernel consumed-time evidence")
+                .to_string(),
+            "Pi direct GENET requires driver-genet consumed-time evidence and terminal timeout policy"
+        );
+
+        let mut wrong_timeout = manifest.clone();
+        pi4_driver_genet_task(&mut wrong_timeout).timeout_policy = TimeoutPolicy::NaturalPostpone;
+        assert_eq!(
+            wrong_timeout
+                .validate_pi4_direct_genet_temporal_contract()
+                .expect_err("direct GENET requires terminal timeout containment")
+                .to_string(),
+            "Pi direct GENET requires driver-genet consumed-time evidence and terminal timeout policy"
+        );
+
+        let mut unsafe_wcet = manifest.clone();
+        pi4_driver_genet_task(&mut unsafe_wcet).wcet_us = 1_501;
+        assert_eq!(
+            unsafe_wcet
+                .validate_pi4_direct_genet_temporal_contract()
+                .expect_err("direct GENET requires half-budget WCET reserve")
+                .to_string(),
+            "Pi direct GENET requires 2*driver-genet.wcet_us <= budget_us, got wcet_us=1501 budget_us=3000"
+        );
+
+        let mut non_pi = manifest.clone();
+        non_pi.profile.name = "virt-aarch64".to_owned();
+        non_pi
+            .validate_pi4_direct_genet_temporal_contract()
+            .expect("direct-GENET temporal invariant is Pi-scoped");
+
+        let mut non_genet = manifest.clone();
+        non_genet.hw.network.backend = NetworkBackendKind::VirtioNet;
+        non_genet
+            .validate_pi4_direct_genet_temporal_contract()
+            .expect("direct-GENET temporal invariant is BCMGENET-scoped");
+
+        let mut service_absent = manifest.clone();
+        service_absent.console_network_service.enabled = false;
+        service_absent
+            .validate_pi4_direct_genet_temporal_contract()
+            .expect("direct-GENET temporal invariant requires selected child resources");
+
+        let mut full_validation = manifest;
+        pi4_driver_genet_task(&mut full_validation).max_refills = 3;
+        let error = full_validation
+            .validate_with_base(Some(repo_root().as_path()))
+            .expect_err("full manifest validation must invoke direct-GENET invariant");
+        assert_eq!(
+            error.to_string(),
+            "Pi direct GENET requires driver-genet budget_us=3000 period_us=10000 max_refills=2"
         );
     }
 

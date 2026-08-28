@@ -86,6 +86,19 @@ def test_pi4_genet_uses_bold_bounded_core_one_mcs_admission() -> None:
     assert core_three["capacity_us"] - core_three["reserve_us"] == 9_000
 
 
+def test_pi4_wifi_pair_uses_bounded_fragment_preserving_refills() -> None:
+    """CYW43/SDIO preserve eight wake fragments without adding CPU budget."""
+
+    tasks = load_pi4_manifest()["temporal_authority"]["tasks"]
+    for task_id in ("driver-cyw43", "driver-sdio"):
+        task = next(task for task in tasks if task["id"] == task_id)
+        assert task["scheduling_context_bits"] == 8
+        assert task["max_refills"] == 8
+        assert task["budget_us"] == 1_500
+        assert task["period_us"] == 10_000
+        assert task["priority"] == 184
+
+
 def test_pi4_root_preempts_console_with_exact_admitted_response_bounds() -> None:
     """Pi retains pre-auth root priority while deriving the console lane."""
 
