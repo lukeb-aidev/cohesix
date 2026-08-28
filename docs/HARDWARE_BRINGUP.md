@@ -468,6 +468,15 @@ share them as sensitive evidence even when Cohesix itself redacts the PSK.
 On each requested boot, send commands conservatively and wait for the prompt
 after every command:
 
+`scripts/pi4_serial_reboot.py` requires
+`--image-identity-metadata out/pi4-sd/pi4-image-identity.json`. It validates the
+canonical clean sidecar before opening the UART, then requires that sidecar's
+exact full sealed build marker before accepting a fresh root prompt. A generic
+`[BUILD]` prefix, another image ID, inconsistent metadata, or a root prompt that
+arrives first fails closed. This binds diagnostics to the expected root image;
+U-Boot, DTB, firmware, saved policy, flash/readback, and Pi acceptance remain
+separate proof obligations.
+
 ```text
 netstats
 smp activity
@@ -477,29 +486,44 @@ wifi dump-state
 wifi diag
 usb diag
 usb status
+smp activity
 ```
 
 That ordering is the Wi-Fi helper path after the settled supervisor and DHCP
 checks: the retained `smp activity` prefix must precede the fresh nettest,
-terminal netstats, TCP, and DPC tail. The GENET path retains its existing
-`netstats`, `nettest`, final `netstats`, USB diagnostics, then `smp activity`
-order. The helper accepts a `cohesix>` prompt split across two bounded reads
-only when the prior read's final bytes and the next read are one physically
-contiguous stream. It carries at most the marker-length-minus-one tail into the
-next prompt wait; unrelated intervening bytes cannot complete the marker. This
-allows a prompt whose leading byte arrived with the guarded `ping` result
-without sending the next diagnostic early.
+terminal netstats, TCP, and DPC tail. The final `smp activity` produces the
+non-stale counter-delta window that the first sample explicitly requests. The
+GENET path uses `netstats`, the same first activity sample, `nettest`, final
+`netstats`, USB diagnostics, then the second activity sample. These two samples
+are routing telemetry, not benchmark or acceptance evidence. The helper accepts
+a `cohesix>` prompt split across two bounded reads only when the prior read's
+final bytes and the next read are one physically contiguous stream. It carries
+at most the marker-length-minus-one tail into the next prompt wait; unrelated
+intervening bytes cannot complete the marker. This allows a prompt whose leading
+byte arrived with the guarded `ping` result without sending the next diagnostic
+early.
 
 The legacy `pi4_gate_proof.sh` live-capture path now enforces the same minimum
 barriers: it waits for the attempt-1 supervisor terminal, polls `netstats` only
-after that terminal, and skips `nettest` unless current Wi-Fi DHCP is bound.
+after that terminal, and skips `nettest` unless current Wi-Fi DHCP is bound. A
+successful `nettest` admission starts a 17-second observation window; the next
+`netstats` response must contain one complete successful terminal for the exact
+admitted nonzero run generation. Missing, malformed, running, failed, duplicate,
+or generation-mismatched status fails after the remaining diagnostics and
+controlled capture are closed. Its default sequence also requires the second
+`smp activity` command to contain one positive non-stale counter-delta window.
+`--no-default-commands` remains a custom capture mode and omits that canonical
+rate gate; it cannot inherit the default sequence's performance-telemetry proof.
 Its default convergence sequence omits the verbose `wifi dump-state`; it cannot
 create missing acceptance evidence. `--require-wifi-ready` inserts the verbose
 command immediately before compact causal triage and then requires its
-command-bound DPC proof. For complete boot-bound settling, DHCP,
-paired-pcap, verbose state, and terminal-verdict handling,
-`pi4_serial_reboot.py` remains the canonical live helper; gate-proof
-`--normalize-only` remains safe for historical logs.
+command-bound DPC proof. `pi4_serial_reboot.py` remains the canonical interactive
+reboot helper and additionally compares any observed asynchronous result with
+the final generation-tagged status. It also refuses to begin live evidence
+unless the exact clean identity-sidecar marker is observed. The gate wrapper
+remains the canonical path for a controlled concurrent serial/pcap proof.
+Gate-proof `--normalize-only` remains safe for historical logs but cannot create
+the live admission-to-terminal link.
 
 `OK NETTEST detail=started run_generation=<n>` proves only admission. Wait at
 least 15 seconds, then issue the final `netstats` before continuing. For a

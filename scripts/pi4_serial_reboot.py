@@ -21,6 +21,12 @@ except ImportError as exc:  # pragma: no cover - exercised by host setup.
         "pyserial is required; run `.venv/bin/pip install pyserial` from the repo root"
     ) from exc
 
+SCRIPT_DIR = pathlib.Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+import pi4_image_identity  # noqa: E402
+
 
 DEFAULT_PORT = "/dev/cu.usbserial-0001"
 DEFAULT_BAUD = 115_200
@@ -162,6 +168,22 @@ ASYNC_RESULT_FRAGMENT_RE = re.compile(
     rb"|NET_DRIVER_TASK_[A-Z_]*"
     rb"|SDIO_DRIVER_TASK_[A-Z_]*"
     rb")[^\r\n]*"
+)
+SMP_ACTIVITY_ASYNC_FRAGMENT_RE = re.compile(
+    rb"(?:"
+    rb"\[(?!smp\])[A-Za-z0-9_.:-]+\]"
+    rb"|SERIAL_INPUT_TRACE"
+    rb"|HDMI_FRAME_[A-Z_]*"
+    rb"|DRIVER_TASK_[A-Z_]*"
+    rb"|SCHED_CONTRACT"
+    rb"|CYW43_[A-Z0-9_]*"
+    rb"|NET_DRIVER_TASK_[A-Z_]*"
+    rb"|SDIO_DRIVER_TASK_[A-Z_]*"
+    rb")[^\r\n]*"
+)
+SMP_ACTIVITY_RATE_RE = re.compile(
+    rb"\[smp\]activityrateswindow_ms=(?P<window_ms>[1-9][0-9]*)"
+    rb"cpu_pct=unavailableview=counter-deltatask_allocation=multi"
 )
 MENU_ROOT = "root"
 MENU_DHCP = "dhcp"
@@ -433,6 +455,15 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--lane", choices=("wifi", "genet"), required=True)
     parser.add_argument("--log", type=pathlib.Path, required=True)
+    parser.add_argument(
+        "--image-identity-metadata",
+        type=pathlib.Path,
+        required=True,
+        help=(
+            "Validated pi4-image-identity.json whose exact full build marker "
+            "must be observed before the fresh root prompt."
+        ),
+    )
     parser.add_argument("--repo", type=pathlib.Path, default=DEFAULT_REPO)
     parser.add_argument("--port", default=DEFAULT_PORT)
     parser.add_argument("--baud", type=int, default=DEFAULT_BAUD)
@@ -470,6 +501,52 @@ def resolve_under_repo(repo: pathlib.Path, path: pathlib.Path) -> pathlib.Path:
     return path if path.is_absolute() else repo / path
 
 
+def load_expected_image_identity(
+    repo: pathlib.Path,
+    metadata_path: pathlib.Path,
+) -> pi4_image_identity.ImageIdentity:
+    """Load one clean, canonical image identity before opening the UART."""
+
+    resolved = resolve_under_repo(repo, metadata_path).resolve()
+    try:
+        identity = pi4_image_identity.read_metadata(resolved)
+    except (OSError, ValueError) as exc:
+        raise RuntimeError(
+            f"invalid Pi image identity metadata {resolved}: {exc}"
+        ) from exc
+    if identity.source_tree_clean is not True:
+        raise RuntimeError("Pi image identity metadata does not name a clean source tree")
+    if identity.git_commit is None or identity.build_id is None:
+        raise RuntimeError("Pi image identity metadata lacks commit or build identity")
+    return identity
+
+
+def require_exact_build_marker(
+    controller: RedactingSerialController,
+    expected_marker: str,
+    timeout_s: float,
+) -> tuple[bytes, bool]:
+    """Require the exact sealed marker before accepting a fresh root prompt."""
+
+    marker = expected_marker.encode("ascii")
+    snapshot = controller.read_until(
+        (marker, ROOT_PROMPT_FULL),
+        timeout_s,
+        label="exact sealed build marker or premature root prompt",
+    )
+    marker_offset = snapshot.find(marker)
+    prompt_offset = snapshot.find(ROOT_PROMPT_FULL)
+    if marker_offset < 0 or (0 <= prompt_offset < marker_offset):
+        raise RuntimeError(
+            "fresh root prompt arrived before the expected sealed build marker"
+        )
+    prompt_after_marker = snapshot.find(
+        ROOT_PROMPT_FULL,
+        marker_offset + len(marker),
+    ) >= 0
+    return snapshot, prompt_after_marker
+
+
 def serial_line_bytes(
     line: str,
     *,
@@ -498,6 +575,19 @@ def serial_marker_seen(snapshot: bytes, marker: bytes) -> bool:
     compact_snapshot = b"".join(cleaned.split())
     compact_marker = b"".join(marker.split())
     return compact_marker in compact_snapshot
+
+
+def parse_smp_activity_rate_window(snapshot: bytes) -> int | None:
+    """Return one exact positive counter-delta window from an activity batch."""
+
+    cleaned = SMP_ACTIVITY_ASYNC_FRAGMENT_RE.sub(b"", snapshot)
+    compact = b"".join(cleaned.split())
+    prefix = b"[smp]activityrates"
+    matches = list(SMP_ACTIVITY_RATE_RE.finditer(compact))
+    if compact.count(prefix) != 1 or len(matches) != 1:
+        return None
+    window_ms = int(matches[0].group("window_ms"), 10)
+    return window_ms if window_ms <= U64_MAX else None
 
 
 def inspect_wifi_supervisor_evidence(
@@ -1420,16 +1510,20 @@ def run_diagnostics(
         commands.insert(0, ("smp activity", "smp activity-prefix"))
         commands.append(("wifi dump-state", "wifi dump-state"))
         commands.append(("wifi diag", "wifi diag"))
+    else:
+        # The first sample seeds the target-owned cumulative counters before
+        # the connectivity workload.  A final sample below yields the bounded
+        # delta window that a one-shot `smp activity` explicitly cannot.
+        commands.insert(1, ("smp activity", "smp activity-prefix"))
     commands.extend(
         [
             ("usb diag", "usb diag"),
             ("usb status", "usb status"),
         ]
     )
-    if lane != "wifi":
-        commands.append(("smp activity", "smp activity"))
     if active_usb_probe:
         commands.append(("usb probe-kbd", "usb probe-kbd"))
+    commands.append(("smp activity", "smp activity"))
     for command, label in commands:
         if command.startswith("usb ") and not usb_scored:
             controller.note(
@@ -1561,6 +1655,18 @@ def run_diagnostics(
                             f"generation-{generation}-"
                             f"run-{run_generation}-fail"
                         )
+            elif label == "smp activity":
+                window_ms = parse_smp_activity_rate_window(command_snapshot)
+                if window_ms is None:
+                    failures.append("smp-activity:rate-window-invalid")
+                    controller.note(
+                        "smp activity rate window result=invalid "
+                        "action=fail-closed"
+                    )
+                else:
+                    controller.note(
+                        f"smp activity rate window_ms={window_ms} result=valid"
+                    )
         except SerialMarkerTimeout as exc:
             controller.note(
                 f"diagnostic timeout command={command!r} label={label!r} error={exc}"
@@ -1584,6 +1690,10 @@ def run_diagnostics(
 def run() -> int:
     args = parse_args()
     repo = args.repo.resolve()
+    expected_identity = load_expected_image_identity(
+        repo,
+        args.image_identity_metadata,
+    )
     args.log.parent.mkdir(parents=True, exist_ok=True)
 
     controller = RedactingSerialController(
@@ -1624,16 +1734,26 @@ def run() -> int:
                 menu_snapshot = first
 
         select_lane(controller, args.lane, menu_snapshot)
-        build_snapshot = controller.read_until(
-            (b"[BUILD]",),
+        build_snapshot, prompt_ready = require_exact_build_marker(
+            controller,
+            expected_identity.build_marker,
             args.boot_timeout_s,
-            label="fresh build marker",
         )
-        root_snapshot = controller.read_until(
-            (ROOT_PROMPT,),
-            args.boot_timeout_s,
-            label="root prompt",
+        controller.note(
+            "image identity matched "
+            f"git_commit={expected_identity.git_commit} "
+            f"build_id={expected_identity.build_id} "
+            f"image_id={expected_identity.image_id} "
+            f"build_marker_sha256={expected_identity.build_marker_sha256}"
         )
+        root_snapshot = b""
+        if not prompt_ready:
+            root_snapshot = controller.read_until(
+                (ROOT_PROMPT_FULL,),
+                args.boot_timeout_s,
+                label="root prompt after exact sealed build marker",
+                stream_prefix=build_snapshot[-(len(ROOT_PROMPT_FULL) - 1) :],
+            )
         if args.diagnostics and not run_diagnostics(
             controller,
             args.lane,

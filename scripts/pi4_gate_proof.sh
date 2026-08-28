@@ -26,6 +26,7 @@ CAPTURE_SECONDS=10
 COMMAND_DELAY_SECONDS=2
 COMMAND_CHAR_DELAY_SECONDS="${COHESIX_PI4_COMMAND_CHAR_DELAY_SECONDS:-0.06}"
 COMMAND_PROMPT_TIMEOUT_SECONDS=30
+NETTEST_OBSERVATION_SECONDS=17
 WIFI_SUPERVISOR_TIMEOUT_SECONDS=180
 WIFI_DHCP_TIMEOUT_SECONDS=60
 GATEWAY_READY_TIMEOUT_SECONDS="${COHESIX_PI4_GATEWAY_READY_TIMEOUT_SECONDS:-60}"
@@ -38,6 +39,7 @@ REQUIRE_WIFI_READY=0
 REQUIRE_WIRED_READY=0
 REQUIRE_DRIVER_TASK_PROOF=0
 REQUIRE_INPUT_RESPONSIVE=0
+REQUIRE_DEFAULT_SMP_RATE=1
 GATEWAY_STATUS_URL=""
 GATEWAY_STATUS_ENDPOINT=""
 GATEWAY_TARGET_HOST=""
@@ -66,6 +68,7 @@ DEFAULT_COMMANDS=(
     "wifi diag"
     "usb diag"
     "usb status"
+    "smp activity"
 )
 EXTRA_COMMANDS=()
 EXPECTATIONS=()
@@ -162,7 +165,7 @@ Options:
   --skip-build               Reuse existing seL4 image while staging/flashing
   --no-capture               Do not open serial; normalize the existing log
   --normalize-only           Skip build, flash, and capture; normalize only
-  --no-default-commands      Do not send the default proof commands
+  --no-default-commands      Omit canonical commands and their SMP-rate gate
   --probe-usb-keyboard       Explicitly append one active USB keyboard probe.
                              Passive default diagnostics never probe hardware.
   --command <line>           Append a console command to send during capture
@@ -200,6 +203,15 @@ Default proof commands:
   wifi diag
   usb diag
   usb status
+  smp activity
+
+After a successful `nettest` admission, capture waits 17 seconds and requires
+the following `netstats` response to contain a successful terminal result for
+that exact nonzero run generation.
+
+The two `smp activity` commands bracket the connectivity diagnostics. The first
+seeds the target-owned counter snapshot; the second must emit a non-stale delta
+window suitable for routing serial, USB, HDMI, and network throughput pressure.
 
 `--require-wifi-ready` inserts `wifi dump-state` immediately before the compact
 WiFi diagnostic so DPC and verbose acceptance evidence are command-bound.
@@ -1574,10 +1586,221 @@ send_console_line() {
     printf '\r' > "${SERIAL_DEVICE}"
 }
 
+serial_snapshot_byte_count() {
+    refresh_serial_snapshot
+    "${PYTHON}" - "${SERIAL_SNAPSHOT_PATH}" <<'PY'
+import pathlib
+import sys
+
+print(pathlib.Path(sys.argv[1]).stat().st_size)
+PY
+}
+
+nettest_admission_run_generation() {
+    local snapshot_path="$1"
+    local start_offset="$2"
+
+    "${PYTHON}" - "${snapshot_path}" "${start_offset}" <<'PY'
+import pathlib
+import re
+import sys
+
+U64_MAX = (1 << 64) - 1
+ASYNC_FRAGMENT_RE = re.compile(
+    rb"(?:"
+    rb"\[[A-Za-z0-9_.:-]+\]"
+    rb"|SERIAL_INPUT_TRACE"
+    rb"|HDMI_FRAME_[A-Z_]*"
+    rb"|DRIVER_TASK_[A-Z_]*"
+    rb"|SCHED_CONTRACT"
+    rb"|CYW43_[A-Z0-9_]*"
+    rb"|NET_DRIVER_TASK_[A-Z_]*"
+    rb"|SDIO_DRIVER_TASK_[A-Z_]*"
+    rb")[^\r\n]*"
+)
+ADMISSION_RE = re.compile(
+    rb"OKNETTESTdetail=startedrun_generation=(?P<generation>[1-9][0-9]*)"
+    rb"(?=cohesix>)"
+)
+ADMISSION_PREFIX = b"OKNETTESTdetail=startedrun_generation="
+
+path = pathlib.Path(sys.argv[1])
+try:
+    offset = int(sys.argv[2], 10)
+except ValueError as exc:
+    raise SystemExit("nettest command offset is not an integer") from exc
+raw = path.read_bytes()
+if offset < 0 or offset > len(raw):
+    raise SystemExit("nettest command offset is outside the serial snapshot")
+command_snapshot = raw[offset:]
+cleaned = ASYNC_FRAGMENT_RE.sub(b"", command_snapshot)
+compact = b"".join(cleaned.split())
+matches = list(ADMISSION_RE.finditer(compact))
+if compact.count(ADMISSION_PREFIX) != 1 or len(matches) != 1:
+    raise SystemExit(
+        "nettest admission must contain exactly one canonical started ACK"
+    )
+generation = int(matches[0].group("generation"), 10)
+if generation > U64_MAX:
+    raise SystemExit("nettest admission run_generation exceeds u64")
+print(generation)
+PY
+}
+
+nettest_terminal_record() {
+    local snapshot_path="$1"
+    local start_offset="$2"
+    local expected_run_generation="$3"
+
+    "${PYTHON}" - \
+        "${snapshot_path}" \
+        "${start_offset}" \
+        "${expected_run_generation}" <<'PY'
+import pathlib
+import re
+import sys
+
+U32_MAX = (1 << 32) - 1
+U64_MAX = (1 << 64) - 1
+STATUS_RE = re.compile(
+    rb"nettest: generation=(?P<generation>0|[1-9][0-9]*) "
+    rb"run_generation=(?P<run_generation>0|[1-9][0-9]*) "
+    rb"enabled=(?P<enabled>true|false) "
+    rb"running=(?P<running>true|false) "
+    rb"verdict=(?P<verdict>none|running|pass|peer-assisted-pass|fail) "
+    rb"tx_ok=(?P<tx_ok>true|false|na) "
+    rb"udp_echo_ok=(?P<udp_echo_ok>true|false|na) "
+    rb"tcp_ok=(?P<tcp_ok>true|false|na) "
+    rb"console_ok=(?P<console_ok>true|false|na) "
+    rb"peer_assisted_ok=(?P<peer_assisted_ok>true|false|na)"
+)
+
+
+def expected_verdict(values: tuple[str, str, str, str, str]) -> str:
+    if all(value == "true" for value in values[:4]):
+        return "pass"
+    if values[4] == "true":
+        return "peer-assisted-pass"
+    return "fail"
+
+
+path = pathlib.Path(sys.argv[1])
+try:
+    offset = int(sys.argv[2], 10)
+    expected_run_generation = int(sys.argv[3], 10)
+except ValueError as exc:
+    raise SystemExit("nettest terminal arguments must be integers") from exc
+raw = path.read_bytes()
+if offset < 0 or offset > len(raw):
+    raise SystemExit("nettest command offset is outside the serial snapshot")
+if expected_run_generation <= 0 or expected_run_generation > U64_MAX:
+    raise SystemExit("expected nettest run_generation is outside nonzero u64")
+command_snapshot = raw[offset:]
+candidates = []
+for raw_line in command_snapshot.splitlines(keepends=True):
+    if not raw_line.endswith((b"\r", b"\n")):
+        continue
+    line = raw_line.removesuffix(b"\n").removesuffix(b"\r")
+    if line.startswith(b"nettest:"):
+        candidates.append(line)
+if len(candidates) != 1 or b"[truncated]" in candidates[0]:
+    raise SystemExit(
+        "netstats must contain exactly one complete canonical nettest status"
+    )
+match = STATUS_RE.fullmatch(candidates[0])
+if match is None:
+    raise SystemExit("netstats nettest status is malformed")
+generation = int(match.group("generation"), 10)
+run_generation = int(match.group("run_generation"), 10)
+if generation > U32_MAX or run_generation > U64_MAX:
+    raise SystemExit("netstats nettest generation exceeds its integer bound")
+if run_generation != expected_run_generation:
+    raise SystemExit(
+        "netstats nettest run_generation does not match the admitted run"
+    )
+values = tuple(
+    match.group(field).decode("ascii")
+    for field in (
+        "tx_ok",
+        "udp_echo_ok",
+        "tcp_ok",
+        "console_ok",
+        "peer_assisted_ok",
+    )
+)
+verdict = match.group("verdict").decode("ascii")
+if (
+    match.group("enabled") != b"true"
+    or match.group("running") != b"false"
+    or verdict not in {"pass", "peer-assisted-pass"}
+    or "na" in values
+    or verdict != expected_verdict(values)
+):
+    raise SystemExit("netstats nettest status is not a successful terminal result")
+print(generation, run_generation, verdict)
+PY
+}
+
+smp_activity_rate_window() {
+    local snapshot_path="$1"
+    local start_offset="$2"
+
+    "${PYTHON}" - "${snapshot_path}" "${start_offset}" <<'PY'
+import pathlib
+import re
+import sys
+
+U64_MAX = (1 << 64) - 1
+ASYNC_FRAGMENT_RE = re.compile(
+    rb"(?:"
+    rb"\[(?!smp\])[A-Za-z0-9_.:-]+\]"
+    rb"|SERIAL_INPUT_TRACE"
+    rb"|HDMI_FRAME_[A-Z_]*"
+    rb"|DRIVER_TASK_[A-Z_]*"
+    rb"|SCHED_CONTRACT"
+    rb"|CYW43_[A-Z0-9_]*"
+    rb"|NET_DRIVER_TASK_[A-Z_]*"
+    rb"|SDIO_DRIVER_TASK_[A-Z_]*"
+    rb")[^\r\n]*"
+)
+RATE_RE = re.compile(
+    rb"\[smp\]activityrateswindow_ms=(?P<window_ms>[1-9][0-9]*)"
+    rb"cpu_pct=unavailableview=counter-deltatask_allocation=multi"
+)
+RATE_PREFIX = b"[smp]activityrates"
+
+path = pathlib.Path(sys.argv[1])
+try:
+    offset = int(sys.argv[2], 10)
+except ValueError as exc:
+    raise SystemExit("smp activity command offset is not an integer") from exc
+raw = path.read_bytes()
+if offset < 0 or offset > len(raw):
+    raise SystemExit("smp activity command offset is outside the serial snapshot")
+command_snapshot = raw[offset:]
+cleaned = ASYNC_FRAGMENT_RE.sub(b"", command_snapshot)
+compact = b"".join(cleaned.split())
+matches = list(RATE_RE.finditer(compact))
+if compact.count(RATE_PREFIX) != 1 or len(matches) != 1:
+    raise SystemExit("second smp activity sample lacks one canonical rate window")
+window_ms = int(matches[0].group("window_ms"), 10)
+if window_ms > U64_MAX:
+    raise SystemExit("smp activity rate window exceeds u64")
+print(window_ms)
+PY
+}
+
 run_capture() {
     local -a commands=()
+    local -a nettest_failures=()
+    local -a telemetry_failures=()
     local command
+    local command_start_bytes
     local index
+    local nettest_started_run_generation=""
+    local nettest_terminal=""
+    local smp_activity_rate=""
+    local smp_activity_samples=0
     local wifi_supervisor_status="not-required"
     local wifi_dhcp_bound=0
 
@@ -1623,11 +1846,64 @@ run_capture() {
             fi
         fi
         prompt_count_before="$(console_prompt_count)"
+        command_start_bytes="$(serial_snapshot_byte_count)"
         log "console command: ${command}"
         send_console_line "${command}"
         wait_for_prompt_after_command "${prompt_count_before}" "${command}"
+        refresh_serial_snapshot
+        if [[ "${command}" == "nettest" ]]; then
+            if [[ -n "${nettest_started_run_generation}" ]]; then
+                nettest_failures+=("overlapping-admission")
+                log "nettest admission rejected: prior run has no terminal netstats"
+            elif nettest_started_run_generation="$(
+                nettest_admission_run_generation \
+                    "${SERIAL_SNAPSHOT_PATH}" \
+                    "${command_start_bytes}"
+            )"; then
+                log "nettest admitted run_generation=${nettest_started_run_generation}; observing terminal window"
+                sleep "${NETTEST_OBSERVATION_SECONDS}"
+                continue
+            else
+                nettest_started_run_generation=""
+                nettest_failures+=("admission-invalid")
+                log "nettest admission is missing or malformed; continuing diagnostics"
+            fi
+        elif [[ "${command}" == "netstats" && -n "${nettest_started_run_generation}" ]]; then
+            if nettest_terminal="$(
+                nettest_terminal_record \
+                    "${SERIAL_SNAPSHOT_PATH}" \
+                    "${command_start_bytes}" \
+                    "${nettest_started_run_generation}"
+            )"; then
+                log "nettest terminal ${nettest_terminal}"
+            else
+                nettest_failures+=("terminal-invalid")
+                log "nettest terminal is missing, non-successful, or generation-mismatched; continuing diagnostics"
+            fi
+            nettest_started_run_generation=""
+        elif [[ "${command}" == "smp activity" ]]; then
+            smp_activity_samples=$((smp_activity_samples + 1))
+            if [[ "${REQUIRE_DEFAULT_SMP_RATE}" -eq 1 && "${smp_activity_samples}" -ge 2 ]]; then
+                if smp_activity_rate="$(
+                    smp_activity_rate_window \
+                        "${SERIAL_SNAPSHOT_PATH}" \
+                        "${command_start_bytes}"
+                )"; then
+                    log "smp activity rate window_ms=${smp_activity_rate} result=valid"
+                else
+                    telemetry_failures+=("smp-activity-rate-window-invalid")
+                    log "smp activity rate window is missing, stale, or malformed; continuing diagnostics"
+                fi
+            fi
+        fi
         sleep "${COMMAND_DELAY_SECONDS}"
     done
+    if [[ -n "${nettest_started_run_generation}" ]]; then
+        nettest_failures+=("terminal-netstats-unavailable")
+    fi
+    if [[ "${REQUIRE_DEFAULT_SMP_RATE}" -eq 1 && "${smp_activity_samples}" -lt 2 ]]; then
+        telemetry_failures+=("smp-activity-second-sample-unavailable")
+    fi
     sleep "${CAPTURE_SECONDS}"
     capture_gateway_continuity_end
     if [[ -n "${CAPTURE_PID}" ]]; then
@@ -1641,6 +1917,12 @@ run_capture() {
     fi
     finish_network_capture
     validate_gateway_capture_timeline
+    if ((${#nettest_failures[@]} > 0)); then
+        fail "nettest proof failed: $(IFS=,; printf '%s' "${nettest_failures[*]}")"
+    fi
+    if ((${#telemetry_failures[@]} > 0)); then
+        fail "performance telemetry failed: $(IFS=,; printf '%s' "${telemetry_failures[*]}")"
+    fi
 }
 
 run_normalizer() {
@@ -2510,6 +2792,7 @@ while [[ $# -gt 0 ]]; do
             ;;
         --no-default-commands)
             DEFAULT_COMMANDS=()
+            REQUIRE_DEFAULT_SMP_RATE=0
             shift
             ;;
         --probe-usb-keyboard)

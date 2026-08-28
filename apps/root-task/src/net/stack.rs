@@ -693,7 +693,7 @@ fn physical_driver_tcp_data_path_required(
 ) -> bool {
     matches!(
         (active_driver, active_interface),
-        ("cyw43", "wifi") | ("bcmgenet-v5", "wired")
+        ("cyw43", "wifi") | ("bcmgenet-v5", "wired") | ("bcmgenet-v5-direct", "wired")
     )
 }
 
@@ -706,7 +706,7 @@ fn physical_driver_tcp_data_path_proven(
         && (counters.tcp_accepts != 0 || counters.tcp_auth_sessions != 0)
 }
 
-fn net_status_tcp_ready(
+pub(super) fn net_status_tcp_ready(
     listener_ready: bool,
     active_driver: &'static str,
     active_interface: &'static str,
@@ -13713,6 +13713,21 @@ mod tests {
                 arp_tx: 1,
                 ..NetCounters::default()
             }
+        ));
+        assert!(!net_status_tcp_ready(
+            true,
+            "bcmgenet-v5-direct",
+            "wired",
+            NetCounters::default(),
+        ));
+        assert!(net_status_tcp_ready(
+            true,
+            "bcmgenet-v5-direct",
+            "wired",
+            NetCounters {
+                tcp_auth_sessions: 1,
+                ..NetCounters::default()
+            },
         ));
         assert!(!net_status_tcp_ready(
             true,

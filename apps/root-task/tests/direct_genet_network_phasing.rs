@@ -4,6 +4,7 @@
 // Author: Lukas Bower
 
 const STACK_SOURCE: &str = include_str!("../src/net/stack.rs");
+const ISOLATED_CONSOLE_SOURCE: &str = include_str!("../src/net/isolated_console.rs");
 const DRIVER_SOURCE: &str = include_str!("../src/drivers/driver_task_net.rs");
 const RUNTIME_SOURCE: &str = include_str!("../../pi4-driver-runtime/src/lib.rs");
 const HAL_SOURCE: &str = include_str!("../src/hal/mod.rs");
@@ -118,6 +119,23 @@ fn default_stack_delegates_the_direct_genet_probe_without_cross_backend_fallback
         1,
         "one netstats request must issue at most one concrete GENET probe",
     );
+}
+
+#[test]
+fn isolated_direct_genet_listener_is_not_end_to_end_tcp_proof() {
+    assert!(STACK_SOURCE.contains("(\"bcmgenet-v5-direct\", \"wired\")"));
+    let status = ISOLATED_CONSOLE_SOURCE
+        .split_once("fn status_report(&self) -> NetStatusReport")
+        .map(|(_, tail)| tail)
+        .expect("isolated status report exists");
+    let status = status
+        .split_once("fn contain_faulted_console_service")
+        .map(|(body, _)| body)
+        .expect("isolated status report has a finite body");
+    assert!(status.contains("super::stack::net_status_tcp_ready("));
+    assert!(status.contains("self.console_listener_ready()"));
+    assert!(status.contains("self.counters"));
+    assert!(!status.contains("tcp_ready: self.console_listener_ready(),"));
 }
 
 #[test]

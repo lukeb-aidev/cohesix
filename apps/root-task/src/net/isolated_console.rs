@@ -26,6 +26,8 @@ use smoltcp::wire::{EthernetAddress, Ipv4Address};
 use super::isolated_self_test::{IsolatedSelfTestObservation, IsolatedSelfTestState};
 #[cfg(feature = "net-backend-virtio")]
 use super::ConsoleNetConfig;
+#[cfg(feature = "net-backend-virtio")]
+use super::NetDeviceCounters;
 use super::{
     select_isolated_direct_network_turn, select_isolated_direct_response_turn,
     select_isolated_network_turn, select_isolated_response_turn, ConsoleLine,
@@ -1859,7 +1861,12 @@ impl<D: NetDevice> NetPoller for IsolatedNetworkConsole<D> {
             ip,
             gateway,
             dhcp_phase: self.dhcp_phase,
-            tcp_ready: self.console_listener_ready(),
+            tcp_ready: super::stack::net_status_tcp_ready(
+                self.console_listener_ready(),
+                self.active_driver,
+                self.active_interface,
+                self.counters,
+            ),
         }
     }
 

@@ -6347,28 +6347,46 @@ def validate_tcp_auth(host: str, port: int, token: str, timeout_s: float) -> Non
         raise TimeoutError("TCP auth token is required for handshake preflight")
     payload = f"AUTH {token}".encode("utf-8")
     frame = (len(payload) + 4).to_bytes(4, "little") + payload
-    deadline = time.time() + timeout_s
-    while time.time() < deadline:
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
         try:
-            with socket.create_connection((host, port), timeout=1.0) as sock:
-                sock.settimeout(1.5)
+            remaining_timeout = max(0.001, deadline - time.monotonic())
+            with socket.create_connection(
+                (host, port),
+                timeout=min(1.0, remaining_timeout),
+            ) as sock:
                 sock.sendall(frame)
-                header = sock.recv(4)
-                if len(header) != 4:
-                    raise TimeoutError("short auth frame header")
-                total = int.from_bytes(header, "little")
-                if total < 4 or total > 8192:
-                    raise TimeoutError(f"invalid auth frame size {total}")
-                remaining = total - 4
-                payload_bytes = b""
-                while len(payload_bytes) < remaining:
-                    part = sock.recv(remaining - len(payload_bytes))
-                    if not part:
+                for _frame_index in range(32):
+                    remaining_timeout = deadline - time.monotonic()
+                    if remaining_timeout <= 0:
                         break
-                    payload_bytes += part
-                text = payload_bytes.decode("utf-8", errors="ignore")
-                if "OK AUTH" in text or "ERR AUTH" in text:
-                    return
+                    sock.settimeout(min(1.5, remaining_timeout))
+
+                    def recv_exact(length: int) -> bytes:
+                        received = bytearray()
+                        while len(received) < length:
+                            part = sock.recv(length - len(received))
+                            if not part:
+                                raise ConnectionError(
+                                    "TCP auth peer closed a partial frame"
+                                )
+                            received.extend(part)
+                        return bytes(received)
+
+                    header = recv_exact(4)
+                    total = int.from_bytes(header, "little")
+                    if total < 4 or total > 8192:
+                        raise RestError(f"invalid TCP auth frame size {total}")
+                    response = recv_exact(total - 4).decode("utf-8")
+                    response = response.strip("\r\n")
+                    if response == "OK AUTH":
+                        return
+                    if response == "ERR AUTH" or response.startswith(
+                        "ERR AUTH "
+                    ):
+                        raise RestError(
+                            f"TCP authentication rejected by {host}:{port}"
+                        )
         except OSError:
             pass
         time.sleep(0.4)

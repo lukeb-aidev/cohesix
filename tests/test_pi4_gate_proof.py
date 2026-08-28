@@ -602,18 +602,30 @@ def test_gate_proof_advances_current_cohesix_boot_menu() -> None:
 
 
 def test_gate_proof_runs_smp_activity_for_post_prompt_driver_proof() -> None:
-    """Default captures should refresh driver-task proof after prompt-side replay."""
+    """Default captures should bracket connectivity work with rate samples."""
 
     source = SCRIPT_PATH.read_text(encoding="utf-8")
+    defaults = source.split("DEFAULT_COMMANDS=(", 1)[1].split(")", 1)[0]
 
-    assert '"smp activity"' in source
+    assert defaults.count('"smp activity"') == 2
     assert source.index('"netstats"') < source.index('"smp activity"')
     assert source.index('"smp activity"') < source.index('"wifi diag"')
+    assert defaults.rindex('"smp activity"') > defaults.index('"usb status"')
     assert source.index('"nettest"') < source.index('"wifi diag"')
     assert "wait_for_wifi_supervisor_terminal" in source
     assert "wait_for_wifi_dhcp_bound" in source
     assert 'commands+=("wifi dump-state")' in source
     assert '"${REQUIRE_WIFI_READY}" -eq 1' in source
+
+
+def test_gate_proof_custom_commands_do_not_require_default_smp_pair() -> None:
+    """Opting out of defaults must also opt out of their paired-rate gate."""
+
+    source = SCRIPT_PATH.read_text(encoding="utf-8")
+    option_body = source.split("--no-default-commands)", 1)[1].split(";;", 1)[0]
+
+    assert "DEFAULT_COMMANDS=()" in option_body
+    assert "REQUIRE_DEFAULT_SMP_RATE=0" in option_body
 
 
 def test_gate_proof_defaults_to_passive_usb_diagnostics() -> None:
@@ -724,13 +736,212 @@ def test_gate_proof_orders_wired_and_wifi_nettest_without_cross_gating() -> None
         'if [[ "${command}" == "nettest" && "${REQUIRE_WIFI_READY}" -eq 1 ]]'
     )
     command_send = capture_body.index('log "console command: ${command}"')
+    nettest_terminal_guard = capture_body.index(
+        'if [[ "${command}" == "nettest" ]]; then',
+        command_send,
+    )
 
     assert wifi_wait < gateway_start < command_loop
     assert command_loop < nettest_wifi_gate < command_send
     assert 'if [[ "${wifi_commands}" -eq 1 ]]' not in capture_body
-    assert '"${command}" == "nettest" ]]; then' not in capture_body
     assert "wait_for_wifi_supervisor_terminal" in capture_body[wifi_wait:gateway_start]
     assert "wait_for_wifi_dhcp_bound" in capture_body[nettest_wifi_gate:command_send]
+    assert command_send < nettest_terminal_guard
+    assert 'sleep "${NETTEST_OBSERVATION_SECONDS}"' in capture_body[
+        nettest_terminal_guard:
+    ]
+    assert capture_body.index("finish_network_capture") < capture_body.index(
+        'fail "nettest proof failed:'
+    )
+    assert capture_body.index("finish_network_capture") < capture_body.index(
+        'fail "performance telemetry failed:'
+    )
+
+
+def test_gate_proof_parses_one_canonical_nettest_admission(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Admission proof retains the exact nonzero run generation."""
+
+    snapshot = tmp_path / "serial.log"
+    prefix = b"nettest: run_generation=7 enabled=true running=false\r\n"
+    snapshot.write_bytes(
+        prefix
+        + b"nettest\r\n"
+        + b"OK NETTEST detail=started run_"
+        + b"[local-seat] redraw=deferred\r\n"
+        + b"generation=31\r\ncohesix> "
+    )
+
+    result = _run_output_guard_probe(
+        tmp_path,
+        'nettest_admission_run_generation "$4" "$5"',
+        str(snapshot),
+        str(len(prefix)),
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "31"
+
+
+@pytest.mark.parametrize(
+    "admission",
+    [
+        b"OK NETTEST detail=started run_generation=0\r\ncohesix> ",
+        b"OK NETTEST detail=started run_generation=31x\r\ncohesix> ",
+        (
+            b"OK NETTEST detail=started run_generation=30\r\n"
+            b"OK NETTEST detail=started run_generation=31\r\ncohesix> "
+        ),
+    ],
+)
+def test_gate_proof_rejects_invalid_nettest_admission(
+    tmp_path: pathlib.Path,
+    admission: bytes,
+) -> None:
+    """Zero, malformed, and duplicate started ACKs fail closed."""
+
+    snapshot = tmp_path / "serial.log"
+    snapshot.write_bytes(b"nettest\r\n" + admission)
+
+    result = _run_output_guard_probe(
+        tmp_path,
+        'nettest_admission_run_generation "$4" 0',
+        str(snapshot),
+    )
+
+    assert result.returncode != 0
+    assert "nettest admission" in result.stderr
+
+
+def test_gate_proof_accepts_matching_successful_nettest_terminal(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The final netstats row must close the admitted generation exactly."""
+
+    snapshot = tmp_path / "serial.log"
+    prefix = b"nettest: generation=4 run_generation=30 enabled=true\r\n"
+    snapshot.write_bytes(
+        prefix
+        + b"netstats\r\n"
+        + b"nettest: generation=5 run_generation=31 enabled=true running=false "
+        + b"verdict=pass tx_ok=true udp_echo_ok=true tcp_ok=true "
+        + b"console_ok=true peer_assisted_ok=false\r\ncohesix> "
+    )
+
+    result = _run_output_guard_probe(
+        tmp_path,
+        'nettest_terminal_record "$4" "$5" 31',
+        str(snapshot),
+        str(len(prefix)),
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "5 31 pass"
+
+
+@pytest.mark.parametrize(
+    ("run_generation", "running", "verdict", "fields"),
+    [
+        (30, "false", "pass", ("true", "true", "true", "true", "false")),
+        (31, "true", "running", ("na", "na", "na", "na", "na")),
+        (31, "false", "fail", ("true", "false", "false", "true", "false")),
+    ],
+)
+def test_gate_proof_rejects_wrong_or_nonterminal_nettest_status(
+    tmp_path: pathlib.Path,
+    run_generation: int,
+    running: str,
+    verdict: str,
+    fields: tuple[str, str, str, str, str],
+) -> None:
+    """Stale, running, and failed rows cannot satisfy current-run proof."""
+
+    snapshot = tmp_path / "serial.log"
+    tx_ok, udp_echo_ok, tcp_ok, console_ok, peer_assisted_ok = fields
+    snapshot.write_text(
+        "netstats\r\n"
+        f"nettest: generation=5 run_generation={run_generation} enabled=true "
+        f"running={running} verdict={verdict} tx_ok={tx_ok} "
+        f"udp_echo_ok={udp_echo_ok} tcp_ok={tcp_ok} "
+        f"console_ok={console_ok} peer_assisted_ok={peer_assisted_ok}\r\n"
+        "cohesix> ",
+        encoding="utf-8",
+    )
+
+    result = _run_output_guard_probe(
+        tmp_path,
+        'nettest_terminal_record "$4" 0 31',
+        str(snapshot),
+    )
+
+    assert result.returncode != 0
+    assert "nettest" in result.stderr
+
+
+def test_gate_proof_accepts_second_smp_activity_rate_window(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The second sample retains one exact positive target delta window."""
+
+    snapshot = tmp_path / "serial.log"
+    prefix = b"[smp] activity rates sample=first run_again=yes\r\n"
+    snapshot.write_bytes(
+        prefix
+        + b"[smp] activity rates window_"
+        + b"[local-seat] redraw=deferred\r\n"
+        + b"ms=17000 cpu_pct=unavailable view=counter-delta "
+        + b"task_allocation=multi\r\nOK SMP\r\ncohesix> "
+    )
+
+    result = _run_output_guard_probe(
+        tmp_path,
+        'smp_activity_rate_window "$4" "$5"',
+        str(snapshot),
+        str(len(prefix)),
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "17000"
+
+
+@pytest.mark.parametrize(
+    "rate_record",
+    [
+        b"[smp] activity rates sample=first run_again=yes "
+        b"cpu_pct=unavailable\r\n",
+        b"[smp] activity rates window_ms=0 status=stale run_again=yes "
+        b"cpu_pct=unavailable\r\n",
+        (
+            b"[smp] activity rates window_ms=17000 cpu_pct=unavailable "
+            b"view=counter-delta task_allocation=multi\r\n"
+            b"[smp] activity rates window_ms=17001 cpu_pct=unavailable "
+            b"view=counter-delta task_allocation=multi\r\n"
+        ),
+        (
+            b"[smp] activity rates window_ms=18446744073709551616 "
+            b"cpu_pct=unavailable view=counter-delta "
+            b"task_allocation=multi\r\n"
+        ),
+    ],
+)
+def test_gate_proof_rejects_invalid_second_smp_activity_rate_window(
+    tmp_path: pathlib.Path,
+    rate_record: bytes,
+) -> None:
+    """First, stale, duplicate, and overflowing rate rows fail closed."""
+
+    snapshot = tmp_path / "serial.log"
+    snapshot.write_bytes(rate_record + b"OK SMP\r\ncohesix> ")
+
+    result = _run_output_guard_probe(
+        tmp_path,
+        'smp_activity_rate_window "$4" 0',
+        str(snapshot),
+    )
+
+    assert result.returncode != 0
+    assert "smp activity" in result.stderr
 
 
 def test_gateway_continuity_accepts_one_unchanged_authenticated_connection(

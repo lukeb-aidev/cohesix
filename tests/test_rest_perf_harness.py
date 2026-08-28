@@ -15,6 +15,7 @@ import pathlib
 import socket
 import subprocess
 import sys
+import threading
 import time
 import tomllib
 import urllib.error
@@ -38,6 +39,80 @@ rest_perf = importlib.util.module_from_spec(spec)
 assert spec.loader is not None
 sys.modules[spec.name] = rest_perf
 spec.loader.exec_module(rest_perf)
+
+
+def _start_tcp_auth_server(
+    responses: list[str],
+) -> tuple[int, threading.Thread, list[bytes], list[BaseException]]:
+    """Serve one framed auth exchange on a fresh loopback listener."""
+
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(1)
+    listener.settimeout(2.0)
+    port = int(listener.getsockname()[1])
+    requests: list[bytes] = []
+    failures: list[BaseException] = []
+
+    def recv_exact(connection: socket.socket, length: int) -> bytes:
+        payload = bytearray()
+        while len(payload) < length:
+            part = connection.recv(length - len(payload))
+            if not part:
+                raise ConnectionError("auth test client closed a partial frame")
+            payload.extend(part)
+        return bytes(payload)
+
+    def serve() -> None:
+        try:
+            with listener:
+                connection, _address = listener.accept()
+                with connection:
+                    header = recv_exact(connection, 4)
+                    total = int.from_bytes(header, "little")
+                    requests.append(recv_exact(connection, total - 4))
+                    for response in responses:
+                        payload = response.encode("utf-8")
+                        frame = (len(payload) + 4).to_bytes(4, "little") + payload
+                        connection.sendall(frame)
+        except BaseException as exc:  # pragma: no cover - asserted by caller
+            failures.append(exc)
+
+    thread = threading.Thread(target=serve, daemon=True)
+    thread.start()
+    return port, thread, requests, failures
+
+
+def test_validate_tcp_auth_waits_for_exact_terminal_ok() -> None:
+    """An informational AUTH ACK cannot replace the terminal success ACK."""
+
+    port, thread, requests, failures = _start_tcp_auth_server(
+        ["OK AUTH detail=present-token", "OK AUTH"]
+    )
+
+    rest_perf.validate_tcp_auth("127.0.0.1", port, "correct-token", 1.0)
+    thread.join(timeout=2.0)
+
+    assert not thread.is_alive()
+    assert failures == []
+    assert requests == [b"AUTH correct-token"]
+
+
+def test_validate_tcp_auth_rejects_terminal_err_after_information() -> None:
+    """ERR AUTH must fail preflight even after a positive informational ACK."""
+
+    port, thread, requests, failures = _start_tcp_auth_server(
+        ["OK AUTH detail=present-token", "ERR AUTH detail=invalid-token"]
+    )
+
+    with pytest.raises(rest_perf.RestError, match="authentication rejected"):
+        rest_perf.validate_tcp_auth("127.0.0.1", port, "wrong-token", 1.0)
+    thread.join(timeout=2.0)
+
+    assert not thread.is_alive()
+    assert failures == []
+    assert requests == [b"AUTH wrong-token"]
 
 
 class ReadinessClient:

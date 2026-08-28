@@ -10,12 +10,27 @@ import importlib.util
 import io
 import pathlib
 from collections.abc import Iterable
+from types import SimpleNamespace
 
 import pytest
 
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 SCRIPT_PATH = REPO_ROOT / "scripts" / "pi4_serial_reboot.py"
+EXPECTED_GIT_COMMIT = "1" * 40
+EXPECTED_IMAGE_ID = "2" * 64
+EXPECTED_BUILD_ID = "3" * 64
+EXPECTED_BUILD_MARKER_SHA256 = "4" * 64
+EXPECTED_BUILD_MARKER = (
+    f"[BUILD] {EXPECTED_GIT_COMMIT} 2026-08-28T00:00:00Z "
+    f"image-id={EXPECTED_IMAGE_ID} "
+    "features=[kernel:1 bootstrap-trace:1 serial-console:1 net:1 "
+    "net-console:1 qemu-driver-task-smoke:0]"
+)
+SMP_ACTIVITY_RATE_LINE = (
+    b"[smp] activity rates window_ms=17000 cpu_pct=unavailable "
+    b"view=counter-delta task_allocation=multi\n"
+)
 
 SPEC = importlib.util.spec_from_file_location("pi4_serial_reboot", SCRIPT_PATH)
 assert SPEC is not None
@@ -218,10 +233,15 @@ class FakeController:
         label: str,
         stream_prefix: bytes = b"",
     ) -> bytes:
-        del timeout_s, label
+        del timeout_s
         assert self.reads, f"unexpected read for markers {tuple(markers)!r}"
         snapshot = stream_prefix + self.reads.pop(0)
         assert any(pi4_serial_reboot.serial_marker_seen(snapshot, marker) for marker in markers)
+        if (
+            label == "result for smp activity"
+            and b"[smp] activity rates" not in snapshot
+        ):
+            snapshot = SMP_ACTIVITY_RATE_LINE + snapshot
         return snapshot
 
     def drain_for(self, duration_s: float, *, label: str) -> bytes:
@@ -244,6 +264,19 @@ class FakeController:
     ) -> None:
         self.diagnostic_barriers.append(label)
         self.diagnostic_deadlines.append(deadline)
+
+
+def expected_image_identity(*, clean: bool = True) -> SimpleNamespace:
+    """Return the exact nonsecret identity fields consumed by the helper."""
+
+    return SimpleNamespace(
+        source_tree_clean=clean,
+        git_commit=EXPECTED_GIT_COMMIT,
+        build_id=EXPECTED_BUILD_ID,
+        image_id=EXPECTED_IMAGE_ID,
+        build_marker=EXPECTED_BUILD_MARKER,
+        build_marker_sha256=EXPECTED_BUILD_MARKER_SHA256,
+    )
 
 
 class TimeoutOnceController(FakeController):
@@ -684,6 +717,7 @@ def test_wifi_diagnostics_wait_for_supervisor_and_dhcp_before_nettest() -> None:
             b"OK WIFI\ncohesix>",
             b"OK USB\ncohesix>",
             b"OK USB\ncohesix>",
+            b"OK SMP\ncohesix>",
         ]
     )
 
@@ -751,6 +785,7 @@ def test_wifi_failed_supervisor_fails_closed_without_nettest() -> None:
             b"OK WIFI\ncohesix>",
             b"OK USB\ncohesix>",
             b"OK USB\ncohesix>",
+            b"OK SMP\ncohesix>",
         ]
     )
 
@@ -781,6 +816,7 @@ def test_wifi_ready_observation_rejects_later_attempt_before_any_command() -> No
             b"OK WIFI\ncohesix>",
             b"OK USB\ncohesix>",
             b"OK USB\ncohesix>",
+            b"OK SMP\ncohesix>",
             b"OK SMP\ncohesix>",
         ]
     )
@@ -824,6 +860,7 @@ def test_wifi_ready_retraction_waits_for_permanent_before_diagnostics() -> None:
             b"OK WIFI\ncohesix>",
             b"OK USB\ncohesix>",
             b"OK USB\ncohesix>",
+            b"OK SMP\ncohesix>",
         ]
     )
     controller.drain_reads.append(
@@ -849,6 +886,7 @@ def test_wifi_ready_retraction_waits_for_permanent_before_diagnostics() -> None:
         "wifi diag",
         "usb diag",
         "usb status",
+        "smp activity",
     ]
     assert controller.drains[0] == (
         pi4_serial_reboot.WIFI_READY_STABILITY_WINDOW_S,
@@ -903,6 +941,7 @@ def test_wifi_republished_bootstrap_ready_is_rejected() -> None:
             b"OK WIFI\ncohesix>",
             b"OK USB\ncohesix>",
             b"OK USB\ncohesix>",
+            b"OK SMP\ncohesix>",
             b"OK SMP\ncohesix>",
         ]
     )
@@ -967,6 +1006,7 @@ def test_wifi_dhcp_timeout_preserves_later_diagnostics() -> None:
             b"OK WIFI\ncohesix>",
             b"OK USB\ncohesix>",
             b"OK USB\ncohesix>",
+            b"OK SMP\ncohesix>",
         ]
     )
 
@@ -987,11 +1027,13 @@ def test_wifi_dhcp_timeout_preserves_later_diagnostics() -> None:
         "wifi diag",
         "usb diag",
         "usb status",
+        "smp activity",
     ]
     assert controller.dhcp_result_timeout_s is not None
     assert 0 < controller.dhcp_result_timeout_s <= 0.5
     assert controller.diagnostic_deadlines[0] is not None
     assert controller.diagnostic_deadlines[1:] == [
+        None,
         None,
         None,
         None,
@@ -1087,6 +1129,7 @@ def test_diagnostics_reinforce_root_command_terminators() -> None:
             b"OK WIFI\ncohesix>",
             b"OK USB\ncohesix>",
             b"OK USB\ncohesix>",
+            b"OK SMP\ncohesix>",
         ]
     )
 
@@ -1107,9 +1150,20 @@ def test_diagnostics_reinforce_root_command_terminators() -> None:
         "wifi diag",
         "usb diag",
         "usb status",
+        "smp activity",
     ]
     assert controller.public_sent[0] == "netstats"
-    assert controller.reinforced == [True, True, True, True, True, True, True, True]
+    assert controller.reinforced == [
+        True,
+        True,
+        True,
+        True,
+        True,
+        True,
+        True,
+        True,
+        True,
+    ]
     assert controller.diagnostic_barriers == [
         "netstats",
         "smp activity-prefix",
@@ -1119,6 +1173,7 @@ def test_diagnostics_reinforce_root_command_terminators() -> None:
         "wifi diag",
         "usb diag",
         "usb status",
+        "smp activity",
     ]
     assert (
         "nettest async-terminal observed generation=14 "
@@ -1154,6 +1209,7 @@ def test_diagnostics_accept_interleaved_result_marker() -> None:
                 b"ERR NE[local-seat] usb keyboard command-ready "
                 b"action=enable-command-input\nTSTATS reason=policy\ncohesix>"
             ),
+            b"OK SMP\ncohesix>",
             NETTEST_STARTED,
             NETTEST_RESULT,
             NETSTATS_TERMINAL_PASS,
@@ -1172,6 +1228,7 @@ def test_diagnostics_accept_interleaved_result_marker() -> None:
     assert not diagnostics_ok
     assert controller.sent == [
         "netstats",
+        "smp activity",
         "nettest",
         "netstats",
         "usb diag",
@@ -1191,6 +1248,7 @@ def test_diagnostics_accept_prompt_tail_after_result() -> None:
         [
             b"[local-seat] usb keyboard command-ready action=enable-command-input clean_polls=2 no_reply=0 recovery_pending=no\n",
             b"OK NETSTATS\nx>",
+            b"OK SMP\nx>",
             b"OK NETTEST detail=started run_generation=31\nx>",
             NETTEST_RESULT,
             NETTEST_STATUS_PASS + b"OK NETSTATS\nx>",
@@ -1209,13 +1267,22 @@ def test_diagnostics_accept_prompt_tail_after_result() -> None:
     assert diagnostics_ok
     assert controller.sent == [
         "netstats",
+        "smp activity",
         "nettest",
         "netstats",
         "usb diag",
         "usb status",
         "smp activity",
     ]
-    assert controller.diagnostic_deadlines == [None, None, None, None, None, None]
+    assert controller.diagnostic_deadlines == [
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    ]
     assert controller.reads == []
 
 
@@ -1226,13 +1293,14 @@ def test_diagnostics_run_active_usb_probe_only_when_requested() -> None:
         [
             b"[local-seat] usb keyboard command-ready action=enable-command-input\n",
             b"OK NETSTATS\ncohesix>",
+            b"OK SMP\ncohesix>",
             NETTEST_STARTED,
             NETTEST_RESULT,
             NETSTATS_TERMINAL_PASS,
             b"OK USB\ncohesix>",
             b"OK USB\ncohesix>",
-            b"OK SMP\ncohesix>",
             b"OK USB\ncohesix>",
+            b"OK SMP\ncohesix>",
         ]
     )
 
@@ -1246,12 +1314,13 @@ def test_diagnostics_run_active_usb_probe_only_when_requested() -> None:
     assert diagnostics_ok
     assert controller.sent == [
         "netstats",
+        "smp activity",
         "nettest",
         "netstats",
         "usb diag",
         "usb status",
-        "smp activity",
         "usb probe-kbd",
+        "smp activity",
     ]
 
 
@@ -1261,6 +1330,7 @@ def test_diagnostics_accept_command_ready_seen_during_settle_drain() -> None:
     controller = FakeController(
         [
             b"OK NETSTATS\ncohesix>",
+            b"OK SMP\ncohesix>",
             NETTEST_STARTED,
             NETTEST_RESULT,
             NETSTATS_TERMINAL_PASS,
@@ -1283,6 +1353,7 @@ def test_diagnostics_accept_command_ready_seen_during_settle_drain() -> None:
     assert diagnostics_ok
     assert controller.sent == [
         "netstats",
+        "smp activity",
         "nettest",
         "netstats",
         "usb diag",
@@ -1303,6 +1374,7 @@ def test_diagnostics_do_not_wait_for_consumed_prompt_after_ok() -> None:
         [
             b"[local-seat] usb keyboard command-ready action=enable-command-input clean_polls=2 no_reply=0 recovery_pending=no\n",
             b"OK NETSTATS\ncohesix>",
+            b"OK SMP\ncohesix>",
             NETTEST_STARTED,
             NETTEST_RESULT,
             NETSTATS_TERMINAL_PASS,
@@ -1316,6 +1388,7 @@ def test_diagnostics_do_not_wait_for_consumed_prompt_after_ok() -> None:
 
     assert controller.sent == [
         "netstats",
+        "smp activity",
         "nettest",
         "netstats",
         "usb diag",
@@ -1344,6 +1417,7 @@ def test_diagnostics_reject_gate_eight_keyboard_markers_as_command_ready() -> No
                 b"usb: runtime_gate keyboard=yes first_report=yes first_byte=yes\n"
             ),
             b"OK NETSTATS\ncohesix>",
+            b"OK SMP\ncohesix>",
             NETTEST_STARTED,
             NETTEST_RESULT,
             NETSTATS_TERMINAL_PASS,
@@ -1357,6 +1431,7 @@ def test_diagnostics_reject_gate_eight_keyboard_markers_as_command_ready() -> No
 
     assert controller.sent == [
         "netstats",
+        "smp activity",
         "nettest",
         "netstats",
         "usb diag",
@@ -1380,6 +1455,7 @@ def test_diagnostics_barrier_replaces_prompt_wait_after_result() -> None:
         [
             b"[local-seat] usb keyboard command-ready action=enable-command-input clean_polls=2 no_reply=0 recovery_pending=no\n",
             b"OK NETSTATS\n",
+            b"OK SMP\ncohesix>",
             NETTEST_STARTED,
             NETTEST_RESULT,
             NETSTATS_TERMINAL_PASS,
@@ -1393,6 +1469,7 @@ def test_diagnostics_barrier_replaces_prompt_wait_after_result() -> None:
 
     assert controller.sent == [
         "netstats",
+        "smp activity",
         "nettest",
         "netstats",
         "usb diag",
@@ -1401,6 +1478,7 @@ def test_diagnostics_barrier_replaces_prompt_wait_after_result() -> None:
     ]
     assert controller.diagnostic_barriers == [
         "netstats",
+        "smp activity-prefix",
         "nettest",
         "netstats-final",
         "usb diag",
@@ -1416,6 +1494,7 @@ def test_diagnostics_continue_when_command_ready_never_arrives() -> None:
     controller = TimeoutOnceController(
         [
             b"OK NETSTATS\ncohesix>",
+            b"OK SMP\ncohesix>",
             NETTEST_STARTED,
             NETTEST_RESULT,
             NETSTATS_TERMINAL_PASS,
@@ -1429,6 +1508,7 @@ def test_diagnostics_continue_when_command_ready_never_arrives() -> None:
 
     assert controller.sent == [
         "netstats",
+        "smp activity",
         "nettest",
         "netstats",
         "usb diag",
@@ -1572,6 +1652,77 @@ def test_nettest_status_parser_requires_complete_compact_terminal() -> None:
     ) == (0, 0, False, "none")
 
 
+def test_smp_activity_rate_parser_requires_one_positive_delta_window() -> None:
+    """A first, stale, duplicate, or overflowing sample is not rate evidence."""
+
+    assert (
+        pi4_serial_reboot.parse_smp_activity_rate_window(SMP_ACTIVITY_RATE_LINE)
+        == 17_000
+    )
+    assert (
+        pi4_serial_reboot.parse_smp_activity_rate_window(
+            b"[smp] activity rates window_"
+            b"[local-seat] redraw=deferred\n"
+            b"ms=17000 cpu_pct=unavailable view=counter-delta "
+            b"task_allocation=multi\n"
+        )
+        == 17_000
+    )
+    for invalid in (
+        b"[smp] activity rates sample=first run_again=yes cpu_pct=unavailable\n",
+        b"[smp] activity rates window_ms=0 status=stale "
+        b"run_again=yes cpu_pct=unavailable\n",
+        SMP_ACTIVITY_RATE_LINE + SMP_ACTIVITY_RATE_LINE,
+        SMP_ACTIVITY_RATE_LINE.replace(b"17000", str(1 << 64).encode("ascii")),
+    ):
+        assert pi4_serial_reboot.parse_smp_activity_rate_window(invalid) is None
+
+
+def test_diagnostics_fail_when_second_smp_sample_has_no_rate_window() -> None:
+    """A second first/stale sample cannot silently become performance telemetry."""
+
+    class MissingRateController(FakeController):
+        def read_until(
+            self,
+            markers: Iterable[bytes],
+            timeout_s: float,
+            *,
+            label: str,
+            stream_prefix: bytes = b"",
+        ) -> bytes:
+            snapshot = super().read_until(
+                markers,
+                timeout_s,
+                label=label,
+                stream_prefix=stream_prefix,
+            )
+            if label == "result for smp activity":
+                return snapshot.replace(SMP_ACTIVITY_RATE_LINE, b"")
+            return snapshot
+
+    controller = MissingRateController(
+        [
+            b"[local-seat] usb keyboard command-ready "
+            b"action=enable-command-input\n",
+            NETSTATS_OK,
+            b"OK SMP\ncohesix>",
+            NETTEST_STARTED,
+            NETTEST_RESULT,
+            NETSTATS_TERMINAL_PASS,
+            b"OK USB\ncohesix>",
+            b"OK USB\ncohesix>",
+            b"OK SMP\ncohesix>",
+        ]
+    )
+
+    assert not pi4_serial_reboot.run_diagnostics(
+        controller,
+        "genet",
+        prompt_ready=True,
+    )
+    assert "smp-activity:rate-window-invalid" in controller.notes[-1]
+
+
 def test_diagnostics_capture_final_netstats_after_nettest_error() -> None:
     """A refused self-test is terminal but still requires final counter capture."""
 
@@ -1579,6 +1730,7 @@ def test_diagnostics_capture_final_netstats_after_nettest_error() -> None:
         [
             b"[local-seat] usb keyboard command-ready action=enable-command-input\n",
             NETSTATS_OK,
+            b"OK SMP\ncohesix>",
             b"ERR NETTEST reason=policy detail=dhcp-pending\ncohesix>",
             NETSTATS_OK,
             b"OK USB\ncohesix>",
@@ -1596,6 +1748,7 @@ def test_diagnostics_capture_final_netstats_after_nettest_error() -> None:
     assert not diagnostics_ok
     assert controller.sent == [
         "netstats",
+        "smp activity",
         "nettest",
         "netstats",
         "usb diag",
@@ -1604,8 +1757,8 @@ def test_diagnostics_capture_final_netstats_after_nettest_error() -> None:
     ]
     assert controller.diagnostic_barriers[:3] == [
         "netstats",
+        "smp activity-prefix",
         "nettest",
-        "netstats-final",
     ]
     assert not any(note.startswith("nettest terminal") for note in controller.notes)
     assert (
@@ -1621,6 +1774,7 @@ def test_diagnostics_accept_netstats_terminal_without_async_log() -> None:
         [
             b"[local-seat] usb keyboard command-ready action=enable-command-input\n",
             NETSTATS_OK,
+            b"OK SMP\ncohesix>",
             NETTEST_STARTED,
             NETSTATS_TERMINAL_PASS,
             b"OK USB\ncohesix>",
@@ -1653,6 +1807,7 @@ def test_diagnostics_reject_netstats_run_generation_mismatch() -> None:
         [
             b"[local-seat] usb keyboard command-ready action=enable-command-input\n",
             NETSTATS_OK,
+            b"OK SMP\ncohesix>",
             NETTEST_STARTED,
             NETSTATS_TERMINAL_PASS.replace(
                 b"run_generation=31",
@@ -1673,6 +1828,7 @@ def test_diagnostics_reject_netstats_run_generation_mismatch() -> None:
     assert not diagnostics_ok
     assert controller.sent == [
         "netstats",
+        "smp activity",
         "nettest",
         "netstats",
         "usb diag",
@@ -1696,6 +1852,7 @@ def test_diagnostics_reject_async_and_netstats_generation_mismatch() -> None:
         [
             b"[local-seat] usb keyboard command-ready action=enable-command-input\n",
             NETSTATS_OK,
+            b"OK SMP\ncohesix>",
             NETTEST_STARTED,
             NETTEST_RESULT,
             NETSTATS_TERMINAL_PASS.replace(
@@ -1740,6 +1897,7 @@ def test_diagnostics_reject_async_and_netstats_result_mismatch() -> None:
         [
             b"[local-seat] usb keyboard command-ready action=enable-command-input\n",
             NETSTATS_OK,
+            b"OK SMP\ncohesix>",
             NETTEST_STARTED,
             NETTEST_RESULT,
             terminal_failure,
@@ -1775,6 +1933,7 @@ def test_diagnostics_continue_after_generation_tagged_nettest_failure() -> None:
         [
             b"[local-seat] usb keyboard command-ready action=enable-command-input\n",
             NETSTATS_OK,
+            b"OK SMP\ncohesix>",
             NETTEST_STARTED,
             NETTEST_FAILURE_RESULT,
             NETSTATS_TERMINAL_FAILURE,
@@ -1793,6 +1952,7 @@ def test_diagnostics_continue_after_generation_tagged_nettest_failure() -> None:
     assert not diagnostics_ok
     assert controller.sent == [
         "netstats",
+        "smp activity",
         "nettest",
         "netstats",
         "usb diag",
@@ -1809,6 +1969,172 @@ def test_diagnostics_continue_after_generation_tagged_nettest_failure() -> None:
     ) in controller.notes
 
 
+def test_exact_build_marker_binds_boot_and_reuses_same_snapshot_prompt() -> None:
+    """The exact sidecar marker, not its generic prefix, admits diagnostics."""
+
+    controller = FakeController(
+        [(EXPECTED_BUILD_MARKER + "\ncohesix> ").encode("ascii")]
+    )
+
+    snapshot, prompt_ready = pi4_serial_reboot.require_exact_build_marker(
+        controller,
+        EXPECTED_BUILD_MARKER,
+        1.0,
+    )
+
+    assert EXPECTED_BUILD_MARKER.encode("ascii") in snapshot
+    assert prompt_ready
+
+
+def test_exact_build_marker_matches_across_serial_chunks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The exact marker remains matchable when one UART read splits it."""
+
+    controller, output = redaction_controller(b"secret-ticket")
+    encoded = EXPECTED_BUILD_MARKER.encode("ascii")
+
+    class MarkerSerial:
+        def __init__(self) -> None:
+            split = len(encoded) // 2
+            self.reads = [encoded[:split], encoded[split:] + b"\ncohesix> "]
+
+        def read(self, _size: int) -> bytes:
+            return self.reads.pop(0) if self.reads else b""
+
+    controller._serial = MarkerSerial()
+    times = iter((0.0, 0.0, 0.0))
+    monkeypatch.setattr(pi4_serial_reboot.time, "monotonic", lambda: next(times))
+
+    snapshot, prompt_ready = pi4_serial_reboot.require_exact_build_marker(
+        controller,
+        EXPECTED_BUILD_MARKER,
+        1.0,
+    )
+
+    assert snapshot == encoded + b"\ncohesix> "
+    assert output.getvalue() == snapshot
+    assert prompt_ready
+
+
+def test_exact_build_marker_rejects_correct_marker_after_root_prompt() -> None:
+    """A late exact marker cannot retroactively bind an already-ready boot."""
+
+    controller = FakeController(
+        [("cohesix> \n" + EXPECTED_BUILD_MARKER).encode("ascii")]
+    )
+
+    with pytest.raises(RuntimeError, match="before the expected sealed build marker"):
+        pi4_serial_reboot.require_exact_build_marker(
+            controller,
+            EXPECTED_BUILD_MARKER,
+            1.0,
+        )
+
+
+@pytest.mark.parametrize(
+    "observed_marker",
+    (
+        "[BUILD] stale-image",
+        EXPECTED_BUILD_MARKER.replace(EXPECTED_IMAGE_ID, "5" * 64),
+    ),
+)
+def test_exact_build_marker_rejects_wrong_image_before_root(
+    observed_marker: str,
+) -> None:
+    """A generic or same-source marker with another image ID fails closed."""
+
+    controller = FakeController([(observed_marker + "\ncohesix> ").encode("ascii")])
+
+    with pytest.raises(RuntimeError, match="before the expected sealed build marker"):
+        pi4_serial_reboot.require_exact_build_marker(
+            controller,
+            EXPECTED_BUILD_MARKER,
+            1.0,
+        )
+
+
+def test_image_identity_loader_rejects_dirty_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: pathlib.Path,
+) -> None:
+    """A dirty staged identity cannot authorize a physical diagnostic run."""
+
+    monkeypatch.setattr(
+        pi4_serial_reboot.pi4_image_identity,
+        "read_metadata",
+        lambda _path: expected_image_identity(clean=False),
+    )
+
+    with pytest.raises(RuntimeError, match="does not name a clean source tree"):
+        pi4_serial_reboot.load_expected_image_identity(
+            REPO_ROOT,
+            tmp_path / "pi4-image-identity.json",
+        )
+
+
+def test_image_identity_loader_rejects_malformed_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: pathlib.Path,
+) -> None:
+    """Canonical sidecar validation errors remain fatal before serial opens."""
+
+    def reject_metadata(_path: pathlib.Path) -> None:
+        raise pi4_serial_reboot.pi4_image_identity.ImageIdentityError(
+            "metadata canonical build ID is invalid"
+        )
+
+    monkeypatch.setattr(
+        pi4_serial_reboot.pi4_image_identity,
+        "read_metadata",
+        reject_metadata,
+    )
+
+    with pytest.raises(RuntimeError, match="invalid Pi image identity metadata"):
+        pi4_serial_reboot.load_expected_image_identity(
+            REPO_ROOT,
+            tmp_path / "pi4-image-identity.json",
+        )
+
+
+def test_run_validates_identity_before_opening_serial(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: pathlib.Path,
+) -> None:
+    """Malformed identity metadata cannot acquire or disturb the UART."""
+
+    class Args:
+        repo = REPO_ROOT
+        image_identity_metadata = tmp_path / "pi4-image-identity.json"
+        log = tmp_path / "serial.log"
+
+    serial_constructed = False
+
+    def construct_serial(*_args: object, **_kwargs: object) -> None:
+        nonlocal serial_constructed
+        serial_constructed = True
+        raise AssertionError("serial must not open before identity validation")
+
+    def reject_identity(*_args: object) -> None:
+        raise RuntimeError("invalid identity")
+
+    monkeypatch.setattr(pi4_serial_reboot, "parse_args", Args)
+    monkeypatch.setattr(
+        pi4_serial_reboot,
+        "load_expected_image_identity",
+        reject_identity,
+    )
+    monkeypatch.setattr(
+        pi4_serial_reboot,
+        "RedactingSerialController",
+        construct_serial,
+    )
+
+    with pytest.raises(RuntimeError, match="invalid identity"):
+        pi4_serial_reboot.run()
+    assert not serial_constructed
+
+
 def test_run_returns_nonzero_after_diagnostic_failure(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: pathlib.Path,
@@ -1818,6 +2144,7 @@ def test_run_returns_nonzero_after_diagnostic_failure(
     class Args:
         lane = "genet"
         log = tmp_path / "serial.log"
+        image_identity_metadata = tmp_path / "pi4-image-identity.json"
         repo = REPO_ROOT
         port = "serial-test"
         baud = 115_200
@@ -1829,7 +2156,9 @@ def test_run_returns_nonzero_after_diagnostic_failure(
 
     class RunController(FakeController):
         def __init__(self, *_args: object, **_kwargs: object) -> None:
-            super().__init__([b"[BUILD]", b"cohesix>"])
+            super().__init__(
+                [EXPECTED_BUILD_MARKER.encode("ascii") + b"\ncohesix", b"> "]
+            )
             self.closed = False
 
         def close(self) -> None:
@@ -1837,6 +2166,11 @@ def test_run_returns_nonzero_after_diagnostic_failure(
 
     controller = RunController()
     monkeypatch.setattr(pi4_serial_reboot, "parse_args", Args)
+    monkeypatch.setattr(
+        pi4_serial_reboot,
+        "load_expected_image_identity",
+        lambda *_args: expected_image_identity(),
+    )
     monkeypatch.setattr(
         pi4_serial_reboot,
         "RedactingSerialController",
@@ -1851,6 +2185,16 @@ def test_run_returns_nonzero_after_diagnostic_failure(
 
     assert pi4_serial_reboot.run() == 1
     assert controller.closed
+    assert any(
+        note == (
+            "image identity matched "
+            f"git_commit={EXPECTED_GIT_COMMIT} "
+            f"build_id={EXPECTED_BUILD_ID} "
+            f"image_id={EXPECTED_IMAGE_ID} "
+            f"build_marker_sha256={EXPECTED_BUILD_MARKER_SHA256}"
+        )
+        for note in controller.notes
+    )
     assert "complete result=diagnostic-failure exit=1" in controller.notes
 
 

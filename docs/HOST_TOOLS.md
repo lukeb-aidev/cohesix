@@ -52,15 +52,16 @@ rows nor their before/after delta is passive performance or acceptance proof.
 
 The complete `coh` and `cohsh` implementations, `coh-status`, Hive Gateway/REST,
 SwarmUI, GPU bridge, host-ticket agent, sidecar, sidecar bus, CAS tool,
-`tools/cohesix-py`, generated-profile consumers, every `.coh` script,
-`pi4_serial_reboot.py`, the Pi gate wrapper, REST performance harness, driver
+`tools/cohesix-py`, generated-profile consumers, every `.coh` script, driver
 model comparator, M26e pressure runner, benchmark workloads, and report schemas
-were reviewed and require no hand-authored compatibility change. The benchmark
-harness continues to validate the same-boot private direct-GENET handoff
-terminal and reject later fault, poison, or containment evidence; its workload
-and report schema do not change. Pi build selection and generated private
-ABI/resource records remain unchanged by this diagnostic. A fresh physical
-benchmark is still the only Pi performance authority.
+were reviewed and require no hand-authored compatibility change. The Pi gate
+wrapper now requires an exact same-generation `nettest` terminal after its
+bounded observation window; `pi4_serial_reboot.py` requires the clean staged
+identity sidecar and exact sealed marker and takes two activity samples; the
+REST performance harness accepts only terminal `OK AUTH`. These are bounded
+host evidence-truth changes, not wire, workload, or report-schema changes. Pi
+build selection and generated private ABI/resource records remain unchanged.
+A fresh physical benchmark is still the only Pi performance authority.
 
 ## Choose one live topology
 
