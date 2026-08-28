@@ -919,6 +919,48 @@ def test_cli_publishes_v2_provenance_and_verifies_sidecar(
             str(cpio_path),
         ]
     ) == 0
+    verified = json.loads(capsys.readouterr().out)
+    assert verified["path"] == str(image_path.resolve())
+
+
+def test_verify_metadata_accepts_equivalent_relative_image_path(
+    tmp_path: pathlib.Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Strict metadata canonicalizes equivalent spellings of one image path."""
+
+    image_path, root_path, cpio_path = write_packaging_fixture(
+        tmp_path, sealed=True
+    )
+    metadata_path = tmp_path / "pi4-image-identity.json"
+    assert identity.main(
+        publish_args(image_path.resolve(), metadata_path, root_path, cpio_path)
+    ) == 0
+    metadata_record = json.loads(metadata_path.read_text(encoding="utf-8"))
+    capsys.readouterr()
+    (tmp_path / "nested").mkdir()
+    monkeypatch.chdir(tmp_path)
+
+    assert identity.main(
+        [
+            "verify-metadata",
+            "--image",
+            str(pathlib.Path("nested") / ".." / image_path.name),
+            "--metadata",
+            str(metadata_path),
+            "--expected-git-commit",
+            FULL_COMMIT,
+            "--expected-build-id",
+            metadata_record["build_id"],
+            "--expected-root-elf",
+            str(root_path),
+            "--expected-root-cpio",
+            str(cpio_path),
+        ]
+    ) == 0
+    verified = json.loads(capsys.readouterr().out)
+    assert verified["path"] == str(image_path.resolve())
 
 
 @pytest.mark.parametrize(

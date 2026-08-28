@@ -230,6 +230,13 @@ marker and `pi4-image-identity.json`. The marker content-binds the complete
 boot-script, firmware, saved policy, or other partition files, which remain
 separate entries in the flash ledger.
 
+Identity-v2 records the image's canonical resolved `path`; equivalent relative,
+absolute, or normalized `..` spellings that resolve to that same file verify
+without weakening its device, inode, size, timestamp, CRC, hash, marker, or
+root-archive checks. The schema remains v2 because canonical Pi builds already
+publish that same absolute path, so this alias-verification repair leaves their
+metadata bytes unchanged and changes no benchmark report schema.
+
 ### 2. Verify the Flash Target
 
 Flashing is destructive. Identify both the whole removable medium and its exact

@@ -486,7 +486,7 @@ def inspect_image(path: Path) -> ImageIdentity:
     snapshot = read_stable_regular_file(path)
     return inspect_image_bytes(
         snapshot.data,
-        path=str(path),
+        path=snapshot.resolved_path,
         device=snapshot.device,
         inode=snapshot.inode,
         mtime_ns=snapshot.mtime_ns,

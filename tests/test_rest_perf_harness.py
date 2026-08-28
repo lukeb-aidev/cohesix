@@ -5794,16 +5794,47 @@ def test_pi_archive_validator_rejects_validation_time_mutation(
     assert len(calls) == 2
 
 
+def write_pi_image_validator_fixture(
+    tmp_path: pathlib.Path,
+) -> tuple[
+    tuple[pathlib.Path, pathlib.Path, pathlib.Path, pathlib.Path],
+    bytes,
+]:
+    """Write exact files and v2 stat fields for a mocked canonical verifier."""
+
+    paths = (
+        tmp_path / "image",
+        tmp_path / "metadata.json",
+        tmp_path / "rootserver",
+        tmp_path / "root.cpio",
+    )
+    for index, path in enumerate(paths):
+        if index != 1:
+            path.write_bytes(f"artifact-{index}".encode("ascii"))
+    image_metadata = paths[0].stat()
+    metadata_raw = (
+        json.dumps(
+            {
+                "schema": "cohesix-pi4-image-identity/v2",
+                "device": image_metadata.st_dev,
+                "inode": image_metadata.st_ino,
+                "size_bytes": image_metadata.st_size,
+                "mtime_ns": image_metadata.st_mtime_ns,
+                "ctime_ns": image_metadata.st_ctime_ns,
+            },
+            sort_keys=True,
+        )
+        + "\n"
+    ).encode("utf-8")
+    paths[1].write_bytes(metadata_raw)
+    return paths, metadata_raw
+
+
 def test_pi_image_validator_rejects_validation_time_mutation(
     tmp_path: pathlib.Path,
     monkeypatch,
 ) -> None:
-    paths = [
-        tmp_path / name
-        for name in ("image", "metadata.json", "rootserver", "root.cpio")
-    ]
-    for index, path in enumerate(paths):
-        path.write_bytes(f"artifact-{index}".encode("ascii"))
+    paths, metadata_raw = write_pi_image_validator_fixture(tmp_path)
 
     def validate(command, **_kwargs):
         paths[0].write_bytes(b"mutated-image")
@@ -5815,7 +5846,100 @@ def test_pi_image_validator_rejects_validation_time_mutation(
             str(paths[0]),
             b"artifact-0",
             str(paths[1]),
-            b"artifact-1",
+            metadata_raw,
+            str(paths[2]),
+            b"artifact-2",
+            str(paths[3]),
+            b"artifact-3",
+            "1" * 40,
+            "2" * 64,
+        )
+
+
+def test_pi_image_validator_uses_original_exact_paths(
+    tmp_path: pathlib.Path,
+    monkeypatch,
+) -> None:
+    """The v2 verifier must inspect the inode-bound staged files, not copies."""
+
+    paths, metadata_raw = write_pi_image_validator_fixture(tmp_path)
+    observed: list[tuple[str, ...]] = []
+
+    def validate(command, **_kwargs):
+        observed.append(command)
+        return subprocess.CompletedProcess(command, 0, b"", b"")
+
+    monkeypatch.setattr(rest_perf.subprocess, "run", validate)
+    rest_perf.validate_pi_image_identity(
+        str(paths[0]),
+        b"artifact-0",
+        str(paths[1]),
+        metadata_raw,
+        str(paths[2]),
+        b"artifact-2",
+        str(paths[3]),
+        b"artifact-3",
+        "1" * 40,
+        "2" * 64,
+    )
+
+    assert len(observed) == 1
+    command = observed[0]
+    assert command[command.index("--image") + 1] == str(paths[0])
+    assert command[command.index("--metadata") + 1] == str(paths[1])
+    assert command[command.index("--expected-root-elf") + 1] == str(paths[2])
+    assert command[command.index("--expected-root-cpio") + 1] == str(paths[3])
+
+
+def test_pi_image_validator_rejects_prevalidation_input_drift(
+    tmp_path: pathlib.Path,
+    monkeypatch,
+) -> None:
+    """Previously captured bytes must still match before v2 verification."""
+
+    paths, metadata_raw = write_pi_image_validator_fixture(tmp_path)
+    paths[0].write_bytes(b"mutated-before-validation")
+
+    def unexpected_validate(*_args, **_kwargs):
+        pytest.fail("drifted input must be rejected before the verifier runs")
+
+    monkeypatch.setattr(rest_perf.subprocess, "run", unexpected_validate)
+    with pytest.raises(rest_perf.RestError, match="changed during evidence validation"):
+        rest_perf.validate_pi_image_identity(
+            str(paths[0]),
+            b"artifact-0",
+            str(paths[1]),
+            metadata_raw,
+            str(paths[2]),
+            b"artifact-2",
+            str(paths[3]),
+            b"artifact-3",
+            "1" * 40,
+            "2" * 64,
+        )
+
+
+def test_pi_image_validator_rejects_same_bytes_on_a_new_inode(
+    tmp_path: pathlib.Path,
+    monkeypatch,
+) -> None:
+    """An atomic same-byte replacement cannot retain staged image identity."""
+
+    paths, metadata_raw = write_pi_image_validator_fixture(tmp_path)
+
+    def replace_with_same_bytes(command, **_kwargs):
+        replacement = tmp_path / "replacement-image"
+        replacement.write_bytes(paths[0].read_bytes())
+        os.replace(replacement, paths[0])
+        return subprocess.CompletedProcess(command, 0, b"", b"")
+
+    monkeypatch.setattr(rest_perf.subprocess, "run", replace_with_same_bytes)
+    with pytest.raises(rest_perf.RestError, match="stat identity changed"):
+        rest_perf.validate_pi_image_identity(
+            str(paths[0]),
+            b"artifact-0",
+            str(paths[1]),
+            metadata_raw,
             str(paths[2]),
             b"artifact-2",
             str(paths[3]),

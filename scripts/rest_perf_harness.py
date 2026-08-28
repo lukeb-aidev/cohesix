@@ -2406,57 +2406,21 @@ def validate_pi_image_identity(
 ) -> None:
     """Run the canonical sealed-wrapper verifier and reject input drift."""
 
-    with tempfile.TemporaryDirectory(prefix="cohesix-pi-image-") as temporary:
-        frozen_root = pathlib.Path(os.path.realpath(temporary))
-        frozen_inputs = (
-            ("image", image_raw, BENCHMARK_IMAGE_MAX_BYTES),
-            ("metadata.json", metadata_raw, BENCHMARK_EVIDENCE_MAX_BYTES),
-            ("rootserver", root_raw, BENCHMARK_EVIDENCE_MAX_BYTES),
-            ("root.cpio", root_cpio_raw, BENCHMARK_EVIDENCE_MAX_BYTES),
-        )
-        for name, raw, _maximum in frozen_inputs:
-            (frozen_root / name).write_bytes(raw)
-        command = (
-            sys.executable,
-            str(pathlib.Path(__file__).with_name("pi4_image_identity.py")),
-            "verify-metadata",
-            "--image",
-            str(frozen_root / "image"),
-            "--metadata",
-            str(frozen_root / "metadata.json"),
-            "--expected-git-commit",
-            git_commit,
-            "--expected-build-id",
-            build_id,
-            "--expected-root-elf",
-            str(frozen_root / "rootserver"),
-            "--expected-root-cpio",
-            str(frozen_root / "root.cpio"),
-        )
-        try:
-            result = subprocess.run(
-                command,
-                check=False,
-                capture_output=True,
-                timeout=120,
-            )
-        except (OSError, subprocess.TimeoutExpired) as exc:
-            raise RestError("cannot validate canonical Pi image identity") from exc
-        if result.returncode != 0:
-            detail = result.stderr.decode("utf-8", errors="replace").strip()
-            raise RestError(f"canonical Pi image identity validation failed: {detail}")
-        require_exact_artifact_bytes(
-            tuple(
-                (
-                    str(frozen_root / name),
-                    raw,
-                    f"frozen Pi image validator input {name}",
-                    maximum,
-                )
-                for name, raw, maximum in frozen_inputs
-            )
-        )
-    for path_value, expected_raw, label, maximum in (
+    identity_metadata = parse_strict_json_object(
+        metadata_raw, "Pi image identity metadata"
+    )
+    stat_fields = (
+        "device",
+        "inode",
+        "size_bytes",
+        "mtime_ns",
+        "ctime_ns",
+    )
+    if identity_metadata.get("schema") != "cohesix-pi4-image-identity/v2" or any(
+        type(identity_metadata.get(field)) is not int for field in stat_fields
+    ):
+        raise RestError("Pi image identity metadata has invalid staged stat identity")
+    exact_inputs = (
         (image_path, image_raw, "Pi staged image", BENCHMARK_IMAGE_MAX_BYTES),
         (
             metadata_path,
@@ -2471,10 +2435,63 @@ def validate_pi_image_identity(
             "Pi root CPIO",
             BENCHMARK_EVIDENCE_MAX_BYTES,
         ),
-    ):
-        observed_raw, _metadata = read_frozen_artifact(path_value, label, maximum)
+    )
+    require_exact_artifact_bytes(exact_inputs)
+    command = (
+        sys.executable,
+        str(pathlib.Path(__file__).with_name("pi4_image_identity.py")),
+        "verify-metadata",
+        "--image",
+        image_path,
+        "--metadata",
+        metadata_path,
+        "--expected-git-commit",
+        git_commit,
+        "--expected-build-id",
+        build_id,
+        "--expected-root-elf",
+        root_path,
+        "--expected-root-cpio",
+        root_cpio_path,
+    )
+    try:
+        result = subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            timeout=120,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise RestError("cannot validate canonical Pi image identity") from exc
+    if result.returncode != 0:
+        detail = result.stderr.decode("utf-8", errors="replace").strip()
+        raise RestError(f"canonical Pi image identity validation failed: {detail}")
+    for path_value, expected_raw, label, maximum in exact_inputs[1:]:
+        observed_raw, _observed_metadata = read_frozen_artifact(
+            path_value, label, maximum
+        )
         if observed_raw != expected_raw:
             raise RestError(f"{label} changed during canonical validation")
+    image_path_value, expected_image_raw, image_label, image_maximum = exact_inputs[0]
+    observed_image_raw, observed_image_metadata = read_frozen_artifact(
+        image_path_value, image_label, image_maximum
+    )
+    if observed_image_raw != expected_image_raw:
+        raise RestError(f"{image_label} changed during canonical validation")
+    observed_stat = {
+        "device": observed_image_metadata.st_dev,
+        "inode": observed_image_metadata.st_ino,
+        "size_bytes": observed_image_metadata.st_size,
+        "mtime_ns": observed_image_metadata.st_mtime_ns,
+        "ctime_ns": observed_image_metadata.st_ctime_ns,
+    }
+    if any(
+        identity_metadata.get(field) != observed_stat[field]
+        for field in stat_fields
+    ):
+        raise RestError(
+            "Pi staged image stat identity changed during canonical validation"
+        )
 
 
 def require_current_artifact(
