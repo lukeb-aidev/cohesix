@@ -12816,6 +12816,51 @@ Implementation requirements:
   floor, system/GPU/provider conformance, federation closure, and the
   fail-closed classification used by every use case.
 
+### 2b) Jetson Orin Nano live reference profile
+**Purpose:** Make the physical-GPU and Jetson provider lanes executable on the
+current ARM64 edge reference without pretending that datacenter-only features
+exist on the device.
+
+Implementation requirements:
+- Add a generated `jetson-orin-nano-jp7` host profile whose initial accepted
+  reference is Jetson Orin Nano 8GB, AArch64 Ubuntu 24.04, Jetson Linux/L4T
+  39.2.1, JetPack 7.2.1, CUDA 13.2.1, compute capability 8.7, and the exact
+  installed NVIDIA package/runtime versions captured by conformance evidence.
+  These values identify this reference, not open-ended compatibility bounds;
+  another JetPack/L4T combination requires its own tested profile or typed
+  unavailable status.
+- Treat Orin Nano memory as shared system/GPU memory. Discovery records total
+  device-visible memory, current free memory, reserved host headroom, admitted
+  bytes, and the observation time/TTL. Workload admission uses the bounded
+  available budget, never the marketed 8GB module size or a stale inventory
+  value.
+- The Orin Nano reference has one physical CUDA device and no MIG, DLA, or PVA.
+  MIG discovery and execution must return generated `not_supported` for this
+  profile and cannot block the physical-GPU lane or produce MIG evidence. DLA
+  and PVA are not GPU-workload fallbacks.
+- NVML feature limitations are expected on this profile. Inventory and doctor
+  must exercise the deterministic NVML-to-CUDA fallback and still report exact
+  driver/runtime, memory, SM count, and device identity. CUDA 13 sonames and the
+  unversioned toolkit symlink must be covered without removing older supported
+  CUDA profiles.
+- Record read-only Jetson board identity, L4T/JetPack package versions, active
+  power mode, clocks, throttling/thermal state, kernel, NVIDIA container
+  runtime, and NVMe-backed model/cache/runtime roots. Conformance must not
+  change `nvpmodel`, force clocks, restart networking/VNC, or reboot the host
+  unless a separately selected disruptive test profile explicitly authorizes
+  and restores that state.
+- Run real bounded vector-add and matrix-multiply references from NVMe-backed
+  CAS/build storage. Live negative coverage includes wrong-device, over-budget
+  memory admission, timeout, cancel, revoke, bridge restart, stale inventory,
+  and output-hash mismatch. It must not deliberately exhaust the Nano's shared
+  RAM; CUDA OOM mapping uses an isolated memory-capped child or deterministic
+  fault injection, while the live oversized request is rejected before
+  allocation.
+- Keep native-process and NVIDIA-container execution as separate provider
+  observations. A selected container lane pins the image digest and proves GPU
+  access through the installed NVIDIA Container Runtime; container presence or
+  `docker info` alone is not CUDA execution evidence.
+
 ### 3) Read visibility classification
 **Purpose:** Ensure read-only projections do not leak cross-caller state.
 
@@ -12954,6 +12999,8 @@ Implementation requirements:
 - `scripts/ci/provider_conformance_run.sh --matrix configs/provider_conformance.toml --state-dir out/provider-conformance/m28b`
 - `scripts/ci/provider_conformance_run.sh --native-providers --matrix configs/provider_conformance.toml --state-dir out/provider-conformance/m28b-native`
 - `scripts/ci/provider_conformance_run.sh --provider gpu.workload --matrix configs/provider_conformance.toml --state-dir out/provider-conformance/m28b-gpu-workload`
+- `scripts/ci/provider_conformance_run.sh --provider jetson --host-profile jetson-orin-nano-jp7 --live-reference --matrix configs/provider_conformance.toml --state-dir out/provider-conformance/m28b-jetson-orin`
+- `scripts/ci/provider_conformance_run.sh --provider gpu.workload --host-profile jetson-orin-nano-jp7 --live-reference --matrix configs/provider_conformance.toml --state-dir out/provider-conformance/m28b-jetson-gpu`
 - `scripts/ci/provider_conformance_run.sh --perf-only --matrix configs/provider_conformance.toml --state-dir out/bench/m28b-provider-overhead`
 - `scripts/ci/use_case_gate.sh --matrix configs/generated/use_case_evidence.json --state-dir out/use-case-gate/m28b`
 - `scripts/ci/test_plan_run.sh --target qemu --state-dir out/test-plan/m28b-coexistence`
@@ -12969,6 +13016,11 @@ Implementation requirements:
 - Invalid provider target, action, argument, auth, writer epoch, idempotency key, dry-run/live-mode, or identity claim fails before executor dispatch.
 - Every documented production provider has mock, dry-run, negative, and at least one live-safe conformance path or an explicit not-enabled status.
 - GPU discovery/publication and GPU execution/device isolation are separately evidenced; PEFT filesystem lifecycle and the full export/train/evaluate/scan/import/activate/reload transaction are separately evidenced; neither may borrow the other's proof.
+- The `jetson-orin-nano-jp7` lane proves the physical CUDA path with exact
+  JetPack/L4T/package/device/power/thermal identity, bounded shared-memory
+  admission, and deterministic NVML fallback. MIG/DLA/PVA remain typed
+  unsupported, and no negative test intentionally exhausts shared system RAM
+  or mutates the operator's power, network, display, or boot state.
 - FUSE proves canonical `/shard` behavior and supported-host read/write/error semantics; federation proves WAL-before-forward, enforced timeout, retained pending intent, target terminal receipt return, and restart recovery; selected Jetson/network providers return real bounded host-native observations, while unsupported profiles return typed unavailable and no no-op can report success.
 - Kubernetes RBAC, OIDC/JWT, SPIFFE, and local-host subject mappings produce bounded delegated ticket scopes and deterministic audit lines.
 - Packaging artifacts deploy only host-side tools and preserve loopback defaults, least privilege, secret references, and delegated-ticket write requirements.
@@ -13072,10 +13124,24 @@ Changes:
   - apps/gpu-bridge-host/** — implement generated bounded `gpu.workload.submit|cancel|observe` execution for allowlisted CAS artifacts/entrypoints, including memory/stream admission, context/process isolation, deadline, lease TTL/epoch, revoke/preempt, cancellation, CUDA failure mapping, output CAS hashes, and one correlated terminal provider/WorkerGpu record. CUDA/NVML access remains exclusively in this host tool.
   - apps/host-ticket-agent/** + generated local provider ABI — validate the Cohesix ticket/action and forward the admitted request to `gpu-bridge-host` through a compiler-declared authenticated bounded host-local transport; it cannot submit raw commands, inline PTX, arbitrary paths, or bypass lease/MIG fencing.
   - apps/coh/src/{gpu.rs,run.rs} — expose the generated workload lifecycle and classify plain local subprocess execution separately as a non-authoritative host operation report; `echo ok`, vadd/matmul descriptors, breadcrumbs, or a successful lease cannot satisfy GPU execution.
-  - conformance/evidence — prove real vector-add and matrix-multiply reference workloads plus cancel, timeout, revoke, OOM, stale-MIG-generation, wrong-device, bridge restart, and output-hash cases on physical and MIG-capable profiles where advertised.
+  - conformance/evidence — prove real vector-add and matrix-multiply reference workloads plus cancel, timeout, revoke, over-budget admission, CUDA OOM mapping, stale-MIG-generation, wrong-device, bridge restart, and output-hash cases on physical and MIG-capable profiles where advertised. Shared-memory Jetson profiles reject oversized live requests before allocation and test CUDA OOM mapping only through an isolated memory-capped child or deterministic fault injection.
 Commands: cargo test -p host-cuda && cargo test -p gpu-bridge-host && cargo test -p host-ticket-agent && cargo test -p coh --test gpu_workload && scripts/ci/provider_conformance_run.sh --provider gpu.workload --matrix configs/provider_conformance.toml --state-dir out/provider-conformance/m28b-gpu-workload
 Checks: A live GPU result is impossible without observed CUDA execution on the exact lease-bound physical/MIG target and generation, and reconstructs admission, isolation, cancellation/revoke, outputs, terminal status, and exact WorkerGpu correlation; fixture descriptors remain test-only.
 Deliverables: Real CUDA/MIG workload execution and evidence, distinct from discovery, model publication, and lease projection.
+
+Title/ID: m28b-jetson-orin-nano-live-conformance
+Milestone: Milestone 28b — Host Integration Registry + Provider/Executor + Use-Case Conformance / m28b-jetson-orin-nano-live-conformance
+Goal: Prove the generated Jetson provider and physical CUDA executor on the maintained Jetson Orin Nano 8GB reference host without requiring unsupported accelerators or disruptive host changes.
+Inputs: m28b-native-provider-discovery-and-actions, m28b-gpu-workload-and-mig-executor, `jetson-orin-nano-jp7` generated profile, JetPack/L4T package inventory, CUDA driver/runtime APIs, NVIDIA Container Runtime, `/mnt/nvme` reference layout, docs/GPU_NODES.md, docs/HOST_TOOLS.md, docs/TEST_PLAN.md.
+Changes:
+  - configs/provider_conformance.toml + generated provider/profile records — exact AArch64, Ubuntu, L4T, JetPack, CUDA, compute-capability, shared-memory, physical-device, unsupported-MIG/DLA/PVA, power/thermal observation, container-runtime, and NVMe evidence requirements.
+  - crates/host-cuda/** + apps/gpu-bridge-host/** — CUDA 13-compatible discovery and bounded native physical-device workload execution with live free-memory/headroom admission; retain older supported CUDA/NVML profiles.
+  - apps/host-sidecar-bridge/** — bounded read-only Jetson board, package, power, clock, thermal/throttle, and storage observations from allowlisted native sources, with typed unavailable fields where the SKU exposes no source.
+  - scripts/ci/provider_conformance_run.sh — `--host-profile jetson-orin-nano-jp7 --live-reference` routing, exact-host preflight, non-disruptive default, native/container lane separation, safe negative cases, raw log redaction, and evidence capture under the selected NVMe state directory.
+  - docs/GPU_NODES.md + docs/HOST_TOOLS.md + docs/TEST_PLAN.md — operator prerequisites, non-disruptive default, unsupported-feature behavior, exact commands, and proof boundaries.
+Commands: cargo test -p host-cuda && cargo test -p gpu-bridge-host && cargo test -p host-sidecar-bridge && scripts/ci/provider_conformance_run.sh --provider jetson --host-profile jetson-orin-nano-jp7 --live-reference --matrix configs/provider_conformance.toml --state-dir out/provider-conformance/m28b-jetson-orin && scripts/ci/provider_conformance_run.sh --provider gpu.workload --host-profile jetson-orin-nano-jp7 --live-reference --matrix configs/provider_conformance.toml --state-dir out/provider-conformance/m28b-jetson-gpu
+Checks: Exact live inventory and doctor fallback pass; bounded native vector-add and matrix-multiply execute on the admitted physical Orin device and produce verified CAS outputs; cancel/timeout/revoke/restart/wrong-device/stale-inventory/over-budget cases fail safely; MIG/DLA/PVA report unsupported; optional container execution is separately evidenced by a digest-pinned image; the run does not reboot, change power mode, force clocks, restart network/VNC, or consume unsafe shared-memory headroom.
+Deliverables: Repeatable, non-disruptive Jetson Orin Nano live provider and physical-GPU conformance evidence that cannot be mistaken for MIG, datacenter-GPU, QEMU, Pi, or NeMo acceptance.
 
 Title/ID: m28b-authoritative-receipt-and-evidence-core
 Milestone: Milestone 28b — Host Integration Registry + Provider/Executor + Use-Case Conformance / m28b-authoritative-receipt-and-evidence-core
@@ -14485,6 +14551,53 @@ Implementation requirements:
   other accepted backend.
 - NeMo Agent Toolkit, MCP, or A2A features may be consumed only as downstream host integrations behind existing Cohesix auth and evidence boundaries; they must not become public control surfaces or authoritative coordination channels.
 
+### 8a) Jetson Orin Nano NeMo reference topology
+**Purpose:** Make optional NeMo support testable on the maintained 8GB Jetson
+without assuming that every NeMo component, container, or model is available on
+AArch64 or fits in shared memory.
+
+Implementation requirements:
+- Extend the generated `jetson-orin-nano-jp7` profile with independently
+  selected capabilities for `local_infer`, `remote_infer`, `guardrails`,
+  `evaluate`, `retrieve`, and `customize`. A profile may legitimately enable
+  only local edge inference while using remote guardrail/evaluator/customization
+  services; missing capabilities return typed `not_enabled`, `not_installed`,
+  `incompatible`, or `unreachable`, never an inferred healthy aggregate.
+- Probe NeMo Framework/Export-Deploy, NIM, Triton, TensorRT/TensorRT-LLM,
+  Guardrails, Evaluator, and alternate providers separately. Do not assume a
+  datacenter NIM or NeMo container supports Jetson AArch64 merely because Docker
+  and the NVIDIA runtime are installed. Capture package or OCI digest, API and
+  model-profile version, architecture, JetPack/L4T/CUDA compatibility, endpoint
+  identity, auth-ref presence, deployment config hash, and observed capability.
+- The local Jetson reference uses an isolated, reproducible venv or
+  digest-pinned NVIDIA-container profile under the generated NVMe storage root;
+  it never mutates the system Python environment or stores raw credentials in
+  argv, manifests, logs, or evidence. Model, engine, tokenizer, adapter, and
+  evaluation artifacts are content-addressed and include license/provenance
+  metadata.
+- Live local acceptance requires at least one selected licensable quantized
+  reference model and engine whose weights, runtime workspace, KV/cache budget,
+  and bounded batch-1 request fit beneath the live 28b Jetson GPU admission
+  ceiling with reserved OS headroom. An 8B 4-bit edge model may be selected only
+  after this measured preflight; model size or quantization labels alone are
+  not proof that the workload fits or completes.
+- A full NeMo training stack is not mandatory on the 8GB Nano. The generated
+  topology explicitly identifies training/customization as local, remote, or
+  unavailable. A remote training/PEFT transaction may promote a Jetson use case
+  only when the returned artifact is provenance-checked and the exact Jetson
+  inference runtime completes reload, canary, rollback, and WorkerLora receipt
+  correlation.
+- Live inference evidence records cold model load, peak device-visible and
+  system memory, engine/workspace identity, request bounds, TTFT, bounded
+  completion, output digest/summary, temperature/throttling observations, and
+  cleanup. The run fails safely before allocation when the selected model or
+  context budget exceeds current shared-memory headroom; no test deliberately
+  drives the host into system OOM or changes power/network/display state.
+- The currently unconfigured Jetson is a mandatory negative reference: with no
+  NeMo/PyTorch/Transformers/Triton package, image, process, or endpoint selected,
+  capability probes must return the complete stable unavailable shape and issue
+  no pulls, installs, model downloads, provider calls, or host mutations.
+
 As-built leverage:
 - Reuse `host-ticket-agent`, `cohesix-py` orchestration/playbooks, evidence packs, telemetry exports, GPU lease flows, and production audit/replay defaults from Milestone 28a.
 
@@ -14503,6 +14616,9 @@ As-built leverage:
 - `cargo test -p coh --test peft && cargo test -p coh --test peft_registry_transactions`
 - `scripts/ci/provider_conformance_run.sh --provider peft --live-reference --matrix configs/provider_conformance.toml --state-dir out/provider-conformance/m28d-peft-live`
 - `scripts/ci/use_case_gate.sh --promote-milestone 28d --only peft --matrix configs/generated/use_case_evidence.json --state-dir out/use-case-gate/m28d-peft-live`
+- `scripts/ci/provider_conformance_run.sh --provider nemo --host-profile jetson-orin-nano-jp7 --capability-only --matrix configs/provider_conformance.toml --state-dir out/provider-conformance/m28d-nemo-jetson-unavailable`
+- `scripts/ci/provider_conformance_run.sh --provider nemo --host-profile jetson-orin-nano-jp7 --live-reference --matrix configs/provider_conformance.toml --state-dir out/provider-conformance/m28d-nemo-jetson-live`
+- `scripts/ci/use_case_gate.sh --promote-milestone 28d --only nemo-jetson --matrix configs/generated/use_case_evidence.json --state-dir out/use-case-gate/m28d-nemo-jetson`
 
 **Checks (Definition of Done)**
 - Multi-agent host workflows never require an undifferentiated shared Queen writer.
@@ -14526,6 +14642,12 @@ As-built leverage:
 - Every AI/PEFT scenario, playbook, and post-M24 activity is reclassified in the 28b use-case matrix from actual executor, Worker, package, recovery, and evidence records; no mock workflow is promoted by documentation alone.
 - Optional NeMo support remains host-side, ticket-scoped, writer-fenced, and evidence-backed; disabling NeMo leaves the baseline 28d substrate intact.
 - The same Cohesix run envelope and evidence model works against NeMo and at least one alternate provider family, proving NeMo support adds governed lifecycle value rather than vendor-specific lock-in.
+- The `jetson-orin-nano-jp7` NeMo profile passes both the mutation-free
+  unconfigured capability lane and a separately provisioned live-reference
+  lane before any Jetson NeMo use case is promoted. Local inference, remote
+  services, guardrails, evaluation, retrieval, and customization remain
+  independent capabilities; Docker/NVIDIA runtime presence, a downloaded
+  model, or a successful generic CUDA job cannot promote any of them.
 - Guardrail and evaluator receipts can gate live promotion or actuation decisions deterministically in dry-run/mock tests before any real provider mutation is allowed.
 - AI run-cost evidence records checkpoint/resume, semantic-object selection,
   capsule rendering, prefix/hotset reuse, prompt bytes avoided, provider
@@ -14741,7 +14863,7 @@ Milestone: Milestone 28d — Host-Side AI + PEFT Coexistence: Delegated Runs, Du
 Goal: Detect and classify optional NeMo runtime capabilities without making NeMo the source of truth.
 Inputs: tools/cohesix-py/cohesix/integrations.py, tools/cohesix-py/cohesix/generated.py, docs/PYTHON_SUPPORT.md, docs/HOST_TOOLS.md
 Changes:
-  - tools/cohesix-py/cohesix/integrations.py — `probe_nemo_runtime`, `probe_nemo_guardrails`, and `probe_nemo_evaluator` helpers that resolve configured endpoints/auth refs, deployed model profiles, and capability summaries.
+  - tools/cohesix-py/cohesix/integrations.py — `probe_nemo_runtime`, `probe_nemo_guardrails`, and `probe_nemo_evaluator` helpers that resolve configured local packages/containers and remote endpoints/auth refs, deployed model profiles, architecture/runtime compatibility, and independent capability summaries without pulling images, downloading models, or mutating the host.
   - tools/cohesix-py/cohesix/generated.py — generated NeMo capability defaults and bounded endpoint/profile limits from `coh-rtc`.
   - docs/PYTHON_SUPPORT.md + docs/HOST_TOOLS.md — operator-visible NeMo capability probe contract and failure semantics.
 Commands: python -m pytest tools/cohesix-py/tests/test_integrations.py -k nemo_probe
@@ -14797,6 +14919,21 @@ Changes:
 Commands: cargo test -p coh-rtc && python -m pytest tools/cohesix-py/tests/test_integrations.py -k nemo_policy
 Checks: Invalid NeMo policy, missing delegated-authority prerequisites, or NeMo-only authoritative semantics are rejected at validation time; the same run envelope/evidence contract remains valid with NeMo disabled or replaced by another provider family.
 Deliverables: NeMo support is compiler-governed, optional, and demonstrably cross-provider rather than a lock-in path.
+
+Title/ID: m28d-nemo-jetson-reference-profile
+Milestone: Milestone 28d — Host-Side AI + PEFT Coexistence: Delegated Runs, Durable Context, Production PEFT / m28d-nemo-jetson-reference-profile
+Goal: Prove optional NeMo capabilities on the maintained Jetson Orin Nano 8GB topology with exact resource, package, model, runtime, authority, and evidence boundaries.
+Inputs: accepted m28b-jetson-orin-nano-live-conformance evidence, accepted 28c Context Capsule and 28c1 admission contracts, m28d-nemo-capability-probes, m28d-nemo-provider-family, m28d-nemo-guardrails-and-eval, m28d-nemo-policy-and-parity, generated `jetson-orin-nano-jp7` profile, NVIDIA runtime/package compatibility metadata, NVMe model/runtime storage, docs/HOST_TOOLS.md, docs/GPU_NODES.md, docs/TEST_PLAN.md.
+Changes:
+  - configs/provider_conformance.toml + generated NeMo policy/profile records — independent local/remote inference, guardrail, evaluator, retrieval, and customization capability selection; exact AArch64/JetPack/L4T/CUDA/package-or-image compatibility; shared-memory/context ceilings; endpoint/auth refs; artifact/license/provenance requirements; and stable unavailable reasons.
+  - tools/cohesix-py/cohesix/integrations.py — mutation-free Jetson unavailable probe plus configured local-container/venv and remote-endpoint probes with bounded timeouts, redaction, version negotiation, and no ambient credential discovery.
+  - apps/host-ticket-agent/src/executors/infer.rs — admitted Jetson NeMo dispatch through the generated provider record, exact 28b GPU lease/executor and model-engine identity, bounded request/context, deterministic refusal mapping, cancellation/deadline, and normalized terminal receipt.
+  - packaging/reference assets — one digest-pinned, licensable quantized edge model/runtime profile that passes measured 8GB admission, and an optional remote-service profile for guardrail/evaluator/customization capabilities that are not selected locally. Artifacts and caches use the generated NVMe root; no model or mutable image layer enters a release bundle unintentionally.
+  - scripts/ci/provider_conformance_run.sh + scripts/ci/use_case_gate.sh — `--host-profile jetson-orin-nano-jp7` capability-only and live-reference lanes, exact-host preflight, model/runtime compatibility checks, safe memory refusal, cold/warm inference, cancel/timeout/restart, guardrail/evaluator refusal and success, evidence reconstruction, and promotion gating.
+  - docs/HOST_TOOLS.md + docs/GPU_NODES.md + docs/TEST_PLAN.md + docs/USE_CASES.md — exact setup, storage, topology, resource ceilings, supported/unavailable capabilities, test commands, recovery, and proof boundaries.
+Commands: python -m pytest tools/cohesix-py/tests/test_integrations.py -k 'nemo and jetson' && cargo test -p host-ticket-agent -- nemo_provider && scripts/ci/provider_conformance_run.sh --provider nemo --host-profile jetson-orin-nano-jp7 --capability-only --matrix configs/provider_conformance.toml --state-dir out/provider-conformance/m28d-nemo-jetson-unavailable && scripts/ci/provider_conformance_run.sh --provider nemo --host-profile jetson-orin-nano-jp7 --live-reference --matrix configs/provider_conformance.toml --state-dir out/provider-conformance/m28d-nemo-jetson-live && scripts/ci/use_case_gate.sh --promote-milestone 28d --only nemo-jetson --matrix configs/generated/use_case_evidence.json --state-dir out/use-case-gate/m28d-nemo-jetson
+Checks: The unconfigured host produces a complete mutation-free unavailable record; the configured profile proves one real bounded inference and its exact model/engine/GPU/ticket/Worker/evidence chain; selected guardrail/evaluator capabilities gate promotion with durable receipts; remote services are identified separately from local execution; over-budget, incompatible, unauthorised, stale, timeout, cancellation, restart, and rollback cases fail safely; full local training, NIM, Triton, TensorRT-LLM, retrieval, or customization remain unavailable unless that exact component passes its own profile and live evidence.
+Deliverables: A repeatable Jetson NeMo conformance lane that is useful on 8GB hardware, honest about unsupported components, and interchangeable with the same governed alternate-provider run envelope.
 ```
 
 ## Outcome
