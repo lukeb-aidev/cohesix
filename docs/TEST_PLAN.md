@@ -4339,6 +4339,29 @@ first-byte evidence remain independent gates; neither is required to start
 Wi-Fi. This ordering is Pi-only and cannot be inferred from the QEMU VirtIO
 transport path.
 
+Once the controller-owner preflight is complete but retained CYW43 bootstrap
+work remains, focused selector coverage must preserve a bounded operator
+rotation. A due display milestone keeps first-turn priority; the following
+non-display turns alternate one linked `LocalSeat` USB/HID service unit with
+serial/dispatch service, including the all-due `Display -> LocalSeat -> Display
+-> Serial` sequence. Response, reboot, or containment work selects serial
+first. Every such turn must keep Network fenced, perform at most its existing
+one physical operation, and buffer USB input until a later serial/dispatch
+turn. Tests must prove keyboard command readiness and first-byte proof remain
+downstream evidence rather than Wi-Fi admission gates.
+
+Pi `smp` activity coverage must exercise the selected-driver projection at
+saturated integer values. Each selected owner emits exactly seven ordered
+`[smp] driver v=1` parts (`turn`, `outcome`, `sched`, `retry`, `cache`,
+`traffic`, `role`), every row remains below the shared 256-byte line capacity,
+Wi-Fi selects CYW43 plus SDIO, wired selects GENET, and disabled selects none.
+The complete Wi-Fi projection plus the ordinary synchronous body must seal and
+flush with `OK SMP mode=activity`, never
+`bounded-response-overflow`. Preserve the independent overflow negative test
+and the canonical 1,024-byte `DRIVER_TASK_COUNTER` formatter/normalizer record;
+do not enlarge a queue, truncate a field, or treat the operator projection as
+acceptance evidence.
+
 Strict Pi SDIO command/data calls, fixed-layout SDIO CMD52/CMD53 descriptors, CYW43 firmware/NVRAM/SDPCM command records, direct-root-port xHCI keyboard polling, GENET RX/TX descriptor-ring service, and PCIe port read/write/flush helpers now compile in isolated runtime code before any root hardware execution; host coverage must keep proving those ring turns while preserving the fresh-Pi board-proof boundary.
 
 Non-network cadence coverage must preserve the 48-byte ABI footprint and
@@ -4349,6 +4372,22 @@ in-episode `run`, render `gap=na` before a previous entry exists, and never
 restore the ambiguous schema-v1 `dt` interpretation. Cadence remains passive
 source evidence; only fresh target behavior can qualify scheduling.
 
+Physical-Pi MCS HDMI retained-lane coverage must accept only the exact
+canonical one-way HDMI-text `SubmitFrame` identity and select scheduler mask
+zero. The real retained path must fuse a fresh hardware-free `Stage` through
+sequence-last `CommitRing` without sending the endpoint notification in that
+turn. The next outer turn may revalidate and signal that exact request once;
+notification replay or any contract, command, frame, budget, endpoint, ring,
+request, fingerprint, lease, or committed-record drift must fail closed before
+send. Exact completion must advance `Issued -> ReadyToComplete` directly and
+finish without classic priority-boost or restore phases. Negative coverage must
+reject non-MCS selection and any non-HDMI or noncanonical command. Preserve the
+existing budget, payload and frame limits, raster behavior, USB scheduling,
+bus-owner set, one-physical-operation-per-turn rule, and every QEMU path.
+Host tests prove only this finite state-machine contract; fresh exact-image Pi
+serial plus visible HDMI latency, scroll, and completion evidence is required
+for hardware or performance acceptance.
+
 Physical Pi cadence convergence must separately prove the root-control
 composition policy. Deterministic state-machine tests must require the exact
 physical-owner plus linked-serial cut, preserve a single poll for QEMU and
@@ -4357,7 +4396,13 @@ physical rotation at five polls. The composed path must stop on reboot,
 containment, a phase retaining itself, or return to its starting phase. Active
 GENET coverage must perform exactly one NIC poll while admitting the other
 useful physical phases before Yield; a retained CYW43 Network action must stop
-the composition immediately rather than receiving a second driver turn.
+the composition after its one admitted Network phase rather than receiving a
+second driver turn in the same invocation. Attached-CYW43 coverage may traverse
+up to the existing five distinct-phase turns, but must stop on a repeated
+phase, return to the starting phase, quarantine, recovery, containment, or
+reboot. Retaining the guarded activation requires an exact productive
+Network-to-Network successor, one service-counter advance, actual Network
+activity, and fresh durable schedulable work after the outer-event finalizer.
 Quarantine coverage must prove persistent display debt cannot create an
 unbounded redraw loop or poll quarantined CYW43. The next fresh exact-image Pi
 boot must pair serial and captures and compare same-driver cadence against the
@@ -4370,6 +4415,10 @@ phase 157 `sdio-hw-entry` to first MMIO or a typed terminal. Offline tests,
 QEMU, a changed counter gap, or USB readiness alone cannot qualify the Pi
 repair, and no SDIO/CYW43 device-semantic change is authorized until that
 fresh cadence boot is harvested.
+
+These deterministic host tests prove only root-control arbitration and bounds.
+Fresh exact-image Pi serial, packet, raw-TCP, `cohsh`, script, and performance
+evidence remains required for Wi-Fi, USB, HDMI, serial, or GENET acceptance.
 
 Physical Pi bootstrap-output coverage must select exactly one
 ownership-aware sink for a row that would otherwise be emitted through both
@@ -6079,14 +6128,20 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
       descriptor frontier drains. The final fence must revalidate the stopped
       hardware and generation, clear retained raw sources, publish direct
       ownership while ingress remains stopped, then resume RDMA, MAC RX, and
-      the exact source in order with readback. Status timeout, frozen-producer
-      or cursor movement, generation/token drift, ACK failure, or any
+      the exact source in order with readback. Between the final empty
+      source/frontier recheck and direct-generation publication, it must issue
+      exactly one unconditional ACK on the admitted IRQHandler so a
+      queued-but-unobserved legacy notification cannot remain kernel-masked.
+      The ACK must precede direct publication, RDMA resume, MAC RX resume, and
+      source unmask; its failure must fault before READY with ingress still
+      contained. It increments no IRQ-wake, packet, or cursor evidence and
+      cannot recur as polling authority. Status timeout, frozen-producer or
+      cursor movement, generation/token drift, ACK failure, or any
       stop/resume/unmask/readback failure must stop MAC RX/TX plus RDMA/TDMA,
       poison the link, signal the peer, and raise the standard fault without
       READY. No fence path may fabricate a notification badge, IRQ wake,
-      handler acknowledgement, packet, or cursor advance; a queued exact seL4
-      notification observed after READY is direct-epoch work for the same sole
-      owner.
+      packet, or cursor advance; a queued exact seL4 notification observed
+      after READY is direct-epoch work for the same sole owner.
       Tests must cover a fault between child READY publication and root READY
       acceptance, a fence between pair-fault observation and publication, a
       retained legacy call across QUIESCING, full-ring peer rearm, blocked

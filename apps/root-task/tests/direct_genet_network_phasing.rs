@@ -306,6 +306,58 @@ fn handoff_transport_and_quiescing_phases_separate_command_from_legacy_drain() {
 }
 
 #[test]
+fn direct_genet_cutover_rearms_irq_between_quiescence_and_direct_resume() {
+    let cutover = RUNTIME_SOURCE
+        .find("fn genet_direct_advance_cutover")
+        .expect("direct GENET cutover state machine exists");
+    let direct_phase = RUNTIME_SOURCE[cutover..]
+        .find("GenetDirectCutoverPhase::Direct =>")
+        .map(|offset| cutover + offset)
+        .expect("cutover has a finite direct terminal phase");
+    let body = &RUNTIME_SOURCE[cutover..direct_phase];
+
+    let frozen = body
+        .find("GenetDirectCutoverPhase::RdmaFrozen =>")
+        .expect("cutover has a finite frozen ownership boundary");
+    let mask = body[frozen..]
+        .find("genet_irq_mask_sources();")
+        .map(|offset| frozen + offset)
+        .expect("the frozen boundary masks packet IRQ sources");
+    let clear = body[mask..]
+        .find("genet_irq_clear_sources(genet_irq_raw_sources());")
+        .map(|offset| mask + offset)
+        .expect("the frozen boundary clears the masked source");
+    let empty = body[clear..]
+        .find("genet_irq_raw_sources() != 0 || genet_rx_hardware_pending(state)")
+        .map(|offset| clear + offset)
+        .expect("raw source and durable RX state are rechecked");
+    let rearm = body[empty..]
+        .find("runtime_irq_handler_ack(state.irq_handler_slot)")
+        .map(|offset| empty + offset)
+        .expect("the finite boundary rearms a queued but unobserved IRQ lifetime");
+    let generation = body[rearm..]
+        .find("state.direct_genet_generation = generation;")
+        .map(|offset| rearm + offset)
+        .expect("direct generation publishes after handler rearm");
+    let rdma_resume = body[generation..]
+        .find("GENET_RDMA_REG_BASE + GENET_DMA_CTRL")
+        .map(|offset| generation + offset)
+        .expect("RDMA resumes after direct publication");
+    let mac_resume = body[rdma_resume..]
+        .find("GENET_UMAC_CMD")
+        .map(|offset| rdma_resume + offset)
+        .expect("MAC RX resumes after RDMA");
+    let unmask = body[mac_resume..]
+        .find("genet_irq_unmask_sources()")
+        .map(|offset| mac_resume + offset)
+        .expect("packet IRQ sources unmask last");
+
+    assert!(mask < clear && clear < empty && empty < rearm);
+    assert!(rearm < generation && generation < rdma_resume);
+    assert!(rdma_resume < mac_resume && mac_resume < unmask);
+}
+
+#[test]
 fn genet_standard_or_timeout_fault_latches_coupled_console_containment() {
     let supervisor = DRIVER_HAL_SOURCE
         .find("fn root_driver_supervisor_contain_fault")

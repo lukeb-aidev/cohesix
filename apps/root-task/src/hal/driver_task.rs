@@ -6664,6 +6664,8 @@ static CYW43_FIRST_RECOVERY_SCHEDULER: Cyw43FirstRecoverySchedulerState =
 
 #[cfg(all(feature = "kernel", test))]
 static TEST_CYW43_SDIO_NETWORK_PRIORITY_PHYSICAL_MODEL: AtomicU32 = AtomicU32::new(0);
+#[cfg(all(feature = "kernel", test))]
+static TEST_MCS_HDMI_FINITE_FRAME_MODEL: AtomicU32 = AtomicU32::new(0);
 #[cfg(feature = "kernel")]
 static CYW43_SDIO_PAIR_RESTART_IN_PROGRESS: AtomicU32 = AtomicU32::new(0);
 #[cfg(feature = "kernel")]
@@ -12345,6 +12347,53 @@ const fn retained_priority_boost_required(
         && steady_priority < PI4_BOUNDED_BOOTSTRAP_PRIORITY as usize
 }
 
+/// Select the finite HDMI frame lane that needs no request-bound MCS rewrite.
+///
+/// The generated MCS runtime already owns its active scheduling context. HDMI
+/// has no separately scheduled bus owner, so the classic priority-boost and
+/// restore phases are hardware-free no-ops. Keep this exemption deliberately
+/// narrower than the public SubmitFrame ABI: only the canonical, one-way HDMI
+/// text command built by `local_seat` may select the zero-mask lane.
+#[cfg(feature = "kernel")]
+fn mcs_hdmi_finite_frame_target_mask(
+    mcs_enabled: bool,
+    contract: DriverTaskContract,
+    command: DriverTaskCommandRecord,
+) -> Option<usize> {
+    let expected_budget = DriverTaskBudgetGrant::from_contract(contract);
+    (mcs_enabled
+        && contract == HDMI_TEXT_DRIVER_TASK_CONTRACT
+        && command.opcode == DriverTaskOpcode::SubmitFrame.as_u16()
+        && command.flags == DRIVER_TASK_RING_FLAG_ONE_WAY
+        && command.arg0 == DriverTaskHotPath::HdmiText.as_u32()
+        && command.arg1 == DriverTaskHotPath::HdmiText.role_bit() as u32
+        && command.aux0 == 0
+        && command.aux1 == 0
+        && command.budget == expected_budget
+        && command.frame.offset as usize == DRIVER_TASK_RING_FRAME_OFFSET
+        && command.frame.len != 0
+        && usize::from(command.frame.len) <= MAX_DRIVER_TASK_FRAME_BYTES
+        && command.frame.flags == 0)
+        .then_some(0)
+}
+
+#[cfg(feature = "kernel")]
+fn mcs_hdmi_finite_frame_model_enabled() -> bool {
+    let enabled = cfg!(sel4_config_kernel_mcs);
+    #[cfg(test)]
+    let enabled = enabled || TEST_MCS_HDMI_FINITE_FRAME_MODEL.load(Ordering::Acquire) != 0;
+    enabled
+}
+
+#[cfg(feature = "kernel")]
+fn mcs_hdmi_finite_frame_lane(
+    contract: DriverTaskContract,
+    command: DriverTaskCommandRecord,
+) -> bool {
+    mcs_hdmi_finite_frame_target_mask(mcs_hdmi_finite_frame_model_enabled(), contract, command)
+        .is_some()
+}
+
 const DRIVER_TASK_RETAINED_LEASE_PRIMARY: usize = 1 << 0;
 const DRIVER_TASK_RETAINED_LEASE_BUS: usize = 1 << 1;
 
@@ -12760,6 +12809,15 @@ fn retained_priority_lease_target_mask(
         }
         #[cfg(not(test))]
         return Some(0);
+    }
+    if let Some(mask) =
+        mcs_hdmi_finite_frame_target_mask(mcs_hdmi_finite_frame_model_enabled(), contract, command)
+    {
+        // MCS already supplies the generated active-SC scheduling parameters,
+        // and HDMI has no bus-owner TCB. Retain the request lease and all
+        // issue/completion fencing without manufacturing classic priority
+        // operations that cannot change scheduling state on this kernel.
+        return Some(mask);
     }
     let Some(cyw43_slot) = driver_task_slot_for_contract(CYW43_WIFI_DRIVER_TASK_CONTRACT) else {
         return None;
@@ -14980,6 +15038,76 @@ where
     signal(notification);
     slot.retained_persistent_signal_returned_request
         .store(request as u32, Ordering::Release);
+    true
+}
+
+/// Immutable identity for the sole endpoint notification of one finite HDMI
+/// frame after its sequence-last commit.
+#[cfg(feature = "kernel")]
+struct McsHdmiFiniteFrameSignal<'a> {
+    slot: &'a DriverTaskCommandSlot,
+    contract: DriverTaskContract,
+    command: DriverTaskCommandRecord,
+    endpoint: usize,
+    request: usize,
+    fingerprint: u32,
+    ring_root_ptr: usize,
+}
+
+/// Revalidate and signal one exact MCS HDMI frame once.
+///
+/// The caller supplies whether it is modeling an MCS kernel so the pure unit
+/// contract remains testable on the host. Production always passes generated
+/// `sel4_config_kernel_mcs` truth. Phase advances before the endpoint send;
+/// any later retry or identity tear therefore fails closed instead of
+/// duplicating a frame notification.
+#[cfg(feature = "kernel")]
+fn signal_mcs_hdmi_finite_frame_with<B, F>(
+    context: McsHdmiFiniteFrameSignal<'_>,
+    mcs_enabled: bool,
+    before_signal: B,
+    signal: F,
+) -> bool
+where
+    B: FnOnce(),
+    F: FnOnce(usize),
+{
+    let McsHdmiFiniteFrameSignal {
+        slot,
+        contract,
+        command,
+        endpoint,
+        request,
+        fingerprint,
+        ring_root_ptr,
+    } = context;
+    if mcs_hdmi_finite_frame_target_mask(mcs_enabled, contract, command) != Some(0)
+        || request == 0
+        || fingerprint == 0
+        || command.sequence as usize != request
+        || endpoint == 0
+        || slot.endpoint.load(Ordering::Acquire) != endpoint
+        || ring_root_ptr == 0
+        || slot.ring_root_ptr.load(Ordering::Acquire) != ring_root_ptr
+        || slot.active.load(Ordering::Acquire) == 0
+        || slot.request_seq.load(Ordering::Acquire) != request
+        || slot.active_command_fingerprint.load(Ordering::Acquire) != fingerprint
+        || !driver_task_retained_lease_identity_matches(slot, contract, request, fingerprint)
+        || slot.retained_priority_lease_mask.load(Ordering::Acquire) != 0
+        || DriverTaskRetainedLeasePhase::from_usize(
+            slot.retained_priority_lease_phase.load(Ordering::Acquire),
+        ) != Some(DriverTaskRetainedLeasePhase::Committed)
+        || slot.retained_doorbell_issued.load(Ordering::Acquire) == 0
+        || slot.retained_steady_tx_fast_lane.load(Ordering::Acquire) != 0
+        || slot.retained_grant_id.load(Ordering::Acquire) != 0
+        || !driver_task_ring_exact_command_is_stable(slot, ring_root_ptr, command)
+        || !mark_driver_task_retained_priority_lease_issued(slot, false)
+    {
+        return false;
+    }
+    before_signal();
+    driver_task_counter_add(&slot.counters.send_attempts, 1);
+    signal(endpoint);
     true
 }
 
@@ -22316,9 +22444,16 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
         && slot.retained_steady_tx_fast_lane.load(Ordering::Acquire) != 0;
     let persistent_transaction = persistent_transaction_requested
         && command.flags & DRIVER_RUNTIME_COMMAND_FLAG_PERSISTENT_TRANSACTION != 0;
-    if retained_request_prepared && !steady_tx_fast_lane && !persistent_transaction {
+    let mcs_hdmi_finite_frame = mode == DriverTaskRingCommandMode::RetainedTurn
+        && mcs_hdmi_finite_frame_lane(contract, command);
+    if retained_request_prepared
+        && !steady_tx_fast_lane
+        && !persistent_transaction
+        && !mcs_hdmi_finite_frame
+    {
         // Generic, cold, non-op11 control, untyped op7, bulk, and recovery
-        // commands keep Stage as their own retained outer turn. A typed finite
+        // commands keep Stage as their own retained outer turn. Exact MCS HDMI
+        // alone may fuse the hardware-free zero-mask step below. A typed finite
         // op7 or exact persistent op11 may continue only through its existing
         // request-bound scheduler coverage. For op11 this closes the
         // sequence-zero Stage cut inside the already-admitted producer call;
@@ -22327,6 +22462,12 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
         cache_counter_batch.flush(slot);
         return None;
     }
+
+    // Exact MCS HDMI SubmitFrame owns no bus TCB and selects a zero scheduler
+    // mask. Its one fresh continuation below therefore fuses only the
+    // hardware-free Stage -> CommitRing transition. Sequence-last publication
+    // still ends this producer turn; notification and completion/poll remain
+    // separate EventPump turns with one physical operation per turn.
 
     // Eligibility is admitted only on the fresh Stage boundary. Every later
     // retained turn remains an ordinary single-step resume; exact op11's
@@ -22626,6 +22767,33 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
                 },
             ) == DriverTaskRetainedRootGrantNotify::Invalid
             {
+                fail_driver_task_retained_priority_lease(slot, contract);
+            }
+            return None;
+        }
+        if mcs_hdmi_finite_frame {
+            if !mcs_nonblocking_root_producer_allows_send(slot, endpoint) {
+                cache_counter_batch.flush(slot);
+                return None;
+            }
+            let info = sel4_sys::seL4_MessageInfo::new(0, 0, 0, 1);
+            cache_counter_batch.flush(slot);
+            if !signal_mcs_hdmi_finite_frame_with(
+                McsHdmiFiniteFrameSignal {
+                    slot,
+                    contract,
+                    command,
+                    endpoint,
+                    request,
+                    fingerprint: command_fingerprint,
+                    ring_root_ptr,
+                },
+                mcs_hdmi_finite_frame_model_enabled(),
+                || {},
+                |target| {
+                    crate::sel4::send_nb_unchecked(target as sel4_sys::seL4_CPtr, info);
+                },
+            ) {
                 fail_driver_task_retained_priority_lease(slot, contract);
             }
             return None;
@@ -26194,6 +26362,21 @@ pub const fn driver_task_acceptance_ready_for_selected(
 #[cfg(feature = "kernel")]
 pub(crate) const DRIVER_TASK_COUNTER_LINE_BYTES: usize = 1024;
 
+/// Number of independently bounded rows in the operator-facing counter view.
+///
+/// The canonical `DRIVER_TASK_COUNTER` record remains a single lossless
+/// 1,024-byte provenance row. Console transports instead use this fixed split
+/// so every row fits the shared 256-byte line ABI at saturated counter values.
+#[cfg(feature = "kernel")]
+pub(crate) const DRIVER_TASK_ACTIVITY_LINE_COUNT: usize = 7;
+
+#[cfg(feature = "kernel")]
+type DriverTaskActivityLine = heapless::String<{ crate::serial::DEFAULT_LINE_CAPACITY }>;
+
+#[cfg(feature = "kernel")]
+pub(crate) type DriverTaskActivityLines =
+    heapless::Vec<DriverTaskActivityLine, DRIVER_TASK_ACTIVITY_LINE_COUNT>;
+
 #[cfg(feature = "kernel")]
 fn write_driver_task_counter_line(
     line: &mut heapless::String<DRIVER_TASK_COUNTER_LINE_BYTES>,
@@ -26251,6 +26434,131 @@ pub(crate) fn driver_task_counter_line(
     write_driver_task_counter_line(&mut line, contract.name, counters)
         .ok()
         .map(|()| line)
+}
+
+#[cfg(feature = "kernel")]
+fn push_driver_task_activity_line(
+    lines: &mut DriverTaskActivityLines,
+    args: core::fmt::Arguments<'_>,
+) -> Option<()> {
+    use core::fmt::Write as _;
+
+    let mut line = DriverTaskActivityLine::new();
+    line.write_fmt(args).ok()?;
+    lines.push(line).ok()
+}
+
+/// Build the complete bounded console projection of one counter snapshot.
+///
+/// This projection is intentionally distinct from [`driver_task_counter_line`].
+/// Splitting the fields is a transport-shape decision only: it neither mutates
+/// the activity gate nor changes the canonical fixed-layout evidence record.
+#[cfg(feature = "kernel")]
+fn driver_task_activity_lines_from_snapshot(
+    contract_name: &str,
+    counters: DriverRuntimeCounterSnapshot,
+) -> Option<DriverTaskActivityLines> {
+    let hot_path =
+        DriverTaskHotPath::from_u32(counters.hot_path).map_or("unknown", DriverTaskHotPath::as_str);
+    let mut lines = DriverTaskActivityLines::new();
+    push_driver_task_activity_line(
+        &mut lines,
+        format_args!(
+            "[smp] driver v=1 part=turn contract={} hot_path={} sequence={} submitted={} completed={} idle={}",
+            contract_name,
+            hot_path,
+            counters.sequence,
+            counters.submitted_turns,
+            counters.completed_turns,
+            counters.idle_turns,
+        ),
+    )?;
+    push_driver_task_activity_line(
+        &mut lines,
+        format_args!(
+            "[smp] driver v=1 part=outcome contract={} fault={} budget={} frame={} desc={}",
+            contract_name,
+            counters.fault_turns,
+            counters.budget_exhausted_turns,
+            counters.frame_ready_turns,
+            counters.descriptors_drained,
+        ),
+    )?;
+    push_driver_task_activity_line(
+        &mut lines,
+        format_args!(
+            "[smp] driver v=1 part=sched contract={} sends={} yields={} busy={} same_request={}",
+            contract_name,
+            counters.send_attempts,
+            counters.yield_count,
+            counters.busy_conflicts,
+            counters.same_request_resumes,
+        ),
+    )?;
+    push_driver_task_activity_line(
+        &mut lines,
+        format_args!(
+            "[smp] driver v=1 part=retry contract={} timeouts={} keep_active={} aborts={} overruns={} drops={}",
+            contract_name,
+            counters.timeouts,
+            counters.keep_active_timeouts,
+            counters.aborts,
+            counters.overruns,
+            counters.drops,
+        ),
+    )?;
+    push_driver_task_activity_line(
+        &mut lines,
+        format_args!(
+            "[smp] driver v=1 part=cache contract={} staged_bytes={} clean_ops={} clean_bytes={} inv_ops={} inv_bytes={}",
+            contract_name,
+            counters.staged_bytes,
+            counters.cache_clean_ops,
+            counters.cache_clean_bytes,
+            counters.cache_invalidate_ops,
+            counters.cache_invalidate_bytes,
+        ),
+    )?;
+    push_driver_task_activity_line(
+        &mut lines,
+        format_args!(
+            "[smp] driver v=1 part=traffic contract={} rx_frames={} rx_bytes={} tx_frames={} tx_bytes={}",
+            contract_name,
+            counters.rx_frames,
+            counters.rx_bytes,
+            counters.tx_frames,
+            counters.tx_bytes,
+        ),
+    )?;
+    push_driver_task_activity_line(
+        &mut lines,
+        format_args!(
+            "[smp] driver v=1 part=role contract={} role_aux0={} role_aux1={} role_aux2={} role_aux3={}",
+            contract_name,
+            counters.role_aux0,
+            counters.role_aux1,
+            counters.role_aux2,
+            counters.role_aux3,
+        ),
+    )?;
+    (lines.len() == DRIVER_TASK_ACTIVITY_LINE_COUNT).then_some(lines)
+}
+
+#[cfg(all(feature = "kernel", test))]
+pub(crate) fn driver_task_activity_lines_for_test(
+    contract: DriverTaskContract,
+    counters: DriverRuntimeCounterSnapshot,
+) -> Option<DriverTaskActivityLines> {
+    driver_task_activity_lines_from_snapshot(contract.name, counters)
+}
+
+/// Return the bounded operator-facing rows for one activity-gated contract.
+#[cfg(feature = "kernel")]
+pub(crate) fn driver_task_activity_lines(
+    contract: DriverTaskContract,
+) -> Option<DriverTaskActivityLines> {
+    let counters = driver_task_counter_snapshot(contract)?;
+    driver_task_activity_lines_from_snapshot(contract.name, counters)
 }
 
 /// Emit compact scheduling-contract proof breadcrumbs for Pi 4 gate tooling.
@@ -26683,6 +26991,8 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     static PERSISTENT_OP11_DEADLINE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    #[cfg(feature = "kernel")]
+    static MCS_HDMI_FINITE_FRAME_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     #[cfg(feature = "kernel")]
     #[test]
@@ -33796,6 +34106,376 @@ mod tests {
     }
 
     #[cfg(feature = "kernel")]
+    fn mcs_hdmi_test_command(request: u32, payload_len: usize) -> DriverTaskCommandRecord {
+        let frame =
+            DriverFrameDescriptor::new(DRIVER_TASK_RING_FRAME_OFFSET as u32, payload_len as u16, 0)
+                .expect("test HDMI payload fits the canonical frame region");
+        let mut command = DriverTaskCommandRecord::pi4_hot_path(
+            request,
+            DriverTaskHotPath::HdmiText,
+            DriverTaskBudgetGrant::from_contract(HDMI_TEXT_DRIVER_TASK_CONTRACT),
+            frame,
+        );
+        command.flags =
+            driver_task_ring_flags_for_mode(DriverTaskRingCommandMode::RetainedTurn, command.flags);
+        command
+    }
+
+    #[cfg(feature = "kernel")]
+    fn stage_mcs_hdmi_test_frame(
+        slot: &DriverTaskCommandSlot,
+        ring_root_ptr: usize,
+        payload: &[u8],
+        request: u32,
+    ) -> (DriverTaskCommandRecord, u32) {
+        let command = mcs_hdmi_test_command(request, payload.len());
+        let staging_segments = [DriverTaskStagingSegment::ring_frame(payload, 0)];
+        let fingerprint = driver_task_ring_command_fingerprint(
+            command,
+            driver_task_staging_segments_fingerprint(&staging_segments),
+        );
+        let command_ptr = ring_root_ptr as *mut DriverTaskCommandRecord;
+        let completion_ptr =
+            (ring_root_ptr + DRIVER_TASK_RING_COMPLETION_OFFSET) as *mut DriverTaskCompletionRecord;
+        assert_eq!(
+            driver_task_stage_segments(slot, ring_root_ptr, &staging_segments),
+            Some(())
+        );
+        driver_task_ring_stage_command_record(
+            slot,
+            ring_root_ptr,
+            command_ptr,
+            completion_ptr,
+            command,
+            DriverTaskCompletionRecord::fault(0, DriverTaskFaultCode::RejectedCommand),
+        );
+        slot.active.store(1, Ordering::Release);
+        slot.endpoint.store(0x77, Ordering::Release);
+        slot.ring_root_ptr.store(ring_root_ptr, Ordering::Release);
+        slot.request_seq.store(request as usize, Ordering::Release);
+        slot.active_command_fingerprint
+            .store(fingerprint, Ordering::Release);
+        slot.retained_priority_lease_request
+            .store(request as usize, Ordering::Release);
+        slot.retained_priority_lease_fingerprint
+            .store(fingerprint, Ordering::Release);
+        slot.retained_priority_lease_generation.store(
+            driver_task_retained_lease_generation(HDMI_TEXT_DRIVER_TASK_CONTRACT),
+            Ordering::Release,
+        );
+        slot.retained_priority_lease_mask
+            .store(0, Ordering::Release);
+        slot.retained_priority_lease_phase.store(
+            DriverTaskRetainedLeasePhase::ReadyToIssue.as_usize(),
+            Ordering::Release,
+        );
+        (command, fingerprint)
+    }
+
+    #[cfg(feature = "kernel")]
+    fn commit_mcs_hdmi_test_frame(
+        slot: &DriverTaskCommandSlot,
+        ring_root_ptr: usize,
+        payload: &[u8],
+        command: DriverTaskCommandRecord,
+    ) {
+        let staging_segments = [DriverTaskStagingSegment::ring_frame(payload, 0)];
+        let command_ptr = ring_root_ptr as *mut DriverTaskCommandRecord;
+        let completion_ptr =
+            (ring_root_ptr + DRIVER_TASK_RING_COMPLETION_OFFSET) as *mut DriverTaskCompletionRecord;
+        assert!(driver_task_ring_prepare_retained_issue(
+            slot,
+            ring_root_ptr,
+            command_ptr,
+            completion_ptr,
+            command,
+            &staging_segments,
+        ));
+        slot.retained_doorbell_issued.store(1, Ordering::Release);
+        driver_task_ring_commit_command_sequence(
+            slot,
+            ring_root_ptr,
+            command_ptr,
+            command.sequence,
+        );
+        assert!(mark_driver_task_retained_priority_lease_committed(
+            slot, false,
+        ));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn mcs_hdmi_finite_frame_selects_only_the_exact_zero_mask_lane() {
+        let command = mcs_hdmi_test_command(73, 4);
+        assert_eq!(
+            mcs_hdmi_finite_frame_target_mask(true, HDMI_TEXT_DRIVER_TASK_CONTRACT, command,),
+            Some(0),
+        );
+        assert_eq!(
+            mcs_hdmi_finite_frame_target_mask(false, HDMI_TEXT_DRIVER_TASK_CONTRACT, command,),
+            None,
+        );
+        assert_eq!(
+            mcs_hdmi_finite_frame_target_mask(true, GENET_DRIVER_TASK_CONTRACT, command),
+            None,
+        );
+        let mut drifted = command;
+        drifted.aux0 = 1;
+        assert_eq!(
+            mcs_hdmi_finite_frame_target_mask(true, HDMI_TEXT_DRIVER_TASK_CONTRACT, drifted,),
+            None,
+        );
+        drifted = command;
+        drifted.flags |= DRIVER_RUNTIME_COMMAND_FLAG_PERSISTENT_TRANSACTION;
+        assert_eq!(
+            mcs_hdmi_finite_frame_target_mask(true, HDMI_TEXT_DRIVER_TASK_CONTRACT, drifted,),
+            None,
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn mcs_hdmi_real_retained_path_fuses_fresh_stage_only_through_commit() {
+        struct ResetMcsHdmiTestModel;
+
+        impl Drop for ResetMcsHdmiTestModel {
+            fn drop(&mut self) {
+                TEST_MCS_HDMI_FINITE_FRAME_MODEL.store(0, Ordering::Release);
+                clear_driver_task_transport(HDMI_TEXT_DRIVER_TASK_CONTRACT);
+            }
+        }
+
+        let _lock = MCS_HDMI_FINITE_FRAME_TEST_LOCK
+            .lock()
+            .expect("MCS HDMI finite-frame test lock");
+        clear_driver_task_transport(HDMI_TEXT_DRIVER_TASK_CONTRACT);
+        let _reset = ResetMcsHdmiTestModel;
+        TEST_MCS_HDMI_FINITE_FRAME_MODEL.store(1, Ordering::Release);
+
+        let mut ring_page = Box::new(AlignedDriverTaskRing(
+            [0u32; DRIVER_TASK_RING_PAGE_BYTES / core::mem::size_of::<u32>()],
+        ));
+        let ring_root_ptr = ring_page.0.as_mut_ptr() as usize;
+        publish_driver_task_ring(HDMI_TEXT_DRIVER_TASK_CONTRACT, ring_root_ptr);
+        assert!(test_publish_driver_task_ring_endpoint(
+            HDMI_TEXT_DRIVER_TASK_CONTRACT,
+        ));
+        let slot = &DRIVER_TASK_SLOT_HDMI_TEXT;
+        let sends_before = slot.counters.send_attempts.load(Ordering::Acquire);
+        let payload = b"real\n";
+        let command = mcs_hdmi_test_command(0, payload.len());
+        let staging_segments = [DriverTaskStagingSegment::ring_frame(payload, 0)];
+
+        assert_eq!(
+            run_driver_task_ring_service_retained_service_turn_staged(
+                HDMI_TEXT_DRIVER_TASK_CONTRACT,
+                command,
+                &staging_segments,
+            ),
+            DriverTaskRetainedServiceTurn::Pending,
+        );
+        let request = slot.request_seq.load(Ordering::Acquire);
+        assert_ne!(request, 0);
+        // SAFETY: The pointer addresses the fixed command record in the
+        // aligned test-owned ring page throughout this retained request.
+        let published =
+            unsafe { core::ptr::read_volatile(ring_root_ptr as *const DriverTaskCommandRecord) };
+        assert_eq!(published.sequence as usize, request);
+        assert_eq!(published.opcode, DriverTaskOpcode::SubmitFrame.as_u16());
+        assert_eq!(
+            DriverTaskRetainedLeasePhase::from_usize(
+                slot.retained_priority_lease_phase.load(Ordering::Acquire),
+            ),
+            Some(DriverTaskRetainedLeasePhase::Committed),
+        );
+        assert_eq!(slot.retained_priority_lease_mask.load(Ordering::Acquire), 0);
+        assert_eq!(
+            slot.counters.send_attempts.load(Ordering::Acquire),
+            sends_before,
+            "fresh Stage -> Commit performs no endpoint send",
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn mcs_hdmi_fresh_stage_commits_without_send_then_signals_once() {
+        use core::cell::Cell;
+
+        let slot = DriverTaskCommandSlot::new();
+        let mut ring_page = Box::new(AlignedDriverTaskRing(
+            [0u32; DRIVER_TASK_RING_PAGE_BYTES / core::mem::size_of::<u32>()],
+        ));
+        let ring_root_ptr = ring_page.0.as_mut_ptr() as usize;
+        let payload = b"row\n";
+        let (command, fingerprint) = stage_mcs_hdmi_test_frame(&slot, ring_root_ptr, payload, 73);
+        let command_ptr = ring_root_ptr as *mut DriverTaskCommandRecord;
+        // SAFETY: The pointer addresses the fixed command record in the
+        // aligned test-owned ring page.
+        assert_eq!(unsafe { core::ptr::read_volatile(command_ptr) }.sequence, 0);
+        assert_eq!(slot.counters.send_attempts.load(Ordering::Acquire), 0);
+        assert_eq!(
+            DriverTaskRetainedLeasePhase::from_usize(
+                slot.retained_priority_lease_phase.load(Ordering::Acquire),
+            )
+            .map(DriverTaskRetainedLeasePhase::operation),
+            Some(DriverTaskRetainedLeaseOperation::CommitRing),
+        );
+
+        commit_mcs_hdmi_test_frame(&slot, ring_root_ptr, payload, command);
+        // SAFETY: The same fixed ABI record is read after sequence-last commit.
+        assert_eq!(unsafe { core::ptr::read_volatile(command_ptr) }, command);
+        assert_eq!(slot.counters.send_attempts.load(Ordering::Acquire), 0);
+        assert_eq!(
+            DriverTaskRetainedLeasePhase::from_usize(
+                slot.retained_priority_lease_phase.load(Ordering::Acquire),
+            ),
+            Some(DriverTaskRetainedLeasePhase::Committed),
+        );
+
+        let signals = Cell::new(0usize);
+        let context = || McsHdmiFiniteFrameSignal {
+            slot: &slot,
+            contract: HDMI_TEXT_DRIVER_TASK_CONTRACT,
+            command,
+            endpoint: 0x77,
+            request: command.sequence as usize,
+            fingerprint,
+            ring_root_ptr,
+        };
+        assert!(signal_mcs_hdmi_finite_frame_with(
+            context(),
+            true,
+            || {},
+            |endpoint| {
+                assert_eq!(endpoint, 0x77);
+                signals.set(signals.get().saturating_add(1));
+            },
+        ));
+        assert_eq!(signals.get(), 1);
+        assert_eq!(slot.counters.send_attempts.load(Ordering::Acquire), 1);
+        assert!(!signal_mcs_hdmi_finite_frame_with(
+            context(),
+            true,
+            || {},
+            |_| signals.set(signals.get().saturating_add(1)),
+        ));
+        assert_eq!(signals.get(), 1, "issued frame cannot be re-signalled");
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn mcs_hdmi_exact_completion_skips_all_restore_phases() {
+        let slot = DriverTaskCommandSlot::new();
+        let mut ring_page = Box::new(AlignedDriverTaskRing(
+            [0u32; DRIVER_TASK_RING_PAGE_BYTES / core::mem::size_of::<u32>()],
+        ));
+        let ring_root_ptr = ring_page.0.as_mut_ptr() as usize;
+        let payload = b"next\n";
+        let (command, fingerprint) = stage_mcs_hdmi_test_frame(&slot, ring_root_ptr, payload, 74);
+        commit_mcs_hdmi_test_frame(&slot, ring_root_ptr, payload, command);
+        assert!(signal_mcs_hdmi_finite_frame_with(
+            McsHdmiFiniteFrameSignal {
+                slot: &slot,
+                contract: HDMI_TEXT_DRIVER_TASK_CONTRACT,
+                command,
+                endpoint: 0x77,
+                request: command.sequence as usize,
+                fingerprint,
+                ring_root_ptr,
+            },
+            true,
+            || {},
+            |_| {},
+        ));
+        let completion_ptr =
+            (ring_root_ptr + DRIVER_TASK_RING_COMPLETION_OFFSET) as *mut DriverTaskCompletionRecord;
+        let completion = DriverTaskCompletionRecord::idle(command.sequence);
+        // SAFETY: The pointer addresses the fixed completion record in the
+        // aligned test-owned ring page.
+        unsafe { core::ptr::write_volatile(completion_ptr, completion) };
+        // SAFETY: The exact record is read from the same test-owned location.
+        assert_eq!(
+            unsafe { core::ptr::read_volatile(completion_ptr) },
+            completion
+        );
+        assert_eq!(
+            latch_driver_task_retained_priority_lease_completion(&slot),
+            DriverTaskRetainedLeaseTurn::ReadyToComplete,
+        );
+        assert_eq!(
+            DriverTaskRetainedLeasePhase::from_usize(
+                slot.retained_priority_lease_phase.load(Ordering::Acquire),
+            ),
+            Some(DriverTaskRetainedLeasePhase::ReadyToComplete),
+        );
+        assert!(finish_driver_task_retained_priority_lease(
+            &slot,
+            HDMI_TEXT_DRIVER_TASK_CONTRACT,
+            command,
+            command.sequence as usize,
+            fingerprint,
+        ));
+        assert_eq!(
+            DriverTaskRetainedLeasePhase::from_usize(
+                slot.retained_priority_lease_phase.load(Ordering::Acquire),
+            ),
+            Some(DriverTaskRetainedLeasePhase::Inactive),
+        );
+        assert_eq!(
+            slot.retained_priority_boost_active.load(Ordering::Acquire),
+            0
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn mcs_hdmi_tampered_committed_frame_fails_closed_before_signal() {
+        use core::cell::Cell;
+
+        let slot = DriverTaskCommandSlot::new();
+        let mut ring_page = Box::new(AlignedDriverTaskRing(
+            [0u32; DRIVER_TASK_RING_PAGE_BYTES / core::mem::size_of::<u32>()],
+        ));
+        let ring_root_ptr = ring_page.0.as_mut_ptr() as usize;
+        let payload = b"bad\n";
+        let (command, fingerprint) = stage_mcs_hdmi_test_frame(&slot, ring_root_ptr, payload, 75);
+        commit_mcs_hdmi_test_frame(&slot, ring_root_ptr, payload, command);
+        let mut tampered = command;
+        tampered.aux0 = 1;
+        // SAFETY: The pointer addresses the fixed command record in the
+        // aligned test-owned ring page and deliberately models a shared-memory
+        // identity tear before the notification boundary.
+        unsafe {
+            core::ptr::write_volatile(ring_root_ptr as *mut DriverTaskCommandRecord, tampered)
+        };
+        let signals = Cell::new(0usize);
+        assert!(!signal_mcs_hdmi_finite_frame_with(
+            McsHdmiFiniteFrameSignal {
+                slot: &slot,
+                contract: HDMI_TEXT_DRIVER_TASK_CONTRACT,
+                command,
+                endpoint: 0x77,
+                request: command.sequence as usize,
+                fingerprint,
+                ring_root_ptr,
+            },
+            true,
+            || {},
+            |_| signals.set(signals.get().saturating_add(1)),
+        ));
+        assert_eq!(signals.get(), 0);
+        assert_eq!(slot.counters.send_attempts.load(Ordering::Acquire), 0);
+        fail_driver_task_retained_priority_lease(&slot, HDMI_TEXT_DRIVER_TASK_CONTRACT);
+        assert_eq!(
+            DriverTaskRetainedLeasePhase::from_usize(
+                slot.retained_priority_lease_phase.load(Ordering::Acquire),
+            ),
+            Some(DriverTaskRetainedLeasePhase::Poisoned),
+        );
+        assert_eq!(slot.active.load(Ordering::Acquire), 1);
+    }
+
+    #[cfg(feature = "kernel")]
     #[test]
     fn retained_cyw43_issue_restages_canonical_descriptor_before_sequence_commit() {
         let slot = DriverTaskCommandSlot::new();
@@ -36203,6 +36883,8 @@ mod tests {
         counters.timeouts = u64::MAX;
         counters.keep_active_timeouts = u64::MAX;
         counters.aborts = u64::MAX;
+        counters.overruns = u64::MAX;
+        counters.drops = u64::MAX;
         counters.rx_frames = u64::MAX;
         counters.rx_bytes = u64::MAX;
         counters.tx_frames = u64::MAX;
@@ -36221,6 +36903,51 @@ mod tests {
         .is_ok());
         assert!(line.as_str().ends_with("role_aux3=18446744073709551615"));
         assert!(line.len() < DRIVER_TASK_COUNTER_LINE_BYTES);
+
+        for (contract, hot_path) in [
+            (
+                CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                DriverTaskHotPath::Cyw43Wifi,
+            ),
+            (SDIO_HOST_DRIVER_TASK_CONTRACT, DriverTaskHotPath::SdioHost),
+            (GENET_DRIVER_TASK_CONTRACT, DriverTaskHotPath::GenetNic),
+        ] {
+            let mut activity_counters = counters;
+            activity_counters.hot_path = hot_path.as_u32();
+            let activity =
+                driver_task_activity_lines_from_snapshot(contract.name, activity_counters)
+                    .expect("the complete operator projection fits its fixed rows");
+            assert_eq!(activity.len(), DRIVER_TASK_ACTIVITY_LINE_COUNT);
+            for line in &activity {
+                assert!(
+                    line.len() < crate::serial::DEFAULT_LINE_CAPACITY,
+                    "saturated operator row exceeds the console ABI: len={} row={line}",
+                    line.len(),
+                );
+            }
+            for part in [
+                "turn", "outcome", "sched", "retry", "cache", "traffic", "role",
+            ] {
+                let needle = std::format!("part={part}");
+                assert_eq!(
+                    activity
+                        .iter()
+                        .filter(|line| line.contains(needle.as_str()))
+                        .count(),
+                    1,
+                    "each fixed projection part appears exactly once: {part}",
+                );
+            }
+            let contract_field = std::format!("contract={}", contract.name);
+            assert!(activity
+                .iter()
+                .all(|line| line.contains(contract_field.as_str())));
+            let hot_path_field = std::format!("hot_path={}", hot_path.as_str());
+            assert!(activity[0].contains(hot_path_field.as_str()));
+            assert!(activity[0].contains("sequence=4294967295"));
+            assert!(activity[3].contains("drops=18446744073709551615"));
+            assert!(activity[6].ends_with("role_aux3=18446744073709551615"));
+        }
     }
 
     #[test]

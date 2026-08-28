@@ -761,7 +761,14 @@ reusable ownership pattern.
   CYW43/SDIO supervisor cannot take its first driver turn while that PCIe/USB
   controller-owner chain is still retained. Its operator phase routes ordinary
   one-operation EventPump turns until the USB controller owner is ready, then
-  rechecks Wi-Fi admission. Keyboard command readiness and first-byte proof
+  rechecks Wi-Fi admission. While retained bootstrap work remains, a pending
+  display milestone keeps its existing first-turn priority, but distinct
+  non-display turns alternate one bounded linked USB/HID service unit with
+  serial/dispatch service. Network stays fenced throughout this operator
+  rotation, and any USB byte remains buffered for the later serial/dispatch
+  turn. This preserves keyboard-enumeration progress without composing USB and
+  CYW43 hardware operations or allowing either physical console to starve.
+  Keyboard command readiness and first-byte proof
   remain independent downstream USB gates and are not prerequisites for Wi-Fi.
   `LocalSeat` does not add a second proof-scheduling phase after endpoint
   completion and does not
@@ -815,6 +822,21 @@ reusable ownership pattern.
   eight-column stop by exactly 1 through 8 cells, including eight cells when
   the cursor is already aligned. Never read live scanout to implement terminal
   scroll or redraw.
+- On the physical Pi MCS profile only, the canonical one-way HDMI-text
+  `SubmitFrame` command selects retained scheduler mask zero: exact HDMI
+  contract and hot-path role, generated budget, zero auxiliaries, fixed frame
+  offset, nonzero in-bound payload, and zero frame flags are all required.
+  HDMI already owns its generated active scheduling context and has no
+  separately scheduled bus owner, so one fresh request may fuse only the
+  hardware-free `Stage` through sequence-last `CommitRing` transition.
+  Endpoint notification remains the next outer turn, and completion polling
+  and retirement remain a later outer turn. An exact completion advances
+  directly from `Issued` to `ReadyToComplete`; it does not manufacture classic
+  priority-boost or restore phases that cannot change MCS state. Any command,
+  request, endpoint, ring, fingerprint, retained-lease, or committed-record
+  identity drift fails closed before notification. This lane changes no
+  scheduling budget, payload limit, raster operation, USB path, bus ownership,
+  physical-operation cardinality, or QEMU behavior.
 - Admit the framebuffer before rendering: the format must be RGB888 or
   XRGB8888, the visible area must contain a complete 8-by-16 cell, row bytes
   must fit the pitch, the declared framebuffer range must cover
@@ -951,11 +973,16 @@ reusable ownership pattern.
   every retained handler lifetime while the source and ingress remain stopped.
   Producer movement, a cursor distance beyond the 32-descriptor hardware ring,
   generation/token drift, failed stop/readback, or timeout faults the pair and
-  leaves MAC RX, RDMA, TDMA, and IRQ sources contained. The child publishes the
-  direct generation while stopped, resumes RDMA then MAC RX, and unmasks with
-  readback. A queued exact seL4 IRQ notification received after READY belongs
-  to the same sole owner and is serviced as direct-epoch work; DGHO never
-  fabricates or synthetically acknowledges a handler lifetime.
+  leaves MAC RX, RDMA, TDMA, and IRQ sources contained. While stopped and before
+  publishing the direct generation, the child unconditionally acknowledges the
+  exact admitted IRQHandler once at this finite empty ownership boundary. This
+  closes a queued-but-unobserved legacy notification lifetime before RDMA, MAC
+  RX, and the exact source resume in that order with readback. An ACK failure
+  faults before READY. The boundary ACK grants no packet work, does not
+  fabricate an IRQ wake, and cannot recur as a poller; durable DMA and direct
+  ring cursors remain the only post-cutover service authority. A queued exact
+  seL4 IRQ notification received after READY belongs to the same sole owner and
+  is serviced as direct-epoch work.
 - Direct GENET service handles at most 16 material frame units per wake, with at
   most eight TX units before RX receives the remaining share. Finalizing a
   retained ambiguous TX or RX cursor commit consumes one unit in the current
@@ -1041,6 +1068,16 @@ transport:
   The window replaces, rather than composes with, the earlier four-Driver
   restart burst and changes no SC value, device deadline, operation
   cardinality, owner, or QEMU/generic path.
+- After the CYW43 child is attached, one root-control invocation may traverse
+  up to the existing five-turn hard cap across distinct
+  `Serial`/`LocalSeat`/`Dispatch`/`Display`/`Network` phases instead of paying a
+  scheduler edge between every phase. It admits Network at most once in that
+  invocation and stops on a repeated phase, a return to the starting phase,
+  quarantine, recovery, containment, or reboot. Only an exact productive
+  Network-to-Network successor with fresh durable schedulable work may retain
+  the current guarded activation. Each phase keeps its existing
+  one-operation bound; no SC, priority, retry, timeout, device deadline, or
+  QEMU path changes.
 - The isolated console child's Ready timestamp and the root handoff bound share
   the absolute CNTVCT millisecond domain. Root samples immediately before and
   after resume, requires identical nonzero generated/runtime timer frequency
@@ -1226,6 +1263,15 @@ steady-state record. The target may suppress it for steady, nonblocking,
 prompt-slice, and retained turns; initialization, descriptor non-acceptance,
 fault, budget-exhaustion, and non-quiet timeout evidence remains mandatory.
 Absence of a routine call row is therefore neither progress nor failure proof.
+
+The complete activity-gated `DRIVER_TASK_COUNTER` provenance record remains a
+single fixed-layout row with a 1,024-byte construction bound in boot/qlog
+evidence. It is not a console-line ABI. `smp` and `smp activity` project the
+same selected snapshot into exactly seven independently bounded 256-byte rows:
+`[smp] driver v=1` parts `turn`, `outcome`, `sched`, `retry`, `cache`,
+`traffic`, and `role`. Wi-Fi projects CYW43 then SDIO; wired mode projects
+GENET. The split changes no counter, activity gate, owner, or normalizer
+authority and cannot replace a missing canonical provenance record.
 
 On a physical-console `smp` or `smp activity` request with Wi-Fi selected, a
 complete current old-good receipt is emitted before the ordinary activity

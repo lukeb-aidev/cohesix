@@ -1174,6 +1174,29 @@ fn current_wifi_oldgood_owner_lines(
 }
 
 #[cfg(feature = "kernel")]
+fn smp_activity_selected_driver_contracts(
+    selection: crate::hal::driver_task::Pi4PreRootNetBootstrapSelection,
+) -> HeaplessVec<crate::hal::driver_task::DriverTaskContract, 2> {
+    use crate::hal::driver_task::{
+        Pi4PreRootNetBootstrapSelection, CYW43_WIFI_DRIVER_TASK_CONTRACT,
+        GENET_DRIVER_TASK_CONTRACT, SDIO_HOST_DRIVER_TASK_CONTRACT,
+    };
+
+    let mut contracts = HeaplessVec::new();
+    match selection {
+        Pi4PreRootNetBootstrapSelection::Wifi => {
+            let _ = contracts.push(CYW43_WIFI_DRIVER_TASK_CONTRACT);
+            let _ = contracts.push(SDIO_HOST_DRIVER_TASK_CONTRACT);
+        }
+        Pi4PreRootNetBootstrapSelection::Wired => {
+            let _ = contracts.push(GENET_DRIVER_TASK_CONTRACT);
+        }
+        Pi4PreRootNetBootstrapSelection::Disabled => {}
+    }
+    contracts
+}
+
+#[cfg(feature = "kernel")]
 fn enqueue_wifi_oldgood_retained_batch(
     queue: &mut HeaplessVec<PendingConsoleOutput, CONSOLE_OUTPUT_BACKLOG_LINES>,
     outputs: HeaplessVec<PendingConsoleOutput, WIFI_OLDGOOD_RETAINED_BATCH_LINE_COUNT>,
@@ -3287,6 +3310,33 @@ enum LinkedRuntimeServicePhase {
     Display,
 }
 
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Cyw43BootstrapOperatorTurn {
+    Display,
+    LocalSeat,
+    Serial,
+}
+
+#[cfg(feature = "kernel")]
+const fn cyw43_bootstrap_operator_turn(
+    display_due: bool,
+    last_turn_was_display: bool,
+    usb_service_due: bool,
+    last_nondisplay_turn_was_local_seat: bool,
+    response_or_containment_pending: bool,
+) -> Cyw43BootstrapOperatorTurn {
+    if response_or_containment_pending {
+        Cyw43BootstrapOperatorTurn::Serial
+    } else if display_due && !last_turn_was_display {
+        Cyw43BootstrapOperatorTurn::Display
+    } else if usb_service_due && !last_nondisplay_turn_was_local_seat {
+        Cyw43BootstrapOperatorTurn::LocalSeat
+    } else {
+        Cyw43BootstrapOperatorTurn::Serial
+    }
+}
+
 #[cfg(all(feature = "kernel", feature = "net-console"))]
 fn deferred_cyw43_attached_network_continuation(
     cyw43_lane_selected: bool,
@@ -3352,6 +3402,29 @@ fn pi4_local_operator_quantum_should_stop(
         || containment_pending
         || next_phase == starting_phase
         || next_phase == admitted_phase
+}
+
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+fn deferred_cyw43_attached_quantum_should_stop(
+    starting_phase: LinkedRuntimeServicePhase,
+    admitted_phase: LinkedRuntimeServicePhase,
+    next_phase: LinkedRuntimeServicePhase,
+    network_admitted: bool,
+    reboot_pending: bool,
+    containment_pending: bool,
+    network_service_quarantined: bool,
+    recovery_required: bool,
+) -> bool {
+    network_service_quarantined
+        || recovery_required
+        || (network_admitted && next_phase == LinkedRuntimeServicePhase::Network)
+        || pi4_local_operator_quantum_should_stop(
+            starting_phase,
+            admitted_phase,
+            next_phase,
+            reboot_pending,
+            containment_pending,
+        )
 }
 
 /// Select the only physical-driver phase eligible while required Pi local-seat
@@ -4862,6 +4935,8 @@ where
     #[cfg(feature = "kernel")]
     cyw43_bootstrap_last_operator_turn_was_display: bool,
     #[cfg(feature = "kernel")]
+    cyw43_bootstrap_last_nondisplay_turn_was_local_seat: bool,
+    #[cfg(feature = "kernel")]
     cyw43_bootstrap_hdmi_ready_deferred: bool,
     local_seat: Option<&'a mut LocalSeatRuntime>,
     #[cfg(test)]
@@ -5550,6 +5625,8 @@ where
             pending_cyw43_bootstrap_serial_milestones: HeaplessDeque::new(),
             #[cfg(feature = "kernel")]
             cyw43_bootstrap_last_operator_turn_was_display: false,
+            #[cfg(feature = "kernel")]
+            cyw43_bootstrap_last_nondisplay_turn_was_local_seat: false,
             #[cfg(feature = "kernel")]
             cyw43_bootstrap_hdmi_ready_deferred: false,
             local_seat: None,
@@ -6330,37 +6407,74 @@ where
         self.poll_generic();
     }
 
-    /// Execute one ordinary attached-CYW43 EventPump turn and return whether
+    /// Execute one bounded attached-CYW43 EventPump quantum and return whether
     /// the exact Network lifetime proved a productive immediate successor.
     ///
     /// The caller may use this token only to retain its current guarded MCS
-    /// activation. Every poll still enters the ordinary EventPump arbitration,
-    /// opens and retires one outer CYW43 event lease, and performs at most the
-    /// existing bounded Network unit. Serial, local-seat, display, dispatch,
-    /// idle, recovery, quarantine, reboot, and operator-rotation transitions
-    /// all return false.
+    /// activation. Each admitted poll still enters the ordinary EventPump
+    /// arbitration and performs at most its existing one-phase hardware unit.
+    /// The wrapper may fuse up to five distinct serial, local-seat, dispatch,
+    /// display, and Network phases, but admits Network at most once. Only an
+    /// exact productive Network-to-Network edge returns true. Recovery,
+    /// quarantine, reboot, containment, a repeated phase, or a completed
+    /// operator rotation stops the quantum and returns false.
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[inline(never)]
     #[must_use = "a false continuation token requires an explicit root-control yield"]
     pub fn poll_deferred_cyw43_attached_network_control_turn(&mut self) -> bool {
-        let cyw43_lane_selected = self.linked_runtime_cyw43_lane_selected();
-        let admitted_phase = self.linked_runtime_service_phase;
-        let service_turns_before = self.metrics.net_cyw43_service_turns;
-        self.deferred_cyw43_attached_network_activity = false;
-        self.poll();
-        let snapshot = crate::drivers::driver_task_net::cyw43_service_work_snapshot();
-        deferred_cyw43_attached_network_continuation(
-            cyw43_lane_selected && self.linked_runtime_cyw43_lane_selected(),
-            admitted_phase,
-            self.linked_runtime_service_phase,
-            service_turns_before,
-            self.metrics.net_cyw43_service_turns,
-            self.deferred_cyw43_attached_network_activity,
-            self.network_service_quarantined,
-            self.reboot_pending,
-            crate::drivers::driver_task_net::cyw43_recovery_required(),
-            snapshot.schedulable_network_work(),
-        )
+        let starting_phase = self.linked_runtime_service_phase;
+        let mut network_admitted = false;
+        for _ in 0..PI4_LOCAL_OPERATOR_POLLS_PER_EXPLICIT_YIELD {
+            let admitted_phase = self.linked_runtime_service_phase;
+            if network_admitted && admitted_phase == LinkedRuntimeServicePhase::Network {
+                break;
+            }
+            let network_turn = admitted_phase == LinkedRuntimeServicePhase::Network;
+            let cyw43_lane_selected = network_turn && self.linked_runtime_cyw43_lane_selected();
+            let service_turns_before = self.metrics.net_cyw43_service_turns;
+            if network_turn {
+                self.deferred_cyw43_attached_network_activity = false;
+            }
+
+            self.poll();
+
+            if network_turn {
+                network_admitted = true;
+                // The outer-event finalizer has retired before `poll` returns,
+                // so this is a fresh durable snapshot rather than cached turn
+                // authority. Only an exact productive Network -> Network edge
+                // may retain the caller's current guarded MCS activation.
+                let snapshot = crate::drivers::driver_task_net::cyw43_service_work_snapshot();
+                if deferred_cyw43_attached_network_continuation(
+                    cyw43_lane_selected && self.linked_runtime_cyw43_lane_selected(),
+                    admitted_phase,
+                    self.linked_runtime_service_phase,
+                    service_turns_before,
+                    self.metrics.net_cyw43_service_turns,
+                    self.deferred_cyw43_attached_network_activity,
+                    self.network_service_quarantined,
+                    self.reboot_pending,
+                    crate::drivers::driver_task_net::cyw43_recovery_required(),
+                    snapshot.schedulable_network_work(),
+                ) {
+                    return true;
+                }
+            }
+
+            if deferred_cyw43_attached_quantum_should_stop(
+                starting_phase,
+                admitted_phase,
+                self.linked_runtime_service_phase,
+                network_admitted,
+                self.reboot_pending,
+                self.deferred_containment_work_pending(),
+                self.network_service_quarantined,
+                crate::drivers::driver_task_net::cyw43_recovery_required(),
+            ) {
+                break;
+            }
+        }
+        false
     }
 
     /// Service one complete Pi local-operator rotation before the caller's
@@ -8831,12 +8945,11 @@ where
     ///
     /// Serial RX/TX uses fail-closed helpers with no root-context or current-TCB
     /// UART fallback. A retained high-impact Wi-Fi status may instead receive a
-    /// dedicated display turn, alternating with serial so neither operator
-    /// surface can starve. Before CYW43 admission, a required local seat may
-    /// use the ordinary EventPump to finish its PCIe/USB controller owner
-    /// publication. Once that prerequisite is true, USB polling, network
-    /// service, and unrelated hardware-facing commands remain fenced. The
-    /// caller invokes this method only after releasing the prior turn's scoped
+    /// dedicated display turn. A separate bounded local-seat turn continues
+    /// persistent xHCI/HID enumeration and alternates with serial when due, so
+    /// no physical operator surface can starve. Network service and unrelated
+    /// hardware-facing commands remain fenced throughout bootstrap. The caller
+    /// invokes this method only after releasing the prior turn's scoped
     /// `KernelHal` borrow.
     #[cfg(feature = "kernel")]
     pub fn poll_cyw43_bootstrap_supervisor_event_turn(&mut self) {
@@ -8858,18 +8971,43 @@ where
             .local_seat
             .as_ref()
             .is_some_and(|runtime| runtime.linked_hdmi_pending_work());
-        if (self.cyw43_bootstrap_hdmi_pending || local_seat_hdmi_pending)
-            && !self.cyw43_bootstrap_last_operator_turn_was_display
-            && !self.reboot_pending
-            && !self.physical_console_response_pending()
-        {
-            self.cyw43_bootstrap_last_operator_turn_was_display = true;
-            let _ = self.pump_one_cyw43_bootstrap_hdmi_milestone();
-            self.poll_runtime(false, false, false);
-            self.cyw43_bootstrap_operator_turn_active = false;
-            return;
+        let operator_turn = cyw43_bootstrap_operator_turn(
+            self.cyw43_bootstrap_hdmi_pending || local_seat_hdmi_pending,
+            self.cyw43_bootstrap_last_operator_turn_was_display,
+            self.linked_local_seat_usb_service_pending(),
+            self.cyw43_bootstrap_last_nondisplay_turn_was_local_seat,
+            self.reboot_pending
+                || self.physical_console_response_pending()
+                || self.cyw43_bootstrap_containment_diagnostic_due,
+        );
+        match operator_turn {
+            Cyw43BootstrapOperatorTurn::Display => {
+                self.cyw43_bootstrap_last_operator_turn_was_display = true;
+                let _ = self.pump_one_cyw43_bootstrap_hdmi_milestone();
+                self.poll_runtime(false, false, false);
+                self.cyw43_bootstrap_operator_turn_active = false;
+                return;
+            }
+            Cyw43BootstrapOperatorTurn::LocalSeat => {
+                // Controller readiness admits Wi-Fi but is not keyboard
+                // readiness. Continue one bounded xHCI/HID owner turn after
+                // the prior CYW43 HAL borrow has been released. Bytes remain
+                // buffered for a later Serial/dispatch turn, and Network is
+                // explicitly fenced, so this neither delays Wi-Fi admission
+                // nor composes two physical operations in one outer turn.
+                self.cyw43_bootstrap_last_operator_turn_was_display = false;
+                self.cyw43_bootstrap_last_nondisplay_turn_was_local_seat = true;
+                self.poll_local_seat_backend_for_ingress();
+                self.poll_runtime(true, false, false);
+                #[cfg(feature = "usb")]
+                self.maybe_emit_usb_console_startup_feedback();
+                self.cyw43_bootstrap_operator_turn_active = false;
+                return;
+            }
+            Cyw43BootstrapOperatorTurn::Serial => {}
         }
         self.cyw43_bootstrap_last_operator_turn_was_display = false;
+        self.cyw43_bootstrap_last_nondisplay_turn_was_local_seat = false;
         self.serial_console_turn_active = true;
         if self.cyw43_bootstrap_containment_diagnostic_due {
             let serial_rx_activity = self.serial.service_linked_runtime_only_turn();
@@ -14293,21 +14431,12 @@ where
 
     #[cfg(feature = "kernel")]
     fn emit_smp_activity_selected_driver_counters(&mut self) {
-        use crate::hal::driver_task::{
-            pi4_pre_root_net_bootstrap_selection, Pi4PreRootNetBootstrapSelection,
-            CYW43_WIFI_DRIVER_TASK_CONTRACT, GENET_DRIVER_TASK_CONTRACT,
-            SDIO_HOST_DRIVER_TASK_CONTRACT,
-        };
+        use crate::hal::driver_task::pi4_pre_root_net_bootstrap_selection;
 
-        match pi4_pre_root_net_bootstrap_selection() {
-            Pi4PreRootNetBootstrapSelection::Wifi => {
-                self.emit_smp_activity_driver_counter(CYW43_WIFI_DRIVER_TASK_CONTRACT);
-                self.emit_smp_activity_driver_counter(SDIO_HOST_DRIVER_TASK_CONTRACT);
-            }
-            Pi4PreRootNetBootstrapSelection::Wired => {
-                self.emit_smp_activity_driver_counter(GENET_DRIVER_TASK_CONTRACT);
-            }
-            Pi4PreRootNetBootstrapSelection::Disabled => {}
+        for contract in
+            smp_activity_selected_driver_contracts(pi4_pre_root_net_bootstrap_selection())
+        {
+            self.emit_smp_activity_driver_counter(contract);
         }
     }
 
@@ -14316,8 +14445,10 @@ where
         &mut self,
         contract: crate::hal::driver_task::DriverTaskContract,
     ) {
-        if let Some(line) = crate::hal::driver_task::driver_task_counter_line(contract) {
-            self.emit_console_line(line.as_str());
+        if let Some(lines) = crate::hal::driver_task::driver_task_activity_lines(contract) {
+            for line in lines {
+                self.emit_console_line(line.as_str());
+            }
         }
     }
 
@@ -36450,6 +36581,138 @@ mod tests {
         assert!(!sent.contains(&"END"));
     }
 
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn smp_activity_selected_driver_projection_matches_pi_network_owner() {
+        use crate::hal::driver_task::{
+            Pi4PreRootNetBootstrapSelection, CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            GENET_DRIVER_TASK_CONTRACT, SDIO_HOST_DRIVER_TASK_CONTRACT,
+        };
+
+        assert_eq!(
+            smp_activity_selected_driver_contracts(Pi4PreRootNetBootstrapSelection::Wifi)
+                .as_slice(),
+            [
+                CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                SDIO_HOST_DRIVER_TASK_CONTRACT,
+            ]
+        );
+        assert_eq!(
+            smp_activity_selected_driver_contracts(Pi4PreRootNetBootstrapSelection::Wired)
+                .as_slice(),
+            [GENET_DRIVER_TASK_CONTRACT]
+        );
+        assert!(
+            smp_activity_selected_driver_contracts(Pi4PreRootNetBootstrapSelection::Disabled)
+                .is_empty()
+        );
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn bounded_sync_capture_accepts_complete_wifi_driver_activity_projection() {
+        use crate::hal::driver_task::{
+            driver_task_activity_lines_for_test, DriverTaskHotPath,
+            CYW43_WIFI_DRIVER_TASK_CONTRACT, DRIVER_TASK_ACTIVITY_LINE_COUNT,
+            SDIO_HOST_DRIVER_TASK_CONTRACT,
+        };
+
+        let driver = LoopbackSerial::<2048>::new();
+        let serial = SerialPort::<_, 2048, 2048, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 5 });
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        net.active_conn_id = Some(7);
+        net.authenticated_conn_id = Some(7);
+        net.response_batch_capacity = Some(8);
+
+        {
+            let mut pump =
+                EventPump::new(serial, timer, NullIpc, store, &mut audit).with_network(&mut net);
+            pump.last_input_source = ConsoleInputSource::Net;
+            assert!(pump.begin_sync_response_capture("SMP"));
+            pump.metrics.accepted_commands = 1;
+            for index in 0..16 {
+                let line = std::format!("[smp] activity fixture={index}");
+                assert!(pump.try_emit_console_line(line.as_str()));
+            }
+            for (contract, hot_path) in [
+                (
+                    CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                    DriverTaskHotPath::Cyw43Wifi,
+                ),
+                (SDIO_HOST_DRIVER_TASK_CONTRACT, DriverTaskHotPath::SdioHost),
+            ] {
+                let mut counters = pi4_driver_abi::DriverRuntimeCounterSnapshot::for_hot_path(
+                    hot_path.as_u32(),
+                    pi4_driver_abi::DRIVER_RUNTIME_COUNTER_FLAG_ROOT_SNAPSHOT,
+                    u32::MAX,
+                );
+                counters.submitted_turns = u64::MAX;
+                counters.completed_turns = u64::MAX;
+                counters.timeouts = u64::MAX;
+                counters.keep_active_timeouts = u64::MAX;
+                counters.rx_bytes = u64::MAX;
+                counters.tx_bytes = u64::MAX;
+                let lines = driver_task_activity_lines_for_test(contract, counters)
+                    .expect("saturated selected-driver rows fit the console ABI");
+                assert_eq!(lines.len(), DRIVER_TASK_ACTIVITY_LINE_COUNT);
+                for line in lines {
+                    assert!(pump.try_emit_console_line(line.as_str()));
+                }
+            }
+            pump.emit_terminal_console_line("OK SMP mode=activity");
+            assert!(
+                !pump.finish_sync_response_capture(true, true),
+                "a complete WiFi projection must not fault the synchronous capture"
+            );
+            assert_eq!(pump.metrics.accepted_commands, 1);
+            assert_eq!(pump.metrics.denied_commands, 0);
+            for _ in 0..256 {
+                if pump.pending_stream.is_none()
+                    && pump
+                        .net
+                        .as_ref()
+                        .and_then(|net| net.console_response_lane())
+                        .is_none()
+                {
+                    break;
+                }
+                pump.poll_split_ordinary_virtio_compact();
+            }
+            assert!(pump.pending_stream.is_none());
+            assert!(pump
+                .net
+                .as_ref()
+                .and_then(|net| net.console_response_lane())
+                .is_none());
+        }
+
+        assert_eq!(
+            net.sent
+                .iter()
+                .filter(|line| line.starts_with("[smp] driver v=1 "))
+                .count(),
+            2 * crate::hal::driver_task::DRIVER_TASK_ACTIVITY_LINE_COUNT
+        );
+        assert!(net
+            .sent
+            .iter()
+            .all(|line| !line.contains("bounded-response-overflow")));
+        assert_eq!(
+            net.sent.last().map(|line| line.as_str()),
+            Some("OK SMP mode=activity")
+        );
+        assert_eq!(
+            net.terminal_sent
+                .iter()
+                .map(|line| line.as_str())
+                .collect::<std::vec::Vec<_>>(),
+            ["OK SMP mode=activity"]
+        );
+    }
+
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[test]
     fn isolated_fixed_synchronous_producers_cross_batch_depth_without_end() {
@@ -43606,6 +43869,46 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
+    fn cyw43_bootstrap_rotates_display_usb_and_serial_without_network() {
+        use Cyw43BootstrapOperatorTurn::{Display, LocalSeat, Serial};
+
+        assert_eq!(
+            cyw43_bootstrap_operator_turn(true, false, true, false, false),
+            Display,
+            "a pending visible milestone keeps its existing first-turn priority",
+        );
+        assert_eq!(
+            cyw43_bootstrap_operator_turn(true, true, true, false, false),
+            LocalSeat,
+            "the next bounded turn advances persistent keyboard enumeration",
+        );
+        assert_eq!(
+            cyw43_bootstrap_operator_turn(true, false, true, true, false),
+            Display,
+            "display may run between distinct non-display owners",
+        );
+        assert_eq!(
+            cyw43_bootstrap_operator_turn(true, true, true, true, false),
+            Serial,
+            "serial remains the next non-display owner after one USB turn",
+        );
+        assert_eq!(
+            cyw43_bootstrap_operator_turn(false, false, true, false, false),
+            LocalSeat,
+        );
+        assert_eq!(
+            cyw43_bootstrap_operator_turn(false, false, true, true, false),
+            Serial,
+        );
+        assert_eq!(
+            cyw43_bootstrap_operator_turn(true, false, true, false, true),
+            Serial,
+            "response and containment work cannot be displaced by display or USB",
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
     fn pi_local_operator_quantum_requires_physical_and_linked_serial_ownership() {
         assert!(pi4_local_operator_quantum_enabled(true, true));
         for state in [(false, true), (true, false), (false, false)] {
@@ -43658,6 +43961,109 @@ mod tests {
             false,
             true,
         ));
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn pi_attached_wifi_quantum_fuses_distinct_phases_but_never_repolls_network() {
+        let start = LinkedRuntimeServicePhase::Display;
+        for (admitted, next) in [
+            (
+                LinkedRuntimeServicePhase::Display,
+                LinkedRuntimeServicePhase::Serial,
+            ),
+            (
+                LinkedRuntimeServicePhase::Serial,
+                LinkedRuntimeServicePhase::LocalSeat,
+            ),
+            (
+                LinkedRuntimeServicePhase::LocalSeat,
+                LinkedRuntimeServicePhase::Dispatch,
+            ),
+            (
+                LinkedRuntimeServicePhase::Dispatch,
+                LinkedRuntimeServicePhase::Network,
+            ),
+        ] {
+            assert!(!deferred_cyw43_attached_quantum_should_stop(
+                start, admitted, next, false, false, false, false, false,
+            ));
+        }
+
+        assert!(!deferred_cyw43_attached_quantum_should_stop(
+            LinkedRuntimeServicePhase::Network,
+            LinkedRuntimeServicePhase::Network,
+            LinkedRuntimeServicePhase::Serial,
+            true,
+            false,
+            false,
+            false,
+            false,
+        ));
+        assert!(deferred_cyw43_attached_quantum_should_stop(
+            LinkedRuntimeServicePhase::Network,
+            LinkedRuntimeServicePhase::Dispatch,
+            LinkedRuntimeServicePhase::Network,
+            true,
+            false,
+            false,
+            false,
+            false,
+        ));
+        assert!(deferred_cyw43_attached_quantum_should_stop(
+            LinkedRuntimeServicePhase::Serial,
+            LinkedRuntimeServicePhase::Display,
+            LinkedRuntimeServicePhase::Serial,
+            false,
+            false,
+            false,
+            false,
+            false,
+        ));
+        assert!(deferred_cyw43_attached_quantum_should_stop(
+            start,
+            LinkedRuntimeServicePhase::LocalSeat,
+            LinkedRuntimeServicePhase::Dispatch,
+            false,
+            true,
+            false,
+            false,
+            false,
+        ));
+        assert!(deferred_cyw43_attached_quantum_should_stop(
+            start,
+            LinkedRuntimeServicePhase::LocalSeat,
+            LinkedRuntimeServicePhase::Dispatch,
+            false,
+            false,
+            true,
+            false,
+            false,
+        ));
+        assert!(deferred_cyw43_attached_quantum_should_stop(
+            start,
+            LinkedRuntimeServicePhase::Serial,
+            LinkedRuntimeServicePhase::LocalSeat,
+            false,
+            false,
+            false,
+            true,
+            false,
+        ));
+        assert!(deferred_cyw43_attached_quantum_should_stop(
+            start,
+            LinkedRuntimeServicePhase::Serial,
+            LinkedRuntimeServicePhase::LocalSeat,
+            false,
+            false,
+            false,
+            false,
+            true,
+        ));
+        assert_eq!(
+            PI4_LOCAL_OPERATOR_POLLS_PER_EXPLICIT_YIELD, 5,
+            "the fused attached rotor retains the manifest-admitted hard cap",
+        );
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]

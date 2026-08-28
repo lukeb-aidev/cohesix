@@ -45972,6 +45972,22 @@ fn genet_direct_advance_cutover(
                 return genet_direct_cutover_fault(state);
             }
 
+            // Device quiescence alone cannot prove that the seL4/GIC IRQ
+            // lifetime is armed. A legacy RX source can reach the kernel and
+            // disable the handler while this retained DGHO command is running,
+            // before the bound notification badge is observed by the child.
+            // At this finite ownership boundary every device source is masked
+            // and cleared and the producer/consumer frontier is empty, so one
+            // unconditional handler ACK is the safe re-arm operation. It
+            // grants no packet work; durable indices and the direct-ring
+            // generation remain the only post-cutover service authority.
+            if !runtime_irq_handler_ack(state.irq_handler_slot) {
+                state.irq_ack_failures = state.irq_ack_failures.saturating_add(1);
+                return genet_direct_cutover_fault(state);
+            }
+            state.irq_acks = state.irq_acks.saturating_add(1);
+            state.irq_ack_pending = false;
+
             state.direct_genet_generation = generation;
             state.direct_genet_active = true;
             state.direct_genet_cutover_phase = GenetDirectCutoverPhase::Direct;
@@ -61261,7 +61277,8 @@ fn runtime_irq_handler_ack(handler_slot: u32) -> bool {
     let mut mr2 = 0;
     let mut mr3 = 0;
     // SAFETY: Descriptor admission proves that `handler_slot` is the generated
-    // SDIO IRQ-handler cap. This is the exact libsel4 IRQHandler_Ack call shape.
+    // and admitted driver IRQ-handler cap for this runtime. This is the exact
+    // libsel4 IRQHandler_Ack call shape.
     unsafe {
         let tag = sel4_sys::seL4_MessageInfo::new(
             sel4_sys::invocation_label_IRQAckIRQ as sel4_sys::seL4_Word,
@@ -77623,7 +77640,9 @@ mod tests {
             assert!(runtime.direct_genet_active);
             assert_eq!(runtime.rx_cons_index, 1);
             assert!(!runtime.irq_ack_pending);
+            assert_eq!(runtime.irq_acks, 2);
         });
+        assert_eq!(TEST_RUNTIME_IRQ_ACK_CALLS.load(Ordering::Acquire), 2);
 
         GENET_RUNTIME_STATE.with_ref(|runtime| {
             stage_direct_genet_rx_hardware(&descriptor, runtime, b"first-post-fence-rx")
@@ -77647,7 +77666,7 @@ mod tests {
             assert!(!runtime.irq_ack_pending);
             assert_eq!(runtime.irq_wakes, 1);
         });
-        assert_eq!(TEST_RUNTIME_IRQ_ACK_CALLS.load(Ordering::Acquire), 2);
+        assert_eq!(TEST_RUNTIME_IRQ_ACK_CALLS.load(Ordering::Acquire), 3);
 
         for (sequence, aux0, frame) in [
             (
@@ -77716,7 +77735,7 @@ mod tests {
     }
 
     #[test]
-    fn direct_genet_handoff_fences_queued_legacy_source_without_synthetic_ack() {
+    fn direct_genet_handoff_rearms_queued_legacy_irq_at_ownership_boundary() {
         let _guard = test_guard();
         reset_runtime_for_test();
         let generation = 0x26e0_000c;
@@ -77802,17 +77821,22 @@ mod tests {
             "resume restores the engine without reconstructing ring configuration",
         );
         assert_eq!(genet_irq_raw_sources(), 0);
-        assert_eq!(TEST_RUNTIME_IRQ_ACK_CALLS.load(Ordering::Acquire), 0);
+        GENET_RUNTIME_STATE.with_ref(|runtime| {
+            assert_eq!(runtime.irq_wakes, 0);
+            assert_eq!(runtime.irq_acks, 1);
+            assert!(!runtime.irq_ack_pending);
+        });
+        assert_eq!(TEST_RUNTIME_IRQ_ACK_CALLS.load(Ordering::Acquire), 1);
 
         assert!(genet_runtime_service_notification(
             DRIVER_RUNTIME_GENET_IRQ_BADGE,
         ));
         GENET_RUNTIME_STATE.with_ref(|runtime| {
             assert_eq!(runtime.irq_wakes, 1);
-            assert_eq!(runtime.irq_acks, 1);
+            assert_eq!(runtime.irq_acks, 2);
             assert_eq!(runtime.rx_cons_index, 0);
         });
-        assert_eq!(TEST_RUNTIME_IRQ_ACK_CALLS.load(Ordering::Acquire), 1);
+        assert_eq!(TEST_RUNTIME_IRQ_ACK_CALLS.load(Ordering::Acquire), 2);
     }
 
     #[test]
@@ -77846,10 +77870,10 @@ mod tests {
         GENET_RUNTIME_STATE.with_ref(|runtime| {
             assert!(runtime.direct_genet_active);
             assert_eq!(runtime.irq_wakes, 0);
-            assert_eq!(runtime.irq_acks, 0);
+            assert_eq!(runtime.irq_acks, 1);
         });
         assert_eq!(genet_irq_raw_sources(), GENET_IRQ_RXDMA_MBDONE);
-        assert_eq!(TEST_RUNTIME_IRQ_ACK_CALLS.load(Ordering::Acquire), 0);
+        assert_eq!(TEST_RUNTIME_IRQ_ACK_CALLS.load(Ordering::Acquire), 1);
 
         assert!(genet_runtime_service_notification(
             DRIVER_RUNTIME_GENET_IRQ_BADGE,
@@ -77857,14 +77881,14 @@ mod tests {
         GENET_RUNTIME_STATE.with_ref(|runtime| {
             assert!(runtime.direct_genet_active);
             assert_eq!(runtime.irq_wakes, 1);
-            assert_eq!(runtime.irq_acks, 1);
+            assert_eq!(runtime.irq_acks, 2);
             assert_eq!(runtime.rx_cons_index, 0);
         });
-        assert_eq!(TEST_RUNTIME_IRQ_ACK_CALLS.load(Ordering::Acquire), 1);
+        assert_eq!(TEST_RUNTIME_IRQ_ACK_CALLS.load(Ordering::Acquire), 2);
     }
 
     #[test]
-    fn direct_genet_handoff_unmask_readback_failure_faults_without_ready_or_ack() {
+    fn direct_genet_handoff_unmask_readback_failure_faults_after_boundary_rearm() {
         let _guard = test_guard();
         reset_runtime_for_test();
         let generation = 0x26e0_000e;
@@ -77896,11 +77920,58 @@ mod tests {
             assert!(runtime.direct_genet_faulted);
             assert_eq!(runtime.irq_unmask_failures, 1);
             assert_eq!(runtime.irq_wakes, 0);
-            assert_eq!(runtime.irq_acks, 0);
+            assert_eq!(runtime.irq_acks, 1);
         });
-        assert_eq!(TEST_RUNTIME_IRQ_ACK_CALLS.load(Ordering::Acquire), 0);
+        assert_eq!(TEST_RUNTIME_IRQ_ACK_CALLS.load(Ordering::Acquire), 1);
         assert_ne!(
             genet_read32(GENET_INTRL2_0_CPU_MASK_STATUS) & GENET_NAPI_IRQ_MASK,
+            0,
+        );
+    }
+
+    #[test]
+    fn direct_genet_handoff_boundary_rearm_failure_stops_before_ready() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let generation = 0x26e0_0015;
+        RUNTIME_DESCRIPTOR.store(direct_genet_descriptor_for_test());
+        initialize_direct_genet_pages(generation);
+        let mut state = GenetRuntimeState::new();
+        arm_genet_test_irq_state(&mut state);
+        GENET_RUNTIME_STATE.with_mut(|runtime| *runtime = state);
+
+        let command = direct_genet_handoff_command(55, generation);
+        let quiescing = Some(DriverTaskCompletionRecord::idle_with_detail_and_frame(
+            55,
+            DRIVER_RUNTIME_DIRECT_GENET_HANDOFF_DETAIL_QUIESCING,
+            driver_runtime_direct_genet_handoff_token(generation),
+            DriverFrameDescriptor::empty(),
+        ));
+        assert_eq!(genet_direct_handoff_completion(command), quiescing);
+        assert_eq!(genet_direct_handoff_completion(command), quiescing);
+        TEST_RUNTIME_IRQ_ACK_FAILURES_REMAINING.store(1, Ordering::Release);
+
+        assert_eq!(
+            genet_direct_handoff_completion(command),
+            Some(DriverTaskCompletionRecord::fault(
+                55,
+                FAULT_DEVICE_UNAVAILABLE,
+            )),
+        );
+        GENET_RUNTIME_STATE.with_ref(|runtime| {
+            assert!(!runtime.initialized);
+            assert!(!runtime.direct_genet_active);
+            assert!(runtime.direct_genet_faulted);
+            assert_eq!(runtime.irq_ack_failures, 1);
+            assert_eq!(runtime.irq_acks, 0);
+        });
+        assert_eq!(TEST_RUNTIME_IRQ_ACK_CALLS.load(Ordering::Acquire), 1);
+        assert_ne!(
+            genet_read32(GENET_INTRL2_0_CPU_MASK_STATUS) & GENET_NAPI_IRQ_MASK,
+            0,
+        );
+        assert_eq!(
+            genet_read32(GENET_UMAC_CMD) & (GENET_CMD_RX_EN | GENET_CMD_TX_EN),
             0,
         );
     }

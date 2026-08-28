@@ -63,6 +63,19 @@ host evidence-truth changes, not wire, workload, or report-schema changes. Pi
 build selection and generated private ABI/resource records remain unchanged.
 A fresh physical benchmark is still the only Pi performance authority.
 
+The finite GENET ownership-boundary IRQ rearm, attached-CYW43 distinct-phase
+composition, Wi-Fi-bootstrap USB/serial/display fairness, and physical-Pi MCS
+HDMI finite-frame lane are private target scheduling and driver-lifetime
+changes. They add no command, wire field, namespace, Python API, workload, or
+report field. The bounded
+`[smp] driver v=1 part=...` rows are an operator-only projection; trace and
+benchmark tooling continues to consume the unchanged canonical
+`DRIVER_TASK_COUNTER` boot/qlog record. The generated profile contracts,
+`coh-rtc` outputs, Pi manifest/resource allocation, `tools/cohesix-py`, and
+benchmark scripts therefore require no change. Host tests can validate those
+bounds and parsing invariants, but only a fresh exact-image Pi run can establish
+GENET IRQ progress, Wi-Fi/USB/HDMI latency, TCP/script success, or performance.
+
 ## Choose one live topology
 
 The target TCP console is single-client. Use direct mode for one foreground tool or
