@@ -956,6 +956,101 @@ fn root_control_containment_serializes_before_the_ordinary_pump_turn() {
 }
 
 #[test]
+fn pi_recovery_predicates_sample_one_constant_size_service_fault_frontier() {
+    let event = include_str!("../src/event/mod.rs");
+    for (start_marker, end_marker, local_marker) in [
+        (
+            "fn isolated_service_recovery_pending(&self) -> bool {",
+            "fn isolated_service_containment_pending(&self) -> bool {",
+            "NetPoller::console_service_local_fault_pending",
+        ),
+        (
+            "fn isolated_service_containment_pending(&self) -> bool {",
+            "pub fn pi_isolated_service_recovery_pending(&self) -> bool {",
+            "NetPoller::console_service_local_containment_pending",
+        ),
+    ] {
+        let start = event.find(start_marker).expect("Pi recovery predicate");
+        let end = event[start..]
+            .find(end_marker)
+            .map(|offset| start + offset)
+            .expect("bounded Pi recovery predicate");
+        let predicate = &event[start..end];
+
+        assert_eq!(
+            predicate
+                .matches("target_any_service_fault_pending()")
+                .count(),
+            1,
+            "each predicate must take one fresh any-service frontier sample",
+        );
+        assert!(!predicate.contains("target_service_fault_pending("));
+        assert!(!predicate.contains("SERVICE_TASK_ID"));
+        assert!(predicate.contains(".unwrap_or(true)"));
+
+        let direct = predicate
+            .find("genet_direct_pair_fault_pending()")
+            .expect("direct-GENET recovery predicate");
+        let local = predicate[direct..]
+            .find(local_marker)
+            .map(|offset| direct + offset)
+            .expect("console-network local recovery predicate");
+        let frontier = predicate[local..]
+            .find("|| crate::hal::critical_tcb::target_any_service_fault_pending()")
+            .map(|offset| local + offset)
+            .expect("constant-size service-fault frontier predicate");
+        let ninedoor = predicate[frontier..]
+            .find("NineDoorBridge::target_service_")
+            .map(|offset| frontier + offset)
+            .expect("NineDoor local recovery predicate");
+        assert!(direct < local && local < frontier && frontier < ninedoor);
+    }
+
+    let hal = include_str!("../src/hal/critical_tcb.rs");
+    let any_start = hal
+        .find("pub(crate) fn target_any_service_fault_pending()")
+        .expect("event-callable any-service target frontier");
+    let any_end = hal[any_start..]
+        .find("pub fn activate_critical_tcb_runtime(")
+        .map(|offset| any_start + offset)
+        .expect("bounded any-service target frontier");
+    let any_frontier = &hal[any_start..any_end];
+    assert!(any_frontier.contains("is_generated_service_fault_badge("));
+    assert!(any_frontier.contains("handoff.any_service_fault_pending()"));
+    assert!(!any_frontier.contains("generated_service_task_index("));
+    assert!(!any_frontier.contains("generated::temporal_tasks()"));
+    assert!(!any_frontier.contains("task_id"));
+
+    let raw_valid = any_frontier
+        .find("TARGET_PENDING_FAULT_VALID.load(Ordering::Acquire)")
+        .expect("Acquire-ordered raw validity sample");
+    let raw_badge = any_frontier[raw_valid..]
+        .find("TARGET_PENDING_FAULT_BADGE.load(Ordering::Relaxed)")
+        .map(|offset| raw_valid + offset)
+        .expect("payload read after raw validity sample");
+    let intermediate_valid = any_frontier[raw_badge..]
+        .find("TARGET_ROOT_FAULT_SERVICE_VALID.load(Ordering::Acquire)")
+        .map(|offset| raw_badge + offset)
+        .expect("Acquire-ordered intermediate validity sample");
+    assert!(raw_valid < raw_badge && raw_badge < intermediate_valid);
+
+    let model = include_str!("../src/critical_tcb.rs");
+    let classifier_start = model
+        .find("pub(crate) fn is_generated_service_fault_badge(")
+        .expect("constant-size generated service-badge classifier");
+    let classifier_end = model[classifier_start..]
+        .find("pub(crate) fn generated_service_task_index(")
+        .map(|offset| classifier_start + offset)
+        .expect("bounded generated service-badge classifier");
+    let classifier = &model[classifier_start..classifier_end];
+    assert!(classifier.contains("generated::ninedoor_service_config()"));
+    assert!(classifier.contains("generated::console_network_service_config()"));
+    assert!(!classifier.contains("generated::temporal_tasks()"));
+    assert!(!classifier.contains(".iter()"));
+    assert!(model.contains("pub const SERVICE_FAULT_RECORD_CAPACITY: usize = 2;"));
+}
+
+#[test]
 fn pi_passive_boundary_resets_selected_kernel_evidence_immediately_before_yield() {
     let selected_kernel = include_str!("../../../seL4/build_UBOOT/kernel/kernel_all_copy.c");
     let yield_start = selected_kernel

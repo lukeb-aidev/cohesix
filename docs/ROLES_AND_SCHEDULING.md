@@ -579,6 +579,16 @@ closed and emits one bounded operator marker. Unrelated raw input and root-owned
 diagnostics remain live before a passive command is retained. The QEMU direct-VirtIO branch
 exits before this Pi-only boundary and keeps its existing counter guard.
 
+The recovery samples on this hot boundary are complete-service questions, not
+task-discovery operations. Root samples the already-published raw fault badge,
+the intermediate service-fault flag, and the two-slot final handoff once with
+Acquire ordering. It never scans the generated Worker population to rediscover
+the two fixed services and never caches a no-fault answer across turns.
+Ambiguous or contended handoff state remains recovery-pending. This keeps the
+recovery-first and post-sample `CallArm` fences exact while preventing
+population-scaled task discovery from consuming the 250-us passive reserve or
+multiplying every deferred WiFi supervisor turn.
+
 The passive NineDoor service is co-located with `root-control` on core 0 in
 every checked-in target manifest. Its compiler-validated `locality_bound`
 contract makes the sole permitted donor and service share one core, avoiding a

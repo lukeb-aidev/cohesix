@@ -10537,6 +10537,46 @@ Changes:
     change. Focused state/source tests plus a canonical QEMU TCP/NineDoor canary
     are rejection gates only; fresh exact-image WiFi and GENET scripts, raw
     framed tests, and medium/high pressure remain mandatory for closure.
+  - exact-91b complete-service-frontier correction — exact source
+    `91b2c529cea01d0e6c857570b315963c5bf153ad`, build ID
+    `33f71e80412cb39ef0f6e847deb8da17baf6084088d18089417a3b5df7e19116`,
+    image ID
+    `5ad7f4d0df188c7d311ebaaefabe4e4ab74182aeb01b6282fe6f49a1ac87659e`,
+    image SHA-256
+    `2247a83073ae8d7aaa5bf686f5af07458b3b97cd5c038bcb9a0f2f2540d007e6`,
+    serial diagnostics, and boot-paired `20260830-080743` captures prove the
+    pre-Yield evidence reset repairs the prior first-command self-lock:
+    generation-bound `nettest` and its exact host peer pass, then
+    `boot_v0.coh`, `tcp_basic.coh`, and `smp_parity.coh` pass first attempt.
+    They also reject sustained service and latency closure. The next no-retry
+    raw session completes TCP and `AUTH` but receives
+    `busy detail=root-sc-reserve` at `ATTACH`; the authenticated serial GENET
+    reboot is refused at the same boundary. WiFi Gate 8 remains about 149.690
+    seconds versus the accepted August 10 10.6--12.7-second frontier despite
+    clean SDIO/CYW43 protocol, queues, and conservation. The source-audited
+    candidate cause is a shared deterministic tax: a generated-task-table scan
+    accidentally placed in the root hot path. Each
+    of the two exact service-fault queries resolves its ID across all 272
+    temporal tasks, and the deferred WiFi supervisor runs both queries before
+    each useful turn while passive admission runs them inside the unchanged
+    250-us margin. Replace those two O(Workers) lookups with one fresh call to
+    the existing complete-service frontier. It must sample raw,
+    intermediate, and final-handoff service state with the existing Acquire
+    ordering, treat handoff contention as pending, preserve existing
+    invalid-state handling, cache no result, and preserve recovery-first
+    arbitration, post-sample `CallArm`,
+    strict `<250 us`, every MCS numeric/WCET, and all QEMU/GENET/driver
+    behavior. Focused tests must prove empty, raw, intermediate, final, and
+    contended frontier outcomes plus source ordering and absence of an
+    O(Workers) lookup in either hot predicate. Public grammar and ABI, the
+    complete host-tool suite, `tools/cohesix-py`, generated profiles, contracts,
+    and consumers, every `.coh` script, and benchmark implementations,
+    workloads, arithmetic, and report schemas are unchanged and require no
+    consumer change. The canonical `root-mcs` QEMU canary is a shared-root
+    rejection
+    gate; only fresh exact-image WiFi and GENET scripts, raw latency, and
+    medium/high pressure can prove sustained function, the expected Gate-8
+    reduction, or August parity.
   - platform consistency — select the same v5 shared contract, including the
     v4-introduced bounded command batch, complete 256-Worker population, two
     passive-Worker executor-lane architecture, and passive-service locality

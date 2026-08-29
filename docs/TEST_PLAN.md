@@ -1552,6 +1552,36 @@ shared-root rejection gate, not Pi proof. The next exact Pi image must then
 repeat first-attempt scripts, raw framed latency, and medium/high pressure on
 separate WiFi and GENET boots before any performance or August-parity claim.
 
+Exact source `91b2c529cea01d0e6c857570b315963c5bf153ad`, image ID
+`5ad7f4d0df188c7d311ebaaefabe4e4ab74182aeb01b6282fe6f49a1ac87659e`,
+and boot-paired `20260830-080743` evidence close only the first-command case.
+Generation-bound `nettest` plus its exact host peer pass, followed by
+first-attempt `boot_v0.coh`, `tcp_basic.coh`, and `smp_parity.coh`; the next
+no-retry raw connection then reaches `AUTH` and is refused at `ATTACH` with
+`busy detail=root-sc-reserve`. The canonical authenticated serial GENET reboot
+is refused at the same boundary, and WiFi Gate 8 remains about 149.690 seconds.
+The post-failure serial snapshot has a sealed 272/272 registry, live drivers,
+bound DHCP, conserved WiFi TX, responsive serial/USB, and no quarantine,
+overflow, or recovery revocation. REST pressure stops at this first failed
+invariant. These artifacts prove neither sustained service nor GENET nor
+August parity.
+
+The focused source gate for the next candidate must prove that both Pi recovery
+and material-containment predicates take one fresh complete-service fault
+sample rather than resolving two fixed IDs through the 272-task generated
+table. Exercise empty, raw publication, intermediate publication, final
+handoff, ambiguous state, and contended handoff; every nonempty or uncertain
+service frontier remains pending. Preserve the recovery-first outer check, the
+post-consumed-time recovery recheck, and the final `CallArm` bracket. Assert
+that neither hot predicate calls the task-specific generated-table lookup and
+that no cached no-fault result, retry, relaxed equality, or timing-budget
+change is introduced. Run the focused Pi root-control, MCS activation-order,
+service-fault-frontier, service-CallArm, and isolated-VirtIO phasing suites,
+then the canonical QEMU `root-mcs` TCP/NineDoor canary. Those are rejection
+gates only. Fresh exact-image WiFi and GENET runs remain mandatory to measure
+Gate-8 time, sustained raw latency, first-attempt scripts, and medium/high
+pressure against August 10.
+
 The CYW43 software and cadence closure gate is authorized by Milestone 26d
 tasks `m26d-cyw43-hardware-free-closure` and
 `m26d-benchmark-revalidation-and-tuning`, with active defect authority from

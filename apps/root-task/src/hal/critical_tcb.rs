@@ -16,19 +16,20 @@
 //! their capability views remain separate and compiler-bounded.
 
 use crate::critical_tcb::{
-    arm_service_call_with_fault_frontier, classify_generated_service_fault_badge,
-    classify_intermediate_service_fault, detailed_fault_registration_log_required,
-    generated_service_task_index, generated_standard_fault_badge, is_generated_service_fault_badge,
-    mcs_extra_refills, passive_service_recovery_contract,
-    service_call_rollback_accepts_already_cleared, service_call_rollback_requires_exact_clear,
-    service_fault_frontier_pending, service_fault_mailbox_index, validate_critical_temporal_graph,
-    validate_worker_supervisor_wake, CriticalHandoff, CriticalTcbHandle, CriticalTcbInventory,
-    CriticalTcbOrigin, CriticalTopologyError, FaultClass, FaultHandoffError, FaultHandoffRecord,
-    FaultRegistration, FaultRegistry, FaultRegistryError, FaultRegistrySnapshot,
-    GenerationIdentity, PublishResult, ServiceCallArmFrontierError, ServiceFaultFrontierMatch,
-    WorkerControlQueue, WorkerControlQueueError, WorkerControlRecord, WorkerSupervisorItem,
-    CRITICAL_TCB_COUNT, DRIVER_FAULT_RECORD_CAPACITY, FAULT_REGISTRY_CAPACITY,
-    SERVICE_FAULT_RECORD_CAPACITY, WORKER_CONTROL_QUEUE_CAPACITY, WORKER_FAULT_MAILBOX_CAPACITY,
+    any_service_fault_frontier_pending, arm_service_call_with_fault_frontier,
+    classify_generated_service_fault_badge, classify_intermediate_service_fault,
+    detailed_fault_registration_log_required, generated_service_task_index,
+    generated_standard_fault_badge, is_generated_service_fault_badge, mcs_extra_refills,
+    passive_service_recovery_contract, service_call_rollback_accepts_already_cleared,
+    service_call_rollback_requires_exact_clear, service_fault_frontier_pending,
+    service_fault_mailbox_index, validate_critical_temporal_graph, validate_worker_supervisor_wake,
+    CriticalHandoff, CriticalTcbHandle, CriticalTcbInventory, CriticalTcbOrigin,
+    CriticalTopologyError, FaultClass, FaultHandoffError, FaultHandoffRecord, FaultRegistration,
+    FaultRegistry, FaultRegistryError, FaultRegistrySnapshot, GenerationIdentity, PublishResult,
+    ServiceCallArmFrontierError, ServiceFaultFrontierMatch, WorkerControlQueue,
+    WorkerControlQueueError, WorkerControlRecord, WorkerSupervisorItem, CRITICAL_TCB_COUNT,
+    DRIVER_FAULT_RECORD_CAPACITY, FAULT_REGISTRY_CAPACITY, SERVICE_FAULT_RECORD_CAPACITY,
+    WORKER_CONTROL_QUEUE_CAPACITY, WORKER_FAULT_MAILBOX_CAPACITY,
 };
 use crate::generated::{
     self, CriticalTcbResource, TemporalExecution, TemporalTaskConfig, TemporalTaskKind,
@@ -1282,27 +1283,23 @@ pub fn target_service_fault_pending(task_id: &str) -> Result<bool, CriticalTcbCo
     .map_err(CriticalTcbConstructionError::FaultHandoff)
 }
 
-fn target_any_service_fault_pending() -> Result<bool, CriticalTcbConstructionError> {
-    let raw = if TARGET_PENDING_FAULT_VALID.load(Ordering::Acquire)
-        && is_generated_service_fault_badge(TARGET_PENDING_FAULT_BADGE.load(Ordering::Relaxed))
-    {
-        ServiceFaultFrontierMatch::Exact
-    } else {
-        ServiceFaultFrontierMatch::None
-    };
+pub(crate) fn target_any_service_fault_pending() -> Result<bool, CriticalTcbConstructionError> {
+    let raw_service_fault_pending = TARGET_PENDING_FAULT_VALID.load(Ordering::Acquire)
+        && is_generated_service_fault_badge(TARGET_PENDING_FAULT_BADGE.load(Ordering::Relaxed));
     // A published intermediate is exclusively service-fault state. Treat the
     // flag itself as sufficient so corrupt task payload cannot reopen CallArm.
-    let intermediate = if TARGET_ROOT_FAULT_SERVICE_VALID.load(Ordering::Acquire) {
-        ServiceFaultFrontierMatch::Exact
-    } else {
-        ServiceFaultFrontierMatch::None
-    };
-    service_fault_frontier_pending(raw, intermediate, || {
-        let Some(handoff) = TARGET_HANDOFF.try_lock() else {
-            return Err(FaultHandoffError::Contended);
-        };
-        Ok(handoff.any_service_fault_pending())
-    })
+    let intermediate_service_fault_pending =
+        TARGET_ROOT_FAULT_SERVICE_VALID.load(Ordering::Acquire);
+    any_service_fault_frontier_pending(
+        raw_service_fault_pending,
+        intermediate_service_fault_pending,
+        || {
+            let Some(handoff) = TARGET_HANDOFF.try_lock() else {
+                return Err(FaultHandoffError::Contended);
+            };
+            Ok(handoff.any_service_fault_pending())
+        },
+    )
     .map_err(CriticalTcbConstructionError::FaultHandoff)
 }
 

@@ -1272,6 +1272,33 @@ pub(crate) fn service_fault_frontier_pending(
     final_pending()
 }
 
+/// Combine the constant-size any-service raw, intermediate, and final phases.
+///
+/// Unlike exact-owner classification, this predicate does not inspect the
+/// generated temporal-task table. The target caller has already classified
+/// the raw badge against the two generated service descriptors, the
+/// intermediate-valid bit exclusively denotes service-fault state, and the
+/// final mailbox has fixed [`SERVICE_FAULT_RECORD_CAPACITY`] storage.
+pub(crate) fn any_service_fault_frontier_pending(
+    raw_service_fault_pending: bool,
+    intermediate_service_fault_pending: bool,
+    final_pending: impl FnOnce() -> Result<bool, FaultHandoffError>,
+) -> Result<bool, FaultHandoffError> {
+    service_fault_frontier_pending(
+        if raw_service_fault_pending {
+            ServiceFaultFrontierMatch::Exact
+        } else {
+            ServiceFaultFrontierMatch::None
+        },
+        if intermediate_service_fault_pending {
+            ServiceFaultFrontierMatch::Exact
+        } else {
+            ServiceFaultFrontierMatch::None
+        },
+        final_pending,
+    )
+}
+
 /// Failure from the two-sample fault-frontier protocol around service CallArm.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ServiceCallArmFrontierError<E> {
@@ -1840,6 +1867,38 @@ mod tests {
                 || Err(FaultHandoffError::Contended),
             ),
             Err(FaultHandoffError::Contended)
+        );
+    }
+
+    #[test]
+    fn any_service_fault_frontier_covers_empty_raw_intermediate_and_final_phases() {
+        use core::cell::Cell;
+
+        for (raw, intermediate, final_pending, expected, expected_final_samples) in [
+            (false, false, false, false, 1),
+            (true, false, false, true, 0),
+            (false, true, false, true, 0),
+            (false, false, true, true, 1),
+        ] {
+            let final_samples = Cell::new(0u8);
+            assert_eq!(
+                any_service_fault_frontier_pending(raw, intermediate, || {
+                    final_samples.set(final_samples.get() + 1);
+                    Ok(final_pending)
+                }),
+                Ok(expected),
+            );
+            assert_eq!(final_samples.get(), expected_final_samples);
+        }
+    }
+
+    #[test]
+    fn any_service_fault_frontier_propagates_final_mailbox_contention() {
+        assert_eq!(
+            any_service_fault_frontier_pending(false, false, || {
+                Err(FaultHandoffError::Contended)
+            }),
+            Err(FaultHandoffError::Contended),
         );
     }
 

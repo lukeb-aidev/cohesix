@@ -1205,9 +1205,37 @@ hardware setting remains unchanged. Source tests and QEMU can reject this
 candidate, but only fresh exact-image WiFi and GENET scripts, raw framed tests,
 and medium/high benchmarks can prove function or August-performance parity.
 
-For the paired wired regression, the same source reaches DHCP and legacy ARP
-before the old direct handoff stalls with raw/active source `0x00012000`, zero
-IRQ wakes/DPC turns, and an advancing RDMA producer. The next GENET image must
+Exact source `91b2c529cea01d0e6c857570b315963c5bf153ad`, image ID
+`5ad7f4d0df188c7d311ebaaefabe4e4ab74182aeb01b6282fe6f49a1ac87659e`,
+and the boot-paired `20260830-080743` captures prove that correction admits a
+generation-bound peer and three first-attempt canonical `.coh` scripts while
+all six selected WiFi-mode driver contracts, DHCP, queues, serial, USB, and the
+272/272 MCS registry remain healthy. They do not prove sustained admission:
+the immediately following
+no-retry raw session reaches TCP and `AUTH`, then receives
+`busy detail=root-sc-reserve` at `ATTACH`; the canonical authenticated serial
+GENET reboot is refused at the same boundary. WiFi Gate 8 is still about
+149.690 seconds. Stop pressure at that first failed invariant. Do not retry the
+command, bypass Queen authentication, retune RF/SDIO/CYW43/GENET, or enlarge
+the SC/WCET margin.
+
+The candidate image removes only the discovered O(Workers) recovery tax. Before
+this correction, both hot predicates resolved each fixed service ID by scanning
+all 272 generated temporal tasks; the deferred WiFi supervisor performed those
+scans before every useful turn and retained passive admission performed them
+inside the 250-us decision margin. The candidate uses the existing one-sample
+complete-service fault frontier instead, preserving fresh Acquire-ordered
+raw/intermediate/final checks and fail-closed handoff contention. A qualifying
+boot must materially
+reduce Gate-8 time with unchanged clean SDIO/CYW43 evidence, pass sustained
+first-attempt `ATTACH` and raw framed traffic, and then repeat medium/high
+pressure separately on WiFi and GENET. Build, QEMU, flash, and a single
+successful command remain non-hardware or incomplete evidence.
+
+For the earlier exact `24e1c1c7778a3dc7ad8460c9ef644992814e41a5` paired wired
+regression, GENET reaches DHCP and legacy ARP before the old direct handoff
+stalls with raw/active source `0x00012000`, zero IRQ wakes/DPC turns, and an
+advancing RDMA producer. The next GENET image must
 show the generated core-1 `3,000/10,000 us` SC and 3,400 us response contract,
 then prove the finite MAC/RDMA cutover reaches READY without containment. Only
 a same-boot packet capture plus raw TCP, authenticated `cohsh`, focused `.coh`

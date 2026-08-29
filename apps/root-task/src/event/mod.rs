@@ -7675,18 +7675,11 @@ where
                     .net
                     .as_deref()
                     .is_some_and(NetPoller::console_service_local_fault_pending)
-                || crate::hal::critical_tcb::target_service_fault_pending(
-                    crate::console_network_service::SERVICE_TASK_ID,
-                )
-                .unwrap_or(true)
+                || crate::hal::critical_tcb::target_any_service_fault_pending().unwrap_or(true)
                 || self
                     .ninedoor
                     .as_deref()
                     .is_some_and(NineDoorBridge::target_service_recovery_pending)
-                || crate::hal::critical_tcb::target_service_fault_pending(
-                    crate::ninedoor_service::SERVICE_TASK_ID,
-                )
-                .unwrap_or(true)
         }
         #[cfg(not(all(target_arch = "aarch64", target_os = "none", sel4_config_kernel_mcs)))]
         {
@@ -7708,18 +7701,11 @@ where
                     .net
                     .as_deref()
                     .is_some_and(NetPoller::console_service_local_containment_pending)
-                || crate::hal::critical_tcb::target_service_fault_pending(
-                    crate::console_network_service::SERVICE_TASK_ID,
-                )
-                .unwrap_or(true)
+                || crate::hal::critical_tcb::target_any_service_fault_pending().unwrap_or(true)
                 || self
                     .ninedoor
                     .as_deref()
                     .is_some_and(NineDoorBridge::target_service_containment_pending)
-                || crate::hal::critical_tcb::target_service_fault_pending(
-                    crate::ninedoor_service::SERVICE_TASK_ID,
-                )
-                .unwrap_or(true)
         }
         #[cfg(not(all(target_arch = "aarch64", target_os = "none", sel4_config_kernel_mcs)))]
         {
