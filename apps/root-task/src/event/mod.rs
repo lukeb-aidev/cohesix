@@ -3741,6 +3741,28 @@ fn pi_root_control_consumed_contract() -> Option<PiRootControlConsumedContract> 
     })
 }
 
+/// Whether executing this parsed command can enter the passive NineDoor
+/// service and donate the caller's scheduling context.
+///
+/// Physical and network ingress must remain live for local diagnostics even
+/// when no complete NineDoor WCET reserve is currently available. The reserve
+/// guard therefore belongs after parsing, on this exact command boundary, not
+/// in front of raw serial, USB, or TCP input.
+#[cfg(feature = "kernel")]
+const fn command_may_donate_passive_ninedoor(command: &Command) -> bool {
+    matches!(
+        command,
+        Command::Attach { .. }
+            | Command::Tail { .. }
+            | Command::Cat { .. }
+            | Command::Ls { .. }
+            | Command::Log
+            | Command::Echo { .. }
+            | Command::Spawn(_)
+            | Command::Kill(_)
+    )
+}
+
 /// Required local-seat preflight cannot enter Network and therefore has only
 /// the four useful local-operator phases in its bounded rotor.
 #[cfg(feature = "kernel")]
@@ -7409,12 +7431,13 @@ where
         }
     }
 
-    /// Preserve the generated root-control reserve before any Pi input path
-    /// can dequeue a command that may donate the current SC to passive NineDoor.
+    /// Preserve the generated root-control reserve at the exact parsed-command
+    /// boundary that may donate the current SC to passive NineDoor.
     ///
     /// Host contract tests do not invoke kernel accounting. The operational
     /// target path is exact to AArch64 MCS; missing timing or accounting truth
-    /// leaves the retained command in place and fails closed.
+    /// fails closed with a typed response while unrelated operator diagnostics
+    /// remain live.
     #[cfg(feature = "kernel")]
     fn pi_root_control_passive_dispatch_boundary_active(&self) -> bool {
         #[cfg(feature = "release-pi4")]
@@ -10136,19 +10159,6 @@ where
             || self.stream_end_pending
             || self.pending_stream_active()
         {
-            return false;
-        }
-        #[cfg(feature = "kernel")]
-        if self.pi_root_control_passive_dispatch_boundary_active()
-            && self
-                .net
-                .as_ref()
-                .is_some_and(|net| net.buffered_console_lines_pending())
-            && !self.pi_root_control_passive_dispatch_admitted()
-        {
-            // The adapter retains the complete connection-bound line. A later
-            // root refill retries this exact dequeue after the conservative
-            // consumed-time window reopens.
             return false;
         }
         let mut buffered: HeaplessVec<ConsoleLine, 1> = HeaplessVec::new();
@@ -28019,15 +28029,6 @@ where
         #[cfg(feature = "kernel")]
         let pi_passive_dispatch_boundary = self.pi_root_control_passive_dispatch_boundary_active();
         #[cfg(feature = "kernel")]
-        if pi_passive_dispatch_boundary
-            && self.serial.interactive_input_active()
-            && !self.pi_root_control_passive_dispatch_admitted()
-        {
-            // Do not remove even a partial physical line while the next
-            // complete command could donate this SC to passive NineDoor.
-            return false;
-        }
-        #[cfg(feature = "kernel")]
         let line_budget = if linked_runtime_transport || pi_passive_dispatch_boundary {
             1
         } else if self.local_seat.is_some() {
@@ -28148,8 +28149,6 @@ where
         let mut consumed = false;
         let mut passes = 0usize;
         let mut backend_polled = false;
-        #[cfg(feature = "kernel")]
-        let mut pi_passive_dispatch_admitted = false;
         let mut burst_allowed = self.local_seat.as_ref().is_some_and(|runtime| {
             runtime.keyboard_trace().queued_bytes >= KEYBOARD_POLL_CHUNK_BYTES
         });
@@ -28167,21 +28166,6 @@ where
                 .is_some_and(|runtime| !runtime.keyboard_parser_ingress_ready())
             {
                 break;
-            }
-            #[cfg(feature = "kernel")]
-            if !pi_passive_dispatch_admitted
-                && self.pi_root_control_passive_dispatch_boundary_active()
-                && self
-                    .local_seat
-                    .as_ref()
-                    .is_some_and(|runtime| runtime.keyboard_trace().queued_bytes != 0)
-            {
-                if !self.pi_root_control_passive_dispatch_admitted() {
-                    // Leave every keyboard byte in the isolated runtime queue;
-                    // no complete local-seat line has crossed into root.
-                    return consumed;
-                }
-                pi_passive_dispatch_admitted = true;
             }
             let read = match self.local_seat.as_mut() {
                 Some(runtime) => runtime.drain_keyboard_dispatch_bytes(&mut chunk),
@@ -28621,6 +28605,19 @@ where
         #[cfg(feature = "kernel")]
         let mut forwarded = false;
         let verb_label = command.verb().ack_label();
+        #[cfg(feature = "kernel")]
+        if self.pi_root_control_passive_dispatch_boundary_active()
+            && command_may_donate_passive_ninedoor(&command)
+            && !self.pi_root_control_passive_dispatch_admitted()
+        {
+            self.metrics.denied_commands = self.metrics.denied_commands.saturating_add(1);
+            self.emit_refusal(
+                verb_label,
+                RefusalReason::Busy,
+                Some("detail=root-sc-reserve"),
+            );
+            return Ok(());
+        }
         #[cfg(all(feature = "kernel", feature = "net-console"))]
         if self.console_network_quarantine_cleanup_pending {
             self.metrics.denied_commands = self.metrics.denied_commands.saturating_add(1);
@@ -46924,7 +46921,7 @@ mod tests {
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[test]
-    fn pi_reserve_gated_dispatch_retains_the_complete_serial_command() {
+    fn pi_reserve_guard_keeps_serial_diagnostics_live() {
         struct LinkedRuntimeTestReset;
 
         impl Drop for LinkedRuntimeTestReset {
@@ -46949,24 +46946,15 @@ mod tests {
         pump.pi_root_control_dispatch_admission_override = Some(false);
 
         assert!(pump.poll_root_control_quantum_for_state(true, true));
-        assert_eq!(pump.metrics.accepted_commands, 0);
-        assert_eq!(
-            pump.linked_runtime_service_phase,
-            LinkedRuntimeServicePhase::Dispatch,
-            "reserve gating must stop before the command is dequeued",
-        );
-
-        pump.pi_root_control_dispatch_admission_override = Some(true);
-        assert!(pump.poll_root_control_quantum_for_state(true, true));
         assert_eq!(
             pump.metrics.accepted_commands, 1,
-            "the exact retained command must execute after later admission",
+            "a local diagnostic must not donate to NineDoor or wait on its reserve",
         );
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[test]
-    fn pi_root_control_bootstrap_serial_gate_retains_the_complete_line() {
+    fn pi_root_control_bootstrap_serial_diagnostic_bypasses_passive_guard() {
         struct LinkedRuntimeTestReset;
 
         impl Drop for LinkedRuntimeTestReset {
@@ -46976,7 +46964,7 @@ mod tests {
         }
 
         let driver = LoopbackSerial::<4096>::new();
-        driver.push_rx(b"attach queen\n");
+        driver.push_rx(b"help\n");
         let mut serial = SerialPort::<_, 4096, 4096, DEFAULT_LINE_CAPACITY>::new(driver);
         assert!(serial.poll_io());
         crate::serial::test_begin_linked_runtime_only_transport();
@@ -46990,23 +46978,20 @@ mod tests {
         pump.cyw43_bootstrap_operator_turn_active = true;
         pump.pi_root_control_dispatch_admission_override = Some(false);
 
-        assert!(!pump.consume_serial());
-        assert!(
-            pump.serial.interactive_input_active(),
-            "bootstrap must not remove the denied line from linked serial"
-        );
-
-        pump.pi_root_control_dispatch_admission_override = Some(true);
         assert!(pump.consume_serial());
         assert!(
             !pump.serial.interactive_input_active(),
-            "the same line must drain after a later safe refill"
+            "bootstrap diagnostics must drain independently of NineDoor reserve"
+        );
+        assert_eq!(
+            pump.metrics.denied_commands, 1,
+            "the existing bounded bootstrap refusal must still reach the operator"
         );
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[test]
-    fn pi_root_control_local_seat_gate_retains_runtime_keyboard_bytes() {
+    fn pi_root_control_local_seat_diagnostic_bypasses_passive_guard() {
         let serial =
             SerialPort::<_, 4096, 4096, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<4096>::new());
         let timer = TestTimer::repeated(16, 1);
@@ -47026,22 +47011,17 @@ mod tests {
             .with_local_seat(&mut local_seat);
         pump.pi_root_control_dispatch_admission_override = Some(false);
 
-        assert!(!pump.consume_local_seat_buffered_only(LocalSeatConsumePhase::PreRuntime));
-        assert_eq!(pump.metrics.accepted_commands, 0);
-        assert!(pump.local_line.is_empty());
+        assert!(pump.consume_local_seat_buffered_only(LocalSeatConsumePhase::PreRuntime));
+        assert_eq!(pump.metrics.accepted_commands, 1);
         assert!(pump
             .local_seat
             .as_ref()
-            .is_some_and(|runtime| runtime.keyboard_trace().queued_bytes == 5));
-
-        pump.pi_root_control_dispatch_admission_override = Some(true);
-        assert!(pump.consume_local_seat_buffered_only(LocalSeatConsumePhase::PreRuntime));
-        assert_eq!(pump.metrics.accepted_commands, 1);
+            .is_some_and(|runtime| runtime.keyboard_trace().queued_bytes == 0));
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[test]
-    fn pi_root_control_network_gate_retains_connection_bound_line() {
+    fn pi_root_control_network_diagnostic_bypasses_passive_guard() {
         let serial =
             SerialPort::<_, 4096, 4096, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<4096>::new());
         let timer = TestTimer::repeated(16, 1);
@@ -47061,16 +47041,43 @@ mod tests {
             .with_network(&mut net);
         pump.pi_root_control_dispatch_admission_override = Some(false);
 
-        assert!(!pump.dispatch_one_buffered_network_line());
-        assert_eq!(pump.metrics.accepted_commands, 0);
+        assert!(pump.dispatch_one_buffered_network_line());
+        assert_eq!(pump.metrics.accepted_commands, 1);
         assert!(pump
             .net
             .as_ref()
-            .is_some_and(|net| net.buffered_console_lines_pending()));
+            .is_some_and(|net| !net.buffered_console_lines_pending()));
+    }
 
-        pump.pi_root_control_dispatch_admission_override = Some(true);
-        assert!(pump.dispatch_one_buffered_network_line());
-        assert_eq!(pump.metrics.accepted_commands, 1);
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn pi_root_control_passive_command_fails_closed_after_serial_parse() {
+        struct LinkedRuntimeTestReset;
+
+        impl Drop for LinkedRuntimeTestReset {
+            fn drop(&mut self) {
+                crate::serial::test_end_linked_runtime_only_transport();
+            }
+        }
+
+        let driver = LoopbackSerial::<4096>::new();
+        driver.push_rx(b"log\n");
+        let mut serial = SerialPort::<_, 4096, 4096, DEFAULT_LINE_CAPACITY>::new(driver);
+        assert!(serial.poll_io());
+        crate::serial::test_begin_linked_runtime_only_transport();
+        let _reset = LinkedRuntimeTestReset;
+        let timer = TestTimer::repeated(16, 1);
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut bridge = NineDoorBridge::new();
+        let mut pump =
+            EventPump::new(serial, timer, NullIpc, store, &mut audit).with_ninedoor(&mut bridge);
+        pump.pi_root_control_dispatch_admission_override = Some(false);
+
+        assert!(pump.consume_serial());
+        assert!(!pump.serial.interactive_input_active());
+        assert_eq!(pump.metrics.accepted_commands, 0);
+        assert_eq!(pump.metrics.denied_commands, 1);
     }
 
     #[cfg(feature = "kernel")]

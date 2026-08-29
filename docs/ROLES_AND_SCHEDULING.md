@@ -551,21 +551,22 @@ context remains the hard execution bound, while every inner phase, queue, fault
 check, and operator-debt rule remains bounded. This QEMU service composition
 does not alter the physical Pi rotor or any Pi hardware owner.
 
-Before any physical-Pi command path dequeues serial, local-seat, or TCP input
-while NineDoor is attached, root validates the generated active
+Physical-Pi serial, local-seat, and TCP ingress always admits bounded raw input,
+echo, parsing, and root-owned diagnostics while NineDoor is attached. Only a
+parsed command that can enter passive NineDoor validates the generated active
 root-control budget, WCET, period, admission, and consumed-time-evidence
 contract. It accumulates `seL4_SchedContext_Consumed` samples in a conservative
 full-period window because that syscall resets evidence but does not replenish
-the SC. Dispatch is admitted only while the accumulated upper bound is
+the SC. Passive dispatch is admitted only while the accumulated upper bound is
 strictly below the checked `budget_us - wcet_us` limit, currently 250 us, so
-the complete declared 2,500 us WCET remains inside the SC. A blocked command remains
-queued and the existing outer yield runs; the blocked path does not resample or
-slide its expiry. After a full period, the first new sample becomes the next
-conservative bound rather than being discarded. Invalid generated truth,
-counter evidence, period conversion, or kernel accounting latch fail closed
-and emit one bounded operator marker while retaining the command. The QEMU
-direct-VirtIO branch exits before this Pi-only boundary and keeps its existing
-counter guard.
+the complete declared 2,500 us WCET remains inside the SC. A blocked passive
+command returns a typed `busy` refusal; it cannot silence unrelated `help`,
+`smp`, network, WiFi, USB, or reboot diagnostics. After a full period, the
+first new sample becomes the next conservative bound rather than being
+discarded. Invalid generated truth, counter evidence, period conversion, or
+kernel accounting latch fail closed and emit one bounded operator marker. The
+QEMU direct-VirtIO branch exits before this Pi-only boundary and keeps its
+existing counter guard.
 
 The passive NineDoor service is co-located with `root-control` on core 0 in
 every checked-in target manifest. Its compiler-validated `locality_bound`

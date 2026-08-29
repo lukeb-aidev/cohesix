@@ -1495,20 +1495,23 @@ authenticated while direct GENET retains its guarded handoff; selected-MCS
 runtime receive classification treats an admitted low-32 notification badge as
 device work despite stale nonzero `MessageInfo`, rejects zero, zero-length
 command, wrong-task, and foreign high-domain observations, and leaves classic
-length-first behavior unchanged. Before physical-Pi Dispatch dequeues a command
-that may enter passive NineDoor, repeated `SchedContext_Consumed` samples must
-accumulate over a conservative generated-period window and admit only strictly
-below the checked `budget_us - wcet_us` limit of 250 us, leaving the complete
-2,500 us root WCET. A blocked attempt retains
-the exact command and does not resample or slide its deadline; expiry carries
-the next sample into the fresh window; invalid profile, timer, or syscall
-evidence latches fail closed with one bounded marker. A `Closed` result at
+length-first behavior unchanged. Physical-Pi serial, local-seat, and TCP tests
+must prove raw input, echo, parsing, and root-owned diagnostics remain live
+even when passive dispatch admission is denied. Only a parsed command that may
+enter passive NineDoor samples `SchedContext_Consumed`; samples accumulate over
+a conservative generated-period window and admit only strictly below the
+checked `budget_us - wcet_us` limit of 250 us, leaving the complete 2,500 us
+root WCET. A blocked passive command returns one typed refusal without entering
+NineDoor; expiry carries the next sample into the fresh window; invalid
+profile, timer, or syscall evidence latches fail closed with one bounded
+marker. A `Closed` result at
 `CallArm`, `Call`, or recovered fault/timeout is terminal generation evidence,
 must preserve its exact stage through containment, and cannot reset or retry a
 `REPLIED` recovery lane. Public ATTACH busy behavior remains unchanged.
 Deterministic guards must include normal sequential passive calls, terminal
-Closed fencing, retained serial/local-seat/TCP input at the reserve gate,
-bootstrap and degraded-path coverage, QEMU bypass, and the badge negatives.
+Closed fencing, live serial/local-seat/TCP diagnostics with the reserve denied,
+typed denial of a parsed passive command, bootstrap and degraded-path coverage,
+QEMU bypass, and the badge negatives.
 Run a fresh canonical QEMU boot with TCP authentication, Queen ATTACH, one
 representative `.coh`/NineDoor operation, and unexpected-fault scan; it is a
 shared-root rejection gate, not Pi proof. The next exact Pi image must then
