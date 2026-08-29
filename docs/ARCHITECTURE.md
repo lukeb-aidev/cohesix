@@ -434,8 +434,10 @@ reciprocal notification caps, and removes all console copies of the 32 pages
 before anchor revoke. It does not restore a root packet-copy, poll, or GENET
 packet-command path.
 
-The Pi direct-GENET console image has a 65-page PT_LOAD footprint. Its selected
-service inventory is 103 frames and 160 retained root CSpace slots; the 32
+The Pi direct-GENET console image has a 66-page PT_LOAD footprint. Its selected
+service inventory is 104 frames and 161 retained root CSpace slots; the one-page
+increase is one immutable executable image frame and its retained mapping cap.
+The 32
 direct pages are reused external GENET pages and therefore add console mapping
 caps, not new data-plane frames or a larger child untyped. These are generated
 construction bounds. They do not prove a Pi boot, handoff, packet correctness,

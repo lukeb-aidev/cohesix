@@ -4453,8 +4453,8 @@ mod tests {
             super::NetworkBackendKind::BcmGenetV5
         );
         assert!(!manifest.console_network_service.direct_virtio);
-        assert_eq!(manifest.console_network_service.objects.frames, 103);
-        assert_eq!(manifest.console_network_service.objects.cspace_slots, 160);
+        assert_eq!(manifest.console_network_service.objects.frames, 104);
+        assert_eq!(manifest.console_network_service.objects.cspace_slots, 161);
         manifest
             .validate_with_base(Some(repo_root().as_path()))
             .expect("exact Pi direct-GENET object contract");
@@ -6195,7 +6195,7 @@ impl ConsoleNetworkServiceConfig {
             vspaces: 1,
             page_tables: 8,
             asids: 1,
-            frames: 98 + if self.direct_virtio { 36 } else { 0 } + if direct_genet { 5 } else { 0 },
+            frames: 98 + if self.direct_virtio { 36 } else { 0 } + if direct_genet { 6 } else { 0 },
             endpoints: 0,
             notifications: 2,
             fault_caps: 1,
@@ -6204,7 +6204,7 @@ impl ConsoleNetworkServiceConfig {
             scheduling_contexts: 1,
             cspace_slots: 123
                 + if self.direct_virtio { 39 } else { 0 }
-                + if direct_genet { 37 } else { 0 },
+                + if direct_genet { 38 } else { 0 },
             untyped_bytes: 1_048_576,
         };
         if self.revoke_anchor_slot == 0

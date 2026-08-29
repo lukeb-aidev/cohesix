@@ -1051,13 +1051,15 @@ throughput measurement, repeat it as a poller, or treat its rows as packet or
 acceptance proof. Follow it with independent host ARP, ICMP, raw TCP,
 authenticated `cohsh`, and capture evidence.
 
-The selected direct-GENET console image has a 65-page PT_LOAD footprint and a
-service inventory of 103 frames and 160 retained root CSpace slots. The 32
+The selected direct-GENET console image has a 66-page PT_LOAD footprint and a
+service inventory of 104 frames and 161 retained root CSpace slots. The one-page
+increase is one immutable executable image frame and its retained mapping cap;
+it does not enlarge any data-plane or scheduling budget. The 32
 direct pages are reused GENET-owned external frames, so they add mapping-cap
 slots rather than data-plane frame objects and do not enlarge the one-MiB child
 untyped. Construction and stage checks must reject an image exceeding the
-65-page admission or a resource projection that drifts from the generated
-103-frame/160-slot contract, but they are not proof that a Pi reached READY or
+66-page admission or a resource projection that drifts from the generated
+104-frame/161-slot contract, but they are not proof that a Pi reached READY or
 moved a packet.
 
 A dispatched authenticated command still performs no TCP flush in root's

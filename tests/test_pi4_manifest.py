@@ -165,10 +165,10 @@ def test_pi4_genet_object_delta_is_backend_derived_without_a_source_toggle() -> 
     assert network["backend"] == "bcmgenet-v5"
     assert "direct_genet" not in console
     assert console.get("direct_virtio", False) is False
-    assert console["objects"]["frames"] == 103
-    assert console["objects"]["cspace_slots"] == 160
-    assert fixed["frames"] == 4_077
-    assert fixed["cspace_slots"] == 9_267
+    assert console["objects"]["frames"] == 104
+    assert console["objects"]["cspace_slots"] == 161
+    assert fixed["frames"] == 4_078
+    assert fixed["cspace_slots"] == 9_268
 
 
 def test_pi4_serial_tracks_one_frame_of_fifo_empty_refills() -> None:

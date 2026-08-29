@@ -152,8 +152,10 @@ pair-contains both generations. Coupled containment suspends GENET, removes both
 signal caps and all 32 external console mapping caps before anchor revoke, and
 cannot return to root packet mediation as a fallback.
 
-The selected Pi direct-GENET console image spans 65 PT_LOAD pages and is admitted
-by a generated service inventory of 103 frames and 160 retained root CSpace slots.
+The selected Pi direct-GENET console image spans 66 PT_LOAD pages and is admitted
+by a generated service inventory of 104 frames and 161 retained root CSpace slots.
+The one-page increase is one immutable executable image frame and its retained
+mapping cap, not an enlargement of a data-plane or scheduling budget.
 The 32 direct pages reuse external GENET-owned frames and add mapping caps, not
 new data-plane frame objects or a larger child untyped. Exact construction
 bounds constrain authority; they are not runtime or performance evidence.
