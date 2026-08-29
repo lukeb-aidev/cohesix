@@ -2451,16 +2451,16 @@ const _: () = assert!(
     GENET_DIRECT_MCS_GUARD_US + GENET_DIRECT_MCS_SLICE_WCET_US < GENET_DIRECT_MCS_BUDGET_US
 );
 
-/// Software accounting for one dense direct-GENET MCS activation window.
+/// Software accounting for one dense direct-GENET MCS work episode.
 ///
-/// The selected kernel preserves a blocked thread's unspent head refill, so a
-/// notification wake is not itself a fresh-budget boundary. This window is
-/// retained across blocking waits and admits up to sixteen WCET-sized packet
-/// slices while less than half the 3 ms budget has elapsed. A command endpoint
-/// turn marks the window stale because it consumes the same scheduling context.
-/// Blocking time alone cannot reset the window: the final userspace sample
-/// precedes the kernel's budget charge, so elapsed wall time cannot prove every
-/// earlier fragment has replenished.
+/// The selected kernel scheduling context remains the sole CPU authority. This
+/// software window bounds only a continuously durable packet episode: it admits
+/// up to sixteen WCET-sized slices while less than half the 3 ms budget has
+/// elapsed. Proven quiescence closes that dense episode without yielding; a
+/// later IRQ or reciprocal peer notification starts a new software episode on
+/// the same unchanged NaturalPostpone scheduling context. A command endpoint
+/// turn still marks the window stale because it consumes that same context and
+/// must cross the explicit fresh-refill boundary before packet work resumes.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct GenetDirectMcsWindow {
     start_ticks: u64,
@@ -2490,12 +2490,19 @@ impl GenetDirectMcsWindow {
     }
 
     fn clear_accounting(&mut self) {
+        self.close_quiescent_episode();
+        self.needs_fresh_refill = false;
+    }
+
+    /// Close only the dense packet episode after its durable work predicate is
+    /// false. This resets no kernel state and preserves an independently
+    /// required endpoint-command freshness yield.
+    fn close_quiescent_episode(&mut self) {
         self.start_ticks = 0;
         self.quantum_start_ticks = 0;
         self.last_end_ticks = 0;
         self.attempts = 0;
         self.stalled_retry_used = false;
-        self.needs_fresh_refill = false;
     }
 
     fn require_fresh_refill(&mut self) {
@@ -2584,7 +2591,14 @@ impl GenetDirectMcsWindow {
             // a quiescent completion fault; under natural postponement it
             // would still force needless latency. Guard/cap Yield is required
             // only when durable work still owns a successor.
-            self.stalled_retry_used = false;
+            // The exact empty-ring/rearmed-source predicate ends this dense
+            // work episode. Carrying wall-clock start and attempt state across
+            // the following Wait would misclassify blocked, preempted, or
+            // NaturalPostpone time as CPU consumption and force a needless
+            // full-period Yield on the reciprocal wake. Closing this software
+            // episode neither replenishes nor enlarges the kernel SC; it only
+            // leaves that unchanged hard authority to schedule the next edge.
+            self.close_quiescent_episode();
             return GenetDirectMcsQuantumRoute::Block;
         }
         if now.wrapping_sub(self.start_ticks) >= guard_cycles {
@@ -78505,7 +78519,7 @@ mod tests {
     }
 
     #[test]
-    fn direct_genet_dense_mcs_window_reenters_and_preserves_blocked_budget() {
+    fn direct_genet_dense_mcs_window_reenters_and_closes_quiescent_episode() {
         let mut window = GenetDirectMcsWindow::empty();
         let guard = 1_500;
         assert_eq!(window.begin(100, guard), Ok(()));
@@ -78518,11 +78532,14 @@ mod tests {
             window.finish(260, guard, 1_000_000, true, false),
             GenetDirectMcsQuantumRoute::Block,
         );
-        assert_eq!(window.start_ticks, 100);
-        assert_eq!(window.attempts, 2);
+        assert_eq!(window.start_ticks, 0);
+        assert_eq!(window.quantum_start_ticks, 0);
+        assert_eq!(window.last_end_ticks, 0);
+        assert_eq!(window.attempts, 0);
         assert_eq!(window.quantum_high_water_us, 100);
 
         window.require_fresh_refill();
+        window.close_quiescent_episode();
         assert_eq!(
             window.begin(300, guard),
             Err(DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_MCS_FRESH_YIELD),
@@ -78571,8 +78588,11 @@ mod tests {
             GenetDirectMcsQuantumRoute::Block,
             "a final productive slice must block instead of charging the remaining refill",
         );
-        assert_eq!(guarded.attempts, 1);
-        assert_eq!(guarded.last_end_ticks, 1_600);
+        assert_eq!(guarded.start_ticks, 0);
+        assert_eq!(guarded.last_end_ticks, 0);
+        assert_eq!(guarded.attempts, 0);
+        assert_eq!(guarded.begin(30_000, guard), Ok(()));
+        assert_eq!(guarded.start_ticks, 30_000);
 
         let mut capped = GenetDirectMcsWindow::empty();
         capped.start_ticks = 10_000;
@@ -78584,11 +78604,13 @@ mod tests {
             GenetDirectMcsQuantumRoute::Block,
             "an empty direct ring has no successor for the attempt cap to Yield",
         );
-        assert_eq!(capped.attempts, GENET_DIRECT_MCS_QUANTUM_CAP);
+        assert_eq!(capped.start_ticks, 0);
+        assert_eq!(capped.last_end_ticks, 0);
+        assert_eq!(capped.attempts, 0);
     }
 
     #[test]
-    fn direct_genet_dense_mcs_window_preserves_wall_guard_and_stalled_yield() {
+    fn direct_genet_dense_mcs_window_closes_quiescence_and_preserves_stalled_yield() {
         let guard = 1_500;
         let mut blocked = GenetDirectMcsWindow::empty();
         assert_eq!(blocked.begin(100, guard), Ok(()));
@@ -78596,14 +78618,9 @@ mod tests {
             blocked.finish(200, guard, 1_000_000, true, false),
             GenetDirectMcsQuantumRoute::Block,
         );
-        assert_eq!(
-            blocked.attempts, 1,
-            "Block cannot manufacture a fresh refill"
-        );
-        assert_eq!(
-            blocked.begin(1_600, guard),
-            Err(DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_MCS_GUARD_YIELD),
-        );
+        assert_eq!(blocked.attempts, 0);
+        assert_eq!(blocked.begin(1_600, guard), Ok(()));
+        assert_eq!(blocked.start_ticks, 1_600);
 
         let mut stalled = GenetDirectMcsWindow::empty();
         assert_eq!(stalled.begin(10_000, guard), Ok(()));
@@ -78895,7 +78912,11 @@ mod tests {
         GENET_RUNTIME_STATE.with_ref(|runtime| {
             assert_eq!(runtime.direct_genet_tx_packets, 4);
             assert_eq!(runtime.dpc_turns, 4);
-            assert_eq!(runtime.direct_genet_mcs_window.attempts, 4);
+            assert_eq!(
+                runtime.direct_genet_mcs_window.attempts, 0,
+                "the fourth and final packet must close the dense episode",
+            );
+            assert_eq!(runtime.direct_genet_mcs_window.start_ticks, 0);
             assert_eq!(
                 runtime.direct_genet_mcs_window.diagnostic_flags
                     & (DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_MCS_GUARD_YIELD
@@ -78947,7 +78968,7 @@ mod tests {
     }
 
     #[test]
-    fn direct_genet_final_packet_at_guard_blocks_without_yield() {
+    fn direct_genet_final_packet_at_guard_closes_before_reciprocal_wake() {
         let _guard = test_guard();
         reset_runtime_for_test();
         let generation = 0x26e0_001b;
@@ -78970,10 +78991,11 @@ mod tests {
                 "the final packet must leave no successor-owned condition",
             );
             assert_eq!(
-                runtime.direct_genet_mcs_window.start_ticks, 1,
-                "Block preserves the current refill accounting",
+                runtime.direct_genet_mcs_window.start_ticks, 0,
+                "quiescent Block must close the dense software episode",
             );
-            assert_eq!(runtime.direct_genet_mcs_window.attempts, 2);
+            assert_eq!(runtime.direct_genet_mcs_window.last_end_ticks, 0);
+            assert_eq!(runtime.direct_genet_mcs_window.attempts, 0);
             assert_eq!(
                 runtime.direct_genet_mcs_window.diagnostic_flags
                     & (DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_MCS_GUARD_YIELD
@@ -78981,6 +79003,33 @@ mod tests {
                         | DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_MCS_STALLED_YIELD),
                 0,
                 "quiescence must win before any software Yield route",
+            );
+        });
+
+        direct_genet_peer_publish(
+            DirectGenetDirection::Tx,
+            generation,
+            b"reciprocal-after-block",
+        );
+        TEST_RUNTIME_TIMER_COUNTER_TICKS.store(
+            runtime_micros_to_cycles(u64::from(GENET_DIRECT_MCS_PERIOD_US * 2)),
+            Ordering::Release,
+        );
+        assert!(genet_runtime_service_notification(
+            DRIVER_RUNTIME_DIRECT_GENET_NOTIFICATION_BADGE,
+        ));
+        GENET_RUNTIME_STATE.with_ref(|runtime| {
+            assert_eq!(runtime.direct_genet_tx_packets, 2);
+            assert_eq!(runtime.direct_genet_mcs_window.start_ticks, 0);
+            assert_eq!(runtime.direct_genet_mcs_window.attempts, 0);
+            assert_eq!(
+                runtime.direct_genet_mcs_window.diagnostic_flags
+                    & (DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_MCS_FRESH_YIELD
+                        | DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_MCS_GUARD_YIELD
+                        | DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_MCS_CAP_YIELD
+                        | DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_MCS_STALLED_YIELD),
+                0,
+                "a later reciprocal edge must not inherit quiescent wall time or attempts",
             );
         });
     }

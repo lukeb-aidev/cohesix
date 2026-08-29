@@ -1035,14 +1035,17 @@ reusable ownership pattern.
   quarantined as a device failure. Standard faults, explicit device deadlines,
   direct-ring/cursor faults, and pair containment remain terminal. These static
   bounds require fresh Pi consumed-time, latency, and throughput evidence.
-- In direct mode the owner retains one dense software window across Block and
-  may re-enter while exact durable work remains. A `Reenter` successor stays
+- In direct mode the owner retains one dense software episode only while exact
+  durable work remains. A `Reenter` successor stays
   inside the same notification or final-prewait handler, so generic command
   arbitration cannot consume unguarded time between packet slices. The owner
   samples the elapsed MCS guard around every slice and yields at half of its
   3,000 us budget or 16 attempted slices only while durable successor work
-  remains. A final slice that empties the direct condition blocks before the
-  guard/cap/stalled Yield decision, preserving the unused refill. A successor
+  remains. A final slice that proves the rings empty and the source rearmed
+  blocks before the guard/cap/stalled Yield decision and closes only the
+  userspace episode's start, attempt, and stalled-retry state. A later real IRQ
+  or reciprocal peer wake starts a new software episode on the same unchanged
+  kernel SC; it does not manufacture a refill. A successor
   that first crosses the guard yields and returns to outer arbitration rather
   than beginning another activation inside the handler. Only TX issue, resolved reconciliation, RX
   publish, or malformed-descriptor recycle that advances owned state is
@@ -1050,12 +1053,13 @@ reusable ownership pattern.
   window even though reconciliation still consumes its fair slice. One
   no-progress durable recheck is permitted; a second yields.
   Any endpoint command marks the shared SC consumption stale and
-  forces a fresh-refill boundary before more packet work. The compiler and
+  forces a fresh-refill boundary before more packet work, and quiescent episode
+  closure cannot clear that independent requirement. The compiler and
   generated profile require exact `wcet_us=800`; the handoff and runtime
   validate the exact `3,000/10,000 us`, max-two-refill contract. A
   missing/backwards counter, repeated non-advancing slice, contract drift, or
-  invalid cursor fails closed. Blocking alone never resets the window because
-  userspace wall time cannot prove kernel refill state.
+  invalid cursor fails closed. The kernel SC remains the sole CPU authority;
+  continuously durable work never resets its guard, cap, or stalled boundary.
 - Direct GENET copies descriptor-admitted uncached RX/TX payloads with aligned
   volatile 64-bit accesses plus bounded byte prefixes and tails. The source and
   destination range, frame length, cursor, and DMA slot remain validated before
@@ -1197,6 +1201,12 @@ transport:
   Network/Serial/LocalSeat/Dispatch rotation, but it performs no second Network
   operation inside the invocation. Each phase keeps its existing one-operation
   bound; no SC, priority, retry, timeout, device deadline, or QEMU path changes.
+  The retained outer quantum's 25 ms cap accumulates only time spent inside
+  admitted CYW43 Network service. Replenishment gaps, exact-child waits between
+  turns, and physical-operator phases do not consume it. The independent
+  25 ms real-wall physical-operator checkpoint and absolute 192-turn cap remain
+  unchanged, so long waits cannot starve serial/local-seat service and active
+  Network work cannot become unbounded.
 - The isolated console child's Ready timestamp and the root handoff bound share
   the absolute CNTVCT millisecond domain. Root samples immediately before and
   after resume, requires identical nonzero generated/runtime timer frequency

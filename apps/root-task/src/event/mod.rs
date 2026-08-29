@@ -4500,6 +4500,12 @@ const LINKED_RUNTIME_NETWORK_QUANTUM_MAX_TURNS: u16 =
     crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT
         .budget
         .max_ops_per_turn;
+/// Maximum accumulated wall time spent inside admitted CYW43 Network service.
+///
+/// Replenishment gaps, exact-child waits, and bounded physical-operator
+/// checkpoints are deliberately excluded. The independent operator checkpoint
+/// below remains a real-wall deadline, while the compiler-declared turn cap is
+/// the absolute bound on one retained Network quantum.
 #[cfg(all(feature = "kernel", feature = "net-console"))]
 const LINKED_RUNTIME_NETWORK_QUANTUM_DEADLINE_MS: u64 = 25;
 /// Maximum elapsed time between physical-console checkpoints while one exact
@@ -5400,9 +5406,7 @@ where
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     linked_runtime_network_consecutive_turns: u16,
     #[cfg(all(feature = "kernel", feature = "net-console"))]
-    linked_runtime_network_quantum_started_ms: Option<u64>,
-    #[cfg(all(feature = "kernel", feature = "net-console"))]
-    linked_runtime_network_quantum_started_ticks: u64,
+    linked_runtime_network_quantum_active_elapsed_us: u64,
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     linked_runtime_network_operator_checkpoint_started_ms: Option<u64>,
     #[cfg(all(feature = "kernel", feature = "net-console"))]
@@ -6097,9 +6101,7 @@ where
             #[cfg(all(feature = "kernel", feature = "net-console"))]
             linked_runtime_network_consecutive_turns: 0,
             #[cfg(all(feature = "kernel", feature = "net-console"))]
-            linked_runtime_network_quantum_started_ms: None,
-            #[cfg(all(feature = "kernel", feature = "net-console"))]
-            linked_runtime_network_quantum_started_ticks: 0,
+            linked_runtime_network_quantum_active_elapsed_us: 0,
             #[cfg(all(feature = "kernel", feature = "net-console"))]
             linked_runtime_network_operator_checkpoint_started_ms: None,
             #[cfg(all(feature = "kernel", feature = "net-console"))]
@@ -8469,8 +8471,7 @@ where
                         crate::hal::driver_task::Cyw43SdioNetworkPriorityLeaseFinish::Inactive
                         | crate::hal::driver_task::Cyw43SdioNetworkPriorityLeaseFinish::Closed => {
                             self.linked_runtime_network_consecutive_turns = 0;
-                            self.linked_runtime_network_quantum_started_ms = None;
-                            self.linked_runtime_network_quantum_started_ticks = 0;
+                            self.linked_runtime_network_quantum_active_elapsed_us = 0;
                             self.clear_linked_runtime_network_operator_checkpoint_clock();
                             self.linked_runtime_service_phase = LinkedRuntimeServicePhase::Serial;
                             return;
@@ -8512,8 +8513,7 @@ where
                         // serial, local-seat, and Dispatch can run without
                         // turning their fairness cut into a lease close.
                         self.linked_runtime_network_consecutive_turns = 0;
-                        self.linked_runtime_network_quantum_started_ms = None;
-                        self.linked_runtime_network_quantum_started_ticks = 0;
+                        self.linked_runtime_network_quantum_active_elapsed_us = 0;
                         self.clear_linked_runtime_network_operator_checkpoint_clock();
                         self.linked_runtime_service_phase = LinkedRuntimeServicePhase::Serial;
                         return;
@@ -8599,8 +8599,7 @@ where
                                         }
                                         crate::hal::driver_task::Cyw43SdioNetworkBoundaryParent::Inactive => {
                                             self.linked_runtime_network_consecutive_turns = 0;
-                                            self.linked_runtime_network_quantum_started_ms = None;
-                                            self.linked_runtime_network_quantum_started_ticks = 0;
+                                            self.linked_runtime_network_quantum_active_elapsed_us = 0;
                                             self.clear_linked_runtime_network_operator_checkpoint_clock();
                                             self.linked_runtime_service_phase =
                                                 LinkedRuntimeServicePhase::Serial;
@@ -8615,8 +8614,7 @@ where
                                 }
                                 crate::hal::driver_task::Cyw43SdioNetworkPriorityLeaseFinish::Closed => {
                                     self.linked_runtime_network_consecutive_turns = 0;
-                                    self.linked_runtime_network_quantum_started_ms = None;
-                                    self.linked_runtime_network_quantum_started_ticks = 0;
+                                    self.linked_runtime_network_quantum_active_elapsed_us = 0;
                                     self.clear_linked_runtime_network_operator_checkpoint_clock();
                                     self.linked_runtime_service_phase =
                                         LinkedRuntimeServicePhase::Serial;
@@ -8640,8 +8638,7 @@ where
                         }
                         crate::hal::driver_task::Cyw43SdioNetworkPriorityLeaseFinish::Closed => {
                             self.linked_runtime_network_consecutive_turns = 0;
-                            self.linked_runtime_network_quantum_started_ms = None;
-                            self.linked_runtime_network_quantum_started_ticks = 0;
+                            self.linked_runtime_network_quantum_active_elapsed_us = 0;
                             self.clear_linked_runtime_network_operator_checkpoint_clock();
                             self.linked_runtime_service_phase = LinkedRuntimeServicePhase::Serial;
                             return;
@@ -8686,8 +8683,7 @@ where
                     // its canonical consumer even when recovery fences every
                     // fresh Network admission.
                     self.linked_runtime_network_consecutive_turns = 0;
-                    self.linked_runtime_network_quantum_started_ms = None;
-                    self.linked_runtime_network_quantum_started_ticks = 0;
+                    self.linked_runtime_network_quantum_active_elapsed_us = 0;
                     self.clear_linked_runtime_network_operator_checkpoint_clock();
                     self.linked_runtime_service_phase = LinkedRuntimeServicePhase::Serial;
                     return;
@@ -8702,8 +8698,8 @@ where
                         self.linked_runtime_network_consecutive_turns,
                         elapsed_us,
                     ) {
-                        // The virtual-counter cap fences admission of a fresh
-                        // parent. An exact Prepared/Issued parent, or the
+                        // The accumulated active-service cap fences admission
+                        // of a fresh parent. An exact Prepared/Issued parent, or the
                         // immutable requestless successor created by its
                         // consumed terminal or urgent receive-coupled TX,
                         // keeps the same lifetime through the next publication
@@ -8718,13 +8714,10 @@ where
                 }
                 #[cfg(feature = "net-console")]
                 if cyw43_lane_selected && self.linked_runtime_network_consecutive_turns == 0 {
-                    self.linked_runtime_network_quantum_started_ms = Some(self.now_ms);
-                    self.linked_runtime_network_quantum_started_ticks =
-                        Self::linked_runtime_counter_ticks();
-                    self.linked_runtime_network_operator_checkpoint_started_ms =
-                        self.linked_runtime_network_quantum_started_ms;
+                    self.linked_runtime_network_quantum_active_elapsed_us = 0;
+                    self.linked_runtime_network_operator_checkpoint_started_ms = Some(self.now_ms);
                     self.linked_runtime_network_operator_checkpoint_started_ticks =
-                        self.linked_runtime_network_quantum_started_ticks;
+                        Self::linked_runtime_counter_ticks();
                     self.metrics.net_cyw43_service_quanta =
                         self.metrics.net_cyw43_service_quanta.saturating_add(1);
                 }
@@ -8738,9 +8731,20 @@ where
                 }
                 #[cfg(feature = "net-console")]
                 let pending_net_flush_active_before_poll = self.pending_net_flush.active();
+                #[cfg(feature = "net-console")]
+                let network_active_interval_started_ms = self.now_ms;
+                #[cfg(feature = "net-console")]
+                let network_active_interval_started_ticks = Self::linked_runtime_counter_ticks();
                 self.poll_runtime(true, false, true);
                 #[cfg(feature = "net-console")]
                 {
+                    if cyw43_lane_selected {
+                        let active_interval_us = self.linked_runtime_elapsed_us_since(
+                            Some(network_active_interval_started_ms),
+                            network_active_interval_started_ticks,
+                        );
+                        self.record_linked_runtime_network_active_interval(active_interval_us);
+                    }
                     let response_flush_finished_this_turn =
                         pending_net_flush_active_before_poll && !self.pending_net_flush.active();
                     let direct_genet_command_ready =
@@ -8753,8 +8757,7 @@ where
                         );
                     if !cyw43_lane_selected {
                         self.linked_runtime_network_consecutive_turns = 0;
-                        self.linked_runtime_network_quantum_started_ms = None;
-                        self.linked_runtime_network_quantum_started_ticks = 0;
+                        self.linked_runtime_network_quantum_active_elapsed_us = 0;
                         self.clear_linked_runtime_network_operator_checkpoint_clock();
                         self.linked_runtime_service_phase = if direct_genet_command_ready {
                             // Replace only the optional Display leaf. The
@@ -8879,8 +8882,7 @@ where
                             Cyw43RetainedDrainDecision::Continue => {}
                         }
                         self.linked_runtime_network_consecutive_turns = 0;
-                        self.linked_runtime_network_quantum_started_ms = None;
-                        self.linked_runtime_network_quantum_started_ticks = 0;
+                        self.linked_runtime_network_quantum_active_elapsed_us = 0;
                         self.clear_linked_runtime_network_operator_checkpoint_clock();
                         self.linked_runtime_service_phase = if dispatch_directly {
                             LinkedRuntimeServicePhase::Dispatch
@@ -8916,8 +8918,7 @@ where
                         // still receive their normal bounded rotation, but do
                         // not close the sleeping child's pair episode.
                         self.linked_runtime_network_consecutive_turns = 0;
-                        self.linked_runtime_network_quantum_started_ms = None;
-                        self.linked_runtime_network_quantum_started_ticks = 0;
+                        self.linked_runtime_network_quantum_active_elapsed_us = 0;
                         self.clear_linked_runtime_network_operator_checkpoint_clock();
                         self.linked_runtime_service_phase =
                             self.linked_runtime_network_followup_phase();
@@ -8965,8 +8966,8 @@ where
                         // phase only while an exact continuation, queue, or TCP
                         // response is pending.
                         // Bounded physical-console checkpoints preserve the
-                        // open immutable parent. The virtual-counter cap
-                        // fences only fresh-parent admission. A consumed
+                        // open immutable parent. The active-service cap fences
+                        // only fresh-parent admission. A consumed
                         // terminal's immutable requestless successor, or an
                         // urgent/current data-TX cursor produced within the
                         // episode, is the same causal lifetime, while the
@@ -9063,8 +9064,7 @@ where
                 self.require_linked_runtime_cyw43_operator_rotation();
             }
             self.linked_runtime_network_consecutive_turns = 0;
-            self.linked_runtime_network_quantum_started_ms = None;
-            self.linked_runtime_network_quantum_started_ticks = 0;
+            self.linked_runtime_network_quantum_active_elapsed_us = 0;
             self.clear_linked_runtime_network_operator_checkpoint_clock();
             self.linked_runtime_service_phase = LinkedRuntimeServicePhase::Serial;
             return;
@@ -9083,8 +9083,7 @@ where
             self.finish_linked_runtime_network_quantum(false, false, elapsed_us)
         } else {
             let lease_finish = Self::close_cyw43_sdio_network_priority_lease();
-            self.linked_runtime_network_quantum_started_ms = None;
-            self.linked_runtime_network_quantum_started_ticks = 0;
+            self.linked_runtime_network_quantum_active_elapsed_us = 0;
             self.clear_linked_runtime_network_operator_checkpoint_clock();
             lease_finish
         };
@@ -9255,10 +9254,14 @@ where
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     fn linked_runtime_network_quantum_elapsed_us(&self) -> u64 {
-        self.linked_runtime_elapsed_us_since(
-            self.linked_runtime_network_quantum_started_ms,
-            self.linked_runtime_network_quantum_started_ticks,
-        )
+        self.linked_runtime_network_quantum_active_elapsed_us
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    fn record_linked_runtime_network_active_interval(&mut self, elapsed_us: u64) {
+        self.linked_runtime_network_quantum_active_elapsed_us = self
+            .linked_runtime_network_quantum_active_elapsed_us
+            .saturating_add(elapsed_us);
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
@@ -9370,8 +9373,7 @@ where
             }
         }
 
-        self.linked_runtime_network_quantum_started_ms = None;
-        self.linked_runtime_network_quantum_started_ticks = 0;
+        self.linked_runtime_network_quantum_active_elapsed_us = 0;
         self.clear_linked_runtime_network_operator_checkpoint_clock();
         lease_finish
     }
@@ -46128,8 +46130,7 @@ mod tests {
             pump.timer.index = pump.timer.ticks.len();
             pump.now_ms = 100;
             crate::hal::set_timebase_now_ms(pump.now_ms);
-            pump.linked_runtime_network_quantum_started_ms = Some(pump.now_ms);
-            pump.linked_runtime_network_quantum_started_ticks = 0;
+            pump.linked_runtime_network_quantum_active_elapsed_us = 0;
             pump.linked_runtime_network_operator_checkpoint_started_ms = Some(
                 pump.now_ms
                     .saturating_sub(LINKED_RUNTIME_NETWORK_OPERATOR_CHECKPOINT_MS),
@@ -48861,8 +48862,7 @@ mod tests {
                 // This test proves operation-count behavior independently of
                 // host execution speed. The dedicated checkpoint tests cover
                 // the real 25 ms VCNT expiry, so retain the deterministic
-                // TestTimer fallback for both clocks here.
-                pump.linked_runtime_network_quantum_started_ticks = 0;
+                // TestTimer fallback for the operator clock here.
                 pump.linked_runtime_network_operator_checkpoint_started_ticks = 0;
                 outer_turns = outer_turns.saturating_add(1);
             }
@@ -49005,15 +49005,14 @@ mod tests {
             assert_eq!(pump.metrics.net_cyw43_service_quanta, 1);
             assert_eq!(pump.metrics.net_cyw43_service_operator_yields, 0);
 
-            // Keep the whole-quantum clock fresh so this test isolates the
-            // independent physical-checkpoint cadence. Production reaches the
-            // same state when an exact Prepared/Issued parent is retained
-            // beyond the fresh-parent admission deadline.
+            // Keep the active-service accumulator below its cap so this test
+            // isolates the independent real-wall physical-checkpoint cadence.
+            // Production reaches the same state when an exact Prepared/Issued
+            // parent is retained across a replenishment or notification wait.
             pump.timer.index = pump.timer.ticks.len();
             pump.now_ms = 100;
             crate::hal::set_timebase_now_ms(pump.now_ms);
-            pump.linked_runtime_network_quantum_started_ms = Some(pump.now_ms);
-            pump.linked_runtime_network_quantum_started_ticks = 0;
+            pump.linked_runtime_network_quantum_active_elapsed_us = 8_000;
             pump.linked_runtime_network_operator_checkpoint_started_ms = Some(
                 pump.now_ms
                     .saturating_sub(LINKED_RUNTIME_NETWORK_OPERATOR_CHECKPOINT_MS),
@@ -49039,8 +49038,7 @@ mod tests {
                 pump.metrics.net_cyw43_service_operator_yields,
             );
             assert_eq!(pump.metrics.net_cyw43_service_operator_yields, 1);
-            let retained_start = pump.linked_runtime_network_quantum_started_ms;
-            let retained_ticks = pump.linked_runtime_network_quantum_started_ticks;
+            let retained_active_elapsed_us = pump.linked_runtime_network_quantum_active_elapsed_us;
             // Host FakeNet leaves the physical lease Inactive. This is
             // composition evidence that the EventPump checkpoint does not touch
             // lease telemetry; the exact Open/Closing parent identities are
@@ -49063,12 +49061,8 @@ mod tests {
                 "the physical checkpoint is not a NIC child operation"
             );
             assert_eq!(
-                pump.linked_runtime_network_quantum_started_ms, retained_start,
-                "the retained EventPump quantum start must survive the probe"
-            );
-            assert_eq!(
-                pump.linked_runtime_network_quantum_started_ticks, retained_ticks,
-                "the hard virtual-counter fence must remain rooted at the original quantum"
+                pump.linked_runtime_network_quantum_active_elapsed_us, retained_active_elapsed_us,
+                "operator turns must not consume the active Network-service cap"
             );
             assert_eq!(
                 crate::hal::driver_task::cyw43_sdio_network_priority_lease_snapshot(),
@@ -49469,8 +49463,7 @@ mod tests {
             pump.timer.index = pump.timer.ticks.len();
             pump.now_ms = 100;
             crate::hal::set_timebase_now_ms(pump.now_ms);
-            pump.linked_runtime_network_quantum_started_ms = Some(pump.now_ms);
-            pump.linked_runtime_network_quantum_started_ticks = 0;
+            pump.linked_runtime_network_quantum_active_elapsed_us = 8_000;
             pump.linked_runtime_network_operator_checkpoint_started_ms = Some(
                 pump.now_ms
                     .saturating_sub(LINKED_RUNTIME_NETWORK_OPERATOR_CHECKPOINT_MS),
@@ -49492,7 +49485,7 @@ mod tests {
                 pump.metrics.net_cyw43_service_operator_yields,
             );
             network_turns_before_serial = pump.metrics.net_cyw43_service_turns;
-            let retained_start = pump.linked_runtime_network_quantum_started_ms;
+            let retained_active_elapsed_us = pump.linked_runtime_network_quantum_active_elapsed_us;
 
             pump.poll();
 
@@ -49511,8 +49504,8 @@ mod tests {
                 "the Serial probe must not issue a second NIC operation"
             );
             assert_eq!(
-                pump.linked_runtime_network_quantum_started_ms, retained_start,
-                "physical work must be detected within the same retained EventPump quantum"
+                pump.linked_runtime_network_quantum_active_elapsed_us, retained_active_elapsed_us,
+                "physical work must not consume the retained Network-service cap"
             );
 
             let mut transcript = Vec::new();
@@ -49867,7 +49860,7 @@ mod tests {
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[test]
-    fn linked_cyw43_network_quantum_has_virtual_counter_deadline() {
+    fn linked_cyw43_network_quantum_has_active_service_deadline() {
         struct LinkedRuntimeTestReset;
 
         impl Drop for LinkedRuntimeTestReset {
@@ -49901,7 +49894,7 @@ mod tests {
                 assert!(
                     pump.metrics.net_cyw43_service_turns
                         < u64::from(LINKED_RUNTIME_NETWORK_QUANTUM_MAX_TURNS),
-                    "the virtual-counter fence must precede the contract turn cap"
+                    "the accumulated active-service fence must precede the contract turn cap"
                 );
                 pump.poll();
                 outer_turns = outer_turns.saturating_add(1);
@@ -49913,7 +49906,7 @@ mod tests {
             assert_eq!(pump.metrics.net_cyw43_service_time_cap_exits, 1);
             assert!(
                 pump.metrics.net_cyw43_service_max_elapsed_us >= 25_000,
-                "the retained quantum must end at the virtual-counter deadline"
+                "the retained quantum must end at the active-service deadline"
             );
             assert_eq!(
                 pump.metrics.net_cyw43_service_operator_yields, 0,
@@ -49971,10 +49964,10 @@ mod tests {
             );
             assert_eq!(pump.linked_runtime_network_consecutive_turns, 1);
 
-            let started_ms = pump
-                .linked_runtime_network_quantum_started_ms
-                .expect("the admitted CYW43 quantum has a start");
-            pump.now_ms = started_ms.saturating_add(LINKED_RUNTIME_NETWORK_QUANTUM_DEADLINE_MS);
+            let remaining_active_us = LINKED_RUNTIME_NETWORK_QUANTUM_DEADLINE_MS
+                .saturating_mul(1_000)
+                .saturating_sub(pump.linked_runtime_network_quantum_elapsed_us());
+            pump.record_linked_runtime_network_active_interval(remaining_active_us);
             pump.poll();
             assert_eq!(
                 pump.linked_runtime_service_phase,
@@ -49988,6 +49981,64 @@ mod tests {
         assert_eq!(
             net.polls, 1,
             "deadline expiry must not admit an extra NIC/SDIO turn"
+        );
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn linked_cyw43_replenishment_gap_does_not_consume_active_service_cap() {
+        struct LinkedRuntimeTestReset;
+
+        impl Drop for LinkedRuntimeTestReset {
+            fn drop(&mut self) {
+                crate::serial::test_end_linked_runtime_only_transport();
+            }
+        }
+
+        let _progress_guard = wifi_driver_task_progress_test_guard();
+        crate::serial::test_begin_linked_runtime_only_transport();
+        let _reset = LinkedRuntimeTestReset;
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<
+            32768,
+        >::new());
+        let timer = TestTimer::repeated(1, 1);
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        net.driver_contract = crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT;
+        net.console_service_pending = true;
+
+        {
+            let mut pump =
+                EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
+            pump.linked_runtime_service_phase = LinkedRuntimeServicePhase::Network;
+            pump.poll();
+            assert_eq!(pump.linked_runtime_network_consecutive_turns, 1);
+            let active_elapsed_before_gap = pump.linked_runtime_network_quantum_active_elapsed_us;
+
+            pump.now_ms = pump
+                .now_ms
+                .saturating_add(LINKED_RUNTIME_NETWORK_QUANTUM_DEADLINE_MS.saturating_mul(4));
+            crate::hal::set_timebase_now_ms(pump.now_ms);
+            pump.linked_runtime_network_operator_checkpoint_started_ms = Some(pump.now_ms);
+            pump.linked_runtime_network_operator_checkpoint_started_ticks = 0;
+            pump.poll();
+
+            assert_eq!(
+                pump.metrics.net_cyw43_service_time_cap_exits, 0,
+                "a replenishment or notification wait cannot masquerade as active Network service"
+            );
+            assert_eq!(pump.linked_runtime_network_consecutive_turns, 2);
+            assert_eq!(
+                pump.linked_runtime_network_quantum_active_elapsed_us, active_elapsed_before_gap,
+                "only the admitted Network interval may advance the outer cap"
+            );
+        }
+
+        assert_eq!(
+            net.polls, 2,
+            "a wall-clock gap alone must not fence the next admissible NIC turn"
         );
     }
 
@@ -50053,10 +50104,9 @@ mod tests {
                 );
                 pump.poll();
                 // This case isolates the compiler-declared operation cap. Keep
-                // both elapsed-time clocks on the deterministic TestTimer
-                // fallback so host test execution speed cannot accidentally
-                // exercise the independent 25 ms operator checkpoint.
-                pump.linked_runtime_network_quantum_started_ticks = 0;
+                // the operator clock on the deterministic TestTimer fallback
+                // so host execution speed cannot accidentally exercise the
+                // independent 25 ms physical checkpoint.
                 pump.linked_runtime_network_operator_checkpoint_started_ticks = 0;
                 outer_turns = outer_turns.saturating_add(1);
             }

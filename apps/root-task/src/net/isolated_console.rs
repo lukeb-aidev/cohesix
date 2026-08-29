@@ -23,7 +23,9 @@ use smoltcp::phy::{Device, DeviceCapabilities, Medium, RxToken, TxToken};
 use smoltcp::time::Instant;
 use smoltcp::wire::{EthernetAddress, Ipv4Address};
 
-use super::isolated_self_test::{IsolatedSelfTestObservation, IsolatedSelfTestState};
+use super::isolated_self_test::{
+    finish_poll_with_self_test, IsolatedSelfTestObservation, IsolatedSelfTestState,
+};
 #[cfg(feature = "net-backend-virtio")]
 use super::ConsoleNetConfig;
 #[cfg(feature = "net-backend-virtio")]
@@ -1412,6 +1414,7 @@ impl<D: NetDevice> IsolatedNetworkConsole<D> {
             tx_complete: self.counters.tx_complete,
             rx_packets: self.counters.rx_packets,
             tcp_rx_bytes: self.counters.tcp_rx_bytes,
+            connection_bytes_read: self.connection_bytes_read,
             connection_bytes_written: self.connection_bytes_written,
             response_drains: self.response_drains,
             authenticated_connection,
@@ -1665,7 +1668,7 @@ impl<D: NetDevice> NetPoller for IsolatedNetworkConsole<D> {
             return false;
         }
         self.refresh_device_counters();
-        activity || self.service_self_test()
+        finish_poll_with_self_test(activity, || self.service_self_test())
     }
 
     fn poll_with_budget(
@@ -1873,6 +1876,7 @@ impl<D: NetDevice> NetPoller for IsolatedNetworkConsole<D> {
             self.counters.tx_complete,
             self.counters.rx_packets,
             self.counters.tcp_rx_bytes,
+            self.connection_bytes_read,
             self.connection_bytes_written,
             self.response_drains,
             self.authenticated_connection,

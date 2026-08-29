@@ -346,8 +346,13 @@ A missing, zero, backwards, drifted, or otherwise invalid counter/configuration
 permits one legacy logical turn before yielding, preserving liveness. After
 service readiness, an attached Network turn may retain the same window only
 when EventPump proves actual network activity and exactly one CYW43
-service-unit advance. The ordinary continuation requires an immediate Network
-successor and durable schedulable physical work. An active response cursor may
+service-unit advance. The outer 25 ms quantum cap accumulates only admitted
+Network-service intervals; replenishment gaps, exact-child waits between
+turns, and operator phases do not consume it. A separate 25 ms real-wall
+physical-operator checkpoint continues across those gaps, and the generated
+192-turn cap remains the absolute work bound. The ordinary continuation
+requires an immediate Network successor and durable schedulable physical work.
+An active response cursor may
 instead complete exactly `Network -> Serial -> LocalSeat -> Dispatch ->
 Network`: the nonzero active/authenticated connection, one-step cursor
 decrement, service/flush deltas, unchanged accepted-command count, and
@@ -420,8 +425,9 @@ donation or packet authority. A peer fault couples containment only: suspend
 the GENET owner and remove both cross-child signal caps before unmapping the
 console copies, with no root packet fallback.
 
-The direct GENET owner treats repeated packet slices as one retained MCS
-window, not as fresh activations. Each guard sample admits at most one material
+The direct GENET owner treats continuously durable packet slices as one MCS
+software episode, not as fresh activations. Each guard sample admits at most
+one material
 TX or RX operation; successive slices alternate their first choice, an empty
 side donates its slice, and continuous bidirectional pressure receives an exact
 8/8 split inside the 16-slice cap. Retained ambiguous cursor reconciliation
@@ -433,9 +439,13 @@ an owned TX/RX state advance is productive; unresolved cursor reconciliation
 still consumes its slice but cannot reset the no-progress retry. A successor
 that crosses the guard yields and returns to outer arbitration. A final slice
 with no durable successor blocks before guard/cap/stalled Yield, so quiescence
-cannot charge the remaining refill. Block preserves the window. Any endpoint command forces a later `seL4_Yield`
-freshness boundary; that boundary resets software accounting only after the
-syscall returns. The compiler and generated profile require exact
+cannot charge the remaining refill. That exact empty-ring/rearmed-source cut
+closes only the userspace episode start, attempt count, and stalled-retry bit;
+a later IRQ or reciprocal peer edge begins a new episode on the unchanged
+kernel SC. Any endpoint command forces a later `seL4_Yield` freshness boundary,
+and quiescent closure cannot clear it; continuous durable work retains the
+existing guard, cap, and stalled decisions. The compiler and generated profile
+require exact
 `wcet_us=800`; the handoff and runtime validate exact max-two-refill
 `3,000/10,000 us` truth. Sustained legal work that consumes that reservation is
 postponed by the kernel until replenishment rather than classified as a device

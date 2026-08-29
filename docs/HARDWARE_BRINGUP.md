@@ -510,6 +510,13 @@ intervening bytes cannot complete the marker. This allows a prompt whose leading
 byte arrived with the guarded `ping` result without sending the next diagnostic
 early.
 
+For current images, `netstats: cyw43_quantum max_elapsed_us` is accumulated
+time spent inside admitted Network service, not wall duration from the first
+to last turn. Replenishment, exact-child wait, and operator gaps are excluded;
+the separate `checkpoint_ms=25` physical-operator clock remains real-wall.
+Historical images that reported whole-quantum wall duration are not directly
+comparable on this field.
+
 The legacy `pi4_gate_proof.sh` live-capture path now enforces the same minimum
 barriers: it waits for the attempt-1 supervisor terminal, polls `netstats` only
 after that terminal, and skips `nettest` unless current Wi-Fi DHCP is bound. A
@@ -544,8 +551,13 @@ selection to the latest command-scoped `netstats` row rather than accepting a
 historical address from the accumulating transcript.
 The credential exists only in the child environment, never argv or transcript.
 Wait at least 15 seconds, then issue the final `netstats` before continuing.
-The run requires later RX/TCP progress and an exact response drain, so
-historical traffic or an idle previously authenticated connection cannot pass.
+The run binds the first later authenticated connection to fresh zero
+per-connection counters and requires command bytes read, response bytes written
+and exactly drained, listener readiness, and later RX/TCP progress from that
+same identity. Physical backends also require NIC TX completion before the
+identity retires; direct VirtIO uses the exact child drain. A replacement peer,
+post-disconnect NIC activity, historical traffic, or an idle previously
+authenticated connection cannot complete missing proof.
 The final command must contain a complete, untruncated
 `nettest: generation=<connection> run_generation=<run> ... running=false verdict=<pass|peer-assisted-pass|fail> ...`
 line whose run generation matches the admitted ACK. The standard serial reboot

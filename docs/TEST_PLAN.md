@@ -1415,6 +1415,30 @@ Neither focused tests nor a rebuilt image prove repaired sustained GENET TCP,
 WiFi latency, or August parity; the next exact-image WiFi and GENET boot must
 rerun scripts and medium/high REST pressure before acceptance.
 
+The exact-0be4 follow-up binds source
+`0be4e9f4027d0cdf694ba09ef73f6d94b0076182`, build
+`d945d7d493093286fcd1057e5d9c1acd6832a1e7977a16425024b20af294c397`,
+image ID
+`8f607abebae9da4ac9811cff7f0e2f8768deaa79e67cb9eae5da00bfed4ddfbe`,
+image SHA-256
+`55367a1aa518b5dffca14d1844c7bebda867d7cfdab7b6f261412b0c8c777d70`,
+and boot-paired `20260829-180642` captures. WiFi passes Gate 8, DHCP in
+about 205 ms, authenticated TCP, three focused scripts, and 8/32 medium/high
+REST pressure with zero reconnect, pool, retry, deadline, or control errors,
+but reaches service readiness only after about 93.5 seconds. Its 3,155 outer
+25-ms time-cap exits account for about 78.9 seconds and route the cold-path
+regression to wall gaps being charged as active Network service. GENET reaches
+DHCP, lossless direct rings, authenticated TCP, the same scripts, and the same
+REST pressure with zero errors, but retains a 10.251-ms mean ping floor. Its
+dense-window reason mask proves quiescent blocked wall time is inherited by the
+next real wake and triggers a needless period Yield. The repair oracle is
+therefore exact: the WiFi outer cap accumulates only admitted active Network
+intervals while its real-wall operator checkpoint and 192-turn bound remain;
+the GENET empty-ring/rearmed-source Block closes only its userspace episode;
+and peer-assisted `nettest` binds and latches facts from one fresh connection.
+These source invariants and a rebuilt image are not latency or acceptance
+evidence; the next exact image must repeat both backend scripts and REST runs.
+
 The CYW43 software and cadence closure gate is authorized by Milestone 26d
 tasks `m26d-cyw43-hardware-free-closure` and
 `m26d-benchmark-revalidation-and-tuning`, with active defect authority from
@@ -2052,9 +2076,11 @@ already-`Issued` parent may drain alone. Tests must prove that an ABI-invisible
 sequence-zero `Prepared` parent keeps an open quantum actionable and that a
 closing parent does not depend on one Network turn per physical-operator
 rotation. Every root turn must admit at most one parent operation and revalidate
-the same request plus a monotonic `Prepared`-to-`Issued` state. The 25-ms
-virtual-counter cap must fence only fresh-parent admission and must not
-interrupt that exact parent. A pending physical or buffered-console response
+the same request plus a monotonic `Prepared`-to-`Issued` state. The 25-ms cap
+accumulates admitted active Network-service intervals only; replenishment gaps,
+exact-child waits between turns, and operator phases do not consume it. It must
+fence only fresh-parent admission and must not interrupt that exact parent. A
+pending physical or buffered-console response
 may yield only at a stable external wait. The immutable 192-operation budget is
 a HAL-operation bound, not a scheduler-turn or notification count; any resumed
 slice must retain the same fenced parent. Restore order is CYW43 then SDIO after
@@ -2636,8 +2662,8 @@ latch recovery; aggregate DPC client-sample staleness with a healthy ring must
 remain diagnostic only. Repeated reads of the accepted poison must be
 idempotent, and pair scrub must clear the old queue record before a replacement
 owner becomes active.
-A hard turn cap, fresh-parent time cap, actual physical response, or buffered
-physical input must retain unfinished Wi-Fi work behind a fence and prove
+A hard turn cap, fresh-parent active-service cap, actual physical response, or
+buffered physical input must retain unfinished Wi-Fi work behind a fence and prove
 `Serial`, optional `LocalSeat`, and `Dispatch` each receive their bounded turn
 before Network re-admission. A complete command belonging to the exact active
 authenticated CYW43 connection must instead end the current Network quantum and
@@ -2649,7 +2675,7 @@ its existing bounded response cursor; after any exact retained parent receives
 its current already-admitted turn, cursor completion must force one ordinary
 USB/operator rotation before a second buffered command. Unauthenticated,
 wrong-connection, GENET, and physical-input cases must retain the full fence.
-The 25-ms time cap must not interrupt an exact
+The 25-ms accumulated active-service cap must not interrupt an exact
 already-`Prepared` or already-`Issued` parent; physical/dispatch pressure and
 the hard ordinary-EventPump turn cap may yield root admission only with the same
 identity retained. A consumed terminal that sequence-publishes one immutable
@@ -2957,8 +2983,9 @@ runtime/root RX backlog, current valid pending or masked SDIO DPC event, or
 retained CYW43 NetData/TX continuation may retain `Network` subject to the
 compiler-declared CYW43 operation/frame/byte budgets. The 192-operation parent
 bound counts admitted HAL operations, not root polls, scheduler turns, or
-notification hints. A separate 25-ms seL4 virtual-counter cap fences admission
-of a fresh physical parent.
+notification hints. A separate 25-ms cap accumulates admitted active Network
+service and fences admission of a fresh physical parent. Replenishment gaps,
+exact-child waits between turns, and operator phases are excluded.
 
 An exact issued persistent op11 whose stable HAL condition is `Waiting` must
 not retain `Network` merely because its runtime descriptor, logical owner, or
@@ -3044,13 +3071,17 @@ and selected-NIC changes must clear the lifetime cursor. GENET must never read,
 install, clear, or report this state.
 
 Authentication without pending work must not extend the quantum. Tests must
-prove that an independent 25-ms virtual-counter clock, not operation count,
+prove that an independent 25-ms real-wall virtual-counter clock, not operation
+count,
 performs one bounded `Serial -> LocalSeat -> Dispatch` checkpoint and leaves at
 most one `Display` turn pending after elapsed expiry. The checkpoint must
 perform zero NIC operations, preserve the exact CYW43 parent/lease and
 quantum-composition identity, complete the three physical-console phases, reset
-only its own cadence clock after `Dispatch`, and resume that same quantum. More
-than three cheap Network operations inside 25 ms must perform no checkpoint. A
+only its own cadence clock after `Dispatch`, and resume that same quantum. This
+operator clock continues across replenishment, exact-child wait, and operator
+gaps without adding those gaps to the independent active-Network-service cap.
+More than three cheap Network operations inside 25 ms must perform no
+checkpoint. A
 fresh committed empty-to-nonempty queue transition must remain visible without
 rewriting a scheduled LocalSeat, Dispatch, or Display phase; a notification may
 prompt the later check but cannot latch admission. Tests must advance time
@@ -3060,8 +3091,9 @@ prove that a partial local-seat line with pending HDMI echo takes
 admits no intervening Network turn. With the same pending echo, an owned reboot
 acknowledgement or physical response tail must instead route Dispatch directly
 to Serial and leave the echo pending. Tests must also
-prove that a quantum already at its deadline and without an exact retained
-parent returns to `Serial` with zero additional NIC/SDIO operations. An idle
+prove that a quantum already at its accumulated active-service deadline and
+without an exact retained parent returns to `Serial` with zero additional
+NIC/SDIO operations. An idle
 selected interface must not acquire the pair priority lease. EventPump must
 evaluate the exact side-effect-free association-owner predicate and open the
 outer pair lease before NetStack polls or allocates the first Join, including
@@ -3083,8 +3115,10 @@ fenced it, successive admitted `Network` turns may advance only that same root
 parent while rechecking request identity and monotonic issue state after every
 turn. Inside an admitted persistent or finite event lifetime, bounded linked
 runtime helpers may continue while durable semantic state changes and each
-immutable hardware request may issue at most once. Elapsed 25-ms time must not
-interrupt that parent. An operator response or the hard ordinary-EventPump
+immutable hardware request may issue at most once. Accumulated active Network
+service at the 25-ms cap must not interrupt that parent, and wall time spent
+waiting does not consume the cap. An operator response or the hard ordinary
+EventPump
 turn cap may yield to `Serial` and `LocalSeat`, but the next Network slice must
 resume the same parent; when elapsed and hard bounds coincide, telemetry must
 classify the yield as `turn_cap`, not `time_cap`. Request substitution,
@@ -3117,7 +3151,9 @@ return directly to `Serial`. The sole exception must be the exact
 network-origin reboot acknowledgement drain; after that required NIC service
 turn, or when a physical response becomes pending during an admitted operation,
 the next phase must be `Serial` rather than `Display`. `netstats` must expose
-quantum count, turns, maximum duration, `operator_yields`, and exit reasons;
+quantum count, turns, maximum active-service duration, `operator_yields`, and
+exit reasons; `max_elapsed_us` retains its field and format but now means the
+sum of admitted Network-service intervals rather than outer wall duration.
 `operator_yields` counts bounded physical-console checkpoints
 (`Serial -> LocalSeat -> Dispatch -> pending Display`) and may be nonzero only
 for selected CYW43. The reported checkpoint cadence is 25 ms and no
@@ -6381,7 +6417,13 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
       bookkeeping-only transitions must report zero slice units; TX/RX issue,
       retained reconciliation, and malformed RX recycle must each charge the
       existing exact unit. Unresolved reconciliation must report no progress and
-      cannot reset the one-stalled-retry guard. Aligned volatile word-copy tests must retain identical
+      cannot reset the one-stalled-retry guard. A final slice with exact empty
+      rings and a rearmed source must close only the userspace episode before
+      Block; a later reciprocal peer or IRQ wake must run without inheriting
+      quiescent FRESH/GUARD/CAP/STALLED state. Continuously durable work must
+      retain those guard/cap/stalled decisions, and an endpoint command's FRESH
+      requirement must survive quiescent closure. Aligned volatile word-copy
+      tests must retain identical
       frame bytes, descriptor/cursor ordering, and sequence-last commit while
       leaving bounded unaligned prefixes/tails bytewise. Runtime coverage must
       count each actual nonzero GENET receive result exactly once before badge filtering across the initial poll
@@ -6417,7 +6459,7 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
     - `mode=<off|static|dhcp> policy=<wired|wifi|auto> active=<iface> standby=<iface|none> addr_src=<source> ip=<ipv4> gateway=<ipv4> dhcp=<phase>`; the normalizer exposes the selected state as `NET_ACTIVE`, `NET_ADDR_SRC`, and `NET_DHCP`, and separately exposes command/listener proof as `NET_TCP_READY` and `NETTEST_PROOF`. Component-local booleans such as `netstats: cyw43_priority_lease ... active=yes|no` cannot overwrite the selected interface.
     - exactly one complete `nettest: generation=<connection> run_generation=<run> enabled=<bool> running=<bool> verdict=<none|running|pass|peer-assisted-pass|fail> tx_ok=<bool|na> udp_echo_ok=<bool|na> tcp_ok=<bool|na> console_ok=<bool|na> peer_assisted_ok=<bool|na>` status line. `OK NETTEST detail=started run_generation=<run>` admits one immutable run; only a terminal line for the same positive run generation is proof. An internal-only asynchronous log, an incomplete or truncated line, or a prior connection/run-generation verdict is not terminal proof; backend and target strings remain on the separate `nettargets:` line.
     - canonical interactive Pi diagnostics must load a strictly valid clean `pi4-image-identity.json` before opening serial and observe its exact complete build marker before the fresh root prompt. A generic marker prefix or marker from another image is not source/image provenance. This marker binds only the root image; the complete boot partition and physical media retain their separate hash/readback obligations.
-    - when the compiler-declared console-network child owns TCP/IP, `nettest` must not inherit the root adapter's default `unsupported` result. Its existing 15-second generation remains peer-assisted: a physical backend requires a post-admission exact child response drain, a later NIC TX completion, later RX/TCP counter progress, matching authenticated connection identity, and listener readiness; direct VirtIO requires the same child drain but no synthetic root NIC completion. Historical traffic cannot satisfy a new run. The unchanged terminal schema reports `udp_echo_ok=false` when only peer-assisted proof is present. Native ICMP echo response is a separate reachability check and cannot be relabelled as the UDP self-test.
+    - when the compiler-declared console-network child owns TCP/IP, `nettest` must not inherit the root adapter's default `unsupported` result. Its existing 15-second generation remains peer-assisted and must observe its state on every selected console poll even when ordinary network activity is already true. A run that starts without a live peer binds the first later authenticated connection to that connection's fresh zero byte-counter epoch; it must latch same-connection command bytes read, response bytes written and exactly drained, listener readiness, and later RX/TCP progress. A physical backend additionally requires a NIC TX completion observed while that exact connection remains current; direct VirtIO uses the exact child drain and requires no synthetic root NIC completion. Once the bound identity disappears, neither a replacement connection nor later unrelated NIC activity may provide a missing fact, though already established connection facts remain available for truthful terminal reporting. Historical traffic cannot satisfy a new run. The unchanged terminal schema reports `udp_echo_ok=false` when only peer-assisted proof is present. Native ICMP echo response is a separate reachability check and cannot be relabelled as the UDP self-test.
     - the controlled live gate and serial helper must preflight canonical `cohsh`, manifest, credential, and workload inputs before acquiring the UART. After one positive admission they must select only the exact command-bound DHCP lease for the required physical lane, validate the corresponding host route, run one authenticated peer for the canonical observation window, always reap it, and still accept only the generation-matched target terminal. Ambiguous or stale status, wrong-lane or invalid addressing, route/input drift, peer failure, or incomplete terminal evidence fails closed; peer exit alone is never acceptance.
     - isolated child liveness triage must retain the bounded `netstats: isolated_progress`, `netstats: isolated_units`, and `netstats: isolated_state` rows. They distinguish selected child observation/output/disconnect/ingress/tick/egress/diagnostic turns, material-progress time, command/output queue depth, pending egress, response-drain state, and ingress backpressure/drop. These counters diagnose where progress stopped; they are not TCP, performance, or acceptance evidence by themselves.
     - `tx_submit=<count> tx_complete=<count> tx_free=<count> tx_in_flight=<count> tx_double_submit=<count> tx_zero_len_attempt=<count> arp_rx=<count> arp_tx=<count>`; on CYW43, `tx_complete` is the root release count from exact joined Function-2 terminals. `tx_submit > tx_complete` means an outstanding root TX owner, not a missing firmware-credit acknowledgement.
