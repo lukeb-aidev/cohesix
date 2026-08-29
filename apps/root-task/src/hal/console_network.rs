@@ -44,13 +44,13 @@ use super::{
     runtime_elf_page_mapping, runtime_uncached_xn_attributes, HalError, KernelHal,
 };
 use crate::console_network_service::{
-    expected_runtime_image_pages, BoundaryError, ConsoleNetworkBoundary,
-    ConsoleNetworkContainmentCursor, ConsoleNetworkContainmentProof, ConsoleNetworkContainmentTurn,
-    ConsoleNetworkContainmentUnit, ConsoleNetworkContract, ConsoleNetworkEvent,
-    ConsoleNetworkObjectPlan, ServiceState, CONSOLE_NETWORK_IMAGE_IDENTITY_BOUND,
-    CONSOLE_NETWORK_RUNTIME_ENTRY_VADDR, CONSOLE_NETWORK_RUNTIME_IMAGE,
-    CONSOLE_NETWORK_RUNTIME_LOAD_BASE_VADDR, CONSOLE_NETWORK_RUNTIME_LOAD_LIMIT_VADDR,
-    CONSOLE_NETWORK_RUNTIME_LOAD_PAGES, SERVICE_TASK_ID,
+    console_network_yield_to_admitted, expected_runtime_image_pages, BoundaryError,
+    ConsoleNetworkBoundary, ConsoleNetworkContainmentCursor, ConsoleNetworkContainmentProof,
+    ConsoleNetworkContainmentTurn, ConsoleNetworkContainmentUnit, ConsoleNetworkContract,
+    ConsoleNetworkEvent, ConsoleNetworkObjectPlan, ConsoleNetworkYieldToAdmission, ServiceState,
+    CONSOLE_NETWORK_IMAGE_IDENTITY_BOUND, CONSOLE_NETWORK_RUNTIME_ENTRY_VADDR,
+    CONSOLE_NETWORK_RUNTIME_IMAGE, CONSOLE_NETWORK_RUNTIME_LOAD_BASE_VADDR,
+    CONSOLE_NETWORK_RUNTIME_LOAD_LIMIT_VADDR, CONSOLE_NETWORK_RUNTIME_LOAD_PAGES, SERVICE_TASK_ID,
 };
 use crate::critical_tcb::GenerationIdentity;
 use crate::sel4::{self, RamFrame, RevokeAnchorVSpaceTracker};
@@ -663,7 +663,8 @@ impl ConsoleNetworkRuntime {
     }
 
     fn yield_to_child_after_committed_signal(&self) -> Result<(), BoundaryError> {
-        if !self.boundary.contract().yield_to_child_after_signal {
+        let contract = self.boundary.contract();
+        if !contract.yield_to_child_after_signal {
             return Ok(());
         }
         if !self.activated
@@ -672,6 +673,19 @@ impl ConsoleNetworkRuntime {
             || self.scheduling_context == sel4_sys::seL4_CapNull
         {
             return Err(BoundaryError::HandoffFailed);
+        }
+        if !console_network_yield_to_admitted(ConsoleNetworkYieldToAdmission {
+            profile_enabled: contract.yield_to_child_after_signal,
+            runtime_direct_virtio: self.direct_virtio(),
+            runtime_direct_genet: self.direct_genet(),
+            service_state: self.boundary.state(),
+            signal_committed: true,
+            activated: self.activated,
+            containment_started: self.containment_started,
+            contained: self.contained,
+            scheduling_context_present: self.scheduling_context != sel4_sys::seL4_CapNull,
+        }) {
+            return Ok(());
         }
         #[cfg(all(feature = "kernel", sel4_config_kernel_mcs))]
         {

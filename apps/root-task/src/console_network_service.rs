@@ -69,6 +69,44 @@ fn validate_console_network_yield_to(
     Ok(true)
 }
 
+fn select_console_network_yield_to_profile(
+    direct_virtio: bool,
+    direct_genet: bool,
+) -> Result<bool, BoundaryError> {
+    match (direct_virtio, direct_genet) {
+        (true, false) => Ok(false),
+        (false, true) | (false, false) => Ok(true),
+        (true, true) => Err(BoundaryError::GeneratedDrift),
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct ConsoleNetworkYieldToAdmission {
+    pub(crate) profile_enabled: bool,
+    pub(crate) runtime_direct_virtio: bool,
+    pub(crate) runtime_direct_genet: bool,
+    pub(crate) service_state: ServiceState,
+    pub(crate) signal_committed: bool,
+    pub(crate) activated: bool,
+    pub(crate) containment_started: bool,
+    pub(crate) contained: bool,
+    pub(crate) scheduling_context_present: bool,
+}
+
+pub(crate) const fn console_network_yield_to_admitted(
+    admission: ConsoleNetworkYieldToAdmission,
+) -> bool {
+    admission.profile_enabled
+        && !admission.runtime_direct_virtio
+        && admission.signal_committed
+        && admission.activated
+        && !admission.containment_started
+        && !admission.contained
+        && admission.scheduling_context_present
+        && (admission.runtime_direct_genet
+            || matches!(admission.service_state, ServiceState::Authenticated))
+}
+
 /// Return the compiler-owned console-network service record.
 #[must_use]
 pub const fn generated_config() -> crate::generated::ConsoleNetworkServiceConfig {
@@ -144,7 +182,7 @@ pub struct ConsoleNetworkContract {
     pub timeout_badge: u64,
     /// Compiler-owned standard fault badge.
     pub standard_fault_badge: u64,
-    /// Whether Pi root may YieldTo this exact child SC after committed work.
+    /// Whether the selected Pi profile admits guarded YieldTo on this exact child SC.
     pub yield_to_child_after_signal: bool,
     /// Selected virtual-counter frequency.
     pub timer_clock_hz: u64,
@@ -242,7 +280,9 @@ impl ConsoleNetworkContract {
         {
             return Err(BoundaryError::TemporalDrift);
         }
-        let yield_to_child_after_signal = if config.direct_genet {
+        let pi_yield_to_profile =
+            select_console_network_yield_to_profile(config.direct_virtio, config.direct_genet)?;
+        let yield_to_child_after_signal = if pi_yield_to_profile {
             let root_control = crate::generated::temporal_tasks()
                 .iter()
                 .find(|task| task.id == "root-control")
@@ -253,7 +293,7 @@ impl ConsoleNetworkContract {
                 return Err(BoundaryError::TemporalDrift);
             }
             validate_console_network_yield_to(ConsoleNetworkYieldToPrerequisites {
-                pi_profile: true,
+                pi_profile: pi_yield_to_profile,
                 root_core: root_control.core,
                 root_sched_control_core: root_control.sched_control_core,
                 root_priority: root_control.priority,
@@ -1259,9 +1299,28 @@ fn next_sequence(sequence: u64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        expected_object_inventory, expected_runtime_image_pages, validate_console_network_yield_to,
-        BoundaryError, ConsoleNetworkYieldToPrerequisites,
+        console_network_yield_to_admitted, expected_object_inventory, expected_runtime_image_pages,
+        select_console_network_yield_to_profile, validate_console_network_yield_to, BoundaryError,
+        ConsoleNetworkYieldToAdmission, ConsoleNetworkYieldToPrerequisites, ServiceState,
     };
+
+    fn exact_yield_to_admission(
+        direct_virtio: bool,
+        direct_genet: bool,
+        service_state: ServiceState,
+    ) -> ConsoleNetworkYieldToAdmission {
+        ConsoleNetworkYieldToAdmission {
+            profile_enabled: !direct_virtio,
+            runtime_direct_virtio: direct_virtio,
+            runtime_direct_genet: direct_genet,
+            service_state,
+            signal_committed: true,
+            activated: true,
+            containment_started: false,
+            contained: false,
+            scheduling_context_present: true,
+        }
+    }
 
     #[test]
     fn exact_backend_selects_qemu_pi_and_mediated_object_inventories() {
@@ -1322,5 +1381,124 @@ mod tests {
                 Err(BoundaryError::TemporalDrift)
             );
         }
+    }
+
+    #[test]
+    fn yield_to_profile_selects_both_pi_backends_but_not_qemu() {
+        assert_eq!(
+            select_console_network_yield_to_profile(true, false),
+            Ok(false),
+            "QEMU direct VirtIO retains its existing non-YieldTo scheduling"
+        );
+        assert_eq!(
+            select_console_network_yield_to_profile(false, true),
+            Ok(true),
+            "Pi direct GENET retains its existing YieldTo profile"
+        );
+        assert_eq!(
+            select_console_network_yield_to_profile(false, false),
+            Ok(true),
+            "Pi WiFi selects the same statically validated child SC"
+        );
+        assert_eq!(
+            select_console_network_yield_to_profile(true, true),
+            Err(BoundaryError::GeneratedDrift),
+            "mutually exclusive direct backends fail closed"
+        );
+    }
+
+    #[test]
+    fn qemu_skips_and_direct_genet_retains_existing_yield_to_policy() {
+        assert!(!console_network_yield_to_admitted(
+            exact_yield_to_admission(true, false, ServiceState::Authenticated)
+        ));
+        for service_state in [
+            ServiceState::Constructing,
+            ServiceState::Listening,
+            ServiceState::Authenticating,
+            ServiceState::Authenticated,
+            ServiceState::Closing,
+            ServiceState::Faulted,
+            ServiceState::Terminal,
+        ] {
+            assert!(console_network_yield_to_admitted(exact_yield_to_admission(
+                false,
+                true,
+                service_state
+            )));
+        }
+    }
+
+    #[test]
+    fn pi_wifi_yield_to_requires_exact_authenticated_live_signal() {
+        for service_state in [
+            ServiceState::Constructing,
+            ServiceState::Listening,
+            ServiceState::Authenticating,
+            ServiceState::Closing,
+            ServiceState::Faulted,
+            ServiceState::Terminal,
+        ] {
+            assert!(!console_network_yield_to_admitted(
+                exact_yield_to_admission(false, false, service_state)
+            ));
+        }
+        let exact = exact_yield_to_admission(false, false, ServiceState::Authenticated);
+        assert!(console_network_yield_to_admitted(exact));
+        for invalid in [
+            ConsoleNetworkYieldToAdmission {
+                signal_committed: false,
+                ..exact
+            },
+            ConsoleNetworkYieldToAdmission {
+                activated: false,
+                ..exact
+            },
+            ConsoleNetworkYieldToAdmission {
+                containment_started: true,
+                ..exact
+            },
+            ConsoleNetworkYieldToAdmission {
+                contained: true,
+                ..exact
+            },
+            ConsoleNetworkYieldToAdmission {
+                scheduling_context_present: false,
+                ..exact
+            },
+        ] {
+            assert!(!console_network_yield_to_admitted(invalid));
+        }
+    }
+
+    #[test]
+    fn pi_dual_mode_contract_uses_the_selected_runtime_backend_for_yield_to() {
+        // The generated Pi image admits direct GENET resources in both boot
+        // modes. A WiFi shell has neither runtime direct layout and must not
+        // inherit GENET's lifecycle policy from that generated capability.
+        let wifi_listening = ConsoleNetworkYieldToAdmission {
+            profile_enabled: true,
+            runtime_direct_virtio: false,
+            runtime_direct_genet: false,
+            service_state: ServiceState::Listening,
+            signal_committed: true,
+            activated: true,
+            containment_started: false,
+            contained: false,
+            scheduling_context_present: true,
+        };
+        assert!(!console_network_yield_to_admitted(wifi_listening));
+        assert!(console_network_yield_to_admitted(
+            ConsoleNetworkYieldToAdmission {
+                service_state: ServiceState::Authenticated,
+                ..wifi_listening
+            }
+        ));
+        assert!(console_network_yield_to_admitted(
+            ConsoleNetworkYieldToAdmission {
+                runtime_direct_genet: true,
+                ..wifi_listening
+            }
+        ));
     }
 }

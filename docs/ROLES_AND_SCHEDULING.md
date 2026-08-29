@@ -380,11 +380,14 @@ QEMU direct-VirtIO retains the strict lower rotor: `ObserveChild`,
 ready `StageOutput`, then an exact ready `Disconnect`; when neither is ready it
 alternates `ObserveChild` and `ServiceTick`, exactly one unit per Network visit.
 When the first Network visit of an existing five-unit Pi root quantum observes
-exactly one nonsaturated authenticated GENET command, Serial and LocalSeat run
-before Dispatch, and one exact response-stage Network unit may replace optional
-Display as the fifth unit. Display remains the next debt. Connection mismatch,
-saturation, physical response, quarantine, containment, recovery, reboot, or no
-progress denies the causal fifth unit. The exact direct-GENET response lane
+exactly one nonsaturated authenticated GENET command while physical-operator
+and response debt are idle, Dispatch may run next and one exact response-stage
+Network unit may use the third unit. The composer then returns to Serial and
+stops. A queued second command therefore remains behind the restored
+Serial/LocalSeat/Dispatch/Display debt and cannot form a closed network loop.
+Connection mismatch, saturation, physical response, quarantine, containment,
+recovery, reboot, operator work, or no progress denies the causal cut. The
+exact direct-GENET response lane
 retains generation, connection, `ControlCompleted`, and `OutputDrained` proof,
 so it supersedes the weaker legacy flush cursor; any identity or runtime drift
 fails closed to that bounded cursor. CYW43 keeps its ordinary connection-bound
@@ -463,13 +466,16 @@ binds the calculation to the exact selected kernel/profile/build identity and
 rejects eleven. This preserves fragmented wake eligibility; it does not enlarge
 CPU budget or authorize another operation, signal, poll, retry, or owner.
 
-For this Pi-only production path, console-network selects priority/MCP 200/200
+For both Pi network modes, console-network selects priority/MCP 200/200
 with its unchanged `3,000 us / 10,000 us` SC, equal to priority-200 root-control.
-Root's physical-input rotor still selects serial and local-seat work before its
-Network phase. Only after an exact sequence-last packet/control/publication-ACK
-commit, or one bounded service-tick wake, and a successful one-hot signal may
-root invoke `SchedContext_YieldTo` on the already retained, same-core child SC;
-lifecycle, core, priority, MCP, SC, signal, or syscall drift fails closed. The
+Only after an exact sequence-last packet/control/publication-ACK commit, or one
+bounded service-tick wake, and a successful one-hot signal may root invoke
+`SchedContext_YieldTo` on the already retained, same-core child SC. Direct GENET
+retains that policy across its valid lifecycle. Mediated WiFi admits it only in
+exact `Authenticated` state, preserving the ordinary serial/local-seat rotor
+through construction, listening, authentication, closing, fault, and terminal
+states. Core, priority, MCP, SC, signal, containment, or syscall drift fails
+closed. The
 child therefore runs on its own hard-bounded reservation and
 blocks at its existing notification gate without consuming root's remaining
 refill. Compiler response analysis records `8,100 us` for both console-network

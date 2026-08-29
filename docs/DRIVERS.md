@@ -1207,6 +1207,21 @@ transport:
   25 ms real-wall physical-operator checkpoint and absolute 192-turn cap remain
   unchanged, so long waits cannot starve serial/local-seat service and active
   Network work cannot become unbounded.
+- In both Pi network modes, the physical Network leaf owns timer, NIC, and
+  display-ready reconciliation only. It does not repeat the composite root
+  IPC/bootstrap/stream/reboot tail already serviced by the bounded Serial,
+  LocalSeat, Dispatch, and Display leaves. After a successful one-hot child
+  signal, mediated WiFi may YieldTo its compiler-validated equal-priority child
+  SC only in exact authenticated state; pre-authentication and every lifecycle,
+  containment, or invalid-SC state retains the ordinary physical-operator
+  rotor. Direct GENET retains its existing guarded child handoff. When its first
+  Network unit observes one exact authenticated command with no operator or
+  response debt, the same five-unit composer may spend only
+  `Network -> Dispatch -> Network` on causal response staging, then returns to
+  Serial and stops. A second command remains behind complete operator/display
+  debt. This changes no physical owner, packet authority, operation bound,
+  manifest/MCS numeric, queue, listener, ABI, public diagnostic, or QEMU
+  direct-VirtIO behavior.
 - The isolated console child's Ready timestamp and the root handoff bound share
   the absolute CNTVCT millisecond domain. Root samples immediately before and
   after resume, requires identical nonzero generated/runtime timer frequency

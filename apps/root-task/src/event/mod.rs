@@ -2645,6 +2645,13 @@ pub struct PumpMetrics {
     pub net_cyw43_service_max_turns: u64,
     /// Largest completed CYW43 Network quantum duration in microseconds.
     pub net_cyw43_service_max_elapsed_us: u64,
+    /// Exact authenticated direct-GENET commands admitted ahead of passive
+    /// serial/local-seat probes inside the existing bounded root quantum.
+    pub net_direct_genet_immediate_dispatches: u64,
+    /// Direct-GENET response StageOutput turns admitted by that causal lane.
+    pub net_direct_genet_immediate_stage_turns: u64,
+    /// Direct-GENET fast episodes returned to ordinary physical-operator debt.
+    pub net_direct_genet_operator_rotations: u64,
     /// Physical-console output records deferred behind active keyboard input.
     pub physical_console_output_deferred: u64,
     /// Deferred physical-console output records flushed during idle turns.
@@ -3654,12 +3661,44 @@ fn cyw43_terminal_drain_revisit_admitted(
         && terminal_drain_return_due
 }
 
+/// Side-effect-free evidence that one exact authenticated direct-GENET command
+/// may bypass passive serial/local-seat probes after its observing Network
+/// turn. Actual physical work, response tails, quarantine, reboot, and stale
+/// connection state are excluded by `linked_runtime_direct_genet_command_ready`.
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct DirectGenetImmediateDispatchEntitlement {
+    starting_phase: LinkedRuntimeServicePhase,
+    admitted_phase: LinkedRuntimeServicePhase,
+    next_phase: LinkedRuntimeServicePhase,
+    network_units: usize,
+    unit_index: usize,
+    exact_command_ready: bool,
+    accepted_commands_before: u64,
+    accepted_commands_after: u64,
+}
+
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+fn direct_genet_immediate_dispatch_entitled(
+    evidence: DirectGenetImmediateDispatchEntitlement,
+) -> bool {
+    evidence.starting_phase == LinkedRuntimeServicePhase::Network
+        && evidence.admitted_phase == LinkedRuntimeServicePhase::Network
+        && evidence.next_phase == LinkedRuntimeServicePhase::Dispatch
+        && evidence.network_units == 1
+        && evidence.unit_index == 0
+        && evidence.exact_command_ready
+        && evidence.accepted_commands_before != u64::MAX
+        && evidence.accepted_commands_after == evidence.accepted_commands_before
+}
+
 /// Side-effect-free evidence that one command admitted at Dispatch may use the
-/// fifth and final Pi rotor unit to stage its exact direct-GENET response.
+/// next Pi rotor unit to stage its exact direct-GENET response.
 ///
 /// Keeping the entire causal predicate in one value makes every fail-closed
-/// boundary independently testable. It cannot add a sixth unit, repeat the
-/// starting Network visit, or infer progress from a saturated counter.
+/// boundary independently testable. The ordinary path first services serial
+/// and local-seat; an exact immediate path uses the authenticated entitlement
+/// above and returns directly to the ordinary operator-debt rotor.
 #[cfg(all(feature = "kernel", feature = "net-console"))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct DirectGenetCausalStageEntitlement {
@@ -3669,6 +3708,7 @@ struct DirectGenetCausalStageEntitlement {
     network_units: usize,
     serial_admitted: bool,
     local_seat_admitted: bool,
+    immediate_dispatch_admitted: bool,
     unit_index: usize,
     accepted_commands_before: u64,
     accepted_commands_after: u64,
@@ -3676,13 +3716,17 @@ struct DirectGenetCausalStageEntitlement {
 }
 
 #[cfg(all(feature = "kernel", feature = "net-console"))]
-fn direct_genet_causal_fifth_unit_entitled(evidence: DirectGenetCausalStageEntitlement) -> bool {
+fn direct_genet_causal_stage_entitled(evidence: DirectGenetCausalStageEntitlement) -> bool {
+    let operator_cut_admissible = if evidence.immediate_dispatch_admitted {
+        !evidence.serial_admitted && !evidence.local_seat_admitted && evidence.unit_index == 1
+    } else {
+        evidence.serial_admitted && evidence.local_seat_admitted
+    };
     evidence.starting_phase == LinkedRuntimeServicePhase::Network
         && evidence.admitted_phase == LinkedRuntimeServicePhase::Dispatch
         && evidence.next_phase == LinkedRuntimeServicePhase::Network
         && evidence.network_units == 1
-        && evidence.serial_admitted
-        && evidence.local_seat_admitted
+        && operator_cut_admissible
         && evidence.unit_index.saturating_add(1) < PI4_LOCAL_OPERATOR_POLLS_PER_EXPLICIT_YIELD
         && evidence.accepted_commands_before != u64::MAX
         && evidence.accepted_commands_after == evidence.accepted_commands_before.saturating_add(1)
@@ -7173,23 +7217,66 @@ where
             let mut network_units = 0usize;
             let mut serial_admitted = false;
             let mut local_seat_admitted = self.local_seat.is_none();
+            let mut direct_genet_immediate_dispatch_admitted = false;
             for unit_index in 0..PI4_LOCAL_OPERATOR_POLLS_PER_EXPLICIT_YIELD {
                 let admitted_phase = self.linked_runtime_service_phase;
                 let accepted_commands_before = self.metrics.accepted_commands;
+                let direct_genet_immediate_stage_turn = direct_genet_immediate_dispatch_admitted
+                    && admitted_phase == LinkedRuntimeServicePhase::Network
+                    && network_units == 1;
                 self.poll();
                 network_units = network_units.saturating_add(usize::from(
                     admitted_phase == LinkedRuntimeServicePhase::Network,
                 ));
                 serial_admitted |= admitted_phase == LinkedRuntimeServicePhase::Serial;
                 local_seat_admitted |= admitted_phase == LinkedRuntimeServicePhase::LocalSeat;
+
+                if direct_genet_immediate_stage_turn {
+                    self.metrics.net_direct_genet_immediate_stage_turns = self
+                        .metrics
+                        .net_direct_genet_immediate_stage_turns
+                        .saturating_add(1);
+                    self.metrics.net_direct_genet_operator_rotations = self
+                        .metrics
+                        .net_direct_genet_operator_rotations
+                        .saturating_add(1);
+                    self.clear_linked_runtime_network_operator_checkpoint_clock();
+                    // The fast path removes only the two pre-response seams.
+                    // Every completed response returns to Serial so the next
+                    // command cannot evade physical-operator debt.
+                    self.linked_runtime_service_phase = LinkedRuntimeServicePhase::Serial;
+                    break;
+                }
+
+                if !direct_genet_immediate_dispatch_admitted
+                    && direct_genet_immediate_dispatch_entitled(
+                        DirectGenetImmediateDispatchEntitlement {
+                            starting_phase,
+                            admitted_phase,
+                            next_phase: self.linked_runtime_service_phase,
+                            network_units,
+                            unit_index,
+                            exact_command_ready: self.linked_runtime_direct_genet_command_ready(),
+                            accepted_commands_before,
+                            accepted_commands_after: self.metrics.accepted_commands,
+                        },
+                    )
+                {
+                    direct_genet_immediate_dispatch_admitted = true;
+                    self.metrics.net_direct_genet_immediate_dispatches = self
+                        .metrics
+                        .net_direct_genet_immediate_dispatches
+                        .saturating_add(1);
+                }
                 let causal_genet_stage_entitlement =
-                    direct_genet_causal_fifth_unit_entitled(DirectGenetCausalStageEntitlement {
+                    direct_genet_causal_stage_entitled(DirectGenetCausalStageEntitlement {
                         starting_phase,
                         admitted_phase,
                         next_phase: self.linked_runtime_service_phase,
                         network_units,
                         serial_admitted,
                         local_seat_admitted,
+                        immediate_dispatch_admitted: direct_genet_immediate_dispatch_admitted,
                         unit_index,
                         accepted_commands_before,
                         accepted_commands_after: self.metrics.accepted_commands,
@@ -8735,7 +8822,11 @@ where
                 let network_active_interval_started_ms = self.now_ms;
                 #[cfg(feature = "net-console")]
                 let network_active_interval_started_ticks = Self::linked_runtime_counter_ticks();
-                self.poll_runtime(true, false, true);
+                // The Network leaf owns timer/NIC work only. Root IPC,
+                // bootstrap, stream, and reboot tails run in their dedicated
+                // Dispatch/operator phases instead of being multiplied by
+                // every retained child microstep.
+                self.poll_runtime_without_control_tail(true, false, true);
                 #[cfg(feature = "net-console")]
                 {
                     if cyw43_lane_selected {
@@ -8758,14 +8849,14 @@ where
                     if !cyw43_lane_selected {
                         self.linked_runtime_network_consecutive_turns = 0;
                         self.linked_runtime_network_quantum_active_elapsed_us = 0;
-                        self.clear_linked_runtime_network_operator_checkpoint_clock();
                         self.linked_runtime_service_phase = if direct_genet_command_ready {
-                            // Replace only the optional Display leaf. The
-                            // remaining fixed quantum is Serial -> LocalSeat ->
-                            // Dispatch, after which one exact StageOutput unit
-                            // may consume the fifth and final slot.
-                            LinkedRuntimeServicePhase::Serial
+                            // An exact authenticated command may advance
+                            // directly to Dispatch. The bounded root composer
+                            // admits its causal StageOutput turn, then returns
+                            // to the ordinary physical-operator rotor.
+                            LinkedRuntimeServicePhase::Dispatch
                         } else {
+                            self.clear_linked_runtime_network_operator_checkpoint_clock();
                             self.linked_runtime_network_followup_phase()
                         };
                         return;
@@ -9152,10 +9243,10 @@ where
     /// Return whether the isolated direct-GENET child retained one exact
     /// authenticated command and no physical operator currently owns the cut.
     ///
-    /// This predicate is side-effect free. It may only skip the nonessential
-    /// Display phase inside the existing five-unit Pi quantum; Serial,
-    /// LocalSeat, and Dispatch still run before any response control can be
-    /// staged back to the child.
+    /// This predicate is side-effect free. When physical-operator and response
+    /// debt are idle, it may select immediate Dispatch and one causal response
+    /// StageOutput turn inside the existing five-unit Pi quantum. The composer
+    /// then returns to Serial and stops before another command is accepted.
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     fn linked_runtime_direct_genet_command_ready(&self) -> bool {
         if self.network_service_quarantined
@@ -51764,6 +51855,12 @@ mod tests {
             .lines
             .push(ConsoleLine::for_connection(line, 1, 17))
             .is_ok());
+        let mut second_line = HeaplessString::new();
+        assert!(second_line.push_str("ping").is_ok());
+        assert!(genet
+            .lines
+            .push(ConsoleLine::for_connection(second_line, 1, 17))
+            .is_ok());
         let mut local_seat = LocalSeatRuntime::new(crate::local_seat::LocalSeatStatus {
             keyboard_device: "usb-kbd0",
             display_device: "hdmi0",
@@ -51782,9 +51879,12 @@ mod tests {
             assert_eq!(pump.metrics.accepted_commands, 1);
             assert_eq!(
                 pump.linked_runtime_service_phase,
-                LinkedRuntimeServicePhase::Display,
-                "the skipped display remains the next ordinary debt after the causal stage"
+                LinkedRuntimeServicePhase::Serial,
+                "the causal response must return to the complete physical-operator debt rotor"
             );
+            assert_eq!(pump.metrics.net_direct_genet_immediate_dispatches, 1);
+            assert_eq!(pump.metrics.net_direct_genet_immediate_stage_turns, 1);
+            assert_eq!(pump.metrics.net_direct_genet_operator_rotations, 1);
             assert!(
                 !pump.pending_net_flush.active(),
                 "the generation-bound direct response lane must not create legacy flush debt"
@@ -51793,13 +51893,17 @@ mod tests {
 
         assert_eq!(
             genet.polls, 2,
-            "the first unit observes the command and the fifth stages its response"
+            "the first unit observes the command and the third stages its response"
         );
         assert_eq!(
             genet.tcp_flushes, 0,
             "the exact response lane must supersede legacy TCP flush debt"
         );
-        assert!(genet.lines.is_empty());
+        assert_eq!(
+            genet.lines.len(),
+            1,
+            "the next authenticated command must wait behind the restored operator rotor"
+        );
         assert!(genet
             .sent
             .iter()
@@ -51865,6 +51969,54 @@ mod tests {
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[test]
     fn direct_genet_causal_entitlement_rejects_noncausal_or_saturated_progress() {
+        let dispatch = DirectGenetImmediateDispatchEntitlement {
+            starting_phase: LinkedRuntimeServicePhase::Network,
+            admitted_phase: LinkedRuntimeServicePhase::Network,
+            next_phase: LinkedRuntimeServicePhase::Dispatch,
+            network_units: 1,
+            unit_index: 0,
+            exact_command_ready: true,
+            accepted_commands_before: 41,
+            accepted_commands_after: 41,
+        };
+        assert!(direct_genet_immediate_dispatch_entitled(dispatch));
+        for evidence in [
+            DirectGenetImmediateDispatchEntitlement {
+                starting_phase: LinkedRuntimeServicePhase::Serial,
+                ..dispatch
+            },
+            DirectGenetImmediateDispatchEntitlement {
+                next_phase: LinkedRuntimeServicePhase::Serial,
+                ..dispatch
+            },
+            DirectGenetImmediateDispatchEntitlement {
+                network_units: 2,
+                ..dispatch
+            },
+            DirectGenetImmediateDispatchEntitlement {
+                unit_index: 1,
+                ..dispatch
+            },
+            DirectGenetImmediateDispatchEntitlement {
+                exact_command_ready: false,
+                ..dispatch
+            },
+            DirectGenetImmediateDispatchEntitlement {
+                accepted_commands_before: u64::MAX,
+                accepted_commands_after: u64::MAX,
+                ..dispatch
+            },
+            DirectGenetImmediateDispatchEntitlement {
+                accepted_commands_after: 42,
+                ..dispatch
+            },
+        ] {
+            assert!(
+                !direct_genet_immediate_dispatch_entitled(evidence),
+                "immediate Dispatch authority must fail closed: {evidence:?}",
+            );
+        }
+
         let baseline = DirectGenetCausalStageEntitlement {
             starting_phase: LinkedRuntimeServicePhase::Network,
             admitted_phase: LinkedRuntimeServicePhase::Dispatch,
@@ -51872,12 +52024,22 @@ mod tests {
             network_units: 1,
             serial_admitted: true,
             local_seat_admitted: true,
+            immediate_dispatch_admitted: false,
             unit_index: 3,
             accepted_commands_before: 41,
             accepted_commands_after: 42,
             last_input_source: ConsoleInputSource::Net,
         };
-        assert!(direct_genet_causal_fifth_unit_entitled(baseline));
+        assert!(direct_genet_causal_stage_entitled(baseline));
+
+        let immediate = DirectGenetCausalStageEntitlement {
+            serial_admitted: false,
+            local_seat_admitted: false,
+            immediate_dispatch_admitted: true,
+            unit_index: 1,
+            ..baseline
+        };
+        assert!(direct_genet_causal_stage_entitled(immediate));
 
         let rejected = [
             DirectGenetCausalStageEntitlement {
@@ -51936,8 +52098,32 @@ mod tests {
         ];
         for evidence in rejected {
             assert!(
-                !direct_genet_causal_fifth_unit_entitled(evidence),
-                "noncausal fifth-unit evidence must fail closed: {evidence:?}",
+                !direct_genet_causal_stage_entitled(evidence),
+                "noncausal stage evidence must fail closed: {evidence:?}",
+            );
+        }
+
+        for evidence in [
+            DirectGenetCausalStageEntitlement {
+                serial_admitted: true,
+                ..immediate
+            },
+            DirectGenetCausalStageEntitlement {
+                local_seat_admitted: true,
+                ..immediate
+            },
+            DirectGenetCausalStageEntitlement {
+                unit_index: 2,
+                ..immediate
+            },
+            DirectGenetCausalStageEntitlement {
+                immediate_dispatch_admitted: false,
+                ..immediate
+            },
+        ] {
+            assert!(
+                !direct_genet_causal_stage_entitled(evidence),
+                "an immediate response requires the exact Network-to-Dispatch cut: {evidence:?}",
             );
         }
     }

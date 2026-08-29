@@ -2861,11 +2861,13 @@ where
     let activation_reserve_us = deferred_cyw43_activation_reserve_from_manifest_us();
 
     'supervisor: loop {
-        activation_window.begin(monotonic_ticks(), counter_frequency());
+        let activation_ticks = monotonic_ticks();
+        let activation_counter_hz = counter_frequency();
+        activation_window.begin(activation_ticks, activation_counter_hz);
         if activation_window.logical_turns != 0
             && !activation_window.turn_admitted(
-                monotonic_ticks(),
-                counter_frequency(),
+                activation_ticks,
+                activation_counter_hz,
                 activation_reserve_us,
             )
         {

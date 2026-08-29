@@ -1439,6 +1439,35 @@ and peer-assisted `nettest` binds and latches facts from one fresh connection.
 These source invariants and a rebuilt image are not latency or acceptance
 evidence; the next exact image must repeat both backend scripts and REST runs.
 
+The exact-f754 follow-up binds source
+`f7544e88868d77ca90e7bcd687fedb66c1d11f02`, build
+`bbc72b4085fd69d7d2e613b037df8c80df148a92b97a4a9e52b5f77b0386a71b`,
+image ID
+`63ce19d903d15a2369b8c7fa5d0dae2e24898ee1b5f05a9b286dc1fd2913c68d`,
+image SHA-256
+`fa74ee65dab14b5258c72882cea956d7537c43aae48e07d00f44a474a71ea85b`,
+and boot-paired `20260829-192549` captures. WiFi completes 64/64 framed
+requests on one connection without retry at 3.786 requests/s, 234.838 ms
+median, and 301.319 ms p95; GENET completes the same workload at 24.646
+requests/s, 38.323 ms median, and 45.511 ms p95. Both reject August latency
+parity. WiFi must therefore prove that a successfully signalled child wake may
+YieldTo the already validated equal-priority Pi child only after exact
+`Authenticated` state, with pre-authentication physical-operator precedence
+and every lifecycle, containment, SC, signal, and syscall failure remaining
+fail closed. GENET must prove that an idle-operator exact authenticated command
+may traverse `Network -> Dispatch -> Network` inside three of the existing five
+units, stage at most its exact response, then return to Serial and stop with a
+second queued command still unaccepted. QEMU direct-VirtIO must remain on its
+existing early branch and public diagnostic output must remain byte-compatible.
+For both physical backends, the Network leaf may omit only the composite root
+control tail already serviced by Serial, LocalSeat, Dispatch, and Display; it
+must retain timer, NIC, and display-ready reconciliation, and cannot suppress
+recovery, containment, response, operator, or reboot debt. Focused source,
+QEMU, profile, build, image-identity, and flash checks are rejection gates only.
+Fresh same-image WiFi and GENET boots must each pass the canonical first-attempt
+`.coh` scripts, a 64-request single-connection framed run, and medium/high REST
+pressure before comparing with the accepted August latency ranges.
+
 The CYW43 software and cadence closure gate is authorized by Milestone 26d
 tasks `m26d-cyw43-hardware-free-closure` and
 `m26d-benchmark-revalidation-and-tuning`, with active defect authority from
