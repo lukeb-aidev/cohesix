@@ -44,12 +44,13 @@ use super::{
     runtime_elf_page_mapping, runtime_uncached_xn_attributes, HalError, KernelHal,
 };
 use crate::console_network_service::{
-    BoundaryError, ConsoleNetworkBoundary, ConsoleNetworkContainmentCursor,
-    ConsoleNetworkContainmentProof, ConsoleNetworkContainmentTurn, ConsoleNetworkContainmentUnit,
-    ConsoleNetworkContract, ConsoleNetworkEvent, ConsoleNetworkObjectPlan, ServiceState,
-    CONSOLE_NETWORK_IMAGE_IDENTITY_BOUND, CONSOLE_NETWORK_RUNTIME_ENTRY_VADDR,
-    CONSOLE_NETWORK_RUNTIME_IMAGE, CONSOLE_NETWORK_RUNTIME_LOAD_BASE_VADDR,
-    CONSOLE_NETWORK_RUNTIME_LOAD_LIMIT_VADDR, CONSOLE_NETWORK_RUNTIME_LOAD_PAGES, SERVICE_TASK_ID,
+    expected_runtime_image_pages, BoundaryError, ConsoleNetworkBoundary,
+    ConsoleNetworkContainmentCursor, ConsoleNetworkContainmentProof, ConsoleNetworkContainmentTurn,
+    ConsoleNetworkContainmentUnit, ConsoleNetworkContract, ConsoleNetworkEvent,
+    ConsoleNetworkObjectPlan, ServiceState, CONSOLE_NETWORK_IMAGE_IDENTITY_BOUND,
+    CONSOLE_NETWORK_RUNTIME_ENTRY_VADDR, CONSOLE_NETWORK_RUNTIME_IMAGE,
+    CONSOLE_NETWORK_RUNTIME_LOAD_BASE_VADDR, CONSOLE_NETWORK_RUNTIME_LOAD_LIMIT_VADDR,
+    CONSOLE_NETWORK_RUNTIME_LOAD_PAGES, SERVICE_TASK_ID,
 };
 use crate::critical_tcb::GenerationIdentity;
 use crate::sel4::{self, RamFrame, RevokeAnchorVSpaceTracker};
@@ -81,12 +82,12 @@ const fn direct_virtio_mmio_attributes() -> sel4_sys::seL4_ARM_VMAttributes {
 const DIRECT_IRQ_SLOT_COUNT: usize = 2;
 #[cfg(not(feature = "net-backend-virtio"))]
 const DIRECT_IRQ_SLOT_COUNT: usize = 0;
-const IMAGE_FRAME_COUNT: usize = if cfg!(feature = "net-backend-virtio") {
-    62
-} else if cfg!(feature = "net-backend-genet-direct") {
-    65
-} else {
-    60
+const IMAGE_FRAME_COUNT: usize = match expected_runtime_image_pages(
+    cfg!(feature = "net-backend-virtio"),
+    cfg!(feature = "net-backend-genet-direct"),
+) {
+    Some(pages) => pages as usize,
+    None => 0,
 };
 const BASE_FRAME_COUNT: usize = IMAGE_FRAME_COUNT + 38;
 const FRAME_COUNT: usize = BASE_FRAME_COUNT + DIRECT_DMA_FRAME_COUNT;
@@ -191,6 +192,7 @@ const ROOT_PUBLICATION_ACK_WAKE_INDEX: usize = 4;
 const CHILD_CNODE_RADIX_BITS: u8 = 4;
 
 const _: () = assert!(TIMEOUT_FAULT_SLOT_INDEX < ROOT_SLOT_COUNT);
+const _: () = assert!(IMAGE_FRAME_COUNT != 0);
 #[cfg(feature = "net-backend-virtio")]
 const _: () = assert!(DIRECT_MMIO_SLOT_INDEX + 1 == DIRECT_IRQ_NOTIFICATION_SLOT_INDEX);
 #[cfg(feature = "net-backend-virtio")]

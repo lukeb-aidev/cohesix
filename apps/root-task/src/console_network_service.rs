@@ -19,6 +19,11 @@ use heapless::Vec as HeaplessVec;
 pub const SERVICE_TASK_ID: &str = "console-network-service";
 /// Runtime READY identity accepted before packet or console admission.
 pub const READY_IDENTITY: &str = "console-network-service/v5";
+const FIXED_SERVICE_FRAME_COUNT: u32 = 38;
+const RETAINED_ROOT_SLOT_OVERHEAD: u32 = 25;
+const DIRECT_VIRTIO_DMA_FRAME_COUNT: u32 = 34;
+const DIRECT_VIRTIO_RETAINED_SLOT_COUNT: u32 = 3;
+const DIRECT_GENET_RETAINED_SLOT_COUNT: u32 = DIRECT_GENET_SHARED_PAGE_COUNT as u32;
 mod generated_image_identity {
     ::core::include!(::core::concat!(
         ::core::env!("OUT_DIR"),
@@ -120,16 +125,8 @@ impl ConsoleNetworkContract {
     /// Validate generated object and temporal records as one construction unit.
     pub fn from_generated() -> Result<Self, BoundaryError> {
         let config = generated_config();
-        let expected_object_frames = 98
-            + if config.direct_virtio { 36 } else { 0 }
-            + if config.direct_genet { 5 } else { 0 };
-        let expected_object_cspace_slots = 123
-            + if config.direct_virtio { 39 } else { 0 }
-            + if config.direct_genet {
-                DIRECT_GENET_SHARED_PAGE_COUNT as u32 + 5
-            } else {
-                0
-            };
+        let (expected_object_frames, expected_object_cspace_slots) =
+            expected_object_inventory(config.direct_virtio, config.direct_genet)?;
         if !config.enabled
             || config.abi_version != ABI_VERSION
             || config.image_id != "console-network-runtime"
@@ -317,6 +314,49 @@ impl ConsoleNetworkContract {
             .map_err(|_| BoundaryError::InvalidInit)?;
         Ok(descriptor)
     }
+}
+
+/// Exact runtime image-page inventory selected by the root constructor.
+#[must_use]
+pub(crate) const fn expected_runtime_image_pages(
+    direct_virtio: bool,
+    direct_genet: bool,
+) -> Option<u16> {
+    match (direct_virtio, direct_genet) {
+        (true, false) => Some(62),
+        (false, true) => Some(66),
+        (false, false) => Some(60),
+        (true, true) => None,
+    }
+}
+
+fn expected_object_inventory(
+    direct_virtio: bool,
+    direct_genet: bool,
+) -> Result<(u32, u32), BoundaryError> {
+    let image_pages = expected_runtime_image_pages(direct_virtio, direct_genet)
+        .ok_or(BoundaryError::GeneratedDrift)?;
+    let direct_frames = if direct_virtio {
+        DIRECT_VIRTIO_DMA_FRAME_COUNT
+    } else {
+        0
+    };
+    let retained_transport_slots = if direct_virtio {
+        DIRECT_VIRTIO_RETAINED_SLOT_COUNT
+    } else if direct_genet {
+        DIRECT_GENET_RETAINED_SLOT_COUNT
+    } else {
+        0
+    };
+    let frames = u32::from(image_pages)
+        .checked_add(FIXED_SERVICE_FRAME_COUNT)
+        .and_then(|count| count.checked_add(direct_frames))
+        .ok_or(BoundaryError::GeneratedDrift)?;
+    let cspace_slots = frames
+        .checked_add(RETAINED_ROOT_SLOT_OVERHEAD)
+        .and_then(|count| count.checked_add(retained_transport_slots))
+        .ok_or(BoundaryError::GeneratedDrift)?;
+    Ok((frames, cspace_slots))
 }
 
 /// Exact fixed-object footprint reserved before constructing the child.
@@ -1154,4 +1194,21 @@ impl ConsoleNetworkBoundary {
 
 fn next_sequence(sequence: u64) -> u64 {
     sequence.saturating_add(1).max(1)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{expected_object_inventory, expected_runtime_image_pages};
+
+    #[test]
+    fn exact_backend_selects_qemu_pi_and_mediated_object_inventories() {
+        assert_eq!(expected_runtime_image_pages(true, false), Some(62));
+        assert_eq!(expected_object_inventory(true, false), Ok((134, 162)));
+        assert_eq!(expected_runtime_image_pages(false, true), Some(66));
+        assert_eq!(expected_object_inventory(false, true), Ok((104, 161)));
+        assert_eq!(expected_runtime_image_pages(false, false), Some(60));
+        assert_eq!(expected_object_inventory(false, false), Ok((98, 123)));
+        assert_eq!(expected_runtime_image_pages(true, true), None);
+        assert!(expected_object_inventory(true, true).is_err());
+    }
 }
