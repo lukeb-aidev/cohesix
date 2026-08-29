@@ -4761,7 +4761,7 @@ mod tests {
                 true,
                 false,
                 true,
-                Some(15),
+                Some(18),
             ),
             super::DeferredGate8HandoffAdmission::Authorized { generation },
         );
@@ -5432,19 +5432,19 @@ mod tests {
     #[test]
     fn gate8_post_handoff_ready_wait_uses_two_admitted_response_bounds() {
         assert_eq!(super::response_time_us_to_clock_ms(8_100), Some(9));
-        assert_eq!(super::response_time_us_to_clock_ms(5_100), Some(6));
+        assert_eq!(super::response_time_us_to_clock_ms(8_100), Some(9));
         assert_eq!(
             super::response_time_us_to_clock_ms(8_100)
-                .and_then(|child| super::response_time_us_to_clock_ms(5_100)
+                .and_then(|child| super::response_time_us_to_clock_ms(8_100)
                     .and_then(|root| child.checked_add(root))),
-            Some(15),
+            Some(18),
             "separate millisecond rounding covers the child and root response observations",
         );
         assert_eq!(super::response_time_us_to_clock_ms(0), None);
 
         let mut lifecycle = committed_gate8_lifecycle(100, 12);
         assert_eq!(
-            lifecycle.authorize_handoff(90_099, 12, true, false, true, Some(15)),
+            lifecycle.authorize_handoff(90_099, 12, true, false, true, Some(18)),
             super::DeferredGate8HandoffAdmission::Authorized { generation: 12 },
         );
         let plan = match lifecycle.prepare_child_ready_wait(gate8_absolute_clock_ms(90_100), 12) {
@@ -5454,17 +5454,17 @@ mod tests {
         assert_eq!(
             lifecycle.arm_child_ready_wait(plan, gate8_absolute_clock_ms(90_103), 12, true, false,),
             super::DeferredGate8ChildReadyArm::Armed {
-                deadline_ms: 90_118,
+                deadline_ms: 90_121,
             },
             "the Ready bound starts after activation rather than during descriptor finalization",
         );
-        assert_eq!(lifecycle.deadline_ms(), Some(90_118));
+        assert_eq!(lifecycle.deadline_ms(), Some(90_121));
         assert_eq!(
-            lifecycle.service_readiness_deadline_expired(12, 0, Some(90_117)),
+            lifecycle.service_readiness_deadline_expired(12, 0, Some(90_120)),
             None,
             "an exact-generation Ready may still be admitted before the derived boundary",
         );
-        assert!(lifecycle.mark_service_ready(12, 90_117));
+        assert!(lifecycle.mark_service_ready(12, 90_120));
         assert_eq!(
             lifecycle.service_readiness_deadline_expired(12, u64::MAX, None),
             None,
@@ -5473,7 +5473,7 @@ mod tests {
 
         let mut between_resume_and_return = committed_gate8_lifecycle(100, 12);
         assert!(matches!(
-            between_resume_and_return.authorize_handoff(90_099, 12, true, false, true, Some(15),),
+            between_resume_and_return.authorize_handoff(90_099, 12, true, false, true, Some(18),),
             super::DeferredGate8HandoffAdmission::Authorized { .. }
         ));
         let between_plan = match between_resume_and_return
@@ -5491,7 +5491,7 @@ mod tests {
                 false,
             ),
             super::DeferredGate8ChildReadyArm::Armed {
-                deadline_ms: 90_118,
+                deadline_ms: 90_121,
             }
         ));
         assert!(
@@ -5501,7 +5501,7 @@ mod tests {
 
         let mut missing_ready = committed_gate8_lifecycle(100, 12);
         assert_eq!(
-            missing_ready.authorize_handoff(90_099, 12, true, false, true, Some(15)),
+            missing_ready.authorize_handoff(90_099, 12, true, false, true, Some(18)),
             super::DeferredGate8HandoffAdmission::Authorized { generation: 12 },
         );
         let missing_plan =
@@ -5519,10 +5519,10 @@ mod tests {
             ),
             super::DeferredGate8ChildReadyArm::Armed { .. }
         ));
-        assert!(!missing_ready.mark_service_ready(13, 90_117));
+        assert!(!missing_ready.mark_service_ready(13, 90_120));
         assert_eq!(
-            missing_ready.service_readiness_deadline_expired(12, 0, Some(90_118)),
-            Some(90_118),
+            missing_ready.service_readiness_deadline_expired(12, 0, Some(90_121)),
+            Some(90_121),
             "missing or wrong-generation Ready fails at the exact derived boundary",
         );
     }
@@ -5567,7 +5567,7 @@ mod tests {
         ] {
             let mut invalid = committed_gate8_lifecycle(100, 12);
             assert!(matches!(
-                invalid.authorize_handoff(500, 12, true, false, true, Some(15)),
+                invalid.authorize_handoff(500, 12, true, false, true, Some(18)),
                 super::DeferredGate8HandoffAdmission::Authorized { .. }
             ));
             assert_eq!(
@@ -5578,7 +5578,7 @@ mod tests {
 
         let mut invalid_post = committed_gate8_lifecycle(100, 12);
         assert!(matches!(
-            invalid_post.authorize_handoff(500, 12, true, false, true, Some(15)),
+            invalid_post.authorize_handoff(500, 12, true, false, true, Some(18)),
             super::DeferredGate8HandoffAdmission::Authorized { .. }
         ));
         let invalid_post_plan =
@@ -5614,7 +5614,7 @@ mod tests {
 
         let mut overflow = committed_gate8_lifecycle(100, 12);
         assert!(matches!(
-            overflow.authorize_handoff(500, 12, true, false, true, Some(15)),
+            overflow.authorize_handoff(500, 12, true, false, true, Some(18)),
             super::DeferredGate8HandoffAdmission::Authorized { .. }
         ));
         assert_eq!(
@@ -5622,7 +5622,7 @@ mod tests {
             super::DeferredGate8ChildReadyPreparation::ClockOverflow,
         );
         let plan =
-            match overflow.prepare_child_ready_wait(gate8_absolute_clock_ms(u64::MAX - 15), 12) {
+            match overflow.prepare_child_ready_wait(gate8_absolute_clock_ms(u64::MAX - 18), 12) {
                 super::DeferredGate8ChildReadyPreparation::Prepared(plan) => plan,
                 outcome => panic!("expected a boundary-safe Ready plan, got {outcome:?}"),
             };
@@ -5643,7 +5643,7 @@ mod tests {
     fn gate8_handoff_authorization_preserves_deadline_generation_and_recovery() {
         let mut on_time = committed_gate8_lifecycle(100, 12);
         assert_eq!(
-            on_time.authorize_handoff(90_099, 12, true, false, true, Some(15)),
+            on_time.authorize_handoff(90_099, 12, true, false, true, Some(18)),
             super::DeferredGate8HandoffAdmission::Authorized { generation: 12 },
         );
         assert_eq!(
@@ -5654,7 +5654,7 @@ mod tests {
 
         let mut at_deadline = committed_gate8_lifecycle(100, 12);
         assert_eq!(
-            at_deadline.authorize_handoff(90_100, 12, true, false, true, Some(15)),
+            at_deadline.authorize_handoff(90_100, 12, true, false, true, Some(18)),
             super::DeferredGate8HandoffAdmission::Deadline {
                 generation: 12,
                 deadline_ms: 90_100,
@@ -5665,20 +5665,20 @@ mod tests {
 
         let mut late = committed_gate8_lifecycle(100, 12);
         assert!(matches!(
-            late.authorize_handoff(90_101, 12, true, false, true, Some(15)),
+            late.authorize_handoff(90_101, 12, true, false, true, Some(18)),
             super::DeferredGate8HandoffAdmission::Deadline { .. }
         ));
         assert!(!late.handoff_authorization_pending());
 
         let mut drifted = committed_gate8_lifecycle(100, 12);
         assert_eq!(
-            drifted.authorize_handoff(500, 13, false, false, true, Some(15)),
+            drifted.authorize_handoff(500, 13, false, false, true, Some(18)),
             super::DeferredGate8HandoffAdmission::ProofDrift { generation: 12 },
         );
 
         let mut recovery = committed_gate8_lifecycle(100, 12);
         assert_eq!(
-            recovery.authorize_handoff(500, 12, true, true, true, Some(15)),
+            recovery.authorize_handoff(500, 12, true, true, true, Some(18)),
             super::DeferredGate8HandoffAdmission::RecoveryRequired,
         );
         assert!(!recovery.handoff_authorization_pending());
@@ -5699,7 +5699,7 @@ mod tests {
 
         let mut lifecycle = committed_gate8_lifecycle(100, 12);
         assert!(matches!(
-            lifecycle.authorize_handoff(500, 12, true, false, true, Some(15)),
+            lifecycle.authorize_handoff(500, 12, true, false, true, Some(18)),
             super::DeferredGate8HandoffAdmission::Authorized { .. }
         ));
         let plan = match lifecycle.prepare_child_ready_wait(gate8_absolute_clock_ms(501), 12) {
@@ -5716,14 +5716,14 @@ mod tests {
         );
         assert_eq!(
             lifecycle.arm_child_ready_wait(plan, gate8_absolute_clock_ms(502), 12, true, false,),
-            super::DeferredGate8ChildReadyArm::Armed { deadline_ms: 517 },
+            super::DeferredGate8ChildReadyArm::Armed { deadline_ms: 520 },
         );
         assert_eq!(
             lifecycle.arm_child_ready_wait(plan, gate8_absolute_clock_ms(502), 12, true, false,),
             super::DeferredGate8ChildReadyArm::AlreadyArmed,
         );
         assert_eq!(
-            lifecycle.child_ready_pre_network_action(Some(518), 13, false, true, None),
+            lifecycle.child_ready_pre_network_action(Some(521), 13, false, true, None),
             super::DeferredGate8ChildReadyPreNetworkAction::Continue,
             "transport recovery must pre-empt an expired or drifted Ready wait",
         );
@@ -5736,31 +5736,31 @@ mod tests {
             super::DeferredCyw43AttachedTurn::RecoverySupervisor,
         );
         assert_eq!(
-            lifecycle.child_ready_pre_network_action(Some(516), 13, false, false, None),
+            lifecycle.child_ready_pre_network_action(Some(519), 13, false, false, None),
             super::DeferredGate8ChildReadyPreNetworkAction::Fail {
                 generation: 12,
                 blocker: "child-ready-generation-drift",
-                deadline_ms: 516,
+                deadline_ms: 519,
             },
         );
         assert_eq!(
-            lifecycle.child_ready_pre_network_action(Some(518), 12, true, false, None),
+            lifecycle.child_ready_pre_network_action(Some(521), 12, true, false, None),
             super::DeferredGate8ChildReadyPreNetworkAction::ObservePublicationOnly {
                 generation: 12,
-                deadline_ms: 517,
+                deadline_ms: 520,
             },
             "the exact boundary admits one final durable-publication observation",
         );
         assert_eq!(
             lifecycle.child_ready_post_observation_failure(12, None),
-            Some((12, "service-readiness-deadline", 517)),
+            Some((12, "service-readiness-deadline", 520)),
         );
         assert_eq!(
-            lifecycle.child_ready_pre_network_action(Some(519), 12, true, false, None),
+            lifecycle.child_ready_pre_network_action(Some(522), 12, true, false, None),
             super::DeferredGate8ChildReadyPreNetworkAction::Fail {
                 generation: 12,
                 blocker: "service-readiness-deadline",
-                deadline_ms: 517,
+                deadline_ms: 520,
             },
             "a missing Ready cannot obtain a second deadline observation",
         );
@@ -5791,25 +5791,25 @@ mod tests {
         fn armed() -> super::DeferredGate8Lifecycle {
             let mut lifecycle = committed_gate8_lifecycle(100, 12);
             authorize_and_arm_gate8_handoff(&mut lifecycle, 12, 500, 502);
-            assert_eq!(lifecycle.deadline_ms(), Some(517));
+            assert_eq!(lifecycle.deadline_ms(), Some(520));
             lifecycle
         }
 
         let mut on_time_late_observed = armed();
         assert_eq!(
-            on_time_late_observed.child_ready_pre_network_action(Some(518), 12, true, false, None,),
+            on_time_late_observed.child_ready_pre_network_action(Some(521), 12, true, false, None,),
             super::DeferredGate8ChildReadyPreNetworkAction::ObservePublicationOnly {
                 generation: 12,
-                deadline_ms: 517,
+                deadline_ms: 520,
             },
         );
         assert_eq!(
-            on_time_late_observed.child_ready_post_observation_failure(12, Some(516)),
+            on_time_late_observed.child_ready_post_observation_failure(12, Some(519)),
             None,
             "an ABI-validated pre-deadline publication survives delayed root observation",
         );
-        assert!(on_time_late_observed.child_ready_publication_on_time(12, Some(516)));
-        assert!(on_time_late_observed.mark_service_ready(12, 516));
+        assert!(on_time_late_observed.child_ready_publication_on_time(12, Some(519)));
+        assert!(on_time_late_observed.mark_service_ready(12, 519));
 
         let mut exact_lower_bound = armed();
         assert!(exact_lower_bound.child_ready_publication_on_time(12, Some(502)));
@@ -5818,27 +5818,27 @@ mod tests {
         for published_ms in [0, 501] {
             let mut pre_arm = armed();
             assert!(matches!(
-                pre_arm.child_ready_pre_network_action(Some(518), 12, true, false, None),
+                pre_arm.child_ready_pre_network_action(Some(521), 12, true, false, None),
                 super::DeferredGate8ChildReadyPreNetworkAction::ObservePublicationOnly { .. }
             ));
             assert_eq!(
                 pre_arm.child_ready_post_observation_failure(12, Some(published_ms)),
-                Some((12, "service-readiness-deadline", 517)),
+                Some((12, "service-readiness-deadline", 520)),
                 "a zero or pre-resume Ready timestamp cannot satisfy this handoff",
             );
             assert!(!pre_arm.child_ready_publication_on_time(12, Some(published_ms)));
             assert!(!pre_arm.mark_service_ready(12, published_ms));
         }
 
-        for published_ms in [517, 518] {
+        for published_ms in [520, 521] {
             let mut late = armed();
             assert!(matches!(
-                late.child_ready_pre_network_action(Some(518), 12, true, false, None),
+                late.child_ready_pre_network_action(Some(521), 12, true, false, None),
                 super::DeferredGate8ChildReadyPreNetworkAction::ObservePublicationOnly { .. }
             ));
             assert_eq!(
                 late.child_ready_post_observation_failure(12, Some(published_ms)),
-                Some((12, "service-readiness-deadline", 517)),
+                Some((12, "service-readiness-deadline", 520)),
                 "Ready at or after the exact boundary remains terminal",
             );
             assert!(!late.child_ready_publication_on_time(12, Some(published_ms)));
@@ -5847,30 +5847,30 @@ mod tests {
 
         let mut missing = armed();
         assert!(matches!(
-            missing.child_ready_pre_network_action(Some(517), 12, true, false, None),
+            missing.child_ready_pre_network_action(Some(520), 12, true, false, None),
             super::DeferredGate8ChildReadyPreNetworkAction::ObservePublicationOnly { .. }
         ));
         assert_eq!(
             missing.child_ready_post_observation_failure(12, None),
-            Some((12, "service-readiness-deadline", 517)),
+            Some((12, "service-readiness-deadline", 520)),
         );
         assert_eq!(
-            missing.child_ready_pre_network_action(Some(518), 12, true, false, None),
+            missing.child_ready_pre_network_action(Some(521), 12, true, false, None),
             super::DeferredGate8ChildReadyPreNetworkAction::Fail {
                 generation: 12,
                 blocker: "service-readiness-deadline",
-                deadline_ms: 517,
+                deadline_ms: 520,
             },
             "the deadline arbitration is consumed exactly once",
         );
 
         let mut drifted = armed();
         assert_eq!(
-            drifted.child_ready_pre_network_action(Some(516), 13, false, false, None),
+            drifted.child_ready_pre_network_action(Some(519), 13, false, false, None),
             super::DeferredGate8ChildReadyPreNetworkAction::Fail {
                 generation: 12,
                 blocker: "child-ready-generation-drift",
-                deadline_ms: 516,
+                deadline_ms: 519,
             },
         );
     }
@@ -5898,9 +5898,9 @@ mod tests {
             .find(|task| task.id == "root-control")
             .expect("selected profile must declare root-control");
         child.response_time_us = 8_100;
-        root.response_time_us = 5_100;
+        root.response_time_us = 8_100;
         let exact = [child, root];
-        assert_eq!(super::child_ready_response_bound_ms(&exact), Some(15));
+        assert_eq!(super::child_ready_response_bound_ms(&exact), Some(18));
         assert_eq!(super::child_ready_response_bound_ms(&[root]), None);
         assert_eq!(super::child_ready_response_bound_ms(&[child]), None);
 

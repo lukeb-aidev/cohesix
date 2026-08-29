@@ -1353,8 +1353,8 @@ first response. Its SDIO physical stages are sub-millisecond while bus-link
 acceptance and root response continuation cross repeated MCS periods. GENET
 reaches link, DHCP, valid direct rings, and 11 us pre-load window high-water,
 then its first authenticated `nettest` ingress raises the terminal
-`bcmgenet-v5` MCS timeout and correctly quarantines the pair. This is the
-current first-failure oracle: deterministic tests must prove one GENET packet
+`bcmgenet-v5` MCS timeout and correctly quarantines the pair. At that candidate
+chronology this was the first-failure oracle: deterministic tests must prove one GENET packet
 operation per guard sample, exact 800 us compiler admission, complete
 nonforeground bus-link copy bounds plus unchanged foreground trace/overlay
 authority, and the exact response rotation below. No post-containment GENET
@@ -1384,6 +1384,36 @@ console child must independently prove the bounded sub-MSS response trains
 defined below. These are next-image candidates only; source, QEMU, packaging,
 or image checks cannot claim repaired GENET continuity, WiFi latency, or August
 parity without fresh exact-image hardware evidence.
+
+The exact-3ad follow-up input binds source
+`3ad239e95c7e145c28a2fbc9a2f5b5b291eba652`, build
+`d50b3c2b4c43ff6c3c4b5a38c9cf86284fbbf1558f65ea946ee8d354d6083f3b`,
+image ID
+`fcd8c0609b3575ba2770cf3ad74def759c53e04e489ab4af39c7e72e63b3f567`,
+image SHA-256
+`b55da37cc692542939aa991f33b4175569c3ec783cbebfbe884f9c0acc36c658`,
+and boot-paired `20260829-163547` captures. WiFi proves Gate 8, DHCP,
+generation-bound `nettest`, and three canonical scripts without containment;
+its 3.1-3.8-second script cadence and 68.320-ms average accepted-to-issued TX
+delay reject latency closure. GENET proves a 30.938-ms DHCP DORA, healthy
+direct rings, generation-bound `nettest`, and one complete authenticated
+10,771-byte response without retransmission, reset, or sequence gap. A later
+clean reproduction reaches AUTH and ATTACH, then its sustained TAIL response
+first raises exact `bcmgenet-v5` Timeout before the expected paired console
+quarantine. This supersedes the physical first-failure oracle: deterministic
+regression must prove a quiescent final packet blocks before guard/cap/stalled
+Yield, while the selected Pi GENET task uses the unchanged `3,000/10,000 us`,
+two-refill, priority-160, core-1, 800-us-WCET reservation with
+`NaturalPostpone`. Standard/protocol/cursor faults and pair containment remain
+terminal. Separately, the Pi root and console child must prove equal priority
+200 on core 0 and permit `SchedContext_YieldTo` only after an exact committed
+packet/control/publication-ACK record or one elected bounded service-tick wake,
+followed by its successful one-hot signal; invalid SC, lifecycle, core,
+priority, MCP, signal, or syscall state fails closed. QEMU retains its
+lower-priority child and existing path.
+Neither focused tests nor a rebuilt image prove repaired sustained GENET TCP,
+WiFi latency, or August parity; the next exact-image WiFi and GENET boot must
+rerun scripts and medium/high REST pressure before acceptance.
 
 The CYW43 software and cadence closure gate is authorized by Milestone 26d
 tasks `m26d-cyw43-hardware-free-closure` and
@@ -1527,7 +1557,7 @@ prove all of the following:
   fallback, extra retry, or mixed network/HAL work. Successful activation arms
   one distinct exact-generation Ready observation window derived from the
   separately rounded generated response bounds of `console-network-service`
-  and `root-control`; the current Pi profile admits `9 ms + 6 ms = 15 ms`.
+  and `root-control`; the current Pi profile admits `9 ms + 9 ms = 18 ms`.
   Missing, zero, inactive, non-admitted, or overflowing generated authority
   fails closed immediately. The accepted event retains its ABI-validated
   service identity, generation, sequence, and child publication time. At or
@@ -1541,9 +1571,9 @@ prove all of the following:
   DHCP becoming bound in a NetworkControl turn that began at
   `original_deadline - 1 ms` and completed at or after the deadline, prove the
   exclusive handoff still occurs, reject a turn that begins exactly at the
-  deadline, admit exact-generation Ready published at `+14 ms` even when root
+  deadline, admit exact-generation Ready published at `+17 ms` even when root
   consumes it after the boundary, and reject missing, replayed, wrong-generation,
-  or `+15 ms` Ready after the one final publication-only observation.
+  or `+18 ms` Ready after the one final publication-only observation.
 - Transport attachment publishes `stabilizing`. Initial Gate 8 publication in
   the sole `attempt=1` outer boot episode uses one absolute
   `now + 90,000 ms` deadline. Gate 8 is passive: a logical subgate failure
@@ -4429,9 +4459,9 @@ transport-substrate evidence only. Fresh Pi hardware proof is still required
 before claiming Wi-Fi/DHCP, GENET/DHCP, USB keyboard, HDMI, or strongest
 isolated-driver hardware acceptance.
 
-For the selected Pi profile, serial, USB, HDMI, CYW43, and SDIO must report
-`timeout_policy=NaturalPostpone timeout_endpoint=omitted`; PCIe and dormant
-GENET must report `timeout_policy=Terminal timeout_endpoint=installed`. The
+For the selected Pi profile, serial, USB, HDMI, GENET, CYW43, and SDIO must report
+`timeout_policy=NaturalPostpone timeout_endpoint=omitted`; PCIe must report
+`timeout_policy=Terminal timeout_endpoint=installed`. The
 standard fault endpoint, reserved timeout cap/badge/resource, registry entry,
 and supervisor authority remain present for every row. Any timeout containment
 from a selected natural-postpone runtime is a constructor-policy failure unless
@@ -6582,7 +6612,7 @@ permanent-domain retention caps are not grouped reclaimable untyped anchors.
 The QEMU compiler fixture must assert root-control remains on core 0 with
 `5500 us / 10000 us`, `5000 us` WCET, `7600 us` response, and
 `m26e-qemu-root-adjacent-refill-natural-postpone-candidate-v35` provenance. Pi must retain
-core 0, `2750 us / 10000 us`, `2500 us` WCET, `5100 us` response, and
+core 0, `2750 us / 10000 us`, `2500 us` WCET, `8100 us` response, and
 `m26e-pi4-root-adjacent-refill-natural-postpone-candidate-v24` provenance. The QEMU root row must select
 `virtio_operator_serial_io_bytes_per_turn = 64`; the Pi root row and every
 non-root row must select zero. Validation must reject every QEMU root value
@@ -8247,9 +8277,11 @@ translation objects and 16 child CSpace slots, the 32-page stack at
 badge 64, and the sole port-31337 listener. The active SC remains
 `3000 us / 10000 us`, with `3000 us` WCET. QEMU stays on core 2 at
 priority/MCP 180/200 with a `3000 us` response candidate. Pi stays on core 0
-at priority/MCP 180/200 with an `8100 us` response candidate; Pi root-control
-remains 200/200 with its `5100 us` response. The Pi profile regression must
-prove the pre-authentication console priority remains strictly below root.
+at priority/MCP 200/200 with an `8100 us` response candidate; Pi root-control
+remains 200/200 with its `8100 us` response. The Pi profile regression must
+prove equal priority, same-core placement, root MCP authority, and an exact
+post-record-commit or bounded service-tick `SchedContext_YieldTo` eligibility
+boundary while QEMU remains lower-priority and non-YieldTo.
 Refills and
 standard/timeout fault identities remain generated. The timeout
 cap/badge/resource/registry row must remain reserved, but the console TCB
@@ -9054,8 +9086,8 @@ _Generated by coh-rtc (sha256: `fa11c64fe53b859365c45c8e33e565d428029a87529be00c
 ## Manifest fingerprints
 - `configs/root_task.toml` — `sha256:f8ac815eecf31f83739d3569a748ceace199f1e29a6eda3f4fd3d191e202784d`
 - `configs/generated/root_task_resolved.json` — `sha256:a9a50408519f33cf2e05932cffffa5dbb521958870b16edf2f36311ff60385a1`
-- `configs/root_task_pi4_uboot_aarch64.toml` — `sha256:9a0116afcd31ab0895cbda43c728c84a3c0ea6d969091ed8376c6a2d4488cb47`
-- Pi `pi4_production` transient resolved binding — `sha256:1fc0a0efe62acbc6a1edac38cde2c76cd2a4de1b328dbca847b9eecfb790b139`
+- `configs/root_task_pi4_uboot_aarch64.toml` — `sha256:f18e7198d22e68e2c57fd2560f0a235ee23462dd81ed1fc2ffaccbd15057b7e2`
+- Pi `pi4_production` transient resolved binding — `sha256:702dbf93e549f22fa1b46c926b018d60536ab0d03a7796ae2fa568bfc700e052`
 
 ## Transcript fixture hashes
 - `tests/fixtures/transcripts/boot_v0/serial.txt` — `sha256:2ea58218a937f0c702fd67dac83aa838a8c49b9d1fba1e0165dfa93a44ab3c6d`

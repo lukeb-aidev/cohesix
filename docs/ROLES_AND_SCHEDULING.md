@@ -264,7 +264,7 @@ handlers. This policy does not change client deadlines, retries, console
 grammar, or fault authority.
 
 The selected Pi profile applies the same kernel mechanism to the resumable
-serial, USB, HDMI, CYW43, and SDIO physical runtimes. Their active SCs remain
+serial, USB, HDMI, GENET, CYW43, and SDIO physical runtimes. Their active SCs remain
 independent. Serial, USB, CYW43, and SDIO retain their existing values; the
 write-only HDMI damage compositor alone receives 2,000 us per unchanged
 10,000 us period. Its 1,800 us candidate WCET and derived 2,100 us response are
@@ -280,8 +280,8 @@ ceiling for parser-bound proof; the unchanged pointer-free frame transport
 still limits a submitted payload to 1,536 bytes.
 Ordinary current-refill exhaustion postpones execution instead of converting a
 retained multi-turn device lifetime into a terminal driver fault. Standard
-faults and explicit device deadlines remain terminal,
-and PCIe plus GENET retain their selected terminal timeout policies.
+faults and explicit device deadlines remain terminal, and PCIe retains its
+selected terminal timeout policy.
 The temporal adjustment changes neither QEMU scheduling nor driver ownership;
 the shared HDMI grant values change without changing the pointer-free record
 layout.
@@ -401,7 +401,7 @@ lower bound deliberately includes a child that publishes after resume but
 before root returns.
 
 Pi GENET uses core 1 with a selected `3,000 us / 10,000 us` active SC, two
-refills, priority 160, and terminal timeout policy. This isolates the production
+refills, priority 160, and natural-postpone timeout policy. This isolates the production
 wired path from the CYW43/SDIO pair on core 3 without changing either Wi-Fi SC.
 The compiler admits `6,250/9,000 us` on core 1 and `8,000/9,000 us` on core 3,
 leaving 2,750 us and 1,000 us of usable-core reserve respectively. GENET's
@@ -431,12 +431,15 @@ stays inside the current notification or final-prewait handler; it cannot
 escape through generic command-ring arbitration between packet slices. Only
 an owned TX/RX state advance is productive; unresolved cursor reconciliation
 still consumes its slice but cannot reset the no-progress retry. A successor
-that crosses the guard yields and returns to outer arbitration. Block
-preserves the window. Any endpoint command forces a later `seL4_Yield`
+that crosses the guard yields and returns to outer arbitration. A final slice
+with no durable successor blocks before guard/cap/stalled Yield, so quiescence
+cannot charge the remaining refill. Block preserves the window. Any endpoint command forces a later `seL4_Yield`
 freshness boundary; that boundary resets software accounting only after the
 syscall returns. The compiler and generated profile require exact
 `wcet_us=800`; the handoff and runtime validate exact max-two-refill
-`3,000/10,000 us` truth. Counter failure, cursor drift, or contract drift
+`3,000/10,000 us` truth. Sustained legal work that consumes that reservation is
+postponed by the kernel until replenishment rather than classified as a device
+fault. Counter failure, cursor drift, or contract drift
 contains the direct generation. The packet-slice duration high-water and
 dense-window reason fields observe these decisions but do not supply
 scheduling authority or target acceptance.
@@ -450,13 +453,17 @@ binds the calculation to the exact selected kernel/profile/build identity and
 rejects eleven. This preserves fragmented wake eligibility; it does not enlarge
 CPU budget or authorize another operation, signal, poll, retry, or owner.
 
-For this Pi-only production path, console-network retains priority/MCP 180/200
-with its unchanged `3,000 us / 10,000 us` SC. Priority-200 root-control therefore
-continues to service unauthenticated serial and local-seat input first, while the
-direct packet path and existing bounded authenticated-response selection remove
-steady root packet mediation without granting a pre-authentication network
-preemption. Compiler response analysis records `8,100 us` for console-network
-and `5,100 us` for root-control, retains the mandatory reserve, and admits the
+For this Pi-only production path, console-network selects priority/MCP 200/200
+with its unchanged `3,000 us / 10,000 us` SC, equal to priority-200 root-control.
+Root's physical-input rotor still selects serial and local-seat work before its
+Network phase. Only after an exact sequence-last packet/control/publication-ACK
+commit, or one bounded service-tick wake, and a successful one-hot signal may
+root invoke `SchedContext_YieldTo` on the already retained, same-core child SC;
+lifecycle, core, priority, MCP, SC, signal, or syscall drift fails closed. The
+child therefore runs on its own hard-bounded reservation and
+blocks at its existing notification gate without consuming root's remaining
+refill. Compiler response analysis records `8,100 us` for both console-network
+and root-control, retains the mandatory reserve, and admits the
 32 additional console mapping-cap slots. These are static bounds, not measured
 packet latency. Fresh same-image Pi load evidence must still prove authenticated
 response cadence; QEMU priorities and placement remain unchanged.
@@ -464,7 +471,7 @@ response cadence; QEMU priorities and placement remain unchanged.
 The Pi CYW43 boot supervisor consumes those two generated response bounds only
 after the DHCP-bound console child is finalized and resumed. Each bound is
 rounded independently to the millisecond clock, so the current profile admits
-one `9 ms + 6 ms = 15 ms` exact-generation Ready publication window. Root may
+one `9 ms + 9 ms = 18 ms` exact-generation Ready publication window. Root may
 take one final shared-page-only observation at or after the boundary and accept
 it only when the retained ABI-validated publication time is strictly earlier.
 Invalid generated authority or a missing, at-boundary, late, replayed, or

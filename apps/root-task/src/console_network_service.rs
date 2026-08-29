@@ -38,6 +38,37 @@ pub use generated_image_identity::{
     CONSOLE_NETWORK_RUNTIME_LOAD_PAGES, CONSOLE_NETWORK_RUNTIME_SHA256,
 };
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ConsoleNetworkYieldToPrerequisites {
+    pi_profile: bool,
+    root_core: u8,
+    root_sched_control_core: u8,
+    root_priority: u8,
+    root_mcp: u8,
+    child_core: u8,
+    child_sched_control_core: u8,
+    child_priority: u8,
+    child_scheduling_context_slot: u32,
+}
+
+fn validate_console_network_yield_to(
+    prerequisites: ConsoleNetworkYieldToPrerequisites,
+) -> Result<bool, BoundaryError> {
+    if !prerequisites.pi_profile {
+        return Ok(false);
+    }
+    if prerequisites.child_scheduling_context_slot == 0
+        || prerequisites.root_core != prerequisites.child_core
+        || prerequisites.root_sched_control_core != prerequisites.root_core
+        || prerequisites.child_sched_control_core != prerequisites.child_core
+        || prerequisites.root_priority != prerequisites.child_priority
+        || prerequisites.root_mcp < prerequisites.child_priority
+    {
+        return Err(BoundaryError::TemporalDrift);
+    }
+    Ok(true)
+}
+
 /// Return the compiler-owned console-network service record.
 #[must_use]
 pub const fn generated_config() -> crate::generated::ConsoleNetworkServiceConfig {
@@ -113,6 +144,8 @@ pub struct ConsoleNetworkContract {
     pub timeout_badge: u64,
     /// Compiler-owned standard fault badge.
     pub standard_fault_badge: u64,
+    /// Whether Pi root may YieldTo this exact child SC after committed work.
+    pub yield_to_child_after_signal: bool,
     /// Selected virtual-counter frequency.
     pub timer_clock_hz: u64,
     /// Transport-authentication deadline.
@@ -209,6 +242,30 @@ impl ConsoleNetworkContract {
         {
             return Err(BoundaryError::TemporalDrift);
         }
+        let yield_to_child_after_signal = if config.direct_genet {
+            let root_control = crate::generated::temporal_tasks()
+                .iter()
+                .find(|task| task.id == "root-control")
+                .ok_or(BoundaryError::TemporalDrift)?;
+            if root_control.kind != crate::generated::TemporalTaskKind::RootControl
+                || root_control.execution != crate::generated::TemporalExecution::Active
+            {
+                return Err(BoundaryError::TemporalDrift);
+            }
+            validate_console_network_yield_to(ConsoleNetworkYieldToPrerequisites {
+                pi_profile: true,
+                root_core: root_control.core,
+                root_sched_control_core: root_control.sched_control_core,
+                root_priority: root_control.priority,
+                root_mcp: root_control.mcp,
+                child_core: temporal.core,
+                child_sched_control_core: temporal.sched_control_core,
+                child_priority: temporal.priority,
+                child_scheduling_context_slot: temporal.scheduling_context_slot,
+            })?
+        } else {
+            false
+        };
         Ok(Self {
             image_id: config.image_id,
             image_path: config.image_path,
@@ -243,6 +300,7 @@ impl ConsoleNetworkContract {
             timeout_policy: temporal.timeout_policy,
             timeout_badge: config.timeout_badge,
             standard_fault_badge: config.fault_badge,
+            yield_to_child_after_signal,
             timer_clock_hz: config.timer_clock_hz,
             auth_timeout_ms: config.auth_timeout_ms,
             idle_timeout_ms: config.idle_timeout_ms,
@@ -423,6 +481,8 @@ pub enum BoundaryError {
     GeneratedDrift,
     /// Generated temporal and object records disagree.
     TemporalDrift,
+    /// A committed Pi child wake could not transfer execution to its exact SC.
+    HandoffFailed,
     /// Dynamic network/authentication input is invalid.
     InvalidInput,
     /// Runtime-init validation failed.
@@ -1198,7 +1258,10 @@ fn next_sequence(sequence: u64) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{expected_object_inventory, expected_runtime_image_pages};
+    use super::{
+        expected_object_inventory, expected_runtime_image_pages, validate_console_network_yield_to,
+        BoundaryError, ConsoleNetworkYieldToPrerequisites,
+    };
 
     #[test]
     fn exact_backend_selects_qemu_pi_and_mediated_object_inventories() {
@@ -1210,5 +1273,54 @@ mod tests {
         assert_eq!(expected_object_inventory(false, false), Ok((98, 123)));
         assert_eq!(expected_runtime_image_pages(true, true), None);
         assert!(expected_object_inventory(true, true).is_err());
+    }
+
+    #[test]
+    fn pi_yield_to_requires_exact_same_core_equal_priority_and_root_mcp() {
+        let exact = ConsoleNetworkYieldToPrerequisites {
+            pi_profile: true,
+            root_core: 0,
+            root_sched_control_core: 0,
+            root_priority: 200,
+            root_mcp: 200,
+            child_core: 0,
+            child_sched_control_core: 0,
+            child_priority: 200,
+            child_scheduling_context_slot: 6,
+        };
+        assert_eq!(validate_console_network_yield_to(exact), Ok(true));
+        assert_eq!(
+            validate_console_network_yield_to(ConsoleNetworkYieldToPrerequisites {
+                pi_profile: false,
+                child_priority: 180,
+                ..exact
+            }),
+            Ok(false),
+            "QEMU keeps its lower-priority child and existing scheduling behavior"
+        );
+        for invalid in [
+            ConsoleNetworkYieldToPrerequisites {
+                child_core: 1,
+                child_sched_control_core: 1,
+                ..exact
+            },
+            ConsoleNetworkYieldToPrerequisites {
+                child_priority: 199,
+                ..exact
+            },
+            ConsoleNetworkYieldToPrerequisites {
+                root_mcp: 199,
+                ..exact
+            },
+            ConsoleNetworkYieldToPrerequisites {
+                child_scheduling_context_slot: 0,
+                ..exact
+            },
+        ] {
+            assert_eq!(
+                validate_console_network_yield_to(invalid),
+                Err(BoundaryError::TemporalDrift)
+            );
+        }
     }
 }

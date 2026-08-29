@@ -1029,17 +1029,22 @@ reusable ownership pattern.
   peer rearm notification unless an independent retained cursor transition is
   actionable; queued RX cannot create a self-poll while smoltcp ingress is
   occupied. The Pi manifest gives GENET a `3,000 us / 10,000 us` core-1 SC,
-  priority 160, two refills, exact 800 us WCET, and a 3,400 us computed
-  response bound. These static bounds require fresh Pi consumed-time, latency,
-  and throughput evidence.
+  priority 160, two refills, exact 800 us WCET, natural-postpone policy, and a
+  3,400 us computed response bound. Legal sustained packet work remains hard
+  capped by that reservation and is postponed until replenishment rather than
+  quarantined as a device failure. Standard faults, explicit device deadlines,
+  direct-ring/cursor faults, and pair containment remain terminal. These static
+  bounds require fresh Pi consumed-time, latency, and throughput evidence.
 - In direct mode the owner retains one dense software window across Block and
   may re-enter while exact durable work remains. A `Reenter` successor stays
   inside the same notification or final-prewait handler, so generic command
   arbitration cannot consume unguarded time between packet slices. The owner
   samples the elapsed MCS guard around every slice and yields at half of its
-  3,000 us budget or 16 attempted slices. A successor that first crosses the
-  guard yields and returns to outer arbitration rather than beginning another
-  activation inside the handler. Only TX issue, resolved reconciliation, RX
+  3,000 us budget or 16 attempted slices only while durable successor work
+  remains. A final slice that empties the direct condition blocks before the
+  guard/cap/stalled Yield decision, preserving the unused refill. A successor
+  that first crosses the guard yields and returns to outer arbitration rather
+  than beginning another activation inside the handler. Only TX issue, resolved reconciliation, RX
   publish, or malformed-descriptor recycle that advances owned state is
   productive; a peer wake, IRQ ACK, or unresolved cursor race cannot extend the
   window even though reconciliation still consumes its fair slice. One
@@ -1283,7 +1288,7 @@ alone cannot select the handoff. A successful activation replaces neither
 budget nor retry policy: it arms one exact-generation Ready observation window
 derived from the independently
 rounded generated response bounds for `console-network-service` and
-`root-control` (`9 ms + 6 ms = 15 ms` for the current Pi profile). Missing,
+`root-control` (`9 ms + 9 ms = 18 ms` for the current Pi profile). Missing,
 zero, inactive, non-admitted, or overflowing authority fails closed. Retain the
 ABI-validated child publication time together with exact service identity,
 generation, and sequence. At or after the boundary, one final shared-page-only

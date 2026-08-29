@@ -720,9 +720,9 @@ impl Manifest {
                 "Pi direct GENET requires driver-genet budget_us=3000 period_us=10000 max_refills=2"
             );
         }
-        if !task.consumed_time_evidence || task.timeout_policy != TimeoutPolicy::Terminal {
+        if !task.consumed_time_evidence || task.timeout_policy != TimeoutPolicy::NaturalPostpone {
             bail!(
-                "Pi direct GENET requires driver-genet consumed-time evidence and terminal timeout policy"
+                "Pi direct GENET requires driver-genet consumed-time evidence and natural-postpone timeout policy"
             );
         }
         if task.wcet_us != 800 {
@@ -1794,6 +1794,30 @@ impl Manifest {
             || task.max_donation_depth != 0
         {
             bail!("console_network_service object/SC inventory disagrees with temporal task console-network-service");
+        }
+        if self.profile_is_pi4_family() {
+            let root_control = self
+                .temporal_authority
+                .tasks
+                .iter()
+                .find(|candidate| candidate.id == "root-control")
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "Pi console-network YieldTo requires temporal task root-control"
+                    )
+                })?;
+            if root_control.kind != TemporalTaskKind::RootControl
+                || root_control.execution != TemporalExecution::Active
+                || root_control.core != task.core
+                || root_control.sched_control_core != root_control.core
+                || task.sched_control_core != task.core
+                || root_control.priority != task.priority
+                || root_control.mcp < task.priority
+            {
+                bail!(
+                    "Pi console-network YieldTo requires active same-core root-control and console-network-service at equal priority with root-control MCP authority"
+                );
+            }
         }
         let service_index = self
             .temporal_authority
@@ -4355,17 +4379,17 @@ mod tests {
                 .validate_pi4_direct_genet_temporal_contract()
                 .expect_err("direct GENET requires kernel consumed-time evidence")
                 .to_string(),
-            "Pi direct GENET requires driver-genet consumed-time evidence and terminal timeout policy"
+            "Pi direct GENET requires driver-genet consumed-time evidence and natural-postpone timeout policy"
         );
 
         let mut wrong_timeout = manifest.clone();
-        pi4_driver_genet_task(&mut wrong_timeout).timeout_policy = TimeoutPolicy::NaturalPostpone;
+        pi4_driver_genet_task(&mut wrong_timeout).timeout_policy = TimeoutPolicy::Terminal;
         assert_eq!(
             wrong_timeout
                 .validate_pi4_direct_genet_temporal_contract()
-                .expect_err("direct GENET requires terminal timeout containment")
+                .expect_err("direct GENET requires natural postponement under sustained load")
                 .to_string(),
-            "Pi direct GENET requires driver-genet consumed-time evidence and terminal timeout policy"
+            "Pi direct GENET requires driver-genet consumed-time evidence and natural-postpone timeout policy"
         );
 
         for wcet_us in [799, 801] {
@@ -4487,6 +4511,67 @@ mod tests {
             error
                 .to_string()
                 .contains("auto mode requires hw.network.backend=bcmgenet-v5"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn pi4_console_network_yield_to_contract_fails_closed_on_eligibility_drift() {
+        let pi4_path = repo_root().join("configs/root_task_pi4_uboot_aarch64.toml");
+        let qemu_path = repo_root().join("configs/root_task.toml");
+
+        let qemu = load_manifest(&qemu_path).expect("load QEMU manifest");
+        qemu.validate_console_network_service()
+            .expect("QEMU retains its lower-priority non-YieldTo service");
+
+        let mut priority_drift = load_manifest(&pi4_path).expect("load Pi 4 manifest");
+        priority_drift.console_network_service.priority = 199;
+        priority_drift
+            .temporal_authority
+            .tasks
+            .iter_mut()
+            .find(|task| task.id == "console-network-service")
+            .expect("console-network temporal task")
+            .priority = 199;
+        let error = priority_drift
+            .validate_console_network_service()
+            .expect_err("a lower-priority Pi YieldTo target must fail closed");
+        assert!(
+            error.to_string().contains("active same-core root-control"),
+            "unexpected error: {error}"
+        );
+
+        let mut core_drift = load_manifest(&pi4_path).expect("reload Pi 4 manifest");
+        core_drift.console_network_service.core = 1;
+        let console_task = core_drift
+            .temporal_authority
+            .tasks
+            .iter_mut()
+            .find(|task| task.id == "console-network-service")
+            .expect("console-network temporal task");
+        console_task.core = 1;
+        console_task.sched_control_core = 1;
+        let error = core_drift
+            .validate_console_network_service()
+            .expect_err("a cross-core Pi YieldTo target must fail closed");
+        assert!(
+            error.to_string().contains("active same-core root-control"),
+            "unexpected error: {error}"
+        );
+
+        let mut mcp_drift = load_manifest(&pi4_path).expect("reload Pi 4 manifest");
+        mcp_drift
+            .temporal_authority
+            .tasks
+            .iter_mut()
+            .find(|task| task.id == "root-control")
+            .expect("root-control temporal task")
+            .mcp = 199;
+        let error = mcp_drift
+            .validate_console_network_service()
+            .expect_err("insufficient root MCP for Pi YieldTo must fail closed");
+        assert!(
+            error.to_string().contains("root-control MCP authority"),
             "unexpected error: {error}"
         );
     }

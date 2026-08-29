@@ -986,6 +986,19 @@ fn disconnect_control_is_one_shot_and_releases_ingress_after_completion() {
 #[test]
 fn console_publication_ack_is_exactly_once_and_post_retention() {
     let hal = include_str!("../src/hal/console_network.rs");
+    let committed_signal = section(
+        hal,
+        "fn signal_committed_child_work(&self, wake_index: usize)",
+        "/// Stage one virtual/admitted NIC packet",
+    );
+    let release = marker(committed_signal, "fence(Ordering::Release);");
+    let signal = marker(committed_signal, "sel4::signal_unchecked(wake_cap);");
+    let handoff = marker(
+        committed_signal,
+        "self.yield_to_child_after_committed_signal()",
+    );
+    assert!(release < signal && signal < handoff);
+
     let pending = section(
         hal,
         "pub const fn publication_ack_pending(&self)",
@@ -1031,12 +1044,11 @@ fn console_publication_ack_is_exactly_once_and_post_retention() {
     );
     let requires_owed = marker(acknowledge, "|| !self.publication_ack_owed");
     let clear = marker(acknowledge, "self.publication_ack_owed = false;");
-    let release = marker(acknowledge, "fence(Ordering::Release);");
-    let signal = marker(
+    let signal_committed = marker(
         acknowledge,
-        "signal_unchecked(self.root_wake_caps[ROOT_PUBLICATION_ACK_WAKE_INDEX])",
+        "self.signal_committed_child_work(ROOT_PUBLICATION_ACK_WAKE_INDEX)",
     );
-    assert!(requires_owed < clear && clear < release && release < signal);
+    assert!(requires_owed < clear && clear < signal_committed);
     assert_eq!(
         acknowledge
             .matches("self.publication_ack_owed = false;")
@@ -1044,7 +1056,11 @@ fn console_publication_ack_is_exactly_once_and_post_retention() {
         1,
         "one successful ACK must consume the latch exactly once",
     );
-    assert_eq!(acknowledge.matches("signal_unchecked").count(), 1);
+    assert_eq!(
+        acknowledge.matches("signal_committed_child_work").count(),
+        1
+    );
+    assert!(!acknowledge.contains("signal_unchecked"));
 
     let supervisor_fault = section(
         hal,
@@ -1240,6 +1256,28 @@ fn console_publication_ack_is_exactly_once_and_post_retention() {
     );
     assert!(stack_gate.contains("stack.containment_required()"));
     assert!(!stack_gate.contains("stack.faulted()"));
+}
+
+#[test]
+fn service_tick_is_one_bounded_signal_credit_before_optional_handoff() {
+    let hal = include_str!("../src/hal/console_network.rs");
+    let service_tick = section(
+        hal,
+        "pub fn service_tick(&mut self)",
+        "/// Whether the newest response",
+    );
+    let lifecycle = marker(service_tick, "if !self.activated || self.contained");
+    let signal = marker(
+        service_tick,
+        "self.signal_committed_child_work(ROOT_CONTROL_WAKE_INDEX)",
+    );
+    assert!(lifecycle < signal);
+    assert_eq!(
+        service_tick.matches("signal_committed_child_work").count(),
+        1
+    );
+    assert!(!service_tick.contains("stage_"));
+    assert!(!service_tick.contains("signal_unchecked"));
 }
 
 #[test]

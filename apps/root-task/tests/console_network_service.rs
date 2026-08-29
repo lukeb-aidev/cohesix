@@ -88,6 +88,10 @@ fn generated_contract_is_single_listener_active_mcs_authority() {
         contract.timeout_policy,
         root_task::generated::TimeoutPolicy::NaturalPostpone
     );
+    assert!(
+        !contract.yield_to_child_after_signal,
+        "the generated QEMU contract must retain its non-YieldTo path"
+    );
     assert!(!boundary.borrows_root_scheduling_context());
     assert!(!boundary.permits_second_listener());
 

@@ -222,6 +222,15 @@ Root policy, role attachment, namespace mutation, and command execution remain
 outside the child. The public `AUTH`/`ATTACH` and `OK`/`ERR`/`END`
 contract is unchanged.
 
+On Pi, compiler truth places root-control and this child on core 0 at equal
+priority 200. Only after root has committed one exact packet, control, or
+publication-ACK record, or elected one bounded service-tick wake, and then
+successfully signalled its one-hot notification may root invoke
+`SchedContext_YieldTo` on the child's retained SC. Invalid lifecycle, core,
+priority, MCP, SC, signal, or syscall state fails closed. QEMU retains its
+lower-priority child and does not use this handoff. This scheduling transfer
+adds no ABI field, work credit, public frame, or child authority.
+
 When the selected descriptor sets `direct_virtio`, its sealed extension names
 one QEMU VirtIO-net MMIO page, the exact IRQHandler slot, two fixed queue
 pages, and 16 RX plus 16 TX coherent DMA pages. Only the child maps those
@@ -266,7 +275,11 @@ window; successive slices alternate their first TX/RX choice, an empty side
 donates its slice, and continuous bidirectional pressure receives an exact
 eight/eight split. Every slice rechecks the elapsed-time, attempt, progress,
 command-freshness, and refill guards; a notification does not itself reset
-that accounting.
+that accounting. A final slice with no durable successor blocks before any
+guard/cap/stalled Yield. Sustained legal work remains bounded by GENET's exact
+`3,000 us / 10,000 us` SC and is naturally postponed until replenishment;
+standard, protocol, cursor, DMA, IRQ, and paired-containment faults remain
+terminal.
 
 Within control page 0, bytes `[0,64)` hold the immutable control header and
 bytes `[64,320)` hold the four 64-byte RX-producer, RX-consumer, TX-producer,

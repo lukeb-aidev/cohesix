@@ -253,6 +253,7 @@ fn pi4_uboot_profile_emits_network_policy() {
         "driver-serial",
         "driver-usb",
         "driver-hdmi",
+        "driver-genet",
         "driver-cyw43",
         "driver-sdio",
     ] {
@@ -262,13 +263,11 @@ fn pi4_uboot_profile_emits_network_policy() {
             "resumable Pi driver {task_id} must cross ordinary MCS refill boundaries without a false terminal fault"
         );
     }
-    for task_id in ["driver-genet", "driver-pcie"] {
-        assert_eq!(
-            temporal_timeout_policy(temporal_tasks, task_id),
-            "terminal",
-            "unimplicated Pi driver {task_id} must retain its existing timeout policy"
-        );
-    }
+    assert_eq!(
+        temporal_timeout_policy(temporal_tasks, "driver-pcie"),
+        "terminal",
+        "terminal Pi driver driver-pcie must retain its existing timeout policy"
+    );
     for task_id in ["driver-cyw43", "driver-sdio"] {
         let task = temporal_tasks
             .iter()
@@ -296,20 +295,21 @@ fn pi4_uboot_profile_emits_network_policy() {
     assert_eq!(root["budget_us"], 2_750);
     assert_eq!(root["period_us"], 10_000);
     assert_eq!(root["wcet_us"], 2_500);
-    assert_eq!(root["response_time_us"], 5_100);
+    assert_eq!(root["response_time_us"], 8_100);
     assert_eq!(console["core"], 0);
-    assert_eq!(console["priority"], 180);
+    assert_eq!(console["priority"], 200);
     assert_eq!(console["mcp"], 200);
+    assert_eq!(console["priority"], root["priority"]);
     assert!(
-        console["priority"].as_u64().expect("console priority")
-            < root["priority"].as_u64().expect("root priority")
+        root["mcp"].as_u64().expect("root MCP")
+            >= console["priority"].as_u64().expect("console priority")
     );
     assert_eq!(console["budget_us"], 3_000);
     assert_eq!(console["period_us"], 10_000);
     assert_eq!(console["wcet_us"], 3_000);
     assert_eq!(console["response_time_us"], 8_100);
     assert_eq!(manifest["console_network_service"]["abi_version"], 5);
-    assert_eq!(manifest["console_network_service"]["priority"], 180);
+    assert_eq!(manifest["console_network_service"]["priority"], 200);
     assert_eq!(manifest["console_network_service"]["mcp"], 200);
     assert_eq!(console_objects["frames"], 104);
     assert_eq!(console_objects["cspace_slots"], 161);
@@ -324,7 +324,7 @@ fn pi4_uboot_profile_emits_network_policy() {
     assert_eq!(genet["period_us"], 10_000);
     assert_eq!(genet["max_refills"], 2);
     assert_eq!(genet["consumed_time_evidence"], true);
-    assert_eq!(genet["timeout_policy"], "terminal");
+    assert_eq!(genet["timeout_policy"], "natural-postpone");
     assert_eq!(genet["priority"], 160);
     assert_eq!(genet["wcet_us"], 800);
     assert_eq!(genet["response_time_us"], 3_400);

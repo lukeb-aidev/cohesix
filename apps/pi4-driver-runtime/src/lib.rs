@@ -2576,6 +2576,17 @@ impl GenetDirectMcsWindow {
                     timer_hz,
                 ));
         self.last_end_ticks = now;
+        if !durable_work_ready {
+            // A final productive slice can cross the software guard while
+            // retiring the last direct-ring condition. Blocking is then the
+            // exact MCS boundary: forcing Yield would charge the otherwise
+            // unspent head refill. Under the former terminal policy that made
+            // a quiescent completion fault; under natural postponement it
+            // would still force needless latency. Guard/cap Yield is required
+            // only when durable work still owns a successor.
+            self.stalled_retry_used = false;
+            return GenetDirectMcsQuantumRoute::Block;
+        }
         if now.wrapping_sub(self.start_ticks) >= guard_cycles {
             return GenetDirectMcsQuantumRoute::Yield(
                 DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_MCS_GUARD_YIELD,
@@ -2588,21 +2599,14 @@ impl GenetDirectMcsWindow {
         }
         if productive_quantum {
             self.stalled_retry_used = false;
-            if durable_work_ready {
-                GenetDirectMcsQuantumRoute::Reenter
-            } else {
-                GenetDirectMcsQuantumRoute::Block
-            }
-        } else if durable_work_ready && !self.stalled_retry_used {
+            GenetDirectMcsQuantumRoute::Reenter
+        } else if !self.stalled_retry_used {
             self.stalled_retry_used = true;
             GenetDirectMcsQuantumRoute::Reenter
-        } else if durable_work_ready {
+        } else {
             GenetDirectMcsQuantumRoute::Yield(
                 DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_MCS_STALLED_YIELD,
             )
-        } else {
-            self.stalled_retry_used = false;
-            GenetDirectMcsQuantumRoute::Block
         }
     }
 }
@@ -78558,6 +78562,32 @@ mod tests {
     }
 
     #[test]
+    fn direct_genet_dense_mcs_window_blocks_quiescent_final_slice_before_yield() {
+        let guard = 1_500;
+        let mut guarded = GenetDirectMcsWindow::empty();
+        assert_eq!(guarded.begin(100, guard), Ok(()));
+        assert_eq!(
+            guarded.finish(1_600, guard, 1_000_000, true, false),
+            GenetDirectMcsQuantumRoute::Block,
+            "a final productive slice must block instead of charging the remaining refill",
+        );
+        assert_eq!(guarded.attempts, 1);
+        assert_eq!(guarded.last_end_ticks, 1_600);
+
+        let mut capped = GenetDirectMcsWindow::empty();
+        capped.start_ticks = 10_000;
+        capped.last_end_ticks = 10_010;
+        capped.attempts = GENET_DIRECT_MCS_QUANTUM_CAP - 1;
+        assert_eq!(capped.begin(10_011, guard), Ok(()));
+        assert_eq!(
+            capped.finish(10_012, guard, 1_000_000, true, false),
+            GenetDirectMcsQuantumRoute::Block,
+            "an empty direct ring has no successor for the attempt cap to Yield",
+        );
+        assert_eq!(capped.attempts, GENET_DIRECT_MCS_QUANTUM_CAP);
+    }
+
+    #[test]
     fn direct_genet_dense_mcs_window_preserves_wall_guard_and_stalled_yield() {
         let guard = 1_500;
         let mut blocked = GenetDirectMcsWindow::empty();
@@ -78913,6 +78943,45 @@ mod tests {
         ));
         GENET_RUNTIME_STATE.with_ref(|runtime| {
             assert_eq!(runtime.direct_genet_tx_packets, 2);
+        });
+    }
+
+    #[test]
+    fn direct_genet_final_packet_at_guard_blocks_without_yield() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let generation = 0x26e0_001b;
+        let mut state = direct_genet_test_state(generation);
+        direct_genet_peer_publish(DirectGenetDirection::Tx, generation, b"final-at-guard");
+        state.direct_genet_mcs_window.start_ticks = 1;
+        state.direct_genet_mcs_window.last_end_ticks = 1;
+        state.direct_genet_mcs_window.attempts = 1;
+        GENET_RUNTIME_STATE.with_mut(|runtime| *runtime = state);
+        let guard_cycles = runtime_micros_to_cycles(u64::from(GENET_DIRECT_MCS_GUARD_US));
+        TEST_RUNTIME_TIMER_COUNTER_TICKS.store(guard_cycles.saturating_sub(1), Ordering::Release);
+
+        assert!(genet_runtime_service_notification(
+            DRIVER_RUNTIME_DIRECT_GENET_NOTIFICATION_BADGE,
+        ));
+        GENET_RUNTIME_STATE.with_ref(|runtime| {
+            assert_eq!(runtime.direct_genet_tx_packets, 1);
+            assert!(
+                !genet_runtime_dpc_local_continuation_ready(runtime),
+                "the final packet must leave no successor-owned condition",
+            );
+            assert_eq!(
+                runtime.direct_genet_mcs_window.start_ticks, 1,
+                "Block preserves the current refill accounting",
+            );
+            assert_eq!(runtime.direct_genet_mcs_window.attempts, 2);
+            assert_eq!(
+                runtime.direct_genet_mcs_window.diagnostic_flags
+                    & (DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_MCS_GUARD_YIELD
+                        | DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_MCS_CAP_YIELD
+                        | DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_MCS_STALLED_YIELD),
+                0,
+                "quiescence must win before any software Yield route",
+            );
         });
     }
 

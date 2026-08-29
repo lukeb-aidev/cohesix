@@ -662,6 +662,41 @@ impl ConsoleNetworkRuntime {
         Ok(())
     }
 
+    fn yield_to_child_after_committed_signal(&self) -> Result<(), BoundaryError> {
+        if !self.boundary.contract().yield_to_child_after_signal {
+            return Ok(());
+        }
+        if !self.activated
+            || self.contained
+            || self.containment_started
+            || self.scheduling_context == sel4_sys::seL4_CapNull
+        {
+            return Err(BoundaryError::HandoffFailed);
+        }
+        #[cfg(all(feature = "kernel", sel4_config_kernel_mcs))]
+        {
+            sel4::yield_to_sched_context(self.scheduling_context)
+                .map(|_| ())
+                .map_err(|_| BoundaryError::HandoffFailed)
+        }
+        #[cfg(not(all(feature = "kernel", sel4_config_kernel_mcs)))]
+        {
+            Err(BoundaryError::HandoffFailed)
+        }
+    }
+
+    fn signal_committed_child_work(&self, wake_index: usize) -> Result<(), BoundaryError> {
+        let wake_cap = self
+            .root_wake_caps
+            .get(wake_index)
+            .copied()
+            .filter(|cap| *cap != sel4_sys::seL4_CapNull)
+            .ok_or(BoundaryError::HandoffFailed)?;
+        fence(Ordering::Release);
+        sel4::signal_unchecked(wake_cap);
+        self.yield_to_child_after_committed_signal()
+    }
+
     /// Stage one virtual/admitted NIC packet and signal its exact one-hot wake.
     pub fn stage_ingress(&mut self, packet: &[u8]) -> Result<u64, BoundaryError> {
         if self.direct_data_plane() || !self.activated || self.contained {
@@ -670,8 +705,7 @@ impl ConsoleNetworkRuntime {
         let sequence = self
             .boundary
             .stage_ingress(packet, self.shared_frames[0].as_mut_slice())?;
-        fence(Ordering::Release);
-        sel4::signal_unchecked(self.root_wake_caps[ROOT_PACKET_RX_WAKE_INDEX]);
+        self.signal_committed_child_work(ROOT_PACKET_RX_WAKE_INDEX)?;
         Ok(sequence)
     }
 
@@ -685,8 +719,7 @@ impl ConsoleNetworkRuntime {
             now_ms,
             self.shared_frames[2].as_mut_slice(),
         )?;
-        fence(Ordering::Release);
-        sel4::signal_unchecked(self.root_wake_caps[ROOT_CONTROL_WAKE_INDEX]);
+        self.signal_committed_child_work(ROOT_CONTROL_WAKE_INDEX)?;
         Ok(sequence)
     }
 
@@ -704,8 +737,7 @@ impl ConsoleNetworkRuntime {
             now_ms,
             self.shared_frames[2].as_mut_slice(),
         )?;
-        fence(Ordering::Release);
-        sel4::signal_unchecked(self.root_wake_caps[ROOT_CONTROL_WAKE_INDEX]);
+        self.signal_committed_child_work(ROOT_CONTROL_WAKE_INDEX)?;
         Ok(sequence)
     }
 
@@ -717,8 +749,7 @@ impl ConsoleNetworkRuntime {
         let sequence = self
             .boundary
             .stage_disconnect(now_ms, self.shared_frames[2].as_mut_slice())?;
-        fence(Ordering::Release);
-        sel4::signal_unchecked(self.root_wake_caps[ROOT_CONTROL_WAKE_INDEX]);
+        self.signal_committed_child_work(ROOT_CONTROL_WAKE_INDEX)?;
         Ok(sequence)
     }
 
@@ -727,9 +758,7 @@ impl ConsoleNetworkRuntime {
         if !self.activated || self.contained {
             return Err(BoundaryError::InvalidState);
         }
-        fence(Ordering::Release);
-        sel4::signal_unchecked(self.root_wake_caps[ROOT_CONTROL_WAKE_INDEX]);
-        Ok(())
+        self.signal_committed_child_work(ROOT_CONTROL_WAKE_INDEX)
     }
 
     /// Whether the newest response for this connection left the TCP send queue.
@@ -974,9 +1003,7 @@ impl ConsoleNetworkRuntime {
         // Consume root's one-shot authority before signalling. Even a later
         // erroneous duplicate call cannot credit an unobserved replacement.
         self.publication_ack_owed = false;
-        fence(Ordering::Release);
-        sel4::signal_unchecked(self.root_wake_caps[ROOT_PUBLICATION_ACK_WAKE_INDEX]);
-        Ok(())
+        self.signal_committed_child_work(ROOT_PUBLICATION_ACK_WAKE_INDEX)
     }
 
     /// Retire a validated terminal publication without waking the parked child.

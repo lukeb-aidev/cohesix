@@ -137,15 +137,50 @@ fn direct_genet_dense_mcs_boundary_resets_after_yield_and_wraps_every_entry() {
         .find("genet_runtime_begin_direct_quantum()")
         .expect("notification entry performs the shared pre-service guard");
     let service = notification
-        .find("genet_runtime_service_dpc_state(state, badge)")
-        .expect("notification entry services exactly one bounded DPC quantum");
-    let finish = notification
-        .find("genet_runtime_finish_dpc_quantum(state, activity)")
-        .expect("notification entry classifies the shared post-service boundary");
+        .find("genet_runtime_run_dpc_quantum(state, service_badge)")
+        .expect("notification entry runs one guarded material DPC quantum");
+    let reenter = notification
+        .find("route == GenetDirectMcsQuantumRoute::Reenter")
+        .expect("only a retained durable condition may select a successor slice");
     let apply = notification
         .find("genet_runtime_apply_post_quantum_route(route)")
         .expect("notification entry applies the shared post-service route");
-    assert!(begin < service && service < finish && finish < apply);
+    assert!(begin < service && service < reenter && reenter < apply);
+
+    let quantum_start = RUNTIME_SOURCE
+        .find("fn genet_runtime_run_dpc_quantum(")
+        .expect("guarded direct-GENET quantum helper exists");
+    let quantum = &RUNTIME_SOURCE[quantum_start..];
+    let quantum_end = quantum
+        .find("\n}\n\n")
+        .expect("guarded direct-GENET quantum helper is bounded");
+    let quantum = &quantum[..quantum_end];
+    let physical = quantum
+        .find("genet_runtime_service_dpc_quantum_state(state, badge)")
+        .expect("one physical quantum runs inside the shared guard");
+    let classify = quantum
+        .find("genet_runtime_finish_dpc_quantum(state, productive)")
+        .expect("physical progress is classified before the route returns");
+    assert!(physical < classify);
+
+    let window_start = RUNTIME_SOURCE
+        .find("impl GenetDirectMcsWindow")
+        .expect("dense direct-GENET MCS window exists");
+    let window = &RUNTIME_SOURCE[window_start..];
+    let finish_start = window
+        .find("fn finish(\n        &mut self,")
+        .expect("dense-window finish classifier exists");
+    let finish_body = &window[finish_start..];
+    let quiescent = finish_body
+        .find("if !durable_work_ready")
+        .expect("quiescence has an explicit MCS route");
+    let guard = finish_body
+        .find("if now.wrapping_sub(self.start_ticks) >= guard_cycles")
+        .expect("elapsed guard remains explicit");
+    let cap = finish_body
+        .find("if self.attempts >= GENET_DIRECT_MCS_QUANTUM_CAP")
+        .expect("attempt cap remains explicit");
+    assert!(quiescent < guard && guard < cap);
 
     let persistent_start = RUNTIME_SOURCE
         .find("fn service_runtime_persistent_source_once(")
@@ -212,8 +247,8 @@ fn direct_genet_dense_mcs_boundary_resets_after_yield_and_wraps_every_entry() {
         production
             .matches("genet_runtime_service_dpc_state(")
             .count(),
-        5,
-        "raw service is limited to its definition, the two guarded direct paths, and two legacy polls fenced before direct ownership",
+        3,
+        "the legacy wrapper is limited to its definition and two polls fenced before direct ownership; guarded direct paths use the quantum helper",
     );
 }
 

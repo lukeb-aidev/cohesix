@@ -78,6 +78,7 @@ def test_pi4_genet_uses_bold_bounded_core_one_mcs_admission() -> None:
     assert genet["period_us"] == 10_000
     assert genet["max_refills"] == 2
     assert genet["priority"] == 160
+    assert genet["timeout_policy"] == "natural-postpone"
     assert genet["wcet_us"] == 800
     assert genet["response_time_us"] == 3_400
     assert core_one_demand == 6_250
@@ -99,8 +100,8 @@ def test_pi4_wifi_pair_uses_bounded_fragment_preserving_refills() -> None:
         assert task["priority"] == 184
 
 
-def test_pi4_root_preempts_console_with_exact_admitted_response_bounds() -> None:
-    """Pi retains pre-auth root priority while deriving the console lane."""
+def test_pi4_root_can_yield_to_equal_priority_console_with_exact_bounds() -> None:
+    """Pi admits same-core YieldTo without changing either SC budget."""
 
     manifest = load_pi4_manifest()
     temporal = manifest["temporal_authority"]
@@ -125,7 +126,7 @@ def test_pi4_root_preempts_console_with_exact_admitted_response_bounds() -> None
     assert root["period_us"] == 10_000
     assert root["max_refills"] == 2
     assert root["wcet_us"] == 2_500
-    assert root["response_time_us"] == 5_100
+    assert root["response_time_us"] == 8_100
     assert root["priority"] == 200
     assert root["mcp"] == 200
     assert (
@@ -138,11 +139,12 @@ def test_pi4_root_preempts_console_with_exact_admitted_response_bounds() -> None
     assert console_task["max_refills"] == 2
     assert console_task["wcet_us"] == 3_000
     assert console_task["response_time_us"] == 8_100
-    assert console_task["priority"] == 180
+    assert console_task["priority"] == 200
     assert console_task["mcp"] == 200
-    assert console_task["priority"] < root["priority"]
+    assert console_task["priority"] == root["priority"]
+    assert root["mcp"] >= console_task["priority"]
     assert console["abi_version"] == 5
-    assert console["priority"] == 180
+    assert console["priority"] == 200
     assert console["mcp"] == 200
     assert console["timer_clock_hz"] == 54_000_000
     core_zero_demand = sum(

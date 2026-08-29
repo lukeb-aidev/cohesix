@@ -1105,7 +1105,7 @@ the apparent boundary, and incorrectly quarantined at
 `service-readiness-deadline`. The repaired arbitration samples absolute CNTVCT
 immediately before and after child resume, requires the same nonzero generated
 and runtime counter frequency, admits only an exact-identity publication in
-the half-open pre-resume-to-post-resume-plus-15-ms window, takes at most one
+the half-open pre-resume-to-post-resume-plus-18-ms window, takes at most one
 final shared-page-only observation, and rejects zero, pre-resume, at-boundary,
 late, missing, replayed, drifted, or clock-invalid Ready without NIC work or
 retry. The same boot's 6,324 productive Driver turns and approximately 20 ms

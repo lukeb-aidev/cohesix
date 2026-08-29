@@ -299,11 +299,11 @@ mod tests {
                 (
                     2_750,
                     2_500,
-                    5_100,
+                    8_100,
                     0,
                     "m26e-pi4-root-adjacent-refill-natural-postpone-candidate-v24",
                     0,
-                    180,
+                    200,
                     200,
                     8_100,
                     9_000,
@@ -461,17 +461,17 @@ mod tests {
             .iter_mut()
             .find(|task| task.id == "console-network-service")
             .expect("console-network temporal task")
-            .mcp = 179;
+            .mcp = 199;
         let error = invalid_mcp
             .validate_with_base(Some(repo_root.as_path()))
-            .expect_err("priority 180 above MCP 179 must fail closed");
+            .expect_err("priority 200 above MCP 199 must fail closed");
         assert!(
-            error.to_string().contains("priority 180 exceeds MCP 179"),
+            error.to_string().contains("priority 200 exceeds MCP 199"),
             "unexpected error: {error}"
         );
 
         let mut service_drift = pi4_manifest();
-        service_drift.console_network_service.priority = 200;
+        service_drift.console_network_service.priority = 199;
         let error = service_drift
             .validate_with_base(Some(repo_root.as_path()))
             .expect_err("duplicate service priority drift must fail closed");
@@ -483,7 +483,7 @@ mod tests {
         );
 
         for (task_id, stale_response) in
-            [("root-control", 8_100), ("console-network-service", 5_600)]
+            [("root-control", 5_100), ("console-network-service", 5_600)]
         {
             let mut response_drift = pi4_manifest();
             response_drift

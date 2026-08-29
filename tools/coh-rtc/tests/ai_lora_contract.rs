@@ -288,14 +288,14 @@ fn checked_in_profiles_compile_without_radio_sidecar_output() {
                 (
                     "m26e-pi4-root-adjacent-refill-natural-postpone-candidate-v24",
                     2_750,
-                    5_100,
-                    180,
+                    8_100,
+                    200,
                     200,
                     8_100,
                     54_000_000,
                     false,
                     true,
-                    160,
+                    161,
                 )
             };
             assert_eq!(root["wcet_provenance"], expected_root, "{profile}");

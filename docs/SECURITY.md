@@ -167,10 +167,13 @@ Graceful shutdown publishes one terminal record before containment; fault and
 revoke paths scrub mappings, signals, pending responses, and capabilities
 before the child generation can be reused.
 
-Root control and the console child use the selected generated timeout policy.
+Root control, the console child, and the Pi resumable GENET runtime use the
+selected generated timeout policy.
 Under `NaturalPostpone`, exhaustion of the current scheduling-context refill
 postpones execution until replenishment; standard faults remain installed and
-terminal. Reserved timeout identities remain accounted, but client timeouts,
+terminal. GENET protocol, cursor, DMA, IRQ, device-deadline, and paired
+containment failures remain fail closed; only ordinary legal budget exhaustion
+postpones. Reserved timeout identities remain accounted, but client timeouts,
 retry policy, public grammar, and fault authority are unchanged. Exact temporal
 values and response analysis belong to the selected generated profile and
 [Roles and Scheduling](ROLES_AND_SCHEDULING.md).
