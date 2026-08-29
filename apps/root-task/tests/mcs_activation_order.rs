@@ -202,7 +202,7 @@ fn pi_wifi_productive_activation_is_guarded_strictly_operator_driver() {
         .find("'supervisor: loop {")
         .expect("deferred supervisor loop must exist");
     let start_window = supervisor[loop_top..]
-        .find("activation_window.begin(monotonic_ticks(), counter_frequency());")
+        .find("activation_window.begin(activation_ticks, activation_counter_hz);")
         .map(|offset| loop_top + offset)
         .expect("each post-yield activation must retain one continuous counter start");
     let loop_top_guard = supervisor[start_window..]

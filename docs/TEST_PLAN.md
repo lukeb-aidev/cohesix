@@ -1468,6 +1468,53 @@ Fresh same-image WiFi and GENET boots must each pass the canonical first-attempt
 `.coh` scripts, a 64-request single-connection framed run, and medium/high REST
 pressure before comparing with the accepted August latency ranges.
 
+The exact-ae2 supersession binds source
+`ae2dd774126d9be70767d0b56068a13e58de5fd4`, build ID
+`12946f3637f482a3f70b47309dc43f3a2084c59e9d817597f13d2a7f5d9ac05d`,
+image ID
+`249549ae082f2d9a854c2c8b2da85bc6859f7bf55540ff3e39eca94b14573736`,
+image SHA-256
+`19e499454c6a9e0efa4a0f7eb4eb1381adc482586299b1645c77f3d55e3d874d`,
+and boot-paired `20260829-210442` captures. WiFi reaches root ready at
+8.115 seconds and USB command readiness at 9.235 seconds, passes Gate 8a--8h
+on attempt 1, binds DHCP address `192.168.86.154`, and retains a sealed 272/272
+MCS registry with no driver fault or quarantine. Five of five fresh TCP
+sessions complete handshake and `AUTH`, then fail closed at
+`ERR ATTACH reason=busy detail=busy error=busy`; mean SYN-to-error is about
+626.6 ms. Canonical `.coh` scripts therefore cannot start. Medium and high REST
+pressure fail at their first request with HTTP 503 and are blocker evidence,
+not benchmark results. Target-side `peer-assisted-pass` is not a combined
+`nettest` pass when the exact host peer exits nonzero at the ATTACH refusal.
+The authenticated serial reboot is blocked at the same boundary, so this exact
+image has no GENET boot result. Its first failed invariant is
+`SERVICE_RUNTIME`, not SDIO, CYW43, DHCP, or GENET.
+
+The next source oracle supersedes only ae2's mediated-WiFi YieldTo hypothesis.
+Focused coverage must prove that mediated WiFi is signal-only even when
+authenticated while direct GENET retains its guarded handoff; selected-MCS
+runtime receive classification treats an admitted low-32 notification badge as
+device work despite stale nonzero `MessageInfo`, rejects zero, zero-length
+command, wrong-task, and foreign high-domain observations, and leaves classic
+length-first behavior unchanged. Before physical-Pi Dispatch dequeues a command
+that may enter passive NineDoor, repeated `SchedContext_Consumed` samples must
+accumulate over a conservative generated-period window and admit only strictly
+below the checked `budget_us - wcet_us` limit of 250 us, leaving the complete
+2,500 us root WCET. A blocked attempt retains
+the exact command and does not resample or slide its deadline; expiry carries
+the next sample into the fresh window; invalid profile, timer, or syscall
+evidence latches fail closed with one bounded marker. A `Closed` result at
+`CallArm`, `Call`, or recovered fault/timeout is terminal generation evidence,
+must preserve its exact stage through containment, and cannot reset or retry a
+`REPLIED` recovery lane. Public ATTACH busy behavior remains unchanged.
+Deterministic guards must include normal sequential passive calls, terminal
+Closed fencing, retained serial/local-seat/TCP input at the reserve gate,
+bootstrap and degraded-path coverage, QEMU bypass, and the badge negatives.
+Run a fresh canonical QEMU boot with TCP authentication, Queen ATTACH, one
+representative `.coh`/NineDoor operation, and unexpected-fault scan; it is a
+shared-root rejection gate, not Pi proof. The next exact Pi image must then
+repeat first-attempt scripts, raw framed latency, and medium/high pressure on
+separate WiFi and GENET boots before any performance or August-parity claim.
+
 The CYW43 software and cadence closure gate is authorized by Milestone 26d
 tasks `m26d-cyw43-hardware-free-closure` and
 `m26d-benchmark-revalidation-and-tuning`, with active defect authority from

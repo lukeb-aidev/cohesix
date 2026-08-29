@@ -1267,6 +1267,29 @@ pub fn activate_root_control_temporal_runtime(
     Ok(())
 }
 
+/// Consume one exact kernel accounting sample for the active init-thread SC.
+///
+/// The syscall resets only the kernel's consumed-time evidence. It neither
+/// replenishes the scheduling context nor proves a fresh budget. The EventPump
+/// therefore owns the conservative cross-sample refill-window accumulator and
+/// may use this value only as one charge added to that retained bound.
+#[cfg(sel4_config_kernel_mcs)]
+pub fn root_control_consumed_time_us() -> Result<u64, CriticalTcbConstructionError> {
+    if !TARGET_ROOT_CONTROL_TEMPORAL_ACTIVE.load(Ordering::Acquire) {
+        return Err(CriticalTcbConstructionError::RuntimeNotReady);
+    }
+    let task = temporal_task(ROOT_CONTROL_ID)?;
+    if !task.admitted
+        || !task.consumed_time_evidence
+        || !matches!(task.kind, TemporalTaskKind::RootControl)
+        || !matches!(task.execution, TemporalExecution::Active)
+    {
+        return Err(CriticalTcbConstructionError::RuntimeNotReady);
+    }
+    sel4::sched_context_consumed(sel4_sys::seL4_CapInitThreadSC)
+        .map_err(|error| sel4_error("critical.root-control-consumed", error))
+}
+
 /// Construct the exact MCS critical-domain topology in a suspended state.
 ///
 /// No restricted duty becomes runnable until every admitted temporal TCB has

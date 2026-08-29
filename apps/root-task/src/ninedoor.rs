@@ -860,7 +860,9 @@ impl NineDoorBridge {
                 .as_mut()
                 .ok_or(HalError::Unsupported("ninedoor-target-service-missing"))
                 .and_then(NineDoorServiceRuntime::fail_bootstrap);
-            self.namespace_service.revoke();
+            if self.namespace_service.state() != TransportState::Revoked {
+                self.namespace_service.revoke();
+            }
             return match close_result {
                 Ok(()) => Err(HalError::Unsupported("ninedoor-bootstrap-probe")),
                 Err(error) => Err(error),

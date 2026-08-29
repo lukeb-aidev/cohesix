@@ -12271,30 +12271,58 @@ enum RuntimeNonblockingCommandReceiveContract {
     LocalNotificationNbWait { notification_slot: u32 },
 }
 
-/// Classify the result of the nonblocking receive used to admit a Reply-bearing
-/// command. A notification bound to the runtime TCB may win that receive; its
-/// nonzero badge must survive as device work instead of being mistaken for a
-/// missing endpoint message.
+/// Classify one command-endpoint receive that may instead return a bound
+/// notification.
+///
+/// MCS notification delivery defines the badge but does not define the
+/// MessageInfo register. The compiler-owned high badge domain is therefore the
+/// command/notification discriminator; inspecting a possibly stale message
+/// length first can discard a real IRQ or peer wake after an earlier Call.
 #[cfg(any(target_os = "none", test))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum RuntimeNonblockingReplyObservation {
+enum RuntimeReceiveObservation {
     Ipc,
     Notification(u32),
     Empty,
+    Rejected,
 }
 
 #[cfg(any(target_os = "none", test))]
-const fn runtime_nonblocking_reply_observation(
+const fn runtime_receive_observation(
+    kernel_mcs: bool,
     message_length: u64,
-    badge: u32,
-) -> RuntimeNonblockingReplyObservation {
-    if message_length != 0 {
-        RuntimeNonblockingReplyObservation::Ipc
-    } else if badge != 0 {
-        RuntimeNonblockingReplyObservation::Notification(badge)
-    } else {
-        RuntimeNonblockingReplyObservation::Empty
+    badge: u64,
+    expected_command_badge: u64,
+) -> RuntimeReceiveObservation {
+    if !kernel_mcs {
+        let badge = badge as u32;
+        return if message_length != 0 {
+            RuntimeReceiveObservation::Ipc
+        } else if badge != 0 {
+            RuntimeReceiveObservation::Notification(badge)
+        } else {
+            RuntimeReceiveObservation::Empty
+        };
     }
+
+    if badge == expected_command_badge {
+        return if message_length == 0 {
+            RuntimeReceiveObservation::Rejected
+        } else {
+            RuntimeReceiveObservation::Ipc
+        };
+    }
+    if badge == 0 {
+        return if message_length == 0 {
+            RuntimeReceiveObservation::Empty
+        } else {
+            RuntimeReceiveObservation::Rejected
+        };
+    }
+    if badge > u32::MAX as u64 || badge & pi4_driver_abi::DRIVER_RUNTIME_BADGE_DOMAIN_MASK != 0 {
+        return RuntimeReceiveObservation::Rejected;
+    }
+    RuntimeReceiveObservation::Notification(badge as u32)
 }
 
 #[cfg(any(target_os = "none", test))]
@@ -12403,11 +12431,16 @@ fn poll_runtime_command(
     // inconclusive. Reply-bearing commands use the selected-kernel receive
     // contract above, including the explicit MCS Reply object.
     let tag = runtime_nonblocking_command_receive(&mut badge, false);
-    match runtime_nonblocking_reply_observation(tag.length(), badge as u32) {
-        RuntimeNonblockingReplyObservation::Notification(badge) => {
+    match runtime_receive_observation(
+        cfg!(sel4_config_kernel_mcs),
+        tag.length(),
+        badge as u64,
+        pi4_driver_abi::driver_runtime_command_badge(task_key_marker),
+    ) {
+        RuntimeReceiveObservation::Notification(badge) => {
             return RuntimeWake::Notification(badge);
         }
-        RuntimeNonblockingReplyObservation::Empty => {
+        RuntimeReceiveObservation::Empty | RuntimeReceiveObservation::Rejected => {
             publish_runtime_progress(
                 command.sequence,
                 pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_REPLY_PENDING,
@@ -12415,7 +12448,7 @@ fn poll_runtime_command(
             );
             return RuntimeWake::None;
         }
-        RuntimeNonblockingReplyObservation::Ipc => {}
+        RuntimeReceiveObservation::Ipc => {}
     }
     // SAFETY: Root uses MR0 to carry the primitive request sequence when it
     // sends or calls the command endpoint.
@@ -12450,18 +12483,19 @@ fn runtime_wake_from_received_tag(
     last_sequence: u32,
     task_key: u32,
 ) -> RuntimeWake {
-    #[cfg(not(sel4_config_kernel_mcs))]
-    let _ = task_key;
-    if tag.length() == 0 {
-        return if badge == 0 {
-            RuntimeWake::None
-        } else {
-            RuntimeWake::Notification(badge as u32)
-        };
-    }
-    #[cfg(sel4_config_kernel_mcs)]
-    if badge as u64 != pi4_driver_abi::driver_runtime_command_badge(task_key) {
-        return RuntimeWake::None;
+    match runtime_receive_observation(
+        cfg!(sel4_config_kernel_mcs),
+        tag.length(),
+        badge as u64,
+        pi4_driver_abi::driver_runtime_command_badge(task_key),
+    ) {
+        RuntimeReceiveObservation::Notification(badge) => {
+            return RuntimeWake::Notification(badge);
+        }
+        RuntimeReceiveObservation::Empty | RuntimeReceiveObservation::Rejected => {
+            return RuntimeWake::None;
+        }
+        RuntimeReceiveObservation::Ipc => {}
     }
     // SAFETY: The fixed endpoint ABI carries the shared-ring sequence in MR0.
     let ipc_sequence = unsafe { sel4_sys::seL4_GetMR(0) as u32 };
@@ -77079,7 +77113,10 @@ mod tests {
     }
 
     #[test]
-    fn reply_command_poll_preserves_a_bound_device_notification_before_ipc() {
+    fn mcs_receive_classification_uses_the_badge_when_message_info_is_stale() {
+        const TASK_KEY: u32 = 3;
+        let command_badge = pi4_driver_abi::driver_runtime_command_badge(TASK_KEY);
+
         for badge in [
             DRIVER_RUNTIME_SERIAL_IRQ_BADGE,
             DRIVER_RUNTIME_GENET_IRQ_BADGE,
@@ -77089,19 +77126,48 @@ mod tests {
             DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_BADGE,
         ] {
             assert_eq!(
-                runtime_nonblocking_reply_observation(0, badge),
-                RuntimeNonblockingReplyObservation::Notification(badge),
-                "a bound notification must survive the command NBRecv boundary",
+                runtime_receive_observation(true, 7, u64::from(badge), command_badge),
+                RuntimeReceiveObservation::Notification(badge),
+                "a bound notification must survive stale MessageInfo at the receive boundary",
             );
         }
         assert_eq!(
-            runtime_nonblocking_reply_observation(1, DRIVER_RUNTIME_GENET_IRQ_BADGE),
-            RuntimeNonblockingReplyObservation::Ipc,
-            "a delivered endpoint message retains its exact Reply-object intake",
+            runtime_receive_observation(true, 1, command_badge, command_badge),
+            RuntimeReceiveObservation::Ipc,
+            "the exact compiler-owned command badge admits endpoint IPC",
         );
         assert_eq!(
-            runtime_nonblocking_reply_observation(0, 0),
-            RuntimeNonblockingReplyObservation::Empty,
+            runtime_receive_observation(true, 0, command_badge, command_badge),
+            RuntimeReceiveObservation::Rejected,
+            "a zero-length endpoint hint cannot masquerade as a command",
+        );
+        assert_eq!(
+            runtime_receive_observation(
+                true,
+                1,
+                pi4_driver_abi::driver_runtime_command_badge(TASK_KEY + 1),
+                command_badge,
+            ),
+            RuntimeReceiveObservation::Rejected,
+            "another runtime's command badge must fail closed",
+        );
+        assert_eq!(
+            runtime_receive_observation(
+                true,
+                1,
+                pi4_driver_abi::driver_runtime_completion_badge(TASK_KEY),
+                command_badge,
+            ),
+            RuntimeReceiveObservation::Rejected,
+            "a foreign high badge domain must fail closed",
+        );
+        assert_eq!(
+            runtime_receive_observation(true, 1, 0, command_badge),
+            RuntimeReceiveObservation::Rejected,
+        );
+        assert_eq!(
+            runtime_receive_observation(true, 0, 0, command_badge),
+            RuntimeReceiveObservation::Empty,
         );
         assert_eq!(
             runtime_nonblocking_command_receive_contract(true, false),
@@ -77109,6 +77175,33 @@ mod tests {
                 reply_slot: pi4_driver_abi::DRIVER_RUNTIME_COMMAND_REPLY_SLOT,
             },
             "the next command intake still uses the generated Reply object after notification service",
+        );
+    }
+
+    #[test]
+    fn classic_receive_classification_retains_length_first_semantics() {
+        let command_badge = pi4_driver_abi::driver_runtime_command_badge(3);
+        assert_eq!(
+            runtime_receive_observation(
+                false,
+                1,
+                u64::from(DRIVER_RUNTIME_GENET_IRQ_BADGE),
+                command_badge,
+            ),
+            RuntimeReceiveObservation::Ipc,
+        );
+        assert_eq!(
+            runtime_receive_observation(
+                false,
+                0,
+                u64::from(DRIVER_RUNTIME_GENET_IRQ_BADGE),
+                command_badge,
+            ),
+            RuntimeReceiveObservation::Notification(DRIVER_RUNTIME_GENET_IRQ_BADGE),
+        );
+        assert_eq!(
+            runtime_receive_observation(false, 0, 0, command_badge),
+            RuntimeReceiveObservation::Empty,
         );
     }
 
@@ -84918,14 +85011,17 @@ mod tests {
             DRIVER_RUNTIME_SERIAL_SPSC_FLAG_ROOT_TO_RUNTIME,
         ) != Some(0)
         {
-            let wake =
-                match runtime_nonblocking_reply_observation(0, DRIVER_RUNTIME_SERIAL_IRQ_BADGE) {
-                    RuntimeNonblockingReplyObservation::Notification(badge) => {
-                        RuntimeWake::Notification(badge)
-                    }
-                    RuntimeNonblockingReplyObservation::Ipc
-                    | RuntimeNonblockingReplyObservation::Empty => RuntimeWake::None,
-                };
+            let wake = match runtime_receive_observation(
+                true,
+                7,
+                u64::from(DRIVER_RUNTIME_SERIAL_IRQ_BADGE),
+                pi4_driver_abi::driver_runtime_command_badge(0),
+            ) {
+                RuntimeReceiveObservation::Notification(badge) => RuntimeWake::Notification(badge),
+                RuntimeReceiveObservation::Ipc
+                | RuntimeReceiveObservation::Empty
+                | RuntimeReceiveObservation::Rejected => RuntimeWake::None,
+            };
             assert_eq!(
                 wake,
                 RuntimeWake::Notification(DRIVER_RUNTIME_SERIAL_IRQ_BADGE),

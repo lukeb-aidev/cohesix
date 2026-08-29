@@ -3546,6 +3546,201 @@ fn cyw43_response_rotation_continuation(
 #[cfg(feature = "kernel")]
 const PI4_LOCAL_OPERATOR_POLLS_PER_EXPLICIT_YIELD: usize = 5;
 
+/// Generated root-control timing contract required before donating to a
+/// passive NineDoor service on Pi.
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct PiRootControlConsumedContract {
+    budget_us: u64,
+    wcet_us: u64,
+    period_us: u64,
+    consumed_time_evidence: bool,
+    active_root_control: bool,
+    admitted: bool,
+}
+
+#[cfg(feature = "kernel")]
+impl PiRootControlConsumedContract {
+    const fn valid(self) -> bool {
+        self.active_root_control
+            && self.admitted
+            && self.consumed_time_evidence
+            && self.wcet_us != 0
+            && self.wcet_us < self.budget_us
+            && self.budget_us <= self.period_us
+    }
+
+    const fn pre_dispatch_consumed_limit_us(self) -> Option<u64> {
+        self.budget_us.checked_sub(self.wcet_us)
+    }
+}
+
+/// One kernel-consumed-time sample associated with the counter instant after
+/// the syscall returned.
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct PiRootControlConsumedSample {
+    consumed_us: u64,
+    sampled_at_ticks: u64,
+}
+
+/// Conservative upper bound on root-control consumption that may not yet have
+/// replenished.
+///
+/// `seL4_SchedContext_Consumed` resets only the observation counter, never the
+/// SC budget. Every sample is therefore accumulated and treated as if all of
+/// it was consumed at the post-syscall counter instant. The whole bound ages
+/// only after one generated SC period from the latest sample. This is
+/// conservative for sporadic refills, including refill merging: every actual
+/// charge in the bound occurred no later than that instant and must replenish
+/// no later than one period afterwards. A sample spanning the expiry boundary
+/// becomes the first bound of the new window; it is never discarded.
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum PiRootControlConsumedWindow {
+    #[default]
+    Empty,
+    Tracking {
+        upper_bound_us: u64,
+        latest_sample_ticks: u64,
+    },
+    Invalid(PiRootControlConsumedInvalid),
+}
+
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PiRootControlConsumedInvalid {
+    Profile,
+    Counter,
+    Period,
+    ConsumedSample,
+    SampleCounter,
+}
+
+#[cfg(feature = "kernel")]
+impl PiRootControlConsumedInvalid {
+    const fn diagnostic(self) -> &'static str {
+        match self {
+            Self::Profile => "ROOT_SC_GUARD invalid=profile action=retain-yield",
+            Self::Counter => "ROOT_SC_GUARD invalid=counter action=retain-yield",
+            Self::Period => "ROOT_SC_GUARD invalid=period action=retain-yield",
+            Self::ConsumedSample => "ROOT_SC_GUARD invalid=consumed action=retain-yield",
+            Self::SampleCounter => "ROOT_SC_GUARD invalid=sample-counter action=retain-yield",
+        }
+    }
+}
+
+#[cfg(feature = "kernel")]
+impl PiRootControlConsumedWindow {
+    fn admit_dispatch_with<F>(
+        &mut self,
+        contract: PiRootControlConsumedContract,
+        observed_ticks: u64,
+        counter_hz: u64,
+        sample: F,
+    ) -> bool
+    where
+        F: FnOnce() -> Option<PiRootControlConsumedSample>,
+    {
+        if matches!(self, Self::Invalid(_)) {
+            return false;
+        }
+        if !contract.valid() {
+            *self = Self::Invalid(PiRootControlConsumedInvalid::Profile);
+            return false;
+        }
+        let Some(pre_dispatch_consumed_limit_us) = contract
+            .pre_dispatch_consumed_limit_us()
+            .filter(|limit| *limit != 0)
+        else {
+            *self = Self::Invalid(PiRootControlConsumedInvalid::Profile);
+            return false;
+        };
+        if observed_ticks == 0 || counter_hz == 0 {
+            *self = Self::Invalid(PiRootControlConsumedInvalid::Counter);
+            return false;
+        }
+        let period_ticks = match (u128::from(counter_hz)
+            .checked_mul(u128::from(contract.period_us)))
+        .and_then(|ticks| ticks.checked_add(999_999))
+        .map(|ticks| ticks / 1_000_000)
+        .and_then(|ticks| u64::try_from(ticks).ok())
+        .filter(|ticks| *ticks != 0 && *ticks < (1u64 << 63))
+        {
+            Some(period_ticks) => period_ticks,
+            None => {
+                *self = Self::Invalid(PiRootControlConsumedInvalid::Period);
+                return false;
+            }
+        };
+
+        let retained_upper_bound = match *self {
+            Self::Empty => 0,
+            Self::Invalid(_) => return false,
+            Self::Tracking {
+                upper_bound_us,
+                latest_sample_ticks,
+            } => {
+                let Some(elapsed_ticks) = observed_ticks.checked_sub(latest_sample_ticks) else {
+                    *self = Self::Invalid(PiRootControlConsumedInvalid::Counter);
+                    return false;
+                };
+                if elapsed_ticks < period_ticks && upper_bound_us >= pre_dispatch_consumed_limit_us
+                {
+                    // Do not consume/reset another kernel sample or slide the
+                    // deadline while blocked. The caller retains its command
+                    // and ends this activation through the existing yield.
+                    return false;
+                }
+                if elapsed_ticks >= period_ticks {
+                    0
+                } else {
+                    upper_bound_us
+                }
+            }
+        };
+
+        let Some(sample) = sample() else {
+            *self = Self::Invalid(PiRootControlConsumedInvalid::ConsumedSample);
+            return false;
+        };
+        if sample.sampled_at_ticks == 0 || sample.sampled_at_ticks < observed_ticks {
+            *self = Self::Invalid(PiRootControlConsumedInvalid::SampleCounter);
+            return false;
+        }
+        let upper_bound_us = retained_upper_bound.saturating_add(sample.consumed_us);
+        *self = Self::Tracking {
+            upper_bound_us,
+            latest_sample_ticks: sample.sampled_at_ticks,
+        };
+        // Equality stops: no more than budget-minus-WCET may have been
+        // consumed before admitting a fresh leaf, so its complete declared
+        // WCET remains inside the generated SC budget.
+        upper_bound_us < pre_dispatch_consumed_limit_us
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn pi_root_control_consumed_contract() -> Option<PiRootControlConsumedContract> {
+    let task = crate::generated::temporal_tasks()
+        .iter()
+        .find(|task| task.id == "root-control")?;
+    Some(PiRootControlConsumedContract {
+        budget_us: u64::from(task.budget_us),
+        wcet_us: u64::from(task.wcet_us),
+        period_us: u64::from(task.period_us),
+        consumed_time_evidence: task.consumed_time_evidence,
+        active_root_control: matches!(
+            (task.kind, task.execution),
+            (
+                crate::generated::TemporalTaskKind::RootControl,
+                crate::generated::TemporalExecution::Active
+            )
+        ),
+        admitted: task.admitted,
+    })
+}
+
 /// Required local-seat preflight cannot enter Network and therefore has only
 /// the four useful local-operator phases in its bounded rotor.
 #[cfg(feature = "kernel")]
@@ -5414,6 +5609,12 @@ where
     serial_console_turn_active: bool,
     #[cfg(feature = "kernel")]
     linked_runtime_service_phase: LinkedRuntimeServicePhase,
+    #[cfg(feature = "kernel")]
+    pi_root_control_consumed_window: PiRootControlConsumedWindow,
+    #[cfg(feature = "kernel")]
+    pi_root_control_invalid_reported: bool,
+    #[cfg(all(test, feature = "kernel"))]
+    pi_root_control_dispatch_admission_override: Option<bool>,
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     ordinary_service_phase: OrdinaryServicePhase,
     #[cfg(all(feature = "kernel", feature = "net-console"))]
@@ -6109,6 +6310,12 @@ where
             serial_console_turn_active: false,
             #[cfg(feature = "kernel")]
             linked_runtime_service_phase: LinkedRuntimeServicePhase::Serial,
+            #[cfg(feature = "kernel")]
+            pi_root_control_consumed_window: PiRootControlConsumedWindow::Empty,
+            #[cfg(feature = "kernel")]
+            pi_root_control_invalid_reported: false,
+            #[cfg(all(test, feature = "kernel"))]
+            pi_root_control_dispatch_admission_override: None,
             #[cfg(all(feature = "kernel", feature = "net-console"))]
             ordinary_service_phase: OrdinaryServicePhase::Operator,
             #[cfg(all(feature = "kernel", feature = "net-console"))]
@@ -7202,6 +7409,87 @@ where
         }
     }
 
+    /// Preserve the generated root-control reserve before any Pi input path
+    /// can dequeue a command that may donate the current SC to passive NineDoor.
+    ///
+    /// Host contract tests do not invoke kernel accounting. The operational
+    /// target path is exact to AArch64 MCS; missing timing or accounting truth
+    /// leaves the retained command in place and fails closed.
+    #[cfg(feature = "kernel")]
+    fn pi_root_control_passive_dispatch_boundary_active(&self) -> bool {
+        #[cfg(feature = "release-pi4")]
+        {
+            self.ninedoor.is_some()
+        }
+        #[cfg(not(feature = "release-pi4"))]
+        {
+            false
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    fn pi_root_control_passive_dispatch_admitted(&mut self) -> bool {
+        if !self.pi_root_control_passive_dispatch_boundary_active() {
+            return true;
+        }
+        #[cfg(test)]
+        if let Some(admitted) = self.pi_root_control_dispatch_admission_override {
+            return admitted;
+        }
+        #[cfg(all(target_arch = "aarch64", target_os = "none", sel4_config_kernel_mcs))]
+        {
+            let Some(contract) = pi_root_control_consumed_contract() else {
+                self.pi_root_control_consumed_window =
+                    PiRootControlConsumedWindow::Invalid(PiRootControlConsumedInvalid::Profile);
+                self.report_pi_root_control_invalid_once();
+                return false;
+            };
+            let observed_ticks = crate::arch::aarch64::timer::timer_counter_ticks();
+            let counter_hz = crate::arch::aarch64::timer::timer_freq_hz();
+            let admitted = self.pi_root_control_consumed_window.admit_dispatch_with(
+                contract,
+                observed_ticks,
+                counter_hz,
+                || {
+                    let consumed_us =
+                        crate::hal::critical_tcb::root_control_consumed_time_us().ok()?;
+                    Some(PiRootControlConsumedSample {
+                        consumed_us,
+                        sampled_at_ticks: crate::arch::aarch64::timer::timer_counter_ticks(),
+                    })
+                },
+            );
+            if !admitted {
+                self.report_pi_root_control_invalid_once();
+            }
+            return admitted;
+        }
+        #[cfg(not(all(target_arch = "aarch64", target_os = "none", sel4_config_kernel_mcs)))]
+        {
+            true
+        }
+    }
+
+    /// Retain exactly one bounded marker for a terminal admission-truth fault.
+    /// Returning the rotor to Serial lets the existing physical-output queue
+    /// publish the marker without consuming the retained command.
+    #[cfg(feature = "kernel")]
+    fn report_pi_root_control_invalid_once(&mut self) {
+        let PiRootControlConsumedWindow::Invalid(reason) = self.pi_root_control_consumed_window
+        else {
+            return;
+        };
+        self.linked_runtime_service_phase = LinkedRuntimeServicePhase::Serial;
+        if self.pi_root_control_invalid_reported {
+            return;
+        }
+        let diagnostic = reason.diagnostic();
+        self.audit.denied(diagnostic);
+        let _ = self
+            .queue_physical_console_output(PendingConsoleOutputKind::HighImpactLine, diagnostic);
+        self.pi_root_control_invalid_reported = true;
+    }
+
     #[cfg(feature = "kernel")]
     fn poll_root_control_quantum_for_state(
         &mut self,
@@ -8198,6 +8486,25 @@ where
                 return;
             }
             let _ = self.flush_pending_console_output_if_idle();
+            return;
+        }
+        #[cfg(all(feature = "kernel", feature = "net-console"))]
+        if !split_ordinary_virtio_turn
+            && !serial_input
+            && !self.serial.tx_pending()
+            && !self.physical_console_response_pending()
+            && self.pi_root_control_passive_dispatch_boundary_active()
+            && self
+                .net
+                .as_ref()
+                .is_some_and(|net| net.buffered_console_lines_pending())
+        {
+            // Pi never consumes a freshly received authenticated command in
+            // the NIC turn that produced it. The adapter retains it until this
+            // hardware-free, consumed-time-gated operator turn.
+            if self.dispatch_one_buffered_network_line() {
+                self.poll_runtime_without_control_tail(true, false, false);
+            }
             return;
         }
         #[cfg(all(feature = "kernel", feature = "net-console"))]
@@ -9831,6 +10138,19 @@ where
         {
             return false;
         }
+        #[cfg(feature = "kernel")]
+        if self.pi_root_control_passive_dispatch_boundary_active()
+            && self
+                .net
+                .as_ref()
+                .is_some_and(|net| net.buffered_console_lines_pending())
+            && !self.pi_root_control_passive_dispatch_admitted()
+        {
+            // The adapter retains the complete connection-bound line. A later
+            // root refill retries this exact dequeue after the conservative
+            // consumed-time window reopens.
+            return false;
+        }
         let mut buffered: HeaplessVec<ConsoleLine, 1> = HeaplessVec::new();
         if let Some(net) = self.net.as_mut() {
             let _ = net.drain_console_lines_bounded(self.now_ms, 1, &mut |line| {
@@ -11155,6 +11475,10 @@ where
         let response_owner_pending = self.network_response_owner_active()
             || self.stream_end_pending
             || self.pending_stream_active();
+        #[cfg(all(feature = "kernel", feature = "net-console"))]
+        let pi_passive_dispatch_deferred = self.pi_root_control_passive_dispatch_boundary_active();
+        #[cfg(all(not(feature = "kernel"), feature = "net-console"))]
+        let pi_passive_dispatch_deferred = false;
         #[cfg(feature = "net-console")]
         let cyw43_network_service_fenced = service_network
             && !self.cyw43_bootstrap_operator_turn_is_active()
@@ -11358,6 +11682,7 @@ where
                 && !yield_for_physical_input
                 && !suppress_console_input
                 && !response_owner_pending
+                && !pi_passive_dispatch_deferred
             {
                 let _ = net.drain_console_lines_bounded(self.now_ms, 1, &mut |line| {
                     let _ = buffered.push(line);
@@ -27692,7 +28017,18 @@ where
         #[cfg(feature = "kernel")]
         let linked_runtime_transport = crate::serial::serial_linked_runtime_transport_active();
         #[cfg(feature = "kernel")]
-        let line_budget = if linked_runtime_transport {
+        let pi_passive_dispatch_boundary = self.pi_root_control_passive_dispatch_boundary_active();
+        #[cfg(feature = "kernel")]
+        if pi_passive_dispatch_boundary
+            && self.serial.interactive_input_active()
+            && !self.pi_root_control_passive_dispatch_admitted()
+        {
+            // Do not remove even a partial physical line while the next
+            // complete command could donate this SC to passive NineDoor.
+            return false;
+        }
+        #[cfg(feature = "kernel")]
+        let line_budget = if linked_runtime_transport || pi_passive_dispatch_boundary {
             1
         } else if self.local_seat.is_some() {
             LOCAL_SEAT_SERIAL_LINES_PER_TURN
@@ -27812,6 +28148,8 @@ where
         let mut consumed = false;
         let mut passes = 0usize;
         let mut backend_polled = false;
+        #[cfg(feature = "kernel")]
+        let mut pi_passive_dispatch_admitted = false;
         let mut burst_allowed = self.local_seat.as_ref().is_some_and(|runtime| {
             runtime.keyboard_trace().queued_bytes >= KEYBOARD_POLL_CHUNK_BYTES
         });
@@ -27829,6 +28167,21 @@ where
                 .is_some_and(|runtime| !runtime.keyboard_parser_ingress_ready())
             {
                 break;
+            }
+            #[cfg(feature = "kernel")]
+            if !pi_passive_dispatch_admitted
+                && self.pi_root_control_passive_dispatch_boundary_active()
+                && self
+                    .local_seat
+                    .as_ref()
+                    .is_some_and(|runtime| runtime.keyboard_trace().queued_bytes != 0)
+            {
+                if !self.pi_root_control_passive_dispatch_admitted() {
+                    // Leave every keyboard byte in the isolated runtime queue;
+                    // no complete local-seat line has crossed into root.
+                    return consumed;
+                }
+                pi_passive_dispatch_admitted = true;
             }
             let read = match self.local_seat.as_mut() {
                 Some(runtime) => runtime.drain_keyboard_dispatch_bytes(&mut chunk),
@@ -46315,10 +46668,13 @@ mod tests {
         let store: TicketTable<4> = TicketTable::new();
         let mut audit = AuditLog::new();
         let mut net = FakeNet::new();
+        let mut bridge = NineDoorBridge::new();
 
         {
-            let mut pump =
-                EventPump::new(serial, timer, NullIpc, store, &mut audit).with_network(&mut net);
+            let mut pump = EventPump::new(serial, timer, NullIpc, store, &mut audit)
+                .with_network(&mut net)
+                .with_ninedoor(&mut bridge);
+            pump.pi_root_control_dispatch_admission_override = Some(false);
             let explicit_yield_required = pump.poll_root_control_quantum_for_state(false, false);
 
             assert_eq!(pump.qemu_root_control_quantum_sequence, 1);
@@ -46331,6 +46687,11 @@ mod tests {
             assert!(
                 explicit_yield_required,
                 "a drained QEMU quantum must return to the scheduler"
+            );
+            assert_eq!(
+                pump.pi_root_control_consumed_window,
+                PiRootControlConsumedWindow::Empty,
+                "isolated QEMU must bypass the Pi consumed-time admission boundary",
             );
         }
         assert!(
@@ -46392,6 +46753,324 @@ mod tests {
             0, 192_010, 24_000_000
         ));
         assert!(!qemu_root_control_quantum_guard_reached(10, 192_010, 0));
+    }
+
+    #[cfg(feature = "kernel")]
+    fn pi_root_control_test_contract() -> PiRootControlConsumedContract {
+        PiRootControlConsumedContract {
+            budget_us: 2_750,
+            wcet_us: 2_500,
+            period_us: 10_000,
+            consumed_time_evidence: true,
+            active_root_control: true,
+            admitted: true,
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn pi_root_control_consumed_window_accumulates_blocks_and_carries_expiry_sample() {
+        let contract = pi_root_control_test_contract();
+        let mut window = PiRootControlConsumedWindow::Empty;
+
+        assert!(window.admit_dispatch_with(contract, 100, 1_000_000, || {
+            Some(PiRootControlConsumedSample {
+                consumed_us: 100,
+                sampled_at_ticks: 100,
+            })
+        }));
+        assert!(window.admit_dispatch_with(contract, 200, 1_000_000, || {
+            Some(PiRootControlConsumedSample {
+                consumed_us: 149,
+                sampled_at_ticks: 200,
+            })
+        }));
+        assert!(!window.admit_dispatch_with(contract, 300, 1_000_000, || {
+            Some(PiRootControlConsumedSample {
+                consumed_us: 1,
+                sampled_at_ticks: 300,
+            })
+        }));
+        assert_eq!(
+            window,
+            PiRootControlConsumedWindow::Tracking {
+                upper_bound_us: 250,
+                latest_sample_ticks: 300,
+            }
+        );
+
+        let blocked_samples = std::cell::Cell::new(0u8);
+        assert!(
+            !window.admit_dispatch_with(contract, 10_299, 1_000_000, || {
+                blocked_samples.set(blocked_samples.get().saturating_add(1));
+                Some(PiRootControlConsumedSample {
+                    consumed_us: 0,
+                    sampled_at_ticks: 10_299,
+                })
+            })
+        );
+        assert_eq!(
+            blocked_samples.get(),
+            0,
+            "blocked admission must not resample"
+        );
+        assert_eq!(
+            window,
+            PiRootControlConsumedWindow::Tracking {
+                upper_bound_us: 250,
+                latest_sample_ticks: 300,
+            },
+            "a blocked retry must not slide the full-period deadline",
+        );
+
+        assert!(window.admit_dispatch_with(contract, 10_300, 1_000_000, || {
+            Some(PiRootControlConsumedSample {
+                consumed_us: 100,
+                sampled_at_ticks: 10_305,
+            })
+        }));
+        assert_eq!(
+            window,
+            PiRootControlConsumedWindow::Tracking {
+                upper_bound_us: 100,
+                latest_sample_ticks: 10_305,
+            },
+            "the post-expiry sample starts the new conservative bound",
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn pi_root_control_consumed_window_fails_closed_on_invalid_truth() {
+        let contract = pi_root_control_test_contract();
+        let invalid_profile = PiRootControlConsumedContract {
+            consumed_time_evidence: false,
+            ..contract
+        };
+        let cases = [
+            (
+                invalid_profile,
+                1,
+                1_000_000,
+                true,
+                PiRootControlConsumedInvalid::Profile,
+            ),
+            (
+                contract,
+                0,
+                1_000_000,
+                true,
+                PiRootControlConsumedInvalid::Counter,
+            ),
+            (contract, 1, 0, true, PiRootControlConsumedInvalid::Counter),
+            (
+                contract,
+                1,
+                1_000_000,
+                false,
+                PiRootControlConsumedInvalid::ConsumedSample,
+            ),
+        ];
+        for (profile, ticks, frequency, sample_available, expected_reason) in cases {
+            let mut window = PiRootControlConsumedWindow::Empty;
+            assert!(!window.admit_dispatch_with(profile, ticks, frequency, || {
+                sample_available.then_some(PiRootControlConsumedSample {
+                    consumed_us: 0,
+                    sampled_at_ticks: ticks,
+                })
+            }));
+            assert_eq!(
+                window,
+                PiRootControlConsumedWindow::Invalid(expected_reason)
+            );
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn pi_root_control_invalid_transition_retains_exactly_one_operator_marker() {
+        let serial =
+            SerialPort::<_, 2048, 2048, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<2048>::new());
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut pump = EventPump::new(serial, timer, NullIpc, store, &mut audit);
+        pump.linked_runtime_service_phase = LinkedRuntimeServicePhase::Dispatch;
+        pump.pi_root_control_consumed_window =
+            PiRootControlConsumedWindow::Invalid(PiRootControlConsumedInvalid::ConsumedSample);
+
+        pump.report_pi_root_control_invalid_once();
+        pump.report_pi_root_control_invalid_once();
+
+        assert_eq!(
+            pump.linked_runtime_service_phase,
+            LinkedRuntimeServicePhase::Serial
+        );
+        assert_eq!(pump.pending_console_output.len(), 1);
+        assert_eq!(
+            pump.pending_console_output[0].text.as_str(),
+            PiRootControlConsumedInvalid::ConsumedSample.diagnostic(),
+        );
+        drop(pump);
+        assert_eq!(
+            audit
+                .denials
+                .iter()
+                .filter(|line| line.contains("ROOT_SC_GUARD"))
+                .count(),
+            1,
+        );
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn pi_reserve_gated_dispatch_retains_the_complete_serial_command() {
+        struct LinkedRuntimeTestReset;
+
+        impl Drop for LinkedRuntimeTestReset {
+            fn drop(&mut self) {
+                crate::serial::test_end_linked_runtime_only_transport();
+            }
+        }
+
+        let driver = LoopbackSerial::<4096>::new();
+        driver.push_rx(b"help\n");
+        let mut serial = SerialPort::<_, 4096, 4096, DEFAULT_LINE_CAPACITY>::new(driver);
+        assert!(serial.poll_io());
+        crate::serial::test_begin_linked_runtime_only_transport();
+        let _reset = LinkedRuntimeTestReset;
+        let timer = TestTimer::repeated(16, 1);
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut bridge = NineDoorBridge::new();
+        let mut pump =
+            EventPump::new(serial, timer, NullIpc, store, &mut audit).with_ninedoor(&mut bridge);
+        pump.linked_runtime_service_phase = LinkedRuntimeServicePhase::Dispatch;
+        pump.pi_root_control_dispatch_admission_override = Some(false);
+
+        assert!(pump.poll_root_control_quantum_for_state(true, true));
+        assert_eq!(pump.metrics.accepted_commands, 0);
+        assert_eq!(
+            pump.linked_runtime_service_phase,
+            LinkedRuntimeServicePhase::Dispatch,
+            "reserve gating must stop before the command is dequeued",
+        );
+
+        pump.pi_root_control_dispatch_admission_override = Some(true);
+        assert!(pump.poll_root_control_quantum_for_state(true, true));
+        assert_eq!(
+            pump.metrics.accepted_commands, 1,
+            "the exact retained command must execute after later admission",
+        );
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn pi_root_control_bootstrap_serial_gate_retains_the_complete_line() {
+        struct LinkedRuntimeTestReset;
+
+        impl Drop for LinkedRuntimeTestReset {
+            fn drop(&mut self) {
+                crate::serial::test_end_linked_runtime_only_transport();
+            }
+        }
+
+        let driver = LoopbackSerial::<4096>::new();
+        driver.push_rx(b"attach queen\n");
+        let mut serial = SerialPort::<_, 4096, 4096, DEFAULT_LINE_CAPACITY>::new(driver);
+        assert!(serial.poll_io());
+        crate::serial::test_begin_linked_runtime_only_transport();
+        let _reset = LinkedRuntimeTestReset;
+        let timer = TestTimer::repeated(16, 1);
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut bridge = NineDoorBridge::new();
+        let mut pump =
+            EventPump::new(serial, timer, NullIpc, store, &mut audit).with_ninedoor(&mut bridge);
+        pump.cyw43_bootstrap_operator_turn_active = true;
+        pump.pi_root_control_dispatch_admission_override = Some(false);
+
+        assert!(!pump.consume_serial());
+        assert!(
+            pump.serial.interactive_input_active(),
+            "bootstrap must not remove the denied line from linked serial"
+        );
+
+        pump.pi_root_control_dispatch_admission_override = Some(true);
+        assert!(pump.consume_serial());
+        assert!(
+            !pump.serial.interactive_input_active(),
+            "the same line must drain after a later safe refill"
+        );
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn pi_root_control_local_seat_gate_retains_runtime_keyboard_bytes() {
+        let serial =
+            SerialPort::<_, 4096, 4096, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<4096>::new());
+        let timer = TestTimer::repeated(16, 1);
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut bridge = NineDoorBridge::new();
+        let mut local_seat = LocalSeatRuntime::new(crate::local_seat::LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 64,
+            buffer_lines: 8,
+        });
+        local_seat.mark_root_console_ready();
+        local_seat.enqueue_keyboard_bytes(b"help\n");
+        let mut pump = EventPump::new(serial, timer, NullIpc, store, &mut audit)
+            .with_ninedoor(&mut bridge)
+            .with_local_seat(&mut local_seat);
+        pump.pi_root_control_dispatch_admission_override = Some(false);
+
+        assert!(!pump.consume_local_seat_buffered_only(LocalSeatConsumePhase::PreRuntime));
+        assert_eq!(pump.metrics.accepted_commands, 0);
+        assert!(pump.local_line.is_empty());
+        assert!(pump
+            .local_seat
+            .as_ref()
+            .is_some_and(|runtime| runtime.keyboard_trace().queued_bytes == 5));
+
+        pump.pi_root_control_dispatch_admission_override = Some(true);
+        assert!(pump.consume_local_seat_buffered_only(LocalSeatConsumePhase::PreRuntime));
+        assert_eq!(pump.metrics.accepted_commands, 1);
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn pi_root_control_network_gate_retains_connection_bound_line() {
+        let serial =
+            SerialPort::<_, 4096, 4096, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<4096>::new());
+        let timer = TestTimer::repeated(16, 1);
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut bridge = NineDoorBridge::new();
+        let mut net = FakeNet::new();
+        net.active_conn_id = Some(7);
+        net.authenticated_conn_id = Some(7);
+        let mut line = HeaplessString::new();
+        line.push_str("help").expect("bounded command");
+        net.lines
+            .push(ConsoleLine::new(line, 1))
+            .expect("bounded network line");
+        let mut pump = EventPump::new(serial, timer, NullIpc, store, &mut audit)
+            .with_ninedoor(&mut bridge)
+            .with_network(&mut net);
+        pump.pi_root_control_dispatch_admission_override = Some(false);
+
+        assert!(!pump.dispatch_one_buffered_network_line());
+        assert_eq!(pump.metrics.accepted_commands, 0);
+        assert!(pump
+            .net
+            .as_ref()
+            .is_some_and(|net| net.buffered_console_lines_pending()));
+
+        pump.pi_root_control_dispatch_admission_override = Some(true);
+        assert!(pump.dispatch_one_buffered_network_line());
+        assert_eq!(pump.metrics.accepted_commands, 1);
     }
 
     #[cfg(feature = "kernel")]

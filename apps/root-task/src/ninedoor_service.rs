@@ -604,6 +604,10 @@ pub(crate) enum NamespaceTransportFailureStage {
     Exchange,
     /// Generated root/child configuration or generation validation failed.
     RequestContract,
+    /// Root could not arm the exact passive-service recovery mailbox.
+    CallArm,
+    /// The synchronous passive-service Call failed before a protocol reply.
+    Call,
     /// Root-fault call bookkeeping did not match the completed exchange.
     RecoveryBookkeeping,
     /// Root-fault recovered the caller after a service timeout.
@@ -773,6 +777,7 @@ impl NamespaceServiceBoundary {
                 if matches!(
                     error,
                     TransportError::Revoked
+                        | TransportError::Closed
                         | TransportError::StaleIdentity
                         | TransportError::InvalidAbi
                 ) {
@@ -869,6 +874,9 @@ impl NamespaceServiceBoundary {
 
     /// Revoke this generation. It cannot be reopened.
     pub fn revoke(&mut self) {
+        if self.state == TransportState::Revoked {
+            return;
+        }
         self.revoke_with_evidence(NamespaceTransportFailureEvidence {
             error: TransportError::Revoked,
             stage: NamespaceTransportFailureStage::ManualRevoke,
@@ -889,7 +897,9 @@ impl NamespaceServiceBoundary {
     pub(crate) fn take_target_resources_for_containment(
         &mut self,
     ) -> Option<TargetNamespaceServiceResources> {
-        self.revoke();
+        if self.state != TransportState::Revoked {
+            self.revoke();
+        }
         self.target.take()
     }
 
@@ -1084,8 +1094,17 @@ impl NamespaceServiceExchange for TargetNamespaceServiceResources {
             0,
             0,
         ];
-        crate::hal::critical_tcb::arm_target_service_call(SERVICE_TASK_ID, header.sequence)
-            .map_err(|_| TransportError::Closed)?;
+        if crate::hal::critical_tcb::arm_target_service_call(SERVICE_TASK_ID, header.sequence)
+            .is_err()
+        {
+            self.last_failure = Some(NamespaceTransportFailureEvidence {
+                error: TransportError::Closed,
+                stage: NamespaceTransportFailureStage::CallArm,
+                expected_sequence: header.sequence,
+                observed_sequence: 0,
+            });
+            return Err(TransportError::Closed);
+        }
         let reply_result = crate::ipc::try_call_with_message_registers(
             self.config.endpoint_cptr,
             request_tag,
@@ -1093,7 +1112,18 @@ impl NamespaceServiceExchange for TargetNamespaceServiceResources {
         );
         let recovery_result =
             crate::hal::critical_tcb::finish_target_service_call(SERVICE_TASK_ID, header.sequence);
-        let (reply, reply_registers) = reply_result.map_err(|_| TransportError::Closed)?;
+        let (reply, reply_registers) = match reply_result {
+            Ok(reply) => reply,
+            Err(_) => {
+                self.last_failure = Some(NamespaceTransportFailureEvidence {
+                    error: TransportError::Closed,
+                    stage: NamespaceTransportFailureStage::Call,
+                    expected_sequence: header.sequence,
+                    observed_sequence: 0,
+                });
+                return Err(TransportError::Closed);
+            }
+        };
         let completion = match recovery_result {
             Ok(completion) => completion,
             Err(_) => {
@@ -1234,6 +1264,11 @@ mod tests {
         corrupt_sequence: bool,
     }
 
+    struct ClosedMockExchange {
+        calls: u8,
+        failure: Option<NamespaceTransportFailureEvidence>,
+    }
+
     impl NamespaceServiceExchange for PreparedMockExchange {
         fn prepare(
             &mut self,
@@ -1269,6 +1304,28 @@ mod tests {
                 },
                 &response[..response_len],
             )
+        }
+    }
+
+    impl NamespaceServiceExchange for ClosedMockExchange {
+        fn prepare(
+            &mut self,
+            header: NamespaceRequestHeader,
+            _path: &str,
+            _payload: &str,
+        ) -> Result<(), TransportError> {
+            self.calls = self.calls.saturating_add(1);
+            self.failure = Some(NamespaceTransportFailureEvidence {
+                error: TransportError::Closed,
+                stage: NamespaceTransportFailureStage::CallArm,
+                expected_sequence: header.sequence,
+                observed_sequence: 0,
+            });
+            Err(TransportError::Closed)
+        }
+
+        fn take_failure_evidence(&mut self) -> Option<NamespaceTransportFailureEvidence> {
+            self.failure.take()
         }
     }
 
@@ -1449,6 +1506,37 @@ mod tests {
 
         assert_eq!(boundary.state(), TransportState::Open);
         assert!(boundary.outstanding.is_none());
+    }
+
+    #[test]
+    fn closed_call_generation_is_terminal_with_exact_failure_stage() {
+        let mut boundary = NamespaceServiceBoundary::new(18).unwrap();
+        let mut exchange = ClosedMockExchange {
+            calls: 0,
+            failure: None,
+        };
+
+        assert_eq!(
+            boundary.prepare_with_exchange(&mut exchange, NamespaceOpcode::Cat, "/proc/boot", "",),
+            Err(TransportError::Closed)
+        );
+        assert_eq!(exchange.calls, 1);
+        assert_eq!(boundary.state(), TransportState::Revoked);
+        boundary.revoke();
+        assert_eq!(
+            boundary.revocation_evidence(),
+            Some(NamespaceTransportFailureEvidence {
+                error: TransportError::Closed,
+                stage: NamespaceTransportFailureStage::CallArm,
+                expected_sequence: 1,
+                observed_sequence: 0,
+            })
+        );
+        assert_eq!(
+            boundary.prepare_with_exchange(&mut exchange, NamespaceOpcode::Cat, "/proc/boot", "",),
+            Err(TransportError::Revoked)
+        );
+        assert_eq!(exchange.calls, 1, "terminal generations are never retried");
     }
 
     #[test]

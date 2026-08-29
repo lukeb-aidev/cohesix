@@ -508,6 +508,16 @@ Do not acknowledge the kernel IRQ before the device source is safely cleared
 or retained. A notification may coalesce and may arrive before, after, or with
 other state. The consumer must always recheck durable work before sleeping.
 
+On selected MCS builds, a notification bound to the receiving TCB defines its
+badge but does not define the returned `MessageInfo`. Runtime receive
+classification is therefore badge-first: the exact compiler-owned 64-bit
+command badge with nonzero message length is endpoint IPC; any admitted
+low-32-bit nonzero badge is a notification even when the message length is
+stale; and zero, zero-length command, wrong-task, or foreign high-domain badges
+fail closed. Classic seL4 retains its length-first receive semantics. Device
+routing still validates the admitted one-hot or coalesced notification bits
+before performing one bounded owner quantum.
+
 If the selected implementation is intentionally polled, report it as polled.
 Do not claim interrupt delivery from configuration eligibility or an unused
 IRQ record.
@@ -628,10 +638,11 @@ reusable ownership pattern.
 ### 7.1 Serial pattern
 
 - On selected MCS builds, a notification bound to a runtime TCB may satisfy the
-  `seL4_NBRecv` used to admit a Reply-bearing command. A zero-length result with
-  a nonzero generated badge is device work, not an empty endpoint poll. Route
-  and service exactly one bounded owner quantum, then re-read the still-durable
-  command on a later outer turn without reusing or replacing its Reply object.
+  `seL4_NBRecv` used to admit a Reply-bearing command. Apply the common
+  badge-first MCS rule in Section 5.3 rather than trusting the notification's
+  unspecified message length. Route and service exactly one bounded owner
+  quantum, then re-read the still-durable command on a later outer turn without
+  reusing or replacing its Reply object.
 - The selected Pi serial transport uses the runtime's existing four shared
   pages as two independent generation-bound SPSC rings. Pages zero and one are
   the root-to-runtime TX ring, pages two and three are the runtime-to-root RX
@@ -1210,13 +1221,13 @@ transport:
 - In both Pi network modes, the physical Network leaf owns timer, NIC, and
   display-ready reconciliation only. It does not repeat the composite root
   IPC/bootstrap/stream/reboot tail already serviced by the bounded Serial,
-  LocalSeat, Dispatch, and Display leaves. After a successful one-hot child
-  signal, mediated WiFi may YieldTo its compiler-validated equal-priority child
-  SC only in exact authenticated state; pre-authentication and every lifecycle,
-  containment, or invalid-SC state retains the ordinary physical-operator
-  rotor. Direct GENET retains its existing guarded child handoff. When its first
-  Network unit observes one exact authenticated command with no operator or
-  response debt, the same five-unit composer may spend only
+  LocalSeat, Dispatch, and Display leaves. Mediated WiFi is signal-only in
+  every lifecycle state, including exact authenticated state, and returns
+  through ordinary MCS scheduling after a successful one-hot child signal.
+  Direct GENET alone retains the guarded handoff to its compiler-validated
+  equal-priority child SC. When its first Network unit observes one exact
+  authenticated command with no operator or response debt, the same five-unit
+  composer may spend only
   `Network -> Dispatch -> Network` on causal response staging, then returns to
   Serial and stops. A second command remains behind complete operator/display
   debt. This changes no physical owner, packet authority, operation bound,

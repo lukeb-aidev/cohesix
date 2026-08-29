@@ -467,22 +467,21 @@ rejects eleven. This preserves fragmented wake eligibility; it does not enlarge
 CPU budget or authorize another operation, signal, poll, retry, or owner.
 
 For both Pi network modes, console-network selects priority/MCP 200/200
-with its unchanged `3,000 us / 10,000 us` SC, equal to priority-200 root-control.
-Only after an exact sequence-last packet/control/publication-ACK commit, or one
-bounded service-tick wake, and a successful one-hot signal may root invoke
-`SchedContext_YieldTo` on the already retained, same-core child SC. Direct GENET
-retains that policy across its valid lifecycle. Mediated WiFi admits it only in
-exact `Authenticated` state, preserving the ordinary serial/local-seat rotor
-through construction, listening, authentication, closing, fault, and terminal
-states. Core, priority, MCP, SC, signal, containment, or syscall drift fails
-closed. The
-child therefore runs on its own hard-bounded reservation and
-blocks at its existing notification gate without consuming root's remaining
-refill. Compiler response analysis records `8,100 us` for both console-network
-and root-control, retains the mandatory reserve, and admits the
-32 additional console mapping-cap slots. These are static bounds, not measured
-packet latency. Fresh same-image Pi load evidence must still prove authenticated
-response cadence; QEMU priorities and placement remain unchanged.
+with its unchanged `3,000 us / 10,000 us` SC, equal to priority-200
+root-control. That generated equality is eligibility, not permission for every
+backend to use a direct handoff. Only direct GENET may invoke guarded
+`SchedContext_YieldTo` after an exact sequence-last
+packet/control/publication-ACK commit or one bounded service-tick wake and a
+successful one-hot signal. Mediated WiFi always returns through ordinary MCS
+scheduling after signalling, including in exact `Authenticated` state. Core,
+priority, MCP, SC, signal, containment, or syscall drift fails closed. The
+child still runs on its own hard-bounded reservation and blocks at its existing
+notification gate without acquiring root authority. Compiler response analysis
+records `8,100 us` for both console-network and root-control, retains the
+mandatory reserve, and admits the 32 additional console mapping-cap slots.
+These are static bounds, not measured packet latency. Fresh same-image Pi load
+evidence must still prove authenticated response cadence; QEMU priorities and
+placement remain unchanged.
 
 The Pi CYW43 boot supervisor consumes those two generated response bounds only
 after the DHCP-bound console child is finalized and resumed. Each bound is
@@ -552,12 +551,31 @@ context remains the hard execution bound, while every inner phase, queue, fault
 check, and operator-debt rule remains bounded. This QEMU service composition
 does not alter the physical Pi rotor or any Pi hardware owner.
 
+Before any physical-Pi command path dequeues serial, local-seat, or TCP input
+while NineDoor is attached, root validates the generated active
+root-control budget, WCET, period, admission, and consumed-time-evidence
+contract. It accumulates `seL4_SchedContext_Consumed` samples in a conservative
+full-period window because that syscall resets evidence but does not replenish
+the SC. Dispatch is admitted only while the accumulated upper bound is
+strictly below the checked `budget_us - wcet_us` limit, currently 250 us, so
+the complete declared 2,500 us WCET remains inside the SC. A blocked command remains
+queued and the existing outer yield runs; the blocked path does not resample or
+slide its expiry. After a full period, the first new sample becomes the next
+conservative bound rather than being discarded. Invalid generated truth,
+counter evidence, period conversion, or kernel accounting latch fail closed
+and emit one bounded operator marker while retaining the command. The QEMU
+direct-VirtIO branch exits before this Pi-only boundary and keeps its existing
+counter guard.
+
 The passive NineDoor service is co-located with `root-control` on core 0 in
 every checked-in target manifest. Its compiler-validated `locality_bound`
 contract makes the sole permitted donor and service share one core, avoiding a
 cross-core synchronous handoff while retaining the same one-Reply-object,
 one-in-flight, depth-one donation and fault-containment bounds. This is a
 shared QEMU/Pi control-plane invariant, not a platform-specific tuning path.
+Failure to arm or complete a passive Call is terminal generation evidence with
+exact `CallArm` or `Call` stage. The generation is revoked and fenced; a
+root-fault `REPLIED` state is never reset or retried as a normal service call.
 For active tasks, the same field continues to express physical-resource
 locality; for a passive service it constrains every allowlisted donor core.
 

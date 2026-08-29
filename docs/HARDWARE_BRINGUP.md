@@ -1105,8 +1105,8 @@ Implementation mechanics and reusable ownership invariants belong in
 [Developing Cohesix Drivers](DRIVERS.md). This section owns only the physical
 operator and evidence workflow.
 
-The exact `24e1c1c7778a3dc7ad8460c9ef644992814e41a5` convergence boot is the
-current failure oracle, not an accepted WiFi sample. Image ID
+The exact `24e1c1c7778a3dc7ad8460c9ef644992814e41a5` convergence boot is a
+historical Ready-clock failure oracle, not an accepted WiFi sample. Image ID
 `33298abaa8751693f6fcc5c05655d5837a32a9c2c710dc64907a4a61cab03061` and
 image SHA-256
 `f0c2aaa840b6d88948bf938837c5ae6ed538b37862c937a59f05ab2c5e0965d7`
@@ -1135,6 +1135,35 @@ cadence that removes. For the next exact-image test, require listener
 Ready, port 31337 reachability, authenticated `cohsh`, focused `.coh` scripts,
 and measured boot/network performance before promotion. The August 10 accepted
 boots remain compatibility comparators only.
+
+The latest exact boot is source
+`ae2dd774126d9be70767d0b56068a13e58de5fd4`, build ID
+`12946f3637f482a3f70b47309dc43f3a2084c59e9d817597f13d2a7f5d9ac05d`, image
+ID `249549ae082f2d9a854c2c8b2da85bc6859f7bf55540ff3e39eca94b14573736`, and
+image SHA-256
+`19e499454c6a9e0efa4a0f7eb4eb1381adc482586299b1645c77f3d55e3d874d`.
+Its boot-paired `20260829-210442` captures and exact serial slice prove Gate
+8a--8h, DHCP `192.168.86.154`, sealed 272/272 MCS registration, USB command
+readiness, five TCP handshakes, and successful `AUTH` without a driver fault or
+network quarantine. Every operation then fails closed at NineDoor `ATTACH`
+with `reason=busy`; the host peer exits nonzero, canonical `.coh` scripts never
+start, and medium/high REST pressure returns HTTP 503 on its first request.
+That makes `SERVICE_RUNTIME` the first failed invariant for the next image.
+Do not retune RF, SDIO, CYW43, DHCP, queues, or retries from this refusal. An
+authenticated serial reboot was blocked at the same boundary, so ae2 contains
+no GENET boot evidence and cannot qualify either network mode.
+
+The correction keeps mediated WiFi handoff signal-only, retains guarded
+`SchedContext_YieldTo` only for direct GENET, classifies admitted MCS
+notifications by badge before stale `MessageInfo`, and gates physical-Pi
+passive NineDoor Dispatch with a conservative full-period consumed-time window
+that admits only below the checked 250 us `budget_us - wcet_us` limit, leaving
+the complete 2,500 us WCET inside the unchanged SC. A terminal
+`CallArm` or `Call` failure revokes and fences its generation rather than
+resetting or retrying a `REPLIED` lane. Focused source tests and a fresh QEMU
+canary remain rejection gates only. Qualification still requires new
+exact-image WiFi and GENET boots with raw TCP, authenticated `cohsh`, focused
+`.coh` scripts, and medium/high benchmark evidence.
 
 For the paired wired regression, the same source reaches DHCP and legacy ARP
 before the old direct handoff stalls with raw/active source `0x00012000`, zero

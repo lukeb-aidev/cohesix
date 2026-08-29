@@ -74,8 +74,8 @@ fn select_console_network_yield_to_profile(
     direct_genet: bool,
 ) -> Result<bool, BoundaryError> {
     match (direct_virtio, direct_genet) {
-        (true, false) => Ok(false),
-        (false, true) | (false, false) => Ok(true),
+        (true, false) | (false, false) => Ok(false),
+        (false, true) => Ok(true),
         (true, true) => Err(BoundaryError::GeneratedDrift),
     }
 }
@@ -98,13 +98,12 @@ pub(crate) const fn console_network_yield_to_admitted(
 ) -> bool {
     admission.profile_enabled
         && !admission.runtime_direct_virtio
+        && admission.runtime_direct_genet
         && admission.signal_committed
         && admission.activated
         && !admission.containment_started
         && !admission.contained
         && admission.scheduling_context_present
-        && (admission.runtime_direct_genet
-            || matches!(admission.service_state, ServiceState::Authenticated))
 }
 
 /// Return the compiler-owned console-network service record.
@@ -1384,7 +1383,7 @@ mod tests {
     }
 
     #[test]
-    fn yield_to_profile_selects_both_pi_backends_but_not_qemu() {
+    fn yield_to_profile_selects_only_direct_genet() {
         assert_eq!(
             select_console_network_yield_to_profile(true, false),
             Ok(false),
@@ -1397,8 +1396,8 @@ mod tests {
         );
         assert_eq!(
             select_console_network_yield_to_profile(false, false),
-            Ok(true),
-            "Pi WiFi selects the same statically validated child SC"
+            Ok(false),
+            "mediated Pi WiFi retains the proven signal-only handoff"
         );
         assert_eq!(
             select_console_network_yield_to_profile(true, true),
@@ -1430,11 +1429,12 @@ mod tests {
     }
 
     #[test]
-    fn pi_wifi_yield_to_requires_exact_authenticated_live_signal() {
+    fn mediated_pi_wifi_never_selects_yield_to() {
         for service_state in [
             ServiceState::Constructing,
             ServiceState::Listening,
             ServiceState::Authenticating,
+            ServiceState::Authenticated,
             ServiceState::Closing,
             ServiceState::Faulted,
             ServiceState::Terminal,
@@ -1442,32 +1442,6 @@ mod tests {
             assert!(!console_network_yield_to_admitted(
                 exact_yield_to_admission(false, false, service_state)
             ));
-        }
-        let exact = exact_yield_to_admission(false, false, ServiceState::Authenticated);
-        assert!(console_network_yield_to_admitted(exact));
-        for invalid in [
-            ConsoleNetworkYieldToAdmission {
-                signal_committed: false,
-                ..exact
-            },
-            ConsoleNetworkYieldToAdmission {
-                activated: false,
-                ..exact
-            },
-            ConsoleNetworkYieldToAdmission {
-                containment_started: true,
-                ..exact
-            },
-            ConsoleNetworkYieldToAdmission {
-                contained: true,
-                ..exact
-            },
-            ConsoleNetworkYieldToAdmission {
-                scheduling_context_present: false,
-                ..exact
-            },
-        ] {
-            assert!(!console_network_yield_to_admitted(invalid));
         }
     }
 
@@ -1488,7 +1462,7 @@ mod tests {
             scheduling_context_present: true,
         };
         assert!(!console_network_yield_to_admitted(wifi_listening));
-        assert!(console_network_yield_to_admitted(
+        assert!(!console_network_yield_to_admitted(
             ConsoleNetworkYieldToAdmission {
                 service_state: ServiceState::Authenticated,
                 ..wifi_listening
