@@ -672,7 +672,7 @@ generated and projected admitted-maximum inventories differ, or the accepted Wor
 a different target session or topology. The resulting
 `root-tcb-acceptance.json` binds all three input files by digest.
 The strict release inventory packages this topology beside the resolved
-manifest; `scripts/release_bundle.sh --check-manifest` rejects either an
+manifest; `scripts/release_bundle.sh --check-manifest --pi4-stage-dir <path>` rejects either an
 omission or an unexpected compiler-owned generated file rather than silently
 shipping a partial as-built contract.
 `ROOT_CRITICAL_OBJECTS scope=constructed-actual` separately records seven
@@ -6316,6 +6316,11 @@ Run the catalogued host-tool, replay, and UI bundle checks from a clean
 extraction directory, never from repository build output.
 - macOS bundle: `releases/Cohesix-0.9.0-beta-MacOS.tar.gz`
 - Ubuntu bundle: `releases/Cohesix-0.9.0-beta-linux.tar.gz`
+- Current releases also emit a peer `releases/<release-name>-Pi4.tar.gz`.
+  Validate its exact manifest, image SHA-256, MBR partition starting at LBA
+  2048, FAT32 payload, metadata `minimum_target_bytes`, and embedded file hashes.
+  Prove the image writes to media exactly that size or larger; unused capacity
+  on a larger card remains unallocated and does not affect boot.
 - Ensure headless Linux uses `xvfb-run` for SwarmUI.
 - The release bundle includes Python tests and fixtures for running `python3 -m pytest tools/cohesix-py/tests`.
 
@@ -6387,7 +6392,7 @@ python3 scripts/ci/check_implementation_surfaces.py \
   --inventory configs/generated/implementation_surface_inventory.json
 cargo test -p root-task --tests production_fallbacks
 cargo test -p gpu-bridge-host
-scripts/release_bundle.sh --check-manifest
+scripts/release_bundle.sh --check-manifest --pi4-stage-dir out/pi4-sd
 scripts/check-generated.sh
 ```
 
@@ -6400,13 +6405,23 @@ fallbacks, and the exact release artifact set. WorkerBus is the sole legal
 retired, or not-enabled row cannot satisfy target, release, attestation,
 integration, or use-case evidence.
 
-`scripts/release_bundle.sh --check-manifest` validates the inventory-selected
-version, exact host-tool architecture, selected GICv3 kernel, target-image
-sources, and every individually listed document, script, Python artifact, UI
+`scripts/release_bundle.sh --check-manifest --pi4-stage-dir <path>` validates the
+inventory-selected version, exact host-tool architecture, selected GICv3
+kernel, QEMU target-image sources, and the compiler-owned exact Pi 4 SD staging
+set. The Pi gate rejects missing, extra, linked, stale, non-current, or
+primary/fallback-divergent files and re-verifies the sealed image identity. It
+also validates every individually listed document, script, Python artifact, UI
 asset, trace/transcript fixture, support file, and versioned migration. Bundle
-creation then compares every regular-file destination against
-`release.expected_bundle_files` and emits `MANIFEST.sha256`; recursive copies,
-ignored files, missing files, and unexpected files fail.
+creation compares each host bundle against `release.expected_bundle_files` and
+the peer Pi4 bundle against `release.expected_pi4_bundle_files`; each emits
+`MANIFEST.sha256`. Recursive wildcard copies, ignored files, missing files, and
+unexpected files fail. The Pi4 builder creates a compact MBR/FAT32 raw image
+from the exact stage, mounts it read-only, and rechecks every embedded
+regular-file hash before release. A Linux bundle
+additionally requires exact source-bound provenance for every remote-built ELF
+and creates the final tarball on the argument-selected ARM64 builder before
+downloading and byte-validating it. Neither SD packaging nor remote archiving is
+Pi, QEMU, Worker, or full-system target acceptance.
 
 GPU bridge tests cover real-or-empty live registry behavior, no first-model
 activation, placeholder-secret rejection before connection, exact manifest and

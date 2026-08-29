@@ -123,6 +123,7 @@ struct ReleaseSource {
     version: String,
     host_tools: Vec<String>,
     target_images: Vec<String>,
+    pi4_stage_files: Vec<String>,
     generated_configs: Vec<String>,
     public_documents: Vec<String>,
     host_assets: Vec<String>,
@@ -135,9 +136,12 @@ struct ReleaseSource {
     support_files: Vec<String>,
     versioned_migrations: Vec<String>,
     generated_bundle_files: Vec<String>,
+    pi4_generated_bundle_files: Vec<String>,
     forbidden_paths: Vec<String>,
     #[serde(default)]
     expected_bundle_files: Vec<String>,
+    #[serde(default)]
+    expected_pi4_bundle_files: Vec<String>,
     #[serde(default)]
     asset_records: Vec<SurfaceRecord>,
 }
@@ -451,16 +455,22 @@ fn expand_feature<'a>(
 }
 
 fn validate_release(release: &ReleaseSource) -> Result<()> {
-    if release.schema != "cohesix-runtime-release-manifest/v1" {
+    if release.schema != "cohesix-runtime-release-manifest/v2" {
         bail!("unsupported release manifest schema {}", release.schema);
     }
     require_nonempty("release version", &release.version)?;
-    if !release.expected_bundle_files.is_empty() || !release.asset_records.is_empty() {
-        bail!("release expected_bundle_files and asset_records are compiler-owned outputs");
+    if !release.expected_bundle_files.is_empty()
+        || !release.expected_pi4_bundle_files.is_empty()
+        || !release.asset_records.is_empty()
+    {
+        bail!(
+            "release expected_bundle_files, expected_pi4_bundle_files, and asset_records are compiler-owned outputs"
+        );
     }
     for (label, values) in [
         ("host_tools", &release.host_tools),
         ("target_images", &release.target_images),
+        ("pi4_stage_files", &release.pi4_stage_files),
         ("generated_configs", &release.generated_configs),
         ("public_documents", &release.public_documents),
         ("host_assets", &release.host_assets),
@@ -472,6 +482,10 @@ fn validate_release(release: &ReleaseSource) -> Result<()> {
         ("ui_assets", &release.ui_assets),
         ("support_files", &release.support_files),
         ("generated_bundle_files", &release.generated_bundle_files),
+        (
+            "pi4_generated_bundle_files",
+            &release.pi4_generated_bundle_files,
+        ),
     ] {
         if values.is_empty() {
             bail!("release {label} must not be empty");
@@ -510,6 +524,19 @@ fn validate_release(release: &ReleaseSource) -> Result<()> {
             bail!("release path selected by multiple categories: {path}");
         }
     }
+    for path in release
+        .pi4_stage_files
+        .iter()
+        .chain(&release.pi4_generated_bundle_files)
+    {
+        if path.starts_with('/')
+            || Path::new(path)
+                .components()
+                .any(|part| matches!(part, std::path::Component::ParentDir))
+        {
+            bail!("Pi 4 release path must be relative and traversal-free: {path}");
+        }
+    }
     if !release
         .forbidden_paths
         .iter()
@@ -539,6 +566,7 @@ fn compile_release(
 
     let mut records = Vec::new();
     let mut expected = BTreeSet::new();
+    let mut expected_pi4 = BTreeSet::new();
     let release_class = surfaces
         .iter()
         .find(|record| record.id == "release:m26e-runtime")
@@ -646,8 +674,52 @@ fn compile_release(
         )?;
     }
 
+    for source in &release.public_documents {
+        let destination = release_destination("public_document", source, &release.version)?;
+        if !expected_pi4.insert(destination.clone()) {
+            bail!("duplicate Pi 4 release bundle destination: {destination}");
+        }
+    }
+    for source in &release.support_files {
+        if source != "LICENSE.txt" && source != &expected_notes {
+            continue;
+        }
+        let destination = release_destination("support_file", source, &release.version)?;
+        if !expected_pi4.insert(destination.clone()) {
+            bail!("duplicate Pi 4 release bundle destination: {destination}");
+        }
+    }
+    if !release
+        .support_files
+        .iter()
+        .any(|path| path == "LICENSE.txt")
+    {
+        bail!("release support_files must select LICENSE.txt for the Pi 4 bundle");
+    }
+    for destination in &release.pi4_generated_bundle_files {
+        if !expected_pi4.insert(destination.clone()) {
+            bail!("duplicate Pi 4 release bundle destination: {destination}");
+        }
+        if records.iter().any(|record| record.path == *destination) {
+            continue;
+        }
+        let production = destination.starts_with("image/");
+        let classification = if production {
+            release_class.clone()
+        } else {
+            generated_release_classification(milestone, "generated_release_metadata", false)
+        };
+        records.push(SurfaceRecord {
+            id: format!("release-asset:{destination}"),
+            kind: "pi4_generated_bundle_file".to_owned(),
+            path: destination.clone(),
+            classification,
+        });
+    }
+
     records.sort_by(|a, b| a.id.cmp(&b.id));
     release.expected_bundle_files = expected.into_iter().collect();
+    release.expected_pi4_bundle_files = expected_pi4.into_iter().collect();
     release.asset_records = records;
     Ok(release)
 }

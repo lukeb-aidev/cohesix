@@ -152,6 +152,65 @@ requires otherwise. The console and gateway do not provide transport-layer TLS;
 use an authenticated tunnel, VPN, or TLS-terminating reverse proxy for remote
 access.
 
+## Release factory
+
+Milestone 26e release creation uses the primary source host for the pinned QEMU
+and Pi build inputs, and one explicitly selected remote Linux ARM64 builder for
+Linux host binaries and final Linux archive compression. The remote host must be
+prepared in advance; the release path does not install packages, add apt
+repositories, or infer a builder from a machine name. This is especially
+important on Jetson systems, where generic desktop NVIDIA development packages
+can conflict with the board-managed runtime.
+
+First validate the compiler-selected QEMU inputs, Python package, macOS host
+tools, and exact canonical Pi SD stage without mutating a release:
+
+```bash
+scripts/release_bundle.sh --check-manifest \
+  --pi4-stage-dir <local-pi4-stage>
+```
+
+To create peer MacOS, Linux, and Pi4 bundles, provide every
+environment-specific builder and output location explicitly:
+
+```bash
+scripts/release_bundle.sh \
+  --name <release-name> \
+  --version <inventory-version> \
+  --force \
+  --linux \
+  --pi4-stage-dir <local-pi4-stage> \
+  --linux-builder-host <host> \
+  --linux-builder-user <user> \
+  --linux-builder-build-dir <remote-build-root> \
+  --linux-builder-release-dir <remote-release-root> \
+  --linux-builder-cargo <remote-cargo-path> \
+  --linux-builder-cargo-home <remote-cargo-cache> \
+  --linux-builder-max-glibc <major.minor> \
+  --linux-host-tools-dir <local-linux-tools-dir> \
+  --linux-host-tools-manifest <local-provenance-json>
+```
+
+Add `--linux-builder-key <path>` only when normal SSH agent/config
+authentication is insufficient. An NVMe-backed builder is selected by passing
+NVMe-backed build and release roots; no NVMe, host, user, home, cargo, or key
+location is embedded in either release script.
+
+The compiler inventory names every file under the accepted Pi SD stage. The
+release gate verifies the primary/fallback sealed image pair and its current
+source identity, rejects stage-set drift, and builds a separate peer
+`<release-name>-Pi4/` folder and archive beside `<release-name>-MacOS/` and
+`<release-name>-linux/`. The Pi bundle contains a compact raw MBR/FAT32 image,
+its SHA-256 sidecar, layout/provenance metadata, release documentation, and its
+own exact manifest. Image capacity is derived from the selected payload rather
+than from a physical card. The metadata records `minimum_target_bytes`; the
+image works on any SD card at least that large, with additional card capacity
+left unallocated and no filesystem expansion required for boot. This is a
+flash payload and build/provenance artifact, not whole-media readback or Pi
+hardware acceptance; follow
+[HARDWARE_BRINGUP.md](HARDWARE_BRINGUP.md) for destructive media operations and
+fresh physical proof.
+
 ## Tool catalog
 
 The source commands below use `cargo run -p <package> -- ...`. Release bundles

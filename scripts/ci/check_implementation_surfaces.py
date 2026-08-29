@@ -531,14 +531,13 @@ def validate_release_manifest(payload: dict[str, Any]) -> list[str]:
 
     errors: list[str] = []
     release = payload.get("release", {})
-    if release.get("schema") != "cohesix-runtime-release-manifest/v1":
-        errors.append("release schema must be cohesix-runtime-release-manifest/v1")
+    if release.get("schema") != "cohesix-runtime-release-manifest/v2":
+        errors.append("release schema must be cohesix-runtime-release-manifest/v2")
     version = release.get("version")
     if not isinstance(version, str) or not version:
         errors.append("release.version must be non-empty")
         version = ""
-    all_paths: list[str] = []
-    for key in (
+    host_keys = (
         "host_tools",
         "target_images",
         "generated_configs",
@@ -552,18 +551,27 @@ def validate_release_manifest(payload: dict[str, Any]) -> list[str]:
         "ui_assets",
         "support_files",
         "generated_bundle_files",
-    ):
+    )
+    host_paths: list[str] = []
+    for key in host_keys:
         values = release.get(key)
         if not isinstance(values, list) or not values:
             errors.append(f"release.{key} must be a non-empty exact path list")
             continue
-        all_paths.extend(str(value) for value in values)
+        host_paths.extend(str(value) for value in values)
+    for key in ("pi4_stage_files", "pi4_generated_bundle_files"):
+        values = release.get(key)
+        if not isinstance(values, list) or not values:
+            errors.append(f"release.{key} must be a non-empty exact path list")
+            continue
+        if len(values) != len(set(values)):
+            errors.append(f"release.{key} contains duplicate paths")
     migrations = release.get("versioned_migrations")
     if not isinstance(migrations, list):
         errors.append("release.versioned_migrations must be an exact path list")
         migrations = []
-    all_paths.extend(str(value) for value in migrations)
-    if len(all_paths) != len(set(all_paths)):
+    host_paths.extend(str(value) for value in migrations)
+    if len(host_paths) != len(set(host_paths)):
         errors.append("release manifest contains duplicate selected paths")
     forbidden = set(release.get("forbidden_paths", []))
     required_forbidden = {
@@ -577,7 +585,7 @@ def validate_release_manifest(payload: dict[str, Any]) -> list[str]:
             "release manifest missing forbidden paths: "
             f"{sorted(required_forbidden.difference(forbidden))}"
         )
-    overlap = sorted(set(all_paths).intersection(forbidden))
+    overlap = sorted(set(host_paths).intersection(forbidden))
     if overlap:
         errors.append(f"release selects forbidden paths: {overlap}")
     expected_notes = f"releases/RELEASE_NOTES-{version}.md"
@@ -631,10 +639,28 @@ def validate_release_manifest(payload: dict[str, Any]) -> list[str]:
         errors.append("release bundle destinations are not unique")
     if release.get("expected_bundle_files") != sorted(expected_files):
         errors.append("release.expected_bundle_files drift from selected sources")
+    expected_pi4_files = [
+        destination("public_documents", str(source))
+        for source in release.get("public_documents", [])
+    ]
+    expected_pi4_files.extend(
+        destination("support_files", str(source))
+        for source in release.get("support_files", [])
+        if source in ("LICENSE.txt", expected_notes)
+    )
+    expected_pi4_files.extend(
+        str(path) for path in release.get("pi4_generated_bundle_files", [])
+    )
+    if len(expected_pi4_files) != len(set(expected_pi4_files)):
+        errors.append("Pi 4 release bundle destinations are not unique")
+    if release.get("expected_pi4_bundle_files") != sorted(expected_pi4_files):
+        errors.append(
+            "release.expected_pi4_bundle_files drift from selected sources"
+        )
     record_paths = sorted(
         str(record.get("path")) for record in release.get("asset_records", [])
     )
-    if record_paths != sorted(expected_files):
+    if record_paths != sorted(set(expected_files).union(expected_pi4_files)):
         errors.append("release asset classification rows drift from exact bundle files")
     return errors
 

@@ -671,10 +671,34 @@ path = "scripts/release_bundle.sh"
 class = "production_live"
 owner = "release-tooling"
 production_reachable = true
-selection_source = "cohesix-runtime-release-manifest/v1 below"
+selection_source = "cohesix-runtime-release-manifest/v2 below"
 package_disposition = "exact_manifest_only"
 evidence_requirement = "kind architecture hash and unexpected-file checks"
 current_observed_mode = "manifest_validated_release_builder"
+
+[[surfaces]]
+id = "release:m26e-linux-builder"
+kind = "package_release_asset"
+path = "scripts/linux_host_tools_sync.sh"
+class = "production_live"
+owner = "release-tooling"
+production_reachable = true
+selection_source = "argument-selected remote ARM64 release builder"
+package_disposition = "release_factory_tool_not_bundled"
+evidence_requirement = "source host architecture GLIBC hash and archive provenance checks"
+current_observed_mode = "remote_linux_tool_and_archive_builder"
+
+[[surfaces]]
+id = "release:m26e-pi4-image"
+kind = "package_release_asset"
+path = "scripts/pi4_release_image.sh"
+class = "production_live"
+owner = "release-tooling"
+production_reachable = true
+selection_source = "cohesix-runtime-release-manifest/v2 exact Pi 4 stage"
+package_disposition = "release_factory_tool_not_bundled"
+evidence_requirement = "MBR FAT32 exact embedded payload hash and minimum target capacity checks"
+current_observed_mode = "portable_pi4_raw_image_builder"
 
 [[surfaces]]
 id = "contract:driver-runtime-classic-comparator"
@@ -1411,7 +1435,7 @@ expected_artifacts = [
 ]
 
 [release]
-schema = "cohesix-runtime-release-manifest/v1"
+schema = "cohesix-runtime-release-manifest/v2"
 version = "0.1.0-alpha1"
 host_tools = [
   "bin/cas-tool",
@@ -1430,6 +1454,35 @@ target_images = [
   "image/kernel.elf",
   "image/manifest.json",
   "image/rootserver",
+]
+pi4_stage_files = [
+  "bcm2711-rpi-4-b.dtb",
+  "boot.bmp",
+  "boot.cmd",
+  "boot.scr.uimg",
+  "brcmfmac-dyndbg.cmdline",
+  "brcmfmac-dyndbg.sh",
+  "cohesix-composition-CMakeCache.txt",
+  "cohesix-composition-platform_gen.h",
+  "cohesix-composition-profile-build-inputs.json",
+  "cohesix-driver-runtimes.cpio",
+  "cohesix-driver-runtimes.cpio.uimg",
+  "cohesix-image-arm-bcm2711",
+  "cohesix-logo.bmp",
+  "cohesix-root-task-resolved.json",
+  "cohesix-root-task-topology.json",
+  "cohesix-sel4-profile-build-inputs.json",
+  "cohesix-sel4-profile-tree-state.sha256",
+  "cohesix_boot_state.txt",
+  "config.txt",
+  "fixup4.dat",
+  "overlays/miniuart-bt.dtbo",
+  "overlays/upstream-pi4.dtbo",
+  "pi4-image-identity.json",
+  "pi4-runtime-dma-proof.env",
+  "sel4test-driver-image-arm-bcm2711",
+  "start4.elf",
+  "u-boot.bin",
 ]
 generated_configs = [
   "configs/generated/cas_manifest_template.json",
@@ -1628,6 +1681,14 @@ generated_bundle_files = [
   "cas/max_chunks_v1.txt.sha256",
   "traces/trace_v0.hive.cbor.sha256",
   "traces/trace_v0.trace.sha256",
+]
+
+pi4_generated_bundle_files = [
+  "MANIFEST.sha256",
+  "VERSION.txt",
+  "image/cohesix-pi4-sd.img",
+  "image/cohesix-pi4-sd.img.sha256",
+  "image/cohesix-pi4-sd.json",
 ]
 
 forbidden_paths = [

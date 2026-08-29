@@ -143,10 +143,11 @@ const MARKER: &str = "LORA_EXPORT_FIXTURE_ADMISSION";
 
     def test_release_guard_rejects_expected_file_set_drift(self) -> None:
         release = {
-            "schema": "cohesix-runtime-release-manifest/v1",
+            "schema": "cohesix-runtime-release-manifest/v2",
             "version": "0.1.0-alpha1",
             "host_tools": ["bin/coh"],
             "target_images": ["image/kernel.elf"],
+            "pi4_stage_files": ["config.txt"],
             "generated_configs": ["configs/generated/root_task_resolved.json"],
             "public_documents": ["docs/QUICKSTART.md"],
             "host_assets": ["resources/keys/cas_verification_key.hex"],
@@ -163,6 +164,11 @@ const MARKER: &str = "LORA_EXPORT_FIXTURE_ADMISSION";
             ],
             "versioned_migrations": [],
             "generated_bundle_files": ["MANIFEST.sha256"],
+            "pi4_generated_bundle_files": [
+                "MANIFEST.sha256",
+                "VERSION.txt",
+                "image/cohesix-pi4-sd.img",
+            ],
             "forbidden_paths": [
                 "bin/coh-status",
                 "bin/nine-door",
@@ -170,6 +176,7 @@ const MARKER: &str = "LORA_EXPORT_FIXTURE_ADMISSION";
                 "resources/fixtures/cas_signing_key.hex",
             ],
             "expected_bundle_files": [],
+            "expected_pi4_bundle_files": [],
             "asset_records": [],
         }
         errors = SURFACES.validate_release_manifest({"release": release})

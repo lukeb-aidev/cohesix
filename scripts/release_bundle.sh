@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Author: Lukas Bower
-# Purpose: Assemble a Cohesix alpha release bundle under releases/ and emit a tarball.
+# Purpose: Assemble exact Cohesix runtime bundles, including QEMU and Raspberry Pi 4 artifacts.
 # Copyright 2026 Lukas Bower
 
 set -euo pipefail
@@ -9,8 +9,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 RELEASES_DIR="${ROOT_DIR}/releases"
 
-RELEASE_NAME="${RELEASE_NAME:-Cohesix-0.1-Alpha}"
-RELEASE_VERSION="${RELEASE_VERSION:-0.1.0-alpha1}"
+RELEASE_NAME=""
+RELEASE_VERSION=""
 FORCE=0
 LINUX_BUNDLE=0
 LINUX_ONLY=0
@@ -22,14 +22,17 @@ WORKER_ROOT_QEMU_EVIDENCE=""
 WORKER_ROOT_PI4_EVIDENCE=""
 WORKER_SYSTEM_QEMU_EVIDENCE=""
 WORKER_SYSTEM_PI4_EVIDENCE=""
-LINUX_HOST_TARGET="${LINUX_HOST_TARGET:-aarch64-unknown-linux-gnu}"
-LINUX_HOST_TOOLS_DIR="${LINUX_HOST_TOOLS_DIR:-}"
-LINUX_SYNC_HOST="${LINUX_SYNC_HOST:-${COHESIX_SYNC_HOST:-}}"
-LINUX_SYNC_USER="${LINUX_SYNC_USER:-${COHESIX_SYNC_USER:-ubuntu}}"
-LINUX_SYNC_KEY="${LINUX_SYNC_KEY:-${COHESIX_SYNC_KEY:-}}"
-LINUX_SYNC_REMOTE_DIR="${LINUX_SYNC_REMOTE_DIR:-${COHESIX_SYNC_REMOTE_DIR:-}}"
-LINUX_SYNC_LOCAL_OUT="${LINUX_SYNC_LOCAL_OUT:-${COHESIX_SYNC_LOCAL_OUT:-}}"
-HOST_TOOLS_PROFILE="${HOST_TOOLS_PROFILE:-release}"
+LINUX_HOST_TOOLS_DIR=""
+LINUX_HOST_TOOLS_MANIFEST=""
+LINUX_BUILDER_HOST=""
+LINUX_BUILDER_USER=""
+LINUX_BUILDER_KEY=""
+LINUX_BUILDER_BUILD_DIR=""
+LINUX_BUILDER_RELEASE_DIR=""
+LINUX_BUILDER_CARGO=""
+LINUX_BUILDER_CARGO_HOME=""
+LINUX_BUILDER_MAX_GLIBC=""
+PI4_STAGE_DIR=""
 SEL4_BUILD_DIR="${SEL4_BUILD_DIR:-${ROOT_DIR}/out/sel4/profile-v2/qemu-smp-production}"
 IMPLEMENTATION_SURFACE_INVENTORY="${IMPLEMENTATION_SURFACE_INVENTORY:-${ROOT_DIR}/configs/generated/implementation_surface_inventory.json}"
 PYTHON_WHEEL_DIR="${PYTHON_WHEEL_DIR:-${ROOT_DIR}/out/python-wheels}"
@@ -40,30 +43,43 @@ usage() {
 Usage: scripts/release_bundle.sh [release options] [--check-manifest]
        scripts/release_bundle.sh --verify-worker-acceptance <six evidence paths>
 
-Assembles a release bundle from out/cohesix into releases/<release-name> and
-creates releases/<release-name>.tar.gz.
+Assembles peer releases/<release-name>-MacOS and
+releases/<release-name>-Pi4 bundles and archives. With --linux, it also creates
+the peer releases/<release-name>-linux bundle and archive.
 
-With --linux, also builds (or uses) Linux host tools and emits
-releases/<release-name>-linux.tar.gz. Use --linux-only to emit only the Linux bundle.
+With --linux, builds Linux ARM64 host tools and the final Linux release tarball
+on the explicitly selected remote builder. Use --linux-only to omit macOS.
+
+Release options:
+  --name <name>                       Required when creating bundles
+  --version <version>                 Defaults to the compiler inventory version
+  --force                             Replace the selected output bundle(s)
+  --linux                             Also create the remote-built Linux bundle
+  --linux-only                        Create only the remote-built Linux bundle
+  --pi4-stage-dir <path>              Exact canonical Pi 4 SD staging directory
+
+Remote Linux builder options (all required with --linux except --key):
+  --linux-builder-host <host>         SSH hostname or address
+  --linux-builder-user <user>         SSH username
+  --linux-builder-key <path>          Optional SSH key; omit for SSH agent/config auth
+  --linux-builder-build-dir <path>    Remote source/target/staging root
+  --linux-builder-release-dir <path>  Remote directory retaining the release tarball
+  --linux-builder-cargo <path>        Absolute remote cargo executable
+  --linux-builder-cargo-home <path>   Remote Cargo registry/cache directory
+  --linux-builder-max-glibc <x.y>     Maximum permitted GLIBC symbol version
+  --linux-host-tools-dir <path>       Local destination for downloaded host tools
+  --linux-host-tools-manifest <path>  Local destination for build provenance JSON
 
 Env overrides:
-  RELEASE_NAME, RELEASE_VERSION
   SEL4_BUILD_DIR (defaults to $REPO/out/sel4/profile-v2/qemu-smp-production;
                   the selected tree must pass qemu_smp_production release validation)
-  LINUX_HOST_TARGET (default: aarch64-unknown-linux-gnu)
-  LINUX_HOST_TOOLS_DIR (prebuilt host tools dir; if empty, build from source)
-  LINUX_SYNC_HOST (if set, run scripts/linux_host_tools_sync.sh before bundling)
-  LINUX_SYNC_USER (default: ubuntu)
-  LINUX_SYNC_KEY (required when LINUX_SYNC_HOST is set; optional SSH key path)
-  LINUX_SYNC_REMOTE_DIR (optional remote work dir)
-  LINUX_SYNC_LOCAL_OUT (optional local host-tools dir)
-  COHESIX_SYNC_HOST/USER/KEY/REMOTE_DIR/LOCAL_OUT (aliases for LINUX_SYNC_*; use these to avoid hardcoded host/key names)
-  HOST_TOOLS_PROFILE (default: release)
   IMPLEMENTATION_SURFACE_INVENTORY (defaults to the canonical generated inventory;
                                     intended only for non-mutating pre-regeneration validation)
   PYTHON_WHEEL_DIR (defaults to out/python-wheels; must contain one target-neutral wheel)
   PYTHON_PACKAGE_MANIFEST (defaults to out/python-compat/m26e-python-package.json)
-  ALLOW_CROSS_LINUX_HOST_TOOLS=1 (override host-target guard for cross builds)
+
+Remote builder environment locations are never inferred from hostnames or users
+and have no embedded Jetson/NVMe defaults; they must be supplied as arguments.
 
 --check-manifest validates the exact compiler-generated release input set and
 exits without creating, replacing, or deleting a release bundle.
@@ -100,6 +116,61 @@ while [[ $# -gt 0 ]]; do
       LINUX_BUNDLE=1
       LINUX_ONLY=1
       shift
+      ;;
+    --pi4-stage-dir)
+      [[ $# -ge 2 ]] || { echo "--pi4-stage-dir requires a path" >&2; exit 1; }
+      PI4_STAGE_DIR="$2"
+      shift 2
+      ;;
+    --linux-builder-host)
+      [[ $# -ge 2 ]] || { echo "--linux-builder-host requires a value" >&2; exit 1; }
+      LINUX_BUILDER_HOST="$2"
+      shift 2
+      ;;
+    --linux-builder-user)
+      [[ $# -ge 2 ]] || { echo "--linux-builder-user requires a value" >&2; exit 1; }
+      LINUX_BUILDER_USER="$2"
+      shift 2
+      ;;
+    --linux-builder-key)
+      [[ $# -ge 2 ]] || { echo "--linux-builder-key requires a path" >&2; exit 1; }
+      LINUX_BUILDER_KEY="$2"
+      shift 2
+      ;;
+    --linux-builder-build-dir)
+      [[ $# -ge 2 ]] || { echo "--linux-builder-build-dir requires a path" >&2; exit 1; }
+      LINUX_BUILDER_BUILD_DIR="$2"
+      shift 2
+      ;;
+    --linux-builder-release-dir)
+      [[ $# -ge 2 ]] || { echo "--linux-builder-release-dir requires a path" >&2; exit 1; }
+      LINUX_BUILDER_RELEASE_DIR="$2"
+      shift 2
+      ;;
+    --linux-builder-cargo)
+      [[ $# -ge 2 ]] || { echo "--linux-builder-cargo requires a path" >&2; exit 1; }
+      LINUX_BUILDER_CARGO="$2"
+      shift 2
+      ;;
+    --linux-builder-cargo-home)
+      [[ $# -ge 2 ]] || { echo "--linux-builder-cargo-home requires a path" >&2; exit 1; }
+      LINUX_BUILDER_CARGO_HOME="$2"
+      shift 2
+      ;;
+    --linux-builder-max-glibc)
+      [[ $# -ge 2 ]] || { echo "--linux-builder-max-glibc requires a value" >&2; exit 1; }
+      LINUX_BUILDER_MAX_GLIBC="$2"
+      shift 2
+      ;;
+    --linux-host-tools-dir)
+      [[ $# -ge 2 ]] || { echo "--linux-host-tools-dir requires a path" >&2; exit 1; }
+      LINUX_HOST_TOOLS_DIR="$2"
+      shift 2
+      ;;
+    --linux-host-tools-manifest)
+      [[ $# -ge 2 ]] || { echo "--linux-host-tools-manifest requires a path" >&2; exit 1; }
+      LINUX_HOST_TOOLS_MANIFEST="$2"
+      shift 2
       ;;
     --check-manifest)
       CHECK_MANIFEST=1
@@ -186,9 +257,9 @@ OUT_DIR="${ROOT_DIR}/out/cohesix"
 STAGING_DIR="${OUT_DIR}/staging"
 GENERATED_CONFIG_DIR="${ROOT_DIR}/configs/generated"
 DEFAULT_HOST_TOOLS_DIR="${OUT_DIR}/host-tools"
-LINUX_HOST_TOOLS_DIR="${LINUX_HOST_TOOLS_DIR:-${OUT_DIR}/host-tools-linux}"
-MACOS_BUNDLE_NAME="${RELEASE_NAME}-MacOS"
-LINUX_BUNDLE_NAME="${RELEASE_NAME}-linux"
+MACOS_BUNDLE_NAME=""
+LINUX_BUNDLE_NAME=""
+PI4_BUNDLE_NAME=""
 
 fail() {
   echo "$1" >&2
@@ -252,6 +323,7 @@ validate_python_package_inputs() {
   python3 - \
     "$PYTHON_PACKAGE_MANIFEST" \
     "$wheel" \
+    "$(release_inventory_path)" \
     "${ROOT_DIR}/configs/generated/cohesix_python_qemu_smp_production.json" \
     "${ROOT_DIR}/configs/generated/cohesix_python_pi4_production.json" <<'PY'
 import hashlib
@@ -259,7 +331,7 @@ import json
 from pathlib import Path
 import sys
 
-manifest_path, wheel, qemu, pi4 = map(Path, sys.argv[1:])
+manifest_path, wheel, inventory_path, qemu, pi4 = map(Path, sys.argv[1:])
 
 def digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
@@ -270,7 +342,15 @@ if manifest.get("schema") != "cohesix-python-package/v1":
 wheel_record = manifest.get("wheel", {})
 if wheel_record.get("filename") != wheel.name or wheel_record.get("sha256") != digest(wheel):
     raise SystemExit("release Python wheel differs from its package manifest")
-if wheel.name != "cohesix-0.2.0a2-py3-none-any.whl":
+inventory = json.loads(inventory_path.read_text(encoding="utf-8"))
+wheel_destinations = [
+    path
+    for path in inventory.get("release", {}).get("generated_bundle_files", [])
+    if path.startswith("python/dist/") and path.endswith(".whl")
+]
+if len(wheel_destinations) != 1:
+    raise SystemExit("compiler inventory must select exactly one Python wheel")
+if wheel.name != Path(wheel_destinations[0]).name:
     raise SystemExit(f"release Python wheel name is not inventory-selected: {wheel.name}")
 contracts = manifest.get("profile_contracts", {})
 for target, path in (("qemu", qemu), ("pi4", pi4)):
@@ -310,32 +390,20 @@ validate_release_inventory_inputs() {
 
   INVENTORY_PATH="$inventory" \
   ROOT_DIR="$ROOT_DIR" \
-  HOST_TOOLS_DIR="$DEFAULT_HOST_TOOLS_DIR" \
   STAGING_DIR="$STAGING_DIR" \
   OUT_DIR="$OUT_DIR" \
+  PI4_STAGE_DIR="$PI4_STAGE_DIR" \
   python3 - <<'PY'
 import json
 import os
 from pathlib import Path
-import subprocess
 
 inventory = json.loads(Path(os.environ["INVENTORY_PATH"]).read_text(encoding="utf-8"))
 release = inventory["release"]
 root = Path(os.environ["ROOT_DIR"])
-host_root = Path(os.environ["HOST_TOOLS_DIR"])
 staging = Path(os.environ["STAGING_DIR"])
 out = Path(os.environ["OUT_DIR"])
-
-expected_host = {Path(path).name for path in release["host_tools"]}
-if not host_root.is_dir():
-    raise SystemExit(f"host tools directory missing: {host_root}")
-actual_host = {path.name for path in host_root.iterdir() if path.is_file()}
-if actual_host != expected_host:
-    raise SystemExit(
-        "host tool set drift: "
-        f"missing={sorted(expected_host - actual_host)} "
-        f"unexpected={sorted(actual_host - expected_host)}"
-    )
+pi4_stage = Path(os.environ["PI4_STAGE_DIR"])
 
 generated_root = root / "configs/generated"
 expected_generated = {Path(path).name for path in release["generated_configs"]}
@@ -377,23 +445,30 @@ for destination in release["target_images"]:
     if destination == "image/gic-version.txt":
         continue
     source = image_sources.get(destination)
-    if source is None or not source.is_file():
+    if source is None or not source.is_file() or source.is_symlink():
         raise SystemExit(f"target image source missing for {destination}: {source}")
+
+expected_pi4 = set(release["pi4_stage_files"])
+actual_pi4 = {
+    path.relative_to(pi4_stage).as_posix()
+    for path in pi4_stage.rglob("*")
+    if path.is_file() and not path.is_symlink()
+}
+if actual_pi4 != expected_pi4:
+    raise SystemExit(
+        "Pi 4 SD staging set drift: "
+        f"missing={sorted(expected_pi4 - actual_pi4)} "
+        f"unexpected={sorted(actual_pi4 - expected_pi4)}"
+    )
+if any(path.is_symlink() for path in pi4_stage.rglob("*")):
+    raise SystemExit("Pi 4 SD staging set must not contain symlinks")
 
 for relative in release["forbidden_paths"]:
     if relative in release["host_tools"] or relative in release["target_images"]:
         raise SystemExit(f"forbidden release path is selected: {relative}")
-
-for binary in sorted(host_root / name for name in expected_host):
-    description = subprocess.run(
-        ["file", "-b", str(binary)],
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.lower()
-    if "arm64" not in description and "aarch64" not in description:
-        raise SystemExit(f"wrong host-tool architecture for {binary}: {description.strip()}")
 PY
+
+  validate_pi4_stage_identity
 
   local gic_config="${SEL4_BUILD_DIR}/kernel/gen_config/kernel/gen_config.h"
   require_file "$gic_config"
@@ -401,6 +476,155 @@ PY
   gic_version="$("${ROOT_DIR}/scripts/lib/detect_gic_version.py" "$gic_config")"
   [[ "$gic_version" == "3" ]] || fail \
     "runtime release requires QEMU GICv3; selected kernel reports GIC${gic_version}"
+}
+
+validate_pi4_stage_identity() {
+  require_dir "$PI4_STAGE_DIR"
+  local primary="${PI4_STAGE_DIR}/cohesix-image-arm-bcm2711"
+  local fallback="${PI4_STAGE_DIR}/sel4test-driver-image-arm-bcm2711"
+  local metadata="${PI4_STAGE_DIR}/pi4-image-identity.json"
+  require_file "$primary"
+  require_file "$fallback"
+  require_file "$metadata"
+  cmp -s "$primary" "$fallback" || \
+    fail "Pi 4 primary and fallback staged images differ"
+
+  python3 - \
+    "$ROOT_DIR" \
+    "$primary" \
+    "$metadata" \
+    "${ROOT_DIR}/scripts/pi4_image_identity.py" <<'PY'
+from pathlib import Path
+import json
+import subprocess
+import sys
+
+root, image, metadata_path, verifier = map(Path, sys.argv[1:])
+head = subprocess.run(
+    ["git", "-C", str(root), "rev-parse", "--verify", "HEAD"],
+    check=True,
+    capture_output=True,
+    text=True,
+).stdout.strip()
+metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+if metadata.get("schema") != "cohesix-pi4-image-identity/v2":
+    raise SystemExit("Pi 4 image identity schema is invalid")
+if metadata.get("git_commit") != head or metadata.get("source_tree_clean") is not True:
+    raise SystemExit("Pi 4 SD image is not bound to the current clean source commit")
+observed = json.loads(
+    subprocess.run(
+        [sys.executable, str(verifier), "verify", "--image", str(image)],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+)
+for field in (
+    "build_marker",
+    "build_marker_sha256",
+    "build_timestamp",
+    "embedded_git_commit",
+    "image_id",
+    "image_sha256",
+    "size_bytes",
+    "uimage_data_crc32",
+    "uimage_header_crc32",
+):
+    if metadata.get(field) != observed.get(field):
+        raise SystemExit(f"Pi 4 image identity mismatch: {field}")
+if not head.startswith(str(metadata.get("embedded_git_commit", ""))):
+    raise SystemExit("Pi 4 image build marker does not identify the current commit")
+PY
+}
+
+validate_host_tools_inputs() {
+  local host_tools_dir="$1"
+  local platform="$2"
+  local provenance="${3:-}"
+  require_dir "$host_tools_dir"
+
+  INVENTORY_PATH="$(release_inventory_path)" \
+  HOST_TOOLS_DIR="$host_tools_dir" \
+  HOST_PLATFORM="$platform" \
+  HOST_PROVENANCE="$provenance" \
+  REPO_HEAD="$(git -C "$ROOT_DIR" rev-parse --verify HEAD)" \
+  EXPECTED_MAX_GLIBC="$LINUX_BUILDER_MAX_GLIBC" \
+  python3 - <<'PY'
+from pathlib import Path
+import hashlib
+import json
+import os
+import subprocess
+
+inventory = json.loads(Path(os.environ["INVENTORY_PATH"]).read_text(encoding="utf-8"))
+expected = {Path(path).name for path in inventory["release"]["host_tools"]}
+root = Path(os.environ["HOST_TOOLS_DIR"])
+platform = os.environ["HOST_PLATFORM"]
+actual = {path.name for path in root.iterdir() if path.is_file() and not path.is_symlink()}
+if actual != expected:
+    raise SystemExit(
+        "host tool set drift: "
+        f"missing={sorted(expected - actual)} unexpected={sorted(actual - expected)}"
+    )
+if any(not path.is_file() or path.is_symlink() for path in root.iterdir()):
+    raise SystemExit("host tool directory contains non-regular entries")
+
+descriptions: dict[str, str] = {}
+for name in sorted(expected):
+    binary = root / name
+    description = subprocess.run(
+        ["file", "-b", str(binary)],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    descriptions[name] = description
+    lowered = description.lower()
+    if platform == "macos":
+        if "mach-o" not in lowered or "arm64" not in lowered:
+            raise SystemExit(f"wrong macOS ARM64 host tool: {binary}: {description}")
+    elif platform == "linux":
+        if "elf" not in lowered or not ("aarch64" in lowered or "arm aarch64" in lowered):
+            raise SystemExit(f"wrong Linux ARM64 host tool: {binary}: {description}")
+    else:
+        raise SystemExit(f"unknown host-tool platform: {platform}")
+
+if platform == "linux":
+    provenance_path = Path(os.environ["HOST_PROVENANCE"])
+    if not provenance_path.is_file() or provenance_path.is_symlink():
+        raise SystemExit(f"Linux host-tool provenance missing: {provenance_path}")
+    manifest = json.loads(provenance_path.read_text(encoding="utf-8"))
+    if manifest.get("schema") != "cohesix-linux-host-tools-build/v1":
+        raise SystemExit("Linux host-tool provenance schema is invalid")
+    if manifest.get("source_tree_clean") is not True:
+        raise SystemExit("Linux host tools were not built from a clean source tree")
+    builder = manifest.get("builder", {})
+    if builder.get("source_commit") != os.environ["REPO_HEAD"]:
+        raise SystemExit("Linux host tools were built from a different source commit")
+    if builder.get("architecture") not in {"aarch64", "arm64"}:
+        raise SystemExit("Linux host-tool provenance has the wrong architecture")
+    if builder.get("rustc_host") != "aarch64-unknown-linux-gnu":
+        raise SystemExit("Linux host-tool provenance has the wrong Rust host")
+    if builder.get("max_glibc_version") != os.environ["EXPECTED_MAX_GLIBC"]:
+        raise SystemExit("Linux host-tool provenance has the wrong GLIBC ceiling")
+    records = manifest.get("artifacts", [])
+    by_name = {
+        record.get("filename"): record
+        for record in records
+        if isinstance(record, dict) and isinstance(record.get("filename"), str)
+    }
+    if set(by_name) != expected or len(records) != len(expected):
+        raise SystemExit("Linux host-tool provenance artifact set drift")
+    for name in sorted(expected):
+        path = root / name
+        record = by_name[name]
+        if record.get("sha256") != hashlib.sha256(path.read_bytes()).hexdigest():
+            raise SystemExit(f"Linux host-tool provenance digest mismatch: {name}")
+        if record.get("size_bytes") != path.stat().st_size:
+            raise SystemExit(f"Linux host-tool provenance size mismatch: {name}")
+        if record.get("file_description") != descriptions[name]:
+            raise SystemExit(f"Linux host-tool provenance file kind mismatch: {name}")
+PY
 }
 
 validate_release_sel4_profile() {
@@ -419,16 +643,6 @@ validate_release_sel4_profile() {
     || fail "release input does not satisfy qemu_smp_production"
 }
 
-purge_release_paths() {
-  local mac_dir="${RELEASES_DIR}/${MACOS_BUNDLE_NAME}"
-  local linux_dir="${RELEASES_DIR}/${LINUX_BUNDLE_NAME}"
-  local mac_tar="${RELEASES_DIR}/${MACOS_BUNDLE_NAME}.tar.gz"
-  local linux_tar="${RELEASES_DIR}/${LINUX_BUNDLE_NAME}.tar.gz"
-
-  rm -rf "$mac_dir" "$linux_dir"
-  rm -f "$mac_tar" "$linux_tar"
-}
-
 require_file() {
   local path="$1"
   if [[ ! -f "$path" ]]; then
@@ -443,94 +657,140 @@ require_dir() {
   fi
 }
 
-build_linux_host_tools() {
-  local target="$1"
-  local out_dir="$2"
-  local profile="$3"
+write_bundle_manifest() {
+  local bundle_dir="$1"
+  local expected_key="$2"
+  BUNDLE_DIR="$bundle_dir" \
+  EXPECTED_KEY="$expected_key" \
+  INVENTORY_PATH="$(release_inventory_path)" \
+  python3 - <<'PY'
+import hashlib
+import json
+import os
+from pathlib import Path
 
-  command -v cargo >/dev/null 2>&1 || fail "cargo is required to build Linux host tools"
-  command -v rustc >/dev/null 2>&1 || fail "rustc is required to build Linux host tools"
+bundle = Path(os.environ["BUNDLE_DIR"])
+inventory = json.loads(
+    Path(os.environ["INVENTORY_PATH"]).read_text(encoding="utf-8")
+)
+release = inventory["release"]
+expected_key = os.environ["EXPECTED_KEY"]
+expected = set(release[expected_key])
+manifest_relative = "MANIFEST.sha256"
+if manifest_relative not in expected:
+    raise SystemExit(
+        f"compiler release inventory {expected_key} omits MANIFEST.sha256"
+    )
 
-  local host_triple
-  host_triple="$(rustc -vV | awk '/host:/ {print $2}')"
-  if [[ "$host_triple" != "$target" && "${ALLOW_CROSS_LINUX_HOST_TOOLS:-0}" -ne 1 ]]; then
-    fail "Host target ${host_triple} does not match ${target}; build on Linux ${target} or set ALLOW_CROSS_LINUX_HOST_TOOLS=1"
-  fi
+actual_without_manifest = {
+    path.relative_to(bundle).as_posix()
+    for path in bundle.rglob("*")
+    if path.is_file() and path.relative_to(bundle).as_posix() != manifest_relative
+}
+expected_without_manifest = expected - {manifest_relative}
+if actual_without_manifest != expected_without_manifest:
+    raise SystemExit(
+        f"release bundle {expected_key} file-set drift before manifest: "
+        f"missing={sorted(expected_without_manifest - actual_without_manifest)} "
+        f"unexpected={sorted(actual_without_manifest - expected_without_manifest)}"
+    )
 
-  local profile_args=()
-  local profile_dir="$profile"
-  case "$profile" in
-    release)
-      profile_args=(--release)
-      profile_dir="release"
-      ;;
-    dev|debug)
-      profile_dir="debug"
-      ;;
-    *)
-      profile_args=(--profile "$profile")
-      ;;
-  esac
+lines = []
+for relative in sorted(actual_without_manifest):
+    digest = hashlib.sha256((bundle / relative).read_bytes()).hexdigest()
+    lines.append(f"{digest}  {relative}")
+(bundle / manifest_relative).write_text("\n".join(lines) + "\n", encoding="utf-8")
 
-  local host_packages=(gpu-bridge-host cas-tool swarmui hive-gateway host-ticket-agent)
-  local host_bins=(cohsh coh "${host_packages[@]}" host-sidecar-bridge)
-  local build_args=(build)
-  if (( ${#profile_args[@]} > 0 )); then
-    build_args+=("${profile_args[@]}")
-  fi
-  build_args+=(--target "$target")
-  for pkg in "${host_packages[@]}"; do
-    build_args+=(-p "$pkg")
-  done
+actual = {
+    path.relative_to(bundle).as_posix()
+    for path in bundle.rglob("*")
+    if path.is_file()
+}
+if actual != expected:
+    raise SystemExit(
+        f"release bundle {expected_key} exact file-set drift: "
+        f"missing={sorted(expected - actual)} "
+        f"unexpected={sorted(actual - expected)}"
+    )
+for forbidden in release["forbidden_paths"]:
+    if forbidden in actual:
+        raise SystemExit(f"forbidden release path present: {forbidden}")
+PY
+}
 
-  echo "[release] Building Linux host tools via: cargo ${build_args[*]}"
-  cargo "${build_args[@]}"
+rewrite_pi4_quickstart() {
+  local bundle_dir="$1"
+  BUNDLE_DIR="$bundle_dir" python3 - <<'PY'
+import os
+from pathlib import Path
 
-  local sidecar_args=(build)
-  if (( ${#profile_args[@]} > 0 )); then
-    sidecar_args+=("${profile_args[@]}")
-  fi
-  sidecar_args+=(--target "$target" -p host-sidecar-bridge --features tcp)
+bundle = Path(os.environ["BUNDLE_DIR"])
+readme = bundle / "README.md"
+text = readme.read_text(encoding="utf-8")
+text = text.replace("docs/QUICKSTART.md", "QUICKSTART.md")
+readme.write_text(text, encoding="utf-8")
 
-  echo "[release] Building Linux host-sidecar-bridge with TCP support via: cargo ${sidecar_args[*]}"
-  cargo "${sidecar_args[@]}"
+quickstart = bundle / "QUICKSTART.md"
+quickstart.write_text(
+    """<!-- Copyright 2026 Lukas Bower -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<!-- Purpose: Explain how to verify and flash the portable Cohesix Pi 4 release image. -->
+<!-- Author: Lukas Bower -->
 
-  local cohsh_args=(build)
-  if (( ${#profile_args[@]} > 0 )); then
-    cohsh_args+=("${profile_args[@]}")
-  fi
-  cohsh_args+=(--target "$target" -p cohsh --features tcp)
+# Cohesix Pi 4 release quickstart
 
-  echo "[release] Building Linux cohsh via: cargo ${cohsh_args[*]}"
-  cargo "${cohsh_args[@]}"
+The `image/cohesix-pi4-sd.img` file is a complete raw MBR/FAT32 boot image.
+Its compact size is derived from the release payload, not from the SD card used
+while building it. Read `image/cohesix-pi4-sd.json` and use only a card whose
+byte capacity is at least `minimum_target_bytes`. Any larger SD card works; the
+remaining capacity is intentionally left unallocated and no expansion is
+required for Cohesix to boot.
 
-  local coh_args=(build)
-  if (( ${#profile_args[@]} > 0 )); then
-    coh_args+=("${profile_args[@]}")
-  fi
-  coh_args+=(--target "$target" -p coh --features "fuse,nvml")
+Verify the release manifest and image digest before writing media:
 
-  echo "[release] Building Linux coh via: cargo ${coh_args[*]}"
-  cargo "${coh_args[@]}"
+```bash
+shasum -a 256 --check MANIFEST.sha256
+cd image
+shasum -a 256 --check cohesix-pi4-sd.img.sha256
+```
 
-  local artifact_dir="target/$target/$profile_dir"
-  [[ -d "$artifact_dir" ]] || fail "Cargo artefact directory not found: $artifact_dir"
+Writing the image destroys the selected card. Resolve the exact removable
+whole-disk device first and substitute it for `/dev/diskN` or `/dev/sdX`.
+Never copy these commands with an unresolved placeholder.
 
-  rm -rf "$out_dir"
-  mkdir -p "$out_dir"
-  for bin in "${host_bins[@]}"; do
-    local src="$artifact_dir/$bin"
-    [[ -f "$src" ]] || fail "Expected host tool not found: $src"
-    install -m 0755 "$src" "$out_dir/$bin"
-  done
+On macOS:
+
+```bash
+diskutil list external physical
+diskutil unmountDisk /dev/diskN
+sudo dd if=image/cohesix-pi4-sd.img of=/dev/rdiskN bs=4m
+sync
+diskutil eject /dev/diskN
+```
+
+On Linux:
+
+```bash
+lsblk --bytes --output NAME,SIZE,TYPE,TRAN,MODEL
+sudo umount /dev/sdX?*
+sudo dd if=image/cohesix-pi4-sd.img of=/dev/sdX bs=4M conv=fsync status=progress
+sudo eject /dev/sdX
+```
+
+This release image is packaging evidence. Flash/readback, a fresh boot, serial
+capture, networking, and performance remain separate Pi 4 acceptance evidence.
+""",
+    encoding="utf-8",
+)
+PY
 }
 
 bundle_release() {
   local bundle_name="$1"
   local host_tools_dir="$2"
-  local tarball_name="${3:-$bundle_name}"
+  local archive_mode="${3:-local}"
   local bundle_dir="${RELEASES_DIR}/${bundle_name}"
-  local tarball="${RELEASES_DIR}/${tarball_name}.tar.gz"
+  local tarball="${RELEASES_DIR}/${bundle_name}.tar.gz"
 
   require_dir "$host_tools_dir"
   if [[ -e "$bundle_dir" || -e "$tarball" ]]; then
@@ -561,11 +821,34 @@ bundle_release() {
   while IFS= read -r selected_path; do
     cp -p "${host_tools_dir}/${selected_path#bin/}" "${bundle_dir}/${selected_path}"
   done < <(release_inventory_values host_tools)
-  cp -p "${STAGING_DIR}/elfloader" "${bundle_dir}/image/elfloader"
-  cp -p "${STAGING_DIR}/kernel.elf" "${bundle_dir}/image/kernel.elf"
-  cp -p "${STAGING_DIR}/rootserver" "${bundle_dir}/image/rootserver"
-  cp -p "${OUT_DIR}/cohesix-system.cpio" "${bundle_dir}/image/cohesix-system.cpio"
-  cp -p "${STAGING_DIR}/cohesix/manifest.json" "${bundle_dir}/image/manifest.json"
+  while IFS= read -r selected_path; do
+    local source_path=""
+    case "$selected_path" in
+      image/gic-version.txt)
+        continue
+        ;;
+      image/elfloader)
+        source_path="${STAGING_DIR}/elfloader"
+        ;;
+      image/kernel.elf)
+        source_path="${STAGING_DIR}/kernel.elf"
+        ;;
+      image/rootserver)
+        source_path="${STAGING_DIR}/rootserver"
+        ;;
+      image/cohesix-system.cpio)
+        source_path="${OUT_DIR}/cohesix-system.cpio"
+        ;;
+      image/manifest.json)
+        source_path="${STAGING_DIR}/cohesix/manifest.json"
+        ;;
+      *)
+        fail "No release source mapping for target image: ${selected_path}"
+        ;;
+    esac
+    mkdir -p "$(dirname "${bundle_dir}/${selected_path}")"
+    cp -p "$source_path" "${bundle_dir}/${selected_path}"
+  done < <(release_inventory_values target_images)
   while IFS= read -r selected_path; do
     cp -p "${ROOT_DIR}/${selected_path}" "${bundle_dir}/${selected_path}"
   done < <(release_inventory_values generated_configs)
@@ -903,19 +1186,19 @@ echo "[qemu] Using QEMU CPU: ${QEMU_CPU_ARG}"
 EOF
   chmod +x "${bundle_dir}/qemu/run.sh"
   chmod +x "${bundle_dir}/scripts/setup_environment.sh"
-  RELEASE_NAME="$bundle_name" python3 - <<'PY'
+  BUNDLE_DIR="$bundle_dir" python3 - <<'PY'
 import hashlib
 import os
 from pathlib import Path
 
-release = os.environ["RELEASE_NAME"]
-trace = Path("releases") / release / "traces" / "trace_v0.trace"
+bundle = Path(os.environ["BUNDLE_DIR"])
+trace = bundle / "traces" / "trace_v0.trace"
 digest = hashlib.sha256(trace.read_bytes()).hexdigest()
 (trace.parent / "trace_v0.trace.sha256").write_text(digest + "\n", encoding="utf-8")
-hive = Path("releases") / release / "traces" / "trace_v0.hive.cbor"
+hive = bundle / "traces" / "trace_v0.hive.cbor"
 hive_digest = hashlib.sha256(hive.read_bytes()).hexdigest()
 (hive.parent / "trace_v0.hive.cbor.sha256").write_text(hive_digest + "\n", encoding="utf-8")
-cas_fixture = Path("releases") / release / "cas" / "max_chunks_v1.txt"
+cas_fixture = bundle / "cas" / "max_chunks_v1.txt"
 cas_fixture_digest = hashlib.sha256(cas_fixture.read_bytes()).hexdigest()
 (cas_fixture.parent / "max_chunks_v1.txt.sha256").write_text(
     cas_fixture_digest + "\n", encoding="utf-8"
@@ -973,63 +1256,86 @@ if gpu_nodes.exists():
     gpu_nodes.write_text(text, encoding="utf-8")
 PY
 
-  BUNDLE_DIR="${bundle_dir}" \
-  INVENTORY_PATH="$(release_inventory_path)" \
-  python3 - <<'PY'
-import hashlib
-import json
-import os
-from pathlib import Path
+  write_bundle_manifest "$bundle_dir" expected_bundle_files
 
-bundle = Path(os.environ["BUNDLE_DIR"])
-inventory = json.loads(
-    Path(os.environ["INVENTORY_PATH"]).read_text(encoding="utf-8")
-)
-release = inventory["release"]
-expected = set(release["expected_bundle_files"])
-manifest_relative = "MANIFEST.sha256"
-if manifest_relative not in expected:
-    raise SystemExit("compiler release inventory omits MANIFEST.sha256")
-
-actual_without_manifest = {
-    path.relative_to(bundle).as_posix()
-    for path in bundle.rglob("*")
-    if path.is_file() and path.relative_to(bundle).as_posix() != manifest_relative
-}
-expected_without_manifest = expected - {manifest_relative}
-if actual_without_manifest != expected_without_manifest:
-    raise SystemExit(
-        "release bundle file-set drift before manifest: "
-        f"missing={sorted(expected_without_manifest - actual_without_manifest)} "
-        f"unexpected={sorted(actual_without_manifest - expected_without_manifest)}"
-    )
-
-lines = []
-for relative in sorted(actual_without_manifest):
-    digest = hashlib.sha256((bundle / relative).read_bytes()).hexdigest()
-    lines.append(f"{digest}  {relative}")
-(bundle / manifest_relative).write_text("\n".join(lines) + "\n", encoding="utf-8")
-
-actual = {
-    path.relative_to(bundle).as_posix()
-    for path in bundle.rglob("*")
-    if path.is_file()
-}
-if actual != expected:
-    raise SystemExit(
-        "release bundle exact file-set drift: "
-        f"missing={sorted(expected - actual)} "
-        f"unexpected={sorted(actual - expected)}"
-    )
-
-for forbidden in release["forbidden_paths"]:
-    if forbidden in actual:
-        raise SystemExit(f"forbidden release path present: {forbidden}")
-PY
-
-  tar -C "${RELEASES_DIR}" -czf "${tarball}" "${bundle_name}"
+  case "$archive_mode" in
+    local)
+      COPYFILE_DISABLE=1 tar --no-xattrs -C "${RELEASES_DIR}" -czf "${tarball}" "${bundle_name}"
+      ;;
+    remote-linux)
+      local archive_args=(
+        archive-bundle
+        --host "$LINUX_BUILDER_HOST"
+        --user "$LINUX_BUILDER_USER"
+        --remote-release-dir "$LINUX_BUILDER_RELEASE_DIR"
+        --bundle-dir "$bundle_dir"
+        --local-tarball "$tarball"
+      )
+      if [[ -n "$LINUX_BUILDER_KEY" ]]; then
+        archive_args+=(--key "$LINUX_BUILDER_KEY")
+      fi
+      if [[ "$FORCE" -eq 1 ]]; then
+        archive_args+=(--force)
+      fi
+      "${ROOT_DIR}/scripts/linux_host_tools_sync.sh" "${archive_args[@]}"
+      ;;
+    *)
+      fail "unknown release archive mode: ${archive_mode}"
+      ;;
+  esac
 
   echo "Release bundle ready: ${bundle_dir}"
+  echo "Tarball: ${tarball}"
+}
+
+bundle_pi4_release() {
+  local bundle_name="$1"
+  local bundle_dir="${RELEASES_DIR}/${bundle_name}"
+  local tarball="${RELEASES_DIR}/${bundle_name}.tar.gz"
+
+  if [[ -e "$bundle_dir" || -e "$tarball" ]]; then
+    if [[ "$FORCE" -eq 1 ]]; then
+      rm -rf "$bundle_dir"
+      rm -f "$tarball"
+    else
+      fail "Release path already exists: $bundle_dir or $tarball (use --force)"
+    fi
+  fi
+
+  mkdir -p "${bundle_dir}/docs" "${bundle_dir}/image"
+  local selected_path
+  while IFS= read -r selected_path; do
+    local destination="$selected_path"
+    if [[ "$selected_path" == "docs/QUICKSTART.md" ]]; then
+      destination="QUICKSTART.md"
+    fi
+    mkdir -p "$(dirname "${bundle_dir}/${destination}")"
+    cp -p "${ROOT_DIR}/${selected_path}" "${bundle_dir}/${destination}"
+  done < <(release_inventory_values public_documents)
+
+  while IFS= read -r selected_path; do
+    case "$selected_path" in
+      LICENSE.txt)
+        cp -p "${ROOT_DIR}/${selected_path}" "${bundle_dir}/LICENSE.txt"
+        ;;
+      "releases/RELEASE_NOTES-${RELEASE_VERSION}.md")
+        cp -p "${ROOT_DIR}/${selected_path}" "${bundle_dir}/RELEASE_NOTES.md"
+        ;;
+    esac
+  done < <(release_inventory_values support_files)
+
+  "${ROOT_DIR}/scripts/pi4_release_image.sh" \
+    --stage-dir "$PI4_STAGE_DIR" \
+    --output-image "${bundle_dir}/image/cohesix-pi4-sd.img" \
+    --output-metadata "${bundle_dir}/image/cohesix-pi4-sd.json" \
+    --output-sha256 "${bundle_dir}/image/cohesix-pi4-sd.img.sha256"
+  printf '%s\n' "$RELEASE_VERSION" >"${bundle_dir}/VERSION.txt"
+  rewrite_pi4_quickstart "$bundle_dir"
+  write_bundle_manifest "$bundle_dir" expected_pi4_bundle_files
+
+  COPYFILE_DISABLE=1 tar --no-xattrs \
+    -C "$RELEASES_DIR" -czf "$tarball" "$bundle_name"
+  echo "Pi 4 release bundle ready: ${bundle_dir}"
   echo "Tarball: ${tarball}"
 }
 
@@ -1039,6 +1345,25 @@ if [[ "$VERIFY_WORKER_ACCEPTANCE" -eq 1 ]]; then
   verify_worker_acceptance
   exit 0
 fi
+
+require_file "$(release_inventory_path)"
+if [[ -z "$RELEASE_VERSION" ]]; then
+  RELEASE_VERSION="$(release_inventory_scalar version)"
+fi
+[[ -n "$PI4_STAGE_DIR" ]] || fail "--pi4-stage-dir is required"
+if [[ "$CHECK_MANIFEST" -eq 1 && "$LINUX_BUNDLE" -eq 1 ]]; then
+  fail "--check-manifest is read-only and cannot be combined with --linux"
+fi
+if [[ "$CHECK_MANIFEST" -eq 0 ]]; then
+  [[ -n "$RELEASE_NAME" ]] || fail "--name is required when creating release bundles"
+  [[ "$RELEASE_NAME" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || \
+    fail "release name contains unsupported characters"
+  local_status="$(git -C "$ROOT_DIR" status --porcelain=v1 --untracked-files=all)"
+  [[ -z "$local_status" ]] || fail "release creation requires a clean source checkout"
+fi
+MACOS_BUNDLE_NAME="${RELEASE_NAME}-MacOS"
+LINUX_BUNDLE_NAME="${RELEASE_NAME}-linux"
+PI4_BUNDLE_NAME="${RELEASE_NAME}-Pi4"
 
 require_dir "$OUT_DIR"
 require_file "${STAGING_DIR}/elfloader"
@@ -1065,45 +1390,54 @@ validate_release_sel4_profile
 validate_release_inventory_inputs
 
 if [[ "$CHECK_MANIFEST" -eq 1 ]]; then
+  validate_host_tools_inputs "$DEFAULT_HOST_TOOLS_DIR" macos
   echo "[release] Exact compiler-generated release manifest and inputs: PASS"
   exit 0
 fi
 
-if [[ "$FORCE" -eq 1 ]]; then
-  purge_release_paths
+if [[ "$LINUX_ONLY" -ne 1 ]]; then
+  validate_host_tools_inputs "$DEFAULT_HOST_TOOLS_DIR" macos
 fi
 
 if [[ "$LINUX_BUNDLE" -eq 1 ]]; then
-  if [[ -n "$LINUX_SYNC_HOST" ]]; then
-    if [[ -z "$LINUX_SYNC_KEY" ]]; then
-      fail "LINUX_SYNC_KEY (or COHESIX_SYNC_KEY) is required when LINUX_SYNC_HOST is set"
-    fi
-    echo "[release] Syncing Linux host tools via scripts/linux_host_tools_sync.sh"
-    sync_args=(--host "$LINUX_SYNC_HOST" --no-bundle)
-    if [[ -n "$LINUX_SYNC_USER" ]]; then
-      sync_args+=(--user "$LINUX_SYNC_USER")
-    fi
-    if [[ -n "$LINUX_SYNC_KEY" ]]; then
-      sync_args+=(--key "$LINUX_SYNC_KEY")
-    fi
-    if [[ -n "$LINUX_SYNC_REMOTE_DIR" ]]; then
-      sync_args+=(--remote-dir "$LINUX_SYNC_REMOTE_DIR")
-    fi
-    if [[ -n "$LINUX_SYNC_LOCAL_OUT" ]]; then
-      sync_args+=(--local-out "$LINUX_SYNC_LOCAL_OUT")
-      LINUX_HOST_TOOLS_DIR="$LINUX_SYNC_LOCAL_OUT"
-    fi
-    "${ROOT_DIR}/scripts/linux_host_tools_sync.sh" "${sync_args[@]}"
+  for required in \
+    "$LINUX_BUILDER_HOST" \
+    "$LINUX_BUILDER_USER" \
+    "$LINUX_BUILDER_BUILD_DIR" \
+    "$LINUX_BUILDER_RELEASE_DIR" \
+    "$LINUX_BUILDER_CARGO" \
+    "$LINUX_BUILDER_CARGO_HOME" \
+    "$LINUX_BUILDER_MAX_GLIBC" \
+    "$LINUX_HOST_TOOLS_DIR" \
+    "$LINUX_HOST_TOOLS_MANIFEST"; do
+    [[ -n "$required" ]] || \
+      fail "--linux requires every documented remote builder and local output argument"
+  done
+  sync_args=(
+    build-tools
+    --host "$LINUX_BUILDER_HOST"
+    --user "$LINUX_BUILDER_USER"
+    --remote-build-dir "$LINUX_BUILDER_BUILD_DIR"
+    --remote-cargo "$LINUX_BUILDER_CARGO"
+    --remote-cargo-home "$LINUX_BUILDER_CARGO_HOME"
+    --local-out "$LINUX_HOST_TOOLS_DIR"
+    --manifest-out "$LINUX_HOST_TOOLS_MANIFEST"
+    --max-glibc-version "$LINUX_BUILDER_MAX_GLIBC"
+  )
+  if [[ -n "$LINUX_BUILDER_KEY" ]]; then
+    sync_args+=(--key "$LINUX_BUILDER_KEY")
   fi
-  if [[ ! -d "$LINUX_HOST_TOOLS_DIR" || -z "$(ls -A "$LINUX_HOST_TOOLS_DIR" 2>/dev/null)" ]]; then
-    build_linux_host_tools "$LINUX_HOST_TARGET" "$LINUX_HOST_TOOLS_DIR" "$HOST_TOOLS_PROFILE"
-  fi
+  "${ROOT_DIR}/scripts/linux_host_tools_sync.sh" "${sync_args[@]}"
+  validate_host_tools_inputs \
+    "$LINUX_HOST_TOOLS_DIR" linux "$LINUX_HOST_TOOLS_MANIFEST"
 fi
 
 if [[ "$LINUX_ONLY" -ne 1 ]]; then
   bundle_release "${MACOS_BUNDLE_NAME}" "$DEFAULT_HOST_TOOLS_DIR"
+  bundle_pi4_release "${PI4_BUNDLE_NAME}"
 fi
 
 if [[ "$LINUX_BUNDLE" -eq 1 ]]; then
-  bundle_release "${LINUX_BUNDLE_NAME}" "$LINUX_HOST_TOOLS_DIR"
+  bundle_release \
+    "${LINUX_BUNDLE_NAME}" "$LINUX_HOST_TOOLS_DIR" remote-linux
 fi

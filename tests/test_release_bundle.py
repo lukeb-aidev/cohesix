@@ -1,5 +1,5 @@
 # Author: Lukas Bower
-# Purpose: Verify release gates for exact Milestone 26e Worker acceptance evidence.
+# Purpose: Verify exact Milestone 26e release, Pi 4 payload, and Worker acceptance gates.
 # Copyright 2026 Lukas Bower
 
 from __future__ import annotations
@@ -121,3 +121,77 @@ def test_release_manifest_selects_hash_bound_python_wheel_and_contracts() -> Non
     assert "python/dist/cohesix-0.2.0a2-py3-none-any.whl" in release[
         "generated_bundle_files"
     ]
+
+
+def test_release_manifest_selects_exact_pi4_sd_payload() -> None:
+    source = SCRIPT.read_text(encoding="utf-8")
+    inventory = tomllib.loads(
+        (ROOT / "configs/implementation_surfaces.toml").read_text(encoding="utf-8")
+    )
+    release = inventory["release"]
+    pi4_files = set(release["pi4_stage_files"])
+
+    assert {
+        "cohesix-image-arm-bcm2711",
+        "sel4test-driver-image-arm-bcm2711",
+        "pi4-image-identity.json",
+        "u-boot.bin",
+        "start4.elf",
+        "fixup4.dat",
+        "config.txt",
+        "boot.scr.uimg",
+        "bcm2711-rpi-4-b.dtb",
+        "overlays/upstream-pi4.dtbo",
+        "cohesix-driver-runtimes.cpio.uimg",
+        "cohesix-root-task-topology.json",
+    }.issubset(pi4_files)
+    assert "expected_pi4 = set(release[\"pi4_stage_files\"])" in source
+    assert "validate_pi4_stage_identity" in source
+    assert "Pi 4 SD staging set drift" in source
+
+
+def test_release_creates_peer_pi4_bundle_with_portable_image() -> None:
+    source = SCRIPT.read_text(encoding="utf-8")
+    inventory = tomllib.loads(
+        (ROOT / "configs/implementation_surfaces.toml").read_text(
+            encoding="utf-8"
+        )
+    )
+    release = inventory["release"]
+
+    assert 'PI4_BUNDLE_NAME="${RELEASE_NAME}-Pi4"' in source
+    assert 'bundle_pi4_release "${PI4_BUNDLE_NAME}"' in source
+    assert "scripts/pi4_release_image.sh" in source
+    assert "expected_pi4_bundle_files" in source
+    assert all(not path.startswith("pi4-sd/") for path in release["target_images"])
+    assert set(release["pi4_generated_bundle_files"]) == {
+        "MANIFEST.sha256",
+        "VERSION.txt",
+        "image/cohesix-pi4-sd.img",
+        "image/cohesix-pi4-sd.img.sha256",
+        "image/cohesix-pi4-sd.json",
+    }
+
+
+def test_release_linux_builder_locations_are_argument_driven() -> None:
+    source = SCRIPT.read_text(encoding="utf-8")
+    for option in (
+        "--linux-builder-host",
+        "--linux-builder-user",
+        "--linux-builder-key",
+        "--linux-builder-build-dir",
+        "--linux-builder-release-dir",
+        "--linux-builder-cargo",
+        "--linux-builder-cargo-home",
+        "--linux-builder-max-glibc",
+        "--linux-host-tools-dir",
+        "--linux-host-tools-manifest",
+    ):
+        assert option in source
+    for forbidden in ("merlin2.local", "/mnt/nvme", 'LINUX_SYNC_USER:-ubuntu'):
+        assert forbidden not in source
+    assert "archive-bundle" in source
+    assert "cohesix-linux-host-tools-build/v1" in source
+    assert "archive_args+=(--force)" in source
+    assert 'BUNDLE_DIR="$bundle_dir" python3 -' in source
+    assert 'Path("releases")' not in source
