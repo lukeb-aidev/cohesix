@@ -130,8 +130,8 @@ instance bundle and teardown or containment path. The later production Worker ti
 of the already complete applicable driver MMIO/DMA/shared-ring inventory,
 structured quarantine/evidence, fresh-ticket Worker restart, and fresh driver
 runtime-generation recovery remain separate
-Milestone 28e tasks: `m28e-production-worker-ticket-driver-inventory` and
-`m28e-structured-fault-lifecycle`; they do not complete basic Worker isolation,
+Milestone 28b tasks: `m28b-production-worker-ticket-driver-inventory` and
+`m28b-structured-fault-lifecycle`; they do not complete basic Worker isolation,
 driver authority, or either containment path.
 
 ## Required gate for each compartment

@@ -13,5 +13,5 @@ case.
 
 The selected target namespace service is `apps/nine-door-runtime`, a separate
 `no_std` MCS child reached through the generated bounded service ABI. A future
-Milestone 28b host-service use case must be explicitly authorized before this
+Milestone 27b host-service use case must be explicitly authorized before this
 crate gains any packaged host binary.

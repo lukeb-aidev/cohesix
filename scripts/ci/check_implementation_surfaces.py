@@ -456,7 +456,7 @@ def validate_source_closure(repo_root: Path, payload: dict[str, Any]) -> list[st
     if nine_door_manifest.is_file():
         manifest_text = nine_door_manifest.read_text(encoding="utf-8")
         if "[[bin]]" in manifest_text:
-            errors.append("nine-door must remain library-only until Milestone 28b")
+            errors.append("nine-door must remain library-only until Milestone 27b")
 
     root_manifest = (repo_root / "Cargo.toml").read_text(encoding="utf-8")
     if '"crates/domain-intents"' in root_manifest:

@@ -5,7 +5,7 @@
     "purpose": "Bind advertised host surfaces and use cases to exact integration obligations.",
     "milestone": "Milestone 26e — generated host-integration and use-case dependency contract",
     "graph_id": "m26e-host-integration",
-    "source_sha256": "e4816158efae275a028937549e0d5998ba789b87cd3956cd14b838a76872f4ff",
+    "source_sha256": "ee8f69d01a92f7f386ec9242c6ef057eae218dc15377b5bf8df27fda17469391",
     "resolved_manifest_sha256": "a9a50408519f33cf2e05932cffffa5dbb521958870b16edf2f36311ff60385a1",
     "implementation_surface_inventory_sha256": "77ef914b4c89e75a52e1cb74f3315cf1e6ce816f5d582c86b699551e2b5847f1"
   },
@@ -45,7 +45,7 @@
     {
       "id": "a2a-gateway",
       "owner": "future-a2a-gateway",
-      "owning_milestone": "m28f-a2a-policy-ir",
+      "owning_milestone": "m28c-a2a-policy-ir",
       "class": "future-provider",
       "obligation": "future",
       "host_profiles": [
@@ -66,7 +66,7 @@
         "missing",
         "disabled"
       ],
-      "unavailable_owner": "m28f-a2a-policy-ir",
+      "unavailable_owner": "m28c-a2a-policy-ir",
       "auth_refs": [],
       "timeout_ms": 1000,
       "retry_limit": 0,
@@ -414,7 +414,7 @@
     {
       "id": "general-inference-provider",
       "owner": "future-inference-boundary",
-      "owning_milestone": "m28e-inference-ir-and-compatibility-contract",
+      "owning_milestone": "m27e-inference-ir-and-compatibility-contract",
       "class": "future-provider",
       "obligation": "future",
       "host_profiles": [
@@ -435,7 +435,7 @@
         "missing",
         "disabled"
       ],
-      "unavailable_owner": "m28e-inference-ir-and-compatibility-contract",
+      "unavailable_owner": "m27e-inference-ir-and-compatibility-contract",
       "auth_refs": [],
       "timeout_ms": 1000,
       "retry_limit": 0,
@@ -456,7 +456,7 @@
     {
       "id": "general-training-provider",
       "owner": "future-ai-provider",
-      "owning_milestone": "m28d-live-peft-reference-paths",
+      "owning_milestone": "m27d-live-peft-reference-paths",
       "class": "future-provider",
       "obligation": "future",
       "host_profiles": [
@@ -477,7 +477,7 @@
         "missing",
         "disabled"
       ],
-      "unavailable_owner": "m28d-live-peft-reference-paths",
+      "unavailable_owner": "m27d-live-peft-reference-paths",
       "auth_refs": [],
       "timeout_ms": 1000,
       "retry_limit": 0,
@@ -734,7 +734,7 @@
     {
       "id": "industry-provider-family",
       "owner": "future-framework-adapters",
-      "owning_milestone": "m28d-framework-adapters",
+      "owning_milestone": "m27d-framework-adapters",
       "class": "future-provider",
       "obligation": "future",
       "host_profiles": [
@@ -755,7 +755,7 @@
         "missing",
         "disabled"
       ],
-      "unavailable_owner": "m28d-framework-adapters",
+      "unavailable_owner": "m27d-framework-adapters",
       "auth_refs": [],
       "timeout_ms": 1000,
       "retry_limit": 0,
@@ -851,7 +851,7 @@
     {
       "id": "mcp-gateway",
       "owner": "future-mcp-gateway",
-      "owning_milestone": "m28f-mcp-policy-ir",
+      "owning_milestone": "m28c-mcp-policy-ir",
       "class": "future-provider",
       "obligation": "future",
       "host_profiles": [
@@ -872,7 +872,7 @@
         "missing",
         "disabled"
       ],
-      "unavailable_owner": "m28f-mcp-policy-ir",
+      "unavailable_owner": "m28c-mcp-policy-ir",
       "auth_refs": [],
       "timeout_ms": 1000,
       "retry_limit": 0,
@@ -893,7 +893,7 @@
     {
       "id": "nemo-provider",
       "owner": "future-nemo-provider",
-      "owning_milestone": "m28d-nemo-provider-family",
+      "owning_milestone": "m27d-nemo-provider-family",
       "class": "future-provider",
       "obligation": "future",
       "host_profiles": [
@@ -913,7 +913,7 @@
         "missing",
         "disabled"
       ],
-      "unavailable_owner": "m28d-nemo-provider-family",
+      "unavailable_owner": "m27d-nemo-provider-family",
       "auth_refs": [],
       "timeout_ms": 1000,
       "retry_limit": 0,
@@ -1126,7 +1126,7 @@
     {
       "id": "production-worker-bundle",
       "owner": "future-production-bundle",
-      "owning_milestone": "m28g-production-worker-ticket-driver-inventory",
+      "owning_milestone": "m28b-production-worker-ticket-driver-inventory",
       "class": "future-provider",
       "obligation": "future",
       "host_profiles": [
@@ -1147,7 +1147,7 @@
         "missing",
         "disabled"
       ],
-      "unavailable_owner": "m28g-production-worker-ticket-driver-inventory",
+      "unavailable_owner": "m28b-production-worker-ticket-driver-inventory",
       "auth_refs": [],
       "timeout_ms": 1000,
       "retry_limit": 0,
@@ -1167,7 +1167,7 @@
     {
       "id": "prometheus-otel-export",
       "owner": "future-inference-telemetry",
-      "owning_milestone": "m28e-inference-receipts-otel-and-evidence",
+      "owning_milestone": "m27e-inference-receipts-otel-and-evidence",
       "class": "future-provider",
       "obligation": "future",
       "host_profiles": [
@@ -1188,7 +1188,7 @@
         "missing",
         "disabled"
       ],
-      "unavailable_owner": "m28e-inference-receipts-otel-and-evidence",
+      "unavailable_owner": "m27e-inference-receipts-otel-and-evidence",
       "auth_refs": [],
       "timeout_ms": 1000,
       "retry_limit": 0,
@@ -1350,7 +1350,7 @@
     {
       "id": "semantic-context",
       "owner": "future-semantic-context",
-      "owning_milestone": "m28c-semantic-ir-and-object-contract",
+      "owning_milestone": "m27c-semantic-ir-and-object-contract",
       "class": "future-provider",
       "obligation": "future",
       "host_profiles": [
@@ -1371,7 +1371,7 @@
         "missing",
         "disabled"
       ],
-      "unavailable_owner": "m28c-semantic-ir-and-object-contract",
+      "unavailable_owner": "m27c-semantic-ir-and-object-contract",
       "auth_refs": [],
       "timeout_ms": 1000,
       "retry_limit": 0,
@@ -1574,7 +1574,7 @@
     {
       "id": "swarmui-workbench",
       "owner": "future-ui-workbench",
-      "owning_milestone": "m28h-integration-truth-model",
+      "owning_milestone": "m27f-integration-truth-model",
       "class": "future-provider",
       "obligation": "future",
       "host_profiles": [
@@ -1595,7 +1595,7 @@
         "missing",
         "disabled"
       ],
-      "unavailable_owner": "m28h-integration-truth-model",
+      "unavailable_owner": "m27f-integration-truth-model",
       "auth_refs": [],
       "timeout_ms": 1000,
       "retry_limit": 0,
