@@ -1328,11 +1328,37 @@ spurious interrupt and peer containment during `smp_parity.coh`. For the next
 candidate, CYW43/SDIO retain core 3, priority, `1,500/10,000 us` budget/period,
 WCET, timeout, Reply, and fault truth, while each 8-bit SC selects eight refill
 records. The selected seL4-16 AArch64 MCS ABI/profile/build gate must prove
-capacity ten and reject eleven. Direct GENET must preserve max two refills and
-its exact timing tuple while the dense-window compiler/runtime guards, v4
-high-water/reason telemetry, and fail-closed counter paths pass. None of these
-source, profile, construction, or image checks supplies a physical performance
-result; a fresh exact-image WiFi and GENET run remains mandatory.
+capacity ten and reject eleven. Direct GENET must preserve exact max-two-refill
+`3,000/10,000 us` handoff/runtime truth, while compiler/profile validation
+requires exact `wcet_us=800` and rejects either adjacent drift. Every direct
+guard sample admits at most one material packet slice; the retained window
+permits at most 16 slices, provides an exact 8/8 split under continuous
+bidirectional pressure, and charges ambiguous cursor reconciliation to the same
+bound. The v4 high-water/reason telemetry and fail-closed counter/cursor paths
+must pass. None of these source, profile, construction, or image checks supplies
+a physical performance result; a fresh exact-image WiFi and GENET run remains
+mandatory.
+
+The exact-2be follow-up input binds source
+`2be53e2270562be0a2b9d6435b831c826a9dde37`, image ID
+`21f4a24b173609992e43cd18c852a29fca58aa833ea59600a7b44f2509a603eb`,
+image SHA-256
+`7e5cf5fbdd7721c9a4b8f345c35026df87d991ead6b8ff5259ad2914854b9587`,
+resolved-manifest SHA-256
+`28f99df3f09adc490c25c82625e7ef89d4335cba0563efd3a07b6a806e1e0650`,
+and the boot-paired `20260829-085248` captures. WiFi reaches first-generation
+Ready, DHCP, authenticated TCP, and three focused scripts without loss or
+quarantine, but raw 64/64 remains only 2.630 requests/s with 306.254 ms p95
+first response. Its SDIO physical stages are sub-millisecond while bus-link
+acceptance and root response continuation cross repeated MCS periods. GENET
+reaches link, DHCP, valid direct rings, and 11 us pre-load window high-water,
+then its first authenticated `nettest` ingress raises the terminal
+`bcmgenet-v5` MCS timeout and correctly quarantines the pair. This is the
+current first-failure oracle: deterministic tests must prove one GENET packet
+operation per guard sample, exact 800 us compiler admission, complete
+nonforeground bus-link copy bounds plus unchanged foreground trace/overlay
+authority, and the exact response rotation below. No post-containment GENET
+TCP, REST, `.coh`, or performance result from this lifetime is admissible.
 
 The CYW43 software and cadence closure gate is authorized by Milestone 26d
 tasks `m26d-cyw43-hardware-free-closure` and
@@ -1380,18 +1406,27 @@ terminal/fault/reboot state, or either cap yields and resets the window. An
 invalid counter still admits one legacy logical turn per scheduler activation
 before yielding, so telemetry failure cannot deadlock bootstrap. An attached
 continuation additionally requires a CYW43 Network phase, actual NetPoller
-activity, exactly one service counter advance, the immediate next phase still
-Network, and either durable schedulable physical work or a nonzero retained
-response cursor whose identity exactly matches both the active and
-authenticated connection. Focused pure tests must reject an inactive cursor,
-stale active or authenticated identity, no activity, no service-counter
-advance, quarantine, recovery, reboot, or operator rotation without device
-effects. The response case admits only the next separately charged root turn;
-the isolated child's ordinary lower rotor cannot burst. The prior four-Driver
-restart burst is not composed with this window. QEMU, generic root control, all
-SC numerics, and every physical-operation/finalizer and external-wait boundary
-remain unchanged; only the generation-bound child source Yield is superseded by
-the exact-grant rule below.
+activity, and exactly one service counter advance. The ordinary path requires
+the immediate next phase still Network plus durable schedulable physical work.
+A nonzero retained response cursor may instead cross exactly
+`Network -> Serial -> LocalSeat -> Dispatch -> Network`. Tests must require the
+same active/authenticated connection before and after, a one-step still-active
+cursor decrement, one flush-counter advance, unchanged nonsaturated accepted
+commands, the exact generation/pair/lifetime rotation token after Network and
+before Dispatch, and its clearing after Dispatch. The integration fixture must
+prove exactly one LocalSeat phase and, when USB service debt is present, exactly
+one USB backend poll. It must also prove one response flush, no general second
+NIC poll, phase return to Network, and a continuation token. Focused negative tests
+must reject inactive/exhausted/over-advanced cursors, stale identity, counter
+saturation or drift, missing Serial/LocalSeat/Dispatch, real physical input or
+response, terminal return, quarantine, recovery, containment, reboot, or token
+drift without device effects. The response case admits only the next separately
+charged root turn after the unchanged loop-top guard; the isolated child's
+ordinary lower rotor cannot burst. The prior four-Driver restart burst is not
+composed with this window. QEMU, generic root control, all SC numerics, and
+every physical-operation/finalizer and external-wait boundary remain unchanged;
+only the generation-bound child source Yield is superseded by the exact-grant
+rule below.
 
 Child Ready timing tests use the child's absolute CNTVCT millisecond domain,
 not the pump-driven HAL clock. They must prove a valid same-frequency
@@ -4448,12 +4483,17 @@ the composition after its one admitted Network phase rather than receiving a
 second driver turn in the same invocation. Attached-CYW43 coverage may traverse
 up to the existing five distinct-phase turns, but must stop on a repeated
 phase, return to the starting phase, quarantine, recovery, containment, or
-reboot. Retaining the guarded activation requires an exact productive
-Network-to-Network successor, one service-counter advance, actual Network
-activity, and either fresh durable schedulable work or the exact active and
-authenticated connection-matched response cursor after the outer-event
-finalizer. The response cursor still selects only one separately charged root
-turn and must not compose multiple units of the isolated lower rotor.
+reboot. Retaining the guarded activation ordinarily requires an exact
+productive Network-to-Network successor, one service-counter advance, actual
+Network activity, and fresh durable schedulable work. The exact active and
+authenticated connection-matched response cursor may instead retain it after
+one complete Network/Serial/LocalSeat/Dispatch rotation with one cursor and
+flush advance, LocalSeat admitted exactly once, one backend poll only when USB
+service debt exists, no accepted command or physical response, and an exact
+rotation token cleared at Dispatch. That wrapper still performs no second NIC
+operation; the caller must re-enter the unchanged loop-top guard before the next
+separately charged root turn, and no path may compose multiple units of the
+isolated lower rotor.
 Quarantine coverage must prove persistent display debt cannot create an
 unbounded redraw loop or poll quarantined CYW43. The next fresh exact-image Pi
 boot must pair serial and captures and compare same-driver cadence against the
@@ -5574,6 +5614,13 @@ The gateway's `/v1/meta/status` must project normalized configured backend
 capture and benchmark; those fields bind endpoint identity but do not alone
 prove target execution.
 
+The complete structured READY census is a hard precondition for executable
+pressure. If it is absent, a same-session REST `perf` status or telemetry run
+may be retained only as transport/read-path diagnostic evidence with its exact
+endpoint, backend/proof class, authentication/session continuity, run count,
+latency, retries, and timeouts. It cannot substitute for Worker pressure,
+mixed mutation, target capacity, Pi acceptance, or QEMU/Pi parity.
+
 Run the exact HIGH workload documented under
 [Qualified Pi executable pressure and QEMU parity](BENCHMARKS.md#qualified-pi-executable-pressure-and-qemu-parity):
 
@@ -6125,6 +6172,18 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
       are not SDIO, CYW43, association, or performance evidence; a fresh
       same-boot Pi serial/pcap pair must still prove the complete command engine
       and Wi-Fi acceptance ladder.
+      A separate nonforeground CYW43-to-SDIO bus-link regression must exercise
+      both runtime payload arenas, both transfer directions, and every 8-by-8
+      actual virtual-address alignment pair. Compare the complete result with
+      bytewise truth, preserve source/destination sentinels, and require the
+      exact admitted word-copy count. Zero-length and exact-end ranges must
+      succeed; runtime-arena seam crossing, owner overrun, integer overflow,
+      invalid cursor/range, and reverse `len > frame.len` must reject before
+      mutation. Foreground coverage must prove the sealed-parent trace and
+      prepared-write/overlay path remains authoritative and that it increments
+      none of the nonforeground physical-word counters. This CPU-copy
+      regression grants no SDIO operation, owner, scheduling, association, or
+      hardware-performance evidence.
       The Pi GENET profile regression must require exact IRQ 189, badge 1024,
       and default queue 16 while the QEMU profile retains exactly three
       driver-runtime IRQ entries, no GENET IRQ, and unchanged scheduling.
@@ -6226,9 +6285,12 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
       failures reaching poison, peer signal, and the standard fault endpoint.
       Console-side validation failure must independently poison both of its
       owned cursor lines after raced peer progress, signal the peer exactly
-      once, and then standard-fault. Retained ambiguous TX/RX commit
-      reconciliation must consume the exact current 8-frame TX fair share and
-      16-frame total service quantum rather than precede those bounds.
+      once, and then standard-fault. Direct-active service must admit at most
+      one material TX or RX/finalization unit per guarded slice. Sixteen
+      successive slices under continuous bidirectional pressure must yield the
+      exact eight/eight share; an empty side donates its slice. Retained
+      ambiguous TX/RX commit reconciliation consumes exactly one slice rather
+      than preceding that bound.
       Containment must suspend GENET and delete both cross-child signal caps
       before unmapping/deleting all 32 external console mapping caps and before
       anchor revoke.
@@ -6236,7 +6298,7 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
       control header `[0,64)`, four cursor records `[64,320)`, optional aligned
       192-byte diagnostic-v4 record `[320,512)`, record-relative sequence-last
       commit at offset 184, and still-reserved tail `[512,4096)`. ABI tests must
-      prove record offset 12 round-trips the direct MCS quantum high-water,
+      prove record offset 12 round-trips the direct MCS packet-slice high-water,
       record offset 108 round-trips cumulative `dpc_level_adoptions`, and
       offsets 160, 168, and 176 round-trip nonzero raw notification receipts,
       exact-filter rejections, and the 32-bit badge union. Rejections may not
@@ -6255,7 +6317,7 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
       `genet_direct_irq_source`, `genet_direct_notification`,
       `genet_direct_dpc`, `genet_direct_dma`, `genet_direct_ring`, then
       `genet_direct_peer`. The DPC row must retain the cumulative dense-window
-      yield/fault reason mask and maximum measured quantum duration without
+      yield/fault reason mask and maximum measured packet-slice duration without
       granting scheduling authority. Runtime coverage must count each actual nonzero GENET
       receive result exactly once before badge filtering across the initial poll
       and every later combined wait, while proving the counters cannot service
@@ -8191,7 +8253,7 @@ bounded copy without advancing the accepted sequence. Scalar reserved header
 fields must validate as zero. On direct-GENET control page 0, bytes `[320,512)`
 are no longer generic reserved tail: they hold the optional, separately
 versioned diagnostic-v4 record governed by the stable exact-generation rules
-above. Record offset 12 carries the direct-MCS quantum high-water; cumulative
+above. Record offset 12 carries the direct-MCS packet-slice high-water; cumulative
 reason flags distinguish fresh-boundary, half-budget guard, timer-sample,
 attempt-cap, and stalled-retry yields. Cumulative `dpc_level_adoptions` remains
 at record offset 108, with raw notification receipt, rejection, and badge-union

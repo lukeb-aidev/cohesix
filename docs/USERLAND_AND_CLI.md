@@ -212,13 +212,13 @@ The summary reports one of `refresh=fresh`, `refresh=ready-stale`,
 rows carry the exact generation's flags, IRQ wake/ack and source state, raw
 receive-boundary notification counts and badge union, DPC counts, hardware DMA
 indices, direct-ring cursors and packets, peer hints, and poison state. The DPC
-row also reports the observed direct-service quantum high-water in microseconds
-and the cumulative fresh-command, elapsed-guard, counter-fault, attempt-cap, and
-stalled-retry MCS reason mask. These fields diagnose the bounded dense service
-window; they do not assert that its Pi WCET or throughput target passed. Missing
-optional records can shorten this diagnostic batch and
-remain missing evidence. `ready-unverified` means no stable pre-replay record
-was available, so a visible post-replay record cannot be proven fresh even
+row also reports the observed per-packet-slice duration high-water in
+microseconds and the cumulative fresh-command, elapsed-guard, counter-fault,
+attempt-cap, and stalled-retry MCS reason mask for the dense window. These
+fields diagnose bounded service; they do not assert that its Pi WCET or
+throughput target passed. Missing optional records can shorten this diagnostic
+batch and remain missing evidence. `ready-unverified` means no stable pre-replay
+record was available, so a visible post-replay record cannot be proven fresh even
 though the exact DGHO command returned READY. The refresh uses one exact
 idempotent `DGHO` replay,
 which can wake the GENET owner and allow its normal post-command idle service to

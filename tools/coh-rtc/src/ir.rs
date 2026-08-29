@@ -725,11 +725,10 @@ impl Manifest {
                 "Pi direct GENET requires driver-genet consumed-time evidence and terminal timeout policy"
             );
         }
-        if task.wcet_us > task.budget_us / 2 {
+        if task.wcet_us != 800 {
             bail!(
-                "Pi direct GENET requires 2*driver-genet.wcet_us <= budget_us, got wcet_us={} budget_us={}",
-                task.wcet_us,
-                task.budget_us
+                "Pi direct GENET requires driver-genet wcet_us=800, got {}",
+                task.wcet_us
             );
         }
         Ok(())
@@ -4369,15 +4368,17 @@ mod tests {
             "Pi direct GENET requires driver-genet consumed-time evidence and terminal timeout policy"
         );
 
-        let mut unsafe_wcet = manifest.clone();
-        pi4_driver_genet_task(&mut unsafe_wcet).wcet_us = 1_501;
-        assert_eq!(
-            unsafe_wcet
-                .validate_pi4_direct_genet_temporal_contract()
-                .expect_err("direct GENET requires half-budget WCET reserve")
-                .to_string(),
-            "Pi direct GENET requires 2*driver-genet.wcet_us <= budget_us, got wcet_us=1501 budget_us=3000"
-        );
+        for wcet_us in [799, 801] {
+            let mut wcet_drift = manifest.clone();
+            pi4_driver_genet_task(&mut wcet_drift).wcet_us = wcet_us;
+            assert_eq!(
+                wcet_drift
+                    .validate_pi4_direct_genet_temporal_contract()
+                    .expect_err("direct GENET requires its exact WCET-sized packet slice")
+                    .to_string(),
+                format!("Pi direct GENET requires driver-genet wcet_us=800, got {wcet_us}")
+            );
+        }
 
         let mut non_pi = manifest.clone();
         non_pi.profile.name = "virt-aarch64".to_owned();

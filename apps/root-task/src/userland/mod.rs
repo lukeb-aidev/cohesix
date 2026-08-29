@@ -3593,10 +3593,11 @@ where
                         && productive_network_successor
                     {
                         // EventPump proved that this exact attached Network
-                        // unit made progress and retained its immediate Network
-                        // successor. Re-enter loop-top arbitration under the
-                        // same generated-reserve guard; all other attached
-                        // outcomes restore the explicit MCS yield below.
+                        // unit made progress and retained either its immediate
+                        // Network successor or the exact completed response
+                        // rotation. Re-enter loop-top arbitration under the
+                        // same generated-reserve guard before another Network
+                        // unit; all other outcomes restore the explicit yield.
                         continue 'supervisor;
                     }
                     deferred_cyw43_yield_and_reset(&mut activation_window);

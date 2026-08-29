@@ -1618,7 +1618,7 @@ pub struct DirectGenetRuntimeDiagnostic {
     pub len: u16,
     /// Bounded diagnostic state flags.
     pub flags: u32,
-    /// Highest observed bounded direct-service quantum in microseconds.
+    /// Highest observed bounded direct-service packet slice in microseconds.
     pub mcs_quantum_high_water_us: u32,
     /// Exact nonzero direct-link generation.
     pub generation: u64,

@@ -248,11 +248,14 @@ publish generation-bound monotonic cursor and sequence-last state with release
 ordering; consumers validate generation, sequence, length, and stable commit
 with acquire ordering. The reciprocal send-only peer notifications are
 coalescing wake hints only. Durable cursor state carries work, and both peers
-perform a final state recheck before waiting. One direct service quantum handles
-at most 16 frames and at most eight TX frames before admitting the RX share.
-The GENET owner may run several such quanta in one dense MCS window only under
-its exact elapsed-time, attempt, progress, command-freshness, and refill guards;
-a notification does not itself reset that accounting.
+perform a final state recheck before waiting. One direct MCS slice handles at
+most one material TX or RX operation, including retained cursor
+reconciliation. The GENET owner may retain up to 16 such slices in one dense
+window; successive slices alternate their first TX/RX choice, an empty side
+donates its slice, and continuous bidirectional pressure receives an exact
+eight/eight split. Every slice rechecks the elapsed-time, attempt, progress,
+command-freshness, and refill guards; a notification does not itself reset
+that accounting.
 
 Within control page 0, bytes `[0,64)` hold the immutable control header and
 bytes `[64,320)` hold the four 64-byte RX-producer, RX-consumer, TX-producer,
@@ -260,7 +263,7 @@ and TX-consumer records. Console-network ABI v5 additionally assigns the
 formerly reserved bytes `[320,512)` to an optional, separately versioned
 direct-GENET diagnostic-v4 record. The record is exactly 192 bytes, aligned to
 64 bytes, assigns record-relative offset 12 to the maximum measured direct MCS
-quantum in microseconds, retains offset 108 for cumulative
+packet-slice duration in microseconds, retains offset 108 for cumulative
 `dpc_level_adoptions`, and publishes its nonzero sequence last at
 record-relative offset 184 (control-page offset 504). Offsets 160, 168, and 176
 hold cumulative nonzero receive-boundary notification receipts, receipts

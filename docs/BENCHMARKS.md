@@ -176,6 +176,12 @@ comparator.
 
 `perf` writes a `*.perf-summary.json` artifact. Always state that it is a read
 microbenchmark and name whether status, telemetry, or both suites ran.
+If executable preflight blocks because the complete structured READY Worker
+census is absent, a same-session `perf --suite status|telemetry` run is
+transport/read-path diagnostic only. Record the exact endpoint, backend and
+proof class, authentication/session continuity, run count, latency,
+retries, and timeouts. It cannot be relabelled executable Worker pressure,
+mixed mutation, target capacity, Pi acceptance, or QEMU/Pi parity.
 
 ## Running a Mixed REST Benchmark
 

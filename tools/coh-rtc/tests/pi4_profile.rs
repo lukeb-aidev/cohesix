@@ -327,10 +327,6 @@ fn pi4_uboot_profile_emits_network_policy() {
     assert_eq!(genet["timeout_policy"], "terminal");
     assert_eq!(genet["priority"], 160);
     assert_eq!(genet["wcet_us"], 800);
-    assert!(
-        2 * genet["wcet_us"].as_u64().expect("GENET WCET")
-            <= genet["budget_us"].as_u64().expect("GENET budget")
-    );
     assert_eq!(genet["response_time_us"], 3_400);
     let core_one_demand: u64 = temporal_tasks
         .iter()

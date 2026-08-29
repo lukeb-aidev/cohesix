@@ -1018,33 +1018,35 @@ reusable ownership pattern.
   ring cursors remain the only post-cutover service authority. A queued exact
   seL4 IRQ notification received after READY belongs to the same sole owner and
   is serviced as direct-epoch work.
-- Direct GENET service handles at most 16 material frame units per quantum, with at
-  most eight TX units before RX receives the remaining share. Finalizing a
-  retained ambiguous TX or RX cursor commit consumes one unit in the current
-  quantum; it cannot be reconciled outside the 8/16-frame accounting. A full TX ring waits for a
+- Direct GENET admits exactly one material packet operation per MCS-accounted
+  DPC slice. Successive slices alternate the first TX/RX choice; an empty side
+  donates its slice, while continuous bidirectional pressure receives exactly
+  eight TX and eight RX slices in the retained 16-slice window. Finalizing a
+  retained ambiguous TX or RX cursor commit consumes one of those slices and
+  cannot be reconciled outside the same accounting. A full TX ring waits for a
   peer rearm notification unless an independent retained cursor transition is
   actionable; queued RX cannot create a self-poll while smoltcp ingress is
   occupied. The Pi manifest gives GENET a `3,000 us / 10,000 us` core-1 SC,
-  priority 160, two refills, and a 3,400 us computed response bound while
-  retaining this 16-frame material quantum. These static bounds require fresh
-  Pi consumed-time, latency, and throughput evidence.
-- In direct mode the 16-frame limit is one attempted DPC quantum, not a forced
-  10 ms cadence. The owner retains one dense software window across Block and
-  may re-enter while exact durable work remains, but counts every attempted
-  quantum and yields at half of its 3,000 us budget or 16 attempts. One
-  no-progress durable recheck is permitted; a second yields. Any endpoint
-  command marks the shared SC consumption stale and forces a fresh-refill
-  boundary before more packet work. The handoff and compiler both require the
-  exact `3,000/10,000 us`, max-two-refill contract and a declared WCET no more
-  than half budget. A missing/backwards counter, repeated non-advancing quantum,
-  contract drift, or invalid cursor fails closed. Blocking alone never resets
-  the window because userspace wall time cannot prove kernel refill state.
+  priority 160, two refills, exact 800 us WCET, and a 3,400 us computed
+  response bound. These static bounds require fresh Pi consumed-time, latency,
+  and throughput evidence.
+- In direct mode the owner retains one dense software window across Block and
+  may re-enter while exact durable work remains, but samples the elapsed MCS
+  guard around every packet slice and yields at half of its 3,000 us budget or
+  16 attempted slices. One no-progress durable recheck is permitted; a second
+  yields. Any endpoint command marks the shared SC consumption stale and
+  forces a fresh-refill boundary before more packet work. The compiler and
+  generated profile require exact `wcet_us=800`; the handoff and runtime
+  validate the exact `3,000/10,000 us`, max-two-refill contract. A
+  missing/backwards counter, repeated non-advancing slice, contract drift, or
+  invalid cursor fails closed. Blocking alone never resets the window because
+  userspace wall time cannot prove kernel refill state.
 - Direct-link control page 0 reserves bytes `[0,64)` for its immutable header
   and `[64,320)` for the four 64-byte SPSC cursor records. The optional
   direct-GENET diagnostic-v4 record occupies the formerly reserved bytes
   `[320,512)`, is exactly 192 bytes and cache-line aligned, and commits its
   publication sequence last at record offset 184. Version 4 assigns offset 12
-  to the maximum observed bounded MCS quantum duration and retains offset 108
+  to the maximum observed bounded packet-slice duration and retains offset 108
   for cumulative `dpc_level_adoptions`, the number of badge-zero or
   peer-turn joins of durable physical work to a direct IRQ episode. Offsets
   160, 168, and 176 contain cumulative nonzero raw notification receipts,
@@ -1092,6 +1094,16 @@ transport:
   SDIO work through the generated link.
 - One parent identity remains bound through every child action and the final
   consumer receipt.
+- A nonforeground bus-link payload copy validates both complete ranges before
+  mutation, computes batching from the actual mapped virtual addresses, and
+  uses naturally aligned parent words plus paired aligned owner words when the
+  mappings share alignment. It otherwise uses the existing physical byte
+  primitives without consulting foreground transaction state per byte. The
+  copy cannot cross the runtime ring/shared-buffer mapping seam. Owner reads
+  retain invalidate-before-copy ordering and owner writes retain the store
+  barrier plus clean-after-copy ordering. Foreground sealed-parent, trace, and
+  overlay authority is unchanged; range, length, or cursor drift fails closed
+  without a fallback issuer.
 - The event ring, command ring, child terminal, parent terminal, notification,
   and consumer receipt are distinct states.
 - IRQ/DPC work is condition-driven and bounded. Empty polling must not become
@@ -1127,12 +1139,21 @@ transport:
   2,499 us would have only 251 us of SC budget remaining. Check the continuous
   window before each fresh phase and retire the exact one-operation outer lease
   before re-entry. The kernel SC remains the hard execution boundary if a
-  started unit reaches natural postponement. After child Ready, an attached EventPump turn may retain the
-  window only after actual CYW43 Network activity, exactly one service-unit
-  advance, an immediate Network successor, durable schedulable work, and no
-  recovery, quarantine, reboot, or operator rotation. Invalid timing/config,
-  wait, idle, no progress, handoff, output pressure, fault, terminal, or reboot
-  yields and resets; invalid evidence permits only one legacy logical turn.
+  started unit reaches natural postponement. After child Ready, an attached
+  EventPump turn may retain the window after actual CYW43 Network activity and
+  exactly one service-unit advance. The ordinary case still requires an
+  immediate Network successor with durable schedulable work. A still-active
+  authenticated response cursor may instead cross exactly
+  `Network -> Serial -> LocalSeat -> Dispatch -> Network` when its connection,
+  cursor decrement, service/flush counters, accepted-command count, and
+  generation/pair/lifetime rotation token all remain exact. That rotation
+  admits LocalSeat exactly once, clears its token at Dispatch, and admits only
+  the next separately charged Network turn after the caller rechecks the
+  unchanged 250 us reserve and 64-unit cap. Real physical input or response,
+  terminal return, identity drift, recovery, quarantine, containment, or reboot
+  denies the continuation. Invalid timing/config, wait, idle, no progress, handoff,
+  output pressure, fault, or terminal state yields and resets; invalid evidence
+  permits only one legacy logical turn.
   The window replaces, rather than composes with, the earlier four-Driver
   restart burst and changes no SC value, device deadline, operation
   cardinality, owner, or QEMU/generic path.
@@ -1148,11 +1169,13 @@ transport:
   `Serial`/`LocalSeat`/`Dispatch`/`Display`/`Network` phases instead of paying a
   scheduler edge between every phase. It admits Network at most once in that
   invocation and stops on a repeated phase, a return to the starting phase,
-  quarantine, recovery, containment, or reboot. Only an exact productive
+  quarantine, recovery, containment, or reboot. An exact productive
   Network-to-Network successor with fresh durable schedulable work may retain
-  the current guarded activation. Each phase keeps its existing
-  one-operation bound; no SC, priority, retry, timeout, device deadline, or
-  QEMU path changes.
+  the current guarded activation. The authenticated-response exception above
+  may also retain that activation after one complete
+  Network/Serial/LocalSeat/Dispatch rotation, but it performs no second Network
+  operation inside the invocation. Each phase keeps its existing one-operation
+  bound; no SC, priority, retry, timeout, device deadline, or QEMU path changes.
 - The isolated console child's Ready timestamp and the root handoff bound share
   the absolute CNTVCT millisecond domain. Root samples immediately before and
   after resume, requires identical nonzero generated/runtime timer frequency

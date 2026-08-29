@@ -34,6 +34,8 @@ use core::{
     sync::atomic::{fence, AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering},
 };
 
+#[cfg(test)]
+use console_network_abi::DIRECT_GENET_RX_SLOT_COUNT;
 use console_network_abi::{
     DirectGenetControlPage, DirectGenetCursorRole, DirectGenetDirection, DirectGenetError,
     DirectGenetRingSnapshot, DirectGenetRuntimeDiagnostic, DirectGenetSlotPage,
@@ -55,12 +57,12 @@ use console_network_abi::{
     DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_TX_COMMIT_PENDING,
     DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_TX_RING_VALID, DIRECT_GENET_RUNTIME_DIAGNOSTIC_OFFSET,
     DIRECT_GENET_RX_CONSUMER_STATE_OFFSET, DIRECT_GENET_RX_FIRST_PAGE_INDEX,
-    DIRECT_GENET_RX_PRODUCER_STATE_OFFSET, DIRECT_GENET_RX_SLOT_COUNT,
-    DIRECT_GENET_SHARED_PAGE_COUNT, DIRECT_GENET_SLOT_COMMIT_OFFSET,
-    DIRECT_GENET_SLOT_HEADER_BYTES, DIRECT_GENET_SLOT_LENGTH_OFFSET,
-    DIRECT_GENET_SLOT_PAYLOAD_OFFSET, DIRECT_GENET_TX_CONSUMER_STATE_OFFSET,
-    DIRECT_GENET_TX_FIRST_PAGE_INDEX, DIRECT_GENET_TX_PRODUCER_STATE_OFFSET,
-    ETHERNET_FRAME_BYTES as DIRECT_GENET_MAX_FRAME_BYTES, SHARED_PAGE_BYTES,
+    DIRECT_GENET_RX_PRODUCER_STATE_OFFSET, DIRECT_GENET_SHARED_PAGE_COUNT,
+    DIRECT_GENET_SLOT_COMMIT_OFFSET, DIRECT_GENET_SLOT_HEADER_BYTES,
+    DIRECT_GENET_SLOT_LENGTH_OFFSET, DIRECT_GENET_SLOT_PAYLOAD_OFFSET,
+    DIRECT_GENET_TX_CONSUMER_STATE_OFFSET, DIRECT_GENET_TX_FIRST_PAGE_INDEX,
+    DIRECT_GENET_TX_PRODUCER_STATE_OFFSET, ETHERNET_FRAME_BYTES as DIRECT_GENET_MAX_FRAME_BYTES,
+    SHARED_PAGE_BYTES,
 };
 use font8x8::legacy::BASIC_LEGACY;
 #[cfg(target_os = "none")]
@@ -1158,8 +1160,9 @@ const GENET_TX_BUF_OFFSET: usize = GENET_STATUS_BLOCK_BYTES;
 const GENET_MAX_FRAME_LEN: usize = 1536;
 const GENET_RX_DRAIN_BUDGET: usize = 16;
 const GENET_RX_QUEUE_CAP: usize = GENET_RX_DRAIN_BUDGET;
-const GENET_DIRECT_FRAME_QUANTUM: usize = 16;
-const GENET_DIRECT_TX_FAIR_SHARE: usize = GENET_DIRECT_FRAME_QUANTUM / 2;
+const GENET_DIRECT_SLICE_WINDOW: usize = 16;
+const GENET_DIRECT_TX_FAIR_SHARE: usize = GENET_DIRECT_SLICE_WINDOW / 2;
+const GENET_DIRECT_MCS_SLICE_UNITS: usize = 1;
 const GENET_DIRECT_RX_SETTLE_US: u32 = 10_000;
 const GENET_DIRECT_RDMA_DISABLE_TIMEOUT_US: u32 = 5_000;
 const GENET_RX_CONTROL_BURST_LIMIT: u8 = 4;
@@ -2446,8 +2449,8 @@ const GENET_DIRECT_MCS_QUANTUM_CAP: u8 = 16;
 ///
 /// The selected kernel preserves a blocked thread's unspent head refill, so a
 /// notification wake is not itself a fresh-budget boundary. This window is
-/// retained across blocking waits and admits multiple bounded 16-frame DPC
-/// quanta while less than half the 3 ms budget has elapsed. A command endpoint
+/// retained across blocking waits and admits up to sixteen WCET-sized packet
+/// slices while less than half the 3 ms budget has elapsed. A command endpoint
 /// turn marks the window stale because it consumes the same scheduling context.
 /// Blocking time alone cannot reset the window: the final userspace sample
 /// precedes the kernel's budget charge, so elapsed wall time cannot prove every
@@ -16753,7 +16756,7 @@ fn genet_runtime_apply_post_quantum_route(route: GenetDirectMcsQuantumRoute) -> 
     }
 }
 
-/// Service one child-owned, bounded GENET packet DPC quantum.
+/// Service one child-owned, bounded GENET packet DPC slice.
 ///
 /// An exact IRQ badge starts the ordinary lifetime. After direct ownership,
 /// badge zero or the reciprocal peer badge may also join a raw owned level or
@@ -16815,31 +16818,42 @@ fn genet_runtime_service_dpc_state(state: &mut GenetRuntimeState, badge: u32) ->
 
     state.dpc_turns = state.dpc_turns.saturating_add(1);
     genet_runtime_poll_tx_completions(state);
-    let (direct_tx_serviced, direct_tx_units) = if state.direct_genet_active {
-        genet_direct_service_tx(state, GENET_DIRECT_TX_FAIR_SHARE)
+    let (direct_tx_serviced, drain_cap, drained, rx_service_units) = if state.direct_genet_active {
+        // A manifest WCET describes one material packet operation, not a
+        // sixteen-packet burst. Sample the MCS guard between every such
+        // operation while retaining a dense sixteen-slice activation.
+        // Odd/even DPC turns alternate the first choice so simultaneous
+        // RX and TX pressure receives an exact eight/eight fair share;
+        // an empty side immediately donates its one-unit slice.
+        let tx_first = state.dpc_turns & 1 != 0;
+        let mut tx_serviced = false;
+        let mut rx_cap = 0usize;
+        let mut rx_drained = 0usize;
+        let mut rx_units = 0usize;
+        if tx_first {
+            let (serviced, tx_units) = genet_direct_service_tx(state, GENET_DIRECT_MCS_SLICE_UNITS);
+            tx_serviced = serviced;
+            if tx_units == 0 && !state.direct_genet_faulted {
+                rx_cap = GENET_DIRECT_MCS_SLICE_UNITS;
+                (rx_drained, rx_units) =
+                    genet_direct_drain_rx_hardware(state, GENET_NAPI_BYTE_BUDGET, rx_cap);
+            }
+        } else {
+            rx_cap = GENET_DIRECT_MCS_SLICE_UNITS;
+            (rx_drained, rx_units) =
+                genet_direct_drain_rx_hardware(state, GENET_NAPI_BYTE_BUDGET, rx_cap);
+            if rx_units == 0 && !state.direct_genet_faulted {
+                (tx_serviced, _) = genet_direct_service_tx(state, GENET_DIRECT_MCS_SLICE_UNITS);
+            }
+        }
+        (tx_serviced, rx_cap, rx_drained, rx_units)
     } else {
-        (false, 0)
-    };
-    let (drain_cap, drained, rx_service_units) = if state.direct_genet_active {
-        // One wake may move at most 16 frames total. TX receives an eight-frame
-        // fair share; retained ambiguous TX/RX finalization consumes the same
-        // unit as a fresh frame, and unused TX units become RX capacity. This
-        // keeps the manifest-declared MCS budget auditable without starving
-        // either ring or reducing coalesced-burst throughput to one packet per
-        // turn.
-        let drain_cap = GENET_DIRECT_FRAME_QUANTUM
-            .saturating_sub(direct_tx_units)
-            .min(GENET_RX_DRAIN_BUDGET)
-            .min(DIRECT_GENET_RX_SLOT_COUNT);
-        let (drained, rx_service_units) =
-            genet_direct_drain_rx_hardware(state, GENET_NAPI_BYTE_BUDGET, drain_cap);
-        (drain_cap, drained, rx_service_units)
-    } else {
+        let direct_tx_serviced = false;
         let free_slots = GENET_RX_QUEUE_CAP.saturating_sub(usize::from(state.rx_queue_count));
         let drain_cap = GENET_RX_DRAIN_BUDGET.min(free_slots);
         let drained =
             genet_runtime_drain_rx_hardware_to_queue(state, GENET_NAPI_BYTE_BUDGET, drain_cap);
-        (drain_cap, drained, drained)
+        (direct_tx_serviced, drain_cap, drained, drained)
     };
     if state.direct_genet_faulted {
         return false;
@@ -30511,6 +30525,10 @@ static TEST_CYW43_CONTROL_TX_DONE_PUBLISHES: AtomicU32 = AtomicU32::new(0);
 static TEST_CYW43_FOREGROUND_PARENT_U64_READS: AtomicUsize = AtomicUsize::new(0);
 #[cfg(test)]
 static TEST_CYW43_FOREGROUND_PARENT_U64_WRITES: AtomicUsize = AtomicUsize::new(0);
+#[cfg(test)]
+static TEST_SDIO_BUS_LINK_PARENT_U64_READS: AtomicUsize = AtomicUsize::new(0);
+#[cfg(test)]
+static TEST_SDIO_BUS_LINK_PARENT_U64_WRITES: AtomicUsize = AtomicUsize::new(0);
 
 #[cfg(any(target_os = "none", test))]
 #[inline(never)]
@@ -34288,16 +34306,104 @@ fn sdio_bus_link_copy_to_owner_payload(
         return None;
     }
     let window = RuntimeRingWindow::sdio_owner()?;
-    for index in 0..len {
+    sdio_bus_link_copy_runtime_to_owner_physical(window, frame.offset as usize, dst_offset, len)?;
+    driver_task_shared_store_barrier();
+    driver_task_shared_clean_range(DRIVER_TASK_SDIO_BUS_RING_VADDR + dst_offset, len);
+    Some(())
+}
+
+#[cfg(any(target_os = "none", test))]
+fn sdio_bus_link_runtime_owner_copy_shape(
+    runtime_offset: usize,
+    owner_offset: usize,
+    len: usize,
+) -> Option<SdioExternalDmaCopyShape> {
+    if !sdio_external_dma_payload_range_contiguous(runtime_offset, len) {
+        return None;
+    }
+    let runtime_vaddr = sdio_external_dma_payload_vaddr(runtime_offset)?;
+    let owner_vaddr = DRIVER_TASK_SDIO_BUS_RING_VADDR.checked_add(owner_offset)?;
+    Some(sdio_external_dma_copy_shape(
+        runtime_vaddr,
+        owner_vaddr,
+        len,
+    ))
+}
+
+#[cfg(any(target_os = "none", test))]
+fn sdio_bus_link_copy_runtime_to_owner_physical(
+    window: RuntimeRingWindow,
+    runtime_offset: usize,
+    owner_offset: usize,
+    len: usize,
+) -> Option<()> {
+    let shape = sdio_bus_link_runtime_owner_copy_shape(runtime_offset, owner_offset, len)?;
+    let mut copied = 0usize;
+    while copied < shape.prefix_bytes {
         if !window.write_u8(
-            dst_offset + index,
-            read_runtime_payload_byte(frame.offset as usize + index),
+            owner_offset + copied,
+            read_runtime_payload_byte_physical(runtime_offset + copied),
         ) {
             return None;
         }
+        copied += 1;
     }
-    driver_task_shared_store_barrier();
-    driver_task_shared_clean_range(DRIVER_TASK_SDIO_BUS_RING_VADDR + dst_offset, len);
+    for _ in 0..shape.word_count {
+        let value = read_runtime_payload_u64_physical(runtime_offset + copied);
+        if !window.write_u32(owner_offset + copied, value as u32)
+            || !window.write_u32(owner_offset + copied + 4, (value >> 32) as u32)
+        {
+            return None;
+        }
+        #[cfg(test)]
+        TEST_SDIO_BUS_LINK_PARENT_U64_READS.fetch_add(1, Ordering::AcqRel);
+        copied += SDIO_DMA_COPY_WORD_BYTES;
+    }
+    let tail_end = copied + shape.tail_bytes;
+    while copied < tail_end {
+        if !window.write_u8(
+            owner_offset + copied,
+            read_runtime_payload_byte_physical(runtime_offset + copied),
+        ) {
+            return None;
+        }
+        copied += 1;
+    }
+    Some(())
+}
+
+#[cfg(any(target_os = "none", test))]
+fn sdio_bus_link_copy_owner_to_runtime_physical(
+    window: RuntimeRingWindow,
+    owner_offset: usize,
+    runtime_offset: usize,
+    len: usize,
+) -> Option<()> {
+    let shape = sdio_bus_link_runtime_owner_copy_shape(runtime_offset, owner_offset, len)?;
+    let mut copied = 0usize;
+    while copied < shape.prefix_bytes {
+        write_runtime_payload_byte_physical(
+            runtime_offset + copied,
+            window.read_u8(owner_offset + copied)?,
+        );
+        copied += 1;
+    }
+    for _ in 0..shape.word_count {
+        let lower = u64::from(window.read_u32(owner_offset + copied)?);
+        let upper = u64::from(window.read_u32(owner_offset + copied + 4)?);
+        write_runtime_payload_u64_physical(runtime_offset + copied, lower | (upper << 32));
+        #[cfg(test)]
+        TEST_SDIO_BUS_LINK_PARENT_U64_WRITES.fetch_add(1, Ordering::AcqRel);
+        copied += SDIO_DMA_COPY_WORD_BYTES;
+    }
+    let tail_end = copied + shape.tail_bytes;
+    while copied < tail_end {
+        write_runtime_payload_byte_physical(
+            runtime_offset + copied,
+            window.read_u8(owner_offset + copied)?,
+        );
+        copied += 1;
+    }
     Some(())
 }
 
@@ -34307,6 +34413,11 @@ fn sdio_bus_link_copy_from_owner_payload(
     frame: DriverFrameDescriptor,
     len: usize,
 ) -> Option<()> {
+    let frame_len = usize::from(frame.len);
+    if len > frame_len {
+        return None;
+    }
+    let copy_len = u16::try_from(len).ok()?;
     if cyw43_foreground_transaction_executing() {
         return CYW43_FOREGROUND_TRANSACTION.with_mut(|transaction| {
             let index = transaction.last_replayed_index as usize;
@@ -34318,7 +34429,7 @@ fn sdio_bus_link_copy_from_owner_payload(
             let shared_payload_bytes = RUNTIME_DESCRIPTOR.with_ref(runtime_shared_buffer_bytes);
             let dst_frame = DriverFrameDescriptor {
                 offset: frame.offset,
-                len: len as u16,
+                len: copy_len,
                 flags: frame.flags,
             };
             if !entry.read_from_owner
@@ -34347,7 +34458,7 @@ fn sdio_bus_link_copy_from_owner_payload(
     let shared_payload_bytes = RUNTIME_DESCRIPTOR.with_ref(runtime_shared_buffer_bytes);
     let dst_frame = DriverFrameDescriptor {
         offset: frame.offset,
-        len: len as u16,
+        len: copy_len,
         flags: frame.flags,
     };
     if !frame.in_runtime_payload(shared_payload_bytes)
@@ -34358,12 +34469,7 @@ fn sdio_bus_link_copy_from_owner_payload(
     }
     let window = RuntimeRingWindow::sdio_owner()?;
     driver_task_shared_invalidate_range(DRIVER_TASK_SDIO_BUS_RING_VADDR + src_offset, len);
-    for index in 0..len {
-        write_runtime_payload_byte(
-            frame.offset as usize + index,
-            window.read_u8(src_offset + index)?,
-        );
-    }
+    sdio_bus_link_copy_owner_to_runtime_physical(window, src_offset, frame.offset as usize, len)?;
     Some(())
 }
 
@@ -67717,6 +67823,8 @@ mod tests {
         TEST_CYW43_CONTROL_TX_DONE_PUBLISHES.store(0, Ordering::Release);
         TEST_CYW43_FOREGROUND_PARENT_U64_READS.store(0, Ordering::Release);
         TEST_CYW43_FOREGROUND_PARENT_U64_WRITES.store(0, Ordering::Release);
+        TEST_SDIO_BUS_LINK_PARENT_U64_READS.store(0, Ordering::Release);
+        TEST_SDIO_BUS_LINK_PARENT_U64_WRITES.store(0, Ordering::Release);
         TEST_CYW43_ROOT_WAKE_SIGNALS.store(0, Ordering::Release);
         TEST_CYW43_DPC_TIMING_WRITE_ROOT_WAKE_SIGNALS.store(usize::MAX, Ordering::Release);
         TEST_CYW43_PEER_WAKE_SIGNALS.store(0, Ordering::Release);
@@ -78482,10 +78590,10 @@ mod tests {
     }
 
     #[test]
-    fn direct_genet_one_wake_has_exact_sixteen_frame_fair_quantum() {
+    fn direct_genet_slices_have_exact_sixteen_unit_fair_window() {
         let _guard = test_guard();
         reset_runtime_for_test();
-        assert_eq!(GENET_DIRECT_FRAME_QUANTUM, 16);
+        assert_eq!(GENET_DIRECT_SLICE_WINDOW, 16);
         assert_eq!(GENET_DIRECT_TX_FAIR_SHARE, 8);
         let generation = 0x26e0_0007;
         let descriptor = direct_genet_descriptor_for_test();
@@ -78503,11 +78611,21 @@ mod tests {
             &mut state,
             DRIVER_RUNTIME_DIRECT_GENET_NOTIFICATION_BADGE,
         ));
+        assert_eq!(state.direct_genet_tx_packets, 1);
+        assert_eq!(state.direct_genet_rx_packets, 0);
+        for expected_total in 2..=GENET_DIRECT_SLICE_WINDOW as u32 {
+            assert!(genet_runtime_service_dpc_state(&mut state, 0));
+            assert_eq!(
+                state.direct_genet_tx_packets + state.direct_genet_rx_packets,
+                expected_total,
+                "each guarded service slice admits exactly one material packet operation",
+            );
+        }
         assert_eq!(state.direct_genet_tx_packets, 8);
         assert_eq!(state.direct_genet_rx_packets, 8);
         assert_eq!(
             state.direct_genet_tx_packets + state.direct_genet_rx_packets,
-            GENET_DIRECT_FRAME_QUANTUM as u32,
+            GENET_DIRECT_SLICE_WINDOW as u32,
         );
         let (_, tx_after_first) = genet_direct_control_sample(DirectGenetDirection::Tx, generation)
             .expect("bounded TX state remains exact");
@@ -78517,14 +78635,22 @@ mod tests {
         assert_eq!(rx_after_first.producer_cursor, 8);
         assert!(genet_runtime_dpc_local_continuation_ready(&state));
 
-        assert!(genet_runtime_service_dpc_state(&mut state, 0));
+        for expected_total in
+            GENET_DIRECT_SLICE_WINDOW as u32 + 1..(2 * GENET_DIRECT_SLICE_WINDOW) as u32
+        {
+            assert!(genet_runtime_service_dpc_state(&mut state, 0));
+            assert_eq!(
+                state.direct_genet_tx_packets + state.direct_genet_rx_packets,
+                expected_total,
+            );
+        }
         assert_eq!(state.direct_genet_tx_packets, 16);
         assert_eq!(state.direct_genet_rx_packets, 15);
         assert_eq!(state.rx_cons_index, DIRECT_GENET_RX_SLOT_COUNT as u16);
     }
 
     #[test]
-    fn direct_genet_tx_reconciliation_is_charged_to_fair_and_total_quantum() {
+    fn direct_genet_tx_reconciliation_is_charged_to_fair_and_total_window() {
         let _guard = test_guard();
         reset_runtime_for_test();
         let generation = 0x26e0_0009;
@@ -78550,19 +78676,25 @@ mod tests {
             &mut state,
             DRIVER_RUNTIME_DIRECT_GENET_NOTIFICATION_BADGE,
         ));
+        assert_eq!(state.direct_genet_pending_tx, None);
+        assert_eq!(state.direct_genet_tx_packets, 1);
+        assert_eq!(state.direct_genet_rx_packets, 0);
+        for _ in 1..GENET_DIRECT_SLICE_WINDOW {
+            assert!(genet_runtime_service_dpc_state(&mut state, 0));
+        }
         let (_, tx) = genet_direct_control_sample(DirectGenetDirection::Tx, generation)
             .expect("bounded TX state remains exact after reconciliation");
         let (_, rx) = genet_direct_control_sample(DirectGenetDirection::Rx, generation)
             .expect("bounded RX state remains exact after reconciliation");
         assert_eq!(
             tx.consumer_cursor, GENET_DIRECT_TX_FAIR_SHARE as u64,
-            "one retained TX finalization plus seven new submissions consumes the fair share",
+            "one retained TX finalization plus seven submissions consumes the dense-window share",
         );
         assert_eq!(rx.producer_cursor, 8);
         assert_eq!(
             state.direct_genet_tx_packets + state.direct_genet_rx_packets,
-            GENET_DIRECT_FRAME_QUANTUM as u32,
-            "retained TX finalization and fresh RX/TX packets cannot exceed one quantum",
+            GENET_DIRECT_SLICE_WINDOW as u32,
+            "retained TX finalization and fresh RX/TX packets cannot exceed one dense window",
         );
         assert_eq!(state.direct_genet_pending_tx, None);
     }
@@ -105327,6 +105459,345 @@ mod tests {
                 }
             }
         });
+    }
+
+    #[test]
+    fn sdio_bus_link_nonforeground_bulk_copy_is_exact_for_every_alignment() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        init_runtime_for_test(HOT_PATH_CYW43_WIFI, ROLE_NET);
+        const COPY_BYTES: usize = 79;
+        const RUNTIME_BASES: [usize; 2] = [
+            DRIVER_TASK_RING_FRAME_OFFSET + 128,
+            DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE as usize + 128,
+        ];
+        const OWNER_BASE: usize = CYW43_SDIO_BUS_LINK_DATA_OFFSET + 512;
+        let owner = RuntimeRingWindow::sdio_owner().expect("generated descriptor binds SDIO owner");
+        assert!(!cyw43_foreground_transaction_executing());
+
+        for (arena_index, runtime_base) in RUNTIME_BASES.into_iter().enumerate() {
+            for runtime_alignment in 0..SDIO_DMA_COPY_WORD_BYTES {
+                for owner_alignment in 0..SDIO_DMA_COPY_WORD_BYTES {
+                    let runtime_offset = runtime_base + runtime_alignment;
+                    let owner_offset = OWNER_BASE + owner_alignment;
+                    let frame = DriverFrameDescriptor {
+                        offset: runtime_offset as u32,
+                        len: COPY_BYTES as u16,
+                        flags: 0,
+                    };
+                    let expected_forward: [u8; COPY_BYTES] = core::array::from_fn(|index| {
+                        0x31u8
+                            .wrapping_add((index as u8).wrapping_mul(37))
+                            .wrapping_add(
+                                (arena_index * 11 + runtime_alignment * 3 + owner_alignment) as u8,
+                            )
+                    });
+                    for (index, value) in expected_forward.iter().copied().enumerate() {
+                        write_runtime_payload_byte_physical(runtime_offset + index, value);
+                    }
+                    write_runtime_payload_byte_physical(runtime_offset - 1, 0x96);
+                    write_runtime_payload_byte_physical(runtime_offset + COPY_BYTES, 0x69);
+                    assert!(owner.write_u8(owner_offset - 1, 0x5a));
+                    assert!(owner.write_u8(owner_offset + COPY_BYTES, 0xa5));
+                    let shape = sdio_bus_link_runtime_owner_copy_shape(
+                        runtime_offset,
+                        owner_offset,
+                        COPY_BYTES,
+                    )
+                    .expect("admitted runtime and owner ranges have exact copy geometry");
+                    let reads_before = TEST_SDIO_BUS_LINK_PARENT_U64_READS.load(Ordering::Acquire);
+
+                    assert_eq!(
+                        sdio_bus_link_copy_to_owner_payload(frame, owner_offset),
+                        Some(()),
+                    );
+                    for (index, expected) in expected_forward.iter().copied().enumerate() {
+                        assert_eq!(owner.read_u8(owner_offset + index), Some(expected));
+                        assert_eq!(
+                            read_runtime_payload_byte_physical(runtime_offset + index),
+                            expected,
+                        );
+                    }
+                    assert_eq!(read_runtime_payload_byte_physical(runtime_offset - 1), 0x96,);
+                    assert_eq!(
+                        read_runtime_payload_byte_physical(runtime_offset + COPY_BYTES),
+                        0x69,
+                    );
+                    assert_eq!(owner.read_u8(owner_offset - 1), Some(0x5a));
+                    assert_eq!(owner.read_u8(owner_offset + COPY_BYTES), Some(0xa5));
+                    assert_eq!(
+                        TEST_SDIO_BUS_LINK_PARENT_U64_READS.load(Ordering::Acquire) - reads_before,
+                        shape.word_count,
+                    );
+
+                    let expected_reverse: [u8; COPY_BYTES] = core::array::from_fn(|index| {
+                        0xe7u8
+                            .wrapping_sub((index as u8).wrapping_mul(19))
+                            .wrapping_add(
+                                (arena_index * 13 + runtime_alignment + owner_alignment * 5) as u8,
+                            )
+                    });
+                    for (index, value) in expected_reverse.iter().copied().enumerate() {
+                        assert!(owner.write_u8(owner_offset + index, value));
+                    }
+                    write_runtime_payload_byte_physical(runtime_offset - 1, 0xc3);
+                    write_runtime_payload_byte_physical(runtime_offset + COPY_BYTES, 0x3c);
+                    let writes_before =
+                        TEST_SDIO_BUS_LINK_PARENT_U64_WRITES.load(Ordering::Acquire);
+
+                    assert_eq!(
+                        sdio_bus_link_copy_from_owner_payload(owner_offset, frame, COPY_BYTES),
+                        Some(()),
+                    );
+                    for (index, expected) in expected_reverse.iter().copied().enumerate() {
+                        assert_eq!(
+                            read_runtime_payload_byte_physical(runtime_offset + index),
+                            expected,
+                        );
+                        assert_eq!(owner.read_u8(owner_offset + index), Some(expected));
+                    }
+                    assert_eq!(read_runtime_payload_byte_physical(runtime_offset - 1), 0xc3,);
+                    assert_eq!(
+                        read_runtime_payload_byte_physical(runtime_offset + COPY_BYTES),
+                        0x3c,
+                    );
+                    assert_eq!(
+                        TEST_SDIO_BUS_LINK_PARENT_U64_WRITES.load(Ordering::Acquire)
+                            - writes_before,
+                        shape.word_count,
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn sdio_bus_link_nonforeground_bulk_copy_fails_closed_at_every_boundary() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        init_runtime_for_test(HOT_PATH_CYW43_WIFI, ROLE_NET);
+        let owner = RuntimeRingWindow::sdio_owner().expect("generated descriptor binds SDIO owner");
+        let runtime_end =
+            DRIVER_TASK_RING_PAGE_BYTES + RUNTIME_DESCRIPTOR.with_ref(runtime_shared_buffer_bytes);
+        let owner_end = DRIVER_TASK_RING_PAGE_BYTES + CYW43_SDIO_BUS_LINK_DATA_BYTES;
+
+        let empty = DriverFrameDescriptor {
+            offset: runtime_end as u32,
+            len: 0,
+            flags: 0,
+        };
+        assert_eq!(
+            sdio_bus_link_copy_to_owner_payload(empty, owner_end),
+            Some(()),
+        );
+        assert_eq!(
+            sdio_bus_link_copy_from_owner_payload(owner_end, empty, 0),
+            Some(()),
+        );
+
+        const END_COPY_BYTES: usize = 9;
+        let exact_end = DriverFrameDescriptor {
+            offset: (runtime_end - END_COPY_BYTES) as u32,
+            len: END_COPY_BYTES as u16,
+            flags: 0,
+        };
+        for index in 0..END_COPY_BYTES {
+            write_runtime_payload_byte_physical(
+                runtime_end - END_COPY_BYTES + index,
+                0x31u8.wrapping_add(index as u8),
+            );
+        }
+        assert_eq!(
+            sdio_bus_link_copy_to_owner_payload(exact_end, owner_end - END_COPY_BYTES),
+            Some(()),
+        );
+        for index in 0..END_COPY_BYTES {
+            assert_eq!(
+                owner.read_u8(owner_end - END_COPY_BYTES + index),
+                Some(0x31u8.wrapping_add(index as u8)),
+            );
+        }
+
+        const PROBE_BYTES: usize = 16;
+        const OWNER_PROBE: usize = CYW43_SDIO_BUS_LINK_DATA_OFFSET + 128;
+        const RUNTIME_PROBE: usize = DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE as usize + 128;
+        for index in 0..PROBE_BYTES {
+            assert!(owner.write_u8(OWNER_PROBE + index, 0x6d));
+            write_runtime_payload_byte_physical(RUNTIME_PROBE + index, 0xd6);
+        }
+        let rejected_frames = [
+            DriverFrameDescriptor {
+                offset: (DRIVER_TASK_RING_PAGE_BYTES - 4) as u32,
+                len: 8,
+                flags: 0,
+            },
+            DriverFrameDescriptor {
+                offset: (runtime_end - 4) as u32,
+                len: 8,
+                flags: 0,
+            },
+        ];
+        for frame in rejected_frames {
+            assert_eq!(
+                sdio_bus_link_copy_to_owner_payload(frame, OWNER_PROBE),
+                None,
+            );
+        }
+        let valid_probe = DriverFrameDescriptor {
+            offset: RUNTIME_PROBE as u32,
+            len: PROBE_BYTES as u16,
+            flags: 0,
+        };
+        assert_eq!(
+            sdio_bus_link_copy_to_owner_payload(valid_probe, owner_end - 4),
+            None,
+        );
+        assert_eq!(
+            sdio_bus_link_copy_to_owner_payload(valid_probe, usize::MAX),
+            None,
+        );
+        for index in 0..PROBE_BYTES {
+            assert_eq!(owner.read_u8(OWNER_PROBE + index), Some(0x6d));
+        }
+
+        let short_frame = DriverFrameDescriptor {
+            offset: RUNTIME_PROBE as u32,
+            len: (PROBE_BYTES - 1) as u16,
+            flags: 0,
+        };
+        assert_eq!(
+            sdio_bus_link_copy_from_owner_payload(OWNER_PROBE, short_frame, PROBE_BYTES),
+            None,
+        );
+        assert_eq!(
+            sdio_bus_link_copy_from_owner_payload(owner_end - 4, valid_probe, PROBE_BYTES),
+            None,
+        );
+        assert_eq!(
+            sdio_bus_link_copy_from_owner_payload(usize::MAX, valid_probe, PROBE_BYTES),
+            None,
+        );
+        for index in 0..PROBE_BYTES {
+            assert_eq!(
+                read_runtime_payload_byte_physical(RUNTIME_PROBE + index),
+                0xd6,
+            );
+        }
+    }
+
+    #[test]
+    fn sdio_bus_link_foreground_copy_retains_trace_and_overlay_authority() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        init_runtime_for_test(HOT_PATH_CYW43_WIFI, ROLE_NET);
+        const COPY_BYTES: usize = 16;
+        const RUNTIME_OFFSET: usize = DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE as usize + 768;
+        const OWNER_OFFSET: usize = CYW43_SDIO_BUS_LINK_DATA_OFFSET;
+        let frame = DriverFrameDescriptor {
+            offset: RUNTIME_OFFSET as u32,
+            len: COPY_BYTES as u16,
+            flags: 0,
+        };
+        let owner = RuntimeRingWindow::sdio_owner().expect("generated descriptor binds SDIO owner");
+        let sealed_parent: [u8; COPY_BYTES] =
+            core::array::from_fn(|index| 0x21u8.wrapping_add((index as u8).wrapping_mul(17)));
+        for index in 0..COPY_BYTES {
+            write_runtime_payload_byte_physical(RUNTIME_OFFSET + index, 0xd0 ^ index as u8);
+            assert!(owner.write_u8(OWNER_OFFSET + index, 0xa7));
+        }
+        CYW43_FOREGROUND_TRANSACTION.with_mut(|transaction| {
+            transaction.clear();
+            transaction.active = true;
+            transaction.executing = true;
+            transaction.parent_input_sealed = true;
+            transaction.parent_payload_offset = RUNTIME_OFFSET as u16;
+            transaction.parent_payload_len = COPY_BYTES as u16;
+            transaction.parent_payload[..COPY_BYTES].copy_from_slice(&sealed_parent);
+            transaction.parent_payload_digest = transaction.sealed_parent_payload_digest();
+            transaction.record_parent_overlay(RUNTIME_OFFSET + 3, 0x6c);
+            transaction.record_parent_overlay(RUNTIME_OFFSET + 12, 0xb7);
+        });
+        let mut expected_forward = sealed_parent;
+        expected_forward[3] = 0x6c;
+        expected_forward[12] = 0xb7;
+
+        assert_eq!(
+            sdio_bus_link_copy_to_owner_payload(frame, OWNER_OFFSET),
+            Some(()),
+        );
+        CYW43_FOREGROUND_TRANSACTION.with_ref(|transaction| {
+            assert_eq!(transaction.prepared_write_len, COPY_BYTES as u16);
+            assert_eq!(transaction.prepared_write[..COPY_BYTES], expected_forward,);
+            assert_eq!(transaction.parent_payload[..COPY_BYTES], sealed_parent);
+            assert!(transaction.parent_payload_seal_valid());
+        });
+        for index in 0..COPY_BYTES {
+            assert_eq!(owner.read_u8(OWNER_OFFSET + index), Some(0xa7));
+        }
+        assert_eq!(
+            TEST_SDIO_BUS_LINK_PARENT_U64_READS.load(Ordering::Acquire),
+            0,
+        );
+
+        let expected_reverse: [u8; COPY_BYTES] =
+            core::array::from_fn(|index| 0xe1u8.wrapping_sub((index as u8).wrapping_mul(11)));
+        for index in 0..COPY_BYTES {
+            write_runtime_payload_byte_physical(RUNTIME_OFFSET + index, 0x4d);
+            assert!(owner.write_u8(OWNER_OFFSET + index, 0x74));
+        }
+        CYW43_FOREGROUND_TRANSACTION.with_mut(|transaction| {
+            transaction.clear();
+            transaction.active = true;
+            transaction.executing = true;
+            transaction.parent_input_sealed = true;
+            transaction.parent_payload_offset = RUNTIME_OFFSET as u16;
+            transaction.parent_payload_len = COPY_BYTES as u16;
+            transaction.parent_payload[..COPY_BYTES].copy_from_slice(&sealed_parent);
+            transaction.parent_payload_digest = transaction.sealed_parent_payload_digest();
+            transaction.turn.completed_count = 1;
+            transaction.last_replayed_index = 0;
+            transaction.payload_used = COPY_BYTES as u32;
+            transaction.payload[..COPY_BYTES].copy_from_slice(&expected_reverse);
+            transaction.entries[0] = Cyw43ForegroundTraceEntry {
+                completion: DriverTaskCompletionRecord::frame_ready_at(
+                    0x8000_0042,
+                    OWNER_OFFSET as u32,
+                    COPY_BYTES as u16,
+                ),
+                read_offset: 0,
+                read_len: COPY_BYTES as u16,
+                read_from_owner: true,
+                local_read_frame: frame,
+                ..Cyw43ForegroundTraceEntry::empty()
+            };
+        });
+
+        assert_eq!(
+            sdio_bus_link_copy_from_owner_payload(OWNER_OFFSET, frame, COPY_BYTES),
+            Some(()),
+        );
+        for (index, expected) in expected_reverse.iter().copied().enumerate() {
+            assert_eq!(
+                read_runtime_payload_byte_physical(RUNTIME_OFFSET + index),
+                expected,
+            );
+            assert_eq!(owner.read_u8(OWNER_OFFSET + index), Some(0x74));
+        }
+        CYW43_FOREGROUND_TRANSACTION.with_ref(|transaction| {
+            assert_eq!(transaction.parent_payload[..COPY_BYTES], sealed_parent);
+            assert!(transaction.parent_payload_seal_valid());
+            for (index, expected) in expected_reverse.iter().copied().enumerate() {
+                assert_eq!(
+                    transaction.read_parent_payload(RUNTIME_OFFSET + index),
+                    Some(expected),
+                );
+            }
+        });
+        assert_eq!(
+            TEST_SDIO_BUS_LINK_PARENT_U64_WRITES.load(Ordering::Acquire),
+            0,
+        );
+        CYW43_FOREGROUND_TRANSACTION.with_mut(Cyw43ForegroundTransaction::clear);
     }
 
     #[test]

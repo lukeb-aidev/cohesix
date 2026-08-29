@@ -303,6 +303,16 @@ private uncached DMA4 bounce region under the existing bounded command turn.
 The owners, retry ceilings, pair-restart sequencing, and device/aggregate
 deadlines remain unchanged.
 
+The adjacent nonforeground CYW43-to-SDIO bus-link copy validates the complete
+parent-payload and owner-aperture ranges before mutation. Matching actual
+virtual-address alignment permits naturally aligned parent words and paired
+aligned owner words; other alignment uses the existing physical byte
+primitives without consulting foreground transaction state per byte. No copy
+may cross the runtime ring/shared-buffer seam. Invalidate, store-barrier, and
+clean ordering stays unchanged, as does the foreground sealed-parent
+trace/overlay authority. This removes bookkeeping cost without adding an SC
+turn, payload authority, retry, fallback issuer, or physical SDIO operation.
+
 Retained exact-grant admission for the CYW43/SDIO pair may collapse at most
 three hardware-free bookkeeping states within one already admitted child turn.
 The bound covers source arbitration, one stable grant read, and only after an
@@ -335,17 +345,23 @@ fresh leaf at 2,499 us elapsed with only 251 us of SC budget remaining.
 A missing, zero, backwards, drifted, or otherwise invalid counter/configuration
 permits one legacy logical turn before yielding, preserving liveness. After
 service readiness, an attached Network turn may retain the same window only
-when EventPump proves actual network activity, exactly one CYW43 service-unit
-advance, an immediate Network successor, and either durable schedulable
-physical work or an active response cursor whose nonzero connection identity
-exactly matches both the active and authenticated session. The response case
-selects only the next separately charged bounded Network turn; it does not
-burst the isolated child's ordinary lower rotor. Recovery, quarantine, reboot,
-operator rotation, stale identity, idle, wait, nonprogress, handoff, pressure,
-fault, terminal, or any failed token yields and resets. The unchanged SC and
-natural-postpone policy remain the hard execution boundary. This replaces the
-former pair-restart Driver burst, changes no generated temporal value, and does
-not apply to QEMU or generic root control.
+when EventPump proves actual network activity and exactly one CYW43
+service-unit advance. The ordinary continuation requires an immediate Network
+successor and durable schedulable physical work. An active response cursor may
+instead complete exactly `Network -> Serial -> LocalSeat -> Dispatch ->
+Network`: the nonzero active/authenticated connection, one-step cursor
+decrement, service/flush deltas, unchanged accepted-command count, and
+generation/pair/lifetime rotation token must all agree. The rotation admits
+LocalSeat exactly once, performs one backend poll only when USB service debt
+exists, clears the token at Dispatch, performs no second Network operation in
+that wrapper, and selects only the next separately charged bounded Network turn
+after the caller rechecks the 250 us reserve and 64-unit cap. Real physical
+input or response, terminal return, recovery, quarantine, containment, reboot,
+stale identity, idle, wait, nonprogress, handoff, pressure, fault, or any failed
+token yields and resets. The unchanged SC and natural-postpone policy remain
+the hard execution boundary. This replaces the former pair-restart Driver
+burst, changes no generated temporal value, and does not apply to QEMU or
+generic root control.
 
 The Pi direct-GENET-feature authenticated console's isolated TCP socket,
 shared by the selected WiFi and wired modes, disables delayed ACK and Nagle for
@@ -389,10 +405,10 @@ refills, priority 160, and terminal timeout policy. This isolates the production
 wired path from the CYW43/SDIO pair on core 3 without changing either Wi-Fi SC.
 The compiler admits `6,250/9,000 us` on core 1 and `8,000/9,000 us` on core 3,
 leaving 2,750 us and 1,000 us of usable-core reserve respectively. GENET's
-existing 800 us WCET yields a 3,400 us computed response bound; that is static
-admission truth, not measured packet latency. The Pi-only IRQ 189/badge 1024
-default-queue DPC may
-drain at most 16 frames and 24,576 bytes into its private queue per quantum;
+existing exact 800 us WCET yields a 3,400 us computed response bound; that is
+static admission truth, not measured packet latency. Before direct handoff, the
+Pi-only IRQ 189/badge 1024 legacy/default-queue DPC may drain at most 16 frames
+and 24,576 bytes into its private queue per quantum;
 remaining exact IRQ work retains a masked, unacknowledged continuation. QEMU
 keeps its existing three-entry driver-runtime IRQ topology with no GENET IRQ
 and identical scheduling. After DHCP and exact old-path quiescence, Pi GENET
@@ -404,15 +420,21 @@ donation or packet authority. A peer fault couples containment only: suspend
 the GENET owner and remove both cross-child signal caps before unmapping the
 console copies, with no root packet fallback.
 
-The direct GENET owner treats repeated DPC quanta as one retained MCS window,
-not as fresh activations. It may re-enter only below the half-budget elapsed
-guard and 16-attempt cap, with one bounded no-progress retry. Block preserves
-the window. Any endpoint command forces a later `seL4_Yield` freshness boundary;
-that boundary resets software accounting only after the syscall returns. The
-compiler and runtime require max-two-refill `3,000/10,000 us` truth and a WCET
-no larger than half budget. Counter failure or contract drift contains the
-direct generation. Diagnostic high-water/reason fields observe these decisions
-but do not supply scheduling authority or target acceptance.
+The direct GENET owner treats repeated packet slices as one retained MCS
+window, not as fresh activations. Each guard sample admits at most one material
+TX or RX operation; successive slices alternate their first choice, an empty
+side donates its slice, and continuous bidirectional pressure receives an exact
+8/8 split inside the 16-slice cap. Retained ambiguous cursor reconciliation
+consumes the same bound. The owner may re-enter only below the half-budget
+elapsed guard and 16-attempt cap, with one bounded no-progress retry. Block
+preserves the window. Any endpoint command forces a later `seL4_Yield`
+freshness boundary; that boundary resets software accounting only after the
+syscall returns. The compiler and generated profile require exact
+`wcet_us=800`; the handoff and runtime validate exact max-two-refill
+`3,000/10,000 us` truth. Counter failure, cursor drift, or contract drift
+contains the direct generation. The packet-slice duration high-water and
+dense-window reason fields observe these decisions but do not supply
+scheduling authority or target acceptance.
 
 CYW43 and SDIO remain separate active core-3 runtimes at priority 184 with
 unchanged `1,500 us / 10,000 us` budgets, natural-postpone behavior, WCETs,

@@ -3439,6 +3439,91 @@ fn deferred_cyw43_attached_network_continuation(
         && (schedulable_network_work || retained_authenticated_response_flush)
 }
 
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Cyw43ResponseRotationContinuationEvidence {
+    starting_phase: LinkedRuntimeServicePhase,
+    admitted_phase: LinkedRuntimeServicePhase,
+    next_phase: LinkedRuntimeServicePhase,
+    unit_index: usize,
+    network_units: usize,
+    serial_admitted: bool,
+    local_seat_admitted: bool,
+    cyw43_lane_selected: bool,
+    network_activity: bool,
+    service_turns_before: u64,
+    service_turns_after: u64,
+    flush_polls_before: u64,
+    flush_polls_after: u64,
+    pending_before: PendingNetFlush,
+    pending_after: PendingNetFlush,
+    active_connection_id_before: Option<u64>,
+    authenticated_connection_id_before: Option<u64>,
+    active_connection_id_after: Option<u64>,
+    authenticated_connection_id_after: Option<u64>,
+    rotation_after_network: Option<LinkedRuntimeCyw43DurableResume>,
+    rotation_before_dispatch: Option<LinkedRuntimeCyw43DurableResume>,
+    rotation_after_dispatch: Option<LinkedRuntimeCyw43DurableResume>,
+    rotation_matches_current_lifetime: bool,
+    accepted_commands_before: u64,
+    accepted_commands_after: u64,
+    terminal_drain_return_due: bool,
+    network_service_quarantined: bool,
+    reboot_pending: bool,
+    recovery_required: bool,
+    containment_work_pending: bool,
+    physical_console_response_pending: bool,
+    physical_operator_work: LinkedPhysicalOperatorWork,
+}
+
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+fn cyw43_response_rotation_continuation(
+    evidence: Cyw43ResponseRotationContinuationEvidence,
+) -> bool {
+    let Some(connection_id) = evidence.pending_before.conn_id else {
+        return false;
+    };
+    let Some(rotation) = evidence.rotation_after_network else {
+        return false;
+    };
+    connection_id != 0
+        && evidence.starting_phase == LinkedRuntimeServicePhase::Network
+        && evidence.admitted_phase == LinkedRuntimeServicePhase::Dispatch
+        && evidence.next_phase == LinkedRuntimeServicePhase::Network
+        && evidence.unit_index == 3
+        && evidence.network_units == 1
+        && evidence.serial_admitted
+        && evidence.local_seat_admitted
+        && evidence.cyw43_lane_selected
+        && evidence.network_activity
+        && evidence.service_turns_before != u64::MAX
+        && evidence.service_turns_after == evidence.service_turns_before + 1
+        && evidence.flush_polls_before != u64::MAX
+        && evidence.flush_polls_after == evidence.flush_polls_before + 1
+        && evidence.pending_before.remaining_turns > 1
+        && evidence.pending_after.remaining_turns.checked_add(1)
+            == Some(evidence.pending_before.remaining_turns)
+        && evidence.pending_after.conn_id == Some(connection_id)
+        && evidence.active_connection_id_before == Some(connection_id)
+        && evidence.authenticated_connection_id_before == Some(connection_id)
+        && evidence.active_connection_id_after == Some(connection_id)
+        && evidence.authenticated_connection_id_after == Some(connection_id)
+        && evidence.rotation_before_dispatch == Some(rotation)
+        && evidence.rotation_after_dispatch.is_none()
+        && evidence.rotation_matches_current_lifetime
+        && evidence.accepted_commands_before != u64::MAX
+        && evidence.accepted_commands_after == evidence.accepted_commands_before
+        && !evidence.terminal_drain_return_due
+        && !evidence.network_service_quarantined
+        && !evidence.reboot_pending
+        && !evidence.recovery_required
+        && !evidence.containment_work_pending
+        && !evidence.physical_console_response_pending
+        && !evidence
+            .physical_operator_work
+            .retains_network_fence_after_dispatch()
+}
+
 /// Maximum number of independently bounded Pi linked-runtime polls admitted
 /// before root-control performs its explicit cooperative yield.
 ///
@@ -6825,10 +6910,11 @@ where
     /// arbitration and performs at most its existing one-phase hardware unit.
     /// The wrapper may fuse up to five distinct serial, local-seat, dispatch,
     /// display, and Network phases, but ordinarily admits Network at most once.
-    /// Only an exact productive Network-to-Network edge or the terminal-only
-    /// return below can revisit it. Recovery,
-    /// quarantine, reboot, containment, a repeated phase, or a completed
-    /// operator rotation stops the quantum and returns false. One exact
+    /// Only an exact productive Network-to-Network edge, the completed
+    /// connection-bound response rotation below, or the terminal-only return
+    /// below can revisit it. Recovery, quarantine, reboot, containment, a
+    /// repeated phase, or any other completed operator rotation stops the
+    /// quantum and returns false. One exact
     /// zero-operation CYW43 park may return after Serial solely to retire the
     /// unchanged parent's newly visible terminal; it cannot issue a successor
     /// and remains inside the same five-unit bound. A still-active,
@@ -6841,11 +6927,25 @@ where
     pub fn poll_deferred_cyw43_attached_network_control_turn(&mut self) -> bool {
         let starting_phase = self.linked_runtime_service_phase;
         let accepted_commands_at_start = self.metrics.accepted_commands;
+        let service_turns_at_start = self.metrics.net_cyw43_service_turns;
+        let flush_polls_at_start = self.metrics.net_post_dispatch_flush_polls;
+        let pending_flush_at_start = self.pending_net_flush;
+        let (active_connection_id_at_start, authenticated_connection_id_at_start) =
+            self.net.as_ref().map_or((None, None), |net| {
+                (
+                    net.active_console_conn_id(),
+                    net.authenticated_console_conn_id(),
+                )
+            });
         let mut network_units = 0usize;
         let mut serial_admitted = false;
+        let mut local_seat_admitted = false;
         let mut parked_cyw43_parent = None;
         let mut first_network_operations = 0u32;
         let mut first_cyw43_lane_selected = false;
+        let mut first_network_activity = false;
+        let mut rotation_after_network = None;
+        let mut rotation_before_dispatch = None;
         let mut terminal_drain_return_due = false;
         for unit_index in 0..PI4_LOCAL_OPERATOR_POLLS_PER_EXPLICIT_YIELD {
             let admitted_phase = self.linked_runtime_service_phase;
@@ -6893,20 +6993,26 @@ where
             if network_turn {
                 self.deferred_cyw43_attached_network_activity = false;
             }
+            if admitted_phase == LinkedRuntimeServicePhase::Dispatch {
+                rotation_before_dispatch = self.linked_runtime_cyw43_operator_rotation_pending;
+            }
 
             self.poll();
 
             serial_admitted |= admitted_phase == LinkedRuntimeServicePhase::Serial;
+            local_seat_admitted |= admitted_phase == LinkedRuntimeServicePhase::LocalSeat;
             if network_turn {
                 network_units = network_units.saturating_add(1);
                 if network_units == 1 {
                     first_cyw43_lane_selected = cyw43_lane_selected;
+                    first_network_activity = self.deferred_cyw43_attached_network_activity;
                     first_network_operations =
                         crate::drivers::driver_task_net::cyw43_outer_event_turn_operation_count();
                     parked_cyw43_parent = (first_network_operations == 0
                         && self.linked_runtime_service_phase == LinkedRuntimeServicePhase::Serial)
                         .then_some(cyw43_park_candidate_before_poll)
                         .flatten();
+                    rotation_after_network = self.linked_runtime_cyw43_operator_rotation_pending;
                 }
                 if terminal_drain_return_admitted {
                     // The one-shot revisit exists only to retire the exact
@@ -6956,6 +7062,56 @@ where
                 accepted_commands_at_start,
                 terminal_drain_return_admitted,
             );
+
+            if admitted_phase == LinkedRuntimeServicePhase::Dispatch {
+                let (active_connection_id_after, authenticated_connection_id_after) =
+                    self.net.as_ref().map_or((None, None), |net| {
+                        (
+                            net.active_console_conn_id(),
+                            net.authenticated_console_conn_id(),
+                        )
+                    });
+                let current_snapshot =
+                    crate::drivers::driver_task_net::cyw43_service_work_snapshot();
+                if cyw43_response_rotation_continuation(Cyw43ResponseRotationContinuationEvidence {
+                    starting_phase,
+                    admitted_phase,
+                    next_phase: self.linked_runtime_service_phase,
+                    unit_index,
+                    network_units,
+                    serial_admitted,
+                    local_seat_admitted,
+                    cyw43_lane_selected: first_cyw43_lane_selected
+                        && self.linked_runtime_cyw43_lane_selected(),
+                    network_activity: first_network_activity,
+                    service_turns_before: service_turns_at_start,
+                    service_turns_after: self.metrics.net_cyw43_service_turns,
+                    flush_polls_before: flush_polls_at_start,
+                    flush_polls_after: self.metrics.net_post_dispatch_flush_polls,
+                    pending_before: pending_flush_at_start,
+                    pending_after: self.pending_net_flush,
+                    active_connection_id_before: active_connection_id_at_start,
+                    authenticated_connection_id_before: authenticated_connection_id_at_start,
+                    active_connection_id_after,
+                    authenticated_connection_id_after,
+                    rotation_after_network,
+                    rotation_before_dispatch,
+                    rotation_after_dispatch: self.linked_runtime_cyw43_operator_rotation_pending,
+                    rotation_matches_current_lifetime: rotation_after_network
+                        .is_some_and(|rotation| rotation.matches(current_snapshot)),
+                    accepted_commands_before: accepted_commands_at_start,
+                    accepted_commands_after: self.metrics.accepted_commands,
+                    terminal_drain_return_due,
+                    network_service_quarantined: self.network_service_quarantined,
+                    reboot_pending: self.reboot_pending,
+                    recovery_required: crate::drivers::driver_task_net::cyw43_recovery_required(),
+                    containment_work_pending: self.deferred_containment_work_pending(),
+                    physical_console_response_pending: self.physical_console_response_pending(),
+                    physical_operator_work: self.linked_physical_operator_work(),
+                }) {
+                    return true;
+                }
+            }
 
             if !terminal_drain_return_due
                 && deferred_cyw43_attached_quantum_should_stop(
@@ -45699,6 +45855,315 @@ mod tests {
         ] {
             assert!(!rejected);
         }
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn pi_attached_wifi_response_rotation_continuation_is_exact_and_fail_closed() {
+        let rotation = LinkedRuntimeCyw43DurableResume {
+            generation: 17,
+            pair_epoch: 23,
+            physical_lifetime_epoch: 29,
+        };
+        let baseline = Cyw43ResponseRotationContinuationEvidence {
+            starting_phase: LinkedRuntimeServicePhase::Network,
+            admitted_phase: LinkedRuntimeServicePhase::Dispatch,
+            next_phase: LinkedRuntimeServicePhase::Network,
+            unit_index: 3,
+            network_units: 1,
+            serial_admitted: true,
+            local_seat_admitted: true,
+            cyw43_lane_selected: true,
+            network_activity: true,
+            service_turns_before: 8,
+            service_turns_after: 9,
+            flush_polls_before: 14,
+            flush_polls_after: 15,
+            pending_before: PendingNetFlush {
+                conn_id: Some(41),
+                remaining_turns: 3,
+            },
+            pending_after: PendingNetFlush {
+                conn_id: Some(41),
+                remaining_turns: 2,
+            },
+            active_connection_id_before: Some(41),
+            authenticated_connection_id_before: Some(41),
+            active_connection_id_after: Some(41),
+            authenticated_connection_id_after: Some(41),
+            rotation_after_network: Some(rotation),
+            rotation_before_dispatch: Some(rotation),
+            rotation_after_dispatch: None,
+            rotation_matches_current_lifetime: true,
+            accepted_commands_before: 7,
+            accepted_commands_after: 7,
+            terminal_drain_return_due: false,
+            network_service_quarantined: false,
+            reboot_pending: false,
+            recovery_required: false,
+            containment_work_pending: false,
+            physical_console_response_pending: false,
+            physical_operator_work: LinkedPhysicalOperatorWork::UsbServiceDebt,
+        };
+        assert!(cyw43_response_rotation_continuation(baseline));
+
+        let different_rotation = LinkedRuntimeCyw43DurableResume {
+            generation: rotation.generation + 1,
+            ..rotation
+        };
+        let rejected = [
+            Cyw43ResponseRotationContinuationEvidence {
+                starting_phase: LinkedRuntimeServicePhase::Serial,
+                ..baseline
+            },
+            Cyw43ResponseRotationContinuationEvidence {
+                admitted_phase: LinkedRuntimeServicePhase::LocalSeat,
+                ..baseline
+            },
+            Cyw43ResponseRotationContinuationEvidence {
+                next_phase: LinkedRuntimeServicePhase::Serial,
+                ..baseline
+            },
+            Cyw43ResponseRotationContinuationEvidence {
+                unit_index: 2,
+                ..baseline
+            },
+            Cyw43ResponseRotationContinuationEvidence {
+                network_units: 2,
+                ..baseline
+            },
+            Cyw43ResponseRotationContinuationEvidence {
+                serial_admitted: false,
+                ..baseline
+            },
+            Cyw43ResponseRotationContinuationEvidence {
+                local_seat_admitted: false,
+                ..baseline
+            },
+            Cyw43ResponseRotationContinuationEvidence {
+                cyw43_lane_selected: false,
+                ..baseline
+            },
+            Cyw43ResponseRotationContinuationEvidence {
+                network_activity: false,
+                ..baseline
+            },
+            Cyw43ResponseRotationContinuationEvidence {
+                service_turns_after: 8,
+                ..baseline
+            },
+            Cyw43ResponseRotationContinuationEvidence {
+                service_turns_before: u64::MAX,
+                service_turns_after: u64::MAX,
+                ..baseline
+            },
+            Cyw43ResponseRotationContinuationEvidence {
+                flush_polls_after: 14,
+                ..baseline
+            },
+            Cyw43ResponseRotationContinuationEvidence {
+                flush_polls_before: u64::MAX,
+                flush_polls_after: u64::MAX,
+                ..baseline
+            },
+            Cyw43ResponseRotationContinuationEvidence {
+                pending_before: PendingNetFlush::default(),
+                ..baseline
+            },
+            Cyw43ResponseRotationContinuationEvidence {
+                pending_before: PendingNetFlush {
+                    conn_id: Some(0),
+                    remaining_turns: 3,
+                },
+                pending_after: PendingNetFlush {
+                    conn_id: Some(0),
+                    remaining_turns: 2,
+                },
+                active_connection_id_before: Some(0),
+                authenticated_connection_id_before: Some(0),
+                active_connection_id_after: Some(0),
+                authenticated_connection_id_after: Some(0),
+                ..baseline
+            },
+            Cyw43ResponseRotationContinuationEvidence {
+                pending_after: baseline.pending_before,
+                ..baseline
+            },
+            Cyw43ResponseRotationContinuationEvidence {
+                pending_after: PendingNetFlush {
+                    conn_id: Some(41),
+                    remaining_turns: 1,
+                },
+                ..baseline
+            },
+            Cyw43ResponseRotationContinuationEvidence {
+                pending_after: PendingNetFlush::default(),
+                ..baseline
+            },
+            Cyw43ResponseRotationContinuationEvidence {
+                pending_after: PendingNetFlush {
+                    conn_id: Some(42),
+                    remaining_turns: 2,
+                },
+                ..baseline
+            },
+            Cyw43ResponseRotationContinuationEvidence {
+                active_connection_id_before: Some(42),
+                ..baseline
+            },
+            Cyw43ResponseRotationContinuationEvidence {
+                authenticated_connection_id_after: Some(42),
+                ..baseline
+            },
+            Cyw43ResponseRotationContinuationEvidence {
+                rotation_after_network: None,
+                ..baseline
+            },
+            Cyw43ResponseRotationContinuationEvidence {
+                rotation_before_dispatch: Some(different_rotation),
+                ..baseline
+            },
+            Cyw43ResponseRotationContinuationEvidence {
+                rotation_after_dispatch: Some(rotation),
+                ..baseline
+            },
+            Cyw43ResponseRotationContinuationEvidence {
+                rotation_matches_current_lifetime: false,
+                ..baseline
+            },
+            Cyw43ResponseRotationContinuationEvidence {
+                accepted_commands_after: 8,
+                ..baseline
+            },
+            Cyw43ResponseRotationContinuationEvidence {
+                accepted_commands_before: u64::MAX,
+                accepted_commands_after: u64::MAX,
+                ..baseline
+            },
+            Cyw43ResponseRotationContinuationEvidence {
+                terminal_drain_return_due: true,
+                ..baseline
+            },
+            Cyw43ResponseRotationContinuationEvidence {
+                network_service_quarantined: true,
+                ..baseline
+            },
+            Cyw43ResponseRotationContinuationEvidence {
+                reboot_pending: true,
+                ..baseline
+            },
+            Cyw43ResponseRotationContinuationEvidence {
+                recovery_required: true,
+                ..baseline
+            },
+            Cyw43ResponseRotationContinuationEvidence {
+                containment_work_pending: true,
+                ..baseline
+            },
+            Cyw43ResponseRotationContinuationEvidence {
+                physical_console_response_pending: true,
+                ..baseline
+            },
+            Cyw43ResponseRotationContinuationEvidence {
+                physical_operator_work: LinkedPhysicalOperatorWork::Input,
+                ..baseline
+            },
+        ];
+        for evidence in rejected {
+            assert!(!cyw43_response_rotation_continuation(evidence));
+        }
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn pi_attached_wifi_response_rotation_continues_after_one_usb_checkpoint() {
+        struct LinkedRuntimeTestReset;
+
+        impl Drop for LinkedRuntimeTestReset {
+            fn drop(&mut self) {
+                crate::hal::set_timebase_now_ms(0);
+                crate::serial::test_end_linked_runtime_only_transport();
+            }
+        }
+
+        let _progress_guard = wifi_driver_task_progress_test_guard();
+        crate::drivers::driver_task_net::set_cyw43_service_work_snapshot_test_override(Some(
+            crate::drivers::driver_task_net::Cyw43ServiceWorkSnapshot::for_test(17, 23, 1, 1),
+        ));
+        crate::serial::test_begin_linked_runtime_only_transport();
+        let _reset = LinkedRuntimeTestReset;
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<
+            32768,
+        >::new());
+        let timer = TestTimer::repeated(4, 1);
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        net.driver_contract = crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT;
+        net.active_conn_id = Some(41);
+        net.authenticated_conn_id = Some(41);
+        net.console_service_pending = true;
+        net.tcp_flush_activity_remaining = 4;
+        let mut local_seat = LocalSeatRuntime::new(crate::local_seat::LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 192,
+            buffer_lines: 64,
+        });
+        local_seat.mark_root_console_ready();
+        local_seat.enable_backend_keyboard_polling();
+
+        {
+            let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit)
+                .with_network(&mut net)
+                .with_local_seat(&mut local_seat);
+            pump.linked_local_seat_usb_service_pending_test_override = Some(true);
+            pump.pending_net_flush = PendingNetFlush {
+                conn_id: Some(41),
+                remaining_turns: 4,
+            };
+            pump.linked_runtime_service_phase = LinkedRuntimeServicePhase::Network;
+            pump.linked_runtime_network_consecutive_turns = 1;
+            pump.timer.index = pump.timer.ticks.len();
+            pump.now_ms = 100;
+            crate::hal::set_timebase_now_ms(pump.now_ms);
+            pump.linked_runtime_network_quantum_started_ms = Some(pump.now_ms);
+            pump.linked_runtime_network_quantum_started_ticks = 0;
+            pump.linked_runtime_network_operator_checkpoint_started_ms = Some(
+                pump.now_ms
+                    .saturating_sub(LINKED_RUNTIME_NETWORK_OPERATOR_CHECKPOINT_MS),
+            );
+            pump.linked_runtime_network_operator_checkpoint_started_ticks = 0;
+
+            assert!(
+                pump.poll_deferred_cyw43_attached_network_control_turn(),
+                "the exact response cursor must retain the guarded activation after one complete physical-operator checkpoint",
+            );
+            assert_eq!(pump.pending_net_flush.remaining_turns, 3);
+            assert_eq!(pump.metrics.net_post_dispatch_flush_polls, 1);
+            assert_eq!(pump.metrics.net_cyw43_service_turns, 1);
+            assert_eq!(pump.metrics.net_cyw43_service_operator_yields, 1);
+            assert_eq!(pump.metrics.accepted_commands, 0);
+            assert_eq!(
+                pump.linked_runtime_service_phase,
+                LinkedRuntimeServicePhase::Network,
+            );
+            assert!(pump
+                .linked_runtime_cyw43_operator_rotation_pending
+                .is_none());
+        }
+
+        assert_eq!(net.tcp_flushes, 1, "the cursor advances exactly once");
+        assert_eq!(
+            net.polls, 0,
+            "the response-flush operation cannot compose with a second NIC poll",
+        );
+        assert_eq!(
+            local_seat.keyboard_trace().backend_poll_calls,
+            1,
+            "the fused checkpoint admits exactly one USB service turn",
+        );
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console", feature = "release-qemu"))]
