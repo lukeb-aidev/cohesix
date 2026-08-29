@@ -10498,6 +10498,45 @@ Changes:
     candidate but cannot prove Pi function, latency, throughput, or August
     parity; fresh exact-image WiFi and GENET scripts plus raw and medium/high
     pressure remain mandatory.
+  - exact-1c MCS Yield-evidence correction — exact source
+    `1c269ed97f8f12158a5ce549d96811764411bd25`, build ID
+    `8d4e469aa94453989fa6df7fa7aecd7c35bfb37fdd0edbd8aeccfc3cae312de2`,
+    image ID
+    `c59c7b2e5823f10904516734aede16aa5c98d0931585a52307b7f347bc5e6cad`,
+    image SHA-256
+    `39f7b19e4e51f47735793c06e56ff2716a3abdd3986a8bab0472d1d8a749dba7`,
+    direct serial diagnostics, and boot-paired live `20260830-071519` capture
+    prefixes prove WiFi Gate 8a--8h, DHCP, authenticated TCP, responsive
+    serial/USB paths, sealed 272/272 MCS registration, and a
+    generation-bound peer-assisted transaction without driver fault,
+    quarantine, recovery revocation, queue drop, or overflow. They reject
+    service and performance closure: the first standalone `boot_v0.coh`
+    session completes TCP, `AUTH`, and Queen `ATTACH` but its first `log` is
+    refused with `busy detail=root-sc-reserve`; a separate raw session fails at
+    initial passive admission, cold-neighbour ping loses 2/5 packets with
+    127.921--167.312 ms replies, and usable WiFi readiness remains about 136
+    seconds. Do not run medium/high REST pressure past this first failed
+    invariant or claim GENET, benchmark, or August parity from this WiFi-only
+    boot. Selected repository-managed seL4 source proves the accounting cause:
+    MCS `handleYield` relinquishes the remaining refill, then restores actual
+    `scConsumed`, so the capture-time baseline leaves parse unwind and rotor
+    work in the supposed fresh post-Yield sample. Retain that baseline for early
+    validation, reset `SchedContext_Consumed` a second time immediately before
+    the existing Yield with no intervening userland work, and decide once from
+    the bounded Yield tail plus resumed pre-dispatch work. Snapshot the cheap
+    recovery frontier first; an already-published fault cancels and performs
+    material recovery in the same turn, while a healthy retained command runs
+    before ordinary no-fault containment probes and retains the post-sample and
+    `CallArm` frontiers. Preserve strict `<250 us`, equality refusal, one
+    attempt/no retry, every MCS numeric and WCET, all driver owners and queues,
+    schema 1.15, the 16-bit Pi root CNode, 256 executable Workers, hardware
+    settings, public protocol, QEMU direct-VirtIO branch, `.coh` workloads, and
+    benchmark arithmetic. The full host-tool suite, `tools/cohesix-py`,
+    generated contracts/consumers, evidence tools, and REST reports were
+    reviewed; unchanged external behavior requires no implementation or schema
+    change. Focused state/source tests plus a canonical QEMU TCP/NineDoor canary
+    are rejection gates only; fresh exact-image WiFi and GENET scripts, raw
+    framed tests, and medium/high pressure remain mandatory for closure.
   - platform consistency — select the same v5 shared contract, including the
     v4-introduced bounded command batch, complete 256-Worker population, two
     passive-Worker executor-lane architecture, and passive-service locality
@@ -10507,6 +10546,11 @@ Changes:
   - Pi build compatibility — refresh the repository-managed `pi4_diagnostic` tree from the freshly built SMP+MCS profile, require exact current-profile validation and deterministic immutable-tree composition, use the selected `CARGO_TARGET_DIR` for every Pi runtime payload, and compile direct VirtIO DMA containment only for QEMU/VirtIO profiles. Bind the pre-root-task Pi driver-runtime CPIO into image provenance and copy that exact archive into the SD stage, so `--skip-build` cannot repackage a later QEMU-feature child from the shared Cargo target directory. Retain the exact selected Pi resolved manifest beside the staged image before cleanup restores canonical QEMU generated outputs, and bind the stage-only runtime/DMA proof to that retained file and digest.
   - compatibility — preserve public AUTH/framing/command/ACK/ERR/END behavior, one-slot publication ACK semantics, root policy authority, MCS admission, evidence, and fault containment; advance the selected manifest to schema 1.15 only for the generated internal Worker execution contract and transport correlation identity; update compiler, generated truth, host/target NineDoor, focused tests, host tools, Python library, SwarmUI projections, and benchmark compatibility review together. Full host-tool and `tools/cohesix-py` review preserves the public grammar, generated target-profile contract, and host dependencies. It requires bounded host-only compatibility repairs: `cohsh` TCP-only builds no longer compile in the in-process NineDoor/mock/trace implementation, in-process integration tests declare that required feature explicitly, `cas-tool` and SwarmUI integration tests resolve their Cargo-provided binaries at runtime so all-target linting remains portable, and the Python target validator adopts the generated Pi 1/127/128 population. The evidence and benchmark tools additionally derive the complete 265-task QEMU and 272-task Pi temporal seals from generated truth, keep exactly one detailed live exemplar for each executable role, admit target-neutral fresh-Pi proof, and compare provenance-compatible QEMU/Pi throughput and errors without turning QEMU latency into a physical-network gate. Hive Gateway's `/v1/meta/status` projection adds required normalized configured-backend `target_host` and `target_port` fields so fresh-Pi evidence binds the live gateway to the exact Pi console endpoint; it does not expose the REST bind endpoint or create target proof for host-model mode. `coh`, `cohsh`, `coh-status`, SwarmUI, `gpu-bridge-host`, `host-ticket-agent`, `host-sidecar-bridge`, `sidecar-bus`, `cas-tool`, every `.coh` workload, and `tools/cohesix-py` tolerate or ignore those additive status fields and require no behavior or schema change. Existing QEMU results do not claim Pi performance, and the enlarged Pi declaration requires fresh exact-image physical evidence. This task performs no Pi hardware interaction.
 Commands:
+  - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib pi_root_control_ -- --test-threads=1
+  - cargo test -p root-task --test mcs_activation_order -- --test-threads=1
+  - cargo test -p root-task --test mcs_fault_lanes -- --test-threads=1
+  - cargo test -p root-task --lib service_fault_frontier -- --test-threads=1
+  - cargo test -p root-task --lib service_call_arm -- --test-threads=1
   - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib isolated_self_test -- --test-threads=1
   - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib linked_cyw43_ -- --test-threads=1
   - cargo test -p pi4-driver-runtime --lib direct_genet_ -- --test-threads=1

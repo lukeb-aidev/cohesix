@@ -557,21 +557,27 @@ parsed command that can enter passive NineDoor validates the generated active
 root-control budget, WCET, period, admission, and consumed-time-evidence
 contract. `seL4_SchedContext_Consumed` resets evidence but does not replenish
 the SC. The exact parsed command and its authority identity are retained after
-one baseline/reset sample, then root immediately marks and enters one selected
-periodic MCS Yield boundary. On the first resumed activation, newly published
-service recovery preempts and cancels the reservation; otherwise root refreshes
-the policy timebase and takes one fresh consumed-time sample, including that
-bounded prelude. Passive dispatch is admitted only when the fresh sample is
-strictly below the checked `budget_us - wcet_us` limit, currently 250 us, so the
-complete declared 2,500 us WCET remains inside the SC. Equality or excess ends
-the attempt with one typed refusal and never starts another wait. Reboot,
-containment, quarantine, recovery, or authority drift cancels before sampling
-or dispatch and projects a refusal only when the original response authority is
-still valid. Invalid generated truth, counter evidence, period conversion, or
-kernel accounting latches fail closed and emit one bounded operator marker.
-Unrelated raw input and root-owned diagnostics remain live before a passive
-command is retained. The QEMU direct-VirtIO branch exits before this Pi-only
-boundary and keeps its existing counter guard.
+one baseline/reset sample. The selected seL4 `handleYield` relinquishes the
+remaining refill but restores the actual `scConsumed` value, so capture-to-loop
+unwind work would otherwise contaminate the next sample. Root therefore takes
+a second accounting reset immediately before the sole selected periodic MCS
+Yield; no userland work may intervene. On the first resumed activation, one
+cheap side-effect-free recovery check preempts and cancels an already-faulted
+reservation. A healthy retained command runs before ordinary material
+containment probes, refreshes the policy timebase, and takes one fresh
+consumed-time sample covering only the bounded Yield tail and resumed
+pre-dispatch work. Recovery is checked again after the sample, and `CallArm`
+retains the final fault frontier. Passive dispatch is admitted only when the
+fresh sample is strictly below the checked `budget_us - wcet_us` limit,
+currently 250 us, so the complete declared 2,500 us WCET remains inside the SC.
+Equality or excess ends the attempt with one typed refusal and never starts
+another wait. Reboot, containment, quarantine, recovery, or authority drift
+cancels before dispatch and projects a refusal only when the original response
+authority is still valid. Invalid generated truth, counter evidence, period
+conversion, or failure of either kernel-accounting sample latches admission
+closed and emits one bounded operator marker. Unrelated raw input and root-owned
+diagnostics remain live before a passive command is retained. The QEMU direct-VirtIO branch
+exits before this Pi-only boundary and keeps its existing counter guard.
 
 The passive NineDoor service is co-located with `root-control` on core 0 in
 every checked-in target manifest. Its compiler-validated `locality_bound`

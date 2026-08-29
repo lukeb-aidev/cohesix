@@ -781,11 +781,30 @@ fn root_control_containment_serializes_before_the_ordinary_pump_turn() {
 
     let passive_recovery = root_loop
         .find("let passive_recovery_preempted = pump.pi_root_control_passive_recovery_pending();")
-        .expect("service recovery must be sampled before passive admission");
+        .expect("the cheap recovery frontier must be the first resumed root operation");
     let passive_cancel = root_loop[passive_recovery..]
         .find("pump.cancel_pi_root_control_passive_admission_for_recovery();")
         .map(|offset| passive_recovery + offset)
         .expect("service recovery must cancel the retained passive command");
+    let passive_guard = root_loop[passive_cancel..]
+        .find("if !passive_recovery_preempted")
+        .map(|offset| passive_cancel + offset)
+        .expect("healthy retained admission must precede material probes");
+    assert!(root_loop[passive_guard..].starts_with(
+        "if !passive_recovery_preempted\n            && pump.pi_root_control_passive_admission_pending()"
+    ));
+    let passive_service = root_loop[passive_guard..]
+        .find("pump.service_pi_root_control_passive_admission()")
+        .map(|offset| passive_guard + offset)
+        .expect("retained passive admission must own one exclusive turn");
+    let passive_prepare = root_loop[passive_service..]
+        .find("pump.prepare_pi_root_control_passive_admission_yield();")
+        .map(|offset| passive_service + offset)
+        .expect("passive admission must reset evidence at its exact outer yield");
+    let passive_yield = root_loop[passive_prepare..]
+        .find("sel4::yield_now();")
+        .map(|offset| passive_prepare + offset)
+        .expect("passive admission turn must end at the prepared boundary");
     let direct_pair = root_loop
         .find("pump.contain_faulted_direct_genet_pair(hal)")
         .expect("direct-GENET pair containment probe must remain first");
@@ -826,25 +845,9 @@ fn root_control_containment_serializes_before_the_ordinary_pump_turn() {
         .find("sel4::yield_now();")
         .map(|offset| recovery_guard + offset)
         .expect("recovery turn must end at one scheduler boundary");
-    let passive_guard = root_loop[recovery_yield..]
-        .find("if pump.pi_root_control_passive_admission_pending()")
-        .map(|offset| recovery_yield + offset)
-        .expect("passive admission must follow the recovery boundary");
-    let passive_service = root_loop[passive_guard..]
-        .find("pump.service_pi_root_control_passive_admission()")
-        .map(|offset| passive_guard + offset)
-        .expect("retained passive admission must own one exclusive turn");
-    let passive_prepare = root_loop[passive_service..]
-        .find("pump.prepare_pi_root_control_passive_admission_yield();")
-        .map(|offset| passive_service + offset)
-        .expect("passive admission must prepare its exact outer yield");
-    let passive_yield = root_loop[passive_prepare..]
-        .find("sel4::yield_now();")
-        .map(|offset| passive_prepare + offset)
-        .expect("passive admission turn must end at the prepared boundary");
-    let handoff_guard = root_loop[passive_yield..]
+    let handoff_guard = root_loop[recovery_yield..]
         .find("let handoff_turn = if hal_ptr != 0 {")
-        .map(|offset| passive_yield + offset)
+        .map(|offset| recovery_yield + offset)
         .expect("deferred handoff must follow recovery and passive admission");
     let handoff = root_loop
         .find("pump.service_deferred_console_network_handoff(hal)")
@@ -863,7 +866,11 @@ fn root_control_containment_serializes_before_the_ordinary_pump_turn() {
     assert!(
         activation < passive_recovery
             && passive_recovery < passive_cancel
-            && passive_cancel < direct_pair_assignment
+            && passive_cancel < passive_guard
+            && passive_guard < passive_service
+            && passive_service < passive_prepare
+            && passive_prepare < passive_yield
+            && passive_yield < direct_pair_assignment
             && direct_pair_assignment < direct_pair
             && direct_pair < console_guard
             && console_guard < console_assignment
@@ -874,25 +881,21 @@ fn root_control_containment_serializes_before_the_ordinary_pump_turn() {
             && ninedoor < recovery_merge
             && recovery_merge < recovery_guard
             && recovery_guard < recovery_yield
-            && recovery_yield < passive_guard
-            && passive_guard < passive_service
-            && passive_service < passive_prepare
-            && passive_prepare < passive_yield
-            && passive_yield < handoff_guard
+            && recovery_yield < handoff_guard
             && handoff_guard < handoff
             && handoff < pump_guard
             && pump_guard < pump
             && pump < outer_yield,
         "containment/pump/yield source order drifted: \
          activation={activation}, passive_recovery={passive_recovery}, \
-         passive_cancel={passive_cancel}, direct_pair_assignment={direct_pair_assignment}, \
+         passive_cancel={passive_cancel}, passive_guard={passive_guard}, \
+         passive_service={passive_service}, passive_prepare={passive_prepare}, \
+         passive_yield={passive_yield}, direct_pair_assignment={direct_pair_assignment}, \
          direct_pair={direct_pair}, console_guard={console_guard}, \
          console_assignment={console_assignment}, console={console}, \
          ninedoor_guard={ninedoor_guard}, ninedoor_assignment={ninedoor_assignment}, \
          ninedoor={ninedoor}, recovery_merge={recovery_merge}, \
          recovery_guard={recovery_guard}, recovery_yield={recovery_yield}, \
-         passive_guard={passive_guard}, passive_service={passive_service}, \
-         passive_prepare={passive_prepare}, passive_yield={passive_yield}, \
          handoff_guard={handoff_guard}, handoff={handoff}, \
          pump_guard={pump_guard}, pump={pump}, yield={outer_yield}",
     );
@@ -950,6 +953,66 @@ fn root_control_containment_serializes_before_the_ordinary_pump_turn() {
         ),
         "a deferred handoff must exclude the ordinary pump from that turn",
     );
+}
+
+#[test]
+fn pi_passive_boundary_resets_selected_kernel_evidence_immediately_before_yield() {
+    let selected_kernel = include_str!("../../../seL4/build_UBOOT/kernel/kernel_all_copy.c");
+    let yield_start = selected_kernel
+        .find("static void handleYield(void)")
+        .expect("the selected Pi seL4 profile must retain handleYield");
+    let yield_end = selected_kernel[yield_start..]
+        .find("exception_t handleSyscall(syscall_t syscall)")
+        .map(|offset| yield_start + offset)
+        .expect("handleYield must have a bounded selected-kernel source region");
+    let handle_yield = &selected_kernel[yield_start..yield_end];
+    let preserve = handle_yield
+        .find("ticks_t consumed = NODE_STATE(ksCurSC)->scConsumed + NODE_STATE(ksConsumed);")
+        .expect("Yield must snapshot actual consumed evidence");
+    let relinquish = handle_yield[preserve..]
+        .find("chargeBudget(head.rAmount, false);")
+        .map(|offset| preserve + offset)
+        .expect("Yield must relinquish the remaining refill");
+    let restore = handle_yield[relinquish..]
+        .find("NODE_STATE(ksCurSC)->scConsumed = consumed;")
+        .map(|offset| relinquish + offset)
+        .expect("Yield must restore actual rather than full-slice evidence");
+    assert!(preserve < relinquish && relinquish < restore);
+
+    let event = include_str!("../src/event/mod.rs");
+    let prepare_start = event
+        .find("pub fn prepare_pi_root_control_passive_admission_yield(&mut self) -> bool")
+        .expect("Pi admission must expose one exact outer-Yield preparation method");
+    let prepare_end = event[prepare_start..]
+        .find("/// Side-effect-free target recovery state")
+        .map(|offset| prepare_start + offset)
+        .expect("the preparation method must have a bounded source region");
+    let prepare = &event[prepare_start..prepare_end];
+    let reset_owner = prepare
+        .find("prepare_pi_root_control_passive_admission_yield_with(")
+        .expect("the target boundary must invoke its exact reset state transition");
+    let sample = prepare[reset_owner..]
+        .find("crate::hal::critical_tcb::root_control_consumed_time_us()")
+        .map(|offset| reset_owner + offset)
+        .expect("the target boundary must reset kernel consumed evidence");
+    assert!(reset_owner < sample);
+
+    let userland = include_str!("../src/userland/mod.rs");
+    let marker = "let _ = pump.prepare_pi_root_control_passive_admission_yield();";
+    assert_eq!(
+        userland.matches(marker).count(),
+        4,
+        "every ordinary and deferred Pi scheduler boundary must use the reset owner",
+    );
+    let mut suffix = userland;
+    while let Some(offset) = suffix.find(marker) {
+        let after_marker = &suffix[offset + marker.len()..];
+        assert!(
+            after_marker.trim_start().starts_with("sel4::yield_now();"),
+            "no userland work may intervene between the evidence reset and seL4_Yield",
+        );
+        suffix = after_marker;
+    }
 }
 
 #[test]

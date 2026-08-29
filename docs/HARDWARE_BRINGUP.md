@@ -1136,7 +1136,7 @@ Ready, port 31337 reachability, authenticated `cohsh`, focused `.coh` scripts,
 and measured boot/network performance before promotion. The August 10 accepted
 boots remain compatibility comparators only.
 
-The latest exact boot is source
+The earlier exact service-isolation boot is source
 `ae2dd774126d9be70767d0b56068a13e58de5fd4`, build ID
 `12946f3637f482a3f70b47309dc43f3a2084c59e9d817597f13d2a7f5d9ac05d`, image
 ID `249549ae082f2d9a854c2c8b2da85bc6859f7bf55540ff3e39eca94b14573736`, and
@@ -1167,6 +1167,43 @@ resetting or retrying a `REPLIED` lane. Focused source tests and a fresh QEMU
 canary remain rejection gates only. Qualification still requires new
 exact-image WiFi and GENET boots with raw TCP, authenticated `cohsh`, focused
 `.coh` scripts, and medium/high benchmark evidence.
+
+The follow-up exact source
+`1c269ed97f8f12158a5ce549d96811764411bd25`, build ID
+`8d4e469aa94453989fa6df7fa7aecd7c35bfb37fdd0edbd8aeccfc3cae312de2`, image
+ID `c59c7b2e5823f10904516734aede16aa5c98d0931585a52307b7f347bc5e6cad`, and
+image SHA-256
+`39f7b19e4e51f47735793c06e56ff2716a3abdd3986a8bab0472d1d8a749dba7`
+proves on its 2026-08-30 WiFi boot that the lower driver path remains healthy:
+root is ready at 8.116 seconds, USB command-ready at 12.745 seconds, Gate 8a--8h
+passes on attempt 1, DHCP assigns `192.168.86.154`, the MCS registry seals
+272/272, and paced serial diagnostics plus a generation-bound peer test finish
+without driver fault, quarantine, queue drop, or recovery revocation. It still
+rejects service and performance closure. The first standalone `boot_v0.coh`
+session completes TCP, `AUTH`, and Queen `ATTACH`, then `log` fails once with
+`busy detail=root-sc-reserve`; a separate raw framed session is refused at its
+initial passive admission. The cold-neighbour ping sample loses 2/5 packets and
+the three replies span 127.921--167.312 ms, while WiFi usable readiness remains
+about 136 seconds. Medium/high REST pressure is deliberately withheld at this
+first failed invariant rather than manufacturing a benchmark from refused
+requests. The live `20260830-071519` capture prefixes and direct serial artifact
+are diagnostic provenance only, not sealed acceptance evidence.
+
+Selected seL4 source explains the refusal: MCS `handleYield` relinquishes the
+remaining refill, then restores actual pre-Yield `scConsumed`. The capture-time
+baseline therefore cannot make the resumed decision fresh; parse unwind and
+rotor work survive the Yield and can consume the entire 250-us margin. The next
+candidate retains the capture baseline for early validation, takes a second
+`SchedContext_Consumed` reset immediately before the existing Yield, and runs
+no userland work between them. On resume, an already-published fault still
+cancels and enters material recovery in the same turn; a healthy retained
+command runs before no-fault containment probes, includes its bounded policy
+prelude in the final sample, rechecks recovery after sampling, and retains the
+`CallArm` frontier. Every root/driver MCS number, owner, queue, manifest,
+schema, CNode/Worker allocation, retry bound, public protocol, QEMU branch, and
+hardware setting remains unchanged. Source tests and QEMU can reject this
+candidate, but only fresh exact-image WiFi and GENET scripts, raw framed tests,
+and medium/high benchmarks can prove function or August-performance parity.
 
 For the paired wired regression, the same source reaches DHCP and legacy ARP
 before the old direct handoff stalls with raw/active source `0x00012000`, zero

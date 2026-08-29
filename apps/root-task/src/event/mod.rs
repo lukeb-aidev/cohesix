@@ -3590,11 +3590,14 @@ struct PiRootControlConsumedSample {
 ///
 /// `seL4_SchedContext_Consumed` returns and resets consumption since its prior
 /// observation; it does not replenish the SC. The first sample is therefore a
-/// baseline only. The caller then marks the mandatory MCS Yield boundary and
-/// invokes `seL4_Yield`; with the selected periodic max-two-refill SC, root is
-/// not scheduled again until its next replenishment. The first resumed turn
-/// uses one fresh sample immediately before dispatch. Equality or excess ends
-/// the retained attempt with a typed refusal so input and recovery stay live.
+/// baseline only. Immediately before the mandatory MCS Yield, a second sample
+/// resets the root work accumulated while the parsed command unwound to that
+/// scheduler boundary. This is required because the selected seL4
+/// `handleYield` preserves actual `scConsumed` evidence while relinquishing the
+/// remaining refill. The first resumed turn can then measure only the bounded
+/// boundary tail plus post-replenishment pre-dispatch work. Equality or excess
+/// ends the retained attempt with a typed refusal so input and recovery stay
+/// live.
 #[cfg(feature = "kernel")]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 enum PiRootControlConsumedWindow {
@@ -3701,15 +3704,42 @@ impl PiRootControlConsumedWindow {
         true
     }
 
-    fn prepare_yield_boundary(&mut self) -> bool {
+    fn prepare_yield_boundary_with<F>(
+        &mut self,
+        contract: PiRootControlConsumedContract,
+        observed_ticks: u64,
+        counter_hz: u64,
+        sample: F,
+    ) -> bool
+    where
+        F: FnOnce() -> Option<PiRootControlConsumedSample>,
+    {
         match self {
             Self::AwaitingYield => {
+                if observed_ticks == 0 {
+                    *self = Self::Invalid(PiRootControlConsumedInvalid::Counter);
+                    return false;
+                }
+                if let Err(reason) = Self::checked_contract(contract, counter_hz) {
+                    *self = Self::Invalid(reason);
+                    return false;
+                }
+                let Some(sample) = sample() else {
+                    *self = Self::Invalid(PiRootControlConsumedInvalid::ConsumedSample);
+                    return false;
+                };
+                if sample.sampled_at_ticks == 0 || sample.sampled_at_ticks < observed_ticks {
+                    *self = Self::Invalid(PiRootControlConsumedInvalid::SampleCounter);
+                    return false;
+                }
+                let _pre_yield_consumed_us = sample.consumed_us;
                 *self = Self::ReadyAfterYield;
                 true
             }
-            // Exactly one explicit scheduler boundary belongs to a retained
-            // command. A second prepare cannot silently authorize a second
-            // real Yield before the fresh consumed-time sample.
+            // Exactly one reset plus explicit scheduler boundary belongs to a
+            // retained command. A second prepare cannot silently reset the
+            // evidence or authorize another real Yield before the decision
+            // sample.
             Self::ReadyAfterYield => false,
             Self::Empty | Self::Invalid(_) => false,
         }
@@ -7548,26 +7578,79 @@ where
         }
     }
 
-    /// Mark the sole MCS replenishment boundary for one retained passive
-    /// command immediately before the caller invokes `seL4_Yield`.
+    /// Reset consumed-time evidence and mark the sole MCS replenishment
+    /// boundary for one retained passive command immediately before the caller
+    /// invokes `seL4_Yield`.
     ///
-    /// The marker is deliberately separate from the kernel call: host tests
-    /// can prove the state machine while target userland remains the only
-    /// owner of the cooperative scheduler boundary.
+    /// This method owns the target kernel accounting reset but remains
+    /// deliberately separate from `seL4_Yield`: host tests can prove the state
+    /// machine while target userland remains the only owner of the cooperative
+    /// scheduler call and its immediate source ordering.
     #[cfg(feature = "kernel")]
     #[must_use = "a prepared boundary must be followed immediately by the outer seL4 yield"]
     pub fn prepare_pi_root_control_passive_admission_yield(&mut self) -> bool {
-        #[cfg(feature = "release-pi4")]
+        #[cfg(all(
+            feature = "release-pi4",
+            target_arch = "aarch64",
+            target_os = "none",
+            sel4_config_kernel_mcs
+        ))]
         {
-            self.pi_root_control_pending_passive_command.is_some()
-                && self
-                    .pi_root_control_consumed_window
-                    .prepare_yield_boundary()
+            if self.pi_root_control_pending_passive_command.is_none() {
+                return false;
+            }
+            let Some(contract) = pi_root_control_consumed_contract() else {
+                self.pi_root_control_consumed_window =
+                    PiRootControlConsumedWindow::Invalid(PiRootControlConsumedInvalid::Profile);
+                self.report_pi_root_control_invalid_once();
+                return false;
+            };
+            let observed_ticks = crate::arch::aarch64::timer::timer_counter_ticks();
+            let counter_hz = crate::arch::aarch64::timer::timer_freq_hz();
+            let prepared = self.prepare_pi_root_control_passive_admission_yield_with(
+                contract,
+                observed_ticks,
+                counter_hz,
+                || {
+                    let consumed_us =
+                        crate::hal::critical_tcb::root_control_consumed_time_us().ok()?;
+                    Some(PiRootControlConsumedSample {
+                        consumed_us,
+                        sampled_at_ticks: crate::arch::aarch64::timer::timer_counter_ticks(),
+                    })
+                },
+            );
+            if !prepared {
+                self.report_pi_root_control_invalid_once();
+            }
+            prepared
         }
-        #[cfg(not(feature = "release-pi4"))]
+        #[cfg(not(all(
+            feature = "release-pi4",
+            target_arch = "aarch64",
+            target_os = "none",
+            sel4_config_kernel_mcs
+        )))]
         {
             false
         }
+    }
+
+    #[cfg(all(feature = "kernel", feature = "release-pi4"))]
+    fn prepare_pi_root_control_passive_admission_yield_with<F>(
+        &mut self,
+        contract: PiRootControlConsumedContract,
+        observed_ticks: u64,
+        counter_hz: u64,
+        sample: F,
+    ) -> bool
+    where
+        F: FnOnce() -> Option<PiRootControlConsumedSample>,
+    {
+        self.pi_root_control_pending_passive_command.is_some()
+            && self
+                .pi_root_control_consumed_window
+                .prepare_yield_boundary_with(contract, observed_ticks, counter_hz, sample)
     }
 
     /// Side-effect-free target recovery state that must outrank retained
@@ -47428,19 +47511,31 @@ mod tests {
             "blocked admission must not resample"
         );
         assert_eq!(window, PiRootControlConsumedWindow::AwaitingYield);
-        assert!(window.prepare_yield_boundary());
+        assert!(
+            window.prepare_yield_boundary_with(contract, 102, 1_000_000, || {
+                Some(PiRootControlConsumedSample {
+                    consumed_us: 1_500,
+                    sampled_at_ticks: 103,
+                })
+            })
+        );
         assert_eq!(window, PiRootControlConsumedWindow::ReadyAfterYield);
         assert!(
-            !window.prepare_yield_boundary(),
-            "a retained command owns exactly one explicit Yield boundary",
+            !window.prepare_yield_boundary_with(contract, 104, 1_000_000, || {
+                Some(PiRootControlConsumedSample {
+                    consumed_us: 0,
+                    sampled_at_ticks: 105,
+                })
+            }),
+            "a retained command owns exactly one evidence reset and Yield boundary",
         );
         assert_eq!(window, PiRootControlConsumedWindow::ReadyAfterYield);
 
         assert_eq!(
-            window.decide_with(contract, 102, 1_000_000, || {
+            window.decide_with(contract, 10_104, 1_000_000, || {
                 Some(PiRootControlConsumedSample {
                     consumed_us: 250,
-                    sampled_at_ticks: 103,
+                    sampled_at_ticks: 10_105,
                 })
             }),
             PiRootControlConsumedDecision::Reject,
@@ -47455,12 +47550,19 @@ mod tests {
                 sampled_at_ticks: 200,
             })
         }));
-        assert!(below_limit.prepare_yield_boundary());
+        assert!(
+            below_limit.prepare_yield_boundary_with(contract, 201, 1_000_000, || Some(
+                PiRootControlConsumedSample {
+                    consumed_us: 4_000,
+                    sampled_at_ticks: 202,
+                }
+            ),)
+        );
         assert_eq!(
-            below_limit.decide_with(contract, 201, 1_000_000, || {
+            below_limit.decide_with(contract, 10_203, 1_000_000, || {
                 Some(PiRootControlConsumedSample {
                     consumed_us: 249,
-                    sampled_at_ticks: 202,
+                    sampled_at_ticks: 10_204,
                 })
             }),
             PiRootControlConsumedDecision::Admit,
@@ -47513,6 +47615,20 @@ mod tests {
                 PiRootControlConsumedWindow::Invalid(expected_reason)
             );
         }
+
+        let mut boundary_failure = PiRootControlConsumedWindow::Empty;
+        assert!(boundary_failure.begin_with(contract, 10, 1_000_000, || {
+            Some(PiRootControlConsumedSample {
+                consumed_us: 500,
+                sampled_at_ticks: 10,
+            })
+        }));
+        assert!(!boundary_failure.prepare_yield_boundary_with(contract, 11, 1_000_000, || None,));
+        assert_eq!(
+            boundary_failure,
+            PiRootControlConsumedWindow::Invalid(PiRootControlConsumedInvalid::ConsumedSample),
+            "a missing exact pre-Yield reset must latch admission closed",
+        );
     }
 
     #[cfg(feature = "kernel")]
@@ -47759,7 +47875,15 @@ mod tests {
         assert_eq!(premature_samples.get(), 0);
         assert!(pump.pi_root_control_passive_admission_pending());
         assert_eq!(pump.metrics.denied_commands, 0);
-        assert!(pump.prepare_pi_root_control_passive_admission_yield());
+        assert!(pump.prepare_pi_root_control_passive_admission_yield_with(
+            pi_root_control_test_contract(),
+            10_099,
+            1_000_000,
+            || Some(PiRootControlConsumedSample {
+                consumed_us: 4_000,
+                sampled_at_ticks: 10_099,
+            }),
+        ));
 
         assert!(pump.service_pi_root_control_pending_with(
             pi_root_control_test_contract(),
@@ -47829,7 +47953,15 @@ mod tests {
             0,
             "policy time cannot refresh before the selected Yield",
         );
-        assert!(pump.prepare_pi_root_control_passive_admission_yield());
+        assert!(pump.prepare_pi_root_control_passive_admission_yield_with(
+            pi_root_control_test_contract(),
+            100,
+            1_000_000,
+            || Some(PiRootControlConsumedSample {
+                consumed_us: 4_000,
+                sampled_at_ticks: 100,
+            }),
+        ));
         pump.refresh_pi_root_control_policy_time_if_ready(|pump| {
             policy_time_refreshes.set(policy_time_refreshes.get().saturating_add(1));
             pump.now_ms = 777;
@@ -47877,7 +48009,15 @@ mod tests {
                 sampled_at_ticks: 100,
             }),
         ));
-        assert!(pump.prepare_pi_root_control_passive_admission_yield());
+        assert!(pump.prepare_pi_root_control_passive_admission_yield_with(
+            pi_root_control_test_contract(),
+            100,
+            1_000_000,
+            || Some(PiRootControlConsumedSample {
+                consumed_us: 5_000,
+                sampled_at_ticks: 100,
+            }),
+        ));
         assert!(pump.service_pi_root_control_pending_with(
             pi_root_control_test_contract(),
             101,
@@ -47971,7 +48111,15 @@ mod tests {
                     sampled_at_ticks: 100,
                 }),
             ));
-            assert!(pump.prepare_pi_root_control_passive_admission_yield());
+            assert!(pump.prepare_pi_root_control_passive_admission_yield_with(
+                pi_root_control_test_contract(),
+                100,
+                1_000_000,
+                || Some(PiRootControlConsumedSample {
+                    consumed_us: 5_000,
+                    sampled_at_ticks: 100,
+                }),
+            ));
             assert!(pump.service_pi_root_control_pending_with(
                 pi_root_control_test_contract(),
                 101,
@@ -48016,7 +48164,15 @@ mod tests {
                 sampled_at_ticks: 100,
             }),
         ));
-        assert!(pump.prepare_pi_root_control_passive_admission_yield());
+        assert!(pump.prepare_pi_root_control_passive_admission_yield_with(
+            pi_root_control_test_contract(),
+            100,
+            1_000_000,
+            || Some(PiRootControlConsumedSample {
+                consumed_us: 0,
+                sampled_at_ticks: 100,
+            }),
+        ));
         // The first service-boundary check sees no recovery. The injected
         // publication becomes visible only after the consumed-time syscall.
         pump.pi_root_control_recovery_pending_test_countdown.set(1);

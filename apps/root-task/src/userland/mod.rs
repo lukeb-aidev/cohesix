@@ -486,14 +486,34 @@ where
     #[cfg(feature = "net-console")]
     let mut deferred_wired_handoff_admission_logged = false;
     loop {
-        // A newly published isolated-service fault always outranks a retained
-        // passive command. Cancel its exact reservation before containment can
-        // fence the source identity, then perform the ordinary bounded recovery
-        // turn. Lock contention also preempts admission and forces a yield.
+        // Snapshot the cheap side-effect-free recovery frontier before any
+        // policy-time or admission work. An already-published fault cancels
+        // the exact reservation and falls through to the existing material
+        // containment chain in this same root turn.
         let passive_recovery_preempted = pump.pi_root_control_passive_recovery_pending();
         if passive_recovery_preempted {
             pump.cancel_pi_root_control_passive_admission_for_recovery();
         }
+
+        // A retained passive command owns the first resumed root operation.
+        // The service method rechecks recovery, containment, reboot,
+        // quarantine, and authority before its decision sample and repeats the
+        // recovery check immediately after it. A fault that crosses the outer
+        // snapshot therefore cancels and yields instead of dispatching.
+        // Healthy no-fault material probes must not spend the 250-us margin
+        // measured after the exact Yield boundary reset.
+        if !passive_recovery_preempted
+            && pump.pi_root_control_passive_admission_pending()
+            && pump.service_pi_root_control_passive_admission()
+        {
+            let _ = pump.prepare_pi_root_control_passive_admission_yield();
+            sel4::yield_now();
+            continue;
+        }
+
+        // With no healthy retained command, run the ordinary bounded material
+        // containment chain. A preempted reservation reaches this lane only
+        // after cancellation; lock contention still forces a yield.
         #[cfg(any(
             feature = "net-console",
             all(target_arch = "aarch64", target_os = "none", sel4_config_kernel_mcs)
@@ -525,18 +545,6 @@ where
         let recovery_turn = recovery_turn || passive_recovery_preempted;
 
         if recovery_turn {
-            sel4::yield_now();
-            continue;
-        }
-
-        // One parsed Pi command that can donate root-control's SC is retained
-        // across exactly one selected MCS Yield boundary. On the first resumed
-        // activation, refresh time, sample once, and either dispatch once or
-        // emit a typed refusal; equality/excess never starts a retry loop.
-        if pump.pi_root_control_passive_admission_pending()
-            && pump.service_pi_root_control_passive_admission()
-        {
-            let _ = pump.prepare_pi_root_control_passive_admission_yield();
             sel4::yield_now();
             continue;
         }

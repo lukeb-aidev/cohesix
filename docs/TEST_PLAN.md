@@ -1489,7 +1489,25 @@ The authenticated serial reboot is blocked at the same boundary, so this exact
 image has no GENET boot result. Its first failed invariant is
 `SERVICE_RUNTIME`, not SDIO, CYW43, DHCP, or GENET.
 
-The next source oracle supersedes only ae2's mediated-WiFi YieldTo hypothesis.
+The exact-1c follow-up binds source
+`1c269ed97f8f12158a5ce549d96811764411bd25`, build ID
+`8d4e469aa94453989fa6df7fa7aecd7c35bfb37fdd0edbd8aeccfc3cae312de2`, image
+ID `c59c7b2e5823f10904516734aede16aa5c98d0931585a52307b7f347bc5e6cad`, and
+image SHA-256
+`39f7b19e4e51f47735793c06e56ff2716a3abdd3986a8bab0472d1d8a749dba7`.
+Its 2026-08-30 WiFi boot passes Gate 8a--8h on attempt 1, DHCP, paced serial
+diagnostics, sealed 272/272 MCS registration, and a generation-bound peer
+transaction without fault, quarantine, revocation, overflow, or queue drop.
+The first standalone `boot_v0.coh` connection completes TCP, `AUTH`, and Queen
+`ATTACH`, then its first `log` fails once with
+`busy detail=root-sc-reserve`; a separate raw framed connection is refused at
+initial passive admission. The cold-neighbour ping sample loses 2/5 packets
+with 127.921--167.312 ms replies, and usable WiFi readiness remains about 136
+seconds. The live boot-paired capture prefixes are diagnostic, not sealed
+acceptance evidence. Medium/high REST pressure is withheld at the first failed
+invariant, and this WiFi boot proves neither GENET nor August parity.
+
+The next source oracle retains ae2's corrected signal-only mediated-WiFi path.
 Focused coverage must prove that mediated WiFi is signal-only even when
 authenticated while direct GENET retains its guarded handoff; selected-MCS
 runtime receive classification treats an admitted low-32 notification badge as
@@ -1499,19 +1517,27 @@ length-first behavior unchanged. Physical-Pi serial, local-seat, and TCP tests
 must prove raw input, echo, parsing, and root-owned diagnostics remain live
 even when passive dispatch admission is denied. Only a parsed command that may
 enter passive NineDoor samples `SchedContext_Consumed`: retain the exact parsed
-command and authority identity after one baseline/reset sample, enter exactly
-one selected periodic MCS Yield boundary, then on the first resumed activation
-refresh policy time and decide from one fresh sample. Only a value strictly
-below `budget_us - wcet_us`, currently 250 us, admits the command and leaves the
-complete 2,500 us root WCET; equality or excess emits one typed refusal and
-terminates without retry. Newly published isolated-service recovery, reboot,
-containment, quarantine, connection/session drift, invalid profile, backwards
-or missing timer evidence, and syscall failure must cancel or latch fail closed
-before dispatch, without projecting a response into a replacement connection.
-Focused tests must prove no decision sample before the yield marker, exact
+command and authority identity after one baseline/reset sample, then reset the
+evidence again immediately before exactly one selected periodic MCS Yield. The
+second reset is mandatory because the selected kernel `handleYield` restores
+actual pre-Yield `scConsumed` evidence after relinquishing the remaining
+refill. No userland operation may occur between that reset and `seL4_Yield`.
+On the first resumed activation, an already-published recovery preempts before
+policy work; otherwise a healthy retained command precedes ordinary material
+containment probes, refreshes policy time, and decides from one fresh sample.
+Only a value strictly below `budget_us - wcet_us`, currently 250 us, admits the
+command and leaves the complete 2,500 us root WCET; equality or excess emits
+one typed refusal and terminates without retry. Newly published
+isolated-service recovery, reboot, containment, quarantine, connection/session
+drift, invalid profile, backwards or missing timer evidence, and failure of
+either accounting sample must cancel or latch fail closed before dispatch,
+without projecting a response into a replacement connection. Focused tests
+must bind the selected kernel Yield semantics, prove one capture sample plus
+one pre-Yield reset, no work between reset and Yield, exact
 one-command/one-dispatch retention, strict equality refusal without retry,
-fresh policy time, fault-before-dispatch cancellation, authority cancellation,
-and continued raw serial/local-seat/TCP diagnostic liveness before retention.
+fresh policy time, fault-before-dispatch cancellation before and after the
+decision sample, authority cancellation, and continued raw
+serial/local-seat/TCP diagnostic liveness before retention.
 A `Closed` result at `CallArm`, `Call`, or recovered fault/timeout is terminal
 generation evidence,
 must preserve its exact stage through containment, and cannot reset or retry a
