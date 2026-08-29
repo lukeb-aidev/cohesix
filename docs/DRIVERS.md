@@ -1023,7 +1023,9 @@ reusable ownership pattern.
   donates its slice, while continuous bidirectional pressure receives exactly
   eight TX and eight RX slices in the retained 16-slice window. Finalizing a
   retained ambiguous TX or RX cursor commit consumes one of those slices and
-  cannot be reconciled outside the same accounting. A full TX ring waits for a
+  cannot be reconciled outside the same accounting. Recycling a malformed RX
+  descriptor also consumes its slice and cannot donate that same slice to TX.
+  A full TX ring waits for a
   peer rearm notification unless an independent retained cursor transition is
   actionable; queued RX cannot create a self-poll while smoltcp ingress is
   occupied. The Pi manifest gives GENET a `3,000 us / 10,000 us` core-1 SC,

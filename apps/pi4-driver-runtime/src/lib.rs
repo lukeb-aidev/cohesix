@@ -46397,6 +46397,11 @@ fn genet_direct_drain_rx_hardware(
         let desc = genet_read_rx_desc(slot);
         let len_status = genet_rx_len_status_from_dma(dma_vaddr, desc.0);
         let Some(frame_len) = genet_rx_payload_len(len_status) else {
+            // Recycling a malformed hardware descriptor mutates the owned DMA
+            // frontier and therefore consumes this guarded packet slice even
+            // though no frame reaches the direct ring. Without this charge an
+            // RX-first slice could donate immediately and submit TX too.
+            service_units = service_units.saturating_add(1);
             genet_rearm_rx_slot(&descriptor, dma_range, slot);
             state.rx_cons_index = state.rx_cons_index.wrapping_add(1);
             genet_write32(GENET_RDMA_CONS_INDEX, state.rx_cons_index as u32);
@@ -78647,6 +78652,60 @@ mod tests {
         assert_eq!(state.direct_genet_tx_packets, 16);
         assert_eq!(state.direct_genet_rx_packets, 15);
         assert_eq!(state.rx_cons_index, DIRECT_GENET_RX_SLOT_COUNT as u16);
+    }
+
+    #[test]
+    fn direct_genet_malformed_rx_recycle_cannot_donate_same_slice_to_tx() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let generation = 0x26e0_0017;
+        let descriptor = direct_genet_descriptor_for_test();
+        let mut state = direct_genet_test_state(generation);
+        direct_genet_peer_publish(DirectGenetDirection::Tx, generation, b"next-slice-tx");
+        stage_direct_genet_rx_hardware(&descriptor, &state, b"malformed-rx");
+
+        let dma_range = runtime_resource_range(
+            &descriptor,
+            DRIVER_RUNTIME_RESOURCE_KIND_DMA,
+            DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA,
+        )
+        .expect("direct GENET test descriptor has a DMA arena");
+        let dma_vaddr = dma_range.vaddr as usize;
+        let malformed = GENET_DMA_SOP | GENET_DMA_EOP;
+        write_dma_u32(dma_vaddr, malformed);
+        genet_write_rx_desc(
+            0,
+            runtime_resource_bus_addr_at(&descriptor, dma_range, 0)
+                .expect("direct GENET RX DMA address resolves"),
+            malformed,
+        );
+        state.dpc_turns = 1;
+
+        assert!(genet_runtime_service_dpc_state(
+            &mut state,
+            DRIVER_RUNTIME_DIRECT_GENET_NOTIFICATION_BADGE,
+        ));
+        assert_eq!(state.rx_cons_index, 1, "the malformed RX slot is recycled");
+        assert_eq!(state.direct_genet_rx_packets, 0);
+        assert_eq!(state.direct_genet_tx_packets, 0);
+        assert_eq!(state.tx_prod_index, 0, "TX cannot use the RX recycle slice");
+        let (_, tx_after_recycle) =
+            genet_direct_control_sample(DirectGenetDirection::Tx, generation)
+                .expect("queued TX cursor remains exact after RX recycle");
+        assert_eq!(
+            (
+                tx_after_recycle.producer_cursor,
+                tx_after_recycle.consumer_cursor
+            ),
+            (1, 0)
+        );
+
+        assert!(genet_runtime_service_dpc_state(&mut state, 0));
+        assert_eq!(state.direct_genet_tx_packets, 1);
+        assert_eq!(
+            state.tx_prod_index, 1,
+            "TX advances only in the next guarded slice"
+        );
     }
 
     #[test]

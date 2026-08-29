@@ -6290,7 +6290,8 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
       successive slices under continuous bidirectional pressure must yield the
       exact eight/eight share; an empty side donates its slice. Retained
       ambiguous TX/RX commit reconciliation consumes exactly one slice rather
-      than preceding that bound.
+      than preceding that bound. A malformed RX descriptor must be recycled in
+      one slice while queued TX remains untouched until the next guarded slice.
       Containment must suspend GENET and delete both cross-child signal caps
       before unmapping/deleting all 32 external console mapping caps and before
       anchor revoke.
