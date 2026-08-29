@@ -185,8 +185,19 @@ Control kind `SendBatch = 3` carries encoding version 1, one through eight
 records, exact used length, zero reserved fields, and `1..=256` bytes of valid
 UTF-8 per record with no CR or LF. Root encodes the complete batch before
 publication; the child validates the complete copied payload before emitting
-one record per bounded Session unit. Legacy `SendLine = 1` and Disconnect
-remain valid controls.
+the unchanged sequence of individually length-prefixed records. Internally, the
+child may admit consecutive records as one at-most-1,400-byte socket wire train,
+below the qualified Pi TCP MSS and always ending at a complete record boundary.
+A maximum eight-record, 256-byte-per-record batch therefore uses exactly two
+trains of five and three records; smaller records may fit in one. Preparation
+does not advance the private response cursor. Only a complete socket enqueue
+commits the next cursor, and that commit must still match the authenticated
+connection, batch identity, and prepared cursor. Backpressure or stale identity
+consumes nothing. A partial enqueue is a terminal invariant failure and never
+advances or retries the cursor. The train is only an internal enqueue unit: it
+adds no aggregate external frame, changes no four-byte length prefix, and does
+not change ABI v5 or the public `AUTH`/`ATTACH` and `OK`/`ERR`/`END` grammar.
+Legacy `SendLine = 1` and Disconnect remain valid controls.
 
 Event kind `CommandBatch = 27` carries encoding version 1 and one through eight
 consecutive authenticated commands for one exact connection. Each record
@@ -198,12 +209,12 @@ reserves capacity for every command before admitting any of them. One batch
 consumes one publication credit; it does not add capability, scheduling, or
 command authority.
 
-One complete wire-frame commit may retain one following bounded service cycle.
-A no-progress cycle quiesces; pending state without sendability or capacity does
-not create an uncredited spin. Publication requires explicit credit returned
-only after root has validated and durably handled every indicated event and
-egress record. Duplicate, stale, late, or identity-mismatched acknowledgements
-fail closed.
+One complete wire-frame or wire-train commit may retain one following bounded
+service cycle. A no-progress cycle quiesces; pending state without sendability
+or capacity does not create an uncredited spin. Publication requires explicit
+credit returned only after root has validated and durably handled every
+indicated event and egress record. Duplicate, stale, late, or
+identity-mismatched acknowledgements fail closed.
 
 The generated descriptor supplies target timer frequency, image identity,
 mappings, capabilities, notifications, scheduling authority, and fault routes.

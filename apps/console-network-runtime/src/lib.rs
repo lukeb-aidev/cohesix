@@ -14,6 +14,7 @@ pub use console_network_abi as abi;
 use abi::{
     CommandBatchBuilder, ExchangeKind, RuntimeInitDescriptor, SendBatchCursor,
     COMMAND_BATCH_MAX_RECORDS, COMMAND_LINE_BYTES, CONSOLE_OUTPUT_BYTES, CONSOLE_PAYLOAD_BYTES,
+    SEND_BATCH_LINE_BYTES, SEND_BATCH_MAX_RECORDS,
 };
 use heapless::{Deque, Vec as HeaplessVec};
 use smoltcp::iface::{
@@ -31,6 +32,13 @@ const SESSION_EVENT_DEPTH: usize = 8;
 const SESSION_OUTPUT_DEPTH: usize = 8;
 const FRAME_PREFIX_BYTES: usize = 4;
 const SESSION_INGRESS_BYTES: usize = CONSOLE_PAYLOAD_BYTES + FRAME_PREFIX_BYTES;
+// Stay below the qualified Pi TCP MSS while retaining complete externally
+// framed records. A maximum eight-record response therefore drains through two
+// independently admitted trains instead of depending on an ACK for a trailing
+// segment created by one oversized socket write.
+const SESSION_WIRE_OUTPUT_BYTES: usize = 1_400;
+const _: () = assert!(SESSION_WIRE_OUTPUT_BYTES >= CONSOLE_OUTPUT_BYTES + FRAME_PREFIX_BYTES);
+const _: () = assert!(SESSION_WIRE_OUTPUT_BYTES >= SEND_BATCH_LINE_BYTES + FRAME_PREFIX_BYTES);
 // One maximum receive can complete one partial command-bound oversize frame,
 // contain one complete minimum-size oversize frame, and finish with one
 // payload-oversize prefix. No fourth invalid-length response can fit.
@@ -350,8 +358,30 @@ enum AuthState {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct PendingOutputBatch {
+    connection_id: u64,
+    identity: u64,
     payload: HeaplessVec<u8, CONSOLE_PAYLOAD_BYTES>,
     cursor: SendBatchCursor,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PreparedWireOutputKind {
+    QueuedFrame {
+        connection_id: u64,
+        payload_len: usize,
+    },
+    Batch {
+        connection_id: u64,
+        identity: u64,
+        cursor: SendBatchCursor,
+        next_cursor: SendBatchCursor,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct PreparedWireOutput {
+    length: usize,
+    kind: PreparedWireOutputKind,
 }
 
 /// Bounded transport-authentication and length-prefixed console session.
@@ -375,6 +405,7 @@ pub struct TransportSession {
     events: Deque<ServiceEvent, SESSION_EVENT_DEPTH>,
     outbound: Deque<HeaplessVec<u8, CONSOLE_OUTPUT_BYTES>, SESSION_OUTPUT_DEPTH>,
     pending_batch: Option<PendingOutputBatch>,
+    next_batch_identity: u64,
     close_after_flush: bool,
     terminal: bool,
 }
@@ -405,6 +436,7 @@ impl TransportSession {
             events: Deque::new(),
             outbound: Deque::new(),
             pending_batch: None,
+            next_batch_identity: 1,
             close_after_flush: false,
             terminal: false,
         })
@@ -544,75 +576,204 @@ impl TransportSession {
         private_payload
             .extend_from_slice(payload)
             .map_err(|_| RuntimeError::ConsoleFrame)?;
+        let identity = self.next_batch_identity;
+        let next_identity = identity.checked_add(1).ok_or(RuntimeError::ConsoleFrame)?;
         self.pending_batch = Some(PendingOutputBatch {
+            connection_id: self.connection_id,
+            identity,
             payload: private_payload,
             cursor,
         });
+        self.next_batch_identity = next_identity;
         Ok(())
     }
 
-    fn stage_next_batch_line(&mut self) -> Result<bool, RuntimeError> {
-        if self.pending_batch.is_none() || !self.outbound.is_empty() {
-            return Ok(false);
-        }
-        let (frame, next_cursor, finished) = {
-            let batch = self
-                .pending_batch
-                .as_ref()
+    fn prepare_wire_output(
+        &self,
+        output: &mut [u8],
+    ) -> Result<Option<PreparedWireOutput>, RuntimeError> {
+        if let Some(frame) = self.outbound.front() {
+            let total = FRAME_PREFIX_BYTES
+                .checked_add(frame.len())
                 .ok_or(RuntimeError::ConsoleFrame)?;
-            let mut next_cursor = batch.cursor;
-            let line = next_cursor
+            if output.len() < total {
+                return Err(RuntimeError::Backpressure);
+            }
+            let total_u32 = u32::try_from(total).map_err(|_| RuntimeError::ConsoleFrame)?;
+            output[..FRAME_PREFIX_BYTES].copy_from_slice(&total_u32.to_le_bytes());
+            output[FRAME_PREFIX_BYTES..total].copy_from_slice(frame.as_slice());
+            return Ok(Some(PreparedWireOutput {
+                length: total,
+                kind: PreparedWireOutputKind::QueuedFrame {
+                    connection_id: self.connection_id,
+                    payload_len: frame.len(),
+                },
+            }));
+        }
+
+        let Some(batch) = self.pending_batch.as_ref() else {
+            return Ok(None);
+        };
+        if self.state != AuthState::Authenticated
+            || batch.connection_id == 0
+            || batch.connection_id != self.connection_id
+            || batch.identity == 0
+            || batch.cursor.is_empty()
+        {
+            return Err(RuntimeError::ConsoleFrame);
+        }
+
+        let mut next_cursor = batch.cursor;
+        let mut output_length = 0usize;
+        let mut record_count = 0usize;
+        while record_count < SEND_BATCH_MAX_RECORDS {
+            let mut candidate_cursor = next_cursor;
+            let Some(line) = candidate_cursor
+                .next_line(batch.payload.as_slice())
+                .map_err(|_| RuntimeError::ConsoleFrame)?
+            else {
+                break;
+            };
+            let frame_len = FRAME_PREFIX_BYTES
+                .checked_add(line.len())
+                .ok_or(RuntimeError::ConsoleFrame)?;
+            let frame_end = output_length
+                .checked_add(frame_len)
+                .ok_or(RuntimeError::ConsoleFrame)?;
+            if frame_end > SESSION_WIRE_OUTPUT_BYTES {
+                break;
+            }
+            output_length = frame_end;
+            next_cursor = candidate_cursor;
+            record_count = record_count.saturating_add(1);
+        }
+        if output_length == 0
+            || record_count == 0
+            || record_count > SEND_BATCH_MAX_RECORDS
+            || next_cursor == batch.cursor
+        {
+            return Err(RuntimeError::ConsoleFrame);
+        }
+        if output.len() < output_length {
+            return Err(RuntimeError::Backpressure);
+        }
+
+        let mut copy_cursor = batch.cursor;
+        let mut output_offset = 0usize;
+        for _ in 0..record_count {
+            let line = copy_cursor
                 .next_line(batch.payload.as_slice())
                 .map_err(|_| RuntimeError::ConsoleFrame)?
                 .ok_or(RuntimeError::ConsoleFrame)?;
-            let mut frame: HeaplessVec<u8, CONSOLE_OUTPUT_BYTES> = HeaplessVec::new();
-            frame
-                .extend_from_slice(line.as_bytes())
-                .map_err(|_| RuntimeError::ConsoleFrame)?;
-            (frame, next_cursor, next_cursor.is_empty())
-        };
-        self.outbound
-            .push_back(frame)
-            .map_err(|_| RuntimeError::Backpressure)?;
-        if finished {
-            self.pending_batch = None;
-        } else if let Some(batch) = self.pending_batch.as_mut() {
-            batch.cursor = next_cursor;
-        } else {
+            let frame_len = FRAME_PREFIX_BYTES
+                .checked_add(line.len())
+                .ok_or(RuntimeError::ConsoleFrame)?;
+            let frame_end = output_offset
+                .checked_add(frame_len)
+                .ok_or(RuntimeError::ConsoleFrame)?;
+            let frame_len_u32 = u32::try_from(frame_len).map_err(|_| RuntimeError::ConsoleFrame)?;
+            output[output_offset..output_offset + FRAME_PREFIX_BYTES]
+                .copy_from_slice(&frame_len_u32.to_le_bytes());
+            let payload_offset = output_offset + FRAME_PREFIX_BYTES;
+            output[payload_offset..frame_end].copy_from_slice(line.as_bytes());
+            output_offset = frame_end;
+        }
+        if output_offset != output_length || copy_cursor != next_cursor {
             return Err(RuntimeError::ConsoleFrame);
         }
-        Ok(true)
+        Ok(Some(PreparedWireOutput {
+            length: output_length,
+            kind: PreparedWireOutputKind::Batch {
+                connection_id: batch.connection_id,
+                identity: batch.identity,
+                cursor: batch.cursor,
+                next_cursor,
+            },
+        }))
     }
 
-    /// Copy one length-prefixed outgoing frame into `output`.
-    pub fn pop_wire_output(&mut self, output: &mut [u8]) -> Result<Option<usize>, RuntimeError> {
-        let length = self.peek_wire_output(output)?;
-        if length.is_some() {
-            self.commit_wire_output()?;
+    fn commit_prepared_wire_output(
+        &mut self,
+        prepared: PreparedWireOutput,
+    ) -> Result<(), RuntimeError> {
+        match prepared.kind {
+            PreparedWireOutputKind::QueuedFrame {
+                connection_id,
+                payload_len,
+            } => {
+                let expected_len = FRAME_PREFIX_BYTES
+                    .checked_add(payload_len)
+                    .ok_or(RuntimeError::ConsoleFrame)?;
+                if connection_id != self.connection_id || prepared.length != expected_len {
+                    return Err(RuntimeError::ConsoleFrame);
+                }
+                let Some(frame) = self.outbound.front() else {
+                    return Err(RuntimeError::Backpressure);
+                };
+                if frame.len() != payload_len {
+                    return Err(RuntimeError::ConsoleFrame);
+                }
+                self.outbound
+                    .pop_front()
+                    .map(|_| ())
+                    .ok_or(RuntimeError::Backpressure)
+            }
+            PreparedWireOutputKind::Batch {
+                connection_id,
+                identity,
+                cursor,
+                next_cursor,
+            } => {
+                if self.state != AuthState::Authenticated
+                    || connection_id == 0
+                    || connection_id != self.connection_id
+                    || !self.outbound.is_empty()
+                    || next_cursor == cursor
+                {
+                    return Err(RuntimeError::ConsoleFrame);
+                }
+                let Some(batch) = self.pending_batch.as_mut() else {
+                    return Err(RuntimeError::Backpressure);
+                };
+                if batch.connection_id != connection_id
+                    || batch.identity != identity
+                    || batch.cursor != cursor
+                {
+                    return Err(RuntimeError::ConsoleFrame);
+                }
+                if next_cursor.is_empty() {
+                    self.pending_batch = None;
+                } else {
+                    batch.cursor = next_cursor;
+                }
+                Ok(())
+            }
         }
-        Ok(length)
     }
 
-    /// Copy, but do not consume, one length-prefixed outgoing frame.
-    pub fn peek_wire_output(&self, output: &mut [u8]) -> Result<Option<usize>, RuntimeError> {
-        let Some(frame) = self.outbound.front() else {
+    /// Copy one bounded outgoing frame or response-batch wire train into `output`.
+    pub fn pop_wire_output(&mut self, output: &mut [u8]) -> Result<Option<usize>, RuntimeError> {
+        let Some(prepared) = self.prepare_wire_output(output)? else {
             return Ok(None);
         };
-        let total = FRAME_PREFIX_BYTES.saturating_add(frame.len());
-        if output.len() < total {
-            return Err(RuntimeError::Backpressure);
-        }
-        output[..FRAME_PREFIX_BYTES].copy_from_slice(&(total as u32).to_le_bytes());
-        output[FRAME_PREFIX_BYTES..total].copy_from_slice(frame.as_slice());
-        Ok(Some(total))
+        self.commit_prepared_wire_output(prepared)?;
+        Ok(Some(prepared.length))
     }
 
-    /// Commit the frame most recently copied with [`Self::peek_wire_output`].
+    /// Copy, but do not consume, one outgoing frame or response-batch wire train.
+    pub fn peek_wire_output(&self, output: &mut [u8]) -> Result<Option<usize>, RuntimeError> {
+        Ok(self
+            .prepare_wire_output(output)?
+            .map(|prepared| prepared.length))
+    }
+
+    /// Commit the output most recently copied with [`Self::peek_wire_output`].
     pub fn commit_wire_output(&mut self) -> Result<(), RuntimeError> {
-        self.outbound
-            .pop_front()
-            .map(|_| ())
-            .ok_or(RuntimeError::Backpressure)
+        let mut output = [0u8; SESSION_WIRE_OUTPUT_BYTES];
+        let prepared = self
+            .prepare_wire_output(&mut output)?
+            .ok_or(RuntimeError::Backpressure)?;
+        self.commit_prepared_wire_output(prepared)
     }
 
     /// Pop one typed event for root policy.
@@ -1061,7 +1222,10 @@ impl<'a> ConsoleNetworkService<'a> {
         descriptor
             .validate()
             .map_err(|_| RuntimeError::InvalidInit)?;
-        if socket_storage.len() != 1 || tcp_rx.len() < 1024 || tcp_tx.len() < 1024 {
+        if socket_storage.len() != 1
+            || tcp_rx.len() < 1024
+            || tcp_tx.len() < SESSION_WIRE_OUTPUT_BYTES
+        {
             return Err(RuntimeError::InvalidInit);
         }
         let address = Ipv4Address::from(descriptor.ipv4);
@@ -1204,9 +1368,9 @@ impl<'a> ConsoleNetworkService<'a> {
     /// timeout or other terminal fault identifies the exact attempted unit.
     /// StackIngress, StackEgress, and Session therefore execute in separate
     /// scheduler iterations. The selected smoltcp entry points each have a
-    /// bounded work contract, unlike `Interface::poll`. A successful
-    /// complete-frame commit retains one fresh three-unit cycle; pending output
-    /// without socket capacity does not.
+    /// bounded work contract, unlike `Interface::poll`. A successful complete
+    /// frame or bounded wire-train commit retains one fresh three-unit cycle;
+    /// pending output without socket capacity does not.
     pub fn poll_service_unit(&mut self, now_ms: u64) -> Result<ServicePollOutcome, RuntimeError> {
         if self.terminal {
             return Err(RuntimeError::Terminal);
@@ -1249,7 +1413,7 @@ impl<'a> ConsoleNetworkService<'a> {
 
     #[inline(never)]
     fn poll_session_unit(&mut self, now_ms: u64) -> Result<bool, RuntimeError> {
-        let mut committed_wire_frame = false;
+        let mut committed_wire_output = false;
         let state = self.sockets.get::<TcpSocket>(self.tcp_handle).state();
         if state == TcpState::Established && self.session.connection_id().is_none() {
             let connection_id = self.next_connection_id;
@@ -1286,10 +1450,9 @@ impl<'a> ConsoleNetworkService<'a> {
             }
         }
         self.session.tick(now_ms)?;
-        let _ = self.session.stage_next_batch_line()?;
 
-        let mut output = [0u8; CONSOLE_PAYLOAD_BYTES + FRAME_PREFIX_BYTES];
-        if let Some(length) = self.session.peek_wire_output(&mut output)? {
+        let mut output = [0u8; SESSION_WIRE_OUTPUT_BYTES];
+        if let Some(prepared) = self.session.prepare_wire_output(&mut output)? {
             let (can_send, available) = {
                 let socket = self.sockets.get::<TcpSocket>(self.tcp_handle);
                 (
@@ -1297,20 +1460,24 @@ impl<'a> ConsoleNetworkService<'a> {
                     socket.send_capacity().saturating_sub(socket.send_queue()),
                 )
             };
-            if can_send && available >= length {
+            if can_send && available >= prepared.length {
+                // The capacity preflight and enqueue use the same socket with no
+                // intervening mutation. smoltcp's ring enqueue spans its wrap,
+                // so this admits the complete train or exposes an invariant
+                // failure; a partial train must never be retried or duplicated.
                 let sent = match self
                     .sockets
                     .get_mut::<TcpSocket>(self.tcp_handle)
-                    .send_slice(&output[..length])
+                    .send_slice(&output[..prepared.length])
                 {
                     Ok(bytes) => bytes,
                     Err(_) => return Err(RuntimeError::Backpressure),
                 };
-                if sent != length {
-                    return Err(RuntimeError::Backpressure);
+                if sent != prepared.length {
+                    return Err(RuntimeError::Terminal);
                 }
-                self.session.commit_wire_output()?;
-                committed_wire_frame = true;
+                self.session.commit_prepared_wire_output(prepared)?;
+                committed_wire_output = true;
             }
         }
         if self.session.close_ready() {
@@ -1337,7 +1504,7 @@ impl<'a> ConsoleNetworkService<'a> {
                 .map_err(|_| RuntimeError::ListenerBind)?;
         }
         self.last_tcp_state = self.sockets.get::<TcpSocket>(self.tcp_handle).state();
-        Ok(committed_wire_frame || received != 0)
+        Ok(committed_wire_output || received != 0)
     }
 
     /// Pop one authenticated transport event for root policy.
@@ -1470,7 +1637,7 @@ mod tests {
     #[test]
     fn isolated_console_socket_uses_interactive_tcp_policy() {
         let mut rx = [0u8; 1024];
-        let mut tx = [0u8; 1024];
+        let mut tx = [0u8; SESSION_WIRE_OUTPUT_BYTES];
         let mut storage = [SocketStorage::EMPTY];
         let service =
             ConsoleNetworkService::new(descriptor(), &mut rx, &mut tx, &mut storage).unwrap();
@@ -1493,6 +1660,26 @@ mod tests {
         frame
     }
 
+    fn decode_wire_train(wire: &[u8]) -> std::vec::Vec<&[u8]> {
+        let mut frames = std::vec::Vec::new();
+        let mut offset = 0usize;
+        while offset < wire.len() {
+            assert!(wire.len().saturating_sub(offset) >= FRAME_PREFIX_BYTES);
+            let total = u32::from_le_bytes(
+                wire[offset..offset + FRAME_PREFIX_BYTES]
+                    .try_into()
+                    .unwrap(),
+            ) as usize;
+            assert!(total > FRAME_PREFIX_BYTES);
+            let end = offset.checked_add(total).unwrap();
+            assert!(end <= wire.len());
+            frames.push(&wire[offset + FRAME_PREFIX_BYTES..end]);
+            offset = end;
+        }
+        assert_eq!(offset, wire.len());
+        frames
+    }
+
     fn send_batch_payload(lines: &[&str]) -> ([u8; CONSOLE_PAYLOAD_BYTES], usize) {
         let mut payload = [0u8; CONSOLE_PAYLOAD_BYTES];
         let payload_len = {
@@ -1509,7 +1696,7 @@ mod tests {
         service: &mut ConsoleNetworkService<'_>,
         now_ms: u64,
     ) -> Result<usize, RuntimeError> {
-        let mut committed_frames = 0usize;
+        let mut committed_outputs = 0usize;
         for _ in 0..=abi::SEND_BATCH_MAX_RECORDS {
             assert_eq!(service.poll_unit, ServicePollUnit::StackIngress);
             assert_eq!(
@@ -1525,9 +1712,9 @@ mod tests {
             let outcome = service.poll_service_unit(now_ms)?;
             assert_eq!(service.poll_unit, ServicePollUnit::StackIngress);
             if outcome == ServicePollOutcome::Complete {
-                return Ok(committed_frames);
+                return Ok(committed_outputs);
             }
-            committed_frames = committed_frames.saturating_add(1);
+            committed_outputs = committed_outputs.saturating_add(1);
         }
         Err(RuntimeError::Backpressure)
     }
@@ -2116,7 +2303,7 @@ mod tests {
     }
 
     #[test]
-    fn authorized_batch_is_atomic_and_stages_one_external_frame_per_session_unit() {
+    fn authorized_batch_is_atomic_and_stages_one_bounded_wire_train() {
         let mut rx = [0u8; 4096];
         let mut tx = [0u8; 4096];
         let mut storage = [SocketStorage::EMPTY];
@@ -2145,36 +2332,204 @@ mod tests {
         service.session.request_disconnect();
         assert!(!service.session.close_ready());
 
-        for (index, expected) in lines.iter().enumerate() {
-            assert_eq!(service.session.stage_next_batch_line(), Ok(true));
-            let remaining_after_stage = lines.len().saturating_sub(index + 1);
-            assert_eq!(
-                service
-                    .session
-                    .pending_batch
-                    .as_ref()
-                    .map(|batch| batch.cursor.remaining()),
-                (remaining_after_stage != 0).then_some(remaining_after_stage)
-            );
-            assert_eq!(
-                service.session.stage_next_batch_line(),
-                Ok(false),
-                "one Session unit cannot stage a second batch record"
-            );
+        let accepted = service.session.pending_batch.clone();
+        let mut too_small = [0u8; 32];
+        assert_eq!(
+            service.session.peek_wire_output(&mut too_small),
+            Err(RuntimeError::Backpressure)
+        );
+        assert_eq!(service.session.pending_batch, accepted);
 
-            let mut wire = [0u8; CONSOLE_OUTPUT_BYTES + FRAME_PREFIX_BYTES];
-            let frame_len = service.session.pop_wire_output(&mut wire).unwrap().unwrap();
-            assert_eq!(
-                u32::from_le_bytes(wire[..4].try_into().unwrap()) as usize,
-                frame_len
-            );
-            assert_eq!(&wire[4..frame_len], expected.as_bytes());
-            assert_eq!(
-                service.session.output_queue_empty(),
-                index + 1 == lines.len()
-            );
+        let mut first = [0u8; SESSION_WIRE_OUTPUT_BYTES];
+        let first_len = service
+            .session
+            .peek_wire_output(&mut first)
+            .unwrap()
+            .unwrap();
+        let mut second = [0u8; SESSION_WIRE_OUTPUT_BYTES];
+        let second_len = service
+            .session
+            .peek_wire_output(&mut second)
+            .unwrap()
+            .unwrap();
+        assert_eq!(first_len, second_len);
+        assert_eq!(&first[..first_len], &second[..second_len]);
+        assert_eq!(
+            service.session.pending_batch, accepted,
+            "backpressure and repeated preparation cannot advance the private cursor"
+        );
+
+        let train_len = service
+            .session
+            .pop_wire_output(&mut first)
+            .unwrap()
+            .unwrap();
+        let frames = decode_wire_train(&first[..train_len]);
+        assert_eq!(frames.len(), lines.len());
+        for (frame, expected) in frames.iter().zip(lines) {
+            assert_eq!(*frame, expected.as_bytes());
         }
+        assert!(service.session.output_queue_empty());
         assert!(service.session.close_ready());
+    }
+
+    #[test]
+    fn batch_wire_train_stale_preparation_cannot_consume_replacement_identity() {
+        let mut rx = [0u8; 4096];
+        let mut tx = [0u8; 4096];
+        let mut storage = [SocketStorage::EMPTY];
+        let mut service =
+            ConsoleNetworkService::new(descriptor(), &mut rx, &mut tx, &mut storage).unwrap();
+        service.session.begin(1, 1).unwrap();
+        service.session.state = AuthState::Authenticated;
+        let (first_payload, first_len) = send_batch_payload(&["ACK ONE", "END ONE"]);
+        assert_eq!(
+            service.apply_control(1, ExchangeKind::SendBatch, &first_payload[..first_len],),
+            Ok(ControlApplyOutcome::Applied)
+        );
+        let mut wire = [0u8; SESSION_WIRE_OUTPUT_BYTES];
+        let stale = service
+            .session
+            .prepare_wire_output(&mut wire)
+            .unwrap()
+            .unwrap();
+
+        service.session.end(2).unwrap();
+        service.session.begin(1, 3).unwrap();
+        service.session.state = AuthState::Authenticated;
+        let (replacement_payload, replacement_len) = send_batch_payload(&["ACK TWO", "END TWO"]);
+        assert_eq!(
+            service.apply_control(
+                1,
+                ExchangeKind::SendBatch,
+                &replacement_payload[..replacement_len],
+            ),
+            Ok(ControlApplyOutcome::Applied)
+        );
+        let replacement = service.session.pending_batch.clone();
+
+        assert_eq!(
+            service.session.commit_prepared_wire_output(stale),
+            Err(RuntimeError::ConsoleFrame)
+        );
+        assert_eq!(
+            service.session.pending_batch, replacement,
+            "a stale same-connection/same-layout preparation cannot consume replacement output"
+        );
+
+        let train_len = service.session.pop_wire_output(&mut wire).unwrap().unwrap();
+        assert_eq!(
+            decode_wire_train(&wire[..train_len]),
+            std::vec![b"ACK TWO".as_slice(), b"END TWO".as_slice()]
+        );
+        assert!(service.session.output_queue_empty());
+    }
+
+    #[test]
+    fn maximum_batch_uses_two_mss_bounded_trains_without_speculative_cursor_progress() {
+        let line = "x".repeat(SEND_BATCH_LINE_BYTES);
+        let lines = [line.as_str(); SEND_BATCH_MAX_RECORDS];
+        let (payload, payload_len) = send_batch_payload(&lines);
+        let cursor = SendBatchCursor::validate(&payload[..payload_len]).unwrap();
+        let mut session = TransportSession::new(descriptor()).unwrap();
+        session.begin(1, 1).unwrap();
+        session.state = AuthState::Authenticated;
+        session
+            .queue_authorized_batch(&payload[..payload_len], cursor)
+            .unwrap();
+        let identity = session
+            .pending_batch
+            .as_ref()
+            .map(|batch| batch.identity)
+            .unwrap();
+
+        let maximum_record_wire_bytes = SEND_BATCH_LINE_BYTES + FRAME_PREFIX_BYTES;
+        let first_record_count = SESSION_WIRE_OUTPUT_BYTES / maximum_record_wire_bytes;
+        let first_train_bytes = first_record_count * maximum_record_wire_bytes;
+        let second_record_count = SEND_BATCH_MAX_RECORDS - first_record_count;
+        let second_train_bytes = second_record_count * maximum_record_wire_bytes;
+        assert_eq!(first_record_count, 5);
+        assert_eq!(second_record_count, 3);
+
+        let mut short = [0u8; 1_299];
+        assert_eq!(
+            session.peek_wire_output(&mut short),
+            Err(RuntimeError::Backpressure)
+        );
+        assert_eq!(
+            session
+                .pending_batch
+                .as_ref()
+                .map(|batch| batch.cursor.remaining()),
+            Some(SEND_BATCH_MAX_RECORDS)
+        );
+
+        let mut wire = [0u8; SESSION_WIRE_OUTPUT_BYTES];
+        let first = session.prepare_wire_output(&mut wire).unwrap().unwrap();
+        assert_eq!(first.length, first_train_bytes);
+        assert_eq!(
+            decode_wire_train(&wire[..first.length]).len(),
+            first_record_count
+        );
+        assert_eq!(
+            session
+                .pending_batch
+                .as_ref()
+                .map(|batch| (batch.identity, batch.cursor.remaining())),
+            Some((identity, SEND_BATCH_MAX_RECORDS)),
+            "preparation cannot speculatively advance the batch cursor"
+        );
+
+        session.commit_prepared_wire_output(first).unwrap();
+        assert_eq!(
+            session
+                .pending_batch
+                .as_ref()
+                .map(|batch| (batch.identity, batch.cursor.remaining())),
+            Some((identity, second_record_count)),
+            "the same batch identity must survive until its final train commits"
+        );
+        assert_eq!(
+            session.commit_prepared_wire_output(first),
+            Err(RuntimeError::ConsoleFrame),
+            "a stale first-train commit cannot consume the second train"
+        );
+        assert_eq!(
+            session
+                .pending_batch
+                .as_ref()
+                .map(|batch| (batch.identity, batch.cursor.remaining())),
+            Some((identity, second_record_count))
+        );
+
+        let mut second_short = [0u8; 779];
+        assert_eq!(
+            session.peek_wire_output(&mut second_short),
+            Err(RuntimeError::Backpressure)
+        );
+        assert_eq!(
+            session
+                .pending_batch
+                .as_ref()
+                .map(|batch| batch.cursor.remaining()),
+            Some(second_record_count)
+        );
+        let second = session.prepare_wire_output(&mut wire).unwrap().unwrap();
+        assert_eq!(second.length, second_train_bytes);
+        assert_eq!(
+            decode_wire_train(&wire[..second.length]).len(),
+            second_record_count
+        );
+        session.commit_prepared_wire_output(second).unwrap();
+        assert!(session.output_queue_empty());
+
+        let mut rx = [0u8; 4096];
+        let mut undersized_tx = [0u8; SESSION_WIRE_OUTPUT_BYTES - 1];
+        let mut storage = [SocketStorage::EMPTY];
+        assert!(matches!(
+            ConsoleNetworkService::new(descriptor(), &mut rx, &mut undersized_tx, &mut storage,),
+            Err(RuntimeError::InvalidInit)
+        ));
     }
 
     #[test]

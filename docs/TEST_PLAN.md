@@ -1360,6 +1360,31 @@ nonforeground bus-link copy bounds plus unchanged foreground trace/overlay
 authority, and the exact response rotation below. No post-containment GENET
 TCP, REST, `.coh`, or performance result from this lifetime is admissible.
 
+The exact-0745 follow-up input binds source
+`0745e3592778ba802453735d8015d8f4be934d41`, image ID
+`af050eb6a31ddb676214b3b425a902a09fce2d5260fb632da4893d6d2f1a7529`,
+image SHA-256
+`c43082a92ead026254bdc07420d6c773617c64e1ec9200d7b045ed9a743934a5`,
+and boot-paired `20260829-124133` captures. WiFi again proves first-generation
+Gate 8, DHCP, authenticated TCP, three focused scripts, and lossless framed
+64-request completion, but rejects latency closure at 2.396 requests/s and
+362.848 ms p95 first response. The first same-image GENET boot proves DHCP,
+direct-ring integrity, peer-assisted `nettest`, one authenticated TCP session,
+and post-ARP SYN-to-SYNACK latency of 0.676 ms, matching the accepted August
+hardware path. A later clean same-image boot faults `bcmgenet-v5` during its
+first material direct episode with guard plus fresh-refill reason evidence and
+correctly quarantines the pair. Source regression must therefore prove that a
+`Reenter` successor remains inside the same guarded notification/prewait
+activation, exact RX/TX service units rather than IRQ/peer bookkeeping define
+slice charge, actual owned-state advance defines productivity, wall
+guard/cap/stalled-yield semantics remain intact, a successor guard Yield
+returns to outer arbitration, and aligned
+word copies cannot cross the descriptor-admitted uncached DMA frame. The
+console child must independently prove the bounded sub-MSS response trains
+defined below. These are next-image candidates only; source, QEMU, packaging,
+or image checks cannot claim repaired GENET continuity, WiFi latency, or August
+parity without fresh exact-image hardware evidence.
+
 The CYW43 software and cadence closure gate is authorized by Milestone 26d
 tasks `m26d-cyw43-hardware-free-closure` and
 `m26d-benchmark-revalidation-and-tuning`, with active defect authority from
@@ -6319,8 +6344,17 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
       `genet_direct_dpc`, `genet_direct_dma`, `genet_direct_ring`, then
       `genet_direct_peer`. The DPC row must retain the cumulative dense-window
       yield/fault reason mask and maximum measured packet-slice duration without
-      granting scheduling authority. Runtime coverage must count each actual nonzero GENET
-      receive result exactly once before badge filtering across the initial poll
+      granting scheduling authority. Runtime coverage must prove one direct
+      notification can consume successive exact packet units through caller-local
+      `Reenter` without generic command arbitration, while the elapsed guard and
+      16-attempt cap are sampled between units. Peer wakes, IRQ ACKs, and
+      bookkeeping-only transitions must report zero slice units; TX/RX issue,
+      retained reconciliation, and malformed RX recycle must each charge the
+      existing exact unit. Unresolved reconciliation must report no progress and
+      cannot reset the one-stalled-retry guard. Aligned volatile word-copy tests must retain identical
+      frame bytes, descriptor/cursor ordering, and sequence-last commit while
+      leaving bounded unaligned prefixes/tails bytewise. Runtime coverage must
+      count each actual nonzero GENET receive result exactly once before badge filtering across the initial poll
       and every later combined wait, while proving the counters cannot service
       an IRQ/DPC/packet or alter scheduling. The replay is deliberately
       causal: waking GENET may allow its normal post-command idle path to drain
@@ -7332,7 +7366,7 @@ It passed the first 17 actions through the driver-coverage contract, then
 `host.python-tests` found the one stale V17 structural expression in
 `tests/test_console_network_runtime_packaging.py` after 1,773 tests and 7
 subtests had passed. The source guard now requires exact
-`Ok(committed_wire_frame || received != 0)` ordering while preserving the
+`Ok(committed_wire_output || received != 0)` ordering while preserving the
 independent complete-send/commit flag transition. Its focused file passed
 11/11 and the complete standalone Python gate passed 1,774 tests plus 7
 subtests. This host repair is not Stage 01 qualification; restart with a fresh
@@ -7816,8 +7850,8 @@ before the selected work. `StackIngress` performs exactly one
 gates, and uses the eligible local-Poll path when no publication preempts it, then later
 dispatches the successor. `Session`
 owns connection/session RX, tick, TX, close, and relisten work. A nonzero
-bounded receive or complete wire-frame commit returns `Continuation` and
-retains a fresh three-unit cycle; only zero receive plus no commit returns
+bounded receive or complete wire-frame/wire-train commit returns `Continuation`
+and retains a fresh three-unit cycle; only zero receive plus no commit returns
 `Complete`, and only that `Complete` clears `service_pending`. The focused
 `buffered_oversize_body_and_quit_retain_service_until_same_connection_parse`
 real two-stack regression must buffer the oversize body and following QUIT
@@ -7827,7 +7861,7 @@ zero-progress cycle. Errors must not call scheduler completion. Retained
 completion, event, or egress publication may
 preempt either pending stack successor without losing it, and coalesced badges
 remain hints rather than permission to bypass the gates.
-Session output must require both `socket.can_send()` and complete-frame
+Session output must require both `socket.can_send()` and complete-output
 capacity before `send_slice`. A `FinWait2` socket with free capacity must
 retain output without commit, `OutputDrained`, or error; after peer close the
 existing end path must publish one `Disconnected`, clear the ended connection,
@@ -8292,12 +8326,18 @@ eight-byte header, one through eight records, exact `used_bytes`, reserved zero,
 and each `1..=256`-byte UTF-8 record free of CR/LF. Empty, ninth, oversized,
 malformed UTF-8, truncated, trailing, overlapping, stale-identity, and
 second-batch-while-pending cases fail without partial queue mutation. A valid
-batch is accepted atomically, but each replenishment-bounded child Session unit
-stages at most one external frame. `ControlCompleted` and `OutputDrained` must
+batch is accepted atomically. Each replenishment-bounded child Session unit may
+stage one complete external frame or one at-most-1,400-byte internal wire train
+ending at a complete frame boundary. The maximum eight-by-256-byte batch must
+split deterministically into five-frame/1,300-byte and
+three-frame/780-byte trains without an aggregate external frame. Preparation
+must not move the connection-, identity-, and cursor-bound batch state;
+capacity failure, backpressure, or a stale commit consumes nothing, while a
+partial enqueue is terminal. `ControlCompleted` and `OutputDrained` must
 refer to the exact control sequence and connection; terminal drain evidence
 from an old connection cannot release a replacement response.
-After each successful complete-frame Session commit, including the last batch
-frame, tests must observe exactly one retained following
+After each successful complete-frame or wire-train Session commit, including
+the final batch train, tests must observe exactly one retained following
 `StackIngress -> StackEgress -> Session` cycle. The next no-progress Session
 must complete and quiesce. A pending batch without a commit and a
 capacity/sendability failure must retain zero new cycles; neither a root
@@ -8677,8 +8717,8 @@ before dispatch and `ServicePollOutcome::{Continuation, Complete}`.
 `Continuation` and retains `service_pending` across the gate recheck and
 eligible local-Poll path. `Session`
 owns connection/session RX, tick, TX, close, and relisten. Nonzero receive or a
-complete wire-frame commit returns `Continuation`; only zero receive with no
-commit returns `Complete` and clears the unit. The exact real-stack source
+complete wire-frame/wire-train commit returns `Continuation`; only zero receive
+with no commit returns `Complete` and clears the unit. The exact real-stack source
 regression above must prove already-buffered oversize fragments plus QUIT make
 progress without another packet/control wake. An error or preempting retained
 publication must not lose the pending successor.

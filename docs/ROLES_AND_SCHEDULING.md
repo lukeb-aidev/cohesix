@@ -426,7 +426,12 @@ TX or RX operation; successive slices alternate their first choice, an empty
 side donates its slice, and continuous bidirectional pressure receives an exact
 8/8 split inside the 16-slice cap. Retained ambiguous cursor reconciliation
 consumes the same bound. The owner may re-enter only below the half-budget
-elapsed guard and 16-attempt cap, with one bounded no-progress retry. Block
+elapsed guard and 16-attempt cap, with one bounded no-progress retry. Re-entry
+stays inside the current notification or final-prewait handler; it cannot
+escape through generic command-ring arbitration between packet slices. Only
+an owned TX/RX state advance is productive; unresolved cursor reconciliation
+still consumes its slice but cannot reset the no-progress retry. A successor
+that crosses the guard yields and returns to outer arbitration. Block
 preserves the window. Any endpoint command forces a later `seL4_Yield`
 freshness boundary; that boundary resets software accounting only after the
 syscall returns. The compiler and generated profile require exact

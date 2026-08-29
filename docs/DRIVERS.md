@@ -1033,16 +1033,30 @@ reusable ownership pattern.
   response bound. These static bounds require fresh Pi consumed-time, latency,
   and throughput evidence.
 - In direct mode the owner retains one dense software window across Block and
-  may re-enter while exact durable work remains, but samples the elapsed MCS
-  guard around every packet slice and yields at half of its 3,000 us budget or
-  16 attempted slices. One no-progress durable recheck is permitted; a second
-  yields. Any endpoint command marks the shared SC consumption stale and
+  may re-enter while exact durable work remains. A `Reenter` successor stays
+  inside the same notification or final-prewait handler, so generic command
+  arbitration cannot consume unguarded time between packet slices. The owner
+  samples the elapsed MCS guard around every slice and yields at half of its
+  3,000 us budget or 16 attempted slices. A successor that first crosses the
+  guard yields and returns to outer arbitration rather than beginning another
+  activation inside the handler. Only TX issue, resolved reconciliation, RX
+  publish, or malformed-descriptor recycle that advances owned state is
+  productive; a peer wake, IRQ ACK, or unresolved cursor race cannot extend the
+  window even though reconciliation still consumes its fair slice. One
+  no-progress durable recheck is permitted; a second yields.
+  Any endpoint command marks the shared SC consumption stale and
   forces a fresh-refill boundary before more packet work. The compiler and
   generated profile require exact `wcet_us=800`; the handoff and runtime
   validate the exact `3,000/10,000 us`, max-two-refill contract. A
   missing/backwards counter, repeated non-advancing slice, contract drift, or
   invalid cursor fails closed. Blocking alone never resets the window because
   userspace wall time cannot prove kernel refill state.
+- Direct GENET copies descriptor-admitted uncached RX/TX payloads with aligned
+  volatile 64-bit accesses plus bounded byte prefixes and tails. The source and
+  destination range, frame length, cursor, and DMA slot remain validated before
+  mutation; descriptor publication, cache/barrier ordering, and sequence-last
+  direct-ring commits are unchanged. This reduces the per-frame volatile-copy
+  operation count without widening a DMA mapping or moving device authority.
 - Direct-link control page 0 reserves bytes `[0,64)` for its immutable header
   and `[64,320)` for the four 64-byte SPSC cursor records. The optional
   direct-GENET diagnostic-v4 record occupies the formerly reserved bytes

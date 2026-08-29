@@ -281,7 +281,7 @@ def test_empty_notification_hints_retire_before_local_service_progress() -> None
 
 
 def test_service_poll_continuation_is_retained_until_session_complete() -> None:
-    """A wire commit or bounded receive retains one follow-up service cycle."""
+    """An atomic wire-train commit or receive retains one service cycle."""
 
     library = RUNTIME_LIB.read_text(encoding="utf-8")
     kernel = RUNTIME_KERNEL.read_text(encoding="utf-8")
@@ -313,16 +313,39 @@ def test_service_poll_continuation_is_retained_until_session_complete() -> None:
     session = library.split("fn poll_session_unit", maxsplit=1)[1]
     session = session.split("pub fn pop_event", maxsplit=1)[0]
     assert "-> Result<bool, RuntimeError>" in session
-    assert session.count("let mut committed_wire_frame = false;") == 1
+    assert session.count("let mut committed_wire_output = false;") == 1
     received = session.index("let received = {")
     ingest = session.index("if received != 0 {")
-    full_frame = session.index("if sent != length {")
-    commit = session.index("self.session.commit_wire_output()?;")
-    retain = session.index("committed_wire_frame = true;")
-    result = session.index("Ok(committed_wire_frame || received != 0)")
-    assert received < ingest < full_frame < commit < retain < result
-    assert session.count("committed_wire_frame = true;") == 1
-    assert session.count("Ok(committed_wire_frame || received != 0)") == 1
+    output = session.index("let mut output = [0u8; SESSION_WIRE_OUTPUT_BYTES];")
+    prepare = session.index(
+        "if let Some(prepared) = self.session.prepare_wire_output(&mut output)?"
+    )
+    capacity = session.index("if can_send && available >= prepared.length {")
+    enqueue = session.index(".send_slice(&output[..prepared.length])")
+    full_train = session.index("if sent != prepared.length {")
+    terminal = session.index("return Err(RuntimeError::Terminal);", full_train)
+    commit = session.index("self.session.commit_prepared_wire_output(prepared)?;")
+    retain = session.index("committed_wire_output = true;")
+    result = session.index("Ok(committed_wire_output || received != 0)")
+    assert (
+        received
+        < ingest
+        < output
+        < prepare
+        < capacity
+        < enqueue
+        < full_train
+        < terminal
+        < commit
+        < retain
+        < result
+    )
+    assert "SESSION_WIRE_OUTPUT_BYTES: usize = 1_400;" in library
+    assert (
+        "socket.send_capacity().saturating_sub(socket.send_queue())" in session
+    )
+    assert session.count("committed_wire_output = true;") == 1
+    assert session.count("Ok(committed_wire_output || received != 0)") == 1
 
     target = kernel.split("ChildTurnUnit::PollService => {", maxsplit=1)[1]
     target = target.split("ChildTurnUnit::IngestPacket => {", maxsplit=1)[0]
@@ -407,6 +430,37 @@ def test_control_bytes_are_kind_validated_and_drain_tracks_exact_output() -> Non
     assert "ExchangeKind::OutputDrained" in drain
     assert "control_sequence" in drain
     assert "pending_output_control = None;" in drain
+
+
+def test_response_train_prepare_and_commit_are_connection_identity_bound() -> None:
+    """Preparation is non-mutating and stale batch commits fail closed."""
+
+    source = RUNTIME_LIB.read_text(encoding="utf-8")
+    batch = source.split("struct PendingOutputBatch {", maxsplit=1)[1]
+    batch = batch.split("}", maxsplit=1)[0]
+    assert "connection_id: u64," in batch
+    assert "identity: u64," in batch
+    assert "cursor: SendBatchCursor," in batch
+
+    prepare = source.split("fn prepare_wire_output(", maxsplit=1)[1]
+    prepare = prepare.split("fn commit_prepared_wire_output(", maxsplit=1)[0]
+    assert "&self," in prepare
+    assert "frame_end > SESSION_WIRE_OUTPUT_BYTES" in prepare
+    assert "record_count < SEND_BATCH_MAX_RECORDS" in prepare
+    assert "connection_id: batch.connection_id," in prepare
+    assert "identity: batch.identity," in prepare
+    assert "cursor: batch.cursor," in prepare
+    assert "next_cursor," in prepare
+
+    commit = source.split("fn commit_prepared_wire_output(", maxsplit=1)[1]
+    commit = commit.split("/// Copy one bounded outgoing frame", maxsplit=1)[0]
+    connection = commit.index("connection_id != self.connection_id")
+    identity = commit.index("batch.identity != identity")
+    cursor = commit.index("batch.cursor != cursor")
+    advance = commit.index("batch.cursor = next_cursor;")
+    assert connection < identity < cursor < advance
+    assert "next_cursor == cursor" in commit
+    assert "self.pending_batch = None;" in commit
 
 
 def test_shared_page_caps_are_directionally_minimal() -> None:

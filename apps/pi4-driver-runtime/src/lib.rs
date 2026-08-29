@@ -2443,7 +2443,13 @@ const GENET_DIRECT_MCS_BUDGET_US: u32 = 3_000;
 const GENET_DIRECT_MCS_PERIOD_US: u32 = 10_000;
 const GENET_DIRECT_MCS_MAX_REFILLS: u8 = 2;
 const GENET_DIRECT_MCS_GUARD_US: u32 = GENET_DIRECT_MCS_BUDGET_US / 2;
+const GENET_DIRECT_MCS_SLICE_WCET_US: u32 = 800;
 const GENET_DIRECT_MCS_QUANTUM_CAP: u8 = 16;
+
+const _: () = assert!(GENET_DIRECT_MCS_SLICE_WCET_US != 0);
+const _: () = assert!(
+    GENET_DIRECT_MCS_GUARD_US + GENET_DIRECT_MCS_SLICE_WCET_US < GENET_DIRECT_MCS_BUDGET_US
+);
 
 /// Software accounting for one dense direct-GENET MCS activation window.
 ///
@@ -16635,6 +16641,31 @@ enum GenetDirectMcsPreRoute {
     Fault(u32),
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct GenetRuntimeDpcOutcome {
+    activity: bool,
+    slice_units: usize,
+    progressed: bool,
+}
+
+impl GenetRuntimeDpcOutcome {
+    const fn idle() -> Self {
+        Self {
+            activity: false,
+            slice_units: 0,
+            progressed: false,
+        }
+    }
+
+    const fn new(activity: bool, slice_units: usize, progressed: bool) -> Self {
+        Self {
+            activity,
+            slice_units,
+            progressed,
+        }
+    }
+}
+
 fn genet_direct_mcs_descriptor_valid(descriptor: DriverRuntimeInitDescriptor) -> bool {
     descriptor.valid()
         && descriptor.direct_genet_link_valid()
@@ -16667,8 +16698,8 @@ fn genet_runtime_prepare_dpc_quantum(state: &mut GenetRuntimeState) -> GenetDire
         );
     }
     let now = genet_direct_mcs_counter_ticks();
-    let guard_cycles = runtime_micros_to_cycles(u64::from(GENET_DIRECT_MCS_GUARD_US));
-    match state.direct_genet_mcs_window.begin(now, guard_cycles) {
+    let admission_cycles = runtime_micros_to_cycles(u64::from(GENET_DIRECT_MCS_GUARD_US));
+    match state.direct_genet_mcs_window.begin(now, admission_cycles) {
         Ok(()) => GenetDirectMcsPreRoute::Begin,
         Err(reason) if reason == DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_MCS_COUNTER_FAULT => {
             GenetDirectMcsPreRoute::Fault(reason)
@@ -16738,6 +16769,24 @@ fn genet_runtime_begin_direct_quantum() -> bool {
     }
 }
 
+fn genet_runtime_begin_direct_successor_quantum() -> GenetDirectMcsPreRoute {
+    match GENET_RUNTIME_STATE.with_mut(genet_runtime_prepare_dpc_quantum) {
+        GenetDirectMcsPreRoute::Begin => GenetDirectMcsPreRoute::Begin,
+        GenetDirectMcsPreRoute::Fault(reason) => {
+            genet_runtime_fail_mcs_window(reason);
+            GenetDirectMcsPreRoute::Fault(reason)
+        }
+        GenetDirectMcsPreRoute::Yield(reason) => {
+            genet_runtime_record_mcs_yield(reason);
+            #[cfg(target_os = "none")]
+            runtime_yield_current_tcb();
+            #[cfg(not(target_os = "none"))]
+            genet_runtime_complete_mcs_yield();
+            GenetDirectMcsPreRoute::Yield(reason)
+        }
+    }
+}
+
 fn genet_runtime_apply_post_quantum_route(route: GenetDirectMcsQuantumRoute) -> bool {
     match route {
         GenetDirectMcsQuantumRoute::Block | GenetDirectMcsQuantumRoute::Reenter => true,
@@ -16756,6 +16805,21 @@ fn genet_runtime_apply_post_quantum_route(route: GenetDirectMcsQuantumRoute) -> 
     }
 }
 
+fn genet_runtime_run_dpc_quantum(
+    state: &mut GenetRuntimeState,
+    badge: u32,
+) -> (bool, GenetDirectMcsQuantumRoute) {
+    let direct_active = state.direct_genet_active;
+    let outcome = genet_runtime_service_dpc_quantum_state(state, badge);
+    let productive = if direct_active {
+        outcome.progressed
+    } else {
+        outcome.activity
+    };
+    let route = genet_runtime_finish_dpc_quantum(state, productive);
+    (outcome.activity, route)
+}
+
 /// Service one child-owned, bounded GENET packet DPC slice.
 ///
 /// An exact IRQ badge starts the ordinary lifetime. After direct ownership,
@@ -16766,30 +16830,54 @@ fn genet_runtime_apply_post_quantum_route(route: GenetDirectMcsQuantumRoute) -> 
 /// unmask/recheck closes the classic lost-wake window before the handler cap is
 /// rearmed.
 fn genet_runtime_service_notification(badge: u32) -> bool {
-    if !genet_runtime_begin_direct_quantum() {
-        return false;
+    let mut service_badge = badge;
+    let mut any_activity = false;
+    let mut successor_entry = false;
+    loop {
+        if successor_entry {
+            match genet_runtime_begin_direct_successor_quantum() {
+                GenetDirectMcsPreRoute::Begin => {}
+                GenetDirectMcsPreRoute::Yield(_) => return any_activity,
+                GenetDirectMcsPreRoute::Fault(_) => return false,
+            }
+        } else if !genet_runtime_begin_direct_quantum() {
+            return false;
+        }
+        let (activity, route, direct_active) = GENET_RUNTIME_STATE.with_mut(|state| {
+            let direct_active = state.direct_genet_active;
+            let (activity, route) = genet_runtime_run_dpc_quantum(state, service_badge);
+            (activity, route, direct_active)
+        });
+        any_activity |= activity;
+        if direct_active && route == GenetDirectMcsQuantumRoute::Reenter {
+            // The retained direct condition, not a fresh notification, owns
+            // the successor. Keep it inside this guarded window so generic
+            // command-ring arbitration cannot consume unmeasured SC time
+            // between two packet slices.
+            service_badge = 0;
+            successor_entry = true;
+            continue;
+        }
+        let route_ok = genet_runtime_apply_post_quantum_route(route);
+        return any_activity && route_ok;
     }
-    let (activity, route) = GENET_RUNTIME_STATE.with_mut(|state| {
-        let activity = genet_runtime_service_dpc_state(state, badge);
-        let route = genet_runtime_finish_dpc_quantum(state, activity);
-        (activity, route)
-    });
-    let route_ok = genet_runtime_apply_post_quantum_route(route);
-    activity && route_ok
 }
 
-fn genet_runtime_service_dpc_state(state: &mut GenetRuntimeState, badge: u32) -> bool {
+fn genet_runtime_service_dpc_quantum_state(
+    state: &mut GenetRuntimeState,
+    badge: u32,
+) -> GenetRuntimeDpcOutcome {
     if !state.initialized || state.direct_genet_faulted {
-        return false;
+        return GenetRuntimeDpcOutcome::idle();
     }
     let known_badges = state.irq_badge | DRIVER_RUNTIME_DIRECT_GENET_NOTIFICATION_BADGE;
     if badge & !known_badges != 0 {
-        return false;
+        return GenetRuntimeDpcOutcome::idle();
     }
     let irq_wake = badge & state.irq_badge != 0;
     let direct_bit = badge & DRIVER_RUNTIME_DIRECT_GENET_NOTIFICATION_BADGE != 0;
     if direct_bit && !state.direct_genet_active && !irq_wake {
-        return false;
+        return GenetRuntimeDpcOutcome::idle();
     }
     // Before READY, a coalesced IRQ|direct badge still carries a valid IRQ
     // lifetime, but the unadmitted direct bit grants no legacy packet work.
@@ -16813,12 +16901,20 @@ fn genet_runtime_service_dpc_state(state: &mut GenetRuntimeState, badge: u32) ->
                 && !state.irq_ack_pending
                 && !genet_runtime_dpc_local_continuation_ready(state)))
     {
-        return false;
+        return GenetRuntimeDpcOutcome::idle();
     }
 
     state.dpc_turns = state.dpc_turns.saturating_add(1);
     genet_runtime_poll_tx_completions(state);
-    let (direct_tx_serviced, drain_cap, drained, rx_service_units) = if state.direct_genet_active {
+    let (
+        direct_tx_serviced,
+        tx_service_units,
+        tx_progressed,
+        drain_cap,
+        drained,
+        rx_service_units,
+        rx_progressed,
+    ) = if state.direct_genet_active {
         // A manifest WCET describes one material packet operation, not a
         // sixteen-packet burst. Sample the MCS guard between every such
         // operation while retaining a dense sixteen-slice activation.
@@ -16827,36 +16923,58 @@ fn genet_runtime_service_dpc_state(state: &mut GenetRuntimeState, badge: u32) ->
         // an empty side immediately donates its one-unit slice.
         let tx_first = state.dpc_turns & 1 != 0;
         let mut tx_serviced = false;
+        let mut tx_units = 0usize;
+        let mut tx_progressed = false;
         let mut rx_cap = 0usize;
         let mut rx_drained = 0usize;
         let mut rx_units = 0usize;
+        let mut rx_progressed = false;
         if tx_first {
-            let (serviced, tx_units) = genet_direct_service_tx(state, GENET_DIRECT_MCS_SLICE_UNITS);
-            tx_serviced = serviced;
+            (tx_serviced, tx_units, tx_progressed) =
+                genet_direct_service_tx(state, GENET_DIRECT_MCS_SLICE_UNITS);
             if tx_units == 0 && !state.direct_genet_faulted {
                 rx_cap = GENET_DIRECT_MCS_SLICE_UNITS;
-                (rx_drained, rx_units) =
+                (rx_drained, rx_units, rx_progressed) =
                     genet_direct_drain_rx_hardware(state, GENET_NAPI_BYTE_BUDGET, rx_cap);
             }
         } else {
             rx_cap = GENET_DIRECT_MCS_SLICE_UNITS;
-            (rx_drained, rx_units) =
+            (rx_drained, rx_units, rx_progressed) =
                 genet_direct_drain_rx_hardware(state, GENET_NAPI_BYTE_BUDGET, rx_cap);
             if rx_units == 0 && !state.direct_genet_faulted {
-                (tx_serviced, _) = genet_direct_service_tx(state, GENET_DIRECT_MCS_SLICE_UNITS);
+                (tx_serviced, tx_units, tx_progressed) =
+                    genet_direct_service_tx(state, GENET_DIRECT_MCS_SLICE_UNITS);
             }
         }
-        (tx_serviced, rx_cap, rx_drained, rx_units)
+        (
+            tx_serviced,
+            tx_units,
+            tx_progressed,
+            rx_cap,
+            rx_drained,
+            rx_units,
+            rx_progressed,
+        )
     } else {
         let direct_tx_serviced = false;
         let free_slots = GENET_RX_QUEUE_CAP.saturating_sub(usize::from(state.rx_queue_count));
         let drain_cap = GENET_RX_DRAIN_BUDGET.min(free_slots);
         let drained =
             genet_runtime_drain_rx_hardware_to_queue(state, GENET_NAPI_BYTE_BUDGET, drain_cap);
-        (direct_tx_serviced, drain_cap, drained, drained)
+        (
+            direct_tx_serviced,
+            0,
+            false,
+            drain_cap,
+            drained,
+            drained,
+            drained != 0,
+        )
     };
+    let slice_units = tx_service_units.saturating_add(rx_service_units);
+    let progressed = tx_progressed || rx_progressed;
     if state.direct_genet_faulted {
-        return false;
+        return GenetRuntimeDpcOutcome::new(false, slice_units, progressed);
     }
     let rx_pending = genet_rx_hardware_pending(state);
     if rx_pending {
@@ -16866,13 +16984,17 @@ fn genet_runtime_service_dpc_state(state: &mut GenetRuntimeState, badge: u32) ->
         // Retain the exact unacked or physically adopted IRQ episode. The
         // runtime's mandatory idle condition check or a direct peer rearm may
         // continue it; neither path introduces a timer or synthetic work.
-        return true;
+        return GenetRuntimeDpcOutcome::new(true, slice_units, progressed);
     }
 
     if !state.irq_ack_pending {
         // A direct peer wake is only a scheduler hint for durable TX/RX ring
         // state. It neither creates nor acknowledges a physical IRQ lifetime.
-        return direct_tx_serviced || drained != 0 || direct_wake;
+        return GenetRuntimeDpcOutcome::new(
+            direct_tx_serviced || drained != 0 || direct_wake,
+            slice_units,
+            progressed,
+        );
     }
 
     if !state.direct_genet_active
@@ -16886,11 +17008,11 @@ fn genet_runtime_service_dpc_state(state: &mut GenetRuntimeState, badge: u32) ->
         if !runtime_irq_handler_ack(state.irq_handler_slot) {
             state.irq_ack_failures = state.irq_ack_failures.saturating_add(1);
             let _ = genet_direct_cutover_fault(state);
-            return false;
+            return GenetRuntimeDpcOutcome::new(false, slice_units, progressed);
         }
         state.irq_acks = state.irq_acks.saturating_add(1);
         state.irq_ack_pending = false;
-        return true;
+        return GenetRuntimeDpcOutcome::new(true, slice_units, progressed);
     }
 
     // Remove any completion level represented by the indices just consumed,
@@ -16905,7 +17027,7 @@ fn genet_runtime_service_dpc_state(state: &mut GenetRuntimeState, badge: u32) ->
         } else {
             state.initialized = false;
         }
-        return false;
+        return GenetRuntimeDpcOutcome::new(false, slice_units, progressed);
     }
     state.dpc_final_rechecks = state.dpc_final_rechecks.saturating_add(1);
     let recheck_status = genet_irq_active_sources();
@@ -16915,7 +17037,7 @@ fn genet_runtime_service_dpc_state(state: &mut GenetRuntimeState, badge: u32) ->
         genet_irq_mask_sources();
         genet_irq_clear_sources(recheck_status);
         state.dpc_last_status |= recheck_status;
-        return true;
+        return GenetRuntimeDpcOutcome::new(true, slice_units, progressed);
     }
 
     if !runtime_irq_handler_ack(state.irq_handler_slot) {
@@ -16928,11 +17050,15 @@ fn genet_runtime_service_dpc_state(state: &mut GenetRuntimeState, badge: u32) ->
         } else {
             state.initialized = false;
         }
-        return false;
+        return GenetRuntimeDpcOutcome::new(false, slice_units, progressed);
     }
     state.irq_acks = state.irq_acks.saturating_add(1);
     state.irq_ack_pending = false;
-    true
+    GenetRuntimeDpcOutcome::new(true, slice_units, progressed)
+}
+
+fn genet_runtime_service_dpc_state(state: &mut GenetRuntimeState, badge: u32) -> bool {
+    genet_runtime_service_dpc_quantum_state(state, badge).activity
 }
 
 /// Service and classify the final durable GENET condition before blocking.
@@ -16960,52 +17086,104 @@ fn genet_runtime_condition_before_sleep_route(
         let route = genet_runtime_finish_dpc_quantum(state, false);
         return (false, route);
     }
-    let activity = genet_runtime_service_dpc_state(state, 0);
+    let direct_active = state.direct_genet_active;
+    let outcome = genet_runtime_service_dpc_quantum_state(state, 0);
     let ready = genet_runtime_dpc_local_continuation_ready(state);
-    let route = genet_runtime_finish_dpc_quantum(state, activity);
+    let productive = if direct_active {
+        outcome.progressed
+    } else {
+        outcome.activity
+    };
+    let route = genet_runtime_finish_dpc_quantum(state, productive);
     (ready, route)
 }
 
 #[cfg(test)]
 fn genet_runtime_condition_before_sleep(state: &mut GenetRuntimeState) -> bool {
+    let mut successor_entry = false;
+    let mut retained_ready = false;
     loop {
-        match genet_runtime_prepare_dpc_quantum(state) {
-            GenetDirectMcsPreRoute::Begin => break,
-            GenetDirectMcsPreRoute::Yield(reason) => {
+        if successor_entry {
+            match genet_runtime_prepare_dpc_quantum(state) {
+                GenetDirectMcsPreRoute::Begin => {}
+                GenetDirectMcsPreRoute::Yield(reason) => {
+                    state.direct_genet_mcs_window.record_yield(reason);
+                    state.direct_genet_mcs_window.clear_accounting();
+                    return retained_ready;
+                }
+                GenetDirectMcsPreRoute::Fault(reason) => {
+                    state.direct_genet_mcs_window.diagnostic_flags |= reason;
+                    genet_direct_fail_closed(state);
+                    return false;
+                }
+            }
+        } else {
+            loop {
+                match genet_runtime_prepare_dpc_quantum(state) {
+                    GenetDirectMcsPreRoute::Begin => break,
+                    GenetDirectMcsPreRoute::Yield(reason) => {
+                        state.direct_genet_mcs_window.record_yield(reason);
+                        state.direct_genet_mcs_window.clear_accounting();
+                    }
+                    GenetDirectMcsPreRoute::Fault(reason) => {
+                        state.direct_genet_mcs_window.diagnostic_flags |= reason;
+                        genet_direct_fail_closed(state);
+                        return false;
+                    }
+                }
+            }
+        }
+        let (ready, route) = genet_runtime_condition_before_sleep_route(state);
+        match route {
+            GenetDirectMcsQuantumRoute::Reenter if state.direct_genet_active => {
+                retained_ready = ready;
+                successor_entry = true;
+                continue;
+            }
+            GenetDirectMcsQuantumRoute::Block | GenetDirectMcsQuantumRoute::Reenter => {
+                return ready
+            }
+            GenetDirectMcsQuantumRoute::Yield(reason) => {
                 state.direct_genet_mcs_window.record_yield(reason);
                 state.direct_genet_mcs_window.clear_accounting();
+                return ready;
             }
-            GenetDirectMcsPreRoute::Fault(reason) => {
+            GenetDirectMcsQuantumRoute::Fault(reason) => {
                 state.direct_genet_mcs_window.diagnostic_flags |= reason;
                 genet_direct_fail_closed(state);
                 return false;
             }
         }
     }
-    let (ready, route) = genet_runtime_condition_before_sleep_route(state);
-    match route {
-        GenetDirectMcsQuantumRoute::Block | GenetDirectMcsQuantumRoute::Reenter => ready,
-        GenetDirectMcsQuantumRoute::Yield(reason) => {
-            state.direct_genet_mcs_window.record_yield(reason);
-            state.direct_genet_mcs_window.clear_accounting();
-            ready
-        }
-        GenetDirectMcsQuantumRoute::Fault(reason) => {
-            state.direct_genet_mcs_window.diagnostic_flags |= reason;
-            genet_direct_fail_closed(state);
-            false
-        }
-    }
 }
 
 #[cfg(target_os = "none")]
 fn genet_runtime_condition_before_sleep_once() -> bool {
-    if !genet_runtime_begin_direct_quantum() {
-        return false;
+    let mut successor_entry = false;
+    let mut retained_ready = false;
+    loop {
+        if successor_entry {
+            match genet_runtime_begin_direct_successor_quantum() {
+                GenetDirectMcsPreRoute::Begin => {}
+                GenetDirectMcsPreRoute::Yield(_) => return retained_ready,
+                GenetDirectMcsPreRoute::Fault(_) => return false,
+            }
+        } else if !genet_runtime_begin_direct_quantum() {
+            return false;
+        }
+        let (ready, route, direct_active) = GENET_RUNTIME_STATE.with_mut(|state| {
+            let direct_active = state.direct_genet_active;
+            let (ready, route) = genet_runtime_condition_before_sleep_route(state);
+            (ready, route, direct_active)
+        });
+        if direct_active && route == GenetDirectMcsQuantumRoute::Reenter {
+            retained_ready = ready;
+            successor_entry = true;
+            continue;
+        }
+        let route_ok = genet_runtime_apply_post_quantum_route(route);
+        return ready && route_ok;
     }
-    let (ready, route) = GENET_RUNTIME_STATE.with_mut(genet_runtime_condition_before_sleep_route);
-    let route_ok = genet_runtime_apply_post_quantum_route(route);
-    ready && route_ok
 }
 
 fn genet_completion_result(state: &GenetRuntimeState, tx_free: u16, tx_in_flight: u16) -> u32 {
@@ -20135,6 +20313,10 @@ static TEST_GENET_DIRECT_FORCE_STATE_CHANGE_ON_SAMPLE: AtomicBool = AtomicBool::
 static TEST_GENET_DIRECT_TX_COMMIT_AFTER_DMA: AtomicBool = AtomicBool::new(false);
 #[cfg(all(not(target_os = "none"), test))]
 static TEST_GENET_DIRECT_RX_REARM_AFTER_COMMIT: AtomicBool = AtomicBool::new(false);
+#[cfg(all(not(target_os = "none"), test))]
+static TEST_GENET_DMA_U64_READS: AtomicUsize = AtomicUsize::new(0);
+#[cfg(all(not(target_os = "none"), test))]
+static TEST_GENET_DMA_U64_WRITES: AtomicUsize = AtomicUsize::new(0);
 
 #[cfg(all(not(target_os = "none"), test))]
 fn runtime_signal_notification(slot: u32) {
@@ -45948,6 +46130,54 @@ fn genet_direct_raise_standard_fault() {
 #[cfg(all(not(target_os = "none"), not(test)))]
 fn genet_direct_raise_standard_fault() {}
 
+const GENET_DMA_COPY_WORD_BYTES: usize = core::mem::size_of::<u64>();
+
+fn genet_copy_dma_to_slice(dma_vaddr: usize, output: &mut [u8]) -> Option<()> {
+    dma_vaddr.checked_add(output.len())?;
+    let mut offset = 0usize;
+    while offset < output.len()
+        && dma_vaddr.checked_add(offset)? & (GENET_DMA_COPY_WORD_BYTES - 1) != 0
+    {
+        output[offset] = read_dma_byte(dma_vaddr.checked_add(offset)?);
+        offset += 1;
+    }
+    while output.len().saturating_sub(offset) >= GENET_DMA_COPY_WORD_BYTES {
+        let bytes = read_genet_dma_u64(dma_vaddr.checked_add(offset)?).to_le_bytes();
+        output[offset..offset + GENET_DMA_COPY_WORD_BYTES].copy_from_slice(&bytes);
+        offset += GENET_DMA_COPY_WORD_BYTES;
+    }
+    while offset < output.len() {
+        output[offset] = read_dma_byte(dma_vaddr.checked_add(offset)?);
+        offset += 1;
+    }
+    Some(())
+}
+
+fn genet_copy_frame_to_dma(
+    dma_vaddr: usize,
+    frame_len: usize,
+    read_frame: &mut impl FnMut(usize) -> u8,
+) -> Option<()> {
+    dma_vaddr.checked_add(frame_len)?;
+    let mut offset = 0usize;
+    while offset < frame_len
+        && dma_vaddr.checked_add(offset)? & (GENET_DMA_COPY_WORD_BYTES - 1) != 0
+    {
+        write_dma_byte(dma_vaddr.checked_add(offset)?, read_frame(offset));
+        offset += 1;
+    }
+    while frame_len.saturating_sub(offset) >= GENET_DMA_COPY_WORD_BYTES {
+        let bytes = core::array::from_fn(|index| read_frame(offset + index));
+        write_genet_dma_u64(dma_vaddr.checked_add(offset)?, u64::from_le_bytes(bytes));
+        offset += GENET_DMA_COPY_WORD_BYTES;
+    }
+    while offset < frame_len {
+        write_dma_byte(dma_vaddr.checked_add(offset)?, read_frame(offset));
+        offset += 1;
+    }
+    Some(())
+}
+
 fn genet_direct_publish_rx_slot(
     generation: u64,
     initial: DirectGenetRingSnapshot,
@@ -45962,9 +46192,11 @@ fn genet_direct_publish_rx_slot(
     if frame_len == 0 || frame_len > frame.len() {
         return Err(DirectGenetError::InvalidBound);
     }
-    for (index, byte) in frame[..frame_len].iter_mut().enumerate() {
-        *byte = read_dma_byte(dma_vaddr + GENET_RX_BUF_OFFSET + index);
-    }
+    let dma_payload = dma_vaddr
+        .checked_add(GENET_RX_BUF_OFFSET)
+        .ok_or(DirectGenetError::InvalidLayout)?;
+    genet_copy_dma_to_slice(dma_payload, &mut frame[..frame_len])
+        .ok_or(DirectGenetError::InvalidLayout)?;
     let mut staged = [0u8; SHARED_PAGE_BYTES];
     let sequence = DirectGenetSlotPage::publish_next_into(
         &mut staged,
@@ -46070,11 +46302,12 @@ fn genet_runtime_submit_tx_from(
     ) else {
         return GenetTxSubmitResult::Fault;
     };
-    for index in 0..GENET_TX_BUF_OFFSET {
-        write_dma_byte(dma_vaddr + index, 0);
-    }
-    for index in 0..frame_len {
-        write_dma_byte(dma_vaddr + GENET_TX_BUF_OFFSET + index, read_frame(index));
+    zero_dma_range(dma_vaddr, GENET_TX_BUF_OFFSET);
+    let Some(dma_payload) = dma_vaddr.checked_add(GENET_TX_BUF_OFFSET) else {
+        return GenetTxSubmitResult::Fault;
+    };
+    if genet_copy_frame_to_dma(dma_payload, frame_len, &mut read_frame).is_none() {
+        return GenetTxSubmitResult::Fault;
     }
     dma_store_barrier();
     genet_write_tx_desc(slot, dma_bus_addr, genet_tx_len_status(dma_len));
@@ -46144,26 +46377,33 @@ fn genet_direct_reconcile_pending_tx(
     }
 }
 
-fn genet_direct_service_tx(state: &mut GenetRuntimeState, frame_budget: usize) -> (bool, usize) {
+fn genet_direct_service_tx(
+    state: &mut GenetRuntimeState,
+    frame_budget: usize,
+) -> (bool, usize, bool) {
     if !state.initialized || !state.direct_genet_active || state.direct_genet_faulted {
-        return (false, 0);
+        return (false, 0, false);
     }
     let service_budget = frame_budget.min(GENET_DIRECT_TX_FAIR_SHARE);
     if service_budget == 0 {
-        return (false, 0);
+        return (false, 0, false);
     }
     let mut serviced = false;
     let mut service_units = 0usize;
+    let mut progressed = false;
     if state.direct_genet_pending_tx.is_some() {
         // Reconciliation finalizes a packet already issued to hardware and is
         // therefore one material unit in this turn's exact TX fair share.
         service_units = 1;
         match genet_direct_reconcile_pending_tx(state) {
-            Ok(Some(_)) => serviced = true,
-            Ok(None) => return (true, service_units),
+            Ok(Some(_)) => {
+                serviced = true;
+                progressed = true;
+            }
+            Ok(None) => return (true, service_units, false),
             Err(_) => {
                 genet_direct_fail_closed(state);
-                return (false, service_units);
+                return (false, service_units, false);
             }
         }
     }
@@ -46177,11 +46417,11 @@ fn genet_direct_service_tx(state: &mut GenetRuntimeState, frame_budget: usize) -
             Err(DirectGenetError::StateChanged) => {
                 state.direct_genet_state_changes =
                     state.direct_genet_state_changes.saturating_add(1);
-                return (true, service_units);
+                return (true, service_units, progressed);
             }
             Err(_) => {
                 genet_direct_fail_closed(state);
-                return (false, service_units);
+                return (false, service_units, progressed);
             }
         };
         if initial.occupancy() == 0 {
@@ -46192,7 +46432,7 @@ fn genet_direct_service_tx(state: &mut GenetRuntimeState, frame_budget: usize) -
             Err(DirectGenetError::StateChanged) => {
                 state.direct_genet_state_changes =
                     state.direct_genet_state_changes.saturating_add(1);
-                return (true, service_units);
+                return (true, service_units, progressed);
             }
             Err(_) => {
                 let _ = genet_direct_poison_owner(
@@ -46203,19 +46443,20 @@ fn genet_direct_service_tx(state: &mut GenetRuntimeState, frame_budget: usize) -
                     DIRECT_GENET_POISON_INVALID_SLOT,
                 );
                 genet_direct_fail_closed(state);
-                return (false, service_units);
+                return (false, service_units, progressed);
             }
         };
         match genet_runtime_submit_tx_from(state, record.frame().len(), |index| {
             record.frame()[index]
         }) {
-            GenetTxSubmitResult::Backpressure => return (true, service_units),
+            GenetTxSubmitResult::Backpressure => return (true, service_units, progressed),
             GenetTxSubmitResult::Fault => {
                 genet_direct_fail_closed(state);
-                return (false, service_units);
+                return (false, service_units, progressed);
             }
             GenetTxSubmitResult::Submitted(_) => {
                 service_units = service_units.saturating_add(1);
+                progressed = true;
             }
         }
         state.direct_genet_pending_tx = Some(initial);
@@ -46234,7 +46475,7 @@ fn genet_direct_service_tx(state: &mut GenetRuntimeState, frame_budget: usize) -
             Err(DirectGenetError::StateChanged) => {
                 state.direct_genet_state_changes =
                     state.direct_genet_state_changes.saturating_add(1);
-                return (true, service_units);
+                return (true, service_units, progressed);
             }
             Err(error) => {
                 let reason = genet_direct_poison_reason(error);
@@ -46248,11 +46489,11 @@ fn genet_direct_service_tx(state: &mut GenetRuntimeState, frame_budget: usize) -
                     );
                 }
                 genet_direct_fail_closed(state);
-                return (false, service_units);
+                return (false, service_units, progressed);
             }
         }
     }
-    (serviced, service_units)
+    (serviced, service_units, progressed)
 }
 
 fn genet_direct_finish_rx_commit(
@@ -46336,26 +46577,30 @@ fn genet_direct_drain_rx_hardware(
     state: &mut GenetRuntimeState,
     mut bytes_left: usize,
     drain_budget: usize,
-) -> (usize, usize) {
+) -> (usize, usize, bool) {
     if !state.initialized || !state.direct_genet_active || state.direct_genet_faulted {
-        return (0, 0);
+        return (0, 0, false);
     }
     if drain_budget == 0 {
-        return (0, 0);
+        return (0, 0, false);
     }
     let mut drained = 0usize;
     let mut service_units = 0usize;
+    let mut progressed = false;
     if state.direct_genet_pending_rx.is_some() {
         // The retained publish owns one hardware frame until cursor
         // reconciliation and DMA rearm finish, so it consumes one unit of the
         // caller's exact RX share whether this observation resolves or races.
         service_units = 1;
         match genet_direct_reconcile_pending_rx(state) {
-            Ok(Some(())) => drained = 1,
-            Ok(None) => return (0, service_units),
+            Ok(Some(())) => {
+                drained = 1;
+                progressed = true;
+            }
+            Ok(None) => return (0, service_units, false),
             Err(_) => {
                 genet_direct_fail_closed(state);
-                return (0, service_units);
+                return (0, service_units, false);
             }
         }
     }
@@ -46366,7 +46611,7 @@ fn genet_direct_drain_rx_hardware(
         DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA,
     ) else {
         genet_direct_fail_closed(state);
-        return (drained, service_units);
+        return (drained, service_units, progressed);
     };
     for _ in 0..drain_budget.saturating_sub(service_units) {
         let producer = genet_read32(GENET_RDMA_PROD_INDEX) as u16;
@@ -46405,6 +46650,7 @@ fn genet_direct_drain_rx_hardware(
             genet_rearm_rx_slot(&descriptor, dma_range, slot);
             state.rx_cons_index = state.rx_cons_index.wrapping_add(1);
             genet_write32(GENET_RDMA_CONS_INDEX, state.rx_cons_index as u32);
+            progressed = true;
             continue;
         };
         if frame_len > bytes_left {
@@ -46437,6 +46683,7 @@ fn genet_direct_drain_rx_hardware(
             hardware_consumer: state.rx_cons_index,
         });
         service_units = service_units.saturating_add(1);
+        progressed = true;
         match genet_direct_commit_producer(&mut page, initial) {
             Ok(receipt) => {
                 if genet_direct_finish_rx_commit(state, receipt).is_err() {
@@ -46468,7 +46715,7 @@ fn genet_direct_drain_rx_hardware(
         }
     }
     genet_record_rx_drain_turn(state, drained);
-    (drained, service_units)
+    (drained, service_units, progressed)
 }
 
 fn genet_direct_quiescent(state: &mut GenetRuntimeState) -> bool {
@@ -53474,11 +53721,64 @@ fn write_dma_byte(addr: usize, value: u8) {
 fn write_dma_byte(_addr: usize, _value: u8) {}
 
 #[cfg(target_os = "none")]
-fn read_sdio_dma_u64(addr: usize) -> u64 {
+fn read_uncached_dma_u64(addr: usize) -> u64 {
     debug_assert_eq!(addr & (core::mem::align_of::<u64>() - 1), 0);
-    // SAFETY: The SDIO bulk-copy admission proves this naturally aligned word
-    // lies wholly inside one runtime-private uncached DMA4 bounce page.
+    // SAFETY: Every caller first admits a naturally aligned eight-byte word
+    // wholly inside its descriptor-validated uncached DMA buffer. Volatile
+    // access preserves the existing device-visible copy contracts.
     u64::from_le(unsafe { core::ptr::read_volatile(addr as *const u64) })
+}
+
+#[cfg(target_os = "none")]
+fn write_uncached_dma_u64(addr: usize, value: u64) {
+    debug_assert_eq!(addr & (core::mem::align_of::<u64>() - 1), 0);
+    // SAFETY: Every caller first admits a naturally aligned eight-byte word
+    // wholly inside its descriptor-validated uncached DMA buffer. Volatile
+    // access preserves the existing device-visible copy contracts.
+    unsafe {
+        core::ptr::write_volatile(addr as *mut u64, value.to_le());
+    }
+}
+
+#[cfg(target_os = "none")]
+fn read_genet_dma_u64(addr: usize) -> u64 {
+    read_uncached_dma_u64(addr)
+}
+
+#[cfg(all(not(target_os = "none"), test))]
+fn read_genet_dma_u64(addr: usize) -> u64 {
+    debug_assert_eq!(addr & (core::mem::align_of::<u64>() - 1), 0);
+    TEST_GENET_DMA_U64_READS.fetch_add(1, Ordering::AcqRel);
+    u64::from_le_bytes(core::array::from_fn(|index| {
+        read_dma_byte(addr.saturating_add(index))
+    }))
+}
+
+#[cfg(all(not(target_os = "none"), not(test)))]
+fn read_genet_dma_u64(_addr: usize) -> u64 {
+    0
+}
+
+#[cfg(target_os = "none")]
+fn write_genet_dma_u64(addr: usize, value: u64) {
+    write_uncached_dma_u64(addr, value);
+}
+
+#[cfg(all(not(target_os = "none"), test))]
+fn write_genet_dma_u64(addr: usize, value: u64) {
+    debug_assert_eq!(addr & (core::mem::align_of::<u64>() - 1), 0);
+    TEST_GENET_DMA_U64_WRITES.fetch_add(1, Ordering::AcqRel);
+    for (index, byte) in value.to_le_bytes().iter().copied().enumerate() {
+        write_dma_byte(addr.saturating_add(index), byte);
+    }
+}
+
+#[cfg(all(not(target_os = "none"), not(test)))]
+fn write_genet_dma_u64(_addr: usize, _value: u64) {}
+
+#[cfg(target_os = "none")]
+fn read_sdio_dma_u64(addr: usize) -> u64 {
+    read_uncached_dma_u64(addr)
 }
 
 #[cfg(all(not(target_os = "none"), test))]
@@ -53496,12 +53796,7 @@ fn read_sdio_dma_u64(_addr: usize) -> u64 {
 
 #[cfg(target_os = "none")]
 fn write_sdio_dma_u64(addr: usize, value: u64) {
-    debug_assert_eq!(addr & (core::mem::align_of::<u64>() - 1), 0);
-    // SAFETY: The SDIO bulk-copy admission proves this naturally aligned word
-    // lies wholly inside one runtime-private uncached DMA4 bounce page.
-    unsafe {
-        core::ptr::write_volatile(addr as *mut u64, value.to_le());
-    }
+    write_uncached_dma_u64(addr, value);
 }
 
 #[cfg(all(not(target_os = "none"), test))]
@@ -67838,6 +68133,8 @@ mod tests {
         TEST_GENET_DIRECT_FORCE_STATE_CHANGE_ON_SAMPLE.store(false, Ordering::Release);
         TEST_GENET_DIRECT_TX_COMMIT_AFTER_DMA.store(false, Ordering::Release);
         TEST_GENET_DIRECT_RX_REARM_AFTER_COMMIT.store(false, Ordering::Release);
+        TEST_GENET_DMA_U64_READS.store(0, Ordering::Release);
+        TEST_GENET_DMA_U64_WRITES.store(0, Ordering::Release);
         CYW43_FOREGROUND_BUS_EPISODE
             .with_mut(|episode| *episode = Cyw43BusEpisodeAccumulator::empty());
         CYW43_DPC_BUS_EPISODE.with_mut(|episode| *episode = Cyw43BusEpisodeAccumulator::empty());
@@ -78261,6 +78558,40 @@ mod tests {
     }
 
     #[test]
+    fn direct_genet_dense_mcs_window_preserves_wall_guard_and_stalled_yield() {
+        let guard = 1_500;
+        let mut blocked = GenetDirectMcsWindow::empty();
+        assert_eq!(blocked.begin(100, guard), Ok(()));
+        assert_eq!(
+            blocked.finish(200, guard, 1_000_000, true, false),
+            GenetDirectMcsQuantumRoute::Block,
+        );
+        assert_eq!(
+            blocked.attempts, 1,
+            "Block cannot manufacture a fresh refill"
+        );
+        assert_eq!(
+            blocked.begin(1_600, guard),
+            Err(DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_MCS_GUARD_YIELD),
+        );
+
+        let mut stalled = GenetDirectMcsWindow::empty();
+        assert_eq!(stalled.begin(10_000, guard), Ok(()));
+        assert_eq!(
+            stalled.finish(10_100, guard, 1_000_000, false, true),
+            GenetDirectMcsQuantumRoute::Reenter,
+        );
+        assert_eq!(stalled.begin(10_101, guard), Ok(()));
+        assert_eq!(
+            stalled.finish(10_200, guard, 1_000_000, false, true),
+            GenetDirectMcsQuantumRoute::Yield(
+                DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_MCS_STALLED_YIELD,
+            ),
+            "a durable condition with no exact service cannot block without a future edge",
+        );
+    }
+
+    #[test]
     fn direct_genet_dense_mcs_window_faults_repeated_or_backward_counter() {
         let guard = 1_500;
         let mut stalled = GenetDirectMcsWindow::empty();
@@ -78304,6 +78635,10 @@ mod tests {
         let mut wrong_refills = descriptor;
         wrong_refills.max_refills = 3;
         assert!(!genet_direct_mcs_descriptor_valid(wrong_refills));
+        assert_eq!(GENET_DIRECT_MCS_SLICE_WCET_US, 800);
+        assert!(
+            GENET_DIRECT_MCS_GUARD_US + GENET_DIRECT_MCS_SLICE_WCET_US < GENET_DIRECT_MCS_BUDGET_US
+        );
     }
 
     #[test]
@@ -78471,6 +78806,114 @@ mod tests {
         assert!(!state.irq_ack_pending);
         assert_eq!(state.irq_acks, 2);
         assert!(!genet_runtime_service_dpc_state(&mut state, 0));
+    }
+
+    #[test]
+    fn direct_genet_productivity_requires_exact_owned_state_progress() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let generation = 0x26e0_0018;
+        let mut state = direct_genet_test_state(generation);
+
+        let scheduler_hint = genet_runtime_service_dpc_quantum_state(
+            &mut state,
+            DRIVER_RUNTIME_DIRECT_GENET_NOTIFICATION_BADGE,
+        );
+        assert!(scheduler_hint.activity);
+        assert_eq!(
+            scheduler_hint.slice_units, 0,
+            "a peer wake is not packet service",
+        );
+        assert!(!scheduler_hint.progressed);
+
+        direct_genet_peer_publish(DirectGenetDirection::Tx, generation, b"material-tx");
+        let packet = genet_runtime_service_dpc_quantum_state(&mut state, 0);
+        assert!(packet.activity);
+        assert_eq!(packet.slice_units, 1);
+        assert!(packet.progressed);
+        assert_eq!(state.direct_genet_tx_packets, 1);
+
+        direct_genet_peer_publish(DirectGenetDirection::Tx, generation, b"ambiguous-tx");
+        let (pending, _) = direct_genet_peer_consume(DirectGenetDirection::Tx, generation);
+        state.direct_genet_pending_tx = Some(pending);
+        TEST_GENET_DIRECT_FORCE_STATE_CHANGE_ON_SAMPLE.store(true, Ordering::Release);
+        let (activity, slice_units, progressed) =
+            genet_direct_service_tx(&mut state, GENET_DIRECT_MCS_SLICE_UNITS);
+        assert!(activity);
+        assert_eq!(slice_units, 1, "reconciliation consumes its fair slice");
+        assert!(
+            !progressed,
+            "an unchanged ambiguous cursor cannot reset the no-progress retry",
+        );
+        assert_eq!(state.direct_genet_pending_tx, Some(pending));
+    }
+
+    #[test]
+    fn direct_genet_notification_retains_dense_reentry_inside_one_guarded_activation() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let generation = 0x26e0_0019;
+        let state = direct_genet_test_state(generation);
+        for marker in 0..4u8 {
+            direct_genet_peer_publish(DirectGenetDirection::Tx, generation, &[marker; 64]);
+        }
+        GENET_RUNTIME_STATE.with_mut(|runtime| *runtime = state);
+
+        assert!(genet_runtime_service_notification(
+            DRIVER_RUNTIME_DIRECT_GENET_NOTIFICATION_BADGE,
+        ));
+        GENET_RUNTIME_STATE.with_ref(|runtime| {
+            assert_eq!(runtime.direct_genet_tx_packets, 4);
+            assert_eq!(runtime.dpc_turns, 4);
+            assert_eq!(runtime.direct_genet_mcs_window.attempts, 4);
+            assert_eq!(
+                runtime.direct_genet_mcs_window.diagnostic_flags
+                    & (DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_MCS_GUARD_YIELD
+                        | DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_MCS_CAP_YIELD),
+                0,
+            );
+        });
+    }
+
+    #[test]
+    fn direct_genet_successor_guard_yield_returns_before_a_fresh_activation() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let generation = 0x26e0_001a;
+        let mut state = direct_genet_test_state(generation);
+        for marker in 0..2u8 {
+            direct_genet_peer_publish(DirectGenetDirection::Tx, generation, &[marker; 64]);
+        }
+        state.direct_genet_mcs_window.start_ticks = 1;
+        state.direct_genet_mcs_window.last_end_ticks = 1;
+        state.direct_genet_mcs_window.attempts = 1;
+        GENET_RUNTIME_STATE.with_mut(|runtime| *runtime = state);
+        let guard_cycles = runtime_micros_to_cycles(u64::from(GENET_DIRECT_MCS_GUARD_US));
+        TEST_RUNTIME_TIMER_COUNTER_TICKS.store(guard_cycles.saturating_sub(2), Ordering::Release);
+
+        assert!(genet_runtime_service_notification(
+            DRIVER_RUNTIME_DIRECT_GENET_NOTIFICATION_BADGE,
+        ));
+        GENET_RUNTIME_STATE.with_ref(|runtime| {
+            assert_eq!(
+                runtime.direct_genet_tx_packets, 1,
+                "a successor guard Yield must return before starting a new activation",
+            );
+            assert_eq!(runtime.direct_genet_mcs_window.start_ticks, 0);
+            assert_eq!(runtime.direct_genet_mcs_window.attempts, 0);
+            assert_ne!(
+                runtime.direct_genet_mcs_window.diagnostic_flags
+                    & DIRECT_GENET_RUNTIME_DIAGNOSTIC_FLAG_MCS_GUARD_YIELD,
+                0,
+            );
+        });
+
+        assert!(genet_runtime_service_notification(
+            DRIVER_RUNTIME_DIRECT_GENET_NOTIFICATION_BADGE,
+        ));
+        GENET_RUNTIME_STATE.with_ref(|runtime| {
+            assert_eq!(runtime.direct_genet_tx_packets, 2);
+        });
     }
 
     #[test]
@@ -78788,9 +79231,10 @@ mod tests {
         genet_direct_commit_producer(&mut page, initial)
             .expect("shared RX cursor advances before retained reconciliation");
 
-        let (drained, service_units) =
+        let (drained, service_units, progressed) =
             genet_direct_drain_rx_hardware(&mut state, GENET_NAPI_BYTE_BUDGET, 8);
         assert_eq!((drained, service_units), (8, 8));
+        assert!(progressed);
         assert_eq!(state.rx_cons_index, 8);
         assert_eq!(state.direct_genet_rx_packets, 8);
         let (_, rx) = genet_direct_control_sample(DirectGenetDirection::Rx, generation)
@@ -79733,6 +80177,11 @@ mod tests {
         for (index, byte) in payload.iter().copied().enumerate() {
             assert_eq!(read_dma_byte(dma_vaddr + GENET_TX_BUF_OFFSET + index), byte);
         }
+        assert_ne!(
+            TEST_GENET_DMA_U64_WRITES.load(Ordering::Acquire),
+            0,
+            "aligned direct TX payloads use the bounded word-copy hot path",
+        );
 
         reset_runtime_for_test();
         let mut state = direct_genet_test_state(generation);
@@ -79826,6 +80275,11 @@ mod tests {
                 .expect("wrapped RX slot commits before DMA rearm")
                 .frame(),
             b"rearmed-direct-rx",
+        );
+        assert_ne!(
+            TEST_GENET_DMA_U64_READS.load(Ordering::Acquire),
+            0,
+            "aligned direct RX payloads use the bounded word-copy hot path",
         );
     }
 
