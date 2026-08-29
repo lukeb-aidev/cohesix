@@ -555,18 +555,23 @@ Physical-Pi serial, local-seat, and TCP ingress always admits bounded raw input,
 echo, parsing, and root-owned diagnostics while NineDoor is attached. Only a
 parsed command that can enter passive NineDoor validates the generated active
 root-control budget, WCET, period, admission, and consumed-time-evidence
-contract. It accumulates `seL4_SchedContext_Consumed` samples in a conservative
-full-period window because that syscall resets evidence but does not replenish
-the SC. Passive dispatch is admitted only while the accumulated upper bound is
-strictly below the checked `budget_us - wcet_us` limit, currently 250 us, so
-the complete declared 2,500 us WCET remains inside the SC. A blocked passive
-command returns a typed `busy` refusal; it cannot silence unrelated `help`,
-`smp`, network, WiFi, USB, or reboot diagnostics. After a full period, the
-first new sample becomes the next conservative bound rather than being
-discarded. Invalid generated truth, counter evidence, period conversion, or
-kernel accounting latch fail closed and emit one bounded operator marker. The
-QEMU direct-VirtIO branch exits before this Pi-only boundary and keeps its
-existing counter guard.
+contract. `seL4_SchedContext_Consumed` resets evidence but does not replenish
+the SC. The exact parsed command and its authority identity are retained after
+one baseline/reset sample, then root immediately marks and enters one selected
+periodic MCS Yield boundary. On the first resumed activation, newly published
+service recovery preempts and cancels the reservation; otherwise root refreshes
+the policy timebase and takes one fresh consumed-time sample, including that
+bounded prelude. Passive dispatch is admitted only when the fresh sample is
+strictly below the checked `budget_us - wcet_us` limit, currently 250 us, so the
+complete declared 2,500 us WCET remains inside the SC. Equality or excess ends
+the attempt with one typed refusal and never starts another wait. Reboot,
+containment, quarantine, recovery, or authority drift cancels before sampling
+or dispatch and projects a refusal only when the original response authority is
+still valid. Invalid generated truth, counter evidence, period conversion, or
+kernel accounting latches fail closed and emit one bounded operator marker.
+Unrelated raw input and root-owned diagnostics remain live before a passive
+command is retained. The QEMU direct-VirtIO branch exits before this Pi-only
+boundary and keeps its existing counter guard.
 
 The passive NineDoor service is co-located with `root-control` on core 0 in
 every checked-in target manifest. Its compiler-validated `locality_bound`

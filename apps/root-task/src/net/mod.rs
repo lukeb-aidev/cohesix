@@ -1601,6 +1601,22 @@ pub trait NetPoller {
         false
     }
 
+    /// Return whether child-local fault, containment, or terminal evidence
+    /// must preempt ordinary or retained command admission.
+    ///
+    /// This predicate never reads or consumes the critical fault mailbox.
+    fn console_service_local_fault_pending(&self) -> bool {
+        false
+    }
+
+    /// Return whether child-local containment can advance a material recovery
+    /// unit now. Unlike `console_service_local_fault_pending`, a retained
+    /// terminal diagnostic alone returns `false` so ordinary bounded output can
+    /// publish and commit it.
+    fn console_service_local_containment_pending(&self) -> bool {
+        false
+    }
+
     /// Return whether retained ICMP echo work is due for another network turn.
     ///
     /// This is separate from TCP console demand so a cold-neighbor Echo Reply

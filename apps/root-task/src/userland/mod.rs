@@ -486,6 +486,14 @@ where
     #[cfg(feature = "net-console")]
     let mut deferred_wired_handoff_admission_logged = false;
     loop {
+        // A newly published isolated-service fault always outranks a retained
+        // passive command. Cancel its exact reservation before containment can
+        // fence the source identity, then perform the ordinary bounded recovery
+        // turn. Lock contention also preempts admission and forces a yield.
+        let passive_recovery_preempted = pump.pi_root_control_passive_recovery_pending();
+        if passive_recovery_preempted {
+            pump.cancel_pi_root_control_passive_admission_for_recovery();
+        }
         #[cfg(any(
             feature = "net-console",
             all(target_arch = "aarch64", target_os = "none", sel4_config_kernel_mcs)
@@ -514,6 +522,25 @@ where
                 with_deferred_root_hal(hal_ptr, |hal| pump.contain_faulted_ninedoor(hal))
                     .unwrap_or(false);
         }
+        let recovery_turn = recovery_turn || passive_recovery_preempted;
+
+        if recovery_turn {
+            sel4::yield_now();
+            continue;
+        }
+
+        // One parsed Pi command that can donate root-control's SC is retained
+        // across exactly one selected MCS Yield boundary. On the first resumed
+        // activation, refresh time, sample once, and either dispatch once or
+        // emit a typed refusal; equality/excess never starts a retry loop.
+        if pump.pi_root_control_passive_admission_pending()
+            && pump.service_pi_root_control_passive_admission()
+        {
+            let _ = pump.prepare_pi_root_control_passive_admission_yield();
+            sel4::yield_now();
+            continue;
+        }
+
         #[cfg(feature = "net-console")]
         if !deferred_wired_handoff_admission_logged
             && crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active()
@@ -535,13 +562,17 @@ where
             boot_log::force_uart_line(line.as_str());
         }
         #[cfg(feature = "net-console")]
-        if !recovery_turn && hal_ptr != 0 {
-            recovery_turn = with_deferred_root_hal(hal_ptr, |hal| {
+        let handoff_turn = if hal_ptr != 0 {
+            with_deferred_root_hal(hal_ptr, |hal| {
                 pump.service_deferred_console_network_handoff(hal)
             })
-            .unwrap_or(false);
-        }
-        let explicit_yield_required = if recovery_turn {
+            .unwrap_or(false)
+        } else {
+            false
+        };
+        #[cfg(not(feature = "net-console"))]
+        let handoff_turn = false;
+        let explicit_yield_required = if handoff_turn {
             true
         } else {
             pump.poll_root_control_quantum()
@@ -552,6 +583,7 @@ where
         )))]
         let _ = hal_ptr;
         if explicit_yield_required {
+            let _ = pump.prepare_pi_root_control_passive_admission_yield();
             sel4::yield_now();
         }
     }
@@ -569,6 +601,7 @@ where
 {
     loop {
         if pump.poll_root_control_quantum() {
+            let _ = pump.prepare_pi_root_control_passive_admission_yield();
             sel4::yield_now();
         }
     }
@@ -918,9 +951,61 @@ impl DeferredCyw43ActivationWindow {
     feature = "kernel",
     feature = "net-console"
 ))]
-fn deferred_cyw43_yield_and_reset(window: &mut DeferredCyw43ActivationWindow) {
+fn deferred_cyw43_yield_and_reset<
+    'a,
+    D,
+    T,
+    I,
+    V,
+    const RX: usize,
+    const TX: usize,
+    const LINE: usize,
+>(
+    pump: &mut EventPump<'a, D, T, I, V, RX, TX, LINE>,
+    window: &mut DeferredCyw43ActivationWindow,
+) where
+    D: crate::serial::SerialDriver,
+    T: TimerSource,
+    I: IpcDispatcher,
+    V: CapabilityValidator,
+{
+    // If the immediately preceding operator turn parsed a passive-service
+    // command, this is its sole selected MCS boundary. Preparing here keeps
+    // every deferred-supervisor yield pending-aware without allowing another
+    // driver or ordinary EventPump unit between the baseline sample and Yield.
+    let _ = pump.prepare_pi_root_control_passive_admission_yield();
     sel4::yield_now();
     window.reset();
+}
+
+#[cfg(all(
+    feature = "serial-console",
+    feature = "kernel",
+    feature = "net-console"
+))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DeferredCyw43RootControlTurn {
+    Recovery,
+    PassiveAdmission,
+    Supervisor,
+}
+
+#[cfg(all(
+    feature = "serial-console",
+    feature = "kernel",
+    feature = "net-console"
+))]
+const fn deferred_cyw43_root_control_turn(
+    recovery_pending: bool,
+    passive_admission_pending: bool,
+) -> DeferredCyw43RootControlTurn {
+    if recovery_pending {
+        DeferredCyw43RootControlTurn::Recovery
+    } else if passive_admission_pending {
+        DeferredCyw43RootControlTurn::PassiveAdmission
+    } else {
+        DeferredCyw43RootControlTurn::Supervisor
+    }
 }
 
 #[cfg(all(
@@ -2861,6 +2946,64 @@ where
     let activation_reserve_us = deferred_cyw43_activation_reserve_from_manifest_us();
 
     'supervisor: loop {
+        // The deferred Wi-Fi supervisor owns root-control while bootstrap or
+        // attached CYW43 service is active, so it must implement the same
+        // recovery-first passive admission boundary as the ordinary console
+        // loop. This arbitration runs before activation accounting, output,
+        // EventPump work, or another driver operation.
+        let isolated_recovery_pending = pump.pi_isolated_service_containment_pending();
+        match deferred_cyw43_root_control_turn(
+            isolated_recovery_pending,
+            pump.pi_root_control_passive_admission_pending(),
+        ) {
+            DeferredCyw43RootControlTurn::Recovery => {
+                if pump.pi_root_control_passive_recovery_pending() {
+                    pump.cancel_pi_root_control_passive_admission_for_recovery();
+                }
+                // A raw/intermediate target fault may not yet have reached its
+                // final containment mailbox. Give every already-published
+                // recovery owner one bounded opportunity, then Yield even if
+                // publication is still in flight; ordinary Wi-Fi work remains
+                // fenced until the side-effect-free predicate clears.
+                if hal_ptr != 0 {
+                    let mut recovery_turn = with_deferred_root_hal(hal_ptr, |hal| {
+                        pump.contain_faulted_direct_genet_pair(hal)
+                    })
+                    .unwrap_or(false);
+                    if !recovery_turn {
+                        recovery_turn = with_deferred_root_hal(hal_ptr, |hal| {
+                            pump.contain_faulted_console_network(hal)
+                        })
+                        .unwrap_or(false);
+                    }
+                    #[cfg(all(
+                        target_arch = "aarch64",
+                        target_os = "none",
+                        sel4_config_kernel_mcs
+                    ))]
+                    if !recovery_turn {
+                        recovery_turn = with_deferred_root_hal(hal_ptr, |hal| {
+                            pump.contain_faulted_ninedoor(hal)
+                        })
+                        .unwrap_or(false);
+                    }
+                    let _ = recovery_turn;
+                }
+                deferred_cyw43_yield_and_reset(pump, &mut activation_window);
+                continue;
+            }
+            DeferredCyw43RootControlTurn::PassiveAdmission => {
+                // AwaitingYield performs no sample; ReadyAfterYield refreshes
+                // policy time, samples once, and terminates by dispatch or
+                // typed refusal. Either outcome exclusively owns this turn.
+                let serviced = pump.service_pi_root_control_passive_admission();
+                debug_assert!(serviced);
+                deferred_cyw43_yield_and_reset(pump, &mut activation_window);
+                continue;
+            }
+            DeferredCyw43RootControlTurn::Supervisor => {}
+        }
+
         let activation_ticks = monotonic_ticks();
         let activation_counter_hz = counter_frequency();
         activation_window.begin(activation_ticks, activation_counter_hz);
@@ -2871,7 +3014,7 @@ where
                 activation_reserve_us,
             )
         {
-            deferred_cyw43_yield_and_reset(&mut activation_window);
+            deferred_cyw43_yield_and_reset(pump, &mut activation_window);
             continue;
         }
         if let Some(pending) = recovery_diagnostic_pending.as_ref() {
@@ -2884,7 +3027,7 @@ where
                 // not enter generation poison until the complete causal batch
                 // has a teardown-independent home.
                 pump.poll_cyw43_bootstrap_supervisor_event_turn();
-                deferred_cyw43_yield_and_reset(&mut activation_window);
+                deferred_cyw43_yield_and_reset(pump, &mut activation_window);
                 continue;
             }
             recovery_diagnostic_pending = None;
@@ -2906,7 +3049,7 @@ where
                 // retire that exact owner; do not reset the Gate 8 deadline or
                 // admit any fresh operation.
                 gate8_terminal_pending = None;
-                deferred_cyw43_yield_and_reset(&mut activation_window);
+                deferred_cyw43_yield_and_reset(pump, &mut activation_window);
                 continue;
             }
             if gate8_terminal_pending_cancels_for_recovery(
@@ -2914,7 +3057,7 @@ where
                 crate::drivers::driver_task_net::cyw43_recovery_required(),
             ) {
                 gate8_terminal_pending = None;
-                deferred_cyw43_yield_and_reset(&mut activation_window);
+                deferred_cyw43_yield_and_reset(pump, &mut activation_window);
                 continue;
             }
             if !pending.failure_transaction_retained {
@@ -2948,12 +3091,12 @@ where
                             "CYW43_GATE8_FAILURE_TRANSACTION status=preflight-blocked action=wait-for-serial-capacity",
                         );
                         pump.poll_cyw43_bootstrap_supervisor_event_turn();
-                        deferred_cyw43_yield_and_reset(&mut activation_window);
+                        deferred_cyw43_yield_and_reset(pump, &mut activation_window);
                         continue;
                     }
                     Cyw43BootstrapAtomicDecisionOutcome::DecisionDeclined => {
                         gate8_terminal_pending = None;
-                        deferred_cyw43_yield_and_reset(&mut activation_window);
+                        deferred_cyw43_yield_and_reset(pump, &mut activation_window);
                         continue;
                     }
                     Cyw43BootstrapAtomicDecisionOutcome::Retained => {
@@ -2968,7 +3111,7 @@ where
                             "CYW43_GATE8_FAILURE_TRANSACTION status=retention-invariant-failed action=preserve-terminal-decision",
                         );
                         pump.poll_cyw43_bootstrap_supervisor_event_turn();
-                        deferred_cyw43_yield_and_reset(&mut activation_window);
+                        deferred_cyw43_yield_and_reset(pump, &mut activation_window);
                         continue;
                     }
                 }
@@ -2984,14 +3127,14 @@ where
                 false,
             ) {
                 pump.poll_cyw43_bootstrap_supervisor_event_turn();
-                deferred_cyw43_yield_and_reset(&mut activation_window);
+                deferred_cyw43_yield_and_reset(pump, &mut activation_window);
                 continue;
             }
             pump.quarantine_network_service_after_cyw43_terminal_failure();
             gate8_terminal_pending = None;
             terminal_mode = Some(DeferredNetSupervisorTerminal::PermanentAttachedWifiFailure);
             attempt_active = false;
-            deferred_cyw43_yield_and_reset(&mut activation_window);
+            deferred_cyw43_yield_and_reset(pump, &mut activation_window);
             continue;
         }
 
@@ -3000,7 +3143,7 @@ where
             // guard so a future retained-output branch cannot accidentally
             // fall through to ordinary NetStack/CYW43 polling.
             pump.poll_cyw43_bootstrap_supervisor_event_turn();
-            deferred_cyw43_yield_and_reset(&mut activation_window);
+            deferred_cyw43_yield_and_reset(pump, &mut activation_window);
             continue;
         }
 
@@ -3011,7 +3154,7 @@ where
             // terminal state prevents another child operation. An attached
             // poisoned stack was quarantined before this mode was entered.
             if pump.poll_root_control_quantum() {
-                deferred_cyw43_yield_and_reset(&mut activation_window);
+                deferred_cyw43_yield_and_reset(pump, &mut activation_window);
             }
             continue;
         }
@@ -3061,7 +3204,7 @@ where
                     }
                 }
             }
-            deferred_cyw43_yield_and_reset(&mut activation_window);
+            deferred_cyw43_yield_and_reset(pump, &mut activation_window);
             continue;
         }
 
@@ -3153,7 +3296,7 @@ where
                                 counter_frequency(),
                                 activation_reserve_us,
                             ) {
-                                deferred_cyw43_yield_and_reset(&mut activation_window);
+                                deferred_cyw43_yield_and_reset(pump, &mut activation_window);
                                 continue 'supervisor;
                             }
                             let control_turn_started_ms = crate::hal::timebase().now_ms();
@@ -3165,6 +3308,14 @@ where
                                 crate::drivers::driver_task_net::record_cyw43_pre_recovery_gate8,
                                 crate::drivers::driver_task_net::commit_cyw43_data_handoff_if_ready,
                             );
+                            if pump.pi_root_control_passive_admission_pending() {
+                                // The attached composer returned at the exact
+                                // parse cut. Do not run Gate 8/handoff policy
+                                // or another CYW43 unit before the one selected
+                                // passive-admission boundary.
+                                deferred_cyw43_yield_and_reset(pump, &mut activation_window);
+                                continue 'supervisor;
+                            }
                             activation_window
                                 .record_attached_network_turn(productive_network_successor);
                             // The poll above may start Join and advance the logical
@@ -3194,7 +3345,10 @@ where
                                         // began inside the original Gate 8 bound.
                                         // The exact-generation authorization alone
                                         // admits one exclusive following handoff.
-                                        deferred_cyw43_yield_and_reset(&mut activation_window);
+                                        deferred_cyw43_yield_and_reset(
+                                            pump,
+                                            &mut activation_window,
+                                        );
                                         continue 'supervisor;
                                     }
                                     DeferredGate8HandoffAdmission::InvalidAuthority {
@@ -3271,6 +3425,7 @@ where
                                             ) {
                                                 DeferredGate8ChildReadyArm::Armed { .. } => {
                                                     deferred_cyw43_yield_and_reset(
+                                                        pump,
                                                         &mut activation_window,
                                                     );
                                                     continue 'supervisor;
@@ -3362,7 +3517,7 @@ where
                     // Yield now so recovery begins in a fresh guarded activation;
                     // its Operator and Driver remain distinct logical turns and
                     // cannot compose with this Network unit.
-                    deferred_cyw43_yield_and_reset(&mut activation_window);
+                    deferred_cyw43_yield_and_reset(pump, &mut activation_window);
                     continue 'supervisor;
                 }
                 let stability_now_ms = crate::hal::timebase().now_ms();
@@ -3403,7 +3558,7 @@ where
                             crate::log_buffer::append_log_line(
                                 "CYW43_GATE8_SNAPSHOT_COMMIT status=rejected action=retry-fresh-snapshot",
                             );
-                            deferred_cyw43_yield_and_reset(&mut activation_window);
+                            deferred_cyw43_yield_and_reset(pump, &mut activation_window);
                             continue 'supervisor;
                         }
                         // Reserve lifecycle and consumer state before mutating
@@ -3478,7 +3633,7 @@ where
                                 )
                             };
                             if !ready_queued {
-                                deferred_cyw43_yield_and_reset(&mut activation_window);
+                                deferred_cyw43_yield_and_reset(pump, &mut activation_window);
                                 continue 'supervisor;
                             }
                             let lifecycle_committed =
@@ -3571,7 +3726,7 @@ where
                         // passive snapshot retains recovery authority. The next
                         // supervisor section will service it without publishing a
                         // contradictory logical terminal record.
-                        deferred_cyw43_yield_and_reset(&mut activation_window);
+                        deferred_cyw43_yield_and_reset(pump, &mut activation_window);
                         continue 'supervisor;
                     }
                     gate8_terminal_pending = Some(DeferredGate8TerminalPending {
@@ -3584,7 +3739,7 @@ where
                         terminal_decision_committed: false,
                         failure_transaction_retained: false,
                     });
-                    deferred_cyw43_yield_and_reset(&mut activation_window);
+                    deferred_cyw43_yield_and_reset(pump, &mut activation_window);
                     continue 'supervisor;
                 }
 
@@ -3602,7 +3757,7 @@ where
                         // unit; all other outcomes restore the explicit yield.
                         continue 'supervisor;
                     }
-                    deferred_cyw43_yield_and_reset(&mut activation_window);
+                    deferred_cyw43_yield_and_reset(pump, &mut activation_window);
                     continue 'supervisor;
                 }
             }
@@ -3614,7 +3769,7 @@ where
                 counter_frequency(),
                 activation_reserve_us,
             ) {
-                deferred_cyw43_yield_and_reset(&mut activation_window);
+                deferred_cyw43_yield_and_reset(pump, &mut activation_window);
                 continue;
             }
             // Operator service remains one logical condition-before-operation
@@ -3623,6 +3778,14 @@ where
             // schedules Driver twice without another Operator reconciliation.
             let may_begin_before = pump.cyw43_bootstrap_may_begin();
             pump.poll_cyw43_bootstrap_supervisor_event_turn();
+            if pump.pi_root_control_passive_admission_pending() {
+                // The operator turn may have parsed the exact command and
+                // captured its baseline/reset sample. Do not consume a
+                // sideband batch or issue a CYW43 operation before its sole
+                // selected scheduler boundary.
+                deferred_cyw43_yield_and_reset(pump, &mut activation_window);
+                continue 'supervisor;
+            }
             activation_window.record_operator_turn();
             let may_begin = pump.cyw43_bootstrap_may_begin();
             if may_begin {
@@ -3645,7 +3808,7 @@ where
             );
             supervisor_phase = next_phase;
             if !may_begin {
-                deferred_cyw43_yield_and_reset(&mut activation_window);
+                deferred_cyw43_yield_and_reset(pump, &mut activation_window);
                 continue;
             }
             let now_ms = crate::hal::timebase().now_ms();
@@ -3668,7 +3831,7 @@ where
                 attempt_active = true;
             }
             if continuation == DeferredCyw43McsContinuation::Yield {
-                deferred_cyw43_yield_and_reset(&mut activation_window);
+                deferred_cyw43_yield_and_reset(pump, &mut activation_window);
                 continue;
             }
         }
@@ -3678,7 +3841,7 @@ where
             counter_frequency(),
             activation_reserve_us,
         ) {
-            deferred_cyw43_yield_and_reset(&mut activation_window);
+            deferred_cyw43_yield_and_reset(pump, &mut activation_window);
             continue;
         }
         let may_begin = pump.cyw43_bootstrap_may_begin();
@@ -3691,7 +3854,7 @@ where
             // Driver phase. A reboot, linked-serial cut, or persistent wait
             // that became visible after the preceding operator turn returns
             // to Operator without issuing a child operation.
-            deferred_cyw43_yield_and_reset(&mut activation_window);
+            deferred_cyw43_yield_and_reset(pump, &mut activation_window);
             continue;
         }
 
@@ -3791,7 +3954,7 @@ where
                     if let Some(mode) = permanent_failure_terminal_mode(network_attached) {
                         pump.quarantine_network_service_after_cyw43_terminal_failure();
                         terminal_mode = Some(mode);
-                        deferred_cyw43_yield_and_reset(&mut activation_window);
+                        deferred_cyw43_yield_and_reset(pump, &mut activation_window);
                         continue;
                     }
                     run_root_console_pump(pump);
@@ -3821,7 +3984,7 @@ where
                         false,
                     );
                     attempt_active = false;
-                    deferred_cyw43_yield_and_reset(&mut activation_window);
+                    deferred_cyw43_yield_and_reset(pump, &mut activation_window);
                     continue;
                 }
                 #[cfg(all(target_arch = "aarch64", target_os = "none", sel4_config_kernel_mcs))]
@@ -3964,7 +4127,7 @@ where
             // arbitration while retaining this guarded MCS activation.
             continue 'supervisor;
         }
-        deferred_cyw43_yield_and_reset(&mut activation_window);
+        deferred_cyw43_yield_and_reset(pump, &mut activation_window);
     }
 }
 
@@ -6257,6 +6420,31 @@ mod tests {
         assert!(
             !recovery_successor,
             "a recovery edge rejects a productive attached successor"
+        );
+    }
+
+    #[cfg(all(
+        feature = "serial-console",
+        feature = "kernel",
+        feature = "net-console"
+    ))]
+    #[test]
+    fn deferred_wifi_supervisor_prioritizes_recovery_then_passive_admission() {
+        use super::DeferredCyw43RootControlTurn as Turn;
+
+        assert_eq!(
+            super::deferred_cyw43_root_control_turn(true, true),
+            Turn::Recovery,
+            "fault recovery must cancel a retained passive command before sampling",
+        );
+        assert_eq!(
+            super::deferred_cyw43_root_control_turn(false, true),
+            Turn::PassiveAdmission,
+            "a retained command must own the next Wi-Fi-supervisor turn",
+        );
+        assert_eq!(
+            super::deferred_cyw43_root_control_turn(false, false),
+            Turn::Supervisor,
         );
     }
 

@@ -10457,6 +10457,45 @@ Changes:
   - lease lifecycle — retain completed preemptions in a fixed-capacity chronological ring in both target and host NineDoor implementations. A valid preemption evicts the oldest observation instead of failing control when evidence storage turns over; `/proc/lease/summary` keeps the cumulative successful-preemption count, preserving exact turnover accounting without widening the generated bound.
   - passive-service locality — place NineDoor on core 0 beside its sole `root-control` donor and require the common compiler-validated `locality_bound` invariant in QEMU, regression, and Pi manifests. This removes a cross-core synchronous handoff without changing the passive Reply-object topology, any SC budget/period, or any Pi-specific driver, hardware path, build/flash logic, or diagnostic.
   - passive-service publication — pair root and child release/acquire fences around each ordinary cached request/response frame before publishing or consuming the matching IPC sequence. IPC retains its sole notification/Reply role and no longer substitutes for AArch64 shared-memory ordering under high request pressure.
+  - exact-077 passive-admission correction — exact source
+    `077578a475c1916dcdcbc9119c2e27a960e25c58`, build ID
+    `599797d9fbf4960dbf988082ebe308f2bc4b1711ebe11894fad1fa4e25d407c6`,
+    image ID
+    `aac79c8f539939eb3530cfd4ccd6ec958842d866b22e58cbefef6a111fd461e1`,
+    image SHA-256
+    `634aec4a37e2a398cad629e43df709043bd873d924d29cc7090d5f96b6f3c679`,
+    exact serial diagnostics, and boot-paired `20260829-230338` captures
+    prove WiFi Gate 8, DHCP, authenticated TCP, responsive serial diagnostics,
+    zero console/runtime drops, and a sealed 272/272 MCS registry without fault
+    or quarantine. They reject functional and performance closure because the
+    first passive command fails `busy detail=root-sc-reserve`: the first
+    `SchedContext_Consumed` sample includes all prior root work and the
+    retrospective accumulator can never establish a fresh 250-us reserve.
+    Retain the exact parsed passive command and its session/connection identity
+    after one baseline/reset sample, enter one mandatory selected periodic MCS
+    Yield boundary, then on the first resumed activation refresh policy time
+    and decide from one fresh sample. A value strictly below 250 us admits once;
+    equality or excess emits one typed refusal and terminates without retry.
+    Raw serial, local-seat, and TCP diagnostics remain live before retention.
+    Newly published raw, intermediate, or final isolated-service recovery,
+    reboot, containment, quarantine, timer/accounting invalidity, or authority
+    drift preempts and cancels before sampling or dispatch; `CallArm` brackets
+    its exact sequence with complete frontier checks and exact rollback.
+    A proposed same-activation direct-GENET response-successor was audited and
+    deliberately omitted: the generated contracts contain no independent
+    worst-case bound for each fused root leaf plus epilogue, so a pre-unit wall
+    check could not prevent the last unit from crossing the unchanged root MCS
+    WCET. The established direct-GENET, mediated-WiFi, five-unit rotor, SC
+    budget/period/refill/priority/core/WCET, Worker/CNode/manifest/schema, public
+    grammar, and QEMU direct-VirtIO paths therefore remain unchanged. Current
+    WiFi has no under-load proof after ATTACH and receives no speculative
+    CYW43/SDIO mutation. The complete host-tool suite, `tools/cohesix-py`,
+    generated profile consumers/contracts, `.coh` workloads, REST benchmark
+    arithmetic, and report schemas retain unchanged external behavior and need
+    no implementation change. Focused source and QEMU checks can reject the
+    candidate but cannot prove Pi function, latency, throughput, or August
+    parity; fresh exact-image WiFi and GENET scripts plus raw and medium/high
+    pressure remain mandatory.
   - platform consistency — select the same v5 shared contract, including the
     v4-introduced bounded command batch, complete 256-Worker population, two
     passive-Worker executor-lane architecture, and passive-service locality

@@ -1156,11 +1156,12 @@ no GENET boot evidence and cannot qualify either network mode.
 The correction keeps mediated WiFi handoff signal-only, retains guarded
 `SchedContext_YieldTo` only for direct GENET, classifies admitted MCS
 notifications by badge before stale `MessageInfo`, and gates only parsed
-physical-Pi commands that can enter passive NineDoor with a conservative
-full-period consumed-time window. Raw serial, USB/local-seat, and TCP ingress
-plus root-owned diagnostics remain live. Passive dispatch admits only below
-the checked 250 us `budget_us - wcet_us` limit, leaving the complete 2,500 us
-WCET inside the unchanged SC. A terminal
+physical-Pi commands that can enter passive NineDoor with one baseline/reset
+sample, one mandatory periodic MCS Yield boundary, and one fresh decision.
+Raw serial, USB/local-seat, and TCP ingress plus root-owned diagnostics remain
+live. Passive dispatch admits only below the checked 250 us
+`budget_us - wcet_us` limit, leaving the complete 2,500 us WCET inside the
+unchanged SC; equality or excess refuses once without retry. A terminal
 `CallArm` or `Call` failure revokes and fences its generation rather than
 resetting or retrying a `REPLIED` lane. Focused source tests and a fresh QEMU
 canary remain rejection gates only. Qualification still requires new

@@ -83,6 +83,28 @@ fn refresh_isolated_device_counters<D: NetDevice>(counters: &mut NetCounters, de
     );
 }
 
+const fn console_service_local_fault_state_pending(
+    faulted: bool,
+    graceful_teardown_pending: bool,
+    containment_active: bool,
+    terminal: bool,
+    terminal_diagnostic_pending: bool,
+) -> bool {
+    faulted
+        || graceful_teardown_pending
+        || containment_active
+        || (terminal && terminal_diagnostic_pending)
+}
+
+const fn console_service_local_containment_state_pending(
+    faulted: bool,
+    graceful_teardown_pending: bool,
+    containment_active: bool,
+    terminal: bool,
+) -> bool {
+    !terminal && (faulted || graceful_teardown_pending || containment_active)
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct QueuedConsoleOutput {
     line: HeaplessString<DEFAULT_LINE_CAPACITY>,
@@ -1837,6 +1859,25 @@ impl<D: NetDevice> NetPoller for IsolatedNetworkConsole<D> {
             || !self.lines.is_empty()
     }
 
+    fn console_service_local_fault_pending(&self) -> bool {
+        console_service_local_fault_state_pending(
+            self.faulted(),
+            self.graceful_teardown_pending,
+            self.runtime.containment_active(),
+            self.terminal,
+            self.pending_containment_diagnostic().is_some(),
+        )
+    }
+
+    fn console_service_local_containment_pending(&self) -> bool {
+        console_service_local_containment_state_pending(
+            self.faulted(),
+            self.graceful_teardown_pending,
+            self.runtime.containment_active(),
+            self.terminal,
+        )
+    }
+
     fn console_listen_port(&self) -> u16 {
         self.listen_port
     }
@@ -1958,5 +1999,45 @@ impl<D: NetDevice> NetPoller for IsolatedNetworkConsole<D> {
 
     fn commit_console_network_containment_diagnostic(&mut self, expected_line: &str) -> bool {
         self.commit_containment_diagnostic(expected_line)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn local_fault_hint_covers_fault_containment_and_unreported_terminal_only() {
+        assert!(!console_service_local_fault_state_pending(
+            false, false, false, false, false
+        ));
+        assert!(console_service_local_fault_state_pending(
+            true, false, false, false, false
+        ));
+        assert!(console_service_local_fault_state_pending(
+            false, true, false, false, false
+        ));
+        assert!(console_service_local_fault_state_pending(
+            false, false, true, false, false
+        ));
+        assert!(console_service_local_fault_state_pending(
+            false, false, false, true, true
+        ));
+        assert!(!console_service_local_fault_state_pending(
+            false, false, false, true, false
+        ));
+        assert!(console_service_local_containment_state_pending(
+            true, false, false, false,
+        ));
+        assert!(console_service_local_containment_state_pending(
+            false, true, false, false,
+        ));
+        assert!(console_service_local_containment_state_pending(
+            false, false, true, false,
+        ));
+        assert!(
+            !console_service_local_containment_state_pending(false, false, false, true),
+            "a terminal diagnostic fences passive admission but must let ordinary output run",
+        );
     }
 }

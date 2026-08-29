@@ -16,15 +16,19 @@
 //! their capability views remain separate and compiler-bounded.
 
 use crate::critical_tcb::{
-    detailed_fault_registration_log_required, generated_standard_fault_badge, mcs_extra_refills,
-    passive_service_recovery_contract, service_fault_mailbox_index,
-    validate_critical_temporal_graph, validate_worker_supervisor_wake, CriticalHandoff,
-    CriticalTcbHandle, CriticalTcbInventory, CriticalTcbOrigin, CriticalTopologyError, FaultClass,
-    FaultHandoffError, FaultHandoffRecord, FaultRegistration, FaultRegistry, FaultRegistryError,
-    FaultRegistrySnapshot, GenerationIdentity, PublishResult, WorkerControlQueue,
-    WorkerControlQueueError, WorkerControlRecord, WorkerSupervisorItem, CRITICAL_TCB_COUNT,
-    DRIVER_FAULT_RECORD_CAPACITY, FAULT_REGISTRY_CAPACITY, SERVICE_FAULT_RECORD_CAPACITY,
-    WORKER_CONTROL_QUEUE_CAPACITY, WORKER_FAULT_MAILBOX_CAPACITY,
+    arm_service_call_with_fault_frontier, classify_generated_service_fault_badge,
+    classify_intermediate_service_fault, detailed_fault_registration_log_required,
+    generated_service_task_index, generated_standard_fault_badge, is_generated_service_fault_badge,
+    mcs_extra_refills, passive_service_recovery_contract,
+    service_call_rollback_accepts_already_cleared, service_call_rollback_requires_exact_clear,
+    service_fault_frontier_pending, service_fault_mailbox_index, validate_critical_temporal_graph,
+    validate_worker_supervisor_wake, CriticalHandoff, CriticalTcbHandle, CriticalTcbInventory,
+    CriticalTcbOrigin, CriticalTopologyError, FaultClass, FaultHandoffError, FaultHandoffRecord,
+    FaultRegistration, FaultRegistry, FaultRegistryError, FaultRegistrySnapshot,
+    GenerationIdentity, PublishResult, ServiceCallArmFrontierError, ServiceFaultFrontierMatch,
+    WorkerControlQueue, WorkerControlQueueError, WorkerControlRecord, WorkerSupervisorItem,
+    CRITICAL_TCB_COUNT, DRIVER_FAULT_RECORD_CAPACITY, FAULT_REGISTRY_CAPACITY,
+    SERVICE_FAULT_RECORD_CAPACITY, WORKER_CONTROL_QUEUE_CAPACITY, WORKER_FAULT_MAILBOX_CAPACITY,
 };
 use crate::generated::{
     self, CriticalTcbResource, TemporalExecution, TemporalTaskConfig, TemporalTaskKind,
@@ -247,6 +251,7 @@ static TARGET_PENDING_FAULT_LENGTH: AtomicUsize = AtomicUsize::new(0);
 static TARGET_PENDING_FAULT_MR0: AtomicU64 = AtomicU64::new(0);
 static TARGET_PENDING_FAULT_MR1: AtomicU64 = AtomicU64::new(0);
 static TARGET_PENDING_FAULT_VALID: AtomicBool = AtomicBool::new(false);
+static TARGET_SERVICE_FAULT_EPOCH: AtomicU64 = AtomicU64::new(0);
 static TARGET_ROOT_FAULT_TURN: AtomicUsize =
     AtomicUsize::new(RootFaultCriticalTurn::PrimeReceive as usize);
 static TARGET_ROOT_FAULT_CRITICAL_TASK: AtomicUsize = AtomicUsize::new(0);
@@ -432,6 +437,10 @@ pub fn register_target_service_recovery_reply(
 }
 
 /// Arm the exact one-in-flight service request before root donates its SC.
+///
+/// A successful return is the dispatch linearization point: complete frontier
+/// samples bracket the sequence CAS, and a monotonic service-fault epoch closes
+/// cross-core publication ordering that independent phase atomics cannot prove.
 pub fn arm_target_service_call(
     task_id: &str,
     sequence: u64,
@@ -442,10 +451,58 @@ pub fn arm_target_service_call(
     {
         return Err(CriticalTcbConstructionError::RuntimeNotReady);
     }
-    TARGET_SERVICE_CALL_SEQUENCES[mailbox]
-        .compare_exchange(0, sequence, Ordering::AcqRel, Ordering::Acquire)
-        .map_err(|_| CriticalTcbConstructionError::RuntimeNotReady)?;
-    Ok(())
+    let starting_fault_epoch = TARGET_SERVICE_FAULT_EPOCH.load(Ordering::SeqCst);
+    arm_service_call_with_fault_frontier(
+        || {
+            Ok(target_any_service_fault_pending()?
+                || TARGET_SERVICE_FAULT_EPOCH.load(Ordering::SeqCst) != starting_fault_epoch)
+        },
+        || {
+            TARGET_SERVICE_CALL_SEQUENCES[mailbox]
+                .compare_exchange(0, sequence, Ordering::SeqCst, Ordering::Acquire)
+                .map(|_| ())
+                .map_err(|_| CriticalTcbConstructionError::RuntimeNotReady)
+        },
+        || revoke_just_armed_service_call(mailbox, sequence),
+    )
+    .map_err(|error| match error {
+        ServiceCallArmFrontierError::Pending => CriticalTcbConstructionError::RuntimeNotReady,
+        ServiceCallArmFrontierError::Operation(error) => error,
+    })
+}
+
+fn revoke_just_armed_service_call(
+    mailbox: usize,
+    sequence: u64,
+) -> Result<(), CriticalTcbConstructionError> {
+    let recovery_state = TARGET_SERVICE_RECOVERY_STATES[mailbox].load(Ordering::Acquire);
+    if !service_call_rollback_requires_exact_clear(
+        recovery_state == SERVICE_RECOVERY_READY,
+        recovery_state == SERVICE_RECOVERY_REPLIED,
+    ) {
+        return Err(CriticalTcbConstructionError::RuntimeNotReady);
+    }
+    match TARGET_SERVICE_CALL_SEQUENCES[mailbox].compare_exchange(
+        sequence,
+        0,
+        Ordering::SeqCst,
+        Ordering::Acquire,
+    ) {
+        Ok(_) => Ok(()),
+        Err(observed_sequence)
+            if service_call_rollback_accepts_already_cleared(
+                observed_sequence,
+                TARGET_SERVICE_RECOVERY_STATES[mailbox].load(Ordering::Acquire)
+                    == SERVICE_RECOVERY_REPLIED,
+            ) =>
+        {
+            // Root-fault already owns this generation and cleared the Call
+            // sequence while issuing its typed recovery Reply. Never reopen
+            // or rewrite that terminal lane from CallArm rollback.
+            Ok(())
+        }
+        Err(_) => Err(CriticalTcbConstructionError::RuntimeNotReady),
+    }
 }
 
 /// Clear one completed service request after a normal reply or validate that
@@ -1186,6 +1243,69 @@ pub fn take_target_service_fault(
         .map_err(CriticalTcbConstructionError::FaultHandoff)
 }
 
+/// Side-effect-free check across the complete isolated-service fault frontier.
+///
+/// Retained passive-command admission uses this before its decision sample so
+/// a newly received service fault cannot be hidden behind the command's
+/// scheduler-boundary priority. The root-fault publisher retains an overlap
+/// while moving raw -> intermediate -> handoff: each successor is published
+/// with `Release` before its predecessor is cleared. This reader follows that
+/// order with `Acquire` loads, so every already-retained service fault is seen
+/// in at least one phase. Invalid or ambiguous service state reports pending;
+/// final-handoff contention is returned explicitly and the caller treats it as
+/// recovery work.
+pub fn target_service_fault_pending(task_id: &str) -> Result<bool, CriticalTcbConstructionError> {
+    let task_index = generated_service_task_index(task_id)
+        .ok_or(CriticalTcbConstructionError::MissingGeneratedRecord)?;
+    let raw = if TARGET_PENDING_FAULT_VALID.load(Ordering::Acquire) {
+        classify_generated_service_fault_badge(
+            TARGET_PENDING_FAULT_BADGE.load(Ordering::Relaxed),
+            task_index,
+        )
+    } else {
+        ServiceFaultFrontierMatch::None
+    };
+    let intermediate = if TARGET_ROOT_FAULT_SERVICE_VALID.load(Ordering::Acquire) {
+        classify_intermediate_service_fault(
+            TARGET_ROOT_FAULT_SERVICE_TASK.load(Ordering::Relaxed),
+            task_index,
+        )
+    } else {
+        ServiceFaultFrontierMatch::None
+    };
+    service_fault_frontier_pending(raw, intermediate, || {
+        let Some(handoff) = TARGET_HANDOFF.try_lock() else {
+            return Err(FaultHandoffError::Contended);
+        };
+        handoff.service_fault_pending(task_index)
+    })
+    .map_err(CriticalTcbConstructionError::FaultHandoff)
+}
+
+fn target_any_service_fault_pending() -> Result<bool, CriticalTcbConstructionError> {
+    let raw = if TARGET_PENDING_FAULT_VALID.load(Ordering::Acquire)
+        && is_generated_service_fault_badge(TARGET_PENDING_FAULT_BADGE.load(Ordering::Relaxed))
+    {
+        ServiceFaultFrontierMatch::Exact
+    } else {
+        ServiceFaultFrontierMatch::None
+    };
+    // A published intermediate is exclusively service-fault state. Treat the
+    // flag itself as sufficient so corrupt task payload cannot reopen CallArm.
+    let intermediate = if TARGET_ROOT_FAULT_SERVICE_VALID.load(Ordering::Acquire) {
+        ServiceFaultFrontierMatch::Exact
+    } else {
+        ServiceFaultFrontierMatch::None
+    };
+    service_fault_frontier_pending(raw, intermediate, || {
+        let Some(handoff) = TARGET_HANDOFF.try_lock() else {
+            return Err(FaultHandoffError::Contended);
+        };
+        Ok(handoff.any_service_fault_pending())
+    })
+    .map_err(CriticalTcbConstructionError::FaultHandoff)
+}
+
 /// Resume all six restricted duties only after exact registry construction.
 ///
 /// The init/root-control TCB retains its bootstrap scheduling context until
@@ -1271,8 +1391,12 @@ pub fn activate_root_control_temporal_runtime(
 ///
 /// The syscall resets only the kernel's consumed-time evidence. It neither
 /// replenishes the scheduling context nor proves a fresh budget. The EventPump
-/// therefore owns the conservative cross-sample refill-window accumulator and
-/// may use this value only as one charge added to that retained bound.
+/// may use an initial sample only to reset the evidence before one mandatory
+/// selected periodic MCS Yield boundary. The first resumed activation refreshes
+/// policy time and admits a retained passive command only from one immediate
+/// fresh sample below the generated budget-minus-WCET reserve. Equality or
+/// excess refuses that command; sampling never retries or substitutes for the
+/// scheduler's replenishment semantics.
 #[cfg(sel4_config_kernel_mcs)]
 pub fn root_control_consumed_time_us() -> Result<u64, CriticalTcbConstructionError> {
     if !TARGET_ROOT_CONTROL_TEMPORAL_ACTIVE.load(Ordering::Acquire) {
@@ -1765,6 +1889,15 @@ fn publish_pending_target_fault(
     TARGET_PENDING_FAULT_MR0.store(pending.fault_mr0, Ordering::Relaxed);
     TARGET_PENDING_FAULT_MR1.store(pending.fault_mr1, Ordering::Relaxed);
     TARGET_PENDING_FAULT_VALID.store(true, Ordering::Release);
+    if is_generated_service_fault_badge(pending.fault_badge)
+        && TARGET_SERVICE_FAULT_EPOCH
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |epoch| {
+                epoch.checked_add(1)
+            })
+            .is_err()
+    {
+        return Err(CriticalTcbConstructionError::RuntimeNotReady);
+    }
     Ok(())
 }
 
@@ -1920,14 +2053,6 @@ fn current_root_fault_turn() -> RootFaultCriticalTurn {
             Some(CHILD_EMERGENCY_SIGNAL_SLOT),
         ),
     }
-}
-
-#[inline(always)]
-fn is_generated_service_fault_badge(badge: seL4_Word) -> bool {
-    let ninedoor = generated::ninedoor_service_config();
-    let console = generated::console_network_service_config();
-    (ninedoor.enabled && (badge == ninedoor.fault_badge || badge == ninedoor.timeout_badge))
-        || (console.enabled && (badge == console.fault_badge || badge == console.timeout_badge))
 }
 
 #[inline(never)]

@@ -700,6 +700,23 @@ impl CriticalHandoff {
         Ok(mailbox.take())
     }
 
+    /// Whether one exact isolated-service fault is durably retained.
+    #[must_use]
+    pub fn service_fault_pending(&self, task_index: u16) -> Result<bool, FaultHandoffError> {
+        let slot =
+            service_fault_mailbox_index(task_index).ok_or(FaultHandoffError::SlotOutOfRange)?;
+        self.service_faults
+            .get(slot)
+            .map(Option::is_some)
+            .ok_or(FaultHandoffError::SlotOutOfRange)
+    }
+
+    /// Whether any isolated-service owner has a durable final fault handoff.
+    #[must_use]
+    pub(crate) fn any_service_fault_pending(&self) -> bool {
+        self.service_faults.iter().any(Option::is_some)
+    }
+
     /// Drain one exact driver containment record.
     pub fn drain_driver(&mut self) -> Option<FaultHandoffRecord> {
         for mailbox in &mut self.driver_faults {
@@ -1084,6 +1101,234 @@ pub fn generated_standard_fault_badge(task_id: &str) -> Option<u64> {
     )
 }
 
+/// Classification of one retained phase in the service-fault publication
+/// frontier.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ServiceFaultFrontierMatch {
+    /// This phase is absent or belongs to a different exact service.
+    None,
+    /// This phase belongs to the requested exact service.
+    Exact,
+    /// This phase claims service-fault state that cannot be decoded exactly.
+    Invalid,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum GeneratedServiceFaultCandidate {
+    Valid {
+        task_index: u16,
+        standard_badge: u64,
+        timeout_badge: u64,
+    },
+    Invalid,
+}
+
+/// Whether a badge is declared by one of the two generated service images.
+#[must_use]
+pub(crate) fn is_generated_service_fault_badge(badge: u64) -> bool {
+    let ninedoor = generated::ninedoor_service_config();
+    let console = generated::console_network_service_config();
+    (ninedoor.enabled && (badge == ninedoor.fault_badge || badge == ninedoor.timeout_badge))
+        || (console.enabled && (badge == console.fault_badge || badge == console.timeout_badge))
+}
+
+/// Resolve one unique generated service owner and reject task-table drift.
+#[must_use]
+pub(crate) fn generated_service_task_index(task_id: &str) -> Option<u16> {
+    let mut matched = None;
+    for (index, task) in generated::temporal_tasks().iter().enumerate() {
+        if task.id != task_id {
+            continue;
+        }
+        let task_index = u16::try_from(index).ok()?;
+        if matched.is_some()
+            || !matches!(
+                task.kind,
+                TemporalTaskKind::Service | TemporalTaskKind::Drain
+            )
+            || service_fault_mailbox_index(task_index).is_none()
+        {
+            return None;
+        }
+        matched = Some(task_index);
+    }
+    matched
+}
+
+fn classify_service_fault_badge_candidates(
+    badge: u64,
+    requested_task_index: u16,
+    candidates: impl IntoIterator<Item = GeneratedServiceFaultCandidate>,
+) -> ServiceFaultFrontierMatch {
+    let mut matched = None;
+    for candidate in candidates {
+        let GeneratedServiceFaultCandidate::Valid {
+            task_index,
+            standard_badge,
+            timeout_badge,
+        } = candidate
+        else {
+            return ServiceFaultFrontierMatch::Invalid;
+        };
+        if badge != standard_badge && badge != timeout_badge {
+            continue;
+        }
+        if matched.replace(task_index).is_some() {
+            return ServiceFaultFrontierMatch::Invalid;
+        }
+    }
+    match matched {
+        Some(task_index) if task_index == requested_task_index => ServiceFaultFrontierMatch::Exact,
+        Some(_) => ServiceFaultFrontierMatch::None,
+        None => ServiceFaultFrontierMatch::Invalid,
+    }
+}
+
+/// Classify a raw root-fault badge against one exact generated service owner.
+#[must_use]
+pub(crate) fn classify_generated_service_fault_badge(
+    badge: u64,
+    requested_task_index: u16,
+) -> ServiceFaultFrontierMatch {
+    if !is_generated_service_fault_badge(badge) {
+        return ServiceFaultFrontierMatch::None;
+    }
+    classify_service_fault_badge_candidates(
+        badge,
+        requested_task_index,
+        generated::temporal_tasks()
+            .iter()
+            .enumerate()
+            .filter(|(_, task)| {
+                matches!(
+                    task.kind,
+                    TemporalTaskKind::Service | TemporalTaskKind::Drain
+                )
+            })
+            .map(|(index, task)| {
+                let Some(task_index) = u16::try_from(index).ok() else {
+                    return GeneratedServiceFaultCandidate::Invalid;
+                };
+                let Some(standard_badge) = generated_standard_fault_badge(task.id) else {
+                    return GeneratedServiceFaultCandidate::Invalid;
+                };
+                if service_fault_mailbox_index(task_index).is_none() {
+                    return GeneratedServiceFaultCandidate::Invalid;
+                }
+                GeneratedServiceFaultCandidate::Valid {
+                    task_index,
+                    standard_badge,
+                    timeout_badge: task.timeout_badge,
+                }
+            }),
+    )
+}
+
+/// Classify the root-fault cursor's immutable intermediate task index.
+#[must_use]
+pub(crate) fn classify_intermediate_service_fault(
+    raw_task_index: usize,
+    requested_task_index: u16,
+) -> ServiceFaultFrontierMatch {
+    let Some(task) = generated::temporal_tasks().get(raw_task_index) else {
+        return ServiceFaultFrontierMatch::Invalid;
+    };
+    let Some(task_index) = u16::try_from(raw_task_index).ok() else {
+        return ServiceFaultFrontierMatch::Invalid;
+    };
+    if !matches!(
+        task.kind,
+        TemporalTaskKind::Service | TemporalTaskKind::Drain
+    ) || service_fault_mailbox_index(task_index).is_none()
+    {
+        return ServiceFaultFrontierMatch::Invalid;
+    }
+    if task_index == requested_task_index {
+        ServiceFaultFrontierMatch::Exact
+    } else {
+        ServiceFaultFrontierMatch::None
+    }
+}
+
+/// Combine ordered raw, intermediate, and final service-fault phase checks.
+///
+/// The final callback is evaluated only when neither earlier phase requires
+/// containment, preserving the side-effect-free fast path and exposing final
+/// mailbox contention to the caller's fail-closed policy.
+pub(crate) fn service_fault_frontier_pending(
+    raw: ServiceFaultFrontierMatch,
+    intermediate: ServiceFaultFrontierMatch,
+    final_pending: impl FnOnce() -> Result<bool, FaultHandoffError>,
+) -> Result<bool, FaultHandoffError> {
+    if matches!(
+        raw,
+        ServiceFaultFrontierMatch::Exact | ServiceFaultFrontierMatch::Invalid
+    ) || matches!(
+        intermediate,
+        ServiceFaultFrontierMatch::Exact | ServiceFaultFrontierMatch::Invalid
+    ) {
+        return Ok(true);
+    }
+    final_pending()
+}
+
+/// Failure from the two-sample fault-frontier protocol around service CallArm.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ServiceCallArmFrontierError<E> {
+    /// A service fault was ordered before CallArm completed.
+    Pending,
+    /// A frontier sample, sequence arm, or sequence revoke failed.
+    Operation(E),
+}
+
+/// Arm one service Call between two complete fault-frontier samples.
+///
+/// The second sample closes the publish-before-CAS race. If it observes new
+/// fault state, the caller-provided revoke removes only the sequence just
+/// armed; recovery-owned state remains outside this pure protocol.
+pub(crate) fn arm_service_call_with_fault_frontier<E>(
+    mut fault_pending: impl FnMut() -> Result<bool, E>,
+    arm_sequence: impl FnOnce() -> Result<(), E>,
+    revoke_sequence: impl FnOnce() -> Result<(), E>,
+) -> Result<(), ServiceCallArmFrontierError<E>> {
+    if fault_pending().map_err(ServiceCallArmFrontierError::Operation)? {
+        return Err(ServiceCallArmFrontierError::Pending);
+    }
+    arm_sequence().map_err(ServiceCallArmFrontierError::Operation)?;
+    match fault_pending() {
+        Ok(false) => Ok(()),
+        Ok(true) => {
+            revoke_sequence().map_err(ServiceCallArmFrontierError::Operation)?;
+            Err(ServiceCallArmFrontierError::Pending)
+        }
+        Err(error) => {
+            revoke_sequence().map_err(ServiceCallArmFrontierError::Operation)?;
+            Err(ServiceCallArmFrontierError::Operation(error))
+        }
+    }
+}
+
+/// Whether CallArm rollback must attempt the exact sequence clear.
+///
+/// `Replied` still requires the CAS: root-fault can transition and swap an
+/// empty sequence before a late CallArm CAS publishes the sequence.
+#[must_use]
+pub(crate) const fn service_call_rollback_requires_exact_clear(
+    recovery_ready: bool,
+    recovery_replied: bool,
+) -> bool {
+    recovery_ready || recovery_replied
+}
+
+/// Whether a failed exact clear proves root-fault already consumed the lane.
+#[must_use]
+pub(crate) const fn service_call_rollback_accepts_already_cleared(
+    observed_sequence: u64,
+    recovery_replied: bool,
+) -> bool {
+    observed_sequence == 0 && recovery_replied
+}
+
 /// Ownership state for one root-fault MCS receive/Reply lane.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FaultReplyLaneState {
@@ -1456,6 +1701,209 @@ mod tests {
         assert!(matches!(
             controls.drain_validated().expect("root consume"),
             Some(record) if record.sequence == 1
+        ));
+    }
+
+    #[test]
+    fn service_fault_peek_is_side_effect_free_and_identity_exact() {
+        let mut handoff = CriticalHandoff::default();
+        let service_index = generated::temporal_tasks()
+            .iter()
+            .enumerate()
+            .find(|(_, task)| task.kind == TemporalTaskKind::Service)
+            .and_then(|(index, _)| u16::try_from(index).ok())
+            .expect("generated service temporal task");
+        let mut record = fault(0, 9);
+        record.task_index = service_index;
+
+        assert_eq!(handoff.service_fault_pending(service_index), Ok(false));
+        assert!(!handoff.any_service_fault_pending());
+        handoff
+            .publish_service_fault(record)
+            .expect("publish service fault");
+        assert_eq!(handoff.service_fault_pending(service_index), Ok(true));
+        assert!(handoff.any_service_fault_pending());
+        assert_eq!(handoff.service_fault_pending(service_index), Ok(true));
+        assert_eq!(handoff.drain_service(service_index), Ok(Some(record)));
+        assert_eq!(handoff.service_fault_pending(service_index), Ok(false));
+        assert!(!handoff.any_service_fault_pending());
+    }
+
+    #[test]
+    fn service_fault_frontier_maps_generated_badges_and_tasks_exactly() {
+        let ninedoor = generated::ninedoor_service_config();
+        let console = generated::console_network_service_config();
+        let ninedoor_index = generated_service_task_index("ninedoor-service")
+            .expect("generated NineDoor service task");
+        let console_index = generated_service_task_index("console-network-service")
+            .expect("generated console-network service task");
+
+        assert_eq!(
+            classify_generated_service_fault_badge(ninedoor.fault_badge, ninedoor_index),
+            ServiceFaultFrontierMatch::Exact
+        );
+        assert_eq!(
+            classify_generated_service_fault_badge(ninedoor.timeout_badge, console_index),
+            ServiceFaultFrontierMatch::None
+        );
+        assert_eq!(
+            classify_generated_service_fault_badge(console.fault_badge, console_index),
+            ServiceFaultFrontierMatch::Exact
+        );
+        assert_eq!(
+            classify_intermediate_service_fault(ninedoor_index.into(), ninedoor_index),
+            ServiceFaultFrontierMatch::Exact
+        );
+        assert_eq!(
+            classify_intermediate_service_fault(console_index.into(), ninedoor_index),
+            ServiceFaultFrontierMatch::None
+        );
+        assert_eq!(generated_service_task_index("root-control"), None);
+    }
+
+    #[test]
+    fn service_fault_frontier_has_no_raw_intermediate_or_final_transition_gap() {
+        use ServiceFaultFrontierMatch::{Exact, None};
+
+        for (raw, intermediate, final_pending) in [
+            (Exact, None, false),
+            (Exact, Exact, false),
+            (None, Exact, false),
+            (None, Exact, true),
+            (None, None, true),
+        ] {
+            assert_eq!(
+                service_fault_frontier_pending(raw, intermediate, || Ok(final_pending)),
+                Ok(true)
+            );
+        }
+        assert_eq!(
+            service_fault_frontier_pending(None, None, || Ok(false)),
+            Ok(false)
+        );
+    }
+
+    #[test]
+    fn service_fault_frontier_fails_closed_on_invalid_ambiguous_or_contended_state() {
+        use core::cell::Cell;
+
+        let final_sampled = Cell::new(false);
+        assert_eq!(
+            service_fault_frontier_pending(
+                ServiceFaultFrontierMatch::Invalid,
+                ServiceFaultFrontierMatch::None,
+                || {
+                    final_sampled.set(true);
+                    Ok(false)
+                },
+            ),
+            Ok(true)
+        );
+        assert!(!final_sampled.get());
+        assert_eq!(
+            classify_intermediate_service_fault(usize::MAX, 0),
+            ServiceFaultFrontierMatch::Invalid
+        );
+
+        let duplicate_badge = 0x26e0;
+        assert_eq!(
+            classify_service_fault_badge_candidates(
+                duplicate_badge,
+                1,
+                [
+                    GeneratedServiceFaultCandidate::Valid {
+                        task_index: 1,
+                        standard_badge: duplicate_badge,
+                        timeout_badge: duplicate_badge + 1,
+                    },
+                    GeneratedServiceFaultCandidate::Valid {
+                        task_index: 2,
+                        standard_badge: duplicate_badge,
+                        timeout_badge: duplicate_badge + 2,
+                    },
+                ],
+            ),
+            ServiceFaultFrontierMatch::Invalid
+        );
+        assert_eq!(
+            classify_service_fault_badge_candidates(
+                duplicate_badge,
+                1,
+                [GeneratedServiceFaultCandidate::Invalid],
+            ),
+            ServiceFaultFrontierMatch::Invalid
+        );
+        assert_eq!(
+            service_fault_frontier_pending(
+                ServiceFaultFrontierMatch::None,
+                ServiceFaultFrontierMatch::None,
+                || Err(FaultHandoffError::Contended),
+            ),
+            Err(FaultHandoffError::Contended)
+        );
+    }
+
+    #[test]
+    fn service_call_arm_revokes_publish_between_precheck_and_cas_completion() {
+        use core::cell::Cell;
+
+        let samples = Cell::new(0u8);
+        let armed = Cell::new(false);
+        let revoked = Cell::new(false);
+        let result = arm_service_call_with_fault_frontier(
+            || {
+                let sample = samples.get();
+                samples.set(sample + 1);
+                // Inject publication after the clear precheck and before the
+                // completed CallArm postcheck.
+                Ok::<bool, FaultHandoffError>(sample != 0)
+            },
+            || {
+                armed.set(true);
+                Ok(())
+            },
+            || {
+                revoked.set(true);
+                Ok(())
+            },
+        );
+
+        assert_eq!(result, Err(ServiceCallArmFrontierError::Pending));
+        assert!(armed.get());
+        assert!(revoked.get());
+        assert_eq!(samples.get(), 2);
+    }
+
+    #[test]
+    fn service_call_rollback_clears_late_arm_after_replied_empty_transition() {
+        use core::cell::Cell;
+
+        let sequence = Cell::new(0u64);
+        let mut recovery_ready = true;
+        let mut recovery_replied = false;
+        assert!(recovery_ready && !recovery_replied);
+
+        // Root-fault observes no donor, closes the generation, and swaps the
+        // still-empty Call sequence before CallArm's late CAS is visible.
+        recovery_ready = false;
+        recovery_replied = true;
+        sequence.set(0);
+
+        // The late CAS then publishes a sequence into the REPLIED lane.
+        let armed_sequence = 26u64;
+        assert_eq!(sequence.replace(armed_sequence), 0);
+        assert!(service_call_rollback_requires_exact_clear(
+            recovery_ready,
+            recovery_replied,
+        ));
+        if sequence.get() == armed_sequence {
+            sequence.set(0);
+        }
+
+        assert_eq!(sequence.get(), 0);
+        assert!(service_call_rollback_accepts_already_cleared(
+            sequence.get(),
+            recovery_replied,
         ));
     }
 

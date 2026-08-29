@@ -9600,6 +9600,16 @@ impl NetPoller for GenetNetStack {
         self.inner().is_some_and(NetPoller::console_service_pending)
     }
 
+    fn console_service_local_fault_pending(&self) -> bool {
+        self.inner()
+            .is_some_and(NetPoller::console_service_local_fault_pending)
+    }
+
+    fn console_service_local_containment_pending(&self) -> bool {
+        self.inner()
+            .is_some_and(NetPoller::console_service_local_containment_pending)
+    }
+
     fn icmp_echo_service_due(&self, now_ms: u64) -> bool {
         self.inner()
             .is_some_and(|inner| inner.icmp_echo_service_due(now_ms))
@@ -9930,6 +9940,16 @@ impl NetPoller for Cyw43NetStack {
 
     fn console_service_pending(&self) -> bool {
         self.inner().is_some_and(NetPoller::console_service_pending)
+    }
+
+    fn console_service_local_fault_pending(&self) -> bool {
+        self.inner()
+            .is_some_and(NetPoller::console_service_local_fault_pending)
+    }
+
+    fn console_service_local_containment_pending(&self) -> bool {
+        self.inner()
+            .is_some_and(NetPoller::console_service_local_containment_pending)
     }
 
     fn icmp_echo_service_due(&self, now_ms: u64) -> bool {
@@ -11387,6 +11407,26 @@ impl NetPoller for DefaultNetStack {
             Self::Cyw43DriverTask(stack) => stack.console_service_pending(),
             #[cfg(feature = "net-backend-virtio")]
             Self::Virtio(stack) => stack.console_service_pending(),
+        }
+    }
+
+    fn console_service_local_fault_pending(&self) -> bool {
+        match self {
+            Self::Rtl8139(stack) => stack.console_service_local_fault_pending(),
+            Self::GenetDriverTask(stack) => stack.console_service_local_fault_pending(),
+            Self::Cyw43DriverTask(stack) => stack.console_service_local_fault_pending(),
+            #[cfg(feature = "net-backend-virtio")]
+            Self::Virtio(stack) => stack.console_service_local_fault_pending(),
+        }
+    }
+
+    fn console_service_local_containment_pending(&self) -> bool {
+        match self {
+            Self::Rtl8139(stack) => stack.console_service_local_containment_pending(),
+            Self::GenetDriverTask(stack) => stack.console_service_local_containment_pending(),
+            Self::Cyw43DriverTask(stack) => stack.console_service_local_containment_pending(),
+            #[cfg(feature = "net-backend-virtio")]
+            Self::Virtio(stack) => stack.console_service_local_containment_pending(),
         }
     }
 

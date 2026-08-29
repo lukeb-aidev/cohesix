@@ -275,7 +275,7 @@ fn pi_wifi_productive_activation_is_guarded_strictly_operator_driver() {
         .map(|offset| continue_guard + offset)
         .expect("productive Driver must return through loop-top arbitration");
     let final_yield = supervisor[loop_continue..]
-        .find("deferred_cyw43_yield_and_reset(&mut activation_window);")
+        .find("deferred_cyw43_yield_and_reset(pump, &mut activation_window);")
         .map(|offset| loop_continue + offset)
         .expect("nonproductive and terminal Driver cuts must yield and reset");
     assert!(
@@ -307,7 +307,7 @@ fn pi_wifi_productive_activation_is_guarded_strictly_operator_driver() {
     assert!(!phase_section.contains("PAIR_RESTART_DRIVER_TURNS"));
 
     let yield_helper = source
-        .find("fn deferred_cyw43_yield_and_reset(")
+        .find("fn deferred_cyw43_yield_and_reset<")
         .expect("deferred supervisor must centralize Yield reset");
     let yield_call = source[yield_helper..]
         .find("sel4::yield_now();")
@@ -364,7 +364,7 @@ fn pi_wifi_attached_network_retains_only_one_proven_guarded_successor() {
         .map(|offset| productive + offset)
         .expect("the productive successor must re-enter loop-top arbitration");
     let yield_turn = supervisor[continue_turn..]
-        .find("deferred_cyw43_yield_and_reset(&mut activation_window);")
+        .find("deferred_cyw43_yield_and_reset(pump, &mut activation_window);")
         .map(|offset| continue_turn + offset)
         .expect("every rejected attached successor must yield and reset");
 
@@ -779,6 +779,13 @@ fn root_control_containment_serializes_before_the_ordinary_pump_turn() {
         .find("activate_root_control_temporal_or_fail(ctx);")
         .expect("serial loop must cross the one-time activation seam");
 
+    let passive_recovery = root_loop
+        .find("let passive_recovery_preempted = pump.pi_root_control_passive_recovery_pending();")
+        .expect("service recovery must be sampled before passive admission");
+    let passive_cancel = root_loop[passive_recovery..]
+        .find("pump.cancel_pi_root_control_passive_admission_for_recovery();")
+        .map(|offset| passive_recovery + offset)
+        .expect("service recovery must cancel the retained passive command");
     let direct_pair = root_loop
         .find("pump.contain_faulted_direct_genet_pair(hal)")
         .expect("direct-GENET pair containment probe must remain first");
@@ -807,29 +814,56 @@ fn root_control_containment_serializes_before_the_ordinary_pump_turn() {
         .find("recovery_turn =")
         .map(|offset| ninedoor_guard + offset)
         .expect("NineDoor containment result must own recovery_turn");
-    let handoff_guard = root_loop[ninedoor..]
-        .find("if !recovery_turn && hal_ptr != 0 {")
+    let recovery_merge = root_loop[ninedoor..]
+        .find("let recovery_turn = recovery_turn || passive_recovery_preempted;")
         .map(|offset| ninedoor + offset)
-        .expect("deferred console-network handoff must follow containment");
+        .expect("raw and material recovery must share one exclusion turn");
+    let recovery_guard = root_loop[recovery_merge..]
+        .find("if recovery_turn {")
+        .map(|offset| recovery_merge + offset)
+        .expect("recovery must exclude passive admission and ordinary work");
+    let recovery_yield = root_loop[recovery_guard..]
+        .find("sel4::yield_now();")
+        .map(|offset| recovery_guard + offset)
+        .expect("recovery turn must end at one scheduler boundary");
+    let passive_guard = root_loop[recovery_yield..]
+        .find("if pump.pi_root_control_passive_admission_pending()")
+        .map(|offset| recovery_yield + offset)
+        .expect("passive admission must follow the recovery boundary");
+    let passive_service = root_loop[passive_guard..]
+        .find("pump.service_pi_root_control_passive_admission()")
+        .map(|offset| passive_guard + offset)
+        .expect("retained passive admission must own one exclusive turn");
+    let passive_prepare = root_loop[passive_service..]
+        .find("pump.prepare_pi_root_control_passive_admission_yield();")
+        .map(|offset| passive_service + offset)
+        .expect("passive admission must prepare its exact outer yield");
+    let passive_yield = root_loop[passive_prepare..]
+        .find("sel4::yield_now();")
+        .map(|offset| passive_prepare + offset)
+        .expect("passive admission turn must end at the prepared boundary");
+    let handoff_guard = root_loop[passive_yield..]
+        .find("let handoff_turn = if hal_ptr != 0 {")
+        .map(|offset| passive_yield + offset)
+        .expect("deferred handoff must follow recovery and passive admission");
     let handoff = root_loop
         .find("pump.service_deferred_console_network_handoff(hal)")
         .expect("deferred console-network handoff probe must remain present");
-    let handoff_assignment = root_loop[handoff_guard..handoff]
-        .find("recovery_turn =")
-        .map(|offset| handoff_guard + offset)
-        .expect("deferred console-network handoff must own recovery_turn");
     let pump_guard = root_loop
-        .find("let explicit_yield_required = if recovery_turn {")
-        .expect("ordinary pump must be guarded by both containment results");
+        .find("let explicit_yield_required = if handoff_turn {")
+        .expect("ordinary pump must be guarded by the deferred handoff result");
     let pump = root_loop
         .find("pump.poll_root_control_quantum()")
         .expect("bounded root-control quantum must remain present");
-    let outer_yield = root_loop
+    let outer_yield = root_loop[pump..]
         .find("sel4::yield_now();")
-        .expect("root-control loop must retain its sole outer yield");
+        .map(|offset| pump + offset)
+        .expect("ordinary root-control work must retain its prepared outer yield");
 
     assert!(
-        activation < direct_pair_assignment
+        activation < passive_recovery
+            && passive_recovery < passive_cancel
+            && passive_cancel < direct_pair_assignment
             && direct_pair_assignment < direct_pair
             && direct_pair < console_guard
             && console_guard < console_assignment
@@ -837,19 +871,29 @@ fn root_control_containment_serializes_before_the_ordinary_pump_turn() {
             && console < ninedoor_guard
             && ninedoor_guard < ninedoor_assignment
             && ninedoor_assignment < ninedoor
-            && ninedoor < handoff_guard
-            && handoff_guard < handoff_assignment
-            && handoff_assignment < handoff
+            && ninedoor < recovery_merge
+            && recovery_merge < recovery_guard
+            && recovery_guard < recovery_yield
+            && recovery_yield < passive_guard
+            && passive_guard < passive_service
+            && passive_service < passive_prepare
+            && passive_prepare < passive_yield
+            && passive_yield < handoff_guard
+            && handoff_guard < handoff
             && handoff < pump_guard
             && pump_guard < pump
             && pump < outer_yield,
         "containment/pump/yield source order drifted: \
-         activation={activation}, direct_pair_assignment={direct_pair_assignment}, \
+         activation={activation}, passive_recovery={passive_recovery}, \
+         passive_cancel={passive_cancel}, direct_pair_assignment={direct_pair_assignment}, \
          direct_pair={direct_pair}, console_guard={console_guard}, \
          console_assignment={console_assignment}, console={console}, \
          ninedoor_guard={ninedoor_guard}, ninedoor_assignment={ninedoor_assignment}, \
-         ninedoor={ninedoor}, handoff_guard={handoff_guard}, \
-         handoff_assignment={handoff_assignment}, handoff={handoff}, \
+         ninedoor={ninedoor}, recovery_merge={recovery_merge}, \
+         recovery_guard={recovery_guard}, recovery_yield={recovery_yield}, \
+         passive_guard={passive_guard}, passive_service={passive_service}, \
+         passive_prepare={passive_prepare}, passive_yield={passive_yield}, \
+         handoff_guard={handoff_guard}, handoff={handoff}, \
          pump_guard={pump_guard}, pump={pump}, yield={outer_yield}",
     );
     assert_eq!(
@@ -870,7 +914,7 @@ fn root_control_containment_serializes_before_the_ordinary_pump_turn() {
         0,
         "the root loop must not bypass the platform-gated quantum wrapper",
     );
-    assert_eq!(root_loop.matches("sel4::yield_now();").count(), 1);
+    assert_eq!(root_loop.matches("sel4::yield_now();").count(), 3);
     assert_eq!(
         root_loop
             .matches("pump.contain_faulted_direct_genet_pair(hal)")
@@ -896,15 +940,15 @@ fn root_control_containment_serializes_before_the_ordinary_pump_turn() {
         1,
     );
     assert_eq!(
-        root_loop.matches(".unwrap_or(false);").count(),
+        root_loop.matches(".unwrap_or(false)").count(),
         4,
         "all optional HAL probes must preserve false-on-no-probe semantics",
     );
     assert!(
         root_loop.contains(
-            "let explicit_yield_required = if recovery_turn {\n            true\n        } else {\n            pump.poll_root_control_quantum()\n        };"
+            "let explicit_yield_required = if handoff_turn {\n            true\n        } else {\n            pump.poll_root_control_quantum()\n        };"
         ),
-        "either containment result must exclude the ordinary pump from that turn",
+        "a deferred handoff must exclude the ordinary pump from that turn",
     );
 }
 

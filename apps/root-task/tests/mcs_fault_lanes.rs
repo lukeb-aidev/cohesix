@@ -343,11 +343,11 @@ fn generated_console_and_ninedoor_faults_select_exact_service_units() {
     assert_ne!(ninedoor_config.fault_badge, console_config.fault_badge);
     assert_ne!(ninedoor_config.timeout_badge, console_config.timeout_badge);
 
-    let source = include_str!("../src/hal/critical_tcb.rs");
+    let source = include_str!("../src/critical_tcb.rs");
     let classifier = source_section(
         source,
-        "fn is_generated_service_fault_badge(",
-        "fn prepare_target_service_fault(",
+        "pub(crate) fn is_generated_service_fault_badge(",
+        "/// Resolve one unique generated service owner",
     );
     for selected in [
         "badge == ninedoor.fault_badge",

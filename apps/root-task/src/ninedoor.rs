@@ -979,6 +979,33 @@ impl NineDoorBridge {
         Ok(turn)
     }
 
+    /// Side-effect-free local recovery state for retained passive admission.
+    ///
+    /// Root checks the critical fault mailbox separately. This covers a local
+    /// transport revoke and containment already begun on an earlier recovery
+    /// turn so neither can be hidden by a retained command's priority.
+    #[cfg(all(target_arch = "aarch64", target_os = "none", sel4_config_kernel_mcs))]
+    pub(crate) fn target_service_recovery_pending(&self) -> bool {
+        self.namespace_service.state() == TransportState::Revoked
+            || self
+                .target_service
+                .as_ref()
+                .is_some_and(NineDoorServiceRuntime::containment_active)
+            || self.pending_containment_diagnostic().is_some()
+    }
+
+    /// Whether one material NineDoor containment unit can advance now.
+    /// Retained terminal diagnostics intentionally stay out of this predicate:
+    /// they continue to fence passive admission but require an ordinary
+    /// bounded output turn to publish and commit them.
+    #[cfg(all(target_arch = "aarch64", target_os = "none", sel4_config_kernel_mcs))]
+    pub(crate) fn target_service_containment_pending(&self) -> bool {
+        self.target_service.as_ref().is_some_and(|runtime| {
+            self.namespace_service.state() == TransportState::Revoked
+                || runtime.containment_active()
+        })
+    }
+
     /// Peek the oldest retained containment record without consuming it.
     #[must_use]
     pub(crate) fn pending_containment_diagnostic(&self) -> Option<NineDoorContainmentDiagnostic> {

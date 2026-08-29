@@ -1498,14 +1498,22 @@ command, wrong-task, and foreign high-domain observations, and leaves classic
 length-first behavior unchanged. Physical-Pi serial, local-seat, and TCP tests
 must prove raw input, echo, parsing, and root-owned diagnostics remain live
 even when passive dispatch admission is denied. Only a parsed command that may
-enter passive NineDoor samples `SchedContext_Consumed`; samples accumulate over
-a conservative generated-period window and admit only strictly below the
-checked `budget_us - wcet_us` limit of 250 us, leaving the complete 2,500 us
-root WCET. A blocked passive command returns one typed refusal without entering
-NineDoor; expiry carries the next sample into the fresh window; invalid
-profile, timer, or syscall evidence latches fail closed with one bounded
-marker. A `Closed` result at
-`CallArm`, `Call`, or recovered fault/timeout is terminal generation evidence,
+enter passive NineDoor samples `SchedContext_Consumed`: retain the exact parsed
+command and authority identity after one baseline/reset sample, enter exactly
+one selected periodic MCS Yield boundary, then on the first resumed activation
+refresh policy time and decide from one fresh sample. Only a value strictly
+below `budget_us - wcet_us`, currently 250 us, admits the command and leaves the
+complete 2,500 us root WCET; equality or excess emits one typed refusal and
+terminates without retry. Newly published isolated-service recovery, reboot,
+containment, quarantine, connection/session drift, invalid profile, backwards
+or missing timer evidence, and syscall failure must cancel or latch fail closed
+before dispatch, without projecting a response into a replacement connection.
+Focused tests must prove no decision sample before the yield marker, exact
+one-command/one-dispatch retention, strict equality refusal without retry,
+fresh policy time, fault-before-dispatch cancellation, authority cancellation,
+and continued raw serial/local-seat/TCP diagnostic liveness before retention.
+A `Closed` result at `CallArm`, `Call`, or recovered fault/timeout is terminal
+generation evidence,
 must preserve its exact stage through containment, and cannot reset or retry a
 `REPLIED` recovery lane. Public ATTACH busy behavior remains unchanged.
 Deterministic guards must include normal sequential passive calls, terminal
