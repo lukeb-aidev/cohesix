@@ -537,7 +537,7 @@ def _generated_record(target: str) -> dict[str, object]:
                     "execution": "active",
                     "admitted": True,
                     "critical_reserve": True,
-                    "budget_us": 5_500 if target == "qemu" else 2_750,
+                    "budget_us": 9_000 if target == "qemu" else 5_500,
                     "period_us": 10_000,
                     "max_refills": 2,
                     "timeout_policy": "natural-postpone",
@@ -2735,8 +2735,8 @@ def test_root_and_console_natural_postpone_are_source_and_generated_contracts() 
         ),
         (
             "configs/root_task_pi4_uboot_aarch64.toml",
-            2_750,
-            "m26e-pi4-root-adjacent-refill-natural-postpone-candidate-v24",
+            5_500,
+            "m26e-pi4-root-cross-core-console-parallel-candidate-v25",
         ),
     ):
         manifest = tomllib.loads((ROOT / relative).read_text(encoding="utf-8"))

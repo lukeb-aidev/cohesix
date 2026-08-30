@@ -2441,7 +2441,10 @@ enum GenetDirectMcsQuantumRoute {
 
 const GENET_DIRECT_MCS_BUDGET_US: u32 = 3_000;
 const GENET_DIRECT_MCS_PERIOD_US: u32 = 10_000;
-const GENET_DIRECT_MCS_MAX_REFILLS: u8 = 2;
+// Direct GENET can alternate IRQ, RX, peer, and TX edges inside one admitted
+// period. Eight refills preserve those bounded sporadic edges without changing
+// the 3 ms/10 ms execution authority; any other generated depth fails closed.
+const GENET_DIRECT_MCS_MAX_REFILLS: u8 = 8;
 const GENET_DIRECT_MCS_GUARD_US: u32 = GENET_DIRECT_MCS_BUDGET_US / 2;
 const GENET_DIRECT_MCS_SLICE_WCET_US: u32 = 800;
 const GENET_DIRECT_MCS_QUANTUM_CAP: u8 = 16;
@@ -79100,15 +79103,22 @@ mod tests {
     fn direct_genet_dense_mcs_contract_is_exact() {
         let descriptor = direct_genet_descriptor_for_test();
         assert!(genet_direct_mcs_descriptor_valid(descriptor));
+        assert_eq!(descriptor.max_refills, 8);
+        assert_eq!(GENET_DIRECT_MCS_MAX_REFILLS, 8);
         let mut wrong_budget = descriptor;
         wrong_budget.budget_us -= 1;
         assert!(!genet_direct_mcs_descriptor_valid(wrong_budget));
         let mut wrong_period = descriptor;
         wrong_period.period_us += 1;
         assert!(!genet_direct_mcs_descriptor_valid(wrong_period));
-        let mut wrong_refills = descriptor;
-        wrong_refills.max_refills = 3;
-        assert!(!genet_direct_mcs_descriptor_valid(wrong_refills));
+        for stale_or_drifted_refills in [2, 7, 9] {
+            let mut wrong_refills = descriptor;
+            wrong_refills.max_refills = stale_or_drifted_refills;
+            assert!(
+                !genet_direct_mcs_descriptor_valid(wrong_refills),
+                "direct GENET must reject max_refills={stale_or_drifted_refills}",
+            );
+        }
         assert_eq!(GENET_DIRECT_MCS_SLICE_WCET_US, 800);
         assert!(
             GENET_DIRECT_MCS_GUARD_US + GENET_DIRECT_MCS_SLICE_WCET_US < GENET_DIRECT_MCS_BUDGET_US
@@ -82699,13 +82709,18 @@ mod tests {
             HOT_PATH_PCIE_ROOT => (16, 2, 400, 0x26e2_0006, 0x26ed_0011),
             _ => (10, 1, 500, 0x26e2_0000, 0x26ed_000b),
         };
+        let max_refills = if hot_path == HOT_PATH_GENET_NIC {
+            GENET_DIRECT_MCS_MAX_REFILLS
+        } else {
+            2
+        };
         descriptor
             .with_mcs_scheduler(
                 task_key,
                 slot,
                 8,
                 core,
-                2,
+                max_refills,
                 core,
                 budget,
                 10_000,

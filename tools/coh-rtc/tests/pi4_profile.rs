@@ -292,11 +292,16 @@ fn pi4_uboot_profile_emits_network_policy() {
     assert_eq!(root["core"], 0);
     assert_eq!(root["priority"], 200);
     assert_eq!(root["mcp"], 200);
-    assert_eq!(root["budget_us"], 2_750);
+    assert_eq!(root["budget_us"], 5_500);
     assert_eq!(root["period_us"], 10_000);
     assert_eq!(root["wcet_us"], 2_500);
-    assert_eq!(root["response_time_us"], 8_100);
-    assert_eq!(console["core"], 0);
+    assert_eq!(root["response_time_us"], 5_100);
+    assert_eq!(
+        root["wcet_provenance"],
+        "m26e-pi4-root-cross-core-console-parallel-candidate-v25"
+    );
+    assert_eq!(console["core"], 2);
+    assert_eq!(console["sched_control_core"], 2);
     assert_eq!(console["priority"], 200);
     assert_eq!(console["mcp"], 200);
     assert_eq!(console["priority"], root["priority"]);
@@ -306,11 +311,18 @@ fn pi4_uboot_profile_emits_network_policy() {
     );
     assert_eq!(console["budget_us"], 3_000);
     assert_eq!(console["period_us"], 10_000);
+    assert_eq!(console["max_refills"], 8);
     assert_eq!(console["wcet_us"], 3_000);
-    assert_eq!(console["response_time_us"], 8_100);
+    assert_eq!(console["response_time_us"], 3_000);
+    assert_eq!(
+        console["wcet_provenance"],
+        "m26e-pi4-console-cross-core-signal-only-candidate-v19"
+    );
     assert_eq!(manifest["console_network_service"]["abi_version"], 5);
     assert_eq!(manifest["console_network_service"]["priority"], 200);
     assert_eq!(manifest["console_network_service"]["mcp"], 200);
+    assert_eq!(manifest["console_network_service"]["max_refills"], 8);
+    assert_eq!(manifest["console_network_service"]["core"], 2);
     assert_eq!(console_objects["frames"], 104);
     assert_eq!(console_objects["cspace_slots"], 161);
     assert_eq!(admission["fixed_objects"]["frames"], 4_078);
@@ -322,7 +334,7 @@ fn pi4_uboot_profile_emits_network_policy() {
     assert_eq!(genet["sched_control_core"], 1);
     assert_eq!(genet["budget_us"], 3_000);
     assert_eq!(genet["period_us"], 10_000);
-    assert_eq!(genet["max_refills"], 2);
+    assert_eq!(genet["max_refills"], 8);
     assert_eq!(genet["consumed_time_evidence"], true);
     assert_eq!(genet["timeout_policy"], "natural-postpone");
     assert_eq!(genet["priority"], 160);
@@ -338,7 +350,7 @@ fn pi4_uboot_profile_emits_network_policy() {
         .filter(|task| task["core"] == 3)
         .map(|task| task["budget_us"].as_u64().expect("core-3 budget"))
         .sum();
-    assert_eq!(core_one_demand, 6_250);
+    assert_eq!(core_one_demand, 8_250);
     assert_eq!(core_three_demand, 8_000);
     let core_zero_demand: u64 = temporal_tasks
         .iter()
@@ -351,7 +363,7 @@ fn pi4_uboot_profile_emits_network_policy() {
         .iter()
         .find(|entry| entry["core"] == 0)
         .expect("core-0 admission");
-    assert_eq!(core_zero_demand, 9_000);
+    assert_eq!(core_zero_demand, 8_750);
     assert_eq!(
         core_zero_admission["capacity_us"]
             .as_u64()
@@ -366,13 +378,19 @@ fn pi4_uboot_profile_emits_network_policy() {
     assert_eq!(hdmi["budget_us"], 2_000);
     assert_eq!(hdmi["period_us"], 10_000);
     assert_eq!(hdmi["wcet_us"], 1_800);
-    assert_eq!(hdmi["response_time_us"], 2_100);
+    assert_eq!(hdmi["core"], 1);
+    assert_eq!(hdmi["sched_control_core"], 1);
+    assert_eq!(hdmi["response_time_us"], 5_200);
     assert_eq!(
         hdmi["wcet_provenance"],
         "m26e-pi4-hdmi-write-only-candidate-v1"
     );
     assert_eq!(gpu_executor["budget_us"], 5_000);
-    assert_eq!(gpu_executor["response_time_us"], 7_100);
+    assert_eq!(gpu_executor["response_time_us"], 8_300);
+    let pcie = temporal_task("driver-pcie");
+    assert_eq!(pcie["core"], 2);
+    assert_eq!(pcie["sched_control_core"], 2);
+    assert_eq!(pcie["response_time_us"], 3_300);
     let core_two_demand: u64 = temporal_tasks
         .iter()
         .filter(|task| task["core"] == 2)
@@ -384,7 +402,7 @@ fn pi4_uboot_profile_emits_network_policy() {
         .iter()
         .find(|entry| entry["core"] == 2)
         .expect("core-2 admission");
-    assert_eq!(core_two_demand, 7_400);
+    assert_eq!(core_two_demand, 8_400);
     assert_eq!(
         core_two_admission["capacity_us"]
             .as_u64()

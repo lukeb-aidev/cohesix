@@ -144,7 +144,7 @@ def _driver_task_boot_affinity_lines() -> list[str]:
     return [
         "DRIVER_TASK_BOOT contract=serial role=serial started=yes affinity_core=1",
         "DRIVER_TASK_BOOT contract=usb-local-seat role=usb started=yes affinity_core=1",
-        "DRIVER_TASK_BOOT contract=hdmi-text role=display started=yes affinity_core=2",
+        "DRIVER_TASK_BOOT contract=hdmi-text role=display started=yes affinity_core=1",
         "DRIVER_TASK_BOOT contract=pcie-root role=pcie started=yes affinity_core=2",
         "DRIVER_TASK_BOOT contract=sdio-host role=sdio started=yes affinity_core=3",
         "DRIVER_TASK_BOOT contract=bcmgenet-v5 role=net started=yes affinity_core=1",
@@ -353,7 +353,7 @@ def _strong_wired_driver_task_proof_lines() -> list[str]:
         *_timer_arch_counter_lines(),
         "DRIVER_TASK_BOOT contract=serial role=serial started=yes affinity_core=1",
         "DRIVER_TASK_BOOT contract=usb-local-seat role=usb started=yes affinity_core=1",
-        "DRIVER_TASK_BOOT contract=hdmi-text role=display started=yes affinity_core=2",
+        "DRIVER_TASK_BOOT contract=hdmi-text role=display started=yes affinity_core=1",
         "DRIVER_TASK_BOOT contract=pcie-root role=pcie started=yes affinity_core=2",
         "DRIVER_TASK_BOOT contract=bcmgenet-v5 role=net started=yes affinity_core=1",
         "DRIVER_TASK_SUBSTRATE active=yes profile=pi4-uboot-aarch64 "

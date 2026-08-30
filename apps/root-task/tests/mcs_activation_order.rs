@@ -636,8 +636,8 @@ fn root_control_natural_postpone_keeps_exact_target_budgets_and_fault_routes() {
         ),
         (
             pi4,
-            2_750,
-            "m26e-pi4-root-adjacent-refill-natural-postpone-candidate-v24",
+            5_500,
+            "m26e-pi4-root-cross-core-console-parallel-candidate-v25",
         ),
     ] {
         let root = root_control_section(manifest);
@@ -692,6 +692,64 @@ fn root_control_natural_postpone_keeps_exact_target_budgets_and_fault_routes() {
 }
 
 #[test]
+fn pi_console_network_uses_exact_cross_core_signal_only_topology() {
+    fn task_section<'a>(manifest: &'a str, task_id: &str) -> &'a str {
+        let marker = format!("[[temporal_authority.tasks]]\nid = \"{task_id}\"");
+        let start = manifest.find(&marker).expect("temporal task record");
+        let tail = &manifest[start..];
+        let end = tail[marker.len()..]
+            .find("\n[")
+            .map_or(tail.len(), |offset| marker.len() + offset);
+        &tail[..end]
+    }
+
+    let manifest = include_str!("../../../configs/root_task_pi4_uboot_aarch64.toml");
+    for (task_id, exact_lines) in [
+        (
+            "root-control",
+            ["core = 0", "budget_us = 5500", "response_time_us = 5100"],
+        ),
+        (
+            "console-network-service",
+            ["core = 2", "budget_us = 3000", "response_time_us = 3000"],
+        ),
+        (
+            "driver-hdmi",
+            ["core = 1", "budget_us = 2000", "response_time_us = 5200"],
+        ),
+        (
+            "driver-pcie",
+            ["core = 2", "budget_us = 400", "response_time_us = 3300"],
+        ),
+    ] {
+        let task = task_section(manifest, task_id);
+        for exact in exact_lines {
+            assert_eq!(
+                task.lines().filter(|line| *line == exact).count(),
+                1,
+                "Pi topology task {task_id} must retain exact line: {exact}",
+            );
+        }
+    }
+    assert!(manifest.contains("hdmi-text = 1"));
+    assert!(manifest.contains("pcie-root = 2"));
+
+    let hal = include_str!("../src/hal/console_network.rs");
+    let signal_start = hal
+        .find("fn signal_committed_child_work(")
+        .expect("console child signal path");
+    let signal_end = hal[signal_start..]
+        .find("\n    /// Return the retired same-core YieldTo accounting")
+        .map(|offset| signal_start + offset)
+        .expect("bounded console child signal path");
+    let signal = &hal[signal_start..signal_end];
+    assert!(signal.contains("fence(Ordering::Release)"));
+    assert!(signal.contains("sel4::signal_unchecked(wake_cap)"));
+    assert!(!signal.contains("yield_to_sched_context"));
+    assert!(!signal.contains("sched_context_consumed"));
+}
+
+#[test]
 fn pi_genet_uses_the_bounded_core_one_latency_candidate() {
     fn task_section<'a>(manifest: &'a str, task_id: &str) -> &'a str {
         let marker = format!("[[temporal_authority.tasks]]\nid = \"{task_id}\"");
@@ -711,7 +769,7 @@ fn pi_genet_uses_the_bounded_core_one_latency_candidate() {
         "budget_us = 3000",
         "period_us = 10000",
         "response_time_us = 3400",
-        "max_refills = 2",
+        "max_refills = 8",
         "priority = 160",
         "wcet_us = 800",
     ] {
@@ -1237,13 +1295,16 @@ fn pi_productive_successor_rechecks_identity_fences_and_time_at_the_final_cut() 
     let take = helper
         .find("pump.take_pi_root_control_productive_continuation_identity()")
         .unwrap();
+    let completion_counter = helper
+        .find("let completed_at_ticks = monotonic_ticks();")
+        .unwrap();
     let record = helper
-        .find("window.record_completed_quantum(identity)")
+        .find("window.record_completed_quantum_at(identity, completed_at_ticks)")
         .unwrap();
     assert!(frequency < reserve);
     assert!(reserve < identity && identity < fence);
     assert!(fence < counter && counter < admission && admission < poll);
-    assert!(poll < take && take < record);
+    assert!(poll < take && take < completion_counter && completion_counter < record);
     assert!(helper.contains("feature = \"release-pi4\""));
     assert!(helper.contains("target_arch = \"aarch64\""));
     assert!(helper.contains("sel4_config_kernel_mcs"));

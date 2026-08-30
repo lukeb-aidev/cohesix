@@ -10800,6 +10800,85 @@ Changes:
     QEMU root-MCS canary are required before a clean candidate image. A fresh
     dual-mode Pi run remains the only authority for boot speed, physical
     console behavior, sustained latency, pressure, and August parity.
+  - exact-4be QEMU-shaped Pi scheduling and bounded active-response candidate —
+    exact source `4be7bad98b3187dbd6be4b0d5a12c0d48f0f5628`, build ID
+    `a9fcd26d0e559a1a85fc69e306cd9c6e6baafb08f5f4523acbc6235fa92a95dc`,
+    image ID
+    `3df7f9e4a401651c888f2b35c31d99ae2e7a502794f8e35e05748abac02d3797`,
+    and image SHA-256
+    `fee4f0201bb52739802ca6d1bf892894e089282298a004cacf896f731b0e7ebb`
+    prove both physical backends are functionally healthy while rejecting
+    August latency parity. WiFi reaches root at 8.117 seconds, reaches Gate 8
+    at 37.855 seconds after 3,884 supervisor turns, completes DORA in
+    204.983 ms, passes generation-bound `nettest`, three first-attempt focused
+    `.coh` scripts, medium/high REST pressure, and 64/64 raw requests without
+    loss, retry, quarantine, or driver fault. Its raw result is only
+    4.362 requests/s with 210.987-ms median and 263.210-ms p95. GENET completes
+    DORA, 8/8 ICMP at 0.812-ms average, `nettest`, the same three scripts,
+    medium/high pressure, and 64/64 raw requests with conserved direct rings
+    and no poison, drop, quarantine, or fault. Its raw result is only
+    22.989 requests/s with 41.965-ms median and 48.847-ms p95. The accepted
+    August comparators remain 27.089 requests/s and 50.457-ms p95 for WiFi,
+    and 180.269 requests/s and 1.677-ms p95 for GENET. Healthy DORA, ICMP,
+    DMA/IRQ/rings, TCP ingress, queues, and conservation place the shared
+    failure after physical ingress, in the selected-MCS root/isolated-console
+    response cadence. Direct GENET admits only 62 of 271 productive
+    continuations because the old 2,750-us root budget leaves a strict
+    250-us `budget - WCET` cut; selected MCS Yield charges the remaining head
+    refill, producing repeated period-scale stairs that accepted non-MCS
+    August scheduling did not pay.
+
+    Adopt the bounded QEMU topology principle without copying QEMU numerics or
+    weakening Pi admission. Pi root-control remains on core 0, keeps
+    `max_refills=2`, priority/MCP 200/200, period 10,000 us, and exact
+    2,500-us WCET, but selects a compiler-admitted 5,500-us budget and 5,100-us
+    response bound. Move the isolated console-network service from core 0 to
+    core 2 with its unchanged 3,000/10,000-us budget/period, priority/MCP,
+    WCET, authority, and queues, and select eight refill records in its existing
+    8-bit SC. Move HDMI from core 2 to core 1 without changing its
+    2,000/10,000-us reservation or priority. Keep PCIe on core 2, GENET on
+    core 1, CYW43/SDIO on core 3, and both passive-Worker executor lanes on
+    cores 2 and 3. The compiler must derive exact active demand
+    `8,750/8,250/8,400/8,000 us` on cores 0--3 against each 9,000-us usable
+    capacity, response bounds root/console/HDMI/PCIe/GPU executor
+    `5,100/3,000/5,200/3,300/8,300 us`, and root's strict productive reserve
+    `budget - WCET = 3,000 us`. Adjacent drift in budget, core, response,
+    reserve, refill, sched-control core, or mirrored console configuration
+    fails closed. QEMU retains its existing 9,000-us root, core-2 lower-priority
+    console child, max-two-refill selections, affinities, and response bounds.
+
+    Direct GENET becomes cross-core signal-only: root commits the one-hot wake
+    but performs no `SchedContext_YieldTo`, pre-drain, child-consumed credit, or
+    same-core accounting. Same-core and cross-core authority are distinct
+    generated states; a missing or failed same-core Yield can never be
+    reinterpreted as signal-only progress. An exact authenticated
+    generation/connection `OutputDrained` transition may open one unslid
+    root-local active response tail for at most 8 ms and at most 64 complete
+    physical-rotor quanta. The scheduling context remains the hard CPU bound,
+    and every quantum rechecks passive admission, physical operator work,
+    response priority, recovery, containment, quarantine, reboot, handoff,
+    local fault, generation, connection, phase, counter frequency, wall expiry,
+    and the shared cap. Mediated WiFi remains signal-only and gains no direct
+    GENET authority; its CYW43/SDIO SCs and physical protocol stay unchanged.
+    GENET and console-network each select eight refill records only to preserve
+    bounded fragmented wake progress; no device budget, period, WCET, packet
+    bound, retry, or fallback is enlarged.
+
+    Add root-local scalar telemetry for active-tail opened/admitted/closed and
+    maximum wall time plus distinct same-core versus cross-core productive
+    authority; change no shared child ABI, public command grammar, TCP framing,
+    REST schema, or benchmark report. The complete host-tool suite,
+    `tools/cohesix-py`, generated-profile consumers, `.coh` workloads,
+    benchmark workloads/arithmetic, and report schemas remain compatible and
+    require no consumer change. The internal Pi hardware-evidence normalizer
+    and its proof fixtures advance only their exact HDMI affinity oracle from
+    core 2 to core 1; this changes no public evidence schema. Focused
+    source/profile tests, exact Pi target
+    compilation, generated/Test Plan checks, and a QEMU root-MCS canary can
+    reject this candidate. A clean image or flash cannot prove boot speed,
+    operator quality, WiFi/GENET latency, or August parity; the next exact-image
+    dual-mode boot must rerun diagnostics, three scripts, raw 64, medium/high
+    pressure, and USB/HDMI/serial checks before any performance claim.
   - platform consistency — select the same v5 shared contract, including the
     v4-introduced bounded command batch, complete 256-Worker population, two
     passive-Worker executor-lane architecture, and passive-service locality
@@ -10807,7 +10886,7 @@ Changes:
     for its additional driver inventory and future capability headroom; QEMU
     optimization and static Pi composition require no Pi hardware interaction.
   - Pi build compatibility — refresh the repository-managed `pi4_diagnostic` tree from the freshly built SMP+MCS profile, require exact current-profile validation and deterministic immutable-tree composition, use the selected `CARGO_TARGET_DIR` for every Pi runtime payload, and compile direct VirtIO DMA containment only for QEMU/VirtIO profiles. Bind the pre-root-task Pi driver-runtime CPIO into image provenance and copy that exact archive into the SD stage, so `--skip-build` cannot repackage a later QEMU-feature child from the shared Cargo target directory. Retain the exact selected Pi resolved manifest beside the staged image before cleanup restores canonical QEMU generated outputs, and bind the stage-only runtime/DMA proof to that retained file and digest.
-  - compatibility — preserve public AUTH/framing/command/ACK/ERR/END behavior, one-slot publication ACK semantics, root policy authority, MCS admission, evidence, and fault containment; advance the selected manifest to schema 1.15 only for the generated internal Worker execution contract and transport correlation identity; update compiler, generated truth, host/target NineDoor, focused tests, host tools, Python library, SwarmUI projections, and benchmark compatibility review together. Full host-tool and `tools/cohesix-py` review preserves the public grammar, generated target-profile contract, and host dependencies. It requires bounded host-only compatibility repairs: `cohsh` TCP-only builds no longer compile in the in-process NineDoor/mock/trace implementation, in-process integration tests declare that required feature explicitly, `cas-tool` and SwarmUI integration tests resolve their Cargo-provided binaries at runtime so all-target linting remains portable, and the Python target validator adopts the generated Pi 1/127/128 population. The evidence and benchmark tools additionally derive the complete 265-task QEMU and 272-task Pi temporal seals from generated truth, keep exactly one detailed live exemplar for each executable role, admit target-neutral fresh-Pi proof, and compare provenance-compatible QEMU/Pi throughput and errors without turning QEMU latency into a physical-network gate. Hive Gateway's `/v1/meta/status` projection adds required normalized configured-backend `target_host` and `target_port` fields so fresh-Pi evidence binds the live gateway to the exact Pi console endpoint; it does not expose the REST bind endpoint or create target proof for host-model mode. `coh`, `cohsh`, `coh-status`, SwarmUI, `gpu-bridge-host`, `host-ticket-agent`, `host-sidecar-bridge`, `sidecar-bus`, `cas-tool`, every `.coh` workload, and `tools/cohesix-py` tolerate or ignore those additive status fields and require no behavior or schema change. Existing QEMU results do not claim Pi performance, and the enlarged Pi declaration requires fresh exact-image physical evidence. This task performs no Pi hardware interaction.
+  - compatibility — preserve public AUTH/framing/command/ACK/ERR/END behavior, one-slot publication ACK semantics, root policy authority, MCS admission, evidence, and fault containment; advance the selected manifest to schema 1.15 only for the generated internal Worker execution contract and transport correlation identity; update compiler, generated truth, host/target NineDoor, focused tests, host tools, Python library, SwarmUI projections, and benchmark compatibility review together. Full host-tool and `tools/cohesix-py` review preserves the public grammar, generated target-profile contract, and host dependencies. It requires bounded host-only compatibility repairs: `cohsh` TCP-only builds no longer compile in the in-process NineDoor/mock/trace implementation, in-process integration tests declare that required feature explicitly, `cas-tool` and SwarmUI integration tests resolve their Cargo-provided binaries at runtime so all-target linting remains portable, and the Python target validator adopts the generated Pi 1/127/128 population. The evidence and benchmark tools additionally derive the complete 265-task QEMU and 272-task Pi temporal seals from generated truth, keep exactly one detailed live exemplar for each executable role, admit target-neutral fresh-Pi proof, and compare provenance-compatible QEMU/Pi throughput and errors without turning QEMU latency into a physical-network gate. Hive Gateway's `/v1/meta/status` projection adds required normalized configured-backend `target_host` and `target_port` fields so fresh-Pi evidence binds the live gateway to the exact Pi console endpoint; it does not expose the REST bind endpoint or create target proof for host-model mode. `coh`, `cohsh`, `coh-status`, SwarmUI, `gpu-bridge-host`, `host-ticket-agent`, `host-sidecar-bridge`, `sidecar-bus`, `cas-tool`, every `.coh` workload, and `tools/cohesix-py` tolerate or ignore those additive status fields and require no behavior or schema change. Existing QEMU results do not claim Pi performance, and the enlarged Pi declaration requires fresh exact-image physical evidence. The original manifest/build integration performed no Pi hardware interaction; later exact-image bullets bind their own fresh Pi evidence and still require a new exact-image boot after each source candidate.
 Commands:
   - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib pi_root_control_ -- --test-threads=1
   - cargo test -p root-task --test mcs_activation_order -- --test-threads=1
@@ -10817,6 +10896,7 @@ Commands:
   - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib isolated_self_test -- --test-threads=1
   - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib linked_cyw43_ -- --test-threads=1
   - cargo test -p pi4-driver-runtime --lib direct_genet_ -- --test-threads=1
+  - python3 -m pytest -q tests/test_pi4_trace_normalize.py tests/test_pi4_gate_proof.py
   - cargo test -p console-network-abi
   - cargo test -p console-network-runtime
   - cargo test -p root-task --no-default-features --test console_network_service -- --test-threads=1
@@ -10842,7 +10922,7 @@ Commands:
   - scripts/pi4-image-build.sh --manifest configs/root_task_pi4_uboot_aarch64.toml --clean
   - scripts/cohesix-build-run.sh --no-run --cargo-target aarch64-unknown-none
   - scripts/m26e_qemu_pressure.sh with the canonical medium and high executable-Worker REST profiles on macOS, followed by equivalent Linux/KVM runs for an accepted Mac candidate
-Checks: one child publication admits at most eight already-authenticated commands; original timestamps, per-key FIFO order, connection identity, and queue bounds remain exact; lifecycle events never coalesce; peer-assisted self-test observes decisive state despite ordinary activity, uses one fresh per-connection epoch, and cannot combine replacement or post-retirement traffic; Worker selection is fair; every internal quantum and active window retains hard bounds; the CYW43 outer cap counts only active Network service while its real-wall operator checkpoint and 192-turn cap remain independent; a quiescent direct-GENET Block closes only its software episode while continuous durable work and endpoint freshness retain their guards; the QEMU and Pi 256-Worker populations each consume only the two generated executor-lane utilization reservations; the Pi fixed-plus-maximum-plus-reserve inventory fits its exact 16-bit root CNode with 46,028 slots left; each passive Worker has exactly one allowlisted donor lane and generation-scoped Reply path; shared mappings are immutable and role/image exact while all writable mappings remain private; fault/timeout injection releases the donor once before complete containment; the passive NineDoor service is compiler-rejected unless co-located with its sole root-control donor; the exact selected seL4-16 AArch64 MCS ABI admits eight but rejects eleven refills in an 8-bit SC; direct GENET compiler/profile validation rejects any `wcet_us` other than 800, handoff/runtime validation rejects drift from exact max-two-refill `3,000/10,000 us`, each guarded slice admits at most one material packet operation, and continuous bidirectional pressure receives an exact 8/8 split inside the 16-slice window; diagnostic-v4 packet-slice high-water and dense-window reason fields round-trip and render without authority; nonforeground CYW43-to-SDIO copies pass both directions and every alignment without crossing either admitted arena or changing foreground trace/overlay authority; the exact authenticated response rotation retains activation only through `Network -> Serial -> LocalSeat -> Dispatch -> Network` and rechecks the loop-top guard before another Network unit; non-VirtIO profiles cannot select direct VirtIO DMA containment and reject an invalid cursor; the retained Pi manifest still hashes to the stage proof after canonical QEMU cleanup; the provenance-bound Pi driver-runtime CPIO rejects tampering and remains byte-identical in a skip-build stage even after later QEMU children occupy the Cargo target directory; schedule depth returns after each completed benchmark lifecycle; terminal execution journals compact without weakening exactly-once recovery; preemption evidence turns over without refusing valid lease control and retains cumulative accounting; public output is byte-compatible apart from documented additive diagnostics; no unbounded loop, queue, retry, donation chain, or authority exists; medium/high QEMU pressure improves materially without unexpected fault, MCS timeout, queue runaway, or operator-liveness regression on either host. Static Pi profile and stage-only PASS remain non-hardware evidence.
+Checks: one child publication admits at most eight already-authenticated commands; original timestamps, per-key FIFO order, connection identity, and queue bounds remain exact; lifecycle events never coalesce; peer-assisted self-test observes decisive state despite ordinary activity, uses one fresh per-connection epoch, and cannot combine replacement or post-retirement traffic; Worker selection is fair; every internal quantum and active window retains hard bounds; the CYW43 outer cap counts only active Network service while its real-wall operator checkpoint and 192-turn cap remain independent; a quiescent direct-GENET Block closes only its software episode while continuous durable work and endpoint freshness retain their guards; the QEMU and Pi 256-Worker populations each consume only the two generated executor-lane utilization reservations; the Pi fixed-plus-maximum-plus-reserve inventory fits its exact 16-bit root CNode with 46,028 slots left; each passive Worker has exactly one allowlisted donor lane and generation-scoped Reply path; shared mappings are immutable and role/image exact while all writable mappings remain private; fault/timeout injection releases the donor once before complete containment; the passive NineDoor service is compiler-rejected unless co-located with its sole root-control donor; the exact selected seL4-16 AArch64 MCS ABI admits eight but rejects eleven refills in an 8-bit SC; direct GENET compiler/profile validation rejects any `wcet_us` other than 800, handoff/runtime validation rejects drift from exact max-eight-refill `3,000/10,000 us`, each guarded slice admits at most one material packet operation, and continuous bidirectional pressure receives an exact 8/8 split inside the 16-slice window; diagnostic-v4 packet-slice high-water and dense-window reason fields round-trip and render without authority; nonforeground CYW43-to-SDIO copies pass both directions and every alignment without crossing either admitted arena or changing foreground trace/overlay authority; the exact authenticated response rotation retains activation only through `Network -> Serial -> LocalSeat -> Dispatch -> Network` and rechecks the loop-top guard before another Network unit; non-VirtIO profiles cannot select direct VirtIO DMA containment and reject an invalid cursor; the retained Pi manifest still hashes to the stage proof after canonical QEMU cleanup; the provenance-bound Pi driver-runtime CPIO rejects tampering and remains byte-identical in a skip-build stage even after later QEMU children occupy the Cargo target directory; schedule depth returns after each completed benchmark lifecycle; terminal execution journals compact without weakening exactly-once recovery; preemption evidence turns over without refusing valid lease control and retains cumulative accounting; public output is byte-compatible apart from documented additive diagnostics; no unbounded loop, queue, retry, donation chain, or authority exists; medium/high QEMU pressure improves materially without unexpected fault, MCS timeout, queue runaway, or operator-liveness regression on either host. Static Pi profile and stage-only PASS remain non-hardware evidence.
 Deliverables: ABI v5 bounded command quantum retaining the v4-introduced
 CommandBatch contract, two bounded Worker executor lanes, target-qualified QEMU
 and Pi 256-Worker populations, a 16-bit Pi root-CNode profile with deterministic

@@ -715,9 +715,9 @@ impl Manifest {
         if task.kind != TemporalTaskKind::Driver || task.execution != TemporalExecution::Active {
             bail!("Pi direct GENET requires driver-genet to be an active driver temporal task");
         }
-        if task.budget_us != 3_000 || task.period_us != 10_000 || task.max_refills != 2 {
+        if task.budget_us != 3_000 || task.period_us != 10_000 || task.max_refills != 8 {
             bail!(
-                "Pi direct GENET requires driver-genet budget_us=3000 period_us=10000 max_refills=2"
+                "Pi direct GENET requires driver-genet budget_us=3000 period_us=10000 max_refills=8"
             );
         }
         if !task.consumed_time_evidence || task.timeout_policy != TimeoutPolicy::NaturalPostpone {
@@ -1796,6 +1796,9 @@ impl Manifest {
             bail!("console_network_service object/SC inventory disagrees with temporal task console-network-service");
         }
         if self.profile_is_pi4_family() {
+            if task.max_refills != 8 {
+                bail!("Pi console-network requires max_refills=8");
+            }
             let root_control = self
                 .temporal_authority
                 .tasks
@@ -1803,19 +1806,46 @@ impl Manifest {
                 .find(|candidate| candidate.id == "root-control")
                 .ok_or_else(|| {
                     anyhow::anyhow!(
-                        "Pi console-network YieldTo requires temporal task root-control"
+                        "Pi console-network cross-core signal-only requires temporal task root-control"
                     )
                 })?;
+            if root_control.budget_us != 5_500
+                || root_control.period_us != 10_000
+                || root_control.max_refills != 2
+                || root_control.wcet_us != 2_500
+                || root_control.wcet_provenance
+                    != "m26e-pi4-root-cross-core-console-parallel-candidate-v25"
+                || task.budget_us != 3_000
+                || task.period_us != 10_000
+                || task.max_refills != 8
+                || task.wcet_us != 3_000
+                || task.wcet_provenance != "m26e-pi4-console-cross-core-signal-only-candidate-v19"
+            {
+                bail!(
+                    "Pi console-network cross-core signal-only requires exact root budget/period/refills/WCET 5500/10000/2/2500 and console budget/period/refills/WCET 3000/10000/8/3000"
+                );
+            }
+            if root_control.response_time_us != 5_100 || task.response_time_us != 3_000 {
+                bail!(
+                    "Pi console-network cross-core signal-only requires exact root/console response_time_us 5100/3000"
+                );
+            }
             if root_control.kind != TemporalTaskKind::RootControl
                 || root_control.execution != TemporalExecution::Active
-                || root_control.core != task.core
+                || root_control.core != 0
+                || task.core != 2
+                || root_control.core == task.core
                 || root_control.sched_control_core != root_control.core
                 || task.sched_control_core != task.core
                 || root_control.priority != task.priority
                 || root_control.mcp < task.priority
+                || root_control.priority != 200
+                || root_control.mcp != 200
+                || task.priority != 200
+                || task.mcp != 200
             {
                 bail!(
-                    "Pi console-network YieldTo requires active same-core root-control and console-network-service at equal priority with root-control MCP authority"
+                    "Pi console-network cross-core signal-only requires active root-control on core 0 and console-network-service on core 2 at equal priority with root-control MCP authority"
                 );
             }
         }
@@ -4353,9 +4383,9 @@ mod tests {
         );
 
         let timing_drifts = [
-            ("budget", 3_001, 10_000, 2),
-            ("period", 3_000, 9_999, 2),
-            ("refills", 3_000, 10_000, 3),
+            ("budget", 3_001, 10_000, 8),
+            ("period", 3_000, 9_999, 8),
+            ("refills", 3_000, 10_000, 7),
         ];
         for (label, budget_us, period_us, max_refills) in timing_drifts {
             let mut drift = manifest.clone();
@@ -4368,7 +4398,7 @@ mod tests {
                     .validate_pi4_direct_genet_temporal_contract()
                     .expect_err(label)
                     .to_string(),
-                "Pi direct GENET requires driver-genet budget_us=3000 period_us=10000 max_refills=2"
+                "Pi direct GENET requires driver-genet budget_us=3000 period_us=10000 max_refills=8"
             );
         }
 
@@ -4423,13 +4453,13 @@ mod tests {
             .expect("direct-GENET temporal invariant requires selected child resources");
 
         let mut full_validation = manifest;
-        pi4_driver_genet_task(&mut full_validation).max_refills = 3;
+        pi4_driver_genet_task(&mut full_validation).max_refills = 7;
         let error = full_validation
             .validate_with_base(Some(repo_root().as_path()))
             .expect_err("full manifest validation must invoke direct-GENET invariant");
         assert_eq!(
             error.to_string(),
-            "Pi direct GENET requires driver-genet budget_us=3000 period_us=10000 max_refills=2"
+            "Pi direct GENET requires driver-genet budget_us=3000 period_us=10000 max_refills=8"
         );
     }
 
@@ -4516,13 +4546,77 @@ mod tests {
     }
 
     #[test]
-    fn pi4_console_network_yield_to_contract_fails_closed_on_eligibility_drift() {
+    fn pi4_console_network_cross_core_signal_only_fails_closed_on_topology_drift() {
         let pi4_path = repo_root().join("configs/root_task_pi4_uboot_aarch64.toml");
         let qemu_path = repo_root().join("configs/root_task.toml");
 
         let qemu = load_manifest(&qemu_path).expect("load QEMU manifest");
         qemu.validate_console_network_service()
             .expect("QEMU retains its lower-priority non-YieldTo service");
+        let qemu_console_task = qemu
+            .temporal_authority
+            .tasks
+            .iter()
+            .find(|task| task.id == "console-network-service")
+            .expect("QEMU console-network temporal task");
+        assert_eq!(qemu_console_task.max_refills, 2);
+        assert_eq!(qemu.console_network_service.max_refills, 2);
+
+        let mut refill_drift = load_manifest(&pi4_path).expect("reload Pi 4 manifest");
+        refill_drift.console_network_service.max_refills = 7;
+        refill_drift
+            .temporal_authority
+            .tasks
+            .iter_mut()
+            .find(|task| task.id == "console-network-service")
+            .expect("console-network temporal task")
+            .max_refills = 7;
+        assert_eq!(
+            refill_drift
+                .validate_console_network_service()
+                .expect_err("Pi console-network refill drift must fail closed")
+                .to_string(),
+            "Pi console-network requires max_refills=8"
+        );
+
+        for task_id in ["root-control", "console-network-service"] {
+            let mut budget_drift = load_manifest(&pi4_path).expect("reload Pi 4 manifest");
+            budget_drift
+                .temporal_authority
+                .tasks
+                .iter_mut()
+                .find(|task| task.id == task_id)
+                .unwrap_or_else(|| panic!("temporal task {task_id}"))
+                .budget_us -= 1;
+            if task_id == "console-network-service" {
+                budget_drift.console_network_service.budget_us -= 1;
+            }
+            assert_eq!(
+                budget_drift
+                    .validate_console_network_service()
+                    .expect_err("Pi signal-only budget drift must fail closed")
+                    .to_string(),
+                "Pi console-network cross-core signal-only requires exact root budget/period/refills/WCET 5500/10000/2/2500 and console budget/period/refills/WCET 3000/10000/8/3000"
+            );
+        }
+
+        for task_id in ["root-control", "console-network-service"] {
+            let mut response_drift = load_manifest(&pi4_path).expect("reload Pi 4 manifest");
+            response_drift
+                .temporal_authority
+                .tasks
+                .iter_mut()
+                .find(|task| task.id == task_id)
+                .unwrap_or_else(|| panic!("temporal task {task_id}"))
+                .response_time_us += 1;
+            assert_eq!(
+                response_drift
+                    .validate_console_network_service()
+                    .expect_err("Pi signal-only response drift must fail closed")
+                    .to_string(),
+                "Pi console-network cross-core signal-only requires exact root/console response_time_us 5100/3000"
+            );
+        }
 
         let mut priority_drift = load_manifest(&pi4_path).expect("load Pi 4 manifest");
         priority_drift.console_network_service.priority = 199;
@@ -4535,27 +4629,46 @@ mod tests {
             .priority = 199;
         let error = priority_drift
             .validate_console_network_service()
-            .expect_err("a lower-priority Pi YieldTo target must fail closed");
+            .expect_err("a lower-priority Pi signal-only target must fail closed");
         assert!(
-            error.to_string().contains("active same-core root-control"),
+            error.to_string().contains("cross-core signal-only"),
             "unexpected error: {error}"
         );
 
-        let mut core_drift = load_manifest(&pi4_path).expect("reload Pi 4 manifest");
-        core_drift.console_network_service.core = 1;
-        let console_task = core_drift
+        for child_core in [0, 1, 3] {
+            let mut core_drift = load_manifest(&pi4_path).expect("reload Pi 4 manifest");
+            core_drift.console_network_service.core = child_core;
+            let console_task = core_drift
+                .temporal_authority
+                .tasks
+                .iter_mut()
+                .find(|task| task.id == "console-network-service")
+                .expect("console-network temporal task");
+            console_task.core = child_core;
+            console_task.sched_control_core = child_core;
+            let error = core_drift
+                .validate_console_network_service()
+                .expect_err("Pi console must remain on exact cross-core signal-only core 2");
+            assert!(
+                error.to_string().contains("cross-core signal-only"),
+                "unexpected error for child core {child_core}: {error}"
+            );
+        }
+
+        let mut root_core_drift = load_manifest(&pi4_path).expect("reload Pi 4 manifest");
+        let root_task = root_core_drift
             .temporal_authority
             .tasks
             .iter_mut()
-            .find(|task| task.id == "console-network-service")
-            .expect("console-network temporal task");
-        console_task.core = 1;
-        console_task.sched_control_core = 1;
-        let error = core_drift
+            .find(|task| task.id == "root-control")
+            .expect("root-control temporal task");
+        root_task.core = 1;
+        root_task.sched_control_core = 1;
+        let error = root_core_drift
             .validate_console_network_service()
-            .expect_err("a cross-core Pi YieldTo target must fail closed");
+            .expect_err("Pi root must remain on exact signal-only source core 0");
         assert!(
-            error.to_string().contains("active same-core root-control"),
+            error.to_string().contains("cross-core signal-only"),
             "unexpected error: {error}"
         );
 
@@ -4569,7 +4682,7 @@ mod tests {
             .mcp = 199;
         let error = mcp_drift
             .validate_console_network_service()
-            .expect_err("insufficient root MCP for Pi YieldTo must fail closed");
+            .expect_err("insufficient root MCP for Pi signal-only target must fail closed");
         assert!(
             error.to_string().contains("root-control MCP authority"),
             "unexpected error: {error}"

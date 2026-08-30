@@ -286,12 +286,12 @@ fn checked_in_profiles_compile_without_radio_sidecar_output() {
                 )
             } else {
                 (
-                    "m26e-pi4-root-adjacent-refill-natural-postpone-candidate-v24",
-                    2_750,
-                    8_100,
+                    "m26e-pi4-root-cross-core-console-parallel-candidate-v25",
+                    5_500,
+                    5_100,
                     200,
                     200,
-                    8_100,
+                    3_000,
                     54_000_000,
                     false,
                     true,
@@ -313,7 +313,11 @@ fn checked_in_profiles_compile_without_radio_sidecar_output() {
             );
             assert_eq!(
                 child["wcet_provenance"],
-                "m26e-qemu-console-received-progress-retention-candidate-v18",
+                if *profile == "configs/root_task.toml" {
+                    "m26e-qemu-console-received-progress-retention-candidate-v18"
+                } else {
+                    "m26e-pi4-console-cross-core-signal-only-candidate-v19"
+                },
                 "{profile}"
             );
             assert_eq!(child["timeout_policy"], "natural-postpone", "{profile}");

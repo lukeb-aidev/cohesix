@@ -511,8 +511,8 @@ where
         // recovery immediately before the final CNTVCT bracket. A fault that
         // crosses the outer snapshot therefore cancels and yields instead of
         // dispatching.
-        // Healthy no-fault material probes must not spend the 250-us margin
-        // measured from the exact Yield-return boundary.
+        // Healthy no-fault material probes must not spend the generated
+        // budget-minus-WCET margin measured from the exact Yield-return boundary.
         if !passive_recovery_preempted
             && pump.pi_root_control_passive_admission_pending()
             && pump.service_pi_root_control_passive_admission()
@@ -1093,15 +1093,18 @@ impl DeferredCyw43ActivationWindow {
     }
 }
 
-/// One physical-Pi ordinary root-control activation retained across exact
-/// productive GENET quanta.
+/// One physical-Pi root-control activation retained across exact productive
+/// GENET quanta and, after an authenticated response drain, a bounded active
+/// tail.
 ///
 /// This deliberately reuses the same generated `budget - WCET` cut as the
 /// deferred CYW43 supervisor. The window begins only at the CNTVCT value
 /// captured by `yield_now`, never slides on progress or preemption, and admits
-/// no new complete EventPump quantum at equality. The scheduling context
-/// remains the hard execution bound; the fixed quantum cap is independent of
-/// both time and progress.
+/// no new strict-reserve quantum at equality. A response drain may open one
+/// unslid eight-millisecond active tail so the next sequential TCP request can
+/// arrive without paying another whole selected-MCS Yield period. Every tail
+/// turn still runs the complete physical rotor, and both the scheduling
+/// context and fixed shared quantum cap remain independent hard bounds.
 #[cfg(all(
     any(
         test,
@@ -1121,6 +1124,8 @@ struct PiRootControlProductiveWindow {
     clock: DeferredCyw43ActivationClock,
     completed_quanta: u8,
     continuation: Option<crate::event::PiRootControlProductiveContinuation>,
+    active_hot_tail: Option<crate::event::PiRootControlProductiveContinuation>,
+    active_hot_tail_started_ticks: u64,
     credited_child_scaled: u128,
     last_effective_root_scaled: u128,
     last_reject_reason: u32,
@@ -1142,6 +1147,7 @@ struct PiRootControlProductiveWindow {
 ))]
 impl PiRootControlProductiveWindow {
     const MAX_COMPLETED_QUANTA: u8 = 64;
+    const ACTIVE_HOT_TAIL_US: u64 = 8_000;
     const REJECT_FENCE: u32 = 1 << 0;
     const REJECT_CAP: u32 = 1 << 1;
     const REJECT_CLOCK: u32 = 1 << 2;
@@ -1156,6 +1162,8 @@ impl PiRootControlProductiveWindow {
             clock: DeferredCyw43ActivationClock::Unstarted,
             completed_quanta: 0,
             continuation: None,
+            active_hot_tail: None,
+            active_hot_tail_started_ticks: 0,
             credited_child_scaled: 0,
             last_effective_root_scaled: 0,
             last_reject_reason: 0,
@@ -1174,6 +1182,8 @@ impl PiRootControlProductiveWindow {
     ) -> bool {
         self.completed_quanta = 0;
         self.continuation = None;
+        self.active_hot_tail = None;
+        self.active_hot_tail_started_ticks = 0;
         self.credited_child_scaled = 0;
         self.last_effective_root_scaled = 0;
         self.last_reject_reason = 0;
@@ -1262,9 +1272,10 @@ impl PiRootControlProductiveWindow {
         admitted
     }
 
-    fn record_completed_quantum(
+    fn record_completed_quantum_at(
         &mut self,
         continuation: crate::event::PiRootControlProductiveContinuation,
+        completed_at_ticks: u64,
     ) -> bool {
         if self
             .continuation
@@ -1273,6 +1284,8 @@ impl PiRootControlProductiveWindow {
             self.clock = DeferredCyw43ActivationClock::Invalid;
             self.completed_quanta = Self::MAX_COMPLETED_QUANTA;
             self.continuation = None;
+            self.active_hot_tail = None;
+            self.active_hot_tail_started_ticks = 0;
             self.last_reject_reason = Self::REJECT_TOKEN;
             return false;
         }
@@ -1281,6 +1294,8 @@ impl PiRootControlProductiveWindow {
                 self.clock = DeferredCyw43ActivationClock::Invalid;
                 self.completed_quanta = Self::MAX_COMPLETED_QUANTA;
                 self.continuation = None;
+                self.active_hot_tail = None;
+                self.active_hot_tail_started_ticks = 0;
                 self.last_reject_reason = Self::REJECT_CREDIT;
                 return false;
             };
@@ -1288,6 +1303,8 @@ impl PiRootControlProductiveWindow {
                 self.clock = DeferredCyw43ActivationClock::Invalid;
                 self.completed_quanta = Self::MAX_COMPLETED_QUANTA;
                 self.continuation = None;
+                self.active_hot_tail = None;
+                self.active_hot_tail_started_ticks = 0;
                 self.last_reject_reason = Self::REJECT_COUNTER;
                 return false;
             }
@@ -1299,6 +1316,8 @@ impl PiRootControlProductiveWindow {
             self.clock = DeferredCyw43ActivationClock::Invalid;
             self.completed_quanta = Self::MAX_COMPLETED_QUANTA;
             self.continuation = None;
+            self.active_hot_tail = None;
+            self.active_hot_tail_started_ticks = 0;
             self.last_reject_reason = Self::REJECT_ARITHMETIC;
             return false;
         };
@@ -1306,13 +1325,125 @@ impl PiRootControlProductiveWindow {
             self.clock = DeferredCyw43ActivationClock::Invalid;
             self.completed_quanta = Self::MAX_COMPLETED_QUANTA;
             self.continuation = None;
+            self.active_hot_tail = None;
+            self.active_hot_tail_started_ticks = 0;
             self.last_reject_reason = Self::REJECT_CAP;
             return false;
         };
         self.credited_child_scaled = credited_child_scaled;
         self.continuation = Some(continuation);
         self.completed_quanta = completed_quanta;
+        if self.active_hot_tail.is_none() && continuation.opens_active_hot_tail() {
+            if let DeferredCyw43ActivationClock::Timed { started_ticks, .. } = self.clock {
+                if completed_at_ticks != 0 && completed_at_ticks >= started_ticks {
+                    self.active_hot_tail = Some(continuation);
+                    self.active_hot_tail_started_ticks = completed_at_ticks;
+                }
+            }
+        }
         true
+    }
+
+    /// Admit one complete physical-rotor quantum inside the exact response's
+    /// unslid active tail. This deliberately does not subtract child execution:
+    /// the generated scheduling context remains the hard execution bound, and
+    /// wall time must close the tail even if the root task was postponed.
+    fn active_hot_tail_quantum_admitted(&mut self, now_ticks: u64, counter_hz: u64) -> bool {
+        if self.active_hot_tail.is_none() {
+            return false;
+        }
+        if self.completed_quanta >= Self::MAX_COMPLETED_QUANTA {
+            self.last_reject_reason = Self::REJECT_CAP;
+            return false;
+        }
+        let DeferredCyw43ActivationClock::Timed {
+            counter_hz: started_hz,
+            ..
+        } = self.clock
+        else {
+            self.active_hot_tail = None;
+            self.active_hot_tail_started_ticks = 0;
+            self.last_reject_reason = Self::REJECT_CLOCK;
+            return false;
+        };
+        if self.active_hot_tail_started_ticks == 0
+            || now_ticks == 0
+            || counter_hz == 0
+            || counter_hz != started_hz
+            || now_ticks < self.active_hot_tail_started_ticks
+        {
+            self.clock = DeferredCyw43ActivationClock::Invalid;
+            self.completed_quanta = Self::MAX_COMPLETED_QUANTA;
+            self.continuation = None;
+            self.active_hot_tail = None;
+            self.active_hot_tail_started_ticks = 0;
+            self.last_reject_reason = Self::REJECT_COUNTER;
+            return false;
+        }
+        let elapsed_scaled =
+            u128::from(now_ticks - self.active_hot_tail_started_ticks).checked_mul(1_000_000u128);
+        let guard_scaled = u128::from(counter_hz).checked_mul(u128::from(Self::ACTIVE_HOT_TAIL_US));
+        let Some((elapsed_scaled, guard_scaled)) = elapsed_scaled.zip(guard_scaled) else {
+            self.clock = DeferredCyw43ActivationClock::Invalid;
+            self.completed_quanta = Self::MAX_COMPLETED_QUANTA;
+            self.continuation = None;
+            self.active_hot_tail = None;
+            self.active_hot_tail_started_ticks = 0;
+            self.last_reject_reason = Self::REJECT_ARITHMETIC;
+            return false;
+        };
+        let admitted = elapsed_scaled < guard_scaled;
+        if !admitted {
+            self.last_reject_reason = Self::REJECT_CLOCK;
+        }
+        admitted
+    }
+
+    /// Account one hot-tail quantum that found no exact new productive token.
+    /// Productive and empty rotor turns share the existing 64-quantum ceiling.
+    fn record_active_hot_tail_quantum(&mut self) -> bool {
+        if self.active_hot_tail.is_none() {
+            self.last_reject_reason = Self::REJECT_TOKEN;
+            return false;
+        }
+        let Some(completed_quanta) = self.completed_quanta.checked_add(1) else {
+            self.completed_quanta = Self::MAX_COMPLETED_QUANTA;
+            self.last_reject_reason = Self::REJECT_CAP;
+            return false;
+        };
+        if completed_quanta > Self::MAX_COMPLETED_QUANTA {
+            self.completed_quanta = Self::MAX_COMPLETED_QUANTA;
+            self.last_reject_reason = Self::REJECT_CAP;
+            return false;
+        }
+        self.completed_quanta = completed_quanta;
+        true
+    }
+
+    /// Convert the current active-tail wall sample for bounded scalar
+    /// telemetry only. Admission never depends on this lossy conversion.
+    fn active_hot_tail_elapsed_us(self, now_ticks: u64, counter_hz: u64) -> u64 {
+        let DeferredCyw43ActivationClock::Timed {
+            counter_hz: started_hz,
+            ..
+        } = self.clock
+        else {
+            return 0;
+        };
+        if self.active_hot_tail.is_none()
+            || self.active_hot_tail_started_ticks == 0
+            || now_ticks < self.active_hot_tail_started_ticks
+            || counter_hz == 0
+            || counter_hz != started_hz
+        {
+            return 0;
+        }
+        let elapsed_scaled =
+            u128::from(now_ticks - self.active_hot_tail_started_ticks).saturating_mul(1_000_000);
+        match u64::try_from(elapsed_scaled / u128::from(counter_hz)) {
+            Ok(value) => value,
+            Err(_) => u64::MAX,
+        }
     }
 
     const fn has_completed_quantum(self) -> bool {
@@ -1323,6 +1454,12 @@ impl PiRootControlProductiveWindow {
         self,
     ) -> Option<crate::event::PiRootControlProductiveContinuation> {
         self.continuation
+    }
+
+    const fn active_hot_tail_identity(
+        self,
+    ) -> Option<crate::event::PiRootControlProductiveContinuation> {
+        self.active_hot_tail
     }
 
     fn last_effective_root_us(self, counter_hz: u64) -> u64 {
@@ -1372,44 +1509,78 @@ where
         let counter_hz = counter_frequency();
         let activation_reserve_us = deferred_cyw43_activation_reserve_from_manifest_us();
         let retained_quantum = window.has_completed_quantum();
-        if retained_quantum {
+        let ordinary_fence_clear = if retained_quantum {
             let Some(identity) = window.continuation_identity() else {
                 pump.record_pi_root_control_productive_window_decision(
                     false,
                     window.last_effective_root_us(counter_hz),
                     PiRootControlProductiveWindow::REJECT_TOKEN,
                 );
+                if window.active_hot_tail_identity().is_some() {
+                    let closed_at_ticks = monotonic_ticks();
+                    pump.record_pi_root_control_active_hot_tail_closed(
+                        window.active_hot_tail_elapsed_us(closed_at_ticks, counter_hz),
+                    );
+                }
                 return true;
             };
-            if !pump.pi_root_control_productive_continuation_fence_clear(identity) {
-                pump.record_pi_root_control_productive_window_decision(
-                    false,
-                    window.last_effective_root_us(counter_hz),
-                    PiRootControlProductiveWindow::REJECT_FENCE,
+            pump.pi_root_control_productive_continuation_fence_clear(identity)
+        } else {
+            true
+        };
+        let active_hot_tail_identity = window.active_hot_tail_identity();
+        let active_hot_tail_fence_clear = active_hot_tail_identity
+            .is_some_and(|identity| pump.pi_root_control_active_hot_tail_fence_clear(identity));
+        if retained_quantum && !ordinary_fence_clear && !active_hot_tail_fence_clear {
+            pump.record_pi_root_control_productive_window_decision(
+                false,
+                window.last_effective_root_us(counter_hz),
+                PiRootControlProductiveWindow::REJECT_FENCE,
+            );
+            if active_hot_tail_identity.is_some() {
+                let closed_at_ticks = monotonic_ticks();
+                pump.record_pi_root_control_active_hot_tail_closed(
+                    window.active_hot_tail_elapsed_us(closed_at_ticks, counter_hz),
                 );
-                return true;
             }
+            return true;
         }
         // This is the final operation before the next complete five-phase
         // leaf: no userland prelude, handoff, or material probe may consume
-        // the strict generated 250-us cut after this sample. Resolve and
-        // validate frequency/policy and the complete side-effect-free race
+        // the strict generated budget-minus-WCET cut after this sample.
+        // Resolve and validate frequency/policy and the complete side-effect-free race
         // fence first so CNTVCT remains the last sampled authority before the
-        // pure comparison and EventPump entry.
+        // pure comparisons and EventPump entry. The active tail uses the same
+        // sample and fence but intentionally retains wall time beyond that
+        // strict reserve; a later passive command still forces the selected
+        // Yield boundary before dispatch.
         let now_ticks = monotonic_ticks();
-        let admitted = window.next_quantum_admitted(now_ticks, counter_hz, activation_reserve_us);
-        if retained_quantum && !admitted {
+        let active_hot_tail_wall_us = window.active_hot_tail_elapsed_us(now_ticks, counter_hz);
+        let strict_reserve_admitted = ordinary_fence_clear
+            && window.next_quantum_admitted(now_ticks, counter_hz, activation_reserve_us);
+        let active_hot_tail_admitted = active_hot_tail_fence_clear
+            && window.active_hot_tail_quantum_admitted(now_ticks, counter_hz);
+        if retained_quantum && !strict_reserve_admitted && !active_hot_tail_admitted {
             pump.record_pi_root_control_productive_window_decision(
                 false,
                 window.last_effective_root_us(counter_hz),
                 window.last_reject_reason(),
             );
         }
-        if !admitted {
+        if !strict_reserve_admitted && !active_hot_tail_admitted {
+            if active_hot_tail_identity.is_some() {
+                pump.record_pi_root_control_active_hot_tail_closed(active_hot_tail_wall_us);
+            }
             return true;
         }
         let explicit_yield_required = pump.poll_root_control_quantum();
-        if retained_quantum {
+        if active_hot_tail_admitted {
+            pump.record_pi_root_control_active_hot_tail_admitted(active_hot_tail_wall_us);
+        }
+        if retained_quantum && strict_reserve_admitted {
+            // Existing pcont telemetry remains the exact strict-reserve proof.
+            // Hot-tail-only turns are deliberately not misreported as having
+            // satisfied the generated budget-minus-WCET admission cut.
             pump.record_pi_root_control_productive_window_decision(
                 true,
                 window.last_effective_root_us(counter_hz),
@@ -1417,6 +1588,18 @@ where
             );
         }
         if explicit_yield_required {
+            if active_hot_tail_admitted {
+                let hot_tail_still_clear = active_hot_tail_identity.is_some_and(|identity| {
+                    pump.pi_root_control_active_hot_tail_fence_clear(identity)
+                });
+                if hot_tail_still_clear && window.record_active_hot_tail_quantum() {
+                    continue;
+                }
+                let closed_at_ticks = monotonic_ticks();
+                pump.record_pi_root_control_active_hot_tail_closed(
+                    window.active_hot_tail_elapsed_us(closed_at_ticks, counter_hz),
+                );
+            }
             return true;
         }
         let Some(identity) = pump.take_pi_root_control_productive_continuation_identity() else {
@@ -1425,15 +1608,33 @@ where
                 window.last_effective_root_us(counter_hz),
                 PiRootControlProductiveWindow::REJECT_TOKEN,
             );
+            if active_hot_tail_identity.is_some() {
+                let closed_at_ticks = monotonic_ticks();
+                pump.record_pi_root_control_active_hot_tail_closed(
+                    window.active_hot_tail_elapsed_us(closed_at_ticks, counter_hz),
+                );
+            }
             return true;
         };
-        if !window.record_completed_quantum(identity) {
+        let completed_at_ticks = monotonic_ticks();
+        let active_hot_tail_before_record = window.active_hot_tail_identity().is_some();
+        let active_hot_tail_wall_before_record =
+            window.active_hot_tail_elapsed_us(completed_at_ticks, counter_hz);
+        if !window.record_completed_quantum_at(identity, completed_at_ticks) {
             pump.record_pi_root_control_productive_window_decision(
                 false,
                 window.last_effective_root_us(counter_hz),
                 window.last_reject_reason(),
             );
+            if active_hot_tail_before_record {
+                pump.record_pi_root_control_active_hot_tail_closed(
+                    active_hot_tail_wall_before_record,
+                );
+            }
             return true;
+        }
+        if !active_hot_tail_before_record && window.active_hot_tail_identity().is_some() {
+            pump.record_pi_root_control_active_hot_tail_opened(identity);
         }
     }
 }
@@ -7162,10 +7363,10 @@ mod tests {
     ))]
     #[test]
     fn pi_wifi_activation_guard_reserves_epilogue_and_fails_closed() {
-        let pi_reserve = super::deferred_cyw43_activation_reserve_us(2_750, 2_500, true);
-        assert_eq!(pi_reserve, Some(250));
+        let pi_reserve = super::deferred_cyw43_activation_reserve_us(5_500, 2_500, true);
+        assert_eq!(pi_reserve, Some(3_000));
         assert_eq!(
-            super::deferred_cyw43_activation_reserve_us(2_750, 0, true),
+            super::deferred_cyw43_activation_reserve_us(5_500, 0, true),
             None
         );
         assert_eq!(
@@ -7173,17 +7374,17 @@ mod tests {
             None
         );
         assert_eq!(
-            super::deferred_cyw43_activation_reserve_us(2_750, 2_500, false),
+            super::deferred_cyw43_activation_reserve_us(5_500, 2_500, false),
             None
         );
 
         let mut window = super::DeferredCyw43ActivationWindow::new();
         assert!(window.turn_admitted(100, 1_000_000, pi_reserve));
         window.record_operator_turn();
-        assert!(window.turn_admitted(349, 1_000_000, pi_reserve));
+        assert!(window.turn_admitted(3_099, 1_000_000, pi_reserve));
         assert!(
-            !window.turn_admitted(350, 1_000_000, pi_reserve),
-            "the exact 250 us Pi reserve leaves the complete declared 2,500 us WCET before the 2,750 us SC boundary",
+            !window.turn_admitted(3_100, 1_000_000, pi_reserve),
+            "the exact 3,000 us Pi reserve leaves the complete declared 2,500 us WCET before the 5,500 us SC boundary",
         );
 
         window.reset();
@@ -7233,21 +7434,21 @@ mod tests {
     ))]
     #[test]
     fn pi_genet_productive_window_is_prechecked_unslid_strict_and_hard_capped() {
-        let reserve = super::deferred_cyw43_activation_reserve_us(2_750, 2_500, true);
+        let reserve = super::deferred_cyw43_activation_reserve_us(5_500, 2_500, true);
         let identity = crate::event::PiRootControlProductiveContinuation::for_test(7, 17);
         let mut window = super::PiRootControlProductiveWindow::new();
         assert!(
             window.next_quantum_admitted(100, 1_000_000, reserve),
             "an unstarted window retains exactly one legacy bounded quantum"
         );
-        assert!(window.record_completed_quantum(identity));
+        assert!(window.record_completed_quantum_at(identity, 100));
         assert!(!window.next_quantum_admitted(100, 1_000_000, reserve));
 
         assert!(window.restart_after_yield(100, 1_000_000, reserve));
-        assert!(window.next_quantum_admitted(349, 1_000_000, reserve));
+        assert!(window.next_quantum_admitted(3_099, 1_000_000, reserve));
         assert!(
-            !window.next_quantum_admitted(350, 1_000_000, reserve),
-            "equality at the original Yield-return 250-us cut must Yield"
+            !window.next_quantum_admitted(3_100, 1_000_000, reserve),
+            "equality at the current Yield-return 3,000-us cut must Yield"
         );
 
         let credited = crate::event::PiRootControlProductiveContinuation::for_test_with_credit(
@@ -7257,10 +7458,10 @@ mod tests {
             1_000_000,
         );
         assert!(window.restart_after_yield(100, 1_000_000, reserve));
-        assert!(window.record_completed_quantum(credited));
-        assert!(window.next_quantum_admitted(449, 1_000_000, reserve));
+        assert!(window.record_completed_quantum_at(credited, 200));
+        assert!(window.next_quantum_admitted(3_199, 1_000_000, reserve));
         assert!(
-            !window.next_quantum_admitted(450, 1_000_000, reserve),
+            !window.next_quantum_admitted(3_200, 1_000_000, reserve),
             "equality after subtracting only call-local child consumption must Yield",
         );
 
@@ -7271,7 +7472,7 @@ mod tests {
             300_000_000,
             1_000_000,
         );
-        assert!(window.record_completed_quantum(excess_credit));
+        assert!(window.record_completed_quantum_at(excess_credit, 200));
         assert!(
             !window.next_quantum_admitted(200, 1_000_000, reserve),
             "credit greater than the observed activation wall fails closed",
@@ -7283,7 +7484,7 @@ mod tests {
                 7, 17, 1, 54_000_000,
             );
         assert!(
-            !window.record_completed_quantum(wrong_credit_frequency),
+            !window.record_completed_quantum_at(wrong_credit_frequency, 101),
             "credit from another counter frequency cannot enter the window",
         );
 
@@ -7300,7 +7501,7 @@ mod tests {
         assert!(window.restart_after_yield(2_000, 54_000_000, reserve));
         for _ in 0..super::PiRootControlProductiveWindow::MAX_COMPLETED_QUANTA {
             assert!(window.next_quantum_admitted(2_001, 54_000_000, reserve));
-            assert!(window.record_completed_quantum(identity));
+            assert!(window.record_completed_quantum_at(identity, 2_001));
         }
         assert!(
             !window.next_quantum_admitted(2_001, 54_000_000, reserve),
@@ -7309,20 +7510,101 @@ mod tests {
 
         assert!(!window.restart_after_yield(0, 54_000_000, reserve));
         assert!(window.next_quantum_admitted(1, 54_000_000, reserve));
-        assert!(window.record_completed_quantum(identity));
+        assert!(window.record_completed_quantum_at(identity, 1));
         assert!(!window.next_quantum_admitted(1, 54_000_000, reserve));
         assert!(!window.restart_after_yield(3_000, 0, reserve));
         assert!(!window.restart_after_yield(3_000, 54_000_000, None));
 
         assert!(window.restart_after_yield(4_000, 54_000_000, reserve));
-        assert!(window.record_completed_quantum(identity));
+        assert!(window.record_completed_quantum_at(identity, 4_001));
         assert!(
-            !window.record_completed_quantum(
+            !window.record_completed_quantum_at(
                 crate::event::PiRootControlProductiveContinuation::for_test(8, 17),
+                4_001,
             ),
             "a generation-swapped continuation token fails closed",
         );
         assert!(!window.next_quantum_admitted(4_001, 54_000_000, reserve));
+    }
+
+    #[cfg(all(
+        feature = "serial-console",
+        feature = "kernel",
+        feature = "net-console"
+    ))]
+    #[test]
+    fn pi_genet_active_hot_tail_requires_exact_drain_is_unslid_and_shares_cap() {
+        let reserve = super::deferred_cyw43_activation_reserve_us(5_500, 2_500, true);
+        let stage_only = crate::event::PiRootControlProductiveContinuation::for_test(7, 17);
+        let drained =
+            crate::event::PiRootControlProductiveContinuation::for_test_completed_response(7, 17);
+        let cross_core_drained =
+            crate::event::PiRootControlProductiveContinuation::for_test_cross_core_completed_response(
+                7, 17,
+            );
+        let mut window = super::PiRootControlProductiveWindow::new();
+
+        assert!(window.restart_after_yield(100, 1_000_000, reserve));
+        assert!(window.record_completed_quantum_at(stage_only, 200));
+        assert_eq!(window.active_hot_tail_identity(), None);
+        assert!(!window.active_hot_tail_quantum_admitted(201, 1_000_000));
+
+        assert!(window.restart_after_yield(100, 1_000_000, reserve));
+        assert!(window.record_completed_quantum_at(cross_core_drained, 200));
+        assert_eq!(
+            window.active_hot_tail_identity(),
+            Some(cross_core_drained),
+            "exact cross-core OutputDrained authority opens the same bounded root-local tail",
+        );
+        assert_eq!(
+            window.credited_child_scaled, 0,
+            "signal-only cross-core service must not mint child execution credit",
+        );
+        assert!(window.active_hot_tail_quantum_admitted(8_199, 1_000_000));
+        assert!(
+            !window.record_completed_quantum_at(drained, 8_199),
+            "a continuation cannot change between cross-core signal-only and same-core YieldTo authority",
+        );
+
+        assert!(window.restart_after_yield(100, 1_000_000, reserve));
+        assert!(window.record_completed_quantum_at(drained, 200));
+        assert_eq!(window.active_hot_tail_identity(), Some(drained));
+        assert!(window.active_hot_tail_quantum_admitted(8_199, 1_000_000));
+        assert!(window.record_completed_quantum_at(drained, 4_000));
+        assert!(
+            !window.active_hot_tail_quantum_admitted(8_200, 1_000_000),
+            "another exact response cannot slide the first drain's strict 8 ms wall",
+        );
+
+        assert!(window.restart_after_yield(100, 1_000_000, reserve));
+        assert!(window.record_completed_quantum_at(drained, 200));
+        for _ in 1..super::PiRootControlProductiveWindow::MAX_COMPLETED_QUANTA {
+            assert!(window.active_hot_tail_quantum_admitted(201, 1_000_000));
+            assert!(window.record_active_hot_tail_quantum());
+        }
+        assert!(
+            !window.active_hot_tail_quantum_admitted(201, 1_000_000),
+            "productive and empty hot-tail turns share the 64-quantum ceiling",
+        );
+        assert!(!window.record_active_hot_tail_quantum());
+
+        assert!(window.restart_after_yield(100, 1_000_000, reserve));
+        assert!(window.record_completed_quantum_at(drained, 0));
+        assert_eq!(
+            window.active_hot_tail_identity(),
+            None,
+            "an invalid completion counter cannot open an active tail",
+        );
+
+        for (now_ticks, counter_hz) in [(199, 1_000_000), (201, 0), (201, 54_000_000)] {
+            assert!(window.restart_after_yield(100, 1_000_000, reserve));
+            assert!(window.record_completed_quantum_at(drained, 200));
+            assert!(
+                !window.active_hot_tail_quantum_admitted(now_ticks, counter_hz),
+                "backward, zero, or frequency-drifted active-tail counters fail closed",
+            );
+            assert!(!window.active_hot_tail_quantum_admitted(201, 1_000_000));
+        }
     }
 
     #[cfg(all(

@@ -297,17 +297,17 @@ mod tests {
                 )
             } else {
                 (
-                    2_750,
+                    5_500,
                     2_500,
-                    8_100,
+                    5_100,
                     0,
-                    "m26e-pi4-root-adjacent-refill-natural-postpone-candidate-v24",
-                    0,
+                    "m26e-pi4-root-cross-core-console-parallel-candidate-v25",
+                    2,
                     200,
                     200,
-                    8_100,
-                    9_000,
-                    7_400,
+                    3_000,
+                    8_750,
+                    8_400,
                     54_000_000,
                 )
             };
@@ -363,7 +363,11 @@ mod tests {
             );
             assert_eq!(
                 console_network.wcet_provenance,
-                "m26e-qemu-console-received-progress-retention-candidate-v18"
+                if qemu {
+                    "m26e-qemu-console-received-progress-retention-candidate-v18"
+                } else {
+                    "m26e-pi4-console-cross-core-signal-only-candidate-v19"
+                }
             );
 
             let worker_expectations = if qemu {
@@ -373,7 +377,7 @@ mod tests {
                 ]
             } else {
                 [
-                    ("root-worker-executor-gpu", 2, 7_100),
+                    ("root-worker-executor-gpu", 2, 8_300),
                     ("root-worker-executor-lora", 3, 7_400),
                 ]
             };
@@ -417,7 +421,7 @@ mod tests {
             assert!(core_zero_demand <= core_zero_usable);
             assert_eq!(
                 core_zero_usable - core_zero_demand,
-                if qemu { 9_000 } else { 0 }
+                if qemu { 9_000 } else { 250 }
             );
 
             let core_two_demand = manifest
@@ -483,7 +487,7 @@ mod tests {
         );
 
         for (task_id, stale_response) in
-            [("root-control", 5_100), ("console-network-service", 5_600)]
+            [("root-control", 8_100), ("console-network-service", 8_100)]
         {
             let mut response_drift = pi4_manifest();
             response_drift
@@ -497,7 +501,38 @@ mod tests {
                 .validate_with_base(Some(repo_root.as_path()))
                 .expect_err("stale response bound must fail closed");
             assert!(
-                error.to_string().contains("response-time result mismatch"),
+                error.to_string().contains("response-time result mismatch")
+                    || error
+                        .to_string()
+                        .contains("requires exact root/console response_time_us 5100/3000"),
+                "unexpected error for {task_id}: {error}"
+            );
+        }
+
+        for (task_id, stale_budget) in [("root-control", 5_501), ("console-network-service", 3_001)]
+        {
+            let mut budget_drift = pi4_manifest();
+            budget_drift
+                .temporal_authority
+                .tasks
+                .iter_mut()
+                .find(|task| task.id == task_id)
+                .unwrap_or_else(|| panic!("temporal task {task_id}"))
+                .budget_us = stale_budget;
+            if task_id == "console-network-service" {
+                budget_drift.console_network_service.budget_us = stale_budget;
+            }
+            let error = budget_drift
+                .validate_with_base(Some(repo_root.as_path()))
+                .expect_err("stale budget must fail closed");
+            assert!(
+                error.to_string().contains("response-time result mismatch")
+                    || error
+                        .to_string()
+                        .contains("object/SC inventory disagrees with temporal task")
+                    || error.to_string().contains(
+                        "cross-core signal-only requires exact root budget/period/refills/WCET",
+                    ),
                 "unexpected error for {task_id}: {error}"
             );
         }

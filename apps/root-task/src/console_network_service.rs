@@ -39,8 +39,8 @@ pub use generated_image_identity::{
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct ConsoleNetworkYieldToPrerequisites {
-    pi_profile: bool,
+struct ConsoleNetworkSignalOnlyTopology {
+    required: bool,
     root_core: u8,
     root_sched_control_core: u8,
     root_priority: u8,
@@ -51,25 +51,27 @@ struct ConsoleNetworkYieldToPrerequisites {
     child_scheduling_context_slot: u32,
 }
 
-fn validate_console_network_yield_to(
-    prerequisites: ConsoleNetworkYieldToPrerequisites,
-) -> Result<bool, BoundaryError> {
-    if !prerequisites.pi_profile {
-        return Ok(false);
+fn validate_console_network_signal_only_topology(
+    topology: ConsoleNetworkSignalOnlyTopology,
+) -> Result<(), BoundaryError> {
+    if !topology.required {
+        return Ok(());
     }
-    if prerequisites.child_scheduling_context_slot == 0
-        || prerequisites.root_core != prerequisites.child_core
-        || prerequisites.root_sched_control_core != prerequisites.root_core
-        || prerequisites.child_sched_control_core != prerequisites.child_core
-        || prerequisites.root_priority != prerequisites.child_priority
-        || prerequisites.root_mcp < prerequisites.child_priority
+    if topology.child_scheduling_context_slot == 0
+        || topology.root_core != 0
+        || topology.child_core != 2
+        || topology.root_core == topology.child_core
+        || topology.root_sched_control_core != topology.root_core
+        || topology.child_sched_control_core != topology.child_core
+        || topology.root_priority != topology.child_priority
+        || topology.root_mcp < topology.child_priority
     {
         return Err(BoundaryError::TemporalDrift);
     }
-    Ok(true)
+    Ok(())
 }
 
-fn select_console_network_yield_to_profile(
+fn select_console_network_cross_core_signal_only(
     direct_virtio: bool,
     direct_genet: bool,
 ) -> Result<bool, BoundaryError> {
@@ -81,29 +83,30 @@ fn select_console_network_yield_to_profile(
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct ConsoleNetworkYieldToAdmission {
-    pub(crate) profile_enabled: bool,
-    pub(crate) runtime_direct_virtio: bool,
+pub(crate) struct ConsoleNetworkSignalOnlyAdmission {
+    pub(crate) contract_direct_genet: bool,
     pub(crate) runtime_direct_genet: bool,
-    pub(crate) service_state: ServiceState,
-    pub(crate) signal_committed: bool,
+    pub(crate) cross_core_signal_only: bool,
+    pub(crate) yield_to_child_after_signal: bool,
     pub(crate) activated: bool,
     pub(crate) containment_started: bool,
     pub(crate) contained: bool,
     pub(crate) scheduling_context_present: bool,
 }
 
-pub(crate) const fn console_network_yield_to_admitted(
-    admission: ConsoleNetworkYieldToAdmission,
+pub(crate) const fn console_network_signal_only_admitted(
+    admission: ConsoleNetworkSignalOnlyAdmission,
 ) -> bool {
-    admission.profile_enabled
-        && !admission.runtime_direct_virtio
-        && admission.runtime_direct_genet
-        && admission.signal_committed
-        && admission.activated
-        && !admission.containment_started
-        && !admission.contained
-        && admission.scheduling_context_present
+    !admission.yield_to_child_after_signal
+        && (if admission.contract_direct_genet {
+            admission.cross_core_signal_only
+                && admission.activated
+                && !admission.containment_started
+                && !admission.contained
+                && admission.scheduling_context_present
+        } else {
+            !admission.runtime_direct_genet && !admission.cross_core_signal_only
+        })
 }
 
 /// Return the compiler-owned console-network service record.
@@ -181,8 +184,10 @@ pub struct ConsoleNetworkContract {
     pub timeout_badge: u64,
     /// Compiler-owned standard fault badge.
     pub standard_fault_badge: u64,
-    /// Whether the selected Pi profile admits guarded YieldTo on this exact child SC.
+    /// Retired same-core YieldTo authority; every current profile requires false.
     pub yield_to_child_after_signal: bool,
+    /// Whether the selected Pi direct-GENET profile requires cross-core signal-only handoff.
+    pub(crate) cross_core_signal_only: bool,
     /// Selected virtual-counter frequency.
     pub timer_clock_hz: u64,
     /// Transport-authentication deadline.
@@ -279,9 +284,11 @@ impl ConsoleNetworkContract {
         {
             return Err(BoundaryError::TemporalDrift);
         }
-        let pi_yield_to_profile =
-            select_console_network_yield_to_profile(config.direct_virtio, config.direct_genet)?;
-        let yield_to_child_after_signal = if pi_yield_to_profile {
+        let cross_core_signal_only = select_console_network_cross_core_signal_only(
+            config.direct_virtio,
+            config.direct_genet,
+        )?;
+        if cross_core_signal_only {
             let root_control = crate::generated::temporal_tasks()
                 .iter()
                 .find(|task| task.id == "root-control")
@@ -291,8 +298,8 @@ impl ConsoleNetworkContract {
             {
                 return Err(BoundaryError::TemporalDrift);
             }
-            validate_console_network_yield_to(ConsoleNetworkYieldToPrerequisites {
-                pi_profile: pi_yield_to_profile,
+            validate_console_network_signal_only_topology(ConsoleNetworkSignalOnlyTopology {
+                required: cross_core_signal_only,
                 root_core: root_control.core,
                 root_sched_control_core: root_control.sched_control_core,
                 root_priority: root_control.priority,
@@ -301,10 +308,8 @@ impl ConsoleNetworkContract {
                 child_sched_control_core: temporal.sched_control_core,
                 child_priority: temporal.priority,
                 child_scheduling_context_slot: temporal.scheduling_context_slot,
-            })?
-        } else {
-            false
-        };
+            })?;
+        }
         Ok(Self {
             image_id: config.image_id,
             image_path: config.image_path,
@@ -339,7 +344,8 @@ impl ConsoleNetworkContract {
             timeout_policy: temporal.timeout_policy,
             timeout_badge: config.timeout_badge,
             standard_fault_badge: config.fault_badge,
-            yield_to_child_after_signal,
+            yield_to_child_after_signal: false,
+            cross_core_signal_only,
             timer_clock_hz: config.timer_clock_hz,
             auth_timeout_ms: config.auth_timeout_ms,
             idle_timeout_ms: config.idle_timeout_ms,
@@ -1298,28 +1304,11 @@ fn next_sequence(sequence: u64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        console_network_yield_to_admitted, expected_object_inventory, expected_runtime_image_pages,
-        select_console_network_yield_to_profile, validate_console_network_yield_to, BoundaryError,
-        ConsoleNetworkYieldToAdmission, ConsoleNetworkYieldToPrerequisites, ServiceState,
+        console_network_signal_only_admitted, expected_object_inventory,
+        expected_runtime_image_pages, select_console_network_cross_core_signal_only,
+        validate_console_network_signal_only_topology, BoundaryError,
+        ConsoleNetworkSignalOnlyAdmission, ConsoleNetworkSignalOnlyTopology,
     };
-
-    fn exact_yield_to_admission(
-        direct_virtio: bool,
-        direct_genet: bool,
-        service_state: ServiceState,
-    ) -> ConsoleNetworkYieldToAdmission {
-        ConsoleNetworkYieldToAdmission {
-            profile_enabled: !direct_virtio,
-            runtime_direct_virtio: direct_virtio,
-            runtime_direct_genet: direct_genet,
-            service_state,
-            signal_committed: true,
-            activated: true,
-            containment_started: false,
-            contained: false,
-            scheduling_context_present: true,
-        }
-    }
 
     #[test]
     fn exact_backend_selects_qemu_pi_and_mediated_object_inventories() {
@@ -1334,145 +1323,147 @@ mod tests {
     }
 
     #[test]
-    fn pi_yield_to_requires_exact_same_core_equal_priority_and_root_mcp() {
-        let exact = ConsoleNetworkYieldToPrerequisites {
-            pi_profile: true,
+    fn pi_direct_genet_requires_exact_cross_core_signal_only_topology() {
+        let exact = ConsoleNetworkSignalOnlyTopology {
+            required: true,
             root_core: 0,
             root_sched_control_core: 0,
             root_priority: 200,
             root_mcp: 200,
-            child_core: 0,
-            child_sched_control_core: 0,
+            child_core: 2,
+            child_sched_control_core: 2,
             child_priority: 200,
             child_scheduling_context_slot: 6,
         };
-        assert_eq!(validate_console_network_yield_to(exact), Ok(true));
+        assert_eq!(validate_console_network_signal_only_topology(exact), Ok(()));
         assert_eq!(
-            validate_console_network_yield_to(ConsoleNetworkYieldToPrerequisites {
-                pi_profile: false,
+            validate_console_network_signal_only_topology(ConsoleNetworkSignalOnlyTopology {
+                required: false,
                 child_priority: 180,
                 ..exact
             }),
-            Ok(false),
-            "QEMU keeps its lower-priority child and existing scheduling behavior"
+            Ok(()),
+            "QEMU keeps its existing signal-only scheduling behavior"
         );
         for invalid in [
-            ConsoleNetworkYieldToPrerequisites {
+            ConsoleNetworkSignalOnlyTopology {
+                child_core: 0,
+                child_sched_control_core: 0,
+                ..exact
+            },
+            ConsoleNetworkSignalOnlyTopology {
                 child_core: 1,
                 child_sched_control_core: 1,
                 ..exact
             },
-            ConsoleNetworkYieldToPrerequisites {
+            ConsoleNetworkSignalOnlyTopology {
                 child_priority: 199,
                 ..exact
             },
-            ConsoleNetworkYieldToPrerequisites {
+            ConsoleNetworkSignalOnlyTopology {
                 root_mcp: 199,
                 ..exact
             },
-            ConsoleNetworkYieldToPrerequisites {
+            ConsoleNetworkSignalOnlyTopology {
                 child_scheduling_context_slot: 0,
                 ..exact
             },
         ] {
             assert_eq!(
-                validate_console_network_yield_to(invalid),
+                validate_console_network_signal_only_topology(invalid),
                 Err(BoundaryError::TemporalDrift)
             );
         }
     }
 
     #[test]
-    fn yield_to_profile_selects_only_direct_genet() {
+    fn direct_genet_alone_selects_cross_core_signal_only() {
         assert_eq!(
-            select_console_network_yield_to_profile(true, false),
+            select_console_network_cross_core_signal_only(true, false),
             Ok(false),
-            "QEMU direct VirtIO retains its existing non-YieldTo scheduling"
+            "QEMU direct VirtIO retains its existing signal-only scheduling"
         );
         assert_eq!(
-            select_console_network_yield_to_profile(false, true),
+            select_console_network_cross_core_signal_only(false, true),
             Ok(true),
-            "Pi direct GENET retains its existing YieldTo profile"
+            "Pi direct GENET selects exact cross-core signal-only handoff"
         );
         assert_eq!(
-            select_console_network_yield_to_profile(false, false),
+            select_console_network_cross_core_signal_only(false, false),
             Ok(false),
             "mediated Pi WiFi retains the proven signal-only handoff"
         );
         assert_eq!(
-            select_console_network_yield_to_profile(true, true),
+            select_console_network_cross_core_signal_only(true, true),
             Err(BoundaryError::GeneratedDrift),
             "mutually exclusive direct backends fail closed"
         );
     }
 
     #[test]
-    fn qemu_skips_and_direct_genet_retains_existing_yield_to_policy() {
-        assert!(!console_network_yield_to_admitted(
-            exact_yield_to_admission(true, false, ServiceState::Authenticated)
-        ));
-        for service_state in [
-            ServiceState::Constructing,
-            ServiceState::Listening,
-            ServiceState::Authenticating,
-            ServiceState::Authenticated,
-            ServiceState::Closing,
-            ServiceState::Faulted,
-            ServiceState::Terminal,
-        ] {
-            assert!(console_network_yield_to_admitted(exact_yield_to_admission(
-                false,
-                true,
-                service_state
-            )));
-        }
-    }
-
-    #[test]
-    fn mediated_pi_wifi_never_selects_yield_to() {
-        for service_state in [
-            ServiceState::Constructing,
-            ServiceState::Listening,
-            ServiceState::Authenticating,
-            ServiceState::Authenticated,
-            ServiceState::Closing,
-            ServiceState::Faulted,
-            ServiceState::Terminal,
-        ] {
-            assert!(!console_network_yield_to_admitted(
-                exact_yield_to_admission(false, false, service_state)
-            ));
-        }
-    }
-
-    #[test]
-    fn pi_dual_mode_contract_uses_the_selected_runtime_backend_for_yield_to() {
-        // The generated Pi image admits direct GENET resources in both boot
-        // modes. A WiFi shell has neither runtime direct layout and must not
-        // inherit GENET's lifecycle policy from that generated capability.
-        let wifi_listening = ConsoleNetworkYieldToAdmission {
-            profile_enabled: true,
-            runtime_direct_virtio: false,
-            runtime_direct_genet: false,
-            service_state: ServiceState::Listening,
-            signal_committed: true,
+    fn signal_only_runtime_admission_preserves_pi_lifecycle_and_qemu_isolation() {
+        let exact_pi = ConsoleNetworkSignalOnlyAdmission {
+            contract_direct_genet: true,
+            runtime_direct_genet: true,
+            cross_core_signal_only: true,
+            yield_to_child_after_signal: false,
             activated: true,
             containment_started: false,
             contained: false,
             scheduling_context_present: true,
         };
-        assert!(!console_network_yield_to_admitted(wifi_listening));
-        assert!(!console_network_yield_to_admitted(
-            ConsoleNetworkYieldToAdmission {
-                service_state: ServiceState::Authenticated,
-                ..wifi_listening
+        assert!(console_network_signal_only_admitted(exact_pi));
+        assert!(console_network_signal_only_admitted(
+            ConsoleNetworkSignalOnlyAdmission {
+                runtime_direct_genet: false,
+                ..exact_pi
             }
         ));
-        assert!(console_network_yield_to_admitted(
-            ConsoleNetworkYieldToAdmission {
+        assert!(console_network_signal_only_admitted(
+            ConsoleNetworkSignalOnlyAdmission {
+                contract_direct_genet: false,
+                runtime_direct_genet: false,
+                cross_core_signal_only: false,
+                activated: false,
+                containment_started: true,
+                contained: true,
+                scheduling_context_present: false,
+                ..exact_pi
+            }
+        ));
+        for invalid in [
+            ConsoleNetworkSignalOnlyAdmission {
+                contract_direct_genet: false,
                 runtime_direct_genet: true,
-                ..wifi_listening
-            }
-        ));
+                cross_core_signal_only: false,
+                ..exact_pi
+            },
+            ConsoleNetworkSignalOnlyAdmission {
+                cross_core_signal_only: false,
+                ..exact_pi
+            },
+            ConsoleNetworkSignalOnlyAdmission {
+                yield_to_child_after_signal: true,
+                ..exact_pi
+            },
+            ConsoleNetworkSignalOnlyAdmission {
+                activated: false,
+                ..exact_pi
+            },
+            ConsoleNetworkSignalOnlyAdmission {
+                containment_started: true,
+                ..exact_pi
+            },
+            ConsoleNetworkSignalOnlyAdmission {
+                contained: true,
+                ..exact_pi
+            },
+            ConsoleNetworkSignalOnlyAdmission {
+                scheduling_context_present: false,
+                ..exact_pi
+            },
+        ] {
+            assert!(!console_network_signal_only_admitted(invalid));
+        }
     }
 }

@@ -823,7 +823,7 @@ USB_STALE_UEFI_HINT_MARKERS = (
 DRIVER_TASK_EXPECTED_AFFINITY_CORES = {
     "serial": 1,
     "usb-local-seat": 1,
-    "hdmi-text": 2,
+    "hdmi-text": 1,
     "bcmgenet-v5": 1,
     "cyw43455": 3,
     "sdio-host": 3,

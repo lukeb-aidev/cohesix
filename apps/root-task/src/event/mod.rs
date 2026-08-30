@@ -2668,6 +2668,16 @@ pub struct PumpMetrics {
     pub net_direct_genet_productive_effective_high_us: u64,
     /// Sticky bounded reason mask for rejected productive continuations.
     pub net_direct_genet_productive_reject_reasons: u32,
+    /// Exact drained responses that opened a bounded direct-GENET active tail.
+    pub net_direct_genet_active_tail_opened: u64,
+    /// Active tails derived from exact cross-core signal-only drain authority.
+    pub net_direct_genet_cross_core_signal_only_admissions: u64,
+    /// Complete physical-rotor quanta admitted while an active tail was open.
+    pub net_direct_genet_active_tail_admitted: u64,
+    /// Active tails closed by expiry, cap, or a safety/priority fence.
+    pub net_direct_genet_active_tail_closed: u64,
+    /// Largest observed wall time from the unslid active-tail opening sample.
+    pub net_direct_genet_active_tail_max_wall_us: u64,
     /// Physical-console output records deferred behind active keyboard input.
     pub physical_console_output_deferred: u64,
     /// Deferred physical-console output records flushed during idle turns.
@@ -4177,6 +4187,124 @@ enum DirectGenetProductiveProgress {
     DrainAndStage,
 }
 
+/// Generated scheduling relationship that can authorize a retained
+/// direct-GENET continuation. Same-core service retains the existing exact
+/// `YieldTo` proof; cross-core service is signal-only and can rely only on a
+/// subsequently observed durable `OutputDrained` event.
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DirectGenetContinuationMode {
+    SameCoreYieldTo,
+    CrossCoreSignalOnly,
+}
+
+/// Derive the only two direct-GENET continuation modes from one generated
+/// contract. Every object and scheduling field consumed by the root/child
+/// boundary must agree with the temporal service entry; drift disables
+/// retained execution.
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+fn direct_genet_continuation_mode_for_contract(
+    console: &crate::generated::ConsoleNetworkServiceConfig,
+    root: &crate::generated::TemporalTaskConfig,
+    service: &crate::generated::TemporalTaskConfig,
+) -> Option<DirectGenetContinuationMode> {
+    let exact_profile = console.enabled
+        && console.abi_version == 5
+        && console.listener_port == 31_337
+        && console.single_listener
+        && console.direct_genet
+        && !console.direct_virtio
+        && console.max_packets_per_wake == 8
+        && console.max_commands_per_wake == 8
+        && console.max_control_inflight == 1
+        && console.timer_clock_hz == 54_000_000
+        && console.auth_timeout_ms == 5_000
+        && console.idle_timeout_ms == 300_000
+        && matches!(
+            (root.kind, root.execution),
+            (
+                crate::generated::TemporalTaskKind::RootControl,
+                crate::generated::TemporalExecution::Active
+            )
+        )
+        && matches!(
+            (service.kind, service.execution),
+            (
+                crate::generated::TemporalTaskKind::Service,
+                crate::generated::TemporalExecution::Active
+            )
+        )
+        && root.admitted
+        && service.admitted
+        && root.core == 0
+        && root.scheduling_context_slot == 1
+        && root.scheduling_context_bits == 7
+        && root.sched_control_core == 0
+        && root.budget_us == 5_500
+        && root.period_us == 10_000
+        && root.deadline_us == 10_000
+        && root.blocking_us == 0
+        && root.jitter_us == 0
+        && root.max_refills == 2
+        && root.priority == 200
+        && root.mcp == 200
+        && root.timeout_badge == 653_131_777
+        && matches!(
+            root.timeout_policy,
+            crate::generated::TimeoutPolicy::NaturalPostpone
+        )
+        && root.consumed_time_evidence
+        && root.wcet_us == 2_500
+        && root.response_time_us == 5_100
+        && service.core == 2
+        && service.scheduling_context_slot == 6
+        && service.scheduling_context_bits == 8
+        && service.sched_control_core == 2
+        && service.budget_us == 3_000
+        && service.period_us == 10_000
+        && service.deadline_us == 10_000
+        && service.blocking_us == 0
+        && service.jitter_us == 0
+        && service.max_refills == 8
+        && service.priority == 200
+        && service.mcp == 200
+        && service.timeout_badge == 653_131_785
+        && matches!(
+            service.timeout_policy,
+            crate::generated::TimeoutPolicy::NaturalPostpone
+        )
+        && service.consumed_time_evidence
+        && service.wcet_us == 3_000
+        && service.response_time_us == 3_000
+        && console.core == service.core
+        && console.scheduling_context_slot == service.scheduling_context_slot
+        && console.scheduling_context_bits == service.scheduling_context_bits
+        && console.priority == service.priority
+        && console.mcp == service.mcp
+        && console.budget_us == service.budget_us
+        && console.period_us == service.period_us
+        && console.max_refills == service.max_refills
+        && console.timeout_badge == service.timeout_badge
+        && root.priority == service.priority
+        && root.mcp == service.mcp;
+    if !exact_profile {
+        return None;
+    }
+    Some(DirectGenetContinuationMode::CrossCoreSignalOnly)
+}
+
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+fn direct_genet_continuation_mode_from_generated() -> Option<DirectGenetContinuationMode> {
+    let console = crate::generated::console_network_service_config();
+    let root = crate::generated::temporal_tasks()
+        .iter()
+        .find(|task| task.id == "root-control")?;
+    let service = crate::generated::temporal_tasks()
+        .iter()
+        .find(|task| task.id == "console-network-service")?;
+    direct_genet_continuation_mode_for_contract(&console, root, service)
+}
+
 /// Opaque direct-GENET authority retained only by an exact productive return.
 #[cfg(all(feature = "kernel", feature = "net-console"))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -4185,6 +4313,8 @@ pub(crate) struct PiRootControlProductiveContinuation {
     connection_id: u64,
     expected_phase: LinkedRuntimeServicePhase,
     progress: DirectGenetProductiveProgress,
+    mode: DirectGenetContinuationMode,
+    exact_same_core_yield_to_observed: bool,
     child_credit_scaled: u128,
     child_credit_counter_hz: u64,
 }
@@ -4197,6 +4327,8 @@ impl PiRootControlProductiveContinuation {
             connection_id,
             expected_phase: LinkedRuntimeServicePhase::Serial,
             progress: DirectGenetProductiveProgress::StagePublished,
+            mode: DirectGenetContinuationMode::SameCoreYieldTo,
+            exact_same_core_yield_to_observed: true,
             child_credit_scaled: 0,
             child_credit_counter_hz: 0,
         }
@@ -4214,12 +4346,47 @@ impl PiRootControlProductiveContinuation {
             ..Self::for_test(generation, connection_id)
         }
     }
+
+    pub(crate) const fn for_test_completed_response(generation: u64, connection_id: u64) -> Self {
+        Self {
+            generation,
+            connection_id,
+            expected_phase: LinkedRuntimeServicePhase::Serial,
+            progress: DirectGenetProductiveProgress::ResponseDrained,
+            mode: DirectGenetContinuationMode::SameCoreYieldTo,
+            exact_same_core_yield_to_observed: true,
+            child_credit_scaled: 0,
+            child_credit_counter_hz: 0,
+        }
+    }
+
+    pub(crate) const fn for_test_cross_core_completed_response(
+        generation: u64,
+        connection_id: u64,
+    ) -> Self {
+        Self {
+            mode: DirectGenetContinuationMode::CrossCoreSignalOnly,
+            exact_same_core_yield_to_observed: false,
+            ..Self::for_test_completed_response(generation, connection_id)
+        }
+    }
 }
 
 #[cfg(all(feature = "kernel", feature = "net-console"))]
 impl PiRootControlProductiveContinuation {
     pub(crate) const fn same_lane(self, other: Self) -> bool {
-        self.generation == other.generation && self.connection_id == other.connection_id
+        self.generation == other.generation
+            && self.connection_id == other.connection_id
+            && matches!(
+                (self.mode, other.mode),
+                (
+                    DirectGenetContinuationMode::SameCoreYieldTo,
+                    DirectGenetContinuationMode::SameCoreYieldTo
+                ) | (
+                    DirectGenetContinuationMode::CrossCoreSignalOnly,
+                    DirectGenetContinuationMode::CrossCoreSignalOnly
+                )
+            )
     }
 
     pub(crate) const fn child_credit_scaled(self) -> u128 {
@@ -4228,6 +4395,33 @@ impl PiRootControlProductiveContinuation {
 
     pub(crate) const fn child_credit_counter_hz(self) -> u64 {
         self.child_credit_counter_hz
+    }
+
+    /// Whether this exact authenticated quantum durably drained a response and
+    /// may therefore open the bounded Pi direct-GENET active tail. Same-core
+    /// service requires the retained successful `YieldTo`; exact generated
+    /// cross-core service instead requires signal-only zero-credit evidence.
+    pub(crate) const fn opens_active_hot_tail(self) -> bool {
+        let exact_accounting = match self.mode {
+            DirectGenetContinuationMode::SameCoreYieldTo => self.exact_same_core_yield_to_observed,
+            DirectGenetContinuationMode::CrossCoreSignalOnly => {
+                !self.exact_same_core_yield_to_observed
+                    && self.child_credit_scaled == 0
+                    && self.child_credit_counter_hz == 0
+            }
+        };
+        exact_accounting
+            && matches!(
+                self.progress,
+                DirectGenetProductiveProgress::CommandAcceptedStagePublishedAndDrained
+                    | DirectGenetProductiveProgress::ResponseDrained
+                    | DirectGenetProductiveProgress::DrainAndStage
+            )
+    }
+
+    pub(crate) const fn is_cross_core_signal_only_hot_tail(self) -> bool {
+        matches!(self.mode, DirectGenetContinuationMode::CrossCoreSignalOnly)
+            && self.opens_active_hot_tail()
     }
 }
 
@@ -4239,6 +4433,7 @@ struct DirectGenetProductiveQuantumEvidence {
     before: DirectGenetProductiveQuantumSnapshot,
     after: DirectGenetProductiveQuantumSnapshot,
     causal_stage_completed: bool,
+    continuation_mode: DirectGenetContinuationMode,
     last_input_source: ConsoleInputSource,
     next_phase: LinkedRuntimeServicePhase,
     network_service_quarantined: bool,
@@ -4347,18 +4542,46 @@ fn direct_genet_productive_quantum_continuation_entitled(
         | DirectGenetProductiveProgress::ResponseDrained
         | DirectGenetProductiveProgress::DrainAndStage => LinkedRuntimeServicePhase::Serial,
     };
-    let stage_consistent = if durable_child_stage {
-        exact_response_stage && yield_calls != 0
-    } else {
-        no_response_stage && no_child_stage
+    let stage_consistent = match evidence.continuation_mode {
+        DirectGenetContinuationMode::SameCoreYieldTo => {
+            if durable_child_stage {
+                exact_response_stage && yield_calls != 0
+            } else {
+                no_response_stage && no_child_stage
+            }
+        }
+        DirectGenetContinuationMode::CrossCoreSignalOnly => {
+            if durable_child_stage {
+                exact_response_stage
+            } else {
+                no_response_stage && no_child_stage
+            }
+        }
     };
-    let progress_call_count_exact = match progress {
-        DirectGenetProductiveProgress::CommandAccepted => yield_calls == 0,
-        DirectGenetProductiveProgress::CommandAcceptedAndStagePublished
-        | DirectGenetProductiveProgress::StagePublished
-        | DirectGenetProductiveProgress::ResponseDrained => yield_calls == 1,
-        DirectGenetProductiveProgress::CommandAcceptedStagePublishedAndDrained => yield_calls == 2,
-        DirectGenetProductiveProgress::DrainAndStage => (1..=2).contains(&yield_calls),
+    let progress_call_count_exact = match evidence.continuation_mode {
+        DirectGenetContinuationMode::SameCoreYieldTo => match progress {
+            DirectGenetProductiveProgress::CommandAccepted => yield_calls == 0,
+            DirectGenetProductiveProgress::CommandAcceptedAndStagePublished
+            | DirectGenetProductiveProgress::StagePublished
+            | DirectGenetProductiveProgress::ResponseDrained => yield_calls == 1,
+            DirectGenetProductiveProgress::CommandAcceptedStagePublishedAndDrained => {
+                yield_calls == 2
+            }
+            DirectGenetProductiveProgress::DrainAndStage => (1..=2).contains(&yield_calls),
+        },
+        DirectGenetContinuationMode::CrossCoreSignalOnly => {
+            let accounting_stayed_zero = evidence.before.child_yield_calls == 0
+                && evidence.after.child_yield_calls == 0
+                && evidence.before.child_yield_counter_hz == 0
+                && evidence.after.child_yield_counter_hz == 0
+                && evidence.before.child_yield_call_wall_scaled == 0
+                && evidence.after.child_yield_call_wall_scaled == 0
+                && evidence.before.child_yield_credit_scaled == 0
+                && evidence.after.child_yield_credit_scaled == 0;
+            accounting_stayed_zero
+                && (matches!(progress, DirectGenetProductiveProgress::CommandAccepted)
+                    || exact_response_drain)
+        }
     };
     (same_identity
         && (exact_net_command || no_net_command)
@@ -4383,8 +4606,24 @@ fn direct_genet_productive_quantum_continuation_entitled(
             connection_id: evidence.before.connection_id,
             expected_phase,
             progress,
-            child_credit_scaled,
-            child_credit_counter_hz: evidence.after.child_yield_counter_hz,
+            mode: evidence.continuation_mode,
+            exact_same_core_yield_to_observed: yield_calls != 0,
+            child_credit_scaled: if matches!(
+                evidence.continuation_mode,
+                DirectGenetContinuationMode::CrossCoreSignalOnly
+            ) {
+                0
+            } else {
+                child_credit_scaled
+            },
+            child_credit_counter_hz: if matches!(
+                evidence.continuation_mode,
+                DirectGenetContinuationMode::CrossCoreSignalOnly
+            ) {
+                0
+            } else {
+                evidence.after.child_yield_counter_hz
+            },
         })
 }
 
@@ -4393,6 +4632,7 @@ fn direct_genet_productive_quantum_continuation_entitled(
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct DirectGenetProductiveContinuationFenceEvidence {
     expected: Option<PiRootControlProductiveContinuation>,
+    current_continuation_mode: Option<DirectGenetContinuationMode>,
     current_generation: Option<u64>,
     current_connection_id: Option<u64>,
     next_phase: LinkedRuntimeServicePhase,
@@ -4411,7 +4651,8 @@ fn direct_genet_productive_continuation_fence_clear(
     evidence: DirectGenetProductiveContinuationFenceEvidence,
 ) -> bool {
     evidence.expected.is_some_and(|expected| {
-        evidence.current_generation == Some(expected.generation)
+        evidence.current_continuation_mode == Some(expected.mode)
+            && evidence.current_generation == Some(expected.generation)
             && evidence.current_connection_id == Some(expected.connection_id)
             && evidence.next_phase == expected.expected_phase
     }) && !evidence.network_service_quarantined
@@ -4422,6 +4663,20 @@ fn direct_genet_productive_continuation_fence_clear(
         && !evidence.physical_operator_work_pending
         && !evidence.physical_console_response_pending
         && !evidence.local_fault_pending
+}
+
+/// The active tail requires stronger authority than an ordinary productive
+/// continuation: an exact response must already have drained. The remaining
+/// identity, recovery, passive-admission, and physical-operator fences stay
+/// byte-for-byte identical to the ordinary retained-quantum boundary.
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+fn direct_genet_active_hot_tail_fence_clear(
+    evidence: DirectGenetProductiveContinuationFenceEvidence,
+) -> bool {
+    evidence
+        .expected
+        .is_some_and(PiRootControlProductiveContinuation::opens_active_hot_tail)
+        && direct_genet_productive_continuation_fence_clear(evidence)
 }
 
 /// Exact isolated direct-GENET identity required to supersede the legacy TCP
@@ -8795,7 +9050,7 @@ where
                     self.pi_root_control_productive_continuation_identity = Some(continuation);
                     // The outer userland guard may retain this refill only
                     // while its original Yield-return wall remains strictly
-                    // below the generated 250-us pre-leaf cut. Every complete
+                    // below the generated budget-minus-WCET pre-leaf cut. Every complete
                     // quantum retains identity, local fairness, and all fault
                     // fences; any drift keeps the explicit Yield.
                     return false;
@@ -10850,6 +11105,7 @@ where
         before: DirectGenetProductiveQuantumSnapshot,
         causal_stage_completed: bool,
     ) -> Option<PiRootControlProductiveContinuation> {
+        let continuation_mode = direct_genet_continuation_mode_from_generated()?;
         let Some(after) = self.direct_genet_productive_quantum_snapshot() else {
             return None;
         };
@@ -10862,6 +11118,7 @@ where
                 before,
                 after,
                 causal_stage_completed,
+                continuation_mode,
                 last_input_source: self.last_input_source,
                 next_phase: self.linked_runtime_service_phase,
                 network_service_quarantined: self.network_service_quarantined,
@@ -10891,6 +11148,7 @@ where
         direct_genet_productive_continuation_fence_clear(
             DirectGenetProductiveContinuationFenceEvidence {
                 expected: Some(expected),
+                current_continuation_mode: direct_genet_continuation_mode_from_generated(),
                 current_generation: snapshot.map(|snapshot| snapshot.generation),
                 current_connection_id: snapshot.map(|snapshot| snapshot.connection_id),
                 next_phase: self.linked_runtime_service_phase,
@@ -10907,6 +11165,40 @@ where
                 local_fault_pending,
             },
         )
+    }
+
+    /// Recheck the exact drained-response authority that may retain a bounded
+    /// active direct-GENET tail. A passive command or any physical operator,
+    /// recovery, containment, reboot, handoff, identity, or local-fault drift
+    /// closes the tail before another complete rotor quantum begins.
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    pub(crate) fn pi_root_control_active_hot_tail_fence_clear(
+        &self,
+        expected: PiRootControlProductiveContinuation,
+    ) -> bool {
+        let snapshot = self.direct_genet_productive_quantum_snapshot();
+        let local_fault_pending = self.net.as_deref().is_none_or(|net| {
+            net.console_service_local_fault_pending()
+                || net.console_service_local_containment_pending()
+        });
+        direct_genet_active_hot_tail_fence_clear(DirectGenetProductiveContinuationFenceEvidence {
+            expected: Some(expected),
+            current_continuation_mode: direct_genet_continuation_mode_from_generated(),
+            current_generation: snapshot.map(|snapshot| snapshot.generation),
+            current_connection_id: snapshot.map(|snapshot| snapshot.connection_id),
+            next_phase: self.linked_runtime_service_phase,
+            network_service_quarantined: self.network_service_quarantined,
+            reboot_pending: self.reboot_pending,
+            recovery_or_containment_pending: self.pi_isolated_service_recovery_pending()
+                || self.pi_isolated_service_containment_pending(),
+            handoff_pending: self.deferred_console_network_handoff_pending(),
+            passive_admission_pending: self.pi_root_control_passive_admission_pending(),
+            physical_operator_work_pending: snapshot
+                .is_none_or(|snapshot| snapshot.physical_operator_work_pending),
+            physical_console_response_pending: snapshot
+                .is_none_or(|snapshot| snapshot.physical_console_response_pending),
+            local_fault_pending,
+        })
     }
 
     /// Consume the opaque identity emitted only by an exact false-to-retain
@@ -10942,6 +11234,54 @@ where
                 .saturating_add(1);
             self.metrics.net_direct_genet_productive_reject_reasons |= reject_reason;
         }
+    }
+
+    /// Record one bounded active-tail opening without changing strict pcont
+    /// semantics or any child/shared-memory diagnostic ABI.
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    pub(crate) fn record_pi_root_control_active_hot_tail_opened(
+        &mut self,
+        continuation: PiRootControlProductiveContinuation,
+    ) {
+        self.metrics.net_direct_genet_active_tail_opened = self
+            .metrics
+            .net_direct_genet_active_tail_opened
+            .saturating_add(1);
+        if continuation.is_cross_core_signal_only_hot_tail() {
+            self.metrics
+                .net_direct_genet_cross_core_signal_only_admissions = self
+                .metrics
+                .net_direct_genet_cross_core_signal_only_admissions
+                .saturating_add(1);
+        }
+    }
+
+    /// Record one complete physical-rotor admission inside the active tail.
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    pub(crate) fn record_pi_root_control_active_hot_tail_admitted(&mut self, wall_us: u64) {
+        self.metrics.net_direct_genet_active_tail_admitted = self
+            .metrics
+            .net_direct_genet_active_tail_admitted
+            .saturating_add(1);
+        self.metrics.net_direct_genet_active_tail_max_wall_us = self
+            .metrics
+            .net_direct_genet_active_tail_max_wall_us
+            .max(wall_us);
+    }
+
+    /// Record the single terminal cut for one active tail. Expiry, the shared
+    /// cap, passive admission, operator priority, and safety fences intentionally
+    /// share this scalar; existing pcont and subsystem telemetry identify why.
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    pub(crate) fn record_pi_root_control_active_hot_tail_closed(&mut self, wall_us: u64) {
+        self.metrics.net_direct_genet_active_tail_closed = self
+            .metrics
+            .net_direct_genet_active_tail_closed
+            .saturating_add(1);
+        self.metrics.net_direct_genet_active_tail_max_wall_us = self
+            .metrics
+            .net_direct_genet_active_tail_max_wall_us
+            .max(wall_us);
     }
 
     /// Return whether the isolated direct-GENET child retained one exact
@@ -30286,6 +30626,15 @@ where
                                 self.metrics.net_direct_genet_productive_effective_high_us,
                                 self.metrics.net_direct_genet_productive_reject_reasons,
                             ));
+                            let active_tail = format_message(format_args!(
+                                "netstats: isolated_hot_tail opened={} signal_only_admit={} admitted={} closed={} max_wall_us={}",
+                                self.metrics.net_direct_genet_active_tail_opened,
+                                self.metrics
+                                    .net_direct_genet_cross_core_signal_only_admissions,
+                                self.metrics.net_direct_genet_active_tail_admitted,
+                                self.metrics.net_direct_genet_active_tail_closed,
+                                self.metrics.net_direct_genet_active_tail_max_wall_us,
+                            ));
                             let units = format_message(format_args!(
                                 "netstats: isolated_units observe={} output={} output_ok={} disconnect={} ingress={} tick={} egress={} diagnostic={}",
                                 diagnostic.observe_child_turns,
@@ -30311,7 +30660,7 @@ where
                                 yield_credit_us,
                                 diagnostic.direct_genet_yield_invalid_reasons,
                             ));
-                            (progress, units, state)
+                            (progress, active_tail, units, state)
                         });
                         let line_one = format_message(format_args!(
                             "netstats: rx_pkts={} tx_pkts={} rx_used={} tx_used={} polls={}",
@@ -30585,8 +30934,9 @@ where
                         self.emit_console_line(line_local_seat.as_str());
                         self.emit_console_line(line_four.as_str());
                         self.emit_console_line(line_five.as_str());
-                        if let Some((progress, units, state)) = isolated_lines {
+                        if let Some((progress, active_tail, units, state)) = isolated_lines {
                             self.emit_console_line(progress.as_str());
+                            self.emit_console_line(active_tail.as_str());
                             self.emit_console_line(units.as_str());
                             self.emit_console_line(state.as_str());
                         }
@@ -39194,17 +39544,9 @@ mod tests {
                     diagnostic.response_drains = diagnostic
                         .response_drains
                         .saturating_add(u64::from(completion_fused));
-                    let child_calls = 1 + u64::from(completion_fused);
-                    diagnostic.direct_genet_yield_calls = diagnostic
-                        .direct_genet_yield_calls
-                        .saturating_add(child_calls);
-                    diagnostic.direct_genet_yield_counter_hz = 54_000_000;
-                    diagnostic.direct_genet_yield_call_wall_scaled = diagnostic
-                        .direct_genet_yield_call_wall_scaled
-                        .saturating_add(5_400_000_000u128.saturating_mul(u128::from(child_calls)));
-                    diagnostic.direct_genet_yield_child_credit_scaled = diagnostic
-                        .direct_genet_yield_child_credit_scaled
-                        .saturating_add(4_320_000_000u128.saturating_mul(u128::from(child_calls)));
+                    // The current Pi child is cross-core signal-only. A fake
+                    // stage/drain must preserve exact zero same-core YieldTo
+                    // accounting just like the production boundary.
                     self.isolated_diagnostics = Some(diagnostic);
                 }
             }
@@ -44600,6 +44942,24 @@ mod tests {
         });
         let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
         pump.session = Some(SessionRole::Queen);
+        #[cfg(feature = "kernel")]
+        {
+            pump.record_pi_root_control_active_hot_tail_opened(
+                PiRootControlProductiveContinuation::for_test_cross_core_completed_response(4, 1),
+            );
+            pump.record_pi_root_control_active_hot_tail_admitted(3);
+            pump.record_pi_root_control_active_hot_tail_admitted(7);
+            pump.record_pi_root_control_active_hot_tail_closed(8);
+            assert_eq!(pump.metrics().net_direct_genet_active_tail_opened, 1);
+            assert_eq!(
+                pump.metrics()
+                    .net_direct_genet_cross_core_signal_only_admissions,
+                1
+            );
+            assert_eq!(pump.metrics().net_direct_genet_active_tail_admitted, 2);
+            assert_eq!(pump.metrics().net_direct_genet_active_tail_closed, 1);
+            assert_eq!(pump.metrics().net_direct_genet_active_tail_max_wall_us, 8);
+        }
         pump.serial_mut().driver_mut().push_rx(b"netstats\n");
 
         pump.poll();
@@ -44640,6 +45000,13 @@ mod tests {
         assert!(
             rendered.contains(
                 "netstats: isolated_progress generation=4 poll_ms=900 progress_ms=850 unit=ingress turns=70 progress=12"
+            ),
+            "{rendered}"
+        );
+        #[cfg(feature = "kernel")]
+        assert!(
+            rendered.contains(
+                "netstats: isolated_hot_tail opened=1 signal_only_admit=1 admitted=2 closed=1 max_wall_us=8"
             ),
             "{rendered}"
         );
@@ -54910,7 +55277,7 @@ mod tests {
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[test]
-    fn direct_genet_causal_active_command_stages_response_in_the_existing_five_unit_quantum() {
+    fn direct_genet_fused_drain_fails_closed_without_exact_generated_pi_topology() {
         struct LinkedRuntimeTestReset;
 
         impl Drop for LinkedRuntimeTestReset {
@@ -54992,8 +55359,8 @@ mod tests {
             pump.linked_runtime_service_phase = LinkedRuntimeServicePhase::Network;
 
             assert!(
-                !pump.poll_root_control_quantum_for_state(true, true),
-                "one exact authenticated GENET command and staged response may retain only the Pi-guarded activation",
+                pump.poll_root_control_quantum_for_state(true, true),
+                "canonical host tests retain QEMU generated truth, so Pi-only fused drain authority must fail closed",
             );
             assert_eq!(pump.metrics.accepted_commands, 1);
             assert_eq!(
@@ -55004,28 +55371,10 @@ mod tests {
             assert_eq!(pump.metrics.net_direct_genet_immediate_dispatches, 1);
             assert_eq!(pump.metrics.net_direct_genet_immediate_stage_turns, 1);
             assert_eq!(pump.metrics.net_direct_genet_operator_rotations, 1);
-            let retained_identity = pump
-                .take_pi_root_control_productive_continuation_identity()
-                .expect("the exact false-to-retain path emits one opaque identity");
-            assert_eq!(
-                retained_identity.progress,
-                DirectGenetProductiveProgress::CommandAcceptedStagePublishedAndDrained,
-                "the causal GENET stage may retain only after its exact child drain is also durable",
-            );
-            assert_eq!(retained_identity.child_credit_counter_hz(), 54_000_000);
-            assert_eq!(retained_identity.child_credit_scaled(), 8_640_000_000);
-            assert!(pump.pi_root_control_productive_continuation_fence_clear(retained_identity));
             assert!(
-                !pump.pi_root_control_productive_continuation_fence_clear(
-                    PiRootControlProductiveContinuation::for_test(2, 17),
-                ),
-                "generation drift must stop before another EventPump poll",
-            );
-            assert!(
-                !pump.pi_root_control_productive_continuation_fence_clear(
-                    PiRootControlProductiveContinuation::for_test(1, 18),
-                ),
-                "connection drift must stop before another EventPump poll",
+                pump.take_pi_root_control_productive_continuation_identity()
+                    .is_none(),
+                "non-Pi generated topology cannot mint a Pi continuation token",
             );
             assert!(
                 !pump.pending_net_flush.active(),
@@ -55044,10 +55393,10 @@ mod tests {
         assert!(genet.isolated_diagnostics.is_some_and(|diagnostic| {
             !diagnostic.awaiting_batch_drain
                 && diagnostic.response_drains == 1
-                && diagnostic.direct_genet_yield_calls == 2
-                && diagnostic.direct_genet_yield_counter_hz == 54_000_000
-                && diagnostic.direct_genet_yield_call_wall_scaled == 10_800_000_000
-                && diagnostic.direct_genet_yield_child_credit_scaled == 8_640_000_000
+                && diagnostic.direct_genet_yield_calls == 0
+                && diagnostic.direct_genet_yield_counter_hz == 0
+                && diagnostic.direct_genet_yield_call_wall_scaled == 0
+                && diagnostic.direct_genet_yield_child_credit_scaled == 0
         }));
         assert_eq!(
             genet.lines.len(),
@@ -55062,7 +55411,7 @@ mod tests {
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[test]
-    fn direct_genet_serial_start_retains_exact_command_acceptance_for_network_stage() {
+    fn direct_genet_serial_start_yields_after_stage_until_exact_cross_core_drain() {
         struct LinkedRuntimeTestReset;
 
         impl Drop for LinkedRuntimeTestReset {
@@ -55138,25 +55487,22 @@ mod tests {
         pump.linked_runtime_service_phase = LinkedRuntimeServicePhase::Serial;
         let explicit_yield = pump.poll_root_control_quantum_for_state(true, true);
         assert!(
-            !explicit_yield,
-            "the production Serial-start rotation should retain its exact accepted command and durable stage: phase={:?} accepted={} last_source={:?} metrics={:?}",
+            explicit_yield,
+            "a cross-core stage without exact OutputDrained evidence must return to the scheduler: phase={:?} accepted={} last_source={:?} metrics={:?}",
             pump.linked_runtime_service_phase,
             pump.metrics.accepted_commands,
             pump.last_input_source,
             pump.metrics,
         );
-        let continuation = pump
-            .take_pi_root_control_productive_continuation_identity()
-            .expect("Serial-start command acceptance emits exact continuation authority");
-        assert_eq!(
-            continuation.progress,
-            DirectGenetProductiveProgress::CommandAcceptedAndStagePublished,
+        assert!(
+            pump.take_pi_root_control_productive_continuation_identity()
+                .is_none(),
+            "stage-only progress cannot mint cross-core continuation authority",
         );
         assert_eq!(
             pump.linked_runtime_service_phase,
             LinkedRuntimeServicePhase::Serial,
         );
-        assert!(pump.pi_root_control_productive_continuation_fence_clear(continuation));
         assert!(
             !pump.pending_net_flush.active(),
             "a durable isolated stage must not create legacy flush debt",
@@ -55165,10 +55511,10 @@ mod tests {
         assert!(genet.isolated_diagnostics.is_some_and(|diagnostic| {
             diagnostic.awaiting_batch_drain
                 && diagnostic.response_drains == 0
-                && diagnostic.direct_genet_yield_calls == 1
-                && diagnostic.direct_genet_yield_counter_hz == 54_000_000
-                && diagnostic.direct_genet_yield_call_wall_scaled == 5_400_000_000
-                && diagnostic.direct_genet_yield_child_credit_scaled == 4_320_000_000
+                && diagnostic.direct_genet_yield_calls == 0
+                && diagnostic.direct_genet_yield_counter_hz == 0
+                && diagnostic.direct_genet_yield_call_wall_scaled == 0
+                && diagnostic.direct_genet_yield_child_credit_scaled == 0
         }));
         assert_eq!(
             genet.lines.len(),
@@ -55383,6 +55729,168 @@ mod tests {
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[test]
+    fn direct_genet_continuation_mode_requires_exact_generated_topology() {
+        let mut console = crate::generated::console_network_service_config();
+        let mut root = *crate::generated::temporal_tasks()
+            .iter()
+            .find(|task| task.id == "root-control")
+            .expect("generated root-control task must exist");
+        let mut service = *crate::generated::temporal_tasks()
+            .iter()
+            .find(|task| task.id == "console-network-service")
+            .expect("generated console-network service task must exist");
+        root.core = 0;
+        root.scheduling_context_slot = 1;
+        root.scheduling_context_bits = 7;
+        root.sched_control_core = 0;
+        root.budget_us = 5_500;
+        root.period_us = 10_000;
+        root.deadline_us = 10_000;
+        root.blocking_us = 0;
+        root.jitter_us = 0;
+        root.max_refills = 2;
+        root.priority = 200;
+        root.mcp = 200;
+        root.timeout_badge = 653_131_777;
+        root.timeout_policy = crate::generated::TimeoutPolicy::NaturalPostpone;
+        root.consumed_time_evidence = true;
+        root.wcet_us = 2_500;
+        root.response_time_us = 5_100;
+        service.core = 2;
+        service.scheduling_context_slot = 6;
+        service.scheduling_context_bits = 8;
+        service.sched_control_core = 2;
+        service.budget_us = 3_000;
+        service.period_us = 10_000;
+        service.deadline_us = 10_000;
+        service.blocking_us = 0;
+        service.jitter_us = 0;
+        service.max_refills = 8;
+        service.priority = 200;
+        service.mcp = 200;
+        service.timeout_badge = 653_131_785;
+        service.timeout_policy = crate::generated::TimeoutPolicy::NaturalPostpone;
+        service.consumed_time_evidence = true;
+        service.wcet_us = 3_000;
+        service.response_time_us = 3_000;
+        console.abi_version = 5;
+        console.listener_port = 31_337;
+        console.single_listener = true;
+        console.direct_virtio = false;
+        console.direct_genet = true;
+        console.max_packets_per_wake = 8;
+        console.max_commands_per_wake = 8;
+        console.max_control_inflight = 1;
+        console.timer_clock_hz = 54_000_000;
+        console.auth_timeout_ms = 5_000;
+        console.idle_timeout_ms = 300_000;
+        console.core = service.core;
+        console.scheduling_context_slot = service.scheduling_context_slot;
+        console.scheduling_context_bits = service.scheduling_context_bits;
+        console.priority = service.priority;
+        console.mcp = service.mcp;
+        console.budget_us = service.budget_us;
+        console.period_us = service.period_us;
+        console.max_refills = service.max_refills;
+        console.timeout_badge = service.timeout_badge;
+
+        assert_eq!(
+            direct_genet_continuation_mode_for_contract(&console, &root, &service),
+            Some(DirectGenetContinuationMode::CrossCoreSignalOnly),
+        );
+
+        assert_eq!(
+            direct_genet_continuation_mode_for_contract(
+                &crate::generated::ConsoleNetworkServiceConfig {
+                    core: 0,
+                    ..console
+                },
+                &root,
+                &crate::generated::TemporalTaskConfig {
+                    core: 0,
+                    sched_control_core: 0,
+                    ..service
+                },
+            ),
+            None,
+            "the retained same-core implementation cannot be selected by the exact cross-core Pi profile",
+        );
+
+        for drifted in [
+            crate::generated::ConsoleNetworkServiceConfig {
+                direct_virtio: true,
+                ..console
+            },
+            crate::generated::ConsoleNetworkServiceConfig {
+                direct_genet: false,
+                ..console
+            },
+            crate::generated::ConsoleNetworkServiceConfig {
+                core: root.core,
+                ..console
+            },
+            crate::generated::ConsoleNetworkServiceConfig {
+                scheduling_context_slot: console.scheduling_context_slot.saturating_add(1),
+                ..console
+            },
+            crate::generated::ConsoleNetworkServiceConfig {
+                timer_clock_hz: 24_000_000,
+                ..console
+            },
+        ] {
+            assert_eq!(
+                direct_genet_continuation_mode_for_contract(&drifted, &root, &service),
+                None,
+                "generated direct-GENET topology drift must fail closed: {drifted:?}",
+            );
+        }
+
+        for drifted_root in [
+            crate::generated::TemporalTaskConfig { core: 1, ..root },
+            crate::generated::TemporalTaskConfig {
+                budget_us: 5_499,
+                ..root
+            },
+            crate::generated::TemporalTaskConfig {
+                max_refills: 3,
+                ..root
+            },
+            crate::generated::TemporalTaskConfig {
+                response_time_us: 5_099,
+                ..root
+            },
+        ] {
+            assert_eq!(
+                direct_genet_continuation_mode_for_contract(&console, &drifted_root, &service),
+                None,
+                "root-control numeric drift must fail closed: {drifted_root:?}",
+            );
+        }
+        for drifted_service in [
+            crate::generated::TemporalTaskConfig { core: 3, ..service },
+            crate::generated::TemporalTaskConfig {
+                budget_us: 2_999,
+                ..service
+            },
+            crate::generated::TemporalTaskConfig {
+                max_refills: 2,
+                ..service
+            },
+            crate::generated::TemporalTaskConfig {
+                response_time_us: 2_999,
+                ..service
+            },
+        ] {
+            assert_eq!(
+                direct_genet_continuation_mode_for_contract(&console, &root, &drifted_service),
+                None,
+                "console-service numeric drift must fail closed: {drifted_service:?}",
+            );
+        }
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
     fn direct_genet_productive_continuation_types_exact_progress_and_rejects_mixed_or_stale_evidence(
     ) {
         let before = DirectGenetProductiveQuantumSnapshot {
@@ -55412,6 +55920,7 @@ mod tests {
             before,
             after: command_after,
             causal_stage_completed: false,
+            continuation_mode: DirectGenetContinuationMode::SameCoreYieldTo,
             last_input_source: ConsoleInputSource::Net,
             next_phase: LinkedRuntimeServicePhase::Serial,
             network_service_quarantined: false,
@@ -55485,6 +55994,35 @@ mod tests {
             Some(DirectGenetProductiveProgress::CommandAcceptedStagePublishedAndDrained),
             "one command may retain only when its new batch also produces the exact drain in two bounded child calls",
         );
+        let cross_core_fused = DirectGenetProductiveQuantumEvidence {
+            before: DirectGenetProductiveQuantumSnapshot {
+                child_yield_calls: 0,
+                child_yield_counter_hz: 0,
+                child_yield_call_wall_scaled: 0,
+                child_yield_credit_scaled: 0,
+                ..command_stage_and_drain.before
+            },
+            after: DirectGenetProductiveQuantumSnapshot {
+                child_yield_calls: 0,
+                child_yield_counter_hz: 0,
+                child_yield_call_wall_scaled: 0,
+                child_yield_credit_scaled: 0,
+                ..command_stage_and_drain.after
+            },
+            continuation_mode: DirectGenetContinuationMode::CrossCoreSignalOnly,
+            ..command_stage_and_drain
+        };
+        let cross_core_fused_continuation =
+            direct_genet_productive_quantum_continuation_entitled(cross_core_fused)
+                .expect("exact cross-core command/stage/drain must mint signal-only authority");
+        assert_eq!(
+            cross_core_fused_continuation.progress,
+            DirectGenetProductiveProgress::CommandAcceptedStagePublishedAndDrained,
+        );
+        assert!(cross_core_fused_continuation.opens_active_hot_tail());
+        assert!(cross_core_fused_continuation.is_cross_core_signal_only_hot_tail());
+        assert_eq!(cross_core_fused_continuation.child_credit_scaled(), 0);
+        assert_eq!(cross_core_fused_continuation.child_credit_counter_hz(), 0);
 
         let drain_before = DirectGenetProductiveQuantumSnapshot {
             child_awaiting_batch_drain: true,
@@ -55510,6 +56048,77 @@ mod tests {
                 .map(|continuation| continuation.progress),
             Some(DirectGenetProductiveProgress::ResponseDrained),
         );
+        let drain_without_successful_yield_to = DirectGenetProductiveQuantumEvidence {
+            after: DirectGenetProductiveQuantumSnapshot {
+                child_yield_calls: drain_before.child_yield_calls,
+                child_yield_call_wall_scaled: drain_before.child_yield_call_wall_scaled,
+                child_yield_credit_scaled: drain_before.child_yield_credit_scaled,
+                ..drain_after
+            },
+            ..drain
+        };
+        assert!(
+            direct_genet_productive_quantum_continuation_entitled(
+                drain_without_successful_yield_to,
+            )
+            .is_none(),
+            "a drained response without the exact successful same-core YieldTo cannot mint retained authority",
+        );
+
+        let cross_core_drain = DirectGenetProductiveQuantumEvidence {
+            before: DirectGenetProductiveQuantumSnapshot {
+                child_yield_calls: 0,
+                child_yield_counter_hz: 0,
+                child_yield_call_wall_scaled: 0,
+                child_yield_credit_scaled: 0,
+                ..drain_before
+            },
+            after: DirectGenetProductiveQuantumSnapshot {
+                child_yield_calls: 0,
+                child_yield_counter_hz: 0,
+                child_yield_call_wall_scaled: 0,
+                child_yield_credit_scaled: 0,
+                ..drain_after
+            },
+            continuation_mode: DirectGenetContinuationMode::CrossCoreSignalOnly,
+            ..drain
+        };
+        let cross_core_continuation =
+            direct_genet_productive_quantum_continuation_entitled(cross_core_drain)
+                .expect("exact cross-core OutputDrained progress must mint signal-only authority");
+        assert!(cross_core_continuation.opens_active_hot_tail());
+        assert!(cross_core_continuation.is_cross_core_signal_only_hot_tail());
+        assert_eq!(cross_core_continuation.child_credit_scaled(), 0);
+        assert_eq!(cross_core_continuation.child_credit_counter_hz(), 0);
+
+        for invalid_cross_core in [
+            DirectGenetProductiveQuantumEvidence {
+                continuation_mode: DirectGenetContinuationMode::CrossCoreSignalOnly,
+                ..stage
+            },
+            DirectGenetProductiveQuantumEvidence {
+                after: DirectGenetProductiveQuantumSnapshot {
+                    child_yield_calls: 1,
+                    child_yield_counter_hz: 54_000_000,
+                    child_yield_call_wall_scaled: 1,
+                    ..cross_core_drain.after
+                },
+                ..cross_core_drain
+            },
+            DirectGenetProductiveQuantumEvidence {
+                after: DirectGenetProductiveQuantumSnapshot {
+                    child_yield_invalid_reasons: 1,
+                    ..cross_core_drain.after
+                },
+                ..cross_core_drain
+            },
+        ] {
+            assert!(
+                direct_genet_productive_quantum_continuation_entitled(invalid_cross_core)
+                    .is_none(),
+                "cross-core signal-only continuation must require exact drain and zero YieldTo accounting: {invalid_cross_core:?}",
+            );
+        }
 
         let drain_and_stage = DirectGenetProductiveQuantumEvidence {
             after: DirectGenetProductiveQuantumSnapshot {
@@ -55686,8 +56295,13 @@ mod tests {
     #[test]
     fn direct_genet_productive_race_fence_rejects_every_late_authority_or_operator_change() {
         let continuation = PiRootControlProductiveContinuation::for_test(7, 17);
+        let completed_response =
+            PiRootControlProductiveContinuation::for_test_completed_response(7, 17);
+        let cross_core_completed_response =
+            PiRootControlProductiveContinuation::for_test_cross_core_completed_response(7, 17);
         let baseline = DirectGenetProductiveContinuationFenceEvidence {
             expected: Some(continuation),
+            current_continuation_mode: Some(DirectGenetContinuationMode::SameCoreYieldTo),
             current_generation: Some(7),
             current_connection_id: Some(17),
             next_phase: LinkedRuntimeServicePhase::Serial,
@@ -55701,9 +56315,51 @@ mod tests {
             local_fault_pending: false,
         };
         assert!(direct_genet_productive_continuation_fence_clear(baseline));
+        assert!(
+            !direct_genet_active_hot_tail_fence_clear(baseline),
+            "productive staging without a drained response cannot open the active tail",
+        );
+        let active_baseline = DirectGenetProductiveContinuationFenceEvidence {
+            expected: Some(completed_response),
+            ..baseline
+        };
+        assert!(direct_genet_active_hot_tail_fence_clear(active_baseline));
+        let cross_core_active_baseline = DirectGenetProductiveContinuationFenceEvidence {
+            expected: Some(cross_core_completed_response),
+            current_continuation_mode: Some(DirectGenetContinuationMode::CrossCoreSignalOnly),
+            ..active_baseline
+        };
+        assert!(direct_genet_active_hot_tail_fence_clear(
+            cross_core_active_baseline
+        ));
+        assert!(
+            !direct_genet_active_hot_tail_fence_clear(
+                DirectGenetProductiveContinuationFenceEvidence {
+                    current_continuation_mode: Some(DirectGenetContinuationMode::SameCoreYieldTo,),
+                    ..cross_core_active_baseline
+                },
+            ),
+            "cross-core authority expires when generated topology no longer matches",
+        );
+        assert!(
+            !direct_genet_active_hot_tail_fence_clear(
+                DirectGenetProductiveContinuationFenceEvidence {
+                    expected: Some(PiRootControlProductiveContinuation {
+                        exact_same_core_yield_to_observed: false,
+                        ..completed_response
+                    }),
+                    ..active_baseline
+                },
+            ),
+            "a response token without a successful same-core YieldTo observation fails closed",
+        );
         for evidence in [
             DirectGenetProductiveContinuationFenceEvidence {
                 expected: None,
+                ..baseline
+            },
+            DirectGenetProductiveContinuationFenceEvidence {
+                current_continuation_mode: None,
                 ..baseline
             },
             DirectGenetProductiveContinuationFenceEvidence {
@@ -55762,6 +56418,14 @@ mod tests {
             assert!(
                 !direct_genet_productive_continuation_fence_clear(evidence),
                 "late continuation-fence drift must Yield before work: {evidence:?}",
+            );
+            let active_evidence = DirectGenetProductiveContinuationFenceEvidence {
+                expected: evidence.expected.map(|_| completed_response),
+                ..evidence
+            };
+            assert!(
+                !direct_genet_active_hot_tail_fence_clear(active_evidence),
+                "late active-tail drift must Yield before work: {active_evidence:?}",
             );
         }
     }

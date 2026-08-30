@@ -337,11 +337,9 @@ refill across productive logical turns only inside a continuous CNTVCT window.
 It alternates exactly one Operator and one Driver, checks admission before both,
 retires each one-operation Driver finalizer before re-entry, and stops before
 the generated root-control `budget_us - wcet_us` reserve or after 64 productive
-units. The selected Pi values make that strict elapsed-time cut exactly 250 us
-(`2,750 - 2,500`); equality stops new-leaf admission so one complete declared
-2,500 us WCET remains inside the unchanged SC. An independent WCET audit
-rejected the proposed 2,500 us work-window interpretation: it could admit a
-fresh leaf at 2,499 us elapsed with only 251 us of SC budget remaining.
+units. The selected Pi values make that strict elapsed-time cut exactly
+3,000 us (`5,500 - 2,500`); equality stops new-leaf admission so one complete
+declared 2,500-us WCET remains inside the SC.
 A missing, zero, backwards, drifted, or otherwise invalid counter/configuration
 permits one legacy logical turn before yielding, preserving liveness. After
 service readiness, an attached Network turn may retain the same window only
@@ -360,13 +358,12 @@ generation/pair/lifetime rotation token must all agree. The rotation admits
 LocalSeat exactly once, performs one backend poll only when USB service debt
 exists, clears the token at Dispatch, performs no second Network operation in
 that wrapper, and selects only the next separately charged bounded Network turn
-after the caller rechecks the 250 us reserve and 64-unit cap. Real physical
+after the caller rechecks the 3,000-us reserve and 64-unit cap. Real physical
 input or response, terminal return, recovery, quarantine, containment, reboot,
 stale identity, idle, wait, nonprogress, handoff, pressure, fault, or any failed
-token yields and resets. The unchanged SC and natural-postpone policy remain
-the hard execution boundary. This replaces the former pair-restart Driver
-burst, changes no generated temporal value, and does not apply to QEMU or
-generic root control.
+token yields and resets. The selected SC and natural-postpone policy remain the
+hard execution boundary. This replaces the former pair-restart Driver burst and
+does not apply to QEMU or generic root control.
 
 During CYW43 bootstrap, an admitted and ready USB controller with
 `controller_ready && !command_ready` is itself bounded `LocalSeat` service debt,
@@ -382,45 +379,32 @@ an unacknowledged segment; it does not create another listener, queue, transport
 owner, or scheduling authority. QEMU retains its already-qualified TCP policy.
 
 QEMU direct-VirtIO retains the strict lower rotor: `ObserveChild`,
-`StageOutput`, `Disconnect`, then `ServiceTick`. Direct GENET alone selects an exact
-ready `StageOutput`, then an exact ready `Disconnect`; when neither is ready it
-alternates `ObserveChild` and `ServiceTick`, exactly one unit per Network visit.
-After an exact committed direct-GENET `StageOutput` returns from its same-core
-child `YieldTo`, root may consume and ACK only the causal sequence-last child
-publication in that same selected unit. Absence, backpressure, unrelated
-output, identity drift, or fault leaves any observed ACK pending for the
-ordinary `ObserveChild` turn; mediated WiFi and QEMU never enter the fused
-observation. Exact stage-plus-drain progress accounts both child
-calls and cannot pass a second command ahead of the response lane.
-After a mandatory Yield, direct GENET may retain another complete ordinary
-five-phase root quantum only while one accepted command and its response-stage
-unit make durable progress and the authenticated generation and connection remain
-exact. The first resumed `CNTVCT_EL0` sample remains the continuous wall origin;
-before each new complete quantum elapsed time must be strictly below the
-unchanged generated 250-us `budget_us - wcet_us` cut, and no more than 64
-complete quanta may be retained. Equality, passive admission, physical operator
-input or response, recovery, fault, containment, quarantine, reboot, handoff,
-identity drift, invalid timing, or no progress forces Yield. A queued second
-command remains behind ordinary Serial/LocalSeat/Dispatch/Display debt. The
-exact direct-GENET response lane
-retains generation, connection, `ControlCompleted`, and `OutputDrained` proof,
-so it supersedes the weaker legacy flush cursor; any identity or runtime drift
-fails closed to that bounded cursor. CYW43 keeps its ordinary connection-bound
-cursor. If one such cursor flush accepts exactly one current-generation
-authenticated response after the turn's CYW43 operation claim remains unused,
-it may spend only the remaining ordinary driver budget on that sole operation;
-every physical-operator, recovery, containment, reboot, quarantine, identity,
-acceptance-count, or prior-operation conflict denies it. This changes no SC,
-affinity, core, priority, queue, child authority, or QEMU selector. CYW43 keeps
-the distinct guarded 250-us/64-unit contract above.
+`StageOutput`, `Disconnect`, then `ServiceTick`. Direct GENET alone selects an
+exact ready `StageOutput`, then an exact ready `Disconnect`; when neither is
+ready it alternates `ObserveChild` and `ServiceTick`, exactly one unit per
+Network visit. Pi direct GENET now signals its core-2 child from root core 0 and
+does not call `SchedContext_YieldTo`, pre-drain the child SC, or subtract child
+credit. Same-core and cross-core progress authority remain distinct and
+fail-closed.
+
+An exact authenticated generation/connection `OutputDrained` transition may
+open one unslid root-local active tail for strictly less than 8 ms and no more
+than 64 complete ordinary physical-rotor quanta. The root SC remains the hard
+CPU bound. Every quantum rechecks passive admission, physical operator input or
+response, recovery, fault, containment, quarantine, reboot, handoff, identity,
+final Serial phase, counter frequency, wall expiry, and the shared cap. Empty,
+stale, invalid, or unproductive work closes the tail. A queued second command
+remains behind ordinary Serial/LocalSeat/Dispatch/Display debt. CYW43 keeps its
+ordinary connection-bound cursor and the distinct guarded 3,000-us/64-unit
+contract above; mediated WiFi cannot acquire direct-GENET tail authority.
 
 A parsed passive-service command may survive one expired strict reserve lease
 only by crossing a completely new explicit Yield/refill. The new attempt starts
 from `AwaitingYield`, drains fresh Consumed evidence, rechecks the exact command,
 session, connection, recovery, containment, quarantine, reboot, and fault
-identity, and still requires elapsed wall strictly below 250 us. A second
+identity, and still requires elapsed wall strictly below 3,000 us. A second
 expiry emits the existing single typed refusal. No sliding window, same-refill
-resample, unbounded retry, or MCS numeric change is authorized.
+resample, or unbounded retry is authorized.
 
 The handoff-to-Ready response bound is evaluated in the isolated child's
 absolute CNTVCT millisecond domain, not the pump-driven HAL policy clock. Root
@@ -432,11 +416,13 @@ at-boundary, late, drifted, backwards, or overflowed evidence. The pre-resume
 lower bound deliberately includes a child that publishes after resume but
 before root returns.
 
-Pi GENET uses core 1 with a selected `3,000 us / 10,000 us` active SC, two
-refills, priority 160, and natural-postpone timeout policy. This isolates the production
-wired path from the CYW43/SDIO pair on core 3 without changing either Wi-Fi SC.
-The compiler admits `6,250/9,000 us` on core 1 and `8,000/9,000 us` on core 3,
-leaving 2,750 us and 1,000 us of usable-core reserve respectively. GENET's
+Pi GENET uses core 1 with a selected `3,000 us / 10,000 us` active SC, eight
+refill records, priority 160, and natural-postpone timeout policy. This isolates
+the production wired path from the CYW43/SDIO pair on core 3 without changing
+either Wi-Fi SC.
+The selected Pi topology admits exact active demand
+`8,750/8,250/8,400/8,000 us` on cores 0--3 against each 9,000-us usable
+capacity, leaving `250/750/600/1,000 us` beyond the mandatory reserve. GENET's
 existing exact 800 us WCET yields a 3,400 us computed response bound; that is
 static admission truth, not measured packet latency. Before direct handoff, the
 Pi-only IRQ 189/badge 1024 legacy/default-queue DPC may drain at most 16 frames
@@ -446,9 +432,9 @@ keeps its existing three-entry driver-runtime IRQ topology with no GENET IRQ
 and identical scheduling. After DHCP and exact old-path quiescence, Pi GENET
 performs one fail-closed handoff to the console child over the compiler-declared
 32-page CPU-only direct link. GENET keeps its independent core-1 SC and sole
-MMIO/DMA/IRQ ownership; the console child keeps its core-0 SC and sole
-TCP/auth ownership. Their fixed notifications are wake hints, not scheduling
-donation or packet authority. A peer fault couples containment only: suspend
+MMIO/DMA/IRQ ownership; the console child keeps its independent core-2 SC and
+sole TCP/auth ownership. Their fixed notifications are wake hints, not
+scheduling donation or packet authority. A peer fault couples containment only: suspend
 the GENET owner and remove both cross-child signal caps before unmapping the
 console copies, with no root packet fallback.
 
@@ -473,7 +459,7 @@ kernel SC. Any endpoint command forces a later `seL4_Yield` freshness boundary,
 and quiescent closure cannot clear it; continuous durable work retains the
 existing guard, cap, and stalled decisions. The compiler and generated profile
 require exact
-`wcet_us=800`; the handoff and runtime validate exact max-two-refill
+`wcet_us=800`; the handoff and runtime validate exact max-eight-refill
 `3,000/10,000 us` truth. Sustained legal work that consumes that reservation is
 postponed by the kernel until replenishment rather than classified as a device
 fault. Counter failure, cursor drift, or contract drift
@@ -490,27 +476,43 @@ binds the calculation to the exact selected kernel/profile/build identity and
 rejects eleven. This preserves fragmented wake eligibility; it does not enlarge
 CPU budget or authorize another operation, signal, poll, retry, or owner.
 
-For both Pi network modes, console-network selects priority/MCP 200/200
-with its unchanged `3,000 us / 10,000 us` SC, equal to priority-200
-root-control. That generated equality is eligibility, not permission for every
-backend to use a direct handoff. Only direct GENET may invoke guarded
-`SchedContext_YieldTo` after an exact sequence-last
-packet/control/publication-ACK commit or one bounded service-tick wake and a
-successful one-hot signal. Mediated WiFi always returns through ordinary MCS
-scheduling after signalling, including in exact `Authenticated` state. Core,
-priority, MCP, SC, signal, containment, or syscall drift fails closed. The
-child still runs on its own hard-bounded reservation and blocks at its existing
-notification gate without acquiring root authority. Compiler response analysis
-records `8,100 us` for both console-network and root-control, retains the
-mandatory reserve, and admits the 32 additional console mapping-cap slots.
-These are static bounds, not measured packet latency. Fresh same-image Pi load
-evidence must still prove authenticated response cadence; QEMU priorities and
-placement remain unchanged.
+For both Pi network modes, root-control selects core 0, priority/MCP 200/200,
+`5,500 us / 10,000 us`, max-two-refill scheduling, and exact 2,500-us WCET. Its
+strict productive reserve is therefore 3,000 us. Console-network selects core 2,
+priority/MCP 200/200, its unchanged `3,000 us / 10,000 us` budget/period and
+WCET, and eight refill records in its existing 8-bit SC. Direct GENET and
+mediated WiFi are both signal-only across this generated cross-core boundary:
+root commits the one-hot wake and performs no `SchedContext_YieldTo`, child-SC
+pre-drain, or child-consumed credit. A same-core manifest or runtime cannot
+inherit cross-core progress authority, and a failed same-core Yield cannot be
+reinterpreted as a signal-only success. The child runs concurrently on its own
+hard-bounded reservation and blocks at its existing notification gate without
+acquiring root authority.
 
-The Pi CYW43 boot supervisor consumes those two generated response bounds only
+The compiler records exact root/console response bounds `5,100/3,000 us`,
+HDMI/PCIe/GPU-executor bounds `5,200/3,300/8,300 us`, the complete per-core
+demand above, and mirrored service/task affinity. Adjacent drift in budget,
+WCET, response, core, sched-control core, priority, refill count, or mirrored
+configuration fails closed. QEMU retains its selected core-0 9,000-us root,
+core-2 lower-priority console child, max-two-refill contracts, affinities, and
+non-YieldTo direct-VirtIO behavior. These are static admission bounds, not
+measured packet latency. Fresh same-image Pi load evidence must still prove
+authenticated response cadence.
+
+After an exact authenticated direct-GENET response drain, root may retain one
+unslid local active tail for strictly less than 8 ms and at most 64 complete
+physical-rotor quanta. The root SC remains the hard CPU bound. Every admitted
+quantum rechecks exact generation, connection, final Serial phase, counter
+frequency, passive admission, physical operator/response priority, local fault,
+recovery, containment, quarantine, reboot, handoff, wall expiry, and the shared
+cap. An idle, stale, drifted, faulted, or operator-owned cut closes the tail;
+it never grants child work, another packet operation, a retry, or a new refill.
+Mediated WiFi cannot acquire direct-GENET tail authority.
+
+The Pi CYW43 boot supervisor consumes the root and console generated response bounds only
 after the DHCP-bound console child is finalized and resumed. Each bound is
 rounded independently to the millisecond clock, so the current profile admits
-one `9 ms + 9 ms = 18 ms` exact-generation Ready publication window. Root may
+one `6 ms + 3 ms = 9 ms` exact-generation Ready publication window. Root may
 take one final shared-page-only observation at or after the boundary and accept
 it only when the retained ABI-validated publication time is strictly earlier.
 Invalid generated authority or a missing, at-boundary, late, replayed, or
@@ -595,12 +597,14 @@ final admission sample. That sample closes the strict wall interval from the
 immediate post-Yield counter capture to the final admission/WCET cut.
 `CallArm` retains the final fault frontier. Passive dispatch is admitted only
 when that wall lease is strictly below the checked
-`budget_us - wcet_us` limit, currently 250 us, so the complete declared
+`budget_us - wcet_us` limit, currently 3,000 us, so the complete declared
 2,500 us WCET remains inside the SC. The strict comparison, direct dispatch,
 and bounded response/epilogue are all inside that declared WCET; no mutable
 validity or policy work may be inserted between the cut and dispatch. Equality
-or excess ends the attempt with one typed refusal and never starts another
-wait. Reboot, containment,
+or excess ends that lease without dispatch. The first expired lease retains the
+exact command for one completely new `AwaitingYield` attempt; a second expiry
+emits the existing single typed refusal. No within-refill resampling or sliding
+wait is permitted. Reboot, containment,
 quarantine, recovery, or authority drift cancels before dispatch and projects
 a refusal only when the original response authority is still valid. Invalid
 generated truth, zero or drifted timer frequency, backwards/missing counter
@@ -620,7 +624,7 @@ Acquire ordering. It never scans the generated Worker population to rediscover
 the two fixed services and never caches a no-fault answer across turns.
 Ambiguous or contended handoff state remains recovery-pending. This keeps the
 recovery-first and post-sample `CallArm` fences exact while preventing
-population-scaled task discovery from consuming the 250-us passive reserve or
+population-scaled task discovery from consuming the 3,000-us passive reserve or
 multiplying every deferred WiFi supervisor turn.
 
 The passive NineDoor service is co-located with `root-control` on core 0 in
