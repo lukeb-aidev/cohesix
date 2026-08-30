@@ -27,7 +27,7 @@ const fn architected_counter_ms(counter: u64, timer_clock_hz: u64) -> u64 {
 /// that absolute epoch. Host tests and every QEMU build retain the fallback,
 /// so this helper cannot alter runtime or smoltcp scheduling time.
 #[inline]
-pub(crate) fn isolated_seam_observation_ms(fallback_ms: u64) -> u64 {
+pub(crate) fn isolated_seam_observation_ms(_fallback_ms: u64) -> u64 {
     #[cfg(all(feature = "release-pi4", target_arch = "aarch64", target_os = "none"))]
     {
         return architected_counter_ms(
@@ -38,7 +38,7 @@ pub(crate) fn isolated_seam_observation_ms(fallback_ms: u64) -> u64 {
 
     #[cfg(not(all(feature = "release-pi4", target_arch = "aarch64", target_os = "none")))]
     {
-        fallback_ms
+        _fallback_ms
     }
 }
 
