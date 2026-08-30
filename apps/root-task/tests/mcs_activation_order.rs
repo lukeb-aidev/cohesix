@@ -567,8 +567,12 @@ fn root_control_temporal_activation_exists_only_at_userland_loop_seams() {
     );
     assert_eq!(
         normal_loop.matches("let _ = sel4::yield_now();").count(),
-        0,
-        "the normal caller must use the universal guard rather than minting another seam yield",
+        1,
+        "only the inverse exact-Pi recovery branch may preserve the legacy direct Yield",
+    );
+    assert!(
+        normal_loop.contains("pi_root_control_yield_and_restart(pump, &mut productive_window);"),
+        "the exact Pi/MCS caller must route every ordinary Yield through the guarded restart owner",
     );
 
     let deferred_loop_start = userland
@@ -947,11 +951,23 @@ fn root_control_containment_serializes_before_the_ordinary_pump_turn() {
         4,
         "all optional HAL probes must preserve false-on-no-probe semantics",
     );
+    let handoff = root_loop
+        .find("pump.service_deferred_console_network_handoff(hal)")
+        .expect("deferred handoff probe");
+    let pi_guarded_poll = root_loop
+        .find("poll_pi_root_control_productive_quanta(pump, &mut productive_window)")
+        .expect("exact Pi guarded productive poll");
     assert!(
-        root_loop.contains(
-            "let explicit_yield_required = if handoff_turn {\n            true\n        } else {\n            pump.poll_root_control_quantum()\n        };"
-        ),
-        "a deferred handoff must exclude the ordinary pump from that turn",
+        handoff < pi_guarded_poll,
+        "a deferred handoff must be resolved before any retained Pi quantum",
+    );
+    assert!(
+        root_loop.contains("let explicit_yield_required = if handoff_turn {\n            true"),
+        "a completed handoff must exclude both ordinary poll branches from that turn",
+    );
+    assert!(
+        root_loop.contains("pump.poll_root_control_quantum()"),
+        "QEMU and non-Pi profiles must preserve their direct EventPump result path",
     );
 }
 
@@ -1154,10 +1170,23 @@ fn pi_passive_boundary_drains_preserved_evidence_immediately_after_yield() {
 
     let userland = include_str!("../src/userland/mod.rs");
     let marker = "pump.prepare_pi_root_control_passive_admission_yield();";
+    let productive_helper_start = userland
+        .find("fn pi_root_control_yield_and_restart<")
+        .expect("Pi productive Yield owner");
+    let productive_helper_end = userland[productive_helper_start..]
+        .find("fn deferred_cyw43_yield_and_reset<")
+        .map(|offset| productive_helper_start + offset)
+        .expect("bounded Pi productive Yield owner");
+    let productive_helper = &userland[productive_helper_start..productive_helper_end];
+    assert_eq!(
+        productive_helper.matches(marker).count(),
+        1,
+        "the new productive continuation has exactly one universal passive transition owner",
+    );
     assert_eq!(
         userland.matches(marker).count(),
-        4,
-        "every ordinary and deferred Pi scheduler boundary must use the transition owner",
+        5,
+        "the four existing boundaries plus the one productive owner must use the transition owner",
     );
     let mut suffix = userland;
     while let Some(offset) = suffix.find(marker) {
@@ -1178,6 +1207,46 @@ fn pi_passive_boundary_drains_preserved_evidence_immediately_after_yield() {
         assert!(capture < resume);
         suffix = after_marker;
     }
+}
+
+#[test]
+fn pi_productive_successor_rechecks_identity_fences_and_time_at_the_final_cut() {
+    let userland = include_str!("../src/userland/mod.rs");
+    let start = userland
+        .find("fn poll_pi_root_control_productive_quanta<")
+        .expect("Pi productive continuation helper");
+    let end = userland[start..]
+        .find("fn pi_root_control_yield_and_restart<")
+        .map(|offset| start + offset)
+        .expect("bounded Pi productive continuation helper");
+    let helper = &userland[start..end];
+
+    let frequency = helper
+        .find("let counter_hz = counter_frequency();")
+        .unwrap();
+    let reserve = helper
+        .find("deferred_cyw43_activation_reserve_from_manifest_us();")
+        .unwrap();
+    let identity = helper.find("window.continuation_identity()").unwrap();
+    let fence = helper
+        .find("pump.pi_root_control_productive_continuation_fence_clear(identity)")
+        .unwrap();
+    let counter = helper.find("let now_ticks = monotonic_ticks();").unwrap();
+    let admission = helper.find("window.next_quantum_admitted(").unwrap();
+    let poll = helper.find("pump.poll_root_control_quantum();").unwrap();
+    let take = helper
+        .find("pump.take_pi_root_control_productive_continuation_identity()")
+        .unwrap();
+    let record = helper
+        .find("window.record_completed_quantum(identity)")
+        .unwrap();
+    assert!(frequency < reserve);
+    assert!(reserve < identity && identity < fence);
+    assert!(fence < counter && counter < admission && admission < poll);
+    assert!(poll < take && take < record);
+    assert!(helper.contains("feature = \"release-pi4\""));
+    assert!(helper.contains("target_arch = \"aarch64\""));
+    assert!(helper.contains("sel4_config_kernel_mcs"));
 }
 
 #[test]

@@ -487,6 +487,14 @@ where
     let hal_ptr = ctx.wifi_debug_hal_ptr;
     #[cfg(feature = "net-console")]
     let mut deferred_wired_handoff_admission_logged = false;
+    #[cfg(all(
+        feature = "net-console",
+        feature = "release-pi4",
+        target_arch = "aarch64",
+        target_os = "none",
+        sel4_config_kernel_mcs
+    ))]
+    let mut productive_window = PiRootControlProductiveWindow::new();
     loop {
         // Snapshot the cheap side-effect-free recovery frontier before any
         // policy-time or admission work. An already-published fault cancels
@@ -509,10 +517,30 @@ where
             && pump.pi_root_control_passive_admission_pending()
             && pump.service_pi_root_control_passive_admission()
         {
-            let passive_boundary_prepared = pump.prepare_pi_root_control_passive_admission_yield();
-            let resumed_at_ticks = sel4::yield_now();
-            if passive_boundary_prepared {
-                pump.resume_pi_root_control_passive_admission_after_yield(resumed_at_ticks);
+            #[cfg(all(
+                feature = "net-console",
+                feature = "release-pi4",
+                target_arch = "aarch64",
+                target_os = "none",
+                sel4_config_kernel_mcs
+            ))]
+            {
+                pi_root_control_yield_and_restart(pump, &mut productive_window);
+            }
+            #[cfg(not(all(
+                feature = "net-console",
+                feature = "release-pi4",
+                target_arch = "aarch64",
+                target_os = "none",
+                sel4_config_kernel_mcs
+            )))]
+            {
+                let passive_boundary_prepared =
+                    pump.prepare_pi_root_control_passive_admission_yield();
+                let resumed_at_ticks = sel4::yield_now();
+                if passive_boundary_prepared {
+                    pump.resume_pi_root_control_passive_admission_after_yield(resumed_at_ticks);
+                }
             }
             continue;
         }
@@ -551,7 +579,22 @@ where
         let recovery_turn = recovery_turn || passive_recovery_preempted;
 
         if recovery_turn {
-            sel4::yield_now();
+            #[cfg(all(
+                feature = "net-console",
+                feature = "release-pi4",
+                target_arch = "aarch64",
+                target_os = "none",
+                sel4_config_kernel_mcs
+            ))]
+            pi_root_control_yield_and_restart(pump, &mut productive_window);
+            #[cfg(not(all(
+                feature = "net-console",
+                feature = "release-pi4",
+                target_arch = "aarch64",
+                target_os = "none",
+                sel4_config_kernel_mcs
+            )))]
+            let _ = sel4::yield_now();
             continue;
         }
 
@@ -589,7 +632,26 @@ where
         let explicit_yield_required = if handoff_turn {
             true
         } else {
-            pump.poll_root_control_quantum()
+            #[cfg(all(
+                feature = "net-console",
+                feature = "release-pi4",
+                target_arch = "aarch64",
+                target_os = "none",
+                sel4_config_kernel_mcs
+            ))]
+            {
+                poll_pi_root_control_productive_quanta(pump, &mut productive_window)
+            }
+            #[cfg(not(all(
+                feature = "net-console",
+                feature = "release-pi4",
+                target_arch = "aarch64",
+                target_os = "none",
+                sel4_config_kernel_mcs
+            )))]
+            {
+                pump.poll_root_control_quantum()
+            }
         };
         #[cfg(not(any(
             feature = "net-console",
@@ -597,10 +659,30 @@ where
         )))]
         let _ = hal_ptr;
         if explicit_yield_required {
-            let passive_boundary_prepared = pump.prepare_pi_root_control_passive_admission_yield();
-            let resumed_at_ticks = sel4::yield_now();
-            if passive_boundary_prepared {
-                pump.resume_pi_root_control_passive_admission_after_yield(resumed_at_ticks);
+            #[cfg(all(
+                feature = "net-console",
+                feature = "release-pi4",
+                target_arch = "aarch64",
+                target_os = "none",
+                sel4_config_kernel_mcs
+            ))]
+            {
+                pi_root_control_yield_and_restart(pump, &mut productive_window);
+            }
+            #[cfg(not(all(
+                feature = "net-console",
+                feature = "release-pi4",
+                target_arch = "aarch64",
+                target_os = "none",
+                sel4_config_kernel_mcs
+            )))]
+            {
+                let passive_boundary_prepared =
+                    pump.prepare_pi_root_control_passive_admission_yield();
+                let resumed_at_ticks = sel4::yield_now();
+                if passive_boundary_prepared {
+                    pump.resume_pi_root_control_passive_admission_after_yield(resumed_at_ticks);
+                }
             }
         }
     }
@@ -616,12 +698,57 @@ where
     I: IpcDispatcher,
     V: CapabilityValidator,
 {
+    #[cfg(all(
+        feature = "net-console",
+        feature = "release-pi4",
+        target_arch = "aarch64",
+        target_os = "none",
+        sel4_config_kernel_mcs
+    ))]
+    let mut productive_window = PiRootControlProductiveWindow::new();
     loop {
-        if pump.poll_root_control_quantum() {
-            let passive_boundary_prepared = pump.prepare_pi_root_control_passive_admission_yield();
-            let resumed_at_ticks = sel4::yield_now();
-            if passive_boundary_prepared {
-                pump.resume_pi_root_control_passive_admission_after_yield(resumed_at_ticks);
+        #[cfg(all(
+            feature = "net-console",
+            feature = "release-pi4",
+            target_arch = "aarch64",
+            target_os = "none",
+            sel4_config_kernel_mcs
+        ))]
+        let explicit_yield_required =
+            poll_pi_root_control_productive_quanta(pump, &mut productive_window);
+        #[cfg(not(all(
+            feature = "net-console",
+            feature = "release-pi4",
+            target_arch = "aarch64",
+            target_os = "none",
+            sel4_config_kernel_mcs
+        )))]
+        let explicit_yield_required = pump.poll_root_control_quantum();
+        if explicit_yield_required {
+            #[cfg(all(
+                feature = "net-console",
+                feature = "release-pi4",
+                target_arch = "aarch64",
+                target_os = "none",
+                sel4_config_kernel_mcs
+            ))]
+            {
+                pi_root_control_yield_and_restart(pump, &mut productive_window);
+            }
+            #[cfg(not(all(
+                feature = "net-console",
+                feature = "release-pi4",
+                target_arch = "aarch64",
+                target_os = "none",
+                sel4_config_kernel_mcs
+            )))]
+            {
+                let passive_boundary_prepared =
+                    pump.prepare_pi_root_control_passive_admission_yield();
+                let resumed_at_ticks = sel4::yield_now();
+                if passive_boundary_prepared {
+                    pump.resume_pi_root_control_passive_admission_after_yield(resumed_at_ticks);
+                }
             }
         }
     }
@@ -964,6 +1091,265 @@ impl DeferredCyw43ActivationWindow {
             self.productive_units = self.productive_units.saturating_add(1);
         }
     }
+}
+
+/// One physical-Pi ordinary root-control activation retained across exact
+/// productive GENET quanta.
+///
+/// This deliberately reuses the same generated `budget - WCET` cut as the
+/// deferred CYW43 supervisor. The window begins only at the CNTVCT value
+/// captured by `yield_now`, never slides on progress or preemption, and admits
+/// no new complete EventPump quantum at equality. The scheduling context
+/// remains the hard execution bound; the fixed quantum cap is independent of
+/// both time and progress.
+#[cfg(all(
+    any(
+        test,
+        all(
+            feature = "release-pi4",
+            target_arch = "aarch64",
+            target_os = "none",
+            sel4_config_kernel_mcs
+        )
+    ),
+    feature = "serial-console",
+    feature = "kernel",
+    feature = "net-console",
+))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct PiRootControlProductiveWindow {
+    clock: DeferredCyw43ActivationClock,
+    completed_quanta: u8,
+    identity: Option<crate::event::PiRootControlProductiveContinuationIdentity>,
+}
+
+#[cfg(all(
+    any(
+        test,
+        all(
+            feature = "release-pi4",
+            target_arch = "aarch64",
+            target_os = "none",
+            sel4_config_kernel_mcs
+        )
+    ),
+    feature = "serial-console",
+    feature = "kernel",
+    feature = "net-console",
+))]
+impl PiRootControlProductiveWindow {
+    const MAX_COMPLETED_QUANTA: u8 = 64;
+
+    const fn new() -> Self {
+        Self {
+            clock: DeferredCyw43ActivationClock::Unstarted,
+            completed_quanta: 0,
+            identity: None,
+        }
+    }
+
+    fn reset(&mut self) {
+        *self = Self::new();
+    }
+
+    fn restart_after_yield(
+        &mut self,
+        resumed_at_ticks: u64,
+        counter_hz: u64,
+        reserve_us: Option<u64>,
+    ) -> bool {
+        self.completed_quanta = 0;
+        self.identity = None;
+        self.clock = if resumed_at_ticks != 0
+            && counter_hz != 0
+            && reserve_us.is_some_and(|reserve| reserve != 0)
+        {
+            DeferredCyw43ActivationClock::Timed {
+                started_ticks: resumed_at_ticks,
+                counter_hz,
+            }
+        } else {
+            DeferredCyw43ActivationClock::Invalid
+        };
+        matches!(self.clock, DeferredCyw43ActivationClock::Timed { .. })
+    }
+
+    fn next_quantum_admitted(
+        &mut self,
+        now_ticks: u64,
+        counter_hz: u64,
+        reserve_us: Option<u64>,
+    ) -> bool {
+        if self.completed_quanta >= Self::MAX_COMPLETED_QUANTA {
+            return false;
+        }
+        if matches!(
+            self.clock,
+            DeferredCyw43ActivationClock::Unstarted | DeferredCyw43ActivationClock::Invalid
+        ) {
+            // Before the first measurable Yield return, or after an invalid
+            // return sample, execute at most one legacy bounded quantum and
+            // then force the explicit Yield boundary.
+            return self.completed_quanta == 0;
+        }
+        let Some(reserve_us) = reserve_us.filter(|reserve| *reserve != 0) else {
+            self.clock = DeferredCyw43ActivationClock::Invalid;
+            self.completed_quanta = Self::MAX_COMPLETED_QUANTA;
+            return false;
+        };
+        let DeferredCyw43ActivationClock::Timed {
+            started_ticks,
+            counter_hz: started_hz,
+        } = self.clock
+        else {
+            return false;
+        };
+        if now_ticks == 0
+            || counter_hz == 0
+            || counter_hz != started_hz
+            || now_ticks < started_ticks
+        {
+            self.clock = DeferredCyw43ActivationClock::Invalid;
+            self.completed_quanta = Self::MAX_COMPLETED_QUANTA;
+            return false;
+        }
+        let elapsed_scaled = u128::from(now_ticks - started_ticks).checked_mul(1_000_000u128);
+        let reserve_scaled = u128::from(counter_hz).checked_mul(u128::from(reserve_us));
+        elapsed_scaled
+            .zip(reserve_scaled)
+            .is_some_and(|(elapsed, reserve)| elapsed < reserve)
+    }
+
+    fn record_completed_quantum(
+        &mut self,
+        identity: crate::event::PiRootControlProductiveContinuationIdentity,
+    ) -> bool {
+        if self.identity.is_some_and(|retained| retained != identity) {
+            self.clock = DeferredCyw43ActivationClock::Invalid;
+            self.completed_quanta = Self::MAX_COMPLETED_QUANTA;
+            self.identity = None;
+            return false;
+        }
+        self.identity = Some(identity);
+        self.completed_quanta = self.completed_quanta.saturating_add(1);
+        true
+    }
+
+    const fn has_completed_quantum(self) -> bool {
+        self.completed_quanta != 0
+    }
+
+    const fn continuation_identity(
+        self,
+    ) -> Option<crate::event::PiRootControlProductiveContinuationIdentity> {
+        self.identity
+    }
+}
+
+#[cfg(all(
+    feature = "release-pi4",
+    target_arch = "aarch64",
+    target_os = "none",
+    sel4_config_kernel_mcs,
+    feature = "serial-console",
+    feature = "kernel",
+    feature = "net-console",
+))]
+fn poll_pi_root_control_productive_quanta<
+    'a,
+    D,
+    T,
+    I,
+    V,
+    const RX: usize,
+    const TX: usize,
+    const LINE: usize,
+>(
+    pump: &mut EventPump<'a, D, T, I, V, RX, TX, LINE>,
+    window: &mut PiRootControlProductiveWindow,
+) -> bool
+where
+    D: crate::serial::SerialDriver,
+    T: TimerSource,
+    I: IpcDispatcher,
+    V: CapabilityValidator,
+{
+    loop {
+        let counter_hz = counter_frequency();
+        let activation_reserve_us = deferred_cyw43_activation_reserve_from_manifest_us();
+        if window.has_completed_quantum() {
+            let Some(identity) = window.continuation_identity() else {
+                return true;
+            };
+            if !pump.pi_root_control_productive_continuation_fence_clear(identity) {
+                return true;
+            }
+        }
+        // This is the final operation before the next complete five-phase
+        // leaf: no userland prelude, handoff, or material probe may consume
+        // the strict generated 250-us cut after this sample. Resolve and
+        // validate frequency/policy and the complete side-effect-free race
+        // fence first so CNTVCT remains the last sampled authority before the
+        // pure comparison and EventPump entry.
+        let now_ticks = monotonic_ticks();
+        if !window.next_quantum_admitted(now_ticks, counter_hz, activation_reserve_us) {
+            return true;
+        }
+        let explicit_yield_required = pump.poll_root_control_quantum();
+        if explicit_yield_required {
+            return true;
+        }
+        let Some(identity) = pump.take_pi_root_control_productive_continuation_identity() else {
+            return true;
+        };
+        if !window.record_completed_quantum(identity) {
+            return true;
+        }
+    }
+}
+
+#[cfg(all(
+    feature = "release-pi4",
+    target_arch = "aarch64",
+    target_os = "none",
+    sel4_config_kernel_mcs,
+    feature = "serial-console",
+    feature = "kernel",
+    feature = "net-console",
+))]
+fn pi_root_control_yield_and_restart<
+    'a,
+    D,
+    T,
+    I,
+    V,
+    const RX: usize,
+    const TX: usize,
+    const LINE: usize,
+>(
+    pump: &mut EventPump<'a, D, T, I, V, RX, TX, LINE>,
+    window: &mut PiRootControlProductiveWindow,
+) where
+    D: crate::serial::SerialDriver,
+    T: TimerSource,
+    I: IpcDispatcher,
+    V: CapabilityValidator,
+{
+    let passive_boundary_prepared = pump.prepare_pi_root_control_passive_admission_yield();
+    let resumed_at_ticks = sel4::yield_now();
+    if passive_boundary_prepared {
+        // The retained passive command owns the first post-Yield operation and
+        // its existing Consumed drain. Do not create a competing ordinary
+        // continuation window before that exclusive decision completes.
+        pump.resume_pi_root_control_passive_admission_after_yield(resumed_at_ticks);
+        window.reset();
+        return;
+    }
+    let _ = window.restart_after_yield(
+        resumed_at_ticks,
+        counter_frequency(),
+        deferred_cyw43_activation_reserve_from_manifest_us(),
+    );
 }
 
 #[cfg(all(
@@ -6707,6 +7093,68 @@ mod tests {
             !window.turn_admitted(2, 54_000_000, pi_reserve),
             "the hard productive-turn cap ends even a sub-guard activation",
         );
+    }
+
+    #[cfg(all(
+        feature = "serial-console",
+        feature = "kernel",
+        feature = "net-console"
+    ))]
+    #[test]
+    fn pi_genet_productive_window_is_prechecked_unslid_strict_and_hard_capped() {
+        let reserve = super::deferred_cyw43_activation_reserve_us(2_750, 2_500, true);
+        let identity = crate::event::PiRootControlProductiveContinuationIdentity::for_test(7, 17);
+        let mut window = super::PiRootControlProductiveWindow::new();
+        assert!(
+            window.next_quantum_admitted(100, 1_000_000, reserve),
+            "an unstarted window retains exactly one legacy bounded quantum"
+        );
+        assert!(window.record_completed_quantum(identity));
+        assert!(!window.next_quantum_admitted(100, 1_000_000, reserve));
+
+        assert!(window.restart_after_yield(100, 1_000_000, reserve));
+        assert!(window.next_quantum_admitted(349, 1_000_000, reserve));
+        assert!(
+            !window.next_quantum_admitted(350, 1_000_000, reserve),
+            "equality at the original Yield-return 250-us cut must Yield"
+        );
+
+        assert!(window.restart_after_yield(1_000, 54_000_000, reserve));
+        assert!(
+            !window.next_quantum_admitted(1_001, 24_000_000, reserve),
+            "counter-frequency drift fails closed"
+        );
+        assert!(
+            !window.next_quantum_admitted(1_002, 54_000_000, reserve),
+            "invalid evidence cannot be upgraded by a later valid-looking sample"
+        );
+
+        assert!(window.restart_after_yield(2_000, 54_000_000, reserve));
+        for _ in 0..super::PiRootControlProductiveWindow::MAX_COMPLETED_QUANTA {
+            assert!(window.next_quantum_admitted(2_001, 54_000_000, reserve));
+            assert!(window.record_completed_quantum(identity));
+        }
+        assert!(
+            !window.next_quantum_admitted(2_001, 54_000_000, reserve),
+            "the independent 64-complete-quantum cap refuses quantum 65"
+        );
+
+        assert!(!window.restart_after_yield(0, 54_000_000, reserve));
+        assert!(window.next_quantum_admitted(1, 54_000_000, reserve));
+        assert!(window.record_completed_quantum(identity));
+        assert!(!window.next_quantum_admitted(1, 54_000_000, reserve));
+        assert!(!window.restart_after_yield(3_000, 0, reserve));
+        assert!(!window.restart_after_yield(3_000, 54_000_000, None));
+
+        assert!(window.restart_after_yield(4_000, 54_000_000, reserve));
+        assert!(window.record_completed_quantum(identity));
+        assert!(
+            !window.record_completed_quantum(
+                crate::event::PiRootControlProductiveContinuationIdentity::for_test(8, 17),
+            ),
+            "a generation-swapped continuation token fails closed",
+        );
+        assert!(!window.next_quantum_admitted(4_001, 54_000_000, reserve));
     }
 
     #[cfg(all(

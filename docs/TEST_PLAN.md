@@ -4700,6 +4700,12 @@ first-byte evidence remain independent gates; neither is required to start
 Wi-Fi. This ordering is Pi-only and cannot be inferred from the QEMU VirtIO
 transport path.
 
+Focused selector coverage must also set controller admission and readiness
+true while polling and command readiness are false. That state remains one
+bounded `LocalSeat` bootstrap debt opportunity through CYW43 bootstrap; the
+debt stops when command readiness becomes true. The case must not add a CYW43
+prerequisite, retry, temporal allowance, or second physical operation.
+
 Once the controller-owner preflight is complete but retained CYW43 bootstrap
 work remains, focused selector coverage must preserve a bounded operator
 rotation. A due display milestone keeps first-turn priority; the following
@@ -6504,15 +6510,20 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
       `Disconnect`, then `ServiceTick`. Direct GENET alone must select an exactly ready
       `StageOutput`, then an exactly ready `Disconnect`, and otherwise alternate
       exactly one `ObserveChild`/`ServiceTick` unit per Network visit. Pi root
-      continuation must additionally prove that a Network-starting quantum with
-      exactly one nonsaturated accepted GENET command services Serial and
-      LocalSeat, Dispatches the exact connection-matched response, and consumes
-      one fifth Network stage in place of optional Display. Display must remain
-      the next debt. It must reject inactive, disconnected, stale-active,
-      stale-authenticated, quarantined, recovering, rebooting, contained,
-      physical-response, saturated or no-progress state, a child lower-unit loop
-      or multi-unit burst, budget increase, physical-input bypass, or any
-      QEMU/direct-VirtIO selector or ownership change.
+      continuation must additionally prove that direct GENET can retain no more
+      than 64 complete five-phase root quanta. Before every retained quantum, a
+      continuous first-post-Yield counter sample must satisfy the unchanged
+      generated strict `budget - WCET = 250 us` wall cut; equality refuses. Each
+      retention requires the exact active and authenticated generation and
+      connection plus durable progress for exactly one accepted command and its
+      connection-matched response stage. Serial and LocalSeat remain bounded
+      phases, and optional Display remains explicit debt. Final side-effect-free
+      recovery, operator input or response, fault, reboot, containment,
+      quarantine, stale-identity, handoff, and no-progress fences force Yield.
+      Tests must reject inactive, disconnected, stale-active,
+      stale-authenticated, saturated, a child lower-unit loop or multi-unit
+      burst, budget increase, physical-input bypass, or any QEMU/direct-VirtIO
+      selector or ownership change. QEMU behavior remains unchanged.
       The generated `2,750 - 2,500 = 250 us` pre-admission cut and 64-unit cap
       remain exact. Tests must reject the audited-unsafe 2,500 us elapsed window,
       including the 2,499 us case that leaves only 251 us for a fresh 2,500 us

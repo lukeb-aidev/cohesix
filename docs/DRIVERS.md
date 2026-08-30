@@ -779,6 +779,10 @@ reusable ownership pattern.
   rotation, and any USB byte remains buffered for the later serial/dispatch
   turn. This preserves keyboard-enumeration progress without composing USB and
   CYW43 hardware operations or allowing either physical console to starve.
+  Once that controller is admitted and ready, `controller_ready &&
+  !command_ready` remains finite bounded `LocalSeat` debt even before backend
+  keyboard polling is enabled. One existing local-seat turn services that debt,
+  then returns to serial alternation; the debt stops at command readiness.
   Keyboard command readiness and first-byte proof
   remain independent downstream USB gates and are not prerequisites for Wi-Fi.
   `LocalSeat` does not add a second proof-scheduling phase after endpoint
@@ -1238,11 +1242,16 @@ transport:
   every lifecycle state, including exact authenticated state, and returns
   through ordinary MCS scheduling after a successful one-hot child signal.
   Direct GENET alone retains the guarded handoff to its compiler-validated
-  equal-priority child SC. When its first Network unit observes one exact
-  authenticated command with no operator or response debt, the same five-unit
-  composer may spend only
-  `Network -> Dispatch -> Network` on causal response staging, then returns to
-  Serial and stops. A second command remains behind complete operator/display
+  equal-priority child SC. After a mandatory Yield, it may retain another
+  complete ordinary five-phase root quantum only when the exact authenticated
+  generation and connection remain current and one accepted command and its
+  response-stage unit made durable progress. The first resumed CNTVCT sample is
+  the continuous wall origin; every new complete quantum requires strict
+  elapsed time below the unchanged generated 250-us `budget_us - wcet_us` cut,
+  and the retained lifetime is capped at 64 complete quanta. Equality, passive
+  admission, physical operator work, recovery, fault, containment, quarantine,
+  reboot, handoff, identity drift, invalid timing, or no progress forces Yield
+  and fails closed. A second command remains behind complete operator/display
   debt. This changes no physical owner, packet authority, operation bound,
   manifest/MCS numeric, queue, listener, ABI, public diagnostic, or QEMU
   direct-VirtIO behavior.

@@ -1275,6 +1275,29 @@ numeric, or creating another physical issuer. Build, QEMU, static-profile,
 image, flash, and source-test results remain non-hardware evidence until a
 fresh exact-image Pi run measures the effect separately on WiFi and GENET.
 
+The exact `3f87bca1f978ad80016a15ba4f81b14b0076783a` physical runs establish the
+next performance frontier without changing acceptance status. WiFi completed
+DHCP, authenticated service, focused `.coh` scripts, and raw64, but delivered
+4.404 requests/s at p95 249.597 ms versus the August 10 reference of 27.089
+requests/s at p95 50.457 ms; useful readiness arrived at 46.660 seconds versus
+approximately 10.6--11.0 seconds in August. GENET completed the same functional
+frontier at 24.473 requests/s and p95 44.989 ms versus 180.269 requests/s and
+p95 1.677 ms in August. Its boot-paired capture localizes the regression above
+the wire: DHCP completed in 34.846 ms versus 49.512 ms in August,
+SYN-to-SYN-ACK was 0.463--0.647 ms, ingress ACK p95 was at most 1.342 ms, and
+there were no retransmissions or resets; the remaining delay begins after
+ingress and before application response. The guarded direct-GENET repair may
+retain at most 64 complete five-phase root quanta only after exact durable
+progress for the authenticated generation and connection plus one accepted
+command and its response stage. Before every retained quantum it must use the
+continuous first-post-Yield wall sample and the unchanged generated strict
+`budget - WCET = 250 us` cut; equality refuses. Recovery, operator input or
+response, fault, reboot, containment, quarantine, stale identity, handoff, and
+no-progress fences are final and side-effect-free before retention. QEMU
+behavior is unchanged. This is a source contract pending fresh physical proof,
+not a WiFi or GENET parity claim; WiFi's synchronous child-Yield cadence remains
+an explicit fresh-Pi proof gap.
+
 For the earlier exact `24e1c1c7778a3dc7ad8460c9ef644992814e41a5` paired wired
 regression, GENET reaches DHCP and legacy ARP before the old direct handoff
 stalls with raw/active source `0x00012000`, zero IRQ wakes/DPC turns, and an
@@ -1471,6 +1494,11 @@ first-report or command-ready proof is service demand only: EventPump grants one
 bounded `LocalSeat` opportunity but must not report physical input, retain the
 post-Dispatch CYW43 operator fence, or block the following Network turn unless
 an actual decoded or buffered byte or physical response exists.
+Once the controller is admitted and ready, `controller_ready &&
+!command_ready` remains bounded bootstrap `LocalSeat` debt throughout CYW43
+bootstrap, including before ordinary keyboard polling is enabled, and stops at
+command readiness. This changes no CYW43 prerequisite, temporal budget, retry,
+or physical-issue authority.
 Until a current linked-runtime HID byte is accepted at parser ingress, the
 truthful diagnostic is `usb-physical-input-unproven`. `proof_gate=10`, command
 readiness, and first-report readiness do not imply a first byte and must not

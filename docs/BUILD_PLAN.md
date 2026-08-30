@@ -10633,6 +10633,49 @@ Changes:
     cannot prove Pi behavior. Fresh exact-image WiFi and GENET scripts, raw
     latency, and medium/high pressure are mandatory before any function,
     speedup, or August-parity claim.
+  - exact-3f87 dual-backend retained-quantum and USB-debt correction — exact
+    source `3f87bca1f978ad80016a15ba4f81b14b0076783a` proves both selected network
+    modes remain functional while rejecting August latency parity. WiFi reaches
+    useful Ready at 46.660 seconds versus the accepted August 10 roughly
+    10.6--11.0-second frontier, completes DHCP, service readiness, focused
+    `.coh` scripts, and 64/64 raw requests at 4.404 requests/s with 249.597-ms
+    p95 versus 27.089 requests/s and 50.457-ms p95. GENET completes DHCP,
+    service readiness, focused scripts, and 64/64 raw requests at 24.473
+    requests/s with 44.989-ms p95 versus 180.269 requests/s and 1.677-ms p95.
+    Its paired capture proves 34.846-ms DHCP, faster than the accepted August
+    49.512-ms sample, 0.463--0.647-ms SYN-to-SYN-ACK, ingress ACK p95 no greater
+    than 1.342 ms, and no retransmission or reset. The remaining wired delay is
+    after ingress and before application response, not in PHY, DHCP, DMA, or
+    TCP acknowledgement.
+
+    Supersede only the disproven direct-GENET one-quantum stop: after the
+    mandatory Yield, retain the first resumed `CNTVCT_EL0` origin across
+    another complete ordinary five-phase root quantum only when the exact
+    authenticated generation and connection remain current and one accepted
+    command and its response-stage unit made durable progress. Before every new
+    complete quantum, elapsed wall time must remain strictly below the
+    unchanged generated `budget_us - wcet_us = 250 us` cut; equality refuses,
+    and at most 64 complete quanta may be retained. A final side-effect-free
+    recovery/operator/fault check, passive admission, reboot, containment,
+    quarantine, handoff, identity drift, invalid timing, or no progress forces
+    Yield and fails closed. No repeated Consumed sample creates authority.
+    CYW43 retains its existing separate 250-us/64-unit semantics, and QEMU
+    direct-VirtIO behavior is unchanged.
+
+    The same boot exposes a separate USB eligibility defect rather than an
+    xHCI timeout: once the required controller is admitted and ready,
+    `controller_ready && !command_ready` remains bounded bootstrap
+    `LocalSeat` debt even before backend polling is enabled. The finite CYW43
+    operator rotation grants one existing bounded local-seat turn, alternates
+    with serial, and stops that extra debt at command readiness. This neither
+    makes USB command readiness a CYW43 prerequisite nor changes a USB/CYW43
+    budget, retry, deadline, owner, or operation bound. Current WiFi still
+    requires fresh physical proof that its synchronous child-Yield cadence is
+    closed; no WiFi parity claim is made. The complete host-tool suite,
+    `tools/cohesix-py`, generated contracts and consumers, `.coh` scripts, and
+    benchmark workloads, arithmetic, and report schemas were reviewed and
+    require no behavior or schema change. Fresh exact-image dual-mode scripts,
+    raw latency, and medium/high pressure remain mandatory before promotion.
   - platform consistency — select the same v5 shared contract, including the
     v4-introduced bounded command batch, complete 256-Worker population, two
     passive-Worker executor-lane architecture, and passive-service locality

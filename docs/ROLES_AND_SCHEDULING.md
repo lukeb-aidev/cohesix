@@ -368,6 +368,12 @@ the hard execution boundary. This replaces the former pair-restart Driver
 burst, changes no generated temporal value, and does not apply to QEMU or
 generic root control.
 
+During CYW43 bootstrap, an admitted and ready USB controller with
+`controller_ready && !command_ready` is itself bounded `LocalSeat` service debt,
+including before ordinary keyboard polling is enabled. That bootstrap debt
+stops at command readiness and changes no CYW43 prerequisite, budget, retry, or
+physical-owner authority.
+
 The Pi direct-GENET-feature authenticated console's isolated TCP socket,
 shared by the selected WiFi and wired modes, disables delayed ACK and Nagle for
 the bounded interactive request/response protocol. This keeps its transport ACK
@@ -379,14 +385,16 @@ QEMU direct-VirtIO retains the strict lower rotor: `ObserveChild`,
 `StageOutput`, `Disconnect`, then `ServiceTick`. Direct GENET alone selects an exact
 ready `StageOutput`, then an exact ready `Disconnect`; when neither is ready it
 alternates `ObserveChild` and `ServiceTick`, exactly one unit per Network visit.
-When the first Network visit of an existing five-unit Pi root quantum observes
-exactly one nonsaturated authenticated GENET command while physical-operator
-and response debt are idle, Dispatch may run next and one exact response-stage
-Network unit may use the third unit. The composer then returns to Serial and
-stops. A queued second command therefore remains behind the restored
-Serial/LocalSeat/Dispatch/Display debt and cannot form a closed network loop.
-Connection mismatch, saturation, physical response, quarantine, containment,
-recovery, reboot, operator work, or no progress denies the causal cut. The
+After a mandatory Yield, direct GENET may retain another complete ordinary
+five-phase root quantum only while one accepted command and its response-stage
+unit make durable progress and the authenticated generation and connection remain
+exact. The first resumed `CNTVCT_EL0` sample remains the continuous wall origin;
+before each new complete quantum elapsed time must be strictly below the
+unchanged generated 250-us `budget_us - wcet_us` cut, and no more than 64
+complete quanta may be retained. Equality, passive admission, physical operator
+input or response, recovery, fault, containment, quarantine, reboot, handoff,
+identity drift, invalid timing, or no progress forces Yield. A queued second
+command remains behind ordinary Serial/LocalSeat/Dispatch/Display debt. The
 exact direct-GENET response lane
 retains generation, connection, `ControlCompleted`, and `OutputDrained` proof,
 so it supersedes the weaker legacy flush cursor; any identity or runtime drift
@@ -396,7 +404,8 @@ authenticated response after the turn's CYW43 operation claim remains unused,
 it may spend only the remaining ordinary driver budget on that sole operation;
 every physical-operator, recovery, containment, reboot, quarantine, identity,
 acceptance-count, or prior-operation conflict denies it. This changes no SC,
-affinity, core, priority, queue, child authority, or QEMU selector.
+affinity, core, priority, queue, child authority, or QEMU selector. CYW43 keeps
+the distinct guarded 250-us/64-unit contract above.
 
 The handoff-to-Ready response bound is evaluated in the isolated child's
 absolute CNTVCT millisecond domain, not the pump-driven HAL policy clock. Root
