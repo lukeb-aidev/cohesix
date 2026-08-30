@@ -1,41 +1,85 @@
 <!-- Copyright © 2026 Lukas Bower -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
-<!-- Purpose: Provide practical, evidence-aware Cohesix 26e recipes for new and returning operators. -->
+<!-- Purpose: Provide situation-based Cohesix recipes for edge operations, AI hosts, incidents, and controlled change. -->
 <!-- Author: Lukas Bower -->
 
-# Cohesix Operator Recipes
+# Cohesix Operator Recipes — Real-World Jobs
 
-These recipes turn a healthy Cohesix session into repeatable work. Start with
-the [Quickstart](QUICKSTART.md), then complete the live
+Use these recipes when you have an operational question, not when you merely
+want to tour a component. They cover the recurring jobs that make Cohesix
+valuable around edge and AI systems: deciding whether a node is safe to
+change, constraining an automated action, investigating degraded service,
+rolling an adapter forward or back, comparing targets, and preserving a case
+for someone who was not present.
+
+Start with the [Quickstart](QUICKSTART.md), then complete the live
 [Operator Walkthrough](OPERATOR_WALKTHROUGH.md) before using a mutating recipe.
 
 Commands assume a source checkout from the repository root. Release users
 should replace `cargo run -p <package> --` with the corresponding executable in
 `bin/` and follow the bundle's `QUICKSTART.md` for paths.
 
-The useful habit across every recipe is simple:
+The useful habit across every situation is simple:
 
 1. identify the exact target and transport;
 2. prefer a bounded read before a write;
 3. retain the typed result instead of guessing from a timeout; and
 4. say what the result proves—and what it does not.
 
-## Recipe map
+## Situation map
 
-| If you want to... | Recipe | Mutation |
+| Real-world situation | Recipe | Result or mutation |
 | --- | --- | --- |
-| Turn a manual check into a dependable command | [Make a repeatable health check](#make-a-repeatable-health-check) | No |
-| Inspect what 26e isolation is actually reporting | [Inspect seL4 and MCS state](#inspect-sel4-and-mcs-state) | No |
-| Attach a useful artifact to a bug or change | [Capture and validate an evidence pack](#capture-and-validate-an-evidence-pack) | No |
-| Integrate with an existing script or service | [Read the same state with REST and Python](#read-the-same-state-with-rest-and-python) | No |
-| Check several Queens without opening several shells | [Read a small fleet](#read-a-small-fleet) | No |
-| Use ordinary filesystem tools | [Mount the bounded namespace](#mount-the-bounded-namespace) | Reads or policy-checked writes |
-| Use an AArch64 NVIDIA system as a Cohesix/GPU host | [Inspect and publish AArch64 NVIDIA GPU state](#inspect-and-publish-aarch64-nvidia-gpu-state) | Optional publication |
-| Compare the QEMU and Pi operator experience | [Repeat a check on QEMU and Pi](#repeat-a-check-on-qemu-and-pi) | No |
-| Prepare a node for planned maintenance | [Run a maintenance window](#run-a-maintenance-window) | Yes |
-| Route a failure without random retries | [Triage the first failed boundary](#triage-the-first-failed-boundary) | No |
+| You are evaluating Cohesix for a traffic, factory, medical, logistics, or private-AI workflow | [Explore a deployment before connecting hardware](#explore-a-deployment-before-connecting-hardware) | Labelled mock/dry-run plan and artifacts |
+| A model, service, or image change needs a dependable preflight | [Turn the go/no-go review into a checked script](#make-a-repeatable-health-check) | Read-only pass/refusal |
+| An edge node is responsive but latency or progress looks wrong | [Locate an isolation or scheduling mismatch](#inspect-sel4-and-mcs-state) | Read-only source-labelled diagnosis |
+| A customer, reviewer, or incident lead asks what happened | [Build an offline-reviewable case](#capture-and-validate-an-evidence-pack) | Read-only evidence export |
+| CI, an inventory service, or a notebook needs the same facts | [Feed bounded state into existing automation](#read-the-same-state-with-rest-and-python) | Read-only integration |
+| A small fleet needs one shift-level view | [Find the hive that needs attention](#read-a-small-fleet) | Read-only fan-in |
+| Existing tools expect ordinary files | [Expose only the allowed namespace through FUSE](#mount-the-bounded-namespace) | Reads or policy-checked writes |
+| A Jetson or another AArch64 NVIDIA node is about to receive AI work | [Check the real accelerator before scheduling](#inspect-and-publish-aarch64-nvidia-gpu-state) | Local read; optional bounded publication |
+| A private adapter is ready to stage or roll back | [Stage and reverse a private adapter rollout](#stage-and-reverse-a-private-adapter-rollout) | Host registry and target publication writes |
+| An agent or controller should request one action without receiving a shell | [Let automation request one bounded action](#host-tickets-and-federation) | Allowlisted host action; read-only first |
+| A QEMU result needs physical Pi confirmation | [Repeat the same check without merging the evidence](#repeat-a-check-on-qemu-and-pi) | Read-only comparison |
+| A node needs planned maintenance | [Cordon, drain, verify, and resume](#run-a-maintenance-window) | Lifecycle mutation |
+| Something failed and retries would destroy the first clue | [Route the first failed boundary](#triage-the-first-failed-boundary) | Read-only triage |
 
-## Make a repeatable health check
+## Explore a deployment before connecting hardware
+
+The Python playbooks are useful design tools for discussing a real deployment
+with application, security, and operations teams. List the checked-in
+scenarios:
+
+```bash
+python3 -m pip install -e tools/cohesix-py
+cohesix-playbook --list
+```
+
+The catalogue includes Jetson traffic safety, manufacturing safety, critical
+infrastructure, private PEFT, mixed closed-loop AI, medical edge AI, logistics,
+endpoint compliance, and release-factory examples. Choose the closest shape
+and render its schedule, lease, approval, export, and host-probe plan without
+touching a live target:
+
+```bash
+cohesix-playbook \
+  --playbook mixed-closed-loop-ai-factory \
+  --dry-run \
+  --mock
+```
+
+Use the artifacts under `out/examples/playbooks/` to ask concrete questions:
+Which GPU or service is scarce? Which action needs approval? What must be
+observable before mutation? Which receipt would let an operator distinguish
+success from an admitted request?
+
+The playbook names express integration patterns. Mock and dry-run output is not
+hardware, provider, target, sector, safety, or compliance acceptance. Its value
+is exposing the required control and evidence relationships before expensive
+integration work begins.
+
+<a id="make-a-repeatable-health-check"></a>
+## Before a rollout: turn the go/no-go review into a checked script
 
 Use `.coh` when a sequence matters. It is intentionally smaller than a shell
 language: there are no downloads, variables, loops, command substitution, or
@@ -94,10 +138,14 @@ do not edit them as personal runbooks.
 selected session. **What it does not prove:** all target tests, Worker
 execution, performance, or Pi hardware acceptance.
 
-## Inspect seL4 and MCS state
+<a id="inspect-sel4-and-mcs-state"></a>
+## When an edge node degrades: locate the isolation or scheduling mismatch
 
-The serial/local-seat root console and the NineDoor operator namespace are
-independent views. Use both when investigating temporal isolation.
+Use this when a node still answers `ping`, but control latency, Worker progress,
+or driver responsiveness has changed. The serial/local-seat root console and
+the NineDoor operator namespace are independent views; together they help
+separate a bad generated policy, missing seL4 object, runtime admission issue,
+and ordinary host slowdown.
 
 At the target `cohesix>` console:
 
@@ -138,9 +186,14 @@ execution proof are separate facts.
 these views let you route a mismatch among compiler policy, seL4 objects, live
 admission, scheduler progress, and bounded operator state.
 
-## Capture and validate an evidence pack
+<a id="capture-an-evidence-pack"></a>
+<a id="capture-and-validate-an-evidence-pack"></a>
+<a id="evidence-packs-ci-and-siem"></a>
+## After a change or incident: build an offline-reviewable case
 
-Capture soon after the event, before bounded logs and telemetry wrap:
+Use this when another engineer, a customer, or an auditor must understand the
+event without access to the live node. Capture soon after the event, before
+bounded logs and telemetry wrap:
 
 ```bash
 run_id="case-$(date -u +%Y%m%dT%H%M%SZ)"
@@ -204,7 +257,8 @@ python3 tools/cohesix-py/examples/siem_export_ndjson.py \
 - A non-zero export, absent top-level metadata, or unexplained core error is a
   partial pack, not a publishable result.
 
-## Read the same state with REST and Python
+<a id="read-the-same-state-with-rest-and-python"></a>
+## For CI or inventory: feed bounded state into existing automation
 
 With one healthy gateway, a shell script can read a bounded node without
 parsing an interactive terminal:
@@ -242,7 +296,8 @@ incident collection. Writes still require gateway request authentication and
 the gateway's upstream role/ticket, target lifecycle, policy, and schema all
 remain authoritative.
 
-## Read a small fleet
+<a id="read-a-small-fleet"></a>
+## During a shift: find the hive that needs attention
 
 For one gateway:
 
@@ -275,7 +330,9 @@ This is intentionally not a distributed authority system. Each gateway still
 owns one target session, and two targets can have different manifests,
 evidence status, and request-auth boundaries.
 
-## Mount the bounded namespace
+<a id="mount-the-bounded-namespace"></a>
+<a id="mounted-namespace-with-fuse"></a>
+## For existing file-based tools: expose only the allowed namespace
 
 `coh mount` is useful when existing read-only tools expect files. The mount is
 a foreground FUSE server and exposes only the generated mount root and
@@ -325,7 +382,8 @@ The mount is a convenience projection. Current target, host, and profile
 support still needs its own validation; a successful local mount is not target
 Worker or hardware proof.
 
-## Inspect and publish AArch64 NVIDIA GPU state
+<a id="inspect-and-publish-aarch64-nvidia-gpu-state"></a>
+## Before scheduling AI work: check the real AArch64 NVIDIA accelerator
 
 A Linux AArch64 NVIDIA CUDA system is useful in the 26e topology as a host for
 Cohesix tools, CUDA workloads, models, containers, and evidence. Jetson Orin,
@@ -381,7 +439,157 @@ snapshot reached the selected Queen. **What it does not prove:** CUDA workload
 execution, device isolation, inference, NeMo, PEFT training, or target Worker
 execution. Those need independent host-runtime and target evidence.
 
-## Repeat a check on QEMU and Pi
+<a id="stage-and-reverse-a-private-adapter-rollout"></a>
+## When a private adapter is ready: stage it with a rollback path
+
+This recipe fits a private LoRA workflow in which training data and adapter
+bytes must remain on the AI host, while Cohesix retains bounded job, registry,
+activation, and evidence state. Rehearse the lifecycle first:
+
+```bash
+python3 tools/cohesix-py/examples/peft_roundtrip.py --mock
+```
+
+For a live registry operation, require every deployment-specific location
+explicitly. Put large exports, adapters, registries, and model caches on fast
+SSD/NVMe when available:
+
+```bash
+: "${COH_REST_URL:?set the gateway URL}"
+: "${HIVE_GATEWAY_REQUEST_AUTH_TOKEN:?set REST write authentication}"
+: "${COH_PEFT_JOB:?set the admitted LoRA job id}"
+: "${COH_PEFT_MODEL:?set the model or adapter id}"
+: "${COH_PEFT_EXPORT:?set the export directory}"
+: "${COH_PEFT_ADAPTER:?set the trained adapter directory}"
+: "${COH_GPU_REGISTRY:?set the validated registry directory}"
+
+cargo run -p coh -- peft export \
+  --rest-url "$COH_REST_URL" \
+  --rest-auth-token "$HIVE_GATEWAY_REQUEST_AUTH_TOKEN" \
+  --job "$COH_PEFT_JOB" \
+  --out "$COH_PEFT_EXPORT"
+```
+
+Train and evaluate outside the Cohesix VM with the selected CUDA/PEFT runtime.
+The import directory must contain the bounded Cohesix inputs
+`adapter.safetensors`, `lora.json`, and `metrics.json`; validate their base
+model, dataset provenance, license, metrics, format, and runtime compatibility
+before import.
+
+```bash
+cargo run -p coh -- peft import \
+  --rest-url "$COH_REST_URL" \
+  --rest-auth-token "$HIVE_GATEWAY_REQUEST_AUTH_TOKEN" \
+  --model "$COH_PEFT_MODEL" \
+  --from "$COH_PEFT_ADAPTER" \
+  --job "$COH_PEFT_JOB" \
+  --export "$COH_PEFT_EXPORT" \
+  --registry "$COH_GPU_REGISTRY" \
+  --publish
+
+cargo run -p coh -- peft activate \
+  --rest-url "$COH_REST_URL" \
+  --rest-auth-token "$HIVE_GATEWAY_REQUEST_AUTH_TOKEN" \
+  --model "$COH_PEFT_MODEL" \
+  --registry "$COH_GPU_REGISTRY"
+
+cargo run -p gpu-bridge-host -- \
+  --registry "$COH_GPU_REGISTRY" \
+  --publish \
+  --rest-url "$COH_REST_URL"
+```
+
+Verify the registry projection through REST-backed `cohsh`:
+
+```text
+ls /gpu/models/available
+cat /gpu/models/active
+```
+
+The active identifier proves a bounded registry pointer was accepted. It does
+not prove that an inference process reloaded the adapter, passed a canary, or
+served a request. Keep the deployment runtime's reload and canary result as a
+separate receipt.
+
+If that result fails, roll the pointer back and republish the registry:
+
+```bash
+cargo run -p coh -- peft rollback \
+  --rest-url "$COH_REST_URL" \
+  --rest-auth-token "$HIVE_GATEWAY_REQUEST_AUTH_TOKEN" \
+  --registry "$COH_GPU_REGISTRY"
+
+cargo run -p gpu-bridge-host -- \
+  --registry "$COH_GPU_REGISTRY" \
+  --publish \
+  --rest-url "$COH_REST_URL"
+```
+
+Capture before-import, after-activation, and after-rollback evidence when the
+workflow is being evaluated for production use. Current host helpers do not by
+themselves provide a crash-safe train/evaluate/scan/reload transaction.
+
+<a id="host-tickets-and-federation"></a>
+## When automation needs authority: request one bounded host action
+
+This is the Agent Action Airlock pattern. An AI agent, controller, or support
+tool proposes one generated action record instead of receiving a shell,
+cluster credential, or unrestricted host API. The target admits or refuses the
+record; `host-ticket-agent` independently validates and executes it; status or
+dead-letter records preserve the result.
+
+Start with the non-mutating `systemd.status-check` action against a unit that
+exists on the host running `host-ticket-agent`. In a REST-backed `cohsh`
+session, replace the example unit only with one allowed by the selected
+deployment:
+
+```text
+cat /host/tickets/spec.snapshot
+echo {"schema":"host-ticket/v1","id":"status-demo-1","idempotency_key":"status-demo-1","action":"systemd.status-check","target":"/host/systemd/cohesix-agent.service/status"} > /host/tickets/spec
+quit
+```
+
+Run one agent pass with deployment-specific durable state files:
+
+```bash
+: "${COH_REST_URL:?set the gateway URL}"
+: "${HIVE_GATEWAY_REQUEST_AUTH_TOKEN:?set REST write authentication}"
+
+agent_state="$PWD/out/host-ticket-agent/status-demo"
+mkdir -p "$agent_state"
+
+cargo run -p host-ticket-agent -- \
+  --rest-url "$COH_REST_URL" \
+  --rest-auth-token "$HIVE_GATEWAY_REQUEST_AUTH_TOKEN" \
+  --cursor "$agent_state/cursor.json" \
+  --execution-journal "$agent_state/execution-journal.json" \
+  --agent-lock "$agent_state/agent.lock" \
+  --run-once
+```
+
+Reconnect through REST and inspect both terminal destinations:
+
+```text
+cat /host/tickets/status.snapshot
+cat /host/tickets/deadletter.snapshot
+```
+
+A succeeded status check demonstrates the request/admission/executor/result
+path for that host unit. A failed or refused result is also useful: preserve
+its typed reason rather than widening the allowlist or retrying. Move to
+`systemd.restart`, Docker, Kubernetes, GPU-lease, or PEFT actions only after the
+exact target, arguments, idempotency behavior, rollback, and failure policy
+have been reviewed for that deployment.
+
+Federation uses the same bounded record shape with named source and target
+hives. Enable `--relay` only when the resolved manifest declares the peers,
+actions, hop bounds, and local hive; give every relay its own WAL, cursor,
+journal, lock, credentials, and evidence retention. Federation forwards a
+request—it does not grant ambient fleet authority or prove exactly-once
+external side effects.
+
+<a id="repeat-a-check-on-qemu-and-pi"></a>
+## Before claiming hardware success: repeat the same check on QEMU and Pi
 
 Use the same read-only script to compare operator behavior, while retaining
 different target identities and proof files.
@@ -426,7 +634,8 @@ GENET and Wi-Fi acceptance.
 For published comparisons, retain source commit, selected manifest, image
 hash, seL4 build identity, transcript, and each target's own evidence pack.
 
-## Run a maintenance window
+<a id="run-a-maintenance-window"></a>
+## For planned maintenance: cordon, drain, verify, and resume
 
 Lifecycle control mutates target state. Capture a pre-maintenance evidence pack
 and inspect active leases first:
@@ -463,7 +672,8 @@ platform. The authenticated `reboot` command is a separate operation.
 
 Capture a post-maintenance pack so the before/after records remain comparable.
 
-## Triage the first failed boundary
+<a id="triage-the-first-failed-boundary"></a>
+## When something fails: route the first failed boundary
 
 | Observation | First boundary to inspect | Do not conclude |
 | --- | --- | --- |
@@ -480,17 +690,21 @@ Use [Failure Modes](FAILURE_MODES.md) for the full routing guide. Preserve the
 first typed failure and the independent serial surface before changing code or
 adding retries.
 
-## Know the current 26e boundary
+## Use the strongest claim each situation actually earns
 
-Host tickets, federation, PEFT registry operations, built-in playbooks, and
-host-side AI runtimes exist at different implementation and proof levels. They
-are useful to developers, but they do not all constitute a production use-case
-path today. Use [Cohesix Status](STATUS.md) for current public capability,
+| Result | Useful today for | Do not promote it to |
+| --- | --- | --- |
+| Checked `.coh` reads, target identity, scheduler/lease observations, and a complete evidence pack | Pre-change gates, incident comparison, support cases, and operator handoff | Whole-milestone, performance, or physical-hardware acceptance |
+| Real AArch64 NVIDIA inventory and bounded `/gpu` publication | Verifying that the intended accelerator host is present and visible to the control plane | CUDA execution, isolation, inference, PEFT training, or NeMo acceptance |
+| PEFT export/import/activate/rollback and WorkerLora receipt surfaces | Rehearsing and integrating a private adapter lifecycle with explicit rollback | Training provenance, evaluation, scan, inference reload, or successful canary |
+| Host tickets and playbooks | Designing and testing an action airlock or sector workflow with explicit authority and receipts | Production provider behavior, sector certification, or safe autonomous operation |
+| The same script on QEMU and Pi | Comparing exact operator contracts while retaining two proof files | Treating VM evidence as physical-board evidence |
+
+Use [Cohesix Status](STATUS.md) for the current public capability boundary,
+[Use Cases](USE_CASES.md) for maturity-labelled deployment patterns,
 [Host Tools](HOST_TOOLS.md) for exact modes, and the
-[Build Plan](BUILD_PLAN.md) for planned hardening rather than treating an old
-demo or fixture as a current promise.
-
-The strongest reasons to keep using Cohesix in 26e are already practical:
-portable bounded checks, visible seL4/MCS authority, one consistent namespace
-across several client styles, explicit target-versus-host boundaries, and
-evidence that can be reviewed after the live system is gone.
+[Build Plan](BUILD_PLAN.md) for planned hardening. The practical value already
+available in 26e is not that every integration is finished. It is that an
+operator can make bounded decisions, expose only narrow authority, keep target
+and host claims separate, and reconstruct what happened after the live system
+is gone.

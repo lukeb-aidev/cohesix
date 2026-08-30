@@ -1,36 +1,45 @@
 <!-- Copyright © 2026 Lukas Bower -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
-<!-- Purpose: Guide a first-time operator through one useful, evidence-backed Cohesix 26e session. -->
+<!-- Purpose: Guide a first-time operator through an evidence-backed decision about changing an edge AI node. -->
 <!-- Author: Lukas Bower -->
 
-# Cohesix Operator Walkthrough
+# Operator Walkthrough — Is This Edge AI Node Safe to Change?
 
-This walkthrough turns one live QEMU Queen into a small operator workspace. By
-the end you will have:
+A team wants to update a vision model or restart an AI service on an edge node.
+The node appears healthy, but “the dashboard is green” is not enough. Before
+approving the change, the operator needs to establish:
 
-- inspected the seL4 and MCS state on the independent serial surface;
-- run a checked, repeatable `.coh` target probe;
-- shared the target safely with shell, REST, and Python clients;
-- viewed the same bounded state through SwarmUI; and
-- exported a portable evidence pack and offline timeline.
+- the exact seL4 Queen and policy being consulted;
+- whether control, scheduling, and lease state are healthy;
+- whether the real CUDA host is the expected machine;
+- whether several tools are seeing the same session; and
+- whether the decision can be reconstructed after the live system is gone.
 
-The point is not another dashboard. The point is that every view refers to one
-target session, one generated policy, and one file-shaped control plane whose
-claims remain tied to evidence.
+This walkthrough produces that go/no-go case. It uses a live QEMU Queen as the
+control plane and can include a Jetson or another compatible Linux AArch64
+NVIDIA CUDA host as the external AI machine. The same sequence applies to a Pi
+Queen only after its independent physical acceptance gates pass.
+
+The walkthrough stops before changing a model or service. In current 26e,
+target control state, host GPU discovery, host-side AI execution, and physical
+target evidence remain separate proof classes. A deployment-specific executor
+must still prove the external change and return its result.
 
 Complete the [Quickstart](QUICKSTART.md) first if the host tools are not built
 or the current QEMU profile has not booted. See the [Glossary](GLOSSARY.md) for
 Cohesix-specific terms.
 
-## The session you are building
+## The operational picture you are building
 
 ```text
-QEMU serial -------------------------> independent boot/MCS diagnostics
+QEMU serial --------------------------> independent boot/MCS truth
 
-QEMU TCP console <---- hive-gateway <---- cohsh
-             one owner       |       <---- coh
-                             |       <---- curl / Python
-                             `------------ SwarmUI
+QEMU TCP console <---- hive-gateway <---- operator shell
+             one owner       |       <---- automation / Python
+                             |       <---- evidence exporter / SwarmUI
+                             `-------<---- bounded Jetson GPU publication
+
+Jetson or CUDA host -----------------> model runtime remains host-side
 ```
 
 The target exposes one authenticated TCP console. `hive-gateway` owns that
@@ -49,7 +58,7 @@ The examples assume:
 Release-bundle users should use the matching executable under `bin/` and the
 paths in that bundle's `QUICKSTART.md`.
 
-## 1. Establish target truth at the serial console
+## 1. Identify the control plane before trusting it
 
 Keep the QEMU terminal open. At `cohesix>`, run:
 
@@ -71,11 +80,12 @@ Look for these outcomes:
   source-labelled; and
 - `netstats` reports either a ready TCP path or a specific blocker.
 
-Do not collapse an unavailable live field into a generated value. That
-separation is one of the reasons to use Cohesix: configuration, kernel truth,
-and runtime observation stay distinguishable during diagnosis.
+Do not collapse an unavailable live field into a generated value. If the image
+identity is unexpected or a required live field is unavailable, the rollout is
+already a no-go. This separation keeps configuration, kernel truth, and runtime
+observation distinguishable during diagnosis.
 
-## 2. Save a repeatable direct-target baseline
+## 2. Save the before-change baseline
 
 Before starting the gateway, use the direct console for one foreground script.
 In terminal 2:
@@ -96,11 +106,14 @@ The script attaches, pings, reads `/proc/boot`, schedule and lease summaries,
 lists `/proc`, then performs a clean quit. A zero exit means its exact
 assertions passed; it does not mean every 26e test or physical target passed.
 
-This transcript is your small before-state. It is easy to retain, diff, and
-repeat after a configuration change. More useful custom scripts are in
+This transcript is the before-state for the proposed change. Retain it with the
+change or incident identifier, then repeat the same script after the operation.
+The value is not the text file by itself; it is the ability to compare the same
+bounded assertions against the same identified target. More useful custom
+scripts are in
 [Operator Recipes](OPERATOR_RECIPES.md#make-a-repeatable-health-check).
 
-## 3. Give concurrent tools one safe owner
+## 3. Give the review team one safe session owner
 
 The direct script has exited, so the TCP console is free. In terminal 2, load
 the console secret and a distinct REST write secret, then start the gateway:
@@ -143,7 +156,7 @@ Continue only when:
 `/v1/meta/bounds` is compiled host policy. `/proc/boot` is target-reported
 state. A match supports parity for this session; either value alone does not.
 
-## 4. Explore the 26e target through the operator shell
+## 4. Answer the control-plane go/no-go questions
 
 Open a REST-backed shell in terminal 3:
 
@@ -169,16 +182,16 @@ tail /log/queen.log 32
 test --mode quick --no-mutate
 ```
 
-These surfaces answer different questions:
+These surfaces answer the questions that matter before an edge change:
 
-| Surface | Question answered |
-| --- | --- |
-| `/proc/boot` | Which target/profile says it is running? |
-| `/proc/root/reachable` | Is the bounded root reachability view healthy? |
-| `/proc/schedule/summary` | Is scheduler ingress making bounded progress? |
-| `/proc/lease/summary` | What lease activity is retained? |
-| `/shard` | Which canonical Worker namespace is exposed by this profile? |
-| `/log/queen.log` | What recent bounded Queen events remain available? |
+| Decision question | Surface | Stop condition |
+| --- | --- | --- |
+| Is this the intended target? | `/proc/boot` | Image, profile, or manifest differs from the change record. |
+| Is bounded root control reachable? | `/proc/root/reachable` | A required root or service is unreachable. |
+| Is scheduler ingress progressing? | `/proc/schedule/summary` | Required progress is absent or a typed overload persists. |
+| Will this collide with current work? | `/proc/lease/summary` | An unexplained active lease owns the resource. |
+| Are the expected Worker roles exposed? | `/shard` | The selected manifest and visible role layout disagree. |
+| Is there a recent warning relevant to the change? | `/log/queen.log` | A retained fault or refusal has not been routed. |
 
 The selected QEMU and Pi profiles declare 256 Worker slots: one Heartbeat, 127
 GPU, and 128 LoRA. A namespace entry or admitted control write is not by itself
@@ -187,7 +200,7 @@ completion, target execution, and release acceptance as separate states.
 
 Use `quit` to close `cohsh`. The gateway remains available to other clients.
 
-## 5. Use the same state from Python
+## 5. Give deployment automation the same bounded facts
 
 Install the target-neutral Python package into the repository virtual
 environment:
@@ -211,18 +224,20 @@ PY
 ```
 
 This is deliberately small. The Python package mirrors existing namespace and
-control semantics; it is not a second authority path. Use it to integrate
-Cohesix observations with a test harness, inventory system, notebook, or
-incident workflow without scraping terminal output. The supported backends and
-typed APIs are in [Python Support](PYTHON_SUPPORT.md).
+control semantics; it is not a second authority path. A deployment gate can
+now refuse a rollout on the same target facts the operator reviewed, without
+scraping terminal output or acquiring a shell. The supported backends and typed
+APIs are in [Python Support](PYTHON_SUPPORT.md).
 
-## 6. Project real host GPU inventory when available
+## 6. Verify the actual accelerator as a separate boundary
 
-On any compatible Linux AArch64 NVIDIA CUDA host—including Jetson Orin, AWS
-G5g, NVIDIA DGX Spark, and similar systems—inspect local GPU discovery without
-changing the target:
+The Queen can be healthy while the external AI host is wrong, missing its
+driver, or exposing a different accelerator. On any compatible Linux AArch64
+NVIDIA CUDA host—including Jetson Orin, AWS G5g, NVIDIA DGX Spark, and similar
+systems—inspect local GPU discovery without changing the target:
 
 ```bash
+cargo run -p coh -- doctor
 cargo run -p gpu-bridge-host -- --list
 ```
 
@@ -250,9 +265,10 @@ cat /gpu/bridge/status
 GPU discovery and publication do not execute a workload, isolate a CUDA
 context, prove a model runtime, or prove PEFT training. In 26e, CUDA/NVML and AI
 execution remain host-side; Cohesix projects bounded inventory and control
-state. Keep that boundary when reporting results.
+state. A rollout that requires CUDA is a no-go until its separate runtime probe
+and deployment-specific executor also succeed.
 
-## 7. Export the session before its retained windows wrap
+## 7. Freeze the decision record before retained windows wrap
 
 While the gateway is still connected:
 
@@ -282,7 +298,7 @@ top-level metadata, or unexplained error is not a publishable pack. The full
 redaction and validation recipe is in
 [Operator Recipes](OPERATOR_RECIPES.md#capture-and-validate-an-evidence-pack).
 
-## 8. See the same session in SwarmUI
+## 8. Review the case with another human in SwarmUI
 
 With the gateway still running:
 
@@ -293,12 +309,36 @@ cargo run -p swarmui
 ```
 
 Use SwarmUI to browse status, telemetry, retained replay state, and the Live
-Hive projection. Its embedded console can mutate the target and is subject to
-the same gateway role, ticket, policy, and request authentication as `cohsh`.
-Visual state remains a presentation of target or host records; it is not
-stronger proof than the records behind it.
+Hive projection. This is the useful handoff point for a second operator: they
+can see the same target and GPU projections, then inspect the evidence timeline
+without inheriting an unrestricted host shell. SwarmUI's embedded console can
+mutate the target and is subject to the same gateway role, ticket, policy, and
+request authentication as `cohsh`. Visual state remains a presentation of
+target or host records; it is not stronger proof than the records behind it.
 
-## Move the workflow to Pi 4 or an AArch64 CUDA host
+## Make the go/no-go decision
+
+The node is ready to enter a deployment-specific change procedure only when:
+
+- serial and `/proc/boot` identify the intended target and profile;
+- the checked baseline passes and required control/scheduler state is healthy;
+- every existing lease is expected and compatible with the operation;
+- the gateway is the sole shared console owner and reports the same session;
+- a CUDA-dependent change has separate real-host inventory and runtime proof;
+  and
+- the evidence pack is complete enough to compare with the after-state.
+
+Stop and route the first failed boundary when any item is false. Do not turn an
+unknown GPU runtime into a target fault, a target refusal into a retry loop, or
+a successful model-registry write into proof that an inference runtime
+reloaded.
+
+For a private adapter, continue with
+[Stage and reverse a private adapter rollout](OPERATOR_RECIPES.md#stage-and-reverse-a-private-adapter-rollout).
+For a constrained service, GPU, or model action proposed by automation, use
+[Let automation request one bounded action](OPERATOR_RECIPES.md#host-tickets-and-federation).
+
+## Move the decision workflow to Pi 4 or another CUDA host
 
 For a Pi 4 Queen, keep the sequence but change the proof source:
 
@@ -333,8 +373,8 @@ or AI-runtime acceptance from a successful host GPU inventory.
 unset COH_AUTH_TOKEN COHSH_AUTH_TOKEN HIVE_GATEWAY_REQUEST_AUTH_TOKEN
 ```
 
-You have completed the walkthrough when one exact target identity is visible
-through serial and `/proc/boot`, the gateway is the only shared TCP owner, the
-read-only checks pass, and the saved evidence pack can be reviewed offline.
-That is a small result, but it is repeatable, inspectable, and difficult to
-accidentally overstate—the foundation for every larger Cohesix workflow.
+You have completed the walkthrough when you can make a defensible go/no-go
+decision from one exact target identity, one shared session, separate target
+and GPU-host observations, and an offline-reviewable evidence pack. That is the
+practical value of Cohesix before it performs any external action: it makes the
+authority, preconditions, unknowns, and eventual result difficult to confuse.
