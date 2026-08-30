@@ -808,6 +808,23 @@ fn compact_direct_genet_successor_composes_only_the_exact_adapter_response() {
         assert!(successor.contains(compose), "missing {compose}");
         assert!(successor.contains(deferred), "missing {deferred}");
     }
+
+    let no_pending = successor
+        .find("DirectGenetResponseComposeOutcome::NoPending")
+        .expect("non-SyncCapture responses have an explicit compact outcome");
+    let identity_drift = successor[no_pending..]
+        .find("DirectGenetResponseComposeOutcome::IdentityDrift")
+        .map(|offset| no_pending + offset)
+        .expect("identity drift follows the non-SyncCapture response arms");
+    let no_pending_arms = &successor[no_pending..identity_drift];
+    assert!(
+        no_pending_arms.contains("linked_runtime_direct_genet_no_pending_terminal_stage_ready()")
+    );
+    assert!(no_pending_arms.contains("DirectGenetCommandControlDeferReason::OutputMissing"));
+    assert!(
+        !no_pending_arms.contains("fence_console_network_authority_quiet"),
+        "absence of SyncCapture is not a containment event when the exact response lane is ready",
+    );
 }
 
 #[test]

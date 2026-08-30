@@ -1355,21 +1355,34 @@ not current-candidate performance or acceptance proof.
   QEMU authority. After the child publishes one exact authenticated `Command`
   or `CommandBatch`, it quiesces direct service until root applies a newly
   sequenced `StageOutput` for the same generation and connection. Root may
-  compose only that adapter-local response stage; a stale/empty control, peer
-  wake, publication ACK, identity drift, fault, or containment cannot release
-  the quiesce or authorize NIC work. QEMU direct VirtIO and non-GENET backends
-  remain on their existing paths.
+  compose only that adapter-local response stage. A bounded immediate terminal
+  such as `QUIT` already queues its exact adapter response and therefore has no
+  `SyncCapture` record to compose. Typed `NoPending` may proceed only when the
+  ordinary generation-, connection-, authentication-, recovery-, flush-, and
+  batch-drain predicate independently proves that existing response lane is
+  stage-ready, terminal-queued, producer-closed, and contains exactly one
+  completed response; otherwise it defers as `OutputMissing`. Identity drift
+  retains fail-closed containment. A stale/empty control, peer wake,
+  publication ACK, fault, or containment cannot release the quiesce or
+  authorize NIC work.
+  QEMU direct VirtIO and non-GENET backends remain on their existing paths.
 - Copied WiFi may retain the current guarded root activation across a period
   seam only through one opaque transient-publication credit. Minting requires
   one Network poll to advance exactly one material isolated-child unit while
   lifetime, response cursor/lane, active and authenticated connection,
-  accepted-command count, service count, and pending flush remain exact. The
-  next composer must admit the ordinary `Serial -> LocalSeat? -> Dispatch`
-  cut, revalidate the complete snapshot at entry and immediately before one
-  Network poll, and then consume the credit once. Yield, physical operator or
-  response work, passive admission, identity/cursor drift, recovery,
-  containment, quarantine, reboot, or handoff revokes it. The credit is not a
-  notification, SC refill, retry, device grant, or transferable authority.
+  accepted-command count, service count, and pending flush remain exact at the
+  mint. The next composer must admit the ordinary
+  `Serial -> LocalSeat? -> Dispatch` cut. After Dispatch it may rebase the
+  credit once only when one authenticated network command advances the command
+  count by exactly one, the prior empty lane becomes one exact nonempty sealed
+  completed response lane, and the prior empty flush becomes one bounded
+  same-connection flush. Lifetime, generation, response identity, service
+  count, operator rotor, recovery, containment, quarantine, reboot, and
+  handoff evidence must remain exact. It then revalidates the complete rebased
+  snapshot immediately before one Network poll and consumes the credit once.
+  Any other change, Yield, physical operator or response work, passive
+  admission, or identity/cursor drift revokes or rejects it. The credit is not
+  a notification, SC refill, retry, device grant, or transferable authority.
 - Pi-only causal diagnostics retain bounded in-memory aggregates, not a hot
   log. The composer recorder accumulates raw 54 MHz CNTVCT start-to-start
   periods and start-to-finish run ticks for root-control composer quanta; these
@@ -1393,25 +1406,34 @@ not current-candidate performance or acceptance proof.
   reason mask, and rejects at the exact probe, next-composer entry, final
   pre-Network, or revocation cut. Direct GENET counts the typed response-compose
   outcomes `composed`, `no_pending`, `not_sealed`, `backpressure`, and
-  `identity_drift`; only `composed` authorizes child control. The adjacent
-  `genet_defer` row assigns every aggregate compact Deferred to exactly one of
-  `passive`, `command`, `compose_open`, `compose_backpressure`, `fence`,
-  `prior_batch`, `control_busy`, `output_missing`, or `stage_backpressure`;
-  their sum equals the aggregate `genet_compact deferred` count, and
-  `compose_open` is the aggregate classification for typed `NotSealed`. When
-  the isolated service exposes timing, five optional millisecond seam ages
+  `identity_drift`. `composed` proves a sealed `SyncCapture` moved into the
+  adapter. `no_pending` may reach the same ordinary stage path only when an
+  exact already-queued non-`SyncCapture` response lane is independently
+  stage-ready; otherwise `genet_defer output_missing` increments. The counter
+  alone authorizes nothing. The adjacent `genet_defer` row assigns every
+  aggregate compact Deferred to exactly one of `passive`, `command`,
+  `compose_open`, `compose_backpressure`, `fence`, `prior_batch`,
+  `control_busy`, `output_missing`, or `stage_backpressure`; their sum equals
+  the aggregate `genet_compact deferred` count, and `compose_open` is the
+  aggregate classification for typed `NotSealed`. When the isolated service
+  exposes timing, five optional millisecond seam ages
   cover command publication to root observation, dispatch to first `StageOutput`,
   `StageOutput` to the observed control-consumption watermark, `StageOutput`
   to `OutputDrained`, and `OutputDrained` to root observation. The shared
   control watermark has no timestamp, so `stage-control-observe` intentionally
   combines child consumption and later root observation rather than claiming
-  to split them. Zero/backwards pairs are invalid and valid totals saturate.
+  to split them. On the physical Pi release target, child timestamps and every
+  root dispatch, observation, stage, control, and drain sample use the same
+  absolute `CNTVCT_EL0` epoch scaled by generated `TIMER_CLOCK_HZ`; root
+  elapsed/smoltcp time is never compared with that epoch. The GENET, CYW43, and
+  default stack wrappers forward the exact dispatch identity and observation
+  to the isolated adapter. Host tests and QEMU retain their caller-time
+  fallback. Zero/backwards pairs are invalid and valid totals saturate.
   Collection never calls `SchedContext_Consumed`, changes a scheduling
   decision, signals a task, retries work, or executes accounting writes on the
-  protected QEMU release path; QEMU emits none of the five rows. These rows
-  and the explicit `smp mcs` batch are diagnostic only; fresh exact-image Pi
-  traffic and benchmark evidence remain required for correctness or
-  performance claims.
+  protected QEMU release path; QEMU emits none of the five rows. These rows and
+  the explicit `smp mcs` batch are diagnostic only; fresh exact-image Pi traffic
+  and benchmark evidence remain required for correctness or performance claims.
 
 When debugging the linked pair, trace this chain with exact identities:
 

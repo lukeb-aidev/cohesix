@@ -228,20 +228,31 @@ fence `0x2`, final pre-Network drift `0x4`, and non-material or empty
 publication `0x8`. `cyw43_publication_cut` assigns each rejection to the exact
 proof probe, next-composer entry, final pre-Network revalidation, or later
 revocation cut. The cut counters classify the aggregate `rejected` total; they
-do not create a retry or continuation.
+do not create a retry or continuation. One credit may be rebased after the
+ordinary Dispatch cut only for one exact authenticated network command: the
+command count advances by one, an empty response lane becomes one exact
+nonempty sealed completed lane, and an empty flush becomes one bounded
+same-connection flush while every lifetime, identity, service, operator, and
+recovery fence remains exact. Any other delta is a pre-Network rejection.
 
 `genet_compose` counts the typed outcomes of moving one sealed response into
-the direct-GENET adapter. Only `composed` authorizes the causal child-control
-successor. `no_pending`, `not_sealed`, `backpressure`, and `identity_drift`
-remain distinct fail-closed or retained-response outcomes rather than being
-collapsed into apparent success. `genet_compact` retains the adjacent bounded
-command-control outcomes and operator-rotation counts. Every aggregate compact
-Deferred increments exactly one `genet_defer` counter: `passive`, `command`,
-`compose_open`, `compose_backpressure`, `fence`, `prior_batch`, `control_busy`,
-`output_missing`, or `stage_backpressure`. Their sum therefore equals the
-aggregate `genet_compact deferred` count. `compose_open` maps the typed
-`NotSealed` outcome. This bounded one-hot classification does not authorize a
-retry, admission, child-control successor, or acceptance claim.
+the direct-GENET adapter. `composed` proves a sealed `SyncCapture` was moved.
+An immediate terminal such as `QUIT` already queues its exact adapter response,
+so `no_pending` may proceed only when the ordinary generation-, connection-,
+authentication-, recovery-, flush-, and batch-drain predicate independently
+proves that non-`SyncCapture` lane is stage-ready, terminal-queued,
+producer-closed, and contains exactly one completed response. Otherwise it
+defers as `output_missing`; identity drift remains fail-closed containment. The
+raw counter value alone authorizes no child-control successor. `not_sealed` and
+`backpressure` remain retained-response outcomes. `genet_compact` retains the
+adjacent bounded command-control outcomes and operator-rotation counts. Every
+aggregate compact Deferred increments exactly one `genet_defer` counter:
+`passive`, `command`, `compose_open`, `compose_backpressure`, `fence`,
+`prior_batch`, `control_busy`, `output_missing`, or `stage_backpressure`. Their
+sum therefore equals the aggregate `genet_compact deferred` count.
+`compose_open` maps the typed `NotSealed` outcome. This bounded one-hot
+classification does not authorize a retry, admission, child-control successor,
+or acceptance claim.
 
 The five optional `isolated_seam` names measure child command publication to
 validated root observation, root dispatch to first durable `StageOutput`,
@@ -253,7 +264,12 @@ the later root observation; it cannot independently assign those two portions
 without a shared-ABI change. These millisecond ages accept zero age when both
 timestamps are nonzero, reject a zero endpoint or backwards pair into
 `invalid`, and saturate sample and total arithmetic; `avg_ms` is the integer
-average of valid samples.
+average of valid samples. On a physical Pi release target, both sides use the
+same absolute `CNTVCT_EL0` epoch scaled by generated `TIMER_CLOCK_HZ`; root
+elapsed/smoltcp milliseconds are not an endpoint of these ages. The physical
+stack wrappers forward the exact dispatch observation into the isolated
+adapter. Host tests and QEMU preserve the caller-time fallback, and the row
+grammar and schema remain unchanged.
 
 The detailed Pi composer/scheduler snapshot belongs to explicit `smp mcs`, not
 `netstats`. The Pi release batch contains exactly 22 additive rows:

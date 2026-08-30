@@ -24,7 +24,7 @@ use smoltcp::time::Instant;
 use smoltcp::wire::{EthernetAddress, Ipv4Address};
 
 #[cfg(any(test, feature = "release-pi4"))]
-use super::isolated_seam::IsolatedSeamDiagnostics;
+use super::isolated_seam::{isolated_seam_observation_ms, IsolatedSeamDiagnostics};
 use super::isolated_self_test::{
     finish_poll_with_self_test, IsolatedSelfTestObservation, IsolatedSelfTestState,
 };
@@ -1004,8 +1004,10 @@ impl<D: NetDevice> IsolatedNetworkConsole<D> {
             }
             batch.control_completed = true;
             #[cfg(any(test, feature = "release-pi4"))]
-            self.seam_telemetry
-                .record_control_completed(batch.staged_ms, self.last_now_ms);
+            self.seam_telemetry.record_control_completed(
+                batch.staged_ms,
+                isolated_seam_observation_ms(self.last_now_ms),
+            );
         }
         self.settle_completed_response_batch();
     }
@@ -1081,7 +1083,9 @@ impl<D: NetDevice> IsolatedNetworkConsole<D> {
                 }
                 let console_line = ConsoleLine::for_connection(line, event.now_ms(), connection_id);
                 #[cfg(any(test, feature = "release-pi4"))]
-                let console_line = console_line.with_root_observed_ms(self.last_now_ms);
+                let root_observed_ms = isolated_seam_observation_ms(self.last_now_ms);
+                #[cfg(any(test, feature = "release-pi4"))]
+                let console_line = console_line.with_root_observed_ms(root_observed_ms);
                 if self.lines.push_back(console_line).is_err() {
                     self.ingest_backpressure = self.ingest_backpressure.saturating_add(1);
                     self.fail_closed("command-queue-backpressure");
@@ -1098,7 +1102,7 @@ impl<D: NetDevice> IsolatedNetworkConsole<D> {
                     self.counters.tcp_console_recv_ready.saturating_add(1);
                 #[cfg(any(test, feature = "release-pi4"))]
                 self.seam_telemetry
-                    .record_command_or_batch_observed(event.now_ms(), self.last_now_ms);
+                    .record_command_or_batch_observed(event.now_ms(), root_observed_ms);
             }
             ExchangeKind::CommandBatch => {
                 if self.authenticated_connection != Some(connection_id) {
@@ -1115,6 +1119,8 @@ impl<D: NetDevice> IsolatedNetworkConsole<D> {
                     self.fail_closed("command-batch-queue-backpressure");
                     return;
                 }
+                #[cfg(any(test, feature = "release-pi4"))]
+                let root_observed_ms = isolated_seam_observation_ms(self.last_now_ms);
                 loop {
                     let command = match cursor.next_command(payload) {
                         Ok(Some(command)) => command,
@@ -1132,7 +1138,7 @@ impl<D: NetDevice> IsolatedNetworkConsole<D> {
                     }
                     let console_line = ConsoleLine::for_connection(line, now_ms, connection_id);
                     #[cfg(any(test, feature = "release-pi4"))]
-                    let console_line = console_line.with_root_observed_ms(self.last_now_ms);
+                    let console_line = console_line.with_root_observed_ms(root_observed_ms);
                     if self.lines.push_back(console_line).is_err() {
                         self.fail_closed("command-batch-admission");
                         return;
@@ -1149,7 +1155,7 @@ impl<D: NetDevice> IsolatedNetworkConsole<D> {
                 }
                 #[cfg(any(test, feature = "release-pi4"))]
                 self.seam_telemetry
-                    .record_command_or_batch_observed(event.now_ms(), self.last_now_ms);
+                    .record_command_or_batch_observed(event.now_ms(), root_observed_ms);
             }
             ExchangeKind::Disconnected => {
                 // Root observes lifecycle events before command lines. Retire
@@ -1211,7 +1217,7 @@ impl<D: NetDevice> IsolatedNetworkConsole<D> {
                     self.seam_telemetry.record_output_drained(
                         batch.staged_ms,
                         event.now_ms(),
-                        self.last_now_ms,
+                        isolated_seam_observation_ms(self.last_now_ms),
                     );
                 }
                 self.response_drains = self.response_drains.saturating_add(1);
@@ -1424,20 +1430,28 @@ impl<D: NetDevice> IsolatedNetworkConsole<D> {
         {
             Ok(sequence) => {
                 #[cfg(any(test, feature = "release-pi4"))]
+                let staged_ms = isolated_seam_observation_ms(self.last_now_ms);
+                #[cfg(any(test, feature = "release-pi4"))]
                 if self.response_dispatch_ms != 0 {
                     self.seam_telemetry
-                        .record_dispatch_to_stage(self.response_dispatch_ms, self.last_now_ms);
+                        .record_dispatch_to_stage(self.response_dispatch_ms, staged_ms);
                     self.response_dispatch_ms = 0;
                 }
                 for _ in 0..count {
                     let _ = self.output.pop_front();
                 }
                 if let Some(lane) = self.response_lane.as_mut() {
-                    lane.awaiting_batch = Some(PendingResponseBatch::new(
-                        sequence,
-                        terminal_count,
-                        self.last_now_ms,
-                    ));
+                    lane.awaiting_batch =
+                        Some(PendingResponseBatch::new(sequence, terminal_count, {
+                            #[cfg(any(test, feature = "release-pi4"))]
+                            {
+                                staged_ms
+                            }
+                            #[cfg(not(any(test, feature = "release-pi4")))]
+                            {
+                                self.last_now_ms
+                            }
+                        }));
                 }
                 self.output_issued = true;
                 self.connection_bytes_written =
@@ -2016,7 +2030,7 @@ impl<D: NetDevice> NetPoller for IsolatedNetworkConsole<D> {
             && self.active_connection == Some(connection_id)
             && self.authenticated_connection == Some(connection_id)
         {
-            dispatch_ms
+            isolated_seam_observation_ms(dispatch_ms)
         } else {
             0
         };

@@ -9532,6 +9532,13 @@ impl NetPoller for GenetNetStack {
             .and_then(NetPoller::bounded_console_response_identity)
     }
 
+    #[cfg(feature = "release-pi4")]
+    fn note_console_response_dispatch(&mut self, connection_id: u64, dispatch_ms: u64) {
+        if let Some(inner) = self.inner_mut() {
+            inner.note_console_response_dispatch(connection_id, dispatch_ms);
+        }
+    }
+
     fn console_response_lane(&self) -> Option<ConsoleResponseLane> {
         self.inner().and_then(NetPoller::console_response_lane)
     }
@@ -9893,6 +9900,13 @@ impl NetPoller for Cyw43NetStack {
     fn bounded_console_response_identity(&self) -> Option<ConsoleResponseIdentity> {
         self.inner()
             .and_then(NetPoller::bounded_console_response_identity)
+    }
+
+    #[cfg(feature = "release-pi4")]
+    fn note_console_response_dispatch(&mut self, connection_id: u64, dispatch_ms: u64) {
+        if let Some(inner) = self.inner_mut() {
+            inner.note_console_response_dispatch(connection_id, dispatch_ms);
+        }
     }
 
     fn console_response_lane(&self) -> Option<ConsoleResponseLane> {
@@ -11315,6 +11329,23 @@ impl NetPoller for DefaultNetStack {
             Self::Cyw43DriverTask(stack) => stack.bounded_console_response_identity(),
             #[cfg(feature = "net-backend-virtio")]
             Self::Virtio(stack) => stack.bounded_console_response_identity(),
+        }
+    }
+
+    #[cfg(feature = "release-pi4")]
+    fn note_console_response_dispatch(&mut self, connection_id: u64, dispatch_ms: u64) {
+        match self {
+            Self::Rtl8139(stack) => {
+                stack.note_console_response_dispatch(connection_id, dispatch_ms)
+            }
+            Self::GenetDriverTask(stack) => {
+                stack.note_console_response_dispatch(connection_id, dispatch_ms)
+            }
+            Self::Cyw43DriverTask(stack) => {
+                stack.note_console_response_dispatch(connection_id, dispatch_ms)
+            }
+            #[cfg(feature = "net-backend-virtio")]
+            Self::Virtio(stack) => stack.note_console_response_dispatch(connection_id, dispatch_ms),
         }
     }
 

@@ -3,6 +3,45 @@
 // Author: Lukas Bower
 // Purpose: Accumulate bounded passive timing evidence for isolated network-service seams.
 
+/// Convert one absolute architected-counter sample to the child service's
+/// millisecond epoch.
+///
+/// Keeping the conversion here makes the target-only sample path directly
+/// comparable with `console-network-runtime` while leaving ordinary root
+/// timer and smoltcp time domains untouched.
+const fn architected_counter_ms(counter: u64, timer_clock_hz: u64) -> u64 {
+    if timer_clock_hz == 0 {
+        return 0;
+    }
+    let seconds = counter / timer_clock_hz;
+    let remainder = counter % timer_clock_hz;
+    seconds
+        .saturating_mul(1_000)
+        .saturating_add(remainder.saturating_mul(1_000) / timer_clock_hz)
+}
+
+/// Sample the common child/root seam epoch on a physical Pi release target.
+///
+/// The isolated child publishes absolute `CNTVCT_EL0` time. Only the physical
+/// Pi release target replaces the caller's ordinary elapsed-time fallback with
+/// that absolute epoch. Host tests and every QEMU build retain the fallback,
+/// so this helper cannot alter runtime or smoltcp scheduling time.
+#[inline]
+pub(crate) fn isolated_seam_observation_ms(fallback_ms: u64) -> u64 {
+    #[cfg(all(feature = "release-pi4", target_arch = "aarch64", target_os = "none"))]
+    {
+        return architected_counter_ms(
+            crate::arch::aarch64::timer::timer_counter_ticks(),
+            crate::arch::aarch64::timer::timer_freq_hz(),
+        );
+    }
+
+    #[cfg(not(all(feature = "release-pi4", target_arch = "aarch64", target_os = "none")))]
+    {
+        fallback_ms
+    }
+}
+
 /// One passive age accumulator for a causally matched isolated-service seam.
 ///
 /// The selected exchange ABI already carries millisecond publication time.
@@ -96,6 +135,19 @@ impl IsolatedSeamDiagnostics {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn architected_counter_conversion_matches_child_epoch() {
+        assert_eq!(architected_counter_ms(0, 54_000_000), 0);
+        assert_eq!(architected_counter_ms(81_000_000, 54_000_000), 1_500);
+        assert_eq!(architected_counter_ms(u64::MAX, 0), 0);
+    }
+
+    #[cfg(not(all(feature = "release-pi4", target_arch = "aarch64", target_os = "none")))]
+    #[test]
+    fn non_pi_target_preserves_caller_time_domain() {
+        assert_eq!(isolated_seam_observation_ms(12_345), 12_345);
+    }
 
     #[test]
     fn age_accepts_monotonic_samples_and_saturates() {

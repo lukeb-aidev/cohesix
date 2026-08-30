@@ -3903,6 +3903,131 @@ fn cyw43_transient_publication_credit_reject_reason(
     reasons
 }
 
+/// Exact post-Dispatch transition allowed to rebind one copied-WiFi
+/// publication credit to the response produced by one authenticated command.
+///
+/// The original credit still has to cross the complete Serial -> optional
+/// LocalSeat -> Dispatch operator rotor. Only the expected command-owned
+/// response cursor and legacy flush cursor may change: child generation,
+/// connection identity, CYW43 lifetime, isolated-service progress, and every
+/// recovery/operator fence remain byte-for-byte exact.
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Cyw43TransientPublicationDispatchRebaseEvidence {
+    current: Cyw43TransientPublicationCreditEvidence,
+    starting_phase: LinkedRuntimeServicePhase,
+    admitted_phase: LinkedRuntimeServicePhase,
+    next_phase: LinkedRuntimeServicePhase,
+    unit_index: usize,
+    network_units: usize,
+    rotation_before_dispatch: Option<LinkedRuntimeCyw43DurableResume>,
+    last_input_source: ConsoleInputSource,
+}
+
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+fn cyw43_transient_publication_credit_rebase_after_dispatch(
+    evidence: Cyw43TransientPublicationDispatchRebaseEvidence,
+) -> Result<Cyw43TransientPublicationCredit, u32> {
+    let current = evidence.current;
+    let credit = current.credit;
+    let Some(response_lane) = current.response_lane else {
+        return Err(CYW43_TRANSIENT_REJECT_PRE_NETWORK_DRIFT);
+    };
+    let Some(current_diagnostics) = current.diagnostics else {
+        return Err(
+            CYW43_TRANSIENT_REJECT_SNAPSHOT_OR_LIFETIME | CYW43_TRANSIENT_REJECT_PRE_NETWORK_DRIFT
+        );
+    };
+    let expected_unit_index = usize::from(current.local_seat_required).saturating_add(1);
+    let exact_operator_rotor = evidence.starting_phase == LinkedRuntimeServicePhase::Serial
+        && evidence.admitted_phase == LinkedRuntimeServicePhase::Dispatch
+        && evidence.next_phase == LinkedRuntimeServicePhase::Network
+        && evidence.unit_index == expected_unit_index
+        && evidence.network_units == 0
+        && evidence.rotation_before_dispatch == Some(credit.lifetime)
+        && current.phase == LinkedRuntimeServicePhase::Network
+        && current.operator_rotation.is_none()
+        && current.serial_admitted
+        && current.dispatch_admitted
+        && (!current.local_seat_required || current.local_seat_admitted);
+    let exact_network_command = credit.accepted_commands != u64::MAX
+        && current.accepted_commands == credit.accepted_commands.saturating_add(1)
+        && matches!(evidence.last_input_source, ConsoleInputSource::Net);
+    let mut expected_diagnostics = credit.diagnostics;
+    let exact_command_dequeue = expected_diagnostics.command_queue != 0
+        && expected_diagnostics.output_queue == 0
+        && !expected_diagnostics.awaiting_batch_drain
+        && !expected_diagnostics.producer_open;
+    if exact_command_dequeue {
+        expected_diagnostics.command_queue = expected_diagnostics.command_queue.saturating_sub(1);
+        expected_diagnostics.output_queue = response_lane.queued_lines;
+        expected_diagnostics.awaiting_batch_drain = response_lane.awaiting_batch_drain;
+        expected_diagnostics.producer_open = response_lane.producer_open;
+    }
+    let stable_network_service = current.cyw43_lane_selected
+        && current.lifetime == Some(credit.lifetime)
+        && exact_command_dequeue
+        && current_diagnostics == expected_diagnostics
+        && current.response_identity == Some(credit.response_identity)
+        && current.active_connection_id == Some(credit.active_connection_id)
+        && current.authenticated_connection_id == Some(credit.authenticated_connection_id)
+        && current.service_turns == credit.service_turns;
+    let exact_new_response_lane = credit.response_lane.is_none()
+        && cyw43_response_lane_bound_to_identity(credit.response_identity, Some(response_lane))
+        && response_lane.queued_lines != 0
+        && !response_lane.awaiting_batch_drain
+        && response_lane.terminal_queued
+        && !response_lane.producer_open
+        && response_lane.completed_responses == 1;
+    let exact_new_flush = credit.pending_flush == PendingNetFlush::default()
+        && current.pending_flush.conn_id == Some(credit.active_connection_id)
+        && current.pending_flush.remaining_turns != 0
+        && current.pending_flush.remaining_turns <= NET_POST_DISPATCH_BACKLOG_FLUSH_POLLS;
+
+    let mut reasons = 0u32;
+    if !stable_network_service {
+        reasons |= CYW43_TRANSIENT_REJECT_SNAPSHOT_OR_LIFETIME;
+    }
+    if !exact_operator_rotor
+        || current.network_service_quarantined
+        || current.reboot_pending
+        || current.recovery_required
+        || current.containment_work_pending
+        || current.handoff_pending
+        || current.passive_admission_pending
+        || current.console_service_local_fault_pending
+        || current.console_service_local_containment_pending
+        || current.physical_operator_work_pending
+        || current.physical_console_response_pending
+    {
+        reasons |= CYW43_TRANSIENT_REJECT_OPERATOR_OR_RECOVERY;
+    }
+    if !exact_network_command || !exact_new_response_lane || !exact_new_flush {
+        reasons |= CYW43_TRANSIENT_REJECT_PRE_NETWORK_DRIFT;
+    }
+    if reasons != 0 {
+        return Err(reasons | CYW43_TRANSIENT_REJECT_PRE_NETWORK_DRIFT);
+    }
+
+    let rebased = Cyw43TransientPublicationCredit {
+        diagnostics: current_diagnostics,
+        response_lane: Some(response_lane),
+        accepted_commands: current.accepted_commands,
+        pending_flush: current.pending_flush,
+        ..credit
+    };
+    let final_reasons =
+        cyw43_transient_publication_credit_reject_reason(Cyw43TransientPublicationCreditEvidence {
+            credit: rebased,
+            ..current
+        });
+    if final_reasons == 0 {
+        Ok(rebased)
+    } else {
+        Err(final_reasons)
+    }
+}
+
 #[cfg(all(feature = "kernel", feature = "net-console"))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct Cyw43ResponseRotationContinuationEvidence {
@@ -5516,6 +5641,20 @@ fn direct_genet_response_stage_evidence_matches(
         && lane.connection_id == identity.connection_id
         && lane.queued_lines != 0
         && !lane.awaiting_batch_drain
+}
+
+/// Require the exact already-completed terminal lane that may legitimately
+/// exist without a `SyncCapture` record. Ordinary composed responses may stage
+/// partial batches through `direct_genet_response_stage_evidence_matches`; the
+/// stricter predicate is only for the typed `NoPending` compact-successor arm.
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+fn direct_genet_no_pending_terminal_stage_evidence_matches(
+    evidence: DirectGenetResponseStageEvidence,
+) -> bool {
+    direct_genet_response_stage_evidence_matches(evidence)
+        && evidence.response_lane.is_some_and(|lane| {
+            lane.terminal_queued && !lane.producer_open && lane.completed_responses == 1
+        })
 }
 
 /// Keep direct-GENET command execution behind root output that has not yet
@@ -9030,6 +9169,38 @@ where
                 );
 
                 if admitted_phase == LinkedRuntimeServicePhase::Dispatch {
+                    if let Some(credit) = transient_publication_credit {
+                        if self.metrics.accepted_commands != credit.accepted_commands {
+                            let current = self.cyw43_transient_publication_credit_evidence(
+                                credit,
+                                Cyw43TransientPublicationCreditCut::PreNetwork,
+                                serial_admitted,
+                                local_seat_admitted,
+                                dispatch_admitted,
+                            );
+                            match cyw43_transient_publication_credit_rebase_after_dispatch(
+                                Cyw43TransientPublicationDispatchRebaseEvidence {
+                                    current,
+                                    starting_phase,
+                                    admitted_phase,
+                                    next_phase: self.linked_runtime_service_phase,
+                                    unit_index,
+                                    network_units,
+                                    rotation_before_dispatch,
+                                    last_input_source: self.last_input_source,
+                                },
+                            ) {
+                                Ok(rebased) => transient_publication_credit = Some(rebased),
+                                Err(reasons) => {
+                                    self.record_cyw43_transient_publication_rejection(
+                                        Cyw43TransientPublicationRejectCut::PreNetwork,
+                                        reasons,
+                                    );
+                                    return false;
+                                }
+                            }
+                        }
+                    }
                     let (active_connection_id_after, authenticated_connection_id_after) =
                         self.net.as_ref().map_or((None, None), |net| {
                             (
@@ -12592,6 +12763,23 @@ where
     /// that the isolated direct-GENET child can accept now.
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     fn linked_runtime_direct_genet_response_stage_ready(&mut self) -> bool {
+        self.linked_runtime_direct_genet_response_stage_evidence()
+            .is_some_and(direct_genet_response_stage_evidence_matches)
+    }
+
+    /// Return whether a command with no `SyncCapture` record already owns one
+    /// exact, sealed terminal response. This deliberately does not narrow the
+    /// ordinary composed-response path, which may stage bounded partial output.
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    fn linked_runtime_direct_genet_no_pending_terminal_stage_ready(&mut self) -> bool {
+        self.linked_runtime_direct_genet_response_stage_evidence()
+            .is_some_and(direct_genet_no_pending_terminal_stage_evidence_matches)
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    fn linked_runtime_direct_genet_response_stage_evidence(
+        &mut self,
+    ) -> Option<DirectGenetResponseStageEvidence> {
         let network_service_quarantined = self.network_service_quarantined;
         let reboot_pending = self.reboot_pending;
         let containment_work_pending = if network_service_quarantined || reboot_pending {
@@ -12607,10 +12795,11 @@ where
             || physical_console_response_pending
             || pending_flush.active()
         {
-            return false;
+            return None;
         }
-        self.net.as_ref().is_some_and(|net| {
-            direct_genet_response_stage_evidence_matches(DirectGenetResponseStageEvidence {
+        self.net
+            .as_ref()
+            .map(|net| DirectGenetResponseStageEvidence {
                 network_service_quarantined,
                 reboot_pending,
                 containment_work_pending,
@@ -12628,7 +12817,6 @@ where
                 },
                 response_lane: net.console_response_lane(),
             })
-        })
     }
 
     /// Recheck every post-dispatch authority boundary before signalling the
@@ -12757,12 +12945,20 @@ where
                     true,
                 ));
             }
+            // Not every bounded command uses SyncCapture. Immediate terminal
+            // commands such as `quit` already queue their exact response in the
+            // authenticated adapter lane. Admit that existing lane only after
+            // the same generation, connection, recovery, operator, flush, and
+            // batch-drain predicate used by the ordinary stage path proves it.
+            DirectGenetResponseComposeOutcome::NoPending
+                if self.linked_runtime_direct_genet_no_pending_terminal_stage_ready() => {}
             DirectGenetResponseComposeOutcome::NoPending => {
-                self.audit.denied(
-                    "direct-genet compact response failed closed: reason=no-pending-response",
-                );
-                self.fence_console_network_authority_quiet();
-                return Some((crate::net::DirectGenetCommandControlOutcome::Fault, true));
+                return Some((
+                    crate::net::DirectGenetCommandControlOutcome::Deferred(
+                        crate::net::DirectGenetCommandControlDeferReason::OutputMissing,
+                    ),
+                    true,
+                ));
             }
             DirectGenetResponseComposeOutcome::IdentityDrift => {
                 self.audit.denied(
@@ -50425,6 +50621,438 @@ mod tests {
         );
     }
 
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn cyw43_transient_credit_rebases_only_one_exact_network_dispatch() {
+        let lifetime = LinkedRuntimeCyw43DurableResume {
+            generation: 17,
+            pair_epoch: 23,
+            physical_lifetime_epoch: 29,
+        };
+        let identity = ConsoleResponseIdentity {
+            generation: 7,
+            connection_id: 41,
+        };
+        let mut diagnostics = cyw43_transient_test_material_after("observe");
+        diagnostics.command_queue = 1;
+        diagnostics.output_queue = 0;
+        diagnostics.producer_open = false;
+        let credit = Cyw43TransientPublicationCredit {
+            lifetime,
+            diagnostics,
+            response_identity: identity,
+            response_lane: None,
+            active_connection_id: 41,
+            authenticated_connection_id: 41,
+            accepted_commands: 5,
+            service_turns: 9,
+            pending_flush: PendingNetFlush::default(),
+        };
+        let response_lane = ConsoleResponseLane {
+            generation: 7,
+            connection_id: 41,
+            queued_lines: 2,
+            available_lines: 30,
+            awaiting_batch_drain: false,
+            terminal_queued: true,
+            producer_open: false,
+            completed_responses: 1,
+        };
+        let mut current_diagnostics = diagnostics;
+        current_diagnostics.command_queue = 0;
+        current_diagnostics.output_queue = response_lane.queued_lines;
+        let current = Cyw43TransientPublicationCreditEvidence {
+            credit,
+            cut: Cyw43TransientPublicationCreditCut::PreNetwork,
+            cyw43_lane_selected: true,
+            lifetime: Some(lifetime),
+            diagnostics: Some(current_diagnostics),
+            response_identity: Some(identity),
+            response_lane: Some(response_lane),
+            active_connection_id: Some(41),
+            authenticated_connection_id: Some(41),
+            accepted_commands: 6,
+            service_turns: 9,
+            pending_flush: PendingNetFlush {
+                conn_id: Some(41),
+                remaining_turns: NET_POST_DISPATCH_FLUSH_POLLS,
+            },
+            phase: LinkedRuntimeServicePhase::Network,
+            operator_rotation: None,
+            serial_admitted: true,
+            local_seat_required: true,
+            local_seat_admitted: true,
+            dispatch_admitted: true,
+            network_service_quarantined: false,
+            reboot_pending: false,
+            recovery_required: false,
+            containment_work_pending: false,
+            handoff_pending: false,
+            passive_admission_pending: false,
+            console_service_local_fault_pending: false,
+            console_service_local_containment_pending: false,
+            physical_operator_work_pending: false,
+            physical_console_response_pending: false,
+        };
+        let exact = Cyw43TransientPublicationDispatchRebaseEvidence {
+            current,
+            starting_phase: LinkedRuntimeServicePhase::Serial,
+            admitted_phase: LinkedRuntimeServicePhase::Dispatch,
+            next_phase: LinkedRuntimeServicePhase::Network,
+            unit_index: 2,
+            network_units: 0,
+            rotation_before_dispatch: Some(lifetime),
+            last_input_source: ConsoleInputSource::Net,
+        };
+
+        let rebased = cyw43_transient_publication_credit_rebase_after_dispatch(exact)
+            .expect("one exact network command may rebind its newly sealed response lane");
+        assert_eq!(rebased.response_lane, Some(response_lane));
+        assert_eq!(rebased.accepted_commands, 6);
+        assert_eq!(rebased.pending_flush, current.pending_flush);
+        assert_eq!(rebased.lifetime, lifetime);
+        assert_eq!(rebased.diagnostics, current_diagnostics);
+        assert_eq!(
+            cyw43_transient_publication_credit_reject_reason(
+                Cyw43TransientPublicationCreditEvidence {
+                    credit: rebased,
+                    ..current
+                }
+            ),
+            0,
+        );
+        let without_local_seat = Cyw43TransientPublicationDispatchRebaseEvidence {
+            current: Cyw43TransientPublicationCreditEvidence {
+                local_seat_required: false,
+                local_seat_admitted: false,
+                ..current
+            },
+            unit_index: 1,
+            ..exact
+        };
+        assert!(
+            cyw43_transient_publication_credit_rebase_after_dispatch(without_local_seat).is_ok(),
+            "the exact Serial -> Dispatch rotor remains valid without a local seat",
+        );
+
+        let mut drifted_diagnostics = current_diagnostics;
+        drifted_diagnostics.service_tick_turns =
+            drifted_diagnostics.service_tick_turns.saturating_add(1);
+        let mut zero_dequeue_diagnostics = current_diagnostics;
+        zero_dequeue_diagnostics.command_queue = diagnostics.command_queue;
+        let mut two_command_diagnostics = diagnostics;
+        two_command_diagnostics.command_queue = 2;
+        let rejected = [
+            Cyw43TransientPublicationDispatchRebaseEvidence {
+                current: Cyw43TransientPublicationCreditEvidence {
+                    accepted_commands: 7,
+                    ..current
+                },
+                ..exact
+            },
+            Cyw43TransientPublicationDispatchRebaseEvidence {
+                last_input_source: ConsoleInputSource::Serial,
+                ..exact
+            },
+            Cyw43TransientPublicationDispatchRebaseEvidence {
+                current: Cyw43TransientPublicationCreditEvidence {
+                    diagnostics: Some(drifted_diagnostics),
+                    ..current
+                },
+                ..exact
+            },
+            Cyw43TransientPublicationDispatchRebaseEvidence {
+                current: Cyw43TransientPublicationCreditEvidence {
+                    diagnostics: Some(zero_dequeue_diagnostics),
+                    ..current
+                },
+                ..exact
+            },
+            Cyw43TransientPublicationDispatchRebaseEvidence {
+                current: Cyw43TransientPublicationCreditEvidence {
+                    credit: Cyw43TransientPublicationCredit {
+                        response_lane: Some(response_lane),
+                        ..credit
+                    },
+                    ..current
+                },
+                ..exact
+            },
+            Cyw43TransientPublicationDispatchRebaseEvidence {
+                current: Cyw43TransientPublicationCreditEvidence {
+                    credit: Cyw43TransientPublicationCredit {
+                        diagnostics: two_command_diagnostics,
+                        ..credit
+                    },
+                    ..current
+                },
+                ..exact
+            },
+            Cyw43TransientPublicationDispatchRebaseEvidence {
+                current: Cyw43TransientPublicationCreditEvidence {
+                    active_connection_id: Some(42),
+                    ..current
+                },
+                ..exact
+            },
+            Cyw43TransientPublicationDispatchRebaseEvidence {
+                current: Cyw43TransientPublicationCreditEvidence {
+                    authenticated_connection_id: Some(42),
+                    ..current
+                },
+                ..exact
+            },
+            Cyw43TransientPublicationDispatchRebaseEvidence {
+                current: Cyw43TransientPublicationCreditEvidence {
+                    response_identity: Some(ConsoleResponseIdentity {
+                        generation: identity.generation.saturating_add(1),
+                        ..identity
+                    }),
+                    ..current
+                },
+                ..exact
+            },
+            Cyw43TransientPublicationDispatchRebaseEvidence {
+                current: Cyw43TransientPublicationCreditEvidence {
+                    lifetime: Some(LinkedRuntimeCyw43DurableResume {
+                        generation: lifetime.generation.saturating_add(1),
+                        ..lifetime
+                    }),
+                    ..current
+                },
+                ..exact
+            },
+            Cyw43TransientPublicationDispatchRebaseEvidence {
+                current: Cyw43TransientPublicationCreditEvidence {
+                    service_turns: current.service_turns.saturating_add(1),
+                    ..current
+                },
+                ..exact
+            },
+            Cyw43TransientPublicationDispatchRebaseEvidence {
+                current: Cyw43TransientPublicationCreditEvidence {
+                    response_lane: Some(ConsoleResponseLane {
+                        connection_id: 42,
+                        ..response_lane
+                    }),
+                    ..current
+                },
+                ..exact
+            },
+            Cyw43TransientPublicationDispatchRebaseEvidence {
+                current: Cyw43TransientPublicationCreditEvidence {
+                    response_lane: Some(ConsoleResponseLane {
+                        generation: response_lane.generation.saturating_add(1),
+                        ..response_lane
+                    }),
+                    ..current
+                },
+                ..exact
+            },
+            Cyw43TransientPublicationDispatchRebaseEvidence {
+                current: Cyw43TransientPublicationCreditEvidence {
+                    response_lane: Some(ConsoleResponseLane {
+                        producer_open: true,
+                        ..response_lane
+                    }),
+                    ..current
+                },
+                ..exact
+            },
+            Cyw43TransientPublicationDispatchRebaseEvidence {
+                current: Cyw43TransientPublicationCreditEvidence {
+                    response_lane: Some(ConsoleResponseLane {
+                        terminal_queued: false,
+                        ..response_lane
+                    }),
+                    ..current
+                },
+                ..exact
+            },
+            Cyw43TransientPublicationDispatchRebaseEvidence {
+                current: Cyw43TransientPublicationCreditEvidence {
+                    response_lane: Some(ConsoleResponseLane {
+                        completed_responses: 0,
+                        ..response_lane
+                    }),
+                    ..current
+                },
+                ..exact
+            },
+            Cyw43TransientPublicationDispatchRebaseEvidence {
+                current: Cyw43TransientPublicationCreditEvidence {
+                    response_lane: Some(ConsoleResponseLane {
+                        completed_responses: 2,
+                        ..response_lane
+                    }),
+                    ..current
+                },
+                ..exact
+            },
+            Cyw43TransientPublicationDispatchRebaseEvidence {
+                current: Cyw43TransientPublicationCreditEvidence {
+                    response_lane: Some(ConsoleResponseLane {
+                        queued_lines: 0,
+                        ..response_lane
+                    }),
+                    ..current
+                },
+                ..exact
+            },
+            Cyw43TransientPublicationDispatchRebaseEvidence {
+                current: Cyw43TransientPublicationCreditEvidence {
+                    response_lane: Some(ConsoleResponseLane {
+                        awaiting_batch_drain: true,
+                        ..response_lane
+                    }),
+                    ..current
+                },
+                ..exact
+            },
+            Cyw43TransientPublicationDispatchRebaseEvidence {
+                current: Cyw43TransientPublicationCreditEvidence {
+                    pending_flush: PendingNetFlush::default(),
+                    ..current
+                },
+                ..exact
+            },
+            Cyw43TransientPublicationDispatchRebaseEvidence {
+                current: Cyw43TransientPublicationCreditEvidence {
+                    pending_flush: PendingNetFlush {
+                        conn_id: Some(42),
+                        ..current.pending_flush
+                    },
+                    ..current
+                },
+                ..exact
+            },
+            Cyw43TransientPublicationDispatchRebaseEvidence {
+                current: Cyw43TransientPublicationCreditEvidence {
+                    pending_flush: PendingNetFlush {
+                        remaining_turns: NET_POST_DISPATCH_BACKLOG_FLUSH_POLLS.saturating_add(1),
+                        ..current.pending_flush
+                    },
+                    ..current
+                },
+                ..exact
+            },
+            Cyw43TransientPublicationDispatchRebaseEvidence {
+                rotation_before_dispatch: None,
+                ..exact
+            },
+            Cyw43TransientPublicationDispatchRebaseEvidence {
+                starting_phase: LinkedRuntimeServicePhase::LocalSeat,
+                ..exact
+            },
+            Cyw43TransientPublicationDispatchRebaseEvidence {
+                admitted_phase: LinkedRuntimeServicePhase::Serial,
+                ..exact
+            },
+            Cyw43TransientPublicationDispatchRebaseEvidence {
+                next_phase: LinkedRuntimeServicePhase::Dispatch,
+                ..exact
+            },
+            Cyw43TransientPublicationDispatchRebaseEvidence {
+                unit_index: exact.unit_index.saturating_add(1),
+                ..exact
+            },
+            Cyw43TransientPublicationDispatchRebaseEvidence {
+                network_units: 1,
+                ..exact
+            },
+            Cyw43TransientPublicationDispatchRebaseEvidence {
+                current: Cyw43TransientPublicationCreditEvidence {
+                    operator_rotation: Some(lifetime),
+                    ..current
+                },
+                ..exact
+            },
+            Cyw43TransientPublicationDispatchRebaseEvidence {
+                current: Cyw43TransientPublicationCreditEvidence {
+                    local_seat_admitted: false,
+                    ..current
+                },
+                ..exact
+            },
+            Cyw43TransientPublicationDispatchRebaseEvidence {
+                current: Cyw43TransientPublicationCreditEvidence {
+                    recovery_required: true,
+                    ..current
+                },
+                ..exact
+            },
+            Cyw43TransientPublicationDispatchRebaseEvidence {
+                current: Cyw43TransientPublicationCreditEvidence {
+                    network_service_quarantined: true,
+                    ..current
+                },
+                ..exact
+            },
+            Cyw43TransientPublicationDispatchRebaseEvidence {
+                current: Cyw43TransientPublicationCreditEvidence {
+                    reboot_pending: true,
+                    ..current
+                },
+                ..exact
+            },
+            Cyw43TransientPublicationDispatchRebaseEvidence {
+                current: Cyw43TransientPublicationCreditEvidence {
+                    containment_work_pending: true,
+                    ..current
+                },
+                ..exact
+            },
+            Cyw43TransientPublicationDispatchRebaseEvidence {
+                current: Cyw43TransientPublicationCreditEvidence {
+                    handoff_pending: true,
+                    ..current
+                },
+                ..exact
+            },
+            Cyw43TransientPublicationDispatchRebaseEvidence {
+                current: Cyw43TransientPublicationCreditEvidence {
+                    passive_admission_pending: true,
+                    ..current
+                },
+                ..exact
+            },
+            Cyw43TransientPublicationDispatchRebaseEvidence {
+                current: Cyw43TransientPublicationCreditEvidence {
+                    console_service_local_fault_pending: true,
+                    ..current
+                },
+                ..exact
+            },
+            Cyw43TransientPublicationDispatchRebaseEvidence {
+                current: Cyw43TransientPublicationCreditEvidence {
+                    console_service_local_containment_pending: true,
+                    ..current
+                },
+                ..exact
+            },
+            Cyw43TransientPublicationDispatchRebaseEvidence {
+                current: Cyw43TransientPublicationCreditEvidence {
+                    physical_operator_work_pending: true,
+                    ..current
+                },
+                ..exact
+            },
+            Cyw43TransientPublicationDispatchRebaseEvidence {
+                current: Cyw43TransientPublicationCreditEvidence {
+                    physical_console_response_pending: true,
+                    ..current
+                },
+                ..exact
+            },
+        ];
+        for evidence in rejected {
+            assert!(
+                cyw43_transient_publication_credit_rebase_after_dispatch(evidence).is_err(),
+                "post-Dispatch rebase must fail closed for {evidence:?}",
+            );
+        }
+    }
+
     #[cfg(all(feature = "kernel", feature = "net-console", feature = "release-pi4"))]
     #[test]
     fn clearing_unspent_cyw43_transient_credit_is_bounded_and_accounted() {
@@ -59019,6 +59647,78 @@ mod tests {
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[test]
+    fn direct_genet_quit_without_sync_capture_keeps_exact_terminal_stageable() {
+        let serial =
+            SerialPort::<_, 256, 256, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<256>::new());
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        net.driver_contract = crate::hal::driver_task::GENET_DRIVER_TASK_CONTRACT;
+        net.active_conn_id = Some(7);
+        net.authenticated_conn_id = Some(7);
+        net.response_identity_generation = 7;
+        net.response_lane_generation = 7;
+        net.response_batch_capacity = Some(8);
+        net.isolated_diagnostics = Some(cyw43_transient_test_diagnostics());
+        let expected = ConsoleResponseIdentity {
+            generation: 7,
+            connection_id: 7,
+        };
+
+        {
+            let mut pump = EventPump::new(
+                serial,
+                TestTimer::single(TickEvent { tick: 1, now_ms: 1 }),
+                NullIpc,
+                TicketTable::<4>::new(),
+                &mut audit,
+            )
+            .with_network(&mut net);
+            pump.session = Some(SessionRole::Queen);
+            pump.session_id = Some(9);
+            pump.session_origin = Some(ConsoleInputSource::Net);
+            pump.session_net_conn_id = Some(7);
+            pump.net_conn_id = Some(7);
+            pump.last_input_source = ConsoleInputSource::Net;
+
+            assert!(pump.handle_command(Command::Quit).is_ok());
+            assert!(
+                pump.pending_stream.is_none(),
+                "QUIT does not use SyncCapture"
+            );
+            assert_eq!(
+                pump.compose_direct_genet_sync_response_adapter_only(expected),
+                DirectGenetResponseComposeOutcome::NoPending,
+            );
+            assert!(
+                pump.linked_runtime_direct_genet_response_stage_ready(),
+                "the already-queued exact OK QUIT terminal must remain stageable",
+            );
+            assert!(
+                pump.linked_runtime_direct_genet_no_pending_terminal_stage_ready(),
+                "the NoPending path must prove one sealed completed terminal",
+            );
+            assert!(!pump.network_service_quarantined);
+        }
+
+        assert_eq!(net.disconnect_requests, 1);
+        assert!(net.response_lane.is_some_and(|lane| {
+            lane.generation == 7
+                && lane.connection_id == 7
+                && lane.queued_lines == 1
+                && lane.terminal_queued
+                && !lane.awaiting_batch_drain
+        }));
+        assert_eq!(
+            net.terminal_sent
+                .iter()
+                .map(|line| line.as_str())
+                .collect::<std::vec::Vec<_>>(),
+            ["OK QUIT"],
+        );
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
     fn direct_genet_compose_restores_identity_drift_before_quarantine() {
         let serial =
             SerialPort::<_, 256, 256, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<256>::new());
@@ -59376,6 +60076,41 @@ mod tests {
             response_lane: Some(lane),
         };
         assert!(direct_genet_response_stage_evidence_matches(baseline));
+        assert!(direct_genet_no_pending_terminal_stage_evidence_matches(
+            baseline
+        ));
+
+        for lane in [
+            ConsoleResponseLane {
+                terminal_queued: false,
+                ..lane
+            },
+            ConsoleResponseLane {
+                producer_open: true,
+                ..lane
+            },
+            ConsoleResponseLane {
+                completed_responses: 0,
+                ..lane
+            },
+            ConsoleResponseLane {
+                completed_responses: 2,
+                ..lane
+            },
+        ] {
+            let evidence = DirectGenetResponseStageEvidence {
+                response_lane: Some(lane),
+                ..baseline
+            };
+            assert!(
+                direct_genet_response_stage_evidence_matches(evidence),
+                "ordinary composed output may retain a bounded partial lane: {evidence:?}",
+            );
+            assert!(
+                !direct_genet_no_pending_terminal_stage_evidence_matches(evidence),
+                "NoPending must require one exact sealed terminal lane: {evidence:?}",
+            );
+        }
 
         let rejected = [
             DirectGenetResponseStageEvidence {
