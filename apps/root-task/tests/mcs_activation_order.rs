@@ -1148,7 +1148,7 @@ fn pi_passive_boundary_drains_preserved_evidence_immediately_after_yield() {
     assert!(wrapper.contains("target_arch = \"aarch64\""));
     assert!(wrapper.contains("sel4_config_kernel_mcs"));
     assert!(
-        wrapper.contains("unsafe { syscall::yield_now() };\n        0"),
+        wrapper.contains("syscall::yield_now();\n            0"),
         "non-Pi paths must preserve ordinary Yield and return no fake timestamp"
     );
 

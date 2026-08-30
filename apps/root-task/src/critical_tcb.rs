@@ -701,7 +701,6 @@ impl CriticalHandoff {
     }
 
     /// Whether one exact isolated-service fault is durably retained.
-    #[must_use]
     pub fn service_fault_pending(&self, task_index: u16) -> Result<bool, FaultHandoffError> {
         let slot =
             service_fault_mailbox_index(task_index).ok_or(FaultHandoffError::SlotOutOfRange)?;

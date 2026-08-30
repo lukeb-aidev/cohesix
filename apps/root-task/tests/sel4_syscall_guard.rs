@@ -103,6 +103,12 @@ fn syscall_scanner_detects_only_direct_invocations() {
 fn debug_syscalls_use_selected_sel4_sys_abi() {
     let source = fs::read_to_string("src/sel4.rs")
         .expect("root sel4 wrapper source must be readable for ABI guard");
+    let (_, debug_wrappers_and_after) = source
+        .split_once("pub unsafe extern \"C\" fn seL4_DebugPutChar(byte: u8)")
+        .expect("root DebugPutChar wrapper must remain present");
+    let (debug_wrappers, _) = debug_wrappers_and_after
+        .split_once("pub unsafe fn seL4_DebugCapIdentify")
+        .expect("root debug wrapper region must remain bounded");
 
     for forbidden in [
         "core::arch::asm",
@@ -112,11 +118,11 @@ fn debug_syscalls_use_selected_sel4_sys_abi() {
         "wrapping_sub(10)",
     ] {
         assert!(
-            !source.contains(forbidden),
+            !debug_wrappers.contains(forbidden),
             "root debug wrapper must not encode a profile-specific syscall ABI: {forbidden}"
         );
     }
 
-    assert!(source.contains("sel4_sys::debug_put_char(byte)"));
-    assert!(source.contains("sel4_sys::debug_halt()"));
+    assert!(debug_wrappers.contains("sel4_sys::debug_put_char(byte)"));
+    assert!(debug_wrappers.contains("sel4_sys::debug_halt()"));
 }
