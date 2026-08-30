@@ -30032,6 +30032,8 @@ struct Cyw43ForegroundTurnState {
     replayed_count: u16,
     completed_count: u16,
     action_consumed: bool,
+    completion_observed: bool,
+    new_submission_consumed: bool,
 }
 
 #[cfg(any(target_os = "none", test))]
@@ -30043,6 +30045,8 @@ impl Cyw43ForegroundTurnState {
             replayed_count: 0,
             completed_count: 0,
             action_consumed: false,
+            completion_observed: false,
+            new_submission_consumed: false,
         }
     }
 
@@ -30055,13 +30059,47 @@ impl Cyw43ForegroundTurnState {
         self.replay_index = 0;
         self.replayed_count = 0;
         self.action_consumed = false;
+        self.completion_observed = false;
+        self.new_submission_consumed = false;
     }
 
-    fn complete_child_poll(&mut self) {
+    fn complete_child_poll(&mut self, fusion_authorized: bool) {
         self.completed_count = self.completed_count.saturating_add(1);
         self.replay_index = self.completed_count;
+        self.completion_observed = true;
+        if fusion_authorized {
+            // An exact successful terminal is a stable causal boundary, not a
+            // new physical submission. The current root-granted activation may
+            // use its still-unused submit slot for the following immutable
+            // child, while a second new child remains forbidden below.
+            self.action_consumed = false;
+            // Retain the rollback/replay boundary unless a following child is
+            // actually published. This preserves parent terminal, deadline,
+            // and fault ordering when there is no successor to fuse.
+            self.pending = true;
+        } else {
+            // Fault terminals and successful-but-unauthorized terminals retain
+            // the original replay boundary so typed containment, ordering, and
+            // fault telemetry win before another child can be published.
+            self.action_consumed = true;
+            self.pending = true;
+        }
+    }
+
+    const fn new_submission_available(&self) -> bool {
+        !self.new_submission_consumed
+            && !self.action_consumed
+            && (!self.pending || self.completion_observed)
+    }
+
+    fn consume_new_submission(&mut self) -> bool {
+        if !self.new_submission_available() {
+            return false;
+        }
+        self.new_submission_consumed = true;
         self.action_consumed = true;
         self.pending = true;
+        true
     }
 
     const fn committed_child_replay_due(&self) -> bool {
@@ -30088,8 +30126,10 @@ impl Cyw43ForegroundTurnState {
 ///
 /// Existing Linux-shaped helpers remain ordinary straight-line Rust, while
 /// this trace turns their reciprocal SDIO calls into a resumable frontier:
-/// completed prefix actions replay only cached bytes/results, and exactly one
-/// frontier submit or completion poll is admitted per root-granted turn.
+/// completed prefix actions replay only cached bytes/results. One exact
+/// successful completion may be followed by at most one new immutable child
+/// submission in the same root-granted turn; no turn can publish two new
+/// physical child commands.
 #[cfg(any(target_os = "none", test))]
 struct Cyw43ForegroundTransaction {
     active: bool,
@@ -30306,7 +30346,7 @@ impl Cyw43ForegroundTransaction {
         fallback: usize,
         fresh: RuntimeDeadline,
     ) -> RuntimeDeadline {
-        if self.turn.action_consumed || self.turn.pending || self.issued_unknown || self.poisoned {
+        if !self.turn.new_submission_available() || self.issued_unknown || self.poisoned {
             return fresh;
         }
         let index = usize::from(self.deadline_replay_index);
@@ -30631,6 +30671,19 @@ impl Cyw43ForegroundTransaction {
         }
     }
 
+    fn bootstrap_stream_completion_fusion_authorized(&self) -> bool {
+        self.parent_descriptor_valid
+            && self.parent_descriptor.valid()
+            && matches!(
+                self.parent_descriptor.op,
+                DRIVER_RUNTIME_CYW43_OP_FIRMWARE_CHUNK | DRIVER_RUNTIME_CYW43_OP_NVRAM_CHUNK
+            )
+            && self.parent.flags
+                & (DRIVER_RUNTIME_COMMAND_FLAG_PERSISTENT_TRANSACTION
+                    | DRIVER_RUNTIME_COMMAND_FLAG_STEADY_SERVICE_LEASE)
+                == 0
+    }
+
     fn record_parent_overlay(&mut self, offset: usize, value: u8) {
         let Some(index) = self.parent_payload_index(offset) else {
             return;
@@ -30673,7 +30726,11 @@ impl Cyw43ForegroundTransaction {
             && entry.ticket.issued_turn_id != 0
     }
 
-    fn retain_frontier_submit(&mut self, started_ticks: u64, timeout_cycles: u64) {
+    fn retain_frontier_submit(&mut self, started_ticks: u64, timeout_cycles: u64) -> bool {
+        if !self.turn.consume_new_submission() {
+            self.poisoned = true;
+            return false;
+        }
         self.frontier_submitted = true;
         self.frontier_continuation_grant_required = false;
         self.frontier_continuation_grant_publish = false;
@@ -30682,8 +30739,7 @@ impl Cyw43ForegroundTransaction {
         self.frontier_timeout_cycles = timeout_cycles;
         self.frontier_polls = 0;
         self.frontier_service_progress_slice = 0;
-        self.turn.action_consumed = true;
-        self.turn.pending = true;
+        true
     }
 
     fn retain_frontier_completion_poll(&mut self) {
@@ -30717,7 +30773,9 @@ impl Cyw43ForegroundTransaction {
         }
         self.frontier.completion = completion;
         self.entries[index] = self.frontier;
-        self.turn.complete_child_poll();
+        let fusion_authorized = completion.code != COMPLETION_FAULT
+            && self.bootstrap_stream_completion_fusion_authorized();
+        self.turn.complete_child_poll(fusion_authorized);
         self.last_replayed_index = index as u16;
         self.frontier = Cyw43ForegroundTraceEntry::empty();
         self.frontier_valid = false;
@@ -31016,8 +31074,8 @@ fn service_cyw43_intake_sealed_rx_poll_queue_terminal(
 fn cyw43_foreground_action_suspended() -> bool {
     CYW43_FOREGROUND_TRANSACTION.with_ref(|transaction| {
         transaction.executing
-            && (transaction.turn.action_consumed
-                || transaction.turn.pending
+            && (((transaction.turn.action_consumed || transaction.turn.pending)
+                && !transaction.turn.new_submission_available())
                 || transaction.issued_unknown
                 || transaction.poisoned)
     })
@@ -31105,8 +31163,7 @@ fn cyw43_foreground_poll_retained_deadline(deadline: RuntimeDeadline) -> Option<
     }
     let current = runtime_timer_counter_ticks();
     CYW43_FOREGROUND_TRANSACTION.with_mut(|transaction| {
-        if transaction.turn.action_consumed
-            || transaction.turn.pending
+        if !transaction.turn.new_submission_available()
             || transaction.issued_unknown
             || transaction.poisoned
         {
@@ -31368,7 +31425,11 @@ fn cyw43_foreground_finish_turn(
             command.sequence,
         ));
     }
-    if (poisoned || pending || issued_unknown)
+    if (poisoned
+        || pending
+        || issued_unknown
+        || CYW43_FOREGROUND_TRANSACTION
+            .with_ref(|transaction| transaction.turn.completion_observed))
         && !CYW43_FOREGROUND_TRANSACTION.with_ref(cyw43_foreground_retained_generation_is_current)
     {
         // The current runtime and owner ring already belong to a replacement
@@ -31456,7 +31517,11 @@ fn cyw43_foreground_prepare_sequence() -> Option<u32> {
     if !cyw43_foreground_transaction_executing() {
         return None;
     }
-    if cyw43_foreground_action_suspended() {
+    if CYW43_FOREGROUND_TRANSACTION.with_ref(|transaction| {
+        !transaction.turn.new_submission_available()
+            || transaction.issued_unknown
+            || transaction.poisoned
+    }) {
         return None;
     }
     if let Some(sequence) = CYW43_FOREGROUND_TRANSACTION.with_ref(|transaction| {
@@ -31528,8 +31593,7 @@ fn cyw43_foreground_prepare_descriptor(desc: DriverRuntimeSdioCommandDescriptor)
         return None;
     }
     let accepted = CYW43_FOREGROUND_TRANSACTION.with_mut(|transaction| {
-        if transaction.turn.action_consumed
-            || transaction.turn.pending
+        if !transaction.turn.new_submission_available()
             || transaction.issued_unknown
             || transaction.poisoned
         {
@@ -31561,8 +31625,7 @@ fn cyw43_foreground_prepare_write_byte(offset: usize, value: u8) -> Option<bool>
         return Some(false);
     };
     let accepted = CYW43_FOREGROUND_TRANSACTION.with_mut(|transaction| {
-        if transaction.turn.action_consumed
-            || transaction.turn.pending
+        if !transaction.turn.new_submission_available()
             || transaction.issued_unknown
             || transaction.poisoned
         {
@@ -31599,8 +31662,7 @@ fn cyw43_foreground_prepare_write_frame(
         return Some(None);
     }
     let result = CYW43_FOREGROUND_TRANSACTION.with_mut(|transaction| {
-        if transaction.turn.action_consumed
-            || transaction.turn.pending
+        if !transaction.turn.new_submission_available()
             || transaction.issued_unknown
             || transaction.poisoned
         {
@@ -32767,6 +32829,7 @@ fn cyw43_foreground_reserve_frontier(
     command: DriverTaskCommandRecord,
 ) -> bool {
     if transaction.frontier_valid
+        || !transaction.turn.new_submission_available()
         || !transaction.prepared_descriptor_valid
         || transaction.turn.replay_index != transaction.turn.completed_count
         || transaction.turn.completed_count as usize >= transaction.entries.len()
@@ -33060,7 +33123,8 @@ const fn cyw43_foreground_persistent_transaction_marker_present(
 #[cfg(any(target_os = "none", test))]
 fn cyw43_foreground_submit_frontier(transaction: &mut Cyw43ForegroundTransaction) -> bool {
     let entry = transaction.frontier;
-    if !transaction.frontier_ticket_valid()
+    if !transaction.turn.new_submission_available()
+        || !transaction.frontier_ticket_valid()
         || !entry.descriptor.valid()
         || !cyw43_sdio_child_claim(entry.command.sequence)
     {
@@ -33140,7 +33204,10 @@ fn cyw43_foreground_submit_frontier(transaction: &mut Cyw43ForegroundTransaction
     let timeout_cycles = runtime_micros_to_cycles(u64::from(
         cyw43_sdio_bus_link_child_wait_timeout_us(entry.command),
     ));
-    transaction.retain_frontier_submit(started_ticks, timeout_cycles);
+    if !transaction.retain_frontier_submit(started_ticks, timeout_cycles) {
+        let _ = cyw43_sdio_child_release_exact_or_restart(entry.command.sequence);
+        return false;
+    }
     if !runtime_ring_commit_command_sequence(&mut owner_ring, entry.command.sequence) {
         let _ = cyw43_sdio_child_mark_issued_unknown_or_restart(entry.command.sequence);
         transaction.issued_unknown = true;
@@ -33273,10 +33340,10 @@ fn cyw43_foreground_accept_exact_completion(
         return None;
     }
     cyw43_bus_episode_record_foreground_child_terminal(entry, completion);
-    // The completion poll is the one reciprocal operation admitted for this
-    // outer turn. Retain the parent so the next turn restores its baseline,
-    // replays this exact cached child locally, and only then may submit the
-    // following child action.
+    // A successful exact terminal may flow directly into one following
+    // immutable child submission. Fault terminals retain the prior replay
+    // boundary, and `new_submission_consumed` independently forbids a second
+    // new child in this root-granted turn.
     Some(completion)
 }
 
@@ -69749,6 +69816,7 @@ mod tests {
             );
             assert!(transaction.turn.pending);
             assert!(transaction.turn.action_consumed);
+            assert!(!transaction.turn.new_submission_available());
             assert_eq!(transaction.turn.replay_index, 1);
             assert_eq!(transaction.turn.replayed_count, 0);
             assert_eq!(transaction.turn.completed_count, 1);
@@ -71404,6 +71472,7 @@ mod tests {
             );
             assert!(transaction.turn.pending);
             assert!(transaction.turn.action_consumed);
+            assert!(!transaction.turn.new_submission_available());
             assert_eq!(transaction.turn.replay_index, 1);
             assert_eq!(transaction.turn.replayed_count, 0);
             assert_eq!(transaction.turn.completed_count, 1);
@@ -87500,7 +87569,7 @@ mod tests {
     }
 
     #[test]
-    fn reciprocal_sdio_child_submit_and_polls_require_separate_root_rendezvous() {
+    fn reciprocal_sdio_completion_fuses_exactly_one_following_submit() {
         let _guard = test_guard();
         reset_sdio_descriptor_seam_for_test();
         let generation = 0x4359_5301;
@@ -87521,6 +87590,16 @@ mod tests {
         let parent = retained_gate_test_intake(0x8000_0042).command;
         let mut transaction = Cyw43ForegroundTransaction::new();
         transaction.generation = generation;
+        transaction.parent_descriptor = DriverRuntimeCyw43CommandDescriptor {
+            op: DRIVER_RUNTIME_CYW43_OP_FIRMWARE_CHUNK,
+            target_addr: CYW43_RAM_BASE_4345,
+            payload_offset: DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE,
+            payload_len: 4,
+            total_len: 4,
+            ..DriverRuntimeCyw43CommandDescriptor::empty()
+        };
+        assert!(transaction.parent_descriptor.valid());
+        transaction.parent_descriptor_valid = true;
         assert!(transaction.begin_turn(parent, 1));
         transaction.prepared_sequence = command.sequence;
         transaction.prepared_descriptor = desc;
@@ -87543,7 +87622,7 @@ mod tests {
             &mut ring,
             cyw43_sdio_bus_link_staged_command(command),
         ));
-        transaction.retain_frontier_submit(1, 100);
+        assert!(transaction.retain_frontier_submit(1, 100));
         assert!(runtime_ring_commit_command_sequence(
             &mut ring,
             command.sequence,
@@ -87638,15 +87717,46 @@ mod tests {
         assert!(transaction.commit_frontier_completion(completion));
         assert_eq!(transaction.turn.completed_count, 1);
         assert!(transaction.turn.committed_child_replay_due());
+        assert!(transaction.turn.completion_observed);
+        assert!(!transaction.turn.action_consumed);
+        assert!(transaction.turn.pending);
+        assert!(transaction.turn.new_submission_available());
         assert!(!transaction.frontier_valid);
         assert_eq!(
-            cyw43_foreground_frontier_route(1, 1, true, false, false, true, true, false, false),
+            cyw43_foreground_frontier_route(1, 1, false, false, false, false, true, false, false),
+            Cyw43ForegroundFrontierRoute::Submit,
+            "an exact successful terminal leaves one new-submit slot in this root grant",
+        );
+
+        let mut next_command = command;
+        next_command.sequence = command.sequence.wrapping_add(1);
+        transaction.prepared_sequence = next_command.sequence;
+        transaction.prepared_descriptor = desc;
+        transaction.prepared_descriptor_valid = true;
+        transaction.prepared_write_len = 0;
+        assert!(cyw43_foreground_reserve_frontier(
+            &mut transaction,
+            next_command,
+        ));
+        assert!(transaction.retain_frontier_submit(2, 100));
+        assert!(transaction.turn.new_submission_consumed);
+        assert!(transaction.turn.action_consumed);
+        assert!(transaction.turn.pending);
+        assert!(!transaction.turn.new_submission_available());
+        assert!(
+            !transaction.turn.consume_new_submission(),
+            "one root grant cannot publish a second new physical child",
+        );
+        assert_eq!(
+            cyw43_foreground_frontier_route(1, 1, true, true, false, true, true, false, false),
             Cyw43ForegroundFrontierRoute::Defer,
-            "a terminal poll cannot submit the next reciprocal action in the same turn",
+            "the fused submission consumes the only new physical-action slot",
         );
         assert_eq!(io.command_issue_count(), 1);
 
         assert!(transaction.begin_turn(parent, 5));
+        assert!(!transaction.turn.completion_observed);
+        assert!(!transaction.turn.new_submission_consumed);
         assert!(transaction.turn.committed_child_replay_due());
         transaction.prepared_sequence = command.sequence;
         transaction.prepared_descriptor = desc;
@@ -87660,11 +87770,169 @@ mod tests {
         assert_eq!(transaction.turn.replay_cached_child(), Some(0));
         assert!(!transaction.turn.committed_child_replay_due());
         assert_eq!(transaction.turn.replay_cached_child(), None);
+        assert_eq!(
+            cyw43_foreground_frontier_route(1, 1, true, true, false, false, true, false, false),
+            Cyw43ForegroundFrontierRoute::Poll,
+            "the following grant replays the prefix locally, then polls the fused child",
+        );
         assert_eq!(io.command_issue_count(), 1);
     }
 
     #[test]
-    fn transport_f1_block_size_children_each_require_a_fresh_outer_turn() {
+    fn reciprocal_sdio_fault_completion_cannot_fuse_a_following_submit() {
+        let mut turn = Cyw43ForegroundTurnState::new();
+        turn.complete_child_poll(false);
+
+        assert_eq!(turn.completed_count, 1);
+        assert!(turn.completion_observed);
+        assert!(turn.action_consumed);
+        assert!(turn.pending);
+        assert!(!turn.new_submission_available());
+        assert!(!turn.consume_new_submission());
+        assert_eq!(
+            cyw43_foreground_frontier_route(1, 1, false, false, false, true, true, false, false),
+            Cyw43ForegroundFrontierRoute::Defer,
+            "a fault terminal must reach typed replay and containment before another child",
+        );
+
+        turn.begin_turn();
+        assert!(!turn.completion_observed);
+        assert!(turn.committed_child_replay_due());
+        assert_eq!(turn.replay_cached_child(), Some(0));
+    }
+
+    #[test]
+    fn non_bootstrap_stream_parents_retain_completion_submission_barrier() {
+        let control_payload_len = CYW43_CDC_HEADER_BYTES as u16;
+        let cases = [
+            (
+                "transport",
+                DriverRuntimeCyw43CommandDescriptor {
+                    op: DRIVER_RUNTIME_CYW43_OP_TRANSPORT_INIT,
+                    ..DriverRuntimeCyw43CommandDescriptor::empty()
+                },
+                0,
+            ),
+            (
+                "release",
+                DriverRuntimeCyw43CommandDescriptor {
+                    op: DRIVER_RUNTIME_CYW43_OP_RELEASE,
+                    ..DriverRuntimeCyw43CommandDescriptor::empty()
+                },
+                0,
+            ),
+            (
+                "control",
+                DriverRuntimeCyw43CommandDescriptor {
+                    op: DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE,
+                    payload_offset: DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE,
+                    payload_len: control_payload_len,
+                    total_len: u32::from(control_payload_len),
+                    arg1: 1,
+                    ..DriverRuntimeCyw43CommandDescriptor::empty()
+                },
+                0,
+            ),
+            (
+                "steady",
+                DriverRuntimeCyw43CommandDescriptor {
+                    op: DRIVER_RUNTIME_CYW43_OP_ETH_TX,
+                    flags: DRIVER_RUNTIME_CYW43_FLAG_STEADY_TX_SERVICE_LEASE,
+                    payload_offset: DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE,
+                    payload_len: 64,
+                    total_len: 64,
+                    ..DriverRuntimeCyw43CommandDescriptor::empty()
+                },
+                DRIVER_RUNTIME_COMMAND_FLAG_STEADY_SERVICE_LEASE,
+            ),
+            (
+                "persistent",
+                DriverRuntimeCyw43CommandDescriptor {
+                    op: DRIVER_RUNTIME_CYW43_OP_FIRMWARE_CHUNK,
+                    target_addr: CYW43_RAM_BASE_4345,
+                    payload_offset: DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE,
+                    payload_len: 4,
+                    total_len: 4,
+                    ..DriverRuntimeCyw43CommandDescriptor::empty()
+                },
+                DRIVER_RUNTIME_COMMAND_FLAG_PERSISTENT_TRANSACTION,
+            ),
+        ];
+        let child_descriptor = DriverRuntimeSdioCommandDescriptor {
+            op: DRIVER_RUNTIME_SDIO_OP_CARD_COMMAND,
+            response_kind: DRIVER_RUNTIME_SDIO_RESP_OCR,
+            len: SDIO_CMD5,
+            timeout_us: 100_000,
+            ..DriverRuntimeSdioCommandDescriptor::empty()
+        };
+        assert!(child_descriptor.valid());
+
+        for (ordinal, (case, parent_descriptor, parent_flags)) in cases.into_iter().enumerate() {
+            assert!(parent_descriptor.valid(), "{case}");
+            let parent_sequence = 0x4359_6400u32.wrapping_add(ordinal as u32);
+            let generation = 0x4359_6500u32.wrapping_add(ordinal as u32);
+            let child_sequence = 0x8000_6400u32.wrapping_add(ordinal as u32);
+            let mut parent = cyw43_descriptor_command(parent_sequence);
+            parent.flags |= parent_flags;
+            let child = DriverTaskCommandRecord {
+                sequence: child_sequence,
+                opcode: OPCODE_SERVICE,
+                flags: DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY,
+                arg0: HOT_PATH_SDIO_HOST,
+                arg1: ROLE_SDIO,
+                aux0: 0,
+                aux1: generation,
+                budget: budget(),
+                frame: DriverFrameDescriptor::empty(),
+            };
+            let mut transaction = Cyw43ForegroundTransaction::new();
+            transaction.generation = generation;
+            assert!(transaction.begin_turn(parent, 1), "{case}");
+            transaction.parent_descriptor = parent_descriptor;
+            transaction.parent_descriptor_valid = true;
+            transaction.frontier = Cyw43ForegroundTraceEntry {
+                ticket: Cyw43ForegroundActionTicket {
+                    parent_sequence,
+                    generation,
+                    owner_sequence: child_sequence,
+                    ordinal: 0,
+                    issued_turn_id: 1,
+                },
+                command: child,
+                descriptor: child_descriptor,
+                completion: DriverTaskCompletionRecord::idle(0),
+                write_offset: 0,
+                write_len: 0,
+                read_offset: 0,
+                read_len: 0,
+                read_from_owner: false,
+                local_read_frame: DriverFrameDescriptor::empty(),
+            };
+            transaction.frontier_valid = true;
+            assert!(
+                !transaction.bootstrap_stream_completion_fusion_authorized(),
+                "{case} parent must not acquire bootstrap stream fusion authority",
+            );
+
+            assert!(
+                transaction.commit_frontier_completion(DriverTaskCompletionRecord::progress(
+                    child_sequence,
+                    0x80ff_8000
+                ),)
+            );
+            assert!(transaction.turn.completion_observed, "{case}");
+            assert!(transaction.turn.action_consumed, "{case}");
+            assert!(transaction.turn.pending, "{case}");
+            assert!(!transaction.turn.new_submission_available(), "{case}");
+            assert!(
+                !transaction.turn.consume_new_submission(),
+                "{case} completion must retain the separate-grant submission barrier",
+            );
+        }
+    }
+
+    #[test]
+    fn transport_f1_block_size_children_cross_real_sdio_controller_once_each() {
         let _guard = test_guard();
         reset_sdio_descriptor_seam_for_test();
         let data_offset = CYW43_SDIO_BUS_LINK_DATA_OFFSET;
@@ -87680,8 +87948,6 @@ mod tests {
         let mut io = TestSdioHostIo::new();
         io.use_runtime_payload = true;
         io.command_status = SDHCI_INT_RESPONSE;
-        let mut parent_turn = Cyw43ForegroundTurnState::new();
-
         for (ordinal, (write, addr, value)) in actions.into_iter().enumerate() {
             if write {
                 write_runtime_payload_byte(data_offset, value);
@@ -87724,84 +87990,8 @@ mod tests {
                 local_read_frame: DriverFrameDescriptor::empty(),
             };
             assert!(cyw43_foreground_completion_matches(entry, completion));
-
-            parent_turn.complete_child_poll();
-            assert_eq!(parent_turn.completed_count, (ordinal + 1) as u16);
-            assert_eq!(parent_turn.replay_index, parent_turn.completed_count);
-            assert!(parent_turn.action_consumed);
-            assert!(parent_turn.pending);
-            assert_eq!(
-                cyw43_foreground_frontier_route(
-                    parent_turn.replay_index,
-                    parent_turn.completed_count,
-                    false,
-                    false,
-                    false,
-                    parent_turn.action_consumed,
-                    true,
-                    false,
-                    false,
-                ),
-                Cyw43ForegroundFrontierRoute::Defer,
-                "the exact child poll cannot issue the next F1 CMD52 in the same turn",
-            );
-            assert_eq!(
-                io.command_issue_count(),
-                issue_count_before + 1,
-                "the terminal poll turn performs exactly one owner operation",
-            );
-
-            parent_turn.begin_turn();
-            for replay_index in 0..parent_turn.completed_count {
-                assert_eq!(
-                    cyw43_foreground_frontier_route(
-                        parent_turn.replay_index,
-                        parent_turn.completed_count,
-                        false,
-                        false,
-                        false,
-                        false,
-                        true,
-                        false,
-                        false,
-                    ),
-                    Cyw43ForegroundFrontierRoute::Cached,
-                    "the fresh parent turn replays each completed prefix locally",
-                );
-                assert_eq!(parent_turn.replay_cached_child(), Some(replay_index));
-            }
-            if ordinal + 1 < actions.len() {
-                assert_eq!(
-                    cyw43_foreground_frontier_route(
-                        parent_turn.replay_index,
-                        parent_turn.completed_count,
-                        false,
-                        false,
-                        false,
-                        false,
-                        true,
-                        false,
-                        false,
-                    ),
-                    Cyw43ForegroundFrontierRoute::Submit,
-                    "only a fresh parent turn may submit the next F1 CMD52",
-                );
-            }
         }
         assert_eq!(io.command_issue_count(), 4);
-        assert_eq!(parent_turn.completed_count, 4);
-        assert_eq!(parent_turn.replay_index, 4);
-        assert!(!parent_turn.pending);
-        assert!(!parent_turn.action_consumed);
-
-        let mut single_child = Cyw43ForegroundTurnState::new();
-        single_child.complete_child_poll();
-        assert!(single_child.pending);
-        single_child.begin_turn();
-        assert_eq!(single_child.replay_cached_child(), Some(0));
-        assert_eq!(single_child.replay_cached_child(), None);
-        assert!(!single_child.pending);
-        assert!(!single_child.action_consumed);
     }
 
     #[test]
@@ -92582,7 +92772,7 @@ mod tests {
             transaction.active = true;
             transaction.executing = true;
             transaction.frontier_valid = true;
-            transaction.retain_frontier_submit(1_000, 100_000);
+            assert!(transaction.retain_frontier_submit(1_000, 100_000));
         });
         TEST_RUNTIME_TIMER_COUNTER_TICKS.store(3_001, Ordering::Release);
         let original_deadline = RuntimeDeadline::Counter {
@@ -106977,16 +107167,20 @@ mod tests {
 
             if let Some(completed_sequence) = owner_completion_published.take() {
                 terminal_parent_polls = terminal_parent_polls.saturating_add(1);
-                assert_eq!(
-                    observed_command.sequence, completed_sequence,
-                    "the terminal completion poll must defer before publishing a successor",
-                );
-                assert_eq!(
-                    parent_turn,
-                    RuntimeCommandTurn::Pending,
-                    "an exact child completion is retained for local replay on a later turn",
-                );
-                assert!(!CYW43_SDIO_CHILD_ACTIVE.load(Ordering::Acquire));
+                let successor_published = observed_command.sequence != completed_sequence;
+                if successor_published {
+                    assert_eq!(
+                        parent_turn,
+                        RuntimeCommandTurn::Pending,
+                        "a fused successor keeps the immutable parent retained",
+                    );
+                    assert!(CYW43_SDIO_CHILD_ACTIVE.load(Ordering::Acquire));
+                } else {
+                    assert!(
+                        !CYW43_SDIO_CHILD_ACTIVE.load(Ordering::Acquire),
+                        "without a fused successor the completed child is released",
+                    );
+                }
                 active_child = None;
                 if completed_sequence == child_commands[0].sequence {
                     assert_eq!(child_count, 1);
@@ -107004,8 +107198,13 @@ mod tests {
                         assert!(transaction.active);
                         assert!(!transaction.executing);
                         assert_eq!(transaction.turn_id, turn_id_after);
-                        assert!(transaction.turn.action_consumed);
                         assert!(transaction.turn.pending);
+                        assert!(
+                            transaction.turn.action_consumed
+                                || (transaction.turn.completion_observed
+                                    && transaction.turn.new_submission_available()),
+                            "pending is either a consumed child action or an exact terminal replay boundary",
+                        );
                     });
                 }
             }
@@ -107057,7 +107256,10 @@ mod tests {
                 configure_production_owner_child(&mut io, descriptor);
                 if child_count != 0 {
                     assert!(first_completion_consumed_turn != 0);
-                    assert!(turn_id_after > first_completion_consumed_turn);
+                    assert_eq!(
+                        turn_id_after, first_completion_consumed_turn,
+                        "the next immutable firmware child is published by the successful terminal turn",
+                    );
                     assert!(turn_id_after > child_issued_turn_ids[child_count - 1]);
                 }
                 child_commands[child_count] = observed_command;
@@ -108368,13 +108570,20 @@ mod tests {
 
             if let Some(completed_child) = owner_completion_published.take() {
                 terminal_parent_polls = terminal_parent_polls.saturating_add(1);
-                assert_eq!(observed_command.sequence, completed_child.sequence);
-                assert_eq!(
-                    parent_turn,
-                    RuntimeCommandTurn::Pending,
-                    "an exact child completion is consumed without local re-entry",
-                );
-                assert!(!CYW43_SDIO_CHILD_ACTIVE.load(Ordering::Acquire));
+                let successor_published = observed_command.sequence != completed_child.sequence;
+                if successor_published {
+                    assert_eq!(
+                        parent_turn,
+                        RuntimeCommandTurn::Pending,
+                        "a fused successor retains the exact parent",
+                    );
+                    assert!(CYW43_SDIO_CHILD_ACTIVE.load(Ordering::Acquire));
+                } else {
+                    assert!(
+                        !CYW43_SDIO_CHILD_ACTIVE.load(Ordering::Acquire),
+                        "without a fused successor the completed child is released",
+                    );
+                }
                 children[child_count - 1].owner_turns = active_owner_turns;
                 active_child = None;
                 active_owner_turns = 0;
@@ -113300,8 +113509,13 @@ mod tests {
         for (ordinal, (firmware_offset, transfer_len, block_count)) in
             COMMANDS.into_iter().enumerate()
         {
-            begin_parent_turn_with_cached_prefix(&mut transaction, parent, &mut turn_id);
-            parent_turns = parent_turns.saturating_add(1);
+            if ordinal == 0 {
+                begin_parent_turn_with_cached_prefix(&mut transaction, parent, &mut turn_id);
+                parent_turns = parent_turns.saturating_add(1);
+            } else {
+                assert!(transaction.turn.completion_observed);
+                assert!(transaction.turn.new_submission_available());
+            }
 
             let (shaped_len, block_size, shaped_blocks) =
                 cyw43_backplane_write_chunk_shape(false, true, FIRMWARE_BYTES - firmware_offset);
@@ -113361,7 +113575,7 @@ mod tests {
                 &mut ring,
                 cyw43_sdio_bus_link_staged_command(command),
             ));
-            transaction.retain_frontier_submit(turn_id, 1_000_000);
+            assert!(transaction.retain_frontier_submit(turn_id, 1_000_000));
             assert!(runtime_ring_commit_command_sequence(&mut ring, sequence));
             assert_eq!(io.command_issue_count(), ordinal);
             let owner_command = runtime_ring_read_command_stable(&ring)
@@ -113510,8 +113724,8 @@ mod tests {
                     transaction.poisoned,
                     transaction.issued_unknown,
                 ),
-                Cyw43ForegroundFrontierRoute::Defer,
-                "child {ordinal} terminal poll cannot submit its successor",
+                Cyw43ForegroundFrontierRoute::Submit,
+                "child {ordinal} successful terminal exposes one successor-submit slot",
             );
             assert_eq!(io.command_issue_count(), ordinal + 1);
         }
@@ -113521,8 +113735,8 @@ mod tests {
         assert_eq!(owner_turns, pending_owner_turns + COMMANDS.len());
         assert_eq!(
             parent_turns,
-            COMMANDS.len() * 2 + pending_owner_turns,
-            "every owner continuation requires one fused parent poll/grant turn",
+            COMMANDS.len() + 1 + pending_owner_turns,
+            "each successful terminal after the first fuses its successor submit",
         );
         assert_eq!(io.command_issue_count(), COMMANDS.len());
         assert_eq!(io.dma_started, 1);
@@ -119601,8 +119815,7 @@ mod tests {
             Cyw43ReleasePhase::Function2SrClock,
             Cyw43ReleasePhase::CoreControl,
         ];
-        let mut foreground_turn = Cyw43ForegroundTurnState::new();
-        for (ordinal, expected_phase) in expected_phases.into_iter().enumerate() {
+        for expected_phase in expected_phases {
             let before_transfers = test_sdio_transfer_total_count();
             let before_issues = TEST_REAL_SDIO_CONTROLLER_ISSUES.load(Ordering::Acquire);
             assert_eq!(cyw43_release_step(sequence, 0, &mut state), Ok(false));
@@ -119612,48 +119825,6 @@ mod tests {
                 TEST_REAL_SDIO_CONTROLLER_ISSUES.load(Ordering::Acquire),
                 before_issues + 1,
                 "one retained release phase must cross the real controller seam once",
-            );
-
-            foreground_turn.complete_child_poll();
-            assert_eq!(foreground_turn.completed_count, (ordinal + 1) as u16);
-            assert_eq!(
-                cyw43_foreground_frontier_route(
-                    foreground_turn.replay_index,
-                    foreground_turn.completed_count,
-                    false,
-                    false,
-                    false,
-                    foreground_turn.action_consumed,
-                    true,
-                    false,
-                    false,
-                ),
-                Cyw43ForegroundFrontierRoute::Defer,
-                "the exact completion poll cannot issue the next release operation",
-            );
-            let issues_after_poll = TEST_REAL_SDIO_CONTROLLER_ISSUES.load(Ordering::Acquire);
-            foreground_turn.begin_turn();
-            for replay_index in 0..foreground_turn.completed_count {
-                assert_eq!(
-                    cyw43_foreground_frontier_route(
-                        foreground_turn.replay_index,
-                        foreground_turn.completed_count,
-                        false,
-                        false,
-                        false,
-                        false,
-                        true,
-                        false,
-                        false,
-                    ),
-                    Cyw43ForegroundFrontierRoute::Cached,
-                );
-                assert_eq!(foreground_turn.replay_cached_child(), Some(replay_index),);
-            }
-            assert_eq!(
-                TEST_REAL_SDIO_CONTROLLER_ISSUES.load(Ordering::Acquire),
-                issues_after_poll,
-                "pending reentry replays only the cached prefix",
             );
         }
 

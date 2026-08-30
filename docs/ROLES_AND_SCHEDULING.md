@@ -556,28 +556,38 @@ echo, parsing, and root-owned diagnostics while NineDoor is attached. Only a
 parsed command that can enter passive NineDoor validates the generated active
 root-control budget, WCET, period, admission, and consumed-time-evidence
 contract. `seL4_SchedContext_Consumed` resets evidence but does not replenish
-the SC. The exact parsed command and its authority identity are retained after
-one baseline/reset sample. The selected seL4 `handleYield` relinquishes the
-remaining refill but restores the actual `scConsumed` value, so capture-to-loop
-unwind work would otherwise contaminate the next sample. Root therefore takes
-a second accounting reset immediately before the sole selected periodic MCS
-Yield; no userland work may intervene. On the first resumed activation, one
-cheap side-effect-free recovery check preempts and cancels an already-faulted
-reservation. A healthy retained command runs before ordinary material
-containment probes, refreshes the policy timebase, and takes one fresh
-consumed-time sample covering only the bounded Yield tail and resumed
-pre-dispatch work. Recovery is checked again after the sample, and `CallArm`
-retains the final fault frontier. Passive dispatch is admitted only when the
-fresh sample is strictly below the checked `budget_us - wcet_us` limit,
-currently 250 us, so the complete declared 2,500 us WCET remains inside the SC.
-Equality or excess ends the attempt with one typed refusal and never starts
-another wait. Reboot, containment, quarantine, recovery, or authority drift
-cancels before dispatch and projects a refusal only when the original response
-authority is still valid. Invalid generated truth, counter evidence, period
-conversion, or failure of either kernel-accounting sample latches admission
-closed and emits one bounded operator marker. Unrelated raw input and root-owned
-diagnostics remain live before a passive command is retained. The QEMU direct-VirtIO branch
-exits before this Pi-only boundary and keeps its existing counter guard.
+the SC. More precisely, the selected syscall clears the scheduling context's
+stored `scConsumed` evidence but cannot clear the live per-core `ksConsumed`
+accounting. The exact parsed command and its authority identity are retained
+after one baseline sample that validates this interface. Root then performs
+the sole selected periodic MCS Yield. Immediately when that Yield returns, the
+first userland operation captures `CNTVCT_EL0`; the following Consumed call
+drains the preserved pre-Yield accounting once, and its value is deliberately
+not used as resumed-activation evidence. One cheap side-effect-free recovery
+check preempts and cancels an already-faulted reservation. A healthy retained
+command runs before ordinary material containment probes, refreshes the policy
+timebase, and prepares authority, environment, and recovery truth before the
+final admission sample. That sample closes the strict wall interval from the
+immediate post-Yield counter capture to the final admission/WCET cut.
+`CallArm` retains the final fault frontier. Passive dispatch is admitted only
+when that wall lease is strictly below the checked
+`budget_us - wcet_us` limit, currently 250 us, so the complete declared
+2,500 us WCET remains inside the SC. The strict comparison, direct dispatch,
+and bounded response/epilogue are all inside that declared WCET; no mutable
+validity or policy work may be inserted between the cut and dispatch. Equality
+or excess ends the attempt with one typed refusal and never starts another
+wait. Reboot, containment,
+quarantine, recovery, or authority drift cancels before dispatch and projects
+a refusal only when the original response authority is still valid. Invalid
+generated truth, zero or drifted timer frequency, backwards/missing counter
+evidence, invalid period conversion, or failure of the validation/drain
+accounting samples latches admission closed and emits one bounded operator
+marker. Exact cross multiplication preserves the strict microsecond boundary
+without a rounded-down admission; preemption only makes the wall lease more
+conservative.
+Unrelated raw input and root-owned diagnostics remain live before a passive
+command is retained. The QEMU direct-VirtIO branch exits before this Pi-only
+boundary and keeps its existing counter guard.
 
 The recovery samples on this hot boundary are complete-service questions, not
 task-discovery operations. Root samples the already-published raw fault badge,

@@ -1011,11 +1011,49 @@ pub fn poll(dest: seL4_CPtr, badge: *mut seL4_Word) -> seL4_MessageInfo {
     unsafe { syscall::poll(dest, badge) }
 }
 
-/// Yields the current thread to the scheduler.
+/// Yield the current thread and capture the first Pi CNTVCT boundary after the
+/// syscall returns.
+///
+/// Other profiles retain the same Yield and return zero because they do not
+/// use the Pi-only passive-service resume lease.
 #[cfg(feature = "kernel")]
-#[inline]
-pub fn yield_now() {
-    unsafe { syscall::yield_now() };
+#[inline(always)]
+pub fn yield_now() -> u64 {
+    #[cfg(all(
+        feature = "release-pi4",
+        target_arch = "aarch64",
+        target_os = "none",
+        sel4_config_kernel_mcs
+    ))]
+    {
+        let ticks: u64;
+        let syscall_number = sel4_sys::seL4_SysYield as seL4_Word;
+        // SAFETY: x7 carries the selected seL4 AArch64 null-syscall number.
+        // Yield does not dereference user memory, and the following read-only
+        // CNTVCT_EL0 access is enabled by the selected Pi profile. Keeping both
+        // instructions in one asm block makes the returned counter value the
+        // exact first userspace instruction boundary after Yield returns.
+        unsafe {
+            core::arch::asm!(
+                "svc #0",
+                "mrs {ticks}, cntvct_el0",
+                in("x7") syscall_number,
+                ticks = lateout(reg) ticks,
+                options(nostack, preserves_flags),
+            );
+        }
+        ticks
+    }
+    #[cfg(not(all(
+        feature = "release-pi4",
+        target_arch = "aarch64",
+        target_os = "none",
+        sel4_config_kernel_mcs
+    )))]
+    {
+        unsafe { syscall::yield_now() };
+        0
+    }
 }
 
 /// Issues a raw seL4 send without validating the destination capability.

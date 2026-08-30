@@ -521,14 +521,14 @@ fn root_control_temporal_activation_exists_only_at_userland_loop_seams() {
         .find("crate::hal::critical_tcb::activate_root_control_temporal_runtime(")
         .expect("activation guard must attach the generated root-control SC");
     let activation_yield = guard
-        .find("Ok(()) => sel4::yield_now(),")
+        .find("Ok(()) => {\n                let _ = sel4::yield_now();\n            }")
         .expect("successful activation must immediately surrender the activation-seam remainder");
     let failure = guard
         .find("Err(error) =>")
         .expect("activation failure must remain fail-stop");
     assert!(attach < activation_yield && activation_yield < failure);
     assert_eq!(
-        guard.matches("Ok(()) => sel4::yield_now(),").count(),
+        guard.matches("let _ = sel4::yield_now();").count(),
         1,
         "Milestone 26e has one universal success-only activation-seam yield",
     );
@@ -566,7 +566,7 @@ fn root_control_temporal_activation_exists_only_at_userland_loop_seams() {
         "serial root-control policy must be armed immediately before steady polling",
     );
     assert_eq!(
-        normal_loop.matches("Ok(()) => sel4::yield_now(),").count(),
+        normal_loop.matches("let _ = sel4::yield_now();").count(),
         0,
         "the normal caller must use the universal guard rather than minting another seam yield",
     );
@@ -587,7 +587,7 @@ fn root_control_temporal_activation_exists_only_at_userland_loop_seams() {
         "deferred-network root-control policy must be armed at its supervisor-loop seam",
     );
     assert_eq!(
-        deferred_loop.matches("Ok(()) => sel4::yield_now(),").count(),
+        deferred_loop.matches("let _ = sel4::yield_now();").count(),
         0,
         "the deferred supervisor must use the universal guard rather than minting another seam yield",
     );
@@ -1051,8 +1051,23 @@ fn pi_recovery_predicates_sample_one_constant_size_service_fault_frontier() {
 }
 
 #[test]
-fn pi_passive_boundary_resets_selected_kernel_evidence_immediately_before_yield() {
+fn pi_passive_boundary_drains_preserved_evidence_immediately_after_yield() {
     let selected_kernel = include_str!("../../../seL4/build_UBOOT/kernel/kernel_all_copy.c");
+    let consumed_start = selected_kernel
+        .find("time_t schedContext_updateConsumed(sched_context_t *sc)")
+        .expect("the selected Pi seL4 profile must expose consumed-time evidence");
+    let consumed_end = selected_kernel[consumed_start..]
+        .find("void schedContext_cancelYieldTo(tcb_t *tcb)")
+        .map(|offset| consumed_start + offset)
+        .expect("consumed-time update must have a bounded source region");
+    let update_consumed = &selected_kernel[consumed_start..consumed_end];
+    assert!(update_consumed.contains("ticks_t consumed = sc->scConsumed;"));
+    assert!(update_consumed.contains("sc->scConsumed = 0;"));
+    assert!(
+        !update_consumed.contains("ksConsumed"),
+        "Consumed cannot clear the current core's uncommitted accounting",
+    );
+
     let yield_start = selected_kernel
         .find("static void handleYield(void)")
         .expect("the selected Pi seL4 profile must retain handleYield");
@@ -1082,32 +1097,207 @@ fn pi_passive_boundary_resets_selected_kernel_evidence_immediately_before_yield(
         .find("/// Side-effect-free target recovery state")
         .map(|offset| prepare_start + offset)
         .expect("the preparation method must have a bounded source region");
-    let prepare = &event[prepare_start..prepare_end];
-    let reset_owner = prepare
+    let boundary = &event[prepare_start..prepare_end];
+    let prepare_owner = boundary
         .find("prepare_pi_root_control_passive_admission_yield_with(")
-        .expect("the target boundary must invoke its exact reset state transition");
-    let sample = prepare[reset_owner..]
+        .expect("the target boundary must mark the exact Yield transition");
+    let resume_owner = boundary[prepare_owner..]
+        .find("pub fn resume_pi_root_control_passive_admission_after_yield(")
+        .map(|offset| prepare_owner + offset)
+        .expect("the target boundary must expose an immediate resume transition");
+    let drain = boundary[resume_owner..]
         .find("crate::hal::critical_tcb::root_control_consumed_time_us()")
-        .map(|offset| reset_owner + offset)
-        .expect("the target boundary must reset kernel consumed evidence");
-    assert!(reset_owner < sample);
+        .map(|offset| resume_owner + offset)
+        .expect("the resume transition must drain preserved pre-Yield evidence");
+    assert!(prepare_owner < resume_owner && resume_owner < drain);
+    assert!(
+        !boundary[prepare_owner..resume_owner].contains("root_control_consumed_time_us()"),
+        "no pre-Yield sample may masquerade as fresh post-Yield reserve",
+    );
+
+    let sel4 = include_str!("../src/sel4.rs");
+    let wrapper_start = sel4
+        .find("pub fn yield_now() -> u64")
+        .expect("Yield wrapper must return the exact Pi resume boundary");
+    let wrapper_end = sel4[wrapper_start..]
+        .find("/// Issues a raw seL4 send")
+        .map(|offset| wrapper_start + offset)
+        .expect("Yield wrapper must have a bounded source region");
+    let wrapper = &sel4[wrapper_start..wrapper_end];
+    let asm_start = wrapper
+        .find("core::arch::asm!(")
+        .expect("Pi MCS Yield and CNTVCT capture must share one asm block");
+    let asm_end = wrapper[asm_start..]
+        .find(");")
+        .map(|offset| asm_start + offset)
+        .expect("the combined Pi MCS asm block must be bounded");
+    let asm = &wrapper[asm_start..asm_end];
+    let syscall = asm
+        .find("\"svc #0\"")
+        .expect("combined asm must issue the seL4 null syscall");
+    let capture = asm[syscall..]
+        .find("\"mrs {ticks}, cntvct_el0\"")
+        .map(|offset| syscall + offset)
+        .expect("combined asm must read CNTVCT immediately after Yield");
+    assert!(syscall < capture);
+    assert_eq!(wrapper.matches("core::arch::asm!(").count(), 1);
+    assert!(wrapper.contains("in(\"x7\") syscall_number"));
+    assert!(wrapper.contains("ticks = lateout(reg) ticks"));
+    assert!(!wrapper.contains("timer_counter_ticks()"));
+    assert!(wrapper.contains("feature = \"release-pi4\""));
+    assert!(wrapper.contains("target_arch = \"aarch64\""));
+    assert!(wrapper.contains("sel4_config_kernel_mcs"));
+    assert!(
+        wrapper.contains("unsafe { syscall::yield_now() };\n        0"),
+        "non-Pi paths must preserve ordinary Yield and return no fake timestamp"
+    );
 
     let userland = include_str!("../src/userland/mod.rs");
-    let marker = "let _ = pump.prepare_pi_root_control_passive_admission_yield();";
+    let marker = "pump.prepare_pi_root_control_passive_admission_yield();";
     assert_eq!(
         userland.matches(marker).count(),
         4,
-        "every ordinary and deferred Pi scheduler boundary must use the reset owner",
+        "every ordinary and deferred Pi scheduler boundary must use the transition owner",
     );
     let mut suffix = userland;
     while let Some(offset) = suffix.find(marker) {
         let after_marker = &suffix[offset + marker.len()..];
         assert!(
-            after_marker.trim_start().starts_with("sel4::yield_now();"),
-            "no userland work may intervene between the evidence reset and seL4_Yield",
+            after_marker
+                .trim_start()
+                .starts_with("let resumed_at_ticks = sel4::yield_now();"),
+            "no userland work may intervene between prepare and seL4_Yield",
         );
+        let capture = after_marker
+            .find("let resumed_at_ticks = sel4::yield_now();")
+            .expect("prepared Yield must capture its first returned CNTVCT");
+        let resume = after_marker[capture..]
+            .find("pump.resume_pi_root_control_passive_admission_after_yield(resumed_at_ticks);")
+            .map(|resume| capture + resume)
+            .expect("captured boundary must drive the post-Yield drain");
+        assert!(capture < resume);
         suffix = after_marker;
     }
+}
+
+#[test]
+fn pi_passive_final_bracket_samples_after_preparation_and_dispatches_adjacent() {
+    let event = include_str!("../src/event/mod.rs");
+    let service_start = event
+        .find("fn service_pi_root_control_pending_with<F>(")
+        .expect("Pi passive admission must expose an injectable final bracket");
+    let service_end = event[service_start..]
+        .find("/// Service one retained Pi passive NineDoor reservation")
+        .map(|offset| service_start + offset)
+        .expect("the passive admission bracket must have a bounded source region");
+    let service = &event[service_start..service_end];
+
+    let initial_identity = service
+        .find("self.pi_root_control_pending_identity_matches(pending)")
+        .expect("identity preparation must precede the final sample");
+    let environment = service[initial_identity..]
+        .find("let invalid_environment =")
+        .map(|offset| initial_identity + offset)
+        .expect("environment preparation must precede the final sample");
+    let take = service[environment..]
+        .find("self.pi_root_control_pending_passive_command.take()")
+        .map(|offset| environment + offset)
+        .expect("the exact retained command must be owned before the final sample");
+    let final_identity = service[take..]
+        .find("self.pi_root_control_pending_identity_matches(&pending)")
+        .map(|offset| take + offset)
+        .expect("authority must be revalidated after taking the command");
+    let final_recovery = service[final_identity..]
+        .find("if self.isolated_service_recovery_pending()")
+        .map(|offset| final_identity + offset)
+        .expect("recovery must be prepared before the final sample");
+    let input_preparation = service[final_recovery..]
+        .find("self.console_input_turn_output_budget =")
+        .map(|offset| final_recovery + offset)
+        .expect("bounded dispatch state must be prepared before the final sample");
+    let decision = service[input_preparation..]
+        .find(".decide_with(contract, counter_hz, sample_ticks)")
+        .map(|offset| input_preparation + offset)
+        .expect("prepared state must flow into the final injected sample");
+    let admit = service[decision..]
+        .find("PiRootControlConsumedDecision::Admit =>")
+        .map(|offset| decision + offset)
+        .expect("strict reserve admission branch must exist");
+    let dispatch = service[admit..]
+        .find("self.dispatch_command_now(pending.command)")
+        .map(|offset| admit + offset)
+        .expect("admission must flow directly into the declared dispatch leaf");
+
+    assert!(
+        initial_identity < environment
+            && environment < take
+            && take < final_identity
+            && final_identity < final_recovery
+            && final_recovery < input_preparation
+            && input_preparation < decision
+            && decision < admit
+            && admit < dispatch,
+    );
+    let admitted_transition = &service[admit..dispatch];
+    for forbidden in [
+        "pi_root_control_pending_identity_matches(",
+        "isolated_service_recovery_pending()",
+        "deferred_containment_work_pending()",
+        "timer_counter_ticks()",
+        "pending_passive_command.take()",
+    ] {
+        assert!(
+            !admitted_transition.contains(forbidden),
+            "no mutable validity preparation may follow the final sample: {forbidden}",
+        );
+    }
+
+    let decide_start = event
+        .find("fn decide_with<F>(")
+        .expect("reserve state machine must own the final sample");
+    let decide_end = event[decide_start..]
+        .find("fn pi_root_control_consumed_contract()")
+        .map(|offset| decide_start + offset)
+        .expect("reserve decision must have a bounded source region");
+    let decide = &event[decide_start..decide_end];
+    let contract = decide
+        .find("Self::checked_contract(contract, counter_hz)")
+        .expect("generated contract must be checked before sampling");
+    let state = decide[contract..]
+        .find("let resumed_at_ticks = match *self")
+        .map(|offset| contract + offset)
+        .expect("counter and state truth must be prepared before sampling");
+    let sample = decide[state..]
+        .find("let observed_ticks = sample_ticks();")
+        .map(|offset| state + offset)
+        .expect("one final timestamp must close the preparation bracket");
+    let compare = decide[sample..]
+        .find("if elapsed_scaled < reserve_scaled")
+        .map(|offset| sample + offset)
+        .expect("strict comparison must follow the final timestamp");
+    assert!(contract < state && state < sample && sample < compare);
+    assert!(decide.contains("final sample starts the declared 2,500-us dispatch WCET leaf"));
+
+    let target_start = event
+        .find("pub fn service_pi_root_control_passive_admission(&mut self) -> bool")
+        .expect("target passive admission entry must exist");
+    let target_end = event[target_start..]
+        .find("/// Retain exactly one bounded marker")
+        .map(|offset| target_start + offset)
+        .expect("target passive admission entry must have a bounded source region");
+    let target = &event[target_start..target_end];
+    let frequency = target
+        .find("let counter_hz = crate::arch::aarch64::timer::timer_freq_hz();")
+        .expect("counter frequency must be prepared before the final sample closure");
+    let bracket = target[frequency..]
+        .find("self.service_pi_root_control_pending_with(contract, counter_hz, ||")
+        .map(|offset| frequency + offset)
+        .expect("target must enter the prepared final bracket");
+    let sample = target[bracket..]
+        .find("crate::arch::aarch64::timer::timer_counter_ticks()")
+        .map(|offset| bracket + offset)
+        .expect("target bracket must inject its final CNTVCT read");
+    assert!(frequency < bracket && bracket < sample);
 }
 
 #[test]

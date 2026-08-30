@@ -3586,25 +3586,31 @@ struct PiRootControlConsumedSample {
     sampled_at_ticks: u64,
 }
 
-/// Two-phase root-control consumed-time observation for one retained command.
+/// Root-control reserve proof for one retained passive command.
 ///
-/// `seL4_SchedContext_Consumed` returns and resets consumption since its prior
-/// observation; it does not replenish the SC. The first sample is therefore a
-/// baseline only. Immediately before the mandatory MCS Yield, a second sample
-/// resets the root work accumulated while the parsed command unwound to that
-/// scheduler boundary. This is required because the selected seL4
-/// `handleYield` preserves actual `scConsumed` evidence while relinquishing the
-/// remaining refill. The first resumed turn can then measure only the bounded
-/// boundary tail plus post-replenishment pre-dispatch work. Equality or excess
-/// ends the retained attempt with a typed refusal so input and recovery stay
-/// live.
+/// `seL4_SchedContext_Consumed` clears `scConsumed`, but it cannot clear the
+/// current core's `ksConsumed`. The selected seL4 `handleYield` preserves their
+/// sum while relinquishing the refill, so a consumed-time sample immediately
+/// after Yield still describes pre-Yield work and cannot prove fresh reserve.
+/// We instead drain that preserved evidence once after Yield, then measure the
+/// bounded resume-to-WCET-leaf wall interval with CNTVCT. There is no blocking
+/// child operation in that interval, so preemption only makes the strict wall
+/// lease more conservative. Equality or excess ends the retained attempt with
+/// the existing typed refusal so input and recovery stay live.
 #[cfg(feature = "kernel")]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 enum PiRootControlConsumedWindow {
     #[default]
     Empty,
     AwaitingYield,
-    ReadyAfterYield,
+    AwaitingResume {
+        prepared_at_ticks: u64,
+        counter_hz: u64,
+    },
+    ReadyAfterYield {
+        resumed_at_ticks: u64,
+        counter_hz: u64,
+    },
     Invalid(PiRootControlConsumedInvalid),
 }
 
@@ -3704,16 +3710,12 @@ impl PiRootControlConsumedWindow {
         true
     }
 
-    fn prepare_yield_boundary_with<F>(
+    fn prepare_yield_boundary_with(
         &mut self,
         contract: PiRootControlConsumedContract,
         observed_ticks: u64,
         counter_hz: u64,
-        sample: F,
-    ) -> bool
-    where
-        F: FnOnce() -> Option<PiRootControlConsumedSample>,
-    {
+    ) -> bool {
         match self {
             Self::AwaitingYield => {
                 if observed_ticks == 0 {
@@ -3724,36 +3726,75 @@ impl PiRootControlConsumedWindow {
                     *self = Self::Invalid(reason);
                     return false;
                 }
-                let Some(sample) = sample() else {
-                    *self = Self::Invalid(PiRootControlConsumedInvalid::ConsumedSample);
-                    return false;
+                *self = Self::AwaitingResume {
+                    prepared_at_ticks: observed_ticks,
+                    counter_hz,
                 };
-                if sample.sampled_at_ticks == 0 || sample.sampled_at_ticks < observed_ticks {
-                    *self = Self::Invalid(PiRootControlConsumedInvalid::SampleCounter);
-                    return false;
-                }
-                let _pre_yield_consumed_us = sample.consumed_us;
-                *self = Self::ReadyAfterYield;
                 true
             }
-            // Exactly one reset plus explicit scheduler boundary belongs to a
-            // retained command. A second prepare cannot silently reset the
-            // evidence or authorize another real Yield before the decision
-            // sample.
-            Self::ReadyAfterYield => false,
+            // Exactly one explicit scheduler boundary belongs to a retained
+            // command. A second prepare cannot authorize another real Yield
+            // before the preserved pre-Yield evidence is drained.
+            Self::AwaitingResume { .. } | Self::ReadyAfterYield { .. } => false,
             Self::Empty | Self::Invalid(_) => false,
         }
+    }
+
+    fn resume_after_yield_with<F>(
+        &mut self,
+        contract: PiRootControlConsumedContract,
+        resumed_at_ticks: u64,
+        counter_hz: u64,
+        drain: F,
+    ) -> bool
+    where
+        F: FnOnce() -> Option<PiRootControlConsumedSample>,
+    {
+        let Self::AwaitingResume {
+            prepared_at_ticks,
+            counter_hz: prepared_counter_hz,
+        } = *self
+        else {
+            if !matches!(self, Self::Invalid(_)) {
+                *self = Self::Invalid(PiRootControlConsumedInvalid::ConsumedSample);
+            }
+            return false;
+        };
+        if resumed_at_ticks == 0
+            || counter_hz != prepared_counter_hz
+            || resumed_at_ticks < prepared_at_ticks
+        {
+            *self = Self::Invalid(PiRootControlConsumedInvalid::SampleCounter);
+            return false;
+        }
+        if let Err(reason) = Self::checked_contract(contract, counter_hz) {
+            *self = Self::Invalid(reason);
+            return false;
+        }
+        let Some(sample) = drain() else {
+            *self = Self::Invalid(PiRootControlConsumedInvalid::ConsumedSample);
+            return false;
+        };
+        if sample.sampled_at_ticks == 0 || sample.sampled_at_ticks < resumed_at_ticks {
+            *self = Self::Invalid(PiRootControlConsumedInvalid::SampleCounter);
+            return false;
+        }
+        let _preserved_pre_yield_consumed_us = sample.consumed_us;
+        *self = Self::ReadyAfterYield {
+            resumed_at_ticks,
+            counter_hz,
+        };
+        true
     }
 
     fn decide_with<F>(
         &mut self,
         contract: PiRootControlConsumedContract,
-        observed_ticks: u64,
         counter_hz: u64,
-        sample: F,
+        sample_ticks: F,
     ) -> PiRootControlConsumedDecision
     where
-        F: FnOnce() -> Option<PiRootControlConsumedSample>,
+        F: FnOnce() -> u64,
     {
         if matches!(self, Self::Invalid(_)) {
             return PiRootControlConsumedDecision::Invalid;
@@ -3765,28 +3806,46 @@ impl PiRootControlConsumedWindow {
                 return PiRootControlConsumedDecision::Invalid;
             }
         };
-        if observed_ticks == 0 {
-            *self = Self::Invalid(PiRootControlConsumedInvalid::Counter);
-            return PiRootControlConsumedDecision::Invalid;
-        }
-        match *self {
-            Self::AwaitingYield => return PiRootControlConsumedDecision::Waiting,
-            Self::ReadyAfterYield => {}
+        let resumed_at_ticks = match *self {
+            Self::AwaitingYield | Self::AwaitingResume { .. } => {
+                return PiRootControlConsumedDecision::Waiting;
+            }
+            Self::ReadyAfterYield {
+                resumed_at_ticks,
+                counter_hz: resume_counter_hz,
+            } => {
+                if counter_hz != resume_counter_hz {
+                    *self = Self::Invalid(PiRootControlConsumedInvalid::SampleCounter);
+                    return PiRootControlConsumedDecision::Invalid;
+                }
+                resumed_at_ticks
+            }
             Self::Empty => {
                 *self = Self::Invalid(PiRootControlConsumedInvalid::ConsumedSample);
                 return PiRootControlConsumedDecision::Invalid;
             }
             Self::Invalid(_) => return PiRootControlConsumedDecision::Invalid,
-        }
-        let Some(sample) = sample() else {
-            *self = Self::Invalid(PiRootControlConsumedInvalid::ConsumedSample);
-            return PiRootControlConsumedDecision::Invalid;
         };
-        if sample.sampled_at_ticks == 0 || sample.sampled_at_ticks < observed_ticks {
+        // This is the final pre-dispatch timestamp. Contract, frequency,
+        // state, policy, identity, authority, environment, and recovery work
+        // must already be prepared by the caller. The exact comparison and
+        // final sample starts the declared 2,500-us dispatch WCET leaf. That
+        // leaf includes this strict comparison, the direct dispatch, and its
+        // bounded response/epilogue, so strict inequality leaves the complete
+        // WCET available inside the 2,750-us root-control budget.
+        let observed_ticks = sample_ticks();
+        if observed_ticks == 0 {
+            *self = Self::Invalid(PiRootControlConsumedInvalid::Counter);
+            return PiRootControlConsumedDecision::Invalid;
+        }
+        if observed_ticks < resumed_at_ticks {
             *self = Self::Invalid(PiRootControlConsumedInvalid::SampleCounter);
             return PiRootControlConsumedDecision::Invalid;
         }
-        if sample.consumed_us < consumed_limit_us {
+        let elapsed_ticks = observed_ticks - resumed_at_ticks;
+        let elapsed_scaled = u128::from(elapsed_ticks) * 1_000_000;
+        let reserve_scaled = u128::from(consumed_limit_us) * u128::from(counter_hz);
+        if elapsed_scaled < reserve_scaled {
             *self = Self::Empty;
             PiRootControlConsumedDecision::Admit
         } else {
@@ -7578,14 +7637,13 @@ where
         }
     }
 
-    /// Reset consumed-time evidence and mark the sole MCS replenishment
-    /// boundary for one retained passive command immediately before the caller
-    /// invokes `seL4_Yield`.
+    /// Mark the sole MCS replenishment boundary for one retained passive
+    /// command immediately before the caller invokes `seL4_Yield`.
     ///
-    /// This method owns the target kernel accounting reset but remains
-    /// deliberately separate from `seL4_Yield`: host tests can prove the state
-    /// machine while target userland remains the only owner of the cooperative
-    /// scheduler call and its immediate source ordering.
+    /// This method owns the target transition but remains deliberately
+    /// separate from `seL4_Yield`: host tests can prove the state machine while
+    /// target userland remains the only owner of the cooperative scheduler call
+    /// and its immediate source ordering.
     #[cfg(feature = "kernel")]
     #[must_use = "a prepared boundary must be followed immediately by the outer seL4 yield"]
     pub fn prepare_pi_root_control_passive_admission_yield(&mut self) -> bool {
@@ -7611,14 +7669,6 @@ where
                 contract,
                 observed_ticks,
                 counter_hz,
-                || {
-                    let consumed_us =
-                        crate::hal::critical_tcb::root_control_consumed_time_us().ok()?;
-                    Some(PiRootControlConsumedSample {
-                        consumed_us,
-                        sampled_at_ticks: crate::arch::aarch64::timer::timer_counter_ticks(),
-                    })
-                },
             );
             if !prepared {
                 self.report_pi_root_control_invalid_once();
@@ -7637,12 +7687,73 @@ where
     }
 
     #[cfg(all(feature = "kernel", feature = "release-pi4"))]
-    fn prepare_pi_root_control_passive_admission_yield_with<F>(
+    fn prepare_pi_root_control_passive_admission_yield_with(
         &mut self,
         contract: PiRootControlConsumedContract,
         observed_ticks: u64,
         counter_hz: u64,
-        sample: F,
+    ) -> bool {
+        self.pi_root_control_pending_passive_command.is_some()
+            && self
+                .pi_root_control_consumed_window
+                .prepare_yield_boundary_with(contract, observed_ticks, counter_hz)
+    }
+
+    /// Bind the first instruction boundary after the selected MCS Yield to the
+    /// retained passive command and drain the pre-Yield consumed evidence.
+    ///
+    /// The caller must pass the CNTVCT value captured by `sel4::yield_now`
+    /// before running any EventPump or recovery work. The drained value is not
+    /// an admission oracle; only the strict resume-to-WCET-leaf wall lease is.
+    #[cfg(feature = "kernel")]
+    pub fn resume_pi_root_control_passive_admission_after_yield(&mut self, resumed_at_ticks: u64) {
+        #[cfg(all(
+            feature = "release-pi4",
+            target_arch = "aarch64",
+            target_os = "none",
+            sel4_config_kernel_mcs
+        ))]
+        {
+            let Some(contract) = pi_root_control_consumed_contract() else {
+                self.pi_root_control_consumed_window =
+                    PiRootControlConsumedWindow::Invalid(PiRootControlConsumedInvalid::Profile);
+                self.report_pi_root_control_invalid_once();
+                return;
+            };
+            let counter_hz = crate::arch::aarch64::timer::timer_freq_hz();
+            let resumed = self.resume_pi_root_control_passive_admission_after_yield_with(
+                contract,
+                resumed_at_ticks,
+                counter_hz,
+                || {
+                    let consumed_us =
+                        crate::hal::critical_tcb::root_control_consumed_time_us().ok()?;
+                    Some(PiRootControlConsumedSample {
+                        consumed_us,
+                        sampled_at_ticks: crate::arch::aarch64::timer::timer_counter_ticks(),
+                    })
+                },
+            );
+            if !resumed {
+                self.report_pi_root_control_invalid_once();
+            }
+        }
+        #[cfg(not(all(
+            feature = "release-pi4",
+            target_arch = "aarch64",
+            target_os = "none",
+            sel4_config_kernel_mcs
+        )))]
+        let _ = resumed_at_ticks;
+    }
+
+    #[cfg(all(feature = "kernel", feature = "release-pi4"))]
+    fn resume_pi_root_control_passive_admission_after_yield_with<F>(
+        &mut self,
+        contract: PiRootControlConsumedContract,
+        resumed_at_ticks: u64,
+        counter_hz: u64,
+        drain: F,
     ) -> bool
     where
         F: FnOnce() -> Option<PiRootControlConsumedSample>,
@@ -7650,7 +7761,7 @@ where
         self.pi_root_control_pending_passive_command.is_some()
             && self
                 .pi_root_control_consumed_window
-                .prepare_yield_boundary_with(contract, observed_ticks, counter_hz, sample)
+                .resume_after_yield_with(contract, resumed_at_ticks, counter_hz, drain)
     }
 
     /// Side-effect-free target recovery state that must outrank retained
@@ -7714,7 +7825,7 @@ where
     }
 
     /// Whether newly published fault or containment work must cancel the
-    /// retained command before its fresh consumed-time sample or dispatch.
+    /// retained command before its final CNTVCT reserve bracket or dispatch.
     #[cfg(feature = "kernel")]
     #[must_use]
     pub fn pi_isolated_service_recovery_pending(&self) -> bool {
@@ -7890,7 +8001,7 @@ where
         );
     }
 
-    /// Retain a target Pi command after its baseline/reset sample. `None`
+    /// Retain a target Pi command after its baseline accounting sample. `None`
     /// means the exact command was either retained or failed closed; `Some`
     /// means the host/QEMU path must dispatch it immediately and unchanged.
     #[cfg(all(feature = "kernel", feature = "release-pi4"))]
@@ -7989,12 +8100,11 @@ where
     fn service_pi_root_control_pending_with<F>(
         &mut self,
         contract: PiRootControlConsumedContract,
-        observed_ticks: u64,
         counter_hz: u64,
-        sample: F,
+        sample_ticks: F,
     ) -> bool
     where
-        F: FnOnce() -> Option<PiRootControlConsumedSample>,
+        F: FnOnce() -> u64,
     {
         let Some(pending) = self.pi_root_control_pending_passive_command.as_deref() else {
             return false;
@@ -8010,56 +8120,67 @@ where
             self.cancel_pi_root_control_pending(identity_matches);
             return true;
         }
-        match self.pi_root_control_consumed_window.decide_with(
-            contract,
-            observed_ticks,
-            counter_hz,
-            sample,
-        ) {
-            PiRootControlConsumedDecision::Waiting => {
+
+        match self.pi_root_control_consumed_window {
+            PiRootControlConsumedWindow::AwaitingYield
+            | PiRootControlConsumedWindow::AwaitingResume { .. } => {
                 self.linked_runtime_service_phase = LinkedRuntimeServicePhase::Dispatch;
-                true
+                return true;
             }
-            PiRootControlConsumedDecision::Invalid => {
+            PiRootControlConsumedWindow::Invalid(_) => {
                 self.report_pi_root_control_invalid_once();
                 self.cancel_pi_root_control_pending(true);
-                true
+                return true;
             }
-            PiRootControlConsumedDecision::Reject => {
+            PiRootControlConsumedWindow::Empty => {
+                self.pi_root_control_consumed_window = PiRootControlConsumedWindow::Invalid(
+                    PiRootControlConsumedInvalid::ConsumedSample,
+                );
+                self.report_pi_root_control_invalid_once();
                 self.cancel_pi_root_control_pending(true);
-                self.linked_runtime_service_phase = LinkedRuntimeServicePhase::Serial;
-                true
+                return true;
             }
+            PiRootControlConsumedWindow::ReadyAfterYield { .. } => {}
+        }
+
+        let Some(pending) = self.pi_root_control_pending_passive_command.take() else {
+            self.pi_root_control_consumed_window =
+                PiRootControlConsumedWindow::Invalid(PiRootControlConsumedInvalid::ConsumedSample);
+            self.report_pi_root_control_invalid_once();
+            return true;
+        };
+        if !self.pi_root_control_pending_identity_matches(&pending) {
+            self.pi_root_control_pending_passive_command = Some(pending);
+            self.cancel_pi_root_control_pending(false);
+            return true;
+        }
+        // A root-fault child can publish while the authority checks run. This
+        // final side-effect-free preparation occurs before the final CNTVCT
+        // sample. If a still-later fault crosses that cut, the unchanged target
+        // CallArm fault frontier fails closed.
+        if self.isolated_service_recovery_pending() {
+            self.pi_root_control_pending_passive_command = Some(pending);
+            self.cancel_pi_root_control_pending(true);
+            self.linked_runtime_service_phase = LinkedRuntimeServicePhase::Serial;
+            return true;
+        }
+
+        let source = pending.source;
+        self.last_input_source = source;
+        let prior_input_turn_active = self.console_input_turn_active;
+        let prior_output_budget = self.console_input_turn_output_budget;
+        self.console_input_turn_active = source.is_physical_console();
+        self.console_input_turn_output_budget = CONSOLE_INPUT_TURN_IMMEDIATE_OUTPUT_LINES;
+
+        match self
+            .pi_root_control_consumed_window
+            .decide_with(contract, counter_hz, sample_ticks)
+        {
             PiRootControlConsumedDecision::Admit => {
-                let Some(pending) = self.pi_root_control_pending_passive_command.take() else {
-                    self.pi_root_control_consumed_window = PiRootControlConsumedWindow::Invalid(
-                        PiRootControlConsumedInvalid::ConsumedSample,
-                    );
-                    self.report_pi_root_control_invalid_once();
-                    return true;
-                };
-                if !self.pi_root_control_pending_identity_matches(&pending) {
-                    self.pi_root_control_pending_passive_command = Some(pending);
-                    self.cancel_pi_root_control_pending(false);
-                    return true;
-                }
-                // A root-fault child can publish while the consumed syscall
-                // runs. Recheck the side-effect-free fault state after the
-                // fresh sample and exact authority validation, immediately
-                // before dispatch. The target CallArm boundary independently
-                // fails closed if a still-later preemption crosses this cut.
-                if self.isolated_service_recovery_pending() {
-                    self.pi_root_control_pending_passive_command = Some(pending);
-                    self.cancel_pi_root_control_pending(true);
-                    self.linked_runtime_service_phase = LinkedRuntimeServicePhase::Serial;
-                    return true;
-                }
-                let source = pending.source;
-                self.last_input_source = source;
-                let prior_input_turn_active = self.console_input_turn_active;
-                let prior_output_budget = self.console_input_turn_output_budget;
-                self.console_input_turn_active = source.is_physical_console();
-                self.console_input_turn_output_budget = CONSOLE_INPUT_TURN_IMMEDIATE_OUTPUT_LINES;
+                // The final strict comparison above flows directly into the
+                // declared dispatch WCET leaf. No mutable validity, policy,
+                // authority, environment, or recovery check may be inserted
+                // between this decision and the target service call.
                 if let Err(error) = self.dispatch_command_now(pending.command) {
                     self.handle_dispatch_error(error);
                 }
@@ -8072,6 +8193,17 @@ where
                 self.linked_runtime_service_phase = LinkedRuntimeServicePhase::Dispatch;
                 true
             }
+            decision => {
+                self.console_input_turn_active = prior_input_turn_active;
+                self.console_input_turn_output_budget = prior_output_budget;
+                self.pi_root_control_pending_passive_command = Some(pending);
+                if decision == PiRootControlConsumedDecision::Invalid {
+                    self.report_pi_root_control_invalid_once();
+                }
+                self.cancel_pi_root_control_pending(true);
+                self.linked_runtime_service_phase = LinkedRuntimeServicePhase::Serial;
+                true
+            }
         }
     }
 
@@ -8079,9 +8211,9 @@ where
     /// caller to yield after this exclusive root-control turn.
     ///
     /// This runs only after higher-priority target recovery has been checked.
-    /// It performs no decision sample before the mandatory yield marker and
-    /// dispatches at most one exact command immediately after the first fresh
-    /// below-limit sample on the resumed activation.
+    /// It performs no decision before the mandatory Yield/resume marker and
+    /// starts at most one exact 2,500-us dispatch/response WCET leaf inside the
+    /// strict resumed wall lease.
     #[cfg(all(feature = "kernel", feature = "release-pi4"))]
     fn refresh_pi_root_control_policy_time_if_ready<F>(&mut self, refresh: F)
     where
@@ -8089,7 +8221,7 @@ where
     {
         if matches!(
             self.pi_root_control_consumed_window,
-            PiRootControlConsumedWindow::ReadyAfterYield
+            PiRootControlConsumedWindow::ReadyAfterYield { .. }
         ) {
             refresh(self);
         }
@@ -8108,7 +8240,7 @@ where
             self.refresh_pi_root_control_policy_time_if_ready(|pump| {
                 // Update the target timebase before ticket/session policy is
                 // evaluated. This bounded work is intentionally included in
-                // the fresh kernel consumed-time sample below.
+                // the strict resumed wall lease below.
                 pump.poll_runtime_timer_prelude();
             });
             let Some(contract) = pi_root_control_consumed_contract() else {
@@ -8118,21 +8250,10 @@ where
                 self.cancel_pi_root_control_pending(true);
                 return true;
             };
-            let observed_ticks = crate::arch::aarch64::timer::timer_counter_ticks();
             let counter_hz = crate::arch::aarch64::timer::timer_freq_hz();
-            return self.service_pi_root_control_pending_with(
-                contract,
-                observed_ticks,
-                counter_hz,
-                || {
-                    let consumed_us =
-                        crate::hal::critical_tcb::root_control_consumed_time_us().ok()?;
-                    Some(PiRootControlConsumedSample {
-                        consumed_us,
-                        sampled_at_ticks: crate::arch::aarch64::timer::timer_counter_ticks(),
-                    })
-                },
-            );
+            return self.service_pi_root_control_pending_with(contract, counter_hz, || {
+                crate::arch::aarch64::timer::timer_counter_ticks()
+            });
         }
         #[cfg(not(all(
             feature = "release-pi4",
@@ -47482,12 +47603,9 @@ mod tests {
 
         let blocked_samples = std::cell::Cell::new(0u8);
         assert_eq!(
-            window.decide_with(contract, 101, 1_000_000, || {
+            window.decide_with(contract, 1_000_000, || {
                 blocked_samples.set(blocked_samples.get().saturating_add(1));
-                Some(PiRootControlConsumedSample {
-                    consumed_us: 0,
-                    sampled_at_ticks: 101,
-                })
+                101
             }),
             PiRootControlConsumedDecision::Waiting,
         );
@@ -47497,33 +47615,45 @@ mod tests {
             "blocked admission must not resample"
         );
         assert_eq!(window, PiRootControlConsumedWindow::AwaitingYield);
+        assert!(window.prepare_yield_boundary_with(contract, 102, 1_000_000));
+        assert_eq!(
+            window,
+            PiRootControlConsumedWindow::AwaitingResume {
+                prepared_at_ticks: 102,
+                counter_hz: 1_000_000,
+            }
+        );
+        assert_eq!(
+            window.decide_with(contract, 1_000_000, || {
+                blocked_samples.set(blocked_samples.get().saturating_add(1));
+                103
+            }),
+            PiRootControlConsumedDecision::Waiting,
+            "admission cannot begin before the Yield-return drain",
+        );
         assert!(
-            window.prepare_yield_boundary_with(contract, 102, 1_000_000, || {
+            !window.prepare_yield_boundary_with(contract, 104, 1_000_000),
+            "a retained command owns exactly one Yield boundary",
+        );
+        assert!(
+            window.resume_after_yield_with(contract, 10_000, 1_000_000, || {
                 Some(PiRootControlConsumedSample {
-                    consumed_us: 1_500,
-                    sampled_at_ticks: 103,
+                    consumed_us: u64::MAX,
+                    sampled_at_ticks: 10_001,
                 })
             })
         );
-        assert_eq!(window, PiRootControlConsumedWindow::ReadyAfterYield);
-        assert!(
-            !window.prepare_yield_boundary_with(contract, 104, 1_000_000, || {
-                Some(PiRootControlConsumedSample {
-                    consumed_us: 0,
-                    sampled_at_ticks: 105,
-                })
-            }),
-            "a retained command owns exactly one evidence reset and Yield boundary",
+        assert_eq!(
+            window,
+            PiRootControlConsumedWindow::ReadyAfterYield {
+                resumed_at_ticks: 10_000,
+                counter_hz: 1_000_000,
+            },
+            "arbitrary preserved pre-Yield consumption is drained, not used for admission",
         );
-        assert_eq!(window, PiRootControlConsumedWindow::ReadyAfterYield);
 
         assert_eq!(
-            window.decide_with(contract, 10_104, 1_000_000, || {
-                Some(PiRootControlConsumedSample {
-                    consumed_us: 250,
-                    sampled_at_ticks: 10_105,
-                })
-            }),
+            window.decide_with(contract, 1_000_000, || 10_250),
             PiRootControlConsumedDecision::Reject,
             "equality must terminate without donating or retrying",
         );
@@ -47536,24 +47666,38 @@ mod tests {
                 sampled_at_ticks: 200,
             })
         }));
+        assert!(below_limit.prepare_yield_boundary_with(contract, 201, 1_000_000));
         assert!(
-            below_limit.prepare_yield_boundary_with(contract, 201, 1_000_000, || Some(
-                PiRootControlConsumedSample {
+            below_limit.resume_after_yield_with(contract, 20_000, 1_000_000, || {
+                Some(PiRootControlConsumedSample {
                     consumed_us: 4_000,
-                    sampled_at_ticks: 202,
-                }
-            ),)
+                    sampled_at_ticks: 20_001,
+                })
+            })
         );
         assert_eq!(
-            below_limit.decide_with(contract, 10_203, 1_000_000, || {
-                Some(PiRootControlConsumedSample {
-                    consumed_us: 249,
-                    sampled_at_ticks: 10_204,
-                })
-            }),
+            below_limit.decide_with(contract, 1_000_000, || 20_249),
             PiRootControlConsumedDecision::Admit,
         );
         assert_eq!(below_limit, PiRootControlConsumedWindow::Empty);
+
+        let mut non_integral = PiRootControlConsumedWindow::ReadyAfterYield {
+            resumed_at_ticks: 30_000,
+            counter_hz: 3_000_001,
+        };
+        assert_eq!(
+            non_integral.decide_with(contract, 3_000_001, || 30_750),
+            PiRootControlConsumedDecision::Admit,
+            "cross multiplication must preserve a fractional-tick reserve",
+        );
+        let mut non_integral_over = PiRootControlConsumedWindow::ReadyAfterYield {
+            resumed_at_ticks: 30_000,
+            counter_hz: 3_000_001,
+        };
+        assert_eq!(
+            non_integral_over.decide_with(contract, 3_000_001, || 30_751),
+            PiRootControlConsumedDecision::Reject,
+        );
     }
 
     #[cfg(feature = "kernel")]
@@ -47602,19 +47746,111 @@ mod tests {
             );
         }
 
-        let mut boundary_failure = PiRootControlConsumedWindow::Empty;
-        assert!(boundary_failure.begin_with(contract, 10, 1_000_000, || {
+        let mut missing_drain = PiRootControlConsumedWindow::Empty;
+        assert!(missing_drain.begin_with(contract, 10, 1_000_000, || {
             Some(PiRootControlConsumedSample {
                 consumed_us: 500,
                 sampled_at_ticks: 10,
             })
         }));
-        assert!(!boundary_failure.prepare_yield_boundary_with(contract, 11, 1_000_000, || None,));
+        assert!(missing_drain.prepare_yield_boundary_with(contract, 11, 1_000_000));
+        assert!(!missing_drain.resume_after_yield_with(contract, 12, 1_000_000, || None));
         assert_eq!(
-            boundary_failure,
+            missing_drain,
             PiRootControlConsumedWindow::Invalid(PiRootControlConsumedInvalid::ConsumedSample),
-            "a missing exact pre-Yield reset must latch admission closed",
+            "a missing post-Yield drain must latch admission closed",
         );
+
+        let mut reversed_resume = PiRootControlConsumedWindow::AwaitingResume {
+            prepared_at_ticks: 20,
+            counter_hz: 1_000_000,
+        };
+        assert!(
+            !reversed_resume.resume_after_yield_with(contract, 19, 1_000_000, || {
+                Some(PiRootControlConsumedSample {
+                    consumed_us: 0,
+                    sampled_at_ticks: 20,
+                })
+            })
+        );
+        assert!(matches!(
+            reversed_resume,
+            PiRootControlConsumedWindow::Invalid(PiRootControlConsumedInvalid::SampleCounter)
+        ));
+
+        let mut duplicate_resume = PiRootControlConsumedWindow::AwaitingResume {
+            prepared_at_ticks: 20,
+            counter_hz: 1_000_000,
+        };
+        assert!(
+            duplicate_resume.resume_after_yield_with(contract, 21, 1_000_000, || {
+                Some(PiRootControlConsumedSample {
+                    consumed_us: 0,
+                    sampled_at_ticks: 21,
+                })
+            })
+        );
+        assert!(
+            !duplicate_resume.resume_after_yield_with(contract, 22, 1_000_000, || {
+                Some(PiRootControlConsumedSample {
+                    consumed_us: 0,
+                    sampled_at_ticks: 22,
+                })
+            })
+        );
+        assert!(matches!(
+            duplicate_resume,
+            PiRootControlConsumedWindow::Invalid(PiRootControlConsumedInvalid::ConsumedSample)
+        ));
+
+        let mut frequency_drift = PiRootControlConsumedWindow::AwaitingResume {
+            prepared_at_ticks: 20,
+            counter_hz: 1_000_000,
+        };
+        assert!(
+            !frequency_drift.resume_after_yield_with(contract, 21, 999_999, || {
+                Some(PiRootControlConsumedSample {
+                    consumed_us: 0,
+                    sampled_at_ticks: 21,
+                })
+            })
+        );
+        assert!(matches!(
+            frequency_drift,
+            PiRootControlConsumedWindow::Invalid(PiRootControlConsumedInvalid::SampleCounter)
+        ));
+
+        let mut drain_counter_drift = PiRootControlConsumedWindow::AwaitingResume {
+            prepared_at_ticks: 20,
+            counter_hz: 1_000_000,
+        };
+        assert!(
+            !drain_counter_drift.resume_after_yield_with(contract, 21, 1_000_000, || Some(
+                PiRootControlConsumedSample {
+                    consumed_us: 0,
+                    sampled_at_ticks: 20,
+                }
+            ),)
+        );
+        assert!(matches!(
+            drain_counter_drift,
+            PiRootControlConsumedWindow::Invalid(PiRootControlConsumedInvalid::SampleCounter)
+        ));
+
+        for (observed_ticks, counter_hz) in [(19, 1_000_000), (21, 999_999)] {
+            let mut decision_drift = PiRootControlConsumedWindow::ReadyAfterYield {
+                resumed_at_ticks: 20,
+                counter_hz: 1_000_000,
+            };
+            assert_eq!(
+                decision_drift.decide_with(contract, counter_hz, || observed_ticks),
+                PiRootControlConsumedDecision::Invalid,
+            );
+            assert!(matches!(
+                decision_drift,
+                PiRootControlConsumedWindow::Invalid(PiRootControlConsumedInvalid::SampleCounter)
+            ));
+        }
     }
 
     #[cfg(feature = "kernel")]
@@ -47845,40 +48081,34 @@ mod tests {
         assert_eq!(pending.source, ConsoleInputSource::Serial);
         assert_eq!(pending.input_connection_id, None);
 
-        let premature_samples = core::cell::Cell::new(0u8);
         assert!(pump.service_pi_root_control_pending_with(
             pi_root_control_test_contract(),
-            10_099,
             1_000_000,
-            || {
-                premature_samples.set(premature_samples.get().saturating_add(1));
-                Some(PiRootControlConsumedSample {
-                    consumed_us: 0,
-                    sampled_at_ticks: 10_099,
-                })
-            },
+            || panic!("AwaitingYield must not take a final decision sample"),
         ));
-        assert_eq!(premature_samples.get(), 0);
         assert!(pump.pi_root_control_passive_admission_pending());
         assert_eq!(pump.metrics.denied_commands, 0);
         assert!(pump.prepare_pi_root_control_passive_admission_yield_with(
             pi_root_control_test_contract(),
             10_099,
             1_000_000,
-            || Some(PiRootControlConsumedSample {
-                consumed_us: 4_000,
-                sampled_at_ticks: 10_099,
-            }),
         ));
+        assert!(
+            pump.resume_pi_root_control_passive_admission_after_yield_with(
+                pi_root_control_test_contract(),
+                10_100,
+                1_000_000,
+                || Some(PiRootControlConsumedSample {
+                    consumed_us: 4_000,
+                    sampled_at_ticks: 10_100,
+                }),
+            )
+        );
 
         assert!(pump.service_pi_root_control_pending_with(
             pi_root_control_test_contract(),
-            10_100,
             1_000_000,
-            || Some(PiRootControlConsumedSample {
-                consumed_us: 249,
-                sampled_at_ticks: 10_105,
-            }),
+            || 10_101,
         ));
         assert!(!pump.pi_root_control_passive_admission_pending());
         assert_eq!(
@@ -47887,12 +48117,8 @@ mod tests {
         );
         assert!(!pump.service_pi_root_control_pending_with(
             pi_root_control_test_contract(),
-            20_105,
             1_000_000,
-            || Some(PiRootControlConsumedSample {
-                consumed_us: 0,
-                sampled_at_ticks: 20_105,
-            }),
+            || panic!("an empty pending slot must not sample"),
         ));
         assert_eq!(pump.metrics.denied_commands, 1);
     }
@@ -47943,11 +48169,18 @@ mod tests {
             pi_root_control_test_contract(),
             100,
             1_000_000,
-            || Some(PiRootControlConsumedSample {
-                consumed_us: 4_000,
-                sampled_at_ticks: 100,
-            }),
         ));
+        assert!(
+            pump.resume_pi_root_control_passive_admission_after_yield_with(
+                pi_root_control_test_contract(),
+                101,
+                1_000_000,
+                || Some(PiRootControlConsumedSample {
+                    consumed_us: 4_000,
+                    sampled_at_ticks: 101,
+                }),
+            )
+        );
         pump.refresh_pi_root_control_policy_time_if_ready(|pump| {
             policy_time_refreshes.set(policy_time_refreshes.get().saturating_add(1));
             pump.now_ms = 777;
@@ -47956,12 +48189,8 @@ mod tests {
         assert_eq!(pump.now_ms, 777, "fresh policy time precedes dispatch");
         assert!(pump.service_pi_root_control_pending_with(
             pi_root_control_test_contract(),
-            101,
             1_000_000,
-            || Some(PiRootControlConsumedSample {
-                consumed_us: 249,
-                sampled_at_ticks: 102,
-            }),
+            || 350,
         ));
 
         assert!(!pump.pi_root_control_passive_admission_pending());
@@ -47999,19 +48228,24 @@ mod tests {
             pi_root_control_test_contract(),
             100,
             1_000_000,
-            || Some(PiRootControlConsumedSample {
-                consumed_us: 5_000,
-                sampled_at_ticks: 100,
-            }),
         ));
+        assert!(
+            pump.resume_pi_root_control_passive_admission_after_yield_with(
+                pi_root_control_test_contract(),
+                101,
+                1_000_000,
+                || Some(PiRootControlConsumedSample {
+                    consumed_us: 5_000,
+                    sampled_at_ticks: 101,
+                }),
+            )
+        );
+        let final_bracket_ticks = core::cell::Cell::new(350u64);
+        final_bracket_ticks.set(351);
         assert!(pump.service_pi_root_control_pending_with(
             pi_root_control_test_contract(),
-            101,
             1_000_000,
-            || Some(PiRootControlConsumedSample {
-                consumed_us: 250,
-                sampled_at_ticks: 102,
-            }),
+            || final_bracket_ticks.get(),
         ));
 
         assert!(!pump.pi_root_control_passive_admission_pending());
@@ -48057,12 +48291,8 @@ mod tests {
         );
         assert!(!pump.service_pi_root_control_pending_with(
             pi_root_control_test_contract(),
-            103,
             1_000_000,
-            || Some(PiRootControlConsumedSample {
-                consumed_us: 0,
-                sampled_at_ticks: 104,
-            }),
+            || panic!("a completed refusal must not resample"),
         ));
         assert_eq!(pump.metrics.denied_commands, 1);
     }
@@ -48101,19 +48331,22 @@ mod tests {
                 pi_root_control_test_contract(),
                 100,
                 1_000_000,
-                || Some(PiRootControlConsumedSample {
-                    consumed_us: 5_000,
-                    sampled_at_ticks: 100,
-                }),
             ));
+            assert!(
+                pump.resume_pi_root_control_passive_admission_after_yield_with(
+                    pi_root_control_test_contract(),
+                    101,
+                    1_000_000,
+                    || Some(PiRootControlConsumedSample {
+                        consumed_us: 5_000,
+                        sampled_at_ticks: 101,
+                    }),
+                )
+            );
             assert!(pump.service_pi_root_control_pending_with(
                 pi_root_control_test_contract(),
-                101,
                 1_000_000,
-                || Some(PiRootControlConsumedSample {
-                    consumed_us: 250,
-                    sampled_at_ticks: 102,
-                }),
+                || 351,
             ));
 
             assert!(pump.pending_net_flush.active());
@@ -48129,7 +48362,7 @@ mod tests {
 
     #[cfg(all(feature = "kernel", feature = "net-console", feature = "release-pi4"))]
     #[test]
-    fn pi_root_control_pending_rechecks_recovery_after_fresh_sample() {
+    fn pi_root_control_pending_rechecks_recovery_before_final_sample() {
         let serial =
             SerialPort::<_, 4096, 4096, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<4096>::new());
         let timer = TestTimer::repeated(16, 1);
@@ -48154,29 +48387,32 @@ mod tests {
             pi_root_control_test_contract(),
             100,
             1_000_000,
-            || Some(PiRootControlConsumedSample {
-                consumed_us: 0,
-                sampled_at_ticks: 100,
-            }),
         ));
+        assert!(
+            pump.resume_pi_root_control_passive_admission_after_yield_with(
+                pi_root_control_test_contract(),
+                101,
+                1_000_000,
+                || Some(PiRootControlConsumedSample {
+                    consumed_us: 0,
+                    sampled_at_ticks: 101,
+                }),
+            )
+        );
         // The first service-boundary check sees no recovery. The injected
-        // publication becomes visible only after the consumed-time syscall.
+        // publication becomes visible at the final pre-sample recovery check.
         pump.pi_root_control_recovery_pending_test_countdown.set(1);
-        let samples = core::cell::Cell::new(0u8);
+        let final_samples = core::cell::Cell::new(0u8);
         assert!(pump.service_pi_root_control_pending_with(
             pi_root_control_test_contract(),
-            101,
             1_000_000,
             || {
-                samples.set(samples.get().saturating_add(1));
-                Some(PiRootControlConsumedSample {
-                    consumed_us: 0,
-                    sampled_at_ticks: 102,
-                })
+                final_samples.set(final_samples.get().saturating_add(1));
+                102
             },
         ));
 
-        assert_eq!(samples.get(), 1);
+        assert_eq!(final_samples.get(), 0);
         assert!(!pump.pi_root_control_passive_admission_pending());
         assert_eq!(pump.metrics.accepted_commands, 0);
         assert_eq!(pump.metrics.denied_commands, 1);
@@ -48253,24 +48489,11 @@ mod tests {
             ));
 
             pump.net_conn_id = Some(8);
-            let decision_samples = core::cell::Cell::new(0u8);
             assert!(pump.service_pi_root_control_pending_with(
                 pi_root_control_test_contract(),
-                10_100,
                 1_000_000,
-                || {
-                    decision_samples.set(decision_samples.get().saturating_add(1));
-                    Some(PiRootControlConsumedSample {
-                        consumed_us: 0,
-                        sampled_at_ticks: 10_100,
-                    })
-                },
+                || panic!("authority drift must cancel before the final sample"),
             ));
-            assert_eq!(
-                decision_samples.get(),
-                0,
-                "authority drift must cancel before sampling or dispatch",
-            );
             assert!(!pump.pi_root_control_passive_admission_pending());
             assert_eq!(pump.metrics.accepted_commands, 0);
             assert_eq!(pump.metrics.denied_commands, 1);
@@ -48310,24 +48533,11 @@ mod tests {
         ));
         pump.session_id = Some(42);
 
-        let decision_samples = core::cell::Cell::new(0u8);
         assert!(pump.service_pi_root_control_pending_with(
             pi_root_control_test_contract(),
-            10_100,
             1_000_000,
-            || {
-                decision_samples.set(decision_samples.get().saturating_add(1));
-                Some(PiRootControlConsumedSample {
-                    consumed_us: 0,
-                    sampled_at_ticks: 10_100,
-                })
-            },
+            || panic!("session drift must cancel before the final sample"),
         ));
-        assert_eq!(
-            decision_samples.get(),
-            0,
-            "session drift must cancel before sampling or dispatch",
-        );
         assert!(!pump.pi_root_control_passive_admission_pending());
         assert_eq!(pump.metrics.accepted_commands, 0);
         assert_eq!(pump.metrics.denied_commands, 1);
@@ -48363,20 +48573,11 @@ mod tests {
             } else {
                 pump.console_network_quarantine_cleanup_pending = true;
             }
-            let decision_samples = core::cell::Cell::new(0u8);
             assert!(pump.service_pi_root_control_pending_with(
                 pi_root_control_test_contract(),
-                10_100,
                 1_000_000,
-                || {
-                    decision_samples.set(decision_samples.get().saturating_add(1));
-                    Some(PiRootControlConsumedSample {
-                        consumed_us: 0,
-                        sampled_at_ticks: 10_100,
-                    })
-                },
+                || panic!("invalid environment must cancel before the final sample"),
             ));
-            assert_eq!(decision_samples.get(), 0, "invalidity={invalidity}");
             assert!(!pump.pi_root_control_passive_admission_pending());
             assert_eq!(pump.metrics.accepted_commands, 0);
             assert_eq!(pump.metrics.denied_commands, 1);

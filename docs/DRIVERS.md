@@ -1165,6 +1165,19 @@ transport:
   ambiguous, rejected, Reply-bearing, unsupported, and other-driver routes fail
   closed or retain their prior scheduler handoff and cannot fall back into this
   lane.
+- Within one CYW43 root-granted foreground turn, observing and consuming one
+  exact successful SDIO child terminal under a sealed ordinary firmware-chunk
+  or NVRAM-chunk parent does not consume that turn's sole new-submission slot.
+  After continuing from that exact accepted result, the runtime may publish at
+  most one following immutable child command in that same turn.
+  The new submission consumes the slot; a second new command is forbidden.
+  Fault terminals, every other parent operation, steady or persistent paths, a
+  still-pending child, issued-unknown state, identity or generation drift,
+  invalid replay, or a previously consumed slot admits no new child and
+  preserves the existing typed recovery/containment path. This
+  removes one scheduler edge at a successful completion-to-next-child boundary
+  without granting CYW43 physical-issuer authority, changing SDIO's
+  one-operation-per-command rule, or adding autonomous firmware progress.
 - The deferred physical WiFi supervisor may retain one root-control refill only
   through strict Operator/Driver alternation under the generated
   `root-control budget_us - wcet_us` CNTVCT reserve and a 64-productive-unit

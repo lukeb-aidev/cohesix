@@ -10520,15 +10520,24 @@ Changes:
     boot. Selected repository-managed seL4 source proves the accounting cause:
     MCS `handleYield` relinquishes the remaining refill, then restores actual
     `scConsumed`, so the capture-time baseline leaves parse unwind and rotor
-    work in the supposed fresh post-Yield sample. Retain that baseline for early
-    validation, reset `SchedContext_Consumed` a second time immediately before
-    the existing Yield with no intervening userland work, and decide once from
-    the bounded Yield tail plus resumed pre-dispatch work. Snapshot the cheap
-    recovery frontier first; an already-published fault cancels and performs
-    material recovery in the same turn, while a healthy retained command runs
-    before ordinary no-fault containment probes and retains the post-sample and
-    `CallArm` frontiers. Preserve strict `<250 us`, equality refusal, one
-    attempt/no retry, every MCS numeric and WCET, all driver owners and queues,
+    work in the supposed fresh post-Yield sample. The original second
+    pre-Yield Consumed-reset proposal is now disproven: that syscall clears
+    stored `scConsumed` evidence but cannot clear the live per-core
+    `ksConsumed` value which Yield preserves. Retain the baseline only for
+    validation, perform the existing Yield, capture `CNTVCT_EL0` as the first
+    resumed userland operation, then drain and discard the preserved Consumed
+    evidence once. Complete bounded policy, authority, environment, and
+    recovery preparation before the final admission sample, then decide from
+    the strict wall interval between the resumed capture and that final
+    admission/WCET cut. The strict comparison, direct dispatch, and bounded
+    response/epilogue remain inside the declared 2,500-us WCET. Snapshot the
+    cheap recovery frontier first; an
+    already-published fault cancels and performs material recovery in the same
+    turn, while a healthy retained command runs before ordinary no-fault
+    containment probes and retains the post-decision and `CallArm` frontiers.
+    Preserve strict `<250 us`, equality refusal, timer/frequency/counter drift
+    refusal, one attempt/no retry, every MCS numeric and WCET, all driver
+    owners and queues,
     schema 1.15, the 16-bit Pi root CNode, 256 executable Workers, hardware
     settings, public protocol, QEMU direct-VirtIO branch, `.coh` workloads, and
     benchmark arithmetic. The full host-tool suite, `tools/cohesix-py`,
@@ -10544,8 +10553,8 @@ Changes:
     `5ad7f4d0df188c7d311ebaaefabe4e4ab74182aeb01b6282fe6f49a1ac87659e`,
     image SHA-256
     `2247a83073ae8d7aaa5bf686f5af07458b3b97cd5c038bcb9a0f2f2540d007e6`,
-    serial diagnostics, and boot-paired `20260830-080743` captures prove the
-    pre-Yield evidence reset repairs the prior first-command self-lock:
+    serial diagnostics, and boot-paired `20260830-080743` captures prove that
+    candidate temporarily admits the prior first-command sequence:
     generation-bound `nettest` and its exact host peer pass, then
     `boot_v0.coh`, `tcp_basic.coh`, and `smp_parity.coh` pass first attempt.
     They also reject sustained service and latency closure. The next no-retry
@@ -10577,6 +10586,53 @@ Changes:
     gate; only fresh exact-image WiFi and GENET scripts, raw latency, and
     medium/high pressure can prove sustained function, the expected Gate-8
     reduction, or August parity.
+  - exact-bdb Pi resumed-lease and reciprocal-progress correction — exact
+    source `bdb33f82ca0b21b11e574073cb4c61516883d139`, build ID
+    `f2fea17d6b3fd31644769b7f92627f1c8204413d762535717a7f39d2aaea30d7`,
+    image ID
+    `ceb753d08404f1045f3539d00158b8485297623522e4a4b58a7650ba1a2e7053`,
+    image SHA-256
+    `48d24d8f2398c299dab6036e463b533baaa49cad3aa8e5802cee4ac89f1e2024`,
+    exact serial diagnostics, and boot-paired WiFi/USB captures prove root
+    readiness at 8.116 seconds, USB command readiness at 15.235 seconds, and
+    Gate 8 at 52.270 seconds. The sole supervisor begins at 1.415 seconds and
+    completes attach/control at 45.790 seconds after 5,227 turns, approximately
+    8.49 ms per turn; DHCP completes in approximately 205 ms. Established TCP
+    shows no loss or retransmission, but application response remains
+    193--250 ms and approximately 3.42 kB/s. The first passive command is
+    refused with `busy detail=root-sc-reserve`, medium/high REST pressure cannot
+    produce valid benchmark values, and the authenticated serial reboot is
+    blocked at the same boundary. This exact image supplies no GENET result and
+    proves neither sustained WiFi service/performance nor August parity.
+    Selected seL4 source disproves the second pre-Yield Consumed reset: it
+    clears stored `scConsumed` but cannot clear live per-core `ksConsumed`.
+    Retain one baseline validation sample, Yield once, capture `CNTVCT_EL0` as
+    the first resumed userland operation, drain and ignore the preserved
+    pre-Yield Consumed evidence once, then admit only when the exact
+    capture-to-final-admission/WCET-cut wall interval is strictly below
+    `budget_us - wcet_us = 250 us`; the strict comparison, direct dispatch,
+    and bounded response/epilogue remain inside the declared 2,500-us WCET.
+    Equality, timer-frequency drift,
+    backwards/missing evidence, accounting failure, or invalid period
+    conversion fails closed with no retry. In the CYW43 runtime, only an exact
+    successful child completion under a sealed ordinary firmware-chunk or
+    NVRAM-chunk parent may publish at most one following immutable SDIO child
+    in that same root-granted turn. A fault terminal, other parent operation,
+    steady or persistent path, pending child, stale/unknown identity, or
+    consumed submit slot admits no new child, and a turn can never publish two
+    new physical commands. This removes one avoidable reciprocal scheduling
+    edge in the dominant cold streaming phases while preserving the sole SDIO
+    physical issuer, every MCS numeric, generated manifest/profile, schema,
+    ABI, queue, timeout, retry, recovery, Reply, containment, Worker/CNode,
+    hardware, public protocol, and QEMU direct-VirtIO contract. The complete
+    host-tool suite, `tools/cohesix-py`, generated contracts, profiles and
+    consumers, selected manifests, `.coh` workloads, and benchmark arithmetic
+    and report schemas were reviewed and require no implementation change.
+    Focused source tests and the shared `root-mcs` QEMU canary can reject this
+    source candidate, but build, QEMU, static-profile, image, and flash results
+    cannot prove Pi behavior. Fresh exact-image WiFi and GENET scripts, raw
+    latency, and medium/high pressure are mandatory before any function,
+    speedup, or August-parity claim.
   - platform consistency — select the same v5 shared contract, including the
     v4-introduced bounded command batch, complete 256-Worker population, two
     passive-Worker executor-lane architecture, and passive-service locality

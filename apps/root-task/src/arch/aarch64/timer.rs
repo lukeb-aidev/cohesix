@@ -58,6 +58,7 @@ pub fn timer_period_cycles(freq_hz: u64, period_ms: u64) -> u64 {
 /// Read the EL0 virtual counter used by the Pi profile for telemetry and
 /// cooperative timer polling.
 #[must_use]
+#[inline(always)]
 pub fn timer_counter_ticks() -> u64 {
     #[cfg(all(feature = "timers-arch-counter", target_os = "none"))]
     {
@@ -98,7 +99,7 @@ enum TimerRegister {
 }
 
 #[cfg(all(feature = "timers-arch-counter", target_os = "none"))]
-#[inline]
+#[inline(always)]
 fn read_timer_register(register: TimerRegister) -> u64 {
     let value: u64;
     // SAFETY: `timers-arch-counter` is accepted only when the selected seL4

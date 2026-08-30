@@ -1517,27 +1517,40 @@ length-first behavior unchanged. Physical-Pi serial, local-seat, and TCP tests
 must prove raw input, echo, parsing, and root-owned diagnostics remain live
 even when passive dispatch admission is denied. Only a parsed command that may
 enter passive NineDoor samples `SchedContext_Consumed`: retain the exact parsed
-command and authority identity after one baseline/reset sample, then reset the
-evidence again immediately before exactly one selected periodic MCS Yield. The
-second reset is mandatory because the selected kernel `handleYield` restores
-actual pre-Yield `scConsumed` evidence after relinquishing the remaining
-refill. No userland operation may occur between that reset and `seL4_Yield`.
-On the first resumed activation, an already-published recovery preempts before
-policy work; otherwise a healthy retained command precedes ordinary material
-containment probes, refreshes policy time, and decides from one fresh sample.
-Only a value strictly below `budget_us - wcet_us`, currently 250 us, admits the
-command and leaves the complete 2,500 us root WCET; equality or excess emits
-one typed refusal and terminates without retry. Newly published
+command and authority identity after one baseline sample that validates the
+selected interface, then perform exactly one selected periodic MCS Yield. The
+selected syscall clears stored `scConsumed` evidence but cannot clear live
+per-core `ksConsumed`; therefore a second pre-Yield reset is not a fresh
+resume boundary. Immediately after Yield returns, the first userland operation
+must capture `CNTVCT_EL0`, after which one Consumed call drains and discards the
+preserved pre-Yield accounting. On the resumed activation, an already-published
+recovery preempts before policy work; otherwise a healthy retained command
+precedes ordinary material containment probes and completes bounded policy,
+authority, environment, and recovery preparation before the final admission
+sample. The strict wall interval ends at that final admission/WCET cut, not at
+an earlier policy sample. Only an interval strictly below
+`budget_us - wcet_us`, currently 250 us, admits the command and leaves the
+complete 2,500 us root WCET for the comparison, direct dispatch, and bounded
+response/epilogue; equality
+or excess emits one typed refusal and terminates without retry. Newly published
 isolated-service recovery, reboot, containment, quarantine, connection/session
-drift, invalid profile, backwards or missing timer evidence, and failure of
-either accounting sample must cancel or latch fail closed before dispatch,
-without projecting a response into a replacement connection. Focused tests
-must bind the selected kernel Yield semantics, prove one capture sample plus
-one pre-Yield reset, no work between reset and Yield, exact
+drift, invalid profile, zero or changed timer frequency, backwards/missing
+counter evidence, invalid period conversion, and failure of either the
+validation or drain accounting sample must cancel or latch fail closed before
+dispatch, without projecting a response into a replacement connection.
+Focused tests must bind the selected kernel Yield semantics, prove baseline
+validation plus an immediate post-Yield counter capture and one ignored drain,
+prove no userland operation precedes that counter capture, and cover exact
 one-command/one-dispatch retention, strict equality refusal without retry,
-fresh policy time, fault-before-dispatch cancellation before and after the
-decision sample, authority cancellation, and continued raw
+frequency drift, backwards/missing evidence, exact cross-multiplication without
+rounded-down admission, fresh policy time, fault-before-dispatch cancellation
+before and after the decision, authority cancellation, and continued raw
 serial/local-seat/TCP diagnostic liveness before retention.
+The exact release-Pi root-task ELF must also be disassembled after the clean
+image build and prove that the selected combined Yield/capture assembly block
+executes its `svc` immediately before the `CNTVCT_EL0` read, with no intervening
+userland instruction. Source order or a host build is not sufficient evidence
+for this target instruction-order contract.
 A `Closed` result at `CallArm`, `Call`, or recovered fault/timeout is terminal
 generation evidence,
 must preserve its exact stage through containment, and cannot reset or retry a
@@ -1566,21 +1579,52 @@ overflow, or recovery revocation. REST pressure stops at this first failed
 invariant. These artifacts prove neither sustained service nor GENET nor
 August parity.
 
-The focused source gate for the next candidate must prove that both Pi recovery
-and material-containment predicates take one fresh complete-service fault
-sample rather than resolving two fixed IDs through the 272-task generated
-table. Exercise empty, raw publication, intermediate publication, final
-handoff, ambiguous state, and contended handoff; every nonempty or uncertain
-service frontier remains pending. Preserve the recovery-first outer check, the
-post-consumed-time recovery recheck, and the final `CallArm` bracket. Assert
-that neither hot predicate calls the task-specific generated-table lookup and
-that no cached no-fault result, retry, relaxed equality, or timing-budget
-change is introduced. Run the focused Pi root-control, MCS activation-order,
-service-fault-frontier, service-CallArm, and isolated-VirtIO phasing suites,
-then the canonical QEMU `root-mcs` TCP/NineDoor canary. Those are rejection
-gates only. Fresh exact-image WiFi and GENET runs remain mandatory to measure
-Gate-8 time, sustained raw latency, first-attempt scripts, and medium/high
-pressure against August 10.
+Exact source `bdb33f82ca0b21b11e574073cb4c61516883d139`, build ID
+`f2fea17d6b3fd31644769b7f92627f1c8204413d762535717a7f39d2aaea30d7`,
+image ID
+`ceb753d08404f1045f3539d00158b8485297623522e4a4b58a7650ba1a2e7053`,
+and image SHA-256
+`48d24d8f2398c299dab6036e463b533baaa49cad3aa8e5802cee4ac89f1e2024`
+bind the next WiFi observation. Root is ready at 8.116 seconds, USB command
+readiness at 15.235 seconds, and Gate 8 at 52.270 seconds. The sole bootstrap
+supervisor begins at 1.415 seconds and completes attach/control at
+45.790 seconds after 5,227 turns, approximately 8.49 ms per turn; DHCP then
+completes in approximately 205 ms. The boot-paired capture shows established
+TCP without loss or retransmission, but application response remains
+193--250 ms and approximately 3.42 kB/s. The first passive command is refused
+with `busy detail=root-sc-reserve`, so canonical script completion and valid
+medium/high REST results are unavailable. The authenticated reboot cannot pass
+that same passive boundary; this exact image therefore supplies no GENET
+result. These are exact-image convergence observations, not sustained WiFi
+service/performance, August-parity, GENET, or acceptance evidence.
+
+The next candidate corrects two source invariants. Passive admission must use
+the immediate post-Yield wall lease and ignored preserved-accounting drain
+specified above, not a second pre-Yield Consumed reset. CYW43 may, within one
+root-granted turn, consume one exact successful child completion only for a
+sealed ordinary firmware-chunk or NVRAM-chunk parent and publish at most one
+following immutable SDIO child; a fault terminal, other parent operation,
+steady or persistent path, pending child, identity drift, unknown issue state,
+or already-used submit slot admits no new child, and no turn may publish two
+new physical commands. Deterministic source
+tests plus the canonical QEMU `root-mcs` canary can reject these corrections,
+but even a clean build and QEMU run cannot establish their Pi timing or
+hardware effect. Fresh exact-image WiFi and GENET runs remain mandatory.
+
+The focused source gate for this candidate must prove validation, Yield,
+immediate timer capture, preserved-accounting drain, recovery recheck, and
+dispatch in that order. It must cover strict-below admission, equality and
+excess refusal, counter/frequency drift, missing accounting evidence, and no
+retry or response projection across authority drift. CYW43 runtime tests must
+cover successful completion followed by exactly one new child submit, refusal
+of a second new submit, fault and pending-child denial, stale/unknown identity,
+and replay idempotence. Preserve the recovery-first outer check and final
+`CallArm` bracket. Run the focused Pi root-control and MCS activation-order
+suite, the complete linked-runtime library tests, then the canonical QEMU
+`root-mcs` TCP/NineDoor canary. Those are rejection gates only. Fresh
+exact-image WiFi and GENET runs remain mandatory to measure Gate-8 time,
+sustained raw latency, first-attempt scripts, and medium/high pressure against
+August 10.
 
 The CYW43 software and cadence closure gate is authorized by Milestone 26d
 tasks `m26d-cyw43-hardware-free-closure` and

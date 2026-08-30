@@ -1156,8 +1156,10 @@ no GENET boot evidence and cannot qualify either network mode.
 The correction keeps mediated WiFi handoff signal-only, retains guarded
 `SchedContext_YieldTo` only for direct GENET, classifies admitted MCS
 notifications by badge before stale `MessageInfo`, and gates only parsed
-physical-Pi commands that can enter passive NineDoor with one baseline/reset
-sample, one mandatory periodic MCS Yield boundary, and one fresh decision.
+physical-Pi commands that can enter passive NineDoor with one baseline
+accounting sample used only for validation, one mandatory periodic MCS Yield
+boundary, an immediate post-Yield `CNTVCT_EL0` capture, one ignored
+preserved-accounting drain, and one strict wall-lease decision.
 Raw serial, USB/local-seat, and TCP ingress plus root-owned diagnostics remain
 live. Passive dispatch admits only below the checked 250 us
 `budget_us - wcet_us` limit, leaving the complete 2,500 us WCET inside the
@@ -1192,18 +1194,28 @@ are diagnostic provenance only, not sealed acceptance evidence.
 Selected seL4 source explains the refusal: MCS `handleYield` relinquishes the
 remaining refill, then restores actual pre-Yield `scConsumed`. The capture-time
 baseline therefore cannot make the resumed decision fresh; parse unwind and
-rotor work survive the Yield and can consume the entire 250-us margin. The next
-candidate retains the capture baseline for early validation, takes a second
-`SchedContext_Consumed` reset immediately before the existing Yield, and runs
-no userland work between them. On resume, an already-published fault still
-cancels and enters material recovery in the same turn; a healthy retained
-command runs before no-fault containment probes, includes its bounded policy
-prelude in the final sample, rechecks recovery after sampling, and retains the
-`CallArm` frontier. Every root/driver MCS number, owner, queue, manifest,
-schema, CNode/Worker allocation, retry bound, public protocol, QEMU branch, and
-hardware setting remains unchanged. Source tests and QEMU can reject this
-candidate, but only fresh exact-image WiFi and GENET scripts, raw framed tests,
-and medium/high benchmarks can prove function or August-performance parity.
+rotor work survive the Yield and can consume the entire 250-us margin. A later
+selected-kernel audit disproves the proposed second pre-Yield reset: the
+Consumed syscall clears stored `scConsumed` evidence but cannot clear live
+per-core `ksConsumed`, which Yield preserves into the resumed accounting. The
+correct candidate retains the baseline only for validation, then performs the
+existing Yield. Its first userland operation after Yield captures
+`CNTVCT_EL0`; only then does one Consumed call drain and discard the preserved
+pre-Yield evidence. An already-published fault still cancels and enters
+material recovery in the same turn; a healthy retained command runs before
+no-fault containment probes and completes its bounded policy, authority,
+environment, and recovery preparation before the final admission sample. That
+sample closes the strict post-Yield-capture-to-final-admission/WCET-cut wall
+lease. The comparison, direct dispatch, and bounded response/epilogue remain
+inside the declared 2,500-us WCET, with `CallArm` retaining the final fault
+frontier. Equality at 250 us, timer-frequency drift, backwards or
+missing evidence, accounting failure, or invalid period conversion fails
+closed.
+Every root/driver MCS number, owner, queue, manifest, schema, CNode/Worker
+allocation, retry bound, public protocol, QEMU branch, and hardware setting
+remains unchanged. Source tests and QEMU can reject this candidate, but only
+fresh exact-image WiFi and GENET scripts, raw framed tests, and medium/high
+benchmarks can prove function or August-performance parity.
 
 Exact source `91b2c529cea01d0e6c857570b315963c5bf153ad`, image ID
 `5ad7f4d0df188c7d311ebaaefabe4e4ab74182aeb01b6282fe6f49a1ac87659e`,
@@ -1231,6 +1243,37 @@ reduce Gate-8 time with unchanged clean SDIO/CYW43 evidence, pass sustained
 first-attempt `ATTACH` and raw framed traffic, and then repeat medium/high
 pressure separately on WiFi and GENET. Build, QEMU, flash, and a single
 successful command remain non-hardware or incomplete evidence.
+
+Exact source `bdb33f82ca0b21b11e574073cb4c61516883d139`, build ID
+`f2fea17d6b3fd31644769b7f92627f1c8204413d762535717a7f39d2aaea30d7`,
+image ID
+`ceb753d08404f1045f3539d00158b8485297623522e4a4b58a7650ba1a2e7053`,
+and image SHA-256
+`48d24d8f2398c299dab6036e463b533baaa49cad3aa8e5802cee4ac89f1e2024`
+bind the next exact WiFi run. Root is ready at 8.116 seconds, USB command
+readiness at 15.235 seconds, and Gate 8 at 52.270 seconds. The sole supervisor
+begins at 1.415 seconds and completes attach/control at 45.790 seconds after
+5,227 turns, approximately 8.49 ms per turn; DHCP completes in approximately
+205 ms. Its boot-paired capture shows established TCP with no loss or
+retransmission, while application response remains 193--250 ms and throughput
+approximately 3.42 kB/s. The first passive command is refused with
+`busy detail=root-sc-reserve`; medium/high REST runs therefore stop before a
+valid benchmark sample. The same passive boundary prevents the authenticated
+serial reboot, so this run contains no GENET result. It proves neither WiFi
+service/performance nor GENET behavior nor August parity.
+
+The corresponding source-only candidate uses the corrected strict post-Yield
+wall lease above. It also lets a CYW43 root-granted turn consume one exact
+successful child completion under a sealed ordinary firmware-chunk or
+NVRAM-chunk parent and publish at most one following immutable SDIO child. A
+fault terminal, other parent operation, steady or persistent path, pending
+child, stale/unknown identity, or already-used submit slot cannot publish
+another child, and two new physical submissions in one turn remain forbidden.
+This removes one avoidable reciprocal scheduler edge in the dominant cold
+streaming phases without adding persistent firmware authority, changing an MCS
+numeric, or creating another physical issuer. Build, QEMU, static-profile,
+image, flash, and source-test results remain non-hardware evidence until a
+fresh exact-image Pi run measures the effect separately on WiFi and GENET.
 
 For the earlier exact `24e1c1c7778a3dc7ad8460c9ef644992814e41a5` paired wired
 regression, GENET reaches DHCP and legacy ARP before the old direct handoff

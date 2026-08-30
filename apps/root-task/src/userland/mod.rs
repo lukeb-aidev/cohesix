@@ -373,7 +373,9 @@ fn activate_root_control_temporal_or_fail(ctx: &BootContext) {
             // replenishment begins with the first containment probe or
             // EventPump phase; no output or helper may spend that first
             // admitted root-control budget here.
-            Ok(()) => sel4::yield_now(),
+            Ok(()) => {
+                let _ = sel4::yield_now();
+            }
             Err(error) => {
                 log::error!(
                     target: "root_task::kernel",
@@ -497,17 +499,21 @@ where
 
         // A retained passive command owns the first resumed root operation.
         // The service method rechecks recovery, containment, reboot,
-        // quarantine, and authority before its decision sample and repeats the
-        // recovery check immediately after it. A fault that crosses the outer
-        // snapshot therefore cancels and yields instead of dispatching.
+        // quarantine, and authority before its reserve decision and repeats
+        // recovery immediately before the final CNTVCT bracket. A fault that
+        // crosses the outer snapshot therefore cancels and yields instead of
+        // dispatching.
         // Healthy no-fault material probes must not spend the 250-us margin
-        // measured after the exact Yield boundary reset.
+        // measured from the exact Yield-return boundary.
         if !passive_recovery_preempted
             && pump.pi_root_control_passive_admission_pending()
             && pump.service_pi_root_control_passive_admission()
         {
-            let _ = pump.prepare_pi_root_control_passive_admission_yield();
-            sel4::yield_now();
+            let passive_boundary_prepared = pump.prepare_pi_root_control_passive_admission_yield();
+            let resumed_at_ticks = sel4::yield_now();
+            if passive_boundary_prepared {
+                pump.resume_pi_root_control_passive_admission_after_yield(resumed_at_ticks);
+            }
             continue;
         }
 
@@ -591,8 +597,11 @@ where
         )))]
         let _ = hal_ptr;
         if explicit_yield_required {
-            let _ = pump.prepare_pi_root_control_passive_admission_yield();
-            sel4::yield_now();
+            let passive_boundary_prepared = pump.prepare_pi_root_control_passive_admission_yield();
+            let resumed_at_ticks = sel4::yield_now();
+            if passive_boundary_prepared {
+                pump.resume_pi_root_control_passive_admission_after_yield(resumed_at_ticks);
+            }
         }
     }
 }
@@ -609,8 +618,11 @@ where
 {
     loop {
         if pump.poll_root_control_quantum() {
-            let _ = pump.prepare_pi_root_control_passive_admission_yield();
-            sel4::yield_now();
+            let passive_boundary_prepared = pump.prepare_pi_root_control_passive_admission_yield();
+            let resumed_at_ticks = sel4::yield_now();
+            if passive_boundary_prepared {
+                pump.resume_pi_root_control_passive_admission_after_yield(resumed_at_ticks);
+            }
         }
     }
 }
@@ -981,8 +993,11 @@ fn deferred_cyw43_yield_and_reset<
     // command, this is its sole selected MCS boundary. Preparing here keeps
     // every deferred-supervisor yield pending-aware without allowing another
     // driver or ordinary EventPump unit between the baseline sample and Yield.
-    let _ = pump.prepare_pi_root_control_passive_admission_yield();
-    sel4::yield_now();
+    let passive_boundary_prepared = pump.prepare_pi_root_control_passive_admission_yield();
+    let resumed_at_ticks = sel4::yield_now();
+    if passive_boundary_prepared {
+        pump.resume_pi_root_control_passive_admission_after_yield(resumed_at_ticks);
+    }
     window.reset();
 }
 
@@ -3001,9 +3016,9 @@ where
                 continue;
             }
             DeferredCyw43RootControlTurn::PassiveAdmission => {
-                // AwaitingYield performs no sample; ReadyAfterYield refreshes
-                // policy time, samples once, and terminates by dispatch or
-                // typed refusal. Either outcome exclusively owns this turn.
+                // AwaitingYield performs no decision; ReadyAfterYield refreshes
+                // policy time and terminates by dispatch or typed refusal.
+                // Either outcome exclusively owns this turn.
                 let serviced = pump.service_pi_root_control_passive_admission();
                 debug_assert!(serviced);
                 deferred_cyw43_yield_and_reset(pump, &mut activation_window);
@@ -3788,7 +3803,7 @@ where
             pump.poll_cyw43_bootstrap_supervisor_event_turn();
             if pump.pi_root_control_passive_admission_pending() {
                 // The operator turn may have parsed the exact command and
-                // captured its baseline/reset sample. Do not consume a
+                // captured its baseline accounting sample. Do not consume a
                 // sideband batch or issue a CYW43 operation before its sole
                 // selected scheduler boundary.
                 deferred_cyw43_yield_and_reset(pump, &mut activation_window);

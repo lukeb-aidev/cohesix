@@ -1388,12 +1388,14 @@ pub fn activate_root_control_temporal_runtime(
 ///
 /// The syscall resets only the kernel's consumed-time evidence. It neither
 /// replenishes the scheduling context nor proves a fresh budget. The EventPump
-/// uses one capture baseline and a second reset immediately before one
-/// mandatory selected periodic MCS Yield boundary because that kernel Yield
-/// preserves actual pre-Yield `scConsumed` evidence. The first resumed
-/// activation refreshes policy time and admits a retained passive command only
-/// from one immediate fresh sample below the generated budget-minus-WCET
-/// reserve. Equality or excess refuses that command; sampling never retries or
+/// uses one baseline sample to validate this selected interface, then performs
+/// one mandatory periodic MCS Yield. Because that Yield preserves live
+/// pre-Yield `ksConsumed` accounting, the first resumed userland operation is a
+/// `CNTVCT_EL0` capture and the following Consumed call only drains and discards
+/// the preserved evidence. After bounded policy and authority preparation, a
+/// final counter sample closes the wall-time admission interval. Only a strict
+/// interval below the generated budget-minus-WCET reserve admits the retained
+/// passive command; equality or excess refuses it. Sampling never retries or
 /// substitutes for the scheduler's replenishment semantics.
 #[cfg(sel4_config_kernel_mcs)]
 pub fn root_control_consumed_time_us() -> Result<u64, CriticalTcbConstructionError> {
