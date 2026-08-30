@@ -385,6 +385,13 @@ QEMU direct-VirtIO retains the strict lower rotor: `ObserveChild`,
 `StageOutput`, `Disconnect`, then `ServiceTick`. Direct GENET alone selects an exact
 ready `StageOutput`, then an exact ready `Disconnect`; when neither is ready it
 alternates `ObserveChild` and `ServiceTick`, exactly one unit per Network visit.
+After an exact committed direct-GENET `StageOutput` returns from its same-core
+child `YieldTo`, root may consume and ACK only the causal sequence-last child
+publication in that same selected unit. Absence, backpressure, unrelated
+output, identity drift, or fault leaves any observed ACK pending for the
+ordinary `ObserveChild` turn; mediated WiFi and QEMU never enter the fused
+observation. Exact stage-plus-drain progress accounts both child
+calls and cannot pass a second command ahead of the response lane.
 After a mandatory Yield, direct GENET may retain another complete ordinary
 five-phase root quantum only while one accepted command and its response-stage
 unit make durable progress and the authenticated generation and connection remain
@@ -406,6 +413,14 @@ every physical-operator, recovery, containment, reboot, quarantine, identity,
 acceptance-count, or prior-operation conflict denies it. This changes no SC,
 affinity, core, priority, queue, child authority, or QEMU selector. CYW43 keeps
 the distinct guarded 250-us/64-unit contract above.
+
+A parsed passive-service command may survive one expired strict reserve lease
+only by crossing a completely new explicit Yield/refill. The new attempt starts
+from `AwaitingYield`, drains fresh Consumed evidence, rechecks the exact command,
+session, connection, recovery, containment, quarantine, reboot, and fault
+identity, and still requires elapsed wall strictly below 250 us. A second
+expiry emits the existing single typed refusal. No sliding window, same-refill
+resample, unbounded retry, or MCS numeric change is authorized.
 
 The handoff-to-Ready response bound is evaluated in the isolated child's
 absolute CNTVCT millisecond domain, not the pump-driven HAL policy clock. Root

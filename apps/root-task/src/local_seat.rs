@@ -729,13 +729,19 @@ struct LinkedHdmiSnapshotGeometry {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum LinkedHdmiPayloadReceipt {
     None,
-    QueuedOutput,
+    QueuedOutput {
+        payload_bytes: usize,
+        completes_scroll_fence: bool,
+        scroll_fence_line_generation: u64,
+        scroll_fence_tail_sequence: u64,
+    },
     Redraw {
         final_chunk: bool,
     },
     ScrollStep {
         target_offset: usize,
         mirrored_line_generation: u64,
+        mirrored_tail_sequence: u64,
     },
     InputRow {
         generation: u64,
@@ -921,20 +927,21 @@ pub(crate) const fn local_seat_hdmi_prompt_ready_for_root_state(
 ///
 /// The prompt is a usability contract: when it is visible, USB command input
 /// must already be admitted and the canonical HDMI ready banner must already
-/// be queued. Serial remains independently interactive while USB and HDMI
+/// have completed on the display runtime. Serial remains independently
+/// interactive while USB and HDMI
 /// converge.
 #[must_use]
 pub(crate) const fn local_seat_hdmi_prompt_ready_for_display_state(
     physical_pi_owner_state: bool,
     root_console_ready: bool,
     usb_command_ready: bool,
-    console_ready_line_emitted: bool,
+    console_ready_line_completed: bool,
     _display_idle: bool,
     display_retry_idle: bool,
 ) -> bool {
     local_seat_hdmi_prompt_ready_for_root_state(physical_pi_owner_state, root_console_ready)
         && (!physical_pi_owner_state
-            || (usb_command_ready && console_ready_line_emitted && display_retry_idle))
+            || (usb_command_ready && console_ready_line_completed && display_retry_idle))
 }
 
 /// Return whether a deferred HDMI prompt may be released to the operator.
@@ -987,24 +994,21 @@ pub(crate) const CYW43_READY_TO_USE_HDMI_PREFIX: &str = "[drivers] WiFi ready to
 fn local_seat_cyw43_stale_ready_line(line: &str) -> bool {
     line.starts_with("[drivers] WiFi Gate 8 stable;")
         || line.starts_with(CYW43_READY_TO_USE_HDMI_PREFIX)
-        || line == "Cohesix console ready"
 }
 
 /// Return whether HDMI may publish the final interactive-console banner.
 ///
-/// Serial and buffered USB command handling remain live while deferred Wi-Fi
-/// bootstrap owns its linked-runtime turns. This final ready banner waits for
-/// both that finite episode and USB command admission. The interactive HDMI
-/// prompt is separately gated by current USB command readiness and display
-/// health.
+/// This is a local-console contract, not a network-readiness claim. The banner
+/// becomes due after root and USB command admission even while deferred Wi-Fi
+/// bootstrap continues. The interactive prompt separately waits for the exact
+/// banner frame completion and current display health.
 #[must_use]
 pub(crate) const fn local_seat_hdmi_console_ready_line_due(
     root_console_ready: bool,
-    bootstrap_terminal: bool,
     usb_command_ready: bool,
     ready_line_emitted: bool,
 ) -> bool {
-    root_console_ready && bootstrap_terminal && usb_command_ready && !ready_line_emitted
+    root_console_ready && usb_command_ready && !ready_line_emitted
 }
 
 /// Return whether an attached HDMI runtime still needs its first snapshot.
@@ -1018,9 +1022,9 @@ pub(crate) const fn local_seat_hdmi_initial_snapshot_due(
 
 /// Return whether USB input may be echoed onto the interactive HDMI row.
 ///
-/// Wi-Fi terminal state gates only the final Ready banner. Once the root
-/// console accepts keyboard input, the prompt and typed characters remain
-/// visible during Wi-Fi startup, quarantine, and terminal failure as well.
+/// Once the root console accepts keyboard input, the prompt and typed
+/// characters remain visible during Wi-Fi startup, quarantine, and terminal
+/// failure. Network state does not gate this local-console surface.
 #[must_use]
 pub(crate) const fn local_seat_hdmi_input_echo_allowed(root_console_ready: bool) -> bool {
     root_console_ready
@@ -2021,6 +2025,10 @@ pub struct LocalSeatRuntime {
     hdmi_active_redraw_input_generation: u64,
     hdmi_active_redraw_line_generation: u64,
     hdmi_last_payload_receipt: LinkedHdmiPayloadReceipt,
+    hdmi_scroll_output_fence_active: bool,
+    hdmi_scroll_output_fence_bytes: usize,
+    hdmi_scroll_output_fence_line_generation: u64,
+    hdmi_scroll_output_fence_tail_sequence: u64,
     #[cfg(all(
         feature = "kernel",
         feature = "usb",
@@ -2040,6 +2048,9 @@ pub struct LocalSeatRuntime {
     hdmi_initial_snapshot_scheduled: bool,
     hdmi_bootstrap_terminal_ready: bool,
     hdmi_console_ready_line_emitted: bool,
+    hdmi_console_ready_line_completed: bool,
+    hdmi_console_ready_line_generation: u64,
+    hdmi_console_ready_pending_bytes: usize,
     #[cfg(all(
         feature = "kernel",
         feature = "usb",
@@ -2228,6 +2239,10 @@ impl LocalSeatRuntime {
             hdmi_active_redraw_input_generation: 0,
             hdmi_active_redraw_line_generation: 0,
             hdmi_last_payload_receipt: LinkedHdmiPayloadReceipt::None,
+            hdmi_scroll_output_fence_active: false,
+            hdmi_scroll_output_fence_bytes: 0,
+            hdmi_scroll_output_fence_line_generation: 0,
+            hdmi_scroll_output_fence_tail_sequence: 0,
             #[cfg(all(
                 feature = "kernel",
                 feature = "usb",
@@ -2247,6 +2262,9 @@ impl LocalSeatRuntime {
             hdmi_initial_snapshot_scheduled: false,
             hdmi_bootstrap_terminal_ready: true,
             hdmi_console_ready_line_emitted: false,
+            hdmi_console_ready_line_completed: false,
+            hdmi_console_ready_line_generation: 0,
+            hdmi_console_ready_pending_bytes: 0,
             #[cfg(all(
                 feature = "kernel",
                 feature = "usb",
@@ -2862,7 +2880,7 @@ impl LocalSeatRuntime {
             physical_pi_owner_state,
             self.root_console_ready,
             self.usb_keyboard_command_ready_latched(),
-            self.hdmi_console_ready_line_emitted,
+            self.hdmi_console_ready_line_completed,
             !self.linked_hdmi_pending_work(),
             self.hdmi_no_reply_cooldown == 0
                 && self.hdmi_redraw_no_reply_streak == 0
@@ -2988,7 +3006,9 @@ impl LocalSeatRuntime {
         } else if !self.usb_keyboard_command_ready_latched() {
             "usb-command-pending"
         } else if !self.hdmi_console_ready_line_emitted {
-            "console-ready-pending"
+            "console-ready-queue-pending"
+        } else if !self.hdmi_console_ready_line_completed {
+            "console-ready-completion-pending"
         } else if self.hdmi_no_reply_cooldown != 0
             || self.hdmi_redraw_no_reply_streak != 0
             || self.hdmi_stale_after_retry_exhaustion
@@ -3186,13 +3206,14 @@ impl LocalSeatRuntime {
     fn emit_linked_hdmi_console_ready_if_due(&mut self, usb_command_ready: bool) {
         if !local_seat_hdmi_console_ready_line_due(
             self.root_console_ready,
-            self.hdmi_bootstrap_terminal_ready,
             usb_command_ready,
             self.hdmi_console_ready_line_emitted,
         ) {
             return;
         }
         self.hdmi_console_ready_line_emitted = true;
+        self.hdmi_console_ready_line_completed = false;
+        self.hdmi_console_ready_pending_bytes = 0;
         #[cfg(any(
             test,
             all(
@@ -3211,6 +3232,13 @@ impl LocalSeatRuntime {
             } else {
                 self.mirror_linked_hdmi_line_owner_state("Cohesix console ready");
             }
+            self.hdmi_console_ready_line_generation = self.mirrored_line_generation;
+            if !self.linked_hdmi_redraw_pending() {
+                self.hdmi_console_ready_pending_bytes = self.hdmi_pending_bytes.len();
+                if self.hdmi_console_ready_pending_bytes == 0 {
+                    self.request_linked_hdmi_snapshot_redraw();
+                }
+            }
         }
         #[cfg(not(any(
             test,
@@ -3223,6 +3251,7 @@ impl LocalSeatRuntime {
         )))]
         {
             self.mirror_line("Cohesix console ready");
+            self.hdmi_console_ready_line_completed = true;
         }
     }
 
@@ -3318,6 +3347,10 @@ impl LocalSeatRuntime {
         }
         self.hdmi_pending_high_impact = false;
         self.hdmi_high_impact_bytes_remaining = 0;
+        self.clear_linked_hdmi_scroll_output_fence();
+        if self.hdmi_console_ready_line_emitted && !self.hdmi_console_ready_line_completed {
+            self.hdmi_console_ready_pending_bytes = 0;
+        }
         self.hdmi_pending_redraw = true;
         self.hdmi_stale_after_retry_exhaustion = false;
     }
@@ -3522,14 +3555,57 @@ impl LocalSeatRuntime {
             };
             return Some((payload, "keyboard-scrollback", true));
         }
+        if self.hdmi_scroll_output_fence_active {
+            if self.hdmi_scroll_output_fence_bytes == 0 {
+                self.hdmi_rendered_viewport_valid = false;
+                self.request_linked_hdmi_snapshot_redraw();
+                return None;
+            }
+            let payload = Self::pop_linked_hdmi_chunk_with_limit(
+                &mut self.hdmi_pending_bytes,
+                self.hdmi_scroll_output_fence_bytes,
+            );
+            if payload.is_empty() {
+                self.hdmi_rendered_viewport_valid = false;
+                self.request_linked_hdmi_snapshot_redraw();
+                return None;
+            }
+            self.hdmi_scroll_output_fence_bytes = self
+                .hdmi_scroll_output_fence_bytes
+                .saturating_sub(payload.len());
+            if self.hdmi_pending_high_impact {
+                self.hdmi_high_impact_bytes_remaining = self
+                    .hdmi_high_impact_bytes_remaining
+                    .saturating_sub(payload.len());
+                if self.hdmi_high_impact_bytes_remaining == 0 {
+                    self.hdmi_pending_high_impact = false;
+                }
+            }
+            self.hdmi_last_payload_receipt = LinkedHdmiPayloadReceipt::QueuedOutput {
+                payload_bytes: payload.len(),
+                completes_scroll_fence: self.hdmi_scroll_output_fence_bytes == 0,
+                scroll_fence_line_generation: self.hdmi_scroll_output_fence_line_generation,
+                scroll_fence_tail_sequence: self.hdmi_scroll_output_fence_tail_sequence,
+            };
+            return Some((payload, "queued-output", false));
+        }
         if let Some((payload, target_offset)) = self.next_linked_hdmi_scroll_step_payload() {
+            let Some(mirrored_tail_sequence) = self.linked_hdmi_tail_sequence() else {
+                self.hdmi_rendered_viewport_valid = false;
+                self.request_linked_hdmi_snapshot_redraw();
+                return None;
+            };
             self.hdmi_last_payload_receipt = LinkedHdmiPayloadReceipt::ScrollStep {
                 target_offset,
                 mirrored_line_generation: self.mirrored_line_generation,
+                mirrored_tail_sequence,
             };
             return Some((payload, "keyboard-scroll-step", false));
         }
-        if self.hdmi_pending_high_impact && !self.hdmi_pending_bytes.is_empty() {
+        if self.hdmi_scrollback_offset == 0
+            && self.hdmi_pending_high_impact
+            && !self.hdmi_pending_bytes.is_empty()
+        {
             let payload = Self::pop_linked_hdmi_chunk_with_limit(
                 &mut self.hdmi_pending_bytes,
                 self.hdmi_high_impact_bytes_remaining,
@@ -3540,7 +3616,12 @@ impl LocalSeatRuntime {
             if self.hdmi_high_impact_bytes_remaining == 0 {
                 self.hdmi_pending_high_impact = false;
             }
-            self.hdmi_last_payload_receipt = LinkedHdmiPayloadReceipt::QueuedOutput;
+            self.hdmi_last_payload_receipt = LinkedHdmiPayloadReceipt::QueuedOutput {
+                payload_bytes: payload.len(),
+                completes_scroll_fence: false,
+                scroll_fence_line_generation: 0,
+                scroll_fence_tail_sequence: 0,
+            };
             return Some((payload, "queued-output", false));
         }
         if self.hdmi_input_row_dirty
@@ -3556,7 +3637,7 @@ impl LocalSeatRuntime {
                 false,
             ));
         }
-        if self.hdmi_pending_bytes.is_empty() {
+        if self.hdmi_pending_bytes.is_empty() || self.hdmi_scrollback_offset != 0 {
             return None;
         }
         let payload = Self::pop_linked_hdmi_chunk(&mut self.hdmi_pending_bytes);
@@ -3564,7 +3645,12 @@ impl LocalSeatRuntime {
             self.hdmi_pending_high_impact = false;
             self.hdmi_high_impact_bytes_remaining = 0;
         }
-        self.hdmi_last_payload_receipt = LinkedHdmiPayloadReceipt::QueuedOutput;
+        self.hdmi_last_payload_receipt = LinkedHdmiPayloadReceipt::QueuedOutput {
+            payload_bytes: payload.len(),
+            completes_scroll_fence: false,
+            scroll_fence_line_generation: 0,
+            scroll_fence_tail_sequence: 0,
+        };
         Some((payload, "queued-output", false))
     }
 
@@ -3696,6 +3782,57 @@ impl LocalSeatRuntime {
         Some((payload, target_offset))
     }
 
+    fn linked_hdmi_receipt_offset(
+        &self,
+        target_offset: usize,
+        mirrored_line_generation: u64,
+        mirrored_tail_sequence: u64,
+    ) -> Option<usize> {
+        if self.mirrored_line_generation_wrapped
+            || self
+                .mirrored_line_generation
+                .checked_sub(mirrored_line_generation)
+                .is_none()
+        {
+            return None;
+        }
+        let current_tail_sequence = self.linked_hdmi_tail_sequence()?;
+        let tail_delta = current_tail_sequence.checked_sub(mirrored_tail_sequence)?;
+        let tail_delta = usize::try_from(tail_delta).ok()?;
+        target_offset
+            .checked_add(tail_delta)
+            .filter(|offset| *offset <= self.max_linked_hdmi_scrollback_offset())
+    }
+
+    fn linked_hdmi_console_ready_line_canonical(&self) -> bool {
+        self.mirrored_lines
+            .iter()
+            .any(|line| line.as_str() == "Cohesix console ready")
+    }
+
+    fn record_linked_hdmi_console_ready_output_success(&mut self, payload_bytes: usize) {
+        if !self.hdmi_console_ready_line_emitted
+            || self.hdmi_console_ready_line_completed
+            || self.hdmi_console_ready_pending_bytes == 0
+        {
+            return;
+        }
+        self.hdmi_console_ready_pending_bytes = self
+            .hdmi_console_ready_pending_bytes
+            .saturating_sub(payload_bytes);
+        if self.hdmi_console_ready_pending_bytes == 0
+            && !self.linked_hdmi_redraw_pending()
+            && !self.mirrored_line_generation_wrapped
+            && self
+                .mirrored_line_generation
+                .checked_sub(self.hdmi_console_ready_line_generation)
+                .is_some()
+            && self.linked_hdmi_console_ready_line_canonical()
+        {
+            self.hdmi_console_ready_line_completed = true;
+        }
+    }
+
     fn record_linked_hdmi_submit_success(&mut self, receipt: LinkedHdmiPayloadReceipt) {
         match receipt {
             LinkedHdmiPayloadReceipt::Redraw { final_chunk: true } => {
@@ -3708,21 +3845,30 @@ impl LocalSeatRuntime {
                     self.hdmi_input_row_dirty = false;
                     self.hdmi_input_row_payload.clear();
                 }
+                if self.hdmi_console_ready_line_emitted
+                    && !self.hdmi_console_ready_line_completed
+                    && !self.hdmi_pending_redraw
+                    && !self.mirrored_line_generation_wrapped
+                    && self
+                        .hdmi_active_redraw_line_generation
+                        .checked_sub(self.hdmi_console_ready_line_generation)
+                        .is_some()
+                    && self.linked_hdmi_console_ready_line_canonical()
+                {
+                    self.hdmi_console_ready_line_completed = true;
+                    self.hdmi_console_ready_pending_bytes = 0;
+                }
             }
             LinkedHdmiPayloadReceipt::ScrollStep {
                 target_offset,
                 mirrored_line_generation,
+                mirrored_tail_sequence,
             } => {
-                let generation_delta = self
-                    .mirrored_line_generation
-                    .checked_sub(mirrored_line_generation);
-                let adjusted_target = generation_delta
-                    .and_then(|delta| usize::try_from(delta).ok())
-                    .and_then(|delta| target_offset.checked_add(delta));
-                let exact_anchor = !self.mirrored_line_generation_wrapped;
-                if let Some(adjusted_target) = adjusted_target.filter(|offset| {
-                    exact_anchor && *offset <= self.max_linked_hdmi_scrollback_offset()
-                }) {
+                if let Some(adjusted_target) = self.linked_hdmi_receipt_offset(
+                    target_offset,
+                    mirrored_line_generation,
+                    mirrored_tail_sequence,
+                ) {
                     self.hdmi_rendered_scrollback_offset = adjusted_target;
                     self.hdmi_rendered_viewport_valid = true;
                 } else {
@@ -3736,8 +3882,41 @@ impl LocalSeatRuntime {
                     self.hdmi_input_row_payload.clear();
                 }
             }
+            LinkedHdmiPayloadReceipt::QueuedOutput {
+                payload_bytes,
+                completes_scroll_fence,
+                scroll_fence_line_generation,
+                scroll_fence_tail_sequence,
+            } => {
+                self.record_linked_hdmi_console_ready_output_success(payload_bytes);
+                if completes_scroll_fence {
+                    let exact_fence = self.hdmi_scroll_output_fence_active
+                        && self.hdmi_scroll_output_fence_bytes == 0
+                        && self.hdmi_scroll_output_fence_line_generation
+                            == scroll_fence_line_generation
+                        && self.hdmi_scroll_output_fence_tail_sequence
+                            == scroll_fence_tail_sequence
+                        && !self.linked_hdmi_redraw_pending();
+                    let adjusted_target = exact_fence
+                        .then(|| {
+                            self.linked_hdmi_receipt_offset(
+                                0,
+                                scroll_fence_line_generation,
+                                scroll_fence_tail_sequence,
+                            )
+                        })
+                        .flatten();
+                    self.clear_linked_hdmi_scroll_output_fence();
+                    if let Some(adjusted_target) = adjusted_target {
+                        self.hdmi_rendered_scrollback_offset = adjusted_target;
+                        self.hdmi_rendered_viewport_valid = true;
+                    } else {
+                        self.hdmi_rendered_viewport_valid = false;
+                        self.request_linked_hdmi_snapshot_redraw();
+                    }
+                }
+            }
             LinkedHdmiPayloadReceipt::None
-            | LinkedHdmiPayloadReceipt::QueuedOutput
             | LinkedHdmiPayloadReceipt::Redraw { final_chunk: false } => {}
         }
         self.hdmi_last_payload_receipt = LinkedHdmiPayloadReceipt::None;
@@ -3780,7 +3959,7 @@ impl LocalSeatRuntime {
     pub fn linked_hdmi_pending_work(&self) -> bool {
         self.linked_hdmi_retained_frame_pending()
             || self.linked_hdmi_redraw_pending()
-            || !self.hdmi_pending_bytes.is_empty()
+            || self.linked_hdmi_output_ready_to_issue()
             || (self.hdmi_input_row_dirty && self.hdmi_scrollback_offset == 0)
             || (self.hdmi_rendered_viewport_valid
                 && self.hdmi_rendered_scrollback_offset != self.hdmi_scrollback_offset)
@@ -3814,6 +3993,40 @@ impl LocalSeatRuntime {
 
     fn linked_hdmi_redraw_pending(&self) -> bool {
         self.hdmi_pending_redraw || !self.hdmi_redraw_bytes.is_empty()
+    }
+
+    fn linked_hdmi_tail_sequence(&self) -> Option<u64> {
+        let retained = u64::try_from(self.mirrored_lines.len()).ok()?;
+        self.dropped_mirrored_lines.checked_add(retained)
+    }
+
+    fn clear_linked_hdmi_scroll_output_fence(&mut self) {
+        self.hdmi_scroll_output_fence_active = false;
+        self.hdmi_scroll_output_fence_bytes = 0;
+        self.hdmi_scroll_output_fence_line_generation = 0;
+        self.hdmi_scroll_output_fence_tail_sequence = 0;
+    }
+
+    fn begin_linked_hdmi_scroll_output_fence(&mut self) -> bool {
+        if self.hdmi_scroll_output_fence_active {
+            return true;
+        }
+        let Some(tail_sequence) = self.linked_hdmi_tail_sequence() else {
+            return false;
+        };
+        if self.mirrored_line_generation_wrapped || self.hdmi_pending_bytes.is_empty() {
+            return false;
+        }
+        self.hdmi_scroll_output_fence_active = true;
+        self.hdmi_scroll_output_fence_bytes = self.hdmi_pending_bytes.len();
+        self.hdmi_scroll_output_fence_line_generation = self.mirrored_line_generation;
+        self.hdmi_scroll_output_fence_tail_sequence = tail_sequence;
+        true
+    }
+
+    fn linked_hdmi_output_ready_to_issue(&self) -> bool {
+        (self.hdmi_scroll_output_fence_active && self.hdmi_scroll_output_fence_bytes != 0)
+            || (self.hdmi_scrollback_offset == 0 && !self.hdmi_pending_bytes.is_empty())
     }
 
     #[cfg(all(
@@ -4328,20 +4541,17 @@ impl LocalSeatRuntime {
         }
     }
 
-    /// Keep HDMI in startup mode while the finite deferred Wi-Fi episode runs.
+    /// Mark the finite deferred Wi-Fi episode active for HDMI status.
     ///
-    /// This gates only the final interactive HDMI banner. Serial remains live;
-    /// the HDMI prompt is independently released after USB command admission,
-    /// and bytes already delivered by the linked runtime can still be consumed
-    /// by the bootstrap command fence.
+    /// Wi-Fi milestones may be retracted and replaced while the network
+    /// bootstrap converges. The independent local-console banner and prompt
+    /// remain governed only by root, USB-command, and exact display completion.
     pub fn defer_hdmi_console_ready_until_cyw43_terminal(&mut self) {
-        let stale_ready_visible = self.hdmi_console_ready_line_emitted
-            || self
-                .mirrored_lines
-                .iter()
-                .any(|line| local_seat_cyw43_stale_ready_line(line.as_str()));
+        let stale_ready_visible = self
+            .mirrored_lines
+            .iter()
+            .any(|line| local_seat_cyw43_stale_ready_line(line.as_str()));
         self.hdmi_bootstrap_terminal_ready = false;
-        self.hdmi_console_ready_line_emitted = false;
         if !stale_ready_visible {
             return;
         }
@@ -4389,7 +4599,7 @@ impl LocalSeatRuntime {
         self.request_linked_hdmi_snapshot_redraw();
     }
 
-    /// Release the final HDMI ready banner after a terminal Wi-Fi status.
+    /// Record terminal Wi-Fi display status without gating local readiness.
     pub fn mark_cyw43_bootstrap_terminal_for_hdmi(&mut self) {
         self.hdmi_bootstrap_terminal_ready = true;
         #[cfg(all(
@@ -4404,7 +4614,7 @@ impl LocalSeatRuntime {
         }
     }
 
-    /// Return whether the deferred Wi-Fi episode permits HDMI readiness.
+    /// Return whether the deferred Wi-Fi status episode reached a terminal.
     #[must_use]
     pub const fn hdmi_bootstrap_terminal_ready(&self) -> bool {
         self.hdmi_bootstrap_terminal_ready
@@ -4416,15 +4626,33 @@ impl LocalSeatRuntime {
         self.hdmi_console_ready_line_emitted
     }
 
+    /// Return whether the exact local-console banner frame completed.
+    #[must_use]
+    pub const fn hdmi_console_ready_line_completed(&self) -> bool {
+        self.hdmi_console_ready_line_completed
+    }
+
     /// Exercise the production HDMI ready-banner and prompt ordering after a
     /// test fixture supplies USB command/display readiness.
     #[cfg(test)]
     pub(crate) fn release_linked_hdmi_console_for_test(&mut self, prompt: &str) {
-        if !self.hdmi_bootstrap_terminal_ready {
-            return;
-        }
         self.emit_linked_hdmi_console_ready_if_due(true);
-        self.mirror_linked_hdmi_prompt_now(prompt);
+        if self.hdmi_console_ready_line_completed {
+            self.mirror_linked_hdmi_prompt_now(prompt);
+        }
+    }
+
+    /// Complete every currently queued HDMI frame through the production
+    /// receipt state machine for cross-module ordering tests.
+    #[cfg(test)]
+    pub(crate) fn complete_linked_hdmi_output_for_test(&mut self) {
+        let mut frames = 0usize;
+        while let Some((_, _, _)) = self.next_linked_hdmi_payload() {
+            let receipt = self.hdmi_last_payload_receipt;
+            self.record_linked_hdmi_submit_success(receipt);
+            frames = frames.saturating_add(1);
+            assert!(frames <= 64, "bounded HDMI test output must converge");
+        }
     }
 
     /// Apply the physical Pi USB-not-ready prompt fence in a host event test.
@@ -4630,12 +4858,18 @@ impl LocalSeatRuntime {
             && self.hdmi_rendered_scrollback_offset == 0
             && !self.hdmi_pending_bytes.is_empty()
         {
-            // A CSI scroll is defined against the physical viewport, not the
-            // optimistic canonical tail. Supersede unsent tail bytes so one
-            // bounded snapshot owns ordering before any scroll chase. The
-            // separately generation-tracked input row remains safe because
-            // every scroll step repaints each newly exposed canonical row.
-            self.request_linked_hdmi_snapshot_redraw();
+            // A CSI scroll is defined against the physical viewport. Seal the
+            // finite FIFO prefix that existed when the operator pressed the
+            // arrow, drain that prefix with immutable receipt identity, then
+            // scroll from its exact completed tail anchor. Later mirror output
+            // remains behind the scroll and cannot extend this fence.
+            if !self.hdmi_rendered_viewport_valid
+                || self.linked_hdmi_snapshot_recovery_required()
+                || !self.begin_linked_hdmi_scroll_output_fence()
+            {
+                self.hdmi_rendered_viewport_valid = false;
+                self.request_linked_hdmi_snapshot_redraw();
+            }
         }
         changed
     }
@@ -4790,6 +5024,9 @@ impl LocalSeatRuntime {
                 .iter()
                 .any(|line| line.as_str() == ready_line);
         self.hdmi_console_ready_line_emitted = false;
+        self.hdmi_console_ready_line_completed = false;
+        self.hdmi_console_ready_line_generation = 0;
+        self.hdmi_console_ready_pending_bytes = 0;
         if !ready_visible {
             return false;
         }
@@ -11218,7 +11455,7 @@ mod tests {
     }
 
     #[test]
-    fn runtime_hdmi_arrow_supersedes_unsent_live_tail_fifo_with_exact_snapshot() {
+    fn runtime_hdmi_arrow_drains_sealed_live_tail_prefix_before_fast_csi_scroll() {
         let mut runtime = LocalSeatRuntime::new(LocalSeatStatus {
             keyboard_device: "usb-kbd0",
             display_device: "hdmi0",
@@ -11241,40 +11478,136 @@ mod tests {
         runtime.mirror_linked_hdmi_line_owner_state("line-40");
         assert!(!runtime.hdmi_pending_bytes.is_empty());
         assert!(runtime.apply_linked_hdmi_scroll_delta(1));
-        assert!(runtime.hdmi_pending_bytes.is_empty());
-        assert!(runtime.hdmi_pending_redraw);
+        assert!(runtime.hdmi_scroll_output_fence_active);
+        assert!(!runtime.hdmi_pending_redraw);
 
-        let mut snapshot = Vec::new();
+        runtime.mirror_linked_hdmi_line_owner_state("line-41");
+        assert_eq!(
+            runtime
+                .hdmi_pending_bytes
+                .iter()
+                .copied()
+                .collect::<Vec<_>>(),
+            b"line-40\n",
+            "later canonical output must not extend the already-sealed FIFO prefix",
+        );
+        assert_eq!(runtime.hdmi_scrollback_offset, 2);
+        assert!(runtime.hdmi_scroll_output_fence_active);
+
+        let Some((prefix, reason, redraw)) = runtime.next_linked_hdmi_payload() else {
+            panic!("the sealed live-tail prefix must issue before the scroll");
+        };
+        assert_eq!(reason, "queued-output");
+        assert!(!redraw);
+        assert_eq!(prefix.as_slice(), b"line-40\n");
+        let receipt = runtime.hdmi_last_payload_receipt;
+        runtime.record_linked_hdmi_submit_success(receipt);
+        assert!(!runtime.hdmi_scroll_output_fence_active);
+        assert_eq!(
+            runtime.hdmi_rendered_scrollback_offset, 1,
+            "the completed prefix must rebase behind output mirrored after the fence",
+        );
+
+        let Some((older, reason, redraw)) = runtime.next_linked_hdmi_payload() else {
+            panic!("the exact completed tail must permit one fast CSI scroll");
+        };
+        assert_eq!(reason, "keyboard-scroll-step");
+        assert!(!redraw);
+        assert!(older.windows(4).any(|window| window == b"\x1b[1T"));
+        assert!(older
+            .windows(b"line-12".len())
+            .any(|window| window == b"line-12"));
+        let receipt = runtime.hdmi_last_payload_receipt;
+        runtime.record_linked_hdmi_submit_success(receipt);
+        assert_eq!(runtime.hdmi_rendered_scrollback_offset, 2);
+        assert!(!runtime.hdmi_pending_redraw);
+        assert!(runtime.hdmi_redraw_bytes.is_empty());
+
+        assert!(runtime.apply_linked_hdmi_scroll_delta(-1));
+        let Some((newer, reason, redraw)) = runtime.next_linked_hdmi_payload() else {
+            panic!("the first down-scroll must reveal the fenced tail");
+        };
+        assert_eq!(reason, "keyboard-scroll-step");
+        assert!(!redraw);
+        assert!(newer.windows(4).any(|window| window == b"\x1b[1S"));
+        assert!(newer
+            .windows(b"line-40".len())
+            .any(|window| window == b"line-40"));
+        let receipt = runtime.hdmi_last_payload_receipt;
+        runtime.record_linked_hdmi_submit_success(receipt);
+        assert_eq!(runtime.hdmi_rendered_scrollback_offset, 1);
+
+        assert!(runtime.apply_linked_hdmi_scroll_delta(-1));
+        let Some((live, reason, redraw)) = runtime.next_linked_hdmi_payload() else {
+            panic!("the second down-scroll must reveal later canonical output at live tail");
+        };
+        assert_eq!(reason, "keyboard-scroll-step");
+        assert!(!redraw);
+        assert!(live.windows(4).any(|window| window == b"\x1b[1S"));
+        assert!(live
+            .windows(b"line-41".len())
+            .any(|window| window == b"line-41"));
+        let receipt = runtime.hdmi_last_payload_receipt;
+        runtime.record_linked_hdmi_submit_success(receipt);
+        assert_eq!(runtime.hdmi_rendered_scrollback_offset, 0);
+        assert!(!runtime.linked_hdmi_pending_work());
+    }
+
+    #[test]
+    fn runtime_hdmi_scroll_output_fence_identity_mismatch_fails_to_one_snapshot() {
+        let mut runtime = LocalSeatRuntime::new(LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 32,
+            buffer_lines: 64,
+        });
+        runtime.root_console_ready = true;
+        for index in 0..40 {
+            let mut line = String::from("line-");
+            let _ = core::fmt::Write::write_fmt(&mut line, format_args!("{index:02}"));
+            runtime.mirror_line_current_tcb(line.as_str());
+        }
+        runtime.request_linked_hdmi_snapshot_redraw();
+        while let Some((_, _, redraw)) = runtime.next_linked_hdmi_payload() {
+            assert!(redraw);
+            let receipt = runtime.hdmi_last_payload_receipt;
+            runtime.record_linked_hdmi_submit_success(receipt);
+        }
+
+        runtime.mirror_linked_hdmi_line_owner_state("line-40");
+        assert!(runtime.apply_linked_hdmi_scroll_delta(1));
+        let Some((_, reason, redraw)) = runtime.next_linked_hdmi_payload() else {
+            panic!("expected the sealed output prefix");
+        };
+        assert_eq!(reason, "queued-output");
+        assert!(!redraw);
+        let stale_receipt = runtime.hdmi_last_payload_receipt;
+        runtime.hdmi_scroll_output_fence_tail_sequence = runtime
+            .hdmi_scroll_output_fence_tail_sequence
+            .saturating_add(1);
+        let snapshot_generation = runtime.hdmi_snapshot_generation;
+
+        runtime.record_linked_hdmi_submit_success(stale_receipt);
+
+        assert!(!runtime.hdmi_rendered_viewport_valid);
+        assert!(!runtime.hdmi_scroll_output_fence_active);
+        assert!(runtime.hdmi_pending_redraw);
+        assert_eq!(
+            runtime.hdmi_snapshot_generation,
+            snapshot_generation.wrapping_add(1),
+            "one receipt mismatch requests exactly one canonical snapshot",
+        );
         let mut frames = 0usize;
-        while let Some((payload, reason, redraw)) = runtime.next_linked_hdmi_payload() {
+        while let Some((_, reason, redraw)) = runtime.next_linked_hdmi_payload() {
             assert_eq!(reason, "keyboard-scrollback");
             assert!(redraw);
-            snapshot.extend_from_slice(payload.as_slice());
             let receipt = runtime.hdmi_last_payload_receipt;
             runtime.record_linked_hdmi_submit_success(receipt);
             frames = frames.saturating_add(1);
             assert!(frames <= 16);
         }
+        assert!(runtime.hdmi_rendered_viewport_valid);
         assert_eq!(runtime.hdmi_rendered_scrollback_offset, 1);
-        assert_eq!(
-            snapshot
-                .windows(b"line-12".len())
-                .filter(|window| *window == b"line-12")
-                .count(),
-            1,
-            "the exact oldest exposed row must be present once",
-        );
-        assert_eq!(
-            snapshot
-                .windows(b"line-39".len())
-                .filter(|window| *window == b"line-39")
-                .count(),
-            1,
-            "the exact newest exposed row must be present once",
-        );
-        assert!(!snapshot
-            .windows(b"line-40".len())
-            .any(|window| window == b"line-40"));
     }
 
     #[test]
@@ -12200,8 +12533,8 @@ mod tests {
             true, true, true,
         ));
         assert!(
-            !local_seat_hdmi_console_ready_line_due(true, false, false, false),
-            "the independent prompt cannot manufacture final Wi-Fi/USB readiness",
+            !local_seat_hdmi_console_ready_line_due(true, false, false),
+            "the independent prompt cannot manufacture USB command readiness",
         );
     }
 
@@ -12229,9 +12562,7 @@ mod tests {
 
     #[test]
     fn physical_pi_hdmi_prompt_waits_for_canonical_ready_banner_after_usb_admission() {
-        assert!(local_seat_hdmi_console_ready_line_due(
-            true, true, true, false,
-        ));
+        assert!(local_seat_hdmi_console_ready_line_due(true, true, false,));
         assert!(!local_seat_hdmi_prompt_ready_for_display_state(
             true, true, true, false, true, true,
         ));
@@ -12276,22 +12607,11 @@ mod tests {
     }
 
     #[test]
-    fn physical_pi_hdmi_ready_waits_for_bootstrap_terminal_and_usb_command() {
-        assert!(!local_seat_hdmi_console_ready_line_due(
-            false, true, true, false
-        ));
-        assert!(!local_seat_hdmi_console_ready_line_due(
-            true, false, true, false
-        ));
-        assert!(!local_seat_hdmi_console_ready_line_due(
-            true, true, false, false
-        ));
-        assert!(local_seat_hdmi_console_ready_line_due(
-            true, true, true, false
-        ));
-        assert!(!local_seat_hdmi_console_ready_line_due(
-            true, true, true, true
-        ));
+    fn physical_pi_hdmi_ready_is_independent_of_wifi_and_waits_for_exact_completion() {
+        assert!(!local_seat_hdmi_console_ready_line_due(false, true, false));
+        assert!(!local_seat_hdmi_console_ready_line_due(true, false, false));
+        assert!(local_seat_hdmi_console_ready_line_due(true, true, false));
+        assert!(!local_seat_hdmi_console_ready_line_due(true, true, true));
 
         let mut runtime = LocalSeatRuntime::new(LocalSeatStatus {
             keyboard_device: "usb-kbd0",
@@ -12302,16 +12622,23 @@ mod tests {
         runtime.mark_root_console_ready();
         runtime.defer_hdmi_console_ready_until_cyw43_terminal();
         runtime.emit_linked_hdmi_console_ready_if_due(true);
-        assert!(!runtime.hdmi_console_ready_line_emitted());
-        assert!(!runtime
+        assert!(!runtime.hdmi_bootstrap_terminal_ready());
+        assert!(runtime.hdmi_console_ready_line_emitted());
+        assert!(!runtime.hdmi_console_ready_line_completed());
+        assert!(runtime
             .mirrored_lines_snapshot()
             .iter()
             .any(|line| line == "Cohesix console ready"));
 
-        runtime.mark_cyw43_bootstrap_terminal_for_hdmi();
-        runtime.emit_linked_hdmi_console_ready_if_due(true);
-        assert!(runtime.hdmi_bootstrap_terminal_ready());
-        assert!(runtime.hdmi_console_ready_line_emitted());
+        let mut frames = 0usize;
+        while let Some((_, _, _)) = runtime.next_linked_hdmi_payload() {
+            let receipt = runtime.hdmi_last_payload_receipt;
+            runtime.record_linked_hdmi_submit_success(receipt);
+            frames = frames.saturating_add(1);
+            assert!(frames <= 16);
+        }
+        assert!(runtime.hdmi_console_ready_line_completed());
+        runtime.release_linked_hdmi_console_for_test("cohesix> ");
         assert_eq!(
             runtime
                 .mirrored_lines_snapshot()
@@ -12319,6 +12646,79 @@ mod tests {
                 .filter(|line| line.as_str() == "Cohesix console ready")
                 .count(),
             1
+        );
+        assert_eq!(
+            runtime.mirrored_lines_snapshot().last().map(String::as_str),
+            Some("cohesix> "),
+        );
+        assert!(!runtime.hdmi_bootstrap_terminal_ready());
+
+        runtime.mark_cyw43_bootstrap_terminal_for_hdmi();
+        runtime.emit_linked_hdmi_console_ready_if_due(true);
+        assert!(runtime.hdmi_bootstrap_terminal_ready());
+        assert_eq!(
+            runtime
+                .mirrored_lines_snapshot()
+                .iter()
+                .filter(|line| line.as_str() == "Cohesix console ready")
+                .count(),
+            1,
+        );
+    }
+
+    #[test]
+    fn runtime_hdmi_ready_completion_tracks_fifo_prefix_across_interleaved_output() {
+        let mut runtime = LocalSeatRuntime::new(LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 96,
+            buffer_lines: 64,
+        });
+        runtime.root_console_ready = true;
+        runtime.hdmi_rendered_viewport_valid = true;
+
+        let prior = "p".repeat(80);
+        for _ in 0..7 {
+            runtime.mirror_linked_hdmi_line_owner_state(prior.as_str());
+        }
+        runtime.emit_linked_hdmi_console_ready_if_due(true);
+        let ready_prefix_bytes = runtime.hdmi_console_ready_pending_bytes;
+        assert!(ready_prefix_bytes > LINKED_LOCAL_SEAT_HDMI_FRAME_CHUNK_BYTES);
+
+        let later = "l".repeat(80);
+        for _ in 0..8 {
+            runtime.mirror_linked_hdmi_line_owner_state(later.as_str());
+        }
+        let total_bytes = runtime.hdmi_pending_bytes.len();
+        assert!(total_bytes > LINKED_LOCAL_SEAT_HDMI_FRAME_CHUNK_BYTES.saturating_mul(2));
+
+        let Some((first, reason, redraw)) = runtime.next_linked_hdmi_payload() else {
+            panic!("the first ready-banner prefix frame must be retained");
+        };
+        assert_eq!(reason, "queued-output");
+        assert!(!redraw);
+        assert_eq!(first.len(), LINKED_LOCAL_SEAT_HDMI_FRAME_CHUNK_BYTES);
+        let receipt = runtime.hdmi_last_payload_receipt;
+        runtime.record_linked_hdmi_submit_success(receipt);
+        assert!(!runtime.hdmi_console_ready_line_completed());
+
+        let Some((second, reason, redraw)) = runtime.next_linked_hdmi_payload() else {
+            panic!("the completing ready-banner prefix frame must be retained");
+        };
+        assert_eq!(reason, "queued-output");
+        assert!(!redraw);
+        assert_eq!(second.len(), LINKED_LOCAL_SEAT_HDMI_FRAME_CHUNK_BYTES);
+        let receipt = runtime.hdmi_last_payload_receipt;
+        runtime.record_linked_hdmi_submit_success(receipt);
+
+        assert!(runtime.hdmi_console_ready_line_completed());
+        assert_eq!(
+            runtime.hdmi_pending_bytes.len(),
+            total_bytes.saturating_sub(LINKED_LOCAL_SEAT_HDMI_FRAME_CHUNK_BYTES * 2),
+        );
+        assert!(
+            !runtime.hdmi_pending_bytes.is_empty(),
+            "later output remains ordered behind the completed ready-banner prefix",
         );
     }
 
@@ -12366,6 +12766,7 @@ mod tests {
             "[drivers] WiFi ready to use: DHCP bound at 192.168.86.154; TCP console listening on port 31337";
         runtime.hdmi_bootstrap_terminal_ready = true;
         runtime.hdmi_console_ready_line_emitted = true;
+        runtime.hdmi_console_ready_line_completed = true;
         for line in [
             wifi_ready,
             wifi_ready_to_use,
@@ -12393,7 +12794,8 @@ mod tests {
             .iter()
             .any(|line| line.as_str() == wifi_ready_to_use));
         assert!(!runtime.hdmi_bootstrap_terminal_ready());
-        assert!(!runtime.hdmi_console_ready_line_emitted());
+        assert!(runtime.hdmi_console_ready_line_emitted());
+        assert!(runtime.hdmi_console_ready_line_completed());
         assert!(!runtime
             .mirrored_lines_snapshot()
             .iter()
@@ -12420,16 +12822,16 @@ mod tests {
         assert!(snapshot
             .windows(b"WiFi stabilizing; readiness retracted".len())
             .any(|window| window == b"WiFi stabilizing; readiness retracted"));
-        for stale in [
-            b"WiFi Gate 8 stable".as_slice(),
-            b"Cohesix console ready".as_slice(),
-        ] {
+        for stale in [b"WiFi Gate 8 stable".as_slice()] {
             assert!(
                 !snapshot.windows(stale.len()).any(|window| window == stale),
                 "stale readiness bytes survived redraw: {:?}",
                 core::str::from_utf8(stale).unwrap_or("non-utf8"),
             );
         }
+        assert!(snapshot
+            .windows(b"Cohesix console ready".len())
+            .any(|window| window == b"Cohesix console ready"));
         assert!(snapshot
             .windows(b"cohesix> ".len())
             .any(|window| window == b"cohesix> "));

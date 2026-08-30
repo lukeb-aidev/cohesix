@@ -31,8 +31,9 @@ use super::ConsoleNetConfig;
 #[cfg(feature = "net-backend-virtio")]
 use super::NetDeviceCounters;
 use super::{
-    select_isolated_direct_network_turn_for_contract, select_isolated_direct_response_turn,
-    select_isolated_network_turn, select_isolated_response_turn, ConsoleLine,
+    direct_genet_causal_stage_drain_observed, select_isolated_direct_network_turn_for_contract,
+    select_isolated_direct_response_turn, select_isolated_network_turn,
+    select_isolated_response_turn, ConsoleLine, DirectGenetCausalStageDrainEvidence,
     IsolatedConsoleDiagnostics, IsolatedNetworkLowerCursor, IsolatedNetworkLowerUnit,
     IsolatedNetworkTurnOutcome, IsolatedNetworkTurnSelection, IsolatedNetworkTurnUnit,
     NetConsoleDisconnectReason, NetConsoleEvent, NetCounters, NetDevice, NetPoller,
@@ -103,6 +104,22 @@ const fn console_service_local_containment_state_pending(
     terminal: bool,
 ) -> bool {
     !terminal && (faulted || graceful_teardown_pending || containment_active)
+}
+
+/// Whether one successful response StageOutput may immediately consume its
+/// exact direct-GENET child publication and causal ACK.
+///
+/// The StageOutput signal has already transferred execution to the same-core
+/// child. A stable completion published before that child blocks is therefore
+/// the only eligible successor: this adds no root device operation and no new
+/// control record. QEMU, copied WiFi, a failed stage, and a child without the
+/// exact GENET transport retain their established later ObserveChild turn.
+const fn direct_genet_stage_completion_observation_due(
+    exact_genet_contract: bool,
+    runtime_direct_genet: bool,
+    stage_committed: bool,
+) -> bool {
+    exact_genet_contract && runtime_direct_genet && stage_committed
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1526,7 +1543,63 @@ impl<D: NetDevice> IsolatedNetworkConsole<D> {
 
     #[inline(never)]
     fn poll_stage_output_unit(&mut self) -> IsolatedNetworkTurnOutcome {
-        IsolatedNetworkTurnOutcome::child_signal_attempt(self.stage_one_output())
+        let stage_committed = self.stage_one_output();
+        if !direct_genet_stage_completion_observation_due(
+            D::driver_task_contract() == crate::hal::driver_task::GENET_DRIVER_TASK_CONTRACT,
+            self.runtime.direct_genet(),
+            stage_committed,
+        ) {
+            return IsolatedNetworkTurnOutcome::child_signal_attempt(stage_committed);
+        }
+
+        let expected_batch = self.response_lane.and_then(|lane| {
+            lane.awaiting_batch.map(|batch| {
+                (
+                    lane.generation,
+                    lane.connection_id,
+                    batch.sequence,
+                    self.response_drains,
+                )
+            })
+        });
+
+        // Observe without granting publication credit. Only an exact
+        // OutputDrained transition for the batch just staged above may use the
+        // second same-core YieldTo. An unrelated event or no publication keeps
+        // the ACK owed for the ordinary ObserveChild unit.
+        let _observed = self.poll_child_output_without_ack();
+        let causal_drain_observed = expected_batch.is_some_and(
+            |(generation, connection_id, batch_sequence, response_drains_before)| {
+                let observed_lane = self.response_lane;
+                direct_genet_causal_stage_drain_observed(DirectGenetCausalStageDrainEvidence {
+                    exact_genet_contract: D::driver_task_contract()
+                        == crate::hal::driver_task::GENET_DRIVER_TASK_CONTRACT,
+                    runtime_direct_genet: self.runtime.direct_genet(),
+                    stage_committed,
+                    expected_generation: generation,
+                    expected_connection_id: connection_id,
+                    expected_batch_sequence: batch_sequence,
+                    observed_generation: self.runtime.generation(),
+                    observed_lane_generation: observed_lane.map(|lane| lane.generation),
+                    observed_lane_connection_id: observed_lane.map(|lane| lane.connection_id),
+                    observed_batch_sequence: observed_lane
+                        .and_then(|lane| lane.awaiting_batch.map(|batch| batch.sequence)),
+                    observed_batch_output_drained: observed_lane
+                        .and_then(|lane| lane.awaiting_batch)
+                        .is_some_and(|batch| batch.output_drained),
+                    response_drains_before,
+                    response_drains_after: self.response_drains,
+                    publication_ack_pending: self.runtime.publication_ack_pending(),
+                    faulted: self.faulted,
+                    terminal: self.terminal,
+                    graceful_teardown_pending: self.graceful_teardown_pending,
+                })
+            },
+        );
+        if causal_drain_observed {
+            let _causal_ack = self.acknowledge_child_publication(true);
+        }
+        IsolatedNetworkTurnOutcome::child_signaled(true)
     }
 
     #[inline(never)]
@@ -2017,6 +2090,29 @@ impl<D: NetDevice> NetPoller for IsolatedNetworkConsole<D> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_committed_direct_genet_stage_observes_its_causal_completion() {
+        assert!(direct_genet_stage_completion_observation_due(
+            true, true, true,
+        ));
+        for evidence in [
+            (false, true, true),
+            (true, false, true),
+            (true, true, false),
+            (false, false, true),
+            (false, true, false),
+            (true, false, false),
+            (false, false, false),
+        ] {
+            assert!(
+                !direct_genet_stage_completion_observation_due(
+                    evidence.0, evidence.1, evidence.2,
+                ),
+                "QEMU, WiFi, non-direct, and backpressured stages retain the ordinary observation boundary: {evidence:?}",
+            );
+        }
+    }
 
     #[test]
     fn local_fault_hint_covers_fault_containment_and_unreported_terminal_only() {

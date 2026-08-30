@@ -95,6 +95,61 @@ pub struct DirectGenetYieldAccounting {
     pub invalid_reasons: u32,
 }
 
+/// Exact post-StageOutput evidence that may consume the observed child's one
+/// publication credit without waiting for another root refill.
+///
+/// Root first observes without ACK. Only the newly staged response batch's
+/// validated `OutputDrained` publication may then receive the causal credit;
+/// an unrelated event, a completion watermark alone, or no publication keeps
+/// the ACK pending for the ordinary ObserveChild turn.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct DirectGenetCausalStageDrainEvidence {
+    exact_genet_contract: bool,
+    runtime_direct_genet: bool,
+    stage_committed: bool,
+    expected_generation: u64,
+    expected_connection_id: u64,
+    expected_batch_sequence: u64,
+    observed_generation: u64,
+    observed_lane_generation: Option<u64>,
+    observed_lane_connection_id: Option<u64>,
+    observed_batch_sequence: Option<u64>,
+    observed_batch_output_drained: bool,
+    response_drains_before: u64,
+    response_drains_after: u64,
+    publication_ack_pending: bool,
+    faulted: bool,
+    terminal: bool,
+    graceful_teardown_pending: bool,
+}
+
+pub(crate) fn direct_genet_causal_stage_drain_observed(
+    evidence: DirectGenetCausalStageDrainEvidence,
+) -> bool {
+    let exact_observed_batch = match evidence.observed_batch_sequence {
+        Some(sequence) => {
+            sequence == evidence.expected_batch_sequence && evidence.observed_batch_output_drained
+        }
+        None => !evidence.observed_batch_output_drained,
+    };
+    evidence.exact_genet_contract
+        && evidence.runtime_direct_genet
+        && evidence.stage_committed
+        && evidence.expected_generation != 0
+        && evidence.expected_connection_id != 0
+        && evidence.expected_batch_sequence != 0
+        && evidence.observed_generation == evidence.expected_generation
+        && evidence.observed_lane_generation == Some(evidence.expected_generation)
+        && evidence.observed_lane_connection_id == Some(evidence.expected_connection_id)
+        && evidence.response_drains_before != u64::MAX
+        && evidence.response_drains_after == evidence.response_drains_before.saturating_add(1)
+        && evidence.publication_ack_pending
+        && exact_observed_batch
+        && !evidence.faulted
+        && !evidence.terminal
+        && !evidence.graceful_teardown_pending
+}
+
 impl DirectGenetYieldAccounting {
     pub(crate) fn invalidate(&mut self, reason: u32) {
         self.invalid_reasons |= reason;
@@ -2100,6 +2155,119 @@ mod tests {
     use crate::hal::driver_task::{
         CYW43_WIFI_DRIVER_TASK_CONTRACT, GENET_DRIVER_TASK_CONTRACT, RTL8139_DRIVER_TASK_CONTRACT,
     };
+
+    #[test]
+    fn direct_genet_stage_fusion_acks_only_the_exact_new_batch_drain() {
+        let settled = DirectGenetCausalStageDrainEvidence {
+            exact_genet_contract: true,
+            runtime_direct_genet: true,
+            stage_committed: true,
+            expected_generation: 9,
+            expected_connection_id: 17,
+            expected_batch_sequence: 41,
+            observed_generation: 9,
+            observed_lane_generation: Some(9),
+            observed_lane_connection_id: Some(17),
+            observed_batch_sequence: None,
+            observed_batch_output_drained: false,
+            response_drains_before: 5,
+            response_drains_after: 6,
+            publication_ack_pending: true,
+            faulted: false,
+            terminal: false,
+            graceful_teardown_pending: false,
+        };
+        assert!(direct_genet_causal_stage_drain_observed(settled));
+        assert!(direct_genet_causal_stage_drain_observed(
+            DirectGenetCausalStageDrainEvidence {
+                observed_batch_sequence: Some(41),
+                observed_batch_output_drained: true,
+                ..settled
+            },
+        ));
+
+        for evidence in [
+            DirectGenetCausalStageDrainEvidence {
+                exact_genet_contract: false,
+                ..settled
+            },
+            DirectGenetCausalStageDrainEvidence {
+                runtime_direct_genet: false,
+                ..settled
+            },
+            DirectGenetCausalStageDrainEvidence {
+                stage_committed: false,
+                ..settled
+            },
+            DirectGenetCausalStageDrainEvidence {
+                expected_generation: 0,
+                observed_generation: 0,
+                observed_lane_generation: Some(0),
+                ..settled
+            },
+            DirectGenetCausalStageDrainEvidence {
+                expected_connection_id: 0,
+                observed_lane_connection_id: Some(0),
+                ..settled
+            },
+            DirectGenetCausalStageDrainEvidence {
+                expected_batch_sequence: 0,
+                ..settled
+            },
+            DirectGenetCausalStageDrainEvidence {
+                response_drains_after: 5,
+                ..settled
+            },
+            DirectGenetCausalStageDrainEvidence {
+                response_drains_after: 5,
+                publication_ack_pending: false,
+                ..settled
+            },
+            DirectGenetCausalStageDrainEvidence {
+                observed_batch_sequence: Some(42),
+                observed_batch_output_drained: true,
+                ..settled
+            },
+            DirectGenetCausalStageDrainEvidence {
+                observed_batch_sequence: Some(41),
+                observed_batch_output_drained: false,
+                ..settled
+            },
+            DirectGenetCausalStageDrainEvidence {
+                observed_generation: 10,
+                ..settled
+            },
+            DirectGenetCausalStageDrainEvidence {
+                observed_lane_generation: None,
+                ..settled
+            },
+            DirectGenetCausalStageDrainEvidence {
+                observed_lane_connection_id: Some(18),
+                ..settled
+            },
+            DirectGenetCausalStageDrainEvidence {
+                response_drains_after: 7,
+                ..settled
+            },
+            DirectGenetCausalStageDrainEvidence {
+                faulted: true,
+                ..settled
+            },
+            DirectGenetCausalStageDrainEvidence {
+                terminal: true,
+                ..settled
+            },
+            DirectGenetCausalStageDrainEvidence {
+                graceful_teardown_pending: true,
+                ..settled
+            },
+        ] {
+            assert!(
+                !direct_genet_causal_stage_drain_observed(evidence),
+                "unrelated, absent, stale, or unsafe publication evidence must retain the ordinary ACK boundary: {evidence:?}",
+            );
+        }
+    }
 
     #[test]
     fn direct_genet_yield_accounting_requires_fresh_predrain_and_clamps_to_call_wall() {

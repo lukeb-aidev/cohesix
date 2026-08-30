@@ -3609,8 +3609,11 @@ struct PiRootControlConsumedSample {
 /// We instead drain that preserved evidence once after Yield, then measure the
 /// bounded resume-to-WCET-leaf wall interval with CNTVCT. There is no blocking
 /// child operation in that interval, so preemption only makes the strict wall
-/// lease more conservative. Equality or excess ends the retained attempt with
-/// the existing typed refusal so input and recovery stay live.
+/// lease more conservative. Equality or excess cannot authorize the WCET leaf,
+/// but it also cannot destroy an already parsed command merely because a
+/// higher-priority cross-core episode covered that one wall lease. The command
+/// may cross one further explicit Yield boundary before the existing typed
+/// refusal; the strict comparison itself is unchanged on both attempts.
 #[cfg(feature = "kernel")]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 enum PiRootControlConsumedWindow {
@@ -3633,7 +3636,7 @@ enum PiRootControlConsumedWindow {
 enum PiRootControlConsumedDecision {
     Waiting,
     Admit,
-    Reject,
+    Retry,
     Invalid,
 }
 
@@ -3746,9 +3749,10 @@ impl PiRootControlConsumedWindow {
                 };
                 true
             }
-            // Exactly one explicit scheduler boundary belongs to a retained
-            // command. A second prepare cannot authorize another real Yield
-            // before the preserved pre-Yield evidence is drained.
+            // Exactly one explicit scheduler boundary belongs to each reserve
+            // attempt. A duplicate prepare cannot authorize another real
+            // Yield before that attempt's preserved pre-Yield evidence is
+            // drained. An expired lease returns to AwaitingYield explicitly.
             Self::AwaitingResume { .. } | Self::ReadyAfterYield { .. } => false,
             Self::Empty | Self::Invalid(_) => false,
         }
@@ -3863,8 +3867,8 @@ impl PiRootControlConsumedWindow {
             *self = Self::Empty;
             PiRootControlConsumedDecision::Admit
         } else {
-            *self = Self::Empty;
-            PiRootControlConsumedDecision::Reject
+            *self = Self::AwaitingYield;
+            PiRootControlConsumedDecision::Retry
         }
     }
 }
@@ -3924,6 +3928,7 @@ const fn command_may_donate_passive_ninedoor(command: &Command) -> bool {
 struct PiRootControlPendingPassiveCommand {
     command: Command,
     source: ConsoleInputSource,
+    reserve_attempts: u8,
     input_connection_id: Option<u64>,
     session: Option<SessionRole>,
     session_role: Option<Role>,
@@ -3931,6 +3936,14 @@ struct PiRootControlPendingPassiveCommand {
     session_origin: Option<ConsoleInputSource>,
     session_connection_id: Option<u64>,
 }
+
+/// One initial lease plus one natural-postponement retry for a framed passive
+/// command. This is independent of seL4's internal refill-record capacity: it
+/// is a hard command-level bound that prevents an unbounded donation wait while
+/// allowing one cross-core DPC/preemption episode to finish. A second expired
+/// lease emits the unchanged typed busy refusal.
+#[cfg(all(feature = "kernel", feature = "release-pi4"))]
+const PI_ROOT_CONTROL_PASSIVE_RESERVE_MAX_ATTEMPTS: u8 = 2;
 
 /// Required local-seat preflight cannot enter Network and therefore has only
 /// the four useful local-operator phases in its bounded rotor.
@@ -4149,6 +4162,7 @@ struct DirectGenetStageProgressSnapshot {
     stage_output_turns: u64,
     stage_output_successes: u64,
     awaiting_batch_drain: bool,
+    response_drains: u64,
 }
 
 /// Exact durable progress that may retain one direct-GENET continuation.
@@ -4157,6 +4171,7 @@ struct DirectGenetStageProgressSnapshot {
 enum DirectGenetProductiveProgress {
     CommandAccepted,
     CommandAcceptedAndStagePublished,
+    CommandAcceptedStagePublishedAndDrained,
     StagePublished,
     ResponseDrained,
     DrainAndStage,
@@ -4252,7 +4267,7 @@ fn direct_genet_productive_quantum_continuation_entitled(
         && evidence.causal_stage_completed;
     let no_response_stage =
         evidence.after.immediate_stage_turns == evidence.before.immediate_stage_turns;
-    let durable_child_stage = evidence.before.child_stage_output_turns != u64::MAX
+    let exact_stage_counters = evidence.before.child_stage_output_turns != u64::MAX
         && evidence.after.child_stage_output_turns
             == evidence.before.child_stage_output_turns.saturating_add(1)
         && evidence.before.child_stage_output_successes != u64::MAX
@@ -4260,17 +4275,24 @@ fn direct_genet_productive_quantum_continuation_entitled(
             == evidence
                 .before
                 .child_stage_output_successes
-                .saturating_add(1)
-        && evidence.after.child_awaiting_batch_drain;
+                .saturating_add(1);
+    let exact_drain_counter = evidence.before.child_response_drains != u64::MAX
+        && evidence.after.child_response_drains
+            == evidence.before.child_response_drains.saturating_add(1);
+    let exact_new_stage_drained = exact_stage_counters
+        && exact_drain_counter
+        && !evidence.before.child_awaiting_batch_drain
+        && !evidence.after.child_awaiting_batch_drain;
+    let durable_child_stage = exact_stage_counters
+        && (evidence.after.child_awaiting_batch_drain || exact_new_stage_drained);
     let no_child_stage = evidence.after.child_stage_output_turns
         == evidence.before.child_stage_output_turns
         && evidence.after.child_stage_output_successes
             == evidence.before.child_stage_output_successes;
-    let exact_response_drain = evidence.before.child_response_drains != u64::MAX
-        && evidence.after.child_response_drains
-            == evidence.before.child_response_drains.saturating_add(1)
-        && evidence.before.child_awaiting_batch_drain
-        && (!evidence.after.child_awaiting_batch_drain || durable_child_stage);
+    let exact_response_drain = exact_drain_counter
+        && ((evidence.before.child_awaiting_batch_drain
+            && (!evidence.after.child_awaiting_batch_drain || durable_child_stage))
+            || exact_new_stage_drained);
     let no_response_drain =
         evidence.after.child_response_drains == evidence.before.child_response_drains;
     let command_queue_consistent = if exact_net_command {
@@ -4308,6 +4330,9 @@ fn direct_genet_productive_quantum_continuation_entitled(
                         == evidence.after.child_yield_counter_hz)));
     let progress = match (exact_net_command, durable_child_stage, exact_response_drain) {
         (true, true, false) => DirectGenetProductiveProgress::CommandAcceptedAndStagePublished,
+        (true, true, true) => {
+            DirectGenetProductiveProgress::CommandAcceptedStagePublishedAndDrained
+        }
         (true, false, false) => DirectGenetProductiveProgress::CommandAccepted,
         (false, true, false) => DirectGenetProductiveProgress::StagePublished,
         (false, false, true) => DirectGenetProductiveProgress::ResponseDrained,
@@ -4317,6 +4342,7 @@ fn direct_genet_productive_quantum_continuation_entitled(
     let expected_phase = match progress {
         DirectGenetProductiveProgress::CommandAccepted
         | DirectGenetProductiveProgress::CommandAcceptedAndStagePublished
+        | DirectGenetProductiveProgress::CommandAcceptedStagePublishedAndDrained
         | DirectGenetProductiveProgress::StagePublished
         | DirectGenetProductiveProgress::ResponseDrained
         | DirectGenetProductiveProgress::DrainAndStage => LinkedRuntimeServicePhase::Serial,
@@ -4331,6 +4357,7 @@ fn direct_genet_productive_quantum_continuation_entitled(
         DirectGenetProductiveProgress::CommandAcceptedAndStagePublished
         | DirectGenetProductiveProgress::StagePublished
         | DirectGenetProductiveProgress::ResponseDrained => yield_calls == 1,
+        DirectGenetProductiveProgress::CommandAcceptedStagePublishedAndDrained => yield_calls == 2,
         DirectGenetProductiveProgress::DrainAndStage => (1..=2).contains(&yield_calls),
     };
     (same_identity
@@ -7945,8 +7972,8 @@ where
         }
     }
 
-    /// Mark the sole MCS replenishment boundary for one retained passive
-    /// command immediately before the caller invokes `seL4_Yield`.
+    /// Mark one bounded reserve attempt's MCS replenishment boundary for a
+    /// retained passive command immediately before `seL4_Yield`.
     ///
     /// This method owns the target transition but remains deliberately
     /// separate from `seL4_Yield`: host tests can prove the state machine while
@@ -8217,6 +8244,7 @@ where
         Some(PiRootControlPendingPassiveCommand {
             command,
             source,
+            reserve_attempts: 0,
             input_connection_id,
             session: self.session,
             session_role: self.session_role,
@@ -8501,6 +8529,30 @@ where
                 self.linked_runtime_service_phase = LinkedRuntimeServicePhase::Dispatch;
                 true
             }
+            PiRootControlConsumedDecision::Retry => {
+                self.console_input_turn_active = prior_input_turn_active;
+                self.console_input_turn_output_budget = prior_output_budget;
+                let mut pending = pending;
+                pending.reserve_attempts = pending.reserve_attempts.saturating_add(1);
+                self.pi_root_control_pending_passive_command = Some(pending);
+                if self
+                    .pi_root_control_pending_passive_command
+                    .as_deref()
+                    .is_some_and(|pending| {
+                        pending.reserve_attempts < PI_ROOT_CONTROL_PASSIVE_RESERVE_MAX_ATTEMPTS
+                    })
+                {
+                    // The old lease is terminal. Retain the exact framed
+                    // command and require a completely new Yield/resume drain;
+                    // never slide the failed wall window inside this refill.
+                    self.linked_runtime_service_phase = LinkedRuntimeServicePhase::Dispatch;
+                    true
+                } else {
+                    self.cancel_pi_root_control_pending(true);
+                    self.linked_runtime_service_phase = LinkedRuntimeServicePhase::Serial;
+                    true
+                }
+            }
             decision => {
                 self.console_input_turn_active = prior_input_turn_active;
                 self.console_input_turn_output_budget = prior_output_budget;
@@ -8655,7 +8707,11 @@ where
                             && before.stage_output_successes != u64::MAX
                             && after.stage_output_successes
                                 == before.stage_output_successes.saturating_add(1)
-                            && after.awaiting_batch_drain;
+                            && (after.awaiting_batch_drain
+                                || (!before.awaiting_batch_drain
+                                    && before.response_drains != u64::MAX
+                                    && after.response_drains
+                                        == before.response_drains.saturating_add(1)));
                         (attempted, completed)
                     });
                 #[cfg(feature = "net-console")]
@@ -10784,6 +10840,7 @@ where
             stage_output_turns: diagnostic.stage_output_turns,
             stage_output_successes: diagnostic.stage_output_successes,
             awaiting_batch_drain: diagnostic.awaiting_batch_drain,
+            response_drains: diagnostic.response_drains,
         })
     }
 
@@ -12390,8 +12447,9 @@ where
     ///
     /// The marker travels in the same retained display sequence as the text,
     /// with one terminal reserve behind a saturated ordinary FIFO. This keeps
-    /// only the final HDMI ready banner behind delayed Wi-Fi milestones while
-    /// preserving one linked display operation per turn.
+    /// the final Wi-Fi status behind earlier Wi-Fi milestones while preserving
+    /// one linked display operation per turn. Local console readiness remains
+    /// independent.
     #[cfg(feature = "kernel")]
     pub fn queue_cyw43_bootstrap_supervisor_status_with_terminal(
         &mut self,
@@ -12428,7 +12486,7 @@ where
                     // A terminal status is a liveness transition, not optional
                     // display chatter. Retain it behind every already-queued
                     // milestone even if delayed HDMI service filled the normal
-                    // FIFO, so the final ready banner cannot stay fenced.
+                    // FIFO, so terminal Wi-Fi status cannot stay fenced.
                     self.pending_cyw43_bootstrap_hdmi_terminal_milestone = Some(terminal);
                     self.cyw43_bootstrap_hdmi_pending = true;
                     crate::log_buffer::append_log_line(
@@ -12505,11 +12563,12 @@ where
         true
     }
 
-    /// Keep only the final HDMI ready banner behind the Wi-Fi terminal.
+    /// Start one deferred Wi-Fi HDMI-status episode.
     ///
     /// The serial prompt and buffered USB command fence remain active before
-    /// the single-attempt bootstrap episode begins. HDMI prompt release remains
-    /// independently gated by USB command admission and display health.
+    /// the single-attempt bootstrap episode begins. The local HDMI ready banner
+    /// and prompt remain independently gated by USB command admission, exact
+    /// banner completion, and display health.
     #[cfg(feature = "kernel")]
     pub fn defer_local_seat_hdmi_ready_until_cyw43_terminal(&mut self) {
         let invalidated = self.pending_cyw43_bootstrap_hdmi_milestones.len()
@@ -35630,7 +35689,7 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn deferred_wifi_hdmi_ready_releases_only_after_terminal_milestone() {
+    fn deferred_wifi_hdmi_status_does_not_gate_exact_local_console_ready() {
         let driver = LoopbackSerial::<8192>::new();
         let serial = SerialPort::<_, 8192, 8192, DEFAULT_LINE_CAPACITY>::new(driver);
         let timer = TestTimer::repeated(8, 1);
@@ -35728,13 +35787,47 @@ mod tests {
                 .as_mut()
                 .unwrap()
                 .release_linked_hdmi_console_for_test(CONSOLE_PROMPT);
-            assert!(!pump
+            assert!(pump
                 .local_seat
                 .as_ref()
                 .unwrap()
                 .mirrored_lines_snapshot()
                 .iter()
                 .any(|line| line.as_str() == "Cohesix console ready"));
+            assert!(pump
+                .local_seat
+                .as_ref()
+                .unwrap()
+                .hdmi_console_ready_line_emitted());
+            assert!(!pump
+                .local_seat
+                .as_ref()
+                .unwrap()
+                .hdmi_console_ready_line_completed());
+            assert_eq!(
+                pump.local_seat
+                    .as_ref()
+                    .unwrap()
+                    .mirrored_lines_snapshot()
+                    .iter()
+                    .filter(|line| line.as_str() == CONSOLE_PROMPT)
+                    .count(),
+                0,
+                "prompt release must wait for exact ready-banner output completion",
+            );
+            let runtime = pump.local_seat.as_mut().unwrap();
+            runtime.complete_linked_hdmi_output_for_test();
+            assert!(runtime.hdmi_console_ready_line_completed());
+            runtime.release_linked_hdmi_console_for_test(CONSOLE_PROMPT);
+            runtime.release_linked_hdmi_console_for_test(CONSOLE_PROMPT);
+            assert!(runtime
+                .mirrored_lines_snapshot()
+                .iter()
+                .any(|line| line.as_str() == CONSOLE_PROMPT));
+            assert!(
+                !runtime.hdmi_bootstrap_terminal_ready(),
+                "WiFi bootstrap status must remain independent of local console readiness",
+            );
             pump.poll_cyw43_bootstrap_supervisor_event_turn();
             pump.poll_cyw43_bootstrap_supervisor_event_turn();
             assert!(pump
@@ -35742,9 +35835,6 @@ mod tests {
                 .as_ref()
                 .unwrap()
                 .hdmi_bootstrap_terminal_ready());
-            let runtime = pump.local_seat.as_mut().unwrap();
-            runtime.release_linked_hdmi_console_for_test(CONSOLE_PROMPT);
-            runtime.release_linked_hdmi_console_for_test(CONSOLE_PROMPT);
         }
 
         let lines = local_seat.mirrored_lines_snapshot();
@@ -35761,13 +35851,13 @@ mod tests {
         let ready = lines
             .iter()
             .position(|line| line == "Cohesix console ready")
-            .expect("one final ready banner follows the terminal milestone");
+            .expect("one exact local ready banner reaches HDMI");
         let prompt = lines
             .iter()
             .position(|line| line == CONSOLE_PROMPT)
             .expect("interactive prompt follows the ready banner");
         assert!(begin < terminal);
-        assert!(terminal < ready);
+        assert!(begin < ready);
         assert!(ready < prompt);
         assert_eq!(
             lines
@@ -38939,6 +39029,7 @@ mod tests {
         isolated_diagnostics: Option<IsolatedConsoleDiagnostics>,
         isolated_stage_attempt_on_poll: Option<usize>,
         isolated_stage_progress_on_poll: Option<usize>,
+        isolated_stage_drain_on_poll: Option<usize>,
     }
 
     #[cfg(feature = "net-console")]
@@ -39001,6 +39092,7 @@ mod tests {
                 isolated_diagnostics: None,
                 isolated_stage_attempt_on_poll: None,
                 isolated_stage_progress_on_poll: None,
+                isolated_stage_drain_on_poll: None,
             }
         }
 
@@ -39097,16 +39189,22 @@ mod tests {
                     diagnostic.stage_output_successes =
                         diagnostic.stage_output_successes.saturating_add(1);
                     diagnostic.output_queue = 0;
-                    diagnostic.awaiting_batch_drain = true;
-                    diagnostic.direct_genet_yield_calls =
-                        diagnostic.direct_genet_yield_calls.saturating_add(1);
+                    let completion_fused = self.isolated_stage_drain_on_poll == Some(self.polls);
+                    diagnostic.awaiting_batch_drain = !completion_fused;
+                    diagnostic.response_drains = diagnostic
+                        .response_drains
+                        .saturating_add(u64::from(completion_fused));
+                    let child_calls = 1 + u64::from(completion_fused);
+                    diagnostic.direct_genet_yield_calls = diagnostic
+                        .direct_genet_yield_calls
+                        .saturating_add(child_calls);
                     diagnostic.direct_genet_yield_counter_hz = 54_000_000;
                     diagnostic.direct_genet_yield_call_wall_scaled = diagnostic
                         .direct_genet_yield_call_wall_scaled
-                        .saturating_add(5_400_000_000);
+                        .saturating_add(5_400_000_000u128.saturating_mul(u128::from(child_calls)));
                     diagnostic.direct_genet_yield_child_credit_scaled = diagnostic
                         .direct_genet_yield_child_credit_scaled
-                        .saturating_add(4_320_000_000);
+                        .saturating_add(4_320_000_000u128.saturating_mul(u128::from(child_calls)));
                     self.isolated_diagnostics = Some(diagnostic);
                 }
             }
@@ -48173,7 +48271,7 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn pi_root_control_consumed_window_requires_one_yield_and_rejects_equality() {
+    fn pi_root_control_consumed_window_retries_expired_lease_and_rejects_equality() {
         let contract = pi_root_control_test_contract();
         let mut window = PiRootControlConsumedWindow::Empty;
 
@@ -48217,7 +48315,7 @@ mod tests {
         );
         assert!(
             !window.prepare_yield_boundary_with(contract, 104, 1_000_000),
-            "a retained command owns exactly one Yield boundary",
+            "one reserve attempt owns exactly one Yield boundary",
         );
         assert!(
             window.resume_after_yield_with(contract, 10_000, 1_000_000, || {
@@ -48238,8 +48336,23 @@ mod tests {
 
         assert_eq!(
             window.decide_with(contract, 1_000_000, || 10_250),
-            PiRootControlConsumedDecision::Reject,
-            "equality must terminate without donating or retrying",
+            PiRootControlConsumedDecision::Retry,
+            "equality must not donate from the expired lease",
+        );
+        assert_eq!(window, PiRootControlConsumedWindow::AwaitingYield);
+        assert!(window.prepare_yield_boundary_with(contract, 10_251, 1_000_000));
+        assert!(
+            window.resume_after_yield_with(contract, 20_000, 1_000_000, || {
+                Some(PiRootControlConsumedSample {
+                    consumed_us: 1_000,
+                    sampled_at_ticks: 20_001,
+                })
+            })
+        );
+        assert_eq!(
+            window.decide_with(contract, 1_000_000, || 20_249),
+            PiRootControlConsumedDecision::Admit,
+            "a new refill gets a new strict lease rather than sliding the expired one",
         );
         assert_eq!(window, PiRootControlConsumedWindow::Empty);
 
@@ -48280,7 +48393,7 @@ mod tests {
         };
         assert_eq!(
             non_integral_over.decide_with(contract, 3_000_001, || 30_751),
-            PiRootControlConsumedDecision::Reject,
+            PiRootControlConsumedDecision::Retry,
         );
     }
 
@@ -48605,6 +48718,158 @@ mod tests {
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[test]
+    fn direct_genet_raw_ping_stream_never_enters_passive_reserve_guard() {
+        let serial =
+            SerialPort::<_, 4096, 4096, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<4096>::new());
+        let timer = TestTimer::repeated(128, 1);
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut bridge = NineDoorBridge::new();
+        let mut genet = FakeNet::new();
+        genet.driver_contract = crate::hal::driver_task::GENET_DRIVER_TASK_CONTRACT;
+        genet.active_conn_id = Some(17);
+        genet.authenticated_conn_id = Some(17);
+        let mut pump = EventPump::new(serial, timer, NullIpc, store, &mut audit)
+            .with_ninedoor(&mut bridge)
+            .with_network(&mut genet);
+        pump.net_conn_id = Some(17);
+        pump.pi_root_control_dispatch_admission_override = Some(false);
+
+        for _ in 0..64 {
+            pump.handle_network_line(
+                HeaplessString::try_from("ping").expect("raw PING command fits"),
+            );
+            assert!(!pump.pi_root_control_passive_admission_pending());
+        }
+
+        assert_eq!(pump.metrics.accepted_commands, 64);
+        assert_eq!(pump.metrics.denied_commands, 0);
+        assert!(pump
+            .pending_console_output
+            .iter()
+            .all(|output| { !output.text.as_str().contains("detail=root-sc-reserve") }));
+        drop(pump);
+        assert_eq!(
+            genet
+                .sent
+                .iter()
+                .filter(|line| line.as_str() == "PONG")
+                .count(),
+            64,
+        );
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console", feature = "release-pi4"))]
+    #[test]
+    fn back_to_back_proc_reads_survive_one_expired_reserve_lease_each() {
+        let _root_guard = ReachableRootGuard::new(1);
+        let serial = SerialPort::<_, 16384, 16384, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<
+            16384,
+        >::new());
+        let timer = TestTimer::repeated(128, 1);
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut bridge = NineDoorBridge::new();
+        let mut net = FakeNet::new();
+        net.active_conn_id = Some(17);
+        net.authenticated_conn_id = Some(17);
+
+        let mut pump = EventPump::new(serial, timer, NullIpc, store, &mut audit)
+            .with_ninedoor(&mut bridge)
+            .with_network(&mut net);
+        pump.last_input_source = ConsoleInputSource::Net;
+        pump.net_conn_id = Some(17);
+        pump.session = Some(SessionRole::Worker);
+        pump.session_origin = Some(ConsoleInputSource::Net);
+        pump.session_net_conn_id = Some(17);
+
+        for (index, path) in ["/proc/smp", "/proc/pressure/policy"]
+            .into_iter()
+            .enumerate()
+        {
+            let base = 1_000u64.saturating_add((index as u64).saturating_mul(2_000));
+            assert!(pump.begin_pi_root_control_pending_with(
+                Command::Cat {
+                    path: command_path(path),
+                },
+                pi_root_control_test_contract(),
+                base,
+                1_000_000,
+                || Some(PiRootControlConsumedSample {
+                    consumed_us: 2_750,
+                    sampled_at_ticks: base,
+                }),
+            ));
+            assert!(pump.prepare_pi_root_control_passive_admission_yield_with(
+                pi_root_control_test_contract(),
+                base,
+                1_000_000,
+            ));
+            assert!(
+                pump.resume_pi_root_control_passive_admission_after_yield_with(
+                    pi_root_control_test_contract(),
+                    base + 1,
+                    1_000_000,
+                    || Some(PiRootControlConsumedSample {
+                        consumed_us: 2_750,
+                        sampled_at_ticks: base + 1,
+                    }),
+                )
+            );
+            assert!(pump.service_pi_root_control_pending_with(
+                pi_root_control_test_contract(),
+                1_000_000,
+                || base + 251,
+            ));
+            assert!(pump.pi_root_control_passive_admission_pending());
+            assert_eq!(pump.metrics.denied_commands, 0);
+
+            assert!(pump.prepare_pi_root_control_passive_admission_yield_with(
+                pi_root_control_test_contract(),
+                base + 300,
+                1_000_000,
+            ));
+            assert!(
+                pump.resume_pi_root_control_passive_admission_after_yield_with(
+                    pi_root_control_test_contract(),
+                    base + 301,
+                    1_000_000,
+                    || Some(PiRootControlConsumedSample {
+                        consumed_us: 2_750,
+                        sampled_at_ticks: base + 301,
+                    }),
+                )
+            );
+            assert!(pump.service_pi_root_control_pending_with(
+                pi_root_control_test_contract(),
+                1_000_000,
+                || base + 302,
+            ));
+            assert!(!pump.pi_root_control_passive_admission_pending());
+            assert_eq!(pump.metrics.accepted_commands, (index + 1) as u64);
+            assert_eq!(pump.metrics.denied_commands, 0);
+
+            for _ in 0..128 {
+                pump.flush_pending_stream();
+                pump.emit_stream_end_if_pending();
+                if pump.pending_stream.is_none() && !pump.stream_end_pending {
+                    break;
+                }
+            }
+            assert!(pump.pending_stream.is_none());
+            assert!(!pump.stream_end_pending);
+            pump.pending_net_flush = PendingNetFlush::default();
+        }
+
+        drop(pump);
+        assert!(net
+            .sent
+            .iter()
+            .all(|line| { !line.as_str().contains("detail=root-sc-reserve") }));
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
     fn pi_root_control_passive_command_fails_closed_after_serial_parse() {
         struct LinkedRuntimeTestReset;
 
@@ -48787,7 +49052,7 @@ mod tests {
 
     #[cfg(all(feature = "kernel", feature = "net-console", feature = "release-pi4"))]
     #[test]
-    fn pi_root_control_pending_equality_refuses_once_without_retry() {
+    fn pi_root_control_pending_expired_lease_retries_once_then_refuses() {
         let serial =
             SerialPort::<_, 4096, 4096, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<4096>::new());
         let timer = TestTimer::repeated(16, 1);
@@ -48832,6 +49097,38 @@ mod tests {
             || final_bracket_ticks.get(),
         ));
 
+        assert!(pump.pi_root_control_passive_admission_pending());
+        assert_eq!(
+            pump.pi_root_control_consumed_window,
+            PiRootControlConsumedWindow::AwaitingYield,
+        );
+        assert_eq!(pump.metrics.denied_commands, 0);
+        assert_eq!(
+            pump.linked_runtime_service_phase,
+            LinkedRuntimeServicePhase::Dispatch,
+        );
+        assert!(pump.prepare_pi_root_control_passive_admission_yield_with(
+            pi_root_control_test_contract(),
+            400,
+            1_000_000,
+        ));
+        assert!(
+            pump.resume_pi_root_control_passive_admission_after_yield_with(
+                pi_root_control_test_contract(),
+                401,
+                1_000_000,
+                || Some(PiRootControlConsumedSample {
+                    consumed_us: 5_000,
+                    sampled_at_ticks: 401,
+                }),
+            )
+        );
+        assert!(pump.service_pi_root_control_pending_with(
+            pi_root_control_test_contract(),
+            1_000_000,
+            || 651,
+        ));
+
         assert!(!pump.pi_root_control_passive_admission_pending());
         assert_eq!(
             pump.pi_root_control_consumed_window,
@@ -48866,7 +49163,7 @@ mod tests {
                     .matches("ERR LOG reason=busy detail=root-sc-reserve")
                     .count(),
             1,
-            "equality emits exactly one typed refusal",
+            "two expired leases emit exactly one typed refusal",
         );
         assert_eq!(
             queued_prompts + transcript.matches(CONSOLE_PROMPT).count(),
@@ -48883,7 +49180,7 @@ mod tests {
 
     #[cfg(all(feature = "kernel", feature = "net-console", feature = "release-pi4"))]
     #[test]
-    fn pi_root_control_network_equality_retains_typed_refusal_and_flush() {
+    fn pi_root_control_network_expired_leases_emit_one_typed_refusal_and_flush() {
         let serial =
             SerialPort::<_, 4096, 4096, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<4096>::new());
         let timer = TestTimer::repeated(16, 1);
@@ -48931,6 +49228,31 @@ mod tests {
                 pi_root_control_test_contract(),
                 1_000_000,
                 || 351,
+            ));
+
+            assert!(pump.pi_root_control_passive_admission_pending());
+            assert!(!pump.pending_net_flush.active());
+            assert_eq!(pump.metrics.denied_commands, 0);
+            assert!(pump.prepare_pi_root_control_passive_admission_yield_with(
+                pi_root_control_test_contract(),
+                400,
+                1_000_000,
+            ));
+            assert!(
+                pump.resume_pi_root_control_passive_admission_after_yield_with(
+                    pi_root_control_test_contract(),
+                    401,
+                    1_000_000,
+                    || Some(PiRootControlConsumedSample {
+                        consumed_us: 5_000,
+                        sampled_at_ticks: 401,
+                    }),
+                )
+            );
+            assert!(pump.service_pi_root_control_pending_with(
+                pi_root_control_test_contract(),
+                1_000_000,
+                || 651,
             ));
 
             assert!(pump.pending_net_flush.active());
@@ -54613,6 +54935,7 @@ mod tests {
         genet.authenticated_conn_id = Some(17);
         genet.response_batch_capacity = Some(8);
         genet.isolated_stage_progress_on_poll = Some(2);
+        genet.isolated_stage_drain_on_poll = Some(2);
         genet.isolated_diagnostics = Some(IsolatedConsoleDiagnostics {
             generation: 1,
             last_poll_ms: 1,
@@ -54684,6 +55007,13 @@ mod tests {
             let retained_identity = pump
                 .take_pi_root_control_productive_continuation_identity()
                 .expect("the exact false-to-retain path emits one opaque identity");
+            assert_eq!(
+                retained_identity.progress,
+                DirectGenetProductiveProgress::CommandAcceptedStagePublishedAndDrained,
+                "the causal GENET stage may retain only after its exact child drain is also durable",
+            );
+            assert_eq!(retained_identity.child_credit_counter_hz(), 54_000_000);
+            assert_eq!(retained_identity.child_credit_scaled(), 8_640_000_000);
             assert!(pump.pi_root_control_productive_continuation_fence_clear(retained_identity));
             assert!(
                 !pump.pi_root_control_productive_continuation_fence_clear(
@@ -54711,6 +55041,14 @@ mod tests {
             genet.tcp_flushes, 0,
             "the exact response lane must supersede legacy TCP flush debt"
         );
+        assert!(genet.isolated_diagnostics.is_some_and(|diagnostic| {
+            !diagnostic.awaiting_batch_drain
+                && diagnostic.response_drains == 1
+                && diagnostic.direct_genet_yield_calls == 2
+                && diagnostic.direct_genet_yield_counter_hz == 54_000_000
+                && diagnostic.direct_genet_yield_call_wall_scaled == 10_800_000_000
+                && diagnostic.direct_genet_yield_child_credit_scaled == 8_640_000_000
+        }));
         assert_eq!(
             genet.lines.len(),
             1,
@@ -54819,11 +55157,23 @@ mod tests {
             LinkedRuntimeServicePhase::Serial,
         );
         assert!(pump.pi_root_control_productive_continuation_fence_clear(continuation));
+        assert!(
+            !pump.pending_net_flush.active(),
+            "a durable isolated stage must not create legacy flush debt",
+        );
         drop(pump);
+        assert!(genet.isolated_diagnostics.is_some_and(|diagnostic| {
+            diagnostic.awaiting_batch_drain
+                && diagnostic.response_drains == 0
+                && diagnostic.direct_genet_yield_calls == 1
+                && diagnostic.direct_genet_yield_counter_hz == 54_000_000
+                && diagnostic.direct_genet_yield_call_wall_scaled == 5_400_000_000
+                && diagnostic.direct_genet_yield_child_credit_scaled == 4_320_000_000
+        }));
         assert_eq!(
             genet.lines.len(),
             1,
-            "the first response lane must block a second command before its durable stage",
+            "the second PING must remain queued while the first stage awaits its exact child drain",
         );
     }
 
@@ -55114,6 +55464,26 @@ mod tests {
             direct_genet_productive_quantum_continuation_entitled(command_and_stage)
                 .map(|continuation| continuation.progress),
             Some(DirectGenetProductiveProgress::CommandAcceptedAndStagePublished),
+        );
+
+        let command_stage_and_drain = DirectGenetProductiveQuantumEvidence {
+            after: DirectGenetProductiveQuantumSnapshot {
+                accepted_commands: 42,
+                command_queue: 0,
+                child_awaiting_batch_drain: false,
+                child_response_drains: 3,
+                child_yield_calls: 12,
+                child_yield_call_wall_scaled: 64_800_000_000,
+                child_yield_credit_scaled: 51_840_000_000,
+                ..stage_after
+            },
+            ..stage
+        };
+        assert_eq!(
+            direct_genet_productive_quantum_continuation_entitled(command_stage_and_drain)
+                .map(|continuation| continuation.progress),
+            Some(DirectGenetProductiveProgress::CommandAcceptedStagePublishedAndDrained),
+            "one command may retain only when its new batch also produces the exact drain in two bounded child calls",
         );
 
         let drain_before = DirectGenetProductiveQuantumSnapshot {

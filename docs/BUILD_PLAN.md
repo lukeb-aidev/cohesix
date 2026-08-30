@@ -10736,6 +10736,70 @@ Changes:
     prove physical speedup. Fresh exact-image WiFi and GENET raw latency,
     scripts, and medium/high pressure remain mandatory before parity or
     acceptance claims.
+  - exact-a6c dual-mode discriminator and bounded refill-boundary correction —
+    exact flashed source `a6cdb7a40c054d4f90d7d4a1bad0a10a5cff66ea`, build ID
+    `5495d0a138fcd570ffb52cd717a437308e5156bacb981ce17f0a479e487cff30`,
+    image ID
+    `0cd0153f6499ed401dfcb7a7b2ed35b93c4761a7f701ba99bddb46da9eb401f3`,
+    and image SHA-256
+    `26b5d91da4b7b16fbe7eb2914a77bd6db1eb2b1410197e7fe8dc7891aa50ffc9`
+    prove lossless WiFi and GENET function while rejecting August latency
+    parity. WiFi passes DHCP, authenticated TCP, generation-bound `nettest`,
+    all three focused `.coh` scripts, and medium/high REST pressure; its raw
+    64-request result is 4.350 requests/s with 212.407-ms median and
+    250.393-ms p95. GENET passes DHCP, TCP, `nettest`, `boot_v0.coh`, and
+    `tcp_basic.coh`, but `smp_parity.coh` and medium REST reach the exact typed
+    `busy detail=root-sc-reserve` boundary. Its raw result is 23.016
+    requests/s with 39.992-ms median and 48.759-ms p95. The paired wired
+    capture reports 1.637-ms p95 ingress acknowledgement but 48.576-ms p95
+    application response, locating the remaining wired latency after healthy
+    GENET DMA/IRQ/TCP ingress.
+
+    Supersede the stream-only cold CYW43 wording: within one exact ACKed root
+    grant, immutable terminal-local continuation applies to every finite cold
+    parent—transport init, firmware prep, firmware chunk, NVRAM chunk/tail,
+    and release—under the unchanged 64-successor cap. Zero-payload parents
+    additionally require zero descriptor and retained payload identity.
+    Control, RX, steady, persistent, recovery, restart, issued-unknown,
+    watermark-fault, generation, descriptor, payload, and ticket drift retain
+    the ordinary root boundary. Healthy steady op7 already uses its durable
+    lease and condition-before-sleep path without an explicit runtime Yield;
+    no fabricated steady grant or budget increase is authorized by the cold
+    correction.
+
+    Preserve one parsed passive-service command across at most one genuinely
+    new Yield/refill after an expired strict reserve lease. Each attempt starts
+    from `AwaitingYield`, drains fresh Consumed evidence, retains the unchanged
+    strict `<250 us` comparison, and rechecks every identity, authority,
+    recovery, containment, quarantine, reboot, and session fence. A second
+    expiry emits the existing single typed refusal. For exact direct GENET
+    only, a successful response `StageOutput` may immediately observe and ACK
+    the causal child publication after its same-core `YieldTo`; an absent,
+    unrelated, backpressured, or faulted publication leaves any observed ACK
+    pending for the ordinary `ObserveChild` turn, while non-GENET, QEMU, and
+    WiFi paths never enter this observation. Exact stage-plus-drain progress
+    accounts both child calls and cannot admit a second command ahead of the
+    response lane.
+
+    Local HDMI readiness is independent of network readiness: emit the ready
+    banner only after root and USB command admission, and expose the prompt
+    only after that exact banner frame completes. An arrow at the live tail
+    seals and drains only the already-pending output prefix, rebases its
+    completion with generation and logical-tail identity, then uses the
+    bounded CSI scroll path. Later output remains ordered behind the fence;
+    mismatch, wrap, eviction, or unavailable history requests exactly one
+    canonical snapshot. This changes no xHCI issue, poll, completion, owner,
+    retry, or budget path.
+
+    The complete host-tool suite, `tools/cohesix-py`, generated profile and ABI
+    consumers, `.coh` workloads, and benchmark workload, arithmetic, and
+    report schemas were reviewed. The public console grammar, REST/TCP
+    framing, manifest schema, generated contracts, and report formats do not
+    change, so those surfaces require no implementation or fixture update.
+    Pi-only source tests, exact AArch64 target compilation, and a nonclaiming
+    QEMU root-MCS canary are required before a clean candidate image. A fresh
+    dual-mode Pi run remains the only authority for boot speed, physical
+    console behavior, sustained latency, pressure, and August parity.
   - platform consistency — select the same v5 shared contract, including the
     v4-introduced bounded command batch, complete 256-Worker population, two
     passive-Worker executor-lane architecture, and passive-service locality

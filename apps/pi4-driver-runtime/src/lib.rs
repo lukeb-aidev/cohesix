@@ -29873,9 +29873,9 @@ const CYW43_FOREGROUND_PARENT_OVERLAY_BYTES: usize =
 #[cfg(any(target_os = "none", test))]
 const CYW43_FOREGROUND_DEADLINES: usize = 64;
 #[cfg(any(target_os = "none", test))]
-/// Maximum exact successful immutable-stream child terminals that may mint a
+/// Maximum exact successful cold-parent child terminals that may mint a local
 /// successor before the retained parent must return to its root grant fence.
-const CYW43_FOREGROUND_STREAM_LOCAL_SUCCESSORS: u8 = 64;
+const CYW43_FOREGROUND_ROOT_GRANT_LOCAL_SUCCESSORS: u8 = 64;
 
 #[cfg(any(target_os = "none", test))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -30163,7 +30163,7 @@ struct Cyw43ForegroundTransaction {
     baseline_release_phase: u32,
     turn_id: u64,
     generation: u32,
-    stream_local_successors: u8,
+    root_grant_local_successors: u8,
     deadline_replay_index: u8,
     deadline_count: u8,
     deadlines: [Cyw43ForegroundDeadline; CYW43_FOREGROUND_DEADLINES],
@@ -30225,7 +30225,7 @@ impl Cyw43ForegroundTransaction {
             baseline_release_phase: 0,
             turn_id: 0,
             generation: 0,
-            stream_local_successors: 0,
+            root_grant_local_successors: 0,
             deadline_replay_index: 0,
             deadline_count: 0,
             deadlines: [Cyw43ForegroundDeadline::empty(); CYW43_FOREGROUND_DEADLINES],
@@ -30269,7 +30269,7 @@ impl Cyw43ForegroundTransaction {
         self.parent_overlay_valid.fill(0);
         self.baseline_state_valid = false;
         self.generation = 0;
-        self.stream_local_successors = 0;
+        self.root_grant_local_successors = 0;
         self.deadline_replay_index = 0;
         self.deadline_count = 0;
         self.prepared_sequence = 0;
@@ -30678,12 +30678,17 @@ impl Cyw43ForegroundTransaction {
         }
     }
 
-    fn bootstrap_stream_completion_fusion_authorized(&self) -> bool {
+    fn cold_parent_local_continuation_authorized(&self) -> bool {
         self.parent_descriptor_valid
             && self.parent_descriptor.valid()
             && matches!(
                 self.parent_descriptor.op,
-                DRIVER_RUNTIME_CYW43_OP_FIRMWARE_CHUNK | DRIVER_RUNTIME_CYW43_OP_NVRAM_CHUNK
+                DRIVER_RUNTIME_CYW43_OP_TRANSPORT_INIT
+                    | DRIVER_RUNTIME_CYW43_OP_FIRMWARE_PREP
+                    | DRIVER_RUNTIME_CYW43_OP_FIRMWARE_CHUNK
+                    | DRIVER_RUNTIME_CYW43_OP_NVRAM_CHUNK
+                    | DRIVER_RUNTIME_CYW43_OP_NVRAM_TAIL
+                    | DRIVER_RUNTIME_CYW43_OP_RELEASE
             )
             && self.parent.flags
                 & (DRIVER_RUNTIME_COMMAND_FLAG_PERSISTENT_TRANSACTION
@@ -30691,24 +30696,36 @@ impl Cyw43ForegroundTransaction {
                 == 0
     }
 
-    fn stream_local_successor_candidate(&self, command: DriverTaskCommandRecord) -> bool {
+    fn sealed_parent_payload_identity_valid(&self) -> bool {
+        if self.parent_descriptor.payload_len == 0 {
+            self.parent_descriptor.payload_offset == 0
+                && self.parent_descriptor.total_len == 0
+                && self.parent_payload_offset == 0
+                && self.parent_payload_len == 0
+                && self.parent_payload_digest == 0
+        } else {
+            self.parent_payload_seal_valid()
+                && self.parent_payload_offset == self.parent_descriptor.payload_offset
+                && self.parent_payload_len == self.parent_descriptor.payload_len
+        }
+    }
+
+    fn root_grant_local_successor_candidate(&self, command: DriverTaskCommandRecord) -> bool {
         self.active
             && self.parent == command
             && self.parent_input_sealed
-            && self.parent_payload_seal_valid()
-            && self.bootstrap_stream_completion_fusion_authorized()
-            && self.parent_payload_offset == self.parent_descriptor.payload_offset
-            && self.parent_payload_len == self.parent_descriptor.payload_len
+            && self.cold_parent_local_continuation_authorized()
+            && self.sealed_parent_payload_identity_valid()
             && !self.executing
             && !self.issued_unknown
             && !self.poisoned
             && self.frontier_valid
             && self.frontier_submitted
             && self.frontier_ticket_valid()
-            && self.stream_local_successors < CYW43_FOREGROUND_STREAM_LOCAL_SUCCESSORS
+            && self.root_grant_local_successors < CYW43_FOREGROUND_ROOT_GRANT_LOCAL_SUCCESSORS
     }
 
-    fn stream_local_exact_terminal_candidate(
+    fn root_grant_local_exact_terminal_candidate(
         &self,
         command: DriverTaskCommandRecord,
         environment_current: bool,
@@ -30719,7 +30736,7 @@ impl Cyw43ForegroundTransaction {
         observed: Cyw43SdioChildCompletion,
     ) -> Option<(Cyw43ForegroundTraceEntry, DriverTaskCompletionRecord)> {
         let entry = self.frontier;
-        if !self.stream_local_successor_candidate(command)
+        if !self.root_grant_local_successor_candidate(command)
             || !environment_current
             || !frontier_immutable
             || !child_active
@@ -30736,9 +30753,9 @@ impl Cyw43ForegroundTransaction {
         .then_some((entry, completion))
     }
 
-    fn reset_stream_local_successors(&mut self, command: DriverTaskCommandRecord) -> bool {
+    fn reset_root_grant_local_successors(&mut self, command: DriverTaskCommandRecord) -> bool {
         if self.active && self.parent == command {
-            self.stream_local_successors = 0;
+            self.root_grant_local_successors = 0;
             true
         } else {
             false
@@ -30834,8 +30851,8 @@ impl Cyw43ForegroundTransaction {
         }
         self.frontier.completion = completion;
         self.entries[index] = self.frontier;
-        let fusion_authorized = completion.code != COMPLETION_FAULT
-            && self.bootstrap_stream_completion_fusion_authorized();
+        let fusion_authorized =
+            completion.code != COMPLETION_FAULT && self.cold_parent_local_continuation_authorized();
         self.turn.complete_child_poll(fusion_authorized);
         self.last_replayed_index = index as u16;
         self.frontier = Cyw43ForegroundTraceEntry::empty();
@@ -33416,7 +33433,7 @@ fn cyw43_foreground_poll_frontier(
 }
 
 #[cfg(any(target_os = "none", test))]
-const fn cyw43_foreground_stream_local_environment_admitted(
+const fn cyw43_foreground_root_grant_local_environment_admitted(
     pair_restart_required: bool,
     child_issued_unknown: bool,
     recovery_required: bool,
@@ -33431,12 +33448,12 @@ const fn cyw43_foreground_stream_local_environment_admitted(
 }
 
 #[cfg(any(target_os = "none", test))]
-fn cyw43_foreground_stream_local_environment_current(
+fn cyw43_foreground_root_grant_local_environment_current(
     transaction: &Cyw43ForegroundTransaction,
 ) -> bool {
     let (recovery_required, terminal_cause_active) = CYW43_RUNTIME_STATE
         .with_ref(|state| (state.recovery_required, state.dpc_terminal_cause.active()));
-    cyw43_foreground_stream_local_environment_admitted(
+    cyw43_foreground_root_grant_local_environment_admitted(
         CYW43_SDIO_PAIR_RESTART_REQUIRED.load(Ordering::Acquire),
         CYW43_SDIO_CHILD_ISSUED_UNKNOWN.load(Ordering::Acquire),
         recovery_required,
@@ -33445,25 +33462,25 @@ fn cyw43_foreground_stream_local_environment_current(
     )
 }
 
-/// Admit one owner-local immutable bootstrap successor only from the exact
+/// Admit one owner-local immutable cold-parent successor only from the exact
 /// successful terminal of its immediately preceding SDIO child.
 ///
 /// This is deliberately narrower than a continuation grant: the sealed parent,
 /// generation, payload digest, child ticket, and stable completion must all
 /// remain exact. A miss, fault, restart, issued-unknown state, exhausted cap,
-/// or any non-firmware/NVRAM parent returns to the existing root boundary.
+/// or any steady/DPC/control parent returns to the existing root boundary.
 #[cfg(any(target_os = "none", test))]
-fn cyw43_foreground_prepare_stream_local_successor(command: DriverTaskCommandRecord) -> bool {
+fn cyw43_foreground_prepare_root_grant_local_successor(command: DriverTaskCommandRecord) -> bool {
     CYW43_FOREGROUND_TRANSACTION.with_mut(|transaction| {
-        if !transaction.stream_local_successor_candidate(command)
-            || !cyw43_foreground_stream_local_environment_current(transaction)
+        if !transaction.root_grant_local_successor_candidate(command)
+            || !cyw43_foreground_root_grant_local_environment_current(transaction)
         {
             return false;
         }
         let entry = transaction.frontier;
         let child = Cyw43SdioChildState::new(entry.command.sequence);
         let observed = cyw43_sdio_child_poll_exact(child);
-        let Some((entry, completion)) = transaction.stream_local_exact_terminal_candidate(
+        let Some((entry, completion)) = transaction.root_grant_local_exact_terminal_candidate(
             command,
             true,
             cyw43_foreground_published_frontier_is_immutable(transaction),
@@ -33477,7 +33494,7 @@ fn cyw43_foreground_prepare_stream_local_successor(command: DriverTaskCommandRec
         // A stable terminal read is not authority if recovery, generation, or
         // immutable publication changed around it. Waiting and every rejected
         // observation return above without touching the transaction cursor.
-        if !cyw43_foreground_stream_local_environment_current(transaction)
+        if !cyw43_foreground_root_grant_local_environment_current(transaction)
             || !cyw43_foreground_published_frontier_is_immutable(transaction)
             || transaction.frontier.command.sequence != entry.command.sequence
         {
@@ -33496,11 +33513,12 @@ fn cyw43_foreground_prepare_stream_local_successor(command: DriverTaskCommandRec
             || transaction.poisoned
             || transaction.issued_unknown
             || !transaction.turn.completion_observed
-            || !cyw43_foreground_stream_local_environment_current(transaction)
+            || !cyw43_foreground_root_grant_local_environment_current(transaction)
         {
             return false;
         }
-        transaction.stream_local_successors = transaction.stream_local_successors.saturating_add(1);
+        transaction.root_grant_local_successors =
+            transaction.root_grant_local_successors.saturating_add(1);
         true
     })
 }
@@ -33510,7 +33528,7 @@ fn cyw43_foreground_prepare_stream_local_successor(command: DriverTaskCommandRec
 /// may consume the exact child or retire its retained root-grant fence, so a
 /// fault must reject it without observation or mutation.
 #[cfg(any(target_os = "none", test))]
-fn cyw43_foreground_stream_local_after_watermark<F>(
+fn cyw43_foreground_root_grant_local_after_watermark<F>(
     foreground_watermark_refresh_fault: Option<u32>,
     admit: F,
 ) -> bool
@@ -33535,13 +33553,13 @@ fn cyw43_foreground_exact_root_grant_refill_admitted(
 }
 
 #[cfg(any(target_os = "none", test))]
-fn cyw43_foreground_reset_stream_local_successors_after_exact_root_grant(
+fn cyw43_foreground_reset_root_grant_local_successors_after_exact_root_grant(
     gate: &RuntimePendingCommandGate,
     retained: RuntimeCommandIntake,
     grant: DriverRuntimeContinuationGrant,
 ) -> bool {
     CYW43_FOREGROUND_TRANSACTION.with_mut(|transaction| {
-        cyw43_foreground_reset_stream_local_successors_after_exact_root_grant_in(
+        cyw43_foreground_reset_root_grant_local_successors_after_exact_root_grant_in(
             transaction,
             gate,
             retained,
@@ -33551,14 +33569,14 @@ fn cyw43_foreground_reset_stream_local_successors_after_exact_root_grant(
 }
 
 #[cfg(any(target_os = "none", test))]
-fn cyw43_foreground_reset_stream_local_successors_after_exact_root_grant_in(
+fn cyw43_foreground_reset_root_grant_local_successors_after_exact_root_grant_in(
     transaction: &mut Cyw43ForegroundTransaction,
     gate: &RuntimePendingCommandGate,
     retained: RuntimeCommandIntake,
     grant: DriverRuntimeContinuationGrant,
 ) -> bool {
     cyw43_foreground_exact_root_grant_refill_admitted(gate, retained, grant)
-        && transaction.reset_stream_local_successors(retained.command)
+        && transaction.reset_root_grant_local_successors(retained.command)
 }
 
 #[cfg(any(target_os = "none", test))]
@@ -65166,7 +65184,7 @@ pub fn runtime_main(task_key: usize) -> ! {
                 RuntimeWake::None => {}
             }
         }
-        let stream_local_successor = cyw43_foreground_stream_local_after_watermark(
+        let root_grant_local_successor = cyw43_foreground_root_grant_local_after_watermark(
             foreground_watermark_refresh_fault,
             || {
                 pending_intake.is_some_and(|intake| {
@@ -65174,11 +65192,11 @@ pub fn runtime_main(task_key: usize) -> ! {
                         && pending_command_gate.root_grant_active()
                         && pending_command_gate.delegated_owner_phase()
                             == RuntimeRetainedOwnerPhase::CheckGrant
-                        && cyw43_foreground_prepare_stream_local_successor(intake.command)
+                        && cyw43_foreground_prepare_root_grant_local_successor(intake.command)
                 })
             },
         );
-        if stream_local_successor {
+        if root_grant_local_successor {
             // The exact terminal already consumed the only completion-poll
             // action in this local unit. Retire the old retained-grant state;
             // the command turn below may replay that terminal and publish at
@@ -65186,7 +65204,7 @@ pub fn runtime_main(task_key: usize) -> ! {
             // reconstructs the ordinary root fence before another unit.
             pending_command_gate.complete();
         }
-        if !stream_local_successor
+        if !root_grant_local_successor
             && runtime_command_loop_route(
                 pending_intake.is_some(),
                 pending_command_gate.continuation_required(),
@@ -65220,16 +65238,16 @@ pub fn runtime_main(task_key: usize) -> ! {
                     let _ = service_runtime_notification(badge);
                     // Service is a hard stop. Exactly one persistent-source
                     // physical quantum ran. The sole exception is an exact
-                    // immutable firmware/NVRAM child terminal: that terminal
+                    // immutable cold-parent child terminal: that terminal
                     // may causally admit its one successor without adding an
                     // artificial root-period handoff. Every unrelated source,
                     // miss, fault, or identity mismatch keeps this hard stop.
-                    let stream_local_successor = pending_intake.is_some_and(|intake| {
+                    let root_grant_local_successor = pending_intake.is_some_and(|intake| {
                         notification_route == RuntimeNotificationRoute::Cyw43Client
                             && pending_command_gate.root_grant_active()
-                            && cyw43_foreground_prepare_stream_local_successor(intake.command)
+                            && cyw43_foreground_prepare_root_grant_local_successor(intake.command)
                     });
-                    if stream_local_successor {
+                    if root_grant_local_successor {
                         pending_command_gate.complete();
                     } else {
                         runtime_yield_current_tcb();
@@ -65336,7 +65354,7 @@ pub fn runtime_main(task_key: usize) -> ! {
                     }
                     RuntimeRetainedOwnerAdmissionOutcome::Execute(grant) => {
                         if root_grant {
-                            let _ = cyw43_foreground_reset_stream_local_successors_after_exact_root_grant(
+                            let _ = cyw43_foreground_reset_root_grant_local_successors_after_exact_root_grant(
                                 &pending_command_gate,
                                 *retained,
                                 grant,
@@ -88049,7 +88067,7 @@ mod tests {
     }
 
     #[test]
-    fn bootstrap_stream_local_successor_requires_exact_identity_and_respects_cap() {
+    fn cold_parent_local_successor_requires_exact_identity_and_respects_cap() {
         let parent = retained_gate_test_intake(0x8000_5e01).command;
         let generation = 0x4359_5e01;
         let child_sequence = 0x8000_5e02;
@@ -88100,7 +88118,7 @@ mod tests {
         transaction.frontier_valid = true;
         transaction.frontier_submitted = true;
 
-        assert!(transaction.stream_local_successor_candidate(parent));
+        assert!(transaction.root_grant_local_successor_candidate(parent));
         let turn_before_wait = transaction.turn;
         let frontier_before_wait = (
             transaction.frontier_valid,
@@ -88116,13 +88134,13 @@ mod tests {
         let state_before_wait = (
             transaction.issued_unknown,
             transaction.poisoned,
-            transaction.stream_local_successors,
+            transaction.root_grant_local_successors,
             transaction.prepared_sequence,
             transaction.prepared_descriptor_valid,
             transaction.prepared_write_len,
         );
         assert!(transaction
-            .stream_local_exact_terminal_candidate(
+            .root_grant_local_exact_terminal_candidate(
                 parent,
                 true,
                 true,
@@ -88152,7 +88170,7 @@ mod tests {
             (
                 transaction.issued_unknown,
                 transaction.poisoned,
-                transaction.stream_local_successors,
+                transaction.root_grant_local_successors,
                 transaction.prepared_sequence,
                 transaction.prepared_descriptor_valid,
                 transaction.prepared_write_len,
@@ -88162,7 +88180,7 @@ mod tests {
         );
 
         let exact_completion = DriverTaskCompletionRecord::progress(child_sequence, 1);
-        let Some((entry, completion)) = transaction.stream_local_exact_terminal_candidate(
+        let Some((entry, completion)) = transaction.root_grant_local_exact_terminal_candidate(
             parent,
             true,
             true,
@@ -88181,8 +88199,9 @@ mod tests {
         assert!(transaction.commit_frontier_completion(completion));
         assert!(transaction.turn.completion_observed);
         assert!(transaction.turn.new_submission_available());
-        transaction.stream_local_successors = transaction.stream_local_successors.saturating_add(1);
-        assert_eq!(transaction.stream_local_successors, 1);
+        transaction.root_grant_local_successors =
+            transaction.root_grant_local_successors.saturating_add(1);
+        assert_eq!(transaction.root_grant_local_successors, 1);
 
         let mut next_entry = entry;
         next_entry.ticket.owner_sequence = child_sequence.wrapping_add(1);
@@ -88192,40 +88211,40 @@ mod tests {
         transaction.frontier = next_entry;
         transaction.frontier_valid = true;
         transaction.frontier_submitted = true;
-        transaction.stream_local_successors = CYW43_FOREGROUND_STREAM_LOCAL_SUCCESSORS;
-        assert!(!transaction.stream_local_successor_candidate(parent));
+        transaction.root_grant_local_successors = CYW43_FOREGROUND_ROOT_GRANT_LOCAL_SUCCESSORS;
+        assert!(!transaction.root_grant_local_successor_candidate(parent));
         let mut wrong_parent = parent;
         wrong_parent.sequence = wrong_parent.sequence.wrapping_add(1);
-        assert!(!transaction.reset_stream_local_successors(wrong_parent));
+        assert!(!transaction.reset_root_grant_local_successors(wrong_parent));
         assert_eq!(
-            transaction.stream_local_successors, CYW43_FOREGROUND_STREAM_LOCAL_SUCCESSORS,
+            transaction.root_grant_local_successors, CYW43_FOREGROUND_ROOT_GRANT_LOCAL_SUCCESSORS,
             "an unrelated root grant cannot refill the retained parent",
         );
-        assert!(transaction.reset_stream_local_successors(parent));
-        assert_eq!(transaction.stream_local_successors, 0);
-        assert!(transaction.stream_local_successor_candidate(parent));
+        assert!(transaction.reset_root_grant_local_successors(parent));
+        assert_eq!(transaction.root_grant_local_successors, 0);
+        assert!(transaction.root_grant_local_successor_candidate(parent));
 
         transaction.parent_payload[0] ^= 1;
-        assert!(!transaction.stream_local_successor_candidate(parent));
+        assert!(!transaction.root_grant_local_successor_candidate(parent));
         transaction.parent_payload[0] ^= 1;
         transaction.parent_payload_offset = transaction.parent_payload_offset.wrapping_add(1);
-        assert!(!transaction.stream_local_successor_candidate(parent));
+        assert!(!transaction.root_grant_local_successor_candidate(parent));
         transaction.parent_payload_offset = transaction.parent_descriptor.payload_offset;
         transaction.parent_payload_len = transaction.parent_payload_len.wrapping_add(1);
         transaction.parent_payload_digest = transaction.sealed_parent_payload_digest();
-        assert!(!transaction.stream_local_successor_candidate(parent));
+        assert!(!transaction.root_grant_local_successor_candidate(parent));
         transaction.parent_payload_len = transaction.parent_descriptor.payload_len;
         transaction.parent_payload_digest = transaction.sealed_parent_payload_digest();
         transaction.issued_unknown = true;
-        assert!(!transaction.stream_local_successor_candidate(parent));
+        assert!(!transaction.root_grant_local_successor_candidate(parent));
         transaction.issued_unknown = false;
         transaction.parent_descriptor.op = DRIVER_RUNTIME_CYW43_OP_CONTROL_FRAME;
-        assert!(!transaction.stream_local_successor_candidate(parent));
+        assert!(!transaction.root_grant_local_successor_candidate(parent));
     }
 
     #[test]
-    fn bootstrap_stream_local_successor_fences_recovery_unknown_and_generation_drift() {
-        assert!(cyw43_foreground_stream_local_environment_admitted(
+    fn cold_parent_local_successor_fences_recovery_unknown_and_generation_drift() {
+        assert!(cyw43_foreground_root_grant_local_environment_admitted(
             false, false, false, false, true,
         ));
         for (case, pair_restart, child_unknown, recovery, terminal_cause, generation_current) in [
@@ -88236,7 +88255,7 @@ mod tests {
             ("generation drift", false, false, false, false, false),
         ] {
             assert!(
-                !cyw43_foreground_stream_local_environment_admitted(
+                !cyw43_foreground_root_grant_local_environment_admitted(
                     pair_restart,
                     child_unknown,
                     recovery,
@@ -88249,7 +88268,7 @@ mod tests {
     }
 
     #[test]
-    fn bootstrap_stream_local_watermark_fault_retains_root_fence_without_terminal_commit() {
+    fn cold_parent_local_watermark_fault_retains_root_fence_without_terminal_commit() {
         let generation = 0x4359_5e08;
         let mut gate = RuntimePendingCommandGate::new();
         gate.retain_after_pending_root_generation(generation);
@@ -88257,7 +88276,7 @@ mod tests {
         let gate_before = gate;
         let mut terminal_commit_attempted = false;
 
-        assert!(!cyw43_foreground_stream_local_after_watermark(
+        assert!(!cyw43_foreground_root_grant_local_after_watermark(
             Some(0x8000_5e08),
             || {
                 terminal_commit_attempted = true;
@@ -88278,27 +88297,30 @@ mod tests {
             RuntimeCommandLoopRoute::WaitForRetainedContinuation,
         );
 
-        assert!(cyw43_foreground_stream_local_after_watermark(None, || {
-            terminal_commit_attempted = true;
-            true
-        }));
+        assert!(cyw43_foreground_root_grant_local_after_watermark(
+            None,
+            || {
+                terminal_commit_attempted = true;
+                true
+            }
+        ));
         assert!(terminal_commit_attempted);
     }
 
     #[test]
-    fn bootstrap_stream_local_cap_refills_only_after_exact_acked_root_grant() {
+    fn cold_parent_local_cap_refills_only_after_exact_acked_root_grant() {
         let generation = 0x4359_5e10;
         let retained = root_retained_gate_test_intake(0x8000_5e10, generation);
         let grant = retained_gate_test_grant(retained, generation, 7);
         let mut transaction = Cyw43ForegroundTransaction::new();
         transaction.active = true;
         transaction.parent = retained.command;
-        transaction.stream_local_successors = CYW43_FOREGROUND_STREAM_LOCAL_SUCCESSORS;
+        transaction.root_grant_local_successors = CYW43_FOREGROUND_ROOT_GRANT_LOCAL_SUCCESSORS;
 
         let mut unacked = RuntimePendingCommandGate::new();
         unacked.retain_after_pending_root_generation(generation);
         assert!(
-            !cyw43_foreground_reset_stream_local_successors_after_exact_root_grant_in(
+            !cyw43_foreground_reset_root_grant_local_successors_after_exact_root_grant_in(
                 &mut transaction,
                 &unacked,
                 retained,
@@ -88306,8 +88328,8 @@ mod tests {
             )
         );
         assert_eq!(
-            transaction.stream_local_successors,
-            CYW43_FOREGROUND_STREAM_LOCAL_SUCCESSORS,
+            transaction.root_grant_local_successors,
+            CYW43_FOREGROUND_ROOT_GRANT_LOCAL_SUCCESSORS,
         );
 
         let mut ack_failed = RuntimePendingCommandGate::new();
@@ -88327,7 +88349,7 @@ mod tests {
             RuntimeRetainedOwnerAdmissionOutcome::AckFailed(grant),
         );
         assert!(
-            !cyw43_foreground_reset_stream_local_successors_after_exact_root_grant_in(
+            !cyw43_foreground_reset_root_grant_local_successors_after_exact_root_grant_in(
                 &mut transaction,
                 &ack_failed,
                 retained,
@@ -88352,23 +88374,23 @@ mod tests {
             RuntimeRetainedOwnerAdmissionOutcome::Execute(grant),
         );
         assert!(
-            cyw43_foreground_reset_stream_local_successors_after_exact_root_grant_in(
+            cyw43_foreground_reset_root_grant_local_successors_after_exact_root_grant_in(
                 &mut transaction,
                 &exact,
                 retained,
                 grant,
             )
         );
-        assert_eq!(transaction.stream_local_successors, 0);
+        assert_eq!(transaction.root_grant_local_successors, 0);
 
-        transaction.stream_local_successors = CYW43_FOREGROUND_STREAM_LOCAL_SUCCESSORS;
+        transaction.root_grant_local_successors = CYW43_FOREGROUND_ROOT_GRANT_LOCAL_SUCCESSORS;
         let mut delegated = RuntimePendingCommandGate::new();
         delegated.retain_after_pending_generation(generation);
         delegated.continuation_required = false;
         delegated.last_grant_id = grant.grant_id;
         delegated.set_delegated_owner_phase(RuntimeRetainedOwnerPhase::Inactive);
         assert!(
-            !cyw43_foreground_reset_stream_local_successors_after_exact_root_grant_in(
+            !cyw43_foreground_reset_root_grant_local_successors_after_exact_root_grant_in(
                 &mut transaction,
                 &delegated,
                 retained,
@@ -88376,31 +88398,135 @@ mod tests {
             )
         );
         assert_eq!(
-            transaction.stream_local_successors,
-            CYW43_FOREGROUND_STREAM_LOCAL_SUCCESSORS,
+            transaction.root_grant_local_successors,
+            CYW43_FOREGROUND_ROOT_GRANT_LOCAL_SUCCESSORS,
         );
     }
 
     #[test]
-    fn non_bootstrap_stream_parents_retain_completion_submission_barrier() {
+    fn every_cold_parent_op_admits_exact_terminal_local_continuation() {
+        let cold_ops = [
+            DRIVER_RUNTIME_CYW43_OP_TRANSPORT_INIT,
+            DRIVER_RUNTIME_CYW43_OP_FIRMWARE_PREP,
+            DRIVER_RUNTIME_CYW43_OP_FIRMWARE_CHUNK,
+            DRIVER_RUNTIME_CYW43_OP_NVRAM_CHUNK,
+            DRIVER_RUNTIME_CYW43_OP_NVRAM_TAIL,
+            DRIVER_RUNTIME_CYW43_OP_RELEASE,
+        ];
+        let child_descriptor = DriverRuntimeSdioCommandDescriptor {
+            op: DRIVER_RUNTIME_SDIO_OP_CARD_COMMAND,
+            response_kind: DRIVER_RUNTIME_SDIO_RESP_OCR,
+            len: SDIO_CMD5,
+            timeout_us: 100_000,
+            ..DriverRuntimeSdioCommandDescriptor::empty()
+        };
+        assert!(child_descriptor.valid());
+
+        for (ordinal, op) in cold_ops.into_iter().enumerate() {
+            let parent_sequence = 0x4359_6300u32.wrapping_add(ordinal as u32);
+            let generation = 0x4359_6310u32.wrapping_add(ordinal as u32);
+            let child_sequence = 0x8000_6300u32.wrapping_add(ordinal as u32);
+            let parent = cyw43_descriptor_command(parent_sequence);
+            let carries_payload = matches!(
+                op,
+                DRIVER_RUNTIME_CYW43_OP_FIRMWARE_CHUNK | DRIVER_RUNTIME_CYW43_OP_NVRAM_CHUNK
+            );
+            let parent_descriptor = DriverRuntimeCyw43CommandDescriptor {
+                op,
+                target_addr: carries_payload.then_some(CYW43_RAM_BASE_4345).unwrap_or(0),
+                payload_offset: carries_payload
+                    .then_some(DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE)
+                    .unwrap_or(0),
+                payload_len: carries_payload.then_some(4).unwrap_or(0),
+                total_len: carries_payload.then_some(4).unwrap_or(0),
+                ..DriverRuntimeCyw43CommandDescriptor::empty()
+            };
+            assert!(parent_descriptor.valid(), "cold op {op}");
+
+            let mut transaction = Cyw43ForegroundTransaction::new();
+            transaction.generation = generation;
+            transaction.parent_input_sealed = true;
+            transaction.parent_descriptor = parent_descriptor;
+            transaction.parent_descriptor_valid = true;
+            if carries_payload {
+                transaction.parent_payload_offset = parent_descriptor.payload_offset;
+                transaction.parent_payload_len = parent_descriptor.payload_len;
+                transaction.parent_payload[..4].copy_from_slice(&[1, 2, 3, 4]);
+                transaction.parent_payload_digest = transaction.sealed_parent_payload_digest();
+            }
+            assert!(transaction.begin_turn(parent, 1), "cold op {op}");
+            transaction.executing = false;
+            transaction.frontier = Cyw43ForegroundTraceEntry {
+                ticket: Cyw43ForegroundActionTicket {
+                    parent_sequence,
+                    generation,
+                    owner_sequence: child_sequence,
+                    ordinal: 0,
+                    issued_turn_id: 1,
+                },
+                command: DriverTaskCommandRecord {
+                    sequence: child_sequence,
+                    ..Cyw43ForegroundTraceEntry::empty().command
+                },
+                descriptor: child_descriptor,
+                ..Cyw43ForegroundTraceEntry::empty()
+            };
+            transaction.frontier_valid = true;
+            transaction.frontier_submitted = true;
+
+            assert!(
+                transaction.cold_parent_local_continuation_authorized(),
+                "cold op {op}",
+            );
+            assert!(
+                transaction.sealed_parent_payload_identity_valid(),
+                "cold op {op}",
+            );
+            assert!(
+                transaction.root_grant_local_successor_candidate(parent),
+                "cold op {op}",
+            );
+            if !carries_payload {
+                transaction.parent_payload_offset = 1;
+                assert!(
+                    !transaction.root_grant_local_successor_candidate(parent),
+                    "cold zero-payload op {op} must reject retained-offset drift",
+                );
+                transaction.parent_payload_offset = 0;
+                transaction.parent_payload_digest = 1;
+                assert!(
+                    !transaction.root_grant_local_successor_candidate(parent),
+                    "cold zero-payload op {op} must reject synthetic payload identity",
+                );
+                transaction.parent_payload_digest = 0;
+                transaction.parent_descriptor.payload_offset = 1;
+                assert!(
+                    !transaction.root_grant_local_successor_candidate(parent),
+                    "cold zero-payload op {op} must reject descriptor-offset drift",
+                );
+                transaction.parent_descriptor.payload_offset = 0;
+                transaction.parent_descriptor.total_len = 1;
+                assert!(
+                    !transaction.root_grant_local_successor_candidate(parent),
+                    "cold zero-payload op {op} must reject descriptor-length drift",
+                );
+                transaction.parent_descriptor.total_len = 0;
+            }
+            assert!(
+                transaction.commit_frontier_completion(DriverTaskCompletionRecord::progress(
+                    child_sequence,
+                    1
+                ),)
+            );
+            assert!(transaction.turn.completion_observed, "cold op {op}");
+            assert!(transaction.turn.new_submission_available(), "cold op {op}",);
+        }
+    }
+
+    #[test]
+    fn non_cold_and_autonomous_parents_retain_completion_submission_barrier() {
         let control_payload_len = CYW43_CDC_HEADER_BYTES as u16;
         let cases = [
-            (
-                "transport",
-                DriverRuntimeCyw43CommandDescriptor {
-                    op: DRIVER_RUNTIME_CYW43_OP_TRANSPORT_INIT,
-                    ..DriverRuntimeCyw43CommandDescriptor::empty()
-                },
-                0,
-            ),
-            (
-                "release",
-                DriverRuntimeCyw43CommandDescriptor {
-                    op: DRIVER_RUNTIME_CYW43_OP_RELEASE,
-                    ..DriverRuntimeCyw43CommandDescriptor::empty()
-                },
-                0,
-            ),
             (
                 "control",
                 DriverRuntimeCyw43CommandDescriptor {
@@ -88490,8 +88616,8 @@ mod tests {
             };
             transaction.frontier_valid = true;
             assert!(
-                !transaction.bootstrap_stream_completion_fusion_authorized(),
-                "{case} parent must not acquire bootstrap stream fusion authority",
+                !transaction.cold_parent_local_continuation_authorized(),
+                "{case} parent must not acquire cold-parent continuation authority",
             );
 
             assert!(
@@ -129192,6 +129318,109 @@ mod tests {
         assert_eq!(test_hdmi_cell_digest(&descriptor.framebuffer, 1, 0), blank);
         assert_eq!(state.row, saved_row);
         assert_eq!(state.col, saved_col);
+    }
+
+    #[test]
+    fn hdmi_production_multiline_scroll_payload_slices_parser_and_raster_exactly() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let mut descriptor = descriptor_for(HOT_PATH_HDMI_TEXT, ROLE_DISPLAY);
+        descriptor.framebuffer = DriverRuntimeFramebufferDescriptor {
+            vaddr: DRIVER_RUNTIME_FRAMEBUFFER_VADDR,
+            paddr: 0x3000_0000,
+            width: 72,
+            height: 80,
+            pitch: 72 * 4,
+            format: DRIVER_RUNTIME_FRAMEBUFFER_FORMAT_XRGB8888,
+        };
+        RUNTIME_DESCRIPTOR.store(descriptor);
+        let state = HdmiRenderState::from_descriptor(&descriptor);
+        assert_eq!((state.cols, state.rows), (8, 4));
+        let blank = test_hdmi_cell_digest(&descriptor.framebuffer, 0, 0);
+
+        let initial = b"c\nd\ne\nf";
+        stage_bytes(DRIVER_TASK_RING_FRAME_OFFSET, initial);
+        let initial_frame = DriverFrameDescriptor {
+            offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
+            len: initial.len() as u16,
+            flags: 0,
+        };
+        assert_eq!(hdmi_render_frame(initial_frame), initial.len());
+        assert_eq!(HDMI_CURSOR_ROW.load(Ordering::Acquire), 3);
+        assert_eq!(HDMI_CURSOR_COL.load(Ordering::Acquire), 1);
+
+        // This is the exact multi-row root payload shape: preserve the input
+        // cursor, move the physical viewport down by two rows, repaint the two
+        // exposed canonical rows, then restore the input cursor.
+        let payload = b"\x1b7\x1b[2T\x1b[Ha\x1b[K\nb\x1b[K\x1b8";
+        stage_bytes(DRIVER_TASK_RING_FRAME_OFFSET, payload);
+        let frame = DriverFrameDescriptor {
+            offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
+            len: payload.len() as u16,
+            flags: 0,
+        };
+        let mut next_byte = 0;
+        let mut tab_spaces_remaining = 0;
+        let mut pending_plane_op = HdmiPendingPlaneOp::none();
+        let mut parse_turns = 0usize;
+        let mut saw_retained_scroll_damage = false;
+        loop {
+            let progress = hdmi_parse_frame_to_cell_plane_turn(
+                frame,
+                next_byte,
+                tab_spaces_remaining,
+                pending_plane_op,
+                2,
+            )
+            .expect("the retained multi-row scroll parser state remains canonical");
+            assert!(progress.operations <= 2);
+            assert!(progress.next_byte >= next_byte);
+            saw_retained_scroll_damage |=
+                progress.pending_plane_op.kind == HdmiPendingPlaneOpKind::ScrollDamage;
+            next_byte = progress.next_byte;
+            tab_spaces_remaining = progress.tab_spaces_remaining;
+            pending_plane_op = progress.pending_plane_op;
+            parse_turns = parse_turns.saturating_add(1);
+            assert!(parse_turns <= 128, "bounded parser turns must converge");
+            if progress.complete {
+                break;
+            }
+        }
+        assert!(saw_retained_scroll_damage);
+        assert_eq!(next_byte, frame.len);
+        assert_eq!(HDMI_CURSOR_ROW.load(Ordering::Acquire), 3);
+        assert_eq!(HDMI_CURSOR_COL.load(Ordering::Acquire), 1);
+
+        let mut next_cell = 0usize;
+        let mut raster_turns = 0usize;
+        loop {
+            let progress = hdmi_raster_dirty_turn(next_cell, 1)
+                .expect("each retained raster cursor remains in the admitted cell plane");
+            next_cell = progress.next_cell;
+            raster_turns = raster_turns.saturating_add(1);
+            assert!(raster_turns <= HDMI_CELL_CAPACITY);
+            if progress.complete {
+                break;
+            }
+        }
+        assert!(
+            raster_turns > 1,
+            "the regression must exercise sliced rastering"
+        );
+        HDMI_CELL_PLANE.with_ref(|plane| {
+            assert_eq!(plane.cell(0, 0), b'a');
+            assert_eq!(plane.cell(1, 0), b'b');
+            assert_eq!(plane.cell(2, 0), b'c');
+            assert_eq!(plane.cell(3, 0), b'd');
+            assert!((0..plane.cell_count()).all(|index| !plane.dirty(index)));
+        });
+        for row in 0..4 {
+            assert_ne!(
+                test_hdmi_cell_digest(&descriptor.framebuffer, row, 0),
+                blank,
+                "row {row} must reach the physical raster",
+            );
+        }
     }
 
     #[test]

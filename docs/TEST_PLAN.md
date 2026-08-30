@@ -1518,7 +1518,8 @@ must prove raw input, echo, parsing, and root-owned diagnostics remain live
 even when passive dispatch admission is denied. Only a parsed command that may
 enter passive NineDoor samples `SchedContext_Consumed`: retain the exact parsed
 command and authority identity after one baseline sample that validates the
-selected interface, then perform exactly one selected periodic MCS Yield. The
+selected interface, then perform exactly one selected periodic MCS Yield per
+bounded reserve attempt. The
 selected syscall clears stored `scConsumed` evidence but cannot clear live
 per-core `ksConsumed`; therefore a second pre-Yield reset is not a fresh
 resume boundary. Immediately after Yield returns, the first userland operation
@@ -1531,8 +1532,10 @@ sample. The strict wall interval ends at that final admission/WCET cut, not at
 an earlier policy sample. Only an interval strictly below
 `budget_us - wcet_us`, currently 250 us, admits the command and leaves the
 complete 2,500 us root WCET for the comparison, direct dispatch, and bounded
-response/epilogue; equality
-or excess emits one typed refusal and terminates without retry. Newly published
+response/epilogue. Equality or excess terminates that lease without dispatch;
+the first expired lease retains the exact command for one completely new
+Yield/refill attempt, while a second expiry emits the existing single typed
+refusal. Newly published
 isolated-service recovery, reboot, containment, quarantine, connection/session
 drift, invalid profile, zero or changed timer frequency, backwards/missing
 counter evidence, invalid period conversion, and failure of either the
@@ -1541,7 +1544,8 @@ dispatch, without projecting a response into a replacement connection.
 Focused tests must bind the selected kernel Yield semantics, prove baseline
 validation plus an immediate post-Yield counter capture and one ignored drain,
 prove no userland operation precedes that counter capture, and cover exact
-one-command/one-dispatch retention, strict equality refusal without retry,
+one-command/one-dispatch retention, strict equality retry followed by either
+one admitted dispatch or one refusal after the second expired lease,
 frequency drift, backwards/missing evidence, exact cross-multiplication without
 rounded-down admission, fresh policy time, fault-before-dispatch cancellation
 before and after the decision, authority cancellation, and continued raw
@@ -1618,16 +1622,19 @@ response-only drain transition. Build, QEMU, image, and flash results remain
 non-hardware evidence.
 
 The next candidate supersedes the earlier one-successor-per-root-grant CYW43
-wording. Within one exact ACKed ordinary firmware/NVRAM root grant, each exact
+wording. Within one exact ACKed ordinary cold-parent root grant, each exact
 immutable successful terminal may publish its one immutable successor, up to
-64 successor units. The permit never resets on an unacknowledged, ACK-failed,
-or delegated grant. Waiting, fault, malformed, tampered, persistent, or
-non-stream terminals, an unknown issue state, stale runtime/owner generation,
-descriptor or payload drift, pair restart, recovery, or an in-flight submit
-must not move the frontier or cap. Tests must prove terminal immutability,
-monotonic tickets/frontier, one submit per terminal and turn, cap exhaustion,
-replay idempotence, stable no-mutation denial, and retained DPC/CARD_INT
-fairness.
+64 successor units. The finite cold set is transport init, firmware prep,
+firmware chunk, NVRAM chunk/tail, and release. Zero-payload parents require
+zero descriptor and retained payload identity. The permit never resets on an
+unacknowledged, ACK-failed, or delegated grant. Waiting, fault, malformed,
+tampered, control, RX, steady, persistent, or non-cold terminals, an unknown
+issue state, stale runtime/owner generation, descriptor or payload drift, pair
+restart, recovery, a watermark fault, or an in-flight submit must not move the
+frontier or cap. Tests must prove terminal immutability, monotonic
+tickets/frontier, one submit per terminal and turn, cap exhaustion, replay
+idempotence, stable no-mutation denial, zero-payload identity, and retained
+DPC/CARD_INT fairness.
 
 The direct-GENET source gate must classify productive progress as exactly one
 of `CommandAccepted`, `CommandAcceptedAndStagePublished`, `StagePublished`,
@@ -1650,6 +1657,59 @@ and QEMU `root-mcs` tests can reject this source candidate; they cannot prove
 Pi timing or hardware effect. Fresh exact-image WiFi and GENET runs remain
 mandatory to measure Gate-8 time, sustained raw latency, first-attempt scripts,
 and medium/high pressure against August 10.
+
+Exact a6c hardware narrows the next direct-GENET gate. Its raw 64-request result
+is 23.016 requests/s, 39.992-ms median, and 48.759-ms p95; the same-boot pcap
+shows 1.637-ms p95 ingress acknowledgement and 48.576-ms p95 application
+response. `smp_parity.coh` and medium REST fail at
+`busy detail=root-sc-reserve`, while DMA, IRQ, rings, TCP ingress, quarantine,
+and loss remain healthy. A retained passive command may therefore cross one
+additional explicit Yield/refill only: the new attempt must start from
+`AwaitingYield`, drain fresh Consumed evidence, use the unchanged strict
+`<250 us` lease, retain exact command/session/connection identity and every
+fault/recovery/containment fence, and emit the existing single refusal after a
+second expiry. No within-refill sliding, resampling, retry loop, or numeric
+budget widening is permitted.
+
+An exact committed direct-GENET `StageOutput` may consume and ACK only the
+causal sequence-last child publication immediately after its same-core
+`YieldTo`. The fused path performs no second device issue or control
+publication. Absence, backpressure, unrelated output, identity drift, or fault
+leaves any observed ACK pending for the ordinary `ObserveChild` turn;
+non-GENET transport, mediated WiFi, and QEMU never enter the fused observation.
+Tests must cover no-publication no-mutation, exact
+stage-plus-`OutputDrained` accounting with two child calls, response-lane
+retirement, command-two exclusion, operator/fault fences, and unchanged QEMU
+selection.
+
+Exact a6c WiFi passes DHCP, authenticated TCP, `nettest`, three focused `.coh`
+scripts, and medium/high REST pressure, but raw latency remains 4.350
+requests/s with 250.393-ms p95. Its 205.503-ms DHCP is August-class; the
+remaining discriminator is selected-MCS service cadence. Cold-parent tests and
+fresh hardware must distinguish cold Gate-8 improvement from steady op7
+latency. A host test or clean image cannot claim steady parity, and no
+steady-parent grant, timer poll, retry, or budget increase may be inferred from
+the cold optimization.
+
+For local-seat acceptance, `Cohesix console ready` must be independent of WiFi
+Gate 8, must follow root and USB command admission, and `cohesix>` must follow
+the exact ready-banner frame completion. Up and Down from a live tail with
+pending output must drain the sealed finite prefix and then use the bounded CSI
+scroll path without an xHCI reset or full snapshot. Interleaved later output
+must remain ordered; receipt identity drift, wrap, eviction, or unavailable
+history must request exactly one canonical redraw. Source tests prove only the
+state machine; fresh USB keystrokes and HDMI observation prove physical
+operator behavior.
+
+The complete host-tool suite, `tools/cohesix-py`, generated profile/ABI
+consumers, `.coh` workloads, and benchmark workload, arithmetic, and report
+schemas are compatibility-reviewed. Because the console grammar, REST/TCP
+framing, manifest schema, generated contracts, and report formats are
+unchanged, no implementation, fixture, workload, or schema update is required
+on those surfaces. Before a candidate image, run focused Pi source tests,
+exact AArch64 Pi compilation, generated/Test Plan integrity checks, and a
+nonclaiming QEMU root-MCS canary. Only a fresh exact-image dual-mode Pi run can
+promote boot, console, correctness, latency, pressure, or August-parity claims.
 
 The CYW43 software and cadence closure gate is authorized by Milestone 26d
 tasks `m26d-cyw43-hardware-free-closure` and

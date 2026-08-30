@@ -1506,9 +1506,10 @@ fn deferred_cyw43_yield_and_reset<
     V: CapabilityValidator,
 {
     // If the immediately preceding operator turn parsed a passive-service
-    // command, this is its sole selected MCS boundary. Preparing here keeps
-    // every deferred-supervisor yield pending-aware without allowing another
-    // driver or ordinary EventPump unit between the baseline sample and Yield.
+    // command, this is the selected MCS boundary for its current bounded
+    // reserve attempt. Preparing here keeps every deferred-supervisor yield
+    // pending-aware without allowing another driver or ordinary EventPump unit
+    // between the attempt's baseline sample and Yield.
     let passive_boundary_prepared = pump.prepare_pi_root_control_passive_admission_yield();
     let resumed_at_ticks = sel4::yield_now();
     if passive_boundary_prepared {

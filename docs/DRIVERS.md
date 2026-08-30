@@ -796,8 +796,10 @@ reusable ownership pattern.
   alone cannot satisfy those gates. An ordinary pending enumeration retry may
   retain the existing pre-prompt deferral, but that deferral is not descriptor
   or owner proof authority.
-- Withhold the interactive HDMI prompt until current USB command admission and
-  display retry health both hold. Before that boundary, project bounded
+- Treat local HDMI readiness independently from WiFi or GENET readiness. Queue
+  `Cohesix console ready` only after root and current USB command admission,
+  and withhold the interactive prompt until that exact banner frame completes
+  and display retry health holds. Before that boundary, project bounded
   controller, keyboard-enumeration, and first-report feedback through the
   existing EventPump output path. Emit stage changes immediately and an
   unchanged-stage heartbeat no more often than every two seconds. Retain the
@@ -812,6 +814,12 @@ reusable ownership pattern.
   receipt completes. Older FIFO output stays before that row, later output
   stays after it, and backspace cannot erase bytes at or before the prompt
   floor. An older display completion cannot acknowledge newer input.
+- If an arrow arrives at the live tail while ordinary HDMI output remains
+  pending, seal that finite prefix, drain it under generation and logical-tail
+  receipt identity, and only then apply the bounded CSI scroll. Output queued
+  later stays behind the fence. Identity drift, wrap, eviction, or unavailable
+  history requests one canonical snapshot; none of these presentation paths
+  resets or reinitializes xHCI.
 - If USB command readiness is invalidated, retract the prompt and stale
   console-ready banner without discarding the typed suffix. Re-admit them only
   from fresh readiness; a stale retraction receipt cannot clear the restored
@@ -1170,15 +1178,19 @@ transport:
   closed or retain their prior scheduler handoff and cannot fall back into this
   lane.
 - Within one CYW43 root-granted foreground turn, observing and consuming one
-  exact successful SDIO child terminal under a sealed ordinary firmware-chunk
-  or NVRAM-chunk parent does not consume that turn's sole new-submission slot.
+  exact successful SDIO child terminal under a sealed finite cold parent does
+  not consume that turn's sole new-submission slot. The admitted cold set is
+  transport init, firmware prep, firmware chunk, NVRAM chunk/tail, and release;
+  a zero-payload parent also requires zero descriptor and retained payload
+  identity.
   After continuing from that exact accepted result, the runtime may publish at
   most one following immutable child command in that same turn.
   The new submission consumes the slot; a second new command is forbidden.
-  Fault terminals, every other parent operation, steady or persistent paths, a
-  still-pending child, issued-unknown state, identity or generation drift,
-  invalid replay, or a previously consumed slot admits no new child and
-  preserves the existing typed recovery/containment path. This
+  Fault terminals, every control, RX, steady, persistent, or other non-cold
+  parent, a still-pending child, issued-unknown state, identity or generation
+  drift, invalid replay, watermark fault, pair restart, recovery, or a
+  previously consumed slot admits no new child and preserves the existing
+  typed recovery/containment path. This
   removes one scheduler edge at a successful completion-to-next-child boundary
   without granting CYW43 physical-issuer authority, changing SDIO's
   one-operation-per-command rule, or adding autonomous firmware progress.
@@ -1255,6 +1267,21 @@ transport:
   debt. This changes no physical owner, packet authority, operation bound,
   manifest/MCS numeric, queue, listener, ABI, public diagnostic, or QEMU
   direct-VirtIO behavior.
+- An exact committed direct-GENET `StageOutput` may, immediately after the
+  same-core child `YieldTo` returns, observe and ACK that stage's causal
+  sequence-last child publication. A missing, unrelated, backpressured,
+  identity-invalid, or faulted publication leaves any observed ACK pending for
+  the ordinary `ObserveChild` turn. The fused stage-plus-`OutputDrained` result accounts both
+  child calls, performs no second device issue or control publication, and
+  cannot admit command two before the first response lane retires. Mediated
+  WiFi and QEMU never select this path.
+- A parsed Pi passive-service command whose strict reserve lease expires is
+  retained across at most one completely new Yield/refill attempt. The retry
+  begins from `AwaitingYield`, drains fresh Consumed evidence, and retains the
+  unchanged strict `<250 us` test plus every command, session, connection,
+  recovery, containment, and quarantine fence. A second expiry emits the same
+  single `busy detail=root-sc-reserve` refusal; no within-refill resampling or
+  budget widening is permitted.
 - The isolated console child's Ready timestamp and the root handoff bound share
   the absolute CNTVCT millisecond domain. Root samples immediately before and
   after resume, requires identical nonzero generated/runtime timer frequency
