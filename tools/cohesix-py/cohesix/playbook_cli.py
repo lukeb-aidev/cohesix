@@ -1,8 +1,8 @@
 # Author: Lukas Bower
-# Purpose: Provide a frictionless CLI for Cohesix world-class orchestration playbooks.
+# Purpose: Provide a CLI for bounded Cohesix control-model playbooks and reports.
 # Copyright 2026 Lukas Bower
 
-"""CLI entrypoint for Cohesix orchestration playbooks."""
+"""Inspect or run bounded Cohesix deployment-rehearsal playbooks."""
 
 from __future__ import annotations
 
@@ -60,7 +60,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=playbook_ids()[0],
         help="playbook id to execute",
     )
-    parser.add_argument("--dry-run", action="store_true", help="validate without writes")
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="render the plan and local provider probes without control writes",
+    )
     parser.add_argument(
         "--out",
         type=Path,

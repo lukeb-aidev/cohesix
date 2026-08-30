@@ -98,14 +98,17 @@ remain false until their separate evidence gates promote them.
   - `evidence_pack(...)` and `evidence_timeline(...)`
   - `gpu_lease_with_receipt(...)` and `run_command_with_receipt(...)`
 
-## Playbooks (1k-worker use-case coverage)
+## Playbooks (bounded deployment rehearsal)
 
-Built-in playbooks cover:
+The nine built-in playbooks are control-model fixtures. They make approvals,
+schedules, leases, exports, and selected local provider probes visible before a
+team writes deployment-specific integration code. Their names describe the
+intended composition; they do not run the named industry application, train or
+serve a model, or establish provider, target, safety, or compliance acceptance.
 
-- 1000 Mac use cases: release factory, private PEFT grid, endpoint compliance.
-- 1000 Jetson use cases: traffic safety, manufacturing QA/safety, critical
-  infrastructure mesh.
-- Mixed fleet use cases: closed-loop AI factory, medical edge AI, logistics digital twin.
+`--list` reports each playbook's linked use-case id, current capability summary,
+selected provider probes, planned control counts, and the milestone that owns
+the complete live workflow:
 
 List playbooks:
 
@@ -113,19 +116,26 @@ List playbooks:
 cohesix-playbook --list
 ```
 
-Dry-run a playbook with no control writes:
+Dry-run a playbook with no control writes, then inspect the explicit boundary:
 
 ```bash
 cohesix-playbook --playbook mixed-closed-loop-ai-factory --dry-run --mock
+jq '{workflow_kind, use_case_id, plan_summary, production_use_case_accepted}' \
+  out/examples/playbooks/mixed-closed-loop-ai-factory/report.json
 ```
 
-Execute against live TCP console:
+The expected `workflow_kind` is `control-model`, and
+`production_use_case_accepted` remains `false`. Remove `--dry-run --mock` only
+after selecting and reviewing a live backend; doing so submits the existing
+generic control plan, not the complete sector workflow. For example:
 
 ```bash
 cohesix-playbook --playbook jetson-traffic-safety --tcp-host 127.0.0.1 --tcp-port 31337
 ```
 
 Artifacts are written under `out/examples/playbooks/<playbook-id>/`.
+See [`docs/USE_CASES.md`](../../docs/USE_CASES.md) for the capability map and
+the contribution path toward complete generated workflows.
 
 ## Existing examples
 

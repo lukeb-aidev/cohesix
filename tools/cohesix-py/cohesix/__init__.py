@@ -32,6 +32,7 @@ from .orchestration import (
 from .playbooks import (
     PlaybookReport,
     UseCasePlaybook,
+    built_in_playbooks,
     describe_playbooks,
     execute_playbook,
     load_playbook,
@@ -85,6 +86,7 @@ __all__ = [
     "WorkerReceipt",
     "WorkerStateAxes",
     "build_python_projection_evidence",
+    "built_in_playbooks",
     "describe_playbooks",
     "execute_playbook",
     "export_evidence_pack",

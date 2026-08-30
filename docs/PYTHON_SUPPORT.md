@@ -409,17 +409,26 @@ help the target reject duplicates but do not make every operation idempotent. Se
 
 ## Playbooks and integrations
 
-`cohesix-playbook` executes checked-in, bounded scenario templates. The
-templates are coverage and workflow assets; their worker counts are not claims
-of live fleet capacity or benchmark evidence.
+`cohesix-playbook` executes checked-in, bounded control-model templates. The
+templates expose approvals, schedules, leases, exports, and selected local
+provider probes for deployment design. They do not execute the named industry
+application, train or serve a model, or establish provider, target, sector,
+safety, or compliance acceptance.
 
 ```bash
 cohesix-playbook --list
 cohesix-playbook --playbook mixed-closed-loop-ai-factory --dry-run --mock
+jq '{workflow_kind, use_case_id, plan_summary, production_use_case_accepted}' \
+  out/examples/playbooks/mixed-closed-loop-ai-factory/report.json
 ```
 
-Remove `--dry-run --mock` only after selecting a live backend, reviewing the
-generated plan, and confirming the intended authority and side effects.
+The list output names each linked use-case id, capability boundary, selected
+provider probes, and planned control counts. A dry-run report says
+`workflow_kind: control-model`, retains
+`production_use_case_accepted: false`, and emits no control writes. Remove
+`--dry-run --mock` only after selecting a live backend, reviewing the plan, and
+confirming the intended authority and side effects; live mode still submits the
+current generic control plan rather than a complete sector workflow.
 
 Optional probes cover systemd, Docker, Kubernetes, NVML, and PEFT package
 state. They run on the host, validate and bound collected data, and do not grant

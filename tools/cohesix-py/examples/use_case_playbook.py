@@ -1,8 +1,8 @@
 # Author: Lukas Bower
-# Purpose: Execute built-in Cohesix orchestration playbooks from the examples directory.
+# Purpose: Execute built-in Cohesix control-model playbooks from the examples directory.
 # Copyright 2026 Lukas Bower
 
-"""Run Cohesix world-class playbooks with a simple example command."""
+"""Run Cohesix deployment-rehearsal playbooks with a simple command."""
 
 from __future__ import annotations
 

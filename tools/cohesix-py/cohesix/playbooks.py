@@ -1,14 +1,14 @@
 # Author: Lukas Bower
-# Purpose: Define and execute high-impact Cohesix orchestration playbooks across Mac, Jetson, and mixed fleets.
+# Purpose: Define and execute bounded Cohesix control-model playbooks.
 # Copyright 2026 Lukas Bower
 
-"""World-class Cohesix playbooks for 1k+ worker orchestration."""
+"""Built-in Cohesix control-model playbooks for deployment rehearsal."""
 
 from __future__ import annotations
 
 import hashlib
 import time
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, field, replace
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 from .audit import CohesixAudit
@@ -31,12 +31,28 @@ class ProbeSpec:
     """Host integration probe selection for a playbook."""
 
     systemd_services: Tuple[str, ...] = ()
-    include_docker: bool = True
-    include_k8s: bool = True
-    include_nvml: bool = True
-    include_peft: bool = True
+    include_docker: bool = False
+    include_k8s: bool = False
+    include_nvml: bool = False
+    include_peft: bool = False
     k8s_namespace: str = "default"
     k8s_label_selector: str = ""
+
+    def dependency_ids(self) -> Tuple[str, ...]:
+        """Return compiler graph rows exercised by the selected local probes."""
+
+        dependencies = []
+        if self.include_docker:
+            dependencies.append("docker-provider")
+        if self.include_k8s:
+            dependencies.append("kubernetes-provider")
+        if self.include_nvml:
+            dependencies.append("gpu-host-provider")
+        if self.include_peft:
+            dependencies.append("peft-host-provider")
+        if self.systemd_services:
+            dependencies.append("systemd-provider")
+        return tuple(sorted(dependencies))
 
 
 @dataclass(frozen=True)
@@ -50,10 +66,15 @@ class UseCasePlaybook:
     telemetry_device_id: str
     plan: ControlPlan
     probes: ProbeSpec
+    use_case_id: str = "unclassified"
+    capability_summary: str = "Custom bounded control-model playbook."
 
     def __post_init__(self) -> None:
         validate_component(self.playbook_id)
+        validate_component(self.use_case_id)
         validate_component(self.telemetry_device_id)
+        if not self.capability_summary.strip():
+            raise ValueError("capability_summary must not be empty")
 
 
 @dataclass
@@ -73,6 +94,11 @@ class PlaybookReport:
     python_projection_compatible: bool = True
     runtime_release_accepted: bool = False
     production_use_case_accepted: bool = False
+    use_case_id: str = "unclassified"
+    capability_summary: str = "Custom bounded control-model playbook."
+    workflow_kind: str = "control-model"
+    next_milestone: str = "m27b-live-reference-workflows"
+    plan_summary: Dict[str, int] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, object]:
         payload = asdict(self)
@@ -81,8 +107,8 @@ class PlaybookReport:
         return payload
 
 
-def world_class_playbooks() -> Dict[str, UseCasePlaybook]:
-    """Return built-in playbooks that map directly to high-impact use cases."""
+def built_in_playbooks() -> Dict[str, UseCasePlaybook]:
+    """Return bounded control-model playbooks for high-impact use cases."""
 
     shared_approvals = (
         ApprovalRequest(approval_id="approve-queen-ctl", target_path="/queen/ctl"),
@@ -92,9 +118,14 @@ def world_class_playbooks() -> Dict[str, UseCasePlaybook]:
     return {
         "mac-release-factory": UseCasePlaybook(
             playbook_id="mac-release-factory",
+            use_case_id="self-healing-edge-swarm",
             title="Mac App Release Factory",
             fleet="mac",
-            objective="Orchestrate deterministic release waves with auditable scheduling and lease state.",
+            objective="Rehearse deterministic release-wave scheduling and auditable control state.",
+            capability_summary=(
+                "Models approvals and two bounded release waves; it does not "
+                "build, sign, notarize, or publish an application."
+            ),
             telemetry_device_id="mac-release-audit",
             plan=ControlPlan(
                 approvals=shared_approvals,
@@ -116,18 +147,23 @@ def world_class_playbooks() -> Dict[str, UseCasePlaybook]:
                 ),
             ),
             probes=ProbeSpec(
-                systemd_services=("cohesix-agent.service",),
                 include_docker=True,
-                include_k8s=False,
-                include_nvml=False,
-                include_peft=False,
             ),
         ),
         "mac-private-peft-grid": UseCasePlaybook(
             playbook_id="mac-private-peft-grid",
+            use_case_id="private-lora-foundry",
             title="Mac Private PEFT Grid",
             fleet="mac",
-            objective="Coordinate LoRA adapter waves and export windows across private training pools.",
+            objective=(
+                "Rehearse LoRA control, GPU lease, and export boundaries for a "
+                "private training pool."
+            ),
+            capability_summary=(
+                "Models WorkerLora scheduling, one GPU lease, one export "
+                "window, and selected local provider probes; it does not train "
+                "or activate an adapter."
+            ),
             telemetry_device_id="mac-peft-audit",
             plan=ControlPlan(
                 approvals=shared_approvals,
@@ -155,7 +191,6 @@ def world_class_playbooks() -> Dict[str, UseCasePlaybook]:
                 ),
             ),
             probes=ProbeSpec(
-                systemd_services=("cohesix-agent.service",),
                 include_docker=True,
                 include_k8s=True,
                 include_nvml=True,
@@ -166,9 +201,18 @@ def world_class_playbooks() -> Dict[str, UseCasePlaybook]:
         ),
         "mac-endpoint-compliance": UseCasePlaybook(
             playbook_id="mac-endpoint-compliance",
+            use_case_id="agent-action-airlock",
             title="Mac Endpoint Compliance",
             fleet="mac",
-            objective="Run periodic compliance sweeps with auditable scheduling and exception capture.",
+            objective=(
+                "Rehearse bounded endpoint-review scheduling and quota state "
+                "for an action airlock."
+            ),
+            capability_summary=(
+                "Models approvals, a heartbeat review wave, a quota record, "
+                "and Docker availability; it does not perform or certify an "
+                "endpoint compliance scan."
+            ),
             telemetry_device_id="mac-compliance-audit",
             plan=ControlPlan(
                 approvals=shared_approvals,
@@ -192,18 +236,23 @@ def world_class_playbooks() -> Dict[str, UseCasePlaybook]:
                 ),
             ),
             probes=ProbeSpec(
-                systemd_services=("cohesix-agent.service",),
-                include_docker=False,
-                include_k8s=False,
-                include_nvml=False,
-                include_peft=False,
+                include_docker=True,
             ),
         ),
         "jetson-traffic-safety": UseCasePlaybook(
             playbook_id="jetson-traffic-safety",
+            use_case_id="self-healing-edge-swarm",
             title="Jetson Traffic Safety Mesh",
             fleet="jetson",
-            objective="Schedule edge inference lanes and lease governance for smart corridor operations.",
+            objective=(
+                "Rehearse bounded edge-work scheduling and lease governance "
+                "for a traffic-safety integration."
+            ),
+            capability_summary=(
+                "Models one WorkerGpu schedule and lease plus Kubernetes and "
+                "systemd availability; it does not run perception or "
+                "traffic-control software."
+            ),
             telemetry_device_id="jetson-traffic-audit",
             plan=ControlPlan(
                 approvals=shared_approvals,
@@ -229,19 +278,25 @@ def world_class_playbooks() -> Dict[str, UseCasePlaybook]:
             ),
             probes=ProbeSpec(
                 systemd_services=("docker.service",),
-                include_docker=True,
                 include_k8s=True,
-                include_nvml=True,
-                include_peft=False,
                 k8s_namespace="edge",
                 k8s_label_selector="app=traffic",
             ),
         ),
         "jetson-manufacturing-safety": UseCasePlaybook(
             playbook_id="jetson-manufacturing-safety",
+            use_case_id="self-healing-edge-swarm",
             title="Jetson Manufacturing Safety + QA",
             fleet="jetson",
-            objective="Coordinate visual QA and safety detectors with bounded lease and preemption controls.",
+            objective=(
+                "Rehearse bounded scheduling, quota, and lease controls for a "
+                "manufacturing integration."
+            ),
+            capability_summary=(
+                "Models one WorkerGpu wave, a lease, and quota with Kubernetes "
+                "and systemd availability; it does not run visual QA or safety "
+                "detectors."
+            ),
             telemetry_device_id="jetson-factory-audit",
             plan=ControlPlan(
                 approvals=shared_approvals,
@@ -274,17 +329,23 @@ def world_class_playbooks() -> Dict[str, UseCasePlaybook]:
             ),
             probes=ProbeSpec(
                 systemd_services=("docker.service",),
-                include_docker=True,
-                include_k8s=False,
-                include_nvml=True,
-                include_peft=False,
+                include_k8s=True,
             ),
         ),
         "jetson-critical-infra": UseCasePlaybook(
             playbook_id="jetson-critical-infra",
+            use_case_id="agent-action-airlock",
             title="Jetson Critical Infrastructure Mesh",
             fleet="jetson",
-            objective="Apply resilient lease governance for distributed critical-infrastructure sensing.",
+            objective=(
+                "Rehearse a narrow action-airlock control plan for a "
+                "critical-infrastructure integration."
+            ),
+            capability_summary=(
+                "Models WorkerGpu scheduling, one lease, one export window, "
+                "and Kubernetes/systemd availability; it does not operate a "
+                "sensor network."
+            ),
             telemetry_device_id="jetson-infra-audit",
             plan=ControlPlan(
                 approvals=shared_approvals,
@@ -313,33 +374,39 @@ def world_class_playbooks() -> Dict[str, UseCasePlaybook]:
             ),
             probes=ProbeSpec(
                 systemd_services=("cohesix-agent.service",),
-                include_docker=True,
                 include_k8s=True,
-                include_nvml=True,
-                include_peft=False,
                 k8s_namespace="infra",
                 k8s_label_selector="tier=critical",
             ),
         ),
         "mixed-closed-loop-ai-factory": UseCasePlaybook(
             playbook_id="mixed-closed-loop-ai-factory",
+            use_case_id="multi-hive-mission-control",
             title="Mixed Closed-Loop AI Factory",
             fleet="mixed",
-            objective="Coordinate Mac training and Jetson inference with export and lease lifecycle linkage.",
+            objective=(
+                "Rehearse linked adaptation-wave and inference-wave control "
+                "records across a mixed fleet."
+            ),
+            capability_summary=(
+                "Models WorkerLora and WorkerGpu scheduling, one GPU lease, "
+                "one export window, and Kubernetes availability; it does not "
+                "train, deploy, or run a model."
+            ),
             telemetry_device_id="mixed-closed-loop-audit",
             plan=ControlPlan(
                 approvals=shared_approvals,
                 schedule=(
                     ScheduleRequest(
                         request_id="mixed-train-wave",
-                        role="worker-gpu",
+                        role="worker-lora",
                         priority=6,
                         ticks=9,
                         budget_ms=210,
                     ),
                     ScheduleRequest(
                         request_id="mixed-infer-wave",
-                        role="worker-heartbeat",
+                        role="worker-gpu",
                         priority=5,
                         ticks=9,
                         budget_ms=180,
@@ -360,20 +427,25 @@ def world_class_playbooks() -> Dict[str, UseCasePlaybook]:
                 ),
             ),
             probes=ProbeSpec(
-                systemd_services=("cohesix-agent.service", "docker.service"),
-                include_docker=True,
                 include_k8s=True,
-                include_nvml=True,
-                include_peft=True,
                 k8s_namespace="ai",
                 k8s_label_selector="pipeline=closed-loop",
             ),
         ),
         "mixed-medical-edge-ai": UseCasePlaybook(
             playbook_id="mixed-medical-edge-ai",
+            use_case_id="gpu-flight-deck",
             title="Mixed Medical Edge AI",
             fleet="mixed",
-            objective="Enforce medically auditable control flow with explicit export windows and lease governance.",
+            objective=(
+                "Rehearse narrow GPU lease, quota, and export controls for a "
+                "medical-edge integration."
+            ),
+            capability_summary=(
+                "Models one WorkerGpu wave, a constrained lease/quota, one "
+                "export window, and GPU/Kubernetes availability; it does not "
+                "process medical data or establish compliance."
+            ),
             telemetry_device_id="mixed-medical-audit",
             plan=ControlPlan(
                 approvals=shared_approvals,
@@ -408,20 +480,26 @@ def world_class_playbooks() -> Dict[str, UseCasePlaybook]:
                 ),
             ),
             probes=ProbeSpec(
-                systemd_services=("cohesix-agent.service",),
-                include_docker=True,
                 include_k8s=True,
                 include_nvml=True,
-                include_peft=True,
                 k8s_namespace="medical",
                 k8s_label_selector="compliance=hipaa",
             ),
         ),
         "mixed-logistics-digital-twin": UseCasePlaybook(
             playbook_id="mixed-logistics-digital-twin",
+            use_case_id="multi-hive-mission-control",
             title="Mixed Logistics Digital Twin",
             fleet="mixed",
-            objective="Coordinate planning and perception workers for ports and logistics operations with full audit history.",
+            objective=(
+                "Rehearse planning, edge-work, lease, and preemption records "
+                "across a mixed fleet."
+            ),
+            capability_summary=(
+                "Models Heartbeat and WorkerGpu scheduling, lease preemption, "
+                "and Kubernetes availability; it does not operate a digital "
+                "twin or logistics system."
+            ),
             telemetry_device_id="mixed-logistics-audit",
             plan=ControlPlan(
                 approvals=shared_approvals,
@@ -458,16 +536,18 @@ def world_class_playbooks() -> Dict[str, UseCasePlaybook]:
                 ),
             ),
             probes=ProbeSpec(
-                systemd_services=("cohesix-agent.service", "docker.service"),
-                include_docker=True,
                 include_k8s=True,
-                include_nvml=True,
-                include_peft=False,
                 k8s_namespace="logistics",
                 k8s_label_selector="app=digital-twin",
             ),
         ),
     }
+
+
+def world_class_playbooks() -> Dict[str, UseCasePlaybook]:
+    """Return built-in playbooks through the legacy public API name."""
+
+    return built_in_playbooks()
 
 
 def execute_playbook(
@@ -513,9 +593,14 @@ def execute_playbook(
 
     return PlaybookReport(
         playbook_id=playbook.playbook_id,
+        use_case_id=playbook.use_case_id,
         title=playbook.title,
         fleet=playbook.fleet,
         objective=playbook.objective,
+        capability_summary=playbook.capability_summary,
+        workflow_kind="control-model",
+        next_milestone="m27b-live-reference-workflows",
+        plan_summary=summarize_plan(plan),
         dry_run=dry_run,
         run_id=run_id,
         plan_execution=plan_execution,
@@ -528,13 +613,13 @@ def execute_playbook(
 def playbook_ids() -> List[str]:
     """List built-in playbook ids in deterministic order."""
 
-    return sorted(world_class_playbooks().keys())
+    return sorted(built_in_playbooks().keys())
 
 
 def load_playbook(playbook_id: str) -> UseCasePlaybook:
     """Resolve a playbook by id or raise a clear error."""
 
-    lookup = world_class_playbooks()
+    lookup = built_in_playbooks()
     key = playbook_id.strip()
     if key not in lookup:
         known = ", ".join(sorted(lookup.keys()))
@@ -553,18 +638,25 @@ def summarize_plan(plan: ControlPlan) -> Dict[str, int]:
     }
 
 
-def describe_playbooks(playbooks: Optional[Sequence[UseCasePlaybook]] = None) -> List[Dict[str, object]]:
+def describe_playbooks(
+    playbooks: Optional[Sequence[UseCasePlaybook]] = None,
+) -> List[Dict[str, object]]:
     """Render concise playbook metadata for UI/CLI listing."""
 
-    items = list(playbooks) if playbooks is not None else list(world_class_playbooks().values())
+    items = list(playbooks) if playbooks is not None else list(built_in_playbooks().values())
     rendered: List[Dict[str, object]] = []
     for item in sorted(items, key=lambda value: value.playbook_id):
         rendered.append(
             {
                 "playbook_id": item.playbook_id,
+                "use_case_id": item.use_case_id,
                 "title": item.title,
                 "fleet": item.fleet,
                 "objective": item.objective,
+                "capability_summary": item.capability_summary,
+                "workflow_kind": "control-model",
+                "provider_probes": list(item.probes.dependency_ids()),
+                "next_milestone": "m27b-live-reference-workflows",
                 "plan": summarize_plan(item.plan),
             }
         )

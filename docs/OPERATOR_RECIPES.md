@@ -61,10 +61,10 @@ systems it can change:
 
 | Situation to explore | Playbook | Why Cohesix is useful |
 | --- | --- | --- |
-| A factory needs visual QA without starving a higher-priority safety detector | `jetson-manufacturing-safety` | Makes GPU lease, quota, priority, and preemption decisions explicit and reviewable. |
-| A team trains or adapts centrally, then serves on a Jetson-class edge node | `mixed-closed-loop-ai-factory` | Links training and inference waves to an export window and bounded GPU lease instead of hiding the handoff in scripts. |
-| Private data must produce LoRA adapters without giving the trainer control of the fleet | `mac-private-peft-grid` | Separates adapter work, approval, export, and activation authority while retaining a rollback-oriented trail. |
-| A medical edge workflow needs narrow resource use and an explainable export boundary | `mixed-medical-edge-ai` | Combines a small lease quota, explicit export window, and evidence-oriented control flow for later review. |
+| A factory must decide how visual QA yields to a higher-priority safety detector | `jetson-manufacturing-safety` | Rehearses the schedule, lease, quota, Kubernetes, and service-state relationships that a real integration must prove. |
+| A team needs an explicit handoff between private adaptation and edge inference | `mixed-closed-loop-ai-factory` | Rehearses WorkerLora/WorkerGpu waves, an export window, a bounded GPU lease, and the missing live owners without claiming training or inference. |
+| Private data must produce LoRA adapters without giving the trainer control of the fleet | `mac-private-peft-grid` | Rehearses the adapter-work, approval, export, provider, and activation boundaries while keeping training host-side. |
+| A medical edge design needs narrow resource use and an explainable export boundary | `mixed-medical-edge-ai` | Rehearses a small lease quota, explicit export window, and GPU/Kubernetes availability without claiming a medical application or compliance. |
 
 Select an identifier from the table and render its schedule, lease, approval,
 export, and host-probe plan without touching a live target:
@@ -87,6 +87,10 @@ Use the artifacts under `out/examples/playbooks/` to ask concrete questions:
 Which GPU or service is scarce? Which action needs approval? What must be
 observable before mutation? Which receipt would let an operator distinguish
 success from an admitted request?
+
+The report makes the limit machine-readable: `workflow_kind` is
+`control-model`, `plan_summary` shows what would be submitted, and
+`production_use_case_accepted` remains `false`.
 
 The playbook names express integration patterns. Mock and dry-run output is not
 hardware, provider, target, sector, safety, or compliance acceptance. Its value
