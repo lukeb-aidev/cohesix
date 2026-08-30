@@ -4028,6 +4028,260 @@ fn cyw43_transient_publication_credit_rebase_after_dispatch(
     }
 }
 
+/// Exact authenticated copied-WiFi response retained across the root/child/
+/// CYW43 scheduling episode.
+///
+/// Unlike the one-shot publication credit, this token may survive an explicit
+/// root Yield. It never grants work by itself: each resumed turn revalidates
+/// the physical lifetime, authenticated connection, accepted-command epoch,
+/// response lane, and every recovery/operator fence. A turn that observes no
+/// durable successor returns `Wait` so the caller yields instead of polling.
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Cyw43AuthenticatedResponseEpisode {
+    cursor: Cyw43TransientPublicationCredit,
+}
+
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+impl Cyw43AuthenticatedResponseEpisode {
+    fn from_exact_dispatch(cursor: Cyw43TransientPublicationCredit) -> Option<Self> {
+        let lane = cursor.response_lane?;
+        (cursor.accepted_commands != 0
+            && cursor.service_turns != u64::MAX
+            && cursor.diagnostics.generation == cursor.response_identity.generation
+            && cursor.diagnostics.command_queue == 0
+            && cursor.diagnostics.output_queue == lane.queued_lines
+            && !cursor.diagnostics.producer_open
+            && lane.generation == cursor.response_identity.generation
+            && lane.connection_id == cursor.response_identity.connection_id
+            && lane.queued_lines != 0
+            && lane.terminal_queued
+            && !lane.producer_open
+            && lane.completed_responses == 1
+            && cursor.active_connection_id == cursor.response_identity.connection_id
+            && cursor.authenticated_connection_id == cursor.response_identity.connection_id
+            && cursor.pending_flush.conn_id == Some(cursor.response_identity.connection_id)
+            && cursor.pending_flush.remaining_turns != 0
+            && cursor.pending_flush.remaining_turns <= NET_POST_DISPATCH_BACKLOG_FLUSH_POLLS)
+            .then_some(Self { cursor })
+    }
+}
+
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Cyw43AuthenticatedResponseEpisodeDecision {
+    Progress(Cyw43AuthenticatedResponseEpisode),
+    Wait(Cyw43AuthenticatedResponseEpisode),
+    Complete,
+    Revoke,
+}
+
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Cyw43AuthenticatedResponseEpisodeEvidence {
+    episode: Cyw43AuthenticatedResponseEpisode,
+    current: Option<Cyw43TransientPublicationCredit>,
+    outer_operations: u32,
+    cyw43_lane_selected: bool,
+    network_service_quarantined: bool,
+    reboot_pending: bool,
+    recovery_required: bool,
+    containment_work_pending: bool,
+    handoff_pending: bool,
+    passive_admission_pending: bool,
+    console_service_local_fault_pending: bool,
+    console_service_local_containment_pending: bool,
+    physical_operator_work_pending: bool,
+    physical_console_response_pending: bool,
+}
+
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+fn cyw43_authenticated_response_episode_work_pending(
+    cursor: Cyw43TransientPublicationCredit,
+) -> bool {
+    let lane_pending = cursor.response_lane.is_some_and(|lane| {
+        lane.queued_lines != 0
+            || lane.awaiting_batch_drain
+            || lane.terminal_queued
+            || lane.producer_open
+    });
+    lane_pending
+        || cursor.diagnostics.output_queue != 0
+        || cursor.diagnostics.pending_egress
+        || cursor.diagnostics.awaiting_batch_drain
+        || cursor.diagnostics.producer_open
+        || cursor.pending_flush.active()
+}
+
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+fn isolated_cyw43_response_egress_progress_exact(
+    before: IsolatedConsoleDiagnostics,
+    after: IsolatedConsoleDiagnostics,
+) -> bool {
+    before.generation != 0
+        && after.generation == before.generation
+        && after.last_poll_ms >= before.last_poll_ms
+        && after.last_progress_ms == after.last_poll_ms
+        && after.last_unit == "egress"
+        && before.turns.checked_add(1) == Some(after.turns)
+        && before.progress_turns.checked_add(1) == Some(after.progress_turns)
+        && before.transmit_egress_turns.checked_add(1) == Some(after.transmit_egress_turns)
+        && before.pending_egress
+        && !after.pending_egress
+        && after.observe_child_turns == before.observe_child_turns
+        && after.stage_output_turns == before.stage_output_turns
+        && after.stage_output_successes == before.stage_output_successes
+        && after.disconnect_turns == before.disconnect_turns
+        && after.ingress_turns == before.ingress_turns
+        && after.service_tick_turns == before.service_tick_turns
+        && after.deferred_diagnostic_turns == before.deferred_diagnostic_turns
+        && after.command_queue == before.command_queue
+        && after.output_queue == before.output_queue
+        && after.awaiting_batch_drain == before.awaiting_batch_drain
+        && after.producer_open == before.producer_open
+        && after.response_drains == before.response_drains
+        && after.ingress_backpressure == before.ingress_backpressure
+        && after.ingress_dropped == before.ingress_dropped
+}
+
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+fn cyw43_authenticated_response_episode_decision(
+    evidence: Cyw43AuthenticatedResponseEpisodeEvidence,
+) -> Cyw43AuthenticatedResponseEpisodeDecision {
+    let before = evidence.episode.cursor;
+    let Some(current) = evidence.current else {
+        return Cyw43AuthenticatedResponseEpisodeDecision::Revoke;
+    };
+    let fenced = !evidence.cyw43_lane_selected
+        || evidence.network_service_quarantined
+        || evidence.reboot_pending
+        || evidence.recovery_required
+        || evidence.containment_work_pending
+        || evidence.handoff_pending
+        || evidence.passive_admission_pending
+        || evidence.console_service_local_fault_pending
+        || evidence.console_service_local_containment_pending
+        || evidence.physical_operator_work_pending
+        || evidence.physical_console_response_pending;
+    let same_authority = current.lifetime == before.lifetime
+        && current.response_identity == before.response_identity
+        && current.active_connection_id == before.active_connection_id
+        && current.authenticated_connection_id == before.authenticated_connection_id
+        && current.accepted_commands == before.accepted_commands
+        && current.diagnostics.generation == before.diagnostics.generation
+        && current.diagnostics.command_queue == 0;
+    if fenced || !same_authority || evidence.outer_operations > 1 {
+        return Cyw43AuthenticatedResponseEpisodeDecision::Revoke;
+    }
+
+    let step = |before: u64, after: u64| {
+        after == before || before.checked_add(1).is_some_and(|next| next == after)
+    };
+    let before_diag = before.diagnostics;
+    let after_diag = current.diagnostics;
+    let diagnostics_step = after_diag.last_poll_ms >= before_diag.last_poll_ms
+        && after_diag.last_progress_ms >= before_diag.last_progress_ms
+        && after_diag.last_progress_ms <= after_diag.last_poll_ms
+        && step(before_diag.turns, after_diag.turns)
+        && step(before_diag.progress_turns, after_diag.progress_turns)
+        && step(
+            before_diag.observe_child_turns,
+            after_diag.observe_child_turns,
+        )
+        && step(
+            before_diag.stage_output_turns,
+            after_diag.stage_output_turns,
+        )
+        && step(
+            before_diag.stage_output_successes,
+            after_diag.stage_output_successes,
+        )
+        && step(before_diag.disconnect_turns, after_diag.disconnect_turns)
+        && step(before_diag.ingress_turns, after_diag.ingress_turns)
+        && step(
+            before_diag.service_tick_turns,
+            after_diag.service_tick_turns,
+        )
+        && step(
+            before_diag.transmit_egress_turns,
+            after_diag.transmit_egress_turns,
+        )
+        && step(
+            before_diag.deferred_diagnostic_turns,
+            after_diag.deferred_diagnostic_turns,
+        )
+        && step(before_diag.response_drains, after_diag.response_drains)
+        && after_diag.ingress_backpressure == before_diag.ingress_backpressure
+        && after_diag.ingress_dropped == before_diag.ingress_dropped
+        && after_diag.direct_genet_yield_calls == before_diag.direct_genet_yield_calls
+        && after_diag.direct_genet_yield_counter_hz == before_diag.direct_genet_yield_counter_hz
+        && after_diag.direct_genet_yield_call_wall_scaled
+            == before_diag.direct_genet_yield_call_wall_scaled
+        && after_diag.direct_genet_yield_child_credit_scaled
+            == before_diag.direct_genet_yield_child_credit_scaled
+        && after_diag.direct_genet_yield_invalid_reasons
+            == before_diag.direct_genet_yield_invalid_reasons
+        && !after_diag.producer_open;
+    let service_turn_step = current.service_turns == before.service_turns
+        || before
+            .service_turns
+            .checked_add(1)
+            .is_some_and(|next| next == current.service_turns);
+    let lane_step = match (before.response_lane, current.response_lane) {
+        (Some(before_lane), Some(after_lane)) => {
+            after_lane.generation == before_lane.generation
+                && after_lane.connection_id == before_lane.connection_id
+                && after_lane.queued_lines <= before_lane.queued_lines
+                && after_lane.available_lines >= before_lane.available_lines
+                && after_lane.completed_responses <= before_lane.completed_responses
+                && !after_lane.producer_open
+        }
+        (Some(_), None) => true,
+        (None, None) => true,
+        (None, Some(_)) => false,
+    };
+    let flush_step = current.pending_flush == before.pending_flush
+        || (before.pending_flush.active()
+            && (current.pending_flush == PendingNetFlush::default()
+                || (current.pending_flush.conn_id == before.pending_flush.conn_id
+                    && current.pending_flush.remaining_turns.checked_add(1)
+                        == Some(before.pending_flush.remaining_turns))));
+    if !diagnostics_step || !service_turn_step || !lane_step || !flush_step {
+        return Cyw43AuthenticatedResponseEpisodeDecision::Revoke;
+    }
+    if !cyw43_authenticated_response_episode_work_pending(current) {
+        return Cyw43AuthenticatedResponseEpisodeDecision::Complete;
+    }
+
+    let exact_child_publication =
+        isolated_cyw43_publication_progress_exact(Some(before_diag), Some(after_diag));
+    let exact_stage = exact_child_publication
+        && after_diag.last_unit == "output"
+        && before_diag.stage_output_turns.checked_add(1) == Some(after_diag.stage_output_turns)
+        && before_diag.stage_output_successes.checked_add(1)
+            == Some(after_diag.stage_output_successes)
+        && !before_diag.awaiting_batch_drain
+        && after_diag.awaiting_batch_drain
+        && after_diag.response_drains == before_diag.response_drains
+        && after_diag.output_queue < before_diag.output_queue
+        && current.response_lane != before.response_lane;
+    let exact_drain = exact_child_publication
+        && after_diag.last_unit == "observe"
+        && before_diag.awaiting_batch_drain
+        && !after_diag.awaiting_batch_drain
+        && before_diag.response_drains.checked_add(1) == Some(after_diag.response_drains)
+        && current.response_lane != before.response_lane;
+    let exact_response_egress =
+        isolated_cyw43_response_egress_progress_exact(before_diag, after_diag);
+    let cursor_progress = exact_stage || exact_drain || exact_response_egress;
+    let next = Cyw43AuthenticatedResponseEpisode { cursor: current };
+    if cursor_progress {
+        Cyw43AuthenticatedResponseEpisodeDecision::Progress(next)
+    } else {
+        Cyw43AuthenticatedResponseEpisodeDecision::Wait(next)
+    }
+}
+
 #[cfg(all(feature = "kernel", feature = "net-console"))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct Cyw43ResponseRotationContinuationEvidence {
@@ -5024,8 +5278,9 @@ enum DirectGenetProductiveProgress {
 
 /// Generated scheduling relationship that can authorize a retained
 /// direct-GENET continuation. Same-core service retains the existing exact
-/// `YieldTo` proof; cross-core service is signal-only and can rely only on a
-/// subsequently observed durable `OutputDrained` event.
+/// `YieldTo` proof. Cross-core service is signal-only: one exact durable
+/// command or stage may grant a strict one-shot successor, while only an exact
+/// `OutputDrained` event may open the bounded active response tail.
 #[cfg(all(feature = "kernel", feature = "net-console"))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum DirectGenetContinuationMode {
@@ -5414,8 +5669,12 @@ fn direct_genet_productive_quantum_continuation_entitled(
                 && evidence.before.child_yield_credit_scaled == 0
                 && evidence.after.child_yield_credit_scaled == 0;
             accounting_stayed_zero
-                && (matches!(progress, DirectGenetProductiveProgress::CommandAccepted)
-                    || exact_response_drain)
+                && (matches!(
+                    progress,
+                    DirectGenetProductiveProgress::CommandAccepted
+                        | DirectGenetProductiveProgress::CommandAcceptedAndStagePublished
+                        | DirectGenetProductiveProgress::StagePublished
+                ) || exact_response_drain)
         }
     };
     (same_identity
@@ -7284,6 +7543,8 @@ where
     deferred_cyw43_attached_network_activity: bool,
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     deferred_cyw43_transient_publication_credit: Option<Cyw43TransientPublicationCredit>,
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    deferred_cyw43_authenticated_response_episode: Option<Cyw43AuthenticatedResponseEpisode>,
     #[cfg(feature = "net-console")]
     linked_runtime_network_due_after_display: bool,
     #[cfg(feature = "kernel")]
@@ -7993,6 +8254,8 @@ where
             deferred_cyw43_attached_network_activity: false,
             #[cfg(all(feature = "kernel", feature = "net-console"))]
             deferred_cyw43_transient_publication_credit: None,
+            #[cfg(all(feature = "kernel", feature = "net-console"))]
+            deferred_cyw43_authenticated_response_episode: None,
             #[cfg(feature = "net-console")]
             linked_runtime_network_due_after_display: false,
             #[cfg(feature = "kernel")]
@@ -8821,6 +9084,11 @@ where
         ))]
         let pi_mcs_started_ticks = crate::arch::aarch64::timer::timer_counter_ticks();
         let result = (|| {
+            // A response episode may cross an explicit Yield, but a resumed
+            // activation receives no execution credit merely for retaining
+            // it. Revalidate and rebase any cross-core publication that became
+            // visible while root was descheduled before selecting this turn.
+            let _ = self.advance_cyw43_authenticated_response_episode(0);
             let mut transient_publication_credit =
                 self.deferred_cyw43_transient_publication_credit.take();
             if let Some(credit) = transient_publication_credit {
@@ -9056,6 +9324,11 @@ where
                             )
                         },
                     );
+                    let response_episode_progress = self
+                        .advance_cyw43_authenticated_response_episode(
+                            crate::drivers::driver_task_net::cyw43_outer_event_turn_operation_count(
+                            ),
+                        );
                     let mut transient_publication_minted = false;
                     if !immediate_continuation {
                         #[cfg(feature = "release-pi4")]
@@ -9150,7 +9423,10 @@ where
                             }
                         }
                     }
-                    if immediate_continuation || transient_publication_minted {
+                    if immediate_continuation
+                        || transient_publication_minted
+                        || response_episode_progress
+                    {
                         return true;
                     }
                 }
@@ -9190,7 +9466,13 @@ where
                                     last_input_source: self.last_input_source,
                                 },
                             ) {
-                                Ok(rebased) => transient_publication_credit = Some(rebased),
+                                Ok(rebased) => {
+                                    self.deferred_cyw43_authenticated_response_episode =
+                                        Cyw43AuthenticatedResponseEpisode::from_exact_dispatch(
+                                            rebased,
+                                        );
+                                    transient_publication_credit = Some(rebased);
+                                }
                                 Err(reasons) => {
                                     self.record_cyw43_transient_publication_rejection(
                                         Cyw43TransientPublicationRejectCut::PreNetwork,
@@ -12350,6 +12632,7 @@ where
             child_egress: diagnostic.pending_egress,
             child_event: net.console_event_pending(),
             continuation: self.deferred_cyw43_transient_publication_credit.is_some()
+                || self.deferred_cyw43_authenticated_response_episode.is_some()
                 || self
                     .pi_root_control_productive_continuation_identity
                     .is_some(),
@@ -13279,9 +13562,11 @@ where
         let _ = cut;
     }
 
-    /// Revoke any unspent copied-WiFi publication authority. All explicit
-    /// Yield paths call this before the scheduler boundary, and every CYW43
-    /// recovery/reset path reaches the scheduler-state clear below.
+    /// Revoke any unspent copied-WiFi one-shot publication authority. All
+    /// explicit Yield paths call this before the scheduler boundary, and every
+    /// CYW43 recovery/reset path reaches the scheduler-state clear below. The
+    /// immutable authenticated-response episode deliberately survives Yield;
+    /// it grants no execution by itself and is fully revalidated on resume.
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     pub(crate) fn clear_deferred_cyw43_transient_publication_credit(&mut self) {
         if self
@@ -13293,6 +13578,91 @@ where
                 Cyw43TransientPublicationRejectCut::Revoked,
                 CYW43_TRANSIENT_REJECT_OPERATOR_OR_RECOVERY,
             );
+        }
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    fn cyw43_authenticated_response_episode_cursor(
+        &self,
+        expected_lifetime: LinkedRuntimeCyw43DurableResume,
+    ) -> Option<Cyw43TransientPublicationCredit> {
+        let net = self.net.as_deref()?;
+        let physical_snapshot = crate::drivers::driver_task_net::cyw43_service_work_snapshot();
+        if !expected_lifetime.matches(physical_snapshot) {
+            return None;
+        }
+        Some(Cyw43TransientPublicationCredit {
+            lifetime: expected_lifetime,
+            diagnostics: net.isolated_console_diagnostics()?,
+            response_identity: net.bounded_console_response_identity()?,
+            response_lane: net.console_response_lane(),
+            active_connection_id: net.active_console_conn_id()?,
+            authenticated_connection_id: net.authenticated_console_conn_id()?,
+            accepted_commands: self.metrics.accepted_commands,
+            service_turns: self.metrics.net_cyw43_service_turns,
+            pending_flush: self.pending_net_flush,
+        })
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    fn cyw43_authenticated_response_episode_evidence(
+        &mut self,
+        episode: Cyw43AuthenticatedResponseEpisode,
+        outer_operations: u32,
+    ) -> Cyw43AuthenticatedResponseEpisodeEvidence {
+        let (console_service_local_fault_pending, console_service_local_containment_pending) =
+            self.net.as_deref().map_or((true, true), |net| {
+                (
+                    net.console_service_local_fault_pending(),
+                    net.console_service_local_containment_pending(),
+                )
+            });
+        Cyw43AuthenticatedResponseEpisodeEvidence {
+            episode,
+            current: self.cyw43_authenticated_response_episode_cursor(episode.cursor.lifetime),
+            outer_operations,
+            cyw43_lane_selected: self.linked_runtime_cyw43_lane_selected(),
+            network_service_quarantined: self.network_service_quarantined,
+            reboot_pending: self.reboot_pending,
+            recovery_required: crate::drivers::driver_task_net::cyw43_recovery_required(),
+            containment_work_pending: self.deferred_containment_work_pending(),
+            handoff_pending: self.deferred_console_network_handoff_pending(),
+            passive_admission_pending: self.pi_root_control_passive_admission_pending(),
+            console_service_local_fault_pending,
+            console_service_local_containment_pending,
+            physical_operator_work_pending: self
+                .linked_physical_operator_work()
+                .needs_operator_rotation(),
+            physical_console_response_pending: self.physical_console_response_pending(),
+        }
+    }
+
+    /// Rebase one authenticated copied-WiFi response episode after a bounded
+    /// Network unit. `true` means that unit proved material progress and may
+    /// retain the current strict activation; `false` requires the outer Yield.
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    fn advance_cyw43_authenticated_response_episode(&mut self, outer_operations: u32) -> bool {
+        let Some(episode) = self.deferred_cyw43_authenticated_response_episode else {
+            return false;
+        };
+        match cyw43_authenticated_response_episode_decision(
+            self.cyw43_authenticated_response_episode_evidence(episode, outer_operations),
+        ) {
+            Cyw43AuthenticatedResponseEpisodeDecision::Progress(next) => {
+                self.deferred_cyw43_authenticated_response_episode = Some(next);
+                true
+            }
+            Cyw43AuthenticatedResponseEpisodeDecision::Wait(next) => {
+                // Preserve exact episode identity across the selected Yield,
+                // but never turn an empty observation into retained execution.
+                self.deferred_cyw43_authenticated_response_episode = Some(next);
+                false
+            }
+            Cyw43AuthenticatedResponseEpisodeDecision::Complete
+            | Cyw43AuthenticatedResponseEpisodeDecision::Revoke => {
+                self.deferred_cyw43_authenticated_response_episode = None;
+                false
+            }
         }
     }
 
@@ -13366,6 +13736,7 @@ where
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     fn clear_linked_runtime_cyw43_scheduler_state(&mut self) {
         self.clear_deferred_cyw43_transient_publication_credit();
+        self.deferred_cyw43_authenticated_response_episode = None;
         self.clear_linked_runtime_cyw43_rx_admission();
         self.linked_runtime_cyw43_durable_resume = None;
         self.linked_runtime_cyw43_operator_rotation_pending = None;
@@ -50623,7 +50994,7 @@ mod tests {
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[test]
-    fn cyw43_transient_credit_rebases_only_one_exact_network_dispatch() {
+    fn cyw43_transient_credit_rebases_dispatch_and_response_episode_progress_is_exact() {
         let lifetime = LinkedRuntimeCyw43DurableResume {
             generation: 17,
             pair_epoch: 23,
@@ -50712,6 +51083,390 @@ mod tests {
         assert_eq!(rebased.pending_flush, current.pending_flush);
         assert_eq!(rebased.lifetime, lifetime);
         assert_eq!(rebased.diagnostics, current_diagnostics);
+        let episode = Cyw43AuthenticatedResponseEpisode::from_exact_dispatch(rebased)
+            .expect("the exact sealed single-command response must mint an episode");
+        let episode_evidence = Cyw43AuthenticatedResponseEpisodeEvidence {
+            episode,
+            current: Some(rebased),
+            outer_operations: 0,
+            cyw43_lane_selected: true,
+            network_service_quarantined: false,
+            reboot_pending: false,
+            recovery_required: false,
+            containment_work_pending: false,
+            handoff_pending: false,
+            passive_admission_pending: false,
+            console_service_local_fault_pending: false,
+            console_service_local_containment_pending: false,
+            physical_operator_work_pending: false,
+            physical_console_response_pending: false,
+        };
+        assert_eq!(
+            cyw43_authenticated_response_episode_decision(episode_evidence),
+            Cyw43AuthenticatedResponseEpisodeDecision::Wait(episode),
+            "a retained episode may survive Yield but unchanged state cannot retain execution",
+        );
+
+        let mut staged_diagnostics = current_diagnostics;
+        staged_diagnostics.last_poll_ms = staged_diagnostics.last_poll_ms.saturating_add(1);
+        staged_diagnostics.last_progress_ms = staged_diagnostics.last_poll_ms;
+        staged_diagnostics.last_unit = "output";
+        staged_diagnostics.turns = staged_diagnostics.turns.saturating_add(1);
+        staged_diagnostics.progress_turns = staged_diagnostics.progress_turns.saturating_add(1);
+        staged_diagnostics.stage_output_turns =
+            staged_diagnostics.stage_output_turns.saturating_add(1);
+        staged_diagnostics.stage_output_successes =
+            staged_diagnostics.stage_output_successes.saturating_add(1);
+        staged_diagnostics.output_queue = 0;
+        staged_diagnostics.awaiting_batch_drain = true;
+        let staged_lane = ConsoleResponseLane {
+            queued_lines: 0,
+            available_lines: 32,
+            awaiting_batch_drain: true,
+            ..response_lane
+        };
+        let staged_cursor = Cyw43TransientPublicationCredit {
+            diagnostics: staged_diagnostics,
+            response_lane: Some(staged_lane),
+            service_turns: rebased.service_turns.saturating_add(1),
+            ..rebased
+        };
+        let staged_episode = Cyw43AuthenticatedResponseEpisode {
+            cursor: staged_cursor,
+        };
+        assert_eq!(
+            cyw43_authenticated_response_episode_decision(
+                Cyw43AuthenticatedResponseEpisodeEvidence {
+                    current: Some(staged_cursor),
+                    outer_operations: 1,
+                    ..episode_evidence
+                },
+            ),
+            Cyw43AuthenticatedResponseEpisodeDecision::Progress(staged_episode),
+            "one exact stage successor must retain the strict activation",
+        );
+        for invalid_stage_diagnostics in [
+            IsolatedConsoleDiagnostics {
+                awaiting_batch_drain: false,
+                ..staged_diagnostics
+            },
+            IsolatedConsoleDiagnostics {
+                response_drains: staged_diagnostics.response_drains.saturating_add(1),
+                ..staged_diagnostics
+            },
+        ] {
+            assert!(matches!(
+                cyw43_authenticated_response_episode_decision(
+                    Cyw43AuthenticatedResponseEpisodeEvidence {
+                        current: Some(Cyw43TransientPublicationCredit {
+                            diagnostics: invalid_stage_diagnostics,
+                            ..staged_cursor
+                        }),
+                        outer_operations: 1,
+                        ..episode_evidence
+                    },
+                ),
+                Cyw43AuthenticatedResponseEpisodeDecision::Wait(_)
+            ));
+        }
+        let mut control_observed_diagnostics = staged_diagnostics;
+        control_observed_diagnostics.last_poll_ms =
+            control_observed_diagnostics.last_poll_ms.saturating_add(1);
+        control_observed_diagnostics.last_progress_ms = control_observed_diagnostics.last_poll_ms;
+        control_observed_diagnostics.last_unit = "observe";
+        control_observed_diagnostics.turns = control_observed_diagnostics.turns.saturating_add(1);
+        control_observed_diagnostics.progress_turns = control_observed_diagnostics
+            .progress_turns
+            .saturating_add(1);
+        control_observed_diagnostics.observe_child_turns = control_observed_diagnostics
+            .observe_child_turns
+            .saturating_add(1);
+        let control_observed_cursor = Cyw43TransientPublicationCredit {
+            diagnostics: control_observed_diagnostics,
+            service_turns: staged_cursor.service_turns.saturating_add(1),
+            ..staged_cursor
+        };
+        let control_observed_episode = Cyw43AuthenticatedResponseEpisode {
+            cursor: control_observed_cursor,
+        };
+        assert_eq!(
+            cyw43_authenticated_response_episode_decision(
+                Cyw43AuthenticatedResponseEpisodeEvidence {
+                    episode: staged_episode,
+                    current: Some(control_observed_cursor),
+                    ..episode_evidence
+                },
+            ),
+            Cyw43AuthenticatedResponseEpisodeDecision::Wait(control_observed_episode),
+            "an observe-only notification preserves identity but cannot prove response-owned progress",
+        );
+
+        let mut drained_diagnostics = control_observed_diagnostics;
+        drained_diagnostics.last_poll_ms = drained_diagnostics.last_poll_ms.saturating_add(1);
+        drained_diagnostics.last_progress_ms = drained_diagnostics.last_poll_ms;
+        drained_diagnostics.last_unit = "observe";
+        drained_diagnostics.turns = drained_diagnostics.turns.saturating_add(1);
+        drained_diagnostics.progress_turns = drained_diagnostics.progress_turns.saturating_add(1);
+        drained_diagnostics.observe_child_turns =
+            drained_diagnostics.observe_child_turns.saturating_add(1);
+        drained_diagnostics.awaiting_batch_drain = false;
+        drained_diagnostics.response_drains = drained_diagnostics.response_drains.saturating_add(1);
+        let drained_cursor = Cyw43TransientPublicationCredit {
+            diagnostics: drained_diagnostics,
+            response_lane: None,
+            service_turns: control_observed_cursor.service_turns.saturating_add(1),
+            ..control_observed_cursor
+        };
+        assert!(matches!(
+            cyw43_authenticated_response_episode_decision(
+                Cyw43AuthenticatedResponseEpisodeEvidence {
+                    episode: control_observed_episode,
+                    current: Some(drained_cursor),
+                    outer_operations: 1,
+                    ..episode_evidence
+                },
+            ),
+            Cyw43AuthenticatedResponseEpisodeDecision::Progress(_)
+        ));
+
+        let mut egress_before_diagnostics = staged_diagnostics;
+        egress_before_diagnostics.pending_egress = true;
+        let egress_before_cursor = Cyw43TransientPublicationCredit {
+            diagnostics: egress_before_diagnostics,
+            ..staged_cursor
+        };
+        let egress_episode = Cyw43AuthenticatedResponseEpisode {
+            cursor: egress_before_cursor,
+        };
+        let mut egress_after_diagnostics = egress_before_diagnostics;
+        egress_after_diagnostics.last_poll_ms =
+            egress_after_diagnostics.last_poll_ms.saturating_add(1);
+        egress_after_diagnostics.last_progress_ms = egress_after_diagnostics.last_poll_ms;
+        egress_after_diagnostics.last_unit = "egress";
+        egress_after_diagnostics.turns = egress_after_diagnostics.turns.saturating_add(1);
+        egress_after_diagnostics.progress_turns =
+            egress_after_diagnostics.progress_turns.saturating_add(1);
+        egress_after_diagnostics.transmit_egress_turns = egress_after_diagnostics
+            .transmit_egress_turns
+            .saturating_add(1);
+        egress_after_diagnostics.pending_egress = false;
+        let egress_after_cursor = Cyw43TransientPublicationCredit {
+            diagnostics: egress_after_diagnostics,
+            service_turns: egress_before_cursor.service_turns.saturating_add(1),
+            ..egress_before_cursor
+        };
+        assert!(matches!(
+            cyw43_authenticated_response_episode_decision(
+                Cyw43AuthenticatedResponseEpisodeEvidence {
+                    episode: egress_episode,
+                    current: Some(egress_after_cursor),
+                    outer_operations: 1,
+                    ..episode_evidence
+                },
+            ),
+            Cyw43AuthenticatedResponseEpisodeDecision::Progress(_)
+        ));
+
+        let mut failed_egress_diagnostics = egress_after_diagnostics;
+        failed_egress_diagnostics.pending_egress = true;
+        assert!(matches!(
+            cyw43_authenticated_response_episode_decision(
+                Cyw43AuthenticatedResponseEpisodeEvidence {
+                    episode: egress_episode,
+                    current: Some(Cyw43TransientPublicationCredit {
+                        diagnostics: failed_egress_diagnostics,
+                        ..egress_after_cursor
+                    }),
+                    outer_operations: 1,
+                    ..episode_evidence
+                },
+            ),
+            Cyw43AuthenticatedResponseEpisodeDecision::Wait(_)
+        ));
+
+        let bare_flush_cursor = Cyw43TransientPublicationCredit {
+            pending_flush: PendingNetFlush {
+                conn_id: staged_cursor.pending_flush.conn_id,
+                remaining_turns: staged_cursor
+                    .pending_flush
+                    .remaining_turns
+                    .saturating_sub(1),
+            },
+            service_turns: staged_cursor.service_turns.saturating_add(1),
+            ..staged_cursor
+        };
+        assert!(matches!(
+            cyw43_authenticated_response_episode_decision(
+                Cyw43AuthenticatedResponseEpisodeEvidence {
+                    episode: staged_episode,
+                    current: Some(bare_flush_cursor),
+                    outer_operations: 1,
+                    ..episode_evidence
+                },
+            ),
+            Cyw43AuthenticatedResponseEpisodeDecision::Wait(_)
+        ));
+
+        let mut mixed_diagnostics = staged_diagnostics;
+        mixed_diagnostics.last_poll_ms = mixed_diagnostics.last_poll_ms.saturating_add(1);
+        mixed_diagnostics.last_progress_ms = mixed_diagnostics.last_poll_ms;
+        mixed_diagnostics.last_unit = "observe";
+        mixed_diagnostics.turns = mixed_diagnostics.turns.saturating_add(1);
+        mixed_diagnostics.progress_turns = mixed_diagnostics.progress_turns.saturating_add(1);
+        mixed_diagnostics.observe_child_turns =
+            mixed_diagnostics.observe_child_turns.saturating_add(1);
+        mixed_diagnostics.stage_output_turns =
+            mixed_diagnostics.stage_output_turns.saturating_add(1);
+        mixed_diagnostics.stage_output_successes =
+            mixed_diagnostics.stage_output_successes.saturating_add(1);
+        assert!(matches!(
+            cyw43_authenticated_response_episode_decision(
+                Cyw43AuthenticatedResponseEpisodeEvidence {
+                    episode: staged_episode,
+                    current: Some(Cyw43TransientPublicationCredit {
+                        diagnostics: mixed_diagnostics,
+                        service_turns: staged_cursor.service_turns.saturating_add(1),
+                        ..staged_cursor
+                    }),
+                    outer_operations: 1,
+                    ..episode_evidence
+                },
+            ),
+            Cyw43AuthenticatedResponseEpisodeDecision::Wait(_)
+        ));
+
+        let mut timer_only_diagnostics = staged_diagnostics;
+        timer_only_diagnostics.last_poll_ms = timer_only_diagnostics.last_poll_ms.saturating_add(1);
+        timer_only_diagnostics.turns = timer_only_diagnostics.turns.saturating_add(1);
+        timer_only_diagnostics.service_tick_turns =
+            timer_only_diagnostics.service_tick_turns.saturating_add(1);
+        let timer_only_cursor = Cyw43TransientPublicationCredit {
+            diagnostics: timer_only_diagnostics,
+            service_turns: staged_cursor.service_turns.saturating_add(1),
+            ..staged_cursor
+        };
+        assert!(matches!(
+            cyw43_authenticated_response_episode_decision(
+                Cyw43AuthenticatedResponseEpisodeEvidence {
+                    episode: staged_episode,
+                    current: Some(timer_only_cursor),
+                    ..episode_evidence
+                },
+            ),
+            Cyw43AuthenticatedResponseEpisodeDecision::Wait(_)
+        ));
+        assert_eq!(
+            cyw43_authenticated_response_episode_decision(
+                Cyw43AuthenticatedResponseEpisodeEvidence {
+                    current: Some(Cyw43TransientPublicationCredit {
+                        accepted_commands: rebased.accepted_commands.saturating_add(1),
+                        ..rebased
+                    }),
+                    ..episode_evidence
+                },
+            ),
+            Cyw43AuthenticatedResponseEpisodeDecision::Revoke,
+            "a second command cannot inherit the prior response episode",
+        );
+        assert_eq!(
+            cyw43_authenticated_response_episode_decision(
+                Cyw43AuthenticatedResponseEpisodeEvidence {
+                    physical_operator_work_pending: true,
+                    ..episode_evidence
+                },
+            ),
+            Cyw43AuthenticatedResponseEpisodeDecision::Revoke,
+            "physical operator debt preempts copied-WiFi response retention",
+        );
+        for fenced in [
+            Cyw43AuthenticatedResponseEpisodeEvidence {
+                outer_operations: 2,
+                ..episode_evidence
+            },
+            Cyw43AuthenticatedResponseEpisodeEvidence {
+                network_service_quarantined: true,
+                ..episode_evidence
+            },
+            Cyw43AuthenticatedResponseEpisodeEvidence {
+                reboot_pending: true,
+                ..episode_evidence
+            },
+            Cyw43AuthenticatedResponseEpisodeEvidence {
+                recovery_required: true,
+                ..episode_evidence
+            },
+            Cyw43AuthenticatedResponseEpisodeEvidence {
+                containment_work_pending: true,
+                ..episode_evidence
+            },
+            Cyw43AuthenticatedResponseEpisodeEvidence {
+                handoff_pending: true,
+                ..episode_evidence
+            },
+            Cyw43AuthenticatedResponseEpisodeEvidence {
+                passive_admission_pending: true,
+                ..episode_evidence
+            },
+            Cyw43AuthenticatedResponseEpisodeEvidence {
+                console_service_local_fault_pending: true,
+                ..episode_evidence
+            },
+            Cyw43AuthenticatedResponseEpisodeEvidence {
+                console_service_local_containment_pending: true,
+                ..episode_evidence
+            },
+            Cyw43AuthenticatedResponseEpisodeEvidence {
+                physical_console_response_pending: true,
+                ..episode_evidence
+            },
+        ] {
+            assert_eq!(
+                cyw43_authenticated_response_episode_decision(fenced),
+                Cyw43AuthenticatedResponseEpisodeDecision::Revoke,
+                "every recovery, operator, or multi-operation fence must revoke: {fenced:?}",
+            );
+        }
+        assert_eq!(
+            cyw43_authenticated_response_episode_decision(
+                Cyw43AuthenticatedResponseEpisodeEvidence {
+                    current: Some(Cyw43TransientPublicationCredit {
+                        lifetime: LinkedRuntimeCyw43DurableResume {
+                            physical_lifetime_epoch: lifetime
+                                .physical_lifetime_epoch
+                                .saturating_add(1),
+                            ..lifetime
+                        },
+                        ..rebased
+                    }),
+                    ..episode_evidence
+                },
+            ),
+            Cyw43AuthenticatedResponseEpisodeDecision::Revoke,
+            "physical-lifetime drift must revoke before another Network unit",
+        );
+        let mut completed_diagnostics = staged_diagnostics;
+        completed_diagnostics.awaiting_batch_drain = false;
+        completed_diagnostics.response_drains =
+            completed_diagnostics.response_drains.saturating_add(1);
+        let completed_cursor = Cyw43TransientPublicationCredit {
+            diagnostics: completed_diagnostics,
+            response_lane: None,
+            pending_flush: PendingNetFlush::default(),
+            service_turns: staged_cursor.service_turns.saturating_add(1),
+            ..staged_cursor
+        };
+        assert_eq!(
+            cyw43_authenticated_response_episode_decision(
+                Cyw43AuthenticatedResponseEpisodeEvidence {
+                    episode: staged_episode,
+                    current: Some(completed_cursor),
+                    outer_operations: 1,
+                    ..episode_evidence
+                },
+            ),
+            Cyw43AuthenticatedResponseEpisodeDecision::Complete,
+            "the token closes when response and bounded TCP flush work are both empty",
+        );
         assert_eq!(
             cyw43_transient_publication_credit_reject_reason(
                 Cyw43TransientPublicationCreditEvidence {
@@ -58895,6 +59650,56 @@ mod tests {
             Some(DirectGenetProductiveProgress::CommandAcceptedAndStagePublished),
         );
 
+        let cross_core_stage = DirectGenetProductiveQuantumEvidence {
+            before: DirectGenetProductiveQuantumSnapshot {
+                child_yield_calls: 0,
+                child_yield_counter_hz: 0,
+                child_yield_call_wall_scaled: 0,
+                child_yield_credit_scaled: 0,
+                ..stage.before
+            },
+            after: DirectGenetProductiveQuantumSnapshot {
+                child_yield_calls: 0,
+                child_yield_counter_hz: 0,
+                child_yield_call_wall_scaled: 0,
+                child_yield_credit_scaled: 0,
+                ..stage.after
+            },
+            continuation_mode: DirectGenetContinuationMode::CrossCoreSignalOnly,
+            ..stage
+        };
+        let cross_core_stage_continuation =
+            direct_genet_productive_quantum_continuation_entitled(cross_core_stage)
+                .expect("an exact cross-core stage must grant one root successor");
+        assert_eq!(
+            cross_core_stage_continuation.progress,
+            DirectGenetProductiveProgress::StagePublished,
+        );
+        assert!(
+            !cross_core_stage_continuation.opens_active_hot_tail(),
+            "stage-only authority is one-shot and cannot open the response-drain hot tail",
+        );
+
+        let cross_core_command_and_stage = DirectGenetProductiveQuantumEvidence {
+            after: DirectGenetProductiveQuantumSnapshot {
+                accepted_commands: 42,
+                command_queue: 0,
+                ..cross_core_stage.after
+            },
+            ..cross_core_stage
+        };
+        let cross_core_command_and_stage_continuation =
+            direct_genet_productive_quantum_continuation_entitled(cross_core_command_and_stage)
+                .expect("an exact fused cross-core command/stage must grant one root successor");
+        assert_eq!(
+            cross_core_command_and_stage_continuation.progress,
+            DirectGenetProductiveProgress::CommandAcceptedAndStagePublished,
+        );
+        assert!(
+            !cross_core_command_and_stage_continuation.opens_active_hot_tail(),
+            "a fused stage remains one-shot until the child proves response drain",
+        );
+
         let command_stage_and_drain = DirectGenetProductiveQuantumEvidence {
             after: DirectGenetProductiveQuantumSnapshot {
                 accepted_commands: 42,
@@ -59013,10 +59818,6 @@ mod tests {
 
         for invalid_cross_core in [
             DirectGenetProductiveQuantumEvidence {
-                continuation_mode: DirectGenetContinuationMode::CrossCoreSignalOnly,
-                ..stage
-            },
-            DirectGenetProductiveQuantumEvidence {
                 after: DirectGenetProductiveQuantumSnapshot {
                     child_yield_calls: 1,
                     child_yield_counter_hz: 54_000_000,
@@ -59036,7 +59837,7 @@ mod tests {
             assert!(
                 direct_genet_productive_quantum_continuation_entitled(invalid_cross_core)
                     .is_none(),
-                "cross-core signal-only continuation must require exact drain and zero YieldTo accounting: {invalid_cross_core:?}",
+                "cross-core signal-only continuation must require exact productive progress and zero YieldTo accounting: {invalid_cross_core:?}",
             );
         }
 
