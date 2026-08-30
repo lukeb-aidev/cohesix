@@ -8,12 +8,12 @@ This report is derived from `docs/audit/M26C_MARKDOWN_INVENTORY.csv`.
 
 ## Summary
 
-- tracked Markdown files: 212
+- tracked Markdown files: 214
 - append-only audit evidence: 4
 - external reference mirror: 3
 - generated report: 1
-- generated snippet: 18
-- human-edited canonical source: 46
+- generated snippet: 19
+- human-edited canonical source: 47
 - live audit register: 29
 - release snapshot: 72
 - vendored reference: 39
@@ -37,6 +37,7 @@ This report is derived from `docs/audit/M26C_MARKDOWN_INVENTORY.csv`.
 | `CONTRIBUTING.md` | human-edited canonical source | docs-owner | edit directly with generated/as-built evidence |
 | `README.md` | human-edited canonical source | docs-owner | edit directly with generated/as-built evidence |
 | `apps/gpu-bridge-host/README.md` | human-edited canonical source | docs-owner | edit directly with generated/as-built evidence |
+| `apps/host-ticket-agent/README.md` | human-edited canonical source | docs-owner | edit directly with generated/as-built evidence |
 | `apps/nine-door/README.md` | human-edited canonical source | docs-owner | edit directly with generated/as-built evidence |
 | `apps/root-task/README.md` | human-edited canonical source | docs-owner | edit directly with generated/as-built evidence |
 | `apps/worker-gpu/README.md` | human-edited canonical source | docs-owner | edit directly with generated/as-built evidence |
@@ -65,12 +66,12 @@ This report is derived from `docs/audit/M26C_MARKDOWN_INVENTORY.csv`.
 | `docs/OPERATOR_WALKTHROUGH.md` | human-edited canonical source | docs-owner | edit directly with generated/as-built evidence |
 | `docs/PYTHON_SUPPORT.md` | human-edited canonical source | docs-owner | edit directly with generated/as-built evidence |
 | `docs/QUICKSTART.md` | human-edited canonical source | docs-owner | edit directly with generated/as-built evidence |
-| `docs/QUICKSTART_ALPHA.md` | human-edited canonical source | docs-owner | edit directly with generated/as-built evidence |
 | `docs/REPO_LAYOUT.md` | human-edited canonical source | docs-owner | edit directly with generated/as-built evidence |
 | `docs/ROLES_AND_SCHEDULING.md` | human-edited canonical source | docs-owner | edit directly with generated/as-built evidence |
 | `docs/SECURE9P.md` | human-edited canonical source | docs-owner | edit directly with generated/as-built evidence |
 | `docs/SECURITY.md` | human-edited canonical source | docs-owner | edit directly with generated/as-built evidence |
 | `docs/SECURITY_NIST_800_53.md` | human-edited canonical source | docs-owner | edit directly with generated/as-built evidence |
+| `docs/STATUS.md` | human-edited canonical source | docs-owner | edit directly with generated/as-built evidence |
 | `docs/TEST_PLAN.md` | human-edited canonical source | docs-owner | edit directly with generated/as-built evidence |
 | `docs/TOOLCHAIN_MAC_ARM64.md` | human-edited canonical source | docs-owner | edit directly with generated/as-built evidence |
 | `docs/USERLAND_AND_CLI.md` | human-edited canonical source | docs-owner | edit directly with generated/as-built evidence |
@@ -120,6 +121,7 @@ This report is derived from `docs/audit/M26C_MARKDOWN_INVENTORY.csv`.
 | `docs/snippets/cohsh_policy.md` | generated snippet | generator-owner | update only through coh-rtc or source generator |
 | `docs/snippets/cohsh_ticket_policy.md` | generated snippet | generator-owner | update only through coh-rtc or source generator |
 | `docs/snippets/gpu_breadcrumbs.md` | generated snippet | generator-owner | update only through coh-rtc or source generator |
+| `docs/snippets/host_integration_dependency.md` | generated snippet | generator-owner | update only through coh-rtc or source generator |
 | `docs/snippets/latency_metrics.md` | generated snippet | generator-owner | update only through coh-rtc or source generator |
 | `docs/snippets/observability_interfaces.md` | generated snippet | generator-owner | update only through coh-rtc or source generator |
 | `docs/snippets/observability_security.md` | generated snippet | generator-owner | update only through coh-rtc or source generator |

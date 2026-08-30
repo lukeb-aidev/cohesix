@@ -4596,20 +4596,6 @@
       "evidence_eligible": false
     },
     {
-      "id": "tracked:docs/QUICKSTART_ALPHA.md",
-      "kind": "tracked_surface",
-      "path": "docs/QUICKSTART_ALPHA.md",
-      "implementation_class": "contract",
-      "owner": "documentation",
-      "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
-      "production_reachable": false,
-      "selection_source": "tracked current documentation; rule=current-docs",
-      "package_disposition": "selected_release_subset_or_source_only",
-      "evidence_requirement": "docs-as-built drift review",
-      "current_observed_mode": "documentation_or_generated_claim",
-      "evidence_eligible": false
-    },
-    {
       "id": "tracked:docs/REPO_LAYOUT.md",
       "kind": "tracked_surface",
       "path": "docs/REPO_LAYOUT.md",

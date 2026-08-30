@@ -6,6 +6,7 @@ AGENTS.md,human-edited canonical source,docs-owner,edit directly with generated/
 CONTRIBUTING.md,human-edited canonical source,docs-owner,edit directly with generated/as-built evidence,canonical Cohesix-authored documentation
 README.md,human-edited canonical source,docs-owner,edit directly with generated/as-built evidence,canonical Cohesix-authored documentation
 apps/gpu-bridge-host/README.md,human-edited canonical source,docs-owner,edit directly with generated/as-built evidence,canonical Cohesix-authored documentation
+apps/host-ticket-agent/README.md,human-edited canonical source,docs-owner,edit directly with generated/as-built evidence,canonical Cohesix-authored documentation
 apps/nine-door/README.md,human-edited canonical source,docs-owner,edit directly with generated/as-built evidence,canonical Cohesix-authored documentation
 apps/root-task/README.md,human-edited canonical source,docs-owner,edit directly with generated/as-built evidence,canonical Cohesix-authored documentation
 apps/worker-gpu/README.md,human-edited canonical source,docs-owner,edit directly with generated/as-built evidence,canonical Cohesix-authored documentation
@@ -34,12 +35,12 @@ docs/OPERATOR_RECIPES.md,human-edited canonical source,docs-owner,edit directly 
 docs/OPERATOR_WALKTHROUGH.md,human-edited canonical source,docs-owner,edit directly with generated/as-built evidence,canonical Cohesix-authored documentation
 docs/PYTHON_SUPPORT.md,human-edited canonical source,docs-owner,edit directly with generated/as-built evidence,canonical Cohesix-authored documentation
 docs/QUICKSTART.md,human-edited canonical source,docs-owner,edit directly with generated/as-built evidence,canonical Cohesix-authored documentation
-docs/QUICKSTART_ALPHA.md,human-edited canonical source,docs-owner,edit directly with generated/as-built evidence,canonical Cohesix-authored documentation
 docs/REPO_LAYOUT.md,human-edited canonical source,docs-owner,edit directly with generated/as-built evidence,canonical Cohesix-authored documentation
 docs/ROLES_AND_SCHEDULING.md,human-edited canonical source,docs-owner,edit directly with generated/as-built evidence,canonical Cohesix-authored documentation
 docs/SECURE9P.md,human-edited canonical source,docs-owner,edit directly with generated/as-built evidence,canonical Cohesix-authored documentation
 docs/SECURITY.md,human-edited canonical source,docs-owner,edit directly with generated/as-built evidence,canonical Cohesix-authored documentation
 docs/SECURITY_NIST_800_53.md,human-edited canonical source,docs-owner,edit directly with generated/as-built evidence,canonical Cohesix-authored documentation
+docs/STATUS.md,human-edited canonical source,docs-owner,edit directly with generated/as-built evidence,canonical Cohesix-authored documentation
 docs/TEST_PLAN.md,human-edited canonical source,docs-owner,edit directly with generated/as-built evidence,canonical Cohesix-authored documentation
 docs/TOOLCHAIN_MAC_ARM64.md,human-edited canonical source,docs-owner,edit directly with generated/as-built evidence,canonical Cohesix-authored documentation
 docs/USERLAND_AND_CLI.md,human-edited canonical source,docs-owner,edit directly with generated/as-built evidence,canonical Cohesix-authored documentation
@@ -89,6 +90,7 @@ docs/snippets/cohsh_grammar.md,generated snippet,generator-owner,update only thr
 docs/snippets/cohsh_policy.md,generated snippet,generator-owner,update only through coh-rtc or source generator,generated documentation snippet
 docs/snippets/cohsh_ticket_policy.md,generated snippet,generator-owner,update only through coh-rtc or source generator,generated documentation snippet
 docs/snippets/gpu_breadcrumbs.md,generated snippet,generator-owner,update only through coh-rtc or source generator,generated documentation snippet
+docs/snippets/host_integration_dependency.md,generated snippet,generator-owner,update only through coh-rtc or source generator,generated documentation snippet
 docs/snippets/latency_metrics.md,generated snippet,generator-owner,update only through coh-rtc or source generator,generated documentation snippet
 docs/snippets/observability_interfaces.md,generated snippet,generator-owner,update only through coh-rtc or source generator,generated documentation snippet
 docs/snippets/observability_security.md,generated snippet,generator-owner,update only through coh-rtc or source generator,generated documentation snippet
