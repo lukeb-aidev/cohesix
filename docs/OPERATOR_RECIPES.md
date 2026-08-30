@@ -1,101 +1,179 @@
 <!-- Copyright © 2026 Lukas Bower -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
-<!-- Purpose: Provide verified task-oriented Cohesix operator recipes beyond the canonical live walkthrough. -->
+<!-- Purpose: Provide practical, evidence-aware Cohesix 26e recipes for new and returning operators. -->
 <!-- Author: Lukas Bower -->
+
 # Cohesix Operator Recipes
 
-This document contains advanced procedures that would obscure the single
-end-to-end journey in
-[OPERATOR_WALKTHROUGH.md](OPERATOR_WALKTHROUGH.md). Complete that walkthrough
-first: these recipes assume a healthy target, one `hive-gateway` as the sole
-TCP console owner, `COH_REST_URL` set to its loopback URL, and the required
-request-auth token loaded without printing it.
+These recipes turn a healthy Cohesix session into repeatable work. Start with
+the [Quickstart](QUICKSTART.md), then complete the live
+[Operator Walkthrough](OPERATOR_WALKTHROUGH.md) before using a mutating recipe.
 
-Commands use a source checkout from the repository root. Release-bundle users
-should replace `cargo run -p <package> --` with the corresponding `./bin/<tool>`
-and use the bundle's `QUICKSTART.md`. These procedures never relax manifest,
-role, ticket, lifecycle, policy, or request-size checks.
+Commands assume a source checkout from the repository root. Release users
+should replace `cargo run -p <package> --` with the corresponding executable in
+`bin/` and follow the bundle's `QUICKSTART.md` for paths.
 
-See the [Glossary](GLOSSARY.md) for Cohesix-specific role, namespace, and
-evidence terms.
+The useful habit across every recipe is simple:
 
-## Evidence packs, CI, and SIEM
+1. identify the exact target and transport;
+2. prefer a bounded read before a write;
+3. retain the typed result instead of guessing from a timeout; and
+4. say what the result proves—and what it does not.
 
-### Capture an evidence pack
+## Recipe map
 
-Capture while the relevant retained windows still contain the event under
-investigation. Telemetry is opt-in because it can materially increase the
-pack's size:
+| If you want to... | Recipe | Mutation |
+| --- | --- | --- |
+| Turn a manual check into a dependable command | [Make a repeatable health check](#make-a-repeatable-health-check) | No |
+| Inspect what 26e isolation is actually reporting | [Inspect seL4 and MCS state](#inspect-sel4-and-mcs-state) | No |
+| Attach a useful artifact to a bug or change | [Capture and validate an evidence pack](#capture-and-validate-an-evidence-pack) | No |
+| Integrate with an existing script or service | [Read the same state with REST and Python](#read-the-same-state-with-rest-and-python) | No |
+| Check several Queens without opening several shells | [Read a small fleet](#read-a-small-fleet) | No |
+| Use ordinary filesystem tools | [Mount the bounded namespace](#mount-the-bounded-namespace) | Reads or policy-checked writes |
+| Use an AArch64 NVIDIA system as a Cohesix/GPU host | [Inspect and publish AArch64 NVIDIA GPU state](#inspect-and-publish-aarch64-nvidia-gpu-state) | Optional publication |
+| Compare the QEMU and Pi operator experience | [Repeat a check on QEMU and Pi](#repeat-a-check-on-qemu-and-pi) | No |
+| Prepare a node for planned maintenance | [Run a maintenance window](#run-a-maintenance-window) | Yes |
+| Route a failure without random retries | [Triage the first failed boundary](#triage-the-first-failed-boundary) | No |
+
+## Make a repeatable health check
+
+Use `.coh` when a sequence matters. It is intentionally smaller than a shell
+language: there are no downloads, variables, loops, command substitution, or
+hidden host commands.
+
+Create the local output directory:
 
 ```bash
-run_id="incident-$(date -u +%Y%m%dT%H%M%SZ)"
+mkdir -p out/operator
+```
+
+Save this as `out/operator/health.coh`:
+
+```text
+# Read-only operator health check
+ping
+EXPECT OK
+cat /proc/boot
+EXPECT OK
+EXPECT SUBSTR path=/proc/boot
+cat /proc/root/reachable
+EXPECT OK
+EXPECT SUBSTR path=/proc/root/reachable
+cat /proc/schedule/summary
+EXPECT OK
+tail /log/queen.log 16
+EXPECT OK
+```
+
+Check the file without contacting a target:
+
+```bash
+cargo run -p cohsh -- --check out/operator/health.coh
+```
+
+Run it through the gateway already selected by `COH_REST_URL`:
+
+```bash
+cargo run -p cohsh -- \
+  --transport rest \
+  --role queen \
+  --script out/operator/health.coh
+```
+
+Script mode exits non-zero on a transport failure, typed command error, or
+failed assertion and reports the source line plus a bounded recent-response
+history. This makes the same file useful before a deployment, after a change,
+and in a support request.
+
+Use the checked-in `scripts/cohsh/smp_parity.coh` for a small target identity,
+scheduler, lease, and `/proc` baseline. Generated scripts such as
+`scripts/cohsh/boot_v0.coh` must be regenerated from their owning manifest/IR;
+do not edit them as personal runbooks.
+
+**What it proves:** the listed reads and assertions completed against the
+selected session. **What it does not prove:** all target tests, Worker
+execution, performance, or Pi hardware acceptance.
+
+## Inspect seL4 and MCS state
+
+The serial/local-seat root console and the NineDoor operator namespace are
+independent views. Use both when investigating temporal isolation.
+
+At the target `cohesix>` console:
+
+```text
+bi
+caps mcs
+smp mcs
+smp
+```
+
+The useful distinction is in the labels:
+
+- `source=generated` describes compiler admission;
+- `source=kernel` describes the selected seL4 configuration or BootInfo; and
+- `source=runtime` describes the copied live registry snapshot.
+
+An unavailable runtime value cannot be replaced by a generated value. `smp`
+reports bounded userspace activity and selected driver progress; it is not a
+kernel CPU-utilization meter.
+
+Through `cohsh`, inspect the operator-facing consequences:
+
+```text
+cat /proc/boot
+cat /proc/root/reachable
+cat /proc/schedule/summary
+cat /proc/lease/summary
+ls /shard
+tail /log/queen.log 32
+```
+
+The selected QEMU and Pi manifests declare one Heartbeat, 127 GPU, and 128 LoRA
+Worker slots. The `/shard` namespace is canonical. A declared slot, directory,
+queued request, READY observation, host-provider completion, and target
+execution proof are separate facts.
+
+**Why this is useful:** a generic VM monitor can say that a process exists;
+these views let you route a mismatch among compiler policy, seL4 objects, live
+admission, scheduler progress, and bounded operator state.
+
+## Capture and validate an evidence pack
+
+Capture soon after the event, before bounded logs and telemetry wrap:
+
+```bash
+run_id="case-$(date -u +%Y%m%dT%H%M%SZ)"
 pack="out/evidence/$run_id"
 
 cargo run -p coh -- evidence pack \
   --rest-url "$COH_REST_URL" \
-  --out "$pack" \
-  --with-telemetry
+  --out "$pack"
 
-cargo run -p coh -- evidence timeline --input "$pack"
+cargo run -p coh -- evidence timeline \
+  --input "$pack"
 ```
 
-`evidence timeline` is offline: after a successful pack export it needs no
-target, gateway, or credential. It writes `timeline.ndjson` for machines and
-`timeline.md` for review. Events are ordered deterministically by available
-audit sequence, lease sequence, correlation key, and event kind. Host-ticket
-events carry federation fields when those fields were present, allowing the
-same `id` and `idempotency_key` to be followed across hives.
+Add `--with-telemetry` only when the extra data is relevant and its size and
+sensitivity are acceptable.
 
-### Pack contract
+### Read the pack in this order
 
-The exporter creates this deterministic layout. A profile-disabled or absent
-optional path is represented in `summary.json`, not silently omitted from the
-inventory.
-
-| Path relative to the pack | Contract |
+| File | First question |
 | --- | --- |
-| `meta.json` | `cohesix-evidence-pack/meta-v1`; generated manifest and policy fingerprints, ticket-redaction mode, and telemetry-selection flag. |
-| `bounds.json` | Gateway `/v1/meta/bounds` response, or the equivalent compiled local bounds for a non-REST export. It describes client/gateway policy and is not proof of the target image by itself. |
-| `summary.json` | `cohesix-evidence-pack/summary-v1`; sorted item inventory with `captured`, `missing`, or `error` status and aggregate counts. |
-| `proc/boot` | Target boot/profile and manifest evidence when exposed. |
-| `proc/schedule/{summary,queue}` | Scheduler snapshots when enabled by `bounds.json`. |
-| `proc/lease/{summary,active,preemptions}` | Lease snapshots when enabled by `bounds.json`. |
-| `log/queen.log` | Bounded retained Queen log snapshot; the current exporter budgets for the 2,048-line retained ring rather than the interactive tail default. |
-| `audit/{export,journal,decisions}` | Audit metadata and redacted JSONL when audit is exposed. |
-| `host/tickets/{spec,status,deadletter}` | Redacted host-ticket request and receipt JSONL when host tickets are exposed. |
-| `replay/status` | Replay state when replay is exposed. |
-| `telemetry/` | Pulled Queen telemetry only when `--with-telemetry` is set. |
-| `timeline.ndjson`, `timeline.md` | Offline correlation products created by the separate timeline command. |
+| `summary.json` | Which requested paths were captured, missing, or errored? |
+| `meta.json` | Which exporter, policy fingerprint, and redaction mode created the pack? |
+| `bounds.json` | Which generated host limits and feature gates were applied? |
+| `proc/boot` | Which profile and manifest did the target report? |
+| `proc/schedule/*`, `proc/lease/*` | What bounded scheduler and lease state was retained? |
+| `log/queen.log` | What recent target events remain? |
+| `timeline.md` | What ordered, human-readable story can be reconstructed offline? |
+| `timeline.ndjson` | What can an incident or analytics pipeline ingest? |
 
-The two manifest fingerprints have different provenance: `meta.json` and
-`bounds.json` use the host tool's compiled/generated policy, while `proc/boot`
-is target evidence. Preserve and compare both before claiming parity.
+`meta.json`/`bounds.json` and `proc/boot` have different provenance. Preserve
+and compare them; do not call a host policy fingerprint target proof.
 
-### Redaction and failure rules
-
-- Audit `ticket` values other than `none` are replaced with
-  `sha256:<hex-digest>`. This preserves correlation without exporting a raw
-  capability ticket.
-- Audit and host-ticket JSON are recursively redacted when a key denotes a
-  token, authorization value, authentication reference, secret, password,
-  signing key, or API key. The replacement value is `<redacted>`.
-- Invalid UTF-8 or malformed JSONL on a surface that must be sanitized fails
-  closed; the exporter does not copy the unsanitized line.
-- A missing or disabled namespace path is non-fatal and appears as
-  `status: "missing"` with `detail: "not-found"` in `summary.json`.
-- Optional capture failures can appear as `status: "error"`. A non-missing
-  failure on a core capture can terminate the command before a final summary is
-  committed. Treat a non-zero command exit or a pack without all three top-level
-  JSON files as a partial, non-publishable capture.
-- Redaction is deliberately narrow. Review the resulting pack under the
-  deployment's data-classification policy before sharing it; telemetry,
-  application logs, and non-secret payload fields can still contain sensitive
-  operational data.
-
-### CI validation
-
-The checked-in validator is deterministic and exits `0` only when its contract
-passes; it exits `2` for a failed pack:
+### Validate for CI or support
 
 ```bash
 python3 tools/cohesix-py/examples/ci_evidence_pack.py \
@@ -103,18 +181,11 @@ python3 tools/cohesix-py/examples/ci_evidence_pack.py \
   --out "$pack/ci-summary.json"
 ```
 
-It requires `meta.json`, `bounds.json`, `summary.json`, and `log/queen.log`; it
-also requires each schedule or lease file enabled by `bounds.json`, enforces
-their advertised byte caps, requires journal and decisions when `audit/export`
-exists, bounds optional `replay/status`, and rejects a raw
-`cohesix-ticket-...` token in the audit journal. Its output schema is
-`cohesix-ci-evidence-pack/v1`. This structural check complements, but does not
-replace, target-specific boot, hardware, or test-plan evidence.
+The validator checks required files, generated bounds, enabled schedule/lease
+surfaces, audit relationships, and raw ticket leakage. A structurally valid
+pack still proves only the target/session and surfaces it actually captured.
 
-### SIEM export
-
-Normalize the currently supported audit and active-lease sources to stable
-NDJSON:
+For a stable offline SIEM projection:
 
 ```bash
 python3 tools/cohesix-py/examples/siem_export_ndjson.py \
@@ -122,45 +193,105 @@ python3 tools/cohesix-py/examples/siem_export_ndjson.py \
   --out "$pack/siem.ndjson"
 ```
 
-The exporter is offline and deterministic. It emits
-`cohesix-siem-event/v1` rows from `audit/journal`, `audit/decisions`, and
-`proc/lease/active` when present. It does not currently normalize host-ticket
-files; use `timeline.ndjson` when cross-hive ticket correlation is required.
-Validate either output against the receiving system's ingestion limits before
-shipping it.
+### Know the redaction boundary
 
-## Mounted namespace with FUSE
+- Capability tickets and secret-like JSON keys are redacted from supported
+  audit and host-ticket inputs.
+- Malformed data on a surface that must be sanitized fails closed.
+- Optional disabled paths are recorded as missing rather than invented.
+- Logs, telemetry, and ordinary payload fields can still contain sensitive
+  deployment data. Review the pack before sharing it.
+- A non-zero export, absent top-level metadata, or unexplained core error is a
+  partial pack, not a publishable result.
 
-### Prerequisites
+## Read the same state with REST and Python
 
-`coh mount` is a foreground filesystem server. It exposes only the generated
-mount root and allowlist; creating a mount does not broaden the attached role or
-ticket.
+With one healthy gateway, a shell script can read a bounded node without
+parsing an interactive terminal:
 
-- Linux needs a FUSE 3 runtime, a usable `/dev/fuse`, and `coh` built for Linux.
-  Repository Linux and release builds include the FUSE backend.
-- macOS needs MacFUSE installed, approved by the operator, and a device such as
-  `/dev/macfuse0`. A direct source build must enable the optional `fuse` feature;
-  `scripts/cohesix-build-run.sh` enables it for the staged macOS `coh` binary.
-- The mount point must already exist and should be empty.
+```bash
+curl --fail-with-body --silent --show-error --get \
+  --data-urlencode 'path=/proc/root/reachable' \
+  --data-urlencode 'max_bytes=64' \
+  "$COH_REST_URL/v1/fs/cat"
+```
 
-For a direct source invocation, build the correct feature and inspect the
-generated doctor output. `doctor` also checks policy, ticket, GPU, and runtime
-prerequisites, so evaluate its individual `check=mount` result if an unrelated
-check fails:
+The Python SDK exposes the same operation as a typed backend:
+
+```bash
+python3 -m pip install -e tools/cohesix-py
+
+python3 - <<'PY'
+import os
+
+from cohesix import RestBackend
+
+backend = RestBackend(os.environ["COH_REST_URL"])
+for path in (
+    "/proc/root/reachable",
+    "/proc/schedule/summary",
+    "/proc/lease/summary",
+):
+    value = backend.read_file(path, 256).decode("utf-8")
+    print(f"{path}: {value}")
+PY
+```
+
+Use REST or Python for health services, deployment checks, notebooks, and
+incident collection. Writes still require gateway request authentication and
+the gateway's upstream role/ticket, target lifecycle, policy, and schema all
+remain authoritative.
+
+## Read a small fleet
+
+For one gateway:
+
+```bash
+cargo run -p coh -- fleet \
+  --rest-url "$COH_REST_URL" \
+  status
+```
+
+For several gateways, give each one a stable operator name:
+
+```bash
+cargo run -p coh -- fleet \
+  --hive qemu=http://127.0.0.1:8080 \
+  --hive pi4=http://127.0.0.1:8081 \
+  status
+
+cargo run -p coh -- fleet \
+  --hive qemu=http://127.0.0.1:8080 \
+  --hive pi4=http://127.0.0.1:8081 \
+  pressure
+```
+
+`fleet status`, `lease-summary`, and `pressure` are read-only fan-in commands.
+Each output row names its hive and carries a bounded error when one source is
+unavailable; inspect every row instead of treating process completion as proof
+that every hive was healthy.
+
+This is intentionally not a distributed authority system. Each gateway still
+owns one target session, and two targets can have different manifests,
+evidence status, and request-auth boundaries.
+
+## Mount the bounded namespace
+
+`coh mount` is useful when existing read-only tools expect files. The mount is
+a foreground FUSE server and exposes only the generated mount root and
+allowlist; it does not broaden the attached role or ticket.
+
+Linux needs FUSE 3 and a usable `/dev/fuse`. macOS needs an approved MacFUSE
+installation. Check the host first:
 
 ```bash
 cargo build -p coh --features fuse
 cargo run -p coh --features fuse -- doctor
 ```
 
-### REST-backed mount
-
-Keep the gateway running and start the mount in its own terminal:
+Create an empty mount point and start a REST-backed mount in its own terminal:
 
 ```bash
-: "${COH_REST_URL:?set the gateway URL}"
-: "${HIVE_GATEWAY_REQUEST_AUTH_TOKEN:?set gateway request authentication}"
 mount_dir="$PWD/out/mount/cohesix"
 mkdir -p "$mount_dir"
 
@@ -169,32 +300,14 @@ cargo run -p coh --features fuse -- mount \
   --at "$mount_dir"
 ```
 
-Use a second terminal to read the mounted tree. Writes still pass through the
-gateway and target policy. Exactly one REST mount can hold the host-side lock
-for a given gateway URL; unmount the first before starting another.
-
-### Direct mount
-
-Stop `hive-gateway` first. The mount becomes the sole TCP console owner for its
-lifetime:
+Use ordinary tools from another terminal:
 
 ```bash
-: "${COH_AUTH_TOKEN:?set the target console token}"
-mount_dir="$PWD/out/mount/cohesix"
-mkdir -p "$mount_dir"
-
-cargo run -p coh --features fuse -- mount \
-  --host "${COH_TCP_HOST:-127.0.0.1}" \
-  --port "${COH_TCP_PORT:-31337}" \
-  --at "$mount_dir"
+find "$mount_dir/proc" -maxdepth 2 -type f
+sed -n '1,40p' "$mount_dir/proc/boot"
 ```
 
-Do not start another direct client until the mount is gone.
-
-### Unmount and verify cleanup
-
-Unmount from a second terminal, then wait for the foreground `coh mount`
-process to return:
+Unmount cleanly and wait for the foreground process to return:
 
 ```bash
 # Linux
@@ -204,164 +317,119 @@ fusermount3 -u "$mount_dir"
 umount "$mount_dir"
 ```
 
-Do not terminate a busy mount first. If unmount fails, stop filesystem users,
-retry the host unmount command, and confirm the mount is absent before removing
-the empty directory or restarting the gateway.
+Do not kill a busy mount first. Stop filesystem users, unmount, confirm the
+mount is gone, then remove the empty directory if desired. Exactly one REST
+mount can hold the host-side lock for a given gateway URL.
 
-## Host tickets and federation
+The mount is a convenience projection. Current target, host, and profile
+support still needs its own validation; a successful local mount is not target
+Worker or hardware proof.
 
-The request, result, lifecycle, and federation fields are owned by
-[INTERFACES.md#host-tickets-and-federation](INTERFACES.md#host-tickets-and-federation).
-The examples below use `RestBackend` so the gateway remains the only direct TCP
-client. The active resolved manifest must enable the host-ticket namespace and
-allow the selected action. Install the package first as described in
-[PYTHON_SUPPORT.md#requirements-and-installation](PYTHON_SUPPORT.md#requirements-and-installation).
+## Inspect and publish AArch64 NVIDIA GPU state
 
-### One local read-only host action
+A Linux AArch64 NVIDIA CUDA system is useful in the 26e topology as a host for
+Cohesix tools, CUDA workloads, models, containers, and evidence. Jetson Orin,
+AWS G5g, NVIDIA DGX Spark, and compatible partner or future systems share this
+architectural role. None is the seL4 Queen in this topology.
 
-This Linux example queues a systemd status check. Replace the unit with one
-that exists on the agent host; the agent executes `systemctl` locally and only
-after claiming the manifest-authorized ticket:
-
-```bash
-python3 - <<'PY'
-import os
-
-from cohesix import CohesixOrchestrator, HostTicketRequest, RestBackend
-
-backend = RestBackend(
-    os.environ["COH_REST_URL"],
-    request_auth_token=os.environ.get("HIVE_GATEWAY_REQUEST_AUTH_TOKEN"),
-)
-orchestrator = CohesixOrchestrator(backend)
-request = HostTicketRequest(
-    ticket_id="status-1",
-    idempotency_key="status-1a",
-    action="systemd.status-check",
-    target="/systemd/cohesix-agent.service",
-)
-for result in orchestrator.enqueue_host_tickets([request]):
-    print(result.path, result.bytes_written)
-PY
-
-export COHESIX_RESOLVED_MANIFEST="${COHESIX_RESOLVED_MANIFEST:-configs/generated/root_task_resolved.json}"
-test -f "$COHESIX_RESOLVED_MANIFEST"
-
-cargo run -p host-ticket-agent -- \
-  --manifest "$COHESIX_RESOLVED_MANIFEST" \
-  --rest-url "$COH_REST_URL" \
-  --cursor out/host-ticket-agent/local-cursor.json \
-  --run-once
-```
-
-Read both terminal and failure receipts; match the pair of stable identifiers,
-not only the most recent line:
+On a supported Ubuntu release, use the Linux ARM64 setup and real host checks.
+On another distribution, use a matching release bundle or satisfy the same
+toolchain/runtime contract explicitly; do not force the Ubuntu installer past
+its OS guard:
 
 ```bash
-curl --fail-with-body --silent --show-error --get \
-  --data-urlencode 'path=/host/tickets/status' \
-  --data-urlencode 'max_bytes=4096' \
-  "$COH_REST_URL/v1/fs/cat"
+./toolchain/setup_linux_arm64.sh
+source "$HOME/.cargo/env"
+source .venv/bin/activate
 
-curl --fail-with-body --silent --show-error --get \
-  --data-urlencode 'path=/host/tickets/deadletter' \
-  --data-urlencode 'max_bytes=4096' \
-  "$COH_REST_URL/v1/fs/cat"
+cargo run -p coh -- doctor
+cargo run -p gpu-bridge-host -- --list
 ```
 
-Use a unique cursor file for every agent instance. Reusing `id` plus
-`idempotency_key` deliberately deduplicates a terminal action; create a new pair
-for a genuinely new operation.
+`coh doctor` prefers NVML and uses CUDA discovery when NVML is feature-limited.
+`gpu-bridge-host --list` prints local inventory only. Backend availability and
+reported fields can differ by SoC, discrete GPU, driver, and CUDA release; the
+typed result is authoritative for that host.
 
-### Federated relay
-
-Federation requires independently generated manifests:
-
-1. The source manifest names its own `local_hive`, the target as a peer, the
-   peer REST URL, and an `auth_ref` environment-variable name.
-2. The target manifest names the target as its `local_hive` and enables the
-   same ticket action and result schemas.
-3. The source agent process receives the target gateway token through the
-   manifest's `auth_ref`; the token is not stored in the manifest or ticket.
-4. Each source and target agent has a dedicated cursor. The relaying source also
-   has a dedicated WAL.
-
-With the checked-in default source profile, `hive-a` knows peer `hive-b` at
-`http://127.0.0.1:8081` and resolves its request token from
-`COHESIX_RELAY_HIVE_B_TOKEN`. A real target must be built from a corresponding
-`hive-b` profile; do not run the same `local_hive = "hive-a"` manifest on both
-sides.
-
-Point each process at the resolved manifest generated for its own target. The
-paths below are required inputs: do not let either process fall back to the
-checked-in `hive-a` default when it is serving `hive-b`.
-
-On the target host, run an ordinary processing agent against the target
-gateway. On the source host, run a relaying agent against the source gateway:
+Use SSD/NVMe for build output, model registries, caches, containers, and
+evidence when available. Supply the location rather than baking a device path
+into scripts. For example:
 
 ```bash
-# Target host: COH_REST_URL and request-auth token refer to hive-b.
-export HIVE_B_MANIFEST="${HIVE_B_MANIFEST:?set the hive-b resolved manifest path}"
-test -f "$HIVE_B_MANIFEST"
-cargo run -p host-ticket-agent -- \
-  --manifest "$HIVE_B_MANIFEST" \
-  --rest-url "$COH_REST_URL" \
-  --cursor out/host-ticket-agent/hive-b-cursor.json
-
-# Source host: the standard token is for hive-a; auth_ref is for hive-b.
-export HIVE_A_MANIFEST="${HIVE_A_MANIFEST:?set the hive-a resolved manifest path}"
-test -f "$HIVE_A_MANIFEST"
-export COHESIX_RELAY_HIVE_B_TOKEN="${HIVE_B_REQUEST_AUTH_TOKEN:?set hive-b request authentication}"
-cargo run -p host-ticket-agent -- \
-  --manifest "$HIVE_A_MANIFEST" \
-  --rest-url "$COH_REST_URL" \
-  --cursor out/host-ticket-agent/hive-a-cursor.json \
-  --relay \
-  --relay-wal out/host-ticket-agent/hive-a-relay-wal.json
+: "${COHESIX_FAST_ROOT:?set a writable fast-storage directory}"
+export CARGO_TARGET_DIR="$COHESIX_FAST_ROOT/cargo-target"
 ```
 
-Queue a compact, read-only federated request on the source. `ssh` is an example
-systemd unit; choose a real target and confirm the serialized request stays
-within `/v1/meta/bounds`:
+To publish one real GPU snapshot to a gateway reachable through the approved
+deployment or encrypted-tunnel boundary:
 
 ```bash
-python3 - <<'PY'
-import os
+: "${COH_REST_URL:?set the gateway URL}"
+: "${HIVE_GATEWAY_REQUEST_AUTH_TOKEN:?set REST write authentication}"
 
-from cohesix import CohesixOrchestrator, HostTicketRequest, RestBackend
-
-backend = RestBackend(
-    os.environ["COH_REST_URL"],
-    request_auth_token=os.environ.get("HIVE_GATEWAY_REQUEST_AUTH_TOKEN"),
-)
-orchestrator = CohesixOrchestrator(backend)
-request = HostTicketRequest(
-    ticket_id="f",
-    idempotency_key="k",
-    action="systemd.status-check",
-    target="/systemd/ssh",
-)
-orchestrator.enqueue_federated_host_tickets(
-    source_hive="hive-a",
-    target_hive="hive-b",
-    requests=[request],
-)
-PY
+cargo run -p gpu-bridge-host -- \
+  --publish \
+  --rest-url "$COH_REST_URL"
 ```
 
-Verify the target `status` or `deadletter` entry contains the same `id`,
-`idempotency_key`, `source_hive`, and `target_hive`, plus the relay hop and
-correlation identifier. Repeating the same federated key is a dedupe test, not
-a second execution request. Capture a source and target evidence pack when the
-relay itself is under test; `timeline.ndjson` retains the correlation fields.
+Add `--registry "$COH_GPU_REGISTRY"` only for a real, validated registry. No
+registry produces explicit empty model state. Do not use `--mock` in an
+operational result.
 
-## Lifecycle maintenance window
+**What it proves:** local GPU discovery and, if published, a bounded inventory
+snapshot reached the selected Queen. **What it does not prove:** CUDA workload
+execution, device isolation, inference, NeMo, PEFT training, or target Worker
+execution. Those need independent host-runtime and target evidence.
 
-Lifecycle control is stateful. `drain` is valid only after `cordon` has moved an
-ONLINE or DEGRADED target to DRAINING, and `drain`, `quiesce`, and `reset` are
-refused while leases remain active.
+## Repeat a check on QEMU and Pi
 
-In a REST-backed `cohsh` session:
+Use the same read-only script to compare operator behavior, while retaining
+different target identities and proof files.
+
+Run against QEMU after ensuring no gateway owns its console:
+
+```bash
+mkdir -p out/operator/compare
+: "${QEMU_AUTH_TOKEN:?set the QEMU Queen token}"
+
+COHSH_AUTH_TOKEN="$QEMU_AUTH_TOKEN" \
+  cargo run -p cohsh -- \
+  --transport tcp \
+  --tcp-host 127.0.0.1 \
+  --tcp-port 31337 \
+  --script scripts/cohsh/smp_parity.coh \
+  > out/operator/compare/qemu.txt
+```
+
+Only after the Pi has passed the exact-image boot and selected-network gates in
+[Hardware Bring-up](HARDWARE_BRINGUP.md), run it against the current proven
+address:
+
+```bash
+: "${PI4_TARGET_IP:?set the proven Pi address}"
+: "${PI4_AUTH_TOKEN:?set the Pi Queen token}"
+
+COHSH_AUTH_TOKEN="$PI4_AUTH_TOKEN" \
+  cargo run -p cohsh -- \
+  --transport tcp \
+  --tcp-host "$PI4_TARGET_IP" \
+  --tcp-port 31337 \
+  --script scripts/cohsh/smp_parity.coh \
+  > out/operator/compare/pi4.txt
+```
+
+Compare the command outcomes, but expect `/proc/boot` identities and
+target-specific state to differ. A passing script on both targets proves the
+script's assertions twice; it does not make QEMU evidence Pi evidence or merge
+GENET and Wi-Fi acceptance.
+
+For published comparisons, retain source commit, selected manifest, image
+hash, seL4 build identity, transcript, and each target's own evidence pack.
+
+## Run a maintenance window
+
+Lifecycle control mutates target state. Capture a pre-maintenance evidence pack
+and inspect active leases first:
 
 ```text
 cat /proc/lifecycle/state
@@ -370,9 +438,9 @@ lifecycle cordon
 cat /proc/lifecycle/state
 ```
 
-After cordon, stop new work submissions and continuous host publishers. Wait
-for every active lease to finish through its documented control path; do not
-edit `/proc` output. Then enter the maintenance state:
+After cordon, stop new submissions and continuous publishers. Wait for active
+leases to finish through their owning control paths. Do not edit `/proc`
+output. When the active set is empty:
 
 ```text
 cat /proc/lease/active
@@ -380,9 +448,8 @@ lifecycle drain
 cat /proc/lifecycle/state
 ```
 
-The expected state is `QUIESCED`. Capture pre-maintenance evidence, perform the
-host or node maintenance, and rerun the relevant health checks. Resume only
-when the node is ready to admit work:
+The intended maintenance state is `QUIESCED`. Perform the external maintenance,
+rerun the relevant health check, then resume admission:
 
 ```text
 lifecycle resume
@@ -390,108 +457,40 @@ cat /proc/lifecycle/state
 cat /proc/root/reachable
 ```
 
-`quiesce` is an explicit shortcut from ONLINE, DEGRADED, or DRAINING when there
-are no active leases; use it only when bypassing the drain observation step is
-intentional. `reset` changes the lifecycle state to BOOTING. It does not reboot
-the platform; the authenticated `reboot` command is a separate operation with
-its own backend and authorization requirements.
+`quiesce` is an explicit shortcut only when there are no active leases.
+`lifecycle reset` changes lifecycle state to BOOTING; it does not reboot the
+platform. The authenticated `reboot` command is a separate operation.
 
-## PEFT adapter lifecycle
+Capture a post-maintenance pack so the before/after records remain comparable.
 
-PEFT artifacts and model runtimes remain host-side. Cohesix exports bounded job
-inputs, builds a content-hashed registry entry, and publishes model descriptors
-and an active-model pointer. Neither activation nor rollback reloads an
-inference process.
+## Triage the first failed boundary
 
-### Export and import
+| Observation | First boundary to inspect | Do not conclude |
+| --- | --- | --- |
+| `coh doctor --mock` passes, QEMU does not boot | selected seL4 tree, build inputs, staged image, serial output | that target code is healthy because host parsing passed |
+| Serial `ping` works, direct TCP cannot attach | TCP readiness, sole owner, endpoint, and console authentication | that the whole target failed |
+| Direct TCP works, gateway says disconnected | another TCP owner, gateway console token, target address | that REST policy is the first cause |
+| Gateway is connected, one command returns `ERR` | exact role, ticket, lifecycle, path, bound, and schema in the error | that retrying or changing the payload is safe |
+| Pi reaches DHCP but `cohsh` fails | same-boot packet capture and selected GENET or Wi-Fi ingress path | that link or DHCP equals TCP acceptance |
+| AArch64 NVIDIA GPU listing works, `/gpu` is absent | whether publication ran, gateway write auth, and manifest path enablement | that local inventory automatically changed the Queen |
+| Evidence summary says an optional path is missing | `bounds.json` feature gate and active manifest | that the exporter fabricated or lost the path |
+| SwarmUI looks healthy but a target read fails | underlying gateway and target record | that presentation state overrides control-plane evidence |
 
-Select stable identifiers and export the Queen job inputs:
+Use [Failure Modes](FAILURE_MODES.md) for the full routing guide. Preserve the
+first typed failure and the independent serial surface before changing code or
+adding retries.
 
-```bash
-job_id="job_8932"
-model_id="edge-adapter-v1"
-export_root="$PWD/out/peft/export"
-adapter_dir="$PWD/out/peft/trained/$model_id"
-registry="$PWD/out/model_registry"
+## Know the current 26e boundary
 
-cargo run -p coh -- peft \
-  --rest-url "$COH_REST_URL" \
-  export --job "$job_id" --out "$export_root"
-```
+Host tickets, federation, PEFT registry operations, built-in playbooks, and
+host-side AI runtimes exist at different implementation and proof levels. They
+are useful to developers, but they do not all constitute a production use-case
+path today. Use [Cohesix Status](STATUS.md) for current public capability,
+[Host Tools](HOST_TOOLS.md) for exact modes, and the
+[Build Plan](BUILD_PLAN.md) for planned hardening rather than treating an old
+demo or fixture as a current promise.
 
-The export must contain exactly `telemetry.cbor`, `base_model.ref`, and
-`policy.toml` under `$export_root/$job_id`. Train or obtain the adapter through
-the approved host-side ML workflow. The import directory must contain
-`adapter.safetensors` and `lora.json`; `metrics.json` is optional.
-
-Import is local and refuses to replace an existing model identifier:
-
-```bash
-cargo run -p coh -- peft import \
-  --model "$model_id" \
-  --from "$adapter_dir" \
-  --job "$job_id" \
-  --export "$export_root" \
-  --registry "$registry"
-
-sed -n '1,160p' "$registry/available/$model_id/manifest.toml"
-```
-
-Review the recorded base-model reference, job provenance, file sizes, and
-SHA-256 values before publication. Publish the refreshed GPU/model descriptor
-snapshot only when the host's real inventory and registry are ready:
-
-```bash
-cargo run -p gpu-bridge-host -- \
-  --registry "$registry" \
-  --publish \
-  --rest-url "$COH_REST_URL"
-```
-
-### Activate, verify, and roll back
-
-Activation uses atomic replacement for each host registry file, updates
-`active` and `active_state.toml`, and then appends the model identifier to
-`/gpu/models/active`:
-
-```bash
-cargo run -p coh -- peft \
-  --rest-url "$COH_REST_URL" \
-  activate --model "$model_id" --registry "$registry"
-
-curl --fail-with-body --silent --show-error --get \
-  --data-urlencode 'path=/gpu/models/active' \
-  --data-urlencode 'max_bytes=128' \
-  "$COH_REST_URL/v1/fs/cat"
-```
-
-At this point Cohesix records intent and state only. Use the inference
-application's own authenticated deployment/reload mechanism, then verify that
-runtime independently; no Cohesix command in this recipe performs that reload.
-
-The host file replacements and target append are not one distributed
-transaction. If activation reports a transport error after changing the local
-pointer, compare the two host files with `/gpu/models/active` before deciding
-whether to reconcile or retry. Do not blindly repeat the command.
-
-If validation fails, restore the previous pointer and again apply the
-application-specific runtime procedure:
-
-```bash
-cargo run -p coh -- peft \
-  --rest-url "$COH_REST_URL" \
-  rollback --registry "$registry"
-```
-
-Rollback is available only when `active_state.toml` names a previous imported
-model. Preserve command acknowledgements, the registry manifest, runtime
-deployment evidence, and an evidence pack as separate records.
-
-## Related documentation
-
-- [OPERATOR_WALKTHROUGH.md](OPERATOR_WALKTHROUGH.md) — canonical live topology and ordered first run.
-- [HOST_TOOLS.md](HOST_TOOLS.md) — tool ownership, modes, and authentication layers.
-- [USERLAND_AND_CLI.md](USERLAND_AND_CLI.md) — console, `cohsh`, and `.coh` grammar.
-- [PYTHON_SUPPORT.md](PYTHON_SUPPORT.md) — Python backends and typed API.
-- [INTERFACES.md](INTERFACES.md) — authoritative paths and record schemas.
-- [FAILURE_MODES.md](FAILURE_MODES.md) — evidence-led diagnosis and retry discipline.
+The strongest reasons to keep using Cohesix in 26e are already practical:
+portable bounded checks, visible seL4/MCS authority, one consistent namespace
+across several client styles, explicit target-versus-host boundaries, and
+evidence that can be reviewed after the live system is gone.
