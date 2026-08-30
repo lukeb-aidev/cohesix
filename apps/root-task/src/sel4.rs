@@ -1019,6 +1019,14 @@ pub fn poll(dest: seL4_CPtr, badge: *mut seL4_Word) -> seL4_MessageInfo {
 #[cfg(feature = "kernel")]
 #[inline(always)]
 pub fn yield_now() -> u64 {
+    yield_now_timed().1
+}
+
+/// Yield and capture both sides of the exact Pi scheduler hiatus in one asm
+/// block. Other profiles retain the established Yield and return zero cuts.
+#[cfg(feature = "kernel")]
+#[inline(always)]
+pub fn yield_now_timed() -> (u64, u64) {
     // SAFETY: The Pi path supplies the selected seL4 AArch64 null-syscall
     // number in x7; Yield does not dereference user memory, and its read-only
     // CNTVCT_EL0 access is enabled by that profile. Other profiles delegate to
@@ -1031,18 +1039,22 @@ pub fn yield_now() -> u64 {
             sel4_config_kernel_mcs
         ))]
         {
+            let entered_ticks: u64;
             let ticks: u64;
             let syscall_number = sel4_sys::seL4_SysYield as seL4_Word;
-            // Keeping both instructions in one asm block makes the returned
-            // counter value the exact first userspace boundary after Yield.
+            // Keeping all three instructions in one asm block makes the two
+            // counter values the exact last pre-Yield and first post-Yield
+            // userspace boundaries.
             core::arch::asm!(
+                "mrs {entered_ticks}, cntvct_el0",
                 "svc #0",
                 "mrs {ticks}, cntvct_el0",
                 in("x7") syscall_number,
+                entered_ticks = out(reg) entered_ticks,
                 ticks = lateout(reg) ticks,
                 options(nostack, preserves_flags),
             );
-            ticks
+            (entered_ticks, ticks)
         }
         #[cfg(not(all(
             feature = "release-pi4",
@@ -1052,7 +1064,7 @@ pub fn yield_now() -> u64 {
         )))]
         {
             syscall::yield_now();
-            0
+            (0, 0)
         }
     }
 }

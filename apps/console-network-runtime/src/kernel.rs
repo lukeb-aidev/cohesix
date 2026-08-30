@@ -26,6 +26,10 @@ use console_network_runtime::abi::{
 };
 #[cfg(feature = "direct-virtio")]
 use console_network_runtime::abi::{DIRECT_VIRTIO_IRQ_HANDLER_SLOT, WAKE_DIRECT_VIRTIO_IRQ};
+#[cfg(feature = "direct-genet")]
+use console_network_runtime::{
+    direct_genet_command_control_releases_quiesce, direct_genet_command_publication_quiesces,
+};
 use console_network_runtime::{
     direct_service_repoll_required, ChildTurnReadiness, ChildTurnScheduler, ChildTurnUnit,
     ConsoleNetworkService, ControlApplyOutcome, RuntimeError, ServicePollOutcome,
@@ -238,6 +242,8 @@ pub unsafe extern "C" fn _start(descriptor: *const u8) -> ! {
     };
     #[cfg(any(feature = "direct-virtio", feature = "direct-genet"))]
     let mut direct_tx_waiting_for_peer = false;
+    #[cfg(feature = "direct-genet")]
+    let mut awaiting_root_command_control = false;
 
     loop {
         #[cfg(any(feature = "direct-virtio", feature = "direct-genet"))]
@@ -255,6 +261,10 @@ pub unsafe extern "C" fn _start(descriptor: *const u8) -> ! {
         };
         #[cfg(not(any(feature = "direct-virtio", feature = "direct-genet")))]
         let direct_transport = false;
+        #[cfg(feature = "direct-genet")]
+        let direct_genet_command_quiesced = awaiting_root_command_control;
+        #[cfg(not(feature = "direct-genet"))]
+        let direct_genet_command_quiesced = false;
         let egress_publication_pending = !direct_transport && service.egress_pending();
         let readiness = ChildTurnReadiness::new(
             !completions.is_empty(),
@@ -273,7 +283,7 @@ pub unsafe extern "C" fn _start(descriptor: *const u8) -> ! {
                 | ChildTurnUnit::IngestPacket
                 | ChildTurnUnit::ApplyControl => true,
                 #[cfg(any(feature = "direct-virtio", feature = "direct-genet"))]
-                ChildTurnUnit::Idle => direct_service_pending,
+                ChildTurnUnit::Idle => direct_service_pending && !direct_genet_command_quiesced,
                 #[cfg(not(any(feature = "direct-virtio", feature = "direct-genet")))]
                 ChildTurnUnit::Idle => false,
             }
@@ -368,7 +378,11 @@ pub unsafe extern "C" fn _start(descriptor: *const u8) -> ! {
             !direct_transport && service.egress_pending(),
         ));
         #[cfg(any(feature = "direct-virtio", feature = "direct-genet"))]
-        if direct_transport && direct_service_pending && unit == ChildTurnUnit::Idle {
+        if direct_transport
+            && direct_service_pending
+            && !direct_genet_command_quiesced
+            && unit == ChildTurnUnit::Idle
+        {
             direct_service_pending = false;
             let mut quantum_units = 0usize;
             let mut cycle_progress = false;
@@ -556,11 +570,12 @@ pub unsafe extern "C" fn _start(descriptor: *const u8) -> ! {
                         Ok(Some(event)) => event,
                         Ok(None) | Err(_) => enter_standard_fault(),
                     };
+                let runtime_event_kind = runtime_event.kind();
                 event_sequence = next_sequence(event_sequence);
                 publish_exchange(
                     event,
                     descriptor.generation,
-                    runtime_event.kind(),
+                    runtime_event_kind,
                     event_sequence,
                     runtime_event.connection_id(),
                     runtime_event.now_ms(),
@@ -568,6 +583,19 @@ pub unsafe extern "C" fn _start(descriptor: *const u8) -> ! {
                     runtime_event.payload_bytes(),
                 );
                 signal_slot(descriptor.supervisor_wake_notification_slot);
+                #[cfg(feature = "direct-genet")]
+                if direct_genet_command_publication_quiesces(
+                    direct_genet_link.is_some(),
+                    runtime_event_kind,
+                ) {
+                    // Root must publish the command's bounded response control
+                    // before an ACK or link wake may spend this child's SC on
+                    // the 64-unit idle NIC loop. Only a newly sequenced control
+                    // record clears the latch; an empty or stale control wake
+                    // does not. QEMU direct VirtIO never enters it.
+                    direct_service_pending = false;
+                    awaiting_root_command_control = true;
+                }
             }
             ChildTurnUnit::PublishEgress => {
                 let mut egress = [0u8; ETHERNET_FRAME_BYTES];
@@ -647,6 +675,13 @@ pub unsafe extern "C" fn _start(descriptor: *const u8) -> ! {
                                 Ok(outcome) => outcome,
                                 Err(_) => enter_standard_fault(),
                             };
+                        #[cfg(feature = "direct-genet")]
+                        let release_command_quiesce = direct_genet_command_control_releases_quiesce(
+                            direct_genet_link.is_some(),
+                            awaiting_root_command_control,
+                            sequence > last_control_sequence,
+                            Some(outcome),
+                        );
                         last_control_sequence = sequence;
                         if outcome == ControlApplyOutcome::Applied {
                             if matches!(kind, ExchangeKind::SendLine | ExchangeKind::SendBatch) {
@@ -665,6 +700,10 @@ pub unsafe extern "C" fn _start(descriptor: *const u8) -> ! {
                         publish_completion_watermark(event, None, Some(sequence));
                         signal_slot(descriptor.supervisor_wake_notification_slot);
                         turn_scheduler.complete(ChildTurnUnit::ApplyControl);
+                        #[cfg(feature = "direct-genet")]
+                        if release_command_quiesce {
+                            awaiting_root_command_control = false;
+                        }
                         if !direct_transport {
                             turn_scheduler.request_service();
                         } else {

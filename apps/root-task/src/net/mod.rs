@@ -661,6 +661,11 @@ pub struct ConsoleLine {
     pub ingest_ms: u64,
     /// Exact child connection identity that admitted this command line.
     pub connection_id: Option<u64>,
+    /// Root observation time for isolated child publications. This Pi-only
+    /// causal timestamp is zero for ordinary in-process backends and never
+    /// crosses the shared console-network ABI.
+    #[cfg(any(test, feature = "release-pi4"))]
+    pub(crate) root_observed_ms: u64,
 }
 
 impl ConsoleLine {
@@ -671,6 +676,8 @@ impl ConsoleLine {
             text,
             ingest_ms,
             connection_id: None,
+            #[cfg(any(test, feature = "release-pi4"))]
+            root_observed_ms: 0,
         }
     }
 
@@ -685,7 +692,18 @@ impl ConsoleLine {
             text,
             ingest_ms,
             connection_id: Some(connection_id),
+            #[cfg(any(test, feature = "release-pi4"))]
+            root_observed_ms: 0,
         }
+    }
+
+    /// Bind an isolated child command to the root turn that observed its
+    /// already-validated publication.
+    #[cfg(any(test, feature = "release-pi4"))]
+    #[must_use]
+    pub(crate) const fn with_root_observed_ms(mut self, observed_ms: u64) -> Self {
+        self.root_observed_ms = observed_ms;
+        self
     }
 }
 
@@ -1662,6 +1680,11 @@ pub trait NetPoller {
         None
     }
 
+    /// Retain a Pi-only root dispatch cut for the first causally matched
+    /// StageOutput. Non-isolated and QEMU transports keep no extra state.
+    #[cfg(feature = "release-pi4")]
+    fn note_console_response_dispatch(&mut self, _connection_id: u64, _dispatch_ms: u64) {}
+
     /// Snapshot an active isolated authenticated response, when supported.
     fn console_response_lane(&self) -> Option<ConsoleResponseLane> {
         None
@@ -1675,6 +1698,17 @@ pub trait NetPoller {
         budget: &mut DriverServiceBudget,
     ) -> Result<bool, DriverServiceBudgetError> {
         self.poll_with_budget(now_ms, budget)
+    }
+
+    /// Execute the exact direct-GENET command successor without polling a NIC
+    /// or any generic runtime responsibility. Ordinary backends do not opt in.
+    fn service_direct_genet_command_control_with_budget(
+        &mut self,
+        _expected: ConsoleResponseIdentity,
+        _now_ms: u64,
+        _budget: &mut DriverServiceBudget,
+    ) -> Result<DirectGenetCommandControlOutcome, DriverServiceBudgetError> {
+        Ok(DirectGenetCommandControlOutcome::Unsupported)
     }
 
     /// Request the active TCP console connection to close after flushing responses.
@@ -1834,6 +1868,13 @@ pub trait NetPoller {
         None
     }
 
+    /// Return passive Pi-only command/control seam ages without changing
+    /// scheduling, authority, or the child-facing diagnostics ABI.
+    #[cfg(feature = "release-pi4")]
+    fn isolated_seam_diagnostics(&self) -> Option<isolated_seam::IsolatedSeamDiagnostics> {
+        None
+    }
+
     /// Run one bounded direct-GENET causal probe and acquire its snapshots.
     ///
     /// Only the Pi wired stack overrides this hook. The refresh is an exact
@@ -1919,6 +1960,47 @@ pub struct ConsoleResponseIdentity {
     pub generation: u64,
     /// Child-created authenticated connection carrying the response.
     pub connection_id: u64,
+}
+
+/// Result of one affirmative direct-GENET control-only command successor.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DirectGenetCommandControlOutcome {
+    /// This backend or runtime state does not expose the control-only path.
+    Unsupported,
+    /// Command or policy evidence changed before the control cut; issue no
+    /// child work and retain the ordinary fail-closed scheduler path.
+    Deferred(DirectGenetCommandControlDeferReason),
+    /// One exact response batch was published and signalled to the child.
+    StagePublished,
+    /// Identity, containment, or runtime state drifted and the adapter failed
+    /// closed instead of issuing ambiguous work.
+    Fault,
+}
+
+/// Exclusive bounded reason one compact direct-GENET successor deferred.
+///
+/// This is root-local diagnostic truth, not a shared ABI or a retry grant.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DirectGenetCommandControlDeferReason {
+    /// Passive root-control admission became due before command dispatch.
+    PassiveAdmission,
+    /// The exact queued command was not consumed by the root dispatcher.
+    CommandNotConsumed,
+    /// The root response existed but had not yet reached its terminal seal.
+    ComposeOpen,
+    /// The root response could not enter the bounded adapter queue.
+    ComposeBackpressure,
+    /// An identity, recovery, operator, or root-control fence changed after
+    /// response composition and before child control.
+    PostComposeFence,
+    /// An earlier response batch still awaited exact child drain proof.
+    PriorBatch,
+    /// The shared child-control publication slot was still occupied.
+    ControlBusy,
+    /// No response record remained stageable after exact composition.
+    OutputMissing,
+    /// The exact stage attempt met bounded publication backpressure.
+    StageBackpressure,
 }
 
 /// Side-effect-free state for one exact authenticated response lane.
@@ -2102,6 +2184,9 @@ impl NetConsoleDisconnectReason {
 }
 
 mod console_srv;
+
+#[cfg(any(test, feature = "release-pi4"))]
+pub mod isolated_seam;
 
 #[cfg(all(
     feature = "kernel",

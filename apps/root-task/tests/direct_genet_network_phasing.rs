@@ -9,6 +9,7 @@ const DRIVER_SOURCE: &str = include_str!("../src/drivers/driver_task_net.rs");
 const RUNTIME_SOURCE: &str = include_str!("../../pi4-driver-runtime/src/lib.rs");
 const HAL_SOURCE: &str = include_str!("../src/hal/mod.rs");
 const CONSOLE_HAL_SOURCE: &str = include_str!("../src/hal/console_network.rs");
+const CONSOLE_KERNEL_SOURCE: &str = include_str!("../../console-network-runtime/src/kernel.rs");
 const DRIVER_HAL_SOURCE: &str = include_str!("../src/hal/driver_task.rs");
 const EVENT_SOURCE: &str = include_str!("../src/event/mod.rs");
 const USERLAND_SOURCE: &str = include_str!("../src/userland/mod.rs");
@@ -695,4 +696,280 @@ fn wifi_shell_never_maps_or_installs_the_wired_direct_link() {
     ));
     assert!(CONSOLE_HAL_SOURCE.contains("if direct_genet {"));
     assert!(CONSOLE_HAL_SOURCE.contains("direct_genet_frame_count"));
+}
+
+#[test]
+fn compact_direct_genet_successor_composes_only_the_exact_adapter_response() {
+    let successor_start = EVENT_SOURCE
+        .find("fn service_direct_genet_compact_command_successor")
+        .expect("compact direct-GENET successor exists");
+    let successor_end = EVENT_SOURCE[successor_start..]
+        .find("fn linked_runtime_direct_genet_response_stage_ready")
+        .map(|offset| successor_start + offset)
+        .expect("compact successor has a finite body");
+    let successor = &EVENT_SOURCE[successor_start..successor_end];
+    let dispatch = successor
+        .find("let dispatched = self.dispatch_one_buffered_network_line()")
+        .expect("one buffered command is dispatched");
+    let consume = successor
+        .find("command_before.command_queue.checked_sub(1) == Some(after.command_queue)")
+        .expect("command consumption is proven from the exact child queue");
+    let compose = successor
+        .find("self.compose_direct_genet_sync_response_adapter_only(expected)")
+        .expect("the sealed response is moved through the adapter-only composer");
+    let control = successor
+        .find("net.service_direct_genet_command_control_with_budget(")
+        .expect("the affirmative isolated control-only hook follows composition");
+    assert!(dispatch < consume && consume < compose && compose < control);
+    assert!(
+        !successor.contains("accepted_commands_after"),
+        "a denied command still owns its typed ERR response and must not be excluded by an accepted-only delta",
+    );
+
+    let adapter_start = EVENT_SOURCE
+        .find("fn try_enqueue_direct_genet_sync_line_adapter_only")
+        .expect("adapter-only line enqueue exists");
+    let adapter_end = EVENT_SOURCE[adapter_start..]
+        .find("fn refill_sync_cache_line")
+        .map(|offset| adapter_start + offset)
+        .expect("adapter-only line enqueue has a finite body");
+    let adapter = &EVENT_SOURCE[adapter_start..adapter_end];
+    assert!(adapter.contains("net.send_console_line(line)"));
+    assert!(adapter.contains("net.send_console_terminal_line(line)"));
+    for forbidden in [
+        "mirror_local_seat_network_line_if_ready(",
+        "poll_runtime(",
+        "poll_with_budget(",
+        "service_linked_runtime_only_turn(",
+        "poll_local_seat_backend_for_ingress(",
+    ] {
+        assert!(
+            !adapter.contains(forbidden),
+            "compact adapter unexpectedly enters side-effecting work via {forbidden}",
+        );
+    }
+
+    let composer_start = EVENT_SOURCE
+        .find("fn compose_direct_genet_sync_response_adapter_only")
+        .expect("bounded adapter-only composer exists");
+    let composer_end = EVENT_SOURCE[composer_start..]
+        .find("fn flush_pending_sync_response")
+        .map(|offset| composer_start + offset)
+        .expect("adapter-only composer has a finite body");
+    let composer = &EVENT_SOURCE[composer_start..composer_end];
+    assert!(composer.contains("pending.sync_sealed()"));
+    assert!(composer.contains("console_network_abi::SEND_BATCH_MAX_RECORDS"));
+    assert!(composer.contains("terminal.as_str(),\n                true,"));
+    assert!(composer.contains("try_enqueue_direct_genet_sync_line_adapter_only"));
+    assert!(!composer.contains("mirror_local_seat_network_line_if_ready("));
+    assert!(!composer.contains("poll_runtime("));
+
+    let identity_check = composer
+        .find("if pending.response_identity != Some(expected)")
+        .expect("composer rechecks the retained response identity");
+    let restore = composer[identity_check..]
+        .find("self.pending_stream = Some(pending)")
+        .map(|offset| identity_check + offset)
+        .expect("identity drift restores the retained response");
+    let identity_drift = composer[restore..]
+        .find("DirectGenetResponseComposeOutcome::IdentityDrift")
+        .map(|offset| restore + offset)
+        .expect("identity drift is causally classified");
+    assert!(identity_check < restore && restore < identity_drift);
+
+    let compose_outcome = successor
+        .find(
+            "let compose_outcome = self.compose_direct_genet_sync_response_adapter_only(expected)",
+        )
+        .expect("compact successor consumes the typed compose result");
+    let drift_arm = successor[compose_outcome..]
+        .find("DirectGenetResponseComposeOutcome::IdentityDrift")
+        .map(|offset| compose_outcome + offset)
+        .expect("successor handles response identity drift explicitly");
+    let fence = successor[drift_arm..]
+        .find("self.fence_console_network_authority_quiet()")
+        .map(|offset| drift_arm + offset)
+        .expect("response identity drift enters quiet containment");
+    let fault = successor[fence..]
+        .find("crate::net::DirectGenetCommandControlOutcome::Fault")
+        .map(|offset| fence + offset)
+        .expect("identity drift returns the typed compact fault");
+    assert!(compose_outcome < drift_arm && drift_arm < fence && fence < fault);
+    for (compose, deferred) in [
+        (
+            "DirectGenetResponseComposeOutcome::NotSealed =>",
+            "DirectGenetCommandControlDeferReason::ComposeOpen",
+        ),
+        (
+            "DirectGenetResponseComposeOutcome::Backpressure =>",
+            "DirectGenetCommandControlDeferReason::ComposeBackpressure",
+        ),
+    ] {
+        assert!(successor.contains(compose), "missing {compose}");
+        assert!(successor.contains(deferred), "missing {deferred}");
+    }
+}
+
+#[test]
+fn compact_direct_genet_denial_and_passive_command_keep_exact_terminal_cuts() {
+    let refusal_start = EVENT_SOURCE
+        .find("fn emit_refusal(&mut self")
+        .expect("typed refusal renderer exists");
+    let refusal_end = EVENT_SOURCE[refusal_start..]
+        .find("fn net_disabled_refusal_detail")
+        .map(|offset| refusal_start + offset)
+        .expect("typed refusal renderer has a finite body");
+    let refusal = &EVENT_SOURCE[refusal_start..refusal_end];
+    assert!(refusal.contains("self.emit_ack_err(verb, Some(detail.as_str()))"));
+
+    let terminal_start = EVENT_SOURCE
+        .find("fn emit_terminal_console_line")
+        .expect("terminal response capture exists");
+    let terminal_end = EVENT_SOURCE[terminal_start..]
+        .find("fn try_emit_sync_response_line")
+        .map(|offset| terminal_start + offset)
+        .expect("terminal response capture has a finite body");
+    let terminal = &EVENT_SOURCE[terminal_start..terminal_end];
+    assert!(terminal.contains("PendingStreamMode::SyncCapture"));
+    assert!(terminal.contains("pending.terminal_line = HeaplessString::try_from(line).ok()"));
+
+    let quantum_start = EVENT_SOURCE
+        .find("fn poll_root_control_quantum_for_state")
+        .expect("Pi root-control quantum exists");
+    let quantum_end = EVENT_SOURCE[quantum_start..]
+        .find("fn isolated_virtio_compact_path_attached")
+        .map(|offset| quantum_start + offset)
+        .expect("Pi root-control quantum has a finite body");
+    let quantum = &EVENT_SOURCE[quantum_start..quantum_end];
+    let poll = quantum.find("self.poll();").expect("one rotor unit runs");
+    let pre_compact_passive = quantum[poll..]
+        .find("if self.pi_root_control_passive_admission_pending()")
+        .map(|offset| poll + offset)
+        .expect("ordinary dispatch stops at a passive command");
+    let compact = quantum[pre_compact_passive..]
+        .find("self.service_direct_genet_compact_command_successor()")
+        .map(|offset| pre_compact_passive + offset)
+        .expect("compact command successor follows the ordinary cut");
+    let post_compact_passive = quantum[compact..]
+        .find("if self.pi_root_control_passive_admission_pending()")
+        .map(|offset| compact + offset)
+        .expect("compact dispatch rechecks the passive cut");
+    let compact_metrics = quantum[post_compact_passive..]
+        .find("net_direct_genet_immediate_dispatches")
+        .map(|offset| post_compact_passive + offset)
+        .expect("metrics follow the passive cut");
+    assert!(poll < pre_compact_passive);
+    assert!(pre_compact_passive < compact && compact < post_compact_passive);
+    assert!(post_compact_passive < compact_metrics);
+
+    let successor_start = EVENT_SOURCE
+        .find("fn service_direct_genet_compact_command_successor")
+        .expect("compact direct-GENET successor exists");
+    let successor_end = EVENT_SOURCE[successor_start..]
+        .find("fn linked_runtime_direct_genet_response_stage_ready")
+        .map(|offset| successor_start + offset)
+        .expect("compact successor has a finite body");
+    let successor = &EVENT_SOURCE[successor_start..successor_end];
+    let dispatch = successor
+        .find("let dispatched = self.dispatch_one_buffered_network_line()")
+        .expect("compact successor dispatches one command");
+    let passive = successor[dispatch..]
+        .find("if self.pi_root_control_passive_admission_pending()")
+        .map(|offset| dispatch + offset)
+        .expect("passive command is cut after classification");
+    let command = successor[passive..]
+        .find("if !command_consumed")
+        .map(|offset| passive + offset)
+        .expect("unconsumed command is classified separately");
+    let compose = successor[command..]
+        .find("self.compose_direct_genet_sync_response_adapter_only(expected)")
+        .map(|offset| command + offset)
+        .expect("response composition follows both command cuts");
+    assert!(dispatch < passive && passive < command && command < compose);
+}
+
+#[test]
+fn compact_control_hook_is_genet_only_and_virtio_fails_closed() {
+    let wrapper_start = STACK_SOURCE
+        .find("impl NetPoller for DefaultNetStack")
+        .expect("default stack wrapper exists");
+    let hook_start = STACK_SOURCE[wrapper_start..]
+        .find("fn service_direct_genet_command_control_with_budget")
+        .map(|offset| wrapper_start + offset)
+        .expect("default wrapper exposes the compact control hook");
+    let hook_end = STACK_SOURCE[hook_start..]
+        .find("fn request_disconnect")
+        .map(|offset| hook_start + offset)
+        .expect("compact control hook has a finite body");
+    let hook = &STACK_SOURCE[hook_start..hook_end];
+    assert!(hook.contains("Self::GenetDriverTask(stack) =>"));
+    assert!(hook.contains(
+        "Self::Rtl8139(_) | Self::Cyw43DriverTask(_) => {\n                Ok(super::DirectGenetCommandControlOutcome::Unsupported)"
+    ));
+    assert!(hook
+        .contains("Self::Virtio(_) => Ok(super::DirectGenetCommandControlOutcome::Unsupported)"));
+    assert_eq!(
+        hook.matches("stack.service_direct_genet_command_control_with_budget")
+            .count(),
+        1,
+        "only the concrete GENET backend may delegate the affirmative hook",
+    );
+
+    let isolated_start = ISOLATED_CONSOLE_SOURCE
+        .find("fn service_direct_genet_command_control_with_budget")
+        .expect("isolated compact control implementation exists");
+    let isolated_end = ISOLATED_CONSOLE_SOURCE[isolated_start..]
+        .find("fn driver_task_contract")
+        .map(|offset| isolated_start + offset)
+        .expect("isolated compact control implementation has a finite body");
+    let isolated = &ISOLATED_CONSOLE_SOURCE[isolated_start..isolated_end];
+    assert!(isolated.contains(
+        "D::driver_task_contract() != crate::hal::driver_task::GENET_DRIVER_TASK_CONTRACT"
+    ));
+    assert!(isolated.contains("return Ok(DirectGenetCommandControlOutcome::Unsupported)"));
+    for reason in [
+        "DirectGenetCommandControlDeferReason::PriorBatch",
+        "DirectGenetCommandControlDeferReason::ControlBusy",
+        "DirectGenetCommandControlDeferReason::OutputMissing",
+        "DirectGenetCommandControlDeferReason::StageBackpressure",
+    ] {
+        assert!(isolated.contains(reason), "missing exact {reason} cut");
+    }
+    assert!(isolated.contains("direct-genet-command-control-response-lane"));
+
+    let successor_start = EVENT_SOURCE
+        .find("fn service_direct_genet_compact_command_successor")
+        .expect("compact successor exists");
+    let successor_end = EVENT_SOURCE[successor_start..]
+        .find("fn linked_runtime_direct_genet_response_stage_ready")
+        .map(|offset| successor_start + offset)
+        .expect("compact successor has a finite body");
+    let successor = &EVENT_SOURCE[successor_start..successor_end];
+    let unsupported = successor
+        .find("crate::net::DirectGenetCommandControlOutcome::Unsupported")
+        .expect("unsupported backend is explicitly classified");
+    let fence = successor[unsupported..]
+        .find("self.fence_console_network_authority_quiet()")
+        .map(|offset| unsupported + offset)
+        .expect("unsupported compact execution fails closed");
+    assert!(unsupported < fence);
+}
+
+#[test]
+fn direct_genet_command_quiesce_fences_both_direct_service_entry_cuts() {
+    let pre_wait = CONSOLE_KERNEL_SOURCE
+        .find("ChildTurnUnit::Idle => direct_service_pending && !direct_genet_command_quiesced")
+        .expect("command quiesce fences the pre-wait direct-service admission");
+    let post_wait = CONSOLE_KERNEL_SOURCE
+        .find("&& !direct_genet_command_quiesced\n            && unit == ChildTurnUnit::Idle")
+        .expect("command quiesce fences the post-wait direct-service admission");
+    let command_publication = CONSOLE_KERNEL_SOURCE
+        .find("awaiting_root_command_control = true")
+        .expect("command publication closes the causal fence");
+    let exact_control = CONSOLE_KERNEL_SOURCE
+        .find("if release_command_quiesce")
+        .expect("only the exact applied control reopens the causal fence");
+    assert!(pre_wait < command_publication);
+    assert!(post_wait < command_publication);
+    assert!(command_publication < exact_control);
 }

@@ -23,6 +23,8 @@ use smoltcp::phy::{Device, DeviceCapabilities, Medium, RxToken, TxToken};
 use smoltcp::time::Instant;
 use smoltcp::wire::{EthernetAddress, Ipv4Address};
 
+#[cfg(any(test, feature = "release-pi4"))]
+use super::isolated_seam::IsolatedSeamDiagnostics;
 use super::isolated_self_test::{
     finish_poll_with_self_test, IsolatedSelfTestObservation, IsolatedSelfTestState,
 };
@@ -34,6 +36,7 @@ use super::{
     direct_genet_causal_stage_drain_observed, select_isolated_direct_network_turn_for_contract,
     select_isolated_direct_response_turn, select_isolated_network_turn,
     select_isolated_response_turn, ConsoleLine, DirectGenetCausalStageDrainEvidence,
+    DirectGenetCommandControlDeferReason, DirectGenetCommandControlOutcome,
     IsolatedConsoleDiagnostics, IsolatedNetworkLowerCursor, IsolatedNetworkLowerUnit,
     IsolatedNetworkTurnOutcome, IsolatedNetworkTurnSelection, IsolatedNetworkTurnUnit,
     NetConsoleDisconnectReason, NetConsoleEvent, NetCounters, NetDevice, NetPoller,
@@ -132,15 +135,19 @@ struct QueuedConsoleOutput {
 struct PendingResponseBatch {
     sequence: u64,
     terminal_count: u16,
+    #[cfg(any(test, feature = "release-pi4"))]
+    staged_ms: u64,
     control_completed: bool,
     output_drained: bool,
 }
 
 impl PendingResponseBatch {
-    const fn new(sequence: u64, terminal_count: u16) -> Self {
+    const fn new(sequence: u64, terminal_count: u16, _staged_ms: u64) -> Self {
         Self {
             sequence,
             terminal_count,
+            #[cfg(any(test, feature = "release-pi4"))]
+            staged_ms: _staged_ms,
             control_completed: false,
             output_drained: false,
         }
@@ -390,6 +397,10 @@ pub struct IsolatedNetworkConsole<D: NetDevice> {
     response_drains: u64,
     self_test: IsolatedSelfTestState,
     turn_telemetry: IsolatedTurnTelemetry,
+    #[cfg(any(test, feature = "release-pi4"))]
+    seam_telemetry: IsolatedSeamDiagnostics,
+    #[cfg(any(test, feature = "release-pi4"))]
+    response_dispatch_ms: u64,
     profile_backend: &'static str,
     backend: &'static str,
     active_driver: &'static str,
@@ -622,6 +633,10 @@ impl<D: NetDevice> IsolatedNetworkConsole<D> {
             response_drains: 0,
             self_test: IsolatedSelfTestState::new(self_test_enabled),
             turn_telemetry: IsolatedTurnTelemetry::new(),
+            #[cfg(any(test, feature = "release-pi4"))]
+            seam_telemetry: IsolatedSeamDiagnostics::default(),
+            #[cfg(any(test, feature = "release-pi4"))]
+            response_dispatch_ms: 0,
             profile_backend,
             backend,
             active_driver,
@@ -644,6 +659,13 @@ impl<D: NetDevice> IsolatedNetworkConsole<D> {
     #[must_use]
     pub(crate) const fn direct_data_plane(&self) -> bool {
         self.runtime.direct_data_plane()
+    }
+
+    /// Copy the passive Pi MCS seam aggregates without changing service state.
+    #[cfg(any(test, feature = "release-pi4"))]
+    #[must_use]
+    pub(crate) const fn isolated_seam_diagnostics(&self) -> IsolatedSeamDiagnostics {
+        self.seam_telemetry
     }
 
     /// Whether a protocol, ABI, timeout, or critical-lane fault needs teardown.
@@ -981,6 +1003,9 @@ impl<D: NetDevice> IsolatedNetworkConsole<D> {
                 return;
             }
             batch.control_completed = true;
+            #[cfg(any(test, feature = "release-pi4"))]
+            self.seam_telemetry
+                .record_control_completed(batch.staged_ms, self.last_now_ms);
         }
         self.settle_completed_response_batch();
     }
@@ -998,6 +1023,10 @@ impl<D: NetDevice> IsolatedNetworkConsole<D> {
                 // A new child connection identity cannot inherit commands
                 // retained for any earlier authenticated peer.
                 self.lines.clear();
+                #[cfg(any(test, feature = "release-pi4"))]
+                {
+                    self.response_dispatch_ms = 0;
+                }
                 self.active_connection = Some(connection_id);
                 self.authenticated_connection = None;
                 self.disconnect_requested = false;
@@ -1045,16 +1074,15 @@ impl<D: NetDevice> IsolatedNetworkConsole<D> {
                     return;
                 };
                 let mut line = HeaplessString::new();
-                if line.push_str(payload).is_err()
-                    || self
-                        .lines
-                        .push_back(ConsoleLine::for_connection(
-                            line,
-                            event.now_ms(),
-                            connection_id,
-                        ))
-                        .is_err()
-                {
+                if line.push_str(payload).is_err() {
+                    self.ingest_backpressure = self.ingest_backpressure.saturating_add(1);
+                    self.fail_closed("command-queue-backpressure");
+                    return;
+                }
+                let console_line = ConsoleLine::for_connection(line, event.now_ms(), connection_id);
+                #[cfg(any(test, feature = "release-pi4"))]
+                let console_line = console_line.with_root_observed_ms(self.last_now_ms);
+                if self.lines.push_back(console_line).is_err() {
                     self.ingest_backpressure = self.ingest_backpressure.saturating_add(1);
                     self.fail_closed("command-queue-backpressure");
                     return;
@@ -1068,6 +1096,9 @@ impl<D: NetDevice> IsolatedNetworkConsole<D> {
                     .saturating_add(payload.len() as u64);
                 self.counters.tcp_console_recv_ready =
                     self.counters.tcp_console_recv_ready.saturating_add(1);
+                #[cfg(any(test, feature = "release-pi4"))]
+                self.seam_telemetry
+                    .record_command_or_batch_observed(event.now_ms(), self.last_now_ms);
             }
             ExchangeKind::CommandBatch => {
                 if self.authenticated_connection != Some(connection_id) {
@@ -1095,12 +1126,14 @@ impl<D: NetDevice> IsolatedNetworkConsole<D> {
                     };
                     let (now_ms, command) = command;
                     let mut line = HeaplessString::new();
-                    if line.push_str(command).is_err()
-                        || self
-                            .lines
-                            .push_back(ConsoleLine::for_connection(line, now_ms, connection_id))
-                            .is_err()
-                    {
+                    if line.push_str(command).is_err() {
+                        self.fail_closed("command-batch-admission");
+                        return;
+                    }
+                    let console_line = ConsoleLine::for_connection(line, now_ms, connection_id);
+                    #[cfg(any(test, feature = "release-pi4"))]
+                    let console_line = console_line.with_root_observed_ms(self.last_now_ms);
+                    if self.lines.push_back(console_line).is_err() {
                         self.fail_closed("command-batch-admission");
                         return;
                     }
@@ -1114,6 +1147,9 @@ impl<D: NetDevice> IsolatedNetworkConsole<D> {
                     self.counters.tcp_console_recv_ready =
                         self.counters.tcp_console_recv_ready.saturating_add(1);
                 }
+                #[cfg(any(test, feature = "release-pi4"))]
+                self.seam_telemetry
+                    .record_command_or_batch_observed(event.now_ms(), self.last_now_ms);
             }
             ExchangeKind::Disconnected => {
                 // Root observes lifecycle events before command lines. Retire
@@ -1145,6 +1181,10 @@ impl<D: NetDevice> IsolatedNetworkConsole<D> {
                 self.output_issued = false;
                 self.output.clear();
                 self.response_lane = None;
+                #[cfg(any(test, feature = "release-pi4"))]
+                {
+                    self.response_dispatch_ms = 0;
+                }
             }
             ExchangeKind::Backpressure => self.fail_closed("child-event-backpressure"),
             ExchangeKind::ControlCompleted => {
@@ -1167,6 +1207,12 @@ impl<D: NetDevice> IsolatedNetworkConsole<D> {
                         return;
                     }
                     batch.output_drained = true;
+                    #[cfg(any(test, feature = "release-pi4"))]
+                    self.seam_telemetry.record_output_drained(
+                        batch.staged_ms,
+                        event.now_ms(),
+                        self.last_now_ms,
+                    );
                 }
                 self.response_drains = self.response_drains.saturating_add(1);
                 self.settle_completed_response_batch();
@@ -1185,6 +1231,10 @@ impl<D: NetDevice> IsolatedNetworkConsole<D> {
                 self.disconnect_requested = false;
                 self.disconnect_issued = false;
                 self.response_lane = None;
+                #[cfg(any(test, feature = "release-pi4"))]
+                {
+                    self.response_dispatch_ms = 0;
+                }
             }
             ExchangeKind::SendLine | ExchangeKind::SendBatch | ExchangeKind::Disconnect => {
                 self.fail_closed("child-published-root-control-kind")
@@ -1373,11 +1423,21 @@ impl<D: NetDevice> IsolatedNetworkConsole<D> {
             .stage_authorized_batch(payload, self.last_now_ms)
         {
             Ok(sequence) => {
+                #[cfg(any(test, feature = "release-pi4"))]
+                if self.response_dispatch_ms != 0 {
+                    self.seam_telemetry
+                        .record_dispatch_to_stage(self.response_dispatch_ms, self.last_now_ms);
+                    self.response_dispatch_ms = 0;
+                }
                 for _ in 0..count {
                     let _ = self.output.pop_front();
                 }
                 if let Some(lane) = self.response_lane.as_mut() {
-                    lane.awaiting_batch = Some(PendingResponseBatch::new(sequence, terminal_count));
+                    lane.awaiting_batch = Some(PendingResponseBatch::new(
+                        sequence,
+                        terminal_count,
+                        self.last_now_ms,
+                    ));
                 }
                 self.output_issued = true;
                 self.connection_bytes_written =
@@ -1818,6 +1878,82 @@ impl<D: NetDevice> NetPoller for IsolatedNetworkConsole<D> {
         Ok(self.poll_response_turn(now_ms))
     }
 
+    fn service_direct_genet_command_control_with_budget(
+        &mut self,
+        expected: super::ConsoleResponseIdentity,
+        now_ms: u64,
+        budget: &mut DriverServiceBudget,
+    ) -> Result<DirectGenetCommandControlOutcome, DriverServiceBudgetError> {
+        if D::driver_task_contract() != crate::hal::driver_task::GENET_DRIVER_TASK_CONTRACT
+            || !self.runtime.direct_genet()
+            || !self.runtime.direct_data_plane()
+        {
+            return Ok(DirectGenetCommandControlOutcome::Unsupported);
+        }
+        let identity_exact = expected.generation != 0
+            && expected.connection_id != 0
+            && self.runtime.generation() == expected.generation
+            && self.active_connection == Some(expected.connection_id)
+            && self.authenticated_connection == Some(expected.connection_id)
+            && self.bounded_console_response_identity() == Some(expected);
+        if !identity_exact || self.faulted || self.terminal || self.graceful_teardown_pending {
+            self.fail_closed("direct-genet-command-control-identity");
+            return Ok(DirectGenetCommandControlOutcome::Fault);
+        }
+        budget.charge_ops(1)?;
+        budget.charge_frames(ISOLATED_NETWORK_TURN_FRAMES)?;
+        budget.charge_bytes(ISOLATED_NETWORK_TURN_BYTES)?;
+        self.last_now_ms = now_ms;
+        self.telemetry.last_poll_ms = now_ms;
+
+        let Some(response_lane) = self.response_lane else {
+            return Ok(DirectGenetCommandControlOutcome::Deferred(
+                DirectGenetCommandControlDeferReason::OutputMissing,
+            ));
+        };
+        if response_lane.generation != expected.generation
+            || response_lane.connection_id != expected.connection_id
+        {
+            self.fail_closed("direct-genet-command-control-response-lane");
+            return Ok(DirectGenetCommandControlOutcome::Fault);
+        }
+        if response_lane.awaiting_batch.is_some() {
+            return Ok(DirectGenetCommandControlOutcome::Deferred(
+                DirectGenetCommandControlDeferReason::PriorBatch,
+            ));
+        }
+        if self.output.is_empty() {
+            return Ok(DirectGenetCommandControlOutcome::Deferred(
+                DirectGenetCommandControlDeferReason::OutputMissing,
+            ));
+        }
+        if !self.runtime.control_available() {
+            return Ok(DirectGenetCommandControlOutcome::Deferred(
+                DirectGenetCommandControlDeferReason::ControlBusy,
+            ));
+        }
+        let stage_published = self.stage_one_output();
+        self.turn_telemetry.record(
+            now_ms,
+            IsolatedNetworkTurnUnit::Lower(IsolatedNetworkLowerUnit::StageOutput),
+            stage_published,
+        );
+        if self.faulted {
+            return Ok(DirectGenetCommandControlOutcome::Fault);
+        }
+        if stage_published {
+            self.lower_cursor = IsolatedNetworkLowerCursor::new();
+            return Ok(DirectGenetCommandControlOutcome::StagePublished);
+        }
+
+        // A notification-only service tick is not causally distinguishable
+        // from an older coalesced WAKE_CONTROL. Keep the child quiesced until
+        // an exact newly sequenced response control record is stageable.
+        Ok(DirectGenetCommandControlOutcome::Deferred(
+            DirectGenetCommandControlDeferReason::StageBackpressure,
+        ))
+    }
+
     fn driver_task_contract(&self) -> DriverTaskContract {
         D::driver_task_contract()
     }
@@ -1872,6 +2008,18 @@ impl<D: NetDevice> NetPoller for IsolatedNetworkConsole<D> {
             generation: self.runtime.generation(),
             connection_id,
         })
+    }
+
+    #[cfg(feature = "release-pi4")]
+    fn note_console_response_dispatch(&mut self, connection_id: u64, dispatch_ms: u64) {
+        self.response_dispatch_ms = if dispatch_ms != 0
+            && self.active_connection == Some(connection_id)
+            && self.authenticated_connection == Some(connection_id)
+        {
+            dispatch_ms
+        } else {
+            0
+        };
     }
 
     fn console_response_lane(&self) -> Option<super::ConsoleResponseLane> {
@@ -2031,6 +2179,11 @@ impl<D: NetDevice> NetPoller for IsolatedNetworkConsole<D> {
 
     fn isolated_console_diagnostics(&self) -> Option<IsolatedConsoleDiagnostics> {
         Some(IsolatedNetworkConsole::isolated_console_diagnostics(self))
+    }
+
+    #[cfg(feature = "release-pi4")]
+    fn isolated_seam_diagnostics(&self) -> Option<IsolatedSeamDiagnostics> {
+        Some(IsolatedNetworkConsole::isolated_seam_diagnostics(self))
     }
 
     fn status_report(&self) -> NetStatusReport {

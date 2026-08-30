@@ -381,6 +381,81 @@ fn pi_wifi_attached_network_retains_only_one_proven_guarded_successor() {
     assert!(source.contains("root_control.budget_us"));
     assert!(source.contains("root_control.wcet_us"));
     assert!(!source.contains("DEFERRED_CYW43_ACTIVATION_GUARD_US"));
+
+    let event_source = include_str!("../src/event/mod.rs");
+    let composer_start = event_source
+        .find("pub fn poll_deferred_cyw43_attached_network_control_turn(&mut self) -> bool")
+        .expect("attached Wi-Fi must retain one bounded EventPump composer");
+    let composer_end = event_source[composer_start..]
+        .find("/// Service one complete Pi local-operator rotation")
+        .map(|offset| composer_start + offset)
+        .expect("attached Wi-Fi composer must have a bounded source region");
+    let composer = &event_source[composer_start..composer_end];
+    let take_credit = composer
+        .find("self.deferred_cyw43_transient_publication_credit.take()")
+        .expect("the opaque publication credit must be consumed at composer entry");
+    let entry_revalidation = composer[take_credit..]
+        .find("Cyw43TransientPublicationCreditCut::Entry")
+        .map(|offset| take_credit + offset)
+        .expect("a consumed credit must revalidate its exact entry snapshot");
+    let pre_network_revalidation = composer[entry_revalidation..]
+        .find("Cyw43TransientPublicationCreditCut::PreNetwork")
+        .map(|offset| entry_revalidation + offset)
+        .expect("the same credit must revalidate immediately before Network");
+    let network_poll = composer[pre_network_revalidation..]
+        .find("self.poll();")
+        .map(|offset| pre_network_revalidation + offset)
+        .expect("pre-Network validation must precede the sole EventPump poll");
+    let operator_rotation = composer[network_poll..]
+        .find("self.require_linked_runtime_cyw43_operator_rotation();")
+        .map(|offset| network_poll + offset)
+        .expect("a new exact credit must require the physical-operator rotor");
+    let force_serial = composer[operator_rotation..]
+        .find("LinkedRuntimeServicePhase::Serial;")
+        .map(|offset| operator_rotation + offset)
+        .expect("the credit must start at Serial rather than Network");
+    let store_credit = composer[force_serial..]
+        .find("deferred_cyw43_transient_publication_credit = Some(credit)")
+        .map(|offset| force_serial + offset)
+        .expect("only the fully fenced post-poll snapshot may cross re-entry");
+    assert!(
+        take_credit < entry_revalidation
+            && entry_revalidation < pre_network_revalidation
+            && pre_network_revalidation < network_poll
+            && network_poll < operator_rotation
+            && operator_rotation < force_serial
+            && force_serial < store_credit,
+    );
+
+    let yield_helper = source
+        .find("fn deferred_cyw43_yield_and_reset<")
+        .expect("deferred Wi-Fi must centralize its explicit Yield boundary");
+    let clear_credit = source[yield_helper..]
+        .find("pump.clear_deferred_cyw43_transient_publication_credit();")
+        .map(|offset| yield_helper + offset)
+        .expect("every deferred Wi-Fi Yield must revoke an unspent credit");
+    let prepare_passive = source[clear_credit..]
+        .find("pump.prepare_pi_root_control_passive_admission_yield()")
+        .map(|offset| clear_credit + offset)
+        .expect("credit revocation must precede passive-boundary preparation");
+    let yield_call = source[prepare_passive..]
+        .find("sel4::yield_now();")
+        .map(|offset| prepare_passive + offset)
+        .expect("the helper must preserve its exact scheduler boundary");
+    let reset = source[yield_call..]
+        .find("window.reset();")
+        .map(|offset| yield_call + offset)
+        .expect("the activation window resets only after Yield returns");
+    assert!(
+        yield_helper < clear_credit
+            && clear_credit < prepare_passive
+            && prepare_passive < yield_call
+            && yield_call < reset,
+    );
+    assert!(source.contains("self.logical_turns >= DEFERRED_CYW43_ACTIVATION_MAX_PRODUCTIVE_UNITS"));
+    assert!(
+        source.contains("self.productive_units >= DEFERRED_CYW43_ACTIVATION_MAX_PRODUCTIVE_UNITS")
+    );
 }
 
 #[test]
@@ -571,7 +646,7 @@ fn root_control_temporal_activation_exists_only_at_userland_loop_seams() {
         "only the inverse exact-Pi recovery branch may preserve the legacy direct Yield",
     );
     assert!(
-        normal_loop.contains("pi_root_control_yield_and_restart(pump, &mut productive_window);"),
+        normal_loop.contains("pi_root_control_yield_and_restart("),
         "the exact Pi/MCS caller must route every ordinary Yield through the guarded restart owner",
     );
 
@@ -1206,6 +1281,9 @@ fn pi_passive_boundary_drains_preserved_evidence_immediately_after_yield() {
         .map(|offset| asm_start + offset)
         .expect("the combined Pi MCS asm block must be bounded");
     let asm = &wrapper[asm_start..asm_end];
+    let entered_capture = asm
+        .find("\"mrs {entered_ticks}, cntvct_el0\"")
+        .expect("combined asm must read CNTVCT before Yield");
     let syscall = asm
         .find("\"svc #0\"")
         .expect("combined asm must issue the seL4 null syscall");
@@ -1213,17 +1291,19 @@ fn pi_passive_boundary_drains_preserved_evidence_immediately_after_yield() {
         .find("\"mrs {ticks}, cntvct_el0\"")
         .map(|offset| syscall + offset)
         .expect("combined asm must read CNTVCT immediately after Yield");
-    assert!(syscall < capture);
+    assert!(entered_capture < syscall && syscall < capture);
     assert_eq!(wrapper.matches("core::arch::asm!(").count(), 1);
     assert!(wrapper.contains("in(\"x7\") syscall_number"));
+    assert!(wrapper.contains("entered_ticks = out(reg) entered_ticks"));
+    assert!(!wrapper.contains("entered_ticks = lateout(reg) entered_ticks"));
     assert!(wrapper.contains("ticks = lateout(reg) ticks"));
     assert!(!wrapper.contains("timer_counter_ticks()"));
     assert!(wrapper.contains("feature = \"release-pi4\""));
     assert!(wrapper.contains("target_arch = \"aarch64\""));
     assert!(wrapper.contains("sel4_config_kernel_mcs"));
     assert!(
-        wrapper.contains("syscall::yield_now();\n            0"),
-        "non-Pi paths must preserve ordinary Yield and return no fake timestamp"
+        wrapper.contains("syscall::yield_now();\n            (0, 0)"),
+        "non-Pi paths must preserve ordinary Yield and return no fake cuts"
     );
 
     let userland = include_str!("../src/userland/mod.rs");
@@ -1249,15 +1329,20 @@ fn pi_passive_boundary_drains_preserved_evidence_immediately_after_yield() {
     let mut suffix = userland;
     while let Some(offset) = suffix.find(marker) {
         let after_marker = &suffix[offset + marker.len()..];
+        let timed_capture = after_marker
+            .find("let (yielded_at_ticks, resumed_at_ticks) = sel4::yield_now_timed();");
+        let ordinary_capture = after_marker.find("let resumed_at_ticks = sel4::yield_now();");
+        let capture = match (timed_capture, ordinary_capture) {
+            (Some(timed), Some(ordinary)) => timed.min(ordinary),
+            (Some(timed), None) => timed,
+            (None, Some(ordinary)) => ordinary,
+            (None, None) => panic!("prepared Yield must capture its return boundary"),
+        };
         assert!(
-            after_marker
-                .trim_start()
-                .starts_with("let resumed_at_ticks = sel4::yield_now();"),
+            !after_marker[..capture].contains("pump.")
+                && !after_marker[..capture].contains("window."),
             "no userland work may intervene between prepare and seL4_Yield",
         );
-        let capture = after_marker
-            .find("let resumed_at_ticks = sel4::yield_now();")
-            .expect("prepared Yield must capture its first returned CNTVCT");
         let resume = after_marker[capture..]
             .find("pump.resume_pi_root_control_passive_admission_after_yield(resumed_at_ticks);")
             .map(|resume| capture + resume)

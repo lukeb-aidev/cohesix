@@ -6352,6 +6352,8 @@ static CYW43_SERVICE_WORK_SNAPSHOT_TEST_OVERRIDE: Mutex<Option<Cyw43ServiceWorkS
 #[cfg(feature = "kernel")]
 static CYW43_SERVICE_WORK_POLICY_SNAPSHOT: Mutex<Option<(u64, Cyw43ServiceWorkSnapshot)>> =
     Mutex::new(None);
+#[cfg(all(feature = "kernel", feature = "release-pi4"))]
+static CYW43_SERVICE_WORK_SCHEDULABLE_CACHE: AtomicU32 = AtomicU32::new(0);
 
 #[cfg(all(feature = "kernel", test))]
 static CYW43_SERVICE_WORK_DERIVATIONS: AtomicU32 = AtomicU32::new(0);
@@ -7711,12 +7713,22 @@ pub(crate) fn cyw43_service_work_snapshot() -> Cyw43ServiceWorkSnapshot {
     if cacheable {
         if let Some((cached_turn_id, snapshot)) = *CYW43_SERVICE_WORK_POLICY_SNAPSHOT.lock() {
             if cached_turn_id == turn_id {
+                #[cfg(feature = "release-pi4")]
+                CYW43_SERVICE_WORK_SCHEDULABLE_CACHE.store(
+                    u32::from(snapshot.schedulable_network_work()),
+                    Ordering::Release,
+                );
                 return snapshot;
             }
         }
     }
 
     let snapshot = derive_cyw43_service_work_snapshot();
+    #[cfg(feature = "release-pi4")]
+    CYW43_SERVICE_WORK_SCHEDULABLE_CACHE.store(
+        u32::from(snapshot.schedulable_network_work()),
+        Ordering::Release,
+    );
     if cacheable
         && cyw43_outer_event_turn_active()
         && CYW43_OUTER_EVENT_TURN_ID.load(Ordering::Acquire) == turn_id
@@ -7724,6 +7736,14 @@ pub(crate) fn cyw43_service_work_snapshot() -> Cyw43ServiceWorkSnapshot {
         *CYW43_SERVICE_WORK_POLICY_SNAPSHOT.lock() = Some((turn_id, snapshot));
     }
     snapshot
+}
+
+/// Return the last ordinary-policy classification without taking the policy
+/// cache lock or re-reading driver rings from Pi MCS telemetry.
+#[cfg(all(feature = "kernel", feature = "release-pi4"))]
+#[must_use]
+pub(crate) fn cyw43_cached_schedulable_network_work() -> bool {
+    CYW43_SERVICE_WORK_SCHEDULABLE_CACHE.load(Ordering::Acquire) != 0
 }
 
 /// Re-read the cheap bus-lifetime identity used by the virtual-time fence.

@@ -991,17 +991,12 @@ fn console_publication_ack_is_exactly_once_and_post_retention() {
         "fn signal_committed_child_work(&mut self, wake_index: usize)",
         "/// Stage one virtual/admitted NIC packet",
     );
-    let admission = marker(
-        committed_signal,
-        "let yield_admitted = self.committed_signal_yield_admitted()?;",
-    );
+    let admission = marker(committed_signal, "self.committed_signal_only_admitted()?;");
     let release = marker(committed_signal, "fence(Ordering::Release);");
     let signal = marker(committed_signal, "sel4::signal_unchecked(wake_cap);");
-    let handoff = marker(
-        committed_signal,
-        "self.yield_to_child_after_committed_signal(yield_admitted, predrain_succeeded)",
-    );
-    assert!(admission < release && release < signal && signal < handoff);
+    assert!(admission < release && release < signal);
+    assert!(!committed_signal.contains("yield_to_child_after_committed_signal"));
+    assert!(!committed_signal.contains("SchedContext_YieldTo"));
 
     let pending = section(
         hal,
@@ -1455,10 +1450,12 @@ fn isolated_console_input_never_crosses_connection_identity_boundaries() {
         command,
         "self.authenticated_connection != Some(connection_id)",
     );
-    let command_enqueue = marker(command, ".push_back(ConsoleLine::for_connection(");
+    let command_enqueue = marker(
+        command,
+        "let console_line = ConsoleLine::for_connection(line, event.now_ms(), connection_id);",
+    );
     assert!(command_identity < command_enqueue);
-    assert!(command.contains("event.now_ms(),"));
-    assert!(command.contains("connection_id,"));
+    assert!(command.contains("self.lines.push_back(console_line)"));
     let batch_identity = marker(
         command_batch,
         "self.authenticated_connection != Some(connection_id)",
@@ -1467,11 +1464,39 @@ fn isolated_console_input_never_crosses_connection_identity_boundaries() {
         command_batch,
         "cursor.remaining() > LINE_QUEUE_DEPTH.saturating_sub(self.lines.len())",
     );
-    let batch_enqueue = marker(command_batch, ".push_back(ConsoleLine::for_connection(");
+    let batch_enqueue = marker(
+        command_batch,
+        "let console_line = ConsoleLine::for_connection(line, now_ms, connection_id);",
+    );
     assert!(batch_identity < batch_capacity);
     assert!(batch_capacity < batch_enqueue);
     assert!(command_batch.contains("let (now_ms, command) = command;"));
     assert!(command_batch.contains("ConsoleLine::for_connection(line, now_ms, connection_id)"));
+    assert!(command_batch.contains("self.lines.push_back(console_line)"));
+}
+
+#[test]
+fn pi_mcs_causal_timestamps_do_not_expand_qemu_runtime_state() {
+    let net = include_str!("../src/net/mod.rs");
+    let console_line = section(net, "pub struct ConsoleLine", "/// Counters gathered");
+    assert!(console_line.contains(
+        "#[cfg(any(test, feature = \"release-pi4\"))]\n    pub(crate) root_observed_ms: u64,"
+    ));
+    assert!(console_line.contains(
+        "#[cfg(any(test, feature = \"release-pi4\"))]\n    #[must_use]\n    pub(crate) const fn with_root_observed_ms"
+    ));
+
+    let isolated = include_str!("../src/net/isolated_console.rs");
+    let response_batch = section(
+        isolated,
+        "struct PendingResponseBatch",
+        "#[derive(Clone, Copy, Debug, Eq, PartialEq)]\nstruct ResponseLane",
+    );
+    assert!(response_batch
+        .contains("#[cfg(any(test, feature = \"release-pi4\"))]\n    staged_ms: u64,"));
+    assert!(response_batch.contains(
+        "#[cfg(any(test, feature = \"release-pi4\"))]\n            staged_ms: _staged_ms,"
+    ));
 }
 
 #[test]

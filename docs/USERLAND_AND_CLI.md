@@ -64,7 +64,7 @@ the most precise description of that boot.
 | `caps mcs` | Print bounded live MCS authority presence and generated fixed/capacity object counts as source-labelled records that fit the Pi linked-HDMI fallback width. |
 | `smp` | Print bounded userspace activity and assignment diagnostics without claiming kernel CPU utilization. This is the preferred spelling. |
 | `smp activity` | Compatibility spelling for `smp`; it produces the same bounded userspace activity report. |
-| `smp mcs` | Print `[smp:mcs/v1]` generated per-core/per-task admission joined to one copied live registry snapshot. |
+| `smp mcs` | Print `[smp:mcs/v1]` generated per-core/per-task admission joined to one copied live registry snapshot; Pi release profiles append the bounded runtime composer/Yield diagnostic batch before the end marker. |
 | `smp dump` | Request the raw kernel scheduler snapshot. This debug-only path is unavailable after linked-UART cutover. |
 | `mem` | Print the RAM/device untyped summary. |
 | `ping` | Return the liveness response. |
@@ -90,7 +90,10 @@ profile before linked-UART cutover; the raw kernel text is UART-only. The
 explicit `smp activity` spelling remains accepted for scripts and older
 runbooks. `smp mcs` labels compiler truth `source=generated`, BootInfo
 `source=kernel`, and copied live state `source=runtime`; unavailable is not a
-missing registration. It never calls `seL4_SchedContext_Consumed`, which would
+missing registration. On Pi release profiles it also emits the 22-row
+aggregate-only `mcs_quantum*`, `mcs_yield*`, command-dispatch, pending-state,
+and budget-guard batch documented below. These rows are not emitted by
+`netstats`. The command never calls `seL4_SchedContext_Consumed`, which would
 reset the accounting interval. QEMU output proves only its exact boot, while Pi
 state requires a fresh exact-image Pi boot. The `serial_rx_drop` and `serial_rx_backpressure` values in this
 report describe the root serial queue only. A zero value does not claim that
@@ -204,6 +207,116 @@ their bounded child-execution credit; `yinvalid` uses `0x01` pre-drain,
 These fields are zero outside the exact Pi direct-GENET path. They explain
 cadence decisions but do not prove function, throughput, latency, or
 acceptance.
+
+Pi release `netstats` appends five bounded fast-path rows and, when the selected
+isolated-network implementation exposes timing evidence, five causal seam
+rows. Their grammar is:
+
+```text
+netstats: cyw43_publication schema=v1 candidates=<u64> minted=<u64> consumed=<u64> rejected=<u64> reasons=0x<hex>
+netstats: cyw43_publication_cut schema=v1 probe=<u64> entry=<u64> pre_network=<u64> revoked=<u64>
+netstats: genet_compact schema=v1 stage=<u64> deferred=<u64> fault=<u64> unsupported=<u64> dispatch=<u64> stage_turns=<u64> rotations=<u64>
+netstats: genet_compose schema=v1 composed=<u64> no_pending=<u64> not_sealed=<u64> backpressure=<u64> identity_drift=<u64>
+netstats: genet_defer schema=v1 passive=<u64> command=<u64> compose_open=<u64> compose_backpressure=<u64> fence=<u64> prior_batch=<u64> control_busy=<u64> output_missing=<u64> stage_backpressure=<u64>
+netstats: isolated_seam schema=v1 name=<command-publish-root-observe|dispatch-stage|stage-control-observe|stage-output-drained|output-drained-root-observe> samples=<u64> invalid=<u64> total_ms=<u64> avg_ms=<u64> last_ms=<u64> max_ms=<u64>
+```
+
+`cyw43_publication` counts exact transient-publication-credit candidates,
+credits minted and consumed, rejected cuts, and the sticky rejection-reason
+mask. The reason bits are snapshot/lifetime drift `0x1`, operator or recovery
+fence `0x2`, final pre-Network drift `0x4`, and non-material or empty
+publication `0x8`. `cyw43_publication_cut` assigns each rejection to the exact
+proof probe, next-composer entry, final pre-Network revalidation, or later
+revocation cut. The cut counters classify the aggregate `rejected` total; they
+do not create a retry or continuation.
+
+`genet_compose` counts the typed outcomes of moving one sealed response into
+the direct-GENET adapter. Only `composed` authorizes the causal child-control
+successor. `no_pending`, `not_sealed`, `backpressure`, and `identity_drift`
+remain distinct fail-closed or retained-response outcomes rather than being
+collapsed into apparent success. `genet_compact` retains the adjacent bounded
+command-control outcomes and operator-rotation counts. Every aggregate compact
+Deferred increments exactly one `genet_defer` counter: `passive`, `command`,
+`compose_open`, `compose_backpressure`, `fence`, `prior_batch`, `control_busy`,
+`output_missing`, or `stage_backpressure`. Their sum therefore equals the
+aggregate `genet_compact deferred` count. `compose_open` maps the typed
+`NotSealed` outcome. This bounded one-hot classification does not authorize a
+retry, admission, child-control successor, or acceptance claim.
+
+The five optional `isolated_seam` names measure child command publication to
+validated root observation, root dispatch to first durable `StageOutput`,
+`StageOutput` to observed control-consumption watermark, `StageOutput` to the
+child's `OutputDrained` publication, and that publication to validated root
+observation. The shared control watermark carries no timestamp, so
+`stage-control-observe` intentionally combines child control consumption and
+the later root observation; it cannot independently assign those two portions
+without a shared-ABI change. These millisecond ages accept zero age when both
+timestamps are nonzero, reject a zero endpoint or backwards pair into
+`invalid`, and saturate sample and total arithmetic; `avg_ms` is the integer
+average of valid samples.
+
+The detailed Pi composer/scheduler snapshot belongs to explicit `smp mcs`, not
+`netstats`. The Pi release batch contains exactly 22 additive rows:
+
+```text
+netstats: mcs_quantum schema=v1 hz=<u64> samples=<u64> material=<u64> periods=<u64> invalid=<u64> invalid_period=<u64>
+netstats: mcs_quantum_state schema=v1 pending=<u64> stalled=<u64>
+netstats: mcs_quantum_lane schema=v1 wifi=<u64> genet=<u64>
+netstats: mcs_quantum_total schema=v1 period_us=<u64> run_us=<u64>
+netstats: mcs_quantum_timing schema=v1 period_avg_us=<u64> period_max_us=<u64> run_avg_us=<u64> run_max_us=<u64>
+netstats: mcs_quantum_period schema=v1 bounds_us=1000,3000,6000,9000,12000,20000 buckets=<u64>,<u64>,<u64>,<u64>,<u64>,<u64>,<u64>
+netstats: mcs_quantum_run schema=v1 bounds_us=1000,3000,6000,9000,12000,20000 buckets=<u64>,<u64>,<u64>,<u64>,<u64>,<u64>,<u64>
+netstats: mcs_quantum_last schema=v1 lane=<wifi|genet> generation=<u64> conn=<u64> progress=0x<hex> pending=0x<hex>->0x<hex> period_us=<u64> run_us=<u64> exit=<YIELD|RETAIN|FENCE|FAULT>
+netstats: mcs_quantum_exit schema=v1 yields=<u64> retains=<u64> fences=<u64> faults=<u64>
+netstats: mcs_command_dispatch schema=v1 samples=<u64> invalid=<u64> avg_ms=<u64> last_ms=<u64> max_ms=<u64>
+netstats: mcs_observe_dispatch schema=v1 samples=<u64> invalid=<u64> avg_ms=<u64> last_ms=<u64> max_ms=<u64>
+netstats: mcs_quantum_progress schema=v1 command=0x1 child=0x2 stage=0x4 drain=0x8 ingress=0x10 token=0x20 queue=0x40
+netstats: mcs_pending schema=v1 command_q=0x1 root_output=0x2 child_control=0x4 child_egress=0x8 child_event=0x10 continuation=0x20 wifi_driver=0x40 passive=0x80 operator=0x100 recovery=0x200
+netstats: mcs_yield schema=v1 hz=<u64> samples=<u64> invalid=<u64> pending=<u64> wifi=<u64> genet=<u64>
+netstats: mcs_yield_timing schema=v1 total_us=<u64> avg_us=<u64> max_us=<u64>
+netstats: mcs_yield_hist schema=v1 bounds_us=1000,3000,6000,9000,12000,20000 buckets=<u64>,<u64>,<u64>,<u64>,<u64>,<u64>,<u64>
+netstats: mcs_yield_cause_a schema=v1 reserve=<u64> no_successor=<u64> passive=<u64>
+netstats: mcs_yield_cause_b schema=v1 recovery=<u64> operator=<u64> other=<u64>
+netstats: mcs_yield_last schema=v1 lane=<wifi|genet> generation=<u64> conn=<u64> pending=0x<hex> trigger=<RESERVE_GUARD|NO_PRODUCTIVE_SUCCESSOR|PASSIVE_ADMISSION|RECOVERY_FENCE|OPERATOR_ROTATION|OTHER_BOUNDARY> hiatus_us=<u64>
+netstats: mcs_budget_guard schema=v1 activation=<u64> attached=<u64> operator=<u64> driver=<u64>
+netstats: mcs_budget_pending schema=v1 activation=<u64> attached=<u64> operator=<u64> driver=<u64>
+netstats: mcs_budget_reason schema=v1 cap=<u64> clock=<u64> reserve=<u64> policy=<u64> mask=0x<hex>
+```
+
+`mcs_quantum*` measures root-control composer quanta, not kernel activations,
+SC refills, or scheduling-context consumption. `run` brackets the composer
+leaf. `period` is start-to-start from the previous valid observed composer
+quantum to the current material quantum; the first observation has no period,
+and a backwards start increments `invalid_period`. A quantum is material when
+progress or pending work exists before or after it. `pending` counts material
+cuts with work pending at entry, while `stalled` requires pending work both
+before and after with no progress. Progress and pending masks use the fixed
+one-bit legends above.
+
+`mcs_yield*` instead measures the exact scheduler hiatus around one explicit
+Yield: the Pi target executes `CNTVCT -> svc -> CNTVCT` in one assembly block.
+Each sample has exactly one trigger class and retains the pre-Yield pending mask
+and lane/identity. The six trigger classes distinguish reserve rejection, no
+productive successor, passive admission, recovery fencing, operator rotation,
+and another explicit boundary. The budget rows classify WiFi reserve guards at
+activation, attached, bootstrap-operator, or bootstrap-driver cuts; reason
+bits are cap `0x1`, clock `0x2`, reserve `0x4`, and policy `0x8`.
+
+Both composer and Yield recorders accumulate raw architectural-counter ticks
+at the exact selected Pi frequency of 54 MHz and convert to microseconds only
+when the explicit snapshot is rendered. Invalid frequency, zero counter
+endpoint, backwards execution, or backwards period is counted separately and
+never enters a valid latency aggregate. The fixed histogram final bucket is
+`>=20000 us`. A large composer period or Yield hiatus with pending work can
+locate an MCS scheduling seam, but it does not by itself prove which kernel
+refill caused it.
+
+All of these rows are Pi-private diagnostic output. Collection does not call
+`SchedContext_Consumed`, wake a task, grant a continuation, retry work, change
+admission, or emit a routine hot-path serial record. QEMU release builds retain
+their existing hot path and command output without these accounting writes or
+rows. Only fresh exact-image TCP, packet, operator, and benchmark evidence can
+establish Pi behavior, performance, August parity, or acceptance.
 
 When the exact Pi direct-GENET generation is active, one `netstats` command
 also runs one bounded causal refresh and emits a complete available snapshot in

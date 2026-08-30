@@ -136,6 +136,10 @@ pub mod log_buffer;
 /// Fixed-record QEMU activation telemetry decoded through NineDoor after a run.
 pub(crate) mod qemu_flight_recorder;
 
+#[cfg(all(feature = "kernel", feature = "release-pi4"))]
+/// Bounded physical-Pi composer-quantum and scheduler-Yield timing diagnostics.
+pub(crate) mod pi4_mcs_recorder;
+
 #[cfg(feature = "kernel")]
 /// Deterministic lifecycle state machine for operator control.
 pub mod lifecycle;

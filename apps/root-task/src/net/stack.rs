@@ -9552,6 +9552,24 @@ impl NetPoller for GenetNetStack {
         })
     }
 
+    fn service_direct_genet_command_control_with_budget(
+        &mut self,
+        expected: ConsoleResponseIdentity,
+        now_ms: u64,
+        budget: &mut DriverServiceBudget,
+    ) -> Result<super::DirectGenetCommandControlOutcome, DriverServiceBudgetError> {
+        #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
+        if let GenetNetState::Isolated { console, .. } = &mut self.state {
+            if console.direct_data_plane() {
+                return console
+                    .service_direct_genet_command_control_with_budget(expected, now_ms, budget);
+            }
+        }
+        #[cfg(not(all(target_os = "none", sel4_config_kernel_mcs)))]
+        let _ = (expected, now_ms, budget);
+        Ok(super::DirectGenetCommandControlOutcome::Unsupported)
+    }
+
     fn request_disconnect(&mut self) {
         if let Some(inner) = self.inner_mut() {
             inner.request_disconnect();
@@ -9651,6 +9669,13 @@ impl NetPoller for GenetNetStack {
     fn isolated_console_diagnostics(&self) -> Option<IsolatedConsoleDiagnostics> {
         self.inner()
             .and_then(NetPoller::isolated_console_diagnostics)
+    }
+
+    #[cfg(feature = "release-pi4")]
+    fn isolated_seam_diagnostics(
+        &self,
+    ) -> Option<crate::net::isolated_seam::IsolatedSeamDiagnostics> {
+        self.inner().and_then(NetPoller::isolated_seam_diagnostics)
     }
 
     fn refresh_direct_genet_diagnostics(&mut self) -> Option<DirectGenetDiagnostics> {
@@ -10021,6 +10046,13 @@ impl NetPoller for Cyw43NetStack {
     fn isolated_console_diagnostics(&self) -> Option<IsolatedConsoleDiagnostics> {
         self.inner()
             .and_then(NetPoller::isolated_console_diagnostics)
+    }
+
+    #[cfg(feature = "release-pi4")]
+    fn isolated_seam_diagnostics(
+        &self,
+    ) -> Option<crate::net::isolated_seam::IsolatedSeamDiagnostics> {
+        self.inner().and_then(NetPoller::isolated_seam_diagnostics)
     }
 
     fn status_report(&self) -> NetStatusReport {
@@ -11310,6 +11342,24 @@ impl NetPoller for DefaultNetStack {
         }
     }
 
+    fn service_direct_genet_command_control_with_budget(
+        &mut self,
+        expected: ConsoleResponseIdentity,
+        now_ms: u64,
+        budget: &mut DriverServiceBudget,
+    ) -> Result<super::DirectGenetCommandControlOutcome, DriverServiceBudgetError> {
+        match self {
+            Self::GenetDriverTask(stack) => {
+                stack.service_direct_genet_command_control_with_budget(expected, now_ms, budget)
+            }
+            Self::Rtl8139(_) | Self::Cyw43DriverTask(_) => {
+                Ok(super::DirectGenetCommandControlOutcome::Unsupported)
+            }
+            #[cfg(feature = "net-backend-virtio")]
+            Self::Virtio(_) => Ok(super::DirectGenetCommandControlOutcome::Unsupported),
+        }
+    }
+
     fn request_disconnect(&mut self) {
         match self {
             Self::Rtl8139(stack) => stack.request_disconnect(),
@@ -11535,6 +11585,19 @@ impl NetPoller for DefaultNetStack {
             Self::Cyw43DriverTask(stack) => stack.isolated_console_diagnostics(),
             #[cfg(feature = "net-backend-virtio")]
             Self::Virtio(stack) => stack.isolated_console_diagnostics(),
+        }
+    }
+
+    #[cfg(feature = "release-pi4")]
+    fn isolated_seam_diagnostics(
+        &self,
+    ) -> Option<crate::net::isolated_seam::IsolatedSeamDiagnostics> {
+        match self {
+            Self::Rtl8139(stack) => stack.isolated_seam_diagnostics(),
+            Self::GenetDriverTask(stack) => stack.isolated_seam_diagnostics(),
+            Self::Cyw43DriverTask(stack) => stack.isolated_seam_diagnostics(),
+            #[cfg(feature = "net-backend-virtio")]
+            Self::Virtio(stack) => stack.isolated_seam_diagnostics(),
         }
     }
 

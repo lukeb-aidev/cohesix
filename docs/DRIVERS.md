@@ -1339,6 +1339,80 @@ transport:
   aggregate deadlines, pair-restart cuts, completion layout, or IRQ
   mask/acknowledgement semantics.
 
+Exact source `0696803f55d215721b4e750825a5c25daf2cac05` is the current
+dual-mode hardware oracle for this seam. WiFi completed Gate 8, DORA, three
+first-attempt `.coh` scripts, and 64/64 raw requests without fault or
+quarantine, but only at 7.196 requests/s and 159.456-ms p95. GENET completed
+the same functional gates and 64/64 at 47.167 requests/s and 20.052-ms p95.
+Its request-to-target-ACK latency, 0.545-ms median and 0.634-ms p95, is already
+effectively equal to the August hardware-ingress comparator, while its
+ACK-to-response latency remains 19.307-ms median and 19.360-ms p95. This
+routes the shared remaining failure to the root/isolated-console MCS response
+seam rather than GENET DMA/IRQ or WiFi RF/DHCP. It is convergence evidence,
+not current-candidate performance or acceptance proof.
+
+- Direct GENET uses a QEMU-derived productive-micro-unit rule without copying
+  QEMU authority. After the child publishes one exact authenticated `Command`
+  or `CommandBatch`, it quiesces direct service until root applies a newly
+  sequenced `StageOutput` for the same generation and connection. Root may
+  compose only that adapter-local response stage; a stale/empty control, peer
+  wake, publication ACK, identity drift, fault, or containment cannot release
+  the quiesce or authorize NIC work. QEMU direct VirtIO and non-GENET backends
+  remain on their existing paths.
+- Copied WiFi may retain the current guarded root activation across a period
+  seam only through one opaque transient-publication credit. Minting requires
+  one Network poll to advance exactly one material isolated-child unit while
+  lifetime, response cursor/lane, active and authenticated connection,
+  accepted-command count, service count, and pending flush remain exact. The
+  next composer must admit the ordinary `Serial -> LocalSeat? -> Dispatch`
+  cut, revalidate the complete snapshot at entry and immediately before one
+  Network poll, and then consume the credit once. Yield, physical operator or
+  response work, passive admission, identity/cursor drift, recovery,
+  containment, quarantine, reboot, or handoff revokes it. The credit is not a
+  notification, SC refill, retry, device grant, or transferable authority.
+- Pi-only causal diagnostics retain bounded in-memory aggregates, not a hot
+  log. The composer recorder accumulates raw 54 MHz CNTVCT start-to-start
+  periods and start-to-finish run ticks for root-control composer quanta; these
+  are not kernel activations, SC refills, or consumed-time samples. The first
+  period is excluded, backwards periods and invalid counter evidence are
+  counted separately, and conversion to microseconds occurs only when an
+  operator requests `smp mcs`. A separate one-assembly-block
+  `CNTVCT -> svc -> CNTVCT` record measures the exact userspace hiatus around
+  an explicit Yield. It retains one exclusive trigger, the pre-Yield pending
+  mask, lane, and exact connection/generation. Fixed one-bit pending state
+  distinguishes command queue, root output, child control, child egress,
+  child event, continuation, WiFi-driver work, passive admission, operator
+  work, and recovery; triggers distinguish reserve guard, no productive
+  successor, passive admission, recovery fence, operator rotation, and other
+  explicit boundaries. Reserve-guard rows additionally retain activation,
+  attached, bootstrap-operator, and bootstrap-driver cuts plus cap, clock,
+  reserve, and policy reasons. These observations can locate an off-CPU MCS
+  seam but do not independently identify a kernel refill.
+- Pi `netstats` retains five additive fast-path rows. Copied WiFi counts
+  transient-publication candidates, mint/consume/reject totals, the sticky
+  reason mask, and rejects at the exact probe, next-composer entry, final
+  pre-Network, or revocation cut. Direct GENET counts the typed response-compose
+  outcomes `composed`, `no_pending`, `not_sealed`, `backpressure`, and
+  `identity_drift`; only `composed` authorizes child control. The adjacent
+  `genet_defer` row assigns every aggregate compact Deferred to exactly one of
+  `passive`, `command`, `compose_open`, `compose_backpressure`, `fence`,
+  `prior_batch`, `control_busy`, `output_missing`, or `stage_backpressure`;
+  their sum equals the aggregate `genet_compact deferred` count, and
+  `compose_open` is the aggregate classification for typed `NotSealed`. When
+  the isolated service exposes timing, five optional millisecond seam ages
+  cover command publication to root observation, dispatch to first `StageOutput`,
+  `StageOutput` to the observed control-consumption watermark, `StageOutput`
+  to `OutputDrained`, and `OutputDrained` to root observation. The shared
+  control watermark has no timestamp, so `stage-control-observe` intentionally
+  combines child consumption and later root observation rather than claiming
+  to split them. Zero/backwards pairs are invalid and valid totals saturate.
+  Collection never calls `SchedContext_Consumed`, changes a scheduling
+  decision, signals a task, retries work, or executes accounting writes on the
+  protected QEMU release path; QEMU emits none of the five rows. These rows
+  and the explicit `smp mcs` batch are diagnostic only; fresh exact-image Pi
+  traffic and benchmark evidence remain required for correctness or
+  performance claims.
+
 When debugging the linked pair, trace this chain with exact identities:
 
 ```text

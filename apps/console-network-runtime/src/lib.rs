@@ -65,6 +65,40 @@ pub const fn direct_service_repoll_required(
         || (egress_pending && !tx_waiting_for_peer)
 }
 
+/// Return whether a just-published child event must quiesce direct-GENET until
+/// root supplies the command's bounded control successor.
+///
+/// Direct VirtIO retains its qualified work-conserving behavior. Only the
+/// physical cross-core GENET child suppresses an ACK-only idle quantum after a
+/// command publication. Publication ACKs, link wakes, and empty control hints
+/// do not release either the pre-wait or post-wait direct-service gate.
+#[must_use]
+pub const fn direct_genet_command_publication_quiesces(
+    exact_direct_genet: bool,
+    kind: ExchangeKind,
+) -> bool {
+    exact_direct_genet && matches!(kind, ExchangeKind::Command | ExchangeKind::CommandBatch)
+}
+
+/// Return whether one exact root control record releases a quiesced command.
+///
+/// `newly_sequenced_control` is proof from the stable sequence-last page read;
+/// `control_outcome` is absent for ACK, link, and empty-control wakes. A new
+/// record for a stale connection is durably consumed but cannot release the
+/// command fence because it did not authorize the command's response lane.
+#[must_use]
+pub const fn direct_genet_command_control_releases_quiesce(
+    exact_direct_genet: bool,
+    awaiting_root_command_control: bool,
+    newly_sequenced_control: bool,
+    control_outcome: Option<ControlApplyOutcome>,
+) -> bool {
+    exact_direct_genet
+        && awaiting_root_command_control
+        && newly_sequenced_control
+        && matches!(control_outcome, Some(ControlApplyOutcome::Applied))
+}
+
 /// Runtime construction or bounded service error.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RuntimeError {
@@ -1586,6 +1620,71 @@ mod tests {
         ));
         assert!(direct_service_repoll_required(
             false, true, false, true, true, false,
+        ));
+    }
+
+    #[test]
+    fn only_direct_genet_command_publications_quiesce_ack_only_idle_service() {
+        for kind in [ExchangeKind::Command, ExchangeKind::CommandBatch] {
+            assert!(direct_genet_command_publication_quiesces(true, kind));
+            assert!(
+                !direct_genet_command_publication_quiesces(false, kind),
+                "the qualified direct-VirtIO path must remain unchanged",
+            );
+        }
+        for kind in [
+            ExchangeKind::Ready,
+            ExchangeKind::Connected,
+            ExchangeKind::Authenticated,
+            ExchangeKind::Disconnected,
+            ExchangeKind::ControlCompleted,
+            ExchangeKind::OutputDrained,
+        ] {
+            assert!(!direct_genet_command_publication_quiesces(true, kind));
+        }
+    }
+
+    #[test]
+    fn only_new_exact_direct_genet_control_releases_command_quiesce() {
+        assert!(direct_genet_command_control_releases_quiesce(
+            true,
+            true,
+            true,
+            Some(ControlApplyOutcome::Applied),
+        ));
+
+        for (label, newly_sequenced, outcome) in [
+            ("stale-page", false, Some(ControlApplyOutcome::Applied)),
+            (
+                "stale-connection",
+                true,
+                Some(ControlApplyOutcome::StaleConnection),
+            ),
+            ("empty-control", false, None),
+            ("link-wake", false, None),
+            ("publication-ack", false, None),
+        ] {
+            assert!(
+                !direct_genet_command_control_releases_quiesce(
+                    true,
+                    true,
+                    newly_sequenced,
+                    outcome,
+                ),
+                "{label} cannot release the causal command fence",
+            );
+        }
+        assert!(!direct_genet_command_control_releases_quiesce(
+            false,
+            true,
+            true,
+            Some(ControlApplyOutcome::Applied),
+        ));
+        assert!(!direct_genet_command_control_releases_quiesce(
+            true,
+            false,
+            true,
+            Some(ControlApplyOutcome::Applied),
         ));
     }
 

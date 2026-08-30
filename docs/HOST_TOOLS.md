@@ -82,6 +82,38 @@ change. Pi build selection and generated private ABI/resource records remain
 unchanged. A fresh physical benchmark is still the only Pi performance
 authority.
 
+The post-069 productive-micro-unit candidate is likewise private to Pi target
+scheduling. Direct GENET's command quiesce and exact response-control release,
+copied WiFi's one-shot transient publication credit, and the bounded causal
+MCS accumulators change no console command, TCP/REST framing, namespace,
+authentication, generated manifest/profile contract, Python API, `.coh`
+grammar, benchmark workload, arithmetic, evidence record, or report schema.
+Pi `netstats` adds five fast-path rows (`cyw43_publication`,
+`cyw43_publication_cut`, `genet_compact`, `genet_compose`, and `genet_defer`)
+plus five isolated-seam rows only when that timing snapshot is available. The detailed
+22-row composer/Yield batch is intentionally restricted to explicit `smp mcs`;
+it is not appended to ordinary `netstats`. Existing key/prefix-based consumers
+ignore these unknown additive rows unless they are later taught to consume
+them; no current parser derives readiness, quarantine, throughput, latency, or
+acceptance from their presence. Every aggregate compact Deferred increments
+exactly one `genet_defer` reason counter, so the reason-counter sum equals the
+aggregate `genet_compact deferred` count; `compose_open` represents typed
+`NotSealed`. The row is classification only, not a retry or admission signal.
+The Pi-only accounting writes and runtime rows are absent from the QEMU
+release hot path and output. A future consumer must
+add bounded-row and missing/invalid-evidence fixtures rather than treating row
+absence as success.
+
+The complete `coh`, `cohsh`, `coh-status`, Hive Gateway/REST, SwarmUI, GPU
+bridge, host-ticket agent, sidecar and sidecar bus, CAS tooling, Pi gate and
+serial helpers, trace normalization, `tools/cohesix-py`, generated-contract
+consumers, every `.coh` script, the M26e pressure runner, benchmark workloads,
+and report readers were reviewed for this candidate. None needs a behavior,
+fixture, generated-output, workload, or schema change. Targeted host and QEMU
+checks can reject shared regressions, but the 069 observations remain
+historical convergence input and only a fresh exact-candidate Pi benchmark can
+establish WiFi or GENET performance.
+
 The finite GENET ownership-boundary IRQ rearm, attached-CYW43 distinct-phase
 composition, Wi-Fi-bootstrap USB/serial/display fairness, and physical-Pi MCS
 HDMI finite-frame lane are private target scheduling and driver-lifetime
