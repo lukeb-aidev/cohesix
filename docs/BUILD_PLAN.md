@@ -10882,6 +10882,48 @@ Changes:
     operator quality, WiFi/GENET latency, or August parity; the next exact-image
     dual-mode boot must rerun diagnostics, three scripts, raw 64, medium/high
     pressure, and USB/HDMI/serial checks before any performance claim.
+  - exact-0c refill-loss discriminator and bounded transaction-window candidate
+    — exact source `0c734db7531ae1328155e03d74d79c4196404034`, build ID
+    `44d4500c89565fb65ff4af07fe5d2597591c893f756ec28dced4f61d6487f84d`,
+    image ID
+    `668b10baad31fd143d05ad0cc55fac2dc96dd95481dc6fea06a226b7833fd4fb`,
+    image SHA-256
+    `3c07203946678bad4328a9734d781a2122181222d156808f33607c25478d1cc5`,
+    and resolved-manifest SHA-256
+    `f83cd48d38d780d491d0317d98513a1703d24663406ed90f8b38911794dde273`
+    bind the 2026-08-31 dual-mode evidence. WiFi passed DORA, authenticated
+    TCP, focused `.coh` scripts, and 64/64 raw requests without driver fault,
+    loss, recovery, or quarantine, but reached Gate 8 at 34.110 seconds and
+    achieved only 7.02 requests/s with 166.209-ms p95. Its 2,926 reserve cuts
+    and 7.575-ms average Yield hiatus account for approximately 22.17 seconds
+    of the cold-boot regression, while request-to-ACK remains the dominant
+    steady-state seam. GENET passed the same correctness path and reached
+    113.884 requests/s with 6.774-ms median and 16.459-ms p95, but retained
+    10,840 no-productive-successor exits and period-scale cuts inside a single
+    authenticated transaction. These observations route both regressions to
+    bounded MCS continuation, not CYW43/SDIO, GENET DMA/IRQ/rings, TCP framing,
+    queue capacity, or hardware ownership.
+
+    Preserve all selected budgets, periods, WCETs, priorities, refills, queues,
+    retries, owners, capabilities, and physical-driver protocols. During cold
+    CYW43 bootstrap, retain exact useful progress and transient-empty child
+    observations only inside the existing unslid 3,000-us/64-turn activation.
+    During attached WiFi service, bind that sticky progress to the exact
+    physical lifetime, authenticated generation/connection, and accepted-command
+    epoch; every operator, passive, fault, recovery, containment, quarantine,
+    reboot, handoff, identity, time, and cap drift closes it. For current
+    cross-core signal-only GENET, exact authenticated command acceptance may
+    open the existing unslid transaction tail before stage/drain publication;
+    stage-only progress cannot mint it, and dormant same-core mode retains its
+    exact successful-`YieldTo` requirement. Sample one common absolute Pi
+    dispatch timestamp for both causal recorders. Add only the bounded Pi
+    `cyw43_productive_window` diagnostic row; it grants no scheduling or device
+    authority. The complete host-tool suite, `tools/cohesix-py`, generated
+    profile consumers, `.coh` workloads, benchmark workloads/arithmetic,
+    evidence records, and report schemas were reviewed and require no consumer
+    change. Focused Pi/QEMU tests and a QEMU root-MCS canary can reject the
+    candidate, but only a fresh exact-image dual-mode Pi boot can prove the
+    expected cold-start and latency improvement or August parity.
   - platform consistency — select the same v5 shared contract, including the
     v4-introduced bounded command batch, complete 256-Worker population, two
     passive-Worker executor-lane architecture, and passive-service locality

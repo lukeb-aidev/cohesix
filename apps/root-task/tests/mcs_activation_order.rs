@@ -267,9 +267,9 @@ fn pi_wifi_productive_activation_is_guarded_strictly_operator_driver() {
         .map(|offset| lease_scope_end + offset)
         .expect("Driver completion must charge the productive-turn cap");
     let continue_guard = supervisor[record_driver..]
-        .find("if continuation == DeferredCyw43McsContinuation::Continue")
+        .find("if deferred_cyw43_activation_retains_after_driver(")
         .map(|offset| record_driver + offset)
-        .expect("only the factored productive path may retain the refill");
+        .expect("only the bounded useful-progress policy may retain the refill");
     let loop_continue = supervisor[continue_guard..]
         .find("continue 'supervisor;")
         .map(|offset| continue_guard + offset)

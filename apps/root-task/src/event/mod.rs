@@ -2674,6 +2674,17 @@ pub struct PumpMetrics {
     /// Unspent copied credits revoked by Yield, recovery, or operator fences.
     #[cfg(feature = "release-pi4")]
     pub net_cyw43_transient_publication_reject_revoked: u64,
+    /// Root-control activations opened by exact attached-WiFi progress.
+    #[cfg(feature = "release-pi4")]
+    pub net_cyw43_productive_windows_opened: u64,
+    /// Transient-empty physical rotors retained inside an already-open exact
+    /// attached-WiFi activation window.
+    #[cfg(feature = "release-pi4")]
+    pub net_cyw43_productive_window_idle_admissions: u64,
+    /// Exact attached-WiFi activation windows closed at Yield or hard-fence
+    /// drift.
+    #[cfg(feature = "release-pi4")]
+    pub net_cyw43_productive_windows_closed: u64,
     /// Largest completed CYW43 Network quantum in outer turns.
     pub net_cyw43_service_max_turns: u64,
     /// Largest completed CYW43 Network quantum duration in microseconds.
@@ -2754,9 +2765,11 @@ pub struct PumpMetrics {
     pub net_direct_genet_productive_effective_high_us: u64,
     /// Sticky bounded reason mask for rejected productive continuations.
     pub net_direct_genet_productive_reject_reasons: u32,
-    /// Exact drained responses that opened a bounded direct-GENET active tail.
+    /// Exact authenticated transactions that opened a bounded direct-GENET
+    /// active tail at command acceptance or a terminal drain.
     pub net_direct_genet_active_tail_opened: u64,
-    /// Active tails derived from exact cross-core signal-only drain authority.
+    /// Active tails derived from exact cross-core signal-only transaction
+    /// authority.
     pub net_direct_genet_cross_core_signal_only_admissions: u64,
     /// Complete physical-rotor quanta admitted while an active tail was open.
     pub net_direct_genet_active_tail_admitted: u64,
@@ -4042,6 +4055,75 @@ struct Cyw43AuthenticatedResponseEpisode {
     cursor: Cyw43TransientPublicationCredit,
 }
 
+/// Exact attached-WiFi identity allowed to retain transient-empty rotor
+/// probes inside one already-bounded root-control activation.
+///
+/// This is the physical-Pi counterpart of QEMU's sticky
+/// `useful_progress_observed` bit, strengthened with the selected CYW43
+/// lifetime and authenticated response identity. It is cleared before every
+/// explicit Yield and therefore cannot carry execution authority into a new
+/// refill window.
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Cyw43ProductiveActivationIdentity {
+    lifetime: LinkedRuntimeCyw43DurableResume,
+    response_identity: ConsoleResponseIdentity,
+    accepted_commands: u64,
+}
+
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+impl Cyw43ProductiveActivationIdentity {
+    const fn is_valid(self) -> bool {
+        self.lifetime.generation != 0
+            && self.lifetime.pair_epoch != 0
+            && self.lifetime.physical_lifetime_epoch != 0
+            && self.response_identity.generation != 0
+            && self.response_identity.connection_id != 0
+            && self.accepted_commands != u64::MAX
+    }
+}
+
+/// Complete root-local evidence for retaining one transient-empty WiFi rotor
+/// inside an already bounded activation. This pure predicate is the authority
+/// boundary; target state collection below cannot omit a fence silently.
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Cyw43ProductiveActivationFenceEvidence {
+    expected: Option<Cyw43ProductiveActivationIdentity>,
+    current: Option<Cyw43ProductiveActivationIdentity>,
+    cyw43_lane_selected: bool,
+    network_service_quarantined: bool,
+    reboot_pending: bool,
+    recovery_required: bool,
+    containment_work_pending: bool,
+    handoff_pending: bool,
+    passive_admission_pending: bool,
+    local_fault_pending: bool,
+    physical_operator_work_pending: bool,
+    physical_console_response_pending: bool,
+}
+
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+fn cyw43_productive_activation_fence_allows(
+    evidence: Cyw43ProductiveActivationFenceEvidence,
+) -> bool {
+    let Some(expected) = evidence.expected else {
+        return false;
+    };
+    expected.is_valid()
+        && evidence.current == Some(expected)
+        && evidence.cyw43_lane_selected
+        && !evidence.network_service_quarantined
+        && !evidence.reboot_pending
+        && !evidence.recovery_required
+        && !evidence.containment_work_pending
+        && !evidence.handoff_pending
+        && !evidence.passive_admission_pending
+        && !evidence.local_fault_pending
+        && !evidence.physical_operator_work_pending
+        && !evidence.physical_console_response_pending
+}
+
 #[cfg(all(feature = "kernel", feature = "net-console"))]
 impl Cyw43AuthenticatedResponseEpisode {
     fn from_exact_dispatch(cursor: Cyw43TransientPublicationCredit) -> Option<Self> {
@@ -5279,8 +5361,9 @@ enum DirectGenetProductiveProgress {
 /// Generated scheduling relationship that can authorize a retained
 /// direct-GENET continuation. Same-core service retains the existing exact
 /// `YieldTo` proof. Cross-core service is signal-only: one exact durable
-/// command or stage may grant a strict one-shot successor, while only an exact
-/// `OutputDrained` event may open the bounded active response tail.
+/// command or stage may grant a strict successor, and an exact authenticated
+/// command opens the bounded transaction window before its stage/drain
+/// publications. Stage-only progress cannot mint an unrelated window.
 #[cfg(all(feature = "kernel", feature = "net-console"))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum DirectGenetContinuationMode {
@@ -5460,6 +5543,19 @@ impl PiRootControlProductiveContinuation {
             ..Self::for_test_completed_response(generation, connection_id)
         }
     }
+
+    pub(crate) const fn for_test_cross_core_command(generation: u64, connection_id: u64) -> Self {
+        Self {
+            generation,
+            connection_id,
+            expected_phase: LinkedRuntimeServicePhase::Serial,
+            progress: DirectGenetProductiveProgress::CommandAccepted,
+            mode: DirectGenetContinuationMode::CrossCoreSignalOnly,
+            exact_same_core_yield_to_observed: false,
+            child_credit_scaled: 0,
+            child_credit_counter_hz: 0,
+        }
+    }
 }
 
 #[cfg(all(feature = "kernel", feature = "net-console"))]
@@ -5487,10 +5583,12 @@ impl PiRootControlProductiveContinuation {
         self.child_credit_counter_hz
     }
 
-    /// Whether this exact authenticated quantum durably drained a response and
-    /// may therefore open the bounded Pi direct-GENET active tail. Same-core
-    /// service requires the retained successful `YieldTo`; exact generated
-    /// cross-core service instead requires signal-only zero-credit evidence.
+    /// Whether this exact authenticated quantum opened or advanced one bounded
+    /// Pi direct-GENET transaction window. A newly accepted command opens the
+    /// window before the first cross-core stage publication, while stage-only
+    /// progress cannot mint authority for an unrelated request. Same-core
+    /// progress always requires the retained successful `YieldTo`; exact
+    /// generated cross-core service instead carries no child execution credit.
     pub(crate) const fn opens_active_hot_tail(self) -> bool {
         let exact_accounting = match self.mode {
             DirectGenetContinuationMode::SameCoreYieldTo => self.exact_same_core_yield_to_observed,
@@ -5503,7 +5601,9 @@ impl PiRootControlProductiveContinuation {
         exact_accounting
             && matches!(
                 self.progress,
-                DirectGenetProductiveProgress::CommandAcceptedStagePublishedAndDrained
+                DirectGenetProductiveProgress::CommandAccepted
+                    | DirectGenetProductiveProgress::CommandAcceptedAndStagePublished
+                    | DirectGenetProductiveProgress::CommandAcceptedStagePublishedAndDrained
                     | DirectGenetProductiveProgress::ResponseDrained
                     | DirectGenetProductiveProgress::DrainAndStage
             )
@@ -5759,10 +5859,11 @@ fn direct_genet_productive_continuation_fence_clear(
         && !evidence.local_fault_pending
 }
 
-/// The active tail requires stronger authority than an ordinary productive
-/// continuation: an exact response must already have drained. The remaining
-/// identity, recovery, passive-admission, and physical-operator fences stay
-/// byte-for-byte identical to the ordinary retained-quantum boundary.
+/// The active transaction tail requires stronger authority than an ordinary
+/// productive continuation: one exact command acceptance or terminal response
+/// drain must bind it to the authenticated lane. The remaining identity,
+/// recovery, passive-admission, and physical-operator fences stay byte-for-byte
+/// identical to the ordinary retained-quantum boundary.
 #[cfg(all(feature = "kernel", feature = "net-console"))]
 fn direct_genet_active_hot_tail_fence_clear(
     evidence: DirectGenetProductiveContinuationFenceEvidence,
@@ -7545,6 +7646,8 @@ where
     deferred_cyw43_transient_publication_credit: Option<Cyw43TransientPublicationCredit>,
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     deferred_cyw43_authenticated_response_episode: Option<Cyw43AuthenticatedResponseEpisode>,
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    cyw43_productive_activation_identity: Option<Cyw43ProductiveActivationIdentity>,
     #[cfg(feature = "net-console")]
     linked_runtime_network_due_after_display: bool,
     #[cfg(feature = "kernel")]
@@ -8256,6 +8359,8 @@ where
             deferred_cyw43_transient_publication_credit: None,
             #[cfg(all(feature = "kernel", feature = "net-console"))]
             deferred_cyw43_authenticated_response_episode: None,
+            #[cfg(all(feature = "kernel", feature = "net-console"))]
+            cyw43_productive_activation_identity: None,
             #[cfg(feature = "net-console")]
             linked_runtime_network_due_after_display: false,
             #[cfg(feature = "kernel")]
@@ -9423,10 +9528,14 @@ where
                             }
                         }
                     }
-                    if immediate_continuation
+                    let exact_productive_progress = immediate_continuation
                         || transient_publication_minted
-                        || response_episode_progress
-                    {
+                        || response_episode_progress;
+                    if exact_productive_progress {
+                        let _ = self.note_cyw43_productive_activation_progress();
+                        return true;
+                    }
+                    if self.retain_cyw43_productive_activation_idle() {
                         return true;
                     }
                 }
@@ -9534,6 +9643,7 @@ where
                             physical_operator_work: self.linked_physical_operator_work(),
                         },
                     ) {
+                        let _ = self.note_cyw43_productive_activation_progress();
                         return true;
                     }
                 }
@@ -12895,8 +13005,8 @@ where
         )
     }
 
-    /// Recheck the exact drained-response authority that may retain a bounded
-    /// active direct-GENET tail. A passive command or any physical operator,
+    /// Recheck the exact authenticated-transaction authority that may retain a
+    /// bounded active direct-GENET tail. A passive command or physical operator,
     /// recovery, containment, reboot, handoff, identity, or local-fault drift
     /// closes the tail before another complete rotor quantum begins.
     #[cfg(all(feature = "kernel", feature = "net-console"))]
@@ -13562,6 +13672,133 @@ where
         let _ = cut;
     }
 
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    fn cyw43_productive_activation_current_identity(
+        &self,
+    ) -> Option<Cyw43ProductiveActivationIdentity> {
+        let net = self.net.as_deref()?;
+        let response_identity = net.bounded_console_response_identity()?;
+        if response_identity.generation == 0
+            || response_identity.connection_id == 0
+            || net.active_console_conn_id() != Some(response_identity.connection_id)
+            || net.authenticated_console_conn_id() != Some(response_identity.connection_id)
+        {
+            return None;
+        }
+        let lifetime = LinkedRuntimeCyw43DurableResume::from_snapshot(
+            crate::drivers::driver_task_net::cyw43_service_work_snapshot(),
+        )?;
+        Some(Cyw43ProductiveActivationIdentity {
+            lifetime,
+            response_identity,
+            accepted_commands: self.metrics.accepted_commands,
+        })
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    fn cyw43_productive_activation_fence_clear(
+        &mut self,
+        expected: Cyw43ProductiveActivationIdentity,
+    ) -> bool {
+        let local_fence = self.net.as_deref().is_none_or(|net| {
+            net.console_service_local_fault_pending()
+                || net.console_service_local_containment_pending()
+        });
+        let current = self.cyw43_productive_activation_current_identity();
+        let cyw43_lane_selected = self.linked_runtime_cyw43_lane_selected();
+        let recovery_required = crate::drivers::driver_task_net::cyw43_recovery_required();
+        let containment_work_pending = self.deferred_containment_work_pending();
+        let handoff_pending = self.deferred_console_network_handoff_pending();
+        let passive_admission_pending = self.pi_root_control_passive_admission_pending();
+        let physical_operator_work_pending = self
+            .linked_physical_operator_work()
+            .needs_operator_rotation();
+        let physical_console_response_pending = self.physical_console_response_pending();
+        cyw43_productive_activation_fence_allows(Cyw43ProductiveActivationFenceEvidence {
+            expected: Some(expected),
+            current,
+            cyw43_lane_selected,
+            network_service_quarantined: self.network_service_quarantined,
+            reboot_pending: self.reboot_pending,
+            recovery_required,
+            containment_work_pending,
+            handoff_pending,
+            passive_admission_pending,
+            local_fault_pending: local_fence,
+            physical_operator_work_pending,
+            physical_console_response_pending,
+        })
+    }
+
+    /// Open or revalidate the exact progress-sticky identity for the current
+    /// bounded attached-WiFi activation. This never starts or extends the
+    /// userland wall/turn window; it only prevents a transient empty
+    /// cross-core observation from being mistaken for transaction completion.
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    fn note_cyw43_productive_activation_progress(&mut self) -> bool {
+        let Some(current) = self.cyw43_productive_activation_current_identity() else {
+            self.close_cyw43_productive_activation();
+            return false;
+        };
+        if !self.cyw43_productive_activation_fence_clear(current) {
+            self.close_cyw43_productive_activation();
+            return false;
+        }
+        match self.cyw43_productive_activation_identity {
+            Some(expected) if expected == current => true,
+            Some(_) => {
+                self.close_cyw43_productive_activation();
+                false
+            }
+            None => {
+                self.cyw43_productive_activation_identity = Some(current);
+                #[cfg(feature = "release-pi4")]
+                {
+                    self.metrics.net_cyw43_productive_windows_opened = self
+                        .metrics
+                        .net_cyw43_productive_windows_opened
+                        .saturating_add(1);
+                }
+                true
+            }
+        }
+    }
+
+    /// Admit one clean transient-empty rotor only while the exact identity and
+    /// every operator/recovery fence remain unchanged. The enclosing CYW43
+    /// activation still enforces its existing 3 ms and 64-turn hard limits.
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    fn retain_cyw43_productive_activation_idle(&mut self) -> bool {
+        let Some(expected) = self.cyw43_productive_activation_identity else {
+            return false;
+        };
+        if !self.cyw43_productive_activation_fence_clear(expected) {
+            self.close_cyw43_productive_activation();
+            return false;
+        }
+        #[cfg(feature = "release-pi4")]
+        {
+            self.metrics.net_cyw43_productive_window_idle_admissions = self
+                .metrics
+                .net_cyw43_productive_window_idle_admissions
+                .saturating_add(1);
+        }
+        true
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    fn close_cyw43_productive_activation(&mut self) {
+        if self.cyw43_productive_activation_identity.take().is_some() {
+            #[cfg(feature = "release-pi4")]
+            {
+                self.metrics.net_cyw43_productive_windows_closed = self
+                    .metrics
+                    .net_cyw43_productive_windows_closed
+                    .saturating_add(1);
+            }
+        }
+    }
+
     /// Revoke any unspent copied-WiFi one-shot publication authority. All
     /// explicit Yield paths call this before the scheduler boundary, and every
     /// CYW43 recovery/reset path reaches the scheduler-state clear below. The
@@ -13569,6 +13806,7 @@ where
     /// it grants no execution by itself and is fully revalidated on resume.
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     pub(crate) fn clear_deferred_cyw43_transient_publication_credit(&mut self) {
+        self.close_cyw43_productive_activation();
         if self
             .deferred_cyw43_transient_publication_credit
             .take()
@@ -32498,14 +32736,16 @@ where
             return;
         }
         #[cfg(all(feature = "kernel", feature = "release-pi4"))]
+        let dispatch_ms = crate::net::isolated_seam::isolated_seam_observation_ms(self.now_ms);
+        #[cfg(all(feature = "kernel", feature = "release-pi4"))]
         crate::pi4_mcs_recorder::record_command_dispatch(
             line.ingest_ms,
             (line.root_observed_ms != 0).then_some(line.root_observed_ms),
-            self.now_ms,
+            dispatch_ms,
         );
         #[cfg(all(feature = "kernel", feature = "release-pi4"))]
         if let (Some(net), Some(connection_id)) = (self.net.as_mut(), line.connection_id) {
-            net.note_console_response_dispatch(connection_id, self.now_ms);
+            net.note_console_response_dispatch(connection_id, dispatch_ms);
         }
         self.handle_network_line(line.text);
     }
@@ -33065,6 +33305,13 @@ where
                             self.metrics.net_cyw43_transient_publication_reject_revoked,
                         ));
                         #[cfg(feature = "release-pi4")]
+                        let line_cyw43_productive_window = format_message(format_args!(
+                            "netstats: cyw43_productive_window schema=v1 opened={} idle_admitted={} closed={}",
+                            self.metrics.net_cyw43_productive_windows_opened,
+                            self.metrics.net_cyw43_productive_window_idle_admissions,
+                            self.metrics.net_cyw43_productive_windows_closed,
+                        ));
+                        #[cfg(feature = "release-pi4")]
                         let line_genet_compact = format_message(format_args!(
                             "netstats: genet_compact schema=v1 stage={} deferred={} fault={} unsupported={} dispatch={} stage_turns={} rotations={}",
                             self.metrics.net_direct_genet_compact_stage_published,
@@ -33318,6 +33565,7 @@ where
                         {
                             self.emit_console_line(line_cyw43_publication.as_str());
                             self.emit_console_line(line_cyw43_publication_cut.as_str());
+                            self.emit_console_line(line_cyw43_productive_window.as_str());
                             self.emit_console_line(line_genet_compact.as_str());
                             self.emit_console_line(line_genet_defer.as_str());
                             self.emit_console_line(line_genet_compose.as_str());
@@ -47298,7 +47546,7 @@ mod tests {
             })
             .collect();
         #[cfg(feature = "release-pi4")]
-        assert_eq!(diagnostic_lines.len(), 19, "{mirrored:?}");
+        assert_eq!(diagnostic_lines.len(), 20, "{mirrored:?}");
         #[cfg(all(feature = "release-qemu", not(feature = "release-pi4")))]
         assert_eq!(diagnostic_lines.len(), 14, "{mirrored:?}");
         assert!(
@@ -47347,6 +47595,13 @@ mod tests {
         assert!(
             mirrored
                 .iter()
+                .any(|line| line.starts_with("netstats: cyw43_productive_window schema=v1")),
+            "{mirrored:?}"
+        );
+        #[cfg(feature = "release-pi4")]
+        assert!(
+            mirrored
+                .iter()
                 .any(|line| line.starts_with("netstats: genet_compact schema=v1")),
             "{mirrored:?}"
         );
@@ -47369,6 +47624,7 @@ mod tests {
             mirrored.iter().all(|line| {
                 !line.starts_with("netstats: cyw43_publication schema=v1")
                     && !line.starts_with("netstats: cyw43_publication_cut schema=v1")
+                    && !line.starts_with("netstats: cyw43_productive_window schema=v1")
                     && !line.starts_with("netstats: genet_compact schema=v1")
                     && !line.starts_with("netstats: genet_defer schema=v1")
                     && !line.starts_with("netstats: genet_compose schema=v1")
@@ -51808,6 +52064,191 @@ mod tests {
         }
     }
 
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn cyw43_productive_activation_fence_is_exact_and_fail_closed() {
+        let identity = Cyw43ProductiveActivationIdentity {
+            lifetime: LinkedRuntimeCyw43DurableResume {
+                generation: 17,
+                pair_epoch: 23,
+                physical_lifetime_epoch: 29,
+            },
+            response_identity: ConsoleResponseIdentity {
+                generation: 7,
+                connection_id: 41,
+            },
+            accepted_commands: 13,
+        };
+        let baseline = Cyw43ProductiveActivationFenceEvidence {
+            expected: Some(identity),
+            current: Some(identity),
+            cyw43_lane_selected: true,
+            network_service_quarantined: false,
+            reboot_pending: false,
+            recovery_required: false,
+            containment_work_pending: false,
+            handoff_pending: false,
+            passive_admission_pending: false,
+            local_fault_pending: false,
+            physical_operator_work_pending: false,
+            physical_console_response_pending: false,
+        };
+        assert!(cyw43_productive_activation_fence_allows(baseline));
+
+        let zero_lifetime = Cyw43ProductiveActivationIdentity {
+            lifetime: LinkedRuntimeCyw43DurableResume {
+                generation: 0,
+                ..identity.lifetime
+            },
+            ..identity
+        };
+        let zero_pair_epoch = Cyw43ProductiveActivationIdentity {
+            lifetime: LinkedRuntimeCyw43DurableResume {
+                pair_epoch: 0,
+                ..identity.lifetime
+            },
+            ..identity
+        };
+        let zero_physical_lifetime = Cyw43ProductiveActivationIdentity {
+            lifetime: LinkedRuntimeCyw43DurableResume {
+                physical_lifetime_epoch: 0,
+                ..identity.lifetime
+            },
+            ..identity
+        };
+        let zero_response = Cyw43ProductiveActivationIdentity {
+            response_identity: ConsoleResponseIdentity {
+                generation: 0,
+                ..identity.response_identity
+            },
+            ..identity
+        };
+        let zero_connection = Cyw43ProductiveActivationIdentity {
+            response_identity: ConsoleResponseIdentity {
+                connection_id: 0,
+                ..identity.response_identity
+            },
+            ..identity
+        };
+        let invalid_command_epoch = Cyw43ProductiveActivationIdentity {
+            accepted_commands: u64::MAX,
+            ..identity
+        };
+        let rejected = [
+            Cyw43ProductiveActivationFenceEvidence {
+                expected: None,
+                ..baseline
+            },
+            Cyw43ProductiveActivationFenceEvidence {
+                current: None,
+                ..baseline
+            },
+            Cyw43ProductiveActivationFenceEvidence {
+                expected: Some(zero_lifetime),
+                current: Some(zero_lifetime),
+                ..baseline
+            },
+            Cyw43ProductiveActivationFenceEvidence {
+                expected: Some(zero_response),
+                current: Some(zero_response),
+                ..baseline
+            },
+            Cyw43ProductiveActivationFenceEvidence {
+                expected: Some(zero_pair_epoch),
+                current: Some(zero_pair_epoch),
+                ..baseline
+            },
+            Cyw43ProductiveActivationFenceEvidence {
+                expected: Some(zero_physical_lifetime),
+                current: Some(zero_physical_lifetime),
+                ..baseline
+            },
+            Cyw43ProductiveActivationFenceEvidence {
+                expected: Some(zero_connection),
+                current: Some(zero_connection),
+                ..baseline
+            },
+            Cyw43ProductiveActivationFenceEvidence {
+                expected: Some(invalid_command_epoch),
+                current: Some(invalid_command_epoch),
+                ..baseline
+            },
+            Cyw43ProductiveActivationFenceEvidence {
+                current: Some(Cyw43ProductiveActivationIdentity {
+                    lifetime: LinkedRuntimeCyw43DurableResume {
+                        pair_epoch: 24,
+                        ..identity.lifetime
+                    },
+                    ..identity
+                }),
+                ..baseline
+            },
+            Cyw43ProductiveActivationFenceEvidence {
+                current: Some(Cyw43ProductiveActivationIdentity {
+                    response_identity: ConsoleResponseIdentity {
+                        connection_id: 42,
+                        ..identity.response_identity
+                    },
+                    ..identity
+                }),
+                ..baseline
+            },
+            Cyw43ProductiveActivationFenceEvidence {
+                current: Some(Cyw43ProductiveActivationIdentity {
+                    accepted_commands: 14,
+                    ..identity
+                }),
+                ..baseline
+            },
+            Cyw43ProductiveActivationFenceEvidence {
+                cyw43_lane_selected: false,
+                ..baseline
+            },
+            Cyw43ProductiveActivationFenceEvidence {
+                network_service_quarantined: true,
+                ..baseline
+            },
+            Cyw43ProductiveActivationFenceEvidence {
+                reboot_pending: true,
+                ..baseline
+            },
+            Cyw43ProductiveActivationFenceEvidence {
+                recovery_required: true,
+                ..baseline
+            },
+            Cyw43ProductiveActivationFenceEvidence {
+                containment_work_pending: true,
+                ..baseline
+            },
+            Cyw43ProductiveActivationFenceEvidence {
+                handoff_pending: true,
+                ..baseline
+            },
+            Cyw43ProductiveActivationFenceEvidence {
+                passive_admission_pending: true,
+                ..baseline
+            },
+            Cyw43ProductiveActivationFenceEvidence {
+                local_fault_pending: true,
+                ..baseline
+            },
+            Cyw43ProductiveActivationFenceEvidence {
+                physical_operator_work_pending: true,
+                ..baseline
+            },
+            Cyw43ProductiveActivationFenceEvidence {
+                physical_console_response_pending: true,
+                ..baseline
+            },
+        ];
+        for evidence in rejected {
+            assert!(
+                !cyw43_productive_activation_fence_allows(evidence),
+                "WiFi productive activation authority must fail closed for {evidence:?}",
+            );
+        }
+    }
+
     #[cfg(all(feature = "kernel", feature = "net-console", feature = "release-pi4"))]
     #[test]
     fn clearing_unspent_cyw43_transient_credit_is_bounded_and_accounted() {
@@ -51834,9 +52275,23 @@ mod tests {
             service_turns: 9,
             pending_flush: PendingNetFlush::default(),
         });
+        pump.cyw43_productive_activation_identity = Some(Cyw43ProductiveActivationIdentity {
+            lifetime: LinkedRuntimeCyw43DurableResume {
+                generation: 17,
+                pair_epoch: 23,
+                physical_lifetime_epoch: 29,
+            },
+            response_identity: ConsoleResponseIdentity {
+                generation: 7,
+                connection_id: 41,
+            },
+            accepted_commands: 13,
+        });
 
         pump.clear_deferred_cyw43_transient_publication_credit();
         assert!(pump.deferred_cyw43_transient_publication_credit.is_none());
+        assert!(pump.cyw43_productive_activation_identity.is_none());
+        assert_eq!(pump.metrics.net_cyw43_productive_windows_closed, 1);
         assert_eq!(pump.metrics.net_cyw43_transient_publication_consumed, 0);
         assert_eq!(pump.metrics.net_cyw43_transient_publication_rejected, 1);
         assert_eq!(
@@ -51845,6 +52300,7 @@ mod tests {
         );
         pump.clear_deferred_cyw43_transient_publication_credit();
         assert_eq!(pump.metrics.net_cyw43_transient_publication_rejected, 1);
+        assert_eq!(pump.metrics.net_cyw43_productive_windows_closed, 1);
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
@@ -59605,12 +60061,46 @@ mod tests {
             passive_admission_pending: false,
             local_fault_pending: false,
         };
+        let command_continuation = direct_genet_productive_quantum_continuation_entitled(command)
+            .expect("an exact authenticated command must retain its bounded transaction");
         assert_eq!(
-            direct_genet_productive_quantum_continuation_entitled(command)
-                .map(|continuation| continuation.progress),
-            Some(DirectGenetProductiveProgress::CommandAccepted),
-            "a production Serial-start quantum may retain only the accepted command after returning to Serial",
+            command_continuation.progress,
+            DirectGenetProductiveProgress::CommandAccepted,
         );
+        assert!(
+            !command_continuation.opens_active_hot_tail(),
+            "dormant same-core mode cannot replace its exact YieldTo proof with root-local command progress",
+        );
+
+        let cross_core_command = DirectGenetProductiveQuantumEvidence {
+            before: DirectGenetProductiveQuantumSnapshot {
+                child_yield_calls: 0,
+                child_yield_counter_hz: 0,
+                child_yield_call_wall_scaled: 0,
+                child_yield_credit_scaled: 0,
+                ..command.before
+            },
+            after: DirectGenetProductiveQuantumSnapshot {
+                child_yield_calls: 0,
+                child_yield_counter_hz: 0,
+                child_yield_call_wall_scaled: 0,
+                child_yield_credit_scaled: 0,
+                ..command.after
+            },
+            continuation_mode: DirectGenetContinuationMode::CrossCoreSignalOnly,
+            ..command
+        };
+        let cross_core_command_continuation =
+            direct_genet_productive_quantum_continuation_entitled(cross_core_command)
+                .expect("an exact cross-core command must open its bounded transaction");
+        assert_eq!(
+            cross_core_command_continuation.progress,
+            DirectGenetProductiveProgress::CommandAccepted,
+        );
+        assert!(cross_core_command_continuation.opens_active_hot_tail());
+        assert!(cross_core_command_continuation.is_cross_core_signal_only_hot_tail());
+        assert_eq!(cross_core_command_continuation.child_credit_scaled(), 0);
+        assert_eq!(cross_core_command_continuation.child_credit_counter_hz(), 0);
 
         let stage_after = DirectGenetProductiveQuantumSnapshot {
             immediate_stage_turns: 10,
@@ -59677,7 +60167,7 @@ mod tests {
         );
         assert!(
             !cross_core_stage_continuation.opens_active_hot_tail(),
-            "stage-only authority is one-shot and cannot open the response-drain hot tail",
+            "stage-only authority is one-shot and cannot open the transaction tail",
         );
 
         let cross_core_command_and_stage = DirectGenetProductiveQuantumEvidence {
@@ -59696,8 +60186,8 @@ mod tests {
             DirectGenetProductiveProgress::CommandAcceptedAndStagePublished,
         );
         assert!(
-            !cross_core_command_and_stage_continuation.opens_active_hot_tail(),
-            "a fused stage remains one-shot until the child proves response drain",
+            cross_core_command_and_stage_continuation.opens_active_hot_tail(),
+            "a fused authenticated command/stage must retain the bounded transaction through its drain",
         );
 
         let command_stage_and_drain = DirectGenetProductiveQuantumEvidence {
@@ -59717,7 +60207,7 @@ mod tests {
             direct_genet_productive_quantum_continuation_entitled(command_stage_and_drain)
                 .map(|continuation| continuation.progress),
             Some(DirectGenetProductiveProgress::CommandAcceptedStagePublishedAndDrained),
-            "one command may retain only when its new batch also produces the exact drain in two bounded child calls",
+            "a fused command/stage/drain must retain its exact three-transition classification",
         );
         let cross_core_fused = DirectGenetProductiveQuantumEvidence {
             before: DirectGenetProductiveQuantumSnapshot {
@@ -60020,6 +60510,8 @@ mod tests {
             PiRootControlProductiveContinuation::for_test_completed_response(7, 17);
         let cross_core_completed_response =
             PiRootControlProductiveContinuation::for_test_cross_core_completed_response(7, 17);
+        let cross_core_command =
+            PiRootControlProductiveContinuation::for_test_cross_core_command(7, 17);
         let baseline = DirectGenetProductiveContinuationFenceEvidence {
             expected: Some(continuation),
             current_continuation_mode: Some(DirectGenetContinuationMode::SameCoreYieldTo),
@@ -60038,7 +60530,7 @@ mod tests {
         assert!(direct_genet_productive_continuation_fence_clear(baseline));
         assert!(
             !direct_genet_active_hot_tail_fence_clear(baseline),
-            "productive staging without a drained response cannot open the active tail",
+            "stage-only progress cannot mint transaction authority",
         );
         let active_baseline = DirectGenetProductiveContinuationFenceEvidence {
             expected: Some(completed_response),
@@ -60052,6 +60544,12 @@ mod tests {
         };
         assert!(direct_genet_active_hot_tail_fence_clear(
             cross_core_active_baseline
+        ));
+        assert!(direct_genet_active_hot_tail_fence_clear(
+            DirectGenetProductiveContinuationFenceEvidence {
+                expected: Some(cross_core_command),
+                ..cross_core_active_baseline
+            }
         ));
         assert!(
             !direct_genet_active_hot_tail_fence_clear(

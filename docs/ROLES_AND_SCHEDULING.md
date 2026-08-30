@@ -387,14 +387,18 @@ does not call `SchedContext_YieldTo`, pre-drain the child SC, or subtract child
 credit. Same-core and cross-core progress authority remain distinct and
 fail-closed.
 
-An exact authenticated generation/connection `OutputDrained` transition may
-open one unslid root-local active tail for strictly less than 8 ms and no more
-than 64 complete ordinary physical-rotor quanta. The root SC remains the hard
-CPU bound. Every quantum rechecks passive admission, physical operator input or
+An exact authenticated cross-core generation/connection command acceptance may
+open one unslid root-local transaction tail before stage/drain publication; an
+exact `OutputDrained` transition may also open or advance it. Stage-only
+progress cannot mint the tail, and same-core progress retains its exact
+successful-`YieldTo` requirement. The tail lasts strictly less than 8 ms and no
+more than 64 complete ordinary physical-rotor quanta. The root SC remains the
+hard CPU bound. Every quantum rechecks passive admission, physical operator input or
 response, recovery, fault, containment, quarantine, reboot, handoff, identity,
-final Serial phase, counter frequency, wall expiry, and the shared cap. Empty,
-stale, invalid, or unproductive work closes the tail. A queued second command
-remains behind ordinary Serial/LocalSeat/Dispatch/Display debt. CYW43 keeps its
+final Serial phase, counter frequency, wall expiry, and the shared cap. A
+transient-empty complete rotor consumes only that same unslid window; stale,
+invalid, or fenced work closes it. A queued second command remains behind
+ordinary Serial/LocalSeat/Dispatch/Display debt. CYW43 keeps its
 ordinary connection-bound cursor and the distinct guarded 3,000-us/64-unit
 contract above; mediated WiFi cannot acquire direct-GENET tail authority.
 
@@ -499,14 +503,17 @@ non-YieldTo direct-VirtIO behavior. These are static admission bounds, not
 measured packet latency. Fresh same-image Pi load evidence must still prove
 authenticated response cadence.
 
-After an exact authenticated direct-GENET response drain, root may retain one
-unslid local active tail for strictly less than 8 ms and at most 64 complete
-physical-rotor quanta. The root SC remains the hard CPU bound. Every admitted
+After an exact authenticated cross-core direct-GENET command acceptance or
+response drain, root may retain one unslid local transaction tail for strictly
+less than 8 ms and at most 64 complete physical-rotor quanta. Stage-only
+progress cannot mint it, and same-core mode still requires exact successful
+`YieldTo` evidence. The root SC remains the hard CPU bound. Every admitted
 quantum rechecks exact generation, connection, final Serial phase, counter
 frequency, passive admission, physical operator/response priority, local fault,
 recovery, containment, quarantine, reboot, handoff, wall expiry, and the shared
-cap. An idle, stale, drifted, faulted, or operator-owned cut closes the tail;
-it never grants child work, another packet operation, a retry, or a new refill.
+cap. Transient-empty rotors share the same wall and quantum bounds; a stale,
+drifted, faulted, or operator-owned cut closes the tail. It never grants child
+work, another packet operation, a retry, or a new refill.
 Mediated WiFi cannot acquire direct-GENET tail authority.
 
 The Pi CYW43 boot supervisor consumes the root and console generated response bounds only

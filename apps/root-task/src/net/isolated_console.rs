@@ -2030,7 +2030,10 @@ impl<D: NetDevice> NetPoller for IsolatedNetworkConsole<D> {
             && self.active_connection == Some(connection_id)
             && self.authenticated_connection == Some(connection_id)
         {
-            isolated_seam_observation_ms(dispatch_ms)
+            // The caller has already sampled the common absolute Pi seam
+            // epoch. Preserve that exact instant for both recorder consumers;
+            // sampling again here would manufacture dispatch skew.
+            dispatch_ms
         } else {
             0
         };

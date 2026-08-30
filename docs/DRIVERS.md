@@ -1262,16 +1262,21 @@ transport:
   pre-drain, or child-consumed credit; a failed or missing same-core Yield can
   never be reclassified as cross-core progress. The child executes concurrently
   on its own hard-bounded SC. QEMU retains its existing direct-VirtIO selector.
-- An exact authenticated direct-GENET `OutputDrained` transition may open one
-  root-local active tail for strictly less than 8 ms and no more than 64
-  complete physical-rotor quanta. The first drain's CNTVCT sample is the unslid
-  wall origin, and the root's `5,500/10,000 us` SC remains the hard execution
-  bound. Every quantum rechecks generation, connection, final Serial phase,
+- An exact authenticated cross-core direct-GENET command acceptance may open
+  one root-local transaction tail before its stage/drain publications; an
+  exact `OutputDrained` transition may also open or advance that authority.
+  Stage-only progress cannot mint it, and dormant same-core progress still
+  requires exact successful `YieldTo` evidence. The first qualifying
+  transition's CNTVCT sample is the unslid wall origin. The tail remains
+  strictly below 8 ms and no more than 64 complete physical-rotor quanta, and
+  the root's `5,500/10,000 us` SC remains the hard execution bound. Every
+  quantum rechecks generation, connection, final Serial phase,
   passive admission, physical operator/response priority, local fault,
   recovery, containment, quarantine, reboot, handoff, counter frequency, wall
-  expiry, and the shared cap. Empty, stale, backpressured, faulted, or
-  operator-owned work closes the tail without a retry, second packet operation,
-  new refill, or child authority. A second command remains behind complete
+  expiry, and the shared cap. A transient-empty complete rotor may consume only
+  the remainder of that same unslid tail; stale, backpressured, faulted, or
+  operator-owned work closes it without a retry, second packet operation, new
+  refill, or child authority. A second command remains behind complete
   operator/display debt. Mediated WiFi cannot mint direct-GENET tail authority.
 - A parsed Pi passive-service command whose strict reserve lease expires is
   retained across at most one completely new Yield/refill attempt. The retry
@@ -1401,10 +1406,14 @@ not current-candidate performance or acceptance proof.
   attached, bootstrap-operator, and bootstrap-driver cuts plus cap, clock,
   reserve, and policy reasons. These observations can locate an off-CPU MCS
   seam but do not independently identify a kernel refill.
-- Pi `netstats` retains five additive fast-path rows. Copied WiFi counts
+- Pi `netstats` retains six additive fast-path rows. Copied WiFi counts
   transient-publication candidates, mint/consume/reject totals, the sticky
   reason mask, and rejects at the exact probe, next-composer entry, final
-  pre-Network, or revocation cut. Direct GENET counts the typed response-compose
+  pre-Network, or revocation cut. `cyw43_productive_window` counts exact
+  same-lifetime, authenticated-generation/connection/accepted-command window
+  opens, transient-empty admissions, and closes inside the unchanged
+  3,000-us/64-turn activation. The counters grant no refill, retry, or device
+  authority. Direct GENET counts the typed response-compose
   outcomes `composed`, `no_pending`, `not_sealed`, `backpressure`, and
   `identity_drift`. `composed` proves a sealed `SyncCapture` moved into the
   adapter. `no_pending` may reach the same ordinary stage path only when an
@@ -1431,7 +1440,7 @@ not current-candidate performance or acceptance proof.
   fallback. Zero/backwards pairs are invalid and valid totals saturate.
   Collection never calls `SchedContext_Consumed`, changes a scheduling
   decision, signals a task, retries work, or executes accounting writes on the
-  protected QEMU release path; QEMU emits none of the five rows. These rows and
+  protected QEMU release path; QEMU emits none of the six rows. These rows and
   the explicit `smp mcs` batch are diagnostic only; fresh exact-image Pi traffic
   and benchmark evidence remain required for correctness or performance claims.
 

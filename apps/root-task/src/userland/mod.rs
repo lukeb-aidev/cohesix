@@ -1198,20 +1198,42 @@ impl DeferredCyw43ActivationWindow {
             self.productive_units = self.productive_units.saturating_add(1);
         }
     }
+
+    /// Whether exact useful work has already opened this unslid activation.
+    /// A subsequent transient-empty child observation may re-enter loop-top
+    /// arbitration, but the existing counter guard and shared 64-turn cap are
+    /// still checked before another operator or driver unit executes.
+    const fn useful_progress_observed(self) -> bool {
+        self.productive_units != 0
+    }
 }
 
-/// One physical-Pi root-control activation retained across exact productive
-/// GENET quanta and, after an authenticated response drain, a bounded active
-/// tail.
+#[cfg(all(
+    feature = "serial-console",
+    feature = "kernel",
+    feature = "net-console"
+))]
+fn deferred_cyw43_activation_retains_after_driver(
+    continuation: DeferredCyw43McsContinuation,
+    transient_empty_pending: bool,
+    useful_progress_observed: bool,
+) -> bool {
+    continuation == DeferredCyw43McsContinuation::Continue
+        || (transient_empty_pending && useful_progress_observed)
+}
+
+/// One physical-Pi root-control activation retained across an exact
+/// authenticated GENET transaction and its bounded active tail.
 ///
 /// This deliberately reuses the same generated `budget - WCET` cut as the
 /// deferred CYW43 supervisor. The window begins only at the CNTVCT value
 /// captured by `yield_now`, never slides on progress or preemption, and admits
-/// no new strict-reserve quantum at equality. A response drain may open one
-/// unslid eight-millisecond active tail so the next sequential TCP request can
-/// arrive without paying another whole selected-MCS Yield period. Every tail
-/// turn still runs the complete physical rotor, and both the scheduling
-/// context and fixed shared quantum cap remain independent hard bounds.
+/// no new strict-reserve quantum at equality. Exact command acceptance opens
+/// one unslid eight-millisecond transaction tail so cross-core stage/drain
+/// publication and the next sequential TCP request do not each pay a whole
+/// selected-MCS Yield period. Every tail turn still runs the complete physical
+/// rotor, and both the scheduling context and fixed shared quantum cap remain
+/// independent hard bounds.
 #[cfg(all(
     any(
         test,
@@ -5079,10 +5101,23 @@ where
                 }
             }
         }
-        if continuation == DeferredCyw43McsContinuation::Continue {
+        if deferred_cyw43_activation_retains_after_driver(
+            continuation,
+            matches!(
+                turn,
+                Cyw43BootstrapTurnOutcome::Pending {
+                    operation_executed: false,
+                    ..
+                }
+            ),
+            activation_window.useful_progress_observed(),
+        ) {
             // The scoped outer-event finalizer above has retired the exact
             // one-operation lease. Re-enter only at loop-top fault/EventPump
-            // arbitration while retaining this guarded MCS activation.
+            // arbitration while retaining this guarded MCS activation. Like
+            // QEMU's useful-progress window, transient-empty child observations
+            // do not forfeit the refill; every repeat still crosses the next
+            // top-of-loop counter/cap and operator/recovery arbitration.
             continue 'supervisor;
         }
         deferred_cyw43_yield_and_reset(pump, &mut activation_window);
@@ -7596,8 +7631,10 @@ mod tests {
         );
 
         let mut window = super::DeferredCyw43ActivationWindow::new();
+        assert!(!window.useful_progress_observed());
         assert!(window.turn_admitted(100, 1_000_000, pi_reserve));
         window.record_operator_turn();
+        assert!(!window.useful_progress_observed());
         assert!(window.turn_admitted(3_099, 1_000_000, pi_reserve));
         assert!(
             !window.turn_admitted(3_100, 1_000_000, pi_reserve),
@@ -7632,6 +7669,53 @@ mod tests {
         assert!(window.turn_admitted(0, 54_000_000, None));
         window.record_driver_turn(false);
         assert!(!window.turn_admitted(0, 54_000_000, None));
+
+        window.reset();
+        assert!(window.turn_admitted(1, 54_000_000, pi_reserve));
+        window.record_driver_turn(false);
+        assert!(
+            !window.useful_progress_observed(),
+            "an empty child observation cannot open the useful-progress window",
+        );
+        window.reset();
+        assert!(window.turn_admitted(1, 54_000_000, pi_reserve));
+        window.record_driver_turn(true);
+        assert!(
+            window.useful_progress_observed(),
+            "one exact child operation keeps a transient-empty observation inside the same unslid activation",
+        );
+        assert!(super::deferred_cyw43_activation_retains_after_driver(
+            super::DeferredCyw43McsContinuation::Yield,
+            true,
+            window.useful_progress_observed(),
+        ));
+        assert!(!super::deferred_cyw43_activation_retains_after_driver(
+            super::DeferredCyw43McsContinuation::Yield,
+            false,
+            window.useful_progress_observed(),
+        ));
+        assert!(!super::deferred_cyw43_activation_retains_after_driver(
+            super::DeferredCyw43McsContinuation::Yield,
+            true,
+            false,
+        ));
+
+        window.reset();
+        assert!(window.turn_admitted(1, 54_000_000, pi_reserve));
+        window.record_driver_turn(true);
+        for _ in 1..super::DEFERRED_CYW43_ACTIVATION_MAX_PRODUCTIVE_UNITS {
+            assert!(super::deferred_cyw43_activation_retains_after_driver(
+                super::DeferredCyw43McsContinuation::Yield,
+                true,
+                window.useful_progress_observed(),
+            ));
+            assert!(window.turn_admitted(1, 54_000_000, pi_reserve));
+            window.record_driver_turn(false);
+        }
+        assert!(
+            !window.turn_admitted(1, 54_000_000, pi_reserve),
+            "repeated transient-empty observations cannot cross the shared 64-turn cap",
+        );
 
         window.reset();
         assert!(window.turn_admitted(1, 54_000_000, pi_reserve));
@@ -7750,7 +7834,7 @@ mod tests {
         feature = "net-console"
     ))]
     #[test]
-    fn pi_genet_active_hot_tail_requires_exact_drain_is_unslid_and_shares_cap() {
+    fn pi_genet_transaction_tail_requires_exact_command_or_drain_is_unslid_and_shares_cap() {
         let reserve = super::deferred_cyw43_activation_reserve_us(5_500, 2_500, true);
         let preleaf = super::pi_root_control_active_hot_tail_preleaf_us(8_000, 2_500, true);
         assert_eq!(preleaf, Some(5_500));
@@ -7773,12 +7857,23 @@ mod tests {
             crate::event::PiRootControlProductiveContinuation::for_test_cross_core_completed_response(
                 7, 17,
             );
+        let cross_core_command =
+            crate::event::PiRootControlProductiveContinuation::for_test_cross_core_command(7, 17);
         let mut window = super::PiRootControlProductiveWindow::new();
 
         assert!(window.restart_after_yield(100, 1_000_000, reserve));
         assert!(window.record_completed_quantum_at(stage_only, 200));
         assert_eq!(window.active_hot_tail_identity(), None);
         assert!(!window.active_hot_tail_quantum_admitted(201, 1_000_000, preleaf));
+
+        assert!(window.restart_after_yield(100, 1_000_000, reserve));
+        assert!(window.record_completed_quantum_at(cross_core_command, 200));
+        assert_eq!(
+            window.active_hot_tail_identity(),
+            Some(cross_core_command),
+            "exact authenticated command acceptance opens the transaction before cross-core stage/drain publication",
+        );
+        assert!(window.active_hot_tail_quantum_admitted(5_699, 1_000_000, preleaf));
 
         assert!(window.restart_after_yield(100, 1_000_000, reserve));
         assert!(window.record_completed_quantum_at(cross_core_drained, 200));

@@ -203,6 +203,17 @@ split into bounded records and service units. An authenticated response lane
 receives bounded flush priority without starving physical operator input,
 fatal output, timers, containment, or ordinary service.
 
+Pi network cadence may retain only an exact authenticated transaction inside
+the existing unslid scheduling bounds: direct GENET remains below 8 ms and 64
+complete rotors, while mediated WiFi remains below its generated 3,000-us cut
+and 64 turns. GENET command acceptance is cross-core signal-only; same-core
+progress still requires successful `YieldTo` evidence. WiFi additionally binds
+the selected physical lifetime, authenticated generation/connection, and
+accepted-command epoch. Identity drift, operator or passive work, recovery,
+containment, quarantine, reboot, handoff, local fault, invalid time, or cap
+expiry fails closed without a new refill, retry, packet owner, or device
+authority.
+
 Routine diagnostics are best-effort and may be dropped under their declared
 bound. Security-relevant authority, lifecycle, completion, and fault decisions
 remain in typed records or evidence surfaces rather than relying on an

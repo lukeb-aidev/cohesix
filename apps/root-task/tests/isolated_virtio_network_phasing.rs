@@ -1497,6 +1497,26 @@ fn pi_mcs_causal_timestamps_do_not_expand_qemu_runtime_state() {
     assert!(response_batch.contains(
         "#[cfg(any(test, feature = \"release-pi4\"))]\n            staged_ms: _staged_ms,"
     ));
+
+    let dispatch_note = section(
+        isolated,
+        "fn note_console_response_dispatch(&mut self, connection_id: u64, dispatch_ms: u64)",
+        "fn console_response_lane",
+    );
+    assert!(dispatch_note.contains("dispatch_ms\n        } else"));
+    assert!(!dispatch_note.contains("isolated_seam_observation_ms(dispatch_ms)"));
+
+    let event = include_str!("../src/event/mod.rs");
+    let dispatch = section(
+        event,
+        "fn handle_pinned_network_line(&mut self, line: ConsoleLine)",
+        "fn schedule_net_post_dispatch_flush",
+    );
+    assert!(dispatch.contains(
+        "let dispatch_ms = crate::net::isolated_seam::isolated_seam_observation_ms(self.now_ms);"
+    ));
+    assert!(dispatch.contains("record_command_dispatch(\n            line.ingest_ms,"));
+    assert!(dispatch.contains("net.note_console_response_dispatch(connection_id, dispatch_ms);"));
 }
 
 #[test]

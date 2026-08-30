@@ -88,14 +88,17 @@ copied WiFi's one-shot transient publication credit, and the bounded causal
 MCS accumulators change no console command, TCP/REST framing, namespace,
 authentication, generated manifest/profile contract, Python API, `.coh`
 grammar, benchmark workload, arithmetic, evidence record, or report schema.
-Pi `netstats` adds five fast-path rows (`cyw43_publication`,
-`cyw43_publication_cut`, `genet_compact`, `genet_compose`, and `genet_defer`)
+Pi `netstats` adds six fast-path rows (`cyw43_publication`,
+`cyw43_publication_cut`, `cyw43_productive_window`, `genet_compact`,
+`genet_compose`, and `genet_defer`)
 plus five isolated-seam rows only when that timing snapshot is available. The detailed
 22-row composer/Yield batch is intentionally restricted to explicit `smp mcs`;
 it is not appended to ordinary `netstats`. Existing key/prefix-based consumers
 ignore these unknown additive rows unless they are later taught to consume
 them; no current parser derives readiness, quarantine, throughput, latency, or
-acceptance from their presence. Every aggregate compact Deferred increments
+acceptance from their presence. `cyw43_productive_window` is diagnostic-only:
+its exact-identity `opened`, `idle_admitted`, and `closed` counters grant no
+refill, retry, network readiness, or device authority. Every aggregate compact Deferred increments
 exactly one `genet_defer` reason counter, so the reason-counter sum equals the
 aggregate `genet_compact deferred` count; `compose_open` represents typed
 `NotSealed`. The row is classification only, not a retry or admission signal.

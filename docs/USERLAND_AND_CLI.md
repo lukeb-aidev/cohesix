@@ -208,13 +208,14 @@ These fields are zero outside the exact Pi direct-GENET path. They explain
 cadence decisions but do not prove function, throughput, latency, or
 acceptance.
 
-Pi release `netstats` appends five bounded fast-path rows and, when the selected
+Pi release `netstats` appends six bounded fast-path rows and, when the selected
 isolated-network implementation exposes timing evidence, five causal seam
 rows. Their grammar is:
 
 ```text
 netstats: cyw43_publication schema=v1 candidates=<u64> minted=<u64> consumed=<u64> rejected=<u64> reasons=0x<hex>
 netstats: cyw43_publication_cut schema=v1 probe=<u64> entry=<u64> pre_network=<u64> revoked=<u64>
+netstats: cyw43_productive_window schema=v1 opened=<u64> idle_admitted=<u64> closed=<u64>
 netstats: genet_compact schema=v1 stage=<u64> deferred=<u64> fault=<u64> unsupported=<u64> dispatch=<u64> stage_turns=<u64> rotations=<u64>
 netstats: genet_compose schema=v1 composed=<u64> no_pending=<u64> not_sealed=<u64> backpressure=<u64> identity_drift=<u64>
 netstats: genet_defer schema=v1 passive=<u64> command=<u64> compose_open=<u64> compose_backpressure=<u64> fence=<u64> prior_batch=<u64> control_busy=<u64> output_missing=<u64> stage_backpressure=<u64>
@@ -228,7 +229,13 @@ fence `0x2`, final pre-Network drift `0x4`, and non-material or empty
 publication `0x8`. `cyw43_publication_cut` assigns each rejection to the exact
 proof probe, next-composer entry, final pre-Network revalidation, or later
 revocation cut. The cut counters classify the aggregate `rejected` total; they
-do not create a retry or continuation. One credit may be rebased after the
+do not create a retry or continuation. `cyw43_productive_window` counts windows
+opened by exact same-lifetime, authenticated generation/connection and
+accepted-command evidence, transient-empty rotor admissions within that exact
+window, and closes. The enclosing unchanged 3,000-us/64-turn activation and
+all operator, passive, recovery, containment, quarantine, reboot, handoff, and
+fault fences remain authoritative; these counters grant no refill, retry,
+readiness, or device authority. One credit may be rebased after the
 ordinary Dispatch cut only for one exact authenticated network command: the
 command count advances by one, an empty response lane becomes one exact
 nonempty sealed completed lane, and an empty flush becomes one bounded
