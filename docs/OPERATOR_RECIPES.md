@@ -55,18 +55,33 @@ python3 -m pip install -e tools/cohesix-py
 cohesix-playbook --list
 ```
 
-The catalogue includes Jetson traffic safety, manufacturing safety, critical
-infrastructure, private PEFT, mixed closed-loop AI, medical edge AI, logistics,
-endpoint compliance, and release-factory examples. Choose the closest shape
-and render its schedule, lease, approval, export, and host-probe plan without
-touching a live target:
+The catalogue contains nine patterns. Start with one of these four; together
+they show the clearest reasons to put Cohesix between an AI workload and the
+systems it can change:
+
+| Situation to explore | Playbook | Why Cohesix is useful |
+| --- | --- | --- |
+| A factory needs visual QA without starving a higher-priority safety detector | `jetson-manufacturing-safety` | Makes GPU lease, quota, priority, and preemption decisions explicit and reviewable. |
+| A team trains or adapts centrally, then serves on a Jetson-class edge node | `mixed-closed-loop-ai-factory` | Links training and inference waves to an export window and bounded GPU lease instead of hiding the handoff in scripts. |
+| Private data must produce LoRA adapters without giving the trainer control of the fleet | `mac-private-peft-grid` | Separates adapter work, approval, export, and activation authority while retaining a rollback-oriented trail. |
+| A medical edge workflow needs narrow resource use and an explainable export boundary | `mixed-medical-edge-ai` | Combines a small lease quota, explicit export window, and evidence-oriented control flow for later review. |
+
+Select an identifier from the table and render its schedule, lease, approval,
+export, and host-probe plan without touching a live target:
 
 ```bash
+playbook="mixed-closed-loop-ai-factory"
+
 cohesix-playbook \
-  --playbook mixed-closed-loop-ai-factory \
+  --playbook "$playbook" \
   --dry-run \
   --mock
 ```
+
+Use `cohesix-playbook --list` for the five additional traffic-safety,
+critical-infrastructure, logistics, endpoint-compliance, and release-factory
+patterns. They use the same command form and do not need duplicate runbooks
+here.
 
 Use the artifacts under `out/examples/playbooks/` to ask concrete questions:
 Which GPU or service is scarce? Which action needs approval? What must be
