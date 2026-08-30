@@ -185,6 +185,25 @@ turn, last material progress, per-unit counts, bounded command/output queues,
 pending egress and response-drain state, and ingress backpressure/drop. These
 are diagnostic counters, not a substitute for the terminal `nettest`, ICMP,
 authenticated TCP, or target-performance evidence.
+The additive direct-GENET cadence fields are:
+
+```text
+isolated_progress: pcont=<candidates>/<admitted>/<rejected> peff_us=<n> preason=0x<n>
+isolated_units: output_ok=<n>
+isolated_state: ycalls=<n> ycredit_us=<n> yinvalid=0x<n>
+```
+
+`pcont` counts candidate, admitted, and rejected retained root quanta;
+`peff_us` is the most recent conservatively credited effective root interval.
+`preason` uses `0x01` fence, `0x02` cap, `0x04` clock, `0x08` policy,
+`0x10` counter, `0x20` arithmetic, `0x40` credit, and `0x80` token bits.
+`output_ok` distinguishes attempted output turns from durable output-stage
+successes. `ycalls` and `ycredit_us` report direct child scheduling calls and
+their bounded child-execution credit; `yinvalid` uses `0x01` pre-drain,
+`0x02` counter/frequency, `0x04` syscall result, and `0x08` overflow bits.
+These fields are zero outside the exact Pi direct-GENET path. They explain
+cadence decisions but do not prove function, throughput, latency, or
+acceptance.
 
 When the exact Pi direct-GENET generation is active, one `netstats` command
 also runs one bounded causal refresh and emits a complete available snapshot in
@@ -230,7 +249,10 @@ acceptance.
 
 On the physical Pi local seat, serial may show `cohesix>` while USB is still
 starting, but HDMI does not show the interactive prompt until USB command input
-is admitted and the display path is healthy. `USB controller starting...` is
+is admitted, the display path is healthy, and the canonical
+`Cohesix console ready` rendering has been queued ahead of the prompt. The
+passive `[drivers] USB console ready` timing record may still arrive later and
+does not control that physical rendering order. `USB controller starting...` is
 followed by bounded controller, keyboard-enumeration, or first-report feedback;
 an unchanged stage appears at most once every two seconds. `USB console ready`
 reports the observed stage timings, but it is a passive EventPump record and may
@@ -238,7 +260,12 @@ appear after the local seat has already released the prompt from that same
 readiness transition. Its relative ordering does not gate the prompt. Once
 visible, typed USB bytes update one canonical command row, backspace cannot
 erase the prompt prefix, and held up/down arrows use counter-paced repeat plus
-completed one-row viewport steps. If command readiness is invalidated, HDMI
+one desired-row viewport steps. Accumulated rendering debt is coalesced into
+the largest exact symmetric CSI `nT`/`nS` span that fits the bounded 512-byte
+HDMI frame. Receipts are generation-anchored; history eviction, generation
+wrap, invalid anchors, or missing rows collapse to one canonical redraw, and
+pending live-tail bytes cannot be overtaken when scrolling away from the tail.
+If command readiness is invalidated, HDMI
 retracts the prompt and stale console-ready banner while preserving the typed
 suffix, and restores them only after fresh readiness. This changes no command
 grammar or USB/HDMI authority. The isolated USB runtime additionally publishes

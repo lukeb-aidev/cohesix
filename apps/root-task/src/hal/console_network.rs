@@ -53,6 +53,16 @@ use crate::console_network_service::{
     CONSOLE_NETWORK_RUNTIME_LOAD_LIMIT_VADDR, CONSOLE_NETWORK_RUNTIME_LOAD_PAGES, SERVICE_TASK_ID,
 };
 use crate::critical_tcb::GenerationIdentity;
+use crate::net::DirectGenetYieldAccounting;
+#[cfg(all(
+    feature = "kernel",
+    feature = "release-pi4",
+    feature = "net-backend-genet-direct",
+    target_arch = "aarch64",
+    target_os = "none",
+    sel4_config_kernel_mcs
+))]
+use crate::net::DIRECT_GENET_YIELD_ACCOUNTING_INVALID_PREDRAIN;
 use crate::sel4::{self, RamFrame, RevokeAnchorVSpaceTracker};
 
 const TRANSLATION_SLOT_COUNT: usize = 8;
@@ -110,6 +120,13 @@ const DIRECT_GENET_CONTROL_VADDR: usize = 0x7208_0000;
 const DIRECT_GENET_RX_VADDR: usize = DIRECT_GENET_CONTROL_VADDR + SHARED_PAGE_BYTES;
 const DIRECT_GENET_TX_VADDR: usize =
     DIRECT_GENET_RX_VADDR + DIRECT_GENET_RX_SLOT_COUNT * SHARED_PAGE_BYTES;
+
+/// Return whether this committed signal will enter the exact direct-GENET
+/// same-core child call and therefore requires a fresh SC accounting drain.
+/// Mediated WiFi shares the Pi binary but must remain signal-only.
+const fn direct_genet_predrain_required(runtime_direct_genet: bool, yield_admitted: bool) -> bool {
+    runtime_direct_genet && yield_admitted
+}
 
 fn sample_direct_genet_runtime_diagnostic(
     control_root_ptr: usize,
@@ -338,6 +355,7 @@ pub struct ConsoleNetworkRuntime {
     containment_started: bool,
     contained: bool,
     containment: ConsoleNetworkContainmentCursor,
+    direct_genet_yield_accounting: DirectGenetYieldAccounting,
 }
 
 impl ConsoleNetworkRuntime {
@@ -662,10 +680,10 @@ impl ConsoleNetworkRuntime {
         Ok(())
     }
 
-    fn yield_to_child_after_committed_signal(&self) -> Result<(), BoundaryError> {
+    fn committed_signal_yield_admitted(&self) -> Result<bool, BoundaryError> {
         let contract = self.boundary.contract();
         if !contract.yield_to_child_after_signal {
-            return Ok(());
+            return Ok(false);
         }
         if !self.activated
             || self.contained
@@ -674,41 +692,122 @@ impl ConsoleNetworkRuntime {
         {
             return Err(BoundaryError::HandoffFailed);
         }
-        if !console_network_yield_to_admitted(ConsoleNetworkYieldToAdmission {
-            profile_enabled: contract.yield_to_child_after_signal,
-            runtime_direct_virtio: self.direct_virtio(),
-            runtime_direct_genet: self.direct_genet(),
-            service_state: self.boundary.state(),
-            signal_committed: true,
-            activated: self.activated,
-            containment_started: self.containment_started,
-            contained: self.contained,
-            scheduling_context_present: self.scheduling_context != sel4_sys::seL4_CapNull,
-        }) {
+        Ok(console_network_yield_to_admitted(
+            ConsoleNetworkYieldToAdmission {
+                profile_enabled: contract.yield_to_child_after_signal,
+                runtime_direct_virtio: self.direct_virtio(),
+                runtime_direct_genet: self.direct_genet(),
+                service_state: self.boundary.state(),
+                signal_committed: true,
+                activated: self.activated,
+                containment_started: self.containment_started,
+                contained: self.contained,
+                scheduling_context_present: self.scheduling_context != sel4_sys::seL4_CapNull,
+            },
+        ))
+    }
+
+    fn yield_to_child_after_committed_signal(
+        &mut self,
+        yield_admitted: bool,
+        predrain_succeeded: bool,
+    ) -> Result<(), BoundaryError> {
+        if !yield_admitted {
             return Ok(());
         }
-        #[cfg(all(feature = "kernel", sel4_config_kernel_mcs))]
+        #[cfg(all(
+            feature = "kernel",
+            feature = "release-pi4",
+            feature = "net-backend-genet-direct",
+            target_arch = "aarch64",
+            target_os = "none",
+            sel4_config_kernel_mcs
+        ))]
         {
+            let counter_hz = crate::arch::aarch64::timer::timer_freq_hz();
+            let started_ticks = crate::arch::aarch64::timer::timer_counter_ticks();
+            let yielded = sel4::yield_to_sched_context(self.scheduling_context);
+            let finished_ticks = crate::arch::aarch64::timer::timer_counter_ticks();
+            self.direct_genet_yield_accounting.record_call(
+                predrain_succeeded,
+                counter_hz,
+                started_ticks,
+                finished_ticks,
+                yielded.as_ref().ok().copied(),
+            );
+            yielded
+                .map(|_| ())
+                .map_err(|_| BoundaryError::HandoffFailed)
+        }
+        #[cfg(all(
+            feature = "kernel",
+            sel4_config_kernel_mcs,
+            not(all(
+                feature = "release-pi4",
+                feature = "net-backend-genet-direct",
+                target_arch = "aarch64",
+                target_os = "none"
+            ))
+        ))]
+        {
+            let _ = predrain_succeeded;
             sel4::yield_to_sched_context(self.scheduling_context)
                 .map(|_| ())
                 .map_err(|_| BoundaryError::HandoffFailed)
         }
         #[cfg(not(all(feature = "kernel", sel4_config_kernel_mcs)))]
         {
+            let _ = predrain_succeeded;
             Err(BoundaryError::HandoffFailed)
         }
     }
 
-    fn signal_committed_child_work(&self, wake_index: usize) -> Result<(), BoundaryError> {
+    fn signal_committed_child_work(&mut self, wake_index: usize) -> Result<(), BoundaryError> {
         let wake_cap = self
             .root_wake_caps
             .get(wake_index)
             .copied()
             .filter(|cap| *cap != sel4_sys::seL4_CapNull)
             .ok_or(BoundaryError::HandoffFailed)?;
+        let yield_admitted = self.committed_signal_yield_admitted()?;
+        #[cfg(all(
+            feature = "kernel",
+            feature = "release-pi4",
+            feature = "net-backend-genet-direct",
+            target_arch = "aarch64",
+            target_os = "none",
+            sel4_config_kernel_mcs
+        ))]
+        let predrain_succeeded = {
+            if direct_genet_predrain_required(self.direct_genet(), yield_admitted) {
+                let succeeded = sel4::sched_context_consumed(self.scheduling_context).is_ok();
+                if !succeeded {
+                    self.direct_genet_yield_accounting
+                        .invalidate(DIRECT_GENET_YIELD_ACCOUNTING_INVALID_PREDRAIN);
+                }
+                succeeded
+            } else {
+                true
+            }
+        };
+        #[cfg(not(all(
+            feature = "kernel",
+            feature = "release-pi4",
+            feature = "net-backend-genet-direct",
+            target_arch = "aarch64",
+            target_os = "none",
+            sel4_config_kernel_mcs
+        )))]
+        let predrain_succeeded = true;
         fence(Ordering::Release);
         sel4::signal_unchecked(wake_cap);
-        self.yield_to_child_after_committed_signal()
+        self.yield_to_child_after_committed_signal(yield_admitted, predrain_succeeded)
+    }
+
+    /// Return fail-closed accounting for exact same-core direct-GENET YieldTo.
+    #[must_use]
+    pub const fn direct_genet_yield_accounting(&self) -> DirectGenetYieldAccounting {
+        self.direct_genet_yield_accounting
     }
 
     /// Stage one virtual/admitted NIC packet and signal its exact one-hot wake.
@@ -1641,6 +1740,7 @@ fn construct_generation(
             DIRECT_DMA_FRAME_COUNT as u8,
             direct_genet_frame_count,
         ),
+        direct_genet_yield_accounting: DirectGenetYieldAccounting::default(),
     })
 }
 
@@ -2385,6 +2485,19 @@ mod tests {
     struct AlignedControlPage([u8; SHARED_PAGE_BYTES]);
 
     #[test]
+    fn direct_genet_predrain_is_exact_to_the_admitted_runtime() {
+        assert!(direct_genet_predrain_required(true, true));
+        assert!(
+            !direct_genet_predrain_required(false, true),
+            "mediated WiFi stays signal-only even in the direct-GENET Pi binary",
+        );
+        assert!(
+            !direct_genet_predrain_required(true, false),
+            "a refused direct-GENET YieldTo cannot reset child accounting",
+        );
+    }
+
+    #[test]
     fn fixed_slot_plan_accounts_every_generated_object() {
         assert_eq!(FRAME_SLOT_START, 6);
         assert_eq!(TRANSLATION_SLOT_START, FRAME_SLOT_START + FRAME_COUNT);
@@ -2533,6 +2646,7 @@ mod tests {
             containment_started: false,
             contained: false,
             containment: ConsoleNetworkContainmentCursor::new(),
+            direct_genet_yield_accounting: DirectGenetYieldAccounting::default(),
         };
         assert!(!runtime.descriptor_finalized());
         let mut runtime = runtime;

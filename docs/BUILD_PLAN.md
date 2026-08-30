@@ -10676,6 +10676,66 @@ Changes:
     benchmark workloads, arithmetic, and report schemas were reviewed and
     require no behavior or schema change. Fresh exact-image dual-mode scripts,
     raw latency, and medium/high pressure remain mandatory before promotion.
+  - exact-5094 physical routing and bounded child-credit/stream/HDMI
+    correction — exact flashed source
+    `509445402f3f53a584cb5726da9a6559b3437167`, build ID
+    `77862a10911e960f796467e5408d92eda00c8e1838c1d79f71e2d84e7845e754`,
+    image ID
+    `cbc7b62bff475069a25515fe314c5acd927927060bdfe0c8e9ea86d5b4997eee`,
+    and image SHA-256
+    `cb9e0487b5b8aa930796d9576d4147cc9005835720a62a61dd94454dc535b66f`
+    prove both selected physical backends remain functional while rejecting
+    August latency parity. WiFi reaches root and USB command readiness at
+    approximately 8.113 and 15.155 seconds, reaches useful CYW43 Ready at
+    approximately 46.795 seconds, completes DHCP in approximately 205.278 ms,
+    and retains authenticated TCP and focused `.coh` behavior; its fresh raw
+    latency remains unmeasured. GENET reaches root and USB command readiness at
+    approximately 8.324 and 9.360 seconds, completes DHCP, authenticated TCP,
+    and focused scripts, and returns 64/64 raw requests without retry at
+    25.805 requests/s, 37.684-ms median, and 44.943-ms p95 versus the accepted
+    August 180.269 requests/s and 1.677-ms p95. Healthy DHCP, DMA, IRQ, rings,
+    and TCP ingress keep the first wired bottleneck in shared root/console MCS
+    cadence rather than the GENET device path.
+
+    Supersede the disproven all-wall, command-plus-stage continuation. For the
+    exact direct-GENET generation, classify one root quantum as exactly one of
+    command accepted, command accepted plus durable stage, durable stage,
+    response drained, or drain plus durable stage. Before every direct child
+    dispatch, drain its prior SC accounting, measure only the adjacent
+    `YieldTo` call wall, and credit no more than both the returned child
+    consumption and that call wall. Retained root time remains strictly below
+    the unchanged generated 250-us cut, equality refuses, and the independent
+    64-quantum cap and every identity, operator, recovery, containment,
+    quarantine, reboot, handoff, and no-progress fence remain exact. Invalid
+    accounting is sticky and denies retention without stopping ordinary
+    service. The mediated WiFi runtime in the same Pi image remains signal-only
+    and performs neither the pre-drain nor `YieldTo`. This changes no MCS
+    numeric, Reply semantic, ownership, ABI,
+    manifest, or QEMU direct-VirtIO behavior.
+
+    During an exact ACKed ordinary CYW43 firmware/NVRAM root grant, each exact
+    immutable successful terminal may publish its single immutable successor,
+    up to an independent 64-successor cap. Fault, malformed or waiting
+    terminals, stale generation or descriptor identity, unknown issue state,
+    pair restart, recovery, persistent/steady operations, and unacknowledged or
+    delegated grants fail closed without moving the frontier or cap. The sole
+    SDIO physical issuer, DPC/CARD_INT fairness, budgets, retries, deadlines,
+    and recovery authority are unchanged.
+
+    USB arrow input continues to move the desired HDMI viewport one row per
+    repeat, while accumulated render debt uses the largest exact symmetric CSI
+    `nT`/`nS` span fitting the bounded 512-byte frame. Every retained receipt is
+    generation-anchored; wrap, eviction, missing history, and invalid anchors
+    collapse to one canonical redraw. Pending tail bytes cannot be overtaken by
+    a scroll departure, and the canonical `Cohesix console ready` rendering is
+    queued ahead of the HDMI `cohesix>` prompt. The complete host-tool suite,
+    `tools/cohesix-py`, generated contracts and profiles, `.coh` workloads,
+    and benchmark workloads, arithmetic, and report schemas were reviewed and
+    require no implementation or schema change. Focused source, target-compile,
+    and QEMU gates can reject this candidate; a clean image or flash cannot
+    prove physical speedup. Fresh exact-image WiFi and GENET raw latency,
+    scripts, and medium/high pressure remain mandatory before parity or
+    acceptance claims.
   - platform consistency — select the same v5 shared contract, including the
     v4-introduced bounded command batch, complete 256-Worker population, two
     passive-Worker executor-lane architecture, and passive-service locality

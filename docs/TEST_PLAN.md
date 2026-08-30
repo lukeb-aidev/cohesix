@@ -1598,33 +1598,58 @@ that same passive boundary; this exact image therefore supplies no GENET
 result. These are exact-image convergence observations, not sustained WiFi
 service/performance, August-parity, GENET, or acceptance evidence.
 
-The next candidate corrects two source invariants. Passive admission must use
-the immediate post-Yield wall lease and ignored preserved-accounting drain
-specified above, not a second pre-Yield Consumed reset. CYW43 may, within one
-root-granted turn, consume one exact successful child completion only for a
-sealed ordinary firmware-chunk or NVRAM-chunk parent and publish at most one
-following immutable SDIO child; a fault terminal, other parent operation,
-steady or persistent path, pending child, identity drift, unknown issue state,
-or already-used submit slot admits no new child, and no turn may publish two
-new physical commands. Deterministic source
-tests plus the canonical QEMU `root-mcs` canary can reject these corrections,
-but even a clean build and QEMU run cannot establish their Pi timing or
-hardware effect. Fresh exact-image WiFi and GENET runs remain mandatory.
+Exact source `509445402f3f53a584cb5726da9a6559b3437167`, build ID
+`77862a10911e960f796467e5408d92eda00c8e1838c1d79f71e2d84e7845e754`,
+image ID
+`cbc7b62bff475069a25515fe314c5acd927927060bdfe0c8e9ea86d5b4997eee`,
+and image SHA-256
+`cb9e0487b5b8aa930796d9576d4147cc9005835720a62a61dd94454dc535b66f`
+bind the dual-mode routing observation. WiFi reaches root and USB command
+readiness at approximately 8.113 and 15.155 seconds, reaches useful CYW43
+Ready at approximately 46.795 seconds, and completes DHCP in approximately
+205.278 ms with authenticated TCP and focused `.coh` behavior; no fresh raw
+latency result was collected. GENET reaches root and USB command readiness at
+approximately 8.324 and 9.360 seconds, completes DHCP and focused scripts, and
+returns 64/64 raw requests without retry at 25.805 requests/s, 37.684-ms
+median, and 44.943-ms p95. These exact-image observations preserve function
+but reject August latency parity. They also prove that the prior whole-quantum
+GENET predicate still charged same-core child execution and excluded a
+response-only drain transition. Build, QEMU, image, and flash results remain
+non-hardware evidence.
 
-The focused source gate for this candidate must prove validation, Yield,
-immediate timer capture, preserved-accounting drain, recovery recheck, and
-dispatch in that order. It must cover strict-below admission, equality and
-excess refusal, counter/frequency drift, missing accounting evidence, and no
-retry or response projection across authority drift. CYW43 runtime tests must
-cover successful completion followed by exactly one new child submit, refusal
-of a second new submit, fault and pending-child denial, stale/unknown identity,
-and replay idempotence. Preserve the recovery-first outer check and final
-`CallArm` bracket. Run the focused Pi root-control and MCS activation-order
-suite, the complete linked-runtime library tests, then the canonical QEMU
-`root-mcs` TCP/NineDoor canary. Those are rejection gates only. Fresh
-exact-image WiFi and GENET runs remain mandatory to measure Gate-8 time,
-sustained raw latency, first-attempt scripts, and medium/high pressure against
-August 10.
+The next candidate supersedes the earlier one-successor-per-root-grant CYW43
+wording. Within one exact ACKed ordinary firmware/NVRAM root grant, each exact
+immutable successful terminal may publish its one immutable successor, up to
+64 successor units. The permit never resets on an unacknowledged, ACK-failed,
+or delegated grant. Waiting, fault, malformed, tampered, persistent, or
+non-stream terminals, an unknown issue state, stale runtime/owner generation,
+descriptor or payload drift, pair restart, recovery, or an in-flight submit
+must not move the frontier or cap. Tests must prove terminal immutability,
+monotonic tickets/frontier, one submit per terminal and turn, cap exhaustion,
+replay idempotence, stable no-mutation denial, and retained DPC/CARD_INT
+fairness.
+
+The direct-GENET source gate must classify productive progress as exactly one
+of `CommandAccepted`, `CommandAcceptedAndStagePublished`, `StagePublished`,
+`ResponseDrained`, or `DrainAndStage`. Their direct child `YieldTo` call counts
+must be exactly 0, 1, 1, 1, and 1--2 respectively. Every direct call must first
+drain prior child-SC accounting, sample the virtual counter immediately around
+that call, and admit credit no larger than
+`min(child_us * hz, call_wall_ticks * 1,000,000)`. The retained effective root
+interval is
+`elapsed_ticks * 1,000,000 - cumulative_exact_child_credit` and must remain
+strictly below `hz * 250`; equality refuses and no more than 64 productive
+root quanta may be retained. Pre-drain, counter/frequency, syscall-result, or
+arithmetic ambiguity is sticky and denies retention while leaving ordinary
+service available. Exact generation, connection, response, queue, final
+Serial phase, operator, fault, recovery, passive admission, quarantine,
+containment, reboot, handoff, and no-progress fences remain mandatory.
+Backpressured stage output must force Serial/Yield and cannot consume a second
+queued command. Focused pure-state, production integration, target-compile,
+and QEMU `root-mcs` tests can reject this source candidate; they cannot prove
+Pi timing or hardware effect. Fresh exact-image WiFi and GENET runs remain
+mandatory to measure Gate-8 time, sustained raw latency, first-attempt scripts,
+and medium/high pressure against August 10.
 
 The CYW43 software and cadence closure gate is authorized by Milestone 26d
 tasks `m26d-cyw43-hardware-free-closure` and
@@ -6333,7 +6358,10 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
       two seconds. `USB console ready` reports the observed stage timings, but
       it is a passive EventPump record and may follow local-seat prompt release
       from the same command-readiness transition; the test must not require
-      either record/prompt ordering. The canonical command-ready receipt must
+      that passive record before the prompt. The physical HDMI ordering is
+      nevertheless exact: the canonical `Cohesix console ready` rendering must
+      be queued ahead of the HDMI `cohesix>` prompt. The canonical
+      command-ready receipt must
       nevertheless appear exactly once on serial immediately before
       `[drivers] USB console ready`, while remaining exactly once in `queen.log`
       without a pre-cutover raw-UART copy. Prompt release itself still requires USB
@@ -6365,10 +6393,18 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
       retraction receipt cannot acknowledge the row restored by fresh
       readiness. Held USB up/down arrows use a 300 ms initial
       and 50 ms repeat deadline from the virtual counter. Once a canonical
-      viewport is materialized, each repeat advances it by one bounded CSI
-      `S`/`T` row. It must retain only the union of old/new nonblank-column
-      damage before the row-origin rotation, preserve prior dirty cells, and
-      clear only the newly exposed row or rows;
+      viewport is materialized, each repeat advances the desired viewport by
+      one row. Accumulated rendered-to-desired debt must emit the largest exact
+      symmetric CSI `nS`/`nT` span that currently fits the bounded 512-byte
+      HDMI frame. Each retained receipt must carry its monotonic mirrored-line
+      generation and rebase the physical rendered anchor exactly once. History
+      eviction, generation wrap, underflow/overflow, a missing row, or an
+      invalid anchor must coalesce to one canonical redraw. Leaving a settled
+      live tail must supersede pending unsent tail bytes with that canonical
+      snapshot so CSI cannot overtake physical output; returning to the tail
+      must not duplicate already rendered bytes. Rendering must retain only the
+      union of old/new nonblank-column damage before row-origin rotation,
+      preserve prior dirty cells, and clear only newly exposed rows;
       a full redraw is reserved for initial or recovery materialization and must
       use the framebuffer-derived safe-area row count even when the payload
       spans multiple bounded HDMI service turns. Each rendered row must use
@@ -6388,8 +6424,10 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
       FIFO ordering, command-readiness invalidation/re-release, prompt and
       ready-banner readiness, startup-feedback cadence/timing, serial runtime
       ring RX/TX turns, and
-      Wi-Fi progress suppression during USB boot activity and after USB
-      first-byte proof. These checks introduce no console command or USB/HDMI
+      generation rebase, live-tail FIFO ordering, eviction/wrap recovery,
+      long-line and full-buffer behavior, and Wi-Fi progress suppression during
+      USB boot activity and after USB first-byte proof. These checks introduce
+      no console command or USB/HDMI
       authority change. The reserved 48-byte USB old-good slot is the only ABI
       evidence extension described above; runtime publication is dormant.
       The Pi write-only damage-compositor regression must independently prove
@@ -6511,23 +6549,35 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
       `StageOutput`, then an exactly ready `Disconnect`, and otherwise alternate
       exactly one `ObserveChild`/`ServiceTick` unit per Network visit. Pi root
       continuation must additionally prove that direct GENET can retain no more
-      than 64 complete five-phase root quanta. Before every retained quantum, a
-      continuous first-post-Yield counter sample must satisfy the unchanged
-      generated strict `budget - WCET = 250 us` wall cut; equality refuses. Each
-      retention requires the exact active and authenticated generation and
-      connection plus durable progress for exactly one accepted command and its
-      connection-matched response stage. Serial and LocalSeat remain bounded
-      phases, and optional Display remains explicit debt. Final side-effect-free
-      recovery, operator input or response, fault, reboot, containment,
-      quarantine, stale-identity, handoff, and no-progress fences force Yield.
-      Tests must reject inactive, disconnected, stale-active,
-      stale-authenticated, saturated, a child lower-unit loop or multi-unit
-      burst, budget increase, physical-input bypass, or any QEMU/direct-VirtIO
-      selector or ownership change. QEMU behavior remains unchanged.
-      The generated `2,750 - 2,500 = 250 us` pre-admission cut and 64-unit cap
-      remain exact. Tests must reject the audited-unsafe 2,500 us elapsed window,
-      including the 2,499 us case that leaves only 251 us for a fresh 2,500 us
-      WCET leaf. Host timing or selector tests cannot establish Pi performance.
+      than 64 productive root quanta. Progress is typed as exactly one of
+      `CommandAccepted`, `CommandAcceptedAndStagePublished`, `StagePublished`,
+      `ResponseDrained`, or `DrainAndStage`; their exact direct child `YieldTo`
+      call counts are 0, 1, 1, 1, and 1--2. Every direct call first drains prior
+      child-SC accounting, then samples `CNTVCT_EL0` immediately before and
+      after the call. Credit is conservative and exact:
+      `min(child_us * hz, call_wall_ticks * 1,000,000)`. The retained root cut
+      applies to
+      `effective_scaled = elapsed_ticks * 1,000,000 - cumulative_credit` and
+      remains strictly below the unchanged generated `hz * 250`; equality
+      refuses. A failed pre-drain, missing/invalid child result, zero/backwards
+      or frequency-drifted counter, or arithmetic overflow makes accounting
+      sticky-invalid and denies retention without suppressing ordinary service.
+      A mediated WiFi runtime in the same Pi image must remain signal-only and
+      perform neither this pre-drain nor `YieldTo`.
+      Each retention requires exact active/authenticated generation,
+      connection, response, queue, and final Serial-phase identity. Serial and
+      LocalSeat remain bounded phases, and optional Display remains explicit
+      debt. Final side-effect-free recovery, operator input or response, fault,
+      reboot, containment, quarantine, stale identity, handoff, passive
+      admission, and no-progress fences force Yield. A failed or backpressured
+      response-stage attempt must force Serial/Yield and cannot consume a
+      second queued command. Tests must reject inactive, disconnected,
+      stale-active, stale-authenticated, saturated, an impossible mixed delta,
+      a child lower-unit loop or multi-unit burst, budget increase,
+      physical-input bypass, or any QEMU/direct-VirtIO selector or ownership
+      change. QEMU behavior remains unchanged. The generated
+      `2,750 - 2,500 = 250 us` pre-admission cut and 64-unit cap remain exact.
+      Host timing or selector tests cannot establish Pi performance.
       Isolated-console construction must also prove
       delayed ACK and Nagle are disabled for its bounded interactive socket;
       that host contract is not evidence of Pi latency.
@@ -6659,7 +6709,7 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
     - canonical interactive Pi diagnostics must load a strictly valid clean `pi4-image-identity.json` before opening serial and observe its exact complete build marker before the fresh root prompt. A generic marker prefix or marker from another image is not source/image provenance. This marker binds only the root image; the complete boot partition and physical media retain their separate hash/readback obligations.
     - when the compiler-declared console-network child owns TCP/IP, `nettest` must not inherit the root adapter's default `unsupported` result. Its existing 15-second generation remains peer-assisted and must observe its state on every selected console poll even when ordinary network activity is already true. A run that starts without a live peer binds the first later authenticated connection to that connection's fresh zero byte-counter epoch; it must latch same-connection command bytes read, response bytes written and exactly drained, listener readiness, and later RX/TCP progress. A physical backend additionally requires a NIC TX completion observed while that exact connection remains current; direct VirtIO uses the exact child drain and requires no synthetic root NIC completion. Once the bound identity disappears, neither a replacement connection nor later unrelated NIC activity may provide a missing fact, though already established connection facts remain available for truthful terminal reporting. Historical traffic cannot satisfy a new run. The unchanged terminal schema reports `udp_echo_ok=false` when only peer-assisted proof is present. Native ICMP echo response is a separate reachability check and cannot be relabelled as the UDP self-test.
     - the controlled live gate and serial helper must preflight canonical `cohsh`, manifest, credential, and workload inputs before acquiring the UART. After one positive admission they must select only the exact command-bound DHCP lease for the required physical lane, validate the corresponding host route, run one authenticated peer for the canonical observation window, always reap it, and still accept only the generation-matched target terminal. Ambiguous or stale status, wrong-lane or invalid addressing, route/input drift, peer failure, or incomplete terminal evidence fails closed; peer exit alone is never acceptance.
-    - isolated child liveness triage must retain the bounded `netstats: isolated_progress`, `netstats: isolated_units`, and `netstats: isolated_state` rows. They distinguish selected child observation/output/disconnect/ingress/tick/egress/diagnostic turns, material-progress time, command/output queue depth, pending egress, response-drain state, and ingress backpressure/drop. These counters diagnose where progress stopped; they are not TCP, performance, or acceptance evidence by themselves.
+    - isolated child liveness triage must retain the bounded `netstats: isolated_progress`, `netstats: isolated_units`, and `netstats: isolated_state` rows. They distinguish selected child observation/output/disconnect/ingress/tick/egress/diagnostic turns, material-progress time, command/output queue depth, pending egress, response-drain state, and ingress backpressure/drop. Additive direct-GENET fields are `pcont=<candidates>/<admitted>/<rejected> peff_us=<n> preason=0x<n>`, `output_ok=<n>`, and `ycalls=<n> ycredit_us=<n> yinvalid=0x<n>`. `preason` uses fence/cap/clock/policy/counter/arithmetic/credit/token bits `0x01` through `0x80`; `yinvalid` uses pre-drain/counter-or-frequency/syscall-result/overflow bits `0x01` through `0x08`. The fields are zero outside the exact Pi direct-GENET path. These counters diagnose where progress stopped; they are not TCP, performance, or acceptance evidence by themselves.
     - `tx_submit=<count> tx_complete=<count> tx_free=<count> tx_in_flight=<count> tx_double_submit=<count> tx_zero_len_attempt=<count> arp_rx=<count> arp_tx=<count>`; on CYW43, `tx_complete` is the root release count from exact joined Function-2 terminals. `tx_submit > tx_complete` means an outstanding root TX owner, not a missing firmware-credit acknowledgement.
     - `wifi_assoc=<0|1> wifi_link=<0|1> eapol_rx=<count> eapol_start=<count> eapol_secure=<0|1>`
     - driver-task scheduling evidence for the active hardware path in reopened 26a/26b acceptance captures: contract name, service class, isolation mode, poll/service count, budget exhaustion/yield count, RX/TX queue depth, drop count, manifest-selected affinity core, observed service latency, and timer backend proof. The normalizer exposes this as `TIMER_BACKEND`, `TIMER_CLOCK_HZ`, `TIMER_EL0_COUNTER`, `DUMMY_TIMER_SEEN`, `DRIVER_TASK_CONTRACTS`, `DRIVER_TASK_DEDICATED`, `DRIVER_TASK_COMPATIBILITY`, `DRIVER_TASK_DEDICATED_READY`, `DRIVER_TASK_SERIAL_DEDICATED`, `DRIVER_TASK_USB_DEDICATED`, `DRIVER_TASK_DISPLAY_DEDICATED`, `DRIVER_TASK_NET_DEDICATED`, `DRIVER_TASK_SDIO_DEDICATED`, `DRIVER_TASK_PCIE_DEDICATED`, `DRIVER_TASK_SUBSTRATE_READY`, `DRIVER_TASK_FAILED_COUNT`, `DRIVER_TASK_CAPSET_PROOF`, `DRIVER_TASK_FAULT_PROOF`, `DRIVER_TASK_REVOKE_PROOF`, `DRIVER_TASK_SCHED_PROOF`, `DRIVER_TASK_AFFINITY_PROOF`, `DRIVER_TASK_AFFINITY_CONFIGURED`, `DRIVER_TASK_AFFINITY_APPLIED`, `DRIVER_TASK_AFFINITY_MANIFEST_PROOF`, `DRIVER_TASK_AFFINITY_MANIFEST_MATCHES`, `DRIVER_TASK_AFFINITY_MANIFEST_MISSING`, `DRIVER_TASK_AFFINITY_MANIFEST_MISMATCHES`, `DRIVER_TASK_VSPACE_PROOF`, `DRIVER_TASK_POINTER_FREE_IPC_PROOF`, `DRIVER_TASK_OWNER_STATE_PROOF`, `DRIVER_TASK_DMA_PROOFS`, `DRIVER_TASK_DMA_BLOCKER`, `PI4_RUNTIME_DMA_PROOF`, `PI4_RUNTIME_DMA_PROOF_REASON`, `PI4_RUNTIME_DMA_COUNTER_PROOF`, `DRIVER_TASK_ACTIVE_NET`, `DRIVER_TASK_BUDGET_OVERRUNS`, `DRIVER_TASK_LATENCY_PROOFS`, `DRIVER_TASK_RING_CALL_BEGIN`, `DRIVER_TASK_RING_CALL_RETURN`, `DRIVER_TASK_RING_CALL_OUTSTANDING`, `DRIVER_TASK_RING_CALL_TIMEOUT`, `DRIVER_TASK_RING_CALL_UNRESOLVED_TIMEOUT`, `DRIVER_TASK_BOOTSTRAP_DEFERRED`, `DRIVER_TASK_RESOURCE_INIT`, `DRIVER_TASK_RESOURCE_BLOCKER`, and `DRIVER_TASK_RESOURCE_CURRENT_BLOCKER`. `DRIVER_TASK_OWNER_STATE_PROOF=yes` must be backed by per-hot-path owner-state descriptor lines for serial, USB, HDMI, PCIe, and the selected network owner set (`cyw43-wifi` plus `sdio-host` when `DRIVER_TASK_ACTIVE_NET=cyw43`, or `genet-nic` when `DRIVER_TASK_ACTIVE_NET=genet`). Pi 4 performance evidence must report `TIMER_BACKEND=arch-counter`, `TIMER_CLOCK_HZ=54000000`, `TIMER_EL0_COUNTER=vct`, `DUMMY_TIMER_SEEN=no`, `DRIVER_TASK_DMA_BLOCKER=none`, and `PI4_RUNTIME_DMA_COUNTER_PROOF=counter-qualified`; otherwise latency proof is red even if driver-task owner-state proof is present. `DRIVER_TASK_RESOURCE_BLOCKER` is the first lost resource proof in the capture; `DRIVER_TASK_RESOURCE_CURRENT_BLOCKER` is the latest non-ready resource-init blocker. The source `DRIVER_TASK_RESOURCE_INIT` line carries the current isolated runtime owner/action, active request, `expected_request_valid` / `expected_aux0_valid`, expected aux/request values when present, same-request flag, and child progress marker needed to diagnose the live turn. Any positive `DRIVER_TASK_RING_CALL_OUTSTANDING`, `DRIVER_TASK_RING_CALL_UNRESOLVED_TIMEOUT`, `DRIVER_TASK_BOOTSTRAP_DEFERRED`, or non-`none` resource blocker is an isolated runtime no-reply/deferred-proof frontier; raw `DRIVER_TASK_RING_CALL_TIMEOUT` counts remain diagnostic when a later return closes the same request. Contract-only root-task compatibility evidence, resource-init breadcrumbs, and declared `max_service_us` budgets are diagnostic and must not be counted as dedicated driver-task closure or latency proof.

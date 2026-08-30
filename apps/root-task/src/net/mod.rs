@@ -74,6 +74,97 @@ pub const CONSOLE_INGEST_QUEUE_DEPTH: usize = 32;
 /// Maximum inbound console commands dispatched from the event pump in one turn.
 pub const CONSOLE_DISPATCH_BURST: usize = 8;
 
+pub(crate) const DIRECT_GENET_YIELD_ACCOUNTING_INVALID_PREDRAIN: u32 = 1 << 0;
+const DIRECT_GENET_YIELD_ACCOUNTING_INVALID_COUNTER: u32 = 1 << 1;
+const DIRECT_GENET_YIELD_ACCOUNTING_INVALID_RESULT: u32 = 1 << 2;
+const DIRECT_GENET_YIELD_ACCOUNTING_INVALID_OVERFLOW: u32 = 1 << 3;
+
+/// Monotonic accounting for exact direct-GENET child scheduling calls.
+///
+/// Each call must begin with a successful reset/read of the child scheduling
+/// context. The returned child-consumed duration is then clamped by the
+/// observed call wall so stale or impossible kernel evidence can never enlarge
+/// a retained root activation. Any ambiguity is sticky and makes the snapshot
+/// ineligible for productive continuation without suppressing ordinary service.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct DirectGenetYieldAccounting {
+    pub yield_calls: u64,
+    pub counter_hz: u64,
+    pub call_wall_scaled: u128,
+    pub credited_child_scaled: u128,
+    pub invalid_reasons: u32,
+}
+
+impl DirectGenetYieldAccounting {
+    pub(crate) fn invalidate(&mut self, reason: u32) {
+        self.invalid_reasons |= reason;
+    }
+
+    pub(crate) fn record_call(
+        &mut self,
+        predrain_succeeded: bool,
+        counter_hz: u64,
+        started_ticks: u64,
+        finished_ticks: u64,
+        child_consumed_us: Option<u64>,
+    ) {
+        if !predrain_succeeded {
+            self.invalidate(DIRECT_GENET_YIELD_ACCOUNTING_INVALID_PREDRAIN);
+            return;
+        }
+        if counter_hz == 0
+            || started_ticks == 0
+            || finished_ticks < started_ticks
+            || (self.counter_hz != 0 && self.counter_hz != counter_hz)
+        {
+            self.invalidate(DIRECT_GENET_YIELD_ACCOUNTING_INVALID_COUNTER);
+            return;
+        }
+        let Some(child_consumed_us) = child_consumed_us else {
+            self.invalidate(DIRECT_GENET_YIELD_ACCOUNTING_INVALID_RESULT);
+            return;
+        };
+        let Some(call_wall_scaled) =
+            u128::from(finished_ticks - started_ticks).checked_mul(1_000_000)
+        else {
+            self.invalidate(DIRECT_GENET_YIELD_ACCOUNTING_INVALID_OVERFLOW);
+            return;
+        };
+        let Some(child_consumed_scaled) =
+            u128::from(child_consumed_us).checked_mul(u128::from(counter_hz))
+        else {
+            self.invalidate(DIRECT_GENET_YIELD_ACCOUNTING_INVALID_OVERFLOW);
+            return;
+        };
+        let credited_child_scaled = child_consumed_scaled.min(call_wall_scaled);
+        let Some(yield_calls) = self.yield_calls.checked_add(1) else {
+            self.invalidate(DIRECT_GENET_YIELD_ACCOUNTING_INVALID_OVERFLOW);
+            return;
+        };
+        let Some(total_call_wall_scaled) = self.call_wall_scaled.checked_add(call_wall_scaled)
+        else {
+            self.invalidate(DIRECT_GENET_YIELD_ACCOUNTING_INVALID_OVERFLOW);
+            return;
+        };
+        let Some(total_credited_child_scaled) = self
+            .credited_child_scaled
+            .checked_add(credited_child_scaled)
+        else {
+            self.invalidate(DIRECT_GENET_YIELD_ACCOUNTING_INVALID_OVERFLOW);
+            return;
+        };
+        self.yield_calls = yield_calls;
+        self.counter_hz = counter_hz;
+        self.call_wall_scaled = total_call_wall_scaled;
+        self.credited_child_scaled = total_credited_child_scaled;
+    }
+
+    #[must_use]
+    pub const fn valid(self) -> bool {
+        self.invalid_reasons == 0
+    }
+}
+
 pub(crate) fn cyw43_control_plane_bootstrap_replay_reason(_reason: &str) -> bool {
     // The bounded startup-link / sideband recovery ladder already retries
     // the current first-reply family in HAL and the driver. Replaying the full
@@ -1817,6 +1908,8 @@ pub struct IsolatedConsoleDiagnostics {
     pub observe_child_turns: u64,
     /// Root-output staging selections.
     pub stage_output_turns: u64,
+    /// Root-output staging selections that durably published a child batch.
+    pub stage_output_successes: u64,
     /// Disconnect-control selections.
     pub disconnect_turns: u64,
     /// Physical-NIC ingress selections.
@@ -1843,6 +1936,16 @@ pub struct IsolatedConsoleDiagnostics {
     pub ingress_backpressure: u64,
     /// Child-ingress publications rejected after ownership was established.
     pub ingress_dropped: u64,
+    /// Exact same-core child YieldTo calls completed by the root HAL.
+    pub direct_genet_yield_calls: u64,
+    /// Architected counter frequency used by the YieldTo accounting.
+    pub direct_genet_yield_counter_hz: u64,
+    /// Cumulative measured YieldTo call wall in scaled counter units.
+    pub direct_genet_yield_call_wall_scaled: u128,
+    /// Cumulative call-local child SC consumption credited against root wall.
+    pub direct_genet_yield_child_credit_scaled: u128,
+    /// Sticky fail-closed YieldTo accounting reasons.
+    pub direct_genet_yield_invalid_reasons: u32,
 }
 
 /// Outcome and optional stable record from one direct-GENET diagnostic replay.
@@ -1997,6 +2100,55 @@ mod tests {
     use crate::hal::driver_task::{
         CYW43_WIFI_DRIVER_TASK_CONTRACT, GENET_DRIVER_TASK_CONTRACT, RTL8139_DRIVER_TASK_CONTRACT,
     };
+
+    #[test]
+    fn direct_genet_yield_accounting_requires_fresh_predrain_and_clamps_to_call_wall() {
+        let mut accounting = DirectGenetYieldAccounting::default();
+        accounting.record_call(false, 54_000_000, 100, 154, Some(2));
+        assert_eq!(accounting.yield_calls, 0);
+        assert_eq!(accounting.credited_child_scaled, 0);
+        assert_eq!(
+            accounting.invalid_reasons, DIRECT_GENET_YIELD_ACCOUNTING_INVALID_PREDRAIN,
+            "stale child consumption cannot survive a failed pre-drain",
+        );
+
+        let mut accounting = DirectGenetYieldAccounting::default();
+        accounting.record_call(true, 54_000_000, 100, 154, Some(2));
+        assert_eq!(accounting.yield_calls, 1);
+        assert_eq!(accounting.call_wall_scaled, 54_000_000);
+        assert_eq!(accounting.credited_child_scaled, 54_000_000);
+        assert!(accounting.valid());
+    }
+
+    #[test]
+    fn direct_genet_yield_accounting_latches_counter_result_and_overflow_failures() {
+        let mut missing_result = DirectGenetYieldAccounting::default();
+        missing_result.record_call(true, 54_000_000, 100, 154, None);
+        assert_eq!(
+            missing_result.invalid_reasons,
+            DIRECT_GENET_YIELD_ACCOUNTING_INVALID_RESULT,
+        );
+
+        let mut counter = DirectGenetYieldAccounting::default();
+        counter.record_call(true, 54_000_000, 100, 154, Some(1));
+        counter.record_call(true, 24_000_000, 200, 199, Some(1));
+        assert_ne!(
+            counter.invalid_reasons & DIRECT_GENET_YIELD_ACCOUNTING_INVALID_COUNTER,
+            0,
+        );
+        assert_eq!(counter.yield_calls, 1);
+
+        let mut overflow = DirectGenetYieldAccounting {
+            yield_calls: u64::MAX,
+            ..DirectGenetYieldAccounting::default()
+        };
+        overflow.record_call(true, 54_000_000, 100, 154, Some(1));
+        assert_ne!(
+            overflow.invalid_reasons & DIRECT_GENET_YIELD_ACCOUNTING_INVALID_OVERFLOW,
+            0,
+        );
+        assert_eq!(overflow.yield_calls, u64::MAX);
+    }
 
     #[test]
     fn device_snapshot_preserves_protocol_counters_and_projects_exact_wifi_generation() {

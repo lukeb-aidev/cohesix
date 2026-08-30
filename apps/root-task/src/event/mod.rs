@@ -2658,6 +2658,16 @@ pub struct PumpMetrics {
     pub net_direct_genet_immediate_stage_turns: u64,
     /// Direct-GENET fast episodes returned to ordinary physical-operator debt.
     pub net_direct_genet_operator_rotations: u64,
+    /// Exact durable direct-GENET progress candidates emitted by EventPump.
+    pub net_direct_genet_productive_candidates: u64,
+    /// Candidates admitted by the strict post-Yield root-time window.
+    pub net_direct_genet_productive_admitted: u64,
+    /// Candidates rejected by identity, safety-fence, accounting, or time.
+    pub net_direct_genet_productive_rejected: u64,
+    /// Largest effective root-only elapsed time observed at admission.
+    pub net_direct_genet_productive_effective_high_us: u64,
+    /// Sticky bounded reason mask for rejected productive continuations.
+    pub net_direct_genet_productive_reject_reasons: u32,
     /// Physical-console output records deferred behind active keyboard input.
     pub physical_console_output_deferred: u64,
     /// Deferred physical-console output records flushed during idle turns.
@@ -4117,38 +4127,92 @@ struct DirectGenetProductiveQuantumSnapshot {
     generation: u64,
     connection_id: u64,
     accepted_commands: u64,
+    command_queue: usize,
     immediate_stage_turns: u64,
     child_stage_output_turns: u64,
+    child_stage_output_successes: u64,
     child_awaiting_batch_drain: bool,
+    child_response_drains: u64,
+    child_yield_calls: u64,
+    child_yield_counter_hz: u64,
+    child_yield_call_wall_scaled: u128,
+    child_yield_credit_scaled: u128,
+    child_yield_invalid_reasons: u32,
     physical_operator_work_pending: bool,
     physical_console_response_pending: bool,
+}
+
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct DirectGenetStageProgressSnapshot {
+    generation: u64,
+    stage_output_turns: u64,
+    stage_output_successes: u64,
+    awaiting_batch_drain: bool,
+}
+
+/// Exact durable progress that may retain one direct-GENET continuation.
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DirectGenetProductiveProgress {
+    CommandAccepted,
+    CommandAcceptedAndStagePublished,
+    StagePublished,
+    ResponseDrained,
+    DrainAndStage,
 }
 
 /// Opaque direct-GENET authority retained only by an exact productive return.
 #[cfg(all(feature = "kernel", feature = "net-console"))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct PiRootControlProductiveContinuationIdentity {
+pub(crate) struct PiRootControlProductiveContinuation {
     generation: u64,
     connection_id: u64,
+    expected_phase: LinkedRuntimeServicePhase,
+    progress: DirectGenetProductiveProgress,
+    child_credit_scaled: u128,
+    child_credit_counter_hz: u64,
 }
 
 #[cfg(all(test, feature = "kernel", feature = "net-console"))]
-impl PiRootControlProductiveContinuationIdentity {
+impl PiRootControlProductiveContinuation {
     pub(crate) const fn for_test(generation: u64, connection_id: u64) -> Self {
         Self {
             generation,
             connection_id,
+            expected_phase: LinkedRuntimeServicePhase::Serial,
+            progress: DirectGenetProductiveProgress::StagePublished,
+            child_credit_scaled: 0,
+            child_credit_counter_hz: 0,
+        }
+    }
+
+    pub(crate) const fn for_test_with_credit(
+        generation: u64,
+        connection_id: u64,
+        child_credit_scaled: u128,
+        child_credit_counter_hz: u64,
+    ) -> Self {
+        Self {
+            child_credit_scaled,
+            child_credit_counter_hz,
+            ..Self::for_test(generation, connection_id)
         }
     }
 }
 
 #[cfg(all(feature = "kernel", feature = "net-console"))]
-impl DirectGenetProductiveQuantumSnapshot {
-    const fn continuation_identity(self) -> PiRootControlProductiveContinuationIdentity {
-        PiRootControlProductiveContinuationIdentity {
-            generation: self.generation,
-            connection_id: self.connection_id,
-        }
+impl PiRootControlProductiveContinuation {
+    pub(crate) const fn same_lane(self, other: Self) -> bool {
+        self.generation == other.generation && self.connection_id == other.connection_id
+    }
+
+    pub(crate) const fn child_credit_scaled(self) -> u128 {
+        self.child_credit_scaled
+    }
+
+    pub(crate) const fn child_credit_counter_hz(self) -> u64 {
+        self.child_credit_counter_hz
     }
 }
 
@@ -4173,7 +4237,7 @@ struct DirectGenetProductiveQuantumEvidence {
 #[cfg(all(feature = "kernel", feature = "net-console"))]
 fn direct_genet_productive_quantum_continuation_entitled(
     evidence: DirectGenetProductiveQuantumEvidence,
-) -> bool {
+) -> Option<PiRootControlProductiveContinuation> {
     let same_identity = evidence.before.generation != 0
         && evidence.before.generation == evidence.after.generation
         && evidence.before.connection_id != 0
@@ -4181,20 +4245,102 @@ fn direct_genet_productive_quantum_continuation_entitled(
     let exact_net_command = evidence.before.accepted_commands != u64::MAX
         && evidence.after.accepted_commands == evidence.before.accepted_commands.saturating_add(1)
         && matches!(evidence.last_input_source, ConsoleInputSource::Net);
+    let no_net_command = evidence.after.accepted_commands == evidence.before.accepted_commands;
     let exact_response_stage = evidence.before.immediate_stage_turns != u64::MAX
         && evidence.after.immediate_stage_turns
-            == evidence.before.immediate_stage_turns.saturating_add(1);
+            == evidence.before.immediate_stage_turns.saturating_add(1)
+        && evidence.causal_stage_completed;
+    let no_response_stage =
+        evidence.after.immediate_stage_turns == evidence.before.immediate_stage_turns;
     let durable_child_stage = evidence.before.child_stage_output_turns != u64::MAX
         && evidence.after.child_stage_output_turns
             == evidence.before.child_stage_output_turns.saturating_add(1)
-        && !evidence.before.child_awaiting_batch_drain
+        && evidence.before.child_stage_output_successes != u64::MAX
+        && evidence.after.child_stage_output_successes
+            == evidence
+                .before
+                .child_stage_output_successes
+                .saturating_add(1)
         && evidence.after.child_awaiting_batch_drain;
-    same_identity
-        && evidence.causal_stage_completed
-        && exact_net_command
-        && exact_response_stage
-        && durable_child_stage
-        && evidence.next_phase == LinkedRuntimeServicePhase::Serial
+    let no_child_stage = evidence.after.child_stage_output_turns
+        == evidence.before.child_stage_output_turns
+        && evidence.after.child_stage_output_successes
+            == evidence.before.child_stage_output_successes;
+    let exact_response_drain = evidence.before.child_response_drains != u64::MAX
+        && evidence.after.child_response_drains
+            == evidence.before.child_response_drains.saturating_add(1)
+        && evidence.before.child_awaiting_batch_drain
+        && (!evidence.after.child_awaiting_batch_drain || durable_child_stage);
+    let no_response_drain =
+        evidence.after.child_response_drains == evidence.before.child_response_drains;
+    let command_queue_consistent = if exact_net_command {
+        evidence.after.command_queue <= evidence.before.command_queue.saturating_add(1)
+    } else {
+        evidence.after.command_queue == evidence.before.command_queue
+    };
+    let accounting_monotonic = evidence.before.child_yield_calls
+        <= evidence.after.child_yield_calls
+        && evidence.before.child_yield_call_wall_scaled
+            <= evidence.after.child_yield_call_wall_scaled
+        && evidence.before.child_yield_credit_scaled <= evidence.after.child_yield_credit_scaled;
+    let yield_calls = evidence
+        .after
+        .child_yield_calls
+        .checked_sub(evidence.before.child_yield_calls)?;
+    let call_wall_scaled = evidence
+        .after
+        .child_yield_call_wall_scaled
+        .checked_sub(evidence.before.child_yield_call_wall_scaled)?;
+    let child_credit_scaled = evidence
+        .after
+        .child_yield_credit_scaled
+        .checked_sub(evidence.before.child_yield_credit_scaled)?;
+    let accounting_exact = accounting_monotonic
+        && evidence.before.child_yield_invalid_reasons == 0
+        && evidence.after.child_yield_invalid_reasons == 0
+        && yield_calls <= 2
+        && child_credit_scaled <= call_wall_scaled
+        && ((yield_calls == 0 && call_wall_scaled == 0 && child_credit_scaled == 0)
+            || (yield_calls != 0
+                && evidence.after.child_yield_counter_hz != 0
+                && (evidence.before.child_yield_counter_hz == 0
+                    || evidence.before.child_yield_counter_hz
+                        == evidence.after.child_yield_counter_hz)));
+    let progress = match (exact_net_command, durable_child_stage, exact_response_drain) {
+        (true, true, false) => DirectGenetProductiveProgress::CommandAcceptedAndStagePublished,
+        (true, false, false) => DirectGenetProductiveProgress::CommandAccepted,
+        (false, true, false) => DirectGenetProductiveProgress::StagePublished,
+        (false, false, true) => DirectGenetProductiveProgress::ResponseDrained,
+        (false, true, true) => DirectGenetProductiveProgress::DrainAndStage,
+        _ => return None,
+    };
+    let expected_phase = match progress {
+        DirectGenetProductiveProgress::CommandAccepted
+        | DirectGenetProductiveProgress::CommandAcceptedAndStagePublished
+        | DirectGenetProductiveProgress::StagePublished
+        | DirectGenetProductiveProgress::ResponseDrained
+        | DirectGenetProductiveProgress::DrainAndStage => LinkedRuntimeServicePhase::Serial,
+    };
+    let stage_consistent = if durable_child_stage {
+        exact_response_stage && yield_calls != 0
+    } else {
+        no_response_stage && no_child_stage
+    };
+    let progress_call_count_exact = match progress {
+        DirectGenetProductiveProgress::CommandAccepted => yield_calls == 0,
+        DirectGenetProductiveProgress::CommandAcceptedAndStagePublished
+        | DirectGenetProductiveProgress::StagePublished
+        | DirectGenetProductiveProgress::ResponseDrained => yield_calls == 1,
+        DirectGenetProductiveProgress::DrainAndStage => (1..=2).contains(&yield_calls),
+    };
+    (same_identity
+        && (exact_net_command || no_net_command)
+        && command_queue_consistent
+        && accounting_exact
+        && stage_consistent
+        && (exact_response_drain || no_response_drain)
+        && progress_call_count_exact
+        && evidence.next_phase == expected_phase
         && !evidence.network_service_quarantined
         && !evidence.reboot_pending
         && !evidence.recovery_or_containment_pending
@@ -4204,15 +4350,24 @@ fn direct_genet_productive_quantum_continuation_entitled(
         && !evidence.after.physical_operator_work_pending
         && !evidence.before.physical_console_response_pending
         && !evidence.after.physical_console_response_pending
-        && !evidence.local_fault_pending
+        && !evidence.local_fault_pending)
+        .then_some(PiRootControlProductiveContinuation {
+            generation: evidence.before.generation,
+            connection_id: evidence.before.connection_id,
+            expected_phase,
+            progress,
+            child_credit_scaled,
+            child_credit_counter_hz: evidence.after.child_yield_counter_hz,
+        })
 }
 
 /// Side-effect-free race fence sampled before a retained direct-GENET quantum.
 #[cfg(all(feature = "kernel", feature = "net-console"))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct DirectGenetProductiveContinuationFenceEvidence {
-    expected_identity: Option<PiRootControlProductiveContinuationIdentity>,
-    current_identity: Option<PiRootControlProductiveContinuationIdentity>,
+    expected: Option<PiRootControlProductiveContinuation>,
+    current_generation: Option<u64>,
+    current_connection_id: Option<u64>,
     next_phase: LinkedRuntimeServicePhase,
     network_service_quarantined: bool,
     reboot_pending: bool,
@@ -4228,10 +4383,11 @@ struct DirectGenetProductiveContinuationFenceEvidence {
 fn direct_genet_productive_continuation_fence_clear(
     evidence: DirectGenetProductiveContinuationFenceEvidence,
 ) -> bool {
-    evidence.expected_identity.is_some()
-        && evidence.expected_identity == evidence.current_identity
-        && evidence.next_phase == LinkedRuntimeServicePhase::Serial
-        && !evidence.network_service_quarantined
+    evidence.expected.is_some_and(|expected| {
+        evidence.current_generation == Some(expected.generation)
+            && evidence.current_connection_id == Some(expected.connection_id)
+            && evidence.next_phase == expected.expected_phase
+    }) && !evidence.network_service_quarantined
         && !evidence.reboot_pending
         && !evidence.recovery_or_containment_pending
         && !evidence.handoff_pending
@@ -4368,6 +4524,18 @@ fn direct_genet_response_stage_evidence_matches(
         && lane.connection_id == identity.connection_id
         && lane.queued_lines != 0
         && !lane.awaiting_batch_drain
+}
+
+/// Keep direct-GENET command execution behind root output that has not yet
+/// reached the exact child. Once StageOutput durably consumes those lines,
+/// the existing bounded response pipeline may overlap the following command.
+/// QEMU and mediated Wi-Fi retain their established batching policies.
+#[cfg(feature = "net-console")]
+fn direct_genet_response_lane_blocks_next_command(
+    exact_direct_genet_lane: bool,
+    lane: Option<ConsoleResponseLane>,
+) -> bool {
+    exact_direct_genet_lane && lane.is_some_and(|lane| lane.queued_lines != 0)
 }
 
 #[cfg(all(feature = "kernel", feature = "net-console"))]
@@ -5925,8 +6093,7 @@ where
     #[cfg(feature = "kernel")]
     pi_root_control_consumed_window: PiRootControlConsumedWindow,
     #[cfg(all(feature = "kernel", feature = "net-console"))]
-    pi_root_control_productive_continuation_identity:
-        Option<PiRootControlProductiveContinuationIdentity>,
+    pi_root_control_productive_continuation_identity: Option<PiRootControlProductiveContinuation>,
     #[cfg(all(feature = "kernel", feature = "release-pi4"))]
     pi_root_control_pending_passive_command: Option<Box<PiRootControlPendingPassiveCommand>>,
     #[cfg(feature = "kernel")]
@@ -8458,9 +8625,8 @@ where
             for unit_index in 0..PI4_LOCAL_OPERATOR_POLLS_PER_EXPLICIT_YIELD {
                 let admitted_phase = self.linked_runtime_service_phase;
                 let accepted_commands_before = self.metrics.accepted_commands;
-                let direct_genet_immediate_stage_turn = direct_genet_immediate_dispatch_admitted
-                    && admitted_phase == LinkedRuntimeServicePhase::Network
-                    && network_units == 1;
+                #[cfg(feature = "net-console")]
+                let direct_genet_stage_before = self.direct_genet_stage_progress_snapshot();
                 self.poll();
                 if self.pi_root_control_passive_admission_pending() {
                     // begin_pi_root_control_pending has already retained
@@ -8475,20 +8641,41 @@ where
                 serial_admitted |= admitted_phase == LinkedRuntimeServicePhase::Serial;
                 local_seat_admitted |= admitted_phase == LinkedRuntimeServicePhase::LocalSeat;
 
-                if direct_genet_immediate_stage_turn {
-                    direct_genet_causal_stage_completed = true;
-                    self.metrics.net_direct_genet_immediate_stage_turns = self
-                        .metrics
-                        .net_direct_genet_immediate_stage_turns
-                        .saturating_add(1);
+                #[cfg(feature = "net-console")]
+                let (direct_genet_stage_attempted, direct_genet_stage_completed) = self
+                    .direct_genet_stage_progress_snapshot()
+                    .zip(direct_genet_stage_before)
+                    .map_or((false, false), |(after, before)| {
+                        let attempted = before.generation != 0
+                            && before.generation == after.generation
+                            && before.stage_output_turns != u64::MAX
+                            && after.stage_output_turns
+                                == before.stage_output_turns.saturating_add(1);
+                        let completed = attempted
+                            && before.stage_output_successes != u64::MAX
+                            && after.stage_output_successes
+                                == before.stage_output_successes.saturating_add(1)
+                            && after.awaiting_batch_drain;
+                        (attempted, completed)
+                    });
+                #[cfg(feature = "net-console")]
+                if direct_genet_stage_attempted {
+                    if direct_genet_stage_completed {
+                        direct_genet_causal_stage_completed = true;
+                        self.metrics.net_direct_genet_immediate_stage_turns = self
+                            .metrics
+                            .net_direct_genet_immediate_stage_turns
+                            .saturating_add(1);
+                    }
                     self.metrics.net_direct_genet_operator_rotations = self
                         .metrics
                         .net_direct_genet_operator_rotations
                         .saturating_add(1);
                     self.clear_linked_runtime_network_operator_checkpoint_clock();
                     // The fast path removes only the two pre-response seams.
-                    // Every completed response returns to Serial so the next
-                    // command cannot evade physical-operator debt.
+                    // A completed or backpressured StageOutput attempt returns
+                    // to Serial so another command cannot pass the first
+                    // response lane or evade physical-operator debt.
                     self.linked_runtime_service_phase = LinkedRuntimeServicePhase::Serial;
                     break;
                 }
@@ -8541,12 +8728,15 @@ where
             }
             #[cfg(feature = "net-console")]
             if let Some(before) = direct_genet_before {
-                if self.direct_genet_productive_quantum_continuation_due(
+                if let Some(continuation) = self.direct_genet_productive_quantum_continuation_due(
                     before,
                     direct_genet_causal_stage_completed,
                 ) {
-                    self.pi_root_control_productive_continuation_identity =
-                        Some(before.continuation_identity());
+                    self.metrics.net_direct_genet_productive_candidates = self
+                        .metrics
+                        .net_direct_genet_productive_candidates
+                        .saturating_add(1);
+                    self.pi_root_control_productive_continuation_identity = Some(continuation);
                     // The outer userland guard may retain this refill only
                     // while its original Yield-return wall remains strictly
                     // below the generated 250-us pre-leaf cut. Every complete
@@ -10555,16 +10745,45 @@ where
         if diagnostic.generation == 0 {
             return None;
         }
+        let response_identity = net.bounded_console_response_identity()?;
+        if response_identity.generation != diagnostic.generation
+            || response_identity.connection_id != connection_id
+        {
+            return None;
+        }
         Some(DirectGenetProductiveQuantumSnapshot {
             generation: diagnostic.generation,
             connection_id,
             accepted_commands: self.metrics.accepted_commands,
+            command_queue: diagnostic.command_queue,
             immediate_stage_turns: self.metrics.net_direct_genet_immediate_stage_turns,
             child_stage_output_turns: diagnostic.stage_output_turns,
+            child_stage_output_successes: diagnostic.stage_output_successes,
             child_awaiting_batch_drain: diagnostic.awaiting_batch_drain,
+            child_response_drains: diagnostic.response_drains,
+            child_yield_calls: diagnostic.direct_genet_yield_calls,
+            child_yield_counter_hz: diagnostic.direct_genet_yield_counter_hz,
+            child_yield_call_wall_scaled: diagnostic.direct_genet_yield_call_wall_scaled,
+            child_yield_credit_scaled: diagnostic.direct_genet_yield_child_credit_scaled,
+            child_yield_invalid_reasons: diagnostic.direct_genet_yield_invalid_reasons,
             physical_operator_work_pending: self.linked_physical_operator_work()
                 != LinkedPhysicalOperatorWork::Idle,
             physical_console_response_pending: self.physical_console_response_pending(),
+        })
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    fn direct_genet_stage_progress_snapshot(&self) -> Option<DirectGenetStageProgressSnapshot> {
+        let net = self.net.as_deref()?;
+        if net.driver_task_contract() != crate::hal::driver_task::GENET_DRIVER_TASK_CONTRACT {
+            return None;
+        }
+        let diagnostic = net.isolated_console_diagnostics()?;
+        Some(DirectGenetStageProgressSnapshot {
+            generation: diagnostic.generation,
+            stage_output_turns: diagnostic.stage_output_turns,
+            stage_output_successes: diagnostic.stage_output_successes,
+            awaiting_batch_drain: diagnostic.awaiting_batch_drain,
         })
     }
 
@@ -10573,9 +10792,9 @@ where
         &self,
         before: DirectGenetProductiveQuantumSnapshot,
         causal_stage_completed: bool,
-    ) -> bool {
+    ) -> Option<PiRootControlProductiveContinuation> {
         let Some(after) = self.direct_genet_productive_quantum_snapshot() else {
-            return false;
+            return None;
         };
         let local_fault_pending = self.net.as_deref().is_none_or(|net| {
             net.console_service_local_fault_pending()
@@ -10605,7 +10824,7 @@ where
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     pub(crate) fn pi_root_control_productive_continuation_fence_clear(
         &self,
-        expected_identity: PiRootControlProductiveContinuationIdentity,
+        expected: PiRootControlProductiveContinuation,
     ) -> bool {
         let snapshot = self.direct_genet_productive_quantum_snapshot();
         let local_fault_pending = self.net.as_deref().is_none_or(|net| {
@@ -10614,8 +10833,9 @@ where
         });
         direct_genet_productive_continuation_fence_clear(
             DirectGenetProductiveContinuationFenceEvidence {
-                expected_identity: Some(expected_identity),
-                current_identity: snapshot.map(|snapshot| snapshot.continuation_identity()),
+                expected: Some(expected),
+                current_generation: snapshot.map(|snapshot| snapshot.generation),
+                current_connection_id: snapshot.map(|snapshot| snapshot.connection_id),
                 next_phase: self.linked_runtime_service_phase,
                 network_service_quarantined: self.network_service_quarantined,
                 reboot_pending: self.reboot_pending,
@@ -10637,8 +10857,34 @@ where
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     pub(crate) fn take_pi_root_control_productive_continuation_identity(
         &mut self,
-    ) -> Option<PiRootControlProductiveContinuationIdentity> {
+    ) -> Option<PiRootControlProductiveContinuation> {
         self.pi_root_control_productive_continuation_identity.take()
+    }
+
+    /// Record one bounded strict-window decision for `netstats` hardware proof.
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    pub(crate) fn record_pi_root_control_productive_window_decision(
+        &mut self,
+        admitted: bool,
+        effective_root_us: u64,
+        reject_reason: u32,
+    ) {
+        self.metrics.net_direct_genet_productive_effective_high_us = self
+            .metrics
+            .net_direct_genet_productive_effective_high_us
+            .max(effective_root_us);
+        if admitted {
+            self.metrics.net_direct_genet_productive_admitted = self
+                .metrics
+                .net_direct_genet_productive_admitted
+                .saturating_add(1);
+        } else {
+            self.metrics.net_direct_genet_productive_rejected = self
+                .metrics
+                .net_direct_genet_productive_rejected
+                .saturating_add(1);
+            self.metrics.net_direct_genet_productive_reject_reasons |= reject_reason;
+        }
     }
 
     /// Return whether the isolated direct-GENET child retained one exact
@@ -11218,15 +11464,20 @@ where
         if self.network_service_quarantined || self.pi_root_control_passive_admission_pending() {
             return false;
         }
-        let response_pipeline_blocked = self
+        let exact_direct_genet_lane = self.isolated_direct_genet_response_lane_attached();
+        let response_lane = self
             .net
             .as_ref()
-            .and_then(|net| net.console_response_lane())
-            .is_some_and(|lane| lane.producer_open || lane.available_lines == 0);
+            .and_then(|net| net.console_response_lane());
+        let response_pipeline_blocked =
+            response_lane.is_some_and(|lane| lane.producer_open || lane.available_lines == 0);
+        let direct_genet_response_pending =
+            direct_genet_response_lane_blocks_next_command(exact_direct_genet_lane, response_lane);
         if self.network_service_quarantined
             || self.pending_net_flush.active()
             || self.network_response_owner_active()
             || response_pipeline_blocked
+            || direct_genet_response_pending
             || self.stream_end_pending
             || self.pending_stream_active()
         {
@@ -29951,19 +30202,36 @@ where
                             .refresh_direct_genet_diagnostics()
                             .map(format_direct_genet_netstats);
                         let isolated_lines = net.isolated_console_diagnostics().map(|diagnostic| {
+                            let yield_credit_us = if diagnostic.direct_genet_yield_counter_hz == 0 {
+                                0
+                            } else {
+                                match u64::try_from(
+                                    diagnostic.direct_genet_yield_child_credit_scaled
+                                        / u128::from(diagnostic.direct_genet_yield_counter_hz),
+                                ) {
+                                    Ok(value) => value,
+                                    Err(_) => u64::MAX,
+                                }
+                            };
                             let progress = format_message(format_args!(
-                                "netstats: isolated_progress generation={} poll_ms={} progress_ms={} unit={} turns={} progress={}",
+                                "netstats: isolated_progress generation={} poll_ms={} progress_ms={} unit={} turns={} progress={} pcont={}/{}/{} peff_us={} preason=0x{:x}",
                                 diagnostic.generation,
                                 diagnostic.last_poll_ms,
                                 diagnostic.last_progress_ms,
                                 diagnostic.last_unit,
                                 diagnostic.turns,
                                 diagnostic.progress_turns,
+                                self.metrics.net_direct_genet_productive_candidates,
+                                self.metrics.net_direct_genet_productive_admitted,
+                                self.metrics.net_direct_genet_productive_rejected,
+                                self.metrics.net_direct_genet_productive_effective_high_us,
+                                self.metrics.net_direct_genet_productive_reject_reasons,
                             ));
                             let units = format_message(format_args!(
-                                "netstats: isolated_units observe={} output={} disconnect={} ingress={} tick={} egress={} diagnostic={}",
+                                "netstats: isolated_units observe={} output={} output_ok={} disconnect={} ingress={} tick={} egress={} diagnostic={}",
                                 diagnostic.observe_child_turns,
                                 diagnostic.stage_output_turns,
+                                diagnostic.stage_output_successes,
                                 diagnostic.disconnect_turns,
                                 diagnostic.ingress_turns,
                                 diagnostic.service_tick_turns,
@@ -29971,7 +30239,7 @@ where
                                 diagnostic.deferred_diagnostic_turns,
                             ));
                             let state = format_message(format_args!(
-                                "netstats: isolated_state cmd_q={} output_q={} pending_egress={} awaiting_batch={} producer_open={} drains={} ingress_bp={} ingress_drop={}",
+                                "netstats: isolated_state cmd_q={} output_q={} pending_egress={} awaiting_batch={} producer_open={} drains={} ingress_bp={} ingress_drop={} ycalls={} ycredit_us={} yinvalid=0x{:x}",
                                 diagnostic.command_queue,
                                 diagnostic.output_queue,
                                 Self::yes_no(diagnostic.pending_egress),
@@ -29980,6 +30248,9 @@ where
                                 diagnostic.response_drains,
                                 diagnostic.ingress_backpressure,
                                 diagnostic.ingress_dropped,
+                                diagnostic.direct_genet_yield_calls,
+                                yield_credit_us,
+                                diagnostic.direct_genet_yield_invalid_reasons,
                             ));
                             (progress, units, state)
                         });
@@ -38666,6 +38937,7 @@ mod tests {
         send_observer: Option<std::rc::Rc<core::cell::Cell<usize>>>,
         response_batch_capacity: Option<usize>,
         isolated_diagnostics: Option<IsolatedConsoleDiagnostics>,
+        isolated_stage_attempt_on_poll: Option<usize>,
         isolated_stage_progress_on_poll: Option<usize>,
     }
 
@@ -38727,6 +38999,7 @@ mod tests {
                 send_observer: None,
                 response_batch_capacity: None,
                 isolated_diagnostics: None,
+                isolated_stage_attempt_on_poll: None,
                 isolated_stage_progress_on_poll: None,
             }
         }
@@ -38805,14 +39078,35 @@ mod tests {
                 consumer();
             }
             self.polls = self.polls.saturating_add(1);
+            if self.isolated_stage_attempt_on_poll == Some(self.polls)
+                && self.isolated_stage_progress_on_poll != Some(self.polls)
+            {
+                if let Some(mut diagnostic) = self.isolated_diagnostics {
+                    diagnostic.last_unit = "output";
+                    diagnostic.turns = diagnostic.turns.saturating_add(1);
+                    diagnostic.stage_output_turns = diagnostic.stage_output_turns.saturating_add(1);
+                    self.isolated_diagnostics = Some(diagnostic);
+                }
+            }
             if self.isolated_stage_progress_on_poll == Some(self.polls) {
                 if let Some(mut diagnostic) = self.isolated_diagnostics {
                     diagnostic.last_unit = "output";
                     diagnostic.turns = diagnostic.turns.saturating_add(1);
                     diagnostic.progress_turns = diagnostic.progress_turns.saturating_add(1);
                     diagnostic.stage_output_turns = diagnostic.stage_output_turns.saturating_add(1);
+                    diagnostic.stage_output_successes =
+                        diagnostic.stage_output_successes.saturating_add(1);
                     diagnostic.output_queue = 0;
                     diagnostic.awaiting_batch_drain = true;
+                    diagnostic.direct_genet_yield_calls =
+                        diagnostic.direct_genet_yield_calls.saturating_add(1);
+                    diagnostic.direct_genet_yield_counter_hz = 54_000_000;
+                    diagnostic.direct_genet_yield_call_wall_scaled = diagnostic
+                        .direct_genet_yield_call_wall_scaled
+                        .saturating_add(5_400_000_000);
+                    diagnostic.direct_genet_yield_child_credit_scaled = diagnostic
+                        .direct_genet_yield_child_credit_scaled
+                        .saturating_add(4_320_000_000);
                     self.isolated_diagnostics = Some(diagnostic);
                 }
             }
@@ -40306,9 +40600,8 @@ mod tests {
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[test]
     fn quarantined_empty_virtio_operator_returns_before_runtime_tail() {
-        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<
-            32768,
-        >::new());
+        let serial =
+            SerialPort::<_, 4096, 4096, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<4096>::new());
         let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
         let dispatches = std::rc::Rc::new(core::cell::Cell::new(0));
         let runtime_units = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
@@ -44187,6 +44480,7 @@ mod tests {
             progress_turns: 12,
             observe_child_turns: 14,
             stage_output_turns: 13,
+            stage_output_successes: 6,
             disconnect_turns: 11,
             ingress_turns: 12,
             service_tick_turns: 10,
@@ -44200,6 +44494,11 @@ mod tests {
             response_drains: 9,
             ingress_backpressure: 5,
             ingress_dropped: 0,
+            direct_genet_yield_calls: 7,
+            direct_genet_yield_counter_hz: 54_000_000,
+            direct_genet_yield_call_wall_scaled: 8_100_000_000,
+            direct_genet_yield_child_credit_scaled: 7_560_000_000,
+            direct_genet_yield_invalid_reasons: 0,
         });
         let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
         pump.session = Some(SessionRole::Queen);
@@ -44248,7 +44547,7 @@ mod tests {
         );
         assert!(
             rendered.contains(
-                "netstats: isolated_units observe=14 output=13 disconnect=11 ingress=12 tick=10 egress=8 diagnostic=2"
+                "netstats: isolated_units observe=14 output=13 output_ok=6 disconnect=11 ingress=12 tick=10 egress=8 diagnostic=2"
             ),
             "{rendered}"
         );
@@ -54323,6 +54622,7 @@ mod tests {
             progress_turns: 1,
             observe_child_turns: 1,
             stage_output_turns: 0,
+            stage_output_successes: 0,
             disconnect_turns: 0,
             ingress_turns: 0,
             service_tick_turns: 0,
@@ -54336,6 +54636,11 @@ mod tests {
             response_drains: 0,
             ingress_backpressure: 0,
             ingress_dropped: 0,
+            direct_genet_yield_calls: 0,
+            direct_genet_yield_counter_hz: 0,
+            direct_genet_yield_call_wall_scaled: 0,
+            direct_genet_yield_child_credit_scaled: 0,
+            direct_genet_yield_invalid_reasons: 0,
         });
         let mut line = HeaplessString::new();
         assert!(line.push_str("ping").is_ok());
@@ -54382,13 +54687,13 @@ mod tests {
             assert!(pump.pi_root_control_productive_continuation_fence_clear(retained_identity));
             assert!(
                 !pump.pi_root_control_productive_continuation_fence_clear(
-                    PiRootControlProductiveContinuationIdentity::for_test(2, 17),
+                    PiRootControlProductiveContinuation::for_test(2, 17),
                 ),
                 "generation drift must stop before another EventPump poll",
             );
             assert!(
                 !pump.pi_root_control_productive_continuation_fence_clear(
-                    PiRootControlProductiveContinuationIdentity::for_test(1, 18),
+                    PiRootControlProductiveContinuation::for_test(1, 18),
                 ),
                 "connection drift must stop before another EventPump poll",
             );
@@ -54419,7 +54724,7 @@ mod tests {
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[test]
-    fn direct_genet_backpressured_stage_attempt_keeps_the_explicit_yield_boundary() {
+    fn direct_genet_serial_start_retains_exact_command_acceptance_for_network_stage() {
         struct LinkedRuntimeTestReset;
 
         impl Drop for LinkedRuntimeTestReset {
@@ -54431,9 +54736,8 @@ mod tests {
         let _progress_guard = wifi_driver_task_progress_test_guard();
         crate::serial::test_begin_linked_runtime_only_transport();
         let _reset = LinkedRuntimeTestReset;
-        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<
-            32768,
-        >::new());
+        let serial =
+            SerialPort::<_, 4096, 4096, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<4096>::new());
         let timer = TestTimer::repeated(8, 1);
         let store: TicketTable<4> = TicketTable::new();
         let mut audit = AuditLog::new();
@@ -54442,6 +54746,7 @@ mod tests {
         genet.active_conn_id = Some(17);
         genet.authenticated_conn_id = Some(17);
         genet.response_batch_capacity = Some(8);
+        genet.isolated_stage_progress_on_poll = Some(1);
         genet.isolated_diagnostics = Some(IsolatedConsoleDiagnostics {
             generation: 1,
             last_poll_ms: 1,
@@ -54451,6 +54756,7 @@ mod tests {
             progress_turns: 1,
             observe_child_turns: 1,
             stage_output_turns: 0,
+            stage_output_successes: 0,
             disconnect_turns: 0,
             ingress_turns: 0,
             service_tick_turns: 0,
@@ -54464,6 +54770,116 @@ mod tests {
             response_drains: 0,
             ingress_backpressure: 0,
             ingress_dropped: 0,
+            direct_genet_yield_calls: 0,
+            direct_genet_yield_counter_hz: 0,
+            direct_genet_yield_call_wall_scaled: 0,
+            direct_genet_yield_child_credit_scaled: 0,
+            direct_genet_yield_invalid_reasons: 0,
+        });
+        let line = HeaplessString::try_from("ping").expect("PING fits console line");
+        assert!(genet
+            .lines
+            .push(ConsoleLine::for_connection(line, 1, 17))
+            .is_ok());
+        let second_line = HeaplessString::try_from("ping").expect("PING fits console line");
+        assert!(genet
+            .lines
+            .push(ConsoleLine::for_connection(second_line, 1, 17))
+            .is_ok());
+        let mut local_seat = LocalSeatRuntime::new(crate::local_seat::LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 192,
+            buffer_lines: 64,
+        });
+        local_seat.mark_root_console_ready();
+
+        let mut pump = EventPump::new(serial, timer, NullIpc, store, &mut audit)
+            .with_network(&mut genet)
+            .with_local_seat(&mut local_seat);
+        pump.linked_runtime_service_phase = LinkedRuntimeServicePhase::Serial;
+        let explicit_yield = pump.poll_root_control_quantum_for_state(true, true);
+        assert!(
+            !explicit_yield,
+            "the production Serial-start rotation should retain its exact accepted command and durable stage: phase={:?} accepted={} last_source={:?} metrics={:?}",
+            pump.linked_runtime_service_phase,
+            pump.metrics.accepted_commands,
+            pump.last_input_source,
+            pump.metrics,
+        );
+        let continuation = pump
+            .take_pi_root_control_productive_continuation_identity()
+            .expect("Serial-start command acceptance emits exact continuation authority");
+        assert_eq!(
+            continuation.progress,
+            DirectGenetProductiveProgress::CommandAcceptedAndStagePublished,
+        );
+        assert_eq!(
+            pump.linked_runtime_service_phase,
+            LinkedRuntimeServicePhase::Serial,
+        );
+        assert!(pump.pi_root_control_productive_continuation_fence_clear(continuation));
+        drop(pump);
+        assert_eq!(
+            genet.lines.len(),
+            1,
+            "the first response lane must block a second command before its durable stage",
+        );
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn direct_genet_backpressured_stage_attempt_keeps_the_explicit_yield_boundary() {
+        struct LinkedRuntimeTestReset;
+
+        impl Drop for LinkedRuntimeTestReset {
+            fn drop(&mut self) {
+                crate::serial::test_end_linked_runtime_only_transport();
+            }
+        }
+
+        let _progress_guard = wifi_driver_task_progress_test_guard();
+        crate::serial::test_begin_linked_runtime_only_transport();
+        let _reset = LinkedRuntimeTestReset;
+        let serial =
+            SerialPort::<_, 4096, 4096, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<4096>::new());
+        let timer = TestTimer::repeated(8, 1);
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut genet = FakeNet::new();
+        genet.driver_contract = crate::hal::driver_task::GENET_DRIVER_TASK_CONTRACT;
+        genet.active_conn_id = Some(17);
+        genet.authenticated_conn_id = Some(17);
+        genet.response_batch_capacity = Some(8);
+        genet.isolated_stage_attempt_on_poll = Some(2);
+        genet.isolated_diagnostics = Some(IsolatedConsoleDiagnostics {
+            generation: 1,
+            last_poll_ms: 1,
+            last_progress_ms: 1,
+            last_unit: "observe-child",
+            turns: 1,
+            progress_turns: 1,
+            observe_child_turns: 1,
+            stage_output_turns: 0,
+            stage_output_successes: 0,
+            disconnect_turns: 0,
+            ingress_turns: 0,
+            service_tick_turns: 0,
+            transmit_egress_turns: 0,
+            deferred_diagnostic_turns: 0,
+            command_queue: 1,
+            output_queue: 0,
+            pending_egress: false,
+            awaiting_batch_drain: false,
+            producer_open: false,
+            response_drains: 0,
+            ingress_backpressure: 0,
+            ingress_dropped: 0,
+            direct_genet_yield_calls: 0,
+            direct_genet_yield_counter_hz: 0,
+            direct_genet_yield_call_wall_scaled: 0,
+            direct_genet_yield_child_credit_scaled: 0,
+            direct_genet_yield_invalid_reasons: 0,
         });
         let line = HeaplessString::try_from("ping").expect("PING fits console line");
         assert!(genet
@@ -54494,18 +54910,63 @@ mod tests {
                 "a selected StageOutput unit without durable child progress must Yield",
             );
             assert_eq!(pump.metrics.accepted_commands, 1);
-            assert_eq!(pump.metrics.net_direct_genet_immediate_stage_turns, 1);
+            assert_eq!(pump.metrics.net_direct_genet_immediate_stage_turns, 0);
             assert!(
                 pump.take_pi_root_control_productive_continuation_identity()
                     .is_none(),
                 "a backpressured StageOutput attempt cannot mint continuation identity",
             );
+
+            assert!(
+                pump.poll_root_control_quantum_for_state(true, true),
+                "the next bounded quantum must Yield while the first response remains unstaged",
+            );
+            assert_eq!(
+                pump.metrics.accepted_commands, 1,
+                "the direct-GENET lane cannot accept a second command behind unstaged output",
+            );
         }
 
-        assert_eq!(genet.polls, 2);
+        assert!(genet.polls >= 3);
+        assert_eq!(genet.lines.len(), 1);
+        assert!(genet
+            .response_lane
+            .is_some_and(|lane| lane.queued_lines != 0));
         assert!(genet
             .isolated_diagnostics
             .is_some_and(|diagnostic| !diagnostic.awaiting_batch_drain));
+
+        // Model the exact child accepting the first batch. Its published
+        // batch may still await drain, but no root output remains unstaged, so
+        // bounded command pipelining is legal again.
+        let response_lane = genet
+            .response_lane
+            .expect("the first completed response remains retained");
+        genet.response_lane = Some(ConsoleResponseLane {
+            queued_lines: 0,
+            available_lines: 8,
+            awaiting_batch_drain: true,
+            ..response_lane
+        });
+        if let Some(mut diagnostic) = genet.isolated_diagnostics {
+            diagnostic.output_queue = 0;
+            diagnostic.awaiting_batch_drain = true;
+            genet.isolated_diagnostics = Some(diagnostic);
+        }
+        let serial =
+            SerialPort::<_, 4096, 4096, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<4096>::new());
+        let timer = TestTimer::repeated(8, 1);
+        let store: TicketTable<4> = TicketTable::new();
+        let mut pump = EventPump::new(serial, timer, NullIpc, store, &mut audit)
+            .with_network(&mut genet)
+            .with_local_seat(&mut local_seat);
+        assert!(
+            pump.dispatch_one_buffered_network_line(),
+            "durable first-response StageOutput must reopen the next command",
+        );
+        assert_eq!(pump.metrics.accepted_commands, 1);
+        drop(pump);
+        assert!(genet.lines.is_empty());
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
@@ -54532,6 +54993,7 @@ mod tests {
             progress_turns: 1,
             observe_child_turns: 1,
             stage_output_turns: 0,
+            stage_output_successes: 0,
             disconnect_turns: 0,
             ingress_turns: 0,
             service_tick_turns: 0,
@@ -54545,6 +55007,11 @@ mod tests {
             response_drains: 0,
             ingress_backpressure: 0,
             ingress_dropped: 0,
+            direct_genet_yield_calls: 0,
+            direct_genet_yield_counter_hz: 0,
+            direct_genet_yield_call_wall_scaled: 0,
+            direct_genet_yield_child_credit_scaled: 0,
+            direct_genet_yield_invalid_reasons: 0,
         });
 
         {
@@ -54566,29 +55033,35 @@ mod tests {
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[test]
-    fn direct_genet_productive_continuation_requires_one_causal_net_response_and_no_operator_debt()
-    {
+    fn direct_genet_productive_continuation_types_exact_progress_and_rejects_mixed_or_stale_evidence(
+    ) {
         let before = DirectGenetProductiveQuantumSnapshot {
             generation: 7,
             connection_id: 17,
             accepted_commands: 41,
+            command_queue: 1,
             immediate_stage_turns: 9,
             child_stage_output_turns: 4,
+            child_stage_output_successes: 4,
             child_awaiting_batch_drain: false,
+            child_response_drains: 2,
+            child_yield_calls: 10,
+            child_yield_counter_hz: 54_000_000,
+            child_yield_call_wall_scaled: 54_000_000_000,
+            child_yield_credit_scaled: 43_200_000_000,
+            child_yield_invalid_reasons: 0,
             physical_operator_work_pending: false,
             physical_console_response_pending: false,
         };
-        let after = DirectGenetProductiveQuantumSnapshot {
+        let command_after = DirectGenetProductiveQuantumSnapshot {
             accepted_commands: 42,
-            immediate_stage_turns: 10,
-            child_stage_output_turns: 5,
-            child_awaiting_batch_drain: true,
+            command_queue: 0,
             ..before
         };
-        let baseline = DirectGenetProductiveQuantumEvidence {
+        let command = DirectGenetProductiveQuantumEvidence {
             before,
-            after,
-            causal_stage_completed: true,
+            after: command_after,
+            causal_stage_completed: false,
             last_input_source: ConsoleInputSource::Net,
             next_phase: LinkedRuntimeServicePhase::Serial,
             network_service_quarantined: false,
@@ -54598,131 +55071,242 @@ mod tests {
             passive_admission_pending: false,
             local_fault_pending: false,
         };
-        assert!(direct_genet_productive_quantum_continuation_entitled(
-            baseline
-        ));
+        assert_eq!(
+            direct_genet_productive_quantum_continuation_entitled(command)
+                .map(|continuation| continuation.progress),
+            Some(DirectGenetProductiveProgress::CommandAccepted),
+            "a production Serial-start quantum may retain only the accepted command after returning to Serial",
+        );
+
+        let stage_after = DirectGenetProductiveQuantumSnapshot {
+            immediate_stage_turns: 10,
+            child_stage_output_turns: 5,
+            child_stage_output_successes: 5,
+            child_awaiting_batch_drain: true,
+            child_yield_calls: 11,
+            child_yield_call_wall_scaled: 59_400_000_000,
+            child_yield_credit_scaled: 47_520_000_000,
+            ..before
+        };
+        let stage = DirectGenetProductiveQuantumEvidence {
+            before,
+            after: stage_after,
+            causal_stage_completed: true,
+            last_input_source: ConsoleInputSource::Net,
+            next_phase: LinkedRuntimeServicePhase::Serial,
+            ..command
+        };
+        assert_eq!(
+            direct_genet_productive_quantum_continuation_entitled(stage)
+                .map(|continuation| continuation.progress),
+            Some(DirectGenetProductiveProgress::StagePublished),
+        );
+
+        let command_and_stage = DirectGenetProductiveQuantumEvidence {
+            after: DirectGenetProductiveQuantumSnapshot {
+                accepted_commands: 42,
+                command_queue: 0,
+                ..stage_after
+            },
+            ..stage
+        };
+        assert_eq!(
+            direct_genet_productive_quantum_continuation_entitled(command_and_stage)
+                .map(|continuation| continuation.progress),
+            Some(DirectGenetProductiveProgress::CommandAcceptedAndStagePublished),
+        );
+
+        let drain_before = DirectGenetProductiveQuantumSnapshot {
+            child_awaiting_batch_drain: true,
+            ..before
+        };
+        let drain_after = DirectGenetProductiveQuantumSnapshot {
+            child_awaiting_batch_drain: false,
+            child_response_drains: 3,
+            child_yield_calls: 11,
+            child_yield_call_wall_scaled: 59_400_000_000,
+            child_yield_credit_scaled: 47_520_000_000,
+            ..drain_before
+        };
+        let drain = DirectGenetProductiveQuantumEvidence {
+            before: drain_before,
+            after: drain_after,
+            causal_stage_completed: false,
+            next_phase: LinkedRuntimeServicePhase::Serial,
+            ..command
+        };
+        assert_eq!(
+            direct_genet_productive_quantum_continuation_entitled(drain)
+                .map(|continuation| continuation.progress),
+            Some(DirectGenetProductiveProgress::ResponseDrained),
+        );
+
+        let drain_and_stage = DirectGenetProductiveQuantumEvidence {
+            after: DirectGenetProductiveQuantumSnapshot {
+                immediate_stage_turns: 10,
+                child_stage_output_turns: 5,
+                child_stage_output_successes: 5,
+                child_awaiting_batch_drain: true,
+                child_response_drains: 3,
+                child_yield_calls: 12,
+                child_yield_call_wall_scaled: 64_800_000_000,
+                child_yield_credit_scaled: 51_840_000_000,
+                ..drain_before
+            },
+            causal_stage_completed: true,
+            ..drain
+        };
+        assert_eq!(
+            direct_genet_productive_quantum_continuation_entitled(drain_and_stage)
+                .map(|continuation| continuation.progress),
+            Some(DirectGenetProductiveProgress::DrainAndStage),
+        );
 
         for evidence in [
             DirectGenetProductiveQuantumEvidence {
                 causal_stage_completed: false,
-                ..baseline
+                ..stage
             },
             DirectGenetProductiveQuantumEvidence {
                 last_input_source: ConsoleInputSource::Serial,
-                ..baseline
-            },
-            DirectGenetProductiveQuantumEvidence {
-                last_input_source: ConsoleInputSource::LocalSeat,
-                ..baseline
-            },
-            DirectGenetProductiveQuantumEvidence {
-                after: DirectGenetProductiveQuantumSnapshot {
-                    accepted_commands: before.accepted_commands,
-                    ..after
-                },
-                ..baseline
+                ..command_and_stage
             },
             DirectGenetProductiveQuantumEvidence {
                 after: DirectGenetProductiveQuantumSnapshot {
                     accepted_commands: before.accepted_commands.saturating_add(2),
-                    ..after
+                    ..command_after
                 },
-                ..baseline
+                ..command
             },
             DirectGenetProductiveQuantumEvidence {
                 after: DirectGenetProductiveQuantumSnapshot {
-                    immediate_stage_turns: before.immediate_stage_turns,
-                    ..after
+                    child_stage_output_successes: before.child_stage_output_successes,
+                    ..stage_after
                 },
-                ..baseline
+                ..stage
             },
             DirectGenetProductiveQuantumEvidence {
                 after: DirectGenetProductiveQuantumSnapshot {
-                    child_stage_output_turns: before.child_stage_output_turns,
-                    ..after
+                    child_yield_invalid_reasons: 1,
+                    ..stage_after
                 },
-                ..baseline
+                ..stage
+            },
+            DirectGenetProductiveQuantumEvidence {
+                before: DirectGenetProductiveQuantumSnapshot {
+                    child_yield_invalid_reasons: 1,
+                    ..before
+                },
+                ..stage
             },
             DirectGenetProductiveQuantumEvidence {
                 after: DirectGenetProductiveQuantumSnapshot {
-                    child_awaiting_batch_drain: false,
-                    ..after
+                    child_yield_counter_hz: 24_000_000,
+                    ..stage_after
                 },
-                ..baseline
+                ..stage
+            },
+            DirectGenetProductiveQuantumEvidence {
+                after: DirectGenetProductiveQuantumSnapshot {
+                    child_yield_calls: before.child_yield_calls - 1,
+                    ..stage_after
+                },
+                ..stage
+            },
+            DirectGenetProductiveQuantumEvidence {
+                after: DirectGenetProductiveQuantumSnapshot {
+                    child_yield_credit_scaled: before.child_yield_credit_scaled - 1,
+                    ..stage_after
+                },
+                ..stage
+            },
+            DirectGenetProductiveQuantumEvidence {
+                after: DirectGenetProductiveQuantumSnapshot {
+                    child_yield_credit_scaled: stage_after.child_yield_call_wall_scaled + 1,
+                    ..stage_after
+                },
+                ..stage
+            },
+            DirectGenetProductiveQuantumEvidence {
+                after: DirectGenetProductiveQuantumSnapshot {
+                    child_response_drains: before.child_response_drains.saturating_add(1),
+                    ..command_after
+                },
+                ..command
             },
             DirectGenetProductiveQuantumEvidence {
                 before: DirectGenetProductiveQuantumSnapshot {
                     physical_operator_work_pending: true,
                     ..before
                 },
-                ..baseline
+                ..stage
             },
             DirectGenetProductiveQuantumEvidence {
                 after: DirectGenetProductiveQuantumSnapshot {
                     physical_operator_work_pending: true,
-                    ..after
+                    ..stage_after
                 },
-                ..baseline
+                ..stage
             },
             DirectGenetProductiveQuantumEvidence {
                 before: DirectGenetProductiveQuantumSnapshot {
                     physical_console_response_pending: true,
                     ..before
                 },
-                ..baseline
+                ..stage
             },
             DirectGenetProductiveQuantumEvidence {
                 after: DirectGenetProductiveQuantumSnapshot {
                     physical_console_response_pending: true,
-                    ..after
+                    ..stage_after
                 },
-                ..baseline
+                ..stage
             },
             DirectGenetProductiveQuantumEvidence {
                 after: DirectGenetProductiveQuantumSnapshot {
                     generation: before.generation.saturating_add(1),
-                    ..after
+                    ..stage_after
                 },
-                ..baseline
+                ..stage
             },
             DirectGenetProductiveQuantumEvidence {
                 after: DirectGenetProductiveQuantumSnapshot {
                     connection_id: before.connection_id.saturating_add(1),
-                    ..after
+                    ..stage_after
                 },
-                ..baseline
+                ..stage
             },
             DirectGenetProductiveQuantumEvidence {
                 next_phase: LinkedRuntimeServicePhase::Network,
-                ..baseline
+                ..stage
             },
             DirectGenetProductiveQuantumEvidence {
                 network_service_quarantined: true,
-                ..baseline
+                ..stage
             },
             DirectGenetProductiveQuantumEvidence {
                 reboot_pending: true,
-                ..baseline
+                ..stage
             },
             DirectGenetProductiveQuantumEvidence {
                 recovery_or_containment_pending: true,
-                ..baseline
+                ..stage
             },
             DirectGenetProductiveQuantumEvidence {
                 handoff_pending: true,
-                ..baseline
+                ..stage
             },
             DirectGenetProductiveQuantumEvidence {
                 passive_admission_pending: true,
-                ..baseline
+                ..stage
             },
             DirectGenetProductiveQuantumEvidence {
                 local_fault_pending: true,
-                ..baseline
+                ..stage
             },
         ] {
             assert!(
-                !direct_genet_productive_quantum_continuation_entitled(evidence),
+                direct_genet_productive_quantum_continuation_entitled(evidence).is_none(),
                 "retained continuation evidence must fail closed: {evidence:?}",
             );
         }
@@ -54731,13 +55315,11 @@ mod tests {
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[test]
     fn direct_genet_productive_race_fence_rejects_every_late_authority_or_operator_change() {
-        let identity = PiRootControlProductiveContinuationIdentity {
-            generation: 7,
-            connection_id: 17,
-        };
+        let continuation = PiRootControlProductiveContinuation::for_test(7, 17);
         let baseline = DirectGenetProductiveContinuationFenceEvidence {
-            expected_identity: Some(identity),
-            current_identity: Some(identity),
+            expected: Some(continuation),
+            current_generation: Some(7),
+            current_connection_id: Some(17),
             next_phase: LinkedRuntimeServicePhase::Serial,
             network_service_quarantined: false,
             reboot_pending: false,
@@ -54751,25 +55333,23 @@ mod tests {
         assert!(direct_genet_productive_continuation_fence_clear(baseline));
         for evidence in [
             DirectGenetProductiveContinuationFenceEvidence {
-                expected_identity: None,
+                expected: None,
                 ..baseline
             },
             DirectGenetProductiveContinuationFenceEvidence {
-                current_identity: None,
+                current_generation: None,
                 ..baseline
             },
             DirectGenetProductiveContinuationFenceEvidence {
-                current_identity: Some(PiRootControlProductiveContinuationIdentity {
-                    generation: identity.generation.saturating_add(1),
-                    ..identity
-                }),
+                current_connection_id: None,
                 ..baseline
             },
             DirectGenetProductiveContinuationFenceEvidence {
-                current_identity: Some(PiRootControlProductiveContinuationIdentity {
-                    connection_id: identity.connection_id.saturating_add(1),
-                    ..identity
-                }),
+                current_generation: Some(8),
+                ..baseline
+            },
+            DirectGenetProductiveContinuationFenceEvidence {
+                current_connection_id: Some(18),
                 ..baseline
             },
             DirectGenetProductiveContinuationFenceEvidence {
@@ -55304,6 +55884,47 @@ mod tests {
                 "unsafe or stale response-stage evidence must fail closed: {evidence:?}",
             );
         }
+    }
+
+    #[cfg(feature = "net-console")]
+    #[test]
+    fn direct_genet_unstaged_output_alone_fences_the_following_command() {
+        let idle = ConsoleResponseLane {
+            generation: 9,
+            connection_id: 17,
+            queued_lines: 0,
+            available_lines: 8,
+            awaiting_batch_drain: false,
+            terminal_queued: false,
+            producer_open: false,
+            completed_responses: 0,
+        };
+        let unstaged = ConsoleResponseLane {
+            queued_lines: 1,
+            available_lines: 7,
+            terminal_queued: true,
+            completed_responses: 1,
+            ..idle
+        };
+        assert!(direct_genet_response_lane_blocks_next_command(
+            true,
+            Some(unstaged),
+        ));
+        assert!(
+            !direct_genet_response_lane_blocks_next_command(false, Some(unstaged)),
+            "QEMU and mediated Wi-Fi retain their bounded batching policy",
+        );
+
+        let staged = ConsoleResponseLane {
+            awaiting_batch_drain: true,
+            terminal_queued: true,
+            completed_responses: 1,
+            ..idle
+        };
+        assert!(
+            !direct_genet_response_lane_blocks_next_command(true, Some(staged)),
+            "durable StageOutput progress reopens bounded direct-GENET pipelining",
+        );
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]

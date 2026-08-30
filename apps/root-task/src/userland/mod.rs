@@ -1120,7 +1120,10 @@ impl DeferredCyw43ActivationWindow {
 struct PiRootControlProductiveWindow {
     clock: DeferredCyw43ActivationClock,
     completed_quanta: u8,
-    identity: Option<crate::event::PiRootControlProductiveContinuationIdentity>,
+    continuation: Option<crate::event::PiRootControlProductiveContinuation>,
+    credited_child_scaled: u128,
+    last_effective_root_scaled: u128,
+    last_reject_reason: u32,
 }
 
 #[cfg(all(
@@ -1139,12 +1142,23 @@ struct PiRootControlProductiveWindow {
 ))]
 impl PiRootControlProductiveWindow {
     const MAX_COMPLETED_QUANTA: u8 = 64;
+    const REJECT_FENCE: u32 = 1 << 0;
+    const REJECT_CAP: u32 = 1 << 1;
+    const REJECT_CLOCK: u32 = 1 << 2;
+    const REJECT_POLICY: u32 = 1 << 3;
+    const REJECT_COUNTER: u32 = 1 << 4;
+    const REJECT_ARITHMETIC: u32 = 1 << 5;
+    const REJECT_CREDIT: u32 = 1 << 6;
+    const REJECT_TOKEN: u32 = 1 << 7;
 
     const fn new() -> Self {
         Self {
             clock: DeferredCyw43ActivationClock::Unstarted,
             completed_quanta: 0,
-            identity: None,
+            continuation: None,
+            credited_child_scaled: 0,
+            last_effective_root_scaled: 0,
+            last_reject_reason: 0,
         }
     }
 
@@ -1159,7 +1173,10 @@ impl PiRootControlProductiveWindow {
         reserve_us: Option<u64>,
     ) -> bool {
         self.completed_quanta = 0;
-        self.identity = None;
+        self.continuation = None;
+        self.credited_child_scaled = 0;
+        self.last_effective_root_scaled = 0;
+        self.last_reject_reason = 0;
         self.clock = if resumed_at_ticks != 0
             && counter_hz != 0
             && reserve_us.is_some_and(|reserve| reserve != 0)
@@ -1180,7 +1197,10 @@ impl PiRootControlProductiveWindow {
         counter_hz: u64,
         reserve_us: Option<u64>,
     ) -> bool {
+        self.last_reject_reason = 0;
+        self.last_effective_root_scaled = 0;
         if self.completed_quanta >= Self::MAX_COMPLETED_QUANTA {
+            self.last_reject_reason = Self::REJECT_CAP;
             return false;
         }
         if matches!(
@@ -1190,11 +1210,16 @@ impl PiRootControlProductiveWindow {
             // Before the first measurable Yield return, or after an invalid
             // return sample, execute at most one legacy bounded quantum and
             // then force the explicit Yield boundary.
-            return self.completed_quanta == 0;
+            let admitted = self.completed_quanta == 0;
+            if !admitted {
+                self.last_reject_reason = Self::REJECT_CLOCK;
+            }
+            return admitted;
         }
         let Some(reserve_us) = reserve_us.filter(|reserve| *reserve != 0) else {
             self.clock = DeferredCyw43ActivationClock::Invalid;
             self.completed_quanta = Self::MAX_COMPLETED_QUANTA;
+            self.last_reject_reason = Self::REJECT_POLICY;
             return false;
         };
         let DeferredCyw43ActivationClock::Timed {
@@ -1211,27 +1236,82 @@ impl PiRootControlProductiveWindow {
         {
             self.clock = DeferredCyw43ActivationClock::Invalid;
             self.completed_quanta = Self::MAX_COMPLETED_QUANTA;
+            self.last_reject_reason = Self::REJECT_COUNTER;
             return false;
         }
         let elapsed_scaled = u128::from(now_ticks - started_ticks).checked_mul(1_000_000u128);
         let reserve_scaled = u128::from(counter_hz).checked_mul(u128::from(reserve_us));
-        elapsed_scaled
-            .zip(reserve_scaled)
-            .is_some_and(|(elapsed, reserve)| elapsed < reserve)
+        let Some((elapsed_scaled, reserve_scaled)) = elapsed_scaled.zip(reserve_scaled) else {
+            self.clock = DeferredCyw43ActivationClock::Invalid;
+            self.completed_quanta = Self::MAX_COMPLETED_QUANTA;
+            self.last_reject_reason = Self::REJECT_ARITHMETIC;
+            return false;
+        };
+        let Some(effective_root_scaled) = elapsed_scaled.checked_sub(self.credited_child_scaled)
+        else {
+            self.clock = DeferredCyw43ActivationClock::Invalid;
+            self.completed_quanta = Self::MAX_COMPLETED_QUANTA;
+            self.last_reject_reason = Self::REJECT_CREDIT;
+            return false;
+        };
+        self.last_effective_root_scaled = effective_root_scaled;
+        let admitted = effective_root_scaled < reserve_scaled;
+        if !admitted {
+            self.last_reject_reason = Self::REJECT_CLOCK;
+        }
+        admitted
     }
 
     fn record_completed_quantum(
         &mut self,
-        identity: crate::event::PiRootControlProductiveContinuationIdentity,
+        continuation: crate::event::PiRootControlProductiveContinuation,
     ) -> bool {
-        if self.identity.is_some_and(|retained| retained != identity) {
+        if self
+            .continuation
+            .is_some_and(|retained| !retained.same_lane(continuation))
+        {
             self.clock = DeferredCyw43ActivationClock::Invalid;
             self.completed_quanta = Self::MAX_COMPLETED_QUANTA;
-            self.identity = None;
+            self.continuation = None;
+            self.last_reject_reason = Self::REJECT_TOKEN;
             return false;
         }
-        self.identity = Some(identity);
-        self.completed_quanta = self.completed_quanta.saturating_add(1);
+        if continuation.child_credit_scaled() != 0 {
+            let DeferredCyw43ActivationClock::Timed { counter_hz, .. } = self.clock else {
+                self.clock = DeferredCyw43ActivationClock::Invalid;
+                self.completed_quanta = Self::MAX_COMPLETED_QUANTA;
+                self.continuation = None;
+                self.last_reject_reason = Self::REJECT_CREDIT;
+                return false;
+            };
+            if continuation.child_credit_counter_hz() != counter_hz {
+                self.clock = DeferredCyw43ActivationClock::Invalid;
+                self.completed_quanta = Self::MAX_COMPLETED_QUANTA;
+                self.continuation = None;
+                self.last_reject_reason = Self::REJECT_COUNTER;
+                return false;
+            }
+        }
+        let Some(credited_child_scaled) = self
+            .credited_child_scaled
+            .checked_add(continuation.child_credit_scaled())
+        else {
+            self.clock = DeferredCyw43ActivationClock::Invalid;
+            self.completed_quanta = Self::MAX_COMPLETED_QUANTA;
+            self.continuation = None;
+            self.last_reject_reason = Self::REJECT_ARITHMETIC;
+            return false;
+        };
+        let Some(completed_quanta) = self.completed_quanta.checked_add(1) else {
+            self.clock = DeferredCyw43ActivationClock::Invalid;
+            self.completed_quanta = Self::MAX_COMPLETED_QUANTA;
+            self.continuation = None;
+            self.last_reject_reason = Self::REJECT_CAP;
+            return false;
+        };
+        self.credited_child_scaled = credited_child_scaled;
+        self.continuation = Some(continuation);
+        self.completed_quanta = completed_quanta;
         true
     }
 
@@ -1241,8 +1321,22 @@ impl PiRootControlProductiveWindow {
 
     const fn continuation_identity(
         self,
-    ) -> Option<crate::event::PiRootControlProductiveContinuationIdentity> {
-        self.identity
+    ) -> Option<crate::event::PiRootControlProductiveContinuation> {
+        self.continuation
+    }
+
+    fn last_effective_root_us(self, counter_hz: u64) -> u64 {
+        if counter_hz == 0 {
+            return 0;
+        }
+        match u64::try_from(self.last_effective_root_scaled / u128::from(counter_hz)) {
+            Ok(value) => value,
+            Err(_) => u64::MAX,
+        }
+    }
+
+    const fn last_reject_reason(self) -> u32 {
+        self.last_reject_reason
     }
 }
 
@@ -1277,11 +1371,22 @@ where
     loop {
         let counter_hz = counter_frequency();
         let activation_reserve_us = deferred_cyw43_activation_reserve_from_manifest_us();
-        if window.has_completed_quantum() {
+        let retained_quantum = window.has_completed_quantum();
+        if retained_quantum {
             let Some(identity) = window.continuation_identity() else {
+                pump.record_pi_root_control_productive_window_decision(
+                    false,
+                    window.last_effective_root_us(counter_hz),
+                    PiRootControlProductiveWindow::REJECT_TOKEN,
+                );
                 return true;
             };
             if !pump.pi_root_control_productive_continuation_fence_clear(identity) {
+                pump.record_pi_root_control_productive_window_decision(
+                    false,
+                    window.last_effective_root_us(counter_hz),
+                    PiRootControlProductiveWindow::REJECT_FENCE,
+                );
                 return true;
             }
         }
@@ -1292,17 +1397,42 @@ where
         // fence first so CNTVCT remains the last sampled authority before the
         // pure comparison and EventPump entry.
         let now_ticks = monotonic_ticks();
-        if !window.next_quantum_admitted(now_ticks, counter_hz, activation_reserve_us) {
+        let admitted = window.next_quantum_admitted(now_ticks, counter_hz, activation_reserve_us);
+        if retained_quantum && !admitted {
+            pump.record_pi_root_control_productive_window_decision(
+                false,
+                window.last_effective_root_us(counter_hz),
+                window.last_reject_reason(),
+            );
+        }
+        if !admitted {
             return true;
         }
         let explicit_yield_required = pump.poll_root_control_quantum();
+        if retained_quantum {
+            pump.record_pi_root_control_productive_window_decision(
+                true,
+                window.last_effective_root_us(counter_hz),
+                0,
+            );
+        }
         if explicit_yield_required {
             return true;
         }
         let Some(identity) = pump.take_pi_root_control_productive_continuation_identity() else {
+            pump.record_pi_root_control_productive_window_decision(
+                false,
+                window.last_effective_root_us(counter_hz),
+                PiRootControlProductiveWindow::REJECT_TOKEN,
+            );
             return true;
         };
         if !window.record_completed_quantum(identity) {
+            pump.record_pi_root_control_productive_window_decision(
+                false,
+                window.last_effective_root_us(counter_hz),
+                window.last_reject_reason(),
+            );
             return true;
         }
     }
@@ -7103,7 +7233,7 @@ mod tests {
     #[test]
     fn pi_genet_productive_window_is_prechecked_unslid_strict_and_hard_capped() {
         let reserve = super::deferred_cyw43_activation_reserve_us(2_750, 2_500, true);
-        let identity = crate::event::PiRootControlProductiveContinuationIdentity::for_test(7, 17);
+        let identity = crate::event::PiRootControlProductiveContinuation::for_test(7, 17);
         let mut window = super::PiRootControlProductiveWindow::new();
         assert!(
             window.next_quantum_admitted(100, 1_000_000, reserve),
@@ -7117,6 +7247,43 @@ mod tests {
         assert!(
             !window.next_quantum_admitted(350, 1_000_000, reserve),
             "equality at the original Yield-return 250-us cut must Yield"
+        );
+
+        let credited = crate::event::PiRootControlProductiveContinuation::for_test_with_credit(
+            7,
+            17,
+            100_000_000,
+            1_000_000,
+        );
+        assert!(window.restart_after_yield(100, 1_000_000, reserve));
+        assert!(window.record_completed_quantum(credited));
+        assert!(window.next_quantum_admitted(449, 1_000_000, reserve));
+        assert!(
+            !window.next_quantum_admitted(450, 1_000_000, reserve),
+            "equality after subtracting only call-local child consumption must Yield",
+        );
+
+        assert!(window.restart_after_yield(100, 1_000_000, reserve));
+        let excess_credit = crate::event::PiRootControlProductiveContinuation::for_test_with_credit(
+            7,
+            17,
+            300_000_000,
+            1_000_000,
+        );
+        assert!(window.record_completed_quantum(excess_credit));
+        assert!(
+            !window.next_quantum_admitted(200, 1_000_000, reserve),
+            "credit greater than the observed activation wall fails closed",
+        );
+
+        assert!(window.restart_after_yield(100, 1_000_000, reserve));
+        let wrong_credit_frequency =
+            crate::event::PiRootControlProductiveContinuation::for_test_with_credit(
+                7, 17, 1, 54_000_000,
+            );
+        assert!(
+            !window.record_completed_quantum(wrong_credit_frequency),
+            "credit from another counter frequency cannot enter the window",
         );
 
         assert!(window.restart_after_yield(1_000, 54_000_000, reserve));
@@ -7150,7 +7317,7 @@ mod tests {
         assert!(window.record_completed_quantum(identity));
         assert!(
             !window.record_completed_quantum(
-                crate::event::PiRootControlProductiveContinuationIdentity::for_test(8, 17),
+                crate::event::PiRootControlProductiveContinuation::for_test(8, 17),
             ),
             "a generation-swapped continuation token fails closed",
         );

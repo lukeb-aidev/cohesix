@@ -151,6 +151,7 @@ struct IsolatedTurnTelemetry {
     progress_turns: u64,
     observe_child_turns: u64,
     stage_output_turns: u64,
+    stage_output_successes: u64,
     disconnect_turns: u64,
     ingress_turns: u64,
     service_tick_turns: u64,
@@ -167,6 +168,7 @@ impl IsolatedTurnTelemetry {
             progress_turns: 0,
             observe_child_turns: 0,
             stage_output_turns: 0,
+            stage_output_successes: 0,
             disconnect_turns: 0,
             ingress_turns: 0,
             service_tick_turns: 0,
@@ -192,6 +194,9 @@ impl IsolatedTurnTelemetry {
             }
             IsolatedNetworkTurnUnit::Lower(IsolatedNetworkLowerUnit::StageOutput) => {
                 self.stage_output_turns = self.stage_output_turns.saturating_add(1);
+                if progress {
+                    self.stage_output_successes = self.stage_output_successes.saturating_add(1);
+                }
                 "output"
             }
             IsolatedNetworkTurnUnit::Lower(IsolatedNetworkLowerUnit::Disconnect) => {
@@ -1465,6 +1470,7 @@ impl<D: NetDevice> IsolatedNetworkConsole<D> {
             self.response_lane.map_or((false, false), |lane| {
                 (lane.awaiting_batch.is_some(), lane.producer_open)
             });
+        let yield_accounting = self.runtime.direct_genet_yield_accounting();
         IsolatedConsoleDiagnostics {
             generation: self.runtime.generation(),
             last_poll_ms: self.last_now_ms,
@@ -1474,6 +1480,7 @@ impl<D: NetDevice> IsolatedNetworkConsole<D> {
             progress_turns: self.turn_telemetry.progress_turns,
             observe_child_turns: self.turn_telemetry.observe_child_turns,
             stage_output_turns: self.turn_telemetry.stage_output_turns,
+            stage_output_successes: self.turn_telemetry.stage_output_successes,
             disconnect_turns: self.turn_telemetry.disconnect_turns,
             ingress_turns: self.turn_telemetry.ingress_turns,
             service_tick_turns: self.turn_telemetry.service_tick_turns,
@@ -1487,6 +1494,11 @@ impl<D: NetDevice> IsolatedNetworkConsole<D> {
             response_drains: self.response_drains,
             ingress_backpressure: self.ingest_backpressure,
             ingress_dropped: self.ingest_dropped,
+            direct_genet_yield_calls: yield_accounting.yield_calls,
+            direct_genet_yield_counter_hz: yield_accounting.counter_hz,
+            direct_genet_yield_call_wall_scaled: yield_accounting.call_wall_scaled,
+            direct_genet_yield_child_credit_scaled: yield_accounting.credited_child_scaled,
+            direct_genet_yield_invalid_reasons: yield_accounting.invalid_reasons,
         }
     }
 

@@ -29872,6 +29872,10 @@ const CYW43_FOREGROUND_PARENT_OVERLAY_BYTES: usize =
     CYW43_FOREGROUND_PARENT_PAYLOAD_BYTES.div_ceil(8);
 #[cfg(any(target_os = "none", test))]
 const CYW43_FOREGROUND_DEADLINES: usize = 64;
+#[cfg(any(target_os = "none", test))]
+/// Maximum exact successful immutable-stream child terminals that may mint a
+/// successor before the retained parent must return to its root grant fence.
+const CYW43_FOREGROUND_STREAM_LOCAL_SUCCESSORS: u8 = 64;
 
 #[cfg(any(target_os = "none", test))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -30159,6 +30163,7 @@ struct Cyw43ForegroundTransaction {
     baseline_release_phase: u32,
     turn_id: u64,
     generation: u32,
+    stream_local_successors: u8,
     deadline_replay_index: u8,
     deadline_count: u8,
     deadlines: [Cyw43ForegroundDeadline; CYW43_FOREGROUND_DEADLINES],
@@ -30220,6 +30225,7 @@ impl Cyw43ForegroundTransaction {
             baseline_release_phase: 0,
             turn_id: 0,
             generation: 0,
+            stream_local_successors: 0,
             deadline_replay_index: 0,
             deadline_count: 0,
             deadlines: [Cyw43ForegroundDeadline::empty(); CYW43_FOREGROUND_DEADLINES],
@@ -30263,6 +30269,7 @@ impl Cyw43ForegroundTransaction {
         self.parent_overlay_valid.fill(0);
         self.baseline_state_valid = false;
         self.generation = 0;
+        self.stream_local_successors = 0;
         self.deadline_replay_index = 0;
         self.deadline_count = 0;
         self.prepared_sequence = 0;
@@ -30682,6 +30689,60 @@ impl Cyw43ForegroundTransaction {
                 & (DRIVER_RUNTIME_COMMAND_FLAG_PERSISTENT_TRANSACTION
                     | DRIVER_RUNTIME_COMMAND_FLAG_STEADY_SERVICE_LEASE)
                 == 0
+    }
+
+    fn stream_local_successor_candidate(&self, command: DriverTaskCommandRecord) -> bool {
+        self.active
+            && self.parent == command
+            && self.parent_input_sealed
+            && self.parent_payload_seal_valid()
+            && self.bootstrap_stream_completion_fusion_authorized()
+            && self.parent_payload_offset == self.parent_descriptor.payload_offset
+            && self.parent_payload_len == self.parent_descriptor.payload_len
+            && !self.executing
+            && !self.issued_unknown
+            && !self.poisoned
+            && self.frontier_valid
+            && self.frontier_submitted
+            && self.frontier_ticket_valid()
+            && self.stream_local_successors < CYW43_FOREGROUND_STREAM_LOCAL_SUCCESSORS
+    }
+
+    fn stream_local_exact_terminal_candidate(
+        &self,
+        command: DriverTaskCommandRecord,
+        environment_current: bool,
+        frontier_immutable: bool,
+        child_active: bool,
+        child_expected_sequence: u32,
+        child_issued_unknown: bool,
+        observed: Cyw43SdioChildCompletion,
+    ) -> Option<(Cyw43ForegroundTraceEntry, DriverTaskCompletionRecord)> {
+        let entry = self.frontier;
+        if !self.stream_local_successor_candidate(command)
+            || !environment_current
+            || !frontier_immutable
+            || !child_active
+            || child_expected_sequence != entry.command.sequence
+            || child_issued_unknown
+        {
+            return None;
+        }
+        let Cyw43SdioChildCompletion::Exact(completion) = observed else {
+            return None;
+        };
+        (completion.code != COMPLETION_FAULT
+            && cyw43_foreground_completion_matches(entry, completion))
+        .then_some((entry, completion))
+    }
+
+    fn reset_stream_local_successors(&mut self, command: DriverTaskCommandRecord) -> bool {
+        if self.active && self.parent == command {
+            self.stream_local_successors = 0;
+            true
+        } else {
+            false
+        }
     }
 
     fn record_parent_overlay(&mut self, offset: usize, value: u8) {
@@ -33352,6 +33413,152 @@ fn cyw43_foreground_poll_frontier(
     transaction: &mut Cyw43ForegroundTransaction,
 ) -> Option<DriverTaskCompletionRecord> {
     cyw43_foreground_poll_frontier_with_interlock(transaction, || {})
+}
+
+#[cfg(any(target_os = "none", test))]
+const fn cyw43_foreground_stream_local_environment_admitted(
+    pair_restart_required: bool,
+    child_issued_unknown: bool,
+    recovery_required: bool,
+    terminal_cause_active: bool,
+    generation_current: bool,
+) -> bool {
+    !pair_restart_required
+        && !child_issued_unknown
+        && !recovery_required
+        && !terminal_cause_active
+        && generation_current
+}
+
+#[cfg(any(target_os = "none", test))]
+fn cyw43_foreground_stream_local_environment_current(
+    transaction: &Cyw43ForegroundTransaction,
+) -> bool {
+    let (recovery_required, terminal_cause_active) = CYW43_RUNTIME_STATE
+        .with_ref(|state| (state.recovery_required, state.dpc_terminal_cause.active()));
+    cyw43_foreground_stream_local_environment_admitted(
+        CYW43_SDIO_PAIR_RESTART_REQUIRED.load(Ordering::Acquire),
+        CYW43_SDIO_CHILD_ISSUED_UNKNOWN.load(Ordering::Acquire),
+        recovery_required,
+        terminal_cause_active,
+        cyw43_foreground_retained_generation_is_current(transaction),
+    )
+}
+
+/// Admit one owner-local immutable bootstrap successor only from the exact
+/// successful terminal of its immediately preceding SDIO child.
+///
+/// This is deliberately narrower than a continuation grant: the sealed parent,
+/// generation, payload digest, child ticket, and stable completion must all
+/// remain exact. A miss, fault, restart, issued-unknown state, exhausted cap,
+/// or any non-firmware/NVRAM parent returns to the existing root boundary.
+#[cfg(any(target_os = "none", test))]
+fn cyw43_foreground_prepare_stream_local_successor(command: DriverTaskCommandRecord) -> bool {
+    CYW43_FOREGROUND_TRANSACTION.with_mut(|transaction| {
+        if !transaction.stream_local_successor_candidate(command)
+            || !cyw43_foreground_stream_local_environment_current(transaction)
+        {
+            return false;
+        }
+        let entry = transaction.frontier;
+        let child = Cyw43SdioChildState::new(entry.command.sequence);
+        let observed = cyw43_sdio_child_poll_exact(child);
+        let Some((entry, completion)) = transaction.stream_local_exact_terminal_candidate(
+            command,
+            true,
+            cyw43_foreground_published_frontier_is_immutable(transaction),
+            CYW43_SDIO_CHILD_ACTIVE.load(Ordering::Acquire),
+            CYW43_SDIO_CHILD_EXPECTED_SEQUENCE.load(Ordering::Acquire),
+            CYW43_SDIO_CHILD_ISSUED_UNKNOWN.load(Ordering::Acquire),
+            observed,
+        ) else {
+            return false;
+        };
+        // A stable terminal read is not authority if recovery, generation, or
+        // immutable publication changed around it. Waiting and every rejected
+        // observation return above without touching the transaction cursor.
+        if !cyw43_foreground_stream_local_environment_current(transaction)
+            || !cyw43_foreground_published_frontier_is_immutable(transaction)
+            || transaction.frontier.command.sequence != entry.command.sequence
+        {
+            return false;
+        }
+        // The exact terminal is the first half of this bounded local unit.
+        // Reset only per-turn action bookkeeping; the immutable trace, replay
+        // cursor, and per-root successor count remain durable.
+        transaction.turn.begin_turn();
+        let Some(completion) =
+            cyw43_foreground_accept_exact_completion(transaction, entry, completion)
+        else {
+            return false;
+        };
+        if completion.code == COMPLETION_FAULT
+            || transaction.poisoned
+            || transaction.issued_unknown
+            || !transaction.turn.completion_observed
+            || !cyw43_foreground_stream_local_environment_current(transaction)
+        {
+            return false;
+        }
+        transaction.stream_local_successors = transaction.stream_local_successors.saturating_add(1);
+        true
+    })
+}
+
+/// Keep a previously proved DPC-watermark invariant fault ahead of every
+/// owner-local bootstrap terminal. The supplied closure is the only path that
+/// may consume the exact child or retire its retained root-grant fence, so a
+/// fault must reject it without observation or mutation.
+#[cfg(any(target_os = "none", test))]
+fn cyw43_foreground_stream_local_after_watermark<F>(
+    foreground_watermark_refresh_fault: Option<u32>,
+    admit: F,
+) -> bool
+where
+    F: FnOnce() -> bool,
+{
+    foreground_watermark_refresh_fault.is_none() && admit()
+}
+
+#[cfg(any(target_os = "none", test))]
+fn cyw43_foreground_exact_root_grant_refill_admitted(
+    gate: &RuntimePendingCommandGate,
+    retained: RuntimeCommandIntake,
+    grant: DriverRuntimeContinuationGrant,
+) -> bool {
+    gate.root_grant_active()
+        && !gate.continuation_required()
+        && gate.delegated_owner_phase() == RuntimeRetainedOwnerPhase::Inactive
+        && gate.last_grant_id == grant.grant_id
+        && grant.consumed_grant_id == 0
+        && gate.grant_identity_matches(retained, grant)
+}
+
+#[cfg(any(target_os = "none", test))]
+fn cyw43_foreground_reset_stream_local_successors_after_exact_root_grant(
+    gate: &RuntimePendingCommandGate,
+    retained: RuntimeCommandIntake,
+    grant: DriverRuntimeContinuationGrant,
+) -> bool {
+    CYW43_FOREGROUND_TRANSACTION.with_mut(|transaction| {
+        cyw43_foreground_reset_stream_local_successors_after_exact_root_grant_in(
+            transaction,
+            gate,
+            retained,
+            grant,
+        )
+    })
+}
+
+#[cfg(any(target_os = "none", test))]
+fn cyw43_foreground_reset_stream_local_successors_after_exact_root_grant_in(
+    transaction: &mut Cyw43ForegroundTransaction,
+    gate: &RuntimePendingCommandGate,
+    retained: RuntimeCommandIntake,
+    grant: DriverRuntimeContinuationGrant,
+) -> bool {
+    cyw43_foreground_exact_root_grant_refill_admitted(gate, retained, grant)
+        && transaction.reset_stream_local_successors(retained.command)
 }
 
 #[cfg(any(target_os = "none", test))]
@@ -64959,10 +65166,31 @@ pub fn runtime_main(task_key: usize) -> ! {
                 RuntimeWake::None => {}
             }
         }
-        if runtime_command_loop_route(
-            pending_intake.is_some(),
-            pending_command_gate.continuation_required(),
-        ) == RuntimeCommandLoopRoute::WaitForRetainedContinuation
+        let stream_local_successor = cyw43_foreground_stream_local_after_watermark(
+            foreground_watermark_refresh_fault,
+            || {
+                pending_intake.is_some_and(|intake| {
+                    notification_route == RuntimeNotificationRoute::Cyw43Client
+                        && pending_command_gate.root_grant_active()
+                        && pending_command_gate.delegated_owner_phase()
+                            == RuntimeRetainedOwnerPhase::CheckGrant
+                        && cyw43_foreground_prepare_stream_local_successor(intake.command)
+                })
+            },
+        );
+        if stream_local_successor {
+            // The exact terminal already consumed the only completion-poll
+            // action in this local unit. Retire the old retained-grant state;
+            // the command turn below may replay that terminal and publish at
+            // most its one causally adjacent successor. A pending successor
+            // reconstructs the ordinary root fence before another unit.
+            pending_command_gate.complete();
+        }
+        if !stream_local_successor
+            && runtime_command_loop_route(
+                pending_intake.is_some(),
+                pending_command_gate.continuation_required(),
+            ) == RuntimeCommandLoopRoute::WaitForRetainedContinuation
         {
             if pending_command_gate.grant_generation().is_some() {
                 // Linux's host request and DPC work both use a durable condition
@@ -64991,10 +65219,22 @@ pub fn runtime_main(task_key: usize) -> ! {
                     }
                     let _ = service_runtime_notification(badge);
                     // Service is a hard stop. Exactly one persistent-source
-                    // physical quantum ran; the foreground grant remains for a
-                    // later scheduling activation.
-                    runtime_yield_current_tcb();
-                    continue;
+                    // physical quantum ran. The sole exception is an exact
+                    // immutable firmware/NVRAM child terminal: that terminal
+                    // may causally admit its one successor without adding an
+                    // artificial root-period handoff. Every unrelated source,
+                    // miss, fault, or identity mismatch keeps this hard stop.
+                    let stream_local_successor = pending_intake.is_some_and(|intake| {
+                        notification_route == RuntimeNotificationRoute::Cyw43Client
+                            && pending_command_gate.root_grant_active()
+                            && cyw43_foreground_prepare_stream_local_successor(intake.command)
+                    });
+                    if stream_local_successor {
+                        pending_command_gate.complete();
+                    } else {
+                        runtime_yield_current_tcb();
+                        continue;
+                    }
                 }
 
                 if matches!(
@@ -65095,6 +65335,13 @@ pub fn runtime_main(task_key: usize) -> ! {
                         continue;
                     }
                     RuntimeRetainedOwnerAdmissionOutcome::Execute(grant) => {
+                        if root_grant {
+                            let _ = cyw43_foreground_reset_stream_local_successors_after_exact_root_grant(
+                                &pending_command_gate,
+                                *retained,
+                                grant,
+                            );
+                        }
                         publish_runtime_progress(
                             retained.command.sequence,
                             if root_grant {
@@ -87799,6 +88046,339 @@ mod tests {
         assert!(!turn.completion_observed);
         assert!(turn.committed_child_replay_due());
         assert_eq!(turn.replay_cached_child(), Some(0));
+    }
+
+    #[test]
+    fn bootstrap_stream_local_successor_requires_exact_identity_and_respects_cap() {
+        let parent = retained_gate_test_intake(0x8000_5e01).command;
+        let generation = 0x4359_5e01;
+        let child_sequence = 0x8000_5e02;
+        let child_descriptor = DriverRuntimeSdioCommandDescriptor {
+            op: DRIVER_RUNTIME_SDIO_OP_CMD53_WRITE,
+            function: 1,
+            response_kind: DRIVER_RUNTIME_SDIO_RESP_SHORT,
+            addr: 0x1234,
+            data_offset: CYW43_SDIO_BUS_LINK_DATA_OFFSET as u16,
+            len: 1,
+            timeout_us: 100_000,
+            ..DriverRuntimeSdioCommandDescriptor::empty()
+        };
+        assert!(child_descriptor.valid());
+        let mut transaction = Cyw43ForegroundTransaction::new();
+        transaction.generation = generation;
+        transaction.parent_input_sealed = true;
+        transaction.parent_descriptor = DriverRuntimeCyw43CommandDescriptor {
+            op: DRIVER_RUNTIME_CYW43_OP_FIRMWARE_CHUNK,
+            target_addr: CYW43_RAM_BASE_4345,
+            payload_offset: DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE,
+            payload_len: 1,
+            total_len: 1,
+            ..DriverRuntimeCyw43CommandDescriptor::empty()
+        };
+        transaction.parent_descriptor_valid = true;
+        transaction.parent_payload_offset = DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE;
+        transaction.parent_payload_len = 1;
+        transaction.parent_payload[0] = 0xa5;
+        transaction.parent_payload_digest = transaction.sealed_parent_payload_digest();
+        assert!(transaction.begin_turn(parent, 1));
+        transaction.executing = false;
+        transaction.frontier = Cyw43ForegroundTraceEntry {
+            ticket: Cyw43ForegroundActionTicket {
+                parent_sequence: parent.sequence,
+                generation,
+                owner_sequence: child_sequence,
+                ordinal: 0,
+                issued_turn_id: 1,
+            },
+            command: DriverTaskCommandRecord {
+                sequence: child_sequence,
+                ..Cyw43ForegroundTraceEntry::empty().command
+            },
+            descriptor: child_descriptor,
+            ..Cyw43ForegroundTraceEntry::empty()
+        };
+        transaction.frontier_valid = true;
+        transaction.frontier_submitted = true;
+
+        assert!(transaction.stream_local_successor_candidate(parent));
+        let turn_before_wait = transaction.turn;
+        let frontier_before_wait = (
+            transaction.frontier_valid,
+            transaction.frontier_submitted,
+            transaction.frontier_continuation_grant_required,
+            transaction.frontier_continuation_grant_publish,
+            transaction.frontier_grant_id,
+            transaction.frontier_started_ticks,
+            transaction.frontier_timeout_cycles,
+            transaction.frontier_polls,
+            transaction.frontier_service_progress_slice,
+        );
+        let state_before_wait = (
+            transaction.issued_unknown,
+            transaction.poisoned,
+            transaction.stream_local_successors,
+            transaction.prepared_sequence,
+            transaction.prepared_descriptor_valid,
+            transaction.prepared_write_len,
+        );
+        assert!(transaction
+            .stream_local_exact_terminal_candidate(
+                parent,
+                true,
+                true,
+                true,
+                child_sequence,
+                false,
+                Cyw43SdioChildCompletion::Waiting,
+            )
+            .is_none(),);
+        assert_eq!(transaction.turn, turn_before_wait);
+        assert_eq!(
+            (
+                transaction.frontier_valid,
+                transaction.frontier_submitted,
+                transaction.frontier_continuation_grant_required,
+                transaction.frontier_continuation_grant_publish,
+                transaction.frontier_grant_id,
+                transaction.frontier_started_ticks,
+                transaction.frontier_timeout_cycles,
+                transaction.frontier_polls,
+                transaction.frontier_service_progress_slice,
+            ),
+            frontier_before_wait,
+            "Waiting must not mutate any retained frontier byte",
+        );
+        assert_eq!(
+            (
+                transaction.issued_unknown,
+                transaction.poisoned,
+                transaction.stream_local_successors,
+                transaction.prepared_sequence,
+                transaction.prepared_descriptor_valid,
+                transaction.prepared_write_len,
+            ),
+            state_before_wait,
+            "Waiting must not mutate transaction or cap state",
+        );
+
+        let exact_completion = DriverTaskCompletionRecord::progress(child_sequence, 1);
+        let Some((entry, completion)) = transaction.stream_local_exact_terminal_candidate(
+            parent,
+            true,
+            true,
+            true,
+            child_sequence,
+            false,
+            Cyw43SdioChildCompletion::Exact(exact_completion),
+        ) else {
+            panic!("an exact successful immutable terminal must be observable");
+        };
+        assert_eq!(entry.command.sequence, child_sequence);
+        assert_eq!(completion, exact_completion);
+        assert!(transaction.frontier_submitted);
+        assert!(!transaction.turn.completion_observed);
+        transaction.turn.begin_turn();
+        assert!(transaction.commit_frontier_completion(completion));
+        assert!(transaction.turn.completion_observed);
+        assert!(transaction.turn.new_submission_available());
+        transaction.stream_local_successors = transaction.stream_local_successors.saturating_add(1);
+        assert_eq!(transaction.stream_local_successors, 1);
+
+        let mut next_entry = entry;
+        next_entry.ticket.owner_sequence = child_sequence.wrapping_add(1);
+        next_entry.ticket.ordinal = transaction.turn.completed_count;
+        next_entry.ticket.issued_turn_id = transaction.turn_id.wrapping_add(1);
+        next_entry.command.sequence = next_entry.ticket.owner_sequence;
+        transaction.frontier = next_entry;
+        transaction.frontier_valid = true;
+        transaction.frontier_submitted = true;
+        transaction.stream_local_successors = CYW43_FOREGROUND_STREAM_LOCAL_SUCCESSORS;
+        assert!(!transaction.stream_local_successor_candidate(parent));
+        let mut wrong_parent = parent;
+        wrong_parent.sequence = wrong_parent.sequence.wrapping_add(1);
+        assert!(!transaction.reset_stream_local_successors(wrong_parent));
+        assert_eq!(
+            transaction.stream_local_successors, CYW43_FOREGROUND_STREAM_LOCAL_SUCCESSORS,
+            "an unrelated root grant cannot refill the retained parent",
+        );
+        assert!(transaction.reset_stream_local_successors(parent));
+        assert_eq!(transaction.stream_local_successors, 0);
+        assert!(transaction.stream_local_successor_candidate(parent));
+
+        transaction.parent_payload[0] ^= 1;
+        assert!(!transaction.stream_local_successor_candidate(parent));
+        transaction.parent_payload[0] ^= 1;
+        transaction.parent_payload_offset = transaction.parent_payload_offset.wrapping_add(1);
+        assert!(!transaction.stream_local_successor_candidate(parent));
+        transaction.parent_payload_offset = transaction.parent_descriptor.payload_offset;
+        transaction.parent_payload_len = transaction.parent_payload_len.wrapping_add(1);
+        transaction.parent_payload_digest = transaction.sealed_parent_payload_digest();
+        assert!(!transaction.stream_local_successor_candidate(parent));
+        transaction.parent_payload_len = transaction.parent_descriptor.payload_len;
+        transaction.parent_payload_digest = transaction.sealed_parent_payload_digest();
+        transaction.issued_unknown = true;
+        assert!(!transaction.stream_local_successor_candidate(parent));
+        transaction.issued_unknown = false;
+        transaction.parent_descriptor.op = DRIVER_RUNTIME_CYW43_OP_CONTROL_FRAME;
+        assert!(!transaction.stream_local_successor_candidate(parent));
+    }
+
+    #[test]
+    fn bootstrap_stream_local_successor_fences_recovery_unknown_and_generation_drift() {
+        assert!(cyw43_foreground_stream_local_environment_admitted(
+            false, false, false, false, true,
+        ));
+        for (case, pair_restart, child_unknown, recovery, terminal_cause, generation_current) in [
+            ("pair restart", true, false, false, false, true),
+            ("issued unknown", false, true, false, false, true),
+            ("runtime recovery", false, false, true, false, true),
+            ("terminal cause", false, false, false, true, true),
+            ("generation drift", false, false, false, false, false),
+        ] {
+            assert!(
+                !cyw43_foreground_stream_local_environment_admitted(
+                    pair_restart,
+                    child_unknown,
+                    recovery,
+                    terminal_cause,
+                    generation_current,
+                ),
+                "{case} must return to the root fence",
+            );
+        }
+    }
+
+    #[test]
+    fn bootstrap_stream_local_watermark_fault_retains_root_fence_without_terminal_commit() {
+        let generation = 0x4359_5e08;
+        let mut gate = RuntimePendingCommandGate::new();
+        gate.retain_after_pending_root_generation(generation);
+        gate.set_delegated_owner_phase(RuntimeRetainedOwnerPhase::CheckGrant);
+        let gate_before = gate;
+        let mut terminal_commit_attempted = false;
+
+        assert!(!cyw43_foreground_stream_local_after_watermark(
+            Some(0x8000_5e08),
+            || {
+                terminal_commit_attempted = true;
+                gate.complete();
+                true
+            },
+        ));
+        assert!(
+            !terminal_commit_attempted,
+            "a proved watermark fault must stop before exact-child observation or commit",
+        );
+        assert_eq!(
+            gate, gate_before,
+            "the fault cannot retire or refill the retained exact root-grant boundary",
+        );
+        assert_eq!(
+            runtime_command_loop_route(true, gate.continuation_required()),
+            RuntimeCommandLoopRoute::WaitForRetainedContinuation,
+        );
+
+        assert!(cyw43_foreground_stream_local_after_watermark(None, || {
+            terminal_commit_attempted = true;
+            true
+        }));
+        assert!(terminal_commit_attempted);
+    }
+
+    #[test]
+    fn bootstrap_stream_local_cap_refills_only_after_exact_acked_root_grant() {
+        let generation = 0x4359_5e10;
+        let retained = root_retained_gate_test_intake(0x8000_5e10, generation);
+        let grant = retained_gate_test_grant(retained, generation, 7);
+        let mut transaction = Cyw43ForegroundTransaction::new();
+        transaction.active = true;
+        transaction.parent = retained.command;
+        transaction.stream_local_successors = CYW43_FOREGROUND_STREAM_LOCAL_SUCCESSORS;
+
+        let mut unacked = RuntimePendingCommandGate::new();
+        unacked.retain_after_pending_root_generation(generation);
+        assert!(
+            !cyw43_foreground_reset_stream_local_successors_after_exact_root_grant_in(
+                &mut transaction,
+                &unacked,
+                retained,
+                grant,
+            )
+        );
+        assert_eq!(
+            transaction.stream_local_successors,
+            CYW43_FOREGROUND_STREAM_LOCAL_SUCCESSORS,
+        );
+
+        let mut ack_failed = RuntimePendingCommandGate::new();
+        ack_failed.retain_after_pending_root_generation(generation);
+        let mut ack_failed_retained = retained;
+        let failed = runtime_retained_owner_bounded_admission(
+            &mut ack_failed,
+            &mut ack_failed_retained,
+            RuntimeNotificationRoute::Cyw43Client,
+            RuntimeWake::Notification(DRIVER_RUNTIME_RESERVED_ROOT_BADGE),
+            |_, _| RuntimeRetainedGrantProbe::Ready(grant),
+            |_, _| panic!("a ready exact grant must not recheck before wait"),
+            |_| false,
+        );
+        assert_eq!(
+            failed.outcome,
+            RuntimeRetainedOwnerAdmissionOutcome::AckFailed(grant),
+        );
+        assert!(
+            !cyw43_foreground_reset_stream_local_successors_after_exact_root_grant_in(
+                &mut transaction,
+                &ack_failed,
+                retained,
+                grant,
+            )
+        );
+
+        let mut exact = RuntimePendingCommandGate::new();
+        exact.retain_after_pending_root_generation(generation);
+        let mut exact_retained = retained;
+        let admitted = runtime_retained_owner_bounded_admission(
+            &mut exact,
+            &mut exact_retained,
+            RuntimeNotificationRoute::Cyw43Client,
+            RuntimeWake::Notification(DRIVER_RUNTIME_RESERVED_ROOT_BADGE),
+            |_, _| RuntimeRetainedGrantProbe::Ready(grant),
+            |_, _| panic!("a ready exact grant must not recheck before wait"),
+            |grant_id| grant_id == grant.grant_id,
+        );
+        assert_eq!(
+            admitted.outcome,
+            RuntimeRetainedOwnerAdmissionOutcome::Execute(grant),
+        );
+        assert!(
+            cyw43_foreground_reset_stream_local_successors_after_exact_root_grant_in(
+                &mut transaction,
+                &exact,
+                retained,
+                grant,
+            )
+        );
+        assert_eq!(transaction.stream_local_successors, 0);
+
+        transaction.stream_local_successors = CYW43_FOREGROUND_STREAM_LOCAL_SUCCESSORS;
+        let mut delegated = RuntimePendingCommandGate::new();
+        delegated.retain_after_pending_generation(generation);
+        delegated.continuation_required = false;
+        delegated.last_grant_id = grant.grant_id;
+        delegated.set_delegated_owner_phase(RuntimeRetainedOwnerPhase::Inactive);
+        assert!(
+            !cyw43_foreground_reset_stream_local_successors_after_exact_root_grant_in(
+                &mut transaction,
+                &delegated,
+                retained,
+                grant,
+            )
+        );
+        assert_eq!(
+            transaction.stream_local_successors,
+            CYW43_FOREGROUND_STREAM_LOCAL_SUCCESSORS,
+        );
     }
 
     #[test]

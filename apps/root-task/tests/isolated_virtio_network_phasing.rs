@@ -988,16 +988,20 @@ fn console_publication_ack_is_exactly_once_and_post_retention() {
     let hal = include_str!("../src/hal/console_network.rs");
     let committed_signal = section(
         hal,
-        "fn signal_committed_child_work(&self, wake_index: usize)",
+        "fn signal_committed_child_work(&mut self, wake_index: usize)",
         "/// Stage one virtual/admitted NIC packet",
+    );
+    let admission = marker(
+        committed_signal,
+        "let yield_admitted = self.committed_signal_yield_admitted()?;",
     );
     let release = marker(committed_signal, "fence(Ordering::Release);");
     let signal = marker(committed_signal, "sel4::signal_unchecked(wake_cap);");
     let handoff = marker(
         committed_signal,
-        "self.yield_to_child_after_committed_signal()",
+        "self.yield_to_child_after_committed_signal(yield_admitted, predrain_succeeded)",
     );
-    assert!(release < signal && signal < handoff);
+    assert!(admission < release && release < signal && signal < handoff);
 
     let pending = section(
         hal,
