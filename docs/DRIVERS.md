@@ -1246,7 +1246,11 @@ transport:
   may also retain that activation after one complete
   Network/Serial/LocalSeat/Dispatch rotation, but it performs no second Network
   operation inside the invocation. Each phase keeps its existing one-operation
-  bound; no SC, priority, retry, timeout, device deadline, or QEMU path changes.
+  bound. The post-Dispatch fence preserves `Idle`, `UsbServiceDebt`, and
+  `Input` as distinct states: passive USB service debt receives its one bounded
+  LocalSeat turn and does not then fence Network, while decoded or buffered
+  input still does. Pre-rotation probes and terminal shortcuts remain strict;
+  no SC, priority, retry, timeout, device deadline, or QEMU path changes.
   The retained outer quantum's 25 ms cap accumulates only time spent inside
   admitted CYW43 Network service. Replenishment gaps, exact-child waits between
   turns, and physical-operator phases do not consume it. The independent
@@ -1273,11 +1277,14 @@ transport:
   quantum rechecks generation, connection, final Serial phase,
   passive admission, physical operator/response priority, local fault,
   recovery, containment, quarantine, reboot, handoff, counter frequency, wall
-  expiry, and the shared cap. A transient-empty complete rotor may consume only
-  the remainder of that same unslid tail; stale, backpressured, faulted, or
-  operator-owned work closes it without a retry, second packet operation, new
-  refill, or child authority. A second command remains behind complete
-  operator/display debt. Mediated WiFi cannot mint direct-GENET tail authority.
+  expiry, and the shared cap. Before/after continuation snapshots preserve the
+  typed operator state: after the complete rotor, `UsbServiceDebt` does not
+  close the tail, real `Input` does, and an unavailable snapshot fails closed.
+  A transient-empty complete rotor may consume only the remainder of that same
+  unslid tail; stale, backpressured, faulted, or operator-owned work closes it
+  without a retry, second packet operation, new refill, or child authority. A
+  second command remains behind complete operator/display debt. Mediated WiFi
+  cannot mint direct-GENET tail authority.
 - A parsed Pi passive-service command whose strict reserve lease expires is
   retained across at most one completely new Yield/refill attempt. The retry
   begins from `AwaitingYield`, drains fresh Consumed evidence, and retains the

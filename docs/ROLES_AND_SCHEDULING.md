@@ -359,11 +359,16 @@ LocalSeat exactly once, performs one backend poll only when USB service debt
 exists, clears the token at Dispatch, performs no second Network operation in
 that wrapper, and selects only the next separately charged bounded Network turn
 after the caller rechecks the 3,000-us reserve and 64-unit cap. Real physical
-input or response, terminal return, recovery, quarantine, containment, reboot,
-stale identity, idle, wait, nonprogress, handoff, pressure, fault, or any failed
-token yields and resets. The selected SC and natural-postpone policy remain the
-hard execution boundary. This replaces the former pair-restart Driver burst and
-does not apply to QEMU or generic root control.
+operator state remains typed across this post-Dispatch cut: `UsbServiceDebt`
+requests that one bounded `LocalSeat` opportunity and then releases the Network
+fence, while decoded or buffered `Input` retains it. A pre-rotation transient
+probe or terminal-return shortcut remains strict and cannot use the
+post-Dispatch relaxation. Physical input or response, recovery, quarantine,
+containment, reboot, stale identity, idle, wait, nonprogress, handoff, pressure,
+fault, or any failed token yields and resets. The selected SC and
+natural-postpone policy remain the hard execution boundary. This replaces the
+former pair-restart Driver burst and does not apply to QEMU or generic root
+control.
 
 During CYW43 bootstrap, an admitted and ready USB controller with
 `controller_ready && !command_ready` is itself bounded `LocalSeat` service debt,
@@ -393,14 +398,17 @@ exact `OutputDrained` transition may also open or advance it. Stage-only
 progress cannot mint the tail, and same-core progress retains its exact
 successful-`YieldTo` requirement. The tail lasts strictly less than 8 ms and no
 more than 64 complete ordinary physical-rotor quanta. The root SC remains the
-hard CPU bound. Every quantum rechecks passive admission, physical operator input or
-response, recovery, fault, containment, quarantine, reboot, handoff, identity,
-final Serial phase, counter frequency, wall expiry, and the shared cap. A
-transient-empty complete rotor consumes only that same unslid window; stale,
-invalid, or fenced work closes it. A queued second command remains behind
-ordinary Serial/LocalSeat/Dispatch/Display debt. CYW43 keeps its
-ordinary connection-bound cursor and the distinct guarded 3,000-us/64-unit
-contract above; mediated WiFi cannot acquire direct-GENET tail authority.
+hard CPU bound. Every quantum rechecks passive admission, physical operator
+input or response, recovery, fault, containment, quarantine, reboot, handoff,
+identity, final Serial phase, counter frequency, wall expiry, and the shared
+cap. Retained before/after snapshots preserve the same typed operator state:
+after the complete rotor, `UsbServiceDebt` alone does not close the tail, real
+`Input` does, and an unavailable snapshot fails closed. A transient-empty
+complete rotor consumes only that same unslid window; stale, invalid, or fenced
+work closes it. A queued second command remains behind ordinary
+Serial/LocalSeat/Dispatch/Display debt. CYW43 keeps its ordinary
+connection-bound cursor and the distinct guarded 3,000-us/64-unit contract
+above; mediated WiFi cannot acquire direct-GENET tail authority.
 
 A parsed passive-service command may survive one expired strict reserve lease
 only by crossing a completely new explicit Yield/refill. The new attempt starts

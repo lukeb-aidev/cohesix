@@ -10924,6 +10924,54 @@ Changes:
     change. Focused Pi/QEMU tests and a QEMU root-MCS canary can reject the
     candidate, but only a fresh exact-image dual-mode Pi boot can prove the
     expected cold-start and latency improvement or August parity.
+  - exact-a9 typed physical-operator fence correction — exact source
+    `a9a852a58930cd3347ba141c074f292609959544`, build ID
+    `f949dfcfc651926ccd7fb6f6e9db7f4ec1a0eb5fcf8f90df995c64dca6a4fcbe`,
+    image ID
+    `8d77972a9aa2fb7df56cd1884d73317cfa09fdee02d654f4f8ba1b453656d0ed`,
+    image SHA-256
+    `f8b085e1c860b7a7bb9879be3f6518aaf4e231f96dde0320fb74af607e951a38`,
+    and resolved-manifest SHA-256
+    `f83cd48d38d780d491d0317d98513a1703d24663406ed90f8b38911794dde273`
+    bind the next dual-mode discriminator. GENET completed 64/64 raw requests
+    at 82.556 requests/s with 18.944-ms p95 while its request-to-target-ACK p95
+    remained 0.662 ms and ACK-to-response p95 was 18.096 ms. Its rings, DMA,
+    queues, and driver state remained clean, while MCS Yield samples still
+    showed period-scale root-return gaps around otherwise fast in-activation
+    command, Dispatch, stage, and drain seams. WiFi
+    likewise opened its productive window while request-to-target-ACK p95
+    remained 157.545 ms and ACK-to-response p95 was 20.166 ms. Exact retained
+    state reported physical-operator pending mask `0x100` at the rejected cuts.
+    These measurements reject the performance gates and locate the first
+    shared invariant above both healthy device paths: retained post-Dispatch
+    collectors collapsed `Idle`, passive `UsbServiceDebt`, and real `Input`
+    into one Boolean, so a debt that had received its mandatory bounded
+    `LocalSeat` turn closed useful Network continuation as though new operator
+    input had arrived.
+
+    Preserve that three-state physical-operator classification through the
+    CYW43 transient-credit, authenticated-response, productive-window, and
+    direct-GENET transaction-tail snapshots. At a post-Dispatch or
+    complete-rotor continuation cut, `UsbServiceDebt` does not retain the
+    Network fence after its one ordinary `LocalSeat` opportunity; real decoded
+    or buffered `Input` still does. A missing direct-GENET snapshot fails
+    closed. The pre-rotation transient probe, terminal-return shortcut, serial
+    and local-seat priority, physical console response, display phase,
+    passive-admission, recovery, containment, quarantine, handoff, reboot,
+    identity, wall, and work-cap fences remain unchanged. This correction adds
+    no notification, poll, retry, fallback owner, grant, or refill and changes
+    no SC budget, period, WCET, priority, Reply semantics, isolation boundary,
+    queue, device owner, or QEMU selector.
+
+    `docs/HOST_TOOLS.md`, the complete host-tool suite, `tools/cohesix-py`, all
+    `.coh` scripts, `scripts/rest_perf_harness.py`, raw/REST benchmark workload
+    and arithmetic, evidence consumers, and benchmark report schemas were
+    reviewed. The correction changes only an internal typed scheduling
+    predicate, so those surfaces require no implementation, fixture, workload,
+    arithmetic, or schema change. Focused predicate tests, exact Pi target
+    compilation, generated/Test Plan checks, and the narrow QEMU root-MCS
+    canary may reject the source correction; only a fresh exact-image dual-mode
+    Pi run can prove WiFi or GENET performance and repeatability.
   - platform consistency — select the same v5 shared contract, including the
     v4-introduced bounded command batch, complete 256-Worker population, two
     passive-Worker executor-lane architecture, and passive-service locality

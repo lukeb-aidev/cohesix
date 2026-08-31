@@ -3855,7 +3855,12 @@ struct Cyw43TransientPublicationCreditEvidence {
     passive_admission_pending: bool,
     console_service_local_fault_pending: bool,
     console_service_local_containment_pending: bool,
-    physical_operator_work_pending: bool,
+    // Preserve the three-state operator classification through both cuts.
+    // Entry already carries a mandatory operator rotation; PreNetwork proves
+    // that rotation completed. Only new physical input retains a Network
+    // fence after that bounded service, while USB service debt remains eligible
+    // for its one ordinary LocalSeat turn.
+    physical_operator_work: LinkedPhysicalOperatorWork,
     physical_console_response_pending: bool,
 }
 
@@ -3878,6 +3883,9 @@ fn cyw43_transient_publication_credit_reject_reason(
     {
         reasons |= CYW43_TRANSIENT_REJECT_SNAPSHOT_OR_LIFETIME;
     }
+    let physical_operator_fenced = evidence
+        .physical_operator_work
+        .retains_network_fence_after_dispatch();
     if evidence.network_service_quarantined
         || evidence.reboot_pending
         || evidence.recovery_required
@@ -3886,7 +3894,7 @@ fn cyw43_transient_publication_credit_reject_reason(
         || evidence.passive_admission_pending
         || evidence.console_service_local_fault_pending
         || evidence.console_service_local_containment_pending
-        || evidence.physical_operator_work_pending
+        || physical_operator_fenced
         || evidence.physical_console_response_pending
     {
         reasons |= CYW43_TRANSIENT_REJECT_OPERATOR_OR_RECOVERY;
@@ -4010,7 +4018,9 @@ fn cyw43_transient_publication_credit_rebase_after_dispatch(
         || current.passive_admission_pending
         || current.console_service_local_fault_pending
         || current.console_service_local_containment_pending
-        || current.physical_operator_work_pending
+        || current
+            .physical_operator_work
+            .retains_network_fence_after_dispatch()
         || current.physical_console_response_pending
     {
         reasons |= CYW43_TRANSIENT_REJECT_OPERATOR_OR_RECOVERY;
@@ -4099,7 +4109,9 @@ struct Cyw43ProductiveActivationFenceEvidence {
     handoff_pending: bool,
     passive_admission_pending: bool,
     local_fault_pending: bool,
-    physical_operator_work_pending: bool,
+    // A productive activation has crossed the ordinary operator rotor. Keep
+    // passive local-seat service debt distinct from physical input here.
+    physical_operator_work: LinkedPhysicalOperatorWork,
     physical_console_response_pending: bool,
 }
 
@@ -4120,7 +4132,9 @@ fn cyw43_productive_activation_fence_allows(
         && !evidence.handoff_pending
         && !evidence.passive_admission_pending
         && !evidence.local_fault_pending
-        && !evidence.physical_operator_work_pending
+        && !evidence
+            .physical_operator_work
+            .retains_network_fence_after_dispatch()
         && !evidence.physical_console_response_pending
 }
 
@@ -4173,7 +4187,9 @@ struct Cyw43AuthenticatedResponseEpisodeEvidence {
     passive_admission_pending: bool,
     console_service_local_fault_pending: bool,
     console_service_local_containment_pending: bool,
-    physical_operator_work_pending: bool,
+    // The episode is minted only after exact Dispatch. A bounded LocalSeat
+    // checkpoint does not revoke it; newly admitted physical input does.
+    physical_operator_work: LinkedPhysicalOperatorWork,
     physical_console_response_pending: bool,
 }
 
@@ -4243,7 +4259,9 @@ fn cyw43_authenticated_response_episode_decision(
         || evidence.passive_admission_pending
         || evidence.console_service_local_fault_pending
         || evidence.console_service_local_containment_pending
-        || evidence.physical_operator_work_pending
+        || evidence
+            .physical_operator_work
+            .retains_network_fence_after_dispatch()
         || evidence.physical_console_response_pending;
     let same_authority = current.lifetime == before.lifetime
         && current.response_identity == before.response_identity
@@ -5053,7 +5071,9 @@ struct DirectGenetProductiveQuantumSnapshot {
     child_yield_call_wall_scaled: u128,
     child_yield_credit_scaled: u128,
     child_yield_invalid_reasons: u32,
-    physical_operator_work_pending: bool,
+    // Retained transaction evidence must distinguish service debt, which has
+    // already received its bounded rotor opportunity, from operator input.
+    physical_operator_work: LinkedPhysicalOperatorWork,
     physical_console_response_pending: bool,
 }
 
@@ -5790,8 +5810,14 @@ fn direct_genet_productive_quantum_continuation_entitled(
         && !evidence.recovery_or_containment_pending
         && !evidence.handoff_pending
         && !evidence.passive_admission_pending
-        && !evidence.before.physical_operator_work_pending
-        && !evidence.after.physical_operator_work_pending
+        && !evidence
+            .before
+            .physical_operator_work
+            .retains_network_fence_after_dispatch()
+        && !evidence
+            .after
+            .physical_operator_work
+            .retains_network_fence_after_dispatch()
         && !evidence.before.physical_console_response_pending
         && !evidence.after.physical_console_response_pending
         && !evidence.local_fault_pending)
@@ -5835,7 +5861,10 @@ struct DirectGenetProductiveContinuationFenceEvidence {
     recovery_or_containment_pending: bool,
     handoff_pending: bool,
     passive_admission_pending: bool,
-    physical_operator_work_pending: bool,
+    // None means the exact authenticated snapshot vanished and fails closed.
+    // Some(UsbServiceDebt) has already crossed the bounded operator rotor;
+    // Some(Input) retains operator precedence and closes the continuation.
+    physical_operator_work: Option<LinkedPhysicalOperatorWork>,
     physical_console_response_pending: bool,
     local_fault_pending: bool,
 }
@@ -5854,7 +5883,9 @@ fn direct_genet_productive_continuation_fence_clear(
         && !evidence.recovery_or_containment_pending
         && !evidence.handoff_pending
         && !evidence.passive_admission_pending
-        && !evidence.physical_operator_work_pending
+        && evidence
+            .physical_operator_work
+            .is_some_and(|work| !work.retains_network_fence_after_dispatch())
         && !evidence.physical_console_response_pending
         && !evidence.local_fault_pending
 }
@@ -12675,8 +12706,7 @@ where
             child_yield_call_wall_scaled: diagnostic.direct_genet_yield_call_wall_scaled,
             child_yield_credit_scaled: diagnostic.direct_genet_yield_child_credit_scaled,
             child_yield_invalid_reasons: diagnostic.direct_genet_yield_invalid_reasons,
-            physical_operator_work_pending: self.linked_physical_operator_work()
-                != LinkedPhysicalOperatorWork::Idle,
+            physical_operator_work: self.linked_physical_operator_work(),
             physical_console_response_pending: self.physical_console_response_pending(),
         })
     }
@@ -12996,8 +13026,7 @@ where
                     || self.pi_isolated_service_containment_pending(),
                 handoff_pending: self.deferred_console_network_handoff_pending(),
                 passive_admission_pending: self.pi_root_control_passive_admission_pending(),
-                physical_operator_work_pending: snapshot
-                    .is_none_or(|snapshot| snapshot.physical_operator_work_pending),
+                physical_operator_work: snapshot.map(|snapshot| snapshot.physical_operator_work),
                 physical_console_response_pending: snapshot
                     .is_none_or(|snapshot| snapshot.physical_console_response_pending),
                 local_fault_pending,
@@ -13031,8 +13060,7 @@ where
                 || self.pi_isolated_service_containment_pending(),
             handoff_pending: self.deferred_console_network_handoff_pending(),
             passive_admission_pending: self.pi_root_control_passive_admission_pending(),
-            physical_operator_work_pending: snapshot
-                .is_none_or(|snapshot| snapshot.physical_operator_work_pending),
+            physical_operator_work: snapshot.map(|snapshot| snapshot.physical_operator_work),
             physical_console_response_pending: snapshot
                 .is_none_or(|snapshot| snapshot.physical_console_response_pending),
             local_fault_pending,
@@ -13710,9 +13738,7 @@ where
         let containment_work_pending = self.deferred_containment_work_pending();
         let handoff_pending = self.deferred_console_network_handoff_pending();
         let passive_admission_pending = self.pi_root_control_passive_admission_pending();
-        let physical_operator_work_pending = self
-            .linked_physical_operator_work()
-            .needs_operator_rotation();
+        let physical_operator_work = self.linked_physical_operator_work();
         let physical_console_response_pending = self.physical_console_response_pending();
         cyw43_productive_activation_fence_allows(Cyw43ProductiveActivationFenceEvidence {
             expected: Some(expected),
@@ -13725,7 +13751,7 @@ where
             handoff_pending,
             passive_admission_pending,
             local_fault_pending: local_fence,
-            physical_operator_work_pending,
+            physical_operator_work,
             physical_console_response_pending,
         })
     }
@@ -13868,9 +13894,7 @@ where
             passive_admission_pending: self.pi_root_control_passive_admission_pending(),
             console_service_local_fault_pending,
             console_service_local_containment_pending,
-            physical_operator_work_pending: self
-                .linked_physical_operator_work()
-                .needs_operator_rotation(),
+            physical_operator_work: self.linked_physical_operator_work(),
             physical_console_response_pending: self.physical_console_response_pending(),
         }
     }
@@ -13964,9 +13988,7 @@ where
             passive_admission_pending: self.pi_root_control_passive_admission_pending(),
             console_service_local_fault_pending,
             console_service_local_containment_pending,
-            physical_operator_work_pending: self
-                .linked_physical_operator_work()
-                .needs_operator_rotation(),
+            physical_operator_work: self.linked_physical_operator_work(),
             physical_console_response_pending: self.physical_console_response_pending(),
         }
     }
@@ -51150,10 +51172,20 @@ mod tests {
             passive_admission_pending: false,
             console_service_local_fault_pending: false,
             console_service_local_containment_pending: false,
-            physical_operator_work_pending: false,
+            physical_operator_work: LinkedPhysicalOperatorWork::Idle,
             physical_console_response_pending: false,
         };
         assert_eq!(cyw43_transient_publication_credit_reject_reason(entry), 0);
+        assert_eq!(
+            cyw43_transient_publication_credit_reject_reason(
+                Cyw43TransientPublicationCreditEvidence {
+                    physical_operator_work: LinkedPhysicalOperatorWork::UsbServiceDebt,
+                    ..entry
+                },
+            ),
+            0,
+            "Entry retains the mandatory operator rotation without treating passive service debt as input",
+        );
         let pre_network = Cyw43TransientPublicationCreditEvidence {
             cut: Cyw43TransientPublicationCreditCut::PreNetwork,
             phase: LinkedRuntimeServicePhase::Network,
@@ -51166,6 +51198,26 @@ mod tests {
         assert_eq!(
             cyw43_transient_publication_credit_reject_reason(pre_network),
             0,
+        );
+        assert_eq!(
+            cyw43_transient_publication_credit_reject_reason(
+                Cyw43TransientPublicationCreditEvidence {
+                    physical_operator_work: LinkedPhysicalOperatorWork::UsbServiceDebt,
+                    ..pre_network
+                },
+            ),
+            0,
+            "completed Serial/LocalSeat/Dispatch rotation releases passive service debt",
+        );
+        assert_eq!(
+            cyw43_transient_publication_credit_reject_reason(
+                Cyw43TransientPublicationCreditEvidence {
+                    physical_operator_work: LinkedPhysicalOperatorWork::Input,
+                    ..pre_network
+                },
+            ),
+            CYW43_TRANSIENT_REJECT_OPERATOR_OR_RECOVERY | CYW43_TRANSIENT_REJECT_PRE_NETWORK_DRIFT,
+            "new physical input retains precedence at the final Network cut",
         );
 
         assert_eq!(
@@ -51318,7 +51370,7 @@ mod tests {
             passive_admission_pending: false,
             console_service_local_fault_pending: false,
             console_service_local_containment_pending: false,
-            physical_operator_work_pending: false,
+            physical_operator_work: LinkedPhysicalOperatorWork::Idle,
             physical_console_response_pending: false,
         };
         let exact = Cyw43TransientPublicationDispatchRebaseEvidence {
@@ -51331,6 +51383,20 @@ mod tests {
             rotation_before_dispatch: Some(lifetime),
             last_input_source: ConsoleInputSource::Net,
         };
+
+        assert!(
+            cyw43_transient_publication_credit_rebase_after_dispatch(
+                Cyw43TransientPublicationDispatchRebaseEvidence {
+                    current: Cyw43TransientPublicationCreditEvidence {
+                        physical_operator_work: LinkedPhysicalOperatorWork::UsbServiceDebt,
+                        ..current
+                    },
+                    ..exact
+                },
+            )
+            .is_ok(),
+            "the completed operator rotor releases passive service debt before rebase",
+        );
 
         let rebased = cyw43_transient_publication_credit_rebase_after_dispatch(exact)
             .expect("one exact network command may rebind its newly sealed response lane");
@@ -51354,13 +51420,23 @@ mod tests {
             passive_admission_pending: false,
             console_service_local_fault_pending: false,
             console_service_local_containment_pending: false,
-            physical_operator_work_pending: false,
+            physical_operator_work: LinkedPhysicalOperatorWork::Idle,
             physical_console_response_pending: false,
         };
         assert_eq!(
             cyw43_authenticated_response_episode_decision(episode_evidence),
             Cyw43AuthenticatedResponseEpisodeDecision::Wait(episode),
             "a retained episode may survive Yield but unchanged state cannot retain execution",
+        );
+        assert_eq!(
+            cyw43_authenticated_response_episode_decision(
+                Cyw43AuthenticatedResponseEpisodeEvidence {
+                    physical_operator_work: LinkedPhysicalOperatorWork::UsbServiceDebt,
+                    ..episode_evidence
+                },
+            ),
+            Cyw43AuthenticatedResponseEpisodeDecision::Wait(episode),
+            "a completed operator checkpoint preserves the exact response episode across passive service debt",
         );
 
         let mut staged_diagnostics = current_diagnostics;
@@ -51400,6 +51476,18 @@ mod tests {
             ),
             Cyw43AuthenticatedResponseEpisodeDecision::Progress(staged_episode),
             "one exact stage successor must retain the strict activation",
+        );
+        assert_eq!(
+            cyw43_authenticated_response_episode_decision(
+                Cyw43AuthenticatedResponseEpisodeEvidence {
+                    current: Some(staged_cursor),
+                    outer_operations: 1,
+                    physical_operator_work: LinkedPhysicalOperatorWork::UsbServiceDebt,
+                    ..episode_evidence
+                },
+            ),
+            Cyw43AuthenticatedResponseEpisodeDecision::Progress(staged_episode),
+            "passive service debt cannot erase exact copied-WiFi response progress",
         );
         for invalid_stage_diagnostics in [
             IsolatedConsoleDiagnostics {
@@ -51627,12 +51715,12 @@ mod tests {
         assert_eq!(
             cyw43_authenticated_response_episode_decision(
                 Cyw43AuthenticatedResponseEpisodeEvidence {
-                    physical_operator_work_pending: true,
+                    physical_operator_work: LinkedPhysicalOperatorWork::Input,
                     ..episode_evidence
                 },
             ),
             Cyw43AuthenticatedResponseEpisodeDecision::Revoke,
-            "physical operator debt preempts copied-WiFi response retention",
+            "physical operator input preempts copied-WiFi response retention",
         );
         for fenced in [
             Cyw43AuthenticatedResponseEpisodeEvidence {
@@ -52043,7 +52131,7 @@ mod tests {
             },
             Cyw43TransientPublicationDispatchRebaseEvidence {
                 current: Cyw43TransientPublicationCreditEvidence {
-                    physical_operator_work_pending: true,
+                    physical_operator_work: LinkedPhysicalOperatorWork::Input,
                     ..current
                 },
                 ..exact
@@ -52090,10 +52178,16 @@ mod tests {
             handoff_pending: false,
             passive_admission_pending: false,
             local_fault_pending: false,
-            physical_operator_work_pending: false,
+            physical_operator_work: LinkedPhysicalOperatorWork::Idle,
             physical_console_response_pending: false,
         };
         assert!(cyw43_productive_activation_fence_allows(baseline));
+        assert!(cyw43_productive_activation_fence_allows(
+            Cyw43ProductiveActivationFenceEvidence {
+                physical_operator_work: LinkedPhysicalOperatorWork::UsbServiceDebt,
+                ..baseline
+            },
+        ));
 
         let zero_lifetime = Cyw43ProductiveActivationIdentity {
             lifetime: LinkedRuntimeCyw43DurableResume {
@@ -52233,7 +52327,7 @@ mod tests {
                 ..baseline
             },
             Cyw43ProductiveActivationFenceEvidence {
-                physical_operator_work_pending: true,
+                physical_operator_work: LinkedPhysicalOperatorWork::Input,
                 ..baseline
             },
             Cyw43ProductiveActivationFenceEvidence {
@@ -60039,7 +60133,7 @@ mod tests {
             child_yield_call_wall_scaled: 54_000_000_000,
             child_yield_credit_scaled: 43_200_000_000,
             child_yield_invalid_reasons: 0,
-            physical_operator_work_pending: false,
+            physical_operator_work: LinkedPhysicalOperatorWork::Idle,
             physical_console_response_pending: false,
         };
         let command_after = DirectGenetProductiveQuantumSnapshot {
@@ -60070,6 +60164,23 @@ mod tests {
         assert!(
             !command_continuation.opens_active_hot_tail(),
             "dormant same-core mode cannot replace its exact YieldTo proof with root-local command progress",
+        );
+        assert!(
+            direct_genet_productive_quantum_continuation_entitled(
+                DirectGenetProductiveQuantumEvidence {
+                    before: DirectGenetProductiveQuantumSnapshot {
+                        physical_operator_work: LinkedPhysicalOperatorWork::UsbServiceDebt,
+                        ..command.before
+                    },
+                    after: DirectGenetProductiveQuantumSnapshot {
+                        physical_operator_work: LinkedPhysicalOperatorWork::UsbServiceDebt,
+                        ..command.after
+                    },
+                    ..command
+                },
+            )
+            .is_some(),
+            "passive local-seat service debt cannot erase an exact retained GENET transaction",
         );
 
         let cross_core_command = DirectGenetProductiveQuantumEvidence {
@@ -60426,14 +60537,14 @@ mod tests {
             },
             DirectGenetProductiveQuantumEvidence {
                 before: DirectGenetProductiveQuantumSnapshot {
-                    physical_operator_work_pending: true,
+                    physical_operator_work: LinkedPhysicalOperatorWork::Input,
                     ..before
                 },
                 ..stage
             },
             DirectGenetProductiveQuantumEvidence {
                 after: DirectGenetProductiveQuantumSnapshot {
-                    physical_operator_work_pending: true,
+                    physical_operator_work: LinkedPhysicalOperatorWork::Input,
                     ..stage_after
                 },
                 ..stage
@@ -60523,11 +60634,17 @@ mod tests {
             recovery_or_containment_pending: false,
             handoff_pending: false,
             passive_admission_pending: false,
-            physical_operator_work_pending: false,
+            physical_operator_work: Some(LinkedPhysicalOperatorWork::Idle),
             physical_console_response_pending: false,
             local_fault_pending: false,
         };
         assert!(direct_genet_productive_continuation_fence_clear(baseline));
+        assert!(direct_genet_productive_continuation_fence_clear(
+            DirectGenetProductiveContinuationFenceEvidence {
+                physical_operator_work: Some(LinkedPhysicalOperatorWork::UsbServiceDebt),
+                ..baseline
+            },
+        ));
         assert!(
             !direct_genet_active_hot_tail_fence_clear(baseline),
             "stage-only progress cannot mint transaction authority",
@@ -60537,6 +60654,12 @@ mod tests {
             ..baseline
         };
         assert!(direct_genet_active_hot_tail_fence_clear(active_baseline));
+        assert!(direct_genet_active_hot_tail_fence_clear(
+            DirectGenetProductiveContinuationFenceEvidence {
+                physical_operator_work: Some(LinkedPhysicalOperatorWork::UsbServiceDebt),
+                ..active_baseline
+            },
+        ));
         let cross_core_active_baseline = DirectGenetProductiveContinuationFenceEvidence {
             expected: Some(cross_core_completed_response),
             current_continuation_mode: Some(DirectGenetContinuationMode::CrossCoreSignalOnly),
@@ -60622,7 +60745,11 @@ mod tests {
                 ..baseline
             },
             DirectGenetProductiveContinuationFenceEvidence {
-                physical_operator_work_pending: true,
+                physical_operator_work: None,
+                ..baseline
+            },
+            DirectGenetProductiveContinuationFenceEvidence {
+                physical_operator_work: Some(LinkedPhysicalOperatorWork::Input),
                 ..baseline
             },
             DirectGenetProductiveContinuationFenceEvidence {

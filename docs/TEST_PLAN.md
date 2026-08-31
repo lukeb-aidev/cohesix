@@ -1762,10 +1762,15 @@ case must permit exactly one authenticated network command to advance the
 command count by one, replace an empty response lane with one exact nonempty
 sealed completed lane, and replace an empty flush with one bounded
 same-connection flush while every other snapshot field remains exact. Tests
-must reject a second command, non-network input, open/empty/draining or
-cross-identity lanes, service/lifetime drift, wrong rotor, unbounded or
-cross-connection flush, and every recovery/operator fence. No test may model
-this as a new refill, notification, retry, or device grant.
+must preserve the three-state physical-operator classification at entry,
+post-Dispatch rebase, response episode, and productive-window cuts. `Idle` and
+`UsbServiceDebt` pass the post-Dispatch operator predicate when every other
+field is exact; `Input` rejects it. Tests must still reject a second command,
+non-network input, open/empty/draining or cross-identity lanes,
+service/lifetime drift, wrong rotor, unbounded or cross-connection flush, and
+every recovery/operator fence. The pre-rotation transient probe and
+terminal-return shortcut remain strict. No test may model this as a new refill,
+notification, retry, or device grant.
 
 Direct GENET must separately cover commands with no `SyncCapture` record. An
 immediate terminal such as `QUIT` may reach the ordinary response stage only
@@ -6780,6 +6785,12 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
       rechecks response/queue identity, passive admission, physical operator
       input or response, recovery, fault, reboot, containment, quarantine,
       handoff, local fault, counter frequency, wall expiry, and progress. A
+      deterministic fence matrix must preserve `Idle`, `UsbServiceDebt`, and
+      `Input` in both before/after snapshots and the final continuation cut.
+      After a complete rotor, `Idle` and `UsbServiceDebt` permit continuation
+      when all other evidence is exact, `Input` rejects it, and a missing
+      snapshot fails closed. The matrix must also prove that this distinction
+      cannot mint a notification, retry, grant, refill, or child authority. A
       failed or backpressured stage, stale identity, second command, or any
       fence closes or denies the tail. A transient-empty complete rotor may
       consume only the same unslid wall/quantum window. Tests
