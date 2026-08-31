@@ -10972,6 +10972,90 @@ Changes:
     compilation, generated/Test Plan checks, and the narrow QEMU root-MCS
     canary may reject the source correction; only a fresh exact-image dual-mode
     Pi run can prove WiFi or GENET performance and repeatability.
+  - exact-4b notification-backed continuation and complete typed-gate
+    correction — exact source `4b16de9b4f1a0895810851ace8cfa6a9d57c112f`,
+    build ID
+    `757f66ac236eb1e2625250faff9353926c567e2d8ac48e273bc4cea4febfe45c`,
+    image ID
+    `b49fb9b03f5a0aef0f81269e8c93ee5f4630883a50cb7d38ea35b82befd8d5ef`,
+    image SHA-256
+    `c23066602dc3b4fd50986b73af43453e26649f0713cc9f27a7b39d398e184b4e`,
+    and resolved-manifest SHA-256
+    `f83cd48d38d780d491d0317d98513a1703d24663406ed90f8b38911794dde273`
+    bind the decisive physical discriminator. WiFi reached Gate 8 only at
+    144.825 seconds, then completed 64/64 raw requests at 7.024 requests/s and
+    167.253-ms p95. Its request-to-target-ACK p95 was 149.803 ms, publication
+    rejected 59,605 candidates at the initial probe, and the last pending
+    `0x100 OTHER_BOUNDARY` Yield hiatus was 8,598 us. GENET completed 64/64 at
+    75.676 requests/s and 28.047-ms p95 while its direct stages, DMA, rings,
+    queues, and notification conservation remained exact; 13,065 exits were
+    `NO_PRODUCTIVE_SUCCESSOR`, and its last pending `0x100` hiatus was 8,743
+    us. Medium/high REST completed 960/960 operations without semantic error,
+    target timeout, retry, reconnect, bounded-resource failure, recovery,
+    containment, or quarantine on each backend. Preserving typed operator debt
+    is safe but did not remove the dominant gap.
+
+    The cross-commit cold discriminator also selects removal of exact-a9's
+    transient-empty local retention. With the same selected driver/runtime
+    architecture, exact `0c734db75` reached Gate 8 at 34.110 seconds; adding
+    local re-entry after a useful turn followed by an empty child observation
+    moved exact a9 to 124.145 seconds, and exact 4b remained at 144.825 seconds.
+    An empty observation is not an event or durable successor. It must Yield;
+    only the existing exact Operator-to-Driver or operation-executed
+    Driver-to-Operator continuation may retain the cold activation.
+
+    The cold Gate 8 path cannot use authenticated-response publication credit:
+    it precedes stack attachment, DHCP, TCP authentication, and service
+    readiness. Close only the narrower condition-before-Yield race with the
+    existing generated CYW43 child-to-root notification. After one selected
+    bounded operator condition turn, read the retained parent. If it is still
+    waiting, poll the unbound receive cap once and re-read durable parent state.
+    Only an exact current terminal or fault may select the ordinary Driver
+    phase. An absent, stale, sideband-only, still-waiting, or attached-service
+    hint preserves Yield; attached EventPump remains the sole consumer after
+    stack attachment. This is a narrow race closure and the next Pi Gate 8
+    measurement, not source reasoning, decides whether it is sufficient.
+
+    During attached WiFi service, retain a consumed root-wake edge only as a
+    stack-local identity token. It must bind the exact CYW43 physical lifetime,
+    authenticated response identity, accepted-command epoch, and a complete
+    `Serial -> LocalSeat? -> Dispatch` rotor after the first Network unit. A
+    fresh durable recheck at the return-to-Network cut may retain the caller's
+    activation, but this wrapper performs no second Network unit. During direct
+    GENET service, one stack-local token may bind an already staged batch and
+    accept only its exact same-identity `OutputDrained` transition after the
+    complete operator rotor; consumption forces the next phase to Serial and
+    stops before a second command or Network leaf.
+
+    Remove the older attached productive-window fallback that retained an
+    unchanged empty snapshot after prior progress. A consumed wake plus durable
+    identity is now the only post-rotor successor; an absent event yields. The
+    additive `idle_admitted` counter remains in the diagnostic schema for
+    comparable hardware evidence but this candidate does not increment it.
+
+    Complete the typed correction at the earliest CYW43 transient-publication
+    probe and the three direct-GENET compact command/stage gates. A CYW43 probe
+    may preserve `UsbServiceDebt` only because successful minting installs the
+    complete mandatory operator rotor before Network re-entry; real `Input`
+    rejects. A direct-GENET one-command leaf may carry passive USB debt only
+    while returning to Serial before another command; real Input and missing
+    evidence reject. Every identity, response, recovery, containment,
+    quarantine, handoff, reboot, wall, work-cap, and ownership fence remains
+    unchanged. No spin, blocking wait, new notification, software work latch,
+    local empty-state polling, fallback owner, queue, retry, grant, refill, SC
+    budget, period, WCET, priority, Reply rule, isolation boundary, manifest
+    population, or QEMU selector changes.
+
+    `docs/HOST_TOOLS.md`, the complete host-tool suite, `tools/cohesix-py`, all
+    `.coh` scripts, `scripts/rest_perf_harness.py`, raw/REST workload and
+    arithmetic, evidence consumers, and report schemas were reviewed. These
+    internal scheduling predicates change none of their interfaces, fixtures,
+    arithmetic, or schemas. Focused predicate tests, exact Pi target
+    compilation, generated/Test Plan checks, and the narrow QEMU root-MCS
+    canary may reject the correction. Only the next exact-image cold WiFi plus
+    warm GENET hardware run can prove Gate 8 or raw performance; passing that
+    discriminator is still insufficient for the required multi-lifetime
+    reliability depth.
   - platform consistency — select the same v5 shared contract, including the
     v4-introduced bounded command batch, complete 256-Worker population, two
     passive-Worker executor-lane architecture, and passive-service locality

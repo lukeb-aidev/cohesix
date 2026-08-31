@@ -753,6 +753,21 @@ impl LinkedPhysicalOperatorWork {
     }
 }
 
+/// Whether one compact direct-GENET command may carry the current operator
+/// classification through its causal response leaf. The leaf returns to
+/// Serial before another command can enter, so passive USB service debt keeps
+/// its mandatory next rotor turn; physical input retains precedence. Missing
+/// classification is never authority.
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+const fn direct_genet_compact_operator_fence_clear(
+    physical_operator_work: Option<LinkedPhysicalOperatorWork>,
+) -> bool {
+    match physical_operator_work {
+        Some(work) => !work.retains_network_fence_after_dispatch(),
+        None => false,
+    }
+}
+
 #[cfg(all(feature = "kernel", feature = "net-console"))]
 const fn linked_runtime_buffered_cyw43_command_dispatch_allowed(
     cyw43_lane_selected: bool,
@@ -2677,8 +2692,8 @@ pub struct PumpMetrics {
     /// Root-control activations opened by exact attached-WiFi progress.
     #[cfg(feature = "release-pi4")]
     pub net_cyw43_productive_windows_opened: u64,
-    /// Transient-empty physical rotors retained inside an already-open exact
-    /// attached-WiFi activation window.
+    /// Legacy transient-empty rotor admissions. Event-backed continuations
+    /// leave this schema-stable counter at zero.
     #[cfg(feature = "release-pi4")]
     pub net_cyw43_productive_window_idle_admissions: u64,
     /// Exact attached-WiFi activation windows closed at Yield or hard-fence
@@ -3692,7 +3707,10 @@ struct Cyw43TransientPublicationProbeEvidence {
     passive_admission_pending: bool,
     console_service_local_fault_pending: bool,
     console_service_local_containment_pending: bool,
-    physical_operator_work_pending: bool,
+    // Minting always installs a complete operator rotor before the credit can
+    // re-enter Network. Preserve the typed work class so passive USB service
+    // debt can cross that rotor without being mistaken for physical input.
+    physical_operator_work: LinkedPhysicalOperatorWork,
     physical_console_response_pending: bool,
 }
 
@@ -3748,7 +3766,9 @@ fn cyw43_transient_publication_probe_reject_reason(
         || evidence.passive_admission_pending
         || evidence.console_service_local_fault_pending
         || evidence.console_service_local_containment_pending
-        || evidence.physical_operator_work_pending
+        || evidence
+            .physical_operator_work
+            .retains_network_fence_after_dispatch()
         || evidence.physical_console_response_pending
     {
         reasons |= CYW43_TRANSIENT_REJECT_OPERATOR_OR_RECOVERY;
@@ -4065,8 +4085,8 @@ struct Cyw43AuthenticatedResponseEpisode {
     cursor: Cyw43TransientPublicationCredit,
 }
 
-/// Exact attached-WiFi identity allowed to retain transient-empty rotor
-/// probes inside one already-bounded root-control activation.
+/// Exact attached-WiFi identity allowed to retain event-backed rotor
+/// successors inside one already-bounded root-control activation.
 ///
 /// This is the physical-Pi counterpart of QEMU's sticky
 /// `useful_progress_observed` bit, strengthened with the selected CYW43
@@ -4093,7 +4113,104 @@ impl Cyw43ProductiveActivationIdentity {
     }
 }
 
-/// Complete root-local evidence for retaining one transient-empty WiFi rotor
+/// Exact child-to-root wake retained only inside one attached-WiFi composer.
+///
+/// The notification is an edge hint, not work authority. The opaque identity
+/// therefore combines it with the current physical lifetime and authenticated
+/// response generation, and the continuation below revalidates the durable
+/// work level after the complete physical-operator rotor. This value is a
+/// stack local in `poll_deferred_cyw43_attached_network_control_turn`, so an
+/// explicit Yield destroys it.
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Cyw43RootWakeRotorContinuation {
+    identity: Cyw43ProductiveActivationIdentity,
+}
+
+/// Complete evidence for turning one consumed child wake into a caller-level
+/// continuation after, never inside, the required operator rotor.
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Cyw43RootWakeRotorContinuationEvidence {
+    expected: Option<Cyw43RootWakeRotorContinuation>,
+    current: Option<Cyw43ProductiveActivationIdentity>,
+    next_phase: LinkedRuntimeServicePhase,
+    network_units: usize,
+    serial_admitted: bool,
+    local_seat_required: bool,
+    local_seat_admitted: bool,
+    dispatch_admitted: bool,
+    rotation_after_network: Option<LinkedRuntimeCyw43DurableResume>,
+    rotation_before_dispatch: Option<LinkedRuntimeCyw43DurableResume>,
+    rotation_after_dispatch: Option<LinkedRuntimeCyw43DurableResume>,
+    terminal_drain_return_due: bool,
+    physical_input_observed: bool,
+    cyw43_lane_selected: bool,
+    network_service_quarantined: bool,
+    reboot_pending: bool,
+    recovery_required: bool,
+    containment_work_pending: bool,
+    handoff_pending: bool,
+    passive_admission_pending: bool,
+    console_service_local_fault_pending: bool,
+    console_service_local_containment_pending: bool,
+    physical_operator_work: LinkedPhysicalOperatorWork,
+    physical_console_response_pending: bool,
+}
+
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+fn cyw43_root_wake_rotor_continuation_allowed(
+    evidence: Cyw43RootWakeRotorContinuationEvidence,
+) -> bool {
+    let Some(expected) = evidence.expected else {
+        return false;
+    };
+    expected.identity.is_valid()
+        && evidence.current == Some(expected.identity)
+        && evidence.next_phase == LinkedRuntimeServicePhase::Network
+        && evidence.network_units == 1
+        && evidence.serial_admitted
+        && (!evidence.local_seat_required || evidence.local_seat_admitted)
+        && evidence.dispatch_admitted
+        && evidence.rotation_after_network == Some(expected.identity.lifetime)
+        && evidence.rotation_before_dispatch == Some(expected.identity.lifetime)
+        && evidence.rotation_after_dispatch.is_none()
+        && !evidence.terminal_drain_return_due
+        && !evidence.physical_input_observed
+        && evidence.cyw43_lane_selected
+        && !evidence.network_service_quarantined
+        && !evidence.reboot_pending
+        && !evidence.recovery_required
+        && !evidence.containment_work_pending
+        && !evidence.handoff_pending
+        && !evidence.passive_admission_pending
+        && !evidence.console_service_local_fault_pending
+        && !evidence.console_service_local_containment_pending
+        && !evidence
+            .physical_operator_work
+            .retains_network_fence_after_dispatch()
+        && !evidence.physical_console_response_pending
+}
+
+/// Prove that the ordinary EventPump poll consumed exactly one notification
+/// from the unchanged CYW43 root-wake route.
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+fn cyw43_root_wake_consumed_between(
+    before: Option<crate::hal::driver_task::Cyw43RootWakeSnapshot>,
+    after: Option<crate::hal::driver_task::Cyw43RootWakeSnapshot>,
+) -> bool {
+    let (Some(before), Some(after)) = (before, after) else {
+        return false;
+    };
+    before.bound
+        && after.bound
+        && before.badge == pi4_driver_abi::DRIVER_RUNTIME_CYW43_ROOT_WAKE_NOTIFICATION_BADGE
+        && after.badge == before.badge
+        && after.polls == before.polls.wrapping_add(1)
+        && after.hits == before.hits.wrapping_add(1)
+}
+
+/// Complete root-local evidence for retaining one event-backed WiFi successor
 /// inside an already bounded activation. This pure predicate is the authority
 /// boundary; target state collection below cannot omit a fence silently.
 #[cfg(all(feature = "kernel", feature = "net-console"))]
@@ -5075,6 +5192,159 @@ struct DirectGenetProductiveQuantumSnapshot {
     // already received its bounded rotor opportunity, from operator input.
     physical_operator_work: LinkedPhysicalOperatorWork,
     physical_console_response_pending: bool,
+}
+
+/// One exact staged direct-GENET response whose child publication may finish
+/// the ordinary physical-operator rotor without reopening generic root work.
+///
+/// The value is stack-local to one root-control quantum.  It is minted only
+/// from the durable awaiting-batch level left by the preceding compact stage;
+/// the child-to-root notification remains an urgency hint, while the exact
+/// `OutputDrained` transition below is the work authority.
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct DirectGenetChildNotificationRotorContinuation {
+    generation: u64,
+    connection_id: u64,
+    accepted_commands: u64,
+    command_queue: usize,
+    immediate_stage_turns: u64,
+    child_stage_output_turns: u64,
+    child_stage_output_successes: u64,
+    child_response_drains: u64,
+}
+
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+impl DirectGenetChildNotificationRotorContinuation {
+    fn from_snapshot(snapshot: DirectGenetProductiveQuantumSnapshot) -> Option<Self> {
+        (snapshot.generation != 0
+            && snapshot.connection_id != 0
+            && snapshot.accepted_commands != 0
+            && snapshot.accepted_commands != u64::MAX
+            && snapshot.immediate_stage_turns != 0
+            && snapshot.immediate_stage_turns != u64::MAX
+            && snapshot.child_stage_output_turns != 0
+            && snapshot.child_stage_output_turns != u64::MAX
+            && snapshot.child_stage_output_successes != 0
+            && snapshot.child_stage_output_successes != u64::MAX
+            && snapshot.child_response_drains != u64::MAX
+            && snapshot.child_awaiting_batch_drain
+            && snapshot.child_yield_calls == 0
+            && snapshot.child_yield_counter_hz == 0
+            && snapshot.child_yield_call_wall_scaled == 0
+            && snapshot.child_yield_credit_scaled == 0
+            && snapshot.child_yield_invalid_reasons == 0
+            && direct_genet_compact_operator_fence_clear(Some(snapshot.physical_operator_work))
+            && !snapshot.physical_console_response_pending)
+            .then_some(Self {
+                generation: snapshot.generation,
+                connection_id: snapshot.connection_id,
+                accepted_commands: snapshot.accepted_commands,
+                command_queue: snapshot.command_queue,
+                immediate_stage_turns: snapshot.immediate_stage_turns,
+                child_stage_output_turns: snapshot.child_stage_output_turns,
+                child_stage_output_successes: snapshot.child_stage_output_successes,
+                child_response_drains: snapshot.child_response_drains,
+            })
+    }
+}
+
+/// Complete proof that the ordinary Network unit consumed the exact child
+/// publication for the staged response selected above.  Serial, optional
+/// LocalSeat, and Dispatch must all run before this one Network observation;
+/// the predicate cannot admit a second command, retry, or blind NIC poll.
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct DirectGenetChildNotificationRotorContinuationEvidence {
+    expected: Option<DirectGenetChildNotificationRotorContinuation>,
+    before_poll: Option<DirectGenetProductiveQuantumSnapshot>,
+    after_poll: Option<DirectGenetProductiveQuantumSnapshot>,
+    starting_phase: LinkedRuntimeServicePhase,
+    admitted_phase: LinkedRuntimeServicePhase,
+    next_phase: LinkedRuntimeServicePhase,
+    network_units: usize,
+    serial_admitted: bool,
+    local_seat_required: bool,
+    local_seat_admitted: bool,
+    dispatch_admitted: bool,
+    unit_index: usize,
+    last_input_source: ConsoleInputSource,
+    physical_input_observed: bool,
+    network_service_quarantined: bool,
+    reboot_pending: bool,
+    recovery_or_containment_pending: bool,
+    handoff_pending: bool,
+    passive_admission_pending: bool,
+    response_tail_pending: bool,
+    local_fault_pending: bool,
+}
+
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+fn direct_genet_child_notification_rotor_continuation_allowed(
+    evidence: DirectGenetChildNotificationRotorContinuationEvidence,
+) -> bool {
+    let (Some(expected), Some(before), Some(after)) =
+        (evidence.expected, evidence.before_poll, evidence.after_poll)
+    else {
+        return false;
+    };
+    let expected_followup = if evidence.local_seat_required {
+        LinkedRuntimeServicePhase::Display
+    } else {
+        LinkedRuntimeServicePhase::Serial
+    };
+    let exact_unit_index = 2usize.saturating_add(usize::from(evidence.local_seat_required));
+    let exact_before = before.generation == expected.generation
+        && before.connection_id == expected.connection_id
+        && before.accepted_commands == expected.accepted_commands
+        && before.command_queue == expected.command_queue
+        && before.immediate_stage_turns == expected.immediate_stage_turns
+        && before.child_stage_output_turns == expected.child_stage_output_turns
+        && before.child_stage_output_successes == expected.child_stage_output_successes
+        && before.child_awaiting_batch_drain
+        && before.child_response_drains == expected.child_response_drains
+        && before.child_yield_calls == 0
+        && before.child_yield_counter_hz == 0
+        && before.child_yield_call_wall_scaled == 0
+        && before.child_yield_credit_scaled == 0
+        && before.child_yield_invalid_reasons == 0
+        && direct_genet_compact_operator_fence_clear(Some(before.physical_operator_work))
+        && !before.physical_console_response_pending;
+    let exact_output_drained = after.generation == expected.generation
+        && after.connection_id == expected.connection_id
+        && after.accepted_commands == expected.accepted_commands
+        && after.command_queue == expected.command_queue
+        && after.immediate_stage_turns == expected.immediate_stage_turns
+        && after.child_stage_output_turns == expected.child_stage_output_turns
+        && after.child_stage_output_successes == expected.child_stage_output_successes
+        && !after.child_awaiting_batch_drain
+        && after.child_response_drains == expected.child_response_drains.saturating_add(1)
+        && after.child_yield_calls == 0
+        && after.child_yield_counter_hz == 0
+        && after.child_yield_call_wall_scaled == 0
+        && after.child_yield_credit_scaled == 0
+        && after.child_yield_invalid_reasons == 0
+        && direct_genet_compact_operator_fence_clear(Some(after.physical_operator_work))
+        && !after.physical_console_response_pending;
+    exact_before
+        && exact_output_drained
+        && evidence.starting_phase == LinkedRuntimeServicePhase::Serial
+        && evidence.admitted_phase == LinkedRuntimeServicePhase::Network
+        && evidence.next_phase == expected_followup
+        && evidence.network_units == 1
+        && evidence.serial_admitted
+        && (!evidence.local_seat_required || evidence.local_seat_admitted)
+        && evidence.dispatch_admitted
+        && evidence.unit_index == exact_unit_index
+        && matches!(evidence.last_input_source, ConsoleInputSource::Net)
+        && !evidence.physical_input_observed
+        && !evidence.network_service_quarantined
+        && !evidence.reboot_pending
+        && !evidence.recovery_or_containment_pending
+        && !evidence.handoff_pending
+        && !evidence.passive_admission_pending
+        && !evidence.response_tail_pending
+        && !evidence.local_fault_pending
 }
 
 #[cfg(all(feature = "kernel", feature = "net-console"))]
@@ -7616,6 +7886,9 @@ where
     pi_root_control_consumed_window: PiRootControlConsumedWindow,
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     pi_root_control_productive_continuation_identity: Option<PiRootControlProductiveContinuation>,
+    #[cfg(all(test, feature = "kernel", feature = "net-console"))]
+    direct_genet_child_notification_rotor_continuation_test_override:
+        Option<DirectGenetChildNotificationRotorContinuation>,
     #[cfg(all(feature = "kernel", feature = "release-pi4"))]
     pi_root_control_pending_passive_command: Option<Box<PiRootControlPendingPassiveCommand>>,
     #[cfg(feature = "kernel")]
@@ -8329,6 +8602,8 @@ where
             pi_root_control_consumed_window: PiRootControlConsumedWindow::Empty,
             #[cfg(all(feature = "kernel", feature = "net-console"))]
             pi_root_control_productive_continuation_identity: None,
+            #[cfg(all(test, feature = "kernel", feature = "net-console"))]
+            direct_genet_child_notification_rotor_continuation_test_override: None,
             #[cfg(all(feature = "kernel", feature = "release-pi4"))]
             pi_root_control_pending_passive_command: None,
             #[cfg(feature = "kernel")]
@@ -9275,8 +9550,12 @@ where
             let mut rotation_after_network = None;
             let mut rotation_before_dispatch = None;
             let mut terminal_drain_return_due = false;
+            let mut root_wake_rotor_continuation = None;
+            let mut physical_input_observed = false;
             for unit_index in 0..PI4_LOCAL_OPERATOR_POLLS_PER_EXPLICIT_YIELD {
                 let admitted_phase = self.linked_runtime_service_phase;
+                physical_input_observed |=
+                    self.linked_physical_operator_work() == LinkedPhysicalOperatorWork::Input;
                 let terminal_drain_return_admitted = cyw43_terminal_drain_revisit_admitted(
                     network_units,
                     admitted_phase,
@@ -9371,7 +9650,14 @@ where
                     }
                 }
 
+                let root_wake_before_poll = crate::hal::driver_task::cyw43_root_wake_snapshot();
                 self.poll();
+                let root_wake_consumed = cyw43_root_wake_consumed_between(
+                    root_wake_before_poll,
+                    crate::hal::driver_task::cyw43_root_wake_snapshot(),
+                );
+                physical_input_observed |=
+                    self.linked_physical_operator_work() == LinkedPhysicalOperatorWork::Input;
                 if self.pi_root_control_passive_admission_pending() {
                     // Parsing the exact passive command is this composer's
                     // terminal event. Preserve Dispatch and return before any
@@ -9389,6 +9675,11 @@ where
                 serial_admitted |= admitted_phase == LinkedRuntimeServicePhase::Serial;
                 local_seat_admitted |= admitted_phase == LinkedRuntimeServicePhase::LocalSeat;
                 dispatch_admitted |= admitted_phase == LinkedRuntimeServicePhase::Dispatch;
+                if network_units != 0 && !network_turn && root_wake_consumed {
+                    root_wake_rotor_continuation = self
+                        .cyw43_productive_activation_current_identity()
+                        .map(|identity| Cyw43RootWakeRotorContinuation { identity });
+                }
                 if network_turn {
                     network_units = network_units.saturating_add(1);
                     if network_units == 1 {
@@ -9510,9 +9801,7 @@ where
                         console_service_local_fault_pending: transient_local_fault_pending,
                         console_service_local_containment_pending:
                             transient_local_containment_pending,
-                        physical_operator_work_pending: self
-                            .linked_physical_operator_work()
-                            .needs_operator_rotation(),
+                        physical_operator_work: self.linked_physical_operator_work(),
                         physical_console_response_pending: self.physical_console_response_pending(),
                     };
                         match cyw43_transient_publication_credit_from_probe(evidence) {
@@ -9564,9 +9853,6 @@ where
                         || response_episode_progress;
                     if exact_productive_progress {
                         let _ = self.note_cyw43_productive_activation_progress();
-                        return true;
-                    }
-                    if self.retain_cyw43_productive_activation_idle() {
                         return true;
                     }
                 }
@@ -9675,6 +9961,22 @@ where
                         },
                     ) {
                         let _ = self.note_cyw43_productive_activation_progress();
+                        return true;
+                    }
+                    if self.cyw43_root_wake_rotor_continuation_due(
+                        root_wake_rotor_continuation,
+                        network_units,
+                        serial_admitted,
+                        local_seat_admitted,
+                        dispatch_admitted,
+                        rotation_after_network,
+                        rotation_before_dispatch,
+                        terminal_drain_return_due,
+                        physical_input_observed,
+                    ) {
+                        // The complete rotor has returned to Network. Preserve
+                        // only the caller's current activation: this wrapper has
+                        // already spent its sole ordinary Network unit.
                         return true;
                     }
                 }
@@ -10500,24 +10802,82 @@ where
             if pi4_local_operator_quantum_enabled(physical_driver_owner, linked_serial_owner) {
                 #[cfg(feature = "net-console")]
                 let direct_genet_before = self.direct_genet_productive_quantum_snapshot();
+                #[cfg(feature = "net-console")]
+                let direct_genet_child_notification_rotor_continuation_from_topology =
+                    (direct_genet_continuation_mode_from_generated()
+                        == Some(DirectGenetContinuationMode::CrossCoreSignalOnly))
+                    .then(|| {
+                        direct_genet_before
+                            .and_then(DirectGenetChildNotificationRotorContinuation::from_snapshot)
+                    })
+                    .flatten();
+                #[cfg(test)]
+                let direct_genet_child_notification_rotor_continuation = self
+                    .direct_genet_child_notification_rotor_continuation_test_override
+                    .take()
+                    .or(direct_genet_child_notification_rotor_continuation_from_topology);
+                #[cfg(not(test))]
+                let direct_genet_child_notification_rotor_continuation =
+                    direct_genet_child_notification_rotor_continuation_from_topology;
                 let starting_phase = self.linked_runtime_service_phase;
                 let mut network_units = 0usize;
                 let mut serial_admitted = false;
                 let mut local_seat_admitted = self.local_seat.is_none();
+                let mut dispatch_admitted = false;
+                let mut physical_input_observed = false;
                 let mut direct_genet_immediate_dispatch_admitted = false;
                 let mut direct_genet_causal_stage_completed = false;
                 for unit_index in 0..PI4_LOCAL_OPERATOR_POLLS_PER_EXPLICIT_YIELD {
                     let admitted_phase = self.linked_runtime_service_phase;
+                    physical_input_observed |=
+                        self.linked_physical_operator_work() == LinkedPhysicalOperatorWork::Input;
                     let accepted_commands_before = self.metrics.accepted_commands;
                     #[cfg(feature = "net-console")]
                     let direct_genet_stage_before = self.direct_genet_stage_progress_snapshot();
+                    #[cfg(feature = "net-console")]
+                    let direct_genet_child_notification_before = (admitted_phase
+                        == LinkedRuntimeServicePhase::Network)
+                        .then(|| self.direct_genet_productive_quantum_snapshot())
+                        .flatten();
                     self.poll();
+                    physical_input_observed |=
+                        self.linked_physical_operator_work() == LinkedPhysicalOperatorWork::Input;
                     if self.pi_root_control_passive_admission_pending() {
                         // begin_pi_root_control_pending has already retained
                         // Dispatch. Stop at the capture cut so no counters,
                         // response staging, or later unit runs before the caller
                         // marks the sole selected MCS Yield boundary.
                         return true;
+                    }
+                    network_units = network_units.saturating_add(usize::from(
+                        admitted_phase == LinkedRuntimeServicePhase::Network,
+                    ));
+                    serial_admitted |= admitted_phase == LinkedRuntimeServicePhase::Serial;
+                    local_seat_admitted |= admitted_phase == LinkedRuntimeServicePhase::LocalSeat;
+                    dispatch_admitted |= admitted_phase == LinkedRuntimeServicePhase::Dispatch;
+                    #[cfg(feature = "net-console")]
+                    let direct_genet_child_notification_after = (admitted_phase
+                        == LinkedRuntimeServicePhase::Network)
+                        .then(|| self.direct_genet_productive_quantum_snapshot())
+                        .flatten();
+                    #[cfg(feature = "net-console")]
+                    if self.consume_direct_genet_child_notification_rotor_continuation(
+                        direct_genet_child_notification_rotor_continuation,
+                        direct_genet_child_notification_before,
+                        direct_genet_child_notification_after,
+                        starting_phase,
+                        admitted_phase,
+                        network_units,
+                        serial_admitted,
+                        local_seat_admitted,
+                        dispatch_admitted,
+                        unit_index,
+                        physical_input_observed,
+                    ) {
+                        // The exact OutputDrained publication is the one-shot
+                        // successor. Do not enter another command, Network, or
+                        // generic operator prefix in this bounded quantum.
+                        break;
                     }
                     #[cfg(feature = "net-console")]
                     let direct_genet_compact_successor = (admitted_phase
@@ -10542,11 +10902,6 @@ where
                             .net_direct_genet_immediate_dispatches
                             .saturating_add(1);
                     }
-                    network_units = network_units.saturating_add(usize::from(
-                        admitted_phase == LinkedRuntimeServicePhase::Network,
-                    ));
-                    serial_admitted |= admitted_phase == LinkedRuntimeServicePhase::Serial;
-                    local_seat_admitted |= admitted_phase == LinkedRuntimeServicePhase::LocalSeat;
 
                     #[cfg(feature = "net-console")]
                     let (direct_genet_stage_attempted, direct_genet_stage_completed) = self
@@ -12711,6 +13066,68 @@ where
         })
     }
 
+    /// Finish one exact child-publication rotor at Serial.
+    ///
+    /// `response_drains + 1` is possible here only after the ordinary GENET
+    /// Network unit consumed the existing child-to-root notification and
+    /// validated its `OutputDrained` record.  Ending at Serial preserves the
+    /// productive-continuation identity; otherwise the fixed five-unit loop
+    /// can advance through another empty operator prefix and strand the exact
+    /// drain at Network just before the explicit Yield boundary.
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    fn consume_direct_genet_child_notification_rotor_continuation(
+        &mut self,
+        expected: Option<DirectGenetChildNotificationRotorContinuation>,
+        before_poll: Option<DirectGenetProductiveQuantumSnapshot>,
+        after_poll: Option<DirectGenetProductiveQuantumSnapshot>,
+        starting_phase: LinkedRuntimeServicePhase,
+        admitted_phase: LinkedRuntimeServicePhase,
+        network_units: usize,
+        serial_admitted: bool,
+        local_seat_admitted: bool,
+        dispatch_admitted: bool,
+        unit_index: usize,
+        physical_input_observed: bool,
+    ) -> bool {
+        let local_fault_pending = self.net.as_deref().is_none_or(|net| {
+            net.console_service_local_fault_pending()
+                || net.console_service_local_containment_pending()
+        });
+        let allowed = direct_genet_child_notification_rotor_continuation_allowed(
+            DirectGenetChildNotificationRotorContinuationEvidence {
+                expected,
+                before_poll,
+                after_poll,
+                starting_phase,
+                admitted_phase,
+                next_phase: self.linked_runtime_service_phase,
+                network_units,
+                serial_admitted,
+                local_seat_required: self.local_seat.is_some(),
+                local_seat_admitted,
+                dispatch_admitted,
+                unit_index,
+                last_input_source: self.last_input_source,
+                physical_input_observed,
+                network_service_quarantined: self.network_service_quarantined,
+                reboot_pending: self.reboot_pending,
+                recovery_or_containment_pending: self.pi_isolated_service_recovery_pending()
+                    || self.pi_isolated_service_containment_pending(),
+                handoff_pending: self.deferred_console_network_handoff_pending(),
+                passive_admission_pending: self.pi_root_control_passive_admission_pending(),
+                response_tail_pending: self.pending_net_flush.active()
+                    || self.stream_end_pending
+                    || self.pending_stream_active(),
+                local_fault_pending,
+            },
+        );
+        if allowed {
+            self.clear_linked_runtime_network_operator_checkpoint_clock();
+            self.linked_runtime_service_phase = LinkedRuntimeServicePhase::Serial;
+        }
+        allowed
+    }
+
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     fn direct_genet_stage_progress_snapshot(&self) -> Option<DirectGenetStageProgressSnapshot> {
         let net = self.net.as_deref()?;
@@ -13151,12 +13568,13 @@ where
     }
 
     /// Return whether the isolated direct-GENET child retained one exact
-    /// authenticated command and no physical operator currently owns the cut.
+    /// authenticated command and no physical input currently owns the cut.
     ///
-    /// This predicate is side-effect free. When physical-operator and response
+    /// This predicate is side-effect free. When physical input and response
     /// debt are idle, it may select immediate Dispatch and one causal response
-    /// StageOutput turn inside the existing five-unit Pi quantum. The composer
-    /// then returns to Serial and stops before another command is accepted.
+    /// StageOutput turn inside the existing five-unit Pi quantum. Passive USB
+    /// debt remains typed through that leaf; the composer then returns to Serial
+    /// and stops before another command is accepted.
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     fn linked_runtime_direct_genet_command_ready(&self) -> bool {
         if self.network_service_quarantined
@@ -13166,7 +13584,9 @@ where
             || self.network_response_owner_active()
             || self.stream_end_pending
             || self.pending_stream_active()
-            || self.linked_physical_operator_work() != LinkedPhysicalOperatorWork::Idle
+            || !direct_genet_compact_operator_fence_clear(Some(
+                self.linked_physical_operator_work(),
+            ))
         {
             return false;
         }
@@ -13259,7 +13679,9 @@ where
             || self.deferred_console_network_handoff_pending()
             || self.pi_root_control_passive_admission_pending()
             || self.physical_console_response_pending()
-            || self.linked_physical_operator_work() != LinkedPhysicalOperatorWork::Idle
+            || !direct_genet_compact_operator_fence_clear(Some(
+                self.linked_physical_operator_work(),
+            ))
             || self.pending_net_flush.active()
             || self.stream_end_pending
             || (self.pending_stream_active() && sync_identity != Some(expected))
@@ -13306,7 +13728,9 @@ where
             || self.pi_isolated_service_containment_pending()
             || self.deferred_console_network_handoff_pending()
             || self.physical_console_response_pending()
-            || self.linked_physical_operator_work() != LinkedPhysicalOperatorWork::Idle
+            || !direct_genet_compact_operator_fence_clear(Some(
+                self.linked_physical_operator_work(),
+            ))
             || !self.linked_runtime_direct_genet_command_ready()
         {
             return None;
@@ -13723,6 +14147,64 @@ where
         })
     }
 
+    /// Revalidate one stack-local root-wake token only after its mandatory
+    /// physical-operator rotor has completed and returned to Network.
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    fn cyw43_root_wake_rotor_continuation_due(
+        &mut self,
+        expected: Option<Cyw43RootWakeRotorContinuation>,
+        network_units: usize,
+        serial_admitted: bool,
+        local_seat_admitted: bool,
+        dispatch_admitted: bool,
+        rotation_after_network: Option<LinkedRuntimeCyw43DurableResume>,
+        rotation_before_dispatch: Option<LinkedRuntimeCyw43DurableResume>,
+        terminal_drain_return_due: bool,
+        physical_input_observed: bool,
+    ) -> bool {
+        let (console_service_local_fault_pending, console_service_local_containment_pending) =
+            self.net.as_deref().map_or((true, true), |net| {
+                (
+                    net.console_service_local_fault_pending(),
+                    net.console_service_local_containment_pending(),
+                )
+            });
+        let current = self.cyw43_productive_activation_current_identity();
+        let cyw43_lane_selected = self.linked_runtime_cyw43_lane_selected();
+        let recovery_required = crate::drivers::driver_task_net::cyw43_recovery_required();
+        let containment_work_pending = self.deferred_containment_work_pending();
+        let handoff_pending = self.deferred_console_network_handoff_pending();
+        let passive_admission_pending = self.pi_root_control_passive_admission_pending();
+        let physical_operator_work = self.linked_physical_operator_work();
+        let physical_console_response_pending = self.physical_console_response_pending();
+        cyw43_root_wake_rotor_continuation_allowed(Cyw43RootWakeRotorContinuationEvidence {
+            expected,
+            current,
+            next_phase: self.linked_runtime_service_phase,
+            network_units,
+            serial_admitted,
+            local_seat_required: self.local_seat.is_some(),
+            local_seat_admitted,
+            dispatch_admitted,
+            rotation_after_network,
+            rotation_before_dispatch,
+            rotation_after_dispatch: self.linked_runtime_cyw43_operator_rotation_pending,
+            terminal_drain_return_due,
+            physical_input_observed,
+            cyw43_lane_selected,
+            network_service_quarantined: self.network_service_quarantined,
+            reboot_pending: self.reboot_pending,
+            recovery_required,
+            containment_work_pending,
+            handoff_pending,
+            passive_admission_pending,
+            console_service_local_fault_pending,
+            console_service_local_containment_pending,
+            physical_operator_work,
+            physical_console_response_pending,
+        })
+    }
+
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     fn cyw43_productive_activation_fence_clear(
         &mut self,
@@ -13756,10 +14238,10 @@ where
         })
     }
 
-    /// Open or revalidate the exact progress-sticky identity for the current
-    /// bounded attached-WiFi activation. This never starts or extends the
-    /// userland wall/turn window; it only prevents a transient empty
-    /// cross-core observation from being mistaken for transaction completion.
+    /// Open or revalidate the exact identity for a later event-backed successor
+    /// in the current bounded attached-WiFi activation. This never starts or
+    /// extends the userland wall/turn window and grants no authority to an
+    /// unchanged empty cross-core observation.
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     fn note_cyw43_productive_activation_progress(&mut self) -> bool {
         let Some(current) = self.cyw43_productive_activation_current_identity() else {
@@ -13788,28 +14270,6 @@ where
                 true
             }
         }
-    }
-
-    /// Admit one clean transient-empty rotor only while the exact identity and
-    /// every operator/recovery fence remain unchanged. The enclosing CYW43
-    /// activation still enforces its existing 3 ms and 64-turn hard limits.
-    #[cfg(all(feature = "kernel", feature = "net-console"))]
-    fn retain_cyw43_productive_activation_idle(&mut self) -> bool {
-        let Some(expected) = self.cyw43_productive_activation_identity else {
-            return false;
-        };
-        if !self.cyw43_productive_activation_fence_clear(expected) {
-            self.close_cyw43_productive_activation();
-            return false;
-        }
-        #[cfg(feature = "release-pi4")]
-        {
-            self.metrics.net_cyw43_productive_window_idle_admissions = self
-                .metrics
-                .net_cyw43_productive_window_idle_admissions
-                .saturating_add(1);
-        }
-        true
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
@@ -42050,6 +42510,7 @@ mod tests {
         isolated_stage_attempt_on_poll: Option<usize>,
         isolated_stage_progress_on_poll: Option<usize>,
         isolated_stage_drain_on_poll: Option<usize>,
+        isolated_response_drain_on_poll: Option<usize>,
     }
 
     #[cfg(feature = "net-console")]
@@ -42113,6 +42574,7 @@ mod tests {
                 isolated_stage_attempt_on_poll: None,
                 isolated_stage_progress_on_poll: None,
                 isolated_stage_drain_on_poll: None,
+                isolated_response_drain_on_poll: None,
             }
         }
 
@@ -42219,6 +42681,19 @@ mod tests {
                     // accounting just like the production boundary.
                     self.isolated_diagnostics = Some(diagnostic);
                 }
+            }
+            if self.isolated_response_drain_on_poll == Some(self.polls) {
+                if let Some(mut diagnostic) = self.isolated_diagnostics {
+                    diagnostic.last_unit = "observe-child";
+                    diagnostic.turns = diagnostic.turns.saturating_add(1);
+                    diagnostic.progress_turns = diagnostic.progress_turns.saturating_add(1);
+                    diagnostic.observe_child_turns =
+                        diagnostic.observe_child_turns.saturating_add(1);
+                    diagnostic.awaiting_batch_drain = false;
+                    diagnostic.response_drains = diagnostic.response_drains.saturating_add(1);
+                    self.isolated_diagnostics = Some(diagnostic);
+                }
+                self.response_lane = None;
             }
             if let Some(observer) = self.poll_observer.as_ref() {
                 observer.set(observer.get().saturating_add(1));
@@ -51139,12 +51614,41 @@ mod tests {
             passive_admission_pending: false,
             console_service_local_fault_pending: false,
             console_service_local_containment_pending: false,
-            physical_operator_work_pending: false,
+            physical_operator_work: LinkedPhysicalOperatorWork::Idle,
             physical_console_response_pending: false,
         };
         assert_eq!(cyw43_transient_publication_probe_reject_reason(probe), 0);
+        let usb_service_debt_probe = Cyw43TransientPublicationProbeEvidence {
+            physical_operator_work: LinkedPhysicalOperatorWork::UsbServiceDebt,
+            ..probe
+        };
+        assert_eq!(
+            cyw43_transient_publication_probe_reject_reason(usb_service_debt_probe),
+            0,
+            "the mandatory operator rotor services passive USB debt before Network re-entry",
+        );
+        let usb_service_debt_credit =
+            cyw43_transient_publication_credit_from_probe(usb_service_debt_probe)
+                .expect("passive USB debt must mint the same exact one-shot credit");
+        let input_probe = Cyw43TransientPublicationProbeEvidence {
+            physical_operator_work: LinkedPhysicalOperatorWork::Input,
+            ..probe
+        };
+        assert_eq!(
+            cyw43_transient_publication_probe_reject_reason(input_probe),
+            CYW43_TRANSIENT_REJECT_OPERATOR_OR_RECOVERY,
+            "physical input must retain precedence at the publication probe",
+        );
+        assert!(
+            cyw43_transient_publication_credit_from_probe(input_probe).is_err(),
+            "physical input cannot mint transient Network authority",
+        );
         let credit = cyw43_transient_publication_credit_from_probe(probe)
             .expect("the exact material publication must mint one credit");
+        assert_eq!(
+            usb_service_debt_credit, credit,
+            "typed passive debt changes no lifetime or response identity",
+        );
         let entry = Cyw43TransientPublicationCreditEvidence {
             credit,
             cut: Cyw43TransientPublicationCreditCut::Entry,
@@ -52399,6 +52903,258 @@ mod tests {
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[test]
+    fn pi_attached_wifi_root_wake_rotor_continuation_is_exact_and_fail_closed() {
+        let lifetime = LinkedRuntimeCyw43DurableResume {
+            generation: 17,
+            pair_epoch: 23,
+            physical_lifetime_epoch: 29,
+        };
+        let identity = Cyw43ProductiveActivationIdentity {
+            lifetime,
+            response_identity: ConsoleResponseIdentity {
+                generation: 7,
+                connection_id: 41,
+            },
+            accepted_commands: 5,
+        };
+        let continuation = Cyw43RootWakeRotorContinuation { identity };
+        let baseline = Cyw43RootWakeRotorContinuationEvidence {
+            expected: Some(continuation),
+            current: Some(identity),
+            next_phase: LinkedRuntimeServicePhase::Network,
+            network_units: 1,
+            serial_admitted: true,
+            local_seat_required: true,
+            local_seat_admitted: true,
+            dispatch_admitted: true,
+            rotation_after_network: Some(lifetime),
+            rotation_before_dispatch: Some(lifetime),
+            rotation_after_dispatch: None,
+            terminal_drain_return_due: false,
+            physical_input_observed: false,
+            cyw43_lane_selected: true,
+            network_service_quarantined: false,
+            reboot_pending: false,
+            recovery_required: false,
+            containment_work_pending: false,
+            handoff_pending: false,
+            passive_admission_pending: false,
+            console_service_local_fault_pending: false,
+            console_service_local_containment_pending: false,
+            physical_operator_work: LinkedPhysicalOperatorWork::UsbServiceDebt,
+            physical_console_response_pending: false,
+        };
+        assert!(cyw43_root_wake_rotor_continuation_allowed(baseline));
+        assert!(cyw43_root_wake_rotor_continuation_allowed(
+            Cyw43RootWakeRotorContinuationEvidence {
+                local_seat_required: false,
+                local_seat_admitted: false,
+                physical_operator_work: LinkedPhysicalOperatorWork::Idle,
+                ..baseline
+            },
+        ));
+
+        let different_lifetime = LinkedRuntimeCyw43DurableResume {
+            generation: lifetime.generation + 1,
+            ..lifetime
+        };
+        let different_identity = Cyw43ProductiveActivationIdentity {
+            lifetime: different_lifetime,
+            ..identity
+        };
+        let rejected = [
+            Cyw43RootWakeRotorContinuationEvidence {
+                expected: None,
+                ..baseline
+            },
+            Cyw43RootWakeRotorContinuationEvidence {
+                current: None,
+                ..baseline
+            },
+            Cyw43RootWakeRotorContinuationEvidence {
+                current: Some(different_identity),
+                ..baseline
+            },
+            Cyw43RootWakeRotorContinuationEvidence {
+                current: Some(Cyw43ProductiveActivationIdentity {
+                    accepted_commands: identity.accepted_commands + 1,
+                    ..identity
+                }),
+                ..baseline
+            },
+            Cyw43RootWakeRotorContinuationEvidence {
+                next_phase: LinkedRuntimeServicePhase::Serial,
+                ..baseline
+            },
+            Cyw43RootWakeRotorContinuationEvidence {
+                network_units: 0,
+                ..baseline
+            },
+            Cyw43RootWakeRotorContinuationEvidence {
+                network_units: 2,
+                ..baseline
+            },
+            Cyw43RootWakeRotorContinuationEvidence {
+                serial_admitted: false,
+                ..baseline
+            },
+            Cyw43RootWakeRotorContinuationEvidence {
+                local_seat_admitted: false,
+                ..baseline
+            },
+            Cyw43RootWakeRotorContinuationEvidence {
+                dispatch_admitted: false,
+                ..baseline
+            },
+            Cyw43RootWakeRotorContinuationEvidence {
+                rotation_after_network: None,
+                ..baseline
+            },
+            Cyw43RootWakeRotorContinuationEvidence {
+                rotation_before_dispatch: Some(different_lifetime),
+                ..baseline
+            },
+            Cyw43RootWakeRotorContinuationEvidence {
+                rotation_after_dispatch: Some(lifetime),
+                ..baseline
+            },
+            Cyw43RootWakeRotorContinuationEvidence {
+                terminal_drain_return_due: true,
+                ..baseline
+            },
+            Cyw43RootWakeRotorContinuationEvidence {
+                physical_input_observed: true,
+                ..baseline
+            },
+            Cyw43RootWakeRotorContinuationEvidence {
+                cyw43_lane_selected: false,
+                ..baseline
+            },
+            Cyw43RootWakeRotorContinuationEvidence {
+                network_service_quarantined: true,
+                ..baseline
+            },
+            Cyw43RootWakeRotorContinuationEvidence {
+                reboot_pending: true,
+                ..baseline
+            },
+            Cyw43RootWakeRotorContinuationEvidence {
+                recovery_required: true,
+                ..baseline
+            },
+            Cyw43RootWakeRotorContinuationEvidence {
+                containment_work_pending: true,
+                ..baseline
+            },
+            Cyw43RootWakeRotorContinuationEvidence {
+                handoff_pending: true,
+                ..baseline
+            },
+            Cyw43RootWakeRotorContinuationEvidence {
+                passive_admission_pending: true,
+                ..baseline
+            },
+            Cyw43RootWakeRotorContinuationEvidence {
+                console_service_local_fault_pending: true,
+                ..baseline
+            },
+            Cyw43RootWakeRotorContinuationEvidence {
+                console_service_local_containment_pending: true,
+                ..baseline
+            },
+            Cyw43RootWakeRotorContinuationEvidence {
+                physical_operator_work: LinkedPhysicalOperatorWork::Input,
+                ..baseline
+            },
+            Cyw43RootWakeRotorContinuationEvidence {
+                physical_console_response_pending: true,
+                ..baseline
+            },
+            Cyw43RootWakeRotorContinuationEvidence {
+                expected: Some(Cyw43RootWakeRotorContinuation {
+                    identity: Cyw43ProductiveActivationIdentity {
+                        lifetime: LinkedRuntimeCyw43DurableResume {
+                            generation: 0,
+                            ..lifetime
+                        },
+                        ..identity
+                    },
+                }),
+                current: Some(Cyw43ProductiveActivationIdentity {
+                    lifetime: LinkedRuntimeCyw43DurableResume {
+                        generation: 0,
+                        ..lifetime
+                    },
+                    ..identity
+                }),
+                rotation_after_network: Some(LinkedRuntimeCyw43DurableResume {
+                    generation: 0,
+                    ..lifetime
+                }),
+                rotation_before_dispatch: Some(LinkedRuntimeCyw43DurableResume {
+                    generation: 0,
+                    ..lifetime
+                }),
+                ..baseline
+            },
+        ];
+        for evidence in rejected {
+            assert!(
+                !cyw43_root_wake_rotor_continuation_allowed(evidence),
+                "root-wake continuation must fail closed for {evidence:?}",
+            );
+        }
+
+        let before = crate::hal::driver_task::Cyw43RootWakeSnapshot {
+            bound: true,
+            badge: pi4_driver_abi::DRIVER_RUNTIME_CYW43_ROOT_WAKE_NOTIFICATION_BADGE,
+            polls: 11,
+            hits: 7,
+        };
+        let after = crate::hal::driver_task::Cyw43RootWakeSnapshot {
+            polls: 12,
+            hits: 8,
+            ..before
+        };
+        assert!(cyw43_root_wake_consumed_between(Some(before), Some(after),));
+        for (before, after) in [
+            (None, Some(after)),
+            (Some(before), None),
+            (
+                Some(before),
+                Some(crate::hal::driver_task::Cyw43RootWakeSnapshot {
+                    bound: false,
+                    ..after
+                }),
+            ),
+            (
+                Some(before),
+                Some(crate::hal::driver_task::Cyw43RootWakeSnapshot {
+                    badge: after.badge + 1,
+                    ..after
+                }),
+            ),
+            (
+                Some(before),
+                Some(crate::hal::driver_task::Cyw43RootWakeSnapshot {
+                    polls: before.polls,
+                    ..after
+                }),
+            ),
+            (
+                Some(before),
+                Some(crate::hal::driver_task::Cyw43RootWakeSnapshot {
+                    hits: before.hits,
+                    ..after
+                }),
+            ),
+        ] {
+            assert!(!cyw43_root_wake_consumed_between(before, after));
+        }
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
     fn pi_attached_wifi_response_rotation_continuation_is_exact_and_fail_closed() {
         let rotation = LinkedRuntimeCyw43DurableResume {
             generation: 17,
@@ -52703,6 +53459,130 @@ mod tests {
             1,
             "the fused checkpoint admits exactly one USB service turn",
         );
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn pi_attached_wifi_root_wake_continues_after_exact_usb_rotor_without_repoll() {
+        struct LinkedRuntimeTestReset;
+
+        impl Drop for LinkedRuntimeTestReset {
+            fn drop(&mut self) {
+                crate::drivers::driver_task_net::set_cyw43_service_work_snapshot_test_override(
+                    None,
+                );
+                crate::hal::driver_task::test_reset_cyw43_root_wake();
+                crate::hal::set_timebase_now_ms(0);
+                crate::serial::test_end_linked_runtime_only_transport();
+            }
+        }
+
+        let _progress_guard = wifi_driver_task_progress_test_guard();
+        crate::drivers::driver_task_net::set_cyw43_service_work_snapshot_test_override(Some(
+            crate::drivers::driver_task_net::Cyw43ServiceWorkSnapshot::for_test(71, 31, 1, 1),
+        ));
+        assert!(crate::hal::driver_task::test_configure_cyw43_root_wake(0));
+        crate::serial::test_begin_linked_runtime_only_transport();
+        let _reset = LinkedRuntimeTestReset;
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<
+            32768,
+        >::new());
+        let timer = TestTimer::repeated(4, 1);
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut wifi = FakeNet::new();
+        wifi.driver_contract = crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT;
+        wifi.active_conn_id = Some(41);
+        wifi.authenticated_conn_id = Some(41);
+        wifi.poll_activity = false;
+        let wake_on_network_poll = std::rc::Rc::new(core::cell::Cell::new(true));
+        let wake_on_network_poll_observer = std::rc::Rc::clone(&wake_on_network_poll);
+        wifi.cyw43_terminal_consumer_on_poll = Some(Box::new(move || {
+            if wake_on_network_poll_observer.replace(false) {
+                crate::hal::driver_task::test_inject_cyw43_root_wake();
+            }
+        }));
+        let mut local_seat = LocalSeatRuntime::new(crate::local_seat::LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 192,
+            buffer_lines: 64,
+        });
+        local_seat.mark_root_console_ready();
+        local_seat.enable_backend_keyboard_polling();
+
+        {
+            let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit)
+                .with_network(&mut wifi)
+                .with_local_seat(&mut local_seat);
+            pump.linked_local_seat_usb_service_pending_test_override = Some(true);
+            pump.linked_runtime_service_phase = LinkedRuntimeServicePhase::Network;
+            pump.linked_runtime_network_consecutive_turns = 1;
+            pump.timer.index = pump.timer.ticks.len();
+            pump.now_ms = 100;
+            crate::hal::set_timebase_now_ms(pump.now_ms);
+            let expired_checkpoint = pump
+                .now_ms
+                .saturating_sub(LINKED_RUNTIME_NETWORK_OPERATOR_CHECKPOINT_MS);
+            pump.linked_runtime_network_operator_checkpoint_started_ms = Some(expired_checkpoint);
+            pump.linked_runtime_network_operator_checkpoint_started_ticks = 0;
+
+            assert!(
+                pump.poll_deferred_cyw43_attached_network_control_turn(),
+                "a consumed exact wake must retain only the caller activation after the complete rotor",
+            );
+            assert_eq!(pump.metrics.net_cyw43_service_turns, 1);
+            assert_eq!(pump.metrics.net_cyw43_service_operator_yields, 1);
+            assert_eq!(
+                pump.linked_runtime_service_phase,
+                LinkedRuntimeServicePhase::Network,
+            );
+            assert!(pump
+                .linked_runtime_cyw43_operator_rotation_pending
+                .is_none());
+            #[cfg(feature = "release-pi4")]
+            assert_eq!(
+                pump.metrics.net_cyw43_productive_window_idle_admissions, 0,
+                "a consumed wake replaces rather than composes with eventless idle retention",
+            );
+            assert_eq!(
+                pump.local_seat
+                    .as_ref()
+                    .expect("local seat remains attached")
+                    .keyboard_trace()
+                    .backend_poll_calls,
+                1,
+                "the wake cannot bypass its required LocalSeat service turn",
+            );
+            pump.linked_runtime_network_operator_checkpoint_started_ms = Some(expired_checkpoint);
+            assert!(
+                !pump.poll_deferred_cyw43_attached_network_control_turn(),
+                "the stack-only wake token must not survive the caller boundary without a new notification",
+            );
+
+            wake_on_network_poll.set(true);
+            assert_eq!(
+                pump.local_seat
+                    .as_mut()
+                    .expect("local seat remains attached")
+                    .enqueue_keyboard_bytes(b"x"),
+                1,
+            );
+            pump.linked_runtime_network_operator_checkpoint_started_ms = Some(expired_checkpoint);
+            assert!(
+                !pump.poll_deferred_cyw43_attached_network_control_turn(),
+                "real local-seat input must revoke a newly consumed wake continuation",
+            );
+        }
+
+        assert_eq!(
+            wifi.polls, 3,
+            "each composer entry performs exactly one Network poll; no wake authorizes an inner repoll",
+        );
+        let wake = crate::hal::driver_task::cyw43_root_wake_snapshot()
+            .expect("configured wake route remains inspectable");
+        assert_eq!(wake.hits, 2, "each injected wake is consumed exactly once");
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console", feature = "release-qemu"))]
@@ -54611,6 +55491,25 @@ mod tests {
                 false,
                 LinkedPhysicalOperatorWork::UsbServiceDebt,
             )
+        );
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn direct_genet_compact_operator_fence_is_typed_and_fail_closed() {
+        assert!(direct_genet_compact_operator_fence_clear(Some(
+            LinkedPhysicalOperatorWork::Idle,
+        )));
+        assert!(direct_genet_compact_operator_fence_clear(Some(
+            LinkedPhysicalOperatorWork::UsbServiceDebt,
+        )));
+        assert!(
+            !direct_genet_compact_operator_fence_clear(Some(LinkedPhysicalOperatorWork::Input,)),
+            "physical input retains precedence over the compact response leaf",
+        );
+        assert!(
+            !direct_genet_compact_operator_fence_clear(None),
+            "missing operator classification cannot grant compact authority",
         );
     }
 
@@ -56947,7 +57846,6 @@ mod tests {
             buffer_lines: 64,
         });
         local_seat.mark_root_console_ready();
-        local_seat.inject_linked_hdmi_pending_bytes_for_test(8);
 
         {
             let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit)
@@ -59582,6 +60480,24 @@ mod tests {
                 .with_network(&mut genet)
                 .with_local_seat(&mut local_seat);
             pump.linked_runtime_service_phase = LinkedRuntimeServicePhase::Network;
+            pump.linked_local_seat_usb_service_pending_test_override = Some(true);
+            assert_eq!(
+                pump.linked_physical_operator_work(),
+                LinkedPhysicalOperatorWork::UsbServiceDebt,
+            );
+            assert!(
+                pump.linked_runtime_direct_genet_command_ready(),
+                "passive USB debt may cross one compact command leaf before its mandatory rotor turn",
+            );
+
+            pump.local_seat_chunk_input_pending = true;
+            assert!(!pump.linked_runtime_direct_genet_command_ready());
+            assert!(
+                pump.service_direct_genet_compact_command_successor()
+                    .is_none(),
+                "physical input must reject compact dispatch before consuming the command",
+            );
+            pump.local_seat_chunk_input_pending = false;
 
             assert!(
                 pump.poll_root_control_quantum_for_state(true, true),
@@ -60936,6 +61852,472 @@ mod tests {
                 "an immediate response requires the exact Network-to-Dispatch cut: {evidence:?}",
             );
         }
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn direct_genet_child_notification_rotor_successor_is_exact_and_fail_closed() {
+        let before = DirectGenetProductiveQuantumSnapshot {
+            generation: 7,
+            connection_id: 17,
+            accepted_commands: 41,
+            command_queue: 0,
+            immediate_stage_turns: 9,
+            child_stage_output_turns: 11,
+            child_stage_output_successes: 10,
+            child_awaiting_batch_drain: true,
+            child_response_drains: 8,
+            child_yield_calls: 0,
+            child_yield_counter_hz: 0,
+            child_yield_call_wall_scaled: 0,
+            child_yield_credit_scaled: 0,
+            child_yield_invalid_reasons: 0,
+            physical_operator_work: LinkedPhysicalOperatorWork::UsbServiceDebt,
+            physical_console_response_pending: false,
+        };
+        let after = DirectGenetProductiveQuantumSnapshot {
+            child_awaiting_batch_drain: false,
+            child_response_drains: 9,
+            physical_operator_work: LinkedPhysicalOperatorWork::Idle,
+            ..before
+        };
+        let expected = DirectGenetChildNotificationRotorContinuation::from_snapshot(before)
+            .expect("an exact staged cross-core batch must mint one stack-local token");
+        let baseline = DirectGenetChildNotificationRotorContinuationEvidence {
+            expected: Some(expected),
+            before_poll: Some(before),
+            after_poll: Some(after),
+            starting_phase: LinkedRuntimeServicePhase::Serial,
+            admitted_phase: LinkedRuntimeServicePhase::Network,
+            next_phase: LinkedRuntimeServicePhase::Display,
+            network_units: 1,
+            serial_admitted: true,
+            local_seat_required: true,
+            local_seat_admitted: true,
+            dispatch_admitted: true,
+            unit_index: 3,
+            last_input_source: ConsoleInputSource::Net,
+            physical_input_observed: false,
+            network_service_quarantined: false,
+            reboot_pending: false,
+            recovery_or_containment_pending: false,
+            handoff_pending: false,
+            passive_admission_pending: false,
+            response_tail_pending: false,
+            local_fault_pending: false,
+        };
+        assert!(direct_genet_child_notification_rotor_continuation_allowed(
+            baseline
+        ));
+        assert!(direct_genet_child_notification_rotor_continuation_allowed(
+            DirectGenetChildNotificationRotorContinuationEvidence {
+                next_phase: LinkedRuntimeServicePhase::Serial,
+                local_seat_required: false,
+                local_seat_admitted: false,
+                unit_index: 2,
+                ..baseline
+            }
+        ));
+
+        for evidence in [
+            DirectGenetChildNotificationRotorContinuationEvidence {
+                expected: None,
+                ..baseline
+            },
+            DirectGenetChildNotificationRotorContinuationEvidence {
+                before_poll: None,
+                ..baseline
+            },
+            DirectGenetChildNotificationRotorContinuationEvidence {
+                after_poll: None,
+                ..baseline
+            },
+            DirectGenetChildNotificationRotorContinuationEvidence {
+                starting_phase: LinkedRuntimeServicePhase::Network,
+                ..baseline
+            },
+            DirectGenetChildNotificationRotorContinuationEvidence {
+                admitted_phase: LinkedRuntimeServicePhase::Dispatch,
+                ..baseline
+            },
+            DirectGenetChildNotificationRotorContinuationEvidence {
+                next_phase: LinkedRuntimeServicePhase::Network,
+                ..baseline
+            },
+            DirectGenetChildNotificationRotorContinuationEvidence {
+                network_units: 0,
+                ..baseline
+            },
+            DirectGenetChildNotificationRotorContinuationEvidence {
+                network_units: 2,
+                ..baseline
+            },
+            DirectGenetChildNotificationRotorContinuationEvidence {
+                serial_admitted: false,
+                ..baseline
+            },
+            DirectGenetChildNotificationRotorContinuationEvidence {
+                local_seat_admitted: false,
+                ..baseline
+            },
+            DirectGenetChildNotificationRotorContinuationEvidence {
+                dispatch_admitted: false,
+                ..baseline
+            },
+            DirectGenetChildNotificationRotorContinuationEvidence {
+                unit_index: 4,
+                ..baseline
+            },
+            DirectGenetChildNotificationRotorContinuationEvidence {
+                last_input_source: ConsoleInputSource::Serial,
+                ..baseline
+            },
+            DirectGenetChildNotificationRotorContinuationEvidence {
+                physical_input_observed: true,
+                ..baseline
+            },
+            DirectGenetChildNotificationRotorContinuationEvidence {
+                network_service_quarantined: true,
+                ..baseline
+            },
+            DirectGenetChildNotificationRotorContinuationEvidence {
+                reboot_pending: true,
+                ..baseline
+            },
+            DirectGenetChildNotificationRotorContinuationEvidence {
+                recovery_or_containment_pending: true,
+                ..baseline
+            },
+            DirectGenetChildNotificationRotorContinuationEvidence {
+                handoff_pending: true,
+                ..baseline
+            },
+            DirectGenetChildNotificationRotorContinuationEvidence {
+                passive_admission_pending: true,
+                ..baseline
+            },
+            DirectGenetChildNotificationRotorContinuationEvidence {
+                response_tail_pending: true,
+                ..baseline
+            },
+            DirectGenetChildNotificationRotorContinuationEvidence {
+                local_fault_pending: true,
+                ..baseline
+            },
+            DirectGenetChildNotificationRotorContinuationEvidence {
+                before_poll: Some(DirectGenetProductiveQuantumSnapshot {
+                    generation: 8,
+                    ..before
+                }),
+                ..baseline
+            },
+            DirectGenetChildNotificationRotorContinuationEvidence {
+                after_poll: Some(DirectGenetProductiveQuantumSnapshot {
+                    accepted_commands: 42,
+                    ..after
+                }),
+                ..baseline
+            },
+            DirectGenetChildNotificationRotorContinuationEvidence {
+                after_poll: Some(DirectGenetProductiveQuantumSnapshot {
+                    child_stage_output_successes: 11,
+                    ..after
+                }),
+                ..baseline
+            },
+            DirectGenetChildNotificationRotorContinuationEvidence {
+                after_poll: Some(DirectGenetProductiveQuantumSnapshot {
+                    child_awaiting_batch_drain: true,
+                    ..after
+                }),
+                ..baseline
+            },
+            DirectGenetChildNotificationRotorContinuationEvidence {
+                after_poll: Some(DirectGenetProductiveQuantumSnapshot {
+                    child_response_drains: 8,
+                    ..after
+                }),
+                ..baseline
+            },
+            DirectGenetChildNotificationRotorContinuationEvidence {
+                after_poll: Some(DirectGenetProductiveQuantumSnapshot {
+                    child_response_drains: 10,
+                    ..after
+                }),
+                ..baseline
+            },
+            DirectGenetChildNotificationRotorContinuationEvidence {
+                after_poll: Some(DirectGenetProductiveQuantumSnapshot {
+                    child_yield_calls: 1,
+                    ..after
+                }),
+                ..baseline
+            },
+            DirectGenetChildNotificationRotorContinuationEvidence {
+                after_poll: Some(DirectGenetProductiveQuantumSnapshot {
+                    physical_operator_work: LinkedPhysicalOperatorWork::Input,
+                    ..after
+                }),
+                ..baseline
+            },
+            DirectGenetChildNotificationRotorContinuationEvidence {
+                after_poll: Some(DirectGenetProductiveQuantumSnapshot {
+                    physical_console_response_pending: true,
+                    ..after
+                }),
+                ..baseline
+            },
+        ] {
+            assert!(
+                !direct_genet_child_notification_rotor_continuation_allowed(evidence),
+                "child-publication successor drift must fail closed: {evidence:?}",
+            );
+        }
+
+        for invalid in [
+            DirectGenetProductiveQuantumSnapshot {
+                accepted_commands: 0,
+                ..before
+            },
+            DirectGenetProductiveQuantumSnapshot {
+                immediate_stage_turns: 0,
+                ..before
+            },
+            DirectGenetProductiveQuantumSnapshot {
+                child_stage_output_successes: 0,
+                ..before
+            },
+            DirectGenetProductiveQuantumSnapshot {
+                child_awaiting_batch_drain: false,
+                ..before
+            },
+            DirectGenetProductiveQuantumSnapshot {
+                child_yield_calls: 1,
+                ..before
+            },
+            DirectGenetProductiveQuantumSnapshot {
+                physical_operator_work: LinkedPhysicalOperatorWork::Input,
+                ..before
+            },
+            DirectGenetProductiveQuantumSnapshot {
+                physical_console_response_pending: true,
+                ..before
+            },
+        ] {
+            assert!(
+                DirectGenetChildNotificationRotorContinuation::from_snapshot(invalid).is_none(),
+                "invalid staged-batch evidence cannot mint authority: {invalid:?}",
+            );
+        }
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn direct_genet_child_notification_successor_forces_serial_after_usb_rotor() {
+        let before = DirectGenetProductiveQuantumSnapshot {
+            generation: 7,
+            connection_id: 17,
+            accepted_commands: 1,
+            command_queue: 0,
+            immediate_stage_turns: 1,
+            child_stage_output_turns: 1,
+            child_stage_output_successes: 1,
+            child_awaiting_batch_drain: true,
+            child_response_drains: 0,
+            child_yield_calls: 0,
+            child_yield_counter_hz: 0,
+            child_yield_call_wall_scaled: 0,
+            child_yield_credit_scaled: 0,
+            child_yield_invalid_reasons: 0,
+            physical_operator_work: LinkedPhysicalOperatorWork::UsbServiceDebt,
+            physical_console_response_pending: false,
+        };
+        let after = DirectGenetProductiveQuantumSnapshot {
+            child_awaiting_batch_drain: false,
+            child_response_drains: 1,
+            physical_operator_work: LinkedPhysicalOperatorWork::Idle,
+            ..before
+        };
+        let expected = DirectGenetChildNotificationRotorContinuation::from_snapshot(before)
+            .expect("staged response token");
+        let serial =
+            SerialPort::<_, 256, 256, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<256>::new());
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        net.driver_contract = crate::hal::driver_task::GENET_DRIVER_TASK_CONTRACT;
+        net.active_conn_id = Some(17);
+        net.authenticated_conn_id = Some(17);
+        let mut local_seat = LocalSeatRuntime::new(crate::local_seat::LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 192,
+            buffer_lines: 64,
+        });
+        local_seat.mark_root_console_ready();
+
+        let mut pump = EventPump::new(
+            serial,
+            TestTimer::single(TickEvent { tick: 1, now_ms: 1 }),
+            NullIpc,
+            TicketTable::<4>::new(),
+            &mut audit,
+        )
+        .with_network(&mut net)
+        .with_local_seat(&mut local_seat);
+        pump.last_input_source = ConsoleInputSource::Net;
+        pump.linked_runtime_service_phase = LinkedRuntimeServicePhase::Display;
+
+        assert!(
+            pump.consume_direct_genet_child_notification_rotor_continuation(
+                Some(expected),
+                Some(before),
+                Some(after),
+                LinkedRuntimeServicePhase::Serial,
+                LinkedRuntimeServicePhase::Network,
+                1,
+                true,
+                true,
+                true,
+                3,
+                false,
+            ),
+            "one exact OutputDrained publication must close the completed USB rotor",
+        );
+        assert_eq!(
+            pump.linked_runtime_service_phase,
+            LinkedRuntimeServicePhase::Serial,
+            "the exact drain must not spend another empty operator prefix before continuation",
+        );
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn direct_genet_quantum_closes_exact_child_drain_at_serial_after_usb_rotor() {
+        struct LinkedRuntimeTestReset;
+
+        impl Drop for LinkedRuntimeTestReset {
+            fn drop(&mut self) {
+                crate::serial::test_end_linked_runtime_only_transport();
+            }
+        }
+
+        let _progress_guard = wifi_driver_task_progress_test_guard();
+        crate::serial::test_begin_linked_runtime_only_transport();
+        let _reset = LinkedRuntimeTestReset;
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<
+            32768,
+        >::new());
+        let timer = TestTimer::repeated(8, 1);
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut genet = FakeNet::new();
+        genet.driver_contract = crate::hal::driver_task::GENET_DRIVER_TASK_CONTRACT;
+        genet.active_conn_id = Some(17);
+        genet.authenticated_conn_id = Some(17);
+        genet.response_batch_capacity = Some(8);
+        genet.response_lane = Some(ConsoleResponseLane {
+            generation: 1,
+            connection_id: 17,
+            queued_lines: 0,
+            available_lines: 8,
+            awaiting_batch_drain: true,
+            terminal_queued: true,
+            producer_open: false,
+            completed_responses: 1,
+        });
+        genet.isolated_response_drain_on_poll = Some(1);
+        genet.isolated_diagnostics = Some(IsolatedConsoleDiagnostics {
+            generation: 1,
+            last_poll_ms: 1,
+            last_progress_ms: 1,
+            last_unit: "output",
+            turns: 1,
+            progress_turns: 1,
+            observe_child_turns: 0,
+            stage_output_turns: 1,
+            stage_output_successes: 1,
+            disconnect_turns: 0,
+            ingress_turns: 0,
+            service_tick_turns: 0,
+            transmit_egress_turns: 0,
+            deferred_diagnostic_turns: 0,
+            command_queue: 0,
+            output_queue: 0,
+            pending_egress: false,
+            awaiting_batch_drain: true,
+            producer_open: false,
+            response_drains: 0,
+            ingress_backpressure: 0,
+            ingress_dropped: 0,
+            direct_genet_yield_calls: 0,
+            direct_genet_yield_counter_hz: 0,
+            direct_genet_yield_call_wall_scaled: 0,
+            direct_genet_yield_child_credit_scaled: 0,
+            direct_genet_yield_invalid_reasons: 0,
+        });
+        let mut local_seat = LocalSeatRuntime::new(crate::local_seat::LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 192,
+            buffer_lines: 64,
+        });
+        local_seat.mark_root_console_ready();
+        local_seat.enable_backend_keyboard_polling();
+        {
+            let mut pump = EventPump::new(serial, timer, NullIpc, store, &mut audit)
+                .with_network(&mut genet)
+                .with_local_seat(&mut local_seat);
+            pump.metrics.accepted_commands = 1;
+            pump.metrics.net_direct_genet_immediate_stage_turns = 1;
+            pump.last_input_source = ConsoleInputSource::Net;
+            pump.linked_runtime_service_phase = LinkedRuntimeServicePhase::Serial;
+            pump.linked_local_seat_usb_service_pending_test_override = Some(true);
+            pump.direct_genet_child_notification_rotor_continuation_test_override =
+                Some(DirectGenetChildNotificationRotorContinuation {
+                    generation: 1,
+                    connection_id: 17,
+                    accepted_commands: 1,
+                    command_queue: 0,
+                    immediate_stage_turns: 1,
+                    child_stage_output_turns: 1,
+                    child_stage_output_successes: 1,
+                    child_response_drains: 0,
+                });
+
+            let _explicit_yield = pump.poll_root_control_quantum_for_state(true, true);
+
+            assert_eq!(
+                pump.linked_runtime_service_phase,
+                LinkedRuntimeServicePhase::Serial,
+                "the exact child drain must terminate the composed rotor before Display or another prefix",
+            );
+            assert_eq!(
+                pump.metrics.accepted_commands, 1,
+                "the drain successor cannot admit a second command",
+            );
+            assert!(
+                pump.direct_genet_child_notification_rotor_continuation_test_override
+                    .is_none(),
+                "the integration-only token must be consumed once",
+            );
+        }
+
+        assert_eq!(
+            genet.polls, 1,
+            "the complete Serial/LocalSeat/Dispatch rotor admits exactly one child-notification Network leaf",
+        );
+        assert_eq!(
+            local_seat.keyboard_trace().backend_poll_calls,
+            1,
+            "the composed rotor must admit exactly one bounded LocalSeat poll",
+        );
+        assert!(genet.lines.is_empty());
+        assert!(genet.isolated_diagnostics.is_some_and(|diagnostic| {
+            !diagnostic.awaiting_batch_drain
+                && diagnostic.response_drains == 1
+                && diagnostic.stage_output_turns == 1
+                && diagnostic.stage_output_successes == 1
+        }));
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console", feature = "release-pi4"))]

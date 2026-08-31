@@ -267,9 +267,9 @@ fn pi_wifi_productive_activation_is_guarded_strictly_operator_driver() {
         .map(|offset| lease_scope_end + offset)
         .expect("Driver completion must charge the productive-turn cap");
     let continue_guard = supervisor[record_driver..]
-        .find("if deferred_cyw43_activation_retains_after_driver(")
+        .find("if continuation == DeferredCyw43McsContinuation::Continue")
         .map(|offset| record_driver + offset)
-        .expect("only the bounded useful-progress policy may retain the refill");
+        .expect("only an exact event-driven Driver continuation may retain the refill");
     let loop_continue = supervisor[continue_guard..]
         .find("continue 'supervisor;")
         .map(|offset| continue_guard + offset)
@@ -294,6 +294,10 @@ fn pi_wifi_productive_activation_is_guarded_strictly_operator_driver() {
         1
     );
     assert_eq!(supervisor.matches("sel4::yield_now();").count(), 0);
+    assert!(
+        !source.contains("deferred_cyw43_activation_retains_after_driver"),
+        "an empty child observation cannot retain a local polling cadence",
+    );
 
     let phase_start = source
         .find("enum DeferredCyw43SupervisorPhase")

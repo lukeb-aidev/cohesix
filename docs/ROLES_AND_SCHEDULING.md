@@ -361,9 +361,20 @@ that wrapper, and selects only the next separately charged bounded Network turn
 after the caller rechecks the 3,000-us reserve and 64-unit cap. Real physical
 operator state remains typed across this post-Dispatch cut: `UsbServiceDebt`
 requests that one bounded `LocalSeat` opportunity and then releases the Network
-fence, while decoded or buffered `Input` retains it. A pre-rotation transient
-probe or terminal-return shortcut remains strict and cannot use the
-post-Dispatch relaxation. Physical input or response, recovery, quarantine,
+fence, while decoded or buffered `Input` retains it. The transient-publication
+probe preserves that type and may carry passive USB debt only because every
+minted credit installs the complete mandatory operator rotor before Network
+re-entry; real Input still fences. A terminal-return shortcut remains strict.
+If EventPump consumes exactly one existing CYW43 child wake after the first
+Network unit, a stack-local token may survive only the complete
+Serial/LocalSeat?/Dispatch rotor. Exact physical lifetime, authenticated
+response identity, accepted-command epoch, durable work level, and every
+operator/recovery/fault fence are revalidated at return to Network. The wrapper
+does not execute a second Network unit, and Yield destroys the token. Prior
+progress followed only by an unchanged empty snapshot yields; it cannot retain
+an eventless polling cadence. The schema-stable `idle_admitted` field remains
+zero for this path.
+Physical input or response, recovery, quarantine,
 containment, reboot, stale identity, idle, wait, nonprogress, handoff, pressure,
 fault, or any failed token yields and resets. The selected SC and
 natural-postpone policy remain the hard execution boundary. This replaces the
@@ -409,6 +420,29 @@ work closes it. A queued second command remains behind ordinary
 Serial/LocalSeat/Dispatch/Display debt. CYW43 keeps its ordinary
 connection-bound cursor and the distinct guarded 3,000-us/64-unit contract
 above; mediated WiFi cannot acquire direct-GENET tail authority.
+
+One already-staged cross-core GENET batch may similarly carry a stack-local
+child-publication token through a complete Serial/LocalSeat?/Dispatch/Network
+rotor. It succeeds only when the ordinary Network unit observes the exact
+same-identity `OutputDrained` level transition: awaiting batch clears,
+response-drain count advances by one, stage/command counters do not drift, and
+cross-core `YieldTo` accounting remains zero. Consumption forces Serial and
+ends the quantum before a second command, Network unit, or generic operator
+prefix. Every input, response-tail, recovery, containment, quarantine, handoff,
+reboot, passive-admission, and local-fault fence remains mandatory.
+
+Cold CYW43 bootstrap uses the already-generated child-to-root notification
+only to close the race between its Operator condition cut and a concurrently
+committed exact child terminal. After one selected bounded operator, recovery,
+and passive-admission condition turn, root reads the parent; only if it remains
+waiting does root poll the receive cap once and recheck durable parent state.
+Only an exact current terminal or fault preserves the activation into the
+ordinary Driver phase. A missing, stale, sideband-only, still-waiting, or
+attached-service hint yields. Root does not wait, spin, retain a software work
+bit, or infer work from the badge; a useful turn followed by an empty child
+observation also yields. The attached EventPump remains sole consumer after
+stack attachment. Existing 3,000-us, 64-turn, root-SC, priority, ownership, and
+Reply/fault bounds remain unchanged.
 
 A parsed passive-service command may survive one expired strict reserve lease
 only by crossing a completely new explicit Yield/refill. The new attempt starts

@@ -1198,28 +1198,6 @@ impl DeferredCyw43ActivationWindow {
             self.productive_units = self.productive_units.saturating_add(1);
         }
     }
-
-    /// Whether exact useful work has already opened this unslid activation.
-    /// A subsequent transient-empty child observation may re-enter loop-top
-    /// arbitration, but the existing counter guard and shared 64-turn cap are
-    /// still checked before another operator or driver unit executes.
-    const fn useful_progress_observed(self) -> bool {
-        self.productive_units != 0
-    }
-}
-
-#[cfg(all(
-    feature = "serial-console",
-    feature = "kernel",
-    feature = "net-console"
-))]
-fn deferred_cyw43_activation_retains_after_driver(
-    continuation: DeferredCyw43McsContinuation,
-    transient_empty_pending: bool,
-    useful_progress_observed: bool,
-) -> bool {
-    continuation == DeferredCyw43McsContinuation::Continue
-        || (transient_empty_pending && useful_progress_observed)
 }
 
 /// One physical-Pi root-control activation retained across an exact
@@ -2137,6 +2115,36 @@ where
     // records remain the complete authority; a consumed notification or a
     // failed stable read neither authorizes Driver nor creates retry history.
     stable_copy_and_ack()
+}
+
+/// Admit the exact cold-bootstrap parent after its child terminal wake races
+/// the selected bounded Operator condition cut.
+///
+/// The notification is a one-shot scheduling hint only. A second durable
+/// parent-condition read remains the sole authority to enter Driver. Attached
+/// service owns the same notification through EventPump, so this helper never
+/// consumes it after the stack is attached. Root never waits here: a missing,
+/// stale, sideband-only, or wrong-generation hint keeps the existing Yield.
+#[cfg(all(
+    feature = "serial-console",
+    feature = "kernel",
+    feature = "net-console"
+))]
+fn deferred_cyw43_cold_terminal_continuation_due<PollWake, RecheckParent>(
+    network_attached: bool,
+    supervisor_admitted: bool,
+    driver_turn_due_before_wake: bool,
+    poll_wake: PollWake,
+    recheck_parent: RecheckParent,
+) -> bool
+where
+    PollWake: FnOnce() -> bool,
+    RecheckParent: FnOnce() -> bool,
+{
+    if network_attached || !supervisor_admitted || driver_turn_due_before_wake {
+        return driver_turn_due_before_wake;
+    }
+    poll_wake() && recheck_parent()
 }
 
 #[cfg(all(
@@ -4771,10 +4779,18 @@ where
                     crate::drivers::driver_task_net::consume_cyw43_persistent_sideband_rx_batch()
                 });
             }
-            // The operator turn is the condition-before-sleep boundary. The
-            // persistent parent has no root continuation edge, so durable
-            // terminal/fault state alone can reopen Driver after it waits.
-            let driver_turn_due = bootstrap.driver_turn_due();
+            // This selected bounded operator turn is the condition-before-
+            // sleep boundary. A child wake carries no continuation authority;
+            // it only closes the race into the second exact terminal/fault
+            // read below.
+            let driver_turn_due_before_wake = bootstrap.driver_turn_due();
+            let driver_turn_due = deferred_cyw43_cold_terminal_continuation_due(
+                network_attached,
+                may_begin,
+                driver_turn_due_before_wake,
+                crate::hal::driver_task::poll_cyw43_root_wake_notification,
+                || bootstrap.driver_turn_due(),
+            );
             let (operator_turn, next_phase) =
                 deferred_cyw43_supervisor_phase_step(supervisor_phase, may_begin, driver_turn_due);
             let continuation = deferred_cyw43_mcs_continuation(
@@ -5101,23 +5117,11 @@ where
                 }
             }
         }
-        if deferred_cyw43_activation_retains_after_driver(
-            continuation,
-            matches!(
-                turn,
-                Cyw43BootstrapTurnOutcome::Pending {
-                    operation_executed: false,
-                    ..
-                }
-            ),
-            activation_window.useful_progress_observed(),
-        ) {
+        if continuation == DeferredCyw43McsContinuation::Continue {
             // The scoped outer-event finalizer above has retired the exact
-            // one-operation lease. Re-enter only at loop-top fault/EventPump
-            // arbitration while retaining this guarded MCS activation. Like
-            // QEMU's useful-progress window, transient-empty child observations
-            // do not forfeit the refill; every repeat still crosses the next
-            // top-of-loop counter/cap and operator/recovery arbitration.
+            // one-operation lease. Only a current event-driven continuation
+            // may retain this guarded MCS activation; an empty child
+            // observation yields rather than becoming a local polling cadence.
             continue 'supervisor;
         }
         deferred_cyw43_yield_and_reset(pump, &mut activation_window);
@@ -7631,10 +7635,8 @@ mod tests {
         );
 
         let mut window = super::DeferredCyw43ActivationWindow::new();
-        assert!(!window.useful_progress_observed());
         assert!(window.turn_admitted(100, 1_000_000, pi_reserve));
         window.record_operator_turn();
-        assert!(!window.useful_progress_observed());
         assert!(window.turn_admitted(3_099, 1_000_000, pi_reserve));
         assert!(
             !window.turn_admitted(3_100, 1_000_000, pi_reserve),
@@ -7669,53 +7671,6 @@ mod tests {
         assert!(window.turn_admitted(0, 54_000_000, None));
         window.record_driver_turn(false);
         assert!(!window.turn_admitted(0, 54_000_000, None));
-
-        window.reset();
-        assert!(window.turn_admitted(1, 54_000_000, pi_reserve));
-        window.record_driver_turn(false);
-        assert!(
-            !window.useful_progress_observed(),
-            "an empty child observation cannot open the useful-progress window",
-        );
-        window.reset();
-        assert!(window.turn_admitted(1, 54_000_000, pi_reserve));
-        window.record_driver_turn(true);
-        assert!(
-            window.useful_progress_observed(),
-            "one exact child operation keeps a transient-empty observation inside the same unslid activation",
-        );
-        assert!(super::deferred_cyw43_activation_retains_after_driver(
-            super::DeferredCyw43McsContinuation::Yield,
-            true,
-            window.useful_progress_observed(),
-        ));
-        assert!(!super::deferred_cyw43_activation_retains_after_driver(
-            super::DeferredCyw43McsContinuation::Yield,
-            false,
-            window.useful_progress_observed(),
-        ));
-        assert!(!super::deferred_cyw43_activation_retains_after_driver(
-            super::DeferredCyw43McsContinuation::Yield,
-            true,
-            false,
-        ));
-
-        window.reset();
-        assert!(window.turn_admitted(1, 54_000_000, pi_reserve));
-        window.record_driver_turn(true);
-        for _ in 1..super::DEFERRED_CYW43_ACTIVATION_MAX_PRODUCTIVE_UNITS {
-            assert!(super::deferred_cyw43_activation_retains_after_driver(
-                super::DeferredCyw43McsContinuation::Yield,
-                true,
-                window.useful_progress_observed(),
-            ));
-            assert!(window.turn_admitted(1, 54_000_000, pi_reserve));
-            window.record_driver_turn(false);
-        }
-        assert!(
-            !window.turn_admitted(1, 54_000_000, pi_reserve),
-            "repeated transient-empty observations cannot cross the shared 64-turn cap",
-        );
 
         window.reset();
         assert!(window.turn_admitted(1, 54_000_000, pi_reserve));
@@ -8042,6 +7997,71 @@ mod tests {
             2,
             "absence is rechecked without a latch"
         );
+    }
+
+    #[cfg(all(
+        feature = "serial-console",
+        feature = "kernel",
+        feature = "net-console"
+    ))]
+    #[test]
+    fn cold_bootstrap_terminal_wake_is_hint_not_driver_authority() {
+        use core::cell::Cell;
+
+        let wake_polls = Cell::new(0u8);
+        let parent_rechecks = Cell::new(0u8);
+        let continuation_due =
+            |network_attached, supervisor_admitted, due_before, wake, exact_after| {
+                super::deferred_cyw43_cold_terminal_continuation_due(
+                    network_attached,
+                    supervisor_admitted,
+                    due_before,
+                    || {
+                        wake_polls.set(wake_polls.get().saturating_add(1));
+                        wake
+                    },
+                    || {
+                        parent_rechecks.set(parent_rechecks.get().saturating_add(1));
+                        exact_after
+                    },
+                )
+            };
+
+        assert!(continuation_due(false, true, true, false, false));
+        assert_eq!(wake_polls.get(), 0, "already-runnable work needs no hint");
+        assert_eq!(parent_rechecks.get(), 0);
+
+        assert!(!continuation_due(false, true, false, false, true));
+        assert_eq!(wake_polls.get(), 1);
+        assert_eq!(
+            parent_rechecks.get(),
+            0,
+            "an absent hint performs no generic parent poll"
+        );
+
+        assert!(!continuation_due(false, true, false, true, false));
+        assert_eq!(wake_polls.get(), 2);
+        assert_eq!(parent_rechecks.get(), 1);
+
+        assert!(continuation_due(false, true, false, true, true));
+        assert_eq!(wake_polls.get(), 3);
+        assert_eq!(parent_rechecks.get(), 2);
+
+        assert!(!continuation_due(true, true, false, true, true));
+        assert_eq!(
+            wake_polls.get(),
+            3,
+            "attached EventPump retains sole ownership of the wake cap"
+        );
+        assert_eq!(parent_rechecks.get(), 2);
+
+        assert!(!continuation_due(false, false, false, true, true));
+        assert_eq!(
+            wake_polls.get(),
+            3,
+            "reboot or lost operator admission preserves the pending hint"
+        );
+        assert_eq!(parent_rechecks.get(), 2);
     }
 
     #[cfg(all(

@@ -1249,8 +1249,22 @@ transport:
   bound. The post-Dispatch fence preserves `Idle`, `UsbServiceDebt`, and
   `Input` as distinct states: passive USB service debt receives its one bounded
   LocalSeat turn and does not then fence Network, while decoded or buffered
-  input still does. Pre-rotation probes and terminal shortcuts remain strict;
-  no SC, priority, retry, timeout, device deadline, or QEMU path changes.
+  input still does. The transient-publication probe preserves the same typed
+  state: it may admit passive USB debt only because a minted credit installs
+  that complete operator rotor before Network re-entry; real input still
+  rejects. Terminal shortcuts remain strict; no SC, priority, retry, timeout,
+  device deadline, or QEMU path changes.
+  If the ordinary EventPump consumes exactly one existing CYW43 child-to-root
+  wake during the post-Network operator rotor, it may retain one stack-local
+  token bound to the current physical lifetime, authenticated response
+  identity, and accepted-command epoch. Only a complete
+  `Serial -> LocalSeat? -> Dispatch` rotor, unchanged durable identity, and a
+  return to Network with every operator/recovery/fault fence clear may retain
+  the caller's activation. The wrapper performs no second Network operation;
+  Yield destroys the token. Prior useful progress followed only by an
+  unchanged empty snapshot yields instead of retaining an eventless polling
+  cadence. The existing `idle_admitted` telemetry field remains schema-stable
+  and stays zero for this path.
   The retained outer quantum's 25 ms cap accumulates only time spent inside
   admitted CYW43 Network service. Replenishment gaps, exact-child waits between
   turns, and physical-operator phases do not consume it. The independent
@@ -1285,6 +1299,29 @@ transport:
   without a retry, second packet operation, new refill, or child authority. A
   second command remains behind complete operator/display debt. Mediated WiFi
   cannot mint direct-GENET tail authority.
+- A cross-core direct-GENET quantum that begins with one exact staged batch may
+  retain a stack-local child-publication token across the complete
+  `Serial -> LocalSeat? -> Dispatch -> Network` rotor. The notification is only
+  urgency; authority requires the same generation, connection,
+  accepted-command epoch, stage counters and command queue,
+  `awaiting_batch_drain` changing from true to false, and `response_drains`
+  advancing by exactly one with zero `YieldTo` accounting. Consumption forces
+  Serial and ends the quantum before a second command, Network leaf, or generic
+  operator prefix. Missing, stale, input-owned, backpressured, response-tail,
+  recovery, containment, quarantine, handoff, reboot, passive, or faulted
+  evidence fails closed.
+- During cold CYW43 bootstrap, the existing compiler-declared child-to-root
+  notification is a one-shot scheduling hint, never work authority. After one
+  selected bounded operator/recovery/passive-admission condition turn, root
+  first reads the retained parent. Only if it remains waiting may root poll the
+  unbound receive cap once and then re-read that exact durable parent condition.
+  Only an exact current terminal or fault selects the next ordinary Driver
+  phase under the unchanged 3,000-us/64-turn activation bound. Missing, stale,
+  sideband-only, still-waiting, or attached-service hints yield; the attached
+  EventPump remains sole notification consumer after stack attach. Root never
+  waits on the cap, and no software latch, retry, queue, polling loop,
+  operation, or device authority is created. A useful turn followed by an
+  empty child observation does not retain the activation.
 - A parsed Pi passive-service command whose strict reserve lease expires is
   retained across at most one completely new Yield/refill attempt. The retry
   begins from `AwaitingYield`, drains fresh Consumed evidence, and retains the
@@ -1418,9 +1455,10 @@ not current-candidate performance or acceptance proof.
   reason mask, and rejects at the exact probe, next-composer entry, final
   pre-Network, or revocation cut. `cyw43_productive_window` counts exact
   same-lifetime, authenticated-generation/connection/accepted-command window
-  opens, transient-empty admissions, and closes inside the unchanged
-  3,000-us/64-turn activation. The counters grant no refill, retry, or device
-  authority. Direct GENET counts the typed response-compose
+  opens and closes inside the unchanged 3,000-us/64-turn activation. Its
+  schema-stable `idle_admitted` field records the retired transient-empty path
+  and remains zero under event-backed continuation. The counters grant no
+  refill, retry, or device authority. Direct GENET counts the typed response-compose
   outcomes `composed`, `no_pending`, `not_sealed`, `backpressure`, and
   `identity_drift`. `composed` proves a sealed `SyncCapture` moved into the
   adapter. `no_pending` may reach the same ordinary stage path only when an
