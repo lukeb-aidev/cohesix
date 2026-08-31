@@ -268,7 +268,17 @@ notification first and the fan-in second. The badge is a coalescing hint,
 never publication, identity, work credit, or scheduling authority. At an
 already-fenced ordinary or no-successor exit, root may poll it once. A nonzero
 badge returns to outer operator/recovery-first arbitration and a fresh durable
-read; zero takes the existing bounded Yield. Root never blocks on this fan-in.
+read; ordinary zero takes the existing bounded Yield. One exact causal cut is
+different: after durable revalidation proves either an exact signal-bound
+finite one-way CYW43 operation whose sequence-last terminal is still absent, or
+an exact staged console control whose child-consumption watermark is still
+owed, root polls once and waits only if that poll is empty. Persistent and
+steady CYW43 parents retain root-polled deadlines and cannot wait. A stable
+terminal, semantic event, packet egress, ingress watermark, or control
+watermark visible at the cut returns to the rotor instead of waiting. Once the
+control watermark is accepted, peer-ACK/`OutputDrained` debt remains ordinary
+network/timer work. Bare physical idle, deadline, recovery, containment,
+quarantine, reboot, and operator-owned cuts grant no wait authority.
 The selected timeout policy for root control and the active console child is
 `NaturalPostpone`: exhausting the current refill postpones execution until a
 valid replenishment. Their standard fault endpoints remain installed and
@@ -428,22 +438,21 @@ QEMU direct-VirtIO retains the strict lower rotor: `ObserveChild`,
 `StageOutput`, `Disconnect`, then `ServiceTick`. Direct GENET alone selects an
 exact ready `StageOutput`, then an exact ready `Disconnect`; when neither is
 ready it alternates `ObserveChild` and `ServiceTick`, exactly one unit per
-Network visit. On Pi, root and console-network share core 0 at equal priority.
-Only an authenticated direct-GENET response publication or causal publication
-credit may successfully pre-drain the child's exact SC for fail-closed
-consumed-time accounting, perform Release, send the one-hot Signal, then call
-`SchedContext_YieldTo` once. A failed pre-drain retains the durable signal but
-suppresses YieldTo. Packet ingress, close, service ticks, mediated WiFi, and
-QEMU remain signal-only.
+Network visit. On Pi, root-control remains on core 0 and console-network runs
+independently on core 2 at equal priority. Both Pi backends use only the
+post-commit Release plus one-hot Signal handoff; neither pre-drains the child SC
+nor calls `SchedContext_YieldTo`. Direct GENET may retain the same causal
+activation after an exact stage only by revalidating that the sealed child
+control still owes its consumption watermark, then performing the condition-before-block
+Poll/Wait cut described above.
 
-Exact durable same-core direct-GENET productive identity may retain
+Exact durable cross-core direct-GENET transaction identity may retain
 root-control under the generated NaturalPostpone profile and unchanged
 64-complete-quantum cap. Userland wall time and child-consumption telemetry are
 not productive admission authority. A generation/connection command acceptance
-may additionally open one unslid root-local transaction tail only with the
-required successful YieldTo/call accounting; an exact `OutputDrained`
-transition may also open or advance it with the corresponding
-publication-credit YieldTo. Stage-only progress cannot mint the tail. The tail
+may open one unslid root-local transaction tail; exact stage and
+`OutputDrained` transitions may advance only that same identity. Stage-only
+progress cannot mint a tail for an unrelated request. The tail
 lasts strictly less than 8 ms and no more than 64 complete ordinary
 physical-rotor quanta; it remains the only wall-guarded empty-turn allowance.
 The root SC remains the hard CPU bound. Every quantum immediately rechecks
@@ -459,17 +468,23 @@ behind ordinary Serial/LocalSeat/Dispatch/Display debt. CYW43 keeps its
 ordinary connection-bound cursor and the distinct NaturalPostpone/64-unit
 contract above; mediated WiFi cannot acquire direct-GENET tail authority.
 
-Cold, attached, and steady Pi root-control use the fan-in only at an
-already-fenced ordinary or no-successor exit and at most once per activation.
-One nonzero poll result returns to outer operator/recovery-first arbitration,
-where the authoritative CYW43, GENET,
-Worker, serial, USB, console, and fault state is re-read. A zero result takes
-the existing bounded Yield. There is no blocking fan-in wait, exact sleep cut,
-software work latch, poll loop, retry, fallback owner, or SDIO deadline-arm
-side effect. The WiFi and exact productive direct-GENET paths use the generated
-NaturalPostpone profile and unchanged 64-unit caps; only the existing
-direct-GENET empty tail retains its unslid wall guard. Every SC numeric, Reply rule,
-isolation boundary, queue, and owner remains unchanged.
+Cold, attached, and steady Pi root-control use the fan-in at an already-fenced
+ordinary or no-successor exit. One nonzero poll result returns to outer
+operator/recovery-first arbitration, where the authoritative CYW43, GENET,
+Worker, serial, USB, console, and fault state is re-read. Ordinary zero takes
+the existing bounded Yield. An exact signal-bound finite one-way CYW43
+operation awaiting completion, or an exact staged console control whose child
+watermark remains owed, may instead wait at most 64 times inside the unchanged
+activation bound. Persistent/steady CYW43 parents cannot wait. Root revalidates
+that no stable terminal or child-frontier publication is visible, polls once,
+waits only on an empty result, then
+returns through the full outer durable-state rotor. There is no generic
+blocking idle cut, software work latch, poll loop, retry, fallback owner, or
+SDIO deadline-arm side effect. The WiFi and exact
+productive direct-GENET paths use the generated NaturalPostpone profile and
+unchanged 64-unit caps; only the existing direct-GENET empty tail retains its
+unslid wall guard. Every SC numeric, Reply rule, isolation boundary, queue, and
+owner remains unchanged.
 
 A parsed passive-service command may survive one expired strict reserve lease
 only by crossing a completely new explicit Yield/refill. The new attempt starts
@@ -549,19 +564,18 @@ binds the calculation to the exact selected kernel/profile/build identity and
 rejects eleven. This preserves fragmented wake eligibility; it does not enlarge
 CPU budget or authorize another operation, signal, poll, retry, or owner.
 
-For both Pi network modes, root-control and console-network select core 0 at
-priority/MCP 200/200. Root retains `5,500 us / 10,000 us`, max-two-refill
-scheduling, and exact 2,500-us WCET; console retains its unchanged
-`3,000 us / 10,000 us` budget/period, 3,000-us WCET, and eight refill records
-in its existing 8-bit SC. Root-fault moves from core 0 to core 2 without any
-budget, period, priority, fault, Reply, or ownership change. Direct GENET alone
-may use the guarded same-core Release+Signal+YieldTo continuation after durable
-authenticated control or publication-credit work. Mediated WiFi is signal-only
-on the same topology, and QEMU keeps its existing signal-only direct-VirtIO
-selector.
+For both Pi network modes, root-control selects core 0 and console-network
+selects core 2 at priority/MCP 200/200. Root retains
+`5,500 us / 10,000 us`, max-two-refill scheduling, and exact 2,500-us WCET;
+console retains its unchanged `3,000 us / 10,000 us` budget/period, 3,000-us
+WCET, and eight refill records in its existing 8-bit SC. Root-fault returns to
+core 0 without any budget, period, priority, fault, Reply, or ownership change.
+Direct GENET, mediated WiFi, and QEMU direct-VirtIO all retain signal-only child
+handoff; only the exact Pi causal wait described above may bridge a finite
+post-commit publication boundary.
 
-The compiler records exact root/console response bounds `5,700/5,700 us`,
-HDMI/PCIe/GPU-executor bounds `5,200/2,700/7,700 us`, root-fault at 2,400 us,
+The compiler records exact root/console response bounds `5,100/3,000 us`,
+HDMI/PCIe/GPU-executor bounds `5,200/3,300/8,300 us`, root-fault at 2,600 us,
 the unchanged complete per-core demand `8,750/8,250/8,400/8,000 us`, and
 mirrored service/task affinity. Adjacent drift in budget, WCET, response, core,
 sched-control core, priority, refill count, or mirrored configuration fails
@@ -571,14 +585,15 @@ direct-VirtIO behavior. These are static admission bounds, not measured packet
 latency. Fresh same-image Pi load evidence must still prove authenticated
 response cadence.
 
-Exact durable same-core direct-GENET productive identity may retain root under
+Exact durable cross-core direct-GENET productive identity may retain root under
 generated NaturalPostpone up to the unchanged 64-quantum cap; wall and child-
 consumption telemetry are not admission authority. After an authenticated
 command acceptance or response drain, root may additionally retain one unslid
 local transaction tail for strictly less than 8 ms and at most 64 complete
-physical-rotor quanta only when its
-exact successful YieldTo accounting agrees. Stage-only progress cannot mint
-it. The root SC remains the hard CPU bound. Every admitted quantum rechecks
+physical-rotor quanta. An exact stage may use one condition-before-block wait
+only while that same sealed control still owes its child-consumption watermark;
+stage-only progress cannot mint unrelated authority. The root SC remains the
+hard CPU bound. Every admitted quantum rechecks
 exact generation, connection, final Serial phase, counter frequency, passive
 admission, physical operator/response priority, local fault, recovery,
 containment, quarantine, reboot, handoff, wall expiry, and the shared cap.
@@ -590,7 +605,7 @@ acquire direct-GENET tail authority.
 The Pi CYW43 boot supervisor consumes the root and console generated response bounds only
 after the DHCP-bound console child is finalized and resumed. Each bound is
 rounded independently to the millisecond clock, so the current profile admits
-one `6 ms + 6 ms = 12 ms` exact-generation Ready publication window. Root may
+one `6 ms + 3 ms = 9 ms` exact-generation Ready publication window. Root may
 take one final shared-page-only observation at or after the boundary and accept
 it only when the retained ABI-validated publication time is strictly earlier.
 Invalid generated authority or a missing, at-boundary, late, replayed, or

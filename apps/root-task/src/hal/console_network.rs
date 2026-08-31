@@ -46,11 +46,12 @@ use super::{
     runtime_elf_page_mapping, runtime_uncached_xn_attributes, HalError, KernelHal,
 };
 use crate::console_network_service::{
-    console_network_yield_to_admitted, expected_runtime_image_pages, BoundaryError,
-    ConsoleNetworkBoundary, ConsoleNetworkContainmentCursor, ConsoleNetworkContainmentProof,
-    ConsoleNetworkContainmentTurn, ConsoleNetworkContainmentUnit, ConsoleNetworkContract,
-    ConsoleNetworkEvent, ConsoleNetworkObjectPlan, ConsoleNetworkYieldToAdmission, ServiceState,
-    CONSOLE_NETWORK_IMAGE_IDENTITY_BOUND, CONSOLE_NETWORK_RUNTIME_ENTRY_VADDR,
+    console_network_signal_only_admitted, console_network_yield_to_admitted,
+    expected_runtime_image_pages, BoundaryError, ConsoleNetworkBoundary,
+    ConsoleNetworkContainmentCursor, ConsoleNetworkContainmentProof, ConsoleNetworkContainmentTurn,
+    ConsoleNetworkContainmentUnit, ConsoleNetworkContract, ConsoleNetworkEvent,
+    ConsoleNetworkObjectPlan, ConsoleNetworkSignalOnlyAdmission, ConsoleNetworkYieldToAdmission,
+    ServiceState, CONSOLE_NETWORK_IMAGE_IDENTITY_BOUND, CONSOLE_NETWORK_RUNTIME_ENTRY_VADDR,
     CONSOLE_NETWORK_RUNTIME_IMAGE, CONSOLE_NETWORK_RUNTIME_LOAD_BASE_VADDR,
     CONSOLE_NETWORK_RUNTIME_LOAD_LIMIT_VADDR, CONSOLE_NETWORK_RUNTIME_LOAD_PAGES, SERVICE_TASK_ID,
 };
@@ -733,9 +734,22 @@ impl ConsoleNetworkRuntime {
         signal_badge: u64,
     ) -> Result<bool, BoundaryError> {
         let contract = self.boundary.contract();
-        if contract.cross_core_signal_only
-            || (contract.yield_to_child_after_signal && !contract.direct_genet)
-        {
+        if contract.cross_core_signal_only {
+            if !console_network_signal_only_admitted(ConsoleNetworkSignalOnlyAdmission {
+                contract_direct_genet: contract.direct_genet,
+                runtime_direct_genet: self.direct_genet(),
+                cross_core_signal_only: contract.cross_core_signal_only,
+                yield_to_child_after_signal: contract.yield_to_child_after_signal,
+                activated: self.activated,
+                containment_started: self.containment_started,
+                contained: self.contained,
+                scheduling_context_present: self.scheduling_context != sel4_sys::seL4_CapNull,
+            }) {
+                return Err(BoundaryError::HandoffFailed);
+            }
+            return Ok(false);
+        }
+        if contract.yield_to_child_after_signal && !contract.direct_genet {
             return Err(BoundaryError::HandoffFailed);
         }
         let admission = ConsoleNetworkYieldToAdmission {
@@ -859,9 +873,8 @@ impl ConsoleNetworkRuntime {
         )))]
         let predrain_succeeded = true;
         // The shared-page or publication-credit commit precedes this release.
-        // Signal is one-hot and YieldTo follows it exactly once; the event pump
-        // then performs its immediate operator/fault fence before retaining
-        // another root-control unit.
+        // The selected cross-core Pi profile stops after its one-hot signal;
+        // only the retired same-core comparison path can admit YieldTo.
         fence(Ordering::Release);
         sel4::signal_unchecked(wake_cap);
         self.yield_to_child_after_committed_signal(yield_admitted, predrain_succeeded)
@@ -947,6 +960,34 @@ impl ConsoleNetworkRuntime {
     #[must_use]
     pub fn console_output_drained(&self, connection_id: u64) -> bool {
         self.boundary.console_output_drained(connection_id)
+    }
+
+    /// Peek whether the child has already committed any publication that root
+    /// has not consumed yet.
+    ///
+    /// This level read is the final stale-edge guard before root-control waits
+    /// on the shared fan-in. It neither consumes the child notification nor
+    /// accepts the shared record; the ordinary isolated-console rotor retains
+    /// sole publication ownership.
+    pub fn child_publication_pending(&self) -> Result<bool, BoundaryError> {
+        if !self.activated || self.contained {
+            return Err(BoundaryError::InvalidState);
+        }
+        self.boundary.child_publication_pending(
+            self.shared_frames[3].as_slice(),
+            self.shared_frames[1].as_slice(),
+        )
+    }
+
+    /// Return the exact root control record whose child watermark is still
+    /// causally owed. This does not accept or advance either shared page.
+    #[must_use]
+    pub fn child_control_publication_owed(
+        &self,
+    ) -> Option<crate::console_network_service::ConsoleNetworkControlPublication> {
+        (self.activated && !self.contained)
+            .then(|| self.boundary.control_publication_owed())
+            .flatten()
     }
 
     /// Close admission and signal the bounded shutdown path.

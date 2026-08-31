@@ -1664,8 +1664,8 @@ root/isolated-console MCS cadence, not RF, PHY, DMA, IRQ, ring ownership,
 buffer sizing, loss, or quarantine. These artifacts prove function and reject
 August parity; they are not repeatability or acceptance evidence.
 
-The next source gate must select the exact Pi topology and reject every
-adjacent drift. Root-control and console-network share core 0 at priority/MCP
+The then-next, now-falsified source gate selected the following exact Pi
+topology and rejected adjacent drift. Root-control and console-network share core 0 at priority/MCP
 200/200. Root retains `5,500/10,000 us`, `max_refills=2`, exact 2,500-us WCET,
 and 5,700-us response. Console retains its unchanged `3,000/10,000 us`
 budget/period, WCET, queues, authority, and eight refill records, with a
@@ -1681,7 +1681,8 @@ response, GENET refill count, and any exceeded core reserve. QEMU must retain
 its current root, console, affinity, refill, priority, response, and
 direct-VirtIO profile exactly.
 
-The generated Pi direct-GENET relationship is same-core guarded YieldTo.
+For that historical gate, the generated Pi direct-GENET relationship was
+same-core guarded YieldTo.
 Focused tests must prove only durable post-auth control or publication-credit
 work performs Release, one-hot Signal, then exactly one YieldTo after a child-SC
 pre-drain. Packet ingress, close, service tick, mediated WiFi, and QEMU must
@@ -6817,18 +6818,24 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
       `Disconnect`, then `ServiceTick`. Direct GENET alone must select an
       exactly ready `StageOutput`, then an exactly ready `Disconnect`, and
       otherwise alternate exactly one `ObserveChild`/`ServiceTick` unit per
-      Network visit. The selected Pi root/console relationship is same-core on
-      core 0 at equal priority. Only durable authenticated control publication
-      or publication-credit work may pre-drain the child SC, perform Release,
-      send its exact one-hot Signal, and make one successful `YieldTo` call.
-      Packet ingress, close, service ticks, mediated WiFi, and QEMU direct-VirtIO
-      must remain signal-only; topology or runtime drift fails closed.
+      Network visit. The selected Pi root/console relationship is cross-core:
+      root-control on core 0 and console-network on core 2 at equal priority.
+      Direct GENET and mediated WiFi must both commit durable state, perform
+      Release, and send the exact one-hot Signal without child-SC pre-drain or
+      `SchedContext_YieldTo`; topology or runtime drift fails closed. After an
+      exact stage, direct GENET may retain the causal activation only while the
+      sealed control still owes its exact child-consumption watermark. Tests must
+      prove a final durable-state recheck, one Poll, Wait only after an empty
+      Poll, and return to the ordinary operator/recovery-first rotor after the
+      wake. A stable publication visible before that cut must return directly
+      to the rotor.
 
-      Same-core productive progress requires exact successful YieldTo/call
-      accounting. An exact authenticated generation/connection
-      `CommandAccepted` result may open an unslid transaction tail before its
-      stage/drain publications only when the required child continuation is
-      accounted; an exact `ResponseDrained` result may also open or advance it.
+      Cross-core productive progress requires exact generation, connection,
+      stage, and publication identity. An exact authenticated
+      generation/connection `CommandAccepted` result may open an unslid
+      transaction tail before its
+      stage/drain publications; an exact `ResponseDrained` result may also open
+      or advance it.
       Stage-only progress cannot mint the tail. The tail remains
       strictly below 8 ms, shares the 64-complete-quantum cap, and is always
       bounded by the root SC. Every quantum requires final Serial phase and
@@ -6843,20 +6850,25 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
       cannot mint a notification, retry, grant, refill, or child authority. A
       failed or backpressured stage, stale identity, second command, or any
       fence closes or denies the tail. A transient-empty complete rotor may
-      consume only the same unslid wall/quantum window. Tests
-      must prove that only exact successful Yield/call evidence authorizes
-      same-core progress; a missing or failed pre-drain, Signal, or Yield cannot
-      mint a continuation token. Host timing or selector tests cannot establish
-      Pi performance.
+      consume only the same unslid wall/quantum window. Tests must prove that
+      only exact durable cross-core transaction evidence authorizes
+      continuation or a causal wait; a missing stage, stale publication level,
+      failed Signal, or identity/fence drift cannot mint a continuation token.
+      Host timing or selector tests cannot establish Pi performance.
       Cold-bootstrap coverage must independently consume the existing
       child-to-root notification at most once after the selected bounded
       operator condition turn, then require a fresh exact terminal/fault parent
-      read before Driver. An
-      absent or stale hint, still-waiting parent, attached stack, sideband-only
-      state, recovery priority, or passive admission yields with no wait,
-      software latch, retry, or inferred work. Commit-before-signal and sole
-      attached EventPump ownership remain source-checked. A host predicate or
-      QEMU pass cannot establish Gate 8 timing.
+      read before Driver. An exact signal-bound finite one-way CYW43 command may use
+      the same condition-before-block Poll/Wait cut only while its stable
+      sequence-last terminal remains absent and its generated identity is
+      unchanged. Persistent and steady CYW43 parents retain root-polled
+      deadlines and must not wait. An absent or stale hint, visible terminal,
+      attached-stack work, sideband-only state, deadline, recovery, containment, quarantine,
+      reboot, operator priority, or passive admission takes ordinary
+      arbitration/Yield with no generic Wait, software latch, retry, or inferred
+      work. Commit-before-signal and sole attached EventPump ownership remain
+      source-checked. A host predicate or QEMU pass cannot establish Gate 8
+      timing.
       Isolated-console construction must also prove
       delayed ACK and Nagle are disabled for its bounded interactive socket;
       that host contract is not evidence of Pi latency.
@@ -7181,8 +7193,9 @@ permanent-domain retention caps are not grouped reclaimable untyped anchors.
 The QEMU compiler fixture must assert root-control remains on core 0 with
 `9000 us / 10000 us`, `8500 us` WCET, `8500 us` response, and
 `m26e-qemu-root-dedicated-core-bounded-quantum-v1` provenance. Pi must retain
-core 0, select `5500 us / 10000 us`, `2500 us` WCET, `5700 us` response, and
-`m26e-pi4-root-same-core-console-yieldto-candidate-v26` provenance. The QEMU root row must select
+core 0, select `5500 us / 10000 us`, `2500 us` WCET, `5100 us` response, and
+`m26e-pi4-root-cross-core-causal-fanin-wait-candidate-v27` provenance. The QEMU
+root row must select
 `virtio_operator_serial_io_bytes_per_turn = 64`; the Pi root row and every
 non-root row must select zero. Validation must reject every QEMU root value
 other than exact `64`, including `0`, `65`, `1024`, and `u32::MAX`, plus a
@@ -7193,10 +7206,12 @@ and SchedControl on core 2 with `3000 us / 10000 us`, `3000 us` WCET,
 `m26e-qemu-console-received-progress-retention-candidate-v18` provenance; its
 GPU and LoRA peers must derive `7500/7200 us` response. It must
 assert exact core-0/core-1/core-2/core-3 demands
-`9000/9000/8000/8250 us`. Pi must place console on core 0, derive `5700 us`
-response, derive GPU/LoRA `7700/7400 us` responses, and preserve exact
+`9000/9000/8000/8250 us`. Pi must place console on core 2, derive `3000 us`
+response, derive GPU/LoRA `8300/7400 us` responses, and preserve exact
 `8750/8250/8400/8000 us` admission truth while selecting the same V18 child
-provenance for QEMU and the Pi V20 YieldTo provenance with current ABI v6. Both fixtures must select
+provenance for QEMU and
+`m26e-pi4-console-cross-core-causal-publication-candidate-v21` provenance for
+Pi with current ABI v6. Both fixtures must select
 `NaturalPostpone` for the active console child and their selected root-control
 row, retain each timeout cap/badge/resource/registry identity, and prove both
 TCB timeout-handler slots are left empty while their standard fault endpoints
@@ -8849,13 +8864,14 @@ translation objects and 16 child CSpace slots, the 32-page stack at
 badge 64, and the sole port-31337 listener. The active SC remains
 `3000 us / 10000 us`, with `3000 us` WCET. QEMU stays on core 2 at
 priority/MCP 180/200 with a `3000 us` response candidate. Pi runs the child on
-core 0 at priority/MCP 200/200 with a `5700 us` response candidate; Pi
-root-control is 200/200 on the same core with its `5700 us` response. The Pi
-profile regression must prove exact same-core task/config affinity and
-SchedControl, root MCP authority, eight child refills, and guarded direct-GENET
-YieldTo only for durable authenticated control or publication-ACK work. Packet
-ingress, close, service ticks, mediated WiFi, and QEMU direct-VirtIO must remain
-signal-only with zero `SchedContext_YieldTo` or child-SC pre-drain.
+core 2 at priority/MCP 200/200 with a `3000 us` response candidate; Pi
+root-control is 200/200 on core 0 with its `5100 us` response. The Pi profile
+regression must prove exact cross-core task/config affinity and SchedControl,
+root MCP authority, eight child refills, and signal-only post-commit handoff for
+both Pi network modes. Direct GENET, mediated WiFi, and QEMU direct-VirtIO must
+perform zero `SchedContext_YieldTo` and zero child-SC pre-drain. The Pi causal
+continuation tests must independently prove the exact condition-before-block
+fan-in contract below.
 Refills and
 standard/timeout fault identities remain generated. The timeout
 cap/badge/resource/registry row must remain reserved, but the console TCB
@@ -8924,7 +8940,9 @@ wrong-slot, wrong-badge, broader-rights, and stale-version descriptors fail
 closed. Source and deterministic state-machine tests must prove
 `NaturalPostpone` is selected for the active console child, selected QEMU V35
 root-control, and Pi
-`m26e-pi4-root-same-core-console-yieldto-candidate-v26` root-control records;
+`m26e-pi4-root-cross-core-causal-fanin-wait-candidate-v27` root-control
+records, with
+`m26e-pi4-console-cross-core-causal-publication-candidate-v21` on the Pi child;
 standard faults remain terminal, and
 each reserved timeout cap is not installed on that TCB.
 Every physical child event and packet-TX publication must commit its
@@ -8945,10 +8963,19 @@ starts bounded containment, and becomes teardown-terminal only after the exact
 proof completes; terminal plus egress coalescing fails closed.
 
 Root-control fan-in tests must prove sequence-last durable publication before
-the coalesced signal and a single nonblocking poll only at the already-fenced
-ordinary/no-successor exit. A nonzero edge must return to outer
-operator/recovery-first arbitration for a fresh durable-state read; zero must
-take the existing bounded Yield. The critical runtime receives only restricted
+the coalesced signal. At an ordinary/no-successor exit, one nonblocking poll is
+the complete hint path: a nonzero edge returns to outer
+operator/recovery-first arbitration for a fresh durable-state read and zero
+takes the existing bounded Yield. The transaction-scoped path must first prove
+one exact signal-bound finite one-way CYW43 operation whose completion remains
+absent, or an exact staged console control that still owes its child-consumption
+watermark; reject a persistent/steady root-polled parent and reject any stable
+terminal, semantic event, packet egress, ingress watermark, or control
+watermark that is already visible,
+perform exactly one Poll, call Wait only after an
+empty Poll, then return through the same outer arbitration. Both the WiFi and
+direct-GENET activation counters must cap those waits at the unchanged 64.
+The critical runtime receives only restricted
 Write-only, badge-1 aliases in task-local slot 5 of the root-fault and
 Worker-supervisor children. On Pi only, they signal those aliases after
 committing a durable fault, service, Worker completion-bit, or accepting an
@@ -8957,8 +8984,12 @@ but compiles out the unconsumed fan-in syscall; executor
 slot 5 is in a separate CSpace. Worker control records remain in the existing
 bounded validated FIFO and root continues to consume that FIFO directly; no
 parallel mailbox count, marker restore, or replacement queue is permitted.
-Negative tests must reject badge-derived work authority, a blocking fan-in
-wait, any QEMU critical fan-in Signal, deadline-arm body zeroing or arm-time root signal, any bypass or reset of
+Negative tests must reject badge-derived work authority, every fan-in Wait
+outside the exact transaction gate, a Wait when a stable terminal/publication
+is visible, a Wait retained only by peer-ACK/`OutputDrained` debt, bare physical
+idle, persistent/steady deadline, recovery, containment, quarantine, reboot,
+or operator Wait, any QEMU critical fan-in Signal, deadline-arm body zeroing or
+arm-time root signal, any bypass or reset of
 the generated WiFi `NaturalPostpone` profile or either unchanged 64 logical/
 productive cap, and any reset or slide of the direct-GENET unslid tail. All
 selected SC and Reply numerics remain unchanged.
@@ -9702,7 +9733,7 @@ _Generated by coh-rtc (sha256: `fa11c64fe53b859365c45c8e33e565d428029a87529be00c
 ## Manifest fingerprints
 - `configs/root_task.toml` — `sha256:cca7cfdc8753ffd712d4431b6223db86d93f7726519aaf923ad236e67af516c3`
 - `configs/generated/root_task_resolved.json` — `sha256:8108f22e580a653df9e65e4509d0841aacef0d1c5825094ee861a3a09fb14c66`
-- `configs/root_task_pi4_uboot_aarch64.toml` — `sha256:4fcecabb51f51a93e93dd4f515cddc20202b0587bd1309cf21133a53e4c5ea87`
+- `configs/root_task_pi4_uboot_aarch64.toml` — `sha256:459730fa4317fc5cc034a2efe02c016413ed966f7578c281105242f16067a8f0`
 - Pi `pi4_production` transient resolved binding — `sha256:c62e261549f0754f29d62f4b3b3245f2c9bd3900b8cc0fd665f2bd60611eb594`
 
 ## Transcript fixture hashes

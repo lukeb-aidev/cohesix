@@ -286,12 +286,12 @@ fn checked_in_profiles_compile_without_radio_sidecar_output() {
                 )
             } else {
                 (
-                    "m26e-pi4-root-same-core-console-yieldto-candidate-v26",
+                    "m26e-pi4-root-cross-core-causal-fanin-wait-candidate-v27",
                     5_500,
-                    5_700,
+                    5_100,
                     200,
                     200,
-                    5_700,
+                    3_000,
                     54_000_000,
                     false,
                     true,
@@ -316,7 +316,7 @@ fn checked_in_profiles_compile_without_radio_sidecar_output() {
                 if *profile == "configs/root_task.toml" {
                     "m26e-qemu-console-received-progress-retention-candidate-v18"
                 } else {
-                    "m26e-pi4-console-same-core-yieldto-candidate-v20"
+                    "m26e-pi4-console-cross-core-causal-publication-candidate-v21"
                 },
                 "{profile}"
             );

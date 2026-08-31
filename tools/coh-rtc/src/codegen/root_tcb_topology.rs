@@ -299,13 +299,13 @@ mod tests {
                 (
                     5_500,
                     2_500,
-                    5_700,
+                    5_100,
                     0,
-                    "m26e-pi4-root-same-core-console-yieldto-candidate-v26",
-                    0,
+                    "m26e-pi4-root-cross-core-causal-fanin-wait-candidate-v27",
+                    2,
                     200,
                     200,
-                    5_700,
+                    3_000,
                     8_750,
                     8_400,
                     54_000_000,
@@ -366,7 +366,7 @@ mod tests {
                 if qemu {
                     "m26e-qemu-console-received-progress-retention-candidate-v18"
                 } else {
-                    "m26e-pi4-console-same-core-yieldto-candidate-v20"
+                    "m26e-pi4-console-cross-core-causal-publication-candidate-v21"
                 }
             );
 
@@ -377,7 +377,7 @@ mod tests {
                 ]
             } else {
                 [
-                    ("root-worker-executor-gpu", 2, 7_700),
+                    ("root-worker-executor-gpu", 2, 8_300),
                     ("root-worker-executor-lora", 3, 7_400),
                 ]
             };
@@ -504,7 +504,7 @@ mod tests {
                 error.to_string().contains("response-time result mismatch")
                     || error
                         .to_string()
-                        .contains("requires exact root/console response_time_us 5700/5700"),
+                        .contains("requires exact root/console response_time_us 5100/3000"),
                 "unexpected error for {task_id}: {error}"
             );
         }
@@ -531,7 +531,7 @@ mod tests {
                         .to_string()
                         .contains("object/SC inventory disagrees with temporal task")
                     || error.to_string().contains(
-                        "same-core YieldTo requires exact root budget/period/refills/WCET",
+                        "cross-core causal continuation requires exact root budget/period/refills/WCET",
                     ),
                 "unexpected error for {task_id}: {error}"
             );

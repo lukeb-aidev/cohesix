@@ -2053,6 +2053,16 @@ impl<D: NetDevice> NetPoller for IsolatedNetworkConsole<D> {
         })
     }
 
+    fn console_child_publication_pending(&self) -> Option<bool> {
+        self.runtime.child_publication_pending().ok()
+    }
+
+    fn console_child_control_publication_owed(
+        &self,
+    ) -> Option<crate::console_network_service::ConsoleNetworkControlPublication> {
+        self.runtime.child_control_publication_owed()
+    }
+
     fn request_disconnect(&mut self) {
         if self.active_connection.is_some() && !self.faulted && !self.terminal {
             self.disconnect_requested = true;

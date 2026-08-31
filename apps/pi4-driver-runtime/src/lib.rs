@@ -12025,8 +12025,16 @@ fn runtime_retained_owner_commit_grant_with<F>(
 where
     F: FnOnce(u32) -> bool,
 {
+    let root_grant = gate.root_grant_active();
     if acknowledge(grant.grant_id) {
         gate.set_delegated_owner_phase(RuntimeRetainedOwnerPhase::Inactive);
+        if root_grant {
+            // The shared consumed-id is sequence-stable before this hint. Root
+            // may be blocked after proving the exact unconsumed grant, so ACK
+            // is a causal state transition and must wake its fan-in before this
+            // runtime can later block awaiting a replacement grant.
+            let _ = runtime_signal_root_control_wake();
+        }
         true
     } else {
         *gate = gate_before_grant;
@@ -98458,6 +98466,61 @@ mod tests {
         assert_eq!(root_control_wake_notification_slot(), None);
         assert!(!runtime_signal_root_control_wake());
         assert_eq!(TEST_ROOT_CONTROL_WAKE_SIGNALS.load(Ordering::Acquire), 1);
+    }
+
+    #[test]
+    fn exact_root_grant_ack_wakes_fanin_only_after_durable_commit() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let exact = descriptor_for(HOT_PATH_CYW43_WIFI, ROLE_NET);
+        assert!(exact.valid());
+        RUNTIME_DESCRIPTOR.store(exact);
+        let grant = DriverRuntimeContinuationGrant::new(7, 0x4359_0007, 9, 1);
+
+        let mut root_gate = RuntimePendingCommandGate::new();
+        root_gate.retain_after_pending_root_generation(grant.generation);
+        let root_before = root_gate;
+        assert!(runtime_retained_owner_commit_grant_with(
+            &mut root_gate,
+            root_before,
+            grant,
+            |grant_id| {
+                assert_eq!(grant_id, grant.grant_id);
+                assert_eq!(TEST_ROOT_CONTROL_WAKE_SIGNALS.load(Ordering::Acquire), 0);
+                true
+            },
+        ));
+        assert_eq!(TEST_ROOT_CONTROL_WAKE_SIGNALS.load(Ordering::Acquire), 1);
+
+        let mut delegated_gate = RuntimePendingCommandGate::new();
+        delegated_gate.retain_after_pending_generation(grant.generation);
+        let delegated_before = delegated_gate;
+        assert!(runtime_retained_owner_commit_grant_with(
+            &mut delegated_gate,
+            delegated_before,
+            grant,
+            |_| true,
+        ));
+        assert_eq!(
+            TEST_ROOT_CONTROL_WAKE_SIGNALS.load(Ordering::Acquire),
+            1,
+            "delegated peer grants retain their existing peer-only wake route",
+        );
+
+        let mut failed_gate = RuntimePendingCommandGate::new();
+        failed_gate.retain_after_pending_root_generation(grant.generation);
+        let failed_before = failed_gate;
+        assert!(!runtime_retained_owner_commit_grant_with(
+            &mut failed_gate,
+            failed_before,
+            grant,
+            |_| false,
+        ));
+        assert_eq!(
+            TEST_ROOT_CONTROL_WAKE_SIGNALS.load(Ordering::Acquire),
+            1,
+            "a failed ACK cannot publish causal progress",
+        );
     }
 
     #[test]

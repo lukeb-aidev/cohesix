@@ -689,6 +689,20 @@ where
                 sel4_config_kernel_mcs
             ))]
             {
+                let causal_child_wait = (!handoff_turn)
+                    .then(|| productive_window.causal_child_wait_identity())
+                    .flatten()
+                    .filter(|identity| {
+                        pump.pi_root_control_productive_child_wait_eligible(*identity)
+                    });
+                if causal_child_wait.is_some() && wait_pi_root_control_causal_fanin(ctx) {
+                    // The exact stage remains the authority before sleep. The
+                    // wake carries no work identity, so restart at the outer
+                    // recovery/operator fence and consume the durable child
+                    // publication through the ordinary Network rotor.
+                    productive_window.record_causal_child_wait();
+                    continue;
+                }
                 if !handoff_turn
                     && productive_window.nonblocking_fanin_hint_eligible()
                     && poll_pi_root_control_fanin_hint(ctx)
@@ -1120,6 +1134,7 @@ enum DeferredCyw43ActivationClock {
 struct DeferredCyw43ActivationWindow {
     logical_turns: u8,
     productive_units: u8,
+    causal_waits: u8,
     last_reject_reason: u32,
     last_reject_stage: u8,
     nonblocking_fanin_hint_consumed: bool,
@@ -1157,6 +1172,7 @@ impl DeferredCyw43ActivationWindow {
         Self {
             logical_turns: 0,
             productive_units: 0,
+            causal_waits: 0,
             last_reject_reason: 0,
             last_reject_stage: Self::STAGE_NONE,
             nonblocking_fanin_hint_consumed: false,
@@ -1210,6 +1226,15 @@ impl DeferredCyw43ActivationWindow {
         }
     }
 
+    const fn causal_wait_available(self) -> bool {
+        self.causal_waits < DEFERRED_CYW43_ACTIVATION_MAX_PRODUCTIVE_UNITS
+    }
+
+    fn record_causal_wait(&mut self) {
+        debug_assert!(self.causal_wait_available());
+        self.causal_waits = self.causal_waits.saturating_add(1);
+    }
+
     const fn nonblocking_fanin_hint_available(self) -> bool {
         !self.nonblocking_fanin_hint_consumed
     }
@@ -1249,6 +1274,7 @@ impl DeferredCyw43ActivationWindow {
 struct PiRootControlProductiveWindow {
     clock: DeferredCyw43ActivationClock,
     completed_quanta: u8,
+    causal_waits: u8,
     continuation: Option<crate::event::PiRootControlProductiveContinuation>,
     active_hot_tail: Option<crate::event::PiRootControlProductiveContinuation>,
     active_hot_tail_started_ticks: u64,
@@ -1288,6 +1314,7 @@ impl PiRootControlProductiveWindow {
         Self {
             clock: DeferredCyw43ActivationClock::Unstarted,
             completed_quanta: 0,
+            causal_waits: 0,
             continuation: None,
             active_hot_tail: None,
             active_hot_tail_started_ticks: 0,
@@ -1311,6 +1338,7 @@ impl PiRootControlProductiveWindow {
         natural_postpone_profile: bool,
     ) -> bool {
         self.completed_quanta = 0;
+        self.causal_waits = 0;
         self.continuation = None;
         self.active_hot_tail = None;
         self.active_hot_tail_started_ticks = 0;
@@ -1572,6 +1600,19 @@ impl PiRootControlProductiveWindow {
         self.active_hot_tail
     }
 
+    fn causal_child_wait_identity(
+        self,
+    ) -> Option<crate::event::PiRootControlProductiveContinuation> {
+        (self.causal_waits < Self::MAX_COMPLETED_QUANTA)
+            .then_some(self.continuation?)
+            .filter(|identity| identity.awaits_child_publication())
+    }
+
+    fn record_causal_child_wait(&mut self) {
+        debug_assert!(self.causal_child_wait_identity().is_some());
+        self.causal_waits = self.causal_waits.saturating_add(1);
+    }
+
     fn last_effective_root_us(self, counter_hz: u64) -> u64 {
         if counter_hz == 0 {
             return 0;
@@ -1827,6 +1868,67 @@ fn poll_pi_root_control_fanin_hint(ctx: &BootContext) -> bool {
         let _ = sel4::poll(notification, &mut ignored_badge);
         ignored_badge != 0
     })
+}
+
+/// Consume a pending edge or block only after durable state proves that an
+/// already-issued finite child operation owes root-control a sequence-last
+/// publication.
+///
+/// The notification badge is never work authority. Release-before-signal on
+/// every eligible producer and this acquire fence make the subsequent outer
+/// recovery/operator-first recheck the sole continuation decision.
+#[cfg(all(
+    feature = "serial-console",
+    feature = "kernel",
+    feature = "net-console",
+    any(
+        test,
+        all(
+            feature = "release-pi4",
+            target_arch = "aarch64",
+            target_os = "none",
+            sel4_config_kernel_mcs
+        )
+    )
+))]
+fn pi_root_control_condition_before_causal_wait<Poll, Wait>(mut poll: Poll, mut wait: Wait)
+where
+    Poll: FnMut() -> bool,
+    Wait: FnMut(),
+{
+    if !poll() {
+        wait();
+    }
+    core::sync::atomic::fence(Ordering::Acquire);
+}
+
+#[cfg(all(
+    feature = "release-pi4",
+    target_arch = "aarch64",
+    target_os = "none",
+    sel4_config_kernel_mcs,
+    feature = "serial-console",
+    feature = "kernel",
+    feature = "net-console",
+))]
+fn wait_pi_root_control_causal_fanin(ctx: &BootContext) -> bool {
+    let Some(notification) =
+        crate::hal::critical_tcb::root_control_wake_notification_origin(ctx.critical_runtime)
+    else {
+        return false;
+    };
+    pi_root_control_condition_before_causal_wait(
+        || {
+            let mut ignored_badge = 0;
+            let _ = sel4::poll(notification, &mut ignored_badge);
+            ignored_badge != 0
+        },
+        || {
+            let mut ignored_badge = 0;
+            let _ = sel4::wait(notification, &mut ignored_badge);
+        },
+    );
+    true
 }
 
 #[cfg(all(
@@ -4804,6 +4906,23 @@ where
                         target_os = "none",
                         sel4_config_kernel_mcs
                     ))]
+                    if activation_window.causal_wait_available()
+                        && pump.pi_root_control_cyw43_causal_wait_eligible()
+                        && wait_pi_root_control_causal_fanin(ctx)
+                    {
+                        // An issued one-way CYW43/SDIO request or an exact
+                        // authenticated console batch owes this activation a
+                        // post-commit publication. Re-enter only through the
+                        // ordinary recovery/operator-first durable recheck.
+                        activation_window.record_causal_wait();
+                        continue 'supervisor;
+                    }
+                    #[cfg(all(
+                        feature = "release-pi4",
+                        target_arch = "aarch64",
+                        target_os = "none",
+                        sel4_config_kernel_mcs
+                    ))]
                     if activation_window.nonblocking_fanin_hint_available()
                         && poll_pi_root_control_fanin_hint(ctx)
                     {
@@ -4892,6 +5011,30 @@ where
                     );
                 }
                 attempt_active = true;
+            }
+            #[cfg(all(
+                feature = "release-pi4",
+                target_arch = "aarch64",
+                target_os = "none",
+                sel4_config_kernel_mcs
+            ))]
+            if continuation == DeferredCyw43McsContinuation::Yield
+                && !network_attached
+                && activation_window.causal_wait_available()
+                && matches!(
+                    crate::hal::driver_task::active_driver_task_one_way_completion_condition(
+                        crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                    ),
+                    crate::hal::driver_task::DriverTaskOneWayCompletionCondition::SignalBoundWaiting
+                )
+                && wait_pi_root_control_causal_fanin(ctx)
+            {
+                // A prior pre-wait Poll may have consumed an unrelated
+                // coalesced edge. The stable parent condition is still Waiting,
+                // so retain this same activation and wait for the exact terminal
+                // rather than falling through to the refill-forfeiting Yield.
+                activation_window.record_causal_wait();
+                continue 'supervisor;
             }
             if continuation == DeferredCyw43McsContinuation::Yield {
                 deferred_cyw43_yield_and_reset(pump, &mut activation_window);
@@ -5181,6 +5324,29 @@ where
                     }
                 }
             }
+        }
+        #[cfg(all(
+            feature = "release-pi4",
+            target_arch = "aarch64",
+            target_os = "none",
+            sel4_config_kernel_mcs
+        ))]
+        if operation_executed
+            && activation_window.causal_wait_available()
+            && matches!(
+                crate::hal::driver_task::active_driver_task_one_way_completion_condition(
+                    crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                ),
+                crate::hal::driver_task::DriverTaskOneWayCompletionCondition::SignalBoundWaiting
+            )
+            && wait_pi_root_control_causal_fanin(ctx)
+        {
+            // Cold bootstrap issued one finite one-way child command. Its
+            // runtime must commit and fan-in signal the terminal; retaining the
+            // current activation here removes the check-then-Yield refill gap
+            // without granting authority to RF, deadline, or idle state.
+            activation_window.record_causal_wait();
+            continue 'supervisor;
         }
         if continuation == DeferredCyw43McsContinuation::Continue {
             // The scoped outer-event finalizer above has retired the exact
@@ -7841,6 +8007,38 @@ mod tests {
         assert!(!activation_window.nonblocking_fanin_hint_available());
         activation_window.reset();
         assert!(activation_window.nonblocking_fanin_hint_available());
+    }
+
+    #[cfg(all(
+        feature = "serial-console",
+        feature = "kernel",
+        feature = "net-console"
+    ))]
+    #[test]
+    fn causal_fanin_consumes_a_pending_edge_before_blocking() {
+        use core::cell::Cell;
+
+        let polls = Cell::new(0u8);
+        let waits = Cell::new(0u8);
+        super::pi_root_control_condition_before_causal_wait(
+            || {
+                polls.set(polls.get().saturating_add(1));
+                true
+            },
+            || waits.set(waits.get().saturating_add(1)),
+        );
+        assert_eq!(polls.get(), 1);
+        assert_eq!(waits.get(), 0);
+
+        super::pi_root_control_condition_before_causal_wait(
+            || {
+                polls.set(polls.get().saturating_add(1));
+                false
+            },
+            || waits.set(waits.get().saturating_add(1)),
+        );
+        assert_eq!(polls.get(), 2);
+        assert_eq!(waits.get(), 1);
     }
 
     #[cfg(all(

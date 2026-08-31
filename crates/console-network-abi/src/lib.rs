@@ -3395,6 +3395,56 @@ impl PacketPage {
         Ok(())
     }
 
+    /// Determine whether the packet page contains a publication newer than
+    /// the caller's last accepted sequence.
+    ///
+    /// This level read does not copy or consume the packet. It exists for the
+    /// final condition-before-block cut where a coalesced notification may
+    /// already have been consumed while the one-slot publication remains
+    /// durable.
+    pub fn publication_pending(
+        input: &[u8],
+        direction: PacketDirection,
+        generation: u64,
+        after_sequence: u64,
+    ) -> Result<bool, AbiError> {
+        if input.len() != SHARED_PAGE_BYTES {
+            return Err(AbiError::InvalidLayout);
+        }
+        let first = read_u64(input, PACKET_COMMIT_OFFSET);
+        fence(Ordering::Acquire);
+        let header = PacketPageHeader {
+            magic: read_u32(input, 0),
+            abi_version: read_u16(input, 4),
+            direction: read_u16(input, 6),
+            generation: read_u64(input, 8),
+            sequence: read_u64(input, 16),
+            committed_sequence: read_u64(input, PACKET_COMMIT_OFFSET),
+            packet_len: read_u16(input, 32),
+            flags: read_u16(input, 34),
+            reserved0: read_u32(input, 36),
+        };
+        if header.magic != PACKET_PAGE_MAGIC || header.abi_version != ABI_VERSION {
+            return Err(AbiError::InvalidIdentity);
+        }
+        if header.generation != generation {
+            return Err(AbiError::StaleGeneration);
+        }
+        if PacketDirection::from_raw(header.direction)? != direction {
+            return Err(AbiError::InvalidKind);
+        }
+        fence(Ordering::Acquire);
+        let second = read_u64(input, PACKET_COMMIT_OFFSET);
+        if !classify_publication_commit(first, second, after_sequence)? {
+            return Ok(false);
+        }
+        let (observed_direction, _) = header.validate(generation, after_sequence)?;
+        if observed_direction != direction || first != header.sequence {
+            return Err(AbiError::InvalidSequence);
+        }
+        Ok(true)
+    }
+
     /// Copy one stable packet publication without materializing a 4-KiB page.
     pub fn decode_bounded(
         input: &[u8],
@@ -4376,8 +4426,24 @@ mod tests {
         assert_eq!(PACKET_LENGTH_OFFSET, 32);
         assert_eq!(PACKET_HEADER_BYTES, PACKET_PAYLOAD_OFFSET);
 
+        let mut empty = [0; SHARED_PAGE_BYTES];
+        PacketPage::empty(PacketDirection::Ingress, 7)
+            .encode(&mut empty)
+            .unwrap();
+        assert!(!PacketPage::publication_pending(&empty, PacketDirection::Ingress, 7, 0,).unwrap());
+
         let mut compact = [0xa5; SHARED_PAGE_BYTES];
         PacketPage::publish_into(&mut compact, PacketDirection::Ingress, 7, 1, &[1, 2, 3]).unwrap();
+        assert!(
+            PacketPage::publication_pending(&compact, PacketDirection::Ingress, 7, 0,).unwrap()
+        );
+        assert!(
+            !PacketPage::publication_pending(&compact, PacketDirection::Ingress, 7, 1,).unwrap()
+        );
+        assert_eq!(
+            PacketPage::publication_pending(&compact, PacketDirection::Egress, 7, 0),
+            Err(AbiError::InvalidKind),
+        );
         assert!(compact[PACKET_PAYLOAD_OFFSET + 3..]
             .iter()
             .all(|byte| *byte == 0xa5));

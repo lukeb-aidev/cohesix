@@ -100,8 +100,8 @@ def test_pi4_wifi_pair_uses_bounded_fragment_preserving_refills() -> None:
         assert task["priority"] == 184
 
 
-def test_pi4_root_and_console_use_exact_same_core_yield_to_bounds() -> None:
-    """Pi direct GENET uses exact same-core root-to-child continuation."""
+def test_pi4_root_and_console_use_exact_cross_core_causal_bounds() -> None:
+    """Pi root and console preserve parallel causal continuation bounds."""
 
     manifest = load_pi4_manifest()
     temporal = manifest["temporal_authority"]
@@ -123,26 +123,26 @@ def test_pi4_root_and_console_use_exact_same_core_yield_to_bounds() -> None:
     assert root["period_us"] == 10_000
     assert root["max_refills"] == 2
     assert root["wcet_us"] == 2_500
-    assert root["response_time_us"] == 5_700
+    assert root["response_time_us"] == 5_100
     assert root["priority"] == 200
     assert root["mcp"] == 200
     assert (
         root["wcet_provenance"]
-        == "m26e-pi4-root-same-core-console-yieldto-candidate-v26"
+        == "m26e-pi4-root-cross-core-causal-fanin-wait-candidate-v27"
     )
-    assert root_fault["core"] == 2
-    assert root_fault["sched_control_core"] == 2
-    assert root_fault["response_time_us"] == 2_400
-    assert console_task["core"] == 0
-    assert console_task["sched_control_core"] == 0
+    assert root_fault["core"] == 0
+    assert root_fault["sched_control_core"] == 0
+    assert root_fault["response_time_us"] == 2_600
+    assert console_task["core"] == 2
+    assert console_task["sched_control_core"] == 2
     assert console_task["budget_us"] == 3_000
     assert console_task["period_us"] == 10_000
     assert console_task["max_refills"] == 8
     assert console_task["wcet_us"] == 3_000
-    assert console_task["response_time_us"] == 5_700
+    assert console_task["response_time_us"] == 3_000
     assert (
         console_task["wcet_provenance"]
-        == "m26e-pi4-console-same-core-yieldto-candidate-v20"
+        == "m26e-pi4-console-cross-core-causal-publication-candidate-v21"
     )
     assert console_task["priority"] == 200
     assert console_task["mcp"] == 200
@@ -152,7 +152,7 @@ def test_pi4_root_and_console_use_exact_same_core_yield_to_bounds() -> None:
     assert console["priority"] == 200
     assert console["mcp"] == 200
     assert console["max_refills"] == 8
-    assert console["core"] == 0
+    assert console["core"] == 2
     assert console["timer_clock_hz"] == 54_000_000
     core_zero_demand = sum(
         task["budget_us"]
@@ -204,8 +204,8 @@ def test_pi4_serial_tracks_one_frame_of_fifo_empty_refills() -> None:
     assert serial["wcet_us"] == 400
 
 
-def test_pi4_hdmi_and_fault_rebalance_preserves_per_core_reserve() -> None:
-    """Pi keeps HDMI on core one and moves root-fault to core two within admission."""
+def test_pi4_hdmi_and_cross_core_console_preserve_per_core_reserve() -> None:
+    """Pi keeps HDMI on core one and the console child on core two."""
 
     manifest = load_pi4_manifest()
     temporal = manifest["temporal_authority"]
@@ -242,10 +242,10 @@ def test_pi4_hdmi_and_fault_rebalance_preserves_per_core_reserve() -> None:
         == "m26e-pi4-hdmi-write-only-candidate-v1"
     )
     assert gpu["budget_us"] == 5_000
-    assert gpu["response_time_us"] == 7_700
+    assert gpu["response_time_us"] == 8_300
     pcie = next(task for task in tasks if task["id"] == "driver-pcie")
     assert pcie["core"] == 2
-    assert pcie["response_time_us"] == 2_700
+    assert pcie["response_time_us"] == 3_300
     assert core_one_demand == 8_250
     assert core_one["capacity_us"] - core_one["reserve_us"] == 9_000
     assert core_two_demand == 8_400

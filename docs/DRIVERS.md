@@ -1247,14 +1247,24 @@ transport:
   The window replaces, rather than composes with, the earlier four-Driver
   restart burst and changes no device deadline, operation cardinality, owner,
   or QEMU/generic path.
-- The additional root-control fan-in is a nonblocking hint only. At an
-  already-fenced ordinary or no-successor exit, root may poll it at most once
-  per activation; a nonzero badge returns to outer operator/recovery-first
-  arbitration for a fresh durable-state read, while zero takes the existing bounded Yield. The
-  badge is never work, identity, credit, or continuation authority. Root never
-  blocks on the fan-in, and SDIO deadline-arm publication and clear retain
-  their prior commit-only behavior without an arm-time root signal, body
-  zeroing, or extra cross-runtime sampling.
+- The additional root-control fan-in remains a coalescing hint. At an
+  already-fenced ordinary or no-successor exit, root may poll it once; a
+  nonzero badge returns to outer operator/recovery-first arbitration for a
+  fresh durable-state read, while ordinary zero takes the existing bounded
+  Yield. One transaction-scoped exception permits condition-before-block Poll
+  then Wait only after durable revalidation proves either an exact signal-bound
+  finite one-way CYW43 operation with no stable sequence-last terminal, or an
+  exact staged console control whose child-consumption watermark remains owed.
+  Persistent/steady CYW43 parents retain root-polled deadlines and cannot wait.
+  The last cut also proves no semantic event, packet egress, ingress watermark,
+  or control watermark is already pending. A visible terminal/publication
+  returns to the rotor; after control-watermark acceptance, peer-ACK-dependent
+  drain work remains in ordinary timer/network arbitration. Bare physical idle,
+  deadline, recovery, containment, quarantine, reboot, and operator work grant
+  no wait authority. The badge is never work, identity, credit, or continuation authority, and SDIO
+  deadline-arm publication and clear retain their prior commit-only behavior
+  without an arm-time root signal, body zeroing, or extra cross-runtime
+  sampling.
 - The Pi direct-GENET-feature isolated authenticated console socket, used by
   both selected Pi network modes, is an interactive control path, not a bulk
   stream. It disables delayed ACK and Nagle so one bounded receive
@@ -1264,9 +1274,10 @@ transport:
   already-qualified TCP policy.
 - The Pi console-network child retains eight refill records in its existing
   8-bit SC, matching the Pi direct-GENET fragment-preserving selection, and
-  runs beside root-control on core 0 at equal priority under the exact guarded
-  YieldTo contract. Its budget, period, MCP, WCET, queue, packet authority, and
-  operation bound are unchanged. QEMU retains its selected core-2
+  runs independently on core 2 while root-control remains on core 0 at equal
+  priority under the exact cross-core signal-only contract. Its budget,
+  period, MCP, WCET, queue, packet authority, and operation bound are
+  unchanged. QEMU retains its selected core-2
   lower-priority max-two-refill console-network contract. Refill capacity and
   affinity are bounded scheduling prerequisites, not physical latency,
   throughput, or August-parity evidence.
@@ -1309,27 +1320,29 @@ transport:
 - In both Pi network modes, the physical Network leaf owns timer, NIC, and
   display-ready reconciliation only. It does not repeat the composite root
   IPC/bootstrap/stream/reboot tail already serviced by the bounded Serial,
-  LocalSeat, Dispatch, and Display leaves. The generated Pi root and console
-  share core 0 at equal priority. Direct GENET alone may use the exact guarded
-  continuation after durable authenticated control or publication-credit work:
-  successfully pre-drain the child SC, perform Release, send the one-hot
-  Signal, then call `SchedContext_YieldTo` once. A failed pre-drain retains the
-  durable signal but suppresses YieldTo; mediated WiFi remains signal-only.
-  Failed or missing same-core accounting fails closed.
-  The child remains bounded by its own SC, and QEMU retains its existing
-  direct-VirtIO selector.
-- Exact durable same-core direct-GENET productive identity may retain
+  LocalSeat, Dispatch, and Display leaves. The generated Pi root remains on
+  core 0 and the console child runs on core 2 at equal priority. Direct GENET
+  and mediated WiFi both publish durable state, perform Release, and send the
+  exact one-hot Signal without child-SC pre-drain or `SchedContext_YieldTo`.
+  An exact staged control may bridge the remaining child boundary only while
+  its child-consumption watermark is still owed, through
+  the condition-before-block fan-in wait after every identity and safety fence
+  revalidates; the child remains bounded by its own SC, and QEMU retains its
+  existing direct-VirtIO selector.
+- Exact durable cross-core direct-GENET productive identity may retain
   root-control under the same generated NaturalPostpone profile and unchanged
   64-complete-quantum cap. Every quantum rechecks generation, connection,
   operator, passive, recovery, containment, quarantine, reboot, handoff, and
   continuation-mode fences; no successor takes the explicit Yield. Userland
   wall time and child-consumption telemetry do not decide productive
   continuation. An authenticated command or `OutputDrained` transition may
-  additionally open or advance one root-local transaction tail only with the
-  required successful Yield/call accounting. Stage-only progress cannot mint
-  that tail. The first qualifying transition's CNTVCT sample is its unslid wall
-  origin. The tail remains
-  strictly below 8 ms and no more than 64 complete physical-rotor quanta, and
+  open or advance one root-local transaction tail for that exact identity. A
+  stage may wait at most 64 times inside the unchanged activation bound, and
+  only while the sealed control still owes its child-consumption watermark. Stable
+  publication returns to the rotor, and stage-only progress cannot mint an
+  unrelated tail. The first qualifying transition's CNTVCT sample is its unslid
+  wall origin. The tail remains strictly below 8 ms and no more than 64 complete
+  physical-rotor quanta, and
   the root's `5,500/10,000 us` SC remains the hard execution bound. Every
   quantum rechecks generation, connection, final Serial phase,
   passive admission, physical operator/response priority, local fault,

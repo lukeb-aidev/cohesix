@@ -4499,6 +4499,70 @@ fn cyw43_authenticated_response_episode_decision(
     }
 }
 
+/// Decide whether the exact physical/console debt has a guaranteed fan-in
+/// producer. Root-polled deadlines and visible or invalid child state always
+/// return to ordinary arbitration, even if a separate response is queued.
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+const fn cyw43_causal_wait_debt_authorized(
+    condition: crate::hal::driver_task::DriverTaskOneWayCompletionCondition,
+    response_publication_pending: bool,
+) -> bool {
+    matches!(
+        condition,
+        crate::hal::driver_task::DriverTaskOneWayCompletionCondition::SignalBoundWaiting
+    ) || (matches!(
+        condition,
+        crate::hal::driver_task::DriverTaskOneWayCompletionCondition::Idle
+    ) && response_publication_pending)
+}
+
+#[cfg(all(test, feature = "kernel", feature = "net-console"))]
+#[test]
+fn cyw43_causal_wait_requires_a_guaranteed_fanin_producer() {
+    use crate::hal::driver_task::DriverTaskOneWayCompletionCondition::{
+        Idle, Ready, Revoked, RootDeadlinePollRequired, SignalBoundWaiting,
+    };
+
+    assert!(cyw43_causal_wait_debt_authorized(SignalBoundWaiting, false));
+    assert!(cyw43_causal_wait_debt_authorized(Idle, true));
+    assert!(!cyw43_causal_wait_debt_authorized(Idle, false));
+    for condition in [RootDeadlinePollRequired, Ready, Revoked] {
+        assert!(!cyw43_causal_wait_debt_authorized(condition, true));
+    }
+}
+
+#[cfg(all(test, feature = "kernel", feature = "net-console"))]
+#[test]
+fn direct_genet_causal_wait_matches_only_the_current_control_identity() {
+    let expected = PiRootControlProductiveContinuation::for_test(7, 41);
+    let exact = crate::console_network_service::ConsoleNetworkControlPublication {
+        generation: 7,
+        connection_id: 41,
+        sequence: 9,
+    };
+    assert!(expected.matches_child_control_publication(exact));
+    for stale in [
+        crate::console_network_service::ConsoleNetworkControlPublication {
+            generation: 8,
+            ..exact
+        },
+        crate::console_network_service::ConsoleNetworkControlPublication {
+            connection_id: 42,
+            ..exact
+        },
+        crate::console_network_service::ConsoleNetworkControlPublication {
+            sequence: 0,
+            ..exact
+        },
+    ] {
+        assert!(!expected.matches_child_control_publication(stale));
+    }
+    assert!(
+        !PiRootControlProductiveContinuation::for_test_completed_response(7, 41)
+            .matches_child_control_publication(exact)
+    );
+}
+
 #[cfg(all(feature = "kernel", feature = "net-console"))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct Cyw43ResponseRotationContinuationEvidence {
@@ -5649,9 +5713,9 @@ enum DirectGenetProductiveProgress {
 }
 
 /// Scheduling relationship considered by direct-GENET continuation policy.
-/// The selected Pi profile is exact same-core `YieldTo`; the superseded
-/// cross-core signal-only variant remains only as a fail-closed comparison
-/// oracle for retained-token tests.
+/// The selected Pi profile is cross-core signal-only. The same-core `YieldTo`
+/// variant remains only as a fail-closed comparison oracle for retained-token
+/// tests and cannot be selected by generated Pi truth.
 #[cfg(all(feature = "kernel", feature = "net-console"))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum DirectGenetContinuationMode {
@@ -5659,7 +5723,7 @@ enum DirectGenetContinuationMode {
     CrossCoreSignalOnly,
 }
 
-/// Derive the exact selected same-core direct-GENET continuation from one
+/// Derive the exact selected cross-core direct-GENET continuation from one
 /// generated contract. Every object and scheduling field consumed by the
 /// root/child boundary must agree with the temporal service entry; drift
 /// disables retained execution.
@@ -5716,11 +5780,11 @@ fn direct_genet_continuation_mode_for_contract(
         )
         && root.consumed_time_evidence
         && root.wcet_us == 2_500
-        && root.response_time_us == 5_700
-        && service.core == 0
+        && root.response_time_us == 5_100
+        && service.core == 2
         && service.scheduling_context_slot == 6
         && service.scheduling_context_bits == 8
-        && service.sched_control_core == 0
+        && service.sched_control_core == 2
         && service.budget_us == 3_000
         && service.period_us == 10_000
         && service.deadline_us == 10_000
@@ -5736,7 +5800,8 @@ fn direct_genet_continuation_mode_for_contract(
         )
         && service.consumed_time_evidence
         && service.wcet_us == 3_000
-        && service.response_time_us == 5_700
+        && service.response_time_us == 3_000
+        && root.core != service.core
         && console.core == service.core
         && console.scheduling_context_slot == service.scheduling_context_slot
         && console.scheduling_context_bits == service.scheduling_context_bits
@@ -5751,7 +5816,7 @@ fn direct_genet_continuation_mode_for_contract(
     if !exact_profile {
         return None;
     }
-    Some(DirectGenetContinuationMode::SameCoreYieldTo)
+    Some(DirectGenetContinuationMode::CrossCoreSignalOnly)
 }
 
 #[cfg(all(feature = "kernel", feature = "net-console"))]
@@ -5871,12 +5936,44 @@ impl PiRootControlProductiveContinuation {
         self.child_credit_counter_hz
     }
 
+    /// Return whether this exact direct-GENET transaction has published a
+    /// child stage whose sequence-last completion is still required.
+    ///
+    /// Only stage-bearing progress can authorize a blocking root-control
+    /// wait. A command that has not yet staged remains root-local work, while
+    /// a response already drained cannot turn a quiet authenticated session
+    /// into an unbounded sleep.
+    pub(crate) const fn awaits_child_publication(self) -> bool {
+        matches!(
+            self.progress,
+            DirectGenetProductiveProgress::CommandAcceptedAndStagePublished
+                | DirectGenetProductiveProgress::StagePublished
+                | DirectGenetProductiveProgress::DrainAndStage
+        )
+    }
+
+    /// Match the exact one-slot root control whose child-consumption
+    /// watermark is still outstanding for this authenticated transaction.
+    ///
+    /// A newer control cannot replace this record while it remains inflight;
+    /// once the child watermark is accepted, the boundary clears the token
+    /// before any later stage may occupy the slot.
+    pub(crate) const fn matches_child_control_publication(
+        self,
+        publication: crate::console_network_service::ConsoleNetworkControlPublication,
+    ) -> bool {
+        self.awaits_child_publication()
+            && publication.generation == self.generation
+            && publication.connection_id == self.connection_id
+            && publication.sequence != 0
+    }
+
     /// Whether this exact authenticated quantum opened or advanced one bounded
     /// Pi direct-GENET transaction window. A newly accepted command opens the
     /// window before the first stage publication, while stage-only progress
-    /// cannot mint authority for an unrelated request. The selected same-core
-    /// profile always requires the retained successful `YieldTo`; the legacy
-    /// cross-core oracle instead carries no child execution credit.
+    /// cannot mint authority for an unrelated request. The selected cross-core
+    /// profile carries no child execution credit; the retired same-core oracle
+    /// still requires an observed successful `YieldTo`.
     pub(crate) const fn opens_active_hot_tail(self) -> bool {
         let exact_accounting = match self.mode {
             DirectGenetContinuationMode::SameCoreYieldTo => self.exact_same_core_yield_to_observed,
@@ -13481,6 +13578,132 @@ where
                 local_fault_pending,
             },
         )
+    }
+
+    /// Revalidate one exact outstanding direct-GENET child publication at the
+    /// final condition-before-block cut.
+    ///
+    /// The retained continuation proves how the stage was created; the live
+    /// exact one-slot control level proves it still owes the child's
+    /// consumption watermark. Both are required so a stale successful quantum
+    /// cannot put root-control to sleep after the child already completed.
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    pub(crate) fn pi_root_control_productive_child_wait_eligible(
+        &self,
+        expected: PiRootControlProductiveContinuation,
+    ) -> bool {
+        self.pi_root_control_productive_continuation_fence_clear(expected)
+            && self
+                .net
+                .as_deref()
+                .and_then(crate::net::NetPoller::console_child_control_publication_owed)
+                .is_some_and(|publication| expected.matches_child_control_publication(publication))
+            && self.net.as_deref().and_then(|net| {
+                net.console_child_publication_pending()
+                    .map(|pending| !pending)
+            }) == Some(true)
+    }
+
+    /// Return whether attached WiFi has one exact child completion that may
+    /// block root-control on the shared fan-in without losing operator or
+    /// recovery liveness.
+    ///
+    /// Two finite publications qualify: an issued one-way CYW43/SDIO command,
+    /// whose runtime is required to signal after its sequence-last terminal,
+    /// or an authenticated console control still awaiting the isolated
+    /// child's exact consumption watermark. Durable state remains the authority;
+    /// the coalesced badge only wakes root to re-read it.
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    fn pi_root_control_cyw43_causal_wait_fence_clear(&mut self) -> bool {
+        let local_fault_pending = self.net.as_deref().is_none_or(|net| {
+            net.console_service_local_fault_pending()
+                || net.console_service_local_containment_pending()
+        });
+        let physical_operator_work = self.linked_physical_operator_work();
+        self.linked_runtime_cyw43_lane_selected()
+            && !self.network_service_quarantined
+            && !self.reboot_pending
+            && !crate::drivers::driver_task_net::cyw43_recovery_required()
+            && !self.deferred_containment_work_pending()
+            && !self.deferred_console_network_handoff_pending()
+            && !self.pi_root_control_passive_admission_pending()
+            && !local_fault_pending
+            && !physical_operator_work.retains_network_fence_after_dispatch()
+            && !self.physical_console_response_pending()
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    pub(crate) fn pi_root_control_cyw43_causal_wait_eligible(&mut self) -> bool {
+        if !self.pi_root_control_cyw43_causal_wait_fence_clear() {
+            return false;
+        }
+        if self
+            .net
+            .as_deref()
+            .and_then(crate::net::NetPoller::console_child_publication_pending)
+            != Some(false)
+        {
+            // A published child record is runnable now, while an unavailable
+            // level cannot prove that the sole coalesced fan-in signal is still
+            // owed. In either case ordinary Network arbitration must run.
+            return false;
+        }
+
+        let physical_condition =
+            crate::hal::driver_task::active_driver_task_one_way_completion_condition(
+                crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            );
+        match physical_condition {
+            crate::hal::driver_task::DriverTaskOneWayCompletionCondition::SignalBoundWaiting => {
+                // The exact child terminal is a guaranteed fan-in producer.
+            }
+            crate::hal::driver_task::DriverTaskOneWayCompletionCondition::Idle => {}
+            crate::hal::driver_task::DriverTaskOneWayCompletionCondition::RootDeadlinePollRequired
+            | crate::hal::driver_task::DriverTaskOneWayCompletionCondition::Ready
+            | crate::hal::driver_task::DriverTaskOneWayCompletionCondition::Revoked => {
+                // A root-polled deadline, visible terminal, or invalid identity
+                // must return to ordinary arbitration even when a distinct
+                // console response is also in flight.
+                return false;
+            }
+        };
+        let response_publication_pending =
+            if let Some(episode) = self.deferred_cyw43_authenticated_response_episode {
+                match cyw43_authenticated_response_episode_decision(
+                    self.cyw43_authenticated_response_episode_evidence(episode, 0),
+                ) {
+                    Cyw43AuthenticatedResponseEpisodeDecision::Wait(next) => {
+                        self.deferred_cyw43_authenticated_response_episode = Some(next);
+                        let identity = next.cursor.response_identity;
+                        self.net
+                            .as_deref()
+                            .and_then(crate::net::NetPoller::console_child_control_publication_owed)
+                            .is_some_and(|publication| {
+                                publication.generation == identity.generation
+                                    && publication.connection_id == identity.connection_id
+                                    && publication.sequence != 0
+                            })
+                    }
+                    Cyw43AuthenticatedResponseEpisodeDecision::Progress(next) => {
+                        self.deferred_cyw43_authenticated_response_episode = Some(next);
+                        false
+                    }
+                    Cyw43AuthenticatedResponseEpisodeDecision::Complete
+                    | Cyw43AuthenticatedResponseEpisodeDecision::Revoke => {
+                        self.deferred_cyw43_authenticated_response_episode = None;
+                        false
+                    }
+                }
+            } else {
+                false
+            };
+
+        // The classifier and response decision may discover and latch a
+        // recovery or containment cut. Re-read every common fence after those
+        // operations so a live response episode cannot turn newly pending
+        // recovery into an unbounded notification wait.
+        cyw43_causal_wait_debt_authorized(physical_condition, response_publication_pending)
+            && self.pi_root_control_cyw43_causal_wait_fence_clear()
     }
 
     /// Recheck the exact authenticated-transaction authority that may retain a
@@ -61085,11 +61308,11 @@ mod tests {
         root.timeout_policy = crate::generated::TimeoutPolicy::NaturalPostpone;
         root.consumed_time_evidence = true;
         root.wcet_us = 2_500;
-        root.response_time_us = 5_700;
-        service.core = 0;
+        root.response_time_us = 5_100;
+        service.core = 2;
         service.scheduling_context_slot = 6;
         service.scheduling_context_bits = 8;
-        service.sched_control_core = 0;
+        service.sched_control_core = 2;
         service.budget_us = 3_000;
         service.period_us = 10_000;
         service.deadline_us = 10_000;
@@ -61102,7 +61325,7 @@ mod tests {
         service.timeout_policy = crate::generated::TimeoutPolicy::NaturalPostpone;
         service.consumed_time_evidence = true;
         service.wcet_us = 3_000;
-        service.response_time_us = 5_700;
+        service.response_time_us = 3_000;
         console.abi_version = 6;
         console.listener_port = 31_337;
         console.single_listener = true;
@@ -61126,21 +61349,21 @@ mod tests {
 
         assert_eq!(
             direct_genet_continuation_mode_for_contract(&console, &root, &service),
-            Some(DirectGenetContinuationMode::SameCoreYieldTo),
+            Some(DirectGenetContinuationMode::CrossCoreSignalOnly),
         );
 
         assert_eq!(
             direct_genet_continuation_mode_for_contract(
-                &crate::generated::ConsoleNetworkServiceConfig { core: 2, ..console },
+                &crate::generated::ConsoleNetworkServiceConfig { core: 0, ..console },
                 &root,
                 &crate::generated::TemporalTaskConfig {
-                    core: 2,
-                    sched_control_core: 2,
+                    core: 0,
+                    sched_control_core: 0,
                     ..service
                 },
             ),
             None,
-            "the outgoing cross-core Pi profile cannot select retained same-core YieldTo",
+            "the failed same-core Pi profile cannot select cross-core continuation",
         );
 
         for drifted in [
@@ -61184,7 +61407,7 @@ mod tests {
                 ..root
             },
             crate::generated::TemporalTaskConfig {
-                response_time_us: 5_699,
+                response_time_us: 5_099,
                 ..root
             },
         ] {
@@ -61195,7 +61418,7 @@ mod tests {
             );
         }
         for drifted_service in [
-            crate::generated::TemporalTaskConfig { core: 2, ..service },
+            crate::generated::TemporalTaskConfig { core: 0, ..service },
             crate::generated::TemporalTaskConfig {
                 budget_us: 2_999,
                 ..service
@@ -61205,7 +61428,7 @@ mod tests {
                 ..service
             },
             crate::generated::TemporalTaskConfig {
-                response_time_us: 5_699,
+                response_time_us: 2_999,
                 ..service
             },
         ] {

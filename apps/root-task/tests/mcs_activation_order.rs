@@ -187,6 +187,58 @@ fn wifi_ready_deadline_observes_only_one_child_publication_before_network_work()
 }
 
 #[test]
+fn wifi_causal_wait_excludes_root_polled_deadline_parents() {
+    let driver = include_str!("../src/hal/driver_task.rs");
+    let classifier_start = driver
+        .find("pub(crate) fn active_driver_task_one_way_completion_condition(")
+        .expect("one-way completion classifier must exist");
+    let classifier_end = driver[classifier_start..]
+        .find("/// Revalidate one retained request")
+        .map(|offset| classifier_start + offset)
+        .expect("classifier must have a bounded source region");
+    let classifier = &driver[classifier_start..classifier_end];
+    assert_eq!(
+        classifier
+            .matches("DriverTaskOneWayCompletionCondition::RootDeadlinePollRequired")
+            .count(),
+        2,
+        "persistent and steady parents must leave root runnable for its deadline poll",
+    );
+    assert!(classifier.contains("DriverTaskOneWayCompletionCondition::SignalBoundWaiting"));
+
+    let userland = include_str!("../src/userland/mod.rs");
+    assert!(!userland.contains(
+        "DriverTaskOneWayCompletionCondition::RootDeadlinePollRequired\n            )\n            && wait_pi_root_control_causal_fanin",
+    ));
+
+    let event = include_str!("../src/event/mod.rs");
+    let wifi_start = event
+        .find("pub(crate) fn pi_root_control_cyw43_causal_wait_eligible(")
+        .expect("attached WiFi causal-wait guard must exist");
+    let wifi_end = event[wifi_start..]
+        .find("/// Recheck the exact authenticated-transaction authority")
+        .map(|offset| wifi_start + offset)
+        .expect("attached WiFi causal-wait guard must have a bounded source region");
+    let wifi_guard = &event[wifi_start..wifi_end];
+    assert!(wifi_guard.contains("console_child_control_publication_owed"));
+    assert!(wifi_guard.contains("DriverTaskOneWayCompletionCondition::Idle"));
+    assert!(wifi_guard.contains("DriverTaskOneWayCompletionCondition::RootDeadlinePollRequired"));
+    assert!(!wifi_guard.contains("diagnostics.awaiting_batch_drain"));
+
+    let genet_start = event
+        .find("pub(crate) fn pi_root_control_productive_child_wait_eligible(")
+        .expect("direct-GENET causal-wait guard must exist");
+    let genet_end = event[genet_start..]
+        .find("/// Return whether attached WiFi")
+        .map(|offset| genet_start + offset)
+        .expect("direct-GENET causal-wait guard must have a bounded source region");
+    let genet_guard = &event[genet_start..genet_end];
+    assert!(genet_guard.contains("console_child_control_publication_owed"));
+    assert!(genet_guard.contains("console_child_publication_pending"));
+    assert!(!genet_guard.contains("child_awaiting_batch_drain"));
+}
+
+#[test]
 fn pi_wifi_productive_activation_uses_natural_postpone_strictly_operator_driver() {
     let source = include_str!("../src/userland/mod.rs");
     let supervisor_start = source
@@ -485,18 +537,35 @@ fn pi_wifi_attached_network_retains_only_one_proven_guarded_successor() {
 }
 
 #[test]
-fn root_control_fanin_is_a_nonblocking_hint_at_exact_empty_cuts() {
+fn root_control_fanin_waits_only_for_exact_causal_child_debt() {
     let source = include_str!("../src/userland/mod.rs");
-    let helper_start = source
+    let hint_start = source
         .find("fn poll_pi_root_control_fanin_hint(ctx: &BootContext) -> bool")
         .expect("Pi root-control must retain one fan-in hint consumer");
-    let helper_end = source[helper_start..]
+    let hint_end = source[hint_start..]
+        .find("fn pi_root_control_condition_before_causal_wait<")
+        .map(|offset| hint_start + offset)
+        .expect("nonblocking fan-in hint must have a bounded source region");
+    let hint_helper = &source[hint_start..hint_end];
+    assert_eq!(hint_helper.matches("sel4::poll(").count(), 1);
+    assert!(!hint_helper.contains("sel4::wait("));
+
+    let wait_start = source
+        .find("fn wait_pi_root_control_causal_fanin(ctx: &BootContext) -> bool")
+        .expect("Pi root-control must retain one exact causal fan-in wait");
+    let wait_end = source[wait_start..]
         .find("fn pi_root_control_yield_and_restart<")
-        .map(|offset| helper_start + offset)
-        .expect("fan-in hint helper must have a bounded source region");
-    let helper = &source[helper_start..helper_end];
-    assert_eq!(helper.matches("sel4::poll(").count(), 1);
-    assert!(!helper.contains("sel4::wait("));
+        .map(|offset| wait_start + offset)
+        .expect("causal fan-in wait must have a bounded source region");
+    let wait_helper = &source[wait_start..wait_end];
+    let prewait_poll = wait_helper
+        .find("sel4::poll(notification")
+        .expect("condition-before-block must first consume a pending edge");
+    let blocking_wait = wait_helper
+        .find("sel4::wait(notification")
+        .expect("exact causal debt may block on the shared fan-in");
+    assert!(prewait_poll < blocking_wait);
+    assert_eq!(source.matches("sel4::wait(").count(), 1);
 
     let steady_start = source
         .find("fn enter_root_console_loop<")
@@ -506,6 +575,21 @@ fn root_control_fanin_is_a_nonblocking_hint_at_exact_empty_cuts() {
         .map(|offset| steady_start + offset)
         .expect("steady root-control loop must have a bounded source region");
     let steady = &source[steady_start..steady_end];
+    let causal_identity = steady
+        .find("productive_window.causal_child_wait_identity()")
+        .expect("steady GENET must require a transaction-scoped child identity");
+    let durable_debt = steady[causal_identity..]
+        .find("pump.pi_root_control_productive_child_wait_eligible(*identity)")
+        .map(|offset| causal_identity + offset)
+        .expect("steady GENET must re-read live child debt before blocking");
+    let causal_wait = steady[durable_debt..]
+        .find("wait_pi_root_control_causal_fanin(ctx)")
+        .map(|offset| durable_debt + offset)
+        .expect("steady GENET must block only after the exact debt check");
+    let record_wait = steady[causal_wait..]
+        .find("productive_window.record_causal_child_wait();")
+        .map(|offset| causal_wait + offset)
+        .expect("steady GENET causal waits share the bounded activation cap");
     let eligibility = steady
         .find("productive_window.nonblocking_fanin_hint_eligible()")
         .expect("ordinary no-successor must be the sole fan-in hint cut");
@@ -525,7 +609,16 @@ fn root_control_fanin_is_a_nonblocking_hint_at_exact_empty_cuts() {
         .find("pi_root_control_yield_and_restart(")
         .map(|offset| reenter + offset)
         .expect("a zero hint retains the existing explicit Yield");
-    assert!(eligibility < hint && hint < consume && consume < reenter && reenter < yield_call);
+    assert!(
+        causal_identity < durable_debt
+            && durable_debt < causal_wait
+            && causal_wait < record_wait
+            && record_wait < eligibility
+            && eligibility < hint
+            && hint < consume
+            && consume < reenter
+            && reenter < yield_call
+    );
 
     let supervisor_start = source
         .find("fn enter_root_console_loop_with_deferred_net_supervisor<")
@@ -535,6 +628,27 @@ fn root_control_fanin_is_a_nonblocking_hint_at_exact_empty_cuts() {
         .map(|offset| supervisor_start + offset)
         .expect("deferred Wi-Fi supervisor must have a bounded source region");
     let supervisor = &source[supervisor_start..supervisor_end];
+    let attached_debt = supervisor
+        .find("pump.pi_root_control_cyw43_causal_wait_eligible()")
+        .expect("attached WiFi must require exact driver or response child debt");
+    let attached_wait = supervisor[attached_debt..]
+        .find("wait_pi_root_control_causal_fanin(ctx)")
+        .map(|offset| attached_debt + offset)
+        .expect("attached WiFi exact debt may block inside the activation");
+    let cold_operation = supervisor
+        .rfind("if operation_executed")
+        .expect("cold WiFi wait must follow one executed driver operation");
+    let cold_condition = supervisor[cold_operation..]
+        .find("DriverTaskOneWayCompletionCondition::SignalBoundWaiting")
+        .map(|offset| cold_operation + offset)
+        .expect("cold WiFi must classify stable terminal state before blocking");
+    let cold_causal_wait = supervisor[cold_condition..]
+        .find("wait_pi_root_control_causal_fanin(ctx)")
+        .map(|offset| cold_condition + offset)
+        .expect("cold WiFi exact driver completion may retain the activation");
+    assert!(attached_debt < attached_wait && attached_wait < cold_operation);
+    assert!(cold_operation < cold_condition && cold_condition < cold_causal_wait);
+
     let cold_cut = supervisor
         .rfind("if !network_attached")
         .expect("cold ordinary/no-successor bottom must remain explicit");
@@ -565,7 +679,6 @@ fn root_control_fanin_is_a_nonblocking_hint_at_exact_empty_cuts() {
             && cold_consume < cold_reenter
             && cold_reenter < cold_yield
     );
-    assert!(!source.contains("sel4::wait("));
 }
 
 #[test]
@@ -822,7 +935,7 @@ fn root_control_natural_postpone_keeps_exact_target_budgets_and_fault_routes() {
         (
             pi4,
             5_500,
-            "m26e-pi4-root-same-core-console-yieldto-candidate-v26",
+            "m26e-pi4-root-cross-core-causal-fanin-wait-candidate-v27",
         ),
     ] {
         let root = root_control_section(manifest);
@@ -877,7 +990,7 @@ fn root_control_natural_postpone_keeps_exact_target_budgets_and_fault_routes() {
 }
 
 #[test]
-fn pi_console_network_uses_exact_same_core_yield_to_topology() {
+fn pi_console_network_uses_exact_cross_core_causal_signal_topology() {
     fn task_section<'a>(manifest: &'a str, task_id: &str) -> &'a str {
         let marker = format!("[[temporal_authority.tasks]]\nid = \"{task_id}\"");
         let start = manifest.find(&marker).expect("temporal task record");
@@ -892,15 +1005,15 @@ fn pi_console_network_uses_exact_same_core_yield_to_topology() {
     for (task_id, exact_lines) in [
         (
             "root-control",
-            ["core = 0", "budget_us = 5500", "response_time_us = 5700"],
+            ["core = 0", "budget_us = 5500", "response_time_us = 5100"],
         ),
         (
             "root-fault",
-            ["core = 2", "budget_us = 3000", "response_time_us = 2400"],
+            ["core = 0", "budget_us = 3000", "response_time_us = 2600"],
         ),
         (
             "console-network-service",
-            ["core = 0", "budget_us = 3000", "response_time_us = 5700"],
+            ["core = 2", "budget_us = 3000", "response_time_us = 3000"],
         ),
         (
             "driver-hdmi",
@@ -908,7 +1021,7 @@ fn pi_console_network_uses_exact_same_core_yield_to_topology() {
         ),
         (
             "driver-pcie",
-            ["core = 2", "budget_us = 400", "response_time_us = 2700"],
+            ["core = 2", "budget_us = 400", "response_time_us = 3300"],
         ),
     ] {
         let task = task_section(manifest, task_id);
@@ -932,24 +1045,23 @@ fn pi_console_network_uses_exact_same_core_yield_to_topology() {
         .map(|offset| signal_start + offset)
         .expect("bounded console child signal path");
     let signal = &hal[signal_start..signal_end];
-    let yield_helper_start = hal
-        .find("fn yield_to_child_after_committed_signal(")
-        .expect("guarded same-core YieldTo helper");
-    let yield_helper_end = hal[yield_helper_start..]
-        .find("\n    fn signal_committed_child_work(")
-        .map(|offset| yield_helper_start + offset)
-        .expect("bounded same-core YieldTo helper");
-    let yield_helper = &hal[yield_helper_start..yield_helper_end];
-    let predrain_gate = yield_helper
-        .find("direct_genet_yield_after_predrain_admitted(yield_admitted, predrain_succeeded)")
-        .expect("failed pre-drain fail-closed gate");
-    let kernel_yield = yield_helper
-        .find("sel4::yield_to_sched_context(self.scheduling_context)")
-        .expect("same-core kernel YieldTo call");
-    assert!(predrain_gate < kernel_yield);
-    let predrain = signal
-        .find("sel4::sched_context_consumed(self.scheduling_context)")
-        .expect("same-core child accounting predrain");
+    let admission_start = hal
+        .find("fn committed_signal_yield_admitted(")
+        .expect("cross-core signal admission helper");
+    let admission_end = hal[admission_start..]
+        .find("\n    fn yield_to_child_after_committed_signal(")
+        .map(|offset| admission_start + offset)
+        .expect("bounded cross-core signal admission helper");
+    let admission = &hal[admission_start..admission_end];
+    let cross_core = admission
+        .find("if contract.cross_core_signal_only")
+        .expect("selected Pi contract must enter signal-only admission");
+    let no_yield = admission[cross_core..]
+        .find("return Ok(false);")
+        .map(|offset| cross_core + offset)
+        .expect("cross-core signal must explicitly deny predrain and YieldTo");
+    assert!(cross_core < no_yield);
+
     let release = signal
         .find("fence(Ordering::Release)")
         .expect("publication release fence");
@@ -958,10 +1070,21 @@ fn pi_console_network_uses_exact_same_core_yield_to_topology() {
         .expect("one-hot child signal");
     let yield_call = signal
         .find("self.yield_to_child_after_committed_signal(")
-        .expect("guarded same-core YieldTo call");
-    assert!(predrain < release);
+        .expect("retired YieldTo comparison remains fail-closed behind false admission");
     assert!(release < signal_call);
     assert!(signal_call < yield_call);
+
+    let service = include_str!("../src/console_network_service.rs");
+    let contract_start = service
+        .find("let cross_core_signal_only = select_console_network_cross_core_signal_only(")
+        .expect("generated Pi backend selects cross-core signal-only");
+    let contract_end = service[contract_start..]
+        .find("\n    /// Build the sealed descriptor")
+        .map(|offset| contract_start + offset)
+        .expect("bounded console contract construction");
+    let contract = &service[contract_start..contract_end];
+    assert!(contract.contains("yield_to_child_after_signal: false"));
+    assert!(contract.contains("cross_core_signal_only,"));
 }
 
 #[test]

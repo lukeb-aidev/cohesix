@@ -1690,6 +1690,20 @@ pub trait NetPoller {
         None
     }
 
+    /// Peek whether an isolated child event is durably published but not yet
+    /// consumed by root. `None` means this transport cannot prove the level.
+    fn console_child_publication_pending(&self) -> Option<bool> {
+        None
+    }
+
+    /// Return the exact staged root control whose child-consumption watermark
+    /// is still owed. `None` grants no blocking authority.
+    fn console_child_control_publication_owed(
+        &self,
+    ) -> Option<crate::console_network_service::ConsoleNetworkControlPublication> {
+        None
+    }
+
     /// Poll one isolated response-network unit through the normal driver-task
     /// budget. Other transports retain their ordinary polling contract.
     fn poll_console_response_with_budget(

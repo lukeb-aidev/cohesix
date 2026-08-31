@@ -9532,6 +9532,18 @@ impl NetPoller for GenetNetStack {
             .and_then(NetPoller::bounded_console_response_identity)
     }
 
+    fn console_child_publication_pending(&self) -> Option<bool> {
+        self.inner()
+            .and_then(NetPoller::console_child_publication_pending)
+    }
+
+    fn console_child_control_publication_owed(
+        &self,
+    ) -> Option<crate::console_network_service::ConsoleNetworkControlPublication> {
+        self.inner()
+            .and_then(NetPoller::console_child_control_publication_owed)
+    }
+
     #[cfg(feature = "release-pi4")]
     fn note_console_response_dispatch(&mut self, connection_id: u64, dispatch_ms: u64) {
         if let Some(inner) = self.inner_mut() {
@@ -9900,6 +9912,18 @@ impl NetPoller for Cyw43NetStack {
     fn bounded_console_response_identity(&self) -> Option<ConsoleResponseIdentity> {
         self.inner()
             .and_then(NetPoller::bounded_console_response_identity)
+    }
+
+    fn console_child_publication_pending(&self) -> Option<bool> {
+        self.inner()
+            .and_then(NetPoller::console_child_publication_pending)
+    }
+
+    fn console_child_control_publication_owed(
+        &self,
+    ) -> Option<crate::console_network_service::ConsoleNetworkControlPublication> {
+        self.inner()
+            .and_then(NetPoller::console_child_control_publication_owed)
     }
 
     #[cfg(feature = "release-pi4")]
@@ -11329,6 +11353,28 @@ impl NetPoller for DefaultNetStack {
             Self::Cyw43DriverTask(stack) => stack.bounded_console_response_identity(),
             #[cfg(feature = "net-backend-virtio")]
             Self::Virtio(stack) => stack.bounded_console_response_identity(),
+        }
+    }
+
+    fn console_child_publication_pending(&self) -> Option<bool> {
+        match self {
+            Self::Rtl8139(stack) => stack.console_child_publication_pending(),
+            Self::GenetDriverTask(stack) => stack.console_child_publication_pending(),
+            Self::Cyw43DriverTask(stack) => stack.console_child_publication_pending(),
+            #[cfg(feature = "net-backend-virtio")]
+            Self::Virtio(stack) => stack.console_child_publication_pending(),
+        }
+    }
+
+    fn console_child_control_publication_owed(
+        &self,
+    ) -> Option<crate::console_network_service::ConsoleNetworkControlPublication> {
+        match self {
+            Self::Rtl8139(stack) => stack.console_child_control_publication_owed(),
+            Self::GenetDriverTask(stack) => stack.console_child_control_publication_owed(),
+            Self::Cyw43DriverTask(stack) => stack.console_child_control_publication_owed(),
+            #[cfg(feature = "net-backend-virtio")]
+            Self::Virtio(stack) => stack.console_child_control_publication_owed(),
         }
     }
 

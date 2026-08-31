@@ -7053,6 +7053,133 @@ pub(crate) fn active_driver_task_retained_request(
     active_driver_task_retained_request_for_slot(slot)
 }
 
+/// Durable state at the final condition-before-block cut for one exact retained
+/// one-way CYW43 command.
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum DriverTaskOneWayCompletionCondition {
+    /// No retained command is active. Physical driver state contributes no
+    /// wait authority, but an independently exact console-control publication
+    /// may still do so.
+    Idle,
+    /// Immutable issued command is live, no terminal is visible, and every
+    /// legal next transition publishes to the root-control fan-in.
+    SignalBoundWaiting,
+    /// Immutable issued command is live, but its independent recovery deadline
+    /// advances only while root performs the existing timer poll.
+    RootDeadlinePollRequired,
+    /// A terminal or root-owned continuation is visible and ordinary arbitration must run.
+    Ready,
+    /// Identity, lifecycle, or deadline state cannot authorize a blocking wait.
+    Revoked,
+}
+
+/// Classify whether one exact retained one-way command still owes its
+/// sequence-last child completion.
+///
+/// The isolated runtime guarantees that every such completion signals the
+/// component notification and then the shared root-control fan-in after the
+/// terminal record is committed. Stable terminal state is checked before wait
+/// eligibility, so a coalesced or stale fan-in edge cannot cause a second wait
+/// after the sole signal has already been issued. Prepared, torn,
+/// Reply-bearing, and retired requests fail closed.
+#[cfg(feature = "kernel")]
+pub(crate) fn active_driver_task_one_way_completion_condition(
+    contract: DriverTaskContract,
+) -> DriverTaskOneWayCompletionCondition {
+    if contract != CYW43_WIFI_DRIVER_TASK_CONTRACT {
+        return DriverTaskOneWayCompletionCondition::Revoked;
+    }
+    let (request, command) = match active_driver_task_retained_request(contract) {
+        Some(DriverTaskRetainedRequestState::Issued { request, command }) => (request, command),
+        None if driver_task_slot_for_contract(contract)
+            .is_some_and(|slot| slot.active.load(Ordering::Acquire) == 0) =>
+        {
+            return DriverTaskOneWayCompletionCondition::Idle;
+        }
+        _ => return DriverTaskOneWayCompletionCondition::Revoked,
+    };
+    if request == 0
+        || command.sequence != request
+        || command.flags & DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY == 0
+        || command.flags & DRIVER_RUNTIME_COMMAND_FLAG_PERSISTENT_TRANSACTION != 0
+            && command.flags & DRIVER_RUNTIME_COMMAND_FLAG_STEADY_SERVICE_LEASE != 0
+    {
+        return DriverTaskOneWayCompletionCondition::Revoked;
+    }
+
+    if command.flags & DRIVER_RUNTIME_COMMAND_FLAG_PERSISTENT_TRANSACTION != 0 {
+        return match cyw43_persistent_transaction_parent_condition(request) {
+            Cyw43PersistentTransactionParentCondition::Waiting => {
+                DriverTaskOneWayCompletionCondition::RootDeadlinePollRequired
+            }
+            Cyw43PersistentTransactionParentCondition::TerminalVisible => {
+                DriverTaskOneWayCompletionCondition::Ready
+            }
+            Cyw43PersistentTransactionParentCondition::NotExact
+            | Cyw43PersistentTransactionParentCondition::DeadlineFault => {
+                DriverTaskOneWayCompletionCondition::Revoked
+            }
+        };
+    }
+    if command.flags & DRIVER_RUNTIME_COMMAND_FLAG_STEADY_SERVICE_LEASE != 0 {
+        return match cyw43_steady_service_parent_condition(request) {
+            Cyw43SteadyServiceParentCondition::Waiting => {
+                DriverTaskOneWayCompletionCondition::RootDeadlinePollRequired
+            }
+            Cyw43SteadyServiceParentCondition::TerminalVisible => {
+                DriverTaskOneWayCompletionCondition::Ready
+            }
+            Cyw43SteadyServiceParentCondition::NotExact
+            | Cyw43SteadyServiceParentCondition::DeadlineFault => {
+                DriverTaskOneWayCompletionCondition::Revoked
+            }
+        };
+    }
+    if driver_task_retained_uses_root_grant(contract, command) {
+        return match cyw43_retained_parent_condition(request) {
+            Cyw43RetainedParentCondition::Waiting => {
+                DriverTaskOneWayCompletionCondition::SignalBoundWaiting
+            }
+            Cyw43RetainedParentCondition::ContinuationReady
+            | Cyw43RetainedParentCondition::TerminalVisible => {
+                DriverTaskOneWayCompletionCondition::Ready
+            }
+            Cyw43RetainedParentCondition::NotExact => DriverTaskOneWayCompletionCondition::Revoked,
+        };
+    }
+
+    let slot = &DRIVER_TASK_SLOT_CYW43455;
+    let ring_root_ptr = slot.ring_root_ptr.load(Ordering::Acquire);
+    let command_fingerprint = slot.active_command_fingerprint.load(Ordering::Acquire);
+    if ring_root_ptr == 0
+        || command_fingerprint == 0
+        || slot.active.load(Ordering::Acquire) == 0
+        || slot.request_seq.load(Ordering::Acquire) != request as usize
+        || !driver_task_retained_lease_identity_matches(
+            slot,
+            contract,
+            request as usize,
+            command_fingerprint,
+        )
+        || slot.retained_doorbell_issued.load(Ordering::Acquire) == 0
+        || !driver_task_ring_exact_command_is_stable(slot, ring_root_ptr, command)
+    {
+        return DriverTaskOneWayCompletionCondition::Revoked;
+    }
+    if driver_task_ring_exact_completion_is_stable(slot, ring_root_ptr, request) {
+        return DriverTaskOneWayCompletionCondition::Ready;
+    }
+    if DriverTaskRetainedLeasePhase::from_usize(
+        slot.retained_priority_lease_phase.load(Ordering::Acquire),
+    ) == Some(DriverTaskRetainedLeasePhase::Issued)
+    {
+        DriverTaskOneWayCompletionCondition::SignalBoundWaiting
+    } else {
+        DriverTaskOneWayCompletionCondition::Ready
+    }
+}
+
 /// Revalidate one retained request against its complete caller-owned input.
 ///
 /// A prepared retained command deliberately has sequence zero and does not
@@ -34861,6 +34988,31 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
+    fn persistent_op11_live_parent_requires_root_deadline_poll_not_blocking_wait() {
+        let _counter = DriverTaskTestCounterOverride::new();
+        let _guard = PERSISTENT_OP11_DEADLINE_TEST_LOCK
+            .lock()
+            .expect("persistent op11 deadline test lock");
+        let mut ring_page = Box::new(AlignedDriverTaskRing(
+            [0u32; DRIVER_TASK_RING_PAGE_BYTES / core::mem::size_of::<u32>()],
+        ));
+        let ring_root_ptr = ring_page.0.as_mut_ptr() as usize;
+        let _command = seed_persistent_op11_deadline_parent(ring_root_ptr, 0x4359_7310);
+
+        assert_eq!(
+            active_driver_task_one_way_completion_condition(CYW43_WIFI_DRIVER_TASK_CONTRACT,),
+            DriverTaskOneWayCompletionCondition::RootDeadlinePollRequired,
+            "a root-polled recovery deadline cannot be delegated to a bare notification Wait",
+        );
+        assert!(!cyw43_sdio_pair_restart_required());
+
+        clear_driver_task_transport(CYW43_WIFI_DRIVER_TASK_CONTRACT);
+        clear_driver_task_transport(SDIO_HOST_DRIVER_TASK_CONTRACT);
+        reset_cyw43_sdio_pair_recovery_for_test();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
     fn persistent_op11_deadline_completion_wins_without_resignal_or_grant() {
         let _counter = DriverTaskTestCounterOverride::new();
         let _guard = PERSISTENT_OP11_DEADLINE_TEST_LOCK
@@ -35255,7 +35407,7 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn root_grant_ack_between_poll_and_notify_advances_without_signal() {
+    fn root_grant_ack_between_root_observations_advances_from_durable_state() {
         use core::cell::Cell;
 
         reset_cyw43_sdio_pair_recovery_for_test();
@@ -35347,7 +35499,11 @@ mod tests {
             ),
             DriverTaskRetainedRootGrantNotify::AlreadyConsumed,
         );
-        assert_eq!(signals.get(), 0);
+        assert_eq!(
+            signals.get(),
+            0,
+            "root consumes the producer's durable ACK without duplicating its fan-in signal",
+        );
         assert_eq!(
             DriverTaskRetainedLeasePhase::from_usize(
                 slot.retained_priority_lease_phase.load(Ordering::Acquire),

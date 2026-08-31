@@ -11090,10 +11090,10 @@ Changes:
     exact finite child result remains pending. On the selected MCS kernel that
     forfeits the remaining head refill, so a later durable child notification
     cannot restore root until the roughly 10-ms replenishment boundary;
-    August's non-MCS Yield merely rotated runnable work. The repair retains the
-    event-driven fan-in only as a nonblocking hint immediately before the
-    existing Yield boundary; it is not a longer spin, budget, retry, poller,
-    blocking wait, or fallback owner.
+    August's non-MCS Yield merely rotated runnable work. The e957 follow-up
+    candidate retained the event-driven fan-in only as a nonblocking hint
+    immediately before the existing Yield boundary; it added no longer spin,
+    budget, retry, poller, blocking wait, or fallback owner.
 
     Advance compiler truth from manifest schema 1.15 to 1.16 for this
     manifest-controlled capability change, console-network ABI v5 to v6, and Pi
@@ -11115,13 +11115,14 @@ Changes:
     its semantic publication signal because QEMU never consumes the Pi fan-in.
     On Pi only, the critical runtime signals only after its durable
     fault/service publication. QEMU retains the common sealed alias slots but
-    compiles out this unconsumed syscall. Every wake is a hint and the durable record remains
-    authoritative. At an already-fenced ordinary or
-    no-successor exit, root may poll the fan-in once. A nonzero badge prompts
+    compiles out this unconsumed syscall. In that e957 candidate every wake was
+    a hint and the durable record remained authoritative. At an already-fenced
+    ordinary or no-successor exit, root polled the fan-in once. A nonzero badge
+    prompted
     exactly one return to outer operator/recovery-first arbitration, where all
-    durable state is re-read; zero falls through to the existing bounded Yield.
-    The badge grants no work or continuation authority, and root never blocks
-    on this fan-in. SDIO deadline publication and clear retain their prior
+    durable state was re-read; zero fell through to the existing bounded Yield.
+    The badge granted no work or continuation authority, and root did not block
+    on this fan-in. SDIO deadline publication and clear retained their prior
     commit-only behavior and do not signal root merely because an arm changed.
 
     Preserve every SC budget, period, refill, priority, MCP, WCET, Reply
@@ -11142,41 +11143,69 @@ Changes:
     the candidate. Only a fresh exact-image WiFi plus GENET boot can prove the
     performance targets, and the required multi-lifetime pressure depth remains
     separate acceptance evidence.
-  - Pi same-core GENET response-continuation correction — the exact-e957
-    hardware discriminator proves healthy direct-GENET ingress followed by a
-    deterministic post-ACK MCS response gap. Preserve every budget, period,
-    priority, MCP, refill count, WCET, Reply rule, queue, owner, retry,
-    recovery, containment, quarantine, and QEMU selector. In the Pi manifest
-    only, move console-network from core 2 to root-control core 0 and move
-    root-fault from core 0 to core 2. The unchanged admitted per-core demands
-    remain `8,750/8,250/8,400/8,000 us`; fixed-priority recurrence derives
-    root/console `5,700/5,700 us`, root-fault `2,400 us`, and PCIe/GPU-executor
-    `2,700/7,700 us` response bounds.
+  - Pi cross-core complete causal-round-trip correction — exact clean source
+    `61b9fdddf8f2a79a552e62936abcd82de3017449`, build ID
+    `1f597eadb88f81bee43be6aef7ea939a7f080b545aafea705a6cb06d43a07680`,
+    normalized image ID
+    `d800175df3f1cab4ca00b6063b7fd973d9c06fb50b6379ddefc79bf1fd8e36d5`,
+    and sealed image SHA-256
+    `82651a7a234df4ef9b0359353308133ba0a3896d0d58a5d82c07a77f4e4b5793`
+    decisively reject the V26/V20 same-core `YieldTo` candidate. WiFi reached
+    Gate 8 only at 144.455 seconds and completed raw64 at 3.0077 request/s with
+    319.353-ms p95; GENET completed raw64 at 37.1575 request/s with 31.396-ms
+    p95. WiFi request-to-ACK/ACK-to-response p95 split 226.840/103.094 ms and
+    GENET split 3.007/28.510 ms while physical links, direct rings, ingress, and
+    bounded queues remained healthy. This is failure evidence, not performance
+    or repeatability acceptance. It falsifies co-location and userland
+    `YieldTo` as refill continuity: each useful root/child boundary still
+    forfeited the causal activation before the finite child result became
+    visible.
 
-    Restore direct GENET's exact post-auth committed continuation from the
-    accepted same-core architecture without reopening its broad historical
-    lifecycle. Only a durable authenticated response control publication or
-    causal publication-credit commit may pre-drain the exact child SC, execute
-    a Release fence, Signal its exact one-hot badge, and then invoke one
-    `seL4_SchedContext_YieldTo`. The generated root/child cores and
-    SchedControl cores must both be zero, priorities must be equal, root MCP
-    must dominate, the child must be active and uncontained, and the SC must be
-    present. Packet ingress, close, service ticks, mediated WiFi, and QEMU
-    remain signal-only. Failed admission, pre-drain, Signal/Yield result, or
-    accounting cannot mint retained progress. On return, the existing event
-    path immediately rechecks physical operator, passive admission, fault,
-    recovery, containment, quarantine, reboot, handoff, and identity fences
-    before any root continuation. No polling, retry, longer spin, fallback
-    owner, or additional CPU authority is introduced.
+    Restore the independent Pi topology: root-control on core 0,
+    console-network on core 2, and root-fault on core 0. Root and console remain
+    equal priority/MCP 200/200. Every budget, period, priority, MCP, refill
+    count, WCET, Reply rule, queue, owner, retry, recovery, containment,
+    quarantine, and QEMU selector remains unchanged. The admitted per-core
+    demands remain `8,750/8,250/8,400/8,000 us`; fixed-priority recurrence
+    derives root/console `5,100/3,000 us`, root-fault `2,600 us`, and
+    PCIe/GPU-executor `3,300/8,300 us` response bounds. Select exact Pi
+    provenance
+    `m26e-pi4-root-cross-core-causal-fanin-wait-candidate-v27` and
+    `m26e-pi4-console-cross-core-causal-publication-candidate-v21`.
 
-    The complete host-tool suite, `tools/cohesix-py`, all `.coh` workloads,
-    `scripts/rest_perf_harness.py`, raw/REST workload arithmetic, public
-    framing and grammar, evidence records, and report schemas remain
-    compatible and require no consumer change. Canonical Pi generated truth,
-    focused topology/admission/order tests, and the narrow QEMU root-MCS canary
-    may reject the source correction. Only the next exact-image WiFi and GENET
-    boot can prove the performance gates; repeatability and pressure depth
-    remain separate physical acceptance evidence.
+    Both Pi network modes use post-commit Release plus exact one-hot Signal
+    only; neither pre-drains a child SC nor invokes
+    `seL4_SchedContext_YieldTo`. Complete one causal round trip inside the
+    current bounded activation only when durable state proves either an exact
+    signal-bound finite one-way CYW43 operation whose sequence-last terminal is
+    still absent, or an exact staged console control whose child-consumption
+    watermark is still owed. Persistent and steady CYW43 parents retain
+    root-polled deadlines and never block on the fan-in. The final
+    condition-before-block cut revalidates every identity and
+    operator/recovery/fault fence and proves the complete child frontier has no
+    pending semantic event, packet egress, ingress watermark, or control
+    watermark; it consumes a pending edge with one Poll and calls Wait only
+    after an empty Poll. A stable terminal or publication already visible
+    returns directly to the ordinary rotor. Once the exact control watermark is
+    accepted, remote TCP ACK and `OutputDrained` work also return to ordinary
+    timer/network arbitration rather than retaining Wait. Every wake returns
+    through operator/recovery-first durable arbitration; the badge remains a
+    coalescing hint and grants no work or identity. Bare physical idle,
+    deadline, recovery, containment, quarantine, reboot, and operator-owned
+    cuts never grant wait authority. The existing 64 logical/productive
+    activation limits also bound causal waits; there is no longer spin, larger
+    budget, polling loop, arbitrary retry, fallback owner, new queue, or
+    weakened safety boundary.
+
+    Compatibility review confirms no change to the host-tool suite, `cohsh`,
+    `tools/cohesix-py`, any `.coh` workload, `scripts/rest_perf_harness.py`
+    workload or report schema, public console grammar/framing, console ABI,
+    manifest schema, evidence record, or raw/REST arithmetic. Canonical Pi
+    generated truth, focused topology/condition-before-block/order tests, and
+    the narrow QEMU root-MCS canary may reject the source correction. Only the
+    next exact-image WiFi and GENET boot can prove the performance gates;
+    repeatability and pressure depth remain separate physical acceptance
+    evidence.
   - platform consistency — select the same v6 shared contract, including the
     v4-introduced bounded command batch, complete 256-Worker population, two
     passive-Worker executor-lane architecture, and passive-service locality

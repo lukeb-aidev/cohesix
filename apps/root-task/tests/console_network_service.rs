@@ -12,7 +12,7 @@ use console_network_abi::{
 use root_task::console_network_service::{
     BoundaryError, ConsoleNetworkBoundary, ConsoleNetworkContainmentCursor,
     ConsoleNetworkContainmentProof, ConsoleNetworkContainmentTurn, ConsoleNetworkContainmentUnit,
-    ConsoleNetworkObjectPlan, ServiceState, READY_IDENTITY,
+    ConsoleNetworkControlPublication, ConsoleNetworkObjectPlan, ServiceState, READY_IDENTITY,
 };
 
 fn event_page(
@@ -117,6 +117,104 @@ fn generated_contract_is_single_listener_active_mcs_authority() {
     );
     boundary.accept_event(&ready).expect("READY");
     assert_eq!(boundary.state(), ServiceState::Listening);
+}
+
+#[test]
+fn child_publication_frontier_covers_event_egress_and_both_watermarks() {
+    let mut boundary = ConsoleNetworkBoundary::new(27).expect("generated contract");
+    let generation = boundary.generation();
+    let mut egress = [0; SHARED_PAGE_BYTES];
+    PacketPage::empty(PacketDirection::Egress, generation)
+        .encode(&mut egress)
+        .expect("empty egress page");
+    let idle = completion_page(generation, 0, 0);
+    assert!(!boundary
+        .child_publication_pending(&idle, &egress)
+        .expect("empty frontier"));
+
+    let ready = event_page(
+        generation,
+        1,
+        ExchangeKind::Ready,
+        0,
+        0,
+        READY_IDENTITY.as_bytes(),
+    );
+    assert!(boundary
+        .child_publication_pending(&ready, &egress)
+        .expect("Ready level"));
+    boundary.accept_event(&ready).expect("consume Ready");
+    assert!(!boundary
+        .child_publication_pending(&idle, &egress)
+        .expect("accepted Ready frontier"));
+
+    PacketPage::publish_into(
+        &mut egress,
+        PacketDirection::Egress,
+        generation,
+        1,
+        &[1, 2, 3, 4],
+    )
+    .expect("egress publication");
+    assert!(boundary
+        .child_publication_pending(&idle, &egress)
+        .expect("egress level"));
+    boundary.accept_egress(&egress).expect("consume egress");
+    assert!(!boundary
+        .child_publication_pending(&idle, &egress)
+        .expect("accepted egress frontier"));
+
+    let mut ingress = [0; SHARED_PAGE_BYTES];
+    let packet_sequence = boundary
+        .stage_ingress(&[5, 6], &mut ingress)
+        .expect("root packet publication");
+    let packet_complete = completion_page(generation, packet_sequence, 0);
+    assert!(boundary
+        .child_publication_pending(&packet_complete, &egress)
+        .expect("ingress watermark level"));
+    boundary
+        .accept_completion_watermarks(&packet_complete)
+        .expect("consume ingress watermark");
+    assert!(!boundary
+        .child_publication_pending(&packet_complete, &egress)
+        .expect("accepted ingress watermark frontier"));
+
+    for (sequence, kind) in [
+        (2, ExchangeKind::Connected),
+        (3, ExchangeKind::Authenticated),
+    ] {
+        boundary
+            .accept_event(&event_page(generation, sequence, kind, 42, 0, &[]))
+            .expect("authenticated lifecycle");
+    }
+    let mut control = [0; SHARED_PAGE_BYTES];
+    let control_sequence = boundary
+        .stage_authorized_line("END", 10, &mut control)
+        .expect("root control publication");
+    assert_eq!(
+        boundary.control_publication_owed(),
+        Some(ConsoleNetworkControlPublication {
+            generation,
+            connection_id: 42,
+            sequence: control_sequence,
+        }),
+        "the exact one-slot control remains causal only until its child watermark",
+    );
+    let control_complete = completion_page(generation, packet_sequence, control_sequence);
+    assert!(boundary
+        .child_publication_pending(&control_complete, &egress)
+        .expect("control watermark level"));
+    boundary
+        .accept_completion_watermarks(&control_complete)
+        .expect("consume control watermark");
+    assert_eq!(
+        boundary.control_publication_owed(),
+        None,
+        "an accepted child watermark revokes wait authority before peer drain",
+    );
+    assert!(!boundary
+        .child_publication_pending(&control_complete, &egress)
+        .expect("accepted complete frontier"));
 }
 
 #[test]
