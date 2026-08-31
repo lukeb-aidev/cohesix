@@ -34,52 +34,52 @@ endif()
 
 # Set path to fallback-tool for dependency-resolution.
 if(NOT DEFINED CMAKE_OBJDUMP)
-  set(CMAKE_OBJDUMP "/private/tmp/cohesix-pi4-build-e66143d8/out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/bin/aarch64-none-elf-objdump")
+  set(CMAKE_OBJDUMP "/Users/lukasbower/GitHub/cohesix/out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/bin/aarch64-none-elf-objdump")
 endif()
 
 if(NOT CMAKE_INSTALL_LOCAL_ONLY)
   # Include the install script for the subdirectory.
-  include("/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/apps/sel4test-driver/sel4_projects_libs/libsel4vm/cmake_install.cmake")
+  include("/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/apps/sel4test-driver/sel4_projects_libs/libsel4vm/cmake_install.cmake")
 endif()
 
 if(NOT CMAKE_INSTALL_LOCAL_ONLY)
   # Include the install script for the subdirectory.
-  include("/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/apps/sel4test-driver/sel4_projects_libs/libsel4vchan/cmake_install.cmake")
+  include("/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/apps/sel4test-driver/sel4_projects_libs/libsel4vchan/cmake_install.cmake")
 endif()
 
 if(NOT CMAKE_INSTALL_LOCAL_ONLY)
   # Include the install script for the subdirectory.
-  include("/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/apps/sel4test-driver/sel4_projects_libs/libsel4dma/cmake_install.cmake")
+  include("/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/apps/sel4test-driver/sel4_projects_libs/libsel4dma/cmake_install.cmake")
 endif()
 
 if(NOT CMAKE_INSTALL_LOCAL_ONLY)
   # Include the install script for the subdirectory.
-  include("/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/apps/sel4test-driver/sel4_projects_libs/libsel4bga/cmake_install.cmake")
+  include("/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/apps/sel4test-driver/sel4_projects_libs/libsel4bga/cmake_install.cmake")
 endif()
 
 if(NOT CMAKE_INSTALL_LOCAL_ONLY)
   # Include the install script for the subdirectory.
-  include("/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/apps/sel4test-driver/sel4_projects_libs/libsel4keyboard/cmake_install.cmake")
+  include("/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/apps/sel4test-driver/sel4_projects_libs/libsel4keyboard/cmake_install.cmake")
 endif()
 
 if(NOT CMAKE_INSTALL_LOCAL_ONLY)
   # Include the install script for the subdirectory.
-  include("/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/apps/sel4test-driver/sel4_projects_libs/libsel4vmmplatsupport/cmake_install.cmake")
+  include("/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/apps/sel4test-driver/sel4_projects_libs/libsel4vmmplatsupport/cmake_install.cmake")
 endif()
 
 if(NOT CMAKE_INSTALL_LOCAL_ONLY)
   # Include the install script for the subdirectory.
-  include("/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/apps/sel4test-driver/sel4_projects_libs/libsel4nanopb/cmake_install.cmake")
+  include("/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/apps/sel4test-driver/sel4_projects_libs/libsel4nanopb/cmake_install.cmake")
 endif()
 
 if(NOT CMAKE_INSTALL_LOCAL_ONLY)
   # Include the install script for the subdirectory.
-  include("/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/apps/sel4test-driver/sel4_projects_libs/libsel4rpc/cmake_install.cmake")
+  include("/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/apps/sel4test-driver/sel4_projects_libs/libsel4rpc/cmake_install.cmake")
 endif()
 
 string(REPLACE ";" "\n" CMAKE_INSTALL_MANIFEST_CONTENT
        "${CMAKE_INSTALL_MANIFEST_FILES}")
 if(CMAKE_INSTALL_LOCAL_ONLY)
-  file(WRITE "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/apps/sel4test-driver/sel4_projects_libs/install_local_manifest.txt"
+  file(WRITE "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/apps/sel4test-driver/sel4_projects_libs/install_local_manifest.txt"
      "${CMAKE_INSTALL_MANIFEST_CONTENT}")
 endif()

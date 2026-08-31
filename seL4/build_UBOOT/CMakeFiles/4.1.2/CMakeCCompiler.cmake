@@ -1,4 +1,4 @@
-set(CMAKE_C_COMPILER "/private/tmp/cohesix-pi4-build-e66143d8/out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/bin/aarch64-none-elf-gcc")
+set(CMAKE_C_COMPILER "/Users/lukasbower/GitHub/cohesix/out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/bin/aarch64-none-elf-gcc")
 set(CMAKE_C_COMPILER_ARG1 "")
 set(CMAKE_C_COMPILER_ID "GNU")
 set(CMAKE_C_COMPILER_VERSION "15.2.1")
@@ -23,11 +23,11 @@ set(CMAKE_C_COMPILER_ARCHITECTURE_ID "aarch64")
 
 
 
-set(CMAKE_AR "/private/tmp/cohesix-pi4-build-e66143d8/out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/bin/aarch64-none-elf-ar")
-set(CMAKE_C_COMPILER_AR "/private/tmp/cohesix-pi4-build-e66143d8/out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/bin/aarch64-none-elf-gcc-ar")
-set(CMAKE_RANLIB "/private/tmp/cohesix-pi4-build-e66143d8/out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/bin/aarch64-none-elf-ranlib")
-set(CMAKE_C_COMPILER_RANLIB "/private/tmp/cohesix-pi4-build-e66143d8/out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/bin/aarch64-none-elf-gcc-ranlib")
-set(CMAKE_LINKER "/private/tmp/cohesix-pi4-build-e66143d8/out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/bin/aarch64-none-elf-ld")
+set(CMAKE_AR "/Users/lukasbower/GitHub/cohesix/out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/bin/aarch64-none-elf-ar")
+set(CMAKE_C_COMPILER_AR "/Users/lukasbower/GitHub/cohesix/out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/bin/aarch64-none-elf-gcc-ar")
+set(CMAKE_RANLIB "/Users/lukasbower/GitHub/cohesix/out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/bin/aarch64-none-elf-ranlib")
+set(CMAKE_C_COMPILER_RANLIB "/Users/lukasbower/GitHub/cohesix/out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/bin/aarch64-none-elf-gcc-ranlib")
+set(CMAKE_LINKER "/Users/lukasbower/GitHub/cohesix/out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/bin/aarch64-none-elf-ld")
 set(CMAKE_LINKER_LINK "")
 set(CMAKE_LINKER_LLD "")
 set(CMAKE_C_COMPILER_LINKER "NOTFOUND")
@@ -78,7 +78,7 @@ endif()
 
 
 
-set(CMAKE_C_IMPLICIT_INCLUDE_DIRECTORIES "/private/tmp/cohesix-pi4-build-e66143d8/out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/lib/gcc/aarch64-none-elf/15.2.1/include;/private/tmp/cohesix-pi4-build-e66143d8/out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/lib/gcc/aarch64-none-elf/15.2.1/include-fixed;/private/tmp/cohesix-pi4-build-e66143d8/out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/aarch64-none-elf/include")
+set(CMAKE_C_IMPLICIT_INCLUDE_DIRECTORIES "/Users/lukasbower/GitHub/cohesix/out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/lib/gcc/aarch64-none-elf/15.2.1/include;/Users/lukasbower/GitHub/cohesix/out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/lib/gcc/aarch64-none-elf/15.2.1/include-fixed;/Users/lukasbower/GitHub/cohesix/out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/aarch64-none-elf/include")
 set(CMAKE_C_IMPLICIT_LINK_LIBRARIES "")
 set(CMAKE_C_IMPLICIT_LINK_DIRECTORIES "")
 set(CMAKE_C_IMPLICIT_LINK_FRAMEWORK_DIRECTORIES "")

@@ -1,8 +1,8 @@
-# 0 "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/kernel_all_copy.c"
-# 1 "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate//"
+# 0 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/kernel_all_copy.c"
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh//"
 # 0 "<built-in>"
 # 0 "<command-line>"
-# 1 "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/kernel_all_copy.c"
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/kernel_all_copy.c"
 # 1 "/Users/lukasbower/seL4_16/kernel/src/api/faults.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
@@ -30,11 +30,11 @@
 
 /* Compile-time configuration parameters. Might be set by the build system. */
 
-# 1 "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/autoconf/autoconf.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/autoconf/autoconf.h" 1
 
        
 
-# 1 "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/gen_config/kernel/gen_config.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/gen_config/kernel/gen_config.h" 1
        
 
 /* disabled: CONFIG_ARCH_AARCH32 */
@@ -144,7 +144,7 @@
 
 
 /* disabled: CONFIG_ARM_HAS_TLB_LOCK */
-# 119 "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/gen_config/kernel/gen_config.h"
+# 119 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/gen_config/kernel/gen_config.h"
 /* disabled: CONFIG_EXCEPTION_FASTPATH */
 
 
@@ -195,7 +195,7 @@
 /* disabled: CONFIG_EXPORT_PTMR_USER */
 /* disabled: CONFIG_EXPORT_VTMR_USER */
 /* disabled: CONFIG_VTIMER_UPDATE_VOFFSET */
-# 5 "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/autoconf/autoconf.h" 2
+# 5 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/autoconf/autoconf.h" 2
 # 12 "/Users/lukasbower/seL4_16/kernel/libsel4/include/sel4/config.h" 2
 # 10 "/Users/lukasbower/seL4_16/kernel/include/config.h" 2
 
@@ -684,7 +684,7 @@ typedef dom_t seL4_Domain;
 
 
 
-# 1 "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/sel4/shared_types_gen.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/sel4/shared_types_gen.h" 1
 /* generated from /Users/lukasbower/seL4_16/kernel/libsel4/mode_include/64/sel4/shared_types.bf */
 
        
@@ -779,10 +779,10 @@ seL4_MessageInfo_new(uint64_t label, uint64_t capsUnwrapped, uint64_t extraCaps,
     seL4_MessageInfo_t seL4_MessageInfo;
 
     /* fail if user has passed bits that we will override */
-    do { if (!((label & ~0xfffffffffffffull) == ((0 && (label & (1ull << 63))) ? 0x0 : 0))) { _assert_fail("(label & ~0xfffffffffffffull) == ((0 && (label & (1ull << 63))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/sel4/shared_types_gen.h", 95, __func__); } } while(0);
-    do { if (!((capsUnwrapped & ~0x7ull) == ((0 && (capsUnwrapped & (1ull << 63))) ? 0x0 : 0))) { _assert_fail("(capsUnwrapped & ~0x7ull) == ((0 && (capsUnwrapped & (1ull << 63))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/sel4/shared_types_gen.h", 96, __func__); } } while(0);
-    do { if (!((extraCaps & ~0x3ull) == ((0 && (extraCaps & (1ull << 63))) ? 0x0 : 0))) { _assert_fail("(extraCaps & ~0x3ull) == ((0 && (extraCaps & (1ull << 63))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/sel4/shared_types_gen.h", 97, __func__); } } while(0);
-    do { if (!((length & ~0x7full) == ((0 && (length & (1ull << 63))) ? 0x0 : 0))) { _assert_fail("(length & ~0x7full) == ((0 && (length & (1ull << 63))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/sel4/shared_types_gen.h", 98, __func__); } } while(0);
+    do { if (!((label & ~0xfffffffffffffull) == ((0 && (label & (1ull << 63))) ? 0x0 : 0))) { _assert_fail("(label & ~0xfffffffffffffull) == ((0 && (label & (1ull << 63))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/sel4/shared_types_gen.h", 95, __func__); } } while(0);
+    do { if (!((capsUnwrapped & ~0x7ull) == ((0 && (capsUnwrapped & (1ull << 63))) ? 0x0 : 0))) { _assert_fail("(capsUnwrapped & ~0x7ull) == ((0 && (capsUnwrapped & (1ull << 63))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/sel4/shared_types_gen.h", 96, __func__); } } while(0);
+    do { if (!((extraCaps & ~0x3ull) == ((0 && (extraCaps & (1ull << 63))) ? 0x0 : 0))) { _assert_fail("(extraCaps & ~0x3ull) == ((0 && (extraCaps & (1ull << 63))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/sel4/shared_types_gen.h", 97, __func__); } } while(0);
+    do { if (!((length & ~0x7full) == ((0 && (length & (1ull << 63))) ? 0x0 : 0))) { _assert_fail("(length & ~0x7full) == ((0 && (length & (1ull << 63))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/sel4/shared_types_gen.h", 98, __func__); } } while(0);
 
     seL4_MessageInfo.words[0] = 0
         | (label & 0xfffffffffffffull) << 12
@@ -818,7 +818,7 @@ seL4_MessageInfo_get_capsUnwrapped(seL4_MessageInfo_t seL4_MessageInfo) {
 static inline seL4_MessageInfo_t __attribute__((__const__))
 seL4_MessageInfo_set_capsUnwrapped(seL4_MessageInfo_t seL4_MessageInfo, uint64_t v64) {
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0xe00ull >> 9 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (63)))) ? 0x0 : 0))) { _assert_fail("(((~0xe00ull >> 9 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (63)))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/sel4/shared_types_gen.h", 134, __func__); } } while(0);
+    do { if (!((((~0xe00ull >> 9 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (63)))) ? 0x0 : 0))) { _assert_fail("(((~0xe00ull >> 9 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (63)))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/sel4/shared_types_gen.h", 134, __func__); } } while(0);
     seL4_MessageInfo.words[0] &= ~0xe00ull;
     seL4_MessageInfo.words[0] |= (v64 << 9) & 0xe00ull;
     return seL4_MessageInfo;
@@ -838,7 +838,7 @@ seL4_MessageInfo_get_extraCaps(seL4_MessageInfo_t seL4_MessageInfo) {
 static inline seL4_MessageInfo_t __attribute__((__const__))
 seL4_MessageInfo_set_extraCaps(seL4_MessageInfo_t seL4_MessageInfo, uint64_t v64) {
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0x180ull >> 7 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (63)))) ? 0x0 : 0))) { _assert_fail("(((~0x180ull >> 7 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (63)))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/sel4/shared_types_gen.h", 154, __func__); } } while(0);
+    do { if (!((((~0x180ull >> 7 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (63)))) ? 0x0 : 0))) { _assert_fail("(((~0x180ull >> 7 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (63)))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/sel4/shared_types_gen.h", 154, __func__); } } while(0);
     seL4_MessageInfo.words[0] &= ~0x180ull;
     seL4_MessageInfo.words[0] |= (v64 << 7) & 0x180ull;
     return seL4_MessageInfo;
@@ -858,7 +858,7 @@ seL4_MessageInfo_get_length(seL4_MessageInfo_t seL4_MessageInfo) {
 static inline seL4_MessageInfo_t __attribute__((__const__))
 seL4_MessageInfo_set_length(seL4_MessageInfo_t seL4_MessageInfo, uint64_t v64) {
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0x7full >> 0 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (63)))) ? 0x0 : 0))) { _assert_fail("(((~0x7full >> 0 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (63)))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/sel4/shared_types_gen.h", 174, __func__); } } while(0);
+    do { if (!((((~0x7full >> 0 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (63)))) ? 0x0 : 0))) { _assert_fail("(((~0x7full >> 0 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (63)))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/sel4/shared_types_gen.h", 174, __func__); } } while(0);
     seL4_MessageInfo.words[0] &= ~0x7full;
     seL4_MessageInfo.words[0] |= (v64 << 0) & 0x7full;
     return seL4_MessageInfo;
@@ -1315,7 +1315,7 @@ static inline word_t __attribute__((__const__)) wordFromMessageInfo(seL4_Message
 
 
 
-# 1 "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h" 1
 /* generated from /Users/lukasbower/seL4_16/kernel/include/arch/arm/arch/object/structures.bf */
 
        
@@ -1334,8 +1334,8 @@ call_stack_new(uint64_t callStackPtr, uint64_t isHead) {
     call_stack_t call_stack;
 
     /* fail if user has passed bits that we will override */
-    do { if (!((isHead & ~0x1ull) == ((1 && (isHead & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(isHead & ~0x1ull) == ((1 && (isHead & (1ull << 47))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 19, __func__); } } while(0);
-    do { if (!((callStackPtr & ~0xffffffffffffull) == ((1 && (callStackPtr & (1ull << 47))) ? 0xffff000000000000 : 0))) { _assert_fail("(callStackPtr & ~0xffffffffffffull) == ((1 && (callStackPtr & (1ull << 47))) ? 0xffff000000000000 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 20, __func__); } } while(0);
+    do { if (!((isHead & ~0x1ull) == ((1 && (isHead & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(isHead & ~0x1ull) == ((1 && (isHead & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 19, __func__); } } while(0);
+    do { if (!((callStackPtr & ~0xffffffffffffull) == ((1 && (callStackPtr & (1ull << 47))) ? 0xffff000000000000 : 0))) { _assert_fail("(callStackPtr & ~0xffffffffffffull) == ((1 && (callStackPtr & (1ull << 47))) ? 0xffff000000000000 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 20, __func__); } } while(0);
 
     call_stack.words[0] = 0
         | (isHead & 0x1ull) << 48
@@ -1385,7 +1385,7 @@ endpoint_ptr_get_epQueue_head(endpoint_t *endpoint_ptr) {
 static inline void
 endpoint_ptr_set_epQueue_head(endpoint_t *endpoint_ptr, uint64_t v64) {
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0xffffffffffffffffull >> 0) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0xffffffffffffffffull >> 0) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 70, __func__); } } while(0);
+    do { if (!((((~0xffffffffffffffffull >> 0) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0xffffffffffffffffull >> 0) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 70, __func__); } } while(0);
     endpoint_ptr->words[1] &= ~0xffffffffffffffffull;
     endpoint_ptr->words[1] |= (v64 << 0) & 0xffffffffffffffff;
 }
@@ -1404,7 +1404,7 @@ endpoint_ptr_get_epQueue_tail(endpoint_t *endpoint_ptr) {
 static inline void
 endpoint_ptr_set_epQueue_tail(endpoint_t *endpoint_ptr, uint64_t v64) {
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0xfffffffffffcull << 0) | 0xffff000000000000) & v64) == ((1 && (v64 & (1ull << (47)))) ? 0xffff000000000000 : 0))) { _assert_fail("(((~0xfffffffffffcull << 0) | 0xffff000000000000) & v64) == ((1 && (v64 & (1ull << (47)))) ? 0xffff000000000000 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 89, __func__); } } while(0);
+    do { if (!((((~0xfffffffffffcull << 0) | 0xffff000000000000) & v64) == ((1 && (v64 & (1ull << (47)))) ? 0xffff000000000000 : 0))) { _assert_fail("(((~0xfffffffffffcull << 0) | 0xffff000000000000) & v64) == ((1 && (v64 & (1ull << (47)))) ? 0xffff000000000000 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 89, __func__); } } while(0);
     endpoint_ptr->words[0] &= ~0xfffffffffffcull;
     endpoint_ptr->words[0] |= (v64 >> 0) & 0xfffffffffffc;
 }
@@ -1423,7 +1423,7 @@ endpoint_ptr_get_state(endpoint_t *endpoint_ptr) {
 static inline void
 endpoint_ptr_set_state(endpoint_t *endpoint_ptr, uint64_t v64) {
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0x3ull >> 0) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0x3ull >> 0) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 108, __func__); } } while(0);
+    do { if (!((((~0x3ull >> 0) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0x3ull >> 0) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 108, __func__); } } while(0);
     endpoint_ptr->words[0] &= ~0x3ull;
     endpoint_ptr->words[0] |= (v64 << 0) & 0x3;
 }
@@ -1438,9 +1438,9 @@ mdb_node_new(uint64_t mdbNext, uint64_t mdbRevocable, uint64_t mdbFirstBadged, u
     mdb_node_t mdb_node;
 
     /* fail if user has passed bits that we will override */
-    do { if (!((mdbNext & ~0xfffffffffffcull) == ((1 && (mdbNext & (1ull << 47))) ? 0xffff000000000000 : 0))) { _assert_fail("(mdbNext & ~0xfffffffffffcull) == ((1 && (mdbNext & (1ull << 47))) ? 0xffff000000000000 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 123, __func__); } } while(0);
-    do { if (!((mdbRevocable & ~0x1ull) == ((1 && (mdbRevocable & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(mdbRevocable & ~0x1ull) == ((1 && (mdbRevocable & (1ull << 47))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 124, __func__); } } while(0);
-    do { if (!((mdbFirstBadged & ~0x1ull) == ((1 && (mdbFirstBadged & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(mdbFirstBadged & ~0x1ull) == ((1 && (mdbFirstBadged & (1ull << 47))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 125, __func__); } } while(0);
+    do { if (!((mdbNext & ~0xfffffffffffcull) == ((1 && (mdbNext & (1ull << 47))) ? 0xffff000000000000 : 0))) { _assert_fail("(mdbNext & ~0xfffffffffffcull) == ((1 && (mdbNext & (1ull << 47))) ? 0xffff000000000000 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 123, __func__); } } while(0);
+    do { if (!((mdbRevocable & ~0x1ull) == ((1 && (mdbRevocable & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(mdbRevocable & ~0x1ull) == ((1 && (mdbRevocable & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 124, __func__); } } while(0);
+    do { if (!((mdbFirstBadged & ~0x1ull) == ((1 && (mdbFirstBadged & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(mdbFirstBadged & ~0x1ull) == ((1 && (mdbFirstBadged & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 125, __func__); } } while(0);
 
     mdb_node.words[0] = 0
         | mdbPrev << 0;;
@@ -1466,7 +1466,7 @@ mdb_node_get_mdbNext(mdb_node_t mdb_node) {
 static inline void
 mdb_node_ptr_set_mdbNext(mdb_node_t *mdb_node_ptr, uint64_t v64) {
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0xfffffffffffcull << 0) | 0xffff000000000000) & v64) == ((1 && (v64 & (1ull << (47)))) ? 0xffff000000000000 : 0))) { _assert_fail("(((~0xfffffffffffcull << 0) | 0xffff000000000000) & v64) == ((1 && (v64 & (1ull << (47)))) ? 0xffff000000000000 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 151, __func__); } } while(0);
+    do { if (!((((~0xfffffffffffcull << 0) | 0xffff000000000000) & v64) == ((1 && (v64 & (1ull << (47)))) ? 0xffff000000000000 : 0))) { _assert_fail("(((~0xfffffffffffcull << 0) | 0xffff000000000000) & v64) == ((1 && (v64 & (1ull << (47)))) ? 0xffff000000000000 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 151, __func__); } } while(0);
     mdb_node_ptr->words[1] &= ~0xfffffffffffcull;
     mdb_node_ptr->words[1] |= (v64 >> 0) & 0xfffffffffffc;
 }
@@ -1485,7 +1485,7 @@ mdb_node_get_mdbRevocable(mdb_node_t mdb_node) {
 static inline mdb_node_t __attribute__((__const__))
 mdb_node_set_mdbRevocable(mdb_node_t mdb_node, uint64_t v64) {
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0x2ull >> 1 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0x2ull >> 1 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 170, __func__); } } while(0);
+    do { if (!((((~0x2ull >> 1 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0x2ull >> 1 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 170, __func__); } } while(0);
     mdb_node.words[1] &= ~0x2ull;
     mdb_node.words[1] |= (v64 << 1) & 0x2ull;
     return mdb_node;
@@ -1494,7 +1494,7 @@ mdb_node_set_mdbRevocable(mdb_node_t mdb_node, uint64_t v64) {
 static inline void
 mdb_node_ptr_set_mdbRevocable(mdb_node_t *mdb_node_ptr, uint64_t v64) {
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0x2ull >> 1) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0x2ull >> 1) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 179, __func__); } } while(0);
+    do { if (!((((~0x2ull >> 1) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0x2ull >> 1) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 179, __func__); } } while(0);
     mdb_node_ptr->words[1] &= ~0x2ull;
     mdb_node_ptr->words[1] |= (v64 << 1) & 0x2;
 }
@@ -1513,7 +1513,7 @@ mdb_node_get_mdbFirstBadged(mdb_node_t mdb_node) {
 static inline mdb_node_t __attribute__((__const__))
 mdb_node_set_mdbFirstBadged(mdb_node_t mdb_node, uint64_t v64) {
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0x1ull >> 0 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0x1ull >> 0 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 198, __func__); } } while(0);
+    do { if (!((((~0x1ull >> 0 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0x1ull >> 0 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 198, __func__); } } while(0);
     mdb_node.words[1] &= ~0x1ull;
     mdb_node.words[1] |= (v64 << 0) & 0x1ull;
     return mdb_node;
@@ -1522,7 +1522,7 @@ mdb_node_set_mdbFirstBadged(mdb_node_t mdb_node, uint64_t v64) {
 static inline void
 mdb_node_ptr_set_mdbFirstBadged(mdb_node_t *mdb_node_ptr, uint64_t v64) {
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0x1ull >> 0) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0x1ull >> 0) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 207, __func__); } } while(0);
+    do { if (!((((~0x1ull >> 0) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0x1ull >> 0) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 207, __func__); } } while(0);
     mdb_node_ptr->words[1] &= ~0x1ull;
     mdb_node_ptr->words[1] |= (v64 << 0) & 0x1;
 }
@@ -1541,7 +1541,7 @@ mdb_node_get_mdbPrev(mdb_node_t mdb_node) {
 static inline mdb_node_t __attribute__((__const__))
 mdb_node_set_mdbPrev(mdb_node_t mdb_node, uint64_t v64) {
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0xffffffffffffffffull >> 0 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0xffffffffffffffffull >> 0 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 226, __func__); } } while(0);
+    do { if (!((((~0xffffffffffffffffull >> 0 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0xffffffffffffffffull >> 0 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 226, __func__); } } while(0);
     mdb_node.words[0] &= ~0xffffffffffffffffull;
     mdb_node.words[0] |= (v64 << 0) & 0xffffffffffffffffull;
     return mdb_node;
@@ -1550,7 +1550,7 @@ mdb_node_set_mdbPrev(mdb_node_t mdb_node, uint64_t v64) {
 static inline void
 mdb_node_ptr_set_mdbPrev(mdb_node_t *mdb_node_ptr, uint64_t v64) {
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0xffffffffffffffffull >> 0) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0xffffffffffffffffull >> 0) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 235, __func__); } } while(0);
+    do { if (!((((~0xffffffffffffffffull >> 0) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0xffffffffffffffffull >> 0) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 235, __func__); } } while(0);
     mdb_node_ptr->words[0] &= ~0xffffffffffffffffull;
     mdb_node_ptr->words[0] |= (v64 << 0) & 0xffffffffffffffff;
 }
@@ -1574,7 +1574,7 @@ notification_ptr_get_ntfnSchedContext(notification_t *notification_ptr) {
 static inline void
 notification_ptr_set_ntfnSchedContext(notification_t *notification_ptr, uint64_t v64) {
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0xffffffffffffull << 0) | 0xffff000000000000) & v64) == ((1 && (v64 & (1ull << (47)))) ? 0xffff000000000000 : 0))) { _assert_fail("(((~0xffffffffffffull << 0) | 0xffff000000000000) & v64) == ((1 && (v64 & (1ull << (47)))) ? 0xffff000000000000 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 259, __func__); } } while(0);
+    do { if (!((((~0xffffffffffffull << 0) | 0xffff000000000000) & v64) == ((1 && (v64 & (1ull << (47)))) ? 0xffff000000000000 : 0))) { _assert_fail("(((~0xffffffffffffull << 0) | 0xffff000000000000) & v64) == ((1 && (v64 & (1ull << (47)))) ? 0xffff000000000000 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 259, __func__); } } while(0);
     notification_ptr->words[4] &= ~0xffffffffffffull;
     notification_ptr->words[4] |= (v64 >> 0) & 0xffffffffffff;
 }
@@ -1593,7 +1593,7 @@ notification_ptr_get_ntfnBoundTCB(notification_t *notification_ptr) {
 static inline void
 notification_ptr_set_ntfnBoundTCB(notification_t *notification_ptr, uint64_t v64) {
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0xffffffffffffull << 0) | 0xffff000000000000) & v64) == ((1 && (v64 & (1ull << (47)))) ? 0xffff000000000000 : 0))) { _assert_fail("(((~0xffffffffffffull << 0) | 0xffff000000000000) & v64) == ((1 && (v64 & (1ull << (47)))) ? 0xffff000000000000 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 278, __func__); } } while(0);
+    do { if (!((((~0xffffffffffffull << 0) | 0xffff000000000000) & v64) == ((1 && (v64 & (1ull << (47)))) ? 0xffff000000000000 : 0))) { _assert_fail("(((~0xffffffffffffull << 0) | 0xffff000000000000) & v64) == ((1 && (v64 & (1ull << (47)))) ? 0xffff000000000000 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 278, __func__); } } while(0);
     notification_ptr->words[3] &= ~0xffffffffffffull;
     notification_ptr->words[3] |= (v64 >> 0) & 0xffffffffffff;
 }
@@ -1612,7 +1612,7 @@ notification_ptr_get_ntfnMsgIdentifier(notification_t *notification_ptr) {
 static inline void
 notification_ptr_set_ntfnMsgIdentifier(notification_t *notification_ptr, uint64_t v64) {
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0xffffffffffffffffull >> 0) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0xffffffffffffffffull >> 0) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 297, __func__); } } while(0);
+    do { if (!((((~0xffffffffffffffffull >> 0) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0xffffffffffffffffull >> 0) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 297, __func__); } } while(0);
     notification_ptr->words[2] &= ~0xffffffffffffffffull;
     notification_ptr->words[2] |= (v64 << 0) & 0xffffffffffffffff;
 }
@@ -1631,7 +1631,7 @@ notification_ptr_get_ntfnQueue_head(notification_t *notification_ptr) {
 static inline void
 notification_ptr_set_ntfnQueue_head(notification_t *notification_ptr, uint64_t v64) {
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0xffffffffffffull << 0) | 0xffff000000000000) & v64) == ((1 && (v64 & (1ull << (47)))) ? 0xffff000000000000 : 0))) { _assert_fail("(((~0xffffffffffffull << 0) | 0xffff000000000000) & v64) == ((1 && (v64 & (1ull << (47)))) ? 0xffff000000000000 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 316, __func__); } } while(0);
+    do { if (!((((~0xffffffffffffull << 0) | 0xffff000000000000) & v64) == ((1 && (v64 & (1ull << (47)))) ? 0xffff000000000000 : 0))) { _assert_fail("(((~0xffffffffffffull << 0) | 0xffff000000000000) & v64) == ((1 && (v64 & (1ull << (47)))) ? 0xffff000000000000 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 316, __func__); } } while(0);
     notification_ptr->words[1] &= ~0xffffffffffffull;
     notification_ptr->words[1] |= (v64 >> 0) & 0xffffffffffff;
 }
@@ -1650,7 +1650,7 @@ notification_ptr_get_ntfnQueue_tail(notification_t *notification_ptr) {
 static inline void
 notification_ptr_set_ntfnQueue_tail(notification_t *notification_ptr, uint64_t v64) {
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0xffffffffffff0000ull >> 16) | 0xffff000000000000) & v64) == ((1 && (v64 & (1ull << (47)))) ? 0xffff000000000000 : 0))) { _assert_fail("(((~0xffffffffffff0000ull >> 16) | 0xffff000000000000) & v64) == ((1 && (v64 & (1ull << (47)))) ? 0xffff000000000000 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 335, __func__); } } while(0);
+    do { if (!((((~0xffffffffffff0000ull >> 16) | 0xffff000000000000) & v64) == ((1 && (v64 & (1ull << (47)))) ? 0xffff000000000000 : 0))) { _assert_fail("(((~0xffffffffffff0000ull >> 16) | 0xffff000000000000) & v64) == ((1 && (v64 & (1ull << (47)))) ? 0xffff000000000000 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 335, __func__); } } while(0);
     notification_ptr->words[0] &= ~0xffffffffffff0000ull;
     notification_ptr->words[0] |= (v64 << 16) & 0xffffffffffff0000;
 }
@@ -1669,7 +1669,7 @@ notification_ptr_get_state(notification_t *notification_ptr) {
 static inline void
 notification_ptr_set_state(notification_t *notification_ptr, uint64_t v64) {
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0x3ull >> 0) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0x3ull >> 0) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 354, __func__); } } while(0);
+    do { if (!((((~0x3ull >> 0) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0x3ull >> 0) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 354, __func__); } } while(0);
     notification_ptr->words[0] &= ~0x3ull;
     notification_ptr->words[0] |= (v64 << 0) & 0x3;
 }
@@ -1693,7 +1693,7 @@ thread_state_ptr_get_blockingIPCBadge(thread_state_t *thread_state_ptr) {
 static inline void
 thread_state_ptr_set_blockingIPCBadge(thread_state_t *thread_state_ptr, uint64_t v64) {
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0xffffffffffffffffull >> 0) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0xffffffffffffffffull >> 0) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 378, __func__); } } while(0);
+    do { if (!((((~0xffffffffffffffffull >> 0) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0xffffffffffffffffull >> 0) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 378, __func__); } } while(0);
     thread_state_ptr->words[2] &= ~0xffffffffffffffffull;
     thread_state_ptr->words[2] |= (v64 << 0) & 0xffffffffffffffff;
 }
@@ -1723,7 +1723,7 @@ thread_state_ptr_get_replyObject(thread_state_t *thread_state_ptr) {
 static inline void
 thread_state_ptr_set_replyObject(thread_state_t *thread_state_ptr, uint64_t v64) {
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0x1ffffffffffe0ull >> 1) | 0xffff000000000000) & v64) == ((1 && (v64 & (1ull << (47)))) ? 0xffff000000000000 : 0))) { _assert_fail("(((~0x1ffffffffffe0ull >> 1) | 0xffff000000000000) & v64) == ((1 && (v64 & (1ull << (47)))) ? 0xffff000000000000 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 408, __func__); } } while(0);
+    do { if (!((((~0x1ffffffffffe0ull >> 1) | 0xffff000000000000) & v64) == ((1 && (v64 & (1ull << (47)))) ? 0xffff000000000000 : 0))) { _assert_fail("(((~0x1ffffffffffe0ull >> 1) | 0xffff000000000000) & v64) == ((1 && (v64 & (1ull << (47)))) ? 0xffff000000000000 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 408, __func__); } } while(0);
     thread_state_ptr->words[1] &= ~0x1ffffffffffe0ull;
     thread_state_ptr->words[1] |= (v64 << 1) & 0x1ffffffffffe0;
 }
@@ -1742,7 +1742,7 @@ thread_state_ptr_get_blockingIPCCanGrant(thread_state_t *thread_state_ptr) {
 static inline void
 thread_state_ptr_set_blockingIPCCanGrant(thread_state_t *thread_state_ptr, uint64_t v64) {
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0x10ull >> 4) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0x10ull >> 4) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 427, __func__); } } while(0);
+    do { if (!((((~0x10ull >> 4) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0x10ull >> 4) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 427, __func__); } } while(0);
     thread_state_ptr->words[1] &= ~0x10ull;
     thread_state_ptr->words[1] |= (v64 << 4) & 0x10;
 }
@@ -1761,7 +1761,7 @@ thread_state_ptr_get_blockingIPCCanGrantReply(thread_state_t *thread_state_ptr) 
 static inline void
 thread_state_ptr_set_blockingIPCCanGrantReply(thread_state_t *thread_state_ptr, uint64_t v64) {
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0x8ull >> 3) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0x8ull >> 3) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 446, __func__); } } while(0);
+    do { if (!((((~0x8ull >> 3) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0x8ull >> 3) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 446, __func__); } } while(0);
     thread_state_ptr->words[1] &= ~0x8ull;
     thread_state_ptr->words[1] |= (v64 << 3) & 0x8;
 }
@@ -1780,7 +1780,7 @@ thread_state_ptr_get_blockingIPCIsCall(thread_state_t *thread_state_ptr) {
 static inline void
 thread_state_ptr_set_blockingIPCIsCall(thread_state_t *thread_state_ptr, uint64_t v64) {
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0x4ull >> 2) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0x4ull >> 2) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 465, __func__); } } while(0);
+    do { if (!((((~0x4ull >> 2) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0x4ull >> 2) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 465, __func__); } } while(0);
     thread_state_ptr->words[1] &= ~0x4ull;
     thread_state_ptr->words[1] |= (v64 << 2) & 0x4;
 }
@@ -1810,7 +1810,7 @@ thread_state_ptr_get_tcbQueued(thread_state_t *thread_state_ptr) {
 static inline void
 thread_state_ptr_set_tcbQueued(thread_state_t *thread_state_ptr, uint64_t v64) {
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0x2ull >> 1) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0x2ull >> 1) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 495, __func__); } } while(0);
+    do { if (!((((~0x2ull >> 1) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0x2ull >> 1) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 495, __func__); } } while(0);
     thread_state_ptr->words[1] &= ~0x2ull;
     thread_state_ptr->words[1] |= (v64 << 1) & 0x2;
 }
@@ -1840,7 +1840,7 @@ thread_state_ptr_get_tcbInReleaseQueue(thread_state_t *thread_state_ptr) {
 static inline void
 thread_state_ptr_set_tcbInReleaseQueue(thread_state_t *thread_state_ptr, uint64_t v64) {
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0x1ull >> 0) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0x1ull >> 0) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 525, __func__); } } while(0);
+    do { if (!((((~0x1ull >> 0) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0x1ull >> 0) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 525, __func__); } } while(0);
     thread_state_ptr->words[1] &= ~0x1ull;
     thread_state_ptr->words[1] |= (v64 << 0) & 0x1;
 }
@@ -1870,7 +1870,7 @@ thread_state_ptr_get_blockingObject(thread_state_t *thread_state_ptr) {
 static inline void
 thread_state_ptr_set_blockingObject(thread_state_t *thread_state_ptr, uint64_t v64) {
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0xfffffffffff0ull << 0) | 0xffff000000000000) & v64) == ((1 && (v64 & (1ull << (47)))) ? 0xffff000000000000 : 0))) { _assert_fail("(((~0xfffffffffff0ull << 0) | 0xffff000000000000) & v64) == ((1 && (v64 & (1ull << (47)))) ? 0xffff000000000000 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 555, __func__); } } while(0);
+    do { if (!((((~0xfffffffffff0ull << 0) | 0xffff000000000000) & v64) == ((1 && (v64 & (1ull << (47)))) ? 0xffff000000000000 : 0))) { _assert_fail("(((~0xfffffffffff0ull << 0) | 0xffff000000000000) & v64) == ((1 && (v64 & (1ull << (47)))) ? 0xffff000000000000 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 555, __func__); } } while(0);
     thread_state_ptr->words[0] &= ~0xfffffffffff0ull;
     thread_state_ptr->words[0] |= (v64 >> 0) & 0xfffffffffff0;
 }
@@ -1900,7 +1900,7 @@ thread_state_ptr_get_tsType(thread_state_t *thread_state_ptr) {
 static inline void
 thread_state_ptr_set_tsType(thread_state_t *thread_state_ptr, uint64_t v64) {
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0xfull >> 0) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0xfull >> 0) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 585, __func__); } } while(0);
+    do { if (!((((~0xfull >> 0) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0xfull >> 0) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 585, __func__); } } while(0);
     thread_state_ptr->words[0] &= ~0xfull;
     thread_state_ptr->words[0] |= (v64 << 0) & 0xf;
 }
@@ -1915,8 +1915,8 @@ ttbr_new(uint64_t asid, uint64_t base_address) {
     ttbr_t ttbr;
 
     /* fail if user has passed bits that we will override */
-    do { if (!((asid & ~0xffffull) == ((0 && (asid & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(asid & ~0xffffull) == ((0 && (asid & (1ull << 47))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 600, __func__); } } while(0);
-    do { if (!((base_address & ~0xffffffffffffull) == ((0 && (base_address & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(base_address & ~0xffffffffffffull) == ((0 && (base_address & (1ull << 47))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 601, __func__); } } while(0);
+    do { if (!((asid & ~0xffffull) == ((0 && (asid & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(asid & ~0xffffull) == ((0 && (asid & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 600, __func__); } } while(0);
+    do { if (!((base_address & ~0xffffffffffffull) == ((0 && (base_address & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(base_address & ~0xffffffffffffull) == ((0 && (base_address & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 601, __func__); } } while(0);
 
     ttbr.words[0] = 0
         | (asid & 0xffffull) << 48
@@ -1935,9 +1935,9 @@ vm_attributes_new(uint64_t armExecuteNever, uint64_t armParityEnabled, uint64_t 
     vm_attributes_t vm_attributes;
 
     /* fail if user has passed bits that we will override */
-    do { if (!((armExecuteNever & ~0x1ull) == ((1 && (armExecuteNever & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(armExecuteNever & ~0x1ull) == ((1 && (armExecuteNever & (1ull << 47))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 620, __func__); } } while(0);
-    do { if (!((armParityEnabled & ~0x1ull) == ((1 && (armParityEnabled & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(armParityEnabled & ~0x1ull) == ((1 && (armParityEnabled & (1ull << 47))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 621, __func__); } } while(0);
-    do { if (!((armPageCacheable & ~0x1ull) == ((1 && (armPageCacheable & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(armPageCacheable & ~0x1ull) == ((1 && (armPageCacheable & (1ull << 47))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 622, __func__); } } while(0);
+    do { if (!((armExecuteNever & ~0x1ull) == ((1 && (armExecuteNever & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(armExecuteNever & ~0x1ull) == ((1 && (armExecuteNever & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 620, __func__); } } while(0);
+    do { if (!((armParityEnabled & ~0x1ull) == ((1 && (armParityEnabled & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(armParityEnabled & ~0x1ull) == ((1 && (armParityEnabled & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 621, __func__); } } while(0);
+    do { if (!((armPageCacheable & ~0x1ull) == ((1 && (armPageCacheable & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(armPageCacheable & ~0x1ull) == ((1 && (armPageCacheable & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 622, __func__); } } while(0);
 
     vm_attributes.words[0] = 0
         | (armExecuteNever & 0x1ull) << 2
@@ -1990,7 +1990,7 @@ asid_map_asid_map_none_new(void) {
     asid_map_t asid_map;
 
     /* fail if user has passed bits that we will override */
-    do { if (!(((uint64_t)asid_map_asid_map_none & ~0x1ull) == ((1 && ((uint64_t)asid_map_asid_map_none & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("((uint64_t)asid_map_asid_map_none & ~0x1ull) == ((1 && ((uint64_t)asid_map_asid_map_none & (1ull << 47))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 675, __func__); } } while(0);
+    do { if (!(((uint64_t)asid_map_asid_map_none & ~0x1ull) == ((1 && ((uint64_t)asid_map_asid_map_none & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("((uint64_t)asid_map_asid_map_none & ~0x1ull) == ((1 && ((uint64_t)asid_map_asid_map_none & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 675, __func__); } } while(0);
 
     asid_map.words[0] = 0
         | ((uint64_t)asid_map_asid_map_none & 0x1ull) << 0;
@@ -2003,8 +2003,8 @@ asid_map_asid_map_vspace_new(uint64_t vspace_root) {
     asid_map_t asid_map;
 
     /* fail if user has passed bits that we will override */
-    do { if (!((vspace_root & ~0xfffffffff000ull) == ((1 && (vspace_root & (1ull << 47))) ? 0xffff000000000000 : 0))) { _assert_fail("(vspace_root & ~0xfffffffff000ull) == ((1 && (vspace_root & (1ull << 47))) ? 0xffff000000000000 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 688, __func__); } } while(0);
-    do { if (!(((uint64_t)asid_map_asid_map_vspace & ~0x1ull) == ((1 && ((uint64_t)asid_map_asid_map_vspace & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("((uint64_t)asid_map_asid_map_vspace & ~0x1ull) == ((1 && ((uint64_t)asid_map_asid_map_vspace & (1ull << 47))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 689, __func__); } } while(0);
+    do { if (!((vspace_root & ~0xfffffffff000ull) == ((1 && (vspace_root & (1ull << 47))) ? 0xffff000000000000 : 0))) { _assert_fail("(vspace_root & ~0xfffffffff000ull) == ((1 && (vspace_root & (1ull << 47))) ? 0xffff000000000000 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 688, __func__); } } while(0);
+    do { if (!(((uint64_t)asid_map_asid_map_vspace & ~0x1ull) == ((1 && ((uint64_t)asid_map_asid_map_vspace & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("((uint64_t)asid_map_asid_map_vspace & ~0x1ull) == ((1 && ((uint64_t)asid_map_asid_map_vspace & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 689, __func__); } } while(0);
 
     asid_map.words[0] = 0
         | (vspace_root & 0xfffffffff000ull) >> 0
@@ -2017,7 +2017,7 @@ static inline uint64_t __attribute__((__const__))
 asid_map_asid_map_vspace_get_vspace_root(asid_map_t asid_map) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((asid_map.words[0] >> 0) & 0x1) == asid_map_asid_map_vspace)) { _assert_fail("((asid_map.words[0] >> 0) & 0x1) == asid_map_asid_map_vspace", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 702, __func__); } } while(0);
+    do { if (!(((asid_map.words[0] >> 0) & 0x1) == asid_map_asid_map_vspace)) { _assert_fail("((asid_map.words[0] >> 0) & 0x1) == asid_map_asid_map_vspace", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 702, __func__); } } while(0);
 
     ret = (asid_map.words[0] & 0xfffffffff000ull) << 0;
     /* Possibly sign extend */
@@ -2069,7 +2069,7 @@ cap_null_cap_new(void) {
     cap_t cap;
 
     /* fail if user has passed bits that we will override */
-    do { if (!(((uint64_t)cap_null_cap & ~0x1full) == ((1 && ((uint64_t)cap_null_cap & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("((uint64_t)cap_null_cap & ~0x1full) == ((1 && ((uint64_t)cap_null_cap & (1ull << 47))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 754, __func__); } } while(0);
+    do { if (!(((uint64_t)cap_null_cap & ~0x1full) == ((1 && ((uint64_t)cap_null_cap & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("((uint64_t)cap_null_cap & ~0x1full) == ((1 && ((uint64_t)cap_null_cap & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 754, __func__); } } while(0);
 
     cap.words[0] = 0
         | ((uint64_t)cap_null_cap & 0x1full) << 59;
@@ -2083,11 +2083,11 @@ cap_untyped_cap_new(uint64_t capFreeIndex, uint64_t capIsDevice, uint64_t capBlo
     cap_t cap;
 
     /* fail if user has passed bits that we will override */
-    do { if (!((capFreeIndex & ~0xffffffffffffull) == ((1 && (capFreeIndex & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(capFreeIndex & ~0xffffffffffffull) == ((1 && (capFreeIndex & (1ull << 47))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 768, __func__); } } while(0);
-    do { if (!((capIsDevice & ~0x1ull) == ((1 && (capIsDevice & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(capIsDevice & ~0x1ull) == ((1 && (capIsDevice & (1ull << 47))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 769, __func__); } } while(0);
-    do { if (!((capBlockSize & ~0x3full) == ((1 && (capBlockSize & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(capBlockSize & ~0x3full) == ((1 && (capBlockSize & (1ull << 47))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 770, __func__); } } while(0);
-    do { if (!(((uint64_t)cap_untyped_cap & ~0x1full) == ((1 && ((uint64_t)cap_untyped_cap & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("((uint64_t)cap_untyped_cap & ~0x1full) == ((1 && ((uint64_t)cap_untyped_cap & (1ull << 47))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 771, __func__); } } while(0);
-    do { if (!((capPtr & ~0xffffffffffffull) == ((1 && (capPtr & (1ull << 47))) ? 0xffff000000000000 : 0))) { _assert_fail("(capPtr & ~0xffffffffffffull) == ((1 && (capPtr & (1ull << 47))) ? 0xffff000000000000 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 772, __func__); } } while(0);
+    do { if (!((capFreeIndex & ~0xffffffffffffull) == ((1 && (capFreeIndex & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(capFreeIndex & ~0xffffffffffffull) == ((1 && (capFreeIndex & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 768, __func__); } } while(0);
+    do { if (!((capIsDevice & ~0x1ull) == ((1 && (capIsDevice & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(capIsDevice & ~0x1ull) == ((1 && (capIsDevice & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 769, __func__); } } while(0);
+    do { if (!((capBlockSize & ~0x3full) == ((1 && (capBlockSize & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(capBlockSize & ~0x3full) == ((1 && (capBlockSize & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 770, __func__); } } while(0);
+    do { if (!(((uint64_t)cap_untyped_cap & ~0x1full) == ((1 && ((uint64_t)cap_untyped_cap & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("((uint64_t)cap_untyped_cap & ~0x1full) == ((1 && ((uint64_t)cap_untyped_cap & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 771, __func__); } } while(0);
+    do { if (!((capPtr & ~0xffffffffffffull) == ((1 && (capPtr & (1ull << 47))) ? 0xffff000000000000 : 0))) { _assert_fail("(capPtr & ~0xffffffffffffull) == ((1 && (capPtr & (1ull << 47))) ? 0xffff000000000000 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 772, __func__); } } while(0);
 
     cap.words[0] = 0
         | ((uint64_t)cap_untyped_cap & 0x1full) << 59
@@ -2104,7 +2104,7 @@ static inline uint64_t __attribute__((__const__))
 cap_untyped_cap_get_capFreeIndex(cap_t cap) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_untyped_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_untyped_cap", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 789, __func__); } } while(0);
+    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_untyped_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_untyped_cap", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 789, __func__); } } while(0);
 
     ret = (cap.words[1] & 0xffffffffffff0000ull) >> 16;
     /* Possibly sign extend */
@@ -2117,9 +2117,9 @@ cap_untyped_cap_get_capFreeIndex(cap_t cap) {
 static inline cap_t __attribute__((__const__))
 cap_untyped_cap_set_capFreeIndex(cap_t cap, uint64_t v64) {
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_untyped_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_untyped_cap", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 802, __func__); } } while(0);
+    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_untyped_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_untyped_cap", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 802, __func__); } } while(0);
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0xffffffffffff0000ull >> 16 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0xffffffffffff0000ull >> 16 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 804, __func__); } } while(0);
+    do { if (!((((~0xffffffffffff0000ull >> 16 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0xffffffffffff0000ull >> 16 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 804, __func__); } } while(0);
 
     cap.words[1] &= ~0xffffffffffff0000ull;
     cap.words[1] |= (v64 << 16) & 0xffffffffffff0000ull;
@@ -2129,10 +2129,10 @@ cap_untyped_cap_set_capFreeIndex(cap_t cap, uint64_t v64) {
 static inline void
 cap_untyped_cap_ptr_set_capFreeIndex(cap_t *cap_ptr, uint64_t v64) {
     /* fail if union does not have the expected tag */
-    do { if (!(((cap_ptr->words[0] >> 59) & 0x1f) == cap_untyped_cap)) { _assert_fail("((cap_ptr->words[0] >> 59) & 0x1f) == cap_untyped_cap", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 814, __func__); } } while(0);
+    do { if (!(((cap_ptr->words[0] >> 59) & 0x1f) == cap_untyped_cap)) { _assert_fail("((cap_ptr->words[0] >> 59) & 0x1f) == cap_untyped_cap", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 814, __func__); } } while(0);
 
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0xffffffffffff0000ull >> 16) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0xffffffffffff0000ull >> 16) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 817, __func__); } } while(0);
+    do { if (!((((~0xffffffffffff0000ull >> 16) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0xffffffffffff0000ull >> 16) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 817, __func__); } } while(0);
 
     cap_ptr->words[1] &= ~0xffffffffffff0000ull;
     cap_ptr->words[1] |= (v64 << 16) & 0xffffffffffff0000ull;
@@ -2142,7 +2142,7 @@ static inline uint64_t __attribute__((__const__))
 cap_untyped_cap_get_capIsDevice(cap_t cap) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_untyped_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_untyped_cap", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 827, __func__); } } while(0);
+    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_untyped_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_untyped_cap", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 827, __func__); } } while(0);
 
     ret = (cap.words[1] & 0x40ull) >> 6;
     /* Possibly sign extend */
@@ -2156,7 +2156,7 @@ static inline uint64_t __attribute__((__const__))
 cap_untyped_cap_get_capBlockSize(cap_t cap) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_untyped_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_untyped_cap", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 841, __func__); } } while(0);
+    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_untyped_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_untyped_cap", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 841, __func__); } } while(0);
 
     ret = (cap.words[1] & 0x3full) >> 0;
     /* Possibly sign extend */
@@ -2170,7 +2170,7 @@ static inline uint64_t __attribute__((__const__))
 cap_untyped_cap_get_capPtr(cap_t cap) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_untyped_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_untyped_cap", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 855, __func__); } } while(0);
+    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_untyped_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_untyped_cap", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 855, __func__); } } while(0);
 
     ret = (cap.words[0] & 0xffffffffffffull) << 0;
     /* Possibly sign extend */
@@ -2185,12 +2185,12 @@ cap_endpoint_cap_new(uint64_t capEPBadge, uint64_t capCanGrantReply, uint64_t ca
     cap_t cap;
 
     /* fail if user has passed bits that we will override */
-    do { if (!((capCanGrantReply & ~0x1ull) == ((1 && (capCanGrantReply & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(capCanGrantReply & ~0x1ull) == ((1 && (capCanGrantReply & (1ull << 47))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 870, __func__); } } while(0);
-    do { if (!((capCanGrant & ~0x1ull) == ((1 && (capCanGrant & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(capCanGrant & ~0x1ull) == ((1 && (capCanGrant & (1ull << 47))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 871, __func__); } } while(0);
-    do { if (!((capCanSend & ~0x1ull) == ((1 && (capCanSend & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(capCanSend & ~0x1ull) == ((1 && (capCanSend & (1ull << 47))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 872, __func__); } } while(0);
-    do { if (!((capCanReceive & ~0x1ull) == ((1 && (capCanReceive & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(capCanReceive & ~0x1ull) == ((1 && (capCanReceive & (1ull << 47))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 873, __func__); } } while(0);
-    do { if (!((capEPPtr & ~0xffffffffffffull) == ((1 && (capEPPtr & (1ull << 47))) ? 0xffff000000000000 : 0))) { _assert_fail("(capEPPtr & ~0xffffffffffffull) == ((1 && (capEPPtr & (1ull << 47))) ? 0xffff000000000000 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 874, __func__); } } while(0);
-    do { if (!(((uint64_t)cap_endpoint_cap & ~0x1full) == ((1 && ((uint64_t)cap_endpoint_cap & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("((uint64_t)cap_endpoint_cap & ~0x1full) == ((1 && ((uint64_t)cap_endpoint_cap & (1ull << 47))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 875, __func__); } } while(0);
+    do { if (!((capCanGrantReply & ~0x1ull) == ((1 && (capCanGrantReply & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(capCanGrantReply & ~0x1ull) == ((1 && (capCanGrantReply & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 870, __func__); } } while(0);
+    do { if (!((capCanGrant & ~0x1ull) == ((1 && (capCanGrant & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(capCanGrant & ~0x1ull) == ((1 && (capCanGrant & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 871, __func__); } } while(0);
+    do { if (!((capCanSend & ~0x1ull) == ((1 && (capCanSend & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(capCanSend & ~0x1ull) == ((1 && (capCanSend & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 872, __func__); } } while(0);
+    do { if (!((capCanReceive & ~0x1ull) == ((1 && (capCanReceive & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(capCanReceive & ~0x1ull) == ((1 && (capCanReceive & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 873, __func__); } } while(0);
+    do { if (!((capEPPtr & ~0xffffffffffffull) == ((1 && (capEPPtr & (1ull << 47))) ? 0xffff000000000000 : 0))) { _assert_fail("(capEPPtr & ~0xffffffffffffull) == ((1 && (capEPPtr & (1ull << 47))) ? 0xffff000000000000 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 874, __func__); } } while(0);
+    do { if (!(((uint64_t)cap_endpoint_cap & ~0x1full) == ((1 && ((uint64_t)cap_endpoint_cap & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("((uint64_t)cap_endpoint_cap & ~0x1full) == ((1 && ((uint64_t)cap_endpoint_cap & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 875, __func__); } } while(0);
 
     cap.words[0] = 0
         | (capCanGrantReply & 0x1ull) << 58
@@ -2209,7 +2209,7 @@ static inline uint64_t __attribute__((__const__))
 cap_endpoint_cap_get_capEPBadge(cap_t cap) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_endpoint_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_endpoint_cap", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 894, __func__); } } while(0);
+    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_endpoint_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_endpoint_cap", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 894, __func__); } } while(0);
 
     ret = (cap.words[1] & 0xffffffffffffffffull) >> 0;
     /* Possibly sign extend */
@@ -2222,9 +2222,9 @@ cap_endpoint_cap_get_capEPBadge(cap_t cap) {
 static inline cap_t __attribute__((__const__))
 cap_endpoint_cap_set_capEPBadge(cap_t cap, uint64_t v64) {
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_endpoint_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_endpoint_cap", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 907, __func__); } } while(0);
+    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_endpoint_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_endpoint_cap", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 907, __func__); } } while(0);
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0xffffffffffffffffull >> 0 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0xffffffffffffffffull >> 0 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 909, __func__); } } while(0);
+    do { if (!((((~0xffffffffffffffffull >> 0 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0xffffffffffffffffull >> 0 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 909, __func__); } } while(0);
 
     cap.words[1] &= ~0xffffffffffffffffull;
     cap.words[1] |= (v64 << 0) & 0xffffffffffffffffull;
@@ -2235,7 +2235,7 @@ static inline uint64_t __attribute__((__const__))
 cap_endpoint_cap_get_capCanGrantReply(cap_t cap) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_endpoint_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_endpoint_cap", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 920, __func__); } } while(0);
+    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_endpoint_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_endpoint_cap", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 920, __func__); } } while(0);
 
     ret = (cap.words[0] & 0x400000000000000ull) >> 58;
     /* Possibly sign extend */
@@ -2248,9 +2248,9 @@ cap_endpoint_cap_get_capCanGrantReply(cap_t cap) {
 static inline cap_t __attribute__((__const__))
 cap_endpoint_cap_set_capCanGrantReply(cap_t cap, uint64_t v64) {
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_endpoint_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_endpoint_cap", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 933, __func__); } } while(0);
+    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_endpoint_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_endpoint_cap", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 933, __func__); } } while(0);
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0x400000000000000ull >> 58 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0x400000000000000ull >> 58 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 935, __func__); } } while(0);
+    do { if (!((((~0x400000000000000ull >> 58 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0x400000000000000ull >> 58 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 935, __func__); } } while(0);
 
     cap.words[0] &= ~0x400000000000000ull;
     cap.words[0] |= (v64 << 58) & 0x400000000000000ull;
@@ -2261,7 +2261,7 @@ static inline uint64_t __attribute__((__const__))
 cap_endpoint_cap_get_capCanGrant(cap_t cap) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_endpoint_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_endpoint_cap", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 946, __func__); } } while(0);
+    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_endpoint_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_endpoint_cap", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 946, __func__); } } while(0);
 
     ret = (cap.words[0] & 0x200000000000000ull) >> 57;
     /* Possibly sign extend */
@@ -2274,9 +2274,9 @@ cap_endpoint_cap_get_capCanGrant(cap_t cap) {
 static inline cap_t __attribute__((__const__))
 cap_endpoint_cap_set_capCanGrant(cap_t cap, uint64_t v64) {
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_endpoint_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_endpoint_cap", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 959, __func__); } } while(0);
+    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_endpoint_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_endpoint_cap", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 959, __func__); } } while(0);
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0x200000000000000ull >> 57 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0x200000000000000ull >> 57 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 961, __func__); } } while(0);
+    do { if (!((((~0x200000000000000ull >> 57 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0x200000000000000ull >> 57 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 961, __func__); } } while(0);
 
     cap.words[0] &= ~0x200000000000000ull;
     cap.words[0] |= (v64 << 57) & 0x200000000000000ull;
@@ -2287,7 +2287,7 @@ static inline uint64_t __attribute__((__const__))
 cap_endpoint_cap_get_capCanReceive(cap_t cap) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_endpoint_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_endpoint_cap", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 972, __func__); } } while(0);
+    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_endpoint_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_endpoint_cap", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 972, __func__); } } while(0);
 
     ret = (cap.words[0] & 0x100000000000000ull) >> 56;
     /* Possibly sign extend */
@@ -2300,9 +2300,9 @@ cap_endpoint_cap_get_capCanReceive(cap_t cap) {
 static inline cap_t __attribute__((__const__))
 cap_endpoint_cap_set_capCanReceive(cap_t cap, uint64_t v64) {
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_endpoint_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_endpoint_cap", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 985, __func__); } } while(0);
+    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_endpoint_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_endpoint_cap", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 985, __func__); } } while(0);
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0x100000000000000ull >> 56 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0x100000000000000ull >> 56 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 987, __func__); } } while(0);
+    do { if (!((((~0x100000000000000ull >> 56 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0x100000000000000ull >> 56 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 987, __func__); } } while(0);
 
     cap.words[0] &= ~0x100000000000000ull;
     cap.words[0] |= (v64 << 56) & 0x100000000000000ull;
@@ -2313,7 +2313,7 @@ static inline uint64_t __attribute__((__const__))
 cap_endpoint_cap_get_capCanSend(cap_t cap) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_endpoint_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_endpoint_cap", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 998, __func__); } } while(0);
+    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_endpoint_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_endpoint_cap", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 998, __func__); } } while(0);
 
     ret = (cap.words[0] & 0x80000000000000ull) >> 55;
     /* Possibly sign extend */
@@ -2326,9 +2326,9 @@ cap_endpoint_cap_get_capCanSend(cap_t cap) {
 static inline cap_t __attribute__((__const__))
 cap_endpoint_cap_set_capCanSend(cap_t cap, uint64_t v64) {
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_endpoint_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_endpoint_cap", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1011, __func__); } } while(0);
+    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_endpoint_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_endpoint_cap", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1011, __func__); } } while(0);
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0x80000000000000ull >> 55 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0x80000000000000ull >> 55 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1013, __func__); } } while(0);
+    do { if (!((((~0x80000000000000ull >> 55 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0x80000000000000ull >> 55 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1013, __func__); } } while(0);
 
     cap.words[0] &= ~0x80000000000000ull;
     cap.words[0] |= (v64 << 55) & 0x80000000000000ull;
@@ -2339,7 +2339,7 @@ static inline uint64_t __attribute__((__const__))
 cap_endpoint_cap_get_capEPPtr(cap_t cap) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_endpoint_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_endpoint_cap", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1024, __func__); } } while(0);
+    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_endpoint_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_endpoint_cap", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1024, __func__); } } while(0);
 
     ret = (cap.words[0] & 0xffffffffffffull) << 0;
     /* Possibly sign extend */
@@ -2354,10 +2354,10 @@ cap_notification_cap_new(uint64_t capNtfnBadge, uint64_t capNtfnCanReceive, uint
     cap_t cap;
 
     /* fail if user has passed bits that we will override */
-    do { if (!(((uint64_t)cap_notification_cap & ~0x1full) == ((1 && ((uint64_t)cap_notification_cap & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("((uint64_t)cap_notification_cap & ~0x1full) == ((1 && ((uint64_t)cap_notification_cap & (1ull << 47))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1039, __func__); } } while(0);
-    do { if (!((capNtfnCanReceive & ~0x1ull) == ((1 && (capNtfnCanReceive & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(capNtfnCanReceive & ~0x1ull) == ((1 && (capNtfnCanReceive & (1ull << 47))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1040, __func__); } } while(0);
-    do { if (!((capNtfnCanSend & ~0x1ull) == ((1 && (capNtfnCanSend & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(capNtfnCanSend & ~0x1ull) == ((1 && (capNtfnCanSend & (1ull << 47))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1041, __func__); } } while(0);
-    do { if (!((capNtfnPtr & ~0xffffffffffffull) == ((1 && (capNtfnPtr & (1ull << 47))) ? 0xffff000000000000 : 0))) { _assert_fail("(capNtfnPtr & ~0xffffffffffffull) == ((1 && (capNtfnPtr & (1ull << 47))) ? 0xffff000000000000 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1042, __func__); } } while(0);
+    do { if (!(((uint64_t)cap_notification_cap & ~0x1full) == ((1 && ((uint64_t)cap_notification_cap & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("((uint64_t)cap_notification_cap & ~0x1full) == ((1 && ((uint64_t)cap_notification_cap & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1039, __func__); } } while(0);
+    do { if (!((capNtfnCanReceive & ~0x1ull) == ((1 && (capNtfnCanReceive & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(capNtfnCanReceive & ~0x1ull) == ((1 && (capNtfnCanReceive & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1040, __func__); } } while(0);
+    do { if (!((capNtfnCanSend & ~0x1ull) == ((1 && (capNtfnCanSend & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(capNtfnCanSend & ~0x1ull) == ((1 && (capNtfnCanSend & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1041, __func__); } } while(0);
+    do { if (!((capNtfnPtr & ~0xffffffffffffull) == ((1 && (capNtfnPtr & (1ull << 47))) ? 0xffff000000000000 : 0))) { _assert_fail("(capNtfnPtr & ~0xffffffffffffull) == ((1 && (capNtfnPtr & (1ull << 47))) ? 0xffff000000000000 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1042, __func__); } } while(0);
 
     cap.words[0] = 0
         | ((uint64_t)cap_notification_cap & 0x1full) << 59
@@ -2374,7 +2374,7 @@ static inline uint64_t __attribute__((__const__))
 cap_notification_cap_get_capNtfnBadge(cap_t cap) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_notification_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_notification_cap", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1059, __func__); } } while(0);
+    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_notification_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_notification_cap", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1059, __func__); } } while(0);
 
     ret = (cap.words[1] & 0xffffffffffffffffull) >> 0;
     /* Possibly sign extend */
@@ -2387,9 +2387,9 @@ cap_notification_cap_get_capNtfnBadge(cap_t cap) {
 static inline cap_t __attribute__((__const__))
 cap_notification_cap_set_capNtfnBadge(cap_t cap, uint64_t v64) {
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_notification_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_notification_cap", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1072, __func__); } } while(0);
+    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_notification_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_notification_cap", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1072, __func__); } } while(0);
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0xffffffffffffffffull >> 0 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0xffffffffffffffffull >> 0 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1074, __func__); } } while(0);
+    do { if (!((((~0xffffffffffffffffull >> 0 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0xffffffffffffffffull >> 0 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1074, __func__); } } while(0);
 
     cap.words[1] &= ~0xffffffffffffffffull;
     cap.words[1] |= (v64 << 0) & 0xffffffffffffffffull;
@@ -2400,7 +2400,7 @@ static inline uint64_t __attribute__((__const__))
 cap_notification_cap_get_capNtfnCanReceive(cap_t cap) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_notification_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_notification_cap", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1085, __func__); } } while(0);
+    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_notification_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_notification_cap", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1085, __func__); } } while(0);
 
     ret = (cap.words[0] & 0x400000000000000ull) >> 58;
     /* Possibly sign extend */
@@ -2413,9 +2413,9 @@ cap_notification_cap_get_capNtfnCanReceive(cap_t cap) {
 static inline cap_t __attribute__((__const__))
 cap_notification_cap_set_capNtfnCanReceive(cap_t cap, uint64_t v64) {
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_notification_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_notification_cap", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1098, __func__); } } while(0);
+    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_notification_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_notification_cap", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1098, __func__); } } while(0);
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0x400000000000000ull >> 58 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0x400000000000000ull >> 58 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1100, __func__); } } while(0);
+    do { if (!((((~0x400000000000000ull >> 58 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0x400000000000000ull >> 58 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1100, __func__); } } while(0);
 
     cap.words[0] &= ~0x400000000000000ull;
     cap.words[0] |= (v64 << 58) & 0x400000000000000ull;
@@ -2426,7 +2426,7 @@ static inline uint64_t __attribute__((__const__))
 cap_notification_cap_get_capNtfnCanSend(cap_t cap) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_notification_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_notification_cap", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1111, __func__); } } while(0);
+    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_notification_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_notification_cap", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1111, __func__); } } while(0);
 
     ret = (cap.words[0] & 0x200000000000000ull) >> 57;
     /* Possibly sign extend */
@@ -2439,9 +2439,9 @@ cap_notification_cap_get_capNtfnCanSend(cap_t cap) {
 static inline cap_t __attribute__((__const__))
 cap_notification_cap_set_capNtfnCanSend(cap_t cap, uint64_t v64) {
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_notification_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_notification_cap", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1124, __func__); } } while(0);
+    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_notification_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_notification_cap", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1124, __func__); } } while(0);
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0x200000000000000ull >> 57 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0x200000000000000ull >> 57 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1126, __func__); } } while(0);
+    do { if (!((((~0x200000000000000ull >> 57 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0x200000000000000ull >> 57 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1126, __func__); } } while(0);
 
     cap.words[0] &= ~0x200000000000000ull;
     cap.words[0] |= (v64 << 57) & 0x200000000000000ull;
@@ -2452,7 +2452,7 @@ static inline uint64_t __attribute__((__const__))
 cap_notification_cap_get_capNtfnPtr(cap_t cap) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_notification_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_notification_cap", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1137, __func__); } } while(0);
+    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_notification_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_notification_cap", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1137, __func__); } } while(0);
 
     ret = (cap.words[0] & 0xffffffffffffull) << 0;
     /* Possibly sign extend */
@@ -2467,8 +2467,8 @@ cap_reply_cap_new(uint64_t capReplyPtr, uint64_t capReplyCanGrant) {
     cap_t cap;
 
     /* fail if user has passed bits that we will override */
-    do { if (!(((uint64_t)cap_reply_cap & ~0x1full) == ((1 && ((uint64_t)cap_reply_cap & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("((uint64_t)cap_reply_cap & ~0x1full) == ((1 && ((uint64_t)cap_reply_cap & (1ull << 47))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1152, __func__); } } while(0);
-    do { if (!((capReplyCanGrant & ~0x1ull) == ((1 && (capReplyCanGrant & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(capReplyCanGrant & ~0x1ull) == ((1 && (capReplyCanGrant & (1ull << 47))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1153, __func__); } } while(0);
+    do { if (!(((uint64_t)cap_reply_cap & ~0x1full) == ((1 && ((uint64_t)cap_reply_cap & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("((uint64_t)cap_reply_cap & ~0x1full) == ((1 && ((uint64_t)cap_reply_cap & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1152, __func__); } } while(0);
+    do { if (!((capReplyCanGrant & ~0x1ull) == ((1 && (capReplyCanGrant & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(capReplyCanGrant & ~0x1ull) == ((1 && (capReplyCanGrant & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1153, __func__); } } while(0);
 
     cap.words[0] = 0
         | ((uint64_t)cap_reply_cap & 0x1full) << 59
@@ -2483,7 +2483,7 @@ static inline uint64_t __attribute__((__const__))
 cap_reply_cap_get_capReplyPtr(cap_t cap) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_reply_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_reply_cap", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1168, __func__); } } while(0);
+    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_reply_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_reply_cap", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1168, __func__); } } while(0);
 
     ret = (cap.words[1] & 0xffffffffffffffffull) >> 0;
     /* Possibly sign extend */
@@ -2497,7 +2497,7 @@ static inline uint64_t __attribute__((__const__))
 cap_reply_cap_get_capReplyCanGrant(cap_t cap) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_reply_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_reply_cap", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1182, __func__); } } while(0);
+    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_reply_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_reply_cap", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1182, __func__); } } while(0);
 
     ret = (cap.words[0] & 0x400000000000000ull) >> 58;
     /* Possibly sign extend */
@@ -2510,9 +2510,9 @@ cap_reply_cap_get_capReplyCanGrant(cap_t cap) {
 static inline cap_t __attribute__((__const__))
 cap_reply_cap_set_capReplyCanGrant(cap_t cap, uint64_t v64) {
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_reply_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_reply_cap", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1195, __func__); } } while(0);
+    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_reply_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_reply_cap", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1195, __func__); } } while(0);
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0x400000000000000ull >> 58 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0x400000000000000ull >> 58 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1197, __func__); } } while(0);
+    do { if (!((((~0x400000000000000ull >> 58 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0x400000000000000ull >> 58 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1197, __func__); } } while(0);
 
     cap.words[0] &= ~0x400000000000000ull;
     cap.words[0] |= (v64 << 58) & 0x400000000000000ull;
@@ -2524,10 +2524,10 @@ cap_cnode_cap_new(uint64_t capCNodeRadix, uint64_t capCNodeGuardSize, uint64_t c
     cap_t cap;
 
     /* fail if user has passed bits that we will override */
-    do { if (!((capCNodeRadix & ~0x3full) == ((1 && (capCNodeRadix & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(capCNodeRadix & ~0x3full) == ((1 && (capCNodeRadix & (1ull << 47))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1209, __func__); } } while(0);
-    do { if (!((capCNodeGuardSize & ~0x3full) == ((1 && (capCNodeGuardSize & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(capCNodeGuardSize & ~0x3full) == ((1 && (capCNodeGuardSize & (1ull << 47))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1210, __func__); } } while(0);
-    do { if (!((capCNodePtr & ~0xfffffffffffeull) == ((1 && (capCNodePtr & (1ull << 47))) ? 0xffff000000000000 : 0))) { _assert_fail("(capCNodePtr & ~0xfffffffffffeull) == ((1 && (capCNodePtr & (1ull << 47))) ? 0xffff000000000000 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1211, __func__); } } while(0);
-    do { if (!(((uint64_t)cap_cnode_cap & ~0x1full) == ((1 && ((uint64_t)cap_cnode_cap & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("((uint64_t)cap_cnode_cap & ~0x1full) == ((1 && ((uint64_t)cap_cnode_cap & (1ull << 47))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1212, __func__); } } while(0);
+    do { if (!((capCNodeRadix & ~0x3full) == ((1 && (capCNodeRadix & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(capCNodeRadix & ~0x3full) == ((1 && (capCNodeRadix & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1209, __func__); } } while(0);
+    do { if (!((capCNodeGuardSize & ~0x3full) == ((1 && (capCNodeGuardSize & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(capCNodeGuardSize & ~0x3full) == ((1 && (capCNodeGuardSize & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1210, __func__); } } while(0);
+    do { if (!((capCNodePtr & ~0xfffffffffffeull) == ((1 && (capCNodePtr & (1ull << 47))) ? 0xffff000000000000 : 0))) { _assert_fail("(capCNodePtr & ~0xfffffffffffeull) == ((1 && (capCNodePtr & (1ull << 47))) ? 0xffff000000000000 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1211, __func__); } } while(0);
+    do { if (!(((uint64_t)cap_cnode_cap & ~0x1full) == ((1 && ((uint64_t)cap_cnode_cap & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("((uint64_t)cap_cnode_cap & ~0x1full) == ((1 && ((uint64_t)cap_cnode_cap & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1212, __func__); } } while(0);
 
     cap.words[0] = 0
         | (capCNodeRadix & 0x3full) << 47
@@ -2544,7 +2544,7 @@ static inline uint64_t __attribute__((__const__))
 cap_cnode_cap_get_capCNodeGuard(cap_t cap) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_cnode_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_cnode_cap", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1229, __func__); } } while(0);
+    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_cnode_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_cnode_cap", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1229, __func__); } } while(0);
 
     ret = (cap.words[1] & 0xffffffffffffffffull) >> 0;
     /* Possibly sign extend */
@@ -2557,9 +2557,9 @@ cap_cnode_cap_get_capCNodeGuard(cap_t cap) {
 static inline cap_t __attribute__((__const__))
 cap_cnode_cap_set_capCNodeGuard(cap_t cap, uint64_t v64) {
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_cnode_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_cnode_cap", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1242, __func__); } } while(0);
+    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_cnode_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_cnode_cap", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1242, __func__); } } while(0);
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0xffffffffffffffffull >> 0 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0xffffffffffffffffull >> 0 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1244, __func__); } } while(0);
+    do { if (!((((~0xffffffffffffffffull >> 0 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0xffffffffffffffffull >> 0 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1244, __func__); } } while(0);
 
     cap.words[1] &= ~0xffffffffffffffffull;
     cap.words[1] |= (v64 << 0) & 0xffffffffffffffffull;
@@ -2570,7 +2570,7 @@ static inline uint64_t __attribute__((__const__))
 cap_cnode_cap_get_capCNodeGuardSize(cap_t cap) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_cnode_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_cnode_cap", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1255, __func__); } } while(0);
+    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_cnode_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_cnode_cap", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1255, __func__); } } while(0);
 
     ret = (cap.words[0] & 0x7e0000000000000ull) >> 53;
     /* Possibly sign extend */
@@ -2583,9 +2583,9 @@ cap_cnode_cap_get_capCNodeGuardSize(cap_t cap) {
 static inline cap_t __attribute__((__const__))
 cap_cnode_cap_set_capCNodeGuardSize(cap_t cap, uint64_t v64) {
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_cnode_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_cnode_cap", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1268, __func__); } } while(0);
+    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_cnode_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_cnode_cap", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1268, __func__); } } while(0);
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0x7e0000000000000ull >> 53 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0x7e0000000000000ull >> 53 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1270, __func__); } } while(0);
+    do { if (!((((~0x7e0000000000000ull >> 53 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0x7e0000000000000ull >> 53 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1270, __func__); } } while(0);
 
     cap.words[0] &= ~0x7e0000000000000ull;
     cap.words[0] |= (v64 << 53) & 0x7e0000000000000ull;
@@ -2596,7 +2596,7 @@ static inline uint64_t __attribute__((__const__))
 cap_cnode_cap_get_capCNodeRadix(cap_t cap) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_cnode_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_cnode_cap", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1281, __func__); } } while(0);
+    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_cnode_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_cnode_cap", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1281, __func__); } } while(0);
 
     ret = (cap.words[0] & 0x1f800000000000ull) >> 47;
     /* Possibly sign extend */
@@ -2610,7 +2610,7 @@ static inline uint64_t __attribute__((__const__))
 cap_cnode_cap_get_capCNodePtr(cap_t cap) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_cnode_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_cnode_cap", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1295, __func__); } } while(0);
+    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_cnode_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_cnode_cap", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1295, __func__); } } while(0);
 
     ret = (cap.words[0] & 0x7fffffffffffull) << 1;
     /* Possibly sign extend */
@@ -2625,8 +2625,8 @@ cap_thread_cap_new(uint64_t capTCBPtr) {
     cap_t cap;
 
     /* fail if user has passed bits that we will override */
-    do { if (!(((uint64_t)cap_thread_cap & ~0x1full) == ((1 && ((uint64_t)cap_thread_cap & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("((uint64_t)cap_thread_cap & ~0x1full) == ((1 && ((uint64_t)cap_thread_cap & (1ull << 47))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1310, __func__); } } while(0);
-    do { if (!((capTCBPtr & ~0xffffffffffffull) == ((1 && (capTCBPtr & (1ull << 47))) ? 0xffff000000000000 : 0))) { _assert_fail("(capTCBPtr & ~0xffffffffffffull) == ((1 && (capTCBPtr & (1ull << 47))) ? 0xffff000000000000 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1311, __func__); } } while(0);
+    do { if (!(((uint64_t)cap_thread_cap & ~0x1full) == ((1 && ((uint64_t)cap_thread_cap & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("((uint64_t)cap_thread_cap & ~0x1full) == ((1 && ((uint64_t)cap_thread_cap & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1310, __func__); } } while(0);
+    do { if (!((capTCBPtr & ~0xffffffffffffull) == ((1 && (capTCBPtr & (1ull << 47))) ? 0xffff000000000000 : 0))) { _assert_fail("(capTCBPtr & ~0xffffffffffffull) == ((1 && (capTCBPtr & (1ull << 47))) ? 0xffff000000000000 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1311, __func__); } } while(0);
 
     cap.words[0] = 0
         | ((uint64_t)cap_thread_cap & 0x1full) << 59
@@ -2640,7 +2640,7 @@ static inline uint64_t __attribute__((__const__))
 cap_thread_cap_get_capTCBPtr(cap_t cap) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_thread_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_thread_cap", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1325, __func__); } } while(0);
+    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_thread_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_thread_cap", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1325, __func__); } } while(0);
 
     ret = (cap.words[0] & 0xffffffffffffull) << 0;
     /* Possibly sign extend */
@@ -2655,7 +2655,7 @@ cap_irq_control_cap_new(void) {
     cap_t cap;
 
     /* fail if user has passed bits that we will override */
-    do { if (!(((uint64_t)cap_irq_control_cap & ~0x1full) == ((1 && ((uint64_t)cap_irq_control_cap & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("((uint64_t)cap_irq_control_cap & ~0x1full) == ((1 && ((uint64_t)cap_irq_control_cap & (1ull << 47))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1340, __func__); } } while(0);
+    do { if (!(((uint64_t)cap_irq_control_cap & ~0x1full) == ((1 && ((uint64_t)cap_irq_control_cap & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("((uint64_t)cap_irq_control_cap & ~0x1full) == ((1 && ((uint64_t)cap_irq_control_cap & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1340, __func__); } } while(0);
 
     cap.words[0] = 0
         | ((uint64_t)cap_irq_control_cap & 0x1full) << 59;
@@ -2669,7 +2669,7 @@ cap_irq_handler_cap_new(uint64_t capIRQ) {
     cap_t cap;
 
     /* fail if user has passed bits that we will override */
-    do { if (!(((uint64_t)cap_irq_handler_cap & ~0x1full) == ((1 && ((uint64_t)cap_irq_handler_cap & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("((uint64_t)cap_irq_handler_cap & ~0x1full) == ((1 && ((uint64_t)cap_irq_handler_cap & (1ull << 47))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1354, __func__); } } while(0);
+    do { if (!(((uint64_t)cap_irq_handler_cap & ~0x1full) == ((1 && ((uint64_t)cap_irq_handler_cap & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("((uint64_t)cap_irq_handler_cap & ~0x1full) == ((1 && ((uint64_t)cap_irq_handler_cap & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1354, __func__); } } while(0);
 
     cap.words[0] = 0
         | ((uint64_t)cap_irq_handler_cap & 0x1full) << 59;
@@ -2683,7 +2683,7 @@ static inline uint64_t __attribute__((__const__))
 cap_irq_handler_cap_get_capIRQ(cap_t cap) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_irq_handler_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_irq_handler_cap", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1368, __func__); } } while(0);
+    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_irq_handler_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_irq_handler_cap", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1368, __func__); } } while(0);
 
     ret = (cap.words[1] & 0xffffffffffffffffull) >> 0;
     /* Possibly sign extend */
@@ -2698,8 +2698,8 @@ cap_zombie_cap_new(uint64_t capZombieID, uint64_t capZombieType) {
     cap_t cap;
 
     /* fail if user has passed bits that we will override */
-    do { if (!(((uint64_t)cap_zombie_cap & ~0x1full) == ((1 && ((uint64_t)cap_zombie_cap & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("((uint64_t)cap_zombie_cap & ~0x1full) == ((1 && ((uint64_t)cap_zombie_cap & (1ull << 47))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1383, __func__); } } while(0);
-    do { if (!((capZombieType & ~0x7full) == ((1 && (capZombieType & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(capZombieType & ~0x7full) == ((1 && (capZombieType & (1ull << 47))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1384, __func__); } } while(0);
+    do { if (!(((uint64_t)cap_zombie_cap & ~0x1full) == ((1 && ((uint64_t)cap_zombie_cap & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("((uint64_t)cap_zombie_cap & ~0x1full) == ((1 && ((uint64_t)cap_zombie_cap & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1383, __func__); } } while(0);
+    do { if (!((capZombieType & ~0x7full) == ((1 && (capZombieType & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(capZombieType & ~0x7full) == ((1 && (capZombieType & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1384, __func__); } } while(0);
 
     cap.words[0] = 0
         | ((uint64_t)cap_zombie_cap & 0x1full) << 59
@@ -2714,7 +2714,7 @@ static inline uint64_t __attribute__((__const__))
 cap_zombie_cap_get_capZombieID(cap_t cap) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_zombie_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_zombie_cap", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1399, __func__); } } while(0);
+    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_zombie_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_zombie_cap", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1399, __func__); } } while(0);
 
     ret = (cap.words[1] & 0xffffffffffffffffull) >> 0;
     /* Possibly sign extend */
@@ -2727,9 +2727,9 @@ cap_zombie_cap_get_capZombieID(cap_t cap) {
 static inline cap_t __attribute__((__const__))
 cap_zombie_cap_set_capZombieID(cap_t cap, uint64_t v64) {
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_zombie_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_zombie_cap", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1412, __func__); } } while(0);
+    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_zombie_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_zombie_cap", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1412, __func__); } } while(0);
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0xffffffffffffffffull >> 0 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0xffffffffffffffffull >> 0 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1414, __func__); } } while(0);
+    do { if (!((((~0xffffffffffffffffull >> 0 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0xffffffffffffffffull >> 0 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1414, __func__); } } while(0);
 
     cap.words[1] &= ~0xffffffffffffffffull;
     cap.words[1] |= (v64 << 0) & 0xffffffffffffffffull;
@@ -2740,7 +2740,7 @@ static inline uint64_t __attribute__((__const__))
 cap_zombie_cap_get_capZombieType(cap_t cap) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_zombie_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_zombie_cap", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1425, __func__); } } while(0);
+    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_zombie_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_zombie_cap", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1425, __func__); } } while(0);
 
     ret = (cap.words[0] & 0x7full) >> 0;
     /* Possibly sign extend */
@@ -2755,7 +2755,7 @@ cap_domain_cap_new(void) {
     cap_t cap;
 
     /* fail if user has passed bits that we will override */
-    do { if (!(((uint64_t)cap_domain_cap & ~0x1full) == ((1 && ((uint64_t)cap_domain_cap & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("((uint64_t)cap_domain_cap & ~0x1full) == ((1 && ((uint64_t)cap_domain_cap & (1ull << 47))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1440, __func__); } } while(0);
+    do { if (!(((uint64_t)cap_domain_cap & ~0x1full) == ((1 && ((uint64_t)cap_domain_cap & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("((uint64_t)cap_domain_cap & ~0x1full) == ((1 && ((uint64_t)cap_domain_cap & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1440, __func__); } } while(0);
 
     cap.words[0] = 0
         | ((uint64_t)cap_domain_cap & 0x1full) << 59;
@@ -2769,9 +2769,9 @@ cap_sched_context_cap_new(uint64_t capSCPtr, uint64_t capSCSizeBits) {
     cap_t cap;
 
     /* fail if user has passed bits that we will override */
-    do { if (!((capSCPtr & ~0xffffffffffffull) == ((1 && (capSCPtr & (1ull << 47))) ? 0xffff000000000000 : 0))) { _assert_fail("(capSCPtr & ~0xffffffffffffull) == ((1 && (capSCPtr & (1ull << 47))) ? 0xffff000000000000 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1454, __func__); } } while(0);
-    do { if (!((capSCSizeBits & ~0x3full) == ((1 && (capSCSizeBits & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(capSCSizeBits & ~0x3full) == ((1 && (capSCSizeBits & (1ull << 47))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1455, __func__); } } while(0);
-    do { if (!(((uint64_t)cap_sched_context_cap & ~0x1full) == ((1 && ((uint64_t)cap_sched_context_cap & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("((uint64_t)cap_sched_context_cap & ~0x1full) == ((1 && ((uint64_t)cap_sched_context_cap & (1ull << 47))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1456, __func__); } } while(0);
+    do { if (!((capSCPtr & ~0xffffffffffffull) == ((1 && (capSCPtr & (1ull << 47))) ? 0xffff000000000000 : 0))) { _assert_fail("(capSCPtr & ~0xffffffffffffull) == ((1 && (capSCPtr & (1ull << 47))) ? 0xffff000000000000 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1454, __func__); } } while(0);
+    do { if (!((capSCSizeBits & ~0x3full) == ((1 && (capSCSizeBits & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(capSCSizeBits & ~0x3full) == ((1 && (capSCSizeBits & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1455, __func__); } } while(0);
+    do { if (!(((uint64_t)cap_sched_context_cap & ~0x1full) == ((1 && ((uint64_t)cap_sched_context_cap & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("((uint64_t)cap_sched_context_cap & ~0x1full) == ((1 && ((uint64_t)cap_sched_context_cap & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1456, __func__); } } while(0);
 
     cap.words[0] = 0
         | ((uint64_t)cap_sched_context_cap & 0x1full) << 59;
@@ -2786,7 +2786,7 @@ static inline uint64_t __attribute__((__const__))
 cap_sched_context_cap_get_capSCPtr(cap_t cap) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_sched_context_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_sched_context_cap", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1471, __func__); } } while(0);
+    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_sched_context_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_sched_context_cap", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1471, __func__); } } while(0);
 
     ret = (cap.words[1] & 0xffffffffffff0000ull) >> 16;
     /* Possibly sign extend */
@@ -2800,7 +2800,7 @@ static inline uint64_t __attribute__((__const__))
 cap_sched_context_cap_get_capSCSizeBits(cap_t cap) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_sched_context_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_sched_context_cap", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1485, __func__); } } while(0);
+    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_sched_context_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_sched_context_cap", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1485, __func__); } } while(0);
 
     ret = (cap.words[1] & 0xfc00ull) >> 10;
     /* Possibly sign extend */
@@ -2815,7 +2815,7 @@ cap_sched_control_cap_new(uint64_t core) {
     cap_t cap;
 
     /* fail if user has passed bits that we will override */
-    do { if (!(((uint64_t)cap_sched_control_cap & ~0x1full) == ((1 && ((uint64_t)cap_sched_control_cap & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("((uint64_t)cap_sched_control_cap & ~0x1full) == ((1 && ((uint64_t)cap_sched_control_cap & (1ull << 47))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1500, __func__); } } while(0);
+    do { if (!(((uint64_t)cap_sched_control_cap & ~0x1full) == ((1 && ((uint64_t)cap_sched_control_cap & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("((uint64_t)cap_sched_control_cap & ~0x1full) == ((1 && ((uint64_t)cap_sched_control_cap & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1500, __func__); } } while(0);
 
     cap.words[0] = 0
         | ((uint64_t)cap_sched_control_cap & 0x1full) << 59;
@@ -2829,7 +2829,7 @@ static inline uint64_t __attribute__((__const__))
 cap_sched_control_cap_get_core(cap_t cap) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_sched_control_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_sched_control_cap", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1514, __func__); } } while(0);
+    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_sched_control_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_sched_control_cap", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1514, __func__); } } while(0);
 
     ret = (cap.words[1] & 0xffffffffffffffffull) >> 0;
     /* Possibly sign extend */
@@ -2844,13 +2844,13 @@ cap_frame_cap_new(uint64_t capFMappedASID, uint64_t capFBasePtr, uint64_t capFSi
     cap_t cap;
 
     /* fail if user has passed bits that we will override */
-    do { if (!((capFMappedASID & ~0xffffull) == ((1 && (capFMappedASID & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(capFMappedASID & ~0xffffull) == ((1 && (capFMappedASID & (1ull << 47))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1529, __func__); } } while(0);
-    do { if (!((capFBasePtr & ~0xffffffffffffull) == ((1 && (capFBasePtr & (1ull << 47))) ? 0xffff000000000000 : 0))) { _assert_fail("(capFBasePtr & ~0xffffffffffffull) == ((1 && (capFBasePtr & (1ull << 47))) ? 0xffff000000000000 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1530, __func__); } } while(0);
-    do { if (!(((uint64_t)cap_frame_cap & ~0x1full) == ((1 && ((uint64_t)cap_frame_cap & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("((uint64_t)cap_frame_cap & ~0x1full) == ((1 && ((uint64_t)cap_frame_cap & (1ull << 47))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1531, __func__); } } while(0);
-    do { if (!((capFSize & ~0x3ull) == ((1 && (capFSize & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(capFSize & ~0x3ull) == ((1 && (capFSize & (1ull << 47))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1532, __func__); } } while(0);
-    do { if (!((capFMappedAddress & ~0xffffffffffffull) == ((1 && (capFMappedAddress & (1ull << 47))) ? 0xffff000000000000 : 0))) { _assert_fail("(capFMappedAddress & ~0xffffffffffffull) == ((1 && (capFMappedAddress & (1ull << 47))) ? 0xffff000000000000 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1533, __func__); } } while(0);
-    do { if (!((capFVMRights & ~0x3ull) == ((1 && (capFVMRights & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(capFVMRights & ~0x3ull) == ((1 && (capFVMRights & (1ull << 47))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1534, __func__); } } while(0);
-    do { if (!((capFIsDevice & ~0x1ull) == ((1 && (capFIsDevice & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(capFIsDevice & ~0x1ull) == ((1 && (capFIsDevice & (1ull << 47))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1535, __func__); } } while(0);
+    do { if (!((capFMappedASID & ~0xffffull) == ((1 && (capFMappedASID & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(capFMappedASID & ~0xffffull) == ((1 && (capFMappedASID & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1529, __func__); } } while(0);
+    do { if (!((capFBasePtr & ~0xffffffffffffull) == ((1 && (capFBasePtr & (1ull << 47))) ? 0xffff000000000000 : 0))) { _assert_fail("(capFBasePtr & ~0xffffffffffffull) == ((1 && (capFBasePtr & (1ull << 47))) ? 0xffff000000000000 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1530, __func__); } } while(0);
+    do { if (!(((uint64_t)cap_frame_cap & ~0x1full) == ((1 && ((uint64_t)cap_frame_cap & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("((uint64_t)cap_frame_cap & ~0x1full) == ((1 && ((uint64_t)cap_frame_cap & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1531, __func__); } } while(0);
+    do { if (!((capFSize & ~0x3ull) == ((1 && (capFSize & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(capFSize & ~0x3ull) == ((1 && (capFSize & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1532, __func__); } } while(0);
+    do { if (!((capFMappedAddress & ~0xffffffffffffull) == ((1 && (capFMappedAddress & (1ull << 47))) ? 0xffff000000000000 : 0))) { _assert_fail("(capFMappedAddress & ~0xffffffffffffull) == ((1 && (capFMappedAddress & (1ull << 47))) ? 0xffff000000000000 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1533, __func__); } } while(0);
+    do { if (!((capFVMRights & ~0x3ull) == ((1 && (capFVMRights & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(capFVMRights & ~0x3ull) == ((1 && (capFVMRights & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1534, __func__); } } while(0);
+    do { if (!((capFIsDevice & ~0x1ull) == ((1 && (capFIsDevice & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(capFIsDevice & ~0x1ull) == ((1 && (capFIsDevice & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1535, __func__); } } while(0);
 
     cap.words[0] = 0
         | ((uint64_t)cap_frame_cap & 0x1full) << 59
@@ -2869,7 +2869,7 @@ static inline uint64_t __attribute__((__const__))
 cap_frame_cap_get_capFMappedASID(cap_t cap) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_frame_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_frame_cap", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1554, __func__); } } while(0);
+    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_frame_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_frame_cap", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1554, __func__); } } while(0);
 
     ret = (cap.words[1] & 0xffff000000000000ull) >> 48;
     /* Possibly sign extend */
@@ -2882,9 +2882,9 @@ cap_frame_cap_get_capFMappedASID(cap_t cap) {
 static inline cap_t __attribute__((__const__))
 cap_frame_cap_set_capFMappedASID(cap_t cap, uint64_t v64) {
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_frame_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_frame_cap", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1567, __func__); } } while(0);
+    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_frame_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_frame_cap", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1567, __func__); } } while(0);
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0xffff000000000000ull >> 48 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0xffff000000000000ull >> 48 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1569, __func__); } } while(0);
+    do { if (!((((~0xffff000000000000ull >> 48 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0xffff000000000000ull >> 48 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1569, __func__); } } while(0);
 
     cap.words[1] &= ~0xffff000000000000ull;
     cap.words[1] |= (v64 << 48) & 0xffff000000000000ull;
@@ -2895,7 +2895,7 @@ static inline uint64_t __attribute__((__const__))
 cap_frame_cap_get_capFBasePtr(cap_t cap) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_frame_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_frame_cap", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1580, __func__); } } while(0);
+    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_frame_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_frame_cap", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1580, __func__); } } while(0);
 
     ret = (cap.words[1] & 0xffffffffffffull) << 0;
     /* Possibly sign extend */
@@ -2909,7 +2909,7 @@ static inline uint64_t __attribute__((__const__))
 cap_frame_cap_get_capFSize(cap_t cap) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_frame_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_frame_cap", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1594, __func__); } } while(0);
+    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_frame_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_frame_cap", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1594, __func__); } } while(0);
 
     ret = (cap.words[0] & 0x600000000000000ull) >> 57;
     /* Possibly sign extend */
@@ -2923,7 +2923,7 @@ static inline uint64_t __attribute__((__const__))
 cap_frame_cap_get_capFMappedAddress(cap_t cap) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_frame_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_frame_cap", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1608, __func__); } } while(0);
+    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_frame_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_frame_cap", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1608, __func__); } } while(0);
 
     ret = (cap.words[0] & 0x1fffffffffffe00ull) >> 9;
     /* Possibly sign extend */
@@ -2936,9 +2936,9 @@ cap_frame_cap_get_capFMappedAddress(cap_t cap) {
 static inline cap_t __attribute__((__const__))
 cap_frame_cap_set_capFMappedAddress(cap_t cap, uint64_t v64) {
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_frame_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_frame_cap", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1621, __func__); } } while(0);
+    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_frame_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_frame_cap", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1621, __func__); } } while(0);
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0x1fffffffffffe00ull >> 9 ) | 0xffff000000000000) & v64) == ((1 && (v64 & (1ull << (47)))) ? 0xffff000000000000 : 0))) { _assert_fail("(((~0x1fffffffffffe00ull >> 9 ) | 0xffff000000000000) & v64) == ((1 && (v64 & (1ull << (47)))) ? 0xffff000000000000 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1623, __func__); } } while(0);
+    do { if (!((((~0x1fffffffffffe00ull >> 9 ) | 0xffff000000000000) & v64) == ((1 && (v64 & (1ull << (47)))) ? 0xffff000000000000 : 0))) { _assert_fail("(((~0x1fffffffffffe00ull >> 9 ) | 0xffff000000000000) & v64) == ((1 && (v64 & (1ull << (47)))) ? 0xffff000000000000 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1623, __func__); } } while(0);
 
     cap.words[0] &= ~0x1fffffffffffe00ull;
     cap.words[0] |= (v64 << 9) & 0x1fffffffffffe00ull;
@@ -2949,7 +2949,7 @@ static inline uint64_t __attribute__((__const__))
 cap_frame_cap_get_capFVMRights(cap_t cap) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_frame_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_frame_cap", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1634, __func__); } } while(0);
+    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_frame_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_frame_cap", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1634, __func__); } } while(0);
 
     ret = (cap.words[0] & 0x180ull) >> 7;
     /* Possibly sign extend */
@@ -2962,9 +2962,9 @@ cap_frame_cap_get_capFVMRights(cap_t cap) {
 static inline cap_t __attribute__((__const__))
 cap_frame_cap_set_capFVMRights(cap_t cap, uint64_t v64) {
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_frame_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_frame_cap", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1647, __func__); } } while(0);
+    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_frame_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_frame_cap", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1647, __func__); } } while(0);
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0x180ull >> 7 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0x180ull >> 7 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1649, __func__); } } while(0);
+    do { if (!((((~0x180ull >> 7 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0x180ull >> 7 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1649, __func__); } } while(0);
 
     cap.words[0] &= ~0x180ull;
     cap.words[0] |= (v64 << 7) & 0x180ull;
@@ -2975,7 +2975,7 @@ static inline uint64_t __attribute__((__const__))
 cap_frame_cap_get_capFIsDevice(cap_t cap) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_frame_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_frame_cap", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1660, __func__); } } while(0);
+    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_frame_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_frame_cap", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1660, __func__); } } while(0);
 
     ret = (cap.words[0] & 0x40ull) >> 6;
     /* Possibly sign extend */
@@ -2990,11 +2990,11 @@ cap_page_table_cap_new(uint64_t capPTMappedASID, uint64_t capPTBasePtr, uint64_t
     cap_t cap;
 
     /* fail if user has passed bits that we will override */
-    do { if (!((capPTMappedASID & ~0xffffull) == ((1 && (capPTMappedASID & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(capPTMappedASID & ~0xffffull) == ((1 && (capPTMappedASID & (1ull << 47))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1675, __func__); } } while(0);
-    do { if (!((capPTBasePtr & ~0xffffffffffffull) == ((1 && (capPTBasePtr & (1ull << 47))) ? 0xffff000000000000 : 0))) { _assert_fail("(capPTBasePtr & ~0xffffffffffffull) == ((1 && (capPTBasePtr & (1ull << 47))) ? 0xffff000000000000 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1676, __func__); } } while(0);
-    do { if (!(((uint64_t)cap_page_table_cap & ~0x1full) == ((1 && ((uint64_t)cap_page_table_cap & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("((uint64_t)cap_page_table_cap & ~0x1full) == ((1 && ((uint64_t)cap_page_table_cap & (1ull << 47))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1677, __func__); } } while(0);
-    do { if (!((capPTIsMapped & ~0x1ull) == ((1 && (capPTIsMapped & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(capPTIsMapped & ~0x1ull) == ((1 && (capPTIsMapped & (1ull << 47))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1678, __func__); } } while(0);
-    do { if (!((capPTMappedAddress & ~0xfffffff00000ull) == ((1 && (capPTMappedAddress & (1ull << 47))) ? 0xffff000000000000 : 0))) { _assert_fail("(capPTMappedAddress & ~0xfffffff00000ull) == ((1 && (capPTMappedAddress & (1ull << 47))) ? 0xffff000000000000 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1679, __func__); } } while(0);
+    do { if (!((capPTMappedASID & ~0xffffull) == ((1 && (capPTMappedASID & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(capPTMappedASID & ~0xffffull) == ((1 && (capPTMappedASID & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1675, __func__); } } while(0);
+    do { if (!((capPTBasePtr & ~0xffffffffffffull) == ((1 && (capPTBasePtr & (1ull << 47))) ? 0xffff000000000000 : 0))) { _assert_fail("(capPTBasePtr & ~0xffffffffffffull) == ((1 && (capPTBasePtr & (1ull << 47))) ? 0xffff000000000000 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1676, __func__); } } while(0);
+    do { if (!(((uint64_t)cap_page_table_cap & ~0x1full) == ((1 && ((uint64_t)cap_page_table_cap & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("((uint64_t)cap_page_table_cap & ~0x1full) == ((1 && ((uint64_t)cap_page_table_cap & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1677, __func__); } } while(0);
+    do { if (!((capPTIsMapped & ~0x1ull) == ((1 && (capPTIsMapped & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(capPTIsMapped & ~0x1ull) == ((1 && (capPTIsMapped & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1678, __func__); } } while(0);
+    do { if (!((capPTMappedAddress & ~0xfffffff00000ull) == ((1 && (capPTMappedAddress & (1ull << 47))) ? 0xffff000000000000 : 0))) { _assert_fail("(capPTMappedAddress & ~0xfffffff00000ull) == ((1 && (capPTMappedAddress & (1ull << 47))) ? 0xffff000000000000 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1679, __func__); } } while(0);
 
     cap.words[0] = 0
         | ((uint64_t)cap_page_table_cap & 0x1full) << 59
@@ -3011,7 +3011,7 @@ static inline uint64_t __attribute__((__const__))
 cap_page_table_cap_get_capPTMappedASID(cap_t cap) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_page_table_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_page_table_cap", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1696, __func__); } } while(0);
+    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_page_table_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_page_table_cap", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1696, __func__); } } while(0);
 
     ret = (cap.words[1] & 0xffff000000000000ull) >> 48;
     /* Possibly sign extend */
@@ -3024,9 +3024,9 @@ cap_page_table_cap_get_capPTMappedASID(cap_t cap) {
 static inline cap_t __attribute__((__const__))
 cap_page_table_cap_set_capPTMappedASID(cap_t cap, uint64_t v64) {
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_page_table_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_page_table_cap", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1709, __func__); } } while(0);
+    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_page_table_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_page_table_cap", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1709, __func__); } } while(0);
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0xffff000000000000ull >> 48 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0xffff000000000000ull >> 48 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1711, __func__); } } while(0);
+    do { if (!((((~0xffff000000000000ull >> 48 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0xffff000000000000ull >> 48 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1711, __func__); } } while(0);
 
     cap.words[1] &= ~0xffff000000000000ull;
     cap.words[1] |= (v64 << 48) & 0xffff000000000000ull;
@@ -3037,7 +3037,7 @@ static inline uint64_t __attribute__((__const__))
 cap_page_table_cap_get_capPTBasePtr(cap_t cap) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_page_table_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_page_table_cap", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1722, __func__); } } while(0);
+    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_page_table_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_page_table_cap", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1722, __func__); } } while(0);
 
     ret = (cap.words[1] & 0xffffffffffffull) << 0;
     /* Possibly sign extend */
@@ -3051,7 +3051,7 @@ static inline uint64_t __attribute__((__const__))
 cap_page_table_cap_get_capPTIsMapped(cap_t cap) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_page_table_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_page_table_cap", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1736, __func__); } } while(0);
+    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_page_table_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_page_table_cap", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1736, __func__); } } while(0);
 
     ret = (cap.words[0] & 0x1000000000000ull) >> 48;
     /* Possibly sign extend */
@@ -3064,9 +3064,9 @@ cap_page_table_cap_get_capPTIsMapped(cap_t cap) {
 static inline cap_t __attribute__((__const__))
 cap_page_table_cap_set_capPTIsMapped(cap_t cap, uint64_t v64) {
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_page_table_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_page_table_cap", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1749, __func__); } } while(0);
+    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_page_table_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_page_table_cap", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1749, __func__); } } while(0);
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0x1000000000000ull >> 48 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0x1000000000000ull >> 48 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1751, __func__); } } while(0);
+    do { if (!((((~0x1000000000000ull >> 48 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0x1000000000000ull >> 48 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1751, __func__); } } while(0);
 
     cap.words[0] &= ~0x1000000000000ull;
     cap.words[0] |= (v64 << 48) & 0x1000000000000ull;
@@ -3076,10 +3076,10 @@ cap_page_table_cap_set_capPTIsMapped(cap_t cap, uint64_t v64) {
 static inline void
 cap_page_table_cap_ptr_set_capPTIsMapped(cap_t *cap_ptr, uint64_t v64) {
     /* fail if union does not have the expected tag */
-    do { if (!(((cap_ptr->words[0] >> 59) & 0x1f) == cap_page_table_cap)) { _assert_fail("((cap_ptr->words[0] >> 59) & 0x1f) == cap_page_table_cap", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1761, __func__); } } while(0);
+    do { if (!(((cap_ptr->words[0] >> 59) & 0x1f) == cap_page_table_cap)) { _assert_fail("((cap_ptr->words[0] >> 59) & 0x1f) == cap_page_table_cap", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1761, __func__); } } while(0);
 
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0x1000000000000ull >> 48) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0x1000000000000ull >> 48) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1764, __func__); } } while(0);
+    do { if (!((((~0x1000000000000ull >> 48) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0x1000000000000ull >> 48) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1764, __func__); } } while(0);
 
     cap_ptr->words[0] &= ~0x1000000000000ull;
     cap_ptr->words[0] |= (v64 << 48) & 0x1000000000000ull;
@@ -3089,7 +3089,7 @@ static inline uint64_t __attribute__((__const__))
 cap_page_table_cap_get_capPTMappedAddress(cap_t cap) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_page_table_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_page_table_cap", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1774, __func__); } } while(0);
+    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_page_table_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_page_table_cap", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1774, __func__); } } while(0);
 
     ret = (cap.words[0] & 0xfffffff00000ull) << 0;
     /* Possibly sign extend */
@@ -3102,9 +3102,9 @@ cap_page_table_cap_get_capPTMappedAddress(cap_t cap) {
 static inline cap_t __attribute__((__const__))
 cap_page_table_cap_set_capPTMappedAddress(cap_t cap, uint64_t v64) {
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_page_table_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_page_table_cap", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1787, __func__); } } while(0);
+    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_page_table_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_page_table_cap", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1787, __func__); } } while(0);
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0xfffffff00000ull << 0 ) | 0xffff000000000000) & v64) == ((1 && (v64 & (1ull << (47)))) ? 0xffff000000000000 : 0))) { _assert_fail("(((~0xfffffff00000ull << 0 ) | 0xffff000000000000) & v64) == ((1 && (v64 & (1ull << (47)))) ? 0xffff000000000000 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1789, __func__); } } while(0);
+    do { if (!((((~0xfffffff00000ull << 0 ) | 0xffff000000000000) & v64) == ((1 && (v64 & (1ull << (47)))) ? 0xffff000000000000 : 0))) { _assert_fail("(((~0xfffffff00000ull << 0 ) | 0xffff000000000000) & v64) == ((1 && (v64 & (1ull << (47)))) ? 0xffff000000000000 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1789, __func__); } } while(0);
 
     cap.words[0] &= ~0xfffffff00000ull;
     cap.words[0] |= (v64 >> 0) & 0xfffffff00000ull;
@@ -3116,10 +3116,10 @@ cap_vspace_cap_new(uint64_t capVSMappedASID, uint64_t capVSBasePtr, uint64_t cap
     cap_t cap;
 
     /* fail if user has passed bits that we will override */
-    do { if (!((capVSMappedASID & ~0xffffull) == ((1 && (capVSMappedASID & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(capVSMappedASID & ~0xffffull) == ((1 && (capVSMappedASID & (1ull << 47))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1801, __func__); } } while(0);
-    do { if (!((capVSBasePtr & ~0xffffffffffffull) == ((1 && (capVSBasePtr & (1ull << 47))) ? 0xffff000000000000 : 0))) { _assert_fail("(capVSBasePtr & ~0xffffffffffffull) == ((1 && (capVSBasePtr & (1ull << 47))) ? 0xffff000000000000 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1802, __func__); } } while(0);
-    do { if (!(((uint64_t)cap_vspace_cap & ~0x1full) == ((1 && ((uint64_t)cap_vspace_cap & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("((uint64_t)cap_vspace_cap & ~0x1full) == ((1 && ((uint64_t)cap_vspace_cap & (1ull << 47))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1803, __func__); } } while(0);
-    do { if (!((capVSIsMapped & ~0x1ull) == ((1 && (capVSIsMapped & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(capVSIsMapped & ~0x1ull) == ((1 && (capVSIsMapped & (1ull << 47))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1804, __func__); } } while(0);
+    do { if (!((capVSMappedASID & ~0xffffull) == ((1 && (capVSMappedASID & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(capVSMappedASID & ~0xffffull) == ((1 && (capVSMappedASID & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1801, __func__); } } while(0);
+    do { if (!((capVSBasePtr & ~0xffffffffffffull) == ((1 && (capVSBasePtr & (1ull << 47))) ? 0xffff000000000000 : 0))) { _assert_fail("(capVSBasePtr & ~0xffffffffffffull) == ((1 && (capVSBasePtr & (1ull << 47))) ? 0xffff000000000000 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1802, __func__); } } while(0);
+    do { if (!(((uint64_t)cap_vspace_cap & ~0x1full) == ((1 && ((uint64_t)cap_vspace_cap & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("((uint64_t)cap_vspace_cap & ~0x1full) == ((1 && ((uint64_t)cap_vspace_cap & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1803, __func__); } } while(0);
+    do { if (!((capVSIsMapped & ~0x1ull) == ((1 && (capVSIsMapped & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(capVSIsMapped & ~0x1ull) == ((1 && (capVSIsMapped & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1804, __func__); } } while(0);
 
     cap.words[0] = 0
         | ((uint64_t)cap_vspace_cap & 0x1full) << 59
@@ -3135,7 +3135,7 @@ static inline uint64_t __attribute__((__const__))
 cap_vspace_cap_get_capVSMappedASID(cap_t cap) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_vspace_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_vspace_cap", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1820, __func__); } } while(0);
+    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_vspace_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_vspace_cap", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1820, __func__); } } while(0);
 
     ret = (cap.words[1] & 0xffff000000000000ull) >> 48;
     /* Possibly sign extend */
@@ -3148,9 +3148,9 @@ cap_vspace_cap_get_capVSMappedASID(cap_t cap) {
 static inline cap_t __attribute__((__const__))
 cap_vspace_cap_set_capVSMappedASID(cap_t cap, uint64_t v64) {
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_vspace_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_vspace_cap", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1833, __func__); } } while(0);
+    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_vspace_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_vspace_cap", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1833, __func__); } } while(0);
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0xffff000000000000ull >> 48 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0xffff000000000000ull >> 48 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1835, __func__); } } while(0);
+    do { if (!((((~0xffff000000000000ull >> 48 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0xffff000000000000ull >> 48 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1835, __func__); } } while(0);
 
     cap.words[1] &= ~0xffff000000000000ull;
     cap.words[1] |= (v64 << 48) & 0xffff000000000000ull;
@@ -3161,7 +3161,7 @@ static inline uint64_t __attribute__((__const__))
 cap_vspace_cap_get_capVSBasePtr(cap_t cap) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_vspace_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_vspace_cap", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1846, __func__); } } while(0);
+    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_vspace_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_vspace_cap", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1846, __func__); } } while(0);
 
     ret = (cap.words[1] & 0xffffffffffffull) << 0;
     /* Possibly sign extend */
@@ -3175,7 +3175,7 @@ static inline uint64_t __attribute__((__const__))
 cap_vspace_cap_get_capVSIsMapped(cap_t cap) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_vspace_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_vspace_cap", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1860, __func__); } } while(0);
+    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_vspace_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_vspace_cap", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1860, __func__); } } while(0);
 
     ret = (cap.words[0] & 0x400000000000000ull) >> 58;
     /* Possibly sign extend */
@@ -3188,9 +3188,9 @@ cap_vspace_cap_get_capVSIsMapped(cap_t cap) {
 static inline cap_t __attribute__((__const__))
 cap_vspace_cap_set_capVSIsMapped(cap_t cap, uint64_t v64) {
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_vspace_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_vspace_cap", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1873, __func__); } } while(0);
+    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_vspace_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_vspace_cap", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1873, __func__); } } while(0);
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0x400000000000000ull >> 58 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0x400000000000000ull >> 58 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1875, __func__); } } while(0);
+    do { if (!((((~0x400000000000000ull >> 58 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0x400000000000000ull >> 58 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1875, __func__); } } while(0);
 
     cap.words[0] &= ~0x400000000000000ull;
     cap.words[0] |= (v64 << 58) & 0x400000000000000ull;
@@ -3202,7 +3202,7 @@ cap_asid_control_cap_new(void) {
     cap_t cap;
 
     /* fail if user has passed bits that we will override */
-    do { if (!(((uint64_t)cap_asid_control_cap & ~0x1full) == ((1 && ((uint64_t)cap_asid_control_cap & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("((uint64_t)cap_asid_control_cap & ~0x1full) == ((1 && ((uint64_t)cap_asid_control_cap & (1ull << 47))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1887, __func__); } } while(0);
+    do { if (!(((uint64_t)cap_asid_control_cap & ~0x1full) == ((1 && ((uint64_t)cap_asid_control_cap & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("((uint64_t)cap_asid_control_cap & ~0x1full) == ((1 && ((uint64_t)cap_asid_control_cap & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1887, __func__); } } while(0);
 
     cap.words[0] = 0
         | ((uint64_t)cap_asid_control_cap & 0x1full) << 59;
@@ -3216,9 +3216,9 @@ cap_asid_pool_cap_new(uint64_t capASIDBase, uint64_t capASIDPool) {
     cap_t cap;
 
     /* fail if user has passed bits that we will override */
-    do { if (!(((uint64_t)cap_asid_pool_cap & ~0x1full) == ((1 && ((uint64_t)cap_asid_pool_cap & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("((uint64_t)cap_asid_pool_cap & ~0x1full) == ((1 && ((uint64_t)cap_asid_pool_cap & (1ull << 47))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1901, __func__); } } while(0);
-    do { if (!((capASIDBase & ~0xffffull) == ((1 && (capASIDBase & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(capASIDBase & ~0xffffull) == ((1 && (capASIDBase & (1ull << 47))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1902, __func__); } } while(0);
-    do { if (!((capASIDPool & ~0xfffffffff800ull) == ((1 && (capASIDPool & (1ull << 47))) ? 0xffff000000000000 : 0))) { _assert_fail("(capASIDPool & ~0xfffffffff800ull) == ((1 && (capASIDPool & (1ull << 47))) ? 0xffff000000000000 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1903, __func__); } } while(0);
+    do { if (!(((uint64_t)cap_asid_pool_cap & ~0x1full) == ((1 && ((uint64_t)cap_asid_pool_cap & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("((uint64_t)cap_asid_pool_cap & ~0x1full) == ((1 && ((uint64_t)cap_asid_pool_cap & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1901, __func__); } } while(0);
+    do { if (!((capASIDBase & ~0xffffull) == ((1 && (capASIDBase & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(capASIDBase & ~0xffffull) == ((1 && (capASIDBase & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1902, __func__); } } while(0);
+    do { if (!((capASIDPool & ~0xfffffffff800ull) == ((1 && (capASIDPool & (1ull << 47))) ? 0xffff000000000000 : 0))) { _assert_fail("(capASIDPool & ~0xfffffffff800ull) == ((1 && (capASIDPool & (1ull << 47))) ? 0xffff000000000000 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1903, __func__); } } while(0);
 
     cap.words[0] = 0
         | ((uint64_t)cap_asid_pool_cap & 0x1full) << 59
@@ -3233,7 +3233,7 @@ static inline uint64_t __attribute__((__const__))
 cap_asid_pool_cap_get_capASIDBase(cap_t cap) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_asid_pool_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_asid_pool_cap", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1918, __func__); } } while(0);
+    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_asid_pool_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_asid_pool_cap", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1918, __func__); } } while(0);
 
     ret = (cap.words[0] & 0x7fff80000000000ull) >> 43;
     /* Possibly sign extend */
@@ -3247,7 +3247,7 @@ static inline uint64_t __attribute__((__const__))
 cap_asid_pool_cap_get_capASIDPool(cap_t cap) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_asid_pool_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_asid_pool_cap", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1932, __func__); } } while(0);
+    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_asid_pool_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_asid_pool_cap", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1932, __func__); } } while(0);
 
     ret = (cap.words[0] & 0x1fffffffffull) << 11;
     /* Possibly sign extend */
@@ -3280,7 +3280,7 @@ lookup_fault_invalid_root_new(void) {
     lookup_fault_t lookup_fault;
 
     /* fail if user has passed bits that we will override */
-    do { if (!(((uint64_t)lookup_fault_invalid_root & ~0x3ull) == ((1 && ((uint64_t)lookup_fault_invalid_root & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("((uint64_t)lookup_fault_invalid_root & ~0x3ull) == ((1 && ((uint64_t)lookup_fault_invalid_root & (1ull << 47))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1965, __func__); } } while(0);
+    do { if (!(((uint64_t)lookup_fault_invalid_root & ~0x3ull) == ((1 && ((uint64_t)lookup_fault_invalid_root & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("((uint64_t)lookup_fault_invalid_root & ~0x3ull) == ((1 && ((uint64_t)lookup_fault_invalid_root & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1965, __func__); } } while(0);
 
     lookup_fault.words[0] = 0
         | ((uint64_t)lookup_fault_invalid_root & 0x3ull) << 0;
@@ -3294,8 +3294,8 @@ lookup_fault_missing_capability_new(uint64_t bitsLeft) {
     lookup_fault_t lookup_fault;
 
     /* fail if user has passed bits that we will override */
-    do { if (!((bitsLeft & ~0x7full) == ((1 && (bitsLeft & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(bitsLeft & ~0x7full) == ((1 && (bitsLeft & (1ull << 47))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1979, __func__); } } while(0);
-    do { if (!(((uint64_t)lookup_fault_missing_capability & ~0x3ull) == ((1 && ((uint64_t)lookup_fault_missing_capability & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("((uint64_t)lookup_fault_missing_capability & ~0x3ull) == ((1 && ((uint64_t)lookup_fault_missing_capability & (1ull << 47))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1980, __func__); } } while(0);
+    do { if (!((bitsLeft & ~0x7full) == ((1 && (bitsLeft & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(bitsLeft & ~0x7full) == ((1 && (bitsLeft & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1979, __func__); } } while(0);
+    do { if (!(((uint64_t)lookup_fault_missing_capability & ~0x3ull) == ((1 && ((uint64_t)lookup_fault_missing_capability & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("((uint64_t)lookup_fault_missing_capability & ~0x3ull) == ((1 && ((uint64_t)lookup_fault_missing_capability & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1980, __func__); } } while(0);
 
     lookup_fault.words[0] = 0
         | (bitsLeft & 0x7full) << 2
@@ -3309,7 +3309,7 @@ static inline uint64_t __attribute__((__const__))
 lookup_fault_missing_capability_get_bitsLeft(lookup_fault_t lookup_fault) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((lookup_fault.words[0] >> 0) & 0x3) == lookup_fault_missing_capability)) { _assert_fail("((lookup_fault.words[0] >> 0) & 0x3) == lookup_fault_missing_capability", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 1994, __func__); } } while(0);
+    do { if (!(((lookup_fault.words[0] >> 0) & 0x3) == lookup_fault_missing_capability)) { _assert_fail("((lookup_fault.words[0] >> 0) & 0x3) == lookup_fault_missing_capability", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 1994, __func__); } } while(0);
 
     ret = (lookup_fault.words[0] & 0x1fcull) >> 2;
     /* Possibly sign extend */
@@ -3324,9 +3324,9 @@ lookup_fault_depth_mismatch_new(uint64_t bitsFound, uint64_t bitsLeft) {
     lookup_fault_t lookup_fault;
 
     /* fail if user has passed bits that we will override */
-    do { if (!((bitsFound & ~0x7full) == ((1 && (bitsFound & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(bitsFound & ~0x7full) == ((1 && (bitsFound & (1ull << 47))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 2009, __func__); } } while(0);
-    do { if (!((bitsLeft & ~0x7full) == ((1 && (bitsLeft & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(bitsLeft & ~0x7full) == ((1 && (bitsLeft & (1ull << 47))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 2010, __func__); } } while(0);
-    do { if (!(((uint64_t)lookup_fault_depth_mismatch & ~0x3ull) == ((1 && ((uint64_t)lookup_fault_depth_mismatch & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("((uint64_t)lookup_fault_depth_mismatch & ~0x3ull) == ((1 && ((uint64_t)lookup_fault_depth_mismatch & (1ull << 47))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 2011, __func__); } } while(0);
+    do { if (!((bitsFound & ~0x7full) == ((1 && (bitsFound & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(bitsFound & ~0x7full) == ((1 && (bitsFound & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 2009, __func__); } } while(0);
+    do { if (!((bitsLeft & ~0x7full) == ((1 && (bitsLeft & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(bitsLeft & ~0x7full) == ((1 && (bitsLeft & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 2010, __func__); } } while(0);
+    do { if (!(((uint64_t)lookup_fault_depth_mismatch & ~0x3ull) == ((1 && ((uint64_t)lookup_fault_depth_mismatch & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("((uint64_t)lookup_fault_depth_mismatch & ~0x3ull) == ((1 && ((uint64_t)lookup_fault_depth_mismatch & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 2011, __func__); } } while(0);
 
     lookup_fault.words[0] = 0
         | (bitsFound & 0x7full) << 9
@@ -3341,7 +3341,7 @@ static inline uint64_t __attribute__((__const__))
 lookup_fault_depth_mismatch_get_bitsFound(lookup_fault_t lookup_fault) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((lookup_fault.words[0] >> 0) & 0x3) == lookup_fault_depth_mismatch)) { _assert_fail("((lookup_fault.words[0] >> 0) & 0x3) == lookup_fault_depth_mismatch", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 2026, __func__); } } while(0);
+    do { if (!(((lookup_fault.words[0] >> 0) & 0x3) == lookup_fault_depth_mismatch)) { _assert_fail("((lookup_fault.words[0] >> 0) & 0x3) == lookup_fault_depth_mismatch", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 2026, __func__); } } while(0);
 
     ret = (lookup_fault.words[0] & 0xfe00ull) >> 9;
     /* Possibly sign extend */
@@ -3355,7 +3355,7 @@ static inline uint64_t __attribute__((__const__))
 lookup_fault_depth_mismatch_get_bitsLeft(lookup_fault_t lookup_fault) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((lookup_fault.words[0] >> 0) & 0x3) == lookup_fault_depth_mismatch)) { _assert_fail("((lookup_fault.words[0] >> 0) & 0x3) == lookup_fault_depth_mismatch", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 2040, __func__); } } while(0);
+    do { if (!(((lookup_fault.words[0] >> 0) & 0x3) == lookup_fault_depth_mismatch)) { _assert_fail("((lookup_fault.words[0] >> 0) & 0x3) == lookup_fault_depth_mismatch", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 2040, __func__); } } while(0);
 
     ret = (lookup_fault.words[0] & 0x1fcull) >> 2;
     /* Possibly sign extend */
@@ -3370,9 +3370,9 @@ lookup_fault_guard_mismatch_new(uint64_t guardFound, uint64_t bitsLeft, uint64_t
     lookup_fault_t lookup_fault;
 
     /* fail if user has passed bits that we will override */
-    do { if (!((bitsLeft & ~0x7full) == ((1 && (bitsLeft & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(bitsLeft & ~0x7full) == ((1 && (bitsLeft & (1ull << 47))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 2055, __func__); } } while(0);
-    do { if (!((bitsFound & ~0x7full) == ((1 && (bitsFound & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(bitsFound & ~0x7full) == ((1 && (bitsFound & (1ull << 47))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 2056, __func__); } } while(0);
-    do { if (!(((uint64_t)lookup_fault_guard_mismatch & ~0x3ull) == ((1 && ((uint64_t)lookup_fault_guard_mismatch & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("((uint64_t)lookup_fault_guard_mismatch & ~0x3ull) == ((1 && ((uint64_t)lookup_fault_guard_mismatch & (1ull << 47))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 2057, __func__); } } while(0);
+    do { if (!((bitsLeft & ~0x7full) == ((1 && (bitsLeft & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(bitsLeft & ~0x7full) == ((1 && (bitsLeft & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 2055, __func__); } } while(0);
+    do { if (!((bitsFound & ~0x7full) == ((1 && (bitsFound & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(bitsFound & ~0x7full) == ((1 && (bitsFound & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 2056, __func__); } } while(0);
+    do { if (!(((uint64_t)lookup_fault_guard_mismatch & ~0x3ull) == ((1 && ((uint64_t)lookup_fault_guard_mismatch & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("((uint64_t)lookup_fault_guard_mismatch & ~0x3ull) == ((1 && ((uint64_t)lookup_fault_guard_mismatch & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 2057, __func__); } } while(0);
 
     lookup_fault.words[0] = 0
         | (bitsLeft & 0x7full) << 9
@@ -3388,7 +3388,7 @@ static inline uint64_t __attribute__((__const__))
 lookup_fault_guard_mismatch_get_guardFound(lookup_fault_t lookup_fault) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((lookup_fault.words[0] >> 0) & 0x3) == lookup_fault_guard_mismatch)) { _assert_fail("((lookup_fault.words[0] >> 0) & 0x3) == lookup_fault_guard_mismatch", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 2073, __func__); } } while(0);
+    do { if (!(((lookup_fault.words[0] >> 0) & 0x3) == lookup_fault_guard_mismatch)) { _assert_fail("((lookup_fault.words[0] >> 0) & 0x3) == lookup_fault_guard_mismatch", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 2073, __func__); } } while(0);
 
     ret = (lookup_fault.words[1] & 0xffffffffffffffffull) >> 0;
     /* Possibly sign extend */
@@ -3402,7 +3402,7 @@ static inline uint64_t __attribute__((__const__))
 lookup_fault_guard_mismatch_get_bitsLeft(lookup_fault_t lookup_fault) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((lookup_fault.words[0] >> 0) & 0x3) == lookup_fault_guard_mismatch)) { _assert_fail("((lookup_fault.words[0] >> 0) & 0x3) == lookup_fault_guard_mismatch", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 2087, __func__); } } while(0);
+    do { if (!(((lookup_fault.words[0] >> 0) & 0x3) == lookup_fault_guard_mismatch)) { _assert_fail("((lookup_fault.words[0] >> 0) & 0x3) == lookup_fault_guard_mismatch", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 2087, __func__); } } while(0);
 
     ret = (lookup_fault.words[0] & 0xfe00ull) >> 9;
     /* Possibly sign extend */
@@ -3416,7 +3416,7 @@ static inline uint64_t __attribute__((__const__))
 lookup_fault_guard_mismatch_get_bitsFound(lookup_fault_t lookup_fault) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((lookup_fault.words[0] >> 0) & 0x3) == lookup_fault_guard_mismatch)) { _assert_fail("((lookup_fault.words[0] >> 0) & 0x3) == lookup_fault_guard_mismatch", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 2101, __func__); } } while(0);
+    do { if (!(((lookup_fault.words[0] >> 0) & 0x3) == lookup_fault_guard_mismatch)) { _assert_fail("((lookup_fault.words[0] >> 0) & 0x3) == lookup_fault_guard_mismatch", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 2101, __func__); } } while(0);
 
     ret = (lookup_fault.words[0] & 0x1fcull) >> 2;
     /* Possibly sign extend */
@@ -3456,7 +3456,7 @@ pte_pte_table_new(uint64_t pt_base_address) {
     pte_t pte;
 
     /* fail if user has passed bits that we will override */
-    do { if (!((pt_base_address & ~0xfffffffff000ull) == ((0 && (pt_base_address & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(pt_base_address & ~0xfffffffff000ull) == ((0 && (pt_base_address & (1ull << 47))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 2141, __func__); } } while(0);
+    do { if (!((pt_base_address & ~0xfffffffff000ull) == ((0 && (pt_base_address & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(pt_base_address & ~0xfffffffff000ull) == ((0 && (pt_base_address & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 2141, __func__); } } while(0);
 
     pte.words[0] = 0
         | (pt_base_address & 0xfffffffff000ull) >> 0
@@ -3469,7 +3469,7 @@ static inline uint64_t __attribute__((__pure__))
 pte_pte_table_ptr_get_pt_base_address(pte_t *pte_ptr) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((pte_ptr->words[0] >> 0) & 0x400000000000003) == 0x3ull /* sliced tag pte_pte_table */)) { _assert_fail("((pte_ptr->words[0] >> 0) & 0x400000000000003) == 0x3ull /* sliced tag pte_pte_table */", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 2154, __func__); } } while(0);
+    do { if (!(((pte_ptr->words[0] >> 0) & 0x400000000000003) == 0x3ull /* sliced tag pte_pte_table */)) { _assert_fail("((pte_ptr->words[0] >> 0) & 0x400000000000003) == 0x3ull /* sliced tag pte_pte_table */", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 2154, __func__); } } while(0);
 
     ret = (pte_ptr->words[0] & 0xfffffffff000ull) << 0;
     /* Possibly sign extend */
@@ -3484,13 +3484,13 @@ pte_pte_page_new(uint64_t UXN, uint64_t page_base_address, uint64_t nG, uint64_t
     pte_t pte;
 
     /* fail if user has passed bits that we will override */
-    do { if (!((UXN & ~0x1ull) == ((0 && (UXN & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(UXN & ~0x1ull) == ((0 && (UXN & (1ull << 47))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 2169, __func__); } } while(0);
-    do { if (!((page_base_address & ~0xfffffffff000ull) == ((0 && (page_base_address & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(page_base_address & ~0xfffffffff000ull) == ((0 && (page_base_address & (1ull << 47))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 2170, __func__); } } while(0);
-    do { if (!((nG & ~0x1ull) == ((0 && (nG & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(nG & ~0x1ull) == ((0 && (nG & (1ull << 47))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 2171, __func__); } } while(0);
-    do { if (!((AF & ~0x1ull) == ((0 && (AF & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(AF & ~0x1ull) == ((0 && (AF & (1ull << 47))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 2172, __func__); } } while(0);
-    do { if (!((SH & ~0x3ull) == ((0 && (SH & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(SH & ~0x3ull) == ((0 && (SH & (1ull << 47))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 2173, __func__); } } while(0);
-    do { if (!((AP & ~0x3ull) == ((0 && (AP & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(AP & ~0x3ull) == ((0 && (AP & (1ull << 47))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 2174, __func__); } } while(0);
-    do { if (!((AttrIndx & ~0x7ull) == ((0 && (AttrIndx & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(AttrIndx & ~0x7ull) == ((0 && (AttrIndx & (1ull << 47))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 2175, __func__); } } while(0);
+    do { if (!((UXN & ~0x1ull) == ((0 && (UXN & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(UXN & ~0x1ull) == ((0 && (UXN & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 2169, __func__); } } while(0);
+    do { if (!((page_base_address & ~0xfffffffff000ull) == ((0 && (page_base_address & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(page_base_address & ~0xfffffffff000ull) == ((0 && (page_base_address & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 2170, __func__); } } while(0);
+    do { if (!((nG & ~0x1ull) == ((0 && (nG & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(nG & ~0x1ull) == ((0 && (nG & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 2171, __func__); } } while(0);
+    do { if (!((AF & ~0x1ull) == ((0 && (AF & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(AF & ~0x1ull) == ((0 && (AF & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 2172, __func__); } } while(0);
+    do { if (!((SH & ~0x3ull) == ((0 && (SH & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(SH & ~0x3ull) == ((0 && (SH & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 2173, __func__); } } while(0);
+    do { if (!((AP & ~0x3ull) == ((0 && (AP & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(AP & ~0x3ull) == ((0 && (AP & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 2174, __func__); } } while(0);
+    do { if (!((AttrIndx & ~0x7ull) == ((0 && (AttrIndx & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(AttrIndx & ~0x7ull) == ((0 && (AttrIndx & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 2175, __func__); } } while(0);
 
     pte.words[0] = 0
         | (UXN & 0x1ull) << 54
@@ -3509,7 +3509,7 @@ static inline uint64_t __attribute__((__pure__))
 pte_pte_page_ptr_get_UXN(pte_t *pte_ptr) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((pte_ptr->words[0] >> 0) & 0x400000000000003) == 0x1ull /* sliced tag pte_pte_page */)) { _assert_fail("((pte_ptr->words[0] >> 0) & 0x400000000000003) == 0x1ull /* sliced tag pte_pte_page */", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 2194, __func__); } } while(0);
+    do { if (!(((pte_ptr->words[0] >> 0) & 0x400000000000003) == 0x1ull /* sliced tag pte_pte_page */)) { _assert_fail("((pte_ptr->words[0] >> 0) & 0x400000000000003) == 0x1ull /* sliced tag pte_pte_page */", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 2194, __func__); } } while(0);
 
     ret = (pte_ptr->words[0] & 0x40000000000000ull) >> 54;
     /* Possibly sign extend */
@@ -3523,7 +3523,7 @@ static inline uint64_t __attribute__((__pure__))
 pte_pte_page_ptr_get_SH(pte_t *pte_ptr) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((pte_ptr->words[0] >> 0) & 0x400000000000003) == 0x1ull /* sliced tag pte_pte_page */)) { _assert_fail("((pte_ptr->words[0] >> 0) & 0x400000000000003) == 0x1ull /* sliced tag pte_pte_page */", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 2208, __func__); } } while(0);
+    do { if (!(((pte_ptr->words[0] >> 0) & 0x400000000000003) == 0x1ull /* sliced tag pte_pte_page */)) { _assert_fail("((pte_ptr->words[0] >> 0) & 0x400000000000003) == 0x1ull /* sliced tag pte_pte_page */", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 2208, __func__); } } while(0);
 
     ret = (pte_ptr->words[0] & 0x300ull) >> 8;
     /* Possibly sign extend */
@@ -3537,7 +3537,7 @@ static inline uint64_t __attribute__((__const__))
 pte_pte_page_get_AP(pte_t pte) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((pte.words[0] >> 0) & 0x400000000000003) == 0x1ull /* sliced tag pte_pte_page */)) { _assert_fail("((pte.words[0] >> 0) & 0x400000000000003) == 0x1ull /* sliced tag pte_pte_page */", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 2222, __func__); } } while(0);
+    do { if (!(((pte.words[0] >> 0) & 0x400000000000003) == 0x1ull /* sliced tag pte_pte_page */)) { _assert_fail("((pte.words[0] >> 0) & 0x400000000000003) == 0x1ull /* sliced tag pte_pte_page */", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 2222, __func__); } } while(0);
 
     ret = (pte.words[0] & 0xc0ull) >> 6;
     /* Possibly sign extend */
@@ -3551,7 +3551,7 @@ static inline uint64_t __attribute__((__pure__))
 pte_pte_page_ptr_get_AP(pte_t *pte_ptr) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((pte_ptr->words[0] >> 0) & 0x400000000000003) == 0x1ull /* sliced tag pte_pte_page */)) { _assert_fail("((pte_ptr->words[0] >> 0) & 0x400000000000003) == 0x1ull /* sliced tag pte_pte_page */", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 2236, __func__); } } while(0);
+    do { if (!(((pte_ptr->words[0] >> 0) & 0x400000000000003) == 0x1ull /* sliced tag pte_pte_page */)) { _assert_fail("((pte_ptr->words[0] >> 0) & 0x400000000000003) == 0x1ull /* sliced tag pte_pte_page */", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 2236, __func__); } } while(0);
 
     ret = (pte_ptr->words[0] & 0xc0ull) >> 6;
     /* Possibly sign extend */
@@ -3566,13 +3566,13 @@ pte_pte_4k_page_new(uint64_t UXN, uint64_t page_base_address, uint64_t nG, uint6
     pte_t pte;
 
     /* fail if user has passed bits that we will override */
-    do { if (!((UXN & ~0x1ull) == ((0 && (UXN & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(UXN & ~0x1ull) == ((0 && (UXN & (1ull << 47))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 2251, __func__); } } while(0);
-    do { if (!((page_base_address & ~0xfffffffff000ull) == ((0 && (page_base_address & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(page_base_address & ~0xfffffffff000ull) == ((0 && (page_base_address & (1ull << 47))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 2252, __func__); } } while(0);
-    do { if (!((nG & ~0x1ull) == ((0 && (nG & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(nG & ~0x1ull) == ((0 && (nG & (1ull << 47))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 2253, __func__); } } while(0);
-    do { if (!((AF & ~0x1ull) == ((0 && (AF & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(AF & ~0x1ull) == ((0 && (AF & (1ull << 47))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 2254, __func__); } } while(0);
-    do { if (!((SH & ~0x3ull) == ((0 && (SH & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(SH & ~0x3ull) == ((0 && (SH & (1ull << 47))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 2255, __func__); } } while(0);
-    do { if (!((AP & ~0x3ull) == ((0 && (AP & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(AP & ~0x3ull) == ((0 && (AP & (1ull << 47))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 2256, __func__); } } while(0);
-    do { if (!((AttrIndx & ~0x7ull) == ((0 && (AttrIndx & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(AttrIndx & ~0x7ull) == ((0 && (AttrIndx & (1ull << 47))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 2257, __func__); } } while(0);
+    do { if (!((UXN & ~0x1ull) == ((0 && (UXN & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(UXN & ~0x1ull) == ((0 && (UXN & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 2251, __func__); } } while(0);
+    do { if (!((page_base_address & ~0xfffffffff000ull) == ((0 && (page_base_address & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(page_base_address & ~0xfffffffff000ull) == ((0 && (page_base_address & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 2252, __func__); } } while(0);
+    do { if (!((nG & ~0x1ull) == ((0 && (nG & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(nG & ~0x1ull) == ((0 && (nG & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 2253, __func__); } } while(0);
+    do { if (!((AF & ~0x1ull) == ((0 && (AF & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(AF & ~0x1ull) == ((0 && (AF & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 2254, __func__); } } while(0);
+    do { if (!((SH & ~0x3ull) == ((0 && (SH & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(SH & ~0x3ull) == ((0 && (SH & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 2255, __func__); } } while(0);
+    do { if (!((AP & ~0x3ull) == ((0 && (AP & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(AP & ~0x3ull) == ((0 && (AP & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 2256, __func__); } } while(0);
+    do { if (!((AttrIndx & ~0x7ull) == ((0 && (AttrIndx & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(AttrIndx & ~0x7ull) == ((0 && (AttrIndx & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 2257, __func__); } } while(0);
 
     pte.words[0] = 0
         | (UXN & 0x1ull) << 54
@@ -3591,7 +3591,7 @@ static inline uint64_t __attribute__((__const__))
 pte_pte_4k_page_get_AP(pte_t pte) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((pte.words[0] >> 0) & 0x400000000000003) == 0x400000000000003ull /* sliced tag pte_pte_4k_page */)) { _assert_fail("((pte.words[0] >> 0) & 0x400000000000003) == 0x400000000000003ull /* sliced tag pte_pte_4k_page */", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 2276, __func__); } } while(0);
+    do { if (!(((pte.words[0] >> 0) & 0x400000000000003) == 0x400000000000003ull /* sliced tag pte_pte_4k_page */)) { _assert_fail("((pte.words[0] >> 0) & 0x400000000000003) == 0x400000000000003ull /* sliced tag pte_pte_4k_page */", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 2276, __func__); } } while(0);
 
     ret = (pte.words[0] & 0xc0ull) >> 6;
     /* Possibly sign extend */
@@ -3643,7 +3643,7 @@ seL4_Fault_NullFault_new(void) {
     seL4_Fault_t seL4_Fault;
 
     /* fail if user has passed bits that we will override */
-    do { if (!(((uint64_t)seL4_Fault_NullFault & ~0xfull) == ((0 && ((uint64_t)seL4_Fault_NullFault & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("((uint64_t)seL4_Fault_NullFault & ~0xfull) == ((0 && ((uint64_t)seL4_Fault_NullFault & (1ull << 47))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 2328, __func__); } } while(0);
+    do { if (!(((uint64_t)seL4_Fault_NullFault & ~0xfull) == ((0 && ((uint64_t)seL4_Fault_NullFault & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("((uint64_t)seL4_Fault_NullFault & ~0xfull) == ((0 && ((uint64_t)seL4_Fault_NullFault & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 2328, __func__); } } while(0);
 
     seL4_Fault.words[0] = 0
         | ((uint64_t)seL4_Fault_NullFault & 0xfull) << 0;
@@ -3657,8 +3657,8 @@ seL4_Fault_CapFault_new(uint64_t address, uint64_t inReceivePhase) {
     seL4_Fault_t seL4_Fault;
 
     /* fail if user has passed bits that we will override */
-    do { if (!((inReceivePhase & ~0x1ull) == ((0 && (inReceivePhase & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(inReceivePhase & ~0x1ull) == ((0 && (inReceivePhase & (1ull << 47))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 2342, __func__); } } while(0);
-    do { if (!(((uint64_t)seL4_Fault_CapFault & ~0xfull) == ((0 && ((uint64_t)seL4_Fault_CapFault & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("((uint64_t)seL4_Fault_CapFault & ~0xfull) == ((0 && ((uint64_t)seL4_Fault_CapFault & (1ull << 47))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 2343, __func__); } } while(0);
+    do { if (!((inReceivePhase & ~0x1ull) == ((0 && (inReceivePhase & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(inReceivePhase & ~0x1ull) == ((0 && (inReceivePhase & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 2342, __func__); } } while(0);
+    do { if (!(((uint64_t)seL4_Fault_CapFault & ~0xfull) == ((0 && ((uint64_t)seL4_Fault_CapFault & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("((uint64_t)seL4_Fault_CapFault & ~0xfull) == ((0 && ((uint64_t)seL4_Fault_CapFault & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 2343, __func__); } } while(0);
 
     seL4_Fault.words[0] = 0
         | (inReceivePhase & 0x1ull) << 63
@@ -3673,7 +3673,7 @@ static inline uint64_t __attribute__((__const__))
 seL4_Fault_CapFault_get_address(seL4_Fault_t seL4_Fault) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((seL4_Fault.words[0] >> 0) & 0xf) == seL4_Fault_CapFault)) { _assert_fail("((seL4_Fault.words[0] >> 0) & 0xf) == seL4_Fault_CapFault", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 2358, __func__); } } while(0);
+    do { if (!(((seL4_Fault.words[0] >> 0) & 0xf) == seL4_Fault_CapFault)) { _assert_fail("((seL4_Fault.words[0] >> 0) & 0xf) == seL4_Fault_CapFault", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 2358, __func__); } } while(0);
 
     ret = (seL4_Fault.words[1] & 0xffffffffffffffffull) >> 0;
     /* Possibly sign extend */
@@ -3687,7 +3687,7 @@ static inline uint64_t __attribute__((__const__))
 seL4_Fault_CapFault_get_inReceivePhase(seL4_Fault_t seL4_Fault) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((seL4_Fault.words[0] >> 0) & 0xf) == seL4_Fault_CapFault)) { _assert_fail("((seL4_Fault.words[0] >> 0) & 0xf) == seL4_Fault_CapFault", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 2372, __func__); } } while(0);
+    do { if (!(((seL4_Fault.words[0] >> 0) & 0xf) == seL4_Fault_CapFault)) { _assert_fail("((seL4_Fault.words[0] >> 0) & 0xf) == seL4_Fault_CapFault", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 2372, __func__); } } while(0);
 
     ret = (seL4_Fault.words[0] & 0x8000000000000000ull) >> 63;
     /* Possibly sign extend */
@@ -3702,7 +3702,7 @@ seL4_Fault_UnknownSyscall_new(uint64_t syscallNumber) {
     seL4_Fault_t seL4_Fault;
 
     /* fail if user has passed bits that we will override */
-    do { if (!(((uint64_t)seL4_Fault_UnknownSyscall & ~0xfull) == ((0 && ((uint64_t)seL4_Fault_UnknownSyscall & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("((uint64_t)seL4_Fault_UnknownSyscall & ~0xfull) == ((0 && ((uint64_t)seL4_Fault_UnknownSyscall & (1ull << 47))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 2387, __func__); } } while(0);
+    do { if (!(((uint64_t)seL4_Fault_UnknownSyscall & ~0xfull) == ((0 && ((uint64_t)seL4_Fault_UnknownSyscall & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("((uint64_t)seL4_Fault_UnknownSyscall & ~0xfull) == ((0 && ((uint64_t)seL4_Fault_UnknownSyscall & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 2387, __func__); } } while(0);
 
     seL4_Fault.words[0] = 0
         | ((uint64_t)seL4_Fault_UnknownSyscall & 0xfull) << 0;
@@ -3716,7 +3716,7 @@ static inline uint64_t __attribute__((__const__))
 seL4_Fault_UnknownSyscall_get_syscallNumber(seL4_Fault_t seL4_Fault) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((seL4_Fault.words[0] >> 0) & 0xf) == seL4_Fault_UnknownSyscall)) { _assert_fail("((seL4_Fault.words[0] >> 0) & 0xf) == seL4_Fault_UnknownSyscall", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 2401, __func__); } } while(0);
+    do { if (!(((seL4_Fault.words[0] >> 0) & 0xf) == seL4_Fault_UnknownSyscall)) { _assert_fail("((seL4_Fault.words[0] >> 0) & 0xf) == seL4_Fault_UnknownSyscall", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 2401, __func__); } } while(0);
 
     ret = (seL4_Fault.words[1] & 0xffffffffffffffffull) >> 0;
     /* Possibly sign extend */
@@ -3731,9 +3731,9 @@ seL4_Fault_UserException_new(uint64_t number, uint64_t code) {
     seL4_Fault_t seL4_Fault;
 
     /* fail if user has passed bits that we will override */
-    do { if (!((number & ~0xffffffffull) == ((0 && (number & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(number & ~0xffffffffull) == ((0 && (number & (1ull << 47))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 2416, __func__); } } while(0);
-    do { if (!((code & ~0xfffffffull) == ((0 && (code & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(code & ~0xfffffffull) == ((0 && (code & (1ull << 47))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 2417, __func__); } } while(0);
-    do { if (!(((uint64_t)seL4_Fault_UserException & ~0xfull) == ((0 && ((uint64_t)seL4_Fault_UserException & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("((uint64_t)seL4_Fault_UserException & ~0xfull) == ((0 && ((uint64_t)seL4_Fault_UserException & (1ull << 47))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 2418, __func__); } } while(0);
+    do { if (!((number & ~0xffffffffull) == ((0 && (number & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(number & ~0xffffffffull) == ((0 && (number & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 2416, __func__); } } while(0);
+    do { if (!((code & ~0xfffffffull) == ((0 && (code & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(code & ~0xfffffffull) == ((0 && (code & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 2417, __func__); } } while(0);
+    do { if (!(((uint64_t)seL4_Fault_UserException & ~0xfull) == ((0 && ((uint64_t)seL4_Fault_UserException & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("((uint64_t)seL4_Fault_UserException & ~0xfull) == ((0 && ((uint64_t)seL4_Fault_UserException & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 2418, __func__); } } while(0);
 
     seL4_Fault.words[0] = 0
         | (number & 0xffffffffull) << 32
@@ -3748,7 +3748,7 @@ static inline uint64_t __attribute__((__const__))
 seL4_Fault_UserException_get_number(seL4_Fault_t seL4_Fault) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((seL4_Fault.words[0] >> 0) & 0xf) == seL4_Fault_UserException)) { _assert_fail("((seL4_Fault.words[0] >> 0) & 0xf) == seL4_Fault_UserException", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 2433, __func__); } } while(0);
+    do { if (!(((seL4_Fault.words[0] >> 0) & 0xf) == seL4_Fault_UserException)) { _assert_fail("((seL4_Fault.words[0] >> 0) & 0xf) == seL4_Fault_UserException", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 2433, __func__); } } while(0);
 
     ret = (seL4_Fault.words[0] & 0xffffffff00000000ull) >> 32;
     /* Possibly sign extend */
@@ -3762,7 +3762,7 @@ static inline uint64_t __attribute__((__const__))
 seL4_Fault_UserException_get_code(seL4_Fault_t seL4_Fault) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((seL4_Fault.words[0] >> 0) & 0xf) == seL4_Fault_UserException)) { _assert_fail("((seL4_Fault.words[0] >> 0) & 0xf) == seL4_Fault_UserException", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 2447, __func__); } } while(0);
+    do { if (!(((seL4_Fault.words[0] >> 0) & 0xf) == seL4_Fault_UserException)) { _assert_fail("((seL4_Fault.words[0] >> 0) & 0xf) == seL4_Fault_UserException", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 2447, __func__); } } while(0);
 
     ret = (seL4_Fault.words[0] & 0xfffffff0ull) >> 4;
     /* Possibly sign extend */
@@ -3777,7 +3777,7 @@ seL4_Fault_Timeout_new(uint64_t badge) {
     seL4_Fault_t seL4_Fault;
 
     /* fail if user has passed bits that we will override */
-    do { if (!(((uint64_t)seL4_Fault_Timeout & ~0xfull) == ((0 && ((uint64_t)seL4_Fault_Timeout & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("((uint64_t)seL4_Fault_Timeout & ~0xfull) == ((0 && ((uint64_t)seL4_Fault_Timeout & (1ull << 47))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 2462, __func__); } } while(0);
+    do { if (!(((uint64_t)seL4_Fault_Timeout & ~0xfull) == ((0 && ((uint64_t)seL4_Fault_Timeout & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("((uint64_t)seL4_Fault_Timeout & ~0xfull) == ((0 && ((uint64_t)seL4_Fault_Timeout & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 2462, __func__); } } while(0);
 
     seL4_Fault.words[0] = 0
         | ((uint64_t)seL4_Fault_Timeout & 0xfull) << 0;
@@ -3791,7 +3791,7 @@ static inline uint64_t __attribute__((__const__))
 seL4_Fault_Timeout_get_badge(seL4_Fault_t seL4_Fault) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((seL4_Fault.words[0] >> 0) & 0xf) == seL4_Fault_Timeout)) { _assert_fail("((seL4_Fault.words[0] >> 0) & 0xf) == seL4_Fault_Timeout", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 2476, __func__); } } while(0);
+    do { if (!(((seL4_Fault.words[0] >> 0) & 0xf) == seL4_Fault_Timeout)) { _assert_fail("((seL4_Fault.words[0] >> 0) & 0xf) == seL4_Fault_Timeout", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 2476, __func__); } } while(0);
 
     ret = (seL4_Fault.words[1] & 0xffffffffffffffffull) >> 0;
     /* Possibly sign extend */
@@ -3806,9 +3806,9 @@ seL4_Fault_VMFault_new(uint64_t address, uint64_t FSR, uint64_t instructionFault
     seL4_Fault_t seL4_Fault;
 
     /* fail if user has passed bits that we will override */
-    do { if (!((FSR & ~0xffffffffull) == ((0 && (FSR & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(FSR & ~0xffffffffull) == ((0 && (FSR & (1ull << 47))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 2491, __func__); } } while(0);
-    do { if (!((instructionFault & ~0x1ull) == ((0 && (instructionFault & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(instructionFault & ~0x1ull) == ((0 && (instructionFault & (1ull << 47))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 2492, __func__); } } while(0);
-    do { if (!(((uint64_t)seL4_Fault_VMFault & ~0xfull) == ((0 && ((uint64_t)seL4_Fault_VMFault & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("((uint64_t)seL4_Fault_VMFault & ~0xfull) == ((0 && ((uint64_t)seL4_Fault_VMFault & (1ull << 47))) ? 0x0 : 0)", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 2493, __func__); } } while(0);
+    do { if (!((FSR & ~0xffffffffull) == ((0 && (FSR & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(FSR & ~0xffffffffull) == ((0 && (FSR & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 2491, __func__); } } while(0);
+    do { if (!((instructionFault & ~0x1ull) == ((0 && (instructionFault & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(instructionFault & ~0x1ull) == ((0 && (instructionFault & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 2492, __func__); } } while(0);
+    do { if (!(((uint64_t)seL4_Fault_VMFault & ~0xfull) == ((0 && ((uint64_t)seL4_Fault_VMFault & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("((uint64_t)seL4_Fault_VMFault & ~0xfull) == ((0 && ((uint64_t)seL4_Fault_VMFault & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 2493, __func__); } } while(0);
 
     seL4_Fault.words[0] = 0
         | (FSR & 0xffffffffull) << 32
@@ -3824,7 +3824,7 @@ static inline uint64_t __attribute__((__const__))
 seL4_Fault_VMFault_get_address(seL4_Fault_t seL4_Fault) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((seL4_Fault.words[0] >> 0) & 0xf) == seL4_Fault_VMFault)) { _assert_fail("((seL4_Fault.words[0] >> 0) & 0xf) == seL4_Fault_VMFault", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 2509, __func__); } } while(0);
+    do { if (!(((seL4_Fault.words[0] >> 0) & 0xf) == seL4_Fault_VMFault)) { _assert_fail("((seL4_Fault.words[0] >> 0) & 0xf) == seL4_Fault_VMFault", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 2509, __func__); } } while(0);
 
     ret = (seL4_Fault.words[1] & 0xffffffffffffffffull) >> 0;
     /* Possibly sign extend */
@@ -3838,7 +3838,7 @@ static inline uint64_t __attribute__((__const__))
 seL4_Fault_VMFault_get_FSR(seL4_Fault_t seL4_Fault) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((seL4_Fault.words[0] >> 0) & 0xf) == seL4_Fault_VMFault)) { _assert_fail("((seL4_Fault.words[0] >> 0) & 0xf) == seL4_Fault_VMFault", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 2523, __func__); } } while(0);
+    do { if (!(((seL4_Fault.words[0] >> 0) & 0xf) == seL4_Fault_VMFault)) { _assert_fail("((seL4_Fault.words[0] >> 0) & 0xf) == seL4_Fault_VMFault", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 2523, __func__); } } while(0);
 
     ret = (seL4_Fault.words[0] & 0xffffffff00000000ull) >> 32;
     /* Possibly sign extend */
@@ -3852,7 +3852,7 @@ static inline uint64_t __attribute__((__const__))
 seL4_Fault_VMFault_get_instructionFault(seL4_Fault_t seL4_Fault) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((seL4_Fault.words[0] >> 0) & 0xf) == seL4_Fault_VMFault)) { _assert_fail("((seL4_Fault.words[0] >> 0) & 0xf) == seL4_Fault_VMFault", "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/generated/arch/object/structures_gen.h", 2537, __func__); } } while(0);
+    do { if (!(((seL4_Fault.words[0] >> 0) & 0xf) == seL4_Fault_VMFault)) { _assert_fail("((seL4_Fault.words[0] >> 0) & 0xf) == seL4_Fault_VMFault", "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/generated/arch/object/structures_gen.h", 2537, __func__); } } while(0);
 
     ret = (seL4_Fault.words[0] & 0x80000000ull) >> 31;
     /* Possibly sign extend */
@@ -5022,7 +5022,7 @@ bool_t Arch_handleFaultReply(tcb_t *receiver, tcb_t *sender, word_t faultType);
  * SPDX-License-Identifier: GPL-2.0-only
  */
 
-# 1 "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/gen_headers/plat/machine/devices_gen.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/gen_headers/plat/machine/devices_gen.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -5332,7 +5332,7 @@ bool_t Arch_handleFaultReply(tcb_t *receiver, tcb_t *sender, word_t faultType);
    asserts check that the kernel config won't lead to UTs being created that aren't
    representable. */
 _Static_assert(17592186044416 <= (1ul << (47)), "ut_max_less_than_canonical");;
-# 19 "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/gen_headers/plat/machine/devices_gen.h" 2
+# 19 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/gen_headers/plat/machine/devices_gen.h" 2
 # 1 "/Users/lukasbower/seL4_16/kernel/include/linker.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
@@ -5374,7 +5374,7 @@ _Static_assert(17592186044416 <= (1ul << (47)), "ut_max_less_than_canonical");;
 
 
 /* bss data that is permitted to be used in the restricted SKIM address space */
-# 20 "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/gen_headers/plat/machine/devices_gen.h" 2
+# 20 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/gen_headers/plat/machine/devices_gen.h" 2
 
 
 /* Wrap raw physBase location constant to give it a symbolic name in C that's
@@ -5429,7 +5429,7 @@ static const kernel_frame_t __attribute__((__section__(".boot.rodata"))) kernel_
         .armExecuteNever = true,
         .userAvailable = false
     },
-# 83 "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/gen_headers/plat/machine/devices_gen.h"
+# 83 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/gen_headers/plat/machine/devices_gen.h"
     /* /soc/local_intc@40000000 */
     {
         .paddr = 0xff800000,
@@ -5462,7 +5462,7 @@ static const p_region_t __attribute__((__section__(".boot.rodata"))) avail_p_reg
     },
 };
 # 8 "/Users/lukasbower/seL4_16/kernel/include/plat/default/plat/machine.h" 2
-# 1 "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/gen_headers/plat/platform_gen.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/gen_headers/plat/platform_gen.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -5470,7 +5470,7 @@ static const p_region_t __attribute__((__section__(".boot.rodata"))) avail_p_reg
  */
 
        
-# 17 "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/gen_headers/plat/platform_gen.h"
+# 17 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/gen_headers/plat/platform_gen.h"
 enum IRQConstants {
     maxIRQ = 216
 };
@@ -6367,7 +6367,7 @@ static inline void ackInterrupt(irq_t irq)
     active_irq[getCurrentCPUIndex()] = 1023u;
 
 }
-# 24 "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/gen_headers/plat/platform_gen.h" 2
+# 24 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/gen_headers/plat/platform_gen.h" 2
 # 1 "/Users/lukasbower/seL4_16/kernel/include/drivers/timer/arm_generic.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
@@ -6895,7 +6895,7 @@ static inline void ackDeadlineIRQ(void)
 }
 # 53 "/Users/lukasbower/seL4_16/kernel/include/drivers/timer/arm_generic.h"
 __attribute__((__section__(".boot.text"))) void initGenericTimer(void);
-# 25 "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/gen_headers/plat/platform_gen.h" 2
+# 25 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/gen_headers/plat/platform_gen.h" 2
 
 /* #undef CONFIGURE_SMMU */
 
@@ -6903,7 +6903,7 @@ __attribute__((__section__(".boot.text"))) void initGenericTimer(void);
 
 
 /* #undef CONFIGURE_SMMU */
-# 41 "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/gen_headers/plat/platform_gen.h"
+# 41 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/gen_headers/plat/platform_gen.h"
 static inline __attribute__((__const__)) time_t getKernelWcetUs(void)
 {
     return 10u;
@@ -7126,7 +7126,7 @@ exception_t decodeARMMMUInvocation(word_t invLabel, word_t length, cptr_t cptr,
 void Arch_userStackTrace(tcb_t *tptr);
 # 10 "/Users/lukasbower/seL4_16/kernel/include/kernel/vspace.h" 2
 # 14 "/Users/lukasbower/seL4_16/kernel/include/api/syscall.h" 2
-# 1 "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/gen_headers/arch/api/syscall.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/gen_headers/arch/api/syscall.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -7140,7 +7140,7 @@ void Arch_userStackTrace(tcb_t *tptr);
  *
  */
        
-# 37 "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/gen_headers/arch/api/syscall.h"
+# 37 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/gen_headers/arch/api/syscall.h"
 enum syscall {
     SysCall = -1,
     SysReplyRecv = -2,
@@ -7166,7 +7166,7 @@ enum syscall {
 
     SysDebugSendIPI = -18,
     SysDebugGetThreadAffinity = -19,
-# 91 "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/gen_headers/arch/api/syscall.h"
+# 91 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/gen_headers/arch/api/syscall.h"
 };
 typedef word_t syscall_t;
 
@@ -10885,7 +10885,7 @@ __attribute__((__section__(".boot.text"))) void clock_sync_test(void);
    can take considerable time */
 # 13 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/64/kernel/vspace.c" 2
 # 21 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/64/kernel/vspace.c"
-# 1 "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/gen_headers/arch/api/invocation.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/gen_headers/arch/api/invocation.h" 1
 
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
@@ -10898,7 +10898,7 @@ __attribute__((__section__(".boot.text"))) void clock_sync_test(void);
  *
  */
        
-# 1 "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/gen_headers/arch/api/sel4_invocation.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/gen_headers/arch/api/sel4_invocation.h" 1
 
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
@@ -10911,7 +10911,7 @@ __attribute__((__section__(".boot.text"))) void clock_sync_test(void);
  *
  */
        
-# 1 "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/gen_headers/api/invocation.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/gen_headers/api/invocation.h" 1
 
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
@@ -10959,7 +10959,7 @@ enum invocation_label {
     TCBResume,
     TCBBindNotification,
     TCBUnbindNotification,
-# 63 "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/gen_headers/api/invocation.h"
+# 63 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/gen_headers/api/invocation.h"
     TCBSetTLSBase,
     TCBSetFlags,
     CNodeRevoke,
@@ -11000,7 +11000,7 @@ enum invocation_label {
 
     nInvocationLabels
 };
-# 14 "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/gen_headers/arch/api/sel4_invocation.h" 2
+# 14 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/gen_headers/arch/api/sel4_invocation.h" 2
 
 enum sel4_arch_invocation_label {
     ARMVSpaceClean_Data = nInvocationLabels,
@@ -11010,7 +11010,7 @@ enum sel4_arch_invocation_label {
     ARMSMCCall,
     nSeL4ArchInvocationLabels
 };
-# 14 "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/gen_headers/arch/api/invocation.h" 2
+# 14 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/gen_headers/arch/api/invocation.h" 2
 
 enum arch_invocation_label {
     ARMPageTableMap = nSeL4ArchInvocationLabels,
@@ -11033,11 +11033,11 @@ enum arch_invocation_label {
     ARMPageGetAddress,
     ARMASIDControlMakePool,
     ARMASIDPoolAssign,
-# 51 "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/gen_headers/arch/api/invocation.h"
+# 51 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/gen_headers/arch/api/invocation.h"
     ARMIRQIssueIRQHandlerTrigger,
 
     ARMIRQIssueIRQHandlerTriggerCore,
-# 94 "/private/tmp/cohesix-pi4-build-e66143d8/out/sel4/profile-v2/pi4-diagnostic-16bit-candidate/kernel/gen_headers/arch/api/invocation.h"
+# 94 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic-contract-refresh/kernel/gen_headers/arch/api/invocation.h"
     nArchInvocationLabels
 };
 # 22 "/Users/lukasbower/seL4_16/kernel/src/arch/arm/64/kernel/vspace.c" 2
