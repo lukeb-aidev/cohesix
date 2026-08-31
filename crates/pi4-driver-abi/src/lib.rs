@@ -8,7 +8,7 @@
 /// Magic value for a pointer-free driver runtime initialization descriptor.
 pub const DRIVER_RUNTIME_INIT_MAGIC: u32 = 0x4452_4934;
 /// Runtime descriptor layout and shared-protocol version.
-pub const DRIVER_RUNTIME_INIT_VERSION: u16 = 10;
+pub const DRIVER_RUNTIME_INIT_VERSION: u16 = 11;
 /// Magic identifying the only Milestone 26e runtime scheduler contract.
 pub const DRIVER_RUNTIME_MCS_MAGIC: u32 = 0x4d43_5331;
 /// Version of the scheduler/capability inventory embedded in runtime init.
@@ -2682,6 +2682,14 @@ pub const DRIVER_RUNTIME_DIRECT_GENET_NOTIFICATION_BADGE: u32 =
 pub const DRIVER_RUNTIME_CYW43_ROOT_WAKE_NOTIFICATION_SLOT: u32 = 11;
 /// Exact badge delivered to root after CYW43 commits Network service progress.
 pub const DRIVER_RUNTIME_CYW43_ROOT_WAKE_NOTIFICATION_BADGE: u32 = 1;
+/// Child CSpace slot containing the send-only root-control fan-in notification cap.
+///
+/// Every admitted MCS physical runtime receives this fixed scheduling-hint
+/// authority. Durable command, input, and fault records remain the authority
+/// for selecting work after root wakes.
+pub const DRIVER_RUNTIME_ROOT_CONTROL_WAKE_NOTIFICATION_SLOT: u32 = 12;
+/// Exact coalescing badge on every root-control fan-in notification cap.
+pub const DRIVER_RUNTIME_ROOT_CONTROL_WAKE_NOTIFICATION_BADGE: u32 = 1;
 /// BCM2711 SDIO host interrupt used by the CYW43 card function.
 pub const DRIVER_RUNTIME_SDIO_IRQ: u32 = 158;
 /// Nonzero notification badge bound to [`DRIVER_RUNTIME_SDIO_IRQ`].
@@ -5312,7 +5320,7 @@ pub const DRIVER_RUNTIME_RESOURCE_FLAG_DEVICE_VISIBLE: u16 = 1 << 2;
 pub const DRIVER_RUNTIME_RESOURCE_FLAG_ROOT_SHARED: u16 = 1 << 3;
 /// Resource range flag: pages are CPU-only and cannot back device DMA.
 pub const DRIVER_RUNTIME_RESOURCE_FLAG_CPU_ONLY: u16 = 1 << 4;
-/// Complete allowed resource-range flag set for ABI v10.
+/// Complete allowed resource-range flag set for ABI v11.
 pub const DRIVER_RUNTIME_RESOURCE_ALLOWED_FLAGS: u16 = DRIVER_RUNTIME_RESOURCE_FLAG_VADDR_CONTIGUOUS
     | DRIVER_RUNTIME_RESOURCE_FLAG_PADDR_CONTIGUOUS
     | DRIVER_RUNTIME_RESOURCE_FLAG_DEVICE_VISIBLE
@@ -5875,7 +5883,7 @@ pub const DRIVER_RUNTIME_INIT_REQUIRED_FLAGS: u32 = DRIVER_RUNTIME_INIT_FLAG_POI
     | DRIVER_RUNTIME_INIT_FLAG_SHARED_PADDRS
     | DRIVER_RUNTIME_INIT_FLAG_BUS_ADDRESSING
     | DRIVER_RUNTIME_INIT_FLAG_ROOT_CONTEXT_FORBIDDEN;
-/// Complete allowed runtime-init flag set for ABI v10.
+/// Complete allowed runtime-init flag set for ABI v11.
 pub const DRIVER_RUNTIME_INIT_ALLOWED_FLAGS: u32 = DRIVER_RUNTIME_INIT_FLAG_MMIO_MAPPED
     | DRIVER_RUNTIME_INIT_FLAG_DMA_PADDRS
     | DRIVER_RUNTIME_INIT_FLAG_SHARED_PADDRS
@@ -6882,8 +6890,8 @@ pub struct DriverRuntimeInitDescriptor {
     pub bus_link_count: u16,
     /// Semantic resource ranges populated in `resource_ranges`.
     pub resource_range_count: u16,
-    /// Reserved for alignment and future fixed-layout fields.
-    pub reserved0: u32,
+    /// Fixed child slot containing the send-only root-control fan-in wake cap.
+    pub root_control_wake_notification_slot: u32,
     /// Child CSpace slot containing a send-only root wake cap, or zero when absent.
     pub root_wake_notification_slot: u32,
     /// Exact badge on the root wake cap, or zero when absent.
@@ -6990,7 +6998,7 @@ impl DriverRuntimeInitDescriptor {
             irq_count: 0,
             bus_link_count: 0,
             resource_range_count: 0,
-            reserved0: 0,
+            root_control_wake_notification_slot: 0,
             root_wake_notification_slot: 0,
             root_wake_notification_badge: 0,
             direct_genet: DriverRuntimeDirectGenetDescriptor::empty(),
@@ -7093,6 +7101,8 @@ impl DriverRuntimeInitDescriptor {
         self.command_reply_slot = DRIVER_RUNTIME_COMMAND_REPLY_SLOT;
         self.irq_notification_slot = DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT;
         self.completion_notification_slot = DRIVER_RUNTIME_COMPLETION_NOTIFICATION_SLOT;
+        self.root_control_wake_notification_slot =
+            DRIVER_RUNTIME_ROOT_CONTROL_WAKE_NOTIFICATION_SLOT;
         self.command_badge = driver_runtime_command_badge(task_key);
         self.completion_badge = driver_runtime_completion_badge(task_key);
         self.standard_fault_badge = standard_fault_badge;
@@ -7170,7 +7180,6 @@ impl DriverRuntimeInitDescriptor {
             && (self.resource_range_count as usize) <= DRIVER_RUNTIME_INIT_MAX_RESOURCE_RANGES
             && self.root_wake_notification_valid()
             && self.direct_genet_link_valid()
-            && self.reserved0 == 0
             && self.command_cap_reserved == 0
             && self.reserved_tail == 0
             && self.mcs_scheduler_valid()
@@ -7207,6 +7216,8 @@ impl DriverRuntimeInitDescriptor {
             && self.command_reply_slot == DRIVER_RUNTIME_COMMAND_REPLY_SLOT
             && self.irq_notification_slot == DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT
             && self.completion_notification_slot == DRIVER_RUNTIME_COMPLETION_NOTIFICATION_SLOT
+            && self.root_control_wake_notification_slot
+                == DRIVER_RUNTIME_ROOT_CONTROL_WAKE_NOTIFICATION_SLOT
             && self.command_badge == driver_runtime_command_badge(self.task_key)
             && self.completion_badge == driver_runtime_completion_badge(self.task_key)
             && self.standard_fault_badge != 0
@@ -9073,7 +9084,7 @@ mod tests {
         assert_eq!(core::mem::size_of::<DriverRuntimeDpcEventEntry>(), 16);
         assert_eq!(core::mem::size_of::<DriverRuntimeDpcEventRing>(), 96);
         assert_eq!(DRIVER_RUNTIME_DPC_EVENT_RING_VERSION, 3);
-        assert_eq!(DRIVER_RUNTIME_INIT_VERSION, 10);
+        assert_eq!(DRIVER_RUNTIME_INIT_VERSION, 11);
         assert_eq!(
             DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET + DRIVER_RUNTIME_DPC_EVENT_RING_BYTES,
             DRIVER_RUNTIME_RING_FRAME_OFFSET
@@ -9405,6 +9416,10 @@ mod tests {
             descriptor.completion_notification_slot,
             DRIVER_RUNTIME_COMPLETION_NOTIFICATION_SLOT
         );
+        assert_eq!(
+            descriptor.root_control_wake_notification_slot,
+            DRIVER_RUNTIME_ROOT_CONTROL_WAKE_NOTIFICATION_SLOT
+        );
         assert_eq!(descriptor.max_inflight_commands, 1);
         assert_ne!(descriptor.command_badge, descriptor.completion_badge);
         assert_ne!(descriptor.command_badge, descriptor.standard_fault_badge);
@@ -9418,6 +9433,13 @@ mod tests {
         assert!(!invalid.mcs_scheduler_valid());
         invalid = descriptor;
         invalid.completion_badge = invalid.command_badge;
+        assert!(!invalid.mcs_scheduler_valid());
+        invalid = descriptor;
+        invalid.root_control_wake_notification_slot = 0;
+        assert!(!invalid.mcs_scheduler_valid());
+        invalid = descriptor;
+        invalid.root_control_wake_notification_slot =
+            DRIVER_RUNTIME_ROOT_CONTROL_WAKE_NOTIFICATION_SLOT + 1;
         assert!(!invalid.mcs_scheduler_valid());
     }
 
@@ -9476,6 +9498,16 @@ mod tests {
         );
         assert_eq!(core::mem::size_of::<DriverRuntimeInitDescriptor>(), 1600);
         assert_eq!(DRIVER_RUNTIME_CHILD_DIRECT_GENET_PEER_NOTIFICATION_SLOT, 8);
+        assert_eq!(DRIVER_RUNTIME_ROOT_CONTROL_WAKE_NOTIFICATION_SLOT, 12);
+        assert!(DRIVER_RUNTIME_ROOT_CONTROL_WAKE_NOTIFICATION_SLOT < 16);
+        assert_ne!(
+            DRIVER_RUNTIME_ROOT_CONTROL_WAKE_NOTIFICATION_SLOT,
+            DRIVER_RUNTIME_CYW43_ROOT_WAKE_NOTIFICATION_SLOT
+        );
+        assert_ne!(
+            DRIVER_RUNTIME_ROOT_CONTROL_WAKE_NOTIFICATION_SLOT,
+            DRIVER_RUNTIME_COMPLETION_NOTIFICATION_SLOT
+        );
         assert_eq!(DRIVER_RUNTIME_GENET_DIRECT_LINK_NOTIFICATION_BADGE, 1 << 8);
         assert_eq!(DRIVER_RUNTIME_DIRECT_GENET_SHARED_PAGE_COUNT, 32);
 

@@ -20,6 +20,7 @@ use console_network_runtime::abi::{
 use direct_genet::DirectGenetLink;
 
 const GENERATION: u64 = 0x4745_4e45_5400_0001;
+const KERNEL_SOURCE: &str = include_str!("../src/kernel.rs");
 
 #[repr(C, align(4096))]
 struct SharedPage([u8; SHARED_PAGE_BYTES]);
@@ -254,4 +255,42 @@ fn malformed_layout_is_rejected_before_shared_memory_access() {
         DirectGenetLink::new(layout),
         Err(DirectGenetError::InvalidLayout)
     ));
+}
+
+#[test]
+fn physical_durable_publications_wake_root_after_their_primary_notification() {
+    let helper_start = KERNEL_SOURCE
+        .find("fn signal_durable_child_publication(")
+        .expect("the durable-publication helper remains explicit");
+    let production = &KERNEL_SOURCE[..helper_start];
+    assert_eq!(
+        production
+            .matches("signal_durable_child_publication(")
+            .count(),
+        7,
+        "every ready, completion, service, egress, and ownership publication uses the helper",
+    );
+    assert!(
+        !production.contains("signal_slot(descriptor.supervisor_wake_notification_slot);"),
+        "no durable supervisor publication may bypass the root-control wake",
+    );
+    assert!(
+        !production.contains("signal_slot(descriptor.packet_tx_wake_notification_slot);"),
+        "no durable packet publication may bypass the root-control wake",
+    );
+
+    let helper = &KERNEL_SOURCE[helper_start..];
+    let primary_signal = helper
+        .find("signal_slot(publication_slot);")
+        .expect("the original publication badge is preserved");
+    let root_control_signal = helper
+        .find("signal_slot(descriptor.root_control_wake_notification_slot);")
+        .expect("the physical root-control wake is signalled");
+    let physical_guard = helper
+        .find("if !descriptor.direct_virtio()")
+        .expect("direct-VirtIO QEMU must not latch the Pi-only fan-in");
+    assert!(
+        primary_signal < physical_guard && physical_guard < root_control_signal,
+        "the semantic publication badge must be latched before root-control becomes runnable",
+    );
 }

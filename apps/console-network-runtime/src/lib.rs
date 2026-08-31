@@ -69,9 +69,10 @@ pub const fn direct_service_repoll_required(
 /// root supplies the command's bounded control successor.
 ///
 /// Direct VirtIO retains its qualified work-conserving behavior. Only the
-/// physical cross-core GENET child suppresses an ACK-only idle quantum after a
-/// command publication. Publication ACKs, link wakes, and empty control hints
-/// do not release either the pre-wait or post-wait direct-service gate.
+/// physical direct-GENET child in the Pi same-core root/console profile
+/// suppresses an ACK-only idle quantum after a command publication.
+/// Publication ACKs, link wakes, and empty control hints do not release either
+/// the pre-wait or post-wait direct-service gate.
 #[must_use]
 pub const fn direct_genet_command_publication_quiesces(
     exact_direct_genet: bool,
@@ -1598,8 +1599,8 @@ mod tests {
     use abi::{
         RuntimeInitDescriptor, ABI_VERSION, AUTH_TOKEN_BYTES, CHILD_CSPACE_SLOTS, CHILD_WAKE_MASK,
         CHILD_WAKE_NOTIFICATION_SLOT, ETHERNET_FRAME_BYTES, FAULT_ENDPOINT_SLOT,
-        PACKET_TX_WAKE_NOTIFICATION_SLOT, REQUIRED_INIT_FLAGS, ROOT_WAKE_MASK, RUNTIME_INIT_MAGIC,
-        SHARED_PAGE_BYTES, SUPERVISOR_WAKE_NOTIFICATION_SLOT,
+        PACKET_TX_WAKE_NOTIFICATION_SLOT, REQUIRED_INIT_FLAGS, ROOT_CONTROL_WAKE_NOTIFICATION_SLOT,
+        ROOT_WAKE_MASK, RUNTIME_INIT_MAGIC, SHARED_PAGE_BYTES, SUPERVISOR_WAKE_NOTIFICATION_SLOT,
     };
     use smoltcp::phy::ChecksumCapabilities;
     use smoltcp::wire::{
@@ -1696,7 +1697,7 @@ mod tests {
             abi_version: ABI_VERSION,
             descriptor_bytes: size_of::<RuntimeInitDescriptor>() as u16,
             flags: REQUIRED_INIT_FLAGS,
-            reserved0: 0,
+            root_control_wake_notification_slot: ROOT_CONTROL_WAKE_NOTIFICATION_SLOT,
             generation: 7,
             child_wake_notification_slot: CHILD_WAKE_NOTIFICATION_SLOT,
             packet_tx_wake_notification_slot: PACKET_TX_WAKE_NOTIFICATION_SLOT,

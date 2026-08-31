@@ -1259,6 +1259,7 @@ impl<T> Hardware for T where T: PciHal + Cyw43Hal {}
 #[cfg(feature = "kernel")]
 pub struct KernelHal<'a> {
     env: KernelEnv<'a>,
+    root_control_wake_notification_origin: seL4_CPtr,
     driver_tasks: heapless::Vec<KernelDriverTaskHandle, MAX_KERNEL_DRIVER_TASKS>,
     dormant_driver_tcbs: heapless::Vec<(DriverTaskContract, seL4_CPtr), 3>,
     driver_task_report: DriverTaskBootstrapReport,
@@ -2805,8 +2806,8 @@ const fn driver_runtime_root_notification_send_rights() -> sel4_sys::seL4_CapRig
 
 #[cfg(feature = "kernel")]
 const fn driver_runtime_child_root_wake_send_rights() -> sel4_sys::seL4_CapRights {
-    // CYW43 may only signal the compiler-declared, badged root wake cap. It
-    // cannot receive from the root-owned object or mint another authority.
+    // A runtime may only signal a compiler-declared, badged root wake cap. It
+    // cannot receive from either root-owned object or mint another authority.
     sel4_sys::seL4_CapRights::new(0, 0, 0, 1)
 }
 
@@ -3886,10 +3887,42 @@ impl<'a> KernelHal<'a> {
     pub fn new(env: KernelEnv<'a>) -> Self {
         Self {
             env,
+            root_control_wake_notification_origin: sel4_sys::seL4_CapNull,
             driver_tasks: heapless::Vec::new(),
             dormant_driver_tcbs: heapless::Vec::new(),
             driver_task_report: DriverTaskBootstrapReport::default(),
         }
+    }
+
+    /// Retain root's sole receive/origin capability for the root-control fan-in.
+    ///
+    /// Physical runtimes receive only fixed-slot, badged, Write-only children
+    /// minted from this cap. Replacing the origin after any child construction
+    /// would split one durable wake domain across unrelated notification
+    /// objects, so installation is deliberately once-only.
+    pub(crate) fn install_root_control_wake_notification_origin(
+        &mut self,
+        cap: seL4_CPtr,
+    ) -> Result<(), HalError> {
+        if cap == sel4_sys::seL4_CapNull {
+            return Err(HalError::Unsupported(
+                "root-control-wake-notification-origin-null",
+            ));
+        }
+        if self.root_control_wake_notification_origin != sel4_sys::seL4_CapNull {
+            return Err(HalError::Unsupported(
+                "root-control-wake-notification-origin-already-installed",
+            ));
+        }
+        self.root_control_wake_notification_origin = cap;
+        Ok(())
+    }
+
+    /// Return root's retained receive/origin cap for the root-control fan-in.
+    #[must_use]
+    pub(crate) fn root_control_wake_notification_origin(&self) -> Option<seL4_CPtr> {
+        (self.root_control_wake_notification_origin != sel4_sys::seL4_CapNull)
+            .then_some(self.root_control_wake_notification_origin)
     }
 
     /// Consumes bootstrap CSpace slots allocated before the HAL is initialised.
@@ -5629,6 +5662,7 @@ impl<'a> KernelHal<'a> {
                 .then(|| driver_task::driver_runtime_image_bytes(spec.hot_path))
                 .flatten()
         });
+        let root_control_wake_required = linked_runtime_image.is_some();
         if driver_task::physical_pi_driver_task_only_owner_state_active()
             && runtime_image_spec.is_some()
             && linked_runtime_image.is_none()
@@ -5800,6 +5834,28 @@ impl<'a> KernelHal<'a> {
             );
             if root_wake_err != seL4_NoError {
                 return Err(HalError::Sel4(root_wake_err));
+            }
+        }
+        if root_control_wake_required {
+            let root_control_wake_notification = self
+                .root_control_wake_notification_origin()
+                .ok_or(HalError::Unsupported(
+                    "driver-runtime-root-control-wake-origin-missing",
+                ))?;
+            let root_control_wake_err = sel4::cnode_mint_depth(
+                child_cnode,
+                seL4_CPtr::from(pi4_driver_abi::DRIVER_RUNTIME_ROOT_CONTROL_WAKE_NOTIFICATION_SLOT),
+                child_depth,
+                root_cnode,
+                root_control_wake_notification,
+                root_depth,
+                driver_runtime_child_root_wake_send_rights(),
+                seL4_Word::from(
+                    pi4_driver_abi::DRIVER_RUNTIME_ROOT_CONTROL_WAKE_NOTIFICATION_BADGE,
+                ),
+            );
+            if root_control_wake_err != seL4_NoError {
+                return Err(HalError::Sel4(root_control_wake_err));
             }
         }
         let mut tracker = VSpaceTableTracker::new();
@@ -7279,6 +7335,10 @@ mod tests {
             descriptor.root_wake_notification_badge,
             pi4_driver_abi::DRIVER_RUNTIME_CYW43_ROOT_WAKE_NOTIFICATION_BADGE
         );
+        assert_eq!(
+            descriptor.root_control_wake_notification_slot,
+            pi4_driver_abi::DRIVER_RUNTIME_ROOT_CONTROL_WAKE_NOTIFICATION_SLOT
+        );
         let link = descriptor.bus_links[0];
         assert_eq!(
             link.owner_hot_path,
@@ -7859,7 +7919,15 @@ mod tests {
         assert_eq!(
             super::driver_runtime_child_root_wake_send_rights().raw(),
             0b0001,
-            "CYW43 may signal but cannot receive from the root-owned wake object"
+            "physical runtimes may signal but cannot receive from root-owned wake objects"
+        );
+        assert_eq!(
+            pi4_driver_abi::DRIVER_RUNTIME_ROOT_CONTROL_WAKE_NOTIFICATION_SLOT,
+            12,
+        );
+        assert_ne!(
+            pi4_driver_abi::DRIVER_RUNTIME_ROOT_CONTROL_WAKE_NOTIFICATION_SLOT,
+            pi4_driver_abi::DRIVER_RUNTIME_CYW43_ROOT_WAKE_NOTIFICATION_SLOT,
         );
         assert_eq!(
             cyw43_sdio_peer_notification_badge(DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_SLOT),

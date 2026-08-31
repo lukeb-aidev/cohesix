@@ -495,6 +495,14 @@ where
         sel4_config_kernel_mcs
     ))]
     let mut productive_window = PiRootControlProductiveWindow::new();
+    #[cfg(all(
+        feature = "net-console",
+        feature = "release-pi4",
+        target_arch = "aarch64",
+        target_os = "none",
+        sel4_config_kernel_mcs
+    ))]
+    let natural_postpone_profile = pi_root_control_natural_postpone_from_manifest();
     loop {
         // Snapshot the cheap side-effect-free recovery frontier before any
         // policy-time or admission work. An already-published fault cancels
@@ -528,6 +536,7 @@ where
                 pi_root_control_yield_and_restart(
                     pump,
                     &mut productive_window,
+                    natural_postpone_profile,
                     crate::pi4_mcs_recorder::PiMcsYieldTrigger::PassiveAdmission,
                 );
             }
@@ -593,6 +602,7 @@ where
             pi_root_control_yield_and_restart(
                 pump,
                 &mut productive_window,
+                natural_postpone_profile,
                 crate::pi4_mcs_recorder::PiMcsYieldTrigger::RecoveryFence,
             );
             #[cfg(not(all(
@@ -648,7 +658,11 @@ where
                 sel4_config_kernel_mcs
             ))]
             {
-                poll_pi_root_control_productive_quanta(pump, &mut productive_window)
+                poll_pi_root_control_productive_quanta(
+                    pump,
+                    &mut productive_window,
+                    natural_postpone_profile,
+                )
             }
             #[cfg(not(all(
                 feature = "net-console",
@@ -675,9 +689,21 @@ where
                 sel4_config_kernel_mcs
             ))]
             {
+                if !handoff_turn
+                    && productive_window.nonblocking_fanin_hint_eligible()
+                    && poll_pi_root_control_fanin_hint(ctx)
+                {
+                    // The ordinary no-successor cut already closed every hard
+                    // fence. The edge may name any producer and authorizes no
+                    // continuation; return once to recovery/operator-first
+                    // arbitration and re-read all durable state.
+                    productive_window.consume_nonblocking_fanin_hint();
+                    continue;
+                }
                 pi_root_control_yield_and_restart(
                     pump,
                     &mut productive_window,
+                    natural_postpone_profile,
                     if handoff_turn {
                         crate::pi4_mcs_recorder::PiMcsYieldTrigger::RecoveryFence
                     } else {
@@ -722,6 +748,14 @@ where
         sel4_config_kernel_mcs
     ))]
     let mut productive_window = PiRootControlProductiveWindow::new();
+    #[cfg(all(
+        feature = "net-console",
+        feature = "release-pi4",
+        target_arch = "aarch64",
+        target_os = "none",
+        sel4_config_kernel_mcs
+    ))]
+    let natural_postpone_profile = pi_root_control_natural_postpone_from_manifest();
     loop {
         #[cfg(all(
             feature = "net-console",
@@ -730,8 +764,11 @@ where
             target_os = "none",
             sel4_config_kernel_mcs
         ))]
-        let explicit_yield_required =
-            poll_pi_root_control_productive_quanta(pump, &mut productive_window);
+        let explicit_yield_required = poll_pi_root_control_productive_quanta(
+            pump,
+            &mut productive_window,
+            natural_postpone_profile,
+        );
         #[cfg(not(all(
             feature = "net-console",
             feature = "release-pi4",
@@ -752,6 +789,7 @@ where
                 pi_root_control_yield_and_restart(
                     pump,
                     &mut productive_window,
+                    natural_postpone_profile,
                     crate::pi4_mcs_recorder::PiMcsYieldTrigger::NoProductiveSuccessor,
                 );
             }
@@ -968,15 +1006,24 @@ enum DeferredCyw43SupervisorPhase {
     feature = "kernel",
     feature = "net-console"
 ))]
-const fn deferred_cyw43_activation_reserve_us(
+const fn pi_root_control_natural_postpone_profile(
     budget_us: u32,
+    period_us: u32,
     wcet_us: u32,
     admitted: bool,
-) -> Option<u64> {
-    if !admitted || wcet_us == 0 || budget_us <= wcet_us {
-        return None;
-    }
-    Some((budget_us - wcet_us) as u64)
+    consumed_time_evidence: bool,
+    timeout_policy: crate::generated::TimeoutPolicy,
+) -> bool {
+    admitted
+        && consumed_time_evidence
+        && budget_us != 0
+        && wcet_us != 0
+        && wcet_us < budget_us
+        && budget_us <= period_us
+        && matches!(
+            timeout_policy,
+            crate::generated::TimeoutPolicy::NaturalPostpone
+        )
 }
 
 #[cfg(all(
@@ -984,15 +1031,26 @@ const fn deferred_cyw43_activation_reserve_us(
     feature = "kernel",
     feature = "net-console"
 ))]
-fn deferred_cyw43_activation_reserve_from_manifest_us() -> Option<u64> {
-    let root_control = crate::generated::temporal_tasks()
+fn pi_root_control_natural_postpone_from_manifest() -> bool {
+    crate::generated::temporal_tasks()
         .iter()
-        .find(|task| task.id == "root-control")?;
-    deferred_cyw43_activation_reserve_us(
-        root_control.budget_us,
-        root_control.wcet_us,
-        root_control.admitted,
-    )
+        .find(|task| task.id == "root-control")
+        .is_some_and(|root_control| {
+            matches!(
+                root_control.kind,
+                crate::generated::TemporalTaskKind::RootControl
+            ) && matches!(
+                root_control.execution,
+                crate::generated::TemporalExecution::Active
+            ) && pi_root_control_natural_postpone_profile(
+                root_control.budget_us,
+                root_control.period_us,
+                root_control.wcet_us,
+                root_control.admitted,
+                root_control.consumed_time_evidence,
+                root_control.timeout_policy,
+            )
+        })
 }
 
 #[cfg(all(
@@ -1060,13 +1118,27 @@ enum DeferredCyw43ActivationClock {
 ))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct DeferredCyw43ActivationWindow {
-    clock: DeferredCyw43ActivationClock,
     logical_turns: u8,
     productive_units: u8,
     last_reject_reason: u32,
     last_reject_stage: u8,
+    nonblocking_fanin_hint_consumed: bool,
 }
 
+/// Bound exact resumable CYW43 root work without turning wall preemption into
+/// an MCS refill-forfeiture decision.
+///
+/// Root-control's selected `NaturalPostpone` SC remains the execution bound:
+/// the kernel may preempt and later resume any one-operation leaf at its exact
+/// instruction cursor. This window admits only already-proven productive
+/// Operator/Driver or attached-Network continuations and retains both sides of
+/// the existing 64-unit bound: every full Operator, Driver, and attached
+/// Network service turn spends one logical unit, while only material Driver or
+/// attached progress spends productive credit. An idle, blocked, passive,
+/// recovery, operator, or cap boundary still reaches the explicit Yield
+/// helper. A missing or incompatible generated profile admits one legacy
+/// logical turn and then yields, preserving fail-closed liveness without a
+/// spin or poll lane.
 #[cfg(all(
     feature = "serial-console",
     feature = "kernel",
@@ -1074,8 +1146,6 @@ struct DeferredCyw43ActivationWindow {
 ))]
 impl DeferredCyw43ActivationWindow {
     const REJECT_CAP: u32 = 1 << 0;
-    const REJECT_CLOCK: u32 = 1 << 1;
-    const REJECT_RESERVE: u32 = 1 << 2;
     const REJECT_POLICY_AFTER_FIRST: u32 = 1 << 3;
     const STAGE_NONE: u8 = 0;
     const STAGE_ACTIVATION: u8 = 1;
@@ -1085,11 +1155,11 @@ impl DeferredCyw43ActivationWindow {
 
     const fn new() -> Self {
         Self {
-            clock: DeferredCyw43ActivationClock::Unstarted,
             logical_turns: 0,
             productive_units: 0,
             last_reject_reason: 0,
             last_reject_stage: Self::STAGE_NONE,
+            nonblocking_fanin_hint_consumed: false,
         }
     }
 
@@ -1097,26 +1167,7 @@ impl DeferredCyw43ActivationWindow {
         *self = Self::new();
     }
 
-    fn begin(&mut self, now_ticks: u64, counter_hz: u64) {
-        if self.clock != DeferredCyw43ActivationClock::Unstarted {
-            return;
-        }
-        self.clock = if now_ticks == 0 || counter_hz == 0 {
-            DeferredCyw43ActivationClock::Invalid
-        } else {
-            DeferredCyw43ActivationClock::Timed {
-                started_ticks: now_ticks,
-                counter_hz,
-            }
-        };
-    }
-
-    fn turn_admitted(
-        &mut self,
-        now_ticks: u64,
-        counter_hz: u64,
-        activation_reserve_us: Option<u64>,
-    ) -> bool {
+    fn resumable_turn_admitted(&mut self, natural_postpone_profile: bool) -> bool {
         self.last_reject_reason = 0;
         self.last_reject_stage = Self::STAGE_NONE;
         if self.logical_turns >= DEFERRED_CYW43_ACTIVATION_MAX_PRODUCTIVE_UNITS
@@ -1125,51 +1176,11 @@ impl DeferredCyw43ActivationWindow {
             self.last_reject_reason = Self::REJECT_CAP;
             return false;
         }
-        self.begin(now_ticks, counter_hz);
-        let Some(activation_reserve_us) = activation_reserve_us else {
-            if self.logical_turns == 0 {
-                return true;
-            }
+        if !natural_postpone_profile && self.logical_turns != 0 {
             self.last_reject_reason = Self::REJECT_POLICY_AFTER_FIRST;
             return false;
-        };
-        match self.clock {
-            DeferredCyw43ActivationClock::Unstarted => {
-                self.last_reject_reason = Self::REJECT_CLOCK;
-                false
-            }
-            DeferredCyw43ActivationClock::Timed {
-                started_ticks,
-                counter_hz: started_hz,
-            } => {
-                if now_ticks == 0
-                    || counter_hz == 0
-                    || counter_hz != started_hz
-                    || now_ticks < started_ticks
-                {
-                    self.last_reject_reason = Self::REJECT_CLOCK;
-                    return false;
-                }
-                let elapsed_ticks = u128::from(now_ticks - started_ticks);
-                let elapsed_scaled = elapsed_ticks.saturating_mul(1_000_000u128);
-                let reserve_scaled =
-                    u128::from(started_hz).saturating_mul(u128::from(activation_reserve_us));
-                if elapsed_scaled < reserve_scaled {
-                    true
-                } else {
-                    self.last_reject_reason = Self::REJECT_RESERVE;
-                    false
-                }
-            }
-            DeferredCyw43ActivationClock::Invalid => {
-                if self.logical_turns == 0 {
-                    true
-                } else {
-                    self.last_reject_reason = Self::REJECT_CLOCK | Self::REJECT_POLICY_AFTER_FIRST;
-                    false
-                }
-            }
         }
+        true
     }
 
     const fn last_reject_reason(self) -> u32 {
@@ -1198,20 +1209,28 @@ impl DeferredCyw43ActivationWindow {
             self.productive_units = self.productive_units.saturating_add(1);
         }
     }
+
+    const fn nonblocking_fanin_hint_available(self) -> bool {
+        !self.nonblocking_fanin_hint_consumed
+    }
+
+    fn consume_nonblocking_fanin_hint(&mut self) {
+        debug_assert!(self.nonblocking_fanin_hint_available());
+        self.nonblocking_fanin_hint_consumed = true;
+    }
 }
 
 /// One physical-Pi root-control activation retained across an exact
 /// authenticated GENET transaction and its bounded active tail.
 ///
-/// This deliberately reuses the same generated `budget - WCET` cut as the
-/// deferred CYW43 supervisor. The window begins only at the CNTVCT value
-/// captured by `yield_now`, never slides on progress or preemption, and admits
-/// no new strict-reserve quantum at equality. Exact command acceptance opens
-/// one unslid eight-millisecond transaction tail so cross-core stage/drain
-/// publication and the next sequential TCP request do not each pay a whole
-/// selected-MCS Yield period. Every tail turn still runs the complete physical
-/// rotor, and both the scheduling context and fixed shared quantum cap remain
-/// independent hard bounds.
+/// Exact productive GENET identity may retain root-control across kernel
+/// NaturalPostpone without a userland wall-time refill-forfeiture guard. The
+/// kernel scheduling context remains the execution bound and resumes the exact
+/// instruction cursor after postponement; every complete rotor quantum still
+/// spends the unchanged 64-quantum cap. Exact same-core YieldTo progress may
+/// additionally open the existing unslid eight-millisecond transaction tail,
+/// which remains the only bounded allowance for an empty rotor turn. The tail
+/// is never extended by progress or preemption.
 #[cfg(all(
     any(
         test,
@@ -1234,8 +1253,11 @@ struct PiRootControlProductiveWindow {
     active_hot_tail: Option<crate::event::PiRootControlProductiveContinuation>,
     active_hot_tail_started_ticks: u64,
     credited_child_scaled: u128,
+    child_credit_telemetry_valid: bool,
     last_effective_root_scaled: u128,
     last_reject_reason: u32,
+    nonblocking_fanin_hint_eligible: bool,
+    nonblocking_fanin_hint_consumed: bool,
 }
 
 #[cfg(all(
@@ -1260,7 +1282,6 @@ impl PiRootControlProductiveWindow {
     const REJECT_POLICY: u32 = 1 << 3;
     const REJECT_COUNTER: u32 = 1 << 4;
     const REJECT_ARITHMETIC: u32 = 1 << 5;
-    const REJECT_CREDIT: u32 = 1 << 6;
     const REJECT_TOKEN: u32 = 1 << 7;
 
     const fn new() -> Self {
@@ -1271,8 +1292,11 @@ impl PiRootControlProductiveWindow {
             active_hot_tail: None,
             active_hot_tail_started_ticks: 0,
             credited_child_scaled: 0,
+            child_credit_telemetry_valid: false,
             last_effective_root_scaled: 0,
             last_reject_reason: 0,
+            nonblocking_fanin_hint_eligible: false,
+            nonblocking_fanin_hint_consumed: false,
         }
     }
 
@@ -1284,19 +1308,20 @@ impl PiRootControlProductiveWindow {
         &mut self,
         resumed_at_ticks: u64,
         counter_hz: u64,
-        reserve_us: Option<u64>,
+        natural_postpone_profile: bool,
     ) -> bool {
         self.completed_quanta = 0;
         self.continuation = None;
         self.active_hot_tail = None;
         self.active_hot_tail_started_ticks = 0;
         self.credited_child_scaled = 0;
+        self.child_credit_telemetry_valid = false;
         self.last_effective_root_scaled = 0;
         self.last_reject_reason = 0;
-        self.clock = if resumed_at_ticks != 0
-            && counter_hz != 0
-            && reserve_us.is_some_and(|reserve| reserve != 0)
-        {
+        self.nonblocking_fanin_hint_eligible = false;
+        self.nonblocking_fanin_hint_consumed = false;
+        self.clock = if natural_postpone_profile && resumed_at_ticks != 0 && counter_hz != 0 {
+            self.child_credit_telemetry_valid = true;
             DeferredCyw43ActivationClock::Timed {
                 started_ticks: resumed_at_ticks,
                 counter_hz,
@@ -1307,75 +1332,54 @@ impl PiRootControlProductiveWindow {
         matches!(self.clock, DeferredCyw43ActivationClock::Timed { .. })
     }
 
-    fn next_quantum_admitted(
-        &mut self,
-        now_ticks: u64,
-        counter_hz: u64,
-        reserve_us: Option<u64>,
-    ) -> bool {
+    fn resumable_quantum_admitted(&mut self, natural_postpone_profile: bool) -> bool {
         self.last_reject_reason = 0;
-        self.last_effective_root_scaled = 0;
         if self.completed_quanta >= Self::MAX_COMPLETED_QUANTA {
             self.last_reject_reason = Self::REJECT_CAP;
             return false;
         }
-        if matches!(
-            self.clock,
-            DeferredCyw43ActivationClock::Unstarted | DeferredCyw43ActivationClock::Invalid
-        ) {
-            // Before the first measurable Yield return, or after an invalid
-            // return sample, execute at most one legacy bounded quantum and
-            // then force the explicit Yield boundary.
-            let admitted = self.completed_quanta == 0;
-            if !admitted {
-                self.last_reject_reason = Self::REJECT_CLOCK;
-            }
-            return admitted;
-        }
-        let Some(reserve_us) = reserve_us.filter(|reserve| *reserve != 0) else {
-            self.clock = DeferredCyw43ActivationClock::Invalid;
-            self.completed_quanta = Self::MAX_COMPLETED_QUANTA;
+        if !natural_postpone_profile && self.completed_quanta != 0 {
             self.last_reject_reason = Self::REJECT_POLICY;
             return false;
-        };
+        }
+        true
+    }
+
+    /// Sample legacy effective-root telemetry without making it an admission
+    /// authority. NaturalPostpone is an execution-time scheduler contract;
+    /// wall time includes child execution and kernel postponement and therefore
+    /// cannot safely decide whether an exact productive cursor may resume.
+    fn sample_effective_root_telemetry(&mut self, now_ticks: u64, counter_hz: u64) {
+        self.last_effective_root_scaled = 0;
+        if !self.child_credit_telemetry_valid {
+            return;
+        }
         let DeferredCyw43ActivationClock::Timed {
             started_ticks,
             counter_hz: started_hz,
         } = self.clock
         else {
-            return false;
+            return;
         };
         if now_ticks == 0
             || counter_hz == 0
             || counter_hz != started_hz
             || now_ticks < started_ticks
         {
-            self.clock = DeferredCyw43ActivationClock::Invalid;
-            self.completed_quanta = Self::MAX_COMPLETED_QUANTA;
-            self.last_reject_reason = Self::REJECT_COUNTER;
-            return false;
+            self.child_credit_telemetry_valid = false;
+            return;
         }
         let elapsed_scaled = u128::from(now_ticks - started_ticks).checked_mul(1_000_000u128);
-        let reserve_scaled = u128::from(counter_hz).checked_mul(u128::from(reserve_us));
-        let Some((elapsed_scaled, reserve_scaled)) = elapsed_scaled.zip(reserve_scaled) else {
-            self.clock = DeferredCyw43ActivationClock::Invalid;
-            self.completed_quanta = Self::MAX_COMPLETED_QUANTA;
-            self.last_reject_reason = Self::REJECT_ARITHMETIC;
-            return false;
+        let Some(elapsed_scaled) = elapsed_scaled else {
+            self.child_credit_telemetry_valid = false;
+            return;
         };
         let Some(effective_root_scaled) = elapsed_scaled.checked_sub(self.credited_child_scaled)
         else {
-            self.clock = DeferredCyw43ActivationClock::Invalid;
-            self.completed_quanta = Self::MAX_COMPLETED_QUANTA;
-            self.last_reject_reason = Self::REJECT_CREDIT;
-            return false;
+            self.child_credit_telemetry_valid = false;
+            return;
         };
         self.last_effective_root_scaled = effective_root_scaled;
-        let admitted = effective_root_scaled < reserve_scaled;
-        if !admitted {
-            self.last_reject_reason = Self::REJECT_CLOCK;
-        }
-        admitted
     }
 
     fn record_completed_quantum_at(
@@ -1395,38 +1399,25 @@ impl PiRootControlProductiveWindow {
             self.last_reject_reason = Self::REJECT_TOKEN;
             return false;
         }
-        if continuation.child_credit_scaled() != 0 {
-            let DeferredCyw43ActivationClock::Timed { counter_hz, .. } = self.clock else {
-                self.clock = DeferredCyw43ActivationClock::Invalid;
-                self.completed_quanta = Self::MAX_COMPLETED_QUANTA;
-                self.continuation = None;
-                self.active_hot_tail = None;
-                self.active_hot_tail_started_ticks = 0;
-                self.last_reject_reason = Self::REJECT_CREDIT;
-                return false;
-            };
-            if continuation.child_credit_counter_hz() != counter_hz {
-                self.clock = DeferredCyw43ActivationClock::Invalid;
-                self.completed_quanta = Self::MAX_COMPLETED_QUANTA;
-                self.continuation = None;
-                self.active_hot_tail = None;
-                self.active_hot_tail_started_ticks = 0;
-                self.last_reject_reason = Self::REJECT_COUNTER;
-                return false;
+        if continuation.child_credit_scaled() != 0 && self.child_credit_telemetry_valid {
+            let matching_frequency = matches!(
+                self.clock,
+                DeferredCyw43ActivationClock::Timed { counter_hz, .. }
+                    if continuation.child_credit_counter_hz() == counter_hz
+            );
+            if matching_frequency {
+                if let Some(credited_child_scaled) = self
+                    .credited_child_scaled
+                    .checked_add(continuation.child_credit_scaled())
+                {
+                    self.credited_child_scaled = credited_child_scaled;
+                } else {
+                    self.child_credit_telemetry_valid = false;
+                }
+            } else {
+                self.child_credit_telemetry_valid = false;
             }
         }
-        let Some(credited_child_scaled) = self
-            .credited_child_scaled
-            .checked_add(continuation.child_credit_scaled())
-        else {
-            self.clock = DeferredCyw43ActivationClock::Invalid;
-            self.completed_quanta = Self::MAX_COMPLETED_QUANTA;
-            self.continuation = None;
-            self.active_hot_tail = None;
-            self.active_hot_tail_started_ticks = 0;
-            self.last_reject_reason = Self::REJECT_ARITHMETIC;
-            return false;
-        };
         let Some(completed_quanta) = self.completed_quanta.checked_add(1) else {
             self.clock = DeferredCyw43ActivationClock::Invalid;
             self.completed_quanta = Self::MAX_COMPLETED_QUANTA;
@@ -1436,7 +1427,6 @@ impl PiRootControlProductiveWindow {
             self.last_reject_reason = Self::REJECT_CAP;
             return false;
         };
-        self.credited_child_scaled = credited_child_scaled;
         self.continuation = Some(continuation);
         self.completed_quanta = completed_quanta;
         if self.active_hot_tail.is_none() && continuation.opens_active_hot_tail() {
@@ -1595,6 +1585,24 @@ impl PiRootControlProductiveWindow {
     const fn last_reject_reason(self) -> u32 {
         self.last_reject_reason
     }
+
+    fn clear_nonblocking_fanin_hint(&mut self) {
+        self.nonblocking_fanin_hint_eligible = false;
+    }
+
+    fn admit_nonblocking_fanin_hint(&mut self) {
+        self.nonblocking_fanin_hint_eligible = !self.nonblocking_fanin_hint_consumed;
+    }
+
+    const fn nonblocking_fanin_hint_eligible(self) -> bool {
+        self.nonblocking_fanin_hint_eligible && !self.nonblocking_fanin_hint_consumed
+    }
+
+    fn consume_nonblocking_fanin_hint(&mut self) {
+        debug_assert!(self.nonblocking_fanin_hint_eligible());
+        self.nonblocking_fanin_hint_eligible = false;
+        self.nonblocking_fanin_hint_consumed = true;
+    }
 }
 
 #[cfg(all(
@@ -1618,6 +1626,7 @@ fn poll_pi_root_control_productive_quanta<
 >(
     pump: &mut EventPump<'a, D, T, I, V, RX, TX, LINE>,
     window: &mut PiRootControlProductiveWindow,
+    natural_postpone_profile: bool,
 ) -> bool
 where
     D: crate::serial::SerialDriver,
@@ -1625,9 +1634,9 @@ where
     I: IpcDispatcher,
     V: CapabilityValidator,
 {
+    window.clear_nonblocking_fanin_hint();
     loop {
         let counter_hz = counter_frequency();
-        let activation_reserve_us = deferred_cyw43_activation_reserve_from_manifest_us();
         let active_hot_tail_preleaf_us = pi_root_control_active_hot_tail_preleaf_from_manifest_us();
         let retained_quantum = window.has_completed_quantum();
         let ordinary_fence_clear = if retained_quantum {
@@ -1666,33 +1675,32 @@ where
             }
             return true;
         }
-        // This is the final operation before the next complete five-phase
-        // leaf: no userland prelude, handoff, or material probe may consume
-        // the strict generated budget-minus-WCET cut after this sample.
-        // Resolve and validate frequency/policy and the complete side-effect-free race
-        // fence first so CNTVCT remains the last sampled authority before the
-        // pure comparisons and EventPump entry. The active tail uses the same
-        // sample and fence but intentionally retains wall time beyond that
-        // strict reserve; a later passive command still forces the selected
-        // Yield boundary before dispatch.
+        // The complete side-effect-free identity/fault fence above is the
+        // final userland authority before a productive rotor. Root-control's
+        // selected NaturalPostpone scheduling context preempts and resumes the
+        // exact instruction cursor; wall time is sampled only for telemetry
+        // and the unchanged eight-millisecond active tail, never to forfeit a
+        // refill. A later passive command still forces its selected Yield
+        // boundary before dispatch.
         let now_ticks = monotonic_ticks();
+        window.sample_effective_root_telemetry(now_ticks, counter_hz);
         let active_hot_tail_wall_us = window.active_hot_tail_elapsed_us(now_ticks, counter_hz);
-        let strict_reserve_admitted = ordinary_fence_clear
-            && window.next_quantum_admitted(now_ticks, counter_hz, activation_reserve_us);
+        let resumable_productive_admitted =
+            ordinary_fence_clear && window.resumable_quantum_admitted(natural_postpone_profile);
         let active_hot_tail_admitted = active_hot_tail_fence_clear
             && window.active_hot_tail_quantum_admitted(
                 now_ticks,
                 counter_hz,
                 active_hot_tail_preleaf_us,
             );
-        if retained_quantum && !strict_reserve_admitted && !active_hot_tail_admitted {
+        if retained_quantum && !resumable_productive_admitted && !active_hot_tail_admitted {
             pump.record_pi_root_control_productive_window_decision(
                 false,
                 window.last_effective_root_us(counter_hz),
                 window.last_reject_reason(),
             );
         }
-        if !strict_reserve_admitted && !active_hot_tail_admitted {
+        if !resumable_productive_admitted && !active_hot_tail_admitted {
             if active_hot_tail_identity.is_some() {
                 pump.record_pi_root_control_active_hot_tail_closed(active_hot_tail_wall_us);
             }
@@ -1702,10 +1710,9 @@ where
         if active_hot_tail_admitted {
             pump.record_pi_root_control_active_hot_tail_admitted(active_hot_tail_wall_us);
         }
-        if retained_quantum && strict_reserve_admitted {
-            // Existing pcont telemetry remains the exact strict-reserve proof.
-            // Hot-tail-only turns are deliberately not misreported as having
-            // satisfied the generated budget-minus-WCET admission cut.
+        if retained_quantum && resumable_productive_admitted {
+            // Existing pcont telemetry now records exact durable identity plus
+            // NaturalPostpone admission. Hot-tail-only turns remain distinct.
             pump.record_pi_root_control_productive_window_decision(
                 true,
                 window.last_effective_root_us(counter_hz),
@@ -1725,6 +1732,13 @@ where
                     window.active_hot_tail_elapsed_us(closed_at_ticks, counter_hz),
                 );
             }
+            // This is the sole ordinary quantum/no-successor exit after a
+            // complete bounded rotor. Cap, policy, identity, recovery,
+            // passive, and operator fences return through earlier cuts. The
+            // caller may consume one nonblocking fan-in edge only to re-enter
+            // outer durable arbitration once; the one-shot latch prevents a
+            // notification storm from replacing the explicit Yield.
+            window.admit_nonblocking_fanin_hint();
             return true;
         }
         let Some(identity) = pump.take_pi_root_control_productive_continuation_identity() else {
@@ -1764,6 +1778,57 @@ where
     }
 }
 
+/// Consume at most one root-control fan-in edge as a scheduling hint.
+///
+/// The notification badge carries no work authority. The acquire fence orders
+/// the producer's sequence-last durable publication before the caller returns
+/// to outer arbitration, where the exact condition is read again. A zero edge
+/// falls through to the existing explicit Yield; this helper never waits.
+#[cfg(all(
+    feature = "serial-console",
+    feature = "kernel",
+    feature = "net-console",
+    any(
+        test,
+        all(
+            feature = "release-pi4",
+            target_arch = "aarch64",
+            target_os = "none",
+            sel4_config_kernel_mcs
+        )
+    )
+))]
+fn pi_root_control_nonblocking_fanin_hint<Poll>(mut poll: Poll) -> bool
+where
+    Poll: FnMut() -> bool,
+{
+    let observed = poll();
+    core::sync::atomic::fence(Ordering::Acquire);
+    observed
+}
+
+#[cfg(all(
+    feature = "release-pi4",
+    target_arch = "aarch64",
+    target_os = "none",
+    sel4_config_kernel_mcs,
+    feature = "serial-console",
+    feature = "kernel",
+    feature = "net-console",
+))]
+fn poll_pi_root_control_fanin_hint(ctx: &BootContext) -> bool {
+    let Some(notification) =
+        crate::hal::critical_tcb::root_control_wake_notification_origin(ctx.critical_runtime)
+    else {
+        return false;
+    };
+    pi_root_control_nonblocking_fanin_hint(|| {
+        let mut ignored_badge = 0;
+        let _ = sel4::poll(notification, &mut ignored_badge);
+        ignored_badge != 0
+    })
+}
+
 #[cfg(all(
     feature = "release-pi4",
     target_arch = "aarch64",
@@ -1785,6 +1850,7 @@ fn pi_root_control_yield_and_restart<
 >(
     pump: &mut EventPump<'a, D, T, I, V, RX, TX, LINE>,
     window: &mut PiRootControlProductiveWindow,
+    natural_postpone_profile: bool,
     trigger: crate::pi4_mcs_recorder::PiMcsYieldTrigger,
 ) where
     D: crate::serial::SerialDriver,
@@ -1810,7 +1876,7 @@ fn pi_root_control_yield_and_restart<
     let _ = window.restart_after_yield(
         resumed_at_ticks,
         counter_frequency(),
-        deferred_cyw43_activation_reserve_from_manifest_us(),
+        natural_postpone_profile,
     );
 }
 
@@ -1839,7 +1905,7 @@ fn deferred_cyw43_yield_and_reset<
 {
     // If the immediately preceding operator turn parsed a passive-service
     // command, this is the selected MCS boundary for its current bounded
-    // reserve attempt. Preparing here keeps every deferred-supervisor yield
+    // activation. Preparing here keeps every deferred-supervisor yield
     // pending-aware without allowing another driver or ordinary EventPump unit
     // between the attempt's baseline sample and Yield.
     pump.clear_deferred_cyw43_transient_publication_credit();
@@ -3923,7 +3989,7 @@ where
     let mut turn_status = DeferredCyw43TurnStatus::new();
     let mut supervisor_phase = DeferredCyw43SupervisorPhase::Operator;
     let mut activation_window = DeferredCyw43ActivationWindow::new();
-    let activation_reserve_us = deferred_cyw43_activation_reserve_from_manifest_us();
+    let natural_postpone_profile = pi_root_control_natural_postpone_from_manifest();
 
     'supervisor: loop {
         // The deferred Wi-Fi supervisor owns root-control while bootstrap or
@@ -3984,15 +4050,8 @@ where
             DeferredCyw43RootControlTurn::Supervisor => {}
         }
 
-        let activation_ticks = monotonic_ticks();
-        let activation_counter_hz = counter_frequency();
-        activation_window.begin(activation_ticks, activation_counter_hz);
         if activation_window.logical_turns != 0
-            && !activation_window.turn_admitted(
-                activation_ticks,
-                activation_counter_hz,
-                activation_reserve_us,
-            )
+            && !activation_window.resumable_turn_admitted(natural_postpone_profile)
         {
             activation_window.mark_reject_stage(DeferredCyw43ActivationWindow::STAGE_ACTIVATION);
             deferred_cyw43_yield_and_reset(pump, &mut activation_window);
@@ -4272,11 +4331,8 @@ where
                         console_handoff_authorized,
                     ) {
                         DeferredCyw43AttachedTurn::NetworkControl => {
-                            if !activation_window.turn_admitted(
-                                monotonic_ticks(),
-                                counter_frequency(),
-                                activation_reserve_us,
-                            ) {
+                            if !activation_window.resumable_turn_admitted(natural_postpone_profile)
+                            {
                                 activation_window.mark_reject_stage(
                                     DeferredCyw43ActivationWindow::STAGE_ATTACHED,
                                 );
@@ -4738,7 +4794,24 @@ where
                         // Network successor, one exact same-lifetime child
                         // publication probe, or the completed response
                         // rotation. Re-enter loop-top arbitration under the
-                        // same generated-reserve guard before another unit.
+                        // same NaturalPostpone/profile and productive-unit
+                        // guard before another exact resumable unit.
+                        continue 'supervisor;
+                    }
+                    #[cfg(all(
+                        feature = "release-pi4",
+                        target_arch = "aarch64",
+                        target_os = "none",
+                        sel4_config_kernel_mcs
+                    ))]
+                    if activation_window.nonblocking_fanin_hint_available()
+                        && poll_pi_root_control_fanin_hint(ctx)
+                    {
+                        // This is the attached runtime's ordinary/no-successor
+                        // race cut. A badge grants no Network authority; use it
+                        // once to re-read recovery, passive, lifecycle, and
+                        // productive-token state from loop top.
+                        activation_window.consume_nonblocking_fanin_hint();
                         continue 'supervisor;
                     }
                     deferred_cyw43_yield_and_reset(pump, &mut activation_window);
@@ -4748,11 +4821,7 @@ where
         }
 
         if supervisor_phase == DeferredCyw43SupervisorPhase::Operator {
-            if !activation_window.turn_admitted(
-                monotonic_ticks(),
-                counter_frequency(),
-                activation_reserve_us,
-            ) {
+            if !activation_window.resumable_turn_admitted(natural_postpone_profile) {
                 activation_window
                     .mark_reject_stage(DeferredCyw43ActivationWindow::STAGE_BOOTSTRAP_OPERATOR);
                 deferred_cyw43_yield_and_reset(pump, &mut activation_window);
@@ -4830,11 +4899,7 @@ where
             }
         }
 
-        if !activation_window.turn_admitted(
-            monotonic_ticks(),
-            counter_frequency(),
-            activation_reserve_us,
-        ) {
+        if !activation_window.resumable_turn_admitted(natural_postpone_profile) {
             activation_window
                 .mark_reject_stage(DeferredCyw43ActivationWindow::STAGE_BOOTSTRAP_DRIVER);
             deferred_cyw43_yield_and_reset(pump, &mut activation_window);
@@ -5122,6 +5187,23 @@ where
             // one-operation lease. Only a current event-driven continuation
             // may retain this guarded MCS activation; an empty child
             // observation yields rather than becoming a local polling cadence.
+            continue 'supervisor;
+        }
+        #[cfg(all(
+            feature = "release-pi4",
+            target_arch = "aarch64",
+            target_os = "none",
+            sel4_config_kernel_mcs
+        ))]
+        if !network_attached
+            && activation_window.nonblocking_fanin_hint_available()
+            && poll_pi_root_control_fanin_hint(ctx)
+        {
+            // This is the cold supervisor's ordinary/no-successor bottom. The
+            // consumed edge may name any producer, so re-enter recovery/
+            // operator-first arbitration once; the badge itself cannot
+            // authorize Driver or reset the cap.
+            activation_window.consume_nonblocking_fanin_hint();
             continue 'supervisor;
         }
         deferred_cyw43_yield_and_reset(pump, &mut activation_window);
@@ -7618,68 +7700,106 @@ mod tests {
         feature = "net-console"
     ))]
     #[test]
-    fn pi_wifi_activation_guard_reserves_epilogue_and_fails_closed() {
-        let pi_reserve = super::deferred_cyw43_activation_reserve_us(5_500, 2_500, true);
-        assert_eq!(pi_reserve, Some(3_000));
-        assert_eq!(
-            super::deferred_cyw43_activation_reserve_us(5_500, 0, true),
-            None
-        );
-        assert_eq!(
-            super::deferred_cyw43_activation_reserve_us(2_500, 2_500, true),
-            None
-        );
-        assert_eq!(
-            super::deferred_cyw43_activation_reserve_us(5_500, 2_500, false),
-            None
-        );
+    fn pi_wifi_activation_uses_natural_postpone_and_exact_material_work_cap() {
+        use crate::generated::TimeoutPolicy;
 
-        let mut window = super::DeferredCyw43ActivationWindow::new();
-        assert!(window.turn_admitted(100, 1_000_000, pi_reserve));
-        window.record_operator_turn();
-        assert!(window.turn_admitted(3_099, 1_000_000, pi_reserve));
-        assert!(
-            !window.turn_admitted(3_100, 1_000_000, pi_reserve),
-            "the exact 3,000 us Pi reserve leaves the complete declared 2,500 us WCET before the 5,500 us SC boundary",
-        );
-
-        window.reset();
-        assert!(window.turn_admitted(500, 54_000_000, pi_reserve));
+        assert!(super::pi_root_control_natural_postpone_profile(
+            5_500,
+            10_000,
+            2_500,
+            true,
+            true,
+            TimeoutPolicy::NaturalPostpone,
+        ));
         for invalid in [
-            (499, 54_000_000),
-            (501, 0),
-            (501, 24_000_000),
-            (0, 54_000_000),
+            (0, 10_000, 2_500, true, true, TimeoutPolicy::NaturalPostpone),
+            (
+                5_500,
+                5_000,
+                2_500,
+                true,
+                true,
+                TimeoutPolicy::NaturalPostpone,
+            ),
+            (5_500, 10_000, 0, true, true, TimeoutPolicy::NaturalPostpone),
+            (
+                5_500,
+                10_000,
+                5_500,
+                true,
+                true,
+                TimeoutPolicy::NaturalPostpone,
+            ),
+            (
+                5_500,
+                10_000,
+                2_500,
+                false,
+                true,
+                TimeoutPolicy::NaturalPostpone,
+            ),
+            (
+                5_500,
+                10_000,
+                2_500,
+                true,
+                false,
+                TimeoutPolicy::NaturalPostpone,
+            ),
+            (5_500, 10_000, 2_500, true, true, TimeoutPolicy::Terminal),
         ] {
             assert!(
-                !window.turn_admitted(invalid.0, invalid.1, pi_reserve),
-                "backward, zero, or frequency-drifted counters fail closed: {invalid:?}",
+                !super::pi_root_control_natural_postpone_profile(
+                    invalid.0, invalid.1, invalid.2, invalid.3, invalid.4, invalid.5,
+                ),
+                "invalid or fault-delivering root profile cannot select resumable postponement: {invalid:?}",
             );
         }
 
-        window.reset();
-        assert!(
-            window.turn_admitted(0, 0, pi_reserve),
-            "an invalid counter retains one legacy logical turn for liveness",
-        );
+        let mut window = super::DeferredCyw43ActivationWindow::new();
+        assert!(window.resumable_turn_admitted(true));
         window.record_operator_turn();
-        assert!(
-            !window.turn_admitted(1, 1, pi_reserve),
-            "an invalid activation cannot upgrade after spending its sole logical turn",
-        );
-        window.reset();
-        assert!(window.turn_admitted(0, 54_000_000, None));
+        assert_eq!(window.logical_turns, 1);
+        assert_eq!(window.productive_units, 0);
+        assert!(window.resumable_turn_admitted(true));
         window.record_driver_turn(false);
-        assert!(!window.turn_admitted(0, 54_000_000, None));
+        assert_eq!(window.logical_turns, 2);
+        assert_eq!(window.productive_units, 0);
 
         window.reset();
-        assert!(window.turn_admitted(1, 54_000_000, pi_reserve));
-        for _ in 0..super::DEFERRED_CYW43_ACTIVATION_MAX_PRODUCTIVE_UNITS {
+        for _ in 0..(super::DEFERRED_CYW43_ACTIVATION_MAX_PRODUCTIVE_UNITS / 2) {
+            assert!(window.resumable_turn_admitted(true));
+            window.record_operator_turn();
+            assert!(window.resumable_turn_admitted(true));
             window.record_driver_turn(true);
         }
         assert!(
-            !window.turn_admitted(2, 54_000_000, pi_reserve),
-            "the hard productive-turn cap ends even a sub-guard activation",
+            !window.resumable_turn_admitted(true),
+            "the unchanged 64 material-work-unit cap counts both full Operator and Driver turns",
+        );
+        assert_eq!(
+            window.logical_turns,
+            super::DEFERRED_CYW43_ACTIVATION_MAX_PRODUCTIVE_UNITS,
+        );
+        assert_eq!(
+            window.productive_units,
+            super::DEFERRED_CYW43_ACTIVATION_MAX_PRODUCTIVE_UNITS / 2,
+        );
+        assert_eq!(
+            window.last_reject_reason(),
+            super::DeferredCyw43ActivationWindow::REJECT_CAP,
+        );
+
+        window.reset();
+        assert!(
+            window.resumable_turn_admitted(false),
+            "an incompatible profile retains one legacy logical turn for liveness",
+        );
+        window.record_operator_turn();
+        assert!(!window.resumable_turn_admitted(false));
+        assert_eq!(
+            window.last_reject_reason(),
+            super::DeferredCyw43ActivationWindow::REJECT_POLICY_AFTER_FIRST,
         );
     }
 
@@ -7689,22 +7809,58 @@ mod tests {
         feature = "net-console"
     ))]
     #[test]
-    fn pi_genet_productive_window_is_prechecked_unslid_strict_and_hard_capped() {
-        let reserve = super::deferred_cyw43_activation_reserve_us(5_500, 2_500, true);
+    fn root_control_fanin_hint_is_one_nonblocking_observation() {
+        use core::cell::Cell;
+
+        let polls = Cell::new(0u8);
+        assert!(!super::pi_root_control_nonblocking_fanin_hint(|| {
+            polls.set(polls.get().saturating_add(1));
+            false
+        }));
+        assert_eq!(polls.get(), 1);
+
+        assert!(super::pi_root_control_nonblocking_fanin_hint(|| {
+            polls.set(polls.get().saturating_add(1));
+            true
+        }));
+        assert_eq!(polls.get(), 2);
+
+        let mut productive_window = super::PiRootControlProductiveWindow::new();
+        productive_window.admit_nonblocking_fanin_hint();
+        assert!(productive_window.nonblocking_fanin_hint_eligible());
+        productive_window.consume_nonblocking_fanin_hint();
+        productive_window.admit_nonblocking_fanin_hint();
+        assert!(
+            !productive_window.nonblocking_fanin_hint_eligible(),
+            "a signal storm cannot turn one race-closure hint into a no-Yield loop",
+        );
+
+        let mut activation_window = super::DeferredCyw43ActivationWindow::new();
+        assert!(activation_window.nonblocking_fanin_hint_available());
+        activation_window.consume_nonblocking_fanin_hint();
+        assert!(!activation_window.nonblocking_fanin_hint_available());
+        activation_window.reset();
+        assert!(activation_window.nonblocking_fanin_hint_available());
+    }
+
+    #[cfg(all(
+        feature = "serial-console",
+        feature = "kernel",
+        feature = "net-console"
+    ))]
+    #[test]
+    fn pi_genet_productive_window_uses_natural_postpone_identity_and_hard_cap() {
+        let natural_postpone_profile = true;
         let identity = crate::event::PiRootControlProductiveContinuation::for_test(7, 17);
         let mut window = super::PiRootControlProductiveWindow::new();
         assert!(
-            window.next_quantum_admitted(100, 1_000_000, reserve),
-            "an unstarted window retains exactly one legacy bounded quantum"
+            window.resumable_quantum_admitted(natural_postpone_profile),
+            "the generated NaturalPostpone profile admits the first bounded quantum"
         );
         assert!(window.record_completed_quantum_at(identity, 100));
-        assert!(!window.next_quantum_admitted(100, 1_000_000, reserve));
-
-        assert!(window.restart_after_yield(100, 1_000_000, reserve));
-        assert!(window.next_quantum_admitted(3_099, 1_000_000, reserve));
         assert!(
-            !window.next_quantum_admitted(3_100, 1_000_000, reserve),
-            "equality at the current Yield-return 3,000-us cut must Yield"
+            window.resumable_quantum_admitted(natural_postpone_profile),
+            "wall time cannot forfeit an exact productive cursor under NaturalPostpone",
         );
 
         let credited = crate::event::PiRootControlProductiveContinuation::for_test_with_credit(
@@ -7713,65 +7869,63 @@ mod tests {
             100_000_000,
             1_000_000,
         );
-        assert!(window.restart_after_yield(100, 1_000_000, reserve));
+        assert!(window.restart_after_yield(100, 1_000_000, natural_postpone_profile));
         assert!(window.record_completed_quantum_at(credited, 200));
-        assert!(window.next_quantum_admitted(3_199, 1_000_000, reserve));
+        window.sample_effective_root_telemetry(3_200, 1_000_000);
+        assert_eq!(window.last_effective_root_us(1_000_000), 3_000);
         assert!(
-            !window.next_quantum_admitted(3_200, 1_000_000, reserve),
-            "equality after subtracting only call-local child consumption must Yield",
+            window.resumable_quantum_admitted(natural_postpone_profile),
+            "legacy effective-root telemetry is not an admission boundary",
         );
 
-        assert!(window.restart_after_yield(100, 1_000_000, reserve));
-        let excess_credit = crate::event::PiRootControlProductiveContinuation::for_test_with_credit(
-            7,
-            17,
-            300_000_000,
-            1_000_000,
-        );
-        assert!(window.record_completed_quantum_at(excess_credit, 200));
-        assert!(
-            !window.next_quantum_admitted(200, 1_000_000, reserve),
-            "credit greater than the observed activation wall fails closed",
-        );
-
-        assert!(window.restart_after_yield(100, 1_000_000, reserve));
+        assert!(window.restart_after_yield(100, 1_000_000, natural_postpone_profile));
         let wrong_credit_frequency =
             crate::event::PiRootControlProductiveContinuation::for_test_with_credit(
                 7, 17, 1, 54_000_000,
             );
         assert!(
-            !window.record_completed_quantum_at(wrong_credit_frequency, 101),
-            "credit from another counter frequency cannot enter the window",
+            window.record_completed_quantum_at(wrong_credit_frequency, 101),
+            "optional telemetry cannot revoke exact productive identity",
+        );
+        assert!(!window.child_credit_telemetry_valid);
+        assert!(window.resumable_quantum_admitted(natural_postpone_profile));
+
+        assert!(window.restart_after_yield(1_000, 54_000_000, natural_postpone_profile));
+        window.sample_effective_root_telemetry(1_001, 24_000_000);
+        assert!(!window.child_credit_telemetry_valid);
+        assert!(
+            window.resumable_quantum_admitted(natural_postpone_profile),
+            "counter drift closes telemetry, not kernel-backed continuation; the tail validates its own exact sample",
         );
 
-        assert!(window.restart_after_yield(1_000, 54_000_000, reserve));
-        assert!(
-            !window.next_quantum_admitted(1_001, 24_000_000, reserve),
-            "counter-frequency drift fails closed"
-        );
-        assert!(
-            !window.next_quantum_admitted(1_002, 54_000_000, reserve),
-            "invalid evidence cannot be upgraded by a later valid-looking sample"
-        );
-
-        assert!(window.restart_after_yield(2_000, 54_000_000, reserve));
+        assert!(window.restart_after_yield(2_000, 54_000_000, natural_postpone_profile));
         for _ in 0..super::PiRootControlProductiveWindow::MAX_COMPLETED_QUANTA {
-            assert!(window.next_quantum_admitted(2_001, 54_000_000, reserve));
+            assert!(window.resumable_quantum_admitted(natural_postpone_profile));
             assert!(window.record_completed_quantum_at(identity, 2_001));
         }
         assert!(
-            !window.next_quantum_admitted(2_001, 54_000_000, reserve),
+            !window.resumable_quantum_admitted(natural_postpone_profile),
             "the independent 64-complete-quantum cap refuses quantum 65"
         );
 
-        assert!(!window.restart_after_yield(0, 54_000_000, reserve));
-        assert!(window.next_quantum_admitted(1, 54_000_000, reserve));
+        assert!(!window.restart_after_yield(0, 54_000_000, natural_postpone_profile));
+        assert!(window.resumable_quantum_admitted(natural_postpone_profile));
         assert!(window.record_completed_quantum_at(identity, 1));
-        assert!(!window.next_quantum_admitted(1, 54_000_000, reserve));
-        assert!(!window.restart_after_yield(3_000, 0, reserve));
-        assert!(!window.restart_after_yield(3_000, 54_000_000, None));
+        assert!(window.resumable_quantum_admitted(natural_postpone_profile));
 
-        assert!(window.restart_after_yield(4_000, 54_000_000, reserve));
+        assert!(!window.restart_after_yield(3_000, 54_000_000, false));
+        assert!(
+            window.resumable_quantum_admitted(false),
+            "an incompatible profile retains exactly one legacy bounded quantum",
+        );
+        assert!(window.record_completed_quantum_at(identity, 3_001));
+        assert!(!window.resumable_quantum_admitted(false));
+        assert_eq!(
+            window.last_reject_reason(),
+            super::PiRootControlProductiveWindow::REJECT_POLICY,
+        );
+
+        assert!(window.restart_after_yield(4_000, 54_000_000, natural_postpone_profile));
         assert!(window.record_completed_quantum_at(identity, 4_001));
         assert!(
             !window.record_completed_quantum_at(
@@ -7780,7 +7934,7 @@ mod tests {
             ),
             "a generation-swapped continuation token fails closed",
         );
-        assert!(!window.next_quantum_admitted(4_001, 54_000_000, reserve));
+        assert!(!window.resumable_quantum_admitted(natural_postpone_profile));
     }
 
     #[cfg(all(
@@ -7789,8 +7943,8 @@ mod tests {
         feature = "net-console"
     ))]
     #[test]
-    fn pi_genet_transaction_tail_requires_exact_command_or_drain_is_unslid_and_shares_cap() {
-        let reserve = super::deferred_cyw43_activation_reserve_us(5_500, 2_500, true);
+    fn pi_genet_same_core_yieldto_tail_is_exact_unslid_and_shares_cap() {
+        let natural_postpone_profile = true;
         let preleaf = super::pi_root_control_active_hot_tail_preleaf_us(8_000, 2_500, true);
         assert_eq!(preleaf, Some(5_500));
         assert_eq!(
@@ -7808,46 +7962,36 @@ mod tests {
         let stage_only = crate::event::PiRootControlProductiveContinuation::for_test(7, 17);
         let drained =
             crate::event::PiRootControlProductiveContinuation::for_test_completed_response(7, 17);
-        let cross_core_drained =
+        let legacy_cross_core_drained =
             crate::event::PiRootControlProductiveContinuation::for_test_cross_core_completed_response(
                 7, 17,
             );
-        let cross_core_command =
-            crate::event::PiRootControlProductiveContinuation::for_test_cross_core_command(7, 17);
         let mut window = super::PiRootControlProductiveWindow::new();
 
-        assert!(window.restart_after_yield(100, 1_000_000, reserve));
+        assert!(window.restart_after_yield(100, 1_000_000, natural_postpone_profile));
         assert!(window.record_completed_quantum_at(stage_only, 200));
         assert_eq!(window.active_hot_tail_identity(), None);
         assert!(!window.active_hot_tail_quantum_admitted(201, 1_000_000, preleaf));
 
-        assert!(window.restart_after_yield(100, 1_000_000, reserve));
-        assert!(window.record_completed_quantum_at(cross_core_command, 200));
+        assert!(window.restart_after_yield(100, 1_000_000, natural_postpone_profile));
+        assert!(window.record_completed_quantum_at(drained, 200));
         assert_eq!(
             window.active_hot_tail_identity(),
-            Some(cross_core_command),
-            "exact authenticated command acceptance opens the transaction before cross-core stage/drain publication",
+            Some(drained),
+            "the selected exact same-core YieldTo drain opens the bounded root-local tail",
         );
+        assert!(!drained.is_cross_core_signal_only_hot_tail());
         assert!(window.active_hot_tail_quantum_admitted(5_699, 1_000_000, preleaf));
-
-        assert!(window.restart_after_yield(100, 1_000_000, reserve));
-        assert!(window.record_completed_quantum_at(cross_core_drained, 200));
-        assert_eq!(
-            window.active_hot_tail_identity(),
-            Some(cross_core_drained),
-            "exact cross-core OutputDrained authority opens the same bounded root-local tail",
-        );
         assert_eq!(
             window.credited_child_scaled, 0,
-            "signal-only cross-core service must not mint child execution credit",
+            "the fixture carries no synthetic child-consumption credit",
         );
-        assert!(window.active_hot_tail_quantum_admitted(5_699, 1_000_000, preleaf));
         assert!(
-            !window.record_completed_quantum_at(drained, 8_199),
-            "a continuation cannot change between cross-core signal-only and same-core YieldTo authority",
+            !window.record_completed_quantum_at(legacy_cross_core_drained, 8_199),
+            "legacy cross-core signal-only evidence cannot replace selected same-core YieldTo authority",
         );
 
-        assert!(window.restart_after_yield(100, 1_000_000, reserve));
+        assert!(window.restart_after_yield(100, 1_000_000, natural_postpone_profile));
         assert!(window.record_completed_quantum_at(drained, 200));
         assert_eq!(window.active_hot_tail_identity(), Some(drained));
         assert!(window.active_hot_tail_quantum_admitted(5_699, 1_000_000, preleaf));
@@ -7857,7 +8001,7 @@ mod tests {
             "another exact response cannot slide the first drain's strict 5.5 ms pre-leaf cut",
         );
 
-        assert!(window.restart_after_yield(100, 1_000_000, reserve));
+        assert!(window.restart_after_yield(100, 1_000_000, natural_postpone_profile));
         assert!(window.record_completed_quantum_at(drained, 200));
         for _ in 1..super::PiRootControlProductiveWindow::MAX_COMPLETED_QUANTA {
             assert!(window.active_hot_tail_quantum_admitted(201, 1_000_000, preleaf));
@@ -7869,7 +8013,7 @@ mod tests {
         );
         assert!(!window.record_active_hot_tail_quantum());
 
-        assert!(window.restart_after_yield(100, 1_000_000, reserve));
+        assert!(window.restart_after_yield(100, 1_000_000, natural_postpone_profile));
         assert!(window.record_completed_quantum_at(drained, 0));
         assert_eq!(
             window.active_hot_tail_identity(),
@@ -7878,7 +8022,7 @@ mod tests {
         );
 
         for (now_ticks, counter_hz) in [(199, 1_000_000), (201, 0), (201, 54_000_000)] {
-            assert!(window.restart_after_yield(100, 1_000_000, reserve));
+            assert!(window.restart_after_yield(100, 1_000_000, natural_postpone_profile));
             assert!(window.record_completed_quantum_at(drained, 200));
             assert!(
                 !window.active_hot_tail_quantum_admitted(now_ticks, counter_hz, preleaf),
@@ -7887,7 +8031,7 @@ mod tests {
             assert!(!window.active_hot_tail_quantum_admitted(201, 1_000_000, preleaf));
         }
 
-        assert!(window.restart_after_yield(100, 1_000_000, reserve));
+        assert!(window.restart_after_yield(100, 1_000_000, natural_postpone_profile));
         assert!(window.record_completed_quantum_at(drained, 200));
         assert!(
             !window.active_hot_tail_quantum_admitted(201, 1_000_000, None),

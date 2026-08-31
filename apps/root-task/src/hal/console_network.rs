@@ -3,13 +3,14 @@
 // Purpose: Construct and contain the generated isolated console-network child.
 // Author: Lukas Bower
 
-//! HAL-owned construction for `console-network-service/v5`.
+//! HAL-owned construction for `console-network-service/v6`.
 //!
 //! Every child object and translation table is retyped below one retained
 //! compiler-selected revoke anchor. The root keeps only copied packet/control
-//! pages, one receive notification, five badged send caps, and the TCB/SC caps
-//! needed for supervision. Construction leaves the TCB suspended until the
-//! complete target fault registry has been sealed.
+//! pages, one receive notification, five protocol send caps, the physical
+//! root-control fan-in send cap, and the TCB/SC caps needed for supervision.
+//! Construction leaves the TCB suspended until the complete target fault
+//! registry has been sealed.
 
 use core::ptr::{read_volatile, write_volatile};
 use core::sync::atomic::{fence, AtomicU64, Ordering};
@@ -23,6 +24,7 @@ use console_network_abi::{
     DIRECT_GENET_RUNTIME_DIAGNOSTIC_OFFSET, DIRECT_GENET_RX_SLOT_COUNT,
     DIRECT_GENET_SHARED_PAGE_COUNT, DIRECT_GENET_TX_SLOT_COUNT, DIRECT_VIRTIO_BUFFER_COUNT,
     DIRECT_VIRTIO_LAYOUT_BYTES, DIRECT_VIRTIO_LAYOUT_OFFSET, DIRECT_VIRTIO_QUEUE_COUNT,
+    ROOT_CONTROL_WAKE_NOTIFICATION_BADGE, ROOT_CONTROL_WAKE_NOTIFICATION_SLOT,
     RUNTIME_INIT_DESCRIPTOR_BYTES, SHARED_PAGE_BYTES, WAKE_CONTROL, WAKE_EVENT_READY,
     WAKE_PACKET_RX, WAKE_PACKET_TX_READY, WAKE_PUBLICATION_ACK, WAKE_REVOKE, WAKE_SHUTDOWN,
 };
@@ -44,16 +46,25 @@ use super::{
     runtime_elf_page_mapping, runtime_uncached_xn_attributes, HalError, KernelHal,
 };
 use crate::console_network_service::{
-    console_network_signal_only_admitted, expected_runtime_image_pages, BoundaryError,
+    console_network_yield_to_admitted, expected_runtime_image_pages, BoundaryError,
     ConsoleNetworkBoundary, ConsoleNetworkContainmentCursor, ConsoleNetworkContainmentProof,
     ConsoleNetworkContainmentTurn, ConsoleNetworkContainmentUnit, ConsoleNetworkContract,
-    ConsoleNetworkEvent, ConsoleNetworkObjectPlan, ConsoleNetworkSignalOnlyAdmission, ServiceState,
+    ConsoleNetworkEvent, ConsoleNetworkObjectPlan, ConsoleNetworkYieldToAdmission, ServiceState,
     CONSOLE_NETWORK_IMAGE_IDENTITY_BOUND, CONSOLE_NETWORK_RUNTIME_ENTRY_VADDR,
     CONSOLE_NETWORK_RUNTIME_IMAGE, CONSOLE_NETWORK_RUNTIME_LOAD_BASE_VADDR,
     CONSOLE_NETWORK_RUNTIME_LOAD_LIMIT_VADDR, CONSOLE_NETWORK_RUNTIME_LOAD_PAGES, SERVICE_TASK_ID,
 };
 use crate::critical_tcb::GenerationIdentity;
 use crate::net::DirectGenetYieldAccounting;
+#[cfg(all(
+    feature = "kernel",
+    feature = "release-pi4",
+    feature = "net-backend-genet-direct",
+    target_arch = "aarch64",
+    target_os = "none",
+    sel4_config_kernel_mcs
+))]
+use crate::net::DIRECT_GENET_YIELD_ACCOUNTING_INVALID_PREDRAIN;
 use crate::sel4::{self, RamFrame, RevokeAnchorVSpaceTracker};
 
 const TRANSLATION_SLOT_COUNT: usize = 8;
@@ -189,6 +200,58 @@ const ROOT_CONTROL_WAKE_INDEX: usize = 1;
 const ROOT_SHUTDOWN_WAKE_INDEX: usize = 2;
 const ROOT_REVOKE_WAKE_INDEX: usize = 3;
 const ROOT_PUBLICATION_ACK_WAKE_INDEX: usize = 4;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DurableChildPublication {
+    None,
+    AuthenticatedControl,
+    AuthenticatedPublicationCredit,
+}
+
+impl DurableChildPublication {
+    const fn committed_for_badge(self, signal_badge: u64) -> Result<bool, BoundaryError> {
+        match self {
+            Self::None => Ok(false),
+            Self::AuthenticatedControl if signal_badge == WAKE_CONTROL => Ok(true),
+            Self::AuthenticatedPublicationCredit if signal_badge == WAKE_PUBLICATION_ACK => {
+                Ok(true)
+            }
+            Self::AuthenticatedControl | Self::AuthenticatedPublicationCredit => {
+                Err(BoundaryError::HandoffFailed)
+            }
+        }
+    }
+}
+
+const fn root_wake_badge(wake_index: usize) -> Option<u64> {
+    match wake_index {
+        ROOT_PACKET_RX_WAKE_INDEX => Some(WAKE_PACKET_RX),
+        ROOT_CONTROL_WAKE_INDEX => Some(WAKE_CONTROL),
+        ROOT_SHUTDOWN_WAKE_INDEX => Some(WAKE_SHUTDOWN),
+        ROOT_REVOKE_WAKE_INDEX => Some(WAKE_REVOKE),
+        ROOT_PUBLICATION_ACK_WAKE_INDEX => Some(WAKE_PUBLICATION_ACK),
+        _ => None,
+    }
+}
+
+/// Return whether this committed signal will enter the exact direct-GENET
+/// same-core child call and therefore requires a fresh SC accounting drain.
+/// Mediated WiFi shares the Pi binary but must remain signal-only.
+const fn direct_genet_predrain_required(runtime_direct_genet: bool, yield_admitted: bool) -> bool {
+    runtime_direct_genet && yield_admitted
+}
+
+/// Return whether the exact same-core child call may follow its SC pre-drain.
+///
+/// A failed drain makes child-consumed accounting ambiguous, so the durable
+/// notification is still delivered but the optional YieldTo optimization must
+/// fail closed.
+const fn direct_genet_yield_after_predrain_admitted(
+    yield_admitted: bool,
+    predrain_succeeded: bool,
+) -> bool {
+    yield_admitted && predrain_succeeded
+}
 
 const CHILD_CNODE_RADIX_BITS: u8 = 4;
 
@@ -409,7 +472,7 @@ impl ConsoleNetworkRuntime {
         sample_direct_genet_runtime_diagnostic(self.direct_genet_root_ptrs[0], self.generation())
     }
 
-    /// Whether the immutable ABI-v5 descriptor and initial registers are ready.
+    /// Whether the immutable ABI-v6 descriptor and initial registers are ready.
     #[must_use]
     pub const fn descriptor_finalized(&self) -> bool {
         self.descriptor_finalized
@@ -472,7 +535,7 @@ impl ConsoleNetworkRuntime {
         Ok(())
     }
 
-    /// Install the immutable ABI-v5 descriptor after physical address acquisition.
+    /// Install the immutable ABI-v6 descriptor after physical address acquisition.
     ///
     /// The child remains suspended throughout this operation. The root creates
     /// one temporary writable alias of the already read-only child init frame,
@@ -521,7 +584,7 @@ impl ConsoleNetworkRuntime {
         let _ = core::fmt::write(
             &mut begin_line,
             format_args!(
-                "CONSOLE_NETWORK_DESCRIPTOR phase=finalize-begin tcb=0x{:04x} init_frame=0x{:04x} state=suspended abi=v5 direct_virtio={} direct_genet={}",
+                "CONSOLE_NETWORK_DESCRIPTOR phase=finalize-begin tcb=0x{:04x} init_frame=0x{:04x} state=suspended abi=v6 direct_virtio={} direct_genet={}",
                 self.tcb,
                 self.slots[FRAME_SLOT_START + INIT_FRAME_INDEX],
                 self.direct_virtio(),
@@ -615,7 +678,7 @@ impl ConsoleNetworkRuntime {
         let _ = core::fmt::write(
             &mut ready_line,
             format_args!(
-                "CONSOLE_NETWORK_DESCRIPTOR phase=finalize-ready tcb=0x{:04x} init_frame=0x{:04x} root_alias=0x{:04x} state=suspended root_alias_state=deleted abi=v5 direct_virtio={} direct_genet={}",
+                "CONSOLE_NETWORK_DESCRIPTOR phase=finalize-ready tcb=0x{:04x} init_frame=0x{:04x} root_alias=0x{:04x} state=suspended root_alias_state=deleted abi=v6 direct_virtio={} direct_genet={}",
                 self.tcb, init_frame, alias, self.direct_virtio(), self.direct_genet(),
             ),
         );
@@ -664,37 +727,147 @@ impl ConsoleNetworkRuntime {
         Ok(())
     }
 
-    fn committed_signal_only_admitted(&self) -> Result<(), BoundaryError> {
+    fn committed_signal_yield_admitted(
+        &self,
+        durable_publication: bool,
+        signal_badge: u64,
+    ) -> Result<bool, BoundaryError> {
         let contract = self.boundary.contract();
-        if !console_network_signal_only_admitted(ConsoleNetworkSignalOnlyAdmission {
-            contract_direct_genet: contract.direct_genet,
+        if contract.cross_core_signal_only
+            || (contract.yield_to_child_after_signal && !contract.direct_genet)
+        {
+            return Err(BoundaryError::HandoffFailed);
+        }
+        let admission = ConsoleNetworkYieldToAdmission {
+            profile_enabled: contract.yield_to_child_after_signal,
+            runtime_direct_virtio: self.direct_virtio(),
             runtime_direct_genet: self.direct_genet(),
-            cross_core_signal_only: contract.cross_core_signal_only,
-            yield_to_child_after_signal: contract.yield_to_child_after_signal,
+            service_state: self.boundary.state(),
+            durable_publication,
+            signal_badge,
             activated: self.activated,
             containment_started: self.containment_started,
             contained: self.contained,
             scheduling_context_present: self.scheduling_context != sel4_sys::seL4_CapNull,
-        }) {
+        };
+        let exact_authenticated_direct_genet_work = contract.yield_to_child_after_signal
+            && !admission.runtime_direct_virtio
+            && admission.runtime_direct_genet
+            && matches!(admission.service_state, ServiceState::Authenticated)
+            && admission.durable_publication
+            && admission.signal_badge.is_power_of_two()
+            && matches!(admission.signal_badge, WAKE_CONTROL | WAKE_PUBLICATION_ACK);
+        if !exact_authenticated_direct_genet_work {
+            return Ok(false);
+        }
+        if !console_network_yield_to_admitted(admission) {
             return Err(BoundaryError::HandoffFailed);
         }
-        Ok(())
+        Ok(true)
     }
 
-    fn signal_committed_child_work(&mut self, wake_index: usize) -> Result<(), BoundaryError> {
+    fn yield_to_child_after_committed_signal(
+        &mut self,
+        yield_admitted: bool,
+        predrain_succeeded: bool,
+    ) -> Result<(), BoundaryError> {
+        if !direct_genet_yield_after_predrain_admitted(yield_admitted, predrain_succeeded) {
+            return Ok(());
+        }
+        #[cfg(all(
+            feature = "kernel",
+            feature = "release-pi4",
+            feature = "net-backend-genet-direct",
+            target_arch = "aarch64",
+            target_os = "none",
+            sel4_config_kernel_mcs
+        ))]
+        {
+            let counter_hz = crate::arch::aarch64::timer::timer_freq_hz();
+            let started_ticks = crate::arch::aarch64::timer::timer_counter_ticks();
+            let yielded = sel4::yield_to_sched_context(self.scheduling_context);
+            let finished_ticks = crate::arch::aarch64::timer::timer_counter_ticks();
+            self.direct_genet_yield_accounting.record_call(
+                predrain_succeeded,
+                counter_hz,
+                started_ticks,
+                finished_ticks,
+                yielded.as_ref().ok().copied(),
+            );
+            yielded
+                .map(|_| ())
+                .map_err(|_| BoundaryError::HandoffFailed)
+        }
+        #[cfg(not(all(
+            feature = "kernel",
+            feature = "release-pi4",
+            feature = "net-backend-genet-direct",
+            target_arch = "aarch64",
+            target_os = "none",
+            sel4_config_kernel_mcs
+        )))]
+        {
+            let _ = predrain_succeeded;
+            Err(BoundaryError::HandoffFailed)
+        }
+    }
+
+    fn signal_committed_child_work(
+        &mut self,
+        wake_index: usize,
+        publication: DurableChildPublication,
+    ) -> Result<(), BoundaryError> {
         let wake_cap = self
             .root_wake_caps
             .get(wake_index)
             .copied()
             .filter(|cap| *cap != sel4_sys::seL4_CapNull)
             .ok_or(BoundaryError::HandoffFailed)?;
-        self.committed_signal_only_admitted()?;
+        let signal_badge = root_wake_badge(wake_index)
+            .filter(|badge| badge.is_power_of_two())
+            .ok_or(BoundaryError::HandoffFailed)?;
+        let durable_publication = publication.committed_for_badge(signal_badge)?;
+        let yield_admitted =
+            self.committed_signal_yield_admitted(durable_publication, signal_badge)?;
+        #[cfg(all(
+            feature = "kernel",
+            feature = "release-pi4",
+            feature = "net-backend-genet-direct",
+            target_arch = "aarch64",
+            target_os = "none",
+            sel4_config_kernel_mcs
+        ))]
+        let predrain_succeeded = {
+            if direct_genet_predrain_required(self.direct_genet(), yield_admitted) {
+                let succeeded = sel4::sched_context_consumed(self.scheduling_context).is_ok();
+                if !succeeded {
+                    self.direct_genet_yield_accounting
+                        .invalidate(DIRECT_GENET_YIELD_ACCOUNTING_INVALID_PREDRAIN);
+                }
+                succeeded
+            } else {
+                true
+            }
+        };
+        #[cfg(not(all(
+            feature = "kernel",
+            feature = "release-pi4",
+            feature = "net-backend-genet-direct",
+            target_arch = "aarch64",
+            target_os = "none",
+            sel4_config_kernel_mcs
+        )))]
+        let predrain_succeeded = true;
+        // The shared-page or publication-credit commit precedes this release.
+        // Signal is one-hot and YieldTo follows it exactly once; the event pump
+        // then performs its immediate operator/fault fence before retaining
+        // another root-control unit.
         fence(Ordering::Release);
         sel4::signal_unchecked(wake_cap);
-        Ok(())
+        self.yield_to_child_after_committed_signal(yield_admitted, predrain_succeeded)
     }
 
-    /// Return the retired same-core YieldTo accounting; signal-only stays zero.
+    /// Return fail-closed accounting for exact same-core direct-GENET YieldTo.
     #[must_use]
     pub const fn direct_genet_yield_accounting(&self) -> DirectGenetYieldAccounting {
         self.direct_genet_yield_accounting
@@ -708,7 +881,7 @@ impl ConsoleNetworkRuntime {
         let sequence = self
             .boundary
             .stage_ingress(packet, self.shared_frames[0].as_mut_slice())?;
-        self.signal_committed_child_work(ROOT_PACKET_RX_WAKE_INDEX)?;
+        self.signal_committed_child_work(ROOT_PACKET_RX_WAKE_INDEX, DurableChildPublication::None)?;
         Ok(sequence)
     }
 
@@ -722,7 +895,10 @@ impl ConsoleNetworkRuntime {
             now_ms,
             self.shared_frames[2].as_mut_slice(),
         )?;
-        self.signal_committed_child_work(ROOT_CONTROL_WAKE_INDEX)?;
+        self.signal_committed_child_work(
+            ROOT_CONTROL_WAKE_INDEX,
+            DurableChildPublication::AuthenticatedControl,
+        )?;
         Ok(sequence)
     }
 
@@ -740,7 +916,10 @@ impl ConsoleNetworkRuntime {
             now_ms,
             self.shared_frames[2].as_mut_slice(),
         )?;
-        self.signal_committed_child_work(ROOT_CONTROL_WAKE_INDEX)?;
+        self.signal_committed_child_work(
+            ROOT_CONTROL_WAKE_INDEX,
+            DurableChildPublication::AuthenticatedControl,
+        )?;
         Ok(sequence)
     }
 
@@ -752,7 +931,7 @@ impl ConsoleNetworkRuntime {
         let sequence = self
             .boundary
             .stage_disconnect(now_ms, self.shared_frames[2].as_mut_slice())?;
-        self.signal_committed_child_work(ROOT_CONTROL_WAKE_INDEX)?;
+        self.signal_committed_child_work(ROOT_CONTROL_WAKE_INDEX, DurableChildPublication::None)?;
         Ok(sequence)
     }
 
@@ -761,7 +940,7 @@ impl ConsoleNetworkRuntime {
         if !self.activated || self.contained {
             return Err(BoundaryError::InvalidState);
         }
-        self.signal_committed_child_work(ROOT_CONTROL_WAKE_INDEX)
+        self.signal_committed_child_work(ROOT_CONTROL_WAKE_INDEX, DurableChildPublication::None)
     }
 
     /// Whether the newest response for this connection left the TCP send queue.
@@ -1006,7 +1185,10 @@ impl ConsoleNetworkRuntime {
         // Consume root's one-shot authority before signalling. Even a later
         // erroneous duplicate call cannot credit an unobserved replacement.
         self.publication_ack_owed = false;
-        self.signal_committed_child_work(ROOT_PUBLICATION_ACK_WAKE_INDEX)
+        self.signal_committed_child_work(
+            ROOT_PUBLICATION_ACK_WAKE_INDEX,
+            DurableChildPublication::AuthenticatedPublicationCredit,
+        )
     }
 
     /// Retire a validated terminal publication without waking the parked child.
@@ -2192,6 +2374,21 @@ fn install_caps_and_mcs(
         sel4_sys::seL4_CapRights::new(0, 0, 0, 1),
         seL4_Word::from(WAKE_EVENT_READY),
     )?;
+    let root_control_wake_notification =
+        hal.root_control_wake_notification_origin()
+            .ok_or(HalError::Unsupported(
+                "console-network-root-control-wake-origin-missing",
+            ))?;
+    mint(
+        child_cnode,
+        seL4_CPtr::from(ROOT_CONTROL_WAKE_NOTIFICATION_SLOT),
+        child_depth,
+        root_cnode,
+        root_control_wake_notification,
+        root_depth,
+        sel4_sys::seL4_CapRights::new(0, 0, 0, 1),
+        seL4_Word::from(ROOT_CONTROL_WAKE_NOTIFICATION_BADGE),
+    )?;
 
     let wake_badges = [
         WAKE_PACKET_RX,
@@ -2415,6 +2612,52 @@ mod tests {
         assert_eq!(WAKE_PACKET_TX_READY | WAKE_EVENT_READY, CHILD_WAKE_MASK);
         assert_eq!(WAKE_PUBLICATION_ACK, 64);
         assert_eq!(WAKE_DIRECT_VIRTIO_IRQ, 128);
+        assert_eq!(ROOT_CONTROL_WAKE_NOTIFICATION_SLOT, 6);
+        assert_eq!(ROOT_CONTROL_WAKE_NOTIFICATION_BADGE, 1);
+        assert!(ROOT_CONTROL_WAKE_NOTIFICATION_SLOT < (1 << CHILD_CNODE_RADIX_BITS));
+    }
+
+    #[test]
+    fn same_core_yield_prep_is_exact_to_durable_authenticated_genet_work() {
+        assert!(direct_genet_predrain_required(true, true));
+        assert!(
+            !direct_genet_predrain_required(false, true),
+            "mediated WiFi stays signal-only in the dual-mode Pi image",
+        );
+        assert!(
+            !direct_genet_predrain_required(true, false),
+            "a refused YieldTo cannot reset child accounting",
+        );
+        assert!(direct_genet_yield_after_predrain_admitted(true, true));
+        assert!(
+            !direct_genet_yield_after_predrain_admitted(true, false),
+            "a failed SC pre-drain must suppress YieldTo while retaining the durable signal",
+        );
+        assert!(!direct_genet_yield_after_predrain_admitted(false, true));
+        assert!(!direct_genet_yield_after_predrain_admitted(false, false));
+        assert_eq!(root_wake_badge(ROOT_CONTROL_WAKE_INDEX), Some(WAKE_CONTROL));
+        assert_eq!(
+            root_wake_badge(ROOT_PUBLICATION_ACK_WAKE_INDEX),
+            Some(WAKE_PUBLICATION_ACK),
+        );
+        assert_eq!(root_wake_badge(5), None);
+        assert_eq!(
+            DurableChildPublication::AuthenticatedControl.committed_for_badge(WAKE_CONTROL),
+            Ok(true),
+        );
+        assert_eq!(
+            DurableChildPublication::AuthenticatedPublicationCredit
+                .committed_for_badge(WAKE_PUBLICATION_ACK),
+            Ok(true),
+        );
+        assert_eq!(
+            DurableChildPublication::None.committed_for_badge(WAKE_CONTROL),
+            Ok(false),
+        );
+        assert_eq!(
+            DurableChildPublication::AuthenticatedControl.committed_for_badge(WAKE_PUBLICATION_ACK),
+            Err(BoundaryError::HandoffFailed),
+        );
     }
 
     #[test]

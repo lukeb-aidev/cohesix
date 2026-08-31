@@ -180,7 +180,7 @@ use crate::hal::{
 };
 #[cfg(feature = "net-console")]
 use crate::local_seat::LocalSeatDisplayTrace;
-use crate::local_seat::{LocalSeatRuntime, KEYBOARD_POLL_CHUNK_BYTES};
+use crate::local_seat::{LocalSeatRuntime, LocalSeatServiceTurn, KEYBOARD_POLL_CHUNK_BYTES};
 #[cfg(feature = "kernel")]
 use crate::log_buffer;
 #[cfg(feature = "net-console")]
@@ -2772,19 +2772,19 @@ pub struct PumpMetrics {
     pub net_direct_genet_compose_identity_drift: u64,
     /// Exact durable direct-GENET progress candidates emitted by EventPump.
     pub net_direct_genet_productive_candidates: u64,
-    /// Candidates admitted by the strict post-Yield root-time window.
+    /// Candidates admitted by exact identity, fence, profile, and hard-cap checks.
     pub net_direct_genet_productive_admitted: u64,
-    /// Candidates rejected by identity, safety-fence, accounting, or time.
+    /// Candidates rejected by identity, safety-fence, accounting, or hard caps.
     pub net_direct_genet_productive_rejected: u64,
-    /// Largest effective root-only elapsed time observed at admission.
+    /// Largest observed root-only elapsed sample; never admission authority.
     pub net_direct_genet_productive_effective_high_us: u64,
     /// Sticky bounded reason mask for rejected productive continuations.
     pub net_direct_genet_productive_reject_reasons: u32,
     /// Exact authenticated transactions that opened a bounded direct-GENET
     /// active tail at command acceptance or a terminal drain.
     pub net_direct_genet_active_tail_opened: u64,
-    /// Active tails derived from exact cross-core signal-only transaction
-    /// authority.
+    /// Legacy cross-core signal-only tail admissions. The selected same-core
+    /// Pi profile retains this schema-stable counter at zero.
     pub net_direct_genet_cross_core_signal_only_admissions: u64,
     /// Complete physical-rotor quanta admitted while an active tail was open.
     pub net_direct_genet_active_tail_admitted: u64,
@@ -5648,12 +5648,10 @@ enum DirectGenetProductiveProgress {
     DrainAndStage,
 }
 
-/// Generated scheduling relationship that can authorize a retained
-/// direct-GENET continuation. Same-core service retains the existing exact
-/// `YieldTo` proof. Cross-core service is signal-only: one exact durable
-/// command or stage may grant a strict successor, and an exact authenticated
-/// command opens the bounded transaction window before its stage/drain
-/// publications. Stage-only progress cannot mint an unrelated window.
+/// Scheduling relationship considered by direct-GENET continuation policy.
+/// The selected Pi profile is exact same-core `YieldTo`; the superseded
+/// cross-core signal-only variant remains only as a fail-closed comparison
+/// oracle for retained-token tests.
 #[cfg(all(feature = "kernel", feature = "net-console"))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum DirectGenetContinuationMode {
@@ -5661,10 +5659,10 @@ enum DirectGenetContinuationMode {
     CrossCoreSignalOnly,
 }
 
-/// Derive the only two direct-GENET continuation modes from one generated
-/// contract. Every object and scheduling field consumed by the root/child
-/// boundary must agree with the temporal service entry; drift disables
-/// retained execution.
+/// Derive the exact selected same-core direct-GENET continuation from one
+/// generated contract. Every object and scheduling field consumed by the
+/// root/child boundary must agree with the temporal service entry; drift
+/// disables retained execution.
 #[cfg(all(feature = "kernel", feature = "net-console"))]
 fn direct_genet_continuation_mode_for_contract(
     console: &crate::generated::ConsoleNetworkServiceConfig,
@@ -5672,7 +5670,7 @@ fn direct_genet_continuation_mode_for_contract(
     service: &crate::generated::TemporalTaskConfig,
 ) -> Option<DirectGenetContinuationMode> {
     let exact_profile = console.enabled
-        && console.abi_version == 5
+        && console.abi_version == 6
         && console.listener_port == 31_337
         && console.single_listener
         && console.direct_genet
@@ -5718,11 +5716,11 @@ fn direct_genet_continuation_mode_for_contract(
         )
         && root.consumed_time_evidence
         && root.wcet_us == 2_500
-        && root.response_time_us == 5_100
-        && service.core == 2
+        && root.response_time_us == 5_700
+        && service.core == 0
         && service.scheduling_context_slot == 6
         && service.scheduling_context_bits == 8
-        && service.sched_control_core == 2
+        && service.sched_control_core == 0
         && service.budget_us == 3_000
         && service.period_us == 10_000
         && service.deadline_us == 10_000
@@ -5738,7 +5736,7 @@ fn direct_genet_continuation_mode_for_contract(
         )
         && service.consumed_time_evidence
         && service.wcet_us == 3_000
-        && service.response_time_us == 3_000
+        && service.response_time_us == 5_700
         && console.core == service.core
         && console.scheduling_context_slot == service.scheduling_context_slot
         && console.scheduling_context_bits == service.scheduling_context_bits
@@ -5753,7 +5751,7 @@ fn direct_genet_continuation_mode_for_contract(
     if !exact_profile {
         return None;
     }
-    Some(DirectGenetContinuationMode::CrossCoreSignalOnly)
+    Some(DirectGenetContinuationMode::SameCoreYieldTo)
 }
 
 #[cfg(all(feature = "kernel", feature = "net-console"))]
@@ -5875,10 +5873,10 @@ impl PiRootControlProductiveContinuation {
 
     /// Whether this exact authenticated quantum opened or advanced one bounded
     /// Pi direct-GENET transaction window. A newly accepted command opens the
-    /// window before the first cross-core stage publication, while stage-only
-    /// progress cannot mint authority for an unrelated request. Same-core
-    /// progress always requires the retained successful `YieldTo`; exact
-    /// generated cross-core service instead carries no child execution credit.
+    /// window before the first stage publication, while stage-only progress
+    /// cannot mint authority for an unrelated request. The selected same-core
+    /// profile always requires the retained successful `YieldTo`; the legacy
+    /// cross-core oracle instead carries no child execution credit.
     pub(crate) const fn opens_active_hot_tail(self) -> bool {
         let exact_accounting = match self.mode {
             DirectGenetContinuationMode::SameCoreYieldTo => self.exact_same_core_yield_to_observed,
@@ -7030,6 +7028,13 @@ const LINKED_RUNTIME_NETWORK_QUANTUM_DEADLINE_MS: u64 = 25;
 /// can spend more service turns on console probes than on packet progress.
 #[cfg(feature = "net-console")]
 const LINKED_RUNTIME_NETWORK_OPERATOR_CHECKPOINT_MS: u64 = 25;
+/// Maximum real-wall interval between fully healthy empty USB HID polls.
+///
+/// This deliberately matches the existing physical-operator checkpoint. USB
+/// has no generated IRQ wake, so the cadence remains finite; readiness,
+/// recovery, buffered input, and exact retained requests bypass it.
+#[cfg(feature = "kernel")]
+const LOCAL_SEAT_USB_HEALTHY_POLL_CADENCE_MS: u64 = 25;
 
 /// Outcome of one serial ownership-cutover EventPump turn.
 #[cfg(feature = "kernel")]
@@ -7871,12 +7876,20 @@ where
     #[cfg(feature = "kernel")]
     cyw43_bootstrap_hdmi_ready_deferred: bool,
     local_seat: Option<&'a mut LocalSeatRuntime>,
+    #[cfg(feature = "kernel")]
+    local_seat_usb_healthy_poll_started_ms: Option<u64>,
+    #[cfg(feature = "kernel")]
+    local_seat_usb_healthy_poll_started_ticks: u64,
     #[cfg(test)]
     test_pi4_debug_commands: bool,
     #[cfg(test)]
     linked_local_seat_usb_service_pending_test_override: Option<bool>,
     #[cfg(test)]
     cyw43_bootstrap_usb_poll_state_test_override: Option<(bool, bool)>,
+    #[cfg(test)]
+    local_seat_usb_immediate_service_test_override: Option<bool>,
+    #[cfg(test)]
+    local_seat_usb_service_turn_test_override: Option<LocalSeatServiceTurn>,
     banner_emitted: bool,
     console_ready_announced: bool,
     serial_console_turn_active: bool,
@@ -8587,12 +8600,20 @@ where
             #[cfg(feature = "kernel")]
             cyw43_bootstrap_hdmi_ready_deferred: false,
             local_seat: None,
+            #[cfg(feature = "kernel")]
+            local_seat_usb_healthy_poll_started_ms: None,
+            #[cfg(feature = "kernel")]
+            local_seat_usb_healthy_poll_started_ticks: 0,
             #[cfg(test)]
             test_pi4_debug_commands: false,
             #[cfg(test)]
             linked_local_seat_usb_service_pending_test_override: None,
             #[cfg(test)]
             cyw43_bootstrap_usb_poll_state_test_override: None,
+            #[cfg(test)]
+            local_seat_usb_immediate_service_test_override: None,
+            #[cfg(test)]
+            local_seat_usb_service_turn_test_override: None,
             banner_emitted: false,
             console_ready_announced: false,
             serial_console_turn_active: false,
@@ -9286,6 +9307,13 @@ where
             runtime.mirror_prompt(CONSOLE_PROMPT);
         }
         self.local_seat = Some(runtime);
+        #[cfg(feature = "kernel")]
+        {
+            // A newly attached owner always receives one immediate physical
+            // probe before the healthy empty cadence can apply.
+            self.local_seat_usb_healthy_poll_started_ms = None;
+            self.local_seat_usb_healthy_poll_started_ticks = 0;
+        }
         #[cfg(all(feature = "kernel", feature = "usb"))]
         {
             if self.console_ready_announced && !self.post_prompt_local_seat_attach_pending {
@@ -11016,10 +11044,12 @@ where
                             .saturating_add(1);
                         self.pi_root_control_productive_continuation_identity = Some(continuation);
                         // The outer userland guard may retain this refill only
-                        // while its original Yield-return wall remains strictly
-                        // below the generated budget-minus-WCET pre-leaf cut. Every complete
-                        // quantum retains identity, local fairness, and all fault
-                        // fences; any drift keeps the explicit Yield.
+                        // under generated NaturalPostpone and the unchanged
+                        // hard 64-complete-quantum cap. Every complete quantum
+                        // retains identity, local fairness, and all fault
+                        // fences; any drift keeps the explicit Yield. Wall time
+                        // remains observational here; only the separate exact
+                        // empty transaction tail has its existing unslid cap.
                         return false;
                     }
                 }
@@ -12861,10 +12891,12 @@ where
                 self.linked_runtime_service_phase = self.linked_runtime_network_followup_phase();
             }
             LinkedRuntimeServicePhase::LocalSeat => {
-                // This phase may perform one USB linked-runtime operation. Any
-                // bytes it produces remain buffered until the following
-                // dispatch phase, so a hardware-facing command cannot compose
-                // with the USB poll that delivered it.
+                // This phase may perform one USB linked-runtime operation. A
+                // fully healthy empty probe can be cadence-deferred without
+                // removing the LocalSeat/runtime/Dispatch topology. Any bytes
+                // it produces remain buffered until the following dispatch
+                // phase, so a hardware-facing command cannot compose with the
+                // USB poll that delivered it.
                 self.poll_local_seat_backend_for_ingress();
                 self.poll_runtime(true, false, false);
                 #[cfg(feature = "usb")]
@@ -14822,10 +14854,13 @@ where
                 // readiness. Continue one bounded xHCI/HID owner turn after
                 // the prior CYW43 HAL borrow has been released, including
                 // steady polling after command admission while this finite
-                // bootstrap loop owns scheduling. Bytes remain buffered for a
-                // later Serial/dispatch turn, and Network is explicitly
-                // fenced, so this neither delays Wi-Fi admission nor composes
-                // two physical operations in one outer turn.
+                // bootstrap loop owns scheduling. Fully healthy empty child
+                // work shares the 25 ms real-wall cadence; this LocalSeat turn
+                // and its runtime service remain present when no USB command
+                // is issued. Bytes remain buffered for a later Serial/dispatch
+                // turn, and Network is explicitly fenced, so this neither
+                // delays Wi-Fi admission nor composes two physical operations
+                // in one outer turn.
                 self.cyw43_bootstrap_last_operator_turn_was_display = false;
                 self.cyw43_bootstrap_last_nondisplay_turn_was_local_seat = true;
                 self.poll_local_seat_backend_for_ingress();
@@ -17164,15 +17199,21 @@ where
         if self.serial_console_turn_active || self.serial.interactive_input_active() {
             return;
         }
-        if let Some(runtime) = self.local_seat.as_mut() {
-            if !runtime.root_console_ready() {
-                return;
-            }
-            for _ in 0..LOCAL_SEAT_OUTPUT_KEYBOARD_POLL_PASSES {
-                runtime.poll_backend_keyboard();
+        if !self
+            .local_seat
+            .as_ref()
+            .is_some_and(|runtime| runtime.root_console_ready())
+        {
+            return;
+        }
+        for _ in 0..LOCAL_SEAT_OUTPUT_KEYBOARD_POLL_PASSES {
+            let physical_poll_issued = self.poll_local_seat_backend_for_ingress().is_some();
+            if let Some(runtime) = self.local_seat.as_mut() {
                 if runtime.keyboard_parser_ingress_ready() {
                     runtime.drain_display_control_bytes_during_output(KEYBOARD_POLL_CHUNK_BYTES);
                 }
+            }
+            if physical_poll_issued {
                 self.metrics.local_seat_output_keyboard_polls = self
                     .metrics
                     .local_seat_output_keyboard_polls
@@ -32847,10 +32888,85 @@ where
         }
     }
 
-    fn poll_local_seat_backend_for_ingress(&mut self) {
-        if let Some(runtime) = self.local_seat.as_mut() {
-            let _ = runtime.service_backend_keyboard_turn();
+    #[cfg(feature = "kernel")]
+    fn local_seat_usb_healthy_poll_elapsed_us(&self) -> u64 {
+        let elapsed_ms = self
+            .local_seat_usb_healthy_poll_started_ms
+            .map_or(0, |started_ms| self.now_ms.saturating_sub(started_ms));
+        if self.local_seat_usb_healthy_poll_started_ticks == 0 {
+            return elapsed_ms.saturating_mul(1_000);
         }
+        let finished_ticks = Self::local_seat_usb_counter_ticks();
+        let frequency_hz = crate::arch::aarch64::timer::timer_freq_hz();
+        if finished_ticks < self.local_seat_usb_healthy_poll_started_ticks || frequency_hz == 0 {
+            return elapsed_ms.saturating_mul(1_000);
+        }
+        let elapsed_ticks =
+            finished_ticks.saturating_sub(self.local_seat_usb_healthy_poll_started_ticks);
+        let micros = u128::from(elapsed_ticks).saturating_mul(1_000_000) / u128::from(frequency_hz);
+        let counter_elapsed_us = core::cmp::min(micros, u128::from(u64::MAX)) as u64;
+        counter_elapsed_us.max(elapsed_ms.saturating_mul(1_000))
+    }
+
+    #[cfg(feature = "kernel")]
+    fn local_seat_usb_counter_ticks() -> u64 {
+        #[cfg(target_os = "none")]
+        {
+            crate::arch::aarch64::timer::timer_counter_ticks()
+        }
+        #[cfg(not(target_os = "none"))]
+        {
+            0
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    fn local_seat_usb_physical_service_due(&self) -> bool {
+        let immediate = self.local_seat.as_ref().is_some_and(|runtime| {
+            runtime.backend_keyboard_physical_poll_requires_immediate_service()
+        });
+        #[cfg(test)]
+        let immediate = self
+            .local_seat_usb_immediate_service_test_override
+            .unwrap_or(immediate);
+        immediate
+            || self.local_seat_usb_healthy_poll_started_ms.is_none()
+            || self.local_seat_usb_healthy_poll_elapsed_us()
+                >= LOCAL_SEAT_USB_HEALTHY_POLL_CADENCE_MS.saturating_mul(1_000)
+    }
+
+    #[cfg(feature = "kernel")]
+    fn reset_local_seat_usb_healthy_poll_clock(&mut self) {
+        self.local_seat_usb_healthy_poll_started_ms = Some(self.now_ms);
+        self.local_seat_usb_healthy_poll_started_ticks = Self::local_seat_usb_counter_ticks();
+    }
+
+    /// Service at most one physical USB child turn while leaving the caller's
+    /// LocalSeat phase and subsequent runtime/Dispatch topology intact.
+    ///
+    /// `None` means only a fully healthy empty poll was cadence-deferred. A
+    /// retained `Pending` request never resets the clock and is therefore
+    /// re-polled on the next outer turn until its exact terminal arrives.
+    fn poll_local_seat_backend_for_ingress(&mut self) -> Option<LocalSeatServiceTurn> {
+        #[cfg(feature = "kernel")]
+        if !self.local_seat_usb_physical_service_due() {
+            return None;
+        }
+        let runtime = self.local_seat.as_mut()?;
+        #[cfg(test)]
+        let outcome = self
+            .local_seat_usb_service_turn_test_override
+            .unwrap_or_else(|| runtime.service_backend_keyboard_turn());
+        #[cfg(not(test))]
+        let outcome = runtime.service_backend_keyboard_turn();
+        #[cfg(feature = "kernel")]
+        if matches!(
+            outcome,
+            LocalSeatServiceTurn::Complete | LocalSeatServiceTurn::Failed(_)
+        ) {
+            self.reset_local_seat_usb_healthy_poll_clock();
+        }
+        Some(outcome)
     }
 
     fn consume_local_seat(&mut self, phase: LocalSeatConsumePhase, skip_runtime: bool) -> bool {
@@ -42676,9 +42792,9 @@ mod tests {
                     diagnostic.response_drains = diagnostic
                         .response_drains
                         .saturating_add(u64::from(completion_fused));
-                    // The current Pi child is cross-core signal-only. A fake
-                    // stage/drain must preserve exact zero same-core YieldTo
-                    // accounting just like the production boundary.
+                    // Legacy signal-only fixtures retain exact zero same-core
+                    // YieldTo accounting. Selected same-core fixtures provide
+                    // their explicit YieldTo diagnostics separately.
                     self.isolated_diagnostics = Some(diagnostic);
                 }
             }
@@ -50601,6 +50717,79 @@ mod tests {
                 "a physical response barrier must continue to override HID service"
             );
         }
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn healthy_usb_poll_uses_real_wall_cadence_without_stranding_pending_work() {
+        let serial =
+            SerialPort::<_, 512, 512, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<512>::new());
+        let timer = TestTimer::repeated(1, 1);
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut local_seat = LocalSeatRuntime::new(crate::local_seat::LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 192,
+            buffer_lines: 16,
+        });
+        local_seat.mark_root_console_ready();
+        let mut pump =
+            EventPump::new(serial, timer, ipc, store, &mut audit).with_local_seat(&mut local_seat);
+        pump.local_seat_usb_immediate_service_test_override = Some(false);
+        pump.local_seat_usb_service_turn_test_override = Some(LocalSeatServiceTurn::Complete);
+
+        assert_eq!(
+            pump.poll_local_seat_backend_for_ingress(),
+            Some(LocalSeatServiceTurn::Complete),
+            "the first healthy poll remains immediate"
+        );
+        assert_eq!(pump.local_seat_usb_healthy_poll_started_ms, Some(0));
+
+        pump.now_ms = LOCAL_SEAT_USB_HEALTHY_POLL_CADENCE_MS - 1;
+        pump.service_local_seat_keyboard_during_output();
+        assert_eq!(
+            pump.metrics.local_seat_output_keyboard_polls, 0,
+            "output emission must share the same physical USB cadence",
+        );
+        assert_eq!(
+            pump.poll_local_seat_backend_for_ingress(),
+            None,
+            "a healthy empty poll must not issue before the real-wall checkpoint"
+        );
+
+        pump.now_ms = LOCAL_SEAT_USB_HEALTHY_POLL_CADENCE_MS;
+        assert_eq!(
+            pump.poll_local_seat_backend_for_ingress(),
+            Some(LocalSeatServiceTurn::Complete),
+            "the exact checkpoint admits one healthy poll"
+        );
+        assert_eq!(
+            pump.local_seat_usb_healthy_poll_started_ms,
+            Some(LOCAL_SEAT_USB_HEALTHY_POLL_CADENCE_MS)
+        );
+
+        pump.now_ms = LOCAL_SEAT_USB_HEALTHY_POLL_CADENCE_MS + 1;
+        pump.local_seat_usb_immediate_service_test_override = Some(true);
+        assert_eq!(
+            pump.poll_local_seat_backend_for_ingress(),
+            Some(LocalSeatServiceTurn::Complete),
+            "readiness, recovery, input, and retained work bypass the cadence"
+        );
+
+        pump.local_seat_usb_immediate_service_test_override = Some(false);
+        pump.local_seat_usb_service_turn_test_override = Some(LocalSeatServiceTurn::Pending);
+        pump.now_ms = LOCAL_SEAT_USB_HEALTHY_POLL_CADENCE_MS * 2 + 1;
+        assert_eq!(
+            pump.poll_local_seat_backend_for_ingress(),
+            Some(LocalSeatServiceTurn::Pending)
+        );
+        assert_eq!(
+            pump.poll_local_seat_backend_for_ingress(),
+            Some(LocalSeatServiceTurn::Pending),
+            "a pending exact request remains due on every outer turn"
+        );
     }
 
     #[cfg(feature = "kernel")]
@@ -60896,11 +61085,11 @@ mod tests {
         root.timeout_policy = crate::generated::TimeoutPolicy::NaturalPostpone;
         root.consumed_time_evidence = true;
         root.wcet_us = 2_500;
-        root.response_time_us = 5_100;
-        service.core = 2;
+        root.response_time_us = 5_700;
+        service.core = 0;
         service.scheduling_context_slot = 6;
         service.scheduling_context_bits = 8;
-        service.sched_control_core = 2;
+        service.sched_control_core = 0;
         service.budget_us = 3_000;
         service.period_us = 10_000;
         service.deadline_us = 10_000;
@@ -60913,8 +61102,8 @@ mod tests {
         service.timeout_policy = crate::generated::TimeoutPolicy::NaturalPostpone;
         service.consumed_time_evidence = true;
         service.wcet_us = 3_000;
-        service.response_time_us = 3_000;
-        console.abi_version = 5;
+        service.response_time_us = 5_700;
+        console.abi_version = 6;
         console.listener_port = 31_337;
         console.single_listener = true;
         console.direct_virtio = false;
@@ -60937,27 +61126,28 @@ mod tests {
 
         assert_eq!(
             direct_genet_continuation_mode_for_contract(&console, &root, &service),
-            Some(DirectGenetContinuationMode::CrossCoreSignalOnly),
+            Some(DirectGenetContinuationMode::SameCoreYieldTo),
         );
 
         assert_eq!(
             direct_genet_continuation_mode_for_contract(
-                &crate::generated::ConsoleNetworkServiceConfig {
-                    core: 0,
-                    ..console
-                },
+                &crate::generated::ConsoleNetworkServiceConfig { core: 2, ..console },
                 &root,
                 &crate::generated::TemporalTaskConfig {
-                    core: 0,
-                    sched_control_core: 0,
+                    core: 2,
+                    sched_control_core: 2,
                     ..service
                 },
             ),
             None,
-            "the retained same-core implementation cannot be selected by the exact cross-core Pi profile",
+            "the outgoing cross-core Pi profile cannot select retained same-core YieldTo",
         );
 
         for drifted in [
+            crate::generated::ConsoleNetworkServiceConfig {
+                abi_version: 5,
+                ..console
+            },
             crate::generated::ConsoleNetworkServiceConfig {
                 direct_virtio: true,
                 ..console
@@ -60966,10 +61156,7 @@ mod tests {
                 direct_genet: false,
                 ..console
             },
-            crate::generated::ConsoleNetworkServiceConfig {
-                core: root.core,
-                ..console
-            },
+            crate::generated::ConsoleNetworkServiceConfig { core: 1, ..console },
             crate::generated::ConsoleNetworkServiceConfig {
                 scheduling_context_slot: console.scheduling_context_slot.saturating_add(1),
                 ..console
@@ -60997,7 +61184,7 @@ mod tests {
                 ..root
             },
             crate::generated::TemporalTaskConfig {
-                response_time_us: 5_099,
+                response_time_us: 5_699,
                 ..root
             },
         ] {
@@ -61008,7 +61195,7 @@ mod tests {
             );
         }
         for drifted_service in [
-            crate::generated::TemporalTaskConfig { core: 3, ..service },
+            crate::generated::TemporalTaskConfig { core: 2, ..service },
             crate::generated::TemporalTaskConfig {
                 budget_us: 2_999,
                 ..service
@@ -61018,7 +61205,7 @@ mod tests {
                 ..service
             },
             crate::generated::TemporalTaskConfig {
-                response_time_us: 2_999,
+                response_time_us: 5_699,
                 ..service
             },
         ] {

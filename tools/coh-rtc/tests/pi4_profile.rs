@@ -235,7 +235,7 @@ fn pi4_uboot_profile_emits_network_policy() {
         ("timeout_fault_caps", 280, 512, 232),
         ("reply_objects", 279, 512, 233),
         ("scheduling_contexts", 280, 512, 232),
-        ("cspace_slots", 19_508, 65_536, 46_028),
+        ("cspace_slots", 19_510, 65_536, 46_026),
         ("untyped_bytes", 167_772_160, 268_435_456, 100_663_296),
     ] {
         assert_eq!(admitted(resource), used, "admitted {resource}");
@@ -287,6 +287,7 @@ fn pi4_uboot_profile_emits_network_policy() {
             .unwrap_or_else(|| panic!("temporal task {task_id}"))
     };
     let root = temporal_task("root-control");
+    let root_fault = temporal_task("root-fault");
     let console = temporal_task("console-network-service");
     let console_objects = &manifest["console_network_service"]["objects"];
     assert_eq!(root["core"], 0);
@@ -295,13 +296,16 @@ fn pi4_uboot_profile_emits_network_policy() {
     assert_eq!(root["budget_us"], 5_500);
     assert_eq!(root["period_us"], 10_000);
     assert_eq!(root["wcet_us"], 2_500);
-    assert_eq!(root["response_time_us"], 5_100);
+    assert_eq!(root["response_time_us"], 5_700);
     assert_eq!(
         root["wcet_provenance"],
-        "m26e-pi4-root-cross-core-console-parallel-candidate-v25"
+        "m26e-pi4-root-same-core-console-yieldto-candidate-v26"
     );
-    assert_eq!(console["core"], 2);
-    assert_eq!(console["sched_control_core"], 2);
+    assert_eq!(root_fault["core"], 2);
+    assert_eq!(root_fault["sched_control_core"], 2);
+    assert_eq!(root_fault["response_time_us"], 2_400);
+    assert_eq!(console["core"], 0);
+    assert_eq!(console["sched_control_core"], 0);
     assert_eq!(console["priority"], 200);
     assert_eq!(console["mcp"], 200);
     assert_eq!(console["priority"], root["priority"]);
@@ -313,20 +317,20 @@ fn pi4_uboot_profile_emits_network_policy() {
     assert_eq!(console["period_us"], 10_000);
     assert_eq!(console["max_refills"], 8);
     assert_eq!(console["wcet_us"], 3_000);
-    assert_eq!(console["response_time_us"], 3_000);
+    assert_eq!(console["response_time_us"], 5_700);
     assert_eq!(
         console["wcet_provenance"],
-        "m26e-pi4-console-cross-core-signal-only-candidate-v19"
+        "m26e-pi4-console-same-core-yieldto-candidate-v20"
     );
-    assert_eq!(manifest["console_network_service"]["abi_version"], 5);
+    assert_eq!(manifest["console_network_service"]["abi_version"], 6);
     assert_eq!(manifest["console_network_service"]["priority"], 200);
     assert_eq!(manifest["console_network_service"]["mcp"], 200);
     assert_eq!(manifest["console_network_service"]["max_refills"], 8);
-    assert_eq!(manifest["console_network_service"]["core"], 2);
+    assert_eq!(manifest["console_network_service"]["core"], 0);
     assert_eq!(console_objects["frames"], 104);
     assert_eq!(console_objects["cspace_slots"], 161);
     assert_eq!(admission["fixed_objects"]["frames"], 4_078);
-    assert_eq!(admission["fixed_objects"]["cspace_slots"], 9_268);
+    assert_eq!(admission["fixed_objects"]["cspace_slots"], 9_270);
     let genet = temporal_task("driver-genet");
     assert_eq!(genet["kind"], "driver");
     assert_eq!(genet["execution"], "active");
@@ -386,11 +390,11 @@ fn pi4_uboot_profile_emits_network_policy() {
         "m26e-pi4-hdmi-write-only-candidate-v1"
     );
     assert_eq!(gpu_executor["budget_us"], 5_000);
-    assert_eq!(gpu_executor["response_time_us"], 8_300);
+    assert_eq!(gpu_executor["response_time_us"], 7_700);
     let pcie = temporal_task("driver-pcie");
     assert_eq!(pcie["core"], 2);
     assert_eq!(pcie["sched_control_core"], 2);
-    assert_eq!(pcie["response_time_us"], 3_300);
+    assert_eq!(pcie["response_time_us"], 2_700);
     let core_two_demand: u64 = temporal_tasks
         .iter()
         .filter(|task| task["core"] == 2)

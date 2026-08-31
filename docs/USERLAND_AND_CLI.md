@@ -197,9 +197,11 @@ isolated_state: ycalls=<n> ycredit_us=<n> yinvalid=0x<n>
 ```
 
 `pcont` counts candidate, admitted, and rejected retained root quanta;
-`peff_us` is the most recent conservatively credited effective root interval.
+`peff_us` is the largest observed root-only elapsed sample and is never
+admission authority.
 `preason` uses `0x01` fence, `0x02` cap, `0x04` clock, `0x08` policy,
-`0x10` counter, `0x20` arithmetic, `0x40` credit, and `0x80` token bits.
+`0x10` counter, `0x20` arithmetic, schema-reserved retired `0x40`, and `0x80`
+token bits.
 `output_ok` distinguishes attempted output turns from durable output-stage
 successes. `ycalls` and `ycredit_us` report direct child scheduling calls and
 their bounded child-execution credit; `yinvalid` uses `0x01` pre-drain,
@@ -229,13 +231,17 @@ fence `0x2`, final pre-Network drift `0x4`, and non-material or empty
 publication `0x8`. `cyw43_publication_cut` assigns each rejection to the exact
 proof probe, next-composer entry, final pre-Network revalidation, or later
 revocation cut. The cut counters classify the aggregate `rejected` total; they
-do not create a retry or continuation. `cyw43_productive_window` counts windows
-opened by exact same-lifetime, authenticated generation/connection and
-accepted-command evidence, transient-empty rotor admissions within that exact
-window, and closes. The enclosing unchanged 3,000-us/64-turn activation and
-all operator, passive, recovery, containment, quarantine, reboot, handoff, and
-fault fences remain authoritative; these counters grant no refill, retry,
-readiness, or device authority. One credit may be rebased after the
+do not create a retry or continuation. `cyw43_productive_window` counts exact
+same-lifetime, authenticated generation/connection and accepted-command window
+opens and closes inside the generated `NaturalPostpone` activation. Its
+schema-stable `idle_admitted` field records the retired transient-empty path
+and remains zero under event-backed continuation. Every full Operator, Driver,
+and attached Network service turn spends one of the unchanged 64 logical
+material-work units; productive Driver or attached Network progress is
+independently capped at 64. All operator, passive, recovery, containment,
+quarantine, reboot, handoff, and fault fences remain authoritative; these
+counters grant no refill, retry, readiness, or device authority. One credit
+may be rebased after the
 ordinary Dispatch cut only for one exact authenticated network command: the
 command count advances by one, an empty response lane becomes one exact
 nonempty sealed completed lane, and an empty flush becomes one bounded
@@ -321,9 +327,13 @@ Yield: the Pi target executes `CNTVCT -> svc -> CNTVCT` in one assembly block.
 Each sample has exactly one trigger class and retains the pre-Yield pending mask
 and lane/identity. The six trigger classes distinguish reserve rejection, no
 productive successor, passive admission, recovery fencing, operator rotation,
-and another explicit boundary. The budget rows classify WiFi reserve guards at
-activation, attached, bootstrap-operator, or bootstrap-driver cuts; reason
-bits are cap `0x1`, clock `0x2`, reserve `0x4`, and policy `0x8`.
+and another explicit boundary. The budget rows retain schema-stable WiFi
+activation, attached, bootstrap-operator, and bootstrap-driver cuts; reason
+bits remain cap `0x1`, clock `0x2`, reserve `0x4`, and policy `0x8`. Exact
+`NaturalPostpone` productive lanes now close on the hard cap or
+incompatible-policy cut, not on a userland clock or reserve estimate; the
+retained clock/reserve fields remain diagnostic schema and historical-image
+evidence rather than current productive admission authority.
 
 Both composer and Yield recorders accumulate raw architectural-counter ticks
 at the exact selected Pi frequency of 54 MHz and convert to microseconds only
@@ -436,8 +446,8 @@ then local-seat input first. During an authenticated session it gives bounded
 TCP response flushing priority while continuing to service both physical
 inputs and fatal output.
 
-The selected internal contract is manifest schema 1.15 and console ABI/READY
-v5. Root may authorize one through eight already-ordered response lines in one
+The selected internal contract is manifest schema 1.16 and console ABI/READY
+v6. Root may authorize one through eight already-ordered response lines in one
 binary `SendBatch` control, but the child still emits one ordinary
 length-prefixed line per replenishment-bounded Session unit. For one exact
 isolated authenticated connection, root captures synchronous HELP, NETSTATS,

@@ -988,15 +988,35 @@ fn console_publication_ack_is_exactly_once_and_post_retention() {
     let hal = include_str!("../src/hal/console_network.rs");
     let committed_signal = section(
         hal,
-        "fn signal_committed_child_work(&mut self, wake_index: usize)",
-        "/// Stage one virtual/admitted NIC packet",
+        "fn signal_committed_child_work(",
+        "/// Return fail-closed accounting for exact same-core direct-GENET YieldTo",
     );
-    let admission = marker(committed_signal, "self.committed_signal_only_admitted()?;");
+    let admission = marker(
+        committed_signal,
+        "self.committed_signal_yield_admitted(durable_publication, signal_badge)",
+    );
+    let predrain = marker(
+        committed_signal,
+        "sel4::sched_context_consumed(self.scheduling_context)",
+    );
     let release = marker(committed_signal, "fence(Ordering::Release);");
     let signal = marker(committed_signal, "sel4::signal_unchecked(wake_cap);");
-    assert!(admission < release && release < signal);
-    assert!(!committed_signal.contains("yield_to_child_after_committed_signal"));
-    assert!(!committed_signal.contains("SchedContext_YieldTo"));
+    let guarded_yield = marker(
+        committed_signal,
+        "self.yield_to_child_after_committed_signal(yield_admitted, predrain_succeeded)",
+    );
+    assert!(
+        admission < predrain && predrain < release && release < signal && signal < guarded_yield
+    );
+
+    let yield_admission = section(
+        hal,
+        "fn committed_signal_yield_admitted(",
+        "fn yield_to_child_after_committed_signal(",
+    );
+    assert!(yield_admission.contains("runtime_direct_virtio: self.direct_virtio()"));
+    assert!(yield_admission.contains("&& !admission.runtime_direct_virtio"));
+    assert!(yield_admission.contains("&& admission.runtime_direct_genet"));
 
     let pending = section(
         hal,
@@ -1045,7 +1065,7 @@ fn console_publication_ack_is_exactly_once_and_post_retention() {
     let clear = marker(acknowledge, "self.publication_ack_owed = false;");
     let signal_committed = marker(
         acknowledge,
-        "self.signal_committed_child_work(ROOT_PUBLICATION_ACK_WAKE_INDEX)",
+        "DurableChildPublication::AuthenticatedPublicationCredit",
     );
     assert!(requires_owed < clear && clear < signal_committed);
     assert_eq!(
@@ -1268,7 +1288,7 @@ fn service_tick_is_one_bounded_signal_credit_before_optional_handoff() {
     let lifecycle = marker(service_tick, "if !self.activated || self.contained");
     let signal = marker(
         service_tick,
-        "self.signal_committed_child_work(ROOT_CONTROL_WAKE_INDEX)",
+        "self.signal_committed_child_work(ROOT_CONTROL_WAKE_INDEX, DurableChildPublication::None)",
     );
     assert!(lifecycle < signal);
     assert_eq!(

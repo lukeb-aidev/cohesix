@@ -221,7 +221,7 @@ pub unsafe extern "C" fn _start(descriptor: *const u8) -> ! {
         0,
         CONSOLE_NETWORK_SERVICE_IDENTITY,
     );
-    signal_slot(descriptor.supervisor_wake_notification_slot);
+    signal_durable_child_publication(descriptor, descriptor.supervisor_wake_notification_slot);
     // Ready occupies the one-slot event page. Only root's explicit ACK after it
     // has accepted that record grants one publication credit. Internal units
     // preserve the credit, and exactly one later publication consumes it.
@@ -354,7 +354,10 @@ pub unsafe extern "C" fn _start(descriptor: *const u8) -> ! {
                 0,
                 b"reason=shutdown",
             );
-            signal_slot(descriptor.supervisor_wake_notification_slot);
+            signal_durable_child_publication(
+                descriptor,
+                descriptor.supervisor_wake_notification_slot,
+            );
             park_for_teardown(descriptor);
         }
 
@@ -562,7 +565,10 @@ pub unsafe extern "C" fn _start(descriptor: *const u8) -> ! {
                     related_sequence,
                     &[],
                 );
-                signal_slot(descriptor.supervisor_wake_notification_slot);
+                signal_durable_child_publication(
+                    descriptor,
+                    descriptor.supervisor_wake_notification_slot,
+                );
             }
             ChildTurnUnit::PublishServiceEvent => {
                 let runtime_event =
@@ -582,7 +588,10 @@ pub unsafe extern "C" fn _start(descriptor: *const u8) -> ! {
                     0,
                     runtime_event.payload_bytes(),
                 );
-                signal_slot(descriptor.supervisor_wake_notification_slot);
+                signal_durable_child_publication(
+                    descriptor,
+                    descriptor.supervisor_wake_notification_slot,
+                );
                 #[cfg(feature = "direct-genet")]
                 if direct_genet_command_publication_quiesces(
                     direct_genet_link.is_some(),
@@ -610,7 +619,10 @@ pub unsafe extern "C" fn _start(descriptor: *const u8) -> ! {
                     packet_tx_sequence,
                     &egress[..length],
                 );
-                signal_slot(descriptor.packet_tx_wake_notification_slot);
+                signal_durable_child_publication(
+                    descriptor,
+                    descriptor.packet_tx_wake_notification_slot,
+                );
             }
             ChildTurnUnit::PollService => {
                 let outcome = match service.poll_service_unit(now_ms(descriptor.timer_clock_hz)) {
@@ -649,7 +661,10 @@ pub unsafe extern "C" fn _start(descriptor: *const u8) -> ! {
                         }
                         last_packet_sequence = sequence;
                         publish_completion_watermark(event, Some(sequence), None);
-                        signal_slot(descriptor.supervisor_wake_notification_slot);
+                        signal_durable_child_publication(
+                            descriptor,
+                            descriptor.supervisor_wake_notification_slot,
+                        );
                         turn_scheduler.complete(ChildTurnUnit::IngestPacket);
                         turn_scheduler.request_service();
                     }
@@ -698,7 +713,10 @@ pub unsafe extern "C" fn _start(descriptor: *const u8) -> ! {
                             // independently pending exact-current drain record.
                         }
                         publish_completion_watermark(event, None, Some(sequence));
-                        signal_slot(descriptor.supervisor_wake_notification_slot);
+                        signal_durable_child_publication(
+                            descriptor,
+                            descriptor.supervisor_wake_notification_slot,
+                        );
                         turn_scheduler.complete(ChildTurnUnit::ApplyControl);
                         #[cfg(feature = "direct-genet")]
                         if release_command_quiesce {
@@ -825,10 +843,26 @@ fn wait_for_work(descriptor: RuntimeInitDescriptor, local_poll_eligible: bool) -
 
 fn signal_slot(slot: u32) {
     fence(Ordering::Release);
-    // SAFETY: The descriptor fixes slots 3 and 4 to separate Write-only caps;
-    // their one-hot badges are minted by the supervisor and not child-selected.
+    // SAFETY: Descriptor validation fixes every passed slot to one of the
+    // child's write-only publication caps. Their badges are minted by root and
+    // are never child-selected.
     unsafe {
         sel4_sys::seL4_Signal(slot as sel4_sys::seL4_CPtr);
+    }
+}
+
+/// Preserve the existing publication notification before waking root-control.
+///
+/// Root consumes the original packet/event badge to select and acknowledge the
+/// sequence-last record. Physical WiFi/direct-GENET profiles then signal the
+/// Pi root-control fan-in after that semantic edge. Direct-VirtIO QEMU retains
+/// its qualified signal-only path without leaving an unconsumed Pi fan-in
+/// latched; neither edge is publication authority without the durable page
+/// transition.
+fn signal_durable_child_publication(descriptor: RuntimeInitDescriptor, publication_slot: u32) {
+    signal_slot(publication_slot);
+    if !descriptor.direct_virtio() {
+        signal_slot(descriptor.root_control_wake_notification_slot);
     }
 }
 

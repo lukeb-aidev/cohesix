@@ -187,8 +187,8 @@ mod tests {
             admitted_frames,
             admitted_slots,
         ) in [
-            (qemu_manifest(), 2_024, 4_378, 5_096, 12_570, 5_608, 14_618),
-            (pi4_manifest(), 4_078, 9_268, 7_150, 17_460, 7_662, 19_508),
+            (qemu_manifest(), 2_024, 4_380, 5_096, 12_572, 5_608, 14_620),
+            (pi4_manifest(), 4_078, 9_270, 7_150, 17_462, 7_662, 19_510),
         ] {
             let qemu = manifest.profile.name == "virt-aarch64";
             assert_eq!(manifest.console_network_service.stack_pages, 32);
@@ -299,13 +299,13 @@ mod tests {
                 (
                     5_500,
                     2_500,
-                    5_100,
+                    5_700,
                     0,
-                    "m26e-pi4-root-cross-core-console-parallel-candidate-v25",
-                    2,
+                    "m26e-pi4-root-same-core-console-yieldto-candidate-v26",
+                    0,
                     200,
                     200,
-                    3_000,
+                    5_700,
                     8_750,
                     8_400,
                     54_000_000,
@@ -352,7 +352,7 @@ mod tests {
                 expected_console_priority
             );
             assert_eq!(manifest.console_network_service.mcp, expected_console_mcp);
-            assert_eq!(manifest.console_network_service.abi_version, 5);
+            assert_eq!(manifest.console_network_service.abi_version, 6);
             assert_eq!(console_network.budget_us, 3_000);
             assert_eq!(console_network.period_us, 10_000);
             assert_eq!(console_network.wcet_us, 3_000);
@@ -366,7 +366,7 @@ mod tests {
                 if qemu {
                     "m26e-qemu-console-received-progress-retention-candidate-v18"
                 } else {
-                    "m26e-pi4-console-cross-core-signal-only-candidate-v19"
+                    "m26e-pi4-console-same-core-yieldto-candidate-v20"
                 }
             );
 
@@ -377,7 +377,7 @@ mod tests {
                 ]
             } else {
                 [
-                    ("root-worker-executor-gpu", 2, 8_300),
+                    ("root-worker-executor-gpu", 2, 7_700),
                     ("root-worker-executor-lora", 3, 7_400),
                 ]
             };
@@ -504,7 +504,7 @@ mod tests {
                 error.to_string().contains("response-time result mismatch")
                     || error
                         .to_string()
-                        .contains("requires exact root/console response_time_us 5100/3000"),
+                        .contains("requires exact root/console response_time_us 5700/5700"),
                 "unexpected error for {task_id}: {error}"
             );
         }
@@ -531,7 +531,7 @@ mod tests {
                         .to_string()
                         .contains("object/SC inventory disagrees with temporal task")
                     || error.to_string().contains(
-                        "cross-core signal-only requires exact root budget/period/refills/WCET",
+                        "same-core YieldTo requires exact root budget/period/refills/WCET",
                     ),
                 "unexpected error for {task_id}: {error}"
             );
@@ -550,14 +550,7 @@ mod tests {
             assert_eq!(root_fault.budget_us, 3_000);
             assert_eq!(root_fault.period_us, 10_000);
             assert_eq!(root_fault.wcet_us, 2_400);
-            assert_eq!(
-                root_fault.response_time_us,
-                if manifest.profile.name == "virt-aarch64" {
-                    2_400
-                } else {
-                    2_600
-                }
-            );
+            assert_eq!(root_fault.response_time_us, 2_400);
             assert_eq!(
                 root_fault.wcet_provenance,
                 "m26e-qemu-root-fault-service-units-candidate-v6"
@@ -693,7 +686,7 @@ mod tests {
         assert_eq!(record["inventory"]["frames"], 5096);
         assert_eq!(record["inventory"]["endpoints"], 271);
         assert_eq!(record["inventory"]["reply_objects"], 264);
-        assert_eq!(record["inventory"]["cspace_slots"], 12570);
+        assert_eq!(record["inventory"]["cspace_slots"], 12572);
 
         let canonical = canonical_json(&record["topology"]).expect("canonical topology");
         assert_eq!(

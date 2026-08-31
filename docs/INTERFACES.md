@@ -164,7 +164,7 @@ child anchor before reuse.
 
 ### Internal target console-network ABI
 
-`console-network-service/v5` is the private ABI of the active-SC
+`console-network-service/v6` is the private ABI of the active-SC
 `console-network-runtime` child. The child owns target Ethernet/IP/TCP state,
 frame parsing, transport authentication, and bounded response emission. It is
 not the passive NineDoor service and is not a second external protocol.
@@ -196,7 +196,7 @@ connection, batch identity, and prepared cursor. Backpressure or stale identity
 consumes nothing. A partial enqueue is a terminal invariant failure and never
 advances or retries the cursor. The train is only an internal enqueue unit: it
 adds no aggregate external frame, changes no four-byte length prefix, and does
-not change ABI v5 or the public `AUTH`/`ATTACH` and `OK`/`ERR`/`END` grammar.
+not change ABI v6 or the public `AUTH`/`ATTACH` and `OK`/`ERR`/`END` grammar.
 Legacy `SendLine = 1` and Disconnect remain valid controls.
 
 Event kind `CommandBatch = 27` carries encoding version 1 and one through eight
@@ -222,14 +222,29 @@ Root policy, role attachment, namespace mutation, and command execution remain
 outside the child. The public `AUTH`/`ATTACH` and `OK`/`ERR`/`END`
 contract is unchanged.
 
+ABI v6 assigns the descriptor's former `reserved0` field to fixed child slot 6.
+HAL mints into that slot only a Write-only, badge-1 capability to the additional
+root-control wake notification; it grants no Read, Reply, Grant, scheduling,
+packet, or policy authority. After committing any durable child event or packet
+TX publication, the child signals the existing component-specific notification
+first and this fan-in notification second. Both notifications are coalescing
+scheduling hints. The sequence-last shared record remains authoritative, so
+root must recheck the exact durable condition before sleeping and must never
+infer publication or identity from the wake badge alone. The descriptor change
+does not alter the four shared pages or any public framing or console grammar.
+
 On Pi, compiler truth places root-control and this child on core 0 at equal
-priority 200. Only after root has committed one exact packet, control, or
-publication-ACK record, or elected one bounded service-tick wake, and then
-successfully signalled its one-hot notification may root invoke
-`SchedContext_YieldTo` on the child's retained SC. Invalid lifecycle, core,
-priority, MCP, SC, signal, or syscall state fails closed. QEMU retains its
-lower-priority child and does not use this handoff. This scheduling transfer
-adds no ABI field, work credit, public frame, or child authority.
+priority 200. Only exact authenticated direct-GENET control or
+publication-ACK work may use the guarded same-core continuation: root commits
+the durable record, successfully pre-drains the child SC for fail-closed
+accounting, executes a release fence, signals the exact one-hot child
+notification, and calls `SchedContext_YieldTo` once on that exact SC. A failed
+pre-drain still delivers the durable signal but suppresses the optional
+YieldTo. Packet ingress, close, bounded
+service-tick wakes, mediated WiFi, and QEMU direct-VirtIO remain signal-only.
+Invalid backend, authentication, lifecycle, core, priority, MCP, SC, badge, or
+publication state fails closed. The durable record remains work authority;
+Signal and YieldTo add no work credit, public frame, or child authority.
 
 When the selected descriptor sets `direct_virtio`, its sealed extension names
 one QEMU VirtIO-net MMIO page, the exact IRQHandler slot, two fixed queue
@@ -243,7 +258,7 @@ device status register, acknowledges no future IRQ, scrubs the admitted DMA
 pages, and then revokes the child bundle.
 
 The compiler derives `direct_genet` only for the exact Pi `bcmgenet-v5`
-profile; there is no manifest-authored runtime toggle. The sealed ABI v5
+profile; there is no manifest-authored runtime toggle. The sealed ABI v6
 extension names one 32-page CPU-only range shared only by the GENET and console
 child generations. Page 0 is the aligned sequence-last control page, pages 1
 through 15 are GENET-to-console RX slots, and pages 16 through 31 are
@@ -283,7 +298,7 @@ terminal.
 
 Within control page 0, bytes `[0,64)` hold the immutable control header and
 bytes `[64,320)` hold the four 64-byte RX-producer, RX-consumer, TX-producer,
-and TX-consumer records. Console-network ABI v5 additionally assigns the
+and TX-consumer records. Console-network ABI v6 additionally assigns the
 formerly reserved bytes `[320,512)` to an optional, separately versioned
 direct-GENET diagnostic-v4 record. The record is exactly 192 bytes, aligned to
 64 bytes, assigns record-relative offset 12 to the maximum measured direct MCS

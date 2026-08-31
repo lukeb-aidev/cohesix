@@ -682,6 +682,133 @@ fn restricted_critical_ipc_uses_explicit_registers_and_bound_extra_cap_lane() {
 }
 
 #[test]
+fn worker_supervisor_fanin_follows_durable_publication() {
+    let critical = include_str!("../src/hal/critical_tcb.rs");
+    assert!(critical.contains("const CHILD_ROOT_CONTROL_WAKE_SLOT: seL4_CPtr = 5;"));
+    let fanin_helper = source_section(
+        critical,
+        "fn signal_root_control_fanin_hint()",
+        "fn publish_target_worker_fault(",
+    );
+    for required in [
+        "feature = \"release-pi4\"",
+        "target_arch = \"aarch64\"",
+        "target_os = \"none\"",
+        "sel4_config_kernel_mcs",
+        "sel4::signal_unchecked(CHILD_ROOT_CONTROL_WAKE_SLOT)",
+    ] {
+        assert!(fanin_helper.contains(required), "missing {required}");
+    }
+    assert_eq!(
+        critical
+            .matches("sel4::signal_unchecked(CHILD_ROOT_CONTROL_WAKE_SLOT)")
+            .count(),
+        1,
+        "only the Pi-gated helper may issue the fan-in syscall",
+    );
+    let construction = source_section(
+        critical,
+        "fn construct_restricted_child(",
+        "fn configure_active_sc(",
+    );
+    let worker_fanin = source_section(
+        construction,
+        "if task.id == WORKER_SUPERVISOR_ID {\n            mint_child_cap(",
+        "        if task.id == DRIVER_SUPERVISOR_ID {",
+    );
+    for required in [
+        "CHILD_ROOT_CONTROL_WAKE_SLOT",
+        "root_control_wake",
+        "write_only_rights()",
+        "critical.worker-supervisor-root-control-wake",
+    ] {
+        assert!(worker_fanin.contains(required), "missing {required}");
+    }
+    assert!(worker_fanin.contains("                1,"));
+
+    let entry = source_section(
+        critical,
+        "extern \"C\" fn root_worker_supervisor_entry",
+        "extern \"C\" fn root_worker_executor_gpu_entry",
+    );
+    let completion_publish = entry
+        .find("drain_target_wake(badge)")
+        .expect("durable role-wake publication");
+    let completion_signal = entry[completion_publish..]
+        .find("signal_root_control_fanin_hint()")
+        .map(|offset| completion_publish + offset)
+        .expect("root fan-in after role-wake publication");
+    assert!(completion_publish < completion_signal);
+
+    let transfer = source_section(
+        entry,
+        "let result = match item {",
+        "        let retry = match TARGET_HANDOFF.try_lock()",
+    );
+    let fault_publish = transfer
+        .find("drain_critical_fault(record)")
+        .expect("durable fault publication");
+    let validated_control = transfer
+        .find("WorkerSupervisorItem::Control(_) => Ok(())")
+        .expect("existing validated-control FIFO retained");
+    let fanin = transfer
+        .find("signal_root_control_fanin_hint()")
+        .expect("coalesced root fan-in");
+    assert!(fault_publish < fanin && validated_control < fanin);
+    assert_eq!(
+        transfer.matches("signal_root_control_fanin_hint()").count(),
+        1
+    );
+
+    let service_publication = source_section(
+        critical,
+        "fn publish_target_service_fault(",
+        "fn publish_target_driver_fault(",
+    );
+    let service_publish = service_publication
+        .find("handoff.publish_service_fault(record)?;")
+        .expect("durable service-fault publication");
+    let service_unlock = service_publication
+        .find("drop(handoff);")
+        .expect("service-fault publication unlock");
+    let service_fanin = service_publication
+        .find("signal_root_control_fanin_hint();")
+        .expect("service-fault root fan-in");
+    assert!(service_publish < service_unlock && service_unlock < service_fanin);
+
+    let driver_publication = source_section(
+        critical,
+        "fn publish_target_driver_fault(",
+        "fn resolve_target_fault(",
+    );
+    let driver_publish = driver_publication
+        .find("handoff.publish_driver_fault(runtime_slot, record)?;")
+        .expect("durable driver-fault publication");
+    let driver_unlock = driver_publication
+        .find("drop(handoff);")
+        .expect("driver-fault publication unlock");
+    let driver_semantic_wake = driver_publication
+        .find("sel4::signal_unchecked(CHILD_DRIVER_SIGNAL_SLOT);")
+        .expect("driver-supervisor semantic wake");
+    let driver_fanin = driver_publication
+        .find("signal_root_control_fanin_hint();")
+        .expect("driver-fault root fan-in");
+    assert!(
+        driver_publish < driver_unlock
+            && driver_unlock < driver_semantic_wake
+            && driver_semantic_wake < driver_fanin
+    );
+
+    let worker_task = include_str!("../src/hal/worker_task.rs");
+    let immediate = source_section(
+        worker_task,
+        "fn handle_one_immediate_work(",
+        "fn handle_one_deadline(",
+    );
+    assert!(immediate.contains("take_validated_worker_control"));
+}
+
+#[test]
 fn terminal_fault_suspends_without_reply_or_early_reuse() {
     let mut lane = FaultReplyLane::default();
     lane.begin(registration(true), FaultClass::Standard)

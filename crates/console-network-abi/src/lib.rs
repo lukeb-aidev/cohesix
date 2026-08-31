@@ -7,7 +7,7 @@
 #![deny(unsafe_code)]
 #![warn(missing_docs)]
 
-//! Fixed-layout `console-network-service/v5` records.
+//! Fixed-layout `console-network-service/v6` records.
 //!
 //! The root remains the sole owner of operator policy and command execution.
 //! The child owns Ethernet/IP/TCP processing, transport authentication, and
@@ -30,9 +30,9 @@ pub const PACKET_PAGE_MAGIC: u32 = 0x434e_5031;
 /// Console exchange page magic (`CNE1`).
 pub const EXCHANGE_PAGE_MAGIC: u32 = 0x434e_4531;
 /// ABI version.
-pub const ABI_VERSION: u16 = 5;
+pub const ABI_VERSION: u16 = 6;
 /// Exact child `Ready` payload for this ABI generation.
-pub const CONSOLE_NETWORK_SERVICE_IDENTITY: &[u8] = b"console-network-service/v5";
+pub const CONSOLE_NETWORK_SERVICE_IDENTITY: &[u8] = b"console-network-service/v6";
 /// Shared page size and alignment.
 pub const SHARED_PAGE_BYTES: usize = 4096;
 /// Maximum copied Ethernet frame, including VLAN headroom.
@@ -127,6 +127,10 @@ pub const SUPERVISOR_WAKE_NOTIFICATION_SLOT: u32 = 4;
 /// The child receives no endpoint capability here; seL4 installs the
 /// root-held fault and timeout-fault caps directly on its TCB.
 pub const FAULT_ENDPOINT_SLOT: u32 = 5;
+/// Child signal cap for the shared root-control wake notification.
+pub const ROOT_CONTROL_WAKE_NOTIFICATION_SLOT: u32 = 6;
+/// Fixed badge on the child's root-control wake signal cap.
+pub const ROOT_CONTROL_WAKE_NOTIFICATION_BADGE: u64 = 1;
 /// Direct-QEMU VirtIO IRQHandler cap slot; empty for non-direct transports.
 pub const DIRECT_VIRTIO_IRQ_HANDLER_SLOT: u32 = 7;
 
@@ -2906,8 +2910,8 @@ pub struct RuntimeInitDescriptor {
     pub descriptor_bytes: u16,
     /// Required flags plus recognized optional transport extensions.
     pub flags: u32,
-    /// Reserved; zero.
-    pub reserved0: u32,
+    /// Child signal-cap slot for the shared root-control wake notification.
+    pub root_control_wake_notification_slot: u32,
     /// Nonzero supervisor generation.
     pub generation: u64,
     /// Child wait-notification cap slot.
@@ -2986,7 +2990,6 @@ impl RuntimeInitDescriptor {
             return Err(AbiError::InvalidIdentity);
         }
         if self.descriptor_bytes as usize != size_of::<Self>()
-            || self.reserved0 != 0
             || self.reserved1 != 0
             || !bytes_zero(&self.reserved2)
         {
@@ -3000,6 +3003,7 @@ impl RuntimeInitDescriptor {
             || self.packet_tx_wake_notification_slot != PACKET_TX_WAKE_NOTIFICATION_SLOT
             || self.supervisor_wake_notification_slot != SUPERVISOR_WAKE_NOTIFICATION_SLOT
             || self.fault_endpoint_slot != FAULT_ENDPOINT_SLOT
+            || self.root_control_wake_notification_slot != ROOT_CONTROL_WAKE_NOTIFICATION_SLOT
             || self.root_wake_mask
                 != (ROOT_WAKE_MASK
                     | if self.direct_virtio() {
@@ -3166,7 +3170,7 @@ impl RuntimeInitDescriptor {
         output[4..6].copy_from_slice(&self.abi_version.to_le_bytes());
         output[6..8].copy_from_slice(&self.descriptor_bytes.to_le_bytes());
         output[8..12].copy_from_slice(&self.flags.to_le_bytes());
-        output[12..16].copy_from_slice(&self.reserved0.to_le_bytes());
+        output[12..16].copy_from_slice(&self.root_control_wake_notification_slot.to_le_bytes());
         output[16..24].copy_from_slice(&self.generation.to_le_bytes());
         output[24..28].copy_from_slice(&self.child_wake_notification_slot.to_le_bytes());
         output[28..32].copy_from_slice(&self.packet_tx_wake_notification_slot.to_le_bytes());
@@ -3221,7 +3225,7 @@ impl RuntimeInitDescriptor {
             abi_version: read_u16(input, 4),
             descriptor_bytes: read_u16(input, 6),
             flags: read_u32(input, 8),
-            reserved0: read_u32(input, 12),
+            root_control_wake_notification_slot: read_u32(input, 12),
             generation: read_u64(input, 16),
             child_wake_notification_slot: read_u32(input, 24),
             packet_tx_wake_notification_slot: read_u32(input, 28),
@@ -3262,7 +3266,7 @@ impl RuntimeInitDescriptor {
         hash = hash_u16(hash, self.abi_version);
         hash = hash_u16(hash, self.descriptor_bytes);
         hash = hash_u32(hash, self.flags);
-        hash = hash_u32(hash, self.reserved0);
+        hash = hash_u32(hash, self.root_control_wake_notification_slot);
         hash = hash_u64(hash, self.generation);
         hash = hash_u32(hash, self.child_wake_notification_slot);
         hash = hash_u32(hash, self.packet_tx_wake_notification_slot);
@@ -4146,6 +4150,10 @@ const _: () = assert!(size_of::<PacketPage>() == SHARED_PAGE_BYTES);
 const _: () = assert!(align_of::<PacketPage>() == SHARED_PAGE_BYTES);
 const _: () = assert!(size_of::<ExchangePage>() == SHARED_PAGE_BYTES);
 const _: () = assert!(size_of::<RuntimeInitDescriptor>() == RUNTIME_INIT_DESCRIPTOR_BYTES);
+const _: () = assert!(
+    core::mem::offset_of!(RuntimeInitDescriptor, root_control_wake_notification_slot) == 12
+);
+const _: () = assert!(ROOT_CONTROL_WAKE_NOTIFICATION_SLOT < CHILD_CSPACE_SLOTS);
 const _: () = assert!(size_of::<DirectVirtioLayout>() == DIRECT_VIRTIO_LAYOUT_BYTES);
 const _: () = assert!(align_of::<DirectVirtioLayout>() == align_of::<u64>());
 const _: () =
@@ -4242,7 +4250,7 @@ mod tests {
             abi_version: ABI_VERSION,
             descriptor_bytes: size_of::<RuntimeInitDescriptor>() as u16,
             flags: REQUIRED_INIT_FLAGS,
-            reserved0: 0,
+            root_control_wake_notification_slot: ROOT_CONTROL_WAKE_NOTIFICATION_SLOT,
             generation: 7,
             child_wake_notification_slot: CHILD_WAKE_NOTIFICATION_SLOT,
             packet_tx_wake_notification_slot: PACKET_TX_WAKE_NOTIFICATION_SLOT,
@@ -4802,11 +4810,13 @@ mod tests {
     fn descriptor_seal_binds_authority_and_secret_tail() {
         let valid = descriptor();
         assert_eq!(valid.validate(), Ok(()));
-        assert_eq!(ABI_VERSION, 5);
+        assert_eq!(ABI_VERSION, 6);
         assert_eq!(
             CONSOLE_NETWORK_SERVICE_IDENTITY,
-            b"console-network-service/v5"
+            b"console-network-service/v6"
         );
+        assert_eq!(ROOT_CONTROL_WAKE_NOTIFICATION_SLOT, 6);
+        assert_eq!(ROOT_CONTROL_WAKE_NOTIFICATION_BADGE, 1);
         assert_eq!(ExchangeKind::SendBatch as u16, 3);
         assert_eq!(ExchangeKind::CommandBatch as u16, 27);
         assert_eq!(WAKE_PUBLICATION_ACK, 64);
@@ -4818,6 +4828,13 @@ mod tests {
         let mut broad = valid;
         broad.child_cspace_slots = 32;
         assert_eq!(broad.validate(), Err(AbiError::InvalidAuthority));
+        let mut wrong_root_control_wake = valid;
+        wrong_root_control_wake.root_control_wake_notification_slot = 0;
+        wrong_root_control_wake = wrong_root_control_wake.sealed();
+        assert_eq!(
+            wrong_root_control_wake.validate(),
+            Err(AbiError::InvalidAuthority)
+        );
         let mut stale = valid;
         stale.generation = 8;
         assert_eq!(stale.validate(), Err(AbiError::InvalidSeal));
@@ -4853,7 +4870,7 @@ mod tests {
     }
 
     #[test]
-    fn direct_genet_extension_is_v5_exact_sealed_and_disjoint() {
+    fn direct_genet_extension_is_v6_exact_sealed_and_disjoint() {
         assert_eq!(DIRECT_GENET_SHARED_PAGE_COUNT, 32);
         assert_eq!(DIRECT_GENET_RX_SLOT_COUNT, 15);
         assert_eq!(DIRECT_GENET_TX_SLOT_COUNT, 16);
@@ -5221,6 +5238,10 @@ mod tests {
         let mut encoded = [0u8; RUNTIME_INIT_DESCRIPTOR_BYTES];
         descriptor.encode(&mut encoded).unwrap();
         assert_eq!(RuntimeInitDescriptor::decode(&encoded), Ok(descriptor));
+        assert_eq!(
+            &encoded[12..16],
+            &ROOT_CONTROL_WAKE_NOTIFICATION_SLOT.to_le_bytes()
+        );
         assert!(encoded[44..48].iter().all(|byte| *byte == 0));
 
         encoded[45] = 1;

@@ -1745,6 +1745,64 @@ pub enum LocalSeatServiceTurn {
     Failed(&'static str),
 }
 
+/// Exact state separating urgent USB work from a healthy empty HID poll.
+///
+/// Physical Pi polling has no IRQ wake, so the healthy/idle case still needs
+/// a bounded wall-clock cadence. Every state that can carry operator input,
+/// advance readiness, recover the path, or retire an immutable request remains
+/// immediately serviceable. First-byte readiness is deliberately not a gate:
+/// an untouched command-ready keyboard would otherwise remain urgent forever.
+/// A later key report is discovered within the 25 ms cadence, after which the
+/// buffered-input gate restores immediate service. A nonzero no-reply streak
+/// remains urgent because it is missing-child-reply recovery state and drives
+/// the existing bounded cooldown/recovery-aux path.
+#[cfg(any(
+    test,
+    all(
+        feature = "kernel",
+        feature = "usb",
+        target_arch = "aarch64",
+        target_os = "none"
+    )
+))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct LocalSeatUsbPhysicalPollCadenceState {
+    physical_pi_owner_state: bool,
+    polling_enabled: bool,
+    command_ready: bool,
+    buffered_input: bool,
+    enumeration_pending: bool,
+    keyboard_ready: bool,
+    first_report_ready: bool,
+    recovery_aux_pending: bool,
+    no_reply_streak: u64,
+    retained_request: bool,
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "kernel",
+        feature = "usb",
+        target_arch = "aarch64",
+        target_os = "none"
+    )
+))]
+impl LocalSeatUsbPhysicalPollCadenceState {
+    const fn requires_immediate_service(self) -> bool {
+        !self.physical_pi_owner_state
+            || !self.polling_enabled
+            || !self.command_ready
+            || self.buffered_input
+            || self.enumeration_pending
+            || !self.keyboard_ready
+            || !self.first_report_ready
+            || self.recovery_aux_pending
+            || self.no_reply_streak != 0
+            || self.retained_request
+    }
+}
+
 #[cfg(all(feature = "kernel", feature = "usb"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LocalSeatUsbAttachPhase {
@@ -4342,6 +4400,48 @@ impl LocalSeatRuntime {
         self.backend_keyboard_polling_enabled
     }
 
+    /// Return whether the next physical keyboard service turn must bypass the
+    /// healthy empty-poll wall-clock cadence.
+    ///
+    /// Non-Pi and compatibility owners preserve their existing every-turn
+    /// behavior. On the isolated physical Pi path, only a fully command-ready,
+    /// caught-up, recovery-free keyboard with no retained child request may be
+    /// cadence limited.
+    #[must_use]
+    pub(crate) fn backend_keyboard_physical_poll_requires_immediate_service(&self) -> bool {
+        #[cfg(all(
+            feature = "kernel",
+            feature = "usb",
+            target_arch = "aarch64",
+            target_os = "none"
+        ))]
+        {
+            return LocalSeatUsbPhysicalPollCadenceState {
+                physical_pi_owner_state:
+                    crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active(),
+                polling_enabled: self.backend_keyboard_polling_enabled,
+                command_ready: self.usb_keyboard_command_ready_latched(),
+                buffered_input: !self.keyboard_queue.is_empty(),
+                enumeration_pending: linked_local_seat_usb_enumeration_pending(),
+                keyboard_ready: linked_local_seat_usb_keyboard_ready(),
+                first_report_ready: linked_local_seat_usb_first_report_ready(),
+                recovery_aux_pending: self.keyboard_recovery_aux_pending,
+                no_reply_streak: self.keyboard_poll_no_reply_streak,
+                retained_request: self.linked_usb_keyboard_retained_work_active(),
+            }
+            .requires_immediate_service();
+        }
+        #[cfg(not(all(
+            feature = "kernel",
+            feature = "usb",
+            target_arch = "aarch64",
+            target_os = "none"
+        )))]
+        {
+            true
+        }
+    }
+
     /// Returns whether the serial root console may settle local-seat work.
     #[must_use]
     pub const fn root_console_ready(&self) -> bool {
@@ -5593,6 +5693,17 @@ impl LocalSeatRuntime {
         outcome
     }
 
+    #[cfg(all(feature = "kernel", feature = "usb"))]
+    fn linked_usb_keyboard_retained_work_active(&self) -> bool {
+        self.linked_usb_poll_command.is_some()
+            || self.linked_usb_attach_command.is_some()
+            || self.keyboard_probe_cursor.active
+            || crate::hal::driver_task::driver_task_ring_command_active(
+                crate::hal::driver_task::PCIE_ROOT_DRIVER_TASK_CONTRACT,
+            )
+            || crate::hal::driver_task::driver_task_ring_command_active(driver_task_contract())
+    }
+
     #[cfg(all(
         feature = "kernel",
         feature = "usb",
@@ -5693,13 +5804,7 @@ impl LocalSeatRuntime {
         // cooldown here would strand the issued request until the cooldown
         // expired and make completion latency depend on unrelated backoff.
         #[cfg(all(feature = "kernel", feature = "usb"))]
-        let retained_poll_active = self.linked_usb_poll_command.is_some()
-            || self.linked_usb_attach_command.is_some()
-            || self.keyboard_probe_cursor.active
-            || crate::hal::driver_task::driver_task_ring_command_active(
-                crate::hal::driver_task::PCIE_ROOT_DRIVER_TASK_CONTRACT,
-            )
-            || crate::hal::driver_task::driver_task_ring_command_active(driver_task_contract());
+        let retained_poll_active = self.linked_usb_keyboard_retained_work_active();
         #[cfg(not(all(feature = "kernel", feature = "usb")))]
         let retained_poll_active = false;
         if !retained_poll_active && self.keyboard_poll_no_reply_cooldown_active() {
@@ -9105,6 +9210,72 @@ mod tests {
         required: true,
     };
     const DEVICES_KEYBOARD_DISPLAY: [HardwareDevice; 2] = [KEYBOARD, DISPLAY];
+
+    #[test]
+    fn usb_physical_poll_cadence_excludes_only_healthy_empty_state() {
+        let healthy = LocalSeatUsbPhysicalPollCadenceState {
+            physical_pi_owner_state: true,
+            polling_enabled: true,
+            command_ready: true,
+            buffered_input: false,
+            enumeration_pending: false,
+            keyboard_ready: true,
+            first_report_ready: true,
+            recovery_aux_pending: false,
+            no_reply_streak: 0,
+            retained_request: false,
+        };
+        assert!(
+            !healthy.requires_immediate_service(),
+            "a command-ready keyboard with one ready report is cadence-eligible before its first accepted key byte",
+        );
+
+        let urgent = [
+            LocalSeatUsbPhysicalPollCadenceState {
+                physical_pi_owner_state: false,
+                ..healthy
+            },
+            LocalSeatUsbPhysicalPollCadenceState {
+                polling_enabled: false,
+                ..healthy
+            },
+            LocalSeatUsbPhysicalPollCadenceState {
+                command_ready: false,
+                ..healthy
+            },
+            LocalSeatUsbPhysicalPollCadenceState {
+                buffered_input: true,
+                ..healthy
+            },
+            LocalSeatUsbPhysicalPollCadenceState {
+                enumeration_pending: true,
+                ..healthy
+            },
+            LocalSeatUsbPhysicalPollCadenceState {
+                keyboard_ready: false,
+                ..healthy
+            },
+            LocalSeatUsbPhysicalPollCadenceState {
+                first_report_ready: false,
+                ..healthy
+            },
+            LocalSeatUsbPhysicalPollCadenceState {
+                recovery_aux_pending: true,
+                ..healthy
+            },
+            LocalSeatUsbPhysicalPollCadenceState {
+                no_reply_streak: 1,
+                ..healthy
+            },
+            LocalSeatUsbPhysicalPollCadenceState {
+                retained_request: true,
+                ..healthy
+            },
+        ];
+        assert!(urgent
+            .into_iter()
+            .all(LocalSeatUsbPhysicalPollCadenceState::requires_immediate_service));
+    }
 
     fn local_seat_hw(required: bool, devices: &'static [HardwareDevice]) -> HardwareConfig {
         HardwareConfig {

@@ -2736,7 +2736,7 @@ def test_root_and_console_natural_postpone_are_source_and_generated_contracts() 
         (
             "configs/root_task_pi4_uboot_aarch64.toml",
             5_500,
-            "m26e-pi4-root-cross-core-console-parallel-candidate-v25",
+            "m26e-pi4-root-same-core-console-yieldto-candidate-v26",
         ),
     ):
         manifest = tomllib.loads((ROOT / relative).read_text(encoding="utf-8"))

@@ -195,7 +195,7 @@ payloads, and rootfs bounds before staging. Both Pi production and diagnostic
 profiles require `KernelRootCNodeSizeBits=16`. The resulting 65,536-slot root
 CSpace admits the manifest's complete 256-Worker population, linked-runtime
 images, isolated HDMI framebuffer mapping, and post-construction reserve while
-consuming 19,507 slots and leaving 46,029 compiler-accounted slots free. The
+consuming 19,510 slots and leaving 46,026 compiler-accounted slots free. The
 profile wrapper preserves that declared value and uses 13 bits only for profiles
 that omit the setting.
 An older Pi build cache reporting 13 or 14 bits is stale and must be rebuilt
@@ -1005,7 +1005,7 @@ focused `.coh` scripts from the boot-paired wired capture before throughput or
 latency measurement. QEMU's retained three-IRQ profile is regression evidence,
 not Pi IRQ or GENET performance proof.
 
-The exact Pi `bcmgenet-v5` profile uses console-network ABI v5 and derives one
+The exact Pi `bcmgenet-v5` profile uses console-network ABI v6 and derives one
 post-DHCP direct data-plane handoff. Root first proves every legacy GENET
 command, RX, and TX cursor quiescent, publishes an atomic handoff-pending
 generation, and issues one generation-bound, zero-payload `DGHO`. An exact

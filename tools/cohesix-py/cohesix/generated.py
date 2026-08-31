@@ -6,7 +6,7 @@
 DEFAULTS = {
     "contract_kind": "target-neutral-fallback",
     "manifest_sha256": None,
-    "generation_source_sha256": "a9a50408519f33cf2e05932cffffa5dbb521958870b16edf2f36311ff60385a1",
+    "generation_source_sha256": "8108f22e580a653df9e65e4509d0841aacef0d1c5825094ee861a3a09fb14c66",
     "execution_proof": "none",
     "secure9p": {"msize": 8192, "walk_depth": 8},
     "console": {

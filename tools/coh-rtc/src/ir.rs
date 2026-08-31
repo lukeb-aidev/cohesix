@@ -18,7 +18,7 @@ use crate::temporal::{
     TimeoutPolicy,
 };
 
-const SCHEMA_VERSION: &str = "1.15";
+const SCHEMA_VERSION: &str = "1.16";
 const VIRT_AARCH64_ROOT_CONTROL_SERIAL_IO_BYTES_PER_TURN: u32 = 64;
 const PI4_PROFILE_NAME: &str = "pi4-uboot-aarch64";
 const PI4_PROFILE_LEGACY_ALIAS: &str = "uefi-aarch64";
@@ -1806,7 +1806,7 @@ impl Manifest {
                 .find(|candidate| candidate.id == "root-control")
                 .ok_or_else(|| {
                     anyhow::anyhow!(
-                        "Pi console-network cross-core signal-only requires temporal task root-control"
+                        "Pi console-network same-core YieldTo requires temporal task root-control"
                     )
                 })?;
             if root_control.budget_us != 5_500
@@ -1814,27 +1814,27 @@ impl Manifest {
                 || root_control.max_refills != 2
                 || root_control.wcet_us != 2_500
                 || root_control.wcet_provenance
-                    != "m26e-pi4-root-cross-core-console-parallel-candidate-v25"
+                    != "m26e-pi4-root-same-core-console-yieldto-candidate-v26"
                 || task.budget_us != 3_000
                 || task.period_us != 10_000
                 || task.max_refills != 8
                 || task.wcet_us != 3_000
-                || task.wcet_provenance != "m26e-pi4-console-cross-core-signal-only-candidate-v19"
+                || task.wcet_provenance != "m26e-pi4-console-same-core-yieldto-candidate-v20"
             {
                 bail!(
-                    "Pi console-network cross-core signal-only requires exact root budget/period/refills/WCET 5500/10000/2/2500 and console budget/period/refills/WCET 3000/10000/8/3000"
+                    "Pi console-network same-core YieldTo requires exact root budget/period/refills/WCET 5500/10000/2/2500 and console budget/period/refills/WCET 3000/10000/8/3000"
                 );
             }
-            if root_control.response_time_us != 5_100 || task.response_time_us != 3_000 {
+            if root_control.response_time_us != 5_700 || task.response_time_us != 5_700 {
                 bail!(
-                    "Pi console-network cross-core signal-only requires exact root/console response_time_us 5100/3000"
+                    "Pi console-network same-core YieldTo requires exact root/console response_time_us 5700/5700"
                 );
             }
             if root_control.kind != TemporalTaskKind::RootControl
                 || root_control.execution != TemporalExecution::Active
                 || root_control.core != 0
-                || task.core != 2
-                || root_control.core == task.core
+                || task.core != 0
+                || root_control.core != task.core
                 || root_control.sched_control_core != root_control.core
                 || task.sched_control_core != task.core
                 || root_control.priority != task.priority
@@ -1845,7 +1845,7 @@ impl Manifest {
                 || task.mcp != 200
             {
                 bail!(
-                    "Pi console-network cross-core signal-only requires active root-control on core 0 and console-network-service on core 2 at equal priority with root-control MCP authority"
+                    "Pi console-network same-core YieldTo requires active root-control and console-network-service on core 0 at equal priority with root-control MCP authority"
                 );
             }
         }
@@ -4546,7 +4546,7 @@ mod tests {
     }
 
     #[test]
-    fn pi4_console_network_cross_core_signal_only_fails_closed_on_topology_drift() {
+    fn pi4_console_network_same_core_yield_to_fails_closed_on_topology_drift() {
         let pi4_path = repo_root().join("configs/root_task_pi4_uboot_aarch64.toml");
         let qemu_path = repo_root().join("configs/root_task.toml");
 
@@ -4594,9 +4594,9 @@ mod tests {
             assert_eq!(
                 budget_drift
                     .validate_console_network_service()
-                    .expect_err("Pi signal-only budget drift must fail closed")
+                    .expect_err("Pi same-core YieldTo budget drift must fail closed")
                     .to_string(),
-                "Pi console-network cross-core signal-only requires exact root budget/period/refills/WCET 5500/10000/2/2500 and console budget/period/refills/WCET 3000/10000/8/3000"
+                "Pi console-network same-core YieldTo requires exact root budget/period/refills/WCET 5500/10000/2/2500 and console budget/period/refills/WCET 3000/10000/8/3000"
             );
         }
 
@@ -4612,9 +4612,9 @@ mod tests {
             assert_eq!(
                 response_drift
                     .validate_console_network_service()
-                    .expect_err("Pi signal-only response drift must fail closed")
+                    .expect_err("Pi same-core YieldTo response drift must fail closed")
                     .to_string(),
-                "Pi console-network cross-core signal-only requires exact root/console response_time_us 5100/3000"
+                "Pi console-network same-core YieldTo requires exact root/console response_time_us 5700/5700"
             );
         }
 
@@ -4629,13 +4629,13 @@ mod tests {
             .priority = 199;
         let error = priority_drift
             .validate_console_network_service()
-            .expect_err("a lower-priority Pi signal-only target must fail closed");
+            .expect_err("a lower-priority Pi YieldTo target must fail closed");
         assert!(
-            error.to_string().contains("cross-core signal-only"),
+            error.to_string().contains("same-core YieldTo"),
             "unexpected error: {error}"
         );
 
-        for child_core in [0, 1, 3] {
+        for child_core in [1, 2, 3] {
             let mut core_drift = load_manifest(&pi4_path).expect("reload Pi 4 manifest");
             core_drift.console_network_service.core = child_core;
             let console_task = core_drift
@@ -4648,9 +4648,9 @@ mod tests {
             console_task.sched_control_core = child_core;
             let error = core_drift
                 .validate_console_network_service()
-                .expect_err("Pi console must remain on exact cross-core signal-only core 2");
+                .expect_err("Pi console must remain on exact same-core YieldTo core 0");
             assert!(
-                error.to_string().contains("cross-core signal-only"),
+                error.to_string().contains("same-core YieldTo"),
                 "unexpected error for child core {child_core}: {error}"
             );
         }
@@ -4666,9 +4666,9 @@ mod tests {
         root_task.sched_control_core = 1;
         let error = root_core_drift
             .validate_console_network_service()
-            .expect_err("Pi root must remain on exact signal-only source core 0");
+            .expect_err("Pi root must remain on exact same-core YieldTo source core 0");
         assert!(
-            error.to_string().contains("cross-core signal-only"),
+            error.to_string().contains("same-core YieldTo"),
             "unexpected error: {error}"
         );
 
@@ -4682,7 +4682,7 @@ mod tests {
             .mcp = 199;
         let error = mcp_drift
             .validate_console_network_service()
-            .expect_err("insufficient root MCP for Pi signal-only target must fail closed");
+            .expect_err("insufficient root MCP for Pi YieldTo target must fail closed");
         assert!(
             error.to_string().contains("root-control MCP authority"),
             "unexpected error: {error}"
@@ -4724,7 +4724,7 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("must match ABI v5 values 1,2,4,8,16,32,64"),
+                .contains("must match ABI v6 values 1,2,4,8,16,32,64"),
             "unexpected error: {error}"
         );
     }
@@ -4741,7 +4741,7 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("console_network_service.abi_version must be 5"),
+                .contains("console_network_service.abi_version must be 6"),
             "unexpected error: {error}"
         );
     }
@@ -6372,8 +6372,8 @@ pub struct ConsoleNetworkServiceConfig {
 
 impl ConsoleNetworkServiceConfig {
     fn validate(&self, direct_genet: bool) -> Result<()> {
-        if self.abi_version != 5 {
-            bail!("console_network_service.abi_version must be 5");
+        if self.abi_version != 6 {
+            bail!("console_network_service.abi_version must be 6");
         }
         if self.image_id != "console-network-runtime"
             || self.image_path != "cohesix/artifacts/console-network-runtime"
@@ -6479,7 +6479,7 @@ impl ConsoleNetworkServiceConfig {
             self.publication_ack_badge,
         ];
         if bits != [1, 2, 4, 8, 16, 32, 64] {
-            bail!("console_network_service badges must match ABI v5 values 1,2,4,8,16,32,64");
+            bail!("console_network_service badges must match ABI v6 values 1,2,4,8,16,32,64");
         }
         let mut combined = 0u64;
         for bit in bits {
@@ -6515,7 +6515,7 @@ impl Default for ConsoleNetworkServiceConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            abi_version: 5,
+            abi_version: 6,
             image_id: "console-network-runtime".to_owned(),
             image_path: "cohesix/artifacts/console-network-runtime".to_owned(),
             entry_symbol: "_start".to_owned(),

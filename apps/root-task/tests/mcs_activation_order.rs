@@ -187,7 +187,7 @@ fn wifi_ready_deadline_observes_only_one_child_publication_before_network_work()
 }
 
 #[test]
-fn pi_wifi_productive_activation_is_guarded_strictly_operator_driver() {
+fn pi_wifi_productive_activation_uses_natural_postpone_strictly_operator_driver() {
     let source = include_str!("../src/userland/mod.rs");
     let supervisor_start = source
         .find("fn enter_root_console_loop_with_deferred_net_supervisor<")
@@ -201,23 +201,21 @@ fn pi_wifi_productive_activation_is_guarded_strictly_operator_driver() {
     let loop_top = supervisor
         .find("'supervisor: loop {")
         .expect("deferred supervisor loop must exist");
-    let start_window = supervisor[loop_top..]
-        .find("activation_window.begin(activation_ticks, activation_counter_hz);")
-        .map(|offset| loop_top + offset)
-        .expect("each post-yield activation must retain one continuous counter start");
+    let start_window = supervisor[..loop_top]
+        .rfind("let natural_postpone_profile = pi_root_control_natural_postpone_from_manifest();")
+        .expect("the supervisor must validate selected NaturalPostpone truth");
     let loop_top_guard = supervisor[start_window..]
         .find("if activation_window.logical_turns != 0")
         .map(|offset| start_window + offset)
-        .expect("every retained activation must guard before loop-top material work");
+        .expect("every retained activation must enforce its productive-work cap");
     let operator = supervisor[loop_top_guard..]
         .find("if supervisor_phase == DeferredCyw43SupervisorPhase::Operator")
         .map(|offset| loop_top_guard + offset)
         .expect("guarded Operator phase must exist");
     let operator_guard = supervisor[operator..]
-        .find("activation_window.turn_admitted(")
+        .find("activation_window.resumable_turn_admitted(natural_postpone_profile)")
         .map(|offset| operator + offset)
         .expect("Operator must check the activation guard before work");
-    assert!(supervisor[operator_guard..].contains("activation_reserve_us,"));
     let admission_before = supervisor[operator_guard..]
         .find("let may_begin_before = pump.cyw43_bootstrap_may_begin();")
         .map(|offset| operator_guard + offset)
@@ -226,30 +224,34 @@ fn pi_wifi_productive_activation_is_guarded_strictly_operator_driver() {
         .find("pump.poll_cyw43_bootstrap_supervisor_event_turn();")
         .map(|offset| admission_before + offset)
         .expect("Operator must execute exactly one logical EventPump turn");
-    let admission_after = supervisor[operator_poll..]
-        .find("let may_begin = pump.cyw43_bootstrap_may_begin();")
+    let operator_record = supervisor[operator_poll..]
+        .find("activation_window.record_operator_turn();")
         .map(|offset| operator_poll + offset)
+        .expect("every full Operator service turn must spend one material-work unit");
+    let admission_after = supervisor[operator_record..]
+        .find("let may_begin = pump.cyw43_bootstrap_may_begin();")
+        .map(|offset| operator_record + offset)
         .expect("Operator must revalidate admission after its turn");
     let operator_continuation = supervisor[admission_after..]
         .find("deferred_cyw43_mcs_continuation(")
         .map(|offset| admission_after + offset)
         .expect("Operator must use the factored continuation policy");
     assert!(
-        loop_top < start_window
-            && start_window < loop_top_guard
+        start_window < loop_top
+            && loop_top < loop_top_guard
             && loop_top_guard < operator
             && operator < operator_guard
             && operator_guard < admission_before
             && admission_before < operator_poll
-            && operator_poll < admission_after
+            && operator_poll < operator_record
+            && operator_record < admission_after
             && admission_after < operator_continuation,
     );
 
     let driver_guard = supervisor[operator_continuation..]
-        .find("activation_window.turn_admitted(")
+        .find("activation_window.resumable_turn_admitted(natural_postpone_profile)")
         .map(|offset| operator_continuation + offset)
-        .expect("Driver must independently recheck the continuous activation guard");
-    assert!(supervisor[driver_guard..].contains("activation_reserve_us,"));
+        .expect("Driver must independently recheck NaturalPostpone and the productive cap");
     let outer_lease = supervisor[driver_guard..]
         .find("begin_cyw43_outer_event_turn();")
         .map(|offset| driver_guard + offset)
@@ -340,11 +342,11 @@ fn pi_wifi_attached_network_retains_only_one_proven_guarded_successor() {
         .find("DeferredCyw43AttachedTurn::NetworkControl => {")
         .expect("attached CYW43 must retain an explicit NetworkControl turn");
     let guard = supervisor[network..]
-        .find("activation_window.turn_admitted(")
+        .find(".resumable_turn_admitted(natural_postpone_profile)")
         .map(|offset| network + offset)
-        .expect("attached Network work must check the continuous activation reserve");
+        .expect("attached Network work must check NaturalPostpone and the productive cap");
     let poll = supervisor[guard..]
-        .find("pump.poll_deferred_cyw43_attached_network_control_turn()")
+        .find("poll_deferred_cyw43_attached_network_control_turn()")
         .map(|offset| guard + offset)
         .expect("attached Network work must obtain EventPump's exact productive token");
     let record = supervisor[poll..]
@@ -367,9 +369,25 @@ fn pi_wifi_attached_network_retains_only_one_proven_guarded_successor() {
         .find("continue 'supervisor;")
         .map(|offset| productive + offset)
         .expect("the productive successor must re-enter loop-top arbitration");
-    let yield_turn = supervisor[continue_turn..]
-        .find("deferred_cyw43_yield_and_reset(pump, &mut activation_window);")
+    let attached_available = supervisor[continue_turn..]
+        .find("activation_window.nonblocking_fanin_hint_available()")
         .map(|offset| continue_turn + offset)
+        .expect("attached no-successor may consume only one hint per activation");
+    let attached_hint = supervisor[attached_available..]
+        .find("poll_pi_root_control_fanin_hint(ctx)")
+        .map(|offset| attached_available + offset)
+        .expect("attached no-successor must poll the fan-in once without waiting");
+    let attached_consume = supervisor[attached_hint..]
+        .find("activation_window.consume_nonblocking_fanin_hint();")
+        .map(|offset| attached_hint + offset)
+        .expect("an observed attached hint must close for the rest of the activation");
+    let attached_reenter = supervisor[attached_consume..]
+        .find("continue 'supervisor;")
+        .map(|offset| attached_consume + offset)
+        .expect("an attached hint returns once to complete loop-top arbitration");
+    let yield_turn = supervisor[attached_reenter..]
+        .find("deferred_cyw43_yield_and_reset(pump, &mut activation_window);")
+        .map(|offset| attached_reenter + offset)
         .expect("every rejected attached successor must yield and reset");
 
     assert!(
@@ -380,10 +398,14 @@ fn pi_wifi_attached_network_retains_only_one_proven_guarded_successor() {
             && ready_before < ready_after
             && ready_after < productive
             && productive < continue_turn
-            && continue_turn < yield_turn,
+            && continue_turn < attached_available
+            && attached_available < attached_hint
+            && attached_hint < attached_consume
+            && attached_consume < attached_reenter
+            && attached_reenter < yield_turn,
     );
-    assert!(source.contains("root_control.budget_us"));
-    assert!(source.contains("root_control.wcet_us"));
+    assert!(source.contains("root_control.timeout_policy"));
+    assert!(source.contains("TimeoutPolicy::NaturalPostpone"));
     assert!(!source.contains("DEFERRED_CYW43_ACTIVATION_GUARD_US"));
 
     let event_source = include_str!("../src/event/mod.rs");
@@ -460,6 +482,90 @@ fn pi_wifi_attached_network_retains_only_one_proven_guarded_successor() {
     assert!(
         source.contains("self.productive_units >= DEFERRED_CYW43_ACTIVATION_MAX_PRODUCTIVE_UNITS")
     );
+}
+
+#[test]
+fn root_control_fanin_is_a_nonblocking_hint_at_exact_empty_cuts() {
+    let source = include_str!("../src/userland/mod.rs");
+    let helper_start = source
+        .find("fn poll_pi_root_control_fanin_hint(ctx: &BootContext) -> bool")
+        .expect("Pi root-control must retain one fan-in hint consumer");
+    let helper_end = source[helper_start..]
+        .find("fn pi_root_control_yield_and_restart<")
+        .map(|offset| helper_start + offset)
+        .expect("fan-in hint helper must have a bounded source region");
+    let helper = &source[helper_start..helper_end];
+    assert_eq!(helper.matches("sel4::poll(").count(), 1);
+    assert!(!helper.contains("sel4::wait("));
+
+    let steady_start = source
+        .find("fn enter_root_console_loop<")
+        .expect("steady root-control loop must exist");
+    let steady_end = source[steady_start..]
+        .find("fn run_root_console_pump<")
+        .map(|offset| steady_start + offset)
+        .expect("steady root-control loop must have a bounded source region");
+    let steady = &source[steady_start..steady_end];
+    let eligibility = steady
+        .find("productive_window.nonblocking_fanin_hint_eligible()")
+        .expect("ordinary no-successor must be the sole fan-in hint cut");
+    let hint = steady[eligibility..]
+        .find("poll_pi_root_control_fanin_hint(ctx)")
+        .map(|offset| eligibility + offset)
+        .expect("the exact ordinary cut may consume one nonblocking hint");
+    let consume = steady[hint..]
+        .find("productive_window.consume_nonblocking_fanin_hint();")
+        .map(|offset| hint + offset)
+        .expect("the hint must be one-shot until the next explicit Yield");
+    let reenter = steady[consume..]
+        .find("continue;")
+        .map(|offset| consume + offset)
+        .expect("a hint returns to outer durable arbitration");
+    let yield_call = steady[reenter..]
+        .find("pi_root_control_yield_and_restart(")
+        .map(|offset| reenter + offset)
+        .expect("a zero hint retains the existing explicit Yield");
+    assert!(eligibility < hint && hint < consume && consume < reenter && reenter < yield_call);
+
+    let supervisor_start = source
+        .find("fn enter_root_console_loop_with_deferred_net_supervisor<")
+        .expect("deferred Wi-Fi supervisor must exist");
+    let supervisor_end = source[supervisor_start..]
+        .find("/// Start the userland console")
+        .map(|offset| supervisor_start + offset)
+        .expect("deferred Wi-Fi supervisor must have a bounded source region");
+    let supervisor = &source[supervisor_start..supervisor_end];
+    let cold_cut = supervisor
+        .rfind("if !network_attached")
+        .expect("cold ordinary/no-successor bottom must remain explicit");
+    let cold_available = supervisor[cold_cut..]
+        .find("activation_window.nonblocking_fanin_hint_available()")
+        .map(|offset| cold_cut + offset)
+        .expect("cold fan-in must be one-shot until the next Yield");
+    let cold_hint = supervisor[cold_available..]
+        .find("poll_pi_root_control_fanin_hint(ctx)")
+        .map(|offset| cold_available + offset)
+        .expect("cold empty successor may consume one nonblocking hint");
+    let cold_consume = supervisor[cold_hint..]
+        .find("activation_window.consume_nonblocking_fanin_hint();")
+        .map(|offset| cold_hint + offset)
+        .expect("cold fan-in must also be one-shot until Yield resets the activation");
+    let cold_reenter = supervisor[cold_consume..]
+        .find("continue 'supervisor;")
+        .map(|offset| cold_consume + offset)
+        .expect("cold hint returns to recovery/operator-first arbitration");
+    let cold_yield = supervisor[cold_reenter..]
+        .find("deferred_cyw43_yield_and_reset(pump, &mut activation_window);")
+        .map(|offset| cold_reenter + offset)
+        .expect("zero cold hint retains the existing explicit Yield");
+    assert!(
+        cold_cut < cold_available
+            && cold_available < cold_hint
+            && cold_hint < cold_consume
+            && cold_consume < cold_reenter
+            && cold_reenter < cold_yield
+    );
+    assert!(!source.contains("sel4::wait("));
 }
 
 #[test]
@@ -716,7 +822,7 @@ fn root_control_natural_postpone_keeps_exact_target_budgets_and_fault_routes() {
         (
             pi4,
             5_500,
-            "m26e-pi4-root-cross-core-console-parallel-candidate-v25",
+            "m26e-pi4-root-same-core-console-yieldto-candidate-v26",
         ),
     ] {
         let root = root_control_section(manifest);
@@ -771,7 +877,7 @@ fn root_control_natural_postpone_keeps_exact_target_budgets_and_fault_routes() {
 }
 
 #[test]
-fn pi_console_network_uses_exact_cross_core_signal_only_topology() {
+fn pi_console_network_uses_exact_same_core_yield_to_topology() {
     fn task_section<'a>(manifest: &'a str, task_id: &str) -> &'a str {
         let marker = format!("[[temporal_authority.tasks]]\nid = \"{task_id}\"");
         let start = manifest.find(&marker).expect("temporal task record");
@@ -786,11 +892,15 @@ fn pi_console_network_uses_exact_cross_core_signal_only_topology() {
     for (task_id, exact_lines) in [
         (
             "root-control",
-            ["core = 0", "budget_us = 5500", "response_time_us = 5100"],
+            ["core = 0", "budget_us = 5500", "response_time_us = 5700"],
+        ),
+        (
+            "root-fault",
+            ["core = 2", "budget_us = 3000", "response_time_us = 2400"],
         ),
         (
             "console-network-service",
-            ["core = 2", "budget_us = 3000", "response_time_us = 3000"],
+            ["core = 0", "budget_us = 3000", "response_time_us = 5700"],
         ),
         (
             "driver-hdmi",
@@ -798,7 +908,7 @@ fn pi_console_network_uses_exact_cross_core_signal_only_topology() {
         ),
         (
             "driver-pcie",
-            ["core = 2", "budget_us = 400", "response_time_us = 3300"],
+            ["core = 2", "budget_us = 400", "response_time_us = 2700"],
         ),
     ] {
         let task = task_section(manifest, task_id);
@@ -818,14 +928,40 @@ fn pi_console_network_uses_exact_cross_core_signal_only_topology() {
         .find("fn signal_committed_child_work(")
         .expect("console child signal path");
     let signal_end = hal[signal_start..]
-        .find("\n    /// Return the retired same-core YieldTo accounting")
+        .find("\n    /// Return fail-closed accounting for exact same-core direct-GENET YieldTo")
         .map(|offset| signal_start + offset)
         .expect("bounded console child signal path");
     let signal = &hal[signal_start..signal_end];
-    assert!(signal.contains("fence(Ordering::Release)"));
-    assert!(signal.contains("sel4::signal_unchecked(wake_cap)"));
-    assert!(!signal.contains("yield_to_sched_context"));
-    assert!(!signal.contains("sched_context_consumed"));
+    let yield_helper_start = hal
+        .find("fn yield_to_child_after_committed_signal(")
+        .expect("guarded same-core YieldTo helper");
+    let yield_helper_end = hal[yield_helper_start..]
+        .find("\n    fn signal_committed_child_work(")
+        .map(|offset| yield_helper_start + offset)
+        .expect("bounded same-core YieldTo helper");
+    let yield_helper = &hal[yield_helper_start..yield_helper_end];
+    let predrain_gate = yield_helper
+        .find("direct_genet_yield_after_predrain_admitted(yield_admitted, predrain_succeeded)")
+        .expect("failed pre-drain fail-closed gate");
+    let kernel_yield = yield_helper
+        .find("sel4::yield_to_sched_context(self.scheduling_context)")
+        .expect("same-core kernel YieldTo call");
+    assert!(predrain_gate < kernel_yield);
+    let predrain = signal
+        .find("sel4::sched_context_consumed(self.scheduling_context)")
+        .expect("same-core child accounting predrain");
+    let release = signal
+        .find("fence(Ordering::Release)")
+        .expect("publication release fence");
+    let signal_call = signal
+        .find("sel4::signal_unchecked(wake_cap)")
+        .expect("one-hot child signal");
+    let yield_call = signal
+        .find("self.yield_to_child_after_committed_signal(")
+        .expect("guarded same-core YieldTo call");
+    assert!(predrain < release);
+    assert!(release < signal_call);
+    assert!(signal_call < yield_call);
 }
 
 #[test]
@@ -1092,7 +1228,7 @@ fn root_control_containment_serializes_before_the_ordinary_pump_turn() {
         .find("pump.service_deferred_console_network_handoff(hal)")
         .expect("deferred handoff probe");
     let pi_guarded_poll = root_loop
-        .find("poll_pi_root_control_productive_quanta(pump, &mut productive_window)")
+        .find("poll_pi_root_control_productive_quanta(")
         .expect("exact Pi guarded productive poll");
     assert!(
         handoff < pi_guarded_poll,
@@ -1357,7 +1493,7 @@ fn pi_passive_boundary_drains_preserved_evidence_immediately_after_yield() {
 }
 
 #[test]
-fn pi_productive_successor_rechecks_identity_fences_and_time_at_the_final_cut() {
+fn pi_productive_successor_rechecks_identity_fences_and_natural_postpone() {
     let userland = include_str!("../src/userland/mod.rs");
     let start = userland
         .find("fn poll_pi_root_control_productive_quanta<")
@@ -1371,15 +1507,17 @@ fn pi_productive_successor_rechecks_identity_fences_and_time_at_the_final_cut() 
     let frequency = helper
         .find("let counter_hz = counter_frequency();")
         .unwrap();
-    let reserve = helper
-        .find("deferred_cyw43_activation_reserve_from_manifest_us();")
-        .unwrap();
     let identity = helper.find("window.continuation_identity()").unwrap();
     let fence = helper
         .find("pump.pi_root_control_productive_continuation_fence_clear(identity)")
         .unwrap();
     let counter = helper.find("let now_ticks = monotonic_ticks();").unwrap();
-    let admission = helper.find("window.next_quantum_admitted(").unwrap();
+    let telemetry = helper
+        .find("window.sample_effective_root_telemetry(now_ticks, counter_hz);")
+        .unwrap();
+    let admission = helper
+        .find("window.resumable_quantum_admitted(natural_postpone_profile)")
+        .unwrap();
     let poll = helper.find("pump.poll_root_control_quantum();").unwrap();
     let take = helper
         .find("pump.take_pi_root_control_productive_continuation_identity()")
@@ -1390,13 +1528,14 @@ fn pi_productive_successor_rechecks_identity_fences_and_time_at_the_final_cut() 
     let record = helper
         .find("window.record_completed_quantum_at(identity, completed_at_ticks)")
         .unwrap();
-    assert!(frequency < reserve);
-    assert!(reserve < identity && identity < fence);
-    assert!(fence < counter && counter < admission && admission < poll);
+    assert!(frequency < identity && identity < fence);
+    assert!(fence < counter && counter < telemetry && telemetry < admission && admission < poll);
     assert!(poll < take && take < completion_counter && completion_counter < record);
     assert!(helper.contains("feature = \"release-pi4\""));
     assert!(helper.contains("target_arch = \"aarch64\""));
     assert!(helper.contains("sel4_config_kernel_mcs"));
+    assert!(!helper.contains("activation_reserve"));
+    assert!(!helper.contains("elapsed_scaled < reserve_scaled"));
 }
 
 #[test]

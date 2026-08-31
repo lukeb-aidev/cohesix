@@ -303,7 +303,7 @@ Operational QEMU profiles select a 14-bit initial root CNode, while Pi profiles
 select 16 bits. QEMU requires its size for compiler-owned retention-anchor
 slots at `0x3f00` and above. Pi additionally admits the complete 256-Worker
 population: its fixed, per-Worker, and post-construction-reserve inventory is
-19,507 slots, which cannot fit a 14-bit CNode and leaves 46,029 slots in the
+19,510 slots, which cannot fit a 14-bit CNode and leaves 46,026 slots in the
 selected 65,536-slot CNode. A Pi cache reporting 13 or 14 bits, or a QEMU cache
 falling back to the upstream 13-bit default, is not a valid Cohesix runtime
 profile.
@@ -358,9 +358,9 @@ Use `--no-run` to stage artifacts without claiming a boot. Use `--transport
 qemu` when `cohsh` should own QEMU without exposing the guest TCP listener.
 See [Quickstart](QUICKSTART.md) for the verified connection flow.
 
-The production wrapper reserves exactly 7 MiB of file-backed space in its
+The production wrapper reserves exactly 8 MiB of file-backed space in its
 non-shipping seL4Test placeholder rootserver. The resulting elfloader CPIO must
-be at least 8 MiB, and that capacity is part of profile validation and the
+be at least 9 MiB, and that capacity is part of profile validation and the
 causal artifact stamp. `scripts/lib/strip_elfloader_modules.py` replaces the
 whole placeholder with the boot-minimized Cohesix root task, including the
 linker-retained MCS driver archive; it still fails closed if the replacement
@@ -578,7 +578,7 @@ DTS/DTB, kernel or elfloader artifacts. In particular:
   only after profile guards pass;
 - use `scripts/lib/strip_elfloader_modules.py` through the integrated harness so
   staged elfloaders do not retain an upstream test rootserver; keep the
-  production profile's declared 8 MiB minimum archive capacity and fail rather
+  production profile's declared 9 MiB minimum archive capacity and fail rather
   than enlarging a linked elfloader in place.
 
 The detailed image, flash, boot, and current-image evidence procedure is in

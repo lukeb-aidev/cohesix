@@ -36,7 +36,7 @@ pub const TICKET_TABLE_SHA256: &str =
 pub const NAMESPACE_TABLE_SHA256: &str =
     "c34073b3f57eeae7ebba0eb35e56b2a1dea490aee4de2cc1f3a0b65ec2bc7b24";
 pub const AUDIT_TABLE_SHA256: &str =
-    "2392c4c8868bd62ffeaa219d9688f3f94a0c23e11a530d77d7b98847087e6d2e";
+    "d2aa5471e7d7410ce524d3bfc660dbbf4c6345bec9d5f5694adad11cff62a24a";
 
 pub const TICKET_INVENTORY: [TicketSpec; 5] = [
     TicketSpec {
@@ -8508,7 +8508,7 @@ pub const NINEDOOR_SERVICE_CONFIG: NineDoorServiceConfig = NineDoorServiceConfig
 pub const CONSOLE_NETWORK_SERVICE_CONFIG: ConsoleNetworkServiceConfig =
     ConsoleNetworkServiceConfig {
         enabled: true,
-        abi_version: 5,
+        abi_version: 6,
         image_id: "console-network-runtime",
         image_path: "cohesix/artifacts/console-network-runtime",
         entry_symbol: "_start",
@@ -8683,7 +8683,7 @@ pub const CRITICAL_TCB_RESOURCES: [CriticalTcbResource; 7] = [
     CriticalTcbResource {
         id: "root-fault",
         cnode_radix_bits: 10,
-        cspace_cap_count: 530,
+        cspace_cap_count: 531,
         revoke_anchor_slot: 16129,
         ipc_buffer_pages: 1,
         stack_pages: 2,
@@ -8701,7 +8701,7 @@ pub const CRITICAL_TCB_RESOURCES: [CriticalTcbResource; 7] = [
     CriticalTcbResource {
         id: "root-worker-supervisor",
         cnode_radix_bits: 6,
-        cspace_cap_count: 16,
+        cspace_cap_count: 17,
         revoke_anchor_slot: 16131,
         ipc_buffer_pages: 1,
         stack_pages: 2,
@@ -8800,7 +8800,7 @@ pub const WORKER_RESOURCE_ADMISSION_CONFIG: WorkerResourceAdmissionConfig =
             timeout_fault_caps: 9,
             reply_objects: 8,
             scheduling_contexts: 9,
-            cspace_slots: 4378,
+            cspace_slots: 4380,
             untyped_bytes: 67108864,
         },
         executable_roles: &EXECUTABLE_ROLE_ADMISSION,
@@ -9502,9 +9502,9 @@ pub const AUDIT_CONFIG: AuditConfig = AuditConfig {
 pub const EVENT_PUMP_FDS: [&str; 5] = ["serial", "timer", "ipc", "net-console", "ninedoor"];
 
 pub const INITIAL_AUDIT_LINES: [&str; 49] = [
-    "manifest.schema=1.15",
+    "manifest.schema=1.16",
     "manifest.profile=virt-aarch64",
-    "manifest.sha256=a9a50408519f33cf2e05932cffffa5dbb521958870b16edf2f36311ff60385a1",
+    "manifest.sha256=8108f22e580a653df9e65e4509d0841aacef0d1c5825094ee861a3a09fb14c66",
     "manifest.tickets=5",
     "manifest.namespaces=1 role_isolation=true",
     "manifest.secure9p.msize=8192",

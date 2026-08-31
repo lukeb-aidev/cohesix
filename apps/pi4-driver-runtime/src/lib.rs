@@ -20349,7 +20349,8 @@ fn runtime_signal_notification(slot: u32) {
     // `slot` is one send-only notification cap. Reciprocal CYW43/SDIO routes
     // use badge 256 for the SDIO owner and badge 2 for completion/DPC; the
     // distinct CYW43-to-root Network wake object uses child slot 11 and badge
-    // 1 for both RX readiness and exact steady-TX terminal publication.
+    // 1 for both RX readiness and exact steady-TX terminal publication. Every
+    // physical runtime also receives the root-control fan-in in slot 12.
     // None of these child caps carries receive or control rights.
     unsafe {
         sel4_sys::seL4_Signal(slot as sel4_sys::seL4_CPtr);
@@ -20358,6 +20359,10 @@ fn runtime_signal_notification(slot: u32) {
 
 #[cfg(all(not(target_os = "none"), test))]
 static TEST_CYW43_PEER_WAKE_SIGNALS: AtomicUsize = AtomicUsize::new(0);
+#[cfg(all(not(target_os = "none"), test))]
+static TEST_COMPLETION_WAKE_SIGNALS: AtomicUsize = AtomicUsize::new(0);
+#[cfg(all(not(target_os = "none"), test))]
+static TEST_ROOT_CONTROL_WAKE_SIGNALS: AtomicUsize = AtomicUsize::new(0);
 #[cfg(all(not(target_os = "none"), test))]
 static TEST_GENET_DIRECT_PEER_WAKE_SIGNALS: AtomicUsize = AtomicUsize::new(0);
 #[cfg(all(not(target_os = "none"), test))]
@@ -20377,6 +20382,12 @@ static TEST_GENET_DMA_U64_WRITES: AtomicUsize = AtomicUsize::new(0);
 fn runtime_signal_notification(slot: u32) {
     if slot == DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT {
         TEST_CYW43_PEER_WAKE_SIGNALS.fetch_add(1, Ordering::AcqRel);
+    }
+    if slot == pi4_driver_abi::DRIVER_RUNTIME_COMPLETION_NOTIFICATION_SLOT {
+        TEST_COMPLETION_WAKE_SIGNALS.fetch_add(1, Ordering::AcqRel);
+    }
+    if slot == pi4_driver_abi::DRIVER_RUNTIME_ROOT_CONTROL_WAKE_NOTIFICATION_SLOT {
+        TEST_ROOT_CONTROL_WAKE_SIGNALS.fetch_add(1, Ordering::AcqRel);
     }
     if slot == DRIVER_RUNTIME_CHILD_DIRECT_GENET_PEER_NOTIFICATION_SLOT {
         TEST_GENET_DIRECT_PEER_WAKE_SIGNALS.fetch_add(1, Ordering::AcqRel);
@@ -20402,6 +20413,23 @@ fn cyw43_root_network_wake_notification_slot() -> Option<u32> {
     })
 }
 
+fn root_control_wake_notification_slot() -> Option<u32> {
+    RUNTIME_DESCRIPTOR.with_ref(|descriptor| {
+        (descriptor.mcs_scheduler_valid()
+            && descriptor.root_control_wake_notification_slot
+                == pi4_driver_abi::DRIVER_RUNTIME_ROOT_CONTROL_WAKE_NOTIFICATION_SLOT)
+            .then_some(descriptor.root_control_wake_notification_slot)
+    })
+}
+
+fn runtime_signal_root_control_wake() -> bool {
+    let Some(slot) = root_control_wake_notification_slot() else {
+        return false;
+    };
+    runtime_signal_notification(slot);
+    true
+}
+
 fn cyw43_signal_root_network_wake() {
     let Some(slot) = cyw43_root_network_wake_notification_slot() else {
         return;
@@ -20409,6 +20437,7 @@ fn cyw43_signal_root_network_wake() {
     #[cfg(test)]
     TEST_CYW43_ROOT_WAKE_SIGNALS.fetch_add(1, Ordering::AcqRel);
     runtime_signal_notification(slot);
+    let _ = runtime_signal_root_control_wake();
 }
 
 #[cfg(any(target_os = "none", test))]
@@ -64546,6 +64575,15 @@ fn serial_drain_hardware_to_queue(
     )
 }
 
+fn runtime_signal_serial_postcommit(rx_doorbell: bool, tx_producer_rearm: bool) {
+    if rx_doorbell || tx_producer_rearm {
+        runtime_signal_notification(pi4_driver_abi::DRIVER_RUNTIME_COMPLETION_NOTIFICATION_SLOT);
+    }
+    if rx_doorbell {
+        let _ = runtime_signal_root_control_wake();
+    }
+}
+
 fn serial_runtime_service_notification(badge: u32) -> bool {
     SERIAL_RUNTIME_RX_QUEUE.with_mut(|queue| {
         let exceptional_before = queue.exceptional_state();
@@ -64641,11 +64679,7 @@ fn serial_runtime_service_notification(badge: u32) -> bool {
         }
         #[cfg(not(target_os = "none"))]
         let _ = completion_result;
-        if rx_doorbell || tx_transfer.producer_rearm {
-            runtime_signal_notification(
-                pi4_driver_abi::DRIVER_RUNTIME_COMPLETION_NOTIFICATION_SLOT,
-            );
-        }
+        runtime_signal_serial_postcommit(rx_doorbell, tx_transfer.producer_rearm);
         if queue.exceptional_state() != exceptional_before
             || rx_outcome.bytes != 0
             || tx_transfer.bytes != 0
@@ -64995,21 +65029,25 @@ const fn runtime_one_way_completion_wake_due(
         && command.flags & DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY != 0
 }
 
-#[cfg(target_os = "none")]
-fn runtime_signal_one_way_completion(command: DriverTaskCommandRecord, completion_committed: bool) {
-    #[cfg(sel4_config_kernel_mcs)]
+#[cfg(any(target_os = "none", test))]
+fn runtime_signal_one_way_completion(
+    command: DriverTaskCommandRecord,
+    completion_committed: bool,
+    postcommit_target: RuntimeCompletionWakeTarget,
+) {
+    #[cfg(any(test, sel4_config_kernel_mcs))]
     if runtime_one_way_completion_wake_due(command, completion_committed) {
-        // SAFETY: HAL installs a Write-only, task-badged completion
-        // notification in fixed slot 7. The sequence-last completion is
-        // already globally visible, so this signal is only a scheduling hint.
-        unsafe {
-            sel4_sys::seL4_Signal(
-                pi4_driver_abi::DRIVER_RUNTIME_COMPLETION_NOTIFICATION_SLOT as sel4_sys::seL4_CPtr,
-            );
+        // HAL installs Write-only notification caps in fixed slots 7 and 12.
+        // The sequence-last completion is already globally visible, so both
+        // signals are only scheduling hints. CYW43 RootNetwork terminals have
+        // already dual-signalled through their component-specific path.
+        runtime_signal_notification(pi4_driver_abi::DRIVER_RUNTIME_COMPLETION_NOTIFICATION_SLOT);
+        if postcommit_target != RuntimeCompletionWakeTarget::RootNetwork {
+            let _ = runtime_signal_root_control_wake();
         }
     }
-    #[cfg(not(sel4_config_kernel_mcs))]
-    let _ = (command, completion_committed);
+    #[cfg(all(not(test), not(sel4_config_kernel_mcs)))]
+    let _ = (command, completion_committed, postcommit_target);
 }
 
 /// Run the isolated driver runtime receive/service loop.
@@ -66365,7 +66403,7 @@ pub fn runtime_main(task_key: usize) -> ! {
             runtime_notification_route(&RUNTIME_DESCRIPTOR.load()),
         );
         let completion_committed = publish_runtime_completion_sequence_last(completion);
-        let _ = runtime_emit_completion_before_diagnostic(
+        let completion_wake_target = runtime_emit_completion_before_diagnostic(
             completion_wake_order,
             completion_committed,
             || {
@@ -66385,7 +66423,7 @@ pub fn runtime_main(task_key: usize) -> ! {
                 );
             },
         );
-        runtime_signal_one_way_completion(command, completion_committed);
+        runtime_signal_one_way_completion(command, completion_committed, completion_wake_target);
         #[cfg(not(sel4_config_kernel_mcs))]
         if intake.reply_cap_available {
             // SAFETY: Only `seL4_Call` installs the reply cap consumed here.
@@ -68515,6 +68553,8 @@ mod tests {
         TEST_CYW43_ROOT_WAKE_SIGNALS.store(0, Ordering::Release);
         TEST_CYW43_DPC_TIMING_WRITE_ROOT_WAKE_SIGNALS.store(usize::MAX, Ordering::Release);
         TEST_CYW43_PEER_WAKE_SIGNALS.store(0, Ordering::Release);
+        TEST_COMPLETION_WAKE_SIGNALS.store(0, Ordering::Release);
+        TEST_ROOT_CONTROL_WAKE_SIGNALS.store(0, Ordering::Release);
         TEST_GENET_DIRECT_PEER_WAKE_SIGNALS.store(0, Ordering::Release);
         TEST_GENET_DIRECT_TERMINAL_FAULTS.store(0, Ordering::Release);
         TEST_GENET_DIRECT_FORCE_STATE_CHANGE_ON_SAMPLE.store(false, Ordering::Release);
@@ -73976,12 +74016,17 @@ mod tests {
 
     #[test]
     fn mcs_one_way_completion_wake_is_postcommit_and_identity_bound() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let descriptor = descriptor_for(HOT_PATH_USB_KEYBOARD, ROLE_USB);
+        assert!(descriptor.valid());
+        RUNTIME_DESCRIPTOR.store(descriptor);
         let command = DriverTaskCommandRecord {
             sequence: 0x8000_50ff,
             opcode: OPCODE_SERVICE,
             flags: DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY,
-            arg0: HOT_PATH_SDIO_HOST,
-            arg1: ROLE_SDIO,
+            arg0: HOT_PATH_USB_KEYBOARD,
+            arg1: ROLE_USB,
             aux0: 0,
             aux1: 0,
             budget: budget(),
@@ -74003,6 +74048,22 @@ mod tests {
             },
             true,
         ));
+
+        runtime_signal_one_way_completion(command, false, RuntimeCompletionWakeTarget::None);
+        assert_eq!(TEST_COMPLETION_WAKE_SIGNALS.load(Ordering::Acquire), 0);
+        assert_eq!(TEST_ROOT_CONTROL_WAKE_SIGNALS.load(Ordering::Acquire), 0);
+
+        runtime_signal_one_way_completion(command, true, RuntimeCompletionWakeTarget::None);
+        assert_eq!(TEST_COMPLETION_WAKE_SIGNALS.load(Ordering::Acquire), 1);
+        assert_eq!(TEST_ROOT_CONTROL_WAKE_SIGNALS.load(Ordering::Acquire), 1);
+
+        runtime_signal_one_way_completion(command, true, RuntimeCompletionWakeTarget::RootNetwork);
+        assert_eq!(TEST_COMPLETION_WAKE_SIGNALS.load(Ordering::Acquire), 2);
+        assert_eq!(
+            TEST_ROOT_CONTROL_WAKE_SIGNALS.load(Ordering::Acquire),
+            1,
+            "the component-specific CYW43 route owns the terminal fan-in edge",
+        );
     }
 
     #[test]
@@ -78476,6 +78537,31 @@ mod tests {
         .expect("stable RX header");
         assert_eq!(header.doorbell_epoch, 2);
         assert_eq!(header.consumer_wake_epoch, 1);
+    }
+
+    #[test]
+    fn serial_postcommit_fanin_is_rx_doorbell_only() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let descriptor = descriptor_for(HOT_PATH_SERIAL_CONSOLE, ROLE_SERIAL);
+        assert!(descriptor.valid());
+        RUNTIME_DESCRIPTOR.store(descriptor);
+
+        runtime_signal_serial_postcommit(false, false);
+        assert_eq!(TEST_COMPLETION_WAKE_SIGNALS.load(Ordering::Acquire), 0);
+        assert_eq!(TEST_ROOT_CONTROL_WAKE_SIGNALS.load(Ordering::Acquire), 0);
+
+        runtime_signal_serial_postcommit(false, true);
+        assert_eq!(TEST_COMPLETION_WAKE_SIGNALS.load(Ordering::Acquire), 1);
+        assert_eq!(
+            TEST_ROOT_CONTROL_WAKE_SIGNALS.load(Ordering::Acquire),
+            0,
+            "TX producer rearm cannot impersonate durable operator input",
+        );
+
+        runtime_signal_serial_postcommit(true, false);
+        assert_eq!(TEST_COMPLETION_WAKE_SIGNALS.load(Ordering::Acquire), 2);
+        assert_eq!(TEST_ROOT_CONTROL_WAKE_SIGNALS.load(Ordering::Acquire), 1);
     }
 
     #[test]
@@ -97289,6 +97375,7 @@ mod tests {
         assert_eq!(poisoned.queue_depth, 1);
         assert_eq!(poisoned.commit_sequence, visible.commit_sequence + 1);
         assert_eq!(TEST_CYW43_ROOT_WAKE_SIGNALS.load(Ordering::Acquire), 1);
+        assert_eq!(TEST_ROOT_CONTROL_WAKE_SIGNALS.load(Ordering::Acquire), 1);
         assert!(!old_batch.valid_for_queue_state(poisoned));
 
         let first_source_line = state.recovery_source_line;
@@ -97296,6 +97383,7 @@ mod tests {
         assert_eq!(state.recovery_source_line, first_source_line);
         assert_eq!(state.rx_queue_state_commit, poisoned.commit_sequence);
         assert_eq!(TEST_CYW43_ROOT_WAKE_SIGNALS.load(Ordering::Acquire), 1);
+        assert_eq!(TEST_ROOT_CONTROL_WAKE_SIGNALS.load(Ordering::Acquire), 1);
     }
 
     #[test]
@@ -97753,6 +97841,7 @@ mod tests {
         let first_slot = cyw43_rx_queue_slot_at(&state, 0);
         assert_eq!(state.rx_queue_admit_cntvct_lo[first_slot], 0x4359_7c00);
         assert_eq!(TEST_CYW43_ROOT_WAKE_SIGNALS.load(Ordering::Acquire), 1);
+        assert_eq!(TEST_ROOT_CONTROL_WAKE_SIGNALS.load(Ordering::Acquire), 1);
         assert_eq!(
             TEST_CYW43_DPC_TIMING_WRITE_ROOT_WAKE_SIGNALS.load(Ordering::Acquire),
             1,
@@ -97774,6 +97863,7 @@ mod tests {
             flags,
         ));
         assert_eq!(TEST_CYW43_ROOT_WAKE_SIGNALS.load(Ordering::Acquire), 1);
+        assert_eq!(TEST_ROOT_CONTROL_WAKE_SIGNALS.load(Ordering::Acquire), 1);
 
         assert!(cyw43_rx_queue_pop_front(&mut state).is_some());
         assert!(cyw43_rx_queue_pop_front(&mut state).is_some());
@@ -97785,6 +97875,7 @@ mod tests {
             flags,
         ));
         assert_eq!(TEST_CYW43_ROOT_WAKE_SIGNALS.load(Ordering::Acquire), 2);
+        assert_eq!(TEST_ROOT_CONTROL_WAKE_SIGNALS.load(Ordering::Acquire), 2);
 
         assert!(!cyw43_rx_queue_push_from_runtime(
             &mut state,
@@ -98342,6 +98433,31 @@ mod tests {
         non_cyw43.hot_path = HOT_PATH_GENET_NIC;
         RUNTIME_DESCRIPTOR.store(non_cyw43);
         assert_eq!(cyw43_root_network_wake_notification_slot(), None);
+    }
+
+    #[test]
+    fn root_control_wake_route_requires_exact_mcs_descriptor_slot() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        assert_eq!(root_control_wake_notification_slot(), None);
+        assert!(!runtime_signal_root_control_wake());
+
+        let exact = descriptor_for(HOT_PATH_GENET_NIC, ROLE_NET);
+        assert!(exact.valid());
+        RUNTIME_DESCRIPTOR.store(exact);
+        assert_eq!(
+            root_control_wake_notification_slot(),
+            Some(pi4_driver_abi::DRIVER_RUNTIME_ROOT_CONTROL_WAKE_NOTIFICATION_SLOT),
+        );
+        assert!(runtime_signal_root_control_wake());
+        assert_eq!(TEST_ROOT_CONTROL_WAKE_SIGNALS.load(Ordering::Acquire), 1);
+
+        let mut absent = exact;
+        absent.root_control_wake_notification_slot = 0;
+        RUNTIME_DESCRIPTOR.store(absent);
+        assert_eq!(root_control_wake_notification_slot(), None);
+        assert!(!runtime_signal_root_control_wake());
+        assert_eq!(TEST_ROOT_CONTROL_WAKE_SIGNALS.load(Ordering::Acquire), 1);
     }
 
     #[test]

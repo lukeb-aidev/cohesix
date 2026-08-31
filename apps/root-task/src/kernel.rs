@@ -4661,6 +4661,20 @@ fn bootstrap<P: Platform>(
                 "critical MCS topology construction failed: {error:?}"
             ))
         })?;
+        let root_control_wake = crate::hal::critical_tcb::root_control_wake_notification_origin(
+            &runtime,
+        )
+        .ok_or_else(|| {
+            BootError::Fatal(
+                "critical root-control wake notification missing after construction".into(),
+            )
+        })?;
+        hal.install_root_control_wake_notification_origin(root_control_wake)
+            .map_err(|error| {
+                BootError::Fatal(format!(
+                    "critical root-control wake installation failed: {error:?}"
+                ))
+            })?;
         emit_root_bootstrap_diag(format_args!(
             "mcs slots control=0x{control:04x} fault=0x{fault_ep:04x} control_reply=0x{control_reply:04x} fault_reply=0x{fault_reply:04x} emergency_reply=0x{emergency_reply:04x} fault_endpoint=0x{fault_endpoint:04x} emergency_endpoint=0x{emergency_endpoint:04x} signals(worker=0x{worker:04x},driver=0x{driver:04x},emergency=0x{emergency_signal:04x},root_fault_release=0x{root_fault_release:04x})",
             control = endpoints.control.raw(),
@@ -8303,7 +8317,7 @@ mod tests {
     #[test]
     fn pi4_physical_manifest_projection_keeps_identity_and_selected_policy() {
         for line in [
-            "manifest.schema=1.15",
+            "manifest.schema=1.16",
             "manifest.profile=pi4-uboot-aarch64",
             "manifest.sha256=abc",
             "manifest.worker_runtime.scheduling.profile=mcs",

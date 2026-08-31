@@ -111,7 +111,7 @@ dts_files = ["kernel/kernel.dts", "qemu-arm-virt.dts"]
 qemu_gic_version = 3
 qemu_virtualization = false
 qemu_cpu = "cortex-a57"
-minimum_elfloader_archive_bytes = 8388608
+minimum_elfloader_archive_bytes = 9437184
 timer_clock_hz = 24000000
 
 [profiles.qemu_smp_production.artifact_policy]
@@ -170,7 +170,7 @@ ElfloaderRootserversLast = "ON"
 ElfloaderImage = "elf"
 ElfloaderIncludeDtb = "ON"
 CMAKE_BUILD_TYPE = "Release"
-COHESIX_ROOTSERVER_ARCHIVE_RESERVE_BYTES = "7340032"
+COHESIX_ROOTSERVER_ARCHIVE_RESERVE_BYTES = "8388608"
 
 [profiles.qemu_smp_production.generated]
 PLAT_QEMU_ARM_VIRT = true
@@ -211,7 +211,7 @@ dts_files = ["kernel/kernel.dts", "qemu-arm-virt.dts"]
 qemu_gic_version = 3
 qemu_virtualization = false
 qemu_cpu = "cortex-a57"
-minimum_elfloader_archive_bytes = 8388608
+minimum_elfloader_archive_bytes = 9437184
 timer_clock_hz = 31250000
 
 [profiles.qemu_smp_kvm_production.artifact_policy]
@@ -270,7 +270,7 @@ ElfloaderRootserversLast = "ON"
 ElfloaderImage = "elf"
 ElfloaderIncludeDtb = "ON"
 CMAKE_BUILD_TYPE = "Release"
-COHESIX_ROOTSERVER_ARCHIVE_RESERVE_BYTES = "7340032"
+COHESIX_ROOTSERVER_ARCHIVE_RESERVE_BYTES = "8388608"
 
 [profiles.qemu_smp_kvm_production.generated]
 PLAT_QEMU_ARM_VIRT = true

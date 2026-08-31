@@ -88,7 +88,7 @@ target canary merely because it is part of final acceptance.
 | `pi4-driver` | pi4 | one exact-image Pi boot, touched service/device liveness, one live operation, UART liveness, and no unexpected target fault | `pi4_diagnostic / configs/root_task_pi4_uboot_aarch64.toml` |
 | `worker` | qemu | canonical QEMU boot, real Worker READY, and one bounded startup/teardown/restart recovery operation | `qemu_smp_production / configs/root_task.toml` |
 | `ninedoor` | qemu | canonical QEMU boot, isolated NineDoor READY, and one real 9P operation | `qemu_smp_production / configs/root_task.toml` |
-| `console-network` | qemu | canonical QEMU boot, isolated console READY v5, and the fixed one-socket HELP/NETSTATS/SMP/CACHELOG matrix | `qemu_smp_production / configs/root_task.toml` |
+| `console-network` | qemu | canonical QEMU boot, isolated console READY v6, and the fixed one-socket HELP/NETSTATS/SMP/CACHELOG matrix | `qemu_smp_production / configs/root_task.toml` |
 | `root-mcs` | qemu | canonical QEMU boot, root steady state, one real target operation, and no unexpected seL4 fault | `qemu_smp_production / configs/root_task.toml` |
 | `live-transport` | qemu, pi4 | one authenticated operation over the changed live target transport | `selected target production profile` |
 | `python-sdk` | qemu, pi4 | focused Python SDK tests | `host-only Python SDK` |
@@ -1665,31 +1665,33 @@ buffer sizing, loss, or quarantine. These artifacts prove function and reject
 August parity; they are not repeatability or acceptance evidence.
 
 The next source gate must select the exact Pi topology and reject every
-adjacent drift. Root-control stays on core 0 with priority/MCP 200/200,
-`5,500/10,000 us`, `max_refills=2`, exact 2,500-us WCET, 5,100-us response,
-and a strict 3,000-us productive reserve. Console-network moves to core 2 with
-its unchanged `3,000/10,000 us` budget/period, priority/MCP, WCET, queues, and
-authority, while its 8-bit SC selects eight refill records and its response is
-3,000 us. HDMI moves to core 1 with its unchanged reservation and a derived
-5,200-us response; PCIe remains core 2 with 3,300-us response; the GPU executor
-remains core 2 with 8,300-us response. Exact active demand must be
+adjacent drift. Root-control and console-network share core 0 at priority/MCP
+200/200. Root retains `5,500/10,000 us`, `max_refills=2`, exact 2,500-us WCET,
+and 5,700-us response. Console retains its unchanged `3,000/10,000 us`
+budget/period, WCET, queues, authority, and eight refill records, with a
+5,700-us response. Root-fault moves to core 2 with unchanged scheduling and
+fault semantics and a derived 2,400-us response. HDMI remains core 1 with
+5,200-us response; PCIe and the GPU executor remain core 2 with derived
+2,700/7,700-us responses. Exact active demand must be
 `8,750/8,250/8,400/8,000 us` on cores 0--3 against each 9,000-us usable
 capacity. Tests must reject drift in root budget/WCET/reserve/refills/response,
 service core/sched-control core/task-to-config mirror/refills/response,
-HDMI affinity/task core/response, PCIe and GPU response, GENET refill count,
-and any exceeded core reserve. QEMU must retain its current root, console,
-affinity, refill, priority, response, and direct-VirtIO profile exactly.
+root-fault affinity/response, HDMI affinity/task core/response, PCIe and GPU
+response, GENET refill count, and any exceeded core reserve. QEMU must retain
+its current root, console, affinity, refill, priority, response, and
+direct-VirtIO profile exactly.
 
-The generated Pi direct-GENET relationship is cross-core signal-only. Focused
-tests must prove a committed one-hot wake performs zero `YieldTo`, zero child-SC
-pre-drain, zero child-consumed credit, and zero same-core wall accounting. They
-must independently prove that the former same-core relationship accepts only
-its exact successful Yield/call accounting and that failed or missing same-core
-evidence cannot mint cross-core authority. Runtime, task, config, generation,
-connection, lifecycle, or topology drift must fail closed.
+The generated Pi direct-GENET relationship is same-core guarded YieldTo.
+Focused tests must prove only durable post-auth control or publication-credit
+work performs Release, one-hot Signal, then exactly one YieldTo after a child-SC
+pre-drain. Packet ingress, close, service tick, mediated WiFi, and QEMU must
+perform zero YieldTo and keep same-core accounting unchanged. Failed pre-drain,
+Signal/Yield result, runtime, task, config, generation, connection, lifecycle,
+or topology drift must fail closed.
 
-Only an exact authenticated cross-core `OutputDrained` transition may open the
-root-local active tail. It is unslid from the first nonzero CNTVCT completion,
+Only exact authenticated same-core progress with successful Yield/call
+accounting may open the root-local active tail. It is unslid from the first
+nonzero CNTVCT completion,
 requires strictly less than 8 ms wall time, shares the 64-complete-quantum cap,
 and remains bounded by root's SC. Tests must cover exact open/admit/close,
 equality expiry, cap equality, backwards/zero/frequency-drifted counters,
@@ -1782,11 +1784,12 @@ terminal/fault parent may continue. Attached mode must not poll this cap from
 the cold supervisor. Source/target checks must retain commit-before-signal in
 the child, one nonblocking root poll after the selected bounded
 operator/recovery/passive condition turn, a second durable parent-condition
-read as the sole authority, and the unchanged 3,000-us/64-turn guards. Tests
-must reject a wait, spin, software work latch, generic badge authority, retry,
-new notification, or attached dual consumer. They must also prove that useful
-progress followed by an empty child observation yields rather than creating a
-local polling cadence.
+read as the sole authority, and the generated `NaturalPostpone` profile plus
+unchanged hard 64 logical and productive caps. Tests must reject a wait, spin,
+software work latch, generic badge authority, userland wall-reserve authority,
+retry, new notification, or attached dual consumer. They must also prove that
+useful progress followed by an empty child observation yields rather than
+creating a local polling cadence.
 
 Attached-WiFi root-wake tests must prove exactly one poll and hit delta during a
 non-Network phase after the first Network unit, complete
@@ -1871,14 +1874,16 @@ The detailed Pi MCS batch must be absent from ordinary `netstats` and appear
 only inside explicit `smp mcs`, before `[smp:mcs/v1] end`. It contains exactly
 22 bounded rows: nine `mcs_quantum*` rows, command-publication-to-dispatch and
 root-observation-to-dispatch rows, fixed progress and ten-bit pending legends,
-six `mcs_yield*` rows, and three reserve-budget rows. Tests must prove the
+six `mcs_yield*` rows, and three schema-stable budget rows. Tests must prove the
 pending bits do not overlap, each Yield sample increments one trigger class,
-the reserve guard separates activation/attached/bootstrap-operator/
-bootstrap-driver cuts and cap/clock/reserve/policy reasons, invalid evidence is
-never folded into latency, the row batch does not truncate at maximum values,
-the recorder never samples `SchedContext_Consumed`, and it emits no routine
-serial record. QEMU release compilation must exclude all new accounting writes
-and preserve its existing command output.
+the schema-stable budget rows separate activation/attached/bootstrap-operator/
+bootstrap-driver cuts and cap/clock/reserve/policy reasons, and exact
+`NaturalPostpone` productive WiFi lanes close only on the hard cap or
+incompatible-policy cut rather than a userland clock/reserve estimate. Invalid
+evidence is never folded into latency, the row batch does not truncate at
+maximum values, the recorder never samples `SchedContext_Consumed`, and it
+emits no routine serial record. QEMU release compilation must exclude all new
+accounting writes and preserve its existing command output.
 These source, unit, QEMU, target-compile, image, and media checks are rejection
 gates only. Fresh boot-separated WiFi and GENET runs of the exact candidate
 must repeat first-attempt scripts, 64-request raw TCP, medium/high REST
@@ -1936,25 +1941,31 @@ external wait. Every helper remains bounded and each immutable hardware request 
 issue at most once, but no scheduler turn, yield, or notification is a required
 edge between semantic phases.
 
-On the deferred physical WiFi supervisor only, productive semantic phases may
-retain the current root-control refill under a continuous CNTVCT activation
-window. Tests must prove strict `Operator -> Driver -> Operator` alternation,
-exactly one physical-operation lease and retired finalizer per Driver, a
-strict stop at the generated `root-control budget_us - wcet_us` reserve, and a
-secondary cap of 64 productive units. The selected Pi oracle is exactly 250 us
-(`2,750 - 2,500`) for the superseded pre-topology candidate. The current
-selected oracle is exactly 3,000 us (`5,500 - 2,500`); equality stops
-new-leaf admission so one complete declared 2,500-us WCET remains inside the
-SC. The guard is checked before every fresh Operator, Driver, and
-attached Network unit. The kernel SC and natural postponement remain the hard
-execution boundary for a unit already started.
-Zero/invalid generated configuration or frequency, a backwards/drifted
-counter, wait, idle/no progress, output backpressure, handoff,
-terminal/fault/reboot state, or either cap yields and resets the window. An
-invalid counter still admits one legacy logical turn per scheduler activation
-before yielding, so telemetry failure cannot deadlock bootstrap. An attached
-continuation additionally requires a CYW43 Network phase, actual NetPoller
-activity, and exactly one service counter advance. The ordinary path requires
+On the deferred physical WiFi supervisor only, exact productive semantic
+phases may remain resumable across root-control replenishments when generated
+root truth is active, admitted, consumed-time capable, selects
+`NaturalPostpone`, and has nonzero budget/WCET values satisfying
+`wcet_us < budget_us <= period_us`. Kernel exhaustion postpones execution and
+later resumes the exact instruction cursor; no continuous userland CNTVCT
+window or `budget_us - wcet_us` estimate grants or revokes productive work.
+Tests must prove strict `Operator -> Driver -> Operator` alternation, exactly one
+physical-operation lease and retired finalizer per Driver, and both unchanged
+hard limits: every full Operator, Driver, and attached Network service turn
+spends one of 64 logical material-work units, while productive Driver or
+attached Network progress is independently capped at 64. The generated profile
+and both caps are checked before every fresh full service turn.
+
+Historical source oracles used an exact 250-us wall reserve
+(`2,750 - 2,500`) for the superseded pre-topology candidate and later an exact
+3,000-us wall reserve (`5,500 - 2,500`). Those values remain evidence for the
+superseded userland wall-guard candidates and are not current productive
+admission authority. Missing or incompatible generated policy admits exactly
+one legacy logical turn before Yield; an external wait, idle/no progress,
+output backpressure, handoff, terminal/fault/reboot state, or either hard cap
+yields and resets the window. Counter and elapsed-time telemetry cannot extend
+or shorten a productive continuation. An attached continuation additionally
+requires a CYW43 Network phase, actual NetPoller activity, and exactly one
+service counter advance. The ordinary path requires
 the immediate next phase still Network plus durable schedulable physical work.
 A nonzero retained response cursor may instead cross exactly
 `Network -> Serial -> LocalSeat -> Dispatch -> Network`. Tests must require the
@@ -1969,8 +1980,9 @@ must reject inactive/exhausted/over-advanced cursors, stale identity, counter
 saturation or drift, missing Serial/LocalSeat/Dispatch, real physical input or
 response, terminal return, quarantine, recovery, containment, reboot, or token
 drift without device effects. The response case admits only the next separately
-charged root turn after the unchanged loop-top guard; the isolated child's
-ordinary lower rotor cannot burst. The prior four-Driver restart burst is not
+charged root turn after the loop-top `NaturalPostpone` profile and cap recheck;
+the isolated child's ordinary lower rotor cannot burst. The prior four-Driver
+restart burst is not
 composed with this window. QEMU, generic root control, all SC numerics, and
 every physical-operation/finalizer and external-wait boundary remain unchanged;
 only the generation-bound child source Yield is superseded by the exact-grant
@@ -6805,18 +6817,19 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
       `Disconnect`, then `ServiceTick`. Direct GENET alone must select an
       exactly ready `StageOutput`, then an exactly ready `Disconnect`, and
       otherwise alternate exactly one `ObserveChild`/`ServiceTick` unit per
-      Network visit. The selected Pi root-core-0 to console-core-2 relationship
-      is cross-core signal-only. A committed wake must perform zero child
-      `YieldTo` calls, zero pre-drains, zero child-consumed credit, and zero
-      same-core wall accounting; topology or runtime drift fails closed.
-      Mediated WiFi is independently signal-only, and QEMU direct-VirtIO keeps
-      its existing selector.
+      Network visit. The selected Pi root/console relationship is same-core on
+      core 0 at equal priority. Only durable authenticated control publication
+      or publication-credit work may pre-drain the child SC, perform Release,
+      send its exact one-hot Signal, and make one successful `YieldTo` call.
+      Packet ingress, close, service ticks, mediated WiFi, and QEMU direct-VirtIO
+      must remain signal-only; topology or runtime drift fails closed.
 
-      Cross-core productive progress is typed without reusing same-core
-      accounting. An exact authenticated cross-core generation/connection
+      Same-core productive progress requires exact successful YieldTo/call
+      accounting. An exact authenticated generation/connection
       `CommandAccepted` result may open an unslid transaction tail before its
-      stage/drain publications; an exact `ResponseDrained` result may also open
-      or advance it. Stage-only progress cannot mint the tail. The tail remains
+      stage/drain publications only when the required child continuation is
+      accounted; an exact `ResponseDrained` result may also open or advance it.
+      Stage-only progress cannot mint the tail. The tail remains
       strictly below 8 ms, shares the 64-complete-quantum cap, and is always
       bounded by the root SC. Every quantum requires final Serial phase and
       rechecks response/queue identity, passive admission, physical operator
@@ -6831,11 +6844,10 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
       failed or backpressured stage, stale identity, second command, or any
       fence closes or denies the tail. A transient-empty complete rotor may
       consume only the same unslid wall/quantum window. Tests
-      must independently retain the superseded same-core predicate as a
-      fail-closed oracle: only its exact successful Yield/call evidence may
-      authorize same-core progress, and a missing/failed Yield can never mint a
-      cross-core token. Host timing or selector tests cannot establish Pi
-      performance.
+      must prove that only exact successful Yield/call evidence authorizes
+      same-core progress; a missing or failed pre-drain, Signal, or Yield cannot
+      mint a continuation token. Host timing or selector tests cannot establish
+      Pi performance.
       Cold-bootstrap coverage must independently consume the existing
       child-to-root notification at most once after the selected bounded
       operator condition turn, then require a fresh exact terminal/fault parent
@@ -6976,7 +6988,7 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
     - canonical interactive Pi diagnostics must load a strictly valid clean `pi4-image-identity.json` before opening serial and observe its exact complete build marker before the fresh root prompt. A generic marker prefix or marker from another image is not source/image provenance. This marker binds only the root image; the complete boot partition and physical media retain their separate hash/readback obligations.
     - when the compiler-declared console-network child owns TCP/IP, `nettest` must not inherit the root adapter's default `unsupported` result. Its existing 15-second generation remains peer-assisted and must observe its state on every selected console poll even when ordinary network activity is already true. A run that starts without a live peer binds the first later authenticated connection to that connection's fresh zero byte-counter epoch; it must latch same-connection command bytes read, response bytes written and exactly drained, listener readiness, and later RX/TCP progress. A physical backend additionally requires a NIC TX completion observed while that exact connection remains current; direct VirtIO uses the exact child drain and requires no synthetic root NIC completion. Once the bound identity disappears, neither a replacement connection nor later unrelated NIC activity may provide a missing fact, though already established connection facts remain available for truthful terminal reporting. Historical traffic cannot satisfy a new run. The unchanged terminal schema reports `udp_echo_ok=false` when only peer-assisted proof is present. Native ICMP echo response is a separate reachability check and cannot be relabelled as the UDP self-test.
     - the controlled live gate and serial helper must preflight canonical `cohsh`, manifest, credential, and workload inputs before acquiring the UART. After one positive admission they must select only the exact command-bound DHCP lease for the required physical lane, validate the corresponding host route, run one authenticated peer for the canonical observation window, always reap it, and still accept only the generation-matched target terminal. Ambiguous or stale status, wrong-lane or invalid addressing, route/input drift, peer failure, or incomplete terminal evidence fails closed; peer exit alone is never acceptance.
-    - isolated child liveness triage must retain the bounded `netstats: isolated_progress`, `netstats: isolated_units`, and `netstats: isolated_state` rows. They distinguish selected child observation/output/disconnect/ingress/tick/egress/diagnostic turns, material-progress time, command/output queue depth, pending egress, response-drain state, and ingress backpressure/drop. Additive direct-GENET fields are `pcont=<candidates>/<admitted>/<rejected> peff_us=<n> preason=0x<n>`, `output_ok=<n>`, and `ycalls=<n> ycredit_us=<n> yinvalid=0x<n>`. `preason` uses fence/cap/clock/policy/counter/arithmetic/credit/token bits `0x01` through `0x80`; `yinvalid` uses pre-drain/counter-or-frequency/syscall-result/overflow bits `0x01` through `0x08`. The fields are zero outside the exact Pi direct-GENET path. Pi `netstats` causal triage additionally retains the six bounded fast-path rows `cyw43_publication`, `cyw43_publication_cut`, `cyw43_productive_window`, `genet_compact`, `genet_compose`, and `genet_defer`. `cyw43_productive_window` counts exact same-lifetime, authenticated generation/connection/accepted-command window opens and closes; its retired transient-empty `idle_admitted` field remains schema-stable and zero under event-backed continuation. It grants no refill, retry, readiness, or device authority. Every aggregate compact Deferred increments exactly one `genet_defer` counter, the reason-counter sum equals `genet_compact deferred`, and `compose_open` represents typed `NotSealed`; typed `NoPending` is interpreted jointly with exact stage-ready evidence or the `output_missing` defer and never as authority by itself. When isolated timing is available it adds exactly five `netstats: isolated_seam schema=v1` rows named `command-publish-root-observe`, `dispatch-stage`, `stage-control-observe`, `stage-output-drained`, and `output-drained-root-observe`; `stage-control-observe` is intentionally the combined child-consumption and root-observation interval because the control watermark has no timestamp. Every physical-Pi seam endpoint must use the shared absolute `CNTVCT_EL0` epoch and generated `TIMER_CLOCK_HZ`; a root-elapsed/child-absolute pair is invalid instrumentation, not target latency. The detailed 22-row `mcs_quantum*`/`mcs_yield*`/dispatch/pending/budget batch is not part of `netstats`; it is emitted only by explicit `smp mcs` on Pi release profiles. Both batches must remain bounded, count invalid/backwards time separately, and omit QEMU-release accounting and output. These counters diagnose where progress stopped; they are not TCP, performance, or acceptance evidence by themselves.
+    - isolated child liveness triage must retain the bounded `netstats: isolated_progress`, `netstats: isolated_units`, and `netstats: isolated_state` rows. They distinguish selected child observation/output/disconnect/ingress/tick/egress/diagnostic turns, material-progress time, command/output queue depth, pending egress, response-drain state, and ingress backpressure/drop. Additive direct-GENET fields are `pcont=<candidates>/<admitted>/<rejected> peff_us=<n> preason=0x<n>`, `output_ok=<n>`, and `ycalls=<n> ycredit_us=<n> yinvalid=0x<n>`. `peff_us` is observational and never admission authority. `preason` uses fence/cap/clock/policy/counter/arithmetic bits `0x01` through `0x20`, retains `0x40` as a schema-reserved retired bit, and uses `0x80` for token rejection; `yinvalid` uses pre-drain/counter-or-frequency/syscall-result/overflow bits `0x01` through `0x08`. The fields are zero outside the exact Pi direct-GENET path. Pi `netstats` causal triage additionally retains the six bounded fast-path rows `cyw43_publication`, `cyw43_publication_cut`, `cyw43_productive_window`, `genet_compact`, `genet_compose`, and `genet_defer`. `cyw43_productive_window` counts exact same-lifetime, authenticated generation/connection/accepted-command window opens and closes; its retired transient-empty `idle_admitted` field remains schema-stable and zero under event-backed continuation. It grants no refill, retry, readiness, or device authority. Every aggregate compact Deferred increments exactly one `genet_defer` counter, the reason-counter sum equals `genet_compact deferred`, and `compose_open` represents typed `NotSealed`; typed `NoPending` is interpreted jointly with exact stage-ready evidence or the `output_missing` defer and never as authority by itself. When isolated timing is available it adds exactly five `netstats: isolated_seam schema=v1` rows named `command-publish-root-observe`, `dispatch-stage`, `stage-control-observe`, `stage-output-drained`, and `output-drained-root-observe`; `stage-control-observe` is intentionally the combined child-consumption and root-observation interval because the control watermark has no timestamp. Every physical-Pi seam endpoint must use the shared absolute `CNTVCT_EL0` epoch and generated `TIMER_CLOCK_HZ`; a root-elapsed/child-absolute pair is invalid instrumentation, not target latency. The detailed 22-row `mcs_quantum*`/`mcs_yield*`/dispatch/pending/budget batch is not part of `netstats`; it is emitted only by explicit `smp mcs` on Pi release profiles. Both batches must remain bounded, count invalid/backwards time separately, and omit QEMU-release accounting and output. These counters diagnose where progress stopped; they are not TCP, performance, or acceptance evidence by themselves.
     - `tx_submit=<count> tx_complete=<count> tx_free=<count> tx_in_flight=<count> tx_double_submit=<count> tx_zero_len_attempt=<count> arp_rx=<count> arp_tx=<count>`; on CYW43, `tx_complete` is the root release count from exact joined Function-2 terminals. `tx_submit > tx_complete` means an outstanding root TX owner, not a missing firmware-credit acknowledgement.
     - `wifi_assoc=<0|1> wifi_link=<0|1> eapol_rx=<count> eapol_start=<count> eapol_secure=<0|1>`
     - driver-task scheduling evidence for the active hardware path in reopened 26a/26b acceptance captures: contract name, service class, isolation mode, poll/service count, budget exhaustion/yield count, RX/TX queue depth, drop count, manifest-selected affinity core, observed service latency, and timer backend proof. The normalizer exposes this as `TIMER_BACKEND`, `TIMER_CLOCK_HZ`, `TIMER_EL0_COUNTER`, `DUMMY_TIMER_SEEN`, `DRIVER_TASK_CONTRACTS`, `DRIVER_TASK_DEDICATED`, `DRIVER_TASK_COMPATIBILITY`, `DRIVER_TASK_DEDICATED_READY`, `DRIVER_TASK_SERIAL_DEDICATED`, `DRIVER_TASK_USB_DEDICATED`, `DRIVER_TASK_DISPLAY_DEDICATED`, `DRIVER_TASK_NET_DEDICATED`, `DRIVER_TASK_SDIO_DEDICATED`, `DRIVER_TASK_PCIE_DEDICATED`, `DRIVER_TASK_SUBSTRATE_READY`, `DRIVER_TASK_FAILED_COUNT`, `DRIVER_TASK_CAPSET_PROOF`, `DRIVER_TASK_FAULT_PROOF`, `DRIVER_TASK_REVOKE_PROOF`, `DRIVER_TASK_SCHED_PROOF`, `DRIVER_TASK_AFFINITY_PROOF`, `DRIVER_TASK_AFFINITY_CONFIGURED`, `DRIVER_TASK_AFFINITY_APPLIED`, `DRIVER_TASK_AFFINITY_MANIFEST_PROOF`, `DRIVER_TASK_AFFINITY_MANIFEST_MATCHES`, `DRIVER_TASK_AFFINITY_MANIFEST_MISSING`, `DRIVER_TASK_AFFINITY_MANIFEST_MISMATCHES`, `DRIVER_TASK_VSPACE_PROOF`, `DRIVER_TASK_POINTER_FREE_IPC_PROOF`, `DRIVER_TASK_OWNER_STATE_PROOF`, `DRIVER_TASK_DMA_PROOFS`, `DRIVER_TASK_DMA_BLOCKER`, `PI4_RUNTIME_DMA_PROOF`, `PI4_RUNTIME_DMA_PROOF_REASON`, `PI4_RUNTIME_DMA_COUNTER_PROOF`, `DRIVER_TASK_ACTIVE_NET`, `DRIVER_TASK_BUDGET_OVERRUNS`, `DRIVER_TASK_LATENCY_PROOFS`, `DRIVER_TASK_RING_CALL_BEGIN`, `DRIVER_TASK_RING_CALL_RETURN`, `DRIVER_TASK_RING_CALL_OUTSTANDING`, `DRIVER_TASK_RING_CALL_TIMEOUT`, `DRIVER_TASK_RING_CALL_UNRESOLVED_TIMEOUT`, `DRIVER_TASK_BOOTSTRAP_DEFERRED`, `DRIVER_TASK_RESOURCE_INIT`, `DRIVER_TASK_RESOURCE_BLOCKER`, and `DRIVER_TASK_RESOURCE_CURRENT_BLOCKER`. `DRIVER_TASK_OWNER_STATE_PROOF=yes` must be backed by per-hot-path owner-state descriptor lines for serial, USB, HDMI, PCIe, and the selected network owner set (`cyw43-wifi` plus `sdio-host` when `DRIVER_TASK_ACTIVE_NET=cyw43`, or `genet-nic` when `DRIVER_TASK_ACTIVE_NET=genet`). Pi 4 performance evidence must report `TIMER_BACKEND=arch-counter`, `TIMER_CLOCK_HZ=54000000`, `TIMER_EL0_COUNTER=vct`, `DUMMY_TIMER_SEEN=no`, `DRIVER_TASK_DMA_BLOCKER=none`, and `PI4_RUNTIME_DMA_COUNTER_PROOF=counter-qualified`; otherwise latency proof is red even if driver-task owner-state proof is present. `DRIVER_TASK_RESOURCE_BLOCKER` is the first lost resource proof in the capture; `DRIVER_TASK_RESOURCE_CURRENT_BLOCKER` is the latest non-ready resource-init blocker. The source `DRIVER_TASK_RESOURCE_INIT` line carries the current isolated runtime owner/action, active request, `expected_request_valid` / `expected_aux0_valid`, expected aux/request values when present, same-request flag, and child progress marker needed to diagnose the live turn. Any positive `DRIVER_TASK_RING_CALL_OUTSTANDING`, `DRIVER_TASK_RING_CALL_UNRESOLVED_TIMEOUT`, `DRIVER_TASK_BOOTSTRAP_DEFERRED`, or non-`none` resource blocker is an isolated runtime no-reply/deferred-proof frontier; raw `DRIVER_TASK_RING_CALL_TIMEOUT` counts remain diagnostic when a later return closes the same request. Contract-only root-task compatibility evidence, resource-init breadcrumbs, and declared `max_service_us` budgets are diagnostic and must not be counted as dedicated driver-task closure or latency proof.
@@ -7153,7 +7165,7 @@ mismatch, fewer than two total refills, missing consumed-time evidence, and an
 active SC that aliases another task. QEMU and Pi each reserve 1,000 us of every
 10,000 us core window. The Pi table includes seven linked-driver records; the
 default QEMU table deliberately does not fabricate those hardware TCBs.
-Manifest `root_task.schema = "1.15"` retains exactly one fixed, root-retained
+Manifest `root_task.schema = "1.16"` retains exactly one fixed, root-retained
 NineDoor bootstrap SC outside the steady temporal-task topology. Resource
 admission must therefore total 18 SCs for QEMU and 25 for Pi; the former 17/24
 totals, a zero-object NineDoor SC inventory, or double-counting the one-shot
@@ -7169,8 +7181,8 @@ permanent-domain retention caps are not grouped reclaimable untyped anchors.
 The QEMU compiler fixture must assert root-control remains on core 0 with
 `9000 us / 10000 us`, `8500 us` WCET, `8500 us` response, and
 `m26e-qemu-root-dedicated-core-bounded-quantum-v1` provenance. Pi must retain
-core 0, select `5500 us / 10000 us`, `2500 us` WCET, `5100 us` response, and
-`m26e-pi4-root-cross-core-console-parallel-candidate-v25` provenance. The QEMU root row must select
+core 0, select `5500 us / 10000 us`, `2500 us` WCET, `5700 us` response, and
+`m26e-pi4-root-same-core-console-yieldto-candidate-v26` provenance. The QEMU root row must select
 `virtio_operator_serial_io_bytes_per_turn = 64`; the Pi root row and every
 non-root row must select zero. Validation must reject every QEMU root value
 other than exact `64`, including `0`, `65`, `1024`, and `u32::MAX`, plus a
@@ -7181,10 +7193,10 @@ and SchedControl on core 2 with `3000 us / 10000 us`, `3000 us` WCET,
 `m26e-qemu-console-received-progress-retention-candidate-v18` provenance; its
 GPU and LoRA peers must derive `7500/7200 us` response. It must
 assert exact core-0/core-1/core-2/core-3 demands
-`9000/9000/8000/8250 us`. Pi must place console on core 2, derive `3000 us`
-response, derive GPU/LoRA `8300/7400 us` responses, and preserve exact
+`9000/9000/8000/8250 us`. Pi must place console on core 0, derive `5700 us`
+response, derive GPU/LoRA `7700/7400 us` responses, and preserve exact
 `8750/8250/8400/8000 us` admission truth while selecting the same V18 child
-provenance and current ABI v5. Both fixtures must select
+provenance for QEMU and the Pi V20 YieldTo provenance with current ABI v6. Both fixtures must select
 `NaturalPostpone` for the active console child and their selected root-control
 row, retain each timeout cap/badge/resource/registry identity, and prove both
 TCB timeout-handler slots are left empty while their standard fault endpoints
@@ -8633,7 +8645,7 @@ The focused source guards are
 `terminal_critical_fault_commits_one_resumable_action_per_refill`.
 
 NineDoor, temporal-contract, console-ACK, SendBatch, and NaturalPostpone schema
-tests must require `root_task.schema = "1.15"` and reject schema 1.14 or older. They must admit
+tests must require `root_task.schema = "1.16"` and reject schema 1.15 or older. They must admit
 exactly one root-retained, one-shot scheduling context with
 object bits 8, `3000 us / 10000 us`, and `max_refills = 2`; any different value,
 missing fixed SC accounting, child-Cspace SC or SchedControl cap, or NineDoor
@@ -8837,12 +8849,13 @@ translation objects and 16 child CSpace slots, the 32-page stack at
 badge 64, and the sole port-31337 listener. The active SC remains
 `3000 us / 10000 us`, with `3000 us` WCET. QEMU stays on core 2 at
 priority/MCP 180/200 with a `3000 us` response candidate. Pi runs the child on
-core 2 at priority/MCP 200/200 with a `3000 us` response candidate; Pi
-root-control remains 200/200 on core 0 with its `5100 us` response. The Pi
-profile regression must prove exact cross-core task/config affinity and
-SchedControl, root MCP authority, eight child refills, signal-only direct-GENET
-and mediated-WiFi selection, and zero `SchedContext_YieldTo`/pre-drain/child
-credit while QEMU remains lower-priority and non-YieldTo.
+core 0 at priority/MCP 200/200 with a `5700 us` response candidate; Pi
+root-control is 200/200 on the same core with its `5700 us` response. The Pi
+profile regression must prove exact same-core task/config affinity and
+SchedControl, root MCP authority, eight child refills, and guarded direct-GENET
+YieldTo only for durable authenticated control or publication-ACK work. Packet
+ingress, close, service ticks, mediated WiFi, and QEMU direct-VirtIO must remain
+signal-only with zero `SchedContext_YieldTo` or child-SC pre-drain.
 Refills and
 standard/timeout fault identities remain generated. The timeout
 cap/badge/resource/registry row must remain reserved, but the console TCB
@@ -8856,14 +8869,17 @@ regression, standard-fault containment, and budget-exhaustion natural
 postponement without stack failure or loss of liveness/isolation.
 
 The compiler resource tests must additionally derive current QEMU
-fixed/maximum frame-slot totals of `2024/4378` and `5096/12570`, and Pi
-fixed/maximum totals of `4078/9268` and `7150/17460`, respectively. The Pi-only
+fixed/maximum frame-slot totals of `2024/4380` and `5096/12572`, and Pi
+fixed/maximum totals of `4078/9270` and `7150/17462`, respectively. The Pi-only
 increase is one immutable executable image frame and its retained mapping cap,
-not a data-plane, CNode, Worker, untyped, MCS, timing, or budget enlargement. The
+not a data-plane, CNode, Worker, untyped, MCS, timing, or budget enlargement.
+The two target-common CSpace additions are the root-fault and Worker-supervisor
+restricted Write-only root-control fan-in aliases; they add no Notification
+object or receive authority. The
 post-construction reserve, per-Worker costs, eight translation objects,
 untyped bytes, and fifth root Write-only publication-ACK mint remain
 unchanged. Adding the reserve yields exact admitted capacity-check totals of
-`5608/14618` for QEMU and `7662/19508` for Pi.
+`5608/14620` for QEMU and `7662/19510` for Pi.
 
 The exact V14 build failure is the oracle for this reconciliation, not target
 evidence: child ELF SHA-256
@@ -8873,7 +8889,7 @@ LOAD end `0x23b540`, while generated truth admitted only 59 pages. V15 must
 bind that 60-page shape exactly; any further ELF growth, shrinkage, span drift,
 or source/generated disagreement fails before root linking and QEMU launch.
 
-The fixed-layout tests must also prove that console-network ABI v5 retains the
+The fixed-layout tests must also prove that console-network ABI v6 retains the
 same four ordinary 4096-byte pages, offsets, lengths, and record schemas while
 the live packet helpers touch only a 40-byte packet or 64-byte control/event
 scalar header plus the validated active payload. A publisher must clear commit,
@@ -8899,15 +8915,24 @@ pages, the full generation, and the fixed peer wake slot. Every direct page is
 cacheable Normal/XN and CPU-only in both children, with no DMA or physical
 address in either the semantic range or legacy page inventory.
 
-Schema 1.15 must reject the immediate 1.14 predecessor and any ACK badge other
-than the ABI v5 value 64. The root must retain the fifth Write-only cap on the
-existing root-to-child Notification without adding a child slot or Notification
-object. Source and deterministic state-machine tests must prove
+Schema 1.16 must reject the immediate 1.15 predecessor and any ACK badge other
+than the ABI v6 value 64. The root must retain the fifth Write-only cap on the
+existing root-to-child Notification and additionally mint only a Write-only,
+badge-1 root-control wake capability into the ABI-v6 descriptor's fixed child
+slot 6. The former `reserved0` field must seal that slot; zero, aliasing,
+wrong-slot, wrong-badge, broader-rights, and stale-version descriptors fail
+closed. Source and deterministic state-machine tests must prove
 `NaturalPostpone` is selected for the active console child, selected QEMU V35
 root-control, and Pi
-`m26e-pi4-root-cross-core-console-parallel-candidate-v25` root-control records;
+`m26e-pi4-root-same-core-console-yieldto-candidate-v26` root-control records;
 standard faults remain terminal, and
 each reserved timeout cap is not installed on that TCB.
+Every physical child event and packet-TX publication must commit its
+sequence-last record, signal the existing component-specific notification, and
+only then signal slot 6. Direct-VirtIO QEMU must emit only the semantic
+publication signal so its unconsumed Pi fan-in cannot remain latched. Reversing
+either physical publication or notification order, omitting the Pi fan-in, or
+treating its badge as durable state must fail focused source-order tests.
 Ready has no credit; ordinary wakes never grant credit; exact eligible internal
 work may Poll and preserves credit; idle or publication-uncredited work calls
 Wait directly with no ordinary Yield; one publication consumes its credit
@@ -8919,7 +8944,26 @@ Graceful ShutdownComplete consumes one credit, retires root debt without ACK,
 starts bounded containment, and becomes teardown-terminal only after the exact
 proof completes; terminal plus egress coalescing fails closed.
 
-ABI v5 tests must prove `SendBatch = 3` binary encoding version 1 with exact
+Root-control fan-in tests must prove sequence-last durable publication before
+the coalesced signal and a single nonblocking poll only at the already-fenced
+ordinary/no-successor exit. A nonzero edge must return to outer
+operator/recovery-first arbitration for a fresh durable-state read; zero must
+take the existing bounded Yield. The critical runtime receives only restricted
+Write-only, badge-1 aliases in task-local slot 5 of the root-fault and
+Worker-supervisor children. On Pi only, they signal those aliases after
+committing a durable fault, service, Worker completion-bit, or accepting an
+existing validated-control publication. QEMU retains the sealed common slots
+but compiles out the unconsumed fan-in syscall; executor
+slot 5 is in a separate CSpace. Worker control records remain in the existing
+bounded validated FIFO and root continues to consume that FIFO directly; no
+parallel mailbox count, marker restore, or replacement queue is permitted.
+Negative tests must reject badge-derived work authority, a blocking fan-in
+wait, any QEMU critical fan-in Signal, deadline-arm body zeroing or arm-time root signal, any bypass or reset of
+the generated WiFi `NaturalPostpone` profile or either unchanged 64 logical/
+productive cap, and any reset or slide of the direct-GENET unslid tail. All
+selected SC and Reply numerics remain unchanged.
+
+ABI v6 tests must prove `SendBatch = 3` binary encoding version 1 with exact
 eight-byte header, one through eight records, exact `used_bytes`, reserved zero,
 and each `1..=256`-byte UTF-8 record free of CR/LF. Empty, ninth, oversized,
 malformed UTF-8, truncated, trailing, overlapping, stale-identity, and
@@ -8941,7 +8985,7 @@ must complete and quiesce. A pending batch without a commit and a
 capacity/sendability failure must retain zero new cycles; neither a root
 ServiceTick-per-record dependency nor a local self-Poll loop is accepted.
 
-ABI v5 compatibility tests must additionally retain the ABI-v4-introduced
+ABI v6 compatibility tests must additionally retain the ABI-v4-introduced
 `CommandBatch = 27` contract with encoding version 1, an exact eight-byte batch
 header, one through eight records, and per-record
 `now_ms`, command length, and exact UTF-8 command bytes. The child may coalesce
@@ -9513,6 +9557,15 @@ Write-only signal caps, one synchronous command association, and fault-before,
 during, after, cancellation, reconstruction-generation, and normal-versus-
 failure Reply exclusion. One-way bootstrap/background completions signal only
 after their sequence-last ring commit and never consume the command Reply.
+Driver runtime-init ABI v11 must preserve the descriptor's fixed size while
+assigning its former reserved field to root-control wake slot 12. HAL must mint
+only a Write-only, badge-1 cap there; zero, aliasing, wrong-slot, wrong-badge,
+broad-rights, and ABI-v10 descriptors fail current admission. CYW43's dedicated
+slot 11 remains separate. Every durable driver terminal, RX, TX, or completion
+publication must signal the existing role-specific completion/doorbell first
+and slot 12 second. Focused source-order tests must reject signalling before the
+commit, reversed notification order, a missing fan-in, and any path that treats
+the wake as completion, identity, Reply, retry, or physical-owner authority.
 The runtime's nonblocking command seam is kernel-contract-specific: classic
 seL4 uses `seL4_Poll`, while MCS must use `seL4_NBRecv` with the exact
 compiler-generated child Reply slot 6. Once that receive retains a Call, both
@@ -9647,10 +9700,10 @@ _Generated by coh-rtc (sha256: `fa11c64fe53b859365c45c8e33e565d428029a87529be00c
 <!-- coh-rtc:trace-policy:end -->
 
 ## Manifest fingerprints
-- `configs/root_task.toml` — `sha256:f8ac815eecf31f83739d3569a748ceace199f1e29a6eda3f4fd3d191e202784d`
-- `configs/generated/root_task_resolved.json` — `sha256:a9a50408519f33cf2e05932cffffa5dbb521958870b16edf2f36311ff60385a1`
-- `configs/root_task_pi4_uboot_aarch64.toml` — `sha256:7242df787da15fe19a13cbe7c06a2c9abdee697f46f2e9353089f1d276c58b98`
-- Pi `pi4_production` transient resolved binding — `sha256:f83cd48d38d780d491d0317d98513a1703d24663406ed90f8b38911794dde273`
+- `configs/root_task.toml` — `sha256:cca7cfdc8753ffd712d4431b6223db86d93f7726519aaf923ad236e67af516c3`
+- `configs/generated/root_task_resolved.json` — `sha256:8108f22e580a653df9e65e4509d0841aacef0d1c5825094ee861a3a09fb14c66`
+- `configs/root_task_pi4_uboot_aarch64.toml` — `sha256:4fcecabb51f51a93e93dd4f515cddc20202b0587bd1309cf21133a53e4c5ea87`
+- Pi `pi4_production` transient resolved binding — `sha256:c62e261549f0754f29d62f4b3b3245f2c9bd3900b8cc0fd665f2bd60611eb594`
 
 ## Transcript fixture hashes
 - `tests/fixtures/transcripts/boot_v0/serial.txt` — `sha256:2ea58218a937f0c702fd67dac83aa838a8c49b9d1fba1e0165dfa93a44ab3c6d`

@@ -921,12 +921,14 @@ impl WorkerResourceAdmissionConfig {
         if root_fault.fault_reply_lanes != declared.receive_reply_lanes {
             bail!("root-fault Reply-object lanes do not match the serialized receive contract");
         }
-        // Eight fixed self-fault, receive, Reply, and notification caps occupy
-        // compiler-selected slots through slot 9 (slot 5 remains reserved).
+        // Nine fixed self-fault, receive, Reply, and notification caps occupy
+        // compiler-selected slots 1 through 9. The root-control fan-in uses
+        // root-fault-local slot 5; executor children reuse that task-local slot
+        // for their independent completion signal.
         // Passive recovery caps start at slot 10; every registered temporal TCB
         // additionally needs one root-fault-local control cap because a
         // root-Cspace CPtr is meaningless inside the restricted handler CSpace.
-        let expected_root_fault_caps = 8usize
+        let expected_root_fault_caps = 9usize
             .checked_add(passive_recovery_caps)
             .and_then(|total| total.checked_add(temporal.tasks.len()))
             .ok_or_else(|| anyhow::anyhow!("root-fault CSpace arithmetic overflows"))?;
@@ -1361,7 +1363,9 @@ mod tests {
                     id: (*id).to_owned(),
                     cnode_radix_bits: 5,
                     cspace_cap_count: if *id == "root-fault" {
-                        19
+                        20
+                    } else if *id == "root-worker-supervisor" {
+                        9
                     } else if *id == "root-driver-supervisor" {
                         15
                     } else {
@@ -1568,7 +1572,7 @@ mod tests {
             .iter_mut()
             .find(|task| task.id == "root-fault")
             .expect("unit root-fault resource")
-            .cspace_cap_count = 20;
+            .cspace_cap_count = 21;
         config.fault_registry.root_fault_tcb_control_slot_base = 10;
         let error = config
             .validate(&temporal)

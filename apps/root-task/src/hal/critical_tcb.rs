@@ -55,10 +55,14 @@ const CHILD_DRIVER_RELEASE_SIGNAL_SLOT: seL4_CPtr = 7;
 const CHILD_DRIVER_SIGNAL_SLOT: seL4_CPtr = 8;
 const CHILD_EMERGENCY_SIGNAL_SLOT: seL4_CPtr = 9;
 const CHILD_SELF_CNODE_SLOT: seL4_CPtr = 10;
+// Slot 5 is task-local: root-fault and Worker-supervisor fan-in aliases plus
+// each executor's completion signal live in distinct restricted CSpaces.
+const CHILD_ROOT_CONTROL_WAKE_SLOT: seL4_CPtr = 5;
 const CHILD_EXECUTOR_COMPLETION_SIGNAL_SLOT: seL4_CPtr = 5;
 
-// Slots 11..14 remain reserved for future fixed critical-control lanes. Each
-// admitted linked driver then owns one exact seven-capability containment row:
+// In the driver-supervisor CSpace, slots 11..14 remain reserved for future
+// fixed critical-control lanes. Each admitted linked driver then owns one
+// exact seven-capability containment row:
 // TCB, command origin, command Reply, completion origin, SC, standard fault,
 // and timeout fault. Seven rows exactly fill the Pi supervisor's 64-slot CNode.
 const DRIVER_SUPERVISOR_RUNTIME_CAP_SLOT_BASE: seL4_CPtr = 15;
@@ -175,6 +179,24 @@ pub struct CriticalTcbRuntime {
     pub children: Vec<CriticalChildBacking, RESTRICTED_CHILD_COUNT>,
     pub signals: CriticalSignalCaps,
     pub faults: CriticalFaultCaps,
+}
+
+/// Return root's sole receive/origin capability for the root-control fan-in.
+///
+/// Child badges are urgency hints only. Root polls this unbadged origin only at
+/// an already-fenced exit, then revalidates the durable producer condition.
+#[must_use]
+pub(crate) fn root_control_wake_notification_origin(
+    runtime: &CriticalTcbRuntime,
+) -> Option<seL4_CPtr> {
+    runtime
+        .handles
+        .iter()
+        .find(|handle| {
+            handle.id == "root-control" && handle.origin == CriticalTcbOrigin::InitRootControl
+        })
+        .map(|handle| handle.wake_notification_cap as seL4_CPtr)
+        .filter(|cap| *cap != sel4_sys::seL4_CapNull)
 }
 
 /// Fatal construction error; bootstrap must not continue with a partial graph.
@@ -1620,6 +1642,7 @@ pub fn construct_critical_tcb_runtime(
             fault_endpoint,
             emergency_endpoint,
             wake,
+            root_control_wake,
             signals,
         )?;
         if id == ROOT_FAULT_ID {
@@ -1696,6 +1719,22 @@ fn target_fail_stop(reason: &'static str, emergency_cap: Option<seL4_CPtr>) -> !
     }
 }
 
+/// Emit the Pi-only root-control fan-in hint after durable publication.
+///
+/// QEMU retains the common sealed slot layout but has no fan-in consumer, so
+/// compiling this syscall out prevents an unconsumed latched notification and
+/// preserves its qualified scheduling path.
+#[inline(always)]
+fn signal_root_control_fanin_hint() {
+    #[cfg(all(
+        feature = "release-pi4",
+        target_arch = "aarch64",
+        target_os = "none",
+        sel4_config_kernel_mcs,
+    ))]
+    sel4::signal_unchecked(CHILD_ROOT_CONTROL_WAKE_SLOT);
+}
+
 fn publish_target_worker_fault(record: FaultHandoffRecord) -> Result<(), FaultHandoffError> {
     let Some(mut handoff) = TARGET_HANDOFF.try_lock() else {
         return Err(FaultHandoffError::Contended);
@@ -1710,7 +1749,10 @@ fn publish_target_service_fault(record: FaultHandoffRecord) -> Result<(), FaultH
     let Some(mut handoff) = TARGET_HANDOFF.try_lock() else {
         return Err(FaultHandoffError::Contended);
     };
-    handoff.publish_service_fault(record)
+    handoff.publish_service_fault(record)?;
+    drop(handoff);
+    signal_root_control_fanin_hint();
+    Ok(())
 }
 
 fn publish_target_driver_fault(record: FaultHandoffRecord) -> Result<(), FaultHandoffError> {
@@ -1721,6 +1763,7 @@ fn publish_target_driver_fault(record: FaultHandoffRecord) -> Result<(), FaultHa
     handoff.publish_driver_fault(runtime_slot, record)?;
     drop(handoff);
     sel4::signal_unchecked(CHILD_DRIVER_SIGNAL_SLOT);
+    signal_root_control_fanin_hint();
     Ok(())
 }
 
@@ -2446,6 +2489,10 @@ extern "C" fn root_worker_supervisor_entry(_arg0: seL4_Word) -> ! {
                 Some(CHILD_EMERGENCY_SIGNAL_SLOT),
             );
         }
+        // The Worker first committed its sequence-last component record and
+        // signalled this supervisor. The validated/coalesced wake publication
+        // precedes this separate root-control fan-in hint.
+        signal_root_control_fanin_hint();
         if !drain_critical_handoff {
             continue;
         }
@@ -2487,6 +2534,9 @@ extern "C" fn root_worker_supervisor_entry(_arg0: seL4_Word) -> ! {
                     Some(CHILD_EMERGENCY_SIGNAL_SLOT),
                 );
             }
+            // Fault bodies and the existing validated-control FIFO publication
+            // are durable before this coalescing hint reaches root-control.
+            signal_root_control_fanin_hint();
         }
         let retry = match TARGET_HANDOFF.try_lock() {
             Some(handoff) => {
@@ -2636,6 +2686,7 @@ fn construct_restricted_child(
     fault_endpoint: seL4_CPtr,
     emergency_endpoint: seL4_CPtr,
     wake_notification: seL4_CPtr,
+    root_control_wake: seL4_CPtr,
     signals: CriticalSignalCaps,
 ) -> Result<ConstructedChild, CriticalTcbConstructionError> {
     let child_depth = resource.cnode_radix_bits;
@@ -2778,6 +2829,17 @@ fn construct_restricted_child(
                 stage,
             )?;
         }
+        mint_child_cap(
+            cnode,
+            child_depth,
+            CHILD_ROOT_CONTROL_WAKE_SLOT,
+            root_cnode,
+            root_control_wake,
+            root_depth,
+            write_only_rights(),
+            1,
+            "critical.root-fault-root-control-wake",
+        )?;
     } else if matches!(task.id, WORKER_SUPERVISOR_ID | DRIVER_SUPERVISOR_ID) {
         copy_child_cap(
             cnode,
@@ -2810,6 +2872,19 @@ fn construct_restricted_child(
             root_depth,
             stage,
         )?;
+        if task.id == WORKER_SUPERVISOR_ID {
+            mint_child_cap(
+                cnode,
+                child_depth,
+                CHILD_ROOT_CONTROL_WAKE_SLOT,
+                root_cnode,
+                root_control_wake,
+                root_depth,
+                write_only_rights(),
+                1,
+                "critical.worker-supervisor-root-control-wake",
+            )?;
+        }
         if task.id == DRIVER_SUPERVISOR_ID {
             copy_child_cap(
                 cnode,

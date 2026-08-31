@@ -134,7 +134,7 @@ fn maximum_role_mix_reserves_exact_generated_worker_population() {
     assert_eq!(total.notifications, 34);
     assert_eq!(total.reply_objects, 272);
     assert_eq!(total.scheduling_contexts, 273);
-    assert_eq!(total.cspace_slots, 14_618);
+    assert_eq!(total.cspace_slots, 14_620);
     assert_eq!(total.untyped_bytes, 134_217_728);
     assert!(total.tcbs <= admission.capacity.tcbs);
     assert!(total.page_tables <= admission.capacity.page_tables);

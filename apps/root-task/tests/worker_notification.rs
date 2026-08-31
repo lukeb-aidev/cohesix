@@ -9,8 +9,10 @@ mod support {
 
 use root_task::generated;
 use root_task::worker_supervisor::{WorkerLifecycleState, WorkerTerminalReason};
-use support::worker_supervisor_fixture::{ready, Event};
-use worker_task_abi::{WorkerCompletionRecord, WorkerCompletionStatus, WorkerRole};
+use support::worker_supervisor_fixture::{starting, Event};
+use worker_task_abi::{
+    WorkerCompletionRecord, WorkerCompletionStatus, WorkerReadyRecord, WorkerRole,
+};
 
 #[test]
 fn worker_wake_bits_and_call_labels_are_disjoint_and_shutdown_is_idempotent() {
@@ -36,7 +38,14 @@ fn worker_wake_bits_and_call_labels_are_disjoint_and_shutdown_is_idempotent() {
     assert_ne!(labels[0], labels[2]);
     assert_ne!(labels[1], labels[2]);
 
-    let (mut supervisor, identity) = ready(WorkerRole::Heartbeat, 1);
+    let (mut supervisor, _image) = starting(WorkerRole::Heartbeat, 1);
+    let init = supervisor.backend().init.expect("init");
+    let ready = WorkerReadyRecord::staged(init, 1).committed();
+    let identity = supervisor
+        .accept_ready(ready)
+        .expect("READY accepted")
+        .identity
+        .expect("READY identity");
     let first = supervisor
         .begin_shutdown(WorkerRole::Heartbeat, 0, 100)
         .expect("shutdown accepted");

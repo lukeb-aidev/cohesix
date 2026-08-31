@@ -1,11 +1,11 @@
 {
   "schema": "cohesix-root-tcb-generated-inventory/v1",
   "profile": "virt-aarch64",
-  "manifest_sha256": "a9a50408519f33cf2e05932cffffa5dbb521958870b16edf2f36311ff60385a1",
-  "topology_sha256": "0598bf1bde290d6beff900ce98f8a9310a83c3627b27616d2f70b28e1cd34a1c",
+  "manifest_sha256": "8108f22e580a653df9e65e4509d0841aacef0d1c5825094ee861a3a09fb14c66",
+  "topology_sha256": "d2341e5366e7638e85d0fc856e11050d3dfe1ce7f94b1d6a0d022a60756b48db",
   "topology": {
     "console_network_service": {
-      "abi_version": 5,
+      "abi_version": 6,
       "auth_timeout_ms": 5000,
       "budget_us": 3000,
       "child_cspace_slots": 16,
@@ -329,7 +329,7 @@
         ],
         "required": true
       },
-      "schema": "1.15"
+      "schema": "1.16"
     },
     "temporal_authority": {
       "admission_window_us": 20000,
@@ -9199,7 +9199,7 @@
         },
         {
           "cnode_radix_bits": 10,
-          "cspace_cap_count": 530,
+          "cspace_cap_count": 531,
           "fault_reply_lanes": 1,
           "id": "root-fault",
           "ipc_buffer_pages": 1,
@@ -9217,7 +9217,7 @@
         },
         {
           "cnode_radix_bits": 6,
-          "cspace_cap_count": 16,
+          "cspace_cap_count": 17,
           "fault_reply_lanes": 1,
           "id": "root-worker-supervisor",
           "ipc_buffer_pages": 1,
@@ -9341,7 +9341,7 @@
       "fixed_objects": {
         "asids": 9,
         "cnodes": 9,
-        "cspace_slots": 4378,
+        "cspace_slots": 4380,
         "endpoints": 15,
         "fault_caps": 9,
         "frames": 2024,
@@ -9559,7 +9559,7 @@
     "timeout_fault_caps": 265,
     "reply_objects": 264,
     "scheduling_contexts": 265,
-    "cspace_slots": 12570,
+    "cspace_slots": 12572,
     "untyped_bytes": 100663296
   }
 }

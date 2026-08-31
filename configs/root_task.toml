@@ -6,7 +6,7 @@ author = "Lukas Bower"
 purpose = "Root-task manifest input for coh-rtc."
 
 [root_task]
-schema = "1.15"
+schema = "1.16"
 
 [root_task.affinity]
 enabled = true
@@ -619,7 +619,7 @@ fault_handler = "root-fault"
 
 [console_network_service]
 enabled = true
-abi_version = 5
+abi_version = 6
 image_id = "console-network-runtime"
 image_path = "cohesix/artifacts/console-network-runtime"
 entry_symbol = "_start"
@@ -794,7 +794,7 @@ fault_caps = 9
 timeout_fault_caps = 9
 reply_objects = 8
 scheduling_contexts = 9
-cspace_slots = 4378
+cspace_slots = 4380
 untyped_bytes = 67108864
 
 [[worker_resource_admission.executable_roles]]
@@ -897,7 +897,7 @@ fault_reply_lanes = 1
 [[worker_resource_admission.critical_tcbs]]
 id = "root-fault"
 cnode_radix_bits = 10
-cspace_cap_count = 530
+cspace_cap_count = 531
 revoke_anchor_slot = 16129
 ipc_buffer_pages = 1
 stack_pages = 2
@@ -915,7 +915,7 @@ fault_reply_lanes = 1
 [[worker_resource_admission.critical_tcbs]]
 id = "root-worker-supervisor"
 cnode_radix_bits = 6
-cspace_cap_count = 16
+cspace_cap_count = 17
 revoke_anchor_slot = 16131
 ipc_buffer_pages = 1
 stack_pages = 2
