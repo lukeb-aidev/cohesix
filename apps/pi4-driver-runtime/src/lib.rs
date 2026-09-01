@@ -632,8 +632,8 @@ use pi4_driver_abi::{
 };
 #[cfg(any(target_os = "none", test))]
 use pi4_driver_abi::{
-    DriverRuntimePersistentWaitReceipt, DriverRuntimeSteadyServiceProgress,
-    DRIVER_RUNTIME_CYW43_FLAG_STEADY_TX_SERVICE_LEASE,
+    DriverRuntimeOneWayWaitReceipt, DriverRuntimePersistentWaitReceipt,
+    DriverRuntimeSteadyServiceProgress, DRIVER_RUNTIME_CYW43_FLAG_STEADY_TX_SERVICE_LEASE,
 };
 #[cfg(any(target_os = "none", test))]
 use pi4_driver_abi::{
@@ -9507,6 +9507,218 @@ fn runtime_steady_service_progress_advance(
         .then_some(progress.service_slice)
 }
 
+#[cfg(any(target_os = "none", test))]
+fn read_runtime_one_way_wait_record_at(
+    base: usize,
+    acknowledged: bool,
+) -> Option<DriverRuntimeOneWayWaitReceipt> {
+    let address = base + usize::from(pi4_driver_abi::DRIVER_RUNTIME_ONE_WAY_WAIT_RECEIPT_OFFSET);
+    driver_task_shared_invalidate_range(
+        address,
+        usize::from(pi4_driver_abi::DRIVER_RUNTIME_ONE_WAY_WAIT_RECEIPT_BYTES),
+    );
+    let first_commit = runtime_continuation_grant_read_u32(
+        base,
+        core::mem::offset_of!(DriverRuntimeOneWayWaitReceipt, committed_wait_slice),
+    )?;
+    if first_commit == 0 {
+        return None;
+    }
+    driver_task_shared_load_barrier();
+    let observed = DriverRuntimeOneWayWaitReceipt {
+        magic: runtime_continuation_grant_read_u32(
+            base,
+            core::mem::offset_of!(DriverRuntimeOneWayWaitReceipt, magic),
+        )?,
+        request_sequence: runtime_continuation_grant_read_u32(
+            base,
+            core::mem::offset_of!(DriverRuntimeOneWayWaitReceipt, request_sequence),
+        )?,
+        action_fingerprint: runtime_continuation_grant_read_u32(
+            base,
+            core::mem::offset_of!(DriverRuntimeOneWayWaitReceipt, action_fingerprint),
+        )?,
+        runtime_identity_token: runtime_continuation_grant_read_u32(
+            base,
+            core::mem::offset_of!(DriverRuntimeOneWayWaitReceipt, runtime_identity_token),
+        )?,
+        wait_slice: runtime_continuation_grant_read_u32(
+            base,
+            core::mem::offset_of!(DriverRuntimeOneWayWaitReceipt, wait_slice),
+        )?,
+        committed_wait_slice: first_commit,
+    };
+    driver_task_shared_load_barrier();
+    driver_task_shared_invalidate_range(
+        address + core::mem::offset_of!(DriverRuntimeOneWayWaitReceipt, committed_wait_slice),
+        core::mem::size_of::<u32>(),
+    );
+    let second_commit = runtime_continuation_grant_read_u32(
+        base,
+        core::mem::offset_of!(DriverRuntimeOneWayWaitReceipt, committed_wait_slice),
+    )?;
+    (first_commit == second_commit
+        && if acknowledged {
+            observed.acknowledged()
+        } else {
+            observed.valid()
+        })
+    .then_some(observed)
+}
+
+#[cfg(any(target_os = "none", test))]
+fn read_runtime_one_way_wait_receipt_at(base: usize) -> Option<DriverRuntimeOneWayWaitReceipt> {
+    read_runtime_one_way_wait_record_at(base, false)
+}
+
+#[cfg(any(target_os = "none", test))]
+fn read_runtime_one_way_wait_ack_at(base: usize) -> Option<DriverRuntimeOneWayWaitReceipt> {
+    read_runtime_one_way_wait_record_at(base, true)
+}
+
+#[cfg(any(target_os = "none", test))]
+const fn runtime_one_way_wait_ack_matches(
+    wait: DriverRuntimeOneWayWaitReceipt,
+    ack: DriverRuntimeOneWayWaitReceipt,
+) -> bool {
+    wait.valid()
+        && ack.acknowledged()
+        && ack.request_sequence == wait.request_sequence
+        && ack.action_fingerprint == wait.action_fingerprint
+        && ack.runtime_identity_token == wait.runtime_identity_token
+        && ack.wait_slice == wait.wait_slice
+        && ack.committed_wait_slice == wait.committed_wait_slice
+}
+
+#[cfg(any(target_os = "none", test))]
+const fn runtime_one_way_wait_receipt_command_valid(command: DriverTaskCommandRecord) -> bool {
+    command.sequence != 0
+        && command.flags & DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY != 0
+        && command.flags
+            & (DRIVER_RUNTIME_COMMAND_FLAG_STEADY_SERVICE_LEASE
+                | DRIVER_RUNTIME_COMMAND_FLAG_PERSISTENT_TRANSACTION)
+            == 0
+        && !runtime_command_requires_continuation_grant(command)
+}
+
+#[cfg(any(target_os = "none", test))]
+fn runtime_one_way_wait_identity(
+    task_key: u32,
+    route: RuntimeNotificationRoute,
+    command: DriverTaskCommandRecord,
+) -> Option<u32> {
+    if !runtime_one_way_wait_receipt_command_valid(command) {
+        return None;
+    }
+    let descriptor = RUNTIME_DESCRIPTOR.load();
+    (descriptor.sealed_identity_valid_for_task(task_key)
+        && runtime_notification_route(&descriptor) == route
+        && descriptor.identity_token != 0)
+        .then_some(descriptor.identity_token)
+}
+
+#[cfg(any(target_os = "none", test))]
+fn publish_runtime_one_way_wait_receipt_at(
+    base: usize,
+    command: DriverTaskCommandRecord,
+    runtime_identity_token: u32,
+    wait_slice: u32,
+) -> bool {
+    if !runtime_one_way_wait_receipt_command_valid(command)
+        || runtime_identity_token == 0
+        || wait_slice == 0
+    {
+        return false;
+    }
+    let receipt = DriverRuntimeOneWayWaitReceipt::new(
+        command.sequence,
+        runtime_continuation_action_fingerprint(command),
+        runtime_identity_token,
+        wait_slice,
+    );
+    let address = base + usize::from(pi4_driver_abi::DRIVER_RUNTIME_ONE_WAY_WAIT_RECEIPT_OFFSET);
+    if !runtime_continuation_grant_write_u32(
+        base,
+        core::mem::offset_of!(DriverRuntimeOneWayWaitReceipt, committed_wait_slice),
+        0,
+    ) {
+        return false;
+    }
+    driver_task_shared_store_barrier();
+    driver_task_shared_clean_range(
+        address + core::mem::offset_of!(DriverRuntimeOneWayWaitReceipt, committed_wait_slice),
+        core::mem::size_of::<u32>(),
+    );
+    for (offset, value) in [
+        (
+            core::mem::offset_of!(DriverRuntimeOneWayWaitReceipt, magic),
+            receipt.magic,
+        ),
+        (
+            core::mem::offset_of!(DriverRuntimeOneWayWaitReceipt, request_sequence),
+            receipt.request_sequence,
+        ),
+        (
+            core::mem::offset_of!(DriverRuntimeOneWayWaitReceipt, action_fingerprint),
+            receipt.action_fingerprint,
+        ),
+        (
+            core::mem::offset_of!(DriverRuntimeOneWayWaitReceipt, runtime_identity_token),
+            receipt.runtime_identity_token,
+        ),
+        (
+            core::mem::offset_of!(DriverRuntimeOneWayWaitReceipt, wait_slice),
+            receipt.wait_slice,
+        ),
+    ] {
+        if !runtime_continuation_grant_write_u32(base, offset, value) {
+            return false;
+        }
+    }
+    driver_task_shared_store_barrier();
+    driver_task_shared_clean_range(
+        address,
+        core::mem::offset_of!(DriverRuntimeOneWayWaitReceipt, committed_wait_slice),
+    );
+    if !runtime_continuation_grant_write_u32(
+        base,
+        core::mem::offset_of!(DriverRuntimeOneWayWaitReceipt, committed_wait_slice),
+        receipt.committed_wait_slice,
+    ) {
+        return false;
+    }
+    driver_task_shared_store_barrier();
+    driver_task_shared_clean_range(
+        address + core::mem::offset_of!(DriverRuntimeOneWayWaitReceipt, committed_wait_slice),
+        core::mem::size_of::<u32>(),
+    );
+    true
+}
+
+#[cfg(any(target_os = "none", test))]
+fn clear_runtime_one_way_wait_receipt_at(
+    base: usize,
+    expected: DriverRuntimeOneWayWaitReceipt,
+) -> bool {
+    if !expected.acknowledged() || read_runtime_one_way_wait_ack_at(base) != Some(expected) {
+        return false;
+    }
+    let address = base + usize::from(pi4_driver_abi::DRIVER_RUNTIME_ONE_WAY_WAIT_RECEIPT_OFFSET);
+    if !runtime_continuation_grant_write_u32(
+        base,
+        core::mem::offset_of!(DriverRuntimeOneWayWaitReceipt, committed_wait_slice),
+        0,
+    ) {
+        return false;
+    }
+    driver_task_shared_store_barrier();
+    driver_task_shared_clean_range(
+        address + core::mem::offset_of!(DriverRuntimeOneWayWaitReceipt, committed_wait_slice),
+        core::mem::size_of::<u32>(),
+    );
+    true
+}
+
 #[cfg(test)]
 fn read_runtime_persistent_wait_receipt_at(
     base: usize,
@@ -11185,6 +11397,78 @@ fn retain_runtime_idle_delegated_wake(
     true
 }
 
+/// Return true only for the root-owned MCS command prompt bit.
+///
+/// The notification is deliberately not command authority. Root publishes the
+/// immutable ring record sequence-last before signalling this bit; the stable
+/// record admitted below remains the only authority for an initial one-way
+/// turn. Classic runtimes keep their established endpoint path.
+#[cfg(any(target_os = "none", test))]
+const fn runtime_initial_root_prompt(
+    kernel_mcs: bool,
+    route: RuntimeNotificationRoute,
+    badge: u32,
+) -> bool {
+    kernel_mcs
+        && runtime_notification_wake_badge(route, badge) & DRIVER_RUNTIME_RESERVED_ROOT_BADGE != 0
+}
+
+/// Admit one fresh sequence-last one-way command from a scheduling prompt.
+///
+/// Root prompts are orthogonal to the route's physical IRQ or delegated-peer
+/// bits. The latter retain their exact existing classifiers; neither may
+/// substitute for the fresh ring sequence checked here. This helper is only
+/// for initial intake. A retained multi-quantum command still requires its
+/// existing generation-bound grant or endpoint rendezvous.
+#[cfg(any(target_os = "none", test))]
+fn runtime_prompted_one_way_intake_after_wake(
+    kernel_mcs: bool,
+    route: RuntimeNotificationRoute,
+    badge: u32,
+    command: DriverTaskCommandRecord,
+    last_sequence: u32,
+) -> Option<RuntimeCommandIntake> {
+    let root_prompt = runtime_initial_root_prompt(kernel_mcs, route, badge);
+    let delegated_prompt =
+        runtime_delegated_owner_wake_admits_command(route, badge, command, last_sequence);
+    (root_prompt || delegated_prompt)
+        .then_some(())
+        .filter(|_| {
+            matches!(
+                runtime_command_admission(command, last_sequence),
+                RuntimeCommandAdmission::OneWay
+            )
+        })
+        .map(|_| runtime_command_intake_after_pre_admit(command, false))
+}
+
+#[cfg(target_os = "none")]
+fn runtime_prompted_one_way_command_after_wake(
+    route: RuntimeNotificationRoute,
+    badge: u32,
+    last_sequence: u32,
+) -> Option<RuntimeCommandIntake> {
+    let root_prompt = runtime_initial_root_prompt(cfg!(sel4_config_kernel_mcs), route, badge);
+    let delegated_prompt = matches!(route, RuntimeNotificationRoute::SdioOwner)
+        && runtime_notification_wake_badge(route, badge)
+            & DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE
+            != 0;
+    if !root_prompt && !delegated_prompt {
+        return None;
+    }
+    // The producer commits the body and then the sequence. One stable read at
+    // the receive boundary closes the condition-before-sleep race without
+    // polling, retrying, or treating notification history as authority.
+    let command = read_runtime_command_record();
+    runtime_prompted_one_way_intake_after_wake(
+        cfg!(sel4_config_kernel_mcs),
+        route,
+        badge,
+        command,
+        last_sequence,
+    )
+}
+
 /// Admit the sequence-last SDIO child while handling its peer wake.
 ///
 /// The notification is only a coalescing hint. The stable command remains the
@@ -11252,13 +11536,16 @@ enum RuntimeIdlePrewaitRoute {
 
 #[cfg(any(target_os = "none", test))]
 const fn runtime_idle_prewait_route(
+    kernel_mcs: bool,
     route: RuntimeNotificationRoute,
     admission: RuntimeCommandAdmission,
 ) -> RuntimeIdlePrewaitRoute {
-    if matches!(
-        route,
-        RuntimeNotificationRoute::SdioOwner | RuntimeNotificationRoute::Cyw43Client
-    ) && matches!(admission, RuntimeCommandAdmission::OneWay)
+    if matches!(admission, RuntimeCommandAdmission::OneWay)
+        && (kernel_mcs
+            || matches!(
+                route,
+                RuntimeNotificationRoute::SdioOwner | RuntimeNotificationRoute::Cyw43Client
+            ))
     {
         RuntimeIdlePrewaitRoute::ReenterCommandPoll
     } else {
@@ -12065,6 +12352,10 @@ struct RuntimePendingCommandGate {
     deferred_service_badge: u32,
     deferred_delegated_wake: bool,
     foreground_due_after_service: bool,
+    one_way_completed_slices: u32,
+    one_way_wait_identity_token: u32,
+    one_way_root_control_sent: bool,
+    one_way_prompt_debt: bool,
     retained_generation: Option<u32>,
     root_generation: Option<u32>,
     last_grant_id: u32,
@@ -12079,6 +12370,10 @@ impl RuntimePendingCommandGate {
             deferred_service_badge: 0,
             deferred_delegated_wake: false,
             foreground_due_after_service: false,
+            one_way_completed_slices: 0,
+            one_way_wait_identity_token: 0,
+            one_way_root_control_sent: false,
+            one_way_prompt_debt: false,
             retained_generation: None,
             root_generation: None,
             last_grant_id: 0,
@@ -12093,6 +12388,23 @@ impl RuntimePendingCommandGate {
     fn retain_after_pending(&mut self) {
         self.continuation_required = true;
         self.owner_phase = RuntimeRetainedOwnerPhase::Inactive;
+    }
+
+    fn retain_after_pending_one_way(&mut self, runtime_identity_token: u32) -> Option<u32> {
+        if runtime_identity_token == 0
+            || self.one_way_wait_identity_token != 0
+            || self.one_way_prompt_debt
+        {
+            return None;
+        }
+        let next = self.one_way_completed_slices.checked_add(1)?;
+        self.continuation_required = true;
+        self.one_way_completed_slices = next;
+        self.one_way_wait_identity_token = runtime_identity_token;
+        self.one_way_root_control_sent = false;
+        self.one_way_prompt_debt = false;
+        self.owner_phase = RuntimeRetainedOwnerPhase::Inactive;
+        Some(next)
     }
 
     fn retain_after_pending_root_generation(&mut self, generation: u32) {
@@ -12113,6 +12425,10 @@ impl RuntimePendingCommandGate {
         self.continuation_required = false;
         self.deferred_delegated_wake = false;
         self.foreground_due_after_service = false;
+        self.one_way_completed_slices = 0;
+        self.one_way_wait_identity_token = 0;
+        self.one_way_root_control_sent = false;
+        self.one_way_prompt_debt = false;
         self.retained_generation = None;
         self.root_generation = None;
         self.last_grant_id = 0;
@@ -12133,6 +12449,54 @@ impl RuntimePendingCommandGate {
 
     const fn root_grant_active(self) -> bool {
         self.root_generation.is_some()
+    }
+
+    const fn one_way_wait_receipt(
+        self,
+        command: DriverTaskCommandRecord,
+    ) -> Option<DriverRuntimeOneWayWaitReceipt> {
+        if !self.continuation_required
+            || self.one_way_wait_identity_token == 0
+            || self.one_way_completed_slices == 0
+        {
+            return None;
+        }
+        Some(DriverRuntimeOneWayWaitReceipt::new(
+            command.sequence,
+            runtime_continuation_action_fingerprint(command),
+            self.one_way_wait_identity_token,
+            self.one_way_completed_slices,
+        ))
+    }
+
+    const fn one_way_root_control_sent(self) -> bool {
+        self.one_way_root_control_sent
+    }
+
+    fn mark_one_way_root_control_sent(&mut self) {
+        self.one_way_root_control_sent = true;
+    }
+
+    const fn one_way_prompt_debt(self) -> bool {
+        self.one_way_prompt_debt
+    }
+
+    fn retain_one_way_prompt_debt(&mut self) {
+        self.one_way_prompt_debt = true;
+    }
+
+    fn resume_one_way_prompt(&mut self) -> bool {
+        if !self.continuation_required
+            || self.one_way_wait_identity_token == 0
+            || !self.one_way_prompt_debt
+        {
+            return false;
+        }
+        self.continuation_required = false;
+        self.one_way_wait_identity_token = 0;
+        self.one_way_root_control_sent = false;
+        self.one_way_prompt_debt = false;
+        true
     }
 
     fn set_delegated_owner_phase(&mut self, phase: RuntimeRetainedOwnerPhase) {
@@ -16749,6 +17113,10 @@ fn pcie_timer_runtime_service_notification(badge: u32) -> bool {
 enum PcieTimerPostIrqWakeRoute {
     Command(RuntimeCommandIntake),
     ServiceThenBlock(u32),
+    RootPrompt {
+        raw_badge: u32,
+        service_badge: Option<u32>,
+    },
     FailClosed,
 }
 
@@ -16756,6 +17124,19 @@ enum PcieTimerPostIrqWakeRoute {
 const fn pcie_timer_post_irq_wake_route(wake: RuntimeWake) -> PcieTimerPostIrqWakeRoute {
     match wake {
         RuntimeWake::Command(intake) => PcieTimerPostIrqWakeRoute::Command(intake),
+        RuntimeWake::Notification(badge)
+            if badge & DRIVER_RUNTIME_RESERVED_ROOT_BADGE != 0
+                && runtime_notification_wake_badge(RuntimeNotificationRoute::PcieTimer, badge)
+                    != 0 =>
+        {
+            PcieTimerPostIrqWakeRoute::RootPrompt {
+                raw_badge: badge,
+                service_badge: runtime_notification_service_badge(
+                    RuntimeNotificationRoute::PcieTimer,
+                    badge,
+                ),
+            }
+        }
         RuntimeWake::Notification(badge) if badge == DRIVER_RUNTIME_PCIE_TIMER_IRQ_BADGE => {
             PcieTimerPostIrqWakeRoute::ServiceThenBlock(badge)
         }
@@ -16784,6 +17165,27 @@ fn pcie_timer_block_after_irq(
             PcieTimerPostIrqWakeRoute::ServiceThenBlock(badge) => {
                 if !pcie_timer_runtime_service_notification(badge) {
                     return None;
+                }
+            }
+            PcieTimerPostIrqWakeRoute::RootPrompt {
+                raw_badge,
+                service_badge,
+            } => {
+                // Seal the exact one-way command before servicing a coalesced
+                // channel-3 source. A stale root hint simply returns to this
+                // blocking boundary; it cannot fault or mint work.
+                let intake = runtime_prompted_one_way_command_after_wake(
+                    RuntimeNotificationRoute::PcieTimer,
+                    raw_badge,
+                    last_sequence,
+                );
+                if service_badge
+                    .is_some_and(|badge| !pcie_timer_runtime_service_notification(badge))
+                {
+                    return None;
+                }
+                if intake.is_some() {
+                    return intake;
                 }
             }
             PcieTimerPostIrqWakeRoute::FailClosed => {
@@ -20588,9 +20990,9 @@ const fn runtime_notification_service_badge(
         RuntimeNotificationRoute::Genet => {
             let known =
                 DRIVER_RUNTIME_GENET_IRQ_BADGE | DRIVER_RUNTIME_DIRECT_GENET_NOTIFICATION_BADGE;
-            if badge != 0 && badge & DRIVER_RUNTIME_RESERVED_ROOT_BADGE == 0 && badge & !known == 0
-            {
-                Some(badge)
+            let service_badge = badge & known;
+            if service_badge != 0 && badge & !(DRIVER_RUNTIME_RESERVED_ROOT_BADGE | known) == 0 {
+                Some(service_badge)
             } else {
                 None
             }
@@ -20620,7 +21022,13 @@ const fn runtime_notification_service_badge(
         {
             Some(DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_BADGE)
         }
-        RuntimeNotificationRoute::PcieTimer if badge == DRIVER_RUNTIME_PCIE_TIMER_IRQ_BADGE => {
+        RuntimeNotificationRoute::PcieTimer
+            if badge & DRIVER_RUNTIME_PCIE_TIMER_IRQ_BADGE != 0
+                && badge
+                    & !(DRIVER_RUNTIME_RESERVED_ROOT_BADGE
+                        | DRIVER_RUNTIME_PCIE_TIMER_IRQ_BADGE)
+                    == 0 =>
+        {
             Some(DRIVER_RUNTIME_PCIE_TIMER_IRQ_BADGE)
         }
         RuntimeNotificationRoute::SdioOwner
@@ -20641,7 +21049,7 @@ fn genet_runtime_record_raw_notification(state: &mut GenetRuntimeState, badge: u
     }
     state.raw_notification_receipts = state.raw_notification_receipts.saturating_add(1);
     state.raw_notification_badge_or |= u64::from(badge);
-    if runtime_notification_service_badge(RuntimeNotificationRoute::Genet, badge).is_none() {
+    if runtime_notification_wake_badge(RuntimeNotificationRoute::Genet, badge) == 0 {
         state.raw_notification_rejected = state.raw_notification_rejected.saturating_add(1);
     }
 }
@@ -20729,8 +21137,8 @@ const fn runtime_notification_wake_badge(route: RuntimeNotificationRoute, badge:
         RuntimeNotificationRoute::Genet => {
             let known =
                 DRIVER_RUNTIME_GENET_IRQ_BADGE | DRIVER_RUNTIME_DIRECT_GENET_NOTIFICATION_BADGE;
-            if root_badge == 0 && badge & !known == 0 {
-                badge
+            if badge & !known == 0 {
+                badge | root_badge
             } else {
                 0
             }
@@ -20757,13 +21165,19 @@ const fn runtime_notification_wake_badge(route: RuntimeNotificationRoute, badge:
             }
         }
         RuntimeNotificationRoute::PcieTimer => {
-            if root_badge == 0 && badge == DRIVER_RUNTIME_PCIE_TIMER_IRQ_BADGE {
-                badge
+            if badge == 0 || badge == DRIVER_RUNTIME_PCIE_TIMER_IRQ_BADGE {
+                badge | root_badge
             } else {
                 0
             }
         }
-        RuntimeNotificationRoute::Unavailable => 0,
+        RuntimeNotificationRoute::Unavailable => {
+            if badge == 0 {
+                root_badge
+            } else {
+                0
+            }
+        }
     }
 }
 
@@ -20992,6 +21406,40 @@ fn wait_runtime_local_notification() -> Option<u32> {
     let mut badge: sel4_sys::seL4_Word = 0;
     let _tag = runtime_blocking_wait(RuntimeBlockingWaitTarget::LocalNotification, &mut badge);
     Some(badge as u32)
+}
+
+/// Publish one exact generic wait edge to root and atomically park locally.
+///
+/// The sequence-last wait receipt is already committed before this syscall.
+/// Slot 12 is the compiler-declared send-only root-control fan-in and slot 3 is
+/// this runtime's bound local notification. Neither notification grants a
+/// physical action; root must validate the exact receipt before returning the
+/// reserved-root scheduling prompt consumed here.
+#[cfg(target_os = "none")]
+fn wait_runtime_local_notification_after_root_control_handoff() -> Option<u32> {
+    #[cfg(sel4_config_kernel_mcs)]
+    {
+        let mut badge: sel4_sys::seL4_Word = 0;
+        // SAFETY: The admitted MCS init descriptor fixes slot 12 as a send-only
+        // root-control notification and slot 3 as this TCB's bound read-only local
+        // notification. `seL4_NBSendWait` atomically publishes the former and
+        // waits on the latter without transferring an SC, Reply object, or device
+        // authority.
+        let _tag = unsafe {
+            sel4_sys::seL4_NBSendWait(
+                pi4_driver_abi::DRIVER_RUNTIME_ROOT_CONTROL_WAKE_NOTIFICATION_SLOT
+                    as sel4_sys::seL4_CPtr,
+                sel4_sys::seL4_MessageInfo::new(0, 0, 0, 0),
+                DRIVER_TASK_CHILD_LOCAL_NOTIFICATION_SLOT,
+                &mut badge,
+            )
+        };
+        Some(badge as u32)
+    }
+    #[cfg(not(sel4_config_kernel_mcs))]
+    {
+        wait_runtime_local_notification()
+    }
 }
 
 /// Prompt the exact SDIO successor and block CYW43 on its bound notification
@@ -68276,7 +68724,7 @@ fn runtime_signal_one_way_completion(
     let _ = (command, completion_committed, postcommit_target);
 }
 
-#[cfg(any(test, all(target_os = "none", sel4_config_kernel_mcs)))]
+#[cfg(any(target_os = "none", test))]
 const fn runtime_terminal_source_service_requires_yield(route: RuntimeNotificationRoute) -> bool {
     matches!(
         route,
@@ -68328,17 +68776,14 @@ fn runtime_retain_terminal_handoff_wake(
         RuntimeWake::Notification(badge) => {
             let delegated_owner_wake =
                 retain_runtime_idle_delegated_wake(notification_route, badge, pending_command_gate);
-            // Seal the immutable successor before telemetry or physical-source
-            // service can introduce another runtime-loop boundary.
-            let delegated_owner_intake = delegated_owner_wake
-                .then(|| {
-                    runtime_delegated_owner_command_after_wake(
-                        notification_route,
-                        badge,
-                        last_sequence,
-                    )
-                })
-                .flatten();
+            // Seal an exact root- or peer-prompted successor before telemetry
+            // or physical-source service can introduce another runtime-loop
+            // boundary. The prompt itself remains non-authoritative.
+            let prompted_intake = runtime_prompted_one_way_command_after_wake(
+                notification_route,
+                badge,
+                last_sequence,
+            );
             if delegated_owner_wake {
                 publish_runtime_progress(
                     0,
@@ -68346,7 +68791,7 @@ fn runtime_retain_terminal_handoff_wake(
                     badge,
                 );
             }
-            if let Some(intake) = delegated_owner_intake {
+            if let Some(intake) = prompted_intake {
                 // Seal the sequence-last successor before servicing an
                 // orthogonal physical source from the same coalesced badge.
                 *pending_intake = Some(intake);
@@ -68523,43 +68968,53 @@ pub fn runtime_main(task_key: usize) -> ! {
                     // physical-source quantum. A pure SDIO peer wake rechecks
                     // and seals its sequence-last command in this activation;
                     // notification history never substitutes for that record.
-                    let delegated_owner_wake = retain_runtime_idle_delegated_wake(
+                    let _delegated_owner_wake = retain_runtime_idle_delegated_wake(
                         notification_route,
                         badge,
                         &mut pending_command_gate,
                     );
-                    let delegated_owner_intake = delegated_owner_wake
-                        .then(|| {
-                            runtime_delegated_owner_command_after_wake(
-                                notification_route,
-                                badge,
-                                last_sequence,
-                            )
-                        })
-                        .flatten();
-                    if let Some(service_badge) =
-                        runtime_notification_service_badge(notification_route, badge)
-                    {
+                    let root_prompt = runtime_initial_root_prompt(
+                        cfg!(sel4_config_kernel_mcs),
+                        notification_route,
+                        badge,
+                    );
+                    let prompted_intake = runtime_prompted_one_way_command_after_wake(
+                        notification_route,
+                        badge,
+                        last_sequence,
+                    );
+                    if let Some(intake) = prompted_intake {
+                        // Retain the exact sequence-last command before an
+                        // orthogonal source consumes this activation.
+                        pending_intake = Some(intake);
+                    }
+                    if let Some(service_badge) = runtime_notification_service_badge(
+                        notification_route,
+                        badge & !DRIVER_RUNTIME_RESERVED_ROOT_BADGE,
+                    ) {
                         let serviced = service_runtime_persistent_source_once(
                             notification_route,
                             service_badge,
                         );
-                        if notification_route == RuntimeNotificationRoute::PcieTimer && serviced {
+                        if notification_route == RuntimeNotificationRoute::PcieTimer
+                            && serviced
+                            && pending_intake.is_none()
+                        {
                             pending_intake =
                                 pcie_timer_block_after_irq(last_sequence, task_key_marker);
                             pending_command_gate.complete();
                         }
-                        // Persistent-source priority remains a hard activation
-                        // boundary. The already sealed peer command survives
-                        // and is admitted on the following owner activation.
-                        if let Some(intake) = delegated_owner_intake {
-                            pending_intake = Some(intake);
+                        // CYW43/SDIO source service retains its established MCS
+                        // handoff. GENET direct DPC keeps its guarded local
+                        // continuation and must not acquire a generic Yield.
+                        if root_prompt
+                            && runtime_terminal_source_service_requires_yield(notification_route)
+                        {
+                            runtime_yield_current_tcb();
                         }
                         continue;
                     }
-                    if let Some(intake) = delegated_owner_intake {
-                        pending_intake = Some(intake);
-                    } else {
+                    if prompted_intake.is_none() {
                         continue;
                     }
                 }
@@ -68911,8 +69366,57 @@ pub fn runtime_main(task_key: usize) -> ! {
                         continue;
                     }
                 }
+            } else if let Some(receipt) = pending_intake
+                .and_then(|intake| pending_command_gate.one_way_wait_receipt(intake.command))
+            {
+                // Generic MCS one-way work has no endpoint continuation: root
+                // reserved that endpoint for reply-bearing Call traffic. The
+                // child publishes one exact final-prewait receipt, atomically
+                // fans it into root once, and then consumes only the matching
+                // reserved-root prompt. Physical IRQ work still wins one hard
+                // source boundary; a coalesced prompt is retained as local
+                // debt and never asks root to signal the same slice twice.
+                if !pending_command_gate.one_way_prompt_debt() {
+                    let raw_badge = if pending_command_gate.one_way_root_control_sent() {
+                        wait_runtime_local_notification()
+                    } else {
+                        pending_command_gate.mark_one_way_root_control_sent();
+                        wait_runtime_local_notification_after_root_control_handoff()
+                    };
+                    let Some(raw_badge) = raw_badge else {
+                        runtime_raise_standard_fault();
+                    };
+                    let badge = runtime_notification_wake_badge(notification_route, raw_badge);
+                    if let Some(ack) = read_runtime_one_way_wait_ack_at(DRIVER_TASK_RING_VADDR)
+                        .filter(|ack| runtime_one_way_wait_ack_matches(receipt, *ack))
+                    {
+                        if !clear_runtime_one_way_wait_receipt_at(DRIVER_TASK_RING_VADDR, ack) {
+                            runtime_raise_standard_fault();
+                        }
+                        pending_command_gate.retain_one_way_prompt_debt();
+                    }
+                    if let Some(service_badge) =
+                        runtime_notification_service_badge(notification_route, badge)
+                    {
+                        let _ = service_runtime_notification(service_badge);
+                        if runtime_terminal_source_service_requires_yield(notification_route) {
+                            runtime_yield_current_tcb();
+                        }
+                        continue;
+                    }
+                    if !pending_command_gate.one_way_prompt_debt() {
+                        // A zero, peer-only, or otherwise non-root wake cannot
+                        // authorize the next foreground quantum. The atomic
+                        // root fan-in was already sent, so park again without
+                        // publishing a duplicate receipt edge.
+                        continue;
+                    }
+                }
+                if !pending_command_gate.resume_one_way_prompt() {
+                    runtime_raise_standard_fault();
+                }
             } else {
-                // One-way non-CYW43 retained commands use the endpoint
+                // Classic one-way retained commands use the endpoint
                 // rendezvous. A defensive Reply-bearing retained state waits
                 // only on the local notification: receiving on the endpoint
                 // again would cancel the blocked caller under MCS. Every CYW43
@@ -69575,16 +70079,18 @@ pub fn runtime_main(task_key: usize) -> ! {
                 }
             }
             if runtime_idle_prewait_route(
+                cfg!(sel4_config_kernel_mcs),
                 notification_route,
                 runtime_command_admission(read_runtime_command_record(), last_sequence),
             ) == RuntimeIdlePrewaitRoute::ReenterCommandPoll
             {
-                // A reciprocal CYW43 child or root one-way CYW43 parent
-                // committed after the earlier intake sample, or its doorbell
-                // was coalesced with prior owner work. Re-enter the stable ring
-                // reader now. The sequence-last command, not notification
-                // history, is the complete work condition; a signal racing
-                // this final check remains latched for the blocking receive.
+                // An MCS root command, reciprocal CYW43 child, or classic
+                // one-way CYW43 parent committed after the earlier intake
+                // sample, or its doorbell was coalesced with prior owner work.
+                // Re-enter the stable ring reader now. The sequence-last
+                // command, not notification history, is the complete work
+                // condition; a signal racing this final check remains latched
+                // for the blocking receive.
                 continue;
             }
             if notification_route == RuntimeNotificationRoute::Genet
@@ -69614,23 +70120,27 @@ pub fn runtime_main(task_key: usize) -> ! {
                     continue;
                 }
                 RuntimeWake::Notification(badge) => {
-                    // The reserved root bit without a retained command is
-                    // stale and never authorizes work. A coalesced peer/IRQ
-                    // badge may still service its own durable source.
+                    // A root or delegated prompt is a scheduling hint only.
+                    // Re-read and retain the exact sequence-last one-way
+                    // command before servicing an orthogonal physical source.
                     let delegated_owner_wake = retain_runtime_idle_delegated_wake(
                         notification_route,
                         badge,
                         &mut pending_command_gate,
                     );
-                    let delegated_owner_intake = delegated_owner_wake
-                        .then(|| {
-                            runtime_delegated_owner_command_after_wake(
-                                notification_route,
-                                badge,
-                                last_sequence,
-                            )
-                        })
-                        .flatten();
+                    let root_prompt = runtime_initial_root_prompt(
+                        cfg!(sel4_config_kernel_mcs),
+                        notification_route,
+                        badge,
+                    );
+                    let prompted_intake = runtime_prompted_one_way_command_after_wake(
+                        notification_route,
+                        badge,
+                        last_sequence,
+                    );
+                    if let Some(intake) = prompted_intake {
+                        pending_intake = Some(intake);
+                    }
                     if delegated_owner_wake {
                         // The same badge can represent both the initial
                         // sequence-last command publication and its first
@@ -69646,20 +70156,22 @@ pub fn runtime_main(task_key: usize) -> ! {
                     let service_badge = runtime_idle_service_badge(notification_route, badge);
                     if let Some(service_badge) = service_badge {
                         let serviced = service_runtime_notification(service_badge);
-                        if notification_route == RuntimeNotificationRoute::PcieTimer && serviced {
+                        if notification_route == RuntimeNotificationRoute::PcieTimer
+                            && serviced
+                            && pending_intake.is_none()
+                        {
                             pending_intake =
                                 pcie_timer_block_after_irq(last_sequence, task_key_marker);
                             pending_command_gate.complete();
                         }
-                        if let Some(intake) = delegated_owner_intake {
-                            pending_intake = Some(intake);
+                        if root_prompt
+                            && runtime_terminal_source_service_requires_yield(notification_route)
+                        {
+                            runtime_yield_current_tcb();
                         }
                         // Physical-source priority remains a hard activation
-                        // boundary; the sealed peer command remains pending.
+                        // boundary; the sealed prompted command remains pending.
                         continue;
-                    }
-                    if let Some(intake) = delegated_owner_intake {
-                        pending_intake = Some(intake);
                     }
                     // The notification is only a prompt. Re-enter arbitration
                     // locally so any durable cursor or joined IRQ progress is
@@ -70162,6 +70674,31 @@ pub fn runtime_main(task_key: usize) -> ! {
                     }
                 }
                 RuntimePendingQuantumRoute::EndpointRendezvous => {
+                    #[cfg(sel4_config_kernel_mcs)]
+                    if let Some(runtime_identity_token) =
+                        runtime_one_way_wait_identity(task_key_marker, notification_route, command)
+                    {
+                        let Some(wait_slice) = pending_command_gate
+                            .retain_after_pending_one_way(runtime_identity_token)
+                        else {
+                            runtime_raise_standard_fault();
+                        };
+                        if !publish_runtime_one_way_wait_receipt_at(
+                            DRIVER_TASK_RING_VADDR,
+                            command,
+                            runtime_identity_token,
+                            wait_slice,
+                        ) {
+                            runtime_raise_standard_fault();
+                        }
+                    } else {
+                        // MCS reserves this endpoint for Reply-bearing Call.
+                        // A missing sealed notification identity cannot fall
+                        // back to an endpoint continuation that root will
+                        // never send; fail through the typed supervisor lane.
+                        runtime_raise_standard_fault();
+                    }
+                    #[cfg(not(sel4_config_kernel_mcs))]
                     pending_command_gate.retain_after_pending();
                 }
                 RuntimePendingQuantumRoute::PreserveReplyAndYield => {
@@ -70355,7 +70892,10 @@ pub fn runtime_main(task_key: usize) -> ! {
             );
             if let Some(source) = deferred_source {
                 let serviced = service_runtime_notification(source.badge);
-                if notification_route == RuntimeNotificationRoute::PcieTimer && serviced {
+                if notification_route == RuntimeNotificationRoute::PcieTimer
+                    && serviced
+                    && pending_intake.is_none()
+                {
                     pending_intake = pcie_timer_block_after_irq(last_sequence, task_key_marker);
                     pending_command_gate.complete();
                 }
@@ -82168,20 +82708,23 @@ mod tests {
 
     #[test]
     fn top_level_notification_routing_rejects_unowned_badges_without_aliasing() {
-        for (route, badge, expected) in [
+        for (route, badge, expected_service, expected_wake) in [
             (
                 RuntimeNotificationRoute::Serial,
                 DRIVER_RUNTIME_RESERVED_ROOT_BADGE | DRIVER_RUNTIME_SERIAL_IRQ_BADGE,
+                Some(DRIVER_RUNTIME_RESERVED_ROOT_BADGE | DRIVER_RUNTIME_SERIAL_IRQ_BADGE),
                 Some(DRIVER_RUNTIME_RESERVED_ROOT_BADGE | DRIVER_RUNTIME_SERIAL_IRQ_BADGE),
             ),
             (
                 RuntimeNotificationRoute::Genet,
                 DRIVER_RUNTIME_GENET_IRQ_BADGE,
                 Some(DRIVER_RUNTIME_GENET_IRQ_BADGE),
+                Some(DRIVER_RUNTIME_GENET_IRQ_BADGE),
             ),
             (
                 RuntimeNotificationRoute::Genet,
                 DRIVER_RUNTIME_DIRECT_GENET_NOTIFICATION_BADGE,
+                Some(DRIVER_RUNTIME_DIRECT_GENET_NOTIFICATION_BADGE),
                 Some(DRIVER_RUNTIME_DIRECT_GENET_NOTIFICATION_BADGE),
             ),
             (
@@ -82190,49 +82733,62 @@ mod tests {
                 Some(
                     DRIVER_RUNTIME_GENET_IRQ_BADGE | DRIVER_RUNTIME_DIRECT_GENET_NOTIFICATION_BADGE,
                 ),
+                Some(
+                    DRIVER_RUNTIME_GENET_IRQ_BADGE | DRIVER_RUNTIME_DIRECT_GENET_NOTIFICATION_BADGE,
+                ),
             ),
             (
                 RuntimeNotificationRoute::SdioOwner,
                 DRIVER_RUNTIME_SDIO_IRQ_BADGE | DRIVER_RUNTIME_SDIO_DMA_IRQ_BADGE,
+                Some(DRIVER_RUNTIME_SDIO_IRQ_BADGE | DRIVER_RUNTIME_SDIO_DMA_IRQ_BADGE),
                 Some(DRIVER_RUNTIME_SDIO_IRQ_BADGE | DRIVER_RUNTIME_SDIO_DMA_IRQ_BADGE),
             ),
             (
                 RuntimeNotificationRoute::Cyw43Client,
                 DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_BADGE,
                 Some(DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_BADGE),
+                Some(DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_BADGE),
             ),
             (
                 RuntimeNotificationRoute::PcieTimer,
                 DRIVER_RUNTIME_PCIE_TIMER_IRQ_BADGE,
                 Some(DRIVER_RUNTIME_PCIE_TIMER_IRQ_BADGE),
+                Some(DRIVER_RUNTIME_PCIE_TIMER_IRQ_BADGE),
             ),
-            (RuntimeNotificationRoute::PcieTimer, 0, None),
+            (RuntimeNotificationRoute::PcieTimer, 0, None, None),
             (
                 RuntimeNotificationRoute::PcieTimer,
                 DRIVER_RUNTIME_RESERVED_ROOT_BADGE | DRIVER_RUNTIME_PCIE_TIMER_IRQ_BADGE,
-                None,
+                Some(DRIVER_RUNTIME_PCIE_TIMER_IRQ_BADGE),
+                Some(DRIVER_RUNTIME_RESERVED_ROOT_BADGE | DRIVER_RUNTIME_PCIE_TIMER_IRQ_BADGE),
             ),
             (
                 RuntimeNotificationRoute::Genet,
                 DRIVER_RUNTIME_RESERVED_ROOT_BADGE,
                 None,
+                Some(DRIVER_RUNTIME_RESERVED_ROOT_BADGE),
             ),
             (
                 RuntimeNotificationRoute::Genet,
                 DRIVER_RUNTIME_DIRECT_GENET_NOTIFICATION_BADGE << 1,
+                None,
                 None,
             ),
             (
                 RuntimeNotificationRoute::Unavailable,
                 DRIVER_RUNTIME_GENET_IRQ_BADGE,
                 None,
+                None,
             ),
         ] {
-            assert_eq!(runtime_notification_service_badge(route, badge), expected);
+            assert_eq!(
+                runtime_notification_service_badge(route, badge),
+                expected_service,
+            );
             assert_eq!(
                 runtime_notification_wake_badge(route, badge),
-                expected.unwrap_or(0),
-                "the blocking-wait route must preserve the same exact source set",
+                expected_wake.unwrap_or(0),
+                "the blocking-wait route preserves the prompt separately from exact source work",
             );
         }
     }
@@ -82311,6 +82867,7 @@ mod tests {
         assert_eq!(cyw43_admission, RuntimeCommandAdmission::OneWay);
         assert_eq!(
             runtime_idle_prewait_route(
+                false,
                 RuntimeNotificationRoute::Cyw43Client,
                 cyw43_admission,
             ),
@@ -82319,6 +82876,7 @@ mod tests {
         );
         assert_eq!(
             runtime_idle_prewait_route(
+                false,
                 RuntimeNotificationRoute::SdioOwner,
                 RuntimeCommandAdmission::OneWay,
             ),
@@ -82337,14 +82895,22 @@ mod tests {
                 RuntimeNotificationRoute::Cyw43Client,
                 RuntimeCommandAdmission::NeedsReplyCap,
             ),
-            (
-                RuntimeNotificationRoute::Unavailable,
-                RuntimeCommandAdmission::OneWay,
-            ),
         ] {
             assert_eq!(
-                runtime_idle_prewait_route(route, admission),
+                runtime_idle_prewait_route(false, route, admission),
                 RuntimeIdlePrewaitRoute::Block,
+            );
+        }
+        for route in [
+            RuntimeNotificationRoute::Unavailable,
+            RuntimeNotificationRoute::Genet,
+            RuntimeNotificationRoute::SdioOwner,
+            RuntimeNotificationRoute::PcieTimer,
+        ] {
+            assert_eq!(
+                runtime_idle_prewait_route(true, route, RuntimeCommandAdmission::OneWay),
+                RuntimeIdlePrewaitRoute::ReenterCommandPoll,
+                "every MCS one-way command must be stable-read before blocking",
             );
         }
     }
@@ -91363,6 +91929,71 @@ mod tests {
     }
 
     #[test]
+    fn one_way_wait_receipt_requires_exact_durable_ack_and_advances_slices() {
+        let command = endpoint_retained_gate_test_intake(0x52).command;
+        let identity = 0x7345_0001;
+        let mut ring = test_continuation_grant_ring();
+        let base = ring.0.as_mut_ptr() as usize;
+
+        assert!(runtime_one_way_wait_receipt_command_valid(command));
+        assert_eq!(read_runtime_one_way_wait_receipt_at(base), None);
+        assert!(publish_runtime_one_way_wait_receipt_at(
+            base, command, identity, 1,
+        ));
+        let wait = read_runtime_one_way_wait_receipt_at(base).expect("committed DROW");
+        assert!(wait.valid());
+        assert!(!wait.acknowledged());
+        assert_eq!(read_runtime_one_way_wait_ack_at(base), None);
+
+        assert!(runtime_continuation_grant_write_u32(
+            base,
+            core::mem::offset_of!(DriverRuntimeOneWayWaitReceipt, magic),
+            pi4_driver_abi::DRIVER_RUNTIME_ONE_WAY_WAIT_ACK_MAGIC,
+        ));
+        let ack = read_runtime_one_way_wait_ack_at(base).expect("committed DROA");
+        assert!(runtime_one_way_wait_ack_matches(wait, ack));
+        assert!(!runtime_one_way_wait_ack_matches(
+            wait,
+            DriverRuntimeOneWayWaitReceipt {
+                runtime_identity_token: identity ^ 1,
+                ..ack
+            },
+        ));
+        assert!(!runtime_one_way_wait_ack_matches(
+            wait,
+            DriverRuntimeOneWayWaitReceipt {
+                request_sequence: wait.request_sequence.wrapping_add(1),
+                ..ack
+            },
+        ));
+        assert!(!runtime_one_way_wait_ack_matches(
+            wait,
+            DriverRuntimeOneWayWaitReceipt {
+                wait_slice: wait.wait_slice.wrapping_add(1),
+                committed_wait_slice: wait.committed_wait_slice.wrapping_add(1),
+                ..ack
+            },
+        ));
+        assert!(clear_runtime_one_way_wait_receipt_at(base, ack));
+        assert_eq!(read_runtime_one_way_wait_ack_at(base), None);
+
+        let mut gate = RuntimePendingCommandGate::new();
+        assert_eq!(gate.retain_after_pending_one_way(identity), Some(1));
+        assert_eq!(gate.one_way_wait_receipt(command), Some(wait));
+        gate.mark_one_way_root_control_sent();
+        gate.retain_one_way_prompt_debt();
+        assert!(gate.resume_one_way_prompt());
+        assert_eq!(gate.retain_after_pending_one_way(identity), Some(2));
+        assert_eq!(
+            gate.one_way_wait_receipt(command)
+                .map(|receipt| receipt.wait_slice),
+            Some(2),
+        );
+        gate.complete();
+        assert_eq!(gate.retain_after_pending_one_way(identity), Some(1));
+    }
+
+    #[test]
     fn continuation_grant_state_and_id_exhaustion_are_fail_closed() {
         let intake = retained_gate_test_intake(0x8000_0042);
         let command = intake.command;
@@ -92754,6 +93385,137 @@ mod tests {
                     | DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_BADGE,
             ),
             Some(DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_BADGE)
+        );
+    }
+
+    #[test]
+    fn mcs_root_prompt_admits_only_a_fresh_sequence_last_one_way_command() {
+        let command = DriverTaskCommandRecord {
+            sequence: 0x8000_7601,
+            opcode: OPCODE_SERVICE,
+            flags: DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY,
+            arg0: HOT_PATH_USB_KEYBOARD,
+            arg1: ROLE_USB,
+            aux0: DRIVER_RUNTIME_ENGINE_INIT_AUX,
+            aux1: 0,
+            budget: budget(),
+            frame: DriverFrameDescriptor::empty(),
+        };
+        for (route, badge) in [
+            (
+                RuntimeNotificationRoute::Unavailable,
+                DRIVER_RUNTIME_RESERVED_ROOT_BADGE,
+            ),
+            (
+                RuntimeNotificationRoute::Genet,
+                DRIVER_RUNTIME_RESERVED_ROOT_BADGE | DRIVER_RUNTIME_GENET_IRQ_BADGE,
+            ),
+            (
+                RuntimeNotificationRoute::SdioOwner,
+                DRIVER_RUNTIME_RESERVED_ROOT_BADGE | DRIVER_RUNTIME_SDIO_IRQ_BADGE,
+            ),
+            (
+                RuntimeNotificationRoute::PcieTimer,
+                DRIVER_RUNTIME_RESERVED_ROOT_BADGE | DRIVER_RUNTIME_PCIE_TIMER_IRQ_BADGE,
+            ),
+        ] {
+            assert!(runtime_initial_root_prompt(true, route, badge));
+            let intake = runtime_prompted_one_way_intake_after_wake(
+                true,
+                route,
+                badge,
+                command,
+                command.sequence.wrapping_sub(1),
+            )
+            .expect("the MCS prompt seals the fresh stable one-way record");
+            assert_eq!(intake.command, command);
+            assert!(!intake.reply_cap_available);
+            assert!(runtime_prompted_one_way_intake_after_wake(
+                true,
+                route,
+                badge,
+                command,
+                command.sequence,
+            )
+            .is_none());
+            assert!(runtime_prompted_one_way_intake_after_wake(
+                false,
+                route,
+                badge,
+                command,
+                command.sequence.wrapping_sub(1),
+            )
+            .is_none());
+        }
+
+        let mut reply_bearing = command;
+        reply_bearing.flags &= !DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY;
+        assert!(runtime_prompted_one_way_intake_after_wake(
+            true,
+            RuntimeNotificationRoute::Unavailable,
+            DRIVER_RUNTIME_RESERVED_ROOT_BADGE,
+            reply_bearing,
+            reply_bearing.sequence.wrapping_sub(1),
+        )
+        .is_none());
+        assert!(!runtime_initial_root_prompt(
+            true,
+            RuntimeNotificationRoute::Genet,
+            DRIVER_RUNTIME_GENET_IRQ_BADGE,
+        ));
+    }
+
+    #[test]
+    fn root_prompt_is_orthogonal_to_exact_physical_source_badges() {
+        let root = DRIVER_RUNTIME_RESERVED_ROOT_BADGE;
+        for (route, source) in [
+            (
+                RuntimeNotificationRoute::Genet,
+                DRIVER_RUNTIME_GENET_IRQ_BADGE,
+            ),
+            (
+                RuntimeNotificationRoute::SdioOwner,
+                DRIVER_RUNTIME_SDIO_IRQ_BADGE,
+            ),
+            (
+                RuntimeNotificationRoute::PcieTimer,
+                DRIVER_RUNTIME_PCIE_TIMER_IRQ_BADGE,
+            ),
+        ] {
+            let coalesced = root | source;
+            assert_eq!(runtime_notification_wake_badge(route, coalesced), coalesced);
+            assert_eq!(
+                runtime_notification_service_badge(route, coalesced),
+                Some(source)
+            );
+            assert_eq!(runtime_notification_service_badge(route, root), None);
+        }
+        assert_eq!(
+            runtime_notification_wake_badge(RuntimeNotificationRoute::Unavailable, root),
+            root,
+            "USB/HDMI bootstrap accepts only the root scheduling bit",
+        );
+        assert_eq!(
+            runtime_notification_wake_badge(
+                RuntimeNotificationRoute::Genet,
+                root | DRIVER_RUNTIME_GENET_IRQ_BADGE | (1 << 6),
+            ),
+            0,
+            "an unknown low badge cannot alias GENET physical authority",
+        );
+        assert!(!runtime_initial_root_prompt(
+            true,
+            RuntimeNotificationRoute::Genet,
+            root | DRIVER_RUNTIME_GENET_IRQ_BADGE | (1 << 6),
+        ));
+        assert_eq!(
+            pcie_timer_post_irq_wake_route(RuntimeWake::Notification(
+                root | DRIVER_RUNTIME_PCIE_TIMER_IRQ_BADGE,
+            )),
+            PcieTimerPostIrqWakeRoute::RootPrompt {
+                raw_badge: root | DRIVER_RUNTIME_PCIE_TIMER_IRQ_BADGE,
+                service_badge: Some(DRIVER_RUNTIME_PCIE_TIMER_IRQ_BADGE),
+            },
         );
     }
 

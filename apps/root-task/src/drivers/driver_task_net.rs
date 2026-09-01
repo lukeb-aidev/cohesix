@@ -12987,11 +12987,25 @@ fn run_driver_task_net_engine_init_service(
     contract: DriverTaskContract,
     command: DriverTaskCommandRecord,
 ) -> Option<DriverTaskCompletionRecord> {
-    if crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active() {
+    if !genet_engine_init_reply_required(
+        crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active(),
+        cfg!(sel4_config_kernel_mcs),
+    ) {
+        // Classic lacks the supervised Reply/fault lane and preserves the
+        // existing bounded bootstrap send.
         crate::hal::driver_task::run_driver_task_ring_service_nonblocking(contract, command)
     } else {
+        // MCS engine initialization is structurally terminal and its caller
+        // immediately consumes the completion to admit GENET owner state.
+        // Call/Reply therefore carries the complete causal round trip without
+        // a retry, polling loop, or abandoned one-way request.
         crate::hal::driver_task::run_driver_task_ring_service(contract, command)
     }
+}
+
+#[cfg(feature = "kernel")]
+const fn genet_engine_init_reply_required(physical_pi: bool, kernel_mcs: bool) -> bool {
+    !physical_pi || kernel_mcs
 }
 
 #[cfg(feature = "kernel")]
@@ -27935,10 +27949,18 @@ pub(crate) fn refresh_genet_direct_diagnostic(generation: u64) -> GenetDirectDia
     );
     command.aux0 = pi4_driver_abi::DRIVER_RUNTIME_DIRECT_GENET_HANDOFF_AUX;
     command.aux1 = token;
-    let Some(completion) = crate::hal::driver_task::run_driver_task_ring_service_prompt_slice(
-        GENET_DRIVER_TASK_CONTRACT,
-        command,
-    ) else {
+    let completion = if genet_direct_diagnostic_reply_required(cfg!(sel4_config_kernel_mcs)) {
+        // DGHO is a snapshot-only command whose operator caller consumes the
+        // exact terminal immediately. MCS Call/Reply keeps that completion in
+        // one causal activation and cannot strand GENET ring ownership.
+        crate::hal::driver_task::run_driver_task_ring_service(GENET_DRIVER_TASK_CONTRACT, command)
+    } else {
+        crate::hal::driver_task::run_driver_task_ring_service_prompt_slice(
+            GENET_DRIVER_TASK_CONTRACT,
+            command,
+        )
+    };
+    let Some(completion) = completion else {
         return GenetDirectDiagnosticRefresh::Timeout;
     };
     if pi4_driver_abi::driver_runtime_direct_genet_handoff_completion_exact(
@@ -27956,6 +27978,11 @@ pub(crate) fn refresh_genet_direct_diagnostic(generation: u64) -> GenetDirectDia
     } else {
         GenetDirectDiagnosticRefresh::Rejected
     }
+}
+
+#[cfg(feature = "kernel")]
+const fn genet_direct_diagnostic_reply_required(kernel_mcs: bool) -> bool {
+    kernel_mcs
 }
 
 #[cfg(feature = "kernel")]
@@ -60213,5 +60240,16 @@ mod tests {
             completion.detail,
             DriverTaskFaultCode::DeviceUnavailable.as_u16()
         );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn synchronous_genet_init_and_diagnostic_use_mcs_reply_lane() {
+        assert!(genet_engine_init_reply_required(true, true));
+        assert!(!genet_engine_init_reply_required(true, false));
+        assert!(genet_engine_init_reply_required(false, true));
+        assert!(genet_engine_init_reply_required(false, false));
+        assert!(genet_direct_diagnostic_reply_required(true));
+        assert!(!genet_direct_diagnostic_reply_required(false));
     }
 }

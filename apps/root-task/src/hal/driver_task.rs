@@ -28,7 +28,8 @@ use pi4_driver_abi::{
     DriverRuntimeCyw43BusEpisodeRecord, DriverRuntimeCyw43CommandDescriptor,
     DriverRuntimeCyw43DpcChildTimingEntry, DriverRuntimeCyw43DpcChildTimingRecord,
     DriverRuntimeCyw43DpcClientRecord, DriverRuntimeDpcEventRing,
-    DriverRuntimeFramebufferDescriptor, DriverRuntimeInitDescriptor, DriverRuntimePcieTimerState,
+    DriverRuntimeFramebufferDescriptor, DriverRuntimeInitDescriptor,
+    DriverRuntimeOneWayWaitReceipt, DriverRuntimePcieTimerState,
     DriverRuntimePersistentWaitReceipt, DriverRuntimeSdioClockSnapshot,
     DriverRuntimeSdioDeadlineArm, DriverRuntimeSdioPhysicalLifetimeRecord,
     DriverRuntimeSerialRxState, DriverRuntimeSerialSpscHeader, DriverRuntimeSteadyServiceProgress,
@@ -57,11 +58,12 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_INIT_FLAG_IRQS_BOUND, DRIVER_RUNTIME_INIT_FLAG_POLL_ONLY,
     DRIVER_RUNTIME_INIT_VERSION, DRIVER_RUNTIME_IRQ_TRIGGER_LEVEL,
     DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT, DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX,
-    DRIVER_RUNTIME_NET_INIT_AUX, DRIVER_RUNTIME_PCIE_OP_ROOT_IDLE_TIMER_ENABLE,
-    DRIVER_RUNTIME_PCIE_TIMER_STATE_BYTES, DRIVER_RUNTIME_PCIE_TIMER_STATE_DISARMED,
-    DRIVER_RUNTIME_PCIE_TIMER_STATE_OFFSET, DRIVER_RUNTIME_PERSISTENT_WAIT_RECEIPT_BYTES,
-    DRIVER_RUNTIME_PERSISTENT_WAIT_RECEIPT_OFFSET, DRIVER_RUNTIME_RING_PROGRESS_COMMAND_OBSERVED,
-    DRIVER_RUNTIME_RING_PROGRESS_COMMAND_VALIDATED,
+    DRIVER_RUNTIME_NET_INIT_AUX, DRIVER_RUNTIME_ONE_WAY_WAIT_ACK_MAGIC,
+    DRIVER_RUNTIME_ONE_WAY_WAIT_RECEIPT_BYTES, DRIVER_RUNTIME_ONE_WAY_WAIT_RECEIPT_OFFSET,
+    DRIVER_RUNTIME_PCIE_OP_ROOT_IDLE_TIMER_ENABLE, DRIVER_RUNTIME_PCIE_TIMER_STATE_BYTES,
+    DRIVER_RUNTIME_PCIE_TIMER_STATE_DISARMED, DRIVER_RUNTIME_PCIE_TIMER_STATE_OFFSET,
+    DRIVER_RUNTIME_PERSISTENT_WAIT_RECEIPT_BYTES, DRIVER_RUNTIME_PERSISTENT_WAIT_RECEIPT_OFFSET,
+    DRIVER_RUNTIME_RING_PROGRESS_COMMAND_OBSERVED, DRIVER_RUNTIME_RING_PROGRESS_COMMAND_VALIDATED,
     DRIVER_RUNTIME_RING_PROGRESS_COMPLETION_PUBLISH,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_ALP_POLL,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_ALP_REQUEST,
@@ -1602,9 +1604,66 @@ pub const DRIVER_TASK_RING_FLAG_ROOT_CONTEXT_NON_ACCEPTANCE: u16 = 1 << 15;
 pub const DRIVER_TASK_RING_FLAG_INIT_DESCRIPTOR_NON_ACCEPTANCE: u16 = 1 << 14;
 /// Command flag used for send-only bootstrap/nonblocking turns.
 ///
-/// The linked runtime must not issue `Reply` for these commands because `NbSend`
-/// does not install a reply cap. Completion still travels through the shared ring.
+/// The linked runtime must not issue `Reply` for these commands. Classic
+/// kernels use `NbSend`; MCS uses one reserved-badge notification prompt, and
+/// neither transport installs a reply cap. Completion still travels through
+/// the shared ring.
 pub const DRIVER_TASK_RING_FLAG_ONE_WAY: u16 = DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY;
+
+/// Kernel transport selected for one published driver-ring command.
+///
+/// MCS reserves the command endpoint for reply-bearing `Call` traffic. A
+/// one-way command carries its complete authority in the sequence-last shared
+/// record and uses the runtime's reserved-badge notification only as one
+/// coalescing scheduling prompt. Classic kernels retain the established
+/// nonblocking endpoint transport.
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DriverTaskRingTransport {
+    EndpointCall,
+    EndpointNonBlocking,
+    McsNotificationPrompt,
+}
+
+#[cfg(feature = "kernel")]
+const fn driver_task_ring_transport(
+    kernel_mcs: bool,
+    command_flags: u16,
+) -> DriverTaskRingTransport {
+    if command_flags & DRIVER_TASK_RING_FLAG_ONE_WAY == 0 {
+        DriverTaskRingTransport::EndpointCall
+    } else if kernel_mcs {
+        DriverTaskRingTransport::McsNotificationPrompt
+    } else {
+        DriverTaskRingTransport::EndpointNonBlocking
+    }
+}
+
+#[cfg(feature = "kernel")]
+const fn driver_task_ring_active_request_resume_allowed(
+    mode: DriverTaskRingCommandMode,
+    transport: DriverTaskRingTransport,
+    exact_terminal_drain: bool,
+    legacy_timeout_retention: bool,
+) -> bool {
+    driver_task_ring_mode_uses_bounded_send(mode)
+        && (exact_terminal_drain
+            || matches!(transport, DriverTaskRingTransport::McsNotificationPrompt)
+            || legacy_timeout_retention)
+}
+
+#[cfg(feature = "kernel")]
+const fn driver_task_mcs_initial_identity_frontier_pending(
+    transport: DriverTaskRingTransport,
+    command: DriverTaskCommandRecord,
+    runtime_identity_token: u32,
+) -> bool {
+    matches!(transport, DriverTaskRingTransport::McsNotificationPrompt)
+        && runtime_identity_token == 0
+        && command.aux0 == DRIVER_RUNTIME_INIT_AUX
+        && command.flags & DRIVER_TASK_RING_FLAG_INIT_DESCRIPTOR_NON_ACCEPTANCE != 0
+        && command.flags & DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY != 0
+}
 /// Command flag used by root to keep proven high-frequency dataplane turns out
 /// of serial timeout/progress tracing while preserving fault and budget traces.
 pub const DRIVER_TASK_RING_FLAG_QUIET_HOT_PATH: u16 = 1 << 12;
@@ -2848,6 +2907,14 @@ fn driver_task_ring_invalidate_root_range(vaddr: usize, len: usize) {
 }
 
 #[cfg(feature = "kernel")]
+fn reset_driver_task_mcs_one_way_wait_state(slot: &DriverTaskCommandSlot) {
+    slot.mcs_one_way_wait_cap_generation
+        .store(0, Ordering::Release);
+    slot.mcs_one_way_last_prompted_slice
+        .store(0, Ordering::Release);
+}
+
+#[cfg(feature = "kernel")]
 fn driver_task_ring_stage_command_record(
     slot: &DriverTaskCommandSlot,
     ring_root_ptr: usize,
@@ -2865,6 +2932,7 @@ fn driver_task_ring_stage_command_record(
         core::ptr::write_volatile(completion_ptr, completion_reset);
         core::ptr::write_volatile(command_ptr, staged_command);
     }
+    reset_driver_task_mcs_one_way_wait_state(slot);
     driver_task_ring_clear_continuation_grant(slot, ring_root_ptr);
     driver_task_ring_clean_root_range(
         completion_ptr as usize,
@@ -3118,6 +3186,55 @@ fn driver_task_ring_read_persistent_wait_receipt(
             wait_epoch
         ))?,
         committed_wait_epoch: first_commit,
+    };
+    driver_task_shared_load_barrier();
+    driver_task_ring_invalidate_root_range(base + commit_offset, core::mem::size_of::<u32>());
+    (word(commit_offset)? == first_commit && receipt.valid()).then_some(receipt)
+}
+
+/// Stable-read one generic MCS one-way runtime's exact parked-wait receipt.
+///
+/// The record shares the auxiliary grant/progress slot only with command modes
+/// that are mutually exclusive with generic one-way work. Root samples the
+/// sequence-last commit twice around the primitive body; a missing, torn, or
+/// structurally invalid record grants no scheduling edge.
+#[cfg(feature = "kernel")]
+fn driver_task_ring_read_one_way_wait_receipt(
+    ring_root_ptr: usize,
+) -> Option<DriverRuntimeOneWayWaitReceipt> {
+    let base_offset = usize::from(DRIVER_RUNTIME_ONE_WAY_WAIT_RECEIPT_OFFSET);
+    let base = ring_root_ptr + base_offset;
+    let ring = DriverTaskRingView::new(ring_root_ptr)?;
+    driver_task_ring_invalidate_root_range(
+        base,
+        usize::from(DRIVER_RUNTIME_ONE_WAY_WAIT_RECEIPT_BYTES),
+    );
+    let word = |offset: usize| ring.read_u32(base_offset.checked_add(offset)?);
+    let commit_offset = core::mem::offset_of!(DriverRuntimeOneWayWaitReceipt, committed_wait_slice);
+    let first_commit = word(commit_offset)?;
+    if first_commit == 0 {
+        return None;
+    }
+    driver_task_shared_load_barrier();
+    let receipt = DriverRuntimeOneWayWaitReceipt {
+        magic: word(core::mem::offset_of!(DriverRuntimeOneWayWaitReceipt, magic))?,
+        request_sequence: word(core::mem::offset_of!(
+            DriverRuntimeOneWayWaitReceipt,
+            request_sequence
+        ))?,
+        action_fingerprint: word(core::mem::offset_of!(
+            DriverRuntimeOneWayWaitReceipt,
+            action_fingerprint
+        ))?,
+        runtime_identity_token: word(core::mem::offset_of!(
+            DriverRuntimeOneWayWaitReceipt,
+            runtime_identity_token
+        ))?,
+        wait_slice: word(core::mem::offset_of!(
+            DriverRuntimeOneWayWaitReceipt,
+            wait_slice
+        ))?,
+        committed_wait_slice: first_commit,
     };
     driver_task_shared_load_barrier();
     driver_task_ring_invalidate_root_range(base + commit_offset, core::mem::size_of::<u32>());
@@ -4718,6 +4835,9 @@ struct DriverTaskCommandSlot {
     mcs_nonblocking_root_producers: AtomicUsize,
     mcs_producer_drain_reported: AtomicU32,
     active_command_fingerprint: AtomicU32,
+    runtime_identity_token: AtomicU32,
+    mcs_one_way_wait_cap_generation: AtomicU32,
+    mcs_one_way_last_prompted_slice: AtomicU32,
     semantic_terminal_request: AtomicU32,
     semantic_terminal_fingerprint: AtomicU32,
     semantic_terminal_aux1: AtomicU32,
@@ -5449,6 +5569,9 @@ impl DriverTaskCommandSlot {
             mcs_nonblocking_root_producers: AtomicUsize::new(0),
             mcs_producer_drain_reported: AtomicU32::new(0),
             active_command_fingerprint: AtomicU32::new(0),
+            runtime_identity_token: AtomicU32::new(0),
+            mcs_one_way_wait_cap_generation: AtomicU32::new(0),
+            mcs_one_way_last_prompted_slice: AtomicU32::new(0),
             semantic_terminal_request: AtomicU32::new(0),
             semantic_terminal_fingerprint: AtomicU32::new(0),
             semantic_terminal_aux1: AtomicU32::new(0),
@@ -5670,6 +5793,51 @@ impl DriverTaskSerialSpscRootGuard<'_> {
             && self.slot.root_notification.load(Ordering::Acquire) == self.notification
             && self.slot.mcs_cap_generation.load(Ordering::Acquire) == self.cap_generation
     }
+}
+
+/// Immutable capability snapshot for one MCS root-to-runtime scheduling
+/// prompt.
+///
+/// The enclosing nonblocking-producer guard prevents capability revocation
+/// until this root turn exits. This snapshot additionally proves that the
+/// exact endpoint generation and its send-only reserved-badge notification
+/// publication still describe the runtime whose shared ring was committed.
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy)]
+struct DriverTaskMcsOneWayNotificationGuard<'a> {
+    slot: &'a DriverTaskCommandSlot,
+    endpoint: usize,
+    notification: usize,
+    cap_generation: u32,
+}
+
+#[cfg(feature = "kernel")]
+impl DriverTaskMcsOneWayNotificationGuard<'_> {
+    fn publication_still_live(self) -> bool {
+        self.endpoint != 0
+            && self.notification != 0
+            && self.cap_generation != 0
+            && self.slot.mcs_command_admission_open.load(Ordering::Acquire) != 0
+            && self.slot.endpoint.load(Ordering::Acquire) == self.endpoint
+            && self.slot.root_notification.load(Ordering::Acquire) == self.notification
+            && self.slot.mcs_cap_generation.load(Ordering::Acquire) == self.cap_generation
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn acquire_driver_task_mcs_one_way_notification_guard(
+    slot: &DriverTaskCommandSlot,
+    endpoint: usize,
+) -> Option<DriverTaskMcsOneWayNotificationGuard<'_>> {
+    let notification = slot.root_notification.load(Ordering::Acquire);
+    let cap_generation = slot.mcs_cap_generation.load(Ordering::Acquire);
+    let guard = DriverTaskMcsOneWayNotificationGuard {
+        slot,
+        endpoint,
+        notification,
+        cap_generation,
+    };
+    guard.publication_still_live().then_some(guard)
 }
 
 #[cfg(feature = "kernel")]
@@ -12389,6 +12557,8 @@ pub fn clear_driver_task_transport(contract: DriverTaskContract) {
     reset_driver_task_retained_priority_lease_slot(slot);
     slot.active.store(0, Ordering::Release);
     slot.active_command_fingerprint.store(0, Ordering::Release);
+    slot.runtime_identity_token.store(0, Ordering::Release);
+    reset_driver_task_mcs_one_way_wait_state(slot);
     slot.request_seq.store(0, Ordering::Release);
     slot.last_progress_magic.store(0, Ordering::Release);
     slot.last_progress_sequence.store(0, Ordering::Release);
@@ -15277,74 +15447,295 @@ where
     true
 }
 
-/// Immutable identity for the sole endpoint notification of one finite HDMI
-/// frame after its sequence-last commit.
+/// Immutable identity for the sole MCS notification prompt of one one-way
+/// driver command after its sequence-last commit.
 #[cfg(feature = "kernel")]
-struct McsHdmiFiniteFrameSignal<'a> {
+struct DriverTaskMcsOneWayPrompt<'a> {
     slot: &'a DriverTaskCommandSlot,
+    notification_guard: DriverTaskMcsOneWayNotificationGuard<'a>,
     contract: DriverTaskContract,
     command: DriverTaskCommandRecord,
-    endpoint: usize,
     request: usize,
     fingerprint: u32,
     ring_root_ptr: usize,
+    mode: DriverTaskRingCommandMode,
 }
 
-/// Revalidate and signal one exact MCS HDMI frame once.
-///
-/// The caller supplies whether it is modeling an MCS kernel so the pure unit
-/// contract remains testable on the host. Production always passes generated
-/// `sel4_config_kernel_mcs` truth. Phase advances before the endpoint send;
-/// any later retry or identity tear therefore fails closed instead of
-/// duplicating a frame notification.
 #[cfg(feature = "kernel")]
-fn signal_mcs_hdmi_finite_frame_with<B, F>(
-    context: McsHdmiFiniteFrameSignal<'_>,
-    mcs_enabled: bool,
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DriverTaskMcsOneWayPromptResult {
+    Signalled,
+    AlreadySignalled,
+    Invalid,
+}
+
+/// Revalidate and signal one exact MCS one-way command once.
+///
+/// The durable command record is the sole authority. The request is marked
+/// issued before the callback and notification, so a repeated producer turn
+/// can only observe `AlreadySignalled`; it can never manufacture a second
+/// edge. The callback is a deterministic test seam for verifying that the
+/// sequence-last commit precedes the signal.
+#[cfg(feature = "kernel")]
+fn signal_driver_task_mcs_one_way_prompt_with<B, F>(
+    context: DriverTaskMcsOneWayPrompt<'_>,
     before_signal: B,
     signal: F,
-) -> bool
+) -> DriverTaskMcsOneWayPromptResult
 where
     B: FnOnce(),
     F: FnOnce(usize),
 {
-    let McsHdmiFiniteFrameSignal {
+    let DriverTaskMcsOneWayPrompt {
         slot,
+        notification_guard,
         contract,
         command,
-        endpoint,
         request,
         fingerprint,
         ring_root_ptr,
+        mode,
     } = context;
-    if mcs_hdmi_finite_frame_target_mask(mcs_enabled, contract, command) != Some(0)
+    if driver_task_ring_transport(true, command.flags)
+        != DriverTaskRingTransport::McsNotificationPrompt
         || request == 0
         || fingerprint == 0
         || command.sequence as usize != request
-        || endpoint == 0
-        || slot.endpoint.load(Ordering::Acquire) != endpoint
         || ring_root_ptr == 0
         || slot.ring_root_ptr.load(Ordering::Acquire) != ring_root_ptr
         || slot.active.load(Ordering::Acquire) == 0
         || slot.request_seq.load(Ordering::Acquire) != request
         || slot.active_command_fingerprint.load(Ordering::Acquire) != fingerprint
-        || !driver_task_retained_lease_identity_matches(slot, contract, request, fingerprint)
-        || slot.retained_priority_lease_mask.load(Ordering::Acquire) != 0
-        || DriverTaskRetainedLeasePhase::from_usize(
-            slot.retained_priority_lease_phase.load(Ordering::Acquire),
-        ) != Some(DriverTaskRetainedLeasePhase::Committed)
-        || slot.retained_doorbell_issued.load(Ordering::Acquire) == 0
-        || slot.retained_steady_tx_fast_lane.load(Ordering::Acquire) != 0
-        || slot.retained_grant_id.load(Ordering::Acquire) != 0
+        || !notification_guard.publication_still_live()
         || !driver_task_ring_exact_command_is_stable(slot, ring_root_ptr, command)
-        || !mark_driver_task_retained_priority_lease_issued(slot, false)
+        || (mode == DriverTaskRingCommandMode::RetainedTurn
+            && (!driver_task_retained_lease_identity_matches(slot, contract, request, fingerprint)
+                || slot.retained_doorbell_issued.load(Ordering::Acquire) == 0
+                || driver_task_retained_uses_root_grant(contract, command)
+                || command.flags & DRIVER_RUNTIME_COMMAND_FLAG_PERSISTENT_TRANSACTION != 0
+                || command.flags & DRIVER_RUNTIME_COMMAND_FLAG_STEADY_SERVICE_LEASE != 0))
+    {
+        return DriverTaskMcsOneWayPromptResult::Invalid;
+    }
+    let claimed = if mode == DriverTaskRingCommandMode::RetainedTurn {
+        if DriverTaskRetainedLeasePhase::from_usize(
+            slot.retained_priority_lease_phase.load(Ordering::Acquire),
+        ) == Some(DriverTaskRetainedLeasePhase::Issued)
+        {
+            return DriverTaskMcsOneWayPromptResult::AlreadySignalled;
+        }
+        mark_driver_task_retained_priority_lease_issued(slot, false)
+    } else {
+        match slot.retained_doorbell_issued.compare_exchange(
+            0,
+            1,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        ) {
+            Ok(_) => true,
+            Err(1) => return DriverTaskMcsOneWayPromptResult::AlreadySignalled,
+            Err(_) => false,
+        }
+    };
+    if !claimed {
+        return DriverTaskMcsOneWayPromptResult::Invalid;
+    }
+    slot.mcs_one_way_wait_cap_generation
+        .store(notification_guard.cap_generation, Ordering::Release);
+    slot.mcs_one_way_last_prompted_slice
+        .store(0, Ordering::Release);
+    before_signal();
+    if !notification_guard.publication_still_live()
+        || !driver_task_ring_exact_command_is_stable(slot, ring_root_ptr, command)
+    {
+        return DriverTaskMcsOneWayPromptResult::Invalid;
+    }
+    driver_task_counter_add(&slot.counters.send_attempts, 1);
+    #[cfg(test)]
+    TEST_ROOT_NOTIFICATION_SIGNALS.fetch_add(1, Ordering::AcqRel);
+    signal(notification_guard.notification);
+    DriverTaskMcsOneWayPromptResult::Signalled
+}
+
+/// Exact identity for one post-quantum generic MCS one-way continuation.
+#[cfg(feature = "kernel")]
+struct DriverTaskMcsOneWayContinuation<'a> {
+    slot: &'a DriverTaskCommandSlot,
+    notification_guard: DriverTaskMcsOneWayNotificationGuard<'a>,
+    contract: DriverTaskContract,
+    command: DriverTaskCommandRecord,
+    request: usize,
+    fingerprint: u32,
+    ring_root_ptr: usize,
+    mode: DriverTaskRingCommandMode,
+}
+
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DriverTaskMcsOneWayContinuationResult {
+    Signalled,
+    NotReady,
+    AlreadySignalled,
+    Invalid,
+}
+
+/// Replace one exact child-owned `DROW` wait with root-owned `DROA`.
+///
+/// The child is parked before it transfers the record to root, so changing
+/// only the magic word cannot race a legitimate child clear. The acknowledged
+/// record is cleaned before the notification scheduling hint; the child must
+/// observe the exact `DROA` body before it may resume foreground work.
+#[cfg(feature = "kernel")]
+fn driver_task_ring_ack_one_way_wait_receipt(
+    slot: &DriverTaskCommandSlot,
+    ring_root_ptr: usize,
+    expected: DriverRuntimeOneWayWaitReceipt,
+) -> bool {
+    if !expected.valid()
+        || driver_task_ring_read_one_way_wait_receipt(ring_root_ptr) != Some(expected)
     {
         return false;
     }
-    before_signal();
-    driver_task_counter_add(&slot.counters.send_attempts, 1);
-    signal(endpoint);
+    let magic_ptr = (ring_root_ptr
+        + usize::from(DRIVER_RUNTIME_ONE_WAY_WAIT_RECEIPT_OFFSET)
+        + core::mem::offset_of!(DriverRuntimeOneWayWaitReceipt, magic))
+        as *mut u32;
+    // SAFETY: The admitted ring page contains the fixed primitive DROW record.
+    // The parked child has transferred ownership of the magic word to root;
+    // root writes the sole acknowledgement value before signalling that child.
+    unsafe {
+        core::ptr::write_volatile(magic_ptr, DRIVER_RUNTIME_ONE_WAY_WAIT_ACK_MAGIC);
+    }
+    driver_task_ring_clean_root_range(magic_ptr as usize, core::mem::size_of::<u32>());
+    driver_task_record_cache_clean(slot, core::mem::size_of::<u32>());
+    driver_task_ring_publish_barrier(ring_root_ptr);
     true
+}
+
+/// Acknowledge and signal exactly the next wait slice for one immutable command.
+///
+/// A notification badge is never authority. Root first proves the active ring,
+/// full command fingerprint, sealed runtime identity, exact MCS capability
+/// generation, and strictly next slice. It then records that slice, publishes
+/// the durable acknowledgement, and emits one coalescing scheduling hint.
+#[cfg(feature = "kernel")]
+fn signal_driver_task_mcs_one_way_continuation_with<C, R, A, B, F>(
+    context: DriverTaskMcsOneWayContinuation<'_>,
+    mut completion_visible: C,
+    read_receipt: R,
+    acknowledge: A,
+    before_signal: B,
+    signal: F,
+) -> DriverTaskMcsOneWayContinuationResult
+where
+    C: FnMut() -> bool,
+    R: FnOnce() -> Option<DriverRuntimeOneWayWaitReceipt>,
+    A: FnOnce(DriverRuntimeOneWayWaitReceipt) -> bool,
+    B: FnOnce(),
+    F: FnOnce(usize),
+{
+    let DriverTaskMcsOneWayContinuation {
+        slot,
+        notification_guard,
+        contract,
+        command,
+        request,
+        fingerprint,
+        ring_root_ptr,
+        mode,
+    } = context;
+    let runtime_identity_token = slot.runtime_identity_token.load(Ordering::Acquire);
+    if driver_task_ring_transport(true, command.flags)
+        != DriverTaskRingTransport::McsNotificationPrompt
+        || command.flags & DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY == 0
+        || command.flags
+            & (DRIVER_RUNTIME_COMMAND_FLAG_STEADY_SERVICE_LEASE
+                | DRIVER_RUNTIME_COMMAND_FLAG_PERSISTENT_TRANSACTION)
+            != 0
+        || driver_task_retained_uses_root_grant(contract, command)
+        || request == 0
+        || fingerprint == 0
+        || command.sequence as usize != request
+        || ring_root_ptr == 0
+        || runtime_identity_token == 0
+        || slot.ring_root_ptr.load(Ordering::Acquire) != ring_root_ptr
+        || slot.active.load(Ordering::Acquire) == 0
+        || slot.request_seq.load(Ordering::Acquire) != request
+        || slot.active_command_fingerprint.load(Ordering::Acquire) != fingerprint
+        || slot.mcs_one_way_wait_cap_generation.load(Ordering::Acquire)
+            != notification_guard.cap_generation
+        || !notification_guard.publication_still_live()
+        || !driver_task_ring_exact_command_is_stable(slot, ring_root_ptr, command)
+        || (mode == DriverTaskRingCommandMode::RetainedTurn
+            && (!driver_task_retained_lease_identity_matches(slot, contract, request, fingerprint)
+                || slot.retained_doorbell_issued.load(Ordering::Acquire) == 0))
+    {
+        return DriverTaskMcsOneWayContinuationResult::Invalid;
+    }
+    if completion_visible() {
+        return DriverTaskMcsOneWayContinuationResult::NotReady;
+    }
+    let Some(receipt) = read_receipt() else {
+        return DriverTaskMcsOneWayContinuationResult::NotReady;
+    };
+    if receipt.request_sequence != request as u32
+        || receipt.action_fingerprint != driver_task_runtime_continuation_fingerprint(command)
+        || receipt.runtime_identity_token != runtime_identity_token
+    {
+        return DriverTaskMcsOneWayContinuationResult::Invalid;
+    }
+    let last = slot.mcs_one_way_last_prompted_slice.load(Ordering::Acquire);
+    if receipt.wait_slice == last {
+        // A successfully acknowledged slice no longer carries DROW magic.
+        // Seeing the same DROW after the cursor advanced proves the prior ACK
+        // did not commit and must enter containment, not a benign duplicate.
+        return DriverTaskMcsOneWayContinuationResult::Invalid;
+    }
+    if last.checked_add(1) != Some(receipt.wait_slice) {
+        return DriverTaskMcsOneWayContinuationResult::Invalid;
+    }
+    if completion_visible() {
+        return DriverTaskMcsOneWayContinuationResult::NotReady;
+    }
+    match slot.mcs_one_way_last_prompted_slice.compare_exchange(
+        last,
+        receipt.wait_slice,
+        Ordering::AcqRel,
+        Ordering::Acquire,
+    ) {
+        Ok(_) => {}
+        Err(observed) if observed == receipt.wait_slice => {
+            return DriverTaskMcsOneWayContinuationResult::AlreadySignalled;
+        }
+        Err(_) => return DriverTaskMcsOneWayContinuationResult::Invalid,
+    }
+    if completion_visible() {
+        return DriverTaskMcsOneWayContinuationResult::NotReady;
+    }
+    if !notification_guard.publication_still_live()
+        || !driver_task_ring_exact_command_is_stable(slot, ring_root_ptr, command)
+    {
+        return DriverTaskMcsOneWayContinuationResult::Invalid;
+    }
+    before_signal();
+    if completion_visible() {
+        return DriverTaskMcsOneWayContinuationResult::NotReady;
+    }
+    if !notification_guard.publication_still_live()
+        || !driver_task_ring_exact_command_is_stable(slot, ring_root_ptr, command)
+        || !acknowledge(receipt)
+    {
+        return DriverTaskMcsOneWayContinuationResult::Invalid;
+    }
+    // Once DROA is durable the child may consume it on any already-pending
+    // local wake. The enclosing producer guard keeps this capability
+    // generation live, so root must now emit the coalescing hint
+    // unconditionally; no post-ack observation can revoke that edge.
+    driver_task_counter_add(&slot.counters.send_attempts, 1);
+    #[cfg(test)]
+    TEST_ROOT_NOTIFICATION_SIGNALS.fetch_add(1, Ordering::AcqRel);
+    signal(notification_guard.notification);
+    DriverTaskMcsOneWayContinuationResult::Signalled
 }
 
 /// Re-arm one immutable retained continuation after a completion poll miss.
@@ -16474,6 +16865,11 @@ pub fn record_driver_runtime_descriptor_seal(
     {
         return false;
     }
+    let Some(slot) = slot_for_task_key(task_key) else {
+        return false;
+    };
+    slot.runtime_identity_token
+        .store(descriptor.identity_token, Ordering::Release);
     DRIVER_TASK_RUNTIME_DESCRIPTOR_SEAL_HOT_PATH_MASK
         .fetch_or(hot_path.owner_state_bit(), Ordering::AcqRel);
     true
@@ -17726,6 +18122,8 @@ fn reset_cyw43_sdio_restart_ring(
     slot.request_seq.store(0, Ordering::Release);
     slot.active.store(0, Ordering::Release);
     slot.active_command_fingerprint.store(0, Ordering::Release);
+    slot.runtime_identity_token.store(0, Ordering::Release);
+    reset_driver_task_mcs_one_way_wait_state(slot);
     slot.timeout_resumes.store(0, Ordering::Release);
     slot.retained_priority_boost_active
         .store(0, Ordering::Release);
@@ -19820,6 +20218,14 @@ fn service_deferred_runtime_init_descriptor_turn(
         DriverTaskDescriptorReplayMode::RetainedTurn => {
             run_driver_task_ring_command_retained_turn_staged(contract, command, &staging_segments)
         }
+        DriverTaskDescriptorReplayMode::Bounded if cfg!(sel4_config_kernel_mcs) => {
+            // The descriptor validator is structurally terminal and its caller
+            // consumes the exact completion to seal the runtime identity. Use
+            // the supervised MCS Call/Reply lane so the initial publication
+            // and seal form one causal activation instead of stranding an
+            // asynchronous request before an identity token exists.
+            run_driver_task_ring_command_staged(contract, command, &staging_segments)
+        }
         DriverTaskDescriptorReplayMode::Bounded
             if deferred_runtime_init_replay_must_be_bounded(hot_path) =>
         {
@@ -21077,6 +21483,23 @@ impl DriverTaskRingCommandMode {
 }
 
 #[cfg(feature = "kernel")]
+const fn driver_task_ring_bootstrap_command_mode(kernel_mcs: bool) -> DriverTaskRingCommandMode {
+    if kernel_mcs {
+        // Bootstrap callers consume the exact completion synchronously in
+        // order to seal the first runtime identity or prove the QEMU
+        // pointer-free trampoline. MCS therefore uses Call/Reply and donates
+        // this root activation to the child; classifying that command as
+        // one-way would return Pending before either caller can retain it.
+        DriverTaskRingCommandMode::Steady
+    } else {
+        // Classic has no supervised MCS Reply lane. Preserve its existing
+        // bounded bootstrap send contract so a failed child cannot block the
+        // root shell indefinitely.
+        DriverTaskRingCommandMode::Bootstrap
+    }
+}
+
+#[cfg(feature = "kernel")]
 fn driver_task_ring_call_trace_enabled(
     contract: DriverTaskContract,
     command: DriverTaskCommandRecord,
@@ -22131,7 +22554,11 @@ pub fn run_driver_task_ring_command_bootstrap(
     contract: DriverTaskContract,
     command: DriverTaskCommandRecord,
 ) -> Option<DriverTaskCompletionRecord> {
-    run_driver_task_ring_command_with_mode(contract, command, DriverTaskRingCommandMode::Bootstrap)
+    run_driver_task_ring_command_with_mode(
+        contract,
+        command,
+        driver_task_ring_bootstrap_command_mode(cfg!(sel4_config_kernel_mcs)),
+    )
 }
 
 /// Execute a bootstrap command with atomic staged-byte publication.
@@ -22144,7 +22571,7 @@ pub fn run_driver_task_ring_command_bootstrap_staged(
     run_driver_task_ring_command_with_mode_and_staging(
         contract,
         command,
-        DriverTaskRingCommandMode::Bootstrap,
+        driver_task_ring_bootstrap_command_mode(cfg!(sel4_config_kernel_mcs)),
         staging_segments,
     )
 }
@@ -22398,6 +22825,26 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
         return None;
     }
     command.flags = driver_task_ring_flags_for_mode(mode, command.flags);
+    let ring_transport = driver_task_ring_transport(cfg!(sel4_config_kernel_mcs), command.flags);
+    let mcs_one_way_notification_guard = if ring_transport
+        == DriverTaskRingTransport::McsNotificationPrompt
+    {
+        let Some(guard) = acquire_driver_task_mcs_one_way_notification_guard(slot, endpoint) else {
+            // The command endpoint is Call-only under MCS. Reject before
+            // Stage publishes any request identity when the matching
+            // generation's reserved-badge prompt cap is unavailable.
+            emit_driver_task_ring_resource_submit_status(
+                contract,
+                command,
+                "runtime-ring-submit",
+                "mcs-one-way-notification-missing",
+            );
+            return None;
+        };
+        Some(guard)
+    } else {
+        None
+    };
     let staged_cyw43_descriptor_header =
         driver_task_staged_cyw43_descriptor_header(command, staging_segments);
     let steady_tx_descriptor_marked = contract == CYW43_WIFI_DRIVER_TASK_CONTRACT
@@ -22530,8 +22977,12 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
         return None;
     }
     let same_request_resume = active_before_submit
-        && driver_task_ring_mode_uses_bounded_send(mode)
-        && (exact_terminal_drain || driver_task_ring_timeout_keeps_active(contract, command, mode))
+        && driver_task_ring_active_request_resume_allowed(
+            mode,
+            ring_transport,
+            exact_terminal_drain,
+            driver_task_ring_timeout_keeps_active(contract, command, mode),
+        )
         && slot.active_command_fingerprint.load(Ordering::Acquire) == command_fingerprint;
     let closing_cyw43_parent_resume = mode == DriverTaskRingCommandMode::RetainedTurn
         && contract == CYW43_WIFI_DRIVER_TASK_CONTRACT
@@ -22794,6 +23245,52 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
     // that local value aligned with the already-published request; no shared
     // byte is rewritten and the staging fingerprint still fences all fields.
     command.sequence = request as u32;
+    let trace_call = driver_task_ring_call_trace_enabled(contract, command, mode);
+    if mode != DriverTaskRingCommandMode::RetainedTurn
+        && ring_transport == DriverTaskRingTransport::McsNotificationPrompt
+    {
+        let Some(notification_guard) = mcs_one_way_notification_guard else {
+            return None;
+        };
+        // The command body and sequence-last identity are already clean and
+        // visible. Signal exactly once in this producer activation; later
+        // prompt slices may only poll the same durable request.
+        cache_counter_batch.flush(slot);
+        match signal_driver_task_mcs_one_way_prompt_with(
+            DriverTaskMcsOneWayPrompt {
+                slot,
+                notification_guard,
+                contract,
+                command,
+                request,
+                fingerprint: command_fingerprint,
+                ring_root_ptr,
+                mode,
+            },
+            || {
+                if trace_call {
+                    emit_driver_task_ring_call_begin(contract, endpoint, request, command);
+                }
+            },
+            |notification| {
+                crate::sel4::signal_unchecked(notification as sel4_sys::seL4_CPtr);
+            },
+        ) {
+            DriverTaskMcsOneWayPromptResult::Signalled => {
+                // End this root activation at the exact initial handoff. The
+                // child can now consume its own SC immediately; root does not
+                // turn a successful scheduling edge into a timeout poll.
+                return None;
+            }
+            DriverTaskMcsOneWayPromptResult::AlreadySignalled => {}
+            DriverTaskMcsOneWayPromptResult::Invalid => {
+                // Sequence publication may already have been observed. Keep
+                // the request active for containment; never clear or replay an
+                // issued-unknown one-way command.
+                return None;
+            }
+        }
+    }
     let steady_tx_fast_lane = steady_tx_fast_lane_requested
         && slot.retained_steady_tx_fast_lane.load(Ordering::Acquire) != 0;
     let persistent_transaction = persistent_transaction_requested
@@ -22870,8 +23367,6 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
     let mut retained_early_completion = None;
     let retained_lease_ready_to_complete =
         retained_lease_turn == Some(DriverTaskRetainedLeaseTurn::ReadyToComplete);
-    let trace_call = driver_task_ring_call_trace_enabled(contract, command, mode);
-
     if retained_commit_turn {
         // Sequence publication is the issue boundary for autonomously polling
         // runtimes. Both required TCBs are already boosted. Re-materialize the
@@ -22936,6 +23431,13 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
                 fail_driver_task_retained_priority_lease(slot, contract);
                 return None;
             };
+            if ring_transport == DriverTaskRingTransport::McsNotificationPrompt
+                && !mcs_one_way_notification_guard
+                    .is_some_and(DriverTaskMcsOneWayNotificationGuard::publication_still_live)
+            {
+                fail_driver_task_retained_priority_lease(slot, contract);
+                return None;
+            }
             // The open Network lease or the request-bound pre-secure lease has
             // completed every scheduler transition. Commit -> Issued and
             // signal exactly once; all later root turns are terminal polls.
@@ -22967,6 +23469,13 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
             return None;
         }
         if persistent_transaction {
+            if ring_transport == DriverTaskRingTransport::McsNotificationPrompt
+                && !mcs_one_way_notification_guard
+                    .is_some_and(DriverTaskMcsOneWayNotificationGuard::publication_still_live)
+            {
+                fail_driver_task_retained_priority_lease(slot, contract);
+                return None;
+            }
             // The complete op11 descriptor and payload are now visible behind
             // the sequence-last commit. Transfer its full durable authority
             // with one scheduling hint; all later root turns are PollRing-only.
@@ -23129,6 +23638,13 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
             emit_driver_task_ring_call_begin(contract, endpoint, request, command);
         }
         if root_grant {
+            if ring_transport == DriverTaskRingTransport::McsNotificationPrompt
+                && !mcs_one_way_notification_guard
+                    .is_some_and(DriverTaskMcsOneWayNotificationGuard::publication_still_live)
+            {
+                fail_driver_task_retained_priority_lease(slot, contract);
+                return None;
+            }
             cache_counter_batch.flush(slot);
             if signal_driver_task_retained_root_grant_with(
                 DriverTaskRetainedRootGrantContinuation {
@@ -23150,30 +23666,33 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
             }
             return None;
         }
-        if mcs_hdmi_finite_frame {
-            if !mcs_nonblocking_root_producer_allows_send(slot, endpoint) {
-                cache_counter_batch.flush(slot);
+        if ring_transport == DriverTaskRingTransport::McsNotificationPrompt {
+            let Some(notification_guard) = mcs_one_way_notification_guard else {
+                fail_driver_task_retained_priority_lease(slot, contract);
                 return None;
-            }
-            let info = sel4_sys::seL4_MessageInfo::new(0, 0, 0, 1);
+            };
             cache_counter_batch.flush(slot);
-            if !signal_mcs_hdmi_finite_frame_with(
-                McsHdmiFiniteFrameSignal {
+            match signal_driver_task_mcs_one_way_prompt_with(
+                DriverTaskMcsOneWayPrompt {
                     slot,
+                    notification_guard,
                     contract,
                     command,
-                    endpoint,
                     request,
                     fingerprint: command_fingerprint,
                     ring_root_ptr,
+                    mode,
                 },
-                mcs_hdmi_finite_frame_model_enabled(),
                 || {},
-                |target| {
-                    crate::sel4::send_nb_unchecked(target as sel4_sys::seL4_CPtr, info);
+                |notification| {
+                    crate::sel4::signal_unchecked(notification as sel4_sys::seL4_CPtr);
                 },
             ) {
-                fail_driver_task_retained_priority_lease(slot, contract);
+                DriverTaskMcsOneWayPromptResult::Signalled
+                | DriverTaskMcsOneWayPromptResult::AlreadySignalled => {}
+                DriverTaskMcsOneWayPromptResult::Invalid => {
+                    fail_driver_task_retained_priority_lease(slot, contract);
+                }
             }
             return None;
         }
@@ -23217,18 +23736,25 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
     if driver_task_ring_mode_uses_bounded_send(mode) {
         let retained_doorbell_issued = mode == DriverTaskRingCommandMode::RetainedTurn
             && slot.retained_doorbell_issued.load(Ordering::Acquire) != 0;
-        if trace_call && (!same_request_resume || !retained_doorbell_issued) {
+        if trace_call
+            && ring_transport != DriverTaskRingTransport::McsNotificationPrompt
+            && (!same_request_resume || !retained_doorbell_issued)
+        {
             emit_driver_task_ring_call_begin(contract, endpoint, request, command);
         }
         if mode.records_latency() && (!same_request_resume || !retained_doorbell_issued) {
             start_ticks = driver_task_counter_ticks();
         }
-        let attempts = if mode == DriverTaskRingCommandMode::RetainedTurn {
+        let attempts = if ring_transport == DriverTaskRingTransport::McsNotificationPrompt {
+            1
+        } else if mode == DriverTaskRingCommandMode::RetainedTurn {
             0
         } else {
             driver_task_ring_attempt_limit(contract, command, mode)
         };
-        if completion.sequence != request as u32 {
+        if completion.sequence != request as u32
+            && ring_transport == DriverTaskRingTransport::EndpointNonBlocking
+        {
             let info = sel4_sys::seL4_MessageInfo::new(0, 0, 0, 1);
             let mut send_attempts = 0usize;
             let mut yield_count = 0usize;
@@ -23274,8 +23800,115 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
             }
             driver_task_counter_add(&slot.counters.send_attempts, send_attempts);
             driver_task_counter_add(&slot.counters.yield_count, yield_count);
-        } else if driver_task_ring_completion_trace_enabled(trace_call, command, completion) {
+        } else if completion.sequence == request as u32
+            && driver_task_ring_completion_trace_enabled(trace_call, command, completion)
+        {
             emit_driver_task_ring_call_return(contract, endpoint, request, completion);
+        }
+        if completion.sequence != request as u32
+            && ring_transport == DriverTaskRingTransport::McsNotificationPrompt
+            && command.flags & DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY != 0
+            && command.flags
+                & (DRIVER_RUNTIME_COMMAND_FLAG_STEADY_SERVICE_LEASE
+                    | DRIVER_RUNTIME_COMMAND_FLAG_PERSISTENT_TRANSACTION)
+                == 0
+            && !driver_task_retained_uses_root_grant(contract, command)
+            && slot.runtime_identity_token.load(Ordering::Acquire) != 0
+        {
+            let Some(notification_guard) = mcs_one_way_notification_guard else {
+                cache_counter_batch.flush(slot);
+                return None;
+            };
+            let continuation = signal_driver_task_mcs_one_way_continuation_with(
+                DriverTaskMcsOneWayContinuation {
+                    slot,
+                    notification_guard,
+                    contract,
+                    command,
+                    request,
+                    fingerprint: command_fingerprint,
+                    ring_root_ptr,
+                    mode,
+                },
+                || {
+                    read_driver_task_ring_completion(
+                        &mut cache_counter_batch,
+                        ring_root_ptr,
+                        completion_ptr,
+                        request,
+                    )
+                    .sequence
+                        == request as u32
+                },
+                || driver_task_ring_read_one_way_wait_receipt(ring_root_ptr),
+                |receipt| driver_task_ring_ack_one_way_wait_receipt(slot, ring_root_ptr, receipt),
+                || {},
+                |notification| {
+                    crate::sel4::signal_unchecked(notification as sel4_sys::seL4_CPtr);
+                },
+            );
+            match continuation {
+                DriverTaskMcsOneWayContinuationResult::Signalled => {
+                    // The child's DROW -> DROA transfer and its scheduling
+                    // hint complete this causal root activation. Do not count
+                    // a successful continuation as a transport timeout.
+                    cache_counter_batch.flush(slot);
+                    return None;
+                }
+                DriverTaskMcsOneWayContinuationResult::NotReady
+                | DriverTaskMcsOneWayContinuationResult::AlreadySignalled => {
+                    // The receipt may have raced an exact sequence-last
+                    // terminal or another root observer. Refresh the local
+                    // snapshot before deciding whether timeout accounting is
+                    // applicable.
+                    completion = read_driver_task_ring_completion(
+                        &mut cache_counter_batch,
+                        ring_root_ptr,
+                        completion_ptr,
+                        request,
+                    );
+                    if completion.sequence != request as u32 {
+                        // No exact parked receipt or terminal is visible yet.
+                        // This is an ordinary asynchronous causal frontier,
+                        // not a timeout; finish the root turn so the child can
+                        // run or publish its root-control fan-in.
+                        cache_counter_batch.flush(slot);
+                        return None;
+                    }
+                }
+                DriverTaskMcsOneWayContinuationResult::Invalid => {
+                    // The command may already have executed a physical
+                    // quantum. Preserve its immutable identity and quarantine
+                    // the slot for explicit generation recovery; never infer a
+                    // retry from a malformed or gapped receipt.
+                    poison_driver_task_retained_request(slot);
+                    cache_counter_batch.flush(slot);
+                    return None;
+                }
+            }
+        }
+        if completion.sequence != request as u32
+            && driver_task_mcs_initial_identity_frontier_pending(
+                ring_transport,
+                command,
+                slot.runtime_identity_token.load(Ordering::Acquire),
+            )
+        {
+            // The first descriptor is itself the authority that establishes
+            // the runtime identity used by DROW. It is structurally terminal,
+            // so a root turn racing its exact completion must neither invent a
+            // token-free continuation nor count an asynchronous scheduling
+            // frontier as a transport timeout.
+            completion = read_driver_task_ring_completion(
+                &mut cache_counter_batch,
+                ring_root_ptr,
+                completion_ptr,
+                request,
+            );
+            if completion.sequence != request as u32 {
+                cache_counter_batch.flush(slot);
+                return None;
+            }
         }
         if completion.sequence != request as u32 {
             driver_task_counter_add(&slot.counters.timeouts, 1);
@@ -23476,7 +24109,26 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
 
     let mut timeout_count = 0usize;
     let mut timeout_keep_limit = 0usize;
-    let mut keep_active_on_timeout = if persistent_transaction_waiting {
+    let mut keep_active_on_timeout = if ring_transport
+        == DriverTaskRingTransport::McsNotificationPrompt
+        && completion.sequence != request as u32
+    {
+        // The sole prompt transferred scheduling to a sequence-last command.
+        // A missing terminal is issued-unknown: retain the immutable slot for
+        // a later terminal drain or supervisor containment, never clear it for
+        // replay merely because the old endpoint retry budget elapsed.
+        let (_, count) = driver_task_ring_timeout_keep_decision(
+            slot,
+            contract,
+            command,
+            mode,
+            request as u32,
+            progress_advanced,
+        );
+        timeout_count = count;
+        timeout_keep_limit = usize::MAX;
+        true
+    } else if persistent_transaction_waiting {
         true
     } else if completion.sequence != request as u32 {
         let (keep_active, count) = driver_task_ring_timeout_keep_decision(
@@ -23690,6 +24342,7 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
     if completion.sequence == request as u32 || !keep_active_on_timeout {
         slot.active.store(0, Ordering::Release);
         slot.active_command_fingerprint.store(0, Ordering::Release);
+        reset_driver_task_mcs_one_way_wait_state(slot);
         slot.timeout_resumes.store(0, Ordering::Release);
         slot.retained_doorbell_issued.store(0, Ordering::Release);
         slot.retained_grant_id.store(0, Ordering::Release);
@@ -23776,7 +24429,11 @@ pub fn run_driver_task_ring_service_bootstrap(
     contract: DriverTaskContract,
     command: DriverTaskCommandRecord,
 ) -> Option<DriverTaskCompletionRecord> {
-    run_driver_task_ring_service_with_mode(contract, command, DriverTaskRingCommandMode::Bootstrap)
+    run_driver_task_ring_service_with_mode(
+        contract,
+        command,
+        driver_task_ring_bootstrap_command_mode(cfg!(sel4_config_kernel_mcs)),
+    )
 }
 
 /// Execute a bootstrap service turn with atomic staged-byte publication.
@@ -23789,7 +24446,7 @@ pub fn run_driver_task_ring_service_bootstrap_staged(
     run_driver_task_ring_service_with_mode_and_staging(
         contract,
         command,
-        DriverTaskRingCommandMode::Bootstrap,
+        driver_task_ring_bootstrap_command_mode(cfg!(sel4_config_kernel_mcs)),
         staging_segments,
     )
 }
@@ -34556,6 +35213,10 @@ mod tests {
         );
         command.sequence = 73;
         command.flags = DRIVER_TASK_RING_FLAG_ONE_WAY;
+        slot.mcs_one_way_wait_cap_generation
+            .store(9, Ordering::Release);
+        slot.mcs_one_way_last_prompted_slice
+            .store(4, Ordering::Release);
 
         driver_task_ring_stage_command_record(
             &slot,
@@ -34564,6 +35225,14 @@ mod tests {
             completion_ptr,
             command,
             DriverTaskCompletionRecord::fault(0, DriverTaskFaultCode::RejectedCommand),
+        );
+        assert_eq!(
+            slot.mcs_one_way_wait_cap_generation.load(Ordering::Acquire),
+            0,
+        );
+        assert_eq!(
+            slot.mcs_one_way_last_prompted_slice.load(Ordering::Acquire),
+            0,
         );
 
         let runtime_poll = || {
@@ -34692,6 +35361,9 @@ mod tests {
         );
         slot.active.store(1, Ordering::Release);
         slot.endpoint.store(0x77, Ordering::Release);
+        slot.root_notification.store(0x99, Ordering::Release);
+        slot.mcs_cap_generation.store(1, Ordering::Release);
+        slot.mcs_command_admission_open.store(1, Ordering::Release);
         slot.ring_root_ptr.store(ring_root_ptr, Ordering::Release);
         slot.request_seq.store(request as usize, Ordering::Release);
         slot.active_command_fingerprint
@@ -34833,7 +35505,7 @@ mod tests {
         assert_eq!(
             slot.counters.send_attempts.load(Ordering::Acquire),
             sends_before,
-            "fresh Stage -> Commit performs no endpoint send",
+            "fresh Stage -> Commit performs no notification prompt",
         );
     }
 
@@ -34874,33 +35546,230 @@ mod tests {
         );
 
         let signals = Cell::new(0usize);
-        let context = || McsHdmiFiniteFrameSignal {
+        let context = || DriverTaskMcsOneWayPrompt {
             slot: &slot,
+            notification_guard: acquire_driver_task_mcs_one_way_notification_guard(&slot, 0x77)
+                .expect("live MCS notification prompt"),
             contract: HDMI_TEXT_DRIVER_TASK_CONTRACT,
             command,
-            endpoint: 0x77,
             request: command.sequence as usize,
             fingerprint,
             ring_root_ptr,
+            mode: DriverTaskRingCommandMode::RetainedTurn,
         };
-        assert!(signal_mcs_hdmi_finite_frame_with(
-            context(),
-            true,
-            || {},
-            |endpoint| {
-                assert_eq!(endpoint, 0x77);
-                signals.set(signals.get().saturating_add(1));
-            },
-        ));
+        assert_eq!(
+            signal_driver_task_mcs_one_way_prompt_with(
+                context(),
+                || {
+                    // SAFETY: The pointer addresses the sequence-last command
+                    // record in this aligned test-owned ring page.
+                    assert_eq!(unsafe { core::ptr::read_volatile(command_ptr) }, command);
+                },
+                |notification| {
+                    assert_eq!(notification, 0x99);
+                    signals.set(signals.get().saturating_add(1));
+                },
+            ),
+            DriverTaskMcsOneWayPromptResult::Signalled,
+        );
         assert_eq!(signals.get(), 1);
         assert_eq!(slot.counters.send_attempts.load(Ordering::Acquire), 1);
-        assert!(!signal_mcs_hdmi_finite_frame_with(
-            context(),
-            true,
-            || {},
-            |_| signals.set(signals.get().saturating_add(1)),
-        ));
+        assert_eq!(
+            signal_driver_task_mcs_one_way_prompt_with(
+                context(),
+                || {},
+                |_| signals.set(signals.get().saturating_add(1)),
+            ),
+            DriverTaskMcsOneWayPromptResult::AlreadySignalled,
+        );
         assert_eq!(signals.get(), 1, "issued frame cannot be re-signalled");
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn mcs_one_way_wait_receipt_acknowledges_only_the_exact_next_slice() {
+        use core::cell::Cell;
+
+        let slot = DriverTaskCommandSlot::new();
+        let mut ring_page = Box::new(AlignedDriverTaskRing(
+            [0u32; DRIVER_TASK_RING_PAGE_BYTES / core::mem::size_of::<u32>()],
+        ));
+        let ring_root_ptr = ring_page.0.as_mut_ptr() as usize;
+        let payload = b"wait\n";
+        let (command, fingerprint) = stage_mcs_hdmi_test_frame(&slot, ring_root_ptr, payload, 0x51);
+        commit_mcs_hdmi_test_frame(&slot, ring_root_ptr, payload, command);
+        slot.runtime_identity_token
+            .store(0x7345_0003, Ordering::Release);
+        let guard = || {
+            acquire_driver_task_mcs_one_way_notification_guard(&slot, 0x77)
+                .expect("live MCS notification generation")
+        };
+        assert_eq!(
+            signal_driver_task_mcs_one_way_prompt_with(
+                DriverTaskMcsOneWayPrompt {
+                    slot: &slot,
+                    notification_guard: guard(),
+                    contract: HDMI_TEXT_DRIVER_TASK_CONTRACT,
+                    command,
+                    request: command.sequence as usize,
+                    fingerprint,
+                    ring_root_ptr,
+                    mode: DriverTaskRingCommandMode::RetainedTurn,
+                },
+                || {},
+                |_| {},
+            ),
+            DriverTaskMcsOneWayPromptResult::Signalled,
+        );
+        let context = || DriverTaskMcsOneWayContinuation {
+            slot: &slot,
+            notification_guard: guard(),
+            contract: HDMI_TEXT_DRIVER_TASK_CONTRACT,
+            command,
+            request: command.sequence as usize,
+            fingerprint,
+            ring_root_ptr,
+            mode: DriverTaskRingCommandMode::RetainedTurn,
+        };
+        let exact = DriverRuntimeOneWayWaitReceipt::new(
+            command.sequence,
+            driver_task_runtime_continuation_fingerprint(command),
+            0x7345_0003,
+            1,
+        );
+        let ack_calls = Cell::new(0usize);
+        let signals = Cell::new(0usize);
+        assert_eq!(
+            signal_driver_task_mcs_one_way_continuation_with(
+                context(),
+                || false,
+                || None,
+                |_| {
+                    ack_calls.set(ack_calls.get().saturating_add(1));
+                    true
+                },
+                || {},
+                |_| signals.set(signals.get().saturating_add(1)),
+            ),
+            DriverTaskMcsOneWayContinuationResult::NotReady,
+        );
+        assert_eq!(
+            signal_driver_task_mcs_one_way_continuation_with(
+                context(),
+                || false,
+                || Some(DriverRuntimeOneWayWaitReceipt::new(
+                    exact.request_sequence,
+                    exact.action_fingerprint,
+                    exact.runtime_identity_token,
+                    2,
+                )),
+                |_| {
+                    ack_calls.set(ack_calls.get().saturating_add(1));
+                    true
+                },
+                || {},
+                |_| signals.set(signals.get().saturating_add(1)),
+            ),
+            DriverTaskMcsOneWayContinuationResult::Invalid,
+        );
+        assert_eq!(
+            signal_driver_task_mcs_one_way_continuation_with(
+                context(),
+                || false,
+                || Some(DriverRuntimeOneWayWaitReceipt {
+                    action_fingerprint: exact.action_fingerprint ^ 1,
+                    ..exact
+                }),
+                |_| {
+                    ack_calls.set(ack_calls.get().saturating_add(1));
+                    true
+                },
+                || {},
+                |_| signals.set(signals.get().saturating_add(1)),
+            ),
+            DriverTaskMcsOneWayContinuationResult::Invalid,
+        );
+        assert_eq!(ack_calls.get(), 0);
+        assert_eq!(signals.get(), 0);
+
+        for terminal_on_check in [2usize, 3, 4] {
+            let completion_checks = Cell::new(0usize);
+            let before_signal_calls = Cell::new(0usize);
+            assert_eq!(
+                signal_driver_task_mcs_one_way_continuation_with(
+                    context(),
+                    || {
+                        let next = completion_checks.get().saturating_add(1);
+                        completion_checks.set(next);
+                        next == terminal_on_check
+                    },
+                    || Some(exact),
+                    |_| {
+                        ack_calls.set(ack_calls.get().saturating_add(1));
+                        true
+                    },
+                    || before_signal_calls.set(before_signal_calls.get().saturating_add(1)),
+                    |_| signals.set(signals.get().saturating_add(1)),
+                ),
+                DriverTaskMcsOneWayContinuationResult::NotReady,
+                "an exact terminal supersedes DROW at completion check {terminal_on_check}",
+            );
+            assert_eq!(ack_calls.get(), 0);
+            assert_eq!(signals.get(), 0);
+            assert_eq!(
+                before_signal_calls.get(),
+                usize::from(terminal_on_check == 4),
+            );
+            // Modeled terminal cleanup owns this reset after a post-CAS race.
+            slot.mcs_one_way_last_prompted_slice
+                .store(0, Ordering::Release);
+        }
+
+        let receipt_ptr = (ring_root_ptr + usize::from(DRIVER_RUNTIME_ONE_WAY_WAIT_RECEIPT_OFFSET))
+            as *mut DriverRuntimeOneWayWaitReceipt;
+        // SAFETY: The aligned test-owned ring reserves this exact 24-byte
+        // auxiliary record and the modeled child is parked before publication.
+        unsafe { core::ptr::write_volatile(receipt_ptr, exact) };
+        assert_eq!(
+            signal_driver_task_mcs_one_way_continuation_with(
+                context(),
+                || false,
+                || driver_task_ring_read_one_way_wait_receipt(ring_root_ptr),
+                |receipt| {
+                    ack_calls.set(ack_calls.get().saturating_add(1));
+                    driver_task_ring_ack_one_way_wait_receipt(&slot, ring_root_ptr, receipt)
+                },
+                || {},
+                |_| signals.set(signals.get().saturating_add(1)),
+            ),
+            DriverTaskMcsOneWayContinuationResult::Signalled,
+        );
+        assert_eq!(ack_calls.get(), 1);
+        assert_eq!(signals.get(), 1);
+        // SAFETY: Root changed only the primitive magic word after validating
+        // the exact test-owned record.
+        let acknowledged = unsafe { core::ptr::read_volatile(receipt_ptr) };
+        assert!(acknowledged.acknowledged());
+        assert_eq!(acknowledged.request_sequence, exact.request_sequence);
+        assert_eq!(acknowledged.wait_slice, exact.wait_slice);
+        assert_eq!(
+            driver_task_ring_read_one_way_wait_receipt(ring_root_ptr),
+            None
+        );
+
+        assert_eq!(
+            signal_driver_task_mcs_one_way_continuation_with(
+                context(),
+                || false,
+                || Some(exact),
+                |_| true,
+                || {},
+                |_| signals.set(signals.get().saturating_add(1)),
+            ),
+            DriverTaskMcsOneWayContinuationResult::Invalid,
+            "a DROW record cannot survive its already-advanced ACK cursor",
+        );
+        assert_eq!(signals.get(), 1);
     }
 
     #[cfg(feature = "kernel")]
@@ -34914,20 +35783,26 @@ mod tests {
         let payload = b"next\n";
         let (command, fingerprint) = stage_mcs_hdmi_test_frame(&slot, ring_root_ptr, payload, 74);
         commit_mcs_hdmi_test_frame(&slot, ring_root_ptr, payload, command);
-        assert!(signal_mcs_hdmi_finite_frame_with(
-            McsHdmiFiniteFrameSignal {
-                slot: &slot,
-                contract: HDMI_TEXT_DRIVER_TASK_CONTRACT,
-                command,
-                endpoint: 0x77,
-                request: command.sequence as usize,
-                fingerprint,
-                ring_root_ptr,
-            },
-            true,
-            || {},
-            |_| {},
-        ));
+        assert_eq!(
+            signal_driver_task_mcs_one_way_prompt_with(
+                DriverTaskMcsOneWayPrompt {
+                    slot: &slot,
+                    notification_guard: acquire_driver_task_mcs_one_way_notification_guard(
+                        &slot, 0x77,
+                    )
+                    .expect("live MCS notification prompt"),
+                    contract: HDMI_TEXT_DRIVER_TASK_CONTRACT,
+                    command,
+                    request: command.sequence as usize,
+                    fingerprint,
+                    ring_root_ptr,
+                    mode: DriverTaskRingCommandMode::RetainedTurn,
+                },
+                || {},
+                |_| {},
+            ),
+            DriverTaskMcsOneWayPromptResult::Signalled,
+        );
         let completion_ptr =
             (ring_root_ptr + DRIVER_TASK_RING_COMPLETION_OFFSET) as *mut DriverTaskCompletionRecord;
         let completion = DriverTaskCompletionRecord::idle(command.sequence);
@@ -34990,20 +35865,26 @@ mod tests {
             core::ptr::write_volatile(ring_root_ptr as *mut DriverTaskCommandRecord, tampered)
         };
         let signals = Cell::new(0usize);
-        assert!(!signal_mcs_hdmi_finite_frame_with(
-            McsHdmiFiniteFrameSignal {
-                slot: &slot,
-                contract: HDMI_TEXT_DRIVER_TASK_CONTRACT,
-                command,
-                endpoint: 0x77,
-                request: command.sequence as usize,
-                fingerprint,
-                ring_root_ptr,
-            },
-            true,
-            || {},
-            |_| signals.set(signals.get().saturating_add(1)),
-        ));
+        assert_eq!(
+            signal_driver_task_mcs_one_way_prompt_with(
+                DriverTaskMcsOneWayPrompt {
+                    slot: &slot,
+                    notification_guard: acquire_driver_task_mcs_one_way_notification_guard(
+                        &slot, 0x77,
+                    )
+                    .expect("live MCS notification prompt"),
+                    contract: HDMI_TEXT_DRIVER_TASK_CONTRACT,
+                    command,
+                    request: command.sequence as usize,
+                    fingerprint,
+                    ring_root_ptr,
+                    mode: DriverTaskRingCommandMode::RetainedTurn,
+                },
+                || {},
+                |_| signals.set(signals.get().saturating_add(1)),
+            ),
+            DriverTaskMcsOneWayPromptResult::Invalid,
+        );
         assert_eq!(signals.get(), 0);
         assert_eq!(slot.counters.send_attempts.load(Ordering::Acquire), 0);
         fail_driver_task_retained_priority_lease(&slot, HDMI_TEXT_DRIVER_TASK_CONTRACT);
@@ -36277,6 +37158,8 @@ mod tests {
     #[test]
     fn clear_driver_task_transport_removes_partial_bootstrap_endpoint() {
         let contract = USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT;
+        let task_key = driver_task_contract_key(contract).expect("task key");
+        let slot = slot_for_task_key(task_key).expect("slot");
         publish_driver_task_command_endpoint(contract, 0x1234);
         publish_driver_task_ring(contract, 0x7000_0000);
         publish_driver_task_scheduler(contract, 0x4321, 240);
@@ -36292,11 +37175,15 @@ mod tests {
             DriverTaskHotPath::UsbKeyboard.as_u32() as usize,
             pi4_bus_ring_service_driver_task,
         ));
+        slot.runtime_identity_token
+            .store(0x7345_0001, Ordering::Release);
+        slot.mcs_one_way_wait_cap_generation
+            .store(7, Ordering::Release);
+        slot.mcs_one_way_last_prompted_slice
+            .store(3, Ordering::Release);
 
         clear_driver_task_transport(contract);
 
-        let task_key = driver_task_contract_key(contract).expect("task key");
-        let slot = slot_for_task_key(task_key).expect("slot");
         assert_eq!(slot.endpoint.load(Ordering::Acquire), 0);
         assert_eq!(slot.ring_root_ptr.load(Ordering::Acquire), 0);
         assert_eq!(slot.ring_context.load(Ordering::Acquire), 0);
@@ -36317,12 +37204,49 @@ mod tests {
             Some(DriverTaskSteadyPriorityState::Bootstrap),
         );
         assert_eq!(slot.active.load(Ordering::Acquire), 0);
+        assert_eq!(slot.runtime_identity_token.load(Ordering::Acquire), 0);
+        assert_eq!(
+            slot.mcs_one_way_wait_cap_generation.load(Ordering::Acquire),
+            0,
+        );
+        assert_eq!(
+            slot.mcs_one_way_last_prompted_slice.load(Ordering::Acquire),
+            0,
+        );
         assert_eq!(slot.request_seq.load(Ordering::Acquire), 0);
         assert_eq!(slot.last_progress_magic.load(Ordering::Acquire), 0);
         assert_eq!(slot.last_progress_sequence.load(Ordering::Acquire), 0);
         assert_eq!(slot.last_progress_phase.load(Ordering::Acquire), 0);
         assert_eq!(slot.last_progress_aux0.load(Ordering::Acquire), 0);
         assert!(latest_driver_task_ring_progress(contract).is_none());
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn pair_restart_ring_scrubs_one_way_wait_generation_state() {
+        let slot = DriverTaskCommandSlot::new();
+        let mut ring_page = Box::new(AlignedDriverTaskRing(
+            [0u32; DRIVER_TASK_RING_PAGE_BYTES / core::mem::size_of::<u32>()],
+        ));
+        slot.ring_root_ptr
+            .store(ring_page.0.as_mut_ptr() as usize, Ordering::Release);
+        slot.runtime_identity_token
+            .store(0x7345_0004, Ordering::Release);
+        slot.mcs_one_way_wait_cap_generation
+            .store(5, Ordering::Release);
+        slot.mcs_one_way_last_prompted_slice
+            .store(8, Ordering::Release);
+
+        assert!(reset_cyw43_sdio_restart_ring(&slot, false));
+        assert_eq!(slot.runtime_identity_token.load(Ordering::Acquire), 0);
+        assert_eq!(
+            slot.mcs_one_way_wait_cap_generation.load(Ordering::Acquire),
+            0,
+        );
+        assert_eq!(
+            slot.mcs_one_way_last_prompted_slice.load(Ordering::Acquire),
+            0,
+        );
     }
 
     #[cfg(feature = "kernel")]
@@ -41197,6 +42121,16 @@ mod tests {
     #[cfg(feature = "kernel")]
     #[test]
     fn bootstrap_ring_mode_remains_bounded() {
+        assert_eq!(
+            driver_task_ring_bootstrap_command_mode(true),
+            DriverTaskRingCommandMode::Steady,
+            "MCS bootstrap completion consumers require the supervised Call/Reply lane",
+        );
+        assert_eq!(
+            driver_task_ring_bootstrap_command_mode(false),
+            DriverTaskRingCommandMode::Bootstrap,
+            "classic bootstrap must retain its bounded one-way send lane",
+        );
         assert!(driver_task_ring_mode_uses_bounded_send(
             DriverTaskRingCommandMode::Bootstrap
         ));
@@ -41232,6 +42166,59 @@ mod tests {
             driver_task_ring_flags_for_mode(DriverTaskRingCommandMode::Steady, 0),
             0
         );
+        assert_eq!(
+            driver_task_ring_transport(true, DRIVER_TASK_RING_FLAG_ONE_WAY),
+            DriverTaskRingTransport::McsNotificationPrompt,
+        );
+        assert_eq!(
+            driver_task_ring_transport(true, 0),
+            DriverTaskRingTransport::EndpointCall,
+        );
+        assert_eq!(
+            driver_task_ring_transport(false, DRIVER_TASK_RING_FLAG_ONE_WAY),
+            DriverTaskRingTransport::EndpointNonBlocking,
+        );
+        assert!(driver_task_ring_active_request_resume_allowed(
+            DriverTaskRingCommandMode::NonBlocking,
+            DriverTaskRingTransport::McsNotificationPrompt,
+            false,
+            false,
+        ));
+        assert!(!driver_task_ring_active_request_resume_allowed(
+            DriverTaskRingCommandMode::NonBlocking,
+            DriverTaskRingTransport::EndpointNonBlocking,
+            false,
+            false,
+        ));
+        assert!(!driver_task_ring_active_request_resume_allowed(
+            DriverTaskRingCommandMode::Steady,
+            DriverTaskRingTransport::EndpointCall,
+            true,
+            true,
+        ));
+        let mut first_descriptor = runtime_init_command(
+            DriverTaskHotPath::GenetNic,
+            DriverTaskBudgetGrant::from_contract(GENET_DRIVER_TASK_CONTRACT),
+            DriverFrameDescriptor {
+                offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
+                len: core::mem::size_of::<DriverRuntimeInitDescriptor>() as u16,
+                flags: DRIVER_TASK_RING_FLAG_INIT_DESCRIPTOR_NON_ACCEPTANCE,
+            },
+        );
+        first_descriptor.flags = driver_task_ring_flags_for_mode(
+            DriverTaskRingCommandMode::NonBlocking,
+            first_descriptor.flags,
+        );
+        assert!(driver_task_mcs_initial_identity_frontier_pending(
+            DriverTaskRingTransport::McsNotificationPrompt,
+            first_descriptor,
+            0,
+        ));
+        assert!(!driver_task_mcs_initial_identity_frontier_pending(
+            DriverTaskRingTransport::McsNotificationPrompt,
+            first_descriptor,
+            1,
+        ));
         assert!(!DriverTaskRingCommandMode::Bootstrap.records_latency());
         assert!(DriverTaskRingCommandMode::PromptSlice.records_latency());
         assert!(DriverTaskRingCommandMode::RetainedTurn.records_latency());

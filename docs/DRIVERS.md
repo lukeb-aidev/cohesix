@@ -275,11 +275,11 @@ For every new or changed record:
 Do not place policy objects, trait objects, slices, references, process-local
 addresses, or allocator-owned structures in the ABI.
 
-The selected Pi contract uses driver runtime-init ABI v12. It preserves v11's
+The selected Pi contract uses driver runtime-init ABI v13. It preserves v12's
 descriptor size and fixed child slot 12, where HAL mints only a Write-only,
 badge-1 capability to the additional root-control wake notification. The
 CYW43-specific child-to-root notification in slot 11 remains distinct and keeps
-its existing meaning and consumers. ABI v12 also makes the existing root-owned
+its existing meaning and consumers. ABI v13 retains the existing root-owned
 continuation record's action frontier explicit without changing its 24-byte
 layout: low-31-bit `grant_id` values advance `consumed_grant_id` from zero, to
 `grant_id | ACTION_ADMITTED_BIT`, to the exact `grant_id`. Admission is not
@@ -292,8 +292,19 @@ nonterminal root-grant action signals slot 12 only after its exact post-action
 value is durable. The fan-in is a coalescing scheduling hint,
 not completion, identity, work credit, Reply, or device authority; the consumer
 must acquire and recheck the sequence-last durable record before acting or
-sleeping. ABI v12 preserves every role's physical ownership, queue, retry,
-recovery, and fault contract.
+sleeping. ABI v13 additionally assigns the mutually exclusive 24-byte auxiliary
+slot to generic MCS one-way wait records: after one bounded pending quantum the
+child commits exact request, action fingerprint, runtime identity, and next
+slice as `DROW`, atomically signals the shared root-control fan-in and parks on
+its local notification. Root may change only that exact stable record to
+`DROA`, then signals the same runtime generation once. The child resumes only
+after observing the exact durable acknowledgement; a badge, stale slice, gap,
+wrong command, wrong runtime, wrong ring, or wrong capability generation grants
+nothing and fails closed. Reply-bearing bootstrap commands instead use the
+supervised MCS Call/Reply lane so callers that immediately consume the first
+descriptor or QEMU smoke completion retain one causal activation. Classic
+bootstrap keeps its bounded one-way transport. ABI v13 preserves every role's
+physical ownership, queue, retry, recovery, and fault contract.
 
 The exact-publication and current-response corrections are scheduling-only.
 An exact persistent MCS CYW43 publisher reuses its bound local-notification
@@ -1404,8 +1415,9 @@ transport:
   address, page-count, IRQ, badge, slot, trigger, period, and interval identity
   is checked before MMIO; malformed identity performs no device access, signal,
   or ACK. Root never maps or programs this timer. The runtime descriptor layout
-  and ABI v12 remain unchanged; additive internal resource tag 15 names only
-  this exact page.
+  and runtime-descriptor layout remain unchanged; additive internal resource
+  tag 15 names only this exact page. The current shared protocol version is
+  ABI v13 because of the later generic one-way wait handshake above.
 - The Pi direct-GENET-feature isolated authenticated console socket, used by
   both selected Pi network modes, is an interactive control path, not a bulk
   stream. It disables delayed ACK and Nagle so one bounded receive

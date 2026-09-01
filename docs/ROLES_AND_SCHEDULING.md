@@ -610,6 +610,18 @@ unchanged 64-unit caps.
 Direct GENET has no broad idle wait or post-response cross-core tail. Every SC
 numeric, Reply rule, isolation boundary, queue, and owner remains unchanged.
 
+Runtime ABI v13 keeps reply-consuming bootstrap work on MCS Call/Reply, so the
+root activation is donated directly through the first descriptor or QEMU smoke
+completion. A genuinely asynchronous generic one-way Pi command instead uses
+its child notification once. If one bounded action remains pending, the child
+commits the exact `DROW` request, action, runtime identity, and next-slice
+record, atomically signals the shared root-control fan-in and parks on its bound
+local notification. Root may publish `DROA` and signal that same runtime only
+after revalidating the current ring and capability generation. The badge is
+never continuation authority; the exact durable acknowledgement is. This
+closes the useful root-to-child-to-root scheduling seam without a spin, poll
+loop, retry, fallback owner, larger work cap, or any SC numeric change.
+
 A parsed passive-service command may survive one expired strict reserve lease
 only by crossing a completely new explicit Yield/refill. The new attempt starts
 from `AwaitingYield`, drains fresh Consumed evidence, rechecks the exact command,

@@ -8,7 +8,7 @@
 /// Magic value for a pointer-free driver runtime initialization descriptor.
 pub const DRIVER_RUNTIME_INIT_MAGIC: u32 = 0x4452_4934;
 /// Runtime descriptor layout and shared-protocol version.
-pub const DRIVER_RUNTIME_INIT_VERSION: u16 = 12;
+pub const DRIVER_RUNTIME_INIT_VERSION: u16 = 13;
 /// Magic identifying the only Milestone 26e runtime scheduler contract.
 pub const DRIVER_RUNTIME_MCS_MAGIC: u32 = 0x4d43_5331;
 /// Version of the scheduler/capability inventory embedded in runtime init.
@@ -1089,6 +1089,22 @@ pub const DRIVER_RUNTIME_STEADY_SERVICE_PROGRESS_BYTES: u16 =
     DRIVER_RUNTIME_CONTINUATION_GRANT_BYTES;
 /// Magic value for a grant-free owner heartbeat record.
 pub const DRIVER_RUNTIME_STEADY_SERVICE_PROGRESS_MAGIC: u32 = 0x4452_5350;
+/// Fixed offset of an exact generic MCS one-way continuation wait receipt.
+///
+/// Generic one-way commands cannot reuse the command endpoint after their
+/// initial notification-prompted intake. Their final-prewait receipt is
+/// mutually exclusive with continuation grants, steady-service progress, and
+/// persistent op11 waits, so it shares the same fixed auxiliary slot. The
+/// distinct magic prevents a diagnostic heartbeat or another authority mode
+/// from being interpreted as permission to issue a scheduling prompt.
+pub const DRIVER_RUNTIME_ONE_WAY_WAIT_RECEIPT_OFFSET: u16 =
+    DRIVER_RUNTIME_CONTINUATION_GRANT_OFFSET;
+/// Bytes in one exact generic MCS one-way continuation wait receipt.
+pub const DRIVER_RUNTIME_ONE_WAY_WAIT_RECEIPT_BYTES: u16 = DRIVER_RUNTIME_CONTINUATION_GRANT_BYTES;
+/// Magic value for a committed generic one-way wait receipt (`DROW`).
+pub const DRIVER_RUNTIME_ONE_WAY_WAIT_RECEIPT_MAGIC: u32 = 0x4452_4f57;
+/// Magic value after root acknowledges that exact wait slice (`DROA`).
+pub const DRIVER_RUNTIME_ONE_WAY_WAIT_ACK_MAGIC: u32 = 0x4452_4f41;
 /// Fixed offset of the exact persistent-transaction wait receipt.
 ///
 /// Continuation grants, finite steady-service progress, and persistent op11
@@ -5345,6 +5361,87 @@ impl DriverRuntimeSteadyServiceProgress {
     }
 }
 
+/// Exact receipt that one generic MCS one-way runtime armed its next wait.
+///
+/// The child publishes this record only after one bounded command quantum is
+/// still pending and after its final durable-condition recheck. Root accepts
+/// it only while the same request, action fingerprint, runtime identity, ring,
+/// and MCS capability generation remain live. `committed_wait_slice` is
+/// published last and cleared by the child before interpreting the matching
+/// prompt. The receipt grants no physical action and renews no deadline; it
+/// proves only that one coalescing reserved-root scheduling hint is due.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DriverRuntimeOneWayWaitReceipt {
+    /// Fixed [`DRIVER_RUNTIME_ONE_WAY_WAIT_RECEIPT_MAGIC`] discriminator.
+    pub magic: u32,
+    /// Immutable retained command sequence.
+    pub request_sequence: u32,
+    /// Fingerprint of every command action field except the sequence.
+    pub action_fingerprint: u32,
+    /// Sealed runtime descriptor identity for cross-runtime rejection.
+    pub runtime_identity_token: u32,
+    /// Nonzero monotonically increasing wait slice for this exact command.
+    pub wait_slice: u32,
+    /// Sequence-last commit copy of [`Self::wait_slice`].
+    pub committed_wait_slice: u32,
+}
+
+impl DriverRuntimeOneWayWaitReceipt {
+    /// Return a byte-zero, uncommitted wait receipt.
+    #[must_use]
+    pub const fn empty() -> Self {
+        Self {
+            magic: 0,
+            request_sequence: 0,
+            action_fingerprint: 0,
+            runtime_identity_token: 0,
+            wait_slice: 0,
+            committed_wait_slice: 0,
+        }
+    }
+
+    /// Build one exact receipt whose commit copy is published last.
+    #[must_use]
+    pub const fn new(
+        request_sequence: u32,
+        action_fingerprint: u32,
+        runtime_identity_token: u32,
+        wait_slice: u32,
+    ) -> Self {
+        Self {
+            magic: DRIVER_RUNTIME_ONE_WAY_WAIT_RECEIPT_MAGIC,
+            request_sequence,
+            action_fingerprint,
+            runtime_identity_token,
+            wait_slice,
+            committed_wait_slice: wait_slice,
+        }
+    }
+
+    /// Return whether the sequence-last record is structurally committed.
+    #[must_use]
+    pub const fn valid(self) -> bool {
+        self.magic == DRIVER_RUNTIME_ONE_WAY_WAIT_RECEIPT_MAGIC
+            && self.request_sequence != 0
+            && self.action_fingerprint != 0
+            && self.runtime_identity_token != 0
+            && self.wait_slice != 0
+            && self.committed_wait_slice == self.wait_slice
+    }
+
+    /// Return whether root durably acknowledged this exact wait slice.
+    #[must_use]
+    pub const fn acknowledged(self) -> bool {
+        self.magic == DRIVER_RUNTIME_ONE_WAY_WAIT_ACK_MAGIC
+            && self.request_sequence != 0
+            && self.action_fingerprint != 0
+            && self.runtime_identity_token != 0
+            && self.wait_slice != 0
+            && self.committed_wait_slice == self.wait_slice
+    }
+}
+
 /// Exact receipt that one persistent op11 owner armed its external wait.
 ///
 /// The CYW43 runtime publishes this record only after exhausting deterministic
@@ -5540,7 +5637,7 @@ pub const DRIVER_RUNTIME_RESOURCE_FLAG_DEVICE_VISIBLE: u16 = 1 << 2;
 pub const DRIVER_RUNTIME_RESOURCE_FLAG_ROOT_SHARED: u16 = 1 << 3;
 /// Resource range flag: pages are CPU-only and cannot back device DMA.
 pub const DRIVER_RUNTIME_RESOURCE_FLAG_CPU_ONLY: u16 = 1 << 4;
-/// Complete allowed resource-range flag set for ABI v12.
+/// Complete allowed resource-range flag set for ABI v13.
 pub const DRIVER_RUNTIME_RESOURCE_ALLOWED_FLAGS: u16 = DRIVER_RUNTIME_RESOURCE_FLAG_VADDR_CONTIGUOUS
     | DRIVER_RUNTIME_RESOURCE_FLAG_PADDR_CONTIGUOUS
     | DRIVER_RUNTIME_RESOURCE_FLAG_DEVICE_VISIBLE
@@ -6105,7 +6202,7 @@ pub const DRIVER_RUNTIME_INIT_REQUIRED_FLAGS: u32 = DRIVER_RUNTIME_INIT_FLAG_POI
     | DRIVER_RUNTIME_INIT_FLAG_SHARED_PADDRS
     | DRIVER_RUNTIME_INIT_FLAG_BUS_ADDRESSING
     | DRIVER_RUNTIME_INIT_FLAG_ROOT_CONTEXT_FORBIDDEN;
-/// Complete allowed runtime-init flag set for ABI v12.
+/// Complete allowed runtime-init flag set for ABI v13.
 pub const DRIVER_RUNTIME_INIT_ALLOWED_FLAGS: u32 = DRIVER_RUNTIME_INIT_FLAG_MMIO_MAPPED
     | DRIVER_RUNTIME_INIT_FLAG_DMA_PADDRS
     | DRIVER_RUNTIME_INIT_FLAG_SHARED_PADDRS
@@ -8922,6 +9019,8 @@ mod tests {
             core::mem::align_of::<DriverRuntimeSteadyServiceProgress>(),
             4
         );
+        assert_eq!(core::mem::size_of::<DriverRuntimeOneWayWaitReceipt>(), 24);
+        assert_eq!(core::mem::align_of::<DriverRuntimeOneWayWaitReceipt>(), 4);
         assert_eq!(
             core::mem::size_of::<DriverRuntimePersistentWaitReceipt>(),
             24
@@ -8960,6 +9059,14 @@ mod tests {
             DRIVER_RUNTIME_CONTINUATION_GRANT_BYTES,
         );
         assert_eq!(
+            DRIVER_RUNTIME_ONE_WAY_WAIT_RECEIPT_OFFSET,
+            DRIVER_RUNTIME_CONTINUATION_GRANT_OFFSET,
+        );
+        assert_eq!(
+            DRIVER_RUNTIME_ONE_WAY_WAIT_RECEIPT_BYTES,
+            DRIVER_RUNTIME_CONTINUATION_GRANT_BYTES,
+        );
+        assert_eq!(
             DRIVER_RUNTIME_PERSISTENT_WAIT_RECEIPT_OFFSET,
             DRIVER_RUNTIME_CONTINUATION_GRANT_OFFSET,
         );
@@ -8975,6 +9082,35 @@ mod tests {
             DRIVER_RUNTIME_PERSISTENT_WAIT_RECEIPT_MAGIC,
             DRIVER_RUNTIME_STEADY_SERVICE_PROGRESS_MAGIC,
         );
+        assert_ne!(
+            DRIVER_RUNTIME_ONE_WAY_WAIT_RECEIPT_MAGIC,
+            DRIVER_RUNTIME_CONTINUATION_GRANT_MAGIC,
+        );
+        assert_ne!(
+            DRIVER_RUNTIME_ONE_WAY_WAIT_RECEIPT_MAGIC,
+            DRIVER_RUNTIME_STEADY_SERVICE_PROGRESS_MAGIC,
+        );
+        assert_ne!(
+            DRIVER_RUNTIME_ONE_WAY_WAIT_RECEIPT_MAGIC,
+            DRIVER_RUNTIME_PERSISTENT_WAIT_RECEIPT_MAGIC,
+        );
+        for other in [
+            DRIVER_RUNTIME_CONTINUATION_GRANT_MAGIC,
+            DRIVER_RUNTIME_STEADY_SERVICE_PROGRESS_MAGIC,
+            DRIVER_RUNTIME_PERSISTENT_WAIT_RECEIPT_MAGIC,
+            DRIVER_RUNTIME_ONE_WAY_WAIT_RECEIPT_MAGIC,
+        ] {
+            assert_ne!(DRIVER_RUNTIME_ONE_WAY_WAIT_ACK_MAGIC, other);
+        }
+        let wait = DriverRuntimeOneWayWaitReceipt::new(7, 0x1234_5678, 0x89ab_cdef, 2);
+        assert!(wait.valid());
+        assert!(!wait.acknowledged());
+        let ack = DriverRuntimeOneWayWaitReceipt {
+            magic: DRIVER_RUNTIME_ONE_WAY_WAIT_ACK_MAGIC,
+            ..wait
+        };
+        assert!(!ack.valid());
+        assert!(ack.acknowledged());
         assert!(
             usize::from(DRIVER_RUNTIME_CONTINUATION_GRANT_OFFSET)
                 + core::mem::size_of::<DriverRuntimeContinuationGrant>()
@@ -8994,6 +9130,14 @@ mod tests {
         );
         assert_eq!(
             core::mem::offset_of!(DriverRuntimeSteadyServiceProgress, committed_slice),
+            20,
+        );
+        assert_eq!(
+            core::mem::offset_of!(DriverRuntimeOneWayWaitReceipt, wait_slice),
+            16,
+        );
+        assert_eq!(
+            core::mem::offset_of!(DriverRuntimeOneWayWaitReceipt, committed_wait_slice),
             20,
         );
         assert_eq!(
@@ -9388,7 +9532,7 @@ mod tests {
         assert_eq!(core::mem::size_of::<DriverRuntimeDpcEventEntry>(), 16);
         assert_eq!(core::mem::size_of::<DriverRuntimeDpcEventRing>(), 96);
         assert_eq!(DRIVER_RUNTIME_DPC_EVENT_RING_VERSION, 3);
-        assert_eq!(DRIVER_RUNTIME_INIT_VERSION, 12);
+        assert_eq!(DRIVER_RUNTIME_INIT_VERSION, 13);
         assert_eq!(
             DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET + DRIVER_RUNTIME_DPC_EVENT_RING_BYTES,
             DRIVER_RUNTIME_RING_FRAME_OFFSET

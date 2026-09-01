@@ -2899,10 +2899,117 @@ fn driver_runtime_root_wake_route(
 }
 
 #[cfg(feature = "kernel")]
-fn driver_runtime_needs_root_notification(contract: DriverTaskContract) -> bool {
+fn driver_runtime_needs_root_notification_for(
+    contract: DriverTaskContract,
+    physical_pi: bool,
+    kernel_mcs: bool,
+) -> bool {
     contract == CYW43_WIFI_DRIVER_TASK_CONTRACT
-        || (driver_task::physical_pi_driver_task_only_owner_state_active()
-            && contract == driver_task::SERIAL_DRIVER_TASK_CONTRACT)
+        || (physical_pi && contract == driver_task::SERIAL_DRIVER_TASK_CONTRACT)
+        || (kernel_mcs
+            && matches!(
+                contract,
+                driver_task::SERIAL_DRIVER_TASK_CONTRACT
+                    | driver_task::USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT
+                    | driver_task::HDMI_TEXT_DRIVER_TASK_CONTRACT
+                    | driver_task::GENET_DRIVER_TASK_CONTRACT
+                    | driver_task::SDIO_HOST_DRIVER_TASK_CONTRACT
+                    | driver_task::PCIE_ROOT_DRIVER_TASK_CONTRACT
+            ))
+}
+
+#[cfg(feature = "kernel")]
+fn driver_runtime_needs_root_notification(contract: DriverTaskContract) -> bool {
+    driver_runtime_needs_root_notification_for(
+        contract,
+        driver_task::physical_pi_driver_task_only_owner_state_active(),
+        cfg!(sel4_config_kernel_mcs),
+    )
+}
+
+#[cfg(feature = "kernel")]
+struct DriverRuntimeRootNotificationGuard {
+    contract: DriverTaskContract,
+    root_cnode: sel4_sys::seL4_CPtr,
+    root_depth: u8,
+    notification: sel4_sys::seL4_CPtr,
+    published: bool,
+    committed: bool,
+}
+
+#[cfg(feature = "kernel")]
+impl DriverRuntimeRootNotificationGuard {
+    fn publish(&mut self) {
+        if self.notification == sel4_sys::seL4_CapNull || self.published {
+            return;
+        }
+        driver_task::publish_driver_task_root_notification(
+            self.contract,
+            self.notification as usize,
+        );
+        self.published = true;
+    }
+
+    fn commit(mut self) -> sel4_sys::seL4_CPtr {
+        self.committed = true;
+        self.notification
+    }
+}
+
+#[cfg(feature = "kernel")]
+impl Drop for DriverRuntimeRootNotificationGuard {
+    fn drop(&mut self) {
+        if self.committed || self.notification == sel4_sys::seL4_CapNull {
+            return;
+        }
+        if self.published {
+            driver_task::publish_driver_task_root_notification(self.contract, 0);
+        }
+        let _ = sel4::cnode_delete(self.root_cnode, self.notification, self.root_depth);
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn mint_driver_runtime_root_notification(
+    env: &mut KernelEnv<'_>,
+    root_cnode: sel4_sys::seL4_CPtr,
+    root_depth: u8,
+    notification: sel4_sys::seL4_CPtr,
+    contract: DriverTaskContract,
+) -> Result<DriverRuntimeRootNotificationGuard, HalError> {
+    if !driver_runtime_needs_root_notification(contract) {
+        return Ok(DriverRuntimeRootNotificationGuard {
+            contract,
+            root_cnode,
+            root_depth,
+            notification: sel4_sys::seL4_CapNull,
+            published: false,
+            committed: false,
+        });
+    }
+    let slot = env.allocate_slot();
+    let err = sel4::cnode_mint_depth(
+        root_cnode,
+        slot,
+        root_depth,
+        root_cnode,
+        notification,
+        root_depth,
+        driver_runtime_root_notification_send_rights(),
+        seL4_Word::from(DRIVER_RUNTIME_RESERVED_ROOT_BADGE),
+    );
+    if err != seL4_NoError {
+        let _ = sel4::cnode_delete(root_cnode, slot, root_depth);
+        return Err(HalError::Sel4(err));
+    }
+    Ok(DriverRuntimeRootNotificationGuard {
+        contract,
+        root_cnode,
+        root_depth,
+        notification: slot,
+        published: false,
+        committed: false,
+    })
 }
 
 #[cfg(feature = "kernel")]
@@ -4874,6 +4981,18 @@ impl<'a> KernelHal<'a> {
         let _notification_bound =
             bind_driver_tcb_notification_for_boot(contract, tcb, notification)?;
 
+        // Mint privately before resume, but do not publish producer authority
+        // until the child has started and every fallible construction step has
+        // completed. A failed construction drops the cap and clears any
+        // transient publication instead of leaving a live producer route.
+        let mut root_notification_guard = mint_driver_runtime_root_notification(
+            &mut self.env,
+            root_cnode,
+            root_depth,
+            notification,
+            contract,
+        )?;
+
         let stack_top = (stack_frame.ptr().as_ptr() as usize + (1usize << sel4::PAGE_BITS)) & !0xf;
         sel4::write_tcb_registers(
             tcb,
@@ -4888,28 +5007,13 @@ impl<'a> KernelHal<'a> {
         restore_driver_tcb_steady_priority(contract, tcb, bootstrap_priority, steady_priority)?;
         let affinity_core =
             apply_driver_tcb_affinity_after_bootstrap(contract, tcb, affinity_core)?;
-
-        let root_notification = if driver_runtime_needs_root_notification(contract) {
-            let slot = self.env.allocate_slot();
-            let err = sel4::cnode_mint_depth(
-                root_cnode,
-                slot,
-                root_depth,
-                root_cnode,
-                notification,
-                root_depth,
-                driver_runtime_root_notification_send_rights(),
-                seL4_Word::from(DRIVER_RUNTIME_RESERVED_ROOT_BADGE),
-            );
-            if err != seL4_NoError {
-                let _ = sel4::cnode_delete(root_cnode, slot, root_depth);
-                return Err(HalError::Sel4(err));
-            }
-            slot
+        let root_notification = if started {
+            root_notification_guard.publish();
+            root_notification_guard.commit()
         } else {
-            0
+            sel4_sys::seL4_CapNull
         };
-        driver_task::publish_driver_task_root_notification(contract, root_notification as usize);
+
         Ok(KernelDriverTaskHandle {
             contract,
             role_bit,
@@ -6239,6 +6343,17 @@ impl<'a> KernelHal<'a> {
 
         let _notification_bound =
             bind_driver_tcb_notification_for_boot(contract, tcb, notification)?;
+        // Keep the producer cap private through construction. It is exposed
+        // only after the child advertises receive readiness, immediately
+        // before the first possible sequence-last one-way runtime command.
+        // The guard clears and deletes it on every later error path.
+        let mut root_notification_guard = mint_driver_runtime_root_notification(
+            &mut self.env,
+            root_cnode,
+            root_depth,
+            notification,
+            contract,
+        )?;
         if let Some(recovery_endpoint) = recovery_endpoint {
             let irq_handlers = runtime_irq.root_handler_slots();
             if !driver_task::publish_cyw43_sdio_restart_context(
@@ -6271,6 +6386,9 @@ impl<'a> KernelHal<'a> {
         } else {
             true
         };
+        if runtime_recv_ready {
+            root_notification_guard.publish();
+        }
         let runtime_init_deferred = runtime_init_descriptor.is_some()
             && driver_task::pre_root_runtime_init_deferred_for_shell(contract);
         let runtime_init_ok = if !runtime_recv_ready {
@@ -6461,27 +6579,6 @@ impl<'a> KernelHal<'a> {
             .map(RamFrame::cap)
             .ok_or(HalError::Unsupported("driver-runtime-stack-empty"))?;
 
-        let root_notification = if driver_runtime_needs_root_notification(contract) {
-            let slot = self.env.allocate_slot();
-            let err = sel4::cnode_mint_depth(
-                root_cnode,
-                slot,
-                root_depth,
-                root_cnode,
-                notification,
-                root_depth,
-                driver_runtime_root_notification_send_rights(),
-                seL4_Word::from(DRIVER_RUNTIME_RESERVED_ROOT_BADGE),
-            );
-            if err != seL4_NoError {
-                let _ = sel4::cnode_delete(root_cnode, slot, root_depth);
-                return Err(HalError::Sel4(err));
-            }
-            slot
-        } else {
-            0
-        };
-        driver_task::publish_driver_task_root_notification(contract, root_notification as usize);
         if root_wake_notification != 0
             && !driver_task::publish_driver_task_root_wake_notification(
                 contract,
@@ -6491,6 +6588,12 @@ impl<'a> KernelHal<'a> {
         {
             return Err(HalError::Unsupported("driver-runtime-root-wake-publish"));
         }
+        let started = pointer_free_ipc || (runtime_recv_ready && runtime_init_deferred);
+        let root_notification = if started {
+            root_notification_guard.commit()
+        } else {
+            sel4_sys::seL4_CapNull
+        };
         let runtime_irqs = runtime_irq.commit();
         let reciprocal_link_caps = reciprocal_link_caps.commit();
         Ok(KernelDriverTaskHandle {
@@ -6535,7 +6638,7 @@ impl<'a> KernelHal<'a> {
             affinity_core,
             vspace_isolated: true,
             pointer_free_ipc,
-            started: pointer_free_ipc || (runtime_recv_ready && runtime_init_deferred),
+            started,
         })
     }
 
@@ -8249,14 +8352,61 @@ mod tests {
             super::driver_runtime_needs_root_notification(
                 super::driver_task::SERIAL_DRIVER_TASK_CONTRACT,
             ),
-            super::driver_task::physical_pi_driver_task_only_owner_state_active(),
+            super::driver_task::physical_pi_driver_task_only_owner_state_active()
+                || cfg!(sel4_config_kernel_mcs),
         );
         for contract in [
             super::driver_task::SDIO_HOST_DRIVER_TASK_CONTRACT,
             super::driver_task::USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
             super::driver_task::GENET_DRIVER_TASK_CONTRACT,
         ] {
-            assert!(!super::driver_runtime_needs_root_notification(contract));
+            assert_eq!(
+                super::driver_runtime_needs_root_notification(contract),
+                cfg!(sel4_config_kernel_mcs),
+            );
+        }
+
+        for contract in [
+            super::driver_task::SERIAL_DRIVER_TASK_CONTRACT,
+            super::driver_task::USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
+            super::driver_task::HDMI_TEXT_DRIVER_TASK_CONTRACT,
+            super::driver_task::GENET_DRIVER_TASK_CONTRACT,
+            super::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            super::driver_task::SDIO_HOST_DRIVER_TASK_CONTRACT,
+            super::driver_task::PCIE_ROOT_DRIVER_TASK_CONTRACT,
+        ] {
+            assert!(super::driver_runtime_needs_root_notification_for(
+                contract, true, true,
+            ));
+            assert!(super::driver_runtime_needs_root_notification_for(
+                contract, false, true,
+            ));
+        }
+        for contract in [
+            super::driver_task::RTL8139_DRIVER_TASK_CONTRACT,
+            super::driver_task::VIRTIO_NET_DRIVER_TASK_CONTRACT,
+        ] {
+            assert!(!super::driver_runtime_needs_root_notification_for(
+                contract, false, true,
+            ));
+        }
+        assert!(super::driver_runtime_needs_root_notification_for(
+            super::driver_task::SERIAL_DRIVER_TASK_CONTRACT,
+            true,
+            false,
+        ));
+        for contract in [
+            super::driver_task::USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
+            super::driver_task::HDMI_TEXT_DRIVER_TASK_CONTRACT,
+            super::driver_task::GENET_DRIVER_TASK_CONTRACT,
+            super::driver_task::SDIO_HOST_DRIVER_TASK_CONTRACT,
+            super::driver_task::PCIE_ROOT_DRIVER_TASK_CONTRACT,
+            super::driver_task::RTL8139_DRIVER_TASK_CONTRACT,
+            super::driver_task::VIRTIO_NET_DRIVER_TASK_CONTRACT,
+        ] {
+            assert!(!super::driver_runtime_needs_root_notification_for(
+                contract, true, false,
+            ));
         }
     }
 

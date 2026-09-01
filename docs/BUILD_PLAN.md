@@ -11563,6 +11563,49 @@ Changes:
     generated-consistency, and narrow QEMU root-MCS checks qualify only the
     next candidate; a fresh exact-image Pi boot must clear registry seal and
     reach root shell before backend testing resumes.
+  - runtime ABI v13 exact one-way causal activation — the same-image `0c734db`
+    discriminator proves healthy RF/link, DHCP, GENET DMA/IRQ/rings, TCP
+    ingress, `.coh` semantics, and clean REST pressure while failing both raw
+    targets: WiFi 6.668 requests/s at 168.133-ms p95 and GENET 115.516
+    requests/s at 16.532-ms p95. WiFi request-to-ACK p95 is 150.479 ms; GENET
+    ACK-to-response p95 is 15.793 ms. The first shared invariant is the useful
+    root/runtime MCS activation ending before a finite child result or exact
+    next action becomes visible, not a NIC, RF, DMA, IRQ, ring, retry, or queue
+    defect.
+
+    Advance the fixed-size driver runtime-init shared protocol from v12 to v13.
+    Reply-consuming MCS bootstrap calls retain the supervised Call/Reply lane,
+    donating the current root activation through the exact first descriptor or
+    QEMU trampoline completion; classic bootstrap retains its bounded one-way
+    behavior. A genuinely asynchronous generic MCS one-way command uses one
+    initial notification prompt. After each bounded pending action, its linked
+    runtime commits an exact 24-byte `DROW` record in the auxiliary slot with
+    request sequence, command-action fingerprint, sealed runtime identity,
+    strictly-next wait slice, and sequence-last commit, then atomically
+    `NBSendWait`s the existing slot-12 root-control fan-in and slot-3 local
+    notification. Root accepts only the current stable record, current ring,
+    and current capability generation, changes only the magic to durable
+    `DROA`, then signals that child once. The child resumes only after observing
+    the exact acknowledgement and clears it before the next action. Stale or
+    coalesced badges, duplicate or skipped slices, wrong identity, torn state,
+    a terminal race, or an auxiliary grant/steady/persistent record grant no
+    authority and fail closed. CYW43/SDIO keep their existing hard source-yield
+    boundary; Serial, GENET, HDMI, USB, and PCIe generic work no longer insert
+    an unconditional post-action Yield that forfeits the current refill.
+
+    Preserve every SC budget, period, refill, priority, MCP, WCET, Reply and
+    fault-supervisor rule, isolation boundary, queue, owner, retry, recovery,
+    containment, quarantine, manifest population, and QEMU selector. The
+    driver-runtime manifest producer and its independent pipeline oracle advance
+    to v13 in the same change. The remaining host-tool suite,
+    `tools/cohesix-py`, `.coh` workloads, public console/TCP/REST grammar,
+    `scripts/rest_perf_harness.py`, raw/REST workload arithmetic, and report
+    schemas were reviewed and require no change.
+    Focused ABI/runtime/root tests and the pinned QEMU 10.1/HVF root-MCS canary
+    qualify only a candidate. A fresh exact-image cold/warm WiFi and two GENET
+    lifetimes with canonical scripts, raw64, medium/high REST, paired captures,
+    diagnostics, and operator-path checks remain the direct performance and
+    repeatability discriminator.
   - platform consistency — select the same v6 shared contract, including the
     v4-introduced bounded command batch, complete 256-Worker population, two
     passive-Worker executor-lane architecture, and passive-service locality

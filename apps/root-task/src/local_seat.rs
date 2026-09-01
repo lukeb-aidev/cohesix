@@ -8635,7 +8635,17 @@ fn run_local_seat_driver_task_ring_service_with_prompt_state_and_staging(
     staging_segments: &[crate::hal::driver_task::DriverTaskStagingSegment<'_>],
 ) -> Option<crate::hal::driver_task::DriverTaskCompletionRecord> {
     if crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active() {
-        if local_seat_driver_task_prompt_slice_required(command.aux0, root_console_ready) {
+        if local_seat_driver_task_mcs_reply_required(contract.kind, cfg!(sel4_config_kernel_mcs)) {
+            // HDMI callers consume this exact frame completion immediately and
+            // do not retain a separate asynchronous cursor. Its bounded memory
+            // copy therefore uses supervised MCS Call/Reply, completing the
+            // causal activation without spin, retry, or a stranded token.
+            crate::hal::driver_task::run_driver_task_ring_service_staged(
+                contract,
+                command,
+                staging_segments,
+            )
+        } else if local_seat_driver_task_prompt_slice_required(command.aux0, root_console_ready) {
             crate::hal::driver_task::run_driver_task_ring_service_prompt_slice_staged(
                 contract,
                 command,
@@ -8655,6 +8665,14 @@ fn run_local_seat_driver_task_ring_service_with_prompt_state_and_staging(
             staging_segments,
         )
     }
+}
+
+#[cfg(feature = "kernel")]
+const fn local_seat_driver_task_mcs_reply_required(
+    kind: crate::hal::driver_task::DriverTaskKind,
+    kernel_mcs: bool,
+) -> bool {
+    kernel_mcs && matches!(kind, crate::hal::driver_task::DriverTaskKind::HdmiText)
 }
 
 #[cfg(feature = "kernel")]
@@ -9934,6 +9952,23 @@ mod tests {
         assert!(!local_seat_pre_root_runtime_init_allowed(true, false));
         assert!(local_seat_pre_root_runtime_init_allowed(true, true));
         assert!(local_seat_pre_root_runtime_init_allowed(false, false));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn mcs_hdmi_frame_uses_reply_bearing_completion_path() {
+        assert!(local_seat_driver_task_mcs_reply_required(
+            crate::hal::driver_task::DriverTaskKind::HdmiText,
+            true,
+        ));
+        assert!(!local_seat_driver_task_mcs_reply_required(
+            crate::hal::driver_task::DriverTaskKind::HdmiText,
+            false,
+        ));
+        assert!(!local_seat_driver_task_mcs_reply_required(
+            crate::hal::driver_task::DriverTaskKind::LocalSeatUsb,
+            true,
+        ));
     }
 
     #[cfg(all(feature = "kernel", feature = "usb"))]

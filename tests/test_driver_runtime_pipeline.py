@@ -113,7 +113,7 @@ def test_archive_is_deterministic_complete_and_comparator_bound(tmp_path: Path) 
     ]
     assert document["classic_comparator"]["sha256"] == COMPARATOR
     assert document["classic_comparator"]["record_sha256"] == COMPARATOR_RECORD
-    assert document["runtime_init_abi_version"] == 12
+    assert document["runtime_init_abi_version"] == 13
 
 
 def test_missing_or_noncanonical_comparator_fails_closed(tmp_path: Path) -> None:

@@ -9030,8 +9030,10 @@ tag, range, page index, physical address, descriptor page, IRQ, badge, slot,
 trigger, hot path, period, or
 interval case must perform zero MMIO, signal, and ACK. Compiler resource totals
 and all generated selected outputs must account for the one added page without
-changing task population, schema 1.16, runtime ABI v12 layout, or any SC
-numeric. QEMU root-MCS convergence protects shared receive/event logic but is
+changing task population, schema 1.16, runtime-descriptor layout, or any SC
+numeric. The selected shared protocol is runtime ABI v13 because of the later
+generic one-way wait handshake. QEMU root-MCS convergence protects shared
+receive/event logic but is
 not Pi timing proof.
 
 The direct-GENET current-response correction requires deterministic exact-level
@@ -9643,10 +9645,10 @@ Write-only signal caps, one synchronous command association, and fault-before,
 during, after, cancellation, reconstruction-generation, and normal-versus-
 failure Reply exclusion. One-way bootstrap/background completions signal only
 after their sequence-last ring commit and never consume the command Reply.
-Driver runtime-init ABI v12 must preserve the descriptor's fixed size while
+Driver runtime-init ABI v13 must preserve the descriptor's fixed size while
 assigning its former reserved field to root-control wake slot 12. HAL must mint
 only a Write-only, badge-1 cap there; zero, aliasing, wrong-slot, wrong-badge,
-broad-rights, and ABI-v11-or-older descriptors fail current admission. CYW43's dedicated
+broad-rights, and ABI-v12-or-older descriptors fail current admission. CYW43's dedicated
 slot 11 remains separate. Every durable driver terminal, RX, TX, or completion
 publication must signal the existing role-specific completion/doorbell first
 and slot 12 second. Focused source-order tests must reject signalling before the
@@ -9663,6 +9665,22 @@ followed by a late consumed-ID write. Delegated CYW43-to-SDIO grants must prove
 the same admission/action-completion ordering after the initial exact
 grant-free service receipt, including post-commit peer signalling and
 terminal-supersedes-grant behavior.
+Generic MCS one-way commands must prove a different, mutually exclusive
+continuation contract. After one bounded pending quantum, the runtime must
+commit one 24-byte `DROW` record with the exact request, action fingerprint,
+sealed runtime identity, nonzero strictly-next wait slice, and sequence-last
+commit copy before atomically signalling slot 12 and waiting on slot 3. Root
+must accept only two stable samples from the current ring and capability
+generation, change only the exact record magic to `DROA`, clean and barrier
+that acknowledgement, then signal the child once. The child must clear the
+commit and resume only after observing the exact durable `DROA`; a badge alone,
+duplicate `DROW`, skipped slice, stale request, wrong action, wrong identity,
+torn record, terminal race, or grant/steady/persistent auxiliary record must
+not authorize continuation. Focused tests must also prove reset on Stage,
+transport clear, and pair restart. Reply-consuming MCS bootstrap callers must
+use Call/Reply rather than this asynchronous lane; QEMU trampoline contracts
+must remain notification-ineligible. Classic bootstrap remains bounded and
+one-way.
 The exact-743e CYW43 wait regression must prove that foreground and DPC paths
 capture every passive identity, recovery, and completion fence and select the
 exact `Cyw43Client` route before committing one nonzero child command sequence.
