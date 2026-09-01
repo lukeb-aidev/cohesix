@@ -6831,30 +6831,25 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
       to the rotor.
 
       Cross-core productive progress requires exact generation, connection,
-      stage, and publication identity. An exact authenticated
-      generation/connection `CommandAccepted` result may open an unslid
-      transaction tail before its
-      stage/drain publications; an exact `ResponseDrained` result may also open
-      or advance it.
-      Stage-only progress cannot mint the tail. The tail remains
-      strictly below 8 ms, shares the 64-complete-quantum cap, and is always
-      bounded by the root SC. Every quantum requires final Serial phase and
+      stage, and publication identity. A stage-bearing continuation must bind
+      the exact nonzero one-slot child-control sequence; a later sequential
+      control in the same authenticated connection must not match it. Tests
+      must prove the final durable-state recheck waits only while that exact
+      control still owes its child watermark and no child publication is
+      visible, and that a publication winning the condition-before-block race
+      returns to outer recovery/operator-first arbitration without Yield.
+      Every retained current-request quantum requires final Serial phase and
       rechecks response/queue identity, passive admission, physical operator
-      input or response, recovery, fault, reboot, containment, quarantine,
-      handoff, local fault, counter frequency, wall expiry, and progress. A
-      deterministic fence matrix must preserve `Idle`, `UsbServiceDebt`, and
-      `Input` in both before/after snapshots and the final continuation cut.
-      After a complete rotor, `Idle` and `UsbServiceDebt` permit continuation
-      when all other evidence is exact, `Input` rejects it, and a missing
-      snapshot fails closed. The matrix must also prove that this distinction
-      cannot mint a notification, retry, grant, refill, or child authority. A
-      failed or backpressured stage, stale identity, second command, or any
-      fence closes or denies the tail. A transient-empty complete rotor may
-      consume only the same unslid wall/quantum window. Tests must prove that
-      only exact durable cross-core transaction evidence authorizes
-      continuation or a causal wait; a missing stage, stale publication level,
-      failed Signal, or identity/fence drift cannot mint a continuation token.
-      Host timing or selector tests cannot establish Pi performance.
+      input or response, display debt, recovery, fault, reboot, containment,
+      quarantine, handoff, and local fault under the unchanged 64-quantum and
+      root-SC bounds. Fused stage-and-drain and `ResponseDrained` must close the
+      episode at ordinary explicit Yield. Tests must reject any post-response
+      Network baton, cross-core empty hot tail, broad wait, or continuation for
+      a future request; that request must publish its own command and enter the
+      Serial-first rotor. A failed or backpressured stage, zero or stale
+      sequence, failed Signal, second command, or identity/fence drift cannot
+      mint continuation authority. Host timing or selector tests cannot
+      establish Pi performance.
       Cold-bootstrap coverage must independently consume the existing
       child-to-root notification at most once after the selected bounded
       operator condition turn, then require a fresh exact terminal/fault parent
@@ -8991,28 +8986,24 @@ idle, persistent/steady deadline, recovery, containment, quarantine, reboot,
 or operator Wait, any QEMU critical fan-in Signal, deadline-arm body zeroing or
 arm-time root signal, any bypass or reset of
 the generated WiFi `NaturalPostpone` profile or either unchanged 64 logical/
-productive cap, and any reset or slide of the direct-GENET unslid tail. All
-selected SC and Reply numerics remain unchanged.
+productive cap, any direct-GENET wait lacking the exact current control
+sequence, and any post-response or broad idle wait. All selected SC and Reply
+numerics remain unchanged.
 
-The exact-743e direct-GENET correction additionally requires a deterministic
-typed-baton regression. A positive case must consume one exact
-`OutputDrained` transition through the complete ordinary
-`Serial -> LocalSeat -> Dispatch -> Network` rotor, prove the response-drain
-counter advanced by exactly one while generation, authenticated connection,
-accepted-command, immediate-stage, child-stage-turn, child-stage-success, and
-child-Yield counters stayed exact, stop that quantum without accepting another
-command, mint the baton while proving that the phase remains `Serial`, and
-retain it dormant through the next continuation's late-fence checks. Only a
-successful final pre-quantum consume may arm exactly one Network-first quantum.
-Negative cases must reject batch-drain debt, any counter or identity drift, a
-physical input or response, operator display debt either at mint or at late
-consume, passive admission, local fault, recovery, containment, quarantine,
-reboot, handoff, non-signal-only mode, and a second consume of the baton. Every
-rejection must leave the phase `Serial` and retain the existing Yield path.
-This baton is not a fan-in Wait authorized by peer ACK or `OutputDrained` debt,
-so the blocking-Wait rejection above remains unchanged. Source and QEMU tests
-may prove only the typed state transition and fail-closed selection, not Pi
-latency or throughput.
+The direct-GENET current-response correction requires deterministic exact-level
+regressions. A stage-bearing token must bind one nonzero child-control sequence
+and reject zero, older, newer, wrong-generation, and wrong-connection levels.
+The final condition-before-block cut must require that exact control still owed
+and no child publication visible; the publication-race path must re-enter outer
+recovery/operator-first arbitration without an explicit Yield. Fused
+stage-and-drain and one exact `OutputDrained` transition must mark the current
+response complete, stop the retained activation, leave the ordinary phase
+Serial-first, and take the existing Yield without minting a Network baton or
+cross-core empty hot tail. Negative cases must reject any future-request,
+broad-wait, physical-input/response, display-debt, passive, local-fault,
+recovery, containment, quarantine, reboot, handoff, or identity-drift
+continuation. Source and QEMU tests may prove only exact state selection and
+fail-closed ordering, not Pi latency or throughput.
 
 ABI v6 tests must prove `SendBatch = 3` binary encoding version 1 with exact
 eight-byte header, one through eight records, exact `used_bytes`, reserved zero,
@@ -9644,6 +9635,22 @@ must retain the prior slot-3 local wait-only behavior and prove that this
 correction emits no slot-8 peer signal. This focused check proves syscall
 selection and publication ordering only; it is not evidence that the SDIO
 owner ran or that Gate 8, DHCP, or either performance gate passed on Pi.
+The exact persistent-publication regression must separately drive the
+production sequence-last commit cut. A positive selected-MCS case must prove
+the persistent parent, child sequence, generation, immutable frontier,
+root-grant environment, exact `Cyw43Client` route, no issued-unknown or pair
+restart, and stable `Waiting` completion before selecting one immediate
+`seL4_NBSendWait` on slots 8 and 3. Zero, stale, replaced, nonpersistent,
+wrong-route, recovery, issued-unknown, pair-restart, and non-Waiting cases must
+not select that atomic park. Classic and inexact publication cases must retain
+exactly one signal-only slot-8 prompt. Tests must classify the returned badge
+without granting it work: an unarmed, unexpired, stale, wrong-lifetime, or
+wrong-sequence reserved-root badge must not prompt SDIO, and only the existing
+exact expired-deadline predicate may do so. The durable command/completion
+classifier remains mandatory before any later work. The
+exact MCS target compile must exercise the real syscall. These checks prove
+selection and ordering only; fresh exact-image Pi evidence remains mandatory
+for SDIO-owner observation, Gate 8, DHCP, raw TCP, and repeatability.
 The runtime's nonblocking command seam is kernel-contract-specific: classic
 seL4 uses `seL4_Poll`, while MCS must use `seL4_NBRecv` with the exact
 compiler-generated child Reply slot 6. Once that receive retains a Call, both

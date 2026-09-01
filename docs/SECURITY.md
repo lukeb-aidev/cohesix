@@ -206,24 +206,23 @@ fatal output, timers, containment, or ordinary service.
 Pi network cadence may retain only exact durable productive identity inside the
 generated scheduling policy and unchanged hard caps. Exact direct-GENET
 productive identity may resume under generated `NaturalPostpone` for at most
-64 complete quanta; its separately authorized empty transaction tail remains
-strictly below 8 ms and 64 complete rotors. Mediated WiFi may resume only under
-generated `NaturalPostpone`, with every full Operator, Driver, and attached
-Network service turn charged against the unchanged 64 logical material-work
-cap and productive Driver or attached Network progress independently capped at
-64. Root-control remains on core 0 and console-network on core 2. Opening or
-advancing GENET's wall-guarded empty tail requires durable authenticated
-command or output-drain publication credit followed by Release and the exact
-one-hot Signal; a finite staged boundary may use the condition-before-block
-root fan-in only while the same durable child-consumption watermark remains
-owed. Neither Pi backend pre-drains the child SC or calls `SchedContext_YieldTo`.
-Packet ingress, close, service ticks, mediated WiFi, and QEMU grant no
-direct-GENET tail authority. WiFi additionally binds the selected physical
-lifetime, authenticated generation/connection, and accepted-command epoch.
-Identity drift, operator or passive work, recovery, containment, quarantine,
-reboot, handoff, local fault, incompatible generated policy, invalid GENET-tail
-time, or cap expiry fails closed without a new refill, retry, packet owner, or
-device authority.
+64 complete quanta and only for the current authenticated request. A
+stage-bearing continuation additionally binds the exact nonzero one-slot
+child-control sequence and may use the condition-before-block root fan-in only
+while that same control still owes its child watermark. Fused stage-and-drain
+or `OutputDrained` is terminal: direct GENET takes the ordinary Yield and
+cannot carry a baton, empty hot tail, broad wait, or authority into a future
+sequential request. Mediated WiFi may resume only under generated
+`NaturalPostpone`, with every full Operator, Driver, and attached Network
+service turn charged against the unchanged 64 logical material-work cap and
+productive Driver or attached Network progress independently capped at 64.
+Root-control remains on core 0 and console-network on core 2. Neither Pi
+backend pre-drains the child SC or calls `SchedContext_YieldTo`. WiFi
+additionally binds the selected physical lifetime, authenticated
+generation/connection, and accepted-command epoch. Identity or control-sequence
+drift, operator or passive work, recovery, containment, quarantine, reboot,
+handoff, local fault, incompatible generated policy, or cap expiry fails
+closed without a new refill, retry, packet owner, or device authority.
 
 The exact-743e CYW43 correction does not grant wake-badge authority. Only after
 one nonzero sequence-last child command is durable and the retained root-causal
@@ -238,18 +237,29 @@ additional SDIO peer signal. A coalesced MCS wake can re-prompt only the same
 durable command; it cannot authorize a retry, duplicate device action,
 fallback owner, broadened capability, or new queue entry.
 
-The exact-743e direct-GENET correction may skip one already-paid operator
-prefix only through a single-use typed post-`OutputDrained` Network baton. Its
-generation, authenticated connection, command, stage, drain, Yield, operator,
-display-debt, passive, fault, recovery, containment, quarantine, reboot, and
-handoff snapshot must all remain exact. Minting stops the current quantum,
-cannot admit a second command, and leaves the phase `Serial`; the baton stays
-dormant while all late fences are rechecked. Only its final one-shot
-pre-quantum consume may arm exactly one Network-first rotor immediately before
-invocation, not child work, a packet, NIC authority, refill, or generic burst.
-Any missing, consumed, reused, or drifted field—including new display debt—
-leaves the ordinary Serial-first path and existing Yield unchanged, so the
-optimization cannot bypass operator priority or safety fences.
+The exact persistent-publication correction adds no badge authority. After the
+sequence-last child command is durable, CYW43 revalidates the exact persistent
+parent, child, generation, immutable frontier, root-grant environment,
+`Cyw43Client` route, recovery fences, and stable `Waiting` completion. Only
+that selected-MCS publication may atomically prompt slot 8 and park on slot 3
+before later bookkeeping. Classic and every inexact or nonpersistent
+publication retain one signal-only prompt. The returned badge carries no work
+authority. A reserved-root bit may pass only through the existing exact
+expired-deadline classifier, which independently requires the immutable arm,
+physical lifetime, child sequence, and expiry before prompting SDIO. SDIO
+independently validates the durable command and generation before its sole
+physical issue. This cannot broaden either cap, duplicate an operation, or
+create a retry, queue, fallback owner, or recovery path.
+
+The direct-GENET correction narrows continuation authority to the current
+causal episode. Generation and connection are insufficient without the exact
+nonzero child-control sequence for a stage-bearing wait. Once fused
+stage-and-drain or `OutputDrained` completes that response, the current
+activation ends at explicit Yield. A post-response Network baton, cross-core
+empty hot tail, or broad fan-in wait is never minted for a request the peer has
+not yet published. The next request enters the ordinary Serial-first rotor, so
+the correction cannot bypass operator priority, display debt, passive work,
+fault handling, or any recovery and containment fence.
 
 Routine diagnostics are best-effort and may be dropped under their declared
 bound. Security-relevant authority, lifecycle, completion, and fault decisions

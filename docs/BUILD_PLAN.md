@@ -11269,7 +11269,7 @@ Changes:
     root-MCS canary may reject this candidate. Only the next exact-image WiFi
     boot and authenticated serial GENET reboot can prove the stated performance
     gates; repeatability and pressure depth remain separate hardware evidence.
-  - exact-743e retained-peer and post-drain baton correction — cite this
+  - exact-743e/51bf discriminators and superseding exact-publication/current-response correction — cite this
     performance correction together with its owning
     `m26e-driver-runtime-mcs-port-and-cyw43-coexistence` and
     `m26e-console-network-service-isolation` tasks. Exact source
@@ -11279,7 +11279,7 @@ Changes:
     `2bf5a82422a788681bf333ab46f1e448e08b08a1a4919a89d16fdfcbb33d5f13`,
     and sealed image SHA-256
     `ca8f5af5eee4fd8954776f5012cadff85b7431bf79aec7ad494f31ab3eaf6fa1`
-    bind the current hardware discriminator. One cold and two rebooted WiFi
+    bind the exact-743e hardware discriminator. One cold and two rebooted WiFi
     lifetimes all stopped before Gate 8 and DHCP with the same exact state:
     root grant request 3 remained action-admitted at consumed value
     `0x80000001`, the sequence-last SDIO command
@@ -11304,41 +11304,76 @@ Changes:
     performance-failure observations only; the second lifetime's erroneous
     host-side duplicate ATTACH invocation is excluded from script acceptance.
 
-    Repair the two earliest proven scheduling cuts without changing either
-    physical owner. For a retained foreground or DPC CYW43 root-causal wait,
-    commit the exact nonzero child command sequence first, re-observe the
-    durable peer frontier, and only when it is still `Waiting` on the exact
-    `Cyw43Client` route execute one MCS `seL4_NBSendWait`: nonblocking-send the
-    existing send-only slot-8 SDIO doorbell and atomically block CYW43 on its
-    bound read-only slot-3 local notification. This atomic peer prompt is
-    MCS-only; a deliberately selected classic non-MCS profile retains its
-    prior slot-3 local wait-only behavior and emits no additional slot-8
-    signal. The record, not either badge, remains work authority. `Returned`,
-    `Recovery`, `Invalid`, wrong-route, zero-sequence, or post-wake identity
-    drift cannot enter or retain this cut and must return to the existing
-    fail-closed path. A coalesced MCS re-prompt after an unrelated wake
-    services the same one durable command; it is not another physical
-    operation, command retry, poller, or owner.
+    Exact source `51bf6581f7f8b9ba343dc3e647e16ff245cfaff9`, build ID
+    `92489bd085b49a3a049ee88cd2fd78f0ffccb7634c7305faad75f57008837a9b`,
+    normalized image ID
+    `f570b3ae990fa33f589601f61c9f5c86712c3de8a7ac67edb0de97964a594980`,
+    and sealed image SHA-256
+    `9ef7b0a6e62cc22c0d6a1dbc4cdb331d64b417e1d31866fa0d224ee2e99d36b9`
+    bind the superseding discriminator. Its cold plus two rebooted WiFi
+    lifetimes again failed before Gate 8 and DHCP: root's stable double-read
+    proved the same sequence-last SDIO command while the owner remained on its
+    older engine-init sequence and no child bus episode or terminal appeared.
+    Its two strict one-connection GENET raw64 runs completed 64/64 without
+    retry or reconnect but measured only `106.8051723372317` and
+    `101.42289185349958` requests/s at `18.985666800290346` and
+    `19.93320812471211` ms p95. Both completed all three scripts first attempt;
+    medium/high REST completed `960/960` without semantic, timeout, reconnect,
+    queue, recovery, containment, quarantine, or driver error. Packet timing
+    and balanced DMA/IRQ/rings locate the regression after ingress: the
+    post-`OutputDrained` baton ran too late, while command publication to root
+    observation and dispatch to stage still crossed MCS Yield periods.
 
-    For direct GENET, after the ordinary
-    `Serial -> LocalSeat -> Dispatch -> Network` rotor consumes one exact
-    `OutputDrained` publication, mint at most one typed post-operator Network
-    baton. It binds the cross-core signal-only mode, generation, authenticated
-    connection, accepted-command count, immediate-stage count, stage-turn and
-    stage-success counts, and the exact incremented response-drain count. It
-    also requires no remaining batch drain, child Yield evidence, physical
-    operator input, physical console response, operator display debt, passive
-    admission, local fault, recovery, containment, quarantine, reboot, or
-    handoff. Mint the baton dormant: the current quantum stops without
-    admitting another command and the service phase remains `Serial`. The next
-    retained continuation also remains Serial-first while every late counter,
-    identity, operator, display-debt, recovery, cap, and safety fence is
-    revalidated. Only at the final pre-quantum cut may the exact baton be
-    consumed once and arm one `Network` leaf immediately before invocation,
-    avoiding a second already-paid operator prefix. Rejection, drift, absence,
-    or a second consume leaves the phase `Serial` and retains explicit-Yield
-    behavior. The baton grants no NIC operation, child work, queue entry,
-    scheduling context, refill, or generic Network burst.
+    Repair the proven WiFi publication cut and the current-request GENET
+    regression without changing either physical owner. Immediately after an
+    exact persistent CYW43 parent commits its nonzero sequence-last SDIO child
+    command, and before later semantic
+    bookkeeping can unwind the publisher, revalidate the complete parent,
+    child, generation, immutable frontier, root-grant environment, route,
+    issued-unknown, pair-restart, and `Waiting` completion fences. Only that
+    exact selected-MCS `Cyw43Client` publication may execute one
+    `seL4_NBSendWait`: nonblocking-send the existing send-only slot-8 SDIO
+    doorbell and atomically park CYW43 on its bound read-only slot-3 local
+    notification. The durable ring command and completion, not either badge,
+    remain authority. A returned root badge may enter only the existing exact
+    expired-deadline classifier; without its immutable arm, lifetime, sequence,
+    and expiry proof it schedules nothing. Every classic publication and every inexact,
+    nonpersistent, stale, recovery, wrong-route, zero-sequence, replaced, or
+    otherwise fenced MCS publication retains the existing single slot-8
+    signal-only path. The later finite foreground/DPC root-causal wait remains
+    separately fenced; neither path creates another command, physical
+    operation, retry, poller, queue, or owner.
+
+    For direct GENET, bind every stage-bearing cross-core continuation to the
+    exact nonzero one-slot child-control sequence in addition to the current
+    authenticated generation and connection. The condition-before-block
+    fan-in may wait only while that exact control still owes its child
+    watermark; if the child wins the race, its durable publication returns to
+    outer recovery/operator-first arbitration without an intervening Yield.
+    Once the current request reaches its exact response terminal—either fused
+    stage-and-drain or `OutputDrained`—end the retained activation and take the
+    ordinary explicit Yield. Do not mint a post-response Network baton, open a
+    cross-core empty hot tail, wait broadly for a future event, or admit a
+    speculative sequential request. A future request must publish its own
+    command and re-enter the ordinary Serial-first rotor. Identity, sequence,
+    operator, display, passive, fault, recovery, containment, quarantine,
+    reboot, or handoff drift fails closed without child work, NIC authority,
+    queue entry, refill, or owner transfer.
+
+    This correction does not claim to eliminate the earlier direct-GENET
+    command-publication-to-root-observation delay. The child already commits
+    and signals both its semantic edge and root fan-in, but an idle MCS root
+    may already have forfeited its refill through `Yield`. The current fan-in
+    is intentionally unbound, passive root endpoint traffic is separately
+    polled, and timer plus USB/operator cadence is root-polled; replacing Yield
+    with a broad notification wait could therefore strand Reply, timer,
+    recovery, reboot, and operator work. Closing that first seam requires one
+    compiler-declared event-driven root-idle topology with bound fan-in,
+    endpoint/Reply multiplexing, and a real bounded timer producer. Do not add
+    a post-response wait, spin, retry, poll loop, fallback owner, or unbounded
+    future-request promise as a local substitute. Until hardware measurement,
+    the current source is a discriminator, not certainty that GENET meets its
+    raw gate.
 
     Preserve every SC budget, WCET, period, priority, MCP, refill count, Reply
     rule, operator ordering, physical owner, queue, retry, deadline, recovery,
@@ -11364,8 +11399,9 @@ Changes:
   - Pi build compatibility — refresh the repository-managed `pi4_diagnostic` tree from the freshly built SMP+MCS profile, require exact current-profile validation and deterministic immutable-tree composition, use the selected `CARGO_TARGET_DIR` for every Pi runtime payload, and compile direct VirtIO DMA containment only for QEMU/VirtIO profiles. Bind the pre-root-task Pi driver-runtime CPIO into image provenance and copy that exact archive into the SD stage, so `--skip-build` cannot repackage a later QEMU-feature child from the shared Cargo target directory. Retain the exact selected Pi resolved manifest beside the staged image before cleanup restores canonical QEMU generated outputs, and bind the stage-only runtime/DMA proof to that retained file and digest.
   - compatibility — preserve public AUTH/framing/command/ACK/ERR/END behavior, one-slot publication ACK semantics, root policy authority, MCS admission, evidence, and fault containment; advance the selected manifest through schema 1.16: schema 1.15 retains the generated internal Worker execution contract and transport correlation identity, while schema 1.16 seals the root-control fan-in slots and internal console/driver ABI versions. Update compiler, generated truth, host/target NineDoor, focused tests, host tools, Python library, SwarmUI projections, and benchmark compatibility review together. Full host-tool and `tools/cohesix-py` review preserves the public grammar, generated target-profile contract, and host dependencies. It requires bounded host-only compatibility repairs: `cohsh` TCP-only builds no longer compile in the in-process NineDoor/mock/trace implementation, in-process integration tests declare that required feature explicitly, `cas-tool` and SwarmUI integration tests resolve their Cargo-provided binaries at runtime so all-target linting remains portable, and the Python target validator adopts the generated Pi 1/127/128 population. The evidence and benchmark tools additionally derive the complete 265-task QEMU and 272-task Pi temporal seals from generated truth, keep exactly one detailed live exemplar for each executable role, admit target-neutral fresh-Pi proof, and compare provenance-compatible QEMU/Pi throughput and errors without turning QEMU latency into a physical-network gate. Hive Gateway's `/v1/meta/status` projection adds required normalized configured-backend `target_host` and `target_port` fields so fresh-Pi evidence binds the live gateway to the exact Pi console endpoint; it does not expose the REST bind endpoint or create target proof for host-model mode. `coh`, `cohsh`, `coh-status`, SwarmUI, `gpu-bridge-host`, `host-ticket-agent`, `host-sidecar-bridge`, `sidecar-bus`, `cas-tool`, every `.coh` workload, and `tools/cohesix-py` tolerate or ignore those additive status fields and require no behavior or schema change. Existing QEMU results do not claim Pi performance, and the enlarged Pi declaration requires fresh exact-image physical evidence. The original manifest/build integration performed no Pi hardware interaction; later exact-image bullets bind their own fresh Pi evidence and still require a new exact-image boot after each source candidate.
 Commands:
-  - cargo test -p pi4-driver-runtime --lib root_causal_wait_handoff_rearms_exact_sdio_successor_only_while_waiting -- --test-threads=1
-  - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib direct_genet_child_notification_successor_mints_one_exact_network_baton -- --test-threads=1
+  - cargo test -p pi4-driver-runtime --lib persistent_child_publication_selects_atomic_mcs_handoff_and_classic_signal -- --test-threads=1
+  - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib direct_genet_causal_wait_matches_only_the_current_control_identity -- --test-threads=1
+  - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib pi_genet_completed_response_does_not_open_a_future_request_tail -- --test-threads=1
   - scripts/ci/test_plan_converge.sh --target qemu --focus root-mcs --path apps/root-task/src/event/mod.rs
   - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib pi_root_control_ -- --test-threads=1
   - cargo test -p root-task --test mcs_activation_order -- --test-threads=1

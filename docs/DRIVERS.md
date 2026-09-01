@@ -295,13 +295,16 @@ must acquire and recheck the sequence-last durable record before acting or
 sleeping. ABI v12 preserves every role's physical ownership, queue, retry,
 recovery, and fault contract.
 
-The exact-743e retained-peer and post-drain corrections are scheduling-only.
-The MCS CYW43 path reuses its bound local-notification slot 3 and the generated
-send-only SDIO-doorbell slot 8; the classic non-MCS path retains only its prior
-slot-3 local wait. The GENET path reuses existing direct-console counters and
-records. Neither correction changes an ABI layout or version, capability right,
-manifest field, generated contract, queue, owner, command, completion, retry,
-or recovery record.
+The exact-publication and current-response corrections are scheduling-only.
+An exact persistent MCS CYW43 publisher reuses its bound local-notification
+slot 3 and generated send-only SDIO-doorbell slot 8 for one atomic prompt and
+park immediately after sequence-last child commit; classic and inexact
+publication paths retain their existing one slot-8 signal. The separately
+fenced later root-causal wait keeps its existing kernel-specific wait behavior.
+The GENET path binds its existing one-slot control sequence and current
+response terminal; it adds no record or tail. Neither correction changes an ABI
+layout or version, capability right, manifest field, generated contract, queue,
+owner, command, completion, retry, or recovery record.
 
 ### Step 3: Add the scheduling contract
 
@@ -1240,6 +1243,22 @@ transport:
   classic non-MCS profile retains its prior slot-3 local-notification wait-only
   behavior and sends no additional slot-8 SDIO signal; unrelated runtime waits
   retain their existing syscall selection.
+- An exact persistent foreground publication closes the earlier scheduling
+  discontinuity at the command commit itself. Immediately after committing the
+  nonzero sequence-last value, CYW43 revalidates the persistent parent, immutable
+  child and generation, current root-grant environment, exact `Cyw43Client`
+  route, absence of issued-unknown or pair restart, and a stable `Waiting`
+  completion. Selected MCS then uses one `seL4_NBSendWait` to prompt slot 8 and
+  park on slot 3 before later semantic bookkeeping. A returned badge has no
+  work authority; a reserved-root bit is routed only through the existing
+  immutable-arm, physical-lifetime, child-sequence, and expiry classifier
+  before it may prompt the sole SDIO owner. The retained state machine then
+  reclassifies the durable completion.
+  Classic and every inexact, nonpersistent, stale, replaced, recovery, or
+  wrong-route publication perform the existing single slot-8 signal instead;
+  they do not inherit the atomic park. SDIO remains the sole issuer and must
+  independently validate the same immutable command and generation before
+  touching hardware.
 - Within one CYW43 root-granted foreground turn, observing and consuming one
   exact successful SDIO child terminal under a sealed finite cold parent does
   not consume that turn's sole new-submission slot. The admitted cold set is
@@ -1367,49 +1386,24 @@ transport:
   revalidates; the child remains bounded by its own SC, and QEMU retains its
   existing direct-VirtIO selector.
 - Exact durable cross-core direct-GENET productive identity may retain
-  root-control under the same generated NaturalPostpone profile and unchanged
-  64-complete-quantum cap. Every quantum rechecks generation, connection,
-  operator, passive, recovery, containment, quarantine, reboot, handoff, and
-  continuation-mode fences; no successor takes the explicit Yield. Userland
-  wall time and child-consumption telemetry do not decide productive
-  continuation. An authenticated command or `OutputDrained` transition may
-  open or advance one root-local transaction tail for that exact identity. A
-  stage may wait at most 64 times inside the unchanged activation bound, and
-  only while the sealed control still owes its child-consumption watermark. Stable
-  publication returns to the rotor, and stage-only progress cannot mint an
-  unrelated tail. The first qualifying transition's CNTVCT sample is its unslid
-  wall origin. The tail remains strictly below 8 ms and no more than 64 complete
-  physical-rotor quanta, and
-  the root's `5,500/10,000 us` SC remains the hard execution bound. Every
-  quantum rechecks generation, connection, final Serial phase,
-  passive admission, physical operator/response priority, local fault,
-  recovery, containment, quarantine, reboot, handoff, counter frequency, wall
-  expiry, and the shared cap. Before/after continuation snapshots preserve the
-  typed operator state: after the complete rotor, `UsbServiceDebt` does not
-  close the tail, real `Input` does, and an unavailable snapshot fails closed.
-  A transient-empty complete rotor may consume only the remainder of that same
-  unslid tail; this is the only wall-guarded empty-turn allowance. Stale,
-  backpressured, faulted, or operator-owned work closes it
-  without a retry, second packet operation, new refill, or child authority. A
-  second command remains behind complete operator/display debt. Mediated WiFi
-  cannot mint direct-GENET tail authority.
-- After the ordinary `Serial -> LocalSeat -> Dispatch -> Network` rotor
-  consumes one exact direct-GENET `OutputDrained` publication, root may mint
-  one typed post-operator Network baton. It binds signal-only cross-core mode,
-  generation, authenticated connection, accepted-command, immediate-stage,
-  child-stage-turn, child-stage-success, and exactly incremented
-  response-drain counters, with no batch-drain debt, child Yield, physical
-  input or response, operator display debt, passive admission, local fault,
-  recovery, containment, quarantine, reboot, or handoff. The minting quantum
-  stops without accepting another command and leaves the phase `Serial`, with
-  the baton dormant. The next retained continuation revalidates the complete
-  snapshot and every late fence, including display debt, without changing that
-  phase. Only the final pre-quantum consume may use the baton once to arm one
-  Network leaf immediately before invocation. Missing, consumed, reused, or
-  drifted authority leaves the ordinary Serial-first rotor and explicit Yield
-  unchanged. This skips one already-paid operator prefix but grants no child
-  work, NIC operation, packet, queue entry, refill, owner transfer, or generic
-  burst.
+  root-control under the generated NaturalPostpone profile and unchanged
+  64-complete-quantum cap only for the current authenticated request. Every
+  stage-bearing continuation binds generation, connection, and the exact
+  nonzero one-slot child-control sequence. Its condition-before-block fan-in
+  wait remains eligible only while that same control level still owes the
+  child's watermark and no durable child publication is visible; a publication
+  that wins the race returns through outer recovery/operator-first arbitration
+  without Yield. Every quantum rechecks operator, passive, fault, recovery,
+  containment, quarantine, reboot, handoff, and continuation-mode fences, and
+  the root's `5,500/10,000 us` SC remains the hard execution bound. Fused
+  stage-and-drain or `OutputDrained` is the terminal of this causal episode:
+  root takes the ordinary explicit Yield and cannot mint a post-response
+  Network baton, cross-core empty hot tail, broad event wait, or authority for
+  a future sequential request. The next request must publish its own command
+  and enter the ordinary Serial-first rotor. Stale, backpressured, faulted, or
+  operator-owned work fails closed without a retry, second packet operation,
+  new refill, child authority, or owner transfer. Mediated WiFi cannot acquire
+  direct-GENET continuation authority.
 - A parsed Pi passive-service command whose strict reserve lease expires is
   retained across at most one completely new Yield/refill attempt. The retry
   begins from `AwaitingYield`, drains fresh Consumed evidence, and retains the

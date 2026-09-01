@@ -579,7 +579,7 @@ fn root_control_fanin_waits_only_for_exact_causal_child_debt() {
         .find("productive_window.causal_child_wait_identity()")
         .expect("steady GENET must require a transaction-scoped child identity");
     let durable_debt = steady[causal_identity..]
-        .find("pump.pi_root_control_productive_child_wait_eligible(*identity)")
+        .find("pump.pi_root_control_productive_child_wait_eligible(identity)")
         .map(|offset| causal_identity + offset)
         .expect("steady GENET must re-read live child debt before blocking");
     let causal_wait = steady[durable_debt..]

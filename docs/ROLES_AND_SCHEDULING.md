@@ -378,6 +378,17 @@ non-MCS profile retains its prior local-notification wait-only behavior and
 emits no additional SDIO peer signal. This changes no cap right, slot, owner,
 SC numeric, refill, priority, period, deadline, retry, or Reply rule.
 
+The persistent publication cut is earlier and separately exact. Immediately
+after committing one nonzero sequence-last persistent SDIO child, CYW43
+revalidates the parent, child, generation, immutable frontier, root-grant
+environment, exact `Cyw43Client` route, issued-unknown and pair-restart fences,
+and stable `Waiting` completion. Selected MCS may then use one
+`seL4_NBSendWait` to prompt slot 8 and atomically park on slot 3 before later
+semantic bookkeeping. Classic and every inexact or nonpersistent publication
+retain the existing one slot-8 signal and do not park at this cut. The badge is
+only a hint; the durable ring and completion remain authority, and SDIO alone
+validates and issues the physical operation.
+
 The deferred physical WiFi supervisor may retain root-control across productive
 logical turns only when generated root truth is active, admitted,
 consumed-time capable, and selects `NaturalPostpone`. It alternates exactly one
@@ -464,49 +475,30 @@ Network visit. On Pi, root-control remains on core 0 and console-network runs
 independently on core 2 at equal priority. Both Pi backends use only the
 post-commit Release plus one-hot Signal handoff; neither pre-drains the child SC
 nor calls `SchedContext_YieldTo`. Direct GENET may retain the same causal
-activation after an exact stage only by revalidating that the sealed child
-control still owes its consumption watermark, then performing the condition-before-block
-Poll/Wait cut described above.
+activation after an exact stage only by binding and revalidating the sealed
+child control's exact nonzero sequence while it still owes its consumption
+watermark, then performing the condition-before-block Poll/Wait cut described
+above.
 
 Exact durable cross-core direct-GENET transaction identity may retain
 root-control under the generated NaturalPostpone profile and unchanged
-64-complete-quantum cap. Userland wall time and child-consumption telemetry are
-not productive admission authority. A generation/connection command acceptance
-may open one unslid root-local transaction tail; exact stage and
-`OutputDrained` transitions may advance only that same identity. Stage-only
-progress cannot mint a tail for an unrelated request. The tail
-lasts strictly less than 8 ms and no more than 64 complete ordinary
-physical-rotor quanta; it remains the only wall-guarded empty-turn allowance.
-The root SC remains the hard CPU bound. Every quantum immediately rechecks
-passive admission and physical
-operator input or response, recovery, fault, containment, quarantine, reboot,
-handoff, identity, final Serial phase, counter frequency, wall expiry, and the
-shared cap. Retained before/after snapshots preserve the same typed operator
-state: after the complete rotor, `UsbServiceDebt` alone does not close the
-tail, real `Input` does, and an unavailable snapshot fails closed. A
-transient-empty complete rotor consumes only that same unslid window; stale,
-invalid, unaccounted, or fenced work closes it. A queued second command remains
-behind ordinary Serial/LocalSeat/Dispatch/Display debt. CYW43 keeps its
-ordinary connection-bound cursor and the distinct NaturalPostpone/64-unit
-contract above; mediated WiFi cannot acquire direct-GENET tail authority.
-
-After the ordinary `Serial -> LocalSeat -> Dispatch -> Network` rotor consumes
-one exact direct-GENET `OutputDrained` publication, it may mint one typed
-post-operator Network baton for the next retained quantum. The baton binds the
-signal-only mode, generation, authenticated connection, accepted-command,
-immediate-stage, child-stage-turn, child-stage-success, and exactly incremented
-response-drain counters; it also proves no batch-drain debt, child Yield,
-physical input or response, operator display debt, passive admission, local
-fault, recovery, containment, quarantine, reboot, or handoff. The minting
-quantum stops, may not admit a second command, and deliberately leaves the
-phase `Serial`; the baton remains dormant. The next retained continuation
-revalidates every bound counter and every late identity, operator,
-display-debt, recovery, cap, and safety fence while still Serial-first. Only
-the final pre-quantum consume may use the baton once to arm exactly one
-`Network` leaf immediately before invocation. Rejection, absence, drift, or a
-second consume leaves `Serial` unchanged and retains explicit-Yield behavior.
-This is not a child or NIC work grant, refill, owner transfer, or generic
-Network burst.
+64-complete-quantum cap only for the current authenticated request. A
+stage-bearing continuation binds the exact generation, connection, and
+nonzero one-slot child-control sequence; generation and connection alone
+cannot match a later sequential publication. The condition-before-block fan-in
+may wait only while that exact control still owes its child-consumption
+watermark and no durable child publication is visible. If the child wins the
+race, root returns to outer recovery/operator-first arbitration without
+Yield. Every quantum rechecks passive admission, physical operator input or
+response, display debt, recovery, fault, containment, quarantine, reboot,
+handoff, identity, final Serial phase, and the shared cap; the root SC remains
+the hard CPU bound. Fused stage-and-drain or `OutputDrained` ends the current
+causal episode and takes the ordinary explicit Yield. It cannot mint a
+post-response Network baton, cross-core empty hot tail, broad wait, or
+authority for a future request. A queued next command remains behind the
+ordinary Serial/LocalSeat/Dispatch/Display rotor. CYW43 keeps its distinct
+NaturalPostpone/64-unit contract and cannot acquire direct-GENET continuation
+authority.
 
 Cold, attached, and steady Pi root-control use the fan-in at an already-fenced
 ordinary or no-successor exit. One nonzero poll result returns to outer
@@ -520,11 +512,10 @@ that no stable terminal or child-frontier publication is visible, polls once,
 waits only on an empty result, then
 returns through the full outer durable-state rotor. There is no generic
 blocking idle cut, software work latch, poll loop, retry, fallback owner, or
-SDIO deadline-arm side effect. The WiFi and exact
-productive direct-GENET paths use the generated NaturalPostpone profile and
-unchanged 64-unit caps; only the existing direct-GENET empty tail retains its
-unslid wall guard. Every SC numeric, Reply rule, isolation boundary, queue, and
-owner remains unchanged.
+SDIO deadline-arm side effect. The WiFi and exact productive direct-GENET
+paths use the generated NaturalPostpone profile and unchanged 64-unit caps.
+Direct GENET has no broad idle wait or post-response cross-core tail. Every SC
+numeric, Reply rule, isolation boundary, queue, and owner remains unchanged.
 
 A parsed passive-service command may survive one expired strict reserve lease
 only by crossing a completely new explicit Yield/refill. The new attempt starts
@@ -626,30 +617,18 @@ latency. Fresh same-image Pi load evidence must still prove authenticated
 response cadence.
 
 Exact durable cross-core direct-GENET productive identity may retain root under
-generated NaturalPostpone up to the unchanged 64-quantum cap; wall and child-
-consumption telemetry are not admission authority. After an authenticated
-command acceptance or response drain, root may additionally retain one unslid
-local transaction tail for strictly less than 8 ms and at most 64 complete
-physical-rotor quanta. An exact stage may use one condition-before-block wait
-only while that same sealed control still owes its child-consumption watermark;
-stage-only progress cannot mint unrelated authority. The root SC remains the
-hard CPU bound. Every admitted quantum rechecks
-exact generation, connection, final Serial phase, counter frequency, passive
-admission, physical operator/response priority, local fault, recovery,
-containment, quarantine, reboot, handoff, wall expiry, and the shared cap.
-Transient-empty rotors share the same wall and quantum bounds; a stale,
-drifted, faulted, unaccounted, or operator-owned cut closes the tail. It never
-grants another packet operation, retry, refill, or owner. Mediated WiFi cannot
-acquire direct-GENET tail authority.
-
-One exact post-operator Network baton may additionally carry an already
-consumed direct-GENET `OutputDrained` transition across a single retained
-quantum boundary. It is valid only while its typed generation, connection,
-stage, drain, Yield, operator, display-debt, and safety-fence snapshot remains
-exact. It stays dormant with phase `Serial` until the final pre-quantum cut,
-where one successful consume arms one Network-first rotor. It grants no second
-command or packet authority; rejection or reuse leaves the ordinary
-Serial-first path unchanged.
+generated NaturalPostpone up to the unchanged 64-quantum cap only while the
+current authenticated request has exact productive work. A stage-bearing
+token additionally binds the nonzero one-slot child-control sequence and may
+use one condition-before-block wait only while that exact control still owes
+its child watermark. The root SC remains the hard CPU bound, and every admitted
+quantum rechecks generation, connection, final Serial phase, passive admission,
+physical operator/response priority, display debt, local fault, recovery,
+containment, quarantine, reboot, handoff, and the shared cap. The current fused
+stage-and-drain or `OutputDrained` terminal closes the episode at explicit
+Yield. No post-response baton, cross-core empty tail, broad wait, second packet
+operation, retry, refill, or owner authority survives for a future request.
+Mediated WiFi cannot acquire direct-GENET continuation authority.
 
 The Pi CYW43 boot supervisor consumes the root and console generated response bounds only
 after the DHCP-bound console child is finalized and resumed. Each bound is

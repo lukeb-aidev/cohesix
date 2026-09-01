@@ -662,6 +662,7 @@ where
                     pump,
                     &mut productive_window,
                     natural_postpone_profile,
+                    true,
                 )
             }
             #[cfg(not(all(
@@ -691,17 +692,25 @@ where
             {
                 let causal_child_wait = (!handoff_turn)
                     .then(|| productive_window.causal_child_wait_identity())
-                    .flatten()
-                    .filter(|identity| {
-                        pump.pi_root_control_productive_child_wait_eligible(*identity)
-                    });
-                if causal_child_wait.is_some() && wait_pi_root_control_causal_fanin(ctx) {
-                    // The exact stage remains the authority before sleep. The
-                    // wake carries no work identity, so restart at the outer
-                    // recovery/operator fence and consume the durable child
-                    // publication through the ordinary Network rotor.
-                    productive_window.record_causal_child_wait();
-                    continue;
+                    .flatten();
+                if let Some(identity) = causal_child_wait {
+                    if pump.pi_root_control_productive_child_wait_eligible(identity)
+                        && wait_pi_root_control_causal_fanin(ctx)
+                    {
+                        // The exact staged control sequence remains authority
+                        // before sleep. The wake carries no work identity, so
+                        // restart at the outer recovery/operator fence and
+                        // consume durable child output through the ordinary
+                        // Network rotor.
+                        productive_window.record_causal_child_wait();
+                        continue;
+                    }
+                    if pump.pi_root_control_productive_child_publication_ready(identity) {
+                        // The child won the condition-before-block race. Its
+                        // durable level, not the coalesced badge, returns us to
+                        // outer recovery/operator arbitration without Yield.
+                        continue;
+                    }
                 }
                 if !handoff_turn
                     && productive_window.nonblocking_fanin_hint_eligible()
@@ -782,6 +791,7 @@ where
             pump,
             &mut productive_window,
             natural_postpone_profile,
+            false,
         );
         #[cfg(not(all(
             feature = "net-console",
@@ -1594,22 +1604,6 @@ impl PiRootControlProductiveWindow {
         self.continuation
     }
 
-    fn consume_post_operator_network_baton(
-        &mut self,
-        expected: crate::event::PiRootControlProductiveContinuation,
-    ) -> bool {
-        if self.continuation != Some(expected) || !expected.has_post_operator_network_baton() {
-            self.last_reject_reason = Self::REJECT_TOKEN;
-            return false;
-        }
-        let consumed = expected.without_post_operator_network_baton();
-        self.continuation = Some(consumed);
-        if self.active_hot_tail == Some(expected) {
-            self.active_hot_tail = Some(consumed);
-        }
-        true
-    }
-
     const fn active_hot_tail_identity(
         self,
     ) -> Option<crate::event::PiRootControlProductiveContinuation> {
@@ -1663,6 +1657,27 @@ impl PiRootControlProductiveWindow {
 }
 
 #[cfg(all(
+    any(
+        test,
+        all(
+            feature = "release-pi4",
+            target_arch = "aarch64",
+            target_os = "none",
+            sel4_config_kernel_mcs
+        )
+    ),
+    feature = "serial-console",
+    feature = "kernel",
+    feature = "net-console",
+))]
+const fn pi_root_control_current_request_fanin_due(
+    causal_fanin_available: bool,
+    identity: crate::event::PiRootControlProductiveContinuation,
+) -> bool {
+    causal_fanin_available && identity.awaits_child_publication()
+}
+
+#[cfg(all(
     feature = "release-pi4",
     target_arch = "aarch64",
     target_os = "none",
@@ -1684,6 +1699,7 @@ fn poll_pi_root_control_productive_quanta<
     pump: &mut EventPump<'a, D, T, I, V, RX, TX, LINE>,
     window: &mut PiRootControlProductiveWindow,
     natural_postpone_profile: bool,
+    causal_fanin_available: bool,
 ) -> bool
 where
     D: crate::serial::SerialDriver,
@@ -1763,40 +1779,6 @@ where
             }
             return true;
         }
-        if let Some(network_baton) = retained_quantum
-            .then(|| window.continuation_identity())
-            .flatten()
-            .filter(|identity| identity.has_post_operator_network_baton())
-        {
-            // Consume the one-shot token before the final pump mutation. If
-            // the complete identity/operator/fault recheck now fails, the
-            // pump is still at Serial and the ordinary explicit-Yield path is
-            // fail-closed. A successful arm is immediately followed by the
-            // retained quantum, with no intervening generic work.
-            if !window.consume_post_operator_network_baton(network_baton) {
-                pump.record_pi_root_control_productive_window_decision(
-                    false,
-                    window.last_effective_root_us(counter_hz),
-                    window.last_reject_reason(),
-                );
-                if active_hot_tail_identity.is_some() {
-                    pump.record_pi_root_control_active_hot_tail_closed(active_hot_tail_wall_us);
-                }
-                return true;
-            }
-            if !pump.arm_pi_root_control_post_operator_network_baton(network_baton) {
-                window.last_reject_reason = PiRootControlProductiveWindow::REJECT_FENCE;
-                pump.record_pi_root_control_productive_window_decision(
-                    false,
-                    window.last_effective_root_us(counter_hz),
-                    PiRootControlProductiveWindow::REJECT_FENCE,
-                );
-                if active_hot_tail_identity.is_some() {
-                    pump.record_pi_root_control_active_hot_tail_closed(active_hot_tail_wall_us);
-                }
-                return true;
-            }
-        }
         let explicit_yield_required = pump.poll_root_control_quantum();
         if active_hot_tail_admitted {
             pump.record_pi_root_control_active_hot_tail_admitted(active_hot_tail_wall_us);
@@ -1861,6 +1843,19 @@ where
                     active_hot_tail_wall_before_record,
                 );
             }
+            return true;
+        }
+        if identity.completed_current_response() {
+            // The exact sequential response is complete. Do not spend this
+            // refill on a speculative post-response rotor for a request the
+            // peer has not published yet.
+            return true;
+        }
+        if pi_root_control_current_request_fanin_due(causal_fanin_available, identity) {
+            // Hand the exact stage-bearing request directly to the existing
+            // condition-before-block fan-in. The contextual caller performs
+            // the final operator/recovery/fault and durable-level recheck;
+            // no generic rotor or explicit Yield may intervene here.
             return true;
         }
         if !active_hot_tail_before_record && window.active_hot_tail_identity().is_some() {
@@ -8191,29 +8186,20 @@ mod tests {
         feature = "net-console"
     ))]
     #[test]
-    fn pi_genet_post_operator_network_baton_is_consumed_once() {
-        let identity =
-            crate::event::PiRootControlProductiveContinuation::for_test_cross_core_post_operator_network_baton(
-                7, 17,
-            );
-        let consumed = identity.without_post_operator_network_baton();
+    fn pi_genet_stage_identity_is_carried_to_causal_fanin() {
+        let identity = crate::event::PiRootControlProductiveContinuation::for_test(7, 17);
         let mut window = super::PiRootControlProductiveWindow::new();
 
         assert!(window.restart_after_yield(100, 1_000_000, true));
         assert!(window.record_completed_quantum_at(identity, 200));
         assert_eq!(window.continuation_identity(), Some(identity));
-        assert_eq!(window.active_hot_tail_identity(), Some(identity));
-        assert!(window.consume_post_operator_network_baton(identity));
-        assert_eq!(window.continuation_identity(), Some(consumed));
-        assert_eq!(window.active_hot_tail_identity(), Some(consumed));
-        assert!(!consumed.has_post_operator_network_baton());
+        assert_eq!(window.causal_child_wait_identity(), Some(identity));
+        assert!(super::pi_root_control_current_request_fanin_due(
+            true, identity
+        ));
         assert!(
-            !window.consume_post_operator_network_baton(identity),
-            "a consumed Network baton cannot be presented a second time",
-        );
-        assert_eq!(
-            window.last_reject_reason(),
-            super::PiRootControlProductiveWindow::REJECT_TOKEN,
+            !super::pi_root_control_current_request_fanin_due(false, identity),
+            "the plain no-BootContext pump cannot enter a blocking fan-in wait",
         );
     }
 
@@ -8223,100 +8209,20 @@ mod tests {
         feature = "net-console"
     ))]
     #[test]
-    fn pi_genet_same_core_yieldto_tail_is_exact_unslid_and_shares_cap() {
-        let natural_postpone_profile = true;
+    fn pi_genet_completed_response_does_not_open_a_future_request_tail() {
         let preleaf = super::pi_root_control_active_hot_tail_preleaf_us(8_000, 2_500, true);
         assert_eq!(preleaf, Some(5_500));
-        assert_eq!(
-            super::pi_root_control_active_hot_tail_preleaf_us(8_000, 0, true),
-            None,
-        );
-        assert_eq!(
-            super::pi_root_control_active_hot_tail_preleaf_us(2_500, 2_500, true),
-            None,
-        );
-        assert_eq!(
-            super::pi_root_control_active_hot_tail_preleaf_us(8_000, 2_500, false),
-            None,
-        );
-        let stage_only = crate::event::PiRootControlProductiveContinuation::for_test(7, 17);
-        let drained =
-            crate::event::PiRootControlProductiveContinuation::for_test_completed_response(7, 17);
-        let legacy_cross_core_drained =
+        let cross_core_drained =
             crate::event::PiRootControlProductiveContinuation::for_test_cross_core_completed_response(
                 7, 17,
             );
         let mut window = super::PiRootControlProductiveWindow::new();
 
-        assert!(window.restart_after_yield(100, 1_000_000, natural_postpone_profile));
-        assert!(window.record_completed_quantum_at(stage_only, 200));
+        assert!(window.restart_after_yield(100, 1_000_000, true));
+        assert!(window.record_completed_quantum_at(cross_core_drained, 200));
+        assert!(cross_core_drained.completed_current_response());
+        assert!(!cross_core_drained.is_cross_core_signal_only_hot_tail());
         assert_eq!(window.active_hot_tail_identity(), None);
-        assert!(!window.active_hot_tail_quantum_admitted(201, 1_000_000, preleaf));
-
-        assert!(window.restart_after_yield(100, 1_000_000, natural_postpone_profile));
-        assert!(window.record_completed_quantum_at(drained, 200));
-        assert_eq!(
-            window.active_hot_tail_identity(),
-            Some(drained),
-            "the selected exact same-core YieldTo drain opens the bounded root-local tail",
-        );
-        assert!(!drained.is_cross_core_signal_only_hot_tail());
-        assert!(window.active_hot_tail_quantum_admitted(5_699, 1_000_000, preleaf));
-        assert_eq!(
-            window.credited_child_scaled, 0,
-            "the fixture carries no synthetic child-consumption credit",
-        );
-        assert!(
-            !window.record_completed_quantum_at(legacy_cross_core_drained, 8_199),
-            "legacy cross-core signal-only evidence cannot replace selected same-core YieldTo authority",
-        );
-
-        assert!(window.restart_after_yield(100, 1_000_000, natural_postpone_profile));
-        assert!(window.record_completed_quantum_at(drained, 200));
-        assert_eq!(window.active_hot_tail_identity(), Some(drained));
-        assert!(window.active_hot_tail_quantum_admitted(5_699, 1_000_000, preleaf));
-        assert!(window.record_completed_quantum_at(drained, 4_000));
-        assert!(
-            !window.active_hot_tail_quantum_admitted(5_700, 1_000_000, preleaf),
-            "another exact response cannot slide the first drain's strict 5.5 ms pre-leaf cut",
-        );
-
-        assert!(window.restart_after_yield(100, 1_000_000, natural_postpone_profile));
-        assert!(window.record_completed_quantum_at(drained, 200));
-        for _ in 1..super::PiRootControlProductiveWindow::MAX_COMPLETED_QUANTA {
-            assert!(window.active_hot_tail_quantum_admitted(201, 1_000_000, preleaf));
-            assert!(window.record_active_hot_tail_quantum());
-        }
-        assert!(
-            !window.active_hot_tail_quantum_admitted(201, 1_000_000, preleaf),
-            "productive and empty hot-tail turns share the 64-quantum ceiling",
-        );
-        assert!(!window.record_active_hot_tail_quantum());
-
-        assert!(window.restart_after_yield(100, 1_000_000, natural_postpone_profile));
-        assert!(window.record_completed_quantum_at(drained, 0));
-        assert_eq!(
-            window.active_hot_tail_identity(),
-            None,
-            "an invalid completion counter cannot open an active tail",
-        );
-
-        for (now_ticks, counter_hz) in [(199, 1_000_000), (201, 0), (201, 54_000_000)] {
-            assert!(window.restart_after_yield(100, 1_000_000, natural_postpone_profile));
-            assert!(window.record_completed_quantum_at(drained, 200));
-            assert!(
-                !window.active_hot_tail_quantum_admitted(now_ticks, counter_hz, preleaf),
-                "backward, zero, or frequency-drifted active-tail counters fail closed",
-            );
-            assert!(!window.active_hot_tail_quantum_admitted(201, 1_000_000, preleaf));
-        }
-
-        assert!(window.restart_after_yield(100, 1_000_000, natural_postpone_profile));
-        assert!(window.record_completed_quantum_at(drained, 200));
-        assert!(
-            !window.active_hot_tail_quantum_admitted(201, 1_000_000, None),
-            "missing generated WCET policy closes the active tail",
-        );
     }
 
     #[cfg(all(

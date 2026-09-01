@@ -19787,6 +19787,22 @@ fn runtime_forward_cyw43_deadline_on_received_wake(
     wake
 }
 
+/// Classify the wake returned by the publication-side MCS handoff.
+///
+/// This early handoff deliberately has no persistent wait receipt: that
+/// receipt names the later final semantic-prewait epoch, which has not yet
+/// been allocated while the foreground turn is unwinding. Consequently root
+/// must continue to regard this parent as runnable. A returned badge is only a
+/// scheduling hint; the existing deadline helper must independently prove an
+/// exact expired arm before it can prompt the sole SDIO owner.
+#[cfg(any(target_os = "none", test))]
+fn runtime_observe_sdio_owner_publication_wake(raw_badge: u32) -> RuntimeWake {
+    runtime_forward_cyw43_deadline_on_received_wake(
+        RuntimeNotificationRoute::Cyw43Client,
+        RuntimeWake::Notification(raw_badge),
+    )
+}
+
 #[cfg(target_os = "none")]
 fn runtime_observe_received_wake(
     route: RuntimeNotificationRoute,
@@ -20924,12 +20940,45 @@ struct RuntimeSdioOwnerDoorbell {
     sequence: u32,
 }
 
+/// Scheduling operation selected for one sequence-last CYW43 child publish.
+///
+/// Neither variant authorizes SDIO work. The immutable owner-ring command is
+/// the sole authority; this value only chooses whether an MCS publisher parks
+/// in the same syscall that prompts the linked owner.
+#[cfg(any(target_os = "none", test))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RuntimeSdioOwnerPublicationRoute {
+    SignalOnly(RuntimeSdioOwnerDoorbell),
+    AtomicPromptAndWait(RuntimeSdioOwnerDoorbell),
+}
+
 #[cfg(any(target_os = "none", test))]
 const fn runtime_sdio_owner_doorbell(sequence: u32) -> RuntimeSdioOwnerDoorbell {
     RuntimeSdioOwnerDoorbell {
         slot: DRIVER_TASK_CHILD_SDIO_BUS_NOTIFICATION_SLOT,
         sequence,
     }
+}
+
+/// Preserve the classic single-signal path and select `NBSendWait` only for an
+/// exact MCS publication handoff admitted from durable child identity.
+#[cfg(any(target_os = "none", test))]
+const fn runtime_sdio_owner_publication_route(
+    doorbell: RuntimeSdioOwnerDoorbell,
+    exact_persistent_handoff: Option<RuntimeSdioOwnerDoorbell>,
+    kernel_mcs: bool,
+) -> RuntimeSdioOwnerPublicationRoute {
+    if kernel_mcs {
+        if let Some(exact) = exact_persistent_handoff {
+            if exact.sequence != 0
+                && exact.sequence == doorbell.sequence
+                && exact.slot == doorbell.slot
+            {
+                return RuntimeSdioOwnerPublicationRoute::AtomicPromptAndWait(exact);
+            }
+        }
+    }
+    RuntimeSdioOwnerPublicationRoute::SignalOnly(doorbell)
 }
 
 #[cfg(test)]
@@ -20991,6 +21040,67 @@ fn runtime_signal_sdio_owner_doorbell(sequence: u32) {
 
 #[cfg(all(not(target_os = "none"), not(test)))]
 fn runtime_signal_sdio_owner_doorbell(_sequence: u32) {}
+
+/// Deliver one publication prompt using the already selected kernel-profile
+/// route. The caller publishes the true wait-begin seam before selecting the
+/// atomic variant. Any returned badge is classified once through the existing
+/// exact deadline gate; retained state is still rechecked before further work.
+#[cfg(target_os = "none")]
+fn runtime_deliver_sdio_owner_publication(route: RuntimeSdioOwnerPublicationRoute) {
+    match route {
+        RuntimeSdioOwnerPublicationRoute::SignalOnly(doorbell) => {
+            runtime_signal_sdio_owner_doorbell(doorbell.sequence);
+        }
+        RuntimeSdioOwnerPublicationRoute::AtomicPromptAndWait(doorbell) => {
+            if let Some(raw_badge) = wait_runtime_local_notification_after_sdio_handoff(doorbell) {
+                let _ = runtime_observe_sdio_owner_publication_wake(raw_badge);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+fn runtime_deliver_sdio_owner_publication(route: RuntimeSdioOwnerPublicationRoute) {
+    let doorbell = match route {
+        RuntimeSdioOwnerPublicationRoute::SignalOnly(doorbell)
+        | RuntimeSdioOwnerPublicationRoute::AtomicPromptAndWait(doorbell) => doorbell,
+    };
+    record_test_sdio_owner_doorbell(doorbell);
+}
+
+/// Publish the sequence-last owner-send and local-wait seam.
+///
+/// For `AtomicPromptAndWait`, `SEND_DONE` means the immutable command and exact
+/// send operand are committed; `WAIT_BEGIN` is the last publication before
+/// entering `NBSendWait`. Signal-only profiles preserve their former ordering.
+#[cfg(any(target_os = "none", test))]
+fn runtime_deliver_sdio_owner_publication_with_progress(
+    route: RuntimeSdioOwnerPublicationRoute,
+    progress_sequence: u32,
+) {
+    let publish_wait_begin = || {
+        publish_runtime_progress(
+            progress_sequence,
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_SEND_DONE,
+            DRIVER_RUNTIME_CYW43_COMMAND_AUX,
+        );
+        publish_runtime_progress(
+            progress_sequence,
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_WAIT_BEGIN,
+            DRIVER_RUNTIME_CYW43_COMMAND_AUX,
+        );
+    };
+    match route {
+        RuntimeSdioOwnerPublicationRoute::AtomicPromptAndWait(_) => {
+            publish_wait_begin();
+            runtime_deliver_sdio_owner_publication(route);
+        }
+        RuntimeSdioOwnerPublicationRoute::SignalOnly(_) => {
+            runtime_deliver_sdio_owner_publication(route);
+            publish_wait_begin();
+        }
+    }
+}
 
 fn cyw43_publish_owner_rearm_doorbell() -> bool {
     let admitted = CYW43_RUNTIME_STATE.with_mut(|state| {
@@ -33724,6 +33834,66 @@ const fn cyw43_foreground_persistent_transaction_marker_present(
             != 0
 }
 
+/// Re-prove the exact persistent root->CYW43->SDIO child immediately after its
+/// sequence-last command commit and before selecting an atomic MCS handoff.
+///
+/// This is scheduling admission only. SDIO independently validates the same
+/// immutable command and physical generation before touching hardware, and a
+/// notification badge can never substitute for either durable identity.
+#[cfg(any(target_os = "none", test))]
+fn cyw43_foreground_persistent_publication_sdio_handoff(
+    transaction: &Cyw43ForegroundTransaction,
+    route: RuntimeNotificationRoute,
+) -> Option<RuntimeSdioOwnerDoorbell> {
+    let entry = transaction.frontier;
+    if route != RuntimeNotificationRoute::Cyw43Client
+        || !transaction.executing
+        || !transaction.turn.pending
+        || transaction.issued_unknown
+        || transaction.poisoned
+        || !transaction.persistent_transaction_parent_authorized()
+        || !transaction.frontier_submitted
+        || transaction.frontier_continuation_grant_required
+        || transaction.frontier_continuation_grant_publish
+        || transaction.frontier_grant_id != 0
+        || !cyw43_foreground_persistent_transaction_child(entry)
+        || entry.command.sequence == 0
+        || !cyw43_foreground_exact_causal_identity(
+            transaction,
+            transaction.parent,
+            entry.command,
+            transaction.generation,
+        )
+        || !cyw43_foreground_root_grant_local_environment_current(transaction)
+        || !cyw43_foreground_published_frontier_is_immutable(transaction)
+        || CYW43_SDIO_CHILD_ISSUED_UNKNOWN.load(Ordering::Acquire)
+        || CYW43_SDIO_PAIR_RESTART_REQUIRED.load(Ordering::Acquire)
+        || !matches!(
+            cyw43_sdio_child_poll_exact(Cyw43SdioChildState::new(entry.command.sequence)),
+            Cyw43SdioChildCompletion::Waiting
+        )
+    {
+        return None;
+    }
+
+    // The stable completion read above may overlap recovery or replacement of
+    // the owner generation. Recheck the complete immutable identity last; a
+    // race after this point can at most cause one redundant scheduling hint.
+    if !cyw43_foreground_exact_causal_identity(
+        transaction,
+        transaction.parent,
+        entry.command,
+        transaction.generation,
+    ) || !cyw43_foreground_root_grant_local_environment_current(transaction)
+        || !cyw43_foreground_published_frontier_is_immutable(transaction)
+        || CYW43_SDIO_CHILD_ISSUED_UNKNOWN.load(Ordering::Acquire)
+        || CYW43_SDIO_PAIR_RESTART_REQUIRED.load(Ordering::Acquire)
+    {
+        return None;
+    }
+    Some(runtime_sdio_owner_doorbell(entry.command.sequence))
+}
+
 #[cfg(any(target_os = "none", test))]
 fn cyw43_foreground_submit_frontier(transaction: &mut Cyw43ForegroundTransaction) -> bool {
     let entry = transaction.frontier;
@@ -33820,20 +33990,21 @@ fn cyw43_foreground_submit_frontier(transaction: &mut Cyw43ForegroundTransaction
     }
     driver_task_shared_store_barrier();
     driver_task_shared_clean_range(DRIVER_TASK_SDIO_BUS_RING_VADDR, core::mem::size_of::<u32>());
-    // HAL installed the SDIO owner's send-only, badged notification cap in
-    // this fixed child slot. The immutable sequence is already globally
-    // visible; this coalescing signal is only the owner-service doorbell.
-    runtime_signal_sdio_owner_doorbell(entry.command.sequence);
-    publish_runtime_progress(
-        progress_sequence,
-        pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_SEND_DONE,
-        DRIVER_RUNTIME_CYW43_COMMAND_AUX,
+    // The exact persistent parent used to unwind through semantic bookkeeping
+    // before reaching its later local wait. Under MCS that left the equal-
+    // priority SDIO owner runnable but did not hand it the current activation.
+    // Re-prove the durable child now and combine its prompt with CYW43's park.
+    // Classic and every non-exact publication retain the previous one signal.
+    let exact_persistent_handoff = cyw43_foreground_persistent_publication_sdio_handoff(
+        transaction,
+        runtime_notification_route(&RUNTIME_DESCRIPTOR.load()),
     );
-    publish_runtime_progress(
-        progress_sequence,
-        pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_WAIT_BEGIN,
-        DRIVER_RUNTIME_CYW43_COMMAND_AUX,
+    let publication_route = runtime_sdio_owner_publication_route(
+        runtime_sdio_owner_doorbell(entry.command.sequence),
+        exact_persistent_handoff,
+        cfg!(sel4_config_kernel_mcs),
     );
+    runtime_deliver_sdio_owner_publication_with_progress(publication_route, progress_sequence);
     true
 }
 
@@ -70449,6 +70620,7 @@ mod tests {
         TEST_SDIO_BUS_LINK_PARENT_U64_READS.store(0, Ordering::Release);
         TEST_SDIO_BUS_LINK_PARENT_U64_WRITES.store(0, Ordering::Release);
         TEST_CYW43_ROOT_WAKE_SIGNALS.store(0, Ordering::Release);
+        TEST_CYW43_SDIO_DEADLINE_HINT_FORWARDS.store(0, Ordering::Release);
         TEST_CYW43_DPC_TIMING_WRITE_ROOT_WAKE_SIGNALS.store(usize::MAX, Ordering::Release);
         TEST_CYW43_PEER_WAKE_SIGNALS.store(0, Ordering::Release);
         TEST_COMPLETION_WAKE_SIGNALS.store(0, Ordering::Release);
@@ -72050,6 +72222,168 @@ mod tests {
             runtime_durable_pending_route(disposition),
             RuntimeDurablePendingRoute::ContinueToQuiescence,
         );
+    }
+
+    #[test]
+    fn persistent_child_publication_selects_atomic_mcs_handoff_and_classic_signal() {
+        let _guard = test_guard();
+        let physical_generation = 0x4359_5227;
+        let (parent, _) =
+            install_persistent_control_parent_fixture(0x4359_5228, 0, physical_generation);
+        RUNTIME_DESCRIPTOR.store(descriptor_for(HOT_PATH_CYW43_WIFI, ROLE_NET));
+        assert_eq!(
+            runtime_notification_route(&RUNTIME_DESCRIPTOR.load()),
+            RuntimeNotificationRoute::Cyw43Client,
+        );
+        assert!(cyw43_foreground_begin_turn(parent));
+
+        let (child, descriptor) = CYW43_FOREGROUND_TRANSACTION.with_mut(|transaction| {
+            let descriptor = cyw43_foreground_scope_prepared_descriptor(
+                transaction,
+                steady_tx_function2_descriptor(),
+            )
+            .expect("persistent parent scopes one exact Function-2 child");
+            transaction.prepared_sequence = 0x8000_5229;
+            transaction.prepared_descriptor = descriptor;
+            transaction.prepared_descriptor_valid = true;
+            transaction.prepared_write_len = descriptor.len;
+            transaction.prepared_write[..usize::from(descriptor.len)].fill(0x5a);
+            let mut child =
+                stage_sdio_descriptor_service_command(transaction.prepared_sequence, descriptor);
+            child.flags |= DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY;
+            let child = cyw43_foreground_bind_prepared_command(transaction, child)
+                .expect("exact child inherits the persistent parent identity");
+            assert!(cyw43_foreground_reserve_frontier(transaction, child));
+            assert!(cyw43_foreground_submit_frontier(transaction));
+
+            let doorbell = runtime_sdio_owner_doorbell(child.sequence);
+            assert_eq!(
+                cyw43_foreground_persistent_publication_sdio_handoff(
+                    transaction,
+                    RuntimeNotificationRoute::Cyw43Client,
+                ),
+                Some(doorbell),
+                "the sequence-last waiting child must remain the durable handoff authority",
+            );
+            assert_eq!(
+                runtime_sdio_owner_publication_route(doorbell, Some(doorbell), true),
+                RuntimeSdioOwnerPublicationRoute::AtomicPromptAndWait(doorbell),
+                "MCS combines the exact prompt and publisher wait",
+            );
+            assert_eq!(
+                runtime_sdio_owner_publication_route(doorbell, Some(doorbell), false),
+                RuntimeSdioOwnerPublicationRoute::SignalOnly(doorbell),
+                "classic retains its existing single signal",
+            );
+            assert_eq!(
+                runtime_sdio_owner_publication_route(doorbell, None, true),
+                RuntimeSdioOwnerPublicationRoute::SignalOnly(doorbell),
+                "MCS cannot atomically park an inexact publication",
+            );
+            let stale = runtime_sdio_owner_doorbell(child.sequence.wrapping_sub(1));
+            assert_eq!(
+                runtime_sdio_owner_publication_route(doorbell, Some(stale), true),
+                RuntimeSdioOwnerPublicationRoute::SignalOnly(doorbell),
+                "a stale durable token cannot redirect the publication prompt",
+            );
+            assert_eq!(
+                cyw43_foreground_persistent_publication_sdio_handoff(
+                    transaction,
+                    RuntimeNotificationRoute::SdioOwner,
+                ),
+                None,
+                "the physical owner cannot manufacture a CYW43 publication handoff",
+            );
+
+            CYW43_SDIO_CHILD_EXPECTED_SEQUENCE
+                .store(child.sequence.wrapping_add(1), Ordering::Release);
+            assert_eq!(
+                cyw43_foreground_persistent_publication_sdio_handoff(
+                    transaction,
+                    RuntimeNotificationRoute::Cyw43Client,
+                ),
+                None,
+                "a replaced durable child identity suppresses the scheduling handoff",
+            );
+            CYW43_SDIO_CHILD_EXPECTED_SEQUENCE.store(child.sequence, Ordering::Release);
+            CYW43_SDIO_CHILD_ISSUED_UNKNOWN.store(true, Ordering::Release);
+            assert_eq!(
+                cyw43_foreground_persistent_publication_sdio_handoff(
+                    transaction,
+                    RuntimeNotificationRoute::Cyw43Client,
+                ),
+                None,
+                "issued-unknown recovery cannot be converted into a normal handoff",
+            );
+            CYW43_SDIO_CHILD_ISSUED_UNKNOWN.store(false, Ordering::Release);
+            transaction.executing = false;
+            (child, descriptor)
+        });
+
+        assert_eq!(TEST_SDIO_OWNER_DOORBELL_COUNT.load(Ordering::Acquire), 1);
+        assert_eq!(
+            test_sdio_owner_doorbell(0),
+            Some(runtime_sdio_owner_doorbell(0x8000_5229)),
+            "the host/classic coverage path preserves exactly one owner prompt",
+        );
+        assert!(
+            read_runtime_persistent_wait_receipt_at(DRIVER_TASK_RING_VADDR).is_none(),
+            "publication cannot forge the later final-prewait epoch receipt",
+        );
+
+        let deadline_forwards = TEST_CYW43_SDIO_DEADLINE_HINT_FORWARDS.load(Ordering::Acquire);
+        assert_eq!(
+            runtime_observe_sdio_owner_publication_wake(DRIVER_RUNTIME_RESERVED_ROOT_BADGE),
+            RuntimeWake::Notification(DRIVER_RUNTIME_RESERVED_ROOT_BADGE),
+        );
+        assert_eq!(
+            TEST_CYW43_SDIO_DEADLINE_HINT_FORWARDS.load(Ordering::Acquire),
+            deadline_forwards,
+            "a root badge without an exact expired durable arm cannot prompt SDIO",
+        );
+        assert!(
+            !CYW43_FOREGROUND_TRANSACTION.with_ref(|transaction| transaction.poisoned),
+            "an absent publication receipt is not recovery authority",
+        );
+        assert!(!CYW43_SDIO_PAIR_RESTART_REQUIRED.load(Ordering::Acquire));
+
+        let completion =
+            DriverTaskCompletionRecord::progress(child.sequence, u32::from(descriptor.len));
+        let mut owner_ring =
+            RuntimeRingWindow::sdio_owner().expect("generated descriptor binds SDIO owner");
+        assert!(runtime_ring_write_completion_staged(
+            &mut owner_ring,
+            runtime_staged_completion(completion),
+        ));
+        assert!(runtime_ring_commit_completion_sequence(
+            &mut owner_ring,
+            completion.sequence,
+        ));
+        assert_eq!(
+            recheck_runtime_steady_cyw43_child_before_wait(
+                RuntimeNotificationRoute::Cyw43Client,
+                Some(parent),
+            ),
+            RuntimeSteadyCyw43PrewaitRecheck::YieldForExactChildTerminal,
+            "the exact sequence-last terminal outranks every notification history",
+        );
+
+        let expected = runtime_persistent_cyw43_foreground_semantic_snapshot();
+        assert_eq!(
+            runtime_persistent_wait_receipt_final_prewait_after(
+                expected,
+                RuntimeNotificationRoute::Cyw43Client,
+                parent,
+                1,
+                || publish_runtime_persistent_wait_receipt_at(DRIVER_TASK_RING_VADDR, parent, 1),
+                || clear_runtime_persistent_wait_receipt_at(DRIVER_TASK_RING_VADDR),
+            ),
+            RuntimePersistentWaitReceiptPrewaitRoute::ReenterOwner,
+            "if execution reaches final prewait, an exact terminal clears its receipt and wins",
+        );
+        assert!(read_runtime_persistent_wait_receipt_at(DRIVER_TASK_RING_VADDR).is_none());
+        assert!(!CYW43_FOREGROUND_TRANSACTION.with_ref(|transaction| transaction.poisoned),);
+        assert!(!CYW43_SDIO_PAIR_RESTART_REQUIRED.load(Ordering::Acquire));
     }
 
     #[test]

@@ -1018,7 +1018,7 @@ mod imp {
         )
     }
 
-    /// Invoke a Reply cap nonblockingly, then wait without allocating a Reply object.
+    /// Invoke a capability nonblockingly, then wait without allocating a Reply object.
     #[cfg(sel4_config_kernel_mcs)]
     #[inline(always)]
     pub unsafe fn seL4_NBSendWait(
@@ -1056,7 +1056,7 @@ mod imp {
         info
     }
 
-    /// Invoke a Reply cap nonblockingly, then wait using caller-owned MRs.
+    /// Invoke a capability nonblockingly, then wait using caller-owned MRs.
     #[cfg(sel4_config_kernel_mcs)]
     #[inline(always)]
     pub unsafe fn seL4_NBSendWaitWithMRs(
