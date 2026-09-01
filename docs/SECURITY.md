@@ -257,6 +257,26 @@ independently requires the immutable arm, physical lifetime, child sequence,
 and expiry before prompting SDIO. This cannot broaden either cap, duplicate an
 operation, or create a retry, queue, fallback owner, or recovery path.
 
+Selected-MCS terminal handoff also preserves durable authority across the
+producer wake. The isolated runtime commits completion, retires the consumed
+sequence, and publishes receive-ready before an atomic reply-and-receive or the
+reciprocal delegated-SDIO-child peer-prompt-and-wait syscall. Root-owned
+low-domain SDIO bootstrap and recovery commands retain ordinary root fan-in and
+remain endpoint-capable while CYW43 is suspended. A returned badge is scheduling
+information only; a returned endpoint MR0 must still match the stable
+sequence-last command. The delegated SDIO atomic peer prompt is the first
+scheduling syscall after retirement, and generic root fan-in cannot precede it.
+Failed completion publication never admits a successor. Thus the optimization
+closes a lost-wake interval without transferring the Reply object, scheduling
+context, physical issue authority, recovery authority, or capability rights.
+
+An exact-command-badged endpoint IPC with an invalid MR0 or sequence enters the
+generated standard-fault lane; arbitrary or unbadged notification values cannot
+manufacture Reply ownership from a visible ring record. Completion publication
+failure likewise traps before local retirement, receive-ready, Reply, signal,
+or receive, leaving the independent supervisor as the sole authority to answer
+an associated caller and fence the generation.
+
 The direct-GENET correction narrows continuation authority to the current
 causal episode. Generation and connection are insufficient without the exact
 nonzero child-control sequence for a stage-bearing wait. Once fused

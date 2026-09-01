@@ -611,6 +611,27 @@ The consumer must recheck the committed condition after preparing to wait and
 immediately before the blocking receive. This closes the wake-before-wait and
 signal-before-commit races without turning polling into a scheduling clock.
 
+On the selected MCS profile, local terminal retirement is part of this order.
+After the sequence-last completion is durable, the runtime must update its
+consumed command sequence and publish receive-ready before any syscall can wake
+the producer. A reply-bearing terminal then uses the runtime's sole Reply
+object in one atomic `seL4_ReplyRecv`; a committed one-way SDIO child uses one
+atomic slot-10 CYW43 prompt plus slot-3 local wait. The returned endpoint MR0 or
+bound-notification badge is classified and any immutable successor is sealed
+without another outer receive boundary. For the reciprocal SDIO handoff, that
+component prompt is the first post-retirement scheduling syscall; passive
+diagnostics and generic root fan-in follow only after the returned wake is
+classified. Terminal time and CYW43 pending state are captured before that
+atomic wait and published afterwards, so park time and returned-source service
+cannot contaminate the retired command's evidence. If a returned CYW43/SDIO
+badge also carries a physical source, the runtime seals the immutable successor,
+publishes that captured evidence, services exactly one source quantum, and
+yields before foreground physical I/O; a pure peer baton continues locally.
+If completion publication fails, the runtime enters its generated standard-
+fault containment lane before local retirement, receive-ready, Reply, signal,
+or receive. These rules change no Reply ownership, notification authority, SC
+numeric, operation bound, or physical owner.
+
 ### 6.3 Retained operations
 
 Use a retained operation only when a single bounded turn cannot finish the

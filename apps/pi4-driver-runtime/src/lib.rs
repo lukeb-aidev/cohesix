@@ -7237,7 +7237,25 @@ fn cyw43_bus_episode_publish(
     exit_result: u32,
     final_pending_mask: u32,
 ) -> bool {
-    let now = runtime_timer_counter_ticks();
+    cyw43_bus_episode_publish_at(
+        lane,
+        exit_reason,
+        exit_detail,
+        exit_result,
+        final_pending_mask,
+        runtime_timer_counter_ticks(),
+    )
+}
+
+#[cfg(any(target_os = "none", test))]
+fn cyw43_bus_episode_publish_at(
+    lane: Cyw43BusEpisodeLane,
+    exit_reason: u16,
+    exit_detail: u16,
+    exit_result: u32,
+    final_pending_mask: u32,
+    now: u64,
+) -> bool {
     let primary_ready = match lane {
         Cyw43BusEpisodeLane::Foreground => CYW43_FOREGROUND_BUS_EPISODE.with_mut(|episode| {
             episode.active && episode.record_exit(exit_reason, exit_detail, exit_result, now)
@@ -7653,15 +7671,58 @@ fn cyw43_bus_episode_record_root_rx_progress(
 }
 
 #[cfg(any(target_os = "none", test))]
+fn cyw43_bus_episode_foreground_terminal_pending_mask() -> u32 {
+    CYW43_RUNTIME_STATE.with_ref(|state| {
+        let ring = dpc_event_ring_read_at(
+            DRIVER_TASK_SDIO_BUS_RING_VADDR + usize::from(DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET),
+        );
+        let dpc_pending = state.dpc_active_sequence != 0
+            || state.dpc_cursor.event_sequence != 0
+            || (ring.valid()
+                && ring.epoch == state.dpc_shared_epoch
+                && ring.producer != ring.consumer);
+        cyw43_bus_episode_pending_mask(state, false, dpc_pending, false, false)
+    })
+}
+
+#[cfg(test)]
 fn cyw43_bus_episode_record_foreground_parent_terminal(
     command: DriverTaskCommandRecord,
     completion: DriverTaskCompletionRecord,
     completion_committed: bool,
 ) {
+    let pending = if completion_committed
+        && CYW43_FOREGROUND_BUS_EPISODE.with_ref(|episode| {
+            completion.sequence == command.sequence
+                && episode.active
+                && !episode.closed
+                && episode.parent_sequence == command.sequence
+                && episode.logical_generation == command.aux1
+        }) {
+        cyw43_bus_episode_foreground_terminal_pending_mask()
+    } else {
+        0
+    };
+    cyw43_bus_episode_record_foreground_parent_terminal_at(
+        command,
+        completion,
+        completion_committed,
+        runtime_timer_counter_ticks(),
+        pending,
+    );
+}
+
+#[cfg(any(target_os = "none", test))]
+fn cyw43_bus_episode_record_foreground_parent_terminal_at(
+    command: DriverTaskCommandRecord,
+    completion: DriverTaskCompletionRecord,
+    completion_committed: bool,
+    now: u64,
+    pending: u32,
+) {
     if !completion_committed {
         return;
     }
-    let now = runtime_timer_counter_ticks();
     let matched = CYW43_FOREGROUND_BUS_EPISODE.with_mut(|episode| {
         if completion.sequence != command.sequence
             || !episode.active
@@ -7682,28 +7743,18 @@ fn cyw43_bus_episode_record_foreground_parent_terminal(
     if !matched {
         return;
     }
-    let pending = CYW43_RUNTIME_STATE.with_ref(|state| {
-        let ring = dpc_event_ring_read_at(
-            DRIVER_TASK_SDIO_BUS_RING_VADDR + usize::from(DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET),
-        );
-        let dpc_pending = state.dpc_active_sequence != 0
-            || state.dpc_cursor.event_sequence != 0
-            || (ring.valid()
-                && ring.epoch == state.dpc_shared_epoch
-                && ring.producer != ring.consumer);
-        cyw43_bus_episode_pending_mask(state, false, dpc_pending, false, false)
-    });
     let exit_reason = if completion.code == COMPLETION_FAULT {
         pi4_driver_abi::DRIVER_RUNTIME_CYW43_BUS_EPISODE_EXIT_FAULT
     } else {
         pi4_driver_abi::DRIVER_RUNTIME_CYW43_BUS_EPISODE_EXIT_TERMINAL
     };
-    let _ = cyw43_bus_episode_publish(
+    let _ = cyw43_bus_episode_publish_at(
         Cyw43BusEpisodeLane::Foreground,
         exit_reason,
         completion.detail,
         completion.result,
         pending,
+        now,
     );
 }
 
@@ -9072,7 +9123,6 @@ const fn runtime_continuation_action_fingerprint(command: DriverTaskCommandRecor
     )
 }
 
-#[cfg(any(target_os = "none", test))]
 const fn runtime_delegated_continuation_command(command: DriverTaskCommandRecord) -> bool {
     command.sequence & CYW43_SDIO_BUS_LINK_SEQUENCE_DOMAIN != 0
         && command.arg0 == HOT_PATH_SDIO_HOST
@@ -11039,6 +11089,46 @@ enum RuntimeWake {
     None,
 }
 
+/// Semantic result of a receive that may also have installed an MCS Reply
+/// association.
+///
+/// `RuntimeWake::None` alone cannot represent a rejected endpoint IPC: an MCS
+/// receive may already have associated the supplied Reply object even when the
+/// shared-ring sequence or MR0 fails admission. Keep that ambiguity typed so
+/// the independent supervisor, rather than a fabricated completion, contains
+/// the generation.
+#[cfg(any(target_os = "none", test))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RuntimeReceivedBoundary {
+    Wake(RuntimeWake),
+    RejectedEndpointIpc,
+}
+
+#[cfg(any(target_os = "none", test))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RuntimeReceivedIpcRoute {
+    Admit { reply_cap_available: bool },
+    Reject,
+}
+
+#[cfg(any(target_os = "none", test))]
+const fn runtime_received_ipc_route(
+    command: DriverTaskCommandRecord,
+    ipc_sequence: u32,
+    last_sequence: u32,
+) -> RuntimeReceivedIpcRoute {
+    if command.sequence == 0
+        || command.sequence == last_sequence
+        || command.sequence != ipc_sequence
+    {
+        RuntimeReceivedIpcRoute::Reject
+    } else {
+        RuntimeReceivedIpcRoute::Admit {
+            reply_cap_available: command_expects_reply(command),
+        }
+    }
+}
+
 /// Result of observing the runtime's combined command/notification boundary.
 ///
 /// Tests retain an explicit unavailable case to prove fail-closed routing; all
@@ -12820,6 +12910,11 @@ const fn runtime_receive_observation(
 }
 
 #[cfg(any(target_os = "none", test))]
+const fn runtime_rejected_receive_is_endpoint(badge: u64, expected_command_badge: u64) -> bool {
+    badge == expected_command_badge
+}
+
+#[cfg(any(target_os = "none", test))]
 const fn runtime_nonblocking_command_receive_contract(
     kernel_mcs: bool,
     reply_association_active: bool,
@@ -12925,16 +13020,33 @@ fn poll_runtime_command(
     // inconclusive. Reply-bearing commands use the selected-kernel receive
     // contract above, including the explicit MCS Reply object.
     let tag = runtime_nonblocking_command_receive(&mut badge, false);
+    let expected_command_badge = pi4_driver_abi::driver_runtime_command_badge(task_key_marker);
     match runtime_receive_observation(
         cfg!(sel4_config_kernel_mcs),
         tag.length(),
         badge as u64,
-        pi4_driver_abi::driver_runtime_command_badge(task_key_marker),
+        expected_command_badge,
     ) {
         RuntimeReceiveObservation::Notification(badge) => {
             return RuntimeWake::Notification(badge);
         }
-        RuntimeReceiveObservation::Empty | RuntimeReceiveObservation::Rejected => {
+        RuntimeReceiveObservation::Empty => {
+            publish_runtime_progress(
+                command.sequence,
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_REPLY_PENDING,
+                command.aux0,
+            );
+            return RuntimeWake::None;
+        }
+        RuntimeReceiveObservation::Rejected => {
+            if cfg!(sel4_config_kernel_mcs)
+                && runtime_rejected_receive_is_endpoint(badge as u64, expected_command_badge)
+            {
+                // An endpoint IPC without its mandatory MR0 may already own the
+                // supplied Reply object. Delegate that ambiguity to the
+                // independent standard-fault supervisor.
+                runtime_raise_standard_fault();
+            }
             publish_runtime_progress(
                 command.sequence,
                 pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_REPLY_PENDING,
@@ -12948,20 +13060,31 @@ fn poll_runtime_command(
     // sends or calls the command endpoint.
     let ipc_sequence = unsafe { sel4_sys::seL4_GetMR(0) as u32 };
     // The producer publishes the durable record sequence-last before the
-    // endpoint hint. Re-read it exactly once after consuming the hint; a
-    // mismatch is deferred to a later outer turn and producer re-signal,
-    // never converted into a private polling loop.
+    // endpoint hint. Re-read it exactly once after consuming the hint. An MCS
+    // mismatch may own the supplied Reply object and therefore enters standard
+    // fault containment; classic preserves its later producer re-signal.
     command = read_runtime_command_record();
     if command.sequence == 0 || command.sequence == last_sequence {
+        if cfg!(sel4_config_kernel_mcs) {
+            runtime_raise_standard_fault();
+        }
         return RuntimeWake::None;
     }
     let expects_reply = command_expects_reply(command);
-    if expects_reply && ipc_sequence != 0 && command.sequence != ipc_sequence {
+    let rejected = if cfg!(sel4_config_kernel_mcs) {
+        !expects_reply || command.sequence != ipc_sequence
+    } else {
+        expects_reply && ipc_sequence != 0 && command.sequence != ipc_sequence
+    };
+    if rejected {
         publish_runtime_progress(
             command.sequence,
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_REPLY_PENDING,
             ipc_sequence,
         );
+        if cfg!(sel4_config_kernel_mcs) {
+            runtime_raise_standard_fault();
+        }
         return RuntimeWake::None;
     }
     RuntimeWake::Command(runtime_command_intake_after_pre_admit(
@@ -12977,38 +13100,99 @@ fn runtime_wake_from_received_tag(
     last_sequence: u32,
     task_key: u32,
 ) -> RuntimeWake {
-    match runtime_receive_observation(
-        cfg!(sel4_config_kernel_mcs),
-        tag.length(),
-        badge as u64,
-        pi4_driver_abi::driver_runtime_command_badge(task_key),
-    ) {
-        RuntimeReceiveObservation::Notification(badge) => {
-            return RuntimeWake::Notification(badge);
-        }
-        RuntimeReceiveObservation::Empty | RuntimeReceiveObservation::Rejected => {
-            return RuntimeWake::None;
-        }
-        RuntimeReceiveObservation::Ipc => {}
-    }
     // SAFETY: The fixed endpoint ABI carries the shared-ring sequence in MR0.
     let ipc_sequence = unsafe { sel4_sys::seL4_GetMR(0) as u32 };
-    // The sequence-last ring record is authoritative. One stable read per
-    // endpoint rendezvous preserves the one-operation outer-turn bound; a
-    // stale, duplicate, zero, or early hint is rejected and the producer's
-    // exact re-signal supplies liveness on a later turn.
-    let command = read_runtime_command_record();
-    if command.sequence == 0
-        || command.sequence == last_sequence
-        || command.sequence != ipc_sequence
-    {
-        return RuntimeWake::None;
+    runtime_wake_from_received_values(tag, badge, ipc_sequence, last_sequence, task_key)
+}
+
+#[cfg(target_os = "none")]
+fn runtime_wake_from_received_values(
+    tag: sel4_sys::seL4_MessageInfo,
+    badge: sel4_sys::seL4_Word,
+    ipc_sequence: u32,
+    last_sequence: u32,
+    task_key: u32,
+) -> RuntimeWake {
+    match runtime_received_boundary_from_values(tag, badge, ipc_sequence, last_sequence, task_key) {
+        RuntimeReceivedBoundary::Wake(wake) => wake,
+        RuntimeReceivedBoundary::RejectedEndpointIpc => {
+            #[cfg(sel4_config_kernel_mcs)]
+            {
+                // A correctly badged endpoint IPC was consumed but its durable
+                // identity failed admission. seL4 does not expose whether that
+                // IPC was Call or Send, so only the independent supervisor can
+                // safely close a possibly associated Reply object.
+                runtime_raise_standard_fault()
+            }
+            #[cfg(not(sel4_config_kernel_mcs))]
+            {
+                RuntimeWake::None
+            }
+        }
     }
-    let reply_cap_available = command_expects_reply(command);
-    RuntimeWake::Command(runtime_command_intake_after_pre_admit(
-        command,
-        reply_cap_available,
-    ))
+}
+
+#[cfg(target_os = "none")]
+fn runtime_received_boundary_from_values(
+    tag: sel4_sys::seL4_MessageInfo,
+    badge: sel4_sys::seL4_Word,
+    ipc_sequence: u32,
+    last_sequence: u32,
+    task_key: u32,
+) -> RuntimeReceivedBoundary {
+    let expected_command_badge = pi4_driver_abi::driver_runtime_command_badge(task_key);
+    let observation = runtime_receive_observation(
+        cfg!(sel4_config_kernel_mcs),
+        tag.length(),
+        badge,
+        expected_command_badge,
+    );
+    match observation {
+        RuntimeReceiveObservation::Notification(badge) => {
+            return RuntimeReceivedBoundary::Wake(RuntimeWake::Notification(badge));
+        }
+        RuntimeReceiveObservation::Empty => {
+            return RuntimeReceivedBoundary::Wake(RuntimeWake::None);
+        }
+        // Notification delivery defines the badge but not MessageInfo. In
+        // particular, an unbadged bind/restart wake may retain the outgoing
+        // ReplyRecv length. Badge zero cannot be endpoint IPC because every
+        // generated command endpoint uses the exact nonzero badge below.
+        RuntimeReceiveObservation::Rejected if badge == 0 => {
+            return RuntimeReceivedBoundary::Wake(RuntimeWake::None);
+        }
+        // Only the generated endpoint badge proves IPC provenance. A foreign
+        // notification-domain value cannot create Reply-object ownership from
+        // whatever ring record happens to be visible.
+        RuntimeReceiveObservation::Rejected
+            if !runtime_rejected_receive_is_endpoint(badge, expected_command_badge) =>
+        {
+            return RuntimeReceivedBoundary::Wake(RuntimeWake::None);
+        }
+        RuntimeReceiveObservation::Rejected | RuntimeReceiveObservation::Ipc => {}
+    }
+    // The sequence-last ring record is authoritative. One stable read per
+    // endpoint rendezvous preserves the one-operation outer-turn bound.
+    let command = read_runtime_command_record();
+    match runtime_received_ipc_route(command, ipc_sequence, last_sequence) {
+        RuntimeReceivedIpcRoute::Admit {
+            reply_cap_available,
+        } if matches!(observation, RuntimeReceiveObservation::Ipc) => {
+            RuntimeReceivedBoundary::Wake(RuntimeWake::Command(
+                runtime_command_intake_after_pre_admit(command, reply_cap_available),
+            ))
+        }
+        RuntimeReceivedIpcRoute::Admit { .. } | RuntimeReceivedIpcRoute::Reject
+            if !matches!(observation, RuntimeReceiveObservation::Ipc) =>
+        {
+            RuntimeReceivedBoundary::RejectedEndpointIpc
+        }
+        RuntimeReceivedIpcRoute::Reject => RuntimeReceivedBoundary::RejectedEndpointIpc,
+        RuntimeReceivedIpcRoute::Admit { .. } => {
+            // The guarded arm above exhausts an admitted, correctly badged IPC.
+            RuntimeReceivedBoundary::Wake(RuntimeWake::None)
+        }
+    }
 }
 
 #[cfg(target_os = "none")]
@@ -13093,16 +13277,100 @@ fn wait_runtime_command_or_notification(
     // terminal reply. Re-entering Recv with that same object would make the
     // selected MCS kernel cancel the prior caller before it checks the bound
     // notification. Wait on the local notification alone in that state.
-    let tag = runtime_blocking_wait(
-        runtime_blocking_wait_target(reply_association_active),
-        &mut badge,
-    );
+    let target = runtime_blocking_wait_target(reply_association_active);
+    let tag = runtime_blocking_wait(target, &mut badge);
     RuntimeCommandWait::Wake(runtime_wake_from_received_tag(
         tag,
         badge,
         last_sequence,
         task_key,
     ))
+}
+
+/// Reply to one MCS caller and enter the ordinary command-or-notification
+/// receive boundary atomically.
+///
+/// Local command retirement is completed by the caller before this function.
+/// Consequently the producer cannot resume from the Reply while this runtime
+/// is still executing the retired command's tail. Returned endpoint MR0 and a
+/// returned bound-notification badge are retained through the same intake
+/// classifier as the ordinary blocking receive.
+#[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RuntimeAtomicTerminalReceive {
+    ReplyRecv { completion_result: u32 },
+    Cyw43PromptAndWait,
+}
+
+#[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
+struct RuntimeAtomicTerminalReceiveResult {
+    tag: sel4_sys::seL4_MessageInfo,
+    badge: sel4_sys::seL4_Word,
+    mr0: u32,
+}
+
+#[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
+fn runtime_atomic_terminal_receive(
+    operation: RuntimeAtomicTerminalReceive,
+) -> RuntimeAtomicTerminalReceiveResult {
+    let mut badge: sel4_sys::seL4_Word = 0;
+    let mut mr0 = match operation {
+        RuntimeAtomicTerminalReceive::ReplyRecv { completion_result } => {
+            completion_result as sel4_sys::seL4_Word
+        }
+        RuntimeAtomicTerminalReceive::Cyw43PromptAndWait => 0,
+    };
+    let mut mr1 = 0;
+    let mut mr2 = 0;
+    let mut mr3 = 0;
+    // SAFETY: The compiler-generated child CSpace fixes the read-only command
+    // endpoint at slot 2, the TCB-bound local notification at slot 3, the sole
+    // Reply object at slot 6, and the send-only CYW43 peer notification at slot
+    // 10. ReplyRecv consumes exactly the retained Call before receiving again;
+    // NBSendWait transfers no Reply or physical-device authority.
+    let tag = unsafe {
+        match operation {
+            RuntimeAtomicTerminalReceive::ReplyRecv { .. } => sel4_sys::seL4_ReplyRecvWithMRs(
+                DRIVER_TASK_CHILD_COMMAND_SLOT,
+                sel4_sys::seL4_MessageInfo::new(0, 0, 0, 1),
+                &mut badge,
+                &mut mr0,
+                &mut mr1,
+                &mut mr2,
+                &mut mr3,
+                pi4_driver_abi::DRIVER_RUNTIME_COMMAND_REPLY_SLOT as sel4_sys::seL4_CPtr,
+            ),
+            RuntimeAtomicTerminalReceive::Cyw43PromptAndWait => sel4_sys::seL4_NBSendWait(
+                DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT as sel4_sys::seL4_CPtr,
+                sel4_sys::seL4_MessageInfo::new(0, 0, 0, 0),
+                DRIVER_TASK_CHILD_LOCAL_NOTIFICATION_SLOT,
+                &mut badge,
+            ),
+        }
+    };
+    RuntimeAtomicTerminalReceiveResult {
+        tag,
+        badge,
+        mr0: mr0 as u32,
+    }
+}
+
+#[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
+fn reply_and_wait_runtime_command_or_notification(
+    completion_result: u32,
+    last_sequence: u32,
+    task_key: u32,
+) -> RuntimeWake {
+    let received = runtime_atomic_terminal_receive(RuntimeAtomicTerminalReceive::ReplyRecv {
+        completion_result,
+    });
+    runtime_wake_from_received_values(
+        received.tag,
+        received.badge,
+        received.mr0,
+        last_sequence,
+        task_key,
+    )
 }
 
 #[cfg(any(target_os = "none", test))]
@@ -13271,15 +13539,15 @@ fn validate_runtime_init_descriptor_with_wait_support(
             command.aux0,
         );
     }
-    if descriptor.hot_path == HOT_PATH_PCIE_ROOT {
-        if !adopt_hal_prepared_pcie_runtime_descriptor(descriptor) {
-            PCIE_RUNTIME_FLAGS.store(0, Ordering::Release);
-            PCIE_TIMER_ARMED.store(false, Ordering::Release);
-            PCIE_TIMER_ENABLE_SEQUENCE.store(0, Ordering::Release);
-            PCIE_TIMER_DEADLINE_CLO.store(0, Ordering::Release);
-            PCIE_TIMER_IRQ_COUNT.store(0, Ordering::Release);
-            return DriverTaskCompletionRecord::fault(command.sequence, FAULT_DEVICE_UNAVAILABLE);
-        }
+    if descriptor.hot_path == HOT_PATH_PCIE_ROOT
+        && !adopt_hal_prepared_pcie_runtime_descriptor(descriptor)
+    {
+        PCIE_RUNTIME_FLAGS.store(0, Ordering::Release);
+        PCIE_TIMER_ARMED.store(false, Ordering::Release);
+        PCIE_TIMER_ENABLE_SEQUENCE.store(0, Ordering::Release);
+        PCIE_TIMER_DEADLINE_CLO.store(0, Ordering::Release);
+        PCIE_TIMER_IRQ_COUNT.store(0, Ordering::Release);
+        return DriverTaskCompletionRecord::fault(command.sequence, FAULT_DEVICE_UNAVAILABLE);
     }
     DriverTaskCompletionRecord::progress(command.sequence, descriptor.hot_path)
 }
@@ -20766,6 +21034,30 @@ fn wait_runtime_local_notification_after_sdio_handoff(
     }
 }
 
+/// Prompt the CYW43 producer and block the SDIO owner on its bound local
+/// notification as one MCS scheduling operation.
+///
+/// The exact SDIO terminal and local sequence retirement are durable before
+/// this boundary. Slot 10 is the generated send-only CYW43 notification and
+/// slot 3 is the SDIO owner's bound local notification. The next returned
+/// badge remains only a scheduling hint; the sequence-last ring command is
+/// still the sole authority for another physical owner action.
+#[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
+fn wait_runtime_command_after_cyw43_terminal_handoff(
+    last_sequence: u32,
+    task_key: u32,
+) -> RuntimeWake {
+    let received =
+        runtime_atomic_terminal_receive(RuntimeAtomicTerminalReceive::Cyw43PromptAndWait);
+    runtime_wake_from_received_values(
+        received.tag,
+        received.badge,
+        received.mr0,
+        last_sequence,
+        task_key,
+    )
+}
+
 /// Fence a retained physical lifetime when this kernel profile cannot provide
 /// the exact local-notification wait used by the steady owner.
 ///
@@ -20825,9 +21117,7 @@ fn runtime_command_wait_wake_or_quarantine(
     route: RuntimeNotificationRoute,
     _exact_steady_cyw43_parent: Option<DriverTaskCommandRecord>,
 ) -> RuntimeWake {
-    let wake = match runtime_command_wait_route(wait) {
-        RuntimeCommandWaitRoute::Wake(wake) => wake,
-    };
+    let RuntimeCommandWaitRoute::Wake(wake) = runtime_command_wait_route(wait);
     // Every combined blocking or nonblocking receive after the initial ring
     // poll routes through this boundary before badge filtering or service.
     runtime_observe_received_wake(route, wake)
@@ -49203,13 +49493,19 @@ fn genet_direct_fail_closed(state: &mut GenetRuntimeState) {
 #[cfg(target_os = "none")]
 #[cold]
 #[inline(never)]
-fn genet_direct_raise_standard_fault() -> ! {
+fn runtime_raise_standard_fault() -> ! {
     // SAFETY: This typed BRK deliberately transfers terminal direct-link
-    // failure to the supervisor-installed standard fault endpoint. It neither
-    // accesses memory nor permits the failed generation to resume.
+    // or command-publication failure to the supervisor-installed standard
+    // fault endpoint. It neither accesses memory nor permits the failed
+    // generation to resume.
     unsafe {
         core::arch::asm!("brk #42", options(noreturn, nostack, nomem));
     }
+}
+
+#[cfg(target_os = "none")]
+fn genet_direct_raise_standard_fault() -> ! {
+    runtime_raise_standard_fault()
 }
 
 #[cfg(all(not(target_os = "none"), test))]
@@ -56053,10 +56349,35 @@ fn publish_runtime_cadence(
     exit_reason: u16,
     flags: u16,
 ) {
+    publish_runtime_cadence_at(
+        hot_path,
+        sequence,
+        phase,
+        work_completed,
+        work_total,
+        exit_reason,
+        flags,
+        runtime_timer_counter_ticks(),
+    );
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the arguments mirror the fixed cadence ABI"
+)]
+fn publish_runtime_cadence_at(
+    hot_path: u32,
+    sequence: u32,
+    phase: u32,
+    work_completed: u32,
+    work_total: u32,
+    exit_reason: u16,
+    flags: u16,
+    now: u64,
+) {
     if sequence == 0 || !runtime_cadence_supported_hot_path(hot_path) {
         return;
     }
-    let now = runtime_timer_counter_ticks();
     let (entry, previous_entry, previous_entry_valid) =
         if exit_reason == pi4_driver_abi::DRIVER_RUNTIME_CADENCE_EXIT_ENTER {
             let previous = RUNTIME_CADENCE_ENTRY_TICKS.swap(now, Ordering::AcqRel);
@@ -67638,9 +67959,9 @@ const fn sdio_owner_completion_requires_postcommit_signal(
     command: DriverTaskCommandRecord,
     route: RuntimeNotificationRoute,
 ) -> bool {
-    command.arg0 == HOT_PATH_SDIO_HOST
-        && command.flags & DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY != 0
+    command.flags & DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY != 0
         && matches!(route, RuntimeNotificationRoute::SdioOwner)
+        && runtime_delegated_continuation_command(command)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -67655,6 +67976,133 @@ enum RuntimeCompletionWakeTarget {
     None,
     Cyw43Peer,
     RootNetwork,
+}
+
+/// Atomic terminal boundary selected after the durable completion commit.
+///
+/// MCS reply-bearing commands must return their caller and enter the next
+/// combined receive in one syscall. The reciprocal SDIO owner similarly
+/// prompts CYW43 and waits on its own bound notification in one syscall. Every
+/// other terminal retires locally and re-enters the ordinary runtime loop.
+#[cfg(any(test, all(target_os = "none", sel4_config_kernel_mcs)))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RuntimeTerminalHandoff {
+    ReturnToLoop,
+    McsReturnToLoop,
+    McsReplyRecv,
+    McsCyw43PromptAndWait,
+    McsFaultContain,
+}
+
+#[cfg(any(test, all(target_os = "none", sel4_config_kernel_mcs)))]
+const fn runtime_terminal_handoff(
+    command: DriverTaskCommandRecord,
+    route: RuntimeNotificationRoute,
+    reply_cap_available: bool,
+    completion_committed: bool,
+    kernel_mcs: bool,
+) -> RuntimeTerminalHandoff {
+    if !kernel_mcs {
+        return RuntimeTerminalHandoff::ReturnToLoop;
+    }
+    if !completion_committed {
+        // A sequence-last publication failure leaves no durable terminal that
+        // a caller or one-way producer may consume. The independent supervisor
+        // must close any associated Call and fence the generation.
+        return RuntimeTerminalHandoff::McsFaultContain;
+    }
+    if reply_cap_available {
+        return RuntimeTerminalHandoff::McsReplyRecv;
+    }
+    if sdio_owner_completion_requires_postcommit_signal(command, route) {
+        RuntimeTerminalHandoff::McsCyw43PromptAndWait
+    } else {
+        RuntimeTerminalHandoff::McsReturnToLoop
+    }
+}
+
+#[cfg(any(test, all(target_os = "none", sel4_config_kernel_mcs)))]
+const fn runtime_component_completion_wake_order_after_retirement(
+    order: RuntimeCompletionWakeOrder,
+    handoff: RuntimeTerminalHandoff,
+) -> RuntimeCompletionWakeOrder {
+    match handoff {
+        RuntimeTerminalHandoff::ReturnToLoop | RuntimeTerminalHandoff::McsReturnToLoop => order,
+        RuntimeTerminalHandoff::McsReplyRecv
+        | RuntimeTerminalHandoff::McsCyw43PromptAndWait
+        | RuntimeTerminalHandoff::McsFaultContain => {
+            // ReplyRecv is itself the caller wake. The reciprocal CYW43 peer
+            // prompt is fused with the later local wait, and fault containment
+            // wakes no successor, so none may emit a separate component signal.
+            RuntimeCompletionWakeOrder::None
+        }
+    }
+}
+
+#[cfg(any(test, all(target_os = "none", sel4_config_kernel_mcs)))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RuntimeGenericCompletionSignalPhase {
+    None,
+    PostRetire,
+    AfterReturnedWake,
+}
+
+#[cfg(any(test, all(target_os = "none", sel4_config_kernel_mcs)))]
+const fn runtime_generic_completion_signal_phase(
+    handoff: RuntimeTerminalHandoff,
+) -> RuntimeGenericCompletionSignalPhase {
+    match handoff {
+        RuntimeTerminalHandoff::McsReturnToLoop => RuntimeGenericCompletionSignalPhase::PostRetire,
+        RuntimeTerminalHandoff::McsCyw43PromptAndWait => {
+            RuntimeGenericCompletionSignalPhase::AfterReturnedWake
+        }
+        RuntimeTerminalHandoff::ReturnToLoop
+        | RuntimeTerminalHandoff::McsReplyRecv
+        | RuntimeTerminalHandoff::McsFaultContain => RuntimeGenericCompletionSignalPhase::None,
+    }
+}
+
+/// Retire the local command before any successful MCS terminal handoff can wake
+/// its producer, then execute exactly the selected atomic boundary. A failed
+/// completion commit instead enters containment without publishing retirement.
+#[cfg(any(test, all(target_os = "none", sel4_config_kernel_mcs)))]
+fn runtime_retire_and_complete_terminal_handoff_with<
+    Retire,
+    PostRetire,
+    ReplyRecv,
+    PeerWait,
+    FaultContain,
+>(
+    handoff: RuntimeTerminalHandoff,
+    retire: Retire,
+    post_retire: PostRetire,
+    reply_recv: ReplyRecv,
+    peer_wait: PeerWait,
+    fault_contain: FaultContain,
+) -> Option<RuntimeWake>
+where
+    Retire: FnOnce(),
+    PostRetire: FnOnce(),
+    ReplyRecv: FnOnce() -> RuntimeWake,
+    PeerWait: FnOnce() -> RuntimeWake,
+    FaultContain: FnOnce(),
+{
+    if handoff == RuntimeTerminalHandoff::McsFaultContain {
+        // Do not publish receive-ready, retire the failed sequence locally, or
+        // execute any successor-waking syscall. The trap is the sole terminal
+        // scheduling boundary for this corrupt generation.
+        fault_contain();
+        return None;
+    }
+    retire();
+    post_retire();
+    match handoff {
+        RuntimeTerminalHandoff::ReturnToLoop => None,
+        RuntimeTerminalHandoff::McsReturnToLoop => None,
+        RuntimeTerminalHandoff::McsReplyRecv => Some(reply_recv()),
+        RuntimeTerminalHandoff::McsCyw43PromptAndWait => Some(peer_wait()),
+        RuntimeTerminalHandoff::McsFaultContain => None,
+    }
 }
 
 const fn runtime_completion_wake_order(
@@ -67720,6 +68168,7 @@ fn runtime_emit_completion_postcommit_wake(
 }
 
 /// Keep passive diagnostics off the completion commit-to-signal path.
+#[cfg(any(test, all(target_os = "none", not(sel4_config_kernel_mcs))))]
 fn runtime_emit_completion_before_diagnostic<F>(
     order: RuntimeCompletionWakeOrder,
     completion_committed: bool,
@@ -67731,6 +68180,69 @@ where
     let target = runtime_emit_completion_postcommit_wake(order, completion_committed);
     diagnostic();
     target
+}
+
+#[cfg(any(target_os = "none", test))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct RuntimeTerminalDiagnosticSnapshot {
+    cntvct: u64,
+    cyw43_pending_mask: u32,
+}
+
+#[cfg(any(target_os = "none", test))]
+fn runtime_terminal_diagnostic_snapshot(
+    route: RuntimeNotificationRoute,
+) -> RuntimeTerminalDiagnosticSnapshot {
+    RuntimeTerminalDiagnosticSnapshot {
+        cntvct: runtime_timer_counter_ticks(),
+        cyw43_pending_mask: if route == RuntimeNotificationRoute::Cyw43Client {
+            cyw43_bus_episode_foreground_terminal_pending_mask()
+        } else {
+            0
+        },
+    }
+}
+
+#[cfg(any(test, all(target_os = "none", not(sel4_config_kernel_mcs))))]
+fn runtime_record_terminal_diagnostic(
+    command: DriverTaskCommandRecord,
+    completion: DriverTaskCompletionRecord,
+    completion_committed: bool,
+) {
+    runtime_record_terminal_diagnostic_at(
+        command,
+        completion,
+        completion_committed,
+        runtime_terminal_diagnostic_snapshot(runtime_notification_route(
+            &RUNTIME_DESCRIPTOR.load(),
+        )),
+    );
+}
+
+#[cfg(any(target_os = "none", test))]
+fn runtime_record_terminal_diagnostic_at(
+    command: DriverTaskCommandRecord,
+    completion: DriverTaskCompletionRecord,
+    completion_committed: bool,
+    snapshot: RuntimeTerminalDiagnosticSnapshot,
+) {
+    cyw43_bus_episode_record_foreground_parent_terminal_at(
+        command,
+        completion,
+        completion_committed,
+        snapshot.cntvct,
+        snapshot.cyw43_pending_mask,
+    );
+    publish_runtime_cadence_at(
+        command.arg0,
+        command.sequence,
+        pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_COMPLETION_PUBLISH,
+        0,
+        0,
+        pi4_driver_abi::DRIVER_RUNTIME_CADENCE_EXIT_TERMINAL,
+        0,
+        snapshot.cntvct,
+    );
 }
 
 #[cfg(any(test, all(target_os = "none", sel4_config_kernel_mcs)))]
@@ -67762,6 +68274,92 @@ fn runtime_signal_one_way_completion(
     }
     #[cfg(all(not(test), not(sel4_config_kernel_mcs)))]
     let _ = (command, completion_committed, postcommit_target);
+}
+
+#[cfg(any(test, all(target_os = "none", sel4_config_kernel_mcs)))]
+const fn runtime_terminal_source_service_requires_yield(route: RuntimeNotificationRoute) -> bool {
+    matches!(
+        route,
+        RuntimeNotificationRoute::SdioOwner | RuntimeNotificationRoute::Cyw43Client
+    )
+}
+
+#[cfg(any(test, all(target_os = "none", sel4_config_kernel_mcs)))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct RuntimeTerminalDeferredSource {
+    badge: u32,
+    must_yield_before_foreground: bool,
+}
+
+#[cfg(any(test, all(target_os = "none", sel4_config_kernel_mcs)))]
+const fn runtime_terminal_deferred_source(
+    route: RuntimeNotificationRoute,
+    badge: u32,
+) -> Option<RuntimeTerminalDeferredSource> {
+    match runtime_idle_service_badge(route, badge) {
+        Some(service_badge) => Some(RuntimeTerminalDeferredSource {
+            badge: service_badge,
+            must_yield_before_foreground: runtime_terminal_source_service_requires_yield(route),
+        }),
+        None => None,
+    }
+}
+
+/// Retain work returned by an atomic terminal handoff without inserting a new
+/// outer receive boundary.
+#[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
+fn runtime_retain_terminal_handoff_wake(
+    wake: RuntimeWake,
+    notification_route: RuntimeNotificationRoute,
+    last_sequence: u32,
+    pending_intake: &mut Option<RuntimeCommandIntake>,
+    pending_command_gate: &mut RuntimePendingCommandGate,
+) -> Option<RuntimeTerminalDeferredSource> {
+    let mut deferred_source = None;
+    match runtime_command_wait_wake_or_quarantine(
+        RuntimeCommandWait::Wake(wake),
+        notification_route,
+        None,
+    ) {
+        RuntimeWake::Command(intake) => {
+            *pending_intake = Some(intake);
+            pending_command_gate.complete();
+        }
+        RuntimeWake::Notification(badge) => {
+            let delegated_owner_wake =
+                retain_runtime_idle_delegated_wake(notification_route, badge, pending_command_gate);
+            // Seal the immutable successor before telemetry or physical-source
+            // service can introduce another runtime-loop boundary.
+            let delegated_owner_intake = delegated_owner_wake
+                .then(|| {
+                    runtime_delegated_owner_command_after_wake(
+                        notification_route,
+                        badge,
+                        last_sequence,
+                    )
+                })
+                .flatten();
+            if delegated_owner_wake {
+                publish_runtime_progress(
+                    0,
+                    pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_WAKE_RETAINED,
+                    badge,
+                );
+            }
+            if let Some(intake) = delegated_owner_intake {
+                // Seal the sequence-last successor before servicing an
+                // orthogonal physical source from the same coalesced badge.
+                *pending_intake = Some(intake);
+            }
+            // A coalesced physical source is classified now but serviced only
+            // after the retired command's captured terminal evidence is
+            // published. This prevents source state from becoming the prior
+            // command's pending mask and keeps park time out of its cadence.
+            deferred_source = runtime_terminal_deferred_source(notification_route, badge);
+        }
+        RuntimeWake::None => {}
+    }
+    deferred_source
 }
 
 /// Run the isolated driver runtime receive/service loop.
@@ -69615,78 +70213,160 @@ pub fn runtime_main(task_key: usize) -> ! {
             runtime_notification_route(&RUNTIME_DESCRIPTOR.load()),
         );
         let completion_committed = publish_runtime_completion_sequence_last(completion);
-        resolve_runtime_root_grant_terminal_publication(
-            &mut in_flight_root_grant_action,
+        #[cfg(sel4_config_kernel_mcs)]
+        let terminal_diagnostic_snapshot = runtime_terminal_diagnostic_snapshot(notification_route);
+        #[cfg(sel4_config_kernel_mcs)]
+        let terminal_handoff = runtime_terminal_handoff(
             command,
+            notification_route,
+            intake.reply_cap_available,
             completion_committed,
+            cfg!(sel4_config_kernel_mcs),
         );
-        if notification_route == RuntimeNotificationRoute::SdioOwner {
-            resolve_runtime_delegated_grant_terminal_publication(
-                &mut in_flight_delegated_grant_action,
+        let completion_wake_target =
+            runtime_completion_postcommit_wake_target(completion_wake_order, completion_committed);
+        #[cfg(not(sel4_config_kernel_mcs))]
+        {
+            resolve_runtime_root_grant_terminal_publication(
+                &mut in_flight_root_grant_action,
+                command,
                 completion_committed,
             );
-        }
-        let completion_wake_target = runtime_emit_completion_before_diagnostic(
-            completion_wake_order,
-            completion_committed,
-            || {
-                cyw43_bus_episode_record_foreground_parent_terminal(
-                    command,
-                    completion,
+            if notification_route == RuntimeNotificationRoute::SdioOwner {
+                resolve_runtime_delegated_grant_terminal_publication(
+                    &mut in_flight_delegated_grant_action,
                     completion_committed,
                 );
-                publish_runtime_cadence(
-                    command.arg0,
-                    command.sequence,
-                    pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_COMPLETION_PUBLISH,
-                    0,
-                    0,
-                    pi4_driver_abi::DRIVER_RUNTIME_CADENCE_EXIT_TERMINAL,
-                    0,
-                );
-            },
-        );
-        runtime_signal_one_way_completion(command, completion_committed, completion_wake_target);
-        #[cfg(not(sel4_config_kernel_mcs))]
-        if intake.reply_cap_available {
-            // SAFETY: Only `seL4_Call` installs the reply cap consumed here.
-            // Send-only bootstrap and background turns carry the one-way flag and
-            // observe completion through the shared ring without calling Reply.
-            unsafe {
-                let reply0 = completion.result as sel4_sys::seL4_Word;
-                sel4_sys::seL4_ReplyWithMRs(
-                    sel4_sys::seL4_MessageInfo::new(0, 0, 0, 1),
-                    &reply0,
-                    core::ptr::null(),
-                    core::ptr::null(),
-                    core::ptr::null(),
-                );
             }
+            let _ = runtime_emit_completion_before_diagnostic(
+                completion_wake_order,
+                completion_committed,
+                || {
+                    runtime_record_terminal_diagnostic(command, completion, completion_committed);
+                },
+            );
+            runtime_signal_one_way_completion(
+                command,
+                completion_committed,
+                completion_wake_target,
+            );
+            if intake.reply_cap_available {
+                // SAFETY: Only `seL4_Call` installs the reply cap consumed here.
+                // Send-only bootstrap and background turns carry the one-way flag and
+                // observe completion through the shared ring without calling Reply.
+                unsafe {
+                    let reply0 = completion.result as sel4_sys::seL4_Word;
+                    sel4_sys::seL4_ReplyWithMRs(
+                        sel4_sys::seL4_MessageInfo::new(0, 0, 0, 1),
+                        &reply0,
+                        core::ptr::null(),
+                        core::ptr::null(),
+                        core::ptr::null(),
+                    );
+                }
+            }
+            last_sequence = command.sequence;
+            publish_runtime_progress(
+                0,
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_RECV_READY,
+                task_key_marker,
+            );
         }
         #[cfg(sel4_config_kernel_mcs)]
-        if intake.reply_cap_available {
-            // SAFETY: Recv/NBRecv installed this Call's association into the
-            // compiler-declared Reply object in slot 6. The retained intake is
-            // removed exactly once above, and every intervening poll/wait path
-            // avoids the command endpoint while this association remains live.
-            unsafe {
-                let reply0 = completion.result as sel4_sys::seL4_Word;
-                sel4_sys::seL4_MCS_ReplyWithMRs(
-                    pi4_driver_abi::DRIVER_RUNTIME_COMMAND_REPLY_SLOT as sel4_sys::seL4_CPtr,
-                    sel4_sys::seL4_MessageInfo::new(0, 0, 0, 1),
-                    &reply0,
-                    core::ptr::null(),
-                    core::ptr::null(),
-                    core::ptr::null(),
+        {
+            let component_wake_order = runtime_component_completion_wake_order_after_retirement(
+                completion_wake_order,
+                terminal_handoff,
+            );
+            let generic_signal_phase = runtime_generic_completion_signal_phase(terminal_handoff);
+            let returned_wake = runtime_retire_and_complete_terminal_handoff_with(
+                terminal_handoff,
+                || {
+                    last_sequence = command.sequence;
+                    publish_runtime_progress(
+                        0,
+                        pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_RECV_READY,
+                        task_key_marker,
+                    );
+                },
+                || {
+                    resolve_runtime_root_grant_terminal_publication(
+                        &mut in_flight_root_grant_action,
+                        command,
+                        completion_committed,
+                    );
+                    if notification_route == RuntimeNotificationRoute::SdioOwner {
+                        resolve_runtime_delegated_grant_terminal_publication(
+                            &mut in_flight_delegated_grant_action,
+                            completion_committed,
+                        );
+                    }
+                    if generic_signal_phase == RuntimeGenericCompletionSignalPhase::PostRetire {
+                        let component_target = runtime_emit_completion_postcommit_wake(
+                            component_wake_order,
+                            completion_committed,
+                        );
+                        runtime_signal_one_way_completion(
+                            command,
+                            completion_committed,
+                            component_target,
+                        );
+                    }
+                },
+                || {
+                    reply_and_wait_runtime_command_or_notification(
+                        completion.result,
+                        command.sequence,
+                        task_key_marker,
+                    )
+                },
+                || {
+                    wait_runtime_command_after_cyw43_terminal_handoff(
+                        command.sequence,
+                        task_key_marker,
+                    )
+                },
+                || runtime_raise_standard_fault(),
+            );
+            let deferred_source = returned_wake.and_then(|wake| {
+                runtime_retain_terminal_handoff_wake(
+                    wake,
+                    notification_route,
+                    last_sequence,
+                    &mut pending_intake,
+                    &mut pending_command_gate,
+                )
+            });
+            if generic_signal_phase == RuntimeGenericCompletionSignalPhase::AfterReturnedWake {
+                runtime_signal_one_way_completion(
+                    command,
+                    completion_committed,
+                    completion_wake_target,
                 );
             }
+            // Capture precedes the atomic wait, while passive publication
+            // follows the returned-wake seal. Consequently neither park time
+            // nor a coalesced source service can contaminate this terminal.
+            runtime_record_terminal_diagnostic_at(
+                command,
+                completion,
+                completion_committed,
+                terminal_diagnostic_snapshot,
+            );
+            if let Some(source) = deferred_source {
+                let serviced = service_runtime_notification(source.badge);
+                if notification_route == RuntimeNotificationRoute::PcieTimer && serviced {
+                    pending_intake = pcie_timer_block_after_irq(last_sequence, task_key_marker);
+                    pending_command_gate.complete();
+                }
+                // CYW43/SDIO persistent-source priority is a hard activation
+                // boundary. Even a rejected or already-quiescent source cannot
+                // fall through into foreground physical I/O in this refill.
+                if source.must_yield_before_foreground {
+                    runtime_yield_current_tcb();
+                }
+            }
         }
-        last_sequence = command.sequence;
-        publish_runtime_progress(
-            0,
-            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_RECV_READY,
-            task_key_marker,
-        );
     }
 }
 
@@ -70847,6 +71527,34 @@ mod tests {
             pi4_driver_abi::DRIVER_RUNTIME_CADENCE_EXIT_TERMINAL
         );
         assert_eq!(read_ring_u32(base + 44), 2);
+
+        TEST_RUNTIME_TIMER_COUNTER_TICKS.store(0x9abc, Ordering::Release);
+        let command = DriverTaskCommandRecord {
+            sequence: 4,
+            opcode: OPCODE_SERVICE,
+            flags: 0,
+            arg0: HOT_PATH_USB_KEYBOARD,
+            arg1: ROLE_USB,
+            aux0: 0,
+            aux1: 0,
+            budget: budget(),
+            frame: DriverFrameDescriptor::empty(),
+        };
+        runtime_record_terminal_diagnostic_at(
+            command,
+            DriverTaskCompletionRecord::progress(command.sequence, 1),
+            true,
+            RuntimeTerminalDiagnosticSnapshot {
+                cntvct: 0x5678,
+                cyw43_pending_mask: 0,
+            },
+        );
+        assert_eq!(
+            read_ring_u32(base + 28),
+            0x5678,
+            "a blocking terminal handoff must not charge later park time to the retired command",
+        );
+        assert_eq!(read_ring_u32(base + 44), command.sequence);
     }
 
     #[test]
@@ -81372,12 +82080,62 @@ mod tests {
             runtime_receive_observation(true, 0, 0, command_badge),
             RuntimeReceiveObservation::Empty,
         );
+        assert!(runtime_rejected_receive_is_endpoint(
+            command_badge,
+            command_badge,
+        ));
+        assert!(
+            !runtime_rejected_receive_is_endpoint(0, command_badge),
+            "an unbadged wake with stale MessageInfo cannot create Reply ownership",
+        );
+        assert!(!runtime_rejected_receive_is_endpoint(
+            pi4_driver_abi::driver_runtime_command_badge(TASK_KEY + 1),
+            command_badge,
+        ));
         assert_eq!(
             runtime_nonblocking_command_receive_contract(true, false),
             RuntimeNonblockingCommandReceiveContract::McsNbRecv {
                 reply_slot: pi4_driver_abi::DRIVER_RUNTIME_COMMAND_REPLY_SLOT,
             },
             "the next command intake still uses the generated Reply object after notification service",
+        );
+
+        let reply_command = DriverTaskCommandRecord {
+            sequence: 0x42,
+            opcode: OPCODE_SERVICE,
+            flags: 0,
+            arg0: HOT_PATH_SDIO_HOST,
+            arg1: ROLE_SDIO,
+            aux0: DRIVER_RUNTIME_ENGINE_INIT_AUX,
+            aux1: 0,
+            budget: budget(),
+            frame: DriverFrameDescriptor::empty(),
+        };
+        assert_eq!(
+            runtime_received_ipc_route(reply_command, 0x42, 0),
+            RuntimeReceivedIpcRoute::Admit {
+                reply_cap_available: true,
+            },
+        );
+        assert_eq!(
+            runtime_received_ipc_route(reply_command, 0x41, 0),
+            RuntimeReceivedIpcRoute::Reject,
+            "a mismatched exact-badged MR0 must enter containment",
+        );
+        assert_eq!(
+            runtime_received_ipc_route(reply_command, 0x42, 0x42),
+            RuntimeReceivedIpcRoute::Reject,
+            "a duplicate endpoint sequence cannot replace the retired command",
+        );
+        let one_way = DriverTaskCommandRecord {
+            flags: DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY,
+            ..reply_command
+        };
+        assert_eq!(
+            runtime_received_ipc_route(one_way, 0x42, 0),
+            RuntimeReceivedIpcRoute::Admit {
+                reply_cap_available: false,
+            },
         );
     }
 
@@ -86265,8 +87023,16 @@ mod tests {
         assert_eq!(staged.opcode, command.opcode);
         assert_eq!(staged.arg0, command.arg0);
         assert_eq!(staged.frame, command.frame);
-        assert!(sdio_owner_completion_requires_postcommit_signal(
+        assert!(!sdio_owner_completion_requires_postcommit_signal(
             staged,
+            RuntimeNotificationRoute::SdioOwner
+        ));
+        let committed = DriverTaskCommandRecord {
+            sequence: command.sequence,
+            ..staged
+        };
+        assert!(sdio_owner_completion_requires_postcommit_signal(
+            committed,
             RuntimeNotificationRoute::SdioOwner
         ));
         assert!(!sdio_owner_completion_requires_postcommit_signal(
@@ -86365,6 +87131,281 @@ mod tests {
             RuntimeCompletionWakeOrder::None,
             "post-commit wakes remain bound to each linked runtime's exact route",
         );
+    }
+
+    #[test]
+    fn mcs_terminal_handoff_selects_replyrecv_and_reciprocal_owner_baton() {
+        let reply_bearing_engine = DriverTaskCommandRecord {
+            sequence: 2,
+            opcode: OPCODE_SERVICE,
+            flags: 0,
+            arg0: HOT_PATH_SDIO_HOST,
+            arg1: ROLE_SDIO,
+            aux0: DRIVER_RUNTIME_ENGINE_INIT_AUX,
+            aux1: 0,
+            budget: budget(),
+            frame: DriverFrameDescriptor::empty(),
+        };
+        assert_eq!(
+            runtime_terminal_handoff(
+                reply_bearing_engine,
+                RuntimeNotificationRoute::SdioOwner,
+                true,
+                true,
+                true,
+            ),
+            RuntimeTerminalHandoff::McsReplyRecv,
+            "a durable MCS engine terminal atomically replies and re-enters receive",
+        );
+        assert_eq!(
+            runtime_terminal_handoff(
+                reply_bearing_engine,
+                RuntimeNotificationRoute::SdioOwner,
+                true,
+                false,
+                true,
+            ),
+            RuntimeTerminalHandoff::McsFaultContain,
+            "a nondurable terminal must delegate any associated caller to containment",
+        );
+
+        let child = DriverTaskCommandRecord {
+            sequence: 0x8000_50e3,
+            flags: DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY,
+            ..reply_bearing_engine
+        };
+        assert_eq!(
+            runtime_terminal_handoff(
+                child,
+                RuntimeNotificationRoute::SdioOwner,
+                false,
+                true,
+                true,
+            ),
+            RuntimeTerminalHandoff::McsCyw43PromptAndWait,
+        );
+        let root_replay = DriverTaskCommandRecord {
+            sequence: 3,
+            flags: DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY,
+            ..reply_bearing_engine
+        };
+        assert_eq!(
+            runtime_terminal_handoff(
+                root_replay,
+                RuntimeNotificationRoute::SdioOwner,
+                false,
+                true,
+                true,
+            ),
+            RuntimeTerminalHandoff::McsReturnToLoop,
+            "root-owned low-domain replay must remain endpoint-capable while CYW43 is suspended",
+        );
+        assert_eq!(
+            runtime_completion_wake_order(root_replay, RuntimeNotificationRoute::SdioOwner),
+            RuntimeCompletionWakeOrder::None,
+        );
+        assert_eq!(
+            runtime_generic_completion_signal_phase(RuntimeTerminalHandoff::McsReturnToLoop),
+            RuntimeGenericCompletionSignalPhase::PostRetire,
+            "root replay preserves the ordinary post-retire root fan-in",
+        );
+        assert_eq!(
+            runtime_component_completion_wake_order_after_retirement(
+                RuntimeCompletionWakeOrder::AfterCommitCyw43Peer,
+                RuntimeTerminalHandoff::McsCyw43PromptAndWait,
+            ),
+            RuntimeCompletionWakeOrder::None,
+            "MCS must not emit a plain peer signal before local retirement",
+        );
+        assert_eq!(
+            runtime_terminal_handoff(
+                child,
+                RuntimeNotificationRoute::SdioOwner,
+                false,
+                false,
+                true,
+            ),
+            RuntimeTerminalHandoff::McsFaultContain,
+        );
+        assert_eq!(
+            runtime_terminal_handoff(
+                child,
+                RuntimeNotificationRoute::SdioOwner,
+                false,
+                true,
+                false,
+            ),
+            RuntimeTerminalHandoff::ReturnToLoop,
+            "classic keeps its established signal/reply loop",
+        );
+        assert_eq!(DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT, 10);
+        assert_eq!(DRIVER_TASK_CHILD_LOCAL_NOTIFICATION_SLOT, 3);
+        assert_eq!(
+            runtime_generic_completion_signal_phase(RuntimeTerminalHandoff::McsCyw43PromptAndWait,),
+            RuntimeGenericCompletionSignalPhase::AfterReturnedWake,
+        );
+        assert_eq!(
+            runtime_idle_service_badge(
+                RuntimeNotificationRoute::SdioOwner,
+                DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE,
+            ),
+            None,
+            "a pure peer baton seals the command and continues locally",
+        );
+        assert_eq!(
+            runtime_idle_service_badge(
+                RuntimeNotificationRoute::SdioOwner,
+                DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE | DRIVER_RUNTIME_SDIO_IRQ_BADGE,
+            ),
+            Some(DRIVER_RUNTIME_SDIO_IRQ_BADGE),
+        );
+        assert!(runtime_terminal_source_service_requires_yield(
+            RuntimeNotificationRoute::SdioOwner,
+        ));
+        assert!(runtime_terminal_source_service_requires_yield(
+            RuntimeNotificationRoute::Cyw43Client,
+        ));
+        assert!(
+            !runtime_terminal_source_service_requires_yield(RuntimeNotificationRoute::Genet),
+            "GENET retains its own guarded direct-DPC window",
+        );
+        assert_eq!(
+            runtime_terminal_deferred_source(
+                RuntimeNotificationRoute::SdioOwner,
+                DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE,
+            ),
+            None,
+            "a pure peer baton is not physical-source work",
+        );
+        assert_eq!(
+            runtime_terminal_deferred_source(
+                RuntimeNotificationRoute::SdioOwner,
+                DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE | DRIVER_RUNTIME_SDIO_IRQ_BADGE,
+            ),
+            Some(RuntimeTerminalDeferredSource {
+                badge: DRIVER_RUNTIME_SDIO_IRQ_BADGE,
+                must_yield_before_foreground: true,
+            }),
+            "a coalesced CARD_INT is serviced only after terminal evidence and then yields",
+        );
+    }
+
+    #[test]
+    fn terminal_handoff_retires_before_exactly_one_selected_atomic_syscall() {
+        let trace = core::cell::RefCell::new(Vec::new());
+        let wake = runtime_retire_and_complete_terminal_handoff_with(
+            RuntimeTerminalHandoff::McsCyw43PromptAndWait,
+            || trace.borrow_mut().push("local-retire"),
+            || trace.borrow_mut().push("grant-retire"),
+            || panic!("the reciprocal child cannot use ReplyRecv"),
+            || {
+                trace.borrow_mut().push("nbsendwait-slot10-slot3");
+                RuntimeWake::Notification(DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE)
+            },
+            || panic!("a durable reciprocal terminal cannot fault-contain"),
+        );
+        assert_eq!(
+            *trace.borrow(),
+            ["local-retire", "grant-retire", "nbsendwait-slot10-slot3"],
+        );
+        assert_eq!(
+            wake,
+            Some(RuntimeWake::Notification(
+                DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE
+            )),
+        );
+
+        trace.borrow_mut().clear();
+        let wake = runtime_retire_and_complete_terminal_handoff_with(
+            RuntimeTerminalHandoff::McsReplyRecv,
+            || trace.borrow_mut().push("local-retire"),
+            || trace.borrow_mut().push("grant-retire"),
+            || {
+                trace.borrow_mut().push("replyrecv-slot2-slot6");
+                RuntimeWake::None
+            },
+            || panic!("a reply-bearing command cannot prompt the CYW43 peer"),
+            || panic!("a durable reply terminal cannot fault-contain"),
+        );
+        assert_eq!(
+            *trace.borrow(),
+            ["local-retire", "grant-retire", "replyrecv-slot2-slot6"],
+        );
+        assert_eq!(wake, Some(RuntimeWake::None));
+
+        trace.borrow_mut().clear();
+        assert_eq!(
+            runtime_retire_and_complete_terminal_handoff_with(
+                RuntimeTerminalHandoff::McsFaultContain,
+                || panic!("a nondurable terminal cannot retire locally"),
+                || panic!("a nondurable terminal cannot publish successor wakes"),
+                || panic!("a nondurable terminal cannot use ReplyRecv"),
+                || panic!("a nondurable terminal cannot prompt a peer"),
+                || trace.borrow_mut().push("standard-fault-contain"),
+            ),
+            None,
+        );
+        assert_eq!(*trace.borrow(), ["standard-fault-contain"],);
+    }
+
+    #[test]
+    fn mcs_terminal_syscall_wiring_preserves_source_order_and_exact_caps() {
+        let source = include_str!("lib.rs");
+        let atomic_start = source
+            .find("fn runtime_atomic_terminal_receive(")
+            .expect("atomic terminal receive must remain present");
+        let atomic_end = source[atomic_start..]
+            .find("fn reply_and_wait_runtime_command_or_notification(")
+            .map(|offset| atomic_start + offset)
+            .expect("reply-and-wait wrapper must follow the atomic receive");
+        let atomic = &source[atomic_start..atomic_end];
+        assert_eq!(atomic.matches("unsafe {").count(), 1);
+        assert_eq!(atomic.matches("seL4_ReplyRecvWithMRs(").count(), 1);
+        assert_eq!(atomic.matches("seL4_NBSendWait(").count(), 1);
+        assert!(atomic.contains("DRIVER_TASK_CHILD_COMMAND_SLOT"));
+        assert!(atomic.contains("DRIVER_RUNTIME_COMMAND_REPLY_SLOT"));
+        assert!(atomic.contains("DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT"));
+        assert!(atomic.contains("DRIVER_TASK_CHILD_LOCAL_NOTIFICATION_SLOT"));
+
+        let retire_start = source
+            .find("fn runtime_retire_and_complete_terminal_handoff_with<")
+            .expect("terminal retirement helper must remain present");
+        let retire_end = source[retire_start..]
+            .find("const fn runtime_completion_wake_order(")
+            .map(|offset| retire_start + offset)
+            .expect("completion wake selection must follow retirement");
+        let retire = &source[retire_start..retire_end];
+        let local_retire = retire.find("retire();").expect("local retirement call");
+        let grant_retire = retire
+            .find("post_retire();")
+            .expect("grant retirement call");
+        let reply_recv = retire.find("reply_recv()").expect("ReplyRecv selection");
+        let peer_wait = retire.find("peer_wait()").expect("NBSendWait selection");
+        assert!(local_retire < grant_retire);
+        assert!(grant_retire < reply_recv);
+        assert!(grant_retire < peer_wait);
+
+        let main_start = source.find("pub fn runtime_main(").expect("runtime main");
+        let main = &source[main_start..];
+        let commit = main
+            .find("let completion_committed = publish_runtime_completion_sequence_last")
+            .expect("durable completion commit");
+        let snapshot = main
+            .find("let terminal_diagnostic_snapshot")
+            .expect("pre-handoff terminal snapshot");
+        let handoff = main
+            .find("runtime_retire_and_complete_terminal_handoff_with(")
+            .expect("atomic terminal handoff");
+        let diagnostic = main
+            .find("runtime_record_terminal_diagnostic_at(")
+            .expect("captured terminal diagnostic publication");
+        let source_service = main
+            .find("let serviced = service_runtime_notification(source.badge);")
+            .expect("deferred source service");
+        assert!(commit < snapshot);
+        assert!(snapshot < handoff);
+        assert!(handoff < diagnostic);
+        assert!(diagnostic < source_service);
     }
 
     #[test]

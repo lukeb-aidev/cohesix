@@ -9736,6 +9736,26 @@ bindings. This source and target check proves Reply-association selection and
 notification routing only; it cannot prove a child ran or that a pending
 physical IRQ crossed its wait boundary on Pi.
 
+The reciprocal terminal regression must prove selected-MCS local order
+`completion commit -> consumed sequence -> receive-ready -> atomic handoff`.
+A reply-bearing terminal must use exactly one `seL4_ReplyRecv` with command
+endpoint slot 2 and Reply slot 6, preserve the returned MR0/badge, and route the
+returned wake without another receive. A committed delegated one-way SDIO child
+terminal must suppress any earlier plain slot-10 signal and make slot-10/slot-3
+`seL4_NBSendWait` the first post-retirement scheduling syscall, seal a returned
+sequence-last successor before service or telemetry, and emit generic root
+fan-in and the pre-handoff-captured passive diagnostics only afterwards. A
+root-owned low-domain one-way SDIO replay must instead remain endpoint-capable
+and preserve ordinary root fan-in while CYW43 is suspended. A failed completion
+commit must enter standard-fault containment before local retirement,
+receive-ready, Reply, signal, or receive. Tests must also distinguish an unbadged wake with
+stale MessageInfo and a foreign notification badge from exact-command-badged
+invalid IPC, and must preserve the CYW43/SDIO source-service activation boundary
+when a peer and physical badge coalesce. Classic profiles retain their existing
+Reply and signal paths. Source-order checks and the exact Pi MCS target compile
+prove syscall and ordering selection only; fresh Pi Gate 8, DHCP, TCP, pressure,
+operator, and raw-timing evidence remains authoritative.
+
 The Pi serial regression must lock the hardware-validated BCM2711 mini-UART IER
 values at RX `0x1`, TX-empty `0x2`, and combined `0x3`, despite the reversed
 labels in the older BCM2835 peripheral PDF and in agreement with its published

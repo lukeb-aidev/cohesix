@@ -418,6 +418,27 @@ suppression-only atomic latch closes recovery that begins after the turn
 snapshot; only the canonical
 pair-generation scrub may clear it after private recovery authority resets.
 
+The reciprocal terminal boundary is equally atomic. On selected MCS, every
+reply-bearing isolated-driver terminal retires its local sequence and advertises
+receive-ready before `seL4_ReplyRecv` both releases the current root caller and
+waits for the next command or bound notification. A committed one-way SDIO
+child instead retires locally before slot-10-to-CYW43 `seL4_NBSendWait` parks
+the sole owner on slot 3. Returned IPC and notification state is retained in
+that activation; it is never discarded merely to enter the outer loop. The
+SDIO peer prompt precedes passive terminal diagnostics and generic root fan-in,
+and those secondary hints may run only after a returned wake has been
+classified and any sequence-last successor sealed. A failed completion commit
+enters generated standard-fault containment before retirement or any wake. An
+exact-command-badged IPC whose MR0 or sequence fails admission is contained the
+same way because only the independent supervisor can safely disambiguate a
+possibly associated Reply object. A pure peer baton completes the scheduling
+round trip without a yield; a coalesced CYW43/SDIO physical source preserves the
+existing hard boundary: terminal time and pending state are captured before the
+atomic wait, published after successor sealing, and followed by one source
+quantum and a yield before foreground I/O. This adds no poll, retry, second
+owner, or change to any budget, period, refill, priority, core, deadline, or
+Reply association.
+
 The selected physical Pi MCS root-control task in the exact direct-GENET
 topology no longer forfeits a refill at the proved ordinary global-idle cut.
 Activation binds its existing compiler-
