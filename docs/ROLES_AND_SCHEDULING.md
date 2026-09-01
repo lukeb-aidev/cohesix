@@ -361,6 +361,23 @@ priority, core, owner, retry, or Reply/fault contract. Ordinary synchronous
 work and every genuine external-condition wait retain their prior scheduler
 handoff; rejected, ambiguous, and Reply-bearing generation inputs fail closed.
 
+The exact-743e discriminator proved one remaining retained root-causal cut:
+the sequence-last CYW43-to-SDIO command was durable and its outer grant was
+action-admitted, but the equal-priority SDIO owner never observed it. At the
+final foreground or DPC cut, CYW43 therefore re-observes the durable peer
+frontier and may use exactly one MCS `seL4_NBSendWait` only for a nonzero exact
+child sequence still in `Waiting` on the `Cyw43Client` route. The syscall sends
+the existing send-only slot-8 SDIO doorbell and atomically waits on CYW43's
+bound read-only slot-3 local notification. The command and grant record remain
+authority; a badge is only a coalescing hint, and re-prompting the same durable
+command after an unrelated wake is neither a retry nor a second physical
+operation. `Returned`, `Recovery`, `Invalid`, a wrong route, a zero sequence,
+or identity drift performs no combined wait and returns to the existing
+fail-closed path. The atomic peer prompt is MCS-only. A selected classic
+non-MCS profile retains its prior local-notification wait-only behavior and
+emits no additional SDIO peer signal. This changes no cap right, slot, owner,
+SC numeric, refill, priority, period, deadline, retry, or Reply rule.
+
 The deferred physical WiFi supervisor may retain root-control across productive
 logical turns only when generated root truth is active, admitted,
 consumed-time capable, and selects `NaturalPostpone`. It alternates exactly one
@@ -472,6 +489,24 @@ invalid, unaccounted, or fenced work closes it. A queued second command remains
 behind ordinary Serial/LocalSeat/Dispatch/Display debt. CYW43 keeps its
 ordinary connection-bound cursor and the distinct NaturalPostpone/64-unit
 contract above; mediated WiFi cannot acquire direct-GENET tail authority.
+
+After the ordinary `Serial -> LocalSeat -> Dispatch -> Network` rotor consumes
+one exact direct-GENET `OutputDrained` publication, it may mint one typed
+post-operator Network baton for the next retained quantum. The baton binds the
+signal-only mode, generation, authenticated connection, accepted-command,
+immediate-stage, child-stage-turn, child-stage-success, and exactly incremented
+response-drain counters; it also proves no batch-drain debt, child Yield,
+physical input or response, operator display debt, passive admission, local
+fault, recovery, containment, quarantine, reboot, or handoff. The minting
+quantum stops, may not admit a second command, and deliberately leaves the
+phase `Serial`; the baton remains dormant. The next retained continuation
+revalidates every bound counter and every late identity, operator,
+display-debt, recovery, cap, and safety fence while still Serial-first. Only
+the final pre-quantum consume may use the baton once to arm exactly one
+`Network` leaf immediately before invocation. Rejection, absence, drift, or a
+second consume leaves `Serial` unchanged and retains explicit-Yield behavior.
+This is not a child or NIC work grant, refill, owner transfer, or generic
+Network burst.
 
 Cold, attached, and steady Pi root-control use the fan-in at an already-fenced
 ordinary or no-successor exit. One nonzero poll result returns to outer
@@ -606,6 +641,15 @@ Transient-empty rotors share the same wall and quantum bounds; a stale,
 drifted, faulted, unaccounted, or operator-owned cut closes the tail. It never
 grants another packet operation, retry, refill, or owner. Mediated WiFi cannot
 acquire direct-GENET tail authority.
+
+One exact post-operator Network baton may additionally carry an already
+consumed direct-GENET `OutputDrained` transition across a single retained
+quantum boundary. It is valid only while its typed generation, connection,
+stage, drain, Yield, operator, display-debt, and safety-fence snapshot remains
+exact. It stays dormant with phase `Serial` until the final pre-quantum cut,
+where one successful consume arms one Network-first rotor. It grants no second
+command or packet authority; rejection or reuse leaves the ordinary
+Serial-first path unchanged.
 
 The Pi CYW43 boot supervisor consumes the root and console generated response bounds only
 after the DHCP-bound console child is finalized and resumed. Each bound is

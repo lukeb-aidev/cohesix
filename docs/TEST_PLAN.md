@@ -8994,6 +8994,26 @@ the generated WiFi `NaturalPostpone` profile or either unchanged 64 logical/
 productive cap, and any reset or slide of the direct-GENET unslid tail. All
 selected SC and Reply numerics remain unchanged.
 
+The exact-743e direct-GENET correction additionally requires a deterministic
+typed-baton regression. A positive case must consume one exact
+`OutputDrained` transition through the complete ordinary
+`Serial -> LocalSeat -> Dispatch -> Network` rotor, prove the response-drain
+counter advanced by exactly one while generation, authenticated connection,
+accepted-command, immediate-stage, child-stage-turn, child-stage-success, and
+child-Yield counters stayed exact, stop that quantum without accepting another
+command, mint the baton while proving that the phase remains `Serial`, and
+retain it dormant through the next continuation's late-fence checks. Only a
+successful final pre-quantum consume may arm exactly one Network-first quantum.
+Negative cases must reject batch-drain debt, any counter or identity drift, a
+physical input or response, operator display debt either at mint or at late
+consume, passive admission, local fault, recovery, containment, quarantine,
+reboot, handoff, non-signal-only mode, and a second consume of the baton. Every
+rejection must leave the phase `Serial` and retain the existing Yield path.
+This baton is not a fan-in Wait authorized by peer ACK or `OutputDrained` debt,
+so the blocking-Wait rejection above remains unchanged. Source and QEMU tests
+may prove only the typed state transition and fail-closed selection, not Pi
+latency or throughput.
+
 ABI v6 tests must prove `SendBatch = 3` binary encoding version 1 with exact
 eight-byte header, one through eight records, exact `used_bytes`, reserved zero,
 and each `1..=256`-byte UTF-8 record free of CR/LF. Empty, ninth, oversized,
@@ -9608,6 +9628,22 @@ followed by a late consumed-ID write. Delegated CYW43-to-SDIO grants must prove
 the same admission/action-completion ordering after the initial exact
 grant-free service receipt, including post-commit peer signalling and
 terminal-supersedes-grant behavior.
+The exact-743e CYW43 wait regression must prove that foreground and DPC paths
+first commit one nonzero exact child command sequence, then re-observe the
+durable root-causal frontier. Only `Waiting` on the exact `Cyw43Client` route
+may issue one MCS `seL4_NBSendWait`, with the existing send-only slot-8 SDIO
+doorbell as its nonblocking send and the bound read-only slot-3 CYW43 local
+notification as its wait. `Returned`, `Recovery`, `Invalid`, a wrong route,
+zero sequence, or post-wake identity drift must issue no combined wait and
+select the existing fail-closed path. Tests must also prove that the durable
+command/grant record, never either notification badge, remains authority, and
+that an unrelated wake can only re-prompt the same durable command rather than
+create a retry or second physical operation. The exact MCS target compile must
+exercise the real `NBSendWait` binding. A classic non-MCS compile/source test
+must retain the prior slot-3 local wait-only behavior and prove that this
+correction emits no slot-8 peer signal. This focused check proves syscall
+selection and publication ordering only; it is not evidence that the SDIO
+owner ran or that Gate 8, DHCP, or either performance gate passed on Pi.
 The runtime's nonblocking command seam is kernel-contract-specific: classic
 seL4 uses `seL4_Poll`, while MCS must use `seL4_NBRecv` with the exact
 compiler-generated child Reply slot 6. Once that receive retains a Call, both

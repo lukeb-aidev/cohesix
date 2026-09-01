@@ -225,6 +225,32 @@ reboot, handoff, local fault, incompatible generated policy, invalid GENET-tail
 time, or cap expiry fails closed without a new refill, retry, packet owner, or
 device authority.
 
+The exact-743e CYW43 correction does not grant wake-badge authority. Only after
+one nonzero sequence-last child command is durable and the retained root-causal
+frontier still reads `Waiting` on the exact `Cyw43Client` route may CYW43 use
+one MCS `seL4_NBSendWait` to prompt the existing send-only slot-8 SDIO
+doorbell while atomically blocking on its bound read-only slot-3 local
+notification. `Returned`, `Recovery`, `Invalid`, wrong-route, zero-sequence,
+or identity-drift evidence performs no combined wait and selects the existing
+fail-closed path. This atomic peer prompt is MCS-only. A classic non-MCS
+profile retains its prior local-notification wait-only behavior and sends no
+additional SDIO peer signal. A coalesced MCS wake can re-prompt only the same
+durable command; it cannot authorize a retry, duplicate device action,
+fallback owner, broadened capability, or new queue entry.
+
+The exact-743e direct-GENET correction may skip one already-paid operator
+prefix only through a single-use typed post-`OutputDrained` Network baton. Its
+generation, authenticated connection, command, stage, drain, Yield, operator,
+display-debt, passive, fault, recovery, containment, quarantine, reboot, and
+handoff snapshot must all remain exact. Minting stops the current quantum,
+cannot admit a second command, and leaves the phase `Serial`; the baton stays
+dormant while all late fences are rechecked. Only its final one-shot
+pre-quantum consume may arm exactly one Network-first rotor immediately before
+invocation, not child work, a packet, NIC authority, refill, or generic burst.
+Any missing, consumed, reused, or drifted field—including new display debt—
+leaves the ordinary Serial-first path and existing Yield unchanged, so the
+optimization cannot bypass operator priority or safety fences.
+
 Routine diagnostics are best-effort and may be dropped under their declared
 bound. Security-relevant authority, lifecycle, completion, and fault decisions
 remain in typed records or evidence surfaces rather than relying on an

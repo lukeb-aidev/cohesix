@@ -1594,6 +1594,22 @@ impl PiRootControlProductiveWindow {
         self.continuation
     }
 
+    fn consume_post_operator_network_baton(
+        &mut self,
+        expected: crate::event::PiRootControlProductiveContinuation,
+    ) -> bool {
+        if self.continuation != Some(expected) || !expected.has_post_operator_network_baton() {
+            self.last_reject_reason = Self::REJECT_TOKEN;
+            return false;
+        }
+        let consumed = expected.without_post_operator_network_baton();
+        self.continuation = Some(consumed);
+        if self.active_hot_tail == Some(expected) {
+            self.active_hot_tail = Some(consumed);
+        }
+        true
+    }
+
     const fn active_hot_tail_identity(
         self,
     ) -> Option<crate::event::PiRootControlProductiveContinuation> {
@@ -1746,6 +1762,40 @@ where
                 pump.record_pi_root_control_active_hot_tail_closed(active_hot_tail_wall_us);
             }
             return true;
+        }
+        if let Some(network_baton) = retained_quantum
+            .then(|| window.continuation_identity())
+            .flatten()
+            .filter(|identity| identity.has_post_operator_network_baton())
+        {
+            // Consume the one-shot token before the final pump mutation. If
+            // the complete identity/operator/fault recheck now fails, the
+            // pump is still at Serial and the ordinary explicit-Yield path is
+            // fail-closed. A successful arm is immediately followed by the
+            // retained quantum, with no intervening generic work.
+            if !window.consume_post_operator_network_baton(network_baton) {
+                pump.record_pi_root_control_productive_window_decision(
+                    false,
+                    window.last_effective_root_us(counter_hz),
+                    window.last_reject_reason(),
+                );
+                if active_hot_tail_identity.is_some() {
+                    pump.record_pi_root_control_active_hot_tail_closed(active_hot_tail_wall_us);
+                }
+                return true;
+            }
+            if !pump.arm_pi_root_control_post_operator_network_baton(network_baton) {
+                window.last_reject_reason = PiRootControlProductiveWindow::REJECT_FENCE;
+                pump.record_pi_root_control_productive_window_decision(
+                    false,
+                    window.last_effective_root_us(counter_hz),
+                    PiRootControlProductiveWindow::REJECT_FENCE,
+                );
+                if active_hot_tail_identity.is_some() {
+                    pump.record_pi_root_control_active_hot_tail_closed(active_hot_tail_wall_us);
+                }
+                return true;
+            }
         }
         let explicit_yield_required = pump.poll_root_control_quantum();
         if active_hot_tail_admitted {
@@ -8133,6 +8183,38 @@ mod tests {
             "a generation-swapped continuation token fails closed",
         );
         assert!(!window.resumable_quantum_admitted(natural_postpone_profile));
+    }
+
+    #[cfg(all(
+        feature = "serial-console",
+        feature = "kernel",
+        feature = "net-console"
+    ))]
+    #[test]
+    fn pi_genet_post_operator_network_baton_is_consumed_once() {
+        let identity =
+            crate::event::PiRootControlProductiveContinuation::for_test_cross_core_post_operator_network_baton(
+                7, 17,
+            );
+        let consumed = identity.without_post_operator_network_baton();
+        let mut window = super::PiRootControlProductiveWindow::new();
+
+        assert!(window.restart_after_yield(100, 1_000_000, true));
+        assert!(window.record_completed_quantum_at(identity, 200));
+        assert_eq!(window.continuation_identity(), Some(identity));
+        assert_eq!(window.active_hot_tail_identity(), Some(identity));
+        assert!(window.consume_post_operator_network_baton(identity));
+        assert_eq!(window.continuation_identity(), Some(consumed));
+        assert_eq!(window.active_hot_tail_identity(), Some(consumed));
+        assert!(!consumed.has_post_operator_network_baton());
+        assert!(
+            !window.consume_post_operator_network_baton(identity),
+            "a consumed Network baton cannot be presented a second time",
+        );
+        assert_eq!(
+            window.last_reject_reason(),
+            super::PiRootControlProductiveWindow::REJECT_TOKEN,
+        );
     }
 
     #[cfg(all(

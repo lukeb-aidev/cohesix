@@ -295,6 +295,14 @@ must acquire and recheck the sequence-last durable record before acting or
 sleeping. ABI v12 preserves every role's physical ownership, queue, retry,
 recovery, and fault contract.
 
+The exact-743e retained-peer and post-drain corrections are scheduling-only.
+The MCS CYW43 path reuses its bound local-notification slot 3 and the generated
+send-only SDIO-doorbell slot 8; the classic non-MCS path retains only its prior
+slot-3 local wait. The GENET path reuses existing direct-console counters and
+records. Neither correction changes an ABI layout or version, capability right,
+manifest field, generated contract, queue, owner, command, completion, retry,
+or recovery record.
+
 ### Step 3: Add the scheduling contract
 
 Every root service path validates a `DriverTaskContract` before HAL admits
@@ -1216,6 +1224,22 @@ transport:
   ambiguous, rejected, Reply-bearing, unsupported, and other-driver routes fail
   closed or retain their prior scheduler handoff and cannot fall back into this
   lane.
+- Exact-743e proved that a sequence-last CYW43-to-SDIO command could remain
+  durable behind an action-admitted outer grant while the equal-priority SDIO
+  owner received no runnable observation. At the final retained foreground or
+  DPC root-causal cut, CYW43 must therefore re-observe the durable peer
+  frontier. Only a nonzero exact child sequence still in `Waiting` on the
+  `Cyw43Client` route may execute one MCS `seL4_NBSendWait`: its nonblocking
+  send uses generated send-only slot 8 to prompt SDIO, and its atomic wait uses
+  CYW43's bound read-only local-notification slot 3. The durable command/grant
+  record, not either badge, remains authority. An unrelated wake may re-prompt
+  that same command but cannot create another command, retry, physical
+  operation, poller, or owner. `Returned`, `Recovery`, `Invalid`, wrong-route,
+  zero-sequence, and post-wake identity drift perform no combined wait and
+  select the existing fail-closed path. This atomic peer prompt is MCS-only. A
+  classic non-MCS profile retains its prior slot-3 local-notification wait-only
+  behavior and sends no additional slot-8 SDIO signal; unrelated runtime waits
+  retain their existing syscall selection.
 - Within one CYW43 root-granted foreground turn, observing and consuming one
   exact successful SDIO child terminal under a sealed finite cold parent does
   not consume that turn's sole new-submission slot. The admitted cold set is
@@ -1369,6 +1393,23 @@ transport:
   without a retry, second packet operation, new refill, or child authority. A
   second command remains behind complete operator/display debt. Mediated WiFi
   cannot mint direct-GENET tail authority.
+- After the ordinary `Serial -> LocalSeat -> Dispatch -> Network` rotor
+  consumes one exact direct-GENET `OutputDrained` publication, root may mint
+  one typed post-operator Network baton. It binds signal-only cross-core mode,
+  generation, authenticated connection, accepted-command, immediate-stage,
+  child-stage-turn, child-stage-success, and exactly incremented
+  response-drain counters, with no batch-drain debt, child Yield, physical
+  input or response, operator display debt, passive admission, local fault,
+  recovery, containment, quarantine, reboot, or handoff. The minting quantum
+  stops without accepting another command and leaves the phase `Serial`, with
+  the baton dormant. The next retained continuation revalidates the complete
+  snapshot and every late fence, including display debt, without changing that
+  phase. Only the final pre-quantum consume may use the baton once to arm one
+  Network leaf immediately before invocation. Missing, consumed, reused, or
+  drifted authority leaves the ordinary Serial-first rotor and explicit Yield
+  unchanged. This skips one already-paid operator prefix but grants no child
+  work, NIC operation, packet, queue entry, refill, owner transfer, or generic
+  burst.
 - A parsed Pi passive-service command whose strict reserve lease expires is
   retained across at most one completely new Yield/refill attempt. The retry
   begins from `AwaitingYield`, drains fresh Consumed evidence, and retains the

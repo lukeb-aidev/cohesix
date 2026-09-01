@@ -11269,6 +11269,92 @@ Changes:
     root-MCS canary may reject this candidate. Only the next exact-image WiFi
     boot and authenticated serial GENET reboot can prove the stated performance
     gates; repeatability and pressure depth remain separate hardware evidence.
+  - exact-743e retained-peer and post-drain baton correction — cite this
+    performance correction together with its owning
+    `m26e-driver-runtime-mcs-port-and-cyw43-coexistence` and
+    `m26e-console-network-service-isolation` tasks. Exact source
+    `743e554d9c990a84e1d92a34b6048bdf75160f09`, build ID
+    `f934e7e3a8a115cb5a6019d0963fb640e9e42c7330383dde9b308a20597cfc13`,
+    normalized image ID
+    `2bf5a82422a788681bf333ab46f1e448e08b08a1a4919a89d16fdfcbb33d5f13`,
+    and sealed image SHA-256
+    `ca8f5af5eee4fd8954776f5012cadff85b7431bf79aec7ad494f31ab3eaf6fa1`
+    bind the current hardware discriminator. One cold and two rebooted WiFi
+    lifetimes all stopped before Gate 8 and DHCP with the same exact state:
+    root grant request 3 remained action-admitted at consumed value
+    `0x80000001`, the sequence-last SDIO command
+    `eff090d9/0001/2000/00000000/43595301` was visible, its completion remained
+    empty, and the equal-priority SDIO owner recorded no observation before
+    bounded pair recovery and quarantine. This is failure evidence at the
+    committed CYW43-to-SDIO scheduling handoff, not RF, DHCP, firmware, device
+    retry, or Gate-8 performance evidence.
+
+    The same exact image's two valid one-connection raw GENET measurements
+    completed 64/64 without transport retry or reconnect but reached only
+    `143.2629479567085` and `137.12952399222013` requests/s with respective
+    p95 latency `16.938749933615327` and `11.625333921983838` ms, below the
+    required `162.242` requests/s and above the `1.845`-ms p95 limit. The first
+    lifetime separately completed medium `192/192` and high `768/768` REST
+    pressure without semantic, timeout, retry, reconnect, queue, containment,
+    quarantine, or driver error. Its direct rings and IRQ path conserved
+    `291/291` RX and `279/279` TX, while causal telemetry measured command to
+    root observation at 4-ms average/17-ms maximum, dispatch to child stage at
+    6/20 ms, and 25,062 `NO_PRODUCTIVE_SUCCESSOR` exits with an 8,829-us
+    average and 9,993-us maximum Yield hiatus. These are functional-prefix and
+    performance-failure observations only; the second lifetime's erroneous
+    host-side duplicate ATTACH invocation is excluded from script acceptance.
+
+    Repair the two earliest proven scheduling cuts without changing either
+    physical owner. For a retained foreground or DPC CYW43 root-causal wait,
+    commit the exact nonzero child command sequence first, re-observe the
+    durable peer frontier, and only when it is still `Waiting` on the exact
+    `Cyw43Client` route execute one MCS `seL4_NBSendWait`: nonblocking-send the
+    existing send-only slot-8 SDIO doorbell and atomically block CYW43 on its
+    bound read-only slot-3 local notification. This atomic peer prompt is
+    MCS-only; a deliberately selected classic non-MCS profile retains its
+    prior slot-3 local wait-only behavior and emits no additional slot-8
+    signal. The record, not either badge, remains work authority. `Returned`,
+    `Recovery`, `Invalid`, wrong-route, zero-sequence, or post-wake identity
+    drift cannot enter or retain this cut and must return to the existing
+    fail-closed path. A coalesced MCS re-prompt after an unrelated wake
+    services the same one durable command; it is not another physical
+    operation, command retry, poller, or owner.
+
+    For direct GENET, after the ordinary
+    `Serial -> LocalSeat -> Dispatch -> Network` rotor consumes one exact
+    `OutputDrained` publication, mint at most one typed post-operator Network
+    baton. It binds the cross-core signal-only mode, generation, authenticated
+    connection, accepted-command count, immediate-stage count, stage-turn and
+    stage-success counts, and the exact incremented response-drain count. It
+    also requires no remaining batch drain, child Yield evidence, physical
+    operator input, physical console response, operator display debt, passive
+    admission, local fault, recovery, containment, quarantine, reboot, or
+    handoff. Mint the baton dormant: the current quantum stops without
+    admitting another command and the service phase remains `Serial`. The next
+    retained continuation also remains Serial-first while every late counter,
+    identity, operator, display-debt, recovery, cap, and safety fence is
+    revalidated. Only at the final pre-quantum cut may the exact baton be
+    consumed once and arm one `Network` leaf immediately before invocation,
+    avoiding a second already-paid operator prefix. Rejection, drift, absence,
+    or a second consume leaves the phase `Serial` and retains explicit-Yield
+    behavior. The baton grants no NIC operation, child work, queue entry,
+    scheduling context, refill, or generic Network burst.
+
+    Preserve every SC budget, WCET, period, priority, MCP, refill count, Reply
+    rule, operator ordering, physical owner, queue, retry, deadline, recovery,
+    containment, quarantine, manifest population, ABI layout/version, schema,
+    and QEMU selector. `docs/INTERFACES.md`, the complete host-tool suite,
+    `tools/cohesix-py`, compiler/generated contracts, all `.coh` workloads,
+    `scripts/rest_perf_harness.py` workloads and arithmetic, benchmark evidence
+    records, and report schemas were reviewed and require no change because the
+    existing slots, rights, durable records, public grammar, and measurement
+    contracts are unchanged. Focused state-machine/order tests, exact Pi target
+    compilation, generated and Test Plan consistency, and the pinned QEMU
+    10.1/HVF root-MCS canary may reject this correction. They cannot prove a Pi
+    speedup: a new exact-image cold WiFi boot, authenticated GENET reboot,
+    first-attempt scripts, raw64, medium/high REST, operator liveness, causal
+    diagnostics, and boot-paired captures remain mandatory before either
+    performance or repeatability acceptance.
   - platform consistency — select the same v6 shared contract, including the
     v4-introduced bounded command batch, complete 256-Worker population, two
     passive-Worker executor-lane architecture, and passive-service locality
@@ -11278,6 +11364,9 @@ Changes:
   - Pi build compatibility — refresh the repository-managed `pi4_diagnostic` tree from the freshly built SMP+MCS profile, require exact current-profile validation and deterministic immutable-tree composition, use the selected `CARGO_TARGET_DIR` for every Pi runtime payload, and compile direct VirtIO DMA containment only for QEMU/VirtIO profiles. Bind the pre-root-task Pi driver-runtime CPIO into image provenance and copy that exact archive into the SD stage, so `--skip-build` cannot repackage a later QEMU-feature child from the shared Cargo target directory. Retain the exact selected Pi resolved manifest beside the staged image before cleanup restores canonical QEMU generated outputs, and bind the stage-only runtime/DMA proof to that retained file and digest.
   - compatibility — preserve public AUTH/framing/command/ACK/ERR/END behavior, one-slot publication ACK semantics, root policy authority, MCS admission, evidence, and fault containment; advance the selected manifest through schema 1.16: schema 1.15 retains the generated internal Worker execution contract and transport correlation identity, while schema 1.16 seals the root-control fan-in slots and internal console/driver ABI versions. Update compiler, generated truth, host/target NineDoor, focused tests, host tools, Python library, SwarmUI projections, and benchmark compatibility review together. Full host-tool and `tools/cohesix-py` review preserves the public grammar, generated target-profile contract, and host dependencies. It requires bounded host-only compatibility repairs: `cohsh` TCP-only builds no longer compile in the in-process NineDoor/mock/trace implementation, in-process integration tests declare that required feature explicitly, `cas-tool` and SwarmUI integration tests resolve their Cargo-provided binaries at runtime so all-target linting remains portable, and the Python target validator adopts the generated Pi 1/127/128 population. The evidence and benchmark tools additionally derive the complete 265-task QEMU and 272-task Pi temporal seals from generated truth, keep exactly one detailed live exemplar for each executable role, admit target-neutral fresh-Pi proof, and compare provenance-compatible QEMU/Pi throughput and errors without turning QEMU latency into a physical-network gate. Hive Gateway's `/v1/meta/status` projection adds required normalized configured-backend `target_host` and `target_port` fields so fresh-Pi evidence binds the live gateway to the exact Pi console endpoint; it does not expose the REST bind endpoint or create target proof for host-model mode. `coh`, `cohsh`, `coh-status`, SwarmUI, `gpu-bridge-host`, `host-ticket-agent`, `host-sidecar-bridge`, `sidecar-bus`, `cas-tool`, every `.coh` workload, and `tools/cohesix-py` tolerate or ignore those additive status fields and require no behavior or schema change. Existing QEMU results do not claim Pi performance, and the enlarged Pi declaration requires fresh exact-image physical evidence. The original manifest/build integration performed no Pi hardware interaction; later exact-image bullets bind their own fresh Pi evidence and still require a new exact-image boot after each source candidate.
 Commands:
+  - cargo test -p pi4-driver-runtime --lib root_causal_wait_handoff_rearms_exact_sdio_successor_only_while_waiting -- --test-threads=1
+  - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib direct_genet_child_notification_successor_mints_one_exact_network_baton -- --test-threads=1
+  - scripts/ci/test_plan_converge.sh --target qemu --focus root-mcs --path apps/root-task/src/event/mod.rs
   - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib pi_root_control_ -- --test-threads=1
   - cargo test -p root-task --test mcs_activation_order -- --test-threads=1
   - cargo test -p root-task --test mcs_fault_lanes -- --test-threads=1

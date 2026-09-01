@@ -5256,6 +5256,7 @@ struct DirectGenetProductiveQuantumSnapshot {
     // already received its bounded rotor opportunity, from operator input.
     physical_operator_work: LinkedPhysicalOperatorWork,
     physical_console_response_pending: bool,
+    operator_display_pending: bool,
 }
 
 /// One exact staged direct-GENET response whose child publication may finish
@@ -5299,7 +5300,8 @@ impl DirectGenetChildNotificationRotorContinuation {
             && snapshot.child_yield_credit_scaled == 0
             && snapshot.child_yield_invalid_reasons == 0
             && direct_genet_compact_operator_fence_clear(Some(snapshot.physical_operator_work))
-            && !snapshot.physical_console_response_pending)
+            && !snapshot.physical_console_response_pending
+            && !snapshot.operator_display_pending)
             .then_some(Self {
                 generation: snapshot.generation,
                 connection_id: snapshot.connection_id,
@@ -5310,6 +5312,79 @@ impl DirectGenetChildNotificationRotorContinuation {
                 child_stage_output_successes: snapshot.child_stage_output_successes,
                 child_response_drains: snapshot.child_response_drains,
             })
+    }
+}
+
+/// One-shot authority to begin the next retained root quantum at Network.
+///
+/// This token exists only after the ordinary Serial/LocalSeat/Dispatch/Network
+/// rotor consumed the exact `OutputDrained` child publication. It carries the
+/// stable authenticated identity and all root/child progress counters that
+/// must remain unchanged before the next Network leaf. A newly arriving child
+/// command may change only its private command queue; it cannot mutate these
+/// counters until root consumes it.
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct DirectGenetPostOperatorNetworkBaton {
+    generation: u64,
+    connection_id: u64,
+    accepted_commands: u64,
+    immediate_stage_turns: u64,
+    child_stage_output_turns: u64,
+    child_stage_output_successes: u64,
+    child_response_drains: u64,
+}
+
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+impl DirectGenetPostOperatorNetworkBaton {
+    fn from_exact_drain(
+        expected: DirectGenetChildNotificationRotorContinuation,
+        after: DirectGenetProductiveQuantumSnapshot,
+    ) -> Option<Self> {
+        (after.generation == expected.generation
+            && after.connection_id == expected.connection_id
+            && after.accepted_commands == expected.accepted_commands
+            && after.immediate_stage_turns == expected.immediate_stage_turns
+            && after.child_stage_output_turns == expected.child_stage_output_turns
+            && after.child_stage_output_successes == expected.child_stage_output_successes
+            && !after.child_awaiting_batch_drain
+            && after.child_response_drains == expected.child_response_drains.saturating_add(1)
+            && after.child_yield_calls == 0
+            && after.child_yield_counter_hz == 0
+            && after.child_yield_call_wall_scaled == 0
+            && after.child_yield_credit_scaled == 0
+            && after.child_yield_invalid_reasons == 0
+            && direct_genet_compact_operator_fence_clear(Some(after.physical_operator_work))
+            && !after.physical_console_response_pending
+            && !after.operator_display_pending)
+            .then_some(Self {
+                generation: after.generation,
+                connection_id: after.connection_id,
+                accepted_commands: after.accepted_commands,
+                immediate_stage_turns: after.immediate_stage_turns,
+                child_stage_output_turns: after.child_stage_output_turns,
+                child_stage_output_successes: after.child_stage_output_successes,
+                child_response_drains: after.child_response_drains,
+            })
+    }
+
+    fn matches(self, current: DirectGenetProductiveQuantumSnapshot) -> bool {
+        current.generation == self.generation
+            && current.connection_id == self.connection_id
+            && current.accepted_commands == self.accepted_commands
+            && current.immediate_stage_turns == self.immediate_stage_turns
+            && current.child_stage_output_turns == self.child_stage_output_turns
+            && current.child_stage_output_successes == self.child_stage_output_successes
+            && !current.child_awaiting_batch_drain
+            && current.child_response_drains == self.child_response_drains
+            && current.child_yield_calls == 0
+            && current.child_yield_counter_hz == 0
+            && current.child_yield_call_wall_scaled == 0
+            && current.child_yield_credit_scaled == 0
+            && current.child_yield_invalid_reasons == 0
+            && direct_genet_compact_operator_fence_clear(Some(current.physical_operator_work))
+            && !current.physical_console_response_pending
+            && !current.operator_display_pending
     }
 }
 
@@ -5373,7 +5448,8 @@ fn direct_genet_child_notification_rotor_continuation_allowed(
         && before.child_yield_credit_scaled == 0
         && before.child_yield_invalid_reasons == 0
         && direct_genet_compact_operator_fence_clear(Some(before.physical_operator_work))
-        && !before.physical_console_response_pending;
+        && !before.physical_console_response_pending
+        && !before.operator_display_pending;
     let exact_output_drained = after.generation == expected.generation
         && after.connection_id == expected.connection_id
         && after.accepted_commands == expected.accepted_commands
@@ -5389,7 +5465,8 @@ fn direct_genet_child_notification_rotor_continuation_allowed(
         && after.child_yield_credit_scaled == 0
         && after.child_yield_invalid_reasons == 0
         && direct_genet_compact_operator_fence_clear(Some(after.physical_operator_work))
-        && !after.physical_console_response_pending;
+        && !after.physical_console_response_pending
+        && !after.operator_display_pending;
     exact_before
         && exact_output_drained
         && evidence.starting_phase == LinkedRuntimeServicePhase::Serial
@@ -5843,6 +5920,7 @@ pub(crate) struct PiRootControlProductiveContinuation {
     exact_same_core_yield_to_observed: bool,
     child_credit_scaled: u128,
     child_credit_counter_hz: u64,
+    post_operator_network_baton: Option<DirectGenetPostOperatorNetworkBaton>,
 }
 
 #[cfg(all(test, feature = "kernel", feature = "net-console"))]
@@ -5857,6 +5935,7 @@ impl PiRootControlProductiveContinuation {
             exact_same_core_yield_to_observed: true,
             child_credit_scaled: 0,
             child_credit_counter_hz: 0,
+            post_operator_network_baton: None,
         }
     }
 
@@ -5883,6 +5962,7 @@ impl PiRootControlProductiveContinuation {
             exact_same_core_yield_to_observed: true,
             child_credit_scaled: 0,
             child_credit_counter_hz: 0,
+            post_operator_network_baton: None,
         }
     }
 
@@ -5897,6 +5977,31 @@ impl PiRootControlProductiveContinuation {
         }
     }
 
+    pub(crate) const fn for_test_cross_core_post_operator_network_baton(
+        generation: u64,
+        connection_id: u64,
+    ) -> Self {
+        Self {
+            generation,
+            connection_id,
+            expected_phase: LinkedRuntimeServicePhase::Serial,
+            progress: DirectGenetProductiveProgress::ResponseDrained,
+            mode: DirectGenetContinuationMode::CrossCoreSignalOnly,
+            exact_same_core_yield_to_observed: false,
+            child_credit_scaled: 0,
+            child_credit_counter_hz: 0,
+            post_operator_network_baton: Some(DirectGenetPostOperatorNetworkBaton {
+                generation,
+                connection_id,
+                accepted_commands: 1,
+                immediate_stage_turns: 1,
+                child_stage_output_turns: 1,
+                child_stage_output_successes: 1,
+                child_response_drains: 1,
+            }),
+        }
+    }
+
     pub(crate) const fn for_test_cross_core_command(generation: u64, connection_id: u64) -> Self {
         Self {
             generation,
@@ -5907,6 +6012,7 @@ impl PiRootControlProductiveContinuation {
             exact_same_core_yield_to_observed: false,
             child_credit_scaled: 0,
             child_credit_counter_hz: 0,
+            post_operator_network_baton: None,
         }
     }
 }
@@ -5934,6 +6040,28 @@ impl PiRootControlProductiveContinuation {
 
     pub(crate) const fn child_credit_counter_hz(self) -> u64 {
         self.child_credit_counter_hz
+    }
+
+    fn post_operator_network_baton_matches(
+        self,
+        current: Option<DirectGenetProductiveQuantumSnapshot>,
+    ) -> bool {
+        match self.post_operator_network_baton {
+            Some(baton) => {
+                self.expected_phase == LinkedRuntimeServicePhase::Serial
+                    && current.is_some_and(|snapshot| baton.matches(snapshot))
+            }
+            None => self.expected_phase == LinkedRuntimeServicePhase::Serial,
+        }
+    }
+
+    pub(crate) const fn has_post_operator_network_baton(self) -> bool {
+        self.post_operator_network_baton.is_some()
+    }
+
+    pub(crate) const fn without_post_operator_network_baton(mut self) -> Self {
+        self.post_operator_network_baton = None;
+        self
     }
 
     /// Return whether this exact direct-GENET transaction has published a
@@ -6017,6 +6145,7 @@ struct DirectGenetProductiveQuantumEvidence {
     handoff_pending: bool,
     passive_admission_pending: bool,
     local_fault_pending: bool,
+    post_operator_network_baton: Option<DirectGenetPostOperatorNetworkBaton>,
 }
 
 #[cfg(all(feature = "kernel", feature = "net-console"))]
@@ -6109,14 +6238,18 @@ fn direct_genet_productive_quantum_continuation_entitled(
         (false, true, true) => DirectGenetProductiveProgress::DrainAndStage,
         _ => return None,
     };
-    let expected_phase = match progress {
-        DirectGenetProductiveProgress::CommandAccepted
-        | DirectGenetProductiveProgress::CommandAcceptedAndStagePublished
-        | DirectGenetProductiveProgress::CommandAcceptedStagePublishedAndDrained
-        | DirectGenetProductiveProgress::StagePublished
-        | DirectGenetProductiveProgress::ResponseDrained
-        | DirectGenetProductiveProgress::DrainAndStage => LinkedRuntimeServicePhase::Serial,
-    };
+    let post_operator_network_baton = evidence.post_operator_network_baton.filter(|baton| {
+        matches!(
+            evidence.continuation_mode,
+            DirectGenetContinuationMode::CrossCoreSignalOnly
+        ) && matches!(progress, DirectGenetProductiveProgress::ResponseDrained)
+            && baton.matches(evidence.after)
+    });
+    // The baton remains dormant at the ordinary Serial boundary. Only the
+    // final successful pre-quantum consume cut may install Network, so any
+    // intervening fence, cap, or operator rejection leaves Serial-first
+    // arbitration intact.
+    let expected_phase = LinkedRuntimeServicePhase::Serial;
     let stage_consistent = match evidence.continuation_mode {
         DirectGenetContinuationMode::SameCoreYieldTo => {
             if durable_child_stage {
@@ -6209,6 +6342,7 @@ fn direct_genet_productive_quantum_continuation_entitled(
             } else {
                 evidence.after.child_yield_counter_hz
             },
+            post_operator_network_baton,
         })
 }
 
@@ -7999,6 +8133,8 @@ where
     #[cfg(all(test, feature = "kernel", feature = "net-console"))]
     direct_genet_child_notification_rotor_continuation_test_override:
         Option<DirectGenetChildNotificationRotorContinuation>,
+    #[cfg(all(test, feature = "kernel", feature = "net-console"))]
+    direct_genet_continuation_mode_test_override: Option<DirectGenetContinuationMode>,
     #[cfg(all(feature = "kernel", feature = "release-pi4"))]
     pi_root_control_pending_passive_command: Option<Box<PiRootControlPendingPassiveCommand>>,
     #[cfg(feature = "kernel")]
@@ -8722,6 +8858,8 @@ where
             pi_root_control_productive_continuation_identity: None,
             #[cfg(all(test, feature = "kernel", feature = "net-console"))]
             direct_genet_child_notification_rotor_continuation_test_override: None,
+            #[cfg(all(test, feature = "kernel", feature = "net-console"))]
+            direct_genet_continuation_mode_test_override: None,
             #[cfg(all(feature = "kernel", feature = "release-pi4"))]
             pi_root_control_pending_passive_command: None,
             #[cfg(feature = "kernel")]
@@ -10928,14 +11066,14 @@ where
                 #[cfg(feature = "net-console")]
                 let direct_genet_before = self.direct_genet_productive_quantum_snapshot();
                 #[cfg(feature = "net-console")]
-                let direct_genet_child_notification_rotor_continuation_from_topology =
-                    (direct_genet_continuation_mode_from_generated()
-                        == Some(DirectGenetContinuationMode::CrossCoreSignalOnly))
-                    .then(|| {
-                        direct_genet_before
-                            .and_then(DirectGenetChildNotificationRotorContinuation::from_snapshot)
-                    })
-                    .flatten();
+                let direct_genet_child_notification_rotor_continuation_from_topology = (self
+                    .selected_direct_genet_continuation_mode()
+                    == Some(DirectGenetContinuationMode::CrossCoreSignalOnly))
+                .then(|| {
+                    direct_genet_before
+                        .and_then(DirectGenetChildNotificationRotorContinuation::from_snapshot)
+                })
+                .flatten();
                 #[cfg(test)]
                 let direct_genet_child_notification_rotor_continuation = self
                     .direct_genet_child_notification_rotor_continuation_test_override
@@ -10952,6 +11090,7 @@ where
                 let mut physical_input_observed = false;
                 let mut direct_genet_immediate_dispatch_admitted = false;
                 let mut direct_genet_causal_stage_completed = false;
+                let mut direct_genet_post_operator_network_baton = None;
                 for unit_index in 0..PI4_LOCAL_OPERATOR_POLLS_PER_EXPLICIT_YIELD {
                     let admitted_phase = self.linked_runtime_service_phase;
                     physical_input_observed |=
@@ -10986,22 +11125,25 @@ where
                         .then(|| self.direct_genet_productive_quantum_snapshot())
                         .flatten();
                     #[cfg(feature = "net-console")]
-                    if self.consume_direct_genet_child_notification_rotor_continuation(
-                        direct_genet_child_notification_rotor_continuation,
-                        direct_genet_child_notification_before,
-                        direct_genet_child_notification_after,
-                        starting_phase,
-                        admitted_phase,
-                        network_units,
-                        serial_admitted,
-                        local_seat_admitted,
-                        dispatch_admitted,
-                        unit_index,
-                        physical_input_observed,
-                    ) {
+                    if let Some(baton) = self
+                        .consume_direct_genet_child_notification_rotor_continuation(
+                            direct_genet_child_notification_rotor_continuation,
+                            direct_genet_child_notification_before,
+                            direct_genet_child_notification_after,
+                            starting_phase,
+                            admitted_phase,
+                            network_units,
+                            serial_admitted,
+                            local_seat_admitted,
+                            dispatch_admitted,
+                            unit_index,
+                            physical_input_observed,
+                        )
+                    {
+                        direct_genet_post_operator_network_baton = Some(baton);
                         // The exact OutputDrained publication is the one-shot
-                        // successor. Do not enter another command, Network, or
-                        // generic operator prefix in this bounded quantum.
+                        // Network successor. Do not enter it or another generic
+                        // operator prefix in this bounded quantum.
                         break;
                     }
                     #[cfg(feature = "net-console")]
@@ -11133,6 +11275,7 @@ where
                         .direct_genet_productive_quantum_continuation_due(
                             before,
                             direct_genet_causal_stage_completed,
+                            direct_genet_post_operator_network_baton,
                         )
                     {
                         self.metrics.net_direct_genet_productive_candidates = self
@@ -13154,6 +13297,15 @@ where
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
+    fn selected_direct_genet_continuation_mode(&self) -> Option<DirectGenetContinuationMode> {
+        #[cfg(test)]
+        if self.direct_genet_continuation_mode_test_override.is_some() {
+            return self.direct_genet_continuation_mode_test_override;
+        }
+        direct_genet_continuation_mode_from_generated()
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
     fn direct_genet_productive_quantum_snapshot(
         &self,
     ) -> Option<DirectGenetProductiveQuantumSnapshot> {
@@ -13192,17 +13344,18 @@ where
             child_yield_invalid_reasons: diagnostic.direct_genet_yield_invalid_reasons,
             physical_operator_work: self.linked_physical_operator_work(),
             physical_console_response_pending: self.physical_console_response_pending(),
+            operator_display_pending: self.linked_runtime_operator_display_pending(),
         })
     }
 
-    /// Finish one exact child-publication rotor at Serial.
+    /// Finish one exact child-publication rotor with a typed Network baton.
     ///
     /// `response_drains + 1` is possible here only after the ordinary GENET
     /// Network unit consumed the existing child-to-root notification and
-    /// validated its `OutputDrained` record.  Ending at Serial preserves the
-    /// productive-continuation identity; otherwise the fixed five-unit loop
-    /// can advance through another empty operator prefix and strand the exact
-    /// drain at Network just before the explicit Yield boundary.
+    /// validated its `OutputDrained` record. The rotor has already admitted
+    /// Serial, optional LocalSeat, and Dispatch, so the next retained quantum
+    /// may start at Network only while the returned identity/counter token and
+    /// every ordinary safety fence still match.
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     fn consume_direct_genet_child_notification_rotor_continuation(
         &mut self,
@@ -13217,7 +13370,7 @@ where
         dispatch_admitted: bool,
         unit_index: usize,
         physical_input_observed: bool,
-    ) -> bool {
+    ) -> Option<DirectGenetPostOperatorNetworkBaton> {
         let local_fault_pending = self.net.as_deref().is_none_or(|net| {
             net.console_service_local_fault_pending()
                 || net.console_service_local_containment_pending()
@@ -13250,11 +13403,20 @@ where
                 local_fault_pending,
             },
         );
-        if allowed {
-            self.clear_linked_runtime_network_operator_checkpoint_clock();
-            self.linked_runtime_service_phase = LinkedRuntimeServicePhase::Serial;
+        if !allowed {
+            return None;
         }
-        allowed
+        let baton = expected.zip(after_poll).and_then(|(expected, after)| {
+            DirectGenetPostOperatorNetworkBaton::from_exact_drain(expected, after)
+        })?;
+        self.clear_linked_runtime_network_operator_checkpoint_clock();
+        // The exact ordinary rotor already paid Serial, LocalSeat when
+        // configured, and Dispatch before this OutputDrained transition. Keep
+        // the ordinary Serial phase until the final pre-quantum fence consumes
+        // this one typed Network successor; any rejection therefore remains
+        // Serial-first without a separate rollback path.
+        self.linked_runtime_service_phase = LinkedRuntimeServicePhase::Serial;
+        Some(baton)
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
@@ -13518,8 +13680,9 @@ where
         &self,
         before: DirectGenetProductiveQuantumSnapshot,
         causal_stage_completed: bool,
+        post_operator_network_baton: Option<DirectGenetPostOperatorNetworkBaton>,
     ) -> Option<PiRootControlProductiveContinuation> {
-        let continuation_mode = direct_genet_continuation_mode_from_generated()?;
+        let continuation_mode = self.selected_direct_genet_continuation_mode()?;
         let Some(after) = self.direct_genet_productive_quantum_snapshot() else {
             return None;
         };
@@ -13542,6 +13705,7 @@ where
                 handoff_pending: self.deferred_console_network_handoff_pending(),
                 passive_admission_pending: self.pi_root_control_passive_admission_pending(),
                 local_fault_pending,
+                post_operator_network_baton,
             },
         )
     }
@@ -13559,25 +13723,47 @@ where
             net.console_service_local_fault_pending()
                 || net.console_service_local_containment_pending()
         });
-        direct_genet_productive_continuation_fence_clear(
-            DirectGenetProductiveContinuationFenceEvidence {
-                expected: Some(expected),
-                current_continuation_mode: direct_genet_continuation_mode_from_generated(),
-                current_generation: snapshot.map(|snapshot| snapshot.generation),
-                current_connection_id: snapshot.map(|snapshot| snapshot.connection_id),
-                next_phase: self.linked_runtime_service_phase,
-                network_service_quarantined: self.network_service_quarantined,
-                reboot_pending: self.reboot_pending,
-                recovery_or_containment_pending: self.pi_isolated_service_recovery_pending()
-                    || self.pi_isolated_service_containment_pending(),
-                handoff_pending: self.deferred_console_network_handoff_pending(),
-                passive_admission_pending: self.pi_root_control_passive_admission_pending(),
-                physical_operator_work: snapshot.map(|snapshot| snapshot.physical_operator_work),
-                physical_console_response_pending: snapshot
-                    .is_none_or(|snapshot| snapshot.physical_console_response_pending),
-                local_fault_pending,
-            },
-        )
+        expected.post_operator_network_baton_matches(snapshot)
+            && direct_genet_productive_continuation_fence_clear(
+                DirectGenetProductiveContinuationFenceEvidence {
+                    expected: Some(expected),
+                    current_continuation_mode: self.selected_direct_genet_continuation_mode(),
+                    current_generation: snapshot.map(|snapshot| snapshot.generation),
+                    current_connection_id: snapshot.map(|snapshot| snapshot.connection_id),
+                    next_phase: self.linked_runtime_service_phase,
+                    network_service_quarantined: self.network_service_quarantined,
+                    reboot_pending: self.reboot_pending,
+                    recovery_or_containment_pending: self.pi_isolated_service_recovery_pending()
+                        || self.pi_isolated_service_containment_pending(),
+                    handoff_pending: self.deferred_console_network_handoff_pending(),
+                    passive_admission_pending: self.pi_root_control_passive_admission_pending(),
+                    physical_operator_work: snapshot
+                        .map(|snapshot| snapshot.physical_operator_work),
+                    physical_console_response_pending: snapshot
+                        .is_none_or(|snapshot| snapshot.physical_console_response_pending),
+                    local_fault_pending,
+                },
+            )
+    }
+
+    /// Consume one exact post-operator baton at the final pre-quantum cut.
+    ///
+    /// Minting deliberately leaves the rotor at Serial. Only this second full
+    /// identity/operator/fault recheck may install Network, immediately before
+    /// userland invokes the retained quantum. A rejected or absent baton makes
+    /// no phase change and therefore needs no rollback after Yield.
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    pub(crate) fn arm_pi_root_control_post_operator_network_baton(
+        &mut self,
+        expected: PiRootControlProductiveContinuation,
+    ) -> bool {
+        if !expected.has_post_operator_network_baton()
+            || !self.pi_root_control_productive_continuation_fence_clear(expected)
+        {
+            return false;
+        }
+        self.linked_runtime_service_phase = LinkedRuntimeServicePhase::Network;
+        true
     }
 
     /// Revalidate one exact outstanding direct-GENET child publication at the
@@ -13722,23 +13908,27 @@ where
             net.console_service_local_fault_pending()
                 || net.console_service_local_containment_pending()
         });
-        direct_genet_active_hot_tail_fence_clear(DirectGenetProductiveContinuationFenceEvidence {
-            expected: Some(expected),
-            current_continuation_mode: direct_genet_continuation_mode_from_generated(),
-            current_generation: snapshot.map(|snapshot| snapshot.generation),
-            current_connection_id: snapshot.map(|snapshot| snapshot.connection_id),
-            next_phase: self.linked_runtime_service_phase,
-            network_service_quarantined: self.network_service_quarantined,
-            reboot_pending: self.reboot_pending,
-            recovery_or_containment_pending: self.pi_isolated_service_recovery_pending()
-                || self.pi_isolated_service_containment_pending(),
-            handoff_pending: self.deferred_console_network_handoff_pending(),
-            passive_admission_pending: self.pi_root_control_passive_admission_pending(),
-            physical_operator_work: snapshot.map(|snapshot| snapshot.physical_operator_work),
-            physical_console_response_pending: snapshot
-                .is_none_or(|snapshot| snapshot.physical_console_response_pending),
-            local_fault_pending,
-        })
+        expected.post_operator_network_baton_matches(snapshot)
+            && direct_genet_active_hot_tail_fence_clear(
+                DirectGenetProductiveContinuationFenceEvidence {
+                    expected: Some(expected),
+                    current_continuation_mode: self.selected_direct_genet_continuation_mode(),
+                    current_generation: snapshot.map(|snapshot| snapshot.generation),
+                    current_connection_id: snapshot.map(|snapshot| snapshot.connection_id),
+                    next_phase: self.linked_runtime_service_phase,
+                    network_service_quarantined: self.network_service_quarantined,
+                    reboot_pending: self.reboot_pending,
+                    recovery_or_containment_pending: self.pi_isolated_service_recovery_pending()
+                        || self.pi_isolated_service_containment_pending(),
+                    handoff_pending: self.deferred_console_network_handoff_pending(),
+                    passive_admission_pending: self.pi_root_control_passive_admission_pending(),
+                    physical_operator_work: snapshot
+                        .map(|snapshot| snapshot.physical_operator_work),
+                    physical_console_response_pending: snapshot
+                        .is_none_or(|snapshot| snapshot.physical_console_response_pending),
+                    local_fault_pending,
+                },
+            )
     }
 
     /// Consume the opaque identity emitted only by an exact false-to-retain
@@ -61463,6 +61653,7 @@ mod tests {
             child_yield_invalid_reasons: 0,
             physical_operator_work: LinkedPhysicalOperatorWork::Idle,
             physical_console_response_pending: false,
+            operator_display_pending: false,
         };
         let command_after = DirectGenetProductiveQuantumSnapshot {
             accepted_commands: 42,
@@ -61482,6 +61673,7 @@ mod tests {
             handoff_pending: false,
             passive_admission_pending: false,
             local_fault_pending: false,
+            post_operator_network_baton: None,
         };
         let command_continuation = direct_genet_productive_quantum_continuation_entitled(command)
             .expect("an exact authenticated command must retain its bounded transaction");
@@ -61744,6 +61936,61 @@ mod tests {
         assert!(cross_core_continuation.is_cross_core_signal_only_hot_tail());
         assert_eq!(cross_core_continuation.child_credit_scaled(), 0);
         assert_eq!(cross_core_continuation.child_credit_counter_hz(), 0);
+
+        let rotor =
+            DirectGenetChildNotificationRotorContinuation::from_snapshot(cross_core_drain.before)
+                .expect("the exact awaiting-batch state must mint one rotor token");
+        let network_baton =
+            DirectGenetPostOperatorNetworkBaton::from_exact_drain(rotor, cross_core_drain.after)
+                .expect("the exact OutputDrained transition must mint one Network baton");
+        let cross_core_network_successor = DirectGenetProductiveQuantumEvidence {
+            next_phase: LinkedRuntimeServicePhase::Serial,
+            post_operator_network_baton: Some(network_baton),
+            ..cross_core_drain
+        };
+        let network_continuation =
+            direct_genet_productive_quantum_continuation_entitled(cross_core_network_successor)
+                .expect("an exact post-operator drain may retain one Network-first successor");
+        assert_eq!(
+            network_continuation.expected_phase,
+            LinkedRuntimeServicePhase::Serial,
+        );
+        assert!(
+            network_continuation.post_operator_network_baton_matches(Some(cross_core_drain.after))
+        );
+        for drifted in [
+            DirectGenetProductiveQuantumSnapshot {
+                accepted_commands: cross_core_drain.after.accepted_commands.saturating_add(1),
+                ..cross_core_drain.after
+            },
+            DirectGenetProductiveQuantumSnapshot {
+                child_stage_output_successes: cross_core_drain
+                    .after
+                    .child_stage_output_successes
+                    .saturating_add(1),
+                ..cross_core_drain.after
+            },
+            DirectGenetProductiveQuantumSnapshot {
+                child_response_drains: cross_core_drain
+                    .after
+                    .child_response_drains
+                    .saturating_add(1),
+                ..cross_core_drain.after
+            },
+            DirectGenetProductiveQuantumSnapshot {
+                physical_operator_work: LinkedPhysicalOperatorWork::Input,
+                ..cross_core_drain.after
+            },
+            DirectGenetProductiveQuantumSnapshot {
+                operator_display_pending: true,
+                ..cross_core_drain.after
+            },
+        ] {
+            assert!(
+                !network_continuation.post_operator_network_baton_matches(Some(drifted)),
+                "late identity, progress, or operator drift must revoke the Network baton: {drifted:?}",
+            );
+        }
 
         for invalid_cross_core in [
             DirectGenetProductiveQuantumEvidence {
@@ -62286,6 +62533,7 @@ mod tests {
             child_yield_invalid_reasons: 0,
             physical_operator_work: LinkedPhysicalOperatorWork::UsbServiceDebt,
             physical_console_response_pending: false,
+            operator_display_pending: false,
         };
         let after = DirectGenetProductiveQuantumSnapshot {
             child_awaiting_batch_drain: false,
@@ -62515,6 +62763,10 @@ mod tests {
                 physical_console_response_pending: true,
                 ..before
             },
+            DirectGenetProductiveQuantumSnapshot {
+                operator_display_pending: true,
+                ..before
+            },
         ] {
             assert!(
                 DirectGenetChildNotificationRotorContinuation::from_snapshot(invalid).is_none(),
@@ -62525,7 +62777,7 @@ mod tests {
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[test]
-    fn direct_genet_child_notification_successor_forces_serial_after_usb_rotor() {
+    fn direct_genet_child_notification_successor_mints_one_exact_network_baton() {
         let before = DirectGenetProductiveQuantumSnapshot {
             generation: 7,
             connection_id: 17,
@@ -62543,6 +62795,7 @@ mod tests {
             child_yield_invalid_reasons: 0,
             physical_operator_work: LinkedPhysicalOperatorWork::UsbServiceDebt,
             physical_console_response_pending: false,
+            operator_display_pending: false,
         };
         let after = DirectGenetProductiveQuantumSnapshot {
             child_awaiting_batch_drain: false,
@@ -62579,8 +62832,8 @@ mod tests {
         pump.last_input_source = ConsoleInputSource::Net;
         pump.linked_runtime_service_phase = LinkedRuntimeServicePhase::Display;
 
-        assert!(
-            pump.consume_direct_genet_child_notification_rotor_continuation(
+        let baton = pump
+            .consume_direct_genet_child_notification_rotor_continuation(
                 Some(expected),
                 Some(before),
                 Some(after),
@@ -62592,19 +62845,19 @@ mod tests {
                 true,
                 3,
                 false,
-            ),
-            "one exact OutputDrained publication must close the completed USB rotor",
-        );
+            )
+            .expect("one exact OutputDrained publication must close the completed USB rotor");
+        assert!(baton.matches(after));
         assert_eq!(
             pump.linked_runtime_service_phase,
             LinkedRuntimeServicePhase::Serial,
-            "the exact drain must not spend another empty operator prefix before continuation",
+            "minting a baton must leave the ordinary Serial phase intact until final consumption",
         );
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[test]
-    fn direct_genet_quantum_closes_exact_child_drain_at_serial_after_usb_rotor() {
+    fn direct_genet_quantum_routes_exact_child_drain_to_network_without_second_prefix() {
         struct LinkedRuntimeTestReset;
 
         impl Drop for LinkedRuntimeTestReset {
@@ -62684,6 +62937,8 @@ mod tests {
             pump.last_input_source = ConsoleInputSource::Net;
             pump.linked_runtime_service_phase = LinkedRuntimeServicePhase::Serial;
             pump.linked_local_seat_usb_service_pending_test_override = Some(true);
+            pump.direct_genet_continuation_mode_test_override =
+                Some(DirectGenetContinuationMode::CrossCoreSignalOnly);
             pump.direct_genet_child_notification_rotor_continuation_test_override =
                 Some(DirectGenetChildNotificationRotorContinuation {
                     generation: 1,
@@ -62696,12 +62951,45 @@ mod tests {
                     child_response_drains: 0,
                 });
 
-            let _explicit_yield = pump.poll_root_control_quantum_for_state(true, true);
+            let explicit_yield = pump.poll_root_control_quantum_for_state(true, true);
 
             assert_eq!(
                 pump.linked_runtime_service_phase,
                 LinkedRuntimeServicePhase::Serial,
-                "the exact child drain must terminate the composed rotor before Display or another prefix",
+                "the exact child drain must retain a dormant baton until the final userland fence",
+            );
+            assert!(
+                !explicit_yield,
+                "the selected cross-core topology must retain the exact completed rotor",
+            );
+            assert_eq!(direct_genet_continuation_mode_from_generated(), None);
+            let continuation = pump
+                .take_pi_root_control_productive_continuation_identity()
+                .expect("the exact selected-profile drain must publish one retained identity");
+            assert!(continuation.has_post_operator_network_baton());
+            assert!(pump.pi_root_control_productive_continuation_fence_clear(continuation));
+            pump.metrics.accepted_commands = 2;
+            assert!(
+                !pump.arm_pi_root_control_post_operator_network_baton(continuation),
+                "late counter drift must reject the final arm without leaving Serial",
+            );
+            assert_eq!(
+                pump.linked_runtime_service_phase,
+                LinkedRuntimeServicePhase::Serial,
+            );
+            pump.metrics.accepted_commands = 1;
+            assert!(
+                pump.arm_pi_root_control_post_operator_network_baton(continuation),
+                "the final unchanged identity/operator/display fence must arm Network",
+            );
+            assert_eq!(
+                pump.linked_runtime_service_phase,
+                LinkedRuntimeServicePhase::Network,
+                "the already-paid operator prefix is bypassed only at final successful consumption",
+            );
+            assert!(
+                !pump.arm_pi_root_control_post_operator_network_baton(continuation),
+                "the same baton cannot arm twice without returning through the Serial fence",
             );
             assert_eq!(
                 pump.metrics.accepted_commands, 1,

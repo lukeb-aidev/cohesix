@@ -20072,6 +20072,46 @@ fn wait_runtime_local_notification() -> Option<u32> {
     Some(badge as u32)
 }
 
+/// Prompt the exact SDIO successor and block CYW43 on its bound notification
+/// as one MCS scheduling operation.
+///
+/// The shared-ring command was committed sequence-last before this boundary.
+/// Slot 8 is the generated send-only SDIO notification and slot 3 is CYW43's
+/// bound local notification. No scheduling context, reply authority, physical
+/// operation, or retry is transferred by this coalescing handoff.
+#[cfg(target_os = "none")]
+fn wait_runtime_local_notification_after_sdio_handoff(
+    doorbell: RuntimeSdioOwnerDoorbell,
+) -> Option<u32> {
+    debug_assert_eq!(doorbell.slot, DRIVER_TASK_CHILD_SDIO_BUS_NOTIFICATION_SLOT);
+    debug_assert_ne!(doorbell.sequence, 0);
+    #[cfg(sel4_config_kernel_mcs)]
+    {
+        let mut badge: sel4_sys::seL4_Word = 0;
+        // SAFETY: HAL installs slot 8 as a send-only badged cap to the SDIO
+        // owner's notification and binds the read-only local notification in
+        // slot 3 to this CYW43 TCB. NBSendWait invokes the former and waits on
+        // the latter atomically. The durable command and exact causal observer,
+        // not either notification badge, authorize all subsequent work.
+        let _tag = unsafe {
+            sel4_sys::seL4_NBSendWait(
+                doorbell.slot,
+                sel4_sys::seL4_MessageInfo::new(0, 0, 0, 0),
+                DRIVER_TASK_CHILD_LOCAL_NOTIFICATION_SLOT,
+                &mut badge,
+            )
+        };
+        Some(badge as u32)
+    }
+    #[cfg(not(sel4_config_kernel_mcs))]
+    {
+        // Only MCS provides the atomic handoff primitive. A deliberately
+        // selected classic profile retains its previous local wait exactly;
+        // it must not gain a second peer prompt from this correction.
+        wait_runtime_local_notification()
+    }
+}
+
 /// Fence a retained physical lifetime when this kernel profile cannot provide
 /// the exact local-notification wait used by the steady owner.
 ///
@@ -34042,6 +34082,12 @@ impl RuntimeRootCausalWait {
             Self::DpcChild { parent, .. } => parent,
         }
     }
+
+    const fn child_sequence(self) -> u32 {
+        match self {
+            Self::Foreground { child, .. } | Self::DpcChild { child, .. } => child.sequence,
+        }
+    }
 }
 
 #[cfg(any(target_os = "none", test))]
@@ -34051,6 +34097,27 @@ enum RuntimeRootCausalWaitObservation {
     Returned,
     Recovery,
     Invalid,
+}
+
+/// Select the sole scheduling handoff allowed at an exact retained root wait.
+///
+/// The durable child command and grant identity remain the work authority. The
+/// returned doorbell is only a coalescing prompt for the linked SDIO owner and
+/// is valid exclusively while CYW43 has re-proved that the peer-owned frontier
+/// is still waiting immediately before it blocks.
+#[cfg(any(target_os = "none", test))]
+const fn runtime_root_causal_wait_sdio_handoff(
+    wait: RuntimeRootCausalWait,
+    observation: RuntimeRootCausalWaitObservation,
+    route: RuntimeNotificationRoute,
+) -> Option<RuntimeSdioOwnerDoorbell> {
+    if !matches!(observation, RuntimeRootCausalWaitObservation::Waiting)
+        || !matches!(route, RuntimeNotificationRoute::Cyw43Client)
+        || wait.child_sequence() == 0
+    {
+        return None;
+    }
+    Some(runtime_sdio_owner_doorbell(wait.child_sequence()))
 }
 
 /// Exact foreground recovery state that must be sampled on fresh root grants.
@@ -66496,7 +66563,20 @@ pub fn runtime_main(task_key: usize) -> ! {
                 // before it re-enters the exact observer without sleeping.
                 observed = runtime_root_causal_wait_observation(wait);
                 if observed == RuntimeRootCausalWaitObservation::Waiting {
-                    let Some(raw_badge) = wait_runtime_local_notification() else {
+                    let Some(doorbell) =
+                        runtime_root_causal_wait_sdio_handoff(wait, observed, notification_route)
+                    else {
+                        root_causal_wait = None;
+                        pending_command_gate.complete();
+                        contain_runtime_root_grant_action_without_completion(
+                            &mut in_flight_root_grant_action,
+                            parent,
+                        );
+                        continue;
+                    };
+                    let Some(raw_badge) =
+                        wait_runtime_local_notification_after_sdio_handoff(doorbell)
+                    else {
                         root_causal_wait = None;
                         pending_command_gate.complete();
                         contain_runtime_root_grant_action_without_completion(
@@ -100465,6 +100545,92 @@ mod tests {
                 7,
             ),
             RuntimeRootCausalWaitObservation::Invalid,
+        );
+    }
+
+    #[test]
+    fn root_causal_wait_handoff_rearms_exact_sdio_successor_only_while_waiting() {
+        let child = retained_gate_test_intake(0x8000_91b1).command;
+        let parent = retained_gate_test_intake(0x4359_91b0).command;
+        let expected = runtime_sdio_owner_doorbell(child.sequence);
+        let foreground = RuntimeRootCausalWait::Foreground {
+            parent,
+            child,
+            generation: child.aux1,
+            return_frontier: RuntimeRootCausalReturnFrontier::FirstServiceProgress,
+        };
+        let dpc = RuntimeRootCausalWait::DpcChild {
+            parent: Some(parent),
+            event_sequence: 7,
+            child,
+            generation: child.aux1,
+        };
+
+        for wait in [foreground, dpc] {
+            assert_eq!(wait.child_sequence(), child.sequence);
+            assert_eq!(
+                runtime_root_causal_wait_sdio_handoff(
+                    wait,
+                    RuntimeRootCausalWaitObservation::Waiting,
+                    RuntimeNotificationRoute::Cyw43Client,
+                ),
+                Some(expected),
+            );
+            assert_eq!(
+                runtime_root_causal_wait_sdio_handoff(
+                    wait,
+                    RuntimeRootCausalWaitObservation::Waiting,
+                    RuntimeNotificationRoute::Cyw43Client,
+                ),
+                Some(expected),
+                "an unrelated wake recheck rearms the same durable child identity",
+            );
+            for observation in [
+                RuntimeRootCausalWaitObservation::Returned,
+                RuntimeRootCausalWaitObservation::Recovery,
+                RuntimeRootCausalWaitObservation::Invalid,
+            ] {
+                assert_eq!(
+                    runtime_root_causal_wait_sdio_handoff(
+                        wait,
+                        observation,
+                        RuntimeNotificationRoute::Cyw43Client,
+                    ),
+                    None,
+                );
+            }
+            for route in [
+                RuntimeNotificationRoute::SdioOwner,
+                RuntimeNotificationRoute::Serial,
+                RuntimeNotificationRoute::Genet,
+                RuntimeNotificationRoute::Unavailable,
+            ] {
+                assert_eq!(
+                    runtime_root_causal_wait_sdio_handoff(
+                        wait,
+                        RuntimeRootCausalWaitObservation::Waiting,
+                        route,
+                    ),
+                    None,
+                );
+            }
+        }
+
+        let mut zero_child = child;
+        zero_child.sequence = 0;
+        assert_eq!(
+            runtime_root_causal_wait_sdio_handoff(
+                RuntimeRootCausalWait::DpcChild {
+                    parent: Some(parent),
+                    event_sequence: 7,
+                    child: zero_child,
+                    generation: child.aux1,
+                },
+                RuntimeRootCausalWaitObservation::Waiting,
+                RuntimeNotificationRoute::Cyw43Client,
+            ),
+            None,
+            "zero child identity must fail closed at the final handoff selector",
         );
     }
 
