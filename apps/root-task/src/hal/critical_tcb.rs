@@ -1403,6 +1403,19 @@ pub fn activate_root_control_temporal_runtime(
         TARGET_ROOT_CONTROL_TEMPORAL_ACTIVE.store(false, Ordering::Release);
         return Err(error);
     }
+    #[cfg(all(
+        feature = "release-pi4",
+        target_arch = "aarch64",
+        target_os = "none",
+        sel4_config_kernel_mcs
+    ))]
+    if let Err(error) = sel4::bind_tcb_notification(
+        root_control.tcb_cap as seL4_CPtr,
+        root_control.wake_notification_cap as seL4_CPtr,
+    ) {
+        TARGET_ROOT_CONTROL_TEMPORAL_ACTIVE.store(false, Ordering::Release);
+        return Err(sel4_error("critical.root-control-notification-bind", error));
+    }
     Ok(())
 }
 

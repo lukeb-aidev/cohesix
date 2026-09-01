@@ -188,7 +188,7 @@ mod tests {
             admitted_slots,
         ) in [
             (qemu_manifest(), 2_024, 4_380, 5_096, 12_572, 5_608, 14_620),
-            (pi4_manifest(), 4_078, 9_270, 7_150, 17_462, 7_662, 19_510),
+            (pi4_manifest(), 4_079, 9_273, 7_151, 17_465, 7_663, 19_513),
         ] {
             let qemu = manifest.profile.name == "virt-aarch64";
             assert_eq!(manifest.console_network_service.stack_pages, 32);

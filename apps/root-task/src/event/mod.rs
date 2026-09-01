@@ -753,6 +753,67 @@ impl LinkedPhysicalOperatorWork {
     }
 }
 
+/// Result of the final Pi root-control condition-before-idle cut.
+///
+/// `Wait` is available only to the exact healthy direct-GENET topology and
+/// means every root-owned level was empty immediately before the endpoint
+/// receive. `Retry` returns to ordinary recovery/operator-first arbitration;
+/// `Yield` preserves the existing scheduler boundary when the topology or a
+/// durable child level cannot prove that the bound receive is safe.
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PiRootControlIdlePreparation {
+    Retry,
+    Wait,
+    Yield,
+}
+
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct PiRootControlIdleFenceEvidence {
+    exact_direct_genet_topology: bool,
+    ipc_staged: bool,
+    physical_operator_pending: bool,
+    serial_output_pending: bool,
+    display_pending: bool,
+    reboot_pending: bool,
+    recovery_or_containment_pending: bool,
+    handoff_pending: bool,
+    passive_admission_pending: bool,
+    local_fault_pending: bool,
+    physical_response_pending: bool,
+    retained_output_pending: bool,
+    network_work_pending: bool,
+    child_publication_pending: Option<bool>,
+}
+
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+const fn pi_root_control_idle_preparation(
+    evidence: PiRootControlIdleFenceEvidence,
+) -> PiRootControlIdlePreparation {
+    if !evidence.exact_direct_genet_topology || evidence.child_publication_pending.is_none() {
+        return PiRootControlIdlePreparation::Yield;
+    }
+    if evidence.ipc_staged
+        || evidence.physical_operator_pending
+        || evidence.serial_output_pending
+        || evidence.display_pending
+        || evidence.reboot_pending
+        || evidence.recovery_or_containment_pending
+        || evidence.handoff_pending
+        || evidence.passive_admission_pending
+        || evidence.local_fault_pending
+        || evidence.physical_response_pending
+        || evidence.retained_output_pending
+        || evidence.network_work_pending
+        || matches!(evidence.child_publication_pending, Some(true))
+    {
+        PiRootControlIdlePreparation::Retry
+    } else {
+        PiRootControlIdlePreparation::Wait
+    }
+}
+
 /// Whether one compact direct-GENET command may carry the current operator
 /// classification through its causal response leaf. The leaf returns to
 /// Serial before another command can enter, so passive USB service debt keeps
@@ -2009,6 +2070,26 @@ pub trait TimerSource {
     fn poll(&mut self, now_ms: u64) -> Option<TickEvent>;
 }
 
+/// Result of one root-control endpoint receive while its Pi fan-in
+/// notification is bound to the init TCB.
+///
+/// A fan-in badge is only a coalescing hint; callers must re-read durable
+/// producer state. Endpoint messages are copied into dispatcher-owned storage
+/// before this result is returned, so the shared IPC buffer may be reused by
+/// the following bounded root turn without losing the message.
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RootControlReceiveOutcome {
+    /// No endpoint message or bound-notification edge was available.
+    Empty,
+    /// The compiler-owned root-control fan-in notification fired.
+    Fanin,
+    /// One endpoint message was handled or preserved in dispatcher storage.
+    Endpoint,
+    /// The selected dispatcher has no installed MCS Reply/receive authority.
+    Unavailable,
+}
+
 /// IPC dispatcher invoked once per pump cycle.
 pub trait IpcDispatcher {
     /// Service pending IPC messages.
@@ -2038,6 +2119,22 @@ pub trait IpcDispatcher {
     /// Return `true` when a bootstrap message is currently staged.
     fn has_staged_bootstrap(&self) -> bool {
         false
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    /// Nonblockingly multiplex the root-control endpoint with its bound Pi
+    /// fan-in notification. Implementations must preserve any endpoint
+    /// message before returning [`RootControlReceiveOutcome::Endpoint`].
+    fn poll_root_control_receive(&mut self, _now_ms: u64) -> RootControlReceiveOutcome {
+        RootControlReceiveOutcome::Unavailable
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    /// Block on the root-control endpoint after the caller has closed every
+    /// durable idle race. A bound notification may satisfy this receive; any
+    /// endpoint message must be preserved before the method returns.
+    fn wait_root_control_receive(&mut self, _now_ms: u64) -> RootControlReceiveOutcome {
+        RootControlReceiveOutcome::Unavailable
     }
 }
 
@@ -13517,6 +13614,124 @@ where
         ) == DirectGenetCausalFaninState::Arbitrate
     }
 
+    /// Consume at most one endpoint message or bound fan-in hint without
+    /// blocking. Endpoint payload ownership remains inside the dispatcher.
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    pub(crate) fn poll_pi_root_control_receive(&mut self) -> RootControlReceiveOutcome {
+        let outcome = self.ipc.poll_root_control_receive(self.now_ms);
+        core::sync::atomic::fence(core::sync::atomic::Ordering::Acquire);
+        outcome
+    }
+
+    /// Block on the root-control endpoint after the caller has performed the
+    /// final idle preparation. The Pi root-control fan-in is bound to this TCB,
+    /// so either an endpoint sender or any coalesced producer wakes the same
+    /// syscall. Durable levels, never the returned hint, decide the next turn.
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    pub(crate) fn wait_pi_root_control_receive(&mut self) -> RootControlReceiveOutcome {
+        let outcome = self.ipc.wait_root_control_receive(self.now_ms);
+        core::sync::atomic::fence(core::sync::atomic::Ordering::Acquire);
+        outcome
+    }
+
+    /// Recheck every root-owned level that could otherwise be stranded by the
+    /// exact direct-GENET idle receive.
+    ///
+    /// A periodic isolated timer producer is only a bounded wake hint. Root's
+    /// existing absolute `KernelTimer` deadline remains authoritative and is
+    /// polled first here. Serial, local-seat USB/HDMI, recovery/fault,
+    /// containment, reboot, retained output, and all network/child levels then
+    /// close the final condition-before-block cut. A producer racing this
+    /// snapshot signals the notification bound to the endpoint receive.
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    pub(crate) fn prepare_pi_root_control_idle_wait(&mut self) -> PiRootControlIdlePreparation {
+        // Polling consumes the exact absolute deadline duty. A due tick is not
+        // itself residual work: after publishing timebase/metrics here, root
+        // may sleep again when every other durable level is empty.
+        let _ = self.poll_runtime_timer_prelude_checked();
+        let physical_pi_owner_state =
+            crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active();
+        let direct_genet_mode_available = self.selected_direct_genet_continuation_mode().is_some();
+        let network_service_quarantined = self.network_service_quarantined;
+        let (
+            exact_direct_genet_topology,
+            local_fault_pending,
+            network_work_pending,
+            child_publication_pending,
+        ) = self
+            .net
+            .as_deref()
+            .map_or((false, true, true, None), |net| {
+                let diagnostics = net.isolated_console_diagnostics();
+                let response_lane = net.console_response_lane();
+                let diagnostic_work = diagnostics.is_some_and(|diagnostic| {
+                    diagnostic.command_queue != 0
+                        || diagnostic.output_queue != 0
+                        || diagnostic.pending_egress
+                        || diagnostic.awaiting_batch_drain
+                        || diagnostic.producer_open
+                });
+                let response_work = response_lane.is_some_and(|lane| {
+                    lane.queued_lines != 0
+                        || lane.awaiting_batch_drain
+                        || lane.terminal_queued
+                        || lane.producer_open
+                });
+                (
+                    physical_pi_owner_state
+                        && net.driver_task_contract()
+                            == crate::hal::driver_task::GENET_DRIVER_TASK_CONTRACT
+                        && diagnostics.is_some()
+                        && direct_genet_mode_available
+                        && !network_service_quarantined,
+                    net.console_service_local_fault_pending()
+                        || net.console_service_local_containment_pending(),
+                    net.console_service_pending()
+                        || net.console_event_pending()
+                        || net.buffered_console_lines_pending()
+                        || diagnostic_work
+                        || response_work,
+                    net.console_child_publication_pending(),
+                )
+            });
+        let recovery_or_containment_pending = self.pi_isolated_service_recovery_pending()
+            || self.pi_isolated_service_containment_pending()
+            || self.deferred_containment_work_pending();
+        let retained_output_pending = !self.pending_console_output.is_empty()
+            || self.console_output_flush_active
+            || self.tail_active
+            || self.stream_end_pending
+            || self.stream_prompt_pending
+            || self.pending_stream.is_some()
+            || self.pending_network_terminal.is_some()
+            || self.pending_net_flush.active()
+            || self.pending_driver_fault_diagnostic.is_some()
+            || self.pending_usb_debug_hdmi_frontier.is_some()
+            || !self.pending_cyw43_bootstrap_serial_milestones.is_empty()
+            || self.console_network_quarantine_cleanup_pending
+            || self.pending_console_network_quarantine_diagnostic.is_some();
+        let evidence = PiRootControlIdleFenceEvidence {
+            exact_direct_genet_topology,
+            ipc_staged: self.ipc.has_staged_bootstrap(),
+            physical_operator_pending: self.linked_physical_operator_work()
+                != LinkedPhysicalOperatorWork::Idle,
+            serial_output_pending: self.serial.tx_pending(),
+            display_pending: self.linked_runtime_operator_display_pending()
+                || self.split_ordinary_virtio_display_attach_pending(),
+            reboot_pending: self.reboot_pending,
+            recovery_or_containment_pending,
+            handoff_pending: self.deferred_console_network_handoff_pending(),
+            passive_admission_pending: self.pi_root_control_passive_admission_pending(),
+            local_fault_pending,
+            physical_response_pending: self.physical_console_response_pending(),
+            retained_output_pending,
+            network_work_pending,
+            child_publication_pending,
+        };
+        core::sync::atomic::fence(core::sync::atomic::Ordering::Acquire);
+        pi_root_control_idle_preparation(evidence)
+    }
+
     /// Return whether attached WiFi has one exact child completion that may
     /// block root-control on the shared fan-in without losing operator or
     /// recovery liveness.
@@ -16075,7 +16290,7 @@ where
     }
 
     /// Advance only the shared timer/timebase portion of a Runtime visit.
-    fn poll_runtime_timer_prelude(&mut self) {
+    fn poll_runtime_timer_prelude_checked(&mut self) -> bool {
         #[cfg(feature = "kernel")]
         let timebase_now_ms = crate::hal::timebase().now_ms();
         #[cfg(not(feature = "kernel"))]
@@ -16093,9 +16308,18 @@ where
                 ));
                 self.audit.info(message.as_str());
             }
+            true
         } else {
             self.now_ms = timebase_now_ms;
+            false
         }
+    }
+
+    /// Advance the shared timer without exposing whether this visit crossed a
+    /// deadline. The root-idle fence uses the checked form so a newly due tick
+    /// returns to ordinary arbitration instead of sleeping on stale time.
+    fn poll_runtime_timer_prelude(&mut self) {
+        let _ = self.poll_runtime_timer_prelude_checked();
     }
 
     /// Run the exact non-network prelude required by one split Runtime unit.
@@ -55688,6 +55912,66 @@ mod tests {
         assert!(
             input.retains_network_fence_after_dispatch(),
             "actual serial or queued USB input keeps operator precedence"
+        );
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn pi_root_control_idle_fence_rejects_every_runnable_level() {
+        let idle = PiRootControlIdleFenceEvidence {
+            exact_direct_genet_topology: true,
+            child_publication_pending: Some(false),
+            ..PiRootControlIdleFenceEvidence::default()
+        };
+        assert_eq!(
+            pi_root_control_idle_preparation(idle),
+            PiRootControlIdlePreparation::Wait
+        );
+
+        macro_rules! assert_retry {
+            ($field:ident) => {{
+                let mut evidence = idle;
+                evidence.$field = true;
+                assert_eq!(
+                    pi_root_control_idle_preparation(evidence),
+                    PiRootControlIdlePreparation::Retry,
+                    "{} must return to ordinary arbitration",
+                    stringify!($field),
+                );
+            }};
+        }
+        assert_retry!(ipc_staged);
+        assert_retry!(physical_operator_pending);
+        assert_retry!(serial_output_pending);
+        assert_retry!(display_pending);
+        assert_retry!(reboot_pending);
+        assert_retry!(recovery_or_containment_pending);
+        assert_retry!(handoff_pending);
+        assert_retry!(passive_admission_pending);
+        assert_retry!(local_fault_pending);
+        assert_retry!(physical_response_pending);
+        assert_retry!(retained_output_pending);
+        assert_retry!(network_work_pending);
+
+        let mut child_ready = idle;
+        child_ready.child_publication_pending = Some(true);
+        assert_eq!(
+            pi_root_control_idle_preparation(child_ready),
+            PiRootControlIdlePreparation::Retry
+        );
+
+        let mut unavailable_level = idle;
+        unavailable_level.child_publication_pending = None;
+        assert_eq!(
+            pi_root_control_idle_preparation(unavailable_level),
+            PiRootControlIdlePreparation::Yield
+        );
+
+        let mut wrong_topology = idle;
+        wrong_topology.exact_direct_genet_topology = false;
+        assert_eq!(
+            pi_root_control_idle_preparation(wrong_topology),
+            PiRootControlIdlePreparation::Yield
         );
     }
 

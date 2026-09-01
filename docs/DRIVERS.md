@@ -1243,22 +1243,24 @@ transport:
   classic non-MCS profile retains its prior slot-3 local-notification wait-only
   behavior and sends no additional slot-8 SDIO signal; unrelated runtime waits
   retain their existing syscall selection.
-- An exact persistent foreground publication closes the earlier scheduling
+- An exact fresh foreground publication closes the earlier scheduling
   discontinuity at the command commit itself. Immediately after committing the
-  nonzero sequence-last value, CYW43 revalidates the persistent parent, immutable
-  child and generation, current root-grant environment, exact `Cyw43Client`
-  route, absence of issued-unknown or pair restart, and a stable `Waiting`
-  completion. Selected MCS then uses one `seL4_NBSendWait` to prompt slot 8 and
-  park on slot 3 before later semantic bookkeeping. A returned badge has no
-  work authority; a reserved-root bit is routed only through the existing
-  immutable-arm, physical-lifetime, child-sequence, and expiry classifier
-  before it may prompt the sole SDIO owner. The retained state machine then
-  reclassifies the durable completion.
-  Classic and every inexact, nonpersistent, stale, replaced, recovery, or
+  nonzero sequence-last value, CYW43 revalidates the executing turn, immutable
+  parent, child and generation, captured healthy publication environment,
+  exact `Cyw43Client` route, absence of issued-unknown, pair restart, or live
+  recovery, and a stable `Waiting` completion. This includes ordinary cold
+  HOST_CONFIG as well as the previously admitted persistent exchange. Selected
+  MCS then uses one `seL4_NBSendWait` to prompt slot 8 and park on slot 3 before
+  later semantic bookkeeping. A returned badge has no work authority; a
+  reserved-root bit is routed only through the existing immutable-arm,
+  physical-lifetime, child-sequence, and expiry classifier before it may prompt
+  the sole SDIO owner. The retained state machine then reclassifies the durable
+  completion. Classic and every inexact, stale, replaced, recovery, or
   wrong-route publication perform the existing single slot-8 signal instead;
-  they do not inherit the atomic park. SDIO remains the sole issuer and must
-  independently validate the same immutable command and generation before
-  touching hardware.
+  they do not inherit the atomic park. A suppression-only atomic latch closes
+  recovery that begins after the healthy turn snapshot; only canonical pair
+  recovery clears it. SDIO remains the sole issuer and must independently
+  validate the same immutable command and generation before touching hardware.
 - Within one CYW43 root-granted foreground turn, observing and consuming one
   exact successful SDIO child terminal under a sealed finite cold parent does
   not consume that turn's sole new-submission slot. The admitted cold set is
@@ -1303,24 +1305,38 @@ transport:
   The window replaces, rather than composes with, the earlier four-Driver
   restart burst and changes no device deadline, operation cardinality, owner,
   or QEMU/generic path.
-- The additional root-control fan-in remains a coalescing hint. At an
-  already-fenced ordinary or no-successor exit, root may poll it once; a
-  nonzero badge returns to outer operator/recovery-first arbitration for a
-  fresh durable-state read, while ordinary zero takes the existing bounded
-  Yield. One transaction-scoped exception permits condition-before-block Poll
-  then Wait only after durable revalidation proves either an exact signal-bound
-  finite one-way CYW43 operation with no stable sequence-last terminal, or an
-  exact staged console control whose child-consumption watermark remains owed.
-  Persistent/steady CYW43 parents retain root-polled deadlines and cannot wait.
-  The last cut also proves no semantic event, packet egress, ingress watermark,
-  or control watermark is already pending. A visible terminal/publication
-  returns to the rotor; after control-watermark acceptance, peer-ACK-dependent
-  drain work remains in ordinary timer/network arbitration. Bare physical idle,
-  deadline, recovery, containment, quarantine, reboot, and operator work grant
-  no wait authority. The badge is never work, identity, credit, or continuation authority, and SDIO
-  deadline-arm publication and clear retain their prior commit-only behavior
-  without an arm-time root signal, body zeroing, or extra cross-runtime
-  sampling.
+- When the selected physical Pi MCS root-control task is in the exact
+  direct-GENET topology, the compiler-owned root-control
+  fan-in is bound to the init root-control TCB when that TCB's temporal runtime
+  is activated. The direct-GENET ordinary global-idle exit rechecks timer, endpoint,
+  serial/local-seat/display, network, fault, recovery, containment, quarantine,
+  and reboot state, nonblockingly receives once, repeats the durable idle
+  predicate, then may block on the root-control endpoint with the existing
+  explicit Reply object. The bound notification and endpoint are therefore one
+  kernel-atomic receive domain: a fan-in badge is only a coalescing hint, while
+  an endpoint message is copied into root-owned staged storage before the IPC
+  buffer can be reused. A wake always returns to operator/recovery-first
+  arbitration and fresh durable producer reads. Reserve, post-response,
+  operator, recovery, fault, and every non-global-idle exit retain their
+  explicit handoff; no future network request, badge, or elapsed interval is
+  inferred. WiFi never enters this global-idle receive and may block only for a
+  currently issued finite operation or exact current-transaction causal child.
+  QEMU and classic profiles retain their selected paths.
+- The existing isolated `pcie-root` runtime owns one additional, separately
+  tagged Pi BCM system-timer channel-3 duty solely to make that global idle
+  receive deadline-complete. Its ten-page PCIe host aperture remains contiguous
+  and separately tagged. Page eleven maps only physical `0xFE003000`; level IRQ
+  99 uses badge 2048, handler slot 4, and the runtime's local notification slot
+  3. The runtime arms C3 at 5,000 us, exactly half its unchanged generated
+  10,000-us period. One IRQ service clears the source, reads `CLO`, arms the
+  next compare, orders and reads back the device state, signals the existing
+  root fan-in, and acknowledges the IRQ. It never performs root timer work,
+  PCIe work, catch-up, retry, polling, or a second physical action. Every tag,
+  address, page-count, IRQ, badge, slot, trigger, period, and interval identity
+  is checked before MMIO; malformed identity performs no device access, signal,
+  or ACK. Root never maps or programs this timer. The runtime descriptor layout
+  and ABI v12 remain unchanged; additive internal resource tag 15 names only
+  this exact page.
 - The Pi direct-GENET-feature isolated authenticated console socket, used by
   both selected Pi network modes, is an interactive control path, not a bulk
   stream. It disables delayed ACK and Nagle so one bounded receive

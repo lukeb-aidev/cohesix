@@ -6856,12 +6856,15 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
       read before Driver. An exact signal-bound finite one-way CYW43 command may use
       the same condition-before-block Poll/Wait cut only while its stable
       sequence-last terminal remains absent and its generated identity is
-      unchanged. Persistent and steady CYW43 parents retain root-polled
-      deadlines and must not wait. An absent or stale hint, visible terminal,
-      attached-stack work, sideband-only state, deadline, recovery, containment, quarantine,
-      reboot, operator priority, or passive admission takes ordinary
-      arbitration/Yield with no generic Wait, software latch, retry, or inferred
-      work. Commit-before-signal and sole attached EventPump ownership remain
+      unchanged. Persistent and steady CYW43 parents retain their exact
+      transaction deadline classifier and cannot borrow this finite-child wait.
+      An absent or stale hint, visible terminal, attached-stack work,
+      sideband-only state, deadline, recovery, containment, quarantine, reboot,
+      operator priority, or passive admission returns to ordinary arbitration
+      without inferred child work. Only after all such arbitration is empty may
+      the separate exact direct-GENET global-idle endpoint receive apply under the full
+      timer/operator/fault fence below; it is not a transaction continuation.
+      Commit-before-signal and sole attached EventPump ownership remain
       source-checked. A host predicate or QEMU pass cannot establish Gate 8
       timing.
       Isolated-console construction must also prove
@@ -8881,16 +8884,16 @@ postponement without stack failure or loss of liveness/isolation.
 
 The compiler resource tests must additionally derive current QEMU
 fixed/maximum frame-slot totals of `2024/4380` and `5096/12572`, and Pi
-fixed/maximum totals of `4078/9270` and `7150/17462`, respectively. The Pi-only
-increase is one immutable executable image frame and its retained mapping cap,
-not a data-plane, CNode, Worker, untyped, MCS, timing, or budget enlargement.
-The two target-common CSpace additions are the root-fault and Worker-supervisor
-restricted Write-only root-control fan-in aliases; they add no Notification
-object or receive authority. The
+fixed/maximum totals of `4079/9273` and `7151/17465`, respectively. The Pi-only
+increase is one admitted device Frame cap for the discontiguous
+`0xFE003000` system-timer page plus two root-CNode slots for the IRQ 99 handler
+and its badged local-notification mint. It adds no task, CNode object, Worker,
+untyped, SchedulingContext, Reply object, budget, period, priority, refill, or
+Notification object. The
 post-construction reserve, per-Worker costs, eight translation objects,
 untyped bytes, and fifth root Write-only publication-ACK mint remain
 unchanged. Adding the reserve yields exact admitted capacity-check totals of
-`5608/14620` for QEMU and `7662/19510` for Pi.
+`5608/14620` for QEMU and `7663/19513` for Pi.
 
 The exact V14 build failure is the oracle for this reconciliation, not target
 evidence: child ELF SHA-256
@@ -8958,37 +8961,52 @@ starts bounded containment, and becomes teardown-terminal only after the exact
 proof completes; terminal plus egress coalescing fails closed.
 
 Root-control fan-in tests must prove sequence-last durable publication before
-the coalesced signal. At an ordinary/no-successor exit, one nonblocking poll is
-the complete hint path: a nonzero edge returns to outer
-operator/recovery-first arbitration for a fresh durable-state read and zero
-takes the existing bounded Yield. The transaction-scoped path must first prove
-one exact signal-bound finite one-way CYW43 operation whose completion remains
-absent, or an exact staged console control that still owes its child-consumption
-watermark; reject a persistent/steady root-polled parent and reject any stable
-terminal, semantic event, packet egress, ingress watermark, or control
-watermark that is already visible,
-perform exactly one Poll, call Wait only after an
-empty Poll, then return through the same outer arbitration. Both the WiFi and
-direct-GENET activation counters must cap those waits at the unchanged 64.
-The critical runtime receives only restricted
-Write-only, badge-1 aliases in task-local slot 5 of the root-fault and
-Worker-supervisor children. On Pi only, they signal those aliases after
-committing a durable fault, service, Worker completion-bit, or accepting an
-existing validated-control publication. QEMU retains the sealed common slots
-but compiles out the unconsumed fan-in syscall; executor
-slot 5 is in a separate CSpace. Worker control records remain in the existing
-bounded validated FIFO and root continues to consume that FIFO directly; no
-parallel mailbox count, marker restore, or replacement queue is permitted.
-Negative tests must reject badge-derived work authority, every fan-in Wait
-outside the exact transaction gate, a Wait when a stable terminal/publication
-is visible, a Wait retained only by peer-ACK/`OutputDrained` debt, bare physical
-idle, persistent/steady deadline, recovery, containment, quarantine, reboot,
-or operator Wait, any QEMU critical fan-in Signal, deadline-arm body zeroing or
-arm-time root signal, any bypass or reset of
-the generated WiFi `NaturalPostpone` profile or either unchanged 64 logical/
-productive cap, any direct-GENET wait lacking the exact current control
-sequence, and any post-response or broad idle wait. All selected SC and Reply
-numerics remain unchanged.
+the coalesced signal and selected-Pi binding of the existing fan-in origin to
+the init root-control TCB only after its MCS temporal runtime is configured.
+The endpoint receive path must retain the generated root-control Reply object,
+use `NBRecv`/`Recv` with that explicit object under MCS, classify exact badge 1
+as a bound-notification hint before inspecting unspecified MessageInfo, and
+copy every endpoint payload into dispatcher-owned storage before another IPC
+buffer use. Endpoint badge space must remain disjoint from badge 1. A Call must
+be replied or retained through exactly that object; an unavailable/null or
+duplicate Reply installation fails before activation. Classic and QEMU
+selection must retain their qualified receive/binding behavior.
+
+At the physical-Pi exact direct-GENET ordinary global-idle exit, tests must prove timer, endpoint,
+durable producer, serial/local-seat/display, network, fault, recovery,
+containment, quarantine, and reboot predicates are empty, perform exactly one
+nonblocking multiplexed receive, repeat the complete durable predicate, and
+only then perform one blocking endpoint receive. A notification wake returns
+to outer operator/recovery-first arbitration and derives no work from its
+badge; an endpoint wake stages the exact message and returns through that same
+arbitration. A timer becoming due, durable publication winning either race,
+physical input/response, display debt, passive admission, local fault,
+recovery, containment, quarantine, reboot, handoff, or identity drift must
+skip the block. Reserve, post-response, operator, recovery, and fault exits
+must retain explicit handoff. Negative coverage must reject notification-only
+Wait, future-request admission, post-response or peer-ACK tail, spin, retry,
+poll loop, synthetic deadline, larger budget/window, and fallback ownership.
+The transaction-scoped current-request condition-before-block fences remain
+independently exact and cannot broaden the global idle predicate. WiFi must
+never select the global-idle receive; it may block only for a currently issued
+finite operation or exact current-transaction causal child.
+
+Generated-profile, HAL, ABI, and isolated-runtime tests must prove the existing
+`driver-pcie` row retains its task, SC, core, priority/MCP, refill, WCET,
+timeout, and ten-page tagged PCIe aperture while adding exactly one
+discontiguous tagged system-timer page at physical `0xFE003000`. The only
+accepted timer route is level IRQ 99, badge 2048, handler slot 4, local
+notification slot 3, generated owner period 10,000 us, and interval 5,000 us.
+One valid IRQ turn must clear the C3 source, sample `CLO`, arm the next compare,
+perform the required ordering/readback, signal the existing root fan-in, and
+acknowledge once, in that order, with no PCIe action, catch-up, second timer
+operation, retry, or loop. Each malformed tag, range, page index, physical
+address, descriptor page, IRQ, badge, slot, trigger, hot path, period, or
+interval case must perform zero MMIO, signal, and ACK. Compiler resource totals
+and all generated selected outputs must account for the one added page without
+changing task population, schema 1.16, runtime ABI v12 layout, or any SC
+numeric. QEMU root-MCS convergence protects shared receive/event logic but is
+not Pi timing proof.
 
 The direct-GENET current-response correction requires deterministic exact-level
 regressions. A stage-bearing token must bind one nonzero child-control sequence
@@ -9787,7 +9805,7 @@ _Generated by coh-rtc (sha256: `fa11c64fe53b859365c45c8e33e565d428029a87529be00c
 ## Manifest fingerprints
 - `configs/root_task.toml` — `sha256:cca7cfdc8753ffd712d4431b6223db86d93f7726519aaf923ad236e67af516c3`
 - `configs/generated/root_task_resolved.json` — `sha256:8108f22e580a653df9e65e4509d0841aacef0d1c5825094ee861a3a09fb14c66`
-- `configs/root_task_pi4_uboot_aarch64.toml` — `sha256:459730fa4317fc5cc034a2efe02c016413ed966f7578c281105242f16067a8f0`
+- `configs/root_task_pi4_uboot_aarch64.toml` — `sha256:73975b2d77293afebf451414c39701bd3397f105c98560ebe59fdb10eae136a2`
 - Pi `pi4_production` transient resolved binding — `sha256:c62e261549f0754f29d62f4b3b3245f2c9bd3900b8cc0fd665f2bd60611eb594`
 
 ## Transcript fixture hashes

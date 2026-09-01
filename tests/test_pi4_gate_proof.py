@@ -234,7 +234,7 @@ def _driver_task_dma_proof_lines(include_wifi: bool = True) -> list[str]:
         "DRIVER_TASK_DMA_PROOF contract=pcie-root hot_path=pcie-root "
         "status=ready profile=bounded-no-iommu descriptor=present descriptor_version=8 "
         "descriptor_seal=valid artifact_hash=nonzero bus_link_seal=none root_pointer=no "
-        "owner=linked-runtime mmio_pages=10 dma_pages=0 shared_pages=16 "
+        "owner=linked-runtime mmio_pages=11 dma_pages=0 shared_pages=16 "
         "bus_address_policy=zero-dma cache_policy=uncached-plus-root-maintenance "
         "cache_clean_ops=0 cache_clean_bytes=0 cache_invalidate_ops=0 "
         "cache_invalidate_bytes=0 proof_effect=runtime-dma-proof-ready",

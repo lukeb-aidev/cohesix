@@ -195,7 +195,7 @@ payloads, and rootfs bounds before staging. Both Pi production and diagnostic
 profiles require `KernelRootCNodeSizeBits=16`. The resulting 65,536-slot root
 CSpace admits the manifest's complete 256-Worker population, linked-runtime
 images, isolated HDMI framebuffer mapping, and post-construction reserve while
-consuming 19,510 slots and leaving 46,026 compiler-accounted slots free. The
+consuming 19,513 slots and leaving 46,023 compiler-accounted slots free. The
 profile wrapper preserves that declared value and uses 13 bits only for profiles
 that omit the setting.
 An older Pi build cache reporting 13 or 14 bits is stale and must be rebuilt
@@ -980,11 +980,33 @@ Confirm construction reports the CPU-only serial pages through the coherent
 Normal-memory path while DMA/MMIO pages remain uncached; any mapping-attribute,
 atomic, poison, or alignment fault fails the candidate.
 Require zero poison, invalid-generation/cursor, drop, duplicate, no-reply,
-stalled-ACK, or cross-direction corruption records. Root's cooperative
-EventPump observation is the admitted wake path; a host model or child IRQ
-counter must not be reported as proof that an interrupt woke root directly.
+stalled-ACK, or cross-direction corruption records. The selected Pi MCS
+direct-GENET path
+may wake a globally idle root through the bound root-control fan-in only after
+the isolated child commits its durable producer state; root must then re-read
+that state through ordinary EventPump arbitration. A badge, host model, timer
+edge, or child IRQ counter alone remains insufficient proof of serial work.
+WiFi uses the same fan-in only for a currently issued finite transaction or
+exact causal-child debt, never as a generic/global idle receive.
 The unchanged 115200 baud still bounds wire throughput, so report measured
 command/response latency and loss separately from CPU-side ring service.
+
+### Direct-GENET root idle timer and fan-in
+
+The selected Pi profile must construct the existing isolated `pcie-root`
+runtime with its unchanged scheduling contract, a ten-page tagged PCIe host
+aperture, and one separately tagged discontiguous BCM system-timer page at
+physical `0xFE003000`. Construction must seal level IRQ 99, badge 2048,
+handler slot 4, and local-notification slot 3. Boot evidence must show the
+runtime armed channel 3 at 5,000 us from its generated 10,000-us period and
+bound the existing root fan-in to root-control; a missing, duplicate, deferred,
+or mismatched resource/IRQ/binding rejects the candidate before performance
+testing. The timer edge is scheduling evidence only. Packet timing and raw TCP
+remain the performance authority, while fresh serial, USB, HDMI, fault, reboot,
+and endpoint-Call checks prove that the multiplexed idle receive did not strand
+an operator or control path. This blocking global-idle proof applies only in
+the exact direct-GENET topology; WiFi retains its separately fenced
+current-transaction waits.
 
 ### Wired GENET
 
@@ -1447,7 +1469,10 @@ USB keyboard readiness requires isolated-runtime command and first-report
 proof. A USB descriptor does not prove command readiness. `Ready to use`
 requires DHCP bound plus TCP-listener readiness but does not prove the stronger
 end-to-end `tcp_ready` predicate. HDMI may first show
-`USB controller starting...` plus bounded stage feedback, but the interactive
+`Cohesix starting...` plus bounded stage feedback on a frame cleared immediately
+before the kernel handoff; stale U-Boot text under that tile is a failure. The
+isolated HDMI runtime is constructed immediately after Serial and before
+PCIe/USB enumeration, while PCIe still precedes USB. The interactive
 `cohesix>` prompt is released only after the root console, USB command admission,
 and display retry state are all ready; it remains independent of Wi-Fi
 stabilization. The passive `USB console ready` timing record may be emitted by

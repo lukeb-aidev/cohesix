@@ -53,12 +53,12 @@ use crate::cspace::CSpace;
 use crate::debug_uart::debug_uart_str;
 #[cfg(debug_assertions)]
 use crate::event::EventPump;
-#[cfg(feature = "net-console")]
-use crate::event::RuntimeIpcUnit;
 use crate::event::{
     AuditSink, BootstrapMessage, BootstrapMessageHandler, IpcDispatcher, TickEvent,
     TicketRegistryError, TicketTable, TimerSource,
 };
+#[cfg(feature = "net-console")]
+use crate::event::{RootControlReceiveOutcome, RuntimeIpcUnit};
 use crate::generated;
 use crate::guards;
 use crate::hal::{DeviceHal, HalError, KernelHal};
@@ -4675,6 +4675,15 @@ fn bootstrap<P: Platform>(
                     "critical root-control wake installation failed: {error:?}"
                 ))
             })?;
+        bootstrap_ipc
+            .install_root_control_receive_authority(
+                runtime.handles[0].reply_cap as sel4_sys::seL4_CPtr,
+            )
+            .map_err(|reason| {
+                BootError::Fatal(format!(
+                    "critical root-control receive authority installation failed: {reason}"
+                ))
+            })?;
         emit_root_bootstrap_diag(format_args!(
             "mcs slots control=0x{control:04x} fault=0x{fault_ep:04x} control_reply=0x{control_reply:04x} fault_reply=0x{fault_reply:04x} emergency_reply=0x{emergency_reply:04x} fault_endpoint=0x{fault_endpoint:04x} emergency_endpoint=0x{emergency_endpoint:04x} signals(worker=0x{worker:04x},driver=0x{driver:04x},emergency=0x{emergency_signal:04x},root_fault_release=0x{root_fault_release:04x})",
             control = endpoints.control.raw(),
@@ -6650,6 +6659,17 @@ const FAULT_TAG_VMFAULT: u64 = MCS_FAULT_TAG_VMFAULT;
 const FAULT_TAG_TIMEOUT: u64 = MCS_FAULT_TAG_TIMEOUT;
 const CONTROL_LABEL_LOG_AND_BOOTSTRAP: u64 = 0;
 const CONTROL_LABEL_HEARTBEAT: u64 = 0xB2;
+#[cfg(feature = "net-console")]
+const ROOT_CONTROL_FANIN_BADGE: sel4_sys::seL4_Word =
+    console_network_abi::ROOT_CONTROL_WAKE_NOTIFICATION_BADGE as sel4_sys::seL4_Word;
+#[cfg(feature = "net-console")]
+const _: () = {
+    assert!(ROOT_CONTROL_FANIN_BADGE != 0);
+    assert!(
+        console_network_abi::ROOT_CONTROL_WAKE_NOTIFICATION_BADGE
+            == pi4_driver_abi::DRIVER_RUNTIME_ROOT_CONTROL_WAKE_NOTIFICATION_BADGE as u64
+    );
+};
 const MAX_FAULT_REGS: usize = 14;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -7371,8 +7391,18 @@ struct StagedMessage {
 
 impl StagedMessage {
     fn new(info: sel4_sys::seL4_MessageInfo, badge: sel4_sys::seL4_Word) -> Self {
+        Self::new_with_fast_message_registers(info, badge, None)
+    }
+
+    fn new_with_fast_message_registers(
+        info: sel4_sys::seL4_MessageInfo,
+        badge: sel4_sys::seL4_Word,
+        fast_message_registers: Option<[sel4_sys::seL4_Word; 4]>,
+    ) -> Self {
         let payload = copy_message_words(info, |index| unsafe {
-            sel4_sys::seL4_GetMR(index as sel4_sys::seL4_Word)
+            fast_message_registers
+                .and_then(|registers| registers.get(index).copied())
+                .unwrap_or_else(|| sel4_sys::seL4_GetMR(index as sel4_sys::seL4_Word))
         });
         Self {
             badge,
@@ -7419,9 +7449,58 @@ static BOOTSTRAP_STAGE_LOG_ONCE: AtomicBool = AtomicBool::new(false);
 static BOOTSTRAP_DISPATCH_LOG_ONCE: AtomicBool = AtomicBool::new(false);
 static BOOTSTRAP_DISPATCH_STREAM_SEEN: AtomicBool = AtomicBool::new(false);
 
+#[cfg(feature = "net-console")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RootControlReceiveMode {
+    Nonblocking,
+    Blocking,
+}
+
+#[cfg(feature = "net-console")]
+fn classify_root_control_observation(
+    info: &sel4_sys::seL4_MessageInfo,
+    badge: sel4_sys::seL4_Word,
+    mode: RootControlReceiveMode,
+) -> RootControlReceiveOutcome {
+    // seL4 defines the badge for a bound-notification wake but leaves the
+    // returned MessageInfo unspecified. The compiler-owned badge is therefore
+    // authoritative before any label/length inspection. Root's control
+    // endpoint origin is unbadged; no endpoint sender is minted badge 1.
+    if badge == ROOT_CONTROL_FANIN_BADGE {
+        return RootControlReceiveOutcome::Fanin;
+    }
+    // A blocking receive cannot return merely because the endpoint queue is
+    // empty. Therefore any non-fan-in return is an endpoint delivery, even
+    // when an unbadged sender supplied the all-zero MessageInfo. Treating that
+    // return as Empty would lose a possible zero-length Call and leave its
+    // fresh Reply association unresolved.
+    if mode == RootControlReceiveMode::Blocking {
+        return RootControlReceiveOutcome::Endpoint;
+    }
+    // An all-zero nonblocking return is the kernel's empty-queue result. The
+    // sole in-tree unbadged label-zero producer is bootstrap/log `send_frame`:
+    // it uses NBSend and encodes an operation plus byte length, so its
+    // MessageInfo always carries at least two words and is not ambiguous with
+    // this empty result. Call-based control uses a nonzero label or length.
+    if badge != 0
+        || info.length() != 0
+        || info.label() != 0
+        || info.extra_caps() != 0
+        || info.caps_unwrapped() != 0
+    {
+        RootControlReceiveOutcome::Endpoint
+    } else {
+        RootControlReceiveOutcome::Empty
+    }
+}
+
 pub(crate) struct KernelIpc {
     control_ep: ControlEndpoint,
     fault_endpoint: FaultEndpoint,
+    #[cfg(sel4_config_kernel_mcs)]
+    control_reply: Option<sel4_sys::seL4_CPtr>,
+    #[cfg(sel4_config_kernel_mcs)]
+    control_reply_outstanding: bool,
     staged_bootstrap: Option<StagedMessage>,
     staged_forwarded: bool,
     handlers_ready: bool,
@@ -7471,6 +7550,10 @@ impl KernelIpc {
         Self {
             control_ep,
             fault_endpoint,
+            #[cfg(sel4_config_kernel_mcs)]
+            control_reply: None,
+            #[cfg(sel4_config_kernel_mcs)]
+            control_reply_outstanding: false,
             staged_bootstrap: None,
             staged_forwarded: false,
             handlers_ready: false,
@@ -7480,6 +7563,22 @@ impl KernelIpc {
             #[cfg(sel4_config_kernel_mcs)]
             worker_runtime: None,
         }
+    }
+
+    #[cfg(sel4_config_kernel_mcs)]
+    fn install_root_control_receive_authority(
+        &mut self,
+        reply: sel4_sys::seL4_CPtr,
+    ) -> Result<(), &'static str> {
+        if reply == sel4_sys::seL4_CapNull {
+            return Err("root-control Reply cap is null");
+        }
+        if self.control_reply.is_some() {
+            return Err("root-control Reply cap was already installed");
+        }
+        self.control_reply = Some(reply);
+        self.control_reply_outstanding = false;
+        Ok(())
     }
 
     #[cfg(sel4_config_kernel_mcs)]
@@ -7632,13 +7731,57 @@ impl KernelIpc {
         }
     }
 
-    fn reply_line(bytes: &[u8]) {
+    fn reply_control_message(
+        &mut self,
+        info: sel4_sys::seL4_MessageInfo,
+        fast_message_registers: [sel4_sys::seL4_Word; 4],
+    ) {
+        #[cfg(sel4_config_kernel_mcs)]
+        {
+            let Some(reply) = self.control_reply else {
+                log::error!(
+                    target: "root_task::kernel::fault",
+                    "[control] refusing reply without installed root-control Reply authority"
+                );
+                return;
+            };
+            if !self.control_reply_outstanding {
+                log::error!(
+                    target: "root_task::kernel::fault",
+                    "[control] refusing reply without a fresh root-control receive association"
+                );
+                return;
+            }
+            sel4::reply_to(reply, info, fast_message_registers);
+            // Every accepted endpoint observation is treated as potentially
+            // Call-based. For a Send the freshly emptied Reply object makes
+            // this close a no-op; for a Call it consumes the sole association.
+            // Clearing only after that syscall means no second receive can
+            // overwrite an unresolved caller, including malformed traffic.
+            self.control_reply_outstanding = false;
+        }
+        #[cfg(not(sel4_config_kernel_mcs))]
+        {
+            let _ = fast_message_registers;
+            sel4::reply(info);
+        }
+    }
+
+    fn reply_control_empty(&mut self) {
+        self.reply_control_message(sel4_sys::seL4_MessageInfo::new(0, 0, 0, 0), [0; 4]);
+    }
+
+    fn reply_control_line(&mut self, bytes: &[u8]) {
         let word_bytes = core::mem::size_of::<sel4_sys::seL4_Word>();
         let mut words_written: usize = 0;
+        let mut fast_message_registers = [0; 4];
         for (index, chunk) in bytes.chunks(word_bytes).enumerate().take(MAX_MESSAGE_WORDS) {
             let mut buf = [0u8; core::mem::size_of::<sel4_sys::seL4_Word>()];
             buf[..chunk.len()].copy_from_slice(chunk);
             let value = sel4_sys::seL4_Word::from_le_bytes(buf);
+            if let Some(register) = fast_message_registers.get_mut(index) {
+                *register = value;
+            }
             unsafe {
                 sel4_sys::seL4_SetMR(index as sel4_sys::seL4_Word, value);
             }
@@ -7646,10 +7789,10 @@ impl KernelIpc {
         }
 
         let info = sel4_sys::seL4_MessageInfo::new(0, 0, 0, words_written as sel4_sys::seL4_Word);
-        sel4::reply(info);
+        self.reply_control_message(info, fast_message_registers);
     }
 
-    fn reply_control_ack(&self, verb: &str, detail: Option<&str>) {
+    fn reply_control_ack(&mut self, verb: &str, detail: Option<&str>) {
         let mut line: HeaplessString<{ crate::serial::DEFAULT_LINE_CAPACITY }> =
             HeaplessString::new();
         let ack = AckLine {
@@ -7663,7 +7806,7 @@ impl KernelIpc {
             let _ = line.push_str(verb);
         }
         let _ = line.push_str("\n");
-        Self::reply_line(line.as_bytes());
+        self.reply_control_line(line.as_bytes());
         log::debug!(
             target: "root_task::kernel::fault",
             "[control] replied ack verb={verb} detail={detail:?} len={}",
@@ -7764,11 +7907,7 @@ impl KernelIpc {
         }
     }
 
-    fn poll_endpoint(&mut self, now_ms: u64, bootstrap: bool) -> bool {
-        if self.staged_bootstrap.is_some() {
-            return true;
-        }
-
+    fn announce_control_receive_once(&mut self, now_ms: u64, bootstrap: bool) {
         if !self.debug_uart_announced {
             debug_uart_str("[dbg] EP 0x0130: dispatcher loop about to recv\n");
             emit_root_bootstrap_diag(format_args!(
@@ -7785,20 +7924,16 @@ impl KernelIpc {
             ));
             self.debug_uart_announced = true;
         }
-        let mut badge: sel4_sys::seL4_Word = 0;
-        let info = sel4::poll(self.control_ep.raw(), &mut badge);
-        if !Self::message_present(&info, badge) {
-            if bootstrap {
-                log::trace!(
-                    "[ipc] bootstrap poll idle ep=0x{ep:04x} now={now_ms} badge=0x{badge:016x}",
-                    ep = self.control_ep.raw(),
-                    now_ms = now_ms,
-                    badge = badge,
-                );
-            }
-            return false;
-        }
+    }
 
+    fn process_endpoint_observation(
+        &mut self,
+        now_ms: u64,
+        bootstrap: bool,
+        info: sel4_sys::seL4_MessageInfo,
+        badge: sel4_sys::seL4_Word,
+        fast_message_registers: Option<[sel4_sys::seL4_Word; 4]>,
+    ) -> bool {
         let msg_len = info.length();
         let kind = classify_ep_message(&info, false);
         if bootstrap {
@@ -7817,7 +7952,8 @@ impl KernelIpc {
             );
         }
 
-        let staged = StagedMessage::new(info, badge);
+        let staged =
+            StagedMessage::new_with_fast_message_registers(info, badge, fast_message_registers);
 
         if bootstrap {
             let first_bootstrap = !BOOTSTRAP_DISPATCH_STREAM_SEEN.swap(true, Ordering::Relaxed);
@@ -7850,6 +7986,8 @@ impl KernelIpc {
                             badge = badge,
                         );
                     }
+                    #[cfg(sel4_config_kernel_mcs)]
+                    self.reply_control_empty();
                     return true;
                 }
                 let count = record_fault_occurrence(badge);
@@ -7857,6 +7995,8 @@ impl KernelIpc {
                 if let Some(context) = decode_fault_context(&info, badge, source, count) {
                     handle_fatal_fault(context, source);
                 }
+                #[cfg(sel4_config_kernel_mcs)]
+                self.reply_control_empty();
                 return true;
             }
             EpMessageKind::BootstrapControl | EpMessageKind::LogControl => {
@@ -7864,6 +8004,13 @@ impl KernelIpc {
                 if self.try_stage_bootstrap(&staged) {
                     self.staged_bootstrap = Some(staged);
                     self.staged_forwarded = false;
+                    // The in-tree label-zero producer uses NBSend, but the
+                    // initial endpoint is still an authority boundary. Copy
+                    // first, then close the fresh Reply object so an unexpected
+                    // Call cannot retain donation while the staged payload is
+                    // waiting for BootstrapDrain.
+                    #[cfg(sel4_config_kernel_mcs)]
+                    self.reply_control_empty();
                     return true;
                 }
                 log::trace!(
@@ -7873,6 +8020,8 @@ impl KernelIpc {
                     label = info.label(),
                     len = info.length(),
                 );
+                #[cfg(sel4_config_kernel_mcs)]
+                self.reply_control_empty();
             }
             EpMessageKind::Control { label } => {
                 self.log_control_stream(label);
@@ -7890,11 +8039,126 @@ impl KernelIpc {
             }
             EpMessageKind::Unknown { label, length } => {
                 Self::handle_unknown_fault_msg(badge, label as sel4_sys::seL4_Word, length);
+                // The endpoint contract accepts one-way bootstrap/log sends
+                // and Call-based control probes. Replying on an unassociated
+                // MCS Reply object is a no-op, while omitting this close for a
+                // Call would retain donated authority and poison the next
+                // receive. Unknown requests therefore get one explicit empty
+                // close before being discarded.
+                #[cfg(sel4_config_kernel_mcs)]
+                self.reply_control_empty();
                 return false;
             }
         }
 
         false
+    }
+
+    #[cfg(all(feature = "net-console", sel4_config_kernel_mcs))]
+    fn receive_root_control(
+        &mut self,
+        now_ms: u64,
+        bootstrap: bool,
+        mode: RootControlReceiveMode,
+    ) -> RootControlReceiveOutcome {
+        if self.staged_bootstrap.is_some() {
+            return RootControlReceiveOutcome::Endpoint;
+        }
+        let Some(reply) = self.control_reply else {
+            return RootControlReceiveOutcome::Unavailable;
+        };
+        if self.control_reply_outstanding {
+            log::error!(
+                target: "root_task::kernel::fault",
+                "[control] refusing a second receive with an unresolved root-control Reply association"
+            );
+            return RootControlReceiveOutcome::Unavailable;
+        }
+        self.announce_control_receive_once(now_ms, bootstrap);
+
+        let mut badge: sel4_sys::seL4_Word = 0;
+        let (info, fast_message_registers) = match mode {
+            RootControlReceiveMode::Nonblocking => (
+                sel4::nb_recv_with_reply(self.control_ep.raw(), &mut badge, reply),
+                None,
+            ),
+            RootControlReceiveMode::Blocking => {
+                let (info, registers) =
+                    sel4::recv_with_reply(self.control_ep.raw(), &mut badge, reply);
+                (info, Some(registers))
+            }
+        };
+        let outcome = classify_root_control_observation(&info, badge, mode);
+        if outcome == RootControlReceiveOutcome::Endpoint {
+            self.control_reply_outstanding = true;
+        }
+        match outcome {
+            RootControlReceiveOutcome::Endpoint => {
+                let _ = self.process_endpoint_observation(
+                    now_ms,
+                    bootstrap,
+                    info,
+                    badge,
+                    fast_message_registers,
+                );
+                if self.control_reply_outstanding {
+                    log::error!(
+                        target: "root_task::kernel::fault",
+                        "[control] endpoint handler returned with an unresolved root-control Reply association"
+                    );
+                    // Every endpoint outcome is potentially Call-based. Close
+                    // defensively here as well as in each typed handler so a
+                    // future early return cannot leave donated authority live
+                    // or let the following receive overwrite it.
+                    self.reply_control_empty();
+                }
+                if self.control_reply_outstanding {
+                    return RootControlReceiveOutcome::Unavailable;
+                }
+            }
+            RootControlReceiveOutcome::Empty if bootstrap => {
+                log::trace!(
+                    "[ipc] bootstrap poll idle ep=0x{ep:04x} now={now_ms} badge=0x{badge:016x}",
+                    ep = self.control_ep.raw(),
+                    now_ms = now_ms,
+                    badge = badge,
+                );
+            }
+            RootControlReceiveOutcome::Empty
+            | RootControlReceiveOutcome::Fanin
+            | RootControlReceiveOutcome::Unavailable => {}
+        }
+        outcome
+    }
+
+    fn poll_endpoint(&mut self, now_ms: u64, bootstrap: bool) -> bool {
+        if self.staged_bootstrap.is_some() {
+            return true;
+        }
+
+        #[cfg(all(feature = "net-console", sel4_config_kernel_mcs))]
+        if self.control_reply.is_some() {
+            return !matches!(
+                self.receive_root_control(now_ms, bootstrap, RootControlReceiveMode::Nonblocking,),
+                RootControlReceiveOutcome::Empty | RootControlReceiveOutcome::Unavailable
+            );
+        }
+
+        self.announce_control_receive_once(now_ms, bootstrap);
+        let mut badge: sel4_sys::seL4_Word = 0;
+        let info = sel4::poll(self.control_ep.raw(), &mut badge);
+        if !Self::message_present(&info, badge) {
+            if bootstrap {
+                log::trace!(
+                    "[ipc] bootstrap poll idle ep=0x{ep:04x} now={now_ms} badge=0x{badge:016x}",
+                    ep = self.control_ep.raw(),
+                    now_ms = now_ms,
+                    badge = badge,
+                );
+            }
+            return false;
+        }
+        self.process_endpoint_observation(now_ms, bootstrap, info, badge, None)
     }
 
     fn try_stage_bootstrap(&self, message: &StagedMessage) -> bool {
@@ -8010,6 +8274,32 @@ impl IpcDispatcher for KernelIpc {
 
     fn has_staged_bootstrap(&self) -> bool {
         self.staged_bootstrap.is_some()
+    }
+
+    #[cfg(feature = "net-console")]
+    fn poll_root_control_receive(&mut self, now_ms: u64) -> RootControlReceiveOutcome {
+        #[cfg(sel4_config_kernel_mcs)]
+        {
+            self.receive_root_control(now_ms, false, RootControlReceiveMode::Nonblocking)
+        }
+        #[cfg(not(sel4_config_kernel_mcs))]
+        {
+            let _ = now_ms;
+            RootControlReceiveOutcome::Unavailable
+        }
+    }
+
+    #[cfg(feature = "net-console")]
+    fn wait_root_control_receive(&mut self, now_ms: u64) -> RootControlReceiveOutcome {
+        #[cfg(sel4_config_kernel_mcs)]
+        {
+            self.receive_root_control(now_ms, false, RootControlReceiveMode::Blocking)
+        }
+        #[cfg(not(sel4_config_kernel_mcs))]
+        {
+            let _ = now_ms;
+            RootControlReceiveOutcome::Unavailable
+        }
     }
 }
 
@@ -8793,6 +9083,64 @@ mod tests {
         let info = sel4_sys::seL4_MessageInfo::new(0x42, 0, 0, 2);
         let staged = StagedMessage::from_parts(info, 0x99, &[1, 2]);
         assert!(!staged.is_empty());
+    }
+
+    #[cfg(feature = "net-console")]
+    #[test]
+    fn root_control_fanin_badge_precedes_stale_message_info() {
+        assert_eq!(
+            super::ROOT_CONTROL_FANIN_BADGE,
+            console_network_abi::ROOT_CONTROL_WAKE_NOTIFICATION_BADGE as sel4_sys::seL4_Word
+        );
+        assert_eq!(
+            super::ROOT_CONTROL_FANIN_BADGE,
+            pi4_driver_abi::DRIVER_RUNTIME_ROOT_CONTROL_WAKE_NOTIFICATION_BADGE
+                as sel4_sys::seL4_Word
+        );
+        assert_ne!(super::ROOT_CONTROL_FANIN_BADGE, 0);
+
+        let stale = sel4_sys::seL4_MessageInfo::new(0xB2, 1, 1, 4);
+        assert_eq!(
+            super::classify_root_control_observation(
+                &stale,
+                super::ROOT_CONTROL_FANIN_BADGE,
+                super::RootControlReceiveMode::Blocking,
+            ),
+            crate::event::RootControlReceiveOutcome::Fanin
+        );
+        let empty = sel4_sys::seL4_MessageInfo::new(0, 0, 0, 0);
+        assert_eq!(
+            super::classify_root_control_observation(
+                &empty,
+                0,
+                super::RootControlReceiveMode::Nonblocking,
+            ),
+            crate::event::RootControlReceiveOutcome::Empty
+        );
+        assert_eq!(
+            super::classify_root_control_observation(
+                &empty,
+                0,
+                super::RootControlReceiveMode::Blocking,
+            ),
+            crate::event::RootControlReceiveOutcome::Endpoint
+        );
+        assert_eq!(
+            super::classify_root_control_observation(
+                &stale,
+                0,
+                super::RootControlReceiveMode::Nonblocking,
+            ),
+            crate::event::RootControlReceiveOutcome::Endpoint
+        );
+    }
+
+    #[test]
+    fn staged_receive_preserves_fast_call_registers_before_reply() {
+        let info = sel4_sys::seL4_MessageInfo::new(0, 0, 0, 4);
+        let staged =
+            StagedMessage::new_with_fast_message_registers(info, 0, Some([0x11, 0x22, 0x33, 0x44]));
+        assert_eq!(staged.payload.as_slice(), &[0x11, 0x22, 0x33, 0x44]);
     }
 
     #[test]

@@ -2637,6 +2637,13 @@ pub const DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT: u32 = 4;
 /// acknowledged exactly after their badges coalesce on the local notification.
 pub const DRIVER_TASK_CHILD_SDIO_DMA_IRQ_HANDLER_SLOT: u32 =
     DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT + 1;
+/// Child CSpace slot containing the PCIe runtime's Pi system-timer IRQ handler.
+///
+/// PCIe owns no other IRQ in the selected Pi profile, so its independently
+/// isolated CSpace reuses the base handler slot without aliasing another
+/// physical source.
+pub const DRIVER_TASK_CHILD_PCIE_TIMER_IRQ_HANDLER_SLOT: u32 =
+    DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT;
 /// Child CSpace slot containing the explicit MCS command Reply object.
 pub const DRIVER_RUNTIME_COMMAND_REPLY_SLOT: u32 = 6;
 /// Child CSpace slot containing a send-only completion-wake notification cap.
@@ -2696,6 +2703,23 @@ pub const fn driver_runtime_standard_fault_badge(task_key: u32) -> u64 {
 pub const DRIVER_RUNTIME_SERIAL_IRQ: u32 = 125;
 /// Nonzero notification badge bound to [`DRIVER_RUNTIME_SERIAL_IRQ`].
 pub const DRIVER_RUNTIME_SERIAL_IRQ_BADGE: u32 = DRIVER_RUNTIME_SERIAL_IRQ + 1;
+/// BCM2711 system-timer channel 3 interrupt used by the isolated PCIe runtime.
+///
+/// Channel 3 is GIC SPI 67, translated by the selected seL4 Pi profile to IRQ
+/// 99. The architecture timer remains kernel-owned; this board timer exists
+/// only to produce a bounded root-control scheduling hint.
+pub const DRIVER_RUNTIME_PCIE_TIMER_IRQ: u32 = 99;
+/// One-hot notification badge bound to [`DRIVER_RUNTIME_PCIE_TIMER_IRQ`].
+pub const DRIVER_RUNTIME_PCIE_TIMER_IRQ_BADGE: u32 = 1 << 11;
+/// Exact BCM2711 peripheral address of the BCM system-timer register page.
+pub const DRIVER_RUNTIME_PI4_SYSTEM_TIMER_PADDR: u64 = 0xFE00_3000;
+/// Fixed free-running BCM system-timer counter frequency.
+pub const DRIVER_RUNTIME_PI4_SYSTEM_TIMER_CLOCK_HZ: u32 = 1_000_000;
+/// Generated PCIe-owner MCS period admitted by the selected Pi profile.
+pub const DRIVER_RUNTIME_PCIE_TIMER_OWNER_PERIOD_US: u32 = 10_000;
+/// C3 wake interval derived as half of the declared PCIe-owner period.
+pub const DRIVER_RUNTIME_PCIE_TIMER_INTERVAL_US: u32 =
+    DRIVER_RUNTIME_PCIE_TIMER_OWNER_PERIOD_US / 2;
 /// Exact seL4 IRQ identity for the BCM2711 GENET general/descriptor-ring line.
 ///
 /// The selected Pi profile's repository-managed `kernel.dts` records this as
@@ -2755,6 +2779,8 @@ pub const DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE: u32 = 1 << 8;
 
 const _: () = {
     assert!(DRIVER_RUNTIME_GENET_IRQ_BADGE & DRIVER_RUNTIME_RESERVED_ROOT_BADGE == 0);
+    assert!(DRIVER_RUNTIME_PCIE_TIMER_INTERVAL_US == 5_000);
+    assert!(DRIVER_RUNTIME_PCIE_TIMER_IRQ_BADGE & DRIVER_RUNTIME_RESERVED_ROOT_BADGE == 0);
     assert!(
         DRIVER_RUNTIME_GENET_IRQ_BADGE & DRIVER_RUNTIME_GENET_DIRECT_LINK_NOTIFICATION_BADGE == 0
     );
@@ -5392,6 +5418,8 @@ pub const DRIVER_RUNTIME_RESOURCE_TAG_WIFI_PWRSEQ_REQUEST: u32 = 12;
 pub const DRIVER_RUNTIME_RESOURCE_TAG_BCM2835_DMA: u32 = 13;
 /// CPU-only packet pages shared exclusively by GENET and console-network.
 pub const DRIVER_RUNTIME_RESOURCE_TAG_GENET_DIRECT_LINK: u32 = 14;
+/// Isolated PCIe runtime's sole BCM system-timer channel-3 MMIO page.
+pub const DRIVER_RUNTIME_RESOURCE_TAG_PI4_SYSTEM_TIMER: u32 = 15;
 
 /// Direct GENET link contract: pages are never device-visible DMA buffers.
 pub const DRIVER_RUNTIME_DIRECT_GENET_FLAG_CPU_ONLY: u32 = 1 << 0;
@@ -8657,6 +8685,25 @@ mod tests {
         );
         assert!(range.valid());
         assert_eq!(range.first_page_index, 2);
+    }
+
+    #[test]
+    fn pcie_timer_constants_are_exact_and_disjoint() {
+        assert_eq!(DRIVER_RUNTIME_RESOURCE_TAG_PI4_SYSTEM_TIMER, 15);
+        assert_eq!(DRIVER_RUNTIME_PI4_SYSTEM_TIMER_PADDR, 0xFE00_3000);
+        assert_eq!(DRIVER_RUNTIME_PI4_SYSTEM_TIMER_CLOCK_HZ, 1_000_000);
+        assert_eq!(DRIVER_RUNTIME_PCIE_TIMER_IRQ, 99);
+        assert_eq!(DRIVER_RUNTIME_PCIE_TIMER_IRQ_BADGE, 1 << 11);
+        assert_eq!(DRIVER_RUNTIME_PCIE_TIMER_OWNER_PERIOD_US, 10_000);
+        assert_eq!(DRIVER_RUNTIME_PCIE_TIMER_INTERVAL_US, 5_000);
+        assert_eq!(
+            DRIVER_TASK_CHILD_PCIE_TIMER_IRQ_HANDLER_SLOT,
+            DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT
+        );
+        assert_eq!(
+            DRIVER_RUNTIME_PCIE_TIMER_IRQ_BADGE & DRIVER_RUNTIME_RESERVED_ROOT_BADGE,
+            0
+        );
     }
 
     #[test]

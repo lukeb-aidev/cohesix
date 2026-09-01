@@ -227,7 +227,7 @@ def strict_wired_boot_proof_lines() -> list[str]:
         "cache_policy=uncached-plus-root-maintenance proof_effect=runtime-dma-proof-ready",
         "DRIVER_TASK_DMA_PROOF contract=pcie-root hot_path=pcie-root "
         "status=ready profile=bounded-no-iommu descriptor=present "
-        "root_pointer=no owner=linked-runtime mmio_pages=10 dma_pages=0 "
+        "root_pointer=no owner=linked-runtime mmio_pages=11 dma_pages=0 "
         "shared_pages=16 bus_address_policy=zero-dma "
         "cache_policy=uncached-plus-root-maintenance proof_effect=runtime-dma-proof-ready",
         "DRIVER_TASK_COUNTER contract=usb-local-seat hot_path=usb-keyboard "
@@ -2415,7 +2415,7 @@ def test_gate_summary_classifies_fresh_pi_runtime_dma_proof() -> None:
             "proof_effect=runtime-dma-proof-ready",
             "DRIVER_TASK_DMA_PROOF contract=pcie-root hot_path=pcie-root "
             "status=ready profile=bounded-no-iommu descriptor=present "
-            "root_pointer=no owner=linked-runtime mmio_pages=10 dma_pages=0 "
+            "root_pointer=no owner=linked-runtime mmio_pages=11 dma_pages=0 "
             "shared_pages=16 bus_address_policy=zero-dma "
             "cache_policy=uncached-plus-root-maintenance cache_clean_ops=0 "
             "cache_clean_bytes=0 cache_invalidate_ops=0 cache_invalidate_bytes=0 "
@@ -2614,7 +2614,7 @@ def test_gate_summary_accepts_late_wired_owner_state_refresh() -> None:
             "proof_effect=runtime-dma-proof-ready",
             "DRIVER_TASK_DMA_PROOF contract=pcie-root hot_path=pcie-root "
             "status=ready profile=bounded-no-iommu descriptor=present "
-            "root_pointer=no owner=linked-runtime mmio_pages=10 dma_pages=0 "
+            "root_pointer=no owner=linked-runtime mmio_pages=11 dma_pages=0 "
             "shared_pages=16 bus_address_policy=zero-dma "
             "cache_policy=uncached-plus-root-maintenance cache_clean_ops=0 "
             "cache_clean_bytes=0 cache_invalidate_ops=0 cache_invalidate_bytes=0 "
@@ -2751,7 +2751,7 @@ def test_gate_summary_replaces_superseded_dma_blockers() -> None:
             "owner_state=driver-owned descriptor=present root_pointer=no",
             "DRIVER_TASK_DMA_PROOF contract=pcie-root hot_path=pcie-root "
             "status=ready profile=bounded-no-iommu descriptor=present "
-            "root_pointer=no owner=linked-runtime mmio_pages=10 dma_pages=0 "
+            "root_pointer=no owner=linked-runtime mmio_pages=11 dma_pages=0 "
             "shared_pages=16 bus_address_policy=zero-dma "
             "cache_policy=uncached-plus-root-maintenance",
             "SCHED_CONTRACT contract=serial isolation=dedicated-sel4-task "

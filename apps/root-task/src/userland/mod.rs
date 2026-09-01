@@ -29,6 +29,31 @@ use crate::drivers::driver_task_net::{Cyw43BootstrapSupervisor, Cyw43BootstrapTu
     feature = "net-console"
 ))]
 use crate::event::Cyw43BootstrapAtomicDecisionOutcome;
+#[cfg(all(
+    feature = "serial-console",
+    feature = "kernel",
+    feature = "net-console",
+    feature = "release-pi4",
+    target_arch = "aarch64",
+    target_os = "none",
+    sel4_config_kernel_mcs
+))]
+use crate::event::PiRootControlIdlePreparation;
+#[cfg(all(
+    feature = "serial-console",
+    feature = "kernel",
+    feature = "net-console",
+    any(
+        test,
+        all(
+            feature = "release-pi4",
+            target_arch = "aarch64",
+            target_os = "none",
+            sel4_config_kernel_mcs
+        )
+    )
+))]
+use crate::event::RootControlReceiveOutcome;
 use crate::event::{
     AuditSink, BootstrapMessage, BootstrapMessageHandler, CapabilityValidator, EventPump,
     IpcDispatcher, TimerSource,
@@ -695,7 +720,7 @@ where
                     .flatten();
                 if let Some(identity) = causal_child_wait {
                     if pump.pi_root_control_productive_child_wait_eligible(identity)
-                        && wait_pi_root_control_causal_fanin(ctx)
+                        && wait_pi_root_control_causal_fanin(pump)
                     {
                         // The exact staged control sequence remains authority
                         // before sleep. The wake carries no work identity, so
@@ -714,7 +739,7 @@ where
                 }
                 if !handoff_turn
                     && productive_window.nonblocking_fanin_hint_eligible()
-                    && poll_pi_root_control_fanin_hint(ctx)
+                    && poll_pi_root_control_fanin_hint(pump)
                 {
                     // The ordinary no-successor cut already closed every hard
                     // fence. The edge may name any producer and authorizes no
@@ -722,6 +747,29 @@ where
                     // arbitration and re-read all durable state.
                     productive_window.consume_nonblocking_fanin_hint();
                     continue;
+                }
+                if !handoff_turn && productive_window.nonblocking_fanin_hint_eligible() {
+                    match pump.prepare_pi_root_control_idle_wait() {
+                        PiRootControlIdlePreparation::Retry => {
+                            // A level raced the completed empty quantum. Admit
+                            // exactly one outer recheck; if it remains unable
+                            // to advance, the consumed race allowance forces
+                            // the unchanged Yield rather than a root poll loop.
+                            productive_window.consume_nonblocking_fanin_hint();
+                            continue;
+                        }
+                        PiRootControlIdlePreparation::Wait
+                            if wait_pi_root_control_idle_fanin(pump) =>
+                        {
+                            // An endpoint message has already been preserved,
+                            // or a bound fan-in producer woke the receive. The
+                            // badge grants no work identity: return through the
+                            // complete recovery/operator-first outer fence.
+                            continue;
+                        }
+                        PiRootControlIdlePreparation::Wait
+                        | PiRootControlIdlePreparation::Yield => {}
+                    }
                 }
                 pi_root_control_yield_and_restart(
                     pump,
@@ -1902,16 +1950,29 @@ where
     feature = "kernel",
     feature = "net-console",
 ))]
-fn poll_pi_root_control_fanin_hint(ctx: &BootContext) -> bool {
-    let Some(notification) =
-        crate::hal::critical_tcb::root_control_wake_notification_origin(ctx.critical_runtime)
-    else {
-        return false;
-    };
+fn poll_pi_root_control_fanin_hint<
+    'a,
+    D,
+    T,
+    I,
+    V,
+    const RX: usize,
+    const TX: usize,
+    const LINE: usize,
+>(
+    pump: &mut EventPump<'a, D, T, I, V, RX, TX, LINE>,
+) -> bool
+where
+    D: crate::serial::SerialDriver,
+    T: TimerSource,
+    I: IpcDispatcher,
+    V: CapabilityValidator,
+{
     pi_root_control_nonblocking_fanin_hint(|| {
-        let mut ignored_badge = 0;
-        let _ = sel4::poll(notification, &mut ignored_badge);
-        ignored_badge != 0
+        matches!(
+            pump.poll_pi_root_control_receive(),
+            RootControlReceiveOutcome::Fanin | RootControlReceiveOutcome::Endpoint
+        )
     })
 }
 
@@ -1936,15 +1997,27 @@ fn poll_pi_root_control_fanin_hint(ctx: &BootContext) -> bool {
         )
     )
 ))]
-fn pi_root_control_condition_before_causal_wait<Poll, Wait>(mut poll: Poll, mut wait: Wait)
+fn pi_root_control_condition_before_causal_wait<State, Poll, Wait>(
+    state: &mut State,
+    mut poll: Poll,
+    mut wait: Wait,
+) -> bool
 where
-    Poll: FnMut() -> bool,
-    Wait: FnMut(),
+    Poll: FnMut(&mut State) -> RootControlReceiveOutcome,
+    Wait: FnMut(&mut State) -> RootControlReceiveOutcome,
 {
-    if !poll() {
-        wait();
-    }
+    let polled = poll(state);
+    let observed = match polled {
+        RootControlReceiveOutcome::Empty => wait(state),
+        RootControlReceiveOutcome::Fanin
+        | RootControlReceiveOutcome::Endpoint
+        | RootControlReceiveOutcome::Unavailable => polled,
+    };
     core::sync::atomic::fence(Ordering::Acquire);
+    matches!(
+        observed,
+        RootControlReceiveOutcome::Fanin | RootControlReceiveOutcome::Endpoint
+    )
 }
 
 #[cfg(all(
@@ -1956,24 +2029,70 @@ where
     feature = "kernel",
     feature = "net-console",
 ))]
-fn wait_pi_root_control_causal_fanin(ctx: &BootContext) -> bool {
-    let Some(notification) =
-        crate::hal::critical_tcb::root_control_wake_notification_origin(ctx.critical_runtime)
-    else {
-        return false;
-    };
+fn wait_pi_root_control_causal_fanin<
+    'a,
+    D,
+    T,
+    I,
+    V,
+    const RX: usize,
+    const TX: usize,
+    const LINE: usize,
+>(
+    pump: &mut EventPump<'a, D, T, I, V, RX, TX, LINE>,
+) -> bool
+where
+    D: crate::serial::SerialDriver,
+    T: TimerSource,
+    I: IpcDispatcher,
+    V: CapabilityValidator,
+{
     pi_root_control_condition_before_causal_wait(
-        || {
-            let mut ignored_badge = 0;
-            let _ = sel4::poll(notification, &mut ignored_badge);
-            ignored_badge != 0
-        },
-        || {
-            let mut ignored_badge = 0;
-            let _ = sel4::wait(notification, &mut ignored_badge);
-        },
-    );
-    true
+        pump,
+        |pump| pump.poll_pi_root_control_receive(),
+        |pump| pump.wait_pi_root_control_receive(),
+    )
+}
+
+/// Perform only the final blocking receive for the global root-idle cut.
+///
+/// Unlike the finite child transaction helper above, this helper must not
+/// poll again. The completed empty quantum is the first full predicate, the
+/// ordinary fan-in hint cut is its sole nonblocking receive, and
+/// `prepare_pi_root_control_idle_wait` is the full predicate recheck. The
+/// notification bound to this endpoint closes the remaining race between that
+/// recheck and this receive.
+#[cfg(all(
+    feature = "release-pi4",
+    target_arch = "aarch64",
+    target_os = "none",
+    sel4_config_kernel_mcs,
+    feature = "serial-console",
+    feature = "kernel",
+    feature = "net-console",
+))]
+fn wait_pi_root_control_idle_fanin<
+    'a,
+    D,
+    T,
+    I,
+    V,
+    const RX: usize,
+    const TX: usize,
+    const LINE: usize,
+>(
+    pump: &mut EventPump<'a, D, T, I, V, RX, TX, LINE>,
+) -> bool
+where
+    D: crate::serial::SerialDriver,
+    T: TimerSource,
+    I: IpcDispatcher,
+    V: CapabilityValidator,
+{
+    matches!(
+        pump.wait_pi_root_control_receive(),
+        RootControlReceiveOutcome::Fanin | RootControlReceiveOutcome::Endpoint
+    )
 }
 
 #[cfg(all(
@@ -4953,7 +5072,7 @@ where
                     ))]
                     if activation_window.causal_wait_available()
                         && pump.pi_root_control_cyw43_causal_wait_eligible()
-                        && wait_pi_root_control_causal_fanin(ctx)
+                        && wait_pi_root_control_causal_fanin(pump)
                     {
                         // An issued one-way CYW43/SDIO request or an exact
                         // authenticated console batch owes this activation a
@@ -4969,7 +5088,7 @@ where
                         sel4_config_kernel_mcs
                     ))]
                     if activation_window.nonblocking_fanin_hint_available()
-                        && poll_pi_root_control_fanin_hint(ctx)
+                        && poll_pi_root_control_fanin_hint(pump)
                     {
                         // This is the attached runtime's ordinary/no-successor
                         // race cut. A badge grants no Network authority; use it
@@ -5072,7 +5191,7 @@ where
                     ),
                     crate::hal::driver_task::DriverTaskOneWayCompletionCondition::SignalBoundWaiting
                 )
-                && wait_pi_root_control_causal_fanin(ctx)
+                && wait_pi_root_control_causal_fanin(pump)
             {
                 // A prior pre-wait Poll may have consumed an unrelated
                 // coalesced edge. The stable parent condition is still Waiting,
@@ -5384,7 +5503,7 @@ where
                 ),
                 crate::hal::driver_task::DriverTaskOneWayCompletionCondition::SignalBoundWaiting
             )
-            && wait_pi_root_control_causal_fanin(ctx)
+            && wait_pi_root_control_causal_fanin(pump)
         {
             // Cold bootstrap issued one finite one-way child command. Its
             // runtime must commit and fan-in signal the terminal; retaining the
@@ -5408,7 +5527,7 @@ where
         ))]
         if !network_attached
             && activation_window.nonblocking_fanin_hint_available()
-            && poll_pi_root_control_fanin_hint(ctx)
+            && poll_pi_root_control_fanin_hint(pump)
         {
             // This is the cold supervisor's ordinary/no-successor bottom. The
             // consumed edge may name any producer, so re-enter recovery/
@@ -8065,25 +8184,44 @@ mod tests {
 
         let polls = Cell::new(0u8);
         let waits = Cell::new(0u8);
-        super::pi_root_control_condition_before_causal_wait(
-            || {
+        let mut state = ();
+        assert!(super::pi_root_control_condition_before_causal_wait(
+            &mut state,
+            |_| {
                 polls.set(polls.get().saturating_add(1));
-                true
+                crate::event::RootControlReceiveOutcome::Fanin
             },
-            || waits.set(waits.get().saturating_add(1)),
-        );
+            |_| {
+                waits.set(waits.get().saturating_add(1));
+                crate::event::RootControlReceiveOutcome::Fanin
+            },
+        ));
         assert_eq!(polls.get(), 1);
         assert_eq!(waits.get(), 0);
 
-        super::pi_root_control_condition_before_causal_wait(
-            || {
+        assert!(super::pi_root_control_condition_before_causal_wait(
+            &mut state,
+            |_| {
                 polls.set(polls.get().saturating_add(1));
-                false
+                crate::event::RootControlReceiveOutcome::Empty
             },
-            || waits.set(waits.get().saturating_add(1)),
-        );
+            |_| {
+                waits.set(waits.get().saturating_add(1));
+                crate::event::RootControlReceiveOutcome::Endpoint
+            },
+        ));
         assert_eq!(polls.get(), 2);
         assert_eq!(waits.get(), 1);
+
+        assert!(!super::pi_root_control_condition_before_causal_wait(
+            &mut state,
+            |_| crate::event::RootControlReceiveOutcome::Unavailable,
+            |_| {
+                waits.set(waits.get().saturating_add(1));
+                crate::event::RootControlReceiveOutcome::Fanin
+            },
+        ));
+        assert_eq!(waits.get(), 1, "unavailable Reply authority must not block");
     }
 
     #[cfg(all(

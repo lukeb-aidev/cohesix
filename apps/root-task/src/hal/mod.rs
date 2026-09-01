@@ -97,23 +97,25 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_INIT_FLAG_MMIO_MAPPED, DRIVER_RUNTIME_INIT_FLAG_POINTER_FREE,
     DRIVER_RUNTIME_INIT_FLAG_POLL_ONLY, DRIVER_RUNTIME_INIT_FLAG_ROOT_CONTEXT_FORBIDDEN,
     DRIVER_RUNTIME_INIT_FLAG_SHARED_PADDRS, DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT,
-    DRIVER_RUNTIME_RESERVED_ROOT_BADGE, DRIVER_RUNTIME_RESOURCE_FLAG_CPU_ONLY,
-    DRIVER_RUNTIME_RESOURCE_FLAG_DEVICE_VISIBLE, DRIVER_RUNTIME_RESOURCE_FLAG_PADDR_CONTIGUOUS,
-    DRIVER_RUNTIME_RESOURCE_FLAG_ROOT_SHARED, DRIVER_RUNTIME_RESOURCE_FLAG_VADDR_CONTIGUOUS,
-    DRIVER_RUNTIME_RESOURCE_KIND_DMA, DRIVER_RUNTIME_RESOURCE_KIND_FRAMEBUFFER,
-    DRIVER_RUNTIME_RESOURCE_KIND_MMIO, DRIVER_RUNTIME_RESOURCE_KIND_SHARED,
-    DRIVER_RUNTIME_RESOURCE_PAGE_BYTES, DRIVER_RUNTIME_RESOURCE_TAG_BCM2835_DMA,
-    DRIVER_RUNTIME_RESOURCE_TAG_CYW43_CONTROL, DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA,
-    DRIVER_RUNTIME_RESOURCE_TAG_GENET_DIRECT_LINK, DRIVER_RUNTIME_RESOURCE_TAG_GENET_REGS,
-    DRIVER_RUNTIME_RESOURCE_TAG_HDMI_FRAMEBUFFER, DRIVER_RUNTIME_RESOURCE_TAG_HDMI_REGS,
-    DRIVER_RUNTIME_RESOURCE_TAG_PCIE_HOST, DRIVER_RUNTIME_RESOURCE_TAG_SDIO_HOST,
+    DRIVER_RUNTIME_PCIE_TIMER_IRQ, DRIVER_RUNTIME_PCIE_TIMER_IRQ_BADGE,
+    DRIVER_RUNTIME_PI4_SYSTEM_TIMER_PADDR, DRIVER_RUNTIME_RESERVED_ROOT_BADGE,
+    DRIVER_RUNTIME_RESOURCE_FLAG_CPU_ONLY, DRIVER_RUNTIME_RESOURCE_FLAG_DEVICE_VISIBLE,
+    DRIVER_RUNTIME_RESOURCE_FLAG_PADDR_CONTIGUOUS, DRIVER_RUNTIME_RESOURCE_FLAG_ROOT_SHARED,
+    DRIVER_RUNTIME_RESOURCE_FLAG_VADDR_CONTIGUOUS, DRIVER_RUNTIME_RESOURCE_KIND_DMA,
+    DRIVER_RUNTIME_RESOURCE_KIND_FRAMEBUFFER, DRIVER_RUNTIME_RESOURCE_KIND_MMIO,
+    DRIVER_RUNTIME_RESOURCE_KIND_SHARED, DRIVER_RUNTIME_RESOURCE_PAGE_BYTES,
+    DRIVER_RUNTIME_RESOURCE_TAG_BCM2835_DMA, DRIVER_RUNTIME_RESOURCE_TAG_CYW43_CONTROL,
+    DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA, DRIVER_RUNTIME_RESOURCE_TAG_GENET_DIRECT_LINK,
+    DRIVER_RUNTIME_RESOURCE_TAG_GENET_REGS, DRIVER_RUNTIME_RESOURCE_TAG_HDMI_FRAMEBUFFER,
+    DRIVER_RUNTIME_RESOURCE_TAG_HDMI_REGS, DRIVER_RUNTIME_RESOURCE_TAG_PCIE_HOST,
+    DRIVER_RUNTIME_RESOURCE_TAG_PI4_SYSTEM_TIMER, DRIVER_RUNTIME_RESOURCE_TAG_SDIO_HOST,
     DRIVER_RUNTIME_RESOURCE_TAG_SERIAL_MINI_UART, DRIVER_RUNTIME_RESOURCE_TAG_SHARED_CONTROL,
     DRIVER_RUNTIME_RESOURCE_TAG_USB_XHCI, DRIVER_RUNTIME_RESOURCE_TAG_WIFI_PWRSEQ,
     DRIVER_RUNTIME_RESOURCE_TAG_WIFI_PWRSEQ_REQUEST, DRIVER_RUNTIME_SDIO_DMA_IRQ,
     DRIVER_RUNTIME_SDIO_DMA_IRQ_BADGE, DRIVER_RUNTIME_SDIO_IRQ, DRIVER_RUNTIME_SDIO_IRQ_BADGE,
     DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_PAGES, DRIVER_RUNTIME_SERIAL_IRQ,
     DRIVER_RUNTIME_SERIAL_IRQ_BADGE, DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE,
-    DRIVER_TASK_CHILD_SDIO_DMA_IRQ_HANDLER_SLOT,
+    DRIVER_TASK_CHILD_PCIE_TIMER_IRQ_HANDLER_SLOT, DRIVER_TASK_CHILD_SDIO_DMA_IRQ_HANDLER_SLOT,
 };
 #[cfg(feature = "kernel")]
 use sel4_sys::{seL4_ARM_VMAttributes, seL4_CPtr, seL4_Error, seL4_NoError, seL4_Word};
@@ -1284,9 +1286,9 @@ const DRIVER_TASK_BOOTSTRAP_CONTRACTS: &[DriverTaskContract] = &[
 #[cfg(feature = "kernel")]
 const PHYSICAL_PI_DRIVER_TASK_BOOTSTRAP_CONTRACTS_WIFI_SELECTED: &[DriverTaskContract] = &[
     SERIAL_DRIVER_TASK_CONTRACT,
+    HDMI_TEXT_DRIVER_TASK_CONTRACT,
     PCIE_ROOT_DRIVER_TASK_CONTRACT,
     USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
-    HDMI_TEXT_DRIVER_TASK_CONTRACT,
     SDIO_HOST_DRIVER_TASK_CONTRACT,
     CYW43_WIFI_DRIVER_TASK_CONTRACT,
 ];
@@ -1294,18 +1296,18 @@ const PHYSICAL_PI_DRIVER_TASK_BOOTSTRAP_CONTRACTS_WIFI_SELECTED: &[DriverTaskCon
 #[cfg(feature = "kernel")]
 const PHYSICAL_PI_DRIVER_TASK_BOOTSTRAP_CONTRACTS_WIRED_SELECTED: &[DriverTaskContract] = &[
     SERIAL_DRIVER_TASK_CONTRACT,
+    HDMI_TEXT_DRIVER_TASK_CONTRACT,
     PCIE_ROOT_DRIVER_TASK_CONTRACT,
     USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
-    HDMI_TEXT_DRIVER_TASK_CONTRACT,
     GENET_DRIVER_TASK_CONTRACT,
 ];
 
 #[cfg(feature = "kernel")]
 const PHYSICAL_PI_DRIVER_TASK_BOOTSTRAP_CONTRACTS_BASE: &[DriverTaskContract] = &[
     SERIAL_DRIVER_TASK_CONTRACT,
+    HDMI_TEXT_DRIVER_TASK_CONTRACT,
     PCIE_ROOT_DRIVER_TASK_CONTRACT,
     USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
-    HDMI_TEXT_DRIVER_TASK_CONTRACT,
 ];
 
 #[cfg(feature = "kernel")]
@@ -1850,6 +1852,15 @@ const PI4_DRIVER_RUNTIME_BCM2835_DMA_CHANNEL_STRIDE: usize = 0x100;
 const PI4_DRIVER_RUNTIME_NO_MMIO_BASES: &[usize] = &[];
 #[cfg(feature = "kernel")]
 const PI4_DRIVER_RUNTIME_PCIE_MMIO_BASES: &[usize] = &[0xFD50_0000, 0xFE50_0000, 0x7D50_0000];
+#[cfg(feature = "kernel")]
+const PI4_DRIVER_RUNTIME_PCIE_HOST_MMIO_PAGES: usize = 10;
+#[cfg(feature = "kernel")]
+const PI4_DRIVER_RUNTIME_PCIE_TIMER_MMIO_PAGES: usize = 1;
+#[cfg(feature = "kernel")]
+const PI4_DRIVER_RUNTIME_PCIE_TOTAL_MMIO_PAGES: usize =
+    PI4_DRIVER_RUNTIME_PCIE_HOST_MMIO_PAGES + PI4_DRIVER_RUNTIME_PCIE_TIMER_MMIO_PAGES;
+#[cfg(feature = "kernel")]
+const PI4_DRIVER_RUNTIME_SYSTEM_TIMER_PADDR: usize = DRIVER_RUNTIME_PI4_SYSTEM_TIMER_PADDR as usize;
 
 #[cfg(feature = "kernel")]
 fn runtime_mmio_candidate_bases(hot_path: driver_task::DriverTaskHotPath) -> &'static [usize] {
@@ -1916,6 +1927,10 @@ const BCM2711_MINI_UART_IRQ_BADGE: u32 = DRIVER_RUNTIME_SERIAL_IRQ_BADGE;
 const BCM2711_GENET_IRQ: u32 = DRIVER_RUNTIME_GENET_IRQ;
 #[cfg(feature = "kernel")]
 const BCM2711_GENET_IRQ_BADGE: u32 = DRIVER_RUNTIME_GENET_IRQ_BADGE;
+#[cfg(feature = "kernel")]
+const BCM2711_PCIE_TIMER_IRQ: u32 = DRIVER_RUNTIME_PCIE_TIMER_IRQ;
+#[cfg(feature = "kernel")]
+const BCM2711_PCIE_TIMER_IRQ_BADGE: u32 = DRIVER_RUNTIME_PCIE_TIMER_IRQ_BADGE;
 #[cfg(feature = "kernel")]
 const DRIVER_RUNTIME_IRQ_TRIGGER_LEVEL: u16 = 0;
 #[cfg(feature = "kernel")]
@@ -2069,6 +2084,47 @@ fn generated_genet_runtime_irq() -> Result<crate::generated::DriverRuntimeIrqSpe
     if !valid {
         return Err(HalError::Unsupported(
             "driver-runtime-generated-genet-irq-invalid",
+        ));
+    }
+    Ok(irq)
+}
+
+#[cfg(feature = "kernel")]
+fn generated_pcie_timer_runtime_irq_valid(irq: crate::generated::DriverRuntimeIrqSpec) -> bool {
+    irq.irq == BCM2711_PCIE_TIMER_IRQ
+        && irq.badge == BCM2711_PCIE_TIMER_IRQ_BADGE
+        && u32::from(irq.handler_slot) == DRIVER_TASK_CHILD_PCIE_TIMER_IRQ_HANDLER_SLOT
+        && u32::from(irq.notification_slot) == DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT
+        && matches!(
+            irq.trigger,
+            crate::generated::DriverRuntimeIrqTrigger::Level
+        )
+}
+
+#[cfg(feature = "kernel")]
+fn generated_pcie_timer_runtime_irq() -> Result<crate::generated::DriverRuntimeIrqSpec, HalError> {
+    let policy = crate::generated::driver_runtime_image_policy();
+    if !policy.required {
+        return Err(HalError::Unsupported(
+            "driver-runtime-generated-pcie-timer-irq-topology-count",
+        ));
+    }
+    let mut matches = policy
+        .irqs
+        .iter()
+        .copied()
+        .filter(|irq| irq.hot_path == driver_task::DriverTaskHotPath::PcieRoot.as_str());
+    let irq = matches.next().ok_or(HalError::Unsupported(
+        "driver-runtime-generated-pcie-timer-irq-missing",
+    ))?;
+    if matches.next().is_some() {
+        return Err(HalError::Unsupported(
+            "driver-runtime-generated-pcie-timer-irq-duplicate",
+        ));
+    }
+    if !generated_pcie_timer_runtime_irq_valid(irq) {
+        return Err(HalError::Unsupported(
+            "driver-runtime-generated-pcie-timer-irq-invalid",
         ));
     }
     Ok(irq)
@@ -3607,6 +3663,10 @@ fn generated_driver_tcb_notification_binding_source(
     if contract == GENET_DRIVER_TASK_CONTRACT {
         let _ = generated_genet_runtime_irq()?;
         return Ok(Some("generated-genet-irq-topology"));
+    }
+    if contract == PCIE_ROOT_DRIVER_TASK_CONTRACT {
+        let _ = generated_pcie_timer_runtime_irq()?;
+        return Ok(Some("generated-pcie-timer-irq-topology"));
     }
 
     let topology = generated_cyw43_sdio_topology()?;
@@ -5208,6 +5268,90 @@ impl<'a> KernelHal<'a> {
                 "driver-runtime-sdio-dma-mmio-not-covered",
             ));
         }
+        if hot_path == driver_task::DriverTaskHotPath::PcieRoot {
+            if pages != PI4_DRIVER_RUNTIME_PCIE_TOTAL_MMIO_PAGES {
+                return Err(HalError::Unsupported(
+                    "driver-runtime-pcie-timer-mmio-page-budget",
+                ));
+            }
+            if !runtime_candidate_covers_pages(
+                &self.env,
+                PI4_DRIVER_RUNTIME_SYSTEM_TIMER_PADDR,
+                PI4_DRIVER_RUNTIME_PCIE_TIMER_MMIO_PAGES,
+            ) {
+                return Err(HalError::Unsupported(
+                    "driver-runtime-pcie-timer-mmio-not-covered",
+                ));
+            }
+            for &host_base in PI4_DRIVER_RUNTIME_PCIE_MMIO_BASES {
+                if !runtime_candidate_covers_pages(
+                    &self.env,
+                    host_base,
+                    PI4_DRIVER_RUNTIME_PCIE_HOST_MMIO_PAGES,
+                ) {
+                    continue;
+                }
+                let first_page_index = init_descriptor
+                    .as_deref()
+                    .map(|builder| builder.descriptor.mmio_page_count)
+                    .unwrap_or(0);
+                for page in 0..PI4_DRIVER_RUNTIME_PCIE_HOST_MMIO_PAGES {
+                    let paddr = host_base
+                        .checked_add(page.saturating_mul(page_bytes))
+                        .ok_or(HalError::Unsupported("driver-runtime-pcie-mmio-paddr"))?;
+                    let vaddr = runtime_region_page_vaddr(region, page)
+                        .ok_or(HalError::Unsupported("driver-runtime-pcie-mmio-vaddr"))?;
+                    self.env
+                        .map_device_page_into_vspace(
+                            paddr,
+                            vspace,
+                            vaddr,
+                            rights,
+                            runtime_uncached_xn_attributes(),
+                            tracker,
+                        )
+                        .map_err(HalError::Sel4)?;
+                    if let Some(builder) = init_descriptor.as_deref_mut() {
+                        builder.add_mmio_page(paddr)?;
+                    }
+                }
+                let timer_page = PI4_DRIVER_RUNTIME_PCIE_HOST_MMIO_PAGES;
+                let timer_vaddr = runtime_region_page_vaddr(region, timer_page)
+                    .ok_or(HalError::Unsupported("driver-runtime-pcie-timer-vaddr"))?;
+                self.env
+                    .map_device_page_into_vspace(
+                        PI4_DRIVER_RUNTIME_SYSTEM_TIMER_PADDR,
+                        vspace,
+                        timer_vaddr,
+                        rights,
+                        runtime_uncached_xn_attributes(),
+                        tracker,
+                    )
+                    .map_err(HalError::Sel4)?;
+                if let Some(builder) = init_descriptor.as_deref_mut() {
+                    builder.add_mmio_page(PI4_DRIVER_RUNTIME_SYSTEM_TIMER_PADDR)?;
+                    builder.add_tagged_mmio_resource_range(
+                        DRIVER_RUNTIME_RESOURCE_TAG_PCIE_HOST,
+                        region.vaddr,
+                        host_base,
+                        PI4_DRIVER_RUNTIME_PCIE_HOST_MMIO_PAGES,
+                        first_page_index,
+                    )?;
+                    builder.add_tagged_mmio_resource_range(
+                        DRIVER_RUNTIME_RESOURCE_TAG_PI4_SYSTEM_TIMER,
+                        timer_vaddr,
+                        PI4_DRIVER_RUNTIME_SYSTEM_TIMER_PADDR,
+                        PI4_DRIVER_RUNTIME_PCIE_TIMER_MMIO_PAGES,
+                        first_page_index
+                            .saturating_add(PI4_DRIVER_RUNTIME_PCIE_HOST_MMIO_PAGES as u16),
+                    )?;
+                }
+                return Ok(true);
+            }
+            return Err(HalError::Unsupported(
+                "driver-runtime-pcie-host-mmio-not-covered",
+            ));
+        }
         for &base in runtime_mmio_candidate_bases(hot_path) {
             if !runtime_candidate_covers_pages(&self.env, base, pages) {
                 continue;
@@ -6398,6 +6542,8 @@ impl<'a> KernelHal<'a> {
             }
         } else if contract == SDIO_HOST_DRIVER_TASK_CONTRACT {
             generated_cyw43_sdio_topology()?.irqs.map(Some)
+        } else if contract == PCIE_ROOT_DRIVER_TASK_CONTRACT {
+            [Some(generated_pcie_timer_runtime_irq()?), None]
         } else {
             return Ok(RuntimeIrqInstallGuard::empty());
         };
@@ -6472,6 +6618,8 @@ impl<'a> KernelHal<'a> {
                 "irq-rx-ready"
             } else if contract == GENET_DRIVER_TASK_CONTRACT {
                 "bounded-napi-ready"
+            } else if contract == PCIE_ROOT_DRIVER_TASK_CONTRACT {
+                "root-deadline-wake-ready"
             } else if irq.irq == BCM2711_SDIO_DMA_IRQ {
                 "dma-completion-ready"
             } else {
@@ -7163,6 +7311,98 @@ mod tests {
         assert!(
             descriptor.sealed_identity_valid_for_task(runtime_init_test_task_key(hot_path) as u32)
         );
+    }
+
+    #[cfg(all(feature = "kernel", feature = "release-pi4"))]
+    #[test]
+    fn pcie_timer_descriptor_keeps_host_aperture_discontiguous_and_exact() {
+        let hot_path = super::driver_task::DriverTaskHotPath::PcieRoot;
+        let spec = super::driver_task::DriverTaskRuntimeImageSpec::new(
+            hot_path,
+            1,
+            1,
+            super::PI4_DRIVER_RUNTIME_PCIE_TOTAL_MMIO_PAGES as u16,
+            0,
+            16,
+            true,
+            true,
+        );
+        let mut builder =
+            runtime_init_test_builder(spec, super::driver_task::DRIVER_TASK_ROLE_PCIE_BIT)
+                .expect("PCIe descriptor builder");
+        let host_base = super::PI4_DRIVER_RUNTIME_PCIE_MMIO_BASES[0];
+        for page in 0..super::PI4_DRIVER_RUNTIME_PCIE_HOST_MMIO_PAGES {
+            builder
+                .add_mmio_page(
+                    host_base + page * pi4_driver_abi::DRIVER_RUNTIME_RESOURCE_PAGE_BYTES as usize,
+                )
+                .expect("PCIe host page");
+        }
+        builder
+            .add_mmio_page(super::PI4_DRIVER_RUNTIME_SYSTEM_TIMER_PADDR)
+            .expect("system timer page");
+        builder
+            .add_tagged_mmio_resource_range(
+                pi4_driver_abi::DRIVER_RUNTIME_RESOURCE_TAG_PCIE_HOST,
+                super::driver_task::DRIVER_TASK_DEVICE_MMIO_VADDR,
+                host_base,
+                super::PI4_DRIVER_RUNTIME_PCIE_HOST_MMIO_PAGES,
+                0,
+            )
+            .expect("PCIe host range");
+        builder
+            .add_tagged_mmio_resource_range(
+                pi4_driver_abi::DRIVER_RUNTIME_RESOURCE_TAG_PI4_SYSTEM_TIMER,
+                super::driver_task::DRIVER_TASK_DEVICE_MMIO_VADDR
+                    + super::PI4_DRIVER_RUNTIME_PCIE_HOST_MMIO_PAGES
+                        * pi4_driver_abi::DRIVER_RUNTIME_RESOURCE_PAGE_BYTES as usize,
+                super::PI4_DRIVER_RUNTIME_SYSTEM_TIMER_PADDR,
+                super::PI4_DRIVER_RUNTIME_PCIE_TIMER_MMIO_PAGES,
+                super::PI4_DRIVER_RUNTIME_PCIE_HOST_MMIO_PAGES as u16,
+            )
+            .expect("system timer range");
+        for page in 0..16usize {
+            builder
+                .add_shared_page(0x4000_0000 + page * 0x1000)
+                .expect("PCIe shared page");
+        }
+        builder
+            .add_buffer_resource_range(
+                hot_path,
+                pi4_driver_abi::DRIVER_RUNTIME_RESOURCE_KIND_SHARED,
+                super::driver_task::DRIVER_TASK_SHARED_BUFFER_VADDR,
+                0x4000_0000,
+                16,
+                0,
+                true,
+            )
+            .expect("PCIe shared range");
+        let timer_irq = crate::generated::DriverRuntimeIrqSpec {
+            hot_path: "pcie-root",
+            irq: 99,
+            badge: 2048,
+            handler_slot: 4,
+            notification_slot: 3,
+            trigger: crate::generated::DriverRuntimeIrqTrigger::Level,
+        };
+        assert!(super::generated_pcie_timer_runtime_irq_valid(timer_irq));
+        builder.add_irq(timer_irq).expect("timer IRQ descriptor");
+
+        let descriptor = builder.finish().expect("exact PCIe timer descriptor");
+        assert_eq!(descriptor.mmio_page_count, 11);
+        assert_eq!(descriptor.irq_count, 1);
+        assert_eq!(descriptor.irqs[0].irq, 99);
+        assert_eq!(descriptor.irqs[0].badge, 2048);
+        assert_eq!(descriptor.irqs[0].handler_slot, 4);
+        assert_eq!(descriptor.irqs[0].notification_slot, 3);
+        assert_eq!(descriptor.mmio_pages[10].paddr, 0xFE00_3000);
+        assert_eq!(descriptor.resource_range_count, 3);
+        assert_eq!(descriptor.resource_ranges[0].page_count, 10);
+        assert_eq!(descriptor.resource_ranges[0].tag, 8);
+        assert_eq!(descriptor.resource_ranges[1].page_count, 1);
+        assert_eq!(descriptor.resource_ranges[1].first_page_index, 10);
+        assert_eq!(descriptor.resource_ranges[1].tag, 15);
+        assert_eq!(descriptor.resource_ranges[1].paddr, 0xFE00_3000);
     }
 
     #[cfg(feature = "kernel")]
@@ -8624,6 +8864,41 @@ mod tests {
             sdio_index < cyw_index,
             "sdio-host must publish transport caps before cyw43 is created"
         );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn physical_pi_driver_bootstrap_presents_hdmi_before_bus_enumeration() {
+        for contracts in [
+            super::PHYSICAL_PI_DRIVER_TASK_BOOTSTRAP_CONTRACTS_WIFI_SELECTED,
+            super::PHYSICAL_PI_DRIVER_TASK_BOOTSTRAP_CONTRACTS_WIRED_SELECTED,
+            super::PHYSICAL_PI_DRIVER_TASK_BOOTSTRAP_CONTRACTS_BASE,
+        ] {
+            assert_eq!(
+                contracts[0],
+                super::driver_task::SERIAL_DRIVER_TASK_CONTRACT
+            );
+            assert_eq!(
+                contracts[1],
+                super::driver_task::HDMI_TEXT_DRIVER_TASK_CONTRACT
+            );
+            let pcie_index = contracts
+                .iter()
+                .position(|contract| {
+                    *contract == super::driver_task::PCIE_ROOT_DRIVER_TASK_CONTRACT
+                })
+                .expect("physical Pi bootstrap includes PCIe");
+            let usb_index = contracts
+                .iter()
+                .position(|contract| {
+                    *contract == super::driver_task::USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT
+                })
+                .expect("physical Pi bootstrap includes USB");
+            assert!(
+                pcie_index < usb_index,
+                "PCIe must still publish the xHCI bus link before USB construction"
+            );
+        }
     }
 
     #[cfg(feature = "kernel")]

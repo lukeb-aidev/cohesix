@@ -182,8 +182,8 @@ def test_pi4_genet_object_delta_is_backend_derived_without_a_source_toggle() -> 
     assert console.get("direct_virtio", False) is False
     assert console["objects"]["frames"] == 104
     assert console["objects"]["cspace_slots"] == 161
-    assert fixed["frames"] == 4_078
-    assert fixed["cspace_slots"] == 9_270
+    assert fixed["frames"] == 4_079
+    assert fixed["cspace_slots"] == 9_273
     assert worker_supervisor["cspace_cap_count"] == 17
 
 

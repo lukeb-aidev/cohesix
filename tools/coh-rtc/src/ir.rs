@@ -97,6 +97,9 @@ const DRIVER_RUNTIME_SDIO_DMA_IRQ_HANDLER_SLOT: u8 = DRIVER_RUNTIME_IRQ_HANDLER_
 const DRIVER_RUNTIME_SERIAL_IRQ: u32 = 125;
 const DRIVER_RUNTIME_SERIAL_BADGE: u32 = 126;
 const DRIVER_RUNTIME_SERIAL_SPSC_SHARED_PAGES: u16 = 4;
+const DRIVER_RUNTIME_PCIE_TIMER_IRQ: u32 = 99;
+const DRIVER_RUNTIME_PCIE_TIMER_BADGE: u32 = 1 << 11;
+const DRIVER_RUNTIME_PCIE_TIMER_MMIO_PAGES: u16 = 11;
 // Exact IDs resolved from the selected Pi kernel DTS/profile. Runtime code
 // consumes these already-translated values and never infers a GIC offset.
 const DRIVER_RUNTIME_GENET_IRQ: u32 = 189;
@@ -3205,6 +3208,18 @@ impl DriverRuntimeImagePolicy {
                     );
                 }
             }
+            if let Some(pcie) = self
+                .images
+                .iter()
+                .find(|image| image.hot_path == "pcie-root")
+            {
+                if pcie.mmio_pages != DRIVER_RUNTIME_PCIE_TIMER_MMIO_PAGES {
+                    bail!(
+                        "Pi 4 driver runtime image {} for pcie-root must declare exactly 11 MMIO pages: 10 host-aperture pages plus one discontiguous system-timer page",
+                        pcie.id
+                    );
+                }
+            }
         }
         if self.required {
             for required in REQUIRED_PI4_DRIVER_RUNTIME_HOT_PATHS {
@@ -3313,14 +3328,22 @@ impl DriverRuntimeImagePolicy {
                 if !has_genet_irq {
                     bail!("Pi 4 root_task.driver_images.required missing GENET IRQ 189 topology");
                 }
-                if self.irqs.len() != 4
+                let has_pcie_timer_irq = self
+                    .irqs
+                    .iter()
+                    .any(DriverRuntimeIrqSpec::is_pcie_timer_irq);
+                if !has_pcie_timer_irq {
+                    bail!("Pi 4 root_task.driver_images.required missing PCIe-owned system-timer IRQ 99 topology");
+                }
+                if self.irqs.len() != 5
                     || !self.irqs[0].is_serial_console_irq()
                     || !self.irqs[1].is_genet_irq()
                     || !self.irqs[2].is_cyw43_sdio_host_irq()
                     || !self.irqs[3].is_cyw43_sdio_dma_irq()
+                    || !self.irqs[4].is_pcie_timer_irq()
                 {
                     bail!(
-                        "Pi 4 root_task.driver_images.required IRQ topology must contain serial-console IRQ 125, GENET IRQ 189, SDIO IRQ 158, and SDIO DMA IRQ 116 in canonical order"
+                        "Pi 4 root_task.driver_images.required IRQ topology must contain serial-console IRQ 125, GENET IRQ 189, SDIO IRQ 158, SDIO DMA IRQ 116, and PCIe-owned system-timer IRQ 99 in canonical order"
                     );
                 }
             } else if self.irqs.len() != 3
@@ -3418,6 +3441,15 @@ impl DriverRuntimeIrqSpec {
         self.hot_path == "genet-nic"
             && self.irq == DRIVER_RUNTIME_GENET_IRQ
             && self.badge == DRIVER_RUNTIME_GENET_BADGE
+            && self.handler_slot == DRIVER_RUNTIME_IRQ_HANDLER_SLOT
+            && self.notification_slot == DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT
+            && self.trigger == DriverRuntimeIrqTrigger::Level
+    }
+
+    fn is_pcie_timer_irq(&self) -> bool {
+        self.hot_path == "pcie-root"
+            && self.irq == DRIVER_RUNTIME_PCIE_TIMER_IRQ
+            && self.badge == DRIVER_RUNTIME_PCIE_TIMER_BADGE
             && self.handler_slot == DRIVER_RUNTIME_IRQ_HANDLER_SLOT
             && self.notification_slot == DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT
             && self.trigger == DriverRuntimeIrqTrigger::Level
@@ -3775,7 +3807,11 @@ mod tests {
             stack_pages: 1,
             ipc_pages: 1,
             ring_pages: 1,
-            mmio_pages: if hot_path == "sdio-host" { 3 } else { 1 },
+            mmio_pages: match hot_path {
+                "sdio-host" => 3,
+                "pcie-root" => super::DRIVER_RUNTIME_PCIE_TIMER_MMIO_PAGES,
+                _ => 1,
+            },
             dma_pages: if hot_path == "sdio-host" {
                 super::DRIVER_RUNTIME_SDIO_DMA_PAGES
             } else {
@@ -3832,6 +3868,27 @@ mod tests {
             notification_slot: super::DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT,
             trigger: DriverRuntimeIrqTrigger::Level,
         }
+    }
+
+    fn pcie_timer_irq() -> DriverRuntimeIrqSpec {
+        DriverRuntimeIrqSpec {
+            hot_path: "pcie-root".to_owned(),
+            irq: super::DRIVER_RUNTIME_PCIE_TIMER_IRQ,
+            badge: super::DRIVER_RUNTIME_PCIE_TIMER_BADGE,
+            handler_slot: super::DRIVER_RUNTIME_IRQ_HANDLER_SLOT,
+            notification_slot: super::DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT,
+            trigger: DriverRuntimeIrqTrigger::Level,
+        }
+    }
+
+    fn pi4_required_irqs() -> Vec<DriverRuntimeIrqSpec> {
+        vec![
+            serial_irq(),
+            genet_irq(),
+            sdio_irq(),
+            sdio_dma_irq(),
+            pcie_timer_irq(),
+        ]
     }
 
     fn required_irqs() -> Vec<DriverRuntimeIrqSpec> {
@@ -3908,7 +3965,7 @@ mod tests {
             .validate_for_profile(false)
             .expect("the canonical QEMU profile retains its existing shared-page contract");
 
-        let pi_irqs = || vec![serial_irq(), genet_irq(), sdio_irq(), sdio_dma_irq()];
+        let pi_irqs = pi4_required_irqs;
         let err = policy(images_with_serial_pages(3), pi_irqs())
             .validate_for_profile(true)
             .expect_err("an incomplete Pi serial SPSC aperture must fail closed");
@@ -4133,7 +4190,13 @@ mod tests {
                 .copied()
                 .map(driver_runtime_image)
                 .collect(),
-            irqs: vec![serial_irq(), irq, sdio_irq(), sdio_dma_irq()],
+            irqs: vec![
+                serial_irq(),
+                irq,
+                sdio_irq(),
+                sdio_dma_irq(),
+                pcie_timer_irq(),
+            ],
             bus_links: vec![cyw43_sdio_link()],
         };
 
@@ -4177,6 +4240,61 @@ mod tests {
                 .expect_err("malformed GENET IRQ rejected");
             assert!(
                 err.to_string().contains("missing GENET IRQ 189 topology"),
+                "{case}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn driver_runtime_policy_requires_exact_pcie_timer_irq_topology() {
+        let required_policy = |irq: DriverRuntimeIrqSpec| DriverRuntimeImagePolicy {
+            required: true,
+            images: super::REQUIRED_PI4_DRIVER_RUNTIME_HOT_PATHS
+                .iter()
+                .copied()
+                .map(driver_runtime_image)
+                .collect(),
+            irqs: vec![serial_irq(), genet_irq(), sdio_irq(), sdio_dma_irq(), irq],
+            bus_links: vec![cyw43_sdio_link()],
+        };
+
+        required_policy(pcie_timer_irq())
+            .validate_for_profile(true)
+            .expect("selected PCIe timer IRQ topology accepted");
+
+        for (case, malformed) in [
+            ("irq", {
+                let mut irq = pcie_timer_irq();
+                irq.irq += 1;
+                irq
+            }),
+            ("badge", {
+                let mut irq = pcie_timer_irq();
+                irq.badge ^= 1;
+                irq
+            }),
+            ("handler", {
+                let mut irq = pcie_timer_irq();
+                irq.handler_slot += 1;
+                irq
+            }),
+            ("notification", {
+                let mut irq = pcie_timer_irq();
+                irq.notification_slot += 2;
+                irq
+            }),
+            ("trigger", {
+                let mut irq = pcie_timer_irq();
+                irq.trigger = DriverRuntimeIrqTrigger::Edge;
+                irq
+            }),
+        ] {
+            let err = required_policy(malformed)
+                .validate_for_profile(true)
+                .expect_err("malformed PCIe timer IRQ rejected");
+            assert!(
+                err.to_string()
+                    .contains("missing PCIe-owned system-timer IRQ 99 topology"),
                 "{case}: {err}"
             );
         }

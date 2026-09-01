@@ -426,7 +426,7 @@ fn pi_wifi_attached_network_retains_only_one_proven_guarded_successor() {
         .map(|offset| continue_turn + offset)
         .expect("attached no-successor may consume only one hint per activation");
     let attached_hint = supervisor[attached_available..]
-        .find("poll_pi_root_control_fanin_hint(ctx)")
+        .find("poll_pi_root_control_fanin_hint(pump)")
         .map(|offset| attached_available + offset)
         .expect("attached no-successor must poll the fan-in once without waiting");
     let attached_consume = supervisor[attached_hint..]
@@ -540,32 +540,42 @@ fn pi_wifi_attached_network_retains_only_one_proven_guarded_successor() {
 fn root_control_fanin_waits_only_for_exact_causal_child_debt() {
     let source = include_str!("../src/userland/mod.rs");
     let hint_start = source
-        .find("fn poll_pi_root_control_fanin_hint(ctx: &BootContext) -> bool")
+        .find("fn poll_pi_root_control_fanin_hint<")
         .expect("Pi root-control must retain one fan-in hint consumer");
     let hint_end = source[hint_start..]
         .find("fn pi_root_control_condition_before_causal_wait<")
         .map(|offset| hint_start + offset)
         .expect("nonblocking fan-in hint must have a bounded source region");
     let hint_helper = &source[hint_start..hint_end];
-    assert_eq!(hint_helper.matches("sel4::poll(").count(), 1);
-    assert!(!hint_helper.contains("sel4::wait("));
+    assert_eq!(
+        hint_helper
+            .matches("pump.poll_pi_root_control_receive()")
+            .count(),
+        1
+    );
+    assert!(!hint_helper.contains("pump.wait_pi_root_control_receive()"));
 
     let wait_start = source
-        .find("fn wait_pi_root_control_causal_fanin(ctx: &BootContext) -> bool")
+        .find("fn wait_pi_root_control_causal_fanin<")
         .expect("Pi root-control must retain one exact causal fan-in wait");
     let wait_end = source[wait_start..]
-        .find("fn pi_root_control_yield_and_restart<")
+        .find("fn wait_pi_root_control_idle_fanin<")
         .map(|offset| wait_start + offset)
         .expect("causal fan-in wait must have a bounded source region");
     let wait_helper = &source[wait_start..wait_end];
     let prewait_poll = wait_helper
-        .find("sel4::poll(notification")
-        .expect("condition-before-block must first consume a pending edge");
+        .find("|pump| pump.poll_pi_root_control_receive()")
+        .expect("condition-before-block must first multiplex a pending endpoint or fan-in edge");
     let blocking_wait = wait_helper
-        .find("sel4::wait(notification")
-        .expect("exact causal debt may block on the shared fan-in");
+        .find("|pump| pump.wait_pi_root_control_receive()")
+        .expect("exact causal debt may block on the bound endpoint/fan-in receive");
     assert!(prewait_poll < blocking_wait);
-    assert_eq!(source.matches("sel4::wait(").count(), 1);
+    assert_eq!(
+        wait_helper
+            .matches("pump.wait_pi_root_control_receive()")
+            .count(),
+        1
+    );
 
     let steady_start = source
         .find("fn enter_root_console_loop<")
@@ -583,7 +593,7 @@ fn root_control_fanin_waits_only_for_exact_causal_child_debt() {
         .map(|offset| causal_identity + offset)
         .expect("steady GENET must re-read live child debt before blocking");
     let causal_wait = steady[durable_debt..]
-        .find("wait_pi_root_control_causal_fanin(ctx)")
+        .find("wait_pi_root_control_causal_fanin(pump)")
         .map(|offset| durable_debt + offset)
         .expect("steady GENET must block only after the exact debt check");
     let record_wait = steady[causal_wait..]
@@ -594,7 +604,7 @@ fn root_control_fanin_waits_only_for_exact_causal_child_debt() {
         .find("productive_window.nonblocking_fanin_hint_eligible()")
         .expect("ordinary no-successor must be the sole fan-in hint cut");
     let hint = steady[eligibility..]
-        .find("poll_pi_root_control_fanin_hint(ctx)")
+        .find("poll_pi_root_control_fanin_hint(pump)")
         .map(|offset| eligibility + offset)
         .expect("the exact ordinary cut may consume one nonblocking hint");
     let consume = steady[hint..]
@@ -632,7 +642,7 @@ fn root_control_fanin_waits_only_for_exact_causal_child_debt() {
         .find("pump.pi_root_control_cyw43_causal_wait_eligible()")
         .expect("attached WiFi must require exact driver or response child debt");
     let attached_wait = supervisor[attached_debt..]
-        .find("wait_pi_root_control_causal_fanin(ctx)")
+        .find("wait_pi_root_control_causal_fanin(pump)")
         .map(|offset| attached_debt + offset)
         .expect("attached WiFi exact debt may block inside the activation");
     let cold_operation = supervisor
@@ -643,7 +653,7 @@ fn root_control_fanin_waits_only_for_exact_causal_child_debt() {
         .map(|offset| cold_operation + offset)
         .expect("cold WiFi must classify stable terminal state before blocking");
     let cold_causal_wait = supervisor[cold_condition..]
-        .find("wait_pi_root_control_causal_fanin(ctx)")
+        .find("wait_pi_root_control_causal_fanin(pump)")
         .map(|offset| cold_condition + offset)
         .expect("cold WiFi exact driver completion may retain the activation");
     assert!(attached_debt < attached_wait && attached_wait < cold_operation);
@@ -657,7 +667,7 @@ fn root_control_fanin_waits_only_for_exact_causal_child_debt() {
         .map(|offset| cold_cut + offset)
         .expect("cold fan-in must be one-shot until the next Yield");
     let cold_hint = supervisor[cold_available..]
-        .find("poll_pi_root_control_fanin_hint(ctx)")
+        .find("poll_pi_root_control_fanin_hint(pump)")
         .map(|offset| cold_available + offset)
         .expect("cold empty successor may consume one nonblocking hint");
     let cold_consume = supervisor[cold_hint..]
@@ -678,6 +688,322 @@ fn root_control_fanin_waits_only_for_exact_causal_child_debt() {
             && cold_hint < cold_consume
             && cold_consume < cold_reenter
             && cold_reenter < cold_yield
+    );
+}
+
+#[test]
+fn pi_root_idle_receive_multiplexes_endpoint_and_fanin_after_the_final_fence() {
+    let userland = include_str!("../src/userland/mod.rs");
+    let steady_start = userland
+        .find("fn enter_root_console_loop<")
+        .expect("steady root-control loop");
+    let steady_end = userland[steady_start..]
+        .find("fn run_root_console_pump<")
+        .map(|offset| steady_start + offset)
+        .expect("bounded steady root-control loop");
+    let steady = &userland[steady_start..steady_end];
+    let ordinary_cut = steady
+        .find("productive_window.nonblocking_fanin_hint_eligible()")
+        .expect("ordinary no-successor cut");
+    let pre_fence_receive = steady[ordinary_cut..]
+        .find("poll_pi_root_control_fanin_hint(pump)")
+        .map(|offset| ordinary_cut + offset)
+        .expect("pending notification or endpoint message must be consumed first");
+    let idle_fence = steady[pre_fence_receive..]
+        .find("pump.prepare_pi_root_control_idle_wait()")
+        .map(|offset| pre_fence_receive + offset)
+        .expect("durable global idle fence");
+    let bounded_retry = steady[idle_fence..]
+        .find("productive_window.consume_nonblocking_fanin_hint();")
+        .map(|offset| idle_fence + offset)
+        .expect("a raced durable level must receive only one outer recheck");
+    let blocking_receive = steady[bounded_retry..]
+        .find("wait_pi_root_control_idle_fanin(pump)")
+        .map(|offset| bounded_retry + offset)
+        .expect("direct blocking endpoint receive must follow the durable fence");
+    let reenter = steady[blocking_receive..]
+        .find("continue;")
+        .map(|offset| blocking_receive + offset)
+        .expect("a wake must return to outer recovery/operator arbitration");
+    let fallback_yield = steady[reenter..]
+        .find("pi_root_control_yield_and_restart(")
+        .map(|offset| reenter + offset)
+        .expect("unsafe idle topology must preserve the existing Yield");
+    assert!(
+        ordinary_cut < pre_fence_receive
+            && pre_fence_receive < idle_fence
+            && idle_fence < bounded_retry
+            && bounded_retry < blocking_receive
+            && blocking_receive < reenter
+            && reenter < fallback_yield
+    );
+    let global_idle = &steady[ordinary_cut..fallback_yield];
+    assert_eq!(
+        global_idle
+            .matches("poll_pi_root_control_fanin_hint(pump)")
+            .count(),
+        1,
+        "global idle must have exactly one NBRecv before its full predicate recheck"
+    );
+    assert_eq!(
+        global_idle
+            .matches("pump.prepare_pi_root_control_idle_wait()")
+            .count(),
+        1,
+        "global idle must perform one full durable predicate recheck"
+    );
+    assert_eq!(
+        global_idle
+            .matches("wait_pi_root_control_idle_fanin(pump)")
+            .count(),
+        1,
+        "global idle must perform one direct blocking receive"
+    );
+    assert!(
+        !global_idle.contains("wait_pi_root_control_causal_fanin(pump)"),
+        "global idle must not hide a second NBRecv in the transaction helper"
+    );
+
+    let idle_wait_start = userland
+        .find("fn wait_pi_root_control_idle_fanin<")
+        .expect("dedicated global-idle blocking helper");
+    let idle_wait_end = userland[idle_wait_start..]
+        .find("fn pi_root_control_yield_and_restart<")
+        .map(|offset| idle_wait_start + offset)
+        .expect("bounded global-idle blocking helper");
+    let idle_wait = &userland[idle_wait_start..idle_wait_end];
+    assert_eq!(
+        idle_wait
+            .matches("pump.wait_pi_root_control_receive()")
+            .count(),
+        1,
+        "global idle helper must issue exactly one blocking receive"
+    );
+    assert!(
+        !idle_wait.contains("pump.poll_pi_root_control_receive()"),
+        "global idle helper must not perform another NBRecv"
+    );
+
+    let event = include_str!("../src/event/mod.rs");
+    let prepare_start = event
+        .find("pub(crate) fn prepare_pi_root_control_idle_wait(")
+        .expect("root idle fence implementation");
+    let prepare_end = event[prepare_start..]
+        .find("/// Return whether attached WiFi")
+        .map(|offset| prepare_start + offset)
+        .expect("bounded root idle fence implementation");
+    let prepare = &event[prepare_start..prepare_end];
+    let timer = prepare
+        .find("self.poll_runtime_timer_prelude_checked()")
+        .expect("absolute KernelTimer must be the first durable deadline authority");
+    let child = prepare
+        .find("net.console_child_publication_pending()")
+        .expect("isolated child level must participate in the idle cut");
+    let decision = prepare
+        .find("pi_root_control_idle_preparation(evidence)")
+        .expect("all durable evidence must precede the idle decision");
+    assert!(timer < child && child < decision);
+    for required in [
+        "ipc.has_staged_bootstrap()",
+        "linked_physical_operator_work()",
+        "serial.tx_pending()",
+        "linked_runtime_operator_display_pending()",
+        "self.reboot_pending",
+        "pi_isolated_service_recovery_pending()",
+        "deferred_containment_work_pending()",
+        "deferred_console_network_handoff_pending()",
+        "pi_root_control_passive_admission_pending()",
+        "physical_console_response_pending()",
+        "net.console_service_pending()",
+    ] {
+        assert!(prepare.contains(required), "idle fence lost {required}");
+    }
+}
+
+#[test]
+fn root_control_mcs_receive_preserves_reply_and_staged_message_ownership() {
+    let kernel = include_str!("../src/kernel.rs");
+    let install_start = kernel
+        .find("fn install_root_control_receive_authority(")
+        .expect("generated root Reply installation");
+    let install_end = kernel[install_start..]
+        .find("fn install_worker_runtime(")
+        .map(|offset| install_start + offset)
+        .expect("bounded root Reply installation");
+    let install = &kernel[install_start..install_end];
+    let reject_null = install
+        .find("reply == sel4_sys::seL4_CapNull")
+        .expect("null Reply cap rejection");
+    let reject_duplicate = install
+        .find("self.control_reply.is_some()")
+        .expect("duplicate Reply cap rejection");
+    let commit = install
+        .find("self.control_reply = Some(reply);")
+        .expect("one-time Reply authority commit");
+    assert!(reject_null < reject_duplicate && reject_duplicate < commit);
+
+    let receive_start = kernel
+        .find("fn receive_root_control(")
+        .expect("MCS root-control receive");
+    let receive_end = kernel[receive_start..]
+        .find("fn poll_endpoint(")
+        .map(|offset| receive_start + offset)
+        .expect("bounded MCS root-control receive");
+    let receive = &kernel[receive_start..receive_end];
+    let staged_guard = receive
+        .find("if self.staged_bootstrap.is_some()")
+        .expect("staged message must fence another receive");
+    let reply_guard = receive
+        .find("if self.control_reply_outstanding")
+        .expect("possible Call association must fence another receive");
+    let nonblocking = receive
+        .find("sel4::nb_recv_with_reply(")
+        .expect("nonblocking endpoint/fan-in multiplex receive");
+    let blocking = receive
+        .find("sel4::recv_with_reply(")
+        .expect("blocking endpoint/fan-in multiplex receive");
+    let classify = receive
+        .find("classify_root_control_observation(&info, badge, mode)")
+        .expect("badge-first observation classifier");
+    let associate = receive
+        .find("self.control_reply_outstanding = true;")
+        .expect("endpoint observation must own the fresh Reply association");
+    let preserve = receive
+        .find("self.process_endpoint_observation(")
+        .expect("endpoint payload must be preserved before returning");
+    assert!(
+        staged_guard < reply_guard
+            && reply_guard < nonblocking
+            && nonblocking < blocking
+            && blocking < classify
+            && classify < associate
+            && associate < preserve
+    );
+    let defensive_close = receive[preserve..]
+        .find("self.reply_control_empty();")
+        .map(|offset| preserve + offset)
+        .expect("receive boundary must defensively close any fresh Reply association");
+    let unresolved_return = receive[defensive_close..]
+        .find("return RootControlReceiveOutcome::Unavailable;")
+        .map(|offset| defensive_close + offset)
+        .expect("an association that cannot close must refuse another receive");
+    assert!(preserve < defensive_close && defensive_close < unresolved_return);
+
+    let process_start = kernel
+        .find("fn process_endpoint_observation(")
+        .expect("endpoint message processor");
+    let process_end = kernel[process_start..]
+        .find("fn receive_root_control(")
+        .map(|offset| process_start + offset)
+        .expect("bounded endpoint message processor");
+    let process = &kernel[process_start..process_end];
+    let copy = process
+        .find("StagedMessage::new_with_fast_message_registers(")
+        .expect("fast Call MRs must be copied");
+    let retain = process
+        .find("self.staged_bootstrap = Some(staged);")
+        .expect("payload must be retained across BootstrapDrain");
+    let reply = process[retain..]
+        .find("self.reply_control_empty();")
+        .map(|offset| retain + offset)
+        .expect("a possible staged Call must close its fresh Reply association");
+    assert!(copy < retain && retain < reply);
+
+    let reply_start = kernel
+        .find("fn reply_control_message(")
+        .expect("explicit root-control reply owner");
+    let reply_end = kernel[reply_start..]
+        .find("fn reply_control_empty(")
+        .map(|offset| reply_start + offset)
+        .expect("bounded root-control reply owner");
+    let reply_owner = &kernel[reply_start..reply_end];
+    let outstanding = reply_owner
+        .find("if !self.control_reply_outstanding")
+        .expect("reply must require a fresh association");
+    let syscall = reply_owner
+        .find("sel4::reply_to(")
+        .expect("MCS reply must use the generated explicit Reply cap");
+    let release = reply_owner
+        .find("self.control_reply_outstanding = false;")
+        .expect("association must clear only after Reply");
+    assert!(outstanding < syscall && syscall < release);
+
+    let classify_start = kernel
+        .find("fn classify_root_control_observation(")
+        .expect("root-control observation classifier");
+    let classify_end = kernel[classify_start..]
+        .find("pub(crate) struct KernelIpc")
+        .map(|offset| classify_start + offset)
+        .expect("bounded root-control observation classifier");
+    let classifier = &kernel[classify_start..classify_end];
+    let fanin_first = classifier
+        .find("badge == ROOT_CONTROL_FANIN_BADGE")
+        .expect("bound notification badge must remain authoritative");
+    let blocking_endpoint = classifier
+        .find("mode == RootControlReceiveMode::Blocking")
+        .expect("blocking zero MessageInfo must be an endpoint delivery");
+    let nonblocking_empty = classifier
+        .find("RootControlReceiveOutcome::Empty")
+        .expect("only NBRecv may report an empty queue");
+    assert!(fanin_first < blocking_endpoint && blocking_endpoint < nonblocking_empty);
+
+    let bootstrap_log = include_str!("../src/bootstrap/log.rs");
+    let frame_start = bootstrap_log
+        .find("fn send_frame(payload: &[u8]) -> Result<(), ()>")
+        .expect("bootstrap/log endpoint producer");
+    let frame_end = bootstrap_log[frame_start..]
+        .find("fn send_frame(_payload: &[u8])")
+        .map(|offset| frame_start + offset)
+        .expect("bounded bootstrap/log endpoint producer");
+    let frame_sender = &bootstrap_log[frame_start..frame_end];
+    assert!(frame_sender.contains("let frame = encode_frame_words(payload)?;"));
+    assert!(frame_sender.contains("frame.len() as seL4_Word"));
+    assert!(frame_sender.contains("sel4::send_nb_unchecked(endpoint, info);"));
+
+    let encode_start = bootstrap_log
+        .find("fn encode_frame_words(")
+        .expect("bootstrap/log frame encoder");
+    let encode_end = bootstrap_log[encode_start..]
+        .find("fn send_frame_with_stub(")
+        .map(|offset| encode_start + offset)
+        .expect("bounded bootstrap/log frame encoder");
+    let encoder = &bootstrap_log[encode_start..encode_end];
+    let op_word = encoder
+        .find("words.push(BootstrapOp::Log.encode())")
+        .expect("nonempty operation header");
+    let length_word = encoder
+        .find("words.push(bounded_len as seL4_Word)")
+        .expect("nonempty length header");
+    assert!(op_word < length_word);
+}
+
+#[test]
+fn root_control_bound_notification_is_pi_only_and_precedes_runtime_receive() {
+    let critical = include_str!("../src/hal/critical_tcb.rs");
+    let activation_start = critical
+        .find("pub fn activate_root_control_temporal_runtime(")
+        .expect("root-control activation");
+    let activation_end = critical[activation_start..]
+        .find("/// Consume one exact kernel accounting sample")
+        .map(|offset| activation_start + offset)
+        .expect("bounded root-control activation");
+    let activation = &critical[activation_start..activation_end];
+    let configure = activation
+        .find("configure_active_sc_with_sched_control(")
+        .expect("unchanged generated root SC configuration");
+    let pi_cfg = activation
+        .find("feature = \"release-pi4\"")
+        .expect("binding must be selected only by the Pi profile");
+    let bind = activation
+        .find("sel4::bind_tcb_notification(")
+        .expect("root fan-in must bind before the event loop receives");
+    assert!(configure < pi_cfg && pi_cfg < bind);
+    assert!(activation.contains("target_arch = \"aarch64\""));
+    assert!(activation.contains("target_os = \"none\""));
+    assert!(activation.contains("sel4_config_kernel_mcs"));
+    assert!(
+        !activation.contains("feature = \"release-qemu\""),
+        "QEMU root-control must remain unbound"
     );
 }
 

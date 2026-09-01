@@ -298,6 +298,16 @@ operational closure. Exact-image qualification must still observe the selected
 clock, timeout, budget, and fatal-output paths rather than inferring them from
 source or configuration.
 
+The physical Pi MCS profile additionally declares one bounded wake producer for
+an exact direct-GENET globally idle root: BCM system-timer channel 3 is a separately tagged
+physical duty of the existing isolated `pcie-root` runtime. Root owns no timer
+MMIO or IRQ; it consumes the runtime's post-clear/rearm fan-in hint and reads
+the exported virtual counter as the sole time authority. The existing runtime
+task and scheduling context are unchanged. WiFi does not use this global-idle
+receive; it may block only for a currently issued finite transaction or exact
+causal-child debt. Static declaration, a timer edge, or QEMU convergence cannot
+qualify Pi deadline behavior or network latency.
+
 ### 3.5 Current identity and attestation qualification
 
 When enabled, `apps/root-task/src/attest.rs` currently hashes public

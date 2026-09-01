@@ -228,14 +228,14 @@ fn pi4_uboot_profile_emits_network_policy() {
         ("vspaces", 280, 512, 232),
         ("page_tables", 2_640, 4_096, 1_456),
         ("asids", 280, 512, 232),
-        ("frames", 7_662, 8_192, 530),
+        ("frames", 7_663, 8_192, 529),
         ("endpoints", 303, 512, 209),
         ("notifications", 50, 128, 78),
         ("fault_caps", 280, 512, 232),
         ("timeout_fault_caps", 280, 512, 232),
         ("reply_objects", 279, 512, 233),
         ("scheduling_contexts", 280, 512, 232),
-        ("cspace_slots", 19_510, 65_536, 46_026),
+        ("cspace_slots", 19_513, 65_536, 46_023),
         ("untyped_bytes", 167_772_160, 268_435_456, 100_663_296),
     ] {
         assert_eq!(admitted(resource), used, "admitted {resource}");
@@ -329,8 +329,8 @@ fn pi4_uboot_profile_emits_network_policy() {
     assert_eq!(manifest["console_network_service"]["core"], 2);
     assert_eq!(console_objects["frames"], 104);
     assert_eq!(console_objects["cspace_slots"], 161);
-    assert_eq!(admission["fixed_objects"]["frames"], 4_078);
-    assert_eq!(admission["fixed_objects"]["cspace_slots"], 9_270);
+    assert_eq!(admission["fixed_objects"]["frames"], 4_079);
+    assert_eq!(admission["fixed_objects"]["cspace_slots"], 9_273);
     let genet = temporal_task("driver-genet");
     assert_eq!(genet["kind"], "driver");
     assert_eq!(genet["execution"], "active");
@@ -392,6 +392,10 @@ fn pi4_uboot_profile_emits_network_policy() {
     assert_eq!(gpu_executor["budget_us"], 5_000);
     assert_eq!(gpu_executor["response_time_us"], 8_300);
     let pcie = temporal_task("driver-pcie");
+    assert_eq!(pcie["budget_us"], 400);
+    assert_eq!(pcie["period_us"], 10_000);
+    assert_eq!(pcie["wcet_us"], 300);
+    assert_eq!(pcie["priority"], 112);
     assert_eq!(pcie["core"], 2);
     assert_eq!(pcie["sched_control_core"], 2);
     assert_eq!(pcie["response_time_us"], 3_300);
@@ -439,7 +443,7 @@ fn pi4_uboot_profile_emits_network_policy() {
     let irqs = manifest["root_task"]["driver_images"]["irqs"]
         .as_array()
         .expect("driver runtime IRQ topology");
-    assert_eq!(irqs.len(), 4);
+    assert_eq!(irqs.len(), 5);
     let serial_irq = irqs
         .iter()
         .find(|irq| irq["hot-path"] == "serial-console")
@@ -476,10 +480,20 @@ fn pi4_uboot_profile_emits_network_policy() {
     assert_eq!(sdio_dma_irq["handler-slot"], 5);
     assert_eq!(sdio_dma_irq["notification-slot"], 3);
     assert_eq!(sdio_dma_irq["trigger"], "level");
+    let pcie_timer_irq = irqs
+        .iter()
+        .find(|irq| irq["hot-path"] == "pcie-root")
+        .expect("PCIe-owned system-timer IRQ topology");
+    assert_eq!(pcie_timer_irq["irq"], 99);
+    assert_eq!(pcie_timer_irq["badge"], 2048);
+    assert_eq!(pcie_timer_irq["handler-slot"], 4);
+    assert_eq!(pcie_timer_irq["notification-slot"], 3);
+    assert_eq!(pcie_timer_irq["trigger"], "level");
     assert_eq!(irqs[0]["irq"], 125);
     assert_eq!(irqs[1]["irq"], 189);
     assert_eq!(irqs[2]["irq"], 158);
     assert_eq!(irqs[3]["irq"], 116);
+    assert_eq!(irqs[4]["irq"], 99);
 
     // Bind the already-translated manifest IRQ identity to the exact selected
     // Pi kernel profile. The first DTS cell is the default-queue/misc line;
@@ -566,6 +580,7 @@ fn pi4_uboot_profile_emits_network_policy() {
         runtime_pages(images, "pcie-root", "shared-buffer-pages"),
         16
     );
+    assert_eq!(runtime_pages(images, "pcie-root", "mmio-pages"), 11);
 }
 
 fn runtime_bool(images: &[Value], hot_path: &str, field: &str) -> bool {

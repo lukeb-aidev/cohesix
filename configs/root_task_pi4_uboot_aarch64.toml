@@ -138,7 +138,7 @@ code-pages = 320
 stack-pages = 16
 ipc-pages = 1
 ring-pages = 1
-mmio-pages = 10
+mmio-pages = 11
 dma-pages = 0
 shared-buffer-pages = 16
 root-context-required = false
@@ -173,6 +173,14 @@ hot-path = "sdio-host"
 irq = 116
 badge = 512
 handler-slot = 5
+notification-slot = 3
+trigger = "level"
+
+[[root_task.driver_images.irqs]]
+hot-path = "pcie-root"
+irq = 99
+badge = 2048
+handler-slot = 4
 notification-slot = 3
 trigger = "level"
 
@@ -976,14 +984,14 @@ cnodes = 16
 vspaces = 16
 page_tables = 528
 asids = 16
-frames = 4078
+frames = 4079
 endpoints = 31
 notifications = 34
 fault_caps = 16
 timeout_fault_caps = 16
 reply_objects = 15
 scheduling_contexts = 16
-cspace_slots = 9270
+cspace_slots = 9273
 untyped_bytes = 100663296
 
 [[worker_resource_admission.executable_roles]]

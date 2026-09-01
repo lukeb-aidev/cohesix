@@ -33,8 +33,8 @@ Worker archive, and ABI version.
 The Pi manifest retains `max_workers=256` and per-role
 `namespace_capacity=256`, and its complete maximum mix declares all 256 as
 executable children. Its 16-bit root CNode exposes 65,536 slots; the generated
-fixed, per-Worker, and post-construction-reserve inventory consumes 19,510 and
-leaves 46,026 slots of deterministic headroom. This static admission does not
+fixed, per-Worker, and post-construction-reserve inventory consumes 19,513 and
+leaves 46,023 slots of deterministic headroom. This static admission does not
 prove construction, READY, driver coexistence, scheduling behavior, or
 performance on Pi hardware.
 
@@ -378,16 +378,48 @@ non-MCS profile retains its prior local-notification wait-only behavior and
 emits no additional SDIO peer signal. This changes no cap right, slot, owner,
 SC numeric, refill, priority, period, deadline, retry, or Reply rule.
 
-The persistent publication cut is earlier and separately exact. Immediately
-after committing one nonzero sequence-last persistent SDIO child, CYW43
-revalidates the parent, child, generation, immutable frontier, root-grant
-environment, exact `Cyw43Client` route, issued-unknown and pair-restart fences,
-and stable `Waiting` completion. Selected MCS may then use one
-`seL4_NBSendWait` to prompt slot 8 and atomically park on slot 3 before later
-semantic bookkeeping. Classic and every inexact or nonpersistent publication
-retain the existing one slot-8 signal and do not park at this cut. The badge is
-only a hint; the durable ring and completion remain authority, and SDIO alone
-validates and issues the physical operation.
+The foreground publication cut is earlier and separately exact. Immediately
+after committing one nonzero sequence-last fresh SDIO child, including ordinary
+cold HOST_CONFIG, CYW43 revalidates the executing turn, parent, child,
+generation, immutable frontier, captured healthy publication environment,
+exact `Cyw43Client` route, issued-unknown, pair-restart, live-recovery, and
+stable `Waiting` fences. Selected MCS may then use one `seL4_NBSendWait` to
+prompt slot 8 and atomically park on slot 3 before later semantic bookkeeping.
+Classic and every inexact, stale, or recovery-fenced publication retain the
+existing one slot-8 signal and do not park at this cut. The badge is only a
+hint; the durable ring and completion remain authority, and SDIO alone
+validates and issues the physical operation. A suppression-only atomic latch
+closes recovery that begins after the turn snapshot; only the canonical
+pair-generation scrub may clear it after private recovery authority resets.
+
+The selected physical Pi MCS root-control task in the exact direct-GENET
+topology no longer forfeits a refill at the proved ordinary global-idle cut.
+Activation binds its existing compiler-
+owned fan-in notification to the init TCB, and the root endpoint uses its
+existing explicit Reply object for both nonblocking and blocking receive.
+After timer, endpoint, durable producer, serial/local-seat/display, network,
+fault, recovery, containment, quarantine, and reboot predicates all remain
+idle across the condition-before-block cut, root blocks on that endpoint. An
+endpoint Call and a bound-notification signal are multiplexed by the kernel;
+the latter is only a hint, while the former is copied to staged root storage
+before returning. Every wake restarts operator/recovery-first arbitration.
+Post-response, reserve, operator, recovery, and fault exits retain their
+explicit handoff, so the receive cannot speculate about a future request or
+weaken physical-console priority. WiFi never enters this global-idle receive;
+it may block only for a currently issued finite operation or an exact
+current-transaction causal child.
+
+Deadline completeness comes from the existing isolated `driver-pcie` task,
+without another task or SC. Its unchanged `400/10000 us`, `wcet_us=300`,
+priority/MCP, core, refill, and timeout contract owns one additional exact BCM
+system-timer C3 duty: discontiguous page `0xFE003000`, level IRQ 99, badge 2048,
+handler slot 4, local notification slot 3, and 5,000-us interval. Each bounded
+IRQ turn clears and rearms C3, signals the existing root fan-in, then
+acknowledges; it performs no PCIe operation, retry, catch-up, or root work. The
+ten-page PCIe aperture and one-page timer resource remain separately tagged and
+fail closed before MMIO on any identity drift. This secondary duty consumes
+only the existing isolated task's declared execution budget and changes no
+root, console, driver, or Worker scheduling numeric.
 
 The deferred physical WiFi supervisor may retain root-control across productive
 logical turns only when generated root truth is active, admitted,
@@ -500,8 +532,8 @@ ordinary Serial/LocalSeat/Dispatch/Display rotor. CYW43 keeps its distinct
 NaturalPostpone/64-unit contract and cannot acquire direct-GENET continuation
 authority.
 
-Cold, attached, and steady Pi root-control use the fan-in at an already-fenced
-ordinary or no-successor exit. One nonzero poll result returns to outer
+Cold, attached, and steady Pi WiFi root-control use the fan-in only at an
+already-fenced current finite-operation or causal-child exit. One nonzero poll result returns to outer
 operator/recovery-first arbitration, where the authoritative CYW43, GENET,
 Worker, serial, USB, console, and fault state is re-read. Ordinary zero takes
 the existing bounded Yield. An exact signal-bound finite one-way CYW43
@@ -510,10 +542,11 @@ watermark remains owed, may instead wait at most 64 times inside the unchanged
 activation bound. Persistent/steady CYW43 parents cannot wait. Root revalidates
 that no stable terminal or child-frontier publication is visible, polls once,
 waits only on an empty result, then
-returns through the full outer durable-state rotor. There is no generic
+returns through the full outer durable-state rotor. WiFi has no generic
 blocking idle cut, software work latch, poll loop, retry, fallback owner, or
-SDIO deadline-arm side effect. The WiFi and exact productive direct-GENET
-paths use the generated NaturalPostpone profile and unchanged 64-unit caps.
+SDIO deadline-arm side effect. Its transaction waits and the distinct exact
+productive direct-GENET path use the generated NaturalPostpone profile and
+unchanged 64-unit caps.
 Direct GENET has no broad idle wait or post-response cross-core tail. Every SC
 numeric, Reply rule, isolation boundary, queue, and owner remains unchanged.
 

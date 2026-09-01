@@ -343,6 +343,36 @@ def test_pi4_image_build_keeps_dtb_policy_handoff_common() -> None:
     assert 'bootm ${coh_addr} ${coh_runtime_cpio_addr} ${coh_dtb_addr}' in source
 
 
+def test_pi4_image_build_clears_uboot_video_before_kernel_handoff() -> None:
+    """Cohesix owns a clean display while boot diagnostics remain on serial."""
+
+    source = SCRIPT_PATH.read_text(encoding="utf-8")
+    boot_template = source[
+        source.index('echo "[cohesix] pi4 autoboot script"') : source.index(
+            '\nEOF\n    sed -i \'\' "s/__COH_IMAGE__/'
+        )
+    ]
+    handoff = next(
+        line
+        for line in boot_template.splitlines()
+        if line.startswith("setenv coh_boot_loaded_image ")
+    )
+
+    diagnostic = (
+        'echo "[cohesix] loaded ${coh_image} and ${coh_runtime_cpio_file}; '
+        'bootm with ${coh_dtb_file}"'
+    )
+    bootm = "bootm ${coh_addr} ${coh_runtime_cpio_addr} ${coh_dtb_addr}"
+    assert diagnostic in handoff
+    assert "; cls; setenv stdout serial; setenv stderr serial; " in handoff
+    assert handoff.index(diagnostic) < handoff.index("; cls;")
+    assert handoff.index("; cls;") < handoff.index(bootm)
+    assert (
+        f"{bootm}; setenv stdout serial,vidconsole; "
+        'setenv stderr serial,vidconsole; echo "[cohesix] returned from image"'
+    ) in handoff
+
+
 def test_pi4_image_build_does_not_echo_wifi_password_to_serial() -> None:
     """Wi-Fi password entry must stay inside the USB local console."""
 
