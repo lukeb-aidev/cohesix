@@ -11426,18 +11426,26 @@ Changes:
     not raw authority or reliability-depth acceptance.
 
     Supersede the persistent-only WiFi selector with one exact fresh-foreground
-    publication admission. Immediately after any admitted nonzero
-    sequence-last foreground SDIO child, including cold HOST_CONFIG, revalidate
-    route, turn, parent, child, physical generation, immutable frontier,
-    `Waiting` completion, issued-unknown, pair-restart, and live recovery
-    fences. Selected MCS alone may execute the existing atomic slot-8 prompt
-    plus slot-3 wait. When that syscall returns, re-prove the same sequence-last
-    `Waiting` child and its exact first SDIO-owner action receipt. Only an
-    unchanged child without that receipt takes one ordinary slot-3 wait, with
-    no second slot-8 prompt; a visible first action, terminal, replacement,
-    recovery, or identity drift continues through durable reclassification.
-    Classic and every inexact publication remain signal-only and gain no
-    additional wait.
+    publication admission. Before any admitted nonzero sequence-last
+    foreground SDIO child, including cold HOST_CONFIG, commits, capture its
+    route, turn, parent, child, physical generation, `Waiting` completion,
+    issued-unknown, pair-restart, live-recovery, and immutable transaction
+    fences and precompute the exact kernel-profile handoff. After the
+    sequence-last commit and mandatory cache clean, selected MCS must execute
+    the existing atomic slot-8 prompt plus slot-3 wait without an intervening
+    passive read, diagnostic/progress publication, cache clean, or semantic
+    operation. When that syscall returns, re-prove the same durable child and
+    its exact first SDIO-owner action receipt. Only an unchanged child without
+    that receipt takes one ordinary slot-3 wait, with no second slot-8 prompt;
+    a visible first action, terminal, replacement, recovery, or identity drift
+    continues through durable reclassification. The atomic route never replays
+    legacy producer `SEND_DONE` or `WAIT_BEGIN` over newer owner evidence.
+    On either SDIO peer-notification return, the sole owner stable-reads and
+    seals a fresh one-way command in that activation before wake telemetry,
+    source service, or another blocking boundary. A coalesced physical IRQ
+    retains first physical-service priority, but the sealed command survives
+    that boundary without another notification. Classic and every inexact
+    publication remain signal-only and gain no additional wait.
     A release/acquire suppression latch may project private recovery into this
     scheduling decision, but it cannot initiate, complete, or clear recovery;
     only the existing pair-generation scrub clears it after canonical recovery
@@ -11565,6 +11573,8 @@ Changes:
   - compatibility — preserve public AUTH/framing/command/ACK/ERR/END behavior, one-slot publication ACK semantics, root policy authority, MCS admission, evidence, and fault containment; advance the selected manifest through schema 1.16: schema 1.15 retains the generated internal Worker execution contract and transport correlation identity, while schema 1.16 seals the root-control fan-in slots and internal console/driver ABI versions. Update compiler, generated truth, host/target NineDoor, focused tests, host tools, Python library, SwarmUI projections, and benchmark compatibility review together. Full host-tool and `tools/cohesix-py` review preserves the public grammar, generated target-profile contract, and host dependencies. It requires bounded host-only compatibility repairs: `cohsh` TCP-only builds no longer compile in the in-process NineDoor/mock/trace implementation, in-process integration tests declare that required feature explicitly, `cas-tool` and SwarmUI integration tests resolve their Cargo-provided binaries at runtime so all-target linting remains portable, and the Python target validator adopts the generated Pi 1/127/128 population. The evidence and benchmark tools additionally derive the complete 265-task QEMU and 272-task Pi temporal seals from generated truth, keep exactly one detailed live exemplar for each executable role, admit target-neutral fresh-Pi proof, and compare provenance-compatible QEMU/Pi throughput and errors without turning QEMU latency into a physical-network gate. Hive Gateway's `/v1/meta/status` projection adds required normalized configured-backend `target_host` and `target_port` fields so fresh-Pi evidence binds the live gateway to the exact Pi console endpoint; it does not expose the REST bind endpoint or create target proof for host-model mode. `coh`, `cohsh`, `coh-status`, SwarmUI, `gpu-bridge-host`, `host-ticket-agent`, `host-sidecar-bridge`, `sidecar-bus`, `cas-tool`, every `.coh` workload, and `tools/cohesix-py` tolerate or ignore those additive status fields and require no behavior or schema change. Existing QEMU results do not claim Pi performance, and the enlarged Pi declaration requires fresh exact-image physical evidence. The original manifest/build integration performed no Pi hardware interaction; later exact-image bullets bind their own fresh Pi evidence and still require a new exact-image boot after each source candidate.
 Commands:
   - cargo test -p pi4-driver-runtime --lib persistent_child_publication_selects_atomic_mcs_handoff_and_classic_signal -- --test-threads=1
+  - cargo test -p pi4-driver-runtime --lib sdio_peer_wake_admits_the_fresh_durable_one_way_command_immediately -- --test-threads=1
+  - cargo test -p pi4-driver-runtime --lib atomic_sdio_publication_never_replays_legacy_wait_progress -- --test-threads=1
   - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib direct_genet_causal_wait_matches_only_the_current_control_identity -- --test-threads=1
   - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib pi_genet_completed_response_does_not_open_a_future_request_tail -- --test-threads=1
   - scripts/ci/test_plan_converge.sh --target qemu --focus root-mcs --path apps/root-task/src/event/mod.rs

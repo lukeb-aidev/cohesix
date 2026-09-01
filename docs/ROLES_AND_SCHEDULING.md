@@ -380,13 +380,17 @@ non-MCS profile retains its prior local-notification wait-only behavior and
 emits no additional SDIO peer signal. This changes no cap right, slot, owner,
 SC numeric, refill, priority, period, deadline, retry, or Reply rule.
 
-The foreground publication cut is earlier and separately exact. Immediately
-after committing one nonzero sequence-last fresh SDIO child, including ordinary
-cold HOST_CONFIG, CYW43 revalidates the executing turn, parent, child,
-generation, immutable frontier, captured healthy publication environment,
-exact `Cyw43Client` route, issued-unknown, pair-restart, live-recovery, and
-stable `Waiting` fences. Selected MCS may then use one `seL4_NBSendWait` to
-prompt slot 8 and atomically park on slot 3 before later semantic bookkeeping.
+The foreground publication cut is earlier and separately exact. Before
+committing one nonzero sequence-last fresh SDIO child, including ordinary cold
+HOST_CONFIG, CYW43 captures the executing turn, parent, child, generation,
+captured healthy publication environment, exact `Cyw43Client` route,
+stable `Waiting` completion, issued-unknown, pair-restart, and live-recovery
+fences. After the commit and required cache clean, selected MCS performs no
+passive re-read, diagnostic publication, or semantic bookkeeping before one
+`seL4_NBSendWait` prompts slot
+8 and atomically parks on slot 3. The durable command remains the final
+authority, so a recovery race after the captured decision can cause only a
+redundant coalesced hint and cannot authorize physical work.
 On return, CYW43 retains that same activation as a condition-driven publication
 episode. While the exact sequence-last child remains `Waiting` and its exact
 no-grant first-action receipt is absent, CYW43 blocks again on slot 3 without
@@ -404,10 +408,14 @@ closes any number of already-active root or stale-child badges that satisfy a
 wait before the equal-priority SDIO owner runs, without creating a resend,
 retry, polling cadence, spin, second operation, or scheduling-number change.
 Classic and every inexact, stale, or recovery-fenced publication retain the
-existing one slot-8 signal and do not park at this cut. The badge is only a
-hint; the durable ring and completion remain authority, and SDIO alone
-validates and issues the physical operation. A suppression-only atomic latch
-closes recovery that begins after the turn snapshot; only the canonical
+existing one slot-8 signal and do not park at this cut. On an SDIO peer wake,
+the owner stable-reads and seals the fresh one-way command before wake
+telemetry, physical-source arbitration, or another outer-loop boundary; a
+coalesced IRQ still wins the physical action and the sealed command remains
+pending. The badge is only a hint; the durable ring and completion remain
+authority, and SDIO alone validates and issues the physical operation. A
+suppression-only atomic latch closes recovery that begins after the turn
+snapshot; only the canonical
 pair-generation scrub may clear it after private recovery authority resets.
 
 The selected physical Pi MCS root-control task in the exact direct-GENET

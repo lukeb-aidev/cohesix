@@ -237,19 +237,25 @@ additional SDIO peer signal. A coalesced MCS wake can re-prompt only the same
 durable command; it cannot authorize a retry, duplicate device action,
 fallback owner, broadened capability, or new queue entry.
 
-The exact persistent-publication correction adds no badge authority. After the
-sequence-last child command is durable, CYW43 revalidates the exact persistent
-parent, child, generation, immutable frontier, root-grant environment,
-`Cyw43Client` route, recovery fences, and stable `Waiting` completion. Only
-that selected-MCS publication may atomically prompt slot 8 and park on slot 3
-before later bookkeeping. Classic and every inexact or nonpersistent
-publication retain one signal-only prompt. The returned badge carries no work
-authority. A reserved-root bit may pass only through the existing exact
-expired-deadline classifier, which independently requires the immutable arm,
-physical lifetime, child sequence, and expiry before prompting SDIO. SDIO
-independently validates the durable command and generation before its sole
-physical issue. This cannot broaden either cap, duplicate an operation, or
-create a retry, queue, fallback owner, or recovery path.
+The exact fresh-foreground-publication correction adds no badge authority.
+CYW43 captures the exact admitted parent, child, generation, root-grant
+environment, stable `Waiting` completion, `Cyw43Client` route, and recovery
+fences before committing the sequence-last child command. This includes the
+ordinary cold HOST_CONFIG child as well as persistent exchanges. After that
+commit and its required cache clean, selected MCS performs no passive read,
+diagnostic publication, or semantic bookkeeping before atomically prompting
+slot 8 and parking on slot 3. A later recovery race can cause at most one
+redundant coalesced hint: SDIO still validates the durable command and
+generation before its sole physical issue. On return, CYW43 revalidates the
+immutable frontier, completion, and recovery state before later work. It does
+not replay the legacy producer `WAIT_BEGIN` phase over a newer owner action,
+terminal, or recovery frontier. Classic and every inexact, stale,
+wrong-route, or recovery-fenced publication retain one signal-only prompt.
+The returned badge carries no work authority. A reserved-root bit may pass
+only through the existing exact expired-deadline classifier, which
+independently requires the immutable arm, physical lifetime, child sequence,
+and expiry before prompting SDIO. This cannot broaden either cap, duplicate an
+operation, or create a retry, queue, fallback owner, or recovery path.
 
 The direct-GENET correction narrows continuation authority to the current
 causal episode. Generation and connection are insufficient without the exact

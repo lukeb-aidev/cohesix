@@ -9664,23 +9664,29 @@ the same admission/action-completion ordering after the initial exact
 grant-free service receipt, including post-commit peer signalling and
 terminal-supersedes-grant behavior.
 The exact-743e CYW43 wait regression must prove that foreground and DPC paths
-first commit one nonzero exact child command sequence, then re-observe the
-durable root-causal frontier. Only `Waiting` on the exact `Cyw43Client` route
-may issue one MCS `seL4_NBSendWait`, with the existing send-only slot-8 SDIO
-doorbell as its nonblocking send and the bound read-only slot-3 CYW43 local
-notification as its wait. `Returned`, `Recovery`, `Invalid`, a wrong route,
-zero sequence, or post-wake identity drift must issue no combined wait and
-select the existing fail-closed path. Tests must also prove that the durable
-command/grant record, never either notification badge, remains authority, and
-that an unrelated active badge can satisfy the first atomic wait without
-proving the equal-priority SDIO owner ran. Only when the same sequence-last
-child remains `Waiting` and its first owner-action receipt is absent may CYW43
-perform exactly one ordinary local-notification wait, with no second slot-8
-prompt. A visible first action, terminal, replacement, recovery, or identity
-drift must skip that wait and return to durable reclassification. The exact MCS
-target compile must exercise the real `NBSendWait` and post-wait local `Wait`
-bindings. A classic non-MCS compile/source test
-must retain the prior slot-3 local wait-only behavior and prove that this
+capture every passive identity, recovery, and completion fence and select the
+exact `Cyw43Client` route before committing one nonzero child command sequence.
+Only `Waiting` on that exact route may issue one MCS `seL4_NBSendWait`, with the
+existing send-only slot-8 SDIO doorbell as its nonblocking send and the bound
+read-only slot-3 CYW43 local notification as its wait. After the sequence-last
+commit and its mandatory four-byte cache clean, source-order and exact-target
+compile checks must permit no passive ring read, progress publication, cache
+clean, diagnostic work, or semantic revalidation before that syscall. The
+identity and completion fences captured before commit remain the fail-closed
+authority for choosing the route. The atomic route must not replay legacy
+producer `SEND_DONE` or `WAIT_BEGIN` phases after a newer owner action, child
+terminal, or recovery observation. `Returned`, `Recovery`, `Invalid`, a wrong
+route, or zero sequence must issue no combined wait and select the existing
+fail-closed path. Tests must also prove that the durable command/grant record,
+never either notification badge, remains authority, and that an unrelated active badge can
+satisfy the first atomic wait without proving the equal-priority SDIO owner
+ran. Only when the same sequence-last child remains `Waiting` and its first
+owner-action receipt is absent may CYW43 perform exactly one ordinary
+local-notification wait, with no second slot-8 prompt. A visible first action,
+terminal, replacement, recovery, or identity drift must skip that wait and
+return to durable reclassification. The exact MCS target compile must exercise
+the real `NBSendWait` and post-wait local `Wait` bindings. A classic non-MCS
+compile/source test must retain the prior slot-3 local wait-only behavior and prove that this
 correction emits no slot-8 peer signal. This focused check proves syscall
 selection and publication ordering only; it is not evidence that the SDIO
 owner ran or that Gate 8, DHCP, or either performance gate passed on Pi.
@@ -9688,22 +9694,27 @@ The exact fresh-foreground-publication regression must separately drive the
 production sequence-last commit cut. A positive selected-MCS case must prove
 the admitted executing turn, parent, child sequence, generation, immutable
 frontier, root-grant environment, exact `Cyw43Client` route, no issued-unknown
-or pair restart, and stable `Waiting` completion before selecting one immediate
-`seL4_NBSendWait` on slots 8 and 3. Ordinary cold HOST_CONFIG is a positive
-case when those fences are exact. Zero, stale, replaced, inadmissible-turn,
-wrong-route, recovery, issued-unknown, pair-restart, and non-Waiting cases must
-not select that atomic park. Classic and inexact publication cases must retain
-exactly one signal-only slot-8 prompt. After the syscall, tests must separately
-prove that the unchanged exact `Waiting` child without a first owner-action
-receipt selects one slot-3 wait and no send, while an observed receipt or any
-inexact state selects no additional wait. Tests must classify the returned
-badge without granting it work: an unarmed, unexpired, stale, wrong-lifetime, or
-wrong-sequence reserved-root badge must not prompt SDIO, and only the existing
-exact expired-deadline predicate may do so. The durable command/completion
-classifier remains mandatory before any later work. The
-exact MCS target compile must exercise the real syscall. These checks prove
-selection and ordering only; fresh exact-image Pi evidence remains mandatory
-for SDIO-owner observation, Gate 8, DHCP, raw TCP, and repeatability.
+or pair restart, and stable `Waiting` completion before the sequence commit;
+it must precompute the immediate `seL4_NBSendWait` route on slots 8 and 3.
+Ordinary cold HOST_CONFIG is a positive case when those fences are exact.
+Zero, stale, replaced, inadmissible-turn, wrong-route, recovery,
+issued-unknown, pair-restart, and non-Waiting cases must not select that atomic
+park. Classic and inexact publication cases must retain exactly one signal-only
+slot-8 prompt. Both SDIO-owner notification returns must stable-read and seal a
+fresh one-way command before wake telemetry, IRQ service, or an outer-loop
+boundary. A coalesced physical IRQ remains first to issue, but the sealed
+command must survive that service turn without requiring another notification.
+After the syscall, tests must separately prove that the unchanged exact
+`Waiting` child without a first owner-action receipt selects one slot-3 wait
+and no send, while an observed receipt or any inexact state selects no
+additional wait. Tests must classify the returned badge without granting it
+work: an unarmed, unexpired, stale, wrong-lifetime, or wrong-sequence
+reserved-root badge must not prompt SDIO, and only the existing exact
+expired-deadline predicate may do so. The durable command/completion classifier
+remains mandatory before any later work. The exact MCS target compile must
+exercise the real syscall. These checks prove selection, ordering, and
+same-activation owner admission only; fresh exact-image Pi evidence remains
+mandatory for physical owner action, Gate 8, DHCP, raw TCP, and repeatability.
 The runtime's nonblocking command seam is kernel-contract-specific: classic
 seL4 uses `seL4_Poll`, while MCS must use `seL4_NBRecv` with the exact
 compiler-generated child Reply slot 6. Once that receive retains a Call, both

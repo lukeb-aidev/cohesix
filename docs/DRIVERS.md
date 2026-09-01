@@ -1244,15 +1244,17 @@ transport:
   behavior and sends no additional slot-8 SDIO signal; unrelated runtime waits
   retain their existing syscall selection.
 - An exact fresh foreground publication closes the earlier scheduling
-  discontinuity at the command commit itself. Immediately after committing the
-  nonzero sequence-last value, CYW43 revalidates the executing turn, immutable
-  parent, child and generation, captured healthy publication environment,
-  exact `Cyw43Client` route, absence of issued-unknown, pair restart, or live
-  recovery, and a stable `Waiting` completion. This includes ordinary cold
-  HOST_CONFIG as well as the previously admitted persistent exchange. Selected
-  MCS then uses one `seL4_NBSendWait` to prompt slot 8 and park on slot 3 before
-  later semantic bookkeeping. When that syscall returns, CYW43 re-proves the
-  same sequence-last child and enters one condition-driven publication episode.
+  discontinuity at the command commit itself. Before committing the nonzero
+  sequence-last value, CYW43 captures the executing turn, immutable parent,
+  child and generation, healthy publication environment, exact `Cyw43Client`
+  route, stable `Waiting` completion, and absence of issued-unknown, pair
+  restart, or live recovery. This includes ordinary cold HOST_CONFIG as well
+  as the previously admitted persistent exchange. After commit and the
+  required sequence cache clean,
+  selected MCS performs no passive read, progress publication, or semantic work
+  before one `seL4_NBSendWait` prompts slot 8 and parks on slot 3. When that
+  syscall returns, CYW43 re-proves the same sequence-last child and enters one
+  condition-driven publication episode.
   A stable `Waiting` child without its exact first-action receipt parks again
   on the existing slot-3 notification; it never sends slot 8 again. Every
   returned badge is only a reason to re-read the exact child, generation,
@@ -1276,7 +1278,11 @@ transport:
   it may prompt the sole SDIO owner. Classic and every inexact, stale, replaced,
   recovery, or wrong-route publication perform the existing single slot-8
   signal instead; they do not inherit the atomic park. Only canonical pair
-  recovery clears the suppression latch. SDIO remains the sole issuer and must
+  recovery clears the suppression latch. On either SDIO notification-return
+  path, a valid peer badge causes an immediate stable read and local seal of the
+  fresh one-way command before wake diagnostics, source service, or an
+  outer-loop boundary. A coalesced physical IRQ still wins the physical action;
+  the sealed command remains pending. SDIO remains the sole issuer and must
   independently validate the same immutable command and generation before
   touching hardware.
 - Within one CYW43 root-granted foreground turn, observing and consuming one

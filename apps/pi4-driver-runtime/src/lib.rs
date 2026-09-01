@@ -11095,6 +11095,49 @@ fn retain_runtime_idle_delegated_wake(
     true
 }
 
+/// Admit the sequence-last SDIO child while handling its peer wake.
+///
+/// The notification is only a coalescing hint. The stable command remains the
+/// authority, but consuming that hint must not introduce another outer-loop
+/// boundary before the sole SDIO owner rechecks the command condition.
+#[cfg(any(target_os = "none", test))]
+const fn runtime_delegated_owner_wake_admits_command(
+    route: RuntimeNotificationRoute,
+    badge: u32,
+    command: DriverTaskCommandRecord,
+    last_sequence: u32,
+) -> bool {
+    matches!(route, RuntimeNotificationRoute::SdioOwner)
+        && runtime_notification_wake_badge(route, badge)
+            & DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE
+            != 0
+        && matches!(
+            runtime_command_admission(command, last_sequence),
+            RuntimeCommandAdmission::OneWay
+        )
+}
+
+#[cfg(target_os = "none")]
+fn runtime_delegated_owner_command_after_wake(
+    route: RuntimeNotificationRoute,
+    badge: u32,
+    last_sequence: u32,
+) -> Option<RuntimeCommandIntake> {
+    let command = read_runtime_command_record();
+    runtime_delegated_owner_intake_after_wake(route, badge, command, last_sequence)
+}
+
+#[cfg(any(target_os = "none", test))]
+fn runtime_delegated_owner_intake_after_wake(
+    route: RuntimeNotificationRoute,
+    badge: u32,
+    command: DriverTaskCommandRecord,
+    last_sequence: u32,
+) -> Option<RuntimeCommandIntake> {
+    runtime_delegated_owner_wake_admits_command(route, badge, command, last_sequence)
+        .then(|| runtime_command_intake_after_pre_admit(command, false))
+}
+
 #[cfg(any(target_os = "none", test))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RuntimeCommandLoopRoute {
@@ -21721,9 +21764,10 @@ fn runtime_signal_sdio_owner_doorbell(sequence: u32) {
 fn runtime_signal_sdio_owner_doorbell(_sequence: u32) {}
 
 /// Deliver one publication prompt using the already selected kernel-profile
-/// route. The caller publishes the true wait-begin seam before selecting the
-/// atomic variant. Any returned badge is classified once through the existing
-/// exact deadline gate; retained state is still rechecked before further work.
+/// route. The atomic variant is the first operation after the required command
+/// commit/cache-maintenance edge. Any returned badge is classified once through
+/// the existing exact deadline gate; retained state is still rechecked before
+/// further work.
 #[cfg(target_os = "none")]
 fn runtime_deliver_sdio_owner_publication(route: RuntimeSdioOwnerPublicationRoute) {
     match route {
@@ -21747,36 +21791,39 @@ fn runtime_deliver_sdio_owner_publication(route: RuntimeSdioOwnerPublicationRout
     record_test_sdio_owner_doorbell(doorbell);
 }
 
-/// Publish the sequence-last owner-send and local-wait seam.
+/// Publish the legacy signal-only producer-side handoff diagnostics.
 ///
-/// For `AtomicPromptAndWait`, `SEND_DONE` means the immutable command and exact
-/// send operand are committed; `WAIT_BEGIN` is the last publication before
-/// entering `NBSendWait`. Signal-only profiles preserve their former ordering.
+/// The atomic route deliberately never publishes these phases: `WAIT_BEGIN` is
+/// interpreted as a current outstanding owner wait and therefore cannot be
+/// replayed after a newer action, terminal, or recovery frontier. The owner's
+/// distinct command-admitted/action progress is the direct atomic-handoff
+/// proof.
+#[cfg(any(target_os = "none", test))]
+fn publish_runtime_sdio_owner_signal_progress(progress_sequence: u32) {
+    publish_runtime_progress(
+        progress_sequence,
+        pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_SEND_DONE,
+        DRIVER_RUNTIME_CYW43_COMMAND_AUX,
+    );
+    publish_runtime_progress(
+        progress_sequence,
+        pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_WAIT_BEGIN,
+        DRIVER_RUNTIME_CYW43_COMMAND_AUX,
+    );
+}
+
 #[cfg(any(target_os = "none", test))]
 fn runtime_deliver_sdio_owner_publication_with_progress(
     route: RuntimeSdioOwnerPublicationRoute,
     progress_sequence: u32,
 ) {
-    let publish_wait_begin = || {
-        publish_runtime_progress(
-            progress_sequence,
-            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_SEND_DONE,
-            DRIVER_RUNTIME_CYW43_COMMAND_AUX,
-        );
-        publish_runtime_progress(
-            progress_sequence,
-            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_WAIT_BEGIN,
-            DRIVER_RUNTIME_CYW43_COMMAND_AUX,
-        );
-    };
     match route {
         RuntimeSdioOwnerPublicationRoute::AtomicPromptAndWait(_) => {
-            publish_wait_begin();
             runtime_deliver_sdio_owner_publication(route);
         }
         RuntimeSdioOwnerPublicationRoute::SignalOnly(_) => {
             runtime_deliver_sdio_owner_publication(route);
-            publish_wait_begin();
+            publish_runtime_sdio_owner_signal_progress(progress_sequence);
         }
     }
 }
@@ -34550,14 +34597,16 @@ const fn cyw43_foreground_persistent_transaction_marker_present(
             != 0
 }
 
-/// Re-prove an exact root->CYW43->SDIO foreground child immediately after its
-/// sequence-last command commit and before selecting an atomic MCS handoff.
+/// Capture the exact root->CYW43->SDIO scheduling identity before publishing
+/// its sequence-last command.
 ///
-/// This is scheduling admission only. SDIO independently validates the same
-/// immutable command and physical generation before touching hardware, and a
-/// notification badge can never substitute for either durable identity.
+/// This moves every passive identity/recovery read ahead of the causal commit.
+/// Once the sequence is committed, the target path may enter the atomic
+/// notification handoff without another user-space decision or diagnostic
+/// write. A later recovery race can cause at most one redundant coalesced hint;
+/// it cannot authorize SDIO work without the immutable command identity.
 #[cfg(any(target_os = "none", test))]
-fn cyw43_foreground_publication_sdio_handoff(
+fn cyw43_foreground_precommit_sdio_handoff(
     transaction: &Cyw43ForegroundTransaction,
     route: RuntimeNotificationRoute,
 ) -> Option<RuntimeSdioOwnerDoorbell> {
@@ -34579,7 +34628,53 @@ fn cyw43_foreground_publication_sdio_handoff(
             transaction.generation,
         )
         || !cyw43_foreground_publication_environment_current(transaction)
-        || !cyw43_foreground_published_frontier_is_immutable(transaction)
+        || CYW43_SDIO_CHILD_ISSUED_UNKNOWN.load(Ordering::Acquire)
+        || CYW43_SDIO_PAIR_RESTART_REQUIRED.load(Ordering::Acquire)
+    {
+        return None;
+    }
+
+    // Completion is another passive sequence-last fence. Sample it before the
+    // command commit so neither its cache invalidation nor stable double-read
+    // can separate that commit from the atomic handoff.
+    if !matches!(
+        cyw43_sdio_child_poll_exact(Cyw43SdioChildState::new(entry.command.sequence)),
+        Cyw43SdioChildCompletion::Waiting
+    ) {
+        return None;
+    }
+
+    // The completion read may overlap recovery or replacement. Recheck the
+    // complete precommit identity last; a later race can cause only one
+    // redundant coalesced hint because SDIO independently validates the ring.
+    if !cyw43_foreground_exact_causal_identity(
+        transaction,
+        transaction.parent,
+        entry.command,
+        transaction.generation,
+    ) || !cyw43_foreground_publication_environment_current(transaction)
+        || CYW43_SDIO_CHILD_ISSUED_UNKNOWN.load(Ordering::Acquire)
+        || CYW43_SDIO_PAIR_RESTART_REQUIRED.load(Ordering::Acquire)
+    {
+        return None;
+    }
+    Some(runtime_sdio_owner_doorbell(entry.command.sequence))
+}
+
+/// Re-prove an exact root->CYW43->SDIO foreground child after its sequence-last
+/// command commit for passive observation and diagnostics.
+///
+/// This is scheduling admission only. SDIO independently validates the same
+/// immutable command and physical generation before touching hardware, and a
+/// notification badge can never substitute for either durable identity.
+#[cfg(test)]
+fn cyw43_foreground_publication_sdio_handoff(
+    transaction: &Cyw43ForegroundTransaction,
+    route: RuntimeNotificationRoute,
+) -> Option<RuntimeSdioOwnerDoorbell> {
+    let entry = transaction.frontier;
+    let handoff = cyw43_foreground_precommit_sdio_handoff(transaction, route)?;
+    if !cyw43_foreground_published_frontier_is_immutable(transaction)
         || CYW43_SDIO_CHILD_ISSUED_UNKNOWN.load(Ordering::Acquire)
         || CYW43_SDIO_PAIR_RESTART_REQUIRED.load(Ordering::Acquire)
         || !matches!(
@@ -34605,7 +34700,7 @@ fn cyw43_foreground_publication_sdio_handoff(
     {
         return None;
     }
-    Some(runtime_sdio_owner_doorbell(entry.command.sequence))
+    Some(handoff)
 }
 
 #[cfg(any(target_os = "none", test))]
@@ -34879,6 +34974,18 @@ fn cyw43_foreground_submit_frontier(transaction: &mut Cyw43ForegroundTransaction
         let _ = cyw43_sdio_child_release_exact_or_restart(entry.command.sequence);
         return false;
     }
+    // Capture every passive identity and recovery predicate before the
+    // sequence-last commit. On the selected MCS profile, successful commit is
+    // followed directly by the atomic owner prompt-and-wait syscall.
+    let exact_foreground_handoff = cyw43_foreground_precommit_sdio_handoff(
+        transaction,
+        runtime_notification_route(&RUNTIME_DESCRIPTOR.load()),
+    );
+    let publication_route = runtime_sdio_owner_publication_route(
+        runtime_sdio_owner_doorbell(entry.command.sequence),
+        exact_foreground_handoff,
+        cfg!(sel4_config_kernel_mcs),
+    );
     if !runtime_ring_commit_command_sequence(&mut owner_ring, entry.command.sequence) {
         let _ = cyw43_sdio_child_mark_issued_unknown_or_restart(entry.command.sequence);
         transaction.issued_unknown = true;
@@ -34889,20 +34996,11 @@ fn cyw43_foreground_submit_frontier(transaction: &mut Cyw43ForegroundTransaction
     driver_task_shared_clean_range(DRIVER_TASK_SDIO_BUS_RING_VADDR, core::mem::size_of::<u32>());
     // A foreground producer used to unwind through semantic bookkeeping before
     // reaching its later local wait. Under MCS that left the equal-priority
-    // SDIO owner runnable but did not hand it the current activation. Re-prove
-    // the durable child now and combine its prompt with CYW43's park. Classic
+    // SDIO owner runnable but did not hand it the current activation. Use the
+    // pre-commit exact token to combine its prompt with CYW43's park. Classic
     // and every non-exact publication retain the previous one signal.
-    let exact_foreground_handoff = cyw43_foreground_publication_sdio_handoff(
-        transaction,
-        runtime_notification_route(&RUNTIME_DESCRIPTOR.load()),
-    );
     #[cfg(test)]
     record_test_sdio_owner_exact_publication_handoff(exact_foreground_handoff);
-    let publication_route = runtime_sdio_owner_publication_route(
-        runtime_sdio_owner_doorbell(entry.command.sequence),
-        exact_foreground_handoff,
-        cfg!(sel4_config_kernel_mcs),
-    );
     runtime_deliver_sdio_owner_publication_with_progress(publication_route, progress_sequence);
     #[cfg(target_os = "none")]
     if let RuntimeSdioOwnerPublicationRoute::AtomicPromptAndWait(expected) = publication_route {
@@ -67823,15 +67921,24 @@ pub fn runtime_main(task_key: usize) -> ! {
                 RuntimeWake::Notification(badge) => {
                     // A TCB-bound device notification may win the NBRecv used
                     // to admit a Reply-bearing command. Routing exactly that
-                    // badge is this outer turn: retain a peer scheduling hint
-                    // or service one physical-source quantum. The still-durable
-                    // command is re-read on the next turn with its Reply
-                    // association untouched.
-                    let _ = retain_runtime_idle_delegated_wake(
+                    // badge retains a peer scheduling hint or services one
+                    // physical-source quantum. A pure SDIO peer wake rechecks
+                    // and seals its sequence-last command in this activation;
+                    // notification history never substitutes for that record.
+                    let delegated_owner_wake = retain_runtime_idle_delegated_wake(
                         notification_route,
                         badge,
                         &mut pending_command_gate,
                     );
+                    let delegated_owner_intake = delegated_owner_wake
+                        .then(|| {
+                            runtime_delegated_owner_command_after_wake(
+                                notification_route,
+                                badge,
+                                last_sequence,
+                            )
+                        })
+                        .flatten();
                     if let Some(service_badge) =
                         runtime_notification_service_badge(notification_route, badge)
                     {
@@ -67844,8 +67951,19 @@ pub fn runtime_main(task_key: usize) -> ! {
                                 pcie_timer_block_after_irq(last_sequence, task_key_marker);
                             pending_command_gate.complete();
                         }
+                        // Persistent-source priority remains a hard activation
+                        // boundary. The already sealed peer command survives
+                        // and is admitted on the following owner activation.
+                        if let Some(intake) = delegated_owner_intake {
+                            pending_intake = Some(intake);
+                        }
+                        continue;
                     }
-                    continue;
+                    if let Some(intake) = delegated_owner_intake {
+                        pending_intake = Some(intake);
+                    } else {
+                        continue;
+                    }
                 }
                 RuntimeWake::None => {}
             }
@@ -68901,11 +69019,21 @@ pub fn runtime_main(task_key: usize) -> ! {
                     // The reserved root bit without a retained command is
                     // stale and never authorizes work. A coalesced peer/IRQ
                     // badge may still service its own durable source.
-                    if retain_runtime_idle_delegated_wake(
+                    let delegated_owner_wake = retain_runtime_idle_delegated_wake(
                         notification_route,
                         badge,
                         &mut pending_command_gate,
-                    ) {
+                    );
+                    let delegated_owner_intake = delegated_owner_wake
+                        .then(|| {
+                            runtime_delegated_owner_command_after_wake(
+                                notification_route,
+                                badge,
+                                last_sequence,
+                            )
+                        })
+                        .flatten();
+                    if delegated_owner_wake {
                         // The same badge can represent both the initial
                         // sequence-last command publication and its first
                         // continuation grant. Preserve that coalesced scheduler
@@ -68925,6 +69053,15 @@ pub fn runtime_main(task_key: usize) -> ! {
                                 pcie_timer_block_after_irq(last_sequence, task_key_marker);
                             pending_command_gate.complete();
                         }
+                        if let Some(intake) = delegated_owner_intake {
+                            pending_intake = Some(intake);
+                        }
+                        // Physical-source priority remains a hard activation
+                        // boundary; the sealed peer command remains pending.
+                        continue;
+                    }
+                    if let Some(intake) = delegated_owner_intake {
+                        pending_intake = Some(intake);
                     }
                     // The notification is only a prompt. Re-enter arbitration
                     // locally so any durable cursor or joined IRQ progress is
@@ -91577,6 +91714,117 @@ mod tests {
             ),
             Some(DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_BADGE)
         );
+    }
+
+    #[test]
+    fn sdio_peer_wake_admits_the_fresh_durable_one_way_command_immediately() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let command = retained_gate_test_intake(0x8000_7491).command;
+        assert!(runtime_delegated_owner_wake_admits_command(
+            RuntimeNotificationRoute::SdioOwner,
+            DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE,
+            command,
+            command.sequence.wrapping_sub(1),
+        ));
+        assert!(runtime_delegated_owner_wake_admits_command(
+            RuntimeNotificationRoute::SdioOwner,
+            DRIVER_RUNTIME_SDIO_IRQ_BADGE | DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE,
+            command,
+            command.sequence.wrapping_sub(1),
+        ));
+        let coalesced_badge =
+            DRIVER_RUNTIME_SDIO_IRQ_BADGE | DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE;
+        let sealed = runtime_delegated_owner_intake_after_wake(
+            RuntimeNotificationRoute::SdioOwner,
+            coalesced_badge,
+            command,
+            command.sequence.wrapping_sub(1),
+        )
+        .expect("the current one-way ring command is sealed in the wake activation");
+        assert_eq!(sealed.command, command);
+        assert!(!sealed.reply_cap_available);
+        assert_eq!(
+            runtime_notification_service_badge(
+                RuntimeNotificationRoute::SdioOwner,
+                coalesced_badge
+            ),
+            Some(DRIVER_RUNTIME_SDIO_IRQ_BADGE),
+            "coalesced physical service remains first while the sealed intake survives",
+        );
+
+        let mut reply_bearing = command;
+        reply_bearing.flags &= !DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY;
+        for (route, badge, candidate, last_sequence) in [
+            (
+                RuntimeNotificationRoute::Cyw43Client,
+                DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE,
+                command,
+                command.sequence.wrapping_sub(1),
+            ),
+            (
+                RuntimeNotificationRoute::SdioOwner,
+                DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_BADGE,
+                command,
+                command.sequence.wrapping_sub(1),
+            ),
+            (
+                RuntimeNotificationRoute::SdioOwner,
+                DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE,
+                command,
+                command.sequence,
+            ),
+            (
+                RuntimeNotificationRoute::SdioOwner,
+                DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE,
+                reply_bearing,
+                command.sequence.wrapping_sub(1),
+            ),
+        ] {
+            assert!(!runtime_delegated_owner_wake_admits_command(
+                route,
+                badge,
+                candidate,
+                last_sequence,
+            ));
+        }
+    }
+
+    #[test]
+    fn atomic_sdio_publication_never_replays_legacy_wait_progress() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        reset_test_sdio_owner_doorbells();
+        let progress_offset = DRIVER_RUNTIME_RING_PROGRESS_OFFSET as usize;
+        let prior_sequence = 0x8000_7492;
+        let prior_phase = pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_POLL_READY;
+        let prior_aux = 0x4359_7493;
+        publish_runtime_progress(prior_sequence, prior_phase, prior_aux);
+
+        let doorbell = runtime_sdio_owner_doorbell(0x8000_7494);
+        runtime_deliver_sdio_owner_publication_with_progress(
+            RuntimeSdioOwnerPublicationRoute::AtomicPromptAndWait(doorbell),
+            0x8000_7495,
+        );
+        assert_eq!(read_ring_u32(progress_offset + 4), prior_sequence);
+        assert_eq!(read_ring_u32(progress_offset + 8), prior_phase);
+        assert_eq!(read_ring_u32(progress_offset + 12), prior_aux);
+        assert_eq!(test_sdio_owner_doorbell(0), Some(doorbell));
+
+        runtime_deliver_sdio_owner_publication_with_progress(
+            RuntimeSdioOwnerPublicationRoute::SignalOnly(doorbell),
+            0x8000_7496,
+        );
+        assert_eq!(read_ring_u32(progress_offset + 4), 0x8000_7496);
+        assert_eq!(
+            read_ring_u32(progress_offset + 8),
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_WAIT_BEGIN,
+        );
+        assert_eq!(
+            read_ring_u32(progress_offset + 12),
+            DRIVER_RUNTIME_CYW43_COMMAND_AUX,
+        );
+        assert_eq!(test_sdio_owner_doorbell(1), Some(doorbell));
     }
 
     #[test]
