@@ -275,17 +275,25 @@ For every new or changed record:
 Do not place policy objects, trait objects, slices, references, process-local
 addresses, or allocator-owned structures in the ABI.
 
-The selected Pi contract uses driver runtime-init ABI v11. Its former reserved
-descriptor field names fixed child slot 12, where HAL mints only a Write-only,
+The selected Pi contract uses driver runtime-init ABI v12. It preserves v11's
+descriptor size and fixed child slot 12, where HAL mints only a Write-only,
 badge-1 capability to the additional root-control wake notification. The
 CYW43-specific child-to-root notification in slot 11 remains distinct and keeps
-its existing meaning and consumers. After a runtime commits a durable terminal,
-RX, TX, or completion record, it signals the existing role-specific completion
-or doorbell first and slot 12 second. The fan-in is a coalescing scheduling hint,
+its existing meaning and consumers. ABI v12 also makes the existing root-owned
+continuation record's action frontier explicit without changing its 24-byte
+layout: low-31-bit `grant_id` values advance `consumed_grant_id` from zero, to
+`grant_id | ACTION_ADMITTED_BIT`, to the exact `grant_id`. Admission is not
+completion and cannot authorize a successor; only the exact post-action value
+can. The same transition applies to delegated CYW43-to-SDIO grants after their
+initial grant-free action publishes an exact service receipt. After a runtime
+commits a durable terminal, RX, TX, or completion record, it signals the
+existing role-specific completion or doorbell first and slot 12 second. A
+nonterminal root-grant action signals slot 12 only after its exact post-action
+value is durable. The fan-in is a coalescing scheduling hint,
 not completion, identity, work credit, Reply, or device authority; the consumer
 must acquire and recheck the sequence-last durable record before acting or
-sleeping. ABI v11 preserves the descriptor size and every role's physical
-ownership, queue, retry, recovery, and fault contract.
+sleeping. ABI v12 preserves every role's physical ownership, queue, retry,
+recovery, and fault contract.
 
 ### Step 3: Add the scheduling contract
 
@@ -1188,9 +1196,14 @@ transport:
   otherwise exactly one stable grant read is allowed. `Empty` alone permits one
   condition-before-sleep recheck, `Inactive` fails closed with no recheck, and
   `Ready` must revalidate and acknowledge the exact immutable grant before
-  returning authority for one bounded physical quantum. A failed ACK restores
-  the complete pre-grant gate, including coalesced wake state, and performs zero
-  device I/O. The fused helper performs no device operation itself. It removes
+  returning authority for one bounded physical quantum. Both root-owned and
+  delegated CYW43-to-SDIO ACKs publish the high-bit admitted value; the runtime
+  replaces it with the exact low-domain ID and signals the corresponding
+  producer only after the one bounded arbitration or physical action ends. A
+  producer cannot publish a successor while the admitted value remains. A
+  failed ACK restores the complete
+  pre-grant gate, including coalesced wake state, and performs zero device I/O.
+  The fused helper performs no device operation itself. It removes
   scheduler edges between `CheckWake`, `CheckGrant`, and the final local
   admission decision. For generation-bound CYW43/SDIO only, it also
   intentionally supersedes the earlier source-level postphysical `seL4_Yield`:

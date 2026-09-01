@@ -13609,10 +13609,11 @@ where
     /// recovery liveness.
     ///
     /// Two finite publications qualify: an issued one-way CYW43/SDIO command,
-    /// whose runtime is required to signal after its sequence-last terminal,
-    /// or an authenticated console control still awaiting the isolated
-    /// child's exact consumption watermark. Durable state remains the authority;
-    /// the coalesced badge only wakes root to re-read it.
+    /// whose runtime is required to signal after its exact post-action or
+    /// sequence-last terminal publication, or an authenticated console control
+    /// still awaiting the isolated child's exact consumption watermark. Durable
+    /// state remains the authority; the coalesced badge only wakes root to
+    /// re-read it.
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     fn pi_root_control_cyw43_causal_wait_fence_clear(&mut self) -> bool {
         let local_fault_pending = self.net.as_deref().is_none_or(|net| {
@@ -13655,7 +13656,8 @@ where
             );
         match physical_condition {
             crate::hal::driver_task::DriverTaskOneWayCompletionCondition::SignalBoundWaiting => {
-                // The exact child terminal is a guaranteed fan-in producer.
+                // The exact post-action frontier or child terminal is a
+                // guaranteed fan-in producer.
             }
             crate::hal::driver_task::DriverTaskOneWayCompletionCondition::Idle => {}
             crate::hal::driver_task::DriverTaskOneWayCompletionCondition::RootDeadlinePollRequired

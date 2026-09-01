@@ -100,8 +100,11 @@ pub(crate) const fn console_network_signal_only_admitted(
 ) -> bool {
     !admission.yield_to_child_after_signal
         && (if admission.contract_direct_genet {
-            admission.runtime_direct_genet
-                && admission.cross_core_signal_only
+            // Cross-core signal safety comes from the generated topology and
+            // live child fences, not the selected packet backend. The same Pi
+            // image intentionally constructs either a direct-GENET child or a
+            // mediated-WiFi child without the GENET mapping.
+            admission.cross_core_signal_only
                 && admission.activated
                 && !admission.containment_started
                 && !admission.contained
@@ -1543,7 +1546,7 @@ mod tests {
 
     #[test]
     fn signal_only_runtime_admission_preserves_pi_lifecycle_and_qemu_isolation() {
-        let exact_pi = ConsoleNetworkSignalOnlyAdmission {
+        let exact_pi_genet = ConsoleNetworkSignalOnlyAdmission {
             contract_direct_genet: true,
             runtime_direct_genet: true,
             cross_core_signal_only: true,
@@ -1553,13 +1556,13 @@ mod tests {
             contained: false,
             scheduling_context_present: true,
         };
-        assert!(console_network_signal_only_admitted(exact_pi));
-        assert!(!console_network_signal_only_admitted(
-            ConsoleNetworkSignalOnlyAdmission {
-                runtime_direct_genet: false,
-                ..exact_pi
-            }
-        ));
+        let exact_pi_wifi = ConsoleNetworkSignalOnlyAdmission {
+            runtime_direct_genet: false,
+            ..exact_pi_genet
+        };
+        for admitted in [exact_pi_genet, exact_pi_wifi] {
+            assert!(console_network_signal_only_admitted(admitted));
+        }
         assert!(console_network_signal_only_admitted(
             ConsoleNetworkSignalOnlyAdmission {
                 contract_direct_genet: false,
@@ -1569,42 +1572,54 @@ mod tests {
                 containment_started: true,
                 contained: true,
                 scheduling_context_present: false,
-                ..exact_pi
+                ..exact_pi_genet
             }
         ));
-        for invalid in [
+        for invalid_topology in [
             ConsoleNetworkSignalOnlyAdmission {
                 contract_direct_genet: false,
                 runtime_direct_genet: true,
                 cross_core_signal_only: false,
-                ..exact_pi
+                ..exact_pi_genet
             },
             ConsoleNetworkSignalOnlyAdmission {
                 cross_core_signal_only: false,
-                ..exact_pi
+                ..exact_pi_genet
             },
             ConsoleNetworkSignalOnlyAdmission {
-                yield_to_child_after_signal: true,
-                ..exact_pi
-            },
-            ConsoleNetworkSignalOnlyAdmission {
-                activated: false,
-                ..exact_pi
-            },
-            ConsoleNetworkSignalOnlyAdmission {
-                containment_started: true,
-                ..exact_pi
-            },
-            ConsoleNetworkSignalOnlyAdmission {
-                contained: true,
-                ..exact_pi
-            },
-            ConsoleNetworkSignalOnlyAdmission {
-                scheduling_context_present: false,
-                ..exact_pi
+                contract_direct_genet: false,
+                runtime_direct_genet: false,
+                cross_core_signal_only: true,
+                ..exact_pi_genet
             },
         ] {
-            assert!(!console_network_signal_only_admitted(invalid));
+            assert!(!console_network_signal_only_admitted(invalid_topology));
+        }
+        for admitted_backend in [exact_pi_genet, exact_pi_wifi] {
+            for invalid_lifecycle in [
+                ConsoleNetworkSignalOnlyAdmission {
+                    yield_to_child_after_signal: true,
+                    ..admitted_backend
+                },
+                ConsoleNetworkSignalOnlyAdmission {
+                    activated: false,
+                    ..admitted_backend
+                },
+                ConsoleNetworkSignalOnlyAdmission {
+                    containment_started: true,
+                    ..admitted_backend
+                },
+                ConsoleNetworkSignalOnlyAdmission {
+                    contained: true,
+                    ..admitted_backend
+                },
+                ConsoleNetworkSignalOnlyAdmission {
+                    scheduling_context_present: false,
+                    ..admitted_backend
+                },
+            ] {
+                assert!(!console_network_signal_only_admitted(invalid_lifecycle));
+            }
         }
     }
 

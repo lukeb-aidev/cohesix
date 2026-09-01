@@ -11151,7 +11151,7 @@ Changes:
     and sealed image SHA-256
     `82651a7a234df4ef9b0359353308133ba0a3896d0d58a5d82c07a77f4e4b5793`
     decisively reject the V26/V20 same-core `YieldTo` candidate. WiFi reached
-    Gate 8 only at 144.455 seconds and completed raw64 at 3.0077 request/s with
+    Gate 8 only at 60.190 seconds and completed raw64 at 3.0077 request/s with
     319.353-ms p95; GENET completed raw64 at 37.1575 request/s with 31.396-ms
     p95. WiFi request-to-ACK/ACK-to-response p95 split 226.840/103.094 ms and
     GENET split 3.007/28.510 ms while physical links, direct rings, ingress, and
@@ -11206,6 +11206,69 @@ Changes:
     next exact-image WiFi and GENET boot can prove the performance gates;
     repeatability and pressure depth remain separate physical acceptance
     evidence.
+  - exact-ee post-action causal-frontier correction — cite this performance
+    correction together with its owning
+    `m26e-driver-runtime-mcs-port-and-cyw43-coexistence` and
+    `m26e-console-network-service-isolation` tasks. Exact clean source
+    `ee667bea33f80fa1637beb008e2ddd5a94040885`, build ID
+    `39438ead96f20b9e5d583865f76e86466289e39d72d9d53e267281f09197f0b0`,
+    normalized image ID
+    `a7998649a85e938a06ec7bc9def7a7cbc664c3aba6e2be7ce2ff0e7695442917`,
+    and sealed image SHA-256
+    `3489ce17c866b323b6519e4944598ff670468c5d4cb40ccafcbcaea805647231`
+    reach root readiness at 8.116531 seconds, USB command-ready at 14.740
+    seconds, every CYW43 Gate 8 subgate, expected DHCP `192.168.86.154`, and
+    actual service readiness at 30.835 seconds. The Gate 8 metric is the ready
+    record's `next_attempt_ms`; the later `deadline_ms` is a future
+    stabilization deadline and is not boot readiness. This also corrects the
+    preceding exact-61b Gate 8 interpretation from 144.455 to 60.190 seconds.
+    The boot-paired capture places DHCP Discover-to-ACK at 202.847 ms and shows
+    no TCP/31337. Immediately after readiness, generic console publication ACK
+    fails closed and quarantines the network, so TCP, scripts, raw64, REST, and
+    GENET are unscored rather than failed-throughput measurements. Serial
+    diagnostics remain responsive; a physical USB keystroke and the late HDMI
+    path remain unaccepted.
+
+    The first functional invariant is backend-independent: the compiler-sealed
+    Pi cross-core signal-only topology is valid for both selected packet modes,
+    but runtime admission incorrectly required a live direct-GENET mapping and
+    rejected the intentional mediated-WiFi shell. Admit either Pi backend only
+    under the unchanged generated cross-core, zero-`YieldTo`, activated,
+    uncontained, live-SC fences; retain every direct-GENET-specific data-plane
+    identity fence and the QEMU selector.
+
+    The first performance invariant is the root-owned CYW43 continuation's
+    missing post-action frontier. The child formerly published the exact
+    consumed grant before physical service, so root could not distinguish an
+    admitted action from a completed action; a full generated 10-ms wall-period
+    veto then prevented overlap but imposed one dead interval per grant. Advance
+    driver runtime-init ABI v11 to v12 without changing the fixed descriptor or
+    24-byte grant layout. Restrict root grant IDs to the low 31 bits and publish
+    `0 -> grant_id|ACTION_ADMITTED_BIT -> grant_id`: the high-bit state proves
+    ACK-before-I/O admission, the exact low-domain value is written only after
+    one bounded arbitration or physical action, and only that exact completion
+    may publish a successor. Commit the post-action value before the root fan-in;
+    a sequence-last terminal instead retains its existing terminal fan-in and
+    forbids a late grant write. The same admitted/action-complete distinction
+    applies to delegated CYW43-to-SDIO grants: the initial grant-free action
+    returns an exact service receipt, while every later exact grant uses the
+    identical high-bit admission then low-domain post-action transition. Only a
+    fully revalidated exact root grant bypasses the wall-period wake gate;
+    unrelated retained, recovery, terminal, and endpoint lanes keep their
+    existing cadence and fences.
+
+    Preserve every SC budget, period, priority, MCP, refill count, WCET, Reply
+    rule, operator priority, owner, queue, retry, deadline, recovery,
+    containment, quarantine, manifest population, schema-1.16 field shape, and
+    QEMU selector. Driver-runtime manifest schema v1 remains unchanged but its
+    existing ABI field must carry v12. Compatibility review confirms no public
+    TCP/REST/console/netstats schema, AUTH/framing/command behavior, `.coh`
+    workload, `cohsh`, complete host-tool suite, `tools/cohesix-py`, benchmark
+    workload/arithmetic, or report-schema change. Focused ABI/state-machine,
+    generated-consistency, exact Pi compilation, and the pinned QEMU 10.1/HVF
+    root-MCS canary may reject this candidate. Only the next exact-image WiFi
+    boot and authenticated serial GENET reboot can prove the stated performance
+    gates; repeatability and pressure depth remain separate hardware evidence.
   - platform consistency — select the same v6 shared contract, including the
     v4-introduced bounded command batch, complete 256-Worker population, two
     passive-Worker executor-lane architecture, and passive-service locality

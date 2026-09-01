@@ -203,24 +203,27 @@ split into bounded records and service units. An authenticated response lane
 receives bounded flush priority without starving physical operator input,
 fatal output, timers, containment, or ordinary service.
 
-Pi network cadence may retain only exact durable productive identity
-inside the generated scheduling policy and unchanged hard caps. Exact
-direct-GENET productive identity may resume under generated
-`NaturalPostpone` for at most 64 complete quanta; its separately authorized
-empty transaction tail remains strictly below 8 ms and 64 complete rotors.
-Mediated WiFi may resume only under generated `NaturalPostpone`, with every
-full Operator, Driver, and attached Network service turn charged against the
-unchanged 64 logical material-work cap and productive Driver or attached
-Network progress independently capped at 64. Opening or advancing GENET's
-wall-guarded empty tail requires durable authenticated command or
-output-drain publication credit followed by Release, one-hot Signal, and
-successful same-core `YieldTo` accounting. Packet ingress, close, service
-ticks, mediated WiFi, and QEMU remain signal-only. WiFi additionally binds the
-selected physical lifetime, authenticated generation/connection, and
-accepted-command epoch. Identity drift, operator or passive work, recovery,
-containment, quarantine, reboot, handoff, local fault, incompatible generated
-policy, invalid GENET-tail time, or cap expiry fails closed without a new
-refill, retry, packet owner, or device authority.
+Pi network cadence may retain only exact durable productive identity inside the
+generated scheduling policy and unchanged hard caps. Exact direct-GENET
+productive identity may resume under generated `NaturalPostpone` for at most
+64 complete quanta; its separately authorized empty transaction tail remains
+strictly below 8 ms and 64 complete rotors. Mediated WiFi may resume only under
+generated `NaturalPostpone`, with every full Operator, Driver, and attached
+Network service turn charged against the unchanged 64 logical material-work
+cap and productive Driver or attached Network progress independently capped at
+64. Root-control remains on core 0 and console-network on core 2. Opening or
+advancing GENET's wall-guarded empty tail requires durable authenticated
+command or output-drain publication credit followed by Release and the exact
+one-hot Signal; a finite staged boundary may use the condition-before-block
+root fan-in only while the same durable child-consumption watermark remains
+owed. Neither Pi backend pre-drains the child SC or calls `SchedContext_YieldTo`.
+Packet ingress, close, service ticks, mediated WiFi, and QEMU grant no
+direct-GENET tail authority. WiFi additionally binds the selected physical
+lifetime, authenticated generation/connection, and accepted-command epoch.
+Identity drift, operator or passive work, recovery, containment, quarantine,
+reboot, handoff, local fault, incompatible generated policy, invalid GENET-tail
+time, or cap expiry fails closed without a new refill, retry, packet owner, or
+device authority.
 
 Routine diagnostics are best-effort and may be dropped under their declared
 bound. Security-relevant authority, lifecycle, completion, and fault decisions

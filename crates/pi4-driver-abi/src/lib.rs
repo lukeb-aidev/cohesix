@@ -8,7 +8,7 @@
 /// Magic value for a pointer-free driver runtime initialization descriptor.
 pub const DRIVER_RUNTIME_INIT_MAGIC: u32 = 0x4452_4934;
 /// Runtime descriptor layout and shared-protocol version.
-pub const DRIVER_RUNTIME_INIT_VERSION: u16 = 11;
+pub const DRIVER_RUNTIME_INIT_VERSION: u16 = 12;
 /// Magic identifying the only Milestone 26e runtime scheduler contract.
 pub const DRIVER_RUNTIME_MCS_MAGIC: u32 = 0x4d43_5331;
 /// Version of the scheduler/capability inventory embedded in runtime init.
@@ -1038,6 +1038,37 @@ pub const DRIVER_RUNTIME_CONTINUATION_GRANT_OFFSET: u16 = 40;
 pub const DRIVER_RUNTIME_CONTINUATION_GRANT_BYTES: u16 = 24;
 /// Magic value for a retained-command continuation grant.
 pub const DRIVER_RUNTIME_CONTINUATION_GRANT_MAGIC: u32 = 0x4452_4347;
+/// Consumer-state bit proving a grant was admitted before physical I/O.
+///
+/// Root-owned and delegated CYW43-to-SDIO grant IDs are restricted to the low
+/// 31 bits. The isolated consumer first publishes
+/// `grant_id | ADMITTED_BIT` after its exact ACK-before-I/O check, then
+/// replaces that value with the unmodified `grant_id` only after the admitted
+/// bounded action finishes. A producer may use the low-domain completion to
+/// publish a successor, while the high-bit state can only be waited on.
+pub const DRIVER_RUNTIME_CONTINUATION_GRANT_ACTION_ADMITTED_BIT: u32 = 1 << 31;
+
+/// Return the distinct in-flight consumer value for one low-domain grant.
+#[must_use]
+pub const fn driver_runtime_continuation_grant_action_admitted_id(grant_id: u32) -> Option<u32> {
+    if grant_id != 0 && grant_id & DRIVER_RUNTIME_CONTINUATION_GRANT_ACTION_ADMITTED_BIT == 0 {
+        Some(grant_id | DRIVER_RUNTIME_CONTINUATION_GRANT_ACTION_ADMITTED_BIT)
+    } else {
+        None
+    }
+}
+
+/// Return whether a consumer value proves admission but not action completion.
+#[must_use]
+pub const fn driver_runtime_continuation_grant_action_admitted(
+    consumed_grant_id: u32,
+    grant_id: u32,
+) -> bool {
+    match driver_runtime_continuation_grant_action_admitted_id(grant_id) {
+        Some(admitted) => consumed_grant_id == admitted,
+        None => false,
+    }
+}
 /// Fixed offset of the exact heartbeat for a grant-free owner command.
 ///
 /// A finite steady lease or persistent physical SDIO child and a continuation
@@ -4999,12 +5030,15 @@ impl DriverRuntimeSdioDeadlineArm {
 ///
 /// `grant_id` is the sequence-last commit word. Producers publish zero there,
 /// then the immutable request identity, and finally a nonzero monotonically
-/// increasing ID. `consumed_grant_id` is written only by the consumer after it
-/// spends that grant on one arbitration quantum. Producers re-signal an
-/// unacknowledged ID rather than overwriting it. Consumers accept the record
-/// only when both reads of the ID match and its request/fingerprint/generation
-/// match the retained command. A notification is therefore only a wake hint;
-/// its coalesced badge cannot create, duplicate, or mutate foreground authority.
+/// increasing ID. For every exact grant the consumer publishes
+/// `grant_id | ACTION_ADMITTED_BIT` after exact ACK-before-I/O admission, then
+/// the unmodified `grant_id` only after its one bounded outer action completes.
+/// Producers re-signal only an unadmitted ID and never overwrite an admitted
+/// action.
+/// Consumers accept the record only when both reads of the ID match and its
+/// request/fingerprint/generation match the retained command. A notification
+/// is therefore only a wake hint; its coalesced badge cannot create, duplicate,
+/// or mutate foreground authority.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DriverRuntimeContinuationGrant {
@@ -5018,7 +5052,7 @@ pub struct DriverRuntimeContinuationGrant {
     pub generation: u32,
     /// Nonzero sequence-last grant commit ID.
     pub grant_id: u32,
-    /// Consumer-published ID of the most recently spent grant.
+    /// Consumer-published admission/completion frontier for this grant.
     pub consumed_grant_id: u32,
 }
 
@@ -5320,7 +5354,7 @@ pub const DRIVER_RUNTIME_RESOURCE_FLAG_DEVICE_VISIBLE: u16 = 1 << 2;
 pub const DRIVER_RUNTIME_RESOURCE_FLAG_ROOT_SHARED: u16 = 1 << 3;
 /// Resource range flag: pages are CPU-only and cannot back device DMA.
 pub const DRIVER_RUNTIME_RESOURCE_FLAG_CPU_ONLY: u16 = 1 << 4;
-/// Complete allowed resource-range flag set for ABI v11.
+/// Complete allowed resource-range flag set for ABI v12.
 pub const DRIVER_RUNTIME_RESOURCE_ALLOWED_FLAGS: u16 = DRIVER_RUNTIME_RESOURCE_FLAG_VADDR_CONTIGUOUS
     | DRIVER_RUNTIME_RESOURCE_FLAG_PADDR_CONTIGUOUS
     | DRIVER_RUNTIME_RESOURCE_FLAG_DEVICE_VISIBLE
@@ -5883,7 +5917,7 @@ pub const DRIVER_RUNTIME_INIT_REQUIRED_FLAGS: u32 = DRIVER_RUNTIME_INIT_FLAG_POI
     | DRIVER_RUNTIME_INIT_FLAG_SHARED_PADDRS
     | DRIVER_RUNTIME_INIT_FLAG_BUS_ADDRESSING
     | DRIVER_RUNTIME_INIT_FLAG_ROOT_CONTEXT_FORBIDDEN;
-/// Complete allowed runtime-init flag set for ABI v11.
+/// Complete allowed runtime-init flag set for ABI v12.
 pub const DRIVER_RUNTIME_INIT_ALLOWED_FLAGS: u32 = DRIVER_RUNTIME_INIT_FLAG_MMIO_MAPPED
     | DRIVER_RUNTIME_INIT_FLAG_DMA_PADDRS
     | DRIVER_RUNTIME_INIT_FLAG_SHARED_PADDRS
@@ -8648,6 +8682,25 @@ mod tests {
         assert_eq!(DRIVER_RUNTIME_CONTINUATION_GRANT_OFFSET, 40);
         assert_eq!(DRIVER_RUNTIME_CONTINUATION_GRANT_BYTES, 24);
         assert_eq!(
+            driver_runtime_continuation_grant_action_admitted_id(7),
+            Some(DRIVER_RUNTIME_CONTINUATION_GRANT_ACTION_ADMITTED_BIT | 7),
+        );
+        assert!(driver_runtime_continuation_grant_action_admitted(
+            DRIVER_RUNTIME_CONTINUATION_GRANT_ACTION_ADMITTED_BIT | 7,
+            7,
+        ));
+        assert!(!driver_runtime_continuation_grant_action_admitted(7, 7));
+        assert_eq!(
+            driver_runtime_continuation_grant_action_admitted_id(0),
+            None,
+        );
+        assert_eq!(
+            driver_runtime_continuation_grant_action_admitted_id(
+                DRIVER_RUNTIME_CONTINUATION_GRANT_ACTION_ADMITTED_BIT,
+            ),
+            None,
+        );
+        assert_eq!(
             DRIVER_RUNTIME_STEADY_SERVICE_PROGRESS_OFFSET,
             DRIVER_RUNTIME_CONTINUATION_GRANT_OFFSET,
         );
@@ -9084,7 +9137,7 @@ mod tests {
         assert_eq!(core::mem::size_of::<DriverRuntimeDpcEventEntry>(), 16);
         assert_eq!(core::mem::size_of::<DriverRuntimeDpcEventRing>(), 96);
         assert_eq!(DRIVER_RUNTIME_DPC_EVENT_RING_VERSION, 3);
-        assert_eq!(DRIVER_RUNTIME_INIT_VERSION, 11);
+        assert_eq!(DRIVER_RUNTIME_INIT_VERSION, 12);
         assert_eq!(
             DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET + DRIVER_RUNTIME_DPC_EVENT_RING_BYTES,
             DRIVER_RUNTIME_RING_FRAME_OFFSET

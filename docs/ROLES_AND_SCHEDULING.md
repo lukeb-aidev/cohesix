@@ -343,7 +343,12 @@ The bound covers source arbitration, one stable grant read, and only after an
 `Empty` result one condition-before-sleep recheck. A persistent-source
 `Service` decision stops before grant access; `Inactive` fails closed without a
 recheck; `Ready` revalidates and acknowledges the immutable grant before
-authorizing exactly one existing bounded physical quantum. ACK failure restores
+authorizing exactly one existing bounded physical quantum. Root-owned and
+delegated CYW43-to-SDIO grants both publish a distinct high-bit admitted state
+before the action, then the exact low-domain ID and their declared fan-in only
+after that bounded action ends. The producer waits while the admitted state is
+visible and cannot publish the next grant until the exact completion state is
+durable. ACK failure restores
 the pre-grant gate and performs no device I/O. This removes unnecessary
 `CheckWake`/`CheckGrant` scheduler edges. It also supersedes only the former
 source-level postphysical `seL4_Yield` for these generation-bound one-way lanes:
@@ -351,7 +356,7 @@ selected MCS charges Yield's complete remaining head refill, so the child
 immediately re-enters the same bounded admission and blocks on its existing
 local notification when no fresh exact producer/root grant exists. This does
 not compose physical actions, replay a consumed grant, consume a second owner
-quantum without a fresh grant, or alter an SC budget, period, deadline, refill,
+quantum without a fresh completed grant, or alter an SC budget, period, deadline, refill,
 priority, core, owner, retry, or Reply/fault contract. Ordinary synchronous
 work and every genuine external-condition wait retain their prior scheduler
 handoff; rejected, ambiguous, and Reply-bearing generation inputs fail closed.

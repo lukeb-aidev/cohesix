@@ -22,7 +22,7 @@ from typing import Iterable, Sequence
 SCHEMA = "cohesix-driver-runtime-manifest/v1"
 COMPARATOR_SCHEMA = "cohesix-driver-classic-comparator/v1"
 EXPECTED_TARGET = "aarch64-unknown-none"
-RUNTIME_INIT_ABI_VERSION = 9
+RUNTIME_INIT_ABI_VERSION = 12
 SHA256_HEX_LENGTH = 64
 NEWC_MAGIC = b"070701"
 NEWC_HEADER_BYTES = 110

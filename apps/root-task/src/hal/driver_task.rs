@@ -21,7 +21,8 @@ use crate::arch::aarch64::timer::{timer_counter_ticks, timer_freq_hz};
 use heapless::Deque;
 #[cfg(feature = "kernel")]
 use pi4_driver_abi::{
-    driver_runtime_continuation_action_fingerprint, driver_runtime_is_cyw43_root_continuation,
+    driver_runtime_continuation_action_fingerprint,
+    driver_runtime_continuation_grant_action_admitted, driver_runtime_is_cyw43_root_continuation,
     driver_runtime_serial_spsc_consumer_post_commit, driver_runtime_serial_spsc_data_doorbell_due,
     DriverRuntimeCadenceRecord, DriverRuntimeContinuationGrant, DriverRuntimeCounterSnapshot,
     DriverRuntimeCyw43BusEpisodeRecord, DriverRuntimeCyw43CommandDescriptor,
@@ -38,7 +39,8 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_BUS_LINK_FLAG_POINTER_FREE, DRIVER_RUNTIME_BUS_LINK_PCIE_ENDPOINT_SLOT,
     DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_SLOT, DRIVER_RUNTIME_CADENCE_BYTES,
     DRIVER_RUNTIME_CADENCE_OFFSET, DRIVER_RUNTIME_COMMAND_FLAG_PERSISTENT_TRANSACTION,
-    DRIVER_RUNTIME_COMMAND_FLAG_STEADY_SERVICE_LEASE, DRIVER_RUNTIME_CONTINUATION_GRANT_BYTES,
+    DRIVER_RUNTIME_COMMAND_FLAG_STEADY_SERVICE_LEASE,
+    DRIVER_RUNTIME_CONTINUATION_GRANT_ACTION_ADMITTED_BIT, DRIVER_RUNTIME_CONTINUATION_GRANT_BYTES,
     DRIVER_RUNTIME_CONTINUATION_GRANT_MAGIC, DRIVER_RUNTIME_CONTINUATION_GRANT_OFFSET,
     DRIVER_RUNTIME_COUNTER_FLAG_ROOT_SNAPSHOT, DRIVER_RUNTIME_CYW43_BUS_EPISODE_BYTES,
     DRIVER_RUNTIME_CYW43_BUS_EPISODE_OFFSET, DRIVER_RUNTIME_CYW43_COMMAND_AUX,
@@ -3618,6 +3620,11 @@ pub(crate) fn cyw43_retained_parent_condition(
                 };
                 if grant.consumed_grant_id == current {
                     Cyw43RetainedParentCondition::ContinuationReady
+                } else if driver_runtime_continuation_grant_action_admitted(
+                    grant.consumed_grant_id,
+                    current,
+                ) {
+                    Cyw43RetainedParentCondition::Waiting
                 } else {
                     Cyw43RetainedParentCondition::NotExact
                 }
@@ -3876,7 +3883,10 @@ fn driver_task_ring_publish_continuation_grant(
     command: DriverTaskCommandRecord,
     grant_id: u32,
 ) -> bool {
-    if command.sequence == 0 || grant_id == 0 {
+    if command.sequence == 0
+        || grant_id == 0
+        || grant_id & DRIVER_RUNTIME_CONTINUATION_GRANT_ACTION_ADMITTED_BIT != 0
+    {
         return false;
     }
     let grant = DriverRuntimeContinuationGrant::new(
@@ -14776,7 +14786,11 @@ fn mark_driver_task_retained_priority_lease_granted(slot: &DriverTaskCommandSlot
 #[cfg(feature = "kernel")]
 const fn next_driver_task_retained_grant_id(current: u32) -> Option<u32> {
     match current.checked_add(1) {
-        Some(next) if next != 0 => Some(next),
+        Some(next)
+            if next != 0 && next & DRIVER_RUNTIME_CONTINUATION_GRANT_ACTION_ADMITTED_BIT == 0 =>
+        {
+            Some(next)
+        }
         Some(_) | None => None,
     }
 }
@@ -14813,11 +14827,32 @@ fn driver_task_continuation_grant_matches(
         && grant.generation == command.aux1
         && grant.grant_id == grant_id
         && grant_id != 0
-        && (grant.consumed_grant_id == 0 || grant.consumed_grant_id == grant_id)
+        && grant_id & DRIVER_RUNTIME_CONTINUATION_GRANT_ACTION_ADMITTED_BIT == 0
+        && (grant.consumed_grant_id == 0
+            || grant.consumed_grant_id == grant_id
+            || driver_runtime_continuation_grant_action_admitted(grant.consumed_grant_id, grant_id))
 }
 
-/// Read one exact grant while tolerating only the consumer's legal
-/// `unconsumed -> current-id` acknowledgement transition.
+#[cfg(feature = "kernel")]
+const fn driver_task_root_grant_consumer_rank(consumed: u32, current: u32) -> Option<u8> {
+    if consumed == 0 {
+        Some(0)
+    } else if driver_runtime_continuation_grant_action_admitted(consumed, current) {
+        Some(1)
+    } else if consumed == current {
+        Some(2)
+    } else {
+        None
+    }
+}
+
+/// Read one exact grant across the consumer's monotonic action frontier.
+///
+/// The consumer may cross both legal words while root is sampling:
+/// `unconsumed -> admitted -> action-complete`. Four reads are sufficient to
+/// confirm that fastest case because the frontier has exactly three states.
+/// Any reverse observation, identity change, or unconfirmed final state fails
+/// closed without looping or minting another grant.
 #[cfg(feature = "kernel")]
 fn read_driver_task_retained_root_grant_stable_with<R>(
     command: DriverTaskCommandRecord,
@@ -14834,16 +14869,32 @@ where
     {
         return None;
     }
-    match (first.consumed_grant_id, second.consumed_grant_id) {
-        (first_consumed, second_consumed) if first_consumed == second_consumed => Some(second),
-        (0, second_consumed) if second_consumed == current => {
-            let confirmed = read_grant()?;
-            (driver_task_continuation_grant_matches(confirmed, command, current)
-                && confirmed.consumed_grant_id == current)
-                .then_some(confirmed)
-        }
-        _ => None,
+    let first_rank = driver_task_root_grant_consumer_rank(first.consumed_grant_id, current)?;
+    let second_rank = driver_task_root_grant_consumer_rank(second.consumed_grant_id, current)?;
+    if second_rank < first_rank {
+        return None;
     }
+    if second_rank == first_rank {
+        return Some(second);
+    }
+
+    let third = read_grant()?;
+    if !driver_task_continuation_grant_matches(third, command, current) {
+        return None;
+    }
+    let third_rank = driver_task_root_grant_consumer_rank(third.consumed_grant_id, current)?;
+    if third_rank < second_rank {
+        return None;
+    }
+    if third_rank == second_rank {
+        return Some(third);
+    }
+
+    let fourth = read_grant()?;
+    (driver_task_continuation_grant_matches(fourth, command, current)
+        && driver_task_root_grant_consumer_rank(fourth.consumed_grant_id, current)
+            == Some(third_rank))
+    .then_some(fourth)
 }
 
 #[cfg(feature = "kernel")]
@@ -14851,6 +14902,7 @@ where
 enum DriverTaskRetainedRootGrantPublication {
     LateCompletion(DriverTaskCompletionRecord),
     Publish(u32),
+    AwaitActionCompletion,
     Invalid,
 }
 
@@ -14887,6 +14939,9 @@ where
     };
     match grant.consumed_grant_id {
         0 => DriverTaskRetainedRootGrantPublication::Invalid,
+        consumed if driver_runtime_continuation_grant_action_admitted(consumed, current) => {
+            DriverTaskRetainedRootGrantPublication::AwaitActionCompletion
+        }
         consumed if consumed == current => match next_driver_task_retained_grant_id(current) {
             Some(next) => DriverTaskRetainedRootGrantPublication::Publish(next),
             None => DriverTaskRetainedRootGrantPublication::Invalid,
@@ -14979,7 +15034,9 @@ fn driver_task_retained_root_grant_context(
     {
         return None;
     }
-    if grant.consumed_grant_id == current {
+    if grant.consumed_grant_id == current
+        || driver_runtime_continuation_grant_action_admitted(grant.consumed_grant_id, current)
+    {
         Some(DriverTaskRetainedRootGrantContext::Consumed)
     } else if grant.consumed_grant_id == 0 {
         Some(DriverTaskRetainedRootGrantContext::Unconsumed(notification))
@@ -15280,6 +15337,14 @@ fn arm_driver_task_retained_priority_lease_wake_retry(
         }
         if grant.consumed_grant_id == grant_id {
             DriverTaskRetainedLeasePhase::GrantRequired
+        } else if driver_runtime_continuation_grant_action_admitted(
+            grant.consumed_grant_id,
+            grant_id,
+        ) {
+            // The exact child action is in flight. Retain Issued and wait for
+            // its post-action fan-in; neither a re-notify nor a replacement
+            // grant is legal at this frontier.
+            return true;
         } else {
             DriverTaskRetainedLeasePhase::Granted
         }
@@ -22839,6 +22904,26 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
                 cache_counter_batch.flush(slot);
                 return None;
             }
+            DriverTaskRetainedRootGrantPublication::AwaitActionCompletion => {
+                // The child durably admitted this exact grant but has not yet
+                // completed its one bounded action. Restore the issued wait
+                // phase without publishing, signalling, or consuming another
+                // period/budget boundary; the post-action fan-in will wake root.
+                if slot
+                    .retained_priority_lease_phase
+                    .compare_exchange(
+                        DriverTaskRetainedLeasePhase::GrantRequired.as_usize(),
+                        DriverTaskRetainedLeasePhase::Issued.as_usize(),
+                        Ordering::AcqRel,
+                        Ordering::Acquire,
+                    )
+                    .is_err()
+                {
+                    fail_driver_task_retained_priority_lease(slot, contract);
+                }
+                cache_counter_batch.flush(slot);
+                return None;
+            }
             DriverTaskRetainedRootGrantPublication::Invalid => {
                 fail_driver_task_retained_priority_lease(slot, contract);
                 cache_counter_batch.flush(slot);
@@ -22862,7 +22947,7 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
             cache_counter_batch.flush(slot);
             return None;
         }
-        if !admit_driver_task_retained_foreground_wake(slot, contract) {
+        if !root_grant && !admit_driver_task_retained_foreground_wake(slot, contract) {
             // Keep Committed/Granted and the exact command immutable. A later
             // EventPump turn rechecks the architectural counter; no endpoint,
             // grant, device state, retry counter, or MCS reservation changes
@@ -22870,6 +22955,11 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
             cache_counter_batch.flush(slot);
             return None;
         }
+        // A root grant is different from an ordinary retained wake: its prior
+        // low-domain consumed ID was published only after the child's bounded
+        // action ended and the child returned to its exact grant wait. That
+        // causal frontier replaces the wall-period heuristic without changing
+        // either SC budget, replenishment, priority, or notification authority.
         // The command is already immutable and visible. Root-generation
         // CYW43 descriptor continuations signal the child-bound notification;
         // unrelated runtime contracts retain their endpoint rendezvous.
@@ -31846,15 +31936,28 @@ mod tests {
             + usize::from(DRIVER_RUNTIME_CONTINUATION_GRANT_OFFSET)
             + core::mem::offset_of!(DriverRuntimeContinuationGrant, consumed_grant_id))
             as *mut u32;
-        // SAFETY: `consumed_ptr` addresses the fixed grant ACK word in this
-        // test-owned aligned ring page.
+        // SAFETY: `consumed_ptr` addresses the fixed grant consumer frontier
+        // in this test-owned aligned ring page.
+        unsafe {
+            core::ptr::write_volatile(
+                consumed_ptr,
+                DRIVER_RUNTIME_CONTINUATION_GRANT_ACTION_ADMITTED_BIT | 1,
+            );
+        }
+        assert_eq!(
+            cyw43_retained_parent_condition(command.sequence),
+            Cyw43RetainedParentCondition::Waiting,
+            "ACK-before-I/O admission remains blocked until the action ends",
+        );
+        // SAFETY: The exact completed ID is the only legal successor to the
+        // admitted high-bit state.
         unsafe {
             core::ptr::write_volatile(consumed_ptr, 1);
         }
         assert_eq!(
             cyw43_retained_parent_condition(command.sequence),
             Cyw43RetainedParentCondition::ContinuationReady,
-            "a durable ACK admits exactly one replacement-grant turn",
+            "a durable action completion admits exactly one replacement-grant turn",
         );
         slot.retained_priority_lease_phase.store(
             DriverTaskRetainedLeasePhase::GrantRequired.as_usize(),
@@ -35257,7 +35360,20 @@ mod tests {
 
         assert_eq!(next_driver_task_retained_grant_id(0), Some(1));
         assert_eq!(next_driver_task_retained_grant_id(1), Some(2));
+        assert_eq!(
+            next_driver_task_retained_grant_id(
+                DRIVER_RUNTIME_CONTINUATION_GRANT_ACTION_ADMITTED_BIT - 1,
+            ),
+            None,
+        );
         assert_eq!(next_driver_task_retained_grant_id(u32::MAX), None);
+        assert!(!driver_task_ring_publish_continuation_grant(
+            &slot,
+            ring_root_ptr,
+            command,
+            DRIVER_RUNTIME_CONTINUATION_GRANT_ACTION_ADMITTED_BIT | 1,
+        ));
+        assert!(driver_task_ring_read_continuation_grant(ring_root_ptr).is_none());
         assert!(driver_task_ring_publish_continuation_grant(
             &slot,
             ring_root_ptr,
@@ -35479,9 +35595,13 @@ mod tests {
             + core::mem::offset_of!(DriverRuntimeContinuationGrant, consumed_grant_id))
             as *mut u32;
         // SAFETY: The fixed consumed-id word lies inside the test-owned ring.
-        // This models the autonomous runtime's legal ACK between outer turns.
+        // This models the autonomous runtime's legal ACK-before-I/O admission
+        // between outer turns.
         unsafe {
-            core::ptr::write_volatile(consumed_ptr, 1);
+            core::ptr::write_volatile(
+                consumed_ptr,
+                DRIVER_RUNTIME_CONTINUATION_GRANT_ACTION_ADMITTED_BIT | 1,
+            );
         }
         let signals = Cell::new(0usize);
         assert_eq!(
@@ -35502,14 +35622,14 @@ mod tests {
         assert_eq!(
             signals.get(),
             0,
-            "root consumes the producer's durable ACK without duplicating its fan-in signal",
+            "root observes durable admission without duplicating the post-action fan-in signal",
         );
         assert_eq!(
             DriverTaskRetainedLeasePhase::from_usize(
                 slot.retained_priority_lease_phase.load(Ordering::Acquire),
             ),
             Some(DriverTaskRetainedLeasePhase::Issued),
-            "a legal ACK advances to the next PollRing without recovery",
+            "a legal admission advances to PollRing without recovery",
         );
         assert_eq!(slot.retained_grant_id.load(Ordering::Acquire), 1);
 
@@ -35525,7 +35645,27 @@ mod tests {
             DriverTaskRetainedLeasePhase::from_usize(
                 slot.retained_priority_lease_phase.load(Ordering::Acquire),
             ),
+            Some(DriverTaskRetainedLeasePhase::Issued),
+            "an admitted action cannot publish or notify a successor grant",
+        );
+        // SAFETY: The fixed consumer frontier remains inside the test ring.
+        unsafe {
+            core::ptr::write_volatile(consumed_ptr, 1);
+        }
+        assert!(arm_driver_task_retained_priority_lease_wake_retry(
+            &slot,
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            command,
+            ring_root_ptr,
+            command.sequence as usize,
+            fingerprint,
+        ));
+        assert_eq!(
+            DriverTaskRetainedLeasePhase::from_usize(
+                slot.retained_priority_lease_phase.load(Ordering::Acquire),
+            ),
             Some(DriverTaskRetainedLeasePhase::GrantRequired),
+            "only the exact post-action completion frontier admits replacement",
         );
         let next = next_driver_task_retained_grant_id(1).expect("monotonic replacement grant");
         assert!(driver_task_ring_publish_continuation_grant(
@@ -35627,7 +35767,7 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn root_grant_planner_accepts_only_forward_ack_during_stable_observation() {
+    fn root_grant_planner_accepts_only_monotonic_action_frontier_during_stable_observation() {
         use core::cell::Cell;
 
         let mut command = DriverTaskCommandRecord::pi4_hot_path(
@@ -35650,8 +35790,75 @@ mod tests {
             command.aux1,
             current,
         );
+        let mut admitted = unconsumed;
+        admitted.consumed_grant_id =
+            DRIVER_RUNTIME_CONTINUATION_GRANT_ACTION_ADMITTED_BIT | current;
         let mut consumed = unconsumed;
         consumed.consumed_grant_id = current;
+
+        let reads = Cell::new(0usize);
+        assert_eq!(
+            plan_driver_task_retained_root_grant_publication_with(
+                command,
+                current,
+                || None,
+                || {
+                    let read = reads.get();
+                    reads.set(read.saturating_add(1));
+                    Some(if read == 0 { unconsumed } else { admitted })
+                },
+            ),
+            DriverTaskRetainedRootGrantPublication::AwaitActionCompletion,
+        );
+        assert_eq!(
+            reads.get(),
+            3,
+            "0 -> admitted requires confirmation and cannot publish a successor",
+        );
+
+        let reads = Cell::new(0usize);
+        assert_eq!(
+            plan_driver_task_retained_root_grant_publication_with(
+                command,
+                current,
+                || None,
+                || {
+                    let read = reads.get();
+                    reads.set(read.saturating_add(1));
+                    Some(if read == 0 { admitted } else { consumed })
+                },
+            ),
+            DriverTaskRetainedRootGrantPublication::Publish(current + 1),
+        );
+        assert_eq!(
+            reads.get(),
+            3,
+            "admitted -> completed requires confirmation before replacement",
+        );
+
+        let reads = Cell::new(0usize);
+        assert_eq!(
+            plan_driver_task_retained_root_grant_publication_with(
+                command,
+                current,
+                || None,
+                || {
+                    let read = reads.get();
+                    reads.set(read.saturating_add(1));
+                    Some(match read {
+                        0 => unconsumed,
+                        1 => admitted,
+                        _ => consumed,
+                    })
+                },
+            ),
+            DriverTaskRetainedRootGrantPublication::Publish(current + 1),
+        );
+        assert_eq!(
+            reads.get(),
+            4,
+            "0 -> admitted -> completed requires one bounded final confirmation",
+        );
 
         let reads = Cell::new(0usize);
         let probes = Cell::new(0usize);
@@ -35671,7 +35878,11 @@ mod tests {
             ),
             DriverTaskRetainedRootGrantPublication::Publish(current + 1),
         );
-        assert_eq!(reads.get(), 3, "0 -> current ACK requires confirmation");
+        assert_eq!(
+            reads.get(),
+            3,
+            "a skipped 0 -> completed sample requires confirmation",
+        );
         assert_eq!(probes.get(), 2, "completion must win on either side");
 
         let reads = Cell::new(0usize);
@@ -35687,7 +35898,23 @@ mod tests {
                 },
             ),
             DriverTaskRetainedRootGrantPublication::Invalid,
-            "a reverse ACK observation must fail closed",
+            "a reverse completed -> unconsumed observation must fail closed",
+        );
+
+        let reads = Cell::new(0usize);
+        assert_eq!(
+            plan_driver_task_retained_root_grant_publication_with(
+                command,
+                current,
+                || None,
+                || {
+                    let read = reads.get();
+                    reads.set(read.saturating_add(1));
+                    Some(if read == 0 { consumed } else { admitted })
+                },
+            ),
+            DriverTaskRetainedRootGrantPublication::Invalid,
+            "a reverse completed -> admitted observation must fail closed",
         );
     }
 

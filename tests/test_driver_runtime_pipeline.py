@@ -29,6 +29,20 @@ COMPARATOR = "5a" * 32
 COMPARATOR_RECORD = "6b" * 32
 
 
+def test_manifest_abi_matches_rust_runtime_contract() -> None:
+    abi_source = (ROOT / "crates" / "pi4-driver-abi" / "src" / "lib.rs").read_text(
+        encoding="utf-8"
+    )
+    prefix = "pub const DRIVER_RUNTIME_INIT_VERSION: u16 = "
+    declarations = [
+        line.strip() for line in abi_source.splitlines() if line.startswith(prefix)
+    ]
+
+    assert len(declarations) == 1
+    rust_version = int(declarations[0].removeprefix(prefix).removesuffix(";"))
+    assert driver_images.RUNTIME_INIT_ABI_VERSION == rust_version
+
+
 def test_repository_classic_comparator_record_is_exact_and_immutable() -> None:
     comparator, record = driver_images.load_comparator_record(
         ROOT / "configs" / "driver_runtime_classic_comparator.toml"
@@ -99,7 +113,7 @@ def test_archive_is_deterministic_complete_and_comparator_bound(tmp_path: Path) 
     ]
     assert document["classic_comparator"]["sha256"] == COMPARATOR
     assert document["classic_comparator"]["record_sha256"] == COMPARATOR_RECORD
-    assert document["runtime_init_abi_version"] == 9
+    assert document["runtime_init_abi_version"] == 12
 
 
 def test_missing_or_noncanonical_comparator_fails_closed(tmp_path: Path) -> None:

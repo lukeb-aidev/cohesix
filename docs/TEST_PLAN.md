@@ -9588,15 +9588,26 @@ Write-only signal caps, one synchronous command association, and fault-before,
 during, after, cancellation, reconstruction-generation, and normal-versus-
 failure Reply exclusion. One-way bootstrap/background completions signal only
 after their sequence-last ring commit and never consume the command Reply.
-Driver runtime-init ABI v11 must preserve the descriptor's fixed size while
+Driver runtime-init ABI v12 must preserve the descriptor's fixed size while
 assigning its former reserved field to root-control wake slot 12. HAL must mint
 only a Write-only, badge-1 cap there; zero, aliasing, wrong-slot, wrong-badge,
-broad-rights, and ABI-v10 descriptors fail current admission. CYW43's dedicated
+broad-rights, and ABI-v11-or-older descriptors fail current admission. CYW43's dedicated
 slot 11 remains separate. Every durable driver terminal, RX, TX, or completion
 publication must signal the existing role-specific completion/doorbell first
 and slot 12 second. Focused source-order tests must reject signalling before the
 commit, reversed notification order, a missing fan-in, and any path that treats
 the wake as completion, identity, Reply, retry, or physical-owner authority.
+For a root-owned retained CYW43 grant, tests must additionally prove low-31-bit
+grant IDs and the monotonic `0 -> id|ACTION_ADMITTED_BIT -> id` consumer
+frontier. Stable readers must accept a forward transition, including a skipped
+sample only after confirmation, and reject reverse, cross-ID, stale-identity,
+and torn observations. Admission must publish no successor and no root fan-in;
+the exact post-action value must be durable before its fan-in. A terminal
+sequence-last publication supersedes that nonterminal frontier and must not be
+followed by a late consumed-ID write. Delegated CYW43-to-SDIO grants must prove
+the same admission/action-completion ordering after the initial exact
+grant-free service receipt, including post-commit peer signalling and
+terminal-supersedes-grant behavior.
 The runtime's nonblocking command seam is kernel-contract-specific: classic
 seL4 uses `seL4_Poll`, while MCS must use `seL4_NBRecv` with the exact
 compiler-generated child Reply slot 6. Once that receive retains a Call, both

@@ -233,18 +233,18 @@ root must recheck the exact durable condition before sleeping and must never
 infer publication or identity from the wake badge alone. The descriptor change
 does not alter the four shared pages or any public framing or console grammar.
 
-On Pi, compiler truth places root-control and this child on core 0 at equal
-priority 200. Only exact authenticated direct-GENET control or
-publication-ACK work may use the guarded same-core continuation: root commits
-the durable record, successfully pre-drains the child SC for fail-closed
-accounting, executes a release fence, signals the exact one-hot child
-notification, and calls `SchedContext_YieldTo` once on that exact SC. A failed
-pre-drain still delivers the durable signal but suppresses the optional
-YieldTo. Packet ingress, close, bounded
-service-tick wakes, mediated WiFi, and QEMU direct-VirtIO remain signal-only.
+On Pi, compiler truth places root-control on core 0 and this child on core 2 at
+equal priority 200. Direct GENET and mediated WiFi both use the same cross-core
+handoff: root commits the durable record, executes a release fence, and signals
+the exact one-hot child notification. Neither backend pre-drains the child SC
+or calls `SchedContext_YieldTo`. Exact authenticated direct-GENET control or
+publication-ACK work may bridge the remaining boundary only through the
+condition-before-block root fan-in after every identity, lifecycle, operator,
+recovery, containment, and durable-frontier check passes. QEMU direct-VirtIO
+retains its existing signal-only selector and cannot consume the Pi fan-in.
 Invalid backend, authentication, lifecycle, core, priority, MCP, SC, badge, or
 publication state fails closed. The durable record remains work authority;
-Signal and YieldTo add no work credit, public frame, or child authority.
+Signal and the fan-in add no work credit, public frame, or child authority.
 
 When the selected descriptor sets `direct_virtio`, its sealed extension names
 one QEMU VirtIO-net MMIO page, the exact IRQHandler slot, two fixed queue
