@@ -8997,6 +8997,13 @@ timeout, and ten-page tagged PCIe aperture while adding exactly one
 discontiguous tagged system-timer page at physical `0xFE003000`. The only
 accepted timer route is level IRQ 99, badge 2048, handler slot 4, local
 notification slot 3, generated owner period 10,000 us, and interval 5,000 us.
+Focused bootstrap tests must independently prove that every physical Pi
+network selection pre-admits the timer as a root-unmapped child capability
+before any mailbox/watchdog or other higher root MMIO allocation; WiFi must
+admit the timer before its DMA page, while wired and disabled selections admit
+the timer alone. QEMU and host profiles must admit no Pi device page. PCIe
+construction must revalidate that exclusive admission and consume it through
+the child-only map path rather than ordinary cached/root mapping.
 One valid IRQ turn must clear the C3 source, sample `CLO`, arm the next compare,
 perform the required ordering/readback, signal the existing root fan-in, and
 acknowledge once, in that order, with no PCIe action, catch-up, second timer

@@ -28,6 +28,72 @@ fn qemu_children_seal_before_any_service_activation() {
 }
 
 #[test]
+fn pi_timer_page_is_admitted_before_root_mmio_and_consumed_exclusively() {
+    let kernel = include_str!("../src/kernel.rs");
+    let admission = kernel
+        .find("hal.admit_selected_pi4_runtime_mmio()")
+        .expect("Pi child-only MMIO admission");
+    let mailbox = kernel
+        .find("crate::hal::pi4_wifi::preseed_mailbox_mmio(hal)")
+        .expect("root mailbox MMIO preseed");
+    let watchdog = kernel
+        .find("crate::reboot::register_bcm2711_pm_watchdog(hal)")
+        .expect("root watchdog MMIO registration");
+    assert!(admission < mailbox && admission < watchdog);
+
+    let hal = include_str!("../src/hal/mod.rs");
+    let selection_start = hal
+        .find("fn selected_pi4_early_child_mmio_pages(")
+        .expect("Pi early child-only MMIO selection");
+    let selection_end = hal[selection_start..]
+        .find("\nfn classify_driver_task_bootstrap_failure(")
+        .map(|offset| selection_start + offset)
+        .expect("bounded Pi early MMIO selection");
+    let selection = &hal[selection_start..selection_end];
+    assert!(selection.contains("PI4_DRIVER_RUNTIME_EARLY_MMIO_WIFI"));
+    assert!(selection.contains("PI4_DRIVER_RUNTIME_EARLY_MMIO_BASE"));
+
+    let admission_start = hal
+        .find("pub fn admit_selected_pi4_runtime_mmio(&mut self)")
+        .expect("profile-gated Pi early MMIO admission");
+    let admission_end = hal[admission_start..]
+        .find("\n    /// Returns the underlying bootinfo pointer")
+        .map(|offset| admission_start + offset)
+        .expect("bounded Pi early MMIO admission");
+    let admission_body = &hal[admission_start..admission_end];
+    let profile_guard = admission_body
+        .find("if !driver_task::physical_pi_driver_task_only_owner_state_active()")
+        .expect("QEMU and host profiles must bypass Pi device admission");
+    let page_selection = admission_body
+        .find("selected_pi4_early_child_mmio_pages(")
+        .expect("physical Pi selects exact early pages after its profile guard");
+    assert!(profile_guard < page_selection);
+
+    let pcie_start = hal
+        .find("if hot_path == driver_task::DriverTaskHotPath::PcieRoot {")
+        .expect("PCIe runtime MMIO branch");
+    let pcie_end = hal[pcie_start..]
+        .find("\n        for &base in runtime_mmio_candidate_bases(hot_path)")
+        .map(|offset| pcie_start + offset)
+        .expect("bounded PCIe runtime MMIO branch");
+    let pcie = &hal[pcie_start..pcie_end];
+    let preadmitted = pcie
+        .find("device_page_admitted_for_child_without_root_mapping(")
+        .expect("timer page must remain a root-unmapped child admission");
+    let coverage = pcie
+        .find("runtime_candidate_covers_pages(")
+        .expect("timer page coverage recheck");
+    let timer = pcie
+        .find("let timer_page = PI4_DRIVER_RUNTIME_PCIE_HOST_MMIO_PAGES")
+        .expect("discontiguous timer page mapping");
+    let consume = pcie[timer..]
+        .find("map_admitted_device_page_exclusively_into_vspace(")
+        .map(|offset| timer + offset)
+        .expect("PCIe child must consume the pre-admitted timer page exclusively");
+    assert!(preadmitted < coverage && coverage < timer && timer < consume);
+}
+
+#[test]
 fn wired_console_child_registers_before_seal_and_hands_off_only_after_dhcp() {
     let kernel = include_str!("../src/kernel.rs");
     let requires = kernel

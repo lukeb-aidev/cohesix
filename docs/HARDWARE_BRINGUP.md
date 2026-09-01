@@ -998,7 +998,13 @@ runtime with its unchanged scheduling contract, a ten-page tagged PCIe host
 aperture, and one separately tagged discontiguous BCM system-timer page at
 physical `0xFE003000`. Construction must seal level IRQ 99, badge 2048,
 handler slot 4, and local-notification slot 3. Boot evidence must show the
-runtime armed channel 3 at 5,000 us from its generated 10,000-us period and
+child-only early-MMIO admission before root mailbox/watchdog mapping: two
+ascending pages (`0xFE003000`, then `0xFE007000`) in WiFi mode and the timer
+page alone in wired mode. The timer capability must be consumed exclusively
+into `pcie-root`; `driver-runtime-pcie-timer-mmio-not-covered`, an ordinary
+root-mapped substitute, or a retained root alias fails before registry seal.
+Boot evidence must then show the runtime armed channel 3 at 5,000 us from its
+generated 10,000-us period and
 bound the existing root fan-in to root-control; a missing, duplicate, deferred,
 or mismatched resource/IRQ/binding rejects the candidate before performance
 testing. The timer edge is scheduling evidence only. Packet timing and raw TCP

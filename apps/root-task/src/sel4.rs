@@ -8244,8 +8244,9 @@ mod tests {
     }
 
     #[test]
-    fn sdio_dma_page_must_be_admitted_before_higher_mailbox_page() {
+    fn child_timer_and_sdio_dma_pages_must_precede_higher_root_mmio() {
         const DEVICE_BASE: usize = 0xfe00_0000;
+        const TIMER_PAGE: usize = 0xfe00_3000;
         const DMA_PAGE: usize = 0xfe00_7000;
         const MAILBOX_PAGE: usize = 0xfe00_b000;
 
@@ -8257,13 +8258,23 @@ mod tests {
         bootinfo.untypedList[0].isDevice = 1;
 
         let mut ascending = UntypedCatalog::new(&bootinfo, None);
+        assert!(ascending.device_coverage(TIMER_PAGE, PAGE_BITS).is_some());
+        ascending.record_usage(0, (TIMER_PAGE - DEVICE_BASE + PAGE_SIZE) as u128);
         assert!(ascending.device_coverage(DMA_PAGE, PAGE_BITS).is_some());
         ascending.record_usage(0, (DMA_PAGE - DEVICE_BASE + PAGE_SIZE) as u128);
         assert!(ascending.device_coverage(MAILBOX_PAGE, PAGE_BITS).is_some());
 
-        let mut reversed = UntypedCatalog::new(&bootinfo, None);
-        reversed.record_usage(0, (MAILBOX_PAGE - DEVICE_BASE + PAGE_SIZE) as u128);
-        assert!(reversed.device_coverage(DMA_PAGE, PAGE_BITS).is_none());
+        let mut dma_first = UntypedCatalog::new(&bootinfo, None);
+        dma_first.record_usage(0, (DMA_PAGE - DEVICE_BASE + PAGE_SIZE) as u128);
+        assert!(dma_first.device_coverage(TIMER_PAGE, PAGE_BITS).is_none());
+        assert!(dma_first.device_coverage(MAILBOX_PAGE, PAGE_BITS).is_some());
+
+        let mut mailbox_first = UntypedCatalog::new(&bootinfo, None);
+        mailbox_first.record_usage(0, (MAILBOX_PAGE - DEVICE_BASE + PAGE_SIZE) as u128);
+        assert!(mailbox_first
+            .device_coverage(TIMER_PAGE, PAGE_BITS)
+            .is_none());
+        assert!(mailbox_first.device_coverage(DMA_PAGE, PAGE_BITS).is_none());
     }
 
     #[test]

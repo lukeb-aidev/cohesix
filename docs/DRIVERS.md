@@ -1327,7 +1327,13 @@ transport:
   receive deadline-complete. Its ten-page PCIe host aperture remains contiguous
   and separately tagged. Page eleven maps only physical `0xFE003000`; level IRQ
   99 uses badge 2048, handler slot 4, and the runtime's local notification slot
-  3. The runtime arms C3 at 5,000 us, exactly half its unchanged generated
+  3. Because that page precedes root's mailbox/watchdog mappings in the same
+  monotonic device-untyped region, HAL pre-admits it as an unmapped child-only
+  capability before any higher Pi MMIO in every network mode. WiFi admits the
+  timer before its likewise child-only DMA page; wired and disabled modes admit
+  only the timer. `pcie-root` consumes that retained capability through the
+  exclusive child-VSpace path, leaving no root alias. The runtime arms C3 at
+  5,000 us, exactly half its unchanged generated
   10,000-us period. One IRQ service clears the source, reads `CLO`, arms the
   next compare, orders and reads back the device state, signals the existing
   root fan-in, and acknowledges the IRQ. It never performs root timer work,

@@ -1460,11 +1460,11 @@ fn selected_pi4_early_child_mmio_pages(
     selection: driver_task::Pi4PreRootNetBootstrapSelection,
 ) -> &'static [usize] {
     match selection {
-        driver_task::Pi4PreRootNetBootstrapSelection::Wifi => {
-            PI4_DRIVER_RUNTIME_BCM2835_DMA_MMIO_BASES
-        }
+        driver_task::Pi4PreRootNetBootstrapSelection::Wifi => PI4_DRIVER_RUNTIME_EARLY_MMIO_WIFI,
         driver_task::Pi4PreRootNetBootstrapSelection::Wired
-        | driver_task::Pi4PreRootNetBootstrapSelection::Disabled => &[],
+        | driver_task::Pi4PreRootNetBootstrapSelection::Disabled => {
+            PI4_DRIVER_RUNTIME_EARLY_MMIO_BASE
+        }
     }
 }
 
@@ -1861,6 +1861,13 @@ const PI4_DRIVER_RUNTIME_PCIE_TOTAL_MMIO_PAGES: usize =
     PI4_DRIVER_RUNTIME_PCIE_HOST_MMIO_PAGES + PI4_DRIVER_RUNTIME_PCIE_TIMER_MMIO_PAGES;
 #[cfg(feature = "kernel")]
 const PI4_DRIVER_RUNTIME_SYSTEM_TIMER_PADDR: usize = DRIVER_RUNTIME_PI4_SYSTEM_TIMER_PADDR as usize;
+#[cfg(feature = "kernel")]
+const PI4_DRIVER_RUNTIME_EARLY_MMIO_BASE: &[usize] = &[PI4_DRIVER_RUNTIME_SYSTEM_TIMER_PADDR];
+#[cfg(feature = "kernel")]
+const PI4_DRIVER_RUNTIME_EARLY_MMIO_WIFI: &[usize] = &[
+    PI4_DRIVER_RUNTIME_SYSTEM_TIMER_PADDR,
+    PI4_DRIVER_RUNTIME_BCM2835_DMA_MMIO_BASES[0],
+];
 
 #[cfg(feature = "kernel")]
 fn runtime_mmio_candidate_bases(hot_path: driver_task::DriverTaskHotPath) -> &'static [usize] {
@@ -3997,6 +4004,9 @@ impl<'a> KernelHal<'a> {
     /// bootstrap later maps it once into the isolated child VSpace and consumes
     /// the admission record so root cannot discover or alias it.
     pub fn admit_selected_pi4_runtime_mmio(&mut self) -> Result<usize, HalError> {
+        if !driver_task::physical_pi_driver_task_only_owner_state_active() {
+            return Ok(0);
+        }
         let pages = selected_pi4_early_child_mmio_pages(
             driver_task::pi4_pre_root_net_bootstrap_selection(),
         );
@@ -5274,6 +5284,16 @@ impl<'a> KernelHal<'a> {
                     "driver-runtime-pcie-timer-mmio-page-budget",
                 ));
             }
+            if !self
+                .env
+                .device_page_admitted_for_child_without_root_mapping(
+                    PI4_DRIVER_RUNTIME_SYSTEM_TIMER_PADDR,
+                )
+            {
+                return Err(HalError::Unsupported(
+                    "driver-runtime-pcie-timer-mmio-pre-admission-missing",
+                ));
+            }
             if !runtime_candidate_covers_pages(
                 &self.env,
                 PI4_DRIVER_RUNTIME_SYSTEM_TIMER_PADDR,
@@ -5319,7 +5339,7 @@ impl<'a> KernelHal<'a> {
                 let timer_vaddr = runtime_region_page_vaddr(region, timer_page)
                     .ok_or(HalError::Unsupported("driver-runtime-pcie-timer-vaddr"))?;
                 self.env
-                    .map_device_page_into_vspace(
+                    .map_admitted_device_page_exclusively_into_vspace(
                         PI4_DRIVER_RUNTIME_SYSTEM_TIMER_PADDR,
                         vspace,
                         timer_vaddr,
@@ -7102,21 +7122,28 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn pi4_wifi_early_child_admission_precedes_root_mailbox_mapping() {
+    fn pi4_early_child_admission_preserves_timer_before_root_mmio_in_every_mode() {
         use super::driver_task::Pi4PreRootNetBootstrapSelection;
 
         assert_eq!(
             super::selected_pi4_early_child_mmio_pages(Pi4PreRootNetBootstrapSelection::Wifi),
-            super::PI4_DRIVER_RUNTIME_BCM2835_DMA_MMIO_BASES,
+            &[
+                super::PI4_DRIVER_RUNTIME_SYSTEM_TIMER_PADDR,
+                super::PI4_DRIVER_RUNTIME_BCM2835_DMA_MMIO_BASES[0],
+            ],
+        );
+        assert_eq!(
+            super::selected_pi4_early_child_mmio_pages(Pi4PreRootNetBootstrapSelection::Wired),
+            &[super::PI4_DRIVER_RUNTIME_SYSTEM_TIMER_PADDR],
+        );
+        assert_eq!(
+            super::selected_pi4_early_child_mmio_pages(Pi4PreRootNetBootstrapSelection::Disabled),
+            &[super::PI4_DRIVER_RUNTIME_SYSTEM_TIMER_PADDR],
         );
         assert!(
-            super::selected_pi4_early_child_mmio_pages(Pi4PreRootNetBootstrapSelection::Wired)
-                .is_empty()
+            super::PI4_DRIVER_RUNTIME_SYSTEM_TIMER_PADDR
+                < super::PI4_DRIVER_RUNTIME_BCM2835_DMA_MMIO_BASES[0]
         );
-        assert!(super::selected_pi4_early_child_mmio_pages(
-            Pi4PreRootNetBootstrapSelection::Disabled
-        )
-        .is_empty());
         assert!(
             super::PI4_DRIVER_RUNTIME_BCM2835_DMA_MMIO_BASES[0]
                 < super::PI4_DRIVER_RUNTIME_WIFI_PWRSEQ_MMIO_BASES[0]

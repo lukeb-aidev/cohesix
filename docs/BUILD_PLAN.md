@@ -11501,6 +11501,39 @@ Changes:
     hardware lifetimes must still pass their raw, Gate-8, script, REST,
     operator-liveness, packet/ring, and repeatability gates before performance
     or reliability acceptance is claimed.
+
+    The first exact-image post-implementation discriminator is clean source
+    `88c2142838b76056e8146304e030d93479fc2a7b`, build ID
+    `32c01a6cb1b64ba9f8e3ed3bbc8d21c85ba743886182421fd42b3381291a16e6`,
+    normalized image ID
+    `99f81e783aa1f8ef2464519ac2e4305916ac37f575071f2dfd80bcdecc7b4032`,
+    and sealed-image SHA-256
+    `5ba6a9cda127a4a69ad4f91ceaec20501c78db15fdbad569560fad99116ae6b8`.
+    Two WiFi boots and one wired boot failed identically before root shell:
+    WiFi pre-admitted only the `0xFE007000` DMA page and wired admitted no
+    child page; later root mailbox/watchdog mappings advanced the monotonic
+    device-untyped cursor past the lower `0xFE003000` timer page. `pcie-root`
+    then failed `driver-runtime-pcie-timer-mmio-not-covered`, USB consequently
+    failed `driver-runtime-pcie-bus-link-missing`, and exact fault-registry
+    seal rejected `270/272` with only driver-pcie and driver-usb absent. No
+    Gate 8, DHCP completion, root shell, TCP, or performance gate was reached.
+
+    Repair that one construction invariant by pre-admitting `0xFE003000` first
+    for every physical Pi network selection, followed by the existing
+    `0xFE007000` DMA admission only for WiFi, before any higher root MMIO
+    mapping. QEMU and host profiles admit no Pi device page. PCIe construction
+    must require the timer admission to remain root-unmapped and consume it
+    through the exclusive child-VSpace path; an ordinary cached or root-mapped
+    substitute fails closed. This changes no resource count, manifest row,
+    task, owner, SC numeric, IRQ identity, runtime ABI, or public surface.
+    Compatibility review finds no required change to the host-tool suite,
+    `tools/cohesix-py`, cohsh grammar, or raw/REST benchmark workload and report
+    schemas because the repair is confined to pre-runtime physical-Pi device-cap
+    construction order.
+    Focused admission-order, exclusive-consumption, Pi target compile,
+    generated-consistency, and narrow QEMU root-MCS checks qualify only the
+    next candidate; a fresh exact-image Pi boot must clear registry seal and
+    reach root shell before backend testing resumes.
   - platform consistency — select the same v6 shared contract, including the
     v4-introduced bounded command batch, complete 256-Worker population, two
     passive-Worker executor-lane architecture, and passive-service locality
